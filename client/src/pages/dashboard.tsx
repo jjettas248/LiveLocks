@@ -86,6 +86,8 @@ export default function Dashboard() {
   const [parlayPicks, setParlayPicks] = useState<ParlayPickInput[]>([]);
   const [showParlay, setShowParlay] = useState(false);
   const [selectedSportsbook, setSelectedSportsbook] = useState<string>("manual");
+  const [autoFilledFields, setAutoFilledFields] = useState<Set<string>>(new Set());
+  const [showBoxScore, setShowBoxScore] = useState(true);
 
   const calculateMutation = useCalculateProbability();
 
@@ -109,7 +111,49 @@ export default function Dashboard() {
   const selectedPlayer = players?.find((p) => p.id === Number(watchedPlayerId));
 
   // Live stats for selected game
-  const { data: liveStats } = useLiveStats(selectedGameId);
+  const { data: liveStats, refetch: refetchLiveStats, isLoading: isLiveStatsLoading } = useLiveStats(selectedGameId);
+
+  // Find a DB player by ESPN display name — uses first-initial + last-name matching
+  const findPlayerByName = (espnName: string) => {
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+    const normedEspn = norm(espnName);
+    return (players ?? []).find((p) => {
+      if (norm(p.name) === normedEspn) return true;
+      const espnParts = espnName.toLowerCase().split(" ");
+      const dbParts = p.name.toLowerCase().split(" ");
+      const espnLast = espnParts[espnParts.length - 1];
+      const dbLast = dbParts[dbParts.length - 1];
+      return espnLast === dbLast && espnParts[0][0] === dbParts[0][0];
+    });
+  };
+
+  // Direct fill from box score row — bypasses name-matching entirely
+  const handleBoxScoreClick = (stat: import("@shared/schema").LivePlayerStat) => {
+    const matched = findPlayerByName(stat.playerName);
+    if (matched) form.setValue("playerId" as any, String(matched.id));
+
+    const minParts = stat.minutes.split(":");
+    const minutesDecimal = minParts.length === 2
+      ? parseInt(minParts[0]) + parseInt(minParts[1]) / 60
+      : parseFloat(stat.minutes) || 0;
+    form.setValue("halftimeMinutes", Math.round(minutesDecimal * 10) / 10);
+    form.setValue("halftimeFouls", stat.fouls);
+
+    const st = form.getValues("statType");
+    let statVal = 0;
+    if (st === "points") statVal = stat.points;
+    else if (st === "rebounds") statVal = stat.rebounds;
+    else if (st === "assists") statVal = stat.assists;
+    else if (st === "steals") statVal = stat.steals;
+    else if (st === "blocks") statVal = stat.blocks;
+    else if (st === "pts_reb_ast") statVal = stat.points + stat.rebounds + stat.assists;
+    else if (st === "pts_reb") statVal = stat.points + stat.rebounds;
+    else if (st === "pts_ast") statVal = stat.points + stat.assists;
+    else if (st === "reb_ast") statVal = stat.rebounds + stat.assists;
+    else if (st === "stl_blk") statVal = stat.steals + stat.blocks;
+    form.setValue("halftimeStat", statVal);
+    setAutoFilledFields(new Set(["halftimeMinutes", "halftimeFouls", "halftimeStat"]));
+  };
 
   // Determine opponent team: prefer game tile selection, fall back to form field
   const watchedOpponent = form.watch("opponentTeam");
@@ -127,17 +171,26 @@ export default function Dashboard() {
     isSelectedGameLive
   );
 
-  // Auto-fill halftime stats from live box score when player changes
+  // Clear auto-fill badges when player changes manually
+  useEffect(() => {
+    setAutoFilledFields(new Set());
+  }, [watchedPlayerId]);
+
+  // Auto-fill halftime stats from live box score when player or stat type changes
   useEffect(() => {
     if (!liveStats || !selectedPlayer) return;
-    const playerStat = liveStats.find(
-      (s) =>
-        s.playerName.toLowerCase().includes(selectedPlayer.name.toLowerCase().split(" ")[1] ?? "") ||
-        selectedPlayer.name.toLowerCase().includes(s.playerName.toLowerCase().split(" ")[1] ?? "")
-    );
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+    const playerStat = liveStats.find((s) => {
+      if (norm(s.playerName) === norm(selectedPlayer.name)) return true;
+      const espnParts = s.playerName.toLowerCase().split(" ");
+      const dbParts = selectedPlayer.name.toLowerCase().split(" ");
+      return (
+        espnParts[espnParts.length - 1] === dbParts[dbParts.length - 1] &&
+        espnParts[0]?.[0] === dbParts[0]?.[0]
+      );
+    });
     if (!playerStat) return;
 
-    // Parse minutes "MM:SS" → decimal
     const minParts = playerStat.minutes.split(":");
     const minutesDecimal = minParts.length === 2
       ? parseInt(minParts[0]) + parseInt(minParts[1]) / 60
@@ -159,6 +212,7 @@ export default function Dashboard() {
     else if (st === "reb_ast") statVal = playerStat.rebounds + playerStat.assists;
     else if (st === "stl_blk") statVal = playerStat.steals + playerStat.blocks;
     form.setValue("halftimeStat", statVal);
+    setAutoFilledFields(new Set(["halftimeMinutes", "halftimeFouls", "halftimeStat"]));
   }, [liveStats, selectedPlayer, watchedStatType]);
 
   const onSubmit = (data: CalculateProbabilityRequest) => {
@@ -373,6 +427,140 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Live Box Score — shown when a game is selected and stats are available */}
+        {selectedGameId && (liveStats || isLiveStatsLoading) && (
+          <div className="bg-card border border-border rounded-xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border/60">
+              <button
+                onClick={() => setShowBoxScore(!showBoxScore)}
+                className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+                data-testid="button-toggle-boxscore"
+              >
+                <Activity className="w-3.5 h-3.5 text-green-500" />
+                Live Box Score
+                {liveStats && (
+                  <span className="text-muted-foreground/60 font-normal normal-case ml-1">
+                    — click a row to auto-fill
+                  </span>
+                )}
+                <ChevronDown className={`w-3.5 h-3.5 ml-1 transition-transform ${showBoxScore ? "rotate-180" : ""}`} />
+              </button>
+              <button
+                onClick={() => refetchLiveStats()}
+                disabled={isLiveStatsLoading}
+                data-testid="button-refresh-boxscore"
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
+              >
+                <RefreshCw className={`w-3 h-3 ${isLiveStatsLoading ? "animate-spin" : ""}`} />
+                Refresh
+              </button>
+            </div>
+            {showBoxScore && (
+              isLiveStatsLoading ? (
+                <div className="flex items-center justify-center py-6 text-xs text-muted-foreground gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Fetching live stats…
+                </div>
+              ) : liveStats && liveStats.filter(s => s.minutes !== "0" && s.minutes !== "0:00").length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-muted-foreground/70 border-b border-border/40">
+                        <th className="text-left px-4 py-2 font-medium">Player</th>
+                        <th className="text-right px-3 py-2 font-medium">MIN</th>
+                        <th className="text-right px-3 py-2 font-medium text-primary">
+                          {STAT_TYPES.find(s => s.value === watchedStatType)?.label ?? "PTS"}
+                        </th>
+                        <th className="text-right px-3 py-2 font-medium">PTS</th>
+                        <th className="text-right px-3 py-2 font-medium">REB</th>
+                        <th className="text-right px-3 py-2 font-medium">AST</th>
+                        <th className="text-right px-3 py-2 font-medium">STL</th>
+                        <th className="text-right px-3 py-2 font-medium">BLK</th>
+                        <th className="text-right px-3 py-2 font-medium">PF</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const playedStats = liveStats.filter(s => s.minutes !== "0" && s.minutes !== "0:00");
+                        const teams = Array.from(new Set(playedStats.map(s => s.teamAbbr)));
+                        return teams.flatMap((team, ti) => [
+                          <tr key={`team-${team}`} className={ti > 0 ? "border-t-2 border-border/60" : ""}>
+                            <td colSpan={9} className="px-4 py-1 text-muted-foreground/60 font-semibold uppercase tracking-wider text-[10px] bg-secondary/20">
+                              {espnToDb(team)} — {TEAM_FULL_NAMES[espnToDb(team)] ?? team}
+                            </td>
+                          </tr>,
+                          ...playedStats
+                            .filter(s => s.teamAbbr === team)
+                            .sort((a, b) => {
+                              const statForSort = (s: typeof a) => {
+                                if (watchedStatType === "points") return s.points;
+                                if (watchedStatType === "rebounds") return s.rebounds;
+                                if (watchedStatType === "assists") return s.assists;
+                                if (watchedStatType === "steals") return s.steals;
+                                if (watchedStatType === "blocks") return s.blocks;
+                                if (watchedStatType === "pts_reb_ast") return s.points + s.rebounds + s.assists;
+                                if (watchedStatType === "pts_reb") return s.points + s.rebounds;
+                                if (watchedStatType === "pts_ast") return s.points + s.assists;
+                                if (watchedStatType === "reb_ast") return s.rebounds + s.assists;
+                                if (watchedStatType === "stl_blk") return s.steals + s.blocks;
+                                return s.points;
+                              };
+                              return statForSort(b) - statForSort(a);
+                            })
+                            .map((stat, idx) => {
+                              const isSelected = selectedPlayer && findPlayerByName(stat.playerName)?.id === selectedPlayer.id;
+                              const statTotal = (() => {
+                                if (watchedStatType === "points") return stat.points;
+                                if (watchedStatType === "rebounds") return stat.rebounds;
+                                if (watchedStatType === "assists") return stat.assists;
+                                if (watchedStatType === "steals") return stat.steals;
+                                if (watchedStatType === "blocks") return stat.blocks;
+                                if (watchedStatType === "pts_reb_ast") return stat.points + stat.rebounds + stat.assists;
+                                if (watchedStatType === "pts_reb") return stat.points + stat.rebounds;
+                                if (watchedStatType === "pts_ast") return stat.points + stat.assists;
+                                if (watchedStatType === "reb_ast") return stat.rebounds + stat.assists;
+                                if (watchedStatType === "stl_blk") return stat.steals + stat.blocks;
+                                return stat.points;
+                              })();
+                              return (
+                                <tr
+                                  key={idx}
+                                  onClick={() => handleBoxScoreClick(stat)}
+                                  data-testid={`boxscore-row-${idx}`}
+                                  className={`border-b border-border/20 cursor-pointer transition-all ${
+                                    isSelected
+                                      ? "bg-primary/10 border-l-2 border-l-primary"
+                                      : "hover:bg-secondary/40"
+                                  }`}
+                                >
+                                  <td className="px-4 py-2 font-medium text-foreground">
+                                    {stat.playerName}
+                                    {isSelected && <span className="ml-1.5 text-primary text-[10px] font-bold">●</span>}
+                                  </td>
+                                  <td className="text-right px-3 py-2 font-mono text-muted-foreground">{stat.minutes}</td>
+                                  <td className="text-right px-3 py-2 font-mono font-bold text-primary">{statTotal}</td>
+                                  <td className="text-right px-3 py-2 font-mono">{stat.points}</td>
+                                  <td className="text-right px-3 py-2 font-mono">{stat.rebounds}</td>
+                                  <td className="text-right px-3 py-2 font-mono">{stat.assists}</td>
+                                  <td className="text-right px-3 py-2 font-mono">{stat.steals}</td>
+                                  <td className="text-right px-3 py-2 font-mono">{stat.blocks}</td>
+                                  <td className={`text-right px-3 py-2 font-mono ${stat.fouls >= 4 ? "text-red-400 font-bold" : "text-muted-foreground"}`}>{stat.fouls}</td>
+                                </tr>
+                              );
+                            }),
+                        ]);
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="py-6 text-center text-xs text-muted-foreground">
+                  No live stats available yet — box score updates once the game starts.
+                </div>
+              )
+            )}
+          </div>
+        )}
+
         {/* Main 3-column layout */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
 
@@ -441,10 +629,15 @@ export default function Dashboard() {
                   <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
                     <Clock className="w-3 h-3" />
                     Halftime Situation
-                    {liveStats && selectedGameId && (
+                    {autoFilledFields.size > 0 && (
                       <span className="text-green-400 text-xs normal-case font-normal ml-1 flex items-center gap-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse inline-block" />
-                        Live auto-fill
+                        Auto-filled
+                      </span>
+                    )}
+                    {!autoFilledFields.size && liveStats && selectedGameId && (
+                      <span className="text-muted-foreground/50 text-xs normal-case font-normal ml-1">
+                        · click a box score row
                       </span>
                     )}
                   </h3>
@@ -453,18 +646,30 @@ export default function Dashboard() {
                       <label className="text-xs text-muted-foreground">Minutes</label>
                       <input
                         type="number" step="0.1"
-                        {...form.register("halftimeMinutes")}
+                        {...form.register("halftimeMinutes", {
+                          onChange: () => setAutoFilledFields(prev => { const n = new Set(prev); n.delete("halftimeMinutes"); return n; })
+                        })}
                         data-testid="input-minutes"
-                        className="w-full h-9 px-3 rounded-lg bg-input border border-border focus:border-primary outline-none text-sm font-mono"
+                        className={`w-full h-9 px-3 rounded-lg bg-input border focus:border-primary outline-none text-sm font-mono transition-colors ${
+                          autoFilledFields.has("halftimeMinutes")
+                            ? "border-green-500/50 bg-green-500/5 text-green-300"
+                            : "border-border"
+                        }`}
                       />
                     </div>
                     <div className="space-y-1">
                       <label className="text-xs text-muted-foreground">Fouls</label>
                       <input
                         type="number"
-                        {...form.register("halftimeFouls")}
+                        {...form.register("halftimeFouls", {
+                          onChange: () => setAutoFilledFields(prev => { const n = new Set(prev); n.delete("halftimeFouls"); return n; })
+                        })}
                         data-testid="input-fouls"
-                        className="w-full h-9 px-3 rounded-lg bg-input border border-border focus:border-primary outline-none text-sm font-mono"
+                        className={`w-full h-9 px-3 rounded-lg bg-input border focus:border-primary outline-none text-sm font-mono transition-colors ${
+                          autoFilledFields.has("halftimeFouls")
+                            ? "border-green-500/50 bg-green-500/5 text-green-300"
+                            : "border-border"
+                        }`}
                       />
                     </div>
                   </div>
@@ -508,9 +713,15 @@ export default function Dashboard() {
                       <label className="text-xs text-muted-foreground">Current Stat</label>
                       <input
                         type="number" step="0.5"
-                        {...form.register("halftimeStat")}
+                        {...form.register("halftimeStat", {
+                          onChange: () => setAutoFilledFields(prev => { const n = new Set(prev); n.delete("halftimeStat"); return n; })
+                        })}
                         data-testid="input-current-stat"
-                        className="w-full h-9 px-3 rounded-lg bg-input border border-border focus:border-primary outline-none text-sm font-mono"
+                        className={`w-full h-9 px-3 rounded-lg bg-input border focus:border-primary outline-none text-sm font-mono transition-colors ${
+                          autoFilledFields.has("halftimeStat")
+                            ? "border-green-500/50 bg-green-500/5 text-green-300"
+                            : "border-border"
+                        }`}
                       />
                     </div>
                     <div className="space-y-1">
@@ -634,14 +845,27 @@ export default function Dashboard() {
           {/* CENTER: Results */}
           <div className={showParlay ? "lg:col-span-5" : "lg:col-span-8"}>
             {!result ? (
-              <div className="h-full min-h-[400px] flex flex-col items-center justify-center border-2 border-dashed border-border/50 rounded-xl text-muted-foreground bg-card/20 p-8 text-center">
-                <div className="w-16 h-16 rounded-full bg-secondary flex items-center justify-center mb-4">
-                  <Activity className="w-8 h-8 text-muted-foreground/50" />
+              <div className="h-full min-h-[400px] flex flex-col items-center justify-center border-2 border-dashed border-border/40 rounded-xl text-muted-foreground bg-gradient-to-b from-card/20 to-transparent p-8 text-center">
+                <div className="relative mb-5">
+                  <div className="w-20 h-20 rounded-full bg-secondary/80 flex items-center justify-center ring-2 ring-border/40">
+                    <Target className="w-9 h-9 text-muted-foreground/40" />
+                  </div>
+                  <div className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center">
+                    <Zap className="w-3 h-3 text-primary" />
+                  </div>
                 </div>
-                <h3 className="text-lg font-medium text-foreground mb-1">Awaiting Input</h3>
-                <p className="max-w-sm text-sm">Select a player and opponent, enter halftime stats, then calculate.</p>
+                <h3 className="text-lg font-semibold text-foreground mb-2">Ready to Predict</h3>
+                <p className="max-w-xs text-sm text-muted-foreground mb-4">
+                  Select a player and opponent, fill in halftime stats, then calculate the 2H probability.
+                </p>
                 {allGames.length > 0 && (
-                  <p className="text-xs text-muted-foreground/60 mt-2">Tip: Click a live game above to auto-fill stats.</p>
+                  <div className="space-y-1.5 text-left text-xs text-muted-foreground/70 bg-secondary/30 border border-border/30 rounded-lg px-4 py-3 max-w-xs w-full">
+                    <p className="font-semibold text-muted-foreground mb-1 text-[10px] uppercase tracking-wider">Quick start</p>
+                    <p>① Click a game tile above</p>
+                    <p>② Click a player row in the box score</p>
+                    <p>③ Pick a stat type &amp; live line</p>
+                    <p>④ Hit Calculate</p>
+                  </div>
                 )}
               </div>
             ) : (

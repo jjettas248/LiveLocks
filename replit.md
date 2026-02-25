@@ -12,8 +12,11 @@ A full-stack NBA live betting tool that calculates the probability of a player h
 ## Key Features
 - **196 players** across all 30 NBA teams (2025-26 rosters with all major trades), grouped by team
 - **10 stat types**: Points, Rebounds, Assists, Steals, Blocks, and 5 combo props (PRA, PR, PA, RA, S+B)
-- **Live game strip**: ESPN scoreboard auto-refreshes every 30s; clicking a game selects it and auto-fills halftime stats
-- **Live box score auto-fill**: ESPN player box score data populates minutes/fouls/stats when a game+player are selected
+- **Live game strip**: ESPN scoreboard auto-refreshes every 30s; clicking a game selects it and filters players to that matchup
+- **Live box score panel**: Full clickable box score table appears when a game is selected — click any row to instantly auto-fill minutes, fouls, and current stat (sorted by selected prop type, grouped by team, players with minutes > 0 only)
+- **Auto-fill visual feedback**: Green-highlighted inputs show which fields were populated from live stats; each field clears the highlight if manually edited
+- **Improved name matching**: Uses first-initial + last-name matching (fallback from exact match) for more reliable ESPN→DB player resolution
+- **Parlay auto-calculate**: Parlay result updates automatically (debounced 300ms) whenever picks change — no manual button press needed
 - **Sportsbook odds**: The Odds API integration for DraftKings, FanDuel, Hard Rock (5-min cache); gracefully degrades without key
 - **Probability engine**: Blends observed halftime per-minute rate (70%) with season baseline (30%), usage-adjusted scale factor
 - **Foul trouble penalty**: 3 fouls = 30% minute reduction, 4+ fouls = 55% reduction

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
 import type { ParlayPickInput, ParlayResult, CorrelationNote } from "@shared/schema";
 import { ProbabilityRing } from "./probability-ring";
@@ -88,6 +88,7 @@ function CorrelationBadge({ note }: { note: CorrelationNote }) {
 export function ParlaySlip({ picks, onRemove, onClear }: ParlaySlipProps) {
   const [result, setResult] = useState<ParlayResult | null>(null);
   const [showCorrelations, setShowCorrelations] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const calculateParlay = useMutation({
     mutationFn: async (picks: ParlayPickInput[]): Promise<ParlayResult> => {
@@ -102,12 +103,23 @@ export function ParlaySlip({ picks, onRemove, onClear }: ParlaySlipProps) {
     onSuccess: (data) => setResult(data),
   });
 
+  // Auto-calculate whenever picks change (debounced 300ms)
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (picks.length >= 2) {
+      debounceRef.current = setTimeout(() => calculateParlay.mutate(picks), 300);
+    } else {
+      setResult(null);
+    }
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [picks]);
+
   if (picks.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full min-h-[200px] text-center p-6">
         <Trophy className="w-10 h-10 text-muted-foreground/30 mb-3" />
         <p className="text-sm text-muted-foreground">No picks yet.</p>
-        <p className="text-xs text-muted-foreground/60 mt-1">Calculate a prop and click "Add to Parlay"</p>
+        <p className="text-xs text-muted-foreground/60 mt-1">Calculate a prop then click Over or Under to add.</p>
       </div>
     );
   }
@@ -182,21 +194,23 @@ export function ParlaySlip({ picks, onRemove, onClear }: ParlaySlipProps) {
         ))}
       </div>
 
-      {/* Calculate Button */}
-      <button
-        onClick={() => calculateParlay.mutate(picks)}
-        disabled={calculateParlay.isPending || picks.length < 2}
-        data-testid="button-calculate-parlay"
-        className="w-full h-10 rounded-lg bg-primary text-primary-foreground font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-40 mb-3"
-      >
-        {calculateParlay.isPending ? (
-          <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
-        ) : (
-          <>
-            <Trophy className="w-4 h-4" /> Calculate Parlay
-          </>
-        )}
-      </button>
+      {/* Calculate Button / auto-calculating indicator */}
+      {calculateParlay.isPending ? (
+        <div className="w-full h-10 rounded-lg bg-primary/20 border border-primary/30 text-primary/80 text-sm font-semibold flex items-center justify-center gap-2 mb-3">
+          <div className="w-3.5 h-3.5 border-2 border-primary/60 border-t-transparent rounded-full animate-spin" />
+          Calculating…
+        </div>
+      ) : (
+        <button
+          onClick={() => calculateParlay.mutate(picks)}
+          disabled={picks.length < 2}
+          data-testid="button-calculate-parlay"
+          className="w-full h-10 rounded-lg bg-primary/10 border border-primary/30 text-primary font-semibold text-sm flex items-center justify-center gap-2 hover:bg-primary/20 transition-colors disabled:opacity-40 mb-3"
+        >
+          <Trophy className="w-4 h-4" />
+          {result ? "Recalculate" : "Calculate Parlay"}
+        </button>
+      )}
 
       {/* Results */}
       {result && (
