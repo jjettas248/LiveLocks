@@ -290,12 +290,17 @@ export default function Dashboard() {
       <header className="border-b border-border/40 bg-background/80 backdrop-blur-xl sticky top-0 z-50">
         <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-              <Activity className="w-5 h-5 text-primary-foreground" />
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary to-indigo-600 flex items-center justify-center shadow-lg shadow-primary/20 flex-shrink-0">
+              <svg viewBox="0 0 20 20" fill="none" className="w-5 h-5">
+                <rect x="3" y="9" width="14" height="9" rx="2.5" fill="white" fillOpacity="0.95" />
+                <path d="M6.5 9V6.5a3.5 3.5 0 0 1 7 0V9" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                <circle cx="10" cy="13.5" r="1.5" fill="#3b82f6" />
+              </svg>
             </div>
-            <h1 className="text-xl font-bold tracking-tight">
-              NBA Live <span className="text-primary">Prop Predictor</span>
-            </h1>
+            <div className="flex flex-col leading-none">
+              <h1 className="text-xl font-bold tracking-tight text-foreground">LiveLocks</h1>
+              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest mt-0.5">NBA · Live Lines</span>
+            </div>
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">

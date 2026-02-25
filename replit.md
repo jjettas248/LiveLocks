@@ -1,4 +1,4 @@
-# NBA Live Prop Predictor
+# LiveLocks — NBA Live Lines
 
 ## Overview
 A full-stack NBA live betting tool that calculates the probability of a player hitting a live prop line at halftime. It pulls real live game data, player box scores, sportsbook odds, and lets users build correlation-adjusted parlays with deeplinks to DraftKings, FanDuel, and Hard Rock Bet.
