@@ -448,10 +448,9 @@ export default function Dashboard() {
                         <label className="text-xs text-muted-foreground">Live Lines by Book</label>
                         {isOddsLoading && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
                       </div>
-                      {!process.env.ODDS_API_KEY && !oddsData && (
+                      {!isOddsLoading && oddsData && Object.keys(oddsData).length === 0 && (
                         <p className="text-xs text-muted-foreground/60 bg-secondary/50 rounded-lg p-2 border border-border/40">
-                          Set <code className="text-primary">ODDS_API_KEY</code> to see live sportsbook lines.
-                          <a href="https://the-odds-api.com" target="_blank" rel="noopener noreferrer" className="text-primary ml-1 underline">Get free key</a>
+                          No live lines found — player may be inactive or props not yet posted.
                         </p>
                       )}
                       {oddsData && Object.keys(oddsData).length > 0 && (
@@ -479,9 +478,6 @@ export default function Dashboard() {
                             </button>
                           ))}
                         </div>
-                      )}
-                      {oddsData && Object.keys(oddsData).length === 0 && !isOddsLoading && (
-                        <p className="text-xs text-muted-foreground/60">No live lines found for this player/stat.</p>
                       )}
                     </div>
                   )}
