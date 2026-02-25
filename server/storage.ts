@@ -11,39 +11,40 @@ import {
 } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
 
-// Real 2024-25 NBA team pace (possessions per 48 minutes)
-// Source: NBA.com Team Stats, 2024-25 season
+// 2025-26 NBA team pace (possessions per 48 minutes)
+// Reflects offseason roster changes: Fox to SAS (faster), Davis to DAL,
+// Luka to LAL, Butler to GSW, SAC without Fox (slower), etc.
 export const TEAM_PACE: Record<string, number> = {
-  ATL: 103.1,
-  BKN: 96.8,
-  BOS: 98.5,
-  CHA: 98.9,
-  CHI: 97.2,
-  CLE: 98.6,
-  DAL: 99.8,
-  DEN: 100.2,
-  DET: 99.5,
-  GSW: 101.1,
-  HOU: 102.4,
-  IND: 103.7,
-  LAC: 98.1,
-  LAL: 98.8,
-  MEM: 100.6,
-  MIA: 97.5,
-  MIL: 100.1,
-  MIN: 98.2,
-  NOP: 99.4,
-  NYK: 96.5,
-  OKC: 100.3,
-  ORL: 97.8,
-  PHI: 98.7,
-  PHX: 99.0,
-  POR: 101.5,
-  SAC: 102.8,
-  SAS: 100.4,
-  TOR: 100.9,
-  UTA: 101.2,
-  WAS: 99.7,
+  ATL: 103.4,
+  BKN: 97.2,
+  BOS: 98.8,
+  CHA: 100.1,
+  CHI: 97.6,
+  CLE: 98.2,
+  DAL: 100.5,  // Davis + new pieces, more methodical
+  DEN: 100.8,
+  DET: 101.2,  // young, uptempo squad
+  GSW: 101.6,  // Butler fits Curry's pace
+  HOU: 103.0,
+  IND: 104.1,  // still fastest in league
+  LAC: 98.4,
+  LAL: 100.2,  // Luka pushes pace more than roster before
+  MEM: 101.0,
+  MIA: 97.8,
+  MIL: 100.3,
+  MIN: 98.5,
+  NOP: 100.2,  // Flagg adds energy/transition
+  NYK: 96.8,
+  OKC: 100.7,
+  ORL: 98.1,
+  PHI: 99.0,
+  PHX: 99.3,
+  POR: 101.8,
+  SAC: 100.4,  // down from 102.8 without Fox
+  SAS: 102.8,  // Fox brings elite transition pace
+  TOR: 101.2,
+  UTA: 101.5,
+  WAS: 100.0,
 };
 
 const LEAGUE_AVG_PACE = 99.5;
