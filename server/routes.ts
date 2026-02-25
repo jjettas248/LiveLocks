@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
-import { getPlayerOdds, resolveOddsEventId } from "./oddsService";
+import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug } from "./oddsService";
 import { calculateParlay } from "./parlayService";
 
 export async function registerRoutes(
@@ -46,6 +46,29 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("[Odds API Error]", err.message);
       res.status(500).json({ message: err.message || "Failed to fetch odds" });
+    }
+  });
+
+  // Debug endpoint: returns raw Odds API structure for a given matchup
+  // Usage: GET /api/debug/odds-raw?teamA=DEN&teamB=BOS
+  app.get("/api/debug/odds-raw", async (req, res) => {
+    try {
+      const { teamA, teamB } = req.query as { teamA?: string; teamB?: string };
+      if (!teamA || !teamB) return res.status(400).json({ message: "Pass ?teamA=&teamB=" });
+      const eventId = await resolveEventForDebug(teamA, teamB);
+      if (!eventId) return res.json({ error: "No event found for these teams", teamA, teamB });
+      const raw = await getRawOddsForDebug(eventId);
+      const summary = (raw.bookmakers ?? []).map((bk: any) => ({
+        bookmaker: bk.key,
+        markets: (bk.markets ?? []).map((m: any) => ({
+          key: m.key,
+          playerCount: [...new Set((m.outcomes ?? []).map((o: any) => o.description ?? "?"))].length,
+          samplePlayers: [...new Set((m.outcomes ?? []).map((o: any) => o.description ?? "?"))].slice(0, 5),
+        })),
+      }));
+      res.json({ eventId, summary });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
     }
   });
 

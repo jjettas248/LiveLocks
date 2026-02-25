@@ -171,7 +171,23 @@ async function getRawOdds(oddsEventId: string): Promise<any> {
 
   const books = (data.bookmakers ?? []).map((b: any) => b.key).join(", ");
   console.log(`[Odds] Fetched odds for event ${oddsEventId}: bookmakers = ${books || "none"}`);
+
+  // Log available markets per bookmaker for diagnostics
+  for (const bk of (data.bookmakers ?? [])) {
+    const mkeys = (bk.markets ?? []).map((m: any) => m.key).join(", ");
+    console.log(`[Odds]   ${bk.key} markets: ${mkeys || "none"}`);
+  }
   return data;
+}
+
+// Return raw bookmaker/market data for diagnostics — used by /api/debug/odds-raw
+export async function getRawOddsForDebug(oddsEventId: string): Promise<any> {
+  return getRawOdds(oddsEventId);
+}
+
+// Expose the event resolver for the debug endpoint
+export async function resolveEventForDebug(teamA: string, teamB: string): Promise<string | null> {
+  return resolveOddsEventId(teamA, teamB);
 }
 
 // Normalize a player name: lowercase, strip suffixes (Jr., Sr., II, III, IV)
@@ -270,7 +286,17 @@ export async function getPlayerOdds(
   }
 
   if (!foundForAnyBook) {
-    console.warn(`[Odds] No ${statType} line found for "${playerName}" in event ${oddsEventId}`);
+    // Log available players in the market to help diagnose name mismatches
+    const sampleBook = oddsData.bookmakers?.[0];
+    const sampleMarket = sampleBook?.markets?.find((m: any) => m.key === marketKey);
+    if (sampleMarket?.outcomes) {
+      const available = [...new Set(
+        sampleMarket.outcomes.map((o: any) => o.description ?? o.name).filter(Boolean)
+      )].slice(0, 8);
+      console.warn(`[Odds] No ${statType} line found for "${playerName}" — ${available.length ? `Available: ${available.join(", ")}` : "market has no outcomes (props not posted yet)"}`);
+    } else {
+      console.warn(`[Odds] No ${statType} line found for "${playerName}" — market key "${marketKey}" not found in response (may not be offered by these books)`);
+    }
   }
 
   return result;
