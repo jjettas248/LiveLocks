@@ -184,6 +184,105 @@ export async function registerRoutes(
     }
   });
 
+  // Roster sync from ESPN API — updates player team assignments from live rosters
+  app.post("/api/sync-rosters", async (req, res) => {
+    try {
+      const ESPN_TO_DB: Record<string, string> = {
+        GS: "GSW", SA: "SAS", NO: "NOP", NY: "NYK",
+        PHO: "PHX", UTH: "UTA", WSH: "WAS", CHO: "CHA",
+      };
+      const normalize = (s: string) => s.toLowerCase().replace(/['.'\-\s]+/g, "").replace(/jr$|sr$|ii$|iii$|iv$/,"");
+
+      // 1. Get all NBA teams from ESPN
+      const teamsRes = await fetch(
+        "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams?limit=32",
+        { headers: { "User-Agent": "Mozilla/5.0" } }
+      );
+      if (!teamsRes.ok) throw new Error("ESPN teams API unavailable");
+      const teamsData = await teamsRes.json() as any;
+      const espnTeams: any[] = teamsData.sports?.[0]?.leagues?.[0]?.teams ?? [];
+
+      // 2. Get current DB players
+      const dbPlayers = await storage.getPlayers();
+
+      let updated = 0, added = 0, skipped = 0, teamErrors = 0;
+      const processedPlayerIds = new Set<number>();
+
+      for (const teamWrapper of espnTeams) {
+        const espnTeam = teamWrapper.team;
+        const espnAbbr: string = espnTeam.abbreviation ?? "";
+        const dbTeam = ESPN_TO_DB[espnAbbr] ?? espnAbbr;
+
+        try {
+          const rosterRes = await fetch(
+            `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/${espnTeam.id}/roster`,
+            { headers: { "User-Agent": "Mozilla/5.0" } }
+          );
+          if (!rosterRes.ok) { teamErrors++; continue; }
+          const rosterData = await rosterRes.json() as any;
+
+          // ESPN returns athletes as flat array or grouped array
+          let athletes: any[] = [];
+          if (Array.isArray(rosterData.athletes)) {
+            if (rosterData.athletes.length > 0 && Array.isArray(rosterData.athletes[0])) {
+              athletes = rosterData.athletes.flat();
+            } else {
+              athletes = rosterData.athletes;
+            }
+          }
+
+          for (const athlete of athletes) {
+            const name: string = athlete.displayName ?? athlete.fullName ?? "";
+            if (!name) continue;
+            const pos: string = athlete.position?.abbreviation ?? "SF";
+            const normName = normalize(name);
+
+            const match = dbPlayers.find(p => normalize(p.name) === normName);
+            if (match) {
+              if (!processedPlayerIds.has(match.id)) {
+                processedPlayerIds.add(match.id);
+                if (match.team !== dbTeam) {
+                  await storage.updatePlayerStats(match.id, { team: dbTeam } as any);
+                  match.team = dbTeam;
+                  updated++;
+                } else {
+                  skipped++;
+                }
+              }
+            } else {
+              // Only add if it looks like a real NBA player (ESPN roster = active player)
+              const validPos = ["PG","SG","SF","PF","C"].includes(pos) ? pos : "SF";
+              await storage.createPlayer({
+                name,
+                team: dbTeam,
+                position: validPos,
+                avgMinutes: "20.0",
+                avgFouls: "2.0",
+              });
+              dbPlayers.push({ id: -1, name, team: dbTeam, position: validPos, avgMinutes: "20.0", avgFouls: "2.0", ppg: null, rpg: null, apg: null, spg: null, bpg: null, usageRate: null, statsUpdatedAt: null });
+              added++;
+            }
+          }
+        } catch (teamErr) {
+          console.error(`Error syncing ${dbTeam}:`, teamErr);
+          teamErrors++;
+        }
+        await new Promise(r => setTimeout(r, 150));
+      }
+
+      res.json({
+        message: `Roster sync complete`,
+        updated,
+        added,
+        skipped,
+        teamErrors,
+        totalPlayers: dbPlayers.length,
+      });
+    } catch (e) {
+      res.status(500).json({ message: "Roster sync failed", error: (e as any).message });
+    }
+  });
+
   app.get("/api/sync-stats", async (req, res) => {
     try {
       const players = await storage.getPlayers();

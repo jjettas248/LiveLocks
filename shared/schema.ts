@@ -115,6 +115,7 @@ export interface ParlayPickInput {
   statType: string;
   line: number;
   probability: number;
+  betDirection: "over" | "under";
   sportsbook: string;
   oddsAmerican: number;
   gameId?: string;

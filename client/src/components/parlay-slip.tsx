@@ -37,17 +37,17 @@ const SPORTSBOOK_INFO: Record<string, { label: string; color: string; deeplink: 
   draftkings: {
     label: "DraftKings",
     color: "bg-[#1a6f3c] hover:bg-[#1a8f4c]",
-    deeplink: () => "https://sportsbook.draftkings.com/sports/basketball/nba",
+    deeplink: () => "https://sportsbook.draftkings.com/leagues/basketball/nba",
   },
   fanduel: {
     label: "FanDuel",
     color: "bg-[#1358d0] hover:bg-[#1a6af0]",
-    deeplink: () => "https://sportsbook.fanduel.com/basketball/nba",
+    deeplink: () => "https://sportsbook.fanduel.com/navigation/nba",
   },
   hardrockbet: {
     label: "Hard Rock Bet",
     color: "bg-[#b8860b] hover:bg-[#d4a017]",
-    deeplink: () => "https://www.hardrockbet.com/en-us/sports/basketball/nba",
+    deeplink: () => "https://www.hardrockbet.com/sports/basketball",
   },
 };
 
@@ -145,8 +145,12 @@ export function ParlaySlip({ picks, onRemove, onClear }: ParlaySlipProps) {
                 <span className="text-xs text-muted-foreground">{pick.playerTeam}</span>
               </div>
               <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-xs font-mono bg-primary/10 text-primary px-1.5 py-0.5 rounded">
-                  {STAT_LABELS[pick.statType] ?? pick.statType} O{pick.line}
+                <span className={`text-xs font-mono px-1.5 py-0.5 rounded ${
+                  pick.betDirection === "under"
+                    ? "bg-red-500/10 text-red-400"
+                    : "bg-emerald-500/10 text-emerald-400"
+                }`}>
+                  {STAT_LABELS[pick.statType] ?? pick.statType} {pick.betDirection === "under" ? "U" : "O"}{pick.line}
                 </span>
                 {pick.sportsbook && (
                   <span className="text-xs text-muted-foreground">

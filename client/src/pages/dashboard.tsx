@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useMutation } from "@tanstack/react-query";
 import { calculateProbabilitySchema, type CalculateProbabilityRequest, type ParlayPickInput } from "@shared/schema";
 import { usePlayers, useTeams, useCalculateProbability, useLiveGames, useLiveStats, usePlayerOdds } from "@/hooks/use-nba";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ProbabilityRing } from "@/components/probability-ring";
 import { StatCard } from "@/components/stat-card";
 import { ParlaySlip } from "@/components/parlay-slip";
@@ -13,6 +15,7 @@ import {
   Target,
   ShieldAlert,
   TrendingUp,
+  TrendingDown,
   ChevronDown,
   Zap,
   Radio,
@@ -20,7 +23,15 @@ import {
   Plus,
   Trophy,
   Loader2,
+  Users,
 } from "lucide-react";
+
+// ESPN abbreviation → our DB team abbreviation
+const ESPN_TO_DB: Record<string, string> = {
+  GS: "GSW", SA: "SAS", NO: "NOP", NY: "NYK",
+  PHO: "PHX", UTH: "UTA", WSH: "WAS", CHO: "CHA",
+};
+const espnToDb = (abbr: string) => ESPN_TO_DB[abbr.toUpperCase()] ?? abbr.toUpperCase();
 
 const STAT_TYPES = [
   { value: "points", label: "Points" },
@@ -63,8 +74,15 @@ export default function Dashboard() {
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
   const { data: liveGames, isLoading: isGamesLoading, refetch: refetchGames } = useLiveGames();
 
+  const syncRostersMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/sync-rosters"),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/players"] }),
+  });
+
   const [selectedGameId, setSelectedGameId] = useState<string | undefined>();
-  const [selectedGameTeams, setSelectedGameTeams] = useState<{ home: string; away: string } | undefined>();
+  const [selectedGameTeams, setSelectedGameTeams] = useState<{
+    home: string; away: string; homeAbbr: string; awayAbbr: string;
+  } | undefined>();
   const [parlayPicks, setParlayPicks] = useState<ParlayPickInput[]>([]);
   const [showParlay, setShowParlay] = useState(false);
   const [selectedSportsbook, setSelectedSportsbook] = useState<string>("manual");
@@ -139,7 +157,7 @@ export default function Dashboard() {
     calculateMutation.mutate({ ...data, gameId: selectedGameId });
   };
 
-  const handleAddToParlay = () => {
+  const handleAddToParlay = (direction: "over" | "under") => {
     if (!calculateMutation.data || !selectedPlayer) return;
     const result = calculateMutation.data;
     const formVals = form.getValues();
@@ -147,15 +165,22 @@ export default function Dashboard() {
       ? oddsData[selectedSportsbook]
       : null;
 
+    const overProb = result.probability;
+    const probability = direction === "over" ? overProb : Math.round((100 - overProb) * 10) / 10;
+    const oddsAmerican = direction === "over"
+      ? (odds?.overOdds ?? 0)
+      : (odds?.underOdds ?? 0);
+
     const pick: ParlayPickInput = {
       playerId: selectedPlayer.id,
       playerName: selectedPlayer.name,
       playerTeam: selectedPlayer.team,
       statType: formVals.statType,
       line: formVals.liveLine,
-      probability: result.probability,
+      probability,
+      betDirection: direction,
       sportsbook: selectedSportsbook !== "manual" ? selectedSportsbook : "",
-      oddsAmerican: odds?.overOdds ?? 0,
+      oddsAmerican,
       gameId: selectedGameId,
     };
 
@@ -165,7 +190,16 @@ export default function Dashboard() {
     }
   };
 
-  const playersByTeam = (players ?? []).reduce<Record<string, typeof players>>((acc, p) => {
+  // When a game is selected, filter players to only those two teams
+  const filteredPlayers = selectedGameId && selectedGameTeams
+    ? (players ?? []).filter(p => {
+        const homeDb = espnToDb(selectedGameTeams.homeAbbr);
+        const awayDb = espnToDb(selectedGameTeams.awayAbbr);
+        return p.team === homeDb || p.team === awayDb;
+      })
+    : (players ?? []);
+
+  const playersByTeam = filteredPlayers.reduce<Record<string, typeof players>>((acc, p) => {
     if (!acc[p.team]) acc[p.team] = [];
     acc[p.team]!.push(p);
     return acc;
@@ -210,6 +244,20 @@ export default function Dashboard() {
                   : `${activeGames.length} live game${activeGames.length !== 1 ? "s" : ""}`}
               </span>
             </div>
+            <button
+              onClick={() => syncRostersMutation.mutate()}
+              disabled={syncRostersMutation.isPending}
+              data-testid="button-sync-rosters"
+              title="Pull latest rosters from ESPN to update player team assignments"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
+            >
+              {syncRostersMutation.isPending ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5" />
+              )}
+              Sync Rosters
+            </button>
             <button
               onClick={() => setShowParlay(!showParlay)}
               data-testid="button-toggle-parlay"
@@ -260,17 +308,24 @@ export default function Dashboard() {
                         setSelectedGameTeams(undefined);
                         form.setValue("halftimeScore", "");
                         form.setValue("gameId", "");
+                        form.setValue("playerId" as any, "");
                       } else {
                         setSelectedGameId(game.id);
-                        setSelectedGameTeams({ home: game.homeTeam, away: game.awayTeam });
+                        setSelectedGameTeams({
+                          home: game.homeTeam,
+                          away: game.awayTeam,
+                          homeAbbr: game.homeTeamAbbr,
+                          awayAbbr: game.awayTeamAbbr,
+                        });
                         form.setValue("gameId", game.id);
+                        form.setValue("playerId" as any, "");
                         if (game.period >= 2) {
                           form.setValue("halftimeScore", scoreStr);
                         }
-                        const homeAbbr = game.homeTeamAbbr.toUpperCase();
-                        const awayAbbr = game.awayTeamAbbr.toUpperCase();
-                        if (teams?.includes(homeAbbr)) form.setValue("opponentTeam", homeAbbr);
-                        else if (teams?.includes(awayAbbr)) form.setValue("opponentTeam", awayAbbr);
+                        const homeDb = espnToDb(game.homeTeamAbbr);
+                        const awayDb = espnToDb(game.awayTeamAbbr);
+                        if (teams?.includes(homeDb)) form.setValue("opponentTeam", homeDb);
+                        else if (teams?.includes(awayDb)) form.setValue("opponentTeam", awayDb);
                       }
                     }}
                     className={`flex flex-col items-center px-3 py-2 rounded-lg border text-xs min-w-[130px] transition-all ${
@@ -311,7 +366,15 @@ export default function Dashboard() {
               <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
                 {/* Player */}
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">Player</label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-medium text-muted-foreground">Player</label>
+                    {selectedGameId && selectedGameTeams && (
+                      <span className="flex items-center gap-1 text-xs text-primary">
+                        <Users className="w-3 h-3" />
+                        {espnToDb(selectedGameTeams.awayAbbr)} vs {espnToDb(selectedGameTeams.homeAbbr)} only
+                      </span>
+                    )}
+                  </div>
                   <div className="relative">
                     <select
                       {...form.register("playerId")}
@@ -547,17 +610,34 @@ export default function Dashboard() {
                         </div>
                       )}
 
-                      {/* Add to Parlay button */}
-                      <button
-                        type="button"
-                        onClick={handleAddToParlay}
-                        disabled={parlayPicks.length >= 10}
-                        data-testid="button-add-to-parlay"
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary/10 border border-primary/30 text-primary text-sm font-semibold hover:bg-primary/20 transition-colors disabled:opacity-40"
-                      >
-                        <Plus className="w-4 h-4" /> Add to Parlay
-                        {parlayPicks.length >= 10 && <span className="text-xs">(max 10)</span>}
-                      </button>
+                      {/* Add to Parlay — Over / Under */}
+                      <div className="flex gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => handleAddToParlay("over")}
+                          disabled={parlayPicks.length >= 10}
+                          data-testid="button-add-over"
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm font-semibold hover:bg-emerald-500/20 transition-colors disabled:opacity-40"
+                        >
+                          <TrendingUp className="w-4 h-4" />
+                          Over {form.watch("liveLine") || "—"}{" "}
+                          <span className="opacity-70">({result.probability.toFixed(0)}%)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAddToParlay("under")}
+                          disabled={parlayPicks.length >= 10}
+                          data-testid="button-add-under"
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm font-semibold hover:bg-red-500/20 transition-colors disabled:opacity-40"
+                        >
+                          <TrendingDown className="w-4 h-4" />
+                          Under {form.watch("liveLine") || "—"}{" "}
+                          <span className="opacity-70">({(100 - result.probability).toFixed(0)}%)</span>
+                        </button>
+                        {parlayPicks.length >= 10 && (
+                          <span className="text-xs text-muted-foreground self-center">(max 10)</span>
+                        )}
+                      </div>
                     </div>
                     <div className="flex-shrink-0 z-10">
                       <ProbabilityRing probability={result.probability} />
