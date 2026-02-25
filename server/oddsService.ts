@@ -135,13 +135,19 @@ export async function resolveOddsEventId(
 }
 
 // Map our stat type to the Odds API market key
+// Combo and defensive markets are included so a single API call covers all prop types
 const MARKET_MAP: Record<string, string> = {
-  points: "player_points",
-  rebounds: "player_rebounds",
-  assists: "player_assists",
-  steals: "player_steals",
-  blocks: "player_blocks",
-  threes: "player_threes",
+  points:      "player_points",
+  rebounds:    "player_rebounds",
+  assists:     "player_assists",
+  steals:      "player_steals",
+  blocks:      "player_blocks",
+  threes:      "player_threes",
+  pts_reb_ast: "player_points_rebounds_assists",
+  pts_reb:     "player_points_rebounds",
+  pts_ast:     "player_points_assists",
+  reb_ast:     "player_rebounds_assists",
+  stl_blk:     "player_blocks_steals",
 };
 
 // Fetch player prop odds for an Odds API event UUID
