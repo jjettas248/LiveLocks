@@ -15,7 +15,7 @@ export const teamDefense = pgTable("team_defense", {
   id: serial("id").primaryKey(),
   teamName: text("team_name").notNull(),
   position: text("position").notNull(),
-  defRating: numeric("def_rating").notNull(), // Multiplier, > 1 means bad defense (allows more stats), < 1 means good defense
+  defRating: numeric("def_rating").notNull(),
 });
 
 export const insertPlayerSchema = createInsertSchema(players).omit({ id: true });
@@ -26,23 +26,39 @@ export type InsertPlayer = z.infer<typeof insertPlayerSchema>;
 export type TeamDefense = typeof teamDefense.$inferSelect;
 export type InsertTeamDefense = z.infer<typeof insertTeamDefenseSchema>;
 
-// API request schema
 export const calculateProbabilitySchema = z.object({
   playerId: z.coerce.number(),
   opponentTeam: z.string(),
   halftimeMinutes: z.coerce.number(),
   halftimeFouls: z.coerce.number(),
-  halftimeStat: z.coerce.number(), // The stat we are betting on (e.g. 10 points)
+  halftimeStat: z.coerce.number(),
   liveLine: z.coerce.number(),
-  statType: z.string(), // e.g., 'points', 'rebounds', 'assists'
-  halftimeScore: z.string().optional(), // e.g., "55-50"
+  statType: z.string(),
+  halftimeScore: z.string().optional(),
 });
 
 export type CalculateProbabilityRequest = z.infer<typeof calculateProbabilitySchema>;
 
 export interface CalculateProbabilityResponse {
-  probability: number; // 0 to 100
+  probability: number;
   expectedTotal: number;
   projectedSecondHalfMinutes: number;
   defenseMultiplier: number;
+  paceMultiplier: number;
+  paceLabel: string;
+  teamPace: number;
+  opponentPace: number;
+}
+
+export interface LiveGame {
+  id: string;
+  homeTeam: string;
+  homeTeamAbbr: string;
+  homeScore: number;
+  awayTeam: string;
+  awayTeamAbbr: string;
+  awayScore: number;
+  status: string;
+  period: number;
+  clock: string;
 }

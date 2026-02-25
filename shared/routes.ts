@@ -38,6 +38,15 @@ export const api = {
       },
     },
   },
+  liveGames: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/live-games' as const,
+      responses: {
+        200: z.array(z.custom<import('./schema').LiveGame>()),
+      },
+    },
+  },
 };
 
 export function buildUrl(path: string, params?: Record<string, string | number>): string {
