@@ -14,7 +14,9 @@ export async function registerRoutes(
 
   app.get("/api/odds", async (req, res) => {
     try {
-      const { homeTeam, awayTeam, playerName, statType } = req.query;
+      // Accept either full team names (homeTeam/awayTeam from game selection)
+      // OR abbreviations (playerTeam/opponentTeam from player selection without a game).
+      const { homeTeam, awayTeam, playerTeam, opponentTeam, playerName, statType } = req.query;
 
       if (!playerName || !statType) {
         return res.status(400).json({ message: "Missing required parameters: playerName, statType" });
@@ -24,10 +26,16 @@ export async function registerRoutes(
         return res.status(503).json({ message: "ODDS_API_KEY not configured" });
       }
 
-      // Resolve Odds API event ID from team names (ESPN uses different IDs)
-      const oddsEventId = homeTeam && awayTeam
-        ? await resolveOddsEventId(homeTeam as string, awayTeam as string)
-        : null;
+      // Determine which team identifiers to use
+      const teamA = (playerTeam ?? homeTeam) as string | undefined;
+      const teamB = (opponentTeam ?? awayTeam) as string | undefined;
+
+      if (!teamA || !teamB) {
+        return res.json({ _error: "Select a player and opponent to see live lines" });
+      }
+
+      // resolveOddsEventId handles both full names and abbreviations
+      const oddsEventId = await resolveOddsEventId(teamA, teamB);
 
       if (!oddsEventId) {
         return res.json({}); // No matching event found — graceful empty response
@@ -36,7 +44,7 @@ export async function registerRoutes(
       const formattedOdds = await getPlayerOdds(oddsEventId, playerName as string, statType as string);
       res.json(formattedOdds);
     } catch (err: any) {
-      console.error("Odds API Error:", err);
+      console.error("[Odds API Error]", err.message);
       res.status(500).json({ message: err.message || "Failed to fetch odds" });
     }
   });
@@ -89,6 +97,8 @@ export async function registerRoutes(
         const home = comp?.competitors?.find((c: any) => c.homeAway === "home");
         const away = comp?.competitors?.find((c: any) => c.homeAway === "away");
         const status = comp?.status;
+        const statusDesc: string = status?.type?.description ?? "Scheduled";
+        const isScheduled = statusDesc === "Scheduled" || statusDesc === "Pre-Game";
         return {
           id: event.id,
           homeTeam: home?.team?.displayName ?? "",
@@ -97,9 +107,10 @@ export async function registerRoutes(
           awayTeam: away?.team?.displayName ?? "",
           awayTeamAbbr: away?.team?.abbreviation ?? "",
           awayScore: parseInt(away?.score ?? "0", 10),
-          status: status?.type?.description ?? "Scheduled",
+          status: statusDesc,
           period: status?.period ?? 0,
           clock: status?.displayClock ?? "",
+          startTime: isScheduled ? (event.date ?? comp?.date ?? undefined) : undefined,
         };
       });
       res.json(games);

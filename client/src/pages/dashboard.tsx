@@ -111,12 +111,20 @@ export default function Dashboard() {
   // Live stats for selected game
   const { data: liveStats } = useLiveStats(selectedGameId);
 
-  // Live odds for selected player — uses team names to resolve to Odds API event
+  // Determine opponent team: prefer game tile selection, fall back to form field
+  const watchedOpponent = form.watch("opponentTeam");
+  const isSelectedGameLive = selectedGameId
+    ? (liveGames ?? []).some(g => g.id === selectedGameId && g.status !== "Scheduled" && g.status !== "Final")
+    : false;
+
+  // Live odds — works with or without a game tile selected.
+  // Uses player's DB team + manually selected opponent abbreviations.
   const { data: oddsData, isLoading: isOddsLoading } = usePlayerOdds(
-    selectedGameTeams?.home,
-    selectedGameTeams?.away,
+    selectedPlayer?.team,
+    watchedOpponent || undefined,
     selectedPlayer?.name,
-    watchedStatType
+    watchedStatType,
+    isSelectedGameLive
   );
 
   // Auto-fill halftime stats from live box score when player changes
@@ -294,9 +302,14 @@ export default function Dashboard() {
             </div>
             <div className="flex gap-2 flex-wrap">
               {allGames.map((game) => {
-                const isLive = game.status !== "Scheduled" && game.status !== "Final";
+                const isLive = game.status !== "Scheduled" && game.status !== "Pre-Game" && game.status !== "Final";
+                const isFinal = game.status === "Final";
+                const isScheduled = game.status === "Scheduled" || game.status === "Pre-Game";
                 const isSelected = game.id === selectedGameId;
                 const scoreStr = `${game.awayScore}-${game.homeScore}`;
+                const tipoffTime = game.startTime
+                  ? new Date(game.startTime).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })
+                  : null;
 
                 return (
                   <button
@@ -343,8 +356,15 @@ export default function Dashboard() {
                     </div>
                     <div className="flex items-center gap-1 text-muted-foreground mt-0.5">
                       {isLive && <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse inline-block" />}
-                      <span>{isLive ? `Q${game.period} ${game.clock}` : game.status}</span>
-                      {isSelected && <span className="text-primary font-medium ml-1">● Selected</span>}
+                      {isFinal && <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 inline-block" />}
+                      <span className={isLive ? "text-green-400" : isFinal ? "text-muted-foreground/60" : ""}>
+                        {isLive
+                          ? `Q${game.period} ${game.clock}`
+                          : isScheduled && tipoffTime
+                          ? tipoffTime
+                          : game.status}
+                      </span>
+                      {isSelected && <span className="text-primary font-medium ml-1">●</span>}
                     </div>
                   </button>
                 );
@@ -504,42 +524,61 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  {/* Live Odds from Sportsbooks */}
-                  {selectedGameId && (
+                  {/* Live Odds from Sportsbooks — shows whenever player + opponent are both set */}
+                  {selectedPlayer && (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
-                        <label className="text-xs text-muted-foreground">Live Lines by Book</label>
+                        <label className="text-xs text-muted-foreground">
+                          Lines by Book
+                          {isSelectedGameLive && (
+                            <span className="ml-1.5 text-green-400 font-medium">· Live</span>
+                          )}
+                        </label>
                         {isOddsLoading && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
                       </div>
-                      {!isOddsLoading && oddsData && Object.keys(oddsData).length === 0 && (
+
+                      {/* No opponent selected yet */}
+                      {!watchedOpponent && !isOddsLoading && (
                         <p className="text-xs text-muted-foreground/60 bg-secondary/50 rounded-lg p-2 border border-border/40">
-                          No live lines found — player may be inactive or props not yet posted.
+                          Select an opponent team above to load sportsbook lines.
                         </p>
                       )}
+
+                      {/* Odds fetched but nothing found */}
+                      {watchedOpponent && !isOddsLoading && oddsData && Object.keys(oddsData).length === 0 && (
+                        <p className="text-xs text-muted-foreground/60 bg-secondary/50 rounded-lg p-2 border border-border/40">
+                          No lines found — props may not be posted yet, or the player is inactive.
+                        </p>
+                      )}
+
+                      {/* Odds available */}
                       {oddsData && Object.keys(oddsData).length > 0 && (
                         <div className="space-y-1.5">
-                          {Object.entries(oddsData).map(([sb, odds]) => (
-                            <button
-                              key={sb}
-                              type="button"
-                              data-testid={`button-odds-${sb}`}
-                              onClick={() => {
-                                form.setValue("liveLine", odds.line);
-                                setSelectedSportsbook(sb);
-                              }}
-                              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border text-xs transition-all ${
-                                selectedSportsbook === sb
-                                  ? "border-primary bg-primary/10 text-primary"
-                                  : "border-border/50 bg-secondary/30 hover:bg-secondary/60 text-foreground"
-                              }`}
-                            >
-                              <span className="font-semibold">{SPORTSBOOK_LABELS[sb] ?? sb}</span>
-                              <span className="font-mono font-bold">{odds.line}</span>
-                              <span className="text-muted-foreground">
-                                O {formatOdds(odds.overOdds)} / U {formatOdds(odds.underOdds)}
-                              </span>
-                            </button>
-                          ))}
+                          {Object.entries(oddsData).map(([sb, odds]) => {
+                            const o = odds as { line: number; overOdds: number; underOdds: number };
+                            return (
+                              <button
+                                key={sb}
+                                type="button"
+                                data-testid={`button-odds-${sb}`}
+                                onClick={() => {
+                                  form.setValue("liveLine", o.line);
+                                  setSelectedSportsbook(sb);
+                                }}
+                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border text-xs transition-all ${
+                                  selectedSportsbook === sb
+                                    ? "border-primary bg-primary/10 text-primary"
+                                    : "border-border/50 bg-secondary/30 hover:bg-secondary/60 text-foreground"
+                                }`}
+                              >
+                                <span className="font-semibold">{SPORTSBOOK_LABELS[sb] ?? sb}</span>
+                                <span className="font-mono font-bold">{o.line}</span>
+                                <span className="text-muted-foreground">
+                                  O {formatOdds(o.overOdds)} / U {formatOdds(o.underOdds)}
+                                </span>
+                              </button>
+                            );
+                          })}
                         </div>
                       )}
                     </div>

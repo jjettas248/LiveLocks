@@ -1,17 +1,66 @@
 const ODDS_API_KEY = process.env.ODDS_API_KEY;
 const BASE_URL = "https://api.the-odds-api.com/v4/sports/basketball_nba";
 
+// Canonical team name lookup — The Odds API uses full city+nickname
+export const TEAM_FULL_NAMES: Record<string, string> = {
+  ATL: "Atlanta Hawks",
+  BKN: "Brooklyn Nets",
+  BOS: "Boston Celtics",
+  CHA: "Charlotte Hornets",
+  CHI: "Chicago Bulls",
+  CLE: "Cleveland Cavaliers",
+  DAL: "Dallas Mavericks",
+  DEN: "Denver Nuggets",
+  DET: "Detroit Pistons",
+  GSW: "Golden State Warriors",
+  HOU: "Houston Rockets",
+  IND: "Indiana Pacers",
+  LAC: "Los Angeles Clippers",
+  LAL: "Los Angeles Lakers",
+  MEM: "Memphis Grizzlies",
+  MIA: "Miami Heat",
+  MIL: "Milwaukee Bucks",
+  MIN: "Minnesota Timberwolves",
+  NOP: "New Orleans Pelicans",
+  NYK: "New York Knicks",
+  OKC: "Oklahoma City Thunder",
+  ORL: "Orlando Magic",
+  PHI: "Philadelphia 76ers",
+  PHX: "Phoenix Suns",
+  POR: "Portland Trail Blazers",
+  SAC: "Sacramento Kings",
+  SAS: "San Antonio Spurs",
+  TOR: "Toronto Raptors",
+  UTA: "Utah Jazz",
+  UTAH: "Utah Jazz",    // some DB records use UTAH instead of UTA
+  WAS: "Washington Wizards",
+};
+
 interface CacheEntry {
   data: any;
   timestamp: number;
 }
 
 const cache = new Map<string, CacheEntry>();
-const EVENTS_TTL = 10 * 60 * 1000; // 10 min
-const ODDS_TTL = 5 * 60 * 1000;    // 5 min
+const EVENTS_TTL = 3 * 60 * 1000;  // 3 min (shorter so fresh games appear quickly)
+const ODDS_TTL = 4 * 60 * 1000;    // 4 min
 
 function isFresh(entry: CacheEntry | undefined, ttl: number): boolean {
   return !!entry && Date.now() - entry.timestamp < ttl;
+}
+
+// Normalize a team name down to its city word(s) for fuzzy matching
+function normTeam(name: string): string {
+  return name.toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Check if two normalized team strings match each other
+function teamsMatch(a: string, b: string): boolean {
+  const na = normTeam(a);
+  const nb = normTeam(b);
+  return na === nb || na.includes(nb) || nb.includes(na);
 }
 
 // Fetch and cache the full list of NBA events from The Odds API
@@ -22,78 +71,67 @@ async function getEvents(): Promise<any[]> {
 
   if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
 
-  const res = await fetch(`${BASE_URL}/events?apiKey=${ODDS_API_KEY}`);
+  const res = await fetch(
+    `${BASE_URL}/events?apiKey=${ODDS_API_KEY}&dateFormat=iso`,
+    { signal: AbortSignal.timeout(8000) }
+  );
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Events fetch failed: ${res.status} ${body}`);
+    throw new Error(`Events fetch failed: ${res.status} — ${body}`);
   }
   const data = await res.json();
   cache.set(cacheKey, { data, timestamp: Date.now() });
+  console.log(`[Odds] Fetched ${data.length} NBA events`);
   return data;
 }
 
-// Normalise team names for fuzzy matching (handle common abbreviations/aliases)
-function normTeam(name: string): string {
-  return name.toLowerCase()
-    .replace("golden state warriors", "golden state")
-    .replace("oklahoma city thunder", "oklahoma city")
-    .replace("san antonio spurs", "san antonio")
-    .replace("los angeles lakers", "los angeles lakers")
-    .replace("los angeles clippers", "los angeles clippers")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// Match an ESPN game (home/away team full names or abbreviations) to an Odds API event UUID
+// Match a team abbreviation (or full name) to an Odds API event UUID.
+// playerTeam is the team the player is on; opponentTeam is their opponent.
+// We don't know which side is home/away, so we try both orderings.
 export async function resolveOddsEventId(
-  homeTeam: string,
-  awayTeam: string
+  playerTeamInput: string,
+  opponentTeamInput: string
 ): Promise<string | null> {
   try {
     const events = await getEvents();
-    const home = normTeam(homeTeam);
-    const away = normTeam(awayTeam);
+
+    // Resolve abbreviations to full names where possible
+    const playerTeam = TEAM_FULL_NAMES[playerTeamInput.toUpperCase()] ?? playerTeamInput;
+    const opponentTeam = TEAM_FULL_NAMES[opponentTeamInput.toUpperCase()] ?? opponentTeamInput;
 
     for (const ev of events) {
-      const evHome = normTeam(ev.home_team ?? "");
-      const evAway = normTeam(ev.away_team ?? "");
-      if (evHome.includes(home) || home.includes(evHome)) {
-        if (evAway.includes(away) || away.includes(evAway)) {
-          return ev.id as string;
-        }
+      const evHome: string = ev.home_team ?? "";
+      const evAway: string = ev.away_team ?? "";
+
+      // Match regardless of home/away ordering
+      const playerIsHome = teamsMatch(playerTeam, evHome) && teamsMatch(opponentTeam, evAway);
+      const playerIsAway = teamsMatch(playerTeam, evAway) && teamsMatch(opponentTeam, evHome);
+
+      if (playerIsHome || playerIsAway) {
+        console.log(`[Odds] Matched event: ${ev.away_team} @ ${ev.home_team} → ${ev.id}`);
+        return ev.id as string;
       }
     }
+
+    // Fallback: try to find an event that just contains the player's team
+    for (const ev of events) {
+      if (
+        teamsMatch(playerTeam, ev.home_team ?? "") ||
+        teamsMatch(playerTeam, ev.away_team ?? "")
+      ) {
+        console.log(`[Odds] Fuzzy team match: ${ev.away_team} @ ${ev.home_team} → ${ev.id}`);
+        return ev.id as string;
+      }
+    }
+
+    console.warn(`[Odds] No event found for ${playerTeam} vs ${opponentTeam}. Available: ${
+      events.map((e: any) => `${e.away_team} @ ${e.home_team}`).join(" | ")
+    }`);
     return null;
-  } catch {
+  } catch (err) {
+    console.error("[Odds] resolveOddsEventId error:", err);
     return null;
   }
-}
-
-// Fetch player prop odds for an Odds API event UUID
-async function getRawOdds(oddsEventId: string): Promise<any> {
-  const cacheKey = `odds_${oddsEventId}`;
-  const cached = cache.get(cacheKey);
-  if (isFresh(cached, ODDS_TTL)) return cached!.data;
-
-  if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
-
-  const markets = [
-    "player_points",
-    "player_rebounds",
-    "player_assists",
-    "player_steals",
-    "player_blocks",
-  ].join(",");
-
-  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${markets}&bookmakers=draftkings,fanduel,hardrockbet&oddsFormat=american`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Odds fetch failed: ${res.status} ${body}`);
-  }
-  const data = await res.json();
-  cache.set(cacheKey, { data, timestamp: Date.now() });
-  return data;
 }
 
 // Map our stat type to the Odds API market key
@@ -103,7 +141,40 @@ const MARKET_MAP: Record<string, string> = {
   assists: "player_assists",
   steals: "player_steals",
   blocks: "player_blocks",
+  threes: "player_threes",
 };
+
+// Fetch player prop odds for an Odds API event UUID
+async function getRawOdds(oddsEventId: string): Promise<any> {
+  const cacheKey = `odds_${oddsEventId}`;
+  const cached = cache.get(cacheKey);
+  if (isFresh(cached, ODDS_TTL)) return cached!.data;
+
+  if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
+
+  const markets = Object.values(MARKET_MAP).join(",");
+  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${markets}&bookmakers=draftkings,fanduel,hardrockbet&oddsFormat=american`;
+
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Odds fetch failed: ${res.status} — ${body}`);
+  }
+  const data = await res.json();
+  cache.set(cacheKey, { data, timestamp: Date.now() });
+
+  const books = (data.bookmakers ?? []).map((b: any) => b.key).join(", ");
+  console.log(`[Odds] Fetched odds for event ${oddsEventId}: bookmakers = ${books || "none"}`);
+  return data;
+}
+
+// Normalize a player name: lowercase, strip suffixes (Jr., Sr., II, III, IV)
+function normPlayerName(name: string): string {
+  return name.toLowerCase()
+    .replace(/\s+(jr\.?|sr\.?|ii|iii|iv|v)$/i, "")
+    .replace(/[^a-z\s]/g, "")
+    .trim();
+}
 
 export async function getPlayerOdds(
   oddsEventId: string,
@@ -113,24 +184,29 @@ export async function getPlayerOdds(
   const result: Record<string, { line: number; overOdds: number; underOdds: number }> = {};
 
   const marketKey = MARKET_MAP[statType];
-  if (!marketKey) return result; // combo props not in Odds API player markets
+  if (!marketKey) return result;
 
   const oddsData = await getRawOdds(oddsEventId);
   if (!oddsData?.bookmakers) return result;
 
-  const nameLower = playerName.toLowerCase();
+  const normName = normPlayerName(playerName);
+  const nameParts = normName.split(" ");
+  const firstName = nameParts[0];
+  const lastName = nameParts[nameParts.length - 1];
+
+  let foundForAnyBook = false;
 
   for (const bookmaker of oddsData.bookmakers) {
     const market = bookmaker.markets?.find((m: any) => m.key === marketKey);
     if (!market?.outcomes) continue;
 
-    // Match player by description (Odds API uses full names in description field)
+    // Find outcomes matching this player
     const playerOutcomes = market.outcomes.filter((o: any) => {
-      const desc = (o.description ?? "").toLowerCase();
-      // Try last name match or full name containment
-      const parts = nameLower.split(" ");
-      const lastName = parts[parts.length - 1];
-      return desc.includes(nameLower) || desc.includes(lastName);
+      const desc = normPlayerName(o.description ?? o.name ?? "");
+      // Full name match (best) or first+last both appear in description
+      return desc === normName
+        || desc.includes(normName)
+        || (desc.includes(firstName) && desc.includes(lastName));
     });
 
     const over = playerOutcomes.find((o: any) => o.name === "Over");
@@ -142,8 +218,18 @@ export async function getPlayerOdds(
         overOdds: over.price,
         underOdds: under.price,
       };
+      foundForAnyBook = true;
     }
   }
 
+  if (!foundForAnyBook) {
+    console.warn(`[Odds] No ${statType} line found for "${playerName}" in event ${oddsEventId}`);
+  }
+
   return result;
+}
+
+// Bust the event cache (call after a game starts)
+export function bustEventsCache(): void {
+  cache.delete("events_list");
 }

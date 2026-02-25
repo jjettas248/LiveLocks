@@ -78,24 +78,37 @@ export function useLiveStats(gameId: string | undefined) {
   });
 }
 
+// playerTeam / opponentTeam are DB abbreviations (e.g. "GSW", "MEM").
+// A game tile doesn't need to be selected — odds fetch as soon as a player + opponent are chosen.
 export function usePlayerOdds(
-  homeTeam: string | undefined,
-  awayTeam: string | undefined,
+  playerTeam: string | undefined,
+  opponentTeam: string | undefined,
   playerName: string | undefined,
-  statType: string | undefined
+  statType: string | undefined,
+  isLive?: boolean
 ) {
+  const enabled = !!playerTeam && !!opponentTeam && !!playerName && !!statType;
   return useQuery({
-    queryKey: ["/api/odds", homeTeam, awayTeam, playerName, statType],
+    queryKey: ["/api/odds", playerTeam, opponentTeam, playerName, statType],
     queryFn: async (): Promise<Record<string, OddsLine>> => {
-      if (!homeTeam || !awayTeam || !playerName || !statType) return {};
-      const params = new URLSearchParams({ homeTeam, awayTeam, playerName, statType });
+      if (!enabled) return {};
+      const params = new URLSearchParams({
+        playerTeam: playerTeam!,
+        opponentTeam: opponentTeam!,
+        playerName: playerName!,
+        statType: statType!,
+      });
       const res = await fetch(`/api/odds?${params}`);
       if (!res.ok) return {};
-      return res.json();
+      const data = await res.json();
+      // Strip internal error hint keys before returning
+      if (data._error) return {};
+      return data;
     },
-    enabled: !!homeTeam && !!awayTeam && !!playerName && !!statType,
-    staleTime: 5 * 60 * 1000,
-    retry: false,
+    enabled,
+    staleTime: isLive ? 2 * 60 * 1000 : 5 * 60 * 1000,
+    refetchInterval: isLive ? 90 * 1000 : false,
+    retry: 1,
   });
 }
 

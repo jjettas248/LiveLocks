@@ -86,6 +86,7 @@ export interface LiveGame {
   status: string;
   period: number;
   clock: string;
+  startTime?: string; // ISO timestamp, only present for Scheduled games
 }
 
 export interface LivePlayerStat {
