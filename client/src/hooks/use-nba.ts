@@ -78,17 +78,22 @@ export function useLiveStats(gameId: string | undefined) {
   });
 }
 
-export function usePlayerOdds(gameId: string | undefined, playerName: string | undefined, statType: string | undefined) {
+export function usePlayerOdds(
+  homeTeam: string | undefined,
+  awayTeam: string | undefined,
+  playerName: string | undefined,
+  statType: string | undefined
+) {
   return useQuery({
-    queryKey: ["/api/odds", gameId, playerName, statType],
+    queryKey: ["/api/odds", homeTeam, awayTeam, playerName, statType],
     queryFn: async (): Promise<Record<string, OddsLine>> => {
-      if (!gameId || !playerName || !statType) return {};
-      const params = new URLSearchParams({ gameId, playerName, statType });
+      if (!homeTeam || !awayTeam || !playerName || !statType) return {};
+      const params = new URLSearchParams({ homeTeam, awayTeam, playerName, statType });
       const res = await fetch(`/api/odds?${params}`);
       if (!res.ok) return {};
       return res.json();
     },
-    enabled: !!gameId && !!playerName && !!statType,
+    enabled: !!homeTeam && !!awayTeam && !!playerName && !!statType,
     staleTime: 5 * 60 * 1000,
     retry: false,
   });

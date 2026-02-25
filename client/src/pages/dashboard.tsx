@@ -64,6 +64,7 @@ export default function Dashboard() {
   const { data: liveGames, isLoading: isGamesLoading, refetch: refetchGames } = useLiveGames();
 
   const [selectedGameId, setSelectedGameId] = useState<string | undefined>();
+  const [selectedGameTeams, setSelectedGameTeams] = useState<{ home: string; away: string } | undefined>();
   const [parlayPicks, setParlayPicks] = useState<ParlayPickInput[]>([]);
   const [showParlay, setShowParlay] = useState(false);
   const [selectedSportsbook, setSelectedSportsbook] = useState<string>("manual");
@@ -92,9 +93,10 @@ export default function Dashboard() {
   // Live stats for selected game
   const { data: liveStats } = useLiveStats(selectedGameId);
 
-  // Live odds for selected player
+  // Live odds for selected player — uses team names to resolve to Odds API event
   const { data: oddsData, isLoading: isOddsLoading } = usePlayerOdds(
-    selectedGameId,
+    selectedGameTeams?.home,
+    selectedGameTeams?.away,
     selectedPlayer?.name,
     watchedStatType
   );
@@ -255,10 +257,12 @@ export default function Dashboard() {
                     onClick={() => {
                       if (isSelected) {
                         setSelectedGameId(undefined);
+                        setSelectedGameTeams(undefined);
                         form.setValue("halftimeScore", "");
                         form.setValue("gameId", "");
                       } else {
                         setSelectedGameId(game.id);
+                        setSelectedGameTeams({ home: game.homeTeam, away: game.awayTeam });
                         form.setValue("gameId", game.id);
                         if (game.period >= 2) {
                           form.setValue("halftimeScore", scoreStr);

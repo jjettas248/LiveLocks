@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
-import { getPlayerOdds, formatPlayerOdds } from "./oddsService";
+import { getPlayerOdds, resolveOddsEventId } from "./oddsService";
 import { calculateParlay } from "./parlayService";
 
 export async function registerRoutes(
@@ -14,19 +14,26 @@ export async function registerRoutes(
 
   app.get("/api/odds", async (req, res) => {
     try {
-      const { gameId, playerName, statType } = req.query;
-      
-      if (!gameId || !playerName || !statType) {
-        return res.status(400).json({ message: "Missing required parameters: gameId, playerName, statType" });
+      const { homeTeam, awayTeam, playerName, statType } = req.query;
+
+      if (!playerName || !statType) {
+        return res.status(400).json({ message: "Missing required parameters: playerName, statType" });
       }
 
       if (!process.env.ODDS_API_KEY) {
         return res.status(503).json({ message: "ODDS_API_KEY not configured" });
       }
 
-      const oddsData = await getPlayerOdds(gameId as string);
-      const formattedOdds = formatPlayerOdds(oddsData, playerName as string, statType as string);
-      
+      // Resolve Odds API event ID from team names (ESPN uses different IDs)
+      const oddsEventId = homeTeam && awayTeam
+        ? await resolveOddsEventId(homeTeam as string, awayTeam as string)
+        : null;
+
+      if (!oddsEventId) {
+        return res.json({}); // No matching event found — graceful empty response
+      }
+
+      const formattedOdds = await getPlayerOdds(oddsEventId, playerName as string, statType as string);
       res.json(formattedOdds);
     } catch (err: any) {
       console.error("Odds API Error:", err);
