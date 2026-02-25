@@ -53,44 +53,56 @@ async function seedDatabase() {
   const existingPlayers = await storage.getPlayers();
   if (existingPlayers.length === 0) {
     // Seed Players
-    await storage.createPlayer({
-      name: "LeBron James",
-      team: "LAL",
-      position: "SF",
-      avgMinutes: "35.5",
-      avgFouls: "1.8",
-    });
-    await storage.createPlayer({
-      name: "Stephen Curry",
-      team: "GSW",
-      position: "PG",
-      avgMinutes: "33.2",
-      avgFouls: "2.1",
-    });
-    await storage.createPlayer({
-      name: "Nikola Jokic",
-      team: "DEN",
-      position: "C",
-      avgMinutes: "34.0",
-      avgFouls: "2.5",
-    });
-    await storage.createPlayer({
-      name: "Giannis Antetokounmpo",
-      team: "MIL",
-      position: "PF",
-      avgMinutes: "35.0",
-      avgFouls: "3.0",
-    });
+    const playersToSeed = [
+      { name: "LeBron James", team: "LAL", position: "SF", avgMinutes: "35.3", avgFouls: "2.1" },
+      { name: "Stephen Curry", team: "GSW", position: "PG", avgMinutes: "32.7", avgFouls: "1.6" },
+      { name: "Nikola Jokic", team: "DEN", position: "C", avgMinutes: "34.6", avgFouls: "2.4" },
+      { name: "Giannis Antetokounmpo", team: "MIL", position: "PF", avgMinutes: "35.2", avgFouls: "2.9" },
+      { name: "Luka Doncic", team: "DAL", position: "PG", avgMinutes: "37.5", avgFouls: "2.2" },
+      { name: "Shai Gilgeous-Alexander", team: "OKC", position: "PG", avgMinutes: "34.0", avgFouls: "2.5" },
+      { name: "Jayson Tatum", team: "BOS", position: "SF", avgMinutes: "35.7", avgFouls: "2.0" },
+      { name: "Kevin Durant", team: "PHX", position: "PF", avgMinutes: "37.2", avgFouls: "2.2" },
+      { name: "Joel Embiid", team: "PHI", position: "C", avgMinutes: "34.0", avgFouls: "2.9" },
+      { name: "Anthony Edwards", team: "MIN", position: "SG", avgMinutes: "35.1", avgFouls: "1.8" },
+      { name: "Devin Booker", team: "PHX", position: "SG", avgMinutes: "36.0", avgFouls: "2.3" },
+      { name: "Tyrese Haliburton", team: "IND", position: "PG", avgMinutes: "32.2", avgFouls: "1.1" },
+      { name: "Domantas Sabonis", team: "SAC", position: "C", avgMinutes: "35.7", avgFouls: "3.3" },
+      { name: "De'Aaron Fox", team: "SAC", position: "PG", avgMinutes: "35.9", avgFouls: "2.6" },
+      { name: "Jalen Brunson", team: "NYK", position: "PG", avgMinutes: "35.4", avgFouls: "1.9" },
+      { name: "Bam Adebayo", team: "MIA", position: "C", avgMinutes: "34.0", avgFouls: "2.3" },
+      { name: "Donovan Mitchell", team: "CLE", position: "SG", avgMinutes: "35.3", avgFouls: "2.1" },
+      { name: "Kawhi Leonard", team: "LAC", position: "SF", avgMinutes: "34.3", avgFouls: "1.6" },
+      { name: "Paul George", team: "PHI", position: "SF", avgMinutes: "33.8", avgFouls: "2.7" },
+      { name: "Ja Morant", team: "MEM", position: "PG", avgMinutes: "32.5", avgFouls: "1.9" },
+      { name: "Victor Wembanyama", team: "SAS", position: "C", avgMinutes: "29.7", avgFouls: "2.2" },
+      { name: "Chet Holmgren", team: "OKC", position: "C", avgMinutes: "29.4", avgFouls: "2.4" },
+      { name: "Kyrie Irving", team: "DAL", position: "SG", avgMinutes: "35.0", avgFouls: "1.9" },
+      { name: "Jimmy Butler", team: "MIA", position: "SF", avgMinutes: "34.0", avgFouls: "1.1" },
+      { name: "Damian Lillard", team: "MIL", position: "PG", avgMinutes: "35.3", avgFouls: "1.9" },
+      { name: "Trae Young", team: "ATL", position: "PG", avgMinutes: "36.0", avgFouls: "2.0" },
+      { name: "Paolo Banchero", team: "ORL", position: "PF", avgMinutes: "35.0", avgFouls: "1.9" },
+      { name: "Lauri Markkanen", team: "UTA", position: "PF", avgMinutes: "33.1", avgFouls: "1.8" },
+      { name: "Julius Randle", team: "MIN", position: "PF", avgMinutes: "35.4", avgFouls: "2.7" },
+      { name: "Zion Williamson", team: "NOP", position: "PF", avgMinutes: "31.5", avgFouls: "2.3" },
+    ];
+
+    for (const p of playersToSeed) {
+      await storage.createPlayer(p);
+    }
 
     // Seed Team Defense
-    // Defense against positions
-    const teams = ["LAL", "GSW", "DEN", "MIL", "BOS", "PHX"];
+    const teams = [
+      "ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DAL", "DEN", "DET", "GSW",
+      "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NOP", "NYK",
+      "OKC", "ORL", "PHI", "PHX", "POR", "SAC", "SAS", "TOR", "UTA", "WAS"
+    ];
     const positions = ["PG", "SG", "SF", "PF", "C"];
     
     for (const team of teams) {
       for (const pos of positions) {
-        // Randomize defense rating between 0.85 (good) and 1.15 (bad)
-        const rating = 0.85 + Math.random() * 0.3;
+        // More realistic multipliers: 
+        // 0.90 to 0.95 (elite defense), 1.0 (average), 1.05 to 1.10 (poor defense)
+        const rating = 0.9 + Math.random() * 0.2;
         await storage.createTeamDefense({
           teamName: team,
           position: pos,
