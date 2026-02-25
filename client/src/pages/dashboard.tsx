@@ -143,6 +143,16 @@ export default function Dashboard() {
                       />
                     </div>
                   </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-muted-foreground">Game Score (e.g. 55-50)</label>
+                    <input 
+                      type="text"
+                      placeholder="Optional"
+                      {...form.register("halftimeScore")}
+                      className="w-full h-10 px-3 rounded-lg bg-input border border-border focus:border-primary focus:ring-1 focus:ring-primary outline-none text-lg font-mono"
+                    />
+                  </div>
                 </div>
 
                 {/* The Line */}

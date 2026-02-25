@@ -84,6 +84,22 @@ async function seedDatabase() {
       { name: "Lauri Markkanen", team: "UTA", position: "PF", avgMinutes: "33.1", avgFouls: "1.8" },
       { name: "Julius Randle", team: "MIN", position: "PF", avgMinutes: "35.4", avgFouls: "2.7" },
       { name: "Zion Williamson", team: "NOP", position: "PF", avgMinutes: "31.5", avgFouls: "2.3" },
+      // Role Players
+      { name: "Austin Reaves", team: "LAL", position: "SG", avgMinutes: "32.1", avgFouls: "1.7" },
+      { name: "Malik Monk", team: "SAC", position: "SG", avgMinutes: "26.0", avgFouls: "2.1" },
+      { name: "Naz Reid", team: "MIN", position: "C", avgMinutes: "24.2", avgFouls: "2.5" },
+      { name: "Bobby Portis", team: "MIL", position: "PF", avgMinutes: "24.5", avgFouls: "2.3" },
+      { name: "Derrick White", team: "BOS", position: "SG", avgMinutes: "32.6", avgFouls: "2.2" },
+      { name: "Alex Caruso", team: "OKC", position: "SG", avgMinutes: "28.7", avgFouls: "2.4" },
+      { name: "Josh Hart", team: "NYK", position: "SF", avgMinutes: "33.4", avgFouls: "2.3" },
+      { name: "Immanuel Quickley", team: "TOR", position: "PG", avgMinutes: "31.2", avgFouls: "1.9" },
+      { name: "Norman Powell", team: "LAC", position: "SG", avgMinutes: "26.2", avgFouls: "1.8" },
+      { name: "Grayson Allen", team: "PHX", position: "SG", avgMinutes: "33.5", avgFouls: "2.1" },
+      { name: "Bogdan Bogdanovic", team: "ATL", position: "SG", avgMinutes: "30.4", avgFouls: "2.3" },
+      { name: "Herbert Jones", team: "NOP", position: "SF", avgMinutes: "30.5", avgFouls: "2.8" },
+      { name: "Coby White", team: "CHI", position: "PG", avgMinutes: "36.5", avgFouls: "2.2" },
+      { name: "Donte DiVincenzo", team: "MIN", position: "SG", avgMinutes: "29.1", avgFouls: "2.1" },
+      { name: "Al Horford", team: "BOS", position: "C", avgMinutes: "26.8", avgFouls: "1.5" },
     ];
 
     for (const p of playersToSeed) {

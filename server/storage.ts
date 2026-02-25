@@ -77,7 +77,22 @@ export class DatabaseStorage implements IStorage {
 
     // Projected second half stats
     const perMinuteStat = req.halftimeMinutes > 0 ? (req.halftimeStat / req.halftimeMinutes) : 0;
-    let expectedSecondHalf = perMinuteStat * remainingMinutes * defenseMultiplier;
+    
+    // Pace calculation
+    let paceMultiplier = 1.0;
+    if (req.halftimeScore) {
+      const scores = req.halftimeScore.split(/[- ]+/).map(Number);
+      if (scores.length === 2 && !isNaN(scores[0]) && !isNaN(scores[1])) {
+        const totalPoints = scores[0] + scores[1];
+        // Average NBA halftime score is roughly 110-115 total points (220-230 game total)
+        // We'll use 112 as a baseline for "average pace"
+        paceMultiplier = totalPoints / 112;
+        // Clamp pace multiplier to reasonable bounds (0.8 to 1.2)
+        paceMultiplier = Math.max(0.8, Math.min(1.2, paceMultiplier));
+      }
+    }
+
+    let expectedSecondHalf = perMinuteStat * remainingMinutes * defenseMultiplier * paceMultiplier;
 
     const expectedTotal = req.halftimeStat + expectedSecondHalf;
 

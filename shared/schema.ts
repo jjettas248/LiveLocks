@@ -35,6 +35,7 @@ export const calculateProbabilitySchema = z.object({
   halftimeStat: z.coerce.number(), // The stat we are betting on (e.g. 10 points)
   liveLine: z.coerce.number(),
   statType: z.string(), // e.g., 'points', 'rebounds', 'assists'
+  halftimeScore: z.string().optional(), // e.g., "55-50"
 });
 
 export type CalculateProbabilityRequest = z.infer<typeof calculateProbabilitySchema>;
