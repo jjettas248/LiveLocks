@@ -172,6 +172,13 @@ export default function Dashboard() {
                           <option value="points">Points</option>
                           <option value="rebounds">Rebounds</option>
                           <option value="assists">Assists</option>
+                          <option value="steals">Steals</option>
+                          <option value="blocks">Blocks</option>
+                          <option value="pts_reb_ast">Pts+Reb+Ast</option>
+                          <option value="pts_reb">Pts+Reb</option>
+                          <option value="pts_ast">Pts+Ast</option>
+                          <option value="reb_ast">Reb+Ast</option>
+                          <option value="stl_blk">Stl+Blk</option>
                         </select>
                         <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
                       </div>

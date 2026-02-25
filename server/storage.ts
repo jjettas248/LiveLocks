@@ -23,7 +23,7 @@ export interface IStorage {
 
 export class DatabaseStorage implements IStorage {
   async getPlayers(): Promise<Player[]> {
-    return await db.select().from(players);
+    return await db.select().from(players).orderBy(players.name);
   }
 
   async getPlayer(id: number): Promise<Player | undefined> {
@@ -37,7 +37,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getTeams(): Promise<string[]> {
-    const records = await db.selectDistinct({ teamName: teamDefense.teamName }).from(teamDefense);
+    const records = await db.selectDistinct({ teamName: teamDefense.teamName }).from(teamDefense).orderBy(teamDefense.teamName);
     return records.map((r) => r.teamName);
   }
 
