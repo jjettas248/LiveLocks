@@ -107,6 +107,9 @@ export interface OddsLine {
   line: number;
   overOdds: number;
   underOdds: number;
+  openLine?: number;       // First line seen this session (proxy for opening line)
+  lineMovement?: number;   // current - openLine: negative = dropped, positive = rose
+  edgeEstimate?: number;   // rough win-prob shift (%) per direction vs open
 }
 
 export interface ParlayPickInput {

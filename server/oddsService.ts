@@ -176,12 +176,32 @@ function normPlayerName(name: string): string {
     .trim();
 }
 
+// Opening line cache — persists within the server process lifetime.
+// Key: eventId:playerNorm:statType:bookmaker — Value: first line seen
+const openingLineCache = new Map<string, number>();
+
+// Approximate win-probability change (%) per full point of line movement, by stat type.
+// Based on NBA distribution widths: points spread wider so each point matters less.
+const PROB_PER_POINT: Record<string, number> = {
+  points: 3.5,     // a 1-pt drop in a ~24.5 pts line ≈ 3.5 pp swing
+  rebounds: 5.0,
+  assists: 5.5,
+  steals: 8.0,
+  blocks: 8.0,
+  threes: 7.0,
+  pts_reb_ast: 2.0,
+  pts_reb: 2.5,
+  pts_ast: 2.5,
+  reb_ast: 3.5,
+  stl_blk: 5.0,
+};
+
 export async function getPlayerOdds(
   oddsEventId: string,
   playerName: string,
   statType: string
-): Promise<Record<string, { line: number; overOdds: number; underOdds: number }>> {
-  const result: Record<string, { line: number; overOdds: number; underOdds: number }> = {};
+): Promise<Record<string, { line: number; overOdds: number; underOdds: number; openLine?: number; lineMovement?: number; edgeEstimate?: number }>> {
+  const result: Record<string, { line: number; overOdds: number; underOdds: number; openLine?: number; lineMovement?: number; edgeEstimate?: number }> = {};
 
   const marketKey = MARKET_MAP[statType];
   if (!marketKey) return result;
@@ -193,6 +213,7 @@ export async function getPlayerOdds(
   const nameParts = normName.split(" ");
   const firstName = nameParts[0];
   const lastName = nameParts[nameParts.length - 1];
+  const probPerPt = PROB_PER_POINT[statType] ?? 4.0;
 
   let foundForAnyBook = false;
 
@@ -203,7 +224,6 @@ export async function getPlayerOdds(
     // Find outcomes matching this player
     const playerOutcomes = market.outcomes.filter((o: any) => {
       const desc = normPlayerName(o.description ?? o.name ?? "");
-      // Full name match (best) or first+last both appear in description
       return desc === normName
         || desc.includes(normName)
         || (desc.includes(firstName) && desc.includes(lastName));
@@ -213,10 +233,31 @@ export async function getPlayerOdds(
     const under = playerOutcomes.find((o: any) => o.name === "Under");
 
     if (over && under) {
+      const currentLine: number = over.point;
+      const cacheKey = `${oddsEventId}:${normName}:${statType}:${bookmaker.key}`;
+
+      // Store first-seen line as session open
+      if (!openingLineCache.has(cacheKey)) {
+        openingLineCache.set(cacheKey, currentLine);
+      }
+      const openLine = openingLineCache.get(cacheKey)!;
+
+      // lineMovement > 0 = line rose (harder to hit Over, easier Under)
+      // lineMovement < 0 = line dropped (easier to hit Over, harder Under)
+      const lineMovement = parseFloat((currentLine - openLine).toFixed(1));
+
+      // edgeEstimate: probability swing in favor of Over vs session open
+      //   Negative movement = line dropped = Over bettor gained that many probability points
+      //   Positive movement = line rose    = Under bettor gained
+      const edgeEstimate = parseFloat((-lineMovement * probPerPt).toFixed(1));
+
       result[bookmaker.key] = {
-        line: over.point,
+        line: currentLine,
         overOdds: over.price,
         underOdds: under.price,
+        openLine,
+        lineMovement,
+        edgeEstimate,
       };
       foundForAnyBook = true;
     }
@@ -229,7 +270,12 @@ export async function getPlayerOdds(
   return result;
 }
 
-// Bust the event cache (call after a game starts)
+// Bust the event cache (call after a game starts or for testing)
 export function bustEventsCache(): void {
   cache.delete("events_list");
+}
+
+// Expose opening line cache size for diagnostics
+export function getOpeningLineCacheSize(): number {
+  return openingLineCache.size;
 }

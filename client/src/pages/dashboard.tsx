@@ -555,7 +555,10 @@ export default function Dashboard() {
                       {oddsData && Object.keys(oddsData).length > 0 && (
                         <div className="space-y-1.5">
                           {Object.entries(oddsData).map(([sb, odds]) => {
-                            const o = odds as { line: number; overOdds: number; underOdds: number };
+                            const o = odds as import("@shared/schema").OddsLine;
+                            const hasMovement = o.lineMovement !== undefined && o.lineMovement !== 0;
+                            const droppedFromOpen = (o.lineMovement ?? 0) < 0; // easier Over
+                            const roseFromOpen = (o.lineMovement ?? 0) > 0;    // easier Under
                             return (
                               <button
                                 key={sb}
@@ -565,17 +568,44 @@ export default function Dashboard() {
                                   form.setValue("liveLine", o.line);
                                   setSelectedSportsbook(sb);
                                 }}
-                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border text-xs transition-all ${
+                                className={`w-full flex flex-col px-3 py-2 rounded-lg border text-xs transition-all text-left ${
                                   selectedSportsbook === sb
-                                    ? "border-primary bg-primary/10 text-primary"
-                                    : "border-border/50 bg-secondary/30 hover:bg-secondary/60 text-foreground"
+                                    ? "border-primary bg-primary/10"
+                                    : "border-border/50 bg-secondary/30 hover:bg-secondary/60"
                                 }`}
                               >
-                                <span className="font-semibold">{SPORTSBOOK_LABELS[sb] ?? sb}</span>
-                                <span className="font-mono font-bold">{o.line}</span>
-                                <span className="text-muted-foreground">
-                                  O {formatOdds(o.overOdds)} / U {formatOdds(o.underOdds)}
-                                </span>
+                                {/* Main row: name | line | odds */}
+                                <div className="flex items-center justify-between w-full">
+                                  <span className="font-semibold text-foreground">{SPORTSBOOK_LABELS[sb] ?? sb}</span>
+                                  <span className="font-mono font-bold text-primary">{o.line}</span>
+                                  <span className="text-muted-foreground">
+                                    O {formatOdds(o.overOdds)} / U {formatOdds(o.underOdds)}
+                                  </span>
+                                </div>
+                                {/* Line movement row */}
+                                {hasMovement && o.openLine !== undefined && (
+                                  <div className="flex items-center justify-between w-full mt-1 pt-1 border-t border-border/30">
+                                    <span className="text-muted-foreground/70">
+                                      Open: <span className="font-mono">{o.openLine}</span>
+                                    </span>
+                                    <span className={`font-semibold flex items-center gap-0.5 ${
+                                      droppedFromOpen ? "text-emerald-400" : "text-orange-400"
+                                    }`}>
+                                      {droppedFromOpen ? "▼" : "▲"}
+                                      {Math.abs(o.lineMovement!)}
+                                      <span className="font-normal ml-1">
+                                        {droppedFromOpen ? "Over edge" : "Under edge"}
+                                      </span>
+                                    </span>
+                                    {o.edgeEstimate !== undefined && o.edgeEstimate !== 0 && (
+                                      <span className={`font-bold ${
+                                        droppedFromOpen ? "text-emerald-400" : "text-orange-400"
+                                      }`}>
+                                        {o.edgeEstimate > 0 ? "+" : ""}{o.edgeEstimate}%
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
                               </button>
                             );
                           })}
@@ -715,6 +745,56 @@ export default function Dashboard() {
                     highlight={result.paceMultiplier >= 1.02 ? "positive" : result.paceMultiplier <= 0.97 ? "negative" : "neutral"}
                   />
                 </div>
+
+                {/* Line Value Panel — shows when a sportsbook with line movement is selected */}
+                {(() => {
+                  if (!selectedSportsbook || !oddsData) return null;
+                  const selected = (oddsData as Record<string, import("@shared/schema").OddsLine>)[selectedSportsbook];
+                  if (!selected || selected.lineMovement === undefined || selected.lineMovement === 0) return null;
+                  const dropped = selected.lineMovement < 0;
+                  const edge = selected.edgeEstimate ?? 0;
+                  const absMove = Math.abs(selected.lineMovement);
+                  const absEdge = Math.abs(edge);
+                  const valueLabel = absEdge >= 6 ? "Strong" : absEdge >= 3 ? "Moderate" : "Slight";
+                  const favorsSide = dropped ? "Over" : "Under";
+                  return (
+                    <div className={`rounded-xl border p-4 flex gap-3 items-start ${
+                      dropped
+                        ? "bg-emerald-500/10 border-emerald-500/30"
+                        : "bg-orange-500/10 border-orange-500/30"
+                    }`}>
+                      <div className={`mt-0.5 flex-shrink-0 text-lg font-bold ${dropped ? "text-emerald-400" : "text-orange-400"}`}>
+                        {dropped ? "▼" : "▲"}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <h4 className={`text-sm font-semibold ${dropped ? "text-emerald-400" : "text-orange-400"}`}>
+                            {valueLabel} {favorsSide} Value — Line Movement Detected
+                          </h4>
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                            dropped
+                              ? "bg-emerald-500/20 text-emerald-300"
+                              : "bg-orange-500/20 text-orange-300"
+                          }`}>
+                            {edge > 0 ? "+" : ""}{edge}% vs Open
+                          </span>
+                        </div>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          {SPORTSBOOK_LABELS[selectedSportsbook] ?? selectedSportsbook} line moved{" "}
+                          <strong>{dropped ? "down" : "up"} {absMove} pt{absMove !== 1 ? "s" : ""}</strong>{" "}
+                          from session open ({selected.openLine} → {selected.line}).{" "}
+                          {dropped
+                            ? `Lower threshold favors the Over — estimated +${absEdge}% probability gain vs. the open line.`
+                            : `Higher threshold favors the Under — estimated +${absEdge}% probability gain vs. the open line.`
+                          }
+                        </p>
+                        <p className="text-xs text-muted-foreground/60 mt-1.5">
+                          Session open = first line seen since server start. Refresh regularly to track real-time movement.
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Foul Alert */}
                 {form.getValues("halftimeFouls") >= 3 && (
