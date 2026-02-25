@@ -1,41 +1,57 @@
-# NBA Live Line Probability Calculator
+# NBA Live Prop Predictor
 
 ## Overview
-A full-stack NBA betting tool that calculates the probability of a player hitting a live prop line at halftime. It factors in foul-based minute projections, opponent defense by position, real team pace data, and optionally live halftime scores from ESPN.
+A full-stack NBA live betting tool that calculates the probability of a player hitting a live prop line at halftime. It pulls real live game data, player box scores, sportsbook odds, and lets users build correlation-adjusted parlays with deeplinks to DraftKings, FanDuel, and Hard Rock Bet.
 
 ## Architecture
-- **Frontend**: React + Vite, Tailwind CSS, shadcn/ui, TanStack Query, react-hook-form, framer-motion
+- **Frontend**: React + Vite, Tailwind CSS, shadcn/ui, TanStack Query, react-hook-form, wouter
 - **Backend**: Express.js (TypeScript, tsx)
 - **Database**: PostgreSQL via Drizzle ORM
 - **Shared types**: `shared/schema.ts` and `shared/routes.ts`
 
 ## Key Features
-- 200 players across all 30 NBA teams (2024-25 rosters), grouped by team in dropdown
-- 10 stat types: Points, Rebounds, Assists, Steals, Blocks, and 5 combo props
-- Real 2024-25 team defensive ratings per position (30 teams × 5 positions)
-- Real 2024-25 team pace data (possessions/48 min) blended 60/40 with live game pace
-- ESPN live scoreboard proxy (`GET /api/live-games`) — refreshes every 30s, no API key needed
-- Live game cards auto-fill halftime score and opponent team
-- Foul trouble penalty: 3 fouls = 30% minute reduction, 4 fouls = 55% reduction
-- Probability engine outputs: probability, expected total, projected 2H minutes, defense multiplier, pace multiplier, pace label, team/opponent pace
+- **196 players** across all 30 NBA teams (2025-26 rosters with all major trades), grouped by team
+- **10 stat types**: Points, Rebounds, Assists, Steals, Blocks, and 5 combo props (PRA, PR, PA, RA, S+B)
+- **Live game strip**: ESPN scoreboard auto-refreshes every 30s; clicking a game selects it and auto-fills halftime stats
+- **Live box score auto-fill**: ESPN player box score data populates minutes/fouls/stats when a game+player are selected
+- **Sportsbook odds**: The Odds API integration for DraftKings, FanDuel, Hard Rock (5-min cache); gracefully degrades without key
+- **Probability engine**: Blends observed halftime per-minute rate (70%) with season baseline (30%), usage-adjusted scale factor
+- **Foul trouble penalty**: 3 fouls = 30% minute reduction, 4+ fouls = 55% reduction
+- **Parlay builder**: Up to 10 picks, correlation-adjusted combined probability ring, implied American odds
+- **Correlation engine**: Same-team pts vs pts = -8%, assists+points teammate = +8%, same-game diff teams = +4%
+- **Sportsbook deeplinks**: Open DK/FanDuel/Hard Rock bet slip pages (user confirms the bet themselves)
+- **Season stats sync**: `/api/sync-stats` uses BallDontLie API (requires BDL_API_KEY) to populate ppg/rpg/apg/spg/bpg/usageRate
 
 ## Database Tables
-- `players` — id, name, team (3-letter abbr), position (PG/SG/SF/PF/C), avgMinutes, avgFouls
-- `team_defense` — id, teamName, position, defRating (0.88–1.12 scale around 1.0 = league avg)
+- `players` — id, name, team (3-letter abbr), position, avgMinutes, avgFouls, ppg, rpg, apg, spg, bpg, usageRate, statsUpdatedAt
+- `team_defense` — id, teamName, position, defRating (0.88–1.12 scale, 1.0 = league avg)
+- `parlayPicks` — id, sessionId, playerId, statType, line, sportsbook, probability, oddsAmerican, addedAt
 
 ## API Routes
 - `GET /api/players` — all players sorted alphabetically
-- `GET /api/teams` — distinct team abbreviations sorted alphabetically
+- `GET /api/teams` — distinct team abbreviations
 - `POST /api/calculate` — main probability calculation
-- `GET /api/live-games` — ESPN live NBA scoreboard proxy
+- `GET /api/live-games` — ESPN live NBA scoreboard proxy (30s cache)
+- `GET /api/live-stats/:gameId` — ESPN player box score for a live game
+- `GET /api/odds?gameId=&playerName=&statType=` — The Odds API proxy (5-min cache)
+- `POST /api/parlay/calculate` — correlation-adjusted parlay probability
+- `GET /api/sync-stats` — BallDontLie season stats sync (requires BDL_API_KEY env var)
 
-## Team Pace (TEAM_PACE constant in server/storage.ts)
-Hardcoded 2024-25 NBA team pace values (possessions/48 min). League average ≈ 99.5.
+## Required Environment Variables
+- `ODDS_API_KEY` — The Odds API key (free at the-odds-api.com, 500 req/month). App works without it (odds panel hidden)
+- `BDL_API_KEY` — BallDontLie API key (for season stats sync). Not required for core functionality
+- `SESSION_SECRET` — Express session secret (already set)
+- `DATABASE_URL` — PostgreSQL connection string (already set)
 
 ## Probability Model
-1. Derive per-minute rate from halftime stats
-2. Project remaining minutes (foul penalty applied)
-3. Multiply by defense rating (opponent's tendency vs player's position)
-4. Multiply by blended pace multiplier (team historical + live game score)
-5. Sigmoid-style: `probability = 50 + difference × scaleFactor` (clamped 2–98%)
-6. Scale factors: points=8, rebounds/assists=10, steals/blocks=15, combos=6
+1. Derive per-minute rate from halftime observed stats (70%) + season baseline (30%)
+2. Project remaining minutes after foul penalty
+3. Multiply by defense rating (opponent vs player's position)
+4. Multiply by blended pace multiplier (team historical pace + live game pace from score)
+5. `probability = 50 + difference × scaleFactor` (clamped 2–98%)
+6. Scale factor by stat (usage-adjusted): pts=8, reb/ast=10, stl/blk=15, combos=6; clamped 4–20
+
+## 2025-26 Roster Notes (Key Trades)
+- Luka Doncic → LAL; Anthony Davis → DAL
+- De'Aaron Fox → SAS; Jimmy Butler → GSW
+- Domantas Sabonis → MIL; Cooper Flagg (2025 #1 pick) → NOP

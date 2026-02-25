@@ -3,11 +3,36 @@ import type { Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
+import { type Player, type ParlayPickInput } from "@shared/schema";
+import { getPlayerOdds, formatPlayerOdds } from "./oddsService";
+import { calculateParlay } from "./parlayService";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  app.get("/api/odds", async (req, res) => {
+    try {
+      const { gameId, playerName, statType } = req.query;
+      
+      if (!gameId || !playerName || !statType) {
+        return res.status(400).json({ message: "Missing required parameters: gameId, playerName, statType" });
+      }
+
+      if (!process.env.ODDS_API_KEY) {
+        return res.status(503).json({ message: "ODDS_API_KEY not configured" });
+      }
+
+      const oddsData = await getPlayerOdds(gameId as string);
+      const formattedOdds = formatPlayerOdds(oddsData, playerName as string, statType as string);
+      
+      res.json(formattedOdds);
+    } catch (err: any) {
+      console.error("Odds API Error:", err);
+      res.status(500).json({ message: err.message || "Failed to fetch odds" });
+    }
+  });
 
   app.get(api.players.list.path, async (req, res) => {
     try {
@@ -76,6 +101,139 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/live-stats/:gameId", async (req, res) => {
+    try {
+      const { gameId } = req.params;
+      const response = await fetch(
+        `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${gameId}`,
+        { headers: { "User-Agent": "Mozilla/5.0" } }
+      );
+      if (!response.ok) throw new Error("ESPN Boxscore API unavailable");
+      const data = await response.json() as any;
+      
+      const boxscore = data.boxscore;
+      if (!boxscore) throw new Error("Boxscore data not found");
+
+      const players: any[] = [];
+      const teams = boxscore.players || [];
+
+      teams.forEach((teamData: any) => {
+        const teamAbbr = teamData.team?.abbreviation;
+        const athletes = teamData.statistics?.[0]?.athletes || [];
+        const labels = teamData.statistics?.[0]?.labels || [];
+
+        athletes.forEach((athlete: any) => {
+          if (!athlete.athlete) return;
+          
+          const stats = athlete.stats || [];
+          const statMap: Record<string, any> = {};
+          
+          labels.forEach((label: string, idx: number) => {
+            statMap[label.toLowerCase()] = stats[idx];
+          });
+
+          // ESPN stats often come as strings like "24", or for rebounds "2-4-6" (off-def-tot)
+          // We need to parse them carefully
+          const parseStat = (val: string) => {
+            if (!val) return 0;
+            if (val.includes("-")) {
+              const parts = val.split("-");
+              return parseInt(parts[parts.length - 1], 10) || 0;
+            }
+            return parseInt(val, 10) || 0;
+          };
+
+          players.push({
+            playerId: parseInt(athlete.athlete.id, 10),
+            playerName: athlete.athlete.displayName,
+            teamAbbr: teamAbbr,
+            minutes: statMap["min"] || "0",
+            points: parseStat(statMap["pts"]),
+            rebounds: parseStat(statMap["reb"]),
+            assists: parseStat(statMap["ast"]),
+            steals: parseStat(statMap["stl"]),
+            blocks: parseStat(statMap["blk"]),
+            fouls: parseStat(statMap["pf"]),
+          });
+        });
+      });
+
+      res.json(players);
+    } catch (e) {
+      res.status(502).json({ message: "Live stats unavailable", details: (e as any).message });
+    }
+  });
+
+  app.post("/api/parlay/calculate", async (req, res) => {
+    try {
+      const picks = req.body.picks as ParlayPickInput[];
+      if (!picks || !Array.isArray(picks)) {
+        return res.status(400).json({ message: "Invalid picks provided" });
+      }
+      const result = calculateParlay(picks);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ message: "Internal server error", details: (err as any).message });
+    }
+  });
+
+  app.get("/api/sync-stats", async (req, res) => {
+    try {
+      const players = await storage.getPlayers();
+      const BDL_API_KEY = process.env.BDL_API_KEY;
+      
+      if (!BDL_API_KEY) {
+        return res.status(500).json({ message: "BallDontLie API key not configured" });
+      }
+
+      // 1. Get BallDontLie player IDs for our players
+      // We'll search by name. BDL search can be finicky so we do it one by one or in small batches.
+      // For a sync, we can afford some time.
+      let syncCount = 0;
+      for (const player of players) {
+        try {
+          // Search player to get BDL ID
+          const searchRes = await fetch(`https://api.balldontlie.io/v1/players?search=${encodeURIComponent(player.name)}`, {
+            headers: { "Authorization": BDL_API_KEY }
+          });
+          if (!searchRes.ok) continue;
+          const searchData = await searchRes.json() as any;
+          const bdlPlayer = searchData.data?.[0];
+          
+          if (bdlPlayer) {
+            // Get season averages for 2024 (2025-26 season might not be available or 2024 is the latest complete/active)
+            const statsRes = await fetch(`https://api.balldontlie.io/v1/season_averages?season=2024&player_ids[]=${bdlPlayer.id}`, {
+              headers: { "Authorization": BDL_API_KEY }
+            });
+            if (!statsRes.ok) continue;
+            const statsData = await statsRes.json() as any;
+            const avg = statsData.data?.[0];
+            
+            if (avg) {
+              await storage.updatePlayerStats(player.id, {
+                ppg: avg.pts?.toString(),
+                rpg: avg.reb?.toString(),
+                apg: avg.ast?.toString(),
+                spg: avg.stl?.toString(),
+                bpg: avg.blk?.toString(),
+                avgMinutes: avg.min || player.avgMinutes,
+              });
+              syncCount++;
+            }
+          }
+          // Rate limiting sleep for free tier if needed
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (err) {
+          console.error(`Failed to sync ${player.name}:`, err);
+        }
+      }
+
+      res.json({ message: `Synced ${syncCount} players` });
+    } catch (e) {
+      res.status(500).json({ message: "Sync failed", error: (e as any).message });
+    }
+  });
+
   await seedDatabase();
   return httpServer;
 }
@@ -89,7 +247,7 @@ async function seedDatabase() {
     //  • De'Aaron Fox traded to SAS
     //  • Jimmy Butler traded to GSW
     //  • Domantas Sabonis traded to MIL
-    //  • Cooper Flagg (2025 #1 pick) to WAS
+    //  • Cooper Flagg (2025 #1 pick) to NOP
     //  • Various FA signings & role changes across rosters
     const playersToSeed = [
       // ATL Hawks — core intact, DJ Carton/young additions

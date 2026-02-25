@@ -1,14 +1,23 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { api } from "@shared/routes";
-import type { CalculateProbabilityRequest, CalculateProbabilityResponse, LiveGame } from "@shared/schema";
+import type {
+  CalculateProbabilityRequest,
+  CalculateProbabilityResponse,
+  LiveGame,
+  LivePlayerStat,
+  OddsLine,
+  ParlayPickInput,
+  ParlayResult,
+  Player,
+} from "@shared/schema";
 
 export function usePlayers() {
   return useQuery({
     queryKey: [api.players.list.path],
-    queryFn: async () => {
+    queryFn: async (): Promise<Player[]> => {
       const res = await fetch(api.players.list.path);
       if (!res.ok) throw new Error("Failed to fetch players");
-      return res.json() as Promise<import("@shared/schema").Player[]>;
+      return res.json();
     },
   });
 }
@@ -16,10 +25,10 @@ export function usePlayers() {
 export function useTeams() {
   return useQuery({
     queryKey: [api.teams.list.path],
-    queryFn: async () => {
+    queryFn: async (): Promise<string[]> => {
       const res = await fetch(api.teams.list.path);
       if (!res.ok) throw new Error("Failed to fetch teams");
-      return res.json() as Promise<string[]>;
+      return res.json();
     },
   });
 }
@@ -33,8 +42,8 @@ export function useCalculateProbability() {
         body: JSON.stringify(data),
       });
       if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error((errorData as any).message || "Failed to calculate probability");
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as any).message || "Failed to calculate probability");
       }
       return res.json();
     },
@@ -49,7 +58,52 @@ export function useLiveGames() {
       if (!res.ok) return [];
       return res.json();
     },
-    refetchInterval: 30000, // refresh every 30s
+    refetchInterval: 30000,
     staleTime: 15000,
+  });
+}
+
+export function useLiveStats(gameId: string | undefined) {
+  return useQuery({
+    queryKey: ["/api/live-stats", gameId],
+    queryFn: async (): Promise<LivePlayerStat[]> => {
+      if (!gameId) return [];
+      const res = await fetch(`/api/live-stats/${gameId}`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!gameId,
+    refetchInterval: 60000,
+    staleTime: 30000,
+  });
+}
+
+export function usePlayerOdds(gameId: string | undefined, playerName: string | undefined, statType: string | undefined) {
+  return useQuery({
+    queryKey: ["/api/odds", gameId, playerName, statType],
+    queryFn: async (): Promise<Record<string, OddsLine>> => {
+      if (!gameId || !playerName || !statType) return {};
+      const params = new URLSearchParams({ gameId, playerName, statType });
+      const res = await fetch(`/api/odds?${params}`);
+      if (!res.ok) return {};
+      return res.json();
+    },
+    enabled: !!gameId && !!playerName && !!statType,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+}
+
+export function useCalculateParlay() {
+  return useMutation({
+    mutationFn: async (picks: ParlayPickInput[]): Promise<ParlayResult> => {
+      const res = await fetch("/api/parlay/calculate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ picks }),
+      });
+      if (!res.ok) throw new Error("Failed to calculate parlay");
+      return res.json();
+    },
   });
 }
