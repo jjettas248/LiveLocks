@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
-import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug } from "./oddsService";
+import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines } from "./oddsService";
 import { calculateParlay } from "./parlayService";
 
 export async function registerRoutes(
@@ -69,6 +69,26 @@ export async function registerRoutes(
       res.json({ eventId, summary });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  // Game-level spread and total — auto-fetched from The Odds API
+  app.get("/api/game-lines", async (req, res) => {
+    try {
+      const { team, opponent } = req.query as { team?: string; opponent?: string };
+      if (!team || !opponent) {
+        return res.json({ spread: null, total: null, favorite: null });
+      }
+      if (!process.env.ODDS_API_KEY) {
+        return res.json({ spread: null, total: null, favorite: null });
+      }
+      const eventId = await resolveOddsEventId(team, opponent);
+      if (!eventId) return res.json({ spread: null, total: null, favorite: null });
+      const lines = await getGameLines(eventId);
+      return res.json(lines ?? { spread: null, total: null, favorite: null });
+    } catch (err: any) {
+      console.warn("[GameLines] error:", err.message);
+      res.json({ spread: null, total: null, favorite: null });
     }
   });
 

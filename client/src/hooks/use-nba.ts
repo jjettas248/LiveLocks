@@ -112,6 +112,28 @@ export function usePlayerOdds(
   });
 }
 
+// Fetch live game-level spread and total from The Odds API.
+// Enabled whenever both team abbreviations are known — no user input needed.
+export function useGameLines(
+  team: string | undefined,
+  opponent: string | undefined
+) {
+  const enabled = !!team && !!opponent;
+  return useQuery({
+    queryKey: ["/api/game-lines", team, opponent],
+    queryFn: async (): Promise<{ spread: number | null; total: number | null; favorite: string | null }> => {
+      if (!enabled) return { spread: null, total: null, favorite: null };
+      const params = new URLSearchParams({ team: team!, opponent: opponent! });
+      const res = await fetch(`/api/game-lines?${params}`);
+      if (!res.ok) return { spread: null, total: null, favorite: null };
+      return res.json();
+    },
+    enabled,
+    staleTime: 4 * 60 * 1000,
+    refetchInterval: 5 * 60 * 1000,
+  });
+}
+
 export function useCalculateParlay() {
   return useMutation({
     mutationFn: async (picks: ParlayPickInput[]): Promise<ParlayResult> => {

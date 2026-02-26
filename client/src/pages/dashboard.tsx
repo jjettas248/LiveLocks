@@ -3,7 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { calculateProbabilitySchema, type CalculateProbabilityRequest, type ParlayPickInput, type InjuryPlayer } from "@shared/schema";
-import { usePlayers, useTeams, useCalculateProbability, useLiveGames, useLiveStats, usePlayerOdds } from "@/hooks/use-nba";
+import { usePlayers, useTeams, useCalculateProbability, useLiveGames, useLiveStats, usePlayerOdds, useGameLines } from "@/hooks/use-nba";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ProbabilityRing } from "@/components/probability-ring";
 import { StatCard } from "@/components/stat-card";
@@ -108,8 +108,6 @@ export default function Dashboard() {
       statType: "points",
       halftimeScore: "",
       gameId: "",
-      gameSpread: undefined,
-      gameTotalLine: undefined,
     },
   });
 
@@ -224,6 +222,12 @@ export default function Dashboard() {
     isSelectedGameLive
   );
 
+  // Game-level spread + total — auto-fetched from The Odds API when player + opponent known
+  const { data: gameLines } = useGameLines(
+    selectedPlayer?.team,
+    watchedOpponent || undefined
+  );
+
   // Clear auto-fill badges when player changes manually
   useEffect(() => {
     setAutoFilledFields(new Set());
@@ -270,7 +274,12 @@ export default function Dashboard() {
   }, [liveStats, selectedPlayer, watchedStatType]);
 
   const onSubmit = (data: CalculateProbabilityRequest) => {
-    calculateMutation.mutate({ ...data, gameId: selectedGameId });
+    calculateMutation.mutate({
+      ...data,
+      gameId: selectedGameId,
+      gameSpread: gameLines?.spread ?? undefined,
+      gameTotalLine: gameLines?.total ?? undefined,
+    });
   };
 
   const handleAddToParlay = (direction: "over" | "under") => {
@@ -704,7 +713,19 @@ export default function Dashboard() {
           <div className="lg:col-span-4 space-y-4">
             <div className="bg-card border border-border rounded-xl p-5 relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-primary to-transparent" />
-              <h2 className="text-lg font-semibold mb-1">Matchup Details</h2>
+              <div className="flex items-start justify-between mb-1">
+                <h2 className="text-lg font-semibold">Matchup Details</h2>
+                {gameLines?.spread && gameLines?.total ? (
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <span className="text-[10px] font-mono bg-blue-500/10 text-blue-400 border border-blue-500/20 px-1.5 py-0.5 rounded">
+                      {gameLines.favorite?.split(" ").pop()} -{gameLines.spread}
+                    </span>
+                    <span className="text-[10px] font-mono bg-secondary text-muted-foreground border border-border/60 px-1.5 py-0.5 rounded">
+                      O/U {gameLines.total}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
               <p className="text-muted-foreground text-xs mb-4">Enter halftime stats to calculate 2H probability.</p>
 
               <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -821,34 +842,6 @@ export default function Dashboard() {
                       data-testid="input-score"
                       className="w-full h-9 px-3 rounded-lg bg-input border border-border focus:border-primary outline-none text-sm font-mono"
                     />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <div className="space-y-1">
-                      <label className="text-xs text-muted-foreground flex items-center gap-1">
-                        <TrendingDown className="w-3 h-3 text-blue-400" />
-                        Game Spread
-                      </label>
-                      <input
-                        type="number" step="0.5"
-                        placeholder="e.g. -7.5"
-                        {...form.register("gameSpread")}
-                        data-testid="input-spread"
-                        className="w-full h-9 px-3 rounded-lg bg-input border border-border focus:border-primary outline-none text-sm font-mono"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs text-muted-foreground flex items-center gap-1">
-                        <Target className="w-3 h-3 text-blue-400" />
-                        Game O/U Total
-                      </label>
-                      <input
-                        type="number" step="0.5"
-                        placeholder="e.g. 224.5"
-                        {...form.register("gameTotalLine")}
-                        data-testid="input-game-total"
-                        className="w-full h-9 px-3 rounded-lg bg-input border border-border focus:border-primary outline-none text-sm font-mono"
-                      />
-                    </div>
                   </div>
                 </div>
 

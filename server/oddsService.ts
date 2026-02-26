@@ -302,6 +302,77 @@ export async function getPlayerOdds(
   return result;
 }
 
+// Fetch game-level spread and total for a given Odds API event.
+// Uses a separate API call with markets=spreads,totals so it doesn't
+// inflate the player-props response size.
+const GAME_LINES_TTL = 5 * 60 * 1000; // 5 min
+
+export async function getGameLines(
+  oddsEventId: string
+): Promise<{ spread: number; total: number; favorite: string } | null> {
+  const cacheKey = `game_lines_${oddsEventId}`;
+  const cached = cache.get(cacheKey);
+  if (isFresh(cached, GAME_LINES_TTL)) return cached!.data;
+
+  if (!ODDS_API_KEY) return null;
+
+  try {
+    const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads,totals&bookmakers=draftkings,fanduel&oddsFormat=american`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) {
+      console.warn(`[Odds] getGameLines ${res.status} for event ${oddsEventId}`);
+      return null;
+    }
+    const data = await res.json();
+    const bookmakers: any[] = data.bookmakers ?? [];
+
+    let spread: number | null = null;
+    let total: number | null = null;
+    let favorite = "";
+
+    // Try each bookmaker until we get both values
+    for (const bk of bookmakers) {
+      if (spread === null) {
+        const spreadsMarket = (bk.markets ?? []).find((m: any) => m.key === "spreads");
+        if (spreadsMarket?.outcomes?.length >= 2) {
+          // The favorite is the outcome with a negative spread (point < 0)
+          const favOutcome = spreadsMarket.outcomes.find((o: any) => o.point < 0);
+          if (favOutcome) {
+            spread = Math.abs(favOutcome.point as number);
+            favorite = favOutcome.name as string;
+          } else {
+            // Pick the lower absolute spread if neither is negative (pick 'em)
+            const sorted = [...spreadsMarket.outcomes].sort((a: any, b: any) => Math.abs(a.point) - Math.abs(b.point));
+            spread = Math.abs(sorted[0].point as number);
+            favorite = sorted[0].name as string;
+          }
+        }
+      }
+      if (total === null) {
+        const totalsMarket = (bk.markets ?? []).find((m: any) => m.key === "totals");
+        if (totalsMarket?.outcomes?.length >= 1) {
+          const overOutcome = totalsMarket.outcomes.find((o: any) => o.name === "Over");
+          if (overOutcome) total = overOutcome.point as number;
+        }
+      }
+      if (spread !== null && total !== null) break;
+    }
+
+    if (spread === null || total === null) {
+      cache.set(cacheKey, { data: null, timestamp: Date.now() });
+      return null;
+    }
+
+    const result = { spread, total, favorite };
+    cache.set(cacheKey, { data: result, timestamp: Date.now() });
+    console.log(`[Odds] Game lines for ${oddsEventId}: ${favorite} -${spread}, O/U ${total}`);
+    return result;
+  } catch (err) {
+    console.warn("[Odds] getGameLines error:", err);
+    return null;
+  }
+}
+
 // Bust the event cache (call after a game starts or for testing)
 export function bustEventsCache(): void {
   cache.delete("events_list");
