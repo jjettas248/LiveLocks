@@ -3,11 +3,14 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { calculateProbabilitySchema, type CalculateProbabilityRequest, type ParlayPickInput, type InjuryPlayer } from "@shared/schema";
-import { usePlayers, useTeams, useCalculateProbability, useLiveGames, useLiveStats, usePlayerOdds, useGameLines } from "@/hooks/use-nba";
+import { usePlayers, useTeams, useCalculateProbability, useLiveGames, useLiveStats, usePlayerOdds, useGameLines, PlayLimitError } from "@/hooks/use-nba";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ProbabilityRing } from "@/components/probability-ring";
 import { StatCard } from "@/components/stat-card";
 import { ParlaySlip } from "@/components/parlay-slip";
+import { UpgradeModal } from "@/components/upgrade-modal";
+import { useAuth } from "@/hooks/use-auth";
+import { useLocation } from "wouter";
 import {
   Activity,
   Clock,
@@ -73,6 +76,11 @@ function formatOdds(odds: number): string {
 }
 
 export default function Dashboard() {
+  const { user, logout } = useAuth();
+  const [, navigate] = useLocation();
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [upgradeModalState, setUpgradeModalState] = useState<{ playsUsed: number; limit: number }>({ playsUsed: 10, limit: 10 });
+
   const { data: players, isLoading: isPlayersLoading } = usePlayers();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
   const { data: liveGames, isLoading: isGamesLoading, refetch: refetchGames } = useLiveGames();
@@ -163,6 +171,26 @@ export default function Dashboard() {
       refetchHalftimePlays();
     }
   }, [activeTab]);
+
+  // ── Play limit gating ─────────────────────────────────────────────────────
+  useEffect(() => {
+    if (calculateMutation.error instanceof PlayLimitError) {
+      setUpgradeModalState({ playsUsed: calculateMutation.error.playsUsed, limit: calculateMutation.error.limit });
+      setShowUpgradeModal(true);
+    }
+  }, [calculateMutation.error]);
+
+  // ── Handle Stripe redirect back to app ────────────────────────────────────
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const payment = params.get("payment");
+    if (payment === "success") {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      window.history.replaceState({}, "", "/");
+    } else if (payment === "cancelled") {
+      window.history.replaceState({}, "", "/");
+    }
+  }, []);
 
   const watchedPlayerId = form.watch("playerId");
   const watchedStatType = form.watch("statType");
@@ -375,7 +403,7 @@ export default function Dashboard() {
               <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest mt-0.5">NBA · Live Lines</span>
             </div>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Radio className="w-3 h-3 text-green-500 animate-pulse" />
               <span>
@@ -384,6 +412,22 @@ export default function Dashboard() {
                   : `${activeGames.length} live game${activeGames.length !== 1 ? "s" : ""}`}
               </span>
             </div>
+            {user && !user.isAdmin && !user.subscriptionTier && (
+              <button
+                data-testid="button-plays-remaining"
+                onClick={() => { setUpgradeModalState({ playsUsed: user.playsUsed, limit: 10 }); setShowUpgradeModal(true); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-500 text-xs font-medium hover:bg-amber-500/20 transition-colors"
+              >
+                <Zap className="w-3 h-3" />
+                {Math.max(0, 10 - user.playsUsed)} free plays left
+              </button>
+            )}
+            {user && user.subscriptionTier && (
+              <span data-testid="text-subscription-tier" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-medium">
+                <Star className="w-3 h-3" />
+                {user.subscriptionTier === "all" ? "All Sports" : "NBA"}
+              </span>
+            )}
             <button
               onClick={() => syncRostersMutation.mutate()}
               disabled={syncRostersMutation.isPending}
@@ -411,6 +455,17 @@ export default function Dashboard() {
                 </span>
               )}
             </button>
+            {user && (
+              <button
+                data-testid="button-logout"
+                onClick={() => { logout(); navigate("/auth"); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors"
+                title={user.email}
+              >
+                <Users className="w-3.5 h-3.5" />
+                Sign Out
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -1342,6 +1397,14 @@ export default function Dashboard() {
         )}
 
       </main>
+
+      {showUpgradeModal && (
+        <UpgradeModal
+          playsUsed={upgradeModalState.playsUsed}
+          limit={upgradeModalState.limit}
+          onClose={() => setShowUpgradeModal(false)}
+        />
+      )}
     </div>
   );
 }

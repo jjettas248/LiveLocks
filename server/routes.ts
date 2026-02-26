@@ -6,11 +6,16 @@ import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
 import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines } from "./oddsService";
 import { calculateParlay } from "./parlayService";
+import { registerAuthRoutes, requirePlayAccess } from "./auth";
+import { registerStripeRoutes } from "./stripeService";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  await registerAuthRoutes(app);
+  await registerStripeRoutes(app);
 
   app.get("/api/odds", async (req, res) => {
     try {
@@ -110,7 +115,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post(api.calculator.calculate.path, async (req, res) => {
+  app.post(api.calculator.calculate.path, requirePlayAccess, async (req, res) => {
     try {
       const input = api.calculator.calculate.input.parse(req.body);
       const result = await storage.calculateProbability(input);

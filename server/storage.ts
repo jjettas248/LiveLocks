@@ -2,10 +2,13 @@ import { db } from "./db";
 import {
   players,
   teamDefense,
+  users,
   type Player,
   type InsertPlayer,
   type TeamDefense,
   type InsertTeamDefense,
+  type User,
+  type InsertUser,
   type CalculateProbabilityRequest,
   type CalculateProbabilityResponse,
 } from "@shared/schema";
@@ -65,6 +68,12 @@ export interface IStorage {
   getTeamDefense(teamName: string, position: string): Promise<TeamDefense | undefined>;
   createTeamDefense(defense: InsertTeamDefense): Promise<TeamDefense>;
   calculateProbability(req: CalculateProbabilityRequest): Promise<CalculateProbabilityResponse>;
+  getUserById(id: number): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  createUser(user: InsertUser): Promise<User>;
+  incrementPlaysUsed(userId: number): Promise<void>;
+  updateUserSubscription(userId: number, tier: string, stripeCustomerId: string, stripeSubscriptionId: string): Promise<void>;
+  updateUserStripeCustomer(userId: number, stripeCustomerId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -308,6 +317,36 @@ export class DatabaseStorage implements IStorage {
       inSecondHalf,
       baselineSource,
     };
+  }
+
+  async getUserById(id: number): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
+    return user;
+  }
+
+  async createUser(user: InsertUser): Promise<User> {
+    const [newUser] = await db.insert(users).values(user).returning();
+    return newUser;
+  }
+
+  async incrementPlaysUsed(userId: number): Promise<void> {
+    const user = await this.getUserById(userId);
+    if (user) {
+      await db.update(users).set({ playsUsed: user.playsUsed + 1 }).where(eq(users.id, userId));
+    }
+  }
+
+  async updateUserSubscription(userId: number, tier: string, stripeCustomerId: string, stripeSubscriptionId: string): Promise<void> {
+    await db.update(users).set({ subscriptionTier: tier, stripeCustomerId, stripeSubscriptionId }).where(eq(users.id, userId));
+  }
+
+  async updateUserStripeCustomer(userId: number, stripeCustomerId: string): Promise<void> {
+    await db.update(users).set({ stripeCustomerId }).where(eq(users.id, userId));
   }
 }
 

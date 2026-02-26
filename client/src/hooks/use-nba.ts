@@ -33,6 +33,20 @@ export function useTeams() {
   });
 }
 
+export class PlayLimitError extends Error {
+  constructor(public playsUsed: number, public limit: number) {
+    super("play_limit_reached");
+    this.name = "PlayLimitError";
+  }
+}
+
+export class UnauthenticatedError extends Error {
+  constructor() {
+    super("Not authenticated");
+    this.name = "UnauthenticatedError";
+  }
+}
+
 export function useCalculateProbability() {
   return useMutation({
     mutationFn: async (data: CalculateProbabilityRequest): Promise<CalculateProbabilityResponse> => {
@@ -41,6 +55,13 @@ export function useCalculateProbability() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
+      if (res.status === 402) {
+        const err = await res.json().catch(() => ({}));
+        throw new PlayLimitError(err.playsUsed ?? 10, err.limit ?? 10);
+      }
+      if (res.status === 401) {
+        throw new UnauthenticatedError();
+      }
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error((err as any).message || "Failed to calculate probability");
