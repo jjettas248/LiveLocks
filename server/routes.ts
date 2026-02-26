@@ -62,8 +62,8 @@ export async function registerRoutes(
         bookmaker: bk.key,
         markets: (bk.markets ?? []).map((m: any) => ({
           key: m.key,
-          playerCount: [...new Set((m.outcomes ?? []).map((o: any) => o.description ?? "?"))].length,
-          samplePlayers: [...new Set((m.outcomes ?? []).map((o: any) => o.description ?? "?"))].slice(0, 5),
+          playerCount: Array.from(new Set((m.outcomes ?? []).map((o: any) => o.description ?? "?"))).length,
+          samplePlayers: Array.from(new Set((m.outcomes ?? []).map((o: any) => o.description ?? "?"))).slice(0, 5),
         })),
       }));
       res.json({ eventId, summary });
@@ -270,7 +270,6 @@ export async function registerRoutes(
   // Returns top probability plays across all live halftime games.
   app.get("/api/halftime-plays", async (req, res) => {
     try {
-      // Fetch all live games
       const gamesRes = await fetch(
         "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
         { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
@@ -278,12 +277,11 @@ export async function registerRoutes(
       if (!gamesRes.ok) throw new Error("ESPN API unavailable");
       const gamesData = await gamesRes.json() as any;
 
-      // Filter for halftime games (period = 2 with no clock, or period = 3 just starting)
-      const ESPN_TO_DB: Record<string, string> = {
+      const ESPN_TO_DB_LOCAL: Record<string, string> = {
         GS: "GSW", SA: "SAS", NO: "NOP", NY: "NYK",
         PHO: "PHX", UTH: "UTA", WSH: "WAS", CHO: "CHA",
       };
-      const normAbbr = (a: string) => ESPN_TO_DB[a.toUpperCase()] ?? a.toUpperCase();
+      const normAbbr = (a: string) => ESPN_TO_DB_LOCAL[a.toUpperCase()] ?? a.toUpperCase();
 
       const halftimeGames: any[] = [];
       for (const event of (gamesData.events ?? [])) {
@@ -292,7 +290,6 @@ export async function registerRoutes(
         const period = status?.period ?? 0;
         const clock = status?.displayClock ?? "";
         const statusDesc: string = status?.type?.description ?? "";
-        // Halftime = period 2 with 0:00 or "Halftime" description
         const isHalftime = statusDesc === "Halftime" ||
           (period === 2 && (clock === "0:00" || clock === "00.0"));
         if (!isHalftime) continue;
@@ -305,6 +302,8 @@ export async function registerRoutes(
           awayTeamAbbr: normAbbr(away?.team?.abbreviation ?? ""),
           homeScore: parseInt(home?.score ?? "0", 10),
           awayScore: parseInt(away?.score ?? "0", 10),
+          homeFull: home?.team?.displayName ?? "",
+          awayFull: away?.team?.displayName ?? "",
         });
       }
 
@@ -312,11 +311,25 @@ export async function registerRoutes(
         return res.json({ plays: [], message: "No games at halftime right now." });
       }
 
+      // Load all DB players once — avoid repeated DB calls per athlete
+      const allDbPlayers = await storage.getPlayers();
+      const normDb = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+
+      // Cache Odds API event IDs and player odds per game to avoid redundant calls
+      const oddsCache = new Map<string, Map<string, number | null>>();
+
       const allPlays: any[] = [];
       const HALFTIME_STAT_TYPES = ["points", "rebounds", "assists", "threes", "steals", "blocks"];
 
       for (const game of halftimeGames) {
-        // Fetch live box score
+        // Resolve Odds API event ID for this game (for live prop lines)
+        let oddsEventId: string | null = null;
+        const oddsPlayerCache = new Map<string, number | null>(); // "playerName|statType" → line
+        try {
+          const { resolveOddsEventId: resolveId } = await import("./oddsService");
+          oddsEventId = await resolveId(game.homeTeamAbbr, game.awayTeamAbbr);
+        } catch { /* continue without odds */ }
+
         const bsRes = await fetch(
           `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${game.gameId}`,
           { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
@@ -357,10 +370,14 @@ export async function registerRoutes(
               ? parseInt(minParts[0]) + parseInt(minParts[1]) / 60
               : parseFloat(minStr) || 0;
 
-            if (minutes < 3) continue; // skip DNP/scratch players
+            if (minutes < 3) continue;
 
             const playerName: string = athlete.athlete.displayName ?? "";
-            const playerId: number = parseInt(athlete.athlete.id, 10);
+            const normPlayerName = normDb(playerName);
+
+            // Fast lookup from pre-loaded DB player list
+            const dbPlayer = allDbPlayers.find(p => normDb(p.name) === normPlayerName);
+            if (!dbPlayer) continue;
 
             const liveStats: Record<string, number> = {
               points: parseStat(statMap["pts"]),
@@ -371,44 +388,61 @@ export async function registerRoutes(
               threes: parseStat(statMap["3pt"] ?? statMap["fg3m"] ?? "0"),
             };
 
-            // Look up DB player once per athlete (needed for calculateProbability)
-            const dbPlayer = (await storage.getPlayers()).find(p => {
-              const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
-              return norm(p.name) === norm(playerName);
-            });
-            if (!dbPlayer) continue;
-
-            // Fetch season averages from ESPN free API (no API key needed)
-            // This replaces the broken BDL dependency — ESPN stats are always current
-            let espnSeasonStats: Record<string, number> = {};
-            try {
-              const espnStatRes = await fetch(
-                `https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba/athletes/${athlete.athlete.id}/statistics?lang=en&region=us`,
-                { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(5000) }
-              );
-              if (espnStatRes.ok) {
-                const espnStatData = await espnStatRes.json() as any;
-                for (const cat of (espnStatData.splits?.categories ?? [])) {
-                  for (const s of (cat.stats ?? [])) {
-                    espnSeasonStats[s.name] = s.value;
-                  }
-                }
-              }
-            } catch { /* fall through with empty stats */ }
-
-            const seasonStat: Record<string, number | null> = {
-              points: espnSeasonStats.avgPoints ?? null,
-              rebounds: espnSeasonStats.avgRebounds ?? null,
-              assists: espnSeasonStats.avgAssists ?? null,
-              steals: espnSeasonStats.avgSteals ?? null,
-              blocks: espnSeasonStats.avgBlocks ?? null,
-              threes: espnSeasonStats.avgThreePointFieldGoalsMade ?? null,
+            // Build season stat baselines from DB (fast) — fall back to ESPN live fetch only if null
+            const dbSeasonStat: Record<string, number | null> = {
+              points: dbPlayer.ppg ? Number(dbPlayer.ppg) : null,
+              rebounds: dbPlayer.rpg ? Number(dbPlayer.rpg) : null,
+              assists: dbPlayer.apg ? Number(dbPlayer.apg) : null,
+              steals: dbPlayer.spg ? Number(dbPlayer.spg) : null,
+              blocks: dbPlayer.bpg ? Number(dbPlayer.bpg) : null,
+              threes: (dbPlayer as any).tpg ? Number((dbPlayer as any).tpg) : null,
             };
+
+            // If DB stats are missing, fetch from ESPN as fallback
+            const needsEspnFetch = Object.values(dbSeasonStat).every(v => v === null);
+            if (needsEspnFetch) {
+              try {
+                const espnStatRes = await fetch(
+                  `https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba/athletes/${athlete.athlete.id}/statistics?lang=en&region=us`,
+                  { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(4000) }
+                );
+                if (espnStatRes.ok) {
+                  const espnStatData = await espnStatRes.json() as any;
+                  const espnStats: Record<string, number> = {};
+                  for (const cat of (espnStatData.splits?.categories ?? [])) {
+                    for (const s of (cat.stats ?? [])) espnStats[s.name] = s.value;
+                  }
+                  dbSeasonStat.points = espnStats.avgPoints ?? null;
+                  dbSeasonStat.rebounds = espnStats.avgRebounds ?? null;
+                  dbSeasonStat.assists = espnStats.avgAssists ?? null;
+                  dbSeasonStat.steals = espnStats.avgSteals ?? null;
+                  dbSeasonStat.blocks = espnStats.avgBlocks ?? null;
+                  dbSeasonStat.threes = espnStats.avgThreePointFieldGoalsMade ?? null;
+                }
+              } catch { /* ignore */ }
+            }
 
             for (const statType of HALFTIME_STAT_TYPES) {
               try {
-                const seasonAvg = seasonStat[statType];
+                const seasonAvg = dbSeasonStat[statType];
                 if (!seasonAvg || seasonAvg < 0.5) continue;
+
+                // Try Odds API for a live line; cache result per player+stat
+                let liveLine = seasonAvg;
+                let lineSource: "odds_api" | "season_avg" = "season_avg";
+                if (oddsEventId && process.env.ODDS_API_KEY) {
+                  const cacheKey = `${playerName}|${statType}`;
+                  if (!oddsPlayerCache.has(cacheKey)) {
+                    try {
+                      const { getPlayerOdds } = await import("./oddsService");
+                      const oddsResult = await getPlayerOdds(oddsEventId, playerName, statType);
+                      const firstBook = Object.values(oddsResult)[0] as any;
+                      oddsPlayerCache.set(cacheKey, firstBook?.line ?? null);
+                    } catch { oddsPlayerCache.set(cacheKey, null); }
+                  }
+                  const oddsLine = oddsPlayerCache.get(cacheKey);
+                  if (oddsLine != null) { liveLine = oddsLine; lineSource = "odds_api"; }
+                }
 
                 const result = await storage.calculateProbability({
                   playerId: dbPlayer.id,
@@ -416,13 +450,15 @@ export async function registerRoutes(
                   halftimeMinutes: Math.round(minutes * 10) / 10,
                   halftimeFouls: parseStat(statMap["pf"]),
                   halftimeStat: liveStats[statType] ?? 0,
-                  liveLine: seasonAvg,
+                  liveLine,
                   statType,
                   halftimeScore: scoreStr,
+                  currentPeriod: 3, // entering Q3 = halftime
+                  gameClock: "12:00",
                 });
 
                 const edge = Math.abs(result.probability - 50);
-                if (edge < 5) continue; // skip near-50% plays
+                if (edge < 5) continue;
 
                 allPlays.push({
                   gameId: game.gameId,
@@ -432,7 +468,8 @@ export async function registerRoutes(
                   opponent: opponentAbbr,
                   statType,
                   halftimeStat: liveStats[statType] ?? 0,
-                  line: seasonAvg,
+                  line: liveLine,
+                  lineSource,
                   probability: result.probability,
                   edge,
                   expectedTotal: result.expectedTotal,
@@ -446,9 +483,9 @@ export async function registerRoutes(
         }
       }
 
-      // Sort by edge (highest probability edge first)
+      // Sort by edge descending (highest edge = most confident call)
       allPlays.sort((a, b) => b.edge - a.edge);
-      res.json({ plays: allPlays.slice(0, 30) });
+      res.json({ plays: allPlays.slice(0, 20) });
     } catch (e) {
       res.status(502).json({ message: "Halftime plays unavailable", details: (e as any).message });
     }
@@ -542,7 +579,7 @@ export async function registerRoutes(
                 avgMinutes: "20.0",
                 avgFouls: "2.0",
               });
-              dbPlayers.push({ id: -1, name, team: dbTeam, position: validPos, avgMinutes: "20.0", avgFouls: "2.0", ppg: null, rpg: null, apg: null, spg: null, bpg: null, usageRate: null, statsUpdatedAt: null });
+              dbPlayers.push({ id: -1, name, team: dbTeam, position: validPos, avgMinutes: "20.0", avgFouls: "2.0", ppg: null, rpg: null, apg: null, spg: null, bpg: null, tpg: null, usageRate: null, statsUpdatedAt: null, offRating: null, tsPct: null, h2ppg: null, h2rpg: null, h2apg: null, h2spg: null, h2bpg: null, h2tpg: null, h2avgMinutes: null } as any);
               added++;
             }
           }
@@ -561,74 +598,347 @@ export async function registerRoutes(
         teamErrors,
         totalPlayers: dbPlayers.length,
       });
+      // After roster sync, fire a stats sync in background so new players get populated
+      runFullStatSync().catch(console.error);
     } catch (e) {
       res.status(500).json({ message: "Roster sync failed", error: (e as any).message });
     }
   });
 
-  app.get("/api/sync-stats", async (req, res) => {
-    try {
-      const players = await storage.getPlayers();
-      const BDL_API_KEY = process.env.BDL_API_KEY;
-      
-      if (!BDL_API_KEY) {
-        return res.status(500).json({ message: "BallDontLie API key not configured" });
-      }
-
-      // 1. Get BallDontLie player IDs for our players
-      // We'll search by name. BDL search can be finicky so we do it one by one or in small batches.
-      // For a sync, we can afford some time.
-      let syncCount = 0;
-      for (const player of players) {
-        try {
-          // Search player to get BDL ID
-          const searchRes = await fetch(`https://api.balldontlie.io/v1/players?search=${encodeURIComponent(player.name)}`, {
-            headers: { "Authorization": BDL_API_KEY }
-          });
-          if (!searchRes.ok) continue;
-          const searchData = await searchRes.json() as any;
-          const bdlPlayer = searchData.data?.[0];
-          
-          if (bdlPlayer) {
-            // Get season averages for 2024 (2025-26 season might not be available or 2024 is the latest complete/active)
-            const statsRes = await fetch(`https://api.balldontlie.io/v1/season_averages?season=2024&player_ids[]=${bdlPlayer.id}`, {
-              headers: { "Authorization": BDL_API_KEY }
-            });
-            if (!statsRes.ok) continue;
-            const statsData = await statsRes.json() as any;
-            const avg = statsData.data?.[0];
-            
-            if (avg) {
-              await storage.updatePlayerStats(player.id, {
-                ppg: avg.pts?.toString(),
-                rpg: avg.reb?.toString(),
-                apg: avg.ast?.toString(),
-                spg: avg.stl?.toString(),
-                bpg: avg.blk?.toString(),
-                avgMinutes: avg.min || player.avgMinutes,
-              });
-              syncCount++;
-            }
-          }
-          // Rate limiting sleep for free tier if needed
-          await new Promise(resolve => setTimeout(resolve, 100));
-        } catch (err) {
-          console.error(`Failed to sync ${player.name}:`, err);
-        }
-      }
-
-      res.json({ message: `Synced ${syncCount} players` });
-    } catch (e) {
-      res.status(500).json({ message: "Sync failed", error: (e as any).message });
-    }
+  app.post("/api/sync-stats", async (req, res) => {
+    runFullStatSync().catch(console.error);
+    res.json({ message: "Stats sync started (NBA.com + NBaStuffer + ESPN)", status: "background" });
   });
 
   await seedDatabase();
   return httpServer;
 }
 
+// ─── NBA.com required headers (verified working 2026-02-26) ──────────────────
+const NBA_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Accept-Encoding": "gzip, deflate, br",
+  "Referer": "https://www.nba.com/",
+  "Origin": "https://www.nba.com",
+  "x-nba-stats-origin": "stats",
+  "x-nba-stats-token": "true",
+  "Sec-Fetch-Dest": "empty",
+  "Sec-Fetch-Mode": "cors",
+  "Sec-Fetch-Site": "same-site",
+  "Connection": "keep-alive",
+};
+
+const NBA_PARAMS_BASE = "DateFrom=&DateTo=&LastNGames=0&LeagueID=00&Location=&Month=0&OpponentTeamID=0&Outcome=&PORound=0&PaceAdjust=N&Period=0&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&Season=2025-26&SeasonSegment=&SeasonType=Regular+Season&StarterBench=&TeamID=0&TwoWay=0&VsConference=&VsDivision=";
+const NBA_PARAMS = `GameSegment=&${NBA_PARAMS_BASE}`;
+const NBA_PARAMS_H2 = `GameSegment=Second+Half&${NBA_PARAMS_BASE}`;
+
+// Team abbreviation normalization for NBA.com abbreviations → our DB format
+const NBA_TO_DB: Record<string, string> = {
+  UTA: "UTA", SAS: "SAS", PHX: "PHX", NOP: "NOP", NYK: "NYK",
+  GSW: "GSW", WAS: "WAS", CHA: "CHA", SA: "SAS", NO: "NOP",
+  NY: "NYK", GS: "GSW", PHO: "PHX", UTH: "UTA", WSH: "WAS", CHO: "CHA",
+};
+const normTeam = (t: string) => NBA_TO_DB[t.toUpperCase()] ?? t.toUpperCase();
+
+const normalizeName = (s: string) =>
+  s.toLowerCase().replace(/['.'\-\s]+/g, "").replace(/jr$|sr$|ii$|iii$|iv$/, "");
+
+async function syncStatsFromNBA(): Promise<{ matched: number; unmatched: number }> {
+  console.log("[nba-sync] Starting NBA.com stats sync…");
+  try {
+    const baseUrl = "https://stats.nba.com/stats/leaguedashplayerstats";
+    const [baseRes, advRes, h2Res] = await Promise.all([
+      fetch(`${baseUrl}?MeasureType=Base&PerMode=PerGame&${NBA_PARAMS}`, { headers: NBA_HEADERS, signal: AbortSignal.timeout(20000) }),
+      fetch(`${baseUrl}?MeasureType=Advanced&PerMode=PerGame&${NBA_PARAMS}`, { headers: NBA_HEADERS, signal: AbortSignal.timeout(20000) }),
+      fetch(`${baseUrl}?MeasureType=Base&PerMode=PerGame&${NBA_PARAMS_H2}`, { headers: NBA_HEADERS, signal: AbortSignal.timeout(20000) }),
+    ]);
+
+    if (!baseRes.ok || !advRes.ok || !h2Res.ok) {
+      console.error("[nba-sync] NBA.com API request failed:", baseRes.status, advRes.status, h2Res.status);
+      return { matched: 0, unmatched: 0 };
+    }
+
+    const [baseData, advData, h2Data] = await Promise.all([baseRes.json(), advRes.json(), h2Res.json()]) as [any, any, any];
+
+    // Build per-player merged maps keyed by PLAYER_ID
+    const playerMap = new Map<number, Record<string, any>>();
+
+    const baseHeaders: string[] = baseData.resultSets?.[0]?.headers ?? [];
+    for (const row of (baseData.resultSets?.[0]?.rowSet ?? [])) {
+      const o: Record<string, any> = {};
+      baseHeaders.forEach((h: string, i: number) => o[h] = row[i]);
+      playerMap.set(o.PLAYER_ID, {
+        name: o.PLAYER_NAME,
+        team: normTeam(o.TEAM_ABBREVIATION),
+        ppg: o.PTS?.toString(),
+        rpg: o.REB?.toString(),
+        apg: o.AST?.toString(),
+        spg: o.STL?.toString(),
+        bpg: o.BLK?.toString(),
+        tpg: o.FG3M?.toString(),
+        avgMinutes: o.MIN?.toString(),
+        avgFouls: o.PF?.toString(),
+      });
+    }
+
+    const advHeaders: string[] = advData.resultSets?.[0]?.headers ?? [];
+    for (const row of (advData.resultSets?.[0]?.rowSet ?? [])) {
+      const o: Record<string, any> = {};
+      advHeaders.forEach((h: string, i: number) => o[h] = row[i]);
+      const existing = playerMap.get(o.PLAYER_ID) ?? {};
+      playerMap.set(o.PLAYER_ID, {
+        ...existing,
+        usageRate: o.USG_PCT != null ? (o.USG_PCT / 100).toString() : existing.usageRate,
+        tsPct: o.TS_PCT?.toString(),
+        offRating: o.OFF_RATING?.toString(),
+      });
+    }
+
+    const h2Headers: string[] = h2Data.resultSets?.[0]?.headers ?? [];
+    for (const row of (h2Data.resultSets?.[0]?.rowSet ?? [])) {
+      const o: Record<string, any> = {};
+      h2Headers.forEach((h: string, i: number) => o[h] = row[i]);
+      const existing = playerMap.get(o.PLAYER_ID) ?? {};
+      playerMap.set(o.PLAYER_ID, {
+        ...existing,
+        h2ppg: o.PTS?.toString(),
+        h2rpg: o.REB?.toString(),
+        h2apg: o.AST?.toString(),
+        h2spg: o.STL?.toString(),
+        h2bpg: o.BLK?.toString(),
+        h2tpg: o.FG3M?.toString(),
+        h2avgMinutes: o.MIN?.toString(),
+      });
+    }
+
+    // Match NBA.com players to DB players
+    const dbPlayers = await storage.getPlayers();
+    let matched = 0, unmatched = 0;
+
+    const fields = ["ppg","rpg","apg","spg","bpg","tpg","avgMinutes","avgFouls","usageRate","tsPct","offRating","h2ppg","h2rpg","h2apg","h2spg","h2bpg","h2tpg","h2avgMinutes"];
+    for (const nbaPlayer of Array.from(playerMap.values())) {
+      const normNba = normalizeName(nbaPlayer.name ?? "");
+      const dbMatch = dbPlayers.find(p => normalizeName(p.name) === normNba);
+      if (dbMatch) {
+        const update: Record<string, any> = { statsUpdatedAt: new Date() };
+        for (const f of fields) {
+          if (nbaPlayer[f] != null && nbaPlayer[f] !== "null") update[f] = nbaPlayer[f];
+        }
+        await storage.updatePlayerStats(dbMatch.id, update as any);
+        matched++;
+      } else {
+        unmatched++;
+      }
+    }
+
+    console.log(`[nba-sync] Complete: ${matched} matched, ${unmatched} unmatched`);
+    return { matched, unmatched };
+  } catch (e) {
+    console.error("[nba-sync] Error:", (e as any).message);
+    return { matched: 0, unmatched: 0 };
+  }
+}
+
+async function syncStatsFromNBAStuffer(): Promise<{ matched: number; unmatched: number }> {
+  console.log("[nbastuffer-sync] Starting NBaStuffer scrape…");
+  try {
+    const res = await fetch("https://www.nbastuffer.com/2025-2026-nba-player-stats/", {
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "Accept": "text/html" },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) { console.error("[nbastuffer-sync] HTTP", res.status); return { matched: 0, unmatched: 0 }; }
+    const html = await res.text();
+
+    // Extract headers from <th> elements
+    const tableMatch = html.match(/<table[^>]*>([\s\S]*?)<\/table>/);
+    if (!tableMatch) { console.error("[nbastuffer-sync] No table found"); return { matched: 0, unmatched: 0 }; }
+    const tableHtml = tableMatch[0];
+    // Use exec-loop instead of matchAll to avoid es2018 regex flag requirement
+    const thRegex = /<th[^>]*>([\s\S]*?)<\/th>/gi;
+    const headers: string[] = [];
+    let thM: RegExpExecArray | null;
+    while ((thM = thRegex.exec(tableHtml)) !== null) {
+      headers.push(thM[1].replace(/<[^>]*>/g, "").trim());
+    }
+
+    // Extract player rows
+    const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+    const rowMatches: string[] = [];
+    let trM: RegExpExecArray | null;
+    while ((trM = trRegex.exec(tableHtml)) !== null) {
+      if (trM[1].includes("<td")) rowMatches.push(trM[1]);
+    }
+
+    const nameIdx = headers.indexOf("NAME");
+    const curIdx = headers.indexOf("CUR");
+    const gpIdx = headers.indexOf("GP");
+
+    // Group by name, pick current team row
+    const byName = new Map<string, any[]>();
+    for (const rowHtml of rowMatches) {
+      const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+      const cells: string[] = [];
+      let tdM: RegExpExecArray | null;
+      while ((tdM = tdRegex.exec(rowHtml)) !== null) {
+        cells.push(tdM[1].replace(/<[^>]*>/g, "").trim());
+      }
+      const name = cells[nameIdx];
+      if (!name) continue;
+      if (!byName.has(name)) byName.set(name, []);
+      byName.get(name)!.push(cells);
+    }
+
+    const dbPlayers = await storage.getPlayers();
+    let matched = 0, unmatched = 0;
+
+    for (const [name, rows] of Array.from(byName.entries())) {
+      // Pick current team row: prefer CUR="*", else highest GP
+      let row = rows[0];
+      const curRow = rows.find((r: any[]) => r[curIdx] === "*");
+      if (curRow) {
+        row = curRow;
+      } else if (rows.length > 1) {
+        row = rows.reduce((best: any[], r: any[]) => parseInt(r[gpIdx]) > parseInt(best[gpIdx]) ? r : best, rows[0]);
+      }
+
+      const get = (col: string) => parseFloat(row[headers.indexOf(col)] ?? "0") || 0;
+      const gp = get("GP") || 1;
+      const threePA = get("3PA");
+      const threePPct = get("3P%");
+
+      const update: Record<string, any> = {
+        ppg: get("PpG").toString(),
+        rpg: get("RpG").toString(),
+        apg: get("ApG").toString(),
+        spg: get("SpG").toString(),
+        bpg: get("BpG").toString(),
+        tpg: ((threePA * threePPct) / gp).toFixed(2),
+        avgMinutes: get("MpG").toString(),
+        usageRate: (get("USG%") / 100).toFixed(4),
+        statsUpdatedAt: new Date(),
+      };
+
+      const normNbs = normalizeName(name);
+      const dbMatch = dbPlayers.find(p => normalizeName(p.name) === normNbs && (!p.ppg));
+      if (dbMatch) {
+        await storage.updatePlayerStats(dbMatch.id, update as any);
+        matched++;
+      } else {
+        unmatched++;
+      }
+    }
+
+    console.log(`[nbastuffer-sync] Complete: ${matched} matched, ${unmatched} skipped/unmatched`);
+    return { matched, unmatched };
+  } catch (e) {
+    console.error("[nbastuffer-sync] Error:", (e as any).message);
+    return { matched: 0, unmatched: 0 };
+  }
+}
+
+async function syncStatsFromESPN(): Promise<{ matched: number }> {
+  console.log("[espn-sync] Starting ESPN gap-fill sync…");
+  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+  const ESPN_TO_DB_MAP: Record<string, string> = {
+    GS: "GSW", SA: "SAS", NO: "NOP", NY: "NYK",
+    PHO: "PHX", UTH: "UTA", WSH: "WAS", CHO: "CHA",
+  };
+  const normE = (a: string) => ESPN_TO_DB_MAP[a.toUpperCase()] ?? a.toUpperCase();
+
+  try {
+    const teamsRes = await fetch("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams?limit=32", { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(10000) });
+    if (!teamsRes.ok) { console.error("[espn-sync] Teams fetch failed"); return { matched: 0 }; }
+    const teamsData = await teamsRes.json() as any;
+    const espnTeams: any[] = teamsData.sports?.[0]?.leagues?.[0]?.teams ?? [];
+
+    const dbPlayers = await storage.getPlayers();
+    // Only sync players missing ppg
+    const needsSync = dbPlayers.filter(p => !p.ppg);
+    if (needsSync.length === 0) { console.log("[espn-sync] All players already have stats — skipping"); return { matched: 0 }; }
+
+    let matched = 0;
+
+    for (const teamWrapper of espnTeams) {
+      const espnTeam = teamWrapper.team;
+      try {
+        const rosterRes = await fetch(`https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/${espnTeam.id}/roster`, { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) });
+        if (!rosterRes.ok) continue;
+        const rosterData = await rosterRes.json() as any;
+        let athletes: any[] = Array.isArray(rosterData.athletes) ? rosterData.athletes.flat() : [];
+
+        for (const athlete of athletes) {
+          const name: string = athlete.displayName ?? athlete.fullName ?? "";
+          if (!name) continue;
+          const normEspn = normalizeName(name);
+          const dbMatch = needsSync.find(p => normalizeName(p.name) === normEspn);
+          if (!dbMatch) continue;
+
+          try {
+            const statRes = await fetch(
+              `https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba/athletes/${athlete.id}/statistics?lang=en&region=us`,
+              { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(5000) }
+            );
+            if (!statRes.ok) { await sleep(80); continue; }
+            const statData = await statRes.json() as any;
+            const stats: Record<string, number> = {};
+            for (const cat of (statData.splits?.categories ?? [])) {
+              for (const s of (cat.stats ?? [])) stats[s.name] = s.value;
+            }
+
+            const avgMin = stats.avgMinutes ?? 20;
+            const avgFGA = stats.avgFieldGoalAttempts ?? 0;
+            const avgFTA = stats.avgFreeThrowAttempts ?? 0;
+            const avgTOV = stats.avgTurnovers ?? 0;
+            const usageRate = avgMin > 0 ? (avgFGA + 0.44 * avgFTA + avgTOV) / ((avgMin / 48) * 110) : 0.22;
+
+            await storage.updatePlayerStats(dbMatch.id, {
+              ppg: (stats.avgPoints ?? 0).toFixed(1),
+              rpg: (stats.avgRebounds ?? 0).toFixed(1),
+              apg: (stats.avgAssists ?? 0).toFixed(1),
+              spg: (stats.avgSteals ?? 0).toFixed(1),
+              bpg: (stats.avgBlocks ?? 0).toFixed(1),
+              tpg: (stats.avgThreePointFieldGoalsMade ?? 0).toFixed(1),
+              avgMinutes: avgMin.toFixed(1),
+              avgFouls: (stats.avgFouls ?? 2.0).toFixed(1),
+              usageRate: usageRate.toFixed(4),
+              statsUpdatedAt: new Date(),
+            } as any);
+            matched++;
+          } catch { /* skip athlete on error */ }
+          await sleep(80);
+        }
+      } catch (teamErr) {
+        console.error("[espn-sync] Team error:", (teamErr as any).message);
+      }
+    }
+
+    console.log(`[espn-sync] Complete: ${matched} gap-filled from ESPN`);
+    return { matched };
+  } catch (e) {
+    console.error("[espn-sync] Error:", (e as any).message);
+    return { matched: 0 };
+  }
+}
+
+async function runFullStatSync(): Promise<void> {
+  console.log("[stat-sync] Starting full stat sync chain…");
+  await syncStatsFromNBA();
+  await syncStatsFromNBAStuffer();
+  await syncStatsFromESPN();
+  console.log("[stat-sync] Full sync chain complete.");
+}
+
 async function seedDatabase() {
   const existingPlayers = await storage.getPlayers();
+
+  // Auto-trigger stats sync on startup if any player lacks stats
+  if (existingPlayers.length > 0 && existingPlayers.some(p => !p.ppg)) {
+    console.log("[startup] Detected players with null stats — triggering full stat sync in background…");
+    runFullStatSync().catch(console.error);
+  }
+
   if (existingPlayers.length === 0) {
     // ── 2025-26 NBA ROSTERS (accurate as of Feb 25, 2026) ────────────────────
     // All Feb 5, 2026 trade deadline moves reflected (28 trades, 73 players moved).

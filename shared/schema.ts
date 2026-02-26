@@ -9,7 +9,7 @@ export const players = pgTable("players", {
   position: text("position").notNull(),
   avgMinutes: numeric("avg_minutes").notNull(),
   avgFouls: numeric("avg_fouls").notNull(),
-  // Season stats — synced from BallDontLie API
+  // Season stats — synced from NBA.com + NBaStuffer + ESPN
   ppg: numeric("ppg"),
   rpg: numeric("rpg"),
   apg: numeric("apg"),
@@ -17,6 +17,16 @@ export const players = pgTable("players", {
   bpg: numeric("bpg"),
   tpg: numeric("tpg"),
   usageRate: numeric("usage_rate"),
+  offRating: numeric("off_rating"),
+  tsPct: numeric("ts_pct"),
+  // Second-half season averages (NBA.com GameSegment=Second+Half)
+  h2ppg: numeric("h2ppg"),
+  h2rpg: numeric("h2rpg"),
+  h2apg: numeric("h2apg"),
+  h2spg: numeric("h2spg"),
+  h2bpg: numeric("h2bpg"),
+  h2tpg: numeric("h2tpg"),
+  h2avgMinutes: numeric("h2_avg_minutes"),
   statsUpdatedAt: timestamp("stats_updated_at"),
 });
 
@@ -63,6 +73,9 @@ export const calculateProbabilitySchema = z.object({
   gameId: z.string().optional(),
   gameSpread: z.coerce.number().optional(),
   gameTotalLine: z.coerce.number().optional(),
+  // Any-point calculator fields
+  currentPeriod: z.coerce.number().min(0).max(4).optional(),
+  gameClock: z.string().optional(),
 });
 
 export type CalculateProbabilityRequest = z.infer<typeof calculateProbabilitySchema>;
@@ -76,6 +89,9 @@ export interface CalculateProbabilityResponse {
   paceLabel: string;
   teamPace: number;
   opponentPace: number;
+  gameMinutesRemaining?: number;
+  inSecondHalf?: boolean;
+  baselineSource?: "h2" | "fullGame";
 }
 
 export interface LiveGame {

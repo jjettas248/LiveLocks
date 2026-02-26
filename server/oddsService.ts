@@ -290,9 +290,9 @@ export async function getPlayerOdds(
     const sampleBook = oddsData.bookmakers?.[0];
     const sampleMarket = sampleBook?.markets?.find((m: any) => m.key === marketKey);
     if (sampleMarket?.outcomes) {
-      const available = [...new Set(
+      const available = Array.from(new Set(
         sampleMarket.outcomes.map((o: any) => o.description ?? o.name).filter(Boolean)
-      )].slice(0, 8);
+      )).slice(0, 8);
       console.warn(`[Odds] No ${statType} line found for "${playerName}" — ${available.length ? `Available: ${available.join(", ")}` : "market has no outcomes (props not posted yet)"}`);
     } else {
       console.warn(`[Odds] No ${statType} line found for "${playerName}" — market key "${marketKey}" not found in response (may not be offered by these books)`);

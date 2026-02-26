@@ -108,6 +108,8 @@ export default function Dashboard() {
       statType: "points",
       halftimeScore: "",
       gameId: "",
+      currentPeriod: 3,
+      gameClock: "12:00",
     },
   });
 
@@ -149,10 +151,18 @@ export default function Dashboard() {
       autoRefreshRef.current = setInterval(() => {
         queryClient.invalidateQueries({ queryKey: ["/api/live-stats", selectedGameId] });
         setLastRefreshed(new Date());
+        if (activeTab === "halftime") refetchHalftimePlays();
       }, 2 * 60 * 1000);
     }
     return () => { if (autoRefreshRef.current) clearInterval(autoRefreshRef.current); };
-  }, [selectedGameId]);
+  }, [selectedGameId, activeTab]);
+
+  // ── Auto-refresh halftime plays when tab is opened ─────────────────────────
+  useEffect(() => {
+    if (activeTab === "halftime") {
+      refetchHalftimePlays();
+    }
+  }, [activeTab]);
 
   const watchedPlayerId = form.watch("playerId");
   const watchedStatType = form.watch("statType");
@@ -431,7 +441,7 @@ export default function Dashboard() {
             }`}
           >
             <Star className="w-3.5 h-3.5" />
-            Best Halftime Plays
+            Top 2H Plays
           </button>
         </div>
 
@@ -755,11 +765,11 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* Halftime Situation */}
+                {/* Game Situation */}
                 <div className="p-3.5 rounded-lg bg-secondary/40 border border-border/50 space-y-3">
                   <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
                     <Clock className="w-3 h-3" />
-                    Halftime Situation
+                    Game Situation
                     {autoFilledFields.size > 0 && (
                       <span className="text-green-400 text-xs normal-case font-normal ml-1 flex items-center gap-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse inline-block" />
@@ -774,7 +784,36 @@ export default function Dashboard() {
                   </h3>
                   <div className="grid grid-cols-2 gap-2.5">
                     <div className="space-y-1">
-                      <label className="text-xs text-muted-foreground">Minutes</label>
+                      <label className="text-xs text-muted-foreground">Game Period</label>
+                      <div className="relative">
+                        <select
+                          {...form.register("currentPeriod", { valueAsNumber: true })}
+                          data-testid="select-period"
+                          className="w-full h-9 pl-3 pr-8 rounded-lg bg-input border border-border focus:border-primary outline-none appearance-none text-sm"
+                        >
+                          <option value={0}>Pre-Game</option>
+                          <option value={1}>Q1</option>
+                          <option value={2}>Q2</option>
+                          <option value={3}>Q3 / Halftime</option>
+                          <option value={4}>Q4</option>
+                        </select>
+                        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground">Clock Remaining</label>
+                      <input
+                        type="text"
+                        placeholder="12:00"
+                        {...form.register("gameClock")}
+                        data-testid="input-game-clock"
+                        className="w-full h-9 px-3 rounded-lg bg-input border border-border focus:border-primary outline-none text-sm font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground">Minutes Played</label>
                       <input
                         type="number" step="0.1"
                         {...form.register("halftimeMinutes", {
@@ -841,7 +880,7 @@ export default function Dashboard() {
                   </div>
                   <div className="grid grid-cols-2 gap-2.5">
                     <div className="space-y-1">
-                      <label className="text-xs text-muted-foreground">Current Stat</label>
+                      <label className="text-xs text-muted-foreground">Current Stat Total</label>
                       <input
                         type="number" step="0.5"
                         {...form.register("halftimeStat", {
@@ -1079,9 +1118,9 @@ export default function Dashboard() {
                     highlight={result.expectedTotal >= form.getValues("liveLine") ? "positive" : "negative"}
                   />
                   <StatCard
-                    title="Proj. 2H Min"
+                    title="Proj. Remaining Min"
                     value={result.projectedSecondHalfMinutes.toFixed(1)}
-                    subtitle={`1H: ${form.getValues("halftimeMinutes")} min`}
+                    subtitle={(result as any).baselineSource === "h2" ? "H2 Baseline" : "Full-Game Baseline"}
                     icon={<Clock className="w-4 h-4" />}
                     highlight="neutral"
                   />
@@ -1206,10 +1245,10 @@ export default function Dashboard() {
                 <div>
                   <h2 className="text-lg font-semibold flex items-center gap-2">
                     <Star className="w-5 h-5 text-primary" />
-                    Best Halftime Plays
+                    Top 2H Plays — Full Slate
                   </h2>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Top probability edges across all games currently at halftime. Sorted by edge vs 50%.
+                    Top 20 plays by probability edge across all halftime games. Includes overs and unders.
                   </p>
                 </div>
                 <button
@@ -1240,15 +1279,19 @@ export default function Dashboard() {
                     const isOver = play.betDirection === "over";
                     const isInjured = injuredPlayerNames.has(play.playerName.toLowerCase());
                     const statLabel = STAT_TYPES.find(s => s.value === play.statType)?.label ?? play.statType;
+                    const hasLiveLine = play.lineSource === "odds_api";
                     return (
                       <div
                         key={idx}
                         data-testid={`halftime-play-${idx}`}
-                        className={`rounded-xl border p-4 space-y-2 ${
+                        className={`rounded-xl border p-4 space-y-2 relative ${
                           isInjured ? "border-red-500/40 bg-red-500/5" : "border-border/60 bg-secondary/30"
                         }`}
                       >
-                        <div className="flex items-start justify-between gap-2">
+                        <div className="absolute top-3 left-3 w-5 h-5 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center">
+                          <span className="text-[9px] font-bold text-primary leading-none">#{idx + 1}</span>
+                        </div>
+                        <div className="flex items-start justify-between gap-2 pl-7">
                           <div>
                             <div className="font-semibold text-sm text-foreground">{play.playerName}</div>
                             <div className="text-xs text-muted-foreground">{play.team} vs {play.opponent}</div>
@@ -1270,11 +1313,18 @@ export default function Dashboard() {
                             </div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className={`text-xs font-mono px-2 py-0.5 rounded font-bold ${
                             isOver ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"
                           }`}>
                             {statLabel} {isOver ? "O" : "U"}{play.line}
+                          </span>
+                          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                            hasLiveLine
+                              ? "bg-green-500/15 text-green-400"
+                              : "bg-secondary text-muted-foreground"
+                          }`}>
+                            {hasLiveLine ? "Live Line" : "Season Avg"}
                           </span>
                           <span className="text-xs text-muted-foreground">
                             H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}
