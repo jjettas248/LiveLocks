@@ -15,6 +15,7 @@ export const players = pgTable("players", {
   apg: numeric("apg"),
   spg: numeric("spg"),
   bpg: numeric("bpg"),
+  tpg: numeric("tpg"),
   usageRate: numeric("usage_rate"),
   statsUpdatedAt: timestamp("stats_updated_at"),
 });
@@ -60,6 +61,8 @@ export const calculateProbabilitySchema = z.object({
   statType: z.string(),
   halftimeScore: z.string().optional(),
   gameId: z.string().optional(),
+  gameSpread: z.coerce.number().optional(),
+  gameTotalLine: z.coerce.number().optional(),
 });
 
 export type CalculateProbabilityRequest = z.infer<typeof calculateProbabilitySchema>;
@@ -100,6 +103,16 @@ export interface LivePlayerStat {
   steals: number;
   blocks: number;
   fouls: number;
+  threes: number;
+}
+
+export interface InjuryPlayer {
+  playerId: string;
+  playerName: string;
+  team: string;
+  status: string;
+  type: string;
+  detail: string;
 }
 
 export interface OddsLine {

@@ -1,8 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation } from "@tanstack/react-query";
-import { calculateProbabilitySchema, type CalculateProbabilityRequest, type ParlayPickInput } from "@shared/schema";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { calculateProbabilitySchema, type CalculateProbabilityRequest, type ParlayPickInput, type InjuryPlayer } from "@shared/schema";
 import { usePlayers, useTeams, useCalculateProbability, useLiveGames, useLiveStats, usePlayerOdds } from "@/hooks/use-nba";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ProbabilityRing } from "@/components/probability-ring";
@@ -24,6 +24,8 @@ import {
   Trophy,
   Loader2,
   Users,
+  Search,
+  Star,
 } from "lucide-react";
 
 // ESPN abbreviation → our DB team abbreviation
@@ -37,6 +39,7 @@ const STAT_TYPES = [
   { value: "points", label: "Points" },
   { value: "rebounds", label: "Rebounds" },
   { value: "assists", label: "Assists" },
+  { value: "threes", label: "3-Pointers Made" },
   { value: "steals", label: "Steals" },
   { value: "blocks", label: "Blocks" },
   { value: "pts_reb_ast", label: "Pts+Reb+Ast" },
@@ -88,6 +91,10 @@ export default function Dashboard() {
   const [selectedSportsbook, setSelectedSportsbook] = useState<string>("manual");
   const [autoFilledFields, setAutoFilledFields] = useState<Set<string>>(new Set());
   const [showBoxScore, setShowBoxScore] = useState(true);
+  const [boxScoreFilter, setBoxScoreFilter] = useState("");
+  const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
+  const [activeTab, setActiveTab] = useState<"calculator" | "halftime">("calculator");
+  const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const calculateMutation = useCalculateProbability();
 
@@ -101,8 +108,53 @@ export default function Dashboard() {
       statType: "points",
       halftimeScore: "",
       gameId: "",
+      gameSpread: undefined,
+      gameTotalLine: undefined,
     },
   });
+
+  // ── Injury data (polled every 5 min) ──────────────────────────────────────
+  const { data: injuryData } = useQuery<InjuryPlayer[]>({
+    queryKey: ["/api/injuries"],
+    queryFn: async () => {
+      const res = await fetch("/api/injuries");
+      if (!res.ok) return [];
+      return res.json();
+    },
+    refetchInterval: 5 * 60 * 1000,
+    staleTime: 4 * 60 * 1000,
+  });
+
+  const injuredPlayerNames = new Set(
+    (injuryData ?? [])
+      .filter(p => p.status === "Out" || p.status === "Questionable")
+      .map(p => p.playerName.toLowerCase())
+  );
+
+  // ── Halftime plays ────────────────────────────────────────────────────────
+  const { data: halftimePlaysData, isLoading: isHalftimePlaysLoading, refetch: refetchHalftimePlays } = useQuery<{ plays: any[]; message?: string }>({
+    queryKey: ["/api/halftime-plays"],
+    queryFn: async () => {
+      const res = await fetch("/api/halftime-plays");
+      if (!res.ok) return { plays: [] };
+      return res.json();
+    },
+    enabled: activeTab === "halftime",
+    refetchInterval: 5 * 60 * 1000,
+    staleTime: 4 * 60 * 1000,
+  });
+
+  // ── 5-minute auto-refresh for live box score ───────────────────────────────
+  useEffect(() => {
+    if (autoRefreshRef.current) clearInterval(autoRefreshRef.current);
+    if (selectedGameId) {
+      autoRefreshRef.current = setInterval(() => {
+        queryClient.invalidateQueries({ queryKey: ["/api/live-stats", selectedGameId] });
+        setLastRefreshed(new Date());
+      }, 5 * 60 * 1000);
+    }
+    return () => { if (autoRefreshRef.current) clearInterval(autoRefreshRef.current); };
+  }, [selectedGameId]);
 
   const watchedPlayerId = form.watch("playerId");
   const watchedStatType = form.watch("statType");
@@ -146,6 +198,7 @@ export default function Dashboard() {
     else if (st === "assists") statVal = stat.assists;
     else if (st === "steals") statVal = stat.steals;
     else if (st === "blocks") statVal = stat.blocks;
+    else if (st === "threes") statVal = stat.threes ?? 0;
     else if (st === "pts_reb_ast") statVal = stat.points + stat.rebounds + stat.assists;
     else if (st === "pts_reb") statVal = stat.points + stat.rebounds;
     else if (st === "pts_ast") statVal = stat.points + stat.assists;
@@ -206,6 +259,7 @@ export default function Dashboard() {
     else if (st === "assists") statVal = playerStat.assists;
     else if (st === "steals") statVal = playerStat.steals;
     else if (st === "blocks") statVal = playerStat.blocks;
+    else if (st === "threes") statVal = playerStat.threes ?? 0;
     else if (st === "pts_reb_ast") statVal = playerStat.points + playerStat.rebounds + playerStat.assists;
     else if (st === "pts_reb") statVal = playerStat.points + playerStat.rebounds;
     else if (st === "pts_ast") statVal = playerStat.points + playerStat.assists;
@@ -344,6 +398,60 @@ export default function Dashboard() {
 
       <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-5">
 
+        {/* Injury Alert Banner */}
+        {injuryData && injuryData.filter(p => p.status === "Out").length > 0 && selectedGameId && (() => {
+          const gameTeamAbbrs = selectedGameTeams
+            ? [espnToDb(selectedGameTeams.homeAbbr), espnToDb(selectedGameTeams.awayAbbr)]
+            : [];
+          const outs = injuryData.filter(p =>
+            p.status === "Out" &&
+            (gameTeamAbbrs.length === 0 || gameTeamAbbrs.some(t => p.team.toUpperCase().includes(t) || t.includes(p.team.toUpperCase())))
+          ).slice(0, 5);
+          if (outs.length === 0) return null;
+          return (
+            <div className="bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 flex items-start gap-3">
+              <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <span className="text-xs font-semibold text-red-400 uppercase tracking-wider">Injury Alert</span>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {outs.map((p, i) => (
+                    <span key={i} className="text-xs bg-red-500/20 text-red-300 px-2 py-0.5 rounded-full">
+                      {p.playerName} ({p.team}) — OUT
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Tab Navigation */}
+        <div className="flex gap-1 bg-secondary/40 border border-border/60 rounded-xl p-1 w-fit">
+          <button
+            onClick={() => setActiveTab("calculator")}
+            data-testid="tab-calculator"
+            className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
+              activeTab === "calculator"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Live Calculator
+          </button>
+          <button
+            onClick={() => setActiveTab("halftime")}
+            data-testid="tab-halftime"
+            className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
+              activeTab === "halftime"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Star className="w-3.5 h-3.5" />
+            Best Halftime Plays
+          </button>
+        </div>
+
         {/* Live Games Strip */}
         {allGames.length > 0 && (
           <div className="bg-card border border-border rounded-xl p-4">
@@ -450,15 +558,20 @@ export default function Dashboard() {
                 )}
                 <ChevronDown className={`w-3.5 h-3.5 ml-1 transition-transform ${showBoxScore ? "rotate-180" : ""}`} />
               </button>
-              <button
-                onClick={() => refetchLiveStats()}
-                disabled={isLiveStatsLoading}
-                data-testid="button-refresh-boxscore"
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
-              >
-                <RefreshCw className={`w-3 h-3 ${isLiveStatsLoading ? "animate-spin" : ""}`} />
-                Refresh
-              </button>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground/50">
+                  Auto-refreshes every 5 min · Last: {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </span>
+                <button
+                  onClick={() => { refetchLiveStats(); setLastRefreshed(new Date()); }}
+                  disabled={isLiveStatsLoading}
+                  data-testid="button-refresh-boxscore"
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isLiveStatsLoading ? "animate-spin" : ""}`} />
+                  Refresh
+                </button>
+              </div>
             </div>
             {showBoxScore && (
               isLiveStatsLoading ? (
@@ -466,6 +579,20 @@ export default function Dashboard() {
                   <Loader2 className="w-4 h-4 animate-spin" /> Fetching live stats…
                 </div>
               ) : liveStats && liveStats.filter(s => s.minutes !== "0" && s.minutes !== "0:00").length > 0 ? (
+                <div>
+                  <div className="px-4 py-2 border-b border-border/40">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/50" />
+                      <input
+                        type="text"
+                        placeholder="Filter by player name…"
+                        value={boxScoreFilter}
+                        onChange={e => setBoxScoreFilter(e.target.value)}
+                        data-testid="input-boxscore-filter"
+                        className="w-full h-8 pl-8 pr-3 rounded-lg bg-secondary/50 border border-border/50 text-xs focus:border-primary outline-none"
+                      />
+                    </div>
+                  </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead>
@@ -485,7 +612,10 @@ export default function Dashboard() {
                     </thead>
                     <tbody>
                       {(() => {
-                        const playedStats = liveStats.filter(s => s.minutes !== "0" && s.minutes !== "0:00");
+                        const filterLower = boxScoreFilter.toLowerCase().trim();
+                        const playedStats = liveStats
+                          .filter(s => s.minutes !== "0" && s.minutes !== "0:00")
+                          .filter(s => !filterLower || s.playerName.toLowerCase().includes(filterLower));
                         const teams = Array.from(new Set(playedStats.map(s => s.teamAbbr)));
                         return teams.flatMap((team, ti) => [
                           <tr key={`team-${team}`} className={ti > 0 ? "border-t-2 border-border/60" : ""}>
@@ -511,7 +641,7 @@ export default function Dashboard() {
                               };
                               return statForSort(b) - statForSort(a);
                             })
-                            .map((stat, idx) => {
+                            .map((stat) => {
                               const isSelected = selectedPlayer && findPlayerByName(stat.playerName)?.id === selectedPlayer.id;
                               const statTotal = (() => {
                                 if (watchedStatType === "points") return stat.points;
@@ -528,9 +658,9 @@ export default function Dashboard() {
                               })();
                               return (
                                 <tr
-                                  key={idx}
+                                  key={`player-${stat.playerId}`}
                                   onClick={() => handleBoxScoreClick(stat)}
-                                  data-testid={`boxscore-row-${idx}`}
+                                  data-testid={`boxscore-row-${stat.playerId}`}
                                   className={`border-b border-border/20 cursor-pointer transition-all ${
                                     isSelected
                                       ? "bg-primary/10 border-l-2 border-l-primary"
@@ -557,6 +687,7 @@ export default function Dashboard() {
                     </tbody>
                   </table>
                 </div>
+                </div>
               ) : (
                 <div className="py-6 text-center text-xs text-muted-foreground">
                   No live stats available yet — box score updates once the game starts.
@@ -567,7 +698,7 @@ export default function Dashboard() {
         )}
 
         {/* Main 3-column layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+        {activeTab === "calculator" ? <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
 
           {/* LEFT: Input Form */}
           <div className="lg:col-span-4 space-y-4">
@@ -690,6 +821,34 @@ export default function Dashboard() {
                       data-testid="input-score"
                       className="w-full h-9 px-3 rounded-lg bg-input border border-border focus:border-primary outline-none text-sm font-mono"
                     />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground flex items-center gap-1">
+                        <TrendingDown className="w-3 h-3 text-blue-400" />
+                        Game Spread
+                      </label>
+                      <input
+                        type="number" step="0.5"
+                        placeholder="e.g. -7.5"
+                        {...form.register("gameSpread")}
+                        data-testid="input-spread"
+                        className="w-full h-9 px-3 rounded-lg bg-input border border-border focus:border-primary outline-none text-sm font-mono"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Target className="w-3 h-3 text-blue-400" />
+                        Game O/U Total
+                      </label>
+                      <input
+                        type="number" step="0.5"
+                        placeholder="e.g. 224.5"
+                        {...form.register("gameTotalLine")}
+                        data-testid="input-game-total"
+                        className="w-full h-9 px-3 rounded-lg bg-input border border-border focus:border-primary outline-none text-sm font-mono"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -1065,11 +1224,135 @@ export default function Dashboard() {
                   picks={parlayPicks}
                   onRemove={(idx) => setParlayPicks((prev) => prev.filter((_, i) => i !== idx))}
                   onClear={() => { setParlayPicks([]); setShowParlay(false); }}
+                  injuredPlayerNames={injuredPlayerNames}
                 />
               </div>
             </div>
           )}
-        </div>
+        </div> : null}
+
+        {/* Halftime Plays Tab Content */}
+        {activeTab === "halftime" && (
+          <div className="space-y-4">
+            <div className="bg-card border border-border rounded-xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-lg font-semibold flex items-center gap-2">
+                    <Star className="w-5 h-5 text-primary" />
+                    Best Halftime Plays
+                  </h2>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Top probability edges across all games currently at halftime. Sorted by edge vs 50%.
+                  </p>
+                </div>
+                <button
+                  onClick={() => refetchHalftimePlays()}
+                  disabled={isHalftimePlaysLoading}
+                  data-testid="button-refresh-halftime"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isHalftimePlaysLoading ? "animate-spin" : ""}`} />
+                  Refresh
+                </button>
+              </div>
+
+              {isHalftimePlaysLoading ? (
+                <div className="flex items-center justify-center py-12 gap-2 text-muted-foreground">
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <span>Calculating best plays…</span>
+                </div>
+              ) : halftimePlaysData?.message && halftimePlaysData.plays.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  <Star className="w-8 h-8 mx-auto mb-3 opacity-30" />
+                  <p className="text-sm">{halftimePlaysData.message}</p>
+                  <p className="text-xs text-muted-foreground/60 mt-1">Check back when games are at halftime.</p>
+                </div>
+              ) : halftimePlaysData && halftimePlaysData.plays.length > 0 ? (
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {halftimePlaysData.plays.map((play: any, idx: number) => {
+                    const isOver = play.betDirection === "over";
+                    const isInjured = injuredPlayerNames.has(play.playerName.toLowerCase());
+                    const statLabel = STAT_TYPES.find(s => s.value === play.statType)?.label ?? play.statType;
+                    return (
+                      <div
+                        key={idx}
+                        data-testid={`halftime-play-${idx}`}
+                        className={`rounded-xl border p-4 space-y-2 ${
+                          isInjured ? "border-red-500/40 bg-red-500/5" : "border-border/60 bg-secondary/30"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="font-semibold text-sm text-foreground">{play.playerName}</div>
+                            <div className="text-xs text-muted-foreground">{play.team} vs {play.opponent}</div>
+                            {isInjured && (
+                              <span className="text-xs text-red-400 font-semibold flex items-center gap-0.5 mt-0.5">
+                                <AlertTriangle className="w-3 h-3" /> Injured
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-right flex-shrink-0">
+                            <div className={`text-xl font-bold font-mono ${
+                              play.probability >= 65 ? "text-green-400" :
+                              play.probability <= 35 ? "text-red-400" : "text-yellow-400"
+                            }`}>
+                              {play.probability.toFixed(1)}%
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Edge: +{play.edge.toFixed(1)}%
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs font-mono px-2 py-0.5 rounded font-bold ${
+                            isOver ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"
+                          }`}>
+                            {statLabel} {isOver ? "O" : "U"}{play.line}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          data-testid={`button-add-halftime-play-${idx}`}
+                          disabled={parlayPicks.length >= 10}
+                          onClick={() => {
+                            const pick: ParlayPickInput = {
+                              playerId: play.playerId,
+                              playerName: play.playerName,
+                              playerTeam: play.team,
+                              statType: play.statType,
+                              line: play.line,
+                              probability: play.probability,
+                              betDirection: play.betDirection,
+                              sportsbook: "",
+                              oddsAmerican: 0,
+                              gameId: play.gameId,
+                            };
+                            setParlayPicks(prev => [...prev, pick]);
+                            setShowParlay(true);
+                          }}
+                          className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors disabled:opacity-40"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Add to Parlay
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-center py-12 text-muted-foreground">
+                  <Star className="w-8 h-8 mx-auto mb-3 opacity-30" />
+                  <p className="text-sm">No halftime plays available.</p>
+                  <p className="text-xs text-muted-foreground/60 mt-1">Click Refresh to check for halftime games.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
       </main>
     </div>
   );

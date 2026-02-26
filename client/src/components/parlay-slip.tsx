@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
 import type { ParlayPickInput, ParlayResult, CorrelationNote } from "@shared/schema";
 import { ProbabilityRing } from "./probability-ring";
+import { useToast } from "@/hooks/use-toast";
 import {
   X,
   ExternalLink,
@@ -12,6 +13,7 @@ import {
   Trophy,
   ChevronDown,
   ChevronUp,
+  Copy,
 } from "lucide-react";
 
 interface ParlaySlipProps {
@@ -26,6 +28,7 @@ const STAT_LABELS: Record<string, string> = {
   assists: "AST",
   steals: "STL",
   blocks: "BLK",
+  threes: "3PM",
   pts_reb_ast: "PRA",
   pts_reb: "PR",
   pts_ast: "PA",
@@ -33,21 +36,27 @@ const STAT_LABELS: Record<string, string> = {
   stl_blk: "S+B",
 };
 
-const SPORTSBOOK_INFO: Record<string, { label: string; color: string; deeplink: (picks: ParlayPickInput[]) => string }> = {
+const SPORTSBOOK_INFO: Record<string, { label: string; color: string; deeplink: (picks: ParlayPickInput[]) => string; note?: string }> = {
   draftkings: {
     label: "DraftKings",
     color: "bg-[#1a6f3c] hover:bg-[#1a8f4c]",
-    deeplink: () => "https://sportsbook.draftkings.com/leagues/basketball/nba",
+    deeplink: () => "https://sportsbook.draftkings.com/leagues/basketball/nba?category=player-props",
   },
   fanduel: {
     label: "FanDuel",
     color: "bg-[#1358d0] hover:bg-[#1a6af0]",
-    deeplink: () => "https://sportsbook.fanduel.com/navigation/nba",
+    deeplink: () => "https://sportsbook.fanduel.com/basketball/nba",
   },
   hardrockbet: {
     label: "Hard Rock Bet",
     color: "bg-[#b8860b] hover:bg-[#d4a017]",
-    deeplink: () => "https://www.hardrockbet.com/sports/basketball",
+    deeplink: () => "https://www.hardrockbet.com/en-us/sports/basketball/nba",
+  },
+  bet365: {
+    label: "Bet365",
+    color: "bg-[#016f2e] hover:bg-[#018a39]",
+    deeplink: () => "https://www.bet365.com/#/AS/B1/",
+    note: "Copy picks and search manually",
   },
 };
 
@@ -85,10 +94,11 @@ function CorrelationBadge({ note }: { note: CorrelationNote }) {
   );
 }
 
-export function ParlaySlip({ picks, onRemove, onClear }: ParlaySlipProps) {
+export function ParlaySlip({ picks, onRemove, onClear, injuredPlayerNames }: ParlaySlipProps & { injuredPlayerNames?: Set<string> }) {
   const [result, setResult] = useState<ParlayResult | null>(null);
   const [showCorrelations, setShowCorrelations] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { toast } = useToast();
 
   const calculateParlay = useMutation({
     mutationFn: async (picks: ParlayPickInput[]): Promise<ParlayResult> => {
@@ -145,16 +155,25 @@ export function ParlaySlip({ picks, onRemove, onClear }: ParlaySlipProps) {
 
       {/* Picks List */}
       <div className="space-y-2 mb-3">
-        {picks.map((pick, idx) => (
+        {picks.map((pick, idx) => {
+          const isInjured = injuredPlayerNames?.has(pick.playerName.toLowerCase());
+          return (
           <div
             key={idx}
             data-testid={`parlay-pick-${idx}`}
-            className="flex items-center gap-2 p-2.5 bg-secondary/50 rounded-lg border border-border/50"
+            className={`flex items-center gap-2 p-2.5 rounded-lg border ${
+              isInjured ? "bg-red-500/10 border-red-500/40" : "bg-secondary/50 border-border/50"
+            }`}
           >
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5 flex-wrap">
                 <span className="font-semibold text-sm text-foreground truncate">{pick.playerName}</span>
                 <span className="text-xs text-muted-foreground">{pick.playerTeam}</span>
+                {isInjured && (
+                  <span className="text-xs font-bold text-red-400 flex items-center gap-0.5">
+                    <AlertTriangle className="w-3 h-3" /> Injured
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2 mt-0.5">
                 <span className={`text-xs font-mono px-1.5 py-0.5 rounded ${
@@ -191,7 +210,8 @@ export function ParlaySlip({ picks, onRemove, onClear }: ParlaySlipProps) {
               <X className="w-4 h-4" />
             </button>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Calculate Button / auto-calculating indicator */}
@@ -266,11 +286,27 @@ export function ParlaySlip({ picks, onRemove, onClear }: ParlaySlipProps) {
 
           {/* Sportsbook Deeplinks */}
           <div className="space-y-2">
-            <p className="text-xs text-muted-foreground uppercase tracking-wider">Open Bet Slip</p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">Open Bet Slip</p>
+              <button
+                type="button"
+                data-testid="button-copy-picks"
+                onClick={() => {
+                  const text = picks.map(p =>
+                    `${p.playerName} (${p.playerTeam}) — ${STAT_LABELS[p.statType] ?? p.statType} ${p.betDirection === "over" ? "O" : "U"}${p.line} ${p.probability.toFixed(0)}%`
+                  ).join("\n");
+                  navigator.clipboard.writeText(text);
+                  toast({ title: "Picks copied!", description: "Paste into the sportsbook search." });
+                }}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <Copy className="w-3 h-3" /> Copy Picks
+              </button>
+            </div>
             <p className="text-xs text-muted-foreground/60 -mt-1">
-              You'll confirm and place the bet yourself on their platform.
+              Opens NBA player props section. Use Copy Picks to paste into the book's search.
             </p>
-            {(uniqueSportsbooks.length > 0 ? uniqueSportsbooks : ["draftkings", "fanduel", "hardrockbet"]).map((sb) => {
+            {(uniqueSportsbooks.length > 0 ? [...uniqueSportsbooks, "bet365"].filter((v,i,a) => a.indexOf(v) === i) : ["draftkings", "fanduel", "hardrockbet", "bet365"]).map((sb) => {
               const info = SPORTSBOOK_INFO[sb];
               if (!info) return null;
               return (
@@ -280,9 +316,19 @@ export function ParlaySlip({ picks, onRemove, onClear }: ParlaySlipProps) {
                   target="_blank"
                   rel="noopener noreferrer"
                   data-testid={`link-sportsbook-${sb}`}
+                  onClick={() => {
+                    const text = picks.map(p =>
+                      `${p.playerName} — ${STAT_LABELS[p.statType] ?? p.statType} ${p.betDirection === "over" ? "O" : "U"}${p.line}`
+                    ).join("\n");
+                    navigator.clipboard.writeText(text);
+                    toast({ title: `Opening ${info.label}`, description: "Your picks were copied to clipboard." });
+                  }}
                   className={`flex items-center justify-between w-full px-4 py-2.5 rounded-lg text-white font-semibold text-sm transition-colors ${info.color}`}
                 >
-                  <span>{info.label}</span>
+                  <div>
+                    <span>{info.label}</span>
+                    {info.note && <span className="text-white/60 text-xs font-normal ml-2">{info.note}</span>}
+                  </div>
                   <ExternalLink className="w-4 h-4" />
                 </a>
               );

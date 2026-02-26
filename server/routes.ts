@@ -195,6 +195,7 @@ export async function registerRoutes(
             steals: parseStat(statMap["stl"]),
             blocks: parseStat(statMap["blk"]),
             fouls: parseStat(statMap["pf"]),
+            threes: parseStat(statMap["3pt"] ?? statMap["fg3m"] ?? statMap["3ptm"] ?? "0"),
           });
         });
       });
@@ -202,6 +203,216 @@ export async function registerRoutes(
       res.json(players);
     } catch (e) {
       res.status(502).json({ message: "Live stats unavailable", details: (e as any).message });
+    }
+  });
+
+  // ── Injury Report ──────────────────────────────────────────────────────────
+  // Polls ESPN's public injury feed and caches results for 5 minutes.
+  let injuryCache: { data: any[]; timestamp: number } | null = null;
+  const INJURY_TTL = 5 * 60 * 1000;
+
+  app.get("/api/injuries", async (_req, res) => {
+    try {
+      if (injuryCache && Date.now() - injuryCache.timestamp < INJURY_TTL) {
+        return res.json(injuryCache.data);
+      }
+      const response = await fetch(
+        "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries",
+        { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
+      );
+      if (!response.ok) throw new Error("ESPN injuries API unavailable");
+      const data = await response.json() as any;
+
+      const injuries: any[] = [];
+      for (const team of (data.injuries ?? [])) {
+        const teamAbbr: string = team.team?.abbreviation ?? "";
+        for (const item of (team.injuries ?? [])) {
+          const athlete = item.athlete ?? {};
+          injuries.push({
+            playerId: athlete.id ?? "",
+            playerName: athlete.displayName ?? athlete.fullName ?? "",
+            team: teamAbbr,
+            status: item.status ?? "Unknown",
+            type: item.type ?? "",
+            detail: item.longComment ?? item.shortComment ?? "",
+          });
+        }
+      }
+      injuryCache = { data: injuries, timestamp: Date.now() };
+      res.json(injuries);
+    } catch (e) {
+      if (injuryCache) return res.json(injuryCache.data);
+      res.status(502).json({ message: "Injury data unavailable" });
+    }
+  });
+
+  // ── Halftime Best Plays ─────────────────────────────────────────────────────
+  // Returns top probability plays across all live halftime games.
+  app.get("/api/halftime-plays", async (req, res) => {
+    try {
+      // Fetch all live games
+      const gamesRes = await fetch(
+        "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+        { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
+      );
+      if (!gamesRes.ok) throw new Error("ESPN API unavailable");
+      const gamesData = await gamesRes.json() as any;
+
+      // Filter for halftime games (period = 2 with no clock, or period = 3 just starting)
+      const ESPN_TO_DB: Record<string, string> = {
+        GS: "GSW", SA: "SAS", NO: "NOP", NY: "NYK",
+        PHO: "PHX", UTH: "UTA", WSH: "WAS", CHO: "CHA",
+      };
+      const normAbbr = (a: string) => ESPN_TO_DB[a.toUpperCase()] ?? a.toUpperCase();
+
+      const halftimeGames: any[] = [];
+      for (const event of (gamesData.events ?? [])) {
+        const comp = event.competitions?.[0];
+        const status = comp?.status;
+        const period = status?.period ?? 0;
+        const clock = status?.displayClock ?? "";
+        const statusDesc: string = status?.type?.description ?? "";
+        // Halftime = period 2 with 0:00 or "Halftime" description
+        const isHalftime = statusDesc === "Halftime" ||
+          (period === 2 && (clock === "0:00" || clock === "00.0"));
+        if (!isHalftime) continue;
+
+        const home = comp?.competitors?.find((c: any) => c.homeAway === "home");
+        const away = comp?.competitors?.find((c: any) => c.homeAway === "away");
+        halftimeGames.push({
+          gameId: event.id,
+          homeTeamAbbr: normAbbr(home?.team?.abbreviation ?? ""),
+          awayTeamAbbr: normAbbr(away?.team?.abbreviation ?? ""),
+          homeScore: parseInt(home?.score ?? "0", 10),
+          awayScore: parseInt(away?.score ?? "0", 10),
+        });
+      }
+
+      if (halftimeGames.length === 0) {
+        return res.json({ plays: [], message: "No games at halftime right now." });
+      }
+
+      const allPlays: any[] = [];
+      const HALFTIME_STAT_TYPES = ["points", "rebounds", "assists", "threes", "steals", "blocks"];
+
+      for (const game of halftimeGames) {
+        // Fetch live box score
+        const bsRes = await fetch(
+          `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${game.gameId}`,
+          { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
+        );
+        if (!bsRes.ok) continue;
+        const bsData = await bsRes.json() as any;
+        const boxscore = bsData.boxscore;
+        if (!boxscore) continue;
+
+        const scoreStr = `${game.awayScore}-${game.homeScore}`;
+
+        for (const teamData of (boxscore.players ?? [])) {
+          const teamAbbr = normAbbr(teamData.team?.abbreviation ?? "");
+          const opponentAbbr = teamAbbr === game.homeTeamAbbr ? game.awayTeamAbbr : game.homeTeamAbbr;
+          const athletes = teamData.statistics?.[0]?.athletes ?? [];
+          const labels: string[] = teamData.statistics?.[0]?.labels ?? [];
+
+          for (const athlete of athletes) {
+            if (!athlete.athlete) continue;
+            const stats = athlete.stats ?? [];
+            const statMap: Record<string, any> = {};
+            labels.forEach((label: string, idx: number) => {
+              statMap[label.toLowerCase()] = stats[idx];
+            });
+
+            const parseStat = (val: string) => {
+              if (!val) return 0;
+              if (val.includes("-")) {
+                const parts = val.split("-");
+                return parseInt(parts[parts.length - 1], 10) || 0;
+              }
+              return parseInt(val, 10) || 0;
+            };
+
+            const minStr: string = statMap["min"] || "0";
+            const minParts = minStr.split(":");
+            const minutes = minParts.length === 2
+              ? parseInt(minParts[0]) + parseInt(minParts[1]) / 60
+              : parseFloat(minStr) || 0;
+
+            if (minutes < 3) continue; // skip DNP/scratch players
+
+            const playerName: string = athlete.athlete.displayName ?? "";
+            const playerId: number = parseInt(athlete.athlete.id, 10);
+
+            const liveStats: Record<string, number> = {
+              points: parseStat(statMap["pts"]),
+              rebounds: parseStat(statMap["reb"]),
+              assists: parseStat(statMap["ast"]),
+              steals: parseStat(statMap["stl"]),
+              blocks: parseStat(statMap["blk"]),
+              threes: parseStat(statMap["3pt"] ?? statMap["fg3m"] ?? "0"),
+            };
+
+            for (const statType of HALFTIME_STAT_TYPES) {
+              try {
+                const dbPlayer = (await storage.getPlayers()).find(p => {
+                  const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+                  return norm(p.name) === norm(playerName);
+                });
+                if (!dbPlayer) continue;
+
+                // We need a line to calculate against — skip if no live line available
+                // Use the player's season average as a proxy line for this endpoint
+                const seasonStat: Record<string, number | null> = {
+                  points: dbPlayer.ppg ? Number(dbPlayer.ppg) : null,
+                  rebounds: dbPlayer.rpg ? Number(dbPlayer.rpg) : null,
+                  assists: dbPlayer.apg ? Number(dbPlayer.apg) : null,
+                  steals: dbPlayer.spg ? Number(dbPlayer.spg) : null,
+                  blocks: dbPlayer.bpg ? Number(dbPlayer.bpg) : null,
+                  threes: (dbPlayer as any).tpg ? Number((dbPlayer as any).tpg) : null,
+                };
+                const seasonAvg = seasonStat[statType];
+                if (!seasonAvg || seasonAvg < 0.5) continue;
+
+                const result = await storage.calculateProbability({
+                  playerId: dbPlayer.id,
+                  opponentTeam: opponentAbbr,
+                  halftimeMinutes: Math.round(minutes * 10) / 10,
+                  halftimeFouls: parseStat(statMap["pf"]),
+                  halftimeStat: liveStats[statType] ?? 0,
+                  liveLine: seasonAvg,
+                  statType,
+                  halftimeScore: scoreStr,
+                });
+
+                const edge = Math.abs(result.probability - 50);
+                if (edge < 5) continue; // skip near-50% plays
+
+                allPlays.push({
+                  gameId: game.gameId,
+                  playerId: dbPlayer.id,
+                  playerName: dbPlayer.name,
+                  team: teamAbbr,
+                  opponent: opponentAbbr,
+                  statType,
+                  halftimeStat: liveStats[statType] ?? 0,
+                  line: seasonAvg,
+                  probability: result.probability,
+                  edge,
+                  expectedTotal: result.expectedTotal,
+                  betDirection: result.probability > 50 ? "over" : "under",
+                });
+              } catch {
+                // skip calc errors silently
+              }
+            }
+          }
+        }
+      }
+
+      // Sort by edge (highest probability edge first)
+      allPlays.sort((a, b) => b.edge - a.edge);
+      res.json({ plays: allPlays.slice(0, 30) });
+    } catch (e) {
+      res.status(502).json({ message: "Halftime plays unavailable", details: (e as any).message });
     }
   });
 

@@ -129,14 +129,45 @@ export class DatabaseStorage implements IStorage {
     const gamePaceAvg    = (playerTeamPace + opponentPace) / 2;
 
     let paceMultiplier = gamePaceAvg / LEAGUE_AVG_PACE;
+
+    // ─── Game total line (O/U) refines pace multiplier ─────────────────────
+    // If a game O/U is set, use it as a baseline for expected full-game scoring.
+    // A typical NBA game total baseline is ~228 pts (≈114 pts/team).
+    // We compare the expected total to the live halftime pace.
+    const EXPECTED_GAME_TOTAL = 228;
+    if (req.gameTotalLine && req.gameTotalLine > 0) {
+      const totalBasedPace = req.gameTotalLine / EXPECTED_GAME_TOTAL;
+      // Blend total-based pace with team history pace (50/50)
+      paceMultiplier = totalBasedPace * 0.5 + paceMultiplier * 0.5;
+    }
+
     if (req.halftimeScore) {
       const scores = req.halftimeScore.split(/[- ]+/).map(Number);
       if (scores.length === 2 && !isNaN(scores[0]) && !isNaN(scores[1])) {
-        const livePaceMultiplier = (scores[0] + scores[1]) / 112;
+        const halftimeTotal = scores[0] + scores[1];
+        // If game total line is available, compare live pace to implied O/U half
+        const impliedHalf = req.gameTotalLine ? req.gameTotalLine / 2 : 112;
+        const livePaceMultiplier = halftimeTotal / impliedHalf;
         paceMultiplier = livePaceMultiplier * 0.6 + paceMultiplier * 0.4;
       }
     }
     paceMultiplier = Math.max(0.78, Math.min(1.22, paceMultiplier));
+
+    // ─── Game spread → garbage-time minute reduction ────────────────────────
+    // A large spread (>15) means a blowout is likely — stars may sit late.
+    // We reduce remaining minutes for high-usage players when spread is wide.
+    let spreadMinuteReduction = 1.0;
+    if (req.gameSpread !== undefined && req.gameSpread !== 0) {
+      const absSpread = Math.abs(req.gameSpread);
+      if (absSpread >= 20 && usageRate >= 0.25) {
+        spreadMinuteReduction = 0.82; // severe blowout risk: 18% reduction for stars
+      } else if (absSpread >= 15 && usageRate >= 0.25) {
+        spreadMinuteReduction = 0.90; // significant blowout risk: 10% reduction for stars
+      } else if (absSpread >= 15 && usageRate >= 0.20) {
+        spreadMinuteReduction = 0.95; // modest risk for average-usage players
+      }
+    }
+    remainingMinutes *= spreadMinuteReduction;
 
     // ─── Advanced per-minute components from season stats ──────────────────
     // Build per-minute rates for every stat dimension individually so combo
@@ -146,6 +177,7 @@ export class DatabaseStorage implements IStorage {
     const astPerMin = player.apg && avgMinutes > 0 ? Number(player.apg) / avgMinutes : null;
     const stlPerMin = player.spg && avgMinutes > 0 ? Number(player.spg) / avgMinutes : null;
     const blkPerMin = player.bpg && avgMinutes > 0 ? Number(player.bpg) / avgMinutes : null;
+    const tpmPerMin = (player as any).tpg && avgMinutes > 0 ? Number((player as any).tpg) / avgMinutes : null;
 
     // Composite season per-minute for the requested stat type
     function seasonComponentPerMin(): number | null {
@@ -155,6 +187,7 @@ export class DatabaseStorage implements IStorage {
         case "assists":     return astPerMin;
         case "steals":      return stlPerMin;
         case "blocks":      return blkPerMin;
+        case "threes":      return tpmPerMin;
         case "pts_reb_ast": return (ptsPerMin && rebPerMin && astPerMin) ? ptsPerMin + rebPerMin + astPerMin : null;
         case "pts_reb":     return (ptsPerMin && rebPerMin) ? ptsPerMin + rebPerMin : null;
         case "pts_ast":     return (ptsPerMin && astPerMin) ? ptsPerMin + astPerMin : null;
@@ -213,12 +246,14 @@ export class DatabaseStorage implements IStorage {
     let scaleFactor: number;
     if (req.statType === "steals" || req.statType === "blocks" || req.statType === "stl_blk") {
       scaleFactor = 14 * usageNorm * efficiencyIndex; // rare events: widest spread
+    } else if (req.statType === "threes") {
+      scaleFactor = 12 * usageNorm * efficiencyIndex; // 3PM: volatile, high variance per-game
     } else if (req.statType === "rebounds" || req.statType === "assists") {
       scaleFactor = 10 * usageNorm * efficiencyIndex;
     } else if (req.statType.includes("_")) {
       scaleFactor = 5.5 * usageNorm * efficiencyIndex; // combo stats: summed → wider dist
     } else {
-      scaleFactor = 8 * usageNorm * efficiencyIndex;   // single stats: points/threes
+      scaleFactor = 8 * usageNorm * efficiencyIndex;   // single stats: points
     }
     scaleFactor = Math.max(4, Math.min(20, scaleFactor));
 
