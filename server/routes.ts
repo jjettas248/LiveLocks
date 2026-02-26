@@ -371,24 +371,42 @@ export async function registerRoutes(
               threes: parseStat(statMap["3pt"] ?? statMap["fg3m"] ?? "0"),
             };
 
+            // Look up DB player once per athlete (needed for calculateProbability)
+            const dbPlayer = (await storage.getPlayers()).find(p => {
+              const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+              return norm(p.name) === norm(playerName);
+            });
+            if (!dbPlayer) continue;
+
+            // Fetch season averages from ESPN free API (no API key needed)
+            // This replaces the broken BDL dependency — ESPN stats are always current
+            let espnSeasonStats: Record<string, number> = {};
+            try {
+              const espnStatRes = await fetch(
+                `https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba/athletes/${athlete.athlete.id}/statistics?lang=en&region=us`,
+                { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(5000) }
+              );
+              if (espnStatRes.ok) {
+                const espnStatData = await espnStatRes.json() as any;
+                for (const cat of (espnStatData.splits?.categories ?? [])) {
+                  for (const s of (cat.stats ?? [])) {
+                    espnSeasonStats[s.name] = s.value;
+                  }
+                }
+              }
+            } catch { /* fall through with empty stats */ }
+
+            const seasonStat: Record<string, number | null> = {
+              points: espnSeasonStats.avgPoints ?? null,
+              rebounds: espnSeasonStats.avgRebounds ?? null,
+              assists: espnSeasonStats.avgAssists ?? null,
+              steals: espnSeasonStats.avgSteals ?? null,
+              blocks: espnSeasonStats.avgBlocks ?? null,
+              threes: espnSeasonStats.avgThreePointFieldGoalsMade ?? null,
+            };
+
             for (const statType of HALFTIME_STAT_TYPES) {
               try {
-                const dbPlayer = (await storage.getPlayers()).find(p => {
-                  const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
-                  return norm(p.name) === norm(playerName);
-                });
-                if (!dbPlayer) continue;
-
-                // We need a line to calculate against — skip if no live line available
-                // Use the player's season average as a proxy line for this endpoint
-                const seasonStat: Record<string, number | null> = {
-                  points: dbPlayer.ppg ? Number(dbPlayer.ppg) : null,
-                  rebounds: dbPlayer.rpg ? Number(dbPlayer.rpg) : null,
-                  assists: dbPlayer.apg ? Number(dbPlayer.apg) : null,
-                  steals: dbPlayer.spg ? Number(dbPlayer.spg) : null,
-                  blocks: dbPlayer.bpg ? Number(dbPlayer.bpg) : null,
-                  threes: (dbPlayer as any).tpg ? Number((dbPlayer as any).tpg) : null,
-                };
                 const seasonAvg = seasonStat[statType];
                 if (!seasonAvg || seasonAvg < 0.5) continue;
 
