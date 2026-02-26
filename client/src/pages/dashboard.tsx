@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -101,6 +102,9 @@ export default function Dashboard() {
   const [showBoxScore, setShowBoxScore] = useState(true);
   const [boxScoreFilter, setBoxScoreFilter] = useState("");
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
+  const [mlbBannerDismissed, setMlbBannerDismissed] = useState(() =>
+    localStorage.getItem("mlb_banner_dismissed") === "1"
+  );
   const [activeTab, setActiveTab] = useState<"calculator" | "halftime">("calculator");
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -391,16 +395,14 @@ export default function Dashboard() {
       <header className="border-b border-border/40 bg-background/80 backdrop-blur-xl sticky top-0 z-50">
         <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary to-indigo-600 flex items-center justify-center shadow-lg shadow-primary/20 flex-shrink-0">
-              <svg viewBox="0 0 20 20" fill="none" className="w-5 h-5">
-                <rect x="3" y="9" width="14" height="9" rx="2.5" fill="white" fillOpacity="0.95" />
-                <path d="M6.5 9V6.5a3.5 3.5 0 0 1 7 0V9" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                <circle cx="10" cy="13.5" r="1.5" fill="#3b82f6" />
-              </svg>
-            </div>
+            <img
+              src={propPulseLogo}
+              alt="PropPulse"
+              className="w-9 h-9 rounded-xl object-cover shadow-lg shadow-primary/20 flex-shrink-0 ring-1 ring-primary/20"
+            />
             <div className="flex flex-col leading-none">
               <h1 className="text-xl font-bold tracking-tight text-foreground">LiveLocks</h1>
-              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest mt-0.5">NBA · Live Lines</span>
+              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest mt-0.5">by PropPulse · NBA</span>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -585,6 +587,40 @@ export default function Dashboard() {
                 );
               })}
             </div>
+          </div>
+        )}
+
+        {/* MLB Coming Soon Banner */}
+        {!mlbBannerDismissed && (
+          <div
+            data-testid="mlb-banner"
+            className="flex items-center gap-3 px-4 py-2.5 rounded-xl border border-primary/25 bg-primary/5 relative"
+            style={{ boxShadow: "0 0 16px -4px hsl(var(--primary) / 0.12)" }}
+          >
+            <span className="text-lg leading-none" role="img" aria-label="baseball">⚾</span>
+            <div className="flex-1 min-w-0">
+              <span className="text-xs font-semibold text-foreground">MLB Early Access</span>
+              <span className="text-xs text-muted-foreground ml-2">Live MLB prop predictions launching next month — subscribers get in first.</span>
+            </div>
+            {user && !user.subscriptionTier && !user.isAdmin && (
+              <button
+                type="button"
+                data-testid="button-mlb-upgrade"
+                onClick={() => { setUpgradeModalState({ playsUsed: user.playsUsed, limit: 10 }); setShowUpgradeModal(true); }}
+                className="shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+              >
+                Get All Sports
+              </button>
+            )}
+            <button
+              type="button"
+              data-testid="button-dismiss-mlb"
+              onClick={() => { setMlbBannerDismissed(true); localStorage.setItem("mlb_banner_dismissed", "1"); }}
+              className="shrink-0 text-muted-foreground/50 hover:text-muted-foreground transition-colors text-lg leading-none"
+              title="Dismiss"
+            >
+              ×
+            </button>
           </div>
         )}
 

@@ -4,7 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
-import { Activity } from "lucide-react";
+import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
 const authSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
@@ -40,13 +40,22 @@ export default function AuthPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4">
-      <div className="w-full max-w-sm">
-        <div className="flex items-center justify-center gap-2 mb-8">
-          <Activity className="w-6 h-6 text-primary" />
-          <span className="text-xl font-bold text-foreground tracking-tight">LiveLocks</span>
+    <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4 py-10">
+      <div className="w-full max-w-sm space-y-4">
+        {/* Logo + Branding */}
+        <div className="flex flex-col items-center gap-2 mb-2">
+          <img
+            src={propPulseLogo}
+            alt="PropPulse"
+            className="w-16 h-16 rounded-2xl object-cover shadow-lg shadow-primary/20 ring-2 ring-primary/30"
+          />
+          <div className="text-center leading-tight">
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">LiveLocks</h1>
+            <p className="text-xs text-muted-foreground font-medium tracking-widest uppercase mt-0.5">by PropPulse</p>
+          </div>
         </div>
 
+        {/* Auth Card */}
         <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
           <div className="flex rounded-lg bg-muted p-1 mb-6">
             <button
@@ -129,6 +138,35 @@ export default function AuthPage() {
               New accounts get 10 free plays. Upgrade anytime to unlock unlimited access.
             </p>
           )}
+        </div>
+
+        {/* MLB Coming Soon Teaser */}
+        <div
+          data-testid="mlb-teaser"
+          className="relative rounded-xl border border-primary/30 bg-gradient-to-br from-primary/5 via-card to-card p-4 shadow-sm overflow-hidden"
+          style={{ boxShadow: "0 0 24px -4px hsl(var(--primary) / 0.15)" }}
+        >
+          <div className="absolute inset-0 pointer-events-none rounded-xl ring-1 ring-inset ring-primary/20" />
+          <div className="flex items-start gap-3">
+            <span className="text-2xl leading-none mt-0.5" role="img" aria-label="baseball">⚾</span>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-sm font-bold text-foreground">MLB Coming Soon</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full">Beta</span>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Live MLB prop predictions are launching next month. Create an account now to lock in early access — beta testers get priority.
+              </p>
+              <button
+                data-testid="button-mlb-beta"
+                type="button"
+                onClick={() => { setTab("register"); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                className="mt-2.5 text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1"
+              >
+                Create account for early access →
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
