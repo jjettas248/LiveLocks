@@ -784,35 +784,6 @@ export default function Dashboard() {
                   </h3>
                   <div className="grid grid-cols-2 gap-2.5">
                     <div className="space-y-1">
-                      <label className="text-xs text-muted-foreground">Game Period</label>
-                      <div className="relative">
-                        <select
-                          {...form.register("currentPeriod", { valueAsNumber: true })}
-                          data-testid="select-period"
-                          className="w-full h-9 pl-3 pr-8 rounded-lg bg-input border border-border focus:border-primary outline-none appearance-none text-sm"
-                        >
-                          <option value={0}>Pre-Game</option>
-                          <option value={1}>Q1</option>
-                          <option value={2}>Q2</option>
-                          <option value={3}>Q3 / Halftime</option>
-                          <option value={4}>Q4</option>
-                        </select>
-                        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-                      </div>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs text-muted-foreground">Clock Remaining</label>
-                      <input
-                        type="text"
-                        placeholder="12:00"
-                        {...form.register("gameClock")}
-                        data-testid="input-game-clock"
-                        className="w-full h-9 px-3 rounded-lg bg-input border border-border focus:border-primary outline-none text-sm font-mono"
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <div className="space-y-1">
                       <label className="text-xs text-muted-foreground">Minutes Played</label>
                       <input
                         type="number" step="0.1"
