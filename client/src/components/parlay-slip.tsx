@@ -71,12 +71,12 @@ const SPORTSBOOK_INFO: Record<string, { label: string; color: string; deeplink: 
   hardrockbet: {
     label: "Hard Rock Bet",
     color: "bg-[#b8860b] hover:bg-[#d4a017]",
-    deeplink: () => "https://www.hardrockbet.com/en-us/sports/basketball/nba",
+    deeplink: () => "https://www.hardrock.bet/en-us/sports/basketball/nba/player-props",
   },
   bet365: {
     label: "Bet365",
     color: "bg-[#016f2e] hover:bg-[#018a39]",
-    deeplink: () => "https://www.bet365.com/#/AS/B1/",
+    deeplink: () => "https://www.bet365.com/#/AC/B1/C1/D31/",
     note: "Search player name manually",
   },
 };

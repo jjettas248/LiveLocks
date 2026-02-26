@@ -252,7 +252,7 @@ export default function Dashboard() {
 
   // Live odds — works with or without a game tile selected.
   // Uses player's DB team + manually selected opponent abbreviations.
-  const { data: oddsData, isLoading: isOddsLoading } = usePlayerOdds(
+  const { data: oddsData, isLoading: isOddsLoading, dataUpdatedAt: oddsUpdatedAt } = usePlayerOdds(
     selectedPlayer?.team,
     watchedOpponent || undefined,
     selectedPlayer?.name,
@@ -935,13 +935,35 @@ export default function Dashboard() {
                   {selectedPlayer && (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
-                        <label className="text-xs text-muted-foreground">
+                        <label className="text-xs text-muted-foreground flex items-center gap-1.5">
                           Lines by Book
                           {isSelectedGameLive && (
-                            <span className="ml-1.5 text-green-400 font-medium">· Live</span>
+                            <span className="text-green-400 font-medium">· Live</span>
+                          )}
+                          {oddsUpdatedAt > 0 && !isOddsLoading && (
+                            <span className="text-muted-foreground/50">
+                              · {Date.now() - oddsUpdatedAt < 60000
+                                ? `${Math.floor((Date.now() - oddsUpdatedAt) / 1000)}s ago`
+                                : `${Math.floor((Date.now() - oddsUpdatedAt) / 60000)}m ago`}
+                            </span>
                           )}
                         </label>
-                        {isOddsLoading && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
+                        <div className="flex items-center gap-1.5">
+                          {isOddsLoading && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
+                          {watchedOpponent && !isOddsLoading && (
+                            <button
+                              type="button"
+                              data-testid="button-refresh-odds"
+                              title="Refresh lines"
+                              onClick={() => queryClient.invalidateQueries({
+                                queryKey: ["/api/odds", selectedPlayer?.team, watchedOpponent || undefined, selectedPlayer?.name, watchedStatType]
+                              })}
+                              className="text-muted-foreground/50 hover:text-primary transition-colors"
+                            >
+                              <RefreshCw className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       {/* No opponent selected yet */}

@@ -43,7 +43,7 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 const EVENTS_TTL = 3 * 60 * 1000;  // 3 min (shorter so fresh games appear quickly)
-const ODDS_TTL = 4 * 60 * 1000;    // 4 min
+const ODDS_TTL = 5 * 60 * 1000;    // 5 min — balances live line freshness vs API credit cost
 
 function isFresh(entry: CacheEntry | undefined, ttl: number): boolean {
   return !!entry && Date.now() - entry.timestamp < ttl;
