@@ -47,6 +47,10 @@ export async function registerRoutes(
       }
 
       const formattedOdds = await getPlayerOdds(oddsEventId, playerName as string, statType as string);
+      // Return quota sentinel as a 200 so the frontend can show a friendly message
+      if ((formattedOdds as any)._quotaExhausted) {
+        return res.json({ _quotaExhausted: true });
+      }
       res.json(formattedOdds);
     } catch (err: any) {
       console.error("[Odds API Error]", err.message);

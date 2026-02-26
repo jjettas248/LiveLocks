@@ -150,39 +150,66 @@ const MARKET_MAP: Record<string, string> = {
   stl_blk:     "player_blocks_steals",
 };
 
-// Fetch player prop odds for an Odds API event UUID
-async function getRawOdds(oddsEventId: string): Promise<any> {
-  const cacheKey = `odds_${oddsEventId}`;
+// Sentinel object returned when the Odds API quota is exhausted
+const QUOTA_EXHAUSTED = { _quotaExhausted: true } as const;
+// How long to suppress retry attempts after a quota error (60 min)
+const QUOTA_TTL = 60 * 60 * 1000;
+
+// Fetch player prop odds for a single market (saves ~91% of API credits vs fetching all 11).
+// Returns QUOTA_EXHAUSTED sentinel when the key is out of credits — callers must check for it.
+async function getRawOdds(oddsEventId: string, marketKey: string): Promise<any> {
+  const cacheKey = `odds_${oddsEventId}_${marketKey}`;
   const cached = cache.get(cacheKey);
   if (isFresh(cached, ODDS_TTL)) return cached!.data;
 
+  // Quota errors are cached separately so we don't keep hitting the API
+  const quotaCacheKey = `quota_exhausted`;
+  const quotaCached = cache.get(quotaCacheKey);
+  if (isFresh(quotaCached, QUOTA_TTL)) {
+    console.warn("[Odds API Error] Quota still exhausted — skipping API call");
+    return QUOTA_EXHAUSTED;
+  }
+
   if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
 
-  const markets = Object.values(MARKET_MAP).join(",");
-  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${markets}&bookmakers=draftkings,fanduel,hardrockbet&oddsFormat=american`;
+  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${marketKey}&bookmakers=draftkings,fanduel,hardrockbet&oddsFormat=american`;
 
   const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!res.ok) {
     const body = await res.text();
+    // Detect quota exhaustion specifically and cache it to avoid hammering the API
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed.error_code === "OUT_OF_USAGE_CREDITS" || res.status === 401) {
+        console.warn(`[Odds API Error] Quota exhausted — caching for 60 min`);
+        cache.set(quotaCacheKey, { data: QUOTA_EXHAUSTED, timestamp: Date.now() });
+        return QUOTA_EXHAUSTED;
+      }
+    } catch (_) {}
     throw new Error(`Odds fetch failed: ${res.status} — ${body}`);
   }
   const data = await res.json();
   cache.set(cacheKey, { data, timestamp: Date.now() });
 
   const books = (data.bookmakers ?? []).map((b: any) => b.key).join(", ");
-  console.log(`[Odds] Fetched odds for event ${oddsEventId}: bookmakers = ${books || "none"}`);
-
-  // Log available markets per bookmaker for diagnostics
-  for (const bk of (data.bookmakers ?? [])) {
-    const mkeys = (bk.markets ?? []).map((m: any) => m.key).join(", ");
-    console.log(`[Odds]   ${bk.key} markets: ${mkeys || "none"}`);
-  }
+  console.log(`[Odds] Fetched ${marketKey} odds for event ${oddsEventId}: bookmakers = ${books || "none"}`);
   return data;
 }
 
 // Return raw bookmaker/market data for diagnostics — used by /api/debug/odds-raw
 export async function getRawOddsForDebug(oddsEventId: string): Promise<any> {
-  return getRawOdds(oddsEventId);
+  // Debug endpoint fetches all markets for inspection — uses combined cache key
+  const markets = Object.values(MARKET_MAP).join(",");
+  const cacheKey = `odds_debug_${oddsEventId}`;
+  const cached = cache.get(cacheKey);
+  if (isFresh(cached, ODDS_TTL)) return cached!.data;
+  if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
+  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${markets}&bookmakers=draftkings,fanduel,hardrockbet&oddsFormat=american`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) { const body = await res.text(); throw new Error(`Odds fetch failed: ${res.status} — ${body}`); }
+  const data = await res.json();
+  cache.set(cacheKey, { data, timestamp: Date.now() });
+  return data;
 }
 
 // Expose the event resolver for the debug endpoint
@@ -228,7 +255,9 @@ export async function getPlayerOdds(
   const marketKey = MARKET_MAP[statType];
   if (!marketKey) return result;
 
-  const oddsData = await getRawOdds(oddsEventId);
+  const oddsData = await getRawOdds(oddsEventId, marketKey);
+  // Propagate quota exhaustion sentinel to caller
+  if (oddsData?._quotaExhausted) return { _quotaExhausted: true } as any;
   if (!oddsData?.bookmakers) return result;
 
   const normName = normPlayerName(playerName);

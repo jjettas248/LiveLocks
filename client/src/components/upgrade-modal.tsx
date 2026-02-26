@@ -93,20 +93,24 @@ export function UpgradeModal({ playsUsed, limit, onClose }: UpgradeModalProps) {
                 disabled={!!loadingTier}
                 className="w-full text-left p-4 rounded-xl border border-border bg-background hover:border-primary hover:bg-primary/5 transition-all disabled:opacity-60 group relative"
               >
-                {plan.badge && (
-                  <span className="absolute top-3 right-3 text-xs font-semibold bg-primary text-primary-foreground px-2 py-0.5 rounded-full">
-                    {plan.badge}
-                  </span>
-                )}
-                <div className="flex items-center gap-3 mb-1">
-                  <Icon className="w-4 h-4 text-primary shrink-0" />
-                  <span className="font-semibold text-foreground">{plan.name}</span>
-                  <span className="ml-auto font-bold text-foreground">
+                <div className="flex items-start justify-between gap-3 mb-1">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Icon className="w-4 h-4 text-primary shrink-0" />
+                    <div className="flex flex-col">
+                      <span className="font-semibold text-foreground">{plan.name}</span>
+                      {plan.badge && (
+                        <span className="text-xs font-semibold text-primary mt-0.5">
+                          {plan.badge}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <span className="font-bold text-foreground shrink-0">
                     {plan.price}
                     <span className="text-xs font-normal text-muted-foreground">{plan.period}</span>
                   </span>
                 </div>
-                <p className="text-xs text-muted-foreground pl-7">{plan.description}</p>
+                <p className="text-xs text-muted-foreground pl-6">{plan.description}</p>
                 {isLoading && (
                   <div className="absolute inset-0 flex items-center justify-center bg-card/80 rounded-xl">
                     <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />

@@ -111,7 +111,7 @@ export function usePlayerOdds(
   const enabled = !!playerTeam && !!opponentTeam && !!playerName && !!statType;
   return useQuery({
     queryKey: ["/api/odds", playerTeam, opponentTeam, playerName, statType],
-    queryFn: async (): Promise<Record<string, OddsLine>> => {
+    queryFn: async (): Promise<Record<string, OddsLine> & { _quotaExhausted?: boolean }> => {
       if (!enabled) return {};
       const params = new URLSearchParams({
         playerTeam: playerTeam!,
@@ -124,6 +124,8 @@ export function usePlayerOdds(
       const data = await res.json();
       // Strip internal error hint keys before returning
       if (data._error) return {};
+      // Pass quota exhaustion sentinel through so the UI can display a clear message
+      if (data._quotaExhausted) return { _quotaExhausted: true };
       return data;
     },
     enabled,

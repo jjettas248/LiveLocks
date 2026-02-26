@@ -36,16 +36,37 @@ const STAT_LABELS: Record<string, string> = {
   stl_blk: "S+B",
 };
 
+// DraftKings subcategory filter by stat type
+const DK_SUBCATEGORY: Record<string, string> = {
+  points:      "player-points",
+  rebounds:    "player-rebounds",
+  assists:     "player-assists",
+  threes:      "player-threes",
+  steals:      "player-steals",
+  blocks:      "player-blocks",
+  pts_reb_ast: "player-props",
+  pts_reb:     "player-props",
+  pts_ast:     "player-props",
+  reb_ast:     "player-props",
+  stl_blk:     "player-props",
+};
+
+function dkDeeplink(picks: ParlayPickInput[]): string {
+  const firstStatType = picks[0]?.statType;
+  const subcategory = (firstStatType && DK_SUBCATEGORY[firstStatType]) || "player-props";
+  return `https://sportsbook.draftkings.com/leagues/basketball/nba?category=player-props&subcategory=${subcategory}`;
+}
+
 const SPORTSBOOK_INFO: Record<string, { label: string; color: string; deeplink: (picks: ParlayPickInput[]) => string; note?: string }> = {
   draftkings: {
     label: "DraftKings",
     color: "bg-[#1a6f3c] hover:bg-[#1a8f4c]",
-    deeplink: () => "https://sportsbook.draftkings.com/leagues/basketball/nba?category=player-props",
+    deeplink: dkDeeplink,
   },
   fanduel: {
     label: "FanDuel",
     color: "bg-[#1358d0] hover:bg-[#1a6af0]",
-    deeplink: () => "https://sportsbook.fanduel.com/basketball/nba",
+    deeplink: () => "https://sportsbook.fanduel.com/basketball/nba/player-props",
   },
   hardrockbet: {
     label: "Hard Rock Bet",
@@ -56,7 +77,7 @@ const SPORTSBOOK_INFO: Record<string, { label: string; color: string; deeplink: 
     label: "Bet365",
     color: "bg-[#016f2e] hover:bg-[#018a39]",
     deeplink: () => "https://www.bet365.com/#/AS/B1/",
-    note: "Copy picks and search manually",
+    note: "Search player name manually",
   },
 };
 
@@ -304,7 +325,7 @@ export function ParlaySlip({ picks, onRemove, onClear, injuredPlayerNames }: Par
               </button>
             </div>
             <p className="text-xs text-muted-foreground/60 -mt-1">
-              Opens NBA player props section. Use Copy Picks to paste into the book's search.
+              Opens the player props section — your picks are copied to clipboard automatically.
             </p>
             {(uniqueSportsbooks.length > 0 ? [...uniqueSportsbooks, "bet365"].filter((v,i,a) => a.indexOf(v) === i) : ["draftkings", "fanduel", "hardrockbet", "bet365"]).map((sb) => {
               const info = SPORTSBOOK_INFO[sb];

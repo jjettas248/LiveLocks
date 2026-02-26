@@ -951,15 +951,22 @@ export default function Dashboard() {
                         </p>
                       )}
 
+                      {/* Odds API quota exhausted */}
+                      {watchedOpponent && !isOddsLoading && oddsData && (oddsData as any)._quotaExhausted && (
+                        <p className="text-xs text-amber-400/80 bg-amber-500/10 rounded-lg p-2 border border-amber-500/20">
+                          Sportsbook lines temporarily unavailable — API quota reached. Lines will resume next month.
+                        </p>
+                      )}
+
                       {/* Odds fetched but nothing found */}
-                      {watchedOpponent && !isOddsLoading && oddsData && Object.keys(oddsData).length === 0 && (
+                      {watchedOpponent && !isOddsLoading && oddsData && !((oddsData as any)._quotaExhausted) && Object.keys(oddsData).filter(k => k !== '_quotaExhausted').length === 0 && (
                         <p className="text-xs text-muted-foreground/60 bg-secondary/50 rounded-lg p-2 border border-border/40">
                           No lines found — props may not be posted yet, or the player is inactive.
                         </p>
                       )}
 
                       {/* Odds available */}
-                      {oddsData && Object.keys(oddsData).length > 0 && (
+                      {oddsData && !((oddsData as any)._quotaExhausted) && Object.keys(oddsData).filter(k => k !== '_quotaExhausted').length > 0 && (
                         <div className="space-y-1.5">
                           {Object.entries(oddsData).map(([sb, odds]) => {
                             const o = odds as import("@shared/schema").OddsLine;

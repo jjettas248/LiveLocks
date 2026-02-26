@@ -60,6 +60,16 @@ A full-stack NBA live betting tool that calculates the probability of a player h
 - Checkout endpoint: `POST /api/stripe/checkout` with body `{ tier: "nba" | "all" }`
 - On payment success: user redirected to `/?payment=success&tier={tier}`
 
+### Stripe Checkout Appearance
+Two things appear in the Stripe checkout header that may need updating:
+
+1. **"Sandbox" badge** — This is Stripe's automatic test-mode indicator. It cannot be removed via code. It disappears automatically when you switch to live API keys in production. No action needed during development.
+
+2. **Business name ("Nba Probability Engine")** — This is your Stripe account's business name. To change it to "LiveLocks":
+   - Go to Stripe Dashboard → Settings → Business details
+   - Update the Business name field to "LiveLocks"
+   - Save changes — it will reflect immediately on the checkout page
+
 ## Database Tables
 - `players` — id, name, team, position, avgMinutes, avgFouls, ppg, rpg, apg, spg, bpg, usageRate, statsUpdatedAt
 - `team_defense` — id, teamName, position, defRating
