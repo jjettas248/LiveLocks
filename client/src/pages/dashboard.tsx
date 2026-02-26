@@ -10,6 +10,7 @@ import { ProbabilityRing } from "@/components/probability-ring";
 import { StatCard } from "@/components/stat-card";
 import { ParlaySlip } from "@/components/parlay-slip";
 import { UpgradeModal } from "@/components/upgrade-modal";
+import { FeedbackModal } from "@/components/feedback-modal";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import {
@@ -30,6 +31,9 @@ import {
   Users,
   Search,
   Star,
+  Copy,
+  Check,
+  Settings,
 } from "lucide-react";
 
 // ESPN abbreviation → our DB team abbreviation
@@ -105,6 +109,7 @@ export default function Dashboard() {
   const [mlbBannerDismissed, setMlbBannerDismissed] = useState(() =>
     localStorage.getItem("mlb_banner_dismissed") === "1"
   );
+  const [copiedPick, setCopiedPick] = useState(false);
   const [activeTab, setActiveTab] = useState<"calculator" | "halftime">("calculator");
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -457,6 +462,17 @@ export default function Dashboard() {
                 </span>
               )}
             </button>
+            {user?.isAdmin && (
+              <button
+                data-testid="link-admin"
+                onClick={() => navigate("/admin")}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-500 text-xs font-semibold hover:bg-amber-500/20 transition-colors"
+                title="Admin panel"
+              >
+                <Settings className="w-3.5 h-3.5" />
+                Admin
+              </button>
+            )}
             {user && (
               <button
                 data-testid="button-logout"
@@ -1231,6 +1247,39 @@ export default function Dashboard() {
                   />
                 </div>
 
+                {/* Share prompt — shown on strong results */}
+                {(result.probability >= 65 || result.probability <= 35) && (() => {
+                  const playerName = (() => {
+                    const id = form.getValues("playerId");
+                    const p = (players ?? []).find(pl => pl.id === Number(id));
+                    return p?.name ?? "Player";
+                  })();
+                  const statLabel = form.getValues("statType");
+                  const line = form.getValues("liveLine");
+                  const prob = result.probability;
+                  const isOver = prob >= 65;
+                  const snippet = `🏀 ${playerName} ${isOver ? "Over" : "Under"} ${line} ${statLabel} — ${isOver ? prob : (100 - prob).toFixed(0)}% likely via LiveLocks by PropPulse`;
+                  return (
+                    <div className="rounded-xl border border-primary/25 bg-primary/5 p-4 flex items-center justify-between gap-4">
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-foreground mb-0.5">Strong pick detected</p>
+                        <p className="text-xs text-muted-foreground truncate">{snippet}</p>
+                      </div>
+                      <button
+                        data-testid="button-copy-pick"
+                        onClick={() => {
+                          navigator.clipboard.writeText(snippet);
+                          setCopiedPick(true);
+                          setTimeout(() => setCopiedPick(false), 2000);
+                        }}
+                        className="shrink-0 flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                      >
+                        {copiedPick ? <><Check className="w-3 h-3" /> Copied!</> : <><Copy className="w-3 h-3" /> Copy Pick</>}
+                      </button>
+                    </div>
+                  );
+                })()}
+
                 {/* Line Value Panel — shows when a sportsbook with line movement is selected */}
                 {(() => {
                   if (!selectedSportsbook || !oddsData) return null;
@@ -1470,6 +1519,8 @@ export default function Dashboard() {
           onClose={() => setShowUpgradeModal(false)}
         />
       )}
+
+      {user && <FeedbackModal />}
     </div>
   );
 }

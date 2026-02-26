@@ -100,6 +100,17 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   next();
 }
 
+export async function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  if (!req.session.userId) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+  const user = await storage.getUserById(req.session.userId);
+  if (!user || !user.isAdmin) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  next();
+}
+
 export async function requirePlayAccess(req: Request, res: Response, next: NextFunction) {
   if (!req.session.userId) {
     return res.status(401).json({ error: "Not authenticated" });

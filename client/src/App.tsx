@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
 import AuthPage from "@/pages/auth";
+import AdminPage from "@/pages/admin";
 import { useAuth } from "@/hooks/use-auth";
 import { useEffect } from "react";
 
@@ -18,6 +19,9 @@ function ProtectedRouter() {
       navigate("/auth");
     }
     if (!isLoading && user && location === "/auth") {
+      navigate("/");
+    }
+    if (!isLoading && user && !user.isAdmin && location === "/admin") {
       navigate("/");
     }
   }, [user, isLoading, location, navigate]);
@@ -33,6 +37,7 @@ function ProtectedRouter() {
   return (
     <Switch>
       <Route path="/auth" component={AuthPage} />
+      <Route path="/admin" component={AdminPage} />
       <Route path="/" component={Dashboard} />
       <Route component={NotFound} />
     </Switch>

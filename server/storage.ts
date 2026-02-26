@@ -3,16 +3,18 @@ import {
   players,
   teamDefense,
   users,
+  feedback,
   type Player,
   type InsertPlayer,
   type TeamDefense,
   type InsertTeamDefense,
   type User,
   type InsertUser,
+  type Feedback,
   type CalculateProbabilityRequest,
   type CalculateProbabilityResponse,
 } from "@shared/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 
 // 2025-26 NBA team pace (possessions per 48 minutes)
 export const TEAM_PACE: Record<string, number> = {
@@ -74,6 +76,11 @@ export interface IStorage {
   incrementPlaysUsed(userId: number): Promise<void>;
   updateUserSubscription(userId: number, tier: string, stripeCustomerId: string, stripeSubscriptionId: string): Promise<void>;
   updateUserStripeCustomer(userId: number, stripeCustomerId: string): Promise<void>;
+  getAllUsers(): Promise<Omit<User, "passwordHash">[]>;
+  setUserSubscriptionTier(userId: number, tier: string | null): Promise<void>;
+  resetUserPlays(userId: number): Promise<void>;
+  createFeedback(userId: number, message: string): Promise<Feedback>;
+  getAllFeedback(): Promise<(Feedback & { userEmail: string | null })[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -347,6 +354,39 @@ export class DatabaseStorage implements IStorage {
 
   async updateUserStripeCustomer(userId: number, stripeCustomerId: string): Promise<void> {
     await db.update(users).set({ stripeCustomerId }).where(eq(users.id, userId));
+  }
+
+  async getAllUsers(): Promise<Omit<User, "passwordHash">[]> {
+    const rows = await db.select().from(users).orderBy(desc(users.createdAt));
+    return rows.map(({ passwordHash: _ph, ...rest }) => rest);
+  }
+
+  async setUserSubscriptionTier(userId: number, tier: string | null): Promise<void> {
+    await db.update(users).set({ subscriptionTier: tier }).where(eq(users.id, userId));
+  }
+
+  async resetUserPlays(userId: number): Promise<void> {
+    await db.update(users).set({ playsUsed: 0 }).where(eq(users.id, userId));
+  }
+
+  async createFeedback(userId: number, message: string): Promise<Feedback> {
+    const [row] = await db.insert(feedback).values({ userId, message }).returning();
+    return row;
+  }
+
+  async getAllFeedback(): Promise<(Feedback & { userEmail: string | null })[]> {
+    const rows = await db
+      .select({
+        id: feedback.id,
+        userId: feedback.userId,
+        message: feedback.message,
+        createdAt: feedback.createdAt,
+        userEmail: users.email,
+      })
+      .from(feedback)
+      .leftJoin(users, eq(feedback.userId, users.id))
+      .orderBy(desc(feedback.createdAt));
+    return rows;
   }
 }
 

@@ -1,4 +1,4 @@
-# LiveLocks — NBA Live Lines
+# LiveLocks by PropPulse — NBA Live Lines
 
 ## Overview
 A full-stack NBA live betting tool that calculates the probability of a player hitting a live prop line at halftime. It pulls real live game data, player box scores, sportsbook odds, and lets users build correlation-adjusted parlays with deeplinks to DraftKings, FanDuel, and Hard Rock Bet.
@@ -74,14 +74,42 @@ Two things appear in the Stripe checkout header that may need updating:
 - `players` — id, name, team, position, avgMinutes, avgFouls, ppg, rpg, apg, spg, bpg, usageRate, statsUpdatedAt
 - `team_defense` — id, teamName, position, defRating
 - `users` — id, email, passwordHash, isAdmin, subscriptionTier, playsUsed, stripeCustomerId, stripeSubscriptionId
+- `feedback` — id, userId (nullable FK → users), message, createdAt
 - `stripe.*` — managed automatically by stripe-replit-sync (products, prices, customers, subscriptions)
+
+## Admin Panel (/admin)
+- Only accessible to `isAdmin=true` accounts
+- View all users: email, join date, subscription tier, plays used
+- Change any user's tier directly (bypass Stripe): Free → NBA → All Sports
+- Reset a user's play count to 0 (for beta testers who hit the limit)
+- Read all user feedback submissions
+- Admin link appears in dashboard header for admin accounts
+
+## User Feedback
+- Floating feedback button (bottom-right) visible to all logged-in users
+- Submissions stored in `feedback` table; viewable in admin panel
 
 ## Required Environment Variables
 - `ADMIN_EMAIL` — Email address that receives admin/unlimited access upon registration
-- `ODDS_API_KEY` — The Odds API key (free at the-odds-api.com, 500 req/month). App works without it (odds panel hidden)
+- `ODDS_API_KEY` — The Odds API key (see below for upgrade path). App works without it (odds panel hidden)
 - `BDL_API_KEY` — BallDontLie API key (for season stats sync). Not required for core functionality
 - `SESSION_SECRET` — Express session secret (already set)
 - `DATABASE_URL` — PostgreSQL connection string (already set)
+
+## The Odds API — Upgrade Path
+Current free tier: **500 credits/month** (exhausted). Each player prop line call = 1 credit.
+
+At 50 users with 5-min server cache, expected usage: **2,000–5,000 credits/month**.
+
+### Recommended next tier: 20K Plan ($30/month)
+- 20,000 credits/month — covers up to ~200 active users comfortably
+- Upgrade: log in at the-odds-api.com → Billing → select 20K plan
+- The same API key continues to work; quota resets automatically
+- No code changes needed — just upgrade the plan and add credits
+
+### Future: Developer Plan ($59/month)
+- 100,000 credits/month — appropriate for 500+ active users
+- Only needed once the 20K tier is consistently hitting limits
 
 ## Probability Model
 1. Derive per-minute rate from halftime observed stats (70%) + season baseline (30%)

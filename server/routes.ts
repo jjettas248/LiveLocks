@@ -6,7 +6,7 @@ import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
 import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines } from "./oddsService";
 import { calculateParlay } from "./parlayService";
-import { registerAuthRoutes, requirePlayAccess } from "./auth";
+import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin } from "./auth";
 import { registerStripeRoutes } from "./stripeService";
 
 export async function registerRoutes(
@@ -16,6 +16,70 @@ export async function registerRoutes(
 
   await registerAuthRoutes(app);
   await registerStripeRoutes(app);
+
+  // ── Admin Routes ──────────────────────────────────────────────────────────
+
+  app.get("/api/admin/users", requireAdmin, async (_req, res) => {
+    try {
+      const allUsers = await storage.getAllUsers();
+      return res.json(allUsers);
+    } catch (err) {
+      console.error("[admin/users]", err);
+      return res.status(500).json({ error: "Failed to fetch users" });
+    }
+  });
+
+  app.patch("/api/admin/users/:id/tier", requireAdmin, async (req, res) => {
+    try {
+      const userId = parseInt(req.params.id, 10);
+      const { tier } = req.body as { tier: string | null };
+      if (tier !== null && tier !== "nba" && tier !== "all") {
+        return res.status(400).json({ error: "Invalid tier. Use null, 'nba', or 'all'" });
+      }
+      await storage.setUserSubscriptionTier(userId, tier);
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[admin/tier]", err);
+      return res.status(500).json({ error: "Failed to update tier" });
+    }
+  });
+
+  app.patch("/api/admin/users/:id/reset-plays", requireAdmin, async (req, res) => {
+    try {
+      const userId = parseInt(req.params.id, 10);
+      await storage.resetUserPlays(userId);
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[admin/reset-plays]", err);
+      return res.status(500).json({ error: "Failed to reset plays" });
+    }
+  });
+
+  app.get("/api/admin/feedback", requireAdmin, async (_req, res) => {
+    try {
+      const rows = await storage.getAllFeedback();
+      return res.json(rows);
+    } catch (err) {
+      console.error("[admin/feedback]", err);
+      return res.status(500).json({ error: "Failed to fetch feedback" });
+    }
+  });
+
+  // ── Feedback Route ────────────────────────────────────────────────────────
+
+  app.post("/api/feedback", requireAuth, async (req, res) => {
+    try {
+      const { message } = req.body as { message?: string };
+      if (!message || message.trim().length < 3) {
+        return res.status(400).json({ error: "Message must be at least 3 characters" });
+      }
+      const row = await storage.createFeedback(req.session.userId!, message.trim());
+      return res.status(201).json(row);
+    } catch (err) {
+      console.error("[feedback]", err);
+      return res.status(500).json({ error: "Failed to save feedback" });
+    }
+  });
 
   app.get("/api/odds", async (req, res) => {
     try {
