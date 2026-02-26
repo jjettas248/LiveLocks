@@ -73,7 +73,7 @@ export function useLiveStats(gameId: string | undefined) {
       return res.json();
     },
     enabled: !!gameId,
-    refetchInterval: 60000,
+    refetchInterval: false,
     staleTime: 30000,
   });
 }

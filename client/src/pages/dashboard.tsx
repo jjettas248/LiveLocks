@@ -142,14 +142,14 @@ export default function Dashboard() {
     staleTime: 4 * 60 * 1000,
   });
 
-  // ── 5-minute auto-refresh for live box score ───────────────────────────────
+  // ── 2-minute auto-refresh for live box score ───────────────────────────────
   useEffect(() => {
     if (autoRefreshRef.current) clearInterval(autoRefreshRef.current);
     if (selectedGameId) {
       autoRefreshRef.current = setInterval(() => {
         queryClient.invalidateQueries({ queryKey: ["/api/live-stats", selectedGameId] });
         setLastRefreshed(new Date());
-      }, 5 * 60 * 1000);
+      }, 2 * 60 * 1000);
     }
     return () => { if (autoRefreshRef.current) clearInterval(autoRefreshRef.current); };
   }, [selectedGameId]);
@@ -407,32 +407,6 @@ export default function Dashboard() {
 
       <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-5">
 
-        {/* Injury Alert Banner */}
-        {injuryData && injuryData.filter(p => p.status === "Out").length > 0 && selectedGameId && (() => {
-          const gameTeamAbbrs = selectedGameTeams
-            ? [espnToDb(selectedGameTeams.homeAbbr), espnToDb(selectedGameTeams.awayAbbr)]
-            : [];
-          const outs = injuryData.filter(p =>
-            p.status === "Out" &&
-            (gameTeamAbbrs.length === 0 || gameTeamAbbrs.some(t => p.team.toUpperCase().includes(t) || t.includes(p.team.toUpperCase())))
-          ).slice(0, 5);
-          if (outs.length === 0) return null;
-          return (
-            <div className="bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 flex items-start gap-3">
-              <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <span className="text-xs font-semibold text-red-400 uppercase tracking-wider">Injury Alert</span>
-                <div className="flex flex-wrap gap-2 mt-1">
-                  {outs.map((p, i) => (
-                    <span key={i} className="text-xs bg-red-500/20 text-red-300 px-2 py-0.5 rounded-full">
-                      {p.playerName} ({p.team}) — OUT
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-          );
-        })()}
 
         {/* Tab Navigation */}
         <div className="flex gap-1 bg-secondary/40 border border-border/60 rounded-xl p-1 w-fit">
@@ -569,7 +543,7 @@ export default function Dashboard() {
               </button>
               <div className="flex items-center gap-3">
                 <span className="text-xs text-muted-foreground/50">
-                  Auto-refreshes every 5 min · Last: {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  Auto-refreshes every 2 min · Last: {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                 </span>
                 <button
                   onClick={() => { refetchLiveStats(); setLastRefreshed(new Date()); }}
