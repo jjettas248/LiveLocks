@@ -3,6 +3,8 @@ import session from "express-session";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { runMigrations } from "stripe-replit-sync";
+import { getStripeSync } from "./stripeClient";
 
 const app = express();
 const httpServer = createServer(app);
@@ -12,6 +14,53 @@ declare module "http" {
     rawBody: unknown;
   }
 }
+
+async function initStripe() {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    console.warn("[stripe] DATABASE_URL not set, skipping Stripe init");
+    return;
+  }
+  try {
+    console.log("[stripe] Running migrations...");
+    await runMigrations({ databaseUrl });
+    console.log("[stripe] Migrations done");
+
+    const stripeSync = await getStripeSync();
+
+    const domains = process.env.REPLIT_DOMAINS?.split(",")[0];
+    if (domains) {
+      const webhookBaseUrl = `https://${domains}`;
+      await stripeSync.findOrCreateManagedWebhook(`${webhookBaseUrl}/api/stripe/webhook`);
+      console.log("[stripe] Webhook configured");
+    }
+
+    stripeSync.syncBackfill()
+      .then(() => console.log("[stripe] Backfill complete"))
+      .catch((err: any) => console.error("[stripe] Backfill error:", err.message));
+  } catch (err: any) {
+    console.warn("[stripe] Init warning (non-fatal):", err.message);
+  }
+}
+
+app.post(
+  "/api/stripe/webhook",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    const signature = req.headers["stripe-signature"];
+    if (!signature) return res.status(400).json({ error: "Missing stripe-signature" });
+
+    try {
+      const { WebhookHandlers } = await import("./webhookHandlers");
+      const sig = Array.isArray(signature) ? signature[0] : signature;
+      await WebhookHandlers.processWebhook(req.body as Buffer, sig);
+      res.status(200).json({ received: true });
+    } catch (err: any) {
+      console.error("[stripe] Webhook error:", err.message);
+      res.status(400).json({ error: "Webhook processing error" });
+    }
+  }
+);
 
 app.use(
   session({
@@ -74,6 +123,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  await initStripe();
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
@@ -89,9 +139,6 @@ app.use((req, res, next) => {
     return res.status(status).json({ message });
   });
 
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
   if (process.env.NODE_ENV === "production") {
     serveStatic(app);
   } else {
@@ -99,10 +146,6 @@ app.use((req, res, next) => {
     await setupVite(httpServer, app);
   }
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
   httpServer.listen(
     {

@@ -42,3 +42,6 @@ waitForPort = 5000
 
 [userenv.shared]
 ADMIN_EMAIL = "jaylin.becker22@icloud.com"
+
+[agent]
+integrations = ["stripe:2.0.0"]

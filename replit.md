@@ -40,7 +40,34 @@ A full-stack NBA live betting tool that calculates the probability of a player h
 - `POST /api/parlay/calculate` — correlation-adjusted parlay probability
 - `GET /api/sync-stats` — BallDontLie season stats sync (requires BDL_API_KEY env var)
 
+## Authentication & Subscriptions
+- Users register/login with email + password (bcrypt hashed)
+- **Play gating**: Free users get 10 total probability calculations. After 10, a paywall modal appears.
+- **Admin**: Set `ADMIN_EMAIL` env var before registering. The account with that email gets `isAdmin=true` and unlimited access.
+- **Stripe subscriptions**: Two tiers — NBA Only ($25/mo) and All Sports ($50/mo, includes Baseball when it launches)
+- Subscription tier stored in `users.subscriptionTier` (null = free, 'nba' = NBA only, 'all' = all sports)
+- Stripe products seeded via `npx tsx scripts/seed-stripe-products.ts` (already run)
+- Stripe integration via Replit connector (stripe-replit-sync keeps local DB in sync via webhooks)
+
+### Admin Setup Flow
+1. Set `ADMIN_EMAIL` environment variable to your email address
+2. Register an account with that exact email address
+3. The account will have `isAdmin=true` and unlimited play access
+
+### Stripe Setup
+- Products already created: "NBA Only – LiveLocks" ($25/mo) and "All Sports – LiveLocks" ($50/mo)
+- Webhook endpoint: `POST /api/stripe/webhook` (registered before express.json middleware)
+- Checkout endpoint: `POST /api/stripe/checkout` with body `{ tier: "nba" | "all" }`
+- On payment success: user redirected to `/?payment=success&tier={tier}`
+
+## Database Tables
+- `players` — id, name, team, position, avgMinutes, avgFouls, ppg, rpg, apg, spg, bpg, usageRate, statsUpdatedAt
+- `team_defense` — id, teamName, position, defRating
+- `users` — id, email, passwordHash, isAdmin, subscriptionTier, playsUsed, stripeCustomerId, stripeSubscriptionId
+- `stripe.*` — managed automatically by stripe-replit-sync (products, prices, customers, subscriptions)
+
 ## Required Environment Variables
+- `ADMIN_EMAIL` — Email address that receives admin/unlimited access upon registration
 - `ODDS_API_KEY` — The Odds API key (free at the-odds-api.com, 500 req/month). App works without it (odds panel hidden)
 - `BDL_API_KEY` — BallDontLie API key (for season stats sync). Not required for core functionality
 - `SESSION_SECRET` — Express session secret (already set)
