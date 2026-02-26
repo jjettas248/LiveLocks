@@ -34,6 +34,7 @@ import {
   Copy,
   Check,
   Settings,
+  Lock,
 } from "lucide-react";
 
 // ESPN abbreviation → our DB team abbreviation
@@ -106,11 +107,9 @@ export default function Dashboard() {
   const [showBoxScore, setShowBoxScore] = useState(true);
   const [boxScoreFilter, setBoxScoreFilter] = useState("");
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
-  const [mlbBannerDismissed, setMlbBannerDismissed] = useState(() =>
-    localStorage.getItem("mlb_banner_dismissed") === "1"
-  );
   const [copiedPick, setCopiedPick] = useState(false);
   const [activeTab, setActiveTab] = useState<"calculator" | "halftime">("calculator");
+  const [mlbPopoverOpen, setMlbPopoverOpen] = useState(false);
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const calculateMutation = useCalculateProbability();
@@ -492,30 +491,68 @@ export default function Dashboard() {
 
 
         {/* Tab Navigation */}
-        <div className="flex gap-1 bg-secondary/40 border border-border/60 rounded-xl p-1 w-fit">
-          <button
-            onClick={() => setActiveTab("calculator")}
-            data-testid="tab-calculator"
-            className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
-              activeTab === "calculator"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Live Calculator
-          </button>
-          <button
-            onClick={() => setActiveTab("halftime")}
-            data-testid="tab-halftime"
-            className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
-              activeTab === "halftime"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <Star className="w-3.5 h-3.5" />
-            Top 2H Plays
-          </button>
+        <div className="relative flex flex-col w-fit gap-0">
+          <div className="flex gap-1 bg-secondary/40 border border-border/60 rounded-xl p-1 w-fit">
+            <button
+              onClick={() => setActiveTab("calculator")}
+              data-testid="tab-calculator"
+              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
+                activeTab === "calculator"
+                  ? "bg-primary text-primary-foreground border-glow"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Live Calculator
+            </button>
+            <button
+              onClick={() => setActiveTab("halftime")}
+              data-testid="tab-halftime"
+              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
+                activeTab === "halftime"
+                  ? "bg-primary text-primary-foreground border-glow"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Star className="w-3.5 h-3.5" />
+              Top 2H Plays
+            </button>
+            <button
+              data-testid="tab-mlb-locked"
+              onClick={() => setMlbPopoverOpen((v) => !v)}
+              className="px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 opacity-50 cursor-not-allowed text-muted-foreground"
+            >
+              <span role="img" aria-label="baseball">⚾</span>
+              MLB
+              <Lock className="w-3 h-3" />
+            </button>
+          </div>
+
+          {/* MLB locked popover */}
+          {mlbPopoverOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setMlbPopoverOpen(false)} />
+              <div
+                className="absolute top-full left-0 mt-2 z-50 w-72 bg-card border border-border/60 rounded-xl p-4 shadow-2xl animate-fade-in-up"
+                style={{ boxShadow: "0 0 20px -4px hsl(var(--primary) / 0.2), 0 8px 32px -4px hsl(0 0% 0% / 0.5)" }}
+              >
+                <p className="text-sm font-semibold text-foreground mb-1 flex items-center gap-1.5">
+                  <span role="img" aria-label="baseball">⚾</span> MLB Coming Soon
+                </p>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Live MLB prop predictions are launching next month. All Sports subscribers get early access.
+                </p>
+                {user && !user.subscriptionTier && !user.isAdmin && (
+                  <button
+                    data-testid="button-mlb-upgrade"
+                    onClick={() => { setMlbPopoverOpen(false); setShowUpgradeModal(true); }}
+                    className="w-full py-1.5 px-3 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors"
+                  >
+                    Get All Sports Access
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         {/* Live Games Strip */}
@@ -576,8 +613,8 @@ export default function Dashboard() {
                     }}
                     className={`flex flex-col items-center px-3 py-2 rounded-lg border text-xs min-w-[130px] transition-all ${
                       isSelected
-                        ? "border-primary bg-primary/10 ring-1 ring-primary"
-                        : "border-border/60 bg-secondary/40 hover:bg-secondary/70"
+                        ? "border-primary bg-primary/10 ring-1 ring-primary shadow-[0_0_16px_-3px_hsl(var(--primary)/0.4)]"
+                        : "border-border/60 bg-secondary/40 hover:bg-secondary/70 hover:shadow-[0_0_14px_-3px_hsl(var(--primary)/0.25)]"
                     }`}
                   >
                     <div className="flex items-center justify-between w-full gap-2">
@@ -606,39 +643,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* MLB Coming Soon Banner */}
-        {!mlbBannerDismissed && (
-          <div
-            data-testid="mlb-banner"
-            className="flex items-center gap-3 px-4 py-2.5 rounded-xl border border-primary/25 bg-primary/5 relative"
-            style={{ boxShadow: "0 0 16px -4px hsl(var(--primary) / 0.12)" }}
-          >
-            <span className="text-lg leading-none" role="img" aria-label="baseball">⚾</span>
-            <div className="flex-1 min-w-0">
-              <span className="text-xs font-semibold text-foreground">MLB Early Access</span>
-              <span className="text-xs text-muted-foreground ml-2">Live MLB prop predictions launching next month — subscribers get in first.</span>
-            </div>
-            {user && !user.subscriptionTier && !user.isAdmin && (
-              <button
-                type="button"
-                data-testid="button-mlb-upgrade"
-                onClick={() => { setUpgradeModalState({ playsUsed: user.playsUsed, limit: 10 }); setShowUpgradeModal(true); }}
-                className="shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-              >
-                Get All Sports
-              </button>
-            )}
-            <button
-              type="button"
-              data-testid="button-dismiss-mlb"
-              onClick={() => { setMlbBannerDismissed(true); localStorage.setItem("mlb_banner_dismissed", "1"); }}
-              className="shrink-0 text-muted-foreground/50 hover:text-muted-foreground transition-colors text-lg leading-none"
-              title="Dismiss"
-            >
-              ×
-            </button>
-          </div>
-        )}
 
         {/* Live Box Score — shown when a game is selected and stats are available */}
         {selectedGameId && (liveStats || isLiveStatsLoading) && (
@@ -1146,7 +1150,7 @@ export default function Dashboard() {
                 )}
               </div>
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-4 animate-fade-in-up">
                 {/* Main Result Card */}
                 <div className="bg-card border border-border rounded-xl p-5 relative overflow-hidden">
                   <div className="absolute top-0 right-0 w-48 h-48 bg-primary/5 rounded-full blur-[60px] -translate-y-1/2 translate-x-1/2 pointer-events-none" />
@@ -1260,7 +1264,7 @@ export default function Dashboard() {
                   const isOver = prob >= 65;
                   const snippet = `🏀 ${playerName} ${isOver ? "Over" : "Under"} ${line} ${statLabel} — ${isOver ? prob : (100 - prob).toFixed(0)}% likely via LiveLocks by PropPulse`;
                   return (
-                    <div className="rounded-xl border border-primary/25 bg-primary/5 p-4 flex items-center justify-between gap-4">
+                    <div className="rounded-xl border border-primary/25 bg-primary/5 p-4 flex items-center justify-between gap-4 animate-fade-in-up">
                       <div className="min-w-0">
                         <p className="text-xs font-semibold text-foreground mb-0.5">Strong pick detected</p>
                         <p className="text-xs text-muted-foreground truncate">{snippet}</p>

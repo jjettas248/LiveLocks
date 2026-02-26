@@ -7,11 +7,13 @@ export function FeedbackModal() {
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  const [everSubmitted, setEverSubmitted] = useState(false);
 
   const feedbackMutation = useMutation({
     mutationFn: (msg: string) => apiRequest("POST", "/api/feedback", { message: msg }),
     onSuccess: () => {
       setSubmitted(true);
+      setEverSubmitted(true);
       setMessage("");
       setTimeout(() => {
         setSubmitted(false);
@@ -33,7 +35,7 @@ export function FeedbackModal() {
         data-testid="button-open-feedback"
         onClick={() => setOpen(true)}
         title="Send feedback"
-        className="fixed bottom-6 right-6 z-50 w-12 h-12 rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/30 flex items-center justify-center hover:bg-primary/90 transition-all hover:scale-105 active:scale-95"
+        className={`fixed bottom-6 right-6 z-50 w-12 h-12 rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/30 flex items-center justify-center hover:bg-primary/90 transition-all hover:scale-105 active:scale-95 ${!everSubmitted ? "glow-breathe" : ""}`}
       >
         <MessageSquare className="w-5 h-5" />
       </button>
