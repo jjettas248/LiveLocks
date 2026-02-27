@@ -55,6 +55,24 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/admin/users/:id", requireAdmin, async (req, res) => {
+    try {
+      const requestingUserId = (req as any).resolvedUserId!;
+      const targetUserId = parseInt(req.params.id, 10);
+      if (targetUserId === requestingUserId) {
+        return res.status(400).json({ error: "Cannot delete your own account" });
+      }
+      const target = await storage.getUserById(targetUserId);
+      if (!target) return res.status(404).json({ error: "User not found" });
+      if (target.isAdmin) return res.status(403).json({ error: "Cannot delete admin accounts" });
+      await storage.deleteUser(targetUserId);
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[admin/delete-user]", err);
+      return res.status(500).json({ error: "Failed to delete user" });
+    }
+  });
+
   app.get("/api/admin/feedback", requireAdmin, async (_req, res) => {
     try {
       const rows = await storage.getAllFeedback();

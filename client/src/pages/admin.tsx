@@ -3,8 +3,18 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
-import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle } from "lucide-react";
+import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle, Trash2 } from "lucide-react";
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
+
+const TEST_EMAIL_PATTERNS = [
+  /@test\.com$/i,
+  /@example\.com$/i,
+  /^stripetest_/i,
+  /^e2etest_/i,
+  /^mobiletest/i,
+  /^playlimit/i,
+  /^test\+/i,
+];
 
 type AdminUser = {
   id: number;
@@ -97,6 +107,32 @@ export default function AdminPage() {
       apiRequest("PATCH", `/api/admin/users/${userId}/reset-plays`, {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] }),
   });
+
+  const deleteUserMutation = useMutation({
+    mutationFn: (userId: number) =>
+      apiRequest("DELETE", `/api/admin/users/${userId}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] }),
+  });
+
+  const [clearingTestAccounts, setClearingTestAccounts] = useState(false);
+  const handleClearTestAccounts = async () => {
+    const testUsers = (allUsers ?? []).filter(
+      (u) => !u.isAdmin && TEST_EMAIL_PATTERNS.some((p) => p.test(u.email))
+    );
+    if (testUsers.length === 0) return;
+    const confirmed = window.confirm(
+      `Delete ${testUsers.length} test account(s)?\n\n${testUsers.map((u) => u.email).join("\n")}`
+    );
+    if (!confirmed) return;
+    setClearingTestAccounts(true);
+    for (const u of testUsers) {
+      try {
+        await apiRequest("DELETE", `/api/admin/users/${u.id}`);
+      } catch (_) {}
+    }
+    await queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+    setClearingTestAccounts(false);
+  };
 
   const setupProductsMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/stripe/setup-products"),
@@ -206,10 +242,25 @@ export default function AdminPage() {
         {/* Users table */}
         {activeTab === "users" && (
           <div className="bg-card border border-border rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-border/60">
+            <div className="px-4 py-3 border-b border-border/60 flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
                 <Users className="w-4 h-4 text-primary" /> All Users
               </h2>
+              {(allUsers ?? []).some((u) => !u.isAdmin && TEST_EMAIL_PATTERNS.some((p) => p.test(u.email))) && (
+                <button
+                  data-testid="button-clear-test-accounts"
+                  onClick={handleClearTestAccounts}
+                  disabled={clearingTestAccounts}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-destructive/40 text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
+                >
+                  {clearingTestAccounts ? (
+                    <div className="w-3 h-3 border border-destructive border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Trash2 className="w-3 h-3" />
+                  )}
+                  Clear Test Accounts
+                </button>
+              )}
             </div>
             {usersLoading ? (
               <div className="p-8 flex justify-center">
@@ -279,6 +330,22 @@ export default function AdminPage() {
                                 className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40"
                               >
                                 <RotateCcw className="w-3 h-3" /> Reset
+                              </button>
+                            )}
+                            {/* Delete */}
+                            {!u.isAdmin && (
+                              <button
+                                data-testid={`button-delete-user-${u.id}`}
+                                onClick={() => {
+                                  if (window.confirm(`Permanently delete ${u.email}?`)) {
+                                    deleteUserMutation.mutate(u.id);
+                                  }
+                                }}
+                                disabled={deleteUserMutation.isPending}
+                                title="Permanently delete this account"
+                                className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border border-destructive/30 text-destructive/70 hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-40"
+                              >
+                                <Trash2 className="w-3 h-3" />
                               </button>
                             )}
                           </div>

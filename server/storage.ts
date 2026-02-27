@@ -80,6 +80,7 @@ export interface IStorage {
   getAllUsers(): Promise<Omit<User, "passwordHash">[]>;
   setUserSubscriptionTier(userId: number, tier: string | null): Promise<void>;
   resetUserPlays(userId: number): Promise<void>;
+  deleteUser(userId: number): Promise<void>;
   createFeedback(userId: number, message: string): Promise<Feedback>;
   getAllFeedback(): Promise<(Feedback & { userEmail: string | null })[]>;
 }
@@ -373,6 +374,10 @@ export class DatabaseStorage implements IStorage {
 
   async resetUserPlays(userId: number): Promise<void> {
     await db.update(users).set({ playsUsed: 0 }).where(eq(users.id, userId));
+  }
+
+  async deleteUser(userId: number): Promise<void> {
+    await db.delete(users).where(eq(users.id, userId));
   }
 
   async createFeedback(userId: number, message: string): Promise<Feedback> {
