@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
+import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -84,6 +85,7 @@ function formatOdds(odds: number): string {
 export default function Dashboard() {
   const { user, logout } = useAuth();
   const [, navigate] = useLocation();
+  const { toast } = useToast();
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [upgradeModalState, setUpgradeModalState] = useState<{ playsUsed: number; limit: number }>({ playsUsed: 10, limit: 10 });
 
@@ -182,9 +184,16 @@ export default function Dashboard() {
 
   // ── Play limit gating ─────────────────────────────────────────────────────
   useEffect(() => {
+    if (!calculateMutation.error) return;
     if (calculateMutation.error instanceof PlayLimitError) {
       setUpgradeModalState({ playsUsed: calculateMutation.error.playsUsed, limit: calculateMutation.error.limit });
       setShowUpgradeModal(true);
+    } else {
+      toast({
+        title: "Calculation failed",
+        description: calculateMutation.error.message || "Something went wrong. Check your inputs and try again.",
+        variant: "destructive",
+      });
     }
   }, [calculateMutation.error]);
 
@@ -320,6 +329,14 @@ export default function Dashboard() {
   }, [liveStats, selectedPlayer, watchedStatType]);
 
   const onSubmit = (data: CalculateProbabilityRequest) => {
+    if (!data.playerId || data.playerId === 0) {
+      toast({ title: "Select a player", description: "Please choose a player before calculating.", variant: "destructive" });
+      return;
+    }
+    if (!data.opponentTeam) {
+      toast({ title: "Select an opponent", description: "Please choose an opponent team.", variant: "destructive" });
+      return;
+    }
     calculateMutation.mutate({
       ...data,
       gameId: selectedGameId,
@@ -805,7 +822,7 @@ export default function Dashboard() {
         {activeTab === "calculator" ? <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
 
           {/* LEFT: Input Form */}
-          <div className="lg:col-span-4 space-y-4">
+          <div className="lg:col-span-4 space-y-4 mb-20 lg:mb-0">
             <div className="bg-card border border-border rounded-xl p-5 relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-primary to-transparent" />
               <div className="flex items-start justify-between mb-1">

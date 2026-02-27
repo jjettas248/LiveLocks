@@ -82,6 +82,45 @@ export async function registerStripeRoutes(app: import("express").Express) {
     }
   });
 
+  app.post("/api/stripe/setup-products", requireAuth, async (req: Request, res: Response) => {
+    const userId = req.session.userId!;
+    const user = await storage.getUserById(userId);
+    if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
+
+    try {
+      const stripe = await getUncachableStripeClient();
+      const result: Record<string, string> = {};
+
+      for (const [key, meta] of Object.entries(PLAN_META) as [string, typeof PLAN_META[keyof typeof PLAN_META]][]) {
+        const existing = await getPriceIdForTier(key as "nba" | "all");
+        if (existing) {
+          result[key] = existing;
+          continue;
+        }
+
+        const product = await stripe.products.create({
+          name: meta.name,
+          description: meta.description,
+        });
+
+        const price = await stripe.prices.create({
+          product: product.id,
+          unit_amount: meta.amount,
+          currency: "usd",
+          recurring: { interval: "month" },
+        });
+
+        result[key] = price.id;
+        console.log(`[stripe] Created product "${meta.name}" → price ${price.id}`);
+      }
+
+      return res.json({ success: true, priceIds: result });
+    } catch (err: any) {
+      console.error("[stripe setup-products error]", err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post("/api/stripe/checkout-complete", requireAuth, async (req: Request, res: Response) => {
     const { tier, stripeCustomerId, stripeSubscriptionId } = req.body;
     const userId = req.session.userId!;

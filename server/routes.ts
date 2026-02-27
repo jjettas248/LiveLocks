@@ -195,7 +195,11 @@ export async function registerRoutes(
           field: err.errors[0].path.join("."),
         });
       }
-      res.status(500).json({ message: "Internal server error", details: (err as any).message });
+      const msg = (err as any).message ?? "";
+      if (msg.includes("not found") || msg.includes("not exist")) {
+        return res.status(400).json({ message: msg });
+      }
+      res.status(500).json({ message: "Internal server error", details: msg });
     }
   });
 

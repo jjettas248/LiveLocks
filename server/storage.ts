@@ -72,6 +72,7 @@ export interface IStorage {
   calculateProbability(req: CalculateProbabilityRequest): Promise<CalculateProbabilityResponse>;
   getUserById(id: number): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
+  getUserByStripeCustomerId(customerId: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   incrementPlaysUsed(userId: number): Promise<void>;
   updateUserSubscription(userId: number, tier: string, stripeCustomerId: string, stripeSubscriptionId: string): Promise<void>;
@@ -333,6 +334,11 @@ export class DatabaseStorage implements IStorage {
 
   async getUserByEmail(email: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.email, email));
+    return user;
+  }
+
+  async getUserByStripeCustomerId(customerId: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.stripeCustomerId, customerId));
     return user;
   }
 
