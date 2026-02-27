@@ -73,7 +73,7 @@ export async function registerRoutes(
       if (!message || message.trim().length < 3) {
         return res.status(400).json({ error: "Message must be at least 3 characters" });
       }
-      const row = await storage.createFeedback(req.session.userId!, message.trim());
+      const row = await storage.createFeedback((req as any).resolvedUserId!, message.trim());
       return res.status(201).json(row);
     } catch (err) {
       console.error("[feedback]", err);

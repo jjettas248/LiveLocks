@@ -1,5 +1,36 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
+const TOKEN_KEY = "ll_auth_token";
+
+export function getAuthToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setAuthToken(token: string): void {
+  try {
+    localStorage.setItem(TOKEN_KEY, token);
+  } catch {}
+}
+
+export function clearAuthToken(): void {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+  } catch {}
+}
+
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = { ...extra };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
@@ -14,7 +45,7 @@ export async function apiRequest(
 ): Promise<Response> {
   const res = await fetch(url, {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
+    headers: authHeaders(data ? { "Content-Type": "application/json" } : {}),
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
   });
@@ -31,6 +62,7 @@ export const getQueryFn: <T>(options: {
   async ({ queryKey }) => {
     const res = await fetch(queryKey.join("/") as string, {
       credentials: "include",
+      headers: authHeaders(),
     });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {

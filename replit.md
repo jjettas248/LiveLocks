@@ -86,7 +86,7 @@ Two things appear in the Stripe checkout header that may need updating:
 - Admin link appears in dashboard header for admin accounts
 
 ## Mobile UX
-- **Session cookies**: Set with `SameSite=None; Secure` when running in Replit (detected via `REPLIT_DOMAINS` env var). This ensures cookies survive the cross-origin Replit preview iframe and work on mobile browsers.
+- **JWT auth**: Login/register responses include a signed JWT `token` field. Frontend stores it in `localStorage` under key `ll_auth_token` and sends it as `Authorization: Bearer <token>` on every request. Server accepts both Bearer token AND session cookie. This makes auth work everywhere — mobile browsers, iframes, cross-origin contexts — without any cookie restrictions.
 - **Header (mobile)**: Live game counter, Sync Rosters button, plays remaining badge, and subscription badge are hidden on screens narrower than `sm` (640px). Parlay Slip button shows just the trophy icon without text. This keeps the header clean on phones.
 - **Parlay Slip (mobile)**: On screens narrower than 1024px (`lg` breakpoint), the parlay slip opens as a fixed bottom sheet overlay instead of a side column. Tap the backdrop or the X button to close. On desktop it remains a side column.
 

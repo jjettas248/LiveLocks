@@ -38,7 +38,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
 
     try {
       const stripe = await getUncachableStripeClient();
-      const userId = req.session.userId!;
+      const userId = (req as any).resolvedUserId!;
       const user = await storage.getUserById(userId);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
@@ -83,7 +83,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
   });
 
   app.post("/api/stripe/setup-products", requireAuth, async (req: Request, res: Response) => {
-    const userId = req.session.userId!;
+    const userId = (req as any).resolvedUserId!;
     const user = await storage.getUserById(userId);
     if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
 
@@ -123,7 +123,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
 
   app.post("/api/stripe/checkout-complete", requireAuth, async (req: Request, res: Response) => {
     const { tier, stripeCustomerId, stripeSubscriptionId } = req.body;
-    const userId = req.session.userId!;
+    const userId = (req as any).resolvedUserId!;
     if (!tier) return res.status(400).json({ error: "Missing tier" });
     try {
       await storage.updateUserSubscription(userId, tier, stripeCustomerId || "", stripeSubscriptionId || "");

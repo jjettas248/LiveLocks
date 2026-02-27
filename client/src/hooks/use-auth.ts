@@ -1,5 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient } from "@/lib/queryClient";
+import { queryClient, getAuthToken, setAuthToken, clearAuthToken } from "@/lib/queryClient";
 
 export interface AuthUser {
   id: number;
@@ -10,9 +10,18 @@ export interface AuthUser {
 }
 
 async function apiFetch(path: string, options?: RequestInit) {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options?.headers as Record<string, string>),
+  };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
   const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
+    credentials: "include",
     ...options,
+    headers,
   });
   return res;
 }
@@ -40,7 +49,9 @@ export function useAuth() {
         const err = await res.json().catch(() => ({}));
         throw new Error((err as any).error || "Login failed");
       }
-      return res.json() as Promise<AuthUser>;
+      const data = await res.json();
+      if (data.token) setAuthToken(data.token);
+      return data as AuthUser;
     },
     onSuccess: (data) => {
       queryClient.setQueryData(["/api/auth/me"], data);
@@ -57,7 +68,9 @@ export function useAuth() {
         const err = await res.json().catch(() => ({}));
         throw new Error((err as any).error || "Registration failed");
       }
-      return res.json() as Promise<AuthUser>;
+      const data = await res.json();
+      if (data.token) setAuthToken(data.token);
+      return data as AuthUser;
     },
     onSuccess: (data) => {
       queryClient.setQueryData(["/api/auth/me"], data);
@@ -67,6 +80,7 @@ export function useAuth() {
   const logoutMutation = useMutation({
     mutationFn: async () => {
       await apiFetch("/api/auth/logout", { method: "POST" });
+      clearAuthToken();
     },
     onSuccess: () => {
       queryClient.setQueryData(["/api/auth/me"], null);

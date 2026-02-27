@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
 import { storage } from "./storage";
 import { insertUserEmailPasswordSchema } from "@shared/schema";
 import type { User } from "@shared/schema";
@@ -12,6 +13,29 @@ declare module "express-session" {
 
 const FREE_PLAY_LIMIT = 10;
 const SALT_ROUNDS = 10;
+const JWT_SECRET = process.env.SESSION_SECRET || "livelocks-dev-secret";
+const JWT_EXPIRES = "30d";
+
+function signToken(userId: number): string {
+  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+}
+
+function getUserIdFromRequest(req: Request): number | null {
+  if (req.session?.userId) {
+    return req.session.userId;
+  }
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    const token = authHeader.slice(7);
+    try {
+      const payload = jwt.verify(token, JWT_SECRET) as { userId: number };
+      return payload.userId;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
 
 function safeUser(user: User) {
   return {
@@ -51,7 +75,8 @@ export async function registerAuthRoutes(app: import("express").Express) {
     });
 
     req.session.userId = user.id;
-    return res.status(201).json(safeUser(user));
+    const token = signToken(user.id);
+    return res.status(201).json({ ...safeUser(user), token });
   });
 
   app.post("/api/auth/login", async (req: Request, res: Response) => {
@@ -72,7 +97,8 @@ export async function registerAuthRoutes(app: import("express").Express) {
     }
 
     req.session.userId = user.id;
-    return res.json(safeUser(user));
+    const token = signToken(user.id);
+    return res.json({ ...safeUser(user), token });
   });
 
   app.post("/api/auth/logout", (req: Request, res: Response) => {
@@ -82,10 +108,11 @@ export async function registerAuthRoutes(app: import("express").Express) {
   });
 
   app.get("/api/auth/me", async (req: Request, res: Response) => {
-    if (!req.session.userId) {
+    const userId = getUserIdFromRequest(req);
+    if (!userId) {
       return res.status(401).json({ error: "Not authenticated" });
     }
-    const user = await storage.getUserById(req.session.userId);
+    const user = await storage.getUserById(userId);
     if (!user) {
       return res.status(401).json({ error: "Not authenticated" });
     }
@@ -94,29 +121,34 @@ export async function registerAuthRoutes(app: import("express").Express) {
 }
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
-  if (!req.session.userId) {
+  const userId = getUserIdFromRequest(req);
+  if (!userId) {
     return res.status(401).json({ error: "Not authenticated" });
   }
+  (req as any).resolvedUserId = userId;
   next();
 }
 
 export async function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  if (!req.session.userId) {
+  const userId = getUserIdFromRequest(req);
+  if (!userId) {
     return res.status(401).json({ error: "Not authenticated" });
   }
-  const user = await storage.getUserById(req.session.userId);
+  const user = await storage.getUserById(userId);
   if (!user || !user.isAdmin) {
     return res.status(403).json({ error: "Forbidden" });
   }
+  (req as any).resolvedUserId = userId;
   next();
 }
 
 export async function requirePlayAccess(req: Request, res: Response, next: NextFunction) {
-  if (!req.session.userId) {
+  const userId = getUserIdFromRequest(req);
+  if (!userId) {
     return res.status(401).json({ error: "Not authenticated" });
   }
 
-  const user = await storage.getUserById(req.session.userId);
+  const user = await storage.getUserById(userId);
   if (!user) {
     return res.status(401).json({ error: "Not authenticated" });
   }
