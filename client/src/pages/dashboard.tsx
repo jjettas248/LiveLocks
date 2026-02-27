@@ -104,6 +104,7 @@ export default function Dashboard() {
   } | undefined>();
   const [parlayPicks, setParlayPicks] = useState<ParlayPickInput[]>([]);
   const [showParlay, setShowParlay] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 1024);
   const [selectedSportsbook, setSelectedSportsbook] = useState<string>("manual");
   const [autoFilledFields, setAutoFilledFields] = useState<Set<string>>(new Set());
   const [showBoxScore, setShowBoxScore] = useState(true);
@@ -181,6 +182,13 @@ export default function Dashboard() {
       refetchHalftimePlays();
     }
   }, [activeTab]);
+
+  // ── Mobile breakpoint detection ────────────────────────────────────────────
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 1024);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   // ── Play limit gating ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -426,8 +434,8 @@ export default function Dashboard() {
               <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest mt-0.5">by PropPulse · NBA</span>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground">
               <Radio className="w-3 h-3 text-green-500 animate-pulse" />
               <span>
                 {isGamesLoading
@@ -439,14 +447,14 @@ export default function Dashboard() {
               <button
                 data-testid="button-plays-remaining"
                 onClick={() => { setUpgradeModalState({ playsUsed: user.playsUsed, limit: 10 }); setShowUpgradeModal(true); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-500 text-xs font-medium hover:bg-amber-500/20 transition-colors"
+                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-500 text-xs font-medium hover:bg-amber-500/20 transition-colors"
               >
                 <Zap className="w-3 h-3" />
                 {Math.max(0, 10 - user.playsUsed)} free plays left
               </button>
             )}
             {user && user.subscriptionTier && (
-              <span data-testid="text-subscription-tier" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-medium">
+              <span data-testid="text-subscription-tier" className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-medium">
                 <Star className="w-3 h-3" />
                 {user.subscriptionTier === "all" ? "All Sports" : "NBA"}
               </span>
@@ -456,7 +464,7 @@ export default function Dashboard() {
               disabled={syncRostersMutation.isPending}
               data-testid="button-sync-rosters"
               title="Pull latest rosters from ESPN to update player team assignments"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
             >
               {syncRostersMutation.isPending ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -471,7 +479,7 @@ export default function Dashboard() {
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-sm font-semibold hover:bg-primary/20 transition-colors"
             >
               <Trophy className="w-4 h-4" />
-              Parlay Slip
+              <span className="hidden sm:inline">Parlay Slip</span>
               {parlayPicks.length > 0 && (
                 <span className="bg-primary text-primary-foreground text-xs rounded-full w-5 h-5 flex items-center justify-center">
                   {parlayPicks.length}
@@ -1382,10 +1390,10 @@ export default function Dashboard() {
             )}
           </div>
 
-          {/* RIGHT: Parlay Slip */}
-          {showParlay && (
+          {/* RIGHT: Parlay Slip — desktop side column */}
+          {showParlay && !isMobile && (
             <div className="lg:col-span-3">
-              <div className="bg-card border border-border rounded-xl p-4 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto">
+              <div className="bg-card border border-border rounded-xl p-4 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto relative">
                 <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-primary to-transparent rounded-t-xl" />
                 <ParlaySlip
                   picks={parlayPicks}
@@ -1542,6 +1550,47 @@ export default function Dashboard() {
       )}
 
       {user && <FeedbackModal />}
+
+      {/* Parlay Slip — mobile bottom sheet */}
+      {showParlay && isMobile && (
+        <>
+          <div
+            className="fixed inset-0 bg-black/50 z-40"
+            onClick={() => setShowParlay(false)}
+          />
+          <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-2xl bg-card border-t border-border shadow-2xl flex flex-col max-h-[80vh]">
+            <div className="flex items-center justify-center pt-3 pb-1 flex-shrink-0">
+              <div className="w-10 h-1 rounded-full bg-border" />
+            </div>
+            <div className="flex items-center justify-between px-4 py-2 flex-shrink-0 border-b border-border/50">
+              <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                <Trophy className="w-4 h-4 text-primary" />
+                Parlay Slip
+                {parlayPicks.length > 0 && (
+                  <span className="bg-primary text-primary-foreground text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                    {parlayPicks.length}
+                  </span>
+                )}
+              </div>
+              <button
+                data-testid="button-close-parlay-sheet"
+                onClick={() => setShowParlay(false)}
+                className="p-1.5 rounded-lg hover:bg-secondary transition-colors text-muted-foreground"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4">
+              <ParlaySlip
+                picks={parlayPicks}
+                onRemove={(idx) => setParlayPicks((prev) => prev.filter((_, i) => i !== idx))}
+                onClear={() => { setParlayPicks([]); setShowParlay(false); }}
+                injuredPlayerNames={injuredPlayerNames}
+              />
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
