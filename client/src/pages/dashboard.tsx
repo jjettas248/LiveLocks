@@ -37,6 +37,7 @@ import {
   Settings,
   Lock,
 } from "lucide-react";
+import { SiX } from "react-icons/si";
 
 // ESPN abbreviation → our DB team abbreviation
 const ESPN_TO_DB: Record<string, string> = {
@@ -266,6 +267,17 @@ export default function Dashboard() {
     else if (st === "reb_ast") statVal = stat.rebounds + stat.assists;
     else if (st === "stl_blk") statVal = stat.steals + stat.blocks;
     form.setValue("halftimeStat", statVal);
+
+    // Set the live game's current period and clock so the projection is accurate
+    // regardless of whether it's Q1, Q2, halftime, Q3, or Q4
+    if (selectedGameId && liveGames) {
+      const game = liveGames.find(g => g.id === selectedGameId);
+      if (game && game.period >= 1 && game.period <= 4) {
+        form.setValue("currentPeriod", game.period);
+        form.setValue("gameClock", game.clock || "12:00");
+      }
+    }
+
     setAutoFilledFields(new Set(["halftimeMinutes", "halftimeFouls", "halftimeStat"]));
   };
 
@@ -1287,24 +1299,34 @@ export default function Dashboard() {
                   const line = form.getValues("liveLine");
                   const prob = result.probability;
                   const isOver = prob >= 65;
-                  const snippet = `🏀 ${playerName} ${isOver ? "Over" : "Under"} ${line} ${statLabel} — ${isOver ? prob : (100 - prob).toFixed(0)}% likely via LiveLocks by PropPulse`;
+                  const snippet = `🏀 ${playerName} ${isOver ? "Over" : "Under"} ${line} ${statLabel} — ${isOver ? prob : (100 - prob).toFixed(0)}% likely from @proppulsebets #LiveLocks`;
+                  const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(snippet)}`;
                   return (
                     <div className="rounded-xl border border-primary/25 bg-primary/5 p-4 flex items-center justify-between gap-4 animate-fade-in-up">
                       <div className="min-w-0">
                         <p className="text-xs font-semibold text-foreground mb-0.5">Strong pick detected</p>
                         <p className="text-xs text-muted-foreground truncate">{snippet}</p>
                       </div>
-                      <button
-                        data-testid="button-copy-pick"
-                        onClick={() => {
-                          navigator.clipboard.writeText(snippet);
-                          setCopiedPick(true);
-                          setTimeout(() => setCopiedPick(false), 2000);
-                        }}
-                        className="shrink-0 flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-                      >
-                        {copiedPick ? <><Check className="w-3 h-3" /> Copied!</> : <><Copy className="w-3 h-3" /> Copy Pick</>}
-                      </button>
+                      <div className="shrink-0 flex items-center gap-2">
+                        <button
+                          data-testid="button-copy-pick"
+                          onClick={() => {
+                            navigator.clipboard.writeText(snippet);
+                            setCopiedPick(true);
+                            setTimeout(() => setCopiedPick(false), 2000);
+                          }}
+                          className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          {copiedPick ? <><Check className="w-3 h-3" /> Copied</> : <><Copy className="w-3 h-3" /> Copy</>}
+                        </button>
+                        <button
+                          data-testid="button-tweet-pick"
+                          onClick={() => window.open(tweetUrl, "_blank", "noopener,noreferrer")}
+                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-black text-white hover:bg-zinc-800 transition-colors"
+                        >
+                          <SiX className="w-3 h-3" /> Tweet
+                        </button>
+                      </div>
                     </div>
                   );
                 })()}
