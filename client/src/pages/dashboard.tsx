@@ -1299,15 +1299,23 @@ export default function Dashboard() {
                   const line = form.getValues("liveLine");
                   const prob = result.probability;
                   const isOver = prob >= 65;
-                  const snippet = `🏀 ${playerName} ${isOver ? "Over" : "Under"} ${line} ${statLabel} — ${isOver ? prob : (100 - prob).toFixed(0)}% likely from @proppulsebets #LiveLocks`;
+                  const snippet = `🏀 ${playerName} ${isOver ? "Over" : "Under"} ${line} ${statLabel} — ${isOver ? prob : (100 - prob).toFixed(0)}% likely by @proppulsebets #LiveLocks`;
                   const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(snippet)}`;
                   return (
-                    <div className="rounded-xl border border-primary/25 bg-primary/5 p-4 flex items-center justify-between gap-4 animate-fade-in-up">
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-foreground mb-0.5">Strong pick detected</p>
-                        <p className="text-xs text-muted-foreground truncate">{snippet}</p>
+                    <div className="rounded-xl border border-primary/25 bg-primary/5 p-4 flex flex-col gap-3 animate-fade-in-up">
+                      <div>
+                        <p className="text-xs font-semibold text-foreground mb-1">🔥 Strong pick detected</p>
+                        <p className="text-xs text-muted-foreground leading-relaxed">{snippet}</p>
                       </div>
-                      <div className="shrink-0 flex items-center gap-2">
+                      <div className="flex items-center gap-2">
+                        <button
+                          data-testid="button-tweet-pick"
+                          onClick={() => window.open(tweetUrl, "_blank", "noopener,noreferrer")}
+                          className="flex-1 flex items-center justify-center gap-2 text-sm font-bold py-2.5 px-4 rounded-xl bg-black text-white hover:bg-zinc-800 active:scale-95 transition-all"
+                        >
+                          <SiX className="w-4 h-4" />
+                          Tweet this pick
+                        </button>
                         <button
                           data-testid="button-copy-pick"
                           onClick={() => {
@@ -1315,16 +1323,9 @@ export default function Dashboard() {
                             setCopiedPick(true);
                             setTimeout(() => setCopiedPick(false), 2000);
                           }}
-                          className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground hover:text-foreground transition-colors"
+                          className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-2.5 rounded-xl border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
                         >
-                          {copiedPick ? <><Check className="w-3 h-3" /> Copied</> : <><Copy className="w-3 h-3" /> Copy</>}
-                        </button>
-                        <button
-                          data-testid="button-tweet-pick"
-                          onClick={() => window.open(tweetUrl, "_blank", "noopener,noreferrer")}
-                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-black text-white hover:bg-zinc-800 transition-colors"
-                        >
-                          <SiX className="w-3 h-3" /> Tweet
+                          {copiedPick ? <><Check className="w-3.5 h-3.5" /></> : <><Copy className="w-3.5 h-3.5" /></>}
                         </button>
                       </div>
                     </div>
