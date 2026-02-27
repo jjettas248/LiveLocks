@@ -1321,7 +1321,8 @@ export default function Dashboard() {
                     const p = (players ?? []).find(pl => pl.id === Number(id));
                     return p?.name ?? "Player";
                   })();
-                  const statLabel = form.getValues("statType");
+                  const rawStatType = form.getValues("statType");
+                  const statLabel = STAT_TYPES.find(s => s.value === rawStatType)?.label ?? rawStatType;
                   const line = form.getValues("liveLine");
                   const prob = result.probability;
                   const isOver = prob >= 65;
