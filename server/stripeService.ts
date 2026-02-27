@@ -121,6 +121,27 @@ export async function registerStripeRoutes(app: import("express").Express) {
     }
   });
 
+  app.post("/api/stripe/portal", requireAuth, async (req: Request, res: Response) => {
+    const userId = (req as any).resolvedUserId!;
+    const user = await storage.getUserById(userId);
+    if (!user) return res.status(401).json({ error: "Not authenticated" });
+    if (!user.stripeCustomerId) {
+      return res.status(400).json({ error: "No billing account found. Please contact support." });
+    }
+    try {
+      const stripe = await getUncachableStripeClient();
+      const origin = req.headers.origin || `${req.protocol}://${req.headers.host}`;
+      const portalSession = await stripe.billingPortal.sessions.create({
+        customer: user.stripeCustomerId,
+        return_url: origin,
+      });
+      return res.json({ url: portalSession.url });
+    } catch (err: any) {
+      console.error("[Stripe portal error]", err.message);
+      return res.status(500).json({ error: err.message || "Failed to open billing portal" });
+    }
+  });
+
   app.post("/api/stripe/checkout-complete", requireAuth, async (req: Request, res: Response) => {
     const { tier, stripeCustomerId, stripeSubscriptionId } = req.body;
     const userId = (req as any).resolvedUserId!;

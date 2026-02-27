@@ -37,15 +37,8 @@ export function UpgradeModal({ playsUsed, limit, onClose }: UpgradeModalProps) {
     setLoadingTier(tier);
     setError(null);
     try {
-      const res = await fetch("/api/stripe/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tier }),
-      });
+      const res = await apiRequest("POST", "/api/stripe/checkout", { tier });
       const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to start checkout");
-      }
       if (data.url) {
         window.location.href = data.url;
       }

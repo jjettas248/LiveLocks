@@ -112,6 +112,21 @@ export default function Dashboard() {
   const [boxScoreFilter, setBoxScoreFilter] = useState("");
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
   const [copiedPick, setCopiedPick] = useState(false);
+  const [portalLoading, setPortalLoading] = useState(false);
+
+  const handleManageSubscription = async () => {
+    setPortalLoading(true);
+    try {
+      const res = await apiRequest("POST", "/api/stripe/portal");
+      const data = await res.json();
+      if (data.url) window.location.href = data.url;
+    } catch (err: any) {
+      toast({ title: "Could not open billing portal", description: err.message, variant: "destructive" });
+    } finally {
+      setPortalLoading(false);
+    }
+  };
+
   const [activeTab, setActiveTab] = useState<"calculator" | "halftime">("calculator");
   const [mlbPopoverOpen, setMlbPopoverOpen] = useState(false);
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -466,10 +481,21 @@ export default function Dashboard() {
               </button>
             )}
             {user && user.subscriptionTier && (
-              <span data-testid="text-subscription-tier" className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-medium">
-                <Star className="w-3 h-3" />
-                {user.subscriptionTier === "all" ? "All Sports" : "NBA"}
-              </span>
+              <div className="hidden sm:flex items-center gap-1.5">
+                <span data-testid="text-subscription-tier" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-medium">
+                  <Star className="w-3 h-3" />
+                  {user.subscriptionTier === "all" ? "All Sports" : "NBA"}
+                </span>
+                <button
+                  data-testid="button-manage-subscription"
+                  onClick={handleManageSubscription}
+                  disabled={portalLoading}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+                  title="Manage or cancel your subscription"
+                >
+                  {portalLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : "Manage"}
+                </button>
+              </div>
             )}
             <button
               onClick={() => syncRostersMutation.mutate()}
