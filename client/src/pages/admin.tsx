@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
-import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown } from "lucide-react";
+import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle } from "lucide-react";
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
 type AdminUser = {
@@ -98,6 +98,10 @@ export default function AdminPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] }),
   });
 
+  const setupProductsMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/stripe/setup-products"),
+  });
+
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -138,6 +142,47 @@ export default function AdminPage() {
             <span className="text-muted-foreground">Free users:</span>
             <span className="font-bold text-foreground">{allUsers?.filter(u => !u.subscriptionTier && !u.isAdmin).length ?? "—"}</span>
           </div>
+        </div>
+
+        {/* Stripe Tools */}
+        <div className="bg-card border border-border rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <CreditCard className="w-4 h-4 text-primary" />
+            <h3 className="text-sm font-semibold text-foreground">Stripe Tools</h3>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <button
+              data-testid="button-setup-products"
+              onClick={() => setupProductsMutation.mutate()}
+              disabled={setupProductsMutation.isPending}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50 hover:bg-primary/90 transition-colors"
+            >
+              {setupProductsMutation.isPending ? (
+                <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <CreditCard className="w-4 h-4" />
+              )}
+              Setup Stripe Products
+            </button>
+            {setupProductsMutation.isSuccess && (
+              <div className="flex items-center gap-2 text-sm text-green-400" data-testid="text-setup-success">
+                <CheckCircle className="w-4 h-4" />
+                <span>
+                  Products ready — NBA: <code className="text-xs bg-muted px-1 rounded">{(setupProductsMutation.data as any)?.priceIds?.nba ?? "existing"}</code>
+                  {" "}All Sports: <code className="text-xs bg-muted px-1 rounded">{(setupProductsMutation.data as any)?.priceIds?.all ?? "existing"}</code>
+                </span>
+              </div>
+            )}
+            {setupProductsMutation.isError && (
+              <div className="flex items-center gap-2 text-sm text-destructive" data-testid="text-setup-error">
+                <AlertCircle className="w-4 h-4" />
+                <span>Failed: {(setupProductsMutation.error as any)?.message ?? "Unknown error"}</span>
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            Creates the NBA Only ($25/mo) and All Sports ($50/mo) products in your Stripe account if they don't already exist. Run this once after switching to live Stripe keys.
+          </p>
         </div>
 
         {/* Tab nav */}

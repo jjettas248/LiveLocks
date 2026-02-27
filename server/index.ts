@@ -1,5 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
+import pg from "pg";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -8,6 +10,8 @@ import { getStripeSync } from "./stripeClient";
 
 const app = express();
 const httpServer = createServer(app);
+
+app.set("trust proxy", 1);
 
 declare module "http" {
   interface IncomingMessage {
@@ -62,8 +66,16 @@ app.post(
   }
 );
 
+const PgSession = connectPgSimple(session);
+const pgPool = process.env.DATABASE_URL
+  ? new pg.Pool({ connectionString: process.env.DATABASE_URL })
+  : undefined;
+
 app.use(
   session({
+    store: pgPool
+      ? new PgSession({ pool: pgPool, tableName: "user_sessions", createTableIfMissing: true })
+      : undefined,
     secret: process.env.SESSION_SECRET || "livelocks-dev-secret",
     resave: false,
     saveUninitialized: false,
@@ -71,6 +83,7 @@ app.use(
       secure: process.env.NODE_ENV === "production",
       httpOnly: true,
       maxAge: 30 * 24 * 60 * 60 * 1000,
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     },
   })
 );
