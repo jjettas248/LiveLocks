@@ -1,5 +1,6 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { api } from "@shared/routes";
+import { getAuthToken } from "@/lib/queryClient";
 import type {
   CalculateProbabilityRequest,
   CalculateProbabilityResponse,
@@ -10,6 +11,13 @@ import type {
   ParlayResult,
   Player,
 } from "@shared/schema";
+
+function authFetchHeaders(extra?: Record<string, string>): Record<string, string> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = { ...extra };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return headers;
+}
 
 export function usePlayers() {
   return useQuery({
@@ -52,7 +60,8 @@ export function useCalculateProbability() {
     mutationFn: async (data: CalculateProbabilityRequest): Promise<CalculateProbabilityResponse> => {
       const res = await fetch(api.calculator.calculate.path, {
         method: api.calculator.calculate.method,
-        headers: { "Content-Type": "application/json" },
+        headers: authFetchHeaders({ "Content-Type": "application/json" }),
+        credentials: "include",
         body: JSON.stringify(data),
       });
       if (res.status === 402) {
@@ -162,7 +171,8 @@ export function useCalculateParlay() {
     mutationFn: async (picks: ParlayPickInput[]): Promise<ParlayResult> => {
       const res = await fetch("/api/parlay/calculate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authFetchHeaders({ "Content-Type": "application/json" }),
+        credentials: "include",
         body: JSON.stringify({ picks }),
       });
       if (!res.ok) throw new Error("Failed to calculate parlay");
