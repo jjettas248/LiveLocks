@@ -1709,122 +1709,120 @@ export default function Dashboard() {
                       ))}
                     </div>
                   </div>
-                </div>
               </div>
 
-              {isHalftimePlaysLoading ? (
+              {isHalftimePlaysLoading && (
                 <div className="flex items-center justify-center py-12 gap-2 text-muted-foreground">
                   <Loader2 className="w-5 h-5 animate-spin" />
                   <span>Calculating best plays…</span>
                 </div>
-              ) : halftimePlaysData?.message && halftimePlaysData.plays.length === 0 ? (
+              )}
+              {!isHalftimePlaysLoading && halftimePlaysData?.message && halftimePlaysData.plays.length === 0 && (
                 <div className="text-center py-12 text-muted-foreground">
                   <Star className="w-8 h-8 mx-auto mb-3 opacity-30" />
                   <p className="text-sm">{halftimePlaysData.message}</p>
                   <p className="text-xs text-muted-foreground/60 mt-1">Check back when games are at halftime.</p>
                 </div>
-              ) : halftimePlaysData && halftimePlaysData.plays.length > 0 ? (
-                filteredPlays.length === 0 ? (
-                  <div className="text-center py-10 text-muted-foreground">
-                    <p className="text-sm">No plays match the current filters.</p>
-                    <button onClick={() => { setSlateFilterProp("all"); setSlateFilterProb("all"); }} className="text-xs text-primary mt-2 hover:underline">Clear filters</button>
-                  </div>
-                ) : (
-                  <>
-                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                      {filteredPlays.map((play: any, idx: number) => {
-                        const isOver = play.betDirection === "over";
-                        const isInjured = injuredPlayerNames.has(play.playerName.toLowerCase());
-                        const statLabel = STAT_TYPES.find(s => s.value === play.statType)?.label ?? play.statType;
-                        const hasLiveLine = play.lineSource === "odds_api";
-                        const globalIdx = halftimePlaysData.plays.indexOf(play);
-                        return (
-                          <div
-                            key={idx}
-                            data-testid={`halftime-play-${idx}`}
-                            className={`rounded-xl border p-4 space-y-2 relative cursor-pointer transition-all ${
-                              isInjured
-                                ? "border-red-500/40 bg-red-500/5 hover:border-red-500/60"
-                                : "border-border/60 bg-secondary/30 hover:border-primary/40 hover:bg-secondary/50"
-                            }`}
-                            onClick={() => loadPlayInCalculator(play)}
-                          >
-                            <div className="absolute top-3 left-3 w-5 h-5 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center">
-                              <span className="text-[9px] font-bold text-primary leading-none">#{globalIdx + 1}</span>
-                            </div>
-                            <div className="flex items-start justify-between gap-2 pl-7">
-                              <div>
-                                <div className="font-semibold text-sm text-foreground">{play.playerName}</div>
-                                <div className="text-xs text-muted-foreground">{play.team} vs {play.opponent}</div>
-                                {isInjured && (
-                                  <span className="text-xs text-red-400 font-semibold flex items-center gap-0.5 mt-0.5">
-                                    <AlertTriangle className="w-3 h-3" /> Injured
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-right flex-shrink-0">
-                                <div className={`text-xl font-bold font-mono ${
-                                  play.probability >= 65 ? "text-green-400" :
-                                  play.probability <= 35 ? "text-red-400" : "text-yellow-400"
-                                }`}>
-                                  {play.probability.toFixed(1)}%
-                                </div>
-                                <div className="text-xs text-muted-foreground">
-                                  Edge: +{play.edge.toFixed(1)}%
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className={`text-xs font-mono px-2 py-0.5 rounded font-bold ${
-                                isOver ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"
-                              }`}>
-                                {statLabel} {isOver ? "O" : "U"}{play.line}
+              )}
+              {!isHalftimePlaysLoading && halftimePlaysData && halftimePlaysData.plays.length > 0 && filteredPlays.length === 0 && (
+                <div className="text-center py-10 text-muted-foreground">
+                  <p className="text-sm">No plays match the current filters.</p>
+                  <button onClick={() => { setSlateFilterProp("all"); setSlateFilterProb("all"); }} className="text-xs text-primary mt-2 hover:underline">Clear filters</button>
+                </div>
+              )}
+              {!isHalftimePlaysLoading && halftimePlaysData && halftimePlaysData.plays.length > 0 && filteredPlays.length > 0 && (
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {filteredPlays.map((play: any, idx: number) => {
+                    const isOver = play.betDirection === "over";
+                    const isInjured = injuredPlayerNames.has(play.playerName.toLowerCase());
+                    const statLabel = STAT_TYPES.find(s => s.value === play.statType)?.label ?? play.statType;
+                    const hasLiveLine = play.lineSource === "odds_api";
+                    const globalIdx = halftimePlaysData.plays.indexOf(play);
+                    return (
+                      <div
+                        key={idx}
+                        data-testid={`halftime-play-${idx}`}
+                        className={`rounded-xl border p-4 space-y-2 relative cursor-pointer transition-all ${
+                          isInjured
+                            ? "border-red-500/40 bg-red-500/5 hover:border-red-500/60"
+                            : "border-border/60 bg-secondary/30 hover:border-primary/40 hover:bg-secondary/50"
+                        }`}
+                        onClick={() => loadPlayInCalculator(play)}
+                      >
+                        <div className="absolute top-3 left-3 w-5 h-5 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center">
+                          <span className="text-[9px] font-bold text-primary leading-none">#{globalIdx + 1}</span>
+                        </div>
+                        <div className="flex items-start justify-between gap-2 pl-7">
+                          <div>
+                            <div className="font-semibold text-sm text-foreground">{play.playerName}</div>
+                            <div className="text-xs text-muted-foreground">{play.team} vs {play.opponent}</div>
+                            {isInjured && (
+                              <span className="text-xs text-red-400 font-semibold flex items-center gap-0.5 mt-0.5">
+                                <AlertTriangle className="w-3 h-3" /> Injured
                               </span>
-                              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
-                                hasLiveLine
-                                  ? "bg-green-500/15 text-green-400"
-                                  : "bg-secondary text-muted-foreground"
-                              }`}>
-                                {hasLiveLine ? "Live Line" : "Season Avg"}
-                              </span>
-                              <span className="text-xs text-muted-foreground">
-                                H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}
-                              </span>
-                            </div>
-
-                            <button
-                              type="button"
-                              data-testid={`button-add-halftime-play-${idx}`}
-                              disabled={parlayPicks.length >= 10}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const pick: ParlayPickInput = {
-                                  playerId: play.playerId,
-                                  playerName: play.playerName,
-                                  playerTeam: play.team,
-                                  statType: play.statType,
-                                  line: play.line,
-                                  probability: play.probability,
-                                  betDirection: play.betDirection,
-                                  sportsbook: "",
-                                  oddsAmerican: 0,
-                                  gameId: play.gameId,
-                                };
-                                setParlayPicks(prev => [...prev, pick]);
-                                setShowParlay(true);
-                              }}
-                              className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors disabled:opacity-40"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                              Add to Parlay
-                            </button>
+                            )}
                           </div>
-                        );
-                      })}
-                    </div>
-                  </>
-                )
-              ) : (
+                          <div className="text-right flex-shrink-0">
+                            <div className={`text-xl font-bold font-mono ${
+                              play.probability >= 65 ? "text-green-400" :
+                              play.probability <= 35 ? "text-red-400" : "text-yellow-400"
+                            }`}>
+                              {play.probability.toFixed(1)}%
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Edge: +{play.edge.toFixed(1)}%
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`text-xs font-mono px-2 py-0.5 rounded font-bold ${
+                            isOver ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"
+                          }`}>
+                            {statLabel} {isOver ? "O" : "U"}{play.line}
+                          </span>
+                          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                            hasLiveLine
+                              ? "bg-green-500/15 text-green-400"
+                              : "bg-secondary text-muted-foreground"
+                          }`}>
+                            {hasLiveLine ? "Live Line" : "Season Avg"}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          data-testid={`button-add-halftime-play-${idx}`}
+                          disabled={parlayPicks.length >= 10}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const pick: ParlayPickInput = {
+                              playerId: play.playerId,
+                              playerName: play.playerName,
+                              playerTeam: play.team,
+                              statType: play.statType,
+                              line: play.line,
+                              probability: play.probability,
+                              betDirection: play.betDirection,
+                              sportsbook: "",
+                              oddsAmerican: 0,
+                              gameId: play.gameId,
+                            };
+                            setParlayPicks(prev => [...prev, pick]);
+                            setShowParlay(true);
+                          }}
+                          className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors disabled:opacity-40"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Add to Parlay
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {!isHalftimePlaysLoading && !halftimePlaysData && (
                 <div className="text-center py-12 text-muted-foreground">
                   <Star className="w-8 h-8 mx-auto mb-3 opacity-30" />
                   <p className="text-sm">No halftime plays available.</p>
