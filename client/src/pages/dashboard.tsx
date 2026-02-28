@@ -1644,6 +1644,12 @@ export default function Dashboard() {
                         { value: "threes", label: "3PM" },
                         { value: "steals", label: "STL" },
                         { value: "blocks", label: "BLK" },
+                        { value: "combo", label: "Combos" },
+                        { value: "pts_reb", label: "Pts+Reb" },
+                        { value: "pts_ast", label: "Pts+Ast" },
+                        { value: "pts_reb_ast", label: "Pts+Reb+Ast" },
+                        { value: "reb_ast", label: "Reb+Ast" },
+                        { value: "stl_blk", label: "Stl+Blk" },
                       ].map(opt => (
                         <button
                           key={opt.value}
@@ -1699,7 +1705,8 @@ export default function Dashboard() {
                 </div>
               ) : halftimePlaysData && halftimePlaysData.plays.length > 0 ? (() => {
                 const filteredPlays = halftimePlaysData.plays.filter((play: any) => {
-                  if (slateFilterProp !== "all" && play.statType !== slateFilterProp) return false;
+                  if (slateFilterProp === "combo" && !play.statType.includes("_")) return false;
+                  if (slateFilterProp !== "all" && slateFilterProp !== "combo" && play.statType !== slateFilterProp) return false;
                   if (slateFilterProb === "high" && play.probability < 65 && play.probability > 35) return false;
                   if (slateFilterProb === "medium" && (play.probability >= 65 || play.probability <= 35)) return false;
                   return true;

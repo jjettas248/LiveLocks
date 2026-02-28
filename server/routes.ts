@@ -439,7 +439,19 @@ export async function registerRoutes(
       const oddsCache = new Map<string, Map<string, number | null>>();
 
       const allPlays: any[] = [];
-      const HALFTIME_STAT_TYPES = ["points", "rebounds", "assists", "threes", "steals", "blocks"];
+      const ALL_STAT_CONFIGS: Array<{ statType: string; components: string[] }> = [
+        { statType: "points",      components: ["points"] },
+        { statType: "rebounds",    components: ["rebounds"] },
+        { statType: "assists",     components: ["assists"] },
+        { statType: "threes",      components: ["threes"] },
+        { statType: "steals",      components: ["steals"] },
+        { statType: "blocks",      components: ["blocks"] },
+        { statType: "pts_reb",     components: ["points", "rebounds"] },
+        { statType: "pts_ast",     components: ["points", "assists"] },
+        { statType: "pts_reb_ast", components: ["points", "rebounds", "assists"] },
+        { statType: "reb_ast",     components: ["rebounds", "assists"] },
+        { statType: "stl_blk",     components: ["steals", "blocks"] },
+      ];
 
       for (const game of halftimeGames) {
         // Resolve Odds API event ID for this game (for live prop lines)
@@ -547,13 +559,18 @@ export async function registerRoutes(
               } catch { /* ignore */ }
             }
 
-            for (const statType of HALFTIME_STAT_TYPES) {
-              try {
-                const seasonAvg = dbSeasonStat[statType];
-                if (!seasonAvg || seasonAvg < 0.5) continue;
+            const snapToHalf = (n: number) => Math.round(n * 2) / 2;
 
-                // Snap season avg to nearest valid half-point betting line (e.g. 7.9 → 8.0)
-                const snapToHalf = (n: number) => Math.round(n * 2) / 2;
+            for (const { statType, components } of ALL_STAT_CONFIGS) {
+              try {
+                // Season avg: sum of each component's average (null if any component is missing)
+                const seasonParts = components.map(c => dbSeasonStat[c]);
+                if (seasonParts.some(v => v == null)) continue;
+                const seasonAvg = seasonParts.reduce((sum, v) => sum + v!, 0);
+                if (seasonAvg < 0.5) continue;
+
+                // H1 live stat: sum of each component from the live box score
+                const halftimeStat = components.reduce((sum, c) => sum + (liveStats[c] ?? 0), 0);
 
                 // Try Odds API for a live line; cache result per player+stat
                 let liveLine = snapToHalf(seasonAvg);
@@ -577,11 +594,11 @@ export async function registerRoutes(
                   opponentTeam: opponentAbbr,
                   halftimeMinutes: Math.round(minutes * 10) / 10,
                   halftimeFouls: parseStat(statMap["pf"]),
-                  halftimeStat: liveStats[statType] ?? 0,
+                  halftimeStat,
                   liveLine,
                   statType,
                   halftimeScore: scoreStr,
-                  currentPeriod: 3, // entering Q3 = halftime
+                  currentPeriod: 3,
                   gameClock: "12:00",
                 });
 
@@ -595,7 +612,7 @@ export async function registerRoutes(
                   team: teamAbbr,
                   opponent: opponentAbbr,
                   statType,
-                  halftimeStat: liveStats[statType] ?? 0,
+                  halftimeStat,
                   halftimeMinutes: Math.round(minutes * 10) / 10,
                   halftimeFouls: parseStat(statMap["pf"]),
                   line: liveLine,
