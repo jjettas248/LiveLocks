@@ -233,6 +233,19 @@ export default function Dashboard() {
     }
   }, []);
 
+  // ── Auto-fill score, period, and clock on every live-games refresh ─────────
+  useEffect(() => {
+    if (!selectedGameId || !liveGames) return;
+    const game = liveGames.find(g => g.id === selectedGameId);
+    if (!game) return;
+    const isLive = game.status !== "Scheduled" && game.status !== "Pre-Game" && game.status !== "Final";
+    if (isLive && game.period >= 1 && game.period <= 4) {
+      form.setValue("currentPeriod", game.period);
+      form.setValue("gameClock", game.clock || "12:00");
+      form.setValue("halftimeScore", `${game.awayScore}-${game.homeScore}`);
+    }
+  }, [liveGames, selectedGameId]);
+
   const watchedPlayerId = form.watch("playerId");
   const watchedStatType = form.watch("statType");
 
