@@ -622,8 +622,8 @@ export default function Dashboard() {
 
 
         {/* Tab Navigation */}
-        <div className="relative flex flex-col gap-0 overflow-x-auto">
-          <div className="flex gap-1 bg-secondary/40 border border-border/60 rounded-xl p-1 w-fit min-w-0">
+        <div className="relative flex flex-col gap-0 w-full overflow-x-auto">
+          <div className="flex gap-1 bg-secondary/40 border border-border/60 rounded-xl p-1 w-fit">
             <button
               onClick={() => setActiveTab("calculator")}
               data-testid="tab-calculator"

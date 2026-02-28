@@ -126,18 +126,25 @@ function NCAABGameCard({ play }: { play: NCAABPlay }) {
         <div className="flex items-start justify-between gap-2">
           <div className="flex-1 min-w-0">
             <p className="text-xs text-muted-foreground mb-0.5">{halfLabel} · {play.clock || play.status}</p>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-foreground truncate">{play.awayTeam}</span>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="hidden sm:inline text-sm font-semibold text-foreground">{play.awayTeam}</span>
+              <span className="sm:hidden text-sm font-semibold text-foreground">{play.awayTeamAbbr}</span>
               <span className="text-lg font-bold tabular-nums text-foreground">{play.awayScore}</span>
-              <span className="text-muted-foreground text-xs">@</span>
+              <span className="text-muted-foreground text-xs">–</span>
               <span className="text-lg font-bold tabular-nums text-foreground">{play.homeScore}</span>
-              <span className="text-sm font-semibold text-foreground truncate">{play.homeTeam}</span>
+              <span className="hidden sm:inline text-sm font-semibold text-foreground">{play.homeTeam}</span>
+              <span className="sm:hidden text-sm font-semibold text-foreground">{play.homeTeamAbbr}</span>
             </div>
           </div>
           {hasWindow && (
-            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex-shrink-0 ${windowClass}`}>
-              {play.bettingWindowLabel}
-            </span>
+            <div className="flex-shrink-0">
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border hidden sm:inline-block ${windowClass}`}>
+                {play.bettingWindowLabel}
+              </span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border sm:hidden ${windowClass}`}>
+                {play.bettingWindow === "1H_WINDOW" ? "1H ⏱" : play.bettingWindow === "HALFTIME" ? "HT ⏱" : "2H ⏱"}
+              </span>
+            </div>
           )}
         </div>
 
