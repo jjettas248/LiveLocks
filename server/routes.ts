@@ -581,8 +581,20 @@ export async function registerRoutes(
                     try {
                       const { getPlayerOdds } = await import("./oddsService");
                       const oddsResult = await getPlayerOdds(oddsEventId, playerName, statType);
-                      const firstBook = Object.values(oddsResult)[0] as any;
-                      oddsPlayerCache.set(cacheKey, firstBook?.line ?? null);
+                      const books = Object.values(oddsResult) as any[];
+                      if (books.length > 0) {
+                        const lines = books.map((b: any) => b.line as number);
+                        // Estimate direction: H1 stat + rough H2 projection (half season avg)
+                        const roughExpected = halftimeStat + (seasonAvg / 2);
+                        const medianLine = [...lines].sort((a, b) => a - b)[Math.floor(lines.length / 2)];
+                        // Over → pick the lowest line (most favorable); Under → pick the highest
+                        const bestLine = roughExpected >= medianLine
+                          ? Math.min(...lines)
+                          : Math.max(...lines);
+                        oddsPlayerCache.set(cacheKey, bestLine);
+                      } else {
+                        oddsPlayerCache.set(cacheKey, null);
+                      }
                     } catch { oddsPlayerCache.set(cacheKey, null); }
                   }
                   const oddsLine = oddsPlayerCache.get(cacheKey);
