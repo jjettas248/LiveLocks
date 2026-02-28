@@ -701,8 +701,8 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Live Games Strip */}
-        {allGames.length > 0 && (
+        {/* Live Games Strip — hidden on NCAAB tab */}
+        {activeTab !== "ncaab" && allGames.length > 0 && (
           <div className="bg-card border border-border rounded-xl p-4">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
@@ -790,8 +790,8 @@ export default function Dashboard() {
         )}
 
 
-        {/* Live Box Score — shown when a game is selected and stats are available */}
-        {selectedGameId && (liveStats || isLiveStatsLoading) && (
+        {/* Live Box Score — hidden on NCAAB tab */}
+        {activeTab !== "ncaab" && selectedGameId && (liveStats || isLiveStatsLoading) && (
           <div className="bg-card border border-border rounded-xl overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-border/60">
               <button
@@ -1866,7 +1866,14 @@ export default function Dashboard() {
 
         {/* NCAAB Admin Tab — live data */}
         {activeTab === "ncaab" && user?.isAdmin && (
-          <NCAABAdminTab />
+          <NCAABAdminTab
+            onAddToParlay={(pick) => {
+              if (parlayPicks.length < 10) {
+                setParlayPicks((prev) => [...prev, pick]);
+                setShowParlay(true);
+              }
+            }}
+          />
         )}
 
       </main>
