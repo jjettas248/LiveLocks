@@ -1258,20 +1258,23 @@ export default function Dashboard() {
                                     )}
                                   </div>
                                 )}
-                                {/* Model edge vs book implied — shown after Calculate */}
-                                {result && o.overOdds && o.underOdds && (() => {
-                                  const overImplied = americanToImplied(o.overOdds) * 100;
-                                  const overEdge = result.probability - overImplied;
-                                  const isPositive = overEdge > 0;
+                                {/* CLV — line delta vs entered live line, shown after Calculate */}
+                                {result && o.line != null && (() => {
+                                  const enteredLine = form.getValues("liveLine");
+                                  const delta = Number(o.line) - Number(enteredLine);
+                                  const isPositive = delta > 0;
+                                  const fmt = (n: number) => n % 1 === 0 ? String(Math.round(n)) : n.toFixed(1);
                                   return (
                                     <div className="flex items-center justify-between w-full mt-1 pt-1 border-t border-border/30">
-                                      <span className="text-muted-foreground/70">Model vs book</span>
+                                      <span className="text-muted-foreground/70">CLV vs your line</span>
                                       <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
                                         isPositive
                                           ? "bg-emerald-500/15 text-emerald-400"
-                                          : "bg-red-500/10 text-red-400"
+                                          : delta < 0
+                                            ? "bg-red-500/10 text-red-400"
+                                            : "bg-secondary text-muted-foreground"
                                       }`}>
-                                        {isPositive ? "+" : ""}{Math.round(overEdge)}% EV
+                                        {delta === 0 ? "Even" : `${isPositive ? "+" : ""}${fmt(delta)} pt`}
                                       </span>
                                     </div>
                                   );
@@ -1298,6 +1301,11 @@ export default function Dashboard() {
                         const sbName = SPORTSBOOK_LABELS[selectedSportsbook] ?? selectedSportsbook;
                         const hasMovement = selected.lineMovement !== undefined && selected.lineMovement !== 0;
                         const dropped = (selected.lineMovement ?? 0) < 0;
+                        const enteredLine = form.getValues("liveLine");
+                        const clvDelta = Number(selected.line) - Number(enteredLine);
+                        const clvFmt = (n: number) => n % 1 === 0 ? String(Math.round(n)) : n.toFixed(1);
+                        const clvLabel = clvDelta === 0 ? "Even" : `${clvDelta > 0 ? "+" : ""}${clvFmt(clvDelta)} pt`;
+                        const clvPositive = clvDelta > 0;
                         return (
                           <div className={`rounded-xl border p-3 flex gap-2.5 items-start ${
                             isPositive ? "bg-emerald-500/10 border-emerald-500/30" : "bg-red-500/10 border-red-500/30"
@@ -1311,9 +1319,13 @@ export default function Dashboard() {
                                   {valueLabel} {bestEdge.side} CLV
                                 </h4>
                                 <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                                  isPositive ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"
+                                  clvDelta === 0
+                                    ? "bg-secondary text-muted-foreground"
+                                    : clvPositive
+                                      ? "bg-emerald-500/20 text-emerald-300"
+                                      : "bg-red-500/20 text-red-300"
                                 }`}>
-                                  {overEdge > 0 ? "+" : ""}{Math.round(overEdge)}% EV
+                                  {clvLabel}
                                 </span>
                               </div>
                               <p className="text-xs text-muted-foreground mt-1">
