@@ -289,7 +289,8 @@ export async function registerRoutes(
           });
 
           // ESPN stats often come as strings like "24", or for rebounds "2-4-6" (off-def-tot)
-          // We need to parse them carefully
+          // Shooting stats come as "made-attempted" (e.g. "3-7" for 3-of-7)
+          // parseStat: for rebound-style "a-b-c" grabs the LAST part (total)
           const parseStat = (val: string) => {
             if (!val) return 0;
             if (val.includes("-")) {
@@ -298,6 +299,24 @@ export async function registerRoutes(
             }
             return parseInt(val, 10) || 0;
           };
+          // parseMade: for shooting "made-attempted" grabs the FIRST part (made)
+          const parseMade = (val: string) => {
+            if (!val) return 0;
+            if (val.includes("-")) return parseInt(val.split("-")[0], 10) || 0;
+            return parseInt(val, 10) || 0;
+          };
+          const parseAttempted = (val: string) => {
+            if (!val) return 0;
+            if (val.includes("-")) {
+              const parts = val.split("-");
+              return parseInt(parts[1] ?? parts[0], 10) || 0;
+            }
+            return 0;
+          };
+
+          const fgRaw = statMap["fg"] ?? statMap["fgm"] ?? "";
+          const ftRaw = statMap["ft"] ?? statMap["ftm"] ?? "";
+          const fg3Raw = statMap["3pt"] ?? statMap["fg3m"] ?? statMap["3ptm"] ?? "";
 
           players.push({
             playerId: parseInt(athlete.athlete.id, 10),
@@ -310,7 +329,13 @@ export async function registerRoutes(
             steals: parseStat(statMap["stl"]),
             blocks: parseStat(statMap["blk"]),
             fouls: parseStat(statMap["pf"]),
-            threes: parseStat(statMap["3pt"] ?? statMap["fg3m"] ?? statMap["3ptm"] ?? "0"),
+            threes: parseMade(fg3Raw),
+            fgm: parseMade(fgRaw),
+            fga: parseAttempted(fgRaw),
+            ftm: parseMade(ftRaw),
+            fta: parseAttempted(ftRaw),
+            fg3m: parseMade(fg3Raw),
+            fg3a: parseAttempted(fg3Raw),
           });
         });
       });
@@ -458,6 +483,11 @@ export async function registerRoutes(
               }
               return parseInt(val, 10) || 0;
             };
+            const parseMade = (val: string) => {
+              if (!val) return 0;
+              if (val.includes("-")) return parseInt(val.split("-")[0], 10) || 0;
+              return parseInt(val, 10) || 0;
+            };
 
             const minStr: string = statMap["min"] || "0";
             const minParts = minStr.split(":");
@@ -480,7 +510,7 @@ export async function registerRoutes(
               assists: parseStat(statMap["ast"]),
               steals: parseStat(statMap["stl"]),
               blocks: parseStat(statMap["blk"]),
-              threes: parseStat(statMap["3pt"] ?? statMap["fg3m"] ?? "0"),
+              threes: parseMade(statMap["3pt"] ?? statMap["fg3m"] ?? "0"),
             };
 
             // Build season stat baselines from DB (fast) — fall back to ESPN live fetch only if null

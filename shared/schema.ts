@@ -97,6 +97,13 @@ export const calculateProbabilitySchema = z.object({
   // Any-point calculator fields
   currentPeriod: z.coerce.number().min(0).max(4).optional(),
   gameClock: z.string().optional(),
+  // Live shooting efficiency (current game)
+  liveFgm: z.coerce.number().optional(),
+  liveFga: z.coerce.number().optional(),
+  liveFtm: z.coerce.number().optional(),
+  liveFta: z.coerce.number().optional(),
+  liveFg3m: z.coerce.number().optional(),
+  liveFg3a: z.coerce.number().optional(),
 });
 
 export type CalculateProbabilityRequest = z.infer<typeof calculateProbabilitySchema>;
@@ -141,6 +148,12 @@ export interface LivePlayerStat {
   blocks: number;
   fouls: number;
   threes: number;
+  fgm?: number;
+  fga?: number;
+  ftm?: number;
+  fta?: number;
+  fg3m?: number;
+  fg3a?: number;
 }
 
 export interface InjuryPlayer {

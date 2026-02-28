@@ -117,6 +117,8 @@ export default function Dashboard() {
   const [autoFilledFields, setAutoFilledFields] = useState<Set<string>>(new Set());
   const [showBoxScore, setShowBoxScore] = useState(true);
   const [boxScoreFilter, setBoxScoreFilter] = useState("");
+  const [boxScoreSort, setBoxScoreSort] = useState<"stat" | "minutes">("stat");
+  const [boxScoreSortDir, setBoxScoreSortDir] = useState<"desc" | "asc">("desc");
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
   const [copiedPick, setCopiedPick] = useState(false);
   const [portalLoading, setPortalLoading] = useState(false);
@@ -313,6 +315,14 @@ export default function Dashboard() {
       }
     }
 
+    // Wire live shooting efficiency to calculator
+    form.setValue("liveFgm" as any, stat.fgm ?? 0);
+    form.setValue("liveFga" as any, stat.fga ?? 0);
+    form.setValue("liveFtm" as any, stat.ftm ?? 0);
+    form.setValue("liveFta" as any, stat.fta ?? 0);
+    form.setValue("liveFg3m" as any, stat.fg3m ?? 0);
+    form.setValue("liveFg3a" as any, stat.fg3a ?? 0);
+
     setAutoFilledFields(new Set(["halftimeMinutes", "halftimeFouls", "halftimeStat"]));
   };
 
@@ -380,6 +390,15 @@ export default function Dashboard() {
     else if (st === "reb_ast") statVal = playerStat.rebounds + playerStat.assists;
     else if (st === "stl_blk") statVal = playerStat.steals + playerStat.blocks;
     form.setValue("halftimeStat", statVal);
+
+    // Wire live shooting efficiency
+    form.setValue("liveFgm" as any, playerStat.fgm ?? 0);
+    form.setValue("liveFga" as any, playerStat.fga ?? 0);
+    form.setValue("liveFtm" as any, playerStat.ftm ?? 0);
+    form.setValue("liveFta" as any, playerStat.fta ?? 0);
+    form.setValue("liveFg3m" as any, playerStat.fg3m ?? 0);
+    form.setValue("liveFg3a" as any, playerStat.fg3a ?? 0);
+
     setAutoFilledFields(new Set(["halftimeMinutes", "halftimeFouls", "halftimeStat"]));
   }, [liveStats, selectedPlayer, watchedStatType]);
 
@@ -767,8 +786,9 @@ export default function Dashboard() {
                 </div>
               ) : liveStats && liveStats.filter(s => s.minutes !== "0" && s.minutes !== "0:00").length > 0 ? (
                 <div>
-                  <div className="px-4 py-2 border-b border-border/40">
-                    <div className="relative">
+                  {/* Filter + Sort Controls */}
+                  <div className="px-4 py-2 border-b border-border/40 flex items-center gap-2">
+                    <div className="relative flex-1">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/50" />
                       <input
                         type="text"
@@ -779,6 +799,30 @@ export default function Dashboard() {
                         className="w-full h-8 pl-8 pr-3 rounded-lg bg-secondary/50 border border-border/50 text-xs focus:border-primary outline-none"
                       />
                     </div>
+                    <button
+                      data-testid="button-sort-stat"
+                      onClick={() => {
+                        if (boxScoreSort === "stat") setBoxScoreSortDir(d => d === "desc" ? "asc" : "desc");
+                        else setBoxScoreSort("stat");
+                      }}
+                      className={`flex items-center gap-1 px-2.5 h-8 rounded-lg border text-xs font-medium transition-colors ${
+                        boxScoreSort === "stat" ? "border-primary bg-primary/10 text-primary" : "border-border/50 bg-secondary/30 text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      Stat {boxScoreSort === "stat" ? (boxScoreSortDir === "desc" ? "▼" : "▲") : ""}
+                    </button>
+                    <button
+                      data-testid="button-sort-minutes"
+                      onClick={() => {
+                        if (boxScoreSort === "minutes") setBoxScoreSortDir(d => d === "desc" ? "asc" : "desc");
+                        else setBoxScoreSort("minutes");
+                      }}
+                      className={`flex items-center gap-1 px-2.5 h-8 rounded-lg border text-xs font-medium transition-colors ${
+                        boxScoreSort === "minutes" ? "border-primary bg-primary/10 text-primary" : "border-border/50 bg-secondary/30 text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      MIN {boxScoreSort === "minutes" ? (boxScoreSortDir === "desc" ? "▼" : "▲") : ""}
+                    </button>
                   </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
@@ -792,13 +836,18 @@ export default function Dashboard() {
                         <th className="text-right px-3 py-2 font-medium">PTS</th>
                         <th className="text-right px-3 py-2 font-medium">REB</th>
                         <th className="text-right px-3 py-2 font-medium">AST</th>
-                        <th className="text-right px-3 py-2 font-medium">STL</th>
-                        <th className="text-right px-3 py-2 font-medium">BLK</th>
+                        <th className="text-right px-3 py-2 font-medium">FG%</th>
+                        <th className="text-right px-3 py-2 font-medium">FT%</th>
+                        <th className="text-right px-3 py-2 font-medium">3P%</th>
                         <th className="text-right px-3 py-2 font-medium">PF</th>
                       </tr>
                     </thead>
                     <tbody>
                       {(() => {
+                        const parseMinDec = (m: string) => {
+                          const parts = m.split(":");
+                          return parts.length === 2 ? parseInt(parts[0]) + parseInt(parts[1]) / 60 : parseFloat(m) || 0;
+                        };
                         const filterLower = boxScoreFilter.toLowerCase().trim();
                         const playedStats = liveStats
                           .filter(s => s.minutes !== "0" && s.minutes !== "0:00")
@@ -806,19 +855,20 @@ export default function Dashboard() {
                         const teams = Array.from(new Set(playedStats.map(s => s.teamAbbr)));
                         return teams.flatMap((team, ti) => [
                           <tr key={`team-${team}`} className={ti > 0 ? "border-t-2 border-border/60" : ""}>
-                            <td colSpan={9} className="px-4 py-1 text-muted-foreground/60 font-semibold uppercase tracking-wider text-[10px] bg-secondary/20">
+                            <td colSpan={10} className="px-4 py-1 text-muted-foreground/60 font-semibold uppercase tracking-wider text-[10px] bg-secondary/20">
                               {espnToDb(team)} — {TEAM_FULL_NAMES[espnToDb(team)] ?? team}
                             </td>
                           </tr>,
                           ...playedStats
                             .filter(s => s.teamAbbr === team)
                             .sort((a, b) => {
-                              const statForSort = (s: typeof a) => {
+                              const getStatVal = (s: typeof a) => {
                                 if (watchedStatType === "points") return s.points;
                                 if (watchedStatType === "rebounds") return s.rebounds;
                                 if (watchedStatType === "assists") return s.assists;
                                 if (watchedStatType === "steals") return s.steals;
                                 if (watchedStatType === "blocks") return s.blocks;
+                                if (watchedStatType === "threes") return s.threes;
                                 if (watchedStatType === "pts_reb_ast") return s.points + s.rebounds + s.assists;
                                 if (watchedStatType === "pts_reb") return s.points + s.rebounds;
                                 if (watchedStatType === "pts_ast") return s.points + s.assists;
@@ -826,7 +876,10 @@ export default function Dashboard() {
                                 if (watchedStatType === "stl_blk") return s.steals + s.blocks;
                                 return s.points;
                               };
-                              return statForSort(b) - statForSort(a);
+                              const sortVal = boxScoreSort === "minutes"
+                                ? parseMinDec(a.minutes) - parseMinDec(b.minutes)
+                                : getStatVal(a) - getStatVal(b);
+                              return boxScoreSortDir === "desc" ? -sortVal : sortVal;
                             })
                             .map((stat) => {
                               const isSelected = selectedPlayer && findPlayerByName(stat.playerName)?.id === selectedPlayer.id;
@@ -836,6 +889,7 @@ export default function Dashboard() {
                                 if (watchedStatType === "assists") return stat.assists;
                                 if (watchedStatType === "steals") return stat.steals;
                                 if (watchedStatType === "blocks") return stat.blocks;
+                                if (watchedStatType === "threes") return stat.threes;
                                 if (watchedStatType === "pts_reb_ast") return stat.points + stat.rebounds + stat.assists;
                                 if (watchedStatType === "pts_reb") return stat.points + stat.rebounds;
                                 if (watchedStatType === "pts_ast") return stat.points + stat.assists;
@@ -843,6 +897,9 @@ export default function Dashboard() {
                                 if (watchedStatType === "stl_blk") return stat.steals + stat.blocks;
                                 return stat.points;
                               })();
+                              const fgPct = stat.fga && stat.fga > 0 ? ((stat.fgm ?? 0) / stat.fga * 100).toFixed(0) + "%" : "—";
+                              const ftPct = stat.fta && stat.fta > 0 ? ((stat.ftm ?? 0) / stat.fta * 100).toFixed(0) + "%" : "—";
+                              const fg3Pct = stat.fg3a && stat.fg3a > 0 ? ((stat.fg3m ?? 0) / stat.fg3a * 100).toFixed(0) + "%" : "—";
                               return (
                                 <tr
                                   key={`player-${stat.playerId}`}
@@ -863,8 +920,9 @@ export default function Dashboard() {
                                   <td className="text-right px-3 py-2 font-mono">{stat.points}</td>
                                   <td className="text-right px-3 py-2 font-mono">{stat.rebounds}</td>
                                   <td className="text-right px-3 py-2 font-mono">{stat.assists}</td>
-                                  <td className="text-right px-3 py-2 font-mono">{stat.steals}</td>
-                                  <td className="text-right px-3 py-2 font-mono">{stat.blocks}</td>
+                                  <td className="text-right px-3 py-2 font-mono text-muted-foreground">{fgPct}</td>
+                                  <td className="text-right px-3 py-2 font-mono text-muted-foreground">{ftPct}</td>
+                                  <td className="text-right px-3 py-2 font-mono text-muted-foreground">{fg3Pct}</td>
                                   <td className={`text-right px-3 py-2 font-mono ${stat.fouls >= 4 ? "text-red-400 font-bold" : "text-muted-foreground"}`}>{stat.fouls}</td>
                                 </tr>
                               );
@@ -1129,7 +1187,7 @@ export default function Dashboard() {
                       {/* Odds available */}
                       {oddsData && !((oddsData as any)._quotaExhausted) && Object.keys(oddsData).filter(k => k !== '_quotaExhausted').length > 0 && (
                         <div className="space-y-1.5">
-                          {Object.entries(oddsData).map(([sb, odds]) => {
+                          {Object.entries(oddsData).filter(([k]) => k !== '_quotaExhausted').map(([sb, odds]) => {
                             const o = odds as import("@shared/schema").OddsLine;
                             const hasMovement = o.lineMovement !== undefined && o.lineMovement !== 0;
                             const droppedFromOpen = (o.lineMovement ?? 0) < 0; // easier Over
@@ -1204,6 +1262,58 @@ export default function Dashboard() {
                           })}
                         </div>
                       )}
+
+                      {/* CLV panel — under Lines by Book, shows after Calculate */}
+                      {(() => {
+                        if (!selectedSportsbook || selectedSportsbook === "manual" || !oddsData || !result) return null;
+                        const selected = (oddsData as Record<string, import("@shared/schema").OddsLine>)[selectedSportsbook];
+                        if (!selected?.overOdds) return null;
+                        const overImplied = americanToImplied(selected.overOdds) * 100;
+                        const underImplied = americanToImplied(selected.underOdds ?? -110) * 100;
+                        const overEdge = result.probability - overImplied;
+                        const underEdge = (100 - result.probability) - underImplied;
+                        const bestEdge = overEdge >= underEdge ? { side: "Over", edge: overEdge } : { side: "Under", edge: underEdge };
+                        const isPositive = bestEdge.edge > 0;
+                        const absEdge = Math.abs(bestEdge.edge);
+                        const valueLabel = absEdge >= 6 ? "Strong" : absEdge >= 3 ? "Moderate" : "Slight";
+                        const sbName = SPORTSBOOK_LABELS[selectedSportsbook] ?? selectedSportsbook;
+                        const hasMovement = selected.lineMovement !== undefined && selected.lineMovement !== 0;
+                        const dropped = (selected.lineMovement ?? 0) < 0;
+                        return (
+                          <div className={`rounded-xl border p-3 flex gap-2.5 items-start ${
+                            isPositive ? "bg-emerald-500/10 border-emerald-500/30" : "bg-red-500/10 border-red-500/30"
+                          }`}>
+                            <div className={`mt-0.5 flex-shrink-0 font-bold text-base ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
+                              {isPositive ? "▲" : "▼"}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <h4 className={`text-xs font-semibold ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
+                                  {valueLabel} {bestEdge.side} CLV
+                                </h4>
+                                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                                  isPositive ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"
+                                }`}>
+                                  {overEdge > 0 ? "+" : ""}{overEdge.toFixed(1)}% EV
+                                </span>
+                              </div>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Model <strong className="text-foreground">{result.probability.toFixed(1)}%</strong>
+                                {" vs "}{sbName} implied <strong className="text-foreground">{overImplied.toFixed(1)}%</strong>
+                              </p>
+                              <p className="text-[10px] text-muted-foreground/60 mt-0.5">
+                                {absEdge >= 6 ? "High conviction edge vs market."
+                                  : absEdge >= 3 ? "Solid discrepancy — model sees value."
+                                  : isPositive ? "Slight edge — use as tiebreaker."
+                                  : "Model trails implied — line may be priced in."}
+                                {hasMovement && selected.openLine !== undefined && (
+                                  <span> Line {dropped ? "▼" : "▲"}{Math.abs(selected.lineMovement!)} from open ({selected.openLine}→{selected.line}).</span>
+                                )}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
@@ -1314,8 +1424,20 @@ export default function Dashboard() {
                         )}
                       </div>
                     </div>
-                    <div className="flex-shrink-0 z-10">
+                    <div className="flex-shrink-0 z-10 flex flex-col items-center gap-2">
                       <ProbabilityRing probability={result.probability} />
+                      {selectedSportsbook && selectedSportsbook !== "manual" && oddsData && (() => {
+                        const mktOdds = (oddsData as Record<string, import("@shared/schema").OddsLine>)[selectedSportsbook];
+                        if (!mktOdds?.overOdds) return null;
+                        const ev = result.probability - americanToImplied(mktOdds.overOdds) * 100;
+                        return (
+                          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
+                            ev > 0 ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/15 text-red-400"
+                          }`}>
+                            {ev > 0 ? "+" : ""}{ev.toFixed(1)}% EV
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
@@ -1412,74 +1534,6 @@ export default function Dashboard() {
                         >
                           {copiedPick ? <><Check className="w-3.5 h-3.5" /></> : <><Copy className="w-3.5 h-3.5" /></>}
                         </button>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {/* CLV / Model Edge Explanation Panel */}
-                {(() => {
-                  if (!selectedSportsbook || selectedSportsbook === "manual" || !oddsData || !result) return null;
-                  const selected = (oddsData as Record<string, import("@shared/schema").OddsLine>)[selectedSportsbook];
-                  if (!selected?.overOdds) return null;
-
-                  const overImplied = americanToImplied(selected.overOdds) * 100;
-                  const underImplied = americanToImplied(selected.underOdds ?? -110) * 100;
-                  const overEdge = result.probability - overImplied;
-                  const underEdge = (100 - result.probability) - underImplied;
-                  const bestEdge = overEdge >= underEdge ? { side: "Over", edge: overEdge } : { side: "Under", edge: underEdge };
-                  const isPositive = bestEdge.edge > 0;
-                  const absEdge = Math.abs(bestEdge.edge);
-                  const valueLabel = absEdge >= 6 ? "Strong" : absEdge >= 3 ? "Moderate" : "Slight";
-                  const sbName = SPORTSBOOK_LABELS[selectedSportsbook] ?? selectedSportsbook;
-
-                  const hasMovement = selected.lineMovement !== undefined && selected.lineMovement !== 0;
-                  const dropped = (selected.lineMovement ?? 0) < 0;
-
-                  return (
-                    <div className={`rounded-xl border p-4 flex gap-3 items-start ${
-                      isPositive
-                        ? "bg-emerald-500/10 border-emerald-500/30"
-                        : "bg-red-500/10 border-red-500/30"
-                    }`}>
-                      <div className={`mt-0.5 flex-shrink-0 text-lg font-bold ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
-                        {isPositive ? "▲" : "▼"}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2 flex-wrap">
-                          <h4 className={`text-sm font-semibold ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
-                            {valueLabel} {bestEdge.side} CLV — {isPositive ? "Model favors Over" : "Model favors Under"}
-                          </h4>
-                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                            isPositive
-                              ? "bg-emerald-500/20 text-emerald-300"
-                              : "bg-red-500/20 text-red-300"
-                          }`}>
-                            {overEdge > 0 ? "+" : ""}{overEdge.toFixed(1)}% EV
-                          </span>
-                        </div>
-                        <p className="text-sm text-muted-foreground mt-1">
-                          Model probability: <strong className="text-foreground">{result.probability.toFixed(1)}%</strong>
-                          {" · "}Book implied ({sbName}): <strong className="text-foreground">{overImplied.toFixed(1)}%</strong>
-                          {" · "}Edge: <strong className={isPositive ? "text-emerald-400" : "text-red-400"}>
-                            {overEdge > 0 ? "+" : ""}{overEdge.toFixed(1)}%
-                          </strong>
-                        </p>
-                        <p className="text-xs text-muted-foreground/70 mt-1">
-                          {absEdge >= 6
-                            ? "Strong CLV — model significantly disagrees with the market. High conviction edge."
-                            : absEdge >= 3
-                            ? "Moderate CLV — solid discrepancy between model and market pricing."
-                            : isPositive
-                            ? "Slight CLV — model edges the book but margin is thin. Use as a tiebreaker."
-                            : "Model trails the book's implied probability — line may already be priced in."}
-                        </p>
-                        {hasMovement && selected.openLine !== undefined && (
-                          <p className="text-xs text-muted-foreground/50 mt-1.5 border-t border-border/20 pt-1.5">
-                            Line movement: {sbName} moved{" "}
-                            {dropped ? "▼" : "▲"} {Math.abs(selected.lineMovement!)} pts from session open ({selected.openLine} → {selected.line})
-                          </p>
-                        )}
                       </div>
                     </div>
                   );

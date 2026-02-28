@@ -265,6 +265,45 @@ export class DatabaseStorage implements IStorage {
         ? Math.max(0.70, Math.min(1.30, (ptsPerMin / usageRate) / 1.0))
         : 1.0;
 
+    // ─── Live shooting efficiency modifier ──────────────────────────────────
+    // Blends current-game shooting % against season baseline to adjust the
+    // expected output for points, threes, and combo props.
+    // Season baselines: NBA avg FG% ~46%, FT% ~77%, 3P% ~36%
+    const SEASON_FG_PCT  = Number(player.tsPct ?? 0) > 0 ? Number(player.tsPct) / 1.12 : 0.46;
+    const SEASON_3P_PCT  = 0.36;
+    const SEASON_FT_PCT  = 0.77;
+
+    let shootingModifier = 1.0;
+    const liveFga  = req.liveFga  ?? 0;
+    const liveFgm  = req.liveFgm  ?? 0;
+    const liveFta  = req.liveFta  ?? 0;
+    const liveFtm  = req.liveFtm  ?? 0;
+    const liveFg3a = req.liveFg3a ?? 0;
+    const liveFg3m = req.liveFg3m ?? 0;
+
+    if ((req.statType === "points" || req.statType.startsWith("pts")) && minutesPlayed >= 4) {
+      // Blend live FG% into season FG%; weight grows with attempts (max 50% live weight at 8+ FGA)
+      const fgWeight = Math.min(0.50, liveFga / 16);
+      const liveFgPct = liveFga > 0 ? liveFgm / liveFga : SEASON_FG_PCT;
+      const blendedFgPct = liveFgPct * fgWeight + SEASON_FG_PCT * (1 - fgWeight);
+      const fgMod = SEASON_FG_PCT > 0 ? blendedFgPct / SEASON_FG_PCT : 1.0;
+
+      // Same for FT%
+      const ftWeight = Math.min(0.40, liveFta / 10);
+      const liveFtPct = liveFta > 0 ? liveFtm / liveFta : SEASON_FT_PCT;
+      const blendedFtPct = liveFtPct * ftWeight + SEASON_FT_PCT * (1 - ftWeight);
+      const ftMod = SEASON_FT_PCT > 0 ? blendedFtPct / SEASON_FT_PCT : 1.0;
+
+      shootingModifier = fgMod * 0.65 + ftMod * 0.35;
+      shootingModifier = Math.max(0.75, Math.min(1.25, shootingModifier));
+    } else if (req.statType === "threes" && minutesPlayed >= 4) {
+      const fg3Weight = Math.min(0.55, liveFg3a / 8);
+      const live3pPct = liveFg3a > 0 ? liveFg3m / liveFg3a : SEASON_3P_PCT;
+      const blended3pPct = live3pPct * fg3Weight + SEASON_3P_PCT * (1 - fg3Weight);
+      const threeMod = SEASON_3P_PCT > 0 ? blended3pPct / SEASON_3P_PCT : 1.0;
+      shootingModifier = Math.max(0.70, Math.min(1.30, threeMod));
+    }
+
     // ─── Usage-weighted blend of observed vs season per-minute rate ────────
     const seasonPerMin = seasonComponentPerMin();
     const observedPerMin = minutesPlayed > 0
@@ -287,7 +326,7 @@ export class DatabaseStorage implements IStorage {
 
     const blendedPerMin = observedPerMin * observedW + (seasonPerMin ?? 0) * seasonW;
 
-    const expectedFromHere = blendedPerMin * remainingMinutes * defenseMultiplier * paceMultiplier;
+    const expectedFromHere = blendedPerMin * remainingMinutes * defenseMultiplier * paceMultiplier * shootingModifier;
     const expectedTotal    = req.halftimeStat + expectedFromHere;
 
     // ─── Probability via sigmoid-style formula ─────────────────────────────
