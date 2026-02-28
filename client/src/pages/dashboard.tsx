@@ -504,6 +504,14 @@ export default function Dashboard() {
     );
   }
 
+  const filteredPlays = (halftimePlaysData?.plays ?? []).filter((play: any) => {
+    if (slateFilterProp === "combo" && !play.statType.includes("_")) return false;
+    if (slateFilterProp !== "all" && slateFilterProp !== "combo" && play.statType !== slateFilterProp) return false;
+    if (slateFilterProb === "high" && play.probability < 65 && play.probability > 35) return false;
+    if (slateFilterProb === "medium" && (play.probability >= 65 || play.probability <= 35)) return false;
+    return true;
+  });
+
   return (
     <div className="min-h-screen pb-20 bg-background">
       {/* Header */}
@@ -1715,23 +1723,13 @@ export default function Dashboard() {
                   <p className="text-sm">{halftimePlaysData.message}</p>
                   <p className="text-xs text-muted-foreground/60 mt-1">Check back when games are at halftime.</p>
                 </div>
-              ) : halftimePlaysData && halftimePlaysData.plays.length > 0 ? (() => {
-                const filteredPlays = halftimePlaysData.plays.filter((play: any) => {
-                  if (slateFilterProp === "combo" && !play.statType.includes("_")) return false;
-                  if (slateFilterProp !== "all" && slateFilterProp !== "combo" && play.statType !== slateFilterProp) return false;
-                  if (slateFilterProb === "high" && play.probability < 65 && play.probability > 35) return false;
-                  if (slateFilterProb === "medium" && (play.probability >= 65 || play.probability <= 35)) return false;
-                  return true;
-                });
-                if (filteredPlays.length === 0) {
-                  return (
-                    <div className="text-center py-10 text-muted-foreground">
-                      <p className="text-sm">No plays match the current filters.</p>
-                      <button onClick={() => { setSlateFilterProp("all"); setSlateFilterProb("all"); }} className="text-xs text-primary mt-2 hover:underline">Clear filters</button>
-                    </div>
-                  );
-                }
-                return (
+              ) : halftimePlaysData && halftimePlaysData.plays.length > 0 ? (
+                filteredPlays.length === 0 ? (
+                  <div className="text-center py-10 text-muted-foreground">
+                    <p className="text-sm">No plays match the current filters.</p>
+                    <button onClick={() => { setSlateFilterProp("all"); setSlateFilterProb("all"); }} className="text-xs text-primary mt-2 hover:underline">Clear filters</button>
+                  </div>
+                ) : (
                   <>
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                       {filteredPlays.map((play: any, idx: number) => {
@@ -1825,8 +1823,8 @@ export default function Dashboard() {
                       })}
                     </div>
                   </>
-                );
-              })() : (
+                )
+              ) : (
                 <div className="text-center py-12 text-muted-foreground">
                   <Star className="w-8 h-8 mx-auto mb-3 opacity-30" />
                   <p className="text-sm">No halftime plays available.</p>
