@@ -12,6 +12,7 @@ import { StatCard } from "@/components/stat-card";
 import { ParlaySlip } from "@/components/parlay-slip";
 import { UpgradeModal } from "@/components/upgrade-modal";
 import { FeedbackModal } from "@/components/feedback-modal";
+import { NCAABAdminTab } from "@/components/ncaab-admin-tab";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import {
@@ -1863,125 +1864,9 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* NCAAB Admin Preview Tab */}
+        {/* NCAAB Admin Tab — live data */}
         {activeTab === "ncaab" && user?.isAdmin && (
-          <div className="space-y-4">
-            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4 flex items-start gap-3">
-              <span className="text-yellow-400 text-lg">⚠️</span>
-              <div>
-                <p className="text-sm font-semibold text-yellow-400">Admin Preview — Backend Not Yet Wired</p>
-                <p className="text-xs text-muted-foreground mt-0.5">This tab is invisible to all non-admin users. The methodology and data sources below are confirmed and ready for backend implementation.</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="bg-card border border-border rounded-xl p-5 space-y-4">
-                <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <span>📡</span> Confirmed Data Sources
-                </h3>
-                <div className="space-y-3 text-xs">
-                  <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/20">
-                    <p className="font-semibold text-green-400 mb-1">ESPN Core API — Primary (FREE)</p>
-                    <ul className="text-muted-foreground space-y-0.5 list-disc list-inside">
-                      <li>Opening spread + current spread (stored natively — no cache needed)</li>
-                      <li>Opening total + current total with full line history</li>
-                      <li>Live box score: points by half, FGA, 3PA, FTA, fouls per player</li>
-                      <li>Game clock, half number, seconds remaining, game status</li>
-                      <li>All stats needed for pace + probability calculations confirmed</li>
-                    </ul>
-                  </div>
-                  <div className="p-3 rounded-lg bg-primary/10 border border-primary/20">
-                    <p className="font-semibold text-primary mb-1">The Odds API — basketball_ncaab ✓</p>
-                    <ul className="text-muted-foreground space-y-0.5 list-disc list-inside">
-                      <li>Spreads + totals confirmed: FanDuel, BetRivers, DraftKings, BetMGM</li>
-                      <li>Bulk endpoint: 1 API call for all live NCAAB game lines</li>
-                      <li>Juice variance across books = public handle proxy</li>
-                    </ul>
-                  </div>
-                  <div className="p-3 rounded-lg bg-secondary border border-border">
-                    <p className="font-semibold text-foreground mb-1">Public Handle — ESPN + CBS Sports</p>
-                    <ul className="text-muted-foreground space-y-0.5 list-disc list-inside">
-                      <li>Public betting % embedded in page JSON (no API key needed)</li>
-                      <li>Scraped via HTTP + embedded JSON parsing, 90-sec cache</li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-card border border-border rounded-xl p-5 space-y-4">
-                <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <span>📐</span> Probability Model
-                </h3>
-                <div className="space-y-3 text-xs text-muted-foreground">
-                  <div>
-                    <p className="font-semibold text-foreground mb-1">Live Pace (per half)</p>
-                    <code className="block bg-secondary rounded p-2 font-mono text-[10px] leading-relaxed">
-                      paceH1 = H1_points / H1_min_elapsed{"\n"}
-                      paceH2 = (currentH2 × 0.70) + (H1pace × 0.30){"\n"}
-                      projTotal = H1_actual + (paceH2 × remainingMins){"\n"}
-                      projMargin = currentMargin + (trend × remainingMins)
-                    </code>
-                  </div>
-                  <div>
-                    <p className="font-semibold text-foreground mb-1">Coaching Tendency Modifiers</p>
-                    <ul className="space-y-0.5 list-disc list-inside">
-                      <li>Trailing ≥8, H2, 3PA/FGA &gt;40% → volatility +4 (desperation 3s)</li>
-                      <li>Leading ≥8, H2, opp fouls ≥4 → projTotal +6 (intentional fouling)</li>
-                    </ul>
-                  </div>
-                  <div>
-                    <p className="font-semibold text-foreground mb-1">Sigmoid Output (same as NBA props)</p>
-                    <code className="block bg-secondary rounded p-2 font-mono text-[10px] leading-relaxed">
-                      volatility = max(4, 18 × (secsLeft / 2400)) + bonus{"\n"}
-                      spreadProb = sigmoid((projMargin - line) / vol){"\n"}
-                      overProb = sigmoid((projTotal - ouLine) / vol)
-                    </code>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-card border border-border rounded-xl p-5 space-y-3">
-                <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <span>⏱️</span> Betting Windows
-                </h3>
-                <div className="space-y-2 text-xs">
-                  {[
-                    { label: "1H Window", trigger: "Half 1, ≤10 min remaining", bet: "First-half line", color: "text-blue-400 bg-blue-500/10 border-blue-500/20" },
-                    { label: "Halftime", trigger: "Status = Halftime", bet: "Full game spread + total", color: "text-green-400 bg-green-500/10 border-green-500/20" },
-                    { label: "Late Window", trigger: "Half 2, ≤10 min remaining", bet: "Spread + over/under", color: "text-orange-400 bg-orange-500/10 border-orange-500/20" },
-                  ].map((w) => (
-                    <div key={w.label} className={`p-3 rounded-lg border ${w.color}`}>
-                      <p className="font-semibold">{w.label}</p>
-                      <p className="text-muted-foreground mt-0.5">Trigger: {w.trigger}</p>
-                      <p className="text-muted-foreground">Best bet: {w.bet}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="bg-card border border-border rounded-xl p-5 space-y-3">
-                <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <span>👥</span> Public Handle Rules
-                </h3>
-                <div className="space-y-2 text-xs">
-                  {[
-                    { pct: "<60%", signal: "No Edge — Skip", note: "50/50 split, avoid", color: "text-muted-foreground bg-secondary border-border" },
-                    { pct: "60–75%", signal: "Neutral", note: "Show % as context only", color: "text-muted-foreground bg-secondary border-border" },
-                    { pct: "75–85%", signal: "Fade Opportunity", note: "If line moved your way, take the other side", color: "text-yellow-400 bg-yellow-500/10 border-yellow-500/20" },
-                    { pct: "≥85%", signal: "Extreme Public", note: "Blowout OR upset — high variance, flag prominently", color: "text-red-400 bg-red-500/10 border-red-500/20" },
-                  ].map((r) => (
-                    <div key={r.pct} className={`p-3 rounded-lg border ${r.color}`}>
-                      <div className="flex items-center justify-between mb-0.5">
-                        <span className="font-bold font-mono">{r.pct}</span>
-                        <span className="font-semibold">{r.signal}</span>
-                      </div>
-                      <p className="text-muted-foreground">{r.note}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
+          <NCAABAdminTab />
         )}
 
       </main>

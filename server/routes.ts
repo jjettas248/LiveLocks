@@ -5,6 +5,7 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
 import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines } from "./oddsService";
+import { computeNCAABPlays, getNCAABScoreboard } from "./ncaabService";
 import { calculateParlay } from "./parlayService";
 import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin } from "./auth";
 import { registerStripeRoutes } from "./stripeService";
@@ -70,6 +71,27 @@ export async function registerRoutes(
     } catch (err) {
       console.error("[admin/delete-user]", err);
       return res.status(500).json({ error: "Failed to delete user" });
+    }
+  });
+
+  // ── NCAAB Routes (admin only) ─────────────────────────────────────────────
+  app.get("/api/ncaab/plays", requireAdmin, async (_req, res) => {
+    try {
+      const plays = await computeNCAABPlays();
+      return res.json({ plays });
+    } catch (err: any) {
+      console.error("[NCAAB plays]", err.message);
+      return res.status(500).json({ error: err.message || "NCAAB service error" });
+    }
+  });
+
+  app.get("/api/ncaab/games", requireAdmin, async (_req, res) => {
+    try {
+      const games = await getNCAABScoreboard();
+      return res.json({ games });
+    } catch (err: any) {
+      console.error("[NCAAB games]", err.message);
+      return res.status(500).json({ error: err.message || "Failed to fetch NCAAB scoreboard" });
     }
   });
 

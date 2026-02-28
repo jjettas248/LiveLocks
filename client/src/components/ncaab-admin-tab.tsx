@@ -1,0 +1,380 @@
+import { useQuery } from "@tanstack/react-query";
+import { RefreshCw, AlertCircle, Clock, TrendingUp, TrendingDown } from "lucide-react";
+
+interface BookLine {
+  book: string;
+  spread: number | null;
+  total: number | null;
+  favorite: string;
+}
+
+interface HandleSignal {
+  pct: number | null;
+  signal: "no_edge" | "fade" | "extreme" | "neutral" | "unavailable";
+  label: string;
+  color: string;
+}
+
+interface NCAABPlay {
+  gameId: string;
+  homeTeam: string;
+  awayTeam: string;
+  homeTeamAbbr: string;
+  awayTeamAbbr: string;
+  status: string;
+  clock: string;
+  half: number;
+  period: number;
+  homeScore: number;
+  awayScore: number;
+  currentMargin: number;
+  spread: number | null;
+  total: number | null;
+  favorite: string;
+  bookLines: BookLine[];
+  projectedTotal: number | null;
+  projectedMargin: number | null;
+  spreadProb: number | null;
+  overProb: number | null;
+  spreadEdge: number | null;
+  totalEdge: number | null;
+  volatilityBonus: number;
+  volatility: number | null;
+  bettingWindow: "1H_WINDOW" | "HALFTIME" | "LATE_WINDOW" | "NONE";
+  bettingWindowLabel: string;
+  handleSignal: HandleSignal;
+  desperation3s: boolean;
+  intentionalFouling: boolean;
+  scoringByPeriod: Record<string, number[]>;
+  teamStats: Record<string, any>;
+}
+
+interface NCAABGame {
+  id: string;
+  name: string;
+  shortName: string;
+  homeTeam: string;
+  homeTeamAbbr: string;
+  homeScore: number;
+  awayTeam: string;
+  awayTeamAbbr: string;
+  awayScore: number;
+  status: string;
+  period: number;
+  clock: string;
+  isHalftime: boolean;
+  isInProgress: boolean;
+  isLive: boolean;
+}
+
+const BOOK_LABELS: Record<string, string> = {
+  fanduel:   "FD",
+  draftkings: "DK",
+  betmgm:    "MGM",
+  betrivers: "BR",
+};
+
+const WINDOW_COLORS: Record<string, string> = {
+  "1H_WINDOW":   "text-blue-400 bg-blue-500/10 border-blue-500/30",
+  "HALFTIME":    "text-green-400 bg-green-500/10 border-green-500/30",
+  "LATE_WINDOW": "text-orange-400 bg-orange-500/10 border-orange-500/30",
+  "NONE":        "text-muted-foreground bg-secondary border-border",
+};
+
+function edgeColor(edge: number | null): string {
+  if (edge === null) return "text-muted-foreground";
+  const abs = Math.abs(edge);
+  if (abs >= 15) return edge > 0 ? "text-green-400" : "text-red-400";
+  if (abs >= 8)  return edge > 0 ? "text-yellow-400" : "text-orange-400";
+  return "text-muted-foreground";
+}
+
+function probBar(prob: number | null) {
+  if (prob === null) return null;
+  const pct = Math.min(100, Math.max(0, prob));
+  const isOver = pct >= 50;
+  const barWidth = isOver ? pct : 100 - pct;
+  const barColor = isOver ? "bg-green-500" : "bg-red-500";
+  return (
+    <div className="flex items-center gap-1.5 mt-1">
+      <div className="flex-1 h-1.5 bg-secondary rounded-full overflow-hidden">
+        <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${barWidth}%` }} />
+      </div>
+      <span className={`text-[10px] font-bold font-mono ${isOver ? "text-green-400" : "text-red-400"}`}>{pct.toFixed(1)}%</span>
+    </div>
+  );
+}
+
+function NCAABGameCard({ play }: { play: NCAABPlay }) {
+  const windowClass = WINDOW_COLORS[play.bettingWindow] ?? WINDOW_COLORS["NONE"];
+  const hasWindow = play.bettingWindow !== "NONE";
+
+  const spreadEdgeAbs = Math.abs(play.spreadEdge ?? 0);
+  const totalEdgeAbs  = Math.abs(play.totalEdge ?? 0);
+  const bestEdge      = Math.max(spreadEdgeAbs, totalEdgeAbs);
+
+  const halfLabel = play.half === 1 ? "H1" : play.half === 2 ? "H2" : "OT";
+
+  return (
+    <div
+      data-testid={`ncaab-card-${play.gameId}`}
+      className="bg-card border border-border rounded-xl overflow-hidden"
+      style={bestEdge >= 15 ? { boxShadow: "0 0 12px -2px hsl(var(--primary) / 0.3)" } : undefined}
+    >
+      {/* Header — matchup + score */}
+      <div className="px-4 pt-4 pb-3 border-b border-border/50">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1 min-w-0">
+            <p className="text-xs text-muted-foreground mb-0.5">{halfLabel} · {play.clock || play.status}</p>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-foreground truncate">{play.awayTeam}</span>
+              <span className="text-lg font-bold tabular-nums text-foreground">{play.awayScore}</span>
+              <span className="text-muted-foreground text-xs">@</span>
+              <span className="text-lg font-bold tabular-nums text-foreground">{play.homeScore}</span>
+              <span className="text-sm font-semibold text-foreground truncate">{play.homeTeam}</span>
+            </div>
+          </div>
+          {hasWindow && (
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex-shrink-0 ${windowClass}`}>
+              {play.bettingWindowLabel}
+            </span>
+          )}
+        </div>
+
+        {/* Coaching flags */}
+        <div className="flex gap-2 mt-1.5 flex-wrap">
+          {play.desperation3s && (
+            <span className="text-[10px] text-orange-400 bg-orange-500/10 border border-orange-500/20 px-1.5 py-0.5 rounded">
+              ⚠ Desperation 3s (+{play.volatilityBonus} vol)
+            </span>
+          )}
+          {play.intentionalFouling && (
+            <span className="text-[10px] text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 px-1.5 py-0.5 rounded">
+              ⚑ Intentional Fouling (+6 proj)
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Lines + projections */}
+      <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {/* Spread */}
+        <div className="space-y-1.5">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Spread</p>
+          {play.spread !== null ? (
+            <>
+              <p className="text-xs text-foreground">
+                <span className="font-semibold">{play.favorite}</span>
+                <span className="text-muted-foreground ml-1">-{play.spread}</span>
+              </p>
+              {play.projectedMargin !== null && (
+                <p className="text-xs text-muted-foreground">
+                  Proj margin: <span className="text-foreground font-medium">{play.projectedMargin > 0 ? "+" : ""}{play.projectedMargin}</span>
+                </p>
+              )}
+              {play.spreadEdge !== null && (
+                <p className={`text-xs font-semibold ${edgeColor(play.spreadEdge)}`}>
+                  {play.spreadEdge > 0 ? <TrendingUp className="inline w-3 h-3 mr-0.5" /> : <TrendingDown className="inline w-3 h-3 mr-0.5" />}
+                  Edge: {play.spreadEdge > 0 ? "+" : ""}{play.spreadEdge}pp
+                </p>
+              )}
+              {probBar(play.spreadProb)}
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">No line available</p>
+          )}
+        </div>
+
+        {/* Total */}
+        <div className="space-y-1.5">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Total (O/U)</p>
+          {play.total !== null ? (
+            <>
+              <p className="text-xs text-foreground">Line: <span className="font-semibold">{play.total}</span></p>
+              {play.projectedTotal !== null && (
+                <p className="text-xs text-muted-foreground">
+                  Proj total: <span className="text-foreground font-medium">{play.projectedTotal}</span>
+                </p>
+              )}
+              {play.totalEdge !== null && (
+                <p className={`text-xs font-semibold ${edgeColor(play.totalEdge)}`}>
+                  {play.totalEdge > 0 ? <TrendingUp className="inline w-3 h-3 mr-0.5" /> : <TrendingDown className="inline w-3 h-3 mr-0.5" />}
+                  {play.totalEdge > 0 ? "Over" : "Under"} edge: {Math.abs(play.totalEdge).toFixed(1)}pp
+                </p>
+              )}
+              {probBar(play.overProb)}
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">No line available</p>
+          )}
+        </div>
+      </div>
+
+      {/* Book lines */}
+      {play.bookLines.length > 0 && (
+        <div className="px-4 pb-4">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Book Lines</p>
+          <div className="flex gap-2 flex-wrap">
+            {play.bookLines.map(bl => (
+              <div key={bl.book} className="bg-secondary border border-border/60 rounded px-2 py-1 text-[10px]">
+                <span className="font-bold text-foreground">{BOOK_LABELS[bl.book] ?? bl.book}</span>
+                {bl.spread !== null && <span className="text-muted-foreground ml-1">-{bl.spread}</span>}
+                {bl.total !== null && <span className="text-muted-foreground ml-1">O{bl.total}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Handle signal */}
+      {play.handleSignal.signal !== "unavailable" && (
+        <div className="px-4 pb-4">
+          <p className={`text-xs ${play.handleSignal.color}`}>
+            <span className="font-semibold">Handle: </span>{play.handleSignal.label}
+          </p>
+        </div>
+      )}
+
+      {/* Volatility debug */}
+      {play.volatility !== null && (
+        <div className="px-4 pb-4 -mt-2">
+          <p className="text-[10px] text-muted-foreground/60">
+            Volatility: {play.volatility}{play.volatilityBonus > 0 && ` (+${play.volatilityBonus} bonus)`}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NCAABAllGamesGrid({ games }: { games: NCAABGame[] }) {
+  if (games.length === 0) {
+    return <p className="text-xs text-muted-foreground">No games found in today's slate.</p>;
+  }
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+      {games.map(g => {
+        const statusColor = g.isLive ? "text-green-400" : "text-muted-foreground";
+        return (
+          <div key={g.id} className="bg-secondary/50 border border-border/60 rounded-lg px-3 py-2">
+            <p className="text-xs text-foreground font-medium">{g.awayTeam} <span className="text-muted-foreground">@</span> {g.homeTeam}</p>
+            <p className={`text-[10px] mt-0.5 ${statusColor}`}>
+              {g.isLive ? `LIVE — ${g.status} · ${g.clock}` : g.status}
+            </p>
+            {g.isLive && (
+              <p className="text-xs font-bold tabular-nums text-foreground mt-0.5">
+                {g.awayScore} – {g.homeScore}
+              </p>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export function NCAABAdminTab() {
+  const playsQuery = useQuery<{ plays: NCAABPlay[] }>({
+    queryKey: ["/api/ncaab/plays"],
+    refetchInterval: 60 * 1000,
+  });
+
+  const gamesQuery = useQuery<{ games: NCAABGame[] }>({
+    queryKey: ["/api/ncaab/games"],
+    refetchInterval: 90 * 1000,
+  });
+
+  const plays  = playsQuery.data?.plays  ?? [];
+  const games  = gamesQuery.data?.games  ?? [];
+  const loading = playsQuery.isLoading || gamesQuery.isLoading;
+  const error   = playsQuery.error ?? gamesQuery.error;
+
+  const liveGames      = games.filter(g => g.isLive);
+  const scheduledGames = games.filter(g => !g.isLive);
+  const hasPlays       = plays.length > 0;
+
+  return (
+    <div className="space-y-4">
+      {/* Admin banner */}
+      <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4 flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <span className="text-yellow-400 text-base">🏀</span>
+          <div>
+            <p className="text-sm font-semibold text-yellow-400">NCAAB Live Analytics — Admin Only</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              ESPN scoreboard + box scores + The Odds API (basketball_ncaab). Auto-refreshes every 60 seconds.
+              Invisible to non-admin users.
+            </p>
+          </div>
+        </div>
+        <button
+          data-testid="ncaab-refresh"
+          onClick={() => { playsQuery.refetch(); gamesQuery.refetch(); }}
+          disabled={loading}
+          className="flex-shrink-0 p-1.5 rounded-lg border border-border hover:bg-secondary transition-colors disabled:opacity-50"
+          title="Refresh now"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 text-muted-foreground ${loading ? "animate-spin" : ""}`} />
+        </button>
+      </div>
+
+      {/* Error state */}
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 flex items-center gap-3">
+          <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+          <p className="text-xs text-red-400">{(error as any).message ?? "Failed to load NCAAB data"}</p>
+        </div>
+      )}
+
+      {/* Loading skeleton */}
+      {loading && !error && (
+        <div className="space-y-3">
+          {[1, 2].map(i => (
+            <div key={i} className="bg-card border border-border rounded-xl p-4 animate-pulse">
+              <div className="h-4 bg-secondary rounded w-1/2 mb-2" />
+              <div className="h-3 bg-secondary/60 rounded w-1/3" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Live plays */}
+      {!loading && hasPlays && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+            <p className="text-sm font-semibold text-foreground">{plays.length} Live {plays.length === 1 ? "Game" : "Games"} — Computed Plays</p>
+          </div>
+          {plays.map(p => <NCAABGameCard key={p.gameId} play={p} />)}
+        </div>
+      )}
+
+      {/* No live games */}
+      {!loading && !hasPlays && !error && (
+        <div className="bg-card border border-border rounded-xl p-6 text-center space-y-2">
+          <Clock className="w-8 h-8 text-muted-foreground mx-auto" />
+          <p className="text-sm font-semibold text-foreground">No Live NCAAB Games Right Now</p>
+          <p className="text-xs text-muted-foreground">The model will activate automatically when games go live. Check back during game time.</p>
+        </div>
+      )}
+
+      {/* All-games scoreboard */}
+      {!loading && games.length > 0 && (
+        <div className="space-y-3">
+          {liveGames.length > 0 && scheduledGames.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground mb-2">Also Scheduled Today</p>
+              <NCAABAllGamesGrid games={scheduledGames} />
+            </div>
+          )}
+          {liveGames.length === 0 && scheduledGames.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground mb-2">Today's Slate</p>
+              <NCAABAllGamesGrid games={scheduledGames} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
