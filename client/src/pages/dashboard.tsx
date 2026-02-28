@@ -141,6 +141,7 @@ export default function Dashboard() {
   const [slateFilterProb, setSlateFilterProb] = useState<string>("all");
 
   const loadPlayInCalculator = (play: any) => {
+    if (play.gameId) setSelectedGameId(play.gameId);
     form.setValue("playerId" as any, String(play.playerId));
     form.setValue("statType" as any, play.statType);
     form.setValue("liveLine" as any, play.line);
@@ -1619,8 +1620,8 @@ export default function Dashboard() {
 
         {/* Halftime Plays Tab Content */}
         {activeTab === "halftime" && (
-          <div className="space-y-4">
-            <div className="bg-card border border-border rounded-xl p-5">
+          <div className={showParlay && !isMobile ? "flex items-start gap-5" : "space-y-4"}>
+            <div className={showParlay && !isMobile ? "bg-card border border-border rounded-xl p-5 flex-1 min-w-0" : "bg-card border border-border rounded-xl p-5"}>
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -1643,8 +1644,7 @@ export default function Dashboard() {
               </div>
 
               {/* Filters */}
-              {halftimePlaysData && halftimePlaysData.plays.length > 0 && (
-                <div className="flex flex-wrap gap-2 mb-4">
+              <div className="flex flex-wrap gap-2 mb-4">
                   <div className="flex items-center gap-1.5">
                     <span className="text-xs text-muted-foreground font-medium">Prop:</span>
                     <div className="flex gap-1 flex-wrap">
@@ -1702,7 +1702,7 @@ export default function Dashboard() {
                     </div>
                   </div>
                 </div>
-              )}
+              </div>
 
               {isHalftimePlaysLoading ? (
                 <div className="flex items-center justify-center py-12 gap-2 text-muted-foreground">
@@ -1834,6 +1834,21 @@ export default function Dashboard() {
                 </div>
               )}
             </div>
+
+            {/* Parlay slip side column — halftime tab, desktop only */}
+            {showParlay && !isMobile && (
+              <div className="w-80 flex-shrink-0">
+                <div className="bg-card border border-border rounded-xl p-4 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto relative">
+                  <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-primary to-transparent rounded-t-xl" />
+                  <ParlaySlip
+                    picks={parlayPicks}
+                    onRemove={(idx) => setParlayPicks((prev) => prev.filter((_, i) => i !== idx))}
+                    onClear={() => { setParlayPicks([]); setShowParlay(false); }}
+                    injuredPlayerNames={injuredPlayerNames}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         )}
 
