@@ -137,6 +137,9 @@ export default function Dashboard() {
   };
 
   const [activeTab, setActiveTab] = useState<"calculator" | "halftime">("calculator");
+  const [slateFilterProp, setSlateFilterProp] = useState<string>("all");
+  const [slateFilterProb, setSlateFilterProb] = useState<string>("all");
+  const [selectedSlatePlay, setSelectedSlatePlay] = useState<any | null>(null);
   const [mlbPopoverOpen, setMlbPopoverOpen] = useState(false);
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -836,9 +839,9 @@ export default function Dashboard() {
                         <th className="text-right px-3 py-2 font-medium">PTS</th>
                         <th className="text-right px-3 py-2 font-medium">REB</th>
                         <th className="text-right px-3 py-2 font-medium">AST</th>
-                        <th className="text-right px-3 py-2 font-medium">FG%</th>
-                        <th className="text-right px-3 py-2 font-medium">FT%</th>
-                        <th className="text-right px-3 py-2 font-medium">3P%</th>
+                        <th className="text-right px-3 py-2 font-medium">FGM-FGA</th>
+                        <th className="text-right px-3 py-2 font-medium">FTM-FTA</th>
+                        <th className="text-right px-3 py-2 font-medium">3PM-3PA</th>
                         <th className="text-right px-3 py-2 font-medium">PF</th>
                       </tr>
                     </thead>
@@ -897,9 +900,9 @@ export default function Dashboard() {
                                 if (watchedStatType === "stl_blk") return stat.steals + stat.blocks;
                                 return stat.points;
                               })();
-                              const fgPct = stat.fga && stat.fga > 0 ? ((stat.fgm ?? 0) / stat.fga * 100).toFixed(0) + "%" : "—";
-                              const ftPct = stat.fta && stat.fta > 0 ? ((stat.ftm ?? 0) / stat.fta * 100).toFixed(0) + "%" : "—";
-                              const fg3Pct = stat.fg3a && stat.fg3a > 0 ? ((stat.fg3m ?? 0) / stat.fg3a * 100).toFixed(0) + "%" : "—";
+                              const fgPct = stat.fga != null && stat.fga > 0 ? `${stat.fgm ?? 0}-${stat.fga}` : "—";
+                              const ftPct = stat.fta != null && stat.fta > 0 ? `${stat.ftm ?? 0}-${stat.fta}` : "—";
+                              const fg3Pct = stat.fg3a != null && stat.fg3a > 0 ? `${stat.fg3m ?? 0}-${stat.fg3a}` : "—";
                               return (
                                 <tr
                                   key={`player-${stat.playerId}`}
@@ -1611,6 +1614,62 @@ export default function Dashboard() {
                 </button>
               </div>
 
+              {/* Filters */}
+              {halftimePlaysData && halftimePlaysData.plays.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-4">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs text-muted-foreground font-medium">Prop:</span>
+                    <div className="flex gap-1 flex-wrap">
+                      {[
+                        { value: "all", label: "All" },
+                        { value: "points", label: "PTS" },
+                        { value: "rebounds", label: "REB" },
+                        { value: "assists", label: "AST" },
+                        { value: "threes", label: "3PM" },
+                        { value: "steals", label: "STL" },
+                        { value: "blocks", label: "BLK" },
+                      ].map(opt => (
+                        <button
+                          key={opt.value}
+                          data-testid={`slate-filter-prop-${opt.value}`}
+                          onClick={() => setSlateFilterProp(opt.value)}
+                          className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                            slateFilterProp === opt.value
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 ml-auto">
+                    <span className="text-xs text-muted-foreground font-medium">Confidence:</span>
+                    <div className="flex gap-1">
+                      {[
+                        { value: "all", label: "All" },
+                        { value: "high", label: "High ≥65%" },
+                        { value: "medium", label: "Mod 55–65%" },
+                      ].map(opt => (
+                        <button
+                          key={opt.value}
+                          data-testid={`slate-filter-prob-${opt.value}`}
+                          onClick={() => setSlateFilterProb(opt.value)}
+                          className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                            slateFilterProb === opt.value
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {isHalftimePlaysLoading ? (
                 <div className="flex items-center justify-center py-12 gap-2 text-muted-foreground">
                   <Loader2 className="w-5 h-5 animate-spin" />
@@ -1622,93 +1681,173 @@ export default function Dashboard() {
                   <p className="text-sm">{halftimePlaysData.message}</p>
                   <p className="text-xs text-muted-foreground/60 mt-1">Check back when games are at halftime.</p>
                 </div>
-              ) : halftimePlaysData && halftimePlaysData.plays.length > 0 ? (
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  {halftimePlaysData.plays.map((play: any, idx: number) => {
-                    const isOver = play.betDirection === "over";
-                    const isInjured = injuredPlayerNames.has(play.playerName.toLowerCase());
-                    const statLabel = STAT_TYPES.find(s => s.value === play.statType)?.label ?? play.statType;
-                    const hasLiveLine = play.lineSource === "odds_api";
-                    return (
-                      <div
-                        key={idx}
-                        data-testid={`halftime-play-${idx}`}
-                        className={`rounded-xl border p-4 space-y-2 relative ${
-                          isInjured ? "border-red-500/40 bg-red-500/5" : "border-border/60 bg-secondary/30"
-                        }`}
-                      >
-                        <div className="absolute top-3 left-3 w-5 h-5 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center">
-                          <span className="text-[9px] font-bold text-primary leading-none">#{idx + 1}</span>
-                        </div>
-                        <div className="flex items-start justify-between gap-2 pl-7">
-                          <div>
-                            <div className="font-semibold text-sm text-foreground">{play.playerName}</div>
-                            <div className="text-xs text-muted-foreground">{play.team} vs {play.opponent}</div>
-                            {isInjured && (
-                              <span className="text-xs text-red-400 font-semibold flex items-center gap-0.5 mt-0.5">
-                                <AlertTriangle className="w-3 h-3" /> Injured
+              ) : halftimePlaysData && halftimePlaysData.plays.length > 0 ? (() => {
+                const filteredPlays = halftimePlaysData.plays.filter((play: any) => {
+                  if (slateFilterProp !== "all" && play.statType !== slateFilterProp) return false;
+                  if (slateFilterProb === "high" && play.probability < 65 && play.probability > 35) return false;
+                  if (slateFilterProb === "medium" && (play.probability >= 65 || play.probability <= 35)) return false;
+                  return true;
+                });
+                if (filteredPlays.length === 0) {
+                  return (
+                    <div className="text-center py-10 text-muted-foreground">
+                      <p className="text-sm">No plays match the current filters.</p>
+                      <button onClick={() => { setSlateFilterProp("all"); setSlateFilterProb("all"); }} className="text-xs text-primary mt-2 hover:underline">Clear filters</button>
+                    </div>
+                  );
+                }
+                return (
+                  <>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {filteredPlays.map((play: any, idx: number) => {
+                        const isOver = play.betDirection === "over";
+                        const isInjured = injuredPlayerNames.has(play.playerName.toLowerCase());
+                        const statLabel = STAT_TYPES.find(s => s.value === play.statType)?.label ?? play.statType;
+                        const hasLiveLine = play.lineSource === "odds_api";
+                        const isExpanded = selectedSlatePlay === play;
+                        const globalIdx = halftimePlaysData.plays.indexOf(play);
+                        return (
+                          <div
+                            key={idx}
+                            data-testid={`halftime-play-${idx}`}
+                            className={`rounded-xl border p-4 space-y-2 relative cursor-pointer transition-all ${
+                              isExpanded
+                                ? "border-primary/60 bg-primary/5 ring-1 ring-primary/20"
+                                : isInjured
+                                ? "border-red-500/40 bg-red-500/5 hover:border-red-500/60"
+                                : "border-border/60 bg-secondary/30 hover:border-primary/40 hover:bg-secondary/50"
+                            }`}
+                            onClick={() => setSelectedSlatePlay(isExpanded ? null : play)}
+                          >
+                            <div className="absolute top-3 left-3 w-5 h-5 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center">
+                              <span className="text-[9px] font-bold text-primary leading-none">#{globalIdx + 1}</span>
+                            </div>
+                            <div className="flex items-start justify-between gap-2 pl-7">
+                              <div>
+                                <div className="font-semibold text-sm text-foreground">{play.playerName}</div>
+                                <div className="text-xs text-muted-foreground">{play.team} vs {play.opponent}</div>
+                                {isInjured && (
+                                  <span className="text-xs text-red-400 font-semibold flex items-center gap-0.5 mt-0.5">
+                                    <AlertTriangle className="w-3 h-3" /> Injured
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-right flex-shrink-0">
+                                <div className={`text-xl font-bold font-mono ${
+                                  play.probability >= 65 ? "text-green-400" :
+                                  play.probability <= 35 ? "text-red-400" : "text-yellow-400"
+                                }`}>
+                                  {play.probability.toFixed(1)}%
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  Edge: +{play.edge.toFixed(1)}%
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`text-xs font-mono px-2 py-0.5 rounded font-bold ${
+                                isOver ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"
+                              }`}>
+                                {statLabel} {isOver ? "O" : "U"}{play.line}
                               </span>
+                              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                                hasLiveLine
+                                  ? "bg-green-500/15 text-green-400"
+                                  : "bg-secondary text-muted-foreground"
+                              }`}>
+                                {hasLiveLine ? "Live Line" : "Season Avg"}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}
+                              </span>
+                            </div>
+
+                            {/* Expanded detail panel */}
+                            {isExpanded && (
+                              <div className="border-t border-border/40 pt-2 mt-2 space-y-2" onClick={e => e.stopPropagation()}>
+                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                  <div className="bg-background/60 rounded-lg p-2">
+                                    <div className="text-muted-foreground mb-0.5">Prop</div>
+                                    <div className="font-semibold text-foreground">{statLabel} {isOver ? "Over" : "Under"} {play.line}</div>
+                                  </div>
+                                  <div className="bg-background/60 rounded-lg p-2">
+                                    <div className="text-muted-foreground mb-0.5">Probability</div>
+                                    <div className={`font-semibold ${play.probability >= 65 ? "text-green-400" : play.probability <= 35 ? "text-red-400" : "text-yellow-400"}`}>
+                                      {play.probability.toFixed(1)}% ({play.betDirection === "over" ? "Over" : "Under"})
+                                    </div>
+                                  </div>
+                                  <div className="bg-background/60 rounded-lg p-2">
+                                    <div className="text-muted-foreground mb-0.5">H1 Actual</div>
+                                    <div className="font-semibold text-foreground">{play.halftimeStat} {statLabel.toLowerCase()}</div>
+                                  </div>
+                                  <div className="bg-background/60 rounded-lg p-2">
+                                    <div className="text-muted-foreground mb-0.5">Full Game Proj</div>
+                                    <div className="font-semibold text-foreground">{play.expectedTotal?.toFixed(1)}</div>
+                                  </div>
+                                  <div className="bg-background/60 rounded-lg p-2">
+                                    <div className="text-muted-foreground mb-0.5">Line Source</div>
+                                    <div className={`font-semibold ${hasLiveLine ? "text-green-400" : "text-muted-foreground"}`}>
+                                      {hasLiveLine ? "Live (Odds API)" : "Season Avg"}
+                                    </div>
+                                  </div>
+                                  <div className="bg-background/60 rounded-lg p-2">
+                                    <div className="text-muted-foreground mb-0.5">Model Edge</div>
+                                    <div className="font-semibold text-primary">+{play.edge.toFixed(1)}%</div>
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  data-testid={`button-load-calculator-${idx}`}
+                                  onClick={() => {
+                                    const player = findPlayerByName(play.playerName);
+                                    if (player) {
+                                      form.setValue("playerId", player.id);
+                                      form.setValue("statType", play.statType as any);
+                                      form.setValue("liveLine", play.line);
+                                      setActiveTab("calculator");
+                                      setSelectedSlatePlay(null);
+                                    }
+                                  }}
+                                  className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs font-medium hover:text-foreground hover:bg-secondary/80 transition-colors"
+                                >
+                                  Load in Calculator →
+                                </button>
+                              </div>
                             )}
+
+                            <button
+                              type="button"
+                              data-testid={`button-add-halftime-play-${idx}`}
+                              disabled={parlayPicks.length >= 10}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const pick: ParlayPickInput = {
+                                  playerId: play.playerId,
+                                  playerName: play.playerName,
+                                  playerTeam: play.team,
+                                  statType: play.statType,
+                                  line: play.line,
+                                  probability: play.probability,
+                                  betDirection: play.betDirection,
+                                  sportsbook: "",
+                                  oddsAmerican: 0,
+                                  gameId: play.gameId,
+                                };
+                                setParlayPicks(prev => [...prev, pick]);
+                                setShowParlay(true);
+                              }}
+                              className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors disabled:opacity-40"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              Add to Parlay
+                            </button>
                           </div>
-                          <div className="text-right flex-shrink-0">
-                            <div className={`text-xl font-bold font-mono ${
-                              play.probability >= 65 ? "text-green-400" :
-                              play.probability <= 35 ? "text-red-400" : "text-yellow-400"
-                            }`}>
-                              {play.probability.toFixed(1)}%
-                            </div>
-                            <div className="text-xs text-muted-foreground">
-                              Edge: +{play.edge.toFixed(1)}%
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`text-xs font-mono px-2 py-0.5 rounded font-bold ${
-                            isOver ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"
-                          }`}>
-                            {statLabel} {isOver ? "O" : "U"}{play.line}
-                          </span>
-                          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
-                            hasLiveLine
-                              ? "bg-green-500/15 text-green-400"
-                              : "bg-secondary text-muted-foreground"
-                          }`}>
-                            {hasLiveLine ? "Live Line" : "Season Avg"}
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          data-testid={`button-add-halftime-play-${idx}`}
-                          disabled={parlayPicks.length >= 10}
-                          onClick={() => {
-                            const pick: ParlayPickInput = {
-                              playerId: play.playerId,
-                              playerName: play.playerName,
-                              playerTeam: play.team,
-                              statType: play.statType,
-                              line: play.line,
-                              probability: play.probability,
-                              betDirection: play.betDirection,
-                              sportsbook: "",
-                              oddsAmerican: 0,
-                              gameId: play.gameId,
-                            };
-                            setParlayPicks(prev => [...prev, pick]);
-                            setShowParlay(true);
-                          }}
-                          className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors disabled:opacity-40"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          Add to Parlay
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
+                        );
+                      })}
+                    </div>
+                  </>
+                );
+              })() : (
                 <div className="text-center py-12 text-muted-foreground">
                   <Star className="w-8 h-8 mx-auto mb-3 opacity-30" />
                   <p className="text-sm">No halftime plays available.</p>

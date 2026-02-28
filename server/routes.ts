@@ -552,8 +552,11 @@ export async function registerRoutes(
                 const seasonAvg = dbSeasonStat[statType];
                 if (!seasonAvg || seasonAvg < 0.5) continue;
 
+                // Snap season avg to nearest valid half-point betting line (e.g. 7.9 → 8.0)
+                const snapToHalf = (n: number) => Math.round(n * 2) / 2;
+
                 // Try Odds API for a live line; cache result per player+stat
-                let liveLine = seasonAvg;
+                let liveLine = snapToHalf(seasonAvg);
                 let lineSource: "odds_api" | "season_avg" = "season_avg";
                 if (oddsEventId && process.env.ODDS_API_KEY) {
                   const cacheKey = `${playerName}|${statType}`;
