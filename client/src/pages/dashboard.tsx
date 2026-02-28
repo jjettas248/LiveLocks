@@ -139,7 +139,20 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<"calculator" | "halftime">("calculator");
   const [slateFilterProp, setSlateFilterProp] = useState<string>("all");
   const [slateFilterProb, setSlateFilterProb] = useState<string>("all");
-  const [selectedSlatePlay, setSelectedSlatePlay] = useState<any | null>(null);
+
+  const loadPlayInCalculator = (play: any) => {
+    form.setValue("playerId" as any, String(play.playerId));
+    form.setValue("statType" as any, play.statType);
+    form.setValue("liveLine" as any, play.line);
+    form.setValue("halftimeStat" as any, play.halftimeStat ?? 0);
+    form.setValue("halftimeMinutes" as any, play.halftimeMinutes ?? 0);
+    form.setValue("halftimeFouls" as any, play.halftimeFouls ?? 0);
+    form.setValue("opponentTeam" as any, play.opponent ?? "");
+    form.setValue("currentPeriod" as any, 3);
+    form.setValue("gameClock" as any, "12:00");
+    setActiveTab("calculator");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
   const [mlbPopoverOpen, setMlbPopoverOpen] = useState(false);
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -1704,20 +1717,17 @@ export default function Dashboard() {
                         const isInjured = injuredPlayerNames.has(play.playerName.toLowerCase());
                         const statLabel = STAT_TYPES.find(s => s.value === play.statType)?.label ?? play.statType;
                         const hasLiveLine = play.lineSource === "odds_api";
-                        const isExpanded = selectedSlatePlay === play;
                         const globalIdx = halftimePlaysData.plays.indexOf(play);
                         return (
                           <div
                             key={idx}
                             data-testid={`halftime-play-${idx}`}
                             className={`rounded-xl border p-4 space-y-2 relative cursor-pointer transition-all ${
-                              isExpanded
-                                ? "border-primary/60 bg-primary/5 ring-1 ring-primary/20"
-                                : isInjured
+                              isInjured
                                 ? "border-red-500/40 bg-red-500/5 hover:border-red-500/60"
                                 : "border-border/60 bg-secondary/30 hover:border-primary/40 hover:bg-secondary/50"
                             }`}
-                            onClick={() => setSelectedSlatePlay(isExpanded ? null : play)}
+                            onClick={() => loadPlayInCalculator(play)}
                           >
                             <div className="absolute top-3 left-3 w-5 h-5 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center">
                               <span className="text-[9px] font-bold text-primary leading-none">#{globalIdx + 1}</span>
@@ -1761,59 +1771,6 @@ export default function Dashboard() {
                                 H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}
                               </span>
                             </div>
-
-                            {/* Expanded detail panel */}
-                            {isExpanded && (
-                              <div className="border-t border-border/40 pt-2 mt-2 space-y-2" onClick={e => e.stopPropagation()}>
-                                <div className="grid grid-cols-2 gap-2 text-xs">
-                                  <div className="bg-background/60 rounded-lg p-2">
-                                    <div className="text-muted-foreground mb-0.5">Prop</div>
-                                    <div className="font-semibold text-foreground">{statLabel} {isOver ? "Over" : "Under"} {play.line}</div>
-                                  </div>
-                                  <div className="bg-background/60 rounded-lg p-2">
-                                    <div className="text-muted-foreground mb-0.5">Probability</div>
-                                    <div className={`font-semibold ${play.probability >= 65 ? "text-green-400" : play.probability <= 35 ? "text-red-400" : "text-yellow-400"}`}>
-                                      {play.probability.toFixed(1)}% ({play.betDirection === "over" ? "Over" : "Under"})
-                                    </div>
-                                  </div>
-                                  <div className="bg-background/60 rounded-lg p-2">
-                                    <div className="text-muted-foreground mb-0.5">H1 Actual</div>
-                                    <div className="font-semibold text-foreground">{play.halftimeStat} {statLabel.toLowerCase()}</div>
-                                  </div>
-                                  <div className="bg-background/60 rounded-lg p-2">
-                                    <div className="text-muted-foreground mb-0.5">Full Game Proj</div>
-                                    <div className="font-semibold text-foreground">{play.expectedTotal?.toFixed(1)}</div>
-                                  </div>
-                                  <div className="bg-background/60 rounded-lg p-2">
-                                    <div className="text-muted-foreground mb-0.5">Line Source</div>
-                                    <div className={`font-semibold ${hasLiveLine ? "text-green-400" : "text-muted-foreground"}`}>
-                                      {hasLiveLine ? "Live (Odds API)" : "Season Avg"}
-                                    </div>
-                                  </div>
-                                  <div className="bg-background/60 rounded-lg p-2">
-                                    <div className="text-muted-foreground mb-0.5">Model Edge</div>
-                                    <div className="font-semibold text-primary">+{play.edge.toFixed(1)}%</div>
-                                  </div>
-                                </div>
-                                <button
-                                  type="button"
-                                  data-testid={`button-load-calculator-${idx}`}
-                                  onClick={() => {
-                                    const player = findPlayerByName(play.playerName);
-                                    if (player) {
-                                      form.setValue("playerId", player.id);
-                                      form.setValue("statType", play.statType as any);
-                                      form.setValue("liveLine", play.line);
-                                      setActiveTab("calculator");
-                                      setSelectedSlatePlay(null);
-                                    }
-                                  }}
-                                  className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs font-medium hover:text-foreground hover:bg-secondary/80 transition-colors"
-                                >
-                                  Load in Calculator →
-                                </button>
-                              </div>
-                            )}
 
                             <button
                               type="button"

@@ -596,6 +596,8 @@ export async function registerRoutes(
                   opponent: opponentAbbr,
                   statType,
                   halftimeStat: liveStats[statType] ?? 0,
+                  halftimeMinutes: Math.round(minutes * 10) / 10,
+                  halftimeFouls: parseStat(statMap["pf"]),
                   line: liveLine,
                   lineSource,
                   probability: result.probability,
