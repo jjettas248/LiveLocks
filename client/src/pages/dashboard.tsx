@@ -1268,7 +1268,7 @@ export default function Dashboard() {
                                           ? "bg-emerald-500/15 text-emerald-400"
                                           : "bg-red-500/10 text-red-400"
                                       }`}>
-                                        {isPositive ? "+" : ""}{overEdge.toFixed(1)}% EV
+                                        {isPositive ? "+" : ""}{Math.round(overEdge)}% EV
                                       </span>
                                     </div>
                                   );
@@ -1310,7 +1310,7 @@ export default function Dashboard() {
                                 <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
                                   isPositive ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"
                                 }`}>
-                                  {overEdge > 0 ? "+" : ""}{overEdge.toFixed(1)}% EV
+                                  {overEdge > 0 ? "+" : ""}{Math.round(overEdge)}% EV
                                 </span>
                               </div>
                               <p className="text-xs text-muted-foreground mt-1">
@@ -1450,7 +1450,7 @@ export default function Dashboard() {
                           <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
                             ev > 0 ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/15 text-red-400"
                           }`}>
-                            {ev > 0 ? "+" : ""}{ev.toFixed(1)}% EV
+                            {ev > 0 ? "+" : ""}{Math.round(ev)}% EV
                           </span>
                         );
                       })()}
