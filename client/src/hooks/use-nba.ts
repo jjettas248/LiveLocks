@@ -134,7 +134,7 @@ export function usePlayerOdds(
       // Strip internal error hint keys before returning
       if (data._error) return {};
       // Pass quota exhaustion sentinel through so the UI can display a clear message
-      if (data._quotaExhausted) return { _quotaExhausted: true };
+      if (data._quotaExhausted) return { _quotaExhausted: true } as any;
       return data;
     },
     enabled,

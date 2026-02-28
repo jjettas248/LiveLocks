@@ -32,7 +32,7 @@ export async function registerRoutes(
 
   app.patch("/api/admin/users/:id/tier", requireAdmin, async (req, res) => {
     try {
-      const userId = parseInt(req.params.id, 10);
+      const userId = parseInt(String(req.params.id), 10);
       const { tier } = req.body as { tier: string | null };
       if (tier !== null && tier !== "nba" && tier !== "all") {
         return res.status(400).json({ error: "Invalid tier. Use null, 'nba', or 'all'" });
@@ -47,7 +47,7 @@ export async function registerRoutes(
 
   app.patch("/api/admin/users/:id/reset-plays", requireAdmin, async (req, res) => {
     try {
-      const userId = parseInt(req.params.id, 10);
+      const userId = parseInt(String(req.params.id), 10);
       await storage.resetUserPlays(userId);
       return res.json({ success: true });
     } catch (err) {
@@ -59,7 +59,7 @@ export async function registerRoutes(
   app.delete("/api/admin/users/:id", requireAdmin, async (req, res) => {
     try {
       const requestingUserId = (req as any).resolvedUserId!;
-      const targetUserId = parseInt(req.params.id, 10);
+      const targetUserId = parseInt(String(req.params.id), 10);
       if (targetUserId === requestingUserId) {
         return res.status(400).json({ error: "Cannot delete your own account" });
       }
@@ -588,14 +588,14 @@ export async function registerRoutes(
                 // Season avg: sum of each component's average (null if any component is missing)
                 const seasonParts = components.map(c => dbSeasonStat[c]);
                 if (seasonParts.some(v => v == null)) continue;
-                const seasonAvg = seasonParts.reduce((sum, v) => sum + v!, 0);
+                const seasonAvg = seasonParts.reduce((sum: number, v) => sum + (v as number), 0);
                 if (seasonAvg < 0.5) continue;
 
                 // H1 live stat: sum of each component from the live box score
                 const halftimeStat = components.reduce((sum, c) => sum + (liveStats[c] ?? 0), 0);
 
                 // Try Odds API for a live line; cache result per player+stat
-                let liveLine = snapToHalf(seasonAvg);
+                let liveLine = snapToHalf(seasonAvg as number);
                 let lineSource: "odds_api" | "season_avg" = "season_avg";
                 if (oddsEventId && process.env.ODDS_API_KEY) {
                   const cacheKey = `${playerName}|${statType}`;
@@ -607,7 +607,7 @@ export async function registerRoutes(
                       if (books.length > 0) {
                         const lines = books.map((b: any) => b.line as number);
                         // Estimate direction: H1 stat + rough H2 projection (half season avg)
-                        const roughExpected = halftimeStat + (seasonAvg / 2);
+                        const roughExpected = halftimeStat + ((seasonAvg as number) / 2);
                         const medianLine = [...lines].sort((a, b) => a - b)[Math.floor(lines.length / 2)];
                         // Over → pick the lowest line (most favorable); Under → pick the highest
                         const bestLine = roughExpected >= medianLine

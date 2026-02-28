@@ -29,11 +29,22 @@ export async function getNCAABScoreboard(): Promise<any[]> {
   const cached = cache.get(key);
   if (isFresh(cached, GAMES_TTL)) return cached!.data;
 
-  const res = await fetch(`${ESPN_NCAAB}/scoreboard`, {
-    headers: { "User-Agent": "Mozilla/5.0" },
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!res.ok) throw new Error(`ESPN NCAAB scoreboard ${res.status}`);
+  let res: Response;
+  try {
+    res = await fetch(`${ESPN_NCAAB}/scoreboard`, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch (err) {
+    console.warn("[NCAAB] Scoreboard fetch failed (network):", err);
+    if (cached) return cached.data; // serve stale cache if available
+    return [];
+  }
+  if (!res.ok) {
+    console.warn(`[NCAAB] Scoreboard HTTP ${res.status}`);
+    if (cached) return cached.data; // serve stale cache if available
+    return [];
+  }
   const data = await res.json() as any;
 
   const games = (data.events ?? []).map((event: any) => {
@@ -335,6 +346,7 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
   const plays: NCAABPlay[] = [];
 
   for (const game of liveGames) {
+    try {
     let box: any = null;
     try { box = await getNCAABBoxScore(game.id); } catch { /* non-fatal */ }
 
@@ -446,7 +458,7 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       volatility = Math.max(4, 18 * (secsForVol / 2400)) + volatilityBonus;
 
       if (projectedMargin !== null && spread !== null) {
-        const adjustedSpread = favorite === game.homeTeam ? -spread : spread;
+        const adjustedSpread = teamsMatch(favorite, game.homeTeam) ? -spread : spread;
         spreadProb = Math.round(sigmoid((projectedMargin - adjustedSpread) / volatility) * 1000) / 10;
         spreadEdge = Math.round((spreadProb - 50) * 10) / 10;
       }
@@ -476,8 +488,8 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       gameId: game.id,
       homeTeam: game.homeTeam,
       awayTeam: game.awayTeam,
-      homeTeamAbbr,
-      awayTeamAbbr,
+      homeTeamAbbr: homeAbbr,
+      awayTeamAbbr: awayAbbr,
       status: game.status,
       clock: game.clock,
       half,
@@ -505,6 +517,9 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       scoringByPeriod,
       teamStats,
     });
+    } catch (gameErr) {
+      console.warn(`[NCAAB] Skipping game ${game.id} (${game.homeTeam} vs ${game.awayTeam}):`, (gameErr as any).message);
+    }
   }
 
   // Sort by highest edge (spread or total)
