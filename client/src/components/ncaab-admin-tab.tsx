@@ -261,23 +261,23 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
       {expanded && (
         <div className="divide-y divide-border/40">
 
-          {/* 1H Over/Under — only shown during H1 */}
-          {isH1 && play.h1TotalLine !== null && (
+          {/* 1H Projection — shown whenever in H1 and we have a proj1HTotal */}
+          {isH1 && play.proj1HTotal !== null && (
             <div className="p-4 space-y-2">
               <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
-                <span className="text-blue-400">1H</span> Over/Under
+                <span className="text-blue-400">1H</span> Projection
               </p>
               <div className="flex items-start justify-between gap-2">
                 <div className="flex-1 space-y-1">
-                  <p className="text-xs text-foreground">
-                    Line: <span className="font-semibold">{play.h1TotalLine}</span>
-                    <span className="text-muted-foreground ml-2 text-[10px]">
-                      {play.h1TotalLine === Math.round((play.total ?? 0) * 0.47 * 2) / 2 ? "(est)" : "(live)"}
-                    </span>
+                  <p className="text-xs text-muted-foreground">
+                    Proj 1H total: <span className="text-foreground font-semibold text-sm">{play.proj1HTotal}</span>
                   </p>
-                  {play.proj1HTotal !== null && (
-                    <p className="text-xs text-muted-foreground">
-                      Proj 1H total: <span className="text-foreground font-medium">{play.proj1HTotal}</span>
+                  {play.h1TotalLine !== null && (
+                    <p className="text-xs text-foreground">
+                      Line: <span className="font-semibold">{play.h1TotalLine}</span>
+                      <span className="text-muted-foreground ml-2 text-[10px]">
+                        {play.h1TotalLine === Math.round((play.total ?? 0) * 0.47 * 2) / 2 ? "(est)" : "(live)"}
+                      </span>
                     </p>
                   )}
                   {play.total1HEdge !== null && (
@@ -290,6 +290,9 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
                     </p>
                   )}
                   {probBar(play.over1HProb)}
+                  {play.h1TotalLine === null && (
+                    <p className="text-[10px] text-muted-foreground/50 italic">No 1H line available</p>
+                  )}
                 </div>
                 {onAddToParlay && play.over1HProb !== null && play.h1TotalLine !== null && (
                   <div className="flex flex-col gap-1 flex-shrink-0">
@@ -313,19 +316,19 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
             </div>
           )}
 
-          {/* Full Game Over/Under — shown always (H1, Halftime, H2) */}
-          {play.total !== null && (
+          {/* Full Game Projection — shown whenever we have projectedTotal (H1, Halftime, H2) */}
+          {play.projectedTotal !== null && (
             <div className="p-4 space-y-2">
               <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                Full Game Over/Under
+                Full Game Projection
               </p>
               <div className="flex items-start justify-between gap-2">
                 <div className="flex-1 space-y-1">
-                  <p className="text-xs text-foreground">Line: <span className="font-semibold">{play.total}</span></p>
-                  {play.projectedTotal !== null && (
-                    <p className="text-xs text-muted-foreground">
-                      Proj total: <span className="text-foreground font-medium">{play.projectedTotal}</span>
-                    </p>
+                  <p className="text-xs text-muted-foreground">
+                    Proj total: <span className="text-foreground font-semibold text-sm">{play.projectedTotal.toFixed(1)}</span>
+                  </p>
+                  {play.total !== null && (
+                    <p className="text-xs text-foreground">Line: <span className="font-semibold">{play.total}</span></p>
                   )}
                   {play.totalEdge !== null && (
                     <p className={`text-xs font-semibold ${edgeColor(play.totalEdge)}`}>
@@ -337,8 +340,11 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
                     </p>
                   )}
                   {probBar(play.overProb)}
+                  {play.total === null && (
+                    <p className="text-[10px] text-muted-foreground/50 italic">No full-game line available</p>
+                  )}
                 </div>
-                {onAddToParlay && play.overProb !== null && (
+                {onAddToParlay && play.overProb !== null && play.total !== null && (
                   <div className="flex flex-col gap-1 flex-shrink-0">
                     <button
                       data-testid={`ncaab-parlay-over-${play.gameId}`}
