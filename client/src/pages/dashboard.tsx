@@ -83,6 +83,13 @@ function formatOdds(odds: number): string {
   return odds > 0 ? `+${odds}` : `${odds}`;
 }
 
+function americanToImplied(odds: number): number {
+  if (!odds || odds === 0) return 0.5;
+  return odds < 0
+    ? Math.abs(odds) / (Math.abs(odds) + 100)
+    : 100 / (odds + 100);
+}
+
 export default function Dashboard() {
   const { user, logout } = useAuth();
   const [, navigate] = useLocation();
@@ -1174,6 +1181,24 @@ export default function Dashboard() {
                                     )}
                                   </div>
                                 )}
+                                {/* Model edge vs book implied — shown after Calculate */}
+                                {result && o.overOdds && o.underOdds && (() => {
+                                  const overImplied = americanToImplied(o.overOdds) * 100;
+                                  const overEdge = result.probability - overImplied;
+                                  const isPositive = overEdge > 0;
+                                  return (
+                                    <div className="flex items-center justify-between w-full mt-1 pt-1 border-t border-border/30">
+                                      <span className="text-muted-foreground/70">Model vs book</span>
+                                      <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
+                                        isPositive
+                                          ? "bg-emerald-500/15 text-emerald-400"
+                                          : "bg-red-500/10 text-red-400"
+                                      }`}>
+                                        {isPositive ? "+" : ""}{overEdge.toFixed(1)}% EV
+                                      </span>
+                                    </div>
+                                  );
+                                })()}
                               </button>
                             );
                           })}
@@ -1296,36 +1321,56 @@ export default function Dashboard() {
                 </div>
 
                 {/* Stats Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <StatCard
-                    title="Expected Total"
-                    value={result.expectedTotal.toFixed(1)}
-                    subtitle={`Need: ${form.getValues("liveLine")}`}
-                    icon={<Target className="w-4 h-4" />}
-                    highlight={result.expectedTotal >= form.getValues("liveLine") ? "positive" : "negative"}
-                  />
-                  <StatCard
-                    title="Proj. Remaining Min"
-                    value={result.projectedSecondHalfMinutes.toFixed(1)}
-                    subtitle={(result as any).baselineSource === "h2" ? "H2 Baseline" : "Full-Game Baseline"}
-                    icon={<Clock className="w-4 h-4" />}
-                    highlight="neutral"
-                  />
-                  <StatCard
-                    title="Defense vs Pos"
-                    value={`${result.defenseMultiplier > 1 ? "+" : ""}${((result.defenseMultiplier - 1) * 100).toFixed(1)}%`}
-                    subtitle="Opp allow vs position"
-                    icon={<ShieldAlert className="w-4 h-4" />}
-                    highlight={result.defenseMultiplier > 1 ? "positive" : "negative"}
-                  />
-                  <StatCard
-                    title="Game Pace"
-                    value={result.paceLabel}
-                    subtitle={`${result.teamPace} vs ${result.opponentPace} pos/48`}
-                    icon={<Zap className="w-4 h-4" />}
-                    highlight={result.paceMultiplier >= 1.02 ? "positive" : result.paceMultiplier <= 0.97 ? "negative" : "neutral"}
-                  />
-                </div>
+                {(() => {
+                  const marketOdds = selectedSportsbook && selectedSportsbook !== "manual" && oddsData
+                    ? (oddsData as Record<string, import("@shared/schema").OddsLine>)[selectedSportsbook]
+                    : null;
+                  const hasMarket = !!(marketOdds?.overOdds);
+                  const marketEdge = hasMarket
+                    ? result.probability - americanToImplied(marketOdds!.overOdds!) * 100
+                    : null;
+                  return (
+                    <div className={`grid gap-3 ${hasMarket ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5" : "grid-cols-2 sm:grid-cols-4"}`}>
+                      <StatCard
+                        title="Expected Total"
+                        value={result.expectedTotal.toFixed(1)}
+                        subtitle={`Need: ${form.getValues("liveLine")}`}
+                        icon={<Target className="w-4 h-4" />}
+                        highlight={result.expectedTotal >= form.getValues("liveLine") ? "positive" : "negative"}
+                      />
+                      <StatCard
+                        title="Proj. Remaining Min"
+                        value={result.projectedSecondHalfMinutes.toFixed(1)}
+                        subtitle={(result as any).baselineSource === "h2" ? "H2 Baseline" : "Full-Game Baseline"}
+                        icon={<Clock className="w-4 h-4" />}
+                        highlight="neutral"
+                      />
+                      <StatCard
+                        title="Defense vs Pos"
+                        value={`${result.defenseMultiplier > 1 ? "+" : ""}${((result.defenseMultiplier - 1) * 100).toFixed(1)}%`}
+                        subtitle="Opp allow vs position"
+                        icon={<ShieldAlert className="w-4 h-4" />}
+                        highlight={result.defenseMultiplier > 1 ? "positive" : "negative"}
+                      />
+                      <StatCard
+                        title="Game Pace"
+                        value={result.paceLabel}
+                        subtitle={`${result.teamPace} vs ${result.opponentPace} pos/48`}
+                        icon={<Zap className="w-4 h-4" />}
+                        highlight={result.paceMultiplier >= 1.02 ? "positive" : result.paceMultiplier <= 0.97 ? "negative" : "neutral"}
+                      />
+                      {hasMarket && marketEdge !== null && (
+                        <StatCard
+                          title="vs Market"
+                          value={`${marketEdge > 0 ? "+" : ""}${marketEdge.toFixed(1)}%`}
+                          subtitle="Model vs implied odds"
+                          icon={<TrendingUp className="w-4 h-4" />}
+                          highlight={marketEdge > 1 ? "positive" : marketEdge < -1 ? "negative" : "neutral"}
+                        />
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Share prompt — shown on strong results */}
                 {(result.probability >= 65 || result.probability <= 35) && (() => {
@@ -1372,51 +1417,69 @@ export default function Dashboard() {
                   );
                 })()}
 
-                {/* Line Value Panel — shows when a sportsbook with line movement is selected */}
+                {/* CLV / Model Edge Explanation Panel */}
                 {(() => {
-                  if (!selectedSportsbook || !oddsData) return null;
+                  if (!selectedSportsbook || selectedSportsbook === "manual" || !oddsData || !result) return null;
                   const selected = (oddsData as Record<string, import("@shared/schema").OddsLine>)[selectedSportsbook];
-                  if (!selected || selected.lineMovement === undefined || selected.lineMovement === 0) return null;
-                  const dropped = selected.lineMovement < 0;
-                  const edge = selected.edgeEstimate ?? 0;
-                  const absMove = Math.abs(selected.lineMovement);
-                  const absEdge = Math.abs(edge);
+                  if (!selected?.overOdds) return null;
+
+                  const overImplied = americanToImplied(selected.overOdds) * 100;
+                  const underImplied = americanToImplied(selected.underOdds ?? -110) * 100;
+                  const overEdge = result.probability - overImplied;
+                  const underEdge = (100 - result.probability) - underImplied;
+                  const bestEdge = overEdge >= underEdge ? { side: "Over", edge: overEdge } : { side: "Under", edge: underEdge };
+                  const isPositive = bestEdge.edge > 0;
+                  const absEdge = Math.abs(bestEdge.edge);
                   const valueLabel = absEdge >= 6 ? "Strong" : absEdge >= 3 ? "Moderate" : "Slight";
-                  const favorsSide = dropped ? "Over" : "Under";
+                  const sbName = SPORTSBOOK_LABELS[selectedSportsbook] ?? selectedSportsbook;
+
+                  const hasMovement = selected.lineMovement !== undefined && selected.lineMovement !== 0;
+                  const dropped = (selected.lineMovement ?? 0) < 0;
+
                   return (
                     <div className={`rounded-xl border p-4 flex gap-3 items-start ${
-                      dropped
+                      isPositive
                         ? "bg-emerald-500/10 border-emerald-500/30"
-                        : "bg-orange-500/10 border-orange-500/30"
+                        : "bg-red-500/10 border-red-500/30"
                     }`}>
-                      <div className={`mt-0.5 flex-shrink-0 text-lg font-bold ${dropped ? "text-emerald-400" : "text-orange-400"}`}>
-                        {dropped ? "▼" : "▲"}
+                      <div className={`mt-0.5 flex-shrink-0 text-lg font-bold ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
+                        {isPositive ? "▲" : "▼"}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-2 flex-wrap">
-                          <h4 className={`text-sm font-semibold ${dropped ? "text-emerald-400" : "text-orange-400"}`}>
-                            {valueLabel} {favorsSide} Value — Line Movement Detected
+                          <h4 className={`text-sm font-semibold ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
+                            {valueLabel} {bestEdge.side} CLV — {isPositive ? "Model favors Over" : "Model favors Under"}
                           </h4>
                           <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                            dropped
+                            isPositive
                               ? "bg-emerald-500/20 text-emerald-300"
-                              : "bg-orange-500/20 text-orange-300"
+                              : "bg-red-500/20 text-red-300"
                           }`}>
-                            {edge > 0 ? "+" : ""}{edge}% vs Open
+                            {overEdge > 0 ? "+" : ""}{overEdge.toFixed(1)}% EV
                           </span>
                         </div>
                         <p className="text-sm text-muted-foreground mt-1">
-                          {SPORTSBOOK_LABELS[selectedSportsbook] ?? selectedSportsbook} line moved{" "}
-                          <strong>{dropped ? "down" : "up"} {absMove} pt{absMove !== 1 ? "s" : ""}</strong>{" "}
-                          from session open ({selected.openLine} → {selected.line}).{" "}
-                          {dropped
-                            ? `Lower threshold favors the Over — estimated +${absEdge}% probability gain vs. the open line.`
-                            : `Higher threshold favors the Under — estimated +${absEdge}% probability gain vs. the open line.`
-                          }
+                          Model probability: <strong className="text-foreground">{result.probability.toFixed(1)}%</strong>
+                          {" · "}Book implied ({sbName}): <strong className="text-foreground">{overImplied.toFixed(1)}%</strong>
+                          {" · "}Edge: <strong className={isPositive ? "text-emerald-400" : "text-red-400"}>
+                            {overEdge > 0 ? "+" : ""}{overEdge.toFixed(1)}%
+                          </strong>
                         </p>
-                        <p className="text-xs text-muted-foreground/60 mt-1.5">
-                          Session open = first line seen since server start. Refresh regularly to track real-time movement.
+                        <p className="text-xs text-muted-foreground/70 mt-1">
+                          {absEdge >= 6
+                            ? "Strong CLV — model significantly disagrees with the market. High conviction edge."
+                            : absEdge >= 3
+                            ? "Moderate CLV — solid discrepancy between model and market pricing."
+                            : isPositive
+                            ? "Slight CLV — model edges the book but margin is thin. Use as a tiebreaker."
+                            : "Model trails the book's implied probability — line may already be priced in."}
                         </p>
+                        {hasMovement && selected.openLine !== undefined && (
+                          <p className="text-xs text-muted-foreground/50 mt-1.5 border-t border-border/20 pt-1.5">
+                            Line movement: {sbName} moved{" "}
+                            {dropped ? "▼" : "▲"} {Math.abs(selected.lineMovement!)} pts from session open ({selected.openLine} → {selected.line})
+                          </p>
+                        )}
                       </div>
                     </div>
                   );
