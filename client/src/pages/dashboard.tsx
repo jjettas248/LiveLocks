@@ -150,11 +150,13 @@ export default function Dashboard() {
     form.setValue("opponentTeam" as any, play.opponent ?? "");
     form.setValue("currentPeriod" as any, 3);
     form.setValue("gameClock" as any, "12:00");
+    skipAutoFillRef.current = true;
     setActiveTab("calculator");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const [mlbPopoverOpen, setMlbPopoverOpen] = useState(false);
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const skipAutoFillRef = useRef(false);
 
   const calculateMutation = useCalculateProbability();
 
@@ -371,6 +373,7 @@ export default function Dashboard() {
 
   // Auto-fill halftime stats from live box score when player or stat type changes
   useEffect(() => {
+    if (skipAutoFillRef.current) { skipAutoFillRef.current = false; return; }
     if (!liveStats || !selectedPlayer) return;
     const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
     const playerStat = liveStats.find((s) => {
