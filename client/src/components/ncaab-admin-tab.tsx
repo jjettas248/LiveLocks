@@ -163,6 +163,14 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
 
   const isH1 = play.half === 1 && !play.bettingWindow.includes("HALFTIME");
 
+  const effectiveFGLine = play.total ?? (play.projectedTotal !== null ? Math.round(play.projectedTotal * 2) / 2 : null);
+  const effectiveFGProb = play.overProb ?? 50;
+  const fgLineIsProj = play.total === null && effectiveFGLine !== null;
+
+  const effective1HLine = play.h1TotalLine ?? (play.proj1HTotal !== null ? Math.round(play.proj1HTotal * 2) / 2 : null);
+  const effective1HProb = play.over1HProb ?? 50;
+  const h1LineIsProj = play.h1TotalLine === null && effective1HLine !== null;
+
   function addPick(direction: "over" | "under", line: number, prob: number, statType: string, label: string) {
     if (!onAddToParlay) return;
     const bestBook = play.bookLines[0]?.book ?? "fanduel";
@@ -291,24 +299,24 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
                   )}
                   {probBar(play.over1HProb)}
                   {play.h1TotalLine === null && (
-                    <p className="text-[10px] text-muted-foreground/50 italic">No 1H line available</p>
+                    <p className="text-[10px] text-muted-foreground/50 italic">No 1H line — using proj as reference</p>
                   )}
                 </div>
-                {onAddToParlay && play.over1HProb !== null && play.h1TotalLine !== null && (
+                {onAddToParlay && effective1HLine !== null && (
                   <div className="flex flex-col gap-1 flex-shrink-0">
                     <button
                       data-testid={`ncaab-parlay-1h-over-${play.gameId}`}
-                      onClick={(e) => { e.stopPropagation(); addPick("over", play.h1TotalLine!, play.over1HProb!, "ncaab_1h_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — 1H Total`); }}
+                      onClick={(e) => { e.stopPropagation(); addPick("over", effective1HLine, effective1HProb, "ncaab_1h_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — 1H Total`); }}
                       className="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg bg-green-500/10 border border-green-500/30 text-green-400 hover:bg-green-500/20 transition-colors"
                     >
-                      <Plus className="w-2.5 h-2.5" /> Over {play.h1TotalLine}
+                      <Plus className="w-2.5 h-2.5" /> Over {effective1HLine}{h1LineIsProj ? " (proj)" : ""}
                     </button>
                     <button
                       data-testid={`ncaab-parlay-1h-under-${play.gameId}`}
-                      onClick={(e) => { e.stopPropagation(); addPick("under", play.h1TotalLine!, 100 - play.over1HProb!, "ncaab_1h_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — 1H Total`); }}
+                      onClick={(e) => { e.stopPropagation(); addPick("under", effective1HLine, 100 - effective1HProb, "ncaab_1h_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — 1H Total`); }}
                       className="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 transition-colors"
                     >
-                      <Plus className="w-2.5 h-2.5" /> Under {play.h1TotalLine}
+                      <Plus className="w-2.5 h-2.5" /> Under {effective1HLine}{h1LineIsProj ? " (proj)" : ""}
                     </button>
                   </div>
                 )}
@@ -341,24 +349,24 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
                   )}
                   {probBar(play.overProb)}
                   {play.total === null && (
-                    <p className="text-[10px] text-muted-foreground/50 italic">No full-game line available</p>
+                    <p className="text-[10px] text-muted-foreground/50 italic">No line — using proj as reference</p>
                   )}
                 </div>
-                {onAddToParlay && play.overProb !== null && play.total !== null && (
+                {onAddToParlay && effectiveFGLine !== null && (
                   <div className="flex flex-col gap-1 flex-shrink-0">
                     <button
                       data-testid={`ncaab-parlay-over-${play.gameId}`}
-                      onClick={(e) => { e.stopPropagation(); addPick("over", play.total!, play.overProb!, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — Total`); }}
+                      onClick={(e) => { e.stopPropagation(); addPick("over", effectiveFGLine, effectiveFGProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — Total`); }}
                       className="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg bg-green-500/10 border border-green-500/30 text-green-400 hover:bg-green-500/20 transition-colors"
                     >
-                      <Plus className="w-2.5 h-2.5" /> Over {play.total}
+                      <Plus className="w-2.5 h-2.5" /> Over {effectiveFGLine}{fgLineIsProj ? " (proj)" : ""}
                     </button>
                     <button
                       data-testid={`ncaab-parlay-under-${play.gameId}`}
-                      onClick={(e) => { e.stopPropagation(); addPick("under", play.total!, 100 - play.overProb!, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — Total`); }}
+                      onClick={(e) => { e.stopPropagation(); addPick("under", effectiveFGLine, 100 - effectiveFGProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — Total`); }}
                       className="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 transition-colors"
                     >
-                      <Plus className="w-2.5 h-2.5" /> Under {play.total}
+                      <Plus className="w-2.5 h-2.5" /> Under {effectiveFGLine}{fgLineIsProj ? " (proj)" : ""}
                     </button>
                   </div>
                 )}
