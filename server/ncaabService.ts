@@ -510,19 +510,24 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         const secsForVol = isHalftime ? 1200 : secondsLeft;
         volatility = Math.max(4, 18 * (secsForVol / 2400)) + volatilityBonus;
 
+        // Effective lines — use API line if available, otherwise fall back to
+        // projected total rounded to nearest 0.5 so we always produce a probability
+        const effectiveFGLine = total ?? (projectedTotal !== null ? Math.round(projectedTotal * 2) / 2 : null);
+        const effective1HLine = h1TotalLine ?? (proj1HTotal !== null ? Math.round(proj1HTotal * 2) / 2 : null);
+
         if (projectedMargin !== null && spread !== null) {
           const adjustedSpread = teamsMatch(favorite, game.homeTeam) ? -spread : spread;
           spreadProb = Math.round(sigmoid((projectedMargin - adjustedSpread) / volatility) * 1000) / 10;
           spreadEdge = Math.round((spreadProb - 50) * 10) / 10;
         }
-        if (projectedTotal !== null && total !== null) {
-          overProb = Math.round(sigmoid((projectedTotal - total) / volatility) * 1000) / 10;
+        if (projectedTotal !== null && effectiveFGLine !== null) {
+          overProb = Math.round(sigmoid((projectedTotal - effectiveFGLine) / volatility) * 1000) / 10;
           totalEdge = Math.round((overProb - 50) * 10) / 10;
         }
-        // 1H probability — only computed during H1
-        if (half === 1 && proj1HTotal !== null && h1TotalLine !== null) {
+        // 1H probability — computed during H1 using effective line
+        if (half === 1 && proj1HTotal !== null && effective1HLine !== null) {
           const h1Vol = Math.max(3, volatility * 0.6);
-          over1HProb = Math.round(sigmoid((proj1HTotal - h1TotalLine) / h1Vol) * 1000) / 10;
+          over1HProb = Math.round(sigmoid((proj1HTotal - effective1HLine) / h1Vol) * 1000) / 10;
           total1HEdge = Math.round((over1HProb - 50) * 10) / 10;
         }
       }

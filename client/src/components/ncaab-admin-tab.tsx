@@ -382,20 +382,33 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
             </div>
           )}
 
-          {/* Spread */}
-          {play.spread !== null && (
+          {/* Spread / Projected Margin — show if we have a spread line OR a projected margin */}
+          {(play.spread !== null || play.projectedMargin !== null) && (
             <div className="p-4 space-y-2">
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Spread</p>
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                {play.spread !== null ? "Spread" : "Projected Margin"}
+              </p>
               <div className="flex items-start justify-between gap-2">
                 <div className="flex-1 space-y-1">
-                  <p className="text-xs text-foreground">
-                    <span className="font-semibold">{play.favorite}</span>
-                    <span className="text-muted-foreground ml-1">-{play.spread}</span>
-                  </p>
+                  {play.spread !== null && (
+                    <p className="text-xs text-foreground">
+                      <span className="font-semibold">{play.favorite}</span>
+                      <span className="text-muted-foreground ml-1">-{play.spread}</span>
+                    </p>
+                  )}
                   {play.projectedMargin !== null && (
                     <p className="text-xs text-muted-foreground">
-                      Proj margin: <span className="text-foreground font-medium">{play.projectedMargin > 0 ? "+" : ""}{play.projectedMargin}</span>
+                      Proj margin: <span className="text-foreground font-medium">
+                        {play.projectedMargin > 0
+                          ? `+${play.projectedMargin.toFixed(1)} ${play.homeTeamAbbr}`
+                          : play.projectedMargin < 0
+                            ? `+${Math.abs(play.projectedMargin).toFixed(1)} ${play.awayTeamAbbr}`
+                            : "Pick 'em"}
+                      </span>
                     </p>
+                  )}
+                  {play.spread === null && play.projectedMargin !== null && (
+                    <p className="text-[10px] text-muted-foreground/50 italic">No spread line available</p>
                   )}
                   {play.spreadEdge !== null && (
                     <p className={`text-xs font-semibold ${edgeColor(play.spreadEdge)}`}>
