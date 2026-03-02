@@ -1,37 +1,58 @@
 import { getUncachableStripeClient } from "../server/stripeClient";
 
-const PRODUCTS = [
-  {
-    key: "nba",
-    name: "NBA Pro – LiveLocks",
-    description: "Unlimited NBA prop calculations, live halftime slate, parlay builder, push alerts",
-    amount: 2900,
-  },
+const OLD_PRODUCT_NAMES = [
+  "NBA Pro – LiveLocks",
+  "All Sports – LiveLocks",
+  "Elite – LiveLocks",
+];
+
+const NEW_PRODUCTS = [
   {
     key: "all",
-    name: "All Sports – LiveLocks",
-    description: "NBA + NCAAB live analytics + MLB (coming soon) + push notifications",
-    amount: 5900,
+    name: "Pro – LiveLocks",
+    description: "Unlimited NBA prop calculations, NCAAB Live analytics, 2H Plays, parlay builder, push alerts, SMS alerts",
+    amount: 4000,
+    features: ["Unlimited NBA props", "NCAAB Live", "NBA 2H Plays", "SMS Alerts", "Push Notifications"],
   },
   {
     key: "elite",
-    name: "Elite – LiveLocks",
-    description: "All Sports + SMS priority alerts for 2H plays and 90%+ confidence plays",
-    amount: 7900,
+    name: "All Sports – LiveLocks",
+    description: "Everything in Pro + MLB Live (coming soon) + Priority SMS alerts",
+    amount: 6500,
+    features: ["Everything in Pro", "MLB Live (coming soon)", "Priority SMS", "Early access to new sports"],
   },
 ];
 
 async function seed() {
   const stripe = await getUncachableStripeClient();
 
-  for (const plan of PRODUCTS) {
+  // Archive old products
+  for (const oldName of OLD_PRODUCT_NAMES) {
+    const existing = await stripe.products.search({ query: `name:'${oldName}'` });
+    for (const prod of existing.data) {
+      if (prod.active) {
+        await stripe.products.update(prod.id, { active: false });
+        console.log(`[archived] "${oldName}" (${prod.id})`);
+      } else {
+        console.log(`[skip archive] "${oldName}" already inactive`);
+      }
+    }
+  }
+
+  // Create or update new products
+  for (const plan of NEW_PRODUCTS) {
     const existing = await stripe.products.search({ query: `name:'${plan.name}'` });
     if (existing.data.length > 0) {
       const prod = existing.data[0];
-      console.log(`[skip] "${plan.name}" already exists: ${prod.id}`);
+      if (!prod.active) {
+        await stripe.products.update(prod.id, { active: true });
+        console.log(`[reactivated] "${plan.name}"`);
+      } else {
+        console.log(`[exists] "${plan.name}" (${prod.id})`);
+      }
       const prices = await stripe.prices.list({ product: prod.id, active: true });
       if (prices.data.length > 0) {
-        console.log(`       Price: ${prices.data[0].id} ($${prices.data[0].unit_amount! / 100}/mo)`);
+        console.log(`           Price: ${prices.data[0].id} ($${prices.data[0].unit_amount! / 100}/mo)`);
       }
       continue;
     }

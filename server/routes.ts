@@ -36,8 +36,8 @@ export async function registerRoutes(
     try {
       const userId = parseInt(String(req.params.id), 10);
       const { tier } = req.body as { tier: string | null };
-      if (tier !== null && tier !== "nba" && tier !== "all" && tier !== "elite") {
-        return res.status(400).json({ error: "Invalid tier. Use null, 'nba', 'all', or 'elite'" });
+      if (tier !== null && tier !== "all" && tier !== "elite") {
+        return res.status(400).json({ error: "Invalid tier. Use null, 'all', or 'elite'" });
       }
       await storage.setUserSubscriptionTier(userId, tier);
       return res.json({ success: true });
@@ -413,7 +413,7 @@ export async function registerRoutes(
   // ── Halftime Best Plays ─────────────────────────────────────────────────────
   // Returns top probability plays across all live halftime games.
   // Requires NBA Pro, All Sports, or Elite subscription (or admin).
-  app.get("/api/halftime-plays", requireTier("nba", "all", "elite"), async (req, res) => {
+  app.get("/api/halftime-plays", requireTier("all", "elite"), async (req, res) => {
     try {
       const gamesRes = await fetch(
         "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
@@ -747,8 +747,8 @@ export async function registerRoutes(
       const userId = (req as any).resolvedUserId!;
       const user = await storage.getUserById(userId);
       if (!user) return res.status(401).json({ error: "Not found" });
-      if (!["elite"].includes(user.subscriptionTier ?? "") && !user.isAdmin) {
-        return res.status(403).json({ error: "SMS alerts require an Elite subscription" });
+      if (!["all", "elite"].includes(user.subscriptionTier ?? "") && !user.isAdmin) {
+        return res.status(403).json({ error: "SMS alerts require a Pro or All Sports subscription" });
       }
       const { phoneNumber, smsAlerts } = req.body;
       await storage.updateUserAlerts(userId, {
@@ -761,12 +761,30 @@ export async function registerRoutes(
     }
   });
 
+  // ── Twilio STOP webhook ────────────────────────────────────────────────────
+  app.post("/api/webhooks/twilio", async (req, res) => {
+    try {
+      const from: string = req.body?.From ?? "";
+      const body: string = (req.body?.Body ?? "").trim().toUpperCase();
+      const stopWords = ["STOP", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"];
+      if (stopWords.includes(body) && from) {
+        const user = await storage.getUserByPhoneNumber(from);
+        if (user) {
+          await storage.updateUserAlerts(user.id, { smsAlerts: false, smsConsent: false });
+        }
+      }
+    } catch (err) {
+      console.error("[twilio webhook]", err);
+    }
+    res.set("Content-Type", "text/xml").status(200).send("<Response></Response>");
+  });
+
   // Roster sync from ESPN API — updates player team assignments from live rosters
   app.post("/api/sync-rosters", async (req, res) => {
     try {
       const ESPN_TO_DB: Record<string, string> = {
         GS: "GSW", SA: "SAS", NO: "NOP", NY: "NYK",
-        PHO: "PHX", UTH: "UTA", WSH: "WAS", CHO: "CHA",
+        PHO: "PHX", UTH: "UTA", UTAH: "UTA", WSH: "WAS", CHO: "CHA",
       };
       const normalize = (s: string) => s.toLowerCase().replace(/['.'\-\s]+/g, "").replace(/jr$|sr$|ii$|iii$|iv$/,"");
 
@@ -811,7 +829,12 @@ export async function registerRoutes(
           for (const athlete of athletes) {
             const name: string = athlete.displayName ?? athlete.fullName ?? "";
             if (!name) continue;
-            const pos: string = athlete.position?.abbreviation ?? "SF";
+            const rawPos: string = athlete.position?.abbreviation ?? "";
+            const ESPN_POS_MAP: Record<string, string> = {
+              PG: "PG", SG: "SG", SF: "SF", PF: "PF", C: "C",
+              G: "SG", F: "SF", FC: "PF", GF: "SF",
+            };
+            const pos = ESPN_POS_MAP[rawPos.toUpperCase()] ?? "SF";
             const normName = normalize(name);
 
             const match = dbPlayers.find(p => normalize(p.name) === normName);
@@ -828,7 +851,7 @@ export async function registerRoutes(
               }
             } else {
               // Only add if it looks like a real NBA player (ESPN roster = active player)
-              const validPos = ["PG","SG","SF","PF","C"].includes(pos) ? pos : "SF";
+              const validPos = pos;
               await storage.createPlayer({
                 name,
                 team: dbTeam,

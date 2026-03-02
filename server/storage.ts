@@ -83,7 +83,8 @@ export interface IStorage {
   deleteUser(userId: number): Promise<void>;
   createFeedback(userId: number, message: string): Promise<Feedback>;
   getAllFeedback(): Promise<(Feedback & { userEmail: string | null })[]>;
-  updateUserAlerts(userId: number, data: { pushSubscription?: string | null; pushAlerts?: boolean; phoneNumber?: string | null; smsAlerts?: boolean }): Promise<void>;
+  updateUserAlerts(userId: number, data: { pushSubscription?: string | null; pushAlerts?: boolean; phoneNumber?: string | null; smsAlerts?: boolean; smsConsent?: boolean }): Promise<void>;
+  getUserByPhoneNumber(phone: string): Promise<User | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -440,15 +441,21 @@ export class DatabaseStorage implements IStorage {
     return rows;
   }
 
-  async updateUserAlerts(userId: number, data: { pushSubscription?: string | null; pushAlerts?: boolean; phoneNumber?: string | null; smsAlerts?: boolean }): Promise<void> {
+  async updateUserAlerts(userId: number, data: { pushSubscription?: string | null; pushAlerts?: boolean; phoneNumber?: string | null; smsAlerts?: boolean; smsConsent?: boolean }): Promise<void> {
     const update: Record<string, any> = {};
     if (data.pushSubscription !== undefined) update.pushSubscription = data.pushSubscription;
     if (data.pushAlerts !== undefined) update.pushAlerts = data.pushAlerts;
     if (data.phoneNumber !== undefined) update.phoneNumber = data.phoneNumber;
     if (data.smsAlerts !== undefined) update.smsAlerts = data.smsAlerts;
+    if (data.smsConsent !== undefined) update.smsConsent = data.smsConsent;
     if (Object.keys(update).length > 0) {
       await db.update(users).set(update).where(eq(users.id, userId));
     }
+  }
+
+  async getUserByPhoneNumber(phone: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.phoneNumber, phone));
+    return user;
   }
 }
 

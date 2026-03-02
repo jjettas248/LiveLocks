@@ -144,7 +144,8 @@ export default function Dashboard() {
     }
   };
 
-  const [activeTab, setActiveTab] = useState<"calculator" | "halftime" | "ncaab">("calculator");
+  const [activeTab, setActiveTab] = useState<"calculator" | "ncaab">("calculator");
+  const [nbaSubTab, setNbaSubTab] = useState<"live" | "halftime">("live");
   const [slateFilterProp, setSlateFilterProp] = useState<string>("all");
   const [slateFilterProb, setSlateFilterProb] = useState<string>("all");
   const [showAlertsPanel, setShowAlertsPanel] = useState(false);
@@ -346,7 +347,7 @@ export default function Dashboard() {
       if (!res.ok) return { plays: [] };
       return res.json();
     },
-    enabled: activeTab === "halftime",
+    enabled: activeTab === "calculator" && nbaSubTab === "halftime",
     refetchInterval: 5 * 60 * 1000,
     staleTime: 4 * 60 * 1000,
   });
@@ -358,18 +359,18 @@ export default function Dashboard() {
       autoRefreshRef.current = setInterval(() => {
         queryClient.invalidateQueries({ queryKey: ["/api/live-stats", selectedGameId] });
         setLastRefreshed(new Date());
-        if (activeTab === "halftime") refetchHalftimePlays();
+        if (activeTab === "calculator" && nbaSubTab === "halftime") refetchHalftimePlays();
       }, 2 * 60 * 1000);
     }
     return () => { if (autoRefreshRef.current) clearInterval(autoRefreshRef.current); };
   }, [selectedGameId, activeTab]);
 
-  // ── Auto-refresh halftime plays when tab is opened ─────────────────────────
+  // ── Auto-refresh halftime plays when sub-tab is opened ─────────────────────
   useEffect(() => {
-    if (activeTab === "halftime") {
+    if (activeTab === "calculator" && nbaSubTab === "halftime") {
       refetchHalftimePlays();
     }
-  }, [activeTab]);
+  }, [activeTab, nbaSubTab]);
 
   // ── Mobile breakpoint detection ────────────────────────────────────────────
   useEffect(() => {
@@ -690,14 +691,14 @@ export default function Dashboard() {
                 className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-500 text-xs font-medium hover:bg-amber-500/20 transition-colors"
               >
                 <Zap className="w-3 h-3" />
-                {Math.max(0, 10 - user.playsUsed)} free plays left
+                {Math.max(0, 15 - user.playsUsed)} free plays left
               </button>
             )}
             {user && user.subscriptionTier && (
               <div className="hidden sm:flex items-center gap-1.5">
                 <span data-testid="text-subscription-tier" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-medium">
                   <Star className="w-3 h-3" />
-                  {user.subscriptionTier === "elite" ? "Elite" : user.subscriptionTier === "all" ? "All Sports" : "NBA Pro"}
+                  {user.subscriptionTier === "elite" ? "All Sports" : user.subscriptionTier === "all" ? "Pro" : user.subscriptionTier}
                 </span>
                 <button
                   data-testid="button-manage-subscription"
@@ -819,10 +820,10 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* SMS (Elite only) */}
+            {/* SMS (Pro + All Sports) */}
             <div className="bg-secondary/40 rounded-xl p-4 space-y-3">
               <p className="text-sm font-semibold text-foreground">💬 SMS Alerts</p>
-              {["elite"].includes(user.subscriptionTier ?? "") || user.isAdmin
+              {["all", "elite"].includes(user.subscriptionTier ?? "") || user.isAdmin
                 ? (
                   <div className="space-y-2">
                     <p className="text-xs text-muted-foreground">Get a text message for 2H plays and ≥90% confidence plays. Msg & data rates may apply. Reply STOP to cancel anytime.</p>
@@ -864,12 +865,12 @@ export default function Dashboard() {
                   </div>
                 ) : (
                   <div>
-                    <p className="text-xs text-muted-foreground mb-2">SMS alerts are included in the Elite plan — the nuclear option for never missing a play.</p>
+                    <p className="text-xs text-muted-foreground mb-2">SMS alerts are included in the Pro and All Sports plans — never miss a 2H play.</p>
                     <button
-                      onClick={() => { setShowAlertsPanel(false); setUpgradeModalState({ playsUsed: user.playsUsed ?? 0, limit: 10 }); setShowUpgradeModal(true); }}
+                      onClick={() => { setShowAlertsPanel(false); setUpgradeModalState({ playsUsed: user.playsUsed ?? 0, limit: 15 }); setShowUpgradeModal(true); }}
                       className="px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/20"
                     >
-                      View Elite Plan →
+                      View Plans →
                     </button>
                   </div>
                 )
@@ -928,7 +929,7 @@ export default function Dashboard() {
         <div className="relative flex flex-col gap-0 w-full overflow-x-auto">
           <div className="flex gap-1 bg-secondary/40 border border-border/60 rounded-xl p-1 w-fit">
             <button
-              onClick={() => setActiveTab("calculator")}
+              onClick={() => { setActiveTab("calculator"); }}
               data-testid="tab-calculator"
               className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
                 activeTab === "calculator"
@@ -937,27 +938,6 @@ export default function Dashboard() {
               }`}
             >
               🏀 NBA Live
-            </button>
-            <button
-              onClick={() => setActiveTab("halftime")}
-              data-testid="tab-halftime"
-              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
-                activeTab === "halftime"
-                  ? "bg-primary text-primary-foreground border-glow"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <Star className="w-3.5 h-3.5" />
-              🏀 2H Plays
-            </button>
-            <button
-              data-testid="tab-mlb-locked"
-              onClick={() => setMlbPopoverOpen((v) => !v)}
-              className="px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 opacity-50 cursor-not-allowed text-muted-foreground"
-            >
-              <span role="img" aria-label="baseball">⚾</span>
-              MLB Live
-              <Lock className="w-3 h-3" />
             </button>
             {(user?.isAdmin || ["all", "elite"].includes(user?.subscriptionTier ?? "")) && (
               <button
@@ -970,15 +950,48 @@ export default function Dashboard() {
                 }`}
               >
                 🏀 NCAAB Live
-                {user?.isAdmin && (
-                  <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-yellow-500/20 text-yellow-400 ml-0.5">ADMIN</span>
-                )}
-                {!user?.isAdmin && (
-                  <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-blue-500/20 text-blue-400 ml-0.5">LIVE</span>
-                )}
               </button>
             )}
+            <button
+              data-testid="tab-mlb-locked"
+              onClick={() => setMlbPopoverOpen((v) => !v)}
+              className="px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 opacity-50 cursor-not-allowed text-muted-foreground"
+            >
+              <span role="img" aria-label="baseball">⚾</span>
+              MLB Live
+              <Lock className="w-3 h-3" />
+            </button>
           </div>
+
+          {/* NBA sub-tabs */}
+          {activeTab === "calculator" && (
+            <div className="flex gap-1 mt-2 w-fit">
+              <button
+                data-testid="tab-nba-live"
+                onClick={() => setNbaSubTab("live")}
+                className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                  nbaSubTab === "live"
+                    ? "bg-primary/20 text-primary border border-primary/40"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Live Props
+              </button>
+              <button
+                data-testid="tab-nba-halftime"
+                onClick={() => setNbaSubTab("halftime")}
+                className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 ${
+                  nbaSubTab === "halftime"
+                    ? "bg-primary/20 text-primary border border-primary/40"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Star className="w-3 h-3" />
+                2H Plays
+              </button>
+            </div>
+          )}
+
 
           {/* MLB locked popover */}
           {mlbPopoverOpen && (
@@ -1294,7 +1307,7 @@ export default function Dashboard() {
         )}
 
         {/* Main 3-column layout */}
-        {activeTab === "calculator" ? <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+        {activeTab === "calculator" && nbaSubTab === "live" ? <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
 
           {/* LEFT: Input Form */}
           <div className="lg:col-span-4 space-y-4 mb-20 lg:mb-0">
@@ -1949,8 +1962,8 @@ export default function Dashboard() {
           )}
         </div> : null}
 
-        {/* Halftime Plays Tab Content */}
-        {activeTab === "halftime" && (
+        {/* 2H Plays Sub-Tab Content */}
+        {activeTab === "calculator" && nbaSubTab === "halftime" && (
           <div className={showParlay && !isMobile ? "flex items-start gap-5" : "space-y-4"}>
             <div className={showParlay && !isMobile ? "bg-card border border-border rounded-xl p-5 flex-1 min-w-0" : "bg-card border border-border rounded-xl p-5"}>
               <div className="flex items-center justify-between mb-4">
@@ -2041,14 +2054,14 @@ export default function Dashboard() {
                     <Lock className="w-7 h-7 text-primary" />
                   </div>
                   <div>
-                    <p className="text-base font-bold text-foreground">2H Plays Require NBA Pro</p>
+                    <p className="text-base font-bold text-foreground">2H Plays Require a Pro Subscription</p>
                     <p className="text-sm text-muted-foreground mt-1 max-w-xs mx-auto">
                       The 2H halftime slate scans every live game for high-probability props. Subscribe to unlock unlimited access.
                     </p>
                   </div>
                   <button
                     data-testid="button-halftime-upgrade"
-                    onClick={() => { setUpgradeModalState({ playsUsed: user?.playsUsed ?? 10, limit: 10 }); setShowUpgradeModal(true); }}
+                    onClick={() => { setUpgradeModalState({ playsUsed: user?.playsUsed ?? 0, limit: 15 }); setShowUpgradeModal(true); }}
                     className="px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition-colors"
                   >
                     View Plans →

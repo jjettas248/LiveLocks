@@ -34,7 +34,7 @@ export async function getNCAABScoreboard(): Promise<any[]> {
 
   let res: Response;
   try {
-    res = await fetch(`${ESPN_NCAAB}/scoreboard`, {
+    res = await fetch(`${ESPN_NCAAB}/scoreboard?limit=300&groups=50`, {
       headers: { "User-Agent": "Mozilla/5.0" },
       signal: AbortSignal.timeout(8000),
     });

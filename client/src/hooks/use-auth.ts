@@ -59,10 +59,10 @@ export function useAuth() {
   });
 
   const registerMutation = useMutation({
-    mutationFn: async ({ email, password }: { email: string; password: string }) => {
+    mutationFn: async ({ email, password, smsConsent }: { email: string; password: string; smsConsent: boolean }) => {
       const res = await apiFetch("/api/auth/register", {
         method: "POST",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, smsConsent }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));

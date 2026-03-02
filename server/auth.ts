@@ -11,7 +11,7 @@ declare module "express-session" {
   }
 }
 
-const FREE_PLAY_LIMIT = 10;
+const FREE_PLAY_LIMIT = 15;
 const SALT_ROUNDS = 10;
 const JWT_SECRET = process.env.SESSION_SECRET || "livelocks-dev-secret";
 const JWT_EXPIRES = "30d";
@@ -63,6 +63,7 @@ export async function registerAuthRoutes(app: import("express").Express) {
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
     const adminEmail = process.env.ADMIN_EMAIL?.toLowerCase().trim();
     const isAdmin = adminEmail ? email.toLowerCase().trim() === adminEmail : false;
+    const smsConsent = req.body.smsConsent === true || req.body.smsConsent === "true";
 
     const user = await storage.createUser({
       email,
@@ -72,6 +73,7 @@ export async function registerAuthRoutes(app: import("express").Express) {
       playsUsed: 0,
       stripeCustomerId: null,
       stripeSubscriptionId: null,
+      smsConsent,
     });
 
     req.session.userId = user.id;

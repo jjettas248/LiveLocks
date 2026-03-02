@@ -6,12 +6,11 @@ import { db } from "./db";
 import { sql } from "drizzle-orm";
 
 const PLAN_META = {
-  nba:   { name: "NBA Pro – LiveLocks",    description: "Unlimited NBA prop calculations + push alerts",             amount: 2900 },
-  all:   { name: "All Sports – LiveLocks", description: "NBA + NCAAB live analytics + MLB coming + push alerts",    amount: 5900 },
-  elite: { name: "Elite – LiveLocks",      description: "All Sports + SMS priority alerts for 2H plays & 90%+ plays", amount: 7900 },
+  all:   { name: "Pro – LiveLocks",        description: "Unlimited NBA + NCAAB Live, 2H Plays, SMS Alerts, Push Notifications", amount: 4000 },
+  elite: { name: "All Sports – LiveLocks", description: "Everything in Pro + MLB Live (coming soon) + Priority SMS",            amount: 6500 },
 };
 
-async function getPriceIdForTier(tier: "nba" | "all" | "elite"): Promise<string | null> {
+async function getPriceIdForTier(tier: "all" | "elite"): Promise<string | null> {
   try {
     const meta = PLAN_META[tier];
     const result = await db.execute(sql`
@@ -34,7 +33,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
   app.post("/api/stripe/checkout", requireAuth, async (req: Request, res: Response) => {
     const { tier } = req.body;
     if (!tier || !PLAN_META[tier as keyof typeof PLAN_META]) {
-      return res.status(400).json({ error: "Invalid subscription tier. Must be 'nba', 'all', or 'elite'." });
+      return res.status(400).json({ error: "Invalid subscription tier. Must be 'all' or 'elite'." });
     }
 
     try {
@@ -43,7 +42,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
       const user = await storage.getUserById(userId);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const priceId = await getPriceIdForTier(tier as "nba" | "all" | "elite");
+      const priceId = await getPriceIdForTier(tier as "all" | "elite");
       const origin = req.headers.origin || `${req.protocol}://${req.headers.host}`;
       const meta = PLAN_META[tier as keyof typeof PLAN_META];
 

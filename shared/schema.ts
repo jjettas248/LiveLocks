@@ -16,6 +16,7 @@ export const users = pgTable("users", {
   pushAlerts: boolean("push_alerts").notNull().default(false),
   phoneNumber: text("phone_number"),
   smsAlerts: boolean("sms_alerts").notNull().default(false),
+  smsConsent: boolean("sms_consent").notNull().default(false),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });

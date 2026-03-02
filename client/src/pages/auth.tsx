@@ -6,11 +6,21 @@ import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
-const authSchema = z.object({
+const loginSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
   password: z.string().min(8, "Password must be at least 8 characters"),
 });
-type AuthForm = z.infer<typeof authSchema>;
+
+const registerSchema = z.object({
+  email: z.string().email("Please enter a valid email address"),
+  password: z.string().min(8, "Password must be at least 8 characters"),
+  smsConsent: z.literal(true, {
+    errorMap: () => ({ message: "You must agree to the terms to continue." }),
+  }),
+});
+
+type LoginForm = z.infer<typeof loginSchema>;
+type RegisterForm = z.infer<typeof registerSchema>;
 
 export default function AuthPage() {
   const [tab, setTab] = useState<"login" | "register">("login");
@@ -18,21 +28,32 @@ export default function AuthPage() {
   const { login, loginPending, register, registerPending } = useAuth();
   const [, navigate] = useLocation();
 
-  const form = useForm<AuthForm>({
-    resolver: zodResolver(authSchema),
+  const loginForm = useForm<LoginForm>({
+    resolver: zodResolver(loginSchema),
     defaultValues: { email: "", password: "" },
+  });
+
+  const registerForm = useForm<RegisterForm>({
+    resolver: zodResolver(registerSchema),
+    defaultValues: { email: "", password: "", smsConsent: undefined as any },
   });
 
   const isPending = loginPending || registerPending;
 
-  const onSubmit = async (data: AuthForm) => {
+  const onLoginSubmit = async (data: LoginForm) => {
     setErrorMessage(null);
     try {
-      if (tab === "login") {
-        await login(data);
-      } else {
-        await register(data);
-      }
+      await login(data);
+      navigate("/");
+    } catch (err: any) {
+      setErrorMessage(err.message || "Something went wrong. Please try again.");
+    }
+  };
+
+  const onRegisterSubmit = async (data: RegisterForm) => {
+    setErrorMessage(null);
+    try {
+      await register({ email: data.email, password: data.password, smsConsent: data.smsConsent });
       navigate("/");
     } catch (err: any) {
       setErrorMessage(err.message || "Something went wrong. Please try again.");
@@ -42,7 +63,6 @@ export default function AuthPage() {
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4 py-10">
       <div className="w-full max-w-sm space-y-4">
-        {/* Logo + Branding */}
         <div className="flex flex-col items-center gap-2 mb-2">
           <img
             src={propPulseLogo}
@@ -55,13 +75,12 @@ export default function AuthPage() {
           </div>
         </div>
 
-        {/* Auth Card */}
         <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
           <div className="flex rounded-lg bg-muted p-1 mb-6">
             <button
               data-testid="tab-login"
               type="button"
-              onClick={() => { setTab("login"); setErrorMessage(null); form.clearErrors(); }}
+              onClick={() => { setTab("login"); setErrorMessage(null); }}
               className={`flex-1 text-sm font-medium py-1.5 rounded-md transition-colors ${
                 tab === "login"
                   ? "bg-background text-foreground shadow-sm"
@@ -73,7 +92,7 @@ export default function AuthPage() {
             <button
               data-testid="tab-register"
               type="button"
-              onClick={() => { setTab("register"); setErrorMessage(null); form.clearErrors(); }}
+              onClick={() => { setTab("register"); setErrorMessage(null); }}
               className={`flex-1 text-sm font-medium py-1.5 rounded-md transition-colors ${
                 tab === "register"
                   ? "bg-background text-foreground shadow-sm"
@@ -84,63 +103,133 @@ export default function AuthPage() {
             </button>
           </div>
 
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-            <div>
-              <label className="text-sm font-medium text-foreground block mb-1.5">Email</label>
-              <input
-                data-testid="input-email"
-                type="email"
-                autoComplete="email"
-                placeholder="you@example.com"
-                {...form.register("email")}
-                className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
-              />
-              {form.formState.errors.email && (
-                <p className="text-xs text-destructive mt-1">{form.formState.errors.email.message}</p>
-              )}
-            </div>
-
-            <div>
-              <label className="text-sm font-medium text-foreground block mb-1.5">Password</label>
-              <input
-                data-testid="input-password"
-                type="password"
-                autoComplete={tab === "login" ? "current-password" : "new-password"}
-                placeholder="••••••••"
-                {...form.register("password")}
-                className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
-              />
-              {form.formState.errors.password && (
-                <p className="text-xs text-destructive mt-1">{form.formState.errors.password.message}</p>
-              )}
-            </div>
-
-            {errorMessage && (
-              <div data-testid="auth-error" className="text-sm text-destructive bg-destructive/10 rounded-lg px-3 py-2">
-                {errorMessage}
+          {tab === "login" && (
+            <form onSubmit={loginForm.handleSubmit(onLoginSubmit)} className="space-y-4">
+              <div>
+                <label className="text-sm font-medium text-foreground block mb-1.5">Email</label>
+                <input
+                  data-testid="input-email"
+                  type="email"
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  {...loginForm.register("email")}
+                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                />
+                {loginForm.formState.errors.email && (
+                  <p className="text-xs text-destructive mt-1">{loginForm.formState.errors.email.message}</p>
+                )}
               </div>
-            )}
 
-            <button
-              data-testid="button-submit-auth"
-              type="submit"
-              disabled={isPending}
-              className="w-full py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              {isPending ? (
-                <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
-              ) : tab === "login" ? "Sign In" : "Create Account"}
-            </button>
-          </form>
+              <div>
+                <label className="text-sm font-medium text-foreground block mb-1.5">Password</label>
+                <input
+                  data-testid="input-password"
+                  type="password"
+                  autoComplete="current-password"
+                  placeholder="••••••••"
+                  {...loginForm.register("password")}
+                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                />
+                {loginForm.formState.errors.password && (
+                  <p className="text-xs text-destructive mt-1">{loginForm.formState.errors.password.message}</p>
+                )}
+              </div>
+
+              {errorMessage && (
+                <div data-testid="auth-error" className="text-sm text-destructive bg-destructive/10 rounded-lg px-3 py-2">
+                  {errorMessage}
+                </div>
+              )}
+
+              <button
+                data-testid="button-submit-auth"
+                type="submit"
+                disabled={isPending}
+                className="w-full py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {isPending ? (
+                  <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                ) : "Sign In"}
+              </button>
+            </form>
+          )}
 
           {tab === "register" && (
-            <p className="text-xs text-muted-foreground text-center mt-4">
-              New accounts get 10 free plays. Upgrade anytime to unlock unlimited access.
-            </p>
+            <form onSubmit={registerForm.handleSubmit(onRegisterSubmit)} className="space-y-4">
+              <div>
+                <label className="text-sm font-medium text-foreground block mb-1.5">Email</label>
+                <input
+                  data-testid="input-email"
+                  type="email"
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  {...registerForm.register("email")}
+                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                />
+                {registerForm.formState.errors.email && (
+                  <p className="text-xs text-destructive mt-1">{registerForm.formState.errors.email.message}</p>
+                )}
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-foreground block mb-1.5">Password</label>
+                <input
+                  data-testid="input-password"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="••••••••"
+                  {...registerForm.register("password")}
+                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                />
+                {registerForm.formState.errors.password && (
+                  <p className="text-xs text-destructive mt-1">{registerForm.formState.errors.password.message}</p>
+                )}
+              </div>
+
+              <div className="flex items-start gap-2.5">
+                <input
+                  data-testid="input-sms-consent"
+                  type="checkbox"
+                  id="smsConsent"
+                  {...registerForm.register("smsConsent")}
+                  className="mt-0.5 h-4 w-4 rounded border-border accent-primary flex-shrink-0 cursor-pointer"
+                />
+                <label htmlFor="smsConsent" className="text-[11px] text-muted-foreground leading-relaxed cursor-pointer">
+                  I agree to the{" "}
+                  <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-primary/80 hover:text-primary underline">Terms of Service</a>
+                  {" "}and{" "}
+                  <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-primary/80 hover:text-primary underline">Privacy Policy</a>
+                  , and I explicitly consent to receive SMS text alerts and account notifications from LiveLocks AI. Message frequency varies. Msg & data rates may apply. Reply STOP to opt out.
+                </label>
+              </div>
+              {registerForm.formState.errors.smsConsent && (
+                <p className="text-xs text-destructive -mt-2">{registerForm.formState.errors.smsConsent.message}</p>
+              )}
+
+              {errorMessage && (
+                <div data-testid="auth-error" className="text-sm text-destructive bg-destructive/10 rounded-lg px-3 py-2">
+                  {errorMessage}
+                </div>
+              )}
+
+              <button
+                data-testid="button-submit-auth"
+                type="submit"
+                disabled={isPending}
+                className="w-full py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {isPending ? (
+                  <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                ) : "Create Account"}
+              </button>
+
+              <p className="text-xs text-muted-foreground text-center">
+                New accounts get {15} free plays. Upgrade anytime to unlock unlimited access.
+              </p>
+            </form>
           )}
         </div>
 
-        {/* MLB Coming Soon Teaser */}
         <div
           data-testid="mlb-teaser"
           className="relative rounded-xl border border-primary/30 bg-gradient-to-br from-primary/5 via-card to-card p-4 shadow-sm overflow-hidden"
@@ -168,14 +257,6 @@ export default function AuthPage() {
             </div>
           </div>
         </div>
-
-        {/* Legal footer */}
-        <p className="text-center text-[11px] text-muted-foreground/50 mt-2">
-          By creating an account you agree to our{" "}
-          <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-primary/70 hover:text-primary underline">Terms of Service</a>
-          {" "}and{" "}
-          <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-primary/70 hover:text-primary underline">Privacy Policy</a>.
-        </p>
       </div>
     </div>
   );
