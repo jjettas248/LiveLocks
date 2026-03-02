@@ -1,4 +1,4 @@
-const CACHE_NAME = "livelocks-v1";
+const CACHE_NAME = "livelocks-v2";
 const APP_SHELL = ["/", "/index.html", "/favicon.png", "/manifest.json"];
 
 self.addEventListener("install", (event) => {
@@ -37,6 +37,49 @@ self.addEventListener("fetch", (event) => {
         caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
         return response;
       });
+    })
+  );
+});
+
+self.addEventListener("push", (event) => {
+  let data = { title: "LiveLocks", body: "New alert", url: "/" };
+  try {
+    data = event.data ? event.data.json() : data;
+  } catch {}
+
+  const options = {
+    body: data.body,
+    icon: "/favicon.png",
+    badge: "/favicon.png",
+    data: { url: data.url ?? "/" },
+    vibrate: [200, 100, 200],
+    requireInteraction: false,
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(data.title, options).then(() => {
+      return self.clients.matchAll({ type: "window" }).then((clients) => {
+        for (const client of clients) {
+          client.postMessage({ type: "ALERT_RECEIVED", payload: data });
+        }
+      });
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = event.notification.data?.url ?? "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if (client.url.includes(self.location.origin) && "focus" in client) {
+          return client.focus();
+        }
+      }
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(url);
+      }
     })
   );
 });

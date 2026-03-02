@@ -6,11 +6,12 @@ import { db } from "./db";
 import { sql } from "drizzle-orm";
 
 const PLAN_META = {
-  nba: { name: "NBA Only – LiveLocks", description: "Unlimited NBA prop calculations", amount: 2500 },
-  all: { name: "All Sports – LiveLocks", description: "Unlimited NBA + Baseball prop calculations", amount: 5000 },
+  nba:   { name: "NBA Pro – LiveLocks",    description: "Unlimited NBA prop calculations + push alerts",             amount: 2900 },
+  all:   { name: "All Sports – LiveLocks", description: "NBA + NCAAB live analytics + MLB coming + push alerts",    amount: 5900 },
+  elite: { name: "Elite – LiveLocks",      description: "All Sports + SMS priority alerts for 2H plays & 90%+ plays", amount: 7900 },
 };
 
-async function getPriceIdForTier(tier: "nba" | "all"): Promise<string | null> {
+async function getPriceIdForTier(tier: "nba" | "all" | "elite"): Promise<string | null> {
   try {
     const meta = PLAN_META[tier];
     const result = await db.execute(sql`
@@ -33,7 +34,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
   app.post("/api/stripe/checkout", requireAuth, async (req: Request, res: Response) => {
     const { tier } = req.body;
     if (!tier || !PLAN_META[tier as keyof typeof PLAN_META]) {
-      return res.status(400).json({ error: "Invalid subscription tier. Must be 'nba' or 'all'." });
+      return res.status(400).json({ error: "Invalid subscription tier. Must be 'nba', 'all', or 'elite'." });
     }
 
     try {
@@ -42,7 +43,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
       const user = await storage.getUserById(userId);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const priceId = await getPriceIdForTier(tier as "nba" | "all");
+      const priceId = await getPriceIdForTier(tier as "nba" | "all" | "elite");
       const origin = req.headers.origin || `${req.protocol}://${req.headers.host}`;
       const meta = PLAN_META[tier as keyof typeof PLAN_META];
 

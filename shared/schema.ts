@@ -12,6 +12,10 @@ export const users = pgTable("users", {
   stripeCustomerId: text("stripe_customer_id"),
   stripeSubscriptionId: text("stripe_subscription_id"),
   createdAt: timestamp("created_at").defaultNow(),
+  pushSubscription: text("push_subscription"),
+  pushAlerts: boolean("push_alerts").notNull().default(false),
+  phoneNumber: text("phone_number"),
+  smsAlerts: boolean("sms_alerts").notNull().default(false),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });

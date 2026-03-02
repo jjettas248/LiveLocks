@@ -463,7 +463,15 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         // Full game projection: projected H1 + estimated H2 at same blended pace
         const projH1Full = currentTotal + blendedPace * remainH1Min;
         projectedTotal = projH1Full + (blendedPace * 20) + projTotalBonus;
-        projectedMargin = null;
+
+        // H1 per-team projection to compute projected margin
+        const homeShareH1 = currentTotal > 0
+          ? (game.homeScore / currentTotal) * 0.6 + 0.5 * 0.4
+          : 0.5;
+        const remainingH1Scoring = blendedPace * remainH1Min;
+        const proj1HHomeScore = game.homeScore + remainingH1Scoring * homeShareH1;
+        const proj1HAwayScore = game.awayScore + remainingH1Scoring * (1 - homeShareH1);
+        projectedMargin = Math.round((proj1HHomeScore - proj1HAwayScore) * 10) / 10;
 
       } else if (half === 2) {
         // H2: 70/30 blend (live H2 pace × 0.7 + H1 pace × 0.3), cap live H2 pace

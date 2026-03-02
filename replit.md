@@ -44,10 +44,11 @@ A full-stack NBA live betting tool that calculates the probability of a player h
 - Users register/login with email + password (bcrypt hashed)
 - **Play gating**: Free users get 10 total probability calculations. After 10, a paywall modal appears.
 - **Admin**: Set `ADMIN_EMAIL` env var before registering. The account with that email gets `isAdmin=true` and unlimited access.
-- **Stripe subscriptions**: Two tiers — NBA Only ($25/mo) and All Sports ($50/mo, includes Baseball when it launches)
-- Subscription tier stored in `users.subscriptionTier` (null = free, 'nba' = NBA only, 'all' = all sports)
+- **Stripe subscriptions**: 3 tiers — NBA Pro ($29/mo), All Sports ($59/mo), Elite ($79/mo + SMS alerts)
+- Subscription tier stored in `users.subscriptionTier` (null = free, 'nba' = NBA Pro, 'all' = All Sports, 'elite' = Elite)
 - Stripe products seeded via `npx tsx scripts/seed-stripe-products.ts` (already run)
 - Stripe integration via Replit connector (stripe-replit-sync keeps local DB in sync via webhooks)
+- Elite tier unlocks all "all" features + SMS alerts via Twilio
 
 ### Admin Setup Flow
 1. Set `ADMIN_EMAIL` environment variable to your email address

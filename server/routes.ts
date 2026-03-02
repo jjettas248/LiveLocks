@@ -9,6 +9,8 @@ import { computeNCAABPlays, getNCAABScoreboard } from "./ncaabService";
 import { calculateParlay } from "./parlayService";
 import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin } from "./auth";
 import { registerStripeRoutes } from "./stripeService";
+import { getVapidPublicKey } from "./webpush";
+import { checkAndSendAlerts } from "./alertManager";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -34,8 +36,8 @@ export async function registerRoutes(
     try {
       const userId = parseInt(String(req.params.id), 10);
       const { tier } = req.body as { tier: string | null };
-      if (tier !== null && tier !== "nba" && tier !== "all") {
-        return res.status(400).json({ error: "Invalid tier. Use null, 'nba', or 'all'" });
+      if (tier !== null && tier !== "nba" && tier !== "all" && tier !== "elite") {
+        return res.status(400).json({ error: "Invalid tier. Use null, 'nba', 'all', or 'elite'" });
       }
       await storage.setUserSubscriptionTier(userId, tier);
       return res.json({ success: true });
@@ -666,7 +668,10 @@ export async function registerRoutes(
 
       // Sort by edge descending (highest edge = most confident call)
       allPlays.sort((a, b) => b.edge - a.edge);
-      res.json({ plays: allPlays.slice(0, 20) });
+      const topPlays = allPlays.slice(0, 20);
+      res.json({ plays: topPlays });
+      // Fire-and-forget alert checks — never blocks the response
+      checkAndSendAlerts(topPlays, storage).catch(console.warn);
     } catch (e) {
       res.status(502).json({ message: "Halftime plays unavailable", details: (e as any).message });
     }
@@ -682,6 +687,76 @@ export async function registerRoutes(
       res.json(result);
     } catch (err) {
       res.status(500).json({ message: "Internal server error", details: (err as any).message });
+    }
+  });
+
+  // ── Alert / notification routes ───────────────────────────────────────────
+
+  app.get("/api/vapid-public-key", (_req, res) => {
+    const key = getVapidPublicKey();
+    if (!key) return res.status(503).json({ error: "Push notifications not configured" });
+    res.json({ publicKey: key });
+  });
+
+  app.get("/api/user/alerts", requireAuth, async (req, res) => {
+    try {
+      const userId = (req as any).resolvedUserId!;
+      const user = await storage.getUserById(userId);
+      if (!user) return res.status(401).json({ error: "Not found" });
+      res.json({
+        pushAlerts: user.pushAlerts,
+        hasSubscription: !!user.pushSubscription,
+        smsAlerts: user.smsAlerts,
+        phoneNumber: user.phoneNumber ?? null,
+      });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch alert settings" });
+    }
+  });
+
+  app.post("/api/user/alerts/push-subscription", requireAuth, async (req, res) => {
+    try {
+      const userId = (req as any).resolvedUserId!;
+      const { subscription } = req.body;
+      if (!subscription || typeof subscription !== "object") {
+        return res.status(400).json({ error: "Invalid subscription" });
+      }
+      await storage.updateUserAlerts(userId, {
+        pushSubscription: JSON.stringify(subscription),
+        pushAlerts: true,
+      });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to save push subscription" });
+    }
+  });
+
+  app.delete("/api/user/alerts/push-subscription", requireAuth, async (req, res) => {
+    try {
+      const userId = (req as any).resolvedUserId!;
+      await storage.updateUserAlerts(userId, { pushSubscription: null, pushAlerts: false });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to remove push subscription" });
+    }
+  });
+
+  app.post("/api/user/alerts/sms", requireAuth, async (req, res) => {
+    try {
+      const userId = (req as any).resolvedUserId!;
+      const user = await storage.getUserById(userId);
+      if (!user) return res.status(401).json({ error: "Not found" });
+      if (!["elite"].includes(user.subscriptionTier ?? "") && !user.isAdmin) {
+        return res.status(403).json({ error: "SMS alerts require an Elite subscription" });
+      }
+      const { phoneNumber, smsAlerts } = req.body;
+      await storage.updateUserAlerts(userId, {
+        phoneNumber: phoneNumber ?? null,
+        smsAlerts: !!smsAlerts,
+      });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to update SMS settings" });
     }
   });
 

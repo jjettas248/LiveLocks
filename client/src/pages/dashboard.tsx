@@ -91,6 +91,13 @@ function americanToImplied(odds: number): number {
     : 100 / (odds + 100);
 }
 
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+}
+
 export default function Dashboard() {
   const { user, logout } = useAuth();
   const [, navigate] = useLocation();
@@ -140,6 +147,15 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<"calculator" | "halftime" | "ncaab">("calculator");
   const [slateFilterProp, setSlateFilterProp] = useState<string>("all");
   const [slateFilterProb, setSlateFilterProb] = useState<string>("all");
+  const [showAlertsPanel, setShowAlertsPanel] = useState(false);
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [pushLoading, setPushLoading] = useState(false);
+  const [phoneInput, setPhoneInput] = useState("");
+  const [smsEnabled, setSmsEnabled] = useState(false);
+  const [smsLoading, setSmsLoading] = useState(false);
+  const [alertHistory, setAlertHistory] = useState<{ title: string; body: string; time: number }[]>(() => {
+    try { return JSON.parse(localStorage.getItem("ll_alerts") ?? "[]"); } catch { return []; }
+  });
 
   const loadPlayInCalculator = (play: any) => {
     if (play.gameId) setSelectedGameId(play.gameId);
@@ -176,6 +192,87 @@ export default function Dashboard() {
       gameClock: "12:00",
     },
   });
+
+  // ── Push notification subscription state ─────────────────────────────────
+  useEffect(() => {
+    if (!user) return;
+    fetch("/api/user/alerts").then(r => r.json()).then(d => {
+      if (d.hasSubscription) setPushSubscribed(true);
+      if (d.phoneNumber) setPhoneInput(d.phoneNumber);
+      if (d.smsAlerts) setSmsEnabled(true);
+    }).catch(() => {});
+
+    if ("serviceWorker" in navigator && "PushManager" in window) {
+      navigator.serviceWorker.ready.then(reg => {
+        reg.pushManager.getSubscription().then(sub => {
+          if (sub) setPushSubscribed(true);
+        });
+      });
+      navigator.serviceWorker.addEventListener("message", (e) => {
+        if (e.data?.type === "ALERT_RECEIVED") {
+          const payload = e.data.payload;
+          setAlertHistory(prev => {
+            const updated = [{ title: payload.title, body: payload.body, time: Date.now() }, ...prev].slice(0, 10);
+            try { localStorage.setItem("ll_alerts", JSON.stringify(updated)); } catch {}
+            return updated;
+          });
+        }
+      });
+    }
+  }, [user]);
+
+  const handleEnablePush = async () => {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      toast({ title: "Push not supported", description: "Please use Chrome or Firefox on Android, or install the app on iOS 16.4+.", variant: "destructive" });
+      return;
+    }
+    setPushLoading(true);
+    try {
+      const keyRes = await fetch("/api/vapid-public-key");
+      if (!keyRes.ok) { toast({ title: "Push not configured yet", variant: "destructive" }); return; }
+      const { publicKey } = await keyRes.json();
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+      await apiRequest("POST", "/api/user/alerts/push-subscription", { subscription: sub.toJSON() });
+      setPushSubscribed(true);
+      toast({ title: "Push alerts enabled!", description: "You'll be notified when plays hit ≥90% or 2H goes live." });
+    } catch (err: any) {
+      toast({ title: "Could not enable push", description: err.message, variant: "destructive" });
+    } finally {
+      setPushLoading(false);
+    }
+  };
+
+  const handleDisablePush = async () => {
+    setPushLoading(true);
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) await sub.unsubscribe();
+      await apiRequest("DELETE", "/api/user/alerts/push-subscription", {});
+      setPushSubscribed(false);
+      toast({ title: "Push alerts disabled" });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setPushLoading(false);
+    }
+  };
+
+  const handleSaveSms = async () => {
+    setSmsLoading(true);
+    try {
+      await apiRequest("POST", "/api/user/alerts/sms", { phoneNumber: phoneInput, smsAlerts: smsEnabled });
+      toast({ title: "SMS settings saved!" });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setSmsLoading(false);
+    }
+  };
 
   // ── Injury data (polled every 5 min) ──────────────────────────────────────
   const { data: injuryData } = useQuery<InjuryPlayer[]>({
@@ -526,7 +623,9 @@ export default function Dashboard() {
             />
             <div className="flex flex-col leading-none">
               <h1 className="text-xl font-bold tracking-tight text-foreground">LiveLocks</h1>
-              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest mt-0.5">by PropPulse · NBA</span>
+              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest mt-0.5">
+                by PropPulse · {activeTab === "ncaab" ? "NCAAB" : "NBA"}
+              </span>
             </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
@@ -552,7 +651,7 @@ export default function Dashboard() {
               <div className="hidden sm:flex items-center gap-1.5">
                 <span data-testid="text-subscription-tier" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-medium">
                   <Star className="w-3 h-3" />
-                  {user.subscriptionTier === "all" ? "All Sports" : "NBA"}
+                  {user.subscriptionTier === "elite" ? "Elite" : user.subscriptionTier === "all" ? "All Sports" : "NBA Pro"}
                 </span>
                 <button
                   data-testid="button-manage-subscription"
@@ -578,6 +677,17 @@ export default function Dashboard() {
                 <RefreshCw className="w-3.5 h-3.5" />
               )}
               Sync Rosters
+            </button>
+            <button
+              data-testid="button-alerts-panel"
+              onClick={() => setShowAlertsPanel((v) => !v)}
+              className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors"
+              title="Alerts & notifications"
+            >
+              <span className="text-sm">🔔</span>
+              {alertHistory.length > 0 && !showAlertsPanel && (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 border border-background" />
+              )}
             </button>
             <button
               onClick={() => setShowParlay(!showParlay)}
@@ -618,6 +728,119 @@ export default function Dashboard() {
         </div>
       </header>
 
+      {/* Alerts Panel — slides down below header */}
+      {showAlertsPanel && user && (
+        <div className="border-b border-border/60 bg-card/80 backdrop-blur-sm">
+          <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-foreground">Alerts & Notifications</h3>
+              <button onClick={() => setShowAlertsPanel(false)} className="text-xs text-muted-foreground hover:text-foreground">✕ Close</button>
+            </div>
+
+            {/* Push Notifications */}
+            <div className="bg-secondary/40 rounded-xl p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">📲 Push Notifications</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Fires when any play hits ≥90% confidence or 2H goes live — even when the app is closed (if installed to home screen).</p>
+                </div>
+                {pushSubscribed
+                  ? (
+                    <button
+                      data-testid="button-disable-push"
+                      onClick={handleDisablePush}
+                      disabled={pushLoading}
+                      className="shrink-0 px-3 py-1.5 rounded-lg bg-secondary border border-border text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    >
+                      {pushLoading ? "..." : "Disable"}
+                    </button>
+                  ) : (
+                    <button
+                      data-testid="button-enable-push"
+                      onClick={handleEnablePush}
+                      disabled={pushLoading}
+                      className="shrink-0 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 disabled:opacity-50"
+                    >
+                      {pushLoading ? "..." : "Enable"}
+                    </button>
+                  )
+                }
+              </div>
+              {pushSubscribed && (
+                <p className="text-xs text-green-400 flex items-center gap-1">
+                  <span>✓</span> Push alerts active
+                </p>
+              )}
+            </div>
+
+            {/* SMS (Elite only) */}
+            <div className="bg-secondary/40 rounded-xl p-4 space-y-3">
+              <p className="text-sm font-semibold text-foreground">💬 SMS Alerts</p>
+              {["elite"].includes(user.subscriptionTier ?? "") || user.isAdmin
+                ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">Get a text message for 2H plays and ≥90% confidence plays.</p>
+                    <input
+                      data-testid="input-phone-number"
+                      type="tel"
+                      placeholder="+1 555 000 0000"
+                      value={phoneInput}
+                      onChange={(e) => setPhoneInput(e.target.value)}
+                      className="w-full px-3 py-1.5 rounded-lg bg-background border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary"
+                    />
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <button
+                          data-testid="toggle-sms-alerts"
+                          type="button"
+                          onClick={() => setSmsEnabled(v => !v)}
+                          className={`w-10 h-5 rounded-full transition-colors relative ${smsEnabled ? "bg-primary" : "bg-secondary border border-border"}`}
+                        >
+                          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${smsEnabled ? "left-5" : "left-0.5"}`} />
+                        </button>
+                        <span className="text-xs text-muted-foreground">{smsEnabled ? "SMS on" : "SMS off"}</span>
+                      </label>
+                      <button
+                        data-testid="button-save-sms"
+                        onClick={handleSaveSms}
+                        disabled={smsLoading}
+                        className="ml-auto px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 disabled:opacity-50"
+                      >
+                        {smsLoading ? "Saving..." : "Save"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-2">SMS alerts are included in the Elite plan — the nuclear option for never missing a play.</p>
+                    <button
+                      onClick={() => { setShowAlertsPanel(false); setUpgradeModalState({ playsUsed: user.playsUsed ?? 0, limit: 10 }); setShowUpgradeModal(true); }}
+                      className="px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/20"
+                    >
+                      View Elite Plan →
+                    </button>
+                  </div>
+                )
+              }
+            </div>
+
+            {/* Alert history */}
+            {alertHistory.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Recent Alerts</p>
+                {alertHistory.slice(0, 5).map((a, i) => (
+                  <div key={i} className="bg-secondary/30 rounded-lg px-3 py-2">
+                    <p className="text-xs font-semibold text-foreground">{a.title}</p>
+                    <p className="text-xs text-muted-foreground">{a.body}</p>
+                    <p className="text-[10px] text-muted-foreground/50 mt-0.5">{new Date(a.time).toLocaleTimeString()}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-5">
 
 
@@ -633,7 +856,7 @@ export default function Dashboard() {
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              Live Calculator
+              🏀 NBA Live
             </button>
             <button
               onClick={() => setActiveTab("halftime")}
@@ -645,7 +868,7 @@ export default function Dashboard() {
               }`}
             >
               <Star className="w-3.5 h-3.5" />
-              Top 2H Plays
+              🏀 2H Plays
             </button>
             <button
               data-testid="tab-mlb-locked"
@@ -653,7 +876,7 @@ export default function Dashboard() {
               className="px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 opacity-50 cursor-not-allowed text-muted-foreground"
             >
               <span role="img" aria-label="baseball">⚾</span>
-              MLB
+              MLB Live
               <Lock className="w-3 h-3" />
             </button>
             {user?.isAdmin && (
@@ -666,8 +889,7 @@ export default function Dashboard() {
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                <span role="img" aria-label="basketball">🏀</span>
-                NCAAB
+                🏀 NCAAB Live
                 <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-yellow-500/20 text-yellow-400 ml-0.5">ADMIN</span>
               </button>
             )}
@@ -1779,12 +2001,24 @@ export default function Dashboard() {
                             )}
                           </div>
                           <div className="text-right flex-shrink-0">
-                            <div className={`text-xl font-bold font-mono ${
-                              play.probability >= 65 ? "text-green-400" :
-                              play.probability <= 35 ? "text-red-400" : "text-yellow-400"
-                            }`}>
-                              {play.probability.toFixed(1)}%
-                            </div>
+                            {(() => {
+                              const displayProb = play.betDirection === "under"
+                                ? Math.round((100 - play.probability) * 10) / 10
+                                : play.probability;
+                              return (
+                                <>
+                                  <div className={`text-xl font-bold font-mono ${
+                                    displayProb >= 65 ? "text-green-400" :
+                                    displayProb <= 35 ? "text-red-400" : "text-yellow-400"
+                                  }`}>
+                                    {displayProb.toFixed(1)}%
+                                  </div>
+                                  <div className="text-[9px] font-semibold text-muted-foreground">
+                                    {isOver ? "Over %" : "Under %"}
+                                  </div>
+                                </>
+                              );
+                            })()}
                             <div className="text-xs text-muted-foreground">
                               Edge: +{play.edge.toFixed(1)}%
                             </div>
@@ -1806,6 +2040,7 @@ export default function Dashboard() {
                           <span className="text-xs text-muted-foreground">
                             H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}
                           </span>
+                          <span data-testid="hint-tap-verify" className="text-[10px] text-muted-foreground/50 italic">Tap card to cross-check →</span>
                         </div>
                         <button
                           type="button"

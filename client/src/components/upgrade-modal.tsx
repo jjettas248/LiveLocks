@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, Zap, Trophy, Clock } from "lucide-react";
+import { X, Zap, Trophy, Clock, CheckCircle2 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
 interface UpgradeModalProps {
@@ -11,21 +11,45 @@ interface UpgradeModalProps {
 const PLANS = [
   {
     id: "nba",
-    name: "NBA Only",
-    price: "$25",
+    name: "🏀 NBA Pro",
+    price: "$29",
     period: "/month",
-    description: "Unlimited probability calculations for NBA",
     badge: null,
     icon: Trophy,
+    features: [
+      "Unlimited NBA prop calculations",
+      "Live halftime slate — Top 2H Plays",
+      "Parlay builder with correlation scoring",
+      "Push notifications for high-confidence plays",
+    ],
   },
   {
     id: "all",
-    name: "All Sports",
-    price: "$50",
+    name: "🏀⚾ All Sports",
+    price: "$59",
     period: "/month",
-    description: "NBA + Baseball (coming next month) — unlimited access",
-    badge: "Best Value",
+    badge: "Most Popular",
     icon: Zap,
+    features: [
+      "Everything in NBA Pro",
+      "NCAAB live analytics (coming — admin preview now)",
+      "MLB Live prop predictions (coming next month)",
+      "Push alerts for 2H plays & 90%+ confidence",
+    ],
+  },
+  {
+    id: "elite",
+    name: "⚡ Elite",
+    price: "$79",
+    period: "/month",
+    badge: "Serious Bettors",
+    icon: Zap,
+    features: [
+      "Everything in All Sports",
+      "SMS priority alerts — never miss a 2H play",
+      "SMS alerts for ≥90% confidence plays",
+      "Early access to every new sport & feature",
+    ],
   },
 ];
 
@@ -53,12 +77,12 @@ export function UpgradeModal({ playsUsed, limit, onClose }: UpgradeModalProps) {
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div
         data-testid="upgrade-modal"
-        className="relative w-full max-w-md bg-card border border-border rounded-2xl shadow-2xl overflow-hidden"
+        className="relative w-full max-w-md bg-card border border-border rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto"
       >
         <button
           data-testid="button-close-upgrade"
           onClick={onClose}
-          className="absolute top-4 right-4 text-muted-foreground hover:text-foreground transition-colors"
+          className="absolute top-4 right-4 text-muted-foreground hover:text-foreground transition-colors z-10"
         >
           <X className="w-5 h-5" />
         </button>
@@ -70,11 +94,11 @@ export function UpgradeModal({ playsUsed, limit, onClose }: UpgradeModalProps) {
           </div>
           <h2 className="text-xl font-bold text-foreground">You've used all {limit} free plays</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Upgrade to get unlimited access and keep finding edges.
+            Unlock unlimited access and stay ahead of every line.
           </p>
         </div>
 
-        <div className="p-6 space-y-3">
+        <div className="p-4 space-y-3">
           {PLANS.map((plan) => {
             const Icon = plan.icon;
             const isLoading = loadingTier === plan.id;
@@ -86,7 +110,7 @@ export function UpgradeModal({ playsUsed, limit, onClose }: UpgradeModalProps) {
                 disabled={!!loadingTier}
                 className="w-full text-left p-4 rounded-xl border border-border bg-background hover:border-primary hover:bg-primary/5 transition-all disabled:opacity-60 group relative"
               >
-                <div className="flex items-start justify-between gap-3 mb-1">
+                <div className="flex items-start justify-between gap-3 mb-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <Icon className="w-4 h-4 text-primary shrink-0" />
                     <div className="flex flex-col">
@@ -103,7 +127,14 @@ export function UpgradeModal({ playsUsed, limit, onClose }: UpgradeModalProps) {
                     <span className="text-xs font-normal text-muted-foreground">{plan.period}</span>
                   </span>
                 </div>
-                <p className="text-xs text-muted-foreground pl-6">{plan.description}</p>
+                <ul className="space-y-1 pl-0">
+                  {plan.features.map((f, i) => (
+                    <li key={i} className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                      <CheckCircle2 className="w-3 h-3 text-primary/60 shrink-0 mt-0.5" />
+                      {f}
+                    </li>
+                  ))}
+                </ul>
                 {isLoading && (
                   <div className="absolute inset-0 flex items-center justify-center bg-card/80 rounded-xl">
                     <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
