@@ -44,11 +44,22 @@ A full-stack NBA live betting tool that calculates the probability of a player h
 - Users register/login with email + password (bcrypt hashed)
 - **Play gating**: Free users get 10 total probability calculations. After 10, a paywall modal appears.
 - **Admin**: Set `ADMIN_EMAIL` env var before registering. The account with that email gets `isAdmin=true` and unlimited access.
+- **Admin credentials**: jaylin.becker22@icloud.com / LiveLocks2026!
 - **Stripe subscriptions**: 3 tiers — NBA Pro ($29/mo), All Sports ($59/mo), Elite ($79/mo + SMS alerts)
 - Subscription tier stored in `users.subscriptionTier` (null = free, 'nba' = NBA Pro, 'all' = All Sports, 'elite' = Elite)
-- Stripe products seeded via `npx tsx scripts/seed-stripe-products.ts` (already run)
+- Stripe products seeded via `npx tsx scripts/seed-stripe-products.ts`
 - Stripe integration via Replit connector (stripe-replit-sync keeps local DB in sync via webhooks)
 - Elite tier unlocks all "all" features + SMS alerts via Twilio
+
+### Access Control (Backend Gating)
+- `/api/halftime-plays` — requires `requireTier("nba","all","elite")` — free users get 403
+- `/api/ncaab/plays`, `/api/ncaab/games` — requires `requireTier("all","elite")` — NBA Pro and free users get 403
+- Admin bypass: `isAdmin=true` passes all tier checks automatically
+
+### Frontend Gating
+- 2H Plays tab: shows locked teaser with upgrade CTA if user gets 401/403 from halftime endpoint
+- NCAAB tab: only rendered in tab bar for `isAdmin || ["all","elite"].includes(subscriptionTier)`
+- NCAAB content: rendered only for `isAdmin || ["all","elite"].includes(subscriptionTier)`
 
 ### Admin Setup Flow
 1. Set `ADMIN_EMAIL` environment variable to your email address
@@ -56,10 +67,26 @@ A full-stack NBA live betting tool that calculates the probability of a player h
 3. The account will have `isAdmin=true` and unlimited play access
 
 ### Stripe Setup
-- Products already created: "NBA Only – LiveLocks" ($25/mo) and "All Sports – LiveLocks" ($50/mo)
+- 3 products: "NBA Pro – LiveLocks" ($29), "All Sports – LiveLocks" ($59), "Elite – LiveLocks" ($79)
 - Webhook endpoint: `POST /api/stripe/webhook` (registered before express.json middleware)
-- Checkout endpoint: `POST /api/stripe/checkout` with body `{ tier: "nba" | "all" }`
+- Checkout endpoint: `POST /api/stripe/checkout` with body `{ tier: "nba" | "all" | "elite" }`
 - On payment success: user redirected to `/?payment=success&tier={tier}`
+
+### Push Notifications (VAPID)
+- VAPID keys stored as `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` environment variables
+- `/api/vapid-public-key` returns the public key to the frontend for browser push subscription
+- `server/webpush.ts` handles initialization and sending
+
+### SMS Alerts (Twilio — Elite tier)
+- `server/twilioService.ts` wraps the Twilio SDK
+- In `server/alertManager.ts`, Elite users with `smsAlerts=true` and a `phoneNumber` receive SMS
+- Required env vars: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`
+- Gracefully degrades: if vars missing, logs warning and continues without SMS
+
+### PWA Install Prompt
+- `beforeinstallprompt` event captured on Chrome/Android; shows install banner in dashboard
+- iOS: shows static "Tap Share → Add to Home Screen" banner
+- Banner dismissal stored in `localStorage` key `ll_pwa_dismissed`
 
 ### Stripe Checkout Appearance
 Two things appear in the Stripe checkout header that may need updating:

@@ -148,6 +148,15 @@ export default function Dashboard() {
   const [slateFilterProp, setSlateFilterProp] = useState<string>("all");
   const [slateFilterProb, setSlateFilterProb] = useState<string>("all");
   const [showAlertsPanel, setShowAlertsPanel] = useState(false);
+  const [pwaPromptDismissed, setPwaPromptDismissed] = useState(() => !!localStorage.getItem("ll_pwa_dismissed"));
+  const deferredInstallPromptRef = useRef<any>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+  const [isIosPwa] = useState(() => {
+    const ua = navigator.userAgent.toLowerCase();
+    const isIos = /iphone|ipad|ipod/.test(ua);
+    const isStandalone = (window.navigator as any).standalone === true;
+    return isIos && !isStandalone;
+  });
   const [pushSubscribed, setPushSubscribed] = useState(false);
   const [pushLoading, setPushLoading] = useState(false);
   const [phoneInput, setPhoneInput] = useState("");
@@ -192,6 +201,37 @@ export default function Dashboard() {
       gameClock: "12:00",
     },
   });
+
+  // ── PWA install prompt ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (pwaPromptDismissed) return;
+    const handler = (e: Event) => {
+      e.preventDefault();
+      deferredInstallPromptRef.current = e;
+      setShowInstallBanner(true);
+    };
+    window.addEventListener("beforeinstallprompt", handler);
+    if (isIosPwa) setShowInstallBanner(true);
+    return () => window.removeEventListener("beforeinstallprompt", handler);
+  }, [pwaPromptDismissed, isIosPwa]);
+
+  const handleInstall = async () => {
+    if (deferredInstallPromptRef.current) {
+      deferredInstallPromptRef.current.prompt();
+      const choice = await deferredInstallPromptRef.current.userChoice;
+      if (choice.outcome === "accepted") {
+        setShowInstallBanner(false);
+        setPwaPromptDismissed(true);
+        localStorage.setItem("ll_pwa_dismissed", "1");
+      }
+    }
+  };
+
+  const dismissInstallBanner = () => {
+    setShowInstallBanner(false);
+    setPwaPromptDismissed(true);
+    localStorage.setItem("ll_pwa_dismissed", "1");
+  };
 
   // ── Push notification subscription state ─────────────────────────────────
   useEffect(() => {
@@ -293,10 +333,16 @@ export default function Dashboard() {
   );
 
   // ── Halftime plays ────────────────────────────────────────────────────────
+  const [halftimeLocked, setHalftimeLocked] = useState(false);
   const { data: halftimePlaysData, isLoading: isHalftimePlaysLoading, refetch: refetchHalftimePlays } = useQuery<{ plays: any[]; message?: string }>({
     queryKey: ["/api/halftime-plays"],
     queryFn: async () => {
       const res = await fetch("/api/halftime-plays");
+      if (res.status === 401 || res.status === 403) {
+        setHalftimeLocked(true);
+        return { plays: [] };
+      }
+      setHalftimeLocked(false);
       if (!res.ok) return { plays: [] };
       return res.json();
     },
@@ -841,6 +887,34 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* PWA Install Banner */}
+      {showInstallBanner && !pwaPromptDismissed && user && (
+        <div className="border-b border-border/60 bg-primary/5">
+          <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5 flex items-center gap-3">
+            <span className="text-lg">📲</span>
+            <p className="flex-1 text-xs text-foreground">
+              {isIosPwa
+                ? "Tap Share → Add to Home Screen to enable push alerts when the app is closed."
+                : "Install LiveLocks to your home screen to get push alerts even when the app is closed."}
+            </p>
+            {!isIosPwa && (
+              <button
+                data-testid="button-pwa-install"
+                onClick={handleInstall}
+                className="shrink-0 px-3 py-1 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90"
+              >
+                Install
+              </button>
+            )}
+            <button
+              data-testid="button-pwa-dismiss"
+              onClick={dismissInstallBanner}
+              className="shrink-0 text-muted-foreground hover:text-foreground text-xs"
+            >✕</button>
+          </div>
+        </div>
+      )}
+
       <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-5">
 
 
@@ -879,7 +953,7 @@ export default function Dashboard() {
               MLB Live
               <Lock className="w-3 h-3" />
             </button>
-            {user?.isAdmin && (
+            {(user?.isAdmin || ["all", "elite"].includes(user?.subscriptionTier ?? "")) && (
               <button
                 data-testid="tab-ncaab"
                 onClick={() => setActiveTab("ncaab")}
@@ -890,7 +964,12 @@ export default function Dashboard() {
                 }`}
               >
                 🏀 NCAAB Live
-                <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-yellow-500/20 text-yellow-400 ml-0.5">ADMIN</span>
+                {user?.isAdmin && (
+                  <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-yellow-500/20 text-yellow-400 ml-0.5">ADMIN</span>
+                )}
+                {!user?.isAdmin && (
+                  <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-blue-500/20 text-blue-400 ml-0.5">LIVE</span>
+                )}
               </button>
             )}
           </div>
@@ -1949,26 +2028,48 @@ export default function Dashboard() {
                   </div>
               </div>
 
-              {isHalftimePlaysLoading && (
+              {/* Locked teaser for free/unauthenticated users */}
+              {halftimeLocked && !isHalftimePlaysLoading && (
+                <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
+                  <div className="w-14 h-14 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+                    <Lock className="w-7 h-7 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-base font-bold text-foreground">2H Plays Require NBA Pro</p>
+                    <p className="text-sm text-muted-foreground mt-1 max-w-xs mx-auto">
+                      The 2H halftime slate scans every live game for high-probability props. Subscribe to unlock unlimited access.
+                    </p>
+                  </div>
+                  <button
+                    data-testid="button-halftime-upgrade"
+                    onClick={() => { setUpgradeModalState({ playsUsed: user?.playsUsed ?? 10, limit: 10 }); setShowUpgradeModal(true); }}
+                    className="px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition-colors"
+                  >
+                    View Plans →
+                  </button>
+                </div>
+              )}
+
+              {!halftimeLocked && isHalftimePlaysLoading && (
                 <div className="flex items-center justify-center py-12 gap-2 text-muted-foreground">
                   <Loader2 className="w-5 h-5 animate-spin" />
                   <span>Calculating best plays…</span>
                 </div>
               )}
-              {!isHalftimePlaysLoading && halftimePlaysData?.message && halftimePlaysData.plays.length === 0 && (
+              {!halftimeLocked && !isHalftimePlaysLoading && halftimePlaysData?.message && halftimePlaysData.plays.length === 0 && (
                 <div className="text-center py-12 text-muted-foreground">
                   <Star className="w-8 h-8 mx-auto mb-3 opacity-30" />
                   <p className="text-sm">{halftimePlaysData.message}</p>
                   <p className="text-xs text-muted-foreground/60 mt-1">Check back when games are at halftime.</p>
                 </div>
               )}
-              {!isHalftimePlaysLoading && halftimePlaysData && halftimePlaysData.plays.length > 0 && filteredPlays.length === 0 && (
+              {!halftimeLocked && !isHalftimePlaysLoading && halftimePlaysData && halftimePlaysData.plays.length > 0 && filteredPlays.length === 0 && (
                 <div className="text-center py-10 text-muted-foreground">
                   <p className="text-sm">No plays match the current filters.</p>
                   <button onClick={() => { setSlateFilterProp("all"); setSlateFilterProb("all"); }} className="text-xs text-primary mt-2 hover:underline">Clear filters</button>
                 </div>
               )}
-              {!isHalftimePlaysLoading && halftimePlaysData && halftimePlaysData.plays.length > 0 && filteredPlays.length > 0 && (
+              {!halftimeLocked && !isHalftimePlaysLoading && halftimePlaysData && halftimePlaysData.plays.length > 0 && filteredPlays.length > 0 && (
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {filteredPlays.map((play: any, idx: number) => {
                     const isOver = play.betDirection === "over";
@@ -2073,7 +2174,7 @@ export default function Dashboard() {
                   })}
                 </div>
               )}
-              {!isHalftimePlaysLoading && !halftimePlaysData && (
+              {!halftimeLocked && !isHalftimePlaysLoading && !halftimePlaysData && (
                 <div className="text-center py-12 text-muted-foreground">
                   <Star className="w-8 h-8 mx-auto mb-3 opacity-30" />
                   <p className="text-sm">No halftime plays available.</p>
@@ -2099,9 +2200,10 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* NCAAB Admin Tab — live data */}
-        {activeTab === "ncaab" && user?.isAdmin && (
+        {/* NCAAB Tab — live data for All Sports, Elite, and Admin */}
+        {activeTab === "ncaab" && (user?.isAdmin || ["all", "elite"].includes(user?.subscriptionTier ?? "")) && (
           <NCAABAdminTab
+            isAdmin={user?.isAdmin ?? false}
             onAddToParlay={(pick) => {
               if (parlayPicks.length < 10) {
                 setParlayPicks((prev) => [...prev, pick]);

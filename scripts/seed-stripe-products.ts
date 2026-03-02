@@ -3,15 +3,21 @@ import { getUncachableStripeClient } from "../server/stripeClient";
 const PRODUCTS = [
   {
     key: "nba",
-    name: "NBA Only – LiveLocks",
-    description: "Unlimited NBA prop probability calculations",
-    amount: 2500,
+    name: "NBA Pro – LiveLocks",
+    description: "Unlimited NBA prop calculations, live halftime slate, parlay builder, push alerts",
+    amount: 2900,
   },
   {
     key: "all",
     name: "All Sports – LiveLocks",
-    description: "Unlimited NBA + Baseball (coming soon) prop probability calculations",
-    amount: 5000,
+    description: "NBA + NCAAB live analytics + MLB (coming soon) + push notifications",
+    amount: 5900,
+  },
+  {
+    key: "elite",
+    name: "Elite – LiveLocks",
+    description: "All Sports + SMS priority alerts for 2H plays and 90%+ confidence plays",
+    amount: 7900,
   },
 ];
 

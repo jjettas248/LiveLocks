@@ -142,6 +142,22 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
   next();
 }
 
+export function requireTier(...tiers: string[]) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const userId = getUserIdFromRequest(req);
+    if (!userId) return res.status(401).json({ error: "Not authenticated" });
+    const user = await storage.getUserById(userId);
+    if (!user) return res.status(401).json({ error: "Not authenticated" });
+    if (user.isAdmin) return next();
+    if (user.subscriptionTier && tiers.includes(user.subscriptionTier)) return next();
+    return res.status(403).json({
+      error: "tier_required",
+      requiredTiers: tiers,
+      message: `This feature requires one of: ${tiers.join(", ")} subscription.`,
+    });
+  };
+}
+
 export async function requirePlayAccess(req: Request, res: Response, next: NextFunction) {
   const userId = getUserIdFromRequest(req);
   if (!userId) {

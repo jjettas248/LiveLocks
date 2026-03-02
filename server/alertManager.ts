@@ -1,4 +1,5 @@
 import { sendPush } from "./webpush";
+import { sendSms } from "./twilioService";
 import type { IStorage } from "./storage";
 
 const alertedPlays = new Set<string>();
@@ -21,18 +22,18 @@ export async function checkAndSendAlerts(
 
   if (highConfidencePlays.length === 0 && newH2GameIds.length === 0) return;
 
-  let usersWithAlerts: any[] = [];
+  let allUsers: any[] = [];
   try {
-    const allUsers = await storage.getAllUsers();
-    usersWithAlerts = allUsers.filter(
-      (u: any) => u.pushAlerts && u.pushSubscription
-    );
+    allUsers = await storage.getAllUsers();
   } catch (err) {
     console.warn("[alertManager] Failed to fetch users:", err);
     return;
   }
 
-  if (usersWithAlerts.length === 0 && newH2GameIds.length === 0) return;
+  const usersWithPush = allUsers.filter((u: any) => u.pushAlerts && u.pushSubscription);
+  const usersWithSms = allUsers.filter(
+    (u: any) => u.subscriptionTier === "elite" && u.smsAlerts && u.phoneNumber
+  );
 
   for (const play of highConfidencePlays) {
     const fingerprint = `${play.playerName}|${play.statType}|${play.line}`;
@@ -44,10 +45,14 @@ export async function checkAndSendAlerts(
       ? play.probability.toFixed(0)
       : (100 - play.probability).toFixed(0);
     const title = "🔒 LiveLocks High-Confidence Play";
-    const body = `${play.playerName} ${dir}${play.line} — ${prob}% confidence. Tap to view.`;
+    const pushBody = `${play.playerName} ${dir}${play.line} — ${prob}% confidence. Tap to view.`;
+    const smsBody = `LiveLocks: ${play.playerName} ${dir}${play.line} — ${prob}% confidence. livelocksai.app`;
 
-    for (const user of usersWithAlerts) {
-      sendPush(user.pushSubscription, { title, body, url: "/" }).catch(console.warn);
+    for (const user of usersWithPush) {
+      sendPush(user.pushSubscription, { title, body: pushBody, url: "/" }).catch(console.warn);
+    }
+    for (const user of usersWithSms) {
+      sendSms(user.phoneNumber, smsBody).catch(console.warn);
     }
   }
 
@@ -56,10 +61,14 @@ export async function checkAndSendAlerts(
     const play = plays.find((p) => p.gameId === gameId);
     if (!play) continue;
     const title = "⏱ LiveLocks: 2H Plays Live";
-    const body = `${play.team} vs ${play.opponent} — 2H started. Check your slate.`;
+    const pushBody = `${play.team} vs ${play.opponent} — 2H started. Check your slate.`;
+    const smsBody = `LiveLocks: ${play.team} vs ${play.opponent} — 2H plays are live! livelocksai.app`;
 
-    for (const user of usersWithAlerts) {
-      sendPush(user.pushSubscription, { title, body, url: "/" }).catch(console.warn);
+    for (const user of usersWithPush) {
+      sendPush(user.pushSubscription, { title, body: pushBody, url: "/" }).catch(console.warn);
+    }
+    for (const user of usersWithSms) {
+      sendSms(user.phoneNumber, smsBody).catch(console.warn);
     }
   }
 }

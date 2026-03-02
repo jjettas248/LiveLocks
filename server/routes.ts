@@ -7,7 +7,7 @@ import { type Player, type ParlayPickInput } from "@shared/schema";
 import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines } from "./oddsService";
 import { computeNCAABPlays, getNCAABScoreboard } from "./ncaabService";
 import { calculateParlay } from "./parlayService";
-import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin } from "./auth";
+import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin, requireTier } from "./auth";
 import { registerStripeRoutes } from "./stripeService";
 import { getVapidPublicKey } from "./webpush";
 import { checkAndSendAlerts } from "./alertManager";
@@ -76,8 +76,8 @@ export async function registerRoutes(
     }
   });
 
-  // ── NCAAB Routes (admin only) ─────────────────────────────────────────────
-  app.get("/api/ncaab/plays", requireAdmin, async (_req, res) => {
+  // ── NCAAB Routes (All Sports + Elite + Admin) ────────────────────────────
+  app.get("/api/ncaab/plays", requireTier("all", "elite"), async (_req, res) => {
     try {
       const plays = await computeNCAABPlays();
       return res.json({ plays });
@@ -87,7 +87,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/ncaab/games", requireAdmin, async (_req, res) => {
+  app.get("/api/ncaab/games", requireTier("all", "elite"), async (_req, res) => {
     try {
       const games = await getNCAABScoreboard();
       return res.json({ games });
@@ -412,7 +412,8 @@ export async function registerRoutes(
 
   // ── Halftime Best Plays ─────────────────────────────────────────────────────
   // Returns top probability plays across all live halftime games.
-  app.get("/api/halftime-plays", async (req, res) => {
+  // Requires NBA Pro, All Sports, or Elite subscription (or admin).
+  app.get("/api/halftime-plays", requireTier("nba", "all", "elite"), async (req, res) => {
     try {
       const gamesRes = await fetch(
         "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",

@@ -556,9 +556,10 @@ function NCAABAllGamesGrid({ games }: { games: NCAABGame[] }) {
 
 interface NCAABAdminTabProps {
   onAddToParlay?: (pick: ParlayPickInput) => void;
+  isAdmin?: boolean;
 }
 
-export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
+export function NCAABAdminTab({ onAddToParlay, isAdmin }: NCAABAdminTabProps) {
   const playsQuery = useQuery<{ plays: NCAABPlay[] }>({
     queryKey: ["/api/ncaab/plays"],
     refetchInterval: 60 * 1000,
@@ -585,10 +586,13 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
         <div className="flex items-start gap-3">
           <span className="text-yellow-400 text-base">🏀</span>
           <div>
-            <p className="text-sm font-semibold text-yellow-400">NCAAB Live Analytics — Admin Only</p>
+            <p className="text-sm font-semibold text-yellow-400">
+              NCAAB Live Analytics — {isAdmin ? "Admin" : "All Sports"}
+            </p>
             <p className="text-xs text-muted-foreground mt-0.5">
               ESPN scoreboard + box scores + The Odds API (basketball_ncaab). Auto-refreshes every 60 seconds.
-              Tap any game card to expand probabilities. Invisible to non-admin users.
+              Tap any game card to expand probabilities.
+              {isAdmin ? " Visible to All Sports, Elite, and Admin users." : " Available on All Sports and Elite plans."}
             </p>
           </div>
         </div>
