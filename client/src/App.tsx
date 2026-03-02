@@ -7,6 +7,8 @@ import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
 import AuthPage from "@/pages/auth";
 import AdminPage from "@/pages/admin";
+import PrivacyPage from "@/pages/privacy";
+import TermsPage from "@/pages/terms";
 import { useAuth } from "@/hooks/use-auth";
 import { useEffect } from "react";
 
@@ -49,7 +51,11 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Toaster />
-        <ProtectedRouter />
+        <Switch>
+          <Route path="/privacy" component={PrivacyPage} />
+          <Route path="/terms" component={TermsPage} />
+          <Route component={ProtectedRouter} />
+        </Switch>
       </TooltipProvider>
     </QueryClientProvider>
   );

@@ -168,6 +168,14 @@ export default function AuthPage() {
             </div>
           </div>
         </div>
+
+        {/* Legal footer */}
+        <p className="text-center text-[11px] text-muted-foreground/50 mt-2">
+          By creating an account you agree to our{" "}
+          <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-primary/70 hover:text-primary underline">Terms of Service</a>
+          {" "}and{" "}
+          <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-primary/70 hover:text-primary underline">Privacy Policy</a>.
+        </p>
       </div>
     </div>
   );

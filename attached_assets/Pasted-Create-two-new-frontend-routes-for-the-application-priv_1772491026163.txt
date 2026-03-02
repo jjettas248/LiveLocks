@@ -1,0 +1,53 @@
+Create two new frontend routes for the application: /privacy and /terms. Build clean, readable, mobile-responsive pages for both that match the existing LiveLocks AI styling, including our standard header and footer. Please populate the content of the pages with the exact text provided below, using standard HTML or Markdown formatting for the headings and bullet points.
+
+--- START PRIVACY POLICY TEXT ---
+
+Privacy Policy
+Last Updated: March 2026
+
+LiveLocks AI ("we," "our," or "us") is committed to protecting your privacy. This Privacy Policy explains how we collect, use, and safeguard your information when you visit our website (www.livelocksai.app) and use our services.
+
+Information We Collect
+We may collect personal information that you voluntarily provide to us when you register for an account, express an interest in obtaining information about us or our products, or otherwise contact us. This includes your name, email address, and phone number.
+
+SMS Data Sharing and Use
+We respect your privacy. All mobile information you share with LiveLocks AI will remain strictly confidential. No mobile information will be shared with third parties or affiliates for marketing or promotional purposes. Information sharing to subcontractors in support services, such as customer service, is permitted, but all other use case categories exclude text messaging originator opt-in data and consent; this information will not be shared with any third parties.
+
+Data Security
+We implement reasonable security measures to protect your personal information. However, no method of transmission over the internet or electronic storage is 100% secure.
+
+Contact Us
+If you have questions about this policy, please contact us at support@livelocksai.app.
+--- END PRIVACY POLICY TEXT ---
+
+--- START TERMS OF SERVICE TEXT ---
+
+Terms of Service
+Last Updated: March 2026
+
+Welcome to LiveLocks AI. By accessing or using our website and services at www.livelocksai.app, you agree to be bound by these Terms of Service.
+
+Service Description & Disclaimer
+LiveLocks AI provides sports analytics and data tools for entertainment and informational purposes only. We are not a sportsbook and do not accept wagers. We do not guarantee the accuracy of our data or any specific outcomes. You are solely responsible for how you use this information.
+
+SMS Text Messaging Terms
+By opting in to receive text messages from LiveLocks AI, you agree to the following terms:
+
+Program Description: You will receive sports analytics alerts, probability updates, and account notifications (such as OTPs).
+
+Message Frequency: Message frequency varies based on live game schedules and your alert preferences.
+
+Pricing: Message and data rates may apply.
+
+Opt-Out: You may opt out of receiving text messages at any time. Reply STOP to cancel. After you send the SMS message "STOP" to us, we will send you an SMS message to confirm that you have been unsubscribed. After this, you will no longer receive SMS messages from us.
+
+Help: If you are experiencing issues with the messaging program, you can reply with the keyword HELP for more assistance, or get help directly at support@livelocksai.app.
+
+Carrier Liability: Carriers are not liable for delayed or undelivered messages.
+
+Governing Law
+These Terms shall be governed by and defined following the laws of the State of Florida. LiveLocks AI and yourself irrevocably consent that the courts of Florida shall have exclusive jurisdiction to resolve any dispute which may arise in connection with these terms.
+
+Contact Us
+For any questions regarding these terms, contact support@livelocksai.app.
+--- END TERMS OF SERVICE TEXT ---

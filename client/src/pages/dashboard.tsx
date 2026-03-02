@@ -825,7 +825,7 @@ export default function Dashboard() {
               {["elite"].includes(user.subscriptionTier ?? "") || user.isAdmin
                 ? (
                   <div className="space-y-2">
-                    <p className="text-xs text-muted-foreground">Get a text message for 2H plays and ≥90% confidence plays.</p>
+                    <p className="text-xs text-muted-foreground">Get a text message for 2H plays and ≥90% confidence plays. Msg & data rates may apply. Reply STOP to cancel anytime.</p>
                     <input
                       data-testid="input-phone-number"
                       type="tel"
@@ -855,6 +855,12 @@ export default function Dashboard() {
                         {smsLoading ? "Saving..." : "Save"}
                       </button>
                     </div>
+                    <p className="text-[10px] text-muted-foreground/60 leading-relaxed">
+                      By enabling SMS, you consent to receive automated sports alerts from LiveLocks AI. View our{" "}
+                      <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Terms</a>
+                      {" "}and{" "}
+                      <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Privacy Policy</a>.
+                    </p>
                   </div>
                 ) : (
                   <div>
