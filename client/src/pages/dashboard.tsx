@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
@@ -338,19 +338,10 @@ export default function Dashboard() {
   );
 
   // ── Halftime plays ────────────────────────────────────────────────────────
-  const [halftimeLocked, setHalftimeLocked] = useState(false);
+  const [unlockedGameIds, setUnlockedGameIds] = useState<Set<string>>(new Set());
+  const [unlocking2hGame, setUnlocking2hGame] = useState<string | null>(null);
   const { data: halftimePlaysData, isLoading: isHalftimePlaysLoading, refetch: refetchHalftimePlays } = useQuery<{ plays: any[]; message?: string }>({
     queryKey: ["/api/halftime-plays"],
-    queryFn: async () => {
-      const res = await fetch("/api/halftime-plays");
-      if (res.status === 401 || res.status === 403) {
-        setHalftimeLocked(true);
-        return { plays: [] };
-      }
-      setHalftimeLocked(false);
-      if (!res.ok) return { plays: [] };
-      return res.json();
-    },
     enabled: activeTab === "calculator" && nbaSubTab === "halftime",
     refetchInterval: 5 * 60 * 1000,
     staleTime: 4 * 60 * 1000,
@@ -645,6 +636,30 @@ export default function Dashboard() {
   );
   const allGames = liveGames ?? [];
 
+  const halftimeGameGroups = useMemo(() => {
+    const plays = halftimePlaysData?.plays ?? [];
+    const gameMap = new Map<string, {
+      gameId: string; awayTeamAbbr: string; homeTeamAbbr: string;
+      awayFull: string; homeFull: string; awayScore: number; homeScore: number; plays: any[];
+    }>();
+    for (const play of plays) {
+      if (!gameMap.has(play.gameId)) {
+        gameMap.set(play.gameId, {
+          gameId: play.gameId,
+          awayTeamAbbr: play.awayTeamAbbr ?? play.team,
+          homeTeamAbbr: play.homeTeamAbbr ?? play.opponent,
+          awayFull: play.awayFull ?? play.team,
+          homeFull: play.homeFull ?? play.opponent,
+          awayScore: play.awayScore ?? 0,
+          homeScore: play.homeScore ?? 0,
+          plays: [],
+        });
+      }
+      gameMap.get(play.gameId)!.plays.push(play);
+    }
+    return Array.from(gameMap.values());
+  }, [halftimePlaysData]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -653,13 +668,46 @@ export default function Dashboard() {
     );
   }
 
-  const filteredPlays = (halftimePlaysData?.plays ?? []).filter((play: any) => {
+  const isFreeUser = !!user && !user.isAdmin && !user.subscriptionTier;
+
+  const filterPlay = (play: any) => {
     if (slateFilterProp === "combo" && !play.statType.includes("_")) return false;
     if (slateFilterProp !== "all" && slateFilterProp !== "combo" && play.statType !== slateFilterProp) return false;
     if (slateFilterProb === "high" && play.probability < 65 && play.probability > 35) return false;
     if (slateFilterProb === "medium" && (play.probability >= 65 || play.probability <= 35)) return false;
     return true;
-  });
+  };
+
+  const unlock2hGame = async (gameId: string) => {
+    if (unlocking2hGame) return;
+    setUnlocking2hGame(gameId);
+    try {
+      const { getAuthToken: tok } = await import("@/lib/queryClient");
+      const token = tok();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch("/api/2h-game-view", {
+        method: "POST",
+        credentials: "include",
+        headers,
+        body: JSON.stringify({ gameId }),
+      });
+      if (res.status === 402) {
+        const err = await res.json().catch(() => ({}));
+        setUpgradeModalState({ playsUsed: err.playsUsed ?? user?.playsUsed ?? 0, limit: err.limit ?? 15 });
+        setShowUpgradeModal(true);
+      } else if (res.ok) {
+        setUnlockedGameIds(prev => new Set([...prev, gameId]));
+        queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      } else {
+        toast({ title: "Could not unlock game", description: "Please try again.", variant: "destructive" });
+      }
+    } catch (err: any) {
+      toast({ title: "Could not unlock game", description: err.message, variant: "destructive" });
+    } finally {
+      setUnlocking2hGame(null);
+    }
+  };
 
   return (
     <div className="min-h-screen pb-20 bg-background">
@@ -2050,50 +2098,100 @@ export default function Dashboard() {
                   </div>
               </div>
 
-              {/* Locked teaser for free/unauthenticated users */}
-              {halftimeLocked && !isHalftimePlaysLoading && (
-                <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
-                  <div className="w-14 h-14 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-                    <Lock className="w-7 h-7 text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-base font-bold text-foreground">2H Plays Require a Pro Subscription</p>
-                    <p className="text-sm text-muted-foreground mt-1 max-w-xs mx-auto">
-                      The 2H halftime slate scans every live game for high-probability props. Subscribe to unlock unlimited access.
-                    </p>
-                  </div>
-                  <button
-                    data-testid="button-halftime-upgrade"
-                    onClick={() => { setUpgradeModalState({ playsUsed: user?.playsUsed ?? 0, limit: 15 }); setShowUpgradeModal(true); }}
-                    className="px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition-colors"
-                  >
-                    View Plans →
-                  </button>
-                </div>
-              )}
-
-              {!halftimeLocked && isHalftimePlaysLoading && (
+              {/* Loading */}
+              {isHalftimePlaysLoading && (
                 <div className="flex items-center justify-center py-12 gap-2 text-muted-foreground">
                   <Loader2 className="w-5 h-5 animate-spin" />
                   <span>Calculating best plays…</span>
                 </div>
               )}
-              {!halftimeLocked && !isHalftimePlaysLoading && halftimePlaysData?.message && halftimePlaysData.plays.length === 0 && (
+
+              {/* No halftime games message */}
+              {!isHalftimePlaysLoading && halftimePlaysData?.message && halftimePlaysData.plays.length === 0 && (
                 <div className="text-center py-12 text-muted-foreground">
                   <Star className="w-8 h-8 mx-auto mb-3 opacity-30" />
                   <p className="text-sm">{halftimePlaysData.message}</p>
                   <p className="text-xs text-muted-foreground/60 mt-1">Check back when games are at halftime.</p>
                 </div>
               )}
-              {!halftimeLocked && !isHalftimePlaysLoading && halftimePlaysData && halftimePlaysData.plays.length > 0 && filteredPlays.length === 0 && (
-                <div className="text-center py-10 text-muted-foreground">
-                  <p className="text-sm">No plays match the current filters.</p>
-                  <button onClick={() => { setSlateFilterProp("all"); setSlateFilterProb("all"); }} className="text-xs text-primary mt-2 hover:underline">Clear filters</button>
+
+              {/* No data at all */}
+              {!isHalftimePlaysLoading && !halftimePlaysData && (
+                <div className="text-center py-12 text-muted-foreground">
+                  <Star className="w-8 h-8 mx-auto mb-3 opacity-30" />
+                  <p className="text-sm">No halftime plays available.</p>
+                  <p className="text-xs text-muted-foreground/60 mt-1">Click Refresh to check for halftime games.</p>
                 </div>
               )}
-              {!halftimeLocked && !isHalftimePlaysLoading && halftimePlaysData && halftimePlaysData.plays.length > 0 && filteredPlays.length > 0 && (
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  {filteredPlays.map((play: any, idx: number) => {
+
+              {/* Per-game groups */}
+              {!isHalftimePlaysLoading && halftimePlaysData && halftimePlaysData.plays.length > 0 && (
+                <div className="space-y-8">
+                  {halftimeGameGroups.map((group) => {
+                    const gameUnlocked = !isFreeUser || unlockedGameIds.has(group.gameId);
+                    const groupFiltered = group.plays.filter(filterPlay);
+                    const isGameUnlocking = unlocking2hGame === group.gameId;
+                    const playsRemaining = Math.max(0, 15 - (user?.playsUsed ?? 0));
+                    return (
+                      <div key={group.gameId}>
+                        {/* Game header */}
+                        <div className="flex items-center gap-3 mb-3">
+                          <div className="flex items-center gap-2 text-sm font-bold text-foreground">
+                            <span data-testid={`text-game-away-${group.gameId}`}>{group.awayTeamAbbr}</span>
+                            <span className="text-muted-foreground font-normal">{group.awayScore}</span>
+                            <span className="text-muted-foreground font-normal">–</span>
+                            <span className="text-muted-foreground font-normal">{group.homeScore}</span>
+                            <span data-testid={`text-game-home-${group.gameId}`}>{group.homeTeamAbbr}</span>
+                          </div>
+                          <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500 border border-amber-500/30">HALFTIME</span>
+                          {gameUnlocked && (
+                            <span className="text-xs text-muted-foreground ml-auto">{group.plays.length} plays</span>
+                          )}
+                        </div>
+
+                        {/* Lock gate for free users */}
+                        {!gameUnlocked && (
+                          <div className="rounded-xl border border-border bg-muted/20 p-8 flex flex-col items-center gap-4 text-center">
+                            <div className="w-12 h-12 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+                              <Lock className="w-6 h-6 text-primary" />
+                            </div>
+                            <div>
+                              <p className="text-sm font-bold text-foreground">View 2H Analysis — {group.plays.length} plays found</p>
+                              <p className="text-xs text-muted-foreground mt-1">Unlocking this game uses 1 free play. You have {playsRemaining} remaining.</p>
+                            </div>
+                            {playsRemaining > 0 && (
+                              <button
+                                data-testid={`button-unlock-2h-${group.gameId}`}
+                                onClick={() => unlock2hGame(group.gameId)}
+                                disabled={isGameUnlocking}
+                                className="px-5 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition-colors disabled:opacity-60 flex items-center gap-2"
+                              >
+                                {isGameUnlocking && <Loader2 className="w-4 h-4 animate-spin" />}
+                                {isGameUnlocking ? "Unlocking…" : `View ${group.plays.length} Plays — 1 Free Play`}
+                              </button>
+                            )}
+                            {playsRemaining === 0 && (
+                              <button
+                                data-testid="button-halftime-upgrade"
+                                onClick={() => { setUpgradeModalState({ playsUsed: user?.playsUsed ?? 0, limit: 15 }); setShowUpgradeModal(true); }}
+                                className="px-5 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition-colors"
+                              >
+                                View Plans →
+                              </button>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Unlocked plays grid */}
+                        {gameUnlocked && groupFiltered.length === 0 && (
+                          <div className="text-center py-8 text-muted-foreground">
+                            <p className="text-sm">No plays match the current filters.</p>
+                            <button onClick={() => { setSlateFilterProp("all"); setSlateFilterProb("all"); }} className="text-xs text-primary mt-2 hover:underline">Clear filters</button>
+                          </div>
+                        )}
+                        {gameUnlocked && groupFiltered.length > 0 && (
+                          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                            {groupFiltered.map((play: any, idx: number) => {
                     const isOver = play.betDirection === "over";
                     const isInjured = injuredPlayerNames.has(play.playerName.toLowerCase());
                     const statLabel = STAT_TYPES.find(s => s.value === play.statType)?.label ?? play.statType;
@@ -2196,11 +2294,9 @@ export default function Dashboard() {
                   })}
                 </div>
               )}
-              {!halftimeLocked && !isHalftimePlaysLoading && !halftimePlaysData && (
-                <div className="text-center py-12 text-muted-foreground">
-                  <Star className="w-8 h-8 mx-auto mb-3 opacity-30" />
-                  <p className="text-sm">No halftime plays available.</p>
-                  <p className="text-xs text-muted-foreground/60 mt-1">Click Refresh to check for halftime games.</p>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

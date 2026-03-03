@@ -410,10 +410,17 @@ export async function registerRoutes(
     }
   });
 
+  // ── Per-game 2H view — consumes 1 free play for free users ─────────────────
+  app.post("/api/2h-game-view", requirePlayAccess, async (req, res) => {
+    const userId = (req as any).resolvedUserId!;
+    const user = await storage.getUserById(userId);
+    res.json({ ok: true, playsUsed: user?.playsUsed ?? 0 });
+  });
+
   // ── Halftime Best Plays ─────────────────────────────────────────────────────
   // Returns top probability plays across all live halftime games.
-  // Requires Pro or All Sports subscription (or admin).
-  app.get("/api/halftime-plays", requireTier("all", "elite"), async (req, res) => {
+  // All authenticated users can fetch — free users pay 1 play per game unlock via /api/2h-game-view.
+  app.get("/api/halftime-plays", requireAuth, async (req, res) => {
     try {
       const gamesRes = await fetch(
         "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
@@ -644,6 +651,12 @@ export async function registerRoutes(
 
                 allPlays.push({
                   gameId: game.gameId,
+                  homeTeamAbbr: game.homeTeamAbbr,
+                  awayTeamAbbr: game.awayTeamAbbr,
+                  homeFull: game.homeFull,
+                  awayFull: game.awayFull,
+                  homeScore: game.homeScore,
+                  awayScore: game.awayScore,
                   playerId: dbPlayer.id,
                   playerName: dbPlayer.name,
                   team: teamAbbr,
