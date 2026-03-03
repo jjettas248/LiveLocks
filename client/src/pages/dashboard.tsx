@@ -908,61 +908,47 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* SMS (Pro + All Sports) */}
+            {/* SMS Alerts — free on all plans */}
             <div className="bg-secondary/40 rounded-xl p-4 space-y-3">
               <p className="text-sm font-semibold text-foreground">💬 SMS Alerts</p>
-              {["all", "elite"].includes(user.subscriptionTier ?? "") || user.isAdmin
-                ? (
-                  <div className="space-y-2">
-                    <p className="text-xs text-muted-foreground">Get a text message for 2H plays and ≥90% confidence plays. Msg & data rates may apply. Reply STOP to cancel anytime.</p>
-                    <input
-                      data-testid="input-phone-number"
-                      type="tel"
-                      placeholder="+1 555 000 0000"
-                      value={phoneInput}
-                      onChange={(e) => setPhoneInput(e.target.value)}
-                      className="w-full px-3 py-1.5 rounded-lg bg-background border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary"
-                    />
-                    <div className="flex items-center gap-3">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <button
-                          data-testid="toggle-sms-alerts"
-                          type="button"
-                          onClick={() => setSmsEnabled(v => !v)}
-                          className={`w-10 h-5 rounded-full transition-colors relative ${smsEnabled ? "bg-primary" : "bg-secondary border border-border"}`}
-                        >
-                          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${smsEnabled ? "left-5" : "left-0.5"}`} />
-                        </button>
-                        <span className="text-xs text-muted-foreground">{smsEnabled ? "SMS on" : "SMS off"}</span>
-                      </label>
-                      <button
-                        data-testid="button-save-sms"
-                        onClick={handleSaveSms}
-                        disabled={smsLoading}
-                        className="ml-auto px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 disabled:opacity-50"
-                      >
-                        {smsLoading ? "Saving..." : "Save"}
-                      </button>
-                    </div>
-                    <p className="text-[10px] text-muted-foreground/60 leading-relaxed">
-                      By enabling SMS, you consent to receive automated sports alerts from LiveLocks AI. View our{" "}
-                      <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Terms</a>
-                      {" "}and{" "}
-                      <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Privacy Policy</a>.
-                    </p>
-                  </div>
-                ) : (
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-2">SMS alerts are included in the Pro and All Sports plans — never miss a 2H play.</p>
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">Get a text message when plays hit ≥90% confidence — free on all plans. Msg & data rates may apply. Reply STOP to cancel anytime.</p>
+                <input
+                  data-testid="input-phone-number"
+                  type="tel"
+                  placeholder="+1 555 000 0000"
+                  value={phoneInput}
+                  onChange={(e) => setPhoneInput(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-lg bg-background border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary"
+                />
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
                     <button
-                      onClick={() => { setShowAlertsPanel(false); setUpgradeModalState({ playsUsed: user.playsUsed ?? 0, limit: 15 }); setShowUpgradeModal(true); }}
-                      className="px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/20"
+                      data-testid="toggle-sms-alerts"
+                      type="button"
+                      onClick={() => setSmsEnabled(v => !v)}
+                      className={`w-10 h-5 rounded-full transition-colors relative ${smsEnabled ? "bg-primary" : "bg-secondary border border-border"}`}
                     >
-                      View Plans →
+                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${smsEnabled ? "left-5" : "left-0.5"}`} />
                     </button>
-                  </div>
-                )
-              }
+                    <span className="text-xs text-muted-foreground">{smsEnabled ? "SMS on" : "SMS off"}</span>
+                  </label>
+                  <button
+                    data-testid="button-save-sms"
+                    onClick={handleSaveSms}
+                    disabled={smsLoading}
+                    className="ml-auto px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    {smsLoading ? "Saving..." : "Save"}
+                  </button>
+                </div>
+                <p className="text-[10px] text-muted-foreground/60 leading-relaxed">
+                  By enabling SMS, you consent to receive automated sports alerts from LiveLocks AI. View our{" "}
+                  <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Terms</a>
+                  {" "}and{" "}
+                  <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Privacy Policy</a>.
+                </p>
+              </div>
             </div>
 
             {/* Alert history */}
@@ -1027,19 +1013,17 @@ export default function Dashboard() {
             >
               🏀 NBA Live
             </button>
-            {(user?.isAdmin || ["all", "elite"].includes(user?.subscriptionTier ?? "")) && (
-              <button
-                data-testid="tab-ncaab"
-                onClick={() => setActiveTab("ncaab")}
-                className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
-                  activeTab === "ncaab"
-                    ? "bg-primary text-primary-foreground border-glow"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                🏀 NCAAB Live
-              </button>
-            )}
+            <button
+              data-testid="tab-ncaab"
+              onClick={() => setActiveTab("ncaab")}
+              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
+                activeTab === "ncaab"
+                  ? "bg-primary text-primary-foreground border-glow"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              🏀 NCAAB Live
+            </button>
             <button
               data-testid="tab-mlb-locked"
               onClick={() => setMlbPopoverOpen((v) => !v)}
@@ -2491,12 +2475,27 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* NCAAB Tab — live data for All Sports, Elite, and Admin */}
-        {activeTab === "ncaab" && (user?.isAdmin || ["all", "elite"].includes(user?.subscriptionTier ?? "")) && (
+        {/* NCAAB Tab — open to all authenticated users */}
+        {activeTab === "ncaab" && (
           <div className={showParlay && !isMobile ? "flex items-start gap-5" : ""}>
             <div className={showParlay && !isMobile ? "flex-1 min-w-0" : ""}>
               <NCAABAdminTab
                 isAdmin={user?.isAdmin ?? false}
+                isFreeUser={!user?.subscriptionTier && !user?.isAdmin}
+                onGameView={async (gameId: string) => {
+                  try {
+                    await apiRequest("POST", "/api/ncaab/game-view", { gameId });
+                    queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+                    return true;
+                  } catch (err: any) {
+                    queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+                    if (err?.status === 402 || err?.playsUsed !== undefined) {
+                      setUpgradeModalState({ playsUsed: err.playsUsed ?? user?.playsUsed ?? 0, limit: err.limit ?? 15 });
+                      setShowUpgradeModal(true);
+                    }
+                    return false;
+                  }
+                }}
                 onAddToParlay={(pick) => {
                   if (parlayPicks.length < 10) {
                     setParlayPicks((prev) => [...prev, pick]);

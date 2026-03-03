@@ -5,7 +5,7 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
 import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines } from "./oddsService";
-import { computeNCAABPlays, getNCAABScoreboard } from "./ncaabService";
+import { computeNCAABPlays, getNCAABScoreboard, getNCAABGamesWithLines, getNCAABGamePreview } from "./ncaabService";
 import { calculateParlay } from "./parlayService";
 import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin, requireTier } from "./auth";
 import { registerStripeRoutes } from "./stripeService";
@@ -76,8 +76,8 @@ export async function registerRoutes(
     }
   });
 
-  // ── NCAAB Routes (Pro + All Sports subscribers) ─────────────────────────
-  app.get("/api/ncaab/plays", requireTier("all", "elite"), async (_req, res) => {
+  // ── NCAAB Routes (all authenticated users) ──────────────────────────────
+  app.get("/api/ncaab/plays", requireAuth, async (_req, res) => {
     try {
       const plays = await computeNCAABPlays();
       return res.json({ plays });
@@ -87,13 +87,34 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/ncaab/games", requireTier("all", "elite"), async (_req, res) => {
+  app.get("/api/ncaab/games", requireAuth, async (_req, res) => {
     try {
-      const games = await getNCAABScoreboard();
+      const games = await getNCAABGamesWithLines();
       return res.json({ games });
     } catch (err: any) {
       console.error("[NCAAB games]", err.message);
       return res.status(500).json({ error: err.message || "Failed to fetch NCAAB scoreboard" });
+    }
+  });
+
+  app.post("/api/ncaab/game-view", requirePlayAccess, async (req, res) => {
+    try {
+      const userId = (req as any).resolvedUserId!;
+      const user = await storage.getUserById(userId);
+      res.json({ ok: true, playsUsed: user?.playsUsed ?? 0 });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to record game view" });
+    }
+  });
+
+  app.get("/api/ncaab/game-preview/:gameId", requireAuth, async (req, res) => {
+    try {
+      const preview = await getNCAABGamePreview(req.params.gameId);
+      if (!preview) return res.status(404).json({ error: "Game not found" });
+      return res.json(preview);
+    } catch (err: any) {
+      console.error("[NCAAB game-preview]", err.message);
+      return res.status(500).json({ error: err.message || "Failed to fetch game preview" });
     }
   });
 
@@ -771,9 +792,6 @@ export async function registerRoutes(
       const userId = (req as any).resolvedUserId!;
       const user = await storage.getUserById(userId);
       if (!user) return res.status(401).json({ error: "Not found" });
-      if (!["all", "elite"].includes(user.subscriptionTier ?? "") && !user.isAdmin) {
-        return res.status(403).json({ error: "SMS alerts require a Pro or All Sports subscription" });
-      }
       const { phoneNumber, smsAlerts } = req.body;
       await storage.updateUserAlerts(userId, {
         phoneNumber: phoneNumber ?? null,

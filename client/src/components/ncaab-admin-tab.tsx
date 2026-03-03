@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { RefreshCw, AlertCircle, Clock, TrendingUp, Plus, ChevronDown, ChevronUp, AlertTriangle, Zap } from "lucide-react";
+import { RefreshCw, AlertCircle, Clock, TrendingUp, Plus, ChevronDown, ChevronUp, AlertTriangle, Zap, Radio, Lock, X } from "lucide-react";
 import { ProbabilityRing } from "@/components/probability-ring";
 import type { ParlayPickInput } from "@shared/schema";
 
@@ -94,9 +94,11 @@ interface NCAABGame {
   shortName: string;
   homeTeam: string;
   homeTeamAbbr: string;
+  homeTeamId: string;
   homeScore: number;
   awayTeam: string;
   awayTeamAbbr: string;
+  awayTeamId: string;
   awayScore: number;
   status: string;
   period: number;
@@ -104,6 +106,10 @@ interface NCAABGame {
   isHalftime: boolean;
   isInProgress: boolean;
   isLive: boolean;
+  startTime?: string | null;
+  homeSpreadLine?: number | null;
+  awaySpreadLine?: number | null;
+  total?: number | null;
 }
 
 const BOOK_DISPLAY: Record<string, string> = {
@@ -796,32 +802,28 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
   );
 }
 
-function NCAABAllGamesGrid({ games }: { games: NCAABGame[] }) {
-  if (games.length === 0) return null;
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-      {games.map(g => (
-        <div key={g.id} className="bg-secondary/50 border border-border/60 rounded-lg px-3 py-2">
-          <p className="text-xs text-foreground font-medium">{g.awayTeam} <span className="text-muted-foreground">@</span> {g.homeTeam}</p>
-          <p className={`text-[10px] mt-0.5 ${g.isLive ? "text-emerald-400" : "text-muted-foreground"}`}>
-            {g.isLive ? `LIVE — ${g.status} · ${g.clock}` : g.status}
-          </p>
-          {g.isLive && (
-            <p className="text-xs font-bold tabular-nums text-foreground mt-0.5">{g.awayScore} – {g.homeScore}</p>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 interface NCAABAdminTabProps {
   onAddToParlay?: (pick: ParlayPickInput) => void;
   isAdmin?: boolean;
+  isFreeUser?: boolean;
+  onGameView?: (gameId: string) => Promise<boolean>;
 }
 
-export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
+function formatTipoff(startTime: string | null | undefined): string {
+  if (!startTime) return "";
+  try {
+    const d = new Date(startTime);
+    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  } catch {
+    return "";
+  }
+}
+
+export function NCAABAdminTab({ onAddToParlay, isAdmin, isFreeUser, onGameView }: NCAABAdminTabProps) {
   const [ncaabSubTab, setNcaabSubTab] = useState<"live" | "halftime">("live");
+  const [selectedGameId, setSelectedGameId] = useState<string | undefined>(undefined);
+  const [unlockedGameIds, setUnlockedGameIds] = useState<Set<string>>(new Set());
+  const [unlocking, setUnlocking] = useState(false);
 
   const playsQuery = useQuery<{ plays: NCAABPlay[] }>({
     queryKey: ["/api/ncaab/plays"],
@@ -830,7 +832,14 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
 
   const gamesQuery = useQuery<{ games: NCAABGame[] }>({
     queryKey: ["/api/ncaab/games"],
-    refetchInterval: 90 * 1000,
+    refetchInterval: 30 * 1000,
+  });
+
+  const previewQuery = useQuery<NCAABPlay>({
+    queryKey: ["/api/ncaab/game-preview", selectedGameId],
+    enabled: !!selectedGameId && !!(unlockedGameIds.has(selectedGameId ?? "") || !isFreeUser),
+    refetchInterval: 60 * 1000,
+    retry: false,
   });
 
   const plays  = playsQuery.data?.plays  ?? [];
@@ -838,13 +847,183 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
   const loading = playsQuery.isLoading || gamesQuery.isLoading;
   const error   = playsQuery.error ?? gamesQuery.error;
 
-  const liveGames      = games.filter(g => g.isLive);
-  const scheduledGames = games.filter(g => !g.isLive);
-  const halftimePlays  = plays.filter(p => p.bettingWindow === "HALFTIME");
+  const halftimePlays = plays.filter(p => p.bettingWindow === "HALFTIME");
+
+  const sortedGames = [...games].sort((a, b) => {
+    if (a.isLive && !b.isLive) return -1;
+    if (!a.isLive && b.isLive) return 1;
+    const ta = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+    const tb = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+    return ta - tb;
+  });
+
+  const selectedGame = games.find(g => g.id === selectedGameId);
+  const selectedLivePlay = plays.find(p => p.gameId === selectedGameId);
+  const isSelectedGameLive = selectedGame?.isLive ?? false;
+
+  async function handleTileClick(gameId: string) {
+    if (selectedGameId === gameId) {
+      setSelectedGameId(undefined);
+      return;
+    }
+    setSelectedGameId(gameId);
+    if (!isFreeUser || unlockedGameIds.has(gameId)) return;
+  }
+
+  async function handleUnlock() {
+    if (!selectedGameId || !onGameView) return;
+    setUnlocking(true);
+    const ok = await onGameView(selectedGameId);
+    setUnlocking(false);
+    if (ok) {
+      setUnlockedGameIds(prev => new Set([...prev, selectedGameId]));
+    }
+  }
+
+  const displayPlay: NCAABPlay | null = selectedLivePlay ?? previewQuery.data ?? null;
+  const isPreGame = selectedGame && !isSelectedGameLive;
 
   return (
     <div className="space-y-4">
-      {/* Sub-tab pills */}
+
+      {/* ── Today's NCAAB Slate ────────────────────────────────────────────── */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Radio className="w-3.5 h-3.5 text-primary" />
+            <span className="text-xs font-bold text-foreground uppercase tracking-widest">Today's NCAAB Slate</span>
+          </div>
+          <button
+            data-testid="ncaab-refresh"
+            onClick={() => { playsQuery.refetch(); gamesQuery.refetch(); }}
+            disabled={loading}
+            className="p-1.5 rounded-lg border border-border hover:bg-secondary transition-colors disabled:opacity-50"
+            title="Refresh"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-muted-foreground ${loading ? "animate-spin" : ""}`} />
+          </button>
+        </div>
+
+        {loading && games.length === 0 && (
+          <div className="flex items-center gap-2 text-muted-foreground py-2">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            <span className="text-xs">Loading games…</span>
+          </div>
+        )}
+
+        {!loading && sortedGames.length === 0 && (
+          <p className="text-xs text-muted-foreground/60 py-2">No games scheduled today.</p>
+        )}
+
+        {sortedGames.length > 0 && (
+          <div className="flex gap-2 overflow-x-auto pb-1 flex-wrap">
+            {sortedGames.map(g => {
+              const isSelected = selectedGameId === g.id;
+              const tipoff = formatTipoff(g.startTime);
+              const isFinal = g.status === "Final" || g.status === "Final/OT";
+              const spreadVal = g.homeSpreadLine !== null && g.homeSpreadLine !== undefined && !isNaN(g.homeSpreadLine) ? fmtSpread(g.homeSpreadLine) : null;
+              const totalVal = g.total !== null && g.total !== undefined && !isNaN(g.total) ? `O/U ${g.total}` : null;
+              return (
+                <button
+                  key={g.id}
+                  data-testid={`ncaab-game-tile-${g.id}`}
+                  onClick={() => handleTileClick(g.id)}
+                  className={`min-w-[130px] px-3 py-2 rounded-lg border text-xs flex flex-col gap-0.5 transition-all text-left ${
+                    isSelected
+                      ? "border-primary bg-primary/10 ring-1 ring-primary shadow-[0_0_16px_-3px_hsl(var(--primary)/0.4)]"
+                      : "border-border bg-secondary/40 hover:bg-secondary/70"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-1 font-semibold tabular-nums text-foreground">
+                    <span>{g.awayTeamAbbr}</span>
+                    {g.isLive && <span className="text-primary">{g.awayScore} – {g.homeScore}</span>}
+                    <span>{g.homeTeamAbbr}</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {g.isLive && !isFinal && (
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    )}
+                    <span className={`text-[10px] ${g.isLive && !isFinal ? "text-emerald-400" : isFinal ? "text-muted-foreground/60" : "text-muted-foreground"}`}>
+                      {isFinal ? "Final" : g.isLive ? `H${g.period <= 1 ? 1 : 2} ${g.clock}` : tipoff || g.status}
+                    </span>
+                  </div>
+                  {(spreadVal || totalVal) && (
+                    <div className="flex gap-1 flex-wrap mt-0.5">
+                      {spreadVal && <span className="text-[9px] text-muted-foreground/70 bg-secondary px-1 py-0.5 rounded">{spreadVal}</span>}
+                      {totalVal && <span className="text-[9px] text-muted-foreground/70 bg-secondary px-1 py-0.5 rounded">{totalVal}</span>}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ── Prediction Panel ──────────────────────────────────────────────── */}
+      {selectedGameId && selectedGame && (
+        <div className="bg-card border border-border rounded-xl overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-border/60 bg-secondary/30">
+            <div className="flex items-center gap-2">
+              {isSelectedGameLive && (
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              )}
+              <span className="text-[10px] font-bold tracking-widest uppercase text-muted-foreground">
+                {isSelectedGameLive ? "Live Prediction" : "Pre-Game Model"}
+              </span>
+              <span className="text-xs font-semibold text-foreground">{selectedGame.awayTeamAbbr} @ {selectedGame.homeTeamAbbr}</span>
+            </div>
+            <button
+              data-testid="ncaab-prediction-close"
+              onClick={() => setSelectedGameId(undefined)}
+              className="p-1 rounded hover:bg-secondary transition-colors"
+            >
+              <X className="w-3.5 h-3.5 text-muted-foreground" />
+            </button>
+          </div>
+
+          {isFreeUser && !unlockedGameIds.has(selectedGameId) ? (
+            <div className="flex flex-col items-center justify-center py-10 px-6 gap-4">
+              <Lock className="w-8 h-8 text-muted-foreground/40" />
+              <div className="text-center">
+                <p className="text-sm font-semibold text-foreground mb-1">View Prediction</p>
+                <p className="text-xs text-muted-foreground">This uses 1 free play from your 15 total.</p>
+              </div>
+              <button
+                data-testid="ncaab-unlock-game"
+                onClick={handleUnlock}
+                disabled={unlocking}
+                className="px-5 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              >
+                {unlocking ? "Unlocking…" : "View Prediction (1 play)"}
+              </button>
+            </div>
+          ) : previewQuery.isLoading && isPreGame ? (
+            <div className="flex items-center justify-center py-10 gap-2 text-muted-foreground">
+              <RefreshCw className="w-4 h-4 animate-spin" />
+              <span className="text-sm">Loading prediction…</span>
+            </div>
+          ) : displayPlay ? (
+            <div className="p-4">
+              <NCAABGameCard play={displayPlay} onAddToParlay={onAddToParlay} />
+            </div>
+          ) : (
+            <div className="text-center py-10 text-muted-foreground">
+              <Clock className="w-6 h-6 mx-auto mb-2 opacity-30" />
+              <p className="text-sm">No prediction available yet</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 flex items-center gap-3">
+          <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+          <p className="text-xs text-red-400">{(error as any).message ?? "Failed to load NCAAB data"}</p>
+        </div>
+      )}
+
+      {/* ── Sub-tab pills ─────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="flex gap-1 bg-secondary/40 border border-border/60 rounded-xl p-1">
@@ -874,28 +1053,12 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
           </div>
           <p className="text-[10px] text-muted-foreground mt-1 pl-1">Possession model · ESPN stats · KenPom-style efficiency</p>
         </div>
-        <button
-          data-testid="ncaab-refresh"
-          onClick={() => { playsQuery.refetch(); gamesQuery.refetch(); }}
-          disabled={loading}
-          className="p-1.5 rounded-lg border border-border hover:bg-secondary transition-colors disabled:opacity-50"
-          title="Refresh"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 text-muted-foreground ${loading ? "animate-spin" : ""}`} />
-        </button>
       </div>
-
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 flex items-center gap-3">
-          <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-          <p className="text-xs text-red-400">{(error as any).message ?? "Failed to load NCAAB data"}</p>
-        </div>
-      )}
 
       {/* Live sub-tab */}
       {ncaabSubTab === "live" && (
         <div className="space-y-6">
-          {loading && (
+          {loading && plays.length === 0 && (
             <div className="flex items-center justify-center py-12 gap-2 text-muted-foreground">
               <RefreshCw className="w-4 h-4 animate-spin" />
               <span className="text-sm">Loading NCAAB data…</span>
@@ -906,11 +1069,11 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
             <div className="text-center py-12 text-muted-foreground">
               <Clock className="w-8 h-8 mx-auto mb-3 opacity-30" />
               <p className="text-sm font-medium">No live NCAAB games right now</p>
-              <p className="text-xs text-muted-foreground/60 mt-1">Check back during game time</p>
+              <p className="text-xs text-muted-foreground/60 mt-1">Select a game from the slate above to see the pre-game model</p>
             </div>
           )}
 
-          {!loading && plays.length > 0 && (
+          {plays.length > 0 && (
             <div>
               <p className="text-xs text-muted-foreground mb-3">{plays.length} live game{plays.length !== 1 ? "s" : ""} with betting data</p>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -922,13 +1085,6 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
                   />
                 ))}
               </div>
-            </div>
-          )}
-
-          {!loading && scheduledGames.length > 0 && (
-            <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Today's NCAAB Slate</p>
-              <NCAABAllGamesGrid games={scheduledGames} />
             </div>
           )}
         </div>

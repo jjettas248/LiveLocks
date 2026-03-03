@@ -215,6 +215,18 @@ export class DatabaseStorage implements IStorage {
     if (currentPeriod === 4 && clockMins < 4 && absSpread > 12) {
       spreadMinuteReduction = Math.min(spreadMinuteReduction, 0.70);
     }
+    // Live score margin blowout check: override if score shows a blowout regardless of pre-game spread
+    if (currentScore && currentPeriod === 4 && clockMins <= 5) {
+      const liveScores = currentScore.split(/[- ]+/).map(Number);
+      if (liveScores.length === 2 && !isNaN(liveScores[0]) && !isNaN(liveScores[1])) {
+        const liveMargin = Math.abs(liveScores[0] - liveScores[1]);
+        if (liveMargin >= 20) {
+          spreadMinuteReduction = Math.min(spreadMinuteReduction, 0.55);
+        } else if (liveMargin >= 15) {
+          spreadMinuteReduction = Math.min(spreadMinuteReduction, 0.65);
+        }
+      }
+    }
     remainingMinutes *= spreadMinuteReduction;
 
     // ─── Personal minutes budget cap ────────────────────────────────────────
@@ -326,14 +338,12 @@ export class DatabaseStorage implements IStorage {
     let seasonW: number;
     if (!seasonPerMin) {
       observedW = 1.0; seasonW = 0.0;
-    } else if (minutesPlayed < 5) {
-      if (usageRate >= 0.28)      { observedW = 0.30; seasonW = 0.70; }
-      else if (usageRate >= 0.22) { observedW = 0.40; seasonW = 0.60; }
-      else                        { observedW = 0.50; seasonW = 0.50; }
     } else {
-      if (usageRate >= 0.28)      { observedW = 0.60; seasonW = 0.40; }
-      else if (usageRate >= 0.22) { observedW = 0.70; seasonW = 0.30; }
-      else                        { observedW = 0.78; seasonW = 0.22; }
+      // Smooth linear ramp: 0 min → 0% observed weight; 20+ min → full target observed weight.
+      // Eliminates the old binary <5 / >=5 step that caused non-monotonic probability jumps.
+      const maxObservedW = usageRate >= 0.28 ? 0.60 : usageRate >= 0.22 ? 0.70 : 0.78;
+      observedW = Math.min(maxObservedW, (minutesPlayed / 20) * maxObservedW);
+      seasonW = 1 - observedW;
     }
 
     const blendedPerMin = observedPerMin * observedW + (seasonPerMin ?? 0) * seasonW;
