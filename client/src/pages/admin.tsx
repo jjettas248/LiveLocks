@@ -37,14 +37,14 @@ type FeedbackRow = {
 
 const TIER_LABELS: Record<string, string> = {
   "": "Free",
-  nba: "NBA ($25/mo)",
-  all: "All Sports ($50/mo)",
+  all: "Pro ($40/mo)",
+  elite: "All Sports ($65/mo)",
 };
 
 function TierBadge({ tier }: { tier: string | null }) {
   if (!tier) return <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">Free</span>;
-  if (tier === "nba") return <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30 font-medium">NBA</span>;
-  return <span className="text-xs px-2 py-0.5 rounded-full bg-primary/20 text-primary border border-primary/30 font-medium">All Sports</span>;
+  if (tier === "elite") return <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 font-medium">All Sports</span>;
+  return <span className="text-xs px-2 py-0.5 rounded-full bg-primary/20 text-primary border border-primary/30 font-medium">Pro</span>;
 }
 
 function AdminLink() {
@@ -217,7 +217,7 @@ export default function AdminPage() {
             )}
           </div>
           <p className="text-xs text-muted-foreground mt-2">
-            Creates the NBA Only ($25/mo) and All Sports ($50/mo) products in your Stripe account if they don't already exist. Run this once after switching to live Stripe keys.
+            Creates the Pro ($40/mo) and All Sports ($65/mo) products in your Stripe account if they don't already exist. Run this once after switching to live Stripe keys.
           </p>
         </div>
 
