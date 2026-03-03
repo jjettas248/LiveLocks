@@ -32,7 +32,7 @@ export async function checkAndSendAlerts(
 
   const usersWithPush = allUsers.filter((u: any) => u.pushAlerts && u.pushSubscription);
   const usersWithSms = allUsers.filter(
-    (u: any) => u.subscriptionTier === "elite" && u.smsAlerts && u.phoneNumber
+    (u: any) => ["all", "elite"].includes(u.subscriptionTier) && u.smsAlerts && u.phoneNumber
   );
 
   for (const play of highConfidencePlays) {
