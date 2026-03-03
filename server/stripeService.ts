@@ -2,31 +2,14 @@ import type { Request, Response } from "express";
 import { requireAuth } from "./auth";
 import { storage } from "./storage";
 import { getUncachableStripeClient } from "./stripeClient";
-import { db } from "./db";
-import { sql } from "drizzle-orm";
 
 const PLAN_META = {
-  all:   { name: "Pro – LiveLocks",        description: "Unlimited NBA + NCAAB Live, 2H Plays, SMS Alerts, Push Notifications", amount: 4000 },
-  elite: { name: "All Sports – LiveLocks", description: "Everything in Pro + MLB Live (coming soon) + Priority SMS",            amount: 6500 },
+  all:   { name: "Pro – LiveLocks",        description: "Unlimited NBA + NCAAB Live, 2H Plays, SMS Alerts, Push Notifications", amount: 4000, priceId: "price_1T6fl12cW8Vmrgt3B6ffBIuw" },
+  elite: { name: "All Sports – LiveLocks", description: "Everything in Pro + MLB Live (coming soon) + Priority SMS",            amount: 6500, priceId: "price_1T6fly2cW8Vmrgt3WU9uHL7L" },
 };
 
-async function getPriceIdForTier(tier: "all" | "elite"): Promise<string | null> {
-  try {
-    const meta = PLAN_META[tier];
-    const result = await db.execute(sql`
-      SELECT pr.id
-      FROM stripe.prices pr
-      JOIN stripe.products p ON pr.product = p.id
-      WHERE p.name = ${meta.name}
-        AND pr.active = true
-        AND pr.unit_amount = ${meta.amount}
-      LIMIT 1
-    `);
-    const row = result.rows[0] as any;
-    return row?.id ?? null;
-  } catch {
-    return null;
-  }
+async function getPriceIdForTier(tier: "all" | "elite"): Promise<string> {
+  return PLAN_META[tier].priceId;
 }
 
 export async function registerStripeRoutes(app: import("express").Express) {
@@ -54,19 +37,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
         metadata: { userId: String(userId), tier },
       };
 
-      if (priceId) {
-        sessionParams.line_items = [{ price: priceId, quantity: 1 }];
-      } else {
-        sessionParams.line_items = [{
-          price_data: {
-            currency: "usd",
-            product_data: { name: meta.name, description: meta.description },
-            unit_amount: meta.amount,
-            recurring: { interval: "month" },
-          },
-          quantity: 1,
-        }];
-      }
+      sessionParams.line_items = [{ price: priceId, quantity: 1 }];
 
       if (user.stripeCustomerId) {
         sessionParams.customer = user.stripeCustomerId;
