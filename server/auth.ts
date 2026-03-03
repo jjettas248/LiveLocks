@@ -74,6 +74,7 @@ export async function registerAuthRoutes(app: import("express").Express) {
       stripeCustomerId: null,
       stripeSubscriptionId: null,
       smsConsent,
+      smsAlerts: smsConsent,
     });
 
     req.session.userId = user.id;
