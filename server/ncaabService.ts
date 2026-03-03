@@ -367,93 +367,113 @@ const BOOK_DISPLAY: Record<string, string> = {
   betonlineag:  "BetOnline",
 };
 
-// ── Extract per-book spread / total + 1H lines ────────────────────────────────
+// ── Extract per-book spread / total lines (both sides) ───────────────────────
 function extractLines(oddsEvent: any): {
-  spread: number | null;
+  homeSpreadLine: number | null;
+  awaySpreadLine: number | null;
   total: number | null;
-  favorite: string;
+  overPrice: number | null;
+  underPrice: number | null;
   bookLines: Array<{
     book: string;
     name: string;
-    spread: number | null;
+    homePoint: number | null;
+    awayPoint: number | null;
+    homeSpreadPrice: number | null;
+    awaySpreadPrice: number | null;
+    homeFavorite: boolean;
     total: number | null;
-    favorite: string;
-    h1Total: number | null;
-    h1Spread: number | null;
-    h1Favorite: string;
+    overPrice: number | null;
+    underPrice: number | null;
   }>;
-  h1TotalLine: number | null;
-  h1SpreadLine: number | null;
-  h1Favorite: string;
 } {
-  let spread: number | null = null;
+  let homeSpreadLine: number | null = null;
+  let awaySpreadLine: number | null = null;
   let total: number | null = null;
-  let favorite = "";
-  let h1TotalLine: number | null = null;
-  let h1SpreadLine: number | null = null;
-  let h1Favorite = "";
+  let overPrice: number | null = null;
+  let underPrice: number | null = null;
+
+  const eventHome = (oddsEvent.home_team ?? "").toLowerCase();
+
   const bookLines: Array<{
     book: string;
     name: string;
-    spread: number | null;
+    homePoint: number | null;
+    awayPoint: number | null;
+    homeSpreadPrice: number | null;
+    awaySpreadPrice: number | null;
+    homeFavorite: boolean;
     total: number | null;
-    favorite: string;
-    h1Total: number | null;
-    h1Spread: number | null;
-    h1Favorite: string;
+    overPrice: number | null;
+    underPrice: number | null;
   }> = [];
 
   for (const bk of (oddsEvent.bookmakers ?? [])) {
     const spreadsMarket = (bk.markets ?? []).find((m: any) => m.key === "spreads");
     const totalsMarket  = (bk.markets ?? []).find((m: any) => m.key === "totals");
 
-    let bkSpread: number | null = null;
+    let bkHomePoint: number | null = null;
+    let bkAwayPoint: number | null = null;
+    let bkHomePrice: number | null = null;
+    let bkAwayPrice: number | null = null;
+    let bkHomeFav = false;
     let bkTotal: number | null = null;
-    let bkFav = "";
+    let bkOverPrice: number | null = null;
+    let bkUnderPrice: number | null = null;
 
     if (spreadsMarket?.outcomes?.length >= 2) {
-      const favOutcome = spreadsMarket.outcomes.find((o: any) => o.point < 0);
-      if (favOutcome) {
-        bkSpread = Math.abs(favOutcome.point);
-        bkFav = favOutcome.name;
-      } else {
-        const sorted = [...spreadsMarket.outcomes].sort((a: any, b: any) => Math.abs(a.point) - Math.abs(b.point));
-        bkSpread = Math.abs(sorted[0].point);
-        bkFav = sorted[0].name;
+      for (const o of spreadsMarket.outcomes) {
+        const isHome = (o.name ?? "").toLowerCase().includes(eventHome.split(" ")[0]) ||
+          teamsMatch(o.name, oddsEvent.home_team);
+        if (isHome) {
+          bkHomePoint = o.point as number;
+          bkHomePrice = o.price as number;
+        } else {
+          bkAwayPoint = o.point as number;
+          bkAwayPrice = o.price as number;
+        }
       }
-    }
-    if (totalsMarket?.outcomes?.length >= 1) {
-      const over = totalsMarket.outcomes.find((o: any) => o.name === "Over");
-      if (over) bkTotal = over.point as number;
+      bkHomeFav = bkHomePoint !== null && bkHomePoint < 0;
     }
 
-    if (bkSpread !== null || bkTotal !== null) {
+    if (totalsMarket?.outcomes?.length >= 1) {
+      for (const o of totalsMarket.outcomes) {
+        if (o.name === "Over") { bkTotal = o.point as number; bkOverPrice = o.price as number; }
+        else if (o.name === "Under") { bkUnderPrice = o.price as number; }
+      }
+    }
+
+    if (bkHomePoint !== null || bkAwayPoint !== null || bkTotal !== null) {
       bookLines.push({
         book: bk.key,
         name: BOOK_DISPLAY[bk.key] ?? bk.title ?? bk.key,
-        spread: bkSpread,
+        homePoint: bkHomePoint,
+        awayPoint: bkAwayPoint,
+        homeSpreadPrice: bkHomePrice,
+        awaySpreadPrice: bkAwayPrice,
+        homeFavorite: bkHomeFav,
         total: bkTotal,
-        favorite: bkFav,
-        h1Total: null,
-        h1Spread: null,
-        h1Favorite: "",
+        overPrice: bkOverPrice,
+        underPrice: bkUnderPrice,
       });
     }
-    if (spread === null && bkSpread !== null) { spread = bkSpread; favorite = bkFav; }
-    if (total === null && bkTotal !== null) total = bkTotal;
+
+    if (homeSpreadLine === null && bkHomePoint !== null) homeSpreadLine = bkHomePoint;
+    if (awaySpreadLine === null && bkAwayPoint !== null) awaySpreadLine = bkAwayPoint;
+    if (total === null && bkTotal !== null) { total = bkTotal; overPrice = bkOverPrice; underPrice = bkUnderPrice; }
   }
 
-  return { spread, total, favorite, bookLines, h1TotalLine, h1SpreadLine, h1Favorite };
+  return { homeSpreadLine, awaySpreadLine, total, overPrice, underPrice, bookLines };
 }
 
 // ── Public handle signal ──────────────────────────────────────────────────────
-function getHandleSignal(bookLines: Array<{ spread: number | null }>): {
+function getHandleSignal(bookLines: Array<{ homePoint: number | null }>): {
   pct: number | null;
   signal: "no_edge" | "fade" | "extreme" | "neutral" | "unavailable";
   label: string;
   color: string;
 } {
-  const spreads = bookLines.map(b => b.spread).filter((s): s is number => s !== null);
+  const spreads = bookLines.map(b => b.homePoint !== null ? Math.abs(b.homePoint) : null).filter((s): s is number => s !== null);
   if (spreads.length < 2) {
     return { pct: null, signal: "unavailable", label: "Handle data unavailable", color: "text-muted-foreground" };
   }
@@ -484,23 +504,33 @@ export interface NCAABPlay {
   awayScore: number;
   currentMargin: number;
 
-  // Lines
-  spread: number | null;
+  // Lines (from Odds API)
+  homeSpreadLine: number | null;
+  awaySpreadLine: number | null;
   total: number | null;
-  favorite: string;
+  overPrice: number | null;
+  underPrice: number | null;
   bookLines: Array<{
     book: string;
     name: string;
-    spread: number | null;
+    homePoint: number | null;
+    awayPoint: number | null;
+    homeSpreadPrice: number | null;
+    awaySpreadPrice: number | null;
+    homeFavorite: boolean;
     total: number | null;
-    favorite: string;
-    h1Total: number | null;
-    h1Spread: number | null;
-    h1Favorite: string;
+    overPrice: number | null;
+    underPrice: number | null;
   }>;
-  h1TotalLine: number | null;
+
+  // 1H model-derived lines
+  h1TotalLineModel: number | null;
   h1SpreadLine: number | null;
-  h1Favorite: string;
+  h1SpreadProb: number | null;
+  proj1HHome: number | null;
+  proj1HAway: number | null;
+  h1HomeOverProb: number | null;
+  h1AwayOverProb: number | null;
 
   // Projections
   projectedTotal: number | null;
@@ -599,9 +629,9 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         ]);
 
       const oddsEvent = matchOddsEvent(game, oddsEvents);
-      const { spread, total, favorite, bookLines, h1TotalLine: rawH1TotalLine, h1SpreadLine, h1Favorite } = oddsEvent
+      const { homeSpreadLine, awaySpreadLine, total, overPrice, underPrice, bookLines } = oddsEvent
         ? extractLines(oddsEvent)
-        : { spread: null, total: null, favorite: "", bookLines: [], h1TotalLine: null, h1SpreadLine: null, h1Favorite: "" };
+        : { homeSpreadLine: null, awaySpreadLine: null, total: null, overPrice: null, underPrice: null, bookLines: [] };
 
       // ── KenPom-style possession-based model ──────────────────────────────
       // DE (defensive efficiency): penalize for above-average steals and blocks
@@ -754,9 +784,9 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         awayProjected = Math.round(projectedTotal * (1 - homeShare) * 10) / 10;
       }
 
-      // ── 1H total line ────────────────────────────────────────────────────
-      const h1TotalLine = rawH1TotalLine !== null
-        ? rawH1TotalLine
+      // ── 1H model total line (no Odds API support for NCAAB 1H markets) ───
+      const h1TotalLineModel = proj1HTotal !== null
+        ? Math.round(proj1HTotal * 2) / 2
         : total !== null ? Math.round(total * NCAAB_H1_FRACTION * 2) / 2 : null;
 
       // ── Volatility + sigmoid probabilities ───────────────────────────────
@@ -770,20 +800,27 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       let homeOverProb: number | null = null;
       let awayOverProb: number | null = null;
 
+      // 1H team total model fields
+      let proj1HHome: number | null = null;
+      let proj1HAway: number | null = null;
+      let h1ModelSpreadLine: number | null = null;
+      let h1SpreadProb: number | null = null;
+      let h1HomeOverProb: number | null = null;
+      let h1AwayOverProb: number | null = null;
+
       if (projectedTotal !== null || projectedMargin !== null) {
         const secsForVol = isHalftime ? 1200 : secondsLeft;
         volatility = Math.max(4, 18 * (secsForVol / 2400)) + volatilityBonus;
 
         // Effective total line: use book line, or fall back to season-expected (KenPom model baseline)
         const effectiveFGLine = total ?? seasonExpectedTotal;
-        const effective1HLine = h1TotalLine ?? (proj1HTotal !== null ? Math.round(proj1HTotal * 2) / 2 : null);
+        const effective1HLine = h1TotalLineModel;
 
-        // Spread probability
-        if (projectedMargin !== null && spread !== null) {
-          const adjustedSpread = teamsMatch(favorite, game.homeTeam) ? -spread : spread;
-          spreadProb = Math.round(sigmoid((projectedMargin - adjustedSpread) / volatility) * 1000) / 10;
+        // Spread probability — homeSpreadLine is signed from home perspective (negative = home fav)
+        if (projectedMargin !== null && homeSpreadLine !== null) {
+          spreadProb = Math.round(sigmoid((projectedMargin - homeSpreadLine) / volatility) * 1000) / 10;
           spreadEdge = Math.round((spreadProb - 50) * 10) / 10;
-        } else if (projectedMargin !== null && spread === null) {
+        } else if (projectedMargin !== null && homeSpreadLine === null) {
           spreadProb = Math.round(sigmoid((projectedMargin - seasonExpectedMargin) / volatility) * 1000) / 10;
           spreadEdge = Math.round((spreadProb - 50) * 10) / 10;
         }
@@ -799,6 +836,24 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
           const h1Vol = Math.max(3, volatility * 0.6);
           over1HProb = Math.round(sigmoid((proj1HTotal - effective1HLine) / h1Vol) * 1000) / 10;
           total1HEdge = Math.round((over1HProb - 50) * 10) / 10;
+
+          // 1H team totals (model-derived)
+          const homeShare1H = (game.homeScore + game.awayScore) > 0
+            ? (game.homeScore / (game.homeScore + game.awayScore)) * 0.6 + 0.5 * 0.4
+            : 0.5;
+          proj1HHome = Math.round(proj1HTotal * homeShare1H * 10) / 10;
+          proj1HAway = Math.round(proj1HTotal * (1 - homeShare1H) * 10) / 10;
+
+          // 1H model spread line (signed from home perspective)
+          h1ModelSpreadLine = projectedMargin !== null ? Math.round(projectedMargin * 2) / 2 : null;
+          if (h1ModelSpreadLine !== null) {
+            h1SpreadProb = Math.round(sigmoid(projectedMargin! / h1Vol) * 1000) / 10;
+          }
+
+          // 1H team over probabilities
+          const h1TeamVol = h1Vol * 0.7;
+          h1HomeOverProb = Math.round(sigmoid((proj1HHome - homeExpected * 0.47) / h1TeamVol) * 1000) / 10;
+          h1AwayOverProb = Math.round(sigmoid((proj1HAway - awayExpected * 0.47) / h1TeamVol) * 1000) / 10;
         }
 
         // Team total probabilities — compare projected per-team pts to season-expected baseline
@@ -839,13 +894,19 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         homeScore: game.homeScore,
         awayScore: game.awayScore,
         currentMargin,
-        spread,
+        homeSpreadLine,
+        awaySpreadLine,
         total,
-        favorite,
+        overPrice,
+        underPrice,
         bookLines,
-        h1TotalLine,
-        h1SpreadLine,
-        h1Favorite,
+        h1TotalLineModel,
+        h1SpreadLine: h1ModelSpreadLine,
+        h1SpreadProb,
+        proj1HHome,
+        proj1HAway,
+        h1HomeOverProb,
+        h1AwayOverProb,
         projectedTotal: projectedTotal !== null ? Math.round(projectedTotal * 10) / 10 : null,
         projectedMargin: projectedMargin !== null ? Math.round(projectedMargin * 10) / 10 : null,
         proj1HTotal,

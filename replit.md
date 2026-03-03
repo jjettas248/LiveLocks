@@ -9,6 +9,22 @@ A full-stack NBA + NCAAB live betting analytics tool. Calculates the probability
 - **Database**: PostgreSQL via Drizzle ORM
 - **Shared types**: `shared/schema.ts` and `shared/routes.ts`
 
+## NCAAB Market Data Sources (confirmed by API testing)
+| Market | Source |
+|---|---|
+| Full game spread (both sides + prices) | Odds API — `spreads` market |
+| Full game O/U (both sides + prices) | Odds API — `totals` market |
+| 1H Total, 1H Spread, 1H Team Totals | Model (proj1HTotal, projectedMargin) |
+| Team totals full game | Model (homeProjected / awayProjected) |
+| 2H live O/U + spread | Model (live pace in H2) |
+Note: Odds API ONLY supports `spreads` + `totals` for NCAAB — all other markets (h1_*, h2_*, team_totals) return 422 INVALID_MARKET.
+
+## NCAAB Card Sections
+1. **Full Game Lines (Odds API live)** — Both sides of spread + O/U as large py-4 buttons with American odds prices
+2. **First Half Plays (Model, H1 only)** — 1H Total O/U, 1H Spread both sides, 1H Team Totals per team
+3. **Team Totals (Model)** — Full-game projected totals per team with Over/Under buttons
+4. **Book Lines (Odds API)** — Per-book horizontal scroll with both spread sides + O/U per book, vig prices shown
+
 ## Tab Structure
 ```
 Top tab bar:  [🏀 NBA Live]  [🏀 NCAAB Live]*  [⚾ MLB Live 🔒]
