@@ -200,7 +200,11 @@ export async function getNCAABScoreboard(): Promise<any[]> {
 
   let res: Response;
   try {
-    res = await fetch(`${ESPN_NCAAB}/scoreboard?limit=300&groups=50`, {
+    const _now = new Date();
+    const _today = _now.getFullYear().toString()
+      + String(_now.getMonth() + 1).padStart(2, "0")
+      + String(_now.getDate()).padStart(2, "0");
+    res = await fetch(`${ESPN_NCAAB}/scoreboard?limit=300&groups=50&dates=${_today}`, {
       headers: { "User-Agent": "Mozilla/5.0" },
       signal: AbortSignal.timeout(8000),
     });

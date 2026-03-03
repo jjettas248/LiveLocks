@@ -248,8 +248,12 @@ export async function registerRoutes(
   // Proxy ESPN live NBA scoreboard to avoid CORS
   app.get("/api/live-games", async (req, res) => {
     try {
+      const now = new Date();
+      const todayStr = now.getFullYear().toString()
+        + String(now.getMonth() + 1).padStart(2, "0")
+        + String(now.getDate()).padStart(2, "0");
       const response = await fetch(
-        "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+        `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${todayStr}`,
         { headers: { "User-Agent": "Mozilla/5.0" } }
       );
       if (!response.ok) throw new Error("ESPN API unavailable");
@@ -422,8 +426,12 @@ export async function registerRoutes(
   // All authenticated users can fetch — free users pay 1 play per game unlock via /api/2h-game-view.
   app.get("/api/halftime-plays", requireAuth, async (req, res) => {
     try {
+      const now2 = new Date();
+      const todayStr2 = now2.getFullYear().toString()
+        + String(now2.getMonth() + 1).padStart(2, "0")
+        + String(now2.getDate()).padStart(2, "0");
       const gamesRes = await fetch(
-        "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+        `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${todayStr2}`,
         { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
       );
       if (!gamesRes.ok) throw new Error("ESPN API unavailable");
