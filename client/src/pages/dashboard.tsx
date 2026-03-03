@@ -389,6 +389,15 @@ export default function Dashboard() {
     }
   }, [calculateMutation.error]);
 
+  // Auto-show upgrade modal when free user uses their last play successfully
+  useEffect(() => {
+    if (!user || user.isAdmin || user.subscriptionTier) return;
+    if ((user.playsUsed ?? 0) >= 15) {
+      setUpgradeModalState({ playsUsed: user.playsUsed ?? 15, limit: 15 });
+      setShowUpgradeModal(true);
+    }
+  }, [user?.playsUsed]);
+
   // ── Handle Stripe redirect back to app ────────────────────────────────────
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1642,10 +1651,24 @@ export default function Dashboard() {
                                     : "border-border/50 bg-secondary/30 hover:bg-secondary/60"
                                 }`}
                               >
-                                {/* Main row: name | line | odds */}
+                                {/* Main row: name | line + CLV badge | odds */}
                                 <div className="flex items-center justify-between w-full">
                                   <span className="font-semibold text-foreground">{SPORTSBOOK_LABELS[sb] ?? sb}</span>
-                                  <span className="font-mono font-bold text-primary">{o.line}</span>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-mono font-bold text-primary">{o.line}</span>
+                                    {result && o.line != null && (() => {
+                                      const delta = Number(o.line) - Number(form.getValues("liveLine"));
+                                      const fmt = (n: number) => n % 1 === 0 ? String(Math.round(n)) : n.toFixed(1);
+                                      if (delta === 0) return null;
+                                      return (
+                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                                          delta > 0 ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/10 text-red-400"
+                                        }`}>
+                                          {delta > 0 ? "+" : ""}{fmt(delta)} pt
+                                        </span>
+                                      );
+                                    })()}
+                                  </div>
                                   <span className="text-muted-foreground">
                                     O {formatOdds(o.overOdds)} / U {formatOdds(o.underOdds)}
                                   </span>
@@ -1674,93 +1697,12 @@ export default function Dashboard() {
                                     )}
                                   </div>
                                 )}
-                                {/* CLV — line delta vs entered live line, shown after Calculate */}
-                                {result && o.line != null && (() => {
-                                  const enteredLine = form.getValues("liveLine");
-                                  const delta = Number(o.line) - Number(enteredLine);
-                                  const isPositive = delta > 0;
-                                  const fmt = (n: number) => n % 1 === 0 ? String(Math.round(n)) : n.toFixed(1);
-                                  return (
-                                    <div className="flex items-center justify-between w-full mt-1 pt-1 border-t border-border/30">
-                                      <span className="text-muted-foreground/70">CLV vs your line</span>
-                                      <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
-                                        isPositive
-                                          ? "bg-emerald-500/15 text-emerald-400"
-                                          : delta < 0
-                                            ? "bg-red-500/10 text-red-400"
-                                            : "bg-secondary text-muted-foreground"
-                                      }`}>
-                                        {delta === 0 ? "Even" : `${isPositive ? "+" : ""}${fmt(delta)} pt`}
-                                      </span>
-                                    </div>
-                                  );
-                                })()}
                               </button>
                             );
                           })}
                         </div>
                       )}
 
-                      {/* CLV panel — under Lines by Book, shows after Calculate */}
-                      {(() => {
-                        if (!selectedSportsbook || selectedSportsbook === "manual" || !oddsData || !result) return null;
-                        const selected = (oddsData as Record<string, import("@shared/schema").OddsLine>)[selectedSportsbook];
-                        if (!selected?.overOdds) return null;
-                        const overImplied = americanToImplied(selected.overOdds) * 100;
-                        const underImplied = americanToImplied(selected.underOdds ?? -110) * 100;
-                        const overEdge = result.probability - overImplied;
-                        const underEdge = (100 - result.probability) - underImplied;
-                        const bestEdge = overEdge >= underEdge ? { side: "Over", edge: overEdge } : { side: "Under", edge: underEdge };
-                        const isPositive = bestEdge.edge > 0;
-                        const absEdge = Math.abs(bestEdge.edge);
-                        const valueLabel = absEdge >= 6 ? "Strong" : absEdge >= 3 ? "Moderate" : "Slight";
-                        const sbName = SPORTSBOOK_LABELS[selectedSportsbook] ?? selectedSportsbook;
-                        const hasMovement = selected.lineMovement !== undefined && selected.lineMovement !== 0;
-                        const dropped = (selected.lineMovement ?? 0) < 0;
-                        const enteredLine = form.getValues("liveLine");
-                        const clvDelta = Number(selected.line) - Number(enteredLine);
-                        const clvFmt = (n: number) => n % 1 === 0 ? String(Math.round(n)) : n.toFixed(1);
-                        const clvLabel = clvDelta === 0 ? "Even" : `${clvDelta > 0 ? "+" : ""}${clvFmt(clvDelta)} pt`;
-                        const clvPositive = clvDelta > 0;
-                        return (
-                          <div className={`rounded-xl border p-3 flex gap-2.5 items-start ${
-                            isPositive ? "bg-emerald-500/10 border-emerald-500/30" : "bg-red-500/10 border-red-500/30"
-                          }`}>
-                            <div className={`mt-0.5 flex-shrink-0 font-bold text-base ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
-                              {isPositive ? "▲" : "▼"}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center justify-between gap-2 flex-wrap">
-                                <h4 className={`text-xs font-semibold ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
-                                  {valueLabel} {bestEdge.side} CLV
-                                </h4>
-                                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                                  clvDelta === 0
-                                    ? "bg-secondary text-muted-foreground"
-                                    : clvPositive
-                                      ? "bg-emerald-500/20 text-emerald-300"
-                                      : "bg-red-500/20 text-red-300"
-                                }`}>
-                                  {clvLabel}
-                                </span>
-                              </div>
-                              <p className="text-xs text-muted-foreground mt-1">
-                                Model <strong className="text-foreground">{result.probability.toFixed(1)}%</strong>
-                                {" vs "}{sbName} implied <strong className="text-foreground">{overImplied.toFixed(1)}%</strong>
-                              </p>
-                              <p className="text-[10px] text-muted-foreground/60 mt-0.5">
-                                {absEdge >= 6 ? "High conviction edge vs market."
-                                  : absEdge >= 3 ? "Solid discrepancy — model sees value."
-                                  : isPositive ? "Slight edge — use as tiebreaker."
-                                  : "Model trails implied — line may be priced in."}
-                                {hasMovement && selected.openLine !== undefined && (
-                                  <span> Line {dropped ? "▼" : "▲"}{Math.abs(selected.lineMovement!)} from open ({selected.openLine}→{selected.line}).</span>
-                                )}
-                              </p>
-                            </div>
-                          </div>
-                        );
-                      })()}
                     </div>
                   )}
                 </div>
@@ -1777,6 +1719,41 @@ export default function Dashboard() {
                     "Calculate Probability"
                   )}
                 </button>
+
+                {/* Free play countdown — shown to free users only */}
+                {user && !user.isAdmin && !user.subscriptionTier && (() => {
+                  const used = user.playsUsed ?? 0;
+                  const limit = 15;
+                  const remaining = Math.max(0, limit - used);
+                  const pct = Math.round((used / limit) * 100);
+                  return (
+                    <div data-testid="free-play-countdown" className="rounded-lg border border-amber-500/30 bg-amber-500/8 px-3 py-2.5 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <Zap className="w-3.5 h-3.5 text-amber-500" />
+                          <span className="text-xs font-semibold text-amber-400">
+                            {remaining > 0 ? `${remaining} free ${remaining === 1 ? "play" : "plays"} remaining` : "No free plays left"}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          data-testid="button-upgrade-from-countdown"
+                          onClick={() => { setUpgradeModalState({ playsUsed: used, limit }); setShowUpgradeModal(true); }}
+                          className="text-[10px] font-bold text-amber-500 hover:text-amber-400 underline underline-offset-2 transition-colors"
+                        >
+                          Upgrade →
+                        </button>
+                      </div>
+                      <div className="w-full h-1.5 rounded-full bg-amber-500/15 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${remaining === 0 ? "bg-red-500" : "bg-amber-500"}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <p className="text-[10px] text-muted-foreground/60">{used} of {limit} plays used · <span className="text-amber-500/80">Upgrade for unlimited access</span></p>
+                    </div>
+                  );
+                })()}
               </form>
             </div>
           </div>
@@ -1937,6 +1914,64 @@ export default function Dashboard() {
                           highlight={marketEdge > 1 ? "positive" : marketEdge < -1 ? "negative" : "neutral"}
                         />
                       )}
+                    </div>
+                  );
+                })()}
+
+                {/* CLV Alert — shown below result after Calculate when a sportsbook is selected */}
+                {selectedSportsbook && selectedSportsbook !== "manual" && oddsData && result && (() => {
+                  const selected = (oddsData as Record<string, import("@shared/schema").OddsLine>)[selectedSportsbook];
+                  if (!selected?.overOdds) return null;
+                  const overImplied = americanToImplied(selected.overOdds) * 100;
+                  const overEdge = result.probability - overImplied;
+                  const underEdge = (100 - result.probability) - americanToImplied(selected.underOdds ?? -110) * 100;
+                  const bestEdge = overEdge >= underEdge ? { side: "Over", edge: overEdge } : { side: "Under", edge: underEdge };
+                  const isPositive = bestEdge.edge > 0;
+                  const absEdge = Math.abs(bestEdge.edge);
+                  const valueLabel = absEdge >= 6 ? "Strong" : absEdge >= 3 ? "Moderate" : "Slight";
+                  const sbName = SPORTSBOOK_LABELS[selectedSportsbook] ?? selectedSportsbook;
+                  const hasMovement = selected.lineMovement !== undefined && selected.lineMovement !== 0;
+                  const dropped = (selected.lineMovement ?? 0) < 0;
+                  const clvDelta = Number(selected.line) - Number(form.getValues("liveLine"));
+                  const clvFmt = (n: number) => n % 1 === 0 ? String(Math.round(n)) : n.toFixed(1);
+                  const clvLabel = clvDelta === 0 ? "Even" : `${clvDelta > 0 ? "+" : ""}${clvFmt(clvDelta)} pt`;
+                  const clvPositive = clvDelta > 0;
+                  return (
+                    <div data-testid="clv-alert" className={`rounded-xl border p-4 flex gap-3 items-start animate-fade-in-up ${
+                      isPositive ? "bg-emerald-500/10 border-emerald-500/30" : "bg-red-500/10 border-red-500/30"
+                    }`}>
+                      <div className={`mt-0.5 flex-shrink-0 font-bold text-lg ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
+                        {isPositive ? "▲" : "▼"}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <h4 className={`text-sm font-semibold ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
+                            {valueLabel} {bestEdge.side} CLV
+                          </h4>
+                          <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                            clvDelta === 0
+                              ? "bg-secondary text-muted-foreground"
+                              : clvPositive
+                                ? "bg-emerald-500/20 text-emerald-300"
+                                : "bg-red-500/20 text-red-300"
+                          }`}>
+                            {clvLabel}
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Model <strong className="text-foreground">{result.probability.toFixed(1)}%</strong>
+                          {" vs "}{sbName} implied <strong className="text-foreground">{overImplied.toFixed(1)}%</strong>
+                        </p>
+                        <p className="text-[11px] text-muted-foreground/60 mt-0.5">
+                          {absEdge >= 6 ? "High conviction edge vs market."
+                            : absEdge >= 3 ? "Solid discrepancy — model sees value."
+                            : isPositive ? "Slight edge — use as tiebreaker."
+                            : "Model trails implied — line may be priced in."}
+                          {hasMovement && selected.openLine !== undefined && (
+                            <span> Line {dropped ? "▼" : "▲"}{Math.abs(selected.lineMovement!)} from open ({selected.openLine}→{selected.line}).</span>
+                          )}
+                        </p>
+                      </div>
                     </div>
                   );
                 })()}
