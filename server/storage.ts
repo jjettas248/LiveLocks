@@ -217,6 +217,16 @@ export class DatabaseStorage implements IStorage {
     }
     remainingMinutes *= spreadMinuteReduction;
 
+    // ─── Personal minutes budget cap ────────────────────────────────────────
+    // A player cannot play more remaining minutes than the gap between their
+    // season average and what they've already logged. This prevents inflated
+    // probabilities late in games (e.g. Kawhi at 29 min of 32.7 avg can
+    // only project ~3.7 more minutes, not 16.8 based on clock alone).
+    if (minutesPlayed > 0 && avgMinutes > 0) {
+      const minutesBudgetRemaining = Math.max(0, avgMinutes - minutesPlayed);
+      remainingMinutes = Math.min(remainingMinutes, minutesBudgetRemaining);
+    }
+
     // ─── H2 baseline selection ──────────────────────────────────────────────
     // In Q3/Q4 use the actual season second-half averages if available.
     // These are more accurate than extrapolating full-game rates to the H2.

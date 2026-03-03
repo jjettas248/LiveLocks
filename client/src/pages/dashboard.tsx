@@ -424,7 +424,7 @@ export default function Dashboard() {
     const isLive = game.status !== "Scheduled" && game.status !== "Pre-Game" && game.status !== "Final";
     if (isLive && game.period >= 1 && game.period <= 4) {
       form.setValue("currentPeriod", game.period);
-      form.setValue("gameClock", game.clock || "12:00");
+      form.setValue("gameClock", game.clock || (game.period >= 4 ? "0:00" : "12:00"));
       form.setValue("halftimeScore", `${game.awayScore}-${game.homeScore}`);
     }
   }, [liveGames, selectedGameId]);
@@ -500,7 +500,7 @@ export default function Dashboard() {
       const game = liveGames.find(g => g.id === selectedGameId);
       if (game && game.period >= 1 && game.period <= 4) {
         form.setValue("currentPeriod", game.period);
-        form.setValue("gameClock", game.clock || "12:00");
+        form.setValue("gameClock", game.clock || (game.period >= 4 ? "0:00" : "12:00"));
       }
     }
 
