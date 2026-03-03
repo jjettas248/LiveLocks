@@ -76,7 +76,7 @@ export async function registerRoutes(
     }
   });
 
-  // ── NCAAB Routes (All Sports + Elite + Admin) ────────────────────────────
+  // ── NCAAB Routes (Pro + All Sports subscribers) ─────────────────────────
   app.get("/api/ncaab/plays", requireTier("all", "elite"), async (_req, res) => {
     try {
       const plays = await computeNCAABPlays();

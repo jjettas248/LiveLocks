@@ -52,6 +52,11 @@ interface NCAABPlay {
   intentionalFouling: boolean;
   scoringByPeriod: Record<string, number[]>;
   teamStats: Record<string, any>;
+  seasonExpectedTotal?: number;
+  homePPG?: number;
+  awayPPG?: number;
+  homeOverProb?: number | null;
+  awayOverProb?: number | null;
 }
 
 interface NCAABGame {
@@ -219,6 +224,21 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
   const spLine  = play.spread !== null ? -play.spread : null;
   const spProb  = play.spreadProb ?? null;
 
+  // Model spread (no book line) — use projected margin
+  const modelSpreadFav = (play.projectedMargin ?? 0) >= 0 ? play.homeTeamAbbr : play.awayTeamAbbr;
+  const modelSpreadLine = play.projectedMargin !== null ? Math.round(Math.abs(play.projectedMargin) * 2) / 2 : null;
+  const showModelSpread = spLine === null && play.spreadProb !== null && modelSpreadLine !== null;
+
+  // CLV — only when book line exists
+  const clv = play.total !== null && play.projectedTotal !== null
+    ? Math.round((play.projectedTotal - play.total) * 10) / 10
+    : null;
+  const showClv = clv !== null && Math.abs(clv) >= 0.5;
+
+  // Team total probabilities
+  const homeOverProb = play.homeOverProb ?? null;
+  const awayOverProb = play.awayOverProb ?? null;
+
   return (
     <div
       data-testid={`ncaab-card-${play.gameId}`}
@@ -277,57 +297,91 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
           />
         )}
 
-        {/* Full Game Total */}
+        {/* Full Game Total with CLV badge */}
         {fgLine !== null && (
-          <BetRow
-            label="Full Game Total"
-            line={fgLine}
-            lineIsProj={fgIsProj}
-            overProb={fgProb}
-            onOver={onAddToParlay ? () => addPick("over", fgLine, fgProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — O${fgLine}${fgIsProj ? "*" : ""}`) : undefined}
-            onUnder={onAddToParlay ? () => addPick("under", fgLine, 100 - fgProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — U${fgLine}${fgIsProj ? "*" : ""}`) : undefined}
-          />
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Full Game Total</span>
+              <div className="flex items-center gap-2">
+                {showClv && (
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${clv! > 0 ? "text-emerald-400 bg-emerald-500/10" : "text-rose-400 bg-rose-500/10"}`}>
+                    CLV {clv! > 0 ? "+" : ""}{clv}
+                  </span>
+                )}
+                <span className="text-sm font-bold text-foreground tabular-nums">{fgLine}{fgIsProj ? "*" : ""}</span>
+              </div>
+            </div>
+            <ProbBar prob={fgProb} label="over" />
+            <div className="grid grid-cols-2 gap-2 mt-2">
+              {onAddToParlay && (
+                <button
+                  onClick={() => addPick("over", fgLine, fgProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — O${fgLine}${fgIsProj ? "*" : ""}`)}
+                  className="flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 active:scale-95 transition-all"
+                >
+                  <Plus className="w-3 h-3" />
+                  Over {fgLine}{fgIsProj ? "*" : ""} · {fgProb.toFixed(1)}%
+                </button>
+              )}
+              {onAddToParlay && (
+                <button
+                  onClick={() => addPick("under", fgLine, 100 - fgProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — U${fgLine}${fgIsProj ? "*" : ""}`)}
+                  className="flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 active:scale-95 transition-all"
+                >
+                  <Plus className="w-3 h-3" />
+                  Under {fgLine}{fgIsProj ? "*" : ""} · {(100 - fgProb).toFixed(1)}%
+                </button>
+              )}
+            </div>
+          </div>
         )}
 
-        {/* Spread — show whenever data is available (H1 or H2) */}
+        {/* Book Spread */}
         {spLine !== null && spProb !== null && (
           <BetRow
             label={`Spread — ${play.favorite}`}
             line={spLine}
             overProb={spProb}
-            onOver={onAddToParlay ? () => addPick("over", Math.abs(spLine), spProb, "ncaab_spread", `${play.favorite} ${spLine} Cover`) : undefined}
+            onOver={onAddToParlay ? () => addPick("over", Math.abs(spLine), spProb, "ncaab_spread", `${play.favorite} ${spLine > 0 ? "+" : ""}${spLine} Cover`) : undefined}
             singleSide
             singleLabel={`${play.favorite} ${spLine > 0 ? "+" : ""}${spLine} Cover`}
           />
         )}
 
-        {/* Projected margin when no book spread */}
-        {spLine === null && play.projectedMargin !== null && (
-          <div className="text-xs text-muted-foreground italic">
-            1H Margin (proj): {play.projectedMargin > 0
-              ? `${play.homeTeamAbbr} +${play.projectedMargin.toFixed(1)}`
-              : play.projectedMargin < 0
-                ? `${play.awayTeamAbbr} +${Math.abs(play.projectedMargin).toFixed(1)}`
-                : "Pick 'em"} — No line
-          </div>
+        {/* Model Spread — when no book spread, derive from pace model */}
+        {showModelSpread && (
+          <BetRow
+            label={`Model Spread — ${modelSpreadFav}`}
+            line={modelSpreadLine!}
+            lineIsProj={true}
+            overProb={play.spreadProb!}
+            onOver={onAddToParlay ? () => addPick("over", modelSpreadLine!, play.spreadProb!, "ncaab_spread", `${modelSpreadFav} -${modelSpreadLine}* Cover (Model)`) : undefined}
+            singleSide
+            singleLabel={`${modelSpreadFav} -${modelSpreadLine}* (Model)`}
+          />
         )}
 
-        {/* Projected finals */}
-        {(play.awayProjected !== null || play.homeProjected !== null) && (
-          <div className="flex gap-2 pt-1">
-            {play.awayProjected !== null && (
-              <div className="flex-1 bg-secondary/40 rounded-lg px-3 py-2 text-center">
-                <p className="text-[10px] text-muted-foreground">{play.awayTeamAbbr} Proj</p>
-                <p className="text-sm font-bold text-foreground">{Math.round(play.awayProjected)}</p>
-              </div>
-            )}
-            {play.homeProjected !== null && (
-              <div className="flex-1 bg-secondary/40 rounded-lg px-3 py-2 text-center">
-                <p className="text-[10px] text-muted-foreground">{play.homeTeamAbbr} Proj</p>
-                <p className="text-sm font-bold text-foreground">{Math.round(play.homeProjected)}</p>
-              </div>
-            )}
-          </div>
+        {/* Away Team Total */}
+        {play.awayProjected !== null && awayOverProb !== null && (
+          <BetRow
+            label={`${play.awayTeamAbbr} Team Total`}
+            line={Math.round(play.awayProjected)}
+            lineIsProj={true}
+            overProb={awayOverProb}
+            onOver={onAddToParlay ? () => addPick("over", Math.round(play.awayProjected!), awayOverProb, "ncaab_team_total", `${play.awayTeamAbbr} Team Over ${Math.round(play.awayProjected!)}*`) : undefined}
+            onUnder={onAddToParlay ? () => addPick("under", Math.round(play.awayProjected!), 100 - awayOverProb, "ncaab_team_total", `${play.awayTeamAbbr} Team Under ${Math.round(play.awayProjected!)}*`) : undefined}
+          />
+        )}
+
+        {/* Home Team Total */}
+        {play.homeProjected !== null && homeOverProb !== null && (
+          <BetRow
+            label={`${play.homeTeamAbbr} Team Total`}
+            line={Math.round(play.homeProjected)}
+            lineIsProj={true}
+            overProb={homeOverProb}
+            onOver={onAddToParlay ? () => addPick("over", Math.round(play.homeProjected!), homeOverProb, "ncaab_team_total", `${play.homeTeamAbbr} Team Over ${Math.round(play.homeProjected!)}*`) : undefined}
+            onUnder={onAddToParlay ? () => addPick("under", Math.round(play.homeProjected!), 100 - homeOverProb, "ncaab_team_total", `${play.homeTeamAbbr} Team Under ${Math.round(play.homeProjected!)}*`) : undefined}
+          />
         )}
       </div>
 
@@ -531,6 +585,15 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
                 const fgProb = play.overProb ?? 50;
                 const spLine = play.spread !== null ? -play.spread : null;
                 const spProb = play.spreadProb ?? null;
+                const htClv = play.total !== null && play.projectedTotal !== null
+                  ? Math.round((play.projectedTotal - play.total) * 10) / 10
+                  : null;
+                const htShowClv = htClv !== null && Math.abs(htClv) >= 0.5;
+                const htModelSpreadFav = (play.projectedMargin ?? 0) >= 0 ? play.homeTeamAbbr : play.awayTeamAbbr;
+                const htModelSpreadLine = play.projectedMargin !== null ? Math.round(Math.abs(play.projectedMargin) * 2) / 2 : null;
+                const htShowModelSpread = spLine === null && play.spreadProb !== null && htModelSpreadLine !== null;
+                const htHomeOverProb = play.homeOverProb ?? null;
+                const htAwayOverProb = play.awayOverProb ?? null;
 
                 return (
                   <div
@@ -559,16 +622,45 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
                     </div>
 
                     <div className="p-4 space-y-5">
+                      {/* Full Game Total with CLV */}
                       {fgLine !== null && (
-                        <BetRow
-                          label="Full Game Total"
-                          line={fgLine}
-                          lineIsProj={fgIsProj}
-                          overProb={fgProb}
-                          onOver={onAddToParlay ? () => addPick("over", fgLine, fgProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — O${fgLine}`) : undefined}
-                          onUnder={onAddToParlay ? () => addPick("under", fgLine, 100 - fgProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — U${fgLine}`) : undefined}
-                        />
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Full Game Total</span>
+                            <div className="flex items-center gap-2">
+                              {htShowClv && (
+                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${htClv! > 0 ? "text-emerald-400 bg-emerald-500/10" : "text-rose-400 bg-rose-500/10"}`}>
+                                  CLV {htClv! > 0 ? "+" : ""}{htClv}
+                                </span>
+                              )}
+                              <span className="text-sm font-bold text-foreground tabular-nums">{fgLine}{fgIsProj ? "*" : ""}</span>
+                            </div>
+                          </div>
+                          <ProbBar prob={fgProb} label="over" />
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            {onAddToParlay && (
+                              <button
+                                onClick={() => addPick("over", fgLine, fgProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — O${fgLine}`)}
+                                className="flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 active:scale-95 transition-all"
+                              >
+                                <Plus className="w-3 h-3" />
+                                Over {fgLine}{fgIsProj ? "*" : ""} · {fgProb.toFixed(1)}%
+                              </button>
+                            )}
+                            {onAddToParlay && (
+                              <button
+                                onClick={() => addPick("under", fgLine, 100 - fgProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — U${fgLine}`)}
+                                className="flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 active:scale-95 transition-all"
+                              >
+                                <Plus className="w-3 h-3" />
+                                Under {fgLine}{fgIsProj ? "*" : ""} · {(100 - fgProb).toFixed(1)}%
+                              </button>
+                            )}
+                          </div>
+                        </div>
                       )}
+
+                      {/* Book Spread */}
                       {spLine !== null && spProb !== null && (
                         <BetRow
                           label={`Spread — ${play.favorite}`}
@@ -579,21 +671,42 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
                           singleLabel={`${play.favorite} ${spLine > 0 ? "+" : ""}${spLine} Cover`}
                         />
                       )}
-                      {(play.awayProjected !== null || play.homeProjected !== null) && (
-                        <div className="flex gap-2">
-                          {play.awayProjected !== null && (
-                            <div className="flex-1 bg-secondary/40 rounded-lg px-3 py-2 text-center">
-                              <p className="text-[10px] text-muted-foreground">{play.awayTeamAbbr} Proj</p>
-                              <p className="text-sm font-bold text-foreground">{Math.round(play.awayProjected)}</p>
-                            </div>
-                          )}
-                          {play.homeProjected !== null && (
-                            <div className="flex-1 bg-secondary/40 rounded-lg px-3 py-2 text-center">
-                              <p className="text-[10px] text-muted-foreground">{play.homeTeamAbbr} Proj</p>
-                              <p className="text-sm font-bold text-foreground">{Math.round(play.homeProjected)}</p>
-                            </div>
-                          )}
-                        </div>
+
+                      {/* Model Spread — when no book spread */}
+                      {htShowModelSpread && (
+                        <BetRow
+                          label={`Model Spread — ${htModelSpreadFav}`}
+                          line={htModelSpreadLine!}
+                          lineIsProj={true}
+                          overProb={play.spreadProb!}
+                          onOver={onAddToParlay ? () => addPick("over", htModelSpreadLine!, play.spreadProb!, "ncaab_spread", `${htModelSpreadFav} -${htModelSpreadLine}* Cover (Model)`) : undefined}
+                          singleSide
+                          singleLabel={`${htModelSpreadFav} -${htModelSpreadLine}* (Model)`}
+                        />
+                      )}
+
+                      {/* Away Team Total */}
+                      {play.awayProjected !== null && htAwayOverProb !== null && (
+                        <BetRow
+                          label={`${play.awayTeamAbbr} Team Total`}
+                          line={Math.round(play.awayProjected)}
+                          lineIsProj={true}
+                          overProb={htAwayOverProb}
+                          onOver={onAddToParlay ? () => addPick("over", Math.round(play.awayProjected!), htAwayOverProb, "ncaab_team_total", `${play.awayTeamAbbr} Team Over ${Math.round(play.awayProjected!)}*`) : undefined}
+                          onUnder={onAddToParlay ? () => addPick("under", Math.round(play.awayProjected!), 100 - htAwayOverProb, "ncaab_team_total", `${play.awayTeamAbbr} Team Under ${Math.round(play.awayProjected!)}*`) : undefined}
+                        />
+                      )}
+
+                      {/* Home Team Total */}
+                      {play.homeProjected !== null && htHomeOverProb !== null && (
+                        <BetRow
+                          label={`${play.homeTeamAbbr} Team Total`}
+                          line={Math.round(play.homeProjected)}
+                          lineIsProj={true}
+                          overProb={htHomeOverProb}
+                          onOver={onAddToParlay ? () => addPick("over", Math.round(play.homeProjected!), htHomeOverProb, "ncaab_team_total", `${play.homeTeamAbbr} Team Over ${Math.round(play.homeProjected!)}*`) : undefined}
+                          onUnder={onAddToParlay ? () => addPick("under", Math.round(play.homeProjected!), 100 - htHomeOverProb, "ncaab_team_total", `${play.homeTeamAbbr} Team Under ${Math.round(play.homeProjected!)}*`) : undefined}
+                        />
                       )}
                     </div>
 
