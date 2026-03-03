@@ -800,6 +800,12 @@ export async function registerRoutes(
         PHO: "PHX", UTH: "UTA", UTAH: "UTA", WSH: "WAS", CHO: "CHA",
       };
       const normalize = (s: string) => s.toLowerCase().replace(/['.'\-\s]+/g, "").replace(/jr$|sr$|ii$|iii$|iv$/,"");
+      const NAME_ALIASES: Record<string, string> = {
+        "alexsarr": "alexandresarr",
+        "cameronthomas": "camthomas",
+        "camthomas": "camthomas",
+      };
+      const normWithAlias = (s: string) => { const n = normalize(s); return NAME_ALIASES[n] ?? n; };
 
       // 1. Get all NBA teams from ESPN
       const teamsRes = await fetch(
@@ -848,9 +854,9 @@ export async function registerRoutes(
               G: "SG", F: "SF", FC: "PF", GF: "SF",
             };
             const pos = ESPN_POS_MAP[rawPos.toUpperCase()] ?? "SF";
-            const normName = normalize(name);
+            const normName = normWithAlias(name);
 
-            const match = dbPlayers.find(p => normalize(p.name) === normName);
+            const match = dbPlayers.find(p => normWithAlias(p.name) === normName);
             if (match) {
               if (!processedPlayerIds.has(match.id)) {
                 processedPlayerIds.add(match.id);
@@ -1232,8 +1238,8 @@ async function seedDatabase() {
     runFullStatSync().catch(console.error);
   }
 
-  if (existingPlayers.length === 0) {
-    // ── 2025-26 NBA ROSTERS (accurate as of Feb 25, 2026) ────────────────────
+  {
+    // ── 2025-26 NBA ROSTERS (accurate as of Mar 3, 2026) ─────────────────────
     // All Feb 5, 2026 trade deadline moves reflected (28 trades, 73 players moved).
     // Key offseason moves (summer 2025):
     //  • Luka Doncic → LAL; Anthony Davis → DAL (then →WAS at deadline)
@@ -1358,14 +1364,20 @@ async function seedDatabase() {
       { name: "De'Anthony Melton", team: "GSW", position: "SG", avgMinutes: "28.0", avgFouls: "1.8" },
       { name: "Al Horford", team: "GSW", position: "C", avgMinutes: "24.0", avgFouls: "1.4" },
       { name: "Kristaps Porzingis", team: "GSW", position: "C", avgMinutes: "27.0", avgFouls: "2.7" },
-      // HOU Rockets — no significant deadline moves
+      // HOU Rockets — Kevin Durant arrived from PHX; Dillon Brooks traded to PHX
       { name: "Jalen Green", team: "HOU", position: "SG", avgMinutes: "34.0", avgFouls: "2.1" },
       { name: "Alperen Sengun", team: "HOU", position: "C", avgMinutes: "31.0", avgFouls: "3.0" },
       { name: "Amen Thompson", team: "HOU", position: "SF", avgMinutes: "30.0", avgFouls: "2.2" },
       { name: "Fred VanVleet", team: "HOU", position: "PG", avgMinutes: "31.0", avgFouls: "1.8" },
       { name: "Jabari Smith Jr.", team: "HOU", position: "PF", avgMinutes: "28.0", avgFouls: "2.0" },
       { name: "Tari Eason", team: "HOU", position: "PF", avgMinutes: "23.0", avgFouls: "2.4" },
-      { name: "Dillon Brooks", team: "HOU", position: "SF", avgMinutes: "29.0", avgFouls: "2.8" },
+      { name: "Reed Sheppard", team: "HOU", position: "SG", avgMinutes: "25.0", avgFouls: "1.6" },
+      { name: "Kevin Durant", team: "HOU", position: "PF", avgMinutes: "36.0", avgFouls: "2.1" },
+      { name: "Clint Capela", team: "HOU", position: "C", avgMinutes: "20.0", avgFouls: "2.8" },
+      { name: "Dorian Finney-Smith", team: "HOU", position: "SF", avgMinutes: "18.0", avgFouls: "1.4" },
+      { name: "Josh Okogie", team: "HOU", position: "SF", avgMinutes: "18.0", avgFouls: "1.8" },
+      { name: "Aaron Holiday", team: "HOU", position: "PG", avgMinutes: "13.0", avgFouls: "1.2" },
+      { name: "Steven Adams", team: "HOU", position: "C", avgMinutes: "16.0", avgFouls: "2.1" },
       // IND Pacers — Zubac + Kobe Brown added; Mathurin/I.Jackson gone
       { name: "Tyrese Haliburton", team: "IND", position: "PG", avgMinutes: "33.0", avgFouls: "1.1" },
       { name: "Pascal Siakam", team: "IND", position: "PF", avgMinutes: "36.0", avgFouls: "2.1" },
@@ -1464,14 +1476,15 @@ async function seedDatabase() {
       { name: "Kelly Oubre Jr.", team: "PHI", position: "SF", avgMinutes: "27.0", avgFouls: "2.1" },
       { name: "KJ Martin", team: "PHI", position: "PF", avgMinutes: "22.5", avgFouls: "2.0" },
       { name: "Andre Drummond", team: "PHI", position: "C", avgMinutes: "21.0", avgFouls: "2.7" },
-      // PHX Suns — Cole Anthony + Amir Coffey added; Eric Gordon gone
+      // PHX Suns — Dillon Brooks arrived from HOU; Kevin Durant traded to HOU
       { name: "Devin Booker", team: "PHX", position: "SG", avgMinutes: "36.5", avgFouls: "2.3" },
-      { name: "Kevin Durant", team: "PHX", position: "PF", avgMinutes: "36.5", avgFouls: "2.1" },
+      { name: "Dillon Brooks", team: "PHX", position: "SF", avgMinutes: "29.0", avgFouls: "2.8" },
       { name: "Bradley Beal", team: "PHX", position: "SG", avgMinutes: "30.5", avgFouls: "1.8" },
       { name: "Grayson Allen", team: "PHX", position: "SG", avgMinutes: "32.0", avgFouls: "2.0" },
       { name: "Jusuf Nurkic", team: "PHX", position: "C", avgMinutes: "26.0", avgFouls: "2.7" },
       { name: "Cole Anthony", team: "PHX", position: "PG", avgMinutes: "21.0", avgFouls: "1.9" },
       { name: "Amir Coffey", team: "PHX", position: "SF", avgMinutes: "20.0", avgFouls: "1.6" },
+      { name: "Ryan Dunn", team: "PHX", position: "SF", avgMinutes: "22.0", avgFouls: "1.9" },
       // POR Trail Blazers — Simons gone; Jrue Holiday added; Krejci gone (to ATL)
       { name: "Scoot Henderson", team: "POR", position: "PG", avgMinutes: "30.0", avgFouls: "2.5" },
       { name: "Shaedon Sharpe", team: "POR", position: "SG", avgMinutes: "27.5", avgFouls: "1.8" },
@@ -1509,21 +1522,41 @@ async function seedDatabase() {
       { name: "John Collins", team: "UTA", position: "PF", avgMinutes: "27.5", avgFouls: "2.2" },
       { name: "Jaren Jackson Jr.", team: "UTA", position: "PF", avgMinutes: "31.0", avgFouls: "3.0" },
       { name: "Lonzo Ball", team: "UTA", position: "PG", avgMinutes: "26.0", avgFouls: "1.6" },
-      // WAS Wizards — Trae Young + Anthony Davis here; Davis/Russell/Hardy/Exum added at deadline
+      // WAS Wizards — Rebuilding; Poole/Kuzma gone; Trae Young, AD, Russell, Hardy, Exum added
       { name: "Trae Young", team: "WAS", position: "PG", avgMinutes: "35.5", avgFouls: "2.0" },
       { name: "Anthony Davis", team: "WAS", position: "C", avgMinutes: "34.5", avgFouls: "2.5" },
       { name: "Alexandre Sarr", team: "WAS", position: "C", avgMinutes: "27.0", avgFouls: "2.5" },
-      { name: "Kyshawn George", team: "WAS", position: "SF", avgMinutes: "25.0", avgFouls: "1.8" },
+      { name: "Kyshawn George", team: "WAS", position: "SF", avgMinutes: "28.0", avgFouls: "1.8" },
       { name: "Bilal Coulibaly", team: "WAS", position: "SF", avgMinutes: "29.0", avgFouls: "2.1" },
       { name: "D'Angelo Russell", team: "WAS", position: "PG", avgMinutes: "24.0", avgFouls: "1.8" },
-      { name: "Jaden Hardy", team: "WAS", position: "SG", avgMinutes: "20.0", avgFouls: "1.5" },
+      { name: "Jaden Hardy", team: "WAS", position: "SG", avgMinutes: "22.0", avgFouls: "1.5" },
       { name: "Dante Exum", team: "WAS", position: "PG", avgMinutes: "18.0", avgFouls: "1.6" },
-      { name: "Jordan Poole", team: "WAS", position: "SG", avgMinutes: "32.0", avgFouls: "2.0" },
-      { name: "Kyle Kuzma", team: "WAS", position: "PF", avgMinutes: "29.5", avgFouls: "1.8" },
+      { name: "Tristan Vukcevic", team: "WAS", position: "C", avgMinutes: "22.0", avgFouls: "2.3" },
+      { name: "Bub Carrington", team: "WAS", position: "SG", avgMinutes: "20.0", avgFouls: "1.4" },
+      { name: "Tre Johnson", team: "WAS", position: "SG", avgMinutes: "21.0", avgFouls: "1.6" },
+      { name: "Sharife Cooper", team: "WAS", position: "PG", avgMinutes: "15.0", avgFouls: "1.5" },
+      { name: "Will Riley", team: "WAS", position: "SF", avgMinutes: "16.0", avgFouls: "1.3" },
+      { name: "Justin Champagnie", team: "WAS", position: "SF", avgMinutes: "14.0", avgFouls: "1.6" },
+      { name: "Julian Reese", team: "WAS", position: "C", avgMinutes: "15.0", avgFouls: "2.1" },
+      { name: "Jamir Watkins", team: "WAS", position: "SF", avgMinutes: "12.0", avgFouls: "1.4" },
     ];
 
+    const existingByName = new Map(existingPlayers.map(p => [p.name.toLowerCase(), p]));
+    let seeded = 0, updated = 0;
     for (const p of playersToSeed) {
-      await storage.createPlayer(p);
+      const existing = existingByName.get(p.name.toLowerCase());
+      if (existing) {
+        if (existing.team !== p.team || existing.position !== p.position) {
+          await storage.updatePlayerStats(existing.id, { team: p.team, position: p.position });
+          updated++;
+        }
+      } else {
+        await storage.createPlayer(p);
+        seeded++;
+      }
+    }
+    if (seeded > 0 || updated > 0) {
+      console.log(`[seed] ${seeded} new players inserted, ${updated} players updated (team/position)`);
     }
 
     // ── 2025-26 DEFENSIVE RATINGS by team & position ─────────────────────────

@@ -44,7 +44,7 @@ import { SiX } from "react-icons/si";
 // ESPN abbreviation → our DB team abbreviation
 const ESPN_TO_DB: Record<string, string> = {
   GS: "GSW", SA: "SAS", NO: "NOP", NY: "NYK",
-  PHO: "PHX", UTH: "UTA", WSH: "WAS", CHO: "CHA",
+  PHO: "PHX", UTH: "UTA", UTAH: "UTA", WSH: "WAS", CHO: "CHA",
 };
 const espnToDb = (abbr: string) => ESPN_TO_DB[abbr.toUpperCase()] ?? abbr.toUpperCase();
 
@@ -440,7 +440,15 @@ export default function Dashboard() {
   // Direct fill from box score row — bypasses name-matching entirely
   const handleBoxScoreClick = (stat: import("@shared/schema").LivePlayerStat) => {
     const matched = findPlayerByName(stat.playerName);
-    if (matched) form.setValue("playerId" as any, String(matched.id));
+    if (matched) {
+      form.setValue("playerId" as any, String(matched.id));
+    } else {
+      toast({
+        title: `${stat.playerName} not in database`,
+        description: "Click 'Sync Rosters' to add all active players, then try again.",
+        variant: "destructive",
+      });
+    }
 
     const minParts = stat.minutes.split(":");
     const minutesDecimal = minParts.length === 2
