@@ -7,13 +7,27 @@ import { useLocation } from "wouter";
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
 const loginSchema = z.object({
-  email: z.string().email("Please enter a valid email address"),
+  identifier: z.string().min(1, "Please enter your email or phone number"),
   password: z.string().min(8, "Password must be at least 8 characters"),
 });
+
+function normalizePhone(val: string): string {
+  const digits = val.replace(/\D/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return val.trim();
+}
 
 const registerSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
   password: z.string().min(8, "Password must be at least 8 characters"),
+  phoneNumber: z.string().optional().transform(v => {
+    if (!v || v.trim() === "") return undefined;
+    return normalizePhone(v);
+  }).refine(v => {
+    if (!v) return true;
+    return /^\+1\d{10}$/.test(v) || /^\+\d{10,15}$/.test(v);
+  }, { message: "Enter a valid US phone number (e.g. 555-000-0000)" }),
   smsConsent: z.literal(true, {
     errorMap: () => ({ message: "You must agree to the terms to continue." }),
   }),
@@ -30,12 +44,12 @@ export default function AuthPage() {
 
   const loginForm = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
-    defaultValues: { email: "", password: "" },
+    defaultValues: { identifier: "", password: "" },
   });
 
   const registerForm = useForm<RegisterForm>({
     resolver: zodResolver(registerSchema),
-    defaultValues: { email: "", password: "", smsConsent: undefined as any },
+    defaultValues: { email: "", password: "", phoneNumber: "", smsConsent: undefined as any },
   });
 
   const isPending = loginPending || registerPending;
@@ -43,7 +57,12 @@ export default function AuthPage() {
   const onLoginSubmit = async (data: LoginForm) => {
     setErrorMessage(null);
     try {
-      await login(data);
+      const identifier = data.identifier.trim();
+      const isPhone = /^[\d\s\-\(\)\+]+$/.test(identifier) && identifier.replace(/\D/g, "").length >= 10;
+      const loginPayload = isPhone
+        ? { phone: normalizePhone(identifier), password: data.password }
+        : { email: identifier, password: data.password };
+      await login(loginPayload);
       navigate("/");
     } catch (err: any) {
       setErrorMessage(err.message || "Something went wrong. Please try again.");
@@ -53,7 +72,12 @@ export default function AuthPage() {
   const onRegisterSubmit = async (data: RegisterForm) => {
     setErrorMessage(null);
     try {
-      await register({ email: data.email, password: data.password, smsConsent: data.smsConsent });
+      await register({
+        email: data.email,
+        password: data.password,
+        smsConsent: data.smsConsent,
+        phoneNumber: data.phoneNumber,
+      });
       navigate("/");
     } catch (err: any) {
       setErrorMessage(err.message || "Something went wrong. Please try again.");
@@ -106,17 +130,17 @@ export default function AuthPage() {
           {tab === "login" && (
             <form onSubmit={loginForm.handleSubmit(onLoginSubmit)} className="space-y-4">
               <div>
-                <label className="text-sm font-medium text-foreground block mb-1.5">Email</label>
+                <label className="text-sm font-medium text-foreground block mb-1.5">Email or Phone Number</label>
                 <input
                   data-testid="input-email"
-                  type="email"
-                  autoComplete="email"
-                  placeholder="you@example.com"
-                  {...loginForm.register("email")}
+                  type="text"
+                  autoComplete="username"
+                  placeholder="you@example.com or 555-000-0000"
+                  {...loginForm.register("identifier")}
                   className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
                 />
-                {loginForm.formState.errors.email && (
-                  <p className="text-xs text-destructive mt-1">{loginForm.formState.errors.email.message}</p>
+                {loginForm.formState.errors.identifier && (
+                  <p className="text-xs text-destructive mt-1">{loginForm.formState.errors.identifier.message}</p>
                 )}
               </div>
 
@@ -184,6 +208,24 @@ export default function AuthPage() {
                 {registerForm.formState.errors.password && (
                   <p className="text-xs text-destructive mt-1">{registerForm.formState.errors.password.message}</p>
                 )}
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-foreground block mb-1.5">
+                  Phone Number <span className="text-muted-foreground font-normal text-xs">(for SMS alerts)</span>
+                </label>
+                <input
+                  data-testid="input-phone"
+                  type="tel"
+                  autoComplete="tel"
+                  placeholder="555-000-0000"
+                  {...registerForm.register("phoneNumber")}
+                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                />
+                {registerForm.formState.errors.phoneNumber && (
+                  <p className="text-xs text-destructive mt-1">{registerForm.formState.errors.phoneNumber.message}</p>
+                )}
+                <p className="text-[10px] text-muted-foreground mt-1">US numbers only. You can add or update this later in your alerts settings.</p>
               </div>
 
               <div className="flex items-start gap-2.5">

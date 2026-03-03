@@ -319,53 +319,49 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
               <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
                 <span className="text-blue-400">1H</span> Projection
               </p>
-              <div className="bg-secondary/40 rounded-lg p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 space-y-1">
-                    <p className="text-xs text-muted-foreground">
-                      Proj 1H total: <span className="text-foreground font-semibold text-sm">{play.proj1HTotal}</span>
-                    </p>
-                    {play.h1TotalLine !== null && (
-                      <p className="text-xs text-foreground">
-                        Line: <span className="font-semibold">{play.h1TotalLine}</span>
-                        <span className="text-muted-foreground ml-2 text-[10px]">
-                          {play.h1TotalLine === Math.round((play.total ?? 0) * 0.47 * 2) / 2 ? "(est)" : "(live)"}
-                        </span>
-                      </p>
-                    )}
-                    {play.total1HEdge !== null && (
-                      <p className={`text-xs font-semibold ${edgeColor(play.total1HEdge)}`}>
-                        {play.total1HEdge > 0
-                          ? <TrendingUp className="inline w-3 h-3 mr-0.5" />
-                          : <TrendingDown className="inline w-3 h-3 mr-0.5" />
-                        }
-                        {play.total1HEdge > 0 ? "Over" : "Under"} edge: {Math.abs(play.total1HEdge).toFixed(1)}pp
-                      </p>
-                    )}
-                    {probBar(play.over1HProb, false, true)}
-                    {play.h1TotalLine === null && (
-                      <p className="text-[10px] text-muted-foreground/50 italic">No 1H line — using proj as reference</p>
-                    )}
+              <div className="bg-secondary/40 rounded-lg p-3 space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Proj 1H total: <span className="text-foreground font-semibold text-sm">{play.proj1HTotal}</span>
+                </p>
+                {play.h1TotalLine !== null && (
+                  <p className="text-xs text-foreground">
+                    Line: <span className="font-semibold">{play.h1TotalLine}</span>
+                    <span className="text-muted-foreground ml-2 text-[10px]">
+                      {play.h1TotalLine === Math.round((play.total ?? 0) * 0.47 * 2) / 2 ? "(est)" : "(live)"}
+                    </span>
+                  </p>
+                )}
+                {play.total1HEdge !== null && (
+                  <p className={`text-xs font-semibold ${edgeColor(play.total1HEdge)}`}>
+                    {play.total1HEdge > 0
+                      ? <TrendingUp className="inline w-3 h-3 mr-0.5" />
+                      : <TrendingDown className="inline w-3 h-3 mr-0.5" />
+                    }
+                    {play.total1HEdge > 0 ? "Over" : "Under"} edge: {Math.abs(play.total1HEdge).toFixed(1)}pp
+                  </p>
+                )}
+                {probBar(play.over1HProb, false, true)}
+                {play.h1TotalLine === null && (
+                  <p className="text-[10px] text-muted-foreground/50 italic">No 1H line — using proj as reference</p>
+                )}
+                {onAddToParlay && effective1HLine !== null && (
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <button
+                      data-testid={`ncaab-parlay-1h-over-${play.gameId}`}
+                      onClick={(e) => { e.stopPropagation(); addPick("over", effective1HLine, effective1HProb, "ncaab_1h_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — 1H Total`); }}
+                      className="flex items-center justify-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 transition-colors"
+                    >
+                      <Plus className="w-3 h-3" /> Over {effective1HLine}{h1LineIsProj ? "*" : ""}
+                    </button>
+                    <button
+                      data-testid={`ncaab-parlay-1h-under-${play.gameId}`}
+                      onClick={(e) => { e.stopPropagation(); addPick("under", effective1HLine, 100 - effective1HProb, "ncaab_1h_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — 1H Total`); }}
+                      className="flex items-center justify-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 transition-colors"
+                    >
+                      <Plus className="w-3 h-3" /> Under {effective1HLine}{h1LineIsProj ? "*" : ""}
+                    </button>
                   </div>
-                  {onAddToParlay && effective1HLine !== null && (
-                    <div className="flex flex-col gap-1 flex-shrink-0">
-                      <button
-                        data-testid={`ncaab-parlay-1h-over-${play.gameId}`}
-                        onClick={(e) => { e.stopPropagation(); addPick("over", effective1HLine, effective1HProb, "ncaab_1h_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — 1H Total`); }}
-                        className="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 transition-colors"
-                      >
-                        <Plus className="w-2.5 h-2.5" /> Over {effective1HLine}{h1LineIsProj ? " (proj)" : ""}
-                      </button>
-                      <button
-                        data-testid={`ncaab-parlay-1h-under-${play.gameId}`}
-                        onClick={(e) => { e.stopPropagation(); addPick("under", effective1HLine, 100 - effective1HProb, "ncaab_1h_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — 1H Total`); }}
-                        className="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 transition-colors"
-                      >
-                        <Plus className="w-2.5 h-2.5" /> Under {effective1HLine}{h1LineIsProj ? " (proj)" : ""}
-                      </button>
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
             </div>
           )}
@@ -376,48 +372,44 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
               <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
                 Full Game Projection
               </p>
-              <div className="bg-secondary/40 rounded-lg p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 space-y-1">
-                    <p className="text-xs text-muted-foreground">
-                      Proj total: <span className="text-foreground font-semibold text-sm">{play.projectedTotal.toFixed(1)}</span>
-                    </p>
-                    {play.total !== null && (
-                      <p className="text-xs text-foreground">Line: <span className="font-semibold">{play.total}</span></p>
-                    )}
-                    {play.totalEdge !== null && (
-                      <p className={`text-xs font-semibold ${edgeColor(play.totalEdge)}`}>
-                        {play.totalEdge > 0
-                          ? <TrendingUp className="inline w-3 h-3 mr-0.5" />
-                          : <TrendingDown className="inline w-3 h-3 mr-0.5" />
-                        }
-                        {play.totalEdge > 0 ? "Over" : "Under"} edge: {Math.abs(play.totalEdge).toFixed(1)}pp
-                      </p>
-                    )}
-                    {probBar(play.overProb, false, true)}
-                    {play.total === null && (
-                      <p className="text-[10px] text-muted-foreground/50 italic">No line — using proj as reference</p>
-                    )}
+              <div className="bg-secondary/40 rounded-lg p-3 space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Proj total: <span className="text-foreground font-semibold text-sm">{play.projectedTotal.toFixed(1)}</span>
+                </p>
+                {play.total !== null && (
+                  <p className="text-xs text-foreground">Line: <span className="font-semibold">{play.total}</span></p>
+                )}
+                {play.totalEdge !== null && (
+                  <p className={`text-xs font-semibold ${edgeColor(play.totalEdge)}`}>
+                    {play.totalEdge > 0
+                      ? <TrendingUp className="inline w-3 h-3 mr-0.5" />
+                      : <TrendingDown className="inline w-3 h-3 mr-0.5" />
+                    }
+                    {play.totalEdge > 0 ? "Over" : "Under"} edge: {Math.abs(play.totalEdge).toFixed(1)}pp
+                  </p>
+                )}
+                {probBar(play.overProb, false, true)}
+                {play.total === null && (
+                  <p className="text-[10px] text-muted-foreground/50 italic">No line — using proj as reference</p>
+                )}
+                {onAddToParlay && effectiveFGLine !== null && (
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <button
+                      data-testid={`ncaab-parlay-over-${play.gameId}`}
+                      onClick={(e) => { e.stopPropagation(); addPick("over", effectiveFGLine, effectiveFGProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — Total`); }}
+                      className="flex items-center justify-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 transition-colors"
+                    >
+                      <Plus className="w-3 h-3" /> Over {effectiveFGLine}{fgLineIsProj ? "*" : ""}
+                    </button>
+                    <button
+                      data-testid={`ncaab-parlay-under-${play.gameId}`}
+                      onClick={(e) => { e.stopPropagation(); addPick("under", effectiveFGLine, 100 - effectiveFGProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — Total`); }}
+                      className="flex items-center justify-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 transition-colors"
+                    >
+                      <Plus className="w-3 h-3" /> Under {effectiveFGLine}{fgLineIsProj ? "*" : ""}
+                    </button>
                   </div>
-                  {onAddToParlay && effectiveFGLine !== null && (
-                    <div className="flex flex-col gap-1 flex-shrink-0">
-                      <button
-                        data-testid={`ncaab-parlay-over-${play.gameId}`}
-                        onClick={(e) => { e.stopPropagation(); addPick("over", effectiveFGLine, effectiveFGProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — Total`); }}
-                        className="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 transition-colors"
-                      >
-                        <Plus className="w-2.5 h-2.5" /> Over {effectiveFGLine}{fgLineIsProj ? " (proj)" : ""}
-                      </button>
-                      <button
-                        data-testid={`ncaab-parlay-under-${play.gameId}`}
-                        onClick={(e) => { e.stopPropagation(); addPick("under", effectiveFGLine, 100 - effectiveFGProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — Total`); }}
-                        className="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 transition-colors"
-                      >
-                        <Plus className="w-2.5 h-2.5" /> Under {effectiveFGLine}{fgLineIsProj ? " (proj)" : ""}
-                      </button>
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
             </div>
           )}
@@ -438,52 +430,48 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
               <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
                 {isH1 ? "Projected 1H Margin" : play.spread !== null ? "Spread" : "Projected Margin"}
               </p>
-              <div className="bg-secondary/40 rounded-lg p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 space-y-1">
-                    {play.spread !== null && !isH1 && (
-                      <p className="text-xs text-foreground">
-                        <span className="font-semibold">{play.favorite}</span>
-                        <span className="text-muted-foreground ml-1">-{play.spread}</span>
-                      </p>
-                    )}
-                    {play.projectedMargin !== null && (
-                      <p className="text-xs text-foreground font-medium">
-                        {play.projectedMargin > 0
-                          ? `${play.homeTeamAbbr} projected to lead by ${play.projectedMargin.toFixed(1)}`
-                          : play.projectedMargin < 0
-                            ? `${play.awayTeamAbbr} projected to lead by ${Math.abs(play.projectedMargin).toFixed(1)}`
-                            : "Pick 'em"}
-                      </p>
-                    )}
-                    {play.spread === null && play.projectedMargin !== null && (
-                      <p className="text-[10px] text-muted-foreground/50 italic">
-                        {isH1 ? "No 1H spread line — margin only" : "No spread line available"}
-                      </p>
-                    )}
-                    {play.spreadEdge !== null && !isH1 && (
-                      <p className={`text-xs font-semibold ${edgeColor(play.spreadEdge)}`}>
-                        {play.spreadEdge > 0
-                          ? <TrendingUp className="inline w-3 h-3 mr-0.5" />
-                          : <TrendingDown className="inline w-3 h-3 mr-0.5" />
-                        }
-                        Edge: {play.spreadEdge > 0 ? "+" : ""}{play.spreadEdge}pp
-                      </p>
-                    )}
-                    {probBar(play.spreadProb, false, true)}
+              <div className="bg-secondary/40 rounded-lg p-3 space-y-2">
+                {play.spread !== null && !isH1 && (
+                  <p className="text-xs text-foreground">
+                    <span className="font-semibold">{play.favorite}</span>
+                    <span className="text-muted-foreground ml-1">-{play.spread}</span>
+                  </p>
+                )}
+                {play.projectedMargin !== null && (
+                  <p className="text-xs text-foreground font-medium">
+                    {play.projectedMargin > 0
+                      ? `${play.homeTeamAbbr} projected to lead by ${play.projectedMargin.toFixed(1)}`
+                      : play.projectedMargin < 0
+                        ? `${play.awayTeamAbbr} projected to lead by ${Math.abs(play.projectedMargin).toFixed(1)}`
+                        : "Pick 'em"}
+                  </p>
+                )}
+                {play.spread === null && play.projectedMargin !== null && (
+                  <p className="text-[10px] text-muted-foreground/50 italic">
+                    {isH1 ? "No 1H spread line — margin only" : "No spread line available"}
+                  </p>
+                )}
+                {play.spreadEdge !== null && !isH1 && (
+                  <p className={`text-xs font-semibold ${edgeColor(play.spreadEdge)}`}>
+                    {play.spreadEdge > 0
+                      ? <TrendingUp className="inline w-3 h-3 mr-0.5" />
+                      : <TrendingDown className="inline w-3 h-3 mr-0.5" />
+                    }
+                    Edge: {play.spreadEdge > 0 ? "+" : ""}{play.spreadEdge}pp
+                  </p>
+                )}
+                {probBar(play.spreadProb, false, true)}
+                {onAddToParlay && play.spreadProb !== null && play.spread !== null && !isH1 && (
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <button
+                      data-testid={`ncaab-parlay-spread-fav-${play.gameId}`}
+                      onClick={(e) => { e.stopPropagation(); addPick("over", play.spread!, play.spreadProb!, "ncaab_spread", `${play.favorite} -${play.spread}`); }}
+                      className="flex items-center justify-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20 transition-colors col-span-2"
+                    >
+                      <Plus className="w-3 h-3" /> {play.favorite} -{play.spread} (Cover)
+                    </button>
                   </div>
-                  {onAddToParlay && play.spreadProb !== null && play.spread !== null && !isH1 && (
-                    <div className="flex flex-col gap-1 flex-shrink-0">
-                      <button
-                        data-testid={`ncaab-parlay-spread-fav-${play.gameId}`}
-                        onClick={(e) => { e.stopPropagation(); addPick("over", play.spread!, play.spreadProb!, "ncaab_spread", `${play.favorite} -${play.spread}`); }}
-                        className="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20 transition-colors"
-                      >
-                        <Plus className="w-2.5 h-2.5" /> {play.favorite?.split(" ").slice(-1)[0]} -{play.spread}
-                      </button>
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
             </div>
           )}

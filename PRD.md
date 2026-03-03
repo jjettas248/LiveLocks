@@ -1,365 +1,410 @@
-# Product Requirements Document
-## LiveLocks by PropPulse — MLB Baseball Expansion
+# LiveLocks by PropPulse — Product Requirements Document
 
-**Version**: 1.0  
-**Checkpoint**: `b9f431cd22f951b4f7aef34657876ee01dcdc336`  
-**Date**: February 2026  
-**Status**: Pre-implementation (use checkpoint above to revert if MLB implementation breaks anything)
+**Version**: 2.0  
+**Last Updated**: March 2026  
+**Status**: Active Development
 
 ---
 
 ## 1. Product Overview
 
-LiveLocks is a live sports analytics tool that helps sports bettors make sharper in-game prop decisions using real-time data, predictive modeling, and correlation-aware parlay construction. The current product covers NBA. This document defines the requirements for expanding to **MLB Baseball**.
+LiveLocks by PropPulse is a real-time sports analytics and betting intelligence platform designed for NBA and college basketball bettors. The product surfaces live in-game probability models, 2nd-half play recommendations, and NCAAB full-slate coverage — delivered via web app, push notifications, and SMS alerts.
 
-### 1.1 Current NBA Feature Set (Stable Baseline)
+### Vision
 
-- Live game strip (ESPN scoreboard, 30s refresh)
-- Clickable live box score with auto-fill into the calculator
-- Probability engine: blends observed rate (70%) + season baseline (30%), adjusted for defense, pace, foul trouble
-- Sportsbook odds integration (The Odds API — DraftKings, FanDuel, Hard Rock)
-- Parlay builder with correlation engine and implied odds
-- Sportsbook deeplinks
-- Halftime best plays scanner
-- JWT authentication + session cookies
-- Stripe subscriptions ($25/mo NBA, $50/mo All Sports)
-- Free tier: 10 probability calculations
-- Admin panel: user management, tier overrides, feedback inbox
+Give serious sports bettors a data edge through live statistical modeling they cannot get from sportsbooks or public analytics tools, delivered fast enough to act on during live games.
+
+### Core Value Proposition
+
+- **Live props calculator**: Real-time player prop probability updated as games progress
+- **2H Plays**: Halftime model recalculates spread, total, and team-total projections after seeing first-half data
+- **Full NCAAB slate**: All Division I games covered daily, not just featured matchups
+- **Multi-channel alerts**: Web push + SMS for high-confidence plays and halftime triggers
 
 ---
 
-## 2. MLB Expansion Goals
+## 2. Users and Access Tiers
 
-### 2.1 Supported Prop Types (Phase 1)
-1. **Hits** — Batter total hits in game
-2. **Total Bases** — Batter total bases (1B=1, 2B=2, 3B=3, HR=4)
-3. **Strikeouts (Batter)** — Times a batter strikes out
-4. **Home Runs** — Batter hits a home run (binary, but treated as a low-line prop)
+### 2.1 User Roles
 
-### 2.2 Out of Scope for Phase 1
-- Pitcher strikeout props (Phase 2)
-- RBIs, walks, stolen bases (Phase 2)
-- Other sports (NFL, NHL, NBA expansion etc.)
+| Role | Access |
+|------|--------|
+| Guest (not logged in) | Registration/login only |
+| Free (registered, no subscription) | 15 live NBA prop plays, then paywall |
+| Pro | Full NBA + NCAAB live + 2H Plays + SMS + Push |
+| All Sports | Everything in Pro + MLB Live (coming soon) + Priority SMS |
+| Admin | Full access to all features + admin panel |
 
----
+**Admin account**: `jaylin.becker22@icloud.com`
 
-## 3. Data Sources
+### 2.2 Subscription Tiers
 
-### 3.1 Primary: MLB.com / ESPN (Free, No Key Required)
-- **Live box scores**: `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/summary?event={gameId}`
-- **Live scoreboard**: `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard`
-- **Use for**: live game state (inning, outs, score), current batter/pitcher stats in-game
+| Feature | Free | Pro ($40/mo) | All Sports ($65/mo) |
+|---------|------|-------------|-------------------|
+| NBA Live Props | 15 plays → paywall | Unlimited | Unlimited |
+| NBA 2H Plays | Teaser then locked | Yes | Yes |
+| NCAAB Live | No | Yes | Yes |
+| NCAAB 2H Plays | No | Yes | Yes |
+| MLB Live | No | No | Coming Soon |
+| Push Notifications | No | Yes | Yes |
+| SMS Alerts | No | Yes | Yes (Priority) |
+| Parlay Builder | Yes (with plays) | Yes | Yes |
 
-### 3.2 Season Stats: Baseball Savant (scrape, free)
-- **URL**: `https://baseballsavant.mlb.com/statcast_search/csv?type=batter&hfStat=&player_type=batter&...`
-- **CSV endpoint**: Statcast search CSV export (public, no auth required)
-- **Scrape for**:
-  - Batter `avg_hit_speed` (exit velocity)
-  - `launch_angle_avg`
-  - `hard_hit_percent`
-  - `xba` (expected batting average)
-  - `xslg` (expected slugging — proxy for total bases)
-  - `k_percent` (strikeout rate)
-  - `bb_percent`
-  - `woba`, `xwoba`
-  - Season hits, AB, HR, total bases per game (derived)
+**Internal tier keys**: `"all"` = Pro, `"elite"` = All Sports
 
-### 3.3 Matchup Context: Baseball Savant Pitcher vs Batter
-- **URL**: `https://baseballsavant.mlb.com/statcast_search?player_type=batter&pitchers_lookup[]={pitcherId}&batters_lookup[]={batterId}&...`
-- **Scrape for**: career H, K, HR, AB in matchup vs this specific pitcher today
-- Used to adjust probability when the batter has a strong or weak historical tendency vs the starter
+### 2.3 Free Play Limit
 
-### 3.4 Weather: Open-Meteo (Free, No Key Required)
-- **URL**: `https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lng}&current_weather=true`
-- **Ballpark coordinates**: stored in a lookup table (30 MLB stadiums)
-- **Weather factors**:
-  - Wind speed + direction (affects fly balls / home run probability)
-  - Temperature (cold air = less carry on fly balls)
-  - Precipitation (game delay / cancellation risk)
-- Wind blowing **out** to CF at >10 mph = +5–10% HR probability boost
-- Wind blowing **in** from CF = -5–10% HR probability reduction
-- Temperature < 50°F = -5% total bases / HR
-
-### 3.5 Pitcher Data: Baseball Savant Pitcher Leaderboard
-- **URL**: `https://baseballsavant.mlb.com/statcast_search/csv?type=pitcher&...`
-- **Scrape for** (opposing pitcher stats relevant to batter props):
-  - `avg_velocity` (starter average fastball speed)
-  - `k_percent` (pitcher strikeout rate — affects batter K prop)
-  - `bb_percent`
-  - `hard_hit_allowed_percent`
-  - `last_pitch_type` (most recent pitch thrown — from live box score)
-  - `pitch_count` (current count from live box score)
-  - `era`, `whip`, `ops_against`
-
-### 3.6 BallparkPal / Ballpark Factors (scrape or static table)
-- Ballpark run/HR/hit factor per park (1.0 = average)
-- Example: Coors Field HR factor = 1.30, Petco Park = 0.87
-- Store as a static lookup table (30 parks × 3 factors: hits, HR, strikeouts)
-- Update once per season (static is fine — park factors barely change mid-season)
+Free users may view **15 live plays** before hitting the upgrade paywall. The play counter increments on each prop calculation response from the server. Admin and paid users bypass this counter entirely.
 
 ---
 
-## 4. Live Box Score Display
+## 3. Navigation and Tab Structure
 
-### 4.1 Batter Row (per batter in game lineup)
-| Field | Source |
-|-------|--------|
-| Name | ESPN box score |
-| AB | ESPN live |
-| H | ESPN live |
-| HR | ESPN live |
-| RBI | ESPN live |
-| K | ESPN live |
-| BB | ESPN live |
-| Total Bases (computed) | ESPN live |
-| Exit Velo (avg game) | Baseball Savant season avg (cached) |
-| Launch Angle (avg) | Baseball Savant season avg (cached) |
-| Matchup H/AB vs today's pitcher | Baseball Savant career splits |
+```
+Top navigation bar:
+  [🏀 NBA Live]  [🏀 NCAAB Live]  [⚾ MLB Live 🔒]
 
-### 4.2 Pitcher Display (today's starter + current pitcher)
-| Field | Source |
-|-------|--------|
-| Name | ESPN lineup |
-| Pitch Count | ESPN live box score |
-| Last Pitch Type | ESPN live |
-| Avg Velocity (season) | Baseball Savant |
-| K% | Baseball Savant |
-| ERA | Baseball Savant / ESPN |
-| WHIP | Baseball Savant / ESPN |
+When NBA Live is active — secondary pill row appears below:
+  [Live Props]  [⏱ 2H Plays]
+
+When NCAAB Live is active — secondary pill row appears below:
+  [Live]  [2H Plays]
+```
+
+**Visibility rules**:
+- **NBA Live**: visible to all logged-in users
+- **NCAAB Live**: visible to Pro, All Sports, and Admin users only; hidden from free users
+- **MLB Live**: visible to all logged-in users with a lock icon; clicking opens MLB coming-soon popover
 
 ---
 
-## 5. Probability Engine — MLB
+## 4. Feature Specifications
 
-### 5.1 Hits
-```
-baseHitsPerAB = player.seasonH / player.seasonAB  (batting average)
-adjustedBA = baseHitsPerAB × pitcherFactor × parkFactor × tempFactor
-remainingAB = estimatedRemainingAB(currentInning, lineupSlot)  // avg 3.8 AB/9 innings
-expectedHits = currentH + (remainingAB × adjustedBA)
-probability = normal_cdf(line, expectedHits, stddev)
-```
+### 4.1 NBA Live Props (Calculator)
 
-### 5.2 Total Bases
-```
-xSLGPerAB = player.xslg / 3.0  // normalize to per-AB
-adjustedSLG = xSLGPerAB × pitcherFactor × parkFactor × windFactor
-expectedTB = currentTB + (remainingAB × adjustedSLG)
-probability = normal_cdf(line, expectedTB, stddev)
-```
+**Inputs**:
+- Player name (searchable dropdown, synced from ESPN roster)
+- Stat type: Points / Rebounds / Assists / 3-Pointers Made / Steals / Blocks / Pts+Reb+Ast / Pts+Reb / Pts+Ast / Reb+Ast / Stl+Blk
+- Current stat value (live)
+- Line (from sportsbook)
+- Game clock remaining (minutes)
+- Period (Q1–Q4 / OT)
+- Optional: game total line, halftime score, game spread
 
-### 5.3 Strikeouts (Batter)
-```
-kRate = player.kPercent  // 0–1
-adjustedKRate = kRate × (pitcher.kPercent / leagueAvgK) × parkKFactor
-expectedK = currentK + (remainingAB × adjustedKRate)
-probability = normal_cdf(line, expectedK, stddev)
-```
+**Model logic**:
+- Projects final stat based on pace multiplier, usage rate, and game context
+- Applies garbage-time reduction when spread exceeds threshold in late Q4
+- Returns probability of clearing the line (over/under)
+- Probability threshold for high-confidence alert: ≥90% in either direction
 
-### 5.4 Home Runs
-```
-hrPerAB = player.seasonHR / player.seasonAB
-adjustedHRRate = hrPerAB × pitcherHRRate × parkHRFactor × windFactor × tempFactor
-expectedHR = currentHR + (remainingAB × adjustedHRRate)
-probability = poisson_cdf(line, expectedHR)  // Poisson for rare events
-```
+**Display**:
+- Large probability gauge (ring)
+- Over/Under recommendation pill
+- Edge percentage vs. implied odds
+- Parlay builder appended below high-confidence plays
 
-### 5.5 Weather Adjustments
-```
-windFactor (HR/TB) = 1.0 + windEffect(speed, direction, ballparkOrientation)
-  wind out CF >10mph: +0.08
-  wind out CF >20mph: +0.15
-  wind in CF >10mph: -0.08
-  wind in CF >20mph: -0.12
+### 4.2 NBA 2H Plays
 
-tempFactor = 1.0 - max(0, (65 - tempF) * 0.003)  // ~0.3% reduction per degree below 65°F
-```
+Appears as a secondary pill sub-tab under NBA Live (labeled ⏱ 2H Plays). Fetches live halftime games via The Odds API and calculates:
 
-### 5.6 Matchup Adjustment
-```
-matchupBA = careerH / careerAB  (vs today's pitcher, min 10 AB to use)
-if sampleSize >= 10:
-  finalBA = seasonBA * 0.7 + matchupBA * 0.3
-else:
-  finalBA = seasonBA  // small sample, ignore
-```
+- **2H spread**: adjusted projection using first-half pace and score differential
+- **2H total**: remaining scoring projection
+- **Team totals**: per-team scoring projection for the second half
 
----
+Display: game cards sorted by confidence edge. Each card shows spread line + probability bar, total line + probability bar, and color-coded edge pills (green ≥60%, red ≤40%).
 
-## 6. UI/UX Requirements
+**Locking**: Free users see one teaser card blurred, remaining locked behind upgrade prompt.
 
-### 6.1 Dashboard Changes
-- Add "MLB" sport tab alongside "NBA" tab (gated behind "All Sports" subscription)
-- Separate game strip for MLB games (ESPN MLB scoreboard)
-- Reuse the same calculator card layout — same form structure, MLB-specific stat types
-- Live box score panel: shows lineup card with batter stats + pitcher card above
+### 4.3 NCAAB Live
 
-### 6.2 Baseball-Specific Inputs
-| Input | Type | Notes |
-|-------|------|-------|
-| Player | Select | Batters from today's live MLB lineups |
-| Opponent | Select (auto from game) | Pitcher's team |
-| Stat Type | Select | Hits / Total Bases / Strikeouts / Home Runs |
-| Current Stat | Number | Batter's current H/TB/K/HR from live box score |
-| Current AB | Number | Auto-filled from box score |
-| Current Inning | Number | Auto-filled from game state |
-| Live Line | Number | From Odds API (if available) |
+Available to Pro and All Sports subscribers (and admins).
 
-### 6.3 Weather Widget
-- Shown in the result panel when MLB game is selected
-- Displays: temperature, wind speed + direction, precipitation
-- Wind direction indicator relative to ballpark (blowing in/out/crosswind)
-- Color-coded: green = favorable, yellow = neutral, red = unfavorable
+- Pulls full Division I slate daily from ESPN (`limit=300&groups=50` endpoint)
+- Shows game cards with: team names, score, period/clock, live win probability
+- Real-time probability recalculated using NCAAB pace norms and score context
+- Lines fetched from The Odds API (all available bookmakers, not restricted to specific books)
 
-### 6.4 Pitcher Card
-- Appears when a game is selected, above the batter box score
-- Shows: pitcher name, pitch count, last pitch type, avg velocity, K%, ERA, WHIP
+**2H Plays sub-tab**: filters games at halftime and shows spread, O/U, and team total projections. Same display pattern as NBA 2H.
 
-### 6.5 Batter Detail Row
-- Clicking a batter in the box score auto-fills: current stat, AB, and pre-loads matchup data
-- Exit velo and launch angle shown as secondary info badges on the row
+**Access**: No "ADMIN" badge shown. Positioned between NBA Live and MLB Live in tab bar.
+
+### 4.4 MLB Live
+
+Placeholder tab visible to all users. Clicking shows coming-soon popover for free users, upgrade prompt for non-subscribers, and "coming soon" for All Sports subscribers. No live data until MLB season integration is built.
+
+### 4.5 Parlay Builder
+
+Inline feature on all game cards. "Add to Slip" buttons appear as full-width grid rows (Over/Under) below each stat projection section — not as tiny side column buttons. Allows users to:
+- Add plays to a running parlay slip
+- View combined odds and correlation-adjusted probability
+- Deep-link to DraftKings, FanDuel, Hard Rock, or Bet365 with picks copied to clipboard
 
 ---
 
-## 7. Backend Architecture
+## 5. Registration and Authentication
 
-### 7.1 New Database Tables
+### 5.1 Registration Form
 
-#### `mlb_players`
-```typescript
-{
-  id: serial primary key,
-  name: text,
-  mlbId: text unique,  // MLB.com player ID
-  team: text,          // 3-letter abbr (NYY, BOS, etc.)
-  position: text,
-  batSide: text,       // L / R / S
-  throwSide: text,
-  avgMinutes: null,    // not used for baseball
-  // Season stats from Baseball Savant
-  avgExitVelo: decimal,
-  avgLaunchAngle: decimal,
-  hardHitPct: decimal,
-  xba: decimal,
-  xslg: decimal,
-  kPercent: decimal,
-  bbPercent: decimal,
-  woba: decimal,
-  seasonH: integer,
-  seasonAB: integer,
-  seasonHR: integer,
-  seasonTB: integer,
-  seasonK: integer,
-  statsUpdatedAt: timestamp,
-}
-```
+Required fields:
+- **Email** — unique per account
+- **Password** — minimum 8 characters
+- **SMS Consent checkbox** — required; cannot submit without checking
 
-#### `mlb_pitchers`
-```typescript
-{
-  id: serial primary key,
-  name: text,
-  mlbId: text unique,
-  team: text,
-  throwSide: text,
-  avgVelocity: decimal,
-  kPercent: decimal,
-  bbPercent: decimal,
-  era: decimal,
-  whip: decimal,
-  hrPer9: decimal,
-  hardHitAllowedPct: decimal,
-  statsUpdatedAt: timestamp,
-}
-```
+Optional field:
+- **Phone Number** — US number in any common format (555-000-0000, (555) 000-0000, +15550000000); normalized to E.164 (+1XXXXXXXXXX) on save
 
-#### `mlb_ballparks`
-```typescript
-{
-  id: serial primary key,
-  team: text unique,   // home team abbr
-  name: text,
-  latitude: decimal,
-  longitude: decimal,
-  hitFactor: decimal,  // 1.0 = average
-  hrFactor: decimal,
-  kFactor: decimal,
-  windOrientation: integer,  // degrees — direction home plate faces
-}
-```
+When the SMS consent checkbox is checked and the user submits:
+- `smsConsent = true` stored in DB
+- `smsAlerts = true` stored in DB (auto-opted in)
+- Phone number stored in DB if provided
 
-### 7.2 New API Endpoints
+### 5.2 Login
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/mlb/games` | Live MLB scoreboard from ESPN |
-| `GET` | `/api/mlb/live-stats/:gameId` | MLB box score + pitcher info |
-| `GET` | `/api/mlb/weather/:team` | Weather for ballpark by home team |
-| `GET` | `/api/mlb/players` | All batters (with season stats) |
-| `POST` | `/api/mlb/calculate` | MLB probability calculation |
-| `POST` | `/api/mlb/sync-stats` | Admin-triggered Baseball Savant scrape |
+Accepts either:
+- **Email** + password
+- **Phone number** (in any common format) + password — looked up via `phone_number` column
 
-### 7.3 Data Refresh Strategy
-- **Live box score**: same as NBA — fetched on demand, 30s cache
-- **Season stats (Baseball Savant)**: refresh daily at 6am ET (or on admin trigger)
-- **Weather**: refresh every 15 minutes per ballpark (cached by team + timestamp)
-- **Pitcher stats**: refresh daily
-- **Matchup splits**: fetched on demand when a game + player is selected (30-min cache)
+### 5.3 JWT Authentication
+
+- 30-day token expiry
+- Stored in localStorage on the client
+- Sent as `Authorization: Bearer <token>` header
+- Session cookie as fallback
+
+### 5.4 Admin
+
+Admin identified by matching `ADMIN_EMAIL` env variable at registration time. Admin bypasses all tier gates and play limits.
 
 ---
 
-## 8. Subscription Gating
+## 6. Alerts System
 
-MLB is part of the **"All Sports"** tier ($50/mo). Free and NBA-only users see the MLB tab locked with an upgrade prompt. Admin accounts have full access.
+### 6.1 Onboarding Modal
 
-```
-Tier null  → Calculator gated (10 free plays total, NBA + MLB shared pool)
-Tier "nba" → NBA unlimited, MLB locked
-Tier "all" → NBA + MLB unlimited
-isAdmin    → Everything unlocked
-```
+After first login/registration, all users see an "Enable Alerts" modal that:
+- Shows the push notifications option (available to all)
+- Shows the SMS option (visible only to Pro/All Sports/Admin)
+- Prompts to add phone number if not yet set
+- Dismissed state stored in `localStorage` (`ll_alerts_onboarded`)
+
+### 6.2 Alert Triggers
+
+**High-confidence play alert**: fires when any live prop reaches ≥90% probability (either direction) for the first time. Uses a deduplication fingerprint: `playerName|statType|line`.
+
+**2H game alert**: fires when a new game enters halftime for the first time per session.
+
+### 6.3 Push Notifications
+
+- Available to Pro and All Sports subscribers
+- User opts in via the Alerts panel (bell icon in dashboard header)
+- Uses Web Push API (VAPID keys configured server-side)
+- Payload: title + body + URL back to dashboard
+- Stored as serialized push subscription object in DB
+
+### 6.4 SMS Alerts
+
+- Available to Pro and All Sports subscribers
+- User auto-opted in at registration when consent checkbox is checked
+- User provides phone number at registration or later via Alerts panel
+- Phone stored in E.164 format
+- Delivered via Twilio — `TWILIO_FROM_NUMBER` → user's phone
+- **Opt-out**: Twilio STOP webhook at `POST /api/webhooks/twilio` — any inbound STOP/UNSUBSCRIBE/CANCEL/END/QUIT sets `smsAlerts = false` and `smsConsent = false` for that user
+
+### 6.5 SMS Compliance
+
+- Consent checkbox required to complete registration
+- Consent language: "I explicitly consent to receive SMS text alerts and account notifications from LiveLocks AI. Message frequency varies. Msg & data rates may apply. Reply STOP to opt out."
+- Consent stored as boolean in DB (`sms_consent` column)
+- STOP keyword processing handled by Twilio webhook
 
 ---
 
-## 9. Implementation Order
+## 7. Stripe Payments
 
-1. **Schema**: Add `mlb_players`, `mlb_pitchers`, `mlb_ballparks` tables
-2. **Static data**: Seed 30 ballparks with coordinates, factors, and wind orientation
-3. **ESPN scraper**: `/api/mlb/games` and `/api/mlb/live-stats/:gameId`
-4. **Weather service**: Open-Meteo integration
-5. **Baseball Savant scraper**: Season stats for batters + pitchers
-6. **Probability engine**: `server/mlbCalculator.ts`
-7. **New API routes**: All `/api/mlb/*` endpoints
-8. **Frontend**: MLB tab, game strip, box score panel, weather widget, pitcher card, calculator form
-9. **Parlay integration**: MLB picks added to existing parlay builder (correlation engine extended)
-10. **Testing**: Full e2e across mobile and desktop
+### 7.1 Products
 
----
+| Plan | Internal Key | Monthly Price |
+|------|-------------|---------------|
+| Pro | `all` | $40 |
+| All Sports | `elite` | $65 |
 
-## 10. Risk & Mitigations
+### 7.2 Payment Flow
 
-| Risk | Mitigation |
-|------|-----------|
-| Baseball Savant blocks scraping | Rate-limit requests; cache aggressively; fall back to season stats only |
-| Weather API unreliable | Default weather factors to 1.0 (neutral) if request fails |
-| Live MLB data lag from ESPN | Add "last updated" timestamp; show stale data warning if > 5 min old |
-| MLB prop lines not available on Odds API free tier | Degrade gracefully — show calculated probability without sportsbook line |
-| Small matchup sample sizes (< 10 AB) | Fall back to season stats only when sample < 10 AB |
-| Replit cold starts wiping cache | All caches use server memory with TTL; acceptable to re-fetch on restart |
+1. User clicks "Upgrade" → upgrade modal shows 2 plan cards
+2. User selects plan → `POST /api/stripe/create-checkout-session` → redirected to Stripe-hosted checkout
+3. On success → Stripe webhook `customer.subscription.created` fires → `subscriptionTier` set in DB
+4. On cancel/failure → redirect back to dashboard with no tier change
+5. Cancellation handled via Stripe billing portal (`POST /api/stripe/portal`)
+
+### 7.3 Upgrade Modal Cards
+
+- **Pro ($40)** — badge: "Best Value" — features: NBA Live Unlimited, NCAAB Live, NBA 2H + NCAAB 2H, Push + SMS Alerts
+- **All Sports ($65)** — badge: "Power Users" — features: everything in Pro + MLB Live (Coming Soon) + Priority SMS
 
 ---
 
-## 11. Rollback
+## 8. Data Sources
 
-**Checkpoint to revert to**: `b9f431cd22f951b4f7aef34657876ee01dcdc336`
+| Source | Data | Update Frequency |
+|--------|------|-----------------|
+| ESPN API | NBA/NCAAB live scores, rosters, game clocks | Polled every 60–90s |
+| The Odds API | NBA 2H lines, NCAAB spreads/totals/1H lines | Every 5 min (NCAAB), on halftime detection (NBA) |
+| Twilio | Inbound STOP messages | Webhook (real-time) |
 
-This checkpoint represents the stable NBA-only release with:
-- JWT auth
-- Mobile-optimized header and parlay slip
-- Accurate live game period/clock in calculator
-- Twitter share button with `@proppulsebets` attribution
-- Full Stripe subscription flow
-- Admin panel
-- All e2e tests passing on mobile and desktop
+### 8.1 ESPN Roster Sync
 
-To revert: ask the agent to roll back to this checkpoint, or use the Replit checkpoint history.
+- Runs on demand via admin panel → "Sync Rosters" button
+- Maps ESPN team abbreviations to DB abbreviations via `ESPN_TO_DB` map
+- Key mappings: `UTAH → UTA`, `UTH → UTA`, `GS → GSW`, `NY → NYK`, `NO → NOP`, `SA → SAS`, `WSH → WAS`, etc.
+- ESPN position codes mapped: `G → SG`, `F → SF`, `FC → PF`, `C → C`, `PG → PG`
+- Upsert by player name — updates team/position if exists, inserts if new
+
+### 8.2 The Odds API — NCAAB
+
+- Requests `spreads,totals,h1_totals,h1_spreads` markets
+- **All bookmakers queried** (no restriction) to maximize coverage of small-conference games
+- TTL: 5 minutes for odds data; 90s for scoreboard; 60s for box scores
+
+---
+
+## 9. Database Schema (Key Tables)
+
+### users
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | serial PK | |
+| email | text unique | |
+| password_hash | text | bcrypt, 10 rounds |
+| is_admin | boolean | default false |
+| subscription_tier | text nullable | `"all"` (Pro) or `"elite"` (All Sports) |
+| plays_used | integer | free play counter, max 15 |
+| stripe_customer_id | text nullable | |
+| stripe_subscription_id | text nullable | |
+| phone_number | text nullable | E.164 format (+1XXXXXXXXXX) |
+| sms_alerts | boolean | default false; true if consented at signup |
+| sms_consent | boolean | default false; required at registration |
+| push_alerts | boolean | default false |
+| push_subscription | text nullable | serialized Web Push subscription |
+
+### players
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | serial PK | |
+| name | text | |
+| team | text | DB abbreviation (e.g. UTA, GSW) |
+| position | text | PG/SG/SF/PF/C |
+| avg_minutes | numeric | season average |
+| avg_points | numeric | |
+| avg_rebounds | numeric | |
+| avg_assists | numeric | |
+| usage_rate | numeric | |
+| fg_percentage | numeric | |
+| three_point_percentage | numeric | |
+
+---
+
+## 10. API Routes
+
+### Public (no auth)
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| POST | `/api/auth/register` | Create account (email + password + optional phone + smsConsent) |
+| POST | `/api/auth/login` | Login by email or phone number |
+| POST | `/api/webhooks/twilio` | SMS STOP opt-out handler |
+| POST | `/api/webhooks/stripe` | Stripe event handler |
+
+### Authenticated (any logged-in user)
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/api/auth/me` | Current user |
+| POST | `/api/auth/logout` | Logout |
+| GET | `/api/players` | Player list |
+| POST | `/api/calculate` | NBA prop probability (play-gated) |
+| POST | `/api/stripe/create-checkout-session` | Start Stripe checkout |
+| POST | `/api/stripe/portal` | Open billing portal |
+| PUT | `/api/user/alerts` | Update alert preferences |
+| POST | `/api/user/alerts/sms` | Save phone number + SMS toggle |
+| POST | `/api/user/alerts/push-subscription` | Register Web Push subscription |
+| DELETE | `/api/user/alerts/push-subscription` | Remove Web Push subscription |
+
+### Tier-Gated (Pro or All Sports)
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/api/halftime-plays` | NBA 2H plays |
+| GET | `/api/ncaab/games` | NCAAB full slate |
+| GET | `/api/ncaab/plays` | NCAAB computed plays with probabilities |
+
+### Admin Only
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| POST | `/api/sync-rosters` | Trigger ESPN roster sync |
+| GET | `/api/admin/users` | User list |
+
+---
+
+## 11. Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `SESSION_SECRET` | Yes | Express session + JWT secret |
+| `STRIPE_SECRET_KEY` | Yes | Stripe server-side key |
+| `VITE_STRIPE_PUBLISHABLE_KEY` | Yes | Stripe client-side key |
+| `ODDS_API_KEY` | Yes | The Odds API key |
+| `TWILIO_ACCOUNT_SID` | Yes | Twilio account identifier |
+| `TWILIO_AUTH_TOKEN` | Yes | Twilio auth token |
+| `TWILIO_FROM_NUMBER` | Yes | Twilio sender number (E.164) |
+| `ADMIN_EMAIL` | Yes | Email address for admin account |
+| `VAPID_PUBLIC_KEY` | Yes | Web Push public key |
+| `VAPID_PRIVATE_KEY` | Yes | Web Push private key |
+
+---
+
+## 12. Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React 18, TypeScript, Vite |
+| Routing | Wouter |
+| State / Data fetching | TanStack Query v5 |
+| Forms | React Hook Form + Zod |
+| UI components | shadcn/ui + Tailwind CSS |
+| Backend | Express.js (TypeScript) |
+| Database | PostgreSQL via Neon |
+| ORM | Drizzle ORM + drizzle-zod |
+| Auth | bcrypt + JWT + express-session |
+| Payments | Stripe (Checkout + Webhooks) |
+| SMS | Twilio |
+| Push Notifications | Web Push API (VAPID) |
+| Hosting | Replit (dev) + Replit Deployments (prod) |
+
+---
+
+## 13. Known Behaviors and Edge Cases
+
+- **NCAAB small-school games**: Lines from small conferences may not be on major books. The Odds API is queried without bookmaker restriction to maximize coverage. If no line is found, the system projects using its own pace model and notes "(proj)" next to lines.
+- **Phone number format**: All phone numbers stored in E.164 format. Numbers entered without country code are normalized to `+1XXXXXXXXXX` automatically.
+- **SMS opt-out**: Replying STOP to any SMS unsubscribes the user immediately via Twilio webhook.
+- **Twilio trial accounts**: Can only SMS verified numbers until account is upgraded.
+- **Free play counter**: Only increments on successful calculate responses — errors do not consume plays.
+- **Stripe webhooks**: Must be registered in Stripe Dashboard pointing to `https://<domain>/api/webhooks/stripe`.
+- **NCAAB 1H lines**: The `h1_totals` and `h1_spreads` markets are requested from The Odds API. If unavailable for a specific game, the system estimates 1H total using 47% of the full-game line.
+
+---
+
+## 14. Roadmap
+
+| Priority | Feature | Status |
+|----------|---------|--------|
+| High | MLB Live data integration (All Sports gate ready) | Planned |
+| High | Player prop history / trend charts | Planned |
+| Medium | Parlay builder export to sportsbook deep link | Partial (DK/FD/HR/Bet365 deeplinks live) |
+| Medium | User notification history log | Planned |
+| Low | NFL Live integration | Future |
+| Low | Mobile app (React Native) | Future |

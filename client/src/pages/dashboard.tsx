@@ -13,6 +13,7 @@ import { ParlaySlip } from "@/components/parlay-slip";
 import { UpgradeModal } from "@/components/upgrade-modal";
 import { FeedbackModal } from "@/components/feedback-modal";
 import { NCAABAdminTab } from "@/components/ncaab-admin-tab";
+import { AlertsOnboardingModal } from "@/components/alerts-onboarding-modal";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import {
@@ -103,7 +104,7 @@ export default function Dashboard() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
-  const [upgradeModalState, setUpgradeModalState] = useState<{ playsUsed: number; limit: number }>({ playsUsed: 10, limit: 10 });
+  const [upgradeModalState, setUpgradeModalState] = useState<{ playsUsed: number; limit: number }>({ playsUsed: 15, limit: 15 });
 
   const { data: players, isLoading: isPlayersLoading } = usePlayers();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
@@ -149,6 +150,9 @@ export default function Dashboard() {
   const [slateFilterProp, setSlateFilterProp] = useState<string>("all");
   const [slateFilterProb, setSlateFilterProb] = useState<string>("all");
   const [showAlertsPanel, setShowAlertsPanel] = useState(false);
+  const [showAlertsModal, setShowAlertsModal] = useState(() => {
+    try { return !localStorage.getItem("ll_alerts_onboarded"); } catch { return false; }
+  });
   const [pwaPromptDismissed, setPwaPromptDismissed] = useState(() => !!localStorage.getItem("ll_pwa_dismissed"));
   const deferredInstallPromptRef = useRef<any>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
@@ -687,7 +691,7 @@ export default function Dashboard() {
             {user && !user.isAdmin && !user.subscriptionTier && (
               <button
                 data-testid="button-plays-remaining"
-                onClick={() => { setUpgradeModalState({ playsUsed: user.playsUsed, limit: 10 }); setShowUpgradeModal(true); }}
+                onClick={() => { setUpgradeModalState({ playsUsed: user.playsUsed, limit: 15 }); setShowUpgradeModal(true); }}
                 className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-500 text-xs font-medium hover:bg-amber-500/20 transition-colors"
               >
                 <Zap className="w-3 h-3" />
@@ -965,13 +969,13 @@ export default function Dashboard() {
 
           {/* NBA sub-tabs */}
           {activeTab === "calculator" && (
-            <div className="flex gap-1 mt-2 w-fit">
+            <div className="flex gap-1 mt-2 w-fit bg-secondary/40 border border-border/60 rounded-xl p-1">
               <button
                 data-testid="tab-nba-live"
                 onClick={() => setNbaSubTab("live")}
-                className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
                   nbaSubTab === "live"
-                    ? "bg-primary/20 text-primary border border-primary/40"
+                    ? "bg-background text-foreground shadow-sm"
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
@@ -980,14 +984,13 @@ export default function Dashboard() {
               <button
                 data-testid="tab-nba-halftime"
                 onClick={() => setNbaSubTab("halftime")}
-                className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 ${
+                className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
                   nbaSubTab === "halftime"
-                    ? "bg-primary/20 text-primary border border-primary/40"
+                    ? "bg-background text-foreground shadow-sm"
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                <Star className="w-3 h-3" />
-                2H Plays
+                ⏱ 2H Plays
               </button>
             </div>
           )}
@@ -2283,6 +2286,22 @@ export default function Dashboard() {
             </div>
           </div>
         </>
+      )}
+
+      {showAlertsModal && user && (
+        <AlertsOnboardingModal
+          onClose={() => {
+            setShowAlertsModal(false);
+            try { localStorage.setItem("ll_alerts_onboarded", "1"); } catch {}
+          }}
+          onOpenAlertsPanel={() => {
+            setShowAlertsModal(false);
+            try { localStorage.setItem("ll_alerts_onboarded", "1"); } catch {}
+            setShowAlertsPanel(true);
+          }}
+          hasSmsAccess={["all", "elite"].includes(user.subscriptionTier ?? "") || (user.isAdmin ?? false)}
+          hasPhone={!!phoneInput}
+        />
       )}
     </div>
   );

@@ -412,7 +412,7 @@ export async function registerRoutes(
 
   // ── Halftime Best Plays ─────────────────────────────────────────────────────
   // Returns top probability plays across all live halftime games.
-  // Requires NBA Pro, All Sports, or Elite subscription (or admin).
+  // Requires Pro or All Sports subscription (or admin).
   app.get("/api/halftime-plays", requireTier("all", "elite"), async (req, res) => {
     try {
       const gamesRes = await fetch(
@@ -424,7 +424,7 @@ export async function registerRoutes(
 
       const ESPN_TO_DB_LOCAL: Record<string, string> = {
         GS: "GSW", SA: "SAS", NO: "NOP", NY: "NYK",
-        PHO: "PHX", UTH: "UTA", WSH: "WAS", CHO: "CHA",
+        PHO: "PHX", UTH: "UTA", UTAH: "UTA", WSH: "WAS", CHO: "CHA",
       };
       const normAbbr = (a: string) => ESPN_TO_DB_LOCAL[a.toUpperCase()] ?? a.toUpperCase();
 

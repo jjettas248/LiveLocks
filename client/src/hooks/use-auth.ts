@@ -40,10 +40,10 @@ export function useAuth() {
   });
 
   const loginMutation = useMutation({
-    mutationFn: async ({ email, password }: { email: string; password: string }) => {
+    mutationFn: async (payload: { email?: string; phone?: string; password: string }) => {
       const res = await apiFetch("/api/auth/login", {
         method: "POST",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -59,10 +59,10 @@ export function useAuth() {
   });
 
   const registerMutation = useMutation({
-    mutationFn: async ({ email, password, smsConsent }: { email: string; password: string; smsConsent: boolean }) => {
+    mutationFn: async (payload: { email: string; password: string; smsConsent: boolean; phoneNumber?: string }) => {
       const res = await apiFetch("/api/auth/register", {
         method: "POST",
-        body: JSON.stringify({ email, password, smsConsent }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));

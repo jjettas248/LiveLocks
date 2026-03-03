@@ -64,6 +64,8 @@ export async function registerAuthRoutes(app: import("express").Express) {
     const adminEmail = process.env.ADMIN_EMAIL?.toLowerCase().trim();
     const isAdmin = adminEmail ? email.toLowerCase().trim() === adminEmail : false;
     const smsConsent = req.body.smsConsent === true || req.body.smsConsent === "true";
+    const rawPhone: string | undefined = req.body.phoneNumber;
+    const phoneNumber = rawPhone && rawPhone.trim() ? rawPhone.trim() : null;
 
     const user = await storage.createUser({
       email,
@@ -75,6 +77,7 @@ export async function registerAuthRoutes(app: import("express").Express) {
       stripeSubscriptionId: null,
       smsConsent,
       smsAlerts: smsConsent,
+      ...(phoneNumber ? { phoneNumber } : {}),
     });
 
     req.session.userId = user.id;
@@ -83,20 +86,25 @@ export async function registerAuthRoutes(app: import("express").Express) {
   });
 
   app.post("/api/auth/login", async (req: Request, res: Response) => {
-    const parsed = insertUserEmailPasswordSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: parsed.error.flatten().fieldErrors });
+    const { email, phone, password } = req.body ?? {};
+    if (!password || (!email && !phone)) {
+      return res.status(400).json({ error: "Email or phone number and password are required." });
     }
-    const { email, password } = parsed.data;
 
-    const user = await storage.getUserByEmail(email);
+    let user: import("@shared/schema").User | undefined;
+    if (phone) {
+      user = await storage.getUserByPhoneNumber(phone) ?? undefined;
+    } else {
+      user = await storage.getUserByEmail(email) ?? undefined;
+    }
+
     if (!user) {
-      return res.status(401).json({ error: "Invalid email or password." });
+      return res.status(401).json({ error: "Invalid credentials." });
     }
 
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
-      return res.status(401).json({ error: "Invalid email or password." });
+      return res.status(401).json({ error: "Invalid credentials." });
     }
 
     req.session.userId = user.id;
