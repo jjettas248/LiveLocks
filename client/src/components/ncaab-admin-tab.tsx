@@ -140,7 +140,7 @@ function fmtOdds(price: number | null | undefined): string {
 }
 
 function fmtSpread(point: number | null): string {
-  if (point === null) return "—";
+  if (point === null || isNaN(point)) return "—";
   return point > 0 ? `+${point}` : `${point}`;
 }
 
@@ -320,7 +320,7 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
           </div>
           {bestPlay && (
             <div className="shrink-0">
-              <ProbabilityRing probability={bestPlay.prob} size={110} strokeWidth={10} />
+              <ProbabilityRing probability={bestPlay.prob} size={120} strokeWidth={10} />
             </div>
           )}
         </div>
@@ -418,7 +418,7 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
           )}
 
           {/* Spread row — HOME and AWAY as separate full buttons */}
-          {(play.homeSpreadLine !== null || play.awaySpreadLine !== null) && (
+          {((play.homeSpreadLine !== null && !isNaN(play.homeSpreadLine)) || (play.awaySpreadLine !== null && !isNaN(play.awaySpreadLine))) && (
             <div>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Spread</span>

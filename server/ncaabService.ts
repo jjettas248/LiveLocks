@@ -442,11 +442,11 @@ function extractLines(oddsEvent: any): {
       }
       const homeOutcome = outcomes[homeIdx];
       const awayOutcome = outcomes[homeIdx === 0 ? 1 : 0];
-      bkHomePoint = homeOutcome.point;
+      bkHomePoint = isNaN(homeOutcome.point) ? null : homeOutcome.point;
       bkHomePrice = homeOutcome.price;
-      bkAwayPoint = awayOutcome.point;
+      bkAwayPoint = isNaN(awayOutcome.point) ? null : awayOutcome.point;
       bkAwayPrice = awayOutcome.price;
-      bkHomeFav = bkHomePoint < 0;
+      bkHomeFav = (bkHomePoint ?? 0) < 0;
     }
 
     if (totalsMarket?.outcomes?.length >= 1) {
