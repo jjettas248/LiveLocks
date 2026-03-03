@@ -633,6 +633,9 @@ export async function registerRoutes(
                   if (oddsLine != null) { liveLine = oddsLine; lineSource = "odds_api"; }
                 }
 
+                // Only surface plays with a real sportsbook line — skip season_avg fallbacks
+                if (lineSource !== "odds_api") continue;
+
                 const result = await storage.calculateProbability({
                   playerId: dbPlayer.id,
                   opponentTeam: opponentAbbr,
