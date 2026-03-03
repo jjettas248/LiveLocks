@@ -183,6 +183,13 @@ function teamsMatch(a: string, b: string): boolean {
   return na === nb || na.includes(nb) || nb.includes(na);
 }
 
+function teamSimilarity(outcome: string, home: string): number {
+  const na = normTeam(outcome), nb = normTeam(home);
+  if (na === nb) return 999;
+  const ta = na.split(" "), tb = nb.split(" ");
+  return ta.filter(w => tb.includes(w)).length;
+}
+
 function sigmoid(x: number): number { return 1 / (1 + Math.exp(-x)); }
 
 // ── ESPN NCAAB Scoreboard ────────────────────────────────────────────────────
@@ -422,18 +429,20 @@ function extractLines(oddsEvent: any): {
     let bkUnderPrice: number | null = null;
 
     if (spreadsMarket?.outcomes?.length >= 2) {
-      for (const o of spreadsMarket.outcomes) {
-        const isHome = (o.name ?? "").toLowerCase().includes(eventHome.split(" ")[0]) ||
-          teamsMatch(o.name, oddsEvent.home_team);
-        if (isHome) {
-          bkHomePoint = o.point as number;
-          bkHomePrice = o.price as number;
-        } else {
-          bkAwayPoint = o.point as number;
-          bkAwayPrice = o.price as number;
-        }
+      const outcomes = spreadsMarket.outcomes as Array<{ name: string; point: number; price: number }>;
+      const scores = outcomes.map(o => teamSimilarity(o.name, oddsEvent.home_team));
+      const maxScore = Math.max(...scores);
+      let homeIdx = scores.indexOf(maxScore);
+      if (scores[0] === scores[1]) {
+        homeIdx = teamsMatch(outcomes[0].name, oddsEvent.home_team) ? 0 : 1;
       }
-      bkHomeFav = bkHomePoint !== null && bkHomePoint < 0;
+      const homeOutcome = outcomes[homeIdx];
+      const awayOutcome = outcomes[homeIdx === 0 ? 1 : 0];
+      bkHomePoint = homeOutcome.point;
+      bkHomePrice = homeOutcome.price;
+      bkAwayPoint = awayOutcome.point;
+      bkAwayPrice = awayOutcome.price;
+      bkHomeFav = bkHomePoint < 0;
     }
 
     if (totalsMarket?.outcomes?.length >= 1) {

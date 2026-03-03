@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw, AlertCircle, Clock, TrendingUp, Plus, ChevronDown, ChevronUp, AlertTriangle, Zap } from "lucide-react";
+import { ProbabilityRing } from "@/components/probability-ring";
 import type { ParlayPickInput } from "@shared/schema";
 
 interface BookLine {
@@ -210,13 +211,9 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
   const hasWindow = play.bettingWindow !== "NONE" && windowClass;
   const isH1 = play.half === 1;
   const halfLabel = play.half === 1 ? "H1" : play.half === 2 ? "H2" : "OT";
-  const isHT = play.bettingWindow === "HALFTIME";
-
-  const fgProb   = play.overProb ?? 50;
-  const spProb   = play.spreadProb ?? 50;
+  const fgProb    = play.overProb ?? 50;
+  const spProb    = play.spreadProb ?? 50;
   const spDogProb = 100 - spProb;
-
-  const hasApiLines = play.total !== null || play.homeSpreadLine !== null;
 
   const clv = play.total !== null && play.projectedTotal !== null
     ? Math.round((play.projectedTotal - play.total) * 10) / 10
@@ -229,10 +226,6 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
 
   const homeOverProb = play.homeOverProb ?? 50;
   const awayOverProb = play.awayOverProb ?? 50;
-
-  const modelSpreadFav = (play.projectedMargin ?? 0) >= 0 ? play.homeTeamAbbr : play.awayTeamAbbr;
-  const modelSpreadDog = (play.projectedMargin ?? 0) >= 0 ? play.awayTeamAbbr : play.homeTeamAbbr;
-  const modelSpreadAbs = play.projectedMargin !== null ? Math.round(Math.abs(play.projectedMargin) * 2) / 2 : null;
 
   const selectBook = (bookKey: string) => {
     setPreferredBook(bookKey);
@@ -291,7 +284,7 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
       data-testid={`ncaab-card-${play.gameId}`}
       className="bg-card border border-border rounded-xl overflow-hidden"
     >
-      {/* Header */}
+      {/* ── HEADER: scoreboard + probability ring ── */}
       <div className="px-4 pt-4 pb-3 border-b border-border/40">
         <div className="flex flex-wrap items-center gap-1.5 mb-2">
           {hasWindow && (
@@ -307,29 +300,35 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
             <span className="text-[10px] text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 px-1.5 py-0.5 rounded-full">⚑ Fouling</span>
           )}
         </div>
-        <div className="flex items-center justify-between gap-2">
-          <div>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-sm font-bold text-muted-foreground">{play.awayTeamAbbr}</span>
-              <span className="text-2xl font-black tabular-nums text-foreground">{play.awayScore}</span>
-              <span className="text-muted-foreground text-sm">vs</span>
-              <span className="text-2xl font-black tabular-nums text-foreground">{play.homeScore}</span>
+              <span className="text-3xl font-black tabular-nums text-foreground">{play.awayScore}</span>
+              <span className="text-muted-foreground text-lg font-light">–</span>
+              <span className="text-3xl font-black tabular-nums text-foreground">{play.homeScore}</span>
               <span className="text-sm font-bold text-muted-foreground">{play.homeTeamAbbr}</span>
             </div>
-            <p className="text-[10px] text-muted-foreground mt-0.5">{play.awayTeam} @ {play.homeTeam}</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{play.awayTeam} @ {play.homeTeam}</p>
+            <div className="flex items-center gap-2 mt-1.5">
+              <span className="text-xs font-bold text-foreground bg-secondary/60 px-2 py-0.5 rounded-full">{halfLabel}</span>
+              <span className="text-xs text-muted-foreground">{play.clock || play.status}</span>
+              {(play.espnHomeWinPct !== null && play.espnHomeWinPct !== undefined) && (
+                <span className="text-[10px] text-muted-foreground">ESPN: {play.homeTeamAbbr} {play.espnHomeWinPct?.toFixed(0)}%</span>
+              )}
+            </div>
           </div>
-          <div className="text-right shrink-0">
-            <p className="text-xs font-bold text-foreground">{halfLabel} · {play.clock || play.status}</p>
-            {(play.espnHomeWinPct !== null && play.espnHomeWinPct !== undefined) && (
-              <p className="text-[10px] text-muted-foreground mt-0.5">ESPN: {play.homeTeamAbbr} {play.espnHomeWinPct?.toFixed(0)}%</p>
-            )}
-          </div>
+          {bestPlay && (
+            <div className="shrink-0">
+              <ProbabilityRing probability={bestPlay.prob} size={110} strokeWidth={10} />
+            </div>
+          )}
         </div>
       </div>
 
       <div className="p-4 space-y-5">
         {/* MODEL SAYS banner */}
-        {bestPlay && play.bettingWindow !== "NONE" && (
+        {bestPlay && (
           <div className={`rounded-xl px-3 py-3 border flex items-center gap-3 ${
             isOver ? "bg-emerald-500/10 border-emerald-500/30"
             : isUnder ? "bg-rose-500/10 border-rose-500/30"
@@ -337,16 +336,20 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
           }`}>
             <TrendingUp className={`w-4 h-4 shrink-0 ${isOver ? "text-emerald-400" : isUnder ? "text-rose-400" : "text-blue-400"}`} />
             <div className="flex-1 min-w-0">
-              <div className={`text-xs font-bold ${isOver ? "text-emerald-300" : isUnder ? "text-rose-300" : "text-blue-300"}`}>
-                MODEL SAYS: {bestPlay.label}
+              <div className={`text-[10px] font-bold uppercase tracking-widest mb-0.5 ${isOver ? "text-emerald-400/60" : isUnder ? "text-rose-400/60" : "text-blue-400/60"}`}>
+                Model Says
+              </div>
+              <div className={`text-sm font-black ${isOver ? "text-emerald-300" : isUnder ? "text-rose-300" : "text-blue-300"}`}>
+                {bestPlay.label}
               </div>
               <div className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">{bestPlay.explanation}</div>
             </div>
-            <div className="text-right shrink-0">
-              <div className={`text-2xl font-black tabular-nums ${isOver ? "text-emerald-400" : isUnder ? "text-rose-400" : "text-blue-400"}`}>
-                {bestPlay.prob.toFixed(0)}%
-              </div>
-              <div className="text-[9px] text-muted-foreground">confidence</div>
+            <div className={`text-xs font-bold px-2.5 py-1 rounded-full shrink-0 ${
+              isOver ? "bg-emerald-500/20 text-emerald-300"
+              : isUnder ? "bg-rose-500/20 text-rose-300"
+              : "bg-blue-500/20 text-blue-300"
+            }`}>
+              +{bestPlay.edge.toFixed(0)}% edge
             </div>
           </div>
         )}
@@ -367,98 +370,104 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
           </div>
         )}
 
-        {/* ── SECTION A: FULL GAME LINES (Odds API) ── */}
-        {hasApiLines && (
-          <div>
-            <SectionHeader label="Full Game Lines" badge="Live" badgeColor="text-emerald-400 bg-emerald-500/10 border-emerald-500/30" />
+        {/* ── SECTION A: FULL GAME LINES (Odds API live) ── */}
+        <div>
+          <SectionHeader label="Full Game Lines" badge="Live" badgeColor="text-emerald-400 bg-emerald-500/10 border-emerald-500/30" />
 
-            {/* O/U */}
-            {play.total !== null && (
-              <div className="mb-4">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-foreground">Game Total O/U</span>
-                  <div className="flex items-center gap-2">
-                    {showClv && (
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${clv! > 0 ? "text-emerald-400 bg-emerald-500/10" : "text-rose-400 bg-rose-500/10"}`}>
-                        CLV {clv! > 0 ? "+" : ""}{clv}
-                      </span>
-                    )}
-                    <span className="text-sm font-black text-foreground tabular-nums">{play.total}</span>
-                  </div>
-                </div>
-                <ProbBar prob={fgProb} />
-                <div className="text-[10px] text-muted-foreground mt-1 mb-2">
-                  {play.projectedTotal !== null
-                    ? `Model: ${play.projectedTotal} pts · ${play.totalEdge !== null && play.totalEdge > 0 ? "+" : ""}${play.totalEdge ?? "—"}pp edge`
-                    : "Calculating…"}
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    data-testid={`ncaab-over-${play.gameId}`}
-                    onClick={() => onAddToParlay && addPick("over", play.total!, fgProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} O${play.total}`)}
-                    className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 active:scale-95 transition-all"
-                  >
-                    <span className="text-[10px] font-semibold text-emerald-400/70">{fmtOdds(play.overPrice)}</span>
-                    <span className="text-base font-black">OVER {play.total}</span>
-                    <span className="text-[11px] font-bold">{fgProb.toFixed(1)}%</span>
-                  </button>
-                  <button
-                    data-testid={`ncaab-under-${play.gameId}`}
-                    onClick={() => onAddToParlay && addPick("under", play.total!, 100 - fgProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} U${play.total}`)}
-                    className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 active:scale-95 transition-all"
-                  >
-                    <span className="text-[10px] font-semibold text-rose-400/70">{fmtOdds(play.underPrice)}</span>
-                    <span className="text-base font-black">UNDER {play.total}</span>
-                    <span className="text-[11px] font-bold">{(100 - fgProb).toFixed(1)}%</span>
-                  </button>
+          {/* O/U row */}
+          {play.total !== null && (
+            <div className="mb-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Game Total</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-sm font-black text-foreground tabular-nums">{play.total}</span>
+                  {showClv && (
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${clv! > 0 ? "bg-emerald-500/20 text-emerald-400" : "bg-rose-500/20 text-rose-400"}`}>
+                      {clv! > 0 ? "+" : ""}{clv} CLV
+                    </span>
+                  )}
                 </div>
               </div>
-            )}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  data-testid={`ncaab-over-${play.gameId}`}
+                  onClick={() => onAddToParlay && addPick("over", play.total!, fgProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} O${play.total}`)}
+                  className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 active:scale-95 transition-all"
+                >
+                  <span className="text-[10px] font-semibold text-emerald-400/60">{fmtOdds(play.overPrice) || "OVER"}</span>
+                  <span className="text-lg font-black">OVER {play.total}</span>
+                  <span className="text-sm font-bold text-emerald-200">{fgProb.toFixed(1)}% implied</span>
+                </button>
+                <button
+                  data-testid={`ncaab-under-${play.gameId}`}
+                  onClick={() => onAddToParlay && addPick("under", play.total!, 100 - fgProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} U${play.total}`)}
+                  className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 active:scale-95 transition-all"
+                >
+                  <span className="text-[10px] font-semibold text-rose-400/60">{fmtOdds(play.underPrice) || "UNDER"}</span>
+                  <span className="text-lg font-black">UNDER {play.total}</span>
+                  <span className="text-sm font-bold text-rose-200">{(100 - fgProb).toFixed(1)}% implied</span>
+                </button>
+              </div>
+              {play.projectedTotal !== null && (
+                <p className="text-[10px] text-muted-foreground mt-1.5 text-center">
+                  Model projects <strong className="text-foreground">{play.projectedTotal} pts</strong>
+                  {play.totalEdge !== null && <span> · {play.totalEdge > 0 ? "+" : ""}{play.totalEdge}pp edge</span>}
+                </p>
+              )}
+            </div>
+          )}
 
-            {/* Full Game Spread — both sides */}
-            {(play.homeSpreadLine !== null || play.awaySpreadLine !== null) && (
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-foreground">Game Spread</span>
+          {/* Spread row — HOME and AWAY as separate full buttons */}
+          {(play.homeSpreadLine !== null || play.awaySpreadLine !== null) && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Spread</span>
+                {play.projectedMargin !== null && (
                   <span className="text-[10px] text-muted-foreground">
-                    {play.projectedMargin !== null
-                      ? `Model: ${play.homeTeamAbbr} ${play.projectedMargin > 0 ? "+" : ""}${play.projectedMargin.toFixed(1)} margin`
-                      : ""}
+                    Model: {play.homeTeamAbbr} {play.projectedMargin >= 0 ? "+" : ""}{play.projectedMargin.toFixed(1)}
                   </span>
-                </div>
-                <ProbBar prob={spProb} />
-                <div className="text-[10px] text-muted-foreground mt-1 mb-2">
-                  {play.spreadEdge !== null ? `${play.spreadEdge > 0 ? "+" : ""}${play.spreadEdge}pp edge on ${play.homeTeamAbbr} cover` : "Calculating edge…"}
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    data-testid={`ncaab-home-cover-${play.gameId}`}
-                    onClick={() => onAddToParlay && addPick("over", Math.abs(play.homeSpreadLine ?? 0), spProb, "ncaab_spread", `${play.homeTeamAbbr} ${fmtSpread(play.homeSpreadLine)} Cover`)}
-                    className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-blue-500/15 border border-blue-500/30 text-blue-300 hover:bg-blue-500/25 active:scale-95 transition-all"
-                  >
-                    <span className="text-[10px] font-semibold text-blue-400/70">Home</span>
-                    <span className="text-base font-black">{play.homeTeamAbbr} {fmtSpread(play.homeSpreadLine)}</span>
-                    <span className="text-[11px] font-bold">{spProb.toFixed(1)}% cover</span>
-                  </button>
-                  <button
-                    data-testid={`ncaab-away-cover-${play.gameId}`}
-                    onClick={() => onAddToParlay && addPick("over", Math.abs(play.awaySpreadLine ?? 0), spDogProb, "ncaab_spread", `${play.awayTeamAbbr} ${fmtSpread(play.awaySpreadLine)} Cover`)}
-                    className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 active:scale-95 transition-all"
-                  >
-                    <span className="text-[10px] font-semibold text-violet-400/70">Away</span>
-                    <span className="text-base font-black">{play.awayTeamAbbr} {fmtSpread(play.awaySpreadLine)}</span>
-                    <span className="text-[11px] font-bold">{spDogProb.toFixed(1)}% cover</span>
-                  </button>
-                </div>
+                )}
               </div>
-            )}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  data-testid={`ncaab-home-cover-${play.gameId}`}
+                  onClick={() => onAddToParlay && addPick("over", Math.abs(play.homeSpreadLine ?? 0), spProb, "ncaab_spread", `${play.homeTeamAbbr} ${fmtSpread(play.homeSpreadLine)} Cover`)}
+                  className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-blue-500/15 border border-blue-500/30 text-blue-300 hover:bg-blue-500/25 active:scale-95 transition-all"
+                >
+                  <span className="text-[10px] font-semibold text-blue-400/60">HOME</span>
+                  <span className="text-lg font-black">{play.homeTeamAbbr} {fmtSpread(play.homeSpreadLine)}</span>
+                  <span className="text-sm font-bold text-blue-200">{spProb.toFixed(1)}% cover</span>
+                </button>
+                <button
+                  data-testid={`ncaab-away-cover-${play.gameId}`}
+                  onClick={() => onAddToParlay && addPick("over", Math.abs(play.awaySpreadLine ?? 0), spDogProb, "ncaab_spread", `${play.awayTeamAbbr} ${fmtSpread(play.awaySpreadLine)} Cover`)}
+                  className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 active:scale-95 transition-all"
+                >
+                  <span className="text-[10px] font-semibold text-violet-400/60">AWAY</span>
+                  <span className="text-lg font-black">{play.awayTeamAbbr} {fmtSpread(play.awaySpreadLine)}</span>
+                  <span className="text-sm font-bold text-violet-200">{spDogProb.toFixed(1)}% cover</span>
+                </button>
+              </div>
+              {play.spreadEdge !== null && (
+                <p className="text-[10px] text-muted-foreground mt-1.5 text-center">
+                  {play.spreadEdge > 0 ? "+" : ""}{play.spreadEdge}pp edge on {play.homeTeamAbbr} cover
+                </p>
+              )}
+            </div>
+          )}
 
-            {/* No API lines */}
-            {play.total === null && play.homeSpreadLine === null && (
-              <p className="text-[10px] text-muted-foreground italic py-2">No live book lines — model projections used below</p>
-            )}
-          </div>
-        )}
+          {/* No Odds API lines at all */}
+          {play.total === null && play.homeSpreadLine === null && (
+            <div className="text-center py-3">
+              <p className="text-[10px] text-muted-foreground italic">No live book lines — model projections below</p>
+              {play.projectedMargin !== null && (
+                <p className="text-xs font-semibold text-foreground mt-1">
+                  Model: {play.projectedMargin >= 0 ? play.homeTeamAbbr : play.awayTeamAbbr} by {Math.abs(play.projectedMargin).toFixed(1)}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* ── SECTION B: 1H PLAYS (Model, H1 only) ── */}
         {isH1 && (
@@ -482,18 +491,18 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
                     onClick={() => onAddToParlay && addPick("over", play.h1TotalLineModel!, play.over1HProb!, "ncaab_1h_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} 1H O${play.h1TotalLineModel}*`)}
                     className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 hover:bg-emerald-500/20 active:scale-95 transition-all"
                   >
-                    <span className="text-[10px] font-semibold text-emerald-400/60">1H Model</span>
-                    <span className="text-base font-black">OVER {play.h1TotalLineModel}*</span>
-                    <span className="text-[11px] font-bold">{play.over1HProb.toFixed(1)}%</span>
+                    <span className="text-[10px] font-semibold text-emerald-400/60">1H OVER</span>
+                    <span className="text-lg font-black">{play.h1TotalLineModel}*</span>
+                    <span className="text-sm font-bold text-emerald-200">{play.over1HProb.toFixed(1)}% implied</span>
                   </button>
                   <button
                     data-testid={`ncaab-1h-under-${play.gameId}`}
                     onClick={() => onAddToParlay && addPick("under", play.h1TotalLineModel!, 100 - play.over1HProb!, "ncaab_1h_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} 1H U${play.h1TotalLineModel}*`)}
                     className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-rose-500/10 border border-rose-500/25 text-rose-300 hover:bg-rose-500/20 active:scale-95 transition-all"
                   >
-                    <span className="text-[10px] font-semibold text-rose-400/60">1H Model</span>
-                    <span className="text-base font-black">UNDER {play.h1TotalLineModel}*</span>
-                    <span className="text-[11px] font-bold">{(100 - play.over1HProb!).toFixed(1)}%</span>
+                    <span className="text-[10px] font-semibold text-rose-400/60">1H UNDER</span>
+                    <span className="text-lg font-black">{play.h1TotalLineModel}*</span>
+                    <span className="text-sm font-bold text-rose-200">{(100 - play.over1HProb!).toFixed(1)}% implied</span>
                   </button>
                 </div>
               </div>
@@ -515,18 +524,18 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
                     onClick={() => onAddToParlay && addPick("over", Math.abs(play.h1SpreadLine!), play.h1SpreadProb!, "ncaab_1h_spread", `${play.homeTeamAbbr} 1H ${fmtSpread(play.h1SpreadLine)}* Cover`)}
                     className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-blue-500/10 border border-blue-500/25 text-blue-300 hover:bg-blue-500/20 active:scale-95 transition-all"
                   >
-                    <span className="text-[10px] font-semibold text-blue-400/60">1H Home</span>
-                    <span className="text-sm font-black">{play.homeTeamAbbr} {fmtSpread(play.h1SpreadLine)}*</span>
-                    <span className="text-[11px] font-bold">{play.h1SpreadProb.toFixed(1)}%</span>
+                    <span className="text-[10px] font-semibold text-blue-400/60">1H HOME</span>
+                    <span className="text-lg font-black">{play.homeTeamAbbr} {fmtSpread(play.h1SpreadLine)}*</span>
+                    <span className="text-sm font-bold text-blue-200">{play.h1SpreadProb.toFixed(1)}% cover</span>
                   </button>
                   <button
                     data-testid={`ncaab-1h-away-cover-${play.gameId}`}
                     onClick={() => onAddToParlay && addPick("over", Math.abs(play.h1SpreadLine!), 100 - play.h1SpreadProb!, "ncaab_1h_spread", `${play.awayTeamAbbr} 1H ${fmtSpread(play.h1SpreadLine !== null ? -play.h1SpreadLine : null)}* Cover`)}
                     className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-violet-500/10 border border-violet-500/25 text-violet-300 hover:bg-violet-500/20 active:scale-95 transition-all"
                   >
-                    <span className="text-[10px] font-semibold text-violet-400/60">1H Away</span>
-                    <span className="text-sm font-black">{play.awayTeamAbbr} {play.h1SpreadLine !== null ? fmtSpread(-play.h1SpreadLine) : ""}*</span>
-                    <span className="text-[11px] font-bold">{(100 - play.h1SpreadProb!).toFixed(1)}%</span>
+                    <span className="text-[10px] font-semibold text-violet-400/60">1H AWAY</span>
+                    <span className="text-lg font-black">{play.awayTeamAbbr} {play.h1SpreadLine !== null ? fmtSpread(-play.h1SpreadLine) : ""}*</span>
+                    <span className="text-sm font-bold text-violet-200">{(100 - play.h1SpreadProb!).toFixed(1)}% cover</span>
                   </button>
                 </div>
               </div>
@@ -596,90 +605,63 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
           <div>
             <SectionHeader label="Team Totals" badge="Model" badgeColor="text-blue-400 bg-blue-500/10 border-blue-500/30" />
             <div className="space-y-2">
-              {/* Team totals lean bar */}
-              {play.homeProjected !== null && play.awayProjected !== null && (
-                <div className="bg-secondary/20 rounded-lg px-3 py-2 mb-3">
-                  <div className="flex justify-between text-xs font-bold text-muted-foreground mb-1">
-                    <span>{play.homeTeamAbbr} {play.homeProjected}</span>
-                    <span>{play.awayTeamAbbr} {play.awayProjected}</span>
-                  </div>
-                  <div className="flex h-1.5 rounded-full overflow-hidden gap-px">
-                    <div
-                      className="bg-blue-500 rounded-l-full"
-                      style={{ width: `${(play.homeProjected / (play.homeProjected + play.awayProjected)) * 100}%` }}
-                    />
-                    <div
-                      className="bg-orange-500 rounded-r-full flex-1"
-                    />
-                  </div>
-                  <div className="text-[10px] text-center text-muted-foreground mt-1">
-                    {play.homeProjected > play.awayProjected
-                      ? `${play.homeTeamAbbr} projected to outscore by ${(play.homeProjected - play.awayProjected).toFixed(1)}`
-                      : `${play.awayTeamAbbr} projected to outscore by ${(play.awayProjected - play.homeProjected).toFixed(1)}`}
-                  </div>
-                </div>
-              )}
-
               {play.homeProjected !== null && (
-                <div className="bg-secondary/30 rounded-lg px-3 py-2.5">
+                <div className="bg-secondary/30 rounded-xl px-3 py-2.5">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold text-foreground">{play.homeTeamAbbr} Full Game</span>
                     <span className="text-xs font-black text-foreground tabular-nums">{play.homeProjected}*</span>
                   </div>
-                  <div className="grid grid-cols-2 gap-1.5">
+                  <div className="grid grid-cols-2 gap-2">
                     <button
                       data-testid={`ncaab-home-team-over-${play.gameId}`}
                       onClick={() => onAddToParlay && addPick("over", play.homeProjected!, homeOverProb, "ncaab_team_total", `${play.homeTeamAbbr} Team Over ${play.homeProjected}*`)}
-                      className="flex items-center justify-center gap-1 py-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 hover:bg-emerald-500/20 active:scale-95 transition-all text-xs font-bold"
+                      className="flex flex-col items-center justify-center py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 hover:bg-emerald-500/20 active:scale-95 transition-all"
                     >
-                      <Plus className="w-3 h-3" /> Over · {homeOverProb.toFixed(0)}%
+                      <span className="text-[10px] font-semibold text-emerald-400/70">OVER</span>
+                      <span className="text-sm font-black">{play.homeProjected}*</span>
+                      <span className="text-[11px] font-bold">{homeOverProb.toFixed(0)}% implied</span>
                     </button>
                     <button
                       data-testid={`ncaab-home-team-under-${play.gameId}`}
                       onClick={() => onAddToParlay && addPick("under", play.homeProjected!, 100 - homeOverProb, "ncaab_team_total", `${play.homeTeamAbbr} Team Under ${play.homeProjected}*`)}
-                      className="flex items-center justify-center gap-1 py-2.5 rounded-lg bg-rose-500/10 border border-rose-500/25 text-rose-300 hover:bg-rose-500/20 active:scale-95 transition-all text-xs font-bold"
+                      className="flex flex-col items-center justify-center py-3 rounded-xl bg-rose-500/10 border border-rose-500/25 text-rose-300 hover:bg-rose-500/20 active:scale-95 transition-all"
                     >
-                      <Plus className="w-3 h-3" /> Under · {(100 - homeOverProb).toFixed(0)}%
+                      <span className="text-[10px] font-semibold text-rose-400/70">UNDER</span>
+                      <span className="text-sm font-black">{play.homeProjected}*</span>
+                      <span className="text-[11px] font-bold">{(100 - homeOverProb).toFixed(0)}% implied</span>
                     </button>
                   </div>
                 </div>
               )}
               {play.awayProjected !== null && (
-                <div className="bg-secondary/30 rounded-lg px-3 py-2.5">
+                <div className="bg-secondary/30 rounded-xl px-3 py-2.5">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold text-foreground">{play.awayTeamAbbr} Full Game</span>
                     <span className="text-xs font-black text-foreground tabular-nums">{play.awayProjected}*</span>
                   </div>
-                  <div className="grid grid-cols-2 gap-1.5">
+                  <div className="grid grid-cols-2 gap-2">
                     <button
                       data-testid={`ncaab-away-team-over-${play.gameId}`}
                       onClick={() => onAddToParlay && addPick("over", play.awayProjected!, awayOverProb, "ncaab_team_total", `${play.awayTeamAbbr} Team Over ${play.awayProjected}*`)}
-                      className="flex items-center justify-center gap-1 py-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 hover:bg-emerald-500/20 active:scale-95 transition-all text-xs font-bold"
+                      className="flex flex-col items-center justify-center py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 hover:bg-emerald-500/20 active:scale-95 transition-all"
                     >
-                      <Plus className="w-3 h-3" /> Over · {awayOverProb.toFixed(0)}%
+                      <span className="text-[10px] font-semibold text-emerald-400/70">OVER</span>
+                      <span className="text-sm font-black">{play.awayProjected}*</span>
+                      <span className="text-[11px] font-bold">{awayOverProb.toFixed(0)}% implied</span>
                     </button>
                     <button
                       data-testid={`ncaab-away-team-under-${play.gameId}`}
                       onClick={() => onAddToParlay && addPick("under", play.awayProjected!, 100 - awayOverProb, "ncaab_team_total", `${play.awayTeamAbbr} Team Under ${play.awayProjected}*`)}
-                      className="flex items-center justify-center gap-1 py-2.5 rounded-lg bg-rose-500/10 border border-rose-500/25 text-rose-300 hover:bg-rose-500/20 active:scale-95 transition-all text-xs font-bold"
+                      className="flex flex-col items-center justify-center py-3 rounded-xl bg-rose-500/10 border border-rose-500/25 text-rose-300 hover:bg-rose-500/20 active:scale-95 transition-all"
                     >
-                      <Plus className="w-3 h-3" /> Under · {(100 - awayOverProb).toFixed(0)}%
+                      <span className="text-[10px] font-semibold text-rose-400/70">UNDER</span>
+                      <span className="text-sm font-black">{play.awayProjected}*</span>
+                      <span className="text-[11px] font-bold">{(100 - awayOverProb).toFixed(0)}% implied</span>
                     </button>
                   </div>
                 </div>
               )}
             </div>
-          </div>
-        )}
-
-        {/* Model Projected Margin (when no book spread available, or always as reference) */}
-        {play.projectedMargin !== null && play.homeSpreadLine === null && modelSpreadAbs !== null && (
-          <div className="bg-secondary/20 rounded-lg px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Projected Margin (Model)</span>
-              <span className="text-sm font-bold text-foreground">{modelSpreadFav} by {modelSpreadAbs}</span>
-            </div>
-            <div className="text-[10px] text-muted-foreground mt-0.5">No live spread line available</div>
           </div>
         )}
       </div>
