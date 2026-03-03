@@ -32,7 +32,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
       const sessionParams: any = {
         mode: "subscription",
         payment_method_types: ["card"],
-        success_url: `${origin}/?payment=success&tier=${tier}`,
+        success_url: `${origin}/?payment=success&tier=${tier}&session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${origin}/?payment=cancelled`,
         metadata: { userId: String(userId), tier },
       };
@@ -114,14 +114,40 @@ export async function registerStripeRoutes(app: import("express").Express) {
   });
 
   app.post("/api/stripe/checkout-complete", requireAuth, async (req: Request, res: Response) => {
-    const { tier, stripeCustomerId, stripeSubscriptionId } = req.body;
+    const { tier, sessionId } = req.body;
     const userId = (req as any).resolvedUserId!;
-    if (!tier) return res.status(400).json({ error: "Missing tier" });
+    if (!tier || !PLAN_META[tier as keyof typeof PLAN_META]) {
+      return res.status(400).json({ error: "Invalid tier" });
+    }
     try {
-      await storage.updateUserSubscription(userId, tier, stripeCustomerId || "", stripeSubscriptionId || "");
+      let stripeCustomerId = "";
+      let stripeSubscriptionId = "";
+
+      if (sessionId) {
+        try {
+          const stripe = await getUncachableStripeClient();
+          const session = await stripe.checkout.sessions.retrieve(sessionId, {
+            expand: ["subscription"],
+          });
+          if (session.payment_status === "paid" || session.status === "complete") {
+            stripeCustomerId = typeof session.customer === "string" ? session.customer : (session.customer as any)?.id ?? "";
+            const sub = session.subscription as any;
+            stripeSubscriptionId = typeof sub === "string" ? sub : sub?.id ?? "";
+          } else {
+            console.warn(`[checkout-complete] Session ${sessionId} not paid — status: ${session.payment_status}`);
+            return res.status(400).json({ error: "Payment not confirmed" });
+          }
+        } catch (stripeErr: any) {
+          console.error("[checkout-complete] Stripe session lookup failed:", stripeErr.message);
+        }
+      }
+
+      await storage.updateUserSubscription(userId, tier, stripeCustomerId, stripeSubscriptionId);
       const user = await storage.getUserById(userId);
+      console.log(`[checkout-complete] User ${userId} activated tier="${tier}" customer=${stripeCustomerId}`);
       return res.json({ success: true, subscriptionTier: user?.subscriptionTier });
     } catch (err: any) {
+      console.error("[checkout-complete] Error:", err.message);
       return res.status(500).json({ error: err.message });
     }
   });

@@ -297,7 +297,7 @@ export default function AdminPage() {
                           {u.subscriptionTier || u.isAdmin ? (
                             <span className="text-xs text-muted-foreground/50">unlimited</span>
                           ) : (
-                            <span className={u.playsUsed >= 10 ? "text-destructive font-semibold" : ""}>{u.playsUsed} / 10</span>
+                            <span className={u.playsUsed >= 15 ? "text-destructive font-semibold" : ""}>{u.playsUsed} / 15</span>
                           )}
                         </td>
                         <td className="px-4 py-3">
@@ -315,8 +315,8 @@ export default function AdminPage() {
                                 className="text-xs px-2 py-1.5 pr-6 rounded-lg bg-background border border-border text-foreground appearance-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-primary/50"
                               >
                                 <option value="">Free</option>
-                                <option value="nba">NBA ($25)</option>
-                                <option value="all">All Sports ($50)</option>
+                                <option value="all">Pro ($40/mo)</option>
+                                <option value="elite">All Sports ($65/mo)</option>
                               </select>
                               <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground pointer-events-none" />
                             </div>

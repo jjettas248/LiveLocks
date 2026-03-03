@@ -402,9 +402,13 @@ export default function Dashboard() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const payment = params.get("payment");
-    if (payment === "success") {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    const tier = params.get("tier");
+    const sessionId = params.get("session_id");
+    if (payment === "success" && tier) {
       window.history.replaceState({}, "", "/");
+      apiRequest("POST", "/api/stripe/checkout-complete", { tier, sessionId })
+        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] }))
+        .catch(() => queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] }));
     } else if (payment === "cancelled") {
       window.history.replaceState({}, "", "/");
     }
