@@ -25,6 +25,7 @@ import {
   TrendingUp,
   TrendingDown,
   ChevronDown,
+  ChevronUp,
   Zap,
   Radio,
   RefreshCw,
