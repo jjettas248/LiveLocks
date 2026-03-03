@@ -2418,15 +2418,32 @@ export default function Dashboard() {
 
         {/* NCAAB Tab — live data for All Sports, Elite, and Admin */}
         {activeTab === "ncaab" && (user?.isAdmin || ["all", "elite"].includes(user?.subscriptionTier ?? "")) && (
-          <NCAABAdminTab
-            isAdmin={user?.isAdmin ?? false}
-            onAddToParlay={(pick) => {
-              if (parlayPicks.length < 10) {
-                setParlayPicks((prev) => [...prev, pick]);
-                setShowParlay(true);
-              }
-            }}
-          />
+          <div className={showParlay && !isMobile ? "flex items-start gap-5" : ""}>
+            <div className={showParlay && !isMobile ? "flex-1 min-w-0" : ""}>
+              <NCAABAdminTab
+                isAdmin={user?.isAdmin ?? false}
+                onAddToParlay={(pick) => {
+                  if (parlayPicks.length < 10) {
+                    setParlayPicks((prev) => [...prev, pick]);
+                    setShowParlay(true);
+                  }
+                }}
+              />
+            </div>
+            {showParlay && !isMobile && (
+              <div className="w-72 flex-shrink-0">
+                <div className="bg-card border border-border rounded-xl p-4 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto relative">
+                  <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-primary to-transparent rounded-t-xl" />
+                  <ParlaySlip
+                    picks={parlayPicks}
+                    onRemove={(idx) => setParlayPicks((prev) => prev.filter((_, i) => i !== idx))}
+                    onClear={() => { setParlayPicks([]); setShowParlay(false); }}
+                    injuredPlayerNames={injuredPlayerNames}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
       </main>
