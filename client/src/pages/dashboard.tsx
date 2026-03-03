@@ -426,11 +426,18 @@ export default function Dashboard() {
   // Find a DB player by ESPN display name — uses first-initial + last-name matching
   const findPlayerByName = (espnName: string) => {
     const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+    const SUFFIXES = new Set(["jr", "sr", "ii", "iii", "iv", "v"]);
+    const stripSuffix = (parts: string[]): string[] => {
+      while (parts.length > 1 && SUFFIXES.has(norm(parts[parts.length - 1]))) {
+        parts = parts.slice(0, -1);
+      }
+      return parts;
+    };
     const normedEspn = norm(espnName);
     return (players ?? []).find((p) => {
       if (norm(p.name) === normedEspn) return true;
-      const espnParts = espnName.toLowerCase().split(" ");
-      const dbParts = p.name.toLowerCase().split(" ");
+      const espnParts = stripSuffix(espnName.toLowerCase().split(" "));
+      const dbParts = stripSuffix(p.name.toLowerCase().split(" "));
       const espnLast = espnParts[espnParts.length - 1];
       const dbLast = dbParts[dbParts.length - 1];
       return espnLast === dbLast && espnParts[0][0] === dbParts[0][0];
@@ -524,11 +531,16 @@ export default function Dashboard() {
   useEffect(() => {
     if (skipAutoFillRef.current) { skipAutoFillRef.current = false; return; }
     if (!liveStats || !selectedPlayer) return;
-    const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+    const norm2 = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+    const SFXS = new Set(["jr", "sr", "ii", "iii", "iv", "v"]);
+    const strip = (parts: string[]): string[] => {
+      while (parts.length > 1 && SFXS.has(norm2(parts[parts.length - 1]))) parts = parts.slice(0, -1);
+      return parts;
+    };
     const playerStat = liveStats.find((s) => {
-      if (norm(s.playerName) === norm(selectedPlayer.name)) return true;
-      const espnParts = s.playerName.toLowerCase().split(" ");
-      const dbParts = selectedPlayer.name.toLowerCase().split(" ");
+      if (norm2(s.playerName) === norm2(selectedPlayer.name)) return true;
+      const espnParts = strip(s.playerName.toLowerCase().split(" "));
+      const dbParts = strip(selectedPlayer.name.toLowerCase().split(" "));
       return (
         espnParts[espnParts.length - 1] === dbParts[dbParts.length - 1] &&
         espnParts[0]?.[0] === dbParts[0]?.[0]
