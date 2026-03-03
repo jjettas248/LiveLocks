@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { RefreshCw, AlertCircle, Clock, TrendingUp, Plus, ChevronDown, ChevronUp, AlertTriangle, Zap, Radio, Lock, X } from "lucide-react";
+import { RefreshCw, AlertCircle, Clock, TrendingUp, Plus, ChevronDown, ChevronUp, AlertTriangle, Zap, Radio, Lock, X, Settings2 } from "lucide-react";
 import { ProbabilityRing } from "@/components/probability-ring";
 import type { ParlayPickInput } from "@shared/schema";
 
@@ -65,6 +65,9 @@ interface NCAABPlay {
   expectedPoss?: number;
   homeThreePARate?: number;
   awayThreePARate?: number;
+  homeDefRebRate?: number;
+  awayDefRebRate?: number;
+  bpiHomeMargin?: number | null;
   homeOverProb?: number | null;
   awayOverProb?: number | null;
   homeInjuries?: string[];
@@ -165,7 +168,7 @@ function ProbBar({ prob }: { prob: number }) {
 function SectionHeader({ label, badge, badgeColor }: { label: string; badge?: string; badgeColor?: string }) {
   return (
     <div className="flex items-center gap-2 mb-3">
-      <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{label}</span>
+      <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">{label}</span>
       {badge && (
         <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${badgeColor ?? "text-muted-foreground border-border/50 bg-secondary/50"}`}>
           {badge}
@@ -230,9 +233,6 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
   const awayInjuries = play.awayInjuries ?? [];
   const hasInjuries = homeInjuries.length > 0 || awayInjuries.length > 0;
 
-  const homeOverProb = play.homeOverProb ?? 50;
-  const awayOverProb = play.awayOverProb ?? 50;
-
   const selectBook = (bookKey: string) => {
     setPreferredBook(bookKey);
     try { localStorage.setItem("ncaab_preferred_book", bookKey); } catch { }
@@ -285,13 +285,44 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
   const isOver = bestPlay?.direction === "over";
   const isUnder = bestPlay?.direction === "under";
 
+  // Projected final score info
+  const homeProj = play.homeProjected;
+  const awayProj = play.awayProjected;
+  const hasProjection = homeProj !== null && awayProj !== null;
+  const projTotal = hasProjection ? homeProj! + awayProj! : play.projectedTotal;
+  const projMarginAbs = hasProjection ? Math.abs(homeProj! - awayProj!) : null;
+  const projFavoredTeam = hasProjection
+    ? (homeProj! >= awayProj! ? play.homeTeamAbbr : play.awayTeamAbbr)
+    : null;
+
+  // BPI margin display
+  const bpiHomeMargin = play.bpiHomeMargin ?? null;
+  const bpiFavoredTeam = bpiHomeMargin !== null
+    ? (bpiHomeMargin >= 0 ? play.homeTeamAbbr : play.awayTeamAbbr)
+    : null;
+
+  // Model engine stats
+  const homeOE = play.homeOE ?? null;
+  const awayOE = play.awayOE ?? null;
+  const homeDE = play.homeDE ?? null;
+  const awayDE = play.awayDE ?? null;
+  const homeTempo = play.homeTempo ?? null;
+  const awayTempo = play.awayTempo ?? null;
+  const homeDefRebRate = play.homeDefRebRate ?? null;
+  const awayDefRebRate = play.awayDefRebRate ?? null;
+  const expectedPoss = play.expectedPoss ?? null;
+  const home3PA = play.homeThreePARate ?? null;
+  const away3PA = play.awayThreePARate ?? null;
+  const homeHighVar = (home3PA ?? 0) > 37;
+  const awayHighVar = (away3PA ?? 0) > 37;
+
   return (
     <div
       data-testid={`ncaab-card-${play.gameId}`}
       className="bg-card border border-border rounded-xl overflow-hidden"
     >
       {/* ── HEADER: scoreboard + probability ring ── */}
-      <div className="px-4 pt-4 pb-3 border-b border-border/40">
+      <div className="px-5 pt-5 pb-3 border-b border-border/40">
         <div className="flex flex-wrap items-center gap-1.5 mb-2">
           {hasWindow && (
             <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${windowClass}`}>
@@ -309,18 +340,18 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
         <div className="flex items-center justify-between gap-3">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-bold text-muted-foreground">{play.awayTeamAbbr}</span>
-              <span className="text-3xl font-black tabular-nums text-foreground">{play.awayScore}</span>
-              <span className="text-muted-foreground text-lg font-light">–</span>
-              <span className="text-3xl font-black tabular-nums text-foreground">{play.homeScore}</span>
-              <span className="text-sm font-bold text-muted-foreground">{play.homeTeamAbbr}</span>
+              <span className="text-base font-bold text-muted-foreground">{play.awayTeamAbbr}</span>
+              <span className="text-4xl font-black tabular-nums text-foreground">{play.awayScore}</span>
+              <span className="text-muted-foreground text-xl font-light">–</span>
+              <span className="text-4xl font-black tabular-nums text-foreground">{play.homeScore}</span>
+              <span className="text-base font-bold text-muted-foreground">{play.homeTeamAbbr}</span>
             </div>
             <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{play.awayTeam} @ {play.homeTeam}</p>
             <div className="flex items-center gap-2 mt-1.5">
               <span className="text-xs font-bold text-foreground bg-secondary/60 px-2 py-0.5 rounded-full">{halfLabel}</span>
               <span className="text-xs text-muted-foreground">{play.clock || play.status}</span>
               {(play.espnHomeWinPct !== null && play.espnHomeWinPct !== undefined) && (
-                <span className="text-[10px] text-muted-foreground">ESPN: {play.homeTeamAbbr} {play.espnHomeWinPct?.toFixed(0)}%</span>
+                <span className="text-[10px] text-muted-foreground">BPI: {play.homeTeamAbbr} {play.espnHomeWinPct?.toFixed(0)}%</span>
               )}
             </div>
           </div>
@@ -332,7 +363,85 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
         </div>
       </div>
 
-      <div className="p-4 space-y-5">
+      <div className="p-5 space-y-4">
+
+        {/* ── PROJECTED FINAL SCORE (replaces Team Totals 50/50) ── */}
+        {hasProjection && (
+          <div className="rounded-xl bg-secondary/50 border border-border/60 px-4 py-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Projected Final</span>
+              <span className="text-[10px] text-muted-foreground/60 font-medium">Model*</span>
+            </div>
+            <div className="flex items-center justify-center gap-4 mb-2">
+              <div className="text-center">
+                <div className="text-3xl font-black tabular-nums text-foreground">{awayProj}</div>
+                <div className="text-[10px] text-muted-foreground font-medium mt-0.5">{play.awayTeamAbbr}</div>
+              </div>
+              <div className="text-muted-foreground text-lg font-light">–</div>
+              <div className="text-center">
+                <div className="text-3xl font-black tabular-nums text-foreground">{homeProj}</div>
+                <div className="text-[10px] text-muted-foreground font-medium mt-0.5">{play.homeTeamAbbr}</div>
+              </div>
+            </div>
+            <div className="flex items-center justify-center gap-3 text-[11px] text-muted-foreground flex-wrap">
+              {projMarginAbs !== null && projFavoredTeam && (
+                <span className="font-semibold text-foreground">
+                  Spread: <span className="text-primary">{projFavoredTeam} –{projMarginAbs.toFixed(1)}</span>
+                </span>
+              )}
+              {projTotal !== null && (
+                <span>Proj O/U: <strong className="text-foreground">{projTotal.toFixed(1)}</strong></span>
+              )}
+              {bpiHomeMargin !== null && bpiFavoredTeam && (
+                <span className="text-muted-foreground/70">
+                  BPI: <span className="text-foreground">{bpiFavoredTeam} –{Math.abs(bpiHomeMargin).toFixed(1)}</span>
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── MODEL ENGINE (OE/DE/Tempo at the top) ── */}
+        {(homeOE !== null || awayOE !== null) && (
+          <div className="rounded-xl bg-secondary/30 border border-border/40 px-4 py-3 space-y-1.5">
+            <div className="flex items-center gap-1.5 mb-2">
+              <Settings2 className="w-3 h-3 text-primary/60" />
+              <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Model Engine</span>
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+              {homeOE !== null && (
+                <span className="text-muted-foreground">
+                  <strong className="text-foreground">{play.homeTeamAbbr}</strong>{" "}
+                  OE <span className="text-primary font-semibold">{homeOE}</span>
+                  {homeDE !== null && <> · DE {homeDE}</>}
+                  {homeTempo !== null && <> · Tempo {homeTempo}</>}
+                  {homeDefRebRate !== null && <> · DREB {homeDefRebRate}%</>}
+                </span>
+              )}
+              {awayOE !== null && (
+                <span className="text-muted-foreground">
+                  <strong className="text-foreground">{play.awayTeamAbbr}</strong>{" "}
+                  OE <span className="text-primary font-semibold">{awayOE}</span>
+                  {awayDE !== null && <> · DE {awayDE}</>}
+                  {awayTempo !== null && <> · Tempo {awayTempo}</>}
+                  {awayDefRebRate !== null && <> · DREB {awayDefRebRate}%</>}
+                </span>
+              )}
+            </div>
+            {expectedPoss !== null && (
+              <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground pt-0.5">
+                <span>Exp. poss: <strong className="text-foreground">{expectedPoss}</strong></span>
+                {homeHighVar && (
+                  <span className="text-amber-400 font-semibold">{play.homeTeamAbbr} 3PA {home3PA}% ⚠ High variance</span>
+                )}
+                {awayHighVar && (
+                  <span className="text-amber-400 font-semibold">{play.awayTeamAbbr} 3PA {away3PA}% ⚠ High variance</span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* MODEL SAYS banner */}
         {bestPlay && (
           <div className={`rounded-xl px-3 py-3 border flex items-center gap-3 ${
@@ -382,7 +491,7 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
 
           {/* O/U row */}
           {play.total !== null && (
-            <div className="mb-3">
+            <div className="mb-4">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Game Total</span>
                 <div className="flex items-center gap-1.5">
@@ -398,18 +507,18 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
                 <button
                   data-testid={`ncaab-over-${play.gameId}`}
                   onClick={() => onAddToParlay && addPick("over", play.total!, fgProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} O${play.total}`)}
-                  className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 active:scale-95 transition-all"
+                  className="flex flex-col items-center justify-center gap-0.5 py-5 px-4 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 active:scale-95 transition-all"
                 >
-                  <span className="text-[10px] font-semibold text-emerald-400/60">{fmtOdds(play.overPrice) || "OVER"}</span>
+                  <span className="text-xs font-semibold text-emerald-400/60">{fmtOdds(play.overPrice) || "OVER"}</span>
                   <span className="text-lg font-black">OVER {play.total}</span>
                   <span className="text-sm font-bold text-emerald-200">{fgProb.toFixed(1)}% implied</span>
                 </button>
                 <button
                   data-testid={`ncaab-under-${play.gameId}`}
                   onClick={() => onAddToParlay && addPick("under", play.total!, 100 - fgProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} U${play.total}`)}
-                  className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 active:scale-95 transition-all"
+                  className="flex flex-col items-center justify-center gap-0.5 py-5 px-4 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 active:scale-95 transition-all"
                 >
-                  <span className="text-[10px] font-semibold text-rose-400/60">{fmtOdds(play.underPrice) || "UNDER"}</span>
+                  <span className="text-xs font-semibold text-rose-400/60">{fmtOdds(play.underPrice) || "UNDER"}</span>
                   <span className="text-lg font-black">UNDER {play.total}</span>
                   <span className="text-sm font-bold text-rose-200">{(100 - fgProb).toFixed(1)}% implied</span>
                 </button>
@@ -423,13 +532,13 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
             </div>
           )}
 
-          {/* Spread row — HOME and AWAY as separate full buttons */}
+          {/* Spread row */}
           {((play.homeSpreadLine !== null && !isNaN(play.homeSpreadLine)) || (play.awaySpreadLine !== null && !isNaN(play.awaySpreadLine))) && (
             <div>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Spread</span>
                 {play.projectedMargin !== null && (
-                  <span className="text-[10px] text-muted-foreground">
+                  <span className="text-xs text-muted-foreground">
                     Model: {play.homeTeamAbbr} {play.projectedMargin >= 0 ? "+" : ""}{play.projectedMargin.toFixed(1)}
                   </span>
                 )}
@@ -438,24 +547,24 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
                 <button
                   data-testid={`ncaab-home-cover-${play.gameId}`}
                   onClick={() => onAddToParlay && addPick("over", Math.abs(play.homeSpreadLine ?? 0), spProb, "ncaab_spread", `${play.homeTeamAbbr} ${fmtSpread(play.homeSpreadLine)} Cover`)}
-                  className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-blue-500/15 border border-blue-500/30 text-blue-300 hover:bg-blue-500/25 active:scale-95 transition-all"
+                  className="flex flex-col items-center justify-center gap-0.5 py-5 px-4 rounded-xl bg-blue-500/15 border border-blue-500/30 text-blue-300 hover:bg-blue-500/25 active:scale-95 transition-all"
                 >
-                  <span className="text-[10px] font-semibold text-blue-400/60">HOME</span>
+                  <span className="text-xs font-semibold text-blue-400/60">HOME</span>
                   <span className="text-lg font-black">{play.homeTeamAbbr} {fmtSpread(play.homeSpreadLine)}</span>
                   <span className="text-sm font-bold text-blue-200">{spProb.toFixed(1)}% cover</span>
                 </button>
                 <button
                   data-testid={`ncaab-away-cover-${play.gameId}`}
                   onClick={() => onAddToParlay && addPick("over", Math.abs(play.awaySpreadLine ?? 0), spDogProb, "ncaab_spread", `${play.awayTeamAbbr} ${fmtSpread(play.awaySpreadLine)} Cover`)}
-                  className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 active:scale-95 transition-all"
+                  className="flex flex-col items-center justify-center gap-0.5 py-5 px-4 rounded-xl bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 active:scale-95 transition-all"
                 >
-                  <span className="text-[10px] font-semibold text-violet-400/60">AWAY</span>
+                  <span className="text-xs font-semibold text-violet-400/60">AWAY</span>
                   <span className="text-lg font-black">{play.awayTeamAbbr} {fmtSpread(play.awaySpreadLine)}</span>
                   <span className="text-sm font-bold text-violet-200">{spDogProb.toFixed(1)}% cover</span>
                 </button>
               </div>
               {play.spreadEdge !== null && (
-                <p className="text-[10px] text-muted-foreground mt-1.5 text-center">
+                <p className="text-xs text-muted-foreground mt-1.5 text-center">
                   {play.spreadEdge > 0 ? "+" : ""}{play.spreadEdge}pp edge on {play.homeTeamAbbr} cover
                 </p>
               )}
@@ -465,7 +574,7 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
           {/* No Odds API lines at all */}
           {play.total === null && play.homeSpreadLine === null && (
             <div className="text-center py-3">
-              <p className="text-[10px] text-muted-foreground italic">No live book lines — model projections below</p>
+              <p className="text-xs text-muted-foreground italic">No live book lines — model projections below</p>
               {play.projectedMargin !== null && (
                 <p className="text-xs font-semibold text-foreground mt-1">
                   Model: {play.projectedMargin >= 0 ? play.homeTeamAbbr : play.awayTeamAbbr} by {Math.abs(play.projectedMargin).toFixed(1)}
@@ -488,7 +597,7 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
                   <span className="text-sm font-black text-foreground tabular-nums">{play.h1TotalLineModel}*</span>
                 </div>
                 <ProbBar prob={play.over1HProb} />
-                <div className="text-[10px] text-muted-foreground mt-1 mb-2">
+                <div className="text-xs text-muted-foreground mt-1 mb-2">
                   {play.proj1HTotal !== null ? `Model: ${play.proj1HTotal} pts projected for H1` : ""}
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -497,7 +606,7 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
                     onClick={() => onAddToParlay && addPick("over", play.h1TotalLineModel!, play.over1HProb!, "ncaab_1h_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} 1H O${play.h1TotalLineModel}*`)}
                     className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 hover:bg-emerald-500/20 active:scale-95 transition-all"
                   >
-                    <span className="text-[10px] font-semibold text-emerald-400/60">1H OVER</span>
+                    <span className="text-xs font-semibold text-emerald-400/60">1H OVER</span>
                     <span className="text-lg font-black">{play.h1TotalLineModel}*</span>
                     <span className="text-sm font-bold text-emerald-200">{play.over1HProb.toFixed(1)}% implied</span>
                   </button>
@@ -506,7 +615,7 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
                     onClick={() => onAddToParlay && addPick("under", play.h1TotalLineModel!, 100 - play.over1HProb!, "ncaab_1h_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} 1H U${play.h1TotalLineModel}*`)}
                     className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-rose-500/10 border border-rose-500/25 text-rose-300 hover:bg-rose-500/20 active:scale-95 transition-all"
                   >
-                    <span className="text-[10px] font-semibold text-rose-400/60">1H UNDER</span>
+                    <span className="text-xs font-semibold text-rose-400/60">1H UNDER</span>
                     <span className="text-lg font-black">{play.h1TotalLineModel}*</span>
                     <span className="text-sm font-bold text-rose-200">{(100 - play.over1HProb!).toFixed(1)}% implied</span>
                   </button>
@@ -519,8 +628,8 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
               <div className="mb-4">
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-xs font-semibold text-foreground">1H Spread (proj)</span>
-                  <span className="text-[10px] text-muted-foreground">
-                    {play.h1SpreadLine >= 0 ? play.homeTeamAbbr : play.homeTeamAbbr} {fmtSpread(play.h1SpreadLine)}*
+                  <span className="text-xs text-muted-foreground">
+                    {play.homeTeamAbbr} {fmtSpread(play.h1SpreadLine)}*
                   </span>
                 </div>
                 <ProbBar prob={play.h1SpreadProb} />
@@ -530,16 +639,16 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
                     onClick={() => onAddToParlay && addPick("over", Math.abs(play.h1SpreadLine!), play.h1SpreadProb!, "ncaab_1h_spread", `${play.homeTeamAbbr} 1H ${fmtSpread(play.h1SpreadLine)}* Cover`)}
                     className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-blue-500/10 border border-blue-500/25 text-blue-300 hover:bg-blue-500/20 active:scale-95 transition-all"
                   >
-                    <span className="text-[10px] font-semibold text-blue-400/60">1H HOME</span>
+                    <span className="text-xs font-semibold text-blue-400/60">1H HOME</span>
                     <span className="text-lg font-black">{play.homeTeamAbbr} {fmtSpread(play.h1SpreadLine)}*</span>
                     <span className="text-sm font-bold text-blue-200">{play.h1SpreadProb.toFixed(1)}% cover</span>
                   </button>
                   <button
                     data-testid={`ncaab-1h-away-cover-${play.gameId}`}
-                    onClick={() => onAddToParlay && addPick("over", Math.abs(play.h1SpreadLine!), 100 - play.h1SpreadProb!, "ncaab_1h_spread", `${play.awayTeamAbbr} 1H ${fmtSpread(play.h1SpreadLine !== null ? -play.h1SpreadLine : null)}* Cover`)}
+                    onClick={() => onAddToParlay && addPick("over", Math.abs(play.h1SpreadLine!), 100 - play.h1SpreadProb!, "ncaab_1h_spread", `${play.awayTeamAbbr} 1H ${play.h1SpreadLine !== null ? fmtSpread(-play.h1SpreadLine) : ""}* Cover`)}
                     className="flex flex-col items-center justify-center gap-0.5 py-4 rounded-xl bg-violet-500/10 border border-violet-500/25 text-violet-300 hover:bg-violet-500/20 active:scale-95 transition-all"
                   >
-                    <span className="text-[10px] font-semibold text-violet-400/60">1H AWAY</span>
+                    <span className="text-xs font-semibold text-violet-400/60">1H AWAY</span>
                     <span className="text-lg font-black">{play.awayTeamAbbr} {play.h1SpreadLine !== null ? fmtSpread(-play.h1SpreadLine) : ""}*</span>
                     <span className="text-sm font-bold text-violet-200">{(100 - play.h1SpreadProb!).toFixed(1)}% cover</span>
                   </button>
@@ -605,76 +714,11 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
             )}
           </div>
         )}
-
-        {/* ── SECTION C: TEAM TOTALS (Model, always) ── */}
-        {(play.homeProjected !== null || play.awayProjected !== null) && (
-          <div>
-            <SectionHeader label="Team Totals" badge="Model" badgeColor="text-blue-400 bg-blue-500/10 border-blue-500/30" />
-            <div className="space-y-2">
-              {play.homeProjected !== null && (
-                <div className="bg-secondary/30 rounded-xl px-3 py-2.5">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-bold text-foreground">{play.homeTeamAbbr} Full Game</span>
-                    <span className="text-xs font-black text-foreground tabular-nums">{play.homeProjected}*</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      data-testid={`ncaab-home-team-over-${play.gameId}`}
-                      onClick={() => onAddToParlay && addPick("over", play.homeProjected!, homeOverProb, "ncaab_team_total", `${play.homeTeamAbbr} Team Over ${play.homeProjected}*`)}
-                      className="flex flex-col items-center justify-center py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 hover:bg-emerald-500/20 active:scale-95 transition-all"
-                    >
-                      <span className="text-[10px] font-semibold text-emerald-400/70">OVER</span>
-                      <span className="text-sm font-black">{play.homeProjected}*</span>
-                      <span className="text-[11px] font-bold">{homeOverProb.toFixed(0)}% implied</span>
-                    </button>
-                    <button
-                      data-testid={`ncaab-home-team-under-${play.gameId}`}
-                      onClick={() => onAddToParlay && addPick("under", play.homeProjected!, 100 - homeOverProb, "ncaab_team_total", `${play.homeTeamAbbr} Team Under ${play.homeProjected}*`)}
-                      className="flex flex-col items-center justify-center py-3 rounded-xl bg-rose-500/10 border border-rose-500/25 text-rose-300 hover:bg-rose-500/20 active:scale-95 transition-all"
-                    >
-                      <span className="text-[10px] font-semibold text-rose-400/70">UNDER</span>
-                      <span className="text-sm font-black">{play.homeProjected}*</span>
-                      <span className="text-[11px] font-bold">{(100 - homeOverProb).toFixed(0)}% implied</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-              {play.awayProjected !== null && (
-                <div className="bg-secondary/30 rounded-xl px-3 py-2.5">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-bold text-foreground">{play.awayTeamAbbr} Full Game</span>
-                    <span className="text-xs font-black text-foreground tabular-nums">{play.awayProjected}*</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      data-testid={`ncaab-away-team-over-${play.gameId}`}
-                      onClick={() => onAddToParlay && addPick("over", play.awayProjected!, awayOverProb, "ncaab_team_total", `${play.awayTeamAbbr} Team Over ${play.awayProjected}*`)}
-                      className="flex flex-col items-center justify-center py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 hover:bg-emerald-500/20 active:scale-95 transition-all"
-                    >
-                      <span className="text-[10px] font-semibold text-emerald-400/70">OVER</span>
-                      <span className="text-sm font-black">{play.awayProjected}*</span>
-                      <span className="text-[11px] font-bold">{awayOverProb.toFixed(0)}% implied</span>
-                    </button>
-                    <button
-                      data-testid={`ncaab-away-team-under-${play.gameId}`}
-                      onClick={() => onAddToParlay && addPick("under", play.awayProjected!, 100 - awayOverProb, "ncaab_team_total", `${play.awayTeamAbbr} Team Under ${play.awayProjected}*`)}
-                      className="flex flex-col items-center justify-center py-3 rounded-xl bg-rose-500/10 border border-rose-500/25 text-rose-300 hover:bg-rose-500/20 active:scale-95 transition-all"
-                    >
-                      <span className="text-[10px] font-semibold text-rose-400/70">UNDER</span>
-                      <span className="text-sm font-black">{play.awayProjected}*</span>
-                      <span className="text-[11px] font-bold">{(100 - awayOverProb).toFixed(0)}% implied</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* ── SECTION D: PER-BOOK SELECTOR (Odds API) ── */}
       {play.bookLines.length > 0 && (
-        <div className="px-4 pb-4 border-t border-border/30 pt-4 space-y-3">
+        <div className="px-5 pb-5 border-t border-border/30 pt-4 space-y-3">
           <SectionHeader label="Book Lines" badge="Odds API" badgeColor="text-emerald-400 bg-emerald-500/10 border-emerald-500/30" />
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
             {play.bookLines.map(bl => {
@@ -691,7 +735,6 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
                 >
                   <div className={`text-xs font-bold ${isPreferred ? "text-primary" : "text-foreground"}`}>{bl.name}</div>
 
-                  {/* Book totals */}
                   {bl.total !== null && (
                     <div className="grid grid-cols-2 gap-1">
                       <button
@@ -711,7 +754,6 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
                     </div>
                   )}
 
-                  {/* Book spread — both sides */}
                   {(bl.homePoint !== null || bl.awayPoint !== null) && (
                     <div className="grid grid-cols-2 gap-1">
                       {bl.homePoint !== null && (
@@ -739,9 +781,8 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
             })}
           </div>
 
-          {/* Handle signal */}
           {play.bookLines.length >= 2 && (
-            <div className="text-[10px] text-yellow-400/80 font-medium">
+            <div className="text-xs text-yellow-400/80 font-medium">
               {(() => {
                 const spreads = play.bookLines.map(b => b.homePoint !== null ? Math.abs(b.homePoint) : null).filter((s): s is number => s !== null);
                 if (spreads.length >= 2) {
@@ -756,28 +797,18 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
         </div>
       )}
 
-      {/* ESPN Win Prob + Model Details */}
-      <div className="px-4 pb-4 space-y-2">
-        {(play.espnHomeWinPct !== null && play.espnHomeWinPct !== undefined) && (
-          <div className="flex items-center gap-2 pt-1 border-t border-border/20">
-            <Zap className="w-3 h-3 text-primary/60" />
-            <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">ESPN Win Prob:</span>
-            <span className="text-[10px] text-foreground font-semibold">{play.homeTeamAbbr} {play.espnHomeWinPct?.toFixed(1)}%</span>
-            <span className="text-[10px] text-muted-foreground">·</span>
-            <span className="text-[10px] text-foreground font-semibold">{play.awayTeamAbbr} {play.espnAwayWinPct?.toFixed(1)}%</span>
-          </div>
-        )}
-
+      {/* Possession model details (collapsible learn-more) */}
+      <div className="px-5 pb-5 space-y-2">
         <button
           onClick={() => setShowDetails(p => !p)}
-          className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors pt-1"
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors pt-1"
         >
           {showDetails ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
           Possession model details
         </button>
 
         {showDetails && (
-          <div className="bg-secondary/30 rounded-lg px-3 py-2.5 space-y-1.5 text-[10px]">
+          <div className="bg-secondary/30 rounded-lg px-3 py-2.5 space-y-1.5 text-[11px]">
             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-muted-foreground">
               <div><span className="text-foreground font-semibold">{play.homeTeamAbbr} OE:</span> {play.homeOE ?? "—"}</div>
               <div><span className="text-foreground font-semibold">{play.awayTeamAbbr} OE:</span> {play.awayOE ?? "—"}</div>
@@ -793,8 +824,13 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
               {(play.awayThreePARate ?? 0) > 37 && (
                 <div className="col-span-2 text-orange-400/80">{play.awayTeamAbbr} 3PA rate: {play.awayThreePARate}% ← High variance</div>
               )}
+              {play.bpiHomeMargin !== null && play.bpiHomeMargin !== undefined && (
+                <div className="col-span-2 text-muted-foreground/80">
+                  BPI Margin: <span className="text-foreground font-semibold">{play.homeTeamAbbr} {play.bpiHomeMargin >= 0 ? "+" : ""}{play.bpiHomeMargin.toFixed(1)}</span> (blended 50/50 with model)
+                </div>
+              )}
             </div>
-            <div className="text-muted-foreground/60 mt-1">OE = offensive efficiency per 100 poss · DE = defensive efficiency · * = model projection</div>
+            <div className="text-muted-foreground/60 mt-1">OE = offensive efficiency per 100 poss · DE = defensive efficiency · * = model projection · BPI = ESPN Basketball Power Index</div>
           </div>
         )}
       </div>
@@ -819,11 +855,27 @@ function formatTipoff(startTime: string | null | undefined): string {
   }
 }
 
+function roundToHour(startTime: string | null | undefined): string {
+  if (!startTime) return "TBD";
+  try {
+    const d = new Date(startTime);
+    const minutes = d.getMinutes();
+    if (minutes >= 30) {
+      d.setHours(d.getHours() + 1);
+    }
+    d.setMinutes(0, 0, 0);
+    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  } catch {
+    return "TBD";
+  }
+}
+
 export function NCAABAdminTab({ onAddToParlay, isAdmin, isFreeUser, onGameView }: NCAABAdminTabProps) {
   const [ncaabSubTab, setNcaabSubTab] = useState<"live" | "halftime">("live");
   const [selectedGameId, setSelectedGameId] = useState<string | undefined>(undefined);
   const [unlockedGameIds, setUnlockedGameIds] = useState<Set<string>>(new Set());
   const [unlocking, setUnlocking] = useState(false);
+  const [expandedTimeGroups, setExpandedTimeGroups] = useState<Set<string>>(new Set(["LIVE"]));
 
   const playsQuery = useQuery<{ plays: NCAABPlay[] }>({
     queryKey: ["/api/ncaab/plays"],
@@ -857,6 +909,47 @@ export function NCAABAdminTab({ onAddToParlay, isAdmin, isFreeUser, onGameView }
     return ta - tb;
   });
 
+  // Group games by time bucket
+  const timeGroups = useMemo(() => {
+    const groups: Record<string, NCAABGame[]> = {};
+    const liveGames: NCAABGame[] = [];
+    for (const g of sortedGames) {
+      if (g.isLive) {
+        liveGames.push(g);
+      } else {
+        const bucket = roundToHour(g.startTime);
+        if (!groups[bucket]) groups[bucket] = [];
+        groups[bucket].push(g);
+      }
+    }
+    const result: Array<{ key: string; label: string; games: NCAABGame[]; isLive: boolean }> = [];
+    if (liveGames.length > 0) {
+      result.push({ key: "LIVE", label: "🔴 Live Now", games: liveGames, isLive: true });
+    }
+    const bucketKeys = Object.keys(groups).sort((a, b) => {
+      try {
+        const aTime = new Date(`1970/01/01 ${a}`).getTime();
+        const bTime = new Date(`1970/01/01 ${b}`).getTime();
+        return aTime - bTime;
+      } catch {
+        return 0;
+      }
+    });
+    for (const key of bucketKeys) {
+      result.push({ key, label: key, games: groups[key], isLive: false });
+    }
+    return result;
+  }, [sortedGames]);
+
+  // Auto-expand first upcoming group on load
+  useMemo(() => {
+    if (timeGroups.length === 0) return;
+    const toExpand = new Set<string>(["LIVE"]);
+    const firstUpcoming = timeGroups.find(g => !g.isLive);
+    if (firstUpcoming) toExpand.add(firstUpcoming.key);
+    setExpandedTimeGroups(toExpand);
+  }, [timeGroups.length]);
+
   const selectedGame = games.find(g => g.id === selectedGameId);
   const selectedLivePlay = plays.find(p => p.gameId === selectedGameId);
   const isSelectedGameLive = selectedGame?.isLive ?? false;
@@ -867,7 +960,24 @@ export function NCAABAdminTab({ onAddToParlay, isAdmin, isFreeUser, onGameView }
       return;
     }
     setSelectedGameId(gameId);
+    // Auto-expand the time group containing this game
+    const group = timeGroups.find(g => g.games.some(game => game.id === gameId));
+    if (group) {
+      setExpandedTimeGroups(prev => new Set([...prev, group.key]));
+    }
     if (!isFreeUser || unlockedGameIds.has(gameId)) return;
+  }
+
+  function toggleTimeGroup(key: string) {
+    setExpandedTimeGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
   }
 
   async function handleUnlock() {
@@ -892,6 +1002,9 @@ export function NCAABAdminTab({ onAddToParlay, isAdmin, isFreeUser, onGameView }
           <div className="flex items-center gap-2">
             <Radio className="w-3.5 h-3.5 text-primary" />
             <span className="text-xs font-bold text-foreground uppercase tracking-widest">Today's NCAAB Slate</span>
+            {sortedGames.length > 0 && (
+              <span className="text-[10px] text-muted-foreground/60">({sortedGames.length} games)</span>
+            )}
           </div>
           <button
             data-testid="ncaab-refresh"
@@ -915,45 +1028,83 @@ export function NCAABAdminTab({ onAddToParlay, isAdmin, isFreeUser, onGameView }
           <p className="text-xs text-muted-foreground/60 py-2">No games scheduled today.</p>
         )}
 
-        {sortedGames.length > 0 && (
-          <div className="flex gap-2 overflow-x-auto pb-1 flex-wrap">
-            {sortedGames.map(g => {
-              const isSelected = selectedGameId === g.id;
-              const tipoff = formatTipoff(g.startTime);
-              const isFinal = g.status === "Final" || g.status === "Final/OT";
-              const spreadVal = g.homeSpreadLine !== null && g.homeSpreadLine !== undefined && !isNaN(g.homeSpreadLine) ? fmtSpread(g.homeSpreadLine) : null;
-              const totalVal = g.total !== null && g.total !== undefined && !isNaN(g.total) ? `O/U ${g.total}` : null;
+        {/* Collapsible time groups */}
+        {timeGroups.length > 0 && (
+          <div className="space-y-2">
+            {timeGroups.map(group => {
+              const isExpanded = expandedTimeGroups.has(group.key);
               return (
-                <button
-                  key={g.id}
-                  data-testid={`ncaab-game-tile-${g.id}`}
-                  onClick={() => handleTileClick(g.id)}
-                  className={`min-w-[130px] px-3 py-2 rounded-lg border text-xs flex flex-col gap-0.5 transition-all text-left ${
-                    isSelected
-                      ? "border-primary bg-primary/10 ring-1 ring-primary shadow-[0_0_16px_-3px_hsl(var(--primary)/0.4)]"
-                      : "border-border bg-secondary/40 hover:bg-secondary/70"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-1 font-semibold tabular-nums text-foreground">
-                    <span>{g.awayTeamAbbr}</span>
-                    {g.isLive && <span className="text-primary">{g.awayScore} – {g.homeScore}</span>}
-                    <span>{g.homeTeamAbbr}</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {g.isLive && !isFinal && (
-                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    )}
-                    <span className={`text-[10px] ${g.isLive && !isFinal ? "text-emerald-400" : isFinal ? "text-muted-foreground/60" : "text-muted-foreground"}`}>
-                      {isFinal ? "Final" : g.isLive ? `H${g.period <= 1 ? 1 : 2} ${g.clock}` : tipoff || g.status}
-                    </span>
-                  </div>
-                  {(spreadVal || totalVal) && (
-                    <div className="flex gap-1 flex-wrap mt-0.5">
-                      {spreadVal && <span className="text-[9px] text-muted-foreground/70 bg-secondary px-1 py-0.5 rounded">{spreadVal}</span>}
-                      {totalVal && <span className="text-[9px] text-muted-foreground/70 bg-secondary px-1 py-0.5 rounded">{totalVal}</span>}
+                <div key={group.key} className="border border-border/50 rounded-xl overflow-hidden">
+                  <button
+                    data-testid={`ncaab-time-group-${group.key}`}
+                    onClick={() => toggleTimeGroup(group.key)}
+                    className={`w-full flex items-center justify-between px-3 py-2 text-left transition-colors ${
+                      group.isLive
+                        ? "bg-emerald-500/10 hover:bg-emerald-500/15"
+                        : "bg-secondary/30 hover:bg-secondary/50"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {group.isLive && <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />}
+                      <span className={`text-xs font-bold ${group.isLive ? "text-emerald-400" : "text-foreground"}`}>
+                        {group.label}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground/70">
+                        {group.games.length} game{group.games.length !== 1 ? "s" : ""}
+                      </span>
+                    </div>
+                    {isExpanded
+                      ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" />
+                      : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                    }
+                  </button>
+
+                  {isExpanded && (
+                    <div className="p-2 pt-1.5">
+                      <div className="flex gap-2 overflow-x-auto pb-1 flex-wrap">
+                        {group.games.map(g => {
+                          const isSelected = selectedGameId === g.id;
+                          const tipoff = formatTipoff(g.startTime);
+                          const isFinal = g.status === "Final" || g.status === "Final/OT";
+                          const spreadVal = g.homeSpreadLine !== null && g.homeSpreadLine !== undefined && !isNaN(g.homeSpreadLine) ? fmtSpread(g.homeSpreadLine) : null;
+                          const totalVal = g.total !== null && g.total !== undefined && !isNaN(g.total) ? `O/U ${g.total}` : null;
+                          return (
+                            <button
+                              key={g.id}
+                              data-testid={`ncaab-game-tile-${g.id}`}
+                              onClick={() => handleTileClick(g.id)}
+                              className={`min-w-[130px] px-3 py-2 rounded-lg border text-xs flex flex-col gap-0.5 transition-all text-left ${
+                                isSelected
+                                  ? "border-primary bg-primary/10 ring-1 ring-primary shadow-[0_0_16px_-3px_hsl(var(--primary)/0.4)]"
+                                  : "border-border/60 bg-background hover:bg-secondary/50"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-1 font-semibold tabular-nums text-foreground">
+                                <span>{g.awayTeamAbbr}</span>
+                                {g.isLive && <span className="text-primary">{g.awayScore} – {g.homeScore}</span>}
+                                <span>{g.homeTeamAbbr}</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                {g.isLive && !isFinal && (
+                                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                )}
+                                <span className={`text-[10px] ${g.isLive && !isFinal ? "text-emerald-400" : isFinal ? "text-muted-foreground/60" : "text-muted-foreground"}`}>
+                                  {isFinal ? "Final" : g.isLive ? `H${g.period <= 1 ? 1 : 2} ${g.clock}` : tipoff || g.status}
+                                </span>
+                              </div>
+                              {(spreadVal || totalVal) && (
+                                <div className="flex gap-1 flex-wrap mt-0.5">
+                                  {spreadVal && <span className="text-[9px] text-muted-foreground/70 bg-secondary px-1 py-0.5 rounded">{spreadVal}</span>}
+                                  {totalVal && <span className="text-[9px] text-muted-foreground/70 bg-secondary px-1 py-0.5 rounded">{totalVal}</span>}
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
-                </button>
+                </div>
               );
             })}
           </div>
@@ -1051,7 +1202,7 @@ export function NCAABAdminTab({ onAddToParlay, isAdmin, isFreeUser, onGameView }
               2H Plays
             </button>
           </div>
-          <p className="text-[10px] text-muted-foreground mt-1 pl-1">Possession model · ESPN stats · KenPom-style efficiency</p>
+          <p className="text-[10px] text-muted-foreground mt-1 pl-1">Possession model · ESPN BPI blend · KenPom-style efficiency</p>
         </div>
       </div>
 

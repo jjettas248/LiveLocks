@@ -39,6 +39,7 @@ import {
   Check,
   Settings,
   Lock,
+  ArrowUpRight,
 } from "lucide-react";
 import { SiX } from "react-icons/si";
 
@@ -1403,7 +1404,10 @@ export default function Dashboard() {
                 {/* Player */}
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <label className="text-xs font-medium text-muted-foreground">Player</label>
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-full bg-primary/20 text-primary text-[10px] font-bold flex items-center justify-center shrink-0">①</span>
+                      Player
+                    </label>
                     {selectedGameId && selectedGameTeams && (
                       <span className="flex items-center gap-1 text-xs text-primary">
                         <Users className="w-3 h-3" />
@@ -1434,7 +1438,10 @@ export default function Dashboard() {
 
                 {/* Opponent */}
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">Opponent Team</label>
+                  <label className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                    <span className="w-5 h-5 rounded-full bg-primary/20 text-primary text-[10px] font-bold flex items-center justify-center shrink-0">②</span>
+                    Opponent Team
+                  </label>
                   <div className="relative">
                     <select
                       {...form.register("opponentTeam")}
@@ -1455,6 +1462,7 @@ export default function Dashboard() {
                 {/* Game Situation */}
                 <div className="p-3.5 rounded-lg bg-secondary/40 border border-border/50 space-y-3">
                   <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                    <span className="w-5 h-5 rounded-full bg-primary/20 text-primary text-[10px] font-bold flex items-center justify-center shrink-0">③</span>
                     <Clock className="w-3 h-3" />
                     Game Situation
                     {autoFilledFields.size > 0 && (
@@ -1519,21 +1527,65 @@ export default function Dashboard() {
                 {/* Stat Type + Line */}
                 <div className="p-3.5 rounded-lg bg-secondary/40 border border-border/50 space-y-3">
                   <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                    <Target className="w-3 h-3" /> The Line
+                    <span className="w-5 h-5 rounded-full bg-primary/20 text-primary text-[10px] font-bold flex items-center justify-center shrink-0">④</span>
+                    <TrendingUp className="w-3 h-3" /> Prop &amp; Line
                   </h3>
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-foreground">Stat / Prop Type</label>
-                    <div className="relative">
-                      <select
-                        {...form.register("statType")}
-                        data-testid="select-stat-type"
-                        className="w-full h-9 pl-3 pr-8 rounded-lg bg-input border border-border focus:border-primary outline-none appearance-none text-sm"
-                      >
-                        {STAT_TYPES.map((s) => (
-                          <option key={s.value} value={s.value}>{s.label}</option>
-                        ))}
-                      </select>
-                      <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                  {/* Stat type toggle buttons — Row 1: single stats */}
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1.5 block">Stat / Prop Type</label>
+                    <div className="grid grid-cols-3 gap-1.5 mb-1.5">
+                      {[
+                        { value: "points",   short: "PTS" },
+                        { value: "rebounds", short: "REB" },
+                        { value: "assists",  short: "AST" },
+                        { value: "threes",   short: "3-PTR" },
+                        { value: "steals",   short: "STL" },
+                        { value: "blocks",   short: "BLK" },
+                      ].map(s => {
+                        const isActive = watchedStatType === s.value;
+                        return (
+                          <button
+                            key={s.value}
+                            type="button"
+                            data-testid={`stat-btn-${s.value}`}
+                            onClick={() => form.setValue("statType" as any, s.value)}
+                            className={`py-2.5 px-3 rounded-lg border text-sm font-semibold transition-all text-center ${
+                              isActive
+                                ? "bg-primary text-primary-foreground border-primary ring-2 ring-primary/30 shadow-sm"
+                                : "bg-secondary/50 border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                            }`}
+                          >
+                            {s.short}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {/* Row 2: combos */}
+                    <div className="flex flex-wrap gap-1.5">
+                      {[
+                        { value: "pts_reb_ast", short: "P+R+A" },
+                        { value: "pts_reb",     short: "P+R" },
+                        { value: "pts_ast",     short: "P+A" },
+                        { value: "reb_ast",     short: "R+A" },
+                        { value: "stl_blk",     short: "STL+BLK" },
+                      ].map(s => {
+                        const isActive = watchedStatType === s.value;
+                        return (
+                          <button
+                            key={s.value}
+                            type="button"
+                            data-testid={`stat-btn-${s.value}`}
+                            onClick={() => form.setValue("statType" as any, s.value)}
+                            className={`flex-1 py-2 px-2 rounded-lg border text-xs font-semibold transition-all text-center min-w-[52px] ${
+                              isActive
+                                ? "bg-primary text-primary-foreground border-primary ring-2 ring-primary/30 shadow-sm"
+                                : "bg-secondary/50 border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                            }`}
+                          >
+                            {s.short}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2.5">
@@ -1702,12 +1754,19 @@ export default function Dashboard() {
                   type="submit"
                   disabled={calculateMutation.isPending}
                   data-testid="button-calculate"
-                  className="w-full h-10 rounded-lg bg-primary text-primary-foreground font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+                  className={`w-full h-12 rounded-xl bg-primary text-primary-foreground font-bold text-base flex items-center justify-center gap-2 disabled:opacity-50 transition-all ${
+                    !calculateMutation.isPending && watchedStatType && form.watch("liveLine") > 0
+                      ? "shadow-lg shadow-primary/25"
+                      : ""
+                  }`}
                 >
                   {calculateMutation.isPending ? (
-                    <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                    <div className="w-5 h-5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
                   ) : (
-                    "Calculate Probability"
+                    <>
+                      <Zap className="w-5 h-5" />
+                      Calculate Probability
+                    </>
                   )}
                 </button>
 
@@ -2370,16 +2429,11 @@ export default function Dashboard() {
                                 <div className="text-[10px] text-muted-foreground">Season Avg</div>
                               </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                              <div className="flex-1 h-2 bg-secondary rounded-full overflow-hidden">
-                                <div
-                                  className={`h-full rounded-full ${displayProb >= 65 ? "bg-emerald-500" : displayProb <= 35 ? "bg-rose-500" : "bg-primary/70"}`}
-                                  style={{ width: `${displayProb}%` }}
-                                />
-                              </div>
-                              <span className={`text-sm font-bold tabular-nums ${displayProb >= 65 ? "text-emerald-400" : displayProb <= 35 ? "text-rose-400" : "text-yellow-400"}`}>
-                                {displayProb.toFixed(1)}%
-                              </span>
+                            <div className="flex flex-col items-center gap-2 py-2">
+                              <ProbabilityRing probability={displayProb} size={140} strokeWidth={10} />
+                              <p className="text-xs text-muted-foreground text-center">
+                                Model: {displayProb.toFixed(1)}% {isOver ? "Over" : "Under"} implied
+                              </p>
                             </div>
                             <button
                               type="button"
@@ -2409,10 +2463,12 @@ export default function Dashboard() {
                             </button>
                             <button
                               type="button"
+                              data-testid={`button-load-play-${idx}`}
                               onClick={() => loadPlayInCalculator(play)}
-                              className="w-full text-[10px] text-muted-foreground hover:text-foreground transition-colors py-1"
+                              className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors"
                             >
-                              Full analysis in Props Calculator →
+                              <ArrowUpRight className="w-3.5 h-3.5" />
+                              Load into Calculator
                             </button>
                           </div>
                         )}
