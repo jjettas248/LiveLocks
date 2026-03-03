@@ -1668,7 +1668,7 @@ export default function Dashboard() {
                                         <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
                                           delta > 0 ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/10 text-red-400"
                                         }`}>
-                                          {delta > 0 ? "+" : ""}{fmt(delta)} pt
+                                          {delta > 0 ? "+" : ""}{fmt(delta)}
                                         </span>
                                       );
                                     })()}
@@ -1854,21 +1854,60 @@ export default function Dashboard() {
                     </div>
                     <div className="flex-shrink-0 z-10 flex flex-col items-center gap-2">
                       <ProbabilityRing probability={result.probability} />
-                      {selectedSportsbook && selectedSportsbook !== "manual" && oddsData && (() => {
-                        const mktOdds = (oddsData as Record<string, import("@shared/schema").OddsLine>)[selectedSportsbook];
-                        if (!mktOdds?.overOdds) return null;
-                        const ev = result.probability - americanToImplied(mktOdds.overOdds) * 100;
-                        return (
-                          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
-                            ev > 0 ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/15 text-red-400"
-                          }`}>
-                            {ev > 0 ? "+" : ""}{Math.round(ev)}% EV
-                          </span>
-                        );
-                      })()}
                     </div>
                   </div>
                 </div>
+
+                {/* EV% Box — shown directly below probability summary when a sportsbook is selected */}
+                {selectedSportsbook && selectedSportsbook !== "manual" && oddsData && result && (() => {
+                  const mktOdds = (oddsData as Record<string, import("@shared/schema").OddsLine>)[selectedSportsbook];
+                  if (!mktOdds?.overOdds) return null;
+                  const overImplied = americanToImplied(mktOdds.overOdds) * 100;
+                  const underImplied = americanToImplied(mktOdds.underOdds ?? -110) * 100;
+                  const overEV = result.probability - overImplied;
+                  const underEV = (100 - result.probability) - underImplied;
+                  const bestEV = overEV >= underEV ? { side: "Over", ev: overEV, implied: overImplied } : { side: "Under", ev: underEV, implied: underImplied };
+                  const isPositive = bestEV.ev > 0;
+                  const absEV = Math.abs(bestEV.ev);
+                  const edgeLabel = absEV >= 6 ? "Strong" : absEV >= 3 ? "Moderate" : "Slight";
+                  const sbName = SPORTSBOOK_LABELS[selectedSportsbook] ?? selectedSportsbook;
+                  const hasMovement = mktOdds.lineMovement !== undefined && mktOdds.lineMovement !== 0;
+                  const dropped = (mktOdds.lineMovement ?? 0) < 0;
+                  return (
+                    <div data-testid="ev-box" className={`rounded-xl border p-4 flex gap-3 items-start animate-fade-in-up ${
+                      isPositive ? "bg-emerald-500/10 border-emerald-500/30" : "bg-red-500/10 border-red-500/30"
+                    }`}>
+                      <div className={`mt-0.5 flex-shrink-0 font-bold text-lg ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
+                        {isPositive ? "▲" : "▼"}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <h4 className={`text-sm font-semibold ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
+                            {edgeLabel} {bestEV.side} EV
+                          </h4>
+                          <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                            isPositive ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"
+                          }`}>
+                            {isPositive ? "+" : ""}{Math.round(bestEV.ev)}% EV
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Model <strong className="text-foreground">{result.probability.toFixed(1)}%</strong>
+                          {" vs "}{sbName} implied <strong className="text-foreground">{bestEV.implied.toFixed(1)}%</strong>
+                        </p>
+                        <p className="text-[11px] text-muted-foreground/60 mt-0.5">
+                          {absEV >= 6 ? "High conviction edge vs market."
+                            : absEV >= 3 ? "Solid discrepancy — model sees value."
+                            : isPositive ? "Slight edge — use as tiebreaker."
+                            : "Model trails implied — line may be priced in."}
+                          {hasMovement && mktOdds.openLine !== undefined && (
+                            <span> Line {dropped ? "▼" : "▲"}{Math.abs(mktOdds.lineMovement!)} from open ({mktOdds.openLine}→{mktOdds.line}).</span>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Stats Grid */}
                 {(() => {
