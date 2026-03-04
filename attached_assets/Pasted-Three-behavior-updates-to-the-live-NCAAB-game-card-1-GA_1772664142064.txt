@@ -1,0 +1,207 @@
+Three behavior updates to the live NCAAB game card:
+
+---
+
+1. GAUGE ALWAYS SHOWS FULL GAME PROBABILITY
+
+The radial gauge is permanently locked to full game 
+engine probability regardless of which market tab 
+(Full Game / 1H) the user has selected.
+
+GAUGE BEHAVIOR:
+  - Gauge value source: always game.fullGame.engineProb
+  - Gauge label: always "ENGINE PROB" (never "H1 PROB")
+  - Gauge color: teal if Over dominant, red if Under dominant
+    based on full game engine only
+  - Gauge does NOT react to marketTab state changes
+  - Gauge DOES still react to selectedMarket 
+    (Over / Under / Spread button clicks) —
+    that controls which side's full game prob displays
+
+MARKET TAB TOGGLE (Full Game / 1H):
+  Controls ONLY:
+    - Stat grid values
+    - Market button lines and percentages
+    - Verdict row edge calculation
+    - Book pill lines shown
+  
+  Does NOT control:
+    - Gauge value or color
+    - Gauge label
+    - Gauge animation
+
+Add a subtle permanent label below the gauge:
+  "Full Game" text-xs zinc-500
+  Always visible, never changes
+  Communicates to user that gauge is always full game
+
+---
+
+2. AUTO-REFRESH COUNTDOWN ON HOVER ONLY
+
+The "Auto-refresh in X:XX" countdown is hidden by default.
+Only appears when user hovers over the live game card.
+
+IMPLEMENTATION:
+  const [isHovered, setIsHovered] = useState(false)
+
+  Card wrapper:
+    onMouseEnter={() => setIsHovered(true)}
+    onMouseLeave={() => setIsHovered(false)}
+
+  Countdown visibility:
+    {isHovered && (
+      <span className="refresh-countdown">
+        {countdownDisplay}
+      </span>
+    )}
+
+  Transition: opacity 0 → 1, 150ms ease on hover
+  Position: right of the live badge in card header
+  Do not use display:none — use opacity + 
+  pointer-events-none for smooth fade
+
+COUNTDOWN DISPLAY STATES (same as before):
+  > 60s remaining:
+    "Auto-refresh in [X]m [SS]s"
+    color: zinc-500 text-xs
+
+  < 60s remaining:
+    "Refreshing soon..."
+    color: amber #f59e0b text-xs
+
+  During fetch:
+    spinning Loader2 icon (lucide) + "Updating..."
+    color: teal #00d4aa text-xs
+
+  After fetch (2 second window):
+    "Updated ✓"
+    color: teal #00d4aa text-xs
+    fades out after 2s even if still hovering
+
+MOBILE BEHAVIOR:
+  On touch devices (no hover):
+    Countdown never shows via hover
+    Instead: tap the live badge in the header to 
+    toggle countdown visibility for 4 seconds then auto-hide
+    
+    const [showCountdownMobile, setShowCountdownMobile] = useState(false)
+    
+    liveBadge onClick (mobile only):
+      setShowCountdownMobile(true)
+      setTimeout(() => setShowCountdownMobile(false), 4000)
+
+---
+
+3. DRAMATIC FLASH ON SIGNIFICANT PROBABILITY SHIFT
+
+When engine probabilities update after a refresh, 
+apply a standard subtle flash for normal changes
+and a dramatic flash for significant shifts (>10pp).
+
+SHIFT DETECTION:
+  On each fetchGameData completion:
+    const prevProb = prevGameData.current?.engineProb
+    const newProb = updatedGame.engineProb
+    const shift = Math.abs(newProb - prevProb)
+    const directionChanged = 
+      (prevProb > 50) !== (newProb > 50) // side flipped
+    
+    if (directionChanged) {
+      triggerFlash("direction-change")
+    } else if (shift >= 10) {
+      triggerFlash("significant")
+    } else if (shift > 0) {
+      triggerFlash("normal")
+    }
+    
+    prevGameData.current = updatedGame
+
+FLASH TYPES:
+
+"normal" flash (< 10pp shift):
+  Verdict row border pulses once
+  200ms glow in current side color (teal or red)
+  box-shadow: 0 0 8px [color]/40
+  Single pulse, done
+
+"significant" flash (>= 10pp shift, same side):
+  Verdict rows pulse 3 times
+  box-shadow: 0 0 16px [color]/60 each pulse
+  Each pulse: 200ms on, 150ms off
+  Total animation: ~1050ms
+  Gauge arc animates smoothly to new value (500ms ease)
+  Edge badge number counts up/down to new value (600ms)
+  Score display briefly scales up (scale 1.08 → 1.0, 400ms)
+
+"direction-change" flash (side flipped, e.g. Over→Under):
+  This is the most significant event
+  
+  Full card border flash:
+    border color shifts from current side to new side
+    2px border, glows at 0 0 20px [newColor]/70
+    3 pulses, 300ms each
+  
+  Verdict rows:
+    Old row content fades out (200ms)
+    New row content fades in (200ms) with new side colors
+    edgeLabel recalculates and animates in
+  
+  Gauge:
+    Arc color transitions from old color to new color (600ms)
+    Value counts from old to new (600ms)
+    Label flashes once: "SHIFT DETECTED" for 1.5 seconds
+    then returns to "ENGINE PROB"
+  
+  Toast notification fires (even if card is expanded):
+    This is the ONE exception to the suppress-toast rule
+    because a direction change is critical information
+    
+    Toast content:
+      "⚠️ Edge Flipped — [AWAY] @ [HOME]"
+      Sub: "Engine shifted from [OLD SIDE] to [NEW SIDE]"
+      Color: amber border + amber text
+      Duration: 8 seconds (longer than standard toast)
+      Has "View Game" button same as tip-off toast
+
+KEYFRAME DEFINITIONS:
+  @keyframes normalFlash {
+    0%   { box-shadow: none }
+    50%  { box-shadow: 0 0 8px var(--flash-color)/40 }
+    100% { box-shadow: none }
+  }
+  
+  @keyframes significantFlash {
+    0%   { box-shadow: none }
+    20%  { box-shadow: 0 0 16px var(--flash-color)/60 }
+    40%  { box-shadow: none }
+    60%  { box-shadow: 0 0 16px var(--flash-color)/60 }
+    80%  { box-shadow: none }
+    100% { box-shadow: 0 0 16px var(--flash-color)/60 }
+  }
+  
+  @keyframes directionFlash {
+    0%   { border-color: var(--old-color); box-shadow: none }
+    25%  { border-color: var(--new-color); 
+           box-shadow: 0 0 20px var(--new-color)/70 }
+    50%  { border-color: var(--old-color); box-shadow: none }
+    75%  { border-color: var(--new-color); 
+           box-shadow: 0 0 20px var(--new-color)/70 }
+    100% { border-color: var(--new-color); box-shadow: none }
+  }
+
+STORING PREVIOUS DATA:
+  Use useRef to store previous engine probability 
+  without causing re-renders:
+  
+  const prevGameData = useRef(null)
+  
+  // Set on first load:
+  useEffect(() => {
+    prevGameData.current = game
+  }, [])
+  
+  // Compare on each refresh completion:
+  // after setGame(updatedGame):
+  // run shift detection
+  // then update prevGameData.current = updatedGame

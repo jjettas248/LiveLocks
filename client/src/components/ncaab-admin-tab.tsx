@@ -357,22 +357,102 @@ function RadialGauge({ value, color, label, isParlayed }: {
   );
 }
 
+// ── AnimatedNumber (item 3) ───────────────────────────────────────────────────
+// Counts up/down to new value with ease-out cubic. Handles mid-animation interrupts
+// by starting from current display value, not from original start (item 7).
+function AnimatedNumber({
+  value,
+  duration = 600,
+  decimals = 1,
+  suffix = "",
+  color,
+  colorTransition = false,
+}: {
+  value: number;
+  duration?: number;
+  decimals?: number;
+  suffix?: string;
+  color?: string;
+  colorTransition?: boolean;
+}) {
+  const [display, setDisplay] = useState(value);
+  const prevValueRef = useRef(value);
+  const displayRef   = useRef(value);
+  const frameRef     = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (prevValueRef.current === value) return;
+
+    // Item 7: start from current mid-animation display, not original prevValue
+    const startVal  = displayRef.current;
+    const endVal    = value;
+    const startTime = performance.now();
+
+    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+
+    const animate = (now: number) => {
+      const progress = Math.min((now - startTime) / duration, 1);
+      const eased    = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+      const cur      = parseFloat((startVal + (endVal - startVal) * eased).toFixed(decimals));
+      displayRef.current = cur;
+      setDisplay(cur);
+      if (progress < 1) {
+        frameRef.current = requestAnimationFrame(animate);
+      } else {
+        frameRef.current = null;
+        prevValueRef.current = value;
+      }
+    };
+
+    frameRef.current = requestAnimationFrame(animate);
+    return () => { if (frameRef.current !== null) cancelAnimationFrame(frameRef.current); };
+  }, [value, duration, decimals]);
+
+  return (
+    <span style={{
+      color,
+      transition: colorTransition ? "color 600ms ease" : undefined,
+    }}>
+      {display}{suffix}
+    </span>
+  );
+}
+
+// ── ShiftBadge (item 2) ───────────────────────────────────────────────────────
+function ShiftBadge() {
+  return (
+    <div className="flex items-center gap-1.5 animate-pulse px-2 py-0.5 rounded-full"
+      style={{
+        background: "rgba(245,158,11,0.10)",
+        border:     "1px solid rgba(245,158,11,0.30)",
+      }}>
+      <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
+        <span className="absolute inline-flex h-full w-full rounded-full animate-ping" style={{ background: "#f59e0b", opacity: 0.6 }} />
+        <span className="relative inline-flex rounded-full h-1.5 w-1.5" style={{ background: "#f59e0b" }} />
+      </span>
+      <span className="text-xs font-semibold" style={{ color: "#f59e0b" }}>Edge Flipped</span>
+    </div>
+  );
+}
+
 // ── NCAABGameCard ─────────────────────────────────────────────────────────────
 function NCAABGameCard({
   play,
   onAddToParlay,
   h2hDataFromCache,
   isNewlyLive,
+  onShiftDetected,
 }: {
   play: NCAABPlay;
   onAddToParlay?: (pick: ParlayPickInput) => void;
   h2hDataFromCache?: H2HGame[] | null;
   isNewlyLive?: boolean;
+  onShiftDetected?: (gameId: string) => void;
 }) {
   const isH1 = play.half === 1 && !play.bettingWindow.includes("HALFTIME");
 
   const overProb   = isH1 ? (play.over1HProb ?? play.overProb ?? 50) : (play.overProb ?? 50);
-  const underProb  = 100 - overProb;
+  const underProb  = parseFloat((100 - overProb).toFixed(4));
   const spreadProb = play.spreadProb ?? 50;
 
   const dominantMarket = ((): "over" | "under" | "spread" => {
@@ -395,6 +475,9 @@ function NCAABGameCard({
   const [h2hData, setH2hData] = useState<H2HGame[] | null>(h2hDataFromCache ?? null);
   const [h2hOpen, setH2hOpen] = useState(false);
 
+  // Direction-flip state (item 5): triggers color transition on Engine Over/Under%
+  const [isDirectionFlip, setIsDirectionFlip] = useState(false);
+
   // Newly-live flash on mount (item 6): inline teal glow instead of toast
   useEffect(() => {
     if (!isNewlyLive) return;
@@ -415,15 +498,32 @@ function NCAABGameCard({
     return () => { cancelled = true; };
   }, [play.gameId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Synchronous trigger of all animations (item 6): one event, no setTimeout chains
   useEffect(() => {
-    if (Math.abs(prevOverProb.current - overProb) > 0.5) {
-      setFlashColor(overProb > prevOverProb.current ? "#00d4aa" : "#ef4444");
-      setFlashActive(true);
-      const t = setTimeout(() => setFlashActive(false), 300);
-      prevOverProb.current = overProb;
-      return () => clearTimeout(t);
+    const prev  = prevOverProb.current;
+    const delta = Math.abs(prev - overProb);
+    if (delta > 0.5) {
+      const directionChanged = (prev > 50) !== (overProb > 50); // crossing the 50-mark
+      if (directionChanged) {
+        // Direction-change flash: amber border + shift badge (items 5 + 6)
+        setFlashColor("#f59e0b");
+        setIsDirectionFlip(true);
+        onShiftDetected?.(play.gameId);
+        const clear = setTimeout(() => { setIsDirectionFlip(false); }, 700);
+        setFlashActive(true);
+        const clearFlash = setTimeout(() => setFlashActive(false), 300);
+        prevOverProb.current = overProb;
+        return () => { clearTimeout(clear); clearTimeout(clearFlash); };
+      } else {
+        // Significant / normal flash
+        setFlashColor(overProb > prev ? "#00d4aa" : "#ef4444");
+        setFlashActive(true);
+        const t = setTimeout(() => setFlashActive(false), 300);
+        prevOverProb.current = overProb;
+        return () => clearTimeout(t);
+      }
     }
-  }, [overProb]);
+  }, [overProb]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const effectiveFGLine  = play.total ?? (play.projectedTotal !== null ? Math.round(play.projectedTotal * 2) / 2 : null);
   const effective1HLine  = play.h1TotalLine ?? (play.proj1HTotal !== null ? Math.round(play.proj1HTotal * 2) / 2 : null);
@@ -492,14 +592,9 @@ function NCAABGameCard({
     });
   }
 
-  const statRows = [
-    { label: "Full Game Total",    value: effectiveFGLine != null ? String(effectiveFGLine) : "—", sub: "Current line",         vc: "#d4d4d8" },
-    { label: "Engine Over%",       value: `${overProb.toFixed(1)}%`,                               sub: "Model probability",    vc: overProb > 50 ? "#00d4aa" : "#71717a" },
-    { label: "Engine Under%",      value: `${underProb.toFixed(1)}%`,                              sub: "Model probability",    vc: underProb > 50 ? "#ef4444" : "#71717a" },
-    { label: "Spread",             value: play.spread != null ? `-${play.spread}` : "—",           sub: play.spread != null && play.spreadProb != null ? `${play.favorite} cover: ${play.spreadProb.toFixed(0)}%` : "No line", vc: "#d4d4d8" },
-    { label: `${play.awayTeamAbbr} Proj`, value: play.awayProjected != null ? String(play.awayProjected) : "—", sub: "Projected final", vc: "#d4d4d8" },
-    { label: `${play.homeTeamAbbr} Proj`, value: play.homeProjected != null ? String(play.homeProjected) : "—", sub: "Projected final", vc: "#d4d4d8" },
-  ];
+  // Animated stat grid colors (item 5): color transitions for Engine Over/Under% on direction flip
+  const overColor  = overProb  > 50 ? "#00d4aa" : "#71717a";
+  const underColor = underProb > 50 ? "#ef4444" : "#71717a";
 
   return (
     <>
@@ -591,16 +686,78 @@ function NCAABGameCard({
           </div>
         </div>
 
-        {/* ── STAT GRID ──────────────────────────────────────────────── */}
+        {/* ── STAT GRID (items 4 + 5) ────────────────────────────────── */}
         <div className="rounded-lg overflow-hidden" style={{ border: "1px solid #27272a" }}>
-          {statRows.map((row, i) => (
-            <div key={i} className="grid grid-cols-3 items-center px-3 py-2 gap-2"
-              style={{ borderBottom: i < 5 ? "1px solid #1a1a1a" : undefined, background: i % 2 === 0 ? "#0f0f0f" : "#0a0a0a" }}>
-              <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: "#71717a" }}>{row.label}</span>
-              <span className="text-sm font-black tabular-nums text-center" style={{ color: row.vc }}>{row.value}</span>
-              <span className="text-[10px] text-right truncate" style={{ color: "#52525b" }}>{row.sub}</span>
-            </div>
-          ))}
+          {/* Row 0: Full Game Total — static */}
+          {[0,1,2,3,4,5].map(i => {
+            const bg = i % 2 === 0 ? "#0f0f0f" : "#0a0a0a";
+            const borderB = i < 5 ? "1px solid #1a1a1a" : undefined;
+            if (i === 0) return (
+              <div key={0} className="grid grid-cols-3 items-center px-3 py-2 gap-2" style={{ borderBottom: borderB, background: bg }}>
+                <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: "#71717a" }}>Full Game Total</span>
+                <span className="text-sm font-black tabular-nums text-center" style={{ color: "#d4d4d8" }}>
+                  {effectiveFGLine != null ? String(effectiveFGLine) : "—"}
+                </span>
+                <span className="text-[10px] text-right truncate" style={{ color: "#52525b" }}>Current line</span>
+              </div>
+            );
+            if (i === 1) return (
+              <div key={1} className="grid grid-cols-3 items-center px-3 py-2 gap-2" style={{ borderBottom: borderB, background: bg }}>
+                <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: "#71717a" }}>Engine Over%</span>
+                <span className="text-sm font-black tabular-nums text-center">
+                  {/* item 4: AnimatedNumber, item 5: colorTransition on direction flip */}
+                  <AnimatedNumber value={overProb} decimals={1} suffix="%" color={overColor} colorTransition={isDirectionFlip} />
+                </span>
+                <span className="text-[10px] text-right truncate" style={{ color: "#52525b" }}>Model probability</span>
+              </div>
+            );
+            if (i === 2) return (
+              <div key={2} className="grid grid-cols-3 items-center px-3 py-2 gap-2" style={{ borderBottom: borderB, background: bg }}>
+                <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: "#71717a" }}>Engine Under%</span>
+                <span className="text-sm font-black tabular-nums text-center">
+                  {/* item 4: AnimatedNumber, item 5: colorTransition on direction flip */}
+                  <AnimatedNumber value={underProb} decimals={1} suffix="%" color={underColor} colorTransition={isDirectionFlip} />
+                </span>
+                <span className="text-[10px] text-right truncate" style={{ color: "#52525b" }}>Model probability</span>
+              </div>
+            );
+            if (i === 3) return (
+              <div key={3} className="grid grid-cols-3 items-center px-3 py-2 gap-2" style={{ borderBottom: borderB, background: bg }}>
+                <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: "#71717a" }}>Spread</span>
+                <span className="text-sm font-black tabular-nums text-center" style={{ color: "#d4d4d8" }}>
+                  {play.spread != null ? `-${play.spread}` : "—"}
+                </span>
+                <span className="text-[10px] text-right truncate" style={{ color: "#52525b" }}>
+                  {play.spread != null && play.spreadProb != null ? (
+                    <>{play.favorite} cover:&nbsp;<AnimatedNumber value={play.spreadProb} decimals={1} suffix="%" color="#52525b" /></>
+                  ) : "No line"}
+                </span>
+              </div>
+            );
+            if (i === 4) return (
+              <div key={4} className="grid grid-cols-3 items-center px-3 py-2 gap-2" style={{ borderBottom: borderB, background: bg }}>
+                <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: "#71717a" }}>{play.awayTeamAbbr} Proj</span>
+                <span className="text-sm font-black tabular-nums text-center">
+                  {play.awayProjected != null
+                    ? <AnimatedNumber value={play.awayProjected} decimals={1} suffix="" color="#ffffff" />
+                    : <span style={{ color: "#d4d4d8" }}>—</span>}
+                </span>
+                <span className="text-[10px] text-right truncate" style={{ color: "#52525b" }}>Projected final</span>
+              </div>
+            );
+            // i === 5
+            return (
+              <div key={5} className="grid grid-cols-3 items-center px-3 py-2 gap-2" style={{ borderBottom: borderB, background: bg }}>
+                <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: "#71717a" }}>{play.homeTeamAbbr} Proj</span>
+                <span className="text-sm font-black tabular-nums text-center">
+                  {play.homeProjected != null
+                    ? <AnimatedNumber value={play.homeProjected} decimals={1} suffix="" color="#ffffff" />
+                    : <span style={{ color: "#d4d4d8" }}>—</span>}
+                </span>
+                <span className="text-[10px] text-right truncate" style={{ color: "#52525b" }}>Projected final</span>
+              </div>
+            );
+          })}
         </div>
 
         {/* ── H2H SECTION (item 1+4, collapsed by default in live card) ─ */}
@@ -750,12 +907,14 @@ function GroupedGamesList({
   expandedGameId,
   onExpandGame,
   onH2hReady,
+  shiftedGames,
 }: {
   games: NCAABGame[];
   rowRefs: React.MutableRefObject<Record<string, HTMLDivElement | null>>;
   expandedGameId: string | null;
   onExpandGame: (id: string | null) => void;
   onH2hReady: (gameId: string, data: H2HGame[]) => void;
+  shiftedGames: Record<string, boolean>;
 }) {
   if (games.length === 0) {
     return <p className="text-xs" style={{ color: "#71717a" }}>No games found in today's slate.</p>;
@@ -817,8 +976,11 @@ function GroupedGamesList({
                         </p>
                       )}
                     </div>
+                    {/* Status — conditionally swap (item 2): ShiftBadge for 6s on direction change */}
                     <div className="shrink-0 ml-3">
-                      {g.isLive ? (
+                      {shiftedGames[g.id] ? (
+                        <ShiftBadge />
+                      ) : g.isLive ? (
                         <div className="flex items-center gap-1.5">
                           <span className="relative flex h-2 w-2 flex-shrink-0">
                             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
@@ -976,10 +1138,20 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
   // Row refs for "View Game" scroll (build step 2) ──────────────────────────────
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  // H2H expansion + cache (build 6 items: expandedGameId, h2hCache, newlyLiveIds)
+  // H2H expansion + cache
   const [expandedGameId, setExpandedGameId] = useState<string | null>(null);
   const h2hCache = useRef<Record<string, H2HGame[]>>({});
   const [newlyLiveIds, setNewlyLiveIds]     = useState<Set<string>>(new Set());
+
+  // shiftedGames (item 1): { [gameId]: boolean } — 6s auto-clear
+  const [shiftedGames, setShiftedGames] = useState<Record<string, boolean>>({});
+
+  const handleShiftDetected = useCallback((gameId: string) => {
+    setShiftedGames(prev => ({ ...prev, [gameId]: true }));
+    setTimeout(() => {
+      setShiftedGames(prev => ({ ...prev, [gameId]: false }));
+    }, 6000);
+  }, []);
 
   const handleExpandGame = useCallback((id: string | null) => {
     setExpandedGameId(id);
@@ -1196,6 +1368,7 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
                   onAddToParlay={onAddToParlay}
                   h2hDataFromCache={h2hCache.current[p.gameId] ?? null}
                   isNewlyLive={newlyLiveIds.has(p.gameId)}
+                  onShiftDetected={handleShiftDetected}
                 />
               ))}
             </div>
@@ -1306,6 +1479,7 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
                 expandedGameId={expandedGameId}
                 onExpandGame={handleExpandGame}
                 onH2hReady={handleH2hReady}
+                shiftedGames={shiftedGames}
               />
             </div>
           )}
