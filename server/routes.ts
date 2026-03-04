@@ -246,11 +246,28 @@ export async function registerRoutes(
     }
   });
 
+  // Returns today's date in EST as YYYYMMDD, rolling over at 6am EST
+  // (games that finish after midnight still belong to the previous slate until 6am)
+  function getESTSlateDate(): string {
+    const now = new Date();
+    const estOffset = -5 * 60; // EST = UTC-5 (standard); close enough for 6am cutoff
+    const estMs = now.getTime() + (now.getTimezoneOffset() + estOffset) * 60 * 1000;
+    const est = new Date(estMs);
+    if (est.getHours() < 6) {
+      est.setDate(est.getDate() - 1);
+    }
+    const y = est.getFullYear();
+    const m = String(est.getMonth() + 1).padStart(2, "0");
+    const d = String(est.getDate()).padStart(2, "0");
+    return `${y}${m}${d}`;
+  }
+
   // Proxy ESPN live NBA scoreboard to avoid CORS
   app.get("/api/live-games", async (req, res) => {
     try {
+      const slateDate = getESTSlateDate();
       const response = await fetch(
-        "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+        `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${slateDate}`,
         { headers: { "User-Agent": "Mozilla/5.0" } }
       );
       if (!response.ok) throw new Error("ESPN API unavailable");
@@ -423,8 +440,9 @@ export async function registerRoutes(
   // All authenticated users can fetch — free users pay 1 play per game unlock via /api/2h-game-view.
   app.get("/api/halftime-plays", requireAuth, async (req, res) => {
     try {
+      const slateDate = getESTSlateDate();
       const gamesRes = await fetch(
-        "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+        `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${slateDate}`,
         { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
       );
       if (!gamesRes.ok) throw new Error("ESPN API unavailable");
