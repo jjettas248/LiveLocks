@@ -109,7 +109,7 @@ export async function registerRoutes(
 
   app.get("/api/ncaab/game-preview/:gameId", requireAuth, async (req, res) => {
     try {
-      const preview = await getNCAABGamePreview(req.params.gameId);
+      const preview = await getNCAABGamePreview(String(req.params.gameId));
       if (!preview) return res.status(404).json({ error: "Game not found" });
       return res.json(preview);
     } catch (err: any) {

@@ -963,7 +963,7 @@ export function NCAABAdminTab({ onAddToParlay, isAdmin, isFreeUser, onGameView }
     // Auto-expand the time group containing this game
     const group = timeGroups.find(g => g.games.some(game => game.id === gameId));
     if (group) {
-      setExpandedTimeGroups(prev => new Set([...prev, group.key]));
+      setExpandedTimeGroups(prev => { const n = new Set(prev); n.add(group.key); return n; });
     }
     if (!isFreeUser || unlockedGameIds.has(gameId)) return;
   }
@@ -986,7 +986,7 @@ export function NCAABAdminTab({ onAddToParlay, isAdmin, isFreeUser, onGameView }
     const ok = await onGameView(selectedGameId);
     setUnlocking(false);
     if (ok) {
-      setUnlockedGameIds(prev => new Set([...prev, selectedGameId]));
+      setUnlockedGameIds(prev => { const n = new Set(prev); n.add(selectedGameId); return n; });
     }
   }
 
