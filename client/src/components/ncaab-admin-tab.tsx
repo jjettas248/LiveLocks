@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { RefreshCw, AlertCircle, Clock, TrendingUp, ChevronDown, ChevronUp, Plus } from "lucide-react";
+import { RefreshCw, AlertCircle, Clock, TrendingUp } from "lucide-react";
 import type { ParlayPickInput } from "@shared/schema";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
 interface BookLine {
   book: string;
@@ -100,451 +101,397 @@ const WINDOW_COLORS: Record<string, string> = {
   "NONE":        "text-muted-foreground bg-secondary border-border",
 };
 
-function edgeColor(edge: number | null): string {
-  if (edge === null) return "text-muted-foreground";
-  const abs = Math.abs(edge);
-  if (abs >= 15) return edge > 0 ? "text-green-400" : "text-red-400";
-  if (abs >= 8)  return edge > 0 ? "text-yellow-400" : "text-orange-400";
-  return "text-muted-foreground";
-}
-
-function CircleProb({ prob, size = 60 }: { prob: number; size?: number }) {
-  const pct = Math.round(Math.min(100, Math.max(0, prob)));
-  const r = 22;
-  const circ = 2 * Math.PI * r;
-  const filled = (pct / 100) * circ;
-  const color = pct >= 62 ? "#22c55e" : pct <= 38 ? "#ef4444" : pct >= 55 ? "#a3e635" : "#94a3b8";
-  return (
-    <div className="relative flex-shrink-0" style={{ width: size, height: size }}>
-      <svg viewBox="0 0 56 56" style={{ width: size, height: size, transform: "rotate(-90deg)" }}>
-        <circle cx="28" cy="28" r={r} fill="none" stroke="hsl(var(--secondary))" strokeWidth="7" />
-        <circle cx="28" cy="28" r={r} fill="none" stroke={color} strokeWidth="7"
-          strokeDasharray={`${filled} ${circ}`} strokeLinecap="round" />
-      </svg>
-      <div className="absolute inset-0 flex items-center justify-center">
-        <span className="text-[11px] font-black" style={{ color }}>{pct}%</span>
-      </div>
-    </div>
-  );
-}
-
-function MarketSection({
-  title, line, lineIsProj, proj, edge, prob, gameId, testPrefix,
-  onOver, onUnder, overLabel, underLabel,
-}: {
-  title: string; line: number | null; lineIsProj?: boolean;
-  proj?: number | null; edge?: number | null; prob: number | null;
-  gameId: string; testPrefix: string;
-  onOver?: () => void; onUnder?: () => void;
-  overLabel?: string; underLabel?: string;
+// ── RadialGauge ───────────────────────────────────────────────────────────────
+function RadialGauge({ value, color, label, isParlayed }: {
+  value: number; color: string; label: string; isParlayed: boolean;
 }) {
-  if (line === null && prob === null) return null;
-  const overPct  = prob ?? 50;
-  const underPct = 100 - overPct;
+  const cx = 80; const cy = 80;
+  const rInner = 60; const rParlay = 70;
+  const circInner = 2 * Math.PI * rInner;
+  const pct = Math.max(0, Math.min(100, value));
+  const dashOffset = circInner - (pct / 100) * circInner;
   return (
-    <div className="p-4 space-y-3 border-b border-border/40">
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider pt-0.5">{title}</p>
-        <div className="text-right">
-          {line !== null && (
-            <span className="text-3xl font-black tabular-nums text-foreground leading-none">
-              {line}{lineIsProj && <span className="text-base text-muted-foreground/60 ml-0.5">*</span>}
-            </span>
+    <div className="flex flex-col items-center flex-shrink-0 gap-0.5">
+      <div className="relative" style={{ width: 110, height: 110 }}>
+        <svg viewBox="0 0 160 160" style={{ width: 110, height: 110, transform: "rotate(-90deg)" }}>
+          <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#27272a" strokeWidth={8} />
+          <circle
+            cx={cx} cy={cy} r={rInner} fill="none"
+            stroke={color} strokeWidth={8}
+            strokeDasharray={`${circInner}`}
+            strokeDashoffset={dashOffset}
+            strokeLinecap="round"
+            style={{ transition: "stroke-dashoffset 300ms ease, stroke 300ms ease" }}
+          />
+          {isParlayed && (
+            <circle
+              cx={cx} cy={cy} r={rParlay} fill="none"
+              stroke="#f59e0b" strokeWidth={3}
+              strokeDasharray="4 3"
+              style={{ animation: "parlay-pulse 2s ease-in-out infinite" }}
+            />
           )}
-          {proj !== null && proj !== undefined && (
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Proj <span className="text-foreground font-semibold">{typeof proj === "number" ? proj.toFixed(1) : proj}</span>
-              {edge !== null && edge !== undefined && (
-                <span className={`ml-2 font-semibold ${edgeColor(edge)}`}>
-                  {edge > 0 ? "↑" : "↓"}{Math.abs(edge).toFixed(1)}pp
-                </span>
-              )}
-            </p>
-          )}
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <span className="text-2xl font-black tabular-nums leading-none" style={{ color }}>
+            {Math.round(pct)}%
+          </span>
+          <span className="text-[9px] uppercase tracking-widest mt-0.5" style={{ color: "#71717a" }}>{label}</span>
         </div>
       </div>
-      <div className="flex items-center gap-3">
-        {prob !== null && <CircleProb prob={overPct} size={60} />}
-        <div className="flex-1 grid grid-cols-2 gap-2">
-          {onOver && line !== null && (
-            <button
-              data-testid={`ncaab-parlay-${testPrefix}-over-${gameId}`}
-              onClick={(e) => { e.stopPropagation(); onOver(); }}
-              className="flex flex-col items-center py-2.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 transition-colors"
-            >
-              <span className="text-[9px] font-bold uppercase tracking-wide opacity-70">Over</span>
-              <span className="text-lg font-black tabular-nums leading-tight">{overLabel ?? line}</span>
-              {prob !== null && <span className="text-[10px] font-semibold text-emerald-400">{overPct.toFixed(1)}%</span>}
-            </button>
-          )}
-          {onUnder && line !== null && (
-            <button
-              data-testid={`ncaab-parlay-${testPrefix}-under-${gameId}`}
-              onClick={(e) => { e.stopPropagation(); onUnder(); }}
-              className="flex flex-col items-center py-2.5 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 transition-colors"
-            >
-              <span className="text-[9px] font-bold uppercase tracking-wide opacity-70">Under</span>
-              <span className="text-lg font-black tabular-nums leading-tight">{underLabel ?? line}</span>
-              {prob !== null && <span className="text-[10px] font-semibold text-rose-400">{underPct.toFixed(1)}%</span>}
-            </button>
-          )}
-        </div>
-      </div>
-      {lineIsProj && (
-        <p className="text-[10px] text-muted-foreground/50 italic">* No live line — projection used as reference</p>
+      {isParlayed && (
+        <span className="text-[9px] font-black tracking-widest" style={{ color: "#f59e0b" }}>+ PARLAY</span>
       )}
     </div>
   );
 }
 
-function SpreadSection({
-  title, spread, favName, prob, edge, gameId, testPrefix, onCover,
-}: {
-  title: string; spread: number | null; favName: string;
-  prob: number | null; edge?: number | null;
-  gameId: string; testPrefix: string; onCover?: () => void;
-}) {
-  if (spread === null && favName === "") return null;
-  const coverPct = prob ?? 50;
-  return (
-    <div className="p-4 space-y-3 border-b border-border/40">
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider pt-0.5">{title}</p>
-        <div className="text-right">
-          {spread !== null && (
-            <span className="text-3xl font-black tabular-nums text-foreground leading-none">-{spread}</span>
-          )}
-          {favName && (
-            <p className="text-xs text-muted-foreground mt-0.5 truncate max-w-[160px]">{favName}</p>
-          )}
-        </div>
-      </div>
-      <div className="flex items-center gap-3">
-        {prob !== null && <CircleProb prob={coverPct} size={60} />}
-        <div className="flex-1">
-          {onCover && spread !== null && (
-            <button
-              data-testid={`ncaab-parlay-${testPrefix}-cover-${gameId}`}
-              onClick={(e) => { e.stopPropagation(); onCover(); }}
-              className="w-full flex flex-col items-center py-2.5 rounded-lg bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20 transition-colors"
-            >
-              <span className="text-[9px] font-bold uppercase tracking-wide opacity-70">Cover</span>
-              <span className="text-base font-black leading-tight">{favName} -{spread}</span>
-              {prob !== null && <span className="text-[10px] font-semibold">{coverPct.toFixed(1)}%</span>}
-            </button>
-          )}
-          {!onCover && spread !== null && (
-            <div className="bg-secondary/40 rounded-lg px-3 py-2 text-sm font-semibold text-foreground">
-              {favName} <span className="text-primary">-{spread}</span>
-            </div>
-          )}
-          {edge !== null && edge !== undefined && (
-            <p className={`text-[10px] font-semibold mt-1.5 ${edgeColor(edge)}`}>
-              Edge: {edge > 0 ? "+" : ""}{edge}pp
-            </p>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
+// ── NCAABGameCard ─────────────────────────────────────────────────────────────
 function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay?: (pick: ParlayPickInput) => void }) {
-  const [expanded, setExpanded] = useState(false);
-
-  const windowClass = WINDOW_COLORS[play.bettingWindow] ?? WINDOW_COLORS["NONE"];
-  const hasWindow = play.bettingWindow !== "NONE";
-  const spreadEdgeAbs = Math.abs(play.spreadEdge ?? 0);
-  const totalEdgeAbs  = Math.abs(play.totalEdge ?? 0);
-  const bestEdge      = Math.max(spreadEdgeAbs, totalEdgeAbs);
-  const halfLabel = play.half === 1 ? "H1" : play.half === 2 ? "H2" : "OT";
-
   const isH1 = play.half === 1 && !play.bettingWindow.includes("HALFTIME");
 
-  const effectiveFGLine = play.total ?? (play.projectedTotal !== null ? Math.round(play.projectedTotal * 2) / 2 : null);
-  const effectiveFGProb = play.overProb ?? 50;
-  const fgLineIsProj = play.total === null && effectiveFGLine !== null;
+  const overProb   = isH1 ? (play.over1HProb ?? play.overProb ?? 50) : (play.overProb ?? 50);
+  const underProb  = 100 - overProb;
+  const spreadProb = play.spreadProb ?? 50;
 
-  const effective1HLine = play.h1TotalLine ?? (play.proj1HTotal !== null ? Math.round(play.proj1HTotal * 2) / 2 : null);
-  const effective1HProb = play.over1HProb ?? 50;
-  const h1LineIsProj = play.h1TotalLine === null && effective1HLine !== null;
+  const dominantMarket = ((): "over" | "under" | "spread" => {
+    const oe = Math.abs(overProb - 50);
+    const ue = Math.abs(underProb - 50);
+    const se = Math.abs(spreadProb - 50);
+    if (se > oe && se > ue && play.spread !== null) return "spread";
+    if (ue > oe) return "under";
+    return "over";
+  })();
 
-  function addPick(direction: "over" | "under", line: number, prob: number, statType: string, label: string) {
+  const [selectedMarket, setSelectedMarket] = useState<"over" | "under" | "spread">(dominantMarket);
+  const [parlayLegs, setParlayLegs]         = useState<string[]>([]);
+  const [showParlayDrawer, setShowParlayDrawer] = useState(false);
+  const [flashActive, setFlashActive]       = useState(false);
+  const [flashColor, setFlashColor]         = useState("#00d4aa");
+  const prevOverProb = useRef(overProb);
+
+  useEffect(() => {
+    if (Math.abs(prevOverProb.current - overProb) > 0.5) {
+      setFlashColor(overProb > prevOverProb.current ? "#00d4aa" : "#ef4444");
+      setFlashActive(true);
+      const t = setTimeout(() => setFlashActive(false), 300);
+      prevOverProb.current = overProb;
+      return () => clearTimeout(t);
+    }
+  }, [overProb]);
+
+  const effectiveFGLine  = play.total ?? (play.projectedTotal !== null ? Math.round(play.projectedTotal * 2) / 2 : null);
+  const effective1HLine  = play.h1TotalLine ?? (play.proj1HTotal !== null ? Math.round(play.proj1HTotal * 2) / 2 : null);
+  const effectiveLine    = isH1 ? effective1HLine : effectiveFGLine;
+
+  const gaugeForMarket = (m: "over" | "under" | "spread") =>
+    m === "over" ? overProb : m === "under" ? underProb : spreadProb;
+  const gaugeValue  = gaugeForMarket(selectedMarket);
+  const gaugeColor  = selectedMarket === "over" ? "#00d4aa" : selectedMarket === "under" ? "#ef4444" : "#94a3b8";
+  const gaugeLabel  = selectedMarket === "over" ? "OVER" : selectedMarket === "under" ? "UNDER" : "COVER";
+
+  const engineProb  = gaugeValue;
+  const bookImplied = 50;
+  const edgeGap     = Math.abs(engineProb - bookImplied);
+  const edgeSide    = engineProb > bookImplied ? "Under" : "Over";
+  const edgeLabel   = edgeGap >= 20 ? `Strong ${edgeSide} EV` : edgeGap >= 10 ? `Lean ${edgeSide} EV` : "Neutral — No Edge";
+  const edgeBelow   = edgeGap < 5;
+  const evColor     = edgeSide === "Under" ? "#ef4444" : "#00d4aa";
+
+  const getLegId      = (m: string) => `${play.gameId}:${m}`;
+  const isLegParlayed = (m: string) => parlayLegs.includes(getLegId(m));
+  const toggleLeg     = (m: string) => {
+    const id = getLegId(m);
+    setParlayLegs(prev => prev.includes(id) ? prev.filter(l => l !== id) : [...prev, id]);
+  };
+
+  const marketLabel = (m: "over" | "under" | "spread"): string => {
+    if (m === "over")  return effectiveLine !== null ? `Over ${effectiveLine}` : "Over";
+    if (m === "under") return effectiveLine !== null ? `Under ${effectiveLine}` : "Under";
+    return play.spread !== null ? `${play.favorite} -${play.spread}` : "Spread";
+  };
+
+  const mgmBook = play.bookLines.find(b => b.book === "betmgm");
+  const altBook = play.bookLines.find(b => b.book === "betrivers") ??
+                  play.bookLines.find(b => b.book === "fanduel") ??
+                  play.bookLines[1];
+  const altLabel = altBook ? (BOOK_LABELS[altBook.book] ?? altBook.book) : "—";
+
+  const getBookLine = (bl: BookLine | undefined): string => {
+    if (!bl) return "—";
+    if (selectedMarket !== "spread") return bl.total != null ? `O/U ${bl.total}` : "—";
+    return bl.spread != null ? `${bl.favorite} -${bl.spread}` : "—";
+  };
+
+  const halfLabel = play.half === 1 ? "H1" : play.half === 2 ? "H2" : "OT";
+  const bestEdge  = Math.max(Math.abs(play.spreadEdge ?? 0), Math.abs(play.totalEdge ?? 0));
+
+  function addParlayPick(m: "over" | "under" | "spread") {
     if (!onAddToParlay) return;
-    const bestBook = play.bookLines[0]?.book ?? "fanduel";
-    const rawOdds = direction === "over"
-      ? (prob >= 50 ? -Math.round((prob / (100 - prob)) * 100) : Math.round(((100 - prob) / prob) * 100))
-      : (prob < 50 ? Math.round((prob / (100 - prob)) * 100) : -Math.round(((100 - prob) / prob) * 100));
+    const line    = m === "spread" ? (play.spread ?? 0) : (effectiveLine ?? 0);
+    const prob    = gaugeForMarket(m);
+    const rawOdds = prob >= 50
+      ? -Math.round((prob / (100 - prob)) * 100)
+      :  Math.round(((100 - prob) / prob) * 100);
     onAddToParlay({
       playerId: 0,
-      playerName: label,
+      playerName: marketLabel(m),
       playerTeam: "NCAAB",
-      statType,
+      statType: m === "spread" ? "ncaab_spread" : isH1 ? "ncaab_1h_total" : "ncaab_total",
       line,
       probability: prob,
-      betDirection: direction,
-      sportsbook: bestBook,
+      betDirection: m === "under" ? "under" : "over",
+      sportsbook: play.bookLines[0]?.book ?? "fanduel",
       gameId: play.gameId,
       oddsAmerican: rawOdds,
     });
   }
 
+  const statRows = [
+    { label: "Full Game Total",    value: effectiveFGLine != null ? String(effectiveFGLine) : "—", sub: "Current line",         vc: "#d4d4d8" },
+    { label: "Engine Over%",       value: `${overProb.toFixed(1)}%`,                               sub: "Model probability",    vc: overProb > 50 ? "#00d4aa" : "#71717a" },
+    { label: "Engine Under%",      value: `${underProb.toFixed(1)}%`,                              sub: "Model probability",    vc: underProb > 50 ? "#ef4444" : "#71717a" },
+    { label: "Spread",             value: play.spread != null ? `-${play.spread}` : "—",           sub: play.spread != null && play.spreadProb != null ? `${play.favorite} cover: ${play.spreadProb.toFixed(0)}%` : "No line", vc: "#d4d4d8" },
+    { label: `${play.awayTeamAbbr} Proj`, value: play.awayProjected != null ? String(play.awayProjected) : "—", sub: "Projected final", vc: "#d4d4d8" },
+    { label: `${play.homeTeamAbbr} Proj`, value: play.homeProjected != null ? String(play.homeProjected) : "—", sub: "Projected final", vc: "#d4d4d8" },
+  ];
+
   return (
-    <div
-      data-testid={`ncaab-card-${play.gameId}`}
-      className="bg-card border border-border rounded-xl overflow-hidden"
-      style={bestEdge >= 15 ? { boxShadow: "0 0 12px -2px hsl(var(--primary) / 0.3)" } : undefined}
-    >
-      {/* Header — clickable to expand */}
-      <button
-        className="w-full text-left px-4 pt-4 pb-3 border-b border-border/50 hover:bg-secondary/20 transition-colors"
-        onClick={() => setExpanded(!expanded)}
-        data-testid={`ncaab-card-toggle-${play.gameId}`}
+    <>
+      <style>{`@keyframes parlay-pulse{0%,100%{opacity:1}50%{opacity:0.5}}`}</style>
+      <div
+        data-testid={`ncaab-card-${play.gameId}`}
+        className="rounded-xl p-5 space-y-4 relative transition-[box-shadow] duration-300"
+        style={{
+          background: "#0a0a0a",
+          border: "1px solid #27272a",
+          boxShadow: flashActive
+            ? `0 0 0 2px ${flashColor}66`
+            : bestEdge >= 15 ? "0 0 14px -3px rgba(0,212,170,0.25)" : undefined,
+        }}
       >
-        <div className="flex items-start justify-between gap-2">
+        {/* Parlay counter badge */}
+        {parlayLegs.length > 0 && (
+          <button
+            data-testid={`ncaab-parlay-badge-${play.gameId}`}
+            onClick={() => setShowParlayDrawer(true)}
+            className="absolute top-3 right-3 text-[10px] font-black px-2.5 py-0.5 rounded-full transition-all"
+            style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b", border: "1px solid rgba(245,158,11,0.4)" }}
+          >
+            {parlayLegs.length} Legs
+          </button>
+        )}
+
+        {/* ── HEADER ─────────────────────────────────────────────────── */}
+        <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
-            <p className="text-xs text-muted-foreground mb-0.5">{halfLabel} · {play.clock || play.status}</p>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="hidden sm:inline text-sm font-bold text-foreground">{play.awayTeam}</span>
-              <span className="sm:hidden text-sm font-bold text-foreground">{play.awayTeamAbbr}</span>
-              <span className="text-2xl font-black tabular-nums text-foreground">{play.awayScore}</span>
-              <span className="text-muted-foreground text-xs font-medium">vs</span>
-              <span className="text-2xl font-black tabular-nums text-foreground">{play.homeScore}</span>
-              <span className="hidden sm:inline text-sm font-bold text-foreground">{play.homeTeam}</span>
-              <span className="sm:hidden text-sm font-bold text-foreground">{play.homeTeamAbbr}</span>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="relative flex h-2 w-2 flex-shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
+              </span>
+              <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: "#71717a" }}>
+                LIVE · {halfLabel}&nbsp;&nbsp;{play.clock}
+              </span>
+            </div>
+            <p className="text-base font-bold text-white leading-tight">
+              {play.awayTeam} @ {play.homeTeam}
+            </p>
+            <p className="text-2xl font-black tabular-nums leading-tight mt-0.5" style={{ color: "#d4d4d8" }}>
+              {play.awayScore} – {play.homeScore}
+            </p>
+            <div className="flex gap-1.5 mt-1.5 flex-wrap">
+              {play.desperation3s && (
+                <span className="text-[9px] text-orange-400 bg-orange-500/10 border border-orange-500/20 px-1.5 py-0.5 rounded">⚠ Desperation 3s</span>
+              )}
+              {play.intentionalFouling && (
+                <span className="text-[9px] text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 px-1.5 py-0.5 rounded">⚑ Int. Fouling</span>
+              )}
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            {hasWindow && (
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${windowClass}`}>
-                {play.bettingWindow === "1H_WINDOW" ? "1H ⏱" : play.bettingWindow === "HALFTIME" ? "HT ⏱" : "2H ⏱"}
-              </span>
-            )}
-            {hasWindow && (
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border hidden sm:inline-block ${windowClass}`}>
-                {play.bettingWindowLabel}
-              </span>
-            )}
-            {expanded
-              ? <ChevronUp className="w-4 h-4 text-muted-foreground" />
-              : <ChevronDown className="w-4 h-4 text-muted-foreground" />
-            }
-          </div>
+          <RadialGauge value={gaugeValue} color={gaugeColor} label={gaugeLabel} isParlayed={isLegParlayed(selectedMarket)} />
         </div>
 
-        {/* Coaching flags */}
-        <div className="flex gap-2 mt-1.5 flex-wrap">
-          {play.desperation3s && (
-            <span className="text-[10px] text-orange-400 bg-orange-500/10 border border-orange-500/20 px-1.5 py-0.5 rounded">
-              ⚠ Desperation 3s (+{play.volatilityBonus} vol)
-            </span>
+        {/* ── VERDICT ROWS ───────────────────────────────────────────── */}
+        <div className={`space-y-2 transition-opacity duration-300 ${edgeBelow ? "opacity-40" : ""}`}>
+          {edgeBelow && (
+            <p className="text-[10px] italic text-center" style={{ color: "#52525b" }}>Edge below threshold — monitoring</p>
           )}
-          {play.intentionalFouling && (
-            <span className="text-[10px] text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 px-1.5 py-0.5 rounded">
-              ⚑ Intentional Fouling (+6 proj)
-            </span>
-          )}
-        </div>
-
-        {/* Collapsed summary row — always shows proj total */}
-        {!expanded && (
-          <div className="flex gap-3 mt-2 flex-wrap items-center">
-            {play.projectedTotal !== null && (
-              <span className="text-[11px] text-muted-foreground">
-                Proj <span className="text-foreground font-semibold">{play.projectedTotal.toFixed(1)}</span>
-                {play.total !== null && (
-                  <>
-                    {" "}vs O/U {play.total}
-                    {" · "}
-                    <span className={(() => {
-                      const edge = play.totalEdge ?? 0;
-                      const abs = Math.abs(edge);
-                      if (abs >= 10) return edge > 0 ? "text-green-400 font-semibold" : "text-red-400 font-semibold";
-                      if (abs >= 5)  return edge > 0 ? "text-yellow-400 font-semibold" : "text-orange-400 font-semibold";
-                      return "text-muted-foreground";
-                    })()}>
-                      {play.totalEdge !== null && play.totalEdge > 0 ? "↑ Over lean" : "↓ Under lean"}
-                    </span>
-                    {" "}
-                    <span className={`inline-block w-2 h-2 rounded-full ${(() => {
-                      const abs = Math.abs(play.totalEdge ?? 0);
-                      if (abs >= 10) return "bg-green-500";
-                      if (abs >= 5)  return "bg-yellow-500";
-                      return "bg-secondary";
-                    })()}`} />
-                  </>
-                )}
-              </span>
-            )}
-            {play.projectedTotal === null && play.totalEdge !== null && play.total !== null && (
-              <span className={`text-[11px] font-semibold ${edgeColor(play.totalEdge)}`}>
-                {play.totalEdge > 0 ? "↑ Over" : "↓ Under"} O{play.total} · {Math.abs(play.totalEdge).toFixed(1)}pp edge
-              </span>
-            )}
-            {play.spreadEdge !== null && play.spread !== null && (
-              <span className={`text-[11px] font-semibold ${edgeColor(play.spreadEdge)}`}>
-                {play.favorite} -{play.spread} · {Math.abs(play.spreadEdge).toFixed(1)}pp
+          <div className="rounded-lg p-3 flex items-center justify-between gap-2"
+            style={{ background: "#111", border: "1px solid #27272a", borderLeft: `3px solid ${evColor}` }}>
+            <div>
+              <p className="text-xs font-bold" style={{ color: evColor }}>{edgeLabel}</p>
+              <p className="text-[10px]" style={{ color: "#71717a" }}>Engine {engineProb.toFixed(1)}% vs Book {bookImplied}%</p>
+            </div>
+            {edgeGap >= 5 && (
+              <span className="text-[10px] font-black px-2 py-0.5 rounded-full shrink-0"
+                style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b", border: "1px solid rgba(245,158,11,0.3)" }}>
+                +{edgeGap.toFixed(1)}pp
               </span>
             )}
           </div>
-        )}
-      </button>
+          <div className="rounded-lg p-3 flex items-center justify-between gap-2"
+            style={{ background: "#111", border: "1px solid #27272a", borderLeft: `3px solid ${edgeGap >= 5 ? evColor : "#52525b"}` }}>
+            <div>
+              <p className="text-xs font-bold" style={{ color: "#d4d4d8" }}>{edgeSide} CLV</p>
+              <p className="text-[10px]" style={{ color: "#71717a" }}>Closing line value signal</p>
+            </div>
+            <span className="text-[10px] font-black px-2 py-0.5 rounded-full shrink-0"
+              style={edgeGap >= 5
+                ? { background: `${evColor}22`, color: evColor, border: `1px solid ${evColor}44` }
+                : { background: "#27272a", color: "#71717a", border: "1px solid #3f3f46" }
+              }>
+              {edgeGap < 5 ? "Even" : `${edgeSide === "Under" ? "↓" : "↑"} ${edgeSide}`}
+            </span>
+          </div>
+        </div>
 
-      {/* Expanded detail panel */}
-      {expanded && (
-        <div>
+        {/* ── STAT GRID ──────────────────────────────────────────────── */}
+        <div className="rounded-lg overflow-hidden" style={{ border: "1px solid #27272a" }}>
+          {statRows.map((row, i) => (
+            <div key={i} className="grid grid-cols-3 items-center px-3 py-2 gap-2"
+              style={{ borderBottom: i < 5 ? "1px solid #1a1a1a" : undefined, background: i % 2 === 0 ? "#0f0f0f" : "#0a0a0a" }}>
+              <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: "#71717a" }}>{row.label}</span>
+              <span className="text-sm font-black tabular-nums text-center" style={{ color: row.vc }}>{row.value}</span>
+              <span className="text-[10px] text-right truncate" style={{ color: "#52525b" }}>{row.sub}</span>
+            </div>
+          ))}
+        </div>
 
-          {/* 1H Total */}
-          {(isH1 && play.proj1HTotal !== null) || play.h1TotalLine !== null ? (
-            <MarketSection
-              title="1H Total"
-              line={effective1HLine}
-              lineIsProj={h1LineIsProj}
-              proj={play.proj1HTotal}
-              edge={play.total1HEdge}
-              prob={play.over1HProb}
-              gameId={play.gameId}
-              testPrefix="1h"
-              onOver={onAddToParlay && effective1HLine !== null ? () => addPick("over", effective1HLine!, effective1HProb, "ncaab_1h_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — 1H Total`) : undefined}
-              onUnder={onAddToParlay && effective1HLine !== null ? () => addPick("under", effective1HLine!, 100 - effective1HProb, "ncaab_1h_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — 1H Total`) : undefined}
-            />
-          ) : null}
-
-          {/* Full Game Total */}
-          {play.projectedTotal !== null || play.total !== null ? (
-            <MarketSection
-              title="Full Game Total"
-              line={effectiveFGLine}
-              lineIsProj={fgLineIsProj}
-              proj={play.projectedTotal}
-              edge={play.totalEdge}
-              prob={play.overProb}
-              gameId={play.gameId}
-              testPrefix="fg"
-              onOver={onAddToParlay && effectiveFGLine !== null ? () => addPick("over", effectiveFGLine!, effectiveFGProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — Total`) : undefined}
-              onUnder={onAddToParlay && effectiveFGLine !== null ? () => addPick("under", effectiveFGLine!, 100 - effectiveFGProb, "ncaab_total", `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} — Total`) : undefined}
-            />
-          ) : null}
-
-          {/* 1H Spread — SGO live line */}
-          {play.h1SpreadLine !== null && (
-            <SpreadSection
-              title="1H Spread"
-              spread={play.h1SpreadLine}
-              favName={play.h1Favorite}
-              prob={null}
-              gameId={play.gameId}
-              testPrefix="1h-spread"
-              onCover={onAddToParlay ? () => addPick("over", play.h1SpreadLine!, 60, "ncaab_1h_spread", `${play.h1Favorite} -${play.h1SpreadLine} (1H Cover)`) : undefined}
-            />
-          )}
-
-          {/* Full Game Spread */}
-          {(play.spread !== null || play.projectedMargin !== null) && !isH1 && (
-            <SpreadSection
-              title={play.spread !== null ? `Spread — ${play.favorite}` : "Projected Margin"}
-              spread={play.spread}
-              favName={play.spread !== null ? play.favorite : (play.projectedMargin !== null ? (play.projectedMargin > 0 ? play.homeTeamAbbr : play.awayTeamAbbr) : "")}
-              prob={play.spreadProb}
-              edge={play.spreadEdge}
-              gameId={play.gameId}
-              testPrefix="spread"
-              onCover={onAddToParlay && play.spreadProb !== null && play.spread !== null ? () => addPick("over", play.spread!, play.spreadProb!, "ncaab_spread", `${play.favorite} -${play.spread}`) : undefined}
-            />
-          )}
-
-          {/* Team Totals with market lines */}
-          {(play.homeProjected !== null || play.awayProjected !== null || play.homeGameTotalLine !== null || play.awayGameTotalLine !== null) && (
-            <div className="p-4 space-y-3 border-b border-border/40">
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Team Totals</p>
-              <div className="grid grid-cols-2 gap-3">
-                {/* Away team */}
-                <div className="bg-secondary/40 rounded-lg p-3 space-y-1">
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase">{play.awayTeamAbbr}</p>
-                  <p className="text-2xl font-black tabular-nums text-foreground leading-tight">
-                    {play.awayProjected ?? "—"}
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">Proj</p>
-                  {play.awayGameTotalLine !== null && (
-                    <p className="text-[11px] text-foreground font-semibold mt-1">
-                      FG O/U <span className="text-primary">{play.awayGameTotalLine}</span>
-                    </p>
-                  )}
-                  {play.away1HTotalLine !== null && (
-                    <p className="text-[11px] text-blue-400 font-semibold">
-                      1H O/U <span>{play.away1HTotalLine}</span>
-                    </p>
-                  )}
-                </div>
-                {/* Home team */}
-                <div className="bg-secondary/40 rounded-lg p-3 space-y-1">
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase">{play.homeTeamAbbr}</p>
-                  <p className="text-2xl font-black tabular-nums text-foreground leading-tight">
-                    {play.homeProjected ?? "—"}
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">Proj</p>
-                  {play.homeGameTotalLine !== null && (
-                    <p className="text-[11px] text-foreground font-semibold mt-1">
-                      FG O/U <span className="text-primary">{play.homeGameTotalLine}</span>
-                    </p>
-                  )}
-                  {play.home1HTotalLine !== null && (
-                    <p className="text-[11px] text-blue-400 font-semibold">
-                      1H O/U <span>{play.home1HTotalLine}</span>
-                    </p>
-                  )}
-                </div>
+        {/* ── MARKET BUTTONS ─────────────────────────────────────────── */}
+        <div className="grid grid-cols-3 gap-2">
+          {(["over", "under", "spread"] as const).map(m => {
+            if (m === "spread" && play.spread === null) return null;
+            const isSelected = selectedMarket === m;
+            const isParlayed = isLegParlayed(m);
+            const mColor = m === "over" ? "#00d4aa" : m === "under" ? "#ef4444" : "#94a3b8";
+            return (
+              <div key={m} className="relative">
+                <button
+                  data-testid={`ncaab-market-${m}-${play.gameId}`}
+                  onClick={() => setSelectedMarket(m)}
+                  className="w-full rounded-lg py-2.5 px-2 flex flex-col items-center gap-0.5 transition-all duration-300"
+                  style={{
+                    background: isSelected ? `${mColor}22` : "#111",
+                    border: `1px solid ${isSelected ? mColor : "#27272a"}`,
+                    color: isSelected ? mColor : "#71717a",
+                  }}
+                >
+                  <span className="text-[9px] font-black uppercase tracking-widest">{m}</span>
+                  <span className="text-sm font-black tabular-nums leading-tight">
+                    {m === "spread" ? (play.spread !== null ? `-${play.spread}` : "—") : (effectiveLine ?? "—")}
+                  </span>
+                  <span className="text-[10px] font-semibold">{gaugeForMarket(m).toFixed(1)}%</span>
+                </button>
+                <button
+                  data-testid={`ncaab-parlay-toggle-${m}-${play.gameId}`}
+                  onClick={(e) => { e.stopPropagation(); toggleLeg(m); addParlayPick(m); }}
+                  title={isParlayed ? "Remove from parlay" : "Add to parlay"}
+                  className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-black transition-all duration-200"
+                  style={{
+                    background: isParlayed ? "#f59e0b" : "#27272a",
+                    color: isParlayed ? "#000" : "#71717a",
+                    border: isParlayed ? "none" : "1px solid #3f3f46",
+                  }}
+                >
+                  +
+                </button>
               </div>
-              {/* Lean bar */}
-              {play.homeProjected !== null && play.awayProjected !== null && (() => {
-                const tot = play.homeProjected + play.awayProjected;
-                if (tot <= 0) return null;
-                const homePct = (play.homeProjected / tot) * 100;
+            );
+          })}
+        </div>
+
+        {/* ── BOOK PILLS ─────────────────────────────────────────────── */}
+        <div className="flex gap-2 flex-wrap">
+          {[
+            { label: "MGM", book: mgmBook, url: "https://sports.betmgm.com" },
+            { label: altLabel, book: altBook, url: "https://bovada.lv" },
+          ].filter(p => p.label !== "—").map(({ label, book, url }) => (
+            <button
+              key={label}
+              data-testid={`ncaab-book-pill-${label}-${play.gameId}`}
+              onClick={() => window.open(url, "_blank")}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all duration-300"
+              style={{ background: "#111", border: "1px solid #27272a", color: "#a1a1aa" }}
+              onMouseEnter={e => (e.currentTarget.style.borderColor = "#00d4aa55")}
+              onMouseLeave={e => (e.currentTarget.style.borderColor = "#27272a")}
+            >
+              <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-400" />
+              </span>
+              <span style={{ color: "#d4d4d8", fontWeight: 700 }}>{label}</span>
+              <span style={{ color: "#52525b" }}>·</span>
+              <span>{getBookLine(book)}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* ── PARLAY DRAWER ──────────────────────────────────────────── */}
+        <Sheet open={showParlayDrawer} onOpenChange={setShowParlayDrawer}>
+          <SheetContent
+            side="bottom"
+            className="max-h-[60vh] overflow-y-auto p-5"
+            style={{ background: "#050505", borderTop: "1px solid #27272a" }}
+          >
+            <SheetHeader className="mb-4">
+              <SheetTitle className="text-base font-black" style={{ color: "#f59e0b" }}>
+                Parlay Slip · {parlayLegs.length} {parlayLegs.length === 1 ? "Leg" : "Legs"}
+              </SheetTitle>
+            </SheetHeader>
+            <div className="space-y-2 mb-4">
+              {parlayLegs.map(legId => {
+                const m = legId.split(":")[1] as "over" | "under" | "spread";
                 return (
-                  <div className="h-2 bg-secondary rounded-full overflow-hidden flex mt-1">
-                    <div className="h-full bg-blue-500 transition-all" style={{ width: `${100 - homePct}%` }} />
-                    <div className="h-full bg-orange-400 transition-all" style={{ width: `${homePct}%` }} />
+                  <div key={legId} className="flex items-center justify-between p-3 rounded-lg"
+                    style={{ background: "#111", border: "1px solid #27272a" }}>
+                    <div>
+                      <p className="text-xs font-bold text-white">{play.awayTeamAbbr} @ {play.homeTeamAbbr}</p>
+                      <p className="text-[11px]" style={{ color: "#71717a" }}>
+                        {marketLabel(m)} · Engine {gaugeForMarket(m).toFixed(1)}%
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const remaining = parlayLegs.filter(l => l !== legId);
+                        setParlayLegs(remaining);
+                        if (remaining.length === 0) setShowParlayDrawer(false);
+                      }}
+                      className="w-6 h-6 rounded-full flex items-center justify-center text-sm font-black transition-colors"
+                      style={{ background: "#27272a", color: "#71717a" }}
+                    >
+                      ×
+                    </button>
                   </div>
                 );
-              })()}
+              })}
             </div>
-          )}
-
-          {/* Book Lines */}
-          {play.bookLines.length > 0 && (
-            <div className="px-4 py-3 border-b border-border/40">
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Book Lines</p>
-              <div className="flex gap-2 flex-wrap">
-                {play.bookLines.map(bl => (
-                  <div key={bl.book} className="bg-secondary border border-border/60 rounded-lg px-2.5 py-1.5 text-[10px] space-y-0.5">
-                    <p className="font-bold text-foreground text-xs">{BOOK_LABELS[bl.book] ?? bl.book}</p>
-                    {bl.spread !== null && <p className="text-muted-foreground">Spread -{bl.spread}</p>}
-                    {bl.total !== null && <p className="text-muted-foreground">O/U {bl.total}</p>}
-                    {bl.h1Total !== null && (
-                      <p className="text-blue-400/80">1H O{bl.h1Total}</p>
-                    )}
-                  </div>
-                ))}
-              </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setParlayLegs([]); setShowParlayDrawer(false); }}
+                className="flex-1 py-2.5 rounded-lg text-sm font-bold"
+                style={{ background: "#27272a", color: "#d4d4d8", border: "1px solid #3f3f46" }}
+              >
+                Clear All
+              </button>
+              <button
+                onClick={() => {
+                  const text = parlayLegs.map(legId => {
+                    const m = legId.split(":")[1] as "over" | "under" | "spread";
+                    return `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} · ${marketLabel(m)} · Engine: ${gaugeForMarket(m).toFixed(1)}%`;
+                  }).join("\n");
+                  navigator.clipboard.writeText(text);
+                }}
+                className="flex-1 py-2.5 rounded-lg text-sm font-bold"
+                style={{ background: "rgba(0,212,170,0.15)", color: "#00d4aa", border: "1px solid rgba(0,212,170,0.3)" }}
+              >
+                Copy Slip
+              </button>
             </div>
-          )}
-
-          {/* Handle signal + volatility footer */}
-          <div className="px-4 py-2.5 space-y-1">
-            {play.handleSignal.signal !== "unavailable" && (
-              <p className={`text-[10px] ${play.handleSignal.color}`}>
-                <span className="font-semibold">Handle: </span>{play.handleSignal.label}
-              </p>
-            )}
-            {play.volatility !== null && (
-              <p className="text-[10px] text-muted-foreground/40">
-                Volatility: {play.volatility}{play.volatilityBonus > 0 && ` (+${play.volatilityBonus} bonus)`}
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
+          </SheetContent>
+        </Sheet>
+      </div>
+    </>
   );
 }
 
