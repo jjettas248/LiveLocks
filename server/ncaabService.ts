@@ -272,19 +272,28 @@ function blendWithBPI(
   return { blendedMargin, volatilityBonus };
 }
 
+// ── ESPN uses Eastern time for date grouping ─────────────────────────────────
+// US sports games are bucketed by ET date, not UTC. Without this fix, after
+// midnight UTC (≈7pm ET) the server would fetch the next calendar day's slate.
+function getEasternDateStr(): string {
+  const etStr = new Date().toLocaleDateString("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric", month: "2-digit", day: "2-digit",
+  });
+  const [m, d, y] = etStr.split("/");
+  return `${y}${m}${d}`;
+}
+
 // ── ESPN NCAAB Scoreboard ────────────────────────────────────────────────────
 export async function getNCAABScoreboard(): Promise<any[]> {
-  const key = "ncaab_scoreboard";
+  const dateStr = getEasternDateStr();
+  const key = `ncaab_scoreboard:${dateStr}`;
   const cached = cache.get(key);
   if (isFresh(cached, GAMES_TTL)) return cached!.data;
 
   let res: Response;
   try {
-    const _now = new Date();
-    const _today = _now.getFullYear().toString()
-      + String(_now.getMonth() + 1).padStart(2, "0")
-      + String(_now.getDate()).padStart(2, "0");
-    res = await fetch(`${ESPN_NCAAB}/scoreboard?limit=300&groups=50&dates=${_today}`, {
+    res = await fetch(`${ESPN_NCAAB}/scoreboard?limit=300&groups=50&dates=${dateStr}`, {
       headers: { "User-Agent": "Mozilla/5.0" },
       signal: AbortSignal.timeout(8000),
     });

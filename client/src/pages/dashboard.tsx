@@ -347,8 +347,8 @@ export default function Dashboard() {
   const { data: halftimePlaysData, isLoading: isHalftimePlaysLoading, refetch: refetchHalftimePlays } = useQuery<{ plays: any[]; message?: string }>({
     queryKey: ["/api/halftime-plays"],
     enabled: activeTab === "calculator" && nbaSubTab === "halftime",
-    refetchInterval: 5 * 60 * 1000,
-    staleTime: 4 * 60 * 1000,
+    refetchInterval: 90 * 1000,
+    staleTime: 60 * 1000,
   });
 
   // ── 2-minute auto-refresh for live box score ───────────────────────────────

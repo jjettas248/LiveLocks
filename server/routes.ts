@@ -266,13 +266,21 @@ export async function registerRoutes(
     }
   });
 
+  // ESPN groups games by Eastern time, not UTC. Without this helper, after
+  // midnight UTC (≈7pm ET) the server would request the next calendar day.
+  function getEasternDateStr(): string {
+    const etStr = new Date().toLocaleDateString("en-US", {
+      timeZone: "America/New_York",
+      year: "numeric", month: "2-digit", day: "2-digit",
+    });
+    const [m, d, y] = etStr.split("/");
+    return `${y}${m}${d}`;
+  }
+
   // Proxy ESPN live NBA scoreboard to avoid CORS
   app.get("/api/live-games", async (req, res) => {
     try {
-      const now = new Date();
-      const todayStr = now.getFullYear().toString()
-        + String(now.getMonth() + 1).padStart(2, "0")
-        + String(now.getDate()).padStart(2, "0");
+      const todayStr = getEasternDateStr();
       const response = await fetch(
         `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${todayStr}`,
         { headers: { "User-Agent": "Mozilla/5.0" } }
@@ -447,10 +455,7 @@ export async function registerRoutes(
   // All authenticated users can fetch — free users pay 1 play per game unlock via /api/2h-game-view.
   app.get("/api/halftime-plays", requireAuth, async (req, res) => {
     try {
-      const now2 = new Date();
-      const todayStr2 = now2.getFullYear().toString()
-        + String(now2.getMonth() + 1).padStart(2, "0")
-        + String(now2.getDate()).padStart(2, "0");
+      const todayStr2 = getEasternDateStr();
       const gamesRes = await fetch(
         `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${todayStr2}`,
         { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
