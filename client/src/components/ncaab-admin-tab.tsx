@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
-import { RefreshCw, AlertCircle, Clock, TrendingUp, CheckCircle } from "lucide-react";
+import { RefreshCw, AlertCircle, Clock, TrendingUp, CheckCircle, ChevronDown } from "lucide-react";
 import type { ParlayPickInput } from "@shared/schema";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
@@ -130,6 +130,174 @@ function formatTipoffTime(startTime: string): string {
   }
 }
 
+interface H2HGame {
+  date: string;
+  awayTeam: string;
+  homeTeam: string;
+  awayAbbr: string;
+  homeAbbr: string;
+  awayScore: number;
+  homeScore: number;
+  location: string;
+  total: number | null;
+  spread: number | null;
+  spreadTeam: "HOME" | "AWAY" | null;
+}
+
+function determineCoverage(g: H2HGame): { result: "covered" | "failed" | "PUSH" | "N/A"; team: string | null } {
+  if (!g.spread || !g.spreadTeam) return { result: "N/A", team: null };
+  const absSpread = Math.abs(g.spread);
+  if (g.spreadTeam === "HOME") {
+    const margin = g.homeScore - g.awayScore;
+    if (margin > absSpread) return { result: "covered", team: g.homeAbbr };
+    if (margin === absSpread) return { result: "PUSH", team: null };
+    return { result: "failed", team: g.homeAbbr };
+  }
+  const margin = g.awayScore - g.homeScore;
+  if (margin > absSpread) return { result: "covered", team: g.awayAbbr };
+  if (margin === absSpread) return { result: "PUSH", team: null };
+  return { result: "failed", team: g.awayAbbr };
+}
+
+// Shared H2H section (items 1 + 4): toggle row + animated rows with dual badges
+function H2HSection({
+  h2hData,
+  h2hOpen,
+  setH2hOpen,
+}: {
+  h2hData: H2HGame[] | null;
+  h2hOpen: boolean;
+  setH2hOpen: (v: boolean) => void;
+}) {
+  return (
+    <div className="rounded-lg overflow-hidden" style={{ border: "1px solid #27272a" }}>
+      {/* Toggle row with chevron animation (item 4) */}
+      <button
+        onClick={() => setH2hOpen(!h2hOpen)}
+        className="w-full flex items-center justify-between px-3 py-2.5 transition-colors duration-200"
+        style={{ background: "#0f0f0f" }}
+        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#141414"; }}
+        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#0f0f0f"; }}
+      >
+        <span className="text-sm font-semibold" style={{ color: "#71717a" }}>Matchup History</span>
+        <ChevronDown
+          className="w-4 h-4 transition-transform duration-300"
+          style={{ color: "#52525b", transform: h2hOpen ? "rotate(180deg)" : "rotate(0deg)" }}
+        />
+      </button>
+
+      {/* Animated slide-down rows */}
+      <div
+        aria-hidden={!h2hOpen}
+        style={{
+          maxHeight: h2hOpen ? "420px" : "0px",
+          opacity: h2hOpen ? 1 : 0,
+          overflow: "hidden",
+          visibility: h2hOpen ? "visible" : "hidden",
+          transition: "max-height 300ms ease, opacity 200ms ease, visibility 300ms ease",
+        }}>
+        {/* Loading skeleton */}
+        {h2hData === null && (
+          <div>
+            {[1, 2, 3].map(i => (
+              <div key={i} className="flex items-center justify-between px-3 gap-3 animate-pulse"
+                style={{ borderTop: "1px solid #1a1a1a", minHeight: "64px", padding: "10px 12px" }}>
+                <div className="flex-1">
+                  <div className="h-3 rounded w-20 mb-1" style={{ background: "#27272a" }} />
+                  <div className="h-2 rounded w-14" style={{ background: "#1e1e1e" }} />
+                </div>
+                <div className="flex-1 text-center">
+                  <div className="h-4 rounded w-16 mx-auto mb-1" style={{ background: "#27272a" }} />
+                </div>
+                <div className="flex flex-col gap-1 shrink-0">
+                  <div className="h-5 rounded w-12" style={{ background: "#27272a" }} />
+                  <div className="h-5 rounded w-12" style={{ background: "#1e1e1e" }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {/* Empty state */}
+        {h2hData !== null && h2hData.length === 0 && (
+          <div className="px-3 py-4 text-center" style={{ borderTop: "1px solid #1a1a1a" }}>
+            <p className="text-xs" style={{ color: "#52525b" }}>Matchup history unavailable</p>
+          </div>
+        )}
+        {/* H2H rows with dual badges (item 1) */}
+        {h2hData !== null && h2hData.map((g, idx) => {
+          const actualTotal = g.awayScore + g.homeScore;
+          const ouResult = g.total !== null
+            ? (actualTotal > g.total ? "OVER" : actualTotal < g.total ? "UNDER" : "PUSH")
+            : "N/A";
+          const coverage = determineCoverage(g);
+          const awayWon = g.awayScore > g.homeScore;
+
+          const ouColor   = ouResult === "OVER" ? "#00d4aa" : ouResult === "UNDER" ? "#ef4444" : "#71717a";
+          const ouBg      = ouResult === "OVER" ? "rgba(0,212,170,0.15)" : ouResult === "UNDER" ? "rgba(239,68,68,0.15)" : "#27272a";
+          const ouBorder  = ouResult === "OVER" ? "rgba(0,212,170,0.3)"  : ouResult === "UNDER" ? "rgba(239,68,68,0.3)"  : "#3f3f46";
+          const covColor  = coverage.result === "covered" ? "#00d4aa" : coverage.result === "failed" ? "#ef4444" : "#71717a";
+          const covBg     = coverage.result === "covered" ? "rgba(0,212,170,0.15)" : coverage.result === "failed" ? "rgba(239,68,68,0.15)" : "#27272a";
+          const covBorder = coverage.result === "covered" ? "rgba(0,212,170,0.3)"  : coverage.result === "failed" ? "rgba(239,68,68,0.3)"  : "#3f3f46";
+          const covLabel  = coverage.result === "covered"
+            ? `${coverage.team} cvrd` : coverage.result === "failed"
+            ? `${coverage.team} fail` : coverage.result;
+
+          return (
+            <div key={idx}
+              className="flex items-center justify-between gap-3"
+              style={{
+                borderTop: "1px solid #1a1a1a",
+                minHeight: "64px",
+                padding: "10px 12px",
+                background: idx % 2 === 0 ? "#0f0f0f" : "#0a0a0a",
+              }}>
+              {/* Left: date + location */}
+              <div className="min-w-0 shrink-0">
+                <p className="text-[11px]" style={{ color: "#71717a" }}>{g.date}</p>
+                <p className="text-[10px]" style={{ color: "#52525b" }}>{g.location}</p>
+              </div>
+              {/* Center: score */}
+              <div className="flex-1 text-center">
+                <p className="text-xs font-black tabular-nums">
+                  <span style={{ color: awayWon ? "#ffffff" : "#52525b" }}>{g.awayScore}</span>
+                  <span style={{ color: "#3f3f46" }}> – </span>
+                  <span style={{ color: awayWon ? "#52525b" : "#ffffff" }}>{g.homeScore}</span>
+                </p>
+                {g.total !== null && (
+                  <p className="text-[9px]" style={{ color: "#52525b" }}>Total: {actualTotal}</p>
+                )}
+              </div>
+              {/* Right: dual badges stacked */}
+              <div className="flex flex-col gap-1 items-end shrink-0">
+                <div className="text-right">
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded"
+                    style={{ background: ouBg, color: ouColor, border: `1px solid ${ouBorder}` }}>
+                    {ouResult}
+                  </span>
+                  {g.total !== null && (
+                    <p className="text-[9px] mt-0.5" style={{ color: "#3f3f46" }}>O/U: {g.total}</p>
+                  )}
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded"
+                    style={{ background: covBg, color: covColor, border: `1px solid ${covBorder}` }}>
+                    {covLabel}
+                  </span>
+                  {g.spread !== null && g.spreadTeam && (
+                    <p className="text-[9px] mt-0.5" style={{ color: "#3f3f46" }}>
+                      {g.spreadTeam === "HOME" ? g.homeAbbr : g.awayAbbr} -{g.spread}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 const BOOK_LABELS: Record<string, string> = {
   fanduel:    "FD",
   draftkings: "DK",
@@ -190,7 +358,17 @@ function RadialGauge({ value, color, label, isParlayed }: {
 }
 
 // ── NCAABGameCard ─────────────────────────────────────────────────────────────
-function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay?: (pick: ParlayPickInput) => void }) {
+function NCAABGameCard({
+  play,
+  onAddToParlay,
+  h2hDataFromCache,
+  isNewlyLive,
+}: {
+  play: NCAABPlay;
+  onAddToParlay?: (pick: ParlayPickInput) => void;
+  h2hDataFromCache?: H2HGame[] | null;
+  isNewlyLive?: boolean;
+}) {
   const isH1 = play.half === 1 && !play.bettingWindow.includes("HALFTIME");
 
   const overProb   = isH1 ? (play.over1HProb ?? play.overProb ?? 50) : (play.overProb ?? 50);
@@ -212,6 +390,30 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
   const [flashActive, setFlashActive]       = useState(false);
   const [flashColor, setFlashColor]         = useState("#00d4aa");
   const prevOverProb = useRef(overProb);
+
+  // H2H state (items 2-4): collapsed by default for live card
+  const [h2hData, setH2hData] = useState<H2HGame[] | null>(h2hDataFromCache ?? null);
+  const [h2hOpen, setH2hOpen] = useState(false);
+
+  // Newly-live flash on mount (item 6): inline teal glow instead of toast
+  useEffect(() => {
+    if (!isNewlyLive) return;
+    setFlashColor("#00d4aa");
+    setFlashActive(true);
+    const t = setTimeout(() => setFlashActive(false), 200);
+    return () => clearTimeout(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch H2H once on mount if not already cached (item 2)
+  useEffect(() => {
+    if (h2hData !== null) return;
+    let cancelled = false;
+    fetch(`/api/ncaab/h2h?gameId=${play.gameId}`)
+      .then(r => r.ok ? r.json() : { games: [] })
+      .then(data => { if (!cancelled) setH2hData(data.games ?? []); })
+      .catch(() => { if (!cancelled) setH2hData([]); });
+    return () => { cancelled = true; };
+  }, [play.gameId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (Math.abs(prevOverProb.current - overProb) > 0.5) {
@@ -401,6 +603,9 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
           ))}
         </div>
 
+        {/* ── H2H SECTION (item 1+4, collapsed by default in live card) ─ */}
+        <H2HSection h2hData={h2hData} h2hOpen={h2hOpen} setH2hOpen={setH2hOpen} />
+
         {/* ── MARKET BUTTONS ─────────────────────────────────────────── */}
         <div className="grid grid-cols-3 gap-2">
           {(["over", "under", "spread"] as const).map(m => {
@@ -542,9 +747,15 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
 function GroupedGamesList({
   games,
   rowRefs,
+  expandedGameId,
+  onExpandGame,
+  onH2hReady,
 }: {
   games: NCAABGame[];
   rowRefs: React.MutableRefObject<Record<string, HTMLDivElement | null>>;
+  expandedGameId: string | null;
+  onExpandGame: (id: string | null) => void;
+  onH2hReady: (gameId: string, data: H2HGame[]) => void;
 }) {
   if (games.length === 0) {
     return <p className="text-xs" style={{ color: "#71717a" }}>No games found in today's slate.</p>;
@@ -578,48 +789,169 @@ function GroupedGamesList({
             <div className="flex-1 h-px" style={{ background: "#3f3f46" }} />
           </div>
           <div className="space-y-1.5">
-            {sortGroup(groupGames).map(g => (
-              <div
-                key={g.id}
-                ref={el => { rowRefs.current[g.id] = el; }}
-                data-testid={`ncaab-game-row-${g.id}`}
-                className="flex items-center justify-between px-4 py-3 rounded-lg cursor-pointer transition-all duration-200"
-                style={{ background: "#111111", border: "1px solid #27272a" }}
-                onMouseEnter={e => (e.currentTarget.style.borderColor = "#52525b")}
-                onMouseLeave={e => (e.currentTarget.style.borderColor = "#27272a")}
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-bold text-white truncate">
-                    {g.awayTeam} <span style={{ color: "#52525b" }}>@</span> {g.homeTeam}
-                  </p>
-                  {(g.isLive || g.status === "Final") && (
-                    <p className="text-xs tabular-nums" style={{ color: "#71717a" }}>
-                      {g.awayScore} – {g.homeScore}
-                    </p>
-                  )}
-                </div>
-                <div className="shrink-0 ml-3">
-                  {g.isLive ? (
-                    <div className="flex items-center gap-1.5">
-                      <span className="relative flex h-2 w-2 flex-shrink-0">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
-                      </span>
-                      <span className="text-[11px] font-semibold" style={{ color: "#4ade80" }}>
-                        Live{g.period > 0 ? ` · H${g.period}` : ""} {g.clock}
-                      </span>
+            {sortGroup(groupGames).map(g => {
+              const isExpanded = expandedGameId === g.id;
+              const canExpand  = !g.isLive && g.status !== "Final";
+              return (
+                <div key={g.id}>
+                  <div
+                    ref={el => { rowRefs.current[g.id] = el; }}
+                    data-testid={`ncaab-game-row-${g.id}`}
+                    className="flex items-center justify-between px-4 py-3 rounded-lg cursor-pointer transition-all duration-200"
+                    style={{
+                      background: isExpanded ? "#141414" : "#111111",
+                      border: `1px solid ${isExpanded ? "#3f3f46" : "#27272a"}`,
+                      borderRadius: isExpanded ? "8px 8px 0 0" : "8px",
+                    }}
+                    onClick={() => canExpand && onExpandGame(isExpanded ? null : g.id)}
+                    onMouseEnter={e => !isExpanded && (e.currentTarget.style.borderColor = "#52525b")}
+                    onMouseLeave={e => !isExpanded && (e.currentTarget.style.borderColor = "#27272a")}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-bold text-white truncate">
+                        {g.awayTeam} <span style={{ color: "#52525b" }}>@</span> {g.homeTeam}
+                      </p>
+                      {(g.isLive || g.status === "Final") && (
+                        <p className="text-xs tabular-nums" style={{ color: "#71717a" }}>
+                          {g.awayScore} – {g.homeScore}
+                        </p>
+                      )}
                     </div>
-                  ) : g.status === "Final" ? (
-                    <span className="text-[11px] font-medium" style={{ color: "#52525b" }}>Final</span>
-                  ) : (
-                    <span className="text-[11px]" style={{ color: "#52525b" }}>Scheduled</span>
+                    <div className="shrink-0 ml-3">
+                      {g.isLive ? (
+                        <div className="flex items-center gap-1.5">
+                          <span className="relative flex h-2 w-2 flex-shrink-0">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
+                          </span>
+                          <span className="text-[11px] font-semibold" style={{ color: "#4ade80" }}>
+                            Live{g.period > 0 ? ` · H${g.period}` : ""} {g.clock}
+                          </span>
+                        </div>
+                      ) : g.status === "Final" ? (
+                        <span className="text-[11px] font-medium" style={{ color: "#52525b" }}>Final</span>
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px]" style={{ color: "#52525b" }}>Scheduled</span>
+                          <ChevronDown
+                            className="w-3 h-3 transition-transform duration-200"
+                            style={{ color: "#3f3f46", transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)" }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {/* Pre-game card expansion (items 2, 3, 4, 6) */}
+                  {isExpanded && canExpand && (
+                    <PreGameCard
+                      game={g}
+                      onH2hReady={onH2hReady}
+                    />
                   )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ── PreGameCard (item 2, 3, 4, 6) ─────────────────────────────────────────────
+// Shows for scheduled games that the user has expanded. Has countdown + H2H (open by default).
+function PreGameCard({
+  game,
+  onH2hReady,
+}: {
+  game: NCAABGame;
+  onH2hReady: (gameId: string, data: H2HGame[]) => void;
+}) {
+  const [countdown, setCountdown] = useState("");
+  const [timerState, setTimerState] = useState<"countdown" | "live">("countdown");
+  const [h2hData, setH2hData] = useState<H2HGame[] | null>(null);
+  const [h2hOpen, setH2hOpen] = useState(true); // item 3: expanded by default in pre-game
+  const [headerFlash, setHeaderFlash] = useState(false);
+  const didFireZero = useRef(false);
+
+  // Countdown timer
+  useEffect(() => {
+    const tick = () => {
+      const diff = new Date(game.startTime).getTime() - Date.now();
+      if (diff <= 0 && !didFireZero.current) {
+        didFireZero.current = true;
+        setTimerState("live");
+        setH2hOpen(false); // item 3: collapse H2H on transition
+        setHeaderFlash(true); // item 6: brief teal flash on header
+        setTimeout(() => setHeaderFlash(false), 200);
+      } else if (diff > 0) {
+        const h = Math.floor(diff / 3600000);
+        const m = Math.floor((diff % 3600000) / 60000);
+        const s = Math.floor((diff % 60000) / 1000);
+        setCountdown(h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`);
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [game.startTime]);
+
+  // Fetch H2H once on mount — cache result in parent (item 2)
+  useEffect(() => {
+    fetch(`/api/ncaab/h2h?gameId=${game.id}`)
+      .then(r => r.ok ? r.json() : { games: [] })
+      .then(data => {
+        const games: H2HGame[] = data.games ?? [];
+        setH2hData(games);
+        onH2hReady(game.id, games); // cache in parent
+      })
+      .catch(() => {
+        setH2hData([]);
+        onH2hReady(game.id, []);
+      });
+  }, [game.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div
+      data-testid={`ncaab-pregame-card-${game.id}`}
+      className="rounded-xl p-4 space-y-3 mt-1.5"
+      style={{
+        background: "#0a0a0a",
+        border: "1px solid #27272a",
+        boxShadow: headerFlash ? "0 0 0 2px rgba(0,212,170,0.45)" : undefined,
+        transition: "box-shadow 200ms ease",
+      }}
+    >
+      {/* Header with countdown (item 6: flash glow at zero) */}
+      <div className="flex items-center justify-between">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold text-white truncate">
+            {game.awayTeam} <span style={{ color: "#52525b" }}>@</span> {game.homeTeam}
+          </p>
+          <p className="text-[10px] mt-0.5" style={{ color: "#52525b" }}>
+            {formatTipoffTime(game.startTime)}
+          </p>
+        </div>
+        <div className="shrink-0 ml-3 text-right">
+          {timerState === "countdown" ? (
+            <>
+              <p className="text-[10px] uppercase tracking-wide" style={{ color: "#52525b" }}>Tipoff in</p>
+              <p className="text-lg font-black tabular-nums" style={{ color: "#00d4aa" }}>{countdown}</p>
+            </>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
+              </span>
+              <span className="text-xs font-bold" style={{ color: "#4ade80" }}>LIVE · Activating…</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* H2H section (item 3: open by default, collapses on transition) */}
+      <H2HSection h2hData={h2hData} h2hOpen={h2hOpen} setH2hOpen={setH2hOpen} />
     </div>
   );
 }
@@ -643,6 +975,19 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
 
   // Row refs for "View Game" scroll (build step 2) ──────────────────────────────
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // H2H expansion + cache (build 6 items: expandedGameId, h2hCache, newlyLiveIds)
+  const [expandedGameId, setExpandedGameId] = useState<string | null>(null);
+  const h2hCache = useRef<Record<string, H2HGame[]>>({});
+  const [newlyLiveIds, setNewlyLiveIds]     = useState<Set<string>>(new Set());
+
+  const handleExpandGame = useCallback((id: string | null) => {
+    setExpandedGameId(id);
+  }, []);
+
+  const handleH2hReady = useCallback((gameId: string, data: H2HGame[]) => {
+    h2hCache.current[gameId] = data;
+  }, []);
 
   // Previous state refs for transition detection ────────────────────────────────
   const prevGamesRef = useRef<NCAABGame[]>([]);
@@ -707,15 +1052,32 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
     });
   }, []);
 
-  // ── Transition detection (Scheduled→Live → toast, Live→Final → summary) ──────
+  // ── Transition detection (Scheduled→Live → toast/flash, Live→Final → summary) ──
   useEffect(() => {
     if (games.length === 0) { prevGamesRef.current = games; prevPlaysRef.current = plays; return; }
     const prev = prevGamesRef.current;
     if (prev.length > 0) {
-      // Newly live
-      games
-        .filter(g => g.isLive && prev.find(pg => pg.id === g.id && !pg.isLive))
-        .forEach(g => addToast(g));
+      // Newly live — suppress toast (item 5) when that game is expanded
+      const newlyLive = games.filter(g => g.isLive && prev.find(pg => pg.id === g.id && !pg.isLive));
+      newlyLive.forEach(g => {
+        if (expandedGameId === g.id) return; // item 5: suppress toast for expanded game
+        addToast(g);
+      });
+      if (newlyLive.length > 0) {
+        setNewlyLiveIds(prev => {
+          const next = new Set(prev);
+          newlyLive.forEach(g => next.add(g.id));
+          return next;
+        });
+        // Clear newlyLive flag after card animation (item 6)
+        setTimeout(() => {
+          setNewlyLiveIds(prev => {
+            const next = new Set(prev);
+            newlyLive.forEach(g => next.delete(g.id));
+            return next;
+          });
+        }, 500);
+      }
       // Newly final
       games
         .filter(g => g.status === "Final" && prev.find(pg => pg.id === g.id && pg.isLive))
@@ -727,7 +1089,7 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
     }
     prevGamesRef.current = games;
     prevPlaysRef.current = plays;
-  }, [games, plays, addToast, addToSummary]);
+  }, [games, plays, addToast, addToSummary, expandedGameId]);
 
   // ── Summary computed stats (build step 5: W/L counter) ──────────────────────
   const summaryResults = summaryGames.map(g => ({ ...g, result: determineResult(g) }));
@@ -828,7 +1190,13 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
                 </p>
               </div>
               {plays.map(p => (
-                <NCAABGameCard key={p.gameId} play={p} onAddToParlay={onAddToParlay} />
+                <NCAABGameCard
+                  key={p.gameId}
+                  play={p}
+                  onAddToParlay={onAddToParlay}
+                  h2hDataFromCache={h2hCache.current[p.gameId] ?? null}
+                  isNewlyLive={newlyLiveIds.has(p.gameId)}
+                />
               ))}
             </div>
           )}
@@ -932,7 +1300,13 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
               <p className="text-xs font-bold text-white">
                 {liveGames.length > 0 ? "Today's Slate" : "Today's Slate"}
               </p>
-              <GroupedGamesList games={games} rowRefs={rowRefs} />
+              <GroupedGamesList
+                games={games}
+                rowRefs={rowRefs}
+                expandedGameId={expandedGameId}
+                onExpandGame={handleExpandGame}
+                onH2hReady={handleH2hReady}
+              />
             </div>
           )}
         </>

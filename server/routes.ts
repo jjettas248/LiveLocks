@@ -5,7 +5,7 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
 import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines } from "./oddsService";
-import { computeNCAABPlays, getNCAABScoreboard } from "./ncaabService";
+import { computeNCAABPlays, getNCAABScoreboard, getNCAABH2H } from "./ncaabService";
 import { calculateParlay } from "./parlayService";
 import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin, requireTier } from "./auth";
 import { registerStripeRoutes } from "./stripeService";
@@ -95,6 +95,18 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("[NCAAB games]", err.message);
       return res.status(500).json({ error: err.message || "Failed to fetch NCAAB scoreboard" });
+    }
+  });
+
+  app.get("/api/ncaab/h2h", requireAdmin, async (req, res) => {
+    try {
+      const gameId = req.query.gameId as string;
+      if (!gameId) return res.status(400).json({ error: "gameId required" });
+      const games = await getNCAABH2H(gameId);
+      return res.json({ games });
+    } catch (err: any) {
+      console.error("[NCAAB H2H]", err.message);
+      return res.json({ games: [] });
     }
   });
 

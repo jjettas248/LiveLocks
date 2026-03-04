@@ -74,6 +74,19 @@ When NCAAB Live active, sub-tabs appear:
 - `server/ncaabService.ts` — ESPN scoreboard (`?limit=300&groups=50` = all Div I games) + box scores + The Odds API
 - Auto-refreshes every 60s; shows spread/total/team-total probabilities
 - 2H Plays sub-tab filters plays where `bettingWindow === "HALFTIME"`
+- `getNCAABH2H(gameId)` fetches last 3 head-to-head matchups via ESPN team schedule API
+- `/api/ncaab/h2h?gameId=X` route returns `{ games: H2HGame[] }` (requireAdmin)
+
+## NCAAB H2H Matchup History
+- **H2HSection** component: shared toggle row (ChevronDown animated) + slide-down rows with dual badges
+- **Dual badges per row**: O/U result (OVER/UNDER/PUSH/N/A) + spread coverage (covered/failed/PUSH/N/A)
+- **determineCoverage()**: calculates if favored team covered the spread from H2H game data
+- **NCAABGameCard** (live): H2H section collapsed by default, fetches once on mount, caches in parent
+- **PreGameCard**: shown when user clicks a Scheduled game row in GroupedGamesList; H2H expanded by default, collapses on live transition; countdown timer; teal glow flash at countdown zero
+- **expandedGameId**: tracked in NCAABAdminTab; clicking a Scheduled row toggles expansion
+- **h2hCache** (ref): stores H2H data per gameId to avoid re-fetching when PreGameCard mounts again
+- **newlyLiveIds**: set of gameIds that just transitioned Scheduled→Live; passed as `isNewlyLive` prop to NCAABGameCard for teal flash instead of toast
+- **Toast suppression** (item 5): when `expandedGameId === game.id` at Scheduled→Live transition, toast is suppressed (the inline flash handles it)
 
 ## Admin Panel (/admin)
 - View all users, change subscription tier, reset play counts, read feedback

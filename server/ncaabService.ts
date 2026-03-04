@@ -152,6 +152,90 @@ export async function getNCAABBoxScore(gameId: string): Promise<any | null> {
   return result;
 }
 
+// ── ESPN NCAAB Head-to-Head history ──────────────────────────────────────────
+export async function getNCAABH2H(gameId: string): Promise<any[]> {
+  const key = `ncaab_h2h_${gameId}`;
+  const cached = cache.get(key);
+  if (cached) return cached.data; // H2H data doesn't change once fetched
+
+  try {
+    // Step 1: get team IDs from the event summary
+    const summaryRes = await fetch(`${ESPN_NCAAB}/summary?event=${gameId}`, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!summaryRes.ok) return [];
+    const summary = await summaryRes.json() as any;
+
+    const comps: any[] = summary.header?.competitions?.[0]?.competitors ?? [];
+    const homeComp = comps.find((c: any) => c.homeAway === "home");
+    const awayComp = comps.find((c: any) => c.homeAway === "away");
+    if (!homeComp || !awayComp) return [];
+
+    const awayTeamId = String(awayComp.id ?? awayComp.team?.id ?? "");
+    const homeTeamId = String(homeComp.id ?? homeComp.team?.id ?? "");
+    const homeAbbr: string = homeComp.team?.abbreviation ?? homeComp.abbreviation ?? "";
+    const awayAbbr: string = awayComp.team?.abbreviation ?? awayComp.abbreviation ?? "";
+    const homeName: string = homeComp.team?.displayName ?? homeComp.displayName ?? "";
+    const awayName: string = awayComp.team?.displayName ?? awayComp.displayName ?? "";
+
+    if (!awayTeamId || !homeTeamId) return [];
+
+    // Step 2: fetch away team's schedule to find common matchups
+    const schedRes = await fetch(
+      `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/teams/${awayTeamId}/schedule?season=2025`,
+      { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
+    );
+    if (!schedRes.ok) return [];
+    const sched = await schedRes.json() as any;
+
+    const events: any[] = sched.events ?? [];
+    const h2h = events
+      .filter((ev: any) => {
+        const comp = ev.competitions?.[0];
+        const statusDesc = comp?.status?.type?.description ?? "";
+        if (statusDesc !== "Final" && statusDesc !== "Final/OT") return false;
+        return comp?.competitors?.some(
+          (c: any) => String(c.id ?? c.team?.id ?? "") === homeTeamId
+        );
+      })
+      .slice(-3)
+      .map((ev: any) => {
+        const comp = ev.competitions?.[0];
+        const awayEntry = comp?.competitors?.find(
+          (c: any) => String(c.id ?? c.team?.id ?? "") === awayTeamId
+        );
+        const homeEntry = comp?.competitors?.find(
+          (c: any) => String(c.id ?? c.team?.id ?? "") === homeTeamId
+        );
+        const awayScore = parseInt(awayEntry?.score ?? "0", 10);
+        const homeScore = parseInt(homeEntry?.score ?? "0", 10);
+        const homeIsHost = homeEntry?.homeAway === "home" && !(comp?.neutralSite ?? false);
+        const location = homeIsHost ? `@ ${homeAbbr}` : `vs ${homeAbbr}`;
+        const evDate = new Date(ev.date ?? "");
+        const dateStr = isNaN(evDate.getTime()) ? "" : evDate.toLocaleDateString("en-US", {
+          month: "short", day: "numeric", year: "numeric",
+        });
+        return {
+          date: dateStr,
+          awayTeam: awayName, homeTeam: homeName,
+          awayAbbr, homeAbbr,
+          awayScore, homeScore,
+          location,
+          total: null as number | null,
+          spread: null as number | null,
+          spreadTeam: null as "HOME" | "AWAY" | null,
+        };
+      });
+
+    cache.set(key, { data: h2h, timestamp: Date.now() });
+    return h2h;
+  } catch (err: any) {
+    console.warn("[NCAAB H2H]", err.message);
+    return [];
+  }
+}
+
 // ── The Odds API — NCAAB game lines (spreads + totals + 1H markets) ───────────
 export async function getNCAABOddsLines(): Promise<any[]> {
   const key = "ncaab_odds_lines";
