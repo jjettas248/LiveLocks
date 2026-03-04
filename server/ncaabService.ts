@@ -77,6 +77,7 @@ export async function getNCAABScoreboard(): Promise<any[]> {
       status: statusDesc,
       period,
       clock,
+      startTime: (event.date as string) ?? "",
       isHalftime,
       isInProgress,
       isLive: isHalftime || isInProgress,

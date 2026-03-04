@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
-import { RefreshCw, AlertCircle, Clock, TrendingUp } from "lucide-react";
+import { RefreshCw, AlertCircle, Clock, TrendingUp, CheckCircle } from "lucide-react";
 import type { ParlayPickInput } from "@shared/schema";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
@@ -82,9 +83,51 @@ interface NCAABGame {
   status: string;
   period: number;
   clock: string;
+  startTime: string;
   isHalftime: boolean;
   isInProgress: boolean;
   isLive: boolean;
+}
+
+interface SummaryGame {
+  gameId: string;
+  awayTeam: string;
+  homeTeam: string;
+  awayTeamAbbr: string;
+  homeTeamAbbr: string;
+  awayScore: number;
+  homeScore: number;
+  line: number | null;
+  overProb: number | null;
+  edgeGap: number;
+}
+
+interface ToastItem {
+  id: string;
+  game: NCAABGame;
+}
+
+function determineResult(game: SummaryGame): "HIT" | "MISS" | "PUSH" {
+  if (game.line === null || game.overProb === null) return "PUSH";
+  const engineCall = game.overProb > 50 ? "under" : "over";
+  const actualTotal = game.awayScore + game.homeScore;
+  if (actualTotal === game.line) return "PUSH";
+  if (engineCall === "under") return actualTotal < game.line ? "HIT" : "MISS";
+  return actualTotal > game.line ? "HIT" : "MISS";
+}
+
+function formatTipoffTime(startTime: string): string {
+  if (!startTime) return "Today";
+  try {
+    return new Date(startTime).toLocaleTimeString("en-US", {
+      timeZone: "America/Chicago",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }) + " CT";
+  } catch {
+    return "Today";
+  }
 }
 
 const BOOK_LABELS: Record<string, string> = {
@@ -495,28 +538,88 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
   );
 }
 
-function NCAABAllGamesGrid({ games }: { games: NCAABGame[] }) {
+// ── Grouped Games List ────────────────────────────────────────────────────────
+function GroupedGamesList({
+  games,
+  rowRefs,
+}: {
+  games: NCAABGame[];
+  rowRefs: React.MutableRefObject<Record<string, HTMLDivElement | null>>;
+}) {
   if (games.length === 0) {
-    return <p className="text-xs text-muted-foreground">No games found in today's slate.</p>;
+    return <p className="text-xs" style={{ color: "#71717a" }}>No games found in today's slate.</p>;
   }
+
+  const groupMap: Record<string, { games: NCAABGame[]; rawTime: string }> = {};
+  for (const g of games) {
+    const key = formatTipoffTime(g.startTime ?? "");
+    if (!groupMap[key]) groupMap[key] = { games: [], rawTime: g.startTime ?? "" };
+    groupMap[key].games.push(g);
+  }
+
+  const sortedGroups = Object.entries(groupMap).sort(([, a], [, b]) =>
+    new Date(a.rawTime || 0).getTime() - new Date(b.rawTime || 0).getTime()
+  );
+
+  const sortGroup = (gs: NCAABGame[]) => [
+    ...gs.filter(g => g.isLive),
+    ...gs.filter(g => !g.isLive && g.status !== "Final"),
+    ...gs.filter(g => g.status === "Final"),
+  ];
+
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-      {games.map(g => {
-        const statusColor = g.isLive ? "text-green-400" : "text-muted-foreground";
-        return (
-          <div key={g.id} className="bg-secondary/50 border border-border/60 rounded-lg px-3 py-2">
-            <p className="text-xs text-foreground font-medium">{g.awayTeam} <span className="text-muted-foreground">@</span> {g.homeTeam}</p>
-            <p className={`text-[10px] mt-0.5 ${statusColor}`}>
-              {g.isLive ? `LIVE — ${g.status} · ${g.clock}` : g.status}
-            </p>
-            {g.isLive && (
-              <p className="text-xs font-bold tabular-nums text-foreground mt-0.5">
-                {g.awayScore} – {g.homeScore}
-              </p>
-            )}
+    <div className="space-y-4">
+      {sortedGroups.map(([timeLabel, { games: groupGames }]) => (
+        <div key={timeLabel}>
+          <div className="flex items-center gap-3 mb-2">
+            <span className="text-[10px] font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: "#52525b" }}>
+              {timeLabel}
+            </span>
+            <div className="flex-1 h-px" style={{ background: "#3f3f46" }} />
           </div>
-        );
-      })}
+          <div className="space-y-1.5">
+            {sortGroup(groupGames).map(g => (
+              <div
+                key={g.id}
+                ref={el => { rowRefs.current[g.id] = el; }}
+                data-testid={`ncaab-game-row-${g.id}`}
+                className="flex items-center justify-between px-4 py-3 rounded-lg cursor-pointer transition-all duration-200"
+                style={{ background: "#111111", border: "1px solid #27272a" }}
+                onMouseEnter={e => (e.currentTarget.style.borderColor = "#52525b")}
+                onMouseLeave={e => (e.currentTarget.style.borderColor = "#27272a")}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-white truncate">
+                    {g.awayTeam} <span style={{ color: "#52525b" }}>@</span> {g.homeTeam}
+                  </p>
+                  {(g.isLive || g.status === "Final") && (
+                    <p className="text-xs tabular-nums" style={{ color: "#71717a" }}>
+                      {g.awayScore} – {g.homeScore}
+                    </p>
+                  )}
+                </div>
+                <div className="shrink-0 ml-3">
+                  {g.isLive ? (
+                    <div className="flex items-center gap-1.5">
+                      <span className="relative flex h-2 w-2 flex-shrink-0">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
+                      </span>
+                      <span className="text-[11px] font-semibold" style={{ color: "#4ade80" }}>
+                        Live{g.period > 0 ? ` · H${g.period}` : ""} {g.clock}
+                      </span>
+                    </div>
+                  ) : g.status === "Final" ? (
+                    <span className="text-[11px] font-medium" style={{ color: "#52525b" }}>Final</span>
+                  ) : (
+                    <span className="text-[11px]" style={{ color: "#52525b" }}>Scheduled</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -529,6 +632,22 @@ interface NCAABAdminTabProps {
 export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
   const [ncaabSubTab, setNcaabSubTab] = useState<"live" | "halftime">("live");
 
+  // ── Toast state (build step 1: queue + stacking + dismiss timers) ────────────
+  const [toasts, setToasts]                 = useState<ToastItem[]>([]);
+  const toastTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  // ── Summary state (build step 3–6) ──────────────────────────────────────────
+  const [lastSlateDate, setLastSlateDate]   = useState<string | null>(null);
+  const [summaryGames, setSummaryGames]     = useState<SummaryGame[]>([]);
+  const [expandedSummaryId, setExpandedSummaryId] = useState<string | null>(null);
+
+  // Row refs for "View Game" scroll (build step 2) ──────────────────────────────
+  const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // Previous state refs for transition detection ────────────────────────────────
+  const prevGamesRef = useRef<NCAABGame[]>([]);
+  const prevPlaysRef = useRef<NCAABPlay[]>([]);
+
   const playsQuery = useQuery<{ plays: NCAABPlay[] }>({
     queryKey: ["/api/ncaab/plays"],
     refetchInterval: 60 * 1000,
@@ -539,17 +658,96 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
     refetchInterval: 90 * 1000,
   });
 
-  const plays  = playsQuery.data?.plays  ?? [];
-  const games  = gamesQuery.data?.games  ?? [];
+  const plays   = playsQuery.data?.plays ?? [];
+  const games   = gamesQuery.data?.games ?? [];
   const loading = playsQuery.isLoading || gamesQuery.isLoading;
   const error   = playsQuery.error ?? gamesQuery.error;
 
-  const liveGames       = games.filter(g => g.isLive);
-  const scheduledGames  = games.filter(g => !g.isLive);
-  const hasPlays        = plays.length > 0;
-  const halftimePlays   = plays.filter(p => p.bettingWindow === "HALFTIME");
+  const liveGames     = games.filter(g => g.isLive);
+  const hasPlays      = plays.length > 0;
+  const halftimePlays = plays.filter(p => p.bettingWindow === "HALFTIME");
+
+  // ── Day reset (build step 6: lastSlateDate reset logic) ─────────────────────
+  useEffect(() => {
+    const today = new Date().toDateString();
+    if (lastSlateDate && lastSlateDate !== today) {
+      setSummaryGames([]);
+      setLastSlateDate(null);
+    }
+  }, [lastSlateDate]);
+
+  // ── Dismiss toast ────────────────────────────────────────────────────────────
+  const dismissToast = useCallback((id: string) => {
+    clearTimeout(toastTimers.current[id]);
+    delete toastTimers.current[id];
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
+
+  // ── Add toast (build step 1: 6s auto-dismiss, max 3 visible) ────────────────
+  const addToast = useCallback((game: NCAABGame) => {
+    const id = `toast-${game.id}-${Date.now()}`;
+    setToasts(prev => [...prev, { id, game }].slice(-3));
+    toastTimers.current[id] = setTimeout(() => dismissToast(id), 6000);
+  }, [dismissToast]);
+
+  // ── Add to summary ───────────────────────────────────────────────────────────
+  const addToSummary = useCallback((game: NCAABGame, play: NCAABPlay | undefined) => {
+    setSummaryGames(prev => {
+      if (prev.find(s => s.gameId === game.id)) return prev;
+      const line     = play?.total ?? null;
+      const overProb = play?.overProb ?? null;
+      const edgeGap  = overProb !== null ? Math.abs(overProb - 50) : 0;
+      return [...prev, {
+        gameId: game.id,
+        awayTeam: game.awayTeam, homeTeam: game.homeTeam,
+        awayTeamAbbr: game.awayTeamAbbr, homeTeamAbbr: game.homeTeamAbbr,
+        awayScore: game.awayScore, homeScore: game.homeScore,
+        line, overProb, edgeGap,
+      }];
+    });
+  }, []);
+
+  // ── Transition detection (Scheduled→Live → toast, Live→Final → summary) ──────
+  useEffect(() => {
+    if (games.length === 0) { prevGamesRef.current = games; prevPlaysRef.current = plays; return; }
+    const prev = prevGamesRef.current;
+    if (prev.length > 0) {
+      // Newly live
+      games
+        .filter(g => g.isLive && prev.find(pg => pg.id === g.id && !pg.isLive))
+        .forEach(g => addToast(g));
+      // Newly final
+      games
+        .filter(g => g.status === "Final" && prev.find(pg => pg.id === g.id && pg.isLive))
+        .forEach(g => addToSummary(g, prevPlaysRef.current.find(p => p.gameId === g.id)));
+      // All-final check (build step 6)
+      if (games.every(g => g.status === "Final")) {
+        setLastSlateDate(new Date().toDateString());
+      }
+    }
+    prevGamesRef.current = games;
+    prevPlaysRef.current = plays;
+  }, [games, plays, addToast, addToSummary]);
+
+  // ── Summary computed stats (build step 5: W/L counter) ──────────────────────
+  const summaryResults = summaryGames.map(g => ({ ...g, result: determineResult(g) }));
+  const wins   = summaryResults.filter(r => r.result === "HIT").length;
+  const losses = summaryResults.filter(r => r.result === "MISS").length;
+  const allFinal   = games.length > 0 && games.every(g => g.status === "Final");
+  const showSummary = summaryGames.length > 0;
+  const today = new Date();
+  const dateLabel = today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+
+  // ── View Game handler (build step 2) ─────────────────────────────────────────
+  const handleViewGame = useCallback((gameId: string, toastId: string) => {
+    dismissToast(toastId);
+    setTimeout(() => {
+      rowRefs.current[gameId]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 50);
+  }, [dismissToast]);
 
   return (
+    <>
     <div className="space-y-4">
       {/* Header row */}
       <div className="flex items-center justify-between gap-3">
@@ -612,6 +810,15 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
       {/* ── Live sub-tab ───────────────────────────────────────────────────── */}
       {ncaabSubTab === "live" && !loading && (
         <>
+          {/* Slate complete banner */}
+          {allFinal && games.length > 0 && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: "rgba(0,212,170,0.08)", border: "1px solid rgba(0,212,170,0.2)" }}>
+              <CheckCircle className="w-4 h-4 shrink-0" style={{ color: "#00d4aa" }} />
+              <span className="text-xs font-semibold" style={{ color: "#00d4aa" }}>Slate Complete</span>
+            </div>
+          )}
+
+          {/* Live play cards */}
           {hasPlays && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
@@ -626,6 +833,7 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
             </div>
           )}
 
+          {/* Empty state */}
           {!hasPlays && !error && (
             <div className="bg-card border border-border rounded-xl p-6 text-center space-y-2">
               <Clock className="w-8 h-8 text-muted-foreground mx-auto" />
@@ -636,20 +844,95 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
             </div>
           )}
 
+          {/* ── Daily Results Summary (build steps 3–5) ────────────────────── */}
+          {showSummary && (
+            <div className="space-y-3 rounded-xl overflow-hidden" style={{ border: "1px solid #27272a" }}>
+              {/* Header */}
+              <div className="flex items-center justify-between px-4 pt-4">
+                <p className="text-sm font-bold text-white">Today's Results</p>
+                <p className="text-xs" style={{ color: "#71717a" }}>{dateLabel}</p>
+              </div>
+
+              {/* Engine record (build step 5) */}
+              <div className="px-4 pb-2 flex items-center gap-2">
+                <p className="text-xs" style={{ color: "#52525b" }}>Engine Record:</p>
+                <span className="text-sm font-black" style={{ color: "#00d4aa" }}>{wins}W</span>
+                <span className="text-sm font-black" style={{ color: "#71717a" }}>–</span>
+                <span className="text-sm font-black" style={{ color: "#ef4444" }}>{losses}L</span>
+                <span className="text-[10px] ml-1" style={{ color: "#52525b" }}>· Dominant side at final whistle</span>
+              </div>
+
+              {/* Results grid (build step 4) */}
+              <div className="space-y-px">
+                {summaryResults.map(r => {
+                  const isExpanded = expandedSummaryId === r.gameId;
+                  const engineCall = (r.overProb ?? 50) > 50 ? "under" : "over";
+                  const callLabel  = r.line !== null
+                    ? `${engineCall === "under" ? "Under" : "Over"} ${r.line}`
+                    : "—";
+                  const callColor  = engineCall === "under" ? "#ef4444" : "#00d4aa";
+                  const borderColor = r.result === "HIT" ? "#00d4aa" : r.result === "MISS" ? "#ef4444" : "#52525b";
+                  const badgeStyle = r.result === "HIT"
+                    ? { background: "rgba(0,212,170,0.15)", color: "#00d4aa", border: "1px solid rgba(0,212,170,0.3)" }
+                    : r.result === "MISS"
+                    ? { background: "rgba(239,68,68,0.15)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.3)" }
+                    : { background: "#27272a", color: "#71717a", border: "1px solid #3f3f46" };
+
+                  return (
+                    <div
+                      key={r.gameId}
+                      data-testid={`ncaab-summary-row-${r.gameId}`}
+                      className="cursor-pointer transition-all duration-200"
+                      style={{ background: "#111111", borderLeft: `3px solid ${borderColor}` }}
+                      onClick={() => setExpandedSummaryId(isExpanded ? null : r.gameId)}
+                    >
+                      <div className="flex items-center justify-between px-4 py-3 gap-3">
+                        {/* Left */}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-bold text-white truncate">{r.awayTeam} @ {r.homeTeam}</p>
+                          <p className="text-[11px] tabular-nums" style={{ color: "#71717a" }}>
+                            {r.awayScore} – {r.homeScore}
+                          </p>
+                        </div>
+                        {/* Center: engine call */}
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded shrink-0"
+                          style={{ background: `${callColor}22`, color: callColor, border: `1px solid ${callColor}44` }}>
+                          {callLabel}
+                        </span>
+                        {/* Right: result badge + edge */}
+                        <div className="flex flex-col items-end gap-0.5 shrink-0">
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded" style={badgeStyle}>
+                            {r.result}
+                          </span>
+                          {r.edgeGap > 0 && (
+                            <span className="text-[9px] font-semibold" style={{ color: "#f59e0b" }}>
+                              +{r.edgeGap.toFixed(1)}pp
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Summary footer */}
+              <div className="flex items-center justify-center gap-2 px-4 py-3" style={{ borderTop: "1px solid #1a1a1a" }}>
+                <CheckCircle className="w-3.5 h-3.5 shrink-0" style={{ color: "#00d4aa" }} />
+                <p className="text-[11px]" style={{ color: "#52525b" }}>
+                  Slate Complete · {summaryGames.length} {summaryGames.length === 1 ? "game" : "games"} · <span style={{ color: "#00d4aa" }}>{wins}W</span> <span style={{ color: "#ef4444" }}>{losses}L</span>
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* ── Today's Slate grouped vertical list ─────────────────────────── */}
           {games.length > 0 && (
-            <div className="space-y-3">
-              {liveGames.length > 0 && scheduledGames.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground mb-2">Also Scheduled Today</p>
-                  <NCAABAllGamesGrid games={scheduledGames} />
-                </div>
-              )}
-              {liveGames.length === 0 && scheduledGames.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground mb-2">Today's Slate</p>
-                  <NCAABAllGamesGrid games={scheduledGames} />
-                </div>
-              )}
+            <div className="space-y-2">
+              <p className="text-xs font-bold text-white">
+                {liveGames.length > 0 ? "Today's Slate" : "Today's Slate"}
+              </p>
+              <GroupedGamesList games={games} rowRefs={rowRefs} />
             </div>
           )}
         </>
@@ -769,5 +1052,84 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
         </>
       )}
     </div>
+
+    {/* ── Toast Portal (build step 1: stacked, 6s auto-dismiss) ─────────────── */}
+    {toasts.length > 0 && createPortal(
+      <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", zIndex: 9999, pointerEvents: "none" }}>
+        {toasts.slice(-3).map((toast, idx) => {
+          const bottomPx = 24 + idx * 72;
+          return (
+            <div
+              key={toast.id}
+              data-testid={`ncaab-toast-${toast.game.id}`}
+              style={{
+                position: "absolute",
+                bottom: `${bottomPx}px`,
+                left: "50%",
+                transform: "translateX(-50%)",
+                minWidth: "320px",
+                pointerEvents: "auto",
+                background: "#18181b",
+                border: "1px solid #3f3f46",
+                borderRadius: "12px",
+                boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+                padding: "12px 14px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+                transition: "bottom 200ms ease",
+              }}
+              onMouseEnter={() => { clearTimeout(toastTimers.current[toast.id]); }}
+              onMouseLeave={() => { toastTimers.current[toast.id] = setTimeout(() => dismissToast(toast.id), 4000); }}
+            >
+              {/* Left section */}
+              <div className="flex items-start gap-2 min-w-0">
+                <span className="relative flex h-2 w-2 mt-1 flex-shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-white truncate">
+                    {toast.game.awayTeam} @ {toast.game.homeTeam} just tipped off
+                  </p>
+                  <p className="text-[10px] mt-0.5" style={{ color: "#71717a" }}>Engine activating…</p>
+                </div>
+              </div>
+              {/* Right: View Game + Dismiss */}
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  data-testid={`ncaab-toast-view-${toast.game.id}`}
+                  onClick={() => handleViewGame(toast.game.id, toast.id)}
+                  style={{
+                    background: "rgba(0,212,170,0.15)",
+                    border: "1px solid rgba(0,212,170,0.35)",
+                    color: "#00d4aa",
+                    fontSize: "11px",
+                    fontWeight: 600,
+                    borderRadius: "6px",
+                    padding: "3px 8px",
+                    cursor: "pointer",
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "rgba(0,212,170,0.25)")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "rgba(0,212,170,0.15)")}
+                >
+                  View Game
+                </button>
+                <button
+                  data-testid={`ncaab-toast-dismiss-${toast.game.id}`}
+                  onClick={() => dismissToast(toast.id)}
+                  style={{ color: "#52525b", background: "none", border: "none", cursor: "pointer", fontSize: "16px", lineHeight: 1, padding: "2px 4px" }}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>,
+      document.body
+    )}
+  </>
   );
 }
