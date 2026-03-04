@@ -794,112 +794,133 @@ export async function registerRoutes(
 
   // Roster sync from ESPN API — updates player team assignments from live rosters
   app.post("/api/sync-rosters", async (req, res) => {
-    try {
-      const ESPN_TO_DB: Record<string, string> = {
+    const normR = (s: string) => s.toLowerCase().replace(/['.'\-\s]+/g, "").replace(/jr$|sr$|ii$|iii$|iv$/, "");
+    const ROSTER_ALIASES: Record<string, string> = {
+      "alexsarr": "alexandresarr",
+      "cameronthomas": "camthomas",
+      "camthomas": "camthomas",
+      "ojbamidele": "ojbamidele",
+    };
+    const normRA = (s: string) => { const n = normR(s); return ROSTER_ALIASES[n] ?? n; };
+
+    // ── Helper: ESPN fallback roster sync ────────────────────────────────────
+    async function espnFallback(dbPlayers: any[]) {
+      const ESPN_TO_DB_R: Record<string, string> = {
         GS: "GSW", SA: "SAS", NO: "NOP", NY: "NYK",
         PHO: "PHX", UTH: "UTA", UTAH: "UTA", WSH: "WAS", CHO: "CHA",
       };
-      const normalize = (s: string) => s.toLowerCase().replace(/['.'\-\s]+/g, "").replace(/jr$|sr$|ii$|iii$|iv$/,"");
-      const NAME_ALIASES: Record<string, string> = {
-        "alexsarr": "alexandresarr",
-        "cameronthomas": "camthomas",
-        "camthomas": "camthomas",
-      };
-      const normWithAlias = (s: string) => { const n = normalize(s); return NAME_ALIASES[n] ?? n; };
-
-      // 1. Get all NBA teams from ESPN
       const teamsRes = await fetch(
         "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams?limit=32",
-        { headers: { "User-Agent": "Mozilla/5.0" } }
+        { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(10000) }
       );
-      if (!teamsRes.ok) throw new Error("ESPN teams API unavailable");
+      if (!teamsRes.ok) throw new Error("ESPN teams API also unavailable");
       const teamsData = await teamsRes.json() as any;
       const espnTeams: any[] = teamsData.sports?.[0]?.leagues?.[0]?.teams ?? [];
-
-      // 2. Get current DB players
-      const dbPlayers = await storage.getPlayers();
-
-      let updated = 0, added = 0, skipped = 0, teamErrors = 0;
-      const processedPlayerIds = new Set<number>();
-
-      for (const teamWrapper of espnTeams) {
-        const espnTeam = teamWrapper.team;
-        const espnAbbr: string = espnTeam.abbreviation ?? "";
-        const dbTeam = ESPN_TO_DB[espnAbbr] ?? espnAbbr;
-
+      let updated = 0, added = 0, skipped = 0;
+      const seen = new Set<number>();
+      for (const tw of espnTeams) {
+        const espnTeam = tw.team;
+        const dbTeam = ESPN_TO_DB_R[espnTeam.abbreviation ?? ""] ?? espnTeam.abbreviation;
         try {
-          const rosterRes = await fetch(
-            `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/${espnTeam.id}/roster`,
-            { headers: { "User-Agent": "Mozilla/5.0" } }
-          );
-          if (!rosterRes.ok) { teamErrors++; continue; }
-          const rosterData = await rosterRes.json() as any;
-
-          // ESPN returns athletes as flat array or grouped array
-          let athletes: any[] = [];
-          if (Array.isArray(rosterData.athletes)) {
-            if (rosterData.athletes.length > 0 && Array.isArray(rosterData.athletes[0])) {
-              athletes = rosterData.athletes.flat();
-            } else {
-              athletes = rosterData.athletes;
-            }
-          }
-
-          for (const athlete of athletes) {
-            const name: string = athlete.displayName ?? athlete.fullName ?? "";
+          const rr = await fetch(`https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/${espnTeam.id}/roster`, { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) });
+          if (!rr.ok) continue;
+          const rd = await rr.json() as any;
+          const athletes: any[] = Array.isArray(rd.athletes) ? rd.athletes.flat() : [];
+          const ESPN_POS: Record<string, string> = { PG:"PG",SG:"SG",SF:"SF",PF:"PF",C:"C",G:"SG",F:"SF",FC:"PF",GF:"SF" };
+          for (const a of athletes) {
+            const name: string = a.displayName ?? a.fullName ?? "";
             if (!name) continue;
-            const rawPos: string = athlete.position?.abbreviation ?? "";
-            const ESPN_POS_MAP: Record<string, string> = {
-              PG: "PG", SG: "SG", SF: "SF", PF: "PF", C: "C",
-              G: "SG", F: "SF", FC: "PF", GF: "SF",
-            };
-            const pos = ESPN_POS_MAP[rawPos.toUpperCase()] ?? "SF";
-            const normName = normWithAlias(name);
-
-            const match = dbPlayers.find(p => normWithAlias(p.name) === normName);
-            if (match) {
-              if (!processedPlayerIds.has(match.id)) {
-                processedPlayerIds.add(match.id);
-                if (match.team !== dbTeam) {
-                  await storage.updatePlayerStats(match.id, { team: dbTeam } as any);
-                  match.team = dbTeam;
-                  updated++;
-                } else {
-                  skipped++;
-                }
-              }
-            } else {
-              // Only add if it looks like a real NBA player (ESPN roster = active player)
-              const validPos = pos;
-              await storage.createPlayer({
-                name,
-                team: dbTeam,
-                position: validPos,
-                avgMinutes: "20.0",
-                avgFouls: "2.0",
-              });
-              dbPlayers.push({ id: -1, name, team: dbTeam, position: validPos, avgMinutes: "20.0", avgFouls: "2.0", ppg: null, rpg: null, apg: null, spg: null, bpg: null, tpg: null, usageRate: null, statsUpdatedAt: null, offRating: null, tsPct: null, h2ppg: null, h2rpg: null, h2apg: null, h2spg: null, h2bpg: null, h2tpg: null, h2avgMinutes: null } as any);
+            const pos = ESPN_POS[(a.position?.abbreviation ?? "").toUpperCase()] ?? "SF";
+            const match = dbPlayers.find(p => normRA(p.name) === normRA(name));
+            if (match && !seen.has(match.id)) {
+              seen.add(match.id);
+              if (match.team !== dbTeam) { await storage.updatePlayerStats(match.id, { team: dbTeam } as any); match.team = dbTeam; updated++; }
+              else skipped++;
+            } else if (!match) {
+              await storage.createPlayer({ name, team: dbTeam, position: pos, avgMinutes: "20.0", avgFouls: "2.0" });
+              dbPlayers.push({ id: -1, name, team: dbTeam, position: pos, avgMinutes: "20.0", avgFouls: "2.0" } as any);
               added++;
             }
           }
-        } catch (teamErr) {
-          console.error(`Error syncing ${dbTeam}:`, teamErr);
-          teamErrors++;
+        } catch { /* skip team on error */ }
+        await new Promise(r => setTimeout(r, 100));
+      }
+      return { updated, added, skipped, source: "espn" };
+    }
+
+    try {
+      const dbPlayers = await storage.getPlayers();
+
+      // ── Primary: NBA.com commonallplayers ───────────────────────────────────
+      // This is the most authoritative source — reflects every trade, waiver, and signing.
+      let result: { updated: number; added: number; skipped: number; notFound?: number; source: string };
+
+      try {
+        const nbaUrl = "https://stats.nba.com/stats/commonallplayers?IsOnlyCurrentSeason=1&LeagueID=00&Season=2025-26";
+        const nbaRes = await fetch(nbaUrl, { headers: NBA_HEADERS, signal: AbortSignal.timeout(14000) });
+        if (!nbaRes.ok) throw new Error(`NBA.com returned HTTP ${nbaRes.status}`);
+
+        const nbaData = await nbaRes.json() as any;
+        const rs = nbaData.resultSets?.[0];
+        if (!rs) throw new Error("No resultSet in NBA.com response");
+
+        const hdrs: string[] = rs.headers;
+        const rows: any[][] = rs.rowSet;
+        const iName = hdrs.indexOf("DISPLAY_FIRST_LAST");
+        const iTeam = hdrs.indexOf("TEAM_ABBREVIATION");
+        const iStatus = hdrs.indexOf("ROSTERSTATUS");
+        const iPosIdx = hdrs.indexOf("POSITION");
+
+        const ESPN_POS_NBA: Record<string, string> = {
+          "Guard": "SG", "Forward": "SF", "Center": "C",
+          "Guard-Forward": "SG", "Forward-Guard": "SF", "Forward-Center": "PF", "Center-Forward": "C",
+          "G": "SG", "F": "SF", "C": "C", "G-F": "SF", "F-G": "SF", "F-C": "PF", "C-F": "C",
+        };
+
+        let updated = 0, added = 0, skipped = 0, notFound = 0;
+
+        for (const row of rows) {
+          const rosterStatus = iStatus >= 0 ? row[iStatus] : 1;
+          if (!rosterStatus) continue;
+          const name = row[iName] as string;
+          const rawTeam = row[iTeam] as string;
+          if (!name || !rawTeam) continue;
+          const team = normTeam(rawTeam);
+
+          const normName = normRA(name);
+          const match = dbPlayers.find(p => normRA(p.name) === normName);
+          if (match) {
+            const updates: any = {};
+            if (match.team !== team) updates.team = team;
+            if (iPosIdx >= 0 && row[iPosIdx]) {
+              const mappedPos = ESPN_POS_NBA[row[iPosIdx] as string];
+              if (mappedPos && match.position !== mappedPos) updates.position = mappedPos;
+            }
+            if (Object.keys(updates).length > 0) {
+              await storage.updatePlayerStats(match.id, updates);
+              Object.assign(match, updates);
+              updated++;
+            } else {
+              skipped++;
+            }
+          } else {
+            notFound++;
+          }
         }
-        await new Promise(r => setTimeout(r, 150));
+        result = { updated, added, skipped, notFound, source: "nba.com" };
+        console.log(`[sync-rosters] NBA.com: ${updated} updated, ${skipped} already correct, ${notFound} not in DB`);
+
+      } catch (nbaErr) {
+        console.warn("[sync-rosters] NBA.com failed, falling back to ESPN:", (nbaErr as any).message);
+        const fb = await espnFallback(dbPlayers);
+        result = fb;
       }
 
-      res.json({
-        message: `Roster sync complete`,
-        updated,
-        added,
-        skipped,
-        teamErrors,
-        totalPlayers: dbPlayers.length,
-      });
-      // After roster sync, fire a stats sync in background so new players get populated
+      res.json({ message: "Roster sync complete", ...result, totalDbPlayers: dbPlayers.length });
       runFullStatSync().catch(console.error);
+
     } catch (e) {
+      console.error("[sync-rosters] Fatal:", (e as any).message);
       res.status(500).json({ message: "Roster sync failed", error: (e as any).message });
     }
   });
