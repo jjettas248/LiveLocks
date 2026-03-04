@@ -848,8 +848,11 @@ interface NCAABAdminTabProps {
 function formatTipoff(startTime: string | null | undefined): string {
   if (!startTime) return "";
   try {
-    const d = new Date(startTime);
-    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return new Date(startTime).toLocaleTimeString("en-US", {
+      timeZone: "America/New_York",
+      hour: "numeric",
+      minute: "2-digit",
+    });
   } catch {
     return "";
   }
@@ -859,12 +862,16 @@ function roundToHour(startTime: string | null | undefined): string {
   if (!startTime) return "TBD";
   try {
     const d = new Date(startTime);
-    const minutes = d.getMinutes();
-    if (minutes >= 30) {
-      d.setHours(d.getHours() + 1);
-    }
-    d.setMinutes(0, 0, 0);
-    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const etMin = parseInt(
+      d.toLocaleString("en-US", { timeZone: "America/New_York", minute: "numeric" }),
+      10
+    );
+    const adjMs = etMin >= 30 ? (60 - etMin) * 60000 : -etMin * 60000;
+    return new Date(d.getTime() + adjMs).toLocaleTimeString("en-US", {
+      timeZone: "America/New_York",
+      hour: "numeric",
+      minute: "2-digit",
+    });
   } catch {
     return "TBD";
   }
@@ -936,7 +943,7 @@ export function NCAABAdminTab({ onAddToParlay, isAdmin, isFreeUser, onGameView }
       }
     });
     for (const key of bucketKeys) {
-      result.push({ key, label: key, games: groups[key], isLive: false });
+      result.push({ key, label: `${key} ET`, games: groups[key], isLive: false });
     }
     return result;
   }, [sortedGames]);

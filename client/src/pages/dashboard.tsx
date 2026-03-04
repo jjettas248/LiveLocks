@@ -960,7 +960,7 @@ export default function Dashboard() {
                   <div key={i} className="bg-secondary/30 rounded-lg px-3 py-2">
                     <p className="text-xs font-semibold text-foreground">{a.title}</p>
                     <p className="text-xs text-muted-foreground">{a.body}</p>
-                    <p className="text-[10px] text-muted-foreground/50 mt-0.5">{new Date(a.time).toLocaleTimeString()}</p>
+                    <p className="text-[10px] text-muted-foreground/50 mt-0.5">{new Date(a.time).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })} ET</p>
                   </div>
                 ))}
               </div>
@@ -1116,7 +1116,7 @@ export default function Dashboard() {
                 const isSelected = game.id === selectedGameId;
                 const scoreStr = `${game.awayScore}-${game.homeScore}`;
                 const tipoffTime = game.startTime
-                  ? new Date(game.startTime).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })
+                  ? new Date(game.startTime).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit", hour12: true })
                   : null;
 
                 return (
@@ -1169,7 +1169,7 @@ export default function Dashboard() {
                         {isLive
                           ? `Q${game.period} ${game.clock}`
                           : isScheduled && tipoffTime
-                          ? tipoffTime
+                          ? `${tipoffTime} ET`
                           : game.status}
                       </span>
                       {isSelected && <span className="text-primary font-medium ml-1">●</span>}
