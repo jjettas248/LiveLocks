@@ -1,0 +1,65 @@
+Add a "View Game" action button inside the "just tipped off" 
+toast notification.
+
+UPDATED TOAST STRUCTURE:
+  <div className="toast-container">
+    
+    Left section:
+      - Green pulsing dot (animate-ping, 8px)
+      - Text: "🟢 [AWAY] @ [HOME] just tipped off"
+      - Sub-text: "Engine activating..."  
+        (shows for 3 seconds then disappears)
+
+    Right section:
+      - "View Game" button
+          bg: teal/20
+          border: teal/40
+          text: teal-400, text-xs, font-medium
+          rounded-md px-2 py-1
+          hover: bg teal/30
+
+  </div>
+
+  Toast styles:
+    - bg zinc-900, border zinc-700, rounded-xl
+    - shadow-lg
+    - Position: fixed bottom-6 left-1/2 -translate-x-1/2
+    - z-index 50
+    - min-width 320px
+    - Auto-dismisses after 6 seconds (longer to give time to tap)
+    - Dismiss timer resets if user hovers over toast
+
+ON "VIEW GAME" CLICK:
+  1. setExpandedGameId(game.id)
+  2. Scroll sidebar to that game row:
+       rowRefs.current[game.id]?.scrollIntoView({ 
+         behavior: "smooth", 
+         block: "nearest" 
+       })
+  3. Dismiss toast immediately on click
+  4. If sidebar is not yet open (no game was expanded):
+       trigger layout shift to two-column first (300ms)
+       then expand game card after transition completes (setTimeout 320ms)
+
+MULTIPLE GAMES TIPPING OFF SIMULTANEOUSLY:
+  - If 2+ games go live in the same refresh cycle:
+      show one toast per game, stacked vertically
+      each toast offset by 8px + (index * 72px) from bottom
+      each dismisses independently
+      max 3 toasts visible at once — queue the rest
+
+TOAST STATE:
+  const [toasts, setToasts] = useState([])
+  
+  const addToast = (game) => {
+    const id = `toast-${game.id}-${Date.now()}`
+    setToasts(prev => [...prev, { id, game }])
+    setTimeout(() => dismissToast(id), 6000)
+  }
+  
+  const dismissToast = (id) => {
+    setToasts(prev => prev.filter(t => t.id !== id))
+  }
+
+Trigger addToast inside the useEffect that watches for 
+Scheduled → Live transitions.

@@ -1,0 +1,82 @@
+When all games reach Final status and the sidebar auto-collapses,
+persist a daily summary section below the "Slate Complete" banner.
+
+SUMMARY SECTION:
+
+Header row:
+  - Left: "Today's Results" bold white
+  - Right: date string "[Day, Month D]" muted zinc-400
+
+Engine performance row:
+  - "Engine Record: [W] – [L]" 
+      W = games where dominant side at final whistle matched 
+          engine's pre-final dominant probability
+      L = games where it did not
+  - Format: wins in teal, losses in red
+  - Sub-text: "Based on dominant side at final whistle"
+
+Results grid (one row per game, full width):
+
+  Each row contains:
+    Left:
+      - "[AWAY full name] @ [HOME full name]"
+      - Final score: "[AWAY score] – [HOME score]" 
+        muted zinc-400, text-sm
+
+    Center:
+      - Engine's dominant call: "Under 162.5" or "Over 162.5"
+        small badge, teal or red
+
+    Right:
+      - Result badge:
+          "HIT" → bg teal/20, border teal/40, text teal-400
+          "MISS" → bg red/20, border red/40, text red-400
+      - Edge at final whistle: "+[X.X]pp" amber text-xs below badge
+
+  Row styling:
+    - bg #111111, border zinc-800, rounded-lg, px-4 py-3
+    - Full width, stacked vertically
+    - HIT rows: subtle teal left border (3px)
+    - MISS rows: subtle red left border (3px)
+    - Clickable: expands inline to show the frozen final 
+      game card (gauge frozen, final stats, HIT/MISS badge)
+
+SUMMARY FOOTER:
+  - "Slate Complete · [N] games · [W]W [L]L" 
+    small muted text centered
+  - Teal checkmark icon left of text
+
+PERSISTENCE:
+  - Summary stays visible for the remainder of the calendar day
+  - On next day's first data refresh: summary clears and 
+    resets to fresh empty slate state
+  - Use a lastSlateDate string in component state:
+      const [lastSlateDate, setLastSlateDate] = useState(null)
+      
+      // When all-final triggers:
+      setLastSlateDate(new Date().toDateString())
+      
+      // On mount + refresh:
+      if (lastSlateDate !== new Date().toDateString()) {
+        clearSummary()
+      }
+
+  - Do not persist to localStorage — in-memory only,
+    resets on page refresh
+
+HIT/MISS CALCULATION:
+  const determineResult = (game) => {
+    const engineCall = game.engineProb > 50 ? "under" : "over"
+    const actualTotal = game.finalAwayScore + game.finalHomeScore
+    const hitOver = actualTotal > game.line
+    const hitUnder = actualTotal < game.line
+    
+    if (engineCall === "under") return hitUnder ? "HIT" : "MISS"
+    if (engineCall === "over") return hitOver ? "HIT" : "MISS"
+    return "PUSH"
+  }
+
+Handle push (total lands exactly on line):
+  - "PUSH" badge: bg zinc-800, border zinc-600, text zinc-400
+  - Counts as neither W nor L in engine record
+  - Left border: zinc-600
