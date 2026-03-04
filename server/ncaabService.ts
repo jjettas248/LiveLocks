@@ -161,7 +161,7 @@ export async function getNCAABOddsLines(): Promise<any[]> {
   }
 
   try {
-    const url = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads,totals,h1_totals,h1_spreads&oddsFormat=american`;
+    const url = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads,totals&oddsFormat=american`;
     const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
     if (!res.ok) {
       const body = await res.text().catch(() => "");

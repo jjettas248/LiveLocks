@@ -100,6 +100,9 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
+// Health endpoint — must respond before slow startup tasks complete
+app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
+
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
