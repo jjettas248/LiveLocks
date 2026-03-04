@@ -1,4 +1,5 @@
 const ODDS_API_KEY = process.env.ODDS_API_KEY;
+const SGO_API_KEY  = process.env.SGO_API_KEY;
 const ESPN_NCAAB = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball";
 
 interface CacheEntry { data: any; timestamp: number; }
@@ -6,6 +7,7 @@ const cache = new Map<string, CacheEntry>();
 const GAMES_TTL   = 90 * 1000;
 const BOX_TTL     = 60 * 1000;
 const LINES_TTL   = 5 * 60 * 1000;
+const H1_LINES_TTL = 5 * 60 * 1000;
 
 // Historical NCAAB pace constants
 const NCAAB_AVG_PACE    = 3.45;  // pts/min ≈ 138 pt avg game / 40 min
@@ -176,6 +178,106 @@ export async function getNCAABOddsLines(): Promise<any[]> {
     console.warn("[NCAAB Odds] error:", err);
     return [];
   }
+}
+
+// ── Sports Game Odds — NCAAB 1H lines (spread + total) ───────────────────────
+interface SGO1HLines {
+  h1TotalLine: number | null;
+  h1SpreadLine: number | null;
+  h1Favorite: string;       // "home" | "away" | ""
+  h1FavoriteName: string;   // team long name
+}
+
+interface SGOEvent {
+  teams: { home: { names: { long: string; medium?: string; short?: string } }; away: { names: { long: string; medium?: string; short?: string } } };
+  odds: Record<string, any>;
+}
+
+export async function getNCAABSGOLines(): Promise<SGOEvent[]> {
+  const key = "ncaab_sgo_lines";
+  const cached = cache.get(key);
+  if (isFresh(cached, H1_LINES_TTL)) return cached!.data;
+
+  if (!SGO_API_KEY) {
+    console.warn("[NCAAB SGO] SGO_API_KEY not set — skipping 1H lines");
+    return [];
+  }
+
+  try {
+    const url = "https://api.sportsgameodds.com/v2/events?leagueID=NCAAB&oddsAvailable=true&limit=100";
+    const res = await fetch(url, {
+      headers: { "X-Api-Key": SGO_API_KEY },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.warn(`[NCAAB SGO] ${res.status}: ${body}`);
+      return [];
+    }
+    const data = await res.json() as any;
+    const events: SGOEvent[] = data.data ?? [];
+    cache.set(key, { data: events, timestamp: Date.now() });
+    console.log(`[NCAAB SGO] ${events.length} events fetched`);
+    return events;
+  } catch (err) {
+    console.warn("[NCAAB SGO] error:", err);
+    return [];
+  }
+}
+
+function matchSGOEvent(game: any, sgoEvents: SGOEvent[]): SGOEvent | null {
+  for (const ev of sgoEvents) {
+    const evHome = ev.teams?.home?.names?.long ?? "";
+    const evAway = ev.teams?.away?.names?.long ?? "";
+    if (
+      (teamsMatch(game.homeTeam, evHome) && teamsMatch(game.awayTeam, evAway)) ||
+      (teamsMatch(game.homeTeam, evAway) && teamsMatch(game.awayTeam, evHome))
+    ) return ev;
+  }
+  return null;
+}
+
+function extractSGO1HLines(sgoEvent: SGOEvent, game: any): SGO1HLines {
+  const odds = sgoEvent.odds ?? {};
+
+  // Total: points-all-1h-ou-over bookOverUnder
+  const ouOver = odds["points-all-1h-ou-over"];
+  const h1TotalLine: number | null = ouOver?.bookOverUnder != null
+    ? parseFloat(ouOver.bookOverUnder)
+    : null;
+
+  // Spread: points-home-1h-sp-home bookSpread (negative = home is favored)
+  const spHome = odds["points-home-1h-sp-home"];
+  const spAway = odds["points-away-1h-sp-away"];
+
+  let h1SpreadLine: number | null = null;
+  let h1Favorite = "";
+  let h1FavoriteName = "";
+
+  if (spHome?.bookSpread != null) {
+    const val = parseFloat(spHome.bookSpread);
+    h1SpreadLine = Math.abs(val);
+    const evHome = sgoEvent.teams?.home?.names?.long ?? "";
+    const evAway = sgoEvent.teams?.away?.names?.long ?? "";
+    // Determine which team is the favorite based on which side maps to game.homeTeam
+    const homeIsGameHome = teamsMatch(game.homeTeam, evHome);
+    if (val < 0) {
+      h1Favorite = homeIsGameHome ? "home" : "away";
+      h1FavoriteName = homeIsGameHome ? game.homeTeam : game.awayTeam;
+    } else if (val > 0) {
+      h1Favorite = homeIsGameHome ? "away" : "home";
+      h1FavoriteName = homeIsGameHome ? game.awayTeam : game.homeTeam;
+    } else if (spAway?.bookSpread != null) {
+      // Even — use away as reference
+      const aval = parseFloat(spAway.bookSpread);
+      if (aval < 0) {
+        h1Favorite = homeIsGameHome ? "away" : "home";
+        h1FavoriteName = homeIsGameHome ? game.awayTeam : game.homeTeam;
+      }
+    }
+  }
+
+  return { h1TotalLine, h1SpreadLine, h1Favorite, h1FavoriteName };
 }
 
 // ── Match ESPN game → Odds API event ─────────────────────────────────────────
@@ -356,9 +458,10 @@ export interface NCAABPlay {
 const HALF_SECONDS = 1200;
 
 export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
-  const [allGames, oddsEvents] = await Promise.all([
+  const [allGames, oddsEvents, sgoEvents] = await Promise.all([
     getNCAABScoreboard(),
     getNCAABOddsLines(),
+    getNCAABSGOLines(),
   ]);
 
   const liveGames = allGames.filter(g => g.isLive);
@@ -375,9 +478,19 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       try { box = await getNCAABBoxScore(game.id); } catch { /* non-fatal */ }
 
       const oddsEvent = matchOddsEvent(game, oddsEvents);
-      const { spread, total, favorite, bookLines, h1TotalLine: rawH1TotalLine, h1SpreadLine, h1Favorite } = oddsEvent
+      const { spread, total, favorite, bookLines, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav } = oddsEvent
         ? extractLines(oddsEvent)
         : { spread: null, total: null, favorite: "", bookLines: [], h1TotalLine: null, h1SpreadLine: null, h1Favorite: "" };
+
+      // SGO 1H lines (real book lines for 1st half)
+      const sgoEvent = matchSGOEvent(game, sgoEvents);
+      const sgo1H = sgoEvent ? extractSGO1HLines(sgoEvent, game) : null;
+      const rawH1TotalLine = sgo1H?.h1TotalLine ?? null;
+      const h1SpreadLine   = sgo1H?.h1SpreadLine ?? oddsH1Spread ?? null;
+      const h1Favorite     = sgo1H?.h1FavoriteName ?? oddsH1Fav ?? "";
+      if (sgo1H?.h1TotalLine != null) {
+        console.log(`[NCAAB SGO] ${game.awayTeam} @ ${game.homeTeam}: 1H total=${sgo1H.h1TotalLine}, spread=${sgo1H.h1SpreadLine} ${sgo1H.h1FavoriteName}`);
+      }
 
       // ── Box score data ───────────────────────────────────────────────────
       const half        = box?.half ?? (game.period <= 1 ? 1 : 2);
