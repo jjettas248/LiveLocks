@@ -245,20 +245,22 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
     const overEdge = play.overProb - 50;
     const underEdge = 50 - play.overProb;
     if (overEdge >= 8 && play.projectedTotal !== null) {
+      const cappedProb = Math.min(97, play.overProb);
       candidates.push({
         label: `OVER ${play.total}`,
-        prob: play.overProb,
+        prob: cappedProb,
         edge: overEdge,
         direction: "over",
-        explanation: `Model projects ${play.projectedTotal} pts vs book ${play.total} (+${Math.abs(Math.round((play.projectedTotal - play.total) * 10) / 10)} edge). ${play.overProb.toFixed(0)}% confidence.`,
+        explanation: `Model projects ${play.projectedTotal} pts vs book ${play.total} (+${Math.abs(Math.round((play.projectedTotal - play.total) * 10) / 10)} edge). ${cappedProb >= 97 ? "≥97" : cappedProb.toFixed(0)}% confidence.`,
       });
     } else if (underEdge >= 8 && play.projectedTotal !== null) {
+      const cappedProb = Math.min(97, 100 - play.overProb);
       candidates.push({
         label: `UNDER ${play.total}`,
-        prob: 100 - play.overProb,
+        prob: cappedProb,
         edge: underEdge,
         direction: "under",
-        explanation: `Model projects ${play.projectedTotal} pts vs book ${play.total} (${Math.abs(Math.round((play.projectedTotal - play.total) * 10) / 10)} under). ${(100 - play.overProb).toFixed(0)}% confidence.`,
+        explanation: `Model projects ${play.projectedTotal} pts vs book ${play.total} (${Math.abs(Math.round((play.projectedTotal - play.total) * 10) / 10)} under). ${cappedProb >= 97 ? "≥97" : cappedProb.toFixed(0)}% confidence.`,
       });
     }
   }
@@ -271,12 +273,13 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
       const coverLine = isHomeCover
         ? (play.homeSpreadLine !== null ? fmtSpread(play.homeSpreadLine) : "")
         : (play.awaySpreadLine !== null ? fmtSpread(play.awaySpreadLine) : "");
+      const cappedProb = Math.min(97, coverEdge + 50);
       candidates.push({
         label: `${coverTeam} ${coverLine} COVER`,
-        prob: coverEdge + 50,
+        prob: cappedProb,
         edge: coverEdge,
         direction: "cover",
-        explanation: `${play.projectedMargin !== null ? `Model edge: ${Math.abs(play.projectedMargin).toFixed(1)} pts. ` : ""}${(coverEdge + 50).toFixed(0)}% cover probability.`,
+        explanation: `${play.projectedMargin !== null ? `Model edge: ${Math.abs(play.projectedMargin).toFixed(1)} pts. ` : ""}${cappedProb >= 97 ? "≥97" : cappedProb.toFixed(0)}% cover probability.`,
       });
     }
   }
