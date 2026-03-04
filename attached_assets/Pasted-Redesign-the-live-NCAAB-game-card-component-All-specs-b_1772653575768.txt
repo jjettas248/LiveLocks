@@ -1,0 +1,185 @@
+Redesign the live NCAAB game card component. All specs below are final.
+Build RadialGauge as a self-contained component in the same file.
+
+---
+
+1. RADIAL GAUGE COMPONENT
+
+<RadialGauge value, color, label, isParlayed />
+
+Props:
+  - value: number (0–100)
+  - color: string
+  - label: string
+  - isParlayed: boolean
+
+Display logic:
+  - Default: dominant side probability on load
+  - Switches reactively when selectedMarket changes
+  - isParlayed = true:
+      outer amber ring activates (radius 70, stroke 3, dashed 4 3)
+      slow pulse animation on outer ring (2s ease-in-out infinite)
+      small "+ PARLAY" badge renders below main label
+  - Inner arc: stroke-dashoffset transition 300ms ease
+  
+SVG specs:
+  - viewBox="0 0 160 160" center 80 80
+  - Background arc: zinc-800, radius 60, stroke 8
+  - Value arc: dynamic color, radius 60, stroke 8
+  - Parlay ring: amber #f59e0b, radius 70, stroke 3, strokeDasharray="4 3"
+  - Large % number centered bold colored
+  - Label small caps muted below number
+
+---
+
+2. STATE MANAGEMENT
+
+Local component state:
+  - selectedMarket: "over" | "under" | "spread" (default = dominant side)
+  - parlayLegs: string[] (leg IDs added to parlay)
+  - showParlayDrawer: boolean
+
+selectedMarket drives: gauge value + color, button highlight, verdict row focus
+parlayLegs drives: isParlayed on gauge, amber + buttons, leg counter badge
+showParlayDrawer drives: parlay slip drawer open/closed
+
+---
+
+3. HEADER
+
+Left:
+  - animate-ping green dot + "LIVE · Q[X]  [MM:SS]"
+  - Bold: "[AWAY] @ [HOME]"
+  - Muted: "[AWAY_SCORE] – [HOME_SCORE]"
+
+Right:
+  - <RadialGauge /> reactive to all state
+
+---
+
+4. VERDICT ROWS (fully auto-generated, auto-refresh)
+
+Calculation runs every time props update (useEffect on engineProb, bookImplied):
+
+  const edgeGap = Math.abs(engineProb - bookImplied)
+  const edgeSide = engineProb > bookImplied ? "Under" : "Over"
+  const edgeLabel =
+    edgeGap >= 20 ? `Strong ${edgeSide} EV` :
+    edgeGap >= 10 ? `Lean ${edgeSide} EV` :
+    "Neutral — No Edge"
+
+  Use useEffect + a lastUpdated timestamp prop to trigger re-calculation
+  when new engine data arrives. Animate the verdict row with a 
+  brief flash (200ms teal/red glow on border) when values change.
+
+Row 1 — EV:
+  - Left: edgeLabel colored by side
+  - Sub: "Engine [X]% vs Book [Y]%"
+  - Right: amber pill "+[X.X]pp Edge"
+  - Left border accent: teal (Over) or red (Under)
+
+Row 2 — CLV:
+  - Left: "[Side] CLV"
+  - Sub: "Closing line value signal"
+  - Right: "Even" gray badge if edgeGap < 5, else teal/red directional badge
+
+Below threshold state (edgeGap < 5):
+  - Both rows render at 40% opacity
+  - Centered italic text: "Edge below threshold — monitoring"
+  - Stat grid stays full opacity
+  - When edgeGap crosses back above 5: rows snap back to full opacity 
+    with same border flash animation
+
+---
+
+5. STAT GRID 2×3
+
+[Full Game Total  | [line]   | "Current Line"              ]
+[Engine Over%     | [X]%     | "Model probability" teal/>50 ]
+[Engine Under%    | [X]%     | "Model probability" red/<50  ]
+[Spread           | [val]    | "[Team] cover prob: [X]%"    ]
+[[AWAY] Proj      | [val]    | "Projected final"            ]
+[[HOME] Proj      | [val]    | "Projected final"            ]
+
+---
+
+6. MARKET BUTTONS
+
+Three buttons: Over · Under · Spread
+
+Each:
+  - onClick: setSelectedMarket → gauge updates 300ms
+  - Selected: bright border + filled bg 
+    (teal=Over, red=Under, zinc=Spread)
+  - Unselected: muted dark
+
+"+" parlay toggle on each button:
+  - onClick: toggle leg ID in parlayLegs array
+  - Added state: button fills amber #f59e0b
+  - Removed: reverts to default
+  - Does NOT open drawer — drawer opens from counter badge only
+
+Parlay counter badge (top right of card):
+  - Hidden when parlayLegs.length === 0
+  - Shows "[N] Legs" in amber when parlayLegs.length > 0
+  - onClick: setShowParlayDrawer(true)
+
+---
+
+7. PARLAY SLIP DRAWER
+
+Triggered by tapping the "[N] Legs" counter badge.
+Renders as a bottom sheet drawer (use shadcn Sheet component, side="bottom").
+
+Drawer contents:
+  Header: "Parlay Slip · [N] Legs"
+  
+  Leg list (map over parlayLegs):
+    Each row shows:
+      - Game name: "[AWAY] @ [HOME]"
+      - Selected market: "Over 162.5" / "Under 162.5" / "[Team] -2.5"
+      - Engine probability: "[X]%"
+      - Remove button (× icon) → removes from parlayLegs, 
+        updates gauge ring, closes drawer if legs = 0
+
+  Footer:
+    - "Clear All" button → empties parlayLegs, closes drawer
+    - "Copy Slip" button → copies leg list as plain text to clipboard
+      Format: "[AWAY] @ [HOME] · Over 162.5 · Engine: 58.8%"
+      one line per leg, separated by newlines
+    - No bet placement — display only
+
+---
+
+8. BOOK SOURCE PILLS
+
+Below market buttons. Two pills: "MGM" and "Bovada"
+
+Each pill:
+  - Shows: "[BOOK] · [live line for selected market]"
+    e.g. "MGM · O/U 162.5" or "Bovada · JAX -1.5"
+  - Live line updates when selectedMarket changes
+  - Rendered as <button> tags
+  - onClick: window.open("[url]", "_blank")
+    MGM → https://mgm.com
+    Bovada → https://bovada.lv
+  - Hover/active: teal border + slight bg lift
+  - Show a subtle "LIVE" micro-badge on each pill 
+    (small green dot, no text)
+
+---
+
+STYLING:
+  - Card: bg #0a0a0a, border zinc-800, rounded-xl, p-5
+  - Teal (Over): #00d4aa
+  - Red (Under): #ef4444
+  - Amber (Parlay): #f59e0b
+  - Muted text: zinc-400
+  - Live dot: animate-ping bg-green-400
+  - Flash animation: 200ms box-shadow glow keyframe, 
+    named "edge-flash", teal or red depending on side
+  - All transitions: 300ms ease
+  - Drawer: shadcn Sheet, side="bottom", max height 60vh, 
+    bg zinc-950, border-t zinc-800
+  - No external SVG libraries
+  - Keep all existing Tailwind + shadcn structure
