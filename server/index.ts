@@ -2,7 +2,9 @@ import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import pg from "pg";
-import { registerRoutes } from "./routes";
+import { registerRoutes, registerAnalyticsRoutes } from "./routes";
+import { autoResolveAlerts } from "./analyticsResolver";
+import { storage } from "./storage";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { runMigrations } from "stripe-replit-sync";
@@ -138,6 +140,11 @@ app.use((req, res, next) => {
 (async () => {
   await initStripe();
   await registerRoutes(httpServer, app);
+  registerAnalyticsRoutes(app);
+
+  // Auto-resolve plays in background every 60 minutes; run once after 5 min delay on startup
+  setTimeout(() => autoResolveAlerts(storage).catch(console.warn), 5 * 60 * 1000);
+  setInterval(() => autoResolveAlerts(storage).catch(console.warn), 60 * 60 * 1000);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

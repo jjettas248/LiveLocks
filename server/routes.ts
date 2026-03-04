@@ -11,6 +11,7 @@ import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin, requi
 import { registerStripeRoutes } from "./stripeService";
 import { getVapidPublicKey } from "./webpush";
 import { checkAndSendAlerts } from "./alertManager";
+import { autoResolveAlerts } from "./analyticsResolver";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -684,8 +685,9 @@ export async function registerRoutes(
       allPlays.sort((a, b) => b.edge - a.edge);
       const topPlays = allPlays.slice(0, 20);
       res.json({ plays: topPlays });
-      // Fire-and-forget alert checks — never blocks the response
+      // Fire-and-forget: alerts + persist plays for analytics
       checkAndSendAlerts(topPlays, storage).catch(console.warn);
+      storage.savePlayAlerts(topPlays).catch(console.warn);
     } catch (e) {
       res.status(502).json({ message: "Halftime plays unavailable", details: (e as any).message });
     }
@@ -1627,4 +1629,25 @@ async function seedDatabase() {
       }
     }
   }
+}
+
+// Analytics routes (admin only)
+export function registerAnalyticsRoutes(app: Express): void {
+  app.get("/api/analytics/summary", requireAdmin, async (_req, res) => {
+    try {
+      const summary = await storage.getAnalyticsSummary();
+      res.json(summary);
+    } catch (e) {
+      res.status(500).json({ message: "Failed to load analytics summary" });
+    }
+  });
+
+  app.get("/api/analytics/alerts", requireAdmin, async (_req, res) => {
+    try {
+      const alerts = await storage.getRecentPlayAlerts(100);
+      res.json({ alerts });
+    } catch (e) {
+      res.status(500).json({ message: "Failed to load analytics alerts" });
+    }
+  });
 }

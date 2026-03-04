@@ -13,6 +13,7 @@ import { ParlaySlip } from "@/components/parlay-slip";
 import { UpgradeModal } from "@/components/upgrade-modal";
 import { FeedbackModal } from "@/components/feedback-modal";
 import { NCAABAdminTab } from "@/components/ncaab-admin-tab";
+import { AnalyticsTab } from "@/components/analytics-tab";
 import { AlertsOnboardingModal } from "@/components/alerts-onboarding-modal";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
@@ -145,7 +146,7 @@ export default function Dashboard() {
     }
   };
 
-  const [activeTab, setActiveTab] = useState<"calculator" | "ncaab">("calculator");
+  const [activeTab, setActiveTab] = useState<"calculator" | "ncaab" | "analytics">("calculator");
   const [nbaSubTab, setNbaSubTab] = useState<"live" | "halftime">("live");
   const [slateFilterProp, setSlateFilterProp] = useState<string>("all");
   const [slateFilterProb, setSlateFilterProb] = useState<string>("all");
@@ -1035,6 +1036,19 @@ export default function Dashboard() {
                 }`}
               >
                 🏀 NCAAB Live
+              </button>
+            )}
+            {user?.isAdmin && (
+              <button
+                data-testid="tab-analytics"
+                onClick={() => setActiveTab("analytics")}
+                className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
+                  activeTab === "analytics"
+                    ? "bg-primary text-primary-foreground border-glow"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                📊 Analytics
               </button>
             )}
             <button
@@ -2427,6 +2441,13 @@ export default function Dashboard() {
               }
             }}
           />
+        )}
+
+        {/* Analytics Tab — admin only */}
+        {activeTab === "analytics" && user?.isAdmin && (
+          <div className="max-w-5xl mx-auto px-4 py-6">
+            <AnalyticsTab />
+          </div>
         )}
 
       </main>

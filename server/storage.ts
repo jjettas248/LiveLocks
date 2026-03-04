@@ -4,6 +4,8 @@ import {
   teamDefense,
   users,
   feedback,
+  halftimePlayAlerts,
+  playResults,
   type Player,
   type InsertPlayer,
   type TeamDefense,
@@ -13,8 +15,12 @@ import {
   type Feedback,
   type CalculateProbabilityRequest,
   type CalculateProbabilityResponse,
+  type HalftimePlayAlert,
+  type InsertHalftimePlayAlert,
+  type AnalyticsSummary,
+  type PlayAlertWithResult,
 } from "@shared/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, isNull, sql } from "drizzle-orm";
 
 // 2025-26 NBA team pace (possessions per 48 minutes)
 export const TEAM_PACE: Record<string, number> = {
@@ -85,6 +91,11 @@ export interface IStorage {
   getAllFeedback(): Promise<(Feedback & { userEmail: string | null })[]>;
   updateUserAlerts(userId: number, data: { pushSubscription?: string | null; pushAlerts?: boolean; phoneNumber?: string | null; smsAlerts?: boolean; smsConsent?: boolean }): Promise<void>;
   getUserByPhoneNumber(phone: string): Promise<User | undefined>;
+  savePlayAlerts(plays: any[]): Promise<void>;
+  getUnresolvedAlerts(): Promise<HalftimePlayAlert[]>;
+  savePlayResult(alertId: number, actualStat: number, hit: boolean): Promise<void>;
+  getAnalyticsSummary(): Promise<AnalyticsSummary>;
+  getRecentPlayAlerts(limit?: number): Promise<PlayAlertWithResult[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -456,6 +467,113 @@ export class DatabaseStorage implements IStorage {
   async getUserByPhoneNumber(phone: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.phoneNumber, phone));
     return user;
+  }
+
+  async savePlayAlerts(plays: any[]): Promise<void> {
+    const today = new Date().toISOString().slice(0, 10);
+    for (const play of plays) {
+      const prob = Number(play.probability);
+      const directionalConf = play.betDirection === "over" ? prob : 100 - prob;
+      if (directionalConf < 60) continue;
+      try {
+        await db.insert(halftimePlayAlerts).values({
+          gameId: play.gameId,
+          gameDate: today,
+          playerId: play.playerId,
+          playerName: play.playerName,
+          team: play.team,
+          opponent: play.opponent,
+          statType: play.statType,
+          halftimeStat: String(play.halftimeStat),
+          line: String(play.line),
+          probability: String(prob),
+          betDirection: play.betDirection,
+        }).onConflictDoNothing();
+      } catch {
+        // skip individual insert errors silently
+      }
+    }
+  }
+
+  async getUnresolvedAlerts(): Promise<HalftimePlayAlert[]> {
+    const rows = await db
+      .select({ alert: halftimePlayAlerts })
+      .from(halftimePlayAlerts)
+      .leftJoin(playResults, eq(playResults.alertId, halftimePlayAlerts.id))
+      .where(isNull(playResults.id));
+    return rows.map((r) => r.alert);
+  }
+
+  async savePlayResult(alertId: number, actualStat: number, hit: boolean): Promise<void> {
+    await db.insert(playResults).values({
+      alertId,
+      actualStat: String(actualStat),
+      hit,
+    }).onConflictDoNothing();
+  }
+
+  async getAnalyticsSummary(): Promise<AnalyticsSummary> {
+    const rows = await db
+      .select({
+        probability: halftimePlayAlerts.probability,
+        betDirection: halftimePlayAlerts.betDirection,
+        hit: playResults.hit,
+      })
+      .from(halftimePlayAlerts)
+      .innerJoin(playResults, eq(playResults.alertId, halftimePlayAlerts.id));
+
+    const BUCKETS = [
+      { label: "60-69%", min: 60, max: 69.99 },
+      { label: "70-79%", min: 70, max: 79.99 },
+      { label: "80-89%", min: 80, max: 89.99 },
+      { label: "90%+",   min: 90, max: 100 },
+    ];
+
+    const buckets = BUCKETS.map(({ label, min, max }) => {
+      const inBucket = rows.filter((r) => {
+        const prob = Number(r.probability);
+        const conf = r.betDirection === "over" ? prob : 100 - prob;
+        return conf >= min && conf <= max;
+      });
+      const hits = inBucket.filter((r) => r.hit === true).length;
+      const total = inBucket.length;
+      const winRate = total > 0 ? (hits / total) * 100 : 0;
+      const roi = total > 0 ? ((hits * 90.91 - (total - hits) * 100) / total) : 0;
+      return { label, min, max, total, hits, winRate: Math.round(winRate * 10) / 10, roi: Math.round(roi * 10) / 10 };
+    });
+
+    const totalResolved = rows.length;
+    const totalHits = rows.filter((r) => r.hit === true).length;
+    const overallWinRate = totalResolved > 0 ? Math.round((totalHits / totalResolved) * 1000) / 10 : 0;
+
+    return { buckets, totalPlays: totalResolved, overallWinRate };
+  }
+
+  async getRecentPlayAlerts(limit = 100): Promise<PlayAlertWithResult[]> {
+    const rows = await db
+      .select({
+        id: halftimePlayAlerts.id,
+        gameId: halftimePlayAlerts.gameId,
+        gameDate: halftimePlayAlerts.gameDate,
+        playerId: halftimePlayAlerts.playerId,
+        playerName: halftimePlayAlerts.playerName,
+        team: halftimePlayAlerts.team,
+        opponent: halftimePlayAlerts.opponent,
+        statType: halftimePlayAlerts.statType,
+        halftimeStat: halftimePlayAlerts.halftimeStat,
+        line: halftimePlayAlerts.line,
+        probability: halftimePlayAlerts.probability,
+        betDirection: halftimePlayAlerts.betDirection,
+        createdAt: halftimePlayAlerts.createdAt,
+        actualStat: playResults.actualStat,
+        hit: playResults.hit,
+        resolvedAt: playResults.resolvedAt,
+      })
+      .from(halftimePlayAlerts)
+      .leftJoin(playResults, eq(playResults.alertId, halftimePlayAlerts.id))
+      .orderBy(desc(halftimePlayAlerts.createdAt))
+      .limit(limit);
+    return rows as PlayAlertWithResult[];
   }
 }
 

@@ -219,3 +219,57 @@ export const feedback = pgTable("feedback", {
 export const insertFeedbackSchema = createInsertSchema(feedback).omit({ id: true, createdAt: true });
 export type Feedback = typeof feedback.$inferSelect;
 export type InsertFeedback = z.infer<typeof insertFeedbackSchema>;
+
+export const halftimePlayAlerts = pgTable("halftime_play_alerts", {
+  id: serial("id").primaryKey(),
+  gameId: text("game_id").notNull(),
+  gameDate: text("game_date").notNull(),
+  playerId: integer("player_id").notNull(),
+  playerName: text("player_name").notNull(),
+  team: text("team").notNull(),
+  opponent: text("opponent").notNull(),
+  statType: text("stat_type").notNull(),
+  halftimeStat: numeric("halftime_stat").notNull(),
+  line: numeric("line").notNull(),
+  probability: numeric("probability").notNull(),
+  betDirection: text("bet_direction").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const playResults = pgTable("play_results", {
+  id: serial("id").primaryKey(),
+  alertId: integer("alert_id").notNull(),
+  actualStat: numeric("actual_stat").notNull(),
+  hit: boolean("hit").notNull(),
+  resolvedAt: timestamp("resolved_at").defaultNow(),
+});
+
+export const insertHalftimePlayAlertSchema = createInsertSchema(halftimePlayAlerts).omit({ id: true, createdAt: true });
+export const insertPlayResultSchema = createInsertSchema(playResults).omit({ id: true, resolvedAt: true });
+
+export type HalftimePlayAlert = typeof halftimePlayAlerts.$inferSelect;
+export type InsertHalftimePlayAlert = z.infer<typeof insertHalftimePlayAlertSchema>;
+export type PlayResult = typeof playResults.$inferSelect;
+export type InsertPlayResult = z.infer<typeof insertPlayResultSchema>;
+
+export interface BucketStat {
+  label: string;
+  min: number;
+  max: number;
+  total: number;
+  hits: number;
+  winRate: number;
+  roi: number;
+}
+
+export interface AnalyticsSummary {
+  buckets: BucketStat[];
+  totalPlays: number;
+  overallWinRate: number;
+}
+
+export interface PlayAlertWithResult extends HalftimePlayAlert {
+  actualStat: string | null;
+  hit: boolean | null;
+  resolvedAt: Date | null;
+}
