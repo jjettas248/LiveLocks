@@ -480,7 +480,7 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       const oddsEvent = matchOddsEvent(game, oddsEvents);
       const { spread, total, favorite, bookLines, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav } = oddsEvent
         ? extractLines(oddsEvent)
-        : { spread: null, total: null, favorite: "", bookLines: [], h1TotalLine: null, h1SpreadLine: null, h1Favorite: "" };
+        : { spread: null, total: null, favorite: "", bookLines: [], h1SpreadLine: null, h1Favorite: "" };
 
       // SGO 1H lines (real book lines for 1st half)
       const sgoEvent = matchSGOEvent(game, sgoEvents);

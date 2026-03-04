@@ -10,10 +10,44 @@ export function serveStatic(app: Express) {
     );
   }
 
-  app.use(express.static(distPath));
+  // Vite-hashed assets (/assets/*) can be cached indefinitely — their
+  // filenames change whenever the content changes.
+  app.use(
+    "/assets",
+    express.static(path.join(distPath, "assets"), {
+      maxAge: "1y",
+      immutable: true,
+    }),
+  );
 
-  // fall through to index.html if the file doesn't exist
-  app.use("/{*path}", (_req, res) => {
+  // All other static files served with no-cache so browsers always
+  // re-validate. This is the critical fix: index.html must never be
+  // served from cache, otherwise a stale index.html will request JS
+  // bundles that no longer exist after a new deployment.
+  app.use(
+    express.static(distPath, {
+      setHeaders(res, filePath) {
+        if (filePath.endsWith("index.html")) {
+          res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+          res.setHeader("Pragma", "no-cache");
+          res.setHeader("Expires", "0");
+        }
+      },
+    }),
+  );
+
+  // SPA fallback: serve index.html for all non-asset routes.
+  // Asset paths that reach here are genuinely missing — return 404 so the
+  // browser does not silently parse HTML as JavaScript (which causes the
+  // white screen / ";" symptom after deployments).
+  app.use("/{*path}", (req, res) => {
+    if (req.path.startsWith("/assets/")) {
+      res.status(404).send("Not found");
+      return;
+    }
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     res.sendFile(path.resolve(distPath, "index.html"));
   });
 }
