@@ -39,7 +39,17 @@ import {
   Check,
   Settings,
   Lock,
+  Bell,
+  CheckCircle2,
+  X,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { SiX } from "react-icons/si";
 
 // ESPN abbreviation → our DB team abbreviation
@@ -151,6 +161,37 @@ export default function Dashboard() {
   const [slateFilterProp, setSlateFilterProp] = useState<string>("all");
   const [slateFilterProb, setSlateFilterProb] = useState<string>("all");
   const [showAlertsPanel, setShowAlertsPanel] = useState(false);
+
+  // ── SMS Bell state (localStorage-persisted) ───────────────────────────────
+  type SmsStatus = "unprompted" | "opted-in" | "opted-out";
+  const [smsStatus, setSmsStatusState] = useState<SmsStatus>(() =>
+    (localStorage.getItem("smsStatus") as SmsStatus) ?? "unprompted"
+  );
+  const setSmsStatus = (s: SmsStatus) => {
+    setSmsStatusState(s);
+    localStorage.setItem("smsStatus", s);
+  };
+  const [showSmsModal, setShowSmsModal] = useState(false);
+  const [smsBellInput, setSmsBellInput] = useState(() => localStorage.getItem("smsPhone") ?? "");
+  const [smsBellInputError, setSmsBellInputError] = useState("");
+  const [smsModalFlow, setSmsModalFlow] = useState<"view" | "update">("view");
+  const bellRef = useRef<SVGSVGElement>(null);
+
+  const isValidPhone = (phone: string) => {
+    const cleaned = phone.replace(/\D/g, "");
+    return cleaned.length === 10 || (cleaned.length === 11 && cleaned[0] === "1");
+  };
+
+  const triggerBellFlash = () => {
+    if (!bellRef.current) return;
+    bellRef.current.classList.remove("bell-flash");
+    void bellRef.current.offsetWidth; // force reflow
+    bellRef.current.classList.add("bell-flash");
+  };
+
+  useEffect(() => {
+    if (smsStatus === "unprompted") triggerBellFlash();
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
   const [showAlertsModal, setShowAlertsModal] = useState(() => {
     try { return !localStorage.getItem("ll_alerts_onboarded"); } catch { return false; }
   });
@@ -811,6 +852,33 @@ export default function Dashboard() {
               )}
               Sync Rosters
             </button>
+            {/* SMS Bell button (smsStatus dot + flash) */}
+            <button
+              data-testid="button-sms-bell"
+              onClick={() => { setSmsModalFlow("view"); setShowSmsModal(true); }}
+              className="relative flex items-center justify-center w-9 h-9 rounded-lg bg-secondary border border-border text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors"
+              title="SMS Alerts"
+            >
+              <Bell
+                ref={bellRef}
+                className="w-4 h-4"
+                style={{
+                  color: smsStatus === "opted-out" ? "#52525b" : "#71717a",
+                }}
+              />
+              {/* Amber pulsing dot — unprompted */}
+              {smsStatus === "unprompted" && (
+                <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" style={{ animationDuration: "2s" }} />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
+                </span>
+              )}
+              {/* Green static dot — opted-in */}
+              {smsStatus === "opted-in" && (
+                <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-green-400" />
+              )}
+            </button>
+            {/* Existing alerts panel button (push notifications history) */}
             <button
               data-testid="button-alerts-panel"
               onClick={() => setShowAlertsPanel((v) => !v)}
@@ -1119,8 +1187,8 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Live Games Strip — hidden on NCAAB tab */}
-        {activeTab !== "ncaab" && allGames.length > 0 && (
+        {/* Live Games Strip — NBA Live tab only (hidden on NCAAB and Analytics) */}
+        {activeTab === "calculator" && allGames.length > 0 && (
           <div className="bg-card border border-border rounded-xl p-4">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
@@ -1208,8 +1276,8 @@ export default function Dashboard() {
         )}
 
 
-        {/* Live Box Score — hidden on NCAAB tab */}
-        {activeTab !== "ncaab" && selectedGameId && (liveStats || isLiveStatsLoading) && (
+        {/* Live Box Score — NBA Live tab only */}
+        {activeTab === "calculator" && selectedGameId && (liveStats || isLiveStatsLoading) && (
           <div className="bg-card border border-border rounded-xl overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-border/60">
               <button
@@ -2518,6 +2586,144 @@ export default function Dashboard() {
           hasPhone={!!phoneInput}
         />
       )}
+
+      {/* ── SMS Bell Modal (3 content states) ──────────────────────────────── */}
+      <Dialog open={showSmsModal} onOpenChange={setShowSmsModal}>
+        <DialogContent
+          className="max-w-[400px] p-0 overflow-hidden rounded-xl"
+          style={{ background: "#09090b", border: "1px solid #27272a" }}
+        >
+          {/* ── Unprompted: phone opt-in flow ── */}
+          {(smsStatus === "unprompted" || smsModalFlow === "update") && (
+            <div className="p-6 space-y-5">
+              <DialogHeader>
+                <DialogTitle className="text-white text-lg font-bold">Get Live Edge Alerts</DialogTitle>
+                <DialogDescription className="sr-only">Enter your phone number to receive SMS betting edge alerts</DialogDescription>
+                <p className="text-sm mt-1" style={{ color: "#71717a" }}>
+                  We&apos;ll text you when the engine detects a strong edge or a significant probability shift
+                </p>
+              </DialogHeader>
+              <div className="space-y-1.5">
+                <input
+                  data-testid="input-sms-phone"
+                  type="tel"
+                  placeholder="+1 (555) 000-0000"
+                  value={smsBellInput}
+                  onChange={e => { setSmsBellInput(e.target.value); setSmsBellInputError(""); }}
+                  className="w-full rounded-lg px-3 py-2.5 text-sm text-white outline-none transition-colors"
+                  style={{
+                    background: "#18181b",
+                    border: smsBellInputError ? "1px solid #ef4444" : "1px solid #3f3f46",
+                  }}
+                  onFocus={e => { if (!smsBellInputError) e.currentTarget.style.borderColor = "#00d4aa"; }}
+                  onBlur={e => { if (!smsBellInputError) e.currentTarget.style.borderColor = "#3f3f46"; }}
+                />
+                {smsBellInputError && (
+                  <p className="text-xs" style={{ color: "#ef4444" }}>{smsBellInputError}</p>
+                )}
+              </div>
+              <div className="flex flex-col gap-2">
+                <button
+                  data-testid="button-sms-enable"
+                  onClick={() => {
+                    if (!isValidPhone(smsBellInput)) {
+                      setSmsBellInputError("Enter a valid US phone number");
+                      return;
+                    }
+                    localStorage.setItem("smsPhone", smsBellInput);
+                    setSmsStatus("opted-in");
+                    setSmsModalFlow("view");
+                    setShowSmsModal(false);
+                    toast({ title: "✓ SMS alerts enabled", description: smsBellInput, duration: 3000 });
+                  }}
+                  className="w-full py-2.5 rounded-lg text-sm font-bold transition-opacity hover:opacity-90"
+                  style={{ background: "#00d4aa", color: "#000" }}
+                >
+                  Enable SMS Alerts
+                </button>
+                <button
+                  data-testid="button-sms-no-thanks"
+                  onClick={() => {
+                    setSmsStatus("opted-out");
+                    setShowSmsModal(false);
+                  }}
+                  className="w-full py-2.5 rounded-lg text-sm transition-colors"
+                  style={{ background: "transparent", border: "1px solid #3f3f46", color: "#a1a1aa" }}
+                  onMouseEnter={e => (e.currentTarget.style.borderColor = "#52525b")}
+                  onMouseLeave={e => (e.currentTarget.style.borderColor = "#3f3f46")}
+                >
+                  No thanks
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Opted-in: alerts active ── */}
+          {smsStatus === "opted-in" && smsModalFlow === "view" && (
+            <div className="p-6 space-y-5">
+              <DialogHeader>
+                <div className="flex items-center gap-3">
+                  <CheckCircle2 className="w-6 h-6" style={{ color: "#4ade80" }} />
+                  <DialogTitle className="text-white text-lg font-bold">SMS Alerts Active</DialogTitle>
+                </div>
+                <DialogDescription className="sr-only">Your SMS alerts are enabled. You can update your number or disable alerts.</DialogDescription>
+                <p className="text-sm mt-2" style={{ color: "#71717a" }}>
+                  Alerts enabled for <span style={{ color: "#ffffff" }}>{localStorage.getItem("smsPhone") || smsBellInput}</span>
+                </p>
+              </DialogHeader>
+              <div className="flex flex-col gap-2">
+                <button
+                  data-testid="button-sms-update-number"
+                  onClick={() => setSmsModalFlow("update")}
+                  className="w-full py-2.5 rounded-lg text-sm font-semibold transition-colors"
+                  style={{ background: "#18181b", border: "1px solid #3f3f46", color: "#d4d4d8" }}
+                  onMouseEnter={e => (e.currentTarget.style.borderColor = "#52525b")}
+                  onMouseLeave={e => (e.currentTarget.style.borderColor = "#3f3f46")}
+                >
+                  Update Number
+                </button>
+                <button
+                  data-testid="button-sms-disable"
+                  onClick={() => {
+                    setSmsStatus("opted-out");
+                    localStorage.removeItem("smsPhone");
+                    setSmsBellInput("");
+                    setShowSmsModal(false);
+                    toast({ title: "SMS alerts disabled", duration: 3000 });
+                  }}
+                  className="w-full py-2.5 rounded-lg text-sm transition-colors"
+                  style={{ background: "transparent", border: "1px solid #3f3f46", color: "#71717a" }}
+                  onMouseEnter={e => (e.currentTarget.style.borderColor = "#52525b")}
+                  onMouseLeave={e => (e.currentTarget.style.borderColor = "#3f3f46")}
+                >
+                  Disable Alerts
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Opted-out: re-enable flow ── */}
+          {smsStatus === "opted-out" && smsModalFlow === "view" && (
+            <div className="p-6 space-y-5">
+              <DialogHeader>
+                <DialogTitle className="text-white text-lg font-bold">SMS Alerts Off</DialogTitle>
+                <DialogDescription className="sr-only">SMS alerts are currently disabled. Enable them to receive edge alert texts.</DialogDescription>
+                <p className="text-sm mt-1" style={{ color: "#71717a" }}>
+                  You won&apos;t receive edge alert texts
+                </p>
+              </DialogHeader>
+              <button
+                data-testid="button-sms-re-enable"
+                onClick={() => { setSmsStatus("unprompted"); setSmsModalFlow("view"); }}
+                className="w-full py-2.5 rounded-lg text-sm font-bold transition-opacity hover:opacity-90"
+                style={{ background: "#00d4aa", color: "#000" }}
+              >
+                Enable Alerts
+              </button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
