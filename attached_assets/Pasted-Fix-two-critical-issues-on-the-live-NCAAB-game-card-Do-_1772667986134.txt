@@ -1,0 +1,169 @@
+Fix two critical issues on the live NCAAB game card.
+Do not rewrite the component — trace and fix only 
+the broken parts.
+
+---
+
+ISSUE 1: CARD IS SHOWING ONLY H1 MARKETS
+
+The card must show BOTH Full Game and 1H markets 
+via a toggle. Currently only H1 is showing.
+
+FIND the market tab toggle component already in the codebase.
+It should have a state like:
+  const [marketTab, setMarketTab] = useState("full")
+
+FIX 1 — Check default state:
+  Confirm marketTab defaults to "full" not "h1"
+  If it defaults to "h1": change to "full"
+
+FIX 2 — Check data source for each tab:
+  When marketTab === "full":
+    All stat grid values must pull from full game data fields
+    Over/Under line = full game total
+    Engine probs = full game engine calculation
+    Spread = full game spread
+    Projections = full game projected finals
+
+  When marketTab === "h1":
+    All stat grid values pull from first half data fields
+    Over/Under line = H1 total line
+    Engine probs = H1 engine calculation
+    Spread = H1 spread
+
+  If full game data fields exist in the game object 
+  but are not being passed to the stat grid when 
+  marketTab === "full":
+    Fix the conditional so full game fields are used
+    Do not create new data fields — use what exists
+
+FIX 3 — Toggle UI:
+  The toggle must be visible at the top of the stat grid:
+  
+  [Full Game]  [1st Half]
+  
+  Selected tab: bg zinc-800, text white, rounded-md
+  Unselected: text zinc-500, no bg
+  Container: bg zinc-900, rounded-lg, p-1, inline-flex
+  
+  Switching tabs must instantly update:
+    - All stat grid values
+    - Market button lines and percentages
+    - Verdict row edge gap
+    - Book pill lines
+  
+  Gauge is ALWAYS full game — never changes with tab.
+  Add permanent "Full Game" label below gauge.
+
+---
+
+ISSUE 2: ZERO CONTRAST — CARD IS UNREADABLE
+
+Apply these exact color values. Do not use opacity 
+tricks or semi-transparent text. Use explicit hex values.
+
+BACKGROUNDS (clear depth hierarchy):
+  Page/card bg:     #0a0a0a
+  Section bg:       #111111
+  Row bg:           #181818
+  Hover:            #1f1f1f
+
+TEXT (explicit values, no opacity):
+  Primary:          #ffffff   ← game title, score, key numbers
+  Secondary:        #a1a1aa   ← labels, sub-text
+  Muted:            #71717a   ← sub-labels, right-side labels
+  
+  NEVER use text-zinc-600 or darker on dark backgrounds.
+  NEVER replace colors with opacity variants.
+
+STAT GRID ROWS:
+  Left label:       #71717a  text-xs uppercase tracking-wider
+  Center value:     #ffffff  text-lg font-bold
+  Right sub-label:  #a1a1aa  text-xs
+  Row bg:           #111111
+  Row border-bottom: 1px solid #27272a
+  Row padding:      py-4 px-5
+
+ENGINE OVER% value:
+  If value > 50: color #00d4aa (teal)
+  If value < 50: color #ef4444 (red)
+  Font: text-lg font-bold
+
+ENGINE UNDER% value:
+  If value > 50: color #00d4aa (teal)
+  If value < 50: color #ef4444 (red)
+  Font: text-lg font-bold
+
+VERDICT ROWS:
+  "Strong Over/Under EV" label:
+    Over side: #00d4aa font-semibold text-sm
+    Under side: #ef4444 font-semibold text-sm
+  "Engine X% vs Book Y%" sub-text: #a1a1aa text-xs
+  Edge badge "+X.Xpp":
+    bg: rgba(245,158,11,0.15)
+    border: rgba(245,158,11,0.3)
+    text: #f59e0b font-mono font-bold
+  Left border accent: 3px solid #00d4aa (Over) or #ef4444 (Under)
+  Row bg: #111111
+  Row padding: py-4 px-5
+  Row border: 1px solid #27272a
+
+CLV row:
+  Label: #a1a1aa text-sm
+  Badge "↑ Over": 
+    bg rgba(0,212,170,0.15)
+    border rgba(0,212,170,0.3)
+    text #00d4aa
+  Row bg: #0f0f0f
+
+SCORE DISPLAY:
+  "18 – 28": text-4xl font-black #ffffff
+  This must be the most visually dominant element left side
+
+LIVE BADGE:
+  Text "LIVE · H1 4:37": #ffffff font-semibold
+  Green dot: bg-green-400 animate-ping
+  Badge bg: rgba(22,163,74,0.15)
+  Badge border: rgba(22,163,74,0.25)
+  Rounded-full px-3 py-1
+
+GAME TITLE:
+  "[AWAY] @ [HOME]": #ffffff font-bold text-lg
+
+MARKET BUTTONS:
+  Unselected:
+    bg: #181818
+    border: #27272a
+    Label (OVER/UNDER/SPREAD): #71717a text-xs uppercase
+    Line value: #ffffff text-xl font-bold
+    Percentage: #00d4aa (Over) or #ef4444 (Under) text-sm
+  Selected:
+    bg: #1f1f1f
+    border: #ffffff 1.5px
+    All text: #ffffff
+  "+" button: #a1a1aa, border #3f3f46
+
+GAUGE:
+  Background arc: #27272a
+  Value arc: #00d4aa (Over dominant) or #ef4444 (Under)
+  Percentage text: #ffffff font-bold minimum 28px
+  "COVER" or "ENGINE PROB" label: #71717a text-xs
+  Make gauge radius 68, stroke 10
+
+BOOK PILLS:
+  Book name: #ffffff font-semibold text-xs
+  Line text: #a1a1aa text-xs
+  Green dot: bg-green-400
+  Pill bg: #181818
+  Pill border: #27272a
+  Hover border: #00d4aa
+
+MATCHUP HISTORY TOGGLE:
+  "Matchup History" text: #a1a1aa text-sm
+  Chevron: #71717a
+  Row bg: rgba(255,255,255,0.03)
+  Border: #27272a
+
+Apply these color fixes by finding each element's 
+existing className and replacing color values only.
+Do not restructure any component.

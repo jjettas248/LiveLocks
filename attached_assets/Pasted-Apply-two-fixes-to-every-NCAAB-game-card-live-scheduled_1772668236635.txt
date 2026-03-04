@@ -1,0 +1,230 @@
+Apply two fixes to every NCAAB game card — 
+live, scheduled, pre-game, and final.
+These are global fixes, not per-card.
+
+---
+
+FIX 1: CONTRAST — APPLY TO ALL NCAAB CARD STATES
+
+Find the shared NCAAB card component or base card styles.
+Apply these color values globally so every card 
+inherits them — live, scheduled, pre-game, final.
+
+Do not patch each card individually.
+Find the root card component and fix it once.
+
+BACKGROUNDS:
+  Card bg:          #0a0a0a
+  Section bg:       #111111
+  Row bg:           #181818
+  Hover:            #1f1f1f
+  Toggle container: #0f0f0f
+
+TEXT — explicit hex, no opacity tricks:
+  Primary:          #ffffff
+  Secondary:        #a1a1aa
+  Muted:            #71717a
+
+STAT GRID ROWS (all cards):
+  Label left:       #71717a text-xs uppercase tracking-wider
+  Value center:     #ffffff text-lg font-bold
+  Sub-label right:  #a1a1aa text-xs
+  Row bg:           #111111
+  Row divider:      1px solid #27272a
+  Padding:          py-4 px-5
+
+ENGINE OVER% value:
+  > 50%: #00d4aa bold
+  < 50%: #ef4444 bold
+
+ENGINE UNDER% value:
+  > 50%: #00d4aa bold
+  < 50%: #ef4444 bold
+
+VERDICT ROWS:
+  Over EV label:    #00d4aa font-semibold text-sm
+  Under EV label:   #ef4444 font-semibold text-sm
+  Sub-text:         #a1a1aa text-xs
+  Edge badge text:  #f59e0b font-mono font-bold
+  Edge badge bg:    rgba(245,158,11,0.15)
+  Edge badge border:rgba(245,158,11,0.3)
+  Over left accent: 3px solid #00d4aa
+  Under left accent:3px solid #ef4444
+  Row bg:           #111111
+  Row border:       1px solid #27272a
+
+CLV row:
+  Label:            #a1a1aa text-sm
+  Over badge bg:    rgba(0,212,170,0.15)
+  Over badge border:rgba(0,212,170,0.3)
+  Over badge text:  #00d4aa
+  Row bg:           #0f0f0f
+
+SCORE:
+  Text:             #ffffff text-4xl font-black
+
+LIVE BADGE:
+  Text:             #ffffff font-semibold
+  Dot:              bg-green-400 animate-ping
+  Badge bg:         rgba(22,163,74,0.15)
+  Badge border:     rgba(22,163,74,0.25)
+
+GAME TITLE:         #ffffff font-bold text-lg
+
+MARKET BUTTONS:
+  Unselected bg:    #181818
+  Unselected border:#27272a
+  Label text:       #71717a text-xs uppercase
+  Line value:       #ffffff text-xl font-bold
+  Over pct:         #00d4aa text-sm
+  Under pct:        #ef4444 text-sm
+  Selected bg:      #1f1f1f
+  Selected border:  #ffffff 1.5px
+
+GAUGE:
+  Background arc:   #27272a
+  Over arc:         #00d4aa
+  Under arc:        #ef4444
+  Percentage text:  #ffffff font-bold min 28px
+  Label text:       #71717a text-xs
+  Radius: 68, stroke: 10
+
+BOOK PILLS:
+  Name text:        #ffffff font-semibold text-xs
+  Line text:        #a1a1aa text-xs
+  Dot:              bg-green-400
+  Bg:               #181818
+  Border:           #27272a
+  Hover border:     #00d4aa
+
+MATCHUP HISTORY TOGGLE:
+  Label:            #a1a1aa text-sm
+  Chevron:          #71717a
+  Row bg:           rgba(255,255,255,0.03)
+  Border:           #27272a
+
+PRE-GAME CARD SPECIFIC:
+  Countdown text default:  #71717a
+  Countdown warning (<1h): #f59e0b
+  Countdown urgent (<5m):  #ef4444
+  Engine inactive gauge:   #52525b (zinc-600)
+  Disabled button text:    #52525b
+  Engine activation banner bg:    #111111
+  Engine activation banner border:#3f3f46
+  Engine activation banner text:  #a1a1aa
+
+FINAL CARD SPECIFIC:
+  HIT badge bg:     rgba(0,212,170,0.15)
+  HIT badge border: rgba(0,212,170,0.3)
+  HIT badge text:   #00d4aa
+  MISS badge bg:    rgba(239,68,68,0.15)
+  MISS badge border:rgba(239,68,68,0.3)
+  MISS badge text:  #ef4444
+  Final score text: #ffffff font-bold
+  Frozen gauge arc: #52525b
+
+SCHEDULED CARD SPECIFIC:
+  "Scheduled" status text: #71717a
+  Tipoff time text:        #a1a1aa
+  Chevron icon:            #52525b
+
+---
+
+FIX 2: FULL GAME / 1H TOGGLE ON ALL NCAAB CARDS
+
+Add the Full Game / 1H toggle to every NCAAB card 
+that shows market data — live and pre-game cards.
+Final cards do not need the toggle.
+
+TOGGLE STATE:
+  const [marketTab, setMarketTab] = useState("full")
+  Default is always "full" — never "h1"
+
+TOGGLE UI:
+  Position: top of stat grid section, full width
+  
+  <div style={{
+    display: "inline-flex",
+    background: "#0f0f0f",
+    borderRadius: "8px",
+    padding: "4px",
+    gap: "4px"
+  }}>
+    <button 
+      onClick={() => setMarketTab("full")}
+      style={{
+        background: marketTab === "full" ? "#27272a" : "transparent",
+        color: marketTab === "full" ? "#ffffff" : "#71717a",
+        borderRadius: "6px",
+        padding: "4px 12px",
+        fontSize: "12px",
+        fontWeight: 500,
+        border: "none",
+        cursor: "pointer"
+      }}
+    >
+      Full Game
+    </button>
+    <button
+      onClick={() => setMarketTab("h1")}
+      style={{
+        background: marketTab === "h1" ? "#27272a" : "transparent",
+        color: marketTab === "h1" ? "#ffffff" : "#71717a",
+        borderRadius: "6px",
+        padding: "4px 12px",
+        fontSize: "12px",
+        fontWeight: 500,
+        border: "none",
+        cursor: "pointer"
+      }}
+    >
+      1st Half
+    </button>
+  </div>
+
+WHAT CHANGES WHEN TAB SWITCHES:
+
+  marketTab === "full":
+    Full Game Total row: full game total line
+    Engine Over%: full game over probability
+    Engine Under%: full game under probability
+    Spread: full game spread
+    Away Proj: full game projected final
+    Home Proj: full game projected final
+    Market buttons: full game lines
+    Verdict rows: full game edge gap
+    Book pills: full game O/U line from books
+
+  marketTab === "h1":
+    Full Game Total row → label changes to "H1 TOTAL"
+    Value: H1 total line
+    Engine Over%: H1 over probability
+    Engine Under%: H1 under probability
+    Spread: H1 spread
+    Away Proj: H1 projected score
+    Home Proj: H1 projected score
+    Market buttons: H1 lines
+    Verdict rows: H1 edge gap
+    Book pills: H1 O/U line if available, else "H1 Lines TBD"
+
+  GAUGE: never changes — always full game probability
+  Add permanent "Full Game" label below gauge in #71717a text-xs
+  This label does not change when tab switches
+
+  If H1 data is unavailable for a field:
+    Show "--" — do not break layout
+    Show small note under toggle: 
+    "1H lines unavailable" in #71717a text-xs italic
+
+SCOPE:
+  This toggle must exist on:
+    Live game cards ✓
+    Pre-game cards ✓
+  
+  This toggle must NOT exist on:
+    Final cards ✗
+    Scheduled row chips ✗
+    Sidebar condensed rows ✗
+
+  Each card has its own independent marketTab state.
+  One card switching to H1 does not affect other cards.
