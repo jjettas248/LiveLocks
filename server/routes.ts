@@ -794,7 +794,7 @@ export async function registerRoutes(
 
   // Roster sync from ESPN API — updates player team assignments from live rosters
   app.post("/api/sync-rosters", async (req, res) => {
-    const normR = (s: string) => s.toLowerCase().replace(/['.'\-\s]+/g, "").replace(/jr$|sr$|ii$|iii$|iv$/, "");
+    const normR = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/['.'\-\s]+/g, "").replace(/jr$|sr$|ii$|iii$|iv$/, "");
     const ROSTER_ALIASES: Record<string, string> = {
       "alexsarr": "alexandresarr",
       "cameronthomas": "camthomas",
