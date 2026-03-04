@@ -63,7 +63,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
       const result: Record<string, string> = {};
 
       for (const [key, meta] of Object.entries(PLAN_META) as [string, typeof PLAN_META[keyof typeof PLAN_META]][]) {
-        const existing = await getPriceIdForTier(key as "all" | "elite");
+        const existing = await getPriceIdForTier(key as "nba" | "all");
         if (existing) {
           result[key] = existing;
           continue;

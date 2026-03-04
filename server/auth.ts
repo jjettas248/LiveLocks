@@ -4,7 +4,6 @@ import jwt from "jsonwebtoken";
 import { storage } from "./storage";
 import { insertUserEmailPasswordSchema } from "@shared/schema";
 import type { User } from "@shared/schema";
-import { sendSms } from "./twilioService";
 
 declare module "express-session" {
   interface SessionData {
@@ -192,13 +191,6 @@ export async function requirePlayAccess(req: Request, res: Response, next: NextF
   if (user.playsUsed < FREE_PLAY_LIMIT) {
     await storage.incrementPlaysUsed(user.id);
     return next();
-  }
-
-  if (user.playsUsed === FREE_PLAY_LIMIT && user.phoneNumber && user.smsAlerts !== false) {
-    sendSms(
-      user.phoneNumber,
-      `LiveLocks: You've used all ${FREE_PLAY_LIMIT} free plays! Upgrade to Pro ($40/mo) for unlimited NBA & NCAAB predictions. Log in to upgrade your plan.`
-    ).catch(console.warn);
   }
 
   return res.status(402).json({

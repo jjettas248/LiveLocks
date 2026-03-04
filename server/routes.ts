@@ -5,7 +5,7 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
 import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines } from "./oddsService";
-import { computeNCAABPlays, getNCAABScoreboard, getNCAABGamesWithLines, getNCAABGamePreview } from "./ncaabService";
+import { computeNCAABPlays, getNCAABScoreboard } from "./ncaabService";
 import { calculateParlay } from "./parlayService";
 import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin, requireTier } from "./auth";
 import { registerStripeRoutes } from "./stripeService";
@@ -76,8 +76,8 @@ export async function registerRoutes(
     }
   });
 
-  // ── NCAAB Routes (all authenticated users) ──────────────────────────────
-  app.get("/api/ncaab/plays", requireAuth, async (_req, res) => {
+  // ── NCAAB Routes (All Sports + Elite + Admin) ────────────────────────────
+  app.get("/api/ncaab/plays", requireTier("all", "elite"), async (_req, res) => {
     try {
       const plays = await computeNCAABPlays();
       return res.json({ plays });
@@ -87,34 +87,13 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/ncaab/games", requireAuth, async (_req, res) => {
+  app.get("/api/ncaab/games", requireTier("all", "elite"), async (_req, res) => {
     try {
-      const games = await getNCAABGamesWithLines();
+      const games = await getNCAABScoreboard();
       return res.json({ games });
     } catch (err: any) {
       console.error("[NCAAB games]", err.message);
       return res.status(500).json({ error: err.message || "Failed to fetch NCAAB scoreboard" });
-    }
-  });
-
-  app.post("/api/ncaab/game-view", requirePlayAccess, async (req, res) => {
-    try {
-      const userId = (req as any).resolvedUserId!;
-      const user = await storage.getUserById(userId);
-      res.json({ ok: true, playsUsed: user?.playsUsed ?? 0 });
-    } catch (err: any) {
-      res.status(500).json({ error: "Failed to record game view" });
-    }
-  });
-
-  app.get("/api/ncaab/game-preview/:gameId", requireAuth, async (req, res) => {
-    try {
-      const preview = await getNCAABGamePreview(String(req.params.gameId));
-      if (!preview) return res.status(404).json({ error: "Game not found" });
-      return res.json(preview);
-    } catch (err: any) {
-      console.error("[NCAAB game-preview]", err.message);
-      return res.status(500).json({ error: err.message || "Failed to fetch game preview" });
     }
   });
 
@@ -266,23 +245,11 @@ export async function registerRoutes(
     }
   });
 
-  // ESPN groups games by Eastern time, not UTC. Without this helper, after
-  // midnight UTC (≈7pm ET) the server would request the next calendar day.
-  function getEasternDateStr(): string {
-    const etStr = new Date().toLocaleDateString("en-US", {
-      timeZone: "America/New_York",
-      year: "numeric", month: "2-digit", day: "2-digit",
-    });
-    const [m, d, y] = etStr.split("/");
-    return `${y}${m}${d}`;
-  }
-
   // Proxy ESPN live NBA scoreboard to avoid CORS
   app.get("/api/live-games", async (req, res) => {
     try {
-      const todayStr = getEasternDateStr();
       const response = await fetch(
-        `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${todayStr}`,
+        "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
         { headers: { "User-Agent": "Mozilla/5.0" } }
       );
       if (!response.ok) throw new Error("ESPN API unavailable");
@@ -455,9 +422,8 @@ export async function registerRoutes(
   // All authenticated users can fetch — free users pay 1 play per game unlock via /api/2h-game-view.
   app.get("/api/halftime-plays", requireAuth, async (req, res) => {
     try {
-      const todayStr2 = getEasternDateStr();
       const gamesRes = await fetch(
-        `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${todayStr2}`,
+        "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
         { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
       );
       if (!gamesRes.ok) throw new Error("ESPN API unavailable");
@@ -667,9 +633,6 @@ export async function registerRoutes(
                   if (oddsLine != null) { liveLine = oddsLine; lineSource = "odds_api"; }
                 }
 
-                // Only surface plays with a real sportsbook line — skip season_avg fallbacks
-                if (lineSource !== "odds_api") continue;
-
                 const result = await storage.calculateProbability({
                   playerId: dbPlayer.id,
                   opponentTeam: opponentAbbr,
@@ -797,6 +760,9 @@ export async function registerRoutes(
       const userId = (req as any).resolvedUserId!;
       const user = await storage.getUserById(userId);
       if (!user) return res.status(401).json({ error: "Not found" });
+      if (!["all", "elite"].includes(user.subscriptionTier ?? "") && !user.isAdmin) {
+        return res.status(403).json({ error: "SMS alerts require a Pro or All Sports subscription" });
+      }
       const { phoneNumber, smsAlerts } = req.body;
       await storage.updateUserAlerts(userId, {
         phoneNumber: phoneNumber ?? null,

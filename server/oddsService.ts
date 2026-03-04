@@ -63,9 +63,7 @@ function teamsMatch(a: string, b: string): boolean {
   return na === nb || na.includes(nb) || nb.includes(na);
 }
 
-// Fetch and cache the full list of NBA events from The Odds API.
-// We widen the time window to include games that tipped off up to 4 hours ago
-// so that live/in-progress games still appear in the event list.
+// Fetch and cache the full list of NBA events from The Odds API
 async function getEvents(): Promise<any[]> {
   const cacheKey = "events_list";
   const cached = cache.get(cacheKey);
@@ -73,18 +71,17 @@ async function getEvents(): Promise<any[]> {
 
   if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
 
-  const from = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
-  const to   = new Date(Date.now() + 36 * 60 * 60 * 1000).toISOString();
-  const url  = `${BASE_URL}/events?apiKey=${ODDS_API_KEY}&dateFormat=iso&commenceTimeFrom=${from}&commenceTimeTo=${to}`;
-
-  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  const res = await fetch(
+    `${BASE_URL}/events?apiKey=${ODDS_API_KEY}&dateFormat=iso`,
+    { signal: AbortSignal.timeout(8000) }
+  );
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`Events fetch failed: ${res.status} — ${body}`);
   }
   const data = await res.json();
   cache.set(cacheKey, { data, timestamp: Date.now() });
-  console.log(`[Odds] Fetched ${data.length} NBA events (window: last 4h → next 36h)`);
+  console.log(`[Odds] Fetched ${data.length} NBA events`);
   return data;
 }
 
@@ -127,7 +124,7 @@ export async function resolveOddsEventId(
       }
     }
 
-    console.warn(`[Odds] No event found for "${playerTeam}" vs "${opponentTeam}". ${events.length} events in window: ${
+    console.warn(`[Odds] No event found for ${playerTeam} vs ${opponentTeam}. Available: ${
       events.map((e: any) => `${e.away_team} @ ${e.home_team}`).join(" | ")
     }`);
     return null;

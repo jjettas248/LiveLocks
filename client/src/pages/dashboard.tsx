@@ -25,7 +25,6 @@ import {
   TrendingUp,
   TrendingDown,
   ChevronDown,
-  ChevronUp,
   Zap,
   Radio,
   RefreshCw,
@@ -39,7 +38,6 @@ import {
   Check,
   Settings,
   Lock,
-  ArrowUpRight,
 } from "lucide-react";
 import { SiX } from "react-icons/si";
 
@@ -98,7 +96,7 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
   const rawData = window.atob(base64);
-  return Uint8Array.from(Array.from(rawData).map(c => c.charCodeAt(0)));
+  return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
 }
 
 export default function Dashboard() {
@@ -149,7 +147,6 @@ export default function Dashboard() {
 
   const [activeTab, setActiveTab] = useState<"calculator" | "ncaab">("calculator");
   const [nbaSubTab, setNbaSubTab] = useState<"live" | "halftime">("live");
-  const [expandedHtPlayIdx, setExpandedHtPlayIdx] = useState<number | null>(null);
   const [slateFilterProp, setSlateFilterProp] = useState<string>("all");
   const [slateFilterProb, setSlateFilterProb] = useState<string>("all");
   const [showAlertsPanel, setShowAlertsPanel] = useState(false);
@@ -186,7 +183,6 @@ export default function Dashboard() {
     form.setValue("currentPeriod" as any, 3);
     form.setValue("gameClock" as any, "12:00");
     skipAutoFillRef.current = true;
-    setNbaSubTab("live");
     setActiveTab("calculator");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -347,8 +343,8 @@ export default function Dashboard() {
   const { data: halftimePlaysData, isLoading: isHalftimePlaysLoading, refetch: refetchHalftimePlays } = useQuery<{ plays: any[]; message?: string }>({
     queryKey: ["/api/halftime-plays"],
     enabled: activeTab === "calculator" && nbaSubTab === "halftime",
-    refetchInterval: 90 * 1000,
-    staleTime: 60 * 1000,
+    refetchInterval: 5 * 60 * 1000,
+    staleTime: 4 * 60 * 1000,
   });
 
   // ── 2-minute auto-refresh for live box score ───────────────────────────────
@@ -426,7 +422,7 @@ export default function Dashboard() {
     const isLive = game.status !== "Scheduled" && game.status !== "Pre-Game" && game.status !== "Final";
     if (isLive && game.period >= 1 && game.period <= 4) {
       form.setValue("currentPeriod", game.period);
-      form.setValue("gameClock", game.clock || (game.period >= 4 ? "0:00" : "12:00"));
+      form.setValue("gameClock", game.clock || "12:00");
       form.setValue("halftimeScore", `${game.awayScore}-${game.homeScore}`);
     }
   }, [liveGames, selectedGameId]);
@@ -502,7 +498,7 @@ export default function Dashboard() {
       const game = liveGames.find(g => g.id === selectedGameId);
       if (game && game.period >= 1 && game.period <= 4) {
         form.setValue("currentPeriod", game.period);
-        form.setValue("gameClock", game.clock || (game.period >= 4 ? "0:00" : "12:00"));
+        form.setValue("gameClock", game.clock || "12:00");
       }
     }
 
@@ -734,7 +730,7 @@ export default function Dashboard() {
         setUpgradeModalState({ playsUsed: err.playsUsed ?? user?.playsUsed ?? 0, limit: err.limit ?? 15 });
         setShowUpgradeModal(true);
       } else if (res.ok) {
-        setUnlockedGameIds(prev => { const n = new Set(prev); n.add(gameId); return n; });
+        setUnlockedGameIds(prev => new Set([...prev, gameId]));
         queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       } else {
         toast({ title: "Could not unlock game", description: "Please try again.", variant: "destructive" });
@@ -909,47 +905,61 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* SMS Alerts — free on all plans */}
+            {/* SMS (Pro + All Sports) */}
             <div className="bg-secondary/40 rounded-xl p-4 space-y-3">
               <p className="text-sm font-semibold text-foreground">💬 SMS Alerts</p>
-              <div className="space-y-2">
-                <p className="text-xs text-muted-foreground">Get a text message when plays hit ≥90% confidence — free on all plans. Msg & data rates may apply. Reply STOP to cancel anytime.</p>
-                <input
-                  data-testid="input-phone-number"
-                  type="tel"
-                  placeholder="+1 555 000 0000"
-                  value={phoneInput}
-                  onChange={(e) => setPhoneInput(e.target.value)}
-                  className="w-full px-3 py-1.5 rounded-lg bg-background border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary"
-                />
-                <div className="flex items-center gap-3">
-                  <label className="flex items-center gap-2 cursor-pointer">
+              {["all", "elite"].includes(user.subscriptionTier ?? "") || user.isAdmin
+                ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">Get a text message for 2H plays and ≥90% confidence plays. Msg & data rates may apply. Reply STOP to cancel anytime.</p>
+                    <input
+                      data-testid="input-phone-number"
+                      type="tel"
+                      placeholder="+1 555 000 0000"
+                      value={phoneInput}
+                      onChange={(e) => setPhoneInput(e.target.value)}
+                      className="w-full px-3 py-1.5 rounded-lg bg-background border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary"
+                    />
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <button
+                          data-testid="toggle-sms-alerts"
+                          type="button"
+                          onClick={() => setSmsEnabled(v => !v)}
+                          className={`w-10 h-5 rounded-full transition-colors relative ${smsEnabled ? "bg-primary" : "bg-secondary border border-border"}`}
+                        >
+                          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${smsEnabled ? "left-5" : "left-0.5"}`} />
+                        </button>
+                        <span className="text-xs text-muted-foreground">{smsEnabled ? "SMS on" : "SMS off"}</span>
+                      </label>
+                      <button
+                        data-testid="button-save-sms"
+                        onClick={handleSaveSms}
+                        disabled={smsLoading}
+                        className="ml-auto px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 disabled:opacity-50"
+                      >
+                        {smsLoading ? "Saving..." : "Save"}
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground/60 leading-relaxed">
+                      By enabling SMS, you consent to receive automated sports alerts from LiveLocks AI. View our{" "}
+                      <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Terms</a>
+                      {" "}and{" "}
+                      <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Privacy Policy</a>.
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-2">SMS alerts are included in the Pro and All Sports plans — never miss a 2H play.</p>
                     <button
-                      data-testid="toggle-sms-alerts"
-                      type="button"
-                      onClick={() => setSmsEnabled(v => !v)}
-                      className={`w-10 h-5 rounded-full transition-colors relative ${smsEnabled ? "bg-primary" : "bg-secondary border border-border"}`}
+                      onClick={() => { setShowAlertsPanel(false); setUpgradeModalState({ playsUsed: user.playsUsed ?? 0, limit: 15 }); setShowUpgradeModal(true); }}
+                      className="px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/20"
                     >
-                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${smsEnabled ? "left-5" : "left-0.5"}`} />
+                      View Plans →
                     </button>
-                    <span className="text-xs text-muted-foreground">{smsEnabled ? "SMS on" : "SMS off"}</span>
-                  </label>
-                  <button
-                    data-testid="button-save-sms"
-                    onClick={handleSaveSms}
-                    disabled={smsLoading}
-                    className="ml-auto px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 disabled:opacity-50"
-                  >
-                    {smsLoading ? "Saving..." : "Save"}
-                  </button>
-                </div>
-                <p className="text-[10px] text-muted-foreground/60 leading-relaxed">
-                  By enabling SMS, you consent to receive automated sports alerts from LiveLocks AI. View our{" "}
-                  <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Terms</a>
-                  {" "}and{" "}
-                  <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Privacy Policy</a>.
-                </p>
-              </div>
+                  </div>
+                )
+              }
             </div>
 
             {/* Alert history */}
@@ -960,7 +970,7 @@ export default function Dashboard() {
                   <div key={i} className="bg-secondary/30 rounded-lg px-3 py-2">
                     <p className="text-xs font-semibold text-foreground">{a.title}</p>
                     <p className="text-xs text-muted-foreground">{a.body}</p>
-                    <p className="text-[10px] text-muted-foreground/50 mt-0.5">{new Date(a.time).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })} ET</p>
+                    <p className="text-[10px] text-muted-foreground/50 mt-0.5">{new Date(a.time).toLocaleTimeString()}</p>
                   </div>
                 ))}
               </div>
@@ -1014,17 +1024,19 @@ export default function Dashboard() {
             >
               🏀 NBA Live
             </button>
-            <button
-              data-testid="tab-ncaab"
-              onClick={() => setActiveTab("ncaab")}
-              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
-                activeTab === "ncaab"
-                  ? "bg-primary text-primary-foreground border-glow"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              🏀 NCAAB Live
-            </button>
+            {(user?.isAdmin || ["all", "elite"].includes(user?.subscriptionTier ?? "")) && (
+              <button
+                data-testid="tab-ncaab"
+                onClick={() => setActiveTab("ncaab")}
+                className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
+                  activeTab === "ncaab"
+                    ? "bg-primary text-primary-foreground border-glow"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                🏀 NCAAB Live
+              </button>
+            )}
             <button
               data-testid="tab-mlb-locked"
               onClick={() => setMlbPopoverOpen((v) => !v)}
@@ -1116,7 +1128,7 @@ export default function Dashboard() {
                 const isSelected = game.id === selectedGameId;
                 const scoreStr = `${game.awayScore}-${game.homeScore}`;
                 const tipoffTime = game.startTime
-                  ? new Date(game.startTime).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit", hour12: true })
+                  ? new Date(game.startTime).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })
                   : null;
 
                 return (
@@ -1169,7 +1181,7 @@ export default function Dashboard() {
                         {isLive
                           ? `Q${game.period} ${game.clock}`
                           : isScheduled && tipoffTime
-                          ? `${tipoffTime} ET`
+                          ? tipoffTime
                           : game.status}
                       </span>
                       {isSelected && <span className="text-primary font-medium ml-1">●</span>}
@@ -1404,10 +1416,7 @@ export default function Dashboard() {
                 {/* Player */}
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
-                      <span className="w-5 h-5 rounded-full bg-primary/20 text-primary text-[10px] font-bold flex items-center justify-center shrink-0">①</span>
-                      Player
-                    </label>
+                    <label className="text-xs font-medium text-muted-foreground">Player</label>
                     {selectedGameId && selectedGameTeams && (
                       <span className="flex items-center gap-1 text-xs text-primary">
                         <Users className="w-3 h-3" />
@@ -1438,10 +1447,7 @@ export default function Dashboard() {
 
                 {/* Opponent */}
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
-                    <span className="w-5 h-5 rounded-full bg-primary/20 text-primary text-[10px] font-bold flex items-center justify-center shrink-0">②</span>
-                    Opponent Team
-                  </label>
+                  <label className="text-xs font-medium text-muted-foreground">Opponent Team</label>
                   <div className="relative">
                     <select
                       {...form.register("opponentTeam")}
@@ -1462,7 +1468,6 @@ export default function Dashboard() {
                 {/* Game Situation */}
                 <div className="p-3.5 rounded-lg bg-secondary/40 border border-border/50 space-y-3">
                   <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                    <span className="w-5 h-5 rounded-full bg-primary/20 text-primary text-[10px] font-bold flex items-center justify-center shrink-0">③</span>
                     <Clock className="w-3 h-3" />
                     Game Situation
                     {autoFilledFields.size > 0 && (
@@ -1527,30 +1532,22 @@ export default function Dashboard() {
                 {/* Stat Type + Line */}
                 <div className="p-3.5 rounded-lg bg-secondary/40 border border-border/50 space-y-3">
                   <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                    <span className="w-5 h-5 rounded-full bg-primary/20 text-primary text-[10px] font-bold flex items-center justify-center shrink-0">④</span>
-                    <TrendingUp className="w-3 h-3" /> Prop &amp; Line
+                    <Target className="w-3 h-3" /> The Line
                   </h3>
-                  {/* Stat / Prop Type dropdown */}
-                  <div>
-                    <label className="text-xs text-muted-foreground mb-1.5 block">Stat / Prop Type</label>
-                    <select
-                      data-testid="select-stat-type"
-                      value={watchedStatType}
-                      onChange={e => form.setValue("statType" as any, e.target.value)}
-                      className="w-full h-9 px-3 rounded-lg bg-input border border-border focus:border-primary outline-none text-sm"
-                    >
-                      <option value="points">Points (PTS)</option>
-                      <option value="rebounds">Rebounds (REB)</option>
-                      <option value="assists">Assists (AST)</option>
-                      <option value="threes">3-Pointers (3-PTR)</option>
-                      <option value="steals">Steals (STL)</option>
-                      <option value="blocks">Blocks (BLK)</option>
-                      <option value="pts_reb_ast">Pts + Reb + Ast</option>
-                      <option value="pts_reb">Pts + Reb</option>
-                      <option value="pts_ast">Pts + Ast</option>
-                      <option value="reb_ast">Reb + Ast</option>
-                      <option value="stl_blk">Stl + Blk</option>
-                    </select>
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">Stat / Prop Type</label>
+                    <div className="relative">
+                      <select
+                        {...form.register("statType")}
+                        data-testid="select-stat-type"
+                        className="w-full h-9 pl-3 pr-8 rounded-lg bg-input border border-border focus:border-primary outline-none appearance-none text-sm"
+                      >
+                        {STAT_TYPES.map((s) => (
+                          <option key={s.value} value={s.value}>{s.label}</option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2.5">
                     <div className="space-y-1">
@@ -1631,7 +1628,7 @@ export default function Dashboard() {
                       {/* Odds fetched but nothing found */}
                       {watchedOpponent && !isOddsLoading && oddsData && !((oddsData as any)._quotaExhausted) && Object.keys(oddsData).filter(k => k !== '_quotaExhausted').length === 0 && (
                         <p className="text-xs text-muted-foreground/60 bg-secondary/50 rounded-lg p-2 border border-border/40">
-                          No live props available — books often pause player props during live games or blowouts. Lines may reappear after the half. You can enter a line manually above.
+                          No lines found — props may not be posted yet, or the player is inactive.
                         </p>
                       )}
 
@@ -1718,19 +1715,12 @@ export default function Dashboard() {
                   type="submit"
                   disabled={calculateMutation.isPending}
                   data-testid="button-calculate"
-                  className={`w-full h-12 rounded-xl bg-primary text-primary-foreground font-bold text-base flex items-center justify-center gap-2 disabled:opacity-50 transition-all ${
-                    !calculateMutation.isPending && watchedStatType && form.watch("liveLine") > 0
-                      ? "shadow-lg shadow-primary/25"
-                      : ""
-                  }`}
+                  className="w-full h-10 rounded-lg bg-primary text-primary-foreground font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50"
                 >
                   {calculateMutation.isPending ? (
-                    <div className="w-5 h-5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                    <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
                   ) : (
-                    <>
-                      <Zap className="w-5 h-5" />
-                      Calculate Probability
-                    </>
+                    "Calculate Probability"
                   )}
                 </button>
 
@@ -2146,37 +2136,6 @@ export default function Dashboard() {
                 </button>
               </div>
 
-              {/* Games at Halftime strip */}
-              {(() => {
-                const htGames = (liveGames ?? []).filter(g =>
-                  g.status === "Halftime" ||
-                  (typeof g.status === "string" && g.status.toLowerCase().includes("half"))
-                );
-                if (htGames.length === 0) return null;
-                return (
-                  <div className="mb-4 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3">
-                    <p className="text-[10px] font-bold text-amber-500 uppercase tracking-widest mb-2">Games at Halftime</p>
-                    <div className="flex flex-wrap gap-2">
-                      {htGames.map(g => {
-                        const playsGroup = halftimeGameGroups.find(grp => grp.gameId === g.id);
-                        return (
-                          <div key={g.id} data-testid={`halftime-game-${g.id}`} className="flex items-center gap-2 bg-card border border-border/60 rounded-lg px-3 py-1.5 text-xs">
-                            <span className="font-bold text-foreground">{g.awayTeam}</span>
-                            <span className="text-muted-foreground tabular-nums">{g.awayScore}–{g.homeScore}</span>
-                            <span className="font-bold text-foreground">{g.homeTeam}</span>
-                            {playsGroup ? (
-                              <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-primary/15 text-primary font-semibold border border-primary/25">{playsGroup.plays.length} plays</span>
-                            ) : (
-                              <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground border border-border/50">No live lines · <button type="button" className="text-primary hover:underline" onClick={() => setNbaSubTab("live")}>Use Calculator</button></span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })()}
-
               {/* Filters */}
               <div className="flex flex-wrap gap-2 mb-4">
                   <div className="flex items-center gap-1.5">
@@ -2191,6 +2150,11 @@ export default function Dashboard() {
                         { value: "steals", label: "STL" },
                         { value: "blocks", label: "BLK" },
                         { value: "combo", label: "Combos" },
+                        { value: "pts_reb", label: "Pts+Reb" },
+                        { value: "pts_ast", label: "Pts+Ast" },
+                        { value: "pts_reb_ast", label: "Pts+Reb+Ast" },
+                        { value: "reb_ast", label: "Reb+Ast" },
+                        { value: "stl_blk", label: "Stl+Blk" },
                       ].map(opt => (
                         <button
                           key={opt.value}
@@ -2329,169 +2293,100 @@ export default function Dashboard() {
                     const isOver = play.betDirection === "over";
                     const isInjured = injuredPlayerNames.has(play.playerName.toLowerCase());
                     const statLabel = STAT_TYPES.find(s => s.value === play.statType)?.label ?? play.statType;
+                    const hasLiveLine = play.lineSource === "odds_api";
                     const globalIdx = halftimePlaysData.plays.indexOf(play);
-                    const isExpanded = expandedHtPlayIdx === idx;
-                    const displayProb = play.betDirection === "under"
-                      ? Math.round((100 - play.probability) * 10) / 10
-                      : play.probability;
-                    const projH2 = play.expectedTotal !== null && play.halftimeStat !== null
-                      ? Math.max(0, (play.expectedTotal - play.halftimeStat)).toFixed(1)
-                      : null;
                     return (
                       <div
                         key={idx}
                         data-testid={`halftime-play-${idx}`}
-                        className={`rounded-xl border p-4 space-y-2 relative transition-all ${
+                        className={`rounded-xl border p-4 space-y-2 relative cursor-pointer transition-all ${
                           isInjured
-                            ? "border-red-500/40 bg-red-500/5"
-                            : isExpanded
-                            ? "border-primary/50 bg-secondary/50"
-                            : "border-border/60 bg-secondary/30"
+                            ? "border-red-500/40 bg-red-500/5 hover:border-red-500/60"
+                            : "border-border/60 bg-secondary/30 hover:border-primary/40 hover:bg-secondary/50"
                         }`}
+                        onClick={() => loadPlayInCalculator(play)}
                       >
-                        <div
-                          className="cursor-pointer"
-                          onClick={() => setExpandedHtPlayIdx(prev => prev === idx ? null : idx)}
-                        >
-                          <div className="absolute top-3 left-3 w-5 h-5 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center">
-                            <span className="text-[9px] font-bold text-primary leading-none">#{globalIdx + 1}</span>
+                        <div className="absolute top-3 left-3 w-5 h-5 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center">
+                          <span className="text-[9px] font-bold text-primary leading-none">#{globalIdx + 1}</span>
+                        </div>
+                        <div className="flex items-start justify-between gap-2 pl-7">
+                          <div>
+                            <div className="font-semibold text-sm text-foreground">{play.playerName}</div>
+                            <div className="text-xs text-muted-foreground">{play.team} vs {play.opponent}</div>
+                            {isInjured && (
+                              <span className="text-xs text-red-400 font-semibold flex items-center gap-0.5 mt-0.5">
+                                <AlertTriangle className="w-3 h-3" /> Injured
+                              </span>
+                            )}
                           </div>
-                          <div className="flex items-start justify-between gap-2 pl-7">
-                            <div>
-                              <div className="font-semibold text-sm text-foreground">{play.playerName}</div>
-                              <div className="text-xs text-muted-foreground">{play.team} vs {play.opponent}</div>
-                              {isInjured && (
-                                <span className="text-xs text-red-400 font-semibold flex items-center gap-0.5 mt-0.5">
-                                  <AlertTriangle className="w-3 h-3" /> Injured
-                                </span>
-                              )}
+                          <div className="text-right flex-shrink-0">
+                            {(() => {
+                              const displayProb = play.betDirection === "under"
+                                ? Math.round((100 - play.probability) * 10) / 10
+                                : play.probability;
+                              return (
+                                <>
+                                  <div className={`text-xl font-bold font-mono ${
+                                    displayProb >= 65 ? "text-green-400" :
+                                    displayProb <= 35 ? "text-red-400" : "text-yellow-400"
+                                  }`}>
+                                    {displayProb.toFixed(1)}%
+                                  </div>
+                                  <div className="text-[9px] font-semibold text-muted-foreground">
+                                    {isOver ? "Over %" : "Under %"}
+                                  </div>
+                                </>
+                              );
+                            })()}
+                            <div className="text-xs text-muted-foreground">
+                              Edge: +{play.edge.toFixed(1)}%
                             </div>
-                            <div className="text-right flex-shrink-0 flex items-start gap-2">
-                              <div>
-                                <div className={`text-xl font-bold font-mono ${
-                                  displayProb >= 65 ? "text-green-400" :
-                                  displayProb <= 35 ? "text-red-400" : "text-yellow-400"
-                                }`}>
-                                  {displayProb.toFixed(1)}%
-                                </div>
-                                <div className="text-[9px] font-semibold text-muted-foreground">
-                                  {isOver ? "Over %" : "Under %"}
-                                </div>
-                                <div className="text-xs text-muted-foreground">
-                                  Edge: +{play.edge.toFixed(1)}%
-                                </div>
-                              </div>
-                              {isExpanded
-                                ? <ChevronUp className="w-4 h-4 text-muted-foreground mt-1" />
-                                : <ChevronDown className="w-4 h-4 text-muted-foreground mt-1" />
-                              }
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2 flex-wrap mt-1">
-                            <span className={`text-xs font-mono px-2 py-0.5 rounded font-bold ${
-                              isOver ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"
-                            }`}>
-                              {statLabel} {isOver ? "O" : "U"}{play.line}
-                            </span>
-                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-green-500/15 text-green-400">
-                              Live Line
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              H1: {play.halftimeStat}
-                            </span>
                           </div>
                         </div>
-
-                        {/* Expanded detail section */}
-                        {isExpanded && (
-                          <div className="border-t border-border/40 pt-3 mt-2 space-y-3">
-                            <div className="grid grid-cols-3 gap-2 text-center">
-                              <div className="bg-secondary/60 rounded-lg py-2">
-                                <div className="text-xs font-bold text-foreground">{play.halftimeStat}</div>
-                                <div className="text-[10px] text-muted-foreground">H1 Actual</div>
-                              </div>
-                              <div className="bg-secondary/60 rounded-lg py-2">
-                                <div className="text-xs font-bold text-foreground">{projH2 ?? "—"}</div>
-                                <div className="text-[10px] text-muted-foreground">Proj H2</div>
-                              </div>
-                              <div className="bg-secondary/60 rounded-lg py-2">
-                                <div className="text-xs font-bold text-foreground">{play.expectedTotal?.toFixed(1) ?? "—"}</div>
-                                <div className="text-[10px] text-muted-foreground">Season Avg</div>
-                              </div>
-                            </div>
-                            <div className="flex flex-col items-center gap-2 py-2">
-                              <ProbabilityRing probability={displayProb} size={140} strokeWidth={10} />
-                              <p className="text-xs text-muted-foreground text-center">
-                                Model: {displayProb.toFixed(1)}% {isOver ? "Over" : "Under"} implied
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              data-testid={`button-add-halftime-play-${idx}`}
-                              disabled={parlayPicks.length >= 10}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const pick: ParlayPickInput = {
-                                  playerId: play.playerId,
-                                  playerName: play.playerName,
-                                  playerTeam: play.team,
-                                  statType: play.statType,
-                                  line: play.line,
-                                  probability: play.probability,
-                                  betDirection: play.betDirection,
-                                  sportsbook: "",
-                                  oddsAmerican: 0,
-                                  gameId: play.gameId,
-                                };
-                                setParlayPicks(prev => [...prev, pick]);
-                                setShowParlay(true);
-                              }}
-                              className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition-colors disabled:opacity-40"
-                            >
-                              <Plus className="w-4 h-4" />
-                              Add to Parlay
-                            </button>
-                            <button
-                              type="button"
-                              data-testid={`button-load-play-${idx}`}
-                              onClick={() => loadPlayInCalculator(play)}
-                              className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors"
-                            >
-                              <ArrowUpRight className="w-3.5 h-3.5" />
-                              Load into Calculator
-                            </button>
-                          </div>
-                        )}
-
-                        {/* Collapsed Add to Parlay */}
-                        {!isExpanded && (
-                          <button
-                            type="button"
-                            data-testid={`button-add-halftime-play-${idx}`}
-                            disabled={parlayPicks.length >= 10}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const pick: ParlayPickInput = {
-                                playerId: play.playerId,
-                                playerName: play.playerName,
-                                playerTeam: play.team,
-                                statType: play.statType,
-                                line: play.line,
-                                probability: play.probability,
-                                betDirection: play.betDirection,
-                                sportsbook: "",
-                                oddsAmerican: 0,
-                                gameId: play.gameId,
-                              };
-                              setParlayPicks(prev => [...prev, pick]);
-                              setShowParlay(true);
-                            }}
-                            className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors disabled:opacity-40"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            Add to Parlay
-                          </button>
-                        )}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`text-xs font-mono px-2 py-0.5 rounded font-bold ${
+                            isOver ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"
+                          }`}>
+                            {statLabel} {isOver ? "O" : "U"}{play.line}
+                          </span>
+                          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                            hasLiveLine
+                              ? "bg-green-500/15 text-green-400"
+                              : "bg-secondary text-muted-foreground"
+                          }`}>
+                            {hasLiveLine ? "Live Line" : "Season Avg"}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}
+                          </span>
+                          <span data-testid="hint-tap-verify" className="text-[10px] text-muted-foreground/50 italic">Tap card to cross-check →</span>
+                        </div>
+                        <button
+                          type="button"
+                          data-testid={`button-add-halftime-play-${idx}`}
+                          disabled={parlayPicks.length >= 10}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const pick: ParlayPickInput = {
+                              playerId: play.playerId,
+                              playerName: play.playerName,
+                              playerTeam: play.team,
+                              statType: play.statType,
+                              line: play.line,
+                              probability: play.probability,
+                              betDirection: play.betDirection,
+                              sportsbook: "",
+                              oddsAmerican: 0,
+                              gameId: play.gameId,
+                            };
+                            setParlayPicks(prev => [...prev, pick]);
+                            setShowParlay(true);
+                          }}
+                          className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors disabled:opacity-40"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Add to Parlay
+                        </button>
                       </div>
                     );
                   })}
@@ -2521,49 +2416,17 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* NCAAB Tab — open to all authenticated users */}
-        {activeTab === "ncaab" && (
-          <div className={showParlay && !isMobile ? "flex items-start gap-5" : ""}>
-            <div className={showParlay && !isMobile ? "flex-1 min-w-0" : ""}>
-              <NCAABAdminTab
-                isAdmin={user?.isAdmin ?? false}
-                isFreeUser={!user?.subscriptionTier && !user?.isAdmin}
-                onGameView={async (gameId: string) => {
-                  try {
-                    await apiRequest("POST", "/api/ncaab/game-view", { gameId });
-                    queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-                    return true;
-                  } catch (err: any) {
-                    queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-                    if (err?.status === 402 || err?.playsUsed !== undefined) {
-                      setUpgradeModalState({ playsUsed: err.playsUsed ?? user?.playsUsed ?? 0, limit: err.limit ?? 15 });
-                      setShowUpgradeModal(true);
-                    }
-                    return false;
-                  }
-                }}
-                onAddToParlay={(pick) => {
-                  if (parlayPicks.length < 10) {
-                    setParlayPicks((prev) => [...prev, pick]);
-                    setShowParlay(true);
-                  }
-                }}
-              />
-            </div>
-            {showParlay && !isMobile && (
-              <div className="w-72 flex-shrink-0">
-                <div className="bg-card border border-border rounded-xl p-4 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto relative">
-                  <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-primary to-transparent rounded-t-xl" />
-                  <ParlaySlip
-                    picks={parlayPicks}
-                    onRemove={(idx) => setParlayPicks((prev) => prev.filter((_, i) => i !== idx))}
-                    onClear={() => { setParlayPicks([]); setShowParlay(false); }}
-                    injuredPlayerNames={injuredPlayerNames}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
+        {/* NCAAB Tab — live data for All Sports, Elite, and Admin */}
+        {activeTab === "ncaab" && (user?.isAdmin || ["all", "elite"].includes(user?.subscriptionTier ?? "")) && (
+          <NCAABAdminTab
+            isAdmin={user?.isAdmin ?? false}
+            onAddToParlay={(pick) => {
+              if (parlayPicks.length < 10) {
+                setParlayPicks((prev) => [...prev, pick]);
+                setShowParlay(true);
+              }
+            }}
+          />
         )}
 
       </main>

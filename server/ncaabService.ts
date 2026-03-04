@@ -1,211 +1,16 @@
-// ── NCAAB ENGINE ─────────────────────────────────────────────────────────────
-// Uses basketball_ncaab Odds API sport key exclusively.
-// Do NOT import calculateProbability from storage.ts — that is the NBA engine.
-// ─────────────────────────────────────────────────────────────────────────────
-
 const ODDS_API_KEY = process.env.ODDS_API_KEY;
 const ESPN_NCAAB = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball";
 
 interface CacheEntry { data: any; timestamp: number; }
 const cache = new Map<string, CacheEntry>();
-const GAMES_TTL        = 90 * 1000;
-const BOX_TTL          = 60 * 1000;
-const LINES_TTL        = 5 * 60 * 1000;
-const SEASON_STATS_TTL = 6 * 60 * 60 * 1000;
-const ROSTER_TTL       = 15 * 60 * 1000;
+const GAMES_TTL   = 90 * 1000;
+const BOX_TTL     = 60 * 1000;
+const LINES_TTL   = 5 * 60 * 1000;
 
-// Historical NCAAB constants
-const NCAAB_AVG_PACE   = 3.45;   // pts/min ≈ 138 pt avg game / 40 min
-const NCAAB_H1_FRACTION = 0.47;  // H1 ≈ 47% of game total
-const NCAAB_PACE_CAP   = 1.35;   // max pace multiplier
-const NCAAB_AVG_OE     = 108;    // avg offensive efficiency per 100 possessions
-const NCAAB_AVG_STEALS = 6.5;    // avg steals per game
-const NCAAB_AVG_BLOCKS = 3.0;    // avg blocks per game
-const HOME_COURT_ADV   = 3.5;    // home court advantage in pts
-
-// ── Team season stats with full KenPom-style metrics + advanced ESPN fields ──
-interface TeamSeasonStats {
-  ppg: number;
-  oppPpg: number;
-  fgaPerGame: number;
-  orebPerGame: number;
-  toPerGame: number;
-  ftaPerGame: number;
-  threePAPerGame: number;
-  threePARate: number;      // 3PA / FGA
-  avgSteals: number;
-  avgBlocks: number;
-  avgFouls: number;
-  poss: number;             // possessions per game
-  oe: number;               // offensive efficiency per 100 poss
-  // Advanced metrics (newly extracted from ESPN)
-  atoRatio: number;         // assist-to-turnover ratio
-  efgPct: number;           // effective FG% (shooting efficiency)
-  avgDefReb: number;        // avg defensive rebounds per game
-  ftr: number;              // free throw rate (FTA/FGA)
-}
-
-function defaultTeamStats(): TeamSeasonStats {
-  return {
-    ppg: 69, oppPpg: 69,
-    fgaPerGame: 60, orebPerGame: 11, toPerGame: 13, ftaPerGame: 19,
-    threePAPerGame: 22, threePARate: 0.37,
-    avgSteals: 6.5, avgBlocks: 3.0, avgFouls: 15.7,
-    poss: 68, oe: 101,
-    atoRatio: 1.2, efgPct: 0.50, avgDefReb: 25, ftr: 0.30,
-  };
-}
-
-async function getNCAABTeamSeasonStats(teamId: string): Promise<TeamSeasonStats> {
-  if (!teamId) return defaultTeamStats();
-  const key = `ncaab_team_stats_v3_${teamId}`;
-  const cached = cache.get(key);
-  if (isFresh(cached, SEASON_STATS_TTL)) return cached!.data;
-
-  try {
-    const res = await fetch(
-      `${ESPN_NCAAB}/teams/${teamId}/statistics`,
-      { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(6000) }
-    );
-    if (!res.ok) return defaultTeamStats();
-    const data = await res.json() as any;
-
-    const categories = data.results?.stats?.categories ?? data.statistics?.categories ?? [];
-    const statMap: Record<string, number> = {};
-
-    for (const cat of categories) {
-      for (const s of (cat.stats ?? [])) {
-        const val = parseFloat(s.displayValue ?? s.value ?? "");
-        if (!isNaN(val)) statMap[s.name] = val;
-      }
-    }
-
-    const ppg      = statMap["avgPoints"] ?? statMap["ppg"] ?? 69;
-    const fga      = statMap["avgFieldGoalsAttempted"] ?? 60;
-    const oreb     = statMap["avgOffensiveRebounds"] ?? 11;
-    const to_      = statMap["avgTurnovers"] ?? 13;
-    const fta      = statMap["avgFreeThrowsAttempted"] ?? 19;
-    const threePA  = statMap["avgThreePointFieldGoalsAttempted"] ?? 22;
-    const steals   = statMap["avgSteals"] ?? 6.5;
-    const blocks   = statMap["avgBlocks"] ?? 3.0;
-    const fouls    = statMap["avgFouls"] ?? 15.7;
-
-    // Advanced fields — newly extracted
-    const atoRatio = statMap["assistTurnoverRatio"] ?? 1.2;
-    const efgPct   = statMap["shootingEfficiency"] ?? statMap["fieldGoalPct"] ?? 0.50;
-    const avgDefReb = statMap["avgDefensiveRebounds"] ?? 25;
-    const ftr      = fga > 0 ? fta / fga : 0.30;
-
-    const poss     = Math.max(55, fga - oreb + to_ + 0.44 * fta);
-    const oe       = poss > 0 ? Math.round((ppg * 100 / poss) * 10) / 10 : NCAAB_AVG_OE;
-
-    const result: TeamSeasonStats = {
-      ppg,
-      oppPpg: statMap["oppg"] ?? statMap["avgOpponentPoints"] ?? 69,
-      fgaPerGame: fga,
-      orebPerGame: oreb,
-      toPerGame: to_,
-      ftaPerGame: fta,
-      threePAPerGame: threePA,
-      threePARate: fga > 0 ? threePA / fga : 0.37,
-      avgSteals: steals,
-      avgBlocks: blocks,
-      avgFouls: fouls,
-      poss,
-      oe,
-      atoRatio,
-      efgPct: efgPct > 1 ? efgPct / 100 : efgPct,
-      avgDefReb,
-      ftr,
-    };
-    cache.set(key, { data: result, timestamp: Date.now() });
-    return result;
-  } catch {
-    return defaultTeamStats();
-  }
-}
-
-// ── ESPN BPI: pre-game margin prediction ─────────────────────────────────────
-const ESPN_CORE = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/mens-college-basketball";
-
-async function getBPIData(gameId: string): Promise<{
-  awayPredMargin: number | null;
-  matchupQuality: number | null;
-  homeWinPct: number | null;
-  awayWinPct: number | null;
-} | null> {
-  const key = `ncaab_bpi_v2_${gameId}`;
-  const cached = cache.get(key);
-  if (isFresh(cached, 5 * 60 * 1000)) return cached!.data;
-
-  try {
-    const res = await fetch(
-      `${ESPN_CORE}/events/${gameId}/competitions/${gameId}/predictor`,
-      { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(5000) }
-    );
-    if (!res.ok) return null;
-    const data = await res.json() as any;
-
-    const homeStats: any[] = data.homeTeam?.statistics ?? [];
-    const awayStats: any[] = data.awayTeam?.statistics ?? [];
-
-    const findStat = (arr: any[], name: string) => {
-      const s = arr.find((s: any) => s.name === name);
-      return s?.value != null ? parseFloat(s.value) : null;
-    };
-
-    const homeWinPct   = findStat(homeStats, "teampredwinpct");
-    const awayWinPct   = findStat(awayStats, "teampredwinpct");
-    // teampredmov from away team's perspective = positive means away wins
-    const awayPredMargin = findStat(awayStats, "teampredmov");
-    const matchupQuality = findStat(homeStats, "matchupquality");
-
-    const result = { awayPredMargin, matchupQuality, homeWinPct, awayWinPct };
-    cache.set(key, { data: result, timestamp: Date.now() });
-    return result;
-  } catch {
-    return null;
-  }
-}
-
-// ── Team roster — injury detection ───────────────────────────────────────────
-interface TeamRosterInfo {
-  injuredNames: string[];
-  injuryCount: number;
-  injuryPenalty: number;
-}
-
-async function getNCAABTeamRoster(teamId: string): Promise<TeamRosterInfo> {
-  if (!teamId) return { injuredNames: [], injuryCount: 0, injuryPenalty: 0 };
-  const key = `ncaab_roster_${teamId}`;
-  const cached = cache.get(key);
-  if (isFresh(cached, ROSTER_TTL)) return cached!.data;
-
-  try {
-    const res = await fetch(
-      `${ESPN_NCAAB}/teams/${teamId}/roster`,
-      { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(5000) }
-    );
-    if (!res.ok) return { injuredNames: [], injuryCount: 0, injuryPenalty: 0 };
-    const data = await res.json() as any;
-
-    const injuredNames: string[] = [];
-    for (const athlete of (data.athletes ?? [])) {
-      const injArr: any[] = athlete.injuries ?? [];
-      if (injArr.length > 0) {
-        injuredNames.push(athlete.displayName ?? athlete.fullName ?? "Unknown");
-      }
-    }
-
-    const injuryCount = injuredNames.length;
-    const injuryPenalty = Math.min(injuryCount * 2, 4);
-    const result: TeamRosterInfo = { injuredNames, injuryCount, injuryPenalty };
-    cache.set(key, { data: result, timestamp: Date.now() });
-    return result;
-  } catch {
-    return { injuredNames: [], injuryCount: 0, injuryPenalty: 0 };
-  }
-}
+// Historical NCAAB pace constants
+const NCAAB_AVG_PACE    = 3.45;  // pts/min ≈ 138 pt avg game / 40 min
+const NCAAB_H1_FRACTION = 0.47;  // H1 ≈ 47% of game total (NCAAB H1 pace is slower)
+const NCAAB_PACE_CAP    = 1.35;  // max multiplier of avg pace to cap outliers
 
 function isFresh(e: CacheEntry | undefined, ttl: number) {
   return !!e && Date.now() - e.timestamp < ttl;
@@ -219,86 +24,17 @@ function teamsMatch(a: string, b: string): boolean {
   return na === nb || na.includes(nb) || nb.includes(na);
 }
 
-function teamSimilarity(outcome: string, home: string): number {
-  const na = normTeam(outcome), nb = normTeam(home);
-  if (na === nb) return 999;
-  const ta = na.split(" "), tb = nb.split(" ");
-  return ta.filter(w => tb.includes(w)).length;
-}
-
 function sigmoid(x: number): number { return 1 / (1 + Math.exp(-x)); }
-
-// ── Apply advanced stat adjustments to base OE ───────────────────────────────
-function applyAdvancedAdjustments(
-  baseOE: number,
-  stats: TeamSeasonStats,
-  expectedPoss: number,
-): number {
-  const ATG_LEAGUE_AVG = 1.2;
-  // 1. ATO ratio → OE adjustment (ball security)
-  const atoAdj = baseOE * (1 + (stats.atoRatio - ATG_LEAGUE_AVG) * 0.015);
-
-  // 2. eFG% blend — 75% season OE, 25% eFG-implied scoring
-  const efgImplied = stats.efgPct * expectedPoss * 2;
-  const blended = 0.75 * atoAdj + 0.25 * efgImplied;
-
-  // 3. FT rate bonus (±2pt max scaled by expected possessions)
-  const ftBonus = Math.max(-2, Math.min(2, (stats.ftr - 0.30) * 4));
-  const withFT = blended + ftBonus * (expectedPoss / 70);
-
-  return withFT;
-}
-
-function applyDefRebPenaltyToOE(
-  opponentOE: number,
-  defRebStats: TeamSeasonStats,
-): number {
-  const defRebRate = defRebStats.avgDefReb / (defRebStats.avgDefReb + 10);
-  const drebPenalty = (0.70 - defRebRate) * 3;
-  return opponentOE - drebPenalty;
-}
-
-// ── Compute blended margin with BPI ──────────────────────────────────────────
-function blendWithBPI(
-  ourModelMargin: number,  // signed from home perspective (positive = home leads)
-  bpiData: { awayPredMargin: number | null; matchupQuality: number | null } | null,
-): { blendedMargin: number; volatilityBonus: number } {
-  if (!bpiData || bpiData.awayPredMargin === null) {
-    return { blendedMargin: ourModelMargin, volatilityBonus: 0 };
-  }
-  // BPI awayPredMargin is from away's perspective; negate for home perspective
-  const bpiHomeMargin = -bpiData.awayPredMargin;
-  const blendedMargin = 0.5 * ourModelMargin + 0.5 * bpiHomeMargin;
-
-  // matchupQuality (0-100): high quality = close game = higher variance
-  const mq = bpiData.matchupQuality ?? 50;
-  const volatilityBonus = ((mq - 50) / 50) * 2; // ±2pt sigma bonus
-
-  return { blendedMargin, volatilityBonus };
-}
-
-// ── ESPN uses Eastern time for date grouping ─────────────────────────────────
-// US sports games are bucketed by ET date, not UTC. Without this fix, after
-// midnight UTC (≈7pm ET) the server would fetch the next calendar day's slate.
-function getEasternDateStr(): string {
-  const etStr = new Date().toLocaleDateString("en-US", {
-    timeZone: "America/New_York",
-    year: "numeric", month: "2-digit", day: "2-digit",
-  });
-  const [m, d, y] = etStr.split("/");
-  return `${y}${m}${d}`;
-}
 
 // ── ESPN NCAAB Scoreboard ────────────────────────────────────────────────────
 export async function getNCAABScoreboard(): Promise<any[]> {
-  const dateStr = getEasternDateStr();
-  const key = `ncaab_scoreboard:${dateStr}`;
+  const key = "ncaab_scoreboard";
   const cached = cache.get(key);
   if (isFresh(cached, GAMES_TTL)) return cached!.data;
 
   let res: Response;
   try {
-    res = await fetch(`${ESPN_NCAAB}/scoreboard?limit=300&groups=50&dates=${dateStr}`, {
+    res = await fetch(`${ESPN_NCAAB}/scoreboard?limit=300&groups=50`, {
       headers: { "User-Agent": "Mozilla/5.0" },
       signal: AbortSignal.timeout(8000),
     });
@@ -324,7 +60,6 @@ export async function getNCAABScoreboard(): Promise<any[]> {
     const clock: string = status?.displayClock ?? "";
     const isHalftime = statusDesc === "Halftime" || (period === 1 && (clock === "0:00" || clock === "00.0"));
     const isInProgress = statusDesc === "In Progress";
-    const startTime: string | null = event.date ?? null;
     return {
       id: event.id as string,
       name: event.name as string,
@@ -343,7 +78,6 @@ export async function getNCAABScoreboard(): Promise<any[]> {
       isHalftime,
       isInProgress,
       isLive: isHalftime || isInProgress,
-      startTime,
     };
   });
 
@@ -427,7 +161,7 @@ export async function getNCAABOddsLines(): Promise<any[]> {
   }
 
   try {
-    const url = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads,totals&oddsFormat=american`;
+    const url = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads,totals,h1_totals,h1_spreads&oddsFormat=american`;
     const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
@@ -457,130 +191,89 @@ function matchOddsEvent(game: any, oddsEvents: any[]): any | null {
   return null;
 }
 
-// Sportsbook display names
-const BOOK_DISPLAY: Record<string, string> = {
-  fanduel:      "FanDuel",
-  draftkings:   "DraftKings",
-  betmgm:       "BetMGM",
-  betrivers:    "BetRivers",
-  hardrockbet:  "Hard Rock",
-  bet365:       "Bet365",
-  caesars:      "Caesars",
-  pointsbet:    "PointsBet",
-  espnbet:      "ESPN Bet",
-  betus:        "BetUS",
-  mybookieag:   "MyBookie",
-  lowvig:       "LowVig",
-  betonlineag:  "BetOnline",
-};
-
-// ── Extract per-book spread / total lines (both sides) ───────────────────────
+// ── Extract consensus spread / total + 1H lines ───────────────────────────────
 function extractLines(oddsEvent: any): {
-  homeSpreadLine: number | null;
-  awaySpreadLine: number | null;
+  spread: number | null;
   total: number | null;
-  overPrice: number | null;
-  underPrice: number | null;
-  bookLines: Array<{
-    book: string;
-    name: string;
-    homePoint: number | null;
-    awayPoint: number | null;
-    homeSpreadPrice: number | null;
-    awaySpreadPrice: number | null;
-    homeFavorite: boolean;
-    total: number | null;
-    overPrice: number | null;
-    underPrice: number | null;
-  }>;
+  favorite: string;
+  bookLines: Array<{ book: string; spread: number | null; total: number | null; favorite: string; h1Total: number | null; h1Spread: number | null; h1Favorite: string }>;
+  h1TotalLine: number | null;
+  h1SpreadLine: number | null;
+  h1Favorite: string;
 } {
-  let homeSpreadLine: number | null = null;
-  let awaySpreadLine: number | null = null;
+  let spread: number | null = null;
   let total: number | null = null;
-  let overPrice: number | null = null;
-  let underPrice: number | null = null;
-
-  const bookLines: Array<{
-    book: string;
-    name: string;
-    homePoint: number | null;
-    awayPoint: number | null;
-    homeSpreadPrice: number | null;
-    awaySpreadPrice: number | null;
-    homeFavorite: boolean;
-    total: number | null;
-    overPrice: number | null;
-    underPrice: number | null;
-  }> = [];
+  let favorite = "";
+  let h1TotalLine: number | null = null;
+  let h1SpreadLine: number | null = null;
+  let h1Favorite = "";
+  const bookLines: Array<{ book: string; spread: number | null; total: number | null; favorite: string; h1Total: number | null; h1Spread: number | null; h1Favorite: string }> = [];
 
   for (const bk of (oddsEvent.bookmakers ?? [])) {
-    const spreadsMarket = (bk.markets ?? []).find((m: any) => m.key === "spreads");
-    const totalsMarket  = (bk.markets ?? []).find((m: any) => m.key === "totals");
+    const spreadsMarket   = (bk.markets ?? []).find((m: any) => m.key === "spreads");
+    const totalsMarket    = (bk.markets ?? []).find((m: any) => m.key === "totals");
+    const h1TotalsMarket  = (bk.markets ?? []).find((m: any) => m.key === "h1_totals");
+    const h1SpreadsMarket = (bk.markets ?? []).find((m: any) => m.key === "h1_spreads");
 
-    let bkHomePoint: number | null = null;
-    let bkAwayPoint: number | null = null;
-    let bkHomePrice: number | null = null;
-    let bkAwayPrice: number | null = null;
-    let bkHomeFav = false;
+    let bkSpread: number | null = null;
     let bkTotal: number | null = null;
-    let bkOverPrice: number | null = null;
-    let bkUnderPrice: number | null = null;
+    let bkFav = "";
+    let bkH1Total: number | null = null;
+    let bkH1Spread: number | null = null;
+    let bkH1Fav = "";
 
     if (spreadsMarket?.outcomes?.length >= 2) {
-      const outcomes = spreadsMarket.outcomes as Array<{ name: string; point: number; price: number }>;
-      const scores = outcomes.map(o => teamSimilarity(o.name, oddsEvent.home_team));
-      const maxScore = Math.max(...scores);
-      let homeIdx = scores.indexOf(maxScore);
-      if (scores[0] === scores[1]) {
-        homeIdx = teamsMatch(outcomes[0].name, oddsEvent.home_team) ? 0 : 1;
+      const favOutcome = spreadsMarket.outcomes.find((o: any) => o.point < 0);
+      if (favOutcome) {
+        bkSpread = Math.abs(favOutcome.point);
+        bkFav = favOutcome.name;
+      } else {
+        const sorted = [...spreadsMarket.outcomes].sort((a: any, b: any) => Math.abs(a.point) - Math.abs(b.point));
+        bkSpread = Math.abs(sorted[0].point);
+        bkFav = sorted[0].name;
       }
-      const homeOutcome = outcomes[homeIdx];
-      const awayOutcome = outcomes[homeIdx === 0 ? 1 : 0];
-      bkHomePoint = isNaN(homeOutcome.point) ? null : homeOutcome.point;
-      bkHomePrice = homeOutcome.price;
-      bkAwayPoint = isNaN(awayOutcome.point) ? null : awayOutcome.point;
-      bkAwayPrice = awayOutcome.price;
-      bkHomeFav = (bkHomePoint ?? 0) < 0;
     }
-
     if (totalsMarket?.outcomes?.length >= 1) {
-      for (const o of totalsMarket.outcomes) {
-        if (o.name === "Over") { bkTotal = o.point as number; bkOverPrice = o.price as number; }
-        else if (o.name === "Under") { bkUnderPrice = o.price as number; }
+      const over = totalsMarket.outcomes.find((o: any) => o.name === "Over");
+      if (over) bkTotal = over.point as number;
+    }
+    if (h1TotalsMarket?.outcomes?.length >= 1) {
+      const over = h1TotalsMarket.outcomes.find((o: any) => o.name === "Over");
+      if (over) bkH1Total = over.point as number;
+    }
+    if (h1SpreadsMarket?.outcomes?.length >= 2) {
+      const favOutcome = h1SpreadsMarket.outcomes.find((o: any) => o.point < 0);
+      if (favOutcome) {
+        bkH1Spread = Math.abs(favOutcome.point);
+        bkH1Fav = favOutcome.name;
+      } else {
+        const sorted = [...h1SpreadsMarket.outcomes].sort((a: any, b: any) => Math.abs(a.point) - Math.abs(b.point));
+        bkH1Spread = Math.abs(sorted[0].point);
+        bkH1Fav = sorted[0].name;
       }
     }
 
-    if (bkHomePoint !== null || bkAwayPoint !== null || bkTotal !== null) {
-      bookLines.push({
-        book: bk.key,
-        name: BOOK_DISPLAY[bk.key] ?? bk.title ?? bk.key,
-        homePoint: bkHomePoint,
-        awayPoint: bkAwayPoint,
-        homeSpreadPrice: bkHomePrice,
-        awaySpreadPrice: bkAwayPrice,
-        homeFavorite: bkHomeFav,
-        total: bkTotal,
-        overPrice: bkOverPrice,
-        underPrice: bkUnderPrice,
-      });
+    if (bkSpread !== null || bkTotal !== null || bkH1Total !== null) {
+      bookLines.push({ book: bk.key, spread: bkSpread, total: bkTotal, favorite: bkFav, h1Total: bkH1Total, h1Spread: bkH1Spread, h1Favorite: bkH1Fav });
     }
-
-    if (homeSpreadLine === null && bkHomePoint !== null) homeSpreadLine = bkHomePoint;
-    if (awaySpreadLine === null && bkAwayPoint !== null) awaySpreadLine = bkAwayPoint;
-    if (total === null && bkTotal !== null) { total = bkTotal; overPrice = bkOverPrice; underPrice = bkUnderPrice; }
+    if (spread === null && bkSpread !== null) { spread = bkSpread; favorite = bkFav; }
+    if (total === null && bkTotal !== null) total = bkTotal;
+    if (h1TotalLine === null && bkH1Total !== null) h1TotalLine = bkH1Total;
+    if (h1SpreadLine === null && bkH1Spread !== null) { h1SpreadLine = bkH1Spread; h1Favorite = bkH1Fav; }
+    if (spread !== null && total !== null && h1TotalLine !== null) break;
   }
 
-  return { homeSpreadLine, awaySpreadLine, total, overPrice, underPrice, bookLines };
+  return { spread, total, favorite, bookLines, h1TotalLine, h1SpreadLine, h1Favorite };
 }
 
 // ── Public handle signal ──────────────────────────────────────────────────────
-function getHandleSignal(bookLines: Array<{ homePoint: number | null }>): {
+function getHandleSignal(bookLines: Array<{ book: string; spread: number | null; total: number | null; favorite: string; h1Total?: number | null; h1Spread?: number | null; h1Favorite?: string }>): {
   pct: number | null;
   signal: "no_edge" | "fade" | "extreme" | "neutral" | "unavailable";
   label: string;
   color: string;
 } {
-  const spreads = bookLines.map(b => b.homePoint !== null ? Math.abs(b.homePoint) : null).filter((s): s is number => s !== null);
+  const spreads = bookLines.map(b => b.spread).filter((s): s is number => s !== null);
   if (spreads.length < 2) {
     return { pct: null, signal: "unavailable", label: "Handle data unavailable", color: "text-muted-foreground" };
   }
@@ -611,33 +304,14 @@ export interface NCAABPlay {
   awayScore: number;
   currentMargin: number;
 
-  // Lines (from Odds API)
-  homeSpreadLine: number | null;
-  awaySpreadLine: number | null;
+  // Lines
+  spread: number | null;
   total: number | null;
-  overPrice: number | null;
-  underPrice: number | null;
-  bookLines: Array<{
-    book: string;
-    name: string;
-    homePoint: number | null;
-    awayPoint: number | null;
-    homeSpreadPrice: number | null;
-    awaySpreadPrice: number | null;
-    homeFavorite: boolean;
-    total: number | null;
-    overPrice: number | null;
-    underPrice: number | null;
-  }>;
-
-  // 1H model-derived lines
-  h1TotalLineModel: number | null;
+  favorite: string;
+  bookLines: Array<{ book: string; spread: number | null; total: number | null; favorite: string; h1Total: number | null; h1Spread: number | null; h1Favorite: string }>;
+  h1TotalLine: number | null;
   h1SpreadLine: number | null;
-  h1SpreadProb: number | null;
-  proj1HHome: number | null;
-  proj1HAway: number | null;
-  h1HomeOverProb: number | null;
-  h1AwayOverProb: number | null;
+  h1Favorite: string;
 
   // Projections
   projectedTotal: number | null;
@@ -646,34 +320,6 @@ export interface NCAABPlay {
   homeProjected: number | null;
   awayProjected: number | null;
 
-  // Season stats baseline (KenPom-style)
-  seasonExpectedTotal: number;
-  seasonExpectedMargin: number;
-  homePPG: number;
-  awayPPG: number;
-  homeTempo: number;
-  awayTempo: number;
-  homeOE: number;
-  awayOE: number;
-  homeDE: number;
-  awayDE: number;
-  expectedPoss: number;
-
-  // Style flags
-  homeThreePARate: number;
-  awayThreePARate: number;
-
-  // Advanced stats (DREB rate)
-  homeDefRebRate: number;
-  awayDefRebRate: number;
-
-  // BPI data
-  bpiHomeMargin: number | null;
-
-  // Injury info
-  homeInjuries: string[];
-  awayInjuries: string[];
-
   // Probabilities (0–100%)
   spreadProb: number | null;
   overProb: number | null;
@@ -681,12 +327,6 @@ export interface NCAABPlay {
   totalEdge: number | null;
   over1HProb: number | null;
   total1HEdge: number | null;
-  homeOverProb: number | null;
-  awayOverProb: number | null;
-
-  // ESPN Predictor
-  espnHomeWinPct: number | null;
-  espnAwayWinPct: number | null;
 
   // Volatility
   volatilityBonus: number;
@@ -731,58 +371,13 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
 
   for (const game of liveGames) {
     try {
-      // Fetch box score, season stats, rosters, BPI — all in parallel
-      const [box, homeSeasonStats, awaySeasonStats, homeRosterInfo, awayRosterInfo, bpiData] =
-        await Promise.all([
-          getNCAABBoxScore(game.id).catch(() => null),
-          getNCAABTeamSeasonStats(game.homeTeamId),
-          getNCAABTeamSeasonStats(game.awayTeamId),
-          getNCAABTeamRoster(game.homeTeamId),
-          getNCAABTeamRoster(game.awayTeamId),
-          getBPIData(game.id).catch(() => null),
-        ]);
+      let box: any = null;
+      try { box = await getNCAABBoxScore(game.id); } catch { /* non-fatal */ }
 
       const oddsEvent = matchOddsEvent(game, oddsEvents);
-      const { homeSpreadLine, awaySpreadLine, total, overPrice, underPrice, bookLines } = oddsEvent
+      const { spread, total, favorite, bookLines, h1TotalLine: rawH1TotalLine, h1SpreadLine, h1Favorite } = oddsEvent
         ? extractLines(oddsEvent)
-        : { homeSpreadLine: null, awaySpreadLine: null, total: null, overPrice: null, underPrice: null, bookLines: [] };
-
-      // ── KenPom-style possession-based model ──────────────────────────────
-      const homeDE = Math.max(95, NCAAB_AVG_OE
-        - (homeSeasonStats.avgSteals - NCAAB_AVG_STEALS) * 2.0
-        - (homeSeasonStats.avgBlocks - NCAAB_AVG_BLOCKS) * 1.5);
-      const awayDE = Math.max(95, NCAAB_AVG_OE
-        - (awaySeasonStats.avgSteals - NCAAB_AVG_STEALS) * 2.0
-        - (awaySeasonStats.avgBlocks - NCAAB_AVG_BLOCKS) * 1.5);
-
-      const expectedPoss = (homeSeasonStats.poss + awaySeasonStats.poss) / 2;
-
-      // Cross-product OE × DE model with advanced stat adjustments
-      const homeOEAdj = applyAdvancedAdjustments(homeSeasonStats.oe, homeSeasonStats, expectedPoss);
-      const awayOEAdj = applyAdvancedAdjustments(awaySeasonStats.oe, awaySeasonStats, expectedPoss);
-
-      const homeExpectedRaw = (homeOEAdj * applyDefRebPenaltyToOE(awayDE, homeSeasonStats) / 10000) * expectedPoss;
-      const awayExpectedRaw = (awayOEAdj * applyDefRebPenaltyToOE(homeDE, awaySeasonStats) / 10000) * expectedPoss;
-
-      // Injury penalty
-      const homeExpected = homeExpectedRaw - homeRosterInfo.injuryPenalty;
-      const awayExpected = awayExpectedRaw - awayRosterInfo.injuryPenalty;
-
-      const seasonExpectedTotal  = homeExpected + awayExpected;
-      const ourModelMargin = homeExpected - awayExpected + HOME_COURT_ADV;
-
-      // Blend with BPI
-      const { blendedMargin: seasonExpectedMargin, volatilityBonus: bpiVolBonus } =
-        blendWithBPI(ourModelMargin, bpiData);
-
-      // DREB rates for display
-      const homeDefRebRate = Math.round((homeSeasonStats.avgDefReb / (homeSeasonStats.avgDefReb + 10)) * 1000) / 10;
-      const awayDefRebRate = Math.round((awaySeasonStats.avgDefReb / (awaySeasonStats.avgDefReb + 10)) * 1000) / 10;
-
-      // BPI margin for display (from home perspective: positive = home favored)
-      const bpiHomeMargin = bpiData?.awayPredMargin !== null && bpiData?.awayPredMargin !== undefined
-        ? Math.round(-bpiData.awayPredMargin * 10) / 10
-        : null;
+        : { spread: null, total: null, favorite: "", bookLines: [], h1TotalLine: null, h1SpreadLine: null, h1Favorite: "" };
 
       // ── Box score data ───────────────────────────────────────────────────
       const half        = box?.half ?? (game.period <= 1 ? 1 : 2);
@@ -797,54 +392,44 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       const homeScores: number[] = scoringByPeriod[homeAbbr] ?? [];
       const awayScores: number[] = scoringByPeriod[awayAbbr] ?? [];
 
-      // At halftime, the current live scores ARE the completed H1 scores — use them directly.
-      // During H1 in progress, the fallback halves the current score as a mid-half estimate.
-      // During H2, divide by 2 to estimate each half from the full-game total.
-      const h1Home = homeScores[0] ?? (isHalftime
-        ? game.homeScore
-        : Math.round(game.homeScore / (half === 2 ? 2 : 1) * 0.5));
-      const h1Away = awayScores[0] ?? (isHalftime
-        ? game.awayScore
-        : Math.round(game.awayScore / (half === 2 ? 2 : 1) * 0.5));
+      const h1Home = homeScores[0] ?? Math.round(game.homeScore / (half === 2 ? 2 : 1) * 0.5);
+      const h1Away = awayScores[0] ?? Math.round(game.awayScore / (half === 2 ? 2 : 1) * 0.5);
       const h1Total = h1Home + h1Away;
 
       const h2Home = homeScores[1] ?? (half === 2 ? game.homeScore - h1Home : 0);
       const h2Away = awayScores[1] ?? (half === 2 ? game.awayScore - h1Away : 0);
       const h2TotalSoFar = h2Home + h2Away;
 
+      // Cap H1 pace to prevent outlier H1 from inflating H2 projection
       const rawPaceH1 = h1Total > 0 ? h1Total / 20 : NCAAB_AVG_PACE;
       const paceH1 = Math.min(rawPaceH1, NCAAB_AVG_PACE * NCAAB_PACE_CAP);
 
       const currentTotal = game.homeScore + game.awayScore;
       const currentMargin = game.homeScore - game.awayScore;
-      const homeBoxStats = teamStats[homeAbbr] ?? {};
-      const awayBoxStats = teamStats[awayAbbr] ?? {};
+      const homeStats = teamStats[homeAbbr] ?? {};
+      const awayStats = teamStats[awayAbbr] ?? {};
 
-      // ── Volatility modifiers: coaching style + 3PT reliance ─────────────
-      let volatilityBonus = bpiVolBonus;
+      // ── Coaching tendency modifiers ──────────────────────────────────────
+      let volatilityBonus = 0;
       let projTotalBonus = 0;
       let desperation3s = false;
       let intentionalFouling = false;
 
-      if (homeSeasonStats.threePARate > 0.42) volatilityBonus += 3;
-      if (awaySeasonStats.threePARate > 0.42) volatilityBonus += 3;
-      if (homeSeasonStats.avgFouls > 18 || awaySeasonStats.avgFouls > 18) volatilityBonus += 2;
-
       if (half === 2 && !isHalftime) {
         if (currentMargin <= -8) {
-          const fga = homeBoxStats.fieldGoalsAttempted ?? 0;
-          const fg3a = homeBoxStats.threePointAttempted ?? 0;
+          const fga = homeStats.fieldGoalsAttempted ?? 0;
+          const fg3a = homeStats.threePointAttempted ?? 0;
           if (fga > 0 && fg3a / fga > 0.40) { volatilityBonus += 4; desperation3s = true; }
         }
         if (currentMargin >= 8) {
-          const fga = awayBoxStats.fieldGoalsAttempted ?? 0;
-          const fg3a = awayBoxStats.threePointAttempted ?? 0;
+          const fga = awayStats.fieldGoalsAttempted ?? 0;
+          const fg3a = awayStats.threePointAttempted ?? 0;
           if (fga > 0 && fg3a / fga > 0.40) { volatilityBonus += 4; desperation3s = true; }
         }
         if (currentMargin >= 8) {
-          if ((awayBoxStats.fouls ?? 0) >= 4) { projTotalBonus += 6; intentionalFouling = true; }
+          if ((awayStats.fouls ?? 0) >= 4) { projTotalBonus += 6; intentionalFouling = true; }
         } else if (currentMargin <= -8) {
-          if ((homeBoxStats.fouls ?? 0) >= 4) { projTotalBonus += 6; intentionalFouling = true; }
+          if ((homeStats.fouls ?? 0) >= 4) { projTotalBonus += 6; intentionalFouling = true; }
         }
       }
 
@@ -854,32 +439,42 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       let proj1HTotal: number | null = null;
 
       if (isHalftime) {
+        // Halftime: paceH1 is already capped, project H2
         projectedTotal = h1Total + (paceH1 * 20) + projTotalBonus;
         projectedMargin = currentMargin;
 
       } else if (half === 1) {
+        // H1 window: blend live pace with historical NCAAB average
+        // Weight shifts from historical (0 elapsed) to live (12+ min elapsed)
         const h1MinElapsed = (HALF_SECONDS - secondsLeft) / 60;
         const rawPaceH1Live = h1MinElapsed > 0.5
           ? currentTotal / h1MinElapsed
           : NCAAB_AVG_PACE;
+
+        // blend = 0 at tip-off → 1.0 after 12 min elapsed
         const blend = Math.min(1.0, h1MinElapsed / 12);
         const blendedPace = rawPaceH1Live * blend + NCAAB_AVG_PACE * (1 - blend);
+
         const remainH1Min = secondsLeft / 60;
 
+        // 1H projection: current score + remaining H1 at blended pace
         proj1HTotal = Math.round((currentTotal + blendedPace * remainH1Min) * 10) / 10;
 
+        // Full game projection: projected H1 + estimated H2 at same blended pace
         const projH1Full = currentTotal + blendedPace * remainH1Min;
         projectedTotal = projH1Full + (blendedPace * 20) + projTotalBonus;
 
+        // H1 per-team projection to compute projected margin
         const homeShareH1 = currentTotal > 0
           ? (game.homeScore / currentTotal) * 0.6 + 0.5 * 0.4
           : 0.5;
         const remainingH1Scoring = blendedPace * remainH1Min;
         const proj1HHomeScore = game.homeScore + remainingH1Scoring * homeShareH1;
         const proj1HAwayScore = game.awayScore + remainingH1Scoring * (1 - homeShareH1);
-        projectedMargin = Math.max(-30, Math.min(30, Math.round((proj1HHomeScore - proj1HAwayScore) * 10) / 10));
+        projectedMargin = Math.round((proj1HHomeScore - proj1HAwayScore) * 10) / 10;
 
       } else if (half === 2) {
+        // H2: 70/30 blend (live H2 pace × 0.7 + H1 pace × 0.3), cap live H2 pace
         const h2MinElapsed = (HALF_SECONDS - secondsLeft) / 60;
         const rawPaceH2Live = h2MinElapsed > 0 ? h2TotalSoFar / h2MinElapsed : paceH1;
         const paceH2Live = Math.min(rawPaceH2Live, NCAAB_AVG_PACE * 1.5);
@@ -887,24 +482,9 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         const remainMin = secondsLeft / 60;
         projectedTotal = h1Total + h2TotalSoFar + (paceH2 * remainMin) + projTotalBonus;
 
-        if (h2MinElapsed < 2) {
-          projectedMargin = currentMargin;
-        } else {
-          const rawPerMin = (h2Home - h2Away) / h2MinElapsed;
-          const cappedPerMin = Math.max(-3, Math.min(3, rawPerMin));
-          projectedMargin = currentMargin + cappedPerMin * remainMin;
-        }
-      }
-
-      if (projectedMargin !== null) {
-        projectedMargin = Math.max(-45, Math.min(45, projectedMargin));
-      }
-
-      // Safety clamp: projected total must always exceed what's already been scored.
-      // If the model somehow produces a total below the live score, it means data is
-      // corrupted (wrong pace/period values). Clamp to current + 10 minutes of avg pace.
-      if (projectedTotal !== null && projectedTotal < currentTotal) {
-        projectedTotal = Math.round((currentTotal + NCAAB_AVG_PACE * 10) * 10) / 10;
+        const h2MarginSoFar = h2Home - h2Away;
+        const marginPerMin = h2MinElapsed > 0 ? h2MarginSoFar / h2MinElapsed : 0;
+        projectedMargin = currentMargin + (marginPerMin * remainMin);
       }
 
       // ── Team total split ─────────────────────────────────────────────────
@@ -912,6 +492,7 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       let awayProjected: number | null = null;
 
       if (projectedTotal !== null) {
+        // 60% live score share + 40% even split to dampen early-game swings
         const homeShare = currentTotal > 0
           ? (game.homeScore / currentTotal) * 0.6 + 0.5 * 0.4
           : 0.5;
@@ -919,11 +500,12 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         awayProjected = Math.round(projectedTotal * (1 - homeShare) * 10) / 10;
       }
 
-      const h1TotalLineModel = proj1HTotal !== null
-        ? Math.round(proj1HTotal * 2) / 2
+      // ── 1H total line (API or fallback estimate) ──────────────────────────
+      const h1TotalLine = rawH1TotalLine !== null
+        ? rawH1TotalLine
         : total !== null ? Math.round(total * NCAAB_H1_FRACTION * 2) / 2 : null;
 
-      // ── Volatility + sigmoid probabilities ───────────────────────────────
+      // ── Volatility + sigmoid ─────────────────────────────────────────────
       let volatility: number | null = null;
       let spreadProb: number | null = null;
       let overProb: number | null = null;
@@ -931,62 +513,30 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       let totalEdge: number | null = null;
       let over1HProb: number | null = null;
       let total1HEdge: number | null = null;
-      let homeOverProb: number | null = null;
-      let awayOverProb: number | null = null;
-
-      let proj1HHome: number | null = null;
-      let proj1HAway: number | null = null;
-      let h1ModelSpreadLine: number | null = null;
-      let h1SpreadProb: number | null = null;
-      let h1HomeOverProb: number | null = null;
-      let h1AwayOverProb: number | null = null;
 
       if (projectedTotal !== null || projectedMargin !== null) {
         const secsForVol = isHalftime ? 1200 : secondsLeft;
         volatility = Math.max(4, 18 * (secsForVol / 2400)) + volatilityBonus;
 
-        const effectiveFGLine = total ?? seasonExpectedTotal;
-        const effective1HLine = h1TotalLineModel;
+        // Effective lines — use API line if available, otherwise fall back to
+        // projected total rounded to nearest 0.5 so we always produce a probability
+        const effectiveFGLine = total ?? (projectedTotal !== null ? Math.round(projectedTotal * 2) / 2 : null);
+        const effective1HLine = h1TotalLine ?? (proj1HTotal !== null ? Math.round(proj1HTotal * 2) / 2 : null);
 
-        if (projectedMargin !== null && homeSpreadLine !== null) {
-          spreadProb = Math.round(sigmoid((projectedMargin - homeSpreadLine) / volatility) * 1000) / 10;
-          spreadEdge = Math.round((spreadProb - 50) * 10) / 10;
-        } else if (projectedMargin !== null && homeSpreadLine === null) {
-          spreadProb = Math.round(sigmoid((projectedMargin - seasonExpectedMargin) / volatility) * 1000) / 10;
+        if (projectedMargin !== null && spread !== null) {
+          const adjustedSpread = teamsMatch(favorite, game.homeTeam) ? -spread : spread;
+          spreadProb = Math.round(sigmoid((projectedMargin - adjustedSpread) / volatility) * 1000) / 10;
           spreadEdge = Math.round((spreadProb - 50) * 10) / 10;
         }
-
-        if (projectedTotal !== null) {
+        if (projectedTotal !== null && effectiveFGLine !== null) {
           overProb = Math.round(sigmoid((projectedTotal - effectiveFGLine) / volatility) * 1000) / 10;
           totalEdge = Math.round((overProb - 50) * 10) / 10;
         }
-
+        // 1H probability — computed during H1 using effective line
         if (half === 1 && proj1HTotal !== null && effective1HLine !== null) {
           const h1Vol = Math.max(3, volatility * 0.6);
           over1HProb = Math.round(sigmoid((proj1HTotal - effective1HLine) / h1Vol) * 1000) / 10;
           total1HEdge = Math.round((over1HProb - 50) * 10) / 10;
-
-          const homeShare1H = (game.homeScore + game.awayScore) > 0
-            ? (game.homeScore / (game.homeScore + game.awayScore)) * 0.6 + 0.5 * 0.4
-            : 0.5;
-          proj1HHome = Math.round(proj1HTotal * homeShare1H * 10) / 10;
-          proj1HAway = Math.round(proj1HTotal * (1 - homeShare1H) * 10) / 10;
-
-          h1ModelSpreadLine = projectedMargin !== null ? Math.round(projectedMargin * 2) / 2 : null;
-          if (h1ModelSpreadLine !== null) {
-            h1SpreadProb = Math.round(sigmoid(projectedMargin! / h1Vol) * 1000) / 10;
-          }
-
-          const h1TeamVol = h1Vol * 0.7;
-          h1HomeOverProb = Math.round(sigmoid((proj1HHome - homeExpected * 0.47) / h1TeamVol) * 1000) / 10;
-          h1AwayOverProb = Math.round(sigmoid((proj1HAway - awayExpected * 0.47) / h1TeamVol) * 1000) / 10;
-        }
-
-        if (homeProjected !== null) {
-          homeOverProb = Math.round(sigmoid((homeProjected - homeExpected) / (volatility * 0.7)) * 1000) / 10;
-        }
-        if (awayProjected !== null) {
-          awayOverProb = Math.round(sigmoid((awayProjected - awayExpected) / (volatility * 0.7)) * 1000) / 10;
         }
       }
 
@@ -1019,52 +569,24 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         homeScore: game.homeScore,
         awayScore: game.awayScore,
         currentMargin,
-        homeSpreadLine,
-        awaySpreadLine,
+        spread,
         total,
-        overPrice,
-        underPrice,
+        favorite,
         bookLines,
-        h1TotalLineModel,
-        h1SpreadLine: h1ModelSpreadLine,
-        h1SpreadProb,
-        proj1HHome,
-        proj1HAway,
-        h1HomeOverProb,
-        h1AwayOverProb,
+        h1TotalLine,
+        h1SpreadLine,
+        h1Favorite,
         projectedTotal: projectedTotal !== null ? Math.round(projectedTotal * 10) / 10 : null,
         projectedMargin: projectedMargin !== null ? Math.round(projectedMargin * 10) / 10 : null,
         proj1HTotal,
         homeProjected,
         awayProjected,
-        seasonExpectedTotal: Math.round(seasonExpectedTotal * 10) / 10,
-        seasonExpectedMargin: Math.round(seasonExpectedMargin * 10) / 10,
-        homePPG: homeSeasonStats.ppg,
-        awayPPG: awaySeasonStats.ppg,
-        homeTempo: Math.round(homeSeasonStats.poss * 10) / 10,
-        awayTempo: Math.round(awaySeasonStats.poss * 10) / 10,
-        homeOE: homeSeasonStats.oe,
-        awayOE: awaySeasonStats.oe,
-        homeDE: Math.round(homeDE * 10) / 10,
-        awayDE: Math.round(awayDE * 10) / 10,
-        expectedPoss: Math.round(expectedPoss * 10) / 10,
-        homeThreePARate: Math.round(homeSeasonStats.threePARate * 1000) / 10,
-        awayThreePARate: Math.round(awaySeasonStats.threePARate * 1000) / 10,
-        homeDefRebRate,
-        awayDefRebRate,
-        bpiHomeMargin,
-        homeInjuries: homeRosterInfo.injuredNames,
-        awayInjuries: awayRosterInfo.injuredNames,
         spreadProb,
         overProb,
         spreadEdge,
         totalEdge,
         over1HProb,
         total1HEdge,
-        homeOverProb,
-        awayOverProb,
-        espnHomeWinPct: bpiData?.homeWinPct ?? null,
-        espnAwayWinPct: bpiData?.awayWinPct ?? null,
         volatilityBonus,
         volatility: volatility !== null ? Math.round(volatility * 10) / 10 : null,
         bettingWindow,
@@ -1088,148 +610,4 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
 
   console.log(`[NCAAB] Computed ${plays.length} live plays`);
   return plays;
-}
-
-// ── getNCAABGamesWithLines: scoreboard enriched with odds lines ───────────────
-export async function getNCAABGamesWithLines(): Promise<any[]> {
-  const [games, oddsEvents] = await Promise.all([
-    getNCAABScoreboard(),
-    getNCAABOddsLines(),
-  ]);
-
-  return games.map((game: any) => {
-    const oddsEvent = matchOddsEvent(game, oddsEvents);
-    if (!oddsEvent) return { ...game, homeSpreadLine: null, awaySpreadLine: null, total: null };
-    const { homeSpreadLine, awaySpreadLine, total } = extractLines(oddsEvent);
-    return { ...game, homeSpreadLine, awaySpreadLine, total };
-  });
-}
-
-// ── getNCAABGamePreview: pre-game KenPom model for a scheduled game ──────────
-export async function getNCAABGamePreview(gameId: string): Promise<NCAABPlay | null> {
-  const [allGames, oddsEvents] = await Promise.all([
-    getNCAABScoreboard(),
-    getNCAABOddsLines(),
-  ]);
-
-  const game = allGames.find((g: any) => g.id === gameId);
-  if (!game) return null;
-
-  const [homeSeasonStats, awaySeasonStats, homeRosterInfo, awayRosterInfo, bpiData] = await Promise.all([
-    getNCAABTeamSeasonStats(game.homeTeamId),
-    getNCAABTeamSeasonStats(game.awayTeamId),
-    getNCAABTeamRoster(game.homeTeamId),
-    getNCAABTeamRoster(game.awayTeamId),
-    getBPIData(gameId).catch(() => null),
-  ]);
-
-  const oddsEvent = matchOddsEvent(game, oddsEvents);
-  const { homeSpreadLine, awaySpreadLine, total, overPrice, underPrice, bookLines } = oddsEvent
-    ? extractLines(oddsEvent)
-    : { homeSpreadLine: null, awaySpreadLine: null, total: null, overPrice: null, underPrice: null, bookLines: [] };
-
-  const homeDE = Math.max(95, NCAAB_AVG_OE
-    - (homeSeasonStats.avgSteals - NCAAB_AVG_STEALS) * 2.0
-    - (homeSeasonStats.avgBlocks - NCAAB_AVG_BLOCKS) * 1.5);
-  const awayDE = Math.max(95, NCAAB_AVG_OE
-    - (awaySeasonStats.avgSteals - NCAAB_AVG_STEALS) * 2.0
-    - (awaySeasonStats.avgBlocks - NCAAB_AVG_BLOCKS) * 1.5);
-  const expectedPoss = (homeSeasonStats.poss + awaySeasonStats.poss) / 2;
-
-  const homeOEAdj = applyAdvancedAdjustments(homeSeasonStats.oe, homeSeasonStats, expectedPoss);
-  const awayOEAdj = applyAdvancedAdjustments(awaySeasonStats.oe, awaySeasonStats, expectedPoss);
-
-  const homeExpected = (homeOEAdj * applyDefRebPenaltyToOE(awayDE, homeSeasonStats) / 10000) * expectedPoss - homeRosterInfo.injuryPenalty;
-  const awayExpected = (awayOEAdj * applyDefRebPenaltyToOE(homeDE, awaySeasonStats) / 10000) * expectedPoss - awayRosterInfo.injuryPenalty;
-  const seasonExpectedTotal = homeExpected + awayExpected;
-  const ourModelMargin = homeExpected - awayExpected + HOME_COURT_ADV;
-
-  const { blendedMargin: seasonExpectedMargin } = blendWithBPI(ourModelMargin, bpiData);
-
-  const homeDefRebRate = Math.round((homeSeasonStats.avgDefReb / (homeSeasonStats.avgDefReb + 10)) * 1000) / 10;
-  const awayDefRebRate = Math.round((awaySeasonStats.avgDefReb / (awaySeasonStats.avgDefReb + 10)) * 1000) / 10;
-
-  const bpiHomeMargin = bpiData?.awayPredMargin !== null && bpiData?.awayPredMargin !== undefined
-    ? Math.round(-bpiData.awayPredMargin * 10) / 10
-    : null;
-
-  const volatility = 14;
-  const effectiveFGLine = total ?? seasonExpectedTotal;
-
-  const spreadProb = Math.round(sigmoid((seasonExpectedMargin - (homeSpreadLine ?? seasonExpectedMargin)) / volatility) * 1000) / 10;
-  const overProb = Math.round(sigmoid((seasonExpectedTotal - effectiveFGLine) / volatility) * 1000) / 10;
-  const spreadEdge = Math.round((spreadProb - 50) * 10) / 10;
-  const totalEdge = Math.round((overProb - 50) * 10) / 10;
-
-  const handleSignal = getHandleSignal(bookLines);
-
-  return {
-    gameId: game.id,
-    homeTeam: game.homeTeam,
-    awayTeam: game.awayTeam,
-    homeTeamAbbr: game.homeTeamAbbr,
-    awayTeamAbbr: game.awayTeamAbbr,
-    status: game.status,
-    clock: "",
-    half: 1,
-    period: 0,
-    homeScore: 0,
-    awayScore: 0,
-    currentMargin: 0,
-    homeSpreadLine,
-    awaySpreadLine,
-    total,
-    overPrice,
-    underPrice,
-    bookLines,
-    h1TotalLineModel: total !== null ? Math.round(total * NCAAB_H1_FRACTION * 2) / 2 : null,
-    h1SpreadLine: null,
-    h1SpreadProb: null,
-    proj1HHome: null,
-    proj1HAway: null,
-    h1HomeOverProb: null,
-    h1AwayOverProb: null,
-    projectedTotal: Math.round(seasonExpectedTotal * 10) / 10,
-    projectedMargin: Math.round(seasonExpectedMargin * 10) / 10,
-    proj1HTotal: null,
-    homeProjected: Math.round(homeExpected * 10) / 10,
-    awayProjected: Math.round(awayExpected * 10) / 10,
-    seasonExpectedTotal: Math.round(seasonExpectedTotal * 10) / 10,
-    seasonExpectedMargin: Math.round(seasonExpectedMargin * 10) / 10,
-    homePPG: homeSeasonStats.ppg,
-    awayPPG: awaySeasonStats.ppg,
-    homeTempo: Math.round(homeSeasonStats.poss * 10) / 10,
-    awayTempo: Math.round(awaySeasonStats.poss * 10) / 10,
-    homeOE: homeSeasonStats.oe,
-    awayOE: awaySeasonStats.oe,
-    homeDE: Math.round(homeDE * 10) / 10,
-    awayDE: Math.round(awayDE * 10) / 10,
-    expectedPoss: Math.round(expectedPoss * 10) / 10,
-    homeThreePARate: Math.round(homeSeasonStats.threePARate * 1000) / 10,
-    awayThreePARate: Math.round(awaySeasonStats.threePARate * 1000) / 10,
-    homeDefRebRate,
-    awayDefRebRate,
-    bpiHomeMargin,
-    homeInjuries: homeRosterInfo.injuredNames,
-    awayInjuries: awayRosterInfo.injuredNames,
-    spreadProb,
-    overProb,
-    spreadEdge,
-    totalEdge,
-    over1HProb: null,
-    total1HEdge: null,
-    homeOverProb: null,
-    awayOverProb: null,
-    espnHomeWinPct: bpiData?.homeWinPct ?? null,
-    espnAwayWinPct: bpiData?.awayWinPct ?? null,
-    volatilityBonus: 0,
-    volatility,
-    bettingWindow: "NONE" as const,
-    bettingWindowLabel: "",
-    handleSignal,
-    desperation3s: false,
-    intentionalFouling: false,
-    scoringByPeriod: {},
-    teamStats: {},
-  };
 }
