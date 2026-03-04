@@ -1,0 +1,124 @@
+2026-03-03 22:37:17.96
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-03 22:37:19.28
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-03 22:37:19.52
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-03 22:39:46.30
+21d449d0
+User
+[NCAAB Odds] 422: {"message":"Invalid markets: h1_spreads, h1_totals","error_code":"INVALID_MARKET","details_url":"https://the-odds-api.com/liveapi/guides/v4/api-error-codes.html#invalid-market"}
+2026-03-03 22:41:49.31
+cb4b5a8c
+System
+command finished with error [node ./dist/index.cjs]: signal: terminated
+2026-03-03 22:45:52.85
+21d449d0
+User
+[Odds] No event found for Portland Trail Blazers vs Los Angeles Lakers. Available: San Antonio Spurs @ Philadelphia 76ers | New Orleans Pelicans @ Los Angeles Lakers | Phoenix Suns @ Sacramento Kings | Oklahoma City Thunder @ New York Knicks | Charlotte Hornets @ Boston Celtics | Utah Jazz @ Philadelphia 76ers | Atlanta Hawks @ Milwaukee Bucks
+2026-03-03 22:45:52.85
+21d449d0
+User
+[Odds] No event found for Portland Trail Blazers vs Los Angeles Lakers. Available: San Antonio Spurs @ Philadelphia 76ers | New Orleans Pelicans @ Los Angeles Lakers | Phoenix Suns @ Sacramento Kings | Oklahoma City Thunder @ New York Knicks | Charlotte Hornets @ Boston Celtics | Utah Jazz @ Philadelphia 76ers | Atlanta Hawks @ Milwaukee Bucks
+2026-03-03 22:46:50.84
+21d449d0
+User
+[NCAAB Odds] 422: {"message":"Invalid markets: h1_spreads, h1_totals","error_code":"INVALID_MARKET","details_url":"https://the-odds-api.com/liveapi/guides/v4/api-error-codes.html#invalid-market"}
+2026-03-04 01:47:39.43
+21d449d0
+User
+[NCAAB Odds] 422: {"message":"Invalid markets: h1_spreads, h1_totals","error_code":"INVALID_MARKET","details_url":"https://the-odds-api.com/liveapi/guides/v4/api-error-codes.html#invalid-market"}
+2026-03-04 09:18:27.96
+21d449d0
+System
+command finished with error [node ./dist/index.cjs]: signal: terminated
+2026-03-04 09:21:20.17
+21d449d0
+System
+healthcheck failed error=healthcheck /: Get "http://127.0.0.1:1104/": dial tcp 127.0.0.1:1104: connect: connection refused
+2026-03-04 09:21:20.18
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:20.19
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:20.21
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:20.24
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:20.38
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:20.47
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:20.61
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:21.89
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:22.99
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:23.73
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:25.37
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:26.32
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:27.62
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:27.65
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:29.13
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:30.45
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:21:32.05
+21d449d0
+System
+healthcheck failed error=healthcheck / returned status 500
+2026-03-04 09:54:12.39
+21d449d0
+User
+[NCAAB Odds] 422: {"message":"Invalid markets: h1_spreads, h1_totals","error_code":"INVALID_MARKET","details_url":"https://the-odds-api.com/liveapi/guides/v4/api-error-codes.html#invalid-market"}
+2026-03-04 09:55:26.92
+21d449d0
+User
+[NCAAB Odds] 422: {"message":"Invalid markets: h1_spreads, h1_totals","error_code":"INVALID_MARKET","details_url":"https://the-odds-api.com/liveapi/guides/v4/api-error-codes.html#invalid-market"}
+2026-03-04 11:07:37.50
+21d449d0
+User
+[NCAAB Odds] 422: {"message":"Invalid markets: h1_spreads, h1_totals","error_code":"INVALID_MARKET","details_url":"https://the-odds-api.com/liveapi/guides/v4/api-error-codes.html#invalid-market"}
