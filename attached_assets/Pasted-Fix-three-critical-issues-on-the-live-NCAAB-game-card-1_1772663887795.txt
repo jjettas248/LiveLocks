@@ -1,0 +1,202 @@
+Fix three critical issues on the live NCAAB game card:
+
+---
+
+1. CONTRAST + READABILITY OVERHAUL
+
+The card is unreadable due to insufficient contrast. 
+Apply the following fixes across every element:
+
+BACKGROUND LAYERS (establish clear depth hierarchy):
+  Card bg:          #0a0a0a
+  Section bg:       #111111  
+  Row/cell bg:      #181818
+  Hover state:      #1f1f1f
+
+TEXT CONTRAST (all must meet AA minimum):
+  Primary text:     #ffffff   (game title, score, key numbers)
+  Secondary text:   #a1a1aa   (labels, subtitles — zinc-400)
+  Muted text:       #71717a   (sub-labels — zinc-500)
+  
+  NEVER use zinc-600 or darker for any text on dark backgrounds.
+  NEVER use opacity tricks to create "muted" text — 
+  use explicit color values instead.
+
+STAT GRID ROWS:
+  Current problem: label and value blend into background.
+  Fix:
+    Label (left): #71717a zinc-500, text-xs uppercase tracking-wider
+    Value (center): #ffffff white, text-lg font-bold
+    Sub-label (right): #a1a1aa zinc-400, text-xs
+    Row bg: #111111
+    Row border-bottom: 1px solid #27272a (zinc-800)
+    Row padding: py-4 px-5
+    Alternate rows: no zebra striping — use border only
+
+VERDICT ROWS:
+  "Strong Over EV" label: #00d4aa teal, font-semibold, text-sm
+  "Engine X% vs Book Y%": #a1a1aa zinc-400, text-xs
+  Edge badge "+27.0pp": 
+    bg #f59e0b/20, border #f59e0b/40, text #f59e0b
+    font-mono font-bold
+  Left border accent: 3px solid #00d4aa (Over) or #ef4444 (Under)
+  Row bg: #111111, border zinc-800
+  Padding: py-4 px-5
+
+  "Over CLV" label: #a1a1aa zinc-400, text-sm
+  CLV badge "↑ Over": 
+    bg #00d4aa/20, border #00d4aa/40, text #00d4aa
+  Row bg: #0f0f0f slightly different from EV row for separation
+
+MARKET BUTTONS (Over / Under / Spread):
+  Unselected:
+    bg: #181818
+    border: #27272a zinc-800
+    Label text (OVER/UNDER/SPREAD): #71717a zinc-500, text-xs
+    Value text (76.5): #ffffff white, text-xl font-bold
+    Pct text (80.0%): #00d4aa teal for Over, #ef4444 red for Under
+  
+  Selected (currently Spread is selected in screenshot):
+    bg: #1f1f1f
+    border: #ffffff white 1.5px
+    Label: #ffffff white
+    Value: #ffffff white
+    "+" button: #ffffff white, border #3f3f46
+
+BOOK PILLS (MGM / BR row at bottom):
+  Green dot: bg-green-400
+  Book name: #ffffff white font-semibold text-xs
+  Line text: #a1a1aa zinc-400 text-xs
+  Pill bg: #181818, border #27272a
+  Hover: border #00d4aa teal
+
+RADIAL GAUGE:
+  Background arc: #27272a zinc-800
+  Value arc: color matches dominant side
+  Percentage text: #ffffff white font-bold
+  Label text: #71717a zinc-500 text-xs
+  Make gauge larger: radius 68, stroke 10
+  Ensure percentage number is minimum 28px font size
+
+LIVE BADGE:
+  "LIVE · H1 13:55":
+    Dot: bg-green-400 animate-ping
+    Text: #ffffff white font-semibold
+    bg: #16a34a/20 green-800/20
+    border: #16a34a/30
+    rounded-full px-3 py-1
+
+SCORE DISPLAY:
+  "15 – 11": text-4xl font-black #ffffff
+  Make this the most visually dominant element 
+  on the left side of the card header
+
+---
+
+2. FULL GAME MARKETS (not H1 only)
+
+Current problem: card is showing first-half markets only.
+Fix: always display full game markets as the default.
+
+MARKET TAB STRUCTURE:
+  Add a small toggle above the stat grid:
+  
+  [Full Game] [1st Half]
+  
+  - "Full Game" selected by default on every card load
+  - Pill toggle style:
+      Selected: bg zinc-800, text white, rounded-md
+      Unselected: text zinc-500, no bg
+      Container: bg zinc-900, rounded-lg, p-1, inline-flex
+  
+  When "Full Game" selected:
+    - Stat grid shows: Full Game Total, Engine Over%, 
+      Engine Under%, Spread, Away Proj, Home Proj
+    - Market buttons show full game line (e.g. 159.5)
+    - Gauge shows full game engine probability
+    - Verdict rows reflect full game edge
+  
+  When "1st Half" selected:
+    - Stat grid shows: H1 Total, H1 Over%, H1 Under%, 
+      H1 Spread, Away H1 Proj, Home H1 Proj
+    - Market buttons show H1 line
+    - Gauge switches to H1 engine probability
+    - Verdict rows reflect H1 edge
+  
+  Market tab selection is independent per card —
+  one card on 1H does not affect another card's selection.
+  
+  Store in local state:
+    const [marketTab, setMarketTab] = useState("full")
+
+---
+
+3. AUTO-REFRESH SCORE EVERY 3 MINUTES
+
+Live game scores update automatically every 3 minutes.
+Manual refresh button also available.
+
+AUTO-REFRESH LOGIC:
+  useEffect(() => {
+    if (game.status !== "live") return
+    
+    const interval = setInterval(() => {
+      fetchGameData(game.id)
+    }, 180000) // 3 minutes in ms
+    
+    return () => clearInterval(interval)
+  }, [game.id, game.status])
+
+  fetchGameData should:
+    1. Hit ESPN live scoreboard endpoint for this game
+    2. Update score, clock, quarter
+    3. Update engine probabilities
+    4. Update projected finals
+    5. Trigger verdict row recalculation + flash animation
+    6. NOT reset selectedMarket or marketTab state
+    7. NOT collapse expanded H2H section if user opened it
+
+VISUAL REFRESH INDICATOR:
+  Small indicator in card header, right of live badge:
+    Shows "Auto-refresh in [X]m [SS]s" countdown
+    Format:
+      > 60s: "Auto-refresh in [X]m [SS]s" zinc-500 text-xs
+      < 60s: "Refreshing soon..." amber text-xs
+      During fetch: "Updating..." teal text-xs 
+                    with spinning loader icon (lucide Loader2)
+      After fetch: brief "Updated ✓" teal text-xs 
+                   fades out after 2 seconds
+
+  Countdown resets to 3:00 after each successful fetch.
+  
+  const [refreshCountdown, setRefreshCountdown] = useState(180)
+  
+  useEffect(() => {
+    if (game.status !== "live") return
+    const tick = setInterval(() => {
+      setRefreshCountdown(prev => {
+        if (prev <= 1) {
+          fetchGameData(game.id)
+          return 180
+        }
+        return prev - 1
+      })
+    }, 1000)
+    return () => clearInterval(tick)
+  }, [game.id, game.status])
+
+MANUAL REFRESH:
+  Existing "Refresh" button top-right of the tab:
+    On click: 
+      fetchGameData for ALL live games simultaneously
+      Reset all live card countdown timers to 180
+      Show "Updated ✓" on each live card briefly
+
+SCORE ANIMATION ON UPDATE:
+  When score changes after a refresh:
+    New score value does a quick scale pulse:
+      transform: scale(1.15) → scale(1.0) over 400ms
+      color flashes briefly to teal then back to white
+    Clock updates without animation (just swaps)
+
+  If score did not change: no animation, silent update.
