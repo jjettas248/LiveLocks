@@ -184,8 +184,13 @@ export async function getNCAABOddsLines(): Promise<any[]> {
 interface SGO1HLines {
   h1TotalLine: number | null;
   h1SpreadLine: number | null;
-  h1Favorite: string;       // "home" | "away" | ""
-  h1FavoriteName: string;   // team long name
+  h1Favorite: string;
+  h1FavoriteName: string;
+  // Team total lines (aligned to ESPN home/away, not SGO home/away)
+  homeGameTotalLine: number | null;
+  awayGameTotalLine: number | null;
+  home1HTotalLine: number | null;
+  away1HTotalLine: number | null;
 }
 
 interface SGOEvent {
@@ -239,14 +244,17 @@ function matchSGOEvent(game: any, sgoEvents: SGOEvent[]): SGOEvent | null {
 
 function extractSGO1HLines(sgoEvent: SGOEvent, game: any): SGO1HLines {
   const odds = sgoEvent.odds ?? {};
+  const evHome = sgoEvent.teams?.home?.names?.long ?? "";
+  // true if SGO's "home" team maps to the ESPN game's homeTeam
+  const homeIsGameHome = teamsMatch(game.homeTeam, evHome);
 
-  // Total: points-all-1h-ou-over bookOverUnder
+  // 1H total
   const ouOver = odds["points-all-1h-ou-over"];
   const h1TotalLine: number | null = ouOver?.bookOverUnder != null
     ? parseFloat(ouOver.bookOverUnder)
     : null;
 
-  // Spread: points-home-1h-sp-home bookSpread (negative = home is favored)
+  // 1H spread (negative bookSpread on home side = SGO home is favourite)
   const spHome = odds["points-home-1h-sp-home"];
   const spAway = odds["points-away-1h-sp-away"];
 
@@ -257,10 +265,6 @@ function extractSGO1HLines(sgoEvent: SGOEvent, game: any): SGO1HLines {
   if (spHome?.bookSpread != null) {
     const val = parseFloat(spHome.bookSpread);
     h1SpreadLine = Math.abs(val);
-    const evHome = sgoEvent.teams?.home?.names?.long ?? "";
-    const evAway = sgoEvent.teams?.away?.names?.long ?? "";
-    // Determine which team is the favorite based on which side maps to game.homeTeam
-    const homeIsGameHome = teamsMatch(game.homeTeam, evHome);
     if (val < 0) {
       h1Favorite = homeIsGameHome ? "home" : "away";
       h1FavoriteName = homeIsGameHome ? game.homeTeam : game.awayTeam;
@@ -268,7 +272,6 @@ function extractSGO1HLines(sgoEvent: SGOEvent, game: any): SGO1HLines {
       h1Favorite = homeIsGameHome ? "away" : "home";
       h1FavoriteName = homeIsGameHome ? game.awayTeam : game.homeTeam;
     } else if (spAway?.bookSpread != null) {
-      // Even — use away as reference
       const aval = parseFloat(spAway.bookSpread);
       if (aval < 0) {
         h1Favorite = homeIsGameHome ? "away" : "home";
@@ -277,7 +280,22 @@ function extractSGO1HLines(sgoEvent: SGOEvent, game: any): SGO1HLines {
     }
   }
 
-  return { h1TotalLine, h1SpreadLine, h1Favorite, h1FavoriteName };
+  // Team totals — aligned to ESPN home/away
+  function parseOU(key: string): number | null {
+    const v = odds[key]?.bookOverUnder;
+    return v != null ? parseFloat(v) : null;
+  }
+  const sgoHomeFG  = parseOU("points-home-game-ou-over");
+  const sgoAwayFG  = parseOU("points-away-game-ou-over");
+  const sgoHome1H  = parseOU("points-home-1h-ou-over");
+  const sgoAway1H  = parseOU("points-away-1h-ou-over");
+
+  const homeGameTotalLine = homeIsGameHome ? sgoHomeFG : sgoAwayFG;
+  const awayGameTotalLine = homeIsGameHome ? sgoAwayFG : sgoHomeFG;
+  const home1HTotalLine   = homeIsGameHome ? sgoHome1H : sgoAway1H;
+  const away1HTotalLine   = homeIsGameHome ? sgoAway1H : sgoHome1H;
+
+  return { h1TotalLine, h1SpreadLine, h1Favorite, h1FavoriteName, homeGameTotalLine, awayGameTotalLine, home1HTotalLine, away1HTotalLine };
 }
 
 // ── Match ESPN game → Odds API event ─────────────────────────────────────────
@@ -415,6 +433,12 @@ export interface NCAABPlay {
   h1SpreadLine: number | null;
   h1Favorite: string;
 
+  // Team total market lines from SGO
+  homeGameTotalLine: number | null;
+  awayGameTotalLine: number | null;
+  home1HTotalLine: number | null;
+  away1HTotalLine: number | null;
+
   // Projections
   projectedTotal: number | null;
   projectedMargin: number | null;
@@ -485,11 +509,15 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       // SGO 1H lines (real book lines for 1st half)
       const sgoEvent = matchSGOEvent(game, sgoEvents);
       const sgo1H = sgoEvent ? extractSGO1HLines(sgoEvent, game) : null;
-      const rawH1TotalLine = sgo1H?.h1TotalLine ?? null;
-      const h1SpreadLine   = sgo1H?.h1SpreadLine ?? oddsH1Spread ?? null;
-      const h1Favorite     = sgo1H?.h1FavoriteName ?? oddsH1Fav ?? "";
+      const rawH1TotalLine  = sgo1H?.h1TotalLine ?? null;
+      const h1SpreadLine    = sgo1H?.h1SpreadLine ?? oddsH1Spread ?? null;
+      const h1Favorite      = sgo1H?.h1FavoriteName ?? oddsH1Fav ?? "";
+      const homeGameTotalLine = sgo1H?.homeGameTotalLine ?? null;
+      const awayGameTotalLine = sgo1H?.awayGameTotalLine ?? null;
+      const home1HTotalLine   = sgo1H?.home1HTotalLine ?? null;
+      const away1HTotalLine   = sgo1H?.away1HTotalLine ?? null;
       if (sgo1H?.h1TotalLine != null) {
-        console.log(`[NCAAB SGO] ${game.awayTeam} @ ${game.homeTeam}: 1H total=${sgo1H.h1TotalLine}, spread=${sgo1H.h1SpreadLine} ${sgo1H.h1FavoriteName}`);
+        console.log(`[NCAAB SGO] ${game.awayTeam} @ ${game.homeTeam}: 1H total=${sgo1H.h1TotalLine}, spread=${sgo1H.h1SpreadLine} ${sgo1H.h1FavoriteName}, homeTeamTotal=${homeGameTotalLine}, awayTeamTotal=${awayGameTotalLine}`);
       }
 
       // ── Box score data ───────────────────────────────────────────────────
@@ -689,6 +717,10 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         h1TotalLine,
         h1SpreadLine,
         h1Favorite,
+        homeGameTotalLine,
+        awayGameTotalLine,
+        home1HTotalLine,
+        away1HTotalLine,
         projectedTotal: projectedTotal !== null ? Math.round(projectedTotal * 10) / 10 : null,
         projectedMargin: projectedMargin !== null ? Math.round(projectedMargin * 10) / 10 : null,
         proj1HTotal,
