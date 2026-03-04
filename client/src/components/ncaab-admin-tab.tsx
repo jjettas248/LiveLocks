@@ -57,6 +57,7 @@ interface NCAABPlay {
   totalEdge: number | null;
   over1HProb: number | null;
   total1HEdge: number | null;
+  overOddsAmerican: number | null;
   volatilityBonus: number;
   volatility: number | null;
   bettingWindow: "1H_WINDOW" | "HALFTIME" | "LATE_WINDOW" | "NONE";
@@ -451,7 +452,8 @@ function NCAABGameCard({
 }) {
   const isH1 = play.half === 1 && !play.bettingWindow.includes("HALFTIME");
 
-  const overProb   = isH1 ? (play.over1HProb ?? play.overProb ?? 50) : (play.overProb ?? 50);
+  // T002: gauge always shows full-game probability, never H1 data
+  const overProb   = play.overProb ?? 50;
   const underProb  = parseFloat((100 - overProb).toFixed(4));
   const spreadProb = play.spreadProb ?? 50;
 
@@ -536,12 +538,32 @@ function NCAABGameCard({
   const gaugeLabel  = selectedMarket === "over" ? "OVER" : selectedMarket === "under" ? "UNDER" : "COVER";
 
   const engineProb  = gaugeValue;
-  const bookImplied = 50;
-  const edgeGap     = Math.abs(engineProb - bookImplied);
-  const edgeSide    = engineProb > bookImplied ? "Under" : "Over";
-  const edgeLabel   = edgeGap >= 20 ? `Strong ${edgeSide} EV` : edgeGap >= 10 ? `Lean ${edgeSide} EV` : "Neutral — No Edge";
-  const edgeBelow   = edgeGap < 5;
-  const evColor     = edgeSide === "Under" ? "#ef4444" : "#00d4aa";
+
+  // T003: derive bookImplied from American odds price in Odds API response
+  function americanToImplied(odds: number): number {
+    return odds < 0
+      ? (Math.abs(odds) / (Math.abs(odds) + 100)) * 100
+      : (100 / (odds + 100)) * 100;
+  }
+  const bookImplied = play.overOddsAmerican != null
+    ? parseFloat(americanToImplied(play.overOddsAmerican).toFixed(1))
+    : 52.4; // standard -110 vig default
+
+  const edgeGap = Math.abs(engineProb - bookImplied);
+
+  // T004: fix inverted direction — market-aware edgeSide
+  const edgeSide: "Over" | "Under" =
+    selectedMarket === "under"
+      ? (engineProb > bookImplied ? "Under" : "Over")
+      : (engineProb > bookImplied ? "Over" : "Under");
+
+  const edgeLabel = edgeGap >= 20
+    ? `Strong ${edgeSide} EV`
+    : edgeGap >= 10
+    ? `Lean ${edgeSide} EV`
+    : "Neutral — No Edge";
+  const edgeBelow = edgeGap < 5;
+  const evColor   = edgeSide === "Under" ? "#ef4444" : "#00d4aa";
 
   const getLegId      = (m: string) => `${play.gameId}:${m}`;
   const isLegParlayed = (m: string) => parlayLegs.includes(getLegId(m));
@@ -903,18 +925,24 @@ function NCAABGameCard({
 // ── Grouped Games List ────────────────────────────────────────────────────────
 function GroupedGamesList({
   games,
+  plays,
   rowRefs,
   expandedGameId,
   onExpandGame,
   onH2hReady,
+  onAddToParlay,
   shiftedGames,
+  onShiftDetected,
 }: {
   games: NCAABGame[];
+  plays: NCAABPlay[];
   rowRefs: React.MutableRefObject<Record<string, HTMLDivElement | null>>;
   expandedGameId: string | null;
   onExpandGame: (id: string | null) => void;
   onH2hReady: (gameId: string, data: H2HGame[]) => void;
+  onAddToParlay?: (pick: ParlayPickInput) => void;
   shiftedGames: Record<string, boolean>;
+  onShiftDetected?: (gameId: string) => void;
 }) {
   if (games.length === 0) {
     return <p className="text-xs" style={{ color: "#71717a" }}>No games found in today's slate.</p>;
@@ -950,21 +978,23 @@ function GroupedGamesList({
           <div className="space-y-1.5">
             {sortGroup(groupGames).map(g => {
               const isExpanded = expandedGameId === g.id;
-              const canExpand  = !g.isLive && g.status !== "Final";
+              // T001: all non-Final rows are clickable (live + scheduled)
+              const canExpand  = g.status !== "Final";
+              const matchedPlay = plays.find(p => p.gameId === g.id);
               return (
                 <div key={g.id}>
                   <div
                     ref={el => { rowRefs.current[g.id] = el; }}
                     data-testid={`ncaab-game-row-${g.id}`}
-                    className="flex items-center justify-between px-4 py-3 rounded-lg cursor-pointer transition-all duration-200"
+                    className={`flex items-center justify-between px-4 py-3 rounded-lg transition-all duration-200 ${canExpand ? "cursor-pointer" : "cursor-default"}`}
                     style={{
                       background: isExpanded ? "#141414" : "#111111",
                       border: `1px solid ${isExpanded ? "#3f3f46" : "#27272a"}`,
                       borderRadius: isExpanded ? "8px 8px 0 0" : "8px",
                     }}
                     onClick={() => canExpand && onExpandGame(isExpanded ? null : g.id)}
-                    onMouseEnter={e => !isExpanded && (e.currentTarget.style.borderColor = "#52525b")}
-                    onMouseLeave={e => !isExpanded && (e.currentTarget.style.borderColor = "#27272a")}
+                    onMouseEnter={e => canExpand && !isExpanded && (e.currentTarget.style.borderColor = "#52525b")}
+                    onMouseLeave={e => canExpand && !isExpanded && (e.currentTarget.style.borderColor = "#27272a")}
                   >
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-bold text-white truncate">
@@ -1003,8 +1033,25 @@ function GroupedGamesList({
                       )}
                     </div>
                   </div>
-                  {/* Pre-game card expansion (items 2, 3, 4, 6) */}
-                  {isExpanded && canExpand && (
+                  {/* T001: Live game row — inline NCAABGameCard */}
+                  {isExpanded && g.isLive && matchedPlay && (
+                    <NCAABGameCard
+                      play={matchedPlay}
+                      onAddToParlay={onAddToParlay}
+                      h2hDataFromCache={null}
+                      isNewlyLive={false}
+                      onShiftDetected={onShiftDetected}
+                    />
+                  )}
+                  {/* T001: Live game with no play data yet — loading placeholder */}
+                  {isExpanded && g.isLive && !matchedPlay && (
+                    <div className="rounded-b-xl p-4 animate-pulse" style={{ background: "#0a0a0a", border: "1px solid #27272a", borderTop: "none" }}>
+                      <div className="h-3 rounded w-1/3 mb-2" style={{ background: "#27272a" }} />
+                      <div className="h-3 rounded w-1/2" style={{ background: "#1e1e1e" }} />
+                    </div>
+                  )}
+                  {/* Pre-game card expansion for scheduled games */}
+                  {isExpanded && !g.isLive && g.status !== "Final" && (
                     <PreGameCard
                       game={g}
                       onH2hReady={onH2hReady}
@@ -1475,11 +1522,14 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
               </p>
               <GroupedGamesList
                 games={games}
+                plays={plays}
                 rowRefs={rowRefs}
                 expandedGameId={expandedGameId}
                 onExpandGame={handleExpandGame}
                 onH2hReady={handleH2hReady}
+                onAddToParlay={onAddToParlay}
                 shiftedGames={shiftedGames}
+                onShiftDetected={handleShiftDetected}
               />
             </div>
           )}

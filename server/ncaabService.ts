@@ -405,6 +405,7 @@ function extractLines(oddsEvent: any): {
   h1TotalLine: number | null;
   h1SpreadLine: number | null;
   h1Favorite: string;
+  overOddsAmerican: number | null;
 } {
   let spread: number | null = null;
   let total: number | null = null;
@@ -412,6 +413,7 @@ function extractLines(oddsEvent: any): {
   let h1TotalLine: number | null = null;
   let h1SpreadLine: number | null = null;
   let h1Favorite = "";
+  let overOddsAmerican: number | null = null;
   const bookLines: Array<{ book: string; spread: number | null; total: number | null; favorite: string; h1Total: number | null; h1Spread: number | null; h1Favorite: string }> = [];
 
   for (const bk of (oddsEvent.bookmakers ?? [])) {
@@ -440,7 +442,13 @@ function extractLines(oddsEvent: any): {
     }
     if (totalsMarket?.outcomes?.length >= 1) {
       const over = totalsMarket.outcomes.find((o: any) => o.name === "Over");
-      if (over) bkTotal = over.point as number;
+      if (over) {
+        bkTotal = over.point as number;
+        // Extract American odds price for Over (e.g. -110) to compute bookImplied
+        if (overOddsAmerican === null && over.price != null) {
+          overOddsAmerican = over.price as number;
+        }
+      }
     }
     if (h1TotalsMarket?.outcomes?.length >= 1) {
       const over = h1TotalsMarket.outcomes.find((o: any) => o.name === "Over");
@@ -465,10 +473,10 @@ function extractLines(oddsEvent: any): {
     if (total === null && bkTotal !== null) total = bkTotal;
     if (h1TotalLine === null && bkH1Total !== null) h1TotalLine = bkH1Total;
     if (h1SpreadLine === null && bkH1Spread !== null) { h1SpreadLine = bkH1Spread; h1Favorite = bkH1Fav; }
-    if (spread !== null && total !== null && h1TotalLine !== null) break;
+    if (spread !== null && total !== null && h1TotalLine !== null && overOddsAmerican !== null) break;
   }
 
-  return { spread, total, favorite, bookLines, h1TotalLine, h1SpreadLine, h1Favorite };
+  return { spread, total, favorite, bookLines, h1TotalLine, h1SpreadLine, h1Favorite, overOddsAmerican };
 }
 
 // ── Public handle signal ──────────────────────────────────────────────────────
@@ -539,6 +547,9 @@ export interface NCAABPlay {
   over1HProb: number | null;
   total1HEdge: number | null;
 
+  // Book odds for implied probability
+  overOddsAmerican: number | null;
+
   // Volatility
   volatilityBonus: number;
   volatility: number | null;
@@ -587,9 +598,9 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       try { box = await getNCAABBoxScore(game.id); } catch { /* non-fatal */ }
 
       const oddsEvent = matchOddsEvent(game, oddsEvents);
-      const { spread, total, favorite, bookLines, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav } = oddsEvent
+      const { spread, total, favorite, bookLines, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav, overOddsAmerican } = oddsEvent
         ? extractLines(oddsEvent)
-        : { spread: null, total: null, favorite: "", bookLines: [], h1SpreadLine: null, h1Favorite: "" };
+        : { spread: null, total: null, favorite: "", bookLines: [], h1SpreadLine: null, h1Favorite: "", overOddsAmerican: null };
 
       // SGO 1H lines (real book lines for 1st half)
       const sgoEvent = matchSGOEvent(game, sgoEvents);
@@ -817,6 +828,7 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         totalEdge,
         over1HProb,
         total1HEdge,
+        overOddsAmerican,
         volatilityBonus,
         volatility: volatility !== null ? Math.round(volatility * 10) / 10 : null,
         bettingWindow,
