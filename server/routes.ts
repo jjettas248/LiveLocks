@@ -76,8 +76,8 @@ export async function registerRoutes(
     }
   });
 
-  // ── NCAAB Routes (All Sports + Elite + Admin) ────────────────────────────
-  app.get("/api/ncaab/plays", requireTier("all", "elite"), async (_req, res) => {
+  // ── NCAAB Routes (Admin only — temporarily gated while UI is being fixed) ─
+  app.get("/api/ncaab/plays", requireAdmin, async (_req, res) => {
     try {
       const plays = await computeNCAABPlays();
       return res.json({ plays });
@@ -87,7 +87,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/ncaab/games", requireTier("all", "elite"), async (_req, res) => {
+  app.get("/api/ncaab/games", requireAdmin, async (_req, res) => {
     try {
       const games = await getNCAABScoreboard();
       return res.json({ games });

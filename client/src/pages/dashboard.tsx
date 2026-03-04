@@ -1024,7 +1024,7 @@ export default function Dashboard() {
             >
               🏀 NBA Live
             </button>
-            {(user?.isAdmin || ["all", "elite"].includes(user?.subscriptionTier ?? "")) && (
+            {user?.isAdmin && (
               <button
                 data-testid="tab-ncaab"
                 onClick={() => setActiveTab("ncaab")}
@@ -2417,7 +2417,7 @@ export default function Dashboard() {
         )}
 
         {/* NCAAB Tab — live data for All Sports, Elite, and Admin */}
-        {activeTab === "ncaab" && (user?.isAdmin || ["all", "elite"].includes(user?.subscriptionTier ?? "")) && (
+        {activeTab === "ncaab" && user?.isAdmin && (
           <NCAABAdminTab
             isAdmin={user?.isAdmin ?? false}
             onAddToParlay={(pick) => {
