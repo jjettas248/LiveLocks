@@ -241,10 +241,19 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
   type BestPlay = { label: string; prob: number; edge: number; direction: "over" | "under" | "cover"; explanation: string };
   const candidates: BestPlay[] = [];
 
-  if (play.total !== null && play.overProb !== null) {
+  // Only generate best-play candidates when the game is in an active betting window.
+  // bettingWindow="NONE" means no actionable betting window — ring must not fire.
+  const inBettingWindow = play.bettingWindow !== "NONE";
+
+  if (inBettingWindow && play.total !== null && play.overProb !== null) {
     const overEdge = play.overProb - 50;
     const underEdge = 50 - play.overProb;
-    if (overEdge >= 8 && play.projectedTotal !== null) {
+    // Safety guard: only generate a best-play candidate if the projected total
+    // is greater than what's already been scored. A projection less than or equal
+    // to the live score means corrupted model data — skip it to prevent a false ring.
+    const liveTotal = play.homeScore + play.awayScore;
+    const projectionSane = play.projectedTotal === null || play.projectedTotal > liveTotal;
+    if (overEdge >= 8 && play.projectedTotal !== null && projectionSane) {
       const cappedProb = Math.min(97, play.overProb);
       candidates.push({
         label: `OVER ${play.total}`,
@@ -253,7 +262,7 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
         direction: "over",
         explanation: `Model projects ${play.projectedTotal} pts vs book ${play.total} (+${Math.abs(Math.round((play.projectedTotal - play.total) * 10) / 10)} edge). ${cappedProb >= 97 ? "≥97" : cappedProb.toFixed(0)}% confidence.`,
       });
-    } else if (underEdge >= 8 && play.projectedTotal !== null) {
+    } else if (underEdge >= 8 && play.projectedTotal !== null && projectionSane) {
       const cappedProb = Math.min(97, 100 - play.overProb);
       candidates.push({
         label: `UNDER ${play.total}`,
@@ -265,7 +274,7 @@ function NCAABGameCard({ play, onAddToParlay }: { play: NCAABPlay; onAddToParlay
     }
   }
 
-  if (play.spreadProb !== null) {
+  if (inBettingWindow && play.spreadProb !== null) {
     const coverEdge = Math.abs(play.spreadProb - 50);
     if (coverEdge >= 8) {
       const isHomeCover = play.spreadProb >= 50;

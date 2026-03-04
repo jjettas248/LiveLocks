@@ -1,3 +1,8 @@
+// ── NBA ENGINE ───────────────────────────────────────────────────────────────
+// calculateProbability() uses basketball_nba Odds API via oddsService.ts.
+// Do NOT share this engine with ncaabService.ts — that file has its own model.
+// ─────────────────────────────────────────────────────────────────────────────
+
 import { db } from "./db";
 import {
   players,

@@ -1,3 +1,8 @@
+// ── NCAAB ENGINE ─────────────────────────────────────────────────────────────
+// Uses basketball_ncaab Odds API sport key exclusively.
+// Do NOT import calculateProbability from storage.ts — that is the NBA engine.
+// ─────────────────────────────────────────────────────────────────────────────
+
 const ODDS_API_KEY = process.env.ODDS_API_KEY;
 const ESPN_NCAAB = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball";
 
@@ -792,8 +797,15 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       const homeScores: number[] = scoringByPeriod[homeAbbr] ?? [];
       const awayScores: number[] = scoringByPeriod[awayAbbr] ?? [];
 
-      const h1Home = homeScores[0] ?? Math.round(game.homeScore / (half === 2 ? 2 : 1) * 0.5);
-      const h1Away = awayScores[0] ?? Math.round(game.awayScore / (half === 2 ? 2 : 1) * 0.5);
+      // At halftime, the current live scores ARE the completed H1 scores — use them directly.
+      // During H1 in progress, the fallback halves the current score as a mid-half estimate.
+      // During H2, divide by 2 to estimate each half from the full-game total.
+      const h1Home = homeScores[0] ?? (isHalftime
+        ? game.homeScore
+        : Math.round(game.homeScore / (half === 2 ? 2 : 1) * 0.5));
+      const h1Away = awayScores[0] ?? (isHalftime
+        ? game.awayScore
+        : Math.round(game.awayScore / (half === 2 ? 2 : 1) * 0.5));
       const h1Total = h1Home + h1Away;
 
       const h2Home = homeScores[1] ?? (half === 2 ? game.homeScore - h1Home : 0);
@@ -886,6 +898,13 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
 
       if (projectedMargin !== null) {
         projectedMargin = Math.max(-45, Math.min(45, projectedMargin));
+      }
+
+      // Safety clamp: projected total must always exceed what's already been scored.
+      // If the model somehow produces a total below the live score, it means data is
+      // corrupted (wrong pace/period values). Clamp to current + 10 minutes of avg pace.
+      if (projectedTotal !== null && projectedTotal < currentTotal) {
+        projectedTotal = Math.round((currentTotal + NCAAB_AVG_PACE * 10) * 10) / 10;
       }
 
       // ── Team total split ─────────────────────────────────────────────────

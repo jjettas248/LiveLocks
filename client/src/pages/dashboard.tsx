@@ -1631,7 +1631,7 @@ export default function Dashboard() {
                       {/* Odds fetched but nothing found */}
                       {watchedOpponent && !isOddsLoading && oddsData && !((oddsData as any)._quotaExhausted) && Object.keys(oddsData).filter(k => k !== '_quotaExhausted').length === 0 && (
                         <p className="text-xs text-muted-foreground/60 bg-secondary/50 rounded-lg p-2 border border-border/40">
-                          No lines found — props may not be posted yet, or the player is inactive.
+                          No live props available — books often pause player props during live games or blowouts. Lines may reappear after the half. You can enter a line manually above.
                         </p>
                       )}
 
