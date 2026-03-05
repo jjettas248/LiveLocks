@@ -195,6 +195,8 @@ export interface ParlayPickInput {
   oddsAmerican: number;
   gameId?: string;
   isEstimated?: boolean;
+  type?: "live" | "pre_game";
+  confidenceTier?: string;
 }
 
 export interface ParlayResult {

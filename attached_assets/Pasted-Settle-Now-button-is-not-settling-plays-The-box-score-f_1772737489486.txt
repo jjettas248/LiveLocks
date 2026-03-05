@@ -1,0 +1,338 @@
+Settle Now button is not settling plays. The box 
+score fetch is failing silently. Fix the ESPN API 
+call and stat extraction to actually pull final 
+stats and settle pending plays.
+
+---
+
+STEP 1 — AUDIT SETTLEMENT FAILURE
+
+Print before fixing:
+
+  // SETTLEMENT AUDIT
+  // Current settleGamePlays function location: [file]
+  // ESPN endpoint being called: [url]
+  // What the response looks like: 
+  //   Add console.log(JSON.stringify(data, null, 2))
+  //   to the fetch and run Settle Now once
+  //   Print first 200 chars of response
+  // Where it fails silently: [try/catch swallowing error?]
+  // gameId format in plays table: [ESPN event ID format]
+  //   e.g. "401234567" vs "nba-401234567" vs other
+
+---
+
+STEP 2 — FIX ESPN BOX SCORE FETCH
+
+The correct ESPN NBA box score endpoint:
+
+  const fetchBoxScore = async (gameId) => {
+    
+    // Clean gameId — remove any prefix
+    const cleanId = String(gameId)
+      .replace(/^(nba-|ncaab-|game-)/i, "")
+    
+    const url = 
+      `https://site.api.espn.com/apis/site/v2/` +
+      `sports/basketball/nba/summary?event=${cleanId}`
+    
+    console.log("[SETTLE] Fetching box score:", url)
+    
+    let data
+    try {
+      const res = await fetch(url)
+      
+      if (!res.ok) {
+        console.error(
+          "[SETTLE] ESPN returned:", res.status, 
+          "for game", cleanId
+        )
+        return null
+      }
+      
+      data = await res.json()
+    } catch (err) {
+      console.error("[SETTLE] Fetch failed:", err)
+      return null
+    }
+    
+    // Confirm box score exists
+    if (!data?.boxscore?.players?.length) {
+      console.warn(
+        "[SETTLE] No box score data for game", 
+        cleanId,
+        "- game may not be final yet"
+      )
+      return null
+    }
+    
+    console.log(
+      "[SETTLE] Box score found, teams:", 
+      data.boxscore.players.length
+    )
+    
+    return data
+  }
+
+---
+
+STEP 3 — FIX STAT KEY MAPPING
+
+ESPN box score stat keys do not match LiveLocks
+market names. Build a complete mapping.
+
+ESPN returns stats as arrays with a "keys" array
+and "stats" array of values. The keys are ESPN's
+internal abbreviations.
+
+FIND ESPN KEYS first — add this debug log:
+
+  // Add temporarily to settleGamePlays:
+  data.boxscore.players.forEach(teamPlayers => {
+    teamPlayers.statistics.forEach(statGroup => {
+      console.log(
+        "[SETTLE] ESPN stat keys:", 
+        statGroup.keys
+      )
+      // Run once and read the console output
+      // to confirm exact ESPN key names
+    })
+  })
+
+COMMON ESPN KEY NAMES (verify against console):
+  Points: "PTS" or "points"
+  Rebounds: "REB" or "totalRebounds" 
+  Assists: "AST" or "assists"
+  Blocks: "BLK" or "blocks"
+  Steals: "STL" or "steals"
+
+BUILD PLAYER STATS WITH CORRECT KEYS:
+
+  const buildPlayerStats = (data) => {
+    const playerStats = {}
+    
+    data.boxscore.players.forEach(teamData => {
+      // ESPN has multiple stat categories
+      // "starters" and "totals" — use all athletes
+      teamData.statistics.forEach(statGroup => {
+        const keys = statGroup.keys ?? []
+        
+        statGroup.athletes.forEach(athlete => {
+          const id = String(athlete.athlete?.id)
+          if (!id || id === "undefined") return
+          
+          if (!playerStats[id]) {
+            playerStats[id] = {
+              name: athlete.athlete?.displayName,
+              id
+            }
+          }
+          
+          // Map each ESPN key to its value
+          const rawStats = {}
+          keys.forEach((key, index) => {
+            const val = athlete.stats?.[index]
+            rawStats[key.toUpperCase()] = 
+              parseFloat(val ?? 0) || 0
+          })
+          
+          // Store raw ESPN stats
+          Object.assign(playerStats[id], rawStats)
+        })
+      })
+    })
+    
+    return playerStats
+  }
+
+---
+
+STEP 4 — FIX COMBINED STAT CALCULATION
+
+LiveLocks market names map to COMBINATIONS of
+ESPN stats. Build these AFTER extracting raw stats.
+
+  const buildCombinedStats = (rawStats) => {
+    // rawStats has ESPN keys like PTS, REB, AST etc
+    // Read actual ESPN keys from audit log
+    
+    // Try multiple key variants for each stat
+    const pts = 
+      rawStats["PTS"] ?? 
+      rawStats["POINTS"] ?? 0
+    const reb = 
+      rawStats["REB"] ?? 
+      rawStats["TOTALREBOUNDS"] ?? 
+      rawStats["REBOUNDS"] ?? 0
+    const ast = 
+      rawStats["AST"] ?? 
+      rawStats["ASSISTS"] ?? 0
+    const blk = 
+      rawStats["BLK"] ?? 
+      rawStats["BLOCKS"] ?? 0
+    const stl = 
+      rawStats["STL"] ?? 
+      rawStats["STEALS"] ?? 0
+    
+    return {
+      // Single stats
+      "PTS": pts,
+      "REB": reb,
+      "AST": ast,
+      "BLK": blk,
+      "STL": stl,
+      
+      // Combined stats — these do NOT exist 
+      // in ESPN box score, must be calculated
+      "P+R":     pts + reb,
+      "P+A":     pts + ast,
+      "R+A":     reb + ast,
+      "P+R+A":   pts + reb + ast,
+      "S+B":     stl + blk,
+      "BLK+STL": stl + blk,  // alias
+      
+      // Store raw for debugging
+      "_raw": rawStats
+    }
+  }
+
+APPLY IN settleGamePlays:
+
+  const rawPlayerStats = buildPlayerStats(data)
+  
+  // Convert each player to combined stats
+  const playerStats = {}
+  Object.entries(rawPlayerStats).forEach(
+    ([id, raw]) => {
+      playerStats[id] = buildCombinedStats(raw)
+    }
+  )
+  
+  // Log for verification
+  console.log(
+    "[SETTLE] Player stats built for", 
+    Object.keys(playerStats).length, 
+    "players"
+  )
+
+---
+
+STEP 5 — FIX PLAYER ID MATCHING
+
+Plays store playerId from when the notification
+fired. ESPN box score has its own athlete IDs.
+These must match.
+
+ADD DEBUG LOG before settlement check:
+
+  playsToSettle.forEach(play => {
+    const found = playerStats[play.playerId]
+    if (!found) {
+      console.warn(
+        "[SETTLE] Player not found in box score:",
+        play.playerId,
+        play.playerName,
+        "Available IDs:", 
+        Object.keys(playerStats).slice(0, 5)
+      )
+    }
+  })
+
+If player IDs don't match:
+  Try matching by name as fallback:
+  
+  const findPlayer = (playerId, playerName, stats) => {
+    // Try ID match first
+    if (stats[String(playerId)]) {
+      return stats[String(playerId)]
+    }
+    
+    // Fallback: name match
+    const nameLower = playerName?.toLowerCase() ?? ""
+    const byName = Object.values(stats).find(p =>
+      p.name?.toLowerCase() === nameLower ||
+      p.name?.toLowerCase().includes(
+        nameLower.split(" ").pop() ?? ""
+      )
+    )
+    
+    if (byName) {
+      console.log(
+        "[SETTLE] Matched by name:", 
+        playerName, "→", byName.name
+      )
+    }
+    
+    return byName ?? null
+  }
+
+USE IN SETTLEMENT LOOP:
+
+  for (const play of playsToSettle) {
+    const playerFinalStats = findPlayer(
+      play.playerId,
+      play.playerName,
+      playerStats
+    )
+    
+    if (!playerFinalStats) {
+      console.warn(
+        "[SETTLE] Could not find player:", 
+        play.playerName
+      )
+      continue
+    }
+    
+    // Normalize market key to uppercase
+    const marketKey = play.market
+      ?.toUpperCase()
+      ?.trim()
+    const finalStat = playerFinalStats[marketKey]
+    
+    if (finalStat === undefined) {
+      console.warn(
+        "[SETTLE] Market not found:", 
+        marketKey,
+        "Available:", 
+        Object.keys(playerFinalStats)
+          .filter(k => k !== "_raw")
+      )
+      continue
+    }
+    
+    console.log(
+      "[SETTLE]", play.playerName,
+      marketKey, "final:", finalStat,
+      "vs line:", play.line,
+      "direction:", play.direction
+    )
+    
+    // Determine result
+    let result = "MISS"
+    if (finalStat === play.line) {
+      result = "PUSH"
+    } else if (
+      play.direction?.toLowerCase() === "over" && 
+      finalStat > play.line
+    ) {
+      result = "HIT"
+    } else if (
+      play.direction?.toLowerCase() === "under" && 
+      finalStat < play.line
+    ) {
+      result = "HIT"
+    }
+    
+    // Update in DB
+    await updatePlay(play.id, {
+      result,
+      finalStat,
+      settledAt: new Date().toISOString()
+    })
+    
+    console.log(
+      "[SETTLE] Settled:", play.playerName,
+      marketKey, "→", result,
+      `(${finalStat} vs ${play.line})`
+    )
+  }

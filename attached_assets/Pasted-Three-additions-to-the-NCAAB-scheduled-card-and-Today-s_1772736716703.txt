@@ -1,0 +1,376 @@
+Three additions to the NCAAB scheduled card and
+Today's Games strip. Build on existing code only.
+
+---
+
+1. PRE-GAME CONFIDENCE TIER LABELS
+
+Show a confidence tier label on the pre-game gauge
+and verdict row communicating signal reliability.
+
+CONFIDENCE TIER FUNCTION:
+
+  const getPreGameConfidenceTier = (overProb) => {
+    if (!overProb) return null
+    const edge = Math.abs(overProb - 50)
+    
+    if (edge < 3) return {
+      label: "No Edge",
+      sublabel: "Model sees even matchup",
+      color: "#71717a",
+      bg: "rgba(255,255,255,0.04)",
+      border: "rgba(255,255,255,0.08)"
+    }
+    if (edge < 7) return {
+      label: "Low Confidence",
+      sublabel: "Slight lean — insufficient for signal",
+      color: "#71717a",
+      bg: "rgba(255,255,255,0.04)",
+      border: "rgba(255,255,255,0.08)"
+    }
+    if (edge < 12) return {
+      label: "Moderate Signal",
+      sublabel: "Pre-game lean — monitor at tipoff",
+      color: "#f59e0b",
+      bg: "rgba(245,158,11,0.08)",
+      border: "rgba(245,158,11,0.2)"
+    }
+    if (edge < 18) return {
+      label: "Strong Pre-Game Signal",
+      sublabel: "Model has clear lean before tipoff",
+      color: "#00d4aa",
+      bg: "rgba(0,212,170,0.08)",
+      border: "rgba(0,212,170,0.2)"
+    }
+    return {
+      label: "High Confidence",
+      sublabel: "Significant model edge pre-game",
+      color: "#00d4aa",
+      bg: "rgba(0,212,170,0.12)",
+      border: "rgba(0,212,170,0.25)"
+    }
+  }
+
+APPLY TO GAUGE:
+
+  Below the gauge (where "PRE-GAME" label is):
+    Line 1: "PRE-GAME" zinc-500 text-xs (existing)
+    Line 2: tier.label in tier.color text-xs font-semibold
+    
+  When tier is "No Edge" or "Low Confidence":
+    Gauge arc color: #52525b (zinc-600, muted)
+    Gauge value: still shows number
+    
+  When tier is "Moderate Signal"+:
+    Gauge arc color: normal teal/red based on side
+
+APPLY TO VERDICT ROW:
+
+  Verdict row right side — replace just edge badge
+  with two stacked elements:
+  
+    Top: edge badge "+[X]pp" amber (if edge >= 5)
+    Bottom: tier label pill
+      bg: tier.bg
+      border: tier.border  
+      text: tier.color text-xs font-semibold
+      rounded-full px-2 py-0.5
+      content: tier.label
+
+  Below verdict row — persistent note:
+    When any tier:
+      "Pre-game signal · Updates live at tipoff"
+      zinc-600 text-xs italic pt-1
+    
+    When "No Edge" or "Low Confidence":
+      "Pre-game signal · Insufficient edge — 
+       check back at tipoff"
+      zinc-600 text-xs italic
+
+APPLY TO MARKET BUTTONS:
+
+  Over/Under buttons on scheduled cards:
+    Show tier.label as micro-text below percentage:
+    
+    [OVER button]
+      "OVER" label
+      "[line]" line value
+      "[X]%" probability teal
+      "[tier.label]" tier.color text-[10px] mt-0.5
+      // e.g. "Moderate Signal" in amber
+
+---
+
+2. "SHOW LESS" PER TIME GROUP WITH "+ N MORE"
+
+When a time group has more chips than fit in
+one row, collapse to show first row only with
+a "+ N more" button to expand.
+
+CHIP ROW HEIGHT: 60px (NCAAB chip height with O/U)
+ONE ROW = approximately 4-5 chips on mobile,
+           6-8 chips on desktop.
+
+CALCULATE CHIPS PER ROW:
+
+  Use a ref to measure the container width:
+  
+  const stripRef = useRef(null)
+  const [chipsPerRow, setChipsPerRow] = useState(5)
+  
+  useEffect(() => {
+    if (!stripRef.current) return
+    const containerWidth = stripRef.current.offsetWidth
+    const chipWidth = 170  // NCAAB chip min-width + gap
+    const calculated = Math.floor(containerWidth / chipWidth)
+    setChipsPerRow(Math.max(calculated, 3))
+  }, [])
+  
+  // Re-measure on window resize
+  useEffect(() => {
+    const onResize = () => {
+      if (!stripRef.current) return
+      const w = stripRef.current.offsetWidth
+      setChipsPerRow(Math.max(
+        Math.floor(w / 170), 3
+      ))
+    }
+    window.addEventListener("resize", onResize)
+    return () => window.removeEventListener(
+      "resize", onResize
+    )
+  }, [])
+
+PER-GROUP EXPANDED STATE:
+
+  const [expandedGroups, setExpandedGroups] = useState({})
+  // shape: { [groupKey]: boolean }
+  // false/undefined = collapsed to first row
+  // true = show all chips
+
+  const isGroupChipsExpanded = (groupKey) =>
+    expandedGroups[groupKey] === true
+
+CHIP ROW RENDERING:
+
+  For each time group:
+    const chips = group.games
+    const firstRow = chips.slice(0, chipsPerRow)
+    const remaining = chips.slice(chipsPerRow)
+    const hasMore = remaining.length > 0
+    const isExpanded = isGroupChipsExpanded(group.key)
+    
+    Render:
+      {/* Always show first row */}
+      <div className="flex gap-2 overflow-x-auto 
+                      hide-scrollbar">
+        {firstRow.map(game => (
+          <GameChip key={game.id} game={game} ... />
+        ))}
+        
+        {/* Show remaining if expanded */}
+        {isExpanded && remaining.map(game => (
+          <GameChip key={game.id} game={game} ... />
+        ))}
+        
+        {/* "+ N more" button if collapsed + has more */}
+        {!isExpanded && hasMore && (
+          <button
+            onClick={() => setExpandedGroups(prev => ({
+              ...prev,
+              [group.key]: true
+            }))}
+            style={{
+              minWidth: "80px",
+              height: "60px",
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid #27272a",
+              borderRadius: "10px",
+              color: "#a1a1aa",
+              fontSize: "12px",
+              fontWeight: "600",
+              flexShrink: 0,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "4px"
+            }}
+          >
+            +{remaining.length} more
+          </button>
+        )}
+        
+        {/* "Show less" button if expanded + has more */}
+        {isExpanded && hasMore && (
+          <button
+            onClick={() => setExpandedGroups(prev => ({
+              ...prev,
+              [group.key]: false
+            }))}
+            style={{
+              minWidth: "80px",
+              height: "60px",
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid #27272a",
+              borderRadius: "10px",
+              color: "#71717a",
+              fontSize: "12px",
+              fontWeight: "500",
+              flexShrink: 0,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center"
+            }}
+          >
+            Show less
+          </button>
+        )}
+      </div>
+
+ANIMATION:
+  Chips expand with a fade-in:
+    When additional chips mount:
+      opacity: 0 → 1, 200ms ease
+      Each chip staggers 30ms delay per index:
+        style={{ 
+          animationDelay: `${index * 30}ms`,
+          animation: "fadeIn 200ms ease forwards"
+        }}
+
+LIVE GROUP — ALWAYS SHOW ALL:
+  Live group never collapses chips.
+  If group has live games: isExpanded = true always.
+  "+ N more" button never shows on live group.
+
+COLLAPSED ALL / EXPAND ALL INTERACTION:
+  "Expand All" button (already built):
+    Also sets all expandedGroups to true
+    
+  "Collapse All" button:
+    Sets all expandedGroups to false
+    (first row only for each group)
+
+COLLAPSE ALL / EXPAND ALL BUTTON UPDATE:
+  Two separate states now:
+    openGroups: whether group accordion is open
+    expandedGroups: whether chips beyond first row show
+  
+  "Expand All" → opens all accordions + shows all chips
+  "Collapse All" → collapses all chip rows to first row
+    (does NOT close accordion — just hides extra chips)
+
+---
+
+3. SCHEDULED CARD PARLAY BUTTONS
+
+Pre-game market buttons (Over/Under/Spread) on
+scheduled cards add legs to the parlay slip.
+
+All parlay infrastructure already exists.
+Wire scheduled card buttons to the same
+addToParlaySlip function used on live cards.
+
+SCHEDULED PARLAY LEG SHAPE:
+
+  const addScheduledLeg = (game, market, direction) => {
+    const line = market === "spread"
+      ? game.odds?.spreadDetails
+      : game.odds?.overUnder
+    
+    const prob = market === "spread"
+      ? game.odds?.homeWinPct ?? 50
+      : direction === "over"
+      ? game.enginePreGame?.overProb ?? 50
+      : game.enginePreGame?.underProb ?? 50
+    
+    const tier = getPreGameConfidenceTier(
+      game.enginePreGame?.overProb
+    )
+    
+    addToParlaySlip({
+      gameId: game.id,
+      sport: "ncaab",
+      type: "pre_game",
+      direction,
+      market,
+      line,
+      prob,
+      confidenceTier: tier?.label ?? "Pre-Game",
+      label: buildScheduledLegLabel(
+        game, market, direction, line, prob
+      )
+    })
+  }
+
+  const buildScheduledLegLabel = (
+    game, market, direction, line, prob
+  ) => {
+    const away = game.competitions?.[0]
+      ?.competitors
+      ?.find(c => c.homeAway === "away")
+      ?.team?.abbreviation ?? "AWAY"
+    const home = game.competitions?.[0]
+      ?.competitors
+      ?.find(c => c.homeAway === "home")
+      ?.team?.abbreviation ?? "HOME"
+    
+    if (market === "total") {
+      return `${away} @ ${home} · ` +
+             `${direction === "over" ? "Over" : "Under"} ` +
+             `${line} · ${prob}% (Pre-Game)`
+    }
+    if (market === "spread") {
+      return `${away} @ ${home} · ` +
+             `${game.odds?.spreadDetails} · ` +
+             `${prob}% cover (Pre-Game)`
+    }
+    return `${away} @ ${home} · ${market} · Pre-Game`
+  }
+
+PARLAY SLIP — PRE-GAME LEG DISPLAY:
+
+  Pre-game legs show differently from live legs:
+  
+  Left side of leg row:
+    "[AWAY] @ [HOME]" white text-sm font-semibold
+    "[direction] [line] · Pre-Game" zinc-400 text-xs
+  
+  Right side:
+    "[prob]%" probability teal/red
+    
+    Below prob:
+      tier label pill (from confidenceTier field):
+        "Moderate Signal" amber text-[10px]
+        "Strong Pre-Game Signal" teal text-[10px]
+        etc.
+  
+  Pre-game icon: clock icon (⏰) 8px left of label
+    zinc-600 — visually distinguishes from live legs
+  
+  Parlay slip warning when mix of pre-game 
+  and live legs exist:
+    Amber banner at top of slip:
+    "⚠ Mix of pre-game and live legs — 
+     pre-game lines may shift before tipoff"
+    bg rgba(245,158,11,0.08)
+    border-bottom rgba(245,158,11,0.2)
+    text #f59e0b text-xs
+    padding: py-2 px-4
+    Only shows when slip has both types
+
+PARLAY "+" BUTTON STATE ON SCHEDULED CARDS:
+  Same amber toggle as live cards:
+    Unselected: "+" zinc border
+    Selected: "✓" amber bg + border
+  
+  Deselect removes leg from slip.
+  One button per market (Over, Under, Spread).
+  
+  If same game already has a different market
+  in the slip:
+    Show confirmation: 
+    "Replace [current leg] with this?"
+    [Cancel]  [Replace]
+    inline below the button, not a modal

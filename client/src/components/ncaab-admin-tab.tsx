@@ -92,6 +92,9 @@ interface NCAABGame {
   isHalftime: boolean;
   isInProgress: boolean;
   isLive: boolean;
+  enginePreGame?: { overProb: number; underProb: number } | null;
+  odds?: { homeWinPct: number | null; spreadDetails: string | null; overUnder: number | null } | null;
+  competitions?: Array<{ competitors: Array<{ homeAway: string; team: { abbreviation: string } }> }> | null;
 }
 
 interface SummaryGame {
@@ -618,6 +621,47 @@ function getTeamTotalVerdict(
     edgeSide,
     edgeLabel,
     isEstimated,
+  };
+}
+
+// ── Pre-game confidence tier ──────────────────────────────────────────────────
+function getPreGameConfidenceTier(overProb: number | null | undefined) {
+  if (overProb == null) return null;
+  const edge = Math.abs(overProb - 50);
+  if (edge < 3) return {
+    label: "No Edge",
+    sublabel: "Model sees even matchup",
+    color: "#71717a",
+    bg: "rgba(255,255,255,0.04)",
+    border: "rgba(255,255,255,0.08)",
+  };
+  if (edge < 7) return {
+    label: "Low Confidence",
+    sublabel: "Slight lean — insufficient for signal",
+    color: "#71717a",
+    bg: "rgba(255,255,255,0.04)",
+    border: "rgba(255,255,255,0.08)",
+  };
+  if (edge < 12) return {
+    label: "Moderate Signal",
+    sublabel: "Pre-game lean — monitor at tipoff",
+    color: "#f59e0b",
+    bg: "rgba(245,158,11,0.08)",
+    border: "rgba(245,158,11,0.2)",
+  };
+  if (edge < 18) return {
+    label: "Strong Pre-Game Signal",
+    sublabel: "Model has clear lean before tipoff",
+    color: "#00d4aa",
+    bg: "rgba(0,212,170,0.08)",
+    border: "rgba(0,212,170,0.2)",
+  };
+  return {
+    label: "High Confidence",
+    sublabel: "Significant model edge pre-game",
+    color: "#00d4aa",
+    bg: "rgba(0,212,170,0.12)",
+    border: "rgba(0,212,170,0.25)",
   };
 }
 
@@ -1654,8 +1698,30 @@ function NCAABGamesStrip({
   const toggleGroup = (key: string) =>
     setOpenGroups(prev => ({ ...prev, [key]: !prev[key] }));
 
+  // ── Chip row width measurement + expand state ─────────────────────────────
+  const stripContainerRef = useRef<HTMLDivElement>(null);
+  const [chipsPerRow, setChipsPerRow] = useState(5);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (!stripContainerRef.current) return;
+    const w = stripContainerRef.current.offsetWidth;
+    setChipsPerRow(Math.max(Math.floor(w / 170), 3));
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => {
+      if (!stripContainerRef.current) return;
+      const w = stripContainerRef.current.offsetWidth;
+      setChipsPerRow(Math.max(Math.floor(w / 170), 3));
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
   return (
-    <div>
+    <div ref={stripContainerRef}>
+      <style>{`@keyframes ncaabFadeIn { from { opacity: 0 } to { opacity: 1 } }`}</style>
       {/* ── Strip header ───────────────────────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1685,11 +1751,31 @@ function NCAABGamesStrip({
             </span>
           )}
         </div>
-        {liveCount > 0 && (
-          <span style={{ color: "#4ade80", fontSize: 11, fontWeight: 500 }}>
-            ● {liveCount} Live
-          </span>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          {liveCount > 0 && (
+            <span style={{ color: "#4ade80", fontSize: 11, fontWeight: 500, marginRight: 8 }}>
+              ● {liveCount} Live
+            </span>
+          )}
+          <button
+            onClick={() => {
+              const allOpen: Record<string, boolean> = {};
+              timeGroups.forEach(g => { allOpen[g.key] = true; });
+              setOpenGroups(prev => ({ ...prev, ...allOpen }));
+              setExpandedGroups(allOpen);
+            }}
+            style={{ color: "#52525b", fontSize: 11, fontWeight: 500, background: "none", border: "none", cursor: "pointer", padding: "2px 6px" }}
+          >
+            Expand All
+          </button>
+          <span style={{ color: "#3f3f46", fontSize: 11 }}>·</span>
+          <button
+            onClick={() => setExpandedGroups({})}
+            style={{ color: "#52525b", fontSize: 11, fontWeight: 500, background: "none", border: "none", cursor: "pointer", padding: "2px 6px" }}
+          >
+            Collapse All
+          </button>
+        </div>
       </div>
 
       {/* ── Time-group collapsible sections ────────────────────────────────── */}
@@ -1739,23 +1825,74 @@ function NCAABGamesStrip({
                     />
                   </div>
                 </button>
-                {/* Chips row — collapsible */}
-                {isOpen && (
-                  <div className="overflow-x-auto pb-2 mb-1" style={{ scrollbarWidth: "none" }}>
-                    <div className="flex gap-2" style={{ minWidth: "max-content" }}>
-                      {group.games.map(g => (
-                        <GameChip
-                          key={g.id}
-                          game={g}
-                          isSelected={expandedGameId === g.id}
-                          onChipClick={() => onChipClick(g.id)}
-                          oddsData={chipOdds[g.id] ?? null}
-                          onEnterViewport={fetchChipOdds}
-                        />
-                      ))}
+                {/* Chips row — collapsible with "+ N more" expand */}
+                {isOpen && (() => {
+                  const firstRow = group.games.slice(0, chipsPerRow);
+                  const remaining = group.games.slice(chipsPerRow);
+                  const hasMore = remaining.length > 0;
+                  const chipsExpanded = groupIsLive || expandedGroups[group.key] === true;
+                  return (
+                    <div className="pb-2 mb-1">
+                      <div className="flex gap-2" style={{ overflowX: "auto", scrollbarWidth: "none" }}>
+                        {firstRow.map(g => (
+                          <GameChip
+                            key={g.id}
+                            game={g}
+                            isSelected={expandedGameId === g.id}
+                            onChipClick={() => onChipClick(g.id)}
+                            oddsData={chipOdds[g.id] ?? null}
+                            onEnterViewport={fetchChipOdds}
+                          />
+                        ))}
+                        {chipsExpanded && remaining.map((g, idx) => (
+                          <div
+                            key={g.id}
+                            style={{
+                              flexShrink: 0,
+                              opacity: 0,
+                              animation: "ncaabFadeIn 200ms ease forwards",
+                              animationDelay: `${idx * 30}ms`,
+                            }}
+                          >
+                            <GameChip
+                              game={g}
+                              isSelected={expandedGameId === g.id}
+                              onChipClick={() => onChipClick(g.id)}
+                              oddsData={chipOdds[g.id] ?? null}
+                              onEnterViewport={fetchChipOdds}
+                            />
+                          </div>
+                        ))}
+                        {!chipsExpanded && hasMore && !groupIsLive && (
+                          <button
+                            onClick={() => setExpandedGroups(prev => ({ ...prev, [group.key]: true }))}
+                            style={{
+                              minWidth: 80, height: 60, background: "rgba(255,255,255,0.04)",
+                              border: "1px solid #27272a", borderRadius: 10, color: "#a1a1aa",
+                              fontSize: 12, fontWeight: 600, flexShrink: 0, cursor: "pointer",
+                              display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+                            }}
+                          >
+                            +{remaining.length} more
+                          </button>
+                        )}
+                        {chipsExpanded && hasMore && !groupIsLive && (
+                          <button
+                            onClick={() => setExpandedGroups(prev => ({ ...prev, [group.key]: false }))}
+                            style={{
+                              minWidth: 80, height: 60, background: "rgba(255,255,255,0.04)",
+                              border: "1px solid #27272a", borderRadius: 10, color: "#71717a",
+                              fontSize: 12, fontWeight: 500, flexShrink: 0, cursor: "pointer",
+                              display: "flex", alignItems: "center", justifyContent: "center",
+                            }}
+                          >
+                            Show less
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             );
           })}
@@ -1898,6 +2035,7 @@ function GroupedGamesList({
                     <PreGameCard
                       game={g}
                       onH2hReady={onH2hReady}
+                      onAddToParlay={onAddToParlay}
                     />
                   )}
                 </div>
@@ -1915,9 +2053,11 @@ function GroupedGamesList({
 function PreGameCard({
   game,
   onH2hReady,
+  onAddToParlay,
 }: {
   game: NCAABGame;
   onH2hReady: (gameId: string, data: H2HGame[]) => void;
+  onAddToParlay?: (pick: ParlayPickInput) => void;
 }) {
   const [countdown, setCountdown] = useState("");
   const [timerState, setTimerState] = useState<"countdown" | "live">("countdown");
@@ -1925,7 +2065,59 @@ function PreGameCard({
   const [h2hOpen, setH2hOpen] = useState(true); // item 3: expanded by default in pre-game
   const [headerFlash, setHeaderFlash] = useState(false);
   const [preChipOdds, setPreChipOdds] = useState<ChipOddsData | null>(null);
+  const [addedLegKey, setAddedLegKey] = useState<string | null>(null);
+  const [pendingLeg, setPendingLeg] = useState<{
+    legKey: string; market: "total" | "spread";
+    direction: "over" | "under"; line: number; prob: number; tierLabel: string;
+  } | null>(null);
   const didFireZero = useRef(false);
+
+  // ── Pre-game parlay helpers ────────────────────────────────────────────────
+  const buildPreGamePick = (
+    market: "total" | "spread", direction: "over" | "under",
+    line: number, prob: number, tierLabel: string
+  ): ParlayPickInput => {
+    const rawOdds = prob >= 50
+      ? -Math.round((prob / (100 - prob)) * 100)
+      : Math.round(((100 - prob) / prob) * 100);
+    return {
+      playerId: 0,
+      playerName: `${game.awayTeamAbbr} @ ${game.homeTeamAbbr}`,
+      playerTeam: "NCAAB",
+      statType: market === "total" ? "ncaab_pre_game_total" : "ncaab_pre_game_spread",
+      line,
+      probability: prob,
+      betDirection: direction,
+      sportsbook: "pregame",
+      gameId: game.id,
+      oddsAmerican: rawOdds,
+      type: "pre_game",
+      confidenceTier: tierLabel,
+    };
+  };
+
+  const handleScheduledMarketClick = (market: "total" | "spread", direction: "over" | "under") => {
+    if (!onAddToParlay) return;
+    const overProbRaw = game.enginePreGame?.overProb ?? null;
+    const underProbRaw = overProbRaw != null ? parseFloat((100 - overProbRaw).toFixed(1)) : null;
+    const line = market === "total" ? (preChipOdds?.overUnder ?? 0) : 0;
+    const prob = market === "total"
+      ? (direction === "over" ? overProbRaw ?? 50 : underProbRaw ?? 50)
+      : (preChipOdds?.homeWinPct ?? 50);
+    const tier = getPreGameConfidenceTier(overProbRaw);
+    const tierLabel = tier?.label ?? "Pre-Game";
+    const legKey = `${market}:${direction}`;
+    if (addedLegKey === legKey) {
+      setAddedLegKey(null);
+      return;
+    }
+    if (addedLegKey && addedLegKey !== legKey) {
+      setPendingLeg({ legKey, market, direction, line, prob, tierLabel });
+      return;
+    }
+    onAddToParlay(buildPreGamePick(market, direction, line, prob, tierLabel));
+    setAddedLegKey(legKey);
+  };
 
   // Countdown timer
   useEffect(() => {
@@ -2051,6 +2243,175 @@ function PreGameCard({
               );
             })()}
           </div>
+        );
+      })()}
+
+      {/* ── Pre-game confidence gauge + tier label ──────────────────────── */}
+      {(() => {
+        const overProb = game.enginePreGame?.overProb ?? null;
+        const tier = getPreGameConfidenceTier(overProb);
+        const gaugeVal = overProb ?? 50;
+        const isLowTier = !tier || tier.label === "No Edge" || tier.label === "Low Confidence";
+        const gaugeColor = isLowTier ? "#52525b" : (gaugeVal > 50 ? "#00d4aa" : "#ef4444");
+        const circum = 2 * Math.PI * 68;
+        return (
+          <div className="flex items-center gap-4 py-1">
+            <div style={{ position: "relative", width: 80, height: 80, flexShrink: 0 }}>
+              <svg viewBox="0 0 160 160" style={{ width: 80, height: 80, transform: "rotate(-90deg)" }}>
+                <circle cx={80} cy={80} r={68} fill="none" stroke="#27272a" strokeWidth={10} />
+                <circle
+                  cx={80} cy={80} r={68} fill="none" stroke={gaugeColor} strokeWidth={10}
+                  strokeDasharray={String(circum)}
+                  strokeDashoffset={circum * (1 - gaugeVal / 100)}
+                  strokeLinecap="round"
+                  style={{ transition: "stroke-dashoffset 300ms ease, stroke 300ms ease" }}
+                />
+              </svg>
+              <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ color: isLowTier ? "#52525b" : gaugeColor, fontSize: 18, fontWeight: 900, lineHeight: 1, fontFamily: "monospace" }}>
+                  {overProb != null ? `${Math.round(gaugeVal)}%` : "--"}
+                </span>
+                <span style={{ color: "#71717a", fontSize: 8, textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 2 }}>PRE-GAME</span>
+              </div>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs" style={{ color: "#71717a" }}>PRE-GAME</p>
+              {tier ? (
+                <>
+                  <p className="text-xs font-semibold" style={{ color: tier.color }}>{tier.label}</p>
+                  <p style={{ color: "#52525b", fontSize: 10, marginTop: 2 }}>{tier.sublabel}</p>
+                </>
+              ) : (
+                <p className="text-xs font-semibold" style={{ color: "#52525b" }}>Engine data loading…</p>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Verdict row with tier pill ───────────────────────────────────── */}
+      {game.enginePreGame?.overProb != null && (() => {
+        const overProb = game.enginePreGame!.overProb;
+        const tier = getPreGameConfidenceTier(overProb);
+        if (!tier) return null;
+        const isLowTier = tier.label === "No Edge" || tier.label === "Low Confidence";
+        const edgeGap = parseFloat(Math.abs(overProb - 50).toFixed(1));
+        const edgeSide = overProb > 50 ? "Over" : "Under";
+        const evColor = isLowTier ? "#52525b" : (overProb > 50 ? "#00d4aa" : "#ef4444");
+        const edgeLabel = edgeGap >= 18 ? `Strong ${edgeSide} EV`
+          : edgeGap >= 10 ? `Lean ${edgeSide} EV`
+          : edgeGap >= 5 ? `Slight ${edgeSide} Lean`
+          : "Neutral — No Edge";
+        return (
+          <div
+            className="rounded-lg flex items-center justify-between gap-2"
+            style={{ background: "#111111", border: "1px solid #27272a", borderLeft: `3px solid ${isLowTier ? "#52525b" : evColor}`, padding: "12px 16px" }}
+          >
+            <div>
+              <p className="text-sm font-semibold" style={{ color: isLowTier ? "#71717a" : evColor }}>{edgeLabel}</p>
+              <p className="text-xs" style={{ color: "#a1a1aa" }}>Engine {overProb.toFixed(1)}% pre-game</p>
+            </div>
+            <div className="flex flex-col items-end gap-1 shrink-0">
+              {edgeGap >= 5 && (
+                <span
+                  className="text-[10px] font-black px-2 py-0.5 rounded-full"
+                  style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b", border: "1px solid rgba(245,158,11,0.3)", fontFamily: "monospace" }}
+                >
+                  +{edgeGap}pp
+                </span>
+              )}
+              <span
+                className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                style={{ background: tier.bg, border: `1px solid ${tier.border}`, color: tier.color }}
+              >
+                {tier.label}
+              </span>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Market buttons (Over / Under) with tier micro-text ──────────── */}
+      {onAddToParlay && preChipOdds?.overUnder != null && (() => {
+        const overProbRaw = game.enginePreGame?.overProb ?? null;
+        const underProbRaw = overProbRaw != null ? parseFloat((100 - overProbRaw).toFixed(1)) : null;
+        const tier = getPreGameConfidenceTier(overProbRaw);
+        const line = preChipOdds.overUnder;
+        return (
+          <div className="grid grid-cols-2 gap-2">
+            {(["over", "under"] as const).map(dir => {
+              const legKey = `total:${dir}`;
+              const isSelected = addedLegKey === legKey;
+              const isPending = pendingLeg?.legKey === legKey;
+              const mColor = dir === "over" ? "#00d4aa" : "#ef4444";
+              const mProb = dir === "over" ? overProbRaw : underProbRaw;
+              return (
+                <div key={dir}>
+                  <button
+                    data-testid={`ncaab-scheduled-${dir}-${game.id}`}
+                    onClick={() => handleScheduledMarketClick("total", dir)}
+                    className="w-full rounded-lg py-2.5 px-2 flex flex-col items-center gap-0.5 transition-all duration-200 relative"
+                    style={{
+                      background: isSelected ? "#1f1f1f" : "#181818",
+                      border: isSelected ? `1.5px solid ${mColor}` : "1px solid #27272a",
+                    }}
+                  >
+                    <span className="text-xs font-black uppercase tracking-widest" style={{ color: "#71717a" }}>{dir}</span>
+                    <span className="text-xl font-bold tabular-nums leading-tight" style={{ color: "#ffffff" }}>{line}</span>
+                    <span className="text-sm font-semibold" style={{ color: mProb != null ? mColor : "#52525b" }}>
+                      {mProb != null ? `${mProb.toFixed(1)}%` : "--"}
+                    </span>
+                    {tier && (
+                      <span className="text-[10px] mt-0.5" style={{ color: tier.color }}>{tier.label}</span>
+                    )}
+                    {isSelected && (
+                      <span style={{
+                        position: "absolute", top: 4, right: 4, background: mColor, color: "#000",
+                        fontSize: 10, fontWeight: 900, width: 16, height: 16, borderRadius: "50%",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>✓</span>
+                    )}
+                  </button>
+                  {isPending && (
+                    <div className="mt-1 rounded-lg px-3 py-2" style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)" }}>
+                      <p className="text-xs" style={{ color: "#f59e0b" }}>Replace current pick with this?</p>
+                      <div className="flex gap-2 mt-1.5">
+                        <button
+                          onClick={() => setPendingLeg(null)}
+                          style={{ color: "#71717a", background: "#27272a", border: "none", borderRadius: 4, padding: "2px 8px", fontSize: 11, cursor: "pointer" }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => {
+                            onAddToParlay!(buildPreGamePick("total", dir, line, mProb ?? 50, tier?.label ?? "Pre-Game"));
+                            setAddedLegKey(legKey);
+                            setPendingLeg(null);
+                          }}
+                          style={{ color: "#000", background: "#f59e0b", border: "none", borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+                        >
+                          Replace
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
+      {/* ── Pre-game signal note ─────────────────────────────────────────── */}
+      {(() => {
+        const tier = getPreGameConfidenceTier(game.enginePreGame?.overProb ?? null);
+        const isLow = !tier || tier.label === "No Edge" || tier.label === "Low Confidence";
+        return (
+          <p className="text-xs italic" style={{ color: "#52525b", paddingTop: 2 }}>
+            {isLow
+              ? "Pre-game signal · Insufficient edge — check back at tipoff"
+              : "Pre-game signal · Updates live at tipoff"}
+          </p>
         );
       })()}
 

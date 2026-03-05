@@ -1,0 +1,332 @@
+The scheduled NCAAB card is missing markets, showing
+N/A for matchup history scores, and not showing
+pre-game engine predictions. Fix all three using
+only existing APIs.
+
+---
+
+STEP 1 — AUDIT WHAT IS FAILING
+
+Print before fixing:
+
+  // SCHEDULED CARD AUDIT
+  // H2H history rows show N/A — find why:
+  //   The schedule fetch returns events but
+  //   competitor scores are likely in a different
+  //   field than expected. 
+  //   Check: event.competitions[0].competitors[].score
+  //   vs event.competitions[0].score (wrong)
+  //   vs event.competitions[0].competitors[].statistics
+  //   Print raw H2H event object shape
+  //
+  // Markets showing: only O/U Total
+  // Missing: spread, moneyline, win probability,
+  //          team totals, engine predictions
+  //
+  // ESPN summary endpoint for this game:
+  //   Does it return pickcenter? [yes/no]
+  //   Does it return predictor? [yes/no]
+
+---
+
+BUG 1 — FIX H2H HISTORY SCORES SHOWING N/A
+
+The H2H rows show "–" in place of scores and
+"N/A" badges. Scores exist in the data but are
+being read from the wrong field.
+
+Fix score extraction in the H2H mapping function:
+
+  const extractH2HGameData = (event, homeTeamId) => {
+    const comp = event.competitions?.[0]
+    if (!comp) return null
+    
+    const competitors = comp.competitors ?? []
+    
+    // Score field is on each competitor object
+    // Try multiple field locations
+    const getScore = (competitor) => {
+      const score = 
+        competitor.score ??
+        competitor.score?.value ??
+        competitor.statistics?.find(
+          s => s.name === "points"
+        )?.displayValue ??
+        null
+      
+      return score !== null 
+        ? parseInt(score) 
+        : null
+    }
+    
+    const home = competitors.find(
+      c => c.homeAway === "home"
+    )
+    const away = competitors.find(
+      c => c.homeAway === "away"
+    )
+    
+    const homeScore = getScore(home)
+    const awayScore = getScore(away)
+    
+    // Only include if scores exist
+    if (homeScore === null || awayScore === null) {
+      // Game may not be completed yet
+      // Check completed flag
+      const isCompleted = 
+        comp.status?.type?.completed === true ||
+        comp.status?.type?.name === "STATUS_FINAL"
+      
+      if (!isCompleted) return null // skip non-final
+    }
+    
+    const total = (homeScore ?? 0) + (awayScore ?? 0)
+    
+    // Get odds from that specific game
+    const odds = comp.odds?.[0] ?? null
+    const line = odds?.overUnder ?? null
+    const spreadDetails = odds?.details ?? null
+    
+    return {
+      id: event.id,
+      date: event.date,
+      homeTeam: home?.team?.abbreviation ?? "HOME",
+      awayTeam: away?.team?.abbreviation ?? "AWAY",
+      homeScore,
+      awayScore,
+      total,
+      line,
+      spreadDetails,
+      overUnderResult: line 
+        ? total > line ? "OVER" 
+        : total < line ? "UNDER" 
+        : "PUSH"
+        : null,
+      isHomeTeamPlaying: 
+        home?.team?.id === homeTeamId ||
+        away?.team?.id === homeTeamId
+    }
+  }
+
+H2H ROW DISPLAY — fix to show actual data:
+
+  Each row:
+    Date: formatted "Feb 19" or "Mar 15, 2025"
+    Matchup: "[AWAY] [score] – [score] [HOME]"
+      Scores: #ffffff font-semibold
+      Team abbrs: #a1a1aa text-xs
+    Total badge: "[total] pts" zinc-600 text-xs
+    
+    O/U result (only if line available):
+      OVER: teal pill
+      UNDER: red pill  
+      PUSH: zinc pill
+      No line: hide badge entirely — NOT "N/A"
+    
+    Spread result (only if spread available):
+      COVERED: teal pill
+      FAILED: red pill
+      No spread: hide — NOT "N/A"
+    
+    Prior Season label:
+      Games from last season: 
+        muted zinc-600 date + "· Prior Season" italic
+      Current season: normal zinc-400 date
+
+---
+
+BUG 2 — SHOW ALL AVAILABLE MARKETS
+
+Scheduled card currently shows only "O/U Total: 142.5"
+It needs to show a full pre-game market grid.
+
+FETCH full summary on card expand (already built):
+  const summary = await fetchGameSummary(gameId)
+  // summary = ESPN /summary?event=${gameId} response
+
+EXTRACT ALL AVAILABLE MARKETS:
+
+  const pickcenter = summary.pickcenter ?? []
+  const primaryOdds = 
+    pickcenter.find(p => 
+      p.provider?.name?.toLowerCase()
+        .includes("consensus")
+    ) ?? pickcenter[0] ?? null
+
+  const markets = {
+    overUnder: primaryOdds?.overUnder ?? null,
+    spread: primaryOdds?.spread ?? null,
+    spreadDetails: primaryOdds?.details ?? null,
+    homeMoneyline: 
+      primaryOdds?.homeTeamOdds?.moneyLine ?? null,
+    awayMoneyline: 
+      primaryOdds?.awayTeamOdds?.moneyLine ?? null,
+    homeWinPct: 
+      primaryOdds?.homeTeamOdds?.winPercentage ?? null,
+    awayWinPct: 
+      primaryOdds?.awayTeamOdds?.winPercentage ?? null,
+    books: pickcenter.slice(0, 3).map(p => ({
+      name: p.provider?.name,
+      overUnder: p.overUnder,
+      spread: p.spread,
+      details: p.details
+    }))
+  }
+
+STAT GRID — show all markets:
+
+  Row 1: FULL GAME TOTAL
+    Left: "FULL GAME TOTAL" zinc-500 text-xs uppercase
+    Center: markets.overUnder ?? "--" white text-lg bold
+    Right: "Opening line" zinc-500 text-xs
+
+  Row 2: SPREAD
+    Left: "SPREAD"
+    Center: markets.spreadDetails ?? "--"
+    Right: "[TEAM] favored" (parse from spreadDetails)
+
+  Row 3: HOME MONEYLINE (if available)
+    Left: "MONEYLINE"
+    Center: 
+      "[HOME] [+/-odds]  ·  [AWAY] [+/-odds]"
+      Format ml: +150 = teal, -150 = red
+    Right: "To win" zinc-500 text-xs
+
+  Row 4: WIN PROBABILITY (if espn win% available)
+    Left: "WIN PROB"
+    Center: 
+      "[homeWinPct]%  ·  [awayWinPct]%"
+      Favorite side: white bold
+      Underdog side: zinc-400
+    Right: "[HOME] · [AWAY]" zinc-500 text-xs
+
+  Row 5: SHARP SIGNAL (if detected)
+    Already specced — show if gap >= 8
+
+CLICKABLE MARKET BUTTONS below stat grid:
+
+  Three buttons: [OVER] [UNDER] [SPREAD]
+  
+  Same styling as live card market buttons.
+  
+  OVER button:
+    Line: markets.overUnder
+    Pct: pre-game engine over% (calculated below)
+    
+  UNDER button:
+    Line: markets.overUnder
+    Pct: pre-game engine under%
+    
+  SPREAD button:
+    Line: markets.spreadDetails
+    Pct: markets.homeWinPct ?? calculated cover%
+
+  "+" parlay toggle on each button.
+  Selected button updates pre-game gauge.
+
+---
+
+BUG 3 — PRE-GAME ENGINE PREDICTIONS
+
+Use ESPN predictor + existing engine logic to
+show pre-game probability before tipoff.
+
+FETCH PREDICTOR FROM SUMMARY:
+
+  const predictor = summary.predictor ?? null
+  const homeProj = parseFloat(
+    predictor?.homeTeam?.gameProjection ?? 0
+  )
+  const awayProj = parseFloat(
+    predictor?.awayTeam?.gameProjection ?? 0
+  )
+  const projTotal = homeProj + awayProj
+
+PRE-GAME ENGINE CALC:
+
+  // At tipoff: use projection vs line directly
+  // No time-elapsed factor — game hasn't started
+  // Use low multiplier (3.0 — minimal certainty)
+  
+  const preGameEngineProb = (projTotal, line) => {
+    if (!projTotal || !line) return null
+    const diff = projTotal - line
+    const rawProb = 50 + (diff * 3.0)
+    // Pre-game: tight limits (30-70 range)
+    return parseFloat(
+      Math.min(Math.max(rawProb, 30), 70).toFixed(1)
+    )
+  }
+  
+  const overProb = preGameEngineProb(projTotal, markets.overUnder)
+  const underProb = overProb 
+    ? parseFloat((100 - overProb).toFixed(1)) 
+    : null
+
+ADD PROJECTION ROWS to stat grid:
+
+  Row 6: [HOME ABBR] PROJ
+    Left: "[HOME] PROJ"
+    Center: homeProj > 0 ? homeProj.toFixed(1) : "--"
+    Right: "Projected final" zinc-500 text-xs
+
+  Row 7: [AWAY ABBR] PROJ
+    Left: "[AWAY] PROJ"
+    Center: awayProj > 0 ? awayProj.toFixed(1) : "--"
+    Right: "Projected final" zinc-500 text-xs
+
+  Row 8: PROJECTED TOTAL
+    Left: "PROJ TOTAL"
+    Center: projTotal > 0 
+      ? projTotal.toFixed(1) 
+      : "--"
+    Right: 
+      markets.overUnder 
+        ? projTotal > markets.overUnder 
+          ? "↑ Over lean" teal text-xs
+          : projTotal < markets.overUnder
+          ? "↓ Under lean" red text-xs
+          : "Even" zinc text-xs
+        : ""
+
+PRE-GAME GAUGE:
+
+  Show gauge in top-right of card (same as live).
+  
+  value: overProb ?? 50
+  label: "PRE-GAME"  ← different from live "ENGINE"
+  color: overProb > 50 ? teal : red
+  
+  Below gauge: "Full Game" label static
+  
+  If no projection data:
+    Gauge shows "--" with label "NO DATA"
+    Gauge arc at 50% fill in zinc-600
+
+PRE-GAME VERDICT ROW:
+
+  Show single verdict row (not full live verdict):
+  
+  If overProb exists and |overProb - 50| >= 5:
+    "[Over/Under] Lean — Pre-Game Model"
+    teal or red font-semibold text-sm
+    Sub: "Proj [projTotal] vs Line [line]"
+    Right: edge badge "+[X.X]pp"
+    Left border: 3px teal or red
+  
+  If |overProb - 50| < 5 or no data:
+    "Model Lean: Even — Insufficient Edge"
+    zinc-500 italic text-sm
+    No badge
+  
+  Note below verdict:
+    "Pre-game signal — updates live at tipoff"
+    zinc-600 text-xs italic
+
+BOOK PILLS for scheduled card:
+
+  Show pills for each book in markets.books:
+    "[BOOK] · O/U [line]"
+  
+  If no books found:
+    No pills rendered (no empty space)

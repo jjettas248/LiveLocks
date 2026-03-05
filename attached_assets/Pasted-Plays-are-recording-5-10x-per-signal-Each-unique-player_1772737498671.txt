@@ -1,0 +1,254 @@
+Plays are recording 5-10x per signal. Each unique
+player + market + line + direction combination must
+appear exactly once per game day.
+
+---
+
+STEP 1 — FIND ALL WRITE LOCATIONS
+
+Scan entire codebase for every place a play is
+written or recorded. Print ALL locations:
+
+  // PLAY WRITE AUDIT
+  // Location 1: [file + function + line]
+  //   Trigger: [what causes it]
+  //   Called how often: [on every refresh? once?]
+  // Location 2: [file + function + line]
+  //   Trigger: [what causes it]
+  // ... all locations
+
+Common culprits:
+  A. Called inside the 2H plays fetch function
+     which runs every 15-20 seconds
+  B. Called inside a useEffect with no dep array
+     or wrong deps causing re-runs
+  C. Called in both notification trigger AND
+     a separate plays capture function
+  D. Called in component that re-mounts frequently
+
+---
+
+STEP 2 — SINGLE SOURCE OF TRUTH FOR PLAY RECORDING
+
+There must be exactly ONE place in the code that
+calls recordPlay(). All others must be removed.
+
+The correct trigger:
+  Record a play ONCE when it is first detected
+  as a high-confidence signal (>= 80%).
+  
+  NOT on every refresh.
+  NOT in a render function.
+  NOT in multiple places.
+
+CORRECT PATTERN:
+
+  // Module-level set — persists across renders
+  // Resets only on page refresh (intentional)
+  const recordedPlayKeys = new Set()
+  
+  const recordPlayOnce = async (play) => {
+    const key = getPlayKey(play)
+    
+    // Guard 1: in-memory check (fastest)
+    if (recordedPlayKeys.has(key)) {
+      return  // already recorded this session
+    }
+    
+    // Guard 2: DB unique constraint will also
+    // prevent duplicates (belt + suspenders)
+    recordedPlayKeys.add(key)
+    
+    // Now record
+    await recordPlay(play)
+  }
+
+  // getPlayKey must produce consistent output
+  const getPlayKey = (play) => {
+    const date = new Date(play.timestamp)
+      .toISOString()
+      .split("T")[0]  // "2026-03-05"
+    
+    return [
+      String(play.playerId ?? "").trim(),
+      String(play.market ?? "").toUpperCase().trim(),
+      String(play.line ?? ""),
+      String(play.direction ?? "").toLowerCase().trim(),
+      String(play.gameId ?? "").trim(),
+      date
+    ].join("|")
+  }
+
+MOVE recordedPlayKeys OUTSIDE COMPONENT:
+  If currently inside a React component:
+    const recordedPlayKeys = new Set()  ← WRONG
+    // Resets on every render
+  
+  Move to module scope:
+    // At top of file, outside any function:
+    const recordedPlayKeys = new Set()  ← CORRECT
+    // Persists for lifetime of page session
+
+---
+
+STEP 3 — FIX THE 2H PLAYS FETCH LOOP
+
+The 2H plays fetch runs on an interval.
+It must NOT record plays on every run.
+
+FIND the function that loads 2H plays from ESPN.
+
+Current pattern (wrong):
+  const load2HPlays = async () => {
+    const plays = await fetch2HPlays()
+    plays.forEach(play => {
+      recordPlay(play)  // ← called every 15s
+    })
+  }
+
+Fixed pattern:
+  const load2HPlays = async () => {
+    const plays = await fetch2HPlays()
+    plays.forEach(play => {
+      recordPlayOnce(play)  // ← only fires once per key
+    })
+  }
+
+The recordedPlayKeys Set ensures that even if
+load2HPlays runs 100 times, each unique play
+is only written to DB once per session.
+
+---
+
+STEP 4 — FIX DB UNIQUE CONSTRAINT
+
+Even with in-memory dedup, the DB must also
+enforce uniqueness as a hard backstop.
+
+The plays table should have:
+  duplicateGuard TEXT UNIQUE
+
+This was specced in the earlier DB prompt.
+Confirm it exists:
+
+  // Check if constraint exists
+  // For Supabase: check table schema in dashboard
+  // For Prisma: check schema.prisma for @unique
+
+If it does NOT exist, add it:
+
+  Supabase SQL:
+    ALTER TABLE plays 
+    ADD COLUMN IF NOT EXISTS duplicate_guard 
+    TEXT UNIQUE;
+    
+    UPDATE plays 
+    SET duplicate_guard = 
+      player_id || '|' || market || '|' || 
+      line::text || '|' || direction || '|' || 
+      game_id || '|' || game_date::text
+    WHERE duplicate_guard IS NULL;
+
+  Prisma:
+    Add to Play model:
+      duplicateGuard String @unique
+
+  Then in /api/plays/record:
+    Use upsert with ignoreDuplicates:
+    
+    Supabase:
+      const { error } = await supabase
+        .from("plays")
+        .upsert(playData, {
+          onConflict: "duplicate_guard",
+          ignoreDuplicates: true
+        })
+    
+    Prisma:
+      await prisma.play.upsert({
+        where: { duplicateGuard: key },
+        update: {},  // never overwrite
+        create: playData
+      })
+
+---
+
+STEP 5 — CLEAN EXISTING DUPLICATES IN DB
+
+One-time cleanup of existing duplicate plays.
+Run this via the Settle Now button or a separate
+admin "Clean Duplicates" button.
+
+  const cleanDuplicatePlays = async () => {
+    // Get all plays
+    const allPlays = await fetchAllPlays()
+    
+    // Group by duplicateGuard key
+    const seen = new Map()
+    const toDelete = []
+    
+    allPlays.forEach(play => {
+      const key = getPlayKey(play)
+      
+      if (seen.has(key)) {
+        // Keep the one with highest prob
+        // or earliest timestamp
+        const existing = seen.get(key)
+        if (play.prob > existing.prob) {
+          toDelete.push(existing.id)
+          seen.set(key, play)
+        } else {
+          toDelete.push(play.id)
+        }
+      } else {
+        seen.set(key, play)
+      }
+    })
+    
+    // Delete duplicates
+    if (toDelete.length > 0) {
+      console.log(
+        "[CLEAN] Deleting", toDelete.length, 
+        "duplicate plays"
+      )
+      await deletePlays(toDelete)
+    }
+    
+    return {
+      removed: toDelete.length,
+      remaining: allPlays.length - toDelete.length
+    }
+  }
+
+ADD "Clean Duplicates" BUTTON in admin:
+  Next to "Settle Now":
+    "🧹 Clean Dupes" button
+    Same styling as Settle Now
+    
+    On click:
+      Run cleanDuplicatePlays()
+      Toast: "✓ Removed [N] duplicate plays"
+      Refresh plays table display
+
+---
+
+STEP 6 — DISPLAY FIX IN RECENT PLAYS TABLE
+
+Even before full cleanup, filter duplicates
+in the display layer as immediate fix:
+
+  const deduplicatedPlays = useMemo(() => {
+    const seen = new Set()
+    return plays.filter(play => {
+      const key = getPlayKey(play)
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }, [plays])
+  
+  // Use deduplicatedPlays in table render
+  // instead of plays directly
+
+This immediately hides duplicates from view
+even while DB cleanup runs in background.
