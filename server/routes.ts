@@ -175,8 +175,8 @@ export async function registerRoutes(
     }
   });
 
-  // ── NCAAB Routes (Admin only — temporarily gated while UI is being fixed) ─
-  app.get("/api/ncaab/plays", requireAdmin, async (_req, res) => {
+  // ── NCAAB Routes (Pro "all" + Elite "elite" + Admin) ────────────────────────
+  app.get("/api/ncaab/plays", requireTier("all", "elite"), async (_req, res) => {
     try {
       const plays = await computeNCAABPlays();
       return res.json({ plays });
@@ -186,7 +186,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/ncaab/games", requireAdmin, async (_req, res) => {
+  app.get("/api/ncaab/games", requireTier("all", "elite"), async (_req, res) => {
     try {
       const games = await getNCAABScoreboard();
       return res.json({ games });
@@ -196,7 +196,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/ncaab/h2h", requireAdmin, async (req, res) => {
+  app.get("/api/ncaab/h2h", requireTier("all", "elite"), async (req, res) => {
     try {
       const gameId = req.query.gameId as string;
       if (!gameId) return res.status(400).json({ error: "gameId required" });
