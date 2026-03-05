@@ -28,6 +28,38 @@ function teamsMatch(a: string, b: string): boolean {
 
 function sigmoid(x: number): number { return 1 / (1 + Math.exp(-x)); }
 
+// ── Dynamic multiplier: scales certainty with game progress ──────────────────
+function getDynamicMultiplier(secsRemaining: number, totalSecs: number, period: number, maxPeriods: number): number {
+  if (period > maxPeriods) return 12.0; // overtime — max certainty
+  const progress = Math.min(Math.max(1 - secsRemaining / totalSecs, 0), 1);
+  if (progress < 0.10) return 3.0;
+  if (progress < 0.25) return 4.0;
+  if (progress < 0.50) return 5.0;
+  if (progress < 0.65) return 6.0;
+  if (progress < 0.75) return 7.0;
+  if (progress < 0.85) return 8.0;
+  if (progress < 0.92) return 10.0;
+  return 12.0;
+}
+
+function getH1Multiplier(h1Progress: number): number {
+  if (h1Progress < 0.10) return 3.0;
+  if (h1Progress < 0.25) return 4.0;
+  if (h1Progress < 0.50) return 5.0;
+  if (h1Progress < 0.65) return 6.0;
+  if (h1Progress < 0.75) return 7.0;
+  if (h1Progress < 0.85) return 8.0;
+  if (h1Progress < 0.92) return 10.0;
+  return 12.0;
+}
+
+// ── sanitizeProb: early-game guard + 1-99 clamp ──────────────────────────────
+function sanitizeProb(prob: number | null, secsElapsed: number, allowExtreme = false): number | null {
+  if (prob === null) return null;
+  if (secsElapsed < 60 && !allowExtreme) return 50; // < 1 min data: neutral
+  return Math.min(Math.max(prob, 1), 99);
+}
+
 // ── ESPN NCAAB Scoreboard ────────────────────────────────────────────────────
 export async function getNCAABScoreboard(): Promise<any[]> {
   const key = "ncaab_scoreboard";
@@ -742,7 +774,16 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         ? rawH1TotalLine
         : total !== null ? Math.round(total * NCAAB_H1_FRACTION * 2) / 2 : null;
 
-      // ── Volatility + sigmoid ─────────────────────────────────────────────
+      // ENGINE BUG AUDIT
+      // Score fields: game.homeScore (number), game.awayScore (number) — derived from ESPN home?.score / away?.score
+      // h1Home/h1Away: scoringByPeriod[abbr][0] ?? estimated from current score
+      // proj1HTotal: currentTotal + blendedPace * remainH1Min (H1 window only, half === 1)
+      // projectedTotal: projected H1 + H2 pace * 20 (full game)
+      // Cause A mitigated: h1Home/h1Away fallback uses current score estimate
+      // Cause D mitigated: separate proj1HTotal path for H1 vs full game
+      // Post-halftime H1 result: over1HProb not set post-H1 — fixed below with 99/1 exception
+
+      // ── Dynamic multiplier probability ───────────────────────────────────
       let volatility: number | null = null;
       let spreadProb: number | null = null;
       let overProb: number | null = null;
@@ -751,9 +792,18 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       let over1HProb: number | null = null;
       let total1HEdge: number | null = null;
 
+      // Total NCAAB game = 2 halves × 1200s = 2400s
+      // secsRemaining = seconds left in entire game
+      const secsRemaining = isHalftime ? 1200 : (half === 2 ? secondsLeft : secondsLeft + 1200);
+      const secsElapsed   = Math.max(0, 2400 - secsRemaining);
+      const tooEarlyForData = secsElapsed < 60;
+
+      // Retain volatility for backward-compat (spread calc still uses sigmoid)
+      const secsForVol = isHalftime ? 1200 : secondsLeft;
+      volatility = Math.max(4, 18 * (secsForVol / 2400)) + volatilityBonus;
+
       if (projectedTotal !== null || projectedMargin !== null) {
-        const secsForVol = isHalftime ? 1200 : secondsLeft;
-        volatility = Math.max(4, 18 * (secsForVol / 2400)) + volatilityBonus;
+        const dynamicMult = getDynamicMultiplier(secsRemaining, 2400, game.period, 2);
 
         // Effective lines — use API line if available, otherwise fall back to
         // projected total rounded to nearest 0.5 so we always produce a probability
@@ -761,21 +811,55 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         const effective1HLine = h1TotalLine ?? (proj1HTotal !== null ? Math.round(proj1HTotal * 2) / 2 : null);
 
         if (projectedMargin !== null && spread !== null) {
-          const adjustedSpread = teamsMatch(favorite, game.homeTeam) ? -spread : spread;
-          spreadProb = Math.round(sigmoid((projectedMargin - adjustedSpread) / volatility) * 1000) / 10;
+          if (tooEarlyForData) {
+            spreadProb = 50;
+          } else {
+            const adjustedSpread = teamsMatch(favorite, game.homeTeam) ? -spread : spread;
+            // Use sigmoid for spread (margin diff is smaller in scale)
+            spreadProb = Math.round(sigmoid((projectedMargin - adjustedSpread) / volatility) * 1000) / 10;
+          }
           spreadEdge = Math.round((spreadProb - 50) * 10) / 10;
         }
+
         if (projectedTotal !== null && effectiveFGLine !== null) {
-          overProb = Math.round(sigmoid((projectedTotal - effectiveFGLine) / volatility) * 1000) / 10;
+          if (tooEarlyForData) {
+            overProb = 50;
+          } else {
+            const diff = projectedTotal - effectiveFGLine;
+            const raw = 50 + diff * dynamicMult * 0.3;
+            overProb = parseFloat(Math.min(Math.max(raw, 1), 99).toFixed(1));
+          }
           totalEdge = Math.round((overProb - 50) * 10) / 10;
         }
+
         // 1H probability — computed during H1 using effective line
         if (half === 1 && proj1HTotal !== null && effective1HLine !== null) {
-          const h1Vol = Math.max(3, volatility * 0.6);
-          over1HProb = Math.round(sigmoid((proj1HTotal - effective1HLine) / h1Vol) * 1000) / 10;
+          if (tooEarlyForData) {
+            over1HProb = 50;
+          } else {
+            const h1MinElapsed = (HALF_SECONDS - secondsLeft) / 60;
+            const h1Progress = Math.min(Math.max(h1MinElapsed / 20, 0), 1);
+            const h1Mult = getH1Multiplier(h1Progress);
+            const diff1H = proj1HTotal - effective1HLine;
+            const raw1H = 50 + diff1H * h1Mult * 0.3;
+            over1HProb = parseFloat(Math.min(Math.max(raw1H, 1), 99).toFixed(1));
+          }
           total1HEdge = Math.round((over1HProb - 50) * 10) / 10;
         }
       }
+
+      // Post-halftime H1: result is settled — show definitive 99/1
+      if ((isHalftime || half === 2) && h1TotalLine !== null && h1Total > 0) {
+        over1HProb = h1Total > h1TotalLine ? 99 : h1Total < h1TotalLine ? 1 : 50;
+        total1HEdge = Math.round((over1HProb - 50) * 10) / 10;
+      }
+
+      // Apply sanitizeProb — clamp to 1-99 and enforce early-game neutral
+      // (post-halftime H1 99/1 is exempt: allowExtreme = true)
+      const postH1Settled = (isHalftime || half === 2) && h1TotalLine !== null && h1Total > 0;
+      overProb   = sanitizeProb(overProb,   secsElapsed);
+      spreadProb = sanitizeProb(spreadProb, secsElapsed);
+      over1HProb = sanitizeProb(over1HProb, secsElapsed, postH1Settled);
 
       // ── Betting window ───────────────────────────────────────────────────
       let bettingWindow: NCAABPlay["bettingWindow"] = "NONE";

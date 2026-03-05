@@ -314,14 +314,15 @@ const WINDOW_COLORS: Record<string, string> = {
 };
 
 // ── RadialGauge ───────────────────────────────────────────────────────────────
-function RadialGauge({ value, color, label, isParlayed, showFullGameLabel }: {
-  value: number; color: string; label: string; isParlayed: boolean; showFullGameLabel?: boolean;
+function RadialGauge({ value, color, label, isParlayed, showFullGameLabel, displayDash }: {
+  value: number; color: string; label: string; isParlayed: boolean; showFullGameLabel?: boolean; displayDash?: boolean;
 }) {
   const cx = 80; const cy = 80;
   const rInner = 68; const rParlay = 80;
   const circInner = 2 * Math.PI * rInner;
   const pct = Math.max(0, Math.min(100, value));
   const dashOffset = circInner - (pct / 100) * circInner;
+  const arcColor = displayDash ? "#52525b" : color;
   return (
     <div className="flex flex-col items-center flex-shrink-0 gap-0.5">
       <div className="relative" style={{ width: 110, height: 110 }}>
@@ -329,7 +330,7 @@ function RadialGauge({ value, color, label, isParlayed, showFullGameLabel }: {
           <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#27272a" strokeWidth={10} />
           <circle
             cx={cx} cy={cy} r={rInner} fill="none"
-            stroke={color} strokeWidth={10}
+            stroke={arcColor} strokeWidth={10}
             strokeDasharray={`${circInner}`}
             strokeDashoffset={dashOffset}
             strokeLinecap="round"
@@ -345,9 +346,13 @@ function RadialGauge({ value, color, label, isParlayed, showFullGameLabel }: {
           )}
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-3xl font-black tabular-nums leading-none" style={{ color }}>
-            {Math.round(pct)}%
-          </span>
+          {displayDash ? (
+            <span className="text-3xl font-black tabular-nums leading-none" style={{ color: "#52525b" }}>--</span>
+          ) : (
+            <span className="text-3xl font-black tabular-nums leading-none" style={{ color }}>
+              {Math.round(pct)}%
+            </span>
+          )}
           <span className="text-[9px] uppercase tracking-widest mt-0.5" style={{ color: "#71717a" }}>{label}</span>
         </div>
       </div>
@@ -439,6 +444,38 @@ function ShiftBadge() {
   );
 }
 
+// ── Engine probability helpers ────────────────────────────────────────────────
+function computeGameProgress(play: NCAABPlay): number {
+  const halfMins = 20;
+  const totalMins = 40;
+  if (play.period > 2) return 1.0; // overtime — 100%
+  const parts = (play.clock ?? "20:00").split(":").map(Number);
+  const minsLeft = (parts[0] ?? 20) + ((parts[1] ?? 0) / 60);
+  const elapsed = Math.max(0, halfMins - minsLeft) + (play.half - 1) * halfMins;
+  return Math.min(Math.max(elapsed / totalMins, 0), 1);
+}
+
+function getProgressiveLimits(progress: number): { min: number; max: number } {
+  if (progress < 0.10) return { min: 30, max: 70 };
+  if (progress < 0.25) return { min: 20, max: 80 };
+  if (progress < 0.50) return { min: 10, max: 90 };
+  if (progress < 0.75) return { min:  5, max: 95 };
+  if (progress < 0.90) return { min:  3, max: 97 };
+  return { min: 1, max: 99 };
+}
+
+function limitedEngineProb(rawProb: number | null, progress: number, gameId?: string): number {
+  if (rawProb === null) return 50;
+  const { min, max } = getProgressiveLimits(progress);
+  const clamped = Math.min(Math.max(rawProb, min), max);
+  if (Math.abs(rawProb - clamped) > 10) {
+    console.warn(
+      `[ENGINE] Probability clamped: raw=${rawProb.toFixed(1)}% → limited=${clamped.toFixed(1)}% | game=${gameId ?? "?"} | ${(progress * 100).toFixed(0)}% elapsed`
+    );
+  }
+  return parseFloat(clamped.toFixed(1));
+}
+
 // ── NCAABGameCard ─────────────────────────────────────────────────────────────
 function NCAABGameCard({
   play,
@@ -455,10 +492,15 @@ function NCAABGameCard({
 }) {
   const isH1 = play.half === 1 && !play.bettingWindow.includes("HALFTIME");
 
-  // T002: gauge always shows full-game probability, never H1 data
-  const overProb   = play.overProb ?? 50;
-  const underProb  = parseFloat((100 - overProb).toFixed(4));
-  const spreadProb = play.spreadProb ?? 50;
+  // T004: progressive limits applied to engine output
+  const gameProgress = computeGameProgress(play);
+  const overProb     = limitedEngineProb(play.overProb, gameProgress, play.gameId);
+  const underProb    = parseFloat((100 - overProb).toFixed(1));
+  const spreadProb   = limitedEngineProb(play.spreadProb, gameProgress, play.gameId);
+
+  // T005: neutral state — engine hasn't accumulated enough data
+  const rawOver   = play.overProb ?? 50;
+  const isNeutral = gameProgress < 0.10 && rawOver >= 45 && rawOver <= 55;
 
   const dominantMarket = ((): "over" | "under" | "spread" => {
     const oe = Math.abs(overProb - 50);
@@ -691,42 +733,56 @@ function NCAABGameCard({
               )}
             </div>
           </div>
-          <RadialGauge value={gaugeValue} color={gaugeColor} label={gaugeLabel} isParlayed={isLegParlayed(selectedMarket)} showFullGameLabel />
+          <RadialGauge
+            value={isNeutral ? 50 : gaugeValue}
+            color={isNeutral ? "#52525b" : gaugeColor}
+            label={isNeutral ? "EARLY GAME" : gaugeLabel}
+            isParlayed={isLegParlayed(selectedMarket)}
+            showFullGameLabel
+            displayDash={isNeutral}
+          />
         </div>
 
         {/* ── VERDICT ROWS ───────────────────────────────────────────── */}
-        <div className={`space-y-2 transition-opacity duration-300 ${edgeBelow ? "opacity-40" : ""}`}>
-          {edgeBelow && (
-            <p className="text-[10px] italic text-center" style={{ color: "#52525b" }}>Edge below threshold — monitoring</p>
-          )}
-          <div className="rounded-lg flex items-center justify-between gap-2"
-            style={{ background: "#111111", border: "1px solid #27272a", borderLeft: `3px solid ${evColor}`, padding: "16px 20px" }}>
-            <div>
-              <p className="text-sm font-semibold" style={{ color: evColor }}>{edgeLabel}</p>
-              <p className="text-xs" style={{ color: "#a1a1aa" }}>Engine {engineProb.toFixed(1)}% vs Book {bookImplied}%</p>
-            </div>
-            {edgeGap >= 5 && (
-              <span className="text-[10px] font-black px-2 py-0.5 rounded-full shrink-0"
-                style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b", border: "1px solid rgba(245,158,11,0.3)", fontFamily: "monospace" }}>
-                +{edgeGap.toFixed(1)}pp
-              </span>
+        {isNeutral ? (
+          <div className="rounded-lg py-5 text-center" style={{ background: "#0f0f0f", border: "1px solid #27272a" }}>
+            <p className="text-sm italic" style={{ color: "#52525b" }}>Insufficient Data — Engine Warming Up</p>
+            <p className="text-xs mt-1" style={{ color: "#3f3f46" }}>Probability updates as game data accumulates</p>
+          </div>
+        ) : (
+          <div className={`space-y-2 transition-opacity duration-300 ${edgeBelow ? "opacity-40" : ""}`}>
+            {edgeBelow && (
+              <p className="text-[10px] italic text-center" style={{ color: "#52525b" }}>Edge below threshold — monitoring</p>
             )}
-          </div>
-          <div className="rounded-lg flex items-center justify-between gap-2"
-            style={{ background: "#0f0f0f", border: "1px solid #27272a", borderLeft: `3px solid ${edgeGap >= 5 ? evColor : "#52525b"}`, padding: "16px 20px" }}>
-            <div>
-              <p className="text-sm font-semibold" style={{ color: "#a1a1aa" }}>{edgeSide} CLV</p>
-              <p className="text-xs" style={{ color: "#71717a" }}>Closing line value signal</p>
+            <div className="rounded-lg flex items-center justify-between gap-2"
+              style={{ background: "#111111", border: "1px solid #27272a", borderLeft: `3px solid ${evColor}`, padding: "16px 20px" }}>
+              <div>
+                <p className="text-sm font-semibold" style={{ color: evColor }}>{edgeLabel}</p>
+                <p className="text-xs" style={{ color: "#a1a1aa" }}>Engine {engineProb.toFixed(1)}% vs Book {bookImplied}%</p>
+              </div>
+              {edgeGap >= 5 && (
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full shrink-0"
+                  style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b", border: "1px solid rgba(245,158,11,0.3)", fontFamily: "monospace" }}>
+                  +{edgeGap.toFixed(1)}pp
+                </span>
+              )}
             </div>
-            <span className="text-[10px] font-black px-2 py-0.5 rounded-full shrink-0"
-              style={edgeGap >= 5
-                ? { background: `${evColor}22`, color: evColor, border: `1px solid ${evColor}44` }
-                : { background: "#27272a", color: "#71717a", border: "1px solid #3f3f46" }
-              }>
-              {edgeGap < 5 ? "Even" : `${edgeSide === "Under" ? "↓" : "↑"} ${edgeSide}`}
-            </span>
+            <div className="rounded-lg flex items-center justify-between gap-2"
+              style={{ background: "#0f0f0f", border: "1px solid #27272a", borderLeft: `3px solid ${edgeGap >= 5 ? evColor : "#52525b"}`, padding: "16px 20px" }}>
+              <div>
+                <p className="text-sm font-semibold" style={{ color: "#a1a1aa" }}>{edgeSide} CLV</p>
+                <p className="text-xs" style={{ color: "#71717a" }}>Closing line value signal</p>
+              </div>
+              <span className="text-[10px] font-black px-2 py-0.5 rounded-full shrink-0"
+                style={edgeGap >= 5
+                  ? { background: `${evColor}22`, color: evColor, border: `1px solid ${evColor}44` }
+                  : { background: "#27272a", color: "#71717a", border: "1px solid #3f3f46" }
+                }>
+                {edgeGap < 5 ? "Even" : `${edgeSide === "Under" ? "↓" : "↑"} ${edgeSide}`}
+              </span>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* ── FULL GAME / 1H TOGGLE ──────────────────────────────────── */}
         <div className="flex items-center gap-3">
@@ -858,6 +914,7 @@ function NCAABGameCard({
                 <button
                   data-testid={`ncaab-market-${m}-${play.gameId}`}
                   onClick={() => setSelectedMarket(m)}
+                  title={isNeutral ? "Probability updates as game data accumulates" : undefined}
                   className="w-full rounded-lg py-2.5 px-2 flex flex-col items-center gap-0.5 transition-all duration-300"
                   style={{
                     background: isSelected ? "#1f1f1f" : "#181818",
@@ -868,7 +925,9 @@ function NCAABGameCard({
                   <span className="text-xl font-bold tabular-nums leading-tight" style={{ color: "#ffffff" }}>
                     {m === "spread" ? (displaySpread !== null ? `-${displaySpread}` : "—") : (displayLine ?? "—")}
                   </span>
-                  <span className="text-sm font-semibold" style={{ color: mColor }}>{mProb.toFixed(1)}%</span>
+                  <span className="text-sm font-semibold" style={{ color: isNeutral ? "#52525b" : mColor }}>
+                    {isNeutral ? "--" : `${mProb.toFixed(1)}%`}
+                  </span>
                 </button>
                 <button
                   data-testid={`ncaab-parlay-toggle-${m}-${play.gameId}`}
@@ -1832,26 +1891,28 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
             </div>
           )}
 
-          {/* ── Today's Slate — chip strip + grouped vertical list ─────────── */}
+          {/* ── Today's Games strip — always first, outside scroll container ─ */}
           {games.length > 0 && (
-            <div className="space-y-3">
-              <NCAABGamesStrip
-                games={games}
-                expandedGameId={expandedGameId}
-                onChipClick={handleChipClick}
-              />
-              <GroupedGamesList
-                games={games}
-                plays={plays}
-                rowRefs={rowRefs}
-                expandedGameId={expandedGameId}
-                onExpandGame={handleExpandGame}
-                onH2hReady={handleH2hReady}
-                onAddToParlay={onAddToParlay}
-                shiftedGames={shiftedGames}
-                onShiftDetected={handleShiftDetected}
-              />
-            </div>
+            <NCAABGamesStrip
+              games={games}
+              expandedGameId={expandedGameId}
+              onChipClick={handleChipClick}
+            />
+          )}
+
+          {/* ── Grouped game list — separate from strip ─────────────────────── */}
+          {games.length > 0 && (
+            <GroupedGamesList
+              games={games}
+              plays={plays}
+              rowRefs={rowRefs}
+              expandedGameId={expandedGameId}
+              onExpandGame={handleExpandGame}
+              onH2hReady={handleH2hReady}
+              onAddToParlay={onAddToParlay}
+              shiftedGames={shiftedGames}
+              onShiftDetected={handleShiftDetected}
+            />
           )}
         </>
       )}
