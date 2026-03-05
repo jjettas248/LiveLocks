@@ -91,6 +91,17 @@ interface ActionNetworkData {
 interface VegasInsiderData { openTotal: number | null; currentTotal: number | null; movement: number | null; source: string; }
 interface InjuredPlayer { name: string; team: string; position: string; injury: string; status: string; }
 interface InjuryImpact { injuries: InjuredPlayer[]; out: number; hasKeyPlayerOut: boolean; summary: string; }
+interface PlayerPropLine { playerName: string; team: string; stat: string; line: number; }
+interface PropsImplied {
+  homeProj: number | null; awayProj: number | null;
+  homePlayerCount: number; awayPlayerCount: number;
+  source: string;
+}
+interface TeamRankingsStats { ppg: number; oppPpg: number; }
+interface TeamRankingsData {
+  home: TeamRankingsStats | null; away: TeamRankingsStats | null;
+  impliedTotal: number | null; source: string;
+}
 interface CompositeSignal { name: string; projTotal: number | null; weight: number; diff: number; }
 interface CompositeEngineResult {
   overProb: number; underProb: number; projTotal: number | null;
@@ -101,6 +112,9 @@ interface EnrichedGameData {
   torvik: { home: TorvikStats | null; away: TorvikStats | null };
   actionNetwork: ActionNetworkData | null;
   vegasInsider: VegasInsiderData | null;
+  prizePicks: PropsImplied | null;
+  underdog: PropsImplied | null;
+  teamRankings: TeamRankingsData | null;
   injuries: { home: InjuryImpact | null; away: InjuryImpact | null; all: InjuredPlayer[] };
   composite: CompositeEngineResult | null;
   sources: string[];
@@ -1541,35 +1555,52 @@ function NCAABGameCard({
           );
         })()}
 
-        {/* ── ADVANCED ANALYTICS (BartTorvik) ────────────────────────── */}
-        {enrichedData?.torvik && (enrichedData.torvik.home || enrichedData.torvik.away) && (() => {
+        {/* ── ADVANCED ANALYTICS (multi-source) ──────────────────────── */}
+        {enrichedData && (() => {
           const ht = enrichedData.torvik.home;
           const at = enrichedData.torvik.away;
+          const hasTorvik = ht || at;
+          const pp = enrichedData.prizePicks;
+          const ud = enrichedData.underdog;
+          const tr = enrichedData.teamRankings;
+          if (!hasTorvik && !pp && !ud && !tr) return null;
+
           const avgTempo = ht?.tempo && at?.tempo ? (ht.tempo + at.tempo) / 2 : null;
           const tempoLabel = avgTempo ? (avgTempo > 72 ? "Fast Pace" : avgTempo < 65 ? "Slow Pace" : "Average Pace") : null;
           const tempoColor = avgTempo ? (avgTempo > 72 ? "#00d4aa" : avgTempo < 65 ? "#ef4444" : "#71717a") : "#71717a";
-          const torvikTotal = enrichedData.composite?.projTotal;
+          const compositeTotal = enrichedData.composite?.projTotal;
           const liveLine = play.total;
-          const torvikLean = torvikTotal && liveLine ? torvikTotal - liveLine : null;
+          const compositeLean = compositeTotal && liveLine ? parseFloat((compositeTotal - liveLine).toFixed(1)) : null;
+
+          const leanColor = (diff: number | null) =>
+            diff == null ? "#71717a" : diff > 1 ? "#00d4aa" : diff < -1 ? "#ef4444" : "#71717a";
+
           return (
             <div className="rounded-lg overflow-hidden" style={{ border: "1px solid #1e293b" }}>
               <div className="flex items-center justify-between px-3 py-2" style={{ background: "#0b1525" }}>
                 <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "#60a5fa" }}>Advanced Analytics</span>
-                {tempoLabel && (
-                  <span className="text-[9px] font-bold px-2 py-0.5 rounded-full"
-                    style={{ color: tempoColor, background: `${tempoColor}18`, border: `1px solid ${tempoColor}40` }}>
-                    {tempoLabel}
-                  </span>
-                )}
+                <div className="flex items-center gap-1.5">
+                  {tempoLabel && (
+                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-full"
+                      style={{ color: tempoColor, background: `${tempoColor}18`, border: `1px solid ${tempoColor}40` }}>
+                      {tempoLabel}
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="px-3 py-2 space-y-1.5" style={{ background: "#090f1a" }}>
-                {[{ label: play.homeTeamAbbr, t: ht }, { label: play.awayTeamAbbr, t: at }].map(({ label, t }) => t && (
+
+                {/* BartTorvik efficiency rows */}
+                {hasTorvik && [
+                  { label: play.homeTeamAbbr, t: ht },
+                  { label: play.awayTeamAbbr, t: at },
+                ].map(({ label, t }) => t && (
                   <div key={label} className="flex items-center justify-between">
-                    <span className="text-[10px]" style={{ color: "#71717a" }}>{label}</span>
+                    <span className="text-[10px]" style={{ color: "#71717a" }}>{label} (Torvik)</span>
                     <div className="flex items-center gap-2">
                       <span className="text-[9px] font-mono" style={{ color: "#a1a1aa" }}>
                         AdjO <span style={{ color: "#00d4aa" }}>{t.adjO.toFixed(1)}</span>
-                        {" / "}
+                        {" · "}
                         AdjD <span style={{ color: "#ef4444" }}>{t.adjD.toFixed(1)}</span>
                       </span>
                       {t.rank < 400 && (
@@ -1581,19 +1612,68 @@ function NCAABGameCard({
                     </div>
                   </div>
                 ))}
+
+                {/* Tempo */}
                 {avgTempo && (
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px]" style={{ color: "#71717a" }}>Tempo</span>
+                    <span className="text-[10px]" style={{ color: "#71717a" }}>Avg Tempo</span>
                     <span className="text-[10px] font-mono" style={{ color: tempoColor }}>{avgTempo.toFixed(1)} poss/40min</span>
                   </div>
                 )}
-                {torvikTotal && (
+
+                {/* PrizePicks implied team totals */}
+                {pp && (pp.homeProj != null || pp.awayProj != null) && (
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px]" style={{ color: "#71717a" }}>Torvik Projection</span>
-                    <span className="text-[10px] font-mono font-bold"
-                      style={{ color: torvikLean && torvikLean > 1 ? "#00d4aa" : torvikLean && torvikLean < -1 ? "#ef4444" : "#71717a" }}>
-                      {torvikTotal.toFixed(1)} pts
-                      {torvikLean != null && <span style={{ color: "#52525b" }}> ({torvikLean > 0 ? "+" : ""}{torvikLean.toFixed(1)} vs line)</span>}
+                    <span className="text-[10px]" style={{ color: "#71717a" }}>PrizePicks</span>
+                    <span className="text-[10px] font-mono" style={{ color: "#a1a1aa" }}>
+                      {pp.homeProj != null && <span>{play.homeTeamAbbr} <span style={{ color: "#60a5fa" }}>{pp.homeProj}</span></span>}
+                      {pp.homeProj != null && pp.awayProj != null && <span style={{ color: "#3f3f46" }}> · </span>}
+                      {pp.awayProj != null && <span>{play.awayTeamAbbr} <span style={{ color: "#60a5fa" }}>{pp.awayProj}</span></span>}
+                      {pp.homeProj != null && pp.awayProj != null && (
+                        <span style={{ color: "#52525b" }}> = {(pp.homeProj + pp.awayProj).toFixed(1)}</span>
+                      )}
+                    </span>
+                  </div>
+                )}
+
+                {/* Underdog implied team totals */}
+                {ud && (ud.homeProj != null || ud.awayProj != null) && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px]" style={{ color: "#71717a" }}>Underdog</span>
+                    <span className="text-[10px] font-mono" style={{ color: "#a1a1aa" }}>
+                      {ud.homeProj != null && <span>{play.homeTeamAbbr} <span style={{ color: "#818cf8" }}>{ud.homeProj}</span></span>}
+                      {ud.homeProj != null && ud.awayProj != null && <span style={{ color: "#3f3f46" }}> · </span>}
+                      {ud.awayProj != null && <span>{play.awayTeamAbbr} <span style={{ color: "#818cf8" }}>{ud.awayProj}</span></span>}
+                      {ud.homeProj != null && ud.awayProj != null && (
+                        <span style={{ color: "#52525b" }}> = {(ud.homeProj + ud.awayProj).toFixed(1)}</span>
+                      )}
+                    </span>
+                  </div>
+                )}
+
+                {/* TeamRankings season scoring model */}
+                {tr?.impliedTotal != null && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px]" style={{ color: "#71717a" }}>TeamRankings</span>
+                    <span className="text-[10px] font-mono" style={{ color: "#a1a1aa" }}>
+                      {tr.home?.ppg != null && <span>{play.homeTeamAbbr} <span style={{ color: "#34d399" }}>{tr.home.ppg.toFixed(1)}</span></span>}
+                      {tr.home?.ppg != null && tr.away?.ppg != null && <span style={{ color: "#3f3f46" }}> · </span>}
+                      {tr.away?.ppg != null && <span>{play.awayTeamAbbr} <span style={{ color: "#34d399" }}>{tr.away.ppg.toFixed(1)}</span></span>}
+                      {" "}
+                      <span style={{ color: "#52525b" }}>→ {tr.impliedTotal.toFixed(1)}</span>
+                    </span>
+                  </div>
+                )}
+
+                {/* Composite projection vs live line */}
+                {compositeTotal && (
+                  <div className="flex items-center justify-between pt-0.5 mt-0.5" style={{ borderTop: "1px solid #1e293b" }}>
+                    <span className="text-[10px] font-semibold" style={{ color: "#60a5fa" }}>Composite Proj.</span>
+                    <span className="text-[10px] font-mono font-bold" style={{ color: leanColor(compositeLean) }}>
+                      {compositeTotal.toFixed(1)} pts
+                      {compositeLean != null && (
+                        <span style={{ color: "#52525b" }}> ({compositeLean > 0 ? "+" : ""}{compositeLean.toFixed(1)} vs line)</span>
+                      )}
                     </span>
                   </div>
                 )}

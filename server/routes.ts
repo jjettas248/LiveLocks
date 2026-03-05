@@ -270,7 +270,8 @@ export async function registerRoutes(
       if (!game) return res.status(404).json({ error: "Game not found" });
       const homeTeam: string = game.homeTeam ?? "";
       const awayTeam: string = game.awayTeam ?? "";
-      const data = await enrichNCAABGameFull(gameId, homeTeam, awayTeam, null, null);
+      const liveLine: number | null = typeof game.total === "number" ? game.total : null;
+      const data = await enrichNCAABGameFull(gameId, homeTeam, awayTeam, liveLine, null);
       return res.json(data);
     } catch (err: any) {
       console.error("[NCAAB enriched]", err.message);
