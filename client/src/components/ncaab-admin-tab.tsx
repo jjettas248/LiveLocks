@@ -989,7 +989,28 @@ function NCAABGameCard({
   );
 }
 
-// ── NCAAB Games Chip Strip ────────────────────────────────────────────────────
+// ── Group games by tipoff time ────────────────────────────────────────────────
+function groupGamesByTipoff(games: NCAABGame[]) {
+  const groups: Record<string, { key: string; label: string; tipoffMs: number; games: NCAABGame[] }> = {};
+  for (const g of games) {
+    if (g.isLive) {
+      if (!groups["__live__"]) groups["__live__"] = { key: "__live__", label: "Live Now", tipoffMs: 0, games: [] };
+      groups["__live__"].games.push(g);
+      continue;
+    }
+    const d = g.startTime ? new Date(g.startTime) : null;
+    if (!d || isNaN(d.getTime())) {
+      if (!groups["__tbd__"]) groups["__tbd__"] = { key: "__tbd__", label: "TBD", tipoffMs: Infinity, games: [] };
+      groups["__tbd__"].games.push(g);
+      continue;
+    }
+    const label = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true });
+    if (!groups[label]) groups[label] = { key: label, label: label + " CT", tipoffMs: d.getTime(), games: [] };
+    groups[label].games.push(g);
+  }
+  return Object.values(groups).sort((a, b) => a.tipoffMs - b.tipoffMs);
+}
+
 function NCAABGamesStrip({
   games,
   expandedGameId,
@@ -999,83 +1020,217 @@ function NCAABGamesStrip({
   expandedGameId: string | null;
   onChipClick: (id: string) => void;
 }) {
-  if (games.length === 0) return null;
+  const liveCount = games.filter(g => g.isLive).length;
+  const allFinal  = games.length > 0 && games.every(g => g.status === "Final");
+  const timeGroups = groupGamesByTipoff(games);
 
-  const sortedGames = [
-    ...games.filter(g => g.isLive),
-    ...games.filter(g => !g.isLive && g.status !== "Final"),
-    ...games.filter(g => g.status === "Final"),
-  ];
+  const initializedKeys = useRef<Set<string>>(new Set());
+
+  const computeInitialOpen = useCallback((groupKey: string, group: { key: string; tipoffMs: number; games: NCAABGame[] }): boolean => {
+    const now = Date.now();
+    const hasLive   = group.key === "__live__" || group.games.some(g => g.isLive);
+    const diffHours = (group.tipoffMs - now) / 3_600_000;
+    return hasLive || (diffHours >= 0 && diffHours <= 2);
+  }, []);
+
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    groupGamesByTipoff(games).forEach(group => {
+      initializedKeys.current.add(group.key);
+      initial[group.key] = computeInitialOpen(group.key, group);
+    });
+    return initial;
+  });
+
+  useEffect(() => {
+    const newKeys = timeGroups.filter(g => !initializedKeys.current.has(g.key));
+    if (newKeys.length === 0) return;
+    setOpenGroups(prev => {
+      const next = { ...prev };
+      newKeys.forEach(group => {
+        initializedKeys.current.add(group.key);
+        next[group.key] = computeInitialOpen(group.key, group);
+      });
+      return next;
+    });
+  }, [timeGroups.map(g => g.key).join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggleGroup = (key: string) =>
+    setOpenGroups(prev => ({ ...prev, [key]: !prev[key] }));
+
+  const renderChip = (g: NCAABGame) => {
+    const isSelected  = expandedGameId === g.id;
+    const isFinal     = g.status === "Final";
+    const isScheduled = !g.isLive && !isFinal;
+    const tipoffTime  = g.startTime
+      ? new Date(g.startTime).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })
+      : null;
+    return (
+      <button
+        key={g.id}
+        data-testid={`ncaab-chip-${g.id}`}
+        onClick={() => onChipClick(g.id)}
+        style={{
+          minWidth: 160,
+          maxWidth: 200,
+          background: isSelected ? "#1f1f1f" : "#111111",
+          border: isSelected
+            ? "1.5px solid #00d4aa"
+            : g.isLive
+            ? "1px solid rgba(0,212,170,0.2)"
+            : "1px solid #27272a",
+          borderRadius: 8,
+          padding: "8px 14px",
+          cursor: "pointer",
+          transition: "all 150ms ease",
+          textAlign: "left",
+          flexShrink: 0,
+        }}
+        onMouseEnter={e => { if (!isSelected) e.currentTarget.style.borderColor = "#3f3f46"; }}
+        onMouseLeave={e => { if (!isSelected) e.currentTarget.style.borderColor = g.isLive ? "rgba(0,212,170,0.2)" : "#27272a"; }}
+      >
+        {/* Team row */}
+        <div className="flex items-center justify-between gap-1.5">
+          <span
+            className="text-xs font-bold"
+            style={{ color: "#ffffff", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-block" }}
+          >
+            {g.awayTeamAbbr}
+          </span>
+          <span
+            className="text-xs font-bold tabular-nums"
+            style={{ color: isFinal ? "#71717a" : isScheduled ? "#3b82f6" : "#ffffff", flexShrink: 0 }}
+          >
+            {g.awayScore} – {g.homeScore}
+          </span>
+          <span
+            className="text-xs font-bold"
+            style={{ color: "#ffffff", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-block", textAlign: "right" }}
+          >
+            {g.homeTeamAbbr}
+          </span>
+        </div>
+        {/* Status row */}
+        <div className="flex items-center gap-1 mt-1">
+          {g.isLive && (
+            <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-400" />
+            </span>
+          )}
+          <span
+            className="text-[10px] font-medium"
+            style={{ color: g.isLive ? "#4ade80" : isFinal ? "#52525b" : "#71717a" }}
+          >
+            {g.isLive
+              ? `H${g.period} ${g.clock}`
+              : isFinal
+              ? "Final"
+              : tipoffTime ?? "Scheduled"}
+          </span>
+        </div>
+      </button>
+    );
+  };
 
   return (
-    <div className="overflow-x-auto pb-2 -mx-1 px-1" style={{ scrollbarWidth: "none" }}>
-      <div className="flex gap-2" style={{ minWidth: "max-content" }}>
-        {sortedGames.map(g => {
-          const isSelected  = expandedGameId === g.id;
-          const isFinal     = g.status === "Final";
-          const isScheduled = !g.isLive && !isFinal;
-          const tipoffTime  = g.startTime
-            ? new Date(g.startTime).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })
-            : null;
-
-          return (
-            <button
-              key={g.id}
-              data-testid={`ncaab-chip-${g.id}`}
-              onClick={() => onChipClick(g.id)}
-              style={{
-                minWidth: 140,
-                background: isSelected ? "#1f1f1f" : "#111111",
-                border: isSelected
-                  ? "1.5px solid #00d4aa"
-                  : g.isLive
-                  ? "1px solid rgba(0,212,170,0.2)"
-                  : "1px solid #27272a",
-                borderRadius: 8,
-                padding: "8px 10px",
-                cursor: "pointer",
-                transition: "all 150ms ease",
-                textAlign: "left",
-              }}
-              onMouseEnter={e => { if (!isSelected) e.currentTarget.style.borderColor = "#3f3f46"; }}
-              onMouseLeave={e => { if (!isSelected) e.currentTarget.style.borderColor = g.isLive ? "rgba(0,212,170,0.2)" : "#27272a"; }}
-            >
-              {/* Team row */}
-              <div className="flex items-center justify-between gap-1.5">
-                <span className="text-xs font-bold" style={{ color: "#ffffff" }}>{g.awayTeamAbbr}</span>
-                <span
-                  className="text-xs font-bold tabular-nums"
-                  style={{ color: isFinal ? "#71717a" : isScheduled ? "#3b82f6" : "#ffffff" }}
-                >
-                  {g.awayScore} – {g.homeScore}
-                </span>
-                <span className="text-xs font-bold" style={{ color: "#ffffff" }}>{g.homeTeamAbbr}</span>
-              </div>
-              {/* Status row */}
-              <div className="flex items-center gap-1 mt-1">
-                {g.isLive && (
-                  <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-400" />
-                  </span>
-                )}
-                <span
-                  className="text-[10px] font-medium"
-                  style={{
-                    color: g.isLive ? "#4ade80" : isFinal ? "#52525b" : "#71717a",
-                  }}
-                >
-                  {g.isLive
-                    ? `H${g.period} ${g.clock}`
-                    : isFinal
-                    ? "Final"
-                    : tipoffTime ?? "Scheduled"}
-                </span>
-              </div>
-            </button>
-          );
-        })}
+    <div>
+      {/* ── Strip header ───────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {liveCount > 0 && (
+            <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-400" />
+            </span>
+          )}
+          <span
+            className="text-xs font-semibold uppercase tracking-wider"
+            style={{ color: allFinal ? "#71717a" : "#a1a1aa" }}
+          >
+            {allFinal ? "TODAY'S SLATE · FINAL" : "TODAY'S GAMES"}
+          </span>
+          {games.length > 0 && (
+            <span style={{
+              background: "rgba(255,255,255,0.06)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 9999,
+              padding: "1px 8px",
+              color: "#a1a1aa",
+              fontSize: 11,
+              fontFamily: "monospace",
+            }}>
+              · {games.length}
+            </span>
+          )}
+        </div>
+        {liveCount > 0 && (
+          <span style={{ color: "#4ade80", fontSize: 11, fontWeight: 500 }}>
+            ● {liveCount} Live
+          </span>
+        )}
       </div>
+
+      {/* ── Time-group collapsible sections ────────────────────────────────── */}
+      {games.length === 0 ? null : (
+        <div className="space-y-1">
+          {timeGroups.map(group => {
+            const isOpen      = openGroups[group.key] ?? false;
+            const groupIsLive = group.key === "__live__" || group.games.some(g => g.isLive);
+            const groupIsFinal = group.games.every(g => g.status === "Final");
+            return (
+              <div key={group.key}>
+                {/* Group header */}
+                <button
+                  data-testid={`ncaab-strip-group-${group.key}`}
+                  onClick={() => toggleGroup(group.key)}
+                  style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: "5px 0", marginBottom: isOpen ? 6 : 0 }}
+                >
+                  {/* Left: dot + label */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                    {groupIsLive && (
+                      <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-400" />
+                      </span>
+                    )}
+                    <span
+                      className="text-xs font-semibold uppercase tracking-wider"
+                      style={{ color: groupIsLive ? "#4ade80" : groupIsFinal ? "#52525b" : "#71717a" }}
+                    >
+                      {group.label}
+                    </span>
+                  </div>
+                  {/* Center divider */}
+                  <div style={{ flex: 1, height: 1, background: "#27272a" }} />
+                  {/* Right: count + chevron */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                    {groupIsLive ? (
+                      <span style={{ background: "rgba(74,222,128,0.15)", border: "1px solid rgba(74,222,128,0.3)", borderRadius: 9999, padding: "1px 6px", color: "#4ade80", fontSize: 10, fontWeight: 500 }}>
+                        {group.games.length} Live
+                      </span>
+                    ) : (
+                      <span className="text-xs" style={{ color: "#52525b" }}>{group.games.length} games</span>
+                    )}
+                    <ChevronDown
+                      size={12}
+                      style={{ color: "#52525b", transform: isOpen ? "rotate(180deg)" : "none", transition: "transform 200ms ease" }}
+                    />
+                  </div>
+                </button>
+                {/* Chips row — collapsible */}
+                {isOpen && (
+                  <div className="overflow-x-auto pb-2 mb-1" style={{ scrollbarWidth: "none" }}>
+                    <div className="flex gap-2" style={{ minWidth: "max-content" }}>
+                      {group.games.map(g => renderChip(g))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1680,7 +1835,6 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
           {/* ── Today's Slate — chip strip + grouped vertical list ─────────── */}
           {games.length > 0 && (
             <div className="space-y-3">
-              <p className="text-xs font-bold text-white">Today's Slate</p>
               <NCAABGamesStrip
                 games={games}
                 expandedGameId={expandedGameId}

@@ -59,6 +59,101 @@ export async function registerRoutes(
     }
   });
 
+  // ── Admin: Change tier with Stripe integration ──────────────────────────────
+  // STRIPE AUDIT
+  // Client: getUncachableStripeClient() via Replit Connector — no STRIPE_SECRET_KEY env var
+  // Existing calls: checkout.sessions, billingPortal.sessions, products/prices (setup-products)
+  // Price IDs (hardcoded in PLAN_META): all=$40 price_1T6fl12cW8Vmrgt3B6ffBIuw, elite=$65 price_1T6fly2cW8Vmrgt3WU9uHL7L
+  // User schema: subscriptionTier (null/"all"/"elite"), stripeCustomerId, stripeSubscriptionId, playsUsed
+  // Storage: setUserSubscriptionTier, updateUserStripeCustomer, resetUserPlays
+  // stripeCustomerId: yes, on user object
+
+  const ADMIN_TIER_PRICES: Record<string, { label: string; pricePerMonth: number; stripePriceId: string | null }> = {
+    "":      { label: "Free",                pricePerMonth: 0,  stripePriceId: null },
+    "all":   { label: "Pro ($40/mo)",        pricePerMonth: 40, stripePriceId: "price_1T6fl12cW8Vmrgt3B6ffBIuw" },
+    "elite": { label: "All Sports ($65/mo)", pricePerMonth: 65, stripePriceId: "price_1T6fly2cW8Vmrgt3WU9uHL7L" },
+  };
+
+  app.post("/api/admin/change-tier", requireAdmin, async (req, res) => {
+    try {
+      const { userId, newTierKey } = req.body as { userId: number; newTierKey: string };
+      if (typeof userId !== "number" || !Number.isInteger(userId)) {
+        return res.status(400).json({ error: "Invalid userId" });
+      }
+      if (!Object.keys(ADMIN_TIER_PRICES).includes(newTierKey)) {
+        return res.status(400).json({ error: "Invalid tier. Use '', 'all', or 'elite'" });
+      }
+
+      const user = await storage.getUserById(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      const { getUncachableStripeClient } = await import("./stripeClient");
+      const stripe = await getUncachableStripeClient();
+
+      // Downgrade to free
+      if (newTierKey === "") {
+        if (user.stripeCustomerId) {
+          const subs = await stripe.subscriptions.list({ customer: user.stripeCustomerId, status: "active" });
+          for (const sub of subs.data) {
+            await stripe.subscriptions.update(sub.id, { cancel_at_period_end: true });
+          }
+        }
+        await storage.setUserSubscriptionTier(userId, null);
+        return res.json({ message: "Downgraded to Free. Subscription will cancel at period end." });
+      }
+
+      // Paid tier — ensure Stripe customer exists
+      const tierMeta = ADMIN_TIER_PRICES[newTierKey]!;
+      let customerId = user.stripeCustomerId;
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          email: user.email,
+          metadata: { userId: String(userId) },
+        });
+        customerId = customer.id;
+        await storage.updateUserStripeCustomer(userId, customerId);
+      }
+
+      const currentTierMeta = ADMIN_TIER_PRICES[user.subscriptionTier ?? ""] ?? ADMIN_TIER_PRICES[""];
+      const priceDiff = tierMeta.pricePerMonth - currentTierMeta.pricePerMonth;
+
+      // Check for existing active subscription
+      const subs = await stripe.subscriptions.list({ customer: customerId, status: "active", limit: 1 });
+      const existingSub = subs.data[0];
+
+      if (existingSub) {
+        await stripe.subscriptions.update(existingSub.id, {
+          items: [{ id: existingSub.items.data[0].id, price: tierMeta.stripePriceId! }],
+          proration_behavior: "always_invoice",
+        } as any);
+      } else {
+        const paymentMethods = await stripe.paymentMethods.list({ customer: customerId, type: "card" });
+        if (!paymentMethods.data.length) {
+          return res.status(400).json({ error: "No payment method on file for this user." });
+        }
+        await stripe.subscriptions.create({
+          customer: customerId,
+          items: [{ price: tierMeta.stripePriceId! }],
+          default_payment_method: paymentMethods.data[0].id,
+        } as any);
+      }
+
+      await storage.setUserSubscriptionTier(userId, newTierKey);
+      if (priceDiff > 0) await storage.resetUserPlays(userId);
+
+      const message = priceDiff > 0
+        ? `Upgraded to ${tierMeta.label}. $${priceDiff} difference invoiced.`
+        : priceDiff < 0
+        ? `Downgraded to ${tierMeta.label}. Subscription updated.`
+        : `Tier updated to ${tierMeta.label}.`;
+
+      return res.json({ message });
+    } catch (err: any) {
+      console.error("[admin/change-tier]", err.message);
+      return res.status(500).json({ error: err.message || "Failed to change tier" });
+    }
+  });
+
   app.delete("/api/admin/users/:id", requireAdmin, async (req, res) => {
     try {
       const requestingUserId = (req as any).resolvedUserId!;

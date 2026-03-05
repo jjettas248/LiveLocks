@@ -3,7 +3,8 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
-import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle, Trash2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle, Trash2, Loader2 } from "lucide-react";
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
 const TEST_EMAIL_PATTERNS = [
@@ -81,10 +82,18 @@ function AdminLink() {
   );
 }
 
+const CLIENT_TIER_PRICES: Record<string, { label: string; pricePerMonth: number }> = {
+  "":      { label: "Free",                pricePerMonth: 0 },
+  "all":   { label: "Pro ($40/mo)",        pricePerMonth: 40 },
+  "elite": { label: "All Sports ($65/mo)", pricePerMonth: 65 },
+};
+
 export default function AdminPage() {
   const { user, isLoading: authLoading, logout } = useAuth();
   const [, navigate] = useLocation();
   const [activeTab, setActiveTab] = useState<"users" | "feedback">("users");
+  const [tierLoadingId, setTierLoadingId] = useState<number | null>(null);
+  const { toast } = useToast();
 
   const { data: allUsers, isLoading: usersLoading } = useQuery<AdminUser[]>({
     queryKey: ["/api/admin/users"],
@@ -101,6 +110,37 @@ export default function AdminPage() {
       apiRequest("PATCH", `/api/admin/users/${userId}/tier`, { tier }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] }),
   });
+
+  const handleTierChange = async (userId: number, newTierKey: string) => {
+    const u = allUsers?.find(u => u.id === userId);
+    if (!u) return;
+    setTierLoadingId(userId);
+    try {
+      const res = await fetch("/api/admin/change-tier", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, newTierKey }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || "Request failed");
+      }
+      const result = await res.json();
+      await queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      const wasDowngrade =
+        newTierKey === "" ||
+        (CLIENT_TIER_PRICES[newTierKey]?.pricePerMonth ?? 0) <
+        (CLIENT_TIER_PRICES[u.subscriptionTier ?? ""]?.pricePerMonth ?? 0);
+      toast({
+        title: wasDowngrade ? "Tier Downgraded" : "Tier Updated",
+        description: result.message,
+      });
+    } catch (err: any) {
+      toast({ title: "Tier Change Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setTierLoadingId(null);
+    }
+  };
 
   const resetPlaysMutation = useMutation({
     mutationFn: (userId: number) =>
@@ -303,22 +343,24 @@ export default function AdminPage() {
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             {/* Tier selector */}
-                            <div className="relative">
-                              <select
-                                data-testid={`select-tier-${u.id}`}
-                                value={u.subscriptionTier ?? ""}
-                                disabled={u.isAdmin || tierMutation.isPending}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  tierMutation.mutate({ userId: u.id, tier: val === "" ? null : val });
-                                }}
-                                className="text-xs px-2 py-1.5 pr-6 rounded-lg bg-background border border-border text-foreground appearance-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-primary/50"
-                              >
-                                <option value="">Free</option>
-                                <option value="all">Pro ($40/mo)</option>
-                                <option value="elite">All Sports ($65/mo)</option>
-                              </select>
-                              <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground pointer-events-none" />
+                            <div className="relative flex items-center gap-1.5">
+                              <div className="relative">
+                                <select
+                                  data-testid={`select-tier-${u.id}`}
+                                  value={u.subscriptionTier ?? ""}
+                                  disabled={u.isAdmin || tierLoadingId === u.id}
+                                  onChange={(e) => handleTierChange(u.id, e.target.value)}
+                                  className="text-xs px-2 py-1.5 pr-6 rounded-lg bg-background border border-border text-foreground appearance-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-primary/50"
+                                >
+                                  <option value="">Free</option>
+                                  <option value="all">Pro ($40/mo)</option>
+                                  <option value="elite">All Sports ($65/mo)</option>
+                                </select>
+                                <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground pointer-events-none" />
+                              </div>
+                              {tierLoadingId === u.id && (
+                                <Loader2 className="animate-spin w-3 h-3 text-muted-foreground" />
+                              )}
                             </div>
                             {/* Reset plays */}
                             {!u.isAdmin && !u.subscriptionTier && (
