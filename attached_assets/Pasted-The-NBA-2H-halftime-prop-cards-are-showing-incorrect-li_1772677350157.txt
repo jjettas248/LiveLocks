@@ -1,0 +1,216 @@
+The NBA 2H halftime prop cards are showing incorrect 
+lines. Fix the halftime line data to pull from the 
+correct source using only APIs already in the codebase.
+
+---
+
+STEP 1 — AUDIT BEFORE TOUCHING ANYTHING
+
+Scan the codebase and find:
+
+1. Where halftime prop lines currently come from
+   - What API endpoint is being called
+   - What field name is being read for the line value
+   - What the raw API response looks like for a 
+     halftime prop
+
+2. Where "H1: 5", "H1: 9", "H1: 6" values come from
+   - Is this the player's current H1 stat?
+   - Or is this the prop line?
+   - These look like current H1 stats, NOT lines
+   - The line should be something like "O2" in 
+     "Assists O2" meaning the prop line is 2, 
+     not the H1 current stat
+
+3. What APIs are already wired for NBA props:
+   - Check all fetch() calls in the NBA Live tab
+   - Check all fetch() calls in the 2H Plays component
+   - Check all process.env.* with keys related to 
+     props, odds, or lines
+
+Print findings as comment:
+  // HALFTIME LINE AUDIT
+  // Current line source: [field name + API]
+  // H1 stat field: [field name]
+  // Line field: [field name]
+  // Confirmed issue: [describe the bug]
+  // APIs wired for NBA props: [list]
+
+---
+
+STEP 2 — IDENTIFY THE BUG
+
+Based on the screenshot, the visible issue is:
+
+  Card shows: "Assists O2  Live Line  H1: 5"
+  
+  "O2" = the prop line (Over 2 Assists)
+  "H1: 5" = current H1 stat (player has 5 assists 
+             at halftime — this is NOT the line)
+
+The line display and the current stat display 
+appear to be confused or swapped.
+
+Confirm which field is which in the data object:
+  - Find the field storing the prop line value
+    (the number the bet is placed on — e.g. 2.0)
+  - Find the field storing the current H1 stat
+    (how many the player has so far — e.g. 5)
+  - These must NOT be mixed up in the display
+
+Correct display format:
+  "[Market] [Direction][Line]  Live Line  H1: [current stat]"
+  Example: "Assists O2  Live Line  H1: 5"
+  
+  This IS correct formatting — O2 is the line.
+  
+  What IS broken is whether the line value "2" is 
+  coming from the actual live halftime prop line 
+  from the book, or from stale pre-game data.
+
+---
+
+STEP 3 — FIX LINE SOURCE
+
+The halftime prop line must be the LIVE line 
+currently offered by books at halftime.
+
+This is different from the pre-game full game line.
+
+Find where live halftime prop lines are fetched.
+Check if the API being used returns:
+  - Live in-game prop lines (correct)
+  - Pre-game full game prop lines (wrong)
+  - Calculated/estimated lines (wrong)
+
+If the current API call is fetching pre-game lines:
+  Update the API call parameters to request 
+  live/in-game lines instead.
+  
+  Common parameter changes needed:
+    markets parameter: change from pre-game markets 
+    to live/in-game markets
+    
+    Check the existing API docs or response shape 
+    for a "live" or "in_play" parameter and 
+    add it to the existing fetch call.
+
+  Do NOT change the API being used.
+  Do NOT add a new API.
+  Only update the request parameters on the 
+  existing API call.
+
+---
+
+STEP 4 — FIX LINE DISPLAY
+
+After confirming correct data source, fix display:
+
+PROP MARKET BADGE:
+  Format: "[Stat][Direction][Line]"
+  Examples:
+    "Assists O2"      → Over 2 Assists
+    "Pts+Reb O7"      → Over 7 Points+Rebounds
+    "Points O4"       → Over 4 Points
+    "Pts+Reb+Ast U12.5" → Under 12.5 Pts+Reb+Ast
+
+  Badge color:
+    Over: teal bg rgba(0,212,170,0.15) 
+          border rgba(0,212,170,0.3) 
+          text #00d4aa
+    Under: red bg rgba(239,68,68,0.15)
+           border rgba(239,68,68,0.3)
+           text #ef4444
+
+LIVE LINE BADGE:
+  "Live Line" pill: 
+    bg rgba(255,255,255,0.06)
+    border rgba(255,255,255,0.1)
+    text #a1a1aa text-xs
+  This indicates the line shown is the current 
+  live halftime line, not pre-game
+
+H1 CURRENT STAT:
+  "H1: [X]" shows how many the player has so far
+  This is context, not the line
+  Color: #71717a zinc-500 text-xs
+  Only show if current stat > 0
+  If 0: show "H1: 0" in zinc-600 (more muted)
+
+PROBABILITY + EDGE:
+  "[X]%": large font, teal if Over dominant, 
+           red if Under dominant
+  "Over %" or "Under %": zinc-400 text-xs below
+  "Edge: +[X]%": zinc-400 text-xs below that
+
+---
+
+STEP 5 — FIX RANKING ORDER
+
+Cards are ranked #1 through #N by edge size.
+
+Current ranking appears correct (92.9% → 91.8% → 
+91.7% → 89.1% → 88.1%) but verify the sort:
+
+  const sortedPlays = plays.sort((a, b) => 
+    b.engineProb - a.engineProb
+  )
+
+Rank badge (#1, #2, etc.) styling:
+  Circle badge, bg #1d4ed8 blue, text white
+  text-xs font-bold
+  8px border radius
+
+---
+
+STEP 6 — FIX "ADD TO PARLAY" BUTTON
+
+Current button is visible and styled correctly.
+Verify it passes the correct data when tapped:
+
+  onClick={() => addToParlaySlip({
+    playerId: play.playerId,
+    playerName: play.playerName,
+    market: play.market,        // "Assists"
+    direction: play.direction,  // "Over" or "Under"
+    line: play.line,            // 2 (the actual line)
+    engineProb: play.engineProb, // 92.9
+    gameId: play.gameId,
+    sport: "nba",
+    type: "2h_prop",
+    label: `${play.playerName} — 
+            ${play.direction} ${play.line} 
+            ${play.market} — 
+            ${play.engineProb}% confidence`
+  })}
+
+After tap:
+  Button changes to: "✓ Added"
+  bg rgba(0,212,170,0.15)
+  border rgba(0,212,170,0.3)
+  text #00d4aa
+  
+  Tap again to remove:
+  Button returns to "+ Add to Parlay"
+
+---
+
+STEP 7 — GAME HEADER BAR
+
+The top bar shows:
+  "CHA 64 – 43 BOS  HALFTIME  14 plays"
+
+Fix:
+  Score: #ffffff font-bold
+  "HALFTIME" badge: 
+    bg rgba(245,158,11,0.15)
+    border rgba(245,158,11,0.3)
+    text #f59e0b font-semibold text-xs
+    rounded-full px-3 py-1
+  "14 plays" count:
+    #71717a text-xs
+    Updates reactively as plays load
+  
+  Game title clickable:
+    onClick → expand full game card for that matchup
+    Same inline expand behavior as game list rows
