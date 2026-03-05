@@ -111,6 +111,23 @@ Three primary buttons: Over / Under / Spread. Clicking selects the market and up
 - CLV row: "↑ Over" / "↓ Under" / "Even"
 - +Xpp amber pill when edge ≥ 5pp
 
+### Daily Slate Reset System (SHIPPED)
+- `executeSlateReset` in `dashboard.tsx` — clears daily state (notificationLog, parlayPicks, halftimeGroups), forces NCAABAdminTab remount via `ncaabResetKey`, refetches all scoreboard data
+- **Model Performance is NOT cleared** — confidence buckets accumulate indefinitely across days
+- `resetTimerRef` (useRef) — single persistent timer; `rescheduleResetTimer(hours, minutes)` recalculates delay + re-registers timeout after each fire
+- `getResetTime()` — reads from `GET /api/admin/settings` → localStorage fallback → default 6:00 AM EST
+- `NewSlateOverlay` component — full-screen fixed overlay (z-index 100, dark blur bg), pulsing logo, "New Slate Loading" heading, date subtext, teal progress bar (fills over 2.8s), 5-step text cycling every 600ms via `setInterval`, live game count at step 4, enter/exit opacity transitions (200ms in, 300ms out)
+- `RESET_STEPS` array: "Clearing yesterday's slate..." → "Fetching today's NBA games..." → "Fetching today's NCAAB games..." → "Engine ready..." → "Let's go 🔒"
+- **Overlay is rendered outside all tab content** at top of dashboard return JSX
+
+### Configurable Reset Time (Admin — SHIPPED)
+- **`appSettings` table** in DB (id serial PK, `slate_reset_hour` int default 6, `slate_reset_minute` int default 0)
+- `GET /api/admin/settings` → returns `{ slateResetHour, slateResetMinute }` (requireAdmin)
+- `POST /api/admin/settings` → validates 0–23 hour, 0–59 minute, upserts row id=1
+- **Admin Slate Settings section** (`/admin` page, below users/feedback): HH:MM time input + "EST" label + "Save Reset Time" button + "Next reset: [Day] at [TIME] EST" live display
+- `getNextResetDisplay(timeStr)` — pure helper that converts HH:MM → "Friday at 6:00 AM EST"
+- Admin save writes to DB + localStorage; dashboard reads DB first then localStorage then default on mount
+
 ### Team Total Market (SHIPPED)
 - Over/Under team-total buttons embedded in proj rows (rows 4/5 of stat grid)
 - `selectedTeamMarket` state drives a second verdict section below game total verdicts

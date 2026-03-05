@@ -132,6 +132,113 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return Uint8Array.from(Array.from(rawData).map(c => c.charCodeAt(0)));
 }
 
+const RESET_STEPS = [
+  "Clearing yesterday's slate...",
+  "Fetching today's NBA games...",
+  "Fetching today's NCAAB games...",
+  "Engine ready...",
+  "Let's go 🔒",
+];
+
+function NewSlateOverlay({
+  step,
+  steps,
+  date,
+  liveCount,
+  visible,
+}: {
+  step: number;
+  steps: string[];
+  date: Date;
+  liveCount: number;
+  visible: boolean;
+}) {
+  const progressPct = Math.min(100, (step / (steps.length - 1)) * 100);
+  const dateStr = date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+
+  return (
+    <div
+      data-testid="new-slate-overlay"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 100,
+        background: "rgba(0,0,0,0.92)",
+        backdropFilter: "blur(12px)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "24px",
+        opacity: visible ? 1 : 0,
+        transition: "opacity 300ms ease",
+        pointerEvents: visible ? "auto" : "none",
+      }}
+    >
+      {/* Pulsing logo */}
+      <div style={{ animation: "slateLogoPulse 2s ease-in-out infinite" }}>
+        <img
+          src={propPulseLogo}
+          alt="LiveLocks"
+          style={{ width: 64, height: 64, borderRadius: 16, boxShadow: "0 0 32px rgba(0,212,170,0.35)" }}
+        />
+      </div>
+
+      {/* Heading */}
+      <div style={{ textAlign: "center" }}>
+        <p style={{ color: "#ffffff", fontWeight: 900, fontSize: 28, letterSpacing: "-0.02em", margin: 0, lineHeight: 1.1 }}>
+          New Slate Loading
+        </p>
+        <p style={{ color: "#71717a", fontSize: 14, fontWeight: 400, marginTop: 6 }}>{dateStr}</p>
+      </div>
+
+      {/* Progress section */}
+      <div style={{ width: "100%", maxWidth: 280, display: "flex", flexDirection: "column", gap: 10 }}>
+        {/* Progress bar track */}
+        <div style={{ height: 3, background: "#27272a", borderRadius: 99, overflow: "hidden" }}>
+          <div
+            style={{
+              height: "100%",
+              width: `${progressPct}%`,
+              background: "#00d4aa",
+              borderRadius: 99,
+              transition: "width 400ms ease",
+            }}
+          />
+        </div>
+        {/* Step text */}
+        <p
+          data-testid="slate-reset-step"
+          style={{ color: "#a1a1aa", fontSize: 13, fontFamily: "monospace", textAlign: "center", minHeight: 20, transition: "opacity 200ms ease" }}
+        >
+          {steps[step] ?? ""}
+        </p>
+      </div>
+
+      {/* Live count (shows at step 4+) */}
+      {step >= 4 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {liveCount > 0 ? (
+            <>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#00d4aa", display: "inline-block" }} />
+              <span style={{ color: "#00d4aa", fontSize: 13 }}>{liveCount} game{liveCount !== 1 ? "s" : ""} live now</span>
+            </>
+          ) : (
+            <span style={{ color: "#71717a", fontSize: 13 }}>Slate loaded — check back at tipoff</span>
+          )}
+        </div>
+      )}
+
+      <style>{`
+        @keyframes slateLogoPulse {
+          0%, 100% { transform: scale(1.0); }
+          50% { transform: scale(1.08); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const { user, logout } = useAuth();
   const [, navigate] = useLocation();
@@ -142,6 +249,83 @@ export default function Dashboard() {
   const { data: players, isLoading: isPlayersLoading } = usePlayers();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
   const { data: liveGames, isLoading: isGamesLoading, refetch: refetchGames } = useLiveGames();
+
+  const [showResetOverlay, setShowResetOverlay] = useState(false);
+  const [overlayVisible, setOverlayVisible] = useState(false);
+  const [resetStep, setResetStep] = useState(0);
+  const [ncaabResetKey, setNcaabResetKey] = useState(0);
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const getResetTime = async (): Promise<{ hours: number; minutes: number }> => {
+    try {
+      const res = await fetch("/api/admin/settings", { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.slateResetHour != null) return { hours: data.slateResetHour, minutes: data.slateResetMinute ?? 0 };
+      }
+    } catch (_) {}
+    try {
+      const stored = localStorage.getItem("slateResetTime");
+      if (stored) return JSON.parse(stored);
+    } catch (_) {}
+    return { hours: 6, minutes: 0 };
+  };
+
+  const rescheduleResetTimer = useRef<(h: number, m: number) => void>(() => {});
+  rescheduleResetTimer.current = (hours: number, minutes: number) => {
+    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+    const resetHourUTC = hours + 5;
+    const next = new Date();
+    next.setUTCHours(resetHourUTC, minutes, 0, 0);
+    if (new Date() >= next) next.setUTCDate(next.getUTCDate() + 1);
+    const delay = next.getTime() - Date.now();
+    console.log(`[RESET] Rescheduled: ${hours}:${String(minutes).padStart(2, "0")} EST (in ${Math.round(delay / 60000)}m)`);
+    resetTimerRef.current = setTimeout(() => {
+      executeSlateReset.current();
+      rescheduleResetTimer.current(hours, minutes);
+    }, delay);
+  };
+
+  const executeSlateReset = useRef<() => void>(() => {});
+  executeSlateReset.current = async () => {
+    setShowResetOverlay(true);
+    setResetStep(0);
+    setTimeout(() => setOverlayVisible(true), 10);
+
+    const stepInterval = setInterval(() => {
+      setResetStep(prev => {
+        if (prev >= RESET_STEPS.length - 1) { clearInterval(stepInterval); return prev; }
+        return prev + 1;
+      });
+    }, 600);
+
+    setNotificationLog([]);
+    localStorage.setItem("lastLogDate", new Date().toDateString());
+    setParlayPicks([]);
+    setVisibleHalftimeGroups([]);
+    setNcaabResetKey(k => k + 1);
+
+    await Promise.all([
+      refetchGames(),
+      queryClient.invalidateQueries({ queryKey: ["/api/ncaab/plays"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/ncaab/games"] }),
+    ]);
+
+    await new Promise(r => setTimeout(r, 2800));
+
+    setOverlayVisible(false);
+    setTimeout(() => { setShowResetOverlay(false); setResetStep(0); }, 300);
+
+    localStorage.setItem("lastSlateReset", new Date().toISOString());
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    getResetTime().then(({ hours, minutes }) => {
+      if (!cancelled) rescheduleResetTimer.current(hours, minutes);
+    });
+    return () => { cancelled = true; if (resetTimerRef.current) clearTimeout(resetTimerRef.current); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const syncRostersMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/sync-rosters"),
@@ -1010,6 +1194,15 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen pb-20 bg-background">
+      {showResetOverlay && (
+        <NewSlateOverlay
+          step={resetStep}
+          steps={RESET_STEPS}
+          date={new Date()}
+          liveCount={liveGames?.filter((g: any) => g.status === "in" || g.status === "live" || g.isLive).length ?? 0}
+          visible={overlayVisible}
+        />
+      )}
       {/* Header */}
       <header className="border-b border-border/40 bg-background/80 backdrop-blur-xl sticky top-0 z-50">
         <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -2948,6 +3141,7 @@ export default function Dashboard() {
         {/* NCAAB Tab — live data for All Sports, Elite, and Admin */}
         {activeTab === "ncaab" && user?.isAdmin && (
           <NCAABAdminTab
+            key={ncaabResetKey}
             isAdmin={user?.isAdmin ?? false}
             expandToGameId={expandToGameId}
             onAddToParlay={(pick) => {

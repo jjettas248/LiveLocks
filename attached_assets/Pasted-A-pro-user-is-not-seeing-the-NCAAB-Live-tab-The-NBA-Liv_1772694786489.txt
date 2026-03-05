@@ -1,0 +1,276 @@
+A pro user is not seeing the NCAAB Live tab.
+The NBA Live tab is showing but NCAAB is missing 
+entirely from the tab bar.
+
+---
+
+STEP 1 — AUDIT TAB RENDERING FOR THIS USER
+
+Before any code changes, add temporary debug 
+logging to understand exactly what this user's 
+session looks like:
+
+  // Add to the component that renders tabs
+  console.log("[TAB RENDER] User object:", {
+    id: user?.id,
+    email: user?.email,
+    tier: user?.tier,
+    plan: user?.plan,
+    subscription: user?.subscription,
+    role: user?.role,
+    accessLevel: user?.accessLevel,
+    rawTierField: user // log full object
+  })
+  console.log("[TAB RENDER] hasProAccess:", 
+    hasProAccess(user?.tier))
+  console.log("[TAB RENDER] normalizeTier result:", 
+    normalizeTier(user?.tier))
+  console.log("[TAB RENDER] Tabs being rendered:", 
+    tabs.map(t => ({ id: t.id, locked: t.locked })))
+
+This will show exactly what tier value the 
+session is holding and whether hasProAccess 
+is returning true or false.
+
+---
+
+STEP 2 — FIX TAB ARRAY CONSTRUCTION
+
+Find where the tabs array is built.
+It currently likely looks something like:
+
+  const tabs = [
+    { id: "nba", label: "NBA Live", locked: false },
+    { id: "ncaab", label: "NCAAB Live", 
+      locked: !hasProAccess },
+    { id: "analytics", label: "Analytics", 
+      locked: false },
+    { id: "mlb", label: "MLB Live", locked: true }
+  ]
+
+Three possible bugs — check all three:
+
+BUG A: hasProAccess is called before user loads
+  If user is null/undefined on first render,
+  hasProAccess(undefined) returns false → locked.
+  If session then loads asynchronously, the tab 
+  may not re-render.
+  
+  Fix: use loading state
+    const isLoading = !user && sessionStatus !== "error"
+    
+    if (isLoading) {
+      // Render skeleton tabs or wait
+      // Do NOT lock tabs during loading
+    }
+
+BUG B: hasProAccess receives wrong field
+  User object may have tier nested differently:
+    user.tier vs user.user?.tier vs 
+    user.metadata?.tier vs user.publicMetadata?.tier
+  
+  Fix: try all locations:
+    const userTier = 
+      user?.tier ??
+      user?.user?.tier ??
+      user?.metadata?.tier ??
+      user?.publicMetadata?.tier ??
+      user?.subscription?.tier ??
+      null
+    
+    const proAccess = hasProAccess(userTier)
+
+BUG C: NCAAB tab conditionally hidden vs locked
+  Tab may be HIDDEN (not rendered) rather than 
+  locked (rendered with lock icon).
+  
+  Find if there is a condition like:
+    {hasProAccess && <Tab id="ncaab" />}
+  
+  This removes the tab entirely for free users
+  but also means a sync bug hides it for pro users.
+  
+  Fix: always render all tabs, control via locked prop:
+    <Tab id="ncaab" locked={!proAccess} />
+  
+  Never conditionally remove NCAAB tab from DOM.
+  Always render it. Only toggle locked state.
+
+---
+
+STEP 3 — FIX SESSION NOT REFRESHING AFTER UPGRADE
+
+This user was upgraded via admin but their session
+still shows old tier. Same issue fixed previously
+but may not have deployed correctly.
+
+Verify the fix is actually running:
+
+  1. Check if requiresRefresh flag was set in DB
+     for this specific user after admin upgrade.
+     
+     In admin panel or DB, check:
+       user.requiresRefresh === true ?
+     
+     If it was never set: the admin change-tier 
+     route is not writing the flag.
+     Fix: add to /api/admin/change-tier after update:
+       await updateUser(userId, {
+         requiresRefresh: true,
+         isNewProUser: true
+       })
+
+  2. Check if session callback is reading 
+     requiresRefresh and re-fetching tier.
+     
+     If session callback was added but is not 
+     running: check that the auth config file 
+     was actually saved and deployed in Replit.
+
+  3. Add a fallback: re-fetch user on every 
+     page load unconditionally (not just on focus):
+     
+     useEffect(() => {
+       // Always re-fetch user data on mount
+       // to catch any tier changes since last session
+       refreshUserData()
+     }, [])
+     
+     Where refreshUserData() calls your existing 
+     session refresh / update method.
+
+---
+
+STEP 4 — ADD /api/me ENDPOINT AS FALLBACK
+
+If session refresh is unreliable, add a direct 
+user data endpoint that always returns fresh DB data:
+
+  // /api/me  GET
+  export async function GET(req) {
+    // Get user identity from session/token
+    const session = await getServerSession(req)
+    // or however auth works in this codebase
+    
+    if (!session?.user?.email) {
+      return Response.json(
+        { error: "Not authenticated" }, 
+        { status: 401 }
+      )
+    }
+    
+    // Always read from DB — never from session cache
+    const user = await db.user.findUnique({
+      where: { email: session.user.email },
+      select: {
+        id: true,
+        email: true,
+        tier: true,
+        isNewProUser: true,
+        upgradedAt: true,
+        createdAt: true
+      }
+    })
+    
+    if (!user) {
+      return Response.json(
+        { error: "User not found" }, 
+        { status: 404 }
+      )
+    }
+    
+    return Response.json({
+      ...user,
+      normalizedTier: normalizeTier(user.tier),
+      hasProAccess: hasProAccess(user.tier)
+    })
+  }
+
+  Call /api/me on mount to get fresh tier:
+  
+    useEffect(() => {
+      const fetchFreshUser = async () => {
+        try {
+          const res = await fetch("/api/me")
+          if (!res.ok) return
+          const freshUser = await res.json()
+          
+          // If tier differs from session, update local state
+          if (freshUser.normalizedTier !== 
+              normalizeTier(sessionUser?.tier)) {
+            setUserTier(freshUser.normalizedTier)
+            setHasProAccess(freshUser.hasProAccess)
+          }
+        } catch (err) {
+          console.error("[/api/me] fetch failed:", err)
+        }
+      }
+      fetchFreshUser()
+    }, [])
+
+---
+
+STEP 5 — NCAAB TAB ALWAYS IN DOM
+
+Regardless of pro access status, the NCAAB Live 
+tab must always be visible in the tab bar.
+
+Free users: tab visible, lock icon, clicking shows 
+  upgrade prompt instead of content.
+
+Pro users: tab visible, no lock, full content.
+
+If NCAAB tab is currently not rendering at all 
+for this user: it means the component is 
+conditionally removed rather than conditionally 
+locked. Find that condition and change it.
+
+  // WRONG — removes tab from DOM:
+  {hasProAccess && (
+    <TabButton id="ncaab" label="NCAAB Live" />
+  )}
+  
+  // CORRECT — always in DOM, locked state varies:
+  <TabButton 
+    id="ncaab" 
+    label="NCAAB Live"
+    locked={!hasProAccess}
+    onClick={() => {
+      if (!hasProAccess) {
+        showUpgradeModal()
+        return
+      }
+      setActiveTab("ncaab")
+    }}
+  />
+
+---
+
+STEP 6 — IMMEDIATE FIX FOR THIS SPECIFIC USER
+
+Without waiting for a code deploy, force this 
+user's tier in the DB directly via admin panel:
+
+  Add a "Verify Access" button in admin user table
+  that shows current DB tier vs session tier:
+  
+    onClick: fetch /api/admin/verify-access?userId=X
+    
+    /api/admin/verify-access:
+      Read user from DB
+      Return: {
+        dbTier: user.tier,
+        normalizedTier: normalizeTier(user.tier),
+        hasProAccess: hasProAccess(user.tier),
+        requiresRefresh: user.requiresRefresh,
+        lastUpdated: user.updatedAt
+      }
+    
+    Show result in a tooltip/popover on the button:
+      "DB Tier: pro_nba ✓"
+      "Normalized: pro_nba ✓" 
+      "Pro Access: true ✓"
+      "Requires Refresh: false"
+      
+      If hasProAccess is false despite being pro:
+        Show red "✗" and "Force Sync" button inline

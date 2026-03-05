@@ -1,0 +1,367 @@
+Three updates to the daily slate reset and 
+Model Performance display.
+
+---
+
+1. KEEP MODEL PERFORMANCE CUMULATIVE
+
+Model Performance confidence buckets must NEVER 
+reset at 6 AM or at any scheduled reset.
+
+In executeSlateReset, confirm these are NOT cleared:
+  - Confidence bucket counts (60-69%, 70-79%, etc.)
+  - Win rate per bucket
+  - Total settled count
+  - Recent Plays last 100 table
+
+Remove any reset of Model Performance data 
+from executeSlateReset if it exists.
+
+The only things that reset at 6 AM:
+  - Game slates (scoreboard re-fetch)
+  - Plays lists (live props, 2H plays)
+  - Parlay slip
+  - Notification log
+  - Dedup sets
+
+Model Performance accumulates indefinitely 
+across all days so users can answer 
+"what confidence level should I use?"
+by looking at historical hit rates per bucket.
+
+---
+
+2. FULL-SCREEN "NEW SLATE" OVERLAY ON RESET
+
+When executeSlateReset fires, show a full-screen 
+overlay instead of just a toast.
+
+OVERLAY COMPONENT:
+
+  Position: fixed, inset 0
+  z-index: 100 (above everything)
+  bg: rgba(0,0,0,0.92)
+  backdrop-filter: blur(12px)
+  display: flex, flex-direction: column
+  align-items: center, justify-content: center
+  gap: 24px
+
+  CONTENT (centered):
+
+    Top — animated logo/icon:
+      LiveLocks logo or teal pulsing circle
+      Size: 64px
+      Animation: slow pulse scale 1.0→1.08→1.0 
+                 2s infinite ease-in-out
+
+    Middle — main text:
+      "New Slate Loading"
+      #ffffff font-black text-3xl
+      Letter spacing: -0.02em
+
+    Sub text:
+      "[Weekday], [Month] [Day]"
+      e.g. "Friday, March 6"
+      #71717a text-base font-normal
+      Date computed from new Date() at reset time
+
+    Progress section:
+      Animated progress bar
+      Width: 280px max
+      Track: #27272a height 3px rounded-full
+      Fill: #00d4aa
+      Animation: fill left to right over 2.5s linear
+      
+      Below bar:
+        Steps text cycling every ~600ms:
+          Step 1 (0-0.6s):   "Clearing yesterday's slate..."
+          Step 2 (0.6-1.2s): "Fetching today's NBA games..."
+          Step 3 (1.2-1.8s): "Fetching today's NCAAB games..."
+          Step 4 (1.8-2.4s): "Engine ready..."
+          Step 5 (2.4-2.8s): "Let's go 🔒"
+        
+        Text: #a1a1aa text-sm font-mono
+        Fade transition between steps: 200ms
+
+    Bottom — live count (appears at step 4):
+      If live games found:
+        Green dot + "[N] games live now"
+        #00d4aa text-sm
+      If no live games:
+        "[N] games on today's slate"
+        #71717a text-sm
+
+TIMING:
+  Overlay appears: immediately when reset fires
+  Progress completes: 2.8 seconds
+  Overlay dismisses: 300ms fade-out after complete
+  Total duration: ~3.1 seconds
+
+STEP CYCLING LOGIC:
+
+  const RESET_STEPS = [
+    "Clearing yesterday's slate...",
+    "Fetching today's NBA games...",
+    "Fetching today's NCAAB games...",
+    "Engine ready...",
+    "Let's go 🔒"
+  ]
+
+  const [resetStep, setResetStep] = useState(0)
+  const [showResetOverlay, setShowResetOverlay] = 
+    useState(false)
+
+  const executeSlateReset = async () => {
+    setShowResetOverlay(true)
+    setResetStep(0)
+    
+    // Cycle through steps
+    const stepInterval = setInterval(() => {
+      setResetStep(prev => {
+        if (prev >= RESET_STEPS.length - 1) {
+          clearInterval(stepInterval)
+          return prev
+        }
+        return prev + 1
+      })
+    }, 600)
+    
+    // Run actual reset operations in parallel
+    await Promise.all([
+      clearDailyState(),
+      fetchNBAScoreboard(),
+      fetchNCAABScoreboard()
+    ])
+    
+    // Wait for animation to complete
+    await new Promise(r => setTimeout(r, 2800))
+    
+    // Fade out overlay
+    setTimeout(() => {
+      setShowResetOverlay(false)
+      setResetStep(0)
+    }, 300)
+    
+    // Save reset timestamp
+    localStorage.setItem(
+      "lastSlateReset",
+      new Date().toISOString()
+    )
+  }
+
+OVERLAY ENTER/EXIT ANIMATION:
+  Enter: opacity 0 → 1, 200ms ease
+  Exit: opacity 1 → 0, 300ms ease
+  Use CSS transition or Framer if available
+
+RENDER IN ROOT LAYOUT:
+  Place overlay outside all tab content:
+  
+    <>
+      {showResetOverlay && (
+        <NewSlateOverlay 
+          step={resetStep}
+          steps={RESET_STEPS}
+          date={new Date()}
+          liveCount={liveGameCount}
+        />
+      )}
+      {/* rest of app */}
+    </>
+
+---
+
+3. CONFIGURABLE RESET TIME IN ADMIN PANEL
+
+Admin can change the daily reset time from 
+the Admin panel.
+
+FIND the Admin panel component.
+Add a "Slate Settings" section.
+
+---
+
+ADMIN SLATE SETTINGS UI
+
+Position: new section in Admin panel
+Below existing user table and audit log
+
+Section header:
+  "⚙ Slate Settings"
+  font-semibold white text-base
+  border-top: 1px solid #27272a
+  padding-top: 24px margin-top: 24px
+
+RESET TIME SETTING:
+
+  Label: "Daily Slate Reset Time"
+  Sub: "Games and plays reset at this time (EST)"
+  zinc-400 text-xs
+
+  Input row:
+    Time input: HH:MM format
+    Default value: "06:00"
+    
+    <input
+      type="time"
+      value={resetTime}
+      onChange={e => setResetTime(e.target.value)}
+      style={{
+        background: "#181818",
+        border: "1px solid #27272a",
+        color: "#ffffff",
+        borderRadius: "8px",
+        padding: "8px 12px",
+        fontSize: "14px",
+        fontFamily: "monospace",
+        width: "120px"
+      }}
+    />
+    
+    Timezone label right of input:
+      "EST" zinc-400 text-sm ml-2
+
+  "Save Reset Time" button:
+    bg rgba(0,212,170,0.15)
+    border rgba(0,212,170,0.3)
+    text #00d4aa text-sm font-semibold
+    rounded-lg px-4 py-2 ml-3
+    onClick: saveResetTime(resetTime)
+
+SAVE RESET TIME:
+
+  Store in DB and localStorage:
+
+    const saveResetTime = async (timeStr) => {
+      // timeStr format: "06:00" or "05:30"
+      const [hours, minutes] = timeStr
+        .split(":").map(Number)
+      
+      // Save to DB via API
+      await fetch("/api/admin/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          slateResetHour: hours,
+          slateResetMinute: minutes
+        })
+      })
+      
+      // Save to localStorage as backup
+      localStorage.setItem(
+        "slateResetTime",
+        JSON.stringify({ hours, minutes })
+      )
+      
+      // Re-schedule the reset timer with new time
+      rescheduleResetTimer(hours, minutes)
+      
+      showToast(
+        `✓ Reset time saved — ` +
+        `${timeStr} EST daily`,
+        "success",
+        4000
+      )
+    }
+
+READ RESET TIME ON LOAD:
+
+  const getResetTime = async () => {
+    // Try DB first
+    try {
+      const res = await fetch("/api/admin/settings")
+      const data = await res.json()
+      if (data.slateResetHour != null) {
+        return {
+          hours: data.slateResetHour,
+          minutes: data.slateResetMinute ?? 0
+        }
+      }
+    } catch (e) {}
+    
+    // Fallback to localStorage
+    try {
+      const stored = localStorage.getItem(
+        "slateResetTime"
+      )
+      if (stored) return JSON.parse(stored)
+    } catch (e) {}
+    
+    // Default: 6 AM EST
+    return { hours: 6, minutes: 0 }
+  }
+
+DYNAMIC RESET SCHEDULING:
+
+  Replace hardcoded 11:00 UTC with dynamic calc:
+
+  const getNextResetTime = async () => {
+    const { hours, minutes } = await getResetTime()
+    
+    // Convert EST to UTC: add 5 hours
+    // EST = UTC-5, so 6 AM EST = 11 AM UTC
+    const resetHourUTC = hours + 5
+    const resetMinuteUTC = minutes
+    
+    const next = new Date()
+    next.setUTCHours(resetHourUTC, resetMinuteUTC, 0, 0)
+    
+    if (new Date() >= next) {
+      next.setUTCDate(next.getUTCDate() + 1)
+    }
+    
+    return next
+  }
+
+RESCHEDULE ON CHANGE:
+
+  const rescheduleResetTimer = (hours, minutes) => {
+    // Clear existing timer
+    if (resetTimerRef.current) {
+      clearTimeout(resetTimerRef.current)
+    }
+    
+    // Calculate new delay
+    const resetHourUTC = hours + 5
+    const next = new Date()
+    next.setUTCHours(resetHourUTC, minutes, 0, 0)
+    if (new Date() >= next) {
+      next.setUTCDate(next.getUTCDate() + 1)
+    }
+    
+    const delay = next.getTime() - Date.now()
+    
+    resetTimerRef.current = setTimeout(() => {
+      executeSlateReset()
+      rescheduleResetTimer(hours, minutes)
+    }, delay)
+    
+    console.log(
+      `[RESET] Rescheduled: ` +
+      `${hours}:${String(minutes).padStart(2,"0")} EST ` +
+      `(in ${Math.round(delay/60000)}m)`
+    )
+  }
+
+  Store timer in ref so it persists:
+    const resetTimerRef = useRef(null)
+
+/api/admin/settings ENDPOINT:
+
+  GET: return current settings from DB
+  POST: save settings to DB
+  
+  Settings stored in DB as a single row:
+    slateResetHour: integer (default 6)
+    slateResetMinute: integer (default 0)
+  
+  Use existing DB client to read/write.
+  Create settings table/collection if needed.
+
+CURRENT TIME DISPLAY IN ADMIN:
+
+  Below the time input, show:
+    "Next reset: [Day] at [TIME] EST"
+    e.g. "Next reset: Friday at 6:00 AM EST"
+    zinc-500 text-xs
+    Updates reactively when time is changed

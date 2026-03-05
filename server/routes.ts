@@ -208,6 +208,34 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/admin/settings", requireAdmin, async (_req, res) => {
+    try {
+      const settings = await storage.getAppSettings();
+      return res.json(settings);
+    } catch (err) {
+      console.error("[admin/settings GET]", err);
+      return res.status(500).json({ error: "Failed to fetch settings" });
+    }
+  });
+
+  app.post("/api/admin/settings", requireAdmin, async (req, res) => {
+    try {
+      const { slateResetHour, slateResetMinute } = req.body as { slateResetHour?: number; slateResetMinute?: number };
+      if (slateResetHour == null || typeof slateResetHour !== "number" || slateResetHour < 0 || slateResetHour > 23) {
+        return res.status(400).json({ error: "slateResetHour must be 0–23" });
+      }
+      const minute = slateResetMinute ?? 0;
+      if (typeof minute !== "number" || minute < 0 || minute > 59) {
+        return res.status(400).json({ error: "slateResetMinute must be 0–59" });
+      }
+      await storage.saveAppSettings(slateResetHour, minute);
+      return res.json({ success: true, slateResetHour, slateResetMinute: minute });
+    } catch (err) {
+      console.error("[admin/settings POST]", err);
+      return res.status(500).json({ error: "Failed to save settings" });
+    }
+  });
+
   app.get("/api/admin/feedback", requireAdmin, async (_req, res) => {
     try {
       const rows = await storage.getAllFeedback();

@@ -213,6 +213,12 @@ export interface CorrelationNote {
   explanation: string;
 }
 
+export const appSettings = pgTable("app_settings", {
+  id: serial("id").primaryKey(),
+  slateResetHour: integer("slate_reset_hour").notNull().default(6),
+  slateResetMinute: integer("slate_reset_minute").notNull().default(0),
+});
+
 export const feedback = pgTable("feedback", {
   id: serial("id").primaryKey(),
   userId: integer("user_id"),

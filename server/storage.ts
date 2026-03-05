@@ -4,6 +4,7 @@ import {
   teamDefense,
   users,
   feedback,
+  appSettings,
   halftimePlayAlerts,
   playResults,
   type Player,
@@ -98,6 +99,8 @@ export interface IStorage {
   savePlayResult(alertId: number, actualStat: number, hit: boolean): Promise<void>;
   getAnalyticsSummary(): Promise<AnalyticsSummary>;
   getRecentPlayAlerts(limit?: number): Promise<PlayAlertWithResult[]>;
+  getAppSettings(): Promise<{ slateResetHour: number; slateResetMinute: number }>;
+  saveAppSettings(hour: number, minute: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -591,6 +594,21 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(halftimePlayAlerts.createdAt))
       .limit(limit);
     return rows as PlayAlertWithResult[];
+  }
+
+  async getAppSettings(): Promise<{ slateResetHour: number; slateResetMinute: number }> {
+    const [row] = await db.select().from(appSettings).where(eq(appSettings.id, 1));
+    if (row) return { slateResetHour: row.slateResetHour, slateResetMinute: row.slateResetMinute };
+    return { slateResetHour: 6, slateResetMinute: 0 };
+  }
+
+  async saveAppSettings(hour: number, minute: number): Promise<void> {
+    const [existing] = await db.select().from(appSettings).where(eq(appSettings.id, 1));
+    if (existing) {
+      await db.update(appSettings).set({ slateResetHour: hour, slateResetMinute: minute }).where(eq(appSettings.id, 1));
+    } else {
+      await db.insert(appSettings).values({ id: 1, slateResetHour: hour, slateResetMinute: minute });
+    }
   }
 }
 

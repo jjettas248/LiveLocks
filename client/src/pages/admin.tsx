@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
-import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle, Trash2, Loader2 } from "lucide-react";
+import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle, Trash2, Loader2, Settings } from "lucide-react";
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
 const TEST_EMAIL_PATTERNS = [
@@ -88,12 +88,60 @@ const CLIENT_TIER_PRICES: Record<string, { label: string; pricePerMonth: number 
   "elite": { label: "All Sports ($65/mo)", pricePerMonth: 65 },
 };
 
+function getNextResetDisplay(timeStr: string): string {
+  const [h, m] = timeStr.split(":").map(Number);
+  if (isNaN(h) || isNaN(m)) return "";
+  const resetHourUTC = h + 5;
+  const next = new Date();
+  next.setUTCHours(resetHourUTC, m, 0, 0);
+  if (new Date() >= next) next.setUTCDate(next.getUTCDate() + 1);
+  const dayName = next.toLocaleDateString("en-US", { weekday: "long", timeZone: "America/New_York" });
+  const timeLabel = `${h % 12 === 0 ? 12 : h % 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+  return `Next reset: ${dayName} at ${timeLabel} EST`;
+}
+
 export default function AdminPage() {
   const { user, isLoading: authLoading, logout } = useAuth();
   const [, navigate] = useLocation();
   const [activeTab, setActiveTab] = useState<"users" | "feedback">("users");
   const [tierLoadingId, setTierLoadingId] = useState<number | null>(null);
   const { toast } = useToast();
+  const [resetTime, setResetTime] = useState("06:00");
+  const [resetTimeSaving, setResetTimeSaving] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/admin/settings", { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.slateResetHour != null) {
+          const h = String(data.slateResetHour).padStart(2, "0");
+          const m = String(data.slateResetMinute ?? 0).padStart(2, "0");
+          setResetTime(`${h}:${m}`);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const saveResetTime = async (timeStr: string) => {
+    const [hours, minutes] = timeStr.split(":").map(Number);
+    if (isNaN(hours) || isNaN(minutes)) return;
+    setResetTimeSaving(true);
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ slateResetHour: hours, slateResetMinute: minutes }),
+      });
+      if (!res.ok) throw new Error("Failed");
+      localStorage.setItem("slateResetTime", JSON.stringify({ hours, minutes }));
+      toast({ title: `Reset time saved — ${timeStr} EST daily` });
+    } catch {
+      toast({ title: "Failed to save reset time", variant: "destructive" });
+    } finally {
+      setResetTimeSaving(false);
+    }
+  };
 
   const { data: allUsers, isLoading: usersLoading } = useQuery<AdminUser[]>({
     queryKey: ["/api/admin/users"],
@@ -430,6 +478,72 @@ export default function AdminPage() {
             )}
           </div>
         )}
+        {/* Slate Settings */}
+        <div className="bg-card border border-border rounded-xl p-5" data-testid="slate-settings-section">
+          <div className="flex items-center gap-2 mb-1" style={{ borderTop: "none" }}>
+            <Settings className="w-4 h-4 text-primary" />
+            <h3 className="text-sm font-semibold text-foreground">Slate Settings</h3>
+          </div>
+          <p className="text-xs text-muted-foreground mb-4">Configure when the daily game slate resets.</p>
+
+          <div className="space-y-3">
+            <div>
+              <p className="text-sm font-medium text-foreground mb-0.5">Daily Slate Reset Time</p>
+              <p className="text-xs text-muted-foreground mb-3">Games and plays reset at this time (EST)</p>
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <input
+                    data-testid="input-reset-time"
+                    type="time"
+                    value={resetTime}
+                    onChange={e => setResetTime(e.target.value)}
+                    style={{
+                      background: "#181818",
+                      border: "1px solid #27272a",
+                      color: "#ffffff",
+                      borderRadius: "8px",
+                      padding: "8px 12px",
+                      fontSize: "14px",
+                      fontFamily: "monospace",
+                      width: "120px",
+                    }}
+                  />
+                  <span className="text-sm text-muted-foreground">EST</span>
+                </div>
+                <button
+                  data-testid="button-save-reset-time"
+                  onClick={() => saveResetTime(resetTime)}
+                  disabled={resetTimeSaving}
+                  style={{
+                    background: "rgba(0,212,170,0.15)",
+                    border: "1px solid rgba(0,212,170,0.3)",
+                    color: "#00d4aa",
+                    fontSize: "13px",
+                    fontWeight: 600,
+                    borderRadius: "8px",
+                    padding: "8px 16px",
+                    cursor: resetTimeSaving ? "not-allowed" : "pointer",
+                    opacity: resetTimeSaving ? 0.6 : 1,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                  }}
+                >
+                  {resetTimeSaving && <Loader2 className="w-3 h-3 animate-spin" />}
+                  Save Reset Time
+                </button>
+              </div>
+              <p
+                data-testid="text-next-reset"
+                className="text-xs mt-2"
+                style={{ color: "#71717a" }}
+              >
+                {getNextResetDisplay(resetTime)}
+              </p>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   );
