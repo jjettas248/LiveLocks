@@ -80,6 +80,16 @@ interface TorvikStats {
   efgPct: number; tovPct: number; orbPct: number; ftRate: number;
   barthag: number; rank: number; source: string;
 }
+interface TorvikTeamDetail {
+  homeAdjO: number | null; homeAdjD: number | null;
+  awayAdjO: number | null; awayAdjD: number | null;
+  last10: string | null; source: string;
+}
+interface CBBReferenceData {
+  wins: number | null; losses: number | null;
+  srs: number | null; sos: number | null;
+  confRecord: string | null; source: string;
+}
 interface ActionNetworkData {
   overPct: number | null; underPct: number | null;
   overMoney: number | null; underMoney: number | null;
@@ -110,6 +120,8 @@ interface CompositeEngineResult {
 interface EnrichedGameData {
   homeTeam: string; awayTeam: string;
   torvik: { home: TorvikStats | null; away: TorvikStats | null };
+  torvikDetail: { home: TorvikTeamDetail | null; away: TorvikTeamDetail | null };
+  cbbRef: { home: CBBReferenceData | null; away: CBBReferenceData | null };
   actionNetwork: ActionNetworkData | null;
   vegasInsider: VegasInsiderData | null;
   prizePicks: PropsImplied | null;
@@ -2795,8 +2807,32 @@ interface NCAABAdminTabProps {
   expandToGameId?: string | null;
 }
 
-export function NCAABAdminTab({ onAddToParlay, expandToGameId }: NCAABAdminTabProps) {
+export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABAdminTabProps) {
   const [ncaabSubTab, setNcaabSubTab] = useState<"live" | "halftime">("live");
+  const [cacheClearPending, setCacheClearPending] = useState(false);
+  const [cacheClearMsg, setCacheClearMsg] = useState<string | null>(null);
+
+  const handleClearEnrichmentCache = async () => {
+    if (cacheClearPending) return;
+    setCacheClearPending(true);
+    setCacheClearMsg(null);
+    try {
+      const res = await fetch("/api/ncaab/admin/cache-clear", { method: "POST" });
+      const data = await res.json() as any;
+      if (res.ok) {
+        setCacheClearMsg(`Cleared · ${data.stats?.games ?? 0} games flushed`);
+        setTimeout(() => setCacheClearMsg(null), 4000);
+      } else {
+        setCacheClearMsg("Clear failed");
+        setTimeout(() => setCacheClearMsg(null), 3000);
+      }
+    } catch {
+      setCacheClearMsg("Network error");
+      setTimeout(() => setCacheClearMsg(null), 3000);
+    } finally {
+      setCacheClearPending(false);
+    }
+  };
 
   // ── Toast state (build step 1: queue + stacking + dismiss timers) ────────────
   const [toasts, setToasts]                 = useState<ToastItem[]>([]);
@@ -3080,6 +3116,23 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId }: NCAABAdminTabPr
         >
           <RefreshCw className={`w-3.5 h-3.5 text-muted-foreground ${loading ? "animate-spin" : ""}`} />
         </button>
+        {isAdmin && (
+          <button
+            data-testid="ncaab-cache-clear"
+            onClick={handleClearEnrichmentCache}
+            disabled={cacheClearPending}
+            title="Clear analytics enrichment cache (admin)"
+            className="flex-shrink-0 flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px] font-semibold transition-colors disabled:opacity-50"
+            style={{
+              background: cacheClearMsg?.startsWith("Cleared") ? "rgba(0,212,170,0.1)" : "#0d0d0d",
+              border: cacheClearMsg?.startsWith("Cleared") ? "1px solid rgba(0,212,170,0.3)" : "1px solid #27272a",
+              color: cacheClearMsg?.startsWith("Cleared") ? "#00d4aa" : "#52525b",
+            }}
+          >
+            <RefreshCw className={`w-2.5 h-2.5 ${cacheClearPending ? "animate-spin" : ""}`} />
+            {cacheClearMsg ?? "Flush Cache"}
+          </button>
+        )}
       </div>
 
       {/* Error */}

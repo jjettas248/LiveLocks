@@ -7,6 +7,8 @@ const ENRICH_CACHE_TTL   = 3 * 60 * 60 * 1000;  // 3 hours
 const INJURY_CACHE_TTL   = 30 * 60 * 1000;       // 30 min
 const PROPS_CACHE_TTL    = 20 * 60 * 1000;        // 20 min — lines shift
 const RANKINGS_CACHE_TTL = 6 * 60 * 60 * 1000;   // 6 hours — season stats stable
+const DETAIL_CACHE_TTL   = 4 * 60 * 60 * 1000;   // 4 hours — team splits stable
+const CBB_CACHE_TTL      = 8 * 60 * 60 * 1000;   // 8 hours — season records stable
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -20,6 +22,24 @@ export interface TorvikStats {
   ftRate: number;
   barthag: number;
   rank: number;
+  source: string;
+}
+
+export interface TorvikTeamDetail {
+  homeAdjO: number | null;
+  homeAdjD: number | null;
+  awayAdjO: number | null;
+  awayAdjD: number | null;
+  last10: string | null;
+  source: string;
+}
+
+export interface CBBReferenceData {
+  wins: number | null;
+  losses: number | null;
+  srs: number | null;
+  sos: number | null;
+  confRecord: string | null;
   source: string;
 }
 
@@ -109,6 +129,14 @@ export interface EnrichedGameData {
     home: TorvikStats | null;
     away: TorvikStats | null;
   };
+  torvikDetail: {
+    home: TorvikTeamDetail | null;
+    away: TorvikTeamDetail | null;
+  };
+  cbbRef: {
+    home: CBBReferenceData | null;
+    away: CBBReferenceData | null;
+  };
   actionNetwork: ActionNetworkData | null;
   vegasInsider: VegasInsiderData | null;
   prizePicks: PropsImplied | null;
@@ -129,6 +157,8 @@ export interface EnrichedGameData {
 const enrichmentCache = new Map<string, { data: EnrichedGameData; fetchedAt: number }>();
 let torvikData: any[] | null = null;
 let torvikFetchedAt = 0;
+const torvikDetailCache = new Map<string, { data: TorvikTeamDetail; fetchedAt: number }>();
+const cbbRefCache = new Map<string, { data: CBBReferenceData; fetchedAt: number }>();
 let injuryData: InjuredPlayer[] | null = null;
 let injuryFetchedAt = 0;
 let prizePicksLines: PlayerPropLine[] | null = null;
@@ -143,6 +173,8 @@ export function clearEnrichmentCache(): void {
   enrichmentCache.clear();
   torvikData = null;
   torvikFetchedAt = 0;
+  torvikDetailCache.clear();
+  cbbRefCache.clear();
   injuryData = null;
   injuryFetchedAt = 0;
   prizePicksLines = null;
@@ -260,7 +292,126 @@ export async function fetchBartTorvik(teamName: string): Promise<TorvikStats | n
   };
 }
 
-// ── STEP 2: ActionNetwork Public API ──────────────────────────────────────────
+// ── STEP 1b: BartTorvik Team Detail Page (home/away splits) ───────────────────
+// Fetches per-team home/away adjusted efficiency + last-10-game record.
+// Results cached per team name for 4 hours.
+
+export async function fetchBartTorvikTeamPage(teamName: string): Promise<TorvikTeamDetail | null> {
+  const cacheKey = `torvik_detail_${normStr(teamName)}`;
+  const cached = torvikDetailCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < DETAIL_CACHE_TTL) return cached.data;
+
+  try {
+    const encoded = encodeURIComponent(teamName);
+    const year = new Date().getMonth() >= 7 ? new Date().getFullYear() + 1 : new Date().getFullYear();
+    const res = await fetch(
+      `https://barttorvik.com/team-drill.php?team=${encoded}&year=${year}&json=1`,
+      { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(6000) }
+    );
+    if (!res.ok) { console.warn("[TORVIK DETAIL] Status:", res.status, "for", teamName); return null; }
+    const data = await res.json() as any;
+
+    const p = (v: any) => v != null ? parseFloat(String(v)) : null;
+    const result: TorvikTeamDetail = {
+      homeAdjO:  p(data.homeAdjOE ?? data.home_adjoe ?? data.homeadjoe),
+      homeAdjD:  p(data.homeAdjDE ?? data.home_adjde ?? data.homeadjde),
+      awayAdjO:  p(data.awayAdjOE ?? data.away_adjoe ?? data.awayadjoe),
+      awayAdjD:  p(data.awayAdjDE ?? data.away_adjde ?? data.awayadjde),
+      last10: String(data.last10 ?? data.lastTen ?? data.last_10 ?? ""),
+      source: "barttorvik_detail",
+    };
+
+    // Null out zeros that indicate no data
+    if (result.homeAdjO === 0) result.homeAdjO = null;
+    if (result.homeAdjD === 0) result.homeAdjD = null;
+    if (result.awayAdjO === 0) result.awayAdjO = null;
+    if (result.awayAdjD === 0) result.awayAdjD = null;
+
+    console.log("[TORVIK DETAIL] Fetched:", teamName, { homeAdjO: result.homeAdjO, awayAdjO: result.awayAdjO });
+    torvikDetailCache.set(cacheKey, { data: result, fetchedAt: Date.now() });
+    return result;
+  } catch (err: any) {
+    console.warn("[TORVIK DETAIL] Error:", err.message);
+    return null;
+  }
+}
+
+// ── STEP 2b: Sports Reference CBB — SRS / SOS / Record ────────────────────────
+// Parses season record, Simple Rating System, and Strength of Schedule.
+// Sports Reference has Cloudflare — fails gracefully when blocked.
+
+function teamNameToSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/['']/g, "")                   // smart quotes
+    .replace(/[^a-z0-9\s-]/g, "")          // non-alphanumeric
+    .trim()
+    .replace(/\s+/g, "-");
+}
+
+export async function fetchCBBReference(teamName: string): Promise<CBBReferenceData | null> {
+  const cacheKey = `cbb_ref_${normStr(teamName)}`;
+  const cached = cbbRefCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < CBB_CACHE_TTL) return cached.data;
+
+  try {
+    const slug = teamNameToSlug(teamName);
+    const year = new Date().getMonth() >= 7 ? new Date().getFullYear() + 1 : new Date().getFullYear();
+    const res = await fetch(
+      `https://www.sports-reference.com/cbb/schools/${slug}/men/${year}-schedule.html`,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          "Accept": "text/html,application/xhtml+xml",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+        signal: AbortSignal.timeout(7000),
+      }
+    );
+    if (!res.ok) { console.warn("[CBBREF] Status:", res.status, "for", slug); return null; }
+    const html = await res.text();
+
+    // Cloudflare challenge page detection
+    if (html.includes("Just a moment") || html.includes("cf-browser-verification")) {
+      console.warn("[CBBREF] Cloudflare block for:", teamName);
+      return null;
+    }
+
+    // Parse W-L record from title or header: "20-8" pattern in the first 5000 chars
+    const n = (v: string | undefined) => v != null ? parseFloat(v) : null;
+    const recordMatch = html.slice(0, 8000).match(/(\d{1,2})-(\d{1,2})\s*(?:,|\()/);
+    const wins   = recordMatch ? parseInt(recordMatch[1], 10) : null;
+    const losses = recordMatch ? parseInt(recordMatch[2], 10) : null;
+
+    // Parse SRS and SOS from stat tables (they appear as: "SRS", value on same row)
+    const srsMatch   = html.match(/["'>]SRS["'<][^>]*>[\s\S]{0,200}?<td[^>]*>([-\d.]+)<\/td>/i)
+                     ?? html.match(/Simple Rating System[\s\S]{0,200}?([-\d.]+)/i);
+    const sosMatch   = html.match(/["'>]SOS["'<][^>]*>[\s\S]{0,200}?<td[^>]*>([-\d.]+)<\/td>/i)
+                     ?? html.match(/Strength of Schedule[\s\S]{0,200}?([-\d.]+)/i);
+
+    // Parse conference record: "(W-L)" format following word "Conference"
+    const confMatch = html.match(/conference\s+record[\s\S]{0,200}?(\d{1,2}-\d{1,2})/i)
+                    ?? html.match(/conf[\s\S]{0,100}?(\d{1,2}-\d{1,2})/i);
+
+    const result: CBBReferenceData = {
+      wins,
+      losses,
+      srs:        n(srsMatch?.[1]),
+      sos:        n(sosMatch?.[1]),
+      confRecord: confMatch?.[1] ?? null,
+      source: "sports-reference",
+    };
+
+    console.log("[CBBREF] Parsed:", teamName, result);
+    cbbRefCache.set(cacheKey, { data: result, fetchedAt: Date.now() });
+    return result;
+  } catch (err: any) {
+    console.warn("[CBBREF] Error:", err.message);
+    return null;
+  }
+}
+
+// ── STEP 3: ActionNetwork Public API ──────────────────────────────────────────
 
 export async function fetchActionNetwork(homeTeam: string, awayTeam: string): Promise<ActionNetworkData | null> {
   try {
@@ -712,9 +863,18 @@ export async function enrichNCAABGameFull(
 
   console.log("[ENRICH] Full enrichment:", homeTeam, "vs", awayTeam);
 
-  const [homeTorvik, awayTorvik, anData, viData, ppData, udData, trData, injuries] = await Promise.allSettled([
+  const [
+    homeTorvik, awayTorvik,
+    homeTorvikDetail, awayTorvikDetail,
+    homeCBBRef, awayCBBRef,
+    anData, viData, ppData, udData, trData, injuries,
+  ] = await Promise.allSettled([
     fetchBartTorvik(homeTeam),
     fetchBartTorvik(awayTeam),
+    fetchBartTorvikTeamPage(homeTeam),
+    fetchBartTorvikTeamPage(awayTeam),
+    fetchCBBReference(homeTeam),
+    fetchCBBReference(awayTeam),
     fetchActionNetwork(homeTeam, awayTeam),
     fetchVegasInsider(homeTeam, awayTeam),
     fetchPrizePicks(homeTeam, awayTeam),
@@ -725,29 +885,35 @@ export async function enrichNCAABGameFull(
 
   const val = <T>(r: PromiseSettledResult<T>): T | null => r.status === "fulfilled" ? r.value : null;
 
-  const torvik      = { home: val(homeTorvik), away: val(awayTorvik) };
-  const an          = val(anData);
-  const vi          = val(viData);
-  const pp          = val(ppData);
-  const ud          = val(udData);
-  const tr          = val(trData);
-  const allInjuries = val(injuries) ?? [];
+  const torvik       = { home: val(homeTorvik), away: val(awayTorvik) };
+  const torvikDetail = { home: val(homeTorvikDetail), away: val(awayTorvikDetail) };
+  const cbbRef       = { home: val(homeCBBRef), away: val(awayCBBRef) };
+  const an           = val(anData);
+  const vi           = val(viData);
+  const pp           = val(ppData);
+  const ud           = val(udData);
+  const tr           = val(trData);
+  const allInjuries  = val(injuries) ?? [];
 
   const homeInjury = getTeamInjuryImpact(homeTeam, allInjuries);
   const awayInjury = getTeamInjuryImpact(awayTeam, allInjuries);
 
   const sources: string[] = [];
-  if (torvik.home || torvik.away) sources.push("BartTorvik");
-  if (an)                          sources.push("ActionNetwork");
-  if (vi)                          sources.push("VegasInsider");
-  if (pp)                          sources.push("PrizePicks");
-  if (ud)                          sources.push("Underdog");
-  if (tr)                          sources.push("TeamRankings");
-  if (allInjuries.length > 0)      sources.push("Rotowire");
+  if (torvik.home || torvik.away)           sources.push("BartTorvik");
+  if (torvikDetail.home || torvikDetail.away) sources.push("BartTorvik+Splits");
+  if (cbbRef.home || cbbRef.away)           sources.push("CBB-Reference");
+  if (an)                                   sources.push("ActionNetwork");
+  if (vi)                                   sources.push("VegasInsider");
+  if (pp)                                   sources.push("PrizePicks");
+  if (ud)                                   sources.push("Underdog");
+  if (tr)                                   sources.push("TeamRankings");
+  if (allInjuries.length > 0)               sources.push("Rotowire");
 
   console.log("[ENRICH] Sources loaded:", {
     torvikHome:    !!torvik.home,
     torvikAway:    !!torvik.away,
+    torvikDetail:  !!(torvikDetail.home || torvikDetail.away),
+    cbbRef:        !!(cbbRef.home || cbbRef.away),
     actionNetwork: !!an,
     vegasInsider:  !!vi,
     prizePicks:    !!pp,
@@ -757,7 +923,12 @@ export async function enrichNCAABGameFull(
   });
 
   const composite = buildCompositeEngine(
-    { torvik, actionNetwork: an, espnStats, injuries: { home: homeInjury, away: awayInjury }, prizePicks: pp, underdog: ud, teamRankings: tr },
+    {
+      torvik, torvikDetail, cbbRef,
+      actionNetwork: an, espnStats,
+      injuries: { home: homeInjury, away: awayInjury },
+      prizePicks: pp, underdog: ud, teamRankings: tr,
+    },
     liveLine
   );
 
@@ -765,6 +936,8 @@ export async function enrichNCAABGameFull(
     homeTeam,
     awayTeam,
     torvik,
+    torvikDetail,
+    cbbRef,
     actionNetwork: an,
     vegasInsider: vi,
     prizePicks: pp,
@@ -794,6 +967,8 @@ export async function enrichNCAABGameFull(
 function buildCompositeEngine(
   enriched: {
     torvik: { home: TorvikStats | null; away: TorvikStats | null };
+    torvikDetail: { home: TorvikTeamDetail | null; away: TorvikTeamDetail | null };
+    cbbRef: { home: CBBReferenceData | null; away: CBBReferenceData | null };
     actionNetwork: ActionNetworkData | null;
     espnStats: { home: { ppg: number; oppPpg: number } | null; away: { ppg: number; oppPpg: number } | null } | null;
     injuries: { home: InjuryImpact | null; away: InjuryImpact | null };
@@ -819,6 +994,30 @@ function buildCompositeEngine(
     console.log("[COMPOSITE] Torvik:", homeExpPts.toFixed(1), "+", awayExpPts.toFixed(1), "=", torvikTotal.toFixed(1));
     signals.push({ name: "BartTorvik Efficiency", projTotal: torvikTotal, weight: 4.0, diff: torvikTotal - liveLine });
     projTotal = torvikTotal;
+  }
+
+  // ── BartTorvik home/away split adjustment ─────────────────────────────────
+  // When home team has lower home AdjO vs season AdjO, project scoring lower.
+  const htDetail = enriched.torvikDetail.home;
+  void enriched.torvikDetail.away; // available for future away-split signals
+  if (htDetail && ht && htDetail.homeAdjO != null && ht.adjO > 0) {
+    const splitAdj = (htDetail.homeAdjO - ht.adjO) / 100 * (ht.tempo ?? 68);
+    if (Math.abs(splitAdj) > 0.5) {
+      signals.push({ name: "Home/Away Splits (Torvik)", projTotal: null, weight: 1.5, diff: splitAdj });
+    }
+  }
+
+  // ── CBB-Reference SRS strength signal ─────────────────────────────────────
+  // SRS difference → stronger team → more scoring. Weight low (correlation-based).
+  const homeSRS = enriched.cbbRef.home?.srs;
+  const awaySRS = enriched.cbbRef.away?.srs;
+  if (homeSRS != null && awaySRS != null) {
+    const srsSum = homeSRS + awaySRS;
+    // Higher combined SRS → quality game → higher total (both teams are good)
+    const srsDiff = srsSum * 0.15;
+    if (Math.abs(srsDiff) > 0.2) {
+      signals.push({ name: "CBB-Ref SRS Quality", projTotal: null, weight: 1.0, diff: srsDiff });
+    }
   }
 
   // ── ESPN pace model ────────────────────────────────────────────────────────
