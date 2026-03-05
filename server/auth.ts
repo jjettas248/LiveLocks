@@ -44,6 +44,8 @@ function safeUser(user: User) {
     isAdmin: user.isAdmin,
     subscriptionTier: user.subscriptionTier,
     playsUsed: user.playsUsed,
+    isNewProUser: user.isNewProUser ?? false,
+    upgradedAt: user.upgradedAt ?? null,
   };
 }
 

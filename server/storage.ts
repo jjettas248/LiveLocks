@@ -90,6 +90,8 @@ export interface IStorage {
   createFeedback(userId: number, message: string): Promise<Feedback>;
   getAllFeedback(): Promise<(Feedback & { userEmail: string | null })[]>;
   updateUserAlerts(userId: number, data: { pushSubscription?: string | null; pushAlerts?: boolean; phoneNumber?: string | null; smsAlerts?: boolean; smsConsent?: boolean }): Promise<void>;
+  clearNewProFlag(userId: number): Promise<void>;
+  setUpgradedAt(userId: number, upgradedAt: string): Promise<void>;
   getUserByPhoneNumber(phone: string): Promise<User | undefined>;
   savePlayAlerts(plays: any[]): Promise<void>;
   getUnresolvedAlerts(): Promise<HalftimePlayAlert[]>;
@@ -408,7 +410,22 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateUserSubscription(userId: number, tier: string, stripeCustomerId: string, stripeSubscriptionId: string): Promise<void> {
-    await db.update(users).set({ subscriptionTier: tier, stripeCustomerId, stripeSubscriptionId }).where(eq(users.id, userId));
+    await db.update(users).set({
+      subscriptionTier: tier,
+      stripeCustomerId,
+      stripeSubscriptionId,
+      isNewProUser: true,
+      requiresRefresh: true,
+      upgradedAt: new Date().toISOString(),
+    }).where(eq(users.id, userId));
+  }
+
+  async clearNewProFlag(userId: number): Promise<void> {
+    await db.update(users).set({ isNewProUser: false, requiresRefresh: false }).where(eq(users.id, userId));
+  }
+
+  async setUpgradedAt(userId: number, upgradedAt: string): Promise<void> {
+    await db.update(users).set({ upgradedAt, isNewProUser: true, requiresRefresh: true }).where(eq(users.id, userId));
   }
 
   async updateUserStripeCustomer(userId: number, stripeCustomerId: string): Promise<void> {

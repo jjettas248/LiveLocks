@@ -7,6 +7,8 @@ export interface AuthUser {
   isAdmin: boolean;
   subscriptionTier: string | null;
   playsUsed: number;
+  isNewProUser: boolean;
+  upgradedAt: string | null;
 }
 
 async function apiFetch(path: string, options?: RequestInit) {

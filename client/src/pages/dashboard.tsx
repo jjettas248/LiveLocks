@@ -14,6 +14,7 @@ import { UpgradeModal } from "@/components/upgrade-modal";
 import { FeedbackModal } from "@/components/feedback-modal";
 import { NCAABAdminTab } from "@/components/ncaab-admin-tab";
 import { AnalyticsTab } from "@/components/analytics-tab";
+import { WelcomeBanner } from "@/components/welcome-banner";
 import { AlertsOnboardingModal } from "@/components/alerts-onboarding-modal";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
@@ -179,6 +180,9 @@ export default function Dashboard() {
 
   const [activeTab, setActiveTab] = useState<"calculator" | "ncaab" | "analytics">("calculator");
   const [nbaSubTab, setNbaSubTab] = useState<"live" | "halftime">("live");
+  const [expandToGameId, setExpandToGameId] = useState<string | null>(null);
+  const [showWelcomeBanner, setShowWelcomeBanner] = useState(false);
+  const [now, setNow] = useState(Date.now());
   const [slateFilterProp, setSlateFilterProp] = useState<string>("all");
   const [slateFilterProb, setSlateFilterProb] = useState<string>("all");
   const [showAlertsPanel, setShowAlertsPanel] = useState(false);
@@ -639,6 +643,56 @@ export default function Dashboard() {
       window.history.replaceState({}, "", "/");
     }
   }, []);
+
+  // ── Welcome banner + NEW badge system ────────────────────────────────────
+  const { data: ncaabGamesRaw } = useQuery<{ games: Array<{ id: string; status: string; startTime?: string }> }>({
+    queryKey: ["/api/ncaab/games"],
+    refetchInterval: 60_000,
+    enabled: !!user?.isAdmin,
+  });
+  const ncaabGames = ncaabGamesRaw?.games ?? [];
+
+  useEffect(() => {
+    if (user?.isNewProUser) setShowWelcomeBanner(true);
+  }, [user?.isNewProUser]);
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 30 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const showNewBadge = user?.upgradedAt
+    ? (now - new Date(user.upgradedAt).getTime()) < 86_400_000
+    : false;
+
+  const dismissWelcomeBanner = () => {
+    setShowWelcomeBanner(false);
+    apiRequest("POST", "/api/user/clear-new-pro-flag", {}).catch(() => {});
+    queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+  };
+
+  const handleExplore = async () => {
+    setActiveTab("ncaab");
+    await new Promise(r => setTimeout(r, 150));
+    const targetGame =
+      ncaabGames.find(g => g.status === "In Progress") ??
+      ncaabGames.find(g => g.status === "Halftime") ??
+      [...ncaabGames]
+        .filter(g => g.startTime)
+        .sort((a, b) => new Date(a.startTime!).getTime() - new Date(b.startTime!).getTime())[0];
+    if (targetGame) {
+      setExpandToGameId(targetGame.id);
+    }
+    dismissWelcomeBanner();
+  };
+
+  const ncaabSubtitle = (() => {
+    const live = ncaabGames.filter(g => g.status === "In Progress").length;
+    const halftime = ncaabGames.filter(g => g.status === "Halftime").length;
+    if (live > 0) return { text: `${live} game${live === 1 ? "" : "s"} live now — engine is running`, color: "#00d4aa" };
+    if (halftime > 0) return { text: "Games at halftime — 2H edges ready", color: "#f59e0b" };
+    return { text: "NCAAB Live + full access now active", color: "#a1a1aa" };
+  })();
 
   // ── Auto-fill score, period, and clock on every live-games refresh ─────────
   useEffect(() => {
@@ -1248,6 +1302,15 @@ export default function Dashboard() {
 
       <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-5">
 
+        {/* Welcome banner — shown once after upgrade */}
+        {showWelcomeBanner && (
+          <WelcomeBanner
+            onExplore={handleExplore}
+            onDismiss={dismissWelcomeBanner}
+            subtitle={ncaabSubtitle.text}
+            subtitleColor={ncaabSubtitle.color}
+          />
+        )}
 
         {/* Tab Navigation */}
         <div className="relative flex flex-col gap-0 w-full overflow-x-auto">
@@ -1273,7 +1336,32 @@ export default function Dashboard() {
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                🏀 NCAAB Live
+                <div style={{ position: "relative", display: "inline-flex", alignItems: "center", overflow: "visible" }}>
+                  🏀 NCAAB Live
+                  {showNewBadge && (
+                    <span
+                      data-testid="ncaab-new-badge"
+                      style={{
+                        position: "absolute",
+                        top: -8,
+                        right: -20,
+                        background: "#00d4aa",
+                        color: "#000000",
+                        fontSize: 9,
+                        fontWeight: 700,
+                        lineHeight: 1,
+                        padding: "2px 5px",
+                        borderRadius: 4,
+                        letterSpacing: "0.05em",
+                        textTransform: "uppercase",
+                        pointerEvents: "none",
+                        animation: "newBadgeScale 300ms cubic-bezier(0.34,1.56,0.64,1) both",
+                      }}
+                    >
+                      NEW
+                    </span>
+                  )}
+                </div>
               </button>
             )}
             {user?.isAdmin && (
@@ -2861,6 +2949,7 @@ export default function Dashboard() {
         {activeTab === "ncaab" && user?.isAdmin && (
           <NCAABAdminTab
             isAdmin={user?.isAdmin ?? false}
+            expandToGameId={expandToGameId}
             onAddToParlay={(pick) => {
               if (parlayPicks.length < 10) {
                 setParlayPicks((prev) => [...prev, pick]);

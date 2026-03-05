@@ -1,0 +1,370 @@
+Three connected fixes for pro tier access sync,
+force sync email, and welcome banner on upgrade.
+
+---
+
+STEP 1 — AUDIT AUTH SYSTEM IN USE
+
+Before writing any code, scan the entire codebase
+and identify exactly what auth system is being used.
+
+Look for:
+  - Any import of "next-auth" or "NextAuth"
+  - Any import of "@clerk/nextjs" or "clerk"
+  - Any import of "supabase" auth methods
+  - Any custom JWT handling (jsonwebtoken, jose)
+  - Any /api/auth/* route files
+  - Any middleware.ts checking auth
+  - Any useSession, useUser, useAuth hooks
+  - How user object reaches the frontend components
+  - Where user.tier or equivalent is read
+
+Print complete findings before any code:
+  // AUTH AUDIT
+  // Auth system: [NextAuth / Clerk / Supabase / Custom JWT]
+  // Session hook used: [useSession / useUser / custom]
+  // User object shape: [show fields]
+  // Tier field name: [exact string]
+  // Where tier is read for tab access: [file + line]
+  // Session refresh method available: [yes/no + method]
+  // DB client used: [prisma / supabase / drizzle / other]
+
+---
+
+STEP 2 — FIX SESSION SYNC BASED ON AUTH SYSTEM FOUND
+
+Use ONLY the auth system identified in Step 1.
+Do not introduce a different auth library.
+
+IF NextAuth:
+
+  In [...nextauth] route, add tier to session:
+    callbacks: {
+      async session({ session, token }) {
+        // Always re-read tier from DB on session check
+        const user = await db.user.findUnique({
+          where: { email: session.user.email },
+          select: { 
+            tier: true, 
+            requiresRefresh: true,
+            isNewProUser: true
+          }
+        })
+        session.user.tier = 
+          normalizeTier(user?.tier)
+        session.user.isNewProUser = 
+          user?.isNewProUser ?? false
+        
+        // Clear refresh flag after reading
+        if (user?.requiresRefresh) {
+          await db.user.update({
+            where: { email: session.user.email },
+            data: { requiresRefresh: false }
+          })
+        }
+        return session
+      }
+    }
+
+  Client re-fetch on focus:
+    const { data: session, update } = useSession()
+    useEffect(() => {
+      const onFocus = () => update()
+      window.addEventListener("focus", onFocus)
+      return () => 
+        window.removeEventListener("focus", onFocus)
+    }, [update])
+
+IF Clerk:
+
+  Use Clerk's publicMetadata to store tier:
+    In /api/admin/change-tier after DB write:
+      await clerkClient.users.updateUserMetadata(
+        user.clerkId, {
+          publicMetadata: { 
+            tier: newTierKey,
+            isNewProUser: true
+          }
+        }
+      )
+  
+  Client reads from:
+    const { user } = useUser()
+    const tier = normalizeTier(
+      user?.publicMetadata?.tier
+    )
+    const isNewProUser = 
+      user?.publicMetadata?.isNewProUser ?? false
+
+IF Supabase Auth:
+
+  Store tier in user_metadata or a users table:
+    After admin change:
+      await supabase.auth.admin.updateUserById(
+        userId, {
+          user_metadata: { 
+            tier: newTierKey,
+            isNewProUser: true
+          }
+        }
+      )
+  
+  Client reads:
+    const { data: { user } } = 
+      await supabase.auth.getUser()
+    const tier = normalizeTier(
+      user?.user_metadata?.tier
+    )
+
+IF Custom JWT:
+
+  Add tier to JWT payload on sign:
+    const token = jwt.sign({
+      userId: user.id,
+      email: user.email,
+      tier: normalizeTier(user.tier),
+      isNewProUser: user.isNewProUser
+    }, process.env.JWT_SECRET, 
+    { expiresIn: "7d" })
+  
+  On admin tier change:
+    Cannot update existing JWT — instead:
+    Set requiresRefresh = true in DB
+    On next API call from user, issue new token
+    with updated tier embedded
+
+---
+
+STEP 3 — NORMALIZE TIER EVERYWHERE
+
+Add this function to a shared utils file:
+
+  // lib/normalizeTier.ts
+  export const normalizeTier = (rawTier?: string) => {
+    if (!rawTier) return "free"
+    const t = rawTier.toLowerCase().trim()
+    if (t.includes("all")) return "pro_all"
+    if (
+      t.includes("nba") || 
+      t === "pro" || 
+      t.includes("40") ||
+      t.includes("25") ||
+      t.includes("pro")
+    ) return "pro_nba"
+    return "free"
+  }
+
+  export const hasProAccess = (tier?: string) => {
+    const normalized = normalizeTier(tier)
+    return normalized === "pro_nba" || 
+           normalized === "pro_all"
+  }
+
+Import and use normalizeTier + hasProAccess 
+everywhere tier is checked — remove all 
+inline tier string comparisons.
+
+---
+
+STEP 4 — FORCE SYNC ENDPOINT + EMAIL
+
+/api/admin/force-sync  POST { userId }
+
+  1. Read current user from DB
+  2. Flag for session refresh:
+       await updateUser(userId, { 
+         requiresRefresh: true,
+         isNewProUser: true  // triggers welcome banner
+       })
+  3. Send confirmation email to user:
+
+  Subject: "Your LiveLocks Pro access is now active"
+  
+  const html = `
+  <!DOCTYPE html>
+  <html>
+  <body style="background:#0a0a0a;color:#fff;
+               font-family:sans-serif;padding:40px;">
+    <div style="max-width:480px;margin:0 auto;">
+      
+      <h2 style="color:#00d4aa;margin-bottom:4px;">
+        LiveLocks
+      </h2>
+      <p style="color:#71717a;font-size:12px;
+                margin-bottom:32px;">
+        BY PROPPULSE
+      </p>
+      
+      <h3 style="color:#ffffff;margin-bottom:12px;">
+        Your Pro access is active 🔓
+      </h3>
+      
+      <p style="color:#a1a1aa;line-height:1.7;
+                margin-bottom:24px;">
+        Your account has been upgraded to 
+        <strong style="color:#ffffff;">
+          ${tierLabel}
+        </strong>. 
+        You now have full access to:
+      </p>
+      
+      <ul style="color:#a1a1aa;line-height:2;
+                 padding-left:20px;margin-bottom:28px;">
+        ${newTierKey === "pro_all" ? `
+          <li>NBA Live — Real-time prop engine</li>
+          <li>NCAAB Live — College game scanner</li>
+          <li>2H Plays — Halftime edge detection</li>
+          <li>Parlay Builder — Multi-leg slip</li>
+          <li>Push Notifications — High-confidence alerts</li>
+        ` : `
+          <li>NBA Live — Real-time prop engine</li>
+          <li>2H Plays — Halftime edge detection</li>
+          <li>Parlay Builder — Multi-leg slip</li>
+          <li>Push Notifications — High-confidence alerts</li>
+        `}
+      </ul>
+      
+      <a href="${process.env.NEXT_PUBLIC_APP_URL}"
+         style="display:inline-block;
+                background:#00d4aa;
+                color:#000;
+                font-weight:700;
+                padding:14px 28px;
+                border-radius:8px;
+                text-decoration:none;
+                font-size:15px;
+                margin-bottom:28px;">
+        Open LiveLocks →
+      </a>
+      
+      <p style="color:#71717a;font-size:12px;
+                line-height:1.6;">
+        Questions? Reply to this email.<br/>
+        — LiveLocks Team
+      </p>
+      
+    </div>
+  </body>
+  </html>
+  `
+  
+  Send using whatever email service is in codebase.
+  Find the existing send function — do not add new one.
+  
+  4. Return to admin:
+    { 
+      success: true,
+      message: `Access synced and email sent to 
+                ${user.email}`,
+      tier: normalizeTier(user.tier)
+    }
+
+  5. Admin sees toast:
+    "✓ Synced + email sent to [email]"
+    teal styling, 6 seconds
+
+---
+
+STEP 5 — FORCE SYNC BUTTON IN ADMIN TABLE
+
+In the admin users table, add "Force Sync" 
+button to each user row.
+
+Position: between tier dropdown and delete button
+
+  Button:
+    Label: "↻ Sync"
+    bg: #181818
+    border: #3f3f46
+    text: #a1a1aa text-xs
+    rounded-md px-3 py-1.5
+    hover: border zinc-500, text white
+    
+  Loading state:
+    "Syncing..." with spinner
+    Disabled during request
+    
+  On success:
+    Button flashes teal for 1.5s: "✓ Synced"
+    then returns to normal
+    
+  On error:
+    Button flashes red: "✗ Failed"
+    then returns to normal
+
+  Only show for non-free users:
+    free tier users don't need force sync
+
+---
+
+STEP 6 — WELCOME BANNER FOR NEW PRO USERS
+
+Show a one-time welcome banner when a user 
+who was just upgraded opens the app.
+
+TRIGGER CONDITION:
+  user.isNewProUser === true
+  (set by admin force-sync or change-tier route)
+
+BANNER COMPONENT:
+
+  Position: fixed, top of screen
+  z-index: 60
+  Full width
+  
+  Styling:
+    bg: linear-gradient(
+      135deg, 
+      rgba(0,212,170,0.15) 0%, 
+      rgba(0,0,0,0) 100%
+    )
+    border-bottom: 1px solid rgba(0,212,170,0.3)
+    backdrop-filter: blur(8px)
+    padding: 14px 20px
+    
+  Content layout (horizontal):
+    Left:
+      Teal lock-open icon (16px)
+      "Pro Unlocked" font-bold white text-sm
+      "NCAAB Live + full access now active" 
+      #a1a1aa text-xs ml-2
+    
+    Right:
+      "Explore →" button
+        bg rgba(0,212,170,0.2)
+        border rgba(0,212,170,0.4)
+        text #00d4aa text-xs font-semibold
+        rounded-full px-3 py-1
+        onClick → setActiveTab("ncaab") + close banner
+      
+      "×" dismiss button
+        text zinc-500, ml-2
+        onClick → dismiss banner
+
+BANNER BEHAVIOR:
+  Appears immediately on first load after upgrade
+  Auto-dismisses after 8 seconds
+  Dismissing sets isNewProUser = false in DB:
+    fetch("/api/user/clear-new-pro-flag", { 
+      method: "POST" 
+    })
+  
+  Never shows again after dismissed:
+    /api/user/clear-new-pro-flag clears the flag
+    in DB so session callback returns false
+
+  Slide-down animation on appear:
+    transform: translateY(-100%) → translateY(0)
+    300ms ease
+  
+  Slide-up animation on dismiss:
+    transform: translateY(0) → translateY(-100%)
+    200ms ease
+    Then remove from DOM
+
+  /api/user/clear-new-pro-flag:
+    Authenticated route — user clears own flag
+    await updateUser(currentUserId, { 
+      isNewProUser: false 
+    })
+    return { success: true }

@@ -24,7 +24,7 @@ export class WebhookHandlers {
 
         if (userId && tier) {
           await storage.updateUserSubscription(userId, tier, customerId, subscriptionId);
-          console.log(`[webhook] Ungated user ${userId} → tier: ${tier}`);
+          console.log(`[webhook] Ungated user ${userId} → tier: ${tier}, isNewProUser: true, upgradedAt: ${new Date().toISOString()}`);
         }
       } else if (event.type === "customer.subscription.deleted") {
         const subscription = event.data?.object;

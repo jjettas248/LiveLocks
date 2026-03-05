@@ -1540,9 +1540,10 @@ function PreGameCard({
 interface NCAABAdminTabProps {
   onAddToParlay?: (pick: ParlayPickInput) => void;
   isAdmin?: boolean;
+  expandToGameId?: string | null;
 }
 
-export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
+export function NCAABAdminTab({ onAddToParlay, expandToGameId }: NCAABAdminTabProps) {
   const [ncaabSubTab, setNcaabSubTab] = useState<"live" | "halftime">("live");
 
   // ── Toast state (build step 1: queue + stacking + dismiss timers) ────────────
@@ -1580,6 +1581,15 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
   }, []);
 
   const handleExpandGame = handleChipClick;
+
+  // Expand a game from outside (e.g. welcome banner Explore flow)
+  useEffect(() => {
+    if (!expandToGameId) return;
+    setExpandedGameId(expandToGameId);
+    setTimeout(() => {
+      rowRefs.current[expandToGameId]?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
+  }, [expandToGameId]);
 
   const handleH2hReady = useCallback((gameId: string, data: H2HGame[]) => {
     h2hCache.current[gameId] = data;

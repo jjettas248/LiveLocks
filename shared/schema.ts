@@ -17,6 +17,9 @@ export const users = pgTable("users", {
   phoneNumber: text("phone_number"),
   smsAlerts: boolean("sms_alerts").notNull().default(false),
   smsConsent: boolean("sms_consent").notNull().default(false),
+  isNewProUser: boolean("is_new_pro_user").default(false),
+  requiresRefresh: boolean("requires_refresh").default(false),
+  upgradedAt: text("upgraded_at"),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });

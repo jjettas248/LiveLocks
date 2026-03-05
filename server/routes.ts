@@ -139,7 +139,10 @@ export async function registerRoutes(
       }
 
       await storage.setUserSubscriptionTier(userId, newTierKey);
-      if (priceDiff > 0) await storage.resetUserPlays(userId);
+      if (priceDiff > 0) {
+        await storage.resetUserPlays(userId);
+        await storage.setUpgradedAt(userId, new Date().toISOString());
+      }
 
       const message = priceDiff > 0
         ? `Upgraded to ${tierMeta.label}. $${priceDiff} difference invoiced.`
@@ -908,6 +911,17 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: "Failed to update SMS settings" });
+    }
+  });
+
+  // ── Clear new-pro flag after welcome banner is shown ──────────────────────
+  app.post("/api/user/clear-new-pro-flag", requireAuth, async (req, res) => {
+    try {
+      const userId = (req as any).resolvedUserId!;
+      await storage.clearNewProFlag(userId);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to clear flag" });
     }
   });
 

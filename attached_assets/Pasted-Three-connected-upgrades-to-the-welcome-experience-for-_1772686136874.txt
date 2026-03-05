@@ -1,0 +1,247 @@
+Three connected upgrades to the welcome experience
+for newly upgraded Pro users.
+
+---
+
+1. WELCOME BANNER TRIGGERS ON STRIPE PAYMENT TOO
+
+The welcome banner and isNewProUser flag must fire
+for both upgrade paths — not just admin force-sync.
+
+FIND the existing Stripe webhook handler.
+It should already handle checkout.session.completed
+or invoice.payment_succeeded.
+
+In that webhook handler, after grantTierAccess:
+
+  // Set new pro user flag after any Stripe payment
+  await updateUser(userId, {
+    tier: newTierKey,
+    isNewProUser: true,
+    requiresRefresh: true,
+    upgradedAt: new Date().toISOString()
+  })
+
+This ensures the welcome banner fires regardless
+of whether the upgrade came from:
+  - Admin panel direct change
+  - Admin force sync
+  - User paying via Stripe payment link
+  - User self-subscribing via Stripe checkout
+
+Do NOT add a new webhook — use the existing one.
+Only add the isNewProUser + requiresRefresh writes
+after the existing grantTierAccess call.
+
+---
+
+2. "EXPLORE →" OPENS NCAAB AND AUTO-EXPANDS 
+   FIRST LIVE GAME
+
+When user clicks "Explore →" on the welcome banner:
+
+  Step 1: Set active tab to "ncaab"
+    setActiveTab("ncaab")
+
+  Step 2: Wait for NCAAB tab to render (150ms)
+    await new Promise(r => setTimeout(r, 150))
+
+  Step 3: Find the first live game
+    const firstLiveGame = ncaabGames
+      ?.find(g => g.status === "in_progress" || 
+                  g.status === "live")
+    
+    // Fallback to halftime game if no live games
+    const firstHalftimeGame = ncaabGames
+      ?.find(g => g.status === "halftime")
+    
+    // Fallback to next scheduled game
+    const firstScheduledGame = ncaabGames
+      ?.sort((a, b) => 
+        new Date(a.tipoff_datetime) - 
+        new Date(b.tipoff_datetime)
+      )?.[0]
+    
+    const targetGame = 
+      firstLiveGame ?? 
+      firstHalftimeGame ?? 
+      firstScheduledGame
+
+  Step 4: Expand that game card
+    if (targetGame) {
+      setExpandedGameId(targetGame.id)
+      
+      // Wait for expand animation to start
+      await new Promise(r => setTimeout(r, 50))
+      
+      // Scroll to expanded card
+      rowRefs.current[targetGame.id]
+        ?.scrollIntoView({
+          behavior: "smooth",
+          block: "start"
+        })
+    }
+
+  Step 5: Dismiss banner
+    dismissWelcomeBanner()
+    // calls /api/user/clear-new-pro-flag
+
+PASS ncaabGames and setExpandedGameId to the 
+banner component as props so it can execute 
+this sequence:
+
+  <WelcomeBanner
+    onExplore={handleExplore}
+    onDismiss={dismissWelcomeBanner}
+  />
+
+  const handleExplore = async () => {
+    setActiveTab("ncaab")
+    await new Promise(r => setTimeout(r, 150))
+    
+    const targetGame = 
+      ncaabGames?.find(g => 
+        g.status === "in_progress" || 
+        g.status === "live"
+      ) ??
+      ncaabGames?.find(g => 
+        g.status === "halftime"
+      ) ??
+      ncaabGames?.sort((a, b) => 
+        new Date(a.tipoff_datetime) - 
+        new Date(b.tipoff_datetime)
+      )?.[0]
+    
+    if (targetGame) {
+      setExpandedGameId(targetGame.id)
+      setTimeout(() => {
+        rowRefs.current[targetGame.id]
+          ?.scrollIntoView({ 
+            behavior: "smooth", 
+            block: "start" 
+          })
+      }, 50)
+    }
+    
+    dismissWelcomeBanner()
+  }
+
+BANNER UPDATE — add contextual subtitle:
+
+  If live NCAAB games exist:
+    Subtitle: "8 games live now — engine is running"
+    Subtitle color: #00d4aa
+
+  If halftime games but no live:
+    Subtitle: "Games at halftime — 2H edges ready"
+    Subtitle color: #f59e0b
+
+  If only scheduled games:
+    Subtitle: "NCAAB Live + full access now active"
+    Subtitle color: #a1a1aa
+
+  Compute this subtitle in the parent and pass
+  as prop to WelcomeBanner.
+
+---
+
+3. "NEW" BADGE ON NCAAB TAB FOR 24 HOURS
+
+Show a "New" badge on the NCAAB Live tab label
+for 24 hours after upgrade, even after banner dismiss.
+
+STORE UPGRADE TIMESTAMP:
+
+  When isNewProUser is set to true, also write:
+    upgradedAt: new Date().toISOString()
+
+  Read upgradedAt from user session/DB.
+  Pass it to the tab rendering logic.
+
+NEW BADGE VISIBILITY CHECK:
+
+  const showNewBadge = (upgradedAt?: string) => {
+    if (!upgradedAt) return false
+    const upgraded = new Date(upgradedAt).getTime()
+    const now = Date.now()
+    const hoursElapsed = (now - upgraded) / 3600000
+    return hoursElapsed < 24
+  }
+
+TAB BADGE UI:
+
+  When showNewBadge(user.upgradedAt) === true
+  and tab.id === "ncaab":
+
+  Add badge to tab label:
+
+    <div className="tab-label-wrapper" 
+         style={{ position: "relative" }}>
+      
+      {/* existing tab icon + label */}
+      🏀 NCAAB Live
+      
+      {/* New badge */}
+      <span style={{
+        position: "absolute",
+        top: "-6px",
+        right: "-8px",
+        background: "#00d4aa",
+        color: "#000000",
+        fontSize: "9px",
+        fontWeight: "700",
+        lineHeight: 1,
+        padding: "2px 5px",
+        borderRadius: "4px",
+        letterSpacing: "0.05em",
+        textTransform: "uppercase",
+        pointerEvents: "none"
+      }}>
+        NEW
+      </span>
+      
+    </div>
+
+BADGE ANIMATION:
+  On first render (just after upgrade):
+    scale: 0 → 1.2 → 1.0
+    300ms spring ease
+  
+  After that: static, no animation
+
+BADGE AUTO-REMOVE:
+  Check showNewBadge on every session refresh.
+  When 24 hours passes, badge disappears automatically.
+  No manual clear needed — time-based only.
+
+  For sessions longer than 24 hours (unlikely but safe):
+    Add interval check every 30 minutes:
+    
+    useEffect(() => {
+      const interval = setInterval(() => {
+        // Force re-render to re-check time
+        setNow(Date.now())
+      }, 30 * 60 * 1000)
+      return () => clearInterval(interval)
+    }, [])
+    
+    const [now, setNow] = useState(Date.now())
+    
+    const showNewBadge = upgradedAt 
+      ? (now - new Date(upgradedAt).getTime()) 
+        < 86400000
+      : false
+
+MOBILE BADGE POSITIONING:
+  On mobile the tab bar is smaller.
+  Ensure badge does not clip outside tab bar:
+    overflow: visible on parent tab container
+    Tab label wrapper: position relative, 
+    overflow: visible
+
+DO NOT show "New" badge:
+  - On NBA Live tab (already accessible pre-upgrade)
+  - On Analytics tab
+  - On MLB Live tab (locked for everyone)
+  - If user was always Pro (upgradedAt is null)
+  - After 24 hours from upgradedAt
