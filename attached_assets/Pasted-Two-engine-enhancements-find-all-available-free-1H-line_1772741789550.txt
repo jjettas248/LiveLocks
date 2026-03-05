@@ -1,0 +1,360 @@
+Two engine enhancements: find all available free
+1H line APIs for NCAAB, and wire scoring environment
+into the pre-game confidence tier system.
+
+---
+
+1. FIND ALL FREE 1H LINE SOURCES FOR NCAAB
+
+The Odds API h1_totals may not be on current tier.
+Try all of these in order until one returns data.
+Do NOT show a "coming soon" banner — find real data.
+
+ATTEMPT IN ORDER:
+
+  const fetchNCAAB1HLines = async (gameId, game) => {
+    
+    // ATTEMPT 1: The Odds API h1_totals market
+    // (works on paid tiers)
+    try {
+      const url1 = 
+        `https://api.the-odds-api.com/v4/` +
+        `sports/basketball_ncaab/events/` +
+        `${gameId}/odds` +
+        `?apiKey=${process.env.ODDS_API_KEY}` +
+        `&regions=us` +
+        `&markets=h1_totals,h1_spreads` +
+        `&oddsFormat=american`
+      
+      const res1 = await fetch(url1)
+      if (res1.ok) {
+        const d1 = await res1.json()
+        const h1Total = extractH1Total(d1)
+        if (h1Total) {
+          console.log("[1H] Found via Odds API h1_totals")
+          return { line: h1Total, source: "odds_api_h1" }
+        }
+      }
+    } catch (e) {
+      console.warn("[1H] Odds API h1 failed:", e.message)
+    }
+    
+    // ATTEMPT 2: The Odds API alternate_totals
+    // Many books post 1H lines as alternate markets
+    try {
+      const url2 = 
+        `https://api.the-odds-api.com/v4/` +
+        `sports/basketball_ncaab/events/` +
+        `${gameId}/odds` +
+        `?apiKey=${process.env.ODDS_API_KEY}` +
+        `&regions=us` +
+        `&markets=alternate_totals` +
+        `&oddsFormat=american`
+      
+      const res2 = await fetch(url2)
+      if (res2.ok) {
+        const d2 = await res2.json()
+        // alternate_totals includes H1 at lower values
+        // Full game total ~140, H1 total ~65
+        // Find lines in 55-75 range (H1 range for NCAAB)
+        const h1Candidate = extractH1FromAlternates(
+          d2, game.odds?.overUnder
+        )
+        if (h1Candidate) {
+          console.log("[1H] Found via alternate_totals")
+          return { 
+            line: h1Candidate, 
+            source: "odds_api_alternate" 
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[1H] Alternate totals failed:", e.message)
+    }
+    
+    // ATTEMPT 3: ESPN game summary pickcenter
+    // Some ESPN data includes 1H lines in pickcenter
+    try {
+      const summary = game.summary ?? 
+        await fetchNCAABGameSummary(game.id)
+      
+      const pickcenter = summary?.pickcenter ?? []
+      for (const book of pickcenter) {
+        // Look for H1 total in nested odds
+        const h1 = 
+          book?.overUnder1H ??
+          book?.firstHalfOverUnder ??
+          book?.markets?.find(m => 
+            m.type?.includes("1H") || 
+            m.type?.includes("firstHalf")
+          )?.overUnder
+        
+        if (h1 && h1 > 40 && h1 < 90) {
+          console.log("[1H] Found via ESPN pickcenter")
+          return { line: h1, source: "espn_pickcenter" }
+        }
+      }
+    } catch (e) {
+      console.warn("[1H] ESPN pickcenter failed:", e.message)
+    }
+    
+    // ATTEMPT 4: ActionNetwork public API
+    // Publicly accessible, no key required
+    try {
+      const homeTeam = game.competitions?.[0]
+        ?.competitors
+        ?.find(c => c.homeAway === "home")
+        ?.team?.displayName ?? ""
+      
+      const anUrl = 
+        `https://api.actionnetwork.com/web/v1/` +
+        `scoreboard/ncaab?` +
+        `period=game&bookIds=15,30,76,123`
+      
+      const anRes = await fetch(anUrl, {
+        headers: { "User-Agent": "Mozilla/5.0" }
+      })
+      if (anRes.ok) {
+        const anData = await anRes.json()
+        const match = anData.games?.find(g =>
+          g.teams?.some(t => 
+            t.full_name?.toLowerCase()
+              .includes(
+                homeTeam.toLowerCase().split(" ").pop()
+              )
+          )
+        )
+        if (match) {
+          const h1Total = 
+            match.odds?.find(o => o.period === 1)
+              ?.total?.total
+          if (h1Total) {
+            console.log("[1H] Found via ActionNetwork")
+            return { 
+              line: h1Total, 
+              source: "action_network" 
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[1H] ActionNetwork failed:", e.message)
+    }
+    
+    // ATTEMPT 5: 47% estimate fallback (PRD spec)
+    const fullGame = game.odds?.overUnder
+    if (fullGame) {
+      const estimated = parseFloat(
+        (fullGame * 0.47).toFixed(1)
+      )
+      console.log(
+        "[1H] Using 47% estimate:", estimated
+      )
+      return { 
+        line: estimated, 
+        source: "estimated",
+        isEstimated: true
+      }
+    }
+    
+    return null
+  }
+
+HELPER — extract 1H from alternate totals:
+
+  const extractH1FromAlternates = (data, fullGameLine) => {
+    if (!data?.bookmakers?.length) return null
+    
+    // Full game NCAAB ~140, H1 ~65 (47%)
+    // Look for lines in 55-75 range
+    const h1Range = { min: 50, max: 80 }
+    
+    const candidates = []
+    data.bookmakers.forEach(book => {
+      book.markets?.forEach(market => {
+        if (market.key === "alternate_totals") {
+          market.outcomes?.forEach(o => {
+            if (o.point >= h1Range.min && 
+                o.point <= h1Range.max) {
+              candidates.push(o.point)
+            }
+          })
+        }
+      })
+    })
+    
+    if (!candidates.length) return null
+    
+    // Return median candidate
+    const sorted = [...candidates].sort((a, b) => a - b)
+    return sorted[Math.floor(sorted.length / 2)]
+  }
+
+DISPLAY 1H LINE ON CARD:
+
+  Show in stat grid after FULL GAME TOTAL row:
+  
+  Row: "1H TOTAL"
+    Value: h1Result?.line ?? "--"
+    
+    If h1Result?.isEstimated:
+      Value: "~${h1Result.line}"
+      amber color (not white)
+      Right label: "(proj)" zinc-500 text-xs
+    Else:
+      Value: h1Result.line white bold
+      Right label: "1st half line" zinc-500 text-xs
+    
+    Source badge (tiny, right side):
+      "odds_api_h1" → no badge (real line)
+      "action_network" → no badge (real line)
+      "estimated" → "~est" amber text-[10px]
+  
+  Row: "1H SPREAD" (if h1_spreads available):
+    Same pattern — show if found, estimate if not
+
+---
+
+2. SCORING ENVIRONMENT → CONFIDENCE TIER BOOST
+
+When the scoring environment diverges significantly
+from the posted line, boost the pre-game confidence
+tier one level.
+
+UPDATE getPreGameConfidenceTier:
+
+  const getPreGameConfidenceTier = (
+    overProb, 
+    scoringEnv = null,
+    oddsLine = null
+  ) => {
+    if (!overProb) return null
+    
+    let edge = Math.abs(overProb - 50)
+    
+    // SCORING ENVIRONMENT BOOST
+    // If scoringEnv diverges from line, engine has
+    // additional structural support for the lean
+    let envBoost = 0
+    let envSignal = null
+    
+    if (scoringEnv && oddsLine) {
+      const envDiff = scoringEnv - oddsLine
+      
+      if (Math.abs(envDiff) >= 8) {
+        // Significant structural divergence
+        envBoost = 3  // Add 3pp to edge for tier calc
+        
+        envSignal = envDiff > 0
+          ? "High-pace matchup vs low line"
+          : "Low-pace matchup vs high line"
+      } else if (Math.abs(envDiff) >= 4) {
+        envBoost = 1.5
+        envSignal = envDiff > 0
+          ? "Pace leans Over"
+          : "Pace leans Under"
+      }
+    }
+    
+    const adjustedEdge = edge + envBoost
+    
+    // Tier thresholds (same as before but
+    // adjusted edge can push to next tier)
+    let tier
+    if (adjustedEdge < 3) {
+      tier = {
+        label: "No Edge",
+        sublabel: "Model sees even matchup",
+        color: "#71717a",
+        bg: "rgba(255,255,255,0.04)",
+        border: "rgba(255,255,255,0.08)"
+      }
+    } else if (adjustedEdge < 7) {
+      tier = {
+        label: "Low Confidence",
+        sublabel: "Slight lean — insufficient for signal",
+        color: "#71717a",
+        bg: "rgba(255,255,255,0.04)",
+        border: "rgba(255,255,255,0.08)"
+      }
+    } else if (adjustedEdge < 12) {
+      tier = {
+        label: "Moderate Signal",
+        sublabel: "Pre-game lean — monitor at tipoff",
+        color: "#f59e0b",
+        bg: "rgba(245,158,11,0.08)",
+        border: "rgba(245,158,11,0.2)"
+      }
+    } else if (adjustedEdge < 18) {
+      tier = {
+        label: "Strong Pre-Game Signal",
+        sublabel: "Model has clear lean before tipoff",
+        color: "#00d4aa",
+        bg: "rgba(0,212,170,0.08)",
+        border: "rgba(0,212,170,0.2)"
+      }
+    } else {
+      tier = {
+        label: "High Confidence",
+        sublabel: "Significant model edge pre-game",
+        color: "#00d4aa",
+        bg: "rgba(0,212,170,0.12)",
+        border: "rgba(0,212,170,0.25)"
+      }
+    }
+    
+    // Attach environment signal if boost occurred
+    if (envSignal && envBoost > 0) {
+      tier.envSignal = envSignal
+      tier.envBoost = envBoost
+      tier.boosted = true
+    }
+    
+    return tier
+  }
+
+PASS scoringEnv AND oddsLine everywhere 
+getPreGameConfidenceTier is called:
+
+  const tier = getPreGameConfidenceTier(
+    game.engine?.overProb,
+    game.engine?.enrichedStats?.scoringEnv,
+    game.odds?.overUnder
+  )
+
+SHOW BOOST INDICATOR IN VERDICT ROW:
+
+  When tier.boosted === true:
+  
+    Below the tier label pill, add a small row:
+    
+    "📈 [tier.envSignal]"
+    zinc-500 text-xs italic
+    
+    e.g. "📈 High-pace matchup vs low line"
+    
+    This tells the user WHY the confidence 
+    was boosted — transparency is core to brand.
+
+SCORING ENVIRONMENT ROW UPDATE:
+
+  Stat grid "SCORING ENV" row — update color logic:
+  
+  const envVsLine = scoringEnv - oddsLine
+  
+  if (envVsLine >= 8):
+    value color: #00d4aa (teal)
+    right label: "↑ Over lean" teal text-xs
+    
+  if (envVsLine <= -8):
+    value color: #ef4444 (red)
+    right label: "↓ Under lean" red text-xs
+    
+  if (|envVsLine| < 8):
+    value color: #a1a1aa (zinc)
+    right label: "Neutral" zinc-500 text-xs
+  
+  Below value (new sub-row):
+    "Env [scoringEnv] vs Line [oddsLine]"
+    zinc-600 text-xs font-mono
+    e.g. "Env 152.4 vs Line 142.5"

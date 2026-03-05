@@ -1,0 +1,523 @@
+NCAAB scheduled cards only show O/U Total and the 
+engine shows "Engine data loading..." with no 
+probabilities. Fix all data sources and default 
+all cards to expanded.
+
+Per PRD v2.0: NCAAB uses ESPN API (free, no key) 
++ The Odds API (ODDS_API_KEY already in env) with 
+ALL bookmakers queried, no restriction.
+
+---
+
+STEP 1 — AUDIT CURRENT NCAAB DATA FETCH
+
+Print before fixing:
+
+  // NCAAB MARKET AUDIT
+  // Current odds fetch function: [file + name]
+  // The Odds API call being made: [full URL]
+  // Markets requested: [current string]
+  // Bookmakers restricted: [yes/no — which ones]
+  // ODDS_API_KEY in env: [exists yes/no]
+  // ESPN summary endpoint for NCAAB: [url being used]
+  // Predictor field in ESPN response: [exists yes/no]
+  // Why engine shows "loading": [null field / fetch failing]
+
+---
+
+BUG 1 — FIX THE ODDS API CALL FOR NCAAB
+
+Per PRD: request spreads + totals + h1_totals + 
+h1_spreads, ALL bookmakers, no restriction.
+
+  const fetchNCAABOdds = async (gameId) => {
+    
+    // Method 1: The Odds API by event ID
+    // Use sport key for NCAAB
+    const sportKey = "basketball_ncaab"
+    
+    const url = `https://api.the-odds-api.com/v4/` +
+      `sports/${sportKey}/events/${gameId}/odds` +
+      `?apiKey=${process.env.ODDS_API_KEY}` +
+      `&regions=us` +
+      `&markets=spreads,totals,h2h` +
+      // Do NOT restrict bookmakers per PRD
+      // This maximizes coverage for small schools
+      `&oddsFormat=american`
+    
+    console.log("[NCAAB ODDS] Fetching:", url)
+    
+    try {
+      const res = await fetch(url)
+      
+      if (res.status === 422) {
+        // Event ID format mismatch — try alternate
+        console.warn("[NCAAB ODDS] 422 on event fetch")
+        return await fetchNCAABOddsByTeams(gameId)
+      }
+      
+      if (!res.ok) {
+        console.warn(
+          "[NCAAB ODDS] API returned:", res.status
+        )
+        return null
+      }
+      
+      const data = await res.json()
+      return parseOddsAPIResponse(data)
+      
+    } catch (err) {
+      console.error("[NCAAB ODDS] Fetch error:", err)
+      return null
+    }
+  }
+
+  // Fallback: search by team names if event ID fails
+  const fetchNCAABOddsByTeams = async (gameId) => {
+    const game = ncaabGames.find(g => g.id === gameId)
+    if (!game) return null
+    
+    const homeTeam = game.competitions?.[0]
+      ?.competitors
+      ?.find(c => c.homeAway === "home")
+      ?.team?.displayName ?? ""
+    
+    const url = `https://api.the-odds-api.com/v4/` +
+      `sports/basketball_ncaab/odds` +
+      `?apiKey=${process.env.ODDS_API_KEY}` +
+      `&regions=us` +
+      `&markets=spreads,totals,h2h` +
+      `&oddsFormat=american`
+    
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const data = await res.json()
+    
+    // Find matching game by team name
+    const match = data.find(event =>
+      event.home_team?.toLowerCase()
+        .includes(homeTeam.toLowerCase().split(" ").pop())
+      ||
+      event.away_team?.toLowerCase()
+        .includes(homeTeam.toLowerCase().split(" ").pop())
+    )
+    
+    return match ? parseOddsAPIResponse(match) : null
+  }
+
+PARSE THE ODDS API RESPONSE:
+
+  const parseOddsAPIResponse = (data) => {
+    if (!data) return null
+    
+    // data is either a single event or array item
+    const event = Array.isArray(data) ? data[0] : data
+    if (!event?.bookmakers?.length) return null
+    
+    // Aggregate across all bookmakers
+    const totalsLines = []
+    const spreadsLines = []
+    const h2hLines = { home: [], away: [] }
+    
+    event.bookmakers.forEach(book => {
+      book.markets?.forEach(market => {
+        
+        if (market.key === "totals") {
+          const over = market.outcomes?.find(
+            o => o.name === "Over"
+          )
+          if (over?.point) totalsLines.push({
+            book: book.title,
+            line: over.point,
+            overPrice: over.price,
+            underPrice: market.outcomes?.find(
+              o => o.name === "Under"
+            )?.price
+          })
+        }
+        
+        if (market.key === "spreads") {
+          const home = market.outcomes?.find(o =>
+            o.name?.toLowerCase() === 
+              event.home_team?.toLowerCase()
+          )
+          if (home?.point !== undefined) 
+            spreadsLines.push({
+              book: book.title,
+              homeSpread: home.point,
+              homePrice: home.price,
+              awaySpread: -(home.point),
+              awayPrice: market.outcomes?.find(o =>
+                o.name !== home.name
+              )?.price
+            })
+        }
+        
+        if (market.key === "h2h") {
+          const home = market.outcomes?.find(o =>
+            o.name?.toLowerCase() === 
+              event.home_team?.toLowerCase()
+          )
+          const away = market.outcomes?.find(o =>
+            o.name?.toLowerCase() !== 
+              event.home_team?.toLowerCase()
+          )
+          if (home?.price) h2hLines.home.push(home.price)
+          if (away?.price) h2hLines.away.push(away.price)
+        }
+      })
+    })
+    
+    // Use consensus (median of available lines)
+    const median = (arr) => {
+      if (!arr.length) return null
+      const sorted = [...arr].sort((a, b) => a - b)
+      return sorted[Math.floor(sorted.length / 2)]
+    }
+    
+    const consensusTotal = median(
+      totalsLines.map(t => t.line)
+    )
+    const consensusSpread = median(
+      spreadsLines.map(s => s.homeSpread)
+    )
+    
+    // Convert moneyline to implied win%
+    const mlToImplied = (ml) => {
+      if (!ml) return null
+      return ml < 0
+        ? Math.abs(ml) / (Math.abs(ml) + 100) * 100
+        : 100 / (ml + 100) * 100
+    }
+    
+    const homeMLMedian = median(h2hLines.home)
+    const awayMLMedian = median(h2hLines.away)
+    
+    return {
+      overUnder: consensusTotal,
+      spread: consensusSpread,
+      spreadDetails: consensusSpread !== null
+        ? consensusSpread > 0
+          ? `+${consensusSpread}`
+          : String(consensusSpread)
+        : null,
+      homeMoneyline: homeMLMedian,
+      awayMoneyline: awayMLMedian,
+      homeWinPct: homeMLMedian 
+        ? parseFloat(mlToImplied(homeMLMedian)
+            .toFixed(1)) 
+        : null,
+      awayWinPct: awayMLMedian
+        ? parseFloat(mlToImplied(awayMLMedian)
+            .toFixed(1))
+        : null,
+      books: totalsLines.slice(0, 3),
+      bookCount: event.bookmakers.length,
+      source: "odds_api"
+    }
+  }
+
+---
+
+BUG 2 — FIX ESPN PREDICTOR FOR NCAAB ENGINE
+
+The NCAAB engine shows "loading" because ESPN's
+predictor field is either not being fetched or
+the field path is wrong for NCAAB.
+
+CORRECT ESPN SUMMARY FETCH FOR NCAAB:
+
+  const fetchNCAABGameSummary = async (gameId) => {
+    const url = 
+      `https://site.api.espn.com/apis/site/v2/` +
+      `sports/basketball/mens-college-basketball/` +
+      `summary?event=${gameId}`
+    
+    console.log("[NCAAB ENGINE] Summary fetch:", url)
+    
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const data = await res.json()
+    
+    // Log what predictor fields exist
+    console.log("[NCAAB ENGINE] Predictor:", 
+      JSON.stringify(data.predictor, null, 2)
+    )
+    console.log("[NCAAB ENGINE] Pickcenter count:", 
+      data.pickcenter?.length ?? 0
+    )
+    
+    return data
+  }
+
+NCAAB PREDICTOR FIELD PATHS:
+
+  ESPN NCAAB summary has predictor at same path
+  as NBA but field names differ slightly:
+  
+  const extractNCAABProjections = (summary) => {
+    const pred = summary?.predictor
+    
+    // Try multiple field name variants
+    const homeProj = parseFloat(
+      pred?.homeTeam?.gameProjection ??
+      pred?.homeTeam?.teamChance ??
+      pred?.homeTeam?.score ??
+      0
+    )
+    const awayProj = parseFloat(
+      pred?.awayTeam?.gameProjection ??
+      pred?.awayTeam?.teamChance ??
+      pred?.awayTeam?.score ??
+      0
+    )
+    
+    // ESPN win probability (from predictor or pickcenter)
+    const homeWinPct = parseFloat(
+      pred?.homeTeam?.teamChance ??
+      summary?.pickcenter?.[0]
+        ?.homeTeamOdds?.winPercentage ??
+      0
+    )
+    
+    console.log("[NCAAB ENGINE] Projections:", {
+      homeProj, awayProj, homeWinPct
+    })
+    
+    return { homeProj, awayProj, homeWinPct }
+  }
+
+---
+
+BUG 3 — FIX NCAAB PACE-BASED ENGINE FALLBACK
+
+When predictor has no projection scores,
+fall back to NCAAB pace model.
+
+NCAAB average scoring pace: 70 points per team
+per 40 minutes (D1 average ~140 combined).
+
+  const ncaabPaceEngine = (game, oddsLine) => {
+    // Use actual scoring pace if game in progress
+    const score = game.competitions?.[0]
+    const homeScore = parseInt(
+      score?.competitors?.find(
+        c => c.homeAway === "home"
+      )?.score ?? 0
+    )
+    const awayScore = parseInt(
+      score?.competitors?.find(
+        c => c.homeAway === "away"
+      )?.score ?? 0
+    )
+    
+    const period = game.status?.period ?? 0
+    const clock = game.status?.displayClock ?? "20:00"
+    const [mins, secs] = clock.split(":").map(Number)
+    const clockRemaining = mins + (secs / 60)
+    
+    // NCAAB: 2 halves × 20 min each = 40 min total
+    const totalMinutes = 40
+    let elapsedMinutes = 0
+    
+    if (period === 1) {
+      elapsedMinutes = 20 - clockRemaining
+    } else if (period >= 2) {
+      elapsedMinutes = 20 + (20 - clockRemaining)
+    }
+    // OT: add 5 min per OT period
+    if (period > 2) {
+      elapsedMinutes = 40 + ((period - 2) * 5)
+    }
+    
+    const currentTotal = homeScore + awayScore
+    const gameProgress = Math.min(
+      elapsedMinutes / totalMinutes, 1.0
+    )
+    
+    if (gameProgress < 0.05) {
+      // Pre-game: use odds line as baseline
+      // NCAAB D1 average: 140 combined
+      const baseline = oddsLine ?? 140
+      return {
+        projTotal: baseline,
+        overProb: null,  // no edge pre-game without proj
+        gameProgress: 0
+      }
+    }
+    
+    // Project final total from current pace
+    const projectedPace = currentTotal / gameProgress
+    
+    // Regression to mean: 60% pace + 40% league avg
+    const leagueAvg = 140
+    const projTotal = (projectedPace * 0.60) + 
+                      (leagueAvg * 0.40)
+    
+    if (!oddsLine) {
+      return { projTotal, overProb: null, gameProgress }
+    }
+    
+    const diff = projTotal - oddsLine
+    
+    // Dynamic multiplier based on game progress
+    // (reuses existing getDynamicMultiplier logic)
+    const multiplier = getDynamicMultiplier({
+      gameProgress,
+      sport: "ncaab"
+    })
+    
+    const rawProb = 50 + (diff * multiplier)
+    const { min, max } = getProgressiveLimits({
+      gameProgress
+    })
+    const overProb = Math.min(
+      Math.max(rawProb, min), max
+    )
+    
+    return {
+      projTotal: parseFloat(projTotal.toFixed(1)),
+      overProb: parseFloat(overProb.toFixed(1)),
+      underProb: parseFloat(
+        (100 - overProb).toFixed(1)
+      ),
+      gameProgress
+    }
+  }
+
+---
+
+BUG 4 — FETCH ALL MARKETS ON CARD EXPAND
+
+Wire everything together in card expand handler:
+
+  const handleNCAABCardExpand = async (gameId) => {
+    setExpandedGameId(gameId)
+    
+    const game = ncaabGames.find(g => g.id === gameId)
+    if (!game) return
+    
+    // Fetch in parallel — don't wait for one to finish
+    const [summary, oddsData] = await Promise.all([
+      game.summary 
+        ? Promise.resolve(game.summary)
+        : fetchNCAABGameSummary(gameId),
+      game.odds
+        ? Promise.resolve(game.odds)
+        : fetchNCAABOdds(gameId)
+    ])
+    
+    const projections = extractNCAABProjections(summary)
+    
+    // If ESPN predictor has projections, use them
+    // Otherwise fall back to pace model
+    let engine
+    if (projections.homeProj > 0 && 
+        projections.awayProj > 0) {
+      const projTotal = 
+        projections.homeProj + projections.awayProj
+      engine = {
+        projTotal,
+        overProb: preGameEngineProb(
+          projTotal, oddsData?.overUnder
+        ),
+        source: "espn_predictor"
+      }
+    } else {
+      engine = ncaabPaceEngine(
+        game, oddsData?.overUnder
+      )
+      engine.source = "pace_model"
+    }
+    
+    console.log("[NCAAB] Engine result:", engine)
+    console.log("[NCAAB] Odds loaded:", {
+      total: oddsData?.overUnder,
+      spread: oddsData?.spreadDetails,
+      books: oddsData?.bookCount
+    })
+    
+    // Update game with all fetched data
+    setNcaabGames(prev => prev.map(g =>
+      g.id === gameId 
+        ? { ...g, summary, odds: oddsData, engine }
+        : g
+    ))
+  }
+
+---
+
+BUG 5 — DEFAULT ALL CARDS TO EXPANDED VIEW
+
+Per PRD and user request: all NCAAB cards 
+default to expanded state.
+
+Find where expandedGameId or expandedCards state
+is initialized. Change from null/empty to all IDs:
+
+  // Current (wrong):
+  const [expandedGameId, setExpandedGameId] = 
+    useState(null)
+  
+  // OR wrong:
+  const [expandedCards, setExpandedCards] = 
+    useState({})
+
+  // Fix — after games load, expand all:
+  useEffect(() => {
+    if (!ncaabGames?.length) return
+    
+    // If using single expandedGameId (expand first):
+    if (expandedGameId === null) {
+      setExpandedGameId(ncaabGames[0]?.id)
+    }
+    
+    // If using expandedCards map (expand all):
+    setExpandedCards(prev => {
+      const next = { ...prev }
+      ncaabGames.forEach(g => {
+        if (!(g.id in next)) {
+          next[g.id] = true
+        }
+      })
+      return next
+    })
+    
+    // Trigger data fetch for first 3 visible cards
+    ncaabGames.slice(0, 3).forEach(game => {
+      if (!game.odds) {
+        handleNCAABCardExpand(game.id)
+      }
+    })
+    
+  }, [ncaabGames.length])
+  
+  // Use whichever pattern matches current code.
+  // Do not expand ALL 40+ games simultaneously —
+  // that would fire 40 API calls at once.
+  // Instead: expand UI for all, but lazy-fetch data:
+  
+  // Fetch odds/summary when card scrolls into view:
+  // (IntersectionObserver already built for chips)
+  // Apply same pattern to game cards:
+  
+  const cardObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const gameId = 
+            entry.target.dataset.gameId
+          const game = ncaabGames
+            .find(g => g.id === gameId)
+          if (game && !game.odds) {
+            handleNCAABCardExpand(gameId)
+          }
+          cardObserver.unobserve(entry.target)
+        }
+      })
+    },
+    { rootMargin: "200px" }  // pre-fetch 200px ahead
+  )
+  
+  // In card render: add data-game-id and ref:
+  // <div data-game-id={game.id} ref={cardRef}>
