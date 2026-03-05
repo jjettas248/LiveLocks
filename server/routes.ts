@@ -11,7 +11,45 @@ import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin, requi
 import { registerStripeRoutes } from "./stripeService";
 import { getVapidPublicKey, sendPush } from "./webpush";
 import { checkAndSendAlerts } from "./alertManager";
-import { autoResolveAlerts } from "./analyticsResolver";
+import { autoResolveAlerts, autoSettlePersistedPlays } from "./analyticsResolver";
+
+// ── Module-level play dedup guard (persists for process lifetime) ─────────────
+const recordedPlayKeys = new Set<string>();
+
+function getPlayKey(p: {
+  playerId?: string | number | null;
+  playerName: string;
+  statType?: string;
+  market?: string;
+  line: number | string;
+  betDirection?: string;
+  direction?: string;
+  gameId?: string | null;
+  timestamp?: Date | string;
+}): string {
+  const today = p.timestamp
+    ? new Date(p.timestamp).toISOString().slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+  return [
+    String(p.playerId ?? p.playerName ?? "").trim(),
+    String(p.statType ?? p.market ?? "").toUpperCase().trim(),
+    String(p.line ?? ""),
+    String(p.betDirection ?? p.direction ?? "").toLowerCase().trim(),
+    String(p.gameId ?? "").trim(),
+    today,
+  ].join("|");
+}
+
+async function recordPlayOnce(play: Parameters<typeof import("./storage").storage.recordPlay>[0]): Promise<void> {
+  const key = play.duplicateGuard;
+  if (recordedPlayKeys.has(key)) return;
+  recordedPlayKeys.add(key);
+  try {
+    await import("./storage").then(m => m.storage.recordPlay(play));
+  } catch (err) {
+    console.warn("[recordPlayOnce] DB write failed:", (err as any).message);
+  }
+}
 
 export async function registerRoutes(
   httpServer: Server,

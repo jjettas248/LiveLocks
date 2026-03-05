@@ -24,7 +24,7 @@ import {
   type PersistedPlay,
   type PlayStats,
 } from "@shared/schema";
-import { eq, and, desc, isNull, sql, lt, lte } from "drizzle-orm";
+import { eq, and, desc, isNull, sql, lt, lte, inArray } from "drizzle-orm";
 
 // 2025-26 NBA team pace (possessions per 48 minutes)
 export const TEAM_PACE: Record<string, number> = {
@@ -116,6 +116,7 @@ export interface IStorage {
   settlePlay(id: string, result: string, finalStat: number | null, settledAt: Date): Promise<PersistedPlay | null>;
   getPlayStats(): Promise<PlayStats>;
   cleanupOldPlays(): Promise<number>;
+  cleanDuplicatePlays(): Promise<{ removed: number; remaining: number }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -750,6 +751,41 @@ export class DatabaseStorage implements IStorage {
       ))
       .returning({ id: persistedPlays.id });
     return deleted.length;
+  }
+
+  async cleanDuplicatePlays(): Promise<{ removed: number; remaining: number }> {
+    const rows = await db
+      .select()
+      .from(persistedPlays)
+      .orderBy(desc(persistedPlays.timestamp));
+
+    const seen = new Map<string, { id: string; prob: number }>();
+    const toDelete: string[] = [];
+
+    for (const play of rows) {
+      const key = play.duplicateGuard ??
+        `${play.playerId ?? play.playerName}|${play.market}|${play.line}|${play.direction}|${play.gameId ?? ""}|${play.gameDate}`;
+
+      if (seen.has(key)) {
+        const existing = seen.get(key)!;
+        const currentProb = Number(play.prob);
+        if (currentProb > existing.prob) {
+          toDelete.push(existing.id);
+          seen.set(key, { id: play.id, prob: currentProb });
+        } else {
+          toDelete.push(play.id);
+        }
+      } else {
+        seen.set(key, { id: play.id, prob: Number(play.prob) });
+      }
+    }
+
+    if (toDelete.length > 0) {
+      console.log("[CLEAN] Deleting", toDelete.length, "duplicate plays");
+      await db.delete(persistedPlays).where(inArray(persistedPlays.id, toDelete));
+    }
+
+    return { removed: toDelete.length, remaining: rows.length - toDelete.length };
   }
 }
 
