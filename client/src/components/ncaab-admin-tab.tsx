@@ -148,6 +148,52 @@ interface H2HGame {
   isCurrent?: boolean;
 }
 
+// ── NCAAB REFRESH AUDIT ──────────────────────────────────────────────────────
+// Current interval: dynamic (20s live / 15s halftime / 60s upcoming / 300s idle)
+// Fetch function: /api/ncaab/plays (playsQuery) + /api/ncaab/games (gamesQuery)
+// Trigger conditions: dynamic self-rescheduling via refetchInterval function + visibilitychange
+// ESPN endpoint used: site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard
+
+function normalizeGameStatus(game: NCAABGame): "in_progress" | "halftime" | "final" | "scheduled" {
+  if (game.isHalftime) return "halftime";
+  if (game.isInProgress || game.isLive) return "in_progress";
+  const s = (game.status ?? "").toLowerCase();
+  if (s.includes("final")) return "final";
+  return "scheduled";
+}
+
+function getRefreshInterval(games: NCAABGame[]): number {
+  const hasHalftime = games.some(g => normalizeGameStatus(g) === "halftime");
+  const hasLive     = games.some(g => normalizeGameStatus(g) === "in_progress");
+  const hasUpcoming = games.some(g => {
+    if (!g.startTime) return false;
+    const minsUntil = (new Date(g.startTime).getTime() - Date.now()) / 60000;
+    return minsUntil <= 30 && minsUntil > 0;
+  });
+  if (hasHalftime) return 15000;
+  if (hasLive)     return 20000;
+  if (hasUpcoming) return 60000;
+  return 300000;
+}
+
+function isMarchMadness(games: NCAABGame[]): boolean {
+  const month = new Date().getMonth();
+  if (month < 2 || month > 3) return false;
+  return games.some(g =>
+    g.name?.toLowerCase().includes("tournament") ||
+    g.name?.toLowerCase().includes("march madness") ||
+    g.shortName?.toLowerCase().includes("ncaa")
+  );
+}
+
+function getTournamentAwareInterval(games: NCAABGame[]): number {
+  if (isMarchMadness(games)) {
+    const hasActive = games.some(g => g.isLive || g.isHalftime);
+    return hasActive ? 15000 : 30000;
+  }
+  return getRefreshInterval(games);
+}
+
 function determineCoverage(g: H2HGame): { result: "covered" | "failed" | "PUSH" | "N/A"; team: string | null } {
   if (!g.spread || !g.spreadTeam) return { result: "N/A", team: null };
   const absSpread = Math.abs(g.spread);
@@ -1847,18 +1893,55 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId }: NCAABAdminTabPr
   const prevGamesRef = useRef<NCAABGame[]>([]);
   const prevPlaysRef = useRef<NCAABPlay[]>([]);
 
+  // Dynamic refresh state ───────────────────────────────────────────────────────
+  const gamesRef       = useRef<NCAABGame[]>([]);
+  const lastRefreshAt  = useRef<number>(Date.now());
+  const [countdown, setCountdown] = useState<number>(300);
+
   const playsQuery = useQuery<{ plays: NCAABPlay[] }>({
     queryKey: ["/api/ncaab/plays"],
-    refetchInterval: 60 * 1000,
+    refetchInterval: () => getTournamentAwareInterval(gamesRef.current),
   });
 
   const gamesQuery = useQuery<{ games: NCAABGame[] }>({
     queryKey: ["/api/ncaab/games"],
-    refetchInterval: 90 * 1000,
+    refetchInterval: () => getTournamentAwareInterval(gamesRef.current),
   });
 
   const plays   = playsQuery.data?.plays ?? [];
   const games   = gamesQuery.data?.games ?? [];
+
+  // Keep gamesRef in sync for interval calculation ──────────────────────────────
+  useEffect(() => {
+    if (gamesQuery.data?.games) gamesRef.current = gamesQuery.data.games;
+  }, [gamesQuery.data]);
+
+  // Reset countdown clock whenever data refreshes ───────────────────────────────
+  useEffect(() => {
+    lastRefreshAt.current = Date.now();
+  }, [playsQuery.dataUpdatedAt]);
+
+  // Countdown ticker (only meaningful when idle at 300s interval) ───────────────
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const interval = getTournamentAwareInterval(gamesRef.current);
+      const elapsed  = Math.floor((Date.now() - lastRefreshAt.current) / 1000);
+      setCountdown(Math.max(0, Math.floor(interval / 1000) - elapsed));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Refresh immediately when tab regains focus ──────────────────────────────────
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        playsQuery.refetch();
+        gamesQuery.refetch();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const loading = playsQuery.isLoading || gamesQuery.isLoading;
   const error   = playsQuery.error ?? gamesQuery.error;
 
@@ -1992,6 +2075,44 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId }: NCAABAdminTabPr
             2H Plays
           </button>
         </div>
+        {/* Refresh indicator */}
+        {(() => {
+          const isHT       = games.some(g => normalizeGameStatus(g) === "halftime");
+          const isActive   = games.some(g => normalizeGameStatus(g) === "in_progress");
+          const isUpcoming = games.some(g => {
+            if (!g.startTime) return false;
+            const m = (new Date(g.startTime).getTime() - Date.now()) / 60000;
+            return m <= 30 && m > 0;
+          });
+          const isMM = isMarchMadness(games);
+          if (isHT) return (
+            <span data-testid="ncaab-refresh-indicator" className="flex items-center gap-1.5 text-xs" style={{ color: "#71717a" }}>
+              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#f59e0b" }} />
+              {isMM ? "Tournament · 15s" : "Halftime · 15s"}
+            </span>
+          );
+          if (isActive) return (
+            <span data-testid="ncaab-refresh-indicator" className="flex items-center gap-1.5 text-xs" style={{ color: "#71717a" }}>
+              <span className="relative flex w-1.5 h-1.5 shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: "#22c55e" }} />
+                <span className="relative inline-flex rounded-full w-1.5 h-1.5" style={{ background: "#22c55e" }} />
+              </span>
+              {isMM ? "Tournament · 15s" : "Live · 20s"}
+            </span>
+          );
+          if (isUpcoming) return (
+            <span data-testid="ncaab-refresh-indicator" className="flex items-center gap-1.5 text-xs" style={{ color: "#71717a" }}>
+              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#3b82f6" }} />
+              {isMM ? "Tournament · 30s" : "Starting soon · 1m"}
+            </span>
+          );
+          return (
+            <span data-testid="ncaab-refresh-indicator" className="flex items-center gap-1.5 text-xs" style={{ color: "#52525b" }}>
+              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "#52525b" }} />
+              ↻ {countdown}s
+            </span>
+          );
+        })()}
         <button
           data-testid="ncaab-refresh"
           onClick={() => { playsQuery.refetch(); gamesQuery.refetch(); }}

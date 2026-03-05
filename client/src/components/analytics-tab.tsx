@@ -1,5 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
-import { TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { TrendingUp, TrendingDown, Minus, RefreshCw } from "lucide-react";
+import { apiRequest } from "@/lib/queryClient";
 
 interface BucketStat {
   label: string;
@@ -70,6 +72,10 @@ function RoiIcon({ roi }: { roi: number }) {
 }
 
 export function AnalyticsTab() {
+  const queryClient = useQueryClient();
+  const [isSettling, setIsSettling] = useState(false);
+  const [lastSynced, setLastSynced] = useState<string | null>(null);
+
   const { data: summary, isLoading: summaryLoading } = useQuery<AnalyticsSummary>({
     queryKey: ["/api/analytics/summary"],
     refetchInterval: 5 * 60 * 1000,
@@ -82,15 +88,52 @@ export function AnalyticsTab() {
 
   const alerts = alertsData?.alerts ?? [];
 
+  async function handleManualSettle() {
+    setIsSettling(true);
+    try {
+      const result = await apiRequest("POST", "/api/analytics/settle");
+      const data = await result.json() as { settled: number; stillPending: number };
+      await queryClient.invalidateQueries({ queryKey: ["/api/analytics/summary"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/analytics/alerts"] });
+      setLastSynced(new Date().toLocaleTimeString());
+      if (data.settled > 0) {
+        console.log(`[settle] ${data.settled} play(s) settled, ${data.stillPending} still pending`);
+      }
+    } catch (err) {
+      console.warn("[settle] Failed:", err);
+    } finally {
+      setIsSettling(false);
+    }
+  }
+
   return (
     <div className="space-y-6" data-testid="analytics-tab">
-      <div>
-        <h2 className="text-xl font-bold text-white" data-testid="analytics-title">
-          Model Performance
-        </h2>
-        <p className="text-sm text-gray-400 mt-1">
-          NBA Live 2H Plays — settled automatically from final box scores
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-bold text-white" data-testid="analytics-title">
+            Model Performance
+          </h2>
+          <p className="text-sm text-gray-400 mt-1">
+            NBA Live 2H Plays — settled automatically from final box scores
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <button
+            data-testid="button-settle-now"
+            onClick={handleManualSettle}
+            disabled={isSettling}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
+            style={{ background: "#181818", border: "1px solid #3f3f46", color: "#a1a1aa" }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "#71717a"; (e.currentTarget as HTMLElement).style.color = "#ffffff"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "#3f3f46"; (e.currentTarget as HTMLElement).style.color = "#a1a1aa"; }}
+          >
+            <RefreshCw className={`w-3 h-3 ${isSettling ? "animate-spin" : ""}`} />
+            {isSettling ? "Settling..." : "↻ Settle Now"}
+          </button>
+          {lastSynced && (
+            <span className="text-[10px]" style={{ color: "#52525b" }}>Last synced: {lastSynced}</span>
+          )}
+        </div>
       </div>
 
       {summaryLoading ? (

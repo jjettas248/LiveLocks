@@ -36,7 +36,8 @@ export async function checkAndSendAlerts(
   );
 
   for (const play of highConfidencePlays) {
-    const fingerprint = `${play.playerName}|${play.statType}|${play.line}`;
+    // Improved getPlayKey: include gameId + date so server restarts don't re-alert same-day plays
+    const fingerprint = `${play.playerId ?? play.playerName}|${play.statType}|${play.line}|${play.betDirection}|${play.gameId ?? ""}|${new Date().toDateString()}`;
     if (alertedPlays.has(fingerprint)) continue;
     alertedPlays.add(fingerprint);
 

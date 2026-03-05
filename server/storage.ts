@@ -490,12 +490,33 @@ export class DatabaseStorage implements IStorage {
   }
 
   async savePlayAlerts(plays: any[]): Promise<void> {
+    // PLAYS AUDIT
+    // Play storage location: halftime_play_alerts DB table + play_results join table
+    // Deduplication key: gameId + playerId + statType + betDirection + gameDate (select-before-insert guard)
+    // Settlement function: autoResolveAlerts in server/analyticsResolver.ts
+    // Stats fetch for settlement: ESPN NBA summary?event={gameId}
+    // Confirmed cause of duplication: no explicit unique constraint on table; onConflictDoNothing targeted PK only
     const today = new Date().toISOString().slice(0, 10);
     for (const play of plays) {
       const prob = Number(play.probability);
       const directionalConf = play.betDirection === "over" ? prob : 100 - prob;
       if (directionalConf < 60) continue;
       try {
+        // getPlayKey: check for existing record before inserting to prevent 5x duplication
+        const existing = await db
+          .select({ id: halftimePlayAlerts.id })
+          .from(halftimePlayAlerts)
+          .where(
+            and(
+              eq(halftimePlayAlerts.gameId, String(play.gameId ?? "")),
+              eq(halftimePlayAlerts.playerId, Number(play.playerId ?? 0)),
+              eq(halftimePlayAlerts.statType, String(play.statType ?? "")),
+              eq(halftimePlayAlerts.betDirection, String(play.betDirection ?? "")),
+              eq(halftimePlayAlerts.gameDate, today)
+            )
+          )
+          .limit(1);
+        if (existing.length > 0) continue; // already recorded — skip
         await db.insert(halftimePlayAlerts).values({
           gameId: play.gameId,
           gameDate: today,
@@ -508,7 +529,7 @@ export class DatabaseStorage implements IStorage {
           line: String(play.line),
           probability: String(prob),
           betDirection: play.betDirection,
-        }).onConflictDoNothing();
+        });
       } catch {
         // skip individual insert errors silently
       }

@@ -1874,4 +1874,18 @@ export function registerAnalyticsRoutes(app: Express): void {
       res.status(500).json({ message: "Failed to load analytics alerts" });
     }
   });
+
+  // Manual settle: trigger autoResolveAlerts on-demand and return count
+  app.post("/api/analytics/settle", requireAdmin, async (_req, res) => {
+    try {
+      const before = await storage.getUnresolvedAlerts();
+      await autoResolveAlerts(storage);
+      const after  = await storage.getUnresolvedAlerts();
+      const settled = Math.max(0, before.length - after.length);
+      const stillPending = after.length;
+      res.json({ settled, stillPending });
+    } catch (e) {
+      res.status(500).json({ message: "Settle failed", error: (e as any).message });
+    }
+  });
 }

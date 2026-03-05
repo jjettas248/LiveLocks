@@ -1,0 +1,368 @@
+Fix three issues in the Analytics model performance 
+section: plays settling automatically from next-day 
+stats, plays listing 5 times each, and a manual 
+sync button.
+
+---
+
+STEP 1 — AUDIT BEFORE FIXING
+
+Find the plays storage and settlement logic:
+
+  - Where plays are written when notifications fire
+  - What deduplication key (if any) exists
+  - Where settlement logic runs
+  - How "Final" stat values are fetched
+  - Whether there is a unique constraint on play records
+
+Print before fixing:
+  // PLAYS AUDIT
+  // Play storage location: [DB table / state / file]
+  // Deduplication key: [field or "none"]
+  // Settlement function: [name + location]
+  // Stats fetch for settlement: [endpoint]
+  // Confirmed cause of 5x duplication: [describe]
+
+---
+
+STEP 2 — FIX DEDUPLICATION — ONE PLAY PER SIGNAL
+
+Each play must be stored exactly once.
+A play is uniquely identified by:
+
+  playerId + market + line + direction + gameId + date
+
+  const getPlayKey = (play) => [
+    play.playerId,
+    play.market,
+    String(play.line),
+    play.direction,
+    play.gameId,
+    new Date(play.timestamp).toDateString()
+  ].join("|")
+
+BEFORE inserting any play into storage:
+
+  const isDuplicate = existingPlays.some(p =>
+    getPlayKey(p) === getPlayKey(newPlay)
+  )
+  if (isDuplicate) return // do not insert
+
+ALSO: find where the play is currently being
+written multiple times and stop it.
+
+Common causes of 5x duplication:
+  A. Notification fires 5 times per refresh cycle
+     Fix: deduplication set (already specced in 
+     previous session — ensure it is wired)
+  
+  B. Play written in both notification trigger 
+     AND in a separate plays tracker
+     Fix: write in ONE location only
+  
+  C. useEffect with missing dependency array 
+     causes multiple registrations
+     Fix: add correct dependencies or [] for mount-only
+  
+  D. Component re-renders trigger re-write
+     Fix: use ref guard:
+       const writtenPlays = useRef(new Set())
+       if (writtenPlays.current.has(key)) return
+       writtenPlays.current.add(key)
+       // then write play
+
+Find which of A/B/C/D is occurring and fix it.
+Print which cause was found in audit comment.
+
+---
+
+STEP 3 — AUTO-SETTLE FROM NEXT-DAY STAT FETCH
+
+When the NBA scoreboard refreshes with a new slate,
+detect that yesterday's games are now final and
+pull box score stats to settle all pending plays.
+
+TRIGGER: When fetchNBAGames() returns a new set of
+games where none of yesterday's gameIds appear,
+it means yesterday's slate is complete.
+
+  const settlePreviousSlate = async (
+    currentGames, pendingPlays
+  ) => {
+    if (pendingPlays.length === 0) return
+    
+    // Get unique gameIds from pending plays
+    const pendingGameIds = [
+      ...new Set(pendingPlays.map(p => p.gameId))
+    ]
+    
+    // Check if any pending games are in current slate
+    const currentGameIds = new Set(
+      currentGames.map(g => g.id)
+    )
+    
+    // Games that are no longer in current slate
+    // = yesterday's games that are now final
+    const settleableGameIds = pendingGameIds.filter(
+      id => !currentGameIds.has(id)
+    )
+    
+    if (settleableGameIds.length === 0) return
+    
+    // Fetch box score for each completed game
+    for (const gameId of settleableGameIds) {
+      await settleGamePlays(gameId, pendingPlays)
+    }
+  }
+
+SETTLE EACH GAME:
+
+  const settleGamePlays = async (gameId, pendingPlays) => {
+    // Fetch final box score from ESPN
+    const boxScoreUrl = 
+      `https://site.api.espn.com/apis/site/v2/` +
+      `sports/basketball/nba/summary?event=${gameId}`
+    
+    const res = await fetch(boxScoreUrl)
+    const data = await res.json()
+    
+    // Build player stats map from box score
+    const playerStats = {}
+    
+    const players = data.boxscore?.players ?? []
+    players.forEach(teamPlayers => {
+      teamPlayers.statistics?.forEach(statGroup => {
+        statGroup.athletes?.forEach(athlete => {
+          const id = athlete.athlete?.id
+          if (!id) return
+          
+          // Map stat abbreviations to values
+          const stats = {}
+          statGroup.keys?.forEach((key, i) => {
+            stats[key] = parseFloat(
+              athlete.stats?.[i] ?? 0
+            )
+          })
+          
+          // Build combined stat fields
+          playerStats[id] = {
+            PTS: stats.PTS ?? 0,
+            REB: stats.REB ?? 0,
+            AST: stats.AST ?? 0,
+            BLK: stats.BLK ?? 0,
+            STL: stats.STL ?? 0,
+            "P+R": (stats.PTS ?? 0) + (stats.REB ?? 0),
+            "P+A": (stats.PTS ?? 0) + (stats.AST ?? 0),
+            "R+A": (stats.REB ?? 0) + (stats.AST ?? 0),
+            "P+R+A": (stats.PTS ?? 0) + 
+                     (stats.REB ?? 0) + 
+                     (stats.AST ?? 0),
+            "S+B": (stats.STL ?? 0) + (stats.BLK ?? 0)
+          }
+        })
+      })
+    })
+    
+    // Settle each pending play for this game
+    const playsToSettle = pendingPlays.filter(
+      p => p.gameId === gameId && p.result === null
+    )
+    
+    for (const play of playsToSettle) {
+      const playerFinalStats = playerStats[play.playerId]
+      if (!playerFinalStats) continue
+      
+      const finalStat = playerFinalStats[play.market]
+      if (finalStat === undefined) continue
+      
+      // Determine result
+      let result = "MISS"
+      if (finalStat === play.line) {
+        result = "PUSH"
+      } else if (
+        play.direction === "Over" && 
+        finalStat > play.line
+      ) {
+        result = "HIT"
+      } else if (
+        play.direction === "Under" && 
+        finalStat < play.line
+      ) {
+        result = "HIT"
+      }
+      
+      // Update play record
+      await updatePlay(play.id, {
+        result,
+        finalStat,
+        settledAt: new Date().toISOString()
+      })
+    }
+  }
+
+WIRE TO NBA FETCH:
+
+  // In NBA game fetch useEffect or polling function:
+  const updatedGames = await fetchNBAGames()
+  setNbaGames(updatedGames)
+  
+  // Auto-settle previous slate
+  const pending = plays.filter(p => p.result === null)
+  if (pending.length > 0) {
+    await settlePreviousSlate(updatedGames, pending)
+    // Refresh plays display after settlement
+    const updated = await fetchPlays()
+    setPlays(updated)
+  }
+
+---
+
+STEP 4 — MANUAL SYNC BUTTON
+
+Add a "Settle Now" button in the Analytics tab
+model performance section as a failsafe.
+
+BUTTON PLACEMENT:
+  Right side of "Model Performance" header row
+  Next to subtitle text
+
+BUTTON STYLE:
+  Label: "↻ Settle Now"
+  bg: #181818
+  border: #3f3f46
+  text: #a1a1aa text-xs
+  rounded-md px-3 py-1.5
+  hover: border zinc-500, text white
+
+LOADING STATE:
+  "Settling..." + spinner
+  Disabled during fetch
+
+ON CLICK:
+
+  const handleManualSettle = async () => {
+    setIsSettling(true)
+    
+    try {
+      // Fetch current NBA slate
+      const currentGames = await fetchNBAGames()
+      
+      // Get all pending plays (not just today)
+      const allPending = plays.filter(
+        p => p.result === null
+      )
+      
+      if (allPending.length === 0) {
+        showToast("No pending plays to settle", "zinc")
+        return
+      }
+      
+      // Attempt to settle all pending plays
+      // regardless of whether games are in current slate
+      const pendingGameIds = [
+        ...new Set(allPending.map(p => p.gameId))
+      ]
+      
+      let settledCount = 0
+      let failedCount = 0
+      
+      for (const gameId of pendingGameIds) {
+        try {
+          await settleGamePlays(gameId, allPending)
+          settledCount++
+        } catch (err) {
+          failedCount++
+          console.warn(
+            `[SETTLE] Failed for game ${gameId}:`, err
+          )
+        }
+      }
+      
+      // Refresh plays after settlement
+      const updated = await fetchPlays()
+      setPlays(updated)
+      
+      // Show result toast
+      if (settledCount > 0 && failedCount === 0) {
+        showToast(
+          `✓ Settled ${settledCount} game(s)`, 
+          "teal"
+        )
+      } else if (settledCount > 0) {
+        showToast(
+          `↻ ${settledCount} settled, ` +
+          `${failedCount} unavailable`, 
+          "amber"
+        )
+      } else {
+        showToast(
+          "Box scores not yet available — try again later",
+          "zinc"
+        )
+      }
+      
+    } finally {
+      setIsSettling(false)
+    }
+  }
+
+LAST SYNCED TIMESTAMP:
+  Below the "Settle Now" button after any sync:
+    "Last synced: [time]" zinc-500 text-xs
+    Updates after every manual or auto-settle
+    
+    const [lastSynced, setLastSynced] = useState(null)
+    // After settle: 
+    setLastSynced(new Date().toLocaleTimeString())
+
+---
+
+STEP 5 — MODEL PERFORMANCE BUCKET DISPLAY FIX
+
+The buckets (60-69%, 70-79%, 80-89%, 90%+) show
+"0 plays (need 10+)" because plays are duplicated
+and then deduplicated to 0 net unique plays.
+
+After deduplication fix in Step 2, buckets should
+populate correctly. But also fix the bucket logic:
+
+  const getBucket = (prob) => {
+    if (prob >= 90) return "90%+"
+    if (prob >= 80) return "80-89%"
+    if (prob >= 70) return "70-79%"
+    if (prob >= 60) return "60-69%"
+    return null // below threshold — not shown
+  }
+  
+  // Only count settled plays in buckets
+  // Pending plays show in "Recent Plays" table
+  // but do NOT count toward W/L bucket stats
+  
+  const settledPlays = plays.filter(
+    p => p.result !== null && p.result !== "PUSH"
+  )
+  
+  const buckets = {
+    "60-69%": settledPlays.filter(
+      p => getBucket(p.prob) === "60-69%"
+    ),
+    "70-79%": settledPlays.filter(
+      p => getBucket(p.prob) === "70-79%"
+    ),
+    "80-89%": settledPlays.filter(
+      p => getBucket(p.prob) === "80-89%"
+    ),
+    "90%+": settledPlays.filter(
+      p => getBucket(p.prob) === "90%+"
+    )
+  }
+  
+  // Win rate per bucket
+  const getBucketWinRate = (bucketPlays) => {
+    if (bucketPlays.length === 0) return null
+    const wins = bucketPlays.filter(
+      p => p.result === "HIT"
+    ).length
+    return ((wins / bucketPlays.length) * 100)
+      .toFixed(1)
+  }

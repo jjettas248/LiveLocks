@@ -1,0 +1,204 @@
+Fix NCAAB Live tab to aggressively refresh during 
+active slate hours. Currently shows stale "No Live 
+Games" even when games are in progress.
+
+---
+
+STEP 1 — AUDIT CURRENT REFRESH LOGIC
+
+Find all polling/refresh logic in NCAAB Live tab:
+  - Any setInterval or setTimeout for data fetching
+  - Any manual refresh button handler
+  - The ESPN NCAAB scoreboard fetch function
+  - Current refresh interval value
+
+Print before fixing:
+  // NCAAB REFRESH AUDIT
+  // Current interval: [value or "none"]
+  // Fetch function: [name + file]
+  // Trigger conditions: [on mount only / interval / manual]
+  // ESPN endpoint used: [url]
+
+---
+
+STEP 2 — IMPLEMENT TIERED AUTO-REFRESH
+
+Refresh rate must adapt to what is currently happening
+on the slate. More action = faster refresh.
+
+  const getRefreshInterval = (games) => {
+    const hasLive = games.some(g => 
+      g.status === "in_progress" || g.status === "live"
+    )
+    const hasHalftime = games.some(g => 
+      g.status === "halftime"
+    )
+    const hasUpcoming = games.some(g => {
+      const tipoff = new Date(g.date).getTime()
+      const minsUntil = (tipoff - Date.now()) / 60000
+      return minsUntil <= 30 && minsUntil > 0
+    })
+    
+    if (hasLive) return 20000        // 20s — games live
+    if (hasHalftime) return 15000    // 15s — halftime active
+    if (hasUpcoming) return 60000    // 1min — games imminent
+    return 300000                    // 5min — idle slate
+  }
+
+DYNAMIC INTERVAL IMPLEMENTATION:
+
+  const refreshTimeoutRef = useRef(null)
+  
+  const scheduleNextRefresh = (games) => {
+    if (refreshTimeoutRef.current) {
+      clearTimeout(refreshTimeoutRef.current)
+    }
+    const interval = getRefreshInterval(games)
+    refreshTimeoutRef.current = setTimeout(async () => {
+      const updated = await fetchNCAABGames()
+      setNcaabGames(updated)
+      scheduleNextRefresh(updated)
+      // Reschedules itself after each fetch
+      // Interval recalculates based on new game states
+    }, interval)
+  }
+  
+  // Start on mount
+  useEffect(() => {
+    const init = async () => {
+      const games = await fetchNCAABGames()
+      setNcaabGames(games)
+      scheduleNextRefresh(games)
+    }
+    init()
+    
+    return () => {
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current)
+      }
+    }
+  }, [])
+  
+  // Also refresh when tab becomes visible
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        fetchNCAABGames().then(games => {
+          setNcaabGames(games)
+          scheduleNextRefresh(games)
+        })
+      }
+    }
+    document.addEventListener(
+      "visibilitychange", onVisible
+    )
+    return () => document.removeEventListener(
+      "visibilitychange", onVisible
+    )
+  }, [])
+
+---
+
+STEP 3 — FIX "NO LIVE GAMES" FALSE POSITIVE
+
+The empty state currently shows when games array
+is empty OR when status fields don't match filters.
+
+Add status normalization before checking:
+
+  const normalizeGameStatus = (game) => {
+    const statusType = game.status?.type?.name ?? ""
+    const statusDesc = game.status?.type?.description
+      ?.toLowerCase() ?? ""
+    const clock = game.status?.displayClock ?? ""
+    const period = game.status?.period ?? 0
+    
+    // Normalize to standard values
+    if (
+      statusType === "STATUS_IN_PROGRESS" ||
+      statusDesc.includes("in progress") ||
+      statusDesc.includes("half") ||
+      (period > 0 && clock !== "0:00" && 
+       !statusDesc.includes("final"))
+    ) {
+      if (
+        statusDesc.includes("half") ||
+        statusDesc.includes("halftime")
+      ) return "halftime"
+      return "in_progress"
+    }
+    if (
+      statusType === "STATUS_FINAL" ||
+      statusDesc.includes("final")
+    ) return "final"
+    if (
+      statusType === "STATUS_SCHEDULED" ||
+      statusDesc.includes("scheduled")
+    ) return "scheduled"
+    
+    return "scheduled"
+  }
+
+Apply normalizeGameStatus to every game object
+immediately after fetch before storing in state.
+
+---
+
+STEP 4 — REFRESH INDICATOR UI
+
+Show users when next refresh is coming.
+
+In the NCAAB Live tab header area, next to the
+existing refresh button:
+
+  When games are live:
+    Pulsing green dot + "Live · refreshing every 20s"
+    zinc-400 text-xs
+  
+  When halftime:
+    Amber dot + "Halftime · refreshing every 15s"
+  
+  When upcoming within 30min:
+    Blue dot + "Games starting soon · 1 min refresh"
+  
+  When idle:
+    zinc-500 dot + "Next refresh in [countdown]s"
+    Countdown ticks down from 300 to 0
+
+  Countdown implementation:
+    const [countdown, setCountdown] = useState(0)
+    
+    // Update countdown every second when idle
+    // Hide countdown when games are live (not needed)
+
+---
+
+STEP 5 — MARCH MADNESS DETECTION
+
+When tournament games are detected, force
+maximum refresh rate regardless of game state.
+
+  const isMarchMadness = (games) => {
+    return games.some(g => 
+      g.season?.slug === "post-season" ||
+      g.season?.type === 3 ||
+      g.competitions?.[0]?.notes?.some(n =>
+        n.headline?.toLowerCase().includes("ncaa") ||
+        n.headline?.toLowerCase().includes("tournament") ||
+        n.headline?.toLowerCase().includes("march madness")
+      )
+    )
+  }
+  
+  // Override interval for tournament games
+  const getTournamentAwareInterval = (games) => {
+    if (isMarchMadness(games)) {
+      const hasLive = games.some(g =>
+        g.status === "in_progress" || 
+        g.status === "halftime"
+      )
+      return hasLive ? 15000 : 30000
+      // 15s live, 30s between games during tournament
+    }
+    return getRefreshInterval(games)
+  }
