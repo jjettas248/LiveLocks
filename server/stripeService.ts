@@ -4,8 +4,8 @@ import { storage } from "./storage";
 import { getUncachableStripeClient } from "./stripeClient";
 
 const PLAN_META = {
-  all:   { name: "Pro – LiveLocks",        description: "Unlimited NBA + NCAAB Live, 2H Plays, SMS Alerts, Push Notifications", amount: 4000, priceId: "price_1T6fl12cW8Vmrgt3B6ffBIuw" },
-  elite: { name: "All Sports – LiveLocks", description: "Everything in Pro + MLB Live (coming soon) + Priority SMS",            amount: 6500, priceId: "price_1T6fly2cW8Vmrgt3WU9uHL7L" },
+  all:   { name: "Pro – LiveLocks",        description: "Unlimited NBA + NCAAB Live analytics, 2H Plays, Parlay Builder, SMS Alerts, Push Notifications", amount: 4000, priceId: "price_1T6fl12cW8Vmrgt3B6ffBIuw" },
+  elite: { name: "All Sports – LiveLocks", description: "Everything in Pro + MLB Live prop predictions + Priority SMS",                                     amount: 6500, priceId: "price_1T6fly2cW8Vmrgt3WU9uHL7L" },
 };
 
 async function getPriceIdForTier(tier: "all" | "elite"): Promise<string> {

@@ -282,11 +282,11 @@ export default function AuthPage() {
             <span className="text-2xl leading-none mt-0.5" role="img" aria-label="baseball">⚾</span>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-sm font-bold text-foreground">MLB Coming Soon</span>
-                <span className="text-[10px] font-bold uppercase tracking-wider bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full">Beta</span>
+                <span className="text-sm font-bold text-foreground">MLB Live — All Sports Plan</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full">$65/mo</span>
               </div>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Live MLB prop predictions are launching next month. Create an account now to lock in early access — beta testers get priority.
+                Live MLB prop predictions are included in the All Sports plan. NBA + NCAAB access is available on the Pro plan at $40/mo.
               </p>
               <button
                 data-testid="button-mlb-beta"
@@ -294,7 +294,7 @@ export default function AuthPage() {
                 onClick={() => { setTab("register"); window.scrollTo({ top: 0, behavior: "smooth" }); }}
                 className="mt-2.5 text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1"
               >
-                Create account for early access →
+                Create account to get started →
               </button>
             </div>
           </div>

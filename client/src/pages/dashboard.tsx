@@ -1168,19 +1168,25 @@ export default function Dashboard() {
                 style={{ boxShadow: "0 0 20px -4px hsl(var(--primary) / 0.2), 0 8px 32px -4px hsl(0 0% 0% / 0.5)" }}
               >
                 <p className="text-sm font-semibold text-foreground mb-1 flex items-center gap-1.5">
-                  <span role="img" aria-label="baseball">⚾</span> MLB Coming Soon
+                  <span role="img" aria-label="baseball">⚾</span> MLB Live
                 </p>
-                <p className="text-xs text-muted-foreground mb-3">
-                  Live MLB prop predictions are launching next month. All Sports subscribers get early access.
-                </p>
-                {user && !user.subscriptionTier && !user.isAdmin && (
-                  <button
-                    data-testid="button-mlb-upgrade"
-                    onClick={() => { setMlbPopoverOpen(false); setShowUpgradeModal(true); }}
-                    className="w-full py-1.5 px-3 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors"
-                  >
-                    Get All Sports Access
-                  </button>
+                {user?.subscriptionTier === "elite" || user?.isAdmin ? (
+                  <p className="text-xs text-muted-foreground">
+                    MLB Live prop predictions are launching soon. You'll be the first to know as an All Sports subscriber.
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-xs text-muted-foreground mb-3">
+                      MLB Live prop predictions are included in the All Sports plan ($65/mo). Your current plan does not include MLB access.
+                    </p>
+                    <button
+                      data-testid="button-mlb-upgrade"
+                      onClick={() => { setMlbPopoverOpen(false); setShowUpgradeModal(true); }}
+                      className="w-full py-1.5 px-3 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors"
+                    >
+                      Upgrade to All Sports — $65/mo
+                    </button>
+                  </>
                 )}
               </div>
             </>

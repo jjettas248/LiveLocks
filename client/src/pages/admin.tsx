@@ -244,8 +244,8 @@ export default function AdminPage() {
               <div className="flex items-center gap-2 text-sm text-green-400" data-testid="text-setup-success">
                 <CheckCircle className="w-4 h-4" />
                 <span>
-                  Products ready — NBA: <code className="text-xs bg-muted px-1 rounded">{(setupProductsMutation.data as any)?.priceIds?.nba ?? "existing"}</code>
-                  {" "}All Sports: <code className="text-xs bg-muted px-1 rounded">{(setupProductsMutation.data as any)?.priceIds?.all ?? "existing"}</code>
+                  Products ready — Pro: <code className="text-xs bg-muted px-1 rounded">{(setupProductsMutation.data as any)?.priceIds?.all ?? "existing"}</code>
+                  {" "}All Sports: <code className="text-xs bg-muted px-1 rounded">{(setupProductsMutation.data as any)?.priceIds?.elite ?? "existing"}</code>
                 </span>
               </div>
             )}

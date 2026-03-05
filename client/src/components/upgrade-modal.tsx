@@ -30,11 +30,11 @@ const PLANS = [
     name: "🏀⚾ All Sports",
     price: "$65",
     period: "/month",
-    badge: "Power Users",
+    badge: "Includes MLB",
     icon: Zap,
     features: [
       "Everything in Pro",
-      "MLB Live prop predictions (coming soon)",
+      "MLB Live prop predictions",
       "Priority SMS — fastest alerts",
       "Early access to every new sport & feature",
     ],
