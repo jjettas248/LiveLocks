@@ -332,12 +332,17 @@ export async function getNCAABOddsLines(): Promise<any[]> {
   }
 }
 
-// ── Sports Game Odds — NCAAB 1H lines (spread + total) ───────────────────────
+// ── Sports Game Odds — NCAAB 1H + 2H lines (spread + total) ─────────────────
 interface SGO1HLines {
   h1TotalLine: number | null;
   h1SpreadLine: number | null;
   h1Favorite: string;
   h1FavoriteName: string;
+  // 2nd half lines (available during halftime window)
+  h2TotalLine: number | null;
+  h2SpreadLine: number | null;
+  h2Favorite: string;
+  h2FavoriteName: string;
   // Team total lines (aligned to ESPN home/away, not SGO home/away)
   homeGameTotalLine: number | null;
   awayGameTotalLine: number | null;
@@ -432,6 +437,36 @@ function extractSGO1HLines(sgoEvent: SGOEvent, game: any): SGO1HLines {
     }
   }
 
+  // 2H total
+  const ouOver2H = odds["points-all-2h-ou-over"];
+  const h2TotalLine: number | null = ouOver2H?.bookOverUnder != null
+    ? parseFloat(ouOver2H.bookOverUnder) : null;
+
+  // 2H spread
+  const sp2HHome = odds["points-home-2h-sp-home"];
+  const sp2HAway = odds["points-away-2h-sp-away"];
+  let h2SpreadLine: number | null = null;
+  let h2Favorite = "";
+  let h2FavoriteName = "";
+  if (sp2HHome?.bookSpread != null) {
+    const val = parseFloat(sp2HHome.bookSpread);
+    h2SpreadLine = Math.abs(val);
+    if (val < 0) {
+      h2Favorite = homeIsGameHome ? "home" : "away";
+      h2FavoriteName = homeIsGameHome ? game.homeTeam : game.awayTeam;
+    } else {
+      h2Favorite = homeIsGameHome ? "away" : "home";
+      h2FavoriteName = homeIsGameHome ? game.awayTeam : game.homeTeam;
+    }
+  } else if (sp2HAway?.bookSpread != null) {
+    const aval = parseFloat(sp2HAway.bookSpread);
+    h2SpreadLine = Math.abs(aval);
+    if (aval < 0) {
+      h2Favorite = homeIsGameHome ? "away" : "home";
+      h2FavoriteName = homeIsGameHome ? game.awayTeam : game.homeTeam;
+    }
+  }
+
   // Team totals — aligned to ESPN home/away
   function parseOU(key: string): number | null {
     const v = odds[key]?.bookOverUnder;
@@ -447,7 +482,7 @@ function extractSGO1HLines(sgoEvent: SGOEvent, game: any): SGO1HLines {
   const home1HTotalLine   = homeIsGameHome ? sgoHome1H : sgoAway1H;
   const away1HTotalLine   = homeIsGameHome ? sgoAway1H : sgoHome1H;
 
-  return { h1TotalLine, h1SpreadLine, h1Favorite, h1FavoriteName, homeGameTotalLine, awayGameTotalLine, home1HTotalLine, away1HTotalLine };
+  return { h1TotalLine, h1SpreadLine, h1Favorite, h1FavoriteName, h2TotalLine, h2SpreadLine, h2Favorite, h2FavoriteName, homeGameTotalLine, awayGameTotalLine, home1HTotalLine, away1HTotalLine };
 }
 
 // ── Match ESPN game → Odds API event ─────────────────────────────────────────
@@ -472,6 +507,9 @@ function extractLines(oddsEvent: any): {
   h1TotalLine: number | null;
   h1SpreadLine: number | null;
   h1Favorite: string;
+  h2TotalLine: number | null;
+  h2SpreadLine: number | null;
+  h2Favorite: string;
   overOddsAmerican: number | null;
 } {
   let spread: number | null = null;
@@ -480,6 +518,9 @@ function extractLines(oddsEvent: any): {
   let h1TotalLine: number | null = null;
   let h1SpreadLine: number | null = null;
   let h1Favorite = "";
+  let h2TotalLine: number | null = null;
+  let h2SpreadLine: number | null = null;
+  let h2Favorite = "";
   let overOddsAmerican: number | null = null;
   const bookLines: Array<{ book: string; spread: number | null; total: number | null; favorite: string; h1Total: number | null; h1Spread: number | null; h1Favorite: string }> = [];
 
@@ -488,6 +529,8 @@ function extractLines(oddsEvent: any): {
     const totalsMarket    = (bk.markets ?? []).find((m: any) => m.key === "totals");
     const h1TotalsMarket  = (bk.markets ?? []).find((m: any) => m.key === "h1_totals");
     const h1SpreadsMarket = (bk.markets ?? []).find((m: any) => m.key === "h1_spreads");
+    const h2TotalsMarket  = (bk.markets ?? []).find((m: any) => m.key === "h2_totals");
+    const h2SpreadsMarket = (bk.markets ?? []).find((m: any) => m.key === "h2_spreads");
 
     let bkSpread: number | null = null;
     let bkTotal: number | null = null;
@@ -495,6 +538,9 @@ function extractLines(oddsEvent: any): {
     let bkH1Total: number | null = null;
     let bkH1Spread: number | null = null;
     let bkH1Fav = "";
+    let bkH2Total: number | null = null;
+    let bkH2Spread: number | null = null;
+    let bkH2Fav = "";
 
     if (spreadsMarket?.outcomes?.length >= 2) {
       const favOutcome = spreadsMarket.outcomes.find((o: any) => o.point < 0);
@@ -532,18 +578,35 @@ function extractLines(oddsEvent: any): {
         bkH1Fav = sorted[0].name;
       }
     }
+    if (h2TotalsMarket?.outcomes?.length >= 1) {
+      const over = h2TotalsMarket.outcomes.find((o: any) => o.name === "Over");
+      if (over) bkH2Total = over.point as number;
+    }
+    if (h2SpreadsMarket?.outcomes?.length >= 2) {
+      const favOutcome = h2SpreadsMarket.outcomes.find((o: any) => o.point < 0);
+      if (favOutcome) {
+        bkH2Spread = Math.abs(favOutcome.point);
+        bkH2Fav = favOutcome.name;
+      } else {
+        const sorted = [...h2SpreadsMarket.outcomes].sort((a: any, b: any) => Math.abs(a.point) - Math.abs(b.point));
+        bkH2Spread = Math.abs(sorted[0].point);
+        bkH2Fav = sorted[0].name;
+      }
+    }
 
-    if (bkSpread !== null || bkTotal !== null || bkH1Total !== null) {
+    if (bkSpread !== null || bkTotal !== null || bkH1Total !== null || bkH2Total !== null) {
       bookLines.push({ book: bk.key, spread: bkSpread, total: bkTotal, favorite: bkFav, h1Total: bkH1Total, h1Spread: bkH1Spread, h1Favorite: bkH1Fav });
     }
     if (spread === null && bkSpread !== null) { spread = bkSpread; favorite = bkFav; }
     if (total === null && bkTotal !== null) total = bkTotal;
     if (h1TotalLine === null && bkH1Total !== null) h1TotalLine = bkH1Total;
     if (h1SpreadLine === null && bkH1Spread !== null) { h1SpreadLine = bkH1Spread; h1Favorite = bkH1Fav; }
+    if (h2TotalLine === null && bkH2Total !== null) h2TotalLine = bkH2Total;
+    if (h2SpreadLine === null && bkH2Spread !== null) { h2SpreadLine = bkH2Spread; h2Favorite = bkH2Fav; }
     if (spread !== null && total !== null && h1TotalLine !== null && overOddsAmerican !== null) break;
   }
 
-  return { spread, total, favorite, bookLines, h1TotalLine, h1SpreadLine, h1Favorite, overOddsAmerican };
+  return { spread, total, favorite, bookLines, h1TotalLine, h1SpreadLine, h1Favorite, h2TotalLine, h2SpreadLine, h2Favorite, overOddsAmerican };
 }
 
 // ── Public handle signal ──────────────────────────────────────────────────────
@@ -592,6 +655,9 @@ export interface NCAABPlay {
   h1TotalLine: number | null;
   h1SpreadLine: number | null;
   h1Favorite: string;
+  h2TotalLine: number | null;
+  h2SpreadLine: number | null;
+  h2Favorite: string;
 
   // Team total market lines from SGO / ESPN (with estimated flag)
   homeGameTotalLine: number | null;
@@ -619,6 +685,7 @@ export interface NCAABPlay {
   totalEdge: number | null;
   over1HProb: number | null;
   total1HEdge: number | null;
+  over2HProb: number | null;
 
   // Book odds for implied probability
   overOddsAmerican: number | null;
@@ -733,16 +800,22 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       try { box = await getNCAABBoxScore(game.id); } catch { /* non-fatal */ }
 
       const oddsEvent = matchOddsEvent(game, oddsEvents);
-      const { spread, total, favorite, bookLines, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav, overOddsAmerican } = oddsEvent
+      const { spread, total, favorite, bookLines, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav, h2TotalLine: oddsH2Total, h2SpreadLine: oddsH2Spread, h2Favorite: oddsH2Fav, overOddsAmerican } = oddsEvent
         ? extractLines(oddsEvent)
-        : { spread: null, total: null, favorite: "", bookLines: [], h1SpreadLine: null, h1Favorite: "", overOddsAmerican: null };
+        : { spread: null, total: null, favorite: "", bookLines: [], h1SpreadLine: null, h1Favorite: "", h2TotalLine: null, h2SpreadLine: null, h2Favorite: "", overOddsAmerican: null };
 
-      // SGO 1H lines (real book lines for 1st half)
+      // SGO 1H + 2H lines (real book lines)
       const sgoEvent = matchSGOEvent(game, sgoEvents);
       const sgo1H = sgoEvent ? extractSGO1HLines(sgoEvent, game) : null;
       const rawH1TotalLine  = sgo1H?.h1TotalLine ?? null;
       const h1SpreadLine    = sgo1H?.h1SpreadLine ?? oddsH1Spread ?? null;
       const h1Favorite      = sgo1H?.h1FavoriteName ?? oddsH1Fav ?? "";
+      const h2TotalLine     = sgo1H?.h2TotalLine ?? oddsH2Total ?? null;
+      const h2SpreadLine    = sgo1H?.h2SpreadLine ?? oddsH2Spread ?? null;
+      const h2Favorite      = sgo1H?.h2FavoriteName ?? oddsH2Fav ?? "";
+      if (h2TotalLine != null) {
+        console.log(`[NCAAB 2H] ${game.awayTeam} @ ${game.homeTeam}: 2H total=${h2TotalLine}, spread=${h2SpreadLine} ${h2Favorite}`);
+      }
       let finalHomeGameTotalLine: number | null = sgo1H?.homeGameTotalLine ?? null;
       let finalAwayGameTotalLine: number | null = sgo1H?.awayGameTotalLine ?? null;
       const home1HTotalLine   = sgo1H?.home1HTotalLine ?? null;
@@ -976,6 +1049,17 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         total1HEdge = Math.round((over1HProb - 50) * 10) / 10;
       }
 
+      // ── 2H probability — at halftime or during H2 live play ──────────────
+      let over2HProb: number | null = null;
+      if (projectedTotal !== null && (isHalftime || half === 2)) {
+        // proj2H = the expected second half total
+        const proj2H = projectedTotal - h1Total;
+        const effective2HLine = h2TotalLine ?? (Math.round(proj2H * 2) / 2);
+        const diff2H = proj2H - effective2HLine;
+        const raw2H = 50 + diff2H * 2.5 * 0.3;
+        over2HProb = parseFloat(Math.min(Math.max(raw2H, 1), 99).toFixed(1));
+      }
+
       // Apply sanitizeProb — clamp to 1-99 and enforce early-game neutral
       // (post-halftime H1 99/1 is exempt: allowExtreme = true)
       const postH1Settled = (isHalftime || half === 2) && h1TotalLine !== null && h1Total > 0;
@@ -1019,6 +1103,10 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         h1TotalLine,
         h1SpreadLine,
         h1Favorite,
+        h2TotalLine,
+        h2SpreadLine,
+        h2Favorite,
+        over2HProb,
         homeGameTotalLine,
         awayGameTotalLine,
         homeGameTotalIsEstimated,

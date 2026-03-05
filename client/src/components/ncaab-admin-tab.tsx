@@ -42,6 +42,10 @@ interface NCAABPlay {
   h1TotalLine: number | null;
   h1SpreadLine: number | null;
   h1Favorite: string;
+  h2TotalLine: number | null;
+  h2SpreadLine: number | null;
+  h2Favorite: string;
+  over2HProb: number | null;
   homeGameTotalLine: number | null;
   awayGameTotalLine: number | null;
   homeGameTotalIsEstimated: boolean;
@@ -228,7 +232,7 @@ interface SharpMoneyResult {
 }
 
 // ── NCAAB REFRESH AUDIT ──────────────────────────────────────────────────────
-// Current interval: dynamic (20s live / 15s halftime / 60s upcoming / 300s idle)
+// Current interval: dynamic (20s live / 15s halftime / 60s upcoming / 180s idle)
 // Fetch function: /api/ncaab/plays (playsQuery) + /api/ncaab/games (gamesQuery)
 // Trigger conditions: dynamic self-rescheduling via refetchInterval function + visibilitychange
 // ESPN endpoint used: site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard
@@ -252,7 +256,7 @@ function getRefreshInterval(games: NCAABGame[]): number {
   if (hasHalftime) return 15000;
   if (hasLive)     return 20000;
   if (hasUpcoming) return 60000;
-  return 300000;
+  return 180000;
 }
 
 function isMarchMadness(games: NCAABGame[]): boolean {
@@ -759,7 +763,7 @@ function NCAABGameCard({
   })();
 
   const [selectedMarket, setSelectedMarket] = useState<"over" | "under" | "spread">(dominantMarket);
-  const [marketTab, setMarketTab]           = useState<"full" | "h1">("full");
+  const [marketTab, setMarketTab]           = useState<"full" | "h1" | "h2">("full");
   const [parlayLegs, setParlayLegs]         = useState<string[]>([]);
   const [showParlayDrawer, setShowParlayDrawer] = useState(false);
   const [selectedTeamMarket, setSelectedTeamMarket] = useState<{
@@ -852,16 +856,18 @@ function NCAABGameCard({
   const effectiveLine    = isH1 ? effective1HLine : effectiveFGLine;
 
   // T002/T003: market tab display derivations
-  const displayLine        = marketTab === "h1" ? effective1HLine : effectiveFGLine;
-  const displayOverProb    = marketTab === "h1" ? (play.over1HProb ?? overProb) : overProb;
+  const effective2HLine    = play.h2TotalLine ?? null;
+  const displayLine        = marketTab === "h1" ? effective1HLine : marketTab === "h2" ? effective2HLine : effectiveFGLine;
+  const displayOverProb    = marketTab === "h1" ? (play.over1HProb ?? overProb) : marketTab === "h2" ? (play.over2HProb ?? overProb) : overProb;
   const displayUnderProb   = parseFloat((100 - displayOverProb).toFixed(4));
-  const displaySpread      = marketTab === "h1" ? play.h1SpreadLine : play.spread;
-  const displaySpreadFav   = marketTab === "h1" ? play.h1Favorite : play.favorite;
-  const displaySpreadProb  = marketTab === "h1" ? null : play.spreadProb;
+  const displaySpread      = marketTab === "h1" ? play.h1SpreadLine : marketTab === "h2" ? play.h2SpreadLine : play.spread;
+  const displaySpreadFav   = marketTab === "h1" ? play.h1Favorite : marketTab === "h2" ? play.h2Favorite : play.favorite;
+  const displaySpreadProb  = (marketTab === "h1" || marketTab === "h2") ? null : play.spreadProb;
   const h1ProjSplit        = play.proj1HTotal != null ? play.proj1HTotal / 2 : null;
   const displayAwayProj    = marketTab === "h1" ? h1ProjSplit : play.awayProjected;
   const displayHomeProj    = marketTab === "h1" ? h1ProjSplit : play.homeProjected;
   const h1DataUnavailable  = marketTab === "h1" && effective1HLine == null && play.over1HProb == null;
+  const h2DataUnavailable  = marketTab === "h2" && effective2HLine == null && play.over2HProb == null;
 
   // T004: derive team total lines — SGO/ESPN book line first, fallback to projection-derived
   function deriveTeamTotalLine(proj: number | null): number | null {
@@ -1240,7 +1246,7 @@ function NCAABGameCard({
           );
         })()}
 
-        {/* ── FULL GAME / 1H TOGGLE ──────────────────────────────────── */}
+        {/* ── FULL GAME / 1H / 2H TOGGLE ─────────────────────────────── */}
         <div className="flex items-center gap-3">
           <div style={{ display: "inline-flex", background: "#0f0f0f", borderRadius: 8, padding: 4, gap: 4 }}>
             <button
@@ -1273,9 +1279,29 @@ function NCAABGameCard({
             >
               1st Half
             </button>
+            {(play.bettingWindow === "HALFTIME" || play.half === 2) && (
+              <button
+                onClick={() => setMarketTab("h2")}
+                style={{
+                  background: marketTab === "h2" ? "#27272a" : "transparent",
+                  color: marketTab === "h2" ? "#ffffff" : "#71717a",
+                  borderRadius: 6,
+                  padding: "4px 12px",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  border: "none",
+                  cursor: "pointer",
+                }}
+              >
+                2nd Half
+              </button>
+            )}
           </div>
           {h1DataUnavailable && (
             <p style={{ color: "#71717a", fontSize: 11, fontStyle: "italic" }}>1H lines unavailable</p>
+          )}
+          {h2DataUnavailable && (
+            <p style={{ color: "#71717a", fontSize: 11, fontStyle: "italic" }}>2H lines unavailable</p>
           )}
         </div>
 
@@ -1286,7 +1312,7 @@ function NCAABGameCard({
             if (i === 0) return (
               <div key={0} className="grid grid-cols-3 items-center gap-2" style={{ borderBottom: borderB, background: "#111111", padding: "16px 20px" }}>
                 <span className="text-xs font-semibold uppercase tracking-wider truncate" style={{ color: "#71717a" }}>
-                  {marketTab === "h1" ? "H1 Total" : "Full Game Total"}
+                  {marketTab === "h1" ? "H1 Total" : marketTab === "h2" ? "2H Total" : "Full Game Total"}
                 </span>
                 <span className="text-lg font-bold tabular-nums text-center" style={{ color: "#ffffff" }}>
                   {displayLine != null ? String(displayLine) : "—"}
@@ -1482,6 +1508,8 @@ function NCAABGameCard({
             const bookLineText = book
               ? (marketTab === "h1"
                   ? (book.h1Total != null ? `H1 O/U ${book.h1Total}` : "H1 Lines TBD")
+                  : marketTab === "h2"
+                  ? (play.h2TotalLine != null ? `2H O/U ${play.h2TotalLine}` : "2H Lines TBD")
                   : (book.total != null ? `O/U ${book.total}` : "—"))
               : "—";
             return (
