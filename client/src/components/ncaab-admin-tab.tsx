@@ -314,11 +314,11 @@ const WINDOW_COLORS: Record<string, string> = {
 };
 
 // ── RadialGauge ───────────────────────────────────────────────────────────────
-function RadialGauge({ value, color, label, isParlayed }: {
-  value: number; color: string; label: string; isParlayed: boolean;
+function RadialGauge({ value, color, label, isParlayed, showFullGameLabel }: {
+  value: number; color: string; label: string; isParlayed: boolean; showFullGameLabel?: boolean;
 }) {
   const cx = 80; const cy = 80;
-  const rInner = 60; const rParlay = 70;
+  const rInner = 68; const rParlay = 80;
   const circInner = 2 * Math.PI * rInner;
   const pct = Math.max(0, Math.min(100, value));
   const dashOffset = circInner - (pct / 100) * circInner;
@@ -326,10 +326,10 @@ function RadialGauge({ value, color, label, isParlayed }: {
     <div className="flex flex-col items-center flex-shrink-0 gap-0.5">
       <div className="relative" style={{ width: 110, height: 110 }}>
         <svg viewBox="0 0 160 160" style={{ width: 110, height: 110, transform: "rotate(-90deg)" }}>
-          <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#27272a" strokeWidth={8} />
+          <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#27272a" strokeWidth={10} />
           <circle
             cx={cx} cy={cy} r={rInner} fill="none"
-            stroke={color} strokeWidth={8}
+            stroke={color} strokeWidth={10}
             strokeDasharray={`${circInner}`}
             strokeDashoffset={dashOffset}
             strokeLinecap="round"
@@ -345,12 +345,15 @@ function RadialGauge({ value, color, label, isParlayed }: {
           )}
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-2xl font-black tabular-nums leading-none" style={{ color }}>
+          <span className="text-3xl font-black tabular-nums leading-none" style={{ color }}>
             {Math.round(pct)}%
           </span>
           <span className="text-[9px] uppercase tracking-widest mt-0.5" style={{ color: "#71717a" }}>{label}</span>
         </div>
       </div>
+      {showFullGameLabel && (
+        <p style={{ color: "#71717a", fontSize: 10, marginTop: 2 }}>Full Game</p>
+      )}
       {isParlayed && (
         <span className="text-[9px] font-black tracking-widest" style={{ color: "#f59e0b" }}>+ PARLAY</span>
       )}
@@ -467,6 +470,7 @@ function NCAABGameCard({
   })();
 
   const [selectedMarket, setSelectedMarket] = useState<"over" | "under" | "spread">(dominantMarket);
+  const [marketTab, setMarketTab]           = useState<"full" | "h1">("full");
   const [parlayLegs, setParlayLegs]         = useState<string[]>([]);
   const [showParlayDrawer, setShowParlayDrawer] = useState(false);
   const [flashActive, setFlashActive]       = useState(false);
@@ -531,6 +535,18 @@ function NCAABGameCard({
   const effective1HLine  = play.h1TotalLine ?? (play.proj1HTotal !== null ? Math.round(play.proj1HTotal * 2) / 2 : null);
   const effectiveLine    = isH1 ? effective1HLine : effectiveFGLine;
 
+  // T002/T003: market tab display derivations
+  const displayLine        = marketTab === "h1" ? effective1HLine : effectiveFGLine;
+  const displayOverProb    = marketTab === "h1" ? (play.over1HProb ?? overProb) : overProb;
+  const displayUnderProb   = parseFloat((100 - displayOverProb).toFixed(4));
+  const displaySpread      = marketTab === "h1" ? play.h1SpreadLine : play.spread;
+  const displaySpreadFav   = marketTab === "h1" ? play.h1Favorite : play.favorite;
+  const displaySpreadProb  = marketTab === "h1" ? null : play.spreadProb;
+  const h1ProjSplit        = play.proj1HTotal != null ? play.proj1HTotal / 2 : null;
+  const displayAwayProj    = marketTab === "h1" ? h1ProjSplit : play.awayProjected;
+  const displayHomeProj    = marketTab === "h1" ? h1ProjSplit : play.homeProjected;
+  const h1DataUnavailable  = marketTab === "h1" && effective1HLine == null && play.over1HProb == null;
+
   const gaugeForMarket = (m: "over" | "under" | "spread") =>
     m === "over" ? overProb : m === "under" ? underProb : spreadProb;
   const gaugeValue  = gaugeForMarket(selectedMarket);
@@ -584,12 +600,6 @@ function NCAABGameCard({
                   play.bookLines[1];
   const altLabel = altBook ? (BOOK_LABELS[altBook.book] ?? altBook.book) : "—";
 
-  const getBookLine = (bl: BookLine | undefined): string => {
-    if (!bl) return "—";
-    if (selectedMarket !== "spread") return bl.total != null ? `O/U ${bl.total}` : "—";
-    return bl.spread != null ? `${bl.favorite} -${bl.spread}` : "—";
-  };
-
   const halfLabel = play.half === 1 ? "H1" : play.half === 2 ? "H2" : "OT";
   const bestEdge  = Math.max(Math.abs(play.spreadEdge ?? 0), Math.abs(play.totalEdge ?? 0));
 
@@ -615,8 +625,9 @@ function NCAABGameCard({
   }
 
   // Animated stat grid colors (item 5): color transitions for Engine Over/Under% on direction flip
-  const overColor  = overProb  > 50 ? "#00d4aa" : "#71717a";
-  const underColor = underProb > 50 ? "#ef4444" : "#71717a";
+  // T004: always teal/red — never muted #71717a
+  const overColor  = overProb  > 50 ? "#00d4aa" : "#ef4444";
+  const underColor = underProb > 50 ? "#00d4aa" : "#ef4444";
 
   return (
     <>
@@ -652,14 +663,23 @@ function NCAABGameCard({
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
               </span>
-              <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: "#71717a" }}>
+              <span
+                className="text-[11px] font-semibold"
+                style={{
+                  background: "rgba(22,163,74,0.15)",
+                  border: "1px solid rgba(22,163,74,0.25)",
+                  borderRadius: 9999,
+                  padding: "2px 10px",
+                  color: "#ffffff",
+                }}
+              >
                 LIVE · {halfLabel}&nbsp;&nbsp;{play.clock}
               </span>
             </div>
-            <p className="text-base font-bold text-white leading-tight">
+            <p className="text-lg font-bold text-white leading-tight">
               {play.awayTeam} @ {play.homeTeam}
             </p>
-            <p className="text-2xl font-black tabular-nums leading-tight mt-0.5" style={{ color: "#d4d4d8" }}>
+            <p className="text-4xl font-black tabular-nums leading-tight mt-0.5" style={{ color: "#ffffff" }}>
               {play.awayScore} – {play.homeScore}
             </p>
             <div className="flex gap-1.5 mt-1.5 flex-wrap">
@@ -671,7 +691,7 @@ function NCAABGameCard({
               )}
             </div>
           </div>
-          <RadialGauge value={gaugeValue} color={gaugeColor} label={gaugeLabel} isParlayed={isLegParlayed(selectedMarket)} />
+          <RadialGauge value={gaugeValue} color={gaugeColor} label={gaugeLabel} isParlayed={isLegParlayed(selectedMarket)} showFullGameLabel />
         </div>
 
         {/* ── VERDICT ROWS ───────────────────────────────────────────── */}
@@ -679,24 +699,24 @@ function NCAABGameCard({
           {edgeBelow && (
             <p className="text-[10px] italic text-center" style={{ color: "#52525b" }}>Edge below threshold — monitoring</p>
           )}
-          <div className="rounded-lg p-3 flex items-center justify-between gap-2"
-            style={{ background: "#111", border: "1px solid #27272a", borderLeft: `3px solid ${evColor}` }}>
+          <div className="rounded-lg flex items-center justify-between gap-2"
+            style={{ background: "#111111", border: "1px solid #27272a", borderLeft: `3px solid ${evColor}`, padding: "16px 20px" }}>
             <div>
-              <p className="text-xs font-bold" style={{ color: evColor }}>{edgeLabel}</p>
-              <p className="text-[10px]" style={{ color: "#71717a" }}>Engine {engineProb.toFixed(1)}% vs Book {bookImplied}%</p>
+              <p className="text-sm font-semibold" style={{ color: evColor }}>{edgeLabel}</p>
+              <p className="text-xs" style={{ color: "#a1a1aa" }}>Engine {engineProb.toFixed(1)}% vs Book {bookImplied}%</p>
             </div>
             {edgeGap >= 5 && (
               <span className="text-[10px] font-black px-2 py-0.5 rounded-full shrink-0"
-                style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b", border: "1px solid rgba(245,158,11,0.3)" }}>
+                style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b", border: "1px solid rgba(245,158,11,0.3)", fontFamily: "monospace" }}>
                 +{edgeGap.toFixed(1)}pp
               </span>
             )}
           </div>
-          <div className="rounded-lg p-3 flex items-center justify-between gap-2"
-            style={{ background: "#111", border: "1px solid #27272a", borderLeft: `3px solid ${edgeGap >= 5 ? evColor : "#52525b"}` }}>
+          <div className="rounded-lg flex items-center justify-between gap-2"
+            style={{ background: "#0f0f0f", border: "1px solid #27272a", borderLeft: `3px solid ${edgeGap >= 5 ? evColor : "#52525b"}`, padding: "16px 20px" }}>
             <div>
-              <p className="text-xs font-bold" style={{ color: "#d4d4d8" }}>{edgeSide} CLV</p>
-              <p className="text-[10px]" style={{ color: "#71717a" }}>Closing line value signal</p>
+              <p className="text-sm font-semibold" style={{ color: "#a1a1aa" }}>{edgeSide} CLV</p>
+              <p className="text-xs" style={{ color: "#71717a" }}>Closing line value signal</p>
             </div>
             <span className="text-[10px] font-black px-2 py-0.5 rounded-full shrink-0"
               style={edgeGap >= 5
@@ -708,75 +728,115 @@ function NCAABGameCard({
           </div>
         </div>
 
+        {/* ── FULL GAME / 1H TOGGLE ──────────────────────────────────── */}
+        <div className="flex items-center gap-3">
+          <div style={{ display: "inline-flex", background: "#0f0f0f", borderRadius: 8, padding: 4, gap: 4 }}>
+            <button
+              onClick={() => setMarketTab("full")}
+              style={{
+                background: marketTab === "full" ? "#27272a" : "transparent",
+                color: marketTab === "full" ? "#ffffff" : "#71717a",
+                borderRadius: 6,
+                padding: "4px 12px",
+                fontSize: 12,
+                fontWeight: 500,
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              Full Game
+            </button>
+            <button
+              onClick={() => setMarketTab("h1")}
+              style={{
+                background: marketTab === "h1" ? "#27272a" : "transparent",
+                color: marketTab === "h1" ? "#ffffff" : "#71717a",
+                borderRadius: 6,
+                padding: "4px 12px",
+                fontSize: 12,
+                fontWeight: 500,
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              1st Half
+            </button>
+          </div>
+          {h1DataUnavailable && (
+            <p style={{ color: "#71717a", fontSize: 11, fontStyle: "italic" }}>1H lines unavailable</p>
+          )}
+        </div>
+
         {/* ── STAT GRID (items 4 + 5) ────────────────────────────────── */}
         <div className="rounded-lg overflow-hidden" style={{ border: "1px solid #27272a" }}>
-          {/* Row 0: Full Game Total — static */}
           {[0,1,2,3,4,5].map(i => {
-            const bg = i % 2 === 0 ? "#0f0f0f" : "#0a0a0a";
-            const borderB = i < 5 ? "1px solid #1a1a1a" : undefined;
+            const borderB = i < 5 ? "1px solid #27272a" : undefined;
             if (i === 0) return (
-              <div key={0} className="grid grid-cols-3 items-center px-3 py-2 gap-2" style={{ borderBottom: borderB, background: bg }}>
-                <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: "#71717a" }}>Full Game Total</span>
-                <span className="text-sm font-black tabular-nums text-center" style={{ color: "#d4d4d8" }}>
-                  {effectiveFGLine != null ? String(effectiveFGLine) : "—"}
+              <div key={0} className="grid grid-cols-3 items-center gap-2" style={{ borderBottom: borderB, background: "#111111", padding: "16px 20px" }}>
+                <span className="text-xs font-semibold uppercase tracking-wider truncate" style={{ color: "#71717a" }}>
+                  {marketTab === "h1" ? "H1 Total" : "Full Game Total"}
                 </span>
-                <span className="text-[10px] text-right truncate" style={{ color: "#52525b" }}>Current line</span>
+                <span className="text-lg font-bold tabular-nums text-center" style={{ color: "#ffffff" }}>
+                  {displayLine != null ? String(displayLine) : "—"}
+                </span>
+                <span className="text-xs text-right truncate" style={{ color: "#a1a1aa" }}>Current line</span>
               </div>
             );
             if (i === 1) return (
-              <div key={1} className="grid grid-cols-3 items-center px-3 py-2 gap-2" style={{ borderBottom: borderB, background: bg }}>
-                <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: "#71717a" }}>Engine Over%</span>
-                <span className="text-sm font-black tabular-nums text-center">
-                  {/* item 4: AnimatedNumber, item 5: colorTransition on direction flip */}
-                  <AnimatedNumber value={overProb} decimals={1} suffix="%" color={overColor} colorTransition={isDirectionFlip} />
+              <div key={1} className="grid grid-cols-3 items-center gap-2" style={{ borderBottom: borderB, background: "#111111", padding: "16px 20px" }}>
+                <span className="text-xs font-semibold uppercase tracking-wider truncate" style={{ color: "#71717a" }}>Engine Over%</span>
+                <span className="text-lg font-bold tabular-nums text-center">
+                  <AnimatedNumber value={displayOverProb} decimals={1} suffix="%" color={overColor} colorTransition={isDirectionFlip} />
                 </span>
-                <span className="text-[10px] text-right truncate" style={{ color: "#52525b" }}>Model probability</span>
+                <span className="text-xs text-right truncate" style={{ color: "#a1a1aa" }}>Model probability</span>
               </div>
             );
             if (i === 2) return (
-              <div key={2} className="grid grid-cols-3 items-center px-3 py-2 gap-2" style={{ borderBottom: borderB, background: bg }}>
-                <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: "#71717a" }}>Engine Under%</span>
-                <span className="text-sm font-black tabular-nums text-center">
-                  {/* item 4: AnimatedNumber, item 5: colorTransition on direction flip */}
-                  <AnimatedNumber value={underProb} decimals={1} suffix="%" color={underColor} colorTransition={isDirectionFlip} />
+              <div key={2} className="grid grid-cols-3 items-center gap-2" style={{ borderBottom: borderB, background: "#111111", padding: "16px 20px" }}>
+                <span className="text-xs font-semibold uppercase tracking-wider truncate" style={{ color: "#71717a" }}>Engine Under%</span>
+                <span className="text-lg font-bold tabular-nums text-center">
+                  <AnimatedNumber value={displayUnderProb} decimals={1} suffix="%" color={underColor} colorTransition={isDirectionFlip} />
                 </span>
-                <span className="text-[10px] text-right truncate" style={{ color: "#52525b" }}>Model probability</span>
+                <span className="text-xs text-right truncate" style={{ color: "#a1a1aa" }}>Model probability</span>
               </div>
             );
             if (i === 3) return (
-              <div key={3} className="grid grid-cols-3 items-center px-3 py-2 gap-2" style={{ borderBottom: borderB, background: bg }}>
-                <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: "#71717a" }}>Spread</span>
-                <span className="text-sm font-black tabular-nums text-center" style={{ color: "#d4d4d8" }}>
-                  {play.spread != null ? `-${play.spread}` : "—"}
+              <div key={3} className="grid grid-cols-3 items-center gap-2" style={{ borderBottom: borderB, background: "#111111", padding: "16px 20px" }}>
+                <span className="text-xs font-semibold uppercase tracking-wider truncate" style={{ color: "#71717a" }}>Spread</span>
+                <span className="text-lg font-bold tabular-nums text-center" style={{ color: "#ffffff" }}>
+                  {displaySpread != null ? `-${displaySpread}` : "—"}
                 </span>
-                <span className="text-[10px] text-right truncate" style={{ color: "#52525b" }}>
-                  {play.spread != null && play.spreadProb != null ? (
-                    <>{play.favorite} cover:&nbsp;<AnimatedNumber value={play.spreadProb} decimals={1} suffix="%" color="#52525b" /></>
-                  ) : "No line"}
+                <span className="text-xs text-right truncate" style={{ color: "#a1a1aa" }}>
+                  {displaySpread != null && displaySpreadProb != null ? (
+                    <>{displaySpreadFav} cover:&nbsp;<AnimatedNumber value={displaySpreadProb} decimals={1} suffix="%" color="#a1a1aa" /></>
+                  ) : displaySpread != null ? `${displaySpreadFav} fav` : "No line"}
                 </span>
               </div>
             );
             if (i === 4) return (
-              <div key={4} className="grid grid-cols-3 items-center px-3 py-2 gap-2" style={{ borderBottom: borderB, background: bg }}>
-                <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: "#71717a" }}>{play.awayTeamAbbr} Proj</span>
-                <span className="text-sm font-black tabular-nums text-center">
-                  {play.awayProjected != null
-                    ? <AnimatedNumber value={play.awayProjected} decimals={1} suffix="" color="#ffffff" />
-                    : <span style={{ color: "#d4d4d8" }}>—</span>}
+              <div key={4} className="grid grid-cols-3 items-center gap-2" style={{ borderBottom: borderB, background: "#111111", padding: "16px 20px" }}>
+                <span className="text-xs font-semibold uppercase tracking-wider truncate" style={{ color: "#71717a" }}>{play.awayTeamAbbr} Proj</span>
+                <span className="text-lg font-bold tabular-nums text-center">
+                  {displayAwayProj != null
+                    ? <AnimatedNumber value={displayAwayProj} decimals={1} suffix="" color="#ffffff" />
+                    : <span style={{ color: "#a1a1aa" }}>—</span>}
                 </span>
-                <span className="text-[10px] text-right truncate" style={{ color: "#52525b" }}>Projected final</span>
+                <span className="text-xs text-right truncate" style={{ color: "#a1a1aa" }}>
+                  {marketTab === "h1" ? "H1 proj" : "Projected final"}
+                </span>
               </div>
             );
-            // i === 5
             return (
-              <div key={5} className="grid grid-cols-3 items-center px-3 py-2 gap-2" style={{ borderBottom: borderB, background: bg }}>
-                <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: "#71717a" }}>{play.homeTeamAbbr} Proj</span>
-                <span className="text-sm font-black tabular-nums text-center">
-                  {play.homeProjected != null
-                    ? <AnimatedNumber value={play.homeProjected} decimals={1} suffix="" color="#ffffff" />
-                    : <span style={{ color: "#d4d4d8" }}>—</span>}
+              <div key={5} className="grid grid-cols-3 items-center gap-2" style={{ borderBottom: borderB, background: "#111111", padding: "16px 20px" }}>
+                <span className="text-xs font-semibold uppercase tracking-wider truncate" style={{ color: "#71717a" }}>{play.homeTeamAbbr} Proj</span>
+                <span className="text-lg font-bold tabular-nums text-center">
+                  {displayHomeProj != null
+                    ? <AnimatedNumber value={displayHomeProj} decimals={1} suffix="" color="#ffffff" />
+                    : <span style={{ color: "#a1a1aa" }}>—</span>}
                 </span>
-                <span className="text-[10px] text-right truncate" style={{ color: "#52525b" }}>Projected final</span>
+                <span className="text-xs text-right truncate" style={{ color: "#a1a1aa" }}>
+                  {marketTab === "h1" ? "H1 proj" : "Projected final"}
+                </span>
               </div>
             );
           })}
@@ -788,10 +848,11 @@ function NCAABGameCard({
         {/* ── MARKET BUTTONS ─────────────────────────────────────────── */}
         <div className="grid grid-cols-3 gap-2">
           {(["over", "under", "spread"] as const).map(m => {
-            if (m === "spread" && play.spread === null) return null;
+            if (m === "spread" && displaySpread === null) return null;
             const isSelected = selectedMarket === m;
             const isParlayed = isLegParlayed(m);
             const mColor = m === "over" ? "#00d4aa" : m === "under" ? "#ef4444" : "#94a3b8";
+            const mProb = m === "over" ? displayOverProb : m === "under" ? displayUnderProb : (displaySpreadProb ?? spreadProb);
             return (
               <div key={m} className="relative">
                 <button
@@ -799,16 +860,15 @@ function NCAABGameCard({
                   onClick={() => setSelectedMarket(m)}
                   className="w-full rounded-lg py-2.5 px-2 flex flex-col items-center gap-0.5 transition-all duration-300"
                   style={{
-                    background: isSelected ? `${mColor}22` : "#111",
-                    border: `1px solid ${isSelected ? mColor : "#27272a"}`,
-                    color: isSelected ? mColor : "#71717a",
+                    background: isSelected ? "#1f1f1f" : "#181818",
+                    border: isSelected ? "1.5px solid #ffffff" : "1px solid #27272a",
                   }}
                 >
-                  <span className="text-[9px] font-black uppercase tracking-widest">{m}</span>
-                  <span className="text-sm font-black tabular-nums leading-tight">
-                    {m === "spread" ? (play.spread !== null ? `-${play.spread}` : "—") : (effectiveLine ?? "—")}
+                  <span className="text-xs font-black uppercase tracking-widest" style={{ color: "#71717a" }}>{m}</span>
+                  <span className="text-xl font-bold tabular-nums leading-tight" style={{ color: "#ffffff" }}>
+                    {m === "spread" ? (displaySpread !== null ? `-${displaySpread}` : "—") : (displayLine ?? "—")}
                   </span>
-                  <span className="text-[10px] font-semibold">{gaugeForMarket(m).toFixed(1)}%</span>
+                  <span className="text-sm font-semibold" style={{ color: mColor }}>{mProb.toFixed(1)}%</span>
                 </button>
                 <button
                   data-testid={`ncaab-parlay-toggle-${m}-${play.gameId}`}
@@ -817,7 +877,7 @@ function NCAABGameCard({
                   className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-black transition-all duration-200"
                   style={{
                     background: isParlayed ? "#f59e0b" : "#27272a",
-                    color: isParlayed ? "#000" : "#71717a",
+                    color: isParlayed ? "#000" : "#a1a1aa",
                     border: isParlayed ? "none" : "1px solid #3f3f46",
                   }}
                 >
@@ -833,25 +893,32 @@ function NCAABGameCard({
           {[
             { label: "MGM", book: mgmBook, url: "https://sports.betmgm.com" },
             { label: altLabel, book: altBook, url: "https://bovada.lv" },
-          ].filter(p => p.label !== "—").map(({ label, book, url }) => (
-            <button
-              key={label}
-              data-testid={`ncaab-book-pill-${label}-${play.gameId}`}
-              onClick={() => window.open(url, "_blank")}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all duration-300"
-              style={{ background: "#111", border: "1px solid #27272a", color: "#a1a1aa" }}
-              onMouseEnter={e => (e.currentTarget.style.borderColor = "#00d4aa55")}
-              onMouseLeave={e => (e.currentTarget.style.borderColor = "#27272a")}
-            >
-              <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-400" />
-              </span>
-              <span style={{ color: "#d4d4d8", fontWeight: 700 }}>{label}</span>
-              <span style={{ color: "#52525b" }}>·</span>
-              <span>{getBookLine(book)}</span>
-            </button>
-          ))}
+          ].filter(p => p.label !== "—").map(({ label, book, url }) => {
+            const bookLineText = book
+              ? (marketTab === "h1"
+                  ? (book.h1Total != null ? `H1 O/U ${book.h1Total}` : "H1 Lines TBD")
+                  : (book.total != null ? `O/U ${book.total}` : "—"))
+              : "—";
+            return (
+              <button
+                key={label}
+                data-testid={`ncaab-book-pill-${label}-${play.gameId}`}
+                onClick={() => window.open(url, "_blank")}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all duration-300"
+                style={{ background: "#181818", border: "1px solid #27272a", color: "#a1a1aa" }}
+                onMouseEnter={e => (e.currentTarget.style.borderColor = "#00d4aa")}
+                onMouseLeave={e => (e.currentTarget.style.borderColor = "#27272a")}
+              >
+                <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-400" />
+                </span>
+                <span style={{ color: "#ffffff", fontWeight: 700 }}>{label}</span>
+                <span style={{ color: "#52525b" }}>·</span>
+                <span style={{ color: "#a1a1aa" }}>{bookLineText}</span>
+              </button>
+            );
+          })}
         </div>
 
         {/* ── PARLAY DRAWER ──────────────────────────────────────────── */}
@@ -922,6 +989,97 @@ function NCAABGameCard({
   );
 }
 
+// ── NCAAB Games Chip Strip ────────────────────────────────────────────────────
+function NCAABGamesStrip({
+  games,
+  expandedGameId,
+  onChipClick,
+}: {
+  games: NCAABGame[];
+  expandedGameId: string | null;
+  onChipClick: (id: string) => void;
+}) {
+  if (games.length === 0) return null;
+
+  const sortedGames = [
+    ...games.filter(g => g.isLive),
+    ...games.filter(g => !g.isLive && g.status !== "Final"),
+    ...games.filter(g => g.status === "Final"),
+  ];
+
+  return (
+    <div className="overflow-x-auto pb-2 -mx-1 px-1" style={{ scrollbarWidth: "none" }}>
+      <div className="flex gap-2" style={{ minWidth: "max-content" }}>
+        {sortedGames.map(g => {
+          const isSelected  = expandedGameId === g.id;
+          const isFinal     = g.status === "Final";
+          const isScheduled = !g.isLive && !isFinal;
+          const tipoffTime  = g.startTime
+            ? new Date(g.startTime).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })
+            : null;
+
+          return (
+            <button
+              key={g.id}
+              data-testid={`ncaab-chip-${g.id}`}
+              onClick={() => onChipClick(g.id)}
+              style={{
+                minWidth: 140,
+                background: isSelected ? "#1f1f1f" : "#111111",
+                border: isSelected
+                  ? "1.5px solid #00d4aa"
+                  : g.isLive
+                  ? "1px solid rgba(0,212,170,0.2)"
+                  : "1px solid #27272a",
+                borderRadius: 8,
+                padding: "8px 10px",
+                cursor: "pointer",
+                transition: "all 150ms ease",
+                textAlign: "left",
+              }}
+              onMouseEnter={e => { if (!isSelected) e.currentTarget.style.borderColor = "#3f3f46"; }}
+              onMouseLeave={e => { if (!isSelected) e.currentTarget.style.borderColor = g.isLive ? "rgba(0,212,170,0.2)" : "#27272a"; }}
+            >
+              {/* Team row */}
+              <div className="flex items-center justify-between gap-1.5">
+                <span className="text-xs font-bold" style={{ color: "#ffffff" }}>{g.awayTeamAbbr}</span>
+                <span
+                  className="text-xs font-bold tabular-nums"
+                  style={{ color: isFinal ? "#71717a" : isScheduled ? "#3b82f6" : "#ffffff" }}
+                >
+                  {g.awayScore} – {g.homeScore}
+                </span>
+                <span className="text-xs font-bold" style={{ color: "#ffffff" }}>{g.homeTeamAbbr}</span>
+              </div>
+              {/* Status row */}
+              <div className="flex items-center gap-1 mt-1">
+                {g.isLive && (
+                  <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-400" />
+                  </span>
+                )}
+                <span
+                  className="text-[10px] font-medium"
+                  style={{
+                    color: g.isLive ? "#4ade80" : isFinal ? "#52525b" : "#71717a",
+                  }}
+                >
+                  {g.isLive
+                    ? `H${g.period} ${g.clock}`
+                    : isFinal
+                    ? "Final"
+                    : tipoffTime ?? "Scheduled"}
+                </span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Grouped Games List ────────────────────────────────────────────────────────
 function GroupedGamesList({
   games,
@@ -986,7 +1144,7 @@ function GroupedGamesList({
                   <div
                     ref={el => { rowRefs.current[g.id] = el; }}
                     data-testid={`ncaab-game-row-${g.id}`}
-                    className={`flex items-center justify-between px-4 py-3 rounded-lg transition-all duration-200 ${canExpand ? "cursor-pointer" : "cursor-default"}`}
+                    className={`scroll-mt-24 flex items-center justify-between px-4 py-3 rounded-lg transition-all duration-200 ${canExpand ? "cursor-pointer" : "cursor-default"}`}
                     style={{
                       background: isExpanded ? "#141414" : "#111111",
                       border: `1px solid ${isExpanded ? "#3f3f46" : "#27272a"}`,
@@ -1200,9 +1358,14 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
     }, 6000);
   }, []);
 
-  const handleExpandGame = useCallback((id: string | null) => {
-    setExpandedGameId(id);
+  const handleChipClick = useCallback((gameId: string) => {
+    setExpandedGameId(prev => prev === gameId ? null : gameId);
+    setTimeout(() => {
+      rowRefs.current[gameId]?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
   }, []);
+
+  const handleExpandGame = handleChipClick;
 
   const handleH2hReady = useCallback((gameId: string, data: H2HGame[]) => {
     h2hCache.current[gameId] = data;
@@ -1514,12 +1677,15 @@ export function NCAABAdminTab({ onAddToParlay }: NCAABAdminTabProps) {
             </div>
           )}
 
-          {/* ── Today's Slate grouped vertical list ─────────────────────────── */}
+          {/* ── Today's Slate — chip strip + grouped vertical list ─────────── */}
           {games.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-xs font-bold text-white">
-                {liveGames.length > 0 ? "Today's Slate" : "Today's Slate"}
-              </p>
+            <div className="space-y-3">
+              <p className="text-xs font-bold text-white">Today's Slate</p>
+              <NCAABGamesStrip
+                games={games}
+                expandedGameId={expandedGameId}
+                onChipClick={handleChipClick}
+              />
               <GroupedGamesList
                 games={games}
                 plays={plays}
