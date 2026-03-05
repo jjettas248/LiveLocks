@@ -127,68 +127,37 @@ export async function registerRoutes(
       const user = await storage.getUserById(userId);
       if (!user) return res.status(404).json({ error: "User not found" });
 
-      const { getUncachableStripeClient } = await import("./stripeClient");
-      const stripe = await getUncachableStripeClient();
+      const tierMeta = ADMIN_TIER_PRICES[newTierKey]!;
+      const currentTierMeta = ADMIN_TIER_PRICES[user.subscriptionTier ?? ""] ?? ADMIN_TIER_PRICES[""];
+      const priceDiff = tierMeta.pricePerMonth - currentTierMeta.pricePerMonth;
 
-      // Downgrade to free
-      if (newTierKey === "") {
-        if (user.stripeCustomerId) {
+      // If downgrading to free AND user has an active Stripe subscription, cancel it gracefully
+      if (newTierKey === "" && user.stripeCustomerId) {
+        try {
+          const { getUncachableStripeClient } = await import("./stripeClient");
+          const stripe = await getUncachableStripeClient();
           const subs = await stripe.subscriptions.list({ customer: user.stripeCustomerId, status: "active" });
           for (const sub of subs.data) {
             await stripe.subscriptions.update(sub.id, { cancel_at_period_end: true });
           }
+        } catch (stripeErr: any) {
+          console.warn("[ADMIN] Stripe cancel skipped (non-fatal):", stripeErr.message);
         }
-        await storage.setUserSubscriptionTier(userId, null);
-        return res.json({ message: "Downgraded to Free. Subscription will cancel at period end." });
       }
 
-      // Paid tier — ensure Stripe customer exists
-      const tierMeta = ADMIN_TIER_PRICES[newTierKey]!;
-      let customerId = user.stripeCustomerId;
-      if (!customerId) {
-        const customer = await stripe.customers.create({
-          email: user.email,
-          metadata: { userId: String(userId) },
-        });
-        customerId = customer.id;
-        await storage.updateUserStripeCustomer(userId, customerId);
-      }
-
-      const currentTierMeta = ADMIN_TIER_PRICES[user.subscriptionTier ?? ""] ?? ADMIN_TIER_PRICES[""];
-      const priceDiff = tierMeta.pricePerMonth - currentTierMeta.pricePerMonth;
-
-      // Check for existing active subscription
-      const subs = await stripe.subscriptions.list({ customer: customerId, status: "active", limit: 1 });
-      const existingSub = subs.data[0];
-
-      if (existingSub) {
-        await stripe.subscriptions.update(existingSub.id, {
-          items: [{ id: existingSub.items.data[0].id, price: tierMeta.stripePriceId! }],
-          proration_behavior: "always_invoice",
-        } as any);
-      } else {
-        const paymentMethods = await stripe.paymentMethods.list({ customer: customerId, type: "card" });
-        if (!paymentMethods.data.length) {
-          return res.status(400).json({ error: "No payment method on file for this user." });
-        }
-        await stripe.subscriptions.create({
-          customer: customerId,
-          items: [{ price: tierMeta.stripePriceId! }],
-          default_payment_method: paymentMethods.data[0].id,
-        } as any);
-      }
-
-      await storage.setUserSubscriptionTier(userId, newTierKey);
+      // Always update DB directly — admin overrides do not require Stripe price IDs
+      await storage.setUserSubscriptionTier(userId, newTierKey === "" ? null : newTierKey);
       console.log("[ADMIN] change-tier written:", { userId, newTierKey, priceDiff, timestamp: new Date().toISOString() });
+
       if (priceDiff > 0) {
         await storage.resetUserPlays(userId);
         await storage.setUpgradedAt(userId, new Date().toISOString());
       }
 
-      const message = priceDiff > 0
-        ? `Upgraded to ${tierMeta.label}. $${priceDiff} difference invoiced.`
-        : priceDiff < 0
-        ? `Downgraded to ${tierMeta.label}. Subscription updated.`
+      const message = newTierKey === ""
+        ? "Downgraded to Free."
+        : priceDiff > 0
+        ? `Upgraded to ${tierMeta.label}.`
         : `Tier updated to ${tierMeta.label}.`;
 
       return res.json({ message });
