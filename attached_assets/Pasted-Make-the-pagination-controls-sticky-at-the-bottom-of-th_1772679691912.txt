@@ -1,0 +1,74 @@
+Make the pagination controls sticky at the bottom 
+of the screen on mobile for the 2H halftime tab.
+
+STICKY BEHAVIOR:
+
+On screens < 768px:
+  Pagination controls detach from card flow and 
+  stick to bottom of viewport.
+  
+  Position: fixed
+  Bottom: 0
+  Left: 0
+  Right: 0
+  z-index: 40
+
+  Container styling:
+    bg: #0a0a0a
+    border-top: 1px solid #27272a
+    padding: 12px 16px
+    padding-bottom: env(safe-area-inset-bottom, 12px)
+    // ↑ accounts for iPhone home indicator bar
+
+  Layout inside sticky bar:
+    Three columns equal width:
+      [← Prev]  [X of Y]  [Next →]
+    
+    Prev button:
+      Full height tap target: min-height 44px
+      bg #181818, border #27272a, rounded-lg
+      text #a1a1aa when enabled
+      text #3f3f46 when disabled, pointer-events none
+      
+    Page indicator:
+      Centered text
+      "[current] of [total]" zinc-400 text-sm font-mono
+      
+    Next button:
+      Full height tap target: min-height 44px
+      Same styling as Prev
+
+BOTTOM PADDING COMPENSATION:
+  The last halftime card must not be hidden behind 
+  the sticky bar.
+  
+  Add bottom padding to the halftime cards container:
+    On mobile: pb-20 (80px clears the sticky bar)
+    On desktop: pb-0 (sticky bar not shown)
+  
+  Use responsive class or inline conditional:
+    className={`halftime-container ${
+      isMobile ? "pb-20" : "pb-0"
+    }`}
+  
+  Detect mobile:
+    const isMobile = window.innerWidth < 768
+    Or use existing useMobile hook already in codebase
+
+ON PAGE CHANGE:
+  Scroll halftime section to top:
+    halftimeSectionRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start"
+    })
+  
+  On mobile this scroll must account for any 
+  sticky headers above the halftime section.
+  Add scroll-margin-top to halftime section ref:
+    style={{ scrollMarginTop: "80px" }}
+
+DESKTOP BEHAVIOR (>= 768px):
+  Pagination controls render inline below last card
+  Not fixed, not sticky
+  Normal document flow
+  Same styling but position: static

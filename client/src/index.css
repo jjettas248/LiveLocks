@@ -145,4 +145,26 @@
   .bell-flash {
     animation: bellFlash 800ms ease 2;
   }
+
+  @keyframes halftimeExit {
+    0%   { opacity: 1; max-height: 600px; }
+    70%  { opacity: 1; max-height: 600px; }
+    85%  { opacity: 0; max-height: 600px; }
+    100% { opacity: 0; max-height: 0; margin-bottom: 0; overflow: hidden; }
+  }
+
+  @keyframes countPulse {
+    0%   { transform: scale(1.0); }
+    50%  { transform: scale(1.25); }
+    100% { transform: scale(1.0); }
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+    to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+  }
+
+  .halftime-count-pulse {
+    animation: countPulse 300ms ease;
+  }
 }

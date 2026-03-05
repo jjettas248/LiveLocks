@@ -1,0 +1,240 @@
+The engine is calculating 100% Under on a game 
+that went Over. The H1 total line was 68 and 
+the actual total went to 70 (Over hit).
+
+The engine showed 0% Over / 100% Under which is 
+mathematically wrong and means the calculation 
+logic has a bug.
+
+---
+
+STEP 1 — AUDIT THE BUG
+
+The game shown: Baylor Bears @ Houston Cougars
+Score at time of screenshot: 35 – 35 = 70 total
+H1 line: 68
+Result: OVER hit (70 > 68)
+Engine said: 0% Over / 100% Under (completely wrong)
+
+Most likely causes — check each:
+
+CAUSE A: Score not yet populated
+  The card shows "35 – 35" as current score.
+  If homeScore or awayScore is 0 or null when 
+  calculateEngineProb runs:
+    projTotal = 0 + 0 = 0
+    diff = 0 - 68 = -68
+    overProb = clamp(50 + (-68 * 3), 2, 98) = 2% ≈ 0%
+  
+  This is the most likely bug.
+  Score is not being passed correctly to the 
+  probability function.
+
+CAUSE B: Wrong field names
+  homeScore and awayScore field names may differ 
+  from what calculateEngineProb expects.
+  Check exact field names on the game object.
+
+CAUSE C: Projection fields null
+  If predictor projections are null, the function 
+  falls back to 0 + 0.
+  Need a better fallback using current score + 
+  expected 2H pace.
+
+CAUSE D: H1 calculation using full game projection
+  If full game projection is being used instead of 
+  H1 projection, the math is wrong for H1 markets.
+
+Print findings before fixing:
+  // ENGINE BUG AUDIT
+  // Score fields on game object: [field names]
+  // Value of homeScore at calculation time: [value]
+  // Value of awayScore at calculation time: [value]
+  // Projection fields: [field names + values]
+  // Identified cause: [A/B/C/D]
+
+---
+
+STEP 2 — FIX THE PROBABILITY CALCULATION
+
+Based on audit findings, fix the root cause.
+
+CORRECT LOGIC for H1 engine probability:
+
+  const calculate1HEngineProb = (game) => {
+    
+    // Get current H1 scores — try multiple field names
+    const homeScore = 
+      game.homeScore ?? 
+      game.home_score ?? 
+      game.competitions?.[0]?.competitors
+        ?.find(c => c.homeAway === "home")?.score ?? 
+      0
+    
+    const awayScore = 
+      game.awayScore ?? 
+      game.away_score ??
+      game.competitions?.[0]?.competitors
+        ?.find(c => c.homeAway === "away")?.score ??
+      0
+    
+    const currentTotal = 
+      parseFloat(homeScore) + parseFloat(awayScore)
+    
+    // Get H1 line
+    const h1Line = 
+      game.h1Line ?? 
+      game.odds?.h1OverUnder ?? 
+      game.h1Total ??
+      null
+    
+    if (!h1Line) {
+      return { overProb: 50, underProb: 50 }
+    }
+    
+    // Get time remaining in H1
+    const clock = game.status?.displayClock ?? "20:00"
+    const period = game.status?.period ?? 1
+    
+    // Parse minutes remaining
+    const [mins, secs] = clock.split(":").map(Number)
+    const minutesRemaining = mins + (secs / 60)
+    const totalH1Minutes = 20
+    const minutesElapsed = totalH1Minutes - minutesRemaining
+    
+    // If at halftime (H1 0:00) — use final H1 score
+    if (period >= 2 || minutesRemaining <= 0) {
+      // H1 is over — result is known
+      if (currentTotal > h1Line) {
+        return { overProb: 99, underProb: 1 }
+      } else if (currentTotal < h1Line) {
+        return { overProb: 1, underProb: 99 }
+      } else {
+        return { overProb: 50, underProb: 50 } // push
+      }
+    }
+    
+    // Mid H1 — project remaining scoring
+    if (minutesElapsed <= 0) {
+      // Game just started — no data yet
+      // Use line as proxy: 50/50
+      return { overProb: 50, underProb: 50 }
+    }
+    
+    // Calculate current scoring pace
+    const scoringPacePerMinute = currentTotal / minutesElapsed
+    const projectedAdditional = 
+      scoringPacePerMinute * minutesRemaining
+    const projectedFinalTotal = 
+      currentTotal + projectedAdditional
+    
+    // Apply to existing engine calc
+    const diff = projectedFinalTotal - h1Line
+    
+    // More aggressive multiplier for H1 
+    // (less time = more certainty)
+    const certaintyMultiplier = 
+      3 + ((minutesElapsed / totalH1Minutes) * 4)
+    // Ranges from 3 (game start) to 7 (game end)
+    
+    const overProb = Math.min(
+      Math.max(50 + (diff * certaintyMultiplier), 2), 
+      98
+    )
+    
+    return {
+      overProb: parseFloat(overProb.toFixed(1)),
+      underProb: parseFloat((100 - overProb).toFixed(1))
+    }
+  }
+
+---
+
+STEP 3 — FIX FULL GAME ENGINE PROBABILITY
+
+Apply same score-field-name fix to the full game 
+engine probability calculation.
+
+The same null score bug likely affects full game 
+cards too if scores are not being passed correctly.
+
+In calculateEngineProb (full game version):
+  Use the same defensive field name resolution:
+    
+    const homeScore = 
+      game.homeScore ?? 
+      game.home_score ??
+      game.competitions?.[0]?.competitors
+        ?.find(c => c.homeAway === "home")?.score ?? 
+      0
+    
+    const awayScore =
+      game.awayScore ??
+      game.away_score ??
+      game.competitions?.[0]?.competitors
+        ?.find(c => c.homeAway === "away")?.score ??
+      0
+
+  For full game mid-game calculation:
+    Account for points already scored:
+    
+    const currentTotal = 
+      parseFloat(homeScore) + parseFloat(awayScore)
+    const remainingToLine = fullGameLine - currentTotal
+    
+    // Use projected remaining, not projected final
+    const homeRemainingProj = 
+      (game.predictor?.homeTeam?.gameProjection ?? 0) 
+      - parseFloat(homeScore)
+    const awayRemainingProj = 
+      (game.predictor?.awayTeam?.gameProjection ?? 0) 
+      - parseFloat(awayScore)
+    const projRemaining = 
+      Math.max(homeRemainingProj, 0) + 
+      Math.max(awayRemainingProj, 0)
+    
+    const diff = projRemaining - remainingToLine
+    const overProb = Math.min(
+      Math.max(50 + (diff * 3), 2), 98
+    )
+
+---
+
+STEP 4 — ADD PROBABILITY SANITY CHECKS
+
+Before displaying any probability value, 
+run a sanity check:
+
+  const sanitizeProb = (prob, game) => {
+    
+    // If both scores are 0 and game just started:
+    // return 50/50 — not enough data
+    const homeScore = parseFloat(game.homeScore ?? 0)
+    const awayScore = parseFloat(game.awayScore ?? 0)
+    
+    if (homeScore === 0 && awayScore === 0) {
+      const clock = game.status?.displayClock
+      const mins = parseInt(clock?.split(":")?.[0] ?? "20")
+      if (mins >= 19) {
+        // Game just started — return neutral
+        return 50
+      }
+    }
+    
+    // Clamp to 2-98 range — never show 0% or 100%
+    // 0% and 100% are almost never mathematically valid
+    // during live play and indicate a data error
+    return Math.min(Math.max(prob, 2), 98)
+  }
+
+  Apply sanitizeProb to every probability value 
+  before it is displayed in:
+    - Gauge
+    - ENGINE OVER% row
+    - ENGINE UNDER% row
+    - Market button percentages
+    - Verdict row calculations
+
+  Exception: after H1 ends (period >= 2):
+    Allow 99/1 to show (result is effectively known)
+    Do not apply 2-98 clamp post-halftime

@@ -1,0 +1,132 @@
+When a game transitions from halftime to 2H live 
+during an active session, fade the halftime card 
+out with a brief "2H Underway" state before removing.
+
+TRANSITION TRIGGER:
+  On each data refresh, check if any game in 
+  halftimeGames has changed status from 
+  "halftime" to "in_progress" (2H started).
+
+  const checkHalftimeTransitions = (
+    prevGames, currentGames
+  ) => {
+    prevGames.forEach(prev => {
+      const current = currentGames.find(
+        g => g.id === prev.id
+      )
+      if (
+        prev.status === "halftime" && 
+        current?.status === "in_progress"
+      ) {
+        triggerHalftimeExit(prev.id)
+      }
+    })
+  }
+
+TRANSITION STATE PER CARD:
+  Track exiting cards in state:
+  
+  const [exitingGames, setExitingGames] = useState({})
+  // shape: { [gameId]: boolean }
+  
+  const triggerHalftimeExit = (gameId) => {
+    // 1. Mark as exiting
+    setExitingGames(prev => ({ 
+      ...prev, 
+      [gameId]: true 
+    }))
+    
+    // 2. Remove from list after animation completes
+    setTimeout(() => {
+      setHalftimeGames(prev => 
+        prev.filter(g => g.id !== gameId)
+      )
+      setExitingGames(prev => {
+        const next = { ...prev }
+        delete next[gameId]
+        return next
+      })
+    }, 2500) // 2.5s total — matches animation below
+  }
+
+EXITING CARD VISUAL STATE:
+
+When exitingGames[game.id] === true:
+
+  Card overlay appears on top of existing card content:
+    Position: absolute, inset 0
+    bg: rgba(10,10,10,0.85)
+    border-radius: inherit
+    z-index: 10
+    display: flex, align-items: center, 
+    justify-content: center
+    flex-direction: column
+    gap: 8px
+
+  Overlay content:
+    Green pulsing dot (animate-ping, 10px)
+    "2H Underway" text
+      #00d4aa font-bold text-lg
+    "[AWAY] [score] – [HOME] [score]" 
+      #ffffff font-semibold text-sm
+    "Tracking live..." 
+      #71717a text-xs
+
+  Card itself:
+    Existing content fades to 20% opacity (200ms ease)
+    Card border shifts to teal: #00d4aa/30
+    Card does not collapse yet — full height maintained
+
+  After 2 seconds:
+    Card fades out entirely (opacity 0, 300ms ease)
+    Card height collapses to 0 (max-height 0, 300ms ease)
+    margin-bottom collapses to 0 (300ms ease)
+    Then removed from DOM
+
+  CSS keyframe for exit sequence:
+    @keyframes halftimeExit {
+      0%   { opacity: 1; max-height: 600px; }
+      70%  { opacity: 1; max-height: 600px; }
+      85%  { opacity: 0; max-height: 600px; }
+      100% { opacity: 0; max-height: 0; 
+             margin-bottom: 0; overflow: hidden; }
+    }
+    animation: halftimeExit 2.5s ease forwards
+
+PAGINATION UPDATE DURING EXIT:
+  While card is in exiting state (before removal):
+    Still counts toward total for ranking numbers
+    Still occupies its page slot
+    Does NOT count toward the 4-per-page visible slots
+    
+    After removal:
+      Recalculate pagination
+      If current page is now empty: go to prev page
+        setCurrentPage(prev => Math.max(prev - 1, 1))
+      Update game count header number
+
+GAME COUNT HEADER UPDATE:
+  While card exiting: count stays at current number
+  After card removed: count decrements by 1
+  
+  "9 Games at Halftime · Page 1 of 3"
+  Animate number change: brief scale pulse on number
+    transform scale(1.2) → scale(1.0), 300ms
+
+TOAST NOTIFICATION ON EXIT:
+  When game leaves halftime show subtle toast:
+    "[AWAY] @ [HOME] — 2H Underway"
+    Green dot + text
+    bg #111111, border zinc-700
+    Auto-dismiss 3 seconds
+    Position: top of screen (not bottom — 
+    bottom is occupied by sticky pagination)
+    
+    top: 16px
+    left: 50%
+    transform: translateX(-50%)
+    z-index: 50
+
+  Do NOT fire this toast if the user has that 
+  game's card currently expanded in the main 
+  game list — they can already see it's live.

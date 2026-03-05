@@ -184,6 +184,19 @@ export default function Dashboard() {
   const [showAlertsPanel, setShowAlertsPanel] = useState(false);
   const [showHistorySheet, setShowHistorySheet] = useState(false);
   const [notificationLog, setNotificationLog] = useState<NotificationLog[]>([]);
+  const [isSmallScreen, setIsSmallScreen] = useState(() => window.innerWidth < 768);
+  const [exitingGames, setExitingGames] = useState<Record<string, boolean>>({});
+  const [visibleHalftimeGroups, setVisibleHalftimeGroups] = useState<Array<{
+    gameId: string; awayTeamAbbr: string; homeTeamAbbr: string;
+    awayFull: string; homeFull: string; awayScore: number; homeScore: number; plays: any[];
+  }>>([]);
+  const [currentHalftimePage, setCurrentHalftimePage] = useState(1);
+  const [halftimeCountPulse, setHalftimeCountPulse] = useState(false);
+  const [halfTransitionToast, setHalfTransitionToast] = useState<{ away: string; home: string } | null>(null);
+  const halftimeSectionRef = useRef<HTMLDivElement>(null);
+  const prevLiveGamesRef = useRef<any[]>([]);
+  const exitingGamesRef = useRef<Record<string, boolean>>({});
+  const visibleHalftimeGroupsRef = useRef<typeof visibleHalftimeGroups>([]);
 
   // ── SMS Bell state (localStorage-persisted) ───────────────────────────────
   type SmsStatus = "unprompted" | "opted-in" | "opted-out";
@@ -481,6 +494,30 @@ export default function Dashboard() {
     staleTime: 4 * 60 * 1000,
   });
 
+  const halftimeGameGroups = useMemo(() => {
+    const plays = halftimePlaysData?.plays ?? [];
+    const gameMap = new Map<string, {
+      gameId: string; awayTeamAbbr: string; homeTeamAbbr: string;
+      awayFull: string; homeFull: string; awayScore: number; homeScore: number; plays: any[];
+    }>();
+    for (const play of plays) {
+      if (!gameMap.has(play.gameId)) {
+        gameMap.set(play.gameId, {
+          gameId: play.gameId,
+          awayTeamAbbr: play.awayTeamAbbr ?? play.team,
+          homeTeamAbbr: play.homeTeamAbbr ?? play.opponent,
+          awayFull: play.awayFull ?? play.team,
+          homeFull: play.homeFull ?? play.opponent,
+          awayScore: play.awayScore ?? 0,
+          homeScore: play.homeScore ?? 0,
+          plays: [],
+        });
+      }
+      gameMap.get(play.gameId)!.plays.push(play);
+    }
+    return Array.from(gameMap.values());
+  }, [halftimePlaysData]);
+
   // ── 2-minute auto-refresh for live box score ───────────────────────────────
   useEffect(() => {
     if (autoRefreshRef.current) clearInterval(autoRefreshRef.current);
@@ -503,10 +540,65 @@ export default function Dashboard() {
 
   // ── Mobile breakpoint detection ────────────────────────────────────────────
   useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < 1024);
+    const onResize = () => {
+      setIsMobile(window.innerWidth < 1024);
+      setIsSmallScreen(window.innerWidth < 768);
+    };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  // ── Sync refs for halftime transition logic ────────────────────────────────
+  useEffect(() => { visibleHalftimeGroupsRef.current = visibleHalftimeGroups; }, [visibleHalftimeGroups]);
+
+  // ── Sync visibleHalftimeGroups from API data (add new, keep exiting) ───────
+  useEffect(() => {
+    setVisibleHalftimeGroups(prev => {
+      const newMap = new Map(halftimeGameGroups.map(g => [g.gameId, g]));
+      const exitingToKeep = prev.filter(g => exitingGamesRef.current[g.gameId] && !newMap.has(g.gameId));
+      return [...halftimeGameGroups, ...exitingToKeep];
+    });
+  }, [halftimeGameGroups]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Page decrement guard when current page empties after card removal ──────
+  useEffect(() => {
+    const total = Math.max(1, Math.ceil(visibleHalftimeGroups.length / 4));
+    setCurrentHalftimePage(prev => (prev > total ? total : prev));
+  }, [visibleHalftimeGroups.length]);
+
+  // ── Trigger halftime exit animation + cleanup ──────────────────────────────
+  const triggerHalftimeExit = (gameId: string, awayAbbr: string, homeAbbr: string) => {
+    exitingGamesRef.current = { ...exitingGamesRef.current, [gameId]: true };
+    setExitingGames(prev => ({ ...prev, [gameId]: true }));
+    if (selectedGameId !== gameId) {
+      setHalfTransitionToast({ away: awayAbbr, home: homeAbbr });
+      setTimeout(() => setHalfTransitionToast(null), 3000);
+    }
+    setTimeout(() => {
+      setVisibleHalftimeGroups(prev => prev.filter(g => g.gameId !== gameId));
+      delete exitingGamesRef.current[gameId];
+      setExitingGames(prev => { const next = { ...prev }; delete next[gameId]; return next; });
+      setHalftimeCountPulse(true);
+      setTimeout(() => setHalftimeCountPulse(false), 350);
+    }, 2500);
+  };
+
+  // ── Check for halftime → 2H live transitions on every liveGames refresh ───
+  useEffect(() => {
+    if (!liveGames) { prevLiveGamesRef.current = []; return; }
+    const prevById = new Map(prevLiveGamesRef.current.map((g: any) => [g.id, g]));
+    for (const group of visibleHalftimeGroupsRef.current) {
+      if (exitingGamesRef.current[group.gameId]) continue;
+      const curr = liveGames.find((g: any) => g.id === group.gameId);
+      const prev = prevById.get(group.gameId);
+      const isNow2H = curr?.period === 3 && (curr?.status === "In Progress" || curr?.status === "in_progress");
+      const wasHalftime = !prev || prev.period <= 2 || prev.status === "Halftime" || prev.status === "Half Time";
+      if (isNow2H && wasHalftime) {
+        triggerHalftimeExit(group.gameId, group.awayTeamAbbr, group.homeTeamAbbr);
+      }
+    }
+    prevLiveGamesRef.current = liveGames;
+  }, [liveGames]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Play limit gating ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -812,30 +904,6 @@ export default function Dashboard() {
     (g) => g.status !== "Scheduled" && g.status !== "Final"
   );
   const allGames = liveGames ?? [];
-
-  const halftimeGameGroups = useMemo(() => {
-    const plays = halftimePlaysData?.plays ?? [];
-    const gameMap = new Map<string, {
-      gameId: string; awayTeamAbbr: string; homeTeamAbbr: string;
-      awayFull: string; homeFull: string; awayScore: number; homeScore: number; plays: any[];
-    }>();
-    for (const play of plays) {
-      if (!gameMap.has(play.gameId)) {
-        gameMap.set(play.gameId, {
-          gameId: play.gameId,
-          awayTeamAbbr: play.awayTeamAbbr ?? play.team,
-          homeTeamAbbr: play.homeTeamAbbr ?? play.opponent,
-          awayFull: play.awayFull ?? play.team,
-          homeFull: play.homeFull ?? play.opponent,
-          awayScore: play.awayScore ?? 0,
-          homeScore: play.homeScore ?? 0,
-          plays: [],
-        });
-      }
-      gameMap.get(play.gameId)!.plays.push(play);
-    }
-    return Array.from(gameMap.values());
-  }, [halftimePlaysData]);
 
   if (isLoading) {
     return (
@@ -2303,16 +2371,34 @@ export default function Dashboard() {
 
         {/* 2H Plays Sub-Tab Content */}
         {activeTab === "calculator" && nbaSubTab === "halftime" && (
-          <div className={showParlay && !isMobile ? "flex items-start gap-5" : "space-y-4"}>
+          <div
+            ref={halftimeSectionRef}
+            style={{ scrollMarginTop: "80px" }}
+            className={showParlay && !isMobile ? "flex items-start gap-5" : "space-y-4"}
+          >
             <div className={showParlay && !isMobile ? "bg-card border border-border rounded-xl p-5 flex-1 min-w-0" : "bg-card border border-border rounded-xl p-5"}>
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h2 className="text-lg font-semibold flex items-center gap-2">
+                  <h2 className="text-lg font-semibold flex items-center gap-2 flex-wrap">
                     <Star className="w-5 h-5 text-primary" />
-                    Top 2H Plays — Full Slate
+                    2H Plays —{" "}
+                    <span
+                      data-testid="text-halftime-count"
+                      className={halftimeCountPulse ? "halftime-count-pulse" : ""}
+                      style={{ display: "inline-block", color: "#00d4aa" }}
+                      key={visibleHalftimeGroups.length}
+                    >
+                      {visibleHalftimeGroups.length}
+                    </span>
+                    {" "}Game{visibleHalftimeGroups.length !== 1 ? "s" : ""} at Halftime
+                    {Math.max(1, Math.ceil(visibleHalftimeGroups.length / 4)) > 1 && (
+                      <span className="text-sm font-normal text-muted-foreground">
+                        · Page {currentHalftimePage} of {Math.max(1, Math.ceil(visibleHalftimeGroups.length / 4))}
+                      </span>
+                    )}
                   </h2>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Top 20 plays by probability edge across all halftime games. Includes overs and unders.
+                    Top plays by probability edge across all halftime games. Includes overs and unders.
                   </p>
                 </div>
                 <button
@@ -2412,212 +2498,346 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {/* Per-game groups */}
-              {!isHalftimePlaysLoading && halftimePlaysData && halftimePlaysData.plays.length > 0 && (
-                <div className="space-y-8">
-                  {halftimeGameGroups.map((group) => {
-                    const gameUnlocked = !isFreeUser || unlockedGameIds.has(group.gameId);
-                    const groupFiltered = group.plays.filter(filterPlay);
-                    const isGameUnlocking = unlocking2hGame === group.gameId;
-                    const playsRemaining = Math.max(0, 15 - (user?.playsUsed ?? 0));
-                    return (
-                      <div key={group.gameId}>
-                        {/* Game header */}
-                        <div className="flex items-center gap-3 mb-3">
-                          <div className="flex items-center gap-2 text-sm font-bold text-foreground">
-                            <span data-testid={`text-game-away-${group.gameId}`}>{group.awayTeamAbbr}</span>
-                            <span className="font-bold" style={{ color: "#ffffff" }}>{group.awayScore}</span>
-                            <span className="text-muted-foreground font-normal">–</span>
-                            <span className="font-bold" style={{ color: "#ffffff" }}>{group.homeScore}</span>
-                            <span data-testid={`text-game-home-${group.gameId}`}>{group.homeTeamAbbr}</span>
-                          </div>
-                          <span
-                            className="text-xs font-semibold rounded-full"
-                            style={{ background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b", padding: "2px 12px" }}
-                          >HALFTIME</span>
-                          {gameUnlocked && (
-                            <span className="text-xs text-muted-foreground ml-auto">{group.plays.length} plays</span>
-                          )}
-                        </div>
-
-                        {/* Lock gate for free users */}
-                        {!gameUnlocked && (
-                          <div className="rounded-xl border border-border bg-muted/20 p-8 flex flex-col items-center gap-4 text-center">
-                            <div className="w-12 h-12 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-                              <Lock className="w-6 h-6 text-primary" />
-                            </div>
-                            <div>
-                              <p className="text-sm font-bold text-foreground">View 2H Analysis — {group.plays.length} plays found</p>
-                              <p className="text-xs text-muted-foreground mt-1">Unlocking this game uses 1 free play. You have {playsRemaining} remaining.</p>
-                            </div>
-                            {playsRemaining > 0 && (
-                              <button
-                                data-testid={`button-unlock-2h-${group.gameId}`}
-                                onClick={() => unlock2hGame(group.gameId)}
-                                disabled={isGameUnlocking}
-                                className="px-5 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition-colors disabled:opacity-60 flex items-center gap-2"
-                              >
-                                {isGameUnlocking && <Loader2 className="w-4 h-4 animate-spin" />}
-                                {isGameUnlocking ? "Unlocking…" : `View ${group.plays.length} Plays — 1 Free Play`}
-                              </button>
-                            )}
-                            {playsRemaining === 0 && (
-                              <button
-                                data-testid="button-halftime-upgrade"
-                                onClick={() => { setUpgradeModalState({ playsUsed: user?.playsUsed ?? 0, limit: 15 }); setShowUpgradeModal(true); }}
-                                className="px-5 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition-colors"
-                              >
-                                View Plans →
-                              </button>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Unlocked plays grid */}
-                        {gameUnlocked && groupFiltered.length === 0 && (
-                          <div className="text-center py-8 text-muted-foreground">
-                            <p className="text-sm">No plays match the current filters.</p>
-                            <button onClick={() => { setSlateFilterProp("all"); setSlateFilterProb("all"); }} className="text-xs text-primary mt-2 hover:underline">Clear filters</button>
-                          </div>
-                        )}
-                        {gameUnlocked && groupFiltered.length > 0 && (
-                          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                            {groupFiltered.map((play: any, idx: number) => {
-                    const isOver = play.betDirection === "over";
-                    const isInjured = injuredPlayerNames.has(play.playerName.toLowerCase());
-                    const statLabel = STAT_TYPES.find(s => s.value === play.statType)?.label ?? play.statType;
-                    const hasLiveLine = play.lineSource === "odds_api";
-                    const globalIdx = halftimePlaysData.plays.indexOf(play);
-                    return (
-                      <div
-                        key={idx}
-                        data-testid={`halftime-play-${idx}`}
-                        className={`rounded-xl border p-4 space-y-2 relative cursor-pointer transition-all ${
-                          isInjured
-                            ? "border-red-500/40 bg-red-500/5 hover:border-red-500/60"
-                            : "border-border/60 bg-secondary/30 hover:border-primary/40 hover:bg-secondary/50"
-                        }`}
-                        onClick={() => loadPlayInCalculator(play)}
-                      >
-                        <div className="absolute top-3 left-3 w-5 h-5 flex items-center justify-center" style={{ background: "#1d4ed8", borderRadius: 8 }}>
-                          <span className="text-[9px] font-bold text-white leading-none">#{globalIdx + 1}</span>
-                        </div>
-                        <div className="flex items-start justify-between gap-2 pl-7">
-                          <div>
-                            <div className="font-semibold text-sm text-foreground">{play.playerName}</div>
-                            <div className="text-xs text-muted-foreground">{play.team} vs {play.opponent}</div>
-                            {isInjured && (
-                              <span className="text-xs text-red-400 font-semibold flex items-center gap-0.5 mt-0.5">
-                                <AlertTriangle className="w-3 h-3" /> Injured
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-right flex-shrink-0">
-                            {(() => {
-                              const displayProb = play.betDirection === "under"
-                                ? Math.round((100 - play.probability) * 10) / 10
-                                : play.probability;
-                              return (
-                                <>
-                                  <div className={`text-xl font-bold font-mono ${
-                                    displayProb >= 65 ? "text-green-400" :
-                                    displayProb <= 35 ? "text-red-400" : "text-yellow-400"
-                                  }`}>
-                                    {displayProb.toFixed(1)}%
-                                  </div>
-                                  <div className="text-[9px] font-semibold text-muted-foreground">
-                                    {isOver ? "Over %" : "Under %"}
-                                  </div>
-                                </>
-                              );
-                            })()}
-                            <div className="text-xs text-muted-foreground">
-                              Edge: +{play.edge.toFixed(1)}%
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span
-                            className="text-xs font-mono px-2 py-0.5 rounded font-bold"
-                            style={isOver
-                              ? { background: "rgba(0,212,170,0.15)", border: "1px solid rgba(0,212,170,0.3)", color: "#00d4aa" }
-                              : { background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444" }
-                            }
+              {/* Per-game groups — paginated with exit animation */}
+              {!isHalftimePlaysLoading && halftimePlaysData && halftimePlaysData.plays.length > 0 && (() => {
+                const GAMES_PER_PAGE = 4;
+                const totalPages = Math.max(1, Math.ceil(visibleHalftimeGroups.length / GAMES_PER_PAGE));
+                const pageStart = (currentHalftimePage - 1) * GAMES_PER_PAGE;
+                const pageGroups = visibleHalftimeGroups.slice(pageStart, pageStart + GAMES_PER_PAGE);
+                return (
+                  <div className={isSmallScreen ? "pb-20" : "pb-0"}>
+                    <div className="space-y-8">
+                      {pageGroups.map((group) => {
+                        const isExiting = !!exitingGames[group.gameId];
+                        const gameUnlocked = !isFreeUser || unlockedGameIds.has(group.gameId);
+                        const groupFiltered = group.plays.filter(filterPlay);
+                        const isGameUnlocking = unlocking2hGame === group.gameId;
+                        const playsRemaining = Math.max(0, 15 - (user?.playsUsed ?? 0));
+                        return (
+                          <div
+                            key={group.gameId}
+                            className="relative"
+                            style={{
+                              animation: isExiting ? "halftimeExit 2.5s ease forwards" : "none",
+                              border: isExiting ? "1px solid rgba(0,212,170,0.3)" : "1px solid transparent",
+                              borderRadius: 12,
+                              transition: "border-color 200ms ease",
+                            }}
                           >
-                            {statLabel} {isOver ? "O" : "U"}{play.line}
-                          </span>
-                          <span
-                            className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
-                            style={hasLiveLine
-                              ? { background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "#a1a1aa" }
-                              : { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#71717a" }
-                            }
-                          >
-                            {hasLiveLine ? "Live Line" : "Season Avg"}
-                          </span>
-                          <span className="text-xs" style={{ color: play.halftimeStat > 0 ? "#71717a" : "#52525b" }}>
-                            H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}
-                          </span>
-                          <span data-testid="hint-tap-verify" className="text-[10px] text-muted-foreground/50 italic">Tap card to cross-check →</span>
-                        </div>
-                        {(() => {
-                          const inParlayIdx = parlayPicks.findIndex(p =>
-                            p.playerId === play.playerId &&
-                            p.statType === play.statType &&
-                            p.betDirection === play.betDirection
-                          );
-                          const isInParlay = inParlayIdx !== -1;
-                          return (
-                            <button
-                              type="button"
-                              data-testid={`button-add-halftime-play-${idx}`}
-                              disabled={!isInParlay && parlayPicks.length >= 10}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (isInParlay) {
-                                  setParlayPicks(prev => prev.filter((_, i) => i !== inParlayIdx));
-                                } else {
-                                  const pick: ParlayPickInput = {
-                                    playerId: play.playerId,
-                                    playerName: play.playerName,
-                                    playerTeam: play.team,
-                                    statType: play.statType,
-                                    line: play.line,
-                                    probability: play.probability,
-                                    betDirection: play.betDirection,
-                                    sportsbook: "",
-                                    oddsAmerican: 0,
-                                    gameId: play.gameId,
-                                  };
-                                  setParlayPicks(prev => [...prev, pick]);
-                                  setShowParlay(true);
-                                }
-                              }}
-                              className={`w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-40 ${
-                                !isInParlay ? "bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20" : ""
-                              }`}
-                              style={isInParlay
-                                ? { background: "rgba(0,212,170,0.15)", border: "1px solid rgba(0,212,170,0.3)", color: "#00d4aa" }
-                                : undefined}
-                            >
-                              {isInParlay ? (
-                                <>✓ Added</>
-                              ) : (
-                                <><Plus className="w-3.5 h-3.5" />Add to Parlay</>
+                            {/* Inner content — dims when exiting */}
+                            <div style={{ opacity: isExiting ? 0.2 : 1, transition: "opacity 200ms ease" }}>
+                              {/* Game header */}
+                              <div className="flex items-center gap-3 mb-3">
+                                <div className="flex items-center gap-2 text-sm font-bold text-foreground">
+                                  <span data-testid={`text-game-away-${group.gameId}`}>{group.awayTeamAbbr}</span>
+                                  <span className="font-bold" style={{ color: "#ffffff" }}>{group.awayScore}</span>
+                                  <span className="text-muted-foreground font-normal">–</span>
+                                  <span className="font-bold" style={{ color: "#ffffff" }}>{group.homeScore}</span>
+                                  <span data-testid={`text-game-home-${group.gameId}`}>{group.homeTeamAbbr}</span>
+                                </div>
+                                <span
+                                  className="text-xs font-semibold rounded-full"
+                                  style={{ background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b", padding: "2px 12px" }}
+                                >HALFTIME</span>
+                                {gameUnlocked && (
+                                  <span className="text-xs text-muted-foreground ml-auto">{group.plays.length} plays</span>
+                                )}
+                              </div>
+
+                              {/* Lock gate for free users */}
+                              {!gameUnlocked && (
+                                <div className="rounded-xl border border-border bg-muted/20 p-8 flex flex-col items-center gap-4 text-center">
+                                  <div className="w-12 h-12 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+                                    <Lock className="w-6 h-6 text-primary" />
+                                  </div>
+                                  <div>
+                                    <p className="text-sm font-bold text-foreground">View 2H Analysis — {group.plays.length} plays found</p>
+                                    <p className="text-xs text-muted-foreground mt-1">Unlocking this game uses 1 free play. You have {playsRemaining} remaining.</p>
+                                  </div>
+                                  {playsRemaining > 0 && (
+                                    <button
+                                      data-testid={`button-unlock-2h-${group.gameId}`}
+                                      onClick={() => unlock2hGame(group.gameId)}
+                                      disabled={isGameUnlocking}
+                                      className="px-5 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition-colors disabled:opacity-60 flex items-center gap-2"
+                                    >
+                                      {isGameUnlocking && <Loader2 className="w-4 h-4 animate-spin" />}
+                                      {isGameUnlocking ? "Unlocking…" : `View ${group.plays.length} Plays — 1 Free Play`}
+                                    </button>
+                                  )}
+                                  {playsRemaining === 0 && (
+                                    <button
+                                      data-testid="button-halftime-upgrade"
+                                      onClick={() => { setUpgradeModalState({ playsUsed: user?.playsUsed ?? 0, limit: 15 }); setShowUpgradeModal(true); }}
+                                      className="px-5 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition-colors"
+                                    >
+                                      View Plans →
+                                    </button>
+                                  )}
+                                </div>
                               )}
-                            </button>
-                          );
-                        })()}
+
+                              {/* Unlocked plays grid */}
+                              {gameUnlocked && groupFiltered.length === 0 && (
+                                <div className="text-center py-8 text-muted-foreground">
+                                  <p className="text-sm">No plays match the current filters.</p>
+                                  <button onClick={() => { setSlateFilterProp("all"); setSlateFilterProb("all"); }} className="text-xs text-primary mt-2 hover:underline">Clear filters</button>
+                                </div>
+                              )}
+                              {gameUnlocked && groupFiltered.length > 0 && (
+                                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                  {groupFiltered.map((play: any, idx: number) => {
+                                    const isOver = play.betDirection === "over";
+                                    const isInjured = injuredPlayerNames.has(play.playerName.toLowerCase());
+                                    const statLabel = STAT_TYPES.find(s => s.value === play.statType)?.label ?? play.statType;
+                                    const hasLiveLine = play.lineSource === "odds_api";
+                                    const globalIdx = halftimePlaysData.plays.indexOf(play);
+                                    return (
+                                      <div
+                                        key={idx}
+                                        data-testid={`halftime-play-${idx}`}
+                                        className={`rounded-xl border p-4 space-y-2 relative cursor-pointer transition-all ${
+                                          isInjured
+                                            ? "border-red-500/40 bg-red-500/5 hover:border-red-500/60"
+                                            : "border-border/60 bg-secondary/30 hover:border-primary/40 hover:bg-secondary/50"
+                                        }`}
+                                        onClick={() => loadPlayInCalculator(play)}
+                                      >
+                                        <div className="absolute top-3 left-3 w-5 h-5 flex items-center justify-center" style={{ background: "#1d4ed8", borderRadius: 8 }}>
+                                          <span className="text-[9px] font-bold text-white leading-none">#{globalIdx + 1}</span>
+                                        </div>
+                                        <div className="flex items-start justify-between gap-2 pl-7">
+                                          <div>
+                                            <div className="font-semibold text-sm text-foreground">{play.playerName}</div>
+                                            <div className="text-xs text-muted-foreground">{play.team} vs {play.opponent}</div>
+                                            {isInjured && (
+                                              <span className="text-xs text-red-400 font-semibold flex items-center gap-0.5 mt-0.5">
+                                                <AlertTriangle className="w-3 h-3" /> Injured
+                                              </span>
+                                            )}
+                                          </div>
+                                          <div className="text-right flex-shrink-0">
+                                            {(() => {
+                                              const displayProb = play.betDirection === "under"
+                                                ? Math.round((100 - play.probability) * 10) / 10
+                                                : play.probability;
+                                              return (
+                                                <>
+                                                  <div className={`text-xl font-bold font-mono ${
+                                                    displayProb >= 65 ? "text-green-400" :
+                                                    displayProb <= 35 ? "text-red-400" : "text-yellow-400"
+                                                  }`}>
+                                                    {displayProb.toFixed(1)}%
+                                                  </div>
+                                                  <div className="text-[9px] font-semibold text-muted-foreground">
+                                                    {isOver ? "Over %" : "Under %"}
+                                                  </div>
+                                                </>
+                                              );
+                                            })()}
+                                            <div className="text-xs text-muted-foreground">
+                                              Edge: +{play.edge.toFixed(1)}%
+                                            </div>
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <span
+                                            className="text-xs font-mono px-2 py-0.5 rounded font-bold"
+                                            style={isOver
+                                              ? { background: "rgba(0,212,170,0.15)", border: "1px solid rgba(0,212,170,0.3)", color: "#00d4aa" }
+                                              : { background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444" }
+                                            }
+                                          >
+                                            {statLabel} {isOver ? "O" : "U"}{play.line}
+                                          </span>
+                                          <span
+                                            className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+                                            style={hasLiveLine
+                                              ? { background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "#a1a1aa" }
+                                              : { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#71717a" }
+                                            }
+                                          >
+                                            {hasLiveLine ? "Live Line" : "Season Avg"}
+                                          </span>
+                                          <span className="text-xs" style={{ color: play.halftimeStat > 0 ? "#71717a" : "#52525b" }}>
+                                            H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}
+                                          </span>
+                                          <span data-testid="hint-tap-verify" className="text-[10px] text-muted-foreground/50 italic">Tap card to cross-check →</span>
+                                        </div>
+                                        {(() => {
+                                          const inParlayIdx = parlayPicks.findIndex(p =>
+                                            p.playerId === play.playerId &&
+                                            p.statType === play.statType &&
+                                            p.betDirection === play.betDirection
+                                          );
+                                          const isInParlay = inParlayIdx !== -1;
+                                          return (
+                                            <button
+                                              type="button"
+                                              data-testid={`button-add-halftime-play-${idx}`}
+                                              disabled={!isInParlay && parlayPicks.length >= 10}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                if (isInParlay) {
+                                                  setParlayPicks(prev => prev.filter((_, i) => i !== inParlayIdx));
+                                                } else {
+                                                  const pick: ParlayPickInput = {
+                                                    playerId: play.playerId,
+                                                    playerName: play.playerName,
+                                                    playerTeam: play.team,
+                                                    statType: play.statType,
+                                                    line: play.line,
+                                                    probability: play.probability,
+                                                    betDirection: play.betDirection,
+                                                    sportsbook: "",
+                                                    oddsAmerican: 0,
+                                                    gameId: play.gameId,
+                                                  };
+                                                  setParlayPicks(prev => [...prev, pick]);
+                                                  setShowParlay(true);
+                                                }
+                                              }}
+                                              className={`w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-40 ${
+                                                !isInParlay ? "bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20" : ""
+                                              }`}
+                                              style={isInParlay
+                                                ? { background: "rgba(0,212,170,0.15)", border: "1px solid rgba(0,212,170,0.3)", color: "#00d4aa" }
+                                                : undefined}
+                                            >
+                                              {isInParlay ? <>✓ Added</> : <><Plus className="w-3.5 h-3.5" />Add to Parlay</>}
+                                            </button>
+                                          );
+                                        })()}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Exit overlay — "2H Underway" */}
+                            {isExiting && (
+                              <div style={{
+                                position: "absolute", inset: 0,
+                                background: "rgba(10,10,10,0.85)",
+                                borderRadius: "inherit", zIndex: 10,
+                                display: "flex", flexDirection: "column",
+                                alignItems: "center", justifyContent: "center", gap: 8,
+                              }}>
+                                <span className="relative flex h-2.5 w-2.5">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-400" />
+                                </span>
+                                <span className="text-lg font-bold" style={{ color: "#00d4aa" }}>2H Underway</span>
+                                <span className="font-semibold text-sm text-white">{group.awayTeamAbbr} {group.awayScore} – {group.homeScore} {group.homeTeamAbbr}</span>
+                                <span className="text-xs" style={{ color: "#71717a" }}>Tracking live...</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Pagination bar — sticky on mobile, inline on desktop */}
+                    {totalPages > 1 && (isSmallScreen ? (
+                      <div
+                        data-testid="halftime-pagination-sticky"
+                        style={{
+                          position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 40,
+                          background: "#0a0a0a", borderTop: "1px solid #27272a",
+                          padding: "12px 16px",
+                          paddingBottom: "max(12px, env(safe-area-inset-bottom, 12px))",
+                          display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 8,
+                        }}
+                      >
+                        <button
+                          data-testid="button-halftime-prev"
+                          disabled={currentHalftimePage === 1}
+                          onClick={() => {
+                            setCurrentHalftimePage(p => Math.max(1, p - 1));
+                            halftimeSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                          }}
+                          style={{
+                            minHeight: 44, background: "#181818", border: "1px solid #27272a",
+                            borderRadius: 8, color: currentHalftimePage === 1 ? "#3f3f46" : "#a1a1aa",
+                            pointerEvents: currentHalftimePage === 1 ? "none" : "auto",
+                            fontSize: 13, fontWeight: 500, cursor: "pointer",
+                            display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+                          }}
+                        >
+                          ← Prev
+                        </button>
+                        <span className="text-sm font-mono text-center" style={{ color: "#71717a" }}>
+                          {currentHalftimePage} of {totalPages}
+                        </span>
+                        <button
+                          data-testid="button-halftime-next"
+                          disabled={currentHalftimePage === totalPages}
+                          onClick={() => {
+                            setCurrentHalftimePage(p => Math.min(totalPages, p + 1));
+                            halftimeSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                          }}
+                          style={{
+                            minHeight: 44, background: "#181818", border: "1px solid #27272a",
+                            borderRadius: 8, color: currentHalftimePage === totalPages ? "#3f3f46" : "#a1a1aa",
+                            pointerEvents: currentHalftimePage === totalPages ? "none" : "auto",
+                            fontSize: 13, fontWeight: 500, cursor: "pointer",
+                            display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+                          }}
+                        >
+                          Next →
+                        </button>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
+                    ) : (
+                      <div
+                        data-testid="halftime-pagination-inline"
+                        style={{
+                          display: "grid", gridTemplateColumns: "1fr auto 1fr",
+                          alignItems: "center", gap: 8, marginTop: 24,
+                        }}
+                      >
+                        <button
+                          data-testid="button-halftime-prev"
+                          disabled={currentHalftimePage === 1}
+                          onClick={() => {
+                            setCurrentHalftimePage(p => Math.max(1, p - 1));
+                            halftimeSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                          }}
+                          style={{
+                            minHeight: 44, background: "#181818", border: "1px solid #27272a",
+                            borderRadius: 8, color: currentHalftimePage === 1 ? "#3f3f46" : "#a1a1aa",
+                            pointerEvents: currentHalftimePage === 1 ? "none" : "auto",
+                            fontSize: 13, fontWeight: 500, cursor: "pointer",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                          }}
+                        >
+                          ← Prev
+                        </button>
+                        <span className="text-sm font-mono text-center" style={{ color: "#71717a" }}>
+                          {currentHalftimePage} of {totalPages}
+                        </span>
+                        <button
+                          data-testid="button-halftime-next"
+                          disabled={currentHalftimePage === totalPages}
+                          onClick={() => {
+                            setCurrentHalftimePage(p => Math.min(totalPages, p + 1));
+                            halftimeSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                          }}
+                          style={{
+                            minHeight: 44, background: "#181818", border: "1px solid #27272a",
+                            borderRadius: 8, color: currentHalftimePage === totalPages ? "#3f3f46" : "#a1a1aa",
+                            pointerEvents: currentHalftimePage === totalPages ? "none" : "auto",
+                            fontSize: 13, fontWeight: 500, cursor: "pointer",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                          }}
+                        >
+                          Next →
+                        </button>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Parlay slip side column — halftime tab, desktop only */}
@@ -2724,6 +2944,31 @@ export default function Dashboard() {
           hasSmsAccess={["all", "elite"].includes(user.subscriptionTier ?? "") || (user.isAdmin ?? false)}
           hasPhone={!!phoneInput}
         />
+      )}
+
+      {/* ── 2H Transition top toast ─────────────────────────────────────── */}
+      {halfTransitionToast && (
+        <div
+          data-testid="toast-2h-transition"
+          style={{
+            position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)",
+            zIndex: 50, background: "#111111", border: "1px solid #3f3f46",
+            borderRadius: 10, padding: "10px 16px",
+            display: "flex", alignItems: "center", gap: 8,
+            boxShadow: "0 4px 24px rgba(0,0,0,0.5)",
+            animation: "fadeIn 200ms ease",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <span className="relative flex h-2 w-2 flex-shrink-0">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
+          </span>
+          <span className="text-sm font-semibold" style={{ color: "#00d4aa" }}>
+            {halfTransitionToast.away} @ {halfTransitionToast.home}
+          </span>
+          <span className="text-sm" style={{ color: "#a1a1aa" }}>— 2H Underway</span>
+        </div>
       )}
 
       {/* ── Notification History Sheet ───────────────────────────────────── */}
