@@ -157,8 +157,9 @@ const QUOTA_TTL = 60 * 60 * 1000;
 
 // Fetch player prop odds for a single market (saves ~91% of API credits vs fetching all 11).
 // Returns QUOTA_EXHAUSTED sentinel when the key is out of credits — callers must check for it.
-async function getRawOdds(oddsEventId: string, marketKey: string): Promise<any> {
-  const cacheKey = `odds_${oddsEventId}_${marketKey}`;
+// inPlay=true fetches live in-game lines (used for halftime plays) instead of pre-game lines.
+async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false): Promise<any> {
+  const cacheKey = `odds_${inPlay ? "live" : "pre"}_${oddsEventId}_${marketKey}`;
   const cached = cache.get(cacheKey);
   if (isFresh(cached, ODDS_TTL)) return cached!.data;
 
@@ -172,7 +173,8 @@ async function getRawOdds(oddsEventId: string, marketKey: string): Promise<any> 
 
   if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
 
-  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${marketKey}&bookmakers=draftkings,fanduel,hardrockbet&oddsFormat=american`;
+  const inPlayParam = inPlay ? "&in_play=true" : "";
+  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${marketKey}&bookmakers=draftkings,fanduel,hardrockbet&oddsFormat=american${inPlayParam}`;
 
   const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!res.ok) {
@@ -192,7 +194,7 @@ async function getRawOdds(oddsEventId: string, marketKey: string): Promise<any> 
   cache.set(cacheKey, { data, timestamp: Date.now() });
 
   const books = (data.bookmakers ?? []).map((b: any) => b.key).join(", ");
-  console.log(`[Odds] Fetched ${marketKey} odds for event ${oddsEventId}: bookmakers = ${books || "none"}`);
+  console.log(`[Odds] Fetched ${inPlay ? "LIVE" : "pre-game"} ${marketKey} odds for event ${oddsEventId}: bookmakers = ${books || "none"}`);
   return data;
 }
 
@@ -248,14 +250,15 @@ const PROB_PER_POINT: Record<string, number> = {
 export async function getPlayerOdds(
   oddsEventId: string,
   playerName: string,
-  statType: string
+  statType: string,
+  inPlay = false
 ): Promise<Record<string, { line: number; overOdds: number; underOdds: number; openLine?: number; lineMovement?: number; edgeEstimate?: number }>> {
   const result: Record<string, { line: number; overOdds: number; underOdds: number; openLine?: number; lineMovement?: number; edgeEstimate?: number }> = {};
 
   const marketKey = MARKET_MAP[statType];
   if (!marketKey) return result;
 
-  const oddsData = await getRawOdds(oddsEventId, marketKey);
+  const oddsData = await getRawOdds(oddsEventId, marketKey, inPlay);
   // Propagate quota exhaustion sentinel to caller
   if (oddsData?._quotaExhausted) return { _quotaExhausted: true } as any;
   if (!oddsData?.bookmakers) return result;

@@ -2324,12 +2324,15 @@ export default function Dashboard() {
                         <div className="flex items-center gap-3 mb-3">
                           <div className="flex items-center gap-2 text-sm font-bold text-foreground">
                             <span data-testid={`text-game-away-${group.gameId}`}>{group.awayTeamAbbr}</span>
-                            <span className="text-muted-foreground font-normal">{group.awayScore}</span>
+                            <span className="font-bold" style={{ color: "#ffffff" }}>{group.awayScore}</span>
                             <span className="text-muted-foreground font-normal">–</span>
-                            <span className="text-muted-foreground font-normal">{group.homeScore}</span>
+                            <span className="font-bold" style={{ color: "#ffffff" }}>{group.homeScore}</span>
                             <span data-testid={`text-game-home-${group.gameId}`}>{group.homeTeamAbbr}</span>
                           </div>
-                          <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500 border border-amber-500/30">HALFTIME</span>
+                          <span
+                            className="text-xs font-semibold rounded-full"
+                            style={{ background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b", padding: "2px 12px" }}
+                          >HALFTIME</span>
                           {gameUnlocked && (
                             <span className="text-xs text-muted-foreground ml-auto">{group.plays.length} plays</span>
                           )}
@@ -2394,8 +2397,8 @@ export default function Dashboard() {
                         }`}
                         onClick={() => loadPlayInCalculator(play)}
                       >
-                        <div className="absolute top-3 left-3 w-5 h-5 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center">
-                          <span className="text-[9px] font-bold text-primary leading-none">#{globalIdx + 1}</span>
+                        <div className="absolute top-3 left-3 w-5 h-5 flex items-center justify-center" style={{ background: "#1d4ed8", borderRadius: 8 }}>
+                          <span className="text-[9px] font-bold text-white leading-none">#{globalIdx + 1}</span>
                         </div>
                         <div className="flex items-start justify-between gap-2 pl-7">
                           <div>
@@ -2432,49 +2435,77 @@ export default function Dashboard() {
                           </div>
                         </div>
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`text-xs font-mono px-2 py-0.5 rounded font-bold ${
-                            isOver ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"
-                          }`}>
+                          <span
+                            className="text-xs font-mono px-2 py-0.5 rounded font-bold"
+                            style={isOver
+                              ? { background: "rgba(0,212,170,0.15)", border: "1px solid rgba(0,212,170,0.3)", color: "#00d4aa" }
+                              : { background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444" }
+                            }
+                          >
                             {statLabel} {isOver ? "O" : "U"}{play.line}
                           </span>
-                          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
-                            hasLiveLine
-                              ? "bg-green-500/15 text-green-400"
-                              : "bg-secondary text-muted-foreground"
-                          }`}>
+                          <span
+                            className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+                            style={hasLiveLine
+                              ? { background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "#a1a1aa" }
+                              : { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#71717a" }
+                            }
+                          >
                             {hasLiveLine ? "Live Line" : "Season Avg"}
                           </span>
-                          <span className="text-xs text-muted-foreground">
+                          <span className="text-xs" style={{ color: play.halftimeStat > 0 ? "#71717a" : "#52525b" }}>
                             H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}
                           </span>
                           <span data-testid="hint-tap-verify" className="text-[10px] text-muted-foreground/50 italic">Tap card to cross-check →</span>
                         </div>
-                        <button
-                          type="button"
-                          data-testid={`button-add-halftime-play-${idx}`}
-                          disabled={parlayPicks.length >= 10}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const pick: ParlayPickInput = {
-                              playerId: play.playerId,
-                              playerName: play.playerName,
-                              playerTeam: play.team,
-                              statType: play.statType,
-                              line: play.line,
-                              probability: play.probability,
-                              betDirection: play.betDirection,
-                              sportsbook: "",
-                              oddsAmerican: 0,
-                              gameId: play.gameId,
-                            };
-                            setParlayPicks(prev => [...prev, pick]);
-                            setShowParlay(true);
-                          }}
-                          className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors disabled:opacity-40"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          Add to Parlay
-                        </button>
+                        {(() => {
+                          const inParlayIdx = parlayPicks.findIndex(p =>
+                            p.playerId === play.playerId &&
+                            p.statType === play.statType &&
+                            p.betDirection === play.betDirection
+                          );
+                          const isInParlay = inParlayIdx !== -1;
+                          return (
+                            <button
+                              type="button"
+                              data-testid={`button-add-halftime-play-${idx}`}
+                              disabled={!isInParlay && parlayPicks.length >= 10}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (isInParlay) {
+                                  setParlayPicks(prev => prev.filter((_, i) => i !== inParlayIdx));
+                                } else {
+                                  const pick: ParlayPickInput = {
+                                    playerId: play.playerId,
+                                    playerName: play.playerName,
+                                    playerTeam: play.team,
+                                    statType: play.statType,
+                                    line: play.line,
+                                    probability: play.probability,
+                                    betDirection: play.betDirection,
+                                    sportsbook: "",
+                                    oddsAmerican: 0,
+                                    gameId: play.gameId,
+                                  };
+                                  setParlayPicks(prev => [...prev, pick]);
+                                  setShowParlay(true);
+                                }
+                              }}
+                              className={`w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-40 ${
+                                !isInParlay ? "bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20" : ""
+                              }`}
+                              style={isInParlay
+                                ? { background: "rgba(0,212,170,0.15)", border: "1px solid rgba(0,212,170,0.3)", color: "#00d4aa" }
+                                : undefined}
+                            >
+                              {isInParlay ? (
+                                <>✓ Added</>
+                              ) : (
+                                <><Plus className="w-3.5 h-3.5" />Add to Parlay</>
+                              )}
+                            </button>
+                          );
+                        })()}
                       </div>
                     );
                   })}

@@ -545,6 +545,16 @@ export async function registerRoutes(
   // ── Halftime Best Plays ─────────────────────────────────────────────────────
   // Returns top probability plays across all live halftime games.
   // All authenticated users can fetch — free users pay 1 play per game unlock via /api/2h-game-view.
+  //
+  // HALFTIME LINE AUDIT
+  // Current line source: getPlayerOdds() → The Odds API /v4/sports/basketball_nba/events/{id}/odds
+  //   with in_play=true (live halftime-adjusted lines, not pre-game lines)
+  // H1 stat field: play.halftimeStat — sum of live box score components from ESPN summary API
+  // Line field: play.line — from Odds API live line (falls back to snapToHalf(seasonAvg))
+  // lineSource: "odds_api" when Odds API returned a line, "season_avg" when falling back
+  // Confirmed fix: added inPlay=true to getPlayerOdds() call so lines reflect current
+  //   halftime-adjusted (in-game) odds rather than stale pre-game full-game prop lines.
+  // APIs wired: ESPN scoreboard, ESPN boxscore/summary, The Odds API (player props + in_play)
   app.get("/api/halftime-plays", requireAuth, async (req, res) => {
     try {
       const slateDate = getESTSlateDate();
@@ -738,7 +748,7 @@ export async function registerRoutes(
                   if (!oddsPlayerCache.has(cacheKey)) {
                     try {
                       const { getPlayerOdds } = await import("./oddsService");
-                      const oddsResult = await getPlayerOdds(oddsEventId, playerName, statType);
+                      const oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, true);
                       const books = Object.values(oddsResult) as any[];
                       if (books.length > 0) {
                         const lines = books.map((b: any) => b.line as number);
