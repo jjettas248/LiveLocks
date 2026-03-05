@@ -19,7 +19,7 @@ When NBA Live active, sub-tabs appear:
 When NCAAB Live active, sub-tabs appear:
               [Live]  [2H Plays]
 ```
-*NCAAB only visible to Pro/All Sports/Admin users
+*NCAAB tab always visible; locked (Lock icon) for free users → clicking opens upgrade modal; unlocked for Pro/All Sports/Admin
 
 ## Tier Structure (2 paid tiers)
 
@@ -55,6 +55,16 @@ When NCAAB Live active, sub-tabs appear:
 - `/api/ncaab/plays`, `/api/ncaab/games` — requires `requireTier("all","elite")`
 - `/api/user/alerts/sms` — requires `["all","elite"]` subscription
 - `/api/webhooks/twilio` — no auth (Twilio STOP webhook)
+- **`/api/me`** — `requireAuth`; always reads fresh from DB; returns `{ id, email, isAdmin, subscriptionTier, hasNcaabAccess, requiresRefresh }`. Called on mount in dashboard to patch `localTier` state if DB tier differs from session tier.
+- **`/api/admin/verify-access?userId=X`** — `requireAdmin`; returns `{ dbTier, hasNcaabAccess, requiresRefresh }` for any user. Powers "Verify" button in admin users table.
+
+### NCAAB Tab Access Fix (Frontend)
+- **Root bug**: Tab was wrapped in `{user?.isAdmin && ...}` — hidden for all non-admin users including Pro
+- **Fix**: Tab always rendered; `hasNcaabAccess = user.isAdmin || ["all","elite"].includes(effectiveTier)`
+- **`effectiveTier`**: `localTier !== undefined ? localTier : (user?.subscriptionTier ?? user?.tier ?? user?.metadata?.tier ?? null)` — `??` chain covers all tier field locations
+- **`localTier`** state: patched from `/api/me` on mount when DB tier differs from session; ensures admin tier upgrades show immediately without re-login
+- **`setUserSubscriptionTier`** in storage.ts now also sets `requiresRefresh: true` so next session refresh picks up tier changes
+- **Admin "Verify" button**: appears on every non-admin user row; fetches `/api/admin/verify-access`; shows inline color-coded badges for DB tier, NCAAB access (✓/✗), and refresh status
 
 ### SMS Alerts (Twilio)
 - Required env vars: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`

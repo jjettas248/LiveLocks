@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, getAuthToken } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
@@ -108,6 +108,8 @@ export default function AdminPage() {
   const { toast } = useToast();
   const [resetTime, setResetTime] = useState("06:00");
   const [resetTimeSaving, setResetTimeSaving] = useState(false);
+  const [verifyResults, setVerifyResults] = useState<Record<number, { dbTier: string | null; hasNcaabAccess: boolean; requiresRefresh: boolean } | "error">>({});
+  const [verifyLoadingId, setVerifyLoadingId] = useState<number | null>(null);
 
   useEffect(() => {
     fetch("/api/admin/settings", { credentials: "include" })
@@ -432,7 +434,60 @@ export default function AdminPage() {
                                 <Trash2 className="w-3 h-3" />
                               </button>
                             )}
+                            {/* Verify Access */}
+                            {!u.isAdmin && (
+                              <button
+                                data-testid={`button-verify-access-${u.id}`}
+                                disabled={verifyLoadingId === u.id}
+                                title="Check live DB tier vs session tier"
+                                onClick={async () => {
+                                  setVerifyLoadingId(u.id);
+                                  try {
+                                    const token = getAuthToken();
+                                    const headers: Record<string, string> = {};
+                                    if (token) headers["Authorization"] = `Bearer ${token}`;
+                                    const res = await fetch(`/api/admin/verify-access?userId=${u.id}`, { credentials: "include", headers });
+                                    if (!res.ok) throw new Error("Failed");
+                                    const data = await res.json();
+                                    setVerifyResults(prev => ({ ...prev, [u.id]: data }));
+                                  } catch {
+                                    setVerifyResults(prev => ({ ...prev, [u.id]: "error" }));
+                                  } finally {
+                                    setVerifyLoadingId(null);
+                                  }
+                                }}
+                                className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border border-blue-500/30 text-blue-400/70 hover:text-blue-400 hover:bg-blue-500/10 transition-colors disabled:opacity-40"
+                              >
+                                {verifyLoadingId === u.id
+                                  ? <Loader2 className="w-3 h-3 animate-spin" />
+                                  : <Shield className="w-3 h-3" />}
+                                Verify
+                              </button>
+                            )}
                           </div>
+                          {/* Verify result row */}
+                          {verifyResults[u.id] && (
+                            <div data-testid={`text-verify-result-${u.id}`} className="mt-1.5 flex flex-wrap gap-2 items-center">
+                              {verifyResults[u.id] === "error" ? (
+                                <span className="text-[10px] px-2 py-0.5 rounded bg-destructive/10 text-destructive border border-destructive/20">Fetch error</span>
+                              ) : (() => {
+                                const r = verifyResults[u.id] as { dbTier: string | null; hasNcaabAccess: boolean; requiresRefresh: boolean };
+                                return (
+                                  <>
+                                    <span className="text-[10px] px-2 py-0.5 rounded border font-mono" style={{ background: r.dbTier ? "rgba(0,212,170,0.1)" : "rgba(82,82,91,0.2)", borderColor: r.dbTier ? "rgba(0,212,170,0.3)" : "#3f3f46", color: r.dbTier ? "#00d4aa" : "#71717a" }}>
+                                      DB: {r.dbTier ?? "free"}
+                                    </span>
+                                    <span className="text-[10px] px-2 py-0.5 rounded border font-mono" style={{ background: r.hasNcaabAccess ? "rgba(0,212,170,0.1)" : "rgba(239,68,68,0.1)", borderColor: r.hasNcaabAccess ? "rgba(0,212,170,0.3)" : "rgba(239,68,68,0.3)", color: r.hasNcaabAccess ? "#00d4aa" : "#ef4444" }}>
+                                      NCAAB: {r.hasNcaabAccess ? "✓" : "✗"}
+                                    </span>
+                                    <span className="text-[10px] px-2 py-0.5 rounded border font-mono" style={{ background: r.requiresRefresh ? "rgba(245,158,11,0.1)" : "rgba(82,82,91,0.1)", borderColor: r.requiresRefresh ? "rgba(245,158,11,0.3)" : "#3f3f46", color: r.requiresRefresh ? "#f59e0b" : "#71717a" }}>
+                                      refresh: {r.requiresRefresh ? "pending" : "clear"}
+                                    </span>
+                                  </>
+                                );
+                              })()}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     ))}

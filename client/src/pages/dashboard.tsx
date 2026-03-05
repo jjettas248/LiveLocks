@@ -6,7 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { calculateProbabilitySchema, type CalculateProbabilityRequest, type ParlayPickInput, type InjuryPlayer } from "@shared/schema";
 import { usePlayers, useTeams, useCalculateProbability, useLiveGames, useLiveStats, usePlayerOdds, useGameLines, PlayLimitError } from "@/hooks/use-nba";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, getAuthToken } from "@/lib/queryClient";
 import { ProbabilityRing } from "@/components/probability-ring";
 import { StatCard } from "@/components/stat-card";
 import { ParlaySlip } from "@/components/parlay-slip";
@@ -254,6 +254,16 @@ export default function Dashboard() {
   const [overlayVisible, setOverlayVisible] = useState(false);
   const [resetStep, setResetStep] = useState(0);
   const [ncaabResetKey, setNcaabResetKey] = useState(0);
+  const [localTier, setLocalTier] = useState<string | null | undefined>(undefined);
+
+  const effectiveTier = localTier !== undefined
+    ? localTier
+    : (user?.subscriptionTier ??
+       (user as any)?.tier ??
+       (user as any)?.metadata?.tier ??
+       null);
+  const hasNcaabAccess = !!(user?.isAdmin || (effectiveTier && ["all", "elite"].includes(effectiveTier)));
+
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getResetTime = async (): Promise<{ hours: number; minutes: number }> => {
@@ -828,11 +838,34 @@ export default function Dashboard() {
     }
   }, []);
 
+  // ── /api/me: fresh DB tier on mount ──────────────────────────────────────
+  useEffect(() => {
+    if (!user?.id) return;
+    const fetchFreshUser = async () => {
+      try {
+        const token = getAuthToken();
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const res = await fetch("/api/me", { credentials: "include", headers });
+        if (!res.ok) return;
+        const fresh = await res.json();
+        const sessionTier = user?.subscriptionTier ??
+          (user as any)?.tier ??
+          (user as any)?.metadata?.tier ??
+          null;
+        if (fresh.subscriptionTier !== sessionTier) {
+          setLocalTier(fresh.subscriptionTier ?? null);
+        }
+      } catch (_) {}
+    };
+    fetchFreshUser();
+  }, [user?.id]);
+
   // ── Welcome banner + NEW badge system ────────────────────────────────────
   const { data: ncaabGamesRaw } = useQuery<{ games: Array<{ id: string; status: string; startTime?: string }> }>({
     queryKey: ["/api/ncaab/games"],
     refetchInterval: 60_000,
-    enabled: !!user?.isAdmin,
+    enabled: hasNcaabAccess,
   });
   const ncaabGames = ncaabGamesRaw?.games ?? [];
 
@@ -1519,44 +1552,50 @@ export default function Dashboard() {
             >
               🏀 NBA Live
             </button>
-            {user?.isAdmin && (
-              <button
-                data-testid="tab-ncaab"
-                onClick={() => setActiveTab("ncaab")}
-                className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
-                  activeTab === "ncaab"
-                    ? "bg-primary text-primary-foreground border-glow"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <div style={{ position: "relative", display: "inline-flex", alignItems: "center", overflow: "visible" }}>
-                  🏀 NCAAB Live
-                  {showNewBadge && (
-                    <span
-                      data-testid="ncaab-new-badge"
-                      style={{
-                        position: "absolute",
-                        top: -8,
-                        right: -20,
-                        background: "#00d4aa",
-                        color: "#000000",
-                        fontSize: 9,
-                        fontWeight: 700,
-                        lineHeight: 1,
-                        padding: "2px 5px",
-                        borderRadius: 4,
-                        letterSpacing: "0.05em",
-                        textTransform: "uppercase",
-                        pointerEvents: "none",
-                        animation: "newBadgeScale 300ms cubic-bezier(0.34,1.56,0.64,1) both",
-                      }}
-                    >
-                      NEW
-                    </span>
-                  )}
-                </div>
-              </button>
-            )}
+            <button
+              data-testid="tab-ncaab"
+              onClick={() => {
+                if (!hasNcaabAccess) {
+                  setUpgradeModalState({ playsUsed: user?.playsUsed ?? 0, limit: 15 });
+                  setShowUpgradeModal(true);
+                  return;
+                }
+                setActiveTab("ncaab");
+              }}
+              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
+                activeTab === "ncaab"
+                  ? "bg-primary text-primary-foreground border-glow"
+                  : "text-muted-foreground hover:text-foreground"
+              } ${!hasNcaabAccess ? "opacity-60" : ""}`}
+            >
+              <div style={{ position: "relative", display: "inline-flex", alignItems: "center", overflow: "visible" }}>
+                🏀 NCAAB Live
+                {hasNcaabAccess && showNewBadge && (
+                  <span
+                    data-testid="ncaab-new-badge"
+                    style={{
+                      position: "absolute",
+                      top: -8,
+                      right: -20,
+                      background: "#00d4aa",
+                      color: "#000000",
+                      fontSize: 9,
+                      fontWeight: 700,
+                      lineHeight: 1,
+                      padding: "2px 5px",
+                      borderRadius: 4,
+                      letterSpacing: "0.05em",
+                      textTransform: "uppercase",
+                      pointerEvents: "none",
+                      animation: "newBadgeScale 300ms cubic-bezier(0.34,1.56,0.64,1) both",
+                    }}
+                  >
+                    NEW
+                  </span>
+                )}
+              </div>
+              {!hasNcaabAccess && <Lock className="w-3 h-3 ml-0.5 shrink-0" />}
+            </button>
             {user?.isAdmin && (
               <button
                 data-testid="tab-analytics"
@@ -3138,8 +3177,8 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* NCAAB Tab — live data for All Sports, Elite, and Admin */}
-        {activeTab === "ncaab" && user?.isAdmin && (
+        {/* NCAAB Tab — live data for Pro, All Sports, and Admin */}
+        {activeTab === "ncaab" && hasNcaabAccess && (
           <NCAABAdminTab
             key={ncaabResetKey}
             isAdmin={user?.isAdmin ?? false}

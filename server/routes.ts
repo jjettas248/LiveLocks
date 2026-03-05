@@ -246,6 +246,49 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/admin/verify-access", requireAdmin, async (req, res) => {
+    try {
+      const userId = parseInt(String(req.query.userId), 10);
+      if (!userId || isNaN(userId)) return res.status(400).json({ error: "Invalid userId" });
+      const user = await storage.getUserById(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      const tier = user.subscriptionTier;
+      const hasNcaabAccess = user.isAdmin || tier === "all" || tier === "elite";
+      return res.json({
+        dbTier: tier ?? null,
+        hasNcaabAccess,
+        requiresRefresh: user.requiresRefresh ?? false,
+        email: user.email,
+        isAdmin: user.isAdmin,
+      });
+    } catch (err: any) {
+      console.error("[admin/verify-access]", err);
+      return res.status(500).json({ error: err.message || "Failed to verify access" });
+    }
+  });
+
+  // ── /api/me — always reads fresh from DB ──────────────────────────────────
+
+  app.get("/api/me", requireAuth, async (req, res) => {
+    try {
+      const userId = (req as any).resolvedUserId as number;
+      const user = await storage.getUserById(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      const tier = user.subscriptionTier;
+      return res.json({
+        id: user.id,
+        email: user.email,
+        isAdmin: user.isAdmin,
+        subscriptionTier: tier ?? null,
+        requiresRefresh: user.requiresRefresh ?? false,
+        hasNcaabAccess: user.isAdmin || tier === "all" || tier === "elite",
+      });
+    } catch (err: any) {
+      console.error("[/api/me]", err);
+      return res.status(500).json({ error: err.message || "Failed to fetch user" });
+    }
+  });
+
   // ── Feedback Route ────────────────────────────────────────────────────────
 
   app.post("/api/feedback", requireAuth, async (req, res) => {

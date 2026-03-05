@@ -441,7 +441,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async setUserSubscriptionTier(userId: number, tier: string | null): Promise<void> {
-    await db.update(users).set({ subscriptionTier: tier }).where(eq(users.id, userId));
+    await db.update(users).set({ subscriptionTier: tier, requiresRefresh: true }).where(eq(users.id, userId));
   }
 
   async resetUserPlays(userId: number): Promise<void> {
