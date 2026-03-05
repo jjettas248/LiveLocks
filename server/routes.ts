@@ -6,6 +6,7 @@ import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
 import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines } from "./oddsService";
 import { computeNCAABPlays, getNCAABScoreboard, getNCAABH2H, getNCAABChipOdds } from "./ncaabService";
+import { enrichNCAABGameFull, clearEnrichmentCache, getEnrichmentCacheStats } from "./ncaabEnrichment";
 import { calculateParlay } from "./parlayService";
 import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin, requireTier } from "./auth";
 import { registerStripeRoutes } from "./stripeService";
@@ -258,6 +259,29 @@ export async function registerRoutes(
       console.error("[NCAAB chip-odds]", err.message);
       return res.json({ overUnder: null, homeWinPct: null, spreadDetails: null });
     }
+  });
+
+  app.get("/api/ncaab/enriched", requireTier("all", "elite"), async (req, res) => {
+    try {
+      const gameId = String(req.query.gameId ?? "");
+      if (!gameId) return res.status(400).json({ error: "gameId required" });
+      const games = await getNCAABScoreboard();
+      const game = games.find((g: any) => g.id === gameId);
+      if (!game) return res.status(404).json({ error: "Game not found" });
+      const homeTeam: string = game.homeTeam ?? "";
+      const awayTeam: string = game.awayTeam ?? "";
+      const data = await enrichNCAABGameFull(gameId, homeTeam, awayTeam, null, null);
+      return res.json(data);
+    } catch (err: any) {
+      console.error("[NCAAB enriched]", err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/ncaab/admin/cache-clear", requireAdmin, async (_req, res) => {
+    clearEnrichmentCache();
+    const stats = getEnrichmentCacheStats();
+    return res.json({ ok: true, stats });
   });
 
   app.get("/api/admin/settings", requireAdmin, async (_req, res) => {

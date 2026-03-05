@@ -1,0 +1,1002 @@
+Integrate every available free public data source 
+into the NCAAB engine. No new API keys required.
+All endpoints are publicly accessible from Replit.
+If any endpoint gets blocked, fail silently and 
+continue with remaining sources.
+
+Build a unified data pipeline that runs in parallel
+and feeds a composite engine score.
+
+---
+
+ARCHITECTURE OVERVIEW
+
+Every NCAAB game card pulls from this source stack:
+
+  Layer 1 — Lines & Markets:
+    ESPN pickcenter (free)
+    The Odds API (ODDS_API_KEY already in env)
+    VegasInsider public scrape
+    ActionNetwork public API
+    PrizePicks public API
+    Underdog public API
+
+  Layer 2 — Advanced Team Analytics:
+    BartTorvik / T-Rank (free, no key)
+    TeamRankings (free public)
+    Sports Reference CBB (free public)
+    ESPN team stats + standings
+
+  Layer 3 — Context & Situational:
+    ESPN game predictor
+    ESPN H2H schedule
+    ActionNetwork public betting %
+    Rotowire public injury feed
+
+  Layer 4 — Engine:
+    Composite score from all available layers
+    Each source weighted by reliability
+    Missing sources gracefully excluded
+
+---
+
+STEP 1 — BARTTORVIK / T-RANK INTEGRATION
+
+Best free NCAAB analytics source. No key needed.
+
+  const fetchBartTorvik = async (teamName) => {
+    // BartTorvik team stats endpoint
+    // Returns: AdjO, AdjD, Tempo, EFG%, TOV%, ORB%
+    
+    const year = new Date().getFullYear()
+    const url = 
+      `https://barttorvik.com/trank.php` +
+      `?json=1&year=${year}`
+    
+    try {
+      const res = await fetch(url, {
+        headers: { 
+          "User-Agent": "Mozilla/5.0",
+          "Accept": "application/json"
+        }
+      })
+      if (!res.ok) {
+        console.warn("[TORVIK] Fetch failed:", res.status)
+        return null
+      }
+      
+      const data = await res.json()
+      // data is array of team objects
+      // Find team by name matching
+      
+      const match = findTeamInArray(data, teamName, [
+        "team", "teamname", "TeamName", "name"
+      ])
+      
+      if (!match) {
+        console.warn("[TORVIK] No match for:", teamName)
+        return null
+      }
+      
+      console.log("[TORVIK] Found:", teamName, match)
+      
+      return {
+        // Adjusted efficiency per 100 possessions
+        adjO: parseFloat(match.adjoe ?? match.AdjOE ?? 0),
+        adjD: parseFloat(match.adjde ?? match.AdjDE ?? 0),
+        // Tempo: possessions per 40 min
+        tempo: parseFloat(match.tempo ?? match.Tempo ?? 0),
+        // Four factors
+        efgPct: parseFloat(match.efg ?? match.EFG ?? 0),
+        tovPct: parseFloat(match.tov ?? match.TOV ?? 0),
+        orbPct: parseFloat(match.orb ?? match.ORB ?? 0),
+        ftRate: parseFloat(match.ftr ?? match.FTR ?? 0),
+        // Overall rating
+        barthag: parseFloat(
+          match.barthag ?? match.Barthag ?? 0
+        ),
+        // Rank
+        rank: parseInt(match.rk ?? match.Rank ?? 999),
+        source: "barttorvik"
+      }
+    } catch (err) {
+      console.warn("[TORVIK] Error:", err.message)
+      return null
+    }
+  }
+
+  // Also fetch full team page for more detail
+  const fetchBartTorvikTeamPage = async (teamName) => {
+    // URL encode team name
+    const encoded = encodeURIComponent(teamName)
+    const year = new Date().getFullYear()
+    const url = 
+      `https://barttorvik.com/team-drill.php` +
+      `?team=${encoded}&year=${year}&json=1`
+    
+    try {
+      const res = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0" }
+      })
+      if (!res.ok) return null
+      const data = await res.json()
+      
+      return {
+        homeAdjO: parseFloat(data.homeAdjOE ?? 0),
+        homeAdjD: parseFloat(data.homeAdjDE ?? 0),
+        awayAdjO: parseFloat(data.awayAdjOE ?? 0),
+        awayAdjD: parseFloat(data.awayAdjDE ?? 0),
+        last10: data.last10 ?? null,
+        source: "barttorvik_detail"
+      }
+    } catch (err) {
+      console.warn("[TORVIK DETAIL] Error:", err.message)
+      return null
+    }
+  }
+
+---
+
+STEP 2 — TEAMRANKINGS INTEGRATION
+
+Free public data. No key needed.
+
+  const fetchTeamRankings = async (teamName) => {
+    // TeamRankings NCAAB team stats
+    const slug = teamNameToSlug(teamName)
+    // e.g. "North Carolina Central" → 
+    //      "north-carolina-central"
+    
+    const endpoints = [
+      // Points per game
+      `https://www.teamrankings.com/ncaa-basketball/` +
+      `team/${slug}/stats`,
+      
+      // Team totals O/U record
+      `https://www.teamrankings.com/ncaa-basketball/` +
+      `trend/team-totals-over-under-record-trend` +
+      `?team=${slug}`,
+    ]
+    
+    // TeamRankings requires scraping HTML
+    // Parse key stats from response
+    try {
+      const res = await fetch(
+        `https://www.teamrankings.com/ncaa-basketball/` +
+        `stat/points-per-game`,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (compatible)",
+            "Accept": "text/html"
+          }
+        }
+      )
+      if (!res.ok) return null
+      const html = await res.text()
+      
+      // Find team row in HTML table
+      // TeamRankings HTML table has team name + stats
+      const teamRow = extractTeamRowFromHTML(
+        html, teamName
+      )
+      
+      return teamRow
+        ? {
+            pointsPerGame: teamRow.value,
+            rank: teamRow.rank,
+            source: "teamrankings"
+          }
+        : null
+        
+    } catch (err) {
+      console.warn("[TEAMRANKINGS] Error:", err.message)
+      return null
+    }
+  }
+  
+  // Slug converter
+  const teamNameToSlug = (name) =>
+    name?.toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, "")
+      .trim()
+      .replace(/\s+/g, "-") ?? ""
+
+---
+
+STEP 3 — ACTIONNETWORK INTEGRATION
+
+Public API, no key needed.
+
+  const fetchActionNetwork = async (
+    homeTeam, awayTeam
+  ) => {
+    try {
+      // ActionNetwork NCAAB scoreboard
+      const res = await fetch(
+        `https://api.actionnetwork.com/web/v1/` +
+        `scoreboard/ncaab?` +
+        `period=game&bookIds=15,30,76,123,69,68`,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://www.actionnetwork.com"
+          }
+        }
+      )
+      if (!res.ok) {
+        console.warn("[AN] Status:", res.status)
+        return null
+      }
+      
+      const data = await res.json()
+      const games = data.games ?? []
+      
+      // Find matching game
+      const match = games.find(g => {
+        const teams = g.teams ?? []
+        const names = teams.map(
+          t => t.display_name?.toLowerCase() ?? ""
+        )
+        const home = homeTeam.toLowerCase()
+        const away = awayTeam.toLowerCase()
+        
+        return names.some(n => 
+          n.includes(home.split(" ").pop()) ||
+          home.includes(n.split(" ").pop())
+        ) && names.some(n =>
+          n.includes(away.split(" ").pop()) ||
+          away.includes(n.split(" ").pop())
+        )
+      })
+      
+      if (!match) {
+        console.warn("[AN] No game match")
+        return null
+      }
+      
+      // Extract betting percentages
+      const odds = match.odds ?? []
+      const consensus = odds.find(
+        o => o.book_id === 0  // 0 = consensus
+      ) ?? odds[0]
+      
+      console.log("[AN] Found game:", 
+        match.teams?.map(t => t.display_name)
+      )
+      
+      return {
+        overPct: consensus?.over_bets_pct ?? null,
+        underPct: consensus?.under_bets_pct ?? null,
+        overMoney: consensus?.over_money_pct ?? null,
+        underMoney: consensus?.under_money_pct ?? null,
+        total: consensus?.total ?? null,
+        spread: consensus?.spread ?? null,
+        homeSpreadPct: consensus?.home_spread_bets_pct 
+          ?? null,
+        awaySpreadPct: consensus?.away_spread_bets_pct 
+          ?? null,
+        // Line movement
+        openTotal: consensus?.open_total ?? null,
+        openSpread: consensus?.open_spread ?? null,
+        source: "action_network"
+      }
+      
+    } catch (err) {
+      console.warn("[AN] Error:", err.message)
+      return null
+    }
+  }
+
+---
+
+STEP 4 — VEGASINSIDER INTEGRATION
+
+Public scrape, no key needed.
+
+  const fetchVegasInsider = async (
+    homeTeam, awayTeam
+  ) => {
+    try {
+      const res = await fetch(
+        `https://www.vegasinsider.com/college-basketball/odds/`,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0)",
+            "Accept": "text/html,application/xhtml+xml"
+          }
+        }
+      )
+      if (!res.ok) return null
+      const html = await res.text()
+      
+      // Find game section matching team names
+      const homeLast = homeTeam.split(" ").pop()
+      const awayLast = awayTeam.split(" ").pop()
+      
+      // VI HTML contains opening + current lines
+      // Pattern: team name near odds numbers
+      const gameSection = extractVIGameSection(
+        html, homeLast, awayLast
+      )
+      
+      if (!gameSection) return null
+      
+      // Extract opening line and current line
+      const openLine = extractNumber(
+        gameSection, "open"
+      )
+      const currentLine = extractNumber(
+        gameSection, "current"
+      )
+      
+      return {
+        openTotal: openLine,
+        currentTotal: currentLine,
+        movement: openLine && currentLine
+          ? parseFloat(
+              (currentLine - openLine).toFixed(1)
+            )
+          : null,
+        source: "vegasinsider"
+      }
+      
+    } catch (err) {
+      console.warn("[VI] Error:", err.message)
+      return null
+    }
+  }
+
+---
+
+STEP 5 — PRIZEPICKS PUBLIC API
+
+PrizePicks has a public projections endpoint.
+No authentication required.
+
+  const fetchPrizePicks = async (
+    homeTeam, awayTeam
+  ) => {
+    try {
+      // PrizePicks public projections
+      const res = await fetch(
+        `https://api.prizepicks.com/projections` +
+        `?league_id=3&per_page=250&single_stat=true`,
+        // league_id=3 is NCAAB
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json",
+            "X-Device-ID": "livelocks-app"
+          }
+        }
+      )
+      if (!res.ok) {
+        console.warn("[PP] Status:", res.status)
+        return null
+      }
+      
+      const data = await res.json()
+      const projections = data.data ?? []
+      const included = data.included ?? []
+      
+      // Find projections for teams in this game
+      const gameProjections = projections.filter(p => {
+        const teamId = p.relationships?.league_game
+          ?.data?.id
+        const statType = p.attributes?.stat_type
+        return statType !== null
+      })
+      
+      console.log(
+        "[PP] Total projections:", projections.length
+      )
+      
+      return {
+        projections: gameProjections.slice(0, 20),
+        source: "prizepicks"
+      }
+      
+    } catch (err) {
+      console.warn("[PP] Error:", err.message)
+      return null
+    }
+  }
+
+---
+
+STEP 6 — UNDERDOG FANTASY PUBLIC API
+
+  const fetchUnderdog = async () => {
+    try {
+      const res = await fetch(
+        `https://api.underdogfantasy.com/beta/v5/` +
+        `over_under_lines`,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json"
+          }
+        }
+      )
+      if (!res.ok) return null
+      const data = await res.json()
+      
+      // Filter NCAAB lines
+      const ncaabLines = (data.over_under_lines ?? [])
+        .filter(line => 
+          line.sport_id === "NCAAB" ||
+          line.sport === "NCAAB"
+        )
+      
+      console.log("[UD] NCAAB lines:", ncaabLines.length)
+      return {
+        lines: ncaabLines,
+        source: "underdog"
+      }
+      
+    } catch (err) {
+      console.warn("[UD] Error:", err.message)
+      return null
+    }
+  }
+
+---
+
+STEP 7 — SPORTS REFERENCE CBB
+
+Historical records, SOS, ATS data.
+
+  const fetchCBBReference = async (teamName) => {
+    // CBB-Reference school page
+    // Convert team name to CBB-Ref school slug
+    const slug = cbbRefSlug(teamName)
+    if (!slug) return null
+    
+    const year = new Date().getFullYear()
+    const url = 
+      `https://www.sports-reference.com/cbb/schools/` +
+      `${slug}/men/${year}-schedule.html`
+    
+    try {
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          "Accept": "text/html"
+        }
+      })
+      if (!res.ok) return null
+      const html = await res.text()
+      
+      // Parse season record, SRS, SOS from page
+      // SRS = Simple Rating System
+      // SOS = Strength of Schedule
+      const srs = extractMetaValue(html, "SRS")
+      const sos = extractMetaValue(html, "SOS")
+      const record = extractRecord(html)
+      
+      return { srs, sos, record, source: "cbb_ref" }
+      
+    } catch (err) {
+      console.warn("[CBB-REF] Error:", err.message)
+      return null
+    }
+  }
+  
+  // CBB-Ref slug map for common teams
+  // Add more as needed
+  const CBB_REF_SLUGS = {
+    "north carolina central": "north-carolina-central",
+    "south carolina state": "south-carolina-state",
+    "duke": "duke",
+    "kentucky": "kentucky",
+    "kansas": "kansas",
+    // ... expand as needed
+  }
+  
+  const cbbRefSlug = (teamName) => {
+    const lower = teamName?.toLowerCase()
+      .replace(/bulldogs|eagles|tigers|bears|
+                wildcats|cardinals|hawks/gi, "")
+      .trim()
+    return CBB_REF_SLUGS[lower] ?? 
+      lower?.replace(/\s+/g, "-") ?? null
+  }
+
+---
+
+STEP 8 — ROTOWIRE PUBLIC INJURY FEED
+
+Rotowire has a free public news/injury feed.
+
+  const fetchRotowireInjuries = async () => {
+    try {
+      const res = await fetch(
+        `https://www.rotowire.com/basketball/` +
+        `college-basketball-injury-report.php`,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "text/html"
+          }
+        }
+      )
+      if (!res.ok) return null
+      const html = await res.text()
+      
+      // Parse injury table from HTML
+      // Each row: player, team, position, 
+      //           injury, status, date
+      const injuries = parseInjuryTable(html)
+      
+      console.log("[ROTOWIRE] Injuries:", 
+        injuries.length
+      )
+      
+      // Cache globally — same for all games
+      injuryCache.ncaab = {
+        data: injuries,
+        fetchedAt: Date.now()
+      }
+      
+      return injuries
+      
+    } catch (err) {
+      console.warn("[ROTOWIRE] Error:", err.message)
+      return null
+    }
+  }
+  
+  // Check if key player is injured for a team
+  const getTeamInjuryImpact = (
+    teamName, allInjuries
+  ) => {
+    if (!allInjuries?.length) return null
+    
+    const teamInjuries = allInjuries.filter(p =>
+      p.team?.toLowerCase()
+        .includes(teamName.toLowerCase()
+          .split(" ").pop()
+        )
+    )
+    
+    const out = teamInjuries.filter(
+      p => p.status === "Out" || 
+           p.status === "Doubtful"
+    )
+    
+    return {
+      injuries: teamInjuries,
+      out: out.length,
+      hasKeyPlayerOut: out.length > 0,
+      summary: out.length > 0
+        ? `${out.length} player(s) out`
+        : "Healthy"
+    }
+  }
+
+---
+
+STEP 9 — MAIN ENRICHMENT ORCHESTRATOR
+
+One function that calls all sources in parallel
+and returns everything the engine needs.
+
+  // Module-level caches
+  const enrichmentCache = {}
+  const CACHE_TTL = 3 * 60 * 60 * 1000  // 3 hours
+  
+  const enrichNCAABGameFull = async (game) => {
+    const gameId = game.id
+    
+    // Check cache first
+    if (enrichmentCache[gameId]) {
+      const age = Date.now() - 
+        enrichmentCache[gameId].fetchedAt
+      if (age < CACHE_TTL) {
+        console.log("[ENRICH] Cache hit:", gameId)
+        return enrichmentCache[gameId].data
+      }
+    }
+    
+    const comp = game.competitions?.[0]
+    const homeTeam = comp?.competitors
+      ?.find(c => c.homeAway === "home")
+      ?.team?.displayName ?? ""
+    const awayTeam = comp?.competitors
+      ?.find(c => c.homeAway === "away")
+      ?.team?.displayName ?? ""
+    const homeId = comp?.competitors
+      ?.find(c => c.homeAway === "home")?.team?.id
+    const awayId = comp?.competitors
+      ?.find(c => c.homeAway === "away")?.team?.id
+    
+    console.log(
+      "[ENRICH] Starting full enrichment:",
+      homeTeam, "vs", awayTeam
+    )
+    
+    // Fire ALL sources simultaneously
+    const [
+      espnSummary,
+      oddsAPI,
+      homeTorvik,
+      awayTorvik,
+      actionNetwork,
+      vegasInsider,
+      prizePicks,
+      underdog,
+      homeESPN,
+      awayESPN,
+      homeRecord,
+      awayRecord,
+      homeStandings,
+      awayStandings,
+      injuries,
+      h2hHistory
+    ] = await Promise.allSettled([
+      fetchNCAABGameSummary(gameId),
+      fetchNCAABOdds(gameId, game),
+      fetchBartTorvik(homeTeam),
+      fetchBartTorvik(awayTeam),
+      fetchActionNetwork(homeTeam, awayTeam),
+      fetchVegasInsider(homeTeam, awayTeam),
+      fetchPrizePicks(homeTeam, awayTeam),
+      fetchUnderdog(),
+      fetchTeamData(homeId),
+      fetchTeamData(awayId),
+      fetchEfficiencyRatings(homeId),
+      fetchEfficiencyRatings(awayId),
+      fetchTeamStandings(homeId),
+      fetchTeamStandings(awayId),
+      fetchRotowireInjuries(),
+      extractH2HGames(homeId, awayId)
+    ])
+    
+    // Extract values — allSettled never throws
+    const val = (result) => 
+      result.status === "fulfilled" 
+        ? result.value 
+        : null
+    
+    const enriched = {
+      espnSummary: val(espnSummary),
+      odds: val(oddsAPI),
+      torvik: {
+        home: val(homeTorvik),
+        away: val(awayTorvik)
+      },
+      actionNetwork: val(actionNetwork),
+      vegasInsider: val(vegasInsider),
+      prizePicks: val(prizePicks),
+      underdog: val(underdog),
+      espnStats: {
+        home: val(homeESPN),
+        away: val(awayESPN)
+      },
+      records: {
+        home: val(homeRecord),
+        away: val(awayRecord)
+      },
+      standings: {
+        home: val(homeStandings),
+        away: val(awayStandings)
+      },
+      injuries: {
+        home: getTeamInjuryImpact(
+          homeTeam, val(injuries)
+        ),
+        away: getTeamInjuryImpact(
+          awayTeam, val(injuries)
+        )
+      },
+      h2h: val(h2hHistory),
+      homeTeam,
+      awayTeam,
+      fetchedAt: Date.now()
+    }
+    
+    // Log what was successfully retrieved
+    console.log("[ENRICH] Sources loaded:", {
+      espn: !!enriched.espnSummary,
+      odds: !!enriched.odds?.overUnder,
+      tolvikHome: !!enriched.torvik.home,
+      tolvikAway: !!enriched.torvik.away,
+      actionNetwork: !!enriched.actionNetwork,
+      vegasInsider: !!enriched.vegasInsider,
+      injuries: !!(enriched.injuries.home || 
+                   enriched.injuries.away),
+      h2h: enriched.h2h?.length ?? 0
+    })
+    
+    // Cache result
+    enrichmentCache[gameId] = {
+      data: enriched,
+      fetchedAt: Date.now()
+    }
+    
+    return enriched
+  }
+
+---
+
+STEP 10 — COMPOSITE ENGINE USING ALL SOURCES
+
+  const buildCompositeEngine = (enriched, game) => {
+    const line = enriched.odds?.overUnder
+    if (!line) return buildNCAABEngine(
+      game, enriched.odds, enriched.espnSummary
+    )
+    
+    const signals = []
+    let projTotal = null
+    let confidence = 0
+    
+    // SIGNAL 1: BartTorvik tempo projection
+    // Most reliable signal when available
+    const ht = enriched.torvik.home
+    const at = enriched.torvik.away
+    
+    if (ht?.tempo && at?.tempo && 
+        ht?.adjO && at?.adjD &&
+        at?.adjO && ht?.adjD) {
+      
+      // Possessions = avg tempo of both teams
+      const possessions = (ht.tempo + at.tempo) / 2
+      
+      // Expected points per possession
+      // AdjO and AdjD are per-100-possession rates
+      const homeExpPts = 
+        (ht.adjO + at.adjD) / 2 / 100 * possessions
+      const awayExpPts = 
+        (at.adjO + ht.adjD) / 2 / 100 * possessions
+      
+      const torvikTotal = homeExpPts + awayExpPts
+      
+      console.log("[COMPOSITE] Torvik projection:",
+        homeExpPts.toFixed(1), "+",
+        awayExpPts.toFixed(1), "=",
+        torvikTotal.toFixed(1)
+      )
+      
+      signals.push({
+        name: "BartTorvik Efficiency",
+        projTotal: torvikTotal,
+        weight: 4.0,  // highest weight
+        diff: torvikTotal - line
+      })
+      projTotal = torvikTotal
+    }
+    
+    // SIGNAL 2: ESPN team stats scoring environment
+    const homeStats = enriched.espnStats.home
+    const awayStats = enriched.espnStats.away
+    
+    if (homeStats?.ppg && awayStats?.ppg &&
+        homeStats?.oppPpg && awayStats?.oppPpg) {
+      
+      const espnTotal = 
+        ((homeStats.ppg + awayStats.oppPpg) / 2) +
+        ((awayStats.ppg + homeStats.oppPpg) / 2)
+      
+      signals.push({
+        name: "ESPN Pace Model",
+        projTotal: espnTotal,
+        weight: 2.0,
+        diff: espnTotal - line
+      })
+      
+      if (!projTotal) projTotal = espnTotal
+    }
+    
+    // SIGNAL 3: ESPN predictor
+    const pred = enriched.espnSummary?.predictor
+    const homeProj = parseFloat(
+      pred?.homeTeam?.gameProjection ?? 0
+    )
+    const awayProj = parseFloat(
+      pred?.awayTeam?.gameProjection ?? 0
+    )
+    
+    if (homeProj > 20 && awayProj > 20) {
+      const espnPredTotal = homeProj + awayProj
+      signals.push({
+        name: "ESPN Predictor",
+        projTotal: espnPredTotal,
+        weight: 3.0,
+        diff: espnPredTotal - line
+      })
+      if (!projTotal) projTotal = espnPredTotal
+    }
+    
+    // SIGNAL 4: Line movement direction
+    // Sharp money indicator
+    const anData = enriched.actionNetwork
+    const viData = enriched.vegasInsider
+    
+    let lineMovementSignal = 0
+    
+    if (anData?.openTotal && anData?.total) {
+      const move = anData.total - anData.openTotal
+      // Line moved up = sharp over action
+      // Line moved down = sharp under action
+      lineMovementSignal = move * 0.5
+      signals.push({
+        name: "Line Movement",
+        projTotal: null,
+        weight: 1.5,
+        diff: lineMovementSignal
+      })
+    }
+    
+    // SIGNAL 5: Public betting % fade signal
+    // If public is >70% one side, fade slightly
+    if (anData?.overPct !== null && 
+        anData?.underPct !== null) {
+      const publicBias = anData.overPct - 50
+      // Public heavy on over = slight under lean
+      const fadeBias = -publicBias * 0.1
+      signals.push({
+        name: "Public Fade",
+        projTotal: null,
+        weight: 0.5,
+        diff: fadeBias
+      })
+    }
+    
+    // SIGNAL 6: Injury adjustment
+    const homeInjury = enriched.injuries.home
+    const awayInjury = enriched.injuries.away
+    
+    let injuryAdj = 0
+    if (homeInjury?.out > 0) injuryAdj -= 2.5
+    if (awayInjury?.out > 0) injuryAdj -= 2.5
+    
+    if (injuryAdj !== 0) {
+      signals.push({
+        name: "Injury Reduction",
+        projTotal: null,
+        weight: 2.0,
+        diff: injuryAdj
+      })
+    }
+    
+    // COMPOSITE CALCULATION
+    // Weighted average of all diff signals
+    if (signals.length === 0) {
+      return buildNCAABEngine(
+        game, enriched.odds, enriched.espnSummary
+      )
+    }
+    
+    const totalWeight = signals.reduce(
+      (sum, s) => sum + s.weight, 0
+    )
+    const weightedDiff = signals.reduce(
+      (sum, s) => sum + (s.diff * s.weight), 0
+    ) / totalWeight
+    
+    // Final projected total
+    const finalProjTotal = projTotal
+      ? projTotal + (weightedDiff * 0.3)
+      : line + weightedDiff
+    
+    // Convert to probability
+    // More sources = higher certainty multiplier
+    const certaintyMultiplier = Math.min(
+      2.5 + (signals.length * 0.5), 5.0
+    )
+    
+    const rawProb = 50 + (weightedDiff * certaintyMultiplier)
+    
+    // Progressive limits based on source count
+    const maxEdge = Math.min(
+      30 + (signals.length * 5), 70
+    )
+    const overProb = parseFloat(Math.min(
+      Math.max(rawProb, 100 - maxEdge), 
+      maxEdge
+    ).toFixed(1))
+    
+    console.log("[COMPOSITE] Final engine:", {
+      signals: signals.length,
+      weightedDiff: weightedDiff.toFixed(2),
+      finalProjTotal: finalProjTotal.toFixed(1),
+      overProb,
+      sources: signals.map(s => s.name)
+    })
+    
+    return {
+      overProb,
+      underProb: parseFloat(
+        (100 - overProb).toFixed(1)
+      ),
+      projTotal: parseFloat(
+        finalProjTotal.toFixed(1)
+      ),
+      signals,
+      sourceCount: signals.length,
+      source: "composite",
+      sourceSummary: signals.map(s => s.name)
+        .join(", ")
+    }
+  }
+
+---
+
+STEP 11 — DATA DISPLAY ON CARD
+
+Show all available data in structured sections.
+
+SECTION: "BETTING INTELLIGENCE"
+Show when ActionNetwork data available:
+
+  Public %: "[overPct]% Over / [underPct]% Under"
+  Money %: "[overMoney]% money on Over"
+  If overMoney > 60 && overPct < 50:
+    "Sharp Over Signal" teal badge
+    // Money says over but public says under
+    // = sharp money on over
+  If underMoney > 60 && underPct < 50:
+    "Sharp Under Signal" red badge
+
+  Opening line: viData?.openTotal ?? anData?.openTotal
+  Current line: enriched.odds?.overUnder
+  Movement: show arrow + amount if moved
+
+SECTION: "ADVANCED ANALYTICS"
+Show when BartTorvik data available:
+
+  Home: "AdjO [adjO] / AdjD [adjD]" 
+    with rank badge "#[rank]"
+  Away: "AdjO [adjO] / AdjD [adjD]"
+    with rank badge
+  
+  Tempo: "[avg tempo] poss/40min"
+    If tempo > 72: "Fast Pace" teal
+    If tempo < 65: "Slow Pace" red
+    Else: "Average Pace" zinc
+
+  Projected by Torvik:
+    "[torvikTotal] total pts"
+    vs line: teal/red lean label
+
+SECTION: "INJURY REPORT"
+Show when Rotowire data loaded:
+
+  If injuries found:
+    Each player: [name] · [position] · [status]
+    "Out" → red pill
+    "Doubtful" → amber pill
+    "Questionable" → zinc pill
+  If no injuries:
+    "No injuries reported" zinc-500 italic
+
+SECTION: ENGINE SOURCE BREAKDOWN
+Small collapsible section at bottom of card:
+
+  "Sources used: [N]"
+  When expanded:
+    Each signal as a row:
+    [source name] · [diff direction] · [weight]x
+    e.g. "BartTorvik Efficiency · +4.2 pts · 4.0x"
+
+COMPOSITE ENGINE SOURCE BADGE:
+  Below gauge:
+  "[N] sources" teal pill
+  e.g. "6 sources" means Torvik + ESPN + AN + VI + 
+       predictor + injuries all contributed
+
+---
+
+STEP 12 — ADMIN CACHE CONTROL
+
+Add "Refresh Data" button in admin panel:
+
+  Clears enrichmentCache entirely
+  Re-fetches all sources for all cached games
+  Shows: "Last enriched: [time]" + source count
+
+Also add per-game refresh on card:
+  Small "↻" icon top-right of each section
+  Clears that game's cache entry
+  Re-runs enrichNCAABGameFull for that game

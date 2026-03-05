@@ -1,0 +1,67 @@
+BartTorvik / T-Rank
+
+Main rankings: https://barttorvik.com/trank.php?json=1&year=2026
+Team detail: https://barttorvik.com/team-drill.php?team=TEAMNAME&year=2026&json=1
+Website: https://barttorvik.com
+
+
+ActionNetwork
+
+NCAAB scoreboard API: https://api.actionnetwork.com/web/v1/scoreboard/ncaab?period=game&bookIds=15,30,76,123,69,68
+Website: https://www.actionnetwork.com/ncaab/odds
+
+
+VegasInsider
+
+NCAAB odds page: https://www.vegasinsider.com/college-basketball/odds/
+Website: https://www.vegasinsider.com
+
+
+PrizePicks
+
+Public projections API: https://api.prizepicks.com/projections?league_id=3&per_page=250&single_stat=true
+Website: https://app.prizepicks.com
+
+
+Underdog Fantasy
+
+Over/under lines API: https://api.underdogfantasy.com/beta/v5/over_under_lines
+Website: https://underdogfantasy.com
+
+
+Sports Reference / CBB Reference
+
+Team schedule: https://www.sports-reference.com/cbb/schools/SLUG/men/2026-schedule.html
+Example (Duke): https://www.sports-reference.com/cbb/schools/duke/men/2026-schedule.html
+Website: https://www.sports-reference.com/cbb
+
+
+TeamRankings
+
+Points per game: https://www.teamrankings.com/ncaa-basketball/stat/points-per-game
+O/U records: https://www.teamrankings.com/ncaa-basketball/stat/opponent-points-per-game
+Website: https://www.teamrankings.com/ncaa-basketball
+
+
+Rotowire
+
+NCAAB injury report: https://www.rotowire.com/basketball/college-basketball-injury-report.php
+NCAAB news feed: https://www.rotowire.com/basketball/college-basketball-news.php
+Website: https://www.rotowire.com
+
+
+ESPN NCAAB (already wired)
+
+Scoreboard: https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?limit=300&groups=50
+Game summary: https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/summary?event=GAMEID
+Team stats: https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/teams/TEAMID/statistics
+Team record: https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/teams/TEAMID/record
+Team schedule: https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/teams/TEAMID/schedule?season=2026
+Standings: https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/standings?group=GROUPID
+
+
+The Odds API (already wired)
+
+NCAAB odds: https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds?apiKey=KEY&regions=us&markets=spreads,totals,h2h&oddsFormat=american
+NCAAB events: https://api.the-odds-api.com/v4/sports/basketball_ncaab/events?apiKey=KEY
+Docs: https://the-odds-api.com/liveapi/guides/v4

@@ -75,6 +75,38 @@ interface NCAABPlay {
 
 export type { ParlayPickInput as NCAABParlayPick };
 
+interface TorvikStats {
+  adjO: number; adjD: number; tempo: number;
+  efgPct: number; tovPct: number; orbPct: number; ftRate: number;
+  barthag: number; rank: number; source: string;
+}
+interface ActionNetworkData {
+  overPct: number | null; underPct: number | null;
+  overMoney: number | null; underMoney: number | null;
+  total: number | null; openTotal: number | null;
+  spread: number | null; openSpread: number | null;
+  homeSpreadPct: number | null; awaySpreadPct: number | null;
+  source: string;
+}
+interface VegasInsiderData { openTotal: number | null; currentTotal: number | null; movement: number | null; source: string; }
+interface InjuredPlayer { name: string; team: string; position: string; injury: string; status: string; }
+interface InjuryImpact { injuries: InjuredPlayer[]; out: number; hasKeyPlayerOut: boolean; summary: string; }
+interface CompositeSignal { name: string; projTotal: number | null; weight: number; diff: number; }
+interface CompositeEngineResult {
+  overProb: number; underProb: number; projTotal: number | null;
+  signals: CompositeSignal[]; sourceCount: number; sourceSummary: string;
+}
+interface EnrichedGameData {
+  homeTeam: string; awayTeam: string;
+  torvik: { home: TorvikStats | null; away: TorvikStats | null };
+  actionNetwork: ActionNetworkData | null;
+  vegasInsider: VegasInsiderData | null;
+  injuries: { home: InjuryImpact | null; away: InjuryImpact | null; all: InjuredPlayer[] };
+  composite: CompositeEngineResult | null;
+  sources: string[];
+  fetchedAt: number;
+}
+
 interface NCAABGame {
   id: string;
   name: string;
@@ -719,6 +751,12 @@ function NCAABGameCard({
   const [h2hData, setH2hData] = useState<H2HGame[] | null>(h2hDataFromCache ?? null);
   const [h2hOpen, setH2hOpen] = useState(false);
 
+  // Enriched data state (BartTorvik, ActionNetwork, Rotowire, composite engine)
+  const [enrichedData, setEnrichedData] = useState<EnrichedGameData | null>(null);
+  const [enrichedLoading, setEnrichedLoading] = useState(false);
+  const [enrichedVersion, setEnrichedVersion] = useState(0);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+
   // Direction-flip state (item 5): triggers color transition on Engine Over/Under%
   const [isDirectionFlip, setIsDirectionFlip] = useState(false);
 
@@ -730,6 +768,20 @@ function NCAABGameCard({
     const t = setTimeout(() => setFlashActive(false), 200);
     return () => clearTimeout(t);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch enriched analytics data (BartTorvik, ActionNetwork, injuries, composite engine)
+  useEffect(() => {
+    let cancelled = false;
+    setEnrichedLoading(true);
+    fetch(`/api/ncaab/enriched?gameId=${play.gameId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then((data: EnrichedGameData | null) => {
+        if (!cancelled && data) setEnrichedData(data);
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setEnrichedLoading(false); });
+    return () => { cancelled = true; };
+  }, [play.gameId, enrichedVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch H2H once on mount if not already cached (item 2)
   useEffect(() => {
@@ -943,6 +995,19 @@ function NCAABGameCard({
           </button>
         )}
 
+        {/* Per-card refresh icon (top-right, below parlay badge) */}
+        <button
+          data-testid={`ncaab-enrich-refresh-${play.gameId}`}
+          onClick={() => setEnrichedVersion(v => v + 1)}
+          title="Refresh analytics data"
+          className="absolute top-10 right-3 w-5 h-5 flex items-center justify-center rounded transition-colors"
+          style={{ color: "#3f3f46", background: "transparent" }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "#00d4aa"; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "#3f3f46"; }}
+        >
+          <RefreshCw className={`w-3 h-3 ${enrichedLoading ? "animate-spin" : ""}`} />
+        </button>
+
         {/* ── HEADER ─────────────────────────────────────────────────── */}
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
@@ -979,14 +1044,28 @@ function NCAABGameCard({
               )}
             </div>
           </div>
-          <RadialGauge
-            value={isNeutral ? 50 : gaugeValue}
-            color={isNeutral ? "#52525b" : gaugeColor}
-            label={isNeutral ? "EARLY GAME" : gaugeLabel}
-            isParlayed={isLegParlayed(selectedMarket)}
-            showFullGameLabel
-            displayDash={isNeutral}
-          />
+          <div className="flex flex-col items-center gap-1.5">
+            <RadialGauge
+              value={isNeutral ? 50 : gaugeValue}
+              color={isNeutral ? "#52525b" : gaugeColor}
+              label={isNeutral ? "EARLY GAME" : gaugeLabel}
+              isParlayed={isLegParlayed(selectedMarket)}
+              showFullGameLabel
+              displayDash={isNeutral}
+            />
+            {enrichedData && enrichedData.sources.length > 0 && (
+              <span
+                data-testid={`ncaab-sources-badge-${play.gameId}`}
+                className="text-[9px] font-bold px-2 py-0.5 rounded-full"
+                style={{ background: "rgba(0,212,170,0.12)", color: "#00d4aa", border: "1px solid rgba(0,212,170,0.25)" }}
+              >
+                {enrichedData.sources.length} source{enrichedData.sources.length !== 1 ? "s" : ""}
+              </span>
+            )}
+            {enrichedLoading && !enrichedData && (
+              <span className="text-[9px]" style={{ color: "#3f3f46" }}>loading…</span>
+            )}
+          </div>
         </div>
 
         {/* ── VERDICT ROWS ───────────────────────────────────────────── */}
@@ -1400,6 +1479,215 @@ function NCAABGameCard({
             );
           })}
         </div>
+
+        {/* ── BETTING INTELLIGENCE (ActionNetwork) ───────────────────── */}
+        {enrichedData?.actionNetwork && (() => {
+          const an = enrichedData.actionNetwork!;
+          const hasPublicPct = an.overPct != null && an.underPct != null;
+          const hasMovement = an.openTotal != null && an.total != null;
+          const isSharpOver  = (an.overMoney ?? 0) > 60 && (an.overPct ?? 50) < 50;
+          const isSharpUnder = (an.underMoney ?? 0) > 60 && (an.underPct ?? 50) < 50;
+          const sharpSide = isSharpOver ? "Over" : isSharpUnder ? "Under" : null;
+          const movement = hasMovement ? parseFloat(((an.total ?? 0) - (an.openTotal ?? 0)).toFixed(1)) : null;
+          return (
+            <div className="rounded-lg overflow-hidden" style={{ border: "1px solid #1e3a3a" }}>
+              <div className="flex items-center justify-between px-3 py-2" style={{ background: "#0b1f1f" }}>
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "#00d4aa" }}>Betting Intelligence</span>
+                {sharpSide && (
+                  <span className="text-[9px] font-black px-2 py-0.5 rounded-full"
+                    style={{ background: sharpSide === "Over" ? "rgba(0,212,170,0.2)" : "rgba(239,68,68,0.2)", color: sharpSide === "Over" ? "#00d4aa" : "#ef4444", border: `1px solid ${sharpSide === "Over" ? "rgba(0,212,170,0.4)" : "rgba(239,68,68,0.4)"}` }}>
+                    ⚡ Sharp {sharpSide}
+                  </span>
+                )}
+              </div>
+              <div className="px-3 py-2 space-y-1.5" style={{ background: "#0a1a1a" }}>
+                {hasPublicPct && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px]" style={{ color: "#71717a" }}>Public %</span>
+                    <span className="text-[10px] font-mono font-semibold" style={{ color: "#a1a1aa" }}>
+                      <span style={{ color: "#00d4aa" }}>{an.overPct}% Over</span>
+                      {" / "}
+                      <span style={{ color: "#ef4444" }}>{an.underPct}% Under</span>
+                    </span>
+                  </div>
+                )}
+                {an.overMoney != null && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px]" style={{ color: "#71717a" }}>Money %</span>
+                    <span className="text-[10px] font-mono font-semibold" style={{ color: "#a1a1aa" }}>
+                      {an.overMoney}% on Over
+                    </span>
+                  </div>
+                )}
+                {hasMovement && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px]" style={{ color: "#71717a" }}>Line Movement</span>
+                    <span className="text-[10px] font-mono font-semibold"
+                      style={{ color: movement === 0 ? "#71717a" : movement! > 0 ? "#00d4aa" : "#ef4444" }}>
+                      Open {an.openTotal} → {an.total} {movement !== 0 && movement !== null ? `(${movement > 0 ? "+" : ""}${movement})` : "(no move)"}
+                    </span>
+                  </div>
+                )}
+                {an.homeSpreadPct != null && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px]" style={{ color: "#71717a" }}>Spread Tickets</span>
+                    <span className="text-[10px] font-mono" style={{ color: "#71717a" }}>
+                      {play.homeTeamAbbr} {an.homeSpreadPct}% / {play.awayTeamAbbr} {an.awaySpreadPct}%
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── ADVANCED ANALYTICS (BartTorvik) ────────────────────────── */}
+        {enrichedData?.torvik && (enrichedData.torvik.home || enrichedData.torvik.away) && (() => {
+          const ht = enrichedData.torvik.home;
+          const at = enrichedData.torvik.away;
+          const avgTempo = ht?.tempo && at?.tempo ? (ht.tempo + at.tempo) / 2 : null;
+          const tempoLabel = avgTempo ? (avgTempo > 72 ? "Fast Pace" : avgTempo < 65 ? "Slow Pace" : "Average Pace") : null;
+          const tempoColor = avgTempo ? (avgTempo > 72 ? "#00d4aa" : avgTempo < 65 ? "#ef4444" : "#71717a") : "#71717a";
+          const torvikTotal = enrichedData.composite?.projTotal;
+          const liveLine = play.total;
+          const torvikLean = torvikTotal && liveLine ? torvikTotal - liveLine : null;
+          return (
+            <div className="rounded-lg overflow-hidden" style={{ border: "1px solid #1e293b" }}>
+              <div className="flex items-center justify-between px-3 py-2" style={{ background: "#0b1525" }}>
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "#60a5fa" }}>Advanced Analytics</span>
+                {tempoLabel && (
+                  <span className="text-[9px] font-bold px-2 py-0.5 rounded-full"
+                    style={{ color: tempoColor, background: `${tempoColor}18`, border: `1px solid ${tempoColor}40` }}>
+                    {tempoLabel}
+                  </span>
+                )}
+              </div>
+              <div className="px-3 py-2 space-y-1.5" style={{ background: "#090f1a" }}>
+                {[{ label: play.homeTeamAbbr, t: ht }, { label: play.awayTeamAbbr, t: at }].map(({ label, t }) => t && (
+                  <div key={label} className="flex items-center justify-between">
+                    <span className="text-[10px]" style={{ color: "#71717a" }}>{label}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] font-mono" style={{ color: "#a1a1aa" }}>
+                        AdjO <span style={{ color: "#00d4aa" }}>{t.adjO.toFixed(1)}</span>
+                        {" / "}
+                        AdjD <span style={{ color: "#ef4444" }}>{t.adjD.toFixed(1)}</span>
+                      </span>
+                      {t.rank < 400 && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded"
+                          style={{ background: "#1e293b", color: "#60a5fa", border: "1px solid #1e3a5f" }}>
+                          #{t.rank}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {avgTempo && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px]" style={{ color: "#71717a" }}>Tempo</span>
+                    <span className="text-[10px] font-mono" style={{ color: tempoColor }}>{avgTempo.toFixed(1)} poss/40min</span>
+                  </div>
+                )}
+                {torvikTotal && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px]" style={{ color: "#71717a" }}>Torvik Projection</span>
+                    <span className="text-[10px] font-mono font-bold"
+                      style={{ color: torvikLean && torvikLean > 1 ? "#00d4aa" : torvikLean && torvikLean < -1 ? "#ef4444" : "#71717a" }}>
+                      {torvikTotal.toFixed(1)} pts
+                      {torvikLean != null && <span style={{ color: "#52525b" }}> ({torvikLean > 0 ? "+" : ""}{torvikLean.toFixed(1)} vs line)</span>}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── INJURY REPORT (Rotowire) ────────────────────────────────── */}
+        {enrichedData && (enrichedData.injuries.home || enrichedData.injuries.away) && (() => {
+          const hi = enrichedData.injuries.home;
+          const ai = enrichedData.injuries.away;
+          const allPlayers = [
+            ...(hi?.injuries ?? []).map(p => ({ ...p, side: play.homeTeamAbbr })),
+            ...(ai?.injuries ?? []).map(p => ({ ...p, side: play.awayTeamAbbr })),
+          ];
+          if (!allPlayers.length) return null;
+          return (
+            <div className="rounded-lg overflow-hidden" style={{ border: "1px solid #2d1f1f" }}>
+              <div className="flex items-center justify-between px-3 py-2" style={{ background: "#1a0f0f" }}>
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "#f87171" }}>Injury Report</span>
+                {(hi?.hasKeyPlayerOut || ai?.hasKeyPlayerOut) && (
+                  <span className="text-[9px] font-bold px-2 py-0.5 rounded-full"
+                    style={{ background: "rgba(239,68,68,0.15)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.3)" }}>
+                    {(hi?.out ?? 0) + (ai?.out ?? 0)} Out/Doubtful
+                  </span>
+                )}
+              </div>
+              <div className="px-3 py-2 space-y-1" style={{ background: "#100a0a" }}>
+                {allPlayers.slice(0, 8).map((p, i) => {
+                  const statusColor = p.status === "Out" ? "#ef4444" : p.status === "Doubtful" ? "#f59e0b" : "#71717a";
+                  return (
+                    <div key={i} className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-[9px] font-bold shrink-0"
+                          style={{ background: "#1a1a1a", color: "#52525b", border: "1px solid #27272a", padding: "1px 4px", borderRadius: 3 }}>
+                          {p.side}
+                        </span>
+                        <span className="text-[10px] truncate" style={{ color: "#a1a1aa" }}>{p.name}</span>
+                        {p.position && <span className="text-[9px] shrink-0" style={{ color: "#52525b" }}>{p.position}</span>}
+                      </div>
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0"
+                        style={{ background: `${statusColor}18`, color: statusColor, border: `1px solid ${statusColor}40` }}>
+                        {p.status}
+                      </span>
+                    </div>
+                  );
+                })}
+                {allPlayers.length === 0 && (
+                  <p className="text-[10px] italic text-center py-1" style={{ color: "#52525b" }}>No injuries reported</p>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── ENGINE SOURCE BREAKDOWN (collapsible) ──────────────────── */}
+        {enrichedData?.composite && enrichedData.composite.signals.length > 0 && (
+          <div className="rounded-lg overflow-hidden" style={{ border: "1px solid #1f1f1f" }}>
+            <button
+              data-testid={`ncaab-sources-toggle-${play.gameId}`}
+              onClick={() => setSourcesOpen(o => !o)}
+              className="w-full flex items-center justify-between px-3 py-2 transition-colors"
+              style={{ background: "#0d0d0d" }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#111"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#0d0d0d"; }}
+            >
+              <span className="text-[10px] font-semibold" style={{ color: "#52525b" }}>
+                Sources used: {enrichedData.composite.signals.length}
+              </span>
+              <ChevronDown className="w-3 h-3 transition-transform duration-200"
+                style={{ color: "#52525b", transform: sourcesOpen ? "rotate(180deg)" : "rotate(0deg)" }} />
+            </button>
+            <div style={{ maxHeight: sourcesOpen ? "300px" : "0px", overflow: "hidden", transition: "max-height 250ms ease", background: "#080808" }}>
+              <div className="px-3 py-2 space-y-1">
+                {enrichedData.composite.signals.map((sig, i) => (
+                  <div key={i} className="flex items-center justify-between gap-2">
+                    <span className="text-[10px]" style={{ color: "#71717a" }}>{sig.name}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono"
+                        style={{ color: sig.diff > 0.5 ? "#00d4aa" : sig.diff < -0.5 ? "#ef4444" : "#52525b" }}>
+                        {sig.diff > 0 ? "+" : ""}{sig.diff.toFixed(1)} pts
+                      </span>
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded"
+                        style={{ background: "#1a1a1a", color: "#52525b", border: "1px solid #27272a" }}>
+                        {sig.weight}x
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── PARLAY DRAWER ──────────────────────────────────────────── */}
         <Sheet open={showParlayDrawer} onOpenChange={setShowParlayDrawer}>
