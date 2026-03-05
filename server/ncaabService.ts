@@ -601,6 +601,10 @@ export interface NCAABPlay {
   home1HTotalLine: number | null;
   away1HTotalLine: number | null;
 
+  // ESPN pre-game model data (sharp money signal)
+  espnHomeWinPct: number | null;
+  espnSpreadDetails: string | null;
+
   // Projections
   projectedTotal: number | null;
   projectedMargin: number | null;
@@ -646,33 +650,66 @@ export interface NCAABPlay {
 
 const HALF_SECONDS = 1200;
 
-// ── ESPN team total fallback scan (3 response locations) ──────────────────────
-// Only called when SGO has no team total data for both teams — zero extra cost otherwise.
-async function tryGetESPNTeamTotals(gameId: string): Promise<{ home: number | null; away: number | null }> {
+// ── ESPN summary data (team totals + win% + spread) ─────────────────────────
+// Unified ESPN summary fetch — replaces tryGetESPNTeamTotals.
+// Cached per gameId (5 min TTL) to avoid redundant calls during live refresh cycles.
+interface ESPNSummaryData {
+  teamTotals: { home: number | null; away: number | null };
+  homeWinPct: number | null;
+  spreadDetails: string | null;
+  overUnder: number | null;
+}
+async function fetchESPNSummaryData(gameId: string): Promise<ESPNSummaryData> {
+  const key = `ncaab_espn_summary_${gameId}`;
+  const cached = cache.get(key);
+  if (isFresh(cached, 5 * 60 * 1000)) return cached!.data;
+  const empty: ESPNSummaryData = { teamTotals: { home: null, away: null }, homeWinPct: null, spreadDetails: null, overUnder: null };
   try {
     const r = await fetch(`${ESPN_NCAAB}/summary?event=${gameId}`, {
       headers: { "User-Agent": "Mozilla/5.0" },
       signal: AbortSignal.timeout(5000),
     });
-    if (!r.ok) return { home: null, away: null };
+    if (!r.ok) { cache.set(key, { data: empty, timestamp: Date.now() }); return empty; }
     const s = await r.json() as any;
     const comp = s.header?.competitions?.[0];
     const homeComp = comp?.competitors?.find((c: any) => c.homeAway === "home");
     const awayComp = comp?.competitors?.find((c: any) => c.homeAway === "away");
-    // Check all 3 known ESPN response locations for team totals
+    // Team totals — check all 3 known ESPN locations
     const tt = s.teamTotals ?? s.pickcenter?.[0]?.teamTotals ?? comp?.odds?.[0]?.teamTotals;
-    if (!tt) return { home: null, away: null };
     const homeId = String(homeComp?.id ?? homeComp?.team?.id ?? "");
     const awayId = String(awayComp?.id ?? awayComp?.team?.id ?? "");
-    const homeVal = tt[homeId]?.total ?? tt?.home ?? null;
-    const awayVal = tt[awayId]?.total ?? tt?.away ?? null;
-    return {
-      home: homeVal != null ? parseFloat(String(homeVal)) : null,
-      away: awayVal != null ? parseFloat(String(awayVal)) : null,
+    const homeVal = tt ? (tt[homeId]?.total ?? tt?.home ?? null) : null;
+    const awayVal = tt ? (tt[awayId]?.total ?? tt?.away ?? null) : null;
+    // Pickcenter data
+    const pc = s.pickcenter?.[0];
+    const homeWinPct = pc?.homeTeamOdds?.winPercentage ?? null;
+    const spreadDetails = typeof pc?.spreadDetails === "string" ? pc.spreadDetails : null;
+    const overUnder = pc?.overUnder ?? null;
+    const result: ESPNSummaryData = {
+      teamTotals: {
+        home: homeVal != null ? parseFloat(String(homeVal)) : null,
+        away: awayVal != null ? parseFloat(String(awayVal)) : null,
+      },
+      homeWinPct: homeWinPct != null ? parseFloat(String(homeWinPct)) : null,
+      spreadDetails,
+      overUnder: overUnder != null ? parseFloat(String(overUnder)) : null,
     };
+    cache.set(key, { data: result, timestamp: Date.now() });
+    return result;
   } catch {
-    return { home: null, away: null };
+    cache.set(key, { data: empty, timestamp: Date.now() });
+    return empty;
   }
+}
+
+// Public API for chip-odds route
+export async function getNCAABChipOdds(gameId: string): Promise<{
+  overUnder: number | null;
+  homeWinPct: number | null;
+  spreadDetails: string | null;
+}> {
+  const data = await fetchESPNSummaryData(gameId);
+  return { overUnder: data.overUnder, homeWinPct: data.homeWinPct, spreadDetails: data.spreadDetails };
 }
 
 export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
@@ -711,15 +748,17 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       const home1HTotalLine   = sgo1H?.home1HTotalLine ?? null;
       const away1HTotalLine   = sgo1H?.away1HTotalLine ?? null;
 
-      // ESPN fallback — only called when SGO has no team total for both teams
+      // Fetch ESPN summary once per game — provides team totals fallback + win% for sharp signal
+      const espnSummary = await fetchESPNSummaryData(game.id);
       if (finalHomeGameTotalLine === null && finalAwayGameTotalLine === null) {
-        const espnTT = await tryGetESPNTeamTotals(game.id);
-        if (espnTT.home !== null) finalHomeGameTotalLine = espnTT.home;
-        if (espnTT.away !== null) finalAwayGameTotalLine = espnTT.away;
-        if (espnTT.home !== null || espnTT.away !== null) {
-          console.log(`[NCAAB ESPN TT] ${game.awayTeam} @ ${game.homeTeam}: homeTotal=${espnTT.home}, awayTotal=${espnTT.away}`);
+        if (espnSummary.teamTotals.home !== null) finalHomeGameTotalLine = espnSummary.teamTotals.home;
+        if (espnSummary.teamTotals.away !== null) finalAwayGameTotalLine = espnSummary.teamTotals.away;
+        if (espnSummary.teamTotals.home !== null || espnSummary.teamTotals.away !== null) {
+          console.log(`[NCAAB ESPN TT] ${game.awayTeam} @ ${game.homeTeam}: homeTotal=${espnSummary.teamTotals.home}, awayTotal=${espnSummary.teamTotals.away}`);
         }
       }
+      const espnHomeWinPct = espnSummary.homeWinPct;
+      const espnSpreadDetails = espnSummary.spreadDetails;
 
       // isEstimated = true only when both SGO and ESPN returned null (line will be derived from proj in frontend)
       const homeGameTotalIsEstimated = finalHomeGameTotalLine === null;
@@ -986,6 +1025,8 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         awayGameTotalIsEstimated,
         home1HTotalLine,
         away1HTotalLine,
+        espnHomeWinPct,
+        espnSpreadDetails,
         projectedTotal: projectedTotal !== null ? Math.round(projectedTotal * 10) / 10 : null,
         projectedMargin: projectedMargin !== null ? Math.round(projectedMargin * 10) / 10 : null,
         proj1HTotal,

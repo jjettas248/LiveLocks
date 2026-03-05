@@ -5,7 +5,7 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
 import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines } from "./oddsService";
-import { computeNCAABPlays, getNCAABScoreboard, getNCAABH2H } from "./ncaabService";
+import { computeNCAABPlays, getNCAABScoreboard, getNCAABH2H, getNCAABChipOdds } from "./ncaabService";
 import { calculateParlay } from "./parlayService";
 import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin, requireTier } from "./auth";
 import { registerStripeRoutes } from "./stripeService";
@@ -205,6 +205,18 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("[NCAAB H2H]", err.message);
       return res.json({ games: [] });
+    }
+  });
+
+  app.get("/api/ncaab/chip-odds", requireTier("all", "elite"), async (req, res) => {
+    try {
+      const gameId = String(req.query.gameId ?? "");
+      if (!gameId) return res.status(400).json({ error: "gameId required" });
+      const data = await getNCAABChipOdds(gameId);
+      return res.json(data);
+    } catch (err: any) {
+      console.error("[NCAAB chip-odds]", err.message);
+      return res.json({ overUnder: null, homeWinPct: null, spreadDetails: null });
     }
   });
 

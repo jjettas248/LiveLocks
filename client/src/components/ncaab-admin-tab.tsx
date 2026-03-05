@@ -48,6 +48,8 @@ interface NCAABPlay {
   awayGameTotalIsEstimated: boolean;
   home1HTotalLine: number | null;
   away1HTotalLine: number | null;
+  espnHomeWinPct: number | null;
+  espnSpreadDetails: string | null;
   projectedTotal: number | null;
   projectedMargin: number | null;
   proj1HTotal: number | null;
@@ -146,6 +148,22 @@ interface H2HGame {
   spread: number | null;
   spreadTeam: "HOME" | "AWAY" | null;
   isCurrent?: boolean;
+}
+
+interface ChipOddsData {
+  overUnder: number | null;
+  homeWinPct: number | null;
+  spreadDetails: string | null;
+  fetching?: boolean;
+}
+
+interface SharpMoneyResult {
+  detected: true;
+  sharpSide: "home" | "away";
+  gap: number;
+  strength: number;
+  label: string;
+  teamName: string;
 }
 
 // ── NCAAB REFRESH AUDIT ──────────────────────────────────────────────────────
@@ -534,6 +552,40 @@ function limitedEngineProb(rawProb: number | null, progress: number, gameId?: st
     );
   }
   return parseFloat(clamped.toFixed(1));
+}
+
+// ── Sharp money detection ─────────────────────────────────────────────────────
+function detectSharpMoney(opts: {
+  homeWinPct: number | null;
+  spreadDetails: string | null;
+  homeTeamName: string;
+  awayTeamName: string;
+}): SharpMoneyResult | null {
+  const { homeWinPct, spreadDetails, homeTeamName, awayTeamName } = opts;
+  if (!homeWinPct || homeWinPct <= 0) return null;
+  if (!spreadDetails) return null;
+  const spreadMatch = spreadDetails.match(/([+-]?\d+\.?\d*)$/);
+  if (!spreadMatch) return null;
+  const spreadValue = parseFloat(spreadMatch[1]);
+  if (isNaN(spreadValue)) return null;
+  const spreadImpliedWinPct = spreadValue < 0
+    ? 53 + (Math.abs(spreadValue) * 3)
+    : 53 - (Math.abs(spreadValue) * 3);
+  const clamped = Math.min(Math.max(spreadImpliedWinPct, 5), 95);
+  const gap = homeWinPct - clamped;
+  if (Math.abs(gap) < 8) return null;
+  const sharpSide = gap > 0 ? "home" : "away";
+  const strength = Math.abs(gap);
+  const result: SharpMoneyResult = {
+    detected: true,
+    sharpSide,
+    gap: parseFloat(gap.toFixed(1)),
+    strength,
+    label: strength >= 15 ? "Strong Sharp Signal" : "Sharp Money Signal",
+    teamName: sharpSide === "home" ? homeTeamName : awayTeamName,
+  };
+  console.log(`[SHARP] ESPN=${homeWinPct}% vs Spread=${clamped.toFixed(1)}% | gap=${result.gap}pp | ${result.label} → ${result.teamName}`);
+  return result;
 }
 
 // ── Team total probability helpers (T005) ────────────────────────────────────
@@ -933,6 +985,37 @@ function NCAABGameCard({
             </div>
           </div>
         )}
+
+        {/* ── SHARP MONEY SIGNAL ROW ─────────────────────────────────── */}
+        {(() => {
+          const sharp = detectSharpMoney({
+            homeWinPct: play.espnHomeWinPct,
+            spreadDetails: play.espnSpreadDetails,
+            homeTeamName: play.homeTeam,
+            awayTeamName: play.awayTeam,
+          });
+          if (!sharp) return null;
+          const sharpColor = sharp.strength >= 15 ? "#ef4444" : "#f59e0b";
+          return (
+            <div
+              className="rounded-lg flex items-center justify-between gap-2"
+              style={{ background: "#0d0d0d", border: "1px solid #27272a", borderLeft: `3px solid ${sharpColor}`, padding: "12px 20px" }}
+            >
+              <div>
+                <p className="text-sm font-semibold" style={{ color: sharpColor }}>{sharp.label}</p>
+                <p className="text-xs" style={{ color: "#71717a" }}>
+                  ESPN model vs market spread · {sharp.teamName}
+                </p>
+              </div>
+              <span
+                className="text-[10px] font-black px-2 py-0.5 rounded-full shrink-0"
+                style={{ background: `${sharpColor}22`, color: sharpColor, border: `1px solid ${sharpColor}44`, fontFamily: "monospace" }}
+              >
+                {sharp.sharpSide === "home" ? "↑" : "↓"} {sharp.teamName.split(" ").pop()}
+              </span>
+            </div>
+          );
+        })()}
 
         {/* ── TEAM TOTAL VERDICT SECTION (T005) ──────────────────────── */}
         {selectedTeamMarket !== null && (() => {
@@ -1364,6 +1447,148 @@ function groupGamesByTipoff(games: NCAABGame[]) {
   return Object.values(groups).sort((a, b) => a.tipoffMs - b.tipoffMs);
 }
 
+// ── GameChip component ────────────────────────────────────────────────────────
+function GameChip({
+  game: g,
+  isSelected,
+  onChipClick,
+  oddsData,
+  onEnterViewport,
+}: {
+  game: NCAABGame;
+  isSelected: boolean;
+  onChipClick: () => void;
+  oddsData: ChipOddsData | null;
+  onEnterViewport: (gameId: string) => void;
+}) {
+  const isFinal     = g.status === "Final";
+  const isScheduled = !g.isLive && !isFinal;
+  const tipoffTime  = g.startTime
+    ? new Date(g.startTime).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })
+    : null;
+
+  const chipRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const el = chipRef.current;
+    if (!el || !isScheduled) return;
+    const obs = new IntersectionObserver(
+      entries => {
+        if (entries[0]?.isIntersecting) {
+          onEnterViewport(g.id);
+          obs.disconnect();
+        }
+      },
+      { threshold: 0.1 }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [g.id, isScheduled]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const sharpSignal = oddsData?.homeWinPct != null && oddsData?.spreadDetails != null
+    ? detectSharpMoney({
+        homeWinPct: oddsData.homeWinPct,
+        spreadDetails: oddsData.spreadDetails,
+        homeTeamName: g.homeTeam,
+        awayTeamName: g.awayTeam,
+      })
+    : null;
+
+  return (
+    <button
+      ref={chipRef}
+      data-testid={`ncaab-chip-${g.id}`}
+      onClick={onChipClick}
+      style={{
+        minWidth: 160,
+        maxWidth: 200,
+        background: isSelected ? "#1f1f1f" : "#111111",
+        border: isSelected
+          ? "1.5px solid #00d4aa"
+          : g.isLive
+          ? "1px solid rgba(0,212,170,0.2)"
+          : "1px solid #27272a",
+        borderRadius: 8,
+        padding: "8px 14px",
+        cursor: "pointer",
+        transition: "all 150ms ease",
+        textAlign: "left",
+        flexShrink: 0,
+        position: "relative",
+      }}
+      onMouseEnter={e => { if (!isSelected) e.currentTarget.style.borderColor = "#3f3f46"; }}
+      onMouseLeave={e => { if (!isSelected) e.currentTarget.style.borderColor = g.isLive ? "rgba(0,212,170,0.2)" : "#27272a"; }}
+    >
+      {/* Sharp signal amber dot */}
+      {sharpSignal && (
+        <span
+          title={`${sharpSignal.label} → ${sharpSignal.teamName}`}
+          style={{
+            position: "absolute",
+            top: 5,
+            right: 5,
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            background: sharpSignal.strength >= 15 ? "#ef4444" : "#f59e0b",
+            boxShadow: `0 0 4px ${sharpSignal.strength >= 15 ? "#ef444488" : "#f59e0b88"}`,
+          }}
+        />
+      )}
+      {/* Team row */}
+      <div className="flex items-center justify-between gap-1.5">
+        <span
+          className="text-xs font-bold"
+          style={{ color: "#ffffff", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-block" }}
+        >
+          {g.awayTeamAbbr}
+        </span>
+        <span
+          className="text-xs font-bold tabular-nums"
+          style={{ color: isFinal ? "#71717a" : isScheduled ? "#3b82f6" : "#ffffff", flexShrink: 0 }}
+        >
+          {g.awayScore} – {g.homeScore}
+        </span>
+        <span
+          className="text-xs font-bold"
+          style={{ color: "#ffffff", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-block", textAlign: "right" }}
+        >
+          {g.homeTeamAbbr}
+        </span>
+      </div>
+      {/* Status + O/U row */}
+      <div className="flex items-center justify-between gap-1 mt-1">
+        <div className="flex items-center gap-1">
+          {g.isLive && (
+            <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-400" />
+            </span>
+          )}
+          <span
+            className="text-[10px] font-medium"
+            style={{ color: g.isLive ? "#4ade80" : isFinal ? "#52525b" : "#71717a" }}
+          >
+            {g.isLive
+              ? `H${g.period} ${g.clock}`
+              : isFinal
+              ? "Final"
+              : tipoffTime ?? "Scheduled"}
+          </span>
+        </div>
+        {isScheduled && oddsData?.overUnder != null && (
+          <span style={{ color: "#52525b", fontSize: 10, fontFamily: "monospace", flexShrink: 0 }}>
+            O/U {oddsData.overUnder}
+          </span>
+        )}
+        {isScheduled && oddsData?.fetching && !oddsData?.overUnder && (
+          <span style={{ color: "#3f3f46", fontSize: 9 }}>·</span>
+        )}
+      </div>
+    </button>
+  );
+}
+
 function NCAABGamesStrip({
   games,
   expandedGameId,
@@ -1378,6 +1603,24 @@ function NCAABGamesStrip({
   const timeGroups = groupGamesByTipoff(games);
 
   const initializedKeys = useRef<Set<string>>(new Set());
+
+  // Chip odds state — lazy loaded via IntersectionObserver per chip
+  const [chipOdds, setChipOdds] = useState<Record<string, ChipOddsData>>({});
+  const fetchedChipIds = useRef<Set<string>>(new Set());
+
+  const fetchChipOdds = useCallback(async (gameId: string) => {
+    if (fetchedChipIds.current.has(gameId)) return;
+    fetchedChipIds.current.add(gameId);
+    setChipOdds(prev => ({ ...prev, [gameId]: { overUnder: null, homeWinPct: null, spreadDetails: null, fetching: true } }));
+    try {
+      const res = await fetch(`/api/ncaab/chip-odds?gameId=${gameId}`);
+      if (!res.ok) throw new Error("fetch failed");
+      const data = await res.json();
+      setChipOdds(prev => ({ ...prev, [gameId]: { overUnder: data.overUnder ?? null, homeWinPct: data.homeWinPct ?? null, spreadDetails: data.spreadDetails ?? null, fetching: false } }));
+    } catch {
+      setChipOdds(prev => ({ ...prev, [gameId]: { overUnder: null, homeWinPct: null, spreadDetails: null, fetching: false } }));
+    }
+  }, []);
 
   const computeInitialOpen = useCallback((groupKey: string, group: { key: string; tipoffMs: number; games: NCAABGame[] }): boolean => {
     const now = Date.now();
@@ -1410,81 +1653,6 @@ function NCAABGamesStrip({
 
   const toggleGroup = (key: string) =>
     setOpenGroups(prev => ({ ...prev, [key]: !prev[key] }));
-
-  const renderChip = (g: NCAABGame) => {
-    const isSelected  = expandedGameId === g.id;
-    const isFinal     = g.status === "Final";
-    const isScheduled = !g.isLive && !isFinal;
-    const tipoffTime  = g.startTime
-      ? new Date(g.startTime).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })
-      : null;
-    return (
-      <button
-        key={g.id}
-        data-testid={`ncaab-chip-${g.id}`}
-        onClick={() => onChipClick(g.id)}
-        style={{
-          minWidth: 160,
-          maxWidth: 200,
-          background: isSelected ? "#1f1f1f" : "#111111",
-          border: isSelected
-            ? "1.5px solid #00d4aa"
-            : g.isLive
-            ? "1px solid rgba(0,212,170,0.2)"
-            : "1px solid #27272a",
-          borderRadius: 8,
-          padding: "8px 14px",
-          cursor: "pointer",
-          transition: "all 150ms ease",
-          textAlign: "left",
-          flexShrink: 0,
-        }}
-        onMouseEnter={e => { if (!isSelected) e.currentTarget.style.borderColor = "#3f3f46"; }}
-        onMouseLeave={e => { if (!isSelected) e.currentTarget.style.borderColor = g.isLive ? "rgba(0,212,170,0.2)" : "#27272a"; }}
-      >
-        {/* Team row */}
-        <div className="flex items-center justify-between gap-1.5">
-          <span
-            className="text-xs font-bold"
-            style={{ color: "#ffffff", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-block" }}
-          >
-            {g.awayTeamAbbr}
-          </span>
-          <span
-            className="text-xs font-bold tabular-nums"
-            style={{ color: isFinal ? "#71717a" : isScheduled ? "#3b82f6" : "#ffffff", flexShrink: 0 }}
-          >
-            {g.awayScore} – {g.homeScore}
-          </span>
-          <span
-            className="text-xs font-bold"
-            style={{ color: "#ffffff", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-block", textAlign: "right" }}
-          >
-            {g.homeTeamAbbr}
-          </span>
-        </div>
-        {/* Status row */}
-        <div className="flex items-center gap-1 mt-1">
-          {g.isLive && (
-            <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-400" />
-            </span>
-          )}
-          <span
-            className="text-[10px] font-medium"
-            style={{ color: g.isLive ? "#4ade80" : isFinal ? "#52525b" : "#71717a" }}
-          >
-            {g.isLive
-              ? `H${g.period} ${g.clock}`
-              : isFinal
-              ? "Final"
-              : tipoffTime ?? "Scheduled"}
-          </span>
-        </div>
-      </button>
-    );
-  };
 
   return (
     <div>
@@ -1575,7 +1743,16 @@ function NCAABGamesStrip({
                 {isOpen && (
                   <div className="overflow-x-auto pb-2 mb-1" style={{ scrollbarWidth: "none" }}>
                     <div className="flex gap-2" style={{ minWidth: "max-content" }}>
-                      {group.games.map(g => renderChip(g))}
+                      {group.games.map(g => (
+                        <GameChip
+                          key={g.id}
+                          game={g}
+                          isSelected={expandedGameId === g.id}
+                          onChipClick={() => onChipClick(g.id)}
+                          oddsData={chipOdds[g.id] ?? null}
+                          onEnterViewport={fetchChipOdds}
+                        />
+                      ))}
                     </div>
                   </div>
                 )}
@@ -1747,6 +1924,7 @@ function PreGameCard({
   const [h2hData, setH2hData] = useState<H2HGame[] | null>(null);
   const [h2hOpen, setH2hOpen] = useState(true); // item 3: expanded by default in pre-game
   const [headerFlash, setHeaderFlash] = useState(false);
+  const [preChipOdds, setPreChipOdds] = useState<ChipOddsData | null>(null);
   const didFireZero = useRef(false);
 
   // Countdown timer
@@ -1784,6 +1962,14 @@ function PreGameCard({
         setH2hData([]);
         onH2hReady(game.id, []);
       });
+  }, [game.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch chip-odds once on mount — for sharp money signal
+  useEffect(() => {
+    fetch(`/api/ncaab/chip-odds?gameId=${game.id}`)
+      .then(r => r.ok ? r.json() : { overUnder: null, homeWinPct: null, spreadDetails: null })
+      .then(data => setPreChipOdds({ overUnder: data.overUnder ?? null, homeWinPct: data.homeWinPct ?? null, spreadDetails: data.spreadDetails ?? null }))
+      .catch(() => setPreChipOdds({ overUnder: null, homeWinPct: null, spreadDetails: null }));
   }, [game.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
@@ -1824,6 +2010,49 @@ function PreGameCard({
           )}
         </div>
       </div>
+
+      {/* Pre-game lines summary (O/U + sharp signal) */}
+      {preChipOdds && (() => {
+        const sharp = detectSharpMoney({
+          homeWinPct: preChipOdds.homeWinPct,
+          spreadDetails: preChipOdds.spreadDetails,
+          homeTeamName: game.homeTeam,
+          awayTeamName: game.awayTeam,
+        });
+        const hasAnything = preChipOdds.overUnder != null || sharp != null;
+        if (!hasAnything) return null;
+        return (
+          <div className="space-y-2">
+            {preChipOdds.overUnder != null && (
+              <div className="flex items-center justify-between rounded-lg px-4 py-2.5"
+                style={{ background: "#111111", border: "1px solid #27272a" }}>
+                <span className="text-xs font-semibold" style={{ color: "#71717a" }}>O/U Total</span>
+                <span className="text-sm font-bold tabular-nums" style={{ color: "#ffffff", fontFamily: "monospace" }}>
+                  {preChipOdds.overUnder}
+                </span>
+              </div>
+            )}
+            {sharp && (() => {
+              const sharpColor = sharp.strength >= 15 ? "#ef4444" : "#f59e0b";
+              return (
+                <div className="rounded-lg flex items-center justify-between gap-2"
+                  style={{ background: "#0d0d0d", border: "1px solid #27272a", borderLeft: `3px solid ${sharpColor}`, padding: "10px 16px" }}>
+                  <div>
+                    <p className="text-xs font-semibold" style={{ color: sharpColor }}>{sharp.label}</p>
+                    <p style={{ color: "#71717a", fontSize: 10 }}>ESPN model vs market · {sharp.teamName}</p>
+                  </div>
+                  <span
+                    className="text-[10px] font-black px-2 py-0.5 rounded-full shrink-0"
+                    style={{ background: `${sharpColor}22`, color: sharpColor, border: `1px solid ${sharpColor}44`, fontFamily: "monospace" }}
+                  >
+                    {sharp.sharpSide === "home" ? "↑" : "↓"} {sharp.teamName.split(" ").pop()}
+                  </span>
+                </div>
+              );
+            })()}
+          </div>
+        );
+      })()}
 
       {/* H2H section (item 3: open by default, collapses on transition) */}
       <H2HSection h2hData={h2hData} h2hOpen={h2hOpen} setH2hOpen={setH2hOpen} />

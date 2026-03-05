@@ -1,0 +1,365 @@
+CRITICAL BUG: Admin tier change is not syncing 
+to user session. New pro user cannot see NCAAB tab.
+
+This is a full diagnostic and fix. Do not skip steps.
+
+---
+
+STEP 1 — PRINT COMPLETE DIAGNOSTIC FIRST
+
+Before changing any code, print ALL of this:
+
+  // ============================================
+  // TIER SYNC DIAGNOSTIC
+  // ============================================
+  
+  // 1. AUTH SYSTEM
+  //    Find all imports of auth libraries:
+  //    - next-auth, @auth/*, iron-session
+  //    - @clerk/nextjs, @clerk/clerk-sdk
+  //    - @supabase/supabase-js auth methods
+  //    - jsonwebtoken, jose
+  //    - Any custom /api/auth/* routes
+  //    Result: [EXACTLY what is found]
+  
+  // 2. USER SESSION SHAPE
+  //    Find where user object is built for frontend
+  //    Print the EXACT fields on the session/user object
+  //    Specifically: what field holds tier/plan/role?
+  //    Result: [exact field name]
+  
+  // 3. WHERE TIER IS WRITTEN BY ADMIN
+  //    Find /api/admin/change-tier or equivalent
+  //    Print the EXACT database write call
+  //    Print the EXACT field name being written
+  //    Result: [field name written to DB]
+  
+  // 4. WHERE TIER IS READ FOR TAB VISIBILITY
+  //    Find where NCAAB tab is conditionally shown
+  //    Print the EXACT condition code
+  //    Result: [exact condition + file + line]
+  
+  // 5. MISMATCH ANALYSIS
+  //    Does field written in step 3 match 
+  //    field read in step 4?
+  //    Result: [YES / NO — explain]
+  
+  // 6. SESSION REFRESH METHOD
+  //    After admin writes tier to DB, is session
+  //    refreshed? How?
+  //    Result: [method or "NONE — this is the bug"]
+
+---
+
+STEP 2 — FIX THE FIELD NAME MISMATCH
+
+This is almost certainly a field name mismatch
+or missing session refresh. Fix both.
+
+ADD normalizeTier to a shared utility file
+if it doesn't exist yet:
+
+  // lib/tierUtils.ts
+  export const normalizeTier = (raw?: string | null) => {
+    if (!raw) return "free"
+    const t = raw.toString().toLowerCase().trim()
+    // Match any pro variant
+    if (t.includes("all_sports") || 
+        t.includes("all sports") ||
+        t.includes("pro_all") ||
+        t === "all") return "pro_all"
+    if (t.includes("nba") || 
+        t.includes("pro") || 
+        t.includes("25") ||
+        t.includes("40") ||
+        t.includes("49") ||
+        t.includes("50") ||
+        t === "1" ||
+        t === "subscriber") return "pro_nba"
+    return "free"
+  }
+  
+  export const hasProAccess = (raw?: string | null) => {
+    const t = normalizeTier(raw)
+    return t === "pro_nba" || t === "pro_all"
+  }
+
+Import hasProAccess in the tab rendering component.
+Replace ALL inline tier checks with hasProAccess().
+
+---
+
+STEP 3 — FIX ADMIN TIER WRITE
+
+In /api/admin/change-tier (or wherever admin
+updates user tier), after the DB write:
+
+  // Confirm these three things happen:
+  
+  // A. Write normalized tier value to DB
+  const normalizedTier = normalizeTier(newTierKey)
+  await updateUser(userId, {
+    tier: normalizedTier,        // write normalized
+    plan: normalizedTier,        // write to BOTH if both exist
+    subscription_tier: normalizedTier, // write to all variants
+    updatedAt: new Date().toISOString(),
+    requiresSessionRefresh: true,
+    isNewProUser: true,
+    upgradedAt: new Date().toISOString()
+  })
+  // Only write fields that actually exist in your schema.
+  // The audit in Step 1 will tell you which ones exist.
+  
+  // B. Log what was written
+  console.log("[ADMIN] Tier written:", {
+    userId,
+    rawInput: newTierKey,
+    normalized: normalizedTier,
+    timestamp: new Date().toISOString()
+  })
+
+---
+
+STEP 4 — FIX SESSION TO ALWAYS RE-READ FROM DB
+
+Find the session callback or token callback.
+Based on auth system found in Step 1:
+
+  FOR NEXT-AUTH — in [...nextauth].ts callbacks:
+  
+    async jwt({ token, trigger, session }) {
+      // Always re-read user from DB on every request
+      // to catch admin-made changes
+      if (token.email) {
+        const dbUser = await db.user.findUnique({
+          where: { email: token.email },
+          select: { 
+            id: true,
+            tier: true,
+            plan: true,
+            subscription_tier: true,
+            requiresSessionRefresh: true,
+            isNewProUser: true,
+            upgradedAt: true
+          }
+        })
+        
+        if (dbUser) {
+          // Use whichever field exists
+          const rawTier = 
+            dbUser.tier ?? 
+            dbUser.plan ?? 
+            dbUser.subscription_tier
+          
+          token.tier = normalizeTier(rawTier)
+          token.isNewProUser = dbUser.isNewProUser ?? false
+          token.upgradedAt = dbUser.upgradedAt ?? null
+          
+          // Clear refresh flag
+          if (dbUser.requiresSessionRefresh) {
+            await db.user.update({
+              where: { email: token.email },
+              data: { requiresSessionRefresh: false }
+            })
+          }
+        }
+      }
+      return token
+    },
+    
+    async session({ session, token }) {
+      session.user.tier = token.tier ?? "free"
+      session.user.isNewProUser = 
+        token.isNewProUser ?? false
+      session.user.upgradedAt = 
+        token.upgradedAt ?? null
+      return session
+    }
+
+  FOR CUSTOM JWT — in token verification middleware:
+  
+    const verifyAndEnrichToken = async (token) => {
+      const payload = jwt.verify(
+        token, process.env.JWT_SECRET
+      )
+      
+      // Re-read tier from DB on every verify
+      const dbUser = await getUser(payload.userId)
+      const rawTier = 
+        dbUser?.tier ?? 
+        dbUser?.plan ?? 
+        "free"
+      
+      return {
+        ...payload,
+        tier: normalizeTier(rawTier)
+      }
+    }
+
+  FOR SUPABASE AUTH — in user metadata:
+  
+    // In admin change-tier route:
+    const { error } = await supabase.auth.admin
+      .updateUserById(userId, {
+        user_metadata: {
+          tier: normalizedTier,
+          isNewProUser: true,
+          upgradedAt: new Date().toISOString()
+        }
+      })
+    
+    // Client reads:
+    const { data: { user } } = 
+      await supabase.auth.getUser()
+    const tier = normalizeTier(
+      user?.user_metadata?.tier
+    )
+
+---
+
+STEP 5 — FIX CLIENT-SIDE SESSION REFRESH
+
+The logged-in user's client needs to re-check
+their session after an admin change.
+
+Add to the main app component:
+
+  // Re-fetch session on window focus
+  // This catches admin changes made in another tab
+  
+  useEffect(() => {
+    const onFocus = async () => {
+      // Force session re-read based on auth system:
+      
+      // NextAuth:
+      await update()  // from useSession()
+      
+      // Custom: re-fetch /api/me
+      const res = await fetch("/api/me", {
+        cache: "no-store"
+      })
+      const data = await res.json()
+      setUser(data.user)
+      
+      // Supabase:
+      const { data: { user } } = 
+        await supabase.auth.getUser()
+      setUser(user)
+    }
+    
+    // Use whichever method matches auth system
+    window.addEventListener("focus", onFocus)
+    
+    // Also check every 60 seconds while app is open
+    const interval = setInterval(onFocus, 60000)
+    
+    return () => {
+      window.removeEventListener("focus", onFocus)
+      clearInterval(interval)
+    }
+  }, [])
+
+---
+
+STEP 6 — FIX NCAAB TAB GATE CONDITION
+
+Find the tab array or tab rendering.
+Replace current condition with hasProAccess:
+
+  import { hasProAccess } from "@/lib/tierUtils"
+  
+  // Get user tier from session — try all field names
+  const rawTier = 
+    session?.user?.tier ??
+    session?.user?.plan ??
+    session?.user?.subscription_tier ??
+    user?.tier ??
+    user?.plan ??
+    null
+  
+  const userHasProAccess = hasProAccess(rawTier)
+  
+  // Tab definitions:
+  const tabs = [
+    { 
+      id: "nba", 
+      label: "NBA Live", 
+      locked: false 
+    },
+    { 
+      id: "ncaab", 
+      label: "NCAAB Live", 
+      locked: !userHasProAccess,
+      // locked = false for pro users
+      // locked = true for free users
+    },
+    { 
+      id: "analytics", 
+      label: "Analytics", 
+      locked: false 
+    },
+    { 
+      id: "mlb", 
+      label: "MLB Live", 
+      locked: true  // always locked
+    },
+  ]
+
+  // Content gate — prevents direct URL access too:
+  {activeTab === "ncaab" && !userHasProAccess && (
+    <div>Upgrade required</div>
+  )}
+  
+  {activeTab === "ncaab" && userHasProAccess && (
+    <NCAABLiveTab />
+  )}
+
+---
+
+STEP 7 — ADD INSTANT SYNC ENDPOINT
+
+Create /api/auth/refresh-tier  GET (authenticated)
+
+  // Re-reads tier from DB and returns it
+  // Client calls this after admin makes a change
+  
+  export async function GET(req) {
+    const userId = getCurrentUserId(req)
+    if (!userId) return Response.json(
+      { error: "Unauthorized" }, { status: 401 }
+    )
+    
+    const user = await getUser(userId)
+    const rawTier = user?.tier ?? user?.plan ?? "free"
+    const tier = normalizeTier(rawTier)
+    
+    return Response.json({ 
+      tier,
+      hasProAccess: hasProAccess(rawTier),
+      userId,
+      refreshedAt: new Date().toISOString()
+    })
+  }
+
+In admin panel, after successful tier change:
+  
+  // Tell the changed user's client to refresh
+  // (works if they have the app open)
+  // Store a server-side flag the client polls
+  
+  After change: set requiresSessionRefresh = true in DB
+  Client polling (every 60s): hits /api/auth/refresh-tier
+  If tier changed: update local state immediately
+
+---
+
+STEP 8 — DEBUG LOG IN NCAAB TAB GATE
+
+Add temporary logs to confirm fix works:
+
+  console.log("[TAB GATE] Raw tier from session:", rawTier)
+  console.log("[TAB GATE] Normalized:", normalizeTier(rawTier))
+  console.log("[TAB GATE] hasProAccess:", userHasProAccess)
+  console.log("[TAB GATE] NCAAB locked:", !userHasProAccess)
+  
+  // Remove after confirming fix works
