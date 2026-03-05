@@ -213,52 +213,87 @@ export async function getNCAABH2H(gameId: string): Promise<any[]> {
 
     if (!awayTeamId || !homeTeamId) return [];
 
-    // Step 2: fetch away team's schedule to find common matchups
-    const schedRes = await fetch(
-      `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/teams/${awayTeamId}/schedule?season=2025`,
-      { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
-    );
-    if (!schedRes.ok) return [];
-    const sched = await schedRes.json() as any;
+    // Dynamic season year: August onwards = upcoming season year (e.g. Aug 2025 → 2026)
+    const now = new Date();
+    const seasonYear = now.getMonth() >= 7 ? now.getFullYear() + 1 : now.getFullYear();
 
-    const events: any[] = sched.events ?? [];
-    const h2h = events
-      .filter((ev: any) => {
+    // Helper: fetch and filter completed H2H events for a given season
+    const fetchAndFilterH2H = async (teamId: string, season: number, vsTeamId: string): Promise<any[]> => {
+      const res = await fetch(
+        `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/teams/${teamId}/schedule?season=${season}`,
+        { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
+      );
+      if (!res.ok) return [];
+      const sched = await res.json() as any;
+      return (sched.events ?? []).filter((ev: any) => {
         const comp = ev.competitions?.[0];
         const statusDesc = comp?.status?.type?.description ?? "";
         if (statusDesc !== "Final" && statusDesc !== "Final/OT") return false;
         return comp?.competitors?.some(
-          (c: any) => String(c.id ?? c.team?.id ?? "") === homeTeamId
+          (c: any) => String(c.id ?? c.team?.id ?? "") === vsTeamId
         );
-      })
-      .slice(-3)
-      .map((ev: any) => {
-        const comp = ev.competitions?.[0];
-        const awayEntry = comp?.competitors?.find(
-          (c: any) => String(c.id ?? c.team?.id ?? "") === awayTeamId
-        );
-        const homeEntry = comp?.competitors?.find(
-          (c: any) => String(c.id ?? c.team?.id ?? "") === homeTeamId
-        );
-        const awayScore = parseInt(awayEntry?.score ?? "0", 10);
-        const homeScore = parseInt(homeEntry?.score ?? "0", 10);
-        const homeIsHost = homeEntry?.homeAway === "home" && !(comp?.neutralSite ?? false);
-        const location = homeIsHost ? `@ ${homeAbbr}` : `vs ${homeAbbr}`;
-        const evDate = new Date(ev.date ?? "");
-        const dateStr = isNaN(evDate.getTime()) ? "" : evDate.toLocaleDateString("en-US", {
-          month: "short", day: "numeric", year: "numeric",
-        });
-        return {
-          date: dateStr,
-          awayTeam: awayName, homeTeam: homeName,
-          awayAbbr, homeAbbr,
-          awayScore, homeScore,
-          location,
-          total: null as number | null,
-          spread: null as number | null,
-          spreadTeam: null as "HOME" | "AWAY" | null,
-        };
       });
+    };
+
+    // Map a raw ESPN event to our H2HGame shape + isCurrent flag
+    const mapEvent = (ev: any, isCurrent: boolean) => {
+      const comp = ev.competitions?.[0];
+      const awayEntry = comp?.competitors?.find(
+        (c: any) => String(c.id ?? c.team?.id ?? "") === awayTeamId
+      );
+      const homeEntry = comp?.competitors?.find(
+        (c: any) => String(c.id ?? c.team?.id ?? "") === homeTeamId
+      );
+      const awayScore = parseInt(awayEntry?.score ?? "0", 10);
+      const homeScore = parseInt(homeEntry?.score ?? "0", 10);
+      const homeIsHost = homeEntry?.homeAway === "home" && !(comp?.neutralSite ?? false);
+      const location = homeIsHost ? `@ ${homeAbbr}` : `vs ${homeAbbr}`;
+      const evDate = new Date(ev.date ?? "");
+      const dateStr = isNaN(evDate.getTime()) ? "" : evDate.toLocaleDateString("en-US", {
+        month: "short", day: "numeric", year: "numeric",
+      });
+      return {
+        date: dateStr,
+        awayTeam: awayName, homeTeam: homeName,
+        awayAbbr, homeAbbr,
+        awayScore, homeScore,
+        location,
+        total: null as number | null,
+        spread: null as number | null,
+        spreadTeam: null as "HOME" | "AWAY" | null,
+        isCurrent,
+        _eventId: String(ev.id ?? ev.uid ?? ""),
+        _date: ev.date ?? "",
+      };
+    }
+
+    // Fetch current season first
+    const currentRaw = await fetchAndFilterH2H(awayTeamId, seasonYear, homeTeamId);
+
+    let combined: ReturnType<typeof mapEvent>[];
+    if (currentRaw.length >= 2) {
+      combined = currentRaw.map(ev => mapEvent(ev, true));
+    } else {
+      // Extend to prior season when current season has < 2 matchups
+      const priorRaw = await fetchAndFilterH2H(awayTeamId, seasonYear - 1, homeTeamId);
+      const merged = [
+        ...currentRaw.map(ev => mapEvent(ev, true)),
+        ...priorRaw.map(ev => mapEvent(ev, false)),
+      ];
+      // Deduplicate by event ID
+      const seen = new Set<string>();
+      combined = merged.filter(g => {
+        if (seen.has(g._eventId)) return false;
+        seen.add(g._eventId);
+        return true;
+      });
+    }
+
+    // Sort descending by date and take top 3
+    combined.sort((a, b) => new Date(b._date).getTime() - new Date(a._date).getTime());
+
+    // Strip internal tracking fields before caching
+    const h2h = combined.slice(0, 3).map(({ _eventId: _e, _date: _d, ...rest }) => rest);
 
     cache.set(key, { data: h2h, timestamp: Date.now() });
     return h2h;
@@ -558,9 +593,11 @@ export interface NCAABPlay {
   h1SpreadLine: number | null;
   h1Favorite: string;
 
-  // Team total market lines from SGO
+  // Team total market lines from SGO / ESPN (with estimated flag)
   homeGameTotalLine: number | null;
   awayGameTotalLine: number | null;
+  homeGameTotalIsEstimated: boolean;
+  awayGameTotalIsEstimated: boolean;
   home1HTotalLine: number | null;
   away1HTotalLine: number | null;
 
@@ -609,6 +646,35 @@ export interface NCAABPlay {
 
 const HALF_SECONDS = 1200;
 
+// ── ESPN team total fallback scan (3 response locations) ──────────────────────
+// Only called when SGO has no team total data for both teams — zero extra cost otherwise.
+async function tryGetESPNTeamTotals(gameId: string): Promise<{ home: number | null; away: number | null }> {
+  try {
+    const r = await fetch(`${ESPN_NCAAB}/summary?event=${gameId}`, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!r.ok) return { home: null, away: null };
+    const s = await r.json() as any;
+    const comp = s.header?.competitions?.[0];
+    const homeComp = comp?.competitors?.find((c: any) => c.homeAway === "home");
+    const awayComp = comp?.competitors?.find((c: any) => c.homeAway === "away");
+    // Check all 3 known ESPN response locations for team totals
+    const tt = s.teamTotals ?? s.pickcenter?.[0]?.teamTotals ?? comp?.odds?.[0]?.teamTotals;
+    if (!tt) return { home: null, away: null };
+    const homeId = String(homeComp?.id ?? homeComp?.team?.id ?? "");
+    const awayId = String(awayComp?.id ?? awayComp?.team?.id ?? "");
+    const homeVal = tt[homeId]?.total ?? tt?.home ?? null;
+    const awayVal = tt[awayId]?.total ?? tt?.away ?? null;
+    return {
+      home: homeVal != null ? parseFloat(String(homeVal)) : null,
+      away: awayVal != null ? parseFloat(String(awayVal)) : null,
+    };
+  } catch {
+    return { home: null, away: null };
+  }
+}
+
 export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
   const [allGames, oddsEvents, sgoEvents] = await Promise.all([
     getNCAABScoreboard(),
@@ -640,10 +706,27 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       const rawH1TotalLine  = sgo1H?.h1TotalLine ?? null;
       const h1SpreadLine    = sgo1H?.h1SpreadLine ?? oddsH1Spread ?? null;
       const h1Favorite      = sgo1H?.h1FavoriteName ?? oddsH1Fav ?? "";
-      const homeGameTotalLine = sgo1H?.homeGameTotalLine ?? null;
-      const awayGameTotalLine = sgo1H?.awayGameTotalLine ?? null;
+      let finalHomeGameTotalLine: number | null = sgo1H?.homeGameTotalLine ?? null;
+      let finalAwayGameTotalLine: number | null = sgo1H?.awayGameTotalLine ?? null;
       const home1HTotalLine   = sgo1H?.home1HTotalLine ?? null;
       const away1HTotalLine   = sgo1H?.away1HTotalLine ?? null;
+
+      // ESPN fallback — only called when SGO has no team total for both teams
+      if (finalHomeGameTotalLine === null && finalAwayGameTotalLine === null) {
+        const espnTT = await tryGetESPNTeamTotals(game.id);
+        if (espnTT.home !== null) finalHomeGameTotalLine = espnTT.home;
+        if (espnTT.away !== null) finalAwayGameTotalLine = espnTT.away;
+        if (espnTT.home !== null || espnTT.away !== null) {
+          console.log(`[NCAAB ESPN TT] ${game.awayTeam} @ ${game.homeTeam}: homeTotal=${espnTT.home}, awayTotal=${espnTT.away}`);
+        }
+      }
+
+      // isEstimated = true only when both SGO and ESPN returned null (line will be derived from proj in frontend)
+      const homeGameTotalIsEstimated = finalHomeGameTotalLine === null;
+      const awayGameTotalIsEstimated = finalAwayGameTotalLine === null;
+      const homeGameTotalLine = finalHomeGameTotalLine;
+      const awayGameTotalLine = finalAwayGameTotalLine;
+
       if (sgo1H?.h1TotalLine != null) {
         console.log(`[NCAAB SGO] ${game.awayTeam} @ ${game.homeTeam}: 1H total=${sgo1H.h1TotalLine}, spread=${sgo1H.h1SpreadLine} ${sgo1H.h1FavoriteName}, homeTeamTotal=${homeGameTotalLine}, awayTeamTotal=${awayGameTotalLine}`);
       }
@@ -899,6 +982,8 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         h1Favorite,
         homeGameTotalLine,
         awayGameTotalLine,
+        homeGameTotalIsEstimated,
+        awayGameTotalIsEstimated,
         home1HTotalLine,
         away1HTotalLine,
         projectedTotal: projectedTotal !== null ? Math.round(projectedTotal * 10) / 10 : null,

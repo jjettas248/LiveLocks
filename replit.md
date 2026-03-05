@@ -111,11 +111,13 @@ Three primary buttons: Over / Under / Spread. Clicking selects the market and up
 - CLV row: "↑ Over" / "↓ Under" / "Even"
 - +Xpp amber pill when edge ≥ 5pp
 
-### Team Total Market (in progress — next build session)
+### Team Total Market (SHIPPED)
 - Over/Under team-total buttons embedded in proj rows (rows 4/5 of stat grid)
 - `selectedTeamMarket` state drives a second verdict section below game total verdicts
-- Lines from SGO (book) or `deriveTeamTotalLine(proj)` (estimated, shown with "~")
-- "Est." badge in divider header; confidence compressed 40% toward 50 when estimated
+- **Line priority**: SGO → ESPN 3-location summary scan → `deriveTeamTotalLine(proj)` (estimated, shown with "~")
+- `homeGameTotalIsEstimated` / `awayGameTotalIsEstimated` flags on `NCAABPlay`; estimated lines compress confidence 40% toward 50
+- "Est." badge in divider header; confidence note below verdict when estimated
+- Parlay "+" button on team total EV row; `isEstimated` field on `ParlayPickInput`; amber "Est." pill in parlay slip
 
 ### H2H Matchup History
 - **H2HSection** component: toggle row (ChevronDown animated) + animated slide-down rows

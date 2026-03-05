@@ -37,6 +37,10 @@ const STAT_LABELS: Record<string, string> = {
   pts_ast: "PA",
   reb_ast: "RA",
   stl_blk: "S+B",
+  ncaab_total: "Total",
+  ncaab_1h_total: "1H Total",
+  ncaab_spread: "Spread",
+  ncaab_team_total: "Team Total",
 };
 
 const DK_SUBCATEGORY: Record<string, string> = {
@@ -272,6 +276,23 @@ export function ParlaySlip({ picks, onRemove, onClear, injuredPlayerNames }: Par
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="font-semibold text-sm text-foreground truncate">{pick.playerName}</span>
+                  {pick.isEstimated && (
+                    <span
+                      title="Line derived from projection — no book line currently available"
+                      style={{
+                        background: "rgba(245,158,11,0.15)",
+                        border: "1px solid rgba(245,158,11,0.25)",
+                        color: "#f59e0b",
+                        fontSize: 10,
+                        padding: "1px 5px",
+                        borderRadius: 4,
+                        cursor: "help",
+                        flexShrink: 0,
+                      }}
+                    >
+                      Est.
+                    </span>
+                  )}
                   <span className="text-xs text-muted-foreground">{pick.playerTeam}</span>
                   {isInjured && (
                     <span className="text-xs font-bold text-red-400 flex items-center gap-0.5">

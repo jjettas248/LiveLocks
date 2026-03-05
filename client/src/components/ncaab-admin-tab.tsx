@@ -44,6 +44,8 @@ interface NCAABPlay {
   h1Favorite: string;
   homeGameTotalLine: number | null;
   awayGameTotalLine: number | null;
+  homeGameTotalIsEstimated: boolean;
+  awayGameTotalIsEstimated: boolean;
   home1HTotalLine: number | null;
   away1HTotalLine: number | null;
   projectedTotal: number | null;
@@ -143,6 +145,7 @@ interface H2HGame {
   total: number | null;
   spread: number | null;
   spreadTeam: "HOME" | "AWAY" | null;
+  isCurrent?: boolean;
 }
 
 function determineCoverage(g: H2HGame): { result: "covered" | "failed" | "PUSH" | "N/A"; team: string | null } {
@@ -221,10 +224,16 @@ function H2HSection({
         {/* Empty state */}
         {h2hData !== null && h2hData.length === 0 && (
           <div className="px-3 py-4 text-center" style={{ borderTop: "1px solid #1a1a1a" }}>
-            <p className="text-xs" style={{ color: "#52525b" }}>Matchup history unavailable</p>
+            <p className="text-xs" style={{ color: "#52525b" }}>No matchup history found for this season</p>
           </div>
         )}
         {/* H2H rows with dual badges (item 1) */}
+        {/* 1-game insufficient state note */}
+        {h2hData !== null && h2hData.length === 1 && (
+          <div className="px-3 pb-3 text-center" style={{ borderTop: "1px solid #1a1a1a" }}>
+            <p className="text-[10px] italic" style={{ color: "#52525b" }}>Limited history — 1 game found</p>
+          </div>
+        )}
         {h2hData !== null && h2hData.map((g, idx) => {
           const actualTotal = g.awayScore + g.homeScore;
           const ouResult = g.total !== null
@@ -254,7 +263,12 @@ function H2HSection({
               }}>
               {/* Left: date + location */}
               <div className="min-w-0 shrink-0">
-                <p className="text-[11px]" style={{ color: "#71717a" }}>{g.date}</p>
+                <p className="text-[11px]" style={{
+                  color: g.isCurrent === false ? "#52525b" : "#71717a",
+                  fontStyle: g.isCurrent === false ? "italic" : "normal",
+                }}>
+                  {g.isCurrent === false ? `${g.date} · Prior Season` : g.date}
+                </p>
                 <p className="text-[10px]" style={{ color: "#52525b" }}>{g.location}</p>
               </div>
               {/* Center: score */}
@@ -476,6 +490,39 @@ function limitedEngineProb(rawProb: number | null, progress: number, gameId?: st
   return parseFloat(clamped.toFixed(1));
 }
 
+// ── Team total probability helpers (T005) ────────────────────────────────────
+function calculateTeamTotalProb(proj: number, line: number): number {
+  const raw = 50 + (proj - line) * 2; // ~2pp per scoring point delta
+  return Math.min(Math.max(raw, 1), 99);
+}
+
+function getTeamTotalVerdict(
+  teamProj: number,
+  line: number,
+  direction: "over" | "under",
+  isEstimated: boolean
+) {
+  const rawEngine = calculateTeamTotalProb(teamProj, line);
+  // Compress toward 50 by 40% when line is estimated (less confidence)
+  const engineProb = isEstimated ? 50 + (rawEngine - 50) * 0.6 : rawEngine;
+  // No real book odds for estimated lines; standard -110 vig otherwise
+  const bookImplied = isEstimated ? 50 : 52.4;
+  const edgeGap = parseFloat(Math.abs(engineProb - bookImplied).toFixed(1));
+  const edgeSide: "Over" | "Under" = engineProb > bookImplied ? "Over" : "Under";
+  const directionSide = direction === "under" ? "Under" : "Over";
+  const edgeLabel = edgeGap >= 20 ? `Strong ${directionSide} EV`
+    : edgeGap >= 10 ? `Lean ${directionSide} EV`
+    : "Neutral — No Edge";
+  return {
+    engineProb: parseFloat(engineProb.toFixed(1)),
+    bookImplied,
+    edgeGap,
+    edgeSide,
+    edgeLabel,
+    isEstimated,
+  };
+}
+
 // ── NCAABGameCard ─────────────────────────────────────────────────────────────
 function NCAABGameCard({
   play,
@@ -515,6 +562,13 @@ function NCAABGameCard({
   const [marketTab, setMarketTab]           = useState<"full" | "h1">("full");
   const [parlayLegs, setParlayLegs]         = useState<string[]>([]);
   const [showParlayDrawer, setShowParlayDrawer] = useState(false);
+  const [selectedTeamMarket, setSelectedTeamMarket] = useState<{
+    team: "home" | "away";
+    direction: "over" | "under";
+    line: number;
+    isEstimated: boolean;
+    teamAbbr: string;
+  } | null>(null);
   const [flashActive, setFlashActive]       = useState(false);
   const [flashColor, setFlashColor]         = useState("#00d4aa");
   const prevOverProb = useRef(overProb);
@@ -588,6 +642,31 @@ function NCAABGameCard({
   const displayAwayProj    = marketTab === "h1" ? h1ProjSplit : play.awayProjected;
   const displayHomeProj    = marketTab === "h1" ? h1ProjSplit : play.homeProjected;
   const h1DataUnavailable  = marketTab === "h1" && effective1HLine == null && play.over1HProb == null;
+
+  // T004: derive team total lines — SGO/ESPN book line first, fallback to projection-derived
+  function deriveTeamTotalLine(proj: number | null): number | null {
+    if (!proj || proj <= 0) return null;
+    return Math.round(proj * 2) / 2;
+  }
+
+  // Full-game projected values for team total context (not H1 split)
+  const fullAwayProj = play.awayProjected;
+  const fullHomeProj = play.homeProjected;
+  const awayEffTotalLine = play.awayGameTotalLine ?? deriveTeamTotalLine(fullAwayProj);
+  const homeEffTotalLine = play.homeGameTotalLine ?? deriveTeamTotalLine(fullHomeProj);
+  // isEstimated comes from server; if line was null (derived), the server sets estimated=true
+  const awayIsEstimated = play.awayGameTotalIsEstimated;
+  const homeIsEstimated = play.homeGameTotalIsEstimated;
+
+  // Only show team total buttons when projection is within a valid college scoring range
+  const isValidAwayProj = fullAwayProj != null && fullAwayProj >= 10 && fullAwayProj <= 100;
+  const isValidHomeProj = fullHomeProj != null && fullHomeProj >= 10 && fullHomeProj <= 100;
+  if (fullAwayProj != null && (fullAwayProj < 10 || fullAwayProj > 100)) {
+    console.warn(`[ENGINE] Suspicious team proj: ${fullAwayProj} for ${play.awayTeamAbbr} — hiding team total market`);
+  }
+  if (fullHomeProj != null && (fullHomeProj < 10 || fullHomeProj > 100)) {
+    console.warn(`[ENGINE] Suspicious team proj: ${fullHomeProj} for ${play.homeTeamAbbr} — hiding team total market`);
+  }
 
   const gaugeForMarket = (m: "over" | "under" | "spread") =>
     m === "over" ? overProb : m === "under" ? underProb : spreadProb;
@@ -663,6 +742,31 @@ function NCAABGameCard({
       sportsbook: play.bookLines[0]?.book ?? "fanduel",
       gameId: play.gameId,
       oddsAmerican: rawOdds,
+    });
+  }
+
+  function addTeamTotalParlayPick() {
+    if (!onAddToParlay || !selectedTeamMarket) return;
+    const { team, direction, line, isEstimated, teamAbbr } = selectedTeamMarket;
+    const proj = team === "home" ? fullHomeProj : fullAwayProj;
+    if (!proj) return;
+    const v = getTeamTotalVerdict(proj, line, direction, isEstimated);
+    const prob = v.engineProb;
+    const rawOdds = prob >= 50
+      ? -Math.round((prob / (100 - prob)) * 100)
+      : Math.round(((100 - prob) / prob) * 100);
+    onAddToParlay({
+      playerId: 0,
+      playerName: `${teamAbbr} ${direction === "over" ? "Over" : "Under"} ${isEstimated ? "~" : ""}${line}`,
+      playerTeam: "NCAAB",
+      statType: "ncaab_team_total",
+      line,
+      probability: prob,
+      betDirection: direction,
+      sportsbook: play.bookLines[0]?.book ?? "fanduel",
+      gameId: play.gameId,
+      oddsAmerican: rawOdds,
+      isEstimated,
     });
   }
 
@@ -784,6 +888,80 @@ function NCAABGameCard({
           </div>
         )}
 
+        {/* ── TEAM TOTAL VERDICT SECTION (T005) ──────────────────────── */}
+        {selectedTeamMarket !== null && (() => {
+          const { team, direction, line, isEstimated, teamAbbr } = selectedTeamMarket;
+          const proj = team === "home" ? fullHomeProj : fullAwayProj;
+          if (proj === null) return null;
+          const v = getTeamTotalVerdict(proj, line, direction, isEstimated);
+          const ttColor = v.edgeSide === "Over" ? "#00d4aa" : "#ef4444";
+          const ttEdgeBelow = v.edgeGap < 5;
+          return (
+            <div className="space-y-2">
+              {/* Divider header */}
+              <div className="flex items-center gap-2 pt-1">
+                <div style={{ flex: 1, height: 1, background: "#27272a" }} />
+                <span style={{ color: "#71717a", fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+                  Team Total · {teamAbbr} {direction === "over" ? "O" : "U"}{isEstimated ? "~" : ""}{line}
+                </span>
+                {isEstimated && (
+                  <span style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", color: "#71717a", fontSize: 10, padding: "1px 6px", borderRadius: 4 }}>
+                    Est.
+                  </span>
+                )}
+                <div style={{ flex: 1, height: 1, background: "#27272a" }} />
+              </div>
+              {/* Team total EV row */}
+              <div className="relative rounded-lg flex items-center justify-between gap-2"
+                style={{ background: "#111111", border: "1px solid #27272a", borderLeft: `3px solid ${ttEdgeBelow ? "#52525b" : ttColor}`, padding: "16px 20px" }}>
+                <div>
+                  <p className="text-sm font-semibold" style={{ color: ttEdgeBelow ? "#71717a" : ttColor }}>{v.edgeLabel}</p>
+                  <p className="text-xs" style={{ color: "#a1a1aa" }}>Engine {v.engineProb}% vs Book {v.bookImplied}%</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {v.edgeGap >= 5 && (
+                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full shrink-0"
+                      style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b", border: "1px solid rgba(245,158,11,0.3)", fontFamily: "monospace" }}>
+                      +{v.edgeGap}pp
+                    </span>
+                  )}
+                  {onAddToParlay && (
+                    <button
+                      data-testid={`ncaab-team-total-parlay-${play.gameId}`}
+                      onClick={addTeamTotalParlayPick}
+                      title="Add team total to parlay"
+                      className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-black transition-all duration-200 shrink-0"
+                      style={{ background: "#27272a", color: "#a1a1aa", border: "1px solid #3f3f46" }}
+                    >
+                      +
+                    </button>
+                  )}
+                </div>
+              </div>
+              {/* Team total CLV row */}
+              <div className="rounded-lg flex items-center justify-between gap-2"
+                style={{ background: "#0f0f0f", border: "1px solid #27272a", borderLeft: `3px solid ${v.edgeGap >= 5 ? ttColor : "#52525b"}`, padding: "16px 20px" }}>
+                <div>
+                  <p className="text-sm font-semibold" style={{ color: "#a1a1aa" }}>{v.edgeSide} Team CLV</p>
+                  <p className="text-xs" style={{ color: "#71717a" }}>Team total line value signal</p>
+                </div>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full shrink-0"
+                  style={v.edgeGap >= 5
+                    ? { background: `${ttColor}22`, color: ttColor, border: `1px solid ${ttColor}44` }
+                    : { background: "#27272a", color: "#71717a", border: "1px solid #3f3f46" }}>
+                  {v.edgeGap < 5 ? "Even" : `${v.edgeSide === "Under" ? "↓" : "↑"} ${v.edgeSide}`}
+                </span>
+              </div>
+              {/* Reduced confidence note for estimated lines */}
+              {isEstimated && (
+                <p style={{ color: "#52525b", fontSize: 11, fontStyle: "italic", paddingTop: 4, paddingBottom: 8, paddingLeft: 20, paddingRight: 20 }}>
+                  Line estimated from projection — reduced confidence signal
+                </p>
+              )}
+            </div>
+          );
+        })()}
+
         {/* ── FULL GAME / 1H TOGGLE ──────────────────────────────────── */}
         <div className="flex items-center gap-3">
           <div style={{ display: "inline-flex", background: "#0f0f0f", borderRadius: 8, padding: 4, gap: 4 }}>
@@ -869,31 +1047,101 @@ function NCAABGameCard({
                 </span>
               </div>
             );
-            if (i === 4) return (
-              <div key={4} className="grid grid-cols-3 items-center gap-2" style={{ borderBottom: borderB, background: "#111111", padding: "16px 20px" }}>
-                <span className="text-xs font-semibold uppercase tracking-wider truncate" style={{ color: "#71717a" }}>{play.awayTeamAbbr} Proj</span>
-                <span className="text-lg font-bold tabular-nums text-center">
-                  {displayAwayProj != null
-                    ? <AnimatedNumber value={displayAwayProj} decimals={1} suffix="" color="#ffffff" />
-                    : <span style={{ color: "#a1a1aa" }}>—</span>}
-                </span>
-                <span className="text-xs text-right truncate" style={{ color: "#a1a1aa" }}>
-                  {marketTab === "h1" ? "H1 proj" : "Projected final"}
-                </span>
-              </div>
-            );
+            if (i === 4) {
+              const showAwayButtons = marketTab === "full" && isValidAwayProj && awayEffTotalLine !== null;
+              return (
+                <div key={4} className="grid grid-cols-3 items-center gap-2" style={{ borderBottom: borderB, background: "#111111", padding: "16px 20px" }}>
+                  <span className="text-xs font-semibold uppercase tracking-wider truncate" style={{ color: "#71717a" }}>{play.awayTeamAbbr} Proj</span>
+                  <span className="text-lg font-bold tabular-nums text-center">
+                    {displayAwayProj != null
+                      ? <AnimatedNumber value={displayAwayProj} decimals={1} suffix="" color="#ffffff" />
+                      : <span style={{ color: "#a1a1aa" }}>—</span>}
+                  </span>
+                  <div className="flex justify-end items-center gap-1">
+                    {showAwayButtons ? (
+                      <>
+                        {(["over", "under"] as const).map(dir => {
+                          const isSelected = selectedTeamMarket?.team === "away" && selectedTeamMarket?.direction === dir;
+                          const btnColor = dir === "over" ? "#00d4aa" : "#ef4444";
+                          const prefix = dir === "over" ? "O" : "U";
+                          return (
+                            <button
+                              key={dir}
+                              data-testid={`ncaab-team-total-${dir}-away-${play.gameId}`}
+                              onClick={() => setSelectedTeamMarket(isSelected ? null : {
+                                team: "away", direction: dir, line: awayEffTotalLine!,
+                                isEstimated: awayIsEstimated, teamAbbr: play.awayTeamAbbr,
+                              })}
+                              style={{
+                                fontSize: 9, padding: "2px 5px", borderRadius: 4, fontWeight: 700,
+                                border: `1px solid ${isSelected ? btnColor : "#3f3f46"}`,
+                                color: isSelected ? btnColor : "#71717a",
+                                background: isSelected ? `${btnColor}1e` : "#1a1a1a",
+                                cursor: "pointer", lineHeight: 1.4,
+                              }}
+                            >
+                              {prefix}{awayIsEstimated ? "~" : ""}{awayEffTotalLine}
+                            </button>
+                          );
+                        })}
+                      </>
+                    ) : (
+                      <span className="text-xs truncate" style={{ color: "#a1a1aa" }}>
+                        {marketTab === "h1" ? "H1 proj" : "Projected final"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            }
             return (
-              <div key={5} className="grid grid-cols-3 items-center gap-2" style={{ borderBottom: borderB, background: "#111111", padding: "16px 20px" }}>
-                <span className="text-xs font-semibold uppercase tracking-wider truncate" style={{ color: "#71717a" }}>{play.homeTeamAbbr} Proj</span>
-                <span className="text-lg font-bold tabular-nums text-center">
-                  {displayHomeProj != null
-                    ? <AnimatedNumber value={displayHomeProj} decimals={1} suffix="" color="#ffffff" />
-                    : <span style={{ color: "#a1a1aa" }}>—</span>}
-                </span>
-                <span className="text-xs text-right truncate" style={{ color: "#a1a1aa" }}>
-                  {marketTab === "h1" ? "H1 proj" : "Projected final"}
-                </span>
-              </div>
+              (() => {
+                const showHomeButtons = marketTab === "full" && isValidHomeProj && homeEffTotalLine !== null;
+                return (
+                  <div key={5} className="grid grid-cols-3 items-center gap-2" style={{ borderBottom: borderB, background: "#111111", padding: "16px 20px" }}>
+                    <span className="text-xs font-semibold uppercase tracking-wider truncate" style={{ color: "#71717a" }}>{play.homeTeamAbbr} Proj</span>
+                    <span className="text-lg font-bold tabular-nums text-center">
+                      {displayHomeProj != null
+                        ? <AnimatedNumber value={displayHomeProj} decimals={1} suffix="" color="#ffffff" />
+                        : <span style={{ color: "#a1a1aa" }}>—</span>}
+                    </span>
+                    <div className="flex justify-end items-center gap-1">
+                      {showHomeButtons ? (
+                        <>
+                          {(["over", "under"] as const).map(dir => {
+                            const isSelected = selectedTeamMarket?.team === "home" && selectedTeamMarket?.direction === dir;
+                            const btnColor = dir === "over" ? "#00d4aa" : "#ef4444";
+                            const prefix = dir === "over" ? "O" : "U";
+                            return (
+                              <button
+                                key={dir}
+                                data-testid={`ncaab-team-total-${dir}-home-${play.gameId}`}
+                                onClick={() => setSelectedTeamMarket(isSelected ? null : {
+                                  team: "home", direction: dir, line: homeEffTotalLine!,
+                                  isEstimated: homeIsEstimated, teamAbbr: play.homeTeamAbbr,
+                                })}
+                                style={{
+                                  fontSize: 9, padding: "2px 5px", borderRadius: 4, fontWeight: 700,
+                                  border: `1px solid ${isSelected ? btnColor : "#3f3f46"}`,
+                                  color: isSelected ? btnColor : "#71717a",
+                                  background: isSelected ? `${btnColor}1e` : "#1a1a1a",
+                                  cursor: "pointer", lineHeight: 1.4,
+                                }}
+                              >
+                                {prefix}{homeIsEstimated ? "~" : ""}{homeEffTotalLine}
+                              </button>
+                            );
+                          })}
+                        </>
+                      ) : (
+                        <span className="text-xs truncate" style={{ color: "#a1a1aa" }}>
+                          {marketTab === "h1" ? "H1 proj" : "Projected final"}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()
             );
           })}
         </div>

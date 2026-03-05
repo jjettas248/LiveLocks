@@ -194,6 +194,7 @@ export interface ParlayPickInput {
   sportsbook: string;
   oddsAmerican: number;
   gameId?: string;
+  isEstimated?: boolean;
 }
 
 export interface ParlayResult {
