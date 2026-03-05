@@ -62,7 +62,7 @@ export async function autoResolveAlerts(storage: IStorage): Promise<void> {
     let resolved = 0;
     let failed = 0;
 
-    for (const [gameId, alerts] of byGameId) {
+    for (const [gameId, alerts] of Array.from(byGameId)) {
       try {
         const res = await fetch(
           `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${gameId}`,

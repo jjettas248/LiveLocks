@@ -1580,7 +1580,7 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId }: NCAABAdminTabPr
     }, 50);
   }, []);
 
-  const handleExpandGame = handleChipClick;
+  const handleExpandGame = (id: string | null) => { if (id) handleChipClick(id); };
 
   // Expand a game from outside (e.g. welcome banner Explore flow)
   useEffect(() => {

@@ -129,7 +129,7 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
   const rawData = window.atob(base64);
-  return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+  return Uint8Array.from(Array.from(rawData).map(c => c.charCodeAt(0)));
 }
 
 export default function Dashboard() {
@@ -225,7 +225,7 @@ export default function Dashboard() {
   const triggerBellFlash = () => {
     if (!bellRef.current) return;
     bellRef.current.classList.remove("bell-flash");
-    void bellRef.current.offsetWidth; // force reflow
+    void (bellRef.current as unknown as HTMLElement).offsetWidth; // force reflow
     bellRef.current.classList.add("bell-flash");
   };
 
@@ -996,7 +996,7 @@ export default function Dashboard() {
         setUpgradeModalState({ playsUsed: err.playsUsed ?? user?.playsUsed ?? 0, limit: err.limit ?? 15 });
         setShowUpgradeModal(true);
       } else if (res.ok) {
-        setUnlockedGameIds(prev => new Set([...prev, gameId]));
+        setUnlockedGameIds(prev => new Set(Array.from(prev).concat(gameId)));
         queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       } else {
         toast({ title: "Could not unlock game", description: "Please try again.", variant: "destructive" });
