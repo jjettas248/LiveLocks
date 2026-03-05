@@ -319,6 +319,18 @@ export const insertPersistedPlaySchema = createInsertSchema(persistedPlays).omit
 export type PersistedPlay = typeof persistedPlays.$inferSelect;
 export type InsertPersistedPlay = z.infer<typeof insertPersistedPlaySchema>;
 
+// ── Sent-alerts dedup table ───────────────────────────────────────────────────
+export const sentAlerts = pgTable(
+  "sent_alerts",
+  {
+    id:          serial("id").primaryKey(),
+    fingerprint: text("fingerprint").notNull().unique(),
+    userId:      integer("user_id").references(() => users.id),
+    sentAt:      timestamp("sent_at").defaultNow(),
+  },
+  (t) => ({ fingerprintIdx: index("idx_sent_alerts_fingerprint").on(t.fingerprint, t.userId) })
+);
+
 export interface PlayStats {
   buckets: {
     "60-69": { total: number; hits: number; misses: number; winRate: number };

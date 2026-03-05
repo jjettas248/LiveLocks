@@ -1,0 +1,83 @@
+Step 1 — Add the sent_alerts table
+Run this SQL in your Neon database console:
+sqlCREATE TABLE IF NOT EXISTS sent_alerts (
+  id serial PRIMARY KEY,
+  fingerprint text NOT NULL UNIQUE,
+  user_id integer REFERENCES users(id),
+  sent_at timestamp DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sent_alerts_fingerprint ON sent_alerts(fingerprint, user_id);
+
+Step 2 — Replace your SMS alert handler in Replit
+Find wherever your SMS send logic lives (likely server/alerts.ts or inside your halftime polling route) and replace it with this:
+typescriptimport twilio from 'twilio';
+import { db } from './db';
+
+const client = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
+);
+
+export async function sendAlertIfNew(
+  userId: number,
+  phone: string,
+  playerName: string,
+  statType: string,
+  line: string | number,
+  message: string
+) {
+  // Build deduplication fingerprint — one alert per player/stat/line per user per day
+  const fingerprint = `${userId}|${playerName}|${statType}|${line}|${new Date().toISOString().slice(0, 10)}`;
+
+  try {
+    // Check if already sent
+    const existing = await db.query(
+      `SELECT id FROM sent_alerts 
+       WHERE fingerprint = $1 
+       AND sent_at > NOW() - INTERVAL '24 hours'`,
+      [fingerprint]
+    );
+
+    if (existing.rows.length > 0) {
+      console.log(`[SMS] Skipping duplicate alert: ${fingerprint}`);
+      return { sent: false, reason: 'duplicate' };
+    }
+
+    // Send the SMS
+    await client.messages.create({
+      body: message,
+      from: process.env.TWILIO_FROM_NUMBER,
+      to: phone
+    });
+
+    // Log it to prevent resend
+    await db.query(
+      `INSERT INTO sent_alerts (fingerprint, user_id, sent_at) 
+       VALUES ($1, $2, NOW())`,
+      [fingerprint, userId]
+    );
+
+    console.log(`[SMS] Sent to user ${userId}: ${fingerprint}`);
+    return { sent: true };
+
+  } catch (err) {
+    console.error(`[SMS] Failed for user ${userId}:`, err);
+    return { sent: false, reason: 'error' };
+  }
+}
+
+Step 3 — Update every place that calls your SMS send
+Replace any direct client.messages.create() calls with sendAlertIfNew(). For your halftime loop it should look like:
+typescript// Inside your halftime detection loop
+for (const user of eligibleUsers) {
+  if (!user.sms_alerts || !user.phone_number) continue;
+  
+  await sendAlertIfNew(
+    user.id,
+    user.phone_number,
+    playerName,     // e.g. "LeBron James"
+    statType,       // e.g. "Points"
+    line,           // e.g. 25.5
+    `LiveLocks AI: 🔒 Halftime signal triggered. Our scanner is flagging a probability gap on tonight's games. Check the dashboard: www.livelocksai.app Reply STOP to opt out.`
+  );
+}
