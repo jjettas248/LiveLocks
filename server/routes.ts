@@ -698,7 +698,7 @@ export async function registerRoutes(
       for (const game of halftimeGames) {
         // Resolve Odds API event ID for this game (for live prop lines)
         let oddsEventId: string | null = null;
-        const oddsPlayerCache = new Map<string, number | null>(); // "playerName|statType" → line
+        const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[] } | null>(); // "playerName|statType" → { line, bookKeys }
         try {
           const { resolveOddsEventId: resolveId } = await import("./oddsService");
           oddsEventId = await resolveId(game.homeTeamAbbr, game.awayTeamAbbr);
@@ -823,7 +823,8 @@ export async function registerRoutes(
                     try {
                       const { getPlayerOdds } = await import("./oddsService");
                       const oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, true);
-                      const books = Object.values(oddsResult) as any[];
+                      const bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
+                      const books = bookKeys.map(k => (oddsResult as any)[k]);
                       if (books.length > 0) {
                         const lines = books.map((b: any) => b.line as number);
                         // Estimate direction: H1 stat + rough H2 projection (half season avg)
@@ -833,14 +834,14 @@ export async function registerRoutes(
                         const bestLine = roughExpected >= medianLine
                           ? Math.min(...lines)
                           : Math.max(...lines);
-                        oddsPlayerCache.set(cacheKey, bestLine);
+                        oddsPlayerCache.set(cacheKey, { line: bestLine, bookKeys });
                       } else {
                         oddsPlayerCache.set(cacheKey, null);
                       }
                     } catch { oddsPlayerCache.set(cacheKey, null); }
                   }
-                  const oddsLine = oddsPlayerCache.get(cacheKey);
-                  if (oddsLine != null) { liveLine = oddsLine; lineSource = "odds_api"; }
+                  const oddsEntry = oddsPlayerCache.get(cacheKey);
+                  if (oddsEntry != null) { liveLine = oddsEntry.line; lineSource = "odds_api"; }
                 }
 
                 const result = await storage.calculateProbability({
@@ -859,6 +860,8 @@ export async function registerRoutes(
                 const edge = Math.abs(result.probability - 50);
                 if (edge < 5) continue;
 
+                const cacheKey2 = `${playerName}|${statType}`;
+                const oddsEntry2 = oddsPlayerCache.get(cacheKey2);
                 allPlays.push({
                   gameId: game.gameId,
                   homeTeamAbbr: game.homeTeamAbbr,
@@ -877,6 +880,7 @@ export async function registerRoutes(
                   halftimeFouls: parseStat(statMap["pf"]),
                   line: liveLine,
                   lineSource,
+                  bookKeys: oddsEntry2?.bookKeys ?? [],
                   probability: result.probability,
                   edge,
                   expectedTotal: result.expectedTotal,

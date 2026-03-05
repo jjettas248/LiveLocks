@@ -379,6 +379,8 @@ export default function Dashboard() {
   const [now, setNow] = useState(Date.now());
   const [slateFilterProp, setSlateFilterProp] = useState<string>("all");
   const [slateFilterProb, setSlateFilterProb] = useState<string>("all");
+  const [nbaBookFilter, setNbaBookFilter] = useState<string>("all");
+  const [ncaabBookFilter, setNcaabBookFilter] = useState<string>("all");
   const [showAlertsPanel, setShowAlertsPanel] = useState(false);
   const [showHistorySheet, setShowHistorySheet] = useState(false);
   const [notificationLog, setNotificationLog] = useState<NotificationLog[]>([]);
@@ -1192,6 +1194,37 @@ export default function Dashboard() {
     if (slateFilterProb === "high" && play.probability < 65 && play.probability > 35) return false;
     if (slateFilterProb === "medium" && (play.probability >= 65 || play.probability <= 35)) return false;
     return true;
+  };
+
+  const BOOK_OPTIONS = [
+    { key: "all",  abbr: "All",  label: "All Books" },
+    { key: "dk",   abbr: "DK",   label: "DraftKings" },
+    { key: "fd",   abbr: "FD",   label: "FanDuel" },
+    { key: "mgm",  abbr: "MGM",  label: "BetMGM" },
+    { key: "br",   abbr: "BR",   label: "BetRivers" },
+    { key: "espn", abbr: "ESPN", label: "ESPN Bet" },
+  ] as const;
+
+  const bookKeyMap: Record<string, string[]> = {
+    dk:   ["draftkings", "draft_kings", "dk"],
+    fd:   ["fanduel", "fan_duel", "fd"],
+    mgm:  ["betmgm", "mgm", "bet_mgm"],
+    br:   ["betrivers", "bet_rivers", "br", "sugarhouse"],
+    espn: ["espnbet", "espn_bet", "espn"],
+  };
+
+  const filterByBook = (plays: any[], bookKey: string): any[] => {
+    if (bookKey === "all") return plays;
+    const validKeys = bookKeyMap[bookKey] ?? [bookKey];
+    return plays.filter(play => {
+      const bookKeys: string[] = play.bookKeys ?? [];
+      return bookKeys.some(bk => validKeys.some(vk => bk.toLowerCase().includes(vk)));
+    });
+  };
+
+  const getBookCount = (plays: any[], bookKey: string): number => {
+    const preFiltered = plays.filter(filterPlay);
+    return filterByBook(preFiltered, bookKey).length;
   };
 
   const unlock2hGame = async (gameId: string) => {
@@ -2792,6 +2825,43 @@ export default function Dashboard() {
                   </div>
               </div>
 
+              {/* Book filter — Row 4 */}
+              <div className="flex items-center gap-2 mb-3 overflow-x-auto" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
+                <span className="text-xs uppercase tracking-wider shrink-0" style={{ color: "#a1a1aa" }}>Book:</span>
+                <div className="flex gap-1.5 flex-nowrap">
+                  {(() => {
+                    const allPlaysForCount = halftimePlaysData?.plays ?? [];
+                    return BOOK_OPTIONS.map(opt => {
+                      const count = opt.key === "all" ? null : getBookCount(allPlaysForCount, opt.key);
+                      const isZero = count !== null && count === 0;
+                      const isSelected = nbaBookFilter === opt.key;
+                      return (
+                        <button
+                          key={opt.key}
+                          data-testid={`book-filter-${opt.key}`}
+                          onClick={() => setNbaBookFilter(opt.key)}
+                          style={{
+                            opacity: isZero ? 0.4 : 1,
+                            background: isSelected ? "#27272a" : "#181818",
+                            border: isSelected ? "1.5px solid #ffffff" : "1px solid #27272a",
+                            color: isSelected ? "#ffffff" : "#71717a",
+                            fontSize: 11,
+                            fontWeight: isSelected ? 700 : 400,
+                            borderRadius: 9999,
+                            padding: "4px 10px",
+                            whiteSpace: "nowrap",
+                            cursor: "pointer",
+                            transition: "all 80ms ease",
+                          }}
+                        >
+                          {opt.key === "all" ? "All" : count !== null ? `${opt.abbr} · ${count}` : opt.abbr}
+                        </button>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+
               {/* Loading */}
               {isHalftimePlaysLoading && (
                 <div className="flex items-center justify-center py-12 gap-2 text-muted-foreground">
@@ -2830,7 +2900,7 @@ export default function Dashboard() {
                       {pageGroups.map((group) => {
                         const isExiting = !!exitingGames[group.gameId];
                         const gameUnlocked = !isFreeUser || unlockedGameIds.has(group.gameId);
-                        const groupFiltered = group.plays.filter(filterPlay);
+                        const groupFiltered = filterByBook(group.plays.filter(filterPlay), nbaBookFilter);
                         const isGameUnlocking = unlocking2hGame === group.gameId;
                         const playsRemaining = Math.max(0, 15 - (user?.playsUsed ?? 0));
                         return (
@@ -2898,12 +2968,32 @@ export default function Dashboard() {
                               )}
 
                               {/* Unlocked plays grid */}
-                              {gameUnlocked && groupFiltered.length === 0 && (
-                                <div className="text-center py-8 text-muted-foreground">
-                                  <p className="text-sm">No plays match the current filters.</p>
-                                  <button onClick={() => { setSlateFilterProp("all"); setSlateFilterProb("all"); }} className="text-xs text-primary mt-2 hover:underline">Clear filters</button>
-                                </div>
-                              )}
+                              {gameUnlocked && groupFiltered.length === 0 && (() => {
+                                const bookOpt = BOOK_OPTIONS.find(b => b.key === nbaBookFilter);
+                                const isBookCausing = nbaBookFilter !== "all" && filterByBook(group.plays.filter(filterPlay), "all").length > 0;
+                                if (isBookCausing) {
+                                  return (
+                                    <div className="text-center py-8 flex flex-col items-center gap-2">
+                                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#52525b" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                                      <p className="text-sm font-semibold" style={{ color: "#a1a1aa" }}>{bookOpt?.label ?? "Selected book"} lines not yet posted</p>
+                                      <p className="text-xs" style={{ color: "#71717a" }}>Props may not be available at this book for this game yet</p>
+                                      <button
+                                        data-testid="button-show-all-books"
+                                        onClick={() => setNbaBookFilter("all")}
+                                        style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "#a1a1aa", fontSize: 11, borderRadius: 9999, padding: "6px 16px", marginTop: 4, cursor: "pointer" }}
+                                      >
+                                        Show All Books
+                                      </button>
+                                    </div>
+                                  );
+                                }
+                                return (
+                                  <div className="text-center py-8 text-muted-foreground">
+                                    <p className="text-sm">No plays match the current filters.</p>
+                                    <button onClick={() => { setSlateFilterProp("all"); setSlateFilterProb("all"); setNbaBookFilter("all"); }} className="text-xs text-primary mt-2 hover:underline">Clear filters</button>
+                                  </div>
+                                );
+                              })()}
                               {gameUnlocked && groupFiltered.length > 0 && (
                                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                                   {groupFiltered.map((play: any, idx: number) => {
@@ -2977,7 +3067,11 @@ export default function Dashboard() {
                                               : { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#71717a" }
                                             }
                                           >
-                                            {hasLiveLine ? "Live Line" : "Season Avg"}
+                                            {hasLiveLine
+                                              ? (nbaBookFilter !== "all"
+                                                  ? `${BOOK_OPTIONS.find(b => b.key === nbaBookFilter)?.abbr ?? ""} Line`
+                                                  : "Live Line")
+                                              : "Season Avg"}
                                           </span>
                                           <span className="text-xs" style={{ color: play.halftimeStat > 0 ? "#71717a" : "#52525b" }}>
                                             H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}

@@ -1,218 +1,52 @@
 # LiveLocks by PropPulse — NBA/NCAAB Live Lines
 
 ## Overview
-A full-stack NBA + NCAAB live betting analytics PWA. Calculates probability of a player hitting a live prop line at halftime, shows NCAAB live spread/total/team-total probabilities, and lets users build correlation-adjusted parlays. Real live game data from ESPN + The Odds API + Sports Game Odds (SGO). Stripe subscriptions, SMS/push alerts, admin panel.
+LiveLocks is a full-stack Progressive Web Application (PWA) designed for betting analytics in NBA and NCAAB. It offers real-time probabilities for player prop bets at halftime, analyzes NCAAB live spread/total/team-total probabilities, and enables users to construct correlation-adjusted parlays. The platform integrates live game data from ESPN, The Odds API, and Sports Game Odds (SGO). Key features include Stripe-based subscriptions, SMS/push notifications, and an administrative panel for system management. The project aims to provide a comprehensive tool for sports bettors, enhancing their decision-making with data-driven insights.
 
-## Architecture
-- **Frontend**: React + Vite, Tailwind CSS, shadcn/ui, TanStack Query, react-hook-form, wouter
-- **Backend**: Express.js (TypeScript, tsx)
-- **Database**: PostgreSQL via Drizzle ORM
-- **Shared types**: `shared/schema.ts` and `shared/routes.ts`
+## User Preferences
+I prefer clear and concise explanations. When implementing new features or making significant changes, please propose the high-level plan first and wait for my approval before proceeding with detailed implementation. For UI/UX, I prefer modern, clean designs with intuitive navigation. I am open to iterative development and feedback loops.
 
-## Tab Structure
-```
-Top tab bar:  [🏀 NBA Live]  [🏀 NCAAB Live]*  [⚾ MLB Live 🔒]
+## System Architecture
 
-When NBA Live active, sub-tabs appear:
-              [Live Props]  [2H Plays]
+### Frontend
+- **Frameworks**: React with Vite for fast development, Tailwind CSS for styling, and `shadcn/ui` for UI components.
+- **Data Fetching**: TanStack Query manages server state.
+- **Forms**: `react-hook-form` is used for form management.
+- **Routing**: `wouter` provides a lightweight routing solution.
+- **UI/UX**:
+    - **Tab Structure**: A top tab bar for NBA Live, NCAAB Live, and a locked MLB Live section. Sub-tabs appear based on the main sport selected (e.g., "Live Props," "2H Plays").
+    - **Tier Access**: NCAAB tab access is controlled by subscription tier, unlocking features for Pro/All Sports users.
+    - **Book Filtering**: NBA 2H Plays include a book filter with pills (All, DK, FD, MGM, BR, ESPN) that persists across sub-tabs but resets on sport tab switch.
+    - **NCAAB Game Card**: Features market buttons (Over/Under/Spread), radial probability gauges, EV verdicts, and CLV indicators.
+    - **Daily Slate Reset**: A system for clearing daily state, triggering a full-screen "New Slate Loading" overlay with progress animation and configurable reset times via an admin panel.
+    - **Team Total Market**: Over/Under team-total buttons are embedded in projection rows, driven by `selectedTeamMarket` state.
+    - **H2H Matchup History**: Displays historical game results and spread coverage for teams.
+    - **NCAAB Games Strip**: A horizontal scrollable chip bar showing live scores and scheduled times, allowing quick navigation to specific games.
+    - **Welcome Experience**: New Pro users see a `WelcomeBanner` and a "NEW" badge on the NCAAB tab for a limited time post-upgrade.
+    - **Mobile UX**: Parlay Slip functions as a bottom sheet on mobile and a side column on desktop.
+    - **Progressive Probability Limits**: Engine probabilities are clamped to a narrowing range as the game progresses to account for data sufficiency.
+    - **Neutral State Handling**: If game progress is low and probabilities are near 50%, a "Insufficient Data" verdict is displayed.
 
-When NCAAB Live active, sub-tabs appear:
-              [Live]  [2H Plays]
-```
-*NCAAB tab always visible; locked (Lock icon) for free users → clicking opens upgrade modal; unlocked for Pro/All Sports/Admin
+### Backend
+- **Framework**: Express.js, written in TypeScript and executed with `tsx`.
+- **Database**: PostgreSQL, managed with Drizzle ORM.
+- **Shared Components**: `shared/schema.ts` for database schema and `shared/routes.ts` for API routes ensure type safety and consistency between frontend and backend.
+- **Authentication**: JWT-based authentication with Bearer tokens stored in localStorage.
+- **Access Control**: Role-based access control (e.g., `requireAuth`, `requireTier`, `requireAdmin`) is implemented for API endpoints to manage feature access based on user subscription tiers and admin status.
+- **SMS Alerts**: Integrated with Twilio for sending SMS notifications and handling opt-out requests via webhooks.
+- **NBA Probability Model**: Calculates player probabilities based on observed stats, season baseline, foul penalties, defensive ratings, and pace multipliers.
+- **NCAAB Engine**: Consolidates data from ESPN, The Odds API, and SGO to calculate game and player probabilities using dynamic multipliers and clamping functions.
+- **Roster Sync**: An API endpoint to pull live ESPN rosters and map team abbreviations.
 
-## Tier Structure (2 paid tiers)
+### Admin Panel
+- Provides an interface to view users, manage subscription tiers, reset play counts, and review user feedback.
+- Allows configuration of the daily slate reset time.
 
-| Feature | Free | Pro ($40/mo) | All Sports ($65/mo) |
-|---------|------|------------|------------------|
-| NBA Live Props | 15 plays then paywall | unlimited | unlimited |
-| NBA 2H Plays | locked | yes | yes |
-| NCAAB Live + 2H | no | yes | yes |
-| MLB Live | no | no | coming soon |
-| Push Notifications | no | yes | yes |
-| SMS Alerts | no | yes | yes (priority) |
-| Parlay Builder | yes (with plays) | yes | yes |
+## External Dependencies
 
-- Internal tier keys: `null` = free, `"all"` = Pro, `"elite"` = All Sports
-- **Admin**: jaylin.becker22@icloud.com / LiveLocks2026!
-- Free play limit: **15 plays**
-
-## Stripe Products
-- **Pro – LiveLocks** → tier `"all"` → $40/mo → `price_1T6fl12cW8Vmrgt3B6ffBIuw`
-- **All Sports – LiveLocks** → tier `"elite"` → $65/mo → `price_1T6fly2cW8Vmrgt3WU9uHL7L`
-- Seeded via `npx tsx scripts/seed-stripe-products.ts`
-
-## Authentication & Subscriptions
-- JWT-based auth (Bearer token in localStorage `ll_auth_token`)
-- Registration requires SMS consent checkbox (`smsConsent: boolean` in DB)
-- Admin: `ADMIN_EMAIL` env var → unlimited access
-- Stripe webhook: `POST /api/stripe/webhook`
-- Checkout: `POST /api/stripe/checkout` with `{ tier: "all" | "elite" }`
-
-### Access Control (Backend)
-- `/api/calculate` — requires auth + play count check (`requirePlayAccess`)
-- `/api/halftime-plays` — requires `requireTier("all","elite")`
-- `/api/ncaab/plays`, `/api/ncaab/games` — requires `requireTier("all","elite")`
-- `/api/user/alerts/sms` — requires `["all","elite"]` subscription
-- `/api/webhooks/twilio` — no auth (Twilio STOP webhook)
-- **`/api/me`** — `requireAuth`; always reads fresh from DB; returns `{ id, email, isAdmin, subscriptionTier, hasNcaabAccess, requiresRefresh }`. Called on mount in dashboard to patch `localTier` state if DB tier differs from session tier.
-- **`/api/admin/verify-access?userId=X`** — `requireAdmin`; returns `{ dbTier, hasNcaabAccess, requiresRefresh }` for any user. Powers "Verify" button in admin users table.
-
-### NCAAB Tab Access Fix (Frontend)
-- **Root bug**: Tab was wrapped in `{user?.isAdmin && ...}` — hidden for all non-admin users including Pro
-- **Fix**: Tab always rendered; `hasNcaabAccess = user.isAdmin || ["all","elite"].includes(effectiveTier)`
-- **`effectiveTier`**: `localTier !== undefined ? localTier : (user?.subscriptionTier ?? user?.tier ?? user?.metadata?.tier ?? null)` — `??` chain covers all tier field locations
-- **`localTier`** state: patched from `/api/me` on mount when DB tier differs from session; ensures admin tier upgrades show immediately without re-login
-- **`setUserSubscriptionTier`** in storage.ts now also sets `requiresRefresh: true` so next session refresh picks up tier changes
-- **Admin "Verify" button**: appears on every non-admin user row; fetches `/api/admin/verify-access`; shows inline color-coded badges for DB tier, NCAAB access (✓/✗), and refresh status
-
-### SMS Alerts (Twilio)
-- Required env vars: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`
-- `POST /api/webhooks/twilio` — handles STOP/UNSUBSCRIBE/CANCEL/END/QUIT → sets smsAlerts=false + smsConsent=false; always returns `<Response></Response>` XML
-- Available to Pro (`all`) and All Sports (`elite`) subscribers
-- `server/twilioService.ts` wraps the Twilio SDK
-- Gracefully degrades if env vars missing
-
-## Database Tables
-- `players` — id, name, team (3-letter abbr), position, avgMinutes, avgFouls, ppg, rpg, apg, spg, bpg, usageRate, statsUpdatedAt, h2ppg, h2rpg, h2apg, h2spg, h2bpg, h2tpg, h2avgMinutes
-- `team_defense` — id, teamName, position, defRating
-- `users` — id, email, passwordHash, isAdmin, subscriptionTier, playsUsed, stripeCustomerId, stripeSubscriptionId, pushSubscription, pushAlerts, phoneNumber, smsAlerts, smsConsent, **isNewProUser**, **requiresRefresh**, **upgradedAt**
-- `feedback` — id, userId (nullable FK → users), message, createdAt
-- `stripe.*` — managed by stripe-replit-sync
-
-## NCAAB Engine (server/ncaabService.ts)
-
-### Data Sources
-1. **ESPN Scoreboard** — `?limit=300&groups=50` all Div I live games + box scores
-2. **The Odds API** — spread/total book lines + American odds
-3. **Sports Game Odds (SGO)** — 1H lines + team total lines per team
-
-### Probability Formula
-`overProb = clamp(50 + (projectedTotal - line) × multiplier × 0.3, 1, 99)`
-
-- `getDynamicMultiplier(secsRemaining, 2400, period, 2)` — steps from 3.0 (early) → 12.0 (late/OT)
-- `getH1Multiplier(h1Progress)` — same step table for H1-specific market
-- `sanitizeProb(prob, secsElapsed)` — returns 50 if < 60s elapsed (no data guard)
-
-### Post-halftime H1 settlement
-After halftime (half === 2 or isHalftime), `over1HProb` is set to 99/1 based on actual H1 total vs the H1 line.
-
-### isNeutralState (frontend)
-`gameProgress < 10%` AND raw engine prob within [45, 55] → shows "--" gauge, "EARLY GAME" label, "Insufficient Data" verdict, "--" market percentages.
-
-### progressive prob limits (frontend)
-`limitedEngineProb(rawProb, gameProgress)` — clamps to narrowing range as game progresses:
-- < 10%: [30, 70]; < 25%: [20, 80]; < 50%: [10, 90]; < 75%: [5, 95]; < 90%: [3, 97]; else: [1, 99]
-
-### NCAABPlay Fields (key)
-- `homeGameTotalLine`, `awayGameTotalLine` — from SGO team total odds (Priority 1)
-- `homeGameTotalIsEstimated`, `awayGameTotalIsEstimated` — true when SGO + ESPN both null → derived from proj
-- `home1HTotalLine`, `away1HTotalLine` — SGO 1H team total lines
-- `h1TotalLine` — SGO 1H total line (whole game)
-- `homeProjected`, `awayProjected` — projected final score per team
-- `half`, `period`, `clock` — live game state
-
-## NCAAB Game Card Features
-
-### Market Buttons
-Three primary buttons: Over / Under / Spread. Clicking selects the market and updates:
-- RadialGauge (teal/red arc showing engine probability)
-- EV verdict row: "Strong/Lean [Side] EV" or "Neutral — No Edge"
-- CLV row: "↑ Over" / "↓ Under" / "Even"
-- +Xpp amber pill when edge ≥ 5pp
-
-### Daily Slate Reset System (SHIPPED)
-- `executeSlateReset` in `dashboard.tsx` — clears daily state (notificationLog, parlayPicks, halftimeGroups), forces NCAABAdminTab remount via `ncaabResetKey`, refetches all scoreboard data
-- **Model Performance is NOT cleared** — confidence buckets accumulate indefinitely across days
-- `resetTimerRef` (useRef) — single persistent timer; `rescheduleResetTimer(hours, minutes)` recalculates delay + re-registers timeout after each fire
-- `getResetTime()` — reads from `GET /api/admin/settings` → localStorage fallback → default 6:00 AM EST
-- `NewSlateOverlay` component — full-screen fixed overlay (z-index 100, dark blur bg), pulsing logo, "New Slate Loading" heading, date subtext, teal progress bar (fills over 2.8s), 5-step text cycling every 600ms via `setInterval`, live game count at step 4, enter/exit opacity transitions (200ms in, 300ms out)
-- `RESET_STEPS` array: "Clearing yesterday's slate..." → "Fetching today's NBA games..." → "Fetching today's NCAAB games..." → "Engine ready..." → "Let's go 🔒"
-- **Overlay is rendered outside all tab content** at top of dashboard return JSX
-
-### Configurable Reset Time (Admin — SHIPPED)
-- **`appSettings` table** in DB (id serial PK, `slate_reset_hour` int default 6, `slate_reset_minute` int default 0)
-- `GET /api/admin/settings` → returns `{ slateResetHour, slateResetMinute }` (requireAdmin)
-- `POST /api/admin/settings` → validates 0–23 hour, 0–59 minute, upserts row id=1
-- **Admin Slate Settings section** (`/admin` page, below users/feedback): HH:MM time input + "EST" label + "Save Reset Time" button + "Next reset: [Day] at [TIME] EST" live display
-- `getNextResetDisplay(timeStr)` — pure helper that converts HH:MM → "Friday at 6:00 AM EST"
-- Admin save writes to DB + localStorage; dashboard reads DB first then localStorage then default on mount
-
-### Team Total Market (SHIPPED)
-- Over/Under team-total buttons embedded in proj rows (rows 4/5 of stat grid)
-- `selectedTeamMarket` state drives a second verdict section below game total verdicts
-- **Line priority**: SGO → ESPN 3-location summary scan → `deriveTeamTotalLine(proj)` (estimated, shown with "~")
-- `homeGameTotalIsEstimated` / `awayGameTotalIsEstimated` flags on `NCAABPlay`; estimated lines compress confidence 40% toward 50
-- "Est." badge in divider header; confidence note below verdict when estimated
-- Parlay "+" button on team total EV row; `isEstimated` field on `ParlayPickInput`; amber "Est." pill in parlay slip
-
-### H2H Matchup History
-- **H2HSection** component: toggle row (ChevronDown animated) + animated slide-down rows
-- **Dual badges per row**: O/U result (OVER/UNDER/PUSH/N/A) + spread coverage
-- **Fetch**: current season first; if < 2 games → extend to prior season; deduplicate by event ID; max 3 rows
-- **Season label**: prior-season rows show "[date] · Prior Season" in zinc-600 italic
-- **Insufficient states**: 0 games = "No matchup history found", 1 game = note below row
-
-### NCAABGamesStrip
-- 160px horizontal scrollable chip bar above game list
-- Chips show live scores / halftime / scheduled times
-- Clicking a chip scrolls to and expands that game's card
-- Always rendered above `GroupedGamesList` — not nested inside same container
-
-## Welcome Experience (New Pro Users)
-- `isNewProUser`, `requiresRefresh`, `upgradedAt` columns on `users` table
-- Set by Stripe webhook on `checkout.session.completed` and admin tier change
-- **WelcomeBanner**: spring-in animated card; contextual subtitle (# live games / halftime / scheduled); "Explore →" button triggers tab switch + scroll to first live game; "Dismiss" clears flag via `POST /api/user/clear-new-pro-flag`
-- **NEW badge**: teal animated badge on NCAAB tab button, visible for 24h from `upgradedAt`; 30-min interval re-check
-- **`expandToGameId`** prop on NCAABAdminTab: `useEffect` expands target card and scrolls to it
-
-## Admin Panel (/admin)
-- View all users, change subscription tier, reset play counts, read feedback
-- Change tier: `null` → `"all"` → `"elite"` (no `"nba"` tier)
-- Tier changes via Stripe API (create/update subscription) or direct DB write if no Stripe customer
-
-## NCAAB H2H API
-- `getNCAABH2H(gameId)` — ESPN team schedule endpoint, dual-season fetch, cached per gameId
-- `/api/ncaab/h2h?gameId=X` → `{ games: H2HGame[] }` (requireAdmin)
-- `H2HGame` fields: `date`, `location`, `awayScore`, `homeScore`, `total`, `spread`, `spreadTeam`, `awayAbbr`, `homeAbbr`, `awayTeam`, `homeTeam`, `isCurrent`
-
-## NBA Roster Sync
-- `POST /api/sync-rosters` — pulls live ESPN rosters, maps team abbreviations via `ESPN_TO_DB`
-- Key abbr fixes: `UTH → UTA`, `UTAH → UTA`, `GS → GSW`, `PHO → PHX`, `WSH → WAS`, `CHO → CHA`
-- Position mapping: ESPN `G → SG`, `F → SF`, `FC → PF`, `GF → SF`
-
-## Parlay Builder
-- `ParlayPickInput` fields: `playerId`, `playerName`, `playerTeam`, `statType`, `line`, `probability`, `betDirection`, `sportsbook`, `oddsAmerican`, `gameId?`, `isEstimated?`
-- NCAAB stat types: `ncaab_total`, `ncaab_1h_total`, `ncaab_spread`, `ncaab_team_total`
-- `parlay-slip.tsx` renders each leg with name, stat badge, sportsbook, probability; estimated legs show amber "Est." pill with tooltip
-
-## Mobile UX
-- JWT works everywhere (mobile, iframes, cross-origin)
-- Parlay Slip: bottom sheet on mobile (< 1024px), side column on desktop
-
-## Required Environment Variables
-- `ADMIN_EMAIL` — Admin account email
-- `ODDS_API_KEY` — The Odds API key
-- `SGO_API_KEY` — Sports Game Odds API key (team totals, 1H lines)
-- `STRIPE_SECRET_KEY` — Stripe secret key
-- `VITE_STRIPE_PUBLISHABLE_KEY` — Stripe publishable key
-- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` — SMS alerts
-- `SESSION_SECRET`, `DATABASE_URL` — already set
-
-## NBA Probability Model (Players)
-1. Derive per-minute rate from halftime observed stats (70%) + season baseline (30%)
-2. Project remaining minutes after foul penalty
-3. Multiply by defense rating (opponent vs player's position)
-4. Multiply by blended pace multiplier
-5. `probability = 50 + difference × scaleFactor` (clamped 2–98%)
-
-## 2025-26 Roster Notes (Key Trades)
-- Luka Doncic → LAL; Anthony Davis → DAL
-- De'Aaron Fox → SAS; Jimmy Butler → GSW
-- Domantas Sabonis → MIL; Cooper Flagg (2025 #1 pick) → NOP
-
-## Debug Notes
-- TypeScript strict mode: always use `Array.from()` for Set/Map iteration instead of `[...spread]`
-- `bellRef` is typed `SVGSVGElement` — cast to `HTMLElement` for `.offsetWidth` DOM reflow trick
-- `stripeService.ts` tier key is `"all" | "elite"` (never `"nba"`)
-- `onExpandGame` prop on GroupedGamesList expects `(id: string | null) => void`
+- **ESPN**: Primary source for live game data, scores, and player statistics.
+- **The Odds API**: Provides spread/total book lines and American odds.
+- **Sports Game Odds (SGO)**: Used for 1H lines and team total lines.
+- **Stripe**: Payment gateway for subscription management, including product definitions and webhook processing.
+- **Twilio**: SMS service for user alerts and notifications.
+- **PostgreSQL**: Relational database for storing all application data.
