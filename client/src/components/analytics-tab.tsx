@@ -19,6 +19,30 @@ interface AnalyticsSummary {
   overallWinRate: number;
 }
 
+interface PersistedPlay {
+  id: string;
+  createdAt: string;
+  gameId: string;
+  playerId: string | null;
+  playerName: string;
+  team: string | null;
+  sport: string;
+  market: string;
+  direction: string;
+  line: string;
+  prob: string;
+  engineProb: string | null;
+  bookImplied: string | null;
+  edgeGap: string | null;
+  gameDate: string;
+  timestamp: string;
+  result: string | null;
+  finalStat: string | null;
+  settledAt: string | null;
+  notificationSent: boolean | null;
+  duplicateGuard: string | null;
+}
+
 interface PlayAlert {
   id: number;
   gameId: string;
@@ -83,6 +107,11 @@ export function AnalyticsTab() {
 
   const { data: alertsData, isLoading: alertsLoading } = useQuery<{ alerts: PlayAlert[] }>({
     queryKey: ["/api/analytics/alerts"],
+    refetchInterval: 5 * 60 * 1000,
+  });
+
+  const { data: persistedPlaysData, isLoading: persistedPlaysLoading } = useQuery<{ plays: PersistedPlay[]; total: number }>({
+    queryKey: ["/api/plays"],
     refetchInterval: 5 * 60 * 1000,
   });
 
@@ -258,6 +287,87 @@ export function AnalyticsTab() {
                         ) : (
                           <span className="text-gray-500" data-testid={`result-pending-${alert.id}`}>Pending</span>
                         )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* ── PERSISTED PLAYS SECTION ───────────────────────────────── */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-gray-300">
+            Persisted Plays (new table — duplicateGuard UNIQUE)
+          </h3>
+          {persistedPlaysData && (
+            <span className="text-xs text-gray-500">
+              {persistedPlaysData.total} total
+            </span>
+          )}
+        </div>
+        {persistedPlaysLoading ? (
+          <div className="space-y-2">
+            {[0, 1, 2].map(i => (
+              <div
+                key={i}
+                className="h-10 rounded-lg animate-pulse"
+                style={{ background: "#18181b" }}
+              />
+            ))}
+          </div>
+        ) : !persistedPlaysData || persistedPlaysData.plays.length === 0 ? (
+          <div
+            className="text-center py-8 rounded-xl text-xs"
+            data-testid="no-persisted-plays-message"
+            style={{ background: "#111", border: "1px solid #27272a", color: "#52525b" }}
+          >
+            No persisted plays yet — plays record automatically when NBA halftime plays load.
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl" style={{ border: "1px solid #27272a" }}>
+            <table className="w-full text-xs" data-testid="persisted-plays-table">
+              <thead>
+                <tr style={{ borderBottom: "1px solid #27272a", background: "#111" }}>
+                  {["Date", "Player", "Sport", "Market", "Dir", "Line", "Prob", "Edge", "Result"].map(h => (
+                    <th key={h} className="px-3 py-2 text-left font-medium" style={{ color: "#71717a" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(persistedPlaysData.plays).map((play, idx) => {
+                  const prob = Number(play.prob);
+                  const edge = play.edgeGap != null ? Number(play.edgeGap) : null;
+                  const resultColor = play.result === "hit" ? "#22c55e" : play.result === "miss" ? "#ef4444" : "#71717a";
+                  return (
+                    <tr
+                      key={play.id}
+                      data-testid={`persisted-play-row-${play.id}`}
+                      style={{
+                        borderBottom: idx < (persistedPlaysData.plays.length - 1) ? "1px solid #1a1a1a" : undefined,
+                        background: play.result === "hit" ? "rgba(34,197,94,0.04)" : play.result === "miss" ? "rgba(239,68,68,0.04)" : undefined,
+                      }}
+                    >
+                      <td className="px-3 py-2" style={{ color: "#71717a", whiteSpace: "nowrap" }}>{play.gameDate}</td>
+                      <td className="px-3 py-2 font-medium" style={{ color: "#e4e4e7", whiteSpace: "nowrap" }}>
+                        {play.playerName}
+                        {play.team && <span className="ml-1" style={{ color: "#52525b" }}>{play.team}</span>}
+                      </td>
+                      <td className="px-3 py-2" style={{ color: "#a1a1aa" }}>{play.sport.toUpperCase()}</td>
+                      <td className="px-3 py-2" style={{ color: "#a1a1aa" }}>{STAT_LABELS[play.market] ?? play.market}</td>
+                      <td className="px-3 py-2 font-semibold" style={{ color: play.direction === "over" ? "#00d4aa" : "#ef4444" }}>
+                        {play.direction === "over" ? "O" : "U"}
+                      </td>
+                      <td className="px-3 py-2 text-center" style={{ color: "#e4e4e7" }}>{Number(play.line).toFixed(1)}</td>
+                      <td className="px-3 py-2 text-center" style={{ color: "#a1a1aa" }}>{prob.toFixed(0)}%</td>
+                      <td className="px-3 py-2 text-center" style={{ color: edge != null && edge >= 10 ? "#f59e0b" : "#52525b" }}>
+                        {edge != null ? `+${edge.toFixed(1)}pp` : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-center font-bold" style={{ color: resultColor }}>
+                        {play.result === "hit" ? "HIT" : play.result === "miss" ? "MISS" : play.result === "push" ? "PUSH" : "—"}
                       </td>
                     </tr>
                   );

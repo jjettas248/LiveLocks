@@ -7,6 +7,7 @@ import {
   appSettings,
   halftimePlayAlerts,
   playResults,
+  persistedPlays,
   type Player,
   type InsertPlayer,
   type TeamDefense,
@@ -20,8 +21,10 @@ import {
   type InsertHalftimePlayAlert,
   type AnalyticsSummary,
   type PlayAlertWithResult,
+  type PersistedPlay,
+  type PlayStats,
 } from "@shared/schema";
-import { eq, and, desc, isNull, sql } from "drizzle-orm";
+import { eq, and, desc, isNull, sql, lt, lte } from "drizzle-orm";
 
 // 2025-26 NBA team pace (possessions per 48 minutes)
 export const TEAM_PACE: Record<string, number> = {
@@ -101,6 +104,17 @@ export interface IStorage {
   getRecentPlayAlerts(limit?: number): Promise<PlayAlertWithResult[]>;
   getAppSettings(): Promise<{ slateResetHour: number; slateResetMinute: number }>;
   saveAppSettings(hour: number, minute: number): Promise<void>;
+  recordPlay(play: {
+    id: string; gameId: string; playerId?: string; playerName: string; team?: string;
+    sport: string; market: string; direction: string; line: number; prob: number;
+    engineProb?: number; bookImplied?: number; edgeGap?: number;
+    gameDate: string; timestamp: Date;
+    duplicateGuard: string;
+  }): Promise<{ id: string; isDuplicate: boolean }>;
+  getPlays(opts: { sport?: string; limit?: number; settled?: string; date?: string }): Promise<{ plays: PersistedPlay[]; total: number }>;
+  settlePlay(id: string, result: string, finalStat: number | null, settledAt: Date): Promise<PersistedPlay | null>;
+  getPlayStats(): Promise<PlayStats>;
+  cleanupOldPlays(): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -630,6 +644,107 @@ export class DatabaseStorage implements IStorage {
     } else {
       await db.insert(appSettings).values({ id: 1, slateResetHour: hour, slateResetMinute: minute });
     }
+  }
+
+  async recordPlay(play: {
+    id: string; gameId: string; playerId?: string; playerName: string; team?: string;
+    sport: string; market: string; direction: string; line: number; prob: number;
+    engineProb?: number; bookImplied?: number; edgeGap?: number;
+    gameDate: string; timestamp: Date; duplicateGuard: string;
+  }): Promise<{ id: string; isDuplicate: boolean }> {
+    const existing = await db
+      .select({ id: persistedPlays.id })
+      .from(persistedPlays)
+      .where(eq(persistedPlays.duplicateGuard, play.duplicateGuard))
+      .limit(1);
+    if (existing.length > 0) return { id: existing[0].id, isDuplicate: true };
+    await db.insert(persistedPlays).values({
+      id: play.id,
+      gameId: play.gameId,
+      playerId: play.playerId ?? null,
+      playerName: play.playerName,
+      team: play.team ?? null,
+      sport: play.sport,
+      market: play.market,
+      direction: play.direction,
+      line: String(play.line),
+      prob: String(play.prob),
+      engineProb: play.engineProb != null ? String(play.engineProb) : null,
+      bookImplied: play.bookImplied != null ? String(play.bookImplied) : null,
+      edgeGap: play.edgeGap != null ? String(play.edgeGap) : null,
+      gameDate: play.gameDate,
+      timestamp: play.timestamp,
+      duplicateGuard: play.duplicateGuard,
+    });
+    return { id: play.id, isDuplicate: false };
+  }
+
+  async getPlays(opts: { sport?: string; limit?: number; settled?: string; date?: string }): Promise<{ plays: PersistedPlay[]; total: number }> {
+    const limit = Math.min(opts.limit ?? 100, 500);
+    let query = db.select().from(persistedPlays).$dynamic();
+    const conditions = [];
+    if (opts.sport && opts.sport !== "all") conditions.push(eq(persistedPlays.sport, opts.sport));
+    if (opts.date) conditions.push(eq(persistedPlays.gameDate, opts.date));
+    if (opts.settled === "pending") conditions.push(isNull(persistedPlays.result));
+    if (opts.settled === "settled") conditions.push(sql`${persistedPlays.result} IS NOT NULL`);
+    if (conditions.length > 0) query = query.where(and(...conditions));
+    const rows = await query.orderBy(desc(persistedPlays.timestamp)).limit(limit);
+    return { plays: rows, total: rows.length };
+  }
+
+  async settlePlay(id: string, result: string, finalStat: number | null, settledAt: Date): Promise<PersistedPlay | null> {
+    const [updated] = await db
+      .update(persistedPlays)
+      .set({ result, finalStat: finalStat != null ? String(finalStat) : null, settledAt })
+      .where(eq(persistedPlays.id, id))
+      .returning();
+    return updated ?? null;
+  }
+
+  async getPlayStats(): Promise<PlayStats> {
+    const rows = await db.select().from(persistedPlays);
+    const settled = rows.filter(r => r.result !== null);
+    const pending = rows.filter(r => r.result === null);
+
+    const makeBucket = (min: number, max: number) => {
+      const inBucket = settled.filter(r => {
+        const prob = Number(r.prob);
+        return prob >= min && prob <= max;
+      });
+      const hits = inBucket.filter(r => r.result === "hit").length;
+      const misses = inBucket.filter(r => r.result === "miss").length;
+      const total = inBucket.length;
+      return { total, hits, misses, winRate: total > 0 ? Math.round((hits / total) * 1000) / 10 : 0 };
+    };
+
+    const allHits = settled.filter(r => r.result === "hit").length;
+    const allMisses = settled.filter(r => r.result === "miss").length;
+    const allPushes = settled.filter(r => r.result === "push").length;
+
+    return {
+      buckets: {
+        "60-69": makeBucket(60, 69.99),
+        "70-79": makeBucket(70, 79.99),
+        "80-89": makeBucket(80, 89.99),
+        "90+":   makeBucket(90, 100),
+      },
+      totalSettled: settled.length,
+      totalPending: pending.length,
+      allTimeRecord: { hits: allHits, misses: allMisses, pushes: allPushes },
+    };
+  }
+
+  async cleanupOldPlays(): Promise<number> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 90);
+    const deleted = await db
+      .delete(persistedPlays)
+      .where(and(
+        sql`${persistedPlays.result} IS NOT NULL`,
+        lte(persistedPlays.settledAt, cutoff),
+      ))
+      .returning({ id: persistedPlays.id });
+    return deleted.length;
   }
 }
 

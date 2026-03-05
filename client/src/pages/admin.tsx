@@ -4,7 +4,7 @@ import { apiRequest, queryClient, getAuthToken } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
-import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle, Trash2, Loader2, Settings } from "lucide-react";
+import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle, Trash2, Loader2, Settings, Bell, ChevronUp, Send } from "lucide-react";
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
 const TEST_EMAIL_PATTERNS = [
@@ -110,6 +110,18 @@ export default function AdminPage() {
   const [resetTimeSaving, setResetTimeSaving] = useState(false);
   const [verifyResults, setVerifyResults] = useState<Record<number, { dbTier: string | null; hasNcaabAccess: boolean; requiresRefresh: boolean } | "error">>({});
   const [verifyLoadingId, setVerifyLoadingId] = useState<number | null>(null);
+
+  // Alert Tester state
+  const [alertTesterOpen, setAlertTesterOpen] = useState(false);
+  const [alertForm, setAlertForm] = useState({
+    playerName: "", team: "", market: "PTS", direction: "over" as "over" | "under",
+    line: "", confidence: "", gameContext: "", sendTo: "self" as "self" | "all",
+  });
+  const [alertSending, setAlertSending] = useState(false);
+  const [alertSentResult, setAlertSentResult] = useState<{ title: string; body: string; deliveredTo: number | string; time: string } | null>(null);
+  const [alertTestLog, setAlertTestLog] = useState<Array<{ time: string; playerName: string; direction: string; line: string; market: string; confidence: string; sentTo: string }>>([]);
+  const [alertConfirmModal, setAlertConfirmModal] = useState<{ title: string; body: string } | null>(null);
+  const [subscriberCount, setSubscriberCount] = useState<number | null>(null);
 
   useEffect(() => {
     fetch("/api/admin/settings", { credentials: "include" })
@@ -221,6 +233,65 @@ export default function AdminPage() {
   const setupProductsMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/stripe/setup-products"),
   });
+
+  function getNotificationTitle(confidence: number): string | null {
+    if (confidence < 80) return null;
+    if (confidence >= 85) return "🔒 LiveLocks · High Confidence";
+    return "🔔 LiveLocks · Confidence Play";
+  }
+
+  const buildAlertPayload = () => {
+    const conf = parseFloat(alertForm.confidence);
+    const line = parseFloat(alertForm.line);
+    const title = getNotificationTitle(conf);
+    const dirLabel = alertForm.direction === "over" ? "Over" : "Under";
+    const body = `${alertForm.playerName} — ${dirLabel} ${line} ${alertForm.market} — ${conf}% confidence${alertForm.gameContext ? ` · ${alertForm.gameContext}` : ""}`;
+    return { title, body, conf };
+  };
+
+  const handleSendTestAlert = async (confirmed = false) => {
+    const { title, body, conf } = buildAlertPayload();
+    if (!title) {
+      toast({ title: "Confidence below 80% threshold", description: "Alert would not fire in production", variant: "destructive" });
+      return;
+    }
+    if (!alertForm.playerName || !alertForm.line) {
+      toast({ title: "Missing fields", description: "Player name and line are required", variant: "destructive" });
+      return;
+    }
+    setAlertSending(true);
+    try {
+      const res = await fetch("/api/admin/test-alert", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ title, body, target: alertForm.sendTo, confirmed }),
+      });
+      const data = await res.json();
+      if (data.requiresConfirmation) {
+        setSubscriberCount(data.subscriberCount ?? null);
+        setAlertConfirmModal({ title, body });
+        return;
+      }
+      if (!res.ok) {
+        toast({ title: "Failed", description: data.error ?? "Unknown error", variant: "destructive" });
+        return;
+      }
+      const time = new Date().toLocaleTimeString();
+      toast({ title: "✓ Test alert sent", description: `Delivered to: ${alertForm.sendTo === "self" ? "you" : `${data.deliveredTo} subscribers`}` });
+      setAlertSentResult({ title, body, deliveredTo: data.deliveredTo, time });
+      setAlertTestLog(prev => [{
+        time, playerName: alertForm.playerName, direction: alertForm.direction,
+        line: alertForm.line, market: alertForm.market, confidence: alertForm.confidence,
+        sentTo: alertForm.sendTo === "self" ? "self" : `all (${data.deliveredTo})`,
+      }, ...prev].slice(0, 10));
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setAlertSending(false);
+      setAlertConfirmModal(null);
+    }
+  };
 
   if (authLoading) {
     return (

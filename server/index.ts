@@ -2,7 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import pg from "pg";
-import { registerRoutes, registerAnalyticsRoutes } from "./routes";
+import { registerRoutes, registerAnalyticsRoutes, registerPlaysRoutes, registerTestAlertRoute } from "./routes";
 import { autoResolveAlerts } from "./analyticsResolver";
 import { storage } from "./storage";
 import { serveStatic } from "./static";
@@ -144,6 +144,8 @@ app.use((req, res, next) => {
   await initStripe();
   await registerRoutes(httpServer, app);
   registerAnalyticsRoutes(app);
+  registerPlaysRoutes(app);
+  registerTestAlertRoute(app);
 
   // Auto-resolve plays in background every 60 minutes; run once after 5 min delay on startup
   setTimeout(() => autoResolveAlerts(storage).catch(console.warn), 5 * 60 * 1000);

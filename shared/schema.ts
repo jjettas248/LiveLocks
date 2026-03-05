@@ -1,4 +1,4 @@
-import { pgTable, text, serial, numeric, integer, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, numeric, integer, timestamp, boolean, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -282,4 +282,49 @@ export interface PlayAlertWithResult extends HalftimePlayAlert {
   actualStat: string | null;
   hit: boolean | null;
   resolvedAt: Date | null;
+}
+
+// ── Persistent plays table ─────────────────────────────────────────────────────
+export const persistedPlays = pgTable("persisted_plays", {
+  id: text("id").primaryKey(),
+  createdAt: timestamp("created_at").defaultNow(),
+  gameId: text("game_id").notNull(),
+  playerId: text("player_id"),
+  playerName: text("player_name").notNull(),
+  team: text("team"),
+  sport: text("sport").notNull().default("nba"),
+  market: text("market").notNull(),
+  direction: text("direction").notNull(),
+  line: numeric("line").notNull(),
+  prob: numeric("prob").notNull(),
+  engineProb: numeric("engine_prob"),
+  bookImplied: numeric("book_implied"),
+  edgeGap: numeric("edge_gap"),
+  gameDate: text("game_date").notNull(),
+  timestamp: timestamp("timestamp").notNull(),
+  result: text("result"),
+  finalStat: numeric("final_stat"),
+  settledAt: timestamp("settled_at"),
+  notificationSent: boolean("notification_sent").default(false),
+  duplicateGuard: text("duplicate_guard").unique(),
+}, (table) => ({
+  gameDateIdx: index("persisted_plays_game_date_idx").on(table.gameDate),
+  resultIdx: index("persisted_plays_result_idx").on(table.result),
+  sportIdx: index("persisted_plays_sport_idx").on(table.sport),
+}));
+
+export const insertPersistedPlaySchema = createInsertSchema(persistedPlays).omit({ createdAt: true });
+export type PersistedPlay = typeof persistedPlays.$inferSelect;
+export type InsertPersistedPlay = z.infer<typeof insertPersistedPlaySchema>;
+
+export interface PlayStats {
+  buckets: {
+    "60-69": { total: number; hits: number; misses: number; winRate: number };
+    "70-79": { total: number; hits: number; misses: number; winRate: number };
+    "80-89": { total: number; hits: number; misses: number; winRate: number };
+    "90+":   { total: number; hits: number; misses: number; winRate: number };
+  };
+  totalSettled: number;
+  totalPending: number;
+  allTimeRecord: { hits: number; misses: number; pushes: number };
 }

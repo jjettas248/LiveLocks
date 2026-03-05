@@ -1,0 +1,223 @@
+Add an admin tool to test that prop alerts are
+firing correctly with the right player, market,
+line, and confidence values before they go live.
+
+---
+
+ADD "ALERT TESTER" SECTION IN ADMIN PANEL
+
+Place below the user management table.
+Collapsible section, collapsed by default.
+
+Header:
+  "🔔 Prop Alert Tester"
+  zinc-400 text-sm font-semibold
+  Chevron toggle right side
+
+---
+
+ALERT TESTER UI
+
+When expanded, show two panels side by side
+(stacked on mobile):
+
+LEFT PANEL — "Simulate Alert"
+
+  Title: "Simulate a Prop Alert"
+  zinc-400 text-xs uppercase mb-3
+
+  Fields (all text inputs):
+
+  Player Name:
+    Placeholder: "e.g. Jared McCain"
+    
+  Team Abbreviation:
+    Placeholder: "e.g. LAC"
+    
+  Market (dropdown):
+    Options: PTS, REB, AST, BLK, STL, 
+             P+R, P+A, R+A, P+R+A, S+B
+    
+  Direction (toggle):
+    [Over]  [Under]
+    Selected fills with teal/red
+    
+  Line:
+    Placeholder: "e.g. 11.5"
+    Number input, step 0.5
+    
+  Confidence %:
+    Placeholder: "e.g. 92"
+    Number input, min 80 max 99
+    
+  Game context (optional):
+    Placeholder: "e.g. LAC vs IND · H1 2:34"
+
+  Send Test Alert button:
+    "🔔 Send Test Alert"
+    Full width
+    bg rgba(0,212,170,0.15)
+    border rgba(0,212,170,0.4)
+    text #00d4aa font-semibold
+    Hover: bg rgba(0,212,170,0.25)
+
+  Send to (radio):
+    ○ My device only (default)
+    ○ All subscribers
+    
+    "All subscribers" shows amber warning:
+    "⚠ This sends a real alert to all users"
+
+RIGHT PANEL — "Preview"
+
+  Shows live preview of notification as user types:
+
+  Notification preview card:
+    bg #1a1a1a
+    border zinc-700
+    rounded-xl p-4
+    
+    Header row:
+      PropPulse icon (16px) + "LiveLocks" font-bold white
+      "[X]m ago" zinc-500 text-xs right
+    
+    Title line:
+      Renders getNotificationTitle(confidence) live
+      e.g. "🔒 LiveLocks · High Confidence"
+      font-semibold white text-sm
+    
+    Body line:
+      Renders full notification body live:
+      "[playerName] — [direction] [line] [market] 
+       — [confidence]% confidence"
+      zinc-400 text-sm
+      Updates on every keystroke
+    
+    Confidence badge below:
+      Teal if >=85, amber if >=80
+      "[X]% confidence"
+    
+    Below preview card:
+    "Notification will appear as shown above"
+    zinc-600 text-xs italic
+
+---
+
+ON SEND — TEST ALERT FLOW
+
+When "Send Test Alert" is clicked:
+
+  Build notification payload exactly as production does:
+  
+  const testPlay = {
+    playerName: formData.playerName,
+    team: formData.team,
+    market: formData.market,
+    direction: formData.direction,
+    line: parseFloat(formData.line),
+    engineProb: parseFloat(formData.confidence),
+    gameId: "test-" + Date.now(),
+    playerId: "test-player",
+    sport: "nba"
+  }
+  
+  const title = getNotificationTitle(testPlay.engineProb)
+  if (!title) {
+    showToast("Confidence below 80% threshold", "red")
+    return
+  }
+  
+  const directionLabel = 
+    testPlay.direction === "Over" ? "Over" : "Under"
+  
+  const body = 
+    `${testPlay.playerName} — ` +
+    `${directionLabel} ${testPlay.line} ` +
+    `${testPlay.market} — ` +
+    `${testPlay.engineProb}% confidence`
+  
+  POST to /api/admin/test-alert:
+    {
+      title,
+      body,
+      target: formData.sendTo,
+      // "self" or "all"
+      testPlay
+    }
+
+SERVER: /api/admin/test-alert
+
+  If target === "self":
+    Send Web Push notification only to the 
+    admin user's own push subscription
+    
+    Find admin's push subscription in DB:
+      WHERE userId = currentAdminId
+      AND pushSubscription IS NOT NULL
+    
+    Send using existing web push sender function
+    with the test payload
+    
+    Do NOT record this as a real play in DB
+    Add flag: isTest: true in notification data
+
+  If target === "all":
+    Require confirmation — return 
+    { requiresConfirmation: true } first
+    
+    Admin sees modal:
+      "Send test alert to all [N] subscribers?"
+      [Cancel]  [Confirm Send]
+    
+    On confirm: send to all push subscriptions
+    Still mark as isTest: true
+    Still do NOT record in plays DB
+
+RESPONSE HANDLING:
+
+  Success:
+    showToast("✓ Test alert sent", "teal")
+    Show in right panel below preview:
+      "✓ Sent [time]"
+      "Title: [title]"
+      "Body: [body]"
+      "Delivered to: [self / N subscribers]"
+    
+  Error — no push subscription for admin:
+    showToast(
+      "No push subscription found. " +
+      "Install app to home screen first.", 
+      "amber"
+    )
+  
+  Error — below 80% threshold:
+    showToast(
+      "Confidence below 80% — " +
+      "alert would not fire in production", 
+      "red"
+    )
+
+---
+
+ALERT LOG IN TESTER PANEL
+
+Below the two panels, show last 10 test alerts sent:
+
+  "Recent Test Alerts" zinc-400 text-xs uppercase mb-2
+
+  Each row:
+    [time] · [playerName] [dir][line] [market] · 
+    [confidence]% · Sent to: [self/all]
+    
+    zinc-500 text-xs font-mono
+    border-bottom 1px solid #1f1f1f
+    py-2
+
+  Stored in component state (in-memory):
+    const [testLog, setTestLog] = useState([])
+    // Resets on page refresh — intentional
+    // Test alerts are not persisted to DB
+
+  Clear button:
+    "Clear" zinc-500 text-xs right of header
+    onClick → setTestLog([])

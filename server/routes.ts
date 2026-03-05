@@ -9,7 +9,7 @@ import { computeNCAABPlays, getNCAABScoreboard, getNCAABH2H } from "./ncaabServi
 import { calculateParlay } from "./parlayService";
 import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin, requireTier } from "./auth";
 import { registerStripeRoutes } from "./stripeService";
-import { getVapidPublicKey } from "./webpush";
+import { getVapidPublicKey, sendPush } from "./webpush";
 import { checkAndSendAlerts } from "./alertManager";
 import { autoResolveAlerts } from "./analyticsResolver";
 
@@ -901,6 +901,29 @@ export async function registerRoutes(
       // Fire-and-forget: alerts + persist plays for analytics
       checkAndSendAlerts(topPlays, storage).catch(console.warn);
       storage.savePlayAlerts(topPlays).catch(console.warn);
+      // Persist each play to persisted_plays table
+      const today = new Date().toISOString().slice(0, 10);
+      for (const p of topPlays) {
+        const key = `${p.playerId ?? p.playerName}|${p.statType}|${p.line}|${p.betDirection}|${p.gameId ?? ""}|${today}`;
+        storage.recordPlay({
+          id: `play-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          gameId: p.gameId ?? "",
+          playerId: p.playerId ? String(p.playerId) : undefined,
+          playerName: p.playerName,
+          team: p.team,
+          sport: "nba",
+          market: p.statType,
+          direction: p.betDirection,
+          line: Number(p.line),
+          prob: Number(p.probability ?? p.prob ?? 50),
+          engineProb: p.engineProb != null ? Number(p.engineProb) : undefined,
+          bookImplied: p.bookImplied != null ? Number(p.bookImplied) : undefined,
+          edgeGap: p.edge != null ? Number(p.edge) : undefined,
+          gameDate: today,
+          timestamp: new Date(),
+          duplicateGuard: key,
+        }).catch(console.warn);
+      }
     } catch (e) {
       res.status(502).json({ message: "Halftime plays unavailable", details: (e as any).message });
     }
@@ -1853,6 +1876,156 @@ async function seedDatabase() {
       }
     }
   }
+}
+
+// ── Persistent plays routes ────────────────────────────────────────────────────
+export function registerPlaysRoutes(app: Express): void {
+
+  app.post("/api/plays/record", requireAdmin, async (req, res) => {
+    try {
+      const body = req.body as any;
+      if (!body.playerName || !body.market || !body.direction || body.line == null || body.prob == null) {
+        return res.status(400).json({ error: "Missing required play fields" });
+      }
+      const today = new Date().toISOString().slice(0, 10);
+      const duplicateGuard = body.duplicateGuard ??
+        `${body.playerId ?? body.playerName}|${body.market}|${body.line}|${body.direction}|${body.gameId ?? ""}|${today}`;
+      const id = body.id ?? `play-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const result = await storage.recordPlay({
+        id,
+        gameId: body.gameId ?? "",
+        playerId: body.playerId,
+        playerName: body.playerName,
+        team: body.team,
+        sport: body.sport ?? "nba",
+        market: body.market,
+        direction: body.direction,
+        line: Number(body.line),
+        prob: Number(body.prob),
+        engineProb: body.engineProb != null ? Number(body.engineProb) : undefined,
+        bookImplied: body.bookImplied != null ? Number(body.bookImplied) : undefined,
+        edgeGap: body.edgeGap != null ? Number(body.edgeGap) : undefined,
+        gameDate: body.gameDate ?? today,
+        timestamp: body.timestamp ? new Date(body.timestamp) : new Date(),
+        duplicateGuard,
+      });
+      return res.json({ success: true, ...result });
+    } catch (e) {
+      return res.status(500).json({ error: "Failed to record play", details: (e as any).message });
+    }
+  });
+
+  app.get("/api/plays", requireAdmin, async (req, res) => {
+    try {
+      const { sport, limit, settled, date } = req.query as Record<string, string>;
+      const result = await storage.getPlays({
+        sport: sport || "all",
+        limit: limit ? parseInt(limit, 10) : 100,
+        settled: settled || "all",
+        date: date || undefined,
+      });
+      return res.json(result);
+    } catch (e) {
+      return res.status(500).json({ error: "Failed to fetch plays" });
+    }
+  });
+
+  app.patch("/api/plays/:id/settle", requireAdmin, async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      const { result, finalStat, settledAt } = req.body as { result: string; finalStat?: number | null; settledAt?: string };
+      if (!result) return res.status(400).json({ error: "result is required" });
+      const play = await storage.settlePlay(
+        id,
+        result,
+        finalStat ?? null,
+        settledAt ? new Date(settledAt) : new Date()
+      );
+      if (!play) return res.status(404).json({ error: "Play not found" });
+      return res.json({ success: true, play });
+    } catch (e) {
+      return res.status(500).json({ error: "Failed to settle play" });
+    }
+  });
+
+  app.get("/api/plays/stats", requireAdmin, async (_req, res) => {
+    try {
+      const stats = await storage.getPlayStats();
+      return res.json(stats);
+    } catch (e) {
+      return res.status(500).json({ error: "Failed to fetch play stats" });
+    }
+  });
+
+  app.post("/api/plays/cleanup", requireAdmin, async (_req, res) => {
+    try {
+      const deleted = await storage.cleanupOldPlays();
+      return res.json({ success: true, deleted, message: `Removed ${deleted} settled plays older than 90 days` });
+    } catch (e) {
+      return res.status(500).json({ error: "Cleanup failed" });
+    }
+  });
+}
+
+// ── Admin test-alert route ─────────────────────────────────────────────────────
+export function registerTestAlertRoute(app: Express): void {
+
+  app.post("/api/admin/test-alert", requireAdmin, async (req: any, res) => {
+    try {
+      const { title, body, target, testPlay } = req.body as {
+        title: string;
+        body: string;
+        target: "self" | "all";
+        testPlay?: any;
+        confirmed?: boolean;
+      };
+
+      if (!title || !body) return res.status(400).json({ error: "title and body are required" });
+
+      let allUsers: any[] = [];
+      try {
+        allUsers = await storage.getAllUsers();
+      } catch (e) {
+        return res.status(500).json({ error: "Failed to fetch users" });
+      }
+
+      const usersWithPush = allUsers.filter((u: any) => u.pushSubscription);
+
+      if (target === "self") {
+        const adminUser = allUsers.find((u: any) => u.id === req.user?.id);
+        if (!adminUser?.pushSubscription) {
+          return res.status(404).json({ error: "No push subscription found. Install app to home screen first." });
+        }
+        await sendPush(adminUser.pushSubscription, {
+          title,
+          body,
+          url: "/",
+          data: { isTest: true, testPlay },
+        });
+        return res.json({ success: true, deliveredTo: 1, target: "self" });
+      }
+
+      if (target === "all") {
+        if (!req.body.confirmed) {
+          return res.json({ requiresConfirmation: true, subscriberCount: usersWithPush.length });
+        }
+        let sent = 0;
+        await Promise.allSettled(
+          usersWithPush.map(async (u: any) => {
+            try {
+              await sendPush(u.pushSubscription, { title, body, url: "/", data: { isTest: true, testPlay } });
+              sent++;
+            } catch (_) {}
+          })
+        );
+        return res.json({ success: true, deliveredTo: sent, target: "all" });
+      }
+
+      return res.status(400).json({ error: "target must be 'self' or 'all'" });
+    } catch (e: any) {
+      return res.status(500).json({ error: "Test alert failed", details: e.message });
+    }
+  });
 }
 
 // Analytics routes (admin only)
