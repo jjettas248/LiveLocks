@@ -1,0 +1,403 @@
+Three critical engine and data bugs to fix on the 
+NCAAB live game card. Do not rewrite components — 
+trace and fix each bug at its source.
+
+---
+
+STEP 1 — AUDIT BEFORE TOUCHING ANYTHING
+
+Print this comment block before writing any code:
+
+  // NCAAB ENGINE AUDIT
+  // 
+  // BUG 1: Spread cover probability calculation
+  //   USC proj: 82.7, WASH proj: 77.1
+  //   Spread: USC -2.5
+  //   Expected cover prob: USC projects to win by 5.6
+  //   which covers -2.5 easily → should be ~70-80%+
+  //   Actual showing: 0%
+  //   Root cause: [find and print the spread calc code]
+  //
+  // BUG 2: Engine Over% showing 0% or near-0%
+  //   USC 82.7 + WASH 77.1 = 159.8 projected total
+  //   Line: 164.5
+  //   Diff: -4.7 (Under lean is correct)
+  //   But Engine Over% = 36.6% — plausible
+  //   Gauge shows 0% COVER — this is stale/wrong
+  //   Root cause: [find gauge data source]
+  //
+  // BUG 3: Matchup history not loading
+  //   ESPN endpoint for H2H: [find current call]
+  //   Response: [is it returning data or empty?]
+  //   Root cause: [find matchup history fetch]
+  //
+  // NCAAB APIs currently wired: [list all]
+  // Spread cover calc function: [print current code]
+  // Matchup history fetch: [print current code]
+
+---
+
+BUG 1 — FIX SPREAD COVER PROBABILITY
+
+Current code is returning 0% for USC covering -2.5
+when projections clearly show USC winning by 5.6 pts.
+
+FIND the spread cover probability function.
+It is likely using ESPN pickcenter winPercentage
+but that field is either null or not being read.
+
+CORRECT SPREAD COVER LOGIC:
+
+  const calculateSpreadCoverProb = (game, summary) => {
+    
+    // Method 1: Use ESPN pickcenter win percentage
+    // This is the most accurate when available
+    const espnHomeWinPct = 
+      summary?.pickcenter?.[0]
+        ?.homeTeamOdds?.winPercentage
+    
+    if (espnHomeWinPct != null && espnHomeWinPct > 0) {
+      return parseFloat(parseFloat(espnHomeWinPct)
+        .toFixed(1))
+    }
+    
+    // Method 2: Derive from projections when ESPN 
+    // win% is unavailable (fallback)
+    const homeProj = parseFloat(
+      game.predictor?.homeTeam?.gameProjection ?? 0
+    )
+    const awayProj = parseFloat(
+      game.predictor?.awayTeam?.gameProjection ?? 0
+    )
+    
+    if (!homeProj || !awayProj) return 50
+    
+    // Get spread value and which team it favors
+    // Spread string from ESPN: "USC Trojans -2.5"
+    // Negative spread = that team is favored
+    const spreadDetails = 
+      summary?.pickcenter?.[0]?.details ?? 
+      game.odds?.details ?? ""
+    
+    // Parse spread value
+    const spreadMatch = spreadDetails.match(
+      /([+-]?\d+\.?\d*)\s*$/
+    )
+    const spreadValue = spreadMatch 
+      ? parseFloat(spreadMatch[1]) 
+      : 0
+    
+    // Determine which competitor has the spread
+    // and whether home or away
+    const competitors = 
+      game.competitions?.[0]?.competitors ?? []
+    const homeTeam = competitors
+      .find(c => c.homeAway === "home")
+    const awayTeam = competitors
+      .find(c => c.homeAway === "away")
+    
+    const spreadFavorsHome = 
+      spreadDetails.toLowerCase().includes(
+        homeTeam?.team?.displayName?.toLowerCase()
+          ?.split(" ")?.[0] ?? "home"
+      ) && spreadValue < 0
+    
+    // Calculate projected margin
+    const projMargin = homeProj - awayProj
+    // Positive = home winning
+    
+    // Adjust margin against spread
+    // If home favored by -2.5: need to win by >2.5
+    const adjustedMargin = spreadFavorsHome
+      ? projMargin - Math.abs(spreadValue)  
+      // home needs to cover: win by more than spread
+      : projMargin + Math.abs(spreadValue)  
+      // away needs to cover: keep it within spread
+    
+    // Convert margin to probability
+    // Each projected point of margin = ~6% probability shift
+    // Clamped by game progress limits
+    const rawProb = 50 + (adjustedMargin * 6)
+    const { min, max } = getProgressiveLimits(game)
+    
+    return parseFloat(
+      Math.min(Math.max(rawProb, min), max).toFixed(1)
+    )
+  }
+
+USC EXAMPLE VERIFICATION:
+  homeProj (USC) = 82.7
+  awayProj (WASH) = 77.1
+  spread = USC -2.5 (USC favored, must win by >2.5)
+  projMargin = 82.7 - 77.1 = +5.6 (USC winning)
+  adjustedMargin = 5.6 - 2.5 = +3.1 (covers by 3.1)
+  rawProb = 50 + (3.1 * 6) = 68.6%
+  → USC cover should show ~68-70% not 0%
+
+APPLY THIS FIX:
+  Replace current spread cover calculation with above.
+  Wire result to:
+    - SPREAD row right sub-label: "[TEAM] cover: [X]%"
+    - Spread market button percentage
+    - Gauge when Spread button is selected
+
+---
+
+BUG 2 — FIX GAUGE SHOWING 0% COVER
+
+The gauge shows "0% COVER" when spread button 
+is selected because cover prob returns 0.
+
+After fixing calculateSpreadCoverProb above:
+
+  When Spread market selected:
+    gaugeValue = calculateSpreadCoverProb(game, summary)
+    gaugeLabel = "COVER"
+    gaugeColor = gaugeValue >= 50 ? "#00d4aa" : "#ef4444"
+
+  When Over selected:
+    gaugeValue = engineProbs.overProb
+    gaugeLabel = "OVER"
+    gaugeColor = "#00d4aa"
+
+  When Under selected:
+    gaugeValue = engineProbs.underProb
+    gaugeLabel = "UNDER"
+    gaugeColor = "#ef4444"
+
+  Default (no selection):
+    Use dominant side
+    If overProb > underProb:
+      gaugeValue = overProb, label "OVER", teal
+    Else:
+      gaugeValue = underProb, label "UNDER", red
+
+  "Full Game" label below gauge stays static always.
+
+---
+
+BUG 3 — FIX MATCHUP HISTORY NOT LOADING
+
+FIND the matchup history fetch in the codebase.
+It should call an ESPN teams schedule endpoint.
+
+CORRECT ESPN H2H ENDPOINT:
+
+  // Get team IDs from current game competitors
+  const homeTeamId = game.competitions?.[0]
+    ?.competitors
+    ?.find(c => c.homeAway === "home")
+    ?.team?.id
+
+  const awayTeamId = game.competitions?.[0]
+    ?.competitors
+    ?.find(c => c.homeAway === "away")
+    ?.team?.id
+
+  // Fetch home team's schedule to find H2H games
+  const scheduleUrl = 
+    `https://site.api.espn.com/apis/site/v2/sports/` +
+    `basketball/mens-college-basketball/teams/` +
+    `${homeTeamId}/schedule`
+
+  const scheduleRes = await fetch(scheduleUrl)
+  const scheduleData = await scheduleRes.json()
+
+  // Filter for games where opponent = awayTeamId
+  const h2hGames = scheduleData.events
+    ?.filter(event => {
+      const opponents = event.competitions?.[0]
+        ?.competitors ?? []
+      return opponents.some(c => 
+        c.team?.id === awayTeamId && 
+        event.competitions?.[0]?.status
+          ?.type?.completed === true
+      )
+    })
+    ?.slice(0, 3) // last 3 H2H games
+    ?? []
+
+  // Extract data from each H2H game
+  const h2hData = h2hGames.map(event => {
+    const comp = event.competitions?.[0]
+    const competitors = comp?.competitors ?? []
+    
+    const home = competitors
+      .find(c => c.homeAway === "home")
+    const away = competitors
+      .find(c => c.homeAway === "away")
+    
+    const homeScore = parseInt(home?.score ?? 0)
+    const awayScore = parseInt(away?.score ?? 0)
+    const total = homeScore + awayScore
+    
+    // Get the line from that game if available
+    const line = comp?.odds?.[0]?.overUnder ?? null
+    const spreadDetails = 
+      comp?.odds?.[0]?.details ?? null
+    
+    // Determine Over/Under result
+    const overUnderResult = line 
+      ? total > line 
+        ? "OVER" 
+        : total < line 
+        ? "UNDER" 
+        : "PUSH"
+      : null
+    
+    // Determine spread coverage
+    const spreadCovered = spreadDetails 
+      ? determineSpreadCoverage(
+          comp, spreadDetails, homeScore, awayScore
+        ) 
+      : null
+    
+    return {
+      date: event.date,
+      homeTeam: home?.team?.abbreviation,
+      awayTeam: away?.team?.abbreviation,
+      homeScore,
+      awayScore,
+      total,
+      line,
+      overUnderResult,
+      spreadDetails,
+      spreadCovered,
+      location: home?.team?.id === homeTeamId 
+        ? "HOME" : "AWAY"
+    }
+  })
+
+  const determineSpreadCoverage = (
+    comp, spreadDetails, homeScore, awayScore
+  ) => {
+    const spreadMatch = 
+      spreadDetails.match(/([+-]?\d+\.?\d*)\s*$/)
+    if (!spreadMatch) return null
+    
+    const spreadValue = parseFloat(spreadMatch[1])
+    const margin = homeScore - awayScore
+    
+    if (spreadValue < 0) {
+      // Home team favored
+      if (margin > Math.abs(spreadValue)) 
+        return "HOME COVERED"
+      if (margin === Math.abs(spreadValue)) 
+        return "PUSH"
+      return "AWAY COVERED"
+    } else {
+      // Away team favored
+      if (awayScore - homeScore > Math.abs(spreadValue))
+        return "AWAY COVERED"
+      if (awayScore - homeScore === Math.abs(spreadValue))
+        return "PUSH"
+      return "HOME COVERED"
+    }
+  }
+
+CACHE H2H DATA:
+  Store on game object after first fetch:
+    game.h2hHistory = h2hData
+  
+  Do not re-fetch on every refresh.
+  Only fetch once per game session:
+    if (!game.h2hHistory) fetchH2H(game)
+
+MATCHUP HISTORY UI — fix display:
+
+  Each H2H row:
+    Date: formatted "Mar 2, 2025" zinc-500 text-xs
+    Score: "[AWAY] [score] – [score] [HOME]" white text-sm
+    Total: "[total]" zinc-400 text-xs
+    O/U result badge:
+      "OVER": teal pill
+      "UNDER": red pill
+      "PUSH": zinc pill
+    Spread badge:
+      "COVERED": teal pill
+      "FAILED": red pill
+      "PUSH": zinc pill
+    
+  Row bg: rgba(255,255,255,0.03)
+  Row border-bottom: 1px solid #27272a
+  Row padding: py-3 px-4
+  
+  If no H2H games found:
+    "No recent matchup history available"
+    zinc-500 italic text-sm centered py-4
+
+---
+
+BUG 4 — ADD SELECTABLE MARKET TO TEAM PROJ ROWS
+
+Each team projection row (USC PROJ / WASH PROJ)
+must have a selectable market button when data exists.
+
+CURRENT: Static row showing just the projected total.
+TARGET: Row with team total market options.
+
+TEAM TOTAL MARKET ROW:
+
+  Left column:
+    "[TEAM] PROJ" label #71717a text-xs uppercase
+    Projected final score #ffffff text-lg font-bold
+
+  Right column (new):
+    Small market toggle: [Over] [Under]
+    
+    Over button:
+      Shows team total line for Over if available
+      Format: "O[line]" e.g. "O42.5"
+      Teal when selected, zinc when not
+      text-xs, rounded px-2 py-0.5
+      border 1px
+      
+    Under button:
+      Shows team total line for Under
+      Format: "U[line]" e.g. "U42.5"
+      Red when selected, zinc when not
+      Same sizing as Over button
+
+  Click Over/Under on a team row:
+    setSelectedTeamMarket({ 
+      team: "usc", 
+      direction: "over",
+      line: 42.5
+    })
+    
+    This updates:
+      That team's row border-left: teal or red accent
+      Edge badge appears: "+[X.X]pp" if edge exists
+      Does NOT change gauge (gauge = game total markets)
+
+  Team total line source:
+    Try ESPN summary teamTotals if available:
+      summary?.teamTotals?.[teamId]?.line
+    
+    Fallback: derive from projection
+      If USC proj = 82.7, use 82.5 (round to .5)
+      const derivedLine = 
+        Math.round(proj * 2) / 2
+    
+    If no line available:
+      Hide market toggle buttons entirely
+      Row shows projection only (current behavior)
+
+  Team total edge:
+    engineTeamTotalProb = proj > line ? 
+      calculateTeamTotalProb(proj, line) : 
+      100 - calculateTeamTotalProb(proj, line)
+    
+    const calculateTeamTotalProb = (proj, line) => {
+      const diff = proj - line
+      const { min, max } = getProgressiveLimits(game)
+      const raw = 50 + (diff * 4)
+      return parseFloat(
+        Math.min(Math.max(raw, min), max).toFixed(1)
+      )
+    }
+
+  "+" parlay button on each team total row:
+    Same amber toggle as other market buttons
+    Adds to parlayLegs:
+      "[TEAM] [Over/Under] [line] — [prob]%"
