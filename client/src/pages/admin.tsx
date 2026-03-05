@@ -105,12 +105,6 @@ export default function AdminPage() {
     enabled: !!user?.isAdmin && activeTab === "feedback",
   });
 
-  const tierMutation = useMutation({
-    mutationFn: ({ userId, tier }: { userId: number; tier: string | null }) =>
-      apiRequest("PATCH", `/api/admin/users/${userId}/tier`, { tier }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] }),
-  });
-
   const handleTierChange = async (userId: number, newTierKey: string) => {
     const u = allUsers?.find(u => u.id === userId);
     if (!u) return;

@@ -1,0 +1,249 @@
+Fix push notification content to include the prop 
+market type in every notification body.
+
+---
+
+CURRENT NOTIFICATION FORMAT (broken):
+  Title: "LiveLocks High-Confidence Play"
+  Body:  "Jared McCain U11.5 — 92% confidence. Tap to view."
+
+TARGET NOTIFICATION FORMAT:
+  Title: "🔒 LiveLocks · High Confidence"
+  Body:  "Jared McCain — Under 11.5 Points — 92% confidence"
+
+---
+
+FIND ALL NOTIFICATION TRIGGERS
+
+Scan the codebase for every place a push notification 
+is constructed and sent. Look for:
+  - Any Web Push / service worker notification calls
+  - self.registration.showNotification()
+  - Any push payload construction
+  - Any notification title/body string templates
+  - PWA manifest and service worker files
+
+Print findings as comment before writing code:
+  // NOTIFICATION AUDIT
+  // Notification calls found in: [file list]
+  // Current payload shape: [show the object]
+  // Service worker file: [path]
+  // Push service used: [Web Push / Firebase / other]
+
+---
+
+FIX NOTIFICATION PAYLOAD SHAPE
+
+Every notification payload must include prop market.
+
+Current payload likely looks like:
+  {
+    title: "LiveLocks High-Confidence Play",
+    body: `${playerName} ${direction}${line} — 
+           ${confidence}% confidence. Tap to view.`
+  }
+
+Updated payload:
+
+  {
+    title: "🔒 LiveLocks · High Confidence",
+    body: `${playerName} — ${directionLabel} ${line} 
+           ${marketLabel} — ${confidence}% confidence`,
+    icon: "/icon-192x192.png",
+    badge: "/badge-72x72.png",
+    tag: `livelocks-${playId}`,
+    data: {
+      url: "/",
+      playId: playId,
+      sport: sport
+    }
+  }
+
+WHERE:
+
+  directionLabel:
+    "O" or "Over" in raw data → "Over"
+    "U" or "Under" in raw data → "Under"
+    
+    const directionLabel = 
+      direction?.toLowerCase().startsWith("o") 
+        ? "Over" : "Under"
+
+  marketLabel:
+    Must come from the prop/market field on the play object
+    Check what field name stores prop type in play data:
+      common field names: prop, market, stat, propType, 
+                          category, betType
+    
+    const marketLabel = 
+      play.prop || 
+      play.market || 
+      play.stat || 
+      play.propType || 
+      play.category ||
+      ""
+    
+    If marketLabel is empty string:
+      Do not show it — omit from body
+      Body becomes: 
+        "${playerName} — ${directionLabel} ${line} 
+         — ${confidence}% confidence"
+    
+    If marketLabel exists:
+      Body:
+        "${playerName} — ${directionLabel} ${line} 
+         ${marketLabel} — ${confidence}% confidence"
+
+  Examples of correct output:
+    "Jared McCain — Under 11.5 Points — 92% confidence"
+    "Chet Holmgren — Over 28 Rebounds+Assists — 98% confidence"
+    "SGA — Under 31.5 Points — 92% confidence"
+    "Jalen Brunson — Under 19.5 Points — 92% confidence"
+
+---
+
+FIX NOTIFICATION TITLE
+
+Current: "LiveLocks High-Confidence Play from LiveLocks"
+  ("from LiveLocks" is redundant — iOS adds app name)
+
+Updated titles by confidence level:
+
+  >= 95%: "🔒 LiveLocks · Elite Signal"
+  >= 85%: "🔒 LiveLocks · High Confidence"  
+  >= 80%: "🔒 LiveLocks · Strong Edge"
+  < 80%:  Do not send notification
+           (enforce 80% floor — do not notify on weak signals)
+
+  const getNotificationTitle = (confidence) => {
+    if (confidence >= 95) return "🔒 LiveLocks · Elite Signal"
+    if (confidence >= 85) return "🔒 LiveLocks · High Confidence"
+    if (confidence >= 80) return "🔒 LiveLocks · Strong Edge"
+    return null // do not send
+  }
+  
+  if (!getNotificationTitle(confidence)) return
+  // abort notification if below 80%
+
+---
+
+FIX SERVICE WORKER NOTIFICATION DISPLAY
+
+In the service worker file (sw.js or similar):
+
+  self.addEventListener("push", event => {
+    const data = event.data?.json() ?? {}
+    
+    const options = {
+      body: data.body,
+      icon: data.icon || "/icon-192x192.png",
+      badge: data.badge || "/badge-72x72.png",
+      tag: data.tag || "livelocks-notification",
+      renotify: true,
+      // renotify: true means each new notification 
+      // shows even if same tag — important for 
+      // multiple plays at same time
+      data: data.data || { url: "/" },
+      actions: [
+        {
+          action: "view",
+          title: "View Play"
+        },
+        {
+          action: "dismiss",
+          title: "Dismiss"
+        }
+      ]
+    }
+    
+    event.waitUntil(
+      self.registration.showNotification(data.title, options)
+    )
+  })
+
+  // Handle notification click
+  self.addEventListener("notificationclick", event => {
+    event.notification.close()
+    
+    if (event.action === "dismiss") return
+    
+    const url = event.notification.data?.url || "/"
+    
+    event.waitUntil(
+      clients.matchAll({ type: "window" }).then(clientList => {
+        // If app already open, focus it
+        for (const client of clientList) {
+          if (client.url === url && "focus" in client) {
+            return client.focus()
+          }
+        }
+        // Otherwise open new window
+        if (clients.openWindow) {
+          return clients.openWindow(url)
+        }
+      })
+    )
+  })
+
+---
+
+PWA MANIFEST CHECK
+
+Verify manifest.json has correct PWA notification fields:
+
+  {
+    "name": "LiveLocks",
+    "short_name": "LiveLocks",
+    "display": "standalone",
+    "background_color": "#0a0a0a",
+    "theme_color": "#0a0a0a",
+    "icons": [
+      {
+        "src": "/icon-192x192.png",
+        "sizes": "192x192",
+        "type": "image/png",
+        "purpose": "any maskable"
+      },
+      {
+        "src": "/icon-512x512.png",
+        "sizes": "512x512",
+        "type": "image/png",
+        "purpose": "any maskable"
+      }
+    ],
+    "start_url": "/",
+    "scope": "/"
+  }
+
+If icon files do not exist at these paths:
+  Flag it:
+  // ACTION REQUIRED: Add icon-192x192.png and 
+  // icon-512x512.png to /public folder
+  // These are required for iOS home screen 
+  // notification icons to display correctly
+
+---
+
+DEDUPLICATION
+
+Current issue in screenshot: same player sent 
+multiple times (Chet Holmgren appears 3 times).
+
+Add deduplication before sending notifications:
+
+  // Track sent notifications in memory
+  const sentNotifications = new Set()
+  
+  const getNotificationKey = (play) => 
+    `${play.playerId}-${play.market}-${play.line}-${play.gameId}`
+  
+  // Before sending:
+  const key = getNotificationKey(play)
+  if (sentNotifications.has(key)) return
+  sentNotifications.add(key)
+  
+  // Clear set on new game day
+  // (reset at midnight or on new scoreboard fetch)
+
+This prevents the same play from being sent 
+multiple times when the engine refreshes.

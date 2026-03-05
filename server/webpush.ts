@@ -22,7 +22,12 @@ export function getVapidPublicKey(): string | null {
 
 export async function sendPush(
   subscriptionJson: string,
-  payload: { title: string; body: string; url?: string }
+  payload: {
+    title: string;
+    body: string;
+    url?: string;
+    data?: Record<string, any>;
+  }
 ): Promise<void> {
   ensureInit();
   if (!initialized) return;
@@ -30,7 +35,12 @@ export async function sendPush(
     const subscription = JSON.parse(subscriptionJson) as webpush.PushSubscription;
     await webpush.sendNotification(
       subscription,
-      JSON.stringify({ title: payload.title, body: payload.body, url: payload.url ?? "/" })
+      JSON.stringify({
+        title: payload.title,
+        body: payload.body,
+        url: payload.url ?? "/",
+        data: payload.data ?? {},
+      })
     );
   } catch (err: any) {
     if (err.statusCode === 410 || err.statusCode === 404) {

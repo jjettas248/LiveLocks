@@ -50,7 +50,28 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Sheet,
+  SheetContent,
+} from "@/components/ui/sheet";
 import { SiX } from "react-icons/si";
+
+interface NotificationLog {
+  id: string;
+  timestamp: number;
+  type: "prop" | "game" | "edge_flip";
+  sport: "nba" | "ncaab";
+  title: string;
+  body: string;
+  confidence: number;
+  gameId: string;
+  playerId?: string;
+  market?: string;
+  direction?: string;
+  line?: number;
+  result?: "HIT" | "MISS" | "PUSH" | null;
+  settledAt?: number;
+}
 
 // ESPN abbreviation → our DB team abbreviation
 const ESPN_TO_DB: Record<string, string> = {
@@ -161,6 +182,8 @@ export default function Dashboard() {
   const [slateFilterProp, setSlateFilterProp] = useState<string>("all");
   const [slateFilterProb, setSlateFilterProb] = useState<string>("all");
   const [showAlertsPanel, setShowAlertsPanel] = useState(false);
+  const [showHistorySheet, setShowHistorySheet] = useState(false);
+  const [notificationLog, setNotificationLog] = useState<NotificationLog[]>([]);
 
   // ── SMS Bell state (localStorage-persisted) ───────────────────────────────
   type SmsStatus = "unprompted" | "opted-in" | "opted-out";
@@ -280,6 +303,31 @@ export default function Dashboard() {
     localStorage.setItem("ll_pwa_dismissed", "1");
   };
 
+  // ── Daily notification log reset ────────────────────────────────────────
+  useEffect(() => {
+    const today = new Date().toDateString();
+    const lastLogDate = localStorage.getItem("lastLogDate");
+    if (lastLogDate !== today) {
+      setNotificationLog([]);
+      localStorage.setItem("lastLogDate", today);
+    }
+  }, []);
+
+  // ── Deep-link on mount: URL params from notification tap ─────────────────
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get("tab");
+    const gameId = params.get("gameId");
+    const cardType = params.get("cardType");
+    if (tab === "ncaab" || tab === "calculator") setActiveTab(tab as any);
+    if (gameId && cardType === "game") {
+      setTimeout(() => setSelectedGameId(gameId), 400);
+    }
+    if (params.toString()) {
+      window.history.replaceState({}, "", "/");
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Push notification subscription state ─────────────────────────────────
   useEffect(() => {
     if (!user) return;
@@ -295,7 +343,7 @@ export default function Dashboard() {
           if (sub) setPushSubscribed(true);
         });
       });
-      navigator.serviceWorker.addEventListener("message", (e) => {
+      const handleSwMessage = (e: MessageEvent) => {
         if (e.data?.type === "ALERT_RECEIVED") {
           const payload = e.data.payload;
           setAlertHistory(prev => {
@@ -303,10 +351,35 @@ export default function Dashboard() {
             try { localStorage.setItem("ll_alerts", JSON.stringify(updated)); } catch {}
             return updated;
           });
+          const entry: NotificationLog = {
+            id: `notif-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            timestamp: Date.now(),
+            type: payload.cardType === "game" ? "game" : "prop",
+            sport: payload.tab === "ncaab" ? "ncaab" : "nba",
+            title: payload.title ?? "LiveLocks Alert",
+            body: payload.body ?? "",
+            confidence: payload.confidence ?? 0,
+            gameId: payload.gameId ?? "",
+            playerId: payload.playerId,
+            market: payload.market,
+            direction: payload.direction,
+            line: payload.line,
+            result: null,
+          };
+          setNotificationLog(prev => [entry, ...prev]);
         }
-      });
+        if (e.data?.type === "NOTIFICATION_NAVIGATE") {
+          const { tab, gameId, cardType } = e.data.data ?? {};
+          if (tab === "ncaab" || tab === "calculator") setActiveTab(tab as any);
+          setTimeout(() => {
+            if (gameId && cardType === "game") setSelectedGameId(gameId);
+          }, 300);
+        }
+      };
+      navigator.serviceWorker.addEventListener("message", handleSwMessage);
+      return () => navigator.serviceWorker.removeEventListener("message", handleSwMessage);
     }
-  }, [user]);
+  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleEnablePush = async () => {
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
@@ -347,6 +420,25 @@ export default function Dashboard() {
     } finally {
       setPushLoading(false);
     }
+  };
+
+  const settleNotificationLogs = (game: any) => {
+    setNotificationLog(prev => prev.map(entry => {
+      if (entry.gameId !== String(game.id ?? game.gameId)) return entry;
+      if (entry.result !== null) return entry;
+      if (entry.type === "game") {
+        const total = (game.finalAwayScore ?? game.awayScore ?? 0) + (game.finalHomeScore ?? game.homeScore ?? 0);
+        const push = entry.line !== undefined && total === entry.line;
+        const hitOver = entry.line !== undefined && total > entry.line;
+        const hitUnder = entry.line !== undefined && total < entry.line;
+        let result: "HIT" | "MISS" | "PUSH" = "MISS";
+        if (push) result = "PUSH";
+        else if (entry.direction === "Over" && hitOver) result = "HIT";
+        else if (entry.direction === "Under" && hitUnder) result = "HIT";
+        return { ...entry, result, settledAt: Date.now() };
+      }
+      return entry;
+    }));
   };
 
   const handleSaveSms = async () => {
@@ -468,6 +560,16 @@ export default function Dashboard() {
       form.setValue("halftimeScore", `${game.awayScore}-${game.homeScore}`);
     }
   }, [liveGames, selectedGameId]);
+
+  // ── Settle notification logs when games go Final ─────────────────────────
+  useEffect(() => {
+    if (!liveGames || notificationLog.length === 0) return;
+    for (const game of liveGames) {
+      if (game.status === "Final") {
+        settleNotificationLogs(game);
+      }
+    }
+  }, [liveGames]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const watchedPlayerId = form.watch("playerId");
   const watchedStatType = form.watch("statType");
@@ -852,12 +954,12 @@ export default function Dashboard() {
               )}
               Sync Rosters
             </button>
-            {/* SMS Bell button (smsStatus dot + flash) */}
+            {/* Bell — opens notification history sheet */}
             <button
               data-testid="button-sms-bell"
-              onClick={() => { setSmsModalFlow("view"); setShowSmsModal(true); }}
+              onClick={() => setShowHistorySheet(true)}
               className="relative flex items-center justify-center w-9 h-9 rounded-lg bg-secondary border border-border text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors"
-              title="SMS Alerts"
+              title="Alert History"
             >
               <Bell
                 ref={bellRef}
@@ -2623,6 +2725,118 @@ export default function Dashboard() {
           hasPhone={!!phoneInput}
         />
       )}
+
+      {/* ── Notification History Sheet ───────────────────────────────────── */}
+      <Sheet open={showHistorySheet} onOpenChange={setShowHistorySheet}>
+        <SheetContent
+          side="bottom"
+          className="rounded-t-xl border-t border-border p-0 focus:outline-none"
+          style={{ background: "#0a0a0a", maxHeight: "85vh", display: "flex", flexDirection: "column" }}
+        >
+          {/* Header */}
+          <div className="flex items-start justify-between px-5 pt-5 pb-3 border-b border-zinc-800 flex-shrink-0">
+            <div>
+              <h2 className="text-lg font-bold text-white">Alert History</h2>
+              <p className="text-sm text-zinc-400 mt-0.5">Today · {notificationLog.length} alert{notificationLog.length !== 1 ? "s" : ""}</p>
+            </div>
+            <button
+              data-testid="button-alert-preferences"
+              onClick={() => { setSmsModalFlow("view"); setShowSmsModal(true); }}
+              className="text-xs text-zinc-400 underline underline-offset-2 hover:text-zinc-200 transition-colors mt-1"
+            >
+              Alert Preferences
+            </button>
+          </div>
+
+          {/* Scrollable content */}
+          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+            {/* Daily summary row */}
+            {notificationLog.length > 0 && (() => {
+              const hits = notificationLog.filter(e => e.result === "HIT").length;
+              const misses = notificationLog.filter(e => e.result === "MISS").length;
+              const pending = notificationLog.filter(e => e.result === null).length;
+              return (
+                <div className="rounded-lg px-4 py-3 mb-1" style={{ background: "#111111", border: "1px solid #27272a" }}>
+                  <p className="text-xs uppercase tracking-wider font-semibold mb-1" style={{ color: "#71717a" }}>Today's Record</p>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-lg font-bold" style={{ color: "#00d4aa" }}>{hits}W</span>
+                    <span className="text-lg font-bold text-white">–</span>
+                    <span className="text-lg font-bold" style={{ color: "#ef4444" }}>{misses}L</span>
+                    {pending > 0 && <span className="text-xs ml-2" style={{ color: "#71717a" }}>{pending} pending</span>}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Empty state */}
+            {notificationLog.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-16 gap-3">
+                <Clock className="w-10 h-10" style={{ color: "#3f3f46" }} />
+                <p className="text-sm font-semibold" style={{ color: "#71717a" }}>No alerts sent yet today</p>
+                <p className="text-xs text-center" style={{ color: "#52525b" }}>High-confidence signals will appear here</p>
+              </div>
+            )}
+
+            {/* Log entries */}
+            {notificationLog.map((entry) => {
+              const timeStr = new Date(entry.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+              const confColor = entry.confidence >= 85 ? "#00d4aa" : entry.confidence >= 80 ? "#f59e0b" : "#71717a";
+              return (
+                <button
+                  key={entry.id}
+                  data-testid={`notif-log-entry-${entry.id}`}
+                  className="w-full text-left rounded-lg px-4 py-3 space-y-2 transition-colors hover:bg-zinc-800/50"
+                  style={{ background: "#111111", border: "1px solid #27272a" }}
+                  onClick={() => {
+                    setShowHistorySheet(false);
+                    if (entry.gameId) {
+                      if (entry.sport === "ncaab") setActiveTab("ncaab");
+                      else {
+                        setActiveTab("calculator");
+                        setTimeout(() => setSelectedGameId(entry.gameId), 300);
+                      }
+                    }
+                  }}
+                >
+                  {/* Top row: sport pill + time + result badge */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="text-xs font-bold px-1.5 py-0.5 rounded"
+                        style={{ background: "rgba(59,130,246,0.15)", color: "#3b82f6" }}
+                      >
+                        {entry.sport === "nba" ? "NBA" : "NCAAB"}
+                      </span>
+                      <span className="text-xs" style={{ color: "#71717a" }}>{timeStr}</span>
+                    </div>
+                    {entry.result === null && (
+                      <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "#27272a", color: "#71717a" }}>Pending</span>
+                    )}
+                    {entry.result === "HIT" && (
+                      <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: "rgba(0,212,170,0.15)", border: "1px solid rgba(0,212,170,0.3)", color: "#00d4aa" }}>✓ HIT</span>
+                    )}
+                    {entry.result === "MISS" && (
+                      <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444" }}>✗ MISS</span>
+                    )}
+                    {entry.result === "PUSH" && (
+                      <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "#27272a", border: "1px solid #3f3f46", color: "#a1a1aa" }}>— PUSH</span>
+                    )}
+                  </div>
+                  {/* Middle: notification body */}
+                  <p className="text-sm text-white leading-snug">{entry.body}</p>
+                  {/* Bottom: confidence + view */}
+                  <div className="flex items-center justify-between">
+                    {entry.confidence > 0 && (
+                      <span className="text-xs font-semibold" style={{ color: confColor }}>{entry.confidence}% confidence</span>
+                    )}
+                    <span className="text-xs ml-auto" style={{ color: "#00d4aa" }}>View →</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {/* ── SMS Bell Modal (3 content states) ──────────────────────────────── */}
       <Dialog open={showSmsModal} onOpenChange={setShowSmsModal}>

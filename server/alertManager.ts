@@ -48,8 +48,25 @@ export async function checkAndSendAlerts(
     const pushBody = `${play.playerName} ${dir}${play.line} — ${prob}% confidence. Tap to view.`;
     const smsBody = `LiveLocks: ${play.playerName} ${dir}${play.line} — ${prob}% confidence. livelocksai.app`;
 
+    const deepLinkData = {
+      url: "/",
+      tab: "nba",
+      gameId: play.gameId ?? "",
+      playerId: play.playerId ? String(play.playerId) : "",
+      market: play.statType ?? "",
+      direction: play.betDirection ?? "",
+      line: play.line ?? 0,
+      confidence: Number(prob),
+      cardType: "prop",
+    };
+
     for (const user of usersWithPush) {
-      sendPush(user.pushSubscription, { title, body: pushBody, url: "/" }).catch(console.warn);
+      sendPush(user.pushSubscription, {
+        title,
+        body: pushBody,
+        url: "/",
+        data: deepLinkData,
+      }).catch(console.warn);
     }
     for (const user of usersWithSms) {
       sendSms(user.phoneNumber, smsBody).catch(console.warn);
@@ -64,8 +81,21 @@ export async function checkAndSendAlerts(
     const pushBody = `${play.team} vs ${play.opponent} — 2H started. Check your slate.`;
     const smsBody = `LiveLocks: ${play.team} vs ${play.opponent} — 2H plays are live! livelocksai.app`;
 
+    const deepLinkData = {
+      url: "/",
+      tab: "nba",
+      gameId,
+      cardType: "game",
+      trigger: "2h_live",
+    };
+
     for (const user of usersWithPush) {
-      sendPush(user.pushSubscription, { title, body: pushBody, url: "/" }).catch(console.warn);
+      sendPush(user.pushSubscription, {
+        title,
+        body: pushBody,
+        url: "/",
+        data: deepLinkData,
+      }).catch(console.warn);
     }
     for (const user of usersWithSms) {
       sendSms(user.phoneNumber, smsBody).catch(console.warn);

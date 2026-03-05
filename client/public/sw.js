@@ -42,25 +42,37 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("push", (event) => {
-  let data = { title: "LiveLocks", body: "New alert", url: "/" };
+  let payload = { title: "LiveLocks", body: "New alert", url: "/", data: {} };
   try {
-    data = event.data ? event.data.json() : data;
+    payload = event.data ? event.data.json() : payload;
   } catch {}
 
+  const deepData = payload.data ?? {};
+
   const options = {
-    body: data.body,
+    body: payload.body,
     icon: "/favicon.png",
     badge: "/favicon.png",
-    data: { url: data.url ?? "/" },
+    data: {
+      url: payload.url ?? "/",
+      ...deepData,
+    },
     vibrate: [200, 100, 200],
     requireInteraction: false,
   };
 
   event.waitUntil(
-    self.registration.showNotification(data.title, options).then(() => {
+    self.registration.showNotification(payload.title, options).then(() => {
       return self.clients.matchAll({ type: "window" }).then((clients) => {
         for (const client of clients) {
-          client.postMessage({ type: "ALERT_RECEIVED", payload: data });
+          client.postMessage({
+            type: "ALERT_RECEIVED",
+            payload: {
+              title: payload.title,
+              body: payload.body,
+              ...deepData,
+            },
+          });
         }
       });
     })
@@ -69,16 +81,33 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const url = event.notification.data?.url ?? "/";
+  if (event.action === "dismiss") return;
+
+  const data = event.notification.data || {};
+
+  // Build deep-link URL with query params
+  const params = new URLSearchParams();
+  if (data.tab) params.set("tab", data.tab);
+  if (data.gameId) params.set("gameId", data.gameId);
+  if (data.playerId) params.set("playerId", data.playerId);
+  if (data.cardType) params.set("cardType", data.cardType);
+  if (data.trigger) params.set("trigger", data.trigger);
+
+  const targetUrl = params.toString() ? `/?${params.toString()}` : "/";
+
   event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-      for (const client of clients) {
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      // App already open — focus and send navigation message
+      for (const client of clientList) {
         if (client.url.includes(self.location.origin) && "focus" in client) {
-          return client.focus();
+          client.focus();
+          client.postMessage({ type: "NOTIFICATION_NAVIGATE", data });
+          return;
         }
       }
+      // App not open — open with deep-link params
       if (self.clients.openWindow) {
-        return self.clients.openWindow(url);
+        return self.clients.openWindow(targetUrl);
       }
     })
   );
