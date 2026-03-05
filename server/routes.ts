@@ -41,6 +41,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid tier. Use null, 'all', or 'elite'" });
       }
       await storage.setUserSubscriptionTier(userId, tier);
+      console.log("[ADMIN] Tier written:", { userId, tier, timestamp: new Date().toISOString() });
       return res.json({ success: true });
     } catch (err) {
       console.error("[admin/tier]", err);
@@ -139,6 +140,7 @@ export async function registerRoutes(
       }
 
       await storage.setUserSubscriptionTier(userId, newTierKey);
+      console.log("[ADMIN] change-tier written:", { userId, newTierKey, priceDiff, timestamp: new Date().toISOString() });
       if (priceDiff > 0) {
         await storage.resetUserPlays(userId);
         await storage.setUpgradedAt(userId, new Date().toISOString());
@@ -298,6 +300,31 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("[/api/me]", err);
       return res.status(500).json({ error: err.message || "Failed to fetch user" });
+    }
+  });
+
+  // ── /api/auth/refresh-tier — client polls this to detect admin-triggered changes ──
+  app.get("/api/auth/refresh-tier", requireAuth, async (req, res) => {
+    try {
+      const userId = (req as any).resolvedUserId as number;
+      const user = await storage.getUserById(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      const rawTier = user.subscriptionTier ?? null;
+      const hasNcaabAccess = user.isAdmin || rawTier === "all" || rawTier === "elite";
+      // Clear requiresRefresh after client has acknowledged it
+      if (user.requiresRefresh) {
+        await storage.clearRequiresRefresh(userId);
+      }
+      return res.json({
+        tier: rawTier,
+        hasNcaabAccess,
+        userId,
+        requiresRefresh: user.requiresRefresh ?? false,
+        refreshedAt: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      console.error("[auth/refresh-tier]", err.message);
+      return res.status(500).json({ error: "Failed to refresh tier" });
     }
   });
 

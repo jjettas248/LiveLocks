@@ -37,7 +37,9 @@ export function useAuth() {
       if (!res.ok) return null;
       return res.json();
     },
-    staleTime: 30 * 1000,
+    staleTime: 0,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
     retry: false,
   });
 

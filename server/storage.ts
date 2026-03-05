@@ -95,6 +95,7 @@ export interface IStorage {
   getAllFeedback(): Promise<(Feedback & { userEmail: string | null })[]>;
   updateUserAlerts(userId: number, data: { pushSubscription?: string | null; pushAlerts?: boolean; phoneNumber?: string | null; smsAlerts?: boolean; smsConsent?: boolean }): Promise<void>;
   clearNewProFlag(userId: number): Promise<void>;
+  clearRequiresRefresh(userId: number): Promise<void>;
   setUpgradedAt(userId: number, upgradedAt: string): Promise<void>;
   getUserByPhoneNumber(phone: string): Promise<User | undefined>;
   savePlayAlerts(plays: any[]): Promise<void>;
@@ -439,6 +440,10 @@ export class DatabaseStorage implements IStorage {
 
   async clearNewProFlag(userId: number): Promise<void> {
     await db.update(users).set({ isNewProUser: false, requiresRefresh: false }).where(eq(users.id, userId));
+  }
+
+  async clearRequiresRefresh(userId: number): Promise<void> {
+    await db.update(users).set({ requiresRefresh: false }).where(eq(users.id, userId));
   }
 
   async setUpgradedAt(userId: number, upgradedAt: string): Promise<void> {

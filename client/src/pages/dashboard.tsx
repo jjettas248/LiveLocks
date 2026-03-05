@@ -17,6 +17,7 @@ import { AnalyticsTab } from "@/components/analytics-tab";
 import { WelcomeBanner } from "@/components/welcome-banner";
 import { AlertsOnboardingModal } from "@/components/alerts-onboarding-modal";
 import { useAuth } from "@/hooks/use-auth";
+import { hasProAccess } from "@/lib/tierUtils";
 import { useLocation } from "wouter";
 import {
   Activity,
@@ -262,7 +263,7 @@ export default function Dashboard() {
        (user as any)?.tier ??
        (user as any)?.metadata?.tier ??
        null);
-  const hasNcaabAccess = !!(user?.isAdmin || (effectiveTier && ["all", "elite"].includes(effectiveTier)));
+  const hasNcaabAccess = !!(user?.isAdmin || hasProAccess(effectiveTier));
 
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -840,9 +841,8 @@ export default function Dashboard() {
     }
   }, []);
 
-  // ── /api/me: fresh DB tier on mount ──────────────────────────────────────
+  // ── /api/me: fresh DB tier — runs on mount + window focus + every 60s ──────
   useEffect(() => {
-    if (!user?.id) return;
     const fetchFreshUser = async () => {
       try {
         const token = getAuthToken();
@@ -851,17 +851,33 @@ export default function Dashboard() {
         const res = await fetch("/api/me", { credentials: "include", headers });
         if (!res.ok) return;
         const fresh = await res.json();
-        const sessionTier = user?.subscriptionTier ??
-          (user as any)?.tier ??
-          (user as any)?.metadata?.tier ??
-          null;
-        if (fresh.subscriptionTier !== sessionTier) {
-          setLocalTier(fresh.subscriptionTier ?? null);
+        console.log("[TAB GATE] /api/me →", { subscriptionTier: fresh.subscriptionTier, requiresRefresh: fresh.requiresRefresh });
+        // Always sync localTier to DB value
+        setLocalTier(fresh.subscriptionTier ?? null);
+        // If server flagged requiresRefresh, force auth query refresh
+        if (fresh.requiresRefresh) {
+          console.log("[TAB GATE] requiresRefresh=true — invalidating auth cache");
+          queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
         }
       } catch (_) {}
     };
     fetchFreshUser();
-  }, [user?.id]);
+    window.addEventListener("focus", fetchFreshUser);
+    const interval = setInterval(fetchFreshUser, 60_000);
+    return () => {
+      window.removeEventListener("focus", fetchFreshUser);
+      clearInterval(interval);
+    };
+  }, []);
+
+  // ── Debug: NCAAB tab gate state ───────────────────────────────────────────
+  useEffect(() => {
+    console.log("[TAB GATE] Raw tier from session:", effectiveTier);
+    console.log("[TAB GATE] hasProAccess:", hasProAccess(effectiveTier));
+    console.log("[TAB GATE] isAdmin:", user?.isAdmin ?? false);
+    console.log("[TAB GATE] hasNcaabAccess:", hasNcaabAccess);
+    console.log("[TAB GATE] NCAAB locked:", !hasNcaabAccess);
+  }, [hasNcaabAccess, effectiveTier]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Welcome banner + NEW badge system ────────────────────────────────────
   const { data: ncaabGamesRaw } = useQuery<{ games: Array<{ id: string; status: string; startTime?: string }> }>({
@@ -1460,7 +1476,7 @@ export default function Dashboard() {
             {/* SMS (Pro + All Sports) */}
             <div className="bg-secondary/40 rounded-xl p-4 space-y-3">
               <p className="text-sm font-semibold text-foreground">💬 SMS Alerts</p>
-              {["all", "elite"].includes(user.subscriptionTier ?? "") || user.isAdmin
+              {(hasProAccess(user.subscriptionTier) || user.isAdmin)
                 ? (
                   <div className="space-y-2">
                     <p className="text-xs text-muted-foreground">Get a text message for 2H plays and ≥90% confidence plays. Msg & data rates may apply. Reply STOP to cancel anytime.</p>
