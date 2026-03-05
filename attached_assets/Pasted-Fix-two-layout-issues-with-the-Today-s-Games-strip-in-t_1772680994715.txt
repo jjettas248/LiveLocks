@@ -1,0 +1,72 @@
+Fix two layout issues with the Today's Games strip 
+in the NCAAB Live tab.
+
+---
+
+ISSUE 1: TODAY'S GAMES STRIP IS DUPLICATING
+
+The strip is rendering both above AND below 
+the expanded game card. It should only appear once.
+
+FIND every location where TodaysGamesStrip or 
+the Today's Games component is rendered in the 
+NCAAB Live tab file.
+
+There should be exactly ONE instance.
+
+If it appears more than once:
+  Remove all duplicates.
+  Keep only the topmost instance.
+  
+Check these locations specifically:
+  - Top of NCAAB Live tab component (correct location)
+  - Inside the game card component (wrong — remove)
+  - Inside the expanded card wrapper (wrong — remove)
+  - Inside a layout wrapper that wraps all content 
+    (may be causing double render — fix the wrapper)
+
+After fix: strip renders exactly once, always at top.
+
+---
+
+ISSUE 2: TODAY'S GAMES MUST ALWAYS BE AT THE TOP
+
+The strip must be the first element in the NCAAB 
+Live tab, above everything else including:
+  - Expanded game cards
+  - Section headers
+  - Any "Live Now" label
+  - Any game list content
+
+Correct layout order top to bottom:
+
+  1. Today's Games strip (ALWAYS FIRST)
+       - "LIVE NOW" scrollable chip row (if any live)
+       - Time-grouped collapsible sections below
+  2. "Live Now" label + live game count
+  3. Expanded game card (when open)
+  4. Section headers + game rows
+
+The strip must NOT scroll away when a card expands.
+It must NOT be inside the scrollable game list.
+It must be OUTSIDE and ABOVE the scrollable content.
+
+If the strip is currently inside the same scroll 
+container as the game cards:
+  Move it outside that container.
+  
+  Structure:
+    <div className="ncaab-tab">
+      
+      {/* ALWAYS FIRST — outside scroll container */}
+      <TodaysGamesStrip games={ncaabGames} ... />
+      
+      {/* Scrollable content below strip */}
+      <div className="ncaab-game-list">
+        {/* Live label, section headers, cards */}
+      </div>
+      
+    </div>
+
+Do not change any styling.
+Only fix the render location and remove duplicates.
