@@ -44,6 +44,7 @@ import {
   Bell,
   CheckCircle2,
   X,
+  ChevronUp,
 } from "lucide-react";
 import {
   Dialog,
@@ -340,6 +341,12 @@ export default function Dashboard() {
     return () => { cancelled = true; if (resetTimerRef.current) clearTimeout(resetTimerRef.current); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    const onScroll = () => setShowScrollTop(window.scrollY > 300);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
   const syncRostersMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/sync-rosters"),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/players"] }),
@@ -360,6 +367,7 @@ export default function Dashboard() {
   const [boxScoreSortDir, setBoxScoreSortDir] = useState<"desc" | "asc">("desc");
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
   const [copiedPick, setCopiedPick] = useState(false);
+  const [showScrollTop, setShowScrollTop] = useState(false);
   const [portalLoading, setPortalLoading] = useState(false);
 
   const handleManageSubscription = async () => {
@@ -3602,6 +3610,16 @@ export default function Dashboard() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Floating scroll-to-top button */}
+      <button
+        onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+        data-testid="button-float-scroll-top"
+        aria-label="Scroll to top"
+        className={`fixed bottom-6 right-5 z-50 w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-all duration-300 bg-primary text-primary-foreground hover:opacity-90 active:scale-95 ${showScrollTop ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-4 pointer-events-none"}`}
+      >
+        <ChevronUp className="w-5 h-5" />
+      </button>
     </div>
   );
 }
