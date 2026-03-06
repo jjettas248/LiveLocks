@@ -1930,6 +1930,40 @@ export default function Dashboard() {
                           const parts = m.split(":");
                           return parts.length === 2 ? parseInt(parts[0]) + parseInt(parts[1]) / 60 : parseFloat(m) || 0;
                         };
+
+                        // Build player signal map from halftime plays (already loaded, zero extra calls)
+                        type SignalTier = "green" | "red" | "yellow" | "teal";
+                        type PlayerSignal = { tier: SignalTier; displayProb: number; betDirection: string; statType: string };
+                        const playerSignalMap = new Map<string, PlayerSignal>();
+                        for (const play of (halftimePlaysData?.plays ?? [])) {
+                          const dp = play.betDirection === "under"
+                            ? Math.round((100 - play.probability) * 10) / 10
+                            : Math.round(play.probability * 10) / 10;
+                          const tier: SignalTier | null =
+                            dp >= 85 ? (play.betDirection === "under" ? "red" : "green") :
+                            dp >= 70 ? "yellow" :
+                            dp >= 60 ? "teal" : null;
+                          if (!tier) continue;
+                          const key = play.playerName.toLowerCase();
+                          const existing = playerSignalMap.get(key);
+                          if (!existing || dp > existing.displayProb) {
+                            playerSignalMap.set(key, { tier, displayProb: dp, betDirection: play.betDirection, statType: play.statType });
+                          }
+                        }
+
+                        const SIGNAL_STYLES: Record<SignalTier, { border: string; bg: string; dot: string }> = {
+                          green:  { border: "#22c55e", bg: "rgba(34,197,94,0.07)",   dot: "#22c55e" },
+                          red:    { border: "#ef4444", bg: "rgba(239,68,68,0.07)",   dot: "#ef4444" },
+                          yellow: { border: "#eab308", bg: "rgba(234,179,8,0.07)",   dot: "#eab308" },
+                          teal:   { border: "#00d4aa", bg: "rgba(0,212,170,0.07)",   dot: "#00d4aa" },
+                        };
+
+                        const STAT_LABEL_MAP: Record<string, string> = {
+                          points: "PTS", rebounds: "REB", assists: "AST", steals: "STL",
+                          blocks: "BLK", threes: "3PM", pts_reb_ast: "PRA", pts_reb: "P+R",
+                          pts_ast: "P+A", reb_ast: "R+A", stl_blk: "S+B",
+                        };
+
                         const filterLower = boxScoreFilter.toLowerCase().trim();
                         const playedStats = liveStats
                           .filter(s => s.minutes !== "0" && s.minutes !== "0:00")
@@ -1965,6 +1999,7 @@ export default function Dashboard() {
                             })
                             .map((stat) => {
                               const isSelected = selectedPlayer && findPlayerByName(stat.playerName)?.id === selectedPlayer.id;
+                              const signal = playerSignalMap.get(stat.playerName.toLowerCase()) ?? null;
                               const statTotal = (() => {
                                 if (watchedStatType === "points") return stat.points;
                                 if (watchedStatType === "rebounds") return stat.rebounds;
@@ -1982,20 +2017,35 @@ export default function Dashboard() {
                               const fgPct = stat.fga != null && stat.fga > 0 ? `${stat.fgm ?? 0}-${stat.fga}` : "—";
                               const ftPct = stat.fta != null && stat.fta > 0 ? `${stat.ftm ?? 0}-${stat.fta}` : "—";
                               const fg3Pct = stat.fg3a != null && stat.fg3a > 0 ? `${stat.fg3m ?? 0}-${stat.fg3a}` : "—";
+                              const signalStyle = !isSelected && signal ? SIGNAL_STYLES[signal.tier] : null;
+                              const rowStyle = signalStyle
+                                ? { background: signalStyle.bg, boxShadow: `inset 3px 0 0 ${signalStyle.border}` }
+                                : undefined;
                               return (
                                 <tr
                                   key={`player-${stat.playerId}`}
                                   onClick={() => handleBoxScoreClick(stat)}
                                   data-testid={`boxscore-row-${stat.playerId}`}
+                                  style={rowStyle}
                                   className={`border-b border-border/20 cursor-pointer transition-all ${
                                     isSelected
                                       ? "bg-primary/10 border-l-2 border-l-primary"
-                                      : "hover:bg-secondary/40"
+                                      : signal ? "" : "hover:bg-secondary/40"
                                   }`}
                                 >
                                   <td className="px-4 py-2 font-medium text-foreground">
-                                    {stat.playerName}
-                                    {isSelected && <span className="ml-1.5 text-primary text-[10px] font-bold">●</span>}
+                                    <span className="flex items-center gap-1.5">
+                                      <span>{stat.playerName}</span>
+                                      {isSelected && <span className="text-primary text-[10px] font-bold">●</span>}
+                                      {!isSelected && signal && (
+                                        <span
+                                          title={`${STAT_LABEL_MAP[signal.statType] ?? signal.statType} ${signal.betDirection === "under" ? "Under" : "Over"} — ${signal.displayProb}% model confidence`}
+                                          data-testid={`signal-dot-${stat.playerId}`}
+                                          style={{ color: SIGNAL_STYLES[signal.tier].dot }}
+                                          className="text-[9px] font-bold cursor-help select-none"
+                                        >●</span>
+                                      )}
+                                    </span>
                                   </td>
                                   <td className="text-right px-3 py-2 font-mono text-muted-foreground">{stat.minutes}</td>
                                   <td className="text-right px-3 py-2 font-mono font-bold text-primary">{statTotal}</td>
