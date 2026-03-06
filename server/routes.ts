@@ -5,7 +5,7 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
 import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines } from "./oddsService";
-import { computeNCAABPlays, getNCAABScoreboard, getNCAABH2H, getNCAABChipOdds } from "./ncaabService";
+import { computeNCAABPlays, getNCAABScoreboard, getNCAABH2H, getNCAABChipOdds, fetch2HLines, calc2HEngineProb } from "./ncaabService";
 import { enrichNCAABGameFull, clearEnrichmentCache, getEnrichmentCacheStats } from "./ncaabEnrichment";
 import { calculateParlay } from "./parlayService";
 import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin, requireTier } from "./auth";
@@ -245,6 +245,25 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("[NCAAB enriched]", err.message);
       return res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/ncaab/2h-lines", requireTier("all", "elite"), async (req, res) => {
+    try {
+      const gameId = String(req.query.gameId ?? "");
+      if (!gameId) return res.status(400).json({ error: "gameId required" });
+      const games = await getNCAABScoreboard();
+      const game  = games.find((g: any) => g.id === gameId);
+      if (!game) return res.json({ h2Total: null, source: null });
+      const h1HomeScore = typeof req.query.h1HomeScore === "string" ? parseFloat(req.query.h1HomeScore) : 0;
+      const h1AwayScore = typeof req.query.h1AwayScore === "string" ? parseFloat(req.query.h1AwayScore) : 0;
+      const fullLine    = typeof req.query.fullLine === "string" ? parseFloat(req.query.fullLine) : null;
+      const lines  = await fetch2HLines(gameId, game.homeTeam, h1HomeScore || 0, h1AwayScore || 0, fullLine);
+      const engine = calc2HEngineProb(lines, h1HomeScore || 0, h1AwayScore || 0, null);
+      return res.json({ lines, engine });
+    } catch (err: any) {
+      console.error("[NCAAB 2h-lines]", err.message);
+      return res.json({ lines: { h2Total: null, source: null }, engine: null });
     }
   });
 

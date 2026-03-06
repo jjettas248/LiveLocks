@@ -727,6 +727,192 @@ function getPreGameConfidenceTier(overProb: number | null | undefined) {
   };
 }
 
+// ── MarketRow: single O/U or single-side spread row ──────────────────────────
+function MarketRow({
+  label, line,
+  overProb, underProb,
+  overBookImplied, underBookImplied,
+  overPrice, underPrice,
+  singleSide = false,
+  coverProb, bookImplied, price,
+  isEstimated = false,
+}: {
+  label: string; line: number | null;
+  overProb?: number | null; underProb?: number | null;
+  overBookImplied?: number | null; underBookImplied?: number | null;
+  overPrice?: number | null; underPrice?: number | null;
+  singleSide?: boolean;
+  coverProb?: number | null; bookImplied?: number | null; price?: number | null;
+  isEstimated?: boolean;
+}) {
+  const calcEdge = (eng: number | null | undefined, book: number | null | undefined) =>
+    eng != null && book != null ? parseFloat((eng - book).toFixed(1)) : null;
+  const edgeColor = (e: number | null) => {
+    if (e == null) return "#71717a";
+    if (e >= 5) return "#00d4aa";
+    if (e >= 2) return "#f59e0b";
+    if (e <= -5) return "#ef4444";
+    return "#71717a";
+  };
+  const fmtPrice = (p: number | null | undefined) => p != null ? ` (${p > 0 ? "+" : ""}${p})` : "";
+
+  if (!line) return (
+    <div style={{ padding: "10px 16px", borderBottom: "1px solid #1a1a1a", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <span style={{ color: "#3f3f46", fontSize: 11, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>{label}</span>
+      <span style={{ color: "#3f3f46", fontSize: 11 }}>No line</span>
+    </div>
+  );
+
+  if (singleSide) {
+    const edge = calcEdge(coverProb, bookImplied);
+    return (
+      <div style={{ padding: "10px 16px", borderBottom: "1px solid #1a1a1a", background: (edge ?? 0) >= 5 ? "rgba(0,212,170,0.04)" : "#111111", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ color: "#71717a", fontSize: 11, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>
+            {label}{isEstimated && <span style={{ color: "#f59e0b", fontSize: 10, marginLeft: 6 }}>~est</span>}
+          </div>
+          {bookImplied != null && <div style={{ color: "#52525b", fontSize: 10, marginTop: 2 }}>Book: {bookImplied}%{fmtPrice(price)}</div>}
+        </div>
+        <div style={{ textAlign: "right" as const }}>
+          <div style={{ color: "#ffffff", fontSize: 16, fontWeight: 700 }}>{(line ?? 0) > 0 ? "+" : ""}{line}</div>
+          {coverProb != null && (
+            <div style={{ color: edgeColor(edge), fontSize: 12, fontWeight: 600 }}>
+              {coverProb}% cover{edge != null && <span style={{ fontSize: 10, marginLeft: 4 }}>{edge > 0 ? "+" : ""}{edge}pp</span>}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const overEdge  = calcEdge(overProb, overBookImplied);
+  const underEdge = calcEdge(underProb, underBookImplied);
+  return (
+    <div style={{ borderBottom: "1px solid #1a1a1a", background: ((overEdge ?? 0) >= 5 || (underEdge ?? 0) >= 5) ? "rgba(0,212,170,0.03)" : "#111111" }}>
+      <div style={{ padding: "6px 16px 2px", color: "#71717a", fontSize: 10, textTransform: "uppercase" as const, letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 6 }}>
+        {label}{isEstimated && <span style={{ color: "#f59e0b", fontSize: 9 }}>~est</span>}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, padding: "0 16px 10px" }}>
+        {[{ side: "OVER", line, prob: overProb, bookImplied: overBookImplied, price: overPrice, edge: overEdge },
+          { side: "UNDER", line, prob: underProb, bookImplied: underBookImplied, price: underPrice, edge: underEdge }].map(({ side, line: l, prob, bookImplied: bi, price: pr, edge: e }) => (
+          <div key={side} style={{ background: (e ?? 0) >= 5 ? (side === "OVER" ? "rgba(0,212,170,0.08)" : "rgba(239,68,68,0.08)") : "rgba(255,255,255,0.02)", borderRadius: 6, padding: "8px 10px", border: `1px solid ${(e ?? 0) >= 5 ? (side === "OVER" ? "rgba(0,212,170,0.2)" : "rgba(239,68,68,0.2)") : "#27272a"}` }}>
+            <div style={{ color: "#52525b", fontSize: 9, textTransform: "uppercase" as const }}>{side} {l}</div>
+            {prob != null && <div style={{ color: edgeColor(e), fontSize: 18, fontWeight: 700, margin: "2px 0" }}>{prob}%</div>}
+            {bi != null && <div style={{ color: "#3f3f46", fontSize: 10 }}>Book: {bi}%{fmtPrice(pr)}</div>}
+            {e != null && <div style={{ color: edgeColor(e), fontSize: 10, fontWeight: 600 }}>{e > 0 ? "+" : ""}{e}pp</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── FullGameMarkets: all 5 full-game market rows ──────────────────────────────
+function FullGameMarkets({ play, homeAbbr, awayAbbr }: { play: NCAABPlay; homeAbbr: string; awayAbbr: string }) {
+  const fullTotal   = play.total;
+  const overProb    = play.overProb;
+  const underProb   = overProb != null ? parseFloat((100 - overProb).toFixed(1)) : null;
+  const spreadProb  = play.spreadProb;
+  const homeSpread  = play.spread != null ? -play.spread : null;
+  const awaySpread  = play.spread != null ? play.spread : null;
+  const homeTT      = play.homeGameTotalLine;
+  const awayTT      = play.awayGameTotalLine;
+  const homeTTEst   = play.homeGameTotalIsEstimated;
+  const awayTTEst   = play.awayGameTotalIsEstimated;
+
+  return (
+    <div style={{ borderRadius: 8, overflow: "hidden", border: "1px solid #1f1f1f", marginTop: 8 }}>
+      <div style={{ padding: "8px 16px", background: "#0f0f0f", borderBottom: "1px solid #1a1a1a" }}>
+        <span style={{ color: "#52525b", fontSize: 10, textTransform: "uppercase" as const, letterSpacing: "0.06em", fontWeight: 600 }}>Full Game Markets</span>
+      </div>
+      <MarketRow label="Full Game Total" line={fullTotal} overProb={overProb} underProb={underProb} />
+      <MarketRow label={`${homeAbbr} Spread`} line={homeSpread} singleSide coverProb={spreadProb} />
+      <MarketRow label={`${awayAbbr} Spread`} line={awaySpread} singleSide coverProb={spreadProb != null ? parseFloat((100 - spreadProb).toFixed(1)) : null} />
+      <MarketRow label={`${homeAbbr} Team Total`} line={homeTT} isEstimated={homeTTEst} overProb={homeTT && overProb ? parseFloat(Math.min(Math.max(overProb + 2, 1), 99).toFixed(1)) : null} underProb={homeTT && overProb ? parseFloat(Math.min(Math.max(100 - overProb - 2, 1), 99).toFixed(1)) : null} />
+      <MarketRow label={`${awayAbbr} Team Total`} line={awayTT} isEstimated={awayTTEst} overProb={awayTT && overProb ? parseFloat(Math.min(Math.max(100 - overProb + 2, 1), 99).toFixed(1)) : null} underProb={awayTT && overProb ? parseFloat(Math.min(Math.max(overProb - 2, 1), 99).toFixed(1)) : null} />
+    </div>
+  );
+}
+
+// ── H1Markets: 1H market rows with fallback estimates ────────────────────────
+function H1Markets({ play, homeAbbr, awayAbbr }: { play: NCAABPlay; homeAbbr: string; awayAbbr: string }) {
+  const h1Line      = play.h1TotalLine;
+  const h1Over      = play.over1HProb;
+  const h1Under     = h1Over != null ? parseFloat((100 - h1Over).toFixed(1)) : null;
+  const h1Spread    = play.h1SpreadLine;
+  const h1SpreadFav = play.h1Favorite;
+  const h1Home1HTL  = play.home1HTotalLine;
+  const h1Away1HTL  = play.away1HTotalLine;
+  const h1EstimatedLine   = h1Line == null;
+  const h1EstimatedSpread = h1Spread == null;
+
+  return (
+    <div style={{ borderRadius: 8, overflow: "hidden", border: "1px solid #1f1f1f", marginTop: 8 }}>
+      <div style={{ padding: "8px 16px", background: "#0f0f0f", borderBottom: "1px solid #1a1a1a" }}>
+        <span style={{ color: "#52525b", fontSize: 10, textTransform: "uppercase" as const, letterSpacing: "0.06em", fontWeight: 600 }}>1st Half Markets</span>
+      </div>
+      <MarketRow label="1H Total" line={h1Line} overProb={h1Over} underProb={h1Under} isEstimated={h1EstimatedLine} />
+      <MarketRow label={`${h1SpreadFav || homeAbbr} 1H Spread`} line={h1Spread} singleSide isEstimated={h1EstimatedSpread} />
+      <MarketRow label={`${homeAbbr} 1H Team Total`} line={h1Home1HTL ?? (h1Line ? parseFloat((h1Line * 0.48).toFixed(1)) : null)} isEstimated />
+      <MarketRow label={`${awayAbbr} 1H Team Total`} line={h1Away1HTL ?? (h1Line ? parseFloat((h1Line * 0.52).toFixed(1)) : null)} isEstimated />
+    </div>
+  );
+}
+
+// ── Live2HPanel: 2H over/under with engine probability vs book ────────────────
+function Live2HPanel({
+  h2Lines, h2Engine, homeAbbr, awayAbbr, h1HomeScore, h1AwayScore,
+}: {
+  h2Lines: { h2Total: number | null; h2OverPrice: number | null; h2UnderPrice: number | null; h2Spread: number | null; h2OverPct: number | null; h2UnderPct: number | null; source: string | null } | null;
+  h2Engine: { overProb: number; underProb: number; h2Proj: number | null; overEdge: number | null; underEdge: number | null; bookOverImplied: number | null; bookUnderImplied: number | null; hasEdge: boolean; edgeSide: "OVER" | "UNDER" | null; source: string } | null;
+  homeAbbr: string; awayAbbr: string;
+  h1HomeScore: number; h1AwayScore: number;
+}) {
+  if (!h2Lines?.h2Total) return null;
+  const hasEdge   = h2Engine?.hasEdge ?? false;
+  const edgeSide  = h2Engine?.edgeSide ?? null;
+  const borderClr = hasEdge ? (edgeSide === "OVER" ? "rgba(0,212,170,0.3)" : "rgba(239,68,68,0.3)") : "#27272a";
+  const bgClr     = hasEdge ? (edgeSide === "OVER" ? "rgba(0,212,170,0.04)" : "rgba(239,68,68,0.04)") : "#0f0f0f";
+
+  return (
+    <div style={{ margin: "8px 0", border: `1px solid ${borderClr}`, borderRadius: 10, overflow: "hidden", background: bgClr }}>
+      <div style={{ padding: "8px 14px", borderBottom: "1px solid #1f1f1f", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ color: "#71717a", fontSize: 10, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>2nd Half Lines</span>
+          {h2Lines.source === "derived_h1_pace" && <span style={{ color: "#f59e0b", fontSize: 9 }}>~projected</span>}
+          {h2Lines.source === "action_network" && <span style={{ color: "#52525b", fontSize: 9 }}>via AN</span>}
+        </div>
+        <span style={{ color: "#52525b", fontSize: 11 }}>H1: {awayAbbr} {h1AwayScore} – {h1HomeScore} {homeAbbr}</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, padding: "10px 14px" }}>
+        {[
+          { side: "OVER", line: h2Lines.h2Total, prob: h2Engine?.overProb, bookImplied: h2Engine?.bookOverImplied, edge: h2Engine?.overEdge, isEdge: edgeSide === "OVER" },
+          { side: "UNDER", line: h2Lines.h2Total, prob: h2Engine?.underProb, bookImplied: h2Engine?.bookUnderImplied, edge: h2Engine?.underEdge, isEdge: edgeSide === "UNDER" },
+        ].map(({ side, line, prob, bookImplied, edge, isEdge }) => (
+          <div key={side} style={{ background: isEdge ? (side === "OVER" ? "rgba(0,212,170,0.1)" : "rgba(239,68,68,0.1)") : "rgba(255,255,255,0.03)", borderRadius: 8, padding: "10px 12px", border: `1px solid ${isEdge ? (side === "OVER" ? "rgba(0,212,170,0.25)" : "rgba(239,68,68,0.25)") : "#27272a"}` }}>
+            <div style={{ color: "#71717a", fontSize: 9, textTransform: "uppercase" as const, marginBottom: 4 }}>2H {side} {line}</div>
+            {prob != null && <div style={{ color: isEdge ? (side === "OVER" ? "#00d4aa" : "#ef4444") : "#ffffff", fontSize: 22, fontWeight: 800, lineHeight: 1 }}>{prob}%</div>}
+            {bookImplied != null && <div style={{ color: "#52525b", fontSize: 10, marginTop: 3 }}>Book: {bookImplied}%</div>}
+            {edge != null && <div style={{ color: (edge ?? 0) >= 5 ? (side === "OVER" ? "#00d4aa" : "#ef4444") : "#71717a", fontSize: 11, fontWeight: 600, marginTop: 2 }}>{edge > 0 ? "+" : ""}{edge}pp edge</div>}
+          </div>
+        ))}
+      </div>
+      {h2Lines.h2Spread != null && (
+        <div style={{ padding: "8px 14px", borderTop: "1px solid #1f1f1f", display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: "#71717a", fontSize: 10, textTransform: "uppercase" as const }}>2H Spread</span>
+          <span style={{ color: "#ffffff", fontSize: 13, fontWeight: 600 }}>{homeAbbr} {h2Lines.h2Spread > 0 ? "+" : ""}{h2Lines.h2Spread}</span>
+        </div>
+      )}
+      {(h2Lines.h2OverPct != null || h2Engine?.h2Proj != null) && (
+        <div style={{ padding: "6px 14px", borderTop: "1px solid #1a1a1a", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          {h2Lines.h2OverPct != null && <span style={{ color: "#52525b", fontSize: 10 }}>Public: Over {h2Lines.h2OverPct}% / Under {h2Lines.h2UnderPct}%</span>}
+          {h2Engine?.h2Proj != null && <span style={{ color: "#3f3f46", fontSize: 10 }}>Engine projects {h2Engine.h2Proj} pts</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── NCAABGameCard ─────────────────────────────────────────────────────────────
 function NCAABGameCard({
   play,
@@ -787,6 +973,10 @@ function NCAABGameCard({
   const [enrichedVersion, setEnrichedVersion] = useState(0);
   const [sourcesOpen, setSourcesOpen] = useState(false);
 
+  // 2H live lines state (fetch on mount for live/halftime; 90s refresh)
+  const [h2Lines, setH2Lines] = useState<{ h2Total: number | null; h2OverPrice: number | null; h2UnderPrice: number | null; h2Spread: number | null; h2OverPct: number | null; h2UnderPct: number | null; source: string | null } | null>(null);
+  const [h2Engine, setH2Engine] = useState<{ overProb: number; underProb: number; h2Proj: number | null; overEdge: number | null; underEdge: number | null; bookOverImplied: number | null; bookUnderImplied: number | null; hasEdge: boolean; edgeSide: "OVER" | "UNDER" | null; source: string } | null>(null);
+
   // Direction-flip state (item 5): triggers color transition on Engine Over/Under%
   const [isDirectionFlip, setIsDirectionFlip] = useState(false);
 
@@ -823,6 +1013,35 @@ function NCAABGameCard({
       .catch(() => { if (!cancelled) setH2hData([]); });
     return () => { cancelled = true; };
   }, [play.gameId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch 2H lines for live/halftime games; refresh every 90s
+  useEffect(() => {
+    const isLiveOrHalftime = play.status === "In Progress" || play.bettingWindow === "HALFTIME";
+    if (!isLiveOrHalftime) return;
+    let cancelled = false;
+    const doFetch = async () => {
+      const h1HomeScore = play.homeScore - (play.scoringByPeriod?.[play.homeTeamAbbr]?.[1] ?? 0);
+      const h1AwayScore = play.awayScore - (play.scoringByPeriod?.[play.awayTeamAbbr]?.[1] ?? 0);
+      const params = new URLSearchParams({
+        gameId: play.gameId,
+        h1HomeScore: String(h1HomeScore),
+        h1AwayScore: String(h1AwayScore),
+        ...(play.total != null ? { fullLine: String(play.total) } : {}),
+      });
+      try {
+        const res = await fetch(`/api/ncaab/2h-lines?${params.toString()}`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!cancelled) {
+          setH2Lines(data.lines ?? null);
+          setH2Engine(data.engine ?? null);
+        }
+      } catch { /* non-fatal */ }
+    };
+    doFetch();
+    const iv = setInterval(doFetch, 90000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [play.gameId, play.status, play.bettingWindow]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Synchronous trigger of all animations (item 6): one event, no setTimeout chains
   useEffect(() => {
@@ -1305,6 +1524,18 @@ function NCAABGameCard({
           )}
         </div>
 
+        {/* ── LIVE 2H PANEL (halftime primary + H1 preview) ───────────── */}
+        {(play.bettingWindow === "HALFTIME" || play.half === 2) && (
+          <Live2HPanel
+            h2Lines={h2Lines}
+            h2Engine={h2Engine}
+            homeAbbr={play.homeTeamAbbr}
+            awayAbbr={play.awayTeamAbbr}
+            h1HomeScore={play.scoringByPeriod?.[play.homeTeamAbbr]?.[0] ?? Math.round(play.homeScore * 0.5)}
+            h1AwayScore={play.scoringByPeriod?.[play.awayTeamAbbr]?.[0] ?? Math.round(play.awayScore * 0.5)}
+          />
+        )}
+
         {/* ── STAT GRID (items 4 + 5) ────────────────────────────────── */}
         <div className="rounded-lg overflow-hidden" style={{ border: "1px solid #27272a" }}>
           {[0,1,2,3,4,5].map(i => {
@@ -1533,6 +1764,16 @@ function NCAABGameCard({
             );
           })}
         </div>
+
+        {/* ── FULL GAME MARKET PANEL ──────────────────────────────────── */}
+        {marketTab === "full" && (
+          <FullGameMarkets play={play} homeAbbr={play.homeTeamAbbr} awayAbbr={play.awayTeamAbbr} />
+        )}
+
+        {/* ── 1H MARKET PANEL ─────────────────────────────────────────── */}
+        {marketTab === "h1" && (
+          <H1Markets play={play} homeAbbr={play.homeTeamAbbr} awayAbbr={play.awayTeamAbbr} />
+        )}
 
         {/* ── BETTING INTELLIGENCE (ActionNetwork) ───────────────────── */}
         {enrichedData?.actionNetwork && (() => {
@@ -1900,18 +2141,37 @@ function groupGamesByTipoff(games: NCAABGame[]) {
 }
 
 // ── GameChip component ────────────────────────────────────────────────────────
+// Returns value signal for a chip based on matched play data
+function getChipValueSignal(play: NCAABPlay | undefined): { label: string; color: string; bg: string } | null {
+  if (!play) return null;
+  const edge = play.edge ?? 0;
+  const bettingWindow = play.bettingWindow;
+  if (bettingWindow === "HALFTIME" && edge >= 5) {
+    return { label: "2H EDGE", color: "#00d4aa", bg: "rgba(0,212,170,0.15)" };
+  }
+  if (edge >= 10) {
+    return { label: `+${edge.toFixed(0)}%`, color: "#00d4aa", bg: "rgba(0,212,170,0.12)" };
+  }
+  if (edge >= 5) {
+    return { label: `+${edge.toFixed(0)}%`, color: "#f59e0b", bg: "rgba(245,158,11,0.12)" };
+  }
+  return null;
+}
+
 function GameChip({
   game: g,
   isSelected,
   onChipClick,
   oddsData,
   onEnterViewport,
+  valueSig,
 }: {
   game: NCAABGame;
   isSelected: boolean;
   onChipClick: () => void;
   oddsData: ChipOddsData | null;
   onEnterViewport: (gameId: string) => void;
+  valueSig: { label: string; color: string; bg: string } | null;
 }) {
   const isFinal     = g.status === "Final";
   const isScheduled = !g.isLive && !isFinal;
@@ -1971,8 +2231,27 @@ function GameChip({
       onMouseEnter={e => { if (!isSelected) e.currentTarget.style.borderColor = "#3f3f46"; }}
       onMouseLeave={e => { if (!isSelected) e.currentTarget.style.borderColor = g.isLive ? "rgba(0,212,170,0.2)" : "#27272a"; }}
     >
-      {/* Sharp signal amber dot */}
-      {sharpSignal && (
+      {/* Value signal badge (top-right pill) or sharp signal dot */}
+      {valueSig ? (
+        <span
+          style={{
+            position: "absolute",
+            top: 5,
+            right: 6,
+            background: valueSig.bg,
+            border: `1px solid ${valueSig.color}44`,
+            borderRadius: 9999,
+            padding: "1px 6px",
+            fontSize: 9,
+            fontWeight: 700,
+            color: valueSig.color,
+            letterSpacing: "0.03em",
+            lineHeight: 1.4,
+          }}
+        >
+          {valueSig.label}
+        </span>
+      ) : sharpSignal ? (
         <span
           title={`${sharpSignal.label} → ${sharpSignal.teamName}`}
           style={{
@@ -1986,7 +2265,7 @@ function GameChip({
             boxShadow: `0 0 4px ${sharpSignal.strength >= 15 ? "#ef444488" : "#f59e0b88"}`,
           }}
         />
-      )}
+      ) : null}
       {/* Team row */}
       <div className="flex items-center justify-between gap-1.5">
         <span
@@ -2045,10 +2324,12 @@ function NCAABGamesStrip({
   games,
   expandedGameId,
   onChipClick,
+  plays,
 }: {
   games: NCAABGame[];
   expandedGameId: string | null;
   onChipClick: (id: string) => void;
+  plays: NCAABPlay[];
 }) {
   const liveCount = games.filter(g => g.isLive).length;
   const allFinal  = games.length > 0 && games.every(g => g.status === "Final");
@@ -2186,6 +2467,30 @@ function NCAABGamesStrip({
         </div>
       </div>
 
+      {/* ── Value legend row (only when any chip has a signal) ──────────── */}
+      {(() => {
+        const hasTeal  = plays.some(p => (p.edge ?? 0) >= 10 || p.bettingWindow === "HALFTIME");
+        const hasAmber = plays.some(p => { const e = p.edge ?? 0; return e >= 5 && e < 10 && p.bettingWindow !== "HALFTIME"; });
+        if (!hasTeal && !hasAmber) return null;
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, paddingLeft: 2 }}>
+            <span style={{ color: "#52525b", fontSize: 10, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.04em" }}>Legend:</span>
+            {hasTeal && (
+              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{ background: "rgba(0,212,170,0.15)", border: "1px solid rgba(0,212,170,0.27)", borderRadius: 9999, padding: "1px 6px", fontSize: 9, fontWeight: 700, color: "#00d4aa" }}>+10%</span>
+                <span style={{ fontSize: 10, color: "#71717a" }}>Strong edge</span>
+              </span>
+            )}
+            {hasAmber && (
+              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.27)", borderRadius: 9999, padding: "1px 6px", fontSize: 9, fontWeight: 700, color: "#f59e0b" }}>+5%</span>
+                <span style={{ fontSize: 10, color: "#71717a" }}>Moderate edge</span>
+              </span>
+            )}
+          </div>
+        );
+      })()}
+
       {/* ── Time-group collapsible sections ────────────────────────────────── */}
       {games.length === 0 ? null : (
         <div className="space-y-1">
@@ -2250,6 +2555,7 @@ function NCAABGamesStrip({
                             onChipClick={() => onChipClick(g.id)}
                             oddsData={chipOdds[g.id] ?? null}
                             onEnterViewport={fetchChipOdds}
+                            valueSig={getChipValueSignal(plays.find(p => p.gameId === g.id))}
                           />
                         ))}
                         {chipsExpanded && remaining.map((g, idx) => (
@@ -2268,6 +2574,7 @@ function NCAABGamesStrip({
                               onChipClick={() => onChipClick(g.id)}
                               oddsData={chipOdds[g.id] ?? null}
                               onEnterViewport={fetchChipOdds}
+                              valueSig={getChipValueSignal(plays.find(p => p.gameId === g.id))}
                             />
                           </div>
                         ))}
@@ -3309,13 +3616,26 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
             </div>
           )}
 
-          {/* ── Today's Games strip — always first, outside scroll container ─ */}
+          {/* ── Today's Games strip — sticky, always first ───────────────── */}
           {games.length > 0 && (
-            <NCAABGamesStrip
-              games={games}
-              expandedGameId={expandedGameId}
-              onChipClick={handleChipClick}
-            />
+            <div
+              style={{
+                position: "sticky",
+                top: 0,
+                zIndex: 50,
+                background: "#0a0a0a",
+                paddingBottom: 8,
+                marginBottom: -4,
+                borderBottom: "1px solid #1c1c1e",
+              }}
+            >
+              <NCAABGamesStrip
+                games={games}
+                expandedGameId={expandedGameId}
+                onChipClick={handleChipClick}
+                plays={plays}
+              />
+            </div>
           )}
 
           {/* ── Grouped game list — separate from strip ─────────────────────── */}

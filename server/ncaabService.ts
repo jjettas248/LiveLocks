@@ -2,6 +2,11 @@ const ODDS_API_KEY = process.env.ODDS_API_KEY;
 const SGO_API_KEY  = process.env.SGO_API_KEY;
 const ESPN_NCAAB = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball";
 
+// Markets to request from Odds API bulk endpoint (h1_spreads/h1_totals cause 422 — covered by SGO instead)
+const NCAAB_BULK_MARKETS = "spreads,totals,team_totals";
+// Markets for per-event 2H line fetch (halftime only)
+const NCAAB_2H_MARKETS   = "h2_totals,h2_spreads";
+
 interface CacheEntry { data: any; timestamp: number; }
 const cache = new Map<string, CacheEntry>();
 const GAMES_TTL   = 90 * 1000;
@@ -314,21 +319,39 @@ export async function getNCAABOddsLines(): Promise<any[]> {
     return [];
   }
 
-  try {
-    const url = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads,totals&oddsFormat=american`;
+  const tryFetch = async (markets: string): Promise<any[] | null> => {
+    const url = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${markets}&oddsFormat=american`;
     const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (res.status === 422) {
+      const body = await res.text().catch(() => "");
+      console.warn(`[NCAAB Odds] 422 for markets=${markets}: ${body}`);
+      return null;
+    }
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       console.warn(`[NCAAB Odds] ${res.status}: ${body}`);
-      return [];
+      return null;
     }
-    const data = await res.json() as any[];
+    return res.json() as Promise<any[]>;
+  };
+
+  try {
+    let data = await tryFetch(NCAAB_BULK_MARKETS);
+    if (!data) {
+      // team_totals may not be on current plan tier — fallback to safe markets
+      console.warn("[NCAAB Odds] Falling back to spreads,totals only");
+      data = await tryFetch("spreads,totals");
+    }
+    if (!data) return cached?.data ?? [];
+    // Log which markets came back
+    const returned = new Set<string>();
+    data.forEach((ev: any) => ev.bookmakers?.forEach((b: any) => b.markets?.forEach((m: any) => returned.add(m.key))));
+    console.log(`[NCAAB] Odds API: ${data.length} events, markets: ${[...returned].join(",")}`);
     cache.set(key, { data, timestamp: Date.now() });
-    console.log(`[NCAAB] Odds API: ${data.length} events`);
     return data;
   } catch (err) {
     console.warn("[NCAAB Odds] error:", err);
-    return [];
+    return cached?.data ?? [];
   }
 }
 
@@ -499,7 +522,7 @@ function matchOddsEvent(game: any, oddsEvents: any[]): any | null {
 }
 
 // ── Extract consensus spread / total + 1H lines ───────────────────────────────
-function extractLines(oddsEvent: any): {
+function extractLines(oddsEvent: any, homeTeamName?: string): {
   spread: number | null;
   total: number | null;
   favorite: string;
@@ -511,6 +534,8 @@ function extractLines(oddsEvent: any): {
   h2SpreadLine: number | null;
   h2Favorite: string;
   overOddsAmerican: number | null;
+  homeTTBookLine: number | null;
+  awayTTBookLine: number | null;
 } {
   let spread: number | null = null;
   let total: number | null = null;
@@ -522,6 +547,9 @@ function extractLines(oddsEvent: any): {
   let h2SpreadLine: number | null = null;
   let h2Favorite = "";
   let overOddsAmerican: number | null = null;
+  let homeTTBookLine: number | null = null;
+  let awayTTBookLine: number | null = null;
+  const homeLastWord = homeTeamName ? homeTeamName.toLowerCase().split(" ").pop() ?? "" : "";
   const bookLines: Array<{ book: string; spread: number | null; total: number | null; favorite: string; h1Total: number | null; h1Spread: number | null; h1Favorite: string }> = [];
 
   for (const bk of (oddsEvent.bookmakers ?? [])) {
@@ -594,6 +622,19 @@ function extractLines(oddsEvent: any): {
       }
     }
 
+    // team_totals market (home/away team scoring totals)
+    const ttMarket = (bk.markets ?? []).find((m: any) => m.key === "team_totals");
+    if (ttMarket?.outcomes?.length >= 2 && homeLastWord) {
+      (ttMarket.outcomes as any[]).forEach((o: any) => {
+        const desc = (o.description ?? "").toLowerCase();
+        const isHome = homeLastWord && desc.includes(homeLastWord);
+        if (o.name === "Over" && o.point) {
+          if (isHome && homeTTBookLine === null) homeTTBookLine = o.point as number;
+          if (!isHome && awayTTBookLine === null) awayTTBookLine = o.point as number;
+        }
+      });
+    }
+
     if (bkSpread !== null || bkTotal !== null || bkH1Total !== null || bkH2Total !== null) {
       bookLines.push({ book: bk.key, spread: bkSpread, total: bkTotal, favorite: bkFav, h1Total: bkH1Total, h1Spread: bkH1Spread, h1Favorite: bkH1Fav });
     }
@@ -606,7 +647,11 @@ function extractLines(oddsEvent: any): {
     if (spread !== null && total !== null && h1TotalLine !== null && overOddsAmerican !== null) break;
   }
 
-  return { spread, total, favorite, bookLines, h1TotalLine, h1SpreadLine, h1Favorite, h2TotalLine, h2SpreadLine, h2Favorite, overOddsAmerican };
+  if (homeTTBookLine !== null || awayTTBookLine !== null) {
+    console.log(`[NCAAB TT Odds API] home=${homeTTBookLine} away=${awayTTBookLine}`);
+  }
+
+  return { spread, total, favorite, bookLines, h1TotalLine, h1SpreadLine, h1Favorite, h2TotalLine, h2SpreadLine, h2Favorite, overOddsAmerican, homeTTBookLine, awayTTBookLine };
 }
 
 // ── Public handle signal ──────────────────────────────────────────────────────
@@ -800,9 +845,9 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       try { box = await getNCAABBoxScore(game.id); } catch { /* non-fatal */ }
 
       const oddsEvent = matchOddsEvent(game, oddsEvents);
-      const { spread, total, favorite, bookLines, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav, h2TotalLine: oddsH2Total, h2SpreadLine: oddsH2Spread, h2Favorite: oddsH2Fav, overOddsAmerican } = oddsEvent
-        ? extractLines(oddsEvent)
-        : { spread: null, total: null, favorite: "", bookLines: [], h1SpreadLine: null, h1Favorite: "", h2TotalLine: null, h2SpreadLine: null, h2Favorite: "", overOddsAmerican: null };
+      const { spread, total, favorite, bookLines, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav, h2TotalLine: oddsH2Total, h2SpreadLine: oddsH2Spread, h2Favorite: oddsH2Fav, overOddsAmerican, homeTTBookLine, awayTTBookLine } = oddsEvent
+        ? extractLines(oddsEvent, game.homeTeam)
+        : { spread: null, total: null, favorite: "", bookLines: [], h1SpreadLine: null, h1Favorite: "", h2TotalLine: null, h2SpreadLine: null, h2Favorite: "", overOddsAmerican: null, homeTTBookLine: null, awayTTBookLine: null };
 
       // SGO 1H + 2H lines (real book lines)
       const sgoEvent = matchSGOEvent(game, sgoEvents);
@@ -820,6 +865,10 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       let finalAwayGameTotalLine: number | null = sgo1H?.awayGameTotalLine ?? null;
       const home1HTotalLine   = sgo1H?.home1HTotalLine ?? null;
       const away1HTotalLine   = sgo1H?.away1HTotalLine ?? null;
+
+      // Odds API team_totals market as secondary source
+      if (finalHomeGameTotalLine === null && homeTTBookLine !== null) finalHomeGameTotalLine = homeTTBookLine;
+      if (finalAwayGameTotalLine === null && awayTTBookLine !== null) finalAwayGameTotalLine = awayTTBookLine;
 
       // Fetch ESPN summary once per game — provides team totals fallback + win% for sharp signal
       const espnSummary = await fetchESPNSummaryData(game.id);
@@ -1150,4 +1199,169 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
 
   console.log(`[NCAAB] Computed ${plays.length} live plays`);
   return plays;
+}
+
+// ── 2H live line fetch (3-source waterfall) ───────────────────────────────────
+export interface Live2HLines {
+  h2Total: number | null;
+  h2OverPrice: number | null;
+  h2UnderPrice: number | null;
+  h2Spread: number | null;
+  h2OverPct: number | null;
+  h2UnderPct: number | null;
+  source: "odds_api" | "action_network" | "derived_h1_pace" | null;
+}
+
+export async function fetch2HLines(
+  gameId: string,
+  homeTeam: string,
+  h1HomeScore: number,
+  h1AwayScore: number,
+  fullLine: number | null,
+): Promise<Live2HLines> {
+  const result: Live2HLines = { h2Total: null, h2OverPrice: null, h2UnderPrice: null, h2Spread: null, h2OverPct: null, h2UnderPct: null, source: null };
+
+  // Source 1: Odds API per-event 2H markets (only available at halftime)
+  if (ODDS_API_KEY) {
+    try {
+      const url = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/events/${gameId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${NCAAB_2H_MARKETS}&oddsFormat=american`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+      if (res.ok) {
+        const data = await res.json() as any;
+        for (const bk of (data.bookmakers ?? [])) {
+          for (const mkt of (bk.markets ?? [])) {
+            if ((mkt.key === "h2_totals" || mkt.key === "2h_totals") && result.h2Total === null) {
+              const over  = (mkt.outcomes ?? []).find((o: any) => o.name === "Over");
+              const under = (mkt.outcomes ?? []).find((o: any) => o.name === "Under");
+              if (over?.point) {
+                result.h2Total      = over.point as number;
+                result.h2OverPrice  = over.price ?? null;
+                result.h2UnderPrice = under?.price ?? null;
+                result.source       = "odds_api";
+                console.log(`[2H ODDS API] h2Total=${result.h2Total} from ${bk.key}`);
+              }
+            }
+            if ((mkt.key === "h2_spreads" || mkt.key === "2h_spreads") && result.h2Spread === null) {
+              const outcomes: any[] = mkt.outcomes ?? [];
+              if (outcomes.length >= 2) result.h2Spread = outcomes[0].point ?? null;
+            }
+          }
+          if (result.h2Total !== null) break;
+        }
+      }
+    } catch (err) {
+      console.warn("[2H ODDS] fetch error:", (err as any).message);
+    }
+  }
+
+  // Source 2: ActionNetwork 2H lines (period=2)
+  if (!result.h2Total) {
+    try {
+      const homeWord = homeTeam.toLowerCase().split(" ").pop() ?? "";
+      const anRes = await fetch(
+        `https://api.actionnetwork.com/web/v1/scoreboard/ncaab?period=2&bookIds=15,30,76,123,69,68`,
+        { headers: { "User-Agent": "Mozilla/5.0", "Referer": "https://www.actionnetwork.com" }, signal: AbortSignal.timeout(6000) }
+      );
+      if (anRes.ok) {
+        const anData = await anRes.json() as any;
+        const match = (anData.games ?? []).find((g: any) =>
+          (g.teams ?? []).some((t: any) => (t.display_name ?? "").toLowerCase().includes(homeWord))
+        );
+        if (match) {
+          const odds = match.odds?.[0];
+          if (odds?.total) {
+            result.h2Total      = odds.total;
+            result.h2OverPrice  = odds.ml_over ?? null;
+            result.h2UnderPrice = odds.ml_under ?? null;
+            result.h2Spread     = odds.spread ?? null;
+            result.h2OverPct    = odds.over_bets_pct ?? null;
+            result.h2UnderPct   = odds.under_bets_pct ?? null;
+            result.source       = "action_network";
+            console.log(`[2H AN] h2Total=${result.h2Total} for ${homeTeam}`);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[2H AN] fetch error:", (err as any).message);
+    }
+  }
+
+  // Source 3: Derive from H1 pace
+  if (!result.h2Total) {
+    const h1Total = h1HomeScore + h1AwayScore;
+    if (h1Total > 0) {
+      const h1PerMin = h1Total / 20;
+      const h2Projected = h1PerMin * 0.95 * 20; // slight H2 regression
+      result.h2Total = parseFloat((Math.round(h2Projected * 2) / 2).toFixed(1));
+      result.source  = "derived_h1_pace";
+      console.log(`[2H DERIVED] h1Total=${h1Total} → h2Total=${result.h2Total}`);
+    } else if (fullLine) {
+      // No H1 score — use fullLine * 0.53 (H2 is slightly faster)
+      result.h2Total = parseFloat((Math.round(fullLine * 0.53 * 2) / 2).toFixed(1));
+      result.source  = "derived_h1_pace";
+    }
+  }
+
+  return result;
+}
+
+// ── 2H engine probability vs book implied probability ─────────────────────────
+export function calc2HEngineProb(
+  h2Lines: Live2HLines,
+  h1HomeScore: number,
+  h1AwayScore: number,
+  engineProjTotal: number | null,
+): {
+  overProb: number;
+  underProb: number;
+  h2Proj: number | null;
+  overEdge: number | null;
+  underEdge: number | null;
+  bookOverImplied: number | null;
+  bookUnderImplied: number | null;
+  hasEdge: boolean;
+  edgeSide: "OVER" | "UNDER" | null;
+  source: string;
+} | null {
+  if (!h2Lines.h2Total) return null;
+
+  const mlToProb = (ml: number | null): number | null => {
+    if (ml == null) return null;
+    return parseFloat(
+      ml < 0
+        ? (Math.abs(ml) / (Math.abs(ml) + 100) * 100).toFixed(1)
+        : (100 / (ml + 100) * 100).toFixed(1)
+    );
+  };
+
+  const h1Total = h1HomeScore + h1AwayScore;
+  const h2Proj = engineProjTotal != null ? engineProjTotal - h1Total : null;
+
+  let overProb: number;
+  let source: string;
+
+  if (h2Proj !== null) {
+    const diff = h2Proj - h2Lines.h2Total;
+    const rawProb = 50 + diff * 4.5;
+    overProb = parseFloat(Math.min(Math.max(rawProb, 20), 80).toFixed(1));
+    source = "composite_2h";
+  } else {
+    // H1 pace fallback
+    const h1PerMin = h1Total > 0 ? h1Total / 20 : 3.2;
+    const h2ProjFallback = h1PerMin * 0.95 * 20;
+    const diff = h2ProjFallback - h2Lines.h2Total;
+    const rawProb = 50 + diff * 4.0;
+    overProb = parseFloat(Math.min(Math.max(rawProb, 25), 75).toFixed(1));
+    source = "h1_pace_model";
+  }
+
+  const underProb = parseFloat((100 - overProb).toFixed(1));
+  const bookOverImplied  = mlToProb(h2Lines.h2OverPrice);
+  const bookUnderImplied = mlToProb(h2Lines.h2UnderPrice);
+  const overEdge  = bookOverImplied  != null ? parseFloat((overProb  - bookOverImplied).toFixed(1))  : null;
+  const underEdge = bookUnderImplied != null ? parseFloat((underProb - bookUnderImplied).toFixed(1)) : null;
+  const hasEdge   = (overEdge ?? 0) >= 5 || (underEdge ?? 0) >= 5;
+  const edgeSide  = (overEdge ?? 0) >= 5 ? "OVER" : (underEdge ?? 0) >= 5 ? "UNDER" : null;
+
+  return { overProb, underProb, h2Proj: h2Proj !== null ? parseFloat(h2Proj.toFixed(1)) : null, overEdge, underEdge, bookOverImplied, bookUnderImplied, hasEdge, edgeSide, source };
 }
