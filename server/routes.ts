@@ -950,6 +950,10 @@ export async function registerRoutes(
                 const edge = Math.abs(result.probability - 50);
                 if (edge < 5) continue;
 
+                // Skip plays where the line has already been cleared at halftime —
+                // these are not actionable (over already won, under already lost)
+                if (halftimeStat >= liveLine) continue;
+
                 const cacheKey2 = `${playerName}|${statType}`;
                 const oddsEntry2 = oddsPlayerCache.get(cacheKey2);
                 allPlays.push({

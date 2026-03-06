@@ -90,6 +90,12 @@ const SPORTSBOOK_INFO: Record<string, {
     deeplink: () => "https://www.bet365.com/#/AC/B1/C1/D31/",
     note: "Search player name manually",
   },
+  fanatics: {
+    label: "Fanatics",
+    color: "bg-[#cc0000] hover:bg-[#e60000]",
+    deeplink: () => "https://sportsbook.fanatics.com/sports/basketball/nba",
+    note: "Search player name manually",
+  },
 };
 
 function formatOdds(odds: number): string {
@@ -126,8 +132,8 @@ function CorrelationBadge({ note }: { note: CorrelationNote }) {
 function SportsbookButtons({ picks, toast }: { picks: ParlayPickInput[]; toast: ReturnType<typeof useToast>["toast"] }) {
   const uniqueSportsbooks = Array.from(new Set(picks.map((p) => p.sportsbook).filter(Boolean))) as string[];
   const sbList = uniqueSportsbooks.length > 0
-    ? [...uniqueSportsbooks, "bet365"].filter((v, i, a) => a.indexOf(v) === i)
-    : ["draftkings", "fanduel", "hardrockbet", "bet365"];
+    ? [...uniqueSportsbooks, "bet365", "fanatics"].filter((v, i, a) => a.indexOf(v) === i)
+    : ["draftkings", "fanduel", "hardrockbet", "bet365", "fanatics"];
 
   const copyText = picks.map(p =>
     `${p.playerName} — ${STAT_LABELS[p.statType] ?? p.statType} ${p.betDirection === "over" ? "O" : "U"}${p.line}`

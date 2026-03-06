@@ -174,7 +174,7 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
   if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
 
   const inPlayParam = inPlay ? "&in_play=true" : "";
-  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${marketKey}&bookmakers=draftkings,fanduel,hardrockbet&oddsFormat=american${inPlayParam}`;
+  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${marketKey}&bookmakers=draftkings,fanduel,hardrockbet,bet365,fanatics&oddsFormat=american${inPlayParam}`;
 
   const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!res.ok) {
@@ -206,7 +206,7 @@ export async function getRawOddsForDebug(oddsEventId: string): Promise<any> {
   const cached = cache.get(cacheKey);
   if (isFresh(cached, ODDS_TTL)) return cached!.data;
   if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
-  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${markets}&bookmakers=draftkings,fanduel,hardrockbet&oddsFormat=american`;
+  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${markets}&bookmakers=draftkings,fanduel,hardrockbet,bet365,fanatics&oddsFormat=american`;
   const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!res.ok) { const body = await res.text(); throw new Error(`Odds fetch failed: ${res.status} — ${body}`); }
   const data = await res.json();
@@ -349,7 +349,7 @@ export async function getGameLines(
   if (!ODDS_API_KEY) return null;
 
   try {
-    const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads,totals&bookmakers=draftkings,fanduel&oddsFormat=american`;
+    const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads,totals&bookmakers=draftkings,fanduel,hardrockbet,bet365,fanatics&oddsFormat=american`;
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
       console.warn(`[Odds] getGameLines ${res.status} for event ${oddsEventId}`);
