@@ -2823,7 +2823,7 @@ function GroupedGamesList({
                   <div
                     ref={el => { rowRefs.current[g.id] = el; }}
                     data-testid={`ncaab-game-row-${g.id}`}
-                    className={`scroll-mt-52 flex items-center justify-between px-4 py-3 rounded-lg transition-all duration-200 ${canExpand ? "cursor-pointer" : "cursor-default"}`}
+                    className={`scroll-mt-20 flex items-center justify-between px-4 py-3 rounded-lg transition-all duration-200 ${canExpand ? "cursor-pointer" : "cursor-default"}`}
                     style={{
                       background: isExpanded ? "#141414" : "#111111",
                       border: `1px solid ${isExpanded ? "#3f3f46" : "#27272a"}`,
@@ -3642,20 +3642,15 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
       {/* ── Live sub-tab ───────────────────────────────────────────────────── */}
       {ncaabSubTab === "live" && !loading && (
         <>
-          {/* ── Today's Games strip — FIRST in live tab, sticky ──────────── */}
+          {/* ── Today's Games strip — FIRST in live tab ──────────────────── */}
           {games.length > 0 && (
             <div
               style={{
-                position: "sticky",
-                top: 0,
-                zIndex: 50,
                 background: "#0a0a0a",
                 paddingTop: 4,
                 paddingBottom: gamesStripCollapsed ? 4 : 8,
                 marginBottom: gamesStripCollapsed ? 0 : 4,
                 borderBottom: gamesStripCollapsed ? "none" : "1px solid #1c1c1e",
-                maxHeight: gamesStripCollapsed ? "none" : "42vh",
-                overflowY: gamesStripCollapsed ? "visible" : "auto",
               }}
             >
               <NCAABGamesStrip
