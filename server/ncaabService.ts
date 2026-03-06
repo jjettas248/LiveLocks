@@ -731,6 +731,7 @@ export interface NCAABPlay {
   over1HProb: number | null;
   total1HEdge: number | null;
   over2HProb: number | null;
+  effectiveH2Line: number | null;
 
   // Book odds for implied probability
   overOddsAmerican: number | null;
@@ -905,8 +906,10 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       const homeScores: number[] = scoringByPeriod[homeAbbr] ?? [];
       const awayScores: number[] = scoringByPeriod[awayAbbr] ?? [];
 
-      const h1Home = homeScores[0] ?? Math.round(game.homeScore / (half === 2 ? 2 : 1) * 0.5);
-      const h1Away = awayScores[0] ?? Math.round(game.awayScore / (half === 2 ? 2 : 1) * 0.5);
+      // At halftime, H1 is complete — current score IS the H1 score
+      // During H1/H2, fall back to an estimate
+      const h1Home = homeScores[0] ?? (isHalftime ? game.homeScore : Math.round(game.homeScore / (half === 2 ? 2 : 1) * 0.5));
+      const h1Away = awayScores[0] ?? (isHalftime ? game.awayScore : Math.round(game.awayScore / (half === 2 ? 2 : 1) * 0.5));
       const h1Total = h1Home + h1Away;
 
       const h2Home = homeScores[1] ?? (half === 2 ? game.homeScore - h1Home : 0);
@@ -1100,11 +1103,16 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
 
       // ── 2H probability — at halftime or during H2 live play ──────────────
       let over2HProb: number | null = null;
+      let effectiveH2Line: number | null = null;
       if (projectedTotal !== null && (isHalftime || half === 2)) {
         // proj2H = the expected second half total
         const proj2H = projectedTotal - h1Total;
-        const effective2HLine = h2TotalLine ?? (Math.round(proj2H * 2) / 2);
-        const diff2H = proj2H - effective2HLine;
+        // Use book 2H total if available; otherwise derive from H1 pace × 0.95 × 20 min
+        // (same formula as fetch2HLines Source 3) so we compare against an implied market
+        // baseline rather than against ourselves (which would always produce ~50%)
+        const derivedH2Line = Math.round((paceH1 * 0.95 * 20) * 2) / 2;
+        effectiveH2Line = h2TotalLine ?? derivedH2Line;
+        const diff2H = proj2H - effectiveH2Line;
         const raw2H = 50 + diff2H * 2.5 * 0.3;
         over2HProb = parseFloat(Math.min(Math.max(raw2H, 1), 99).toFixed(1));
       }
@@ -1156,6 +1164,7 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         h2SpreadLine,
         h2Favorite,
         over2HProb,
+        effectiveH2Line,
         homeGameTotalLine,
         awayGameTotalLine,
         homeGameTotalIsEstimated,

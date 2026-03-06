@@ -46,6 +46,7 @@ interface NCAABPlay {
   h2SpreadLine: number | null;
   h2Favorite: string;
   over2HProb: number | null;
+  effectiveH2Line: number | null;
   homeGameTotalLine: number | null;
   awayGameTotalLine: number | null;
   homeGameTotalIsEstimated: boolean;
@@ -3875,23 +3876,30 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                       </div>
                     )}
 
-                    {/* O/U */}
-                    {play.total !== null && play.overProb !== null && (
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-muted-foreground">Total O/U — {play.total}</span>
-                          <span className={`font-semibold ${play.overProb >= 60 ? "text-green-400" : play.overProb <= 40 ? "text-red-400" : "text-foreground"}`}>
-                            {play.overProb.toFixed(0)}% over
-                          </span>
+                    {/* 2H O/U — uses over2HProb + book h2TotalLine or derived effectiveH2Line */}
+                    {play.over2HProb !== null && (() => {
+                      const displayLine = play.h2TotalLine ?? play.effectiveH2Line;
+                      const prob = play.over2HProb;
+                      return (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground">
+                              2H O/U{displayLine !== null ? ` — ${displayLine}` : " (derived)"}
+                              {play.h2TotalLine === null && <span className="ml-1 text-[10px] opacity-60">est.</span>}
+                            </span>
+                            <span className={`font-semibold ${prob >= 60 ? "text-green-400" : prob <= 40 ? "text-red-400" : "text-foreground"}`}>
+                              {prob.toFixed(0)}% over
+                            </span>
+                          </div>
+                          <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all ${prob >= 60 ? "bg-green-500" : prob <= 40 ? "bg-red-500" : "bg-primary"}`}
+                              style={{ width: `${Math.min(100, prob)}%` }}
+                            />
+                          </div>
                         </div>
-                        <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all ${play.overProb >= 60 ? "bg-green-500" : play.overProb <= 40 ? "bg-red-500" : "bg-primary"}`}
-                            style={{ width: `${Math.min(100, play.overProb)}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
+                      );
+                    })()}
 
                     {/* Team Totals */}
                     {(play.awayProjected !== null || play.homeProjected !== null) && (
