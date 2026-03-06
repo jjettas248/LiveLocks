@@ -3093,11 +3093,7 @@ export default function Dashboard() {
                                               : { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#71717a" }
                                             }
                                           >
-                                            {hasLiveLine
-                                              ? (nbaBookFilter !== "all"
-                                                  ? `${BOOK_OPTIONS.find(b => b.key === nbaBookFilter)?.abbr ?? ""} Line`
-                                                  : "Live Line")
-                                              : "Season Avg"}
+                                            {hasLiveLine ? "Live Line" : "Season Avg"}
                                           </span>
                                           <span className="text-xs" style={{ color: play.halftimeStat > 0 ? "#71717a" : "#52525b" }}>
                                             H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}

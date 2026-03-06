@@ -939,10 +939,13 @@ export async function registerRoutes(
                       if (bookKeys.length > 0) {
                         const books = bookKeys.map(k => (oddsResult as any)[k]);
                         const lines = books.map((b: any) => b.line as number);
-                        const roughExpected = halftimeStat + ((seasonAvg as number) / 2);
-                        const medianLine = [...lines].sort((a, b) => a - b)[Math.floor(lines.length / 2)];
-                        const bestLine = roughExpected >= medianLine ? Math.min(...lines) : Math.max(...lines);
-                        oddsPlayerCache.set(lineCacheKey, { line: bestLine, bookKeys });
+                        // Log every book → line so data integrity issues are visible
+                        const lineDetail = bookKeys.map((k, i) => `${k}=${lines[i]}`).join(" | ");
+                        console.log(`[Halftime] Lines for ${playerName} (${statType}): ${lineDetail}`);
+                        // Use median consensus — never pick extremes which amplify outlier/stale book data
+                        const sortedLines = [...lines].sort((a, b) => a - b);
+                        const medianLine = sortedLines[Math.floor(sortedLines.length / 2)];
+                        oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys });
                         resolved = true;
                       }
                     }
