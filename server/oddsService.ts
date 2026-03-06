@@ -42,8 +42,9 @@ interface CacheEntry {
 }
 
 const cache = new Map<string, CacheEntry>();
-const EVENTS_TTL = 3 * 60 * 1000;  // 3 min (shorter so fresh games appear quickly)
-const ODDS_TTL = 5 * 60 * 1000;    // 5 min — balances live line freshness vs API credit cost
+const EVENTS_TTL = 3 * 60 * 1000;       // 3 min (shorter so fresh games appear quickly)
+const ODDS_TTL = 5 * 60 * 1000;         // 5 min — pre-game line cache
+const ODDS_LIVE_TTL = 90 * 1000;        // 90 sec — in-play line cache for halftime freshness
 
 function isFresh(entry: CacheEntry | undefined, ttl: number): boolean {
   return !!entry && Date.now() - entry.timestamp < ttl;
@@ -161,7 +162,8 @@ const QUOTA_TTL = 60 * 60 * 1000;
 async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false): Promise<any> {
   const cacheKey = `odds_${inPlay ? "live" : "pre"}_${oddsEventId}_${marketKey}`;
   const cached = cache.get(cacheKey);
-  if (isFresh(cached, ODDS_TTL)) return cached!.data;
+  const ttl = inPlay ? ODDS_LIVE_TTL : ODDS_TTL;
+  if (isFresh(cached, ttl)) return cached!.data;
 
   // Quota errors are cached separately so we don't keep hitting the API
   const quotaCacheKey = `quota_exhausted`;

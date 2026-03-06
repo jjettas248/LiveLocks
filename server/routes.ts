@@ -844,9 +844,24 @@ export async function registerRoutes(
             const playerName: string = athlete.athlete.displayName ?? "";
             const normPlayerName = normDb(playerName);
 
-            // Fast lookup from pre-loaded DB player list
-            const dbPlayer = allDbPlayers.find(p => normDb(p.name) === normPlayerName);
-            if (!dbPlayer) continue;
+            // Fast lookup — exact match first, then first+last fuzzy fallback
+            let dbPlayer = allDbPlayers.find(p => normDb(p.name) === normPlayerName);
+            if (!dbPlayer) {
+              // Fuzzy: split ESPN name and match against DB first+last token set
+              const espnWords = playerName.toLowerCase().replace(/[^a-z ]/g, "").trim().split(/\s+/);
+              const espnFirst = espnWords[0] ?? "";
+              const espnLast = espnWords[espnWords.length - 1] ?? "";
+              dbPlayer = allDbPlayers.find(p => {
+                const dbWords = p.name.toLowerCase().replace(/[^a-z ]/g, "").trim().split(/\s+/);
+                const dbFirst = dbWords[0] ?? "";
+                const dbLast = dbWords[dbWords.length - 1] ?? "";
+                return dbFirst === espnFirst && dbLast === espnLast;
+              }) ?? null;
+            }
+            if (!dbPlayer) {
+              console.log(`[Halftime] Player not in DB: "${playerName}" (${teamAbbr})`);
+              continue;
+            }
 
             const liveStats: Record<string, number> = {
               points: parseStat(statMap["pts"]),
@@ -867,8 +882,8 @@ export async function registerRoutes(
               threes: (dbPlayer as any).tpg ? Number((dbPlayer as any).tpg) : null,
             };
 
-            // If DB stats are missing, fetch from ESPN as fallback
-            const needsEspnFetch = Object.values(dbSeasonStat).every(v => v === null);
+            // If any DB stat component is missing, fetch from ESPN to fill gaps
+            const needsEspnFetch = Object.values(dbSeasonStat).some(v => v === null);
             if (needsEspnFetch) {
               try {
                 const espnStatRes = await fetch(
@@ -881,12 +896,12 @@ export async function registerRoutes(
                   for (const cat of (espnStatData.splits?.categories ?? [])) {
                     for (const s of (cat.stats ?? [])) espnStats[s.name] = s.value;
                   }
-                  dbSeasonStat.points = espnStats.avgPoints ?? null;
-                  dbSeasonStat.rebounds = espnStats.avgRebounds ?? null;
-                  dbSeasonStat.assists = espnStats.avgAssists ?? null;
-                  dbSeasonStat.steals = espnStats.avgSteals ?? null;
-                  dbSeasonStat.blocks = espnStats.avgBlocks ?? null;
-                  dbSeasonStat.threes = espnStats.avgThreePointFieldGoalsMade ?? null;
+                  if (dbSeasonStat.points == null) dbSeasonStat.points = espnStats.avgPoints ?? null;
+                  if (dbSeasonStat.rebounds == null) dbSeasonStat.rebounds = espnStats.avgRebounds ?? null;
+                  if (dbSeasonStat.assists == null) dbSeasonStat.assists = espnStats.avgAssists ?? null;
+                  if (dbSeasonStat.steals == null) dbSeasonStat.steals = espnStats.avgSteals ?? null;
+                  if (dbSeasonStat.blocks == null) dbSeasonStat.blocks = espnStats.avgBlocks ?? null;
+                  if (dbSeasonStat.threes == null) dbSeasonStat.threes = espnStats.avgThreePointFieldGoalsMade ?? null;
                 }
               } catch { /* ignore */ }
             }
@@ -912,8 +927,16 @@ export async function registerRoutes(
                   if (!oddsPlayerCache.has(cacheKey)) {
                     try {
                       const { getPlayerOdds } = await import("./oddsService");
-                      const oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, true);
-                      const bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
+                      // Try live (in-play) lines first; fall back to pre-game if books don't offer live props
+                      let oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, true);
+                      let bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
+                      if (bookKeys.length === 0) {
+                        oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, false);
+                        bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
+                        if (bookKeys.length > 0) {
+                          console.log(`[Halftime] Using pre-game line for ${playerName} (${statType}) — no live props available`);
+                        }
+                      }
                       const books = bookKeys.map(k => (oddsResult as any)[k]);
                       if (books.length > 0) {
                         const lines = books.map((b: any) => b.line as number);
