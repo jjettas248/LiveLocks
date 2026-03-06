@@ -1296,7 +1296,12 @@ export default function Dashboard() {
       {/* Header */}
       <header className="border-b border-border/40 bg-background/80 backdrop-blur-xl sticky top-0 z-50">
         <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <button
+            onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity active:opacity-60"
+            aria-label="Scroll to top"
+            data-testid="button-scroll-to-top"
+          >
             <img
               src={propPulseLogo}
               alt="PropPulse"
@@ -1308,7 +1313,7 @@ export default function Dashboard() {
                 by PropPulse · {activeTab === "ncaab" ? "NCAAB" : "NBA"}
               </span>
             </div>
-          </div>
+          </button>
           <div className="flex items-center gap-2 sm:gap-3">
             <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground">
               <Radio className="w-3 h-3 text-green-500 animate-pulse" />
