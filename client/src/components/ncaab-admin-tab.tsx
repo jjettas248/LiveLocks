@@ -736,6 +736,8 @@ function MarketRow({
   singleSide = false,
   coverProb, bookImplied, price,
   isEstimated = false,
+  onSelectOver, onSelectUnder, onSelectSide,
+  isSelectedOver, isSelectedUnder, isSelectedSide,
 }: {
   label: string; line: number | null;
   overProb?: number | null; underProb?: number | null;
@@ -744,6 +746,8 @@ function MarketRow({
   singleSide?: boolean;
   coverProb?: number | null; bookImplied?: number | null; price?: number | null;
   isEstimated?: boolean;
+  onSelectOver?: () => void; onSelectUnder?: () => void; onSelectSide?: () => void;
+  isSelectedOver?: boolean; isSelectedUnder?: boolean; isSelectedSide?: boolean;
 }) {
   const calcEdge = (eng: number | null | undefined, book: number | null | undefined) =>
     eng != null && book != null ? parseFloat((eng - book).toFixed(1)) : null;
@@ -766,7 +770,18 @@ function MarketRow({
   if (singleSide) {
     const edge = calcEdge(coverProb, bookImplied);
     return (
-      <div style={{ padding: "10px 16px", borderBottom: "1px solid #1a1a1a", background: (edge ?? 0) >= 5 ? "rgba(0,212,170,0.04)" : "#111111", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div
+        onClick={onSelectSide}
+        style={{
+          padding: "10px 16px", borderBottom: "1px solid #1a1a1a",
+          background: isSelectedSide ? "rgba(0,212,170,0.08)" : (edge ?? 0) >= 5 ? "rgba(0,212,170,0.04)" : "#111111",
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          cursor: onSelectSide ? "pointer" : "default",
+          outline: isSelectedSide ? "1.5px solid rgba(0,212,170,0.5)" : "none",
+          borderRadius: isSelectedSide ? 6 : 0,
+          transition: "background 120ms ease",
+        }}
+      >
         <div>
           <div style={{ color: "#71717a", fontSize: 11, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>
             {label}{isEstimated && <span style={{ color: "#f59e0b", fontSize: 10, marginLeft: 6 }}>~est</span>}
@@ -793,9 +808,23 @@ function MarketRow({
         {label}{isEstimated && <span style={{ color: "#f59e0b", fontSize: 9 }}>~est</span>}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, padding: "0 16px 10px" }}>
-        {[{ side: "OVER", line, prob: overProb, bookImplied: overBookImplied, price: overPrice, edge: overEdge },
-          { side: "UNDER", line, prob: underProb, bookImplied: underBookImplied, price: underPrice, edge: underEdge }].map(({ side, line: l, prob, bookImplied: bi, price: pr, edge: e }) => (
-          <div key={side} style={{ background: (e ?? 0) >= 5 ? (side === "OVER" ? "rgba(0,212,170,0.08)" : "rgba(239,68,68,0.08)") : "rgba(255,255,255,0.02)", borderRadius: 6, padding: "8px 10px", border: `1px solid ${(e ?? 0) >= 5 ? (side === "OVER" ? "rgba(0,212,170,0.2)" : "rgba(239,68,68,0.2)") : "#27272a"}` }}>
+        {([
+          { side: "OVER", line, prob: overProb, bookImplied: overBookImplied, price: overPrice, edge: overEdge, onSel: onSelectOver, isSel: isSelectedOver },
+          { side: "UNDER", line, prob: underProb, bookImplied: underBookImplied, price: underPrice, edge: underEdge, onSel: onSelectUnder, isSel: isSelectedUnder },
+        ] as const).map(({ side, line: l, prob, bookImplied: bi, price: pr, edge: e, onSel, isSel }) => (
+          <div
+            key={side}
+            onClick={onSel}
+            style={{
+              background: isSel ? (side === "OVER" ? "rgba(0,212,170,0.15)" : "rgba(239,68,68,0.15)") : (e ?? 0) >= 5 ? (side === "OVER" ? "rgba(0,212,170,0.08)" : "rgba(239,68,68,0.08)") : "rgba(255,255,255,0.02)",
+              borderRadius: 6, padding: "8px 10px",
+              border: isSel
+                ? `1.5px solid ${side === "OVER" ? "#00d4aa" : "#ef4444"}`
+                : `1px solid ${(e ?? 0) >= 5 ? (side === "OVER" ? "rgba(0,212,170,0.2)" : "rgba(239,68,68,0.2)") : "#27272a"}`,
+              cursor: onSel ? "pointer" : "default",
+              transition: "background 120ms ease, border 120ms ease",
+            }}
+          >
             <div style={{ color: "#52525b", fontSize: 9, textTransform: "uppercase" as const }}>{side} {l}</div>
             {prob != null && <div style={{ color: edgeColor(e), fontSize: 18, fontWeight: 700, margin: "2px 0" }}>{prob}%</div>}
             {bi != null && <div style={{ color: "#3f3f46", fontSize: 10 }}>Book: {bi}%{fmtPrice(pr)}</div>}
@@ -808,7 +837,14 @@ function MarketRow({
 }
 
 // ── FullGameMarkets: all 5 full-game market rows ──────────────────────────────
-function FullGameMarkets({ play, homeAbbr, awayAbbr }: { play: NCAABPlay; homeAbbr: string; awayAbbr: string }) {
+type SelMarket = { label: string; impliedPct: number | null; enginePct: number | null; edge: number | null };
+function FullGameMarkets({
+  play, homeAbbr, awayAbbr, onSelect, selectedLabel,
+}: {
+  play: NCAABPlay; homeAbbr: string; awayAbbr: string;
+  onSelect?: (m: SelMarket) => void;
+  selectedLabel?: string | null;
+}) {
   const fullTotal   = play.total;
   const overProb    = play.overProb;
   const underProb   = overProb != null ? parseFloat((100 - overProb).toFixed(1)) : null;
@@ -820,22 +856,59 @@ function FullGameMarkets({ play, homeAbbr, awayAbbr }: { play: NCAABPlay; homeAb
   const homeTTEst   = play.homeGameTotalIsEstimated;
   const awayTTEst   = play.awayGameTotalIsEstimated;
 
+  const sel = (label: string, eng: number | null | undefined, imp: number | null | undefined) =>
+    onSelect?.({ label, enginePct: eng ?? null, impliedPct: imp ?? null, edge: eng != null && imp != null ? parseFloat((eng - imp).toFixed(1)) : null });
+
+  const homeTTOverProb  = homeTT && overProb ? parseFloat(Math.min(Math.max(overProb + 2, 1), 99).toFixed(1)) : null;
+  const homeTTUnderProb = homeTT && overProb ? parseFloat(Math.min(Math.max(100 - overProb - 2, 1), 99).toFixed(1)) : null;
+  const awayTTOverProb  = awayTT && overProb ? parseFloat(Math.min(Math.max(100 - overProb + 2, 1), 99).toFixed(1)) : null;
+  const awayTTUnderProb = awayTT && overProb ? parseFloat(Math.min(Math.max(overProb - 2, 1), 99).toFixed(1)) : null;
+
   return (
     <div style={{ borderRadius: 8, overflow: "hidden", border: "1px solid #1f1f1f", marginTop: 8 }}>
       <div style={{ padding: "8px 16px", background: "#0f0f0f", borderBottom: "1px solid #1a1a1a" }}>
         <span style={{ color: "#52525b", fontSize: 10, textTransform: "uppercase" as const, letterSpacing: "0.06em", fontWeight: 600 }}>Full Game Markets</span>
       </div>
-      <MarketRow label="Full Game Total" line={fullTotal} overProb={overProb} underProb={underProb} />
-      <MarketRow label={`${homeAbbr} Spread`} line={homeSpread} singleSide coverProb={spreadProb} />
-      <MarketRow label={`${awayAbbr} Spread`} line={awaySpread} singleSide coverProb={spreadProb != null ? parseFloat((100 - spreadProb).toFixed(1)) : null} />
-      <MarketRow label={`${homeAbbr} Team Total`} line={homeTT} isEstimated={homeTTEst} overProb={homeTT && overProb ? parseFloat(Math.min(Math.max(overProb + 2, 1), 99).toFixed(1)) : null} underProb={homeTT && overProb ? parseFloat(Math.min(Math.max(100 - overProb - 2, 1), 99).toFixed(1)) : null} />
-      <MarketRow label={`${awayAbbr} Team Total`} line={awayTT} isEstimated={awayTTEst} overProb={awayTT && overProb ? parseFloat(Math.min(Math.max(100 - overProb + 2, 1), 99).toFixed(1)) : null} underProb={awayTT && overProb ? parseFloat(Math.min(Math.max(overProb - 2, 1), 99).toFixed(1)) : null} />
+      <MarketRow label="Full Game Total" line={fullTotal} overProb={overProb} underProb={underProb}
+        onSelectOver={() => sel(`Total Over ${fullTotal}`, overProb, 52.4)}
+        onSelectUnder={() => sel(`Total Under ${fullTotal}`, underProb, 52.4)}
+        isSelectedOver={selectedLabel === `Total Over ${fullTotal}`}
+        isSelectedUnder={selectedLabel === `Total Under ${fullTotal}`}
+      />
+      <MarketRow label={`${homeAbbr} Spread`} line={homeSpread} singleSide coverProb={spreadProb}
+        onSelectSide={() => sel(`${homeAbbr} Spread ${homeSpread && homeSpread > 0 ? "+" : ""}${homeSpread}`, spreadProb, 52.4)}
+        isSelectedSide={selectedLabel === `${homeAbbr} Spread ${homeSpread && homeSpread > 0 ? "+" : ""}${homeSpread}`}
+      />
+      <MarketRow label={`${awayAbbr} Spread`} line={awaySpread} singleSide coverProb={spreadProb != null ? parseFloat((100 - spreadProb).toFixed(1)) : null}
+        onSelectSide={() => sel(`${awayAbbr} Spread ${awaySpread && awaySpread > 0 ? "+" : ""}${awaySpread}`, spreadProb != null ? parseFloat((100 - spreadProb).toFixed(1)) : null, 52.4)}
+        isSelectedSide={selectedLabel === `${awayAbbr} Spread ${awaySpread && awaySpread > 0 ? "+" : ""}${awaySpread}`}
+      />
+      <MarketRow label={`${homeAbbr} Team Total`} line={homeTT} isEstimated={homeTTEst}
+        overProb={homeTTOverProb} underProb={homeTTUnderProb}
+        onSelectOver={() => sel(`${homeAbbr} TT Over ${homeTT}`, homeTTOverProb, 52.4)}
+        onSelectUnder={() => sel(`${homeAbbr} TT Under ${homeTT}`, homeTTUnderProb, 52.4)}
+        isSelectedOver={selectedLabel === `${homeAbbr} TT Over ${homeTT}`}
+        isSelectedUnder={selectedLabel === `${homeAbbr} TT Under ${homeTT}`}
+      />
+      <MarketRow label={`${awayAbbr} Team Total`} line={awayTT} isEstimated={awayTTEst}
+        overProb={awayTTOverProb} underProb={awayTTUnderProb}
+        onSelectOver={() => sel(`${awayAbbr} TT Over ${awayTT}`, awayTTOverProb, 52.4)}
+        onSelectUnder={() => sel(`${awayAbbr} TT Under ${awayTT}`, awayTTUnderProb, 52.4)}
+        isSelectedOver={selectedLabel === `${awayAbbr} TT Over ${awayTT}`}
+        isSelectedUnder={selectedLabel === `${awayAbbr} TT Under ${awayTT}`}
+      />
     </div>
   );
 }
 
 // ── H1Markets: 1H market rows with fallback estimates ────────────────────────
-function H1Markets({ play, homeAbbr, awayAbbr }: { play: NCAABPlay; homeAbbr: string; awayAbbr: string }) {
+function H1Markets({
+  play, homeAbbr, awayAbbr, onSelect, selectedLabel,
+}: {
+  play: NCAABPlay; homeAbbr: string; awayAbbr: string;
+  onSelect?: (m: SelMarket) => void;
+  selectedLabel?: string | null;
+}) {
   const h1Line      = play.h1TotalLine;
   const h1Over      = play.over1HProb;
   const h1Under     = h1Over != null ? parseFloat((100 - h1Over).toFixed(1)) : null;
@@ -845,16 +918,39 @@ function H1Markets({ play, homeAbbr, awayAbbr }: { play: NCAABPlay; homeAbbr: st
   const h1Away1HTL  = play.away1HTotalLine;
   const h1EstimatedLine   = h1Line == null;
   const h1EstimatedSpread = h1Spread == null;
+  const h1HomeTTLine = h1Home1HTL ?? (h1Line ? parseFloat((h1Line * 0.48).toFixed(1)) : null);
+  const h1AwayTTLine = h1Away1HTL ?? (h1Line ? parseFloat((h1Line * 0.52).toFixed(1)) : null);
+
+  const sel = (label: string, eng: number | null | undefined, imp: number | null | undefined) =>
+    onSelect?.({ label, enginePct: eng ?? null, impliedPct: imp ?? null, edge: eng != null && imp != null ? parseFloat((eng - imp).toFixed(1)) : null });
 
   return (
     <div style={{ borderRadius: 8, overflow: "hidden", border: "1px solid #1f1f1f", marginTop: 8 }}>
       <div style={{ padding: "8px 16px", background: "#0f0f0f", borderBottom: "1px solid #1a1a1a" }}>
         <span style={{ color: "#52525b", fontSize: 10, textTransform: "uppercase" as const, letterSpacing: "0.06em", fontWeight: 600 }}>1st Half Markets</span>
       </div>
-      <MarketRow label="1H Total" line={h1Line} overProb={h1Over} underProb={h1Under} isEstimated={h1EstimatedLine} />
-      <MarketRow label={`${h1SpreadFav || homeAbbr} 1H Spread`} line={h1Spread} singleSide isEstimated={h1EstimatedSpread} />
-      <MarketRow label={`${homeAbbr} 1H Team Total`} line={h1Home1HTL ?? (h1Line ? parseFloat((h1Line * 0.48).toFixed(1)) : null)} isEstimated />
-      <MarketRow label={`${awayAbbr} 1H Team Total`} line={h1Away1HTL ?? (h1Line ? parseFloat((h1Line * 0.52).toFixed(1)) : null)} isEstimated />
+      <MarketRow label="1H Total" line={h1Line} overProb={h1Over} underProb={h1Under} isEstimated={h1EstimatedLine}
+        onSelectOver={() => sel(`1H Total Over ${h1Line}`, h1Over, 52.4)}
+        onSelectUnder={() => sel(`1H Total Under ${h1Line}`, h1Under, 52.4)}
+        isSelectedOver={selectedLabel === `1H Total Over ${h1Line}`}
+        isSelectedUnder={selectedLabel === `1H Total Under ${h1Line}`}
+      />
+      <MarketRow label={`${h1SpreadFav || homeAbbr} 1H Spread`} line={h1Spread} singleSide isEstimated={h1EstimatedSpread}
+        onSelectSide={() => sel(`${h1SpreadFav || homeAbbr} 1H Spread ${h1Spread && h1Spread > 0 ? "+" : ""}${h1Spread}`, null, 52.4)}
+        isSelectedSide={selectedLabel === `${h1SpreadFav || homeAbbr} 1H Spread ${h1Spread && h1Spread > 0 ? "+" : ""}${h1Spread}`}
+      />
+      <MarketRow label={`${homeAbbr} 1H Team Total`} line={h1HomeTTLine} isEstimated
+        onSelectOver={() => sel(`${homeAbbr} 1H TT Over ${h1HomeTTLine}`, null, 52.4)}
+        onSelectUnder={() => sel(`${homeAbbr} 1H TT Under ${h1HomeTTLine}`, null, 52.4)}
+        isSelectedOver={selectedLabel === `${homeAbbr} 1H TT Over ${h1HomeTTLine}`}
+        isSelectedUnder={selectedLabel === `${homeAbbr} 1H TT Under ${h1HomeTTLine}`}
+      />
+      <MarketRow label={`${awayAbbr} 1H Team Total`} line={h1AwayTTLine} isEstimated
+        onSelectOver={() => sel(`${awayAbbr} 1H TT Over ${h1AwayTTLine}`, null, 52.4)}
+        onSelectUnder={() => sel(`${awayAbbr} 1H TT Under ${h1AwayTTLine}`, null, 52.4)}
+        isSelectedOver={selectedLabel === `${awayAbbr} 1H TT Over ${h1AwayTTLine}`}
+        isSelectedUnder={selectedLabel === `${awayAbbr} 1H TT Under ${h1AwayTTLine}`}
+      />
     </div>
   );
 }
@@ -950,6 +1046,7 @@ function NCAABGameCard({
 
   const [selectedMarket, setSelectedMarket] = useState<"over" | "under" | "spread">(dominantMarket);
   const [marketTab, setMarketTab]           = useState<"full" | "h1" | "h2">("full");
+  const [mktCallout, setMktCallout]         = useState<SelMarket | null>(null);
   const [parlayLegs, setParlayLegs]         = useState<string[]>([]);
   const [showParlayDrawer, setShowParlayDrawer] = useState(false);
   const [selectedTeamMarket, setSelectedTeamMarket] = useState<{
@@ -1765,14 +1862,49 @@ function NCAABGameCard({
           })}
         </div>
 
+        {/* ── SELECTED MARKET CALLOUT ─────────────────────────────────── */}
+        {mktCallout && (() => {
+          const edgeVal = mktCallout.edge;
+          const edgeClr = edgeVal == null ? "#71717a" : edgeVal >= 5 ? "#00d4aa" : edgeVal >= 2 ? "#f59e0b" : edgeVal != null && edgeVal <= -5 ? "#ef4444" : "#71717a";
+          return (
+            <div style={{ margin: "8px 0", padding: "10px 14px", borderRadius: 8, border: "1.5px solid rgba(0,212,170,0.4)", background: "rgba(0,212,170,0.06)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ color: "#00d4aa", fontSize: 11, fontWeight: 700, marginBottom: 3 }}>{mktCallout.label}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" as const }}>
+                  {mktCallout.impliedPct != null && (
+                    <span style={{ color: "#71717a", fontSize: 10 }}>Book: <span style={{ color: "#a1a1aa", fontWeight: 600 }}>{mktCallout.impliedPct}% implied</span></span>
+                  )}
+                  {mktCallout.enginePct != null && (
+                    <span style={{ color: "#71717a", fontSize: 10 }}>Engine: <span style={{ color: "#ffffff", fontWeight: 700 }}>{mktCallout.enginePct}%</span></span>
+                  )}
+                  {edgeVal != null && (
+                    <span style={{ background: `${edgeClr}22`, border: `1px solid ${edgeClr}44`, color: edgeClr, borderRadius: 9999, padding: "1px 7px", fontSize: 9, fontWeight: 700 }}>
+                      {edgeVal > 0 ? "+" : ""}{edgeVal}pp edge
+                    </span>
+                  )}
+                </div>
+              </div>
+              <button onClick={() => setMktCallout(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#52525b", fontSize: 14, lineHeight: 1, padding: 4, flexShrink: 0 }}>×</button>
+            </div>
+          );
+        })()}
+
         {/* ── FULL GAME MARKET PANEL ──────────────────────────────────── */}
         {marketTab === "full" && (
-          <FullGameMarkets play={play} homeAbbr={play.homeTeamAbbr} awayAbbr={play.awayTeamAbbr} />
+          <FullGameMarkets
+            play={play} homeAbbr={play.homeTeamAbbr} awayAbbr={play.awayTeamAbbr}
+            onSelect={setMktCallout}
+            selectedLabel={mktCallout?.label ?? null}
+          />
         )}
 
         {/* ── 1H MARKET PANEL ─────────────────────────────────────────── */}
         {marketTab === "h1" && (
-          <H1Markets play={play} homeAbbr={play.homeTeamAbbr} awayAbbr={play.awayTeamAbbr} />
+          <H1Markets
+            play={play} homeAbbr={play.homeTeamAbbr} awayAbbr={play.awayTeamAbbr}
+            onSelect={setMktCallout}
+            selectedLabel={mktCallout?.label ?? null}
+          />
         )}
 
         {/* ── BETTING INTELLIGENCE (ActionNetwork) ───────────────────── */}
@@ -2141,6 +2273,17 @@ function groupGamesByTipoff(games: NCAABGame[]) {
 }
 
 // ── GameChip component ────────────────────────────────────────────────────────
+// Returns color tier for chip border/bg based on play edge and probability
+function getChipColorTier(play: NCAABPlay | undefined): "green" | "yellow" | "red" | "neutral" {
+  if (!play) return "neutral";
+  const edge = play.edge ?? 0;
+  const prob = play.overProb ?? 50;
+  const confidence = Math.max(prob, 100 - prob);
+  if (edge >= 10 || confidence >= 70) return "green";
+  if (edge >= 5 || confidence >= 60) return "yellow";
+  return "red";
+}
+
 // Returns value signal for a chip based on matched play data
 function getChipValueSignal(play: NCAABPlay | undefined): { label: string; color: string; bg: string } | null {
   if (!play) return null;
@@ -2165,6 +2308,7 @@ function GameChip({
   oddsData,
   onEnterViewport,
   valueSig,
+  colorTier,
 }: {
   game: NCAABGame;
   isSelected: boolean;
@@ -2172,6 +2316,7 @@ function GameChip({
   oddsData: ChipOddsData | null;
   onEnterViewport: (gameId: string) => void;
   valueSig: { label: string; color: string; bg: string } | null;
+  colorTier: "green" | "yellow" | "red" | "neutral";
 }) {
   const isFinal     = g.status === "Final";
   const isScheduled = !g.isLive && !isFinal;
@@ -2214,12 +2359,22 @@ function GameChip({
       style={{
         minWidth: 160,
         maxWidth: 200,
-        background: isSelected ? "#1f1f1f" : "#111111",
+        background: isSelected
+          ? "#1f1f1f"
+          : colorTier === "green" ? "rgba(0,212,170,0.05)"
+          : colorTier === "yellow" ? "rgba(245,158,11,0.05)"
+          : colorTier === "red" ? "rgba(239,68,68,0.05)"
+          : "#111111",
         border: isSelected
           ? "1.5px solid #00d4aa"
           : g.isLive
           ? "1px solid rgba(0,212,170,0.2)"
           : "1px solid #27272a",
+        borderLeft: isSelected ? undefined
+          : colorTier === "green" ? "3px solid #00d4aa"
+          : colorTier === "yellow" ? "3px solid #f59e0b"
+          : colorTier === "red" ? "3px solid #ef4444"
+          : undefined,
         borderRadius: 8,
         padding: "8px 14px",
         cursor: "pointer",
@@ -2229,7 +2384,14 @@ function GameChip({
         position: "relative",
       }}
       onMouseEnter={e => { if (!isSelected) e.currentTarget.style.borderColor = "#3f3f46"; }}
-      onMouseLeave={e => { if (!isSelected) e.currentTarget.style.borderColor = g.isLive ? "rgba(0,212,170,0.2)" : "#27272a"; }}
+      onMouseLeave={e => {
+        if (!isSelected) {
+          e.currentTarget.style.border = g.isLive ? "1px solid rgba(0,212,170,0.2)" : "1px solid #27272a";
+          if (colorTier !== "neutral") {
+            e.currentTarget.style.borderLeft = colorTier === "green" ? "3px solid #00d4aa" : colorTier === "yellow" ? "3px solid #f59e0b" : "3px solid #ef4444";
+          }
+        }
+      }}
     >
       {/* Value signal badge (top-right pill) or sharp signal dot */}
       {valueSig ? (
@@ -2547,37 +2709,45 @@ function NCAABGamesStrip({
                   return (
                     <div className="pb-2 mb-1">
                       <div className="flex gap-2" style={{ overflowX: "auto", scrollbarWidth: "none" }}>
-                        {firstRow.map(g => (
-                          <GameChip
-                            key={g.id}
-                            game={g}
-                            isSelected={expandedGameId === g.id}
-                            onChipClick={() => onChipClick(g.id)}
-                            oddsData={chipOdds[g.id] ?? null}
-                            onEnterViewport={fetchChipOdds}
-                            valueSig={getChipValueSignal(plays.find(p => p.gameId === g.id))}
-                          />
-                        ))}
-                        {chipsExpanded && remaining.map((g, idx) => (
-                          <div
-                            key={g.id}
-                            style={{
-                              flexShrink: 0,
-                              opacity: 0,
-                              animation: "ncaabFadeIn 200ms ease forwards",
-                              animationDelay: `${idx * 30}ms`,
-                            }}
-                          >
+                        {firstRow.map(g => {
+                          const matchedPlay = plays.find(p => p.gameId === g.id);
+                          return (
                             <GameChip
+                              key={g.id}
                               game={g}
                               isSelected={expandedGameId === g.id}
                               onChipClick={() => onChipClick(g.id)}
                               oddsData={chipOdds[g.id] ?? null}
                               onEnterViewport={fetchChipOdds}
-                              valueSig={getChipValueSignal(plays.find(p => p.gameId === g.id))}
+                              valueSig={getChipValueSignal(matchedPlay)}
+                              colorTier={getChipColorTier(matchedPlay)}
                             />
-                          </div>
-                        ))}
+                          );
+                        })}
+                        {chipsExpanded && remaining.map((g, idx) => {
+                          const matchedPlay = plays.find(p => p.gameId === g.id);
+                          return (
+                            <div
+                              key={g.id}
+                              style={{
+                                flexShrink: 0,
+                                opacity: 0,
+                                animation: "ncaabFadeIn 200ms ease forwards",
+                                animationDelay: `${idx * 30}ms`,
+                              }}
+                            >
+                              <GameChip
+                                game={g}
+                                isSelected={expandedGameId === g.id}
+                                onChipClick={() => onChipClick(g.id)}
+                                oddsData={chipOdds[g.id] ?? null}
+                                onEnterViewport={fetchChipOdds}
+                                valueSig={getChipValueSignal(matchedPlay)}
+                                colorTier={getChipColorTier(matchedPlay)}
+                              />
+                            </div>
+                          );
+                        })}
                         {!chipsExpanded && hasMore && !groupIsLive && (
                           <button
                             onClick={() => setExpandedGroups(prev => ({ ...prev, [group.key]: true }))}
@@ -2681,7 +2851,7 @@ function GroupedGamesList({
                   <div
                     ref={el => { rowRefs.current[g.id] = el; }}
                     data-testid={`ncaab-game-row-${g.id}`}
-                    className={`scroll-mt-24 flex items-center justify-between px-4 py-3 rounded-lg transition-all duration-200 ${canExpand ? "cursor-pointer" : "cursor-default"}`}
+                    className={`scroll-mt-52 flex items-center justify-between px-4 py-3 rounded-lg transition-all duration-200 ${canExpand ? "cursor-pointer" : "cursor-default"}`}
                     style={{
                       background: isExpanded ? "#141414" : "#111111",
                       border: `1px solid ${isExpanded ? "#3f3f46" : "#27272a"}`,
@@ -3199,8 +3369,8 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
   const handleChipClick = useCallback((gameId: string) => {
     setExpandedGameId(prev => prev === gameId ? null : gameId);
     setTimeout(() => {
-      rowRefs.current[gameId]?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 50);
+      rowRefs.current[gameId]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 150);
   }, []);
 
   const handleExpandGame = (id: string | null) => { if (id) handleChipClick(id); };
@@ -3493,6 +3663,29 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
       {/* ── Live sub-tab ───────────────────────────────────────────────────── */}
       {ncaabSubTab === "live" && !loading && (
         <>
+          {/* ── Today's Games strip — FIRST in live tab, sticky ──────────── */}
+          {games.length > 0 && (
+            <div
+              style={{
+                position: "sticky",
+                top: 0,
+                zIndex: 50,
+                background: "#0a0a0a",
+                paddingTop: 4,
+                paddingBottom: 8,
+                marginBottom: 4,
+                borderBottom: "1px solid #1c1c1e",
+              }}
+            >
+              <NCAABGamesStrip
+                games={games}
+                expandedGameId={expandedGameId}
+                onChipClick={handleChipClick}
+                plays={plays}
+              />
+            </div>
+          )}
+
           {/* Slate complete banner */}
           {allFinal && games.length > 0 && (
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: "rgba(0,212,170,0.08)", border: "1px solid rgba(0,212,170,0.2)" }}>
@@ -3613,28 +3806,6 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                   Slate Complete · {summaryGames.length} {summaryGames.length === 1 ? "game" : "games"} · <span style={{ color: "#00d4aa" }}>{wins}W</span> <span style={{ color: "#ef4444" }}>{losses}L</span>
                 </p>
               </div>
-            </div>
-          )}
-
-          {/* ── Today's Games strip — sticky, always first ───────────────── */}
-          {games.length > 0 && (
-            <div
-              style={{
-                position: "sticky",
-                top: 0,
-                zIndex: 50,
-                background: "#0a0a0a",
-                paddingBottom: 8,
-                marginBottom: -4,
-                borderBottom: "1px solid #1c1c1e",
-              }}
-            >
-              <NCAABGamesStrip
-                games={games}
-                expandedGameId={expandedGameId}
-                onChipClick={handleChipClick}
-                plays={plays}
-              />
             </div>
           )}
 
