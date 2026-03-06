@@ -2504,11 +2504,15 @@ function NCAABGamesStrip({
   expandedGameId,
   onChipClick,
   plays,
+  collapsed,
+  onCollapsedChange,
 }: {
   games: NCAABGame[];
   expandedGameId: string | null;
   onChipClick: (id: string) => void;
   plays: NCAABPlay[];
+  collapsed: boolean;
+  onCollapsedChange: (v: boolean) => void;
 }) {
   const liveCount = games.filter(g => g.isLive).length;
   const allFinal  = games.length > 0 && games.every(g => g.status === "Final");
@@ -2566,8 +2570,11 @@ function NCAABGamesStrip({
   const toggleGroup = (key: string) =>
     setOpenGroups(prev => ({ ...prev, [key]: !prev[key] }));
 
-  // ── Strip collapse state ──────────────────────────────────────────────────
-  const [stripCollapsed, setStripCollapsed] = useState(false);
+  // ── Strip collapse state — controlled from parent ─────────────────────────
+  const stripCollapsed = collapsed;
+  const setStripCollapsed = (fn: boolean | ((prev: boolean) => boolean)) => {
+    onCollapsedChange(typeof fn === "function" ? fn(collapsed) : fn);
+  };
 
   // ── Chip row width measurement (kept for ref; chips now wrap) ─────────────
   const stripContainerRef = useRef<HTMLDivElement>(null);
@@ -3319,6 +3326,7 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
   // H2H expansion + cache
   const [expandedGameId, setExpandedGameId] = useState<string | null>(null);
   const h2hCache = useRef<Record<string, H2HGame[]>>({});
+  const [gamesStripCollapsed, setGamesStripCollapsed] = useState(false);
   const [newlyLiveIds, setNewlyLiveIds]     = useState<Set<string>>(new Set());
 
   // shiftedGames (item 1): { [gameId]: boolean } — 6s auto-clear
@@ -3643,11 +3651,11 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                 zIndex: 50,
                 background: "#0a0a0a",
                 paddingTop: 4,
-                paddingBottom: 8,
-                marginBottom: 4,
-                borderBottom: "1px solid #1c1c1e",
-                maxHeight: "42vh",
-                overflowY: "auto",
+                paddingBottom: gamesStripCollapsed ? 4 : 8,
+                marginBottom: gamesStripCollapsed ? 0 : 4,
+                borderBottom: gamesStripCollapsed ? "none" : "1px solid #1c1c1e",
+                maxHeight: gamesStripCollapsed ? "none" : "42vh",
+                overflowY: gamesStripCollapsed ? "visible" : "auto",
               }}
             >
               <NCAABGamesStrip
@@ -3655,6 +3663,8 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                 expandedGameId={expandedGameId}
                 onChipClick={handleChipClick}
                 plays={plays}
+                collapsed={gamesStripCollapsed}
+                onCollapsedChange={setGamesStripCollapsed}
               />
             </div>
           )}
