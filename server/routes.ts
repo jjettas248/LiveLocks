@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
-import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines } from "./oddsService";
+import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines, getSGOPlayerLine } from "./oddsService";
 import { computeNCAABPlays, getNCAABScoreboard, getNCAABH2H, getNCAABChipOdds, fetch2HLines, calc2HEngineProb } from "./ncaabService";
 import { enrichNCAABGameFull, clearEnrichmentCache, getEnrichmentCacheStats } from "./ncaabEnrichment";
 import { calculateParlay } from "./parlayService";
@@ -919,43 +919,49 @@ export async function registerRoutes(
                 // H1 live stat: sum of each component from the live box score
                 const halftimeStat = components.reduce((sum, c) => sum + (liveStats[c] ?? 0), 0);
 
-                // Try Odds API for a live line; cache result per player+stat
+                // Multi-source line lookup: Odds API (live → pre-game) → SGO → season avg
                 let liveLine = snapToHalf(seasonAvg as number);
                 let lineSource: "odds_api" | "season_avg" = "season_avg";
-                if (oddsEventId && process.env.ODDS_API_KEY) {
-                  const cacheKey = `${playerName}|${statType}`;
-                  if (!oddsPlayerCache.has(cacheKey)) {
-                    try {
-                      const { getPlayerOdds } = await import("./oddsService");
-                      // Try live (in-play) lines first; fall back to pre-game if books don't offer live props
+                const lineCacheKey = `${playerName}|${statType}`;
+                if (!oddsPlayerCache.has(lineCacheKey)) {
+                  try {
+                    let resolved = false;
+
+                    // Source 1 & 2: The Odds API (live in-play, then pre-game)
+                    if (oddsEventId && process.env.ODDS_API_KEY) {
                       let oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, true);
                       let bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
                       if (bookKeys.length === 0) {
                         oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, false);
                         bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
-                        if (bookKeys.length > 0) {
-                          console.log(`[Halftime] Using pre-game line for ${playerName} (${statType}) — no live props available`);
-                        }
+                        if (bookKeys.length > 0) console.log(`[Halftime] Pre-game line for ${playerName} (${statType})`);
                       }
-                      const books = bookKeys.map(k => (oddsResult as any)[k]);
-                      if (books.length > 0) {
+                      if (bookKeys.length > 0) {
+                        const books = bookKeys.map(k => (oddsResult as any)[k]);
                         const lines = books.map((b: any) => b.line as number);
-                        // Estimate direction: H1 stat + rough H2 projection (half season avg)
                         const roughExpected = halftimeStat + ((seasonAvg as number) / 2);
                         const medianLine = [...lines].sort((a, b) => a - b)[Math.floor(lines.length / 2)];
-                        // Over → pick the lowest line (most favorable); Under → pick the highest
-                        const bestLine = roughExpected >= medianLine
-                          ? Math.min(...lines)
-                          : Math.max(...lines);
-                        oddsPlayerCache.set(cacheKey, { line: bestLine, bookKeys });
-                      } else {
-                        oddsPlayerCache.set(cacheKey, null);
+                        const bestLine = roughExpected >= medianLine ? Math.min(...lines) : Math.max(...lines);
+                        oddsPlayerCache.set(lineCacheKey, { line: bestLine, bookKeys });
+                        resolved = true;
                       }
-                    } catch { oddsPlayerCache.set(cacheKey, null); }
-                  }
-                  const oddsEntry = oddsPlayerCache.get(cacheKey);
-                  if (oddsEntry != null) { liveLine = oddsEntry.line; lineSource = "odds_api"; }
+                    }
+
+                    // Source 3: SGO NBA (works independently of Odds API event ID)
+                    if (!resolved && process.env.SGO_API_KEY) {
+                      const sgoResult = await getSGOPlayerLine(game.homeTeamAbbr, game.awayTeamAbbr, playerName, statType);
+                      if (sgoResult !== null) {
+                        console.log(`[Halftime] SGO line for ${playerName} (${statType}): ${sgoResult}`);
+                        oddsPlayerCache.set(lineCacheKey, { line: sgoResult, bookKeys: ["sgo"] });
+                        resolved = true;
+                      }
+                    }
+
+                    if (!resolved) oddsPlayerCache.set(lineCacheKey, null);
+                  } catch { oddsPlayerCache.set(lineCacheKey, null); }
                 }
+                const oddsEntry = oddsPlayerCache.get(lineCacheKey);
+                if (oddsEntry != null) { liveLine = oddsEntry.line; lineSource = "odds_api"; }
 
                 const result = await storage.calculateProbability({
                   playerId: dbPlayer.id,

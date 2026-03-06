@@ -1,5 +1,11 @@
 const ODDS_API_KEY = process.env.ODDS_API_KEY;
+const SGO_API_KEY  = process.env.SGO_API_KEY;
 const BASE_URL = "https://api.the-odds-api.com/v4/sports/basketball_nba";
+
+// Bookmakers to query for player props (ordered by reliability for NBA props)
+const PROP_BOOKMAKERS = "draftkings,fanduel,betmgm,betrivers,espnbet,hardrockbet,bet365,fanatics,bovada,betonlineag";
+// Regions: us covers DK/FD/MGM/BR/ESPN; uk covers bet365
+const PROP_REGIONS = "us,uk";
 
 // Canonical team name lookup — The Odds API uses full city+nickname
 export const TEAM_FULL_NAMES: Record<string, string> = {
@@ -176,7 +182,11 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
   if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
 
   const inPlayParam = inPlay ? "&in_play=true" : "";
-  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${marketKey}&bookmakers=draftkings,fanduel,hardrockbet,bet365,fanatics&oddsFormat=american${inPlayParam}`;
+  // For live (in-play) lines, also try pinnacle which offers live NBA props
+  const bookmakers = inPlay
+    ? `${PROP_BOOKMAKERS},pinnacle`
+    : PROP_BOOKMAKERS;
+  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=${PROP_REGIONS}&markets=${marketKey}&bookmakers=${bookmakers}&oddsFormat=american${inPlayParam}`;
 
   const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!res.ok) {
@@ -351,7 +361,7 @@ export async function getGameLines(
   if (!ODDS_API_KEY) return null;
 
   try {
-    const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=spreads,totals&bookmakers=draftkings,fanduel,hardrockbet,bet365,fanatics&oddsFormat=american`;
+    const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=${PROP_REGIONS}&markets=spreads,totals&bookmakers=${PROP_BOOKMAKERS}&oddsFormat=american`;
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
       console.warn(`[Odds] getGameLines ${res.status} for event ${oddsEventId}`);
@@ -407,9 +417,131 @@ export async function getGameLines(
   }
 }
 
+// ─── SGO NBA Player Props ─────────────────────────────────────────────────────
+// Uses the SGO (sportsgameodds.com) API as a third-source fallback for player lines.
+// SGO often carries props for role players that DK/FD don't post.
+
+const SGO_NBA_EVENTS_TTL = 4 * 60 * 1000; // 4 min cache for SGO NBA events
+
+// Stat-type → SGO odds key prefix (SGO uses {stat}-{playerSlug}-ou-{side} format)
+const SGO_STAT_KEY: Record<string, string> = {
+  points:      "points",
+  rebounds:    "rebounds",
+  assists:     "assists",
+  steals:      "steals",
+  blocks:      "blocks",
+  threes:      "threes-made",
+  pts_reb_ast: "points-rebounds-assists",
+  pts_reb:     "points-rebounds",
+  pts_ast:     "points-assists",
+  reb_ast:     "rebounds-assists",
+  stl_blk:     "steals-blocks",
+};
+
+async function getSGONBAEvents(): Promise<any[]> {
+  const cacheKey = "sgo_nba_events";
+  const cached = cache.get(cacheKey);
+  if (isFresh(cached, SGO_NBA_EVENTS_TTL)) return cached!.data;
+
+  if (!SGO_API_KEY) return [];
+  try {
+    const url = "https://api.sportsgameodds.com/v2/events?leagueID=NBA&oddsAvailable=true&limit=30";
+    const res = await fetch(url, {
+      headers: { "X-Api-Key": SGO_API_KEY },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) {
+      console.warn(`[SGO NBA] ${res.status}: ${await res.text().catch(() => "")}`);
+      return [];
+    }
+    const data = await res.json() as any;
+    const events: any[] = data.data ?? [];
+    cache.set(cacheKey, { data: events, timestamp: Date.now() });
+    console.log(`[SGO NBA] ${events.length} events fetched`);
+    return events;
+  } catch (err) {
+    console.warn("[SGO NBA] error:", err);
+    return [];
+  }
+}
+
+// Try to get a player line from SGO for a given game + stat type.
+// Returns the over line (numeric) or null if not found.
+export async function getSGOPlayerLine(
+  homeTeam: string,
+  awayTeam: string,
+  playerName: string,
+  statType: string
+): Promise<number | null> {
+  if (!SGO_API_KEY) return null;
+  const statKey = SGO_STAT_KEY[statType];
+  if (!statKey) return null;
+
+  try {
+    const events = await getSGONBAEvents();
+
+    // Match event by team name
+    const homeNorm = normTeam(TEAM_FULL_NAMES[homeTeam.toUpperCase()] ?? homeTeam);
+    const awayNorm = normTeam(TEAM_FULL_NAMES[awayTeam.toUpperCase()] ?? awayTeam);
+
+    const event = events.find((ev: any) => {
+      const evHome = normTeam(ev.teams?.home?.names?.long ?? "");
+      const evAway = normTeam(ev.teams?.away?.names?.long ?? "");
+      return (teamsMatch(homeNorm, evHome) && teamsMatch(awayNorm, evAway))
+          || (teamsMatch(homeNorm, evAway) && teamsMatch(awayNorm, evHome));
+    });
+
+    if (!event) return null;
+
+    const odds = event.odds ?? {};
+    const normName = normPlayerName(playerName);
+    const nameParts = normName.split(" ");
+    const firstName = nameParts[0] ?? "";
+    const lastName  = nameParts[nameParts.length - 1] ?? "";
+
+    // SGO player prop keys are like: player-{firstName}-{lastName}-{statKey}-ou-over
+    // Try several slug formats
+    const slugFull  = `${firstName}-${lastName}`.replace(/\s+/g, "-");
+    const slugLast  = lastName;
+
+    let line: number | null = null;
+
+    for (const [key, val] of Object.entries(odds)) {
+      if (typeof val !== "object" || val == null) continue;
+      const k = key.toLowerCase();
+      if (!k.includes(statKey)) continue;
+      if (!k.includes("ou")) continue;
+      if (!k.includes("over")) continue;
+      // Check if this key mentions the player by name parts
+      if (!k.includes(slugFull) && !k.includes(slugLast)) continue;
+
+      const overVal = (val as any)?.over ?? (val as any)?.point ?? (val as any)?.line;
+      if (typeof overVal === "number") {
+        line = overVal;
+        console.log(`[SGO NBA] Found ${statType} line for "${playerName}": ${line} (key: ${key})`);
+        break;
+      }
+    }
+
+    // If no match found, log available player keys for this stat to aid debugging
+    if (line === null) {
+      const statKeys = Object.keys(odds).filter(k => k.toLowerCase().includes(statKey) && k.includes("ou-over")).slice(0, 6);
+      if (statKeys.length > 0) {
+        console.log(`[SGO NBA] No "${playerName}" line for ${statType}. Sample keys: ${statKeys.join(", ")}`);
+      }
+    }
+
+    return line;
+  } catch (err) {
+    console.warn("[SGO NBA] getSGOPlayerLine error:", err);
+    return null;
+  }
+}
+
 // Bust the event cache (call after a game starts or for testing)
 export function bustEventsCache(): void {
   cache.delete("events_list");
+  cache.delete("sgo_nba_events");
 }
 
 // Expose opening line cache size for diagnostics
