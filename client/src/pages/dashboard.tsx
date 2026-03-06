@@ -384,7 +384,6 @@ export default function Dashboard() {
   const [slateFilterProb, setSlateFilterProb] = useState<string>("all");
   const [nbaBookFilter, setNbaBookFilter] = useState<string>("all");
   const [ncaabBookFilter, setNcaabBookFilter] = useState<string>("all");
-  const [showAlertsPanel, setShowAlertsPanel] = useState(false);
   const [showHistorySheet, setShowHistorySheet] = useState(false);
   const [notificationLog, setNotificationLog] = useState<NotificationLog[]>([]);
   const [isSmallScreen, setIsSmallScreen] = useState(() => window.innerWidth < 768);
@@ -1208,8 +1207,10 @@ export default function Dashboard() {
   const filterPlay = (play: any) => {
     if (slateFilterProp === "combo" && !play.statType.includes("_")) return false;
     if (slateFilterProp !== "all" && slateFilterProp !== "combo" && play.statType !== slateFilterProp) return false;
-    if (slateFilterProb === "high" && play.probability < 65 && play.probability > 35) return false;
-    if (slateFilterProb === "medium" && (play.probability >= 65 || play.probability <= 35)) return false;
+    const dp = play.betDirection === "under" ? (100 - play.probability) : play.probability;
+    if (slateFilterProb === "elite" && dp < 85) return false;
+    if (slateFilterProb === "strong" && (dp < 70 || dp >= 85)) return false;
+    if (slateFilterProb === "value" && (dp < 60 || dp >= 70)) return false;
     return true;
   };
 
@@ -1328,8 +1329,8 @@ export default function Dashboard() {
               </button>
             )}
             {user && user.subscriptionTier && (
-              <div className="hidden sm:flex items-center gap-1.5">
-                <span data-testid="text-subscription-tier" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-medium">
+              <div className="flex items-center gap-1.5">
+                <span data-testid="text-subscription-tier" className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-medium">
                   <Star className="w-3 h-3" />
                   {user.subscriptionTier === "elite" ? "All Sports" : user.subscriptionTier === "all" ? "Pro" : user.subscriptionTier}
                 </span>
@@ -1337,63 +1338,51 @@ export default function Dashboard() {
                   data-testid="button-manage-subscription"
                   onClick={handleManageSubscription}
                   disabled={portalLoading}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+                  className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
                   title="Manage or cancel your subscription"
                 >
                   {portalLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : "Manage"}
                 </button>
               </div>
             )}
+            {user?.isAdmin && (
+              <button
+                onClick={() => syncRostersMutation.mutate()}
+                disabled={syncRostersMutation.isPending}
+                data-testid="button-sync-rosters"
+                title="Pull latest rosters from ESPN to update player team assignments"
+                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
+              >
+                {syncRostersMutation.isPending ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-3.5 h-3.5" />
+                )}
+                Sync Rosters
+              </button>
+            )}
+            {/* Unified notification bell — opens alert history + push/SMS settings */}
             <button
-              onClick={() => syncRostersMutation.mutate()}
-              disabled={syncRostersMutation.isPending}
-              data-testid="button-sync-rosters"
-              title="Pull latest rosters from ESPN to update player team assignments"
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
-            >
-              {syncRostersMutation.isPending ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="w-3.5 h-3.5" />
-              )}
-              Sync Rosters
-            </button>
-            {/* Bell — opens notification history sheet */}
-            <button
-              data-testid="button-sms-bell"
+              data-testid="button-notifications"
               onClick={() => setShowHistorySheet(true)}
               className="relative flex items-center justify-center w-9 h-9 rounded-lg bg-secondary border border-border text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors"
-              title="Alert History"
+              title="Notifications & alert history"
             >
-              <Bell
-                ref={bellRef}
-                className="w-4 h-4"
-                style={{
-                  color: smsStatus === "opted-out" ? "#52525b" : "#71717a",
-                }}
-              />
-              {/* Amber pulsing dot — unprompted */}
-              {smsStatus === "unprompted" && (
+              <Bell ref={bellRef} className="w-4 h-4" />
+              {/* Red dot — unread alert history (highest priority) */}
+              {notificationLog.length > 0 && (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 border border-background" />
+              )}
+              {/* Amber pulsing dot — SMS not yet configured */}
+              {notificationLog.length === 0 && smsStatus === "unprompted" && (
                 <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" style={{ animationDuration: "2s" }} />
                   <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
                 </span>
               )}
-              {/* Green static dot — opted-in */}
-              {smsStatus === "opted-in" && (
+              {/* Green dot — SMS opted-in, no new alerts */}
+              {notificationLog.length === 0 && smsStatus === "opted-in" && (
                 <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-green-400" />
-              )}
-            </button>
-            {/* Existing alerts panel button (push notifications history) */}
-            <button
-              data-testid="button-alerts-panel"
-              onClick={() => setShowAlertsPanel((v) => !v)}
-              className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors"
-              title="Alerts & notifications"
-            >
-              <span className="text-sm">🔔</span>
-              {alertHistory.length > 0 && !showAlertsPanel && (
-                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 border border-background" />
               )}
             </button>
             <button
@@ -1435,124 +1424,6 @@ export default function Dashboard() {
         </div>
       </header>
 
-      {/* Alerts Panel — slides down below header */}
-      {showAlertsPanel && user && (
-        <div className="border-b border-border/60 bg-card/80 backdrop-blur-sm">
-          <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-4 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground">Alerts & Notifications</h3>
-              <button onClick={() => setShowAlertsPanel(false)} className="text-xs text-muted-foreground hover:text-foreground">✕ Close</button>
-            </div>
-
-            {/* Push Notifications */}
-            <div className="bg-secondary/40 rounded-xl p-4 space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-foreground">📲 Push Notifications</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">Fires when any play hits ≥90% confidence or 2H goes live — even when the app is closed (if installed to home screen).</p>
-                </div>
-                {pushSubscribed
-                  ? (
-                    <button
-                      data-testid="button-disable-push"
-                      onClick={handleDisablePush}
-                      disabled={pushLoading}
-                      className="shrink-0 px-3 py-1.5 rounded-lg bg-secondary border border-border text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
-                    >
-                      {pushLoading ? "..." : "Disable"}
-                    </button>
-                  ) : (
-                    <button
-                      data-testid="button-enable-push"
-                      onClick={handleEnablePush}
-                      disabled={pushLoading}
-                      className="shrink-0 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 disabled:opacity-50"
-                    >
-                      {pushLoading ? "..." : "Enable"}
-                    </button>
-                  )
-                }
-              </div>
-              {pushSubscribed && (
-                <p className="text-xs text-green-400 flex items-center gap-1">
-                  <span>✓</span> Push alerts active
-                </p>
-              )}
-            </div>
-
-            {/* SMS (Pro + All Sports) */}
-            <div className="bg-secondary/40 rounded-xl p-4 space-y-3">
-              <p className="text-sm font-semibold text-foreground">💬 SMS Alerts</p>
-              {(hasProAccess(user.subscriptionTier) || user.isAdmin)
-                ? (
-                  <div className="space-y-2">
-                    <p className="text-xs text-muted-foreground">Get a text message for 2H plays and ≥90% confidence plays. Msg & data rates may apply. Reply STOP to cancel anytime.</p>
-                    <input
-                      data-testid="input-phone-number"
-                      type="tel"
-                      placeholder="+1 555 000 0000"
-                      value={phoneInput}
-                      onChange={(e) => setPhoneInput(e.target.value)}
-                      className="w-full px-3 py-1.5 rounded-lg bg-background border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary"
-                    />
-                    <div className="flex items-center gap-3">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <button
-                          data-testid="toggle-sms-alerts"
-                          type="button"
-                          onClick={() => setSmsEnabled(v => !v)}
-                          className={`w-10 h-5 rounded-full transition-colors relative ${smsEnabled ? "bg-primary" : "bg-secondary border border-border"}`}
-                        >
-                          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${smsEnabled ? "left-5" : "left-0.5"}`} />
-                        </button>
-                        <span className="text-xs text-muted-foreground">{smsEnabled ? "SMS on" : "SMS off"}</span>
-                      </label>
-                      <button
-                        data-testid="button-save-sms"
-                        onClick={handleSaveSms}
-                        disabled={smsLoading}
-                        className="ml-auto px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 disabled:opacity-50"
-                      >
-                        {smsLoading ? "Saving..." : "Save"}
-                      </button>
-                    </div>
-                    <p className="text-[10px] text-muted-foreground/60 leading-relaxed">
-                      By enabling SMS, you consent to receive automated sports alerts from LiveLocks AI. View our{" "}
-                      <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Terms</a>
-                      {" "}and{" "}
-                      <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Privacy Policy</a>.
-                    </p>
-                  </div>
-                ) : (
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-2">SMS alerts are included in the Pro and All Sports plans — never miss a 2H play.</p>
-                    <button
-                      onClick={() => { setShowAlertsPanel(false); setUpgradeModalState({ playsUsed: user.playsUsed ?? 0, limit: 15 }); setShowUpgradeModal(true); }}
-                      className="px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/20"
-                    >
-                      View Plans →
-                    </button>
-                  </div>
-                )
-              }
-            </div>
-
-            {/* Alert history */}
-            {alertHistory.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Recent Alerts</p>
-                {alertHistory.slice(0, 5).map((a, i) => (
-                  <div key={i} className="bg-secondary/30 rounded-lg px-3 py-2">
-                    <p className="text-xs font-semibold text-foreground">{a.title}</p>
-                    <p className="text-xs text-muted-foreground">{a.body}</p>
-                    <p className="text-[10px] text-muted-foreground/50 mt-0.5">{new Date(a.time).toLocaleTimeString()}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* PWA Install Banner */}
       {showInstallBanner && !pwaPromptDismissed && user && (
@@ -1625,7 +1496,7 @@ export default function Dashboard() {
               } ${!hasNcaabAccess ? "opacity-60" : ""}`}
             >
               <div style={{ position: "relative", display: "inline-flex", alignItems: "center", overflow: "visible" }}>
-                🏀 NCAAB Live
+                🎓 NCAAB Live
                 {hasNcaabAccess && showNewBadge && (
                   <span
                     data-testid="ncaab-new-badge"
@@ -1868,6 +1739,16 @@ export default function Dashboard() {
                 </div>
               ) : liveStats && liveStats.filter(s => s.minutes !== "0" && s.minutes !== "0:00").length > 0 ? (
                 <div>
+                  {/* Signal legend — only shown when halftime plays exist */}
+                  {(halftimePlaysData?.plays?.length ?? 0) > 0 && (
+                    <div className="px-4 pt-2 pb-1 flex items-center gap-3 text-[10px] text-muted-foreground/70 border-b border-border/20 flex-wrap">
+                      <span className="font-medium uppercase tracking-wider">Signal Key:</span>
+                      <span className="flex items-center gap-1"><span style={{ color: "#22c55e" }}>●</span> Over ≥85%</span>
+                      <span className="flex items-center gap-1"><span style={{ color: "#ef4444" }}>●</span> Under ≥85%</span>
+                      <span className="flex items-center gap-1"><span style={{ color: "#eab308" }}>●</span> 70–84%</span>
+                      <span className="flex items-center gap-1"><span style={{ color: "#00d4aa" }}>●</span> 60–69%</span>
+                    </div>
+                  )}
                   {/* Filter + Sort Controls */}
                   <div className="px-4 py-2 border-b border-border/40 flex items-center gap-2">
                     <div className="relative flex-1">
@@ -2842,69 +2723,65 @@ export default function Dashboard() {
               </div>
 
               {/* Filters */}
-              <div className="flex flex-wrap gap-2 mb-4">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-muted-foreground font-medium">Prop:</span>
-                    <div className="flex gap-1 flex-wrap">
-                      {[
-                        { value: "all", label: "All" },
-                        { value: "points", label: "PTS" },
-                        { value: "rebounds", label: "REB" },
-                        { value: "assists", label: "AST" },
-                        { value: "threes", label: "3PM" },
-                        { value: "steals", label: "STL" },
-                        { value: "blocks", label: "BLK" },
-                        { value: "combo", label: "Combos" },
-                        { value: "pts_reb", label: "Pts+Reb" },
-                        { value: "pts_ast", label: "Pts+Ast" },
-                        { value: "pts_reb_ast", label: "Pts+Reb+Ast" },
-                        { value: "reb_ast", label: "Reb+Ast" },
-                        { value: "stl_blk", label: "Stl+Blk" },
-                      ].map(opt => (
-                        <button
-                          key={opt.value}
-                          data-testid={`slate-filter-prop-${opt.value}`}
-                          onClick={() => setSlateFilterProp(opt.value)}
-                          className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
-                            slateFilterProp === opt.value
-                              ? "bg-primary text-primary-foreground border-primary"
-                              : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
+              <div className="flex flex-wrap gap-y-2 gap-x-4 mb-4">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs text-muted-foreground font-medium shrink-0">Prop:</span>
+                  <div className="flex gap-1 flex-wrap">
+                    {[
+                      { value: "all", label: "All" },
+                      { value: "points", label: "PTS" },
+                      { value: "rebounds", label: "REB" },
+                      { value: "assists", label: "AST" },
+                      { value: "threes", label: "3PM" },
+                      { value: "steals", label: "STL" },
+                      { value: "blocks", label: "BLK" },
+                      { value: "combo", label: "Combos" },
+                    ].map(opt => (
+                      <button
+                        key={opt.value}
+                        data-testid={`slate-filter-prop-${opt.value}`}
+                        onClick={() => setSlateFilterProp(opt.value)}
+                        className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                          slateFilterProp === opt.value
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
                   </div>
-                  <div className="flex items-center gap-1.5 ml-auto">
-                    <span className="text-xs text-muted-foreground font-medium">Confidence:</span>
-                    <div className="flex gap-1">
-                      {[
-                        { value: "all", label: "All" },
-                        { value: "high", label: "High ≥65%" },
-                        { value: "medium", label: "Mod 55–65%" },
-                      ].map(opt => (
-                        <button
-                          key={opt.value}
-                          data-testid={`slate-filter-prob-${opt.value}`}
-                          onClick={() => setSlateFilterProb(opt.value)}
-                          className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
-                            slateFilterProb === opt.value
-                              ? "bg-primary text-primary-foreground border-primary"
-                              : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-muted-foreground font-medium shrink-0">Confidence:</span>
+                  <div className="flex gap-1 flex-wrap">
+                    {[
+                      { value: "all", label: "All" },
+                      { value: "elite", label: "Elite ≥85%" },
+                      { value: "strong", label: "Strong 70–84%" },
+                      { value: "value", label: "Value 60–69%" },
+                    ].map(opt => (
+                      <button
+                        key={opt.value}
+                        data-testid={`slate-filter-prob-${opt.value}`}
+                        onClick={() => setSlateFilterProb(opt.value)}
+                        className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                          slateFilterProb === opt.value
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
                   </div>
+                </div>
               </div>
 
-              {/* Book filter — Row 4 */}
+              {/* Book filter */}
               <div className="flex items-center gap-2 mb-3 overflow-x-auto" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
-                <span className="text-xs uppercase tracking-wider shrink-0" style={{ color: "#a1a1aa" }}>Book:</span>
-                <div className="flex gap-1.5 flex-nowrap">
+                <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider shrink-0">Book:</span>
+                <div className="flex gap-1 flex-nowrap">
                   {(() => {
                     const allPlaysForCount = halftimePlaysData?.plays ?? [];
                     return BOOK_OPTIONS.map(opt => {
@@ -2916,19 +2793,13 @@ export default function Dashboard() {
                           key={opt.key}
                           data-testid={`book-filter-${opt.key}`}
                           onClick={() => setNbaBookFilter(opt.key)}
-                          style={{
-                            opacity: isZero ? 0.4 : 1,
-                            background: isSelected ? "#27272a" : "#181818",
-                            border: isSelected ? "1.5px solid #ffffff" : "1px solid #27272a",
-                            color: isSelected ? "#ffffff" : "#71717a",
-                            fontSize: 11,
-                            fontWeight: isSelected ? 700 : 400,
-                            borderRadius: 9999,
-                            padding: "4px 10px",
-                            whiteSpace: "nowrap",
-                            cursor: "pointer",
-                            transition: "all 80ms ease",
-                          }}
+                          className={`text-xs px-2.5 py-0.5 rounded-full border transition-colors whitespace-nowrap ${
+                            isZero ? "opacity-40" : ""
+                          } ${
+                            isSelected
+                              ? "bg-foreground text-background border-foreground font-bold"
+                              : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                          }`}
                         >
                           {opt.key === "all" ? "All" : count !== null ? `${opt.abbr} · ${count}` : opt.abbr}
                         </button>
@@ -3056,17 +2927,24 @@ export default function Dashboard() {
                                       <button
                                         data-testid="button-show-all-books"
                                         onClick={() => setNbaBookFilter("all")}
-                                        style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "#a1a1aa", fontSize: 11, borderRadius: 9999, padding: "6px 16px", marginTop: 4, cursor: "pointer" }}
+                                        className="mt-1 text-xs px-4 py-1.5 rounded-full border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors"
                                       >
                                         Show All Books
                                       </button>
                                     </div>
                                   );
                                 }
+                                const activePropFilter = slateFilterProp !== "all";
+                                const activeConfFilter = slateFilterProb !== "all";
+                                const filterDesc = [
+                                  activePropFilter ? `prop "${slateFilterProp}"` : null,
+                                  activeConfFilter ? `confidence "${slateFilterProb}"` : null,
+                                ].filter(Boolean).join(" + ");
                                 return (
                                   <div className="text-center py-8 text-muted-foreground">
-                                    <p className="text-sm">No plays match the current filters.</p>
-                                    <button onClick={() => { setSlateFilterProp("all"); setSlateFilterProb("all"); setNbaBookFilter("all"); }} className="text-xs text-primary mt-2 hover:underline">Clear filters</button>
+                                    <p className="text-sm font-medium">No plays match your current filters.</p>
+                                    {filterDesc && <p className="text-xs mt-1 text-muted-foreground/60">Active: {filterDesc}</p>}
+                                    <button onClick={() => { setSlateFilterProp("all"); setSlateFilterProb("all"); setNbaBookFilter("all"); }} className="text-xs text-primary mt-2 hover:underline">Clear all filters</button>
                                   </div>
                                 );
                               })()}
@@ -3077,7 +2955,6 @@ export default function Dashboard() {
                                     const isInjured = injuredPlayerNames.has(play.playerName.toLowerCase());
                                     const statLabel = STAT_TYPES.find(s => s.value === play.statType)?.label ?? play.statType;
                                     const hasLiveLine = play.lineSource === "odds_api";
-                                    const globalIdx = halftimePlaysData.plays.indexOf(play);
                                     return (
                                       <div
                                         key={idx}
@@ -3090,7 +2967,7 @@ export default function Dashboard() {
                                         onClick={() => loadPlayInCalculator(play)}
                                       >
                                         <div className="absolute top-3 left-3 w-5 h-5 flex items-center justify-center" style={{ background: "#1d4ed8", borderRadius: 8 }}>
-                                          <span className="text-[9px] font-bold text-white leading-none">#{globalIdx + 1}</span>
+                                          <span className="text-[9px] font-bold text-white leading-none">#{idx + 1}</span>
                                         </div>
                                         <div className="flex items-start justify-between gap-2 pl-7">
                                           <div>
@@ -3107,12 +2984,13 @@ export default function Dashboard() {
                                               const displayProb = play.betDirection === "under"
                                                 ? Math.round((100 - play.probability) * 10) / 10
                                                 : play.probability;
+                                              const probColor =
+                                                displayProb >= 85 ? (play.betDirection === "under" ? "text-red-400" : "text-green-400") :
+                                                displayProb >= 70 ? "text-yellow-400" :
+                                                displayProb >= 60 ? "text-[#00d4aa]" : "text-muted-foreground";
                                               return (
                                                 <>
-                                                  <div className={`text-xl font-bold font-mono ${
-                                                    displayProb >= 65 ? "text-green-400" :
-                                                    displayProb <= 35 ? "text-red-400" : "text-yellow-400"
-                                                  }`}>
+                                                  <div className={`text-xl font-bold font-mono ${probColor}`}>
                                                     {displayProb.toFixed(1)}%
                                                   </div>
                                                   <div className="text-[9px] font-semibold text-muted-foreground">
@@ -3148,7 +3026,7 @@ export default function Dashboard() {
                                           <span className="text-xs" style={{ color: play.halftimeStat > 0 ? "#71717a" : "#52525b" }}>
                                             H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}
                                           </span>
-                                          <span data-testid="hint-tap-verify" className="text-[10px] text-muted-foreground/50 italic">Tap card to cross-check →</span>
+                                          {idx === 0 && <span data-testid="hint-tap-verify" className="text-[10px] text-muted-foreground/50 italic">Tap to cross-check in calculator →</span>}
                                         </div>
                                         {(() => {
                                           const inParlayIdx = parlayPicks.findIndex(p =>
@@ -3469,16 +3347,27 @@ export default function Dashboard() {
           {/* Header */}
           <div className="flex items-start justify-between px-5 pt-5 pb-3 border-b border-zinc-800 flex-shrink-0">
             <div>
-              <h2 className="text-lg font-bold text-white">Alert History</h2>
+              <h2 className="text-lg font-bold text-white">Notifications</h2>
               <p className="text-sm text-zinc-400 mt-0.5">Today · {notificationLog.length} alert{notificationLog.length !== 1 ? "s" : ""}</p>
             </div>
-            <button
-              data-testid="button-alert-preferences"
-              onClick={() => { setSmsModalFlow("view"); setShowSmsModal(true); }}
-              className="text-xs text-zinc-400 underline underline-offset-2 hover:text-zinc-200 transition-colors mt-1"
-            >
-              Alert Preferences
-            </button>
+            <div className="flex items-center gap-3 mt-1">
+              {/* Push toggle inline */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-zinc-400">Push</span>
+                {pushSubscribed
+                  ? <button data-testid="button-disable-push" onClick={handleDisablePush} disabled={pushLoading} className="text-xs text-zinc-400 underline underline-offset-2 hover:text-zinc-200 transition-colors disabled:opacity-50">{pushLoading ? "..." : "Disable"}</button>
+                  : <button data-testid="button-enable-push" onClick={handleEnablePush} disabled={pushLoading} className="text-xs text-[#00d4aa] underline underline-offset-2 hover:text-white transition-colors disabled:opacity-50">{pushLoading ? "..." : "Enable"}</button>
+                }
+                {pushSubscribed && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />}
+              </div>
+              <button
+                data-testid="button-alert-preferences"
+                onClick={() => { setSmsModalFlow("view"); setShowSmsModal(true); }}
+                className="text-xs text-zinc-400 underline underline-offset-2 hover:text-zinc-200 transition-colors"
+              >
+                SMS Settings
+              </button>
+            </div>
           </div>
 
           {/* Scrollable content */}
