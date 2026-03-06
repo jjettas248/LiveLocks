@@ -919,9 +919,9 @@ export async function registerRoutes(
                 // H1 live stat: sum of each component from the live box score
                 const halftimeStat = components.reduce((sum, c) => sum + (liveStats[c] ?? 0), 0);
 
-                // Multi-source line lookup: Odds API (live → pre-game) → SGO → season avg
-                let liveLine = snapToHalf(seasonAvg as number);
-                let lineSource: "odds_api" | "season_avg" = "season_avg";
+                // Multi-source line lookup: Odds API (live → pre-game) → SGO.
+                // If no real book line is found, skip this stat — we never invent a line.
+                let liveLine: number | null = null;
                 const lineCacheKey = `${playerName}|${statType}`;
                 if (!oddsPlayerCache.has(lineCacheKey)) {
                   try {
@@ -957,11 +957,18 @@ export async function registerRoutes(
                       }
                     }
 
-                    if (!resolved) oddsPlayerCache.set(lineCacheKey, null);
+                    if (!resolved) {
+                      console.log(`[Halftime] No book line for ${playerName} (${statType}) — skipping`);
+                      oddsPlayerCache.set(lineCacheKey, null);
+                    }
                   } catch { oddsPlayerCache.set(lineCacheKey, null); }
                 }
                 const oddsEntry = oddsPlayerCache.get(lineCacheKey);
-                if (oddsEntry != null) { liveLine = oddsEntry.line; lineSource = "odds_api"; }
+                if (oddsEntry != null) {
+                  liveLine = oddsEntry.line;
+                } else {
+                  continue; // No real line available — never fabricate one
+                }
 
                 const result = await storage.calculateProbability({
                   playerId: dbPlayer.id,
