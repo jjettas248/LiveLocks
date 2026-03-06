@@ -2561,6 +2561,7 @@ function NCAABGamesStrip({
       {/* ── Strip header ───────────────────────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: stripCollapsed ? 0 : 10 }}>
         <button
+          data-testid="button-strip-toggle"
           onClick={() => setStripCollapsed(c => !c)}
           style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0 }}
         >
@@ -3320,7 +3321,13 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
     }, 150);
   }, []);
 
-  const handleExpandGame = (id: string | null) => { if (id) handleChipClick(id); };
+  const handleExpandGame = (id: string | null) => {
+    if (id !== null) {
+      handleChipClick(id);
+    } else {
+      setExpandedGameId(null);
+    }
+  };
 
   // Expand a game from outside (e.g. welcome banner Explore flow)
   useEffect(() => {
@@ -3622,6 +3629,8 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                 paddingBottom: 8,
                 marginBottom: 4,
                 borderBottom: "1px solid #1c1c1e",
+                maxHeight: "42vh",
+                overflowY: "auto",
               }}
             >
               <NCAABGamesStrip
