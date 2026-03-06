@@ -714,8 +714,8 @@ export async function registerRoutes(
   // Current line source: getPlayerOdds() → The Odds API /v4/sports/basketball_nba/events/{id}/odds
   //   with in_play=true (live halftime-adjusted lines, not pre-game lines)
   // H1 stat field: play.halftimeStat — sum of live box score components from ESPN summary API
-  // Line field: play.line — from Odds API live line (falls back to snapToHalf(seasonAvg))
-  // lineSource: "odds_api" when Odds API returned a line, "season_avg" when falling back
+  // Line field: play.line — real book line from Odds API or SGO (never fabricated)
+  // lineSource: always "odds_api" — plays are skipped if no book line is available
   // Confirmed fix: added inPlay=true to getPlayerOdds() call so lines reflect current
   //   halftime-adjusted (in-game) odds rather than stale pre-game full-game prop lines.
   // APIs wired: ESPN scoreboard, ESPN boxscore/summary, The Odds API (player props + in_play)
@@ -1009,7 +1009,7 @@ export async function registerRoutes(
                   halftimeMinutes: Math.round(minutes * 10) / 10,
                   halftimeFouls: parseStat(statMap["pf"]),
                   line: liveLine,
-                  lineSource,
+                  lineSource: "odds_api",
                   bookKeys: oddsEntry2?.bookKeys ?? [],
                   probability: result.probability,
                   edge,

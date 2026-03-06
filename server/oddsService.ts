@@ -438,10 +438,17 @@ const SGO_STAT_KEY: Record<string, string> = {
   stl_blk:     "steals-blocks",
 };
 
+// How long to suppress SGO retries after a rate-limit or error (10 min)
+const SGO_BACKOFF_TTL = 10 * 60 * 1000;
+
 async function getSGONBAEvents(): Promise<any[]> {
   const cacheKey = "sgo_nba_events";
+  const backoffKey = "sgo_nba_backoff";
   const cached = cache.get(cacheKey);
   if (isFresh(cached, SGO_NBA_EVENTS_TTL)) return cached!.data;
+
+  // If we hit a rate-limit recently, don't retry until backoff expires
+  if (isFresh(cache.get(backoffKey), SGO_BACKOFF_TTL)) return [];
 
   if (!SGO_API_KEY) return [];
   try {
@@ -451,16 +458,23 @@ async function getSGONBAEvents(): Promise<any[]> {
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) {
-      console.warn(`[SGO NBA] ${res.status}: ${await res.text().catch(() => "")}`);
+      const body = await res.text().catch(() => "");
+      console.warn(`[SGO NBA] ${res.status} — backing off 10 min`);
+      cache.set(backoffKey, { data: true, timestamp: Date.now() });
       return [];
     }
     const data = await res.json() as any;
     const events: any[] = data.data ?? [];
     cache.set(cacheKey, { data: events, timestamp: Date.now() });
-    console.log(`[SGO NBA] ${events.length} events fetched`);
+    // Log sample odds keys from first event to show what player props are available
+    if (events.length > 0) {
+      const sampleKeys = Object.keys(events[0].odds ?? {}).slice(0, 10);
+      console.log(`[SGO NBA] ${events.length} events. Sample odds keys: ${sampleKeys.join(", ")}`);
+    }
     return events;
   } catch (err) {
-    console.warn("[SGO NBA] error:", err);
+    console.warn("[SGO NBA] error — backing off 10 min:", err);
+    cache.set(backoffKey, { data: true, timestamp: Date.now() });
     return [];
   }
 }
