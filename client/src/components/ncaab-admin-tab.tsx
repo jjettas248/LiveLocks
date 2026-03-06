@@ -2549,33 +2549,21 @@ function NCAABGamesStrip({
   const toggleGroup = (key: string) =>
     setOpenGroups(prev => ({ ...prev, [key]: !prev[key] }));
 
-  // ── Chip row width measurement + expand state ─────────────────────────────
+  // ── Strip collapse state ──────────────────────────────────────────────────
+  const [stripCollapsed, setStripCollapsed] = useState(false);
+
+  // ── Chip row width measurement (kept for ref; chips now wrap) ─────────────
   const stripContainerRef = useRef<HTMLDivElement>(null);
-  const [chipsPerRow, setChipsPerRow] = useState(5);
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    if (!stripContainerRef.current) return;
-    const w = stripContainerRef.current.offsetWidth;
-    setChipsPerRow(Math.max(Math.floor(w / 170), 3));
-  }, []);
-
-  useEffect(() => {
-    const onResize = () => {
-      if (!stripContainerRef.current) return;
-      const w = stripContainerRef.current.offsetWidth;
-      setChipsPerRow(Math.max(Math.floor(w / 170), 3));
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
 
   return (
     <div ref={stripContainerRef}>
       <style>{`@keyframes ncaabFadeIn { from { opacity: 0 } to { opacity: 1 } }`}</style>
       {/* ── Strip header ───────────────────────────────────────────────────── */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: stripCollapsed ? 0 : 10 }}>
+        <button
+          onClick={() => setStripCollapsed(c => !c)}
+          style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0 }}
+        >
           {liveCount > 0 && (
             <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
@@ -2601,34 +2589,47 @@ function NCAABGamesStrip({
               · {games.length}
             </span>
           )}
-        </div>
+          <ChevronDown
+            size={12}
+            style={{ color: "#52525b", transform: stripCollapsed ? "rotate(180deg)" : "none", transition: "transform 200ms ease", marginLeft: 2 }}
+          />
+        </button>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
           {liveCount > 0 && (
             <span style={{ color: "#4ade80", fontSize: 11, fontWeight: 500, marginRight: 8 }}>
               ● {liveCount} Live
             </span>
           )}
-          <button
-            onClick={() => {
-              const allOpen: Record<string, boolean> = {};
-              timeGroups.forEach(g => { allOpen[g.key] = true; });
-              setOpenGroups(prev => ({ ...prev, ...allOpen }));
-              setExpandedGroups(allOpen);
-            }}
-            style={{ color: "#52525b", fontSize: 11, fontWeight: 500, background: "none", border: "none", cursor: "pointer", padding: "2px 6px" }}
-          >
-            Expand All
-          </button>
-          <span style={{ color: "#3f3f46", fontSize: 11 }}>·</span>
-          <button
-            onClick={() => setExpandedGroups({})}
-            style={{ color: "#52525b", fontSize: 11, fontWeight: 500, background: "none", border: "none", cursor: "pointer", padding: "2px 6px" }}
-          >
-            Collapse All
-          </button>
+          {!stripCollapsed && (
+            <>
+              <button
+                onClick={() => {
+                  const allOpen: Record<string, boolean> = {};
+                  timeGroups.forEach(g => { allOpen[g.key] = true; });
+                  setOpenGroups(prev => ({ ...prev, ...allOpen }));
+                }}
+                style={{ color: "#52525b", fontSize: 11, fontWeight: 500, background: "none", border: "none", cursor: "pointer", padding: "2px 6px" }}
+              >
+                Expand All
+              </button>
+              <span style={{ color: "#3f3f46", fontSize: 11 }}>·</span>
+              <button
+                onClick={() => {
+                  const allClosed: Record<string, boolean> = {};
+                  timeGroups.forEach(g => { allClosed[g.key] = false; });
+                  setOpenGroups(prev => ({ ...prev, ...allClosed }));
+                }}
+                style={{ color: "#52525b", fontSize: 11, fontWeight: 500, background: "none", border: "none", cursor: "pointer", padding: "2px 6px" }}
+              >
+                Collapse All
+              </button>
+            </>
+          )}
         </div>
       </div>
 
+      {!stripCollapsed && (
+      <>
       {/* ── Value legend row (only when any chip has a signal) ──────────── */}
       {(() => {
         const hasTeal  = plays.some(p => (p.edge ?? 0) >= 10 || p.bettingWindow === "HALFTIME");
@@ -2700,88 +2701,34 @@ function NCAABGamesStrip({
                     />
                   </div>
                 </button>
-                {/* Chips row — collapsible with "+ N more" expand */}
-                {isOpen && (() => {
-                  const firstRow = group.games.slice(0, chipsPerRow);
-                  const remaining = group.games.slice(chipsPerRow);
-                  const hasMore = remaining.length > 0;
-                  const chipsExpanded = groupIsLive || expandedGroups[group.key] === true;
-                  return (
-                    <div className="pb-2 mb-1">
-                      <div className="flex gap-2" style={{ overflowX: "auto", scrollbarWidth: "none" }}>
-                        {firstRow.map(g => {
-                          const matchedPlay = plays.find(p => p.gameId === g.id);
-                          return (
-                            <GameChip
-                              key={g.id}
-                              game={g}
-                              isSelected={expandedGameId === g.id}
-                              onChipClick={() => onChipClick(g.id)}
-                              oddsData={chipOdds[g.id] ?? null}
-                              onEnterViewport={fetchChipOdds}
-                              valueSig={getChipValueSignal(matchedPlay)}
-                              colorTier={getChipColorTier(matchedPlay)}
-                            />
-                          );
-                        })}
-                        {chipsExpanded && remaining.map((g, idx) => {
-                          const matchedPlay = plays.find(p => p.gameId === g.id);
-                          return (
-                            <div
-                              key={g.id}
-                              style={{
-                                flexShrink: 0,
-                                opacity: 0,
-                                animation: "ncaabFadeIn 200ms ease forwards",
-                                animationDelay: `${idx * 30}ms`,
-                              }}
-                            >
-                              <GameChip
-                                game={g}
-                                isSelected={expandedGameId === g.id}
-                                onChipClick={() => onChipClick(g.id)}
-                                oddsData={chipOdds[g.id] ?? null}
-                                onEnterViewport={fetchChipOdds}
-                                valueSig={getChipValueSignal(matchedPlay)}
-                                colorTier={getChipColorTier(matchedPlay)}
-                              />
-                            </div>
-                          );
-                        })}
-                        {!chipsExpanded && hasMore && !groupIsLive && (
-                          <button
-                            onClick={() => setExpandedGroups(prev => ({ ...prev, [group.key]: true }))}
-                            style={{
-                              minWidth: 80, height: 60, background: "rgba(255,255,255,0.04)",
-                              border: "1px solid #27272a", borderRadius: 10, color: "#a1a1aa",
-                              fontSize: 12, fontWeight: 600, flexShrink: 0, cursor: "pointer",
-                              display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-                            }}
-                          >
-                            +{remaining.length} more
-                          </button>
-                        )}
-                        {chipsExpanded && hasMore && !groupIsLive && (
-                          <button
-                            onClick={() => setExpandedGroups(prev => ({ ...prev, [group.key]: false }))}
-                            style={{
-                              minWidth: 80, height: 60, background: "rgba(255,255,255,0.04)",
-                              border: "1px solid #27272a", borderRadius: 10, color: "#71717a",
-                              fontSize: 12, fontWeight: 500, flexShrink: 0, cursor: "pointer",
-                              display: "flex", alignItems: "center", justifyContent: "center",
-                            }}
-                          >
-                            Show less
-                          </button>
-                        )}
-                      </div>
+                {/* Chips — wrap to multiple rows when there are many games */}
+                {isOpen && (
+                  <div className="pb-2 mb-1">
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {group.games.map(g => {
+                        const matchedPlay = plays.find(p => p.gameId === g.id);
+                        return (
+                          <GameChip
+                            key={g.id}
+                            game={g}
+                            isSelected={expandedGameId === g.id}
+                            onChipClick={() => onChipClick(g.id)}
+                            oddsData={chipOdds[g.id] ?? null}
+                            onEnterViewport={fetchChipOdds}
+                            valueSig={getChipValueSignal(matchedPlay)}
+                            colorTier={getChipColorTier(matchedPlay)}
+                          />
+                        );
+                      })}
                     </div>
-                  );
-                })()}
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
+      )}
+      </>
       )}
     </div>
   );
