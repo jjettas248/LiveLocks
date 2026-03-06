@@ -3,7 +3,7 @@ const SGO_API_KEY  = process.env.SGO_API_KEY;
 const BASE_URL = "https://api.the-odds-api.com/v4/sports/basketball_nba";
 
 // Bookmakers to query for player props (ordered by reliability for NBA props)
-const PROP_BOOKMAKERS = "draftkings,fanduel,betmgm,betrivers,espnbet,hardrockbet,bet365,fanatics,bovada,betonlineag";
+const PROP_BOOKMAKERS = "draftkings,fanduel,betmgm,betrivers,espnbet,hardrockbet,bet365,fanatics,betonlineag";
 // Regions: us covers DK/FD/MGM/BR/ESPN; uk covers bet365
 const PROP_REGIONS = "us,uk";
 

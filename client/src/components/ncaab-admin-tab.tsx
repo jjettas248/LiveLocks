@@ -443,10 +443,27 @@ function H2HSection({
 }
 
 const BOOK_LABELS: Record<string, string> = {
-  fanduel:    "FD",
-  draftkings: "DK",
-  betmgm:     "MGM",
-  betrivers:  "BR",
+  fanduel:      "FD",
+  draftkings:   "DK",
+  betmgm:       "MGM",
+  betrivers:    "BR",
+  espnbet:      "ESPN",
+  hardrockbet:  "HRB",
+  bet365:       "365",
+  fanatics:     "FAN",
+  betonlineag:  "BOL",
+};
+
+const BOOK_URLS: Record<string, string> = {
+  draftkings:  "https://sportsbook.draftkings.com",
+  fanduel:     "https://sportsbook.fanduel.com",
+  betmgm:      "https://sports.betmgm.com",
+  betrivers:   "https://www.betrivers.com",
+  espnbet:     "https://espnbet.com",
+  hardrockbet: "https://www.hardrock.bet",
+  bet365:      "https://www.bet365.com",
+  fanatics:    "https://sportsbook.fanatics.com",
+  betonlineag: "https://www.betonline.ag",
 };
 
 const WINDOW_COLORS: Record<string, string> = {
@@ -1831,7 +1848,7 @@ function NCAABGameCard({
         <div className="flex gap-2 flex-wrap">
           {[
             { label: "MGM", book: mgmBook, url: "https://sports.betmgm.com" },
-            { label: altLabel, book: altBook, url: "https://bovada.lv" },
+            { label: altLabel, book: altBook, url: altBook ? (BOOK_URLS[altBook.book] ?? "#") : "#" },
           ].filter(p => p.label !== "—").map(({ label, book, url }) => {
             const bookLineText = book
               ? (marketTab === "h1"
