@@ -1826,8 +1826,6 @@ export default function Dashboard() {
                         };
 
                         // Build player signal map from halftime plays (already loaded, zero extra calls)
-                        // normSignalName strips all non-alpha chars so "P.J. Washington" matches "PJ Washington"
-                        const normSignalName = (n: string) => n.toLowerCase().replace(/[^a-z]/g, "");
                         type SignalTier = "green" | "red" | "yellow" | "teal";
                         type PlayerSignal = { tier: SignalTier; displayProb: number; betDirection: string; statType: string };
                         const playerSignalMap = new Map<string, PlayerSignal>();
@@ -1840,7 +1838,7 @@ export default function Dashboard() {
                             dp >= 70 ? "yellow" :
                             dp >= 60 ? "teal" : null;
                           if (!tier) continue;
-                          const key = normSignalName(play.playerName);
+                          const key = play.playerName.toLowerCase();
                           const existing = playerSignalMap.get(key);
                           if (!existing || dp > existing.displayProb) {
                             playerSignalMap.set(key, { tier, displayProb: dp, betDirection: play.betDirection, statType: play.statType });
@@ -1895,7 +1893,7 @@ export default function Dashboard() {
                             })
                             .map((stat) => {
                               const isSelected = selectedPlayer && findPlayerByName(stat.playerName)?.id === selectedPlayer.id;
-                              const signal = playerSignalMap.get(normSignalName(stat.playerName)) ?? null;
+                              const signal = playerSignalMap.get(stat.playerName.toLowerCase()) ?? null;
                               const statTotal = (() => {
                                 if (watchedStatType === "points") return stat.points;
                                 if (watchedStatType === "rebounds") return stat.rebounds;
