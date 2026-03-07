@@ -1,25 +1,26 @@
 # LiveLocks by PropPulse — Product Requirements Document
 
-**Version**: 2.0  
-**Last Updated**: March 2026  
-**Status**: Active Development
+**Version**: 3.0
+**Last Updated**: March 2026
+**Status**: Active — NBA + NCAAB Live, MLB Planned
 
 ---
 
 ## 1. Product Overview
 
-LiveLocks by PropPulse is a real-time sports analytics and betting intelligence platform designed for NBA and college basketball bettors. The product surfaces live in-game probability models, 2nd-half play recommendations, and NCAAB full-slate coverage — delivered via web app, push notifications, and SMS alerts.
+LiveLocks by PropPulse is a real-time sports betting analytics platform for serious NBA and NCAAB bettors. It surfaces live in-game probability models, 2nd-half play recommendations, and NCAAB full-slate coverage — delivered as a PWA with push notifications and SMS alerts.
 
 ### Vision
 
-Give serious sports bettors a data edge through live statistical modeling they cannot get from sportsbooks or public analytics tools, delivered fast enough to act on during live games.
+Give serious sports bettors a data edge through live statistical modeling they cannot get from sportsbooks or public analytics tools, fast enough to act on during live games.
 
 ### Core Value Proposition
 
-- **Live props calculator**: Real-time player prop probability updated as games progress
-- **2H Plays**: Halftime model recalculates spread, total, and team-total projections after seeing first-half data
-- **Full NCAAB slate**: All Division I games covered daily, not just featured matchups
-- **Multi-channel alerts**: Web push + SMS for high-confidence plays and halftime triggers
+- **Live prop calculator**: Real-time player prop probability updated as the game progresses, for any quarter (Q1–Q4)
+- **Live box score edge detection**: Automatic row/cell color-coding when the engine finds an edge on any player's book line — no manual input required
+- **2H Plays**: Halftime engine recalculates full-game prop projections for all live halftime games simultaneously, surfaces top plays sorted by confidence
+- **Full NCAAB slate**: All Division I games covered daily with 2H spread/total/team-total projections
+- **Multi-channel alerts**: Web push and SMS for high-confidence plays and new halftime triggers
 
 ---
 
@@ -29,32 +30,33 @@ Give serious sports bettors a data edge through live statistical modeling they c
 
 | Role | Access |
 |------|--------|
-| Guest (not logged in) | Registration/login only |
-| Free (registered, no subscription) | 15 live NBA prop plays, then paywall |
-| Pro | Full NBA + NCAAB live + 2H Plays + SMS + Push |
+| Guest (not logged in) | Registration and login pages only |
+| Free (registered, no subscription) | 15 live NBA prop calculations, then paywall |
+| Pro | Unlimited NBA + NCAAB live + 2H Plays + Push + SMS |
 | All Sports | Everything in Pro + MLB Live (coming soon) + Priority SMS |
-| Admin | Full access to all features + admin panel |
+| Admin | Full access to all features + admin panel + no limits |
 
-**Admin account**: `jaylin.becker22@icloud.com`
+**Admin account**: Set via `ADMIN_EMAIL` environment variable at registration time.
 
 ### 2.2 Subscription Tiers
 
 | Feature | Free | Pro ($40/mo) | All Sports ($65/mo) |
 |---------|------|-------------|-------------------|
-| NBA Live Props | 15 plays → paywall | Unlimited | Unlimited |
-| NBA 2H Plays | Teaser then locked | Yes | Yes |
+| NBA Live Props | 15 plays then paywall | Unlimited | Unlimited |
+| Live Box Score Edge Signals | No | Yes | Yes |
+| NBA 2H Plays | Teaser view (blurred) | Yes | Yes |
 | NCAAB Live | No | Yes | Yes |
 | NCAAB 2H Plays | No | Yes | Yes |
 | MLB Live | No | No | Coming Soon |
 | Push Notifications | No | Yes | Yes |
 | SMS Alerts | No | Yes | Yes (Priority) |
-| Parlay Builder | Yes (with plays) | Yes | Yes |
+| Parlay Builder | Yes (within play limit) | Yes | Yes |
 
-**Internal tier keys**: `"all"` = Pro, `"elite"` = All Sports
+**Internal tier keys**: `"all"` = Pro, `"elite"` = All Sports, `null` = Free
 
 ### 2.3 Free Play Limit
 
-Free users may view **15 live plays** before hitting the upgrade paywall. The play counter increments on each prop calculation response from the server. Admin and paid users bypass this counter entirely.
+Free users may perform **15 live prop calculations** before hitting the upgrade paywall. The counter increments on each successful server-side calculate response. Admin and paid users bypass the counter. Errors do not consume plays.
 
 ---
 
@@ -62,82 +64,150 @@ Free users may view **15 live plays** before hitting the upgrade paywall. The pl
 
 ```
 Top navigation bar:
-  [🏀 NBA Live]  [🏀 NCAAB Live]  [⚾ MLB Live 🔒]
+  [NBA Live]  [NCAAB Live]  [MLB Live 🔒]
 
-When NBA Live is active — secondary pill row appears below:
-  [Live Props]  [⏱ 2H Plays]
+When NBA Live is active — sub-tab pill row appears below:
+  [Live Props]  [2H Plays]
 
-When NCAAB Live is active — secondary pill row appears below:
+When NCAAB Live is active — sub-tab pill row appears below:
   [Live]  [2H Plays]
 ```
 
 **Visibility rules**:
 - **NBA Live**: visible to all logged-in users
-- **NCAAB Live**: visible to Pro, All Sports, and Admin users only; hidden from free users
-- **MLB Live**: visible to all logged-in users with a lock icon; clicking opens MLB coming-soon popover
+- **NCAAB Live**: visible to Pro, All Sports, and Admin users; hidden from free users
+- **MLB Live**: visible to all users with a lock indicator; clicking opens a "coming soon" popover
 
 ---
 
 ## 4. Feature Specifications
 
-### 4.1 NBA Live Props (Calculator)
+### 4.1 NBA Live Box Score
+
+The box score panel opens when the user selects a live game from the game strip.
+
+**Display columns** (configurable via dropdown):
+- MIN, PTS, REB, AST, STL, BLK, FGM-FGA, FTM-FTA, 3PM-3PA, PF
+- One "watched" stat column (PTS, REB, AST, PRA, etc.) selected by the user — highlighted in the header
+
+**Live edge signals** (automatic, no user input required):
+- On load and every 90 seconds, the server runs `/api/live-signals/:gameId`
+- For each player with ≥3 minutes played, checks 5 primary markets: Points, Rebounds, Assists, Threes, PRA
+- Fetches real book lines from The Odds API (live → pre-game fallback) then SGO; never fabricates a line
+- Runs the probability engine with the actual current period and clock
+- Only returns signals where edge ≥5% from 50%
+
+**Color tier thresholds**:
+
+| Color | Condition |
+|-------|-----------|
+| Green (#22c55e) | Hit implied ≥85% OVER direction |
+| Red (#ef4444) | Hit implied ≥85% UNDER direction |
+| Yellow (#eab308) | Hit implied 70–84% either direction |
+| Teal (#00d4aa) | Hit implied 60–69% either direction |
+
+**Two-level color mapping**:
+- **Row highlight**: driven by the player's best signal across any prop type
+- **Watched stat cell**: driven by the signal for the currently selected stat column only
+- Switching the column dropdown instantly remaps cell colors — no additional network request
+
+**Filter + click-to-fill**:
+- Text filter box narrows visible player rows
+- Clicking any player row auto-fills the calculator panel (player, opponent, period, clock, current stat value)
+
+### 4.2 NBA Live Props Calculator
 
 **Inputs**:
 - Player name (searchable dropdown, synced from ESPN roster)
 - Stat type: Points / Rebounds / Assists / 3-Pointers Made / Steals / Blocks / Pts+Reb+Ast / Pts+Reb / Pts+Ast / Reb+Ast / Stl+Blk
-- Current stat value (live)
-- Line (from sportsbook)
+- Current stat value
+- Prop line (from sportsbook — auto-fetched from The Odds API when player + stat type are selected)
 - Game clock remaining (minutes)
 - Period (Q1–Q4 / OT)
 - Optional: game total line, halftime score, game spread
 
-**Model logic**:
-- Projects final stat based on pace multiplier, usage rate, and game context
-- Applies garbage-time reduction when spread exceeds threshold in late Q4
-- Returns probability of clearing the line (over/under)
-- Probability threshold for high-confidence alert: ≥90% in either direction
+**Auto-fill from box score**: Clicking a player row in the box score populates all calculator fields automatically.
 
-**Display**:
-- Large probability gauge (ring)
-- Over/Under recommendation pill
-- Edge percentage vs. implied odds
-- Parlay builder appended below high-confidence plays
+**Auto-fetch odds**: When player + stat type are selected, the odds panel queries The Odds API and displays per-book lines. User can set the line manually or use the fetched median.
 
-### 4.2 NBA 2H Plays
+**Output**:
+- Probability gauge (circular ring), labeled percentage
+- Hit Implied percentage
+- Over/Under call label
+- Edge vs. book-implied odds
+- "Add to Parlay" button
 
-Appears as a secondary pill sub-tab under NBA Live (labeled ⏱ 2H Plays). Fetches live halftime games via The Odds API and calculates:
+**Probability threshold for high-confidence alert**: `|prob - 50| ≥ 35` (equivalent to ≥85% hit implied)
 
-- **2H spread**: adjusted projection using first-half pace and score differential
-- **2H total**: remaining scoring projection
-- **Team totals**: per-team scoring projection for the second half
+### 4.3 NBA 2H Plays
 
-Display: game cards sorted by confidence edge. Each card shows spread line + probability bar, total line + probability bar, and color-coded edge pills (green ≥60%, red ≤40%).
+Appears as a sub-tab under NBA Live (labeled "2H Plays"). Fetches all live NBA games at halftime, then for each game:
 
-**Locking**: Free users see one teaser card blurred, remaining locked behind upgrade prompt.
+1. Fetches ESPN box score summary
+2. For each player with ≥3 minutes at halftime, checks all 11 stat type combinations
+3. Looks up book lines (Odds API live → pre-game → SGO) — skips if no real line found
+4. Uses median consensus line across all available books
+5. Runs probability engine with `currentPeriod: 3, gameClock: "12:00"` (start of 2H)
+6. Skips plays where the line has already been cleared at halftime (not actionable)
+7. Returns top 20 plays sorted by edge descending
 
-### 4.3 NCAAB Live
+**Display**: Play cards grouped by game. Each card shows:
+- Player name + stat type
+- "H1: {halftimeStat} — Needs {remainder} more" status line
+- Season average and projected minutes
+- Primary call box: OVER/UNDER/MONITOR with confidence %
+- Engine % vs. book-implied % comparison bars
+- Betting % bar (action split)
+- "Add to Parlay" button
 
-Available to Pro and All Sports subscribers (and admins).
+**Alert trigger**: Plays with edge ≥35 (≥85% hit implied) fire a push notification and/or SMS on first detection per player/stat/line per session.
 
-- Pulls full Division I slate daily from ESPN (`limit=300&groups=50` endpoint)
-- Shows game cards with: team names, score, period/clock, live win probability
-- Real-time probability recalculated using NCAAB pace norms and score context
-- Lines fetched from The Odds API (all available bookmakers, not restricted to specific books)
+**Locking for free users**: Free users see one teaser card; remaining plays are blurred with an upgrade prompt overlay.
 
-**2H Plays sub-tab**: filters games at halftime and shows spread, O/U, and team total projections. Same display pattern as NBA 2H.
+### 4.4 NCAAB Live
 
-**Access**: No "ADMIN" badge shown. Positioned between NBA Live and MLB Live in tab bar.
+Available to Pro, All Sports, and Admin users.
 
-### 4.4 MLB Live
+**Game strip**: Horizontal scrollable chip bar showing all live and scheduled NCAAB games. Clicking a chip scrolls to that game's card and highlights it.
 
-Placeholder tab visible to all users. Clicking shows coming-soon popover for free users, upgrade prompt for non-subscribers, and "coming soon" for All Sports subscribers. No live data until MLB season integration is built.
+**Game cards** display:
+- Team names, current score, period/clock
+- Market buttons: Spread, Total, H1 Total, H1 Spread
+- Radial probability gauges for each market
+- EV verdict label (Strong Over / Slight Under / etc.)
+- CLV indicator (Closing Line Value signal)
+- Live win probability (based on score differential and pace)
+- H2H matchup history toggle
+- "Add to Slip" buttons for parlay builder
 
-### 4.5 Parlay Builder
+**Data sources**: ESPN (live scores) + The Odds API (all available bookmakers, no restriction) + SGO (1H lines, team totals fallback).
 
-Inline feature on all game cards. "Add to Slip" buttons appear as full-width grid rows (Over/Under) below each stat projection section — not as tiny side column buttons. Allows users to:
-- Add plays to a running parlay slip
-- View combined odds and correlation-adjusted probability
-- Deep-link to DraftKings, FanDuel, Hard Rock, or Bet365 with picks copied to clipboard
+**NCAAB 2H Engine**:
+- Runs for games at halftime with real book lines
+- Computes 2H spread, 2H total, and team totals
+- Shows "Engine: X%" vs "Book: Y%" comparison
+- H2 projection display: `{H1 score} + ~{projected H2} = {projected final}` format
+- Alert deduplication: one alert per gameId per calendar day via in-memory set
+
+### 4.5 MLB Live
+
+Placeholder tab visible to all users. Clicking shows:
+- Free users: "Coming soon" popover with upgrade prompt
+- Pro/All Sports: "Coming soon for All Sports subscribers" message
+- All Sports: "Coming soon" with feature preview
+
+No live data until MLB season integration is built.
+
+### 4.6 Parlay Builder
+
+**Activation**: "Add to Parlay" buttons appear below each prop and on NCAAB game cards.
+
+**Functionality**:
+- Running slip of added plays showing combined odds and correlation-adjusted probability
+- On mobile: fixed bottom sheet with handle to expand
+- On desktop: side column panel
+- Correlation adjustments: same-game parlays are discounted for known correlations (e.g. points and PRA from the same player)
+- Deeplinks: DraftKings, FanDuel, Hard Rock, Bet365 — picks copied to clipboard on click
 
 ---
 
@@ -145,35 +215,36 @@ Inline feature on all game cards. "Add to Slip" buttons appear as full-width gri
 
 ### 5.1 Registration Form
 
-Required fields:
+Required:
 - **Email** — unique per account
 - **Password** — minimum 8 characters
 - **SMS Consent checkbox** — required; cannot submit without checking
 
-Optional field:
-- **Phone Number** — US number in any common format (555-000-0000, (555) 000-0000, +15550000000); normalized to E.164 (+1XXXXXXXXXX) on save
+Optional:
+- **Phone Number** — US number in any common format; normalized to E.164 (`+1XXXXXXXXXX`) on save
 
-When the SMS consent checkbox is checked and the user submits:
+On submission with SMS consent checked:
 - `smsConsent = true` stored in DB
 - `smsAlerts = true` stored in DB (auto-opted in)
-- Phone number stored in DB if provided
+- Phone number stored if provided
 
 ### 5.2 Login
 
 Accepts either:
 - **Email** + password
-- **Phone number** (in any common format) + password — looked up via `phone_number` column
+- **Phone number** (any common format) + password — looked up via `phone_number` column
 
 ### 5.3 JWT Authentication
 
 - 30-day token expiry
-- Stored in localStorage on the client
-- Sent as `Authorization: Bearer <token>` header
-- Session cookie as fallback
+- Stored in localStorage as `ll_auth_token`
+- Sent as `Authorization: Bearer <token>` header on every request
+- Session cookie maintained as fallback
+- Either method is accepted server-side
 
-### 5.4 Admin
+### 5.4 Admin Account
 
-Admin identified by matching `ADMIN_EMAIL` env variable at registration time. Admin bypasses all tier gates and play limits.
+Identified by matching `ADMIN_EMAIL` env variable at registration. Admin bypasses all tier gates and play limits.
 
 ---
 
@@ -181,41 +252,43 @@ Admin identified by matching `ADMIN_EMAIL` env variable at registration time. Ad
 
 ### 6.1 Onboarding Modal
 
-After first login/registration, all users see an "Enable Alerts" modal that:
-- Shows the push notifications option (available to all)
-- Shows the SMS option (visible only to Pro/All Sports/Admin)
-- Prompts to add phone number if not yet set
+After first login, all users see an "Enable Alerts" modal:
+- Push notifications option (visible to all)
+- SMS option (visible to Pro/All Sports/Admin only)
+- Prompt to add phone number if not yet set
 - Dismissed state stored in `localStorage` (`ll_alerts_onboarded`)
 
 ### 6.2 Alert Triggers
 
-**High-confidence play alert**: fires when any live prop reaches ≥90% probability (either direction) for the first time. Uses a deduplication fingerprint: `playerName|statType|line`.
-
-**2H game alert**: fires when a new game enters halftime for the first time per session.
+| Trigger | Threshold | Deduplication |
+|---------|-----------|---------------|
+| NBA high-confidence play | ≥85% hit implied (`edge ≥ 35`) | Per `playerName|statType|line` per session |
+| NCAAB halftime play | ≥85% hit implied | Per `gameId` per calendar day |
+| New halftime game detected | Any game enters halftime | Per `gameId` per session |
 
 ### 6.3 Push Notifications
 
 - Available to Pro and All Sports subscribers
 - User opts in via the Alerts panel (bell icon in dashboard header)
-- Uses Web Push API (VAPID keys configured server-side)
+- Uses Web Push API (VAPID keys configured via environment variables)
 - Payload: title + body + URL back to dashboard
-- Stored as serialized push subscription object in DB
+- Stored as serialized push subscription in DB
 
 ### 6.4 SMS Alerts
 
 - Available to Pro and All Sports subscribers
-- User auto-opted in at registration when consent checkbox is checked
-- User provides phone number at registration or later via Alerts panel
+- Auto-opted in at registration when consent checkbox is checked
 - Phone stored in E.164 format
-- Delivered via Twilio — `TWILIO_FROM_NUMBER` → user's phone
-- **Opt-out**: Twilio STOP webhook at `POST /api/webhooks/twilio` — any inbound STOP/UNSUBSCRIBE/CANCEL/END/QUIT sets `smsAlerts = false` and `smsConsent = false` for that user
+- Delivered via Twilio using `TWILIO_FROM_NUMBER`
+
+**Opt-out**: Twilio STOP webhook at `POST /api/webhooks/twilio` — any inbound STOP/UNSUBSCRIBE/CANCEL/END/QUIT sets `smsAlerts = false` and `smsConsent = false` for that user.
 
 ### 6.5 SMS Compliance
 
-- Consent checkbox required to complete registration
+- Consent checkbox required at registration
 - Consent language: "I explicitly consent to receive SMS text alerts and account notifications from LiveLocks AI. Message frequency varies. Msg & data rates may apply. Reply STOP to opt out."
 - Consent stored as boolean in DB (`sms_consent` column)
-- STOP keyword processing handled by Twilio webhook
+- STOP keyword processing via Twilio webhook
 
 ---
 
@@ -230,44 +303,106 @@ After first login/registration, all users see an "Enable Alerts" modal that:
 
 ### 7.2 Payment Flow
 
-1. User clicks "Upgrade" → upgrade modal shows 2 plan cards
+1. User clicks "Upgrade" → upgrade modal shows two plan cards
 2. User selects plan → `POST /api/stripe/create-checkout-session` → redirected to Stripe-hosted checkout
-3. On success → Stripe webhook `customer.subscription.created` fires → `subscriptionTier` set in DB
-4. On cancel/failure → redirect back to dashboard with no tier change
-5. Cancellation handled via Stripe billing portal (`POST /api/stripe/portal`)
+3. On success → Stripe webhook `customer.subscription.created` → `subscriptionTier` set in DB
+4. On cancel/failure → redirected back to dashboard with no tier change
+5. Cancellation managed via Stripe billing portal (`POST /api/stripe/portal`)
 
-### 7.3 Upgrade Modal Cards
+### 7.3 Upgrade Modal
 
-- **Pro ($40)** — badge: "Best Value" — features: NBA Live Unlimited, NCAAB Live, NBA 2H + NCAAB 2H, Push + SMS Alerts
-- **All Sports ($65)** — badge: "Power Users" — features: everything in Pro + MLB Live (Coming Soon) + Priority SMS
-
----
-
-## 8. Data Sources
-
-| Source | Data | Update Frequency |
-|--------|------|-----------------|
-| ESPN API | NBA/NCAAB live scores, rosters, game clocks | Polled every 60–90s |
-| The Odds API | NBA 2H lines, NCAAB spreads/totals/1H lines | Every 5 min (NCAAB), on halftime detection (NBA) |
-| Twilio | Inbound STOP messages | Webhook (real-time) |
-
-### 8.1 ESPN Roster Sync
-
-- Runs on demand via admin panel → "Sync Rosters" button
-- Maps ESPN team abbreviations to DB abbreviations via `ESPN_TO_DB` map
-- Key mappings: `UTAH → UTA`, `UTH → UTA`, `GS → GSW`, `NY → NYK`, `NO → NOP`, `SA → SAS`, `WSH → WAS`, etc.
-- ESPN position codes mapped: `G → SG`, `F → SF`, `FC → PF`, `C → C`, `PG → PG`
-- Upsert by player name — updates team/position if exists, inserts if new
-
-### 8.2 The Odds API — NCAAB
-
-- Requests `spreads,totals,h1_totals,h1_spreads` markets
-- **All bookmakers queried** (no restriction) to maximize coverage of small-conference games
-- TTL: 5 minutes for odds data; 90s for scoreboard; 60s for box scores
+- **Pro ($40/mo)** — badge: "Best Value" — features: NBA Live Unlimited, NCAAB Live, NBA + NCAAB 2H Plays, Push + SMS Alerts
+- **All Sports ($65/mo)** — badge: "Power Users" — features: everything in Pro + MLB Live (Coming Soon) + Priority SMS
 
 ---
 
-## 9. Database Schema (Key Tables)
+## 8. Data Sources and Caching
+
+| Source | Data | Cache TTL |
+|--------|------|-----------|
+| ESPN Scoreboard API | Live NBA/NCAAB scores | 30s |
+| ESPN Summary API | Box score per game | 90s |
+| ESPN Injuries API | NBA injury report | 5 min |
+| The Odds API (live) | In-play prop lines | 90s |
+| The Odds API (pre-game) | Pre-game prop lines | 5 min |
+| The Odds API (NCAAB) | Spreads, totals, H1 lines | 5 min |
+| Sports Game Odds (SGO) | NCAAB 1H/team-total lines | Rate-limited; 10-min backoff on 429 |
+| NBA.com / ESPN Stats | Season per-game averages, H2 splits | Daily (sync on demand) |
+
+### 8.1 ESPN Abbreviation Mapping
+
+The following ESPN team abbreviations are remapped to internal DB abbreviations:
+
+| ESPN | DB |
+|------|----|
+| GS | GSW |
+| SA | SAS |
+| NO | NOP |
+| NY | NYK |
+| PHO | PHX |
+| UTH / UTAH | UTA |
+| WSH | WAS |
+| CHO | CHA |
+
+### 8.2 Odds Line Methodology
+
+**Consensus line**: The median of all available book lines is used — never an extreme, never a single book. This prevents outlier or stale book lines from distorting the probability calculation.
+
+**Source priority**: Odds API (in-play) → Odds API (pre-game) → SGO fallback
+
+**Line fabrication policy**: If no real book line is available for a player/stat combination, the calculation is skipped entirely. Season averages are never used as synthetic prop lines.
+
+---
+
+## 9. Probability Engine
+
+### 9.1 NBA Player Prop Model
+
+**Input parameters**:
+- `playerId` — DB player record (season avg, position, minutes)
+- `opponentTeam` — for defensive rating lookup
+- `halftimeMinutes` — minutes played so far in the game
+- `halftimeFouls` — current foul count
+- `halftimeStat` — current game stat (e.g., current points)
+- `liveLine` — real book line (never synthetic)
+- `statType` — one of 11 supported types
+- `currentPeriod` — 1, 2, 3, or 4
+- `gameClock` — current display clock (e.g. "8:23")
+
+**Model steps**:
+1. Compute `gameMinutesRemaining` from period + clock
+2. Select baseline: if player has H2 split data and it's the 2nd half, use H2 baseline; otherwise use full-game average
+3. Compute `observedRate = halftimeStat / halftimeMinutes` (per minute)
+4. Blend: `blendedRate = 0.7 × observedRate + 0.3 × baselineRate`
+5. Apply foul penalty: 3 fouls → 30% minute reduction; 4+ fouls → 55% reduction
+6. Apply defensive rating multiplier (0.88 – 1.12 scale from opponent `defRating`)
+7. Apply pace multiplier (blend of team historical pace with live game pace derived from current score)
+8. `expectedTotal = halftimeStat + (projectedMinutes × blendedRate × defMult × paceMult)`
+9. `difference = expectedTotal - liveLine`
+10. `probability = clamp(50 + difference × scaleFactor, 2, 98)`
+
+**Scale factors** (adjusts sensitivity by stat volatility):
+- Points: 8
+- Rebounds: 10
+- Assists: 10
+- Steals/Blocks: 15
+- PRA / combo markets: 6
+
+**Garbage time**: In late Q4 with a large spread, minutes are reduced proportionally.
+
+**Progressive clamping**: As the game nears the final minute, probability is clamped to a narrowing range (e.g., 55–90% max in last 2 minutes) to prevent overconfident projections from low remaining sample.
+
+### 9.2 NCAAB 2H Model
+
+**Inputs**: H1 score, current spread, current total line, H1 pace, team identifiers
+
+**Output**: 2H spread probability, 2H total probability, team total probabilities
+
+**Engine vs. book comparison**: Shows engine-derived probability side-by-side with the book-implied probability from the H2 line, letting the user see where there is disagreement.
+
+---
+
+## 10. Database Schema (Key Tables)
 
 ### users
 
@@ -281,38 +416,40 @@ After first login/registration, all users see an "Enable Alerts" modal that:
 | plays_used | integer | free play counter, max 15 |
 | stripe_customer_id | text nullable | |
 | stripe_subscription_id | text nullable | |
-| phone_number | text nullable | E.164 format (+1XXXXXXXXXX) |
-| sms_alerts | boolean | default false; true if consented at signup |
-| sms_consent | boolean | default false; required at registration |
+| phone_number | text nullable | E.164 format |
+| sms_alerts | boolean | default false |
+| sms_consent | boolean | default false |
 | push_alerts | boolean | default false |
-| push_subscription | text nullable | serialized Web Push subscription |
+| push_subscription | text nullable | serialized Web Push subscription JSON |
 
 ### players
 
 | Column | Type | Notes |
 |--------|------|-------|
 | id | serial PK | |
-| name | text | |
+| name | text | ESPN display name |
 | team | text | DB abbreviation (e.g. UTA, GSW) |
-| position | text | PG/SG/SF/PF/C |
+| position | text | PG / SG / SF / PF / C |
 | avg_minutes | numeric | season average |
-| avg_points | numeric | |
-| avg_rebounds | numeric | |
-| avg_assists | numeric | |
+| ppg | numeric | season points per game |
+| rpg | numeric | season rebounds per game |
+| apg | numeric | season assists per game |
+| spg | numeric | season steals per game |
+| bpg | numeric | season blocks per game |
+| tpg | numeric | season 3-pointers per game |
 | usage_rate | numeric | |
-| fg_percentage | numeric | |
-| three_point_percentage | numeric | |
+| def_rating | numeric | opponent defensive rating |
 
 ---
 
-## 10. API Routes
+## 11. API Routes
 
 ### Public (no auth)
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| POST | `/api/auth/register` | Create account (email + password + optional phone + smsConsent) |
-| POST | `/api/auth/login` | Login by email or phone number |
+| POST | `/api/auth/register` | Create account |
+| POST | `/api/auth/login` | Login by email or phone |
 | POST | `/api/webhooks/twilio` | SMS STOP opt-out handler |
 | POST | `/api/webhooks/stripe` | Stripe event handler |
 
@@ -321,23 +458,32 @@ After first login/registration, all users see an "Enable Alerts" modal that:
 | Method | Route | Description |
 |--------|-------|-------------|
 | GET | `/api/auth/me` | Current user |
+| GET | `/api/me` | Extended current user (with NCAAB access flag) |
 | POST | `/api/auth/logout` | Logout |
 | GET | `/api/players` | Player list |
 | POST | `/api/calculate` | NBA prop probability (play-gated) |
+| GET | `/api/live-games` | Live NBA scoreboard |
+| GET | `/api/live-stats/:gameId` | Live box score for a game |
+| GET | `/api/live-signals/:gameId` | Edge signals for box score coloring (90s cache) |
+| GET | `/api/odds` | Fetch player prop lines |
+| GET | `/api/game-lines` | Fetch game spread + total |
+| GET | `/api/injuries` | NBA injury report |
+| POST | `/api/parlay/calculate` | Parlay correlation calculation |
 | POST | `/api/stripe/create-checkout-session` | Start Stripe checkout |
 | POST | `/api/stripe/portal` | Open billing portal |
 | PUT | `/api/user/alerts` | Update alert preferences |
 | POST | `/api/user/alerts/sms` | Save phone number + SMS toggle |
 | POST | `/api/user/alerts/push-subscription` | Register Web Push subscription |
-| DELETE | `/api/user/alerts/push-subscription` | Remove Web Push subscription |
+| DELETE | `/api/user/alerts/push-subscription` | Remove push subscription |
 
 ### Tier-Gated (Pro or All Sports)
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| GET | `/api/halftime-plays` | NBA 2H plays |
-| GET | `/api/ncaab/games` | NCAAB full slate |
-| GET | `/api/ncaab/plays` | NCAAB computed plays with probabilities |
+| GET | `/api/halftime-plays` | NBA 2H plays across all halftime games |
+| GET | `/api/ncaab/games` | Full NCAAB Division I slate |
+| GET | `/api/ncaab/plays` | NCAAB computed 2H plays |
+| POST | `/api/2h-game-view` | Consume 1 free play (free user game unlock) |
 
 ### Admin Only
 
@@ -345,28 +491,32 @@ After first login/registration, all users see an "Enable Alerts" modal that:
 |--------|-------|-------------|
 | POST | `/api/sync-rosters` | Trigger ESPN roster sync |
 | GET | `/api/admin/users` | User list |
+| PATCH | `/api/admin/users/:id/tier` | Set subscription tier |
+| PATCH | `/api/admin/users/:id/reset-plays` | Reset play counter |
+| GET | `/api/admin/feedback` | User feedback inbox |
 
 ---
 
-## 11. Environment Variables
+## 12. Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `SESSION_SECRET` | Yes | Express session + JWT secret |
-| `STRIPE_SECRET_KEY` | Yes | Stripe server-side key |
-| `VITE_STRIPE_PUBLISHABLE_KEY` | Yes | Stripe client-side key |
+| `SESSION_SECRET` | Yes | Express session + JWT signing secret |
+| `ADMIN_EMAIL` | Yes | Email for the admin account |
 | `ODDS_API_KEY` | Yes | The Odds API key |
-| `TWILIO_ACCOUNT_SID` | Yes | Twilio account identifier |
-| `TWILIO_AUTH_TOKEN` | Yes | Twilio auth token |
-| `TWILIO_FROM_NUMBER` | Yes | Twilio sender number (E.164) |
-| `ADMIN_EMAIL` | Yes | Email address for admin account |
-| `VAPID_PUBLIC_KEY` | Yes | Web Push public key |
-| `VAPID_PRIVATE_KEY` | Yes | Web Push private key |
+| `SGO_API_KEY` | Yes | Sports Game Odds API key |
+| `STRIPE_SECRET_KEY` | Yes | Stripe server-side secret key |
+| `VITE_STRIPE_PUBLISHABLE_KEY` | Yes | Stripe publishable key (frontend) |
+| `TWILIO_ACCOUNT_SID` | Alerts | Twilio account SID |
+| `TWILIO_AUTH_TOKEN` | Alerts | Twilio auth token |
+| `TWILIO_FROM_NUMBER` | Alerts | Twilio sender number (E.164) |
+| `VAPID_PUBLIC_KEY` | Push | Web Push VAPID public key |
+| `VAPID_PRIVATE_KEY` | Push | Web Push VAPID private key |
 
 ---
 
-## 12. Tech Stack
+## 13. Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
@@ -375,36 +525,39 @@ After first login/registration, all users see an "Enable Alerts" modal that:
 | State / Data fetching | TanStack Query v5 |
 | Forms | React Hook Form + Zod |
 | UI components | shadcn/ui + Tailwind CSS |
-| Backend | Express.js (TypeScript) |
+| Backend | Express.js (TypeScript, tsx) |
 | Database | PostgreSQL via Neon |
 | ORM | Drizzle ORM + drizzle-zod |
 | Auth | bcrypt + JWT + express-session |
 | Payments | Stripe (Checkout + Webhooks) |
 | SMS | Twilio |
-| Push Notifications | Web Push API (VAPID) |
-| Hosting | Replit (dev) + Replit Deployments (prod) |
+| Push | Web Push API (VAPID) |
+| PWA | Service Worker + Web App Manifest |
+| Hosting | Replit Deployments |
 
 ---
 
-## 13. Known Behaviors and Edge Cases
+## 14. Known Behaviors and Edge Cases
 
-- **NCAAB small-school games**: Lines from small conferences may not be on major books. The Odds API is queried without bookmaker restriction to maximize coverage. If no line is found, the system projects using its own pace model and notes "(proj)" next to lines.
-- **Phone number format**: All phone numbers stored in E.164 format. Numbers entered without country code are normalized to `+1XXXXXXXXXX` automatically.
-- **SMS opt-out**: Replying STOP to any SMS unsubscribes the user immediately via Twilio webhook.
-- **Twilio trial accounts**: Can only SMS verified numbers until account is upgraded.
+- **NCAAB small-conference games**: Lines from small conferences may not appear on major books. The Odds API is queried without bookmaker restriction. If no line is found, the system skips that market rather than projecting a synthetic line.
+- **SGO rate limiting**: 429 responses from SGO are cached as a 10-minute backoff. Other markets continue to function.
+- **Phone number normalization**: All numbers stored in E.164 format. Numbers entered without country code are normalized to `+1XXXXXXXXXX`.
+- **SMS opt-out**: Replying STOP to any SMS immediately unsubscribes the user via Twilio webhook.
+- **Line already cleared**: If a player's current stat has already exceeded the prop line at halftime (e.g., player has 20 points with a 17.5-point line), that play is skipped as not actionable.
 - **Free play counter**: Only increments on successful calculate responses — errors do not consume plays.
 - **Stripe webhooks**: Must be registered in Stripe Dashboard pointing to `https://<domain>/api/webhooks/stripe`.
-- **NCAAB 1H lines**: The `h1_totals` and `h1_spreads` markets are requested from The Odds API. If unavailable for a specific game, the system estimates 1H total using 47% of the full-game line.
+- **Live signals cache**: The `/api/live-signals/:gameId` endpoint caches results for 90 seconds to avoid repeated odds API calls while the box score refreshes every 2 minutes.
+- **Alert deduplication**: NBA alerts use an in-memory fingerprint `playerName|statType|line` per server session. NCAAB halftime alerts use a per-gameId set with a daily reset.
 
 ---
 
-## 14. Roadmap
+## 15. Roadmap
 
 | Priority | Feature | Status |
 |----------|---------|--------|
-| High | MLB Live data integration (All Sports gate ready) | Planned |
-| High | Player prop history / trend charts | Planned |
-| Medium | Parlay builder export to sportsbook deep link | Partial (DK/FD/HR/Bet365 deeplinks live) |
+| High | MLB Live data integration | Planned (All Sports gate ready) |
+| High | Player prop trend charts / historical hit rate | Planned |
 | Medium | User notification history log | Planned |
+| Medium | Parlay builder deep-link improvements | Partial (DK/FD/HR/Bet365 live) |
 | Low | NFL Live integration | Future |
 | Low | Mobile app (React Native) | Future |
