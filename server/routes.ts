@@ -189,7 +189,9 @@ export async function registerRoutes(
   app.get("/api/ncaab/plays", requireTier("all", "elite"), async (_req, res) => {
     try {
       const plays = await computeNCAABPlays();
-      return res.json({ plays });
+      res.json({ plays });
+      // Fire-and-forget: halftime edge alerts (one per game, ≥85% over2HProb)
+      checkAndSendAlerts(plays, storage).catch(console.warn);
     } catch (err: any) {
       console.error("[NCAAB plays]", err.message);
       return res.status(500).json({ error: err.message || "NCAAB service error" });
