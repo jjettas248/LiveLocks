@@ -661,6 +661,214 @@ export async function registerRoutes(
     }
   });
 
+  // ── Live Prop Signals (any game state: Q1–Q4) ───────────────────────────────
+  // Game-specific endpoint that runs prop edge calculations for any live period,
+  // not just halftime. Used to color box score rows/cells during the full game.
+  const liveSignalsCache = new Map<string, { ts: number; signals: any[] }>();
+  const LIVE_SIGNALS_TTL = 90_000; // 90 seconds — matches client refetch interval
+
+  app.get("/api/live-signals/:gameId", requireAuth, async (req, res) => {
+    const gameId = req.params.gameId as string;
+    const cached = liveSignalsCache.get(gameId);
+    if (cached && Date.now() - cached.ts < LIVE_SIGNALS_TTL) {
+      return res.json({ signals: cached.signals });
+    }
+
+    try {
+      const ESPN_TO_DB_LOCAL: Record<string, string> = {
+        GS: "GSW", SA: "SAS", NO: "NOP", NY: "NYK",
+        PHO: "PHX", UTH: "UTA", UTAH: "UTA", WSH: "WAS", CHO: "CHA",
+      };
+      const normAbbr = (a: string) => ESPN_TO_DB_LOCAL[a.toUpperCase()] ?? a.toUpperCase();
+      const normDb = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+
+      const summaryRes = await fetch(
+        `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${gameId}`,
+        { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
+      );
+      if (!summaryRes.ok) throw new Error("ESPN summary unavailable");
+      const summaryData = await summaryRes.json() as any;
+
+      const boxscore = summaryData.boxscore;
+      const header = summaryData.header;
+      if (!boxscore || !header) {
+        liveSignalsCache.set(gameId, { ts: Date.now(), signals: [] });
+        return res.json({ signals: [] });
+      }
+
+      const comp = header.competitions?.[0];
+      const statusDesc: string = comp?.status?.type?.description ?? "";
+      const period: number = comp?.status?.period ?? 0;
+      const displayClock: string = comp?.status?.displayClock ?? "0:00";
+      const homeComp = comp?.competitors?.find((c: any) => c.homeAway === "home");
+      const awayComp = comp?.competitors?.find((c: any) => c.homeAway === "away");
+      const homeTeamAbbr = normAbbr(homeComp?.team?.abbreviation ?? "");
+      const awayTeamAbbr = normAbbr(awayComp?.team?.abbreviation ?? "");
+      const homeScore = parseInt(homeComp?.score ?? "0", 10);
+      const awayScore = parseInt(awayComp?.score ?? "0", 10);
+      const scoreStr = `${awayScore}-${homeScore}`;
+
+      // Only run for genuinely in-progress games (not final, not scheduled)
+      const inProgress = statusDesc === "In Progress" || statusDesc === "Halftime";
+      if (!inProgress) {
+        liveSignalsCache.set(gameId, { ts: Date.now(), signals: [] });
+        return res.json({ signals: [] });
+      }
+
+      const allDbPlayers = await storage.getPlayers();
+      const { getPlayerOdds, resolveOddsEventId, getSGOPlayerLine } = await import("./oddsService");
+
+      let oddsEventId: string | null = null;
+      try {
+        oddsEventId = await resolveOddsEventId(homeTeamAbbr, awayTeamAbbr);
+      } catch { /* continue without odds event ID */ }
+
+      const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[] } | null>();
+
+      const LIVE_STAT_CONFIGS: Array<{ statType: string; components: string[] }> = [
+        { statType: "points",      components: ["points"] },
+        { statType: "rebounds",    components: ["rebounds"] },
+        { statType: "assists",     components: ["assists"] },
+        { statType: "threes",      components: ["threes"] },
+        { statType: "pts_reb_ast", components: ["points", "rebounds", "assists"] },
+      ];
+
+      const parseStat = (val: string) => {
+        if (!val) return 0;
+        if (val.includes("-")) { const p = val.split("-"); return parseInt(p[p.length - 1], 10) || 0; }
+        return parseInt(val, 10) || 0;
+      };
+      const parseMade = (val: string) => {
+        if (!val) return 0;
+        if (val.includes("-")) return parseInt(val.split("-")[0], 10) || 0;
+        return parseInt(val, 10) || 0;
+      };
+
+      const allSignals: any[] = [];
+
+      for (const teamData of (boxscore.players ?? [])) {
+        const teamAbbr = normAbbr(teamData.team?.abbreviation ?? "");
+        const opponentAbbr = teamAbbr === homeTeamAbbr ? awayTeamAbbr : homeTeamAbbr;
+        const athletes = teamData.statistics?.[0]?.athletes ?? [];
+        const labels: string[] = teamData.statistics?.[0]?.labels ?? [];
+
+        for (const athlete of athletes) {
+          if (!athlete.athlete) continue;
+          const stats = athlete.stats ?? [];
+          const statMap: Record<string, any> = {};
+          labels.forEach((label: string, idx: number) => { statMap[label.toLowerCase()] = stats[idx]; });
+
+          const minStr: string = statMap["min"] || "0";
+          const minParts = minStr.split(":");
+          const minutes = minParts.length === 2
+            ? parseInt(minParts[0]) + parseInt(minParts[1]) / 60
+            : parseFloat(minStr) || 0;
+          if (minutes < 3) continue;
+
+          const playerName: string = athlete.athlete.displayName ?? "";
+          const normPlayerName = normDb(playerName);
+
+          let dbPlayer = allDbPlayers.find(p => normDb(p.name) === normPlayerName);
+          if (!dbPlayer) {
+            const espnWords = playerName.toLowerCase().replace(/[^a-z ]/g, "").trim().split(/\s+/);
+            const espnFirst = espnWords[0] ?? "";
+            const espnLast = espnWords[espnWords.length - 1] ?? "";
+            dbPlayer = allDbPlayers.find(p => {
+              const dbWords = p.name.toLowerCase().replace(/[^a-z ]/g, "").trim().split(/\s+/);
+              return dbWords[0] === espnFirst && dbWords[dbWords.length - 1] === espnLast;
+            }) ?? null;
+          }
+          if (!dbPlayer) continue;
+
+          const liveStats: Record<string, number> = {
+            points:   parseStat(statMap["pts"]),
+            rebounds: parseStat(statMap["reb"]),
+            assists:  parseStat(statMap["ast"]),
+            steals:   parseStat(statMap["stl"]),
+            blocks:   parseStat(statMap["blk"]),
+            threes:   parseMade(statMap["3pt"] ?? statMap["fg3m"] ?? "0"),
+          };
+          const fouls = parseStat(statMap["pf"]);
+
+          for (const { statType, components } of LIVE_STAT_CONFIGS) {
+            try {
+              const currentStat = components.reduce((sum, c) => sum + (liveStats[c] ?? 0), 0);
+              const lineCacheKey = `${playerName}|${statType}`;
+
+              if (!oddsPlayerCache.has(lineCacheKey)) {
+                let resolved = false;
+                if (oddsEventId && process.env.ODDS_API_KEY) {
+                  let oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, true);
+                  let bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
+                  if (bookKeys.length === 0) {
+                    oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, false);
+                    bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
+                  }
+                  if (bookKeys.length > 0) {
+                    const lines = bookKeys.map(k => (oddsResult as any)[k].line as number);
+                    const sortedLines = [...lines].sort((a, b) => a - b);
+                    const medianLine = sortedLines[Math.floor(sortedLines.length / 2)];
+                    oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys });
+                    resolved = true;
+                  }
+                }
+                if (!resolved && process.env.SGO_API_KEY) {
+                  const sgoResult = await getSGOPlayerLine(homeTeamAbbr, awayTeamAbbr, playerName, statType);
+                  if (sgoResult !== null) {
+                    oddsPlayerCache.set(lineCacheKey, { line: sgoResult, bookKeys: ["sgo"] });
+                    resolved = true;
+                  }
+                }
+                if (!resolved) oddsPlayerCache.set(lineCacheKey, null);
+              }
+
+              const oddsEntry = oddsPlayerCache.get(lineCacheKey);
+              if (!oddsEntry) continue;
+              const liveLine = oddsEntry.line;
+
+              if (currentStat >= liveLine) continue; // line already cleared
+
+              const result = await storage.calculateProbability({
+                playerId: dbPlayer.id,
+                opponentTeam: opponentAbbr,
+                halftimeMinutes: Math.round(minutes * 10) / 10,
+                halftimeFouls: fouls,
+                halftimeStat: currentStat,
+                liveLine,
+                statType,
+                halftimeScore: scoreStr,
+                currentPeriod: period,
+                gameClock: displayClock,
+              });
+
+              const edge = Math.abs(result.probability - 50);
+              if (edge < 5) continue;
+
+              allSignals.push({
+                playerName: dbPlayer.name,
+                playerId: dbPlayer.id,
+                statType,
+                probability: result.probability,
+                betDirection: result.probability > 50 ? "over" : "under",
+                edge,
+                line: liveLine,
+                currentStat,
+              });
+            } catch { /* skip calc errors silently */ }
+          }
+        }
+      }
+
+      allSignals.sort((a, b) => b.edge - a.edge);
+      liveSignalsCache.set(gameId, { ts: Date.now(), signals: allSignals });
+      res.json({ signals: allSignals });
+    } catch (e) {
+      console.warn(`[LiveSignals] Error for game ${gameId}:`, (e as any).message);
+      liveSignalsCache.set(gameId, { ts: Date.now(), signals: [] });
+      res.json({ signals: [] });
+    }
+  });
+
   // ── Injury Report ──────────────────────────────────────────────────────────
   // Polls ESPN's public injury feed and caches results for 5 minutes.
   let injuryCache: { data: any[]; timestamp: number } | null = null;

@@ -703,6 +703,13 @@ export default function Dashboard() {
     staleTime: 45_000,
   });
 
+  const { data: liveSignalsData } = useQuery<{ signals: any[] }>({
+    queryKey: ["/api/live-signals", selectedGameId],
+    enabled: !!selectedGameId && showBoxScore,
+    refetchInterval: 90_000,
+    staleTime: 80_000,
+  });
+
   const halftimeGameGroups = useMemo(() => {
     const plays = halftimePlaysData?.plays ?? [];
     const gameMap = new Map<string, {
@@ -733,6 +740,7 @@ export default function Dashboard() {
     if (selectedGameId) {
       autoRefreshRef.current = setInterval(() => {
         queryClient.invalidateQueries({ queryKey: ["/api/live-stats", selectedGameId] });
+        queryClient.invalidateQueries({ queryKey: ["/api/live-signals", selectedGameId] });
         setLastRefreshed(new Date());
         if (activeTab === "calculator" && nbaSubTab === "halftime") refetchHalftimePlays();
       }, 2 * 60 * 1000);
@@ -1825,12 +1833,16 @@ export default function Dashboard() {
                           return parts.length === 2 ? parseInt(parts[0]) + parseInt(parts[1]) / 60 : parseFloat(m) || 0;
                         };
 
-                        // Build player signal map from halftime plays (already loaded, zero extra calls)
+                        // Build player signal map — prefer live signals (works Q1-Q4),
+                        // fall back to halftimePlaysData for the dedicated halftime panel.
                         type SignalTier = "green" | "red" | "yellow" | "teal";
                         type PlayerSignal = { tier: SignalTier; displayProb: number; betDirection: string; statType: string };
                         const playerSignalMap = new Map<string, PlayerSignal>();
                         const statCellSignalMap = new Map<string, PlayerSignal>();
-                        for (const play of (halftimePlaysData?.plays ?? [])) {
+                        const signalSource = (liveSignalsData?.signals && liveSignalsData.signals.length > 0)
+                          ? liveSignalsData.signals
+                          : (halftimePlaysData?.plays ?? []);
+                        for (const play of signalSource) {
                           const dp = play.betDirection === "under"
                             ? Math.round((100 - play.probability) * 10) / 10
                             : Math.round(play.probability * 10) / 10;
