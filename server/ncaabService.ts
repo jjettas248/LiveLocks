@@ -756,6 +756,22 @@ export interface NCAABPlay {
   desperation3s: boolean;
   intentionalFouling: boolean;
 
+  // Live 2H book prices & betting percentages (from fetch2HLines)
+  h2OverPrice: number | null;
+  h2UnderPrice: number | null;
+  h2OverPct: number | null;
+  h2UnderPct: number | null;
+  h2LinesSource: "odds_api" | "action_network" | "derived_h1_pace" | null;
+
+  // Engine vs book implied probability (from calc2HEngineProb)
+  h2EngineOverProb: number | null;
+  h2BookOverImplied: number | null;
+  h2BookUnderImplied: number | null;
+  h2OverEdge: number | null;
+  h2UnderEdge: number | null;
+  h2EdgeSide: "OVER" | "UNDER" | null;
+  h2Proj: number | null;
+
   // Raw box data
   scoringByPeriod: Record<string, number[]>;
   teamStats: Record<string, any>;
@@ -897,6 +913,17 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       const half        = box?.half ?? (game.period <= 1 ? 1 : 2);
       const isHalftime  = game.isHalftime || box?.isHalftime;
       const secondsLeft = box?.secondsRemainingInHalf ?? (isHalftime ? 1200 : 600);
+
+      // ── Live 2H line fetch (halftime + H2 only) ──────────────────────────
+      // Runs fetch2HLines so we get book prices (American odds) + betting %
+      // for engine-vs-book edge comparison on the 2H card.
+      let live2HLines: Live2HLines | null = null;
+      if (isHalftime || half === 2) {
+        try {
+          live2HLines = await fetch2HLines(game.id, game.homeTeam, game.homeScore, game.awayScore, total);
+          // If we got a better 2H total from this waterfall, prefer it over SGO (which may lag)
+        } catch { /* non-fatal */ }
+      }
       const scoringByPeriod = box?.scoringByPeriod ?? {};
       const teamStats       = box?.teamStats ?? {};
 
@@ -1101,21 +1128,33 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         total1HEdge = Math.round((over1HProb - 50) * 10) / 10;
       }
 
-      // ── 2H probability — at halftime or during H2 live play ──────────────
-      let over2HProb: number | null = null;
-      let effectiveH2Line: number | null = null;
-      if (projectedTotal !== null && (isHalftime || half === 2)) {
-        // proj2H = the expected second half total
-        const proj2H = projectedTotal - h1Total;
-        // Use book 2H total if available; otherwise derive from H1 pace × 0.95 × 20 min
-        // (same formula as fetch2HLines Source 3) so we compare against an implied market
-        // baseline rather than against ourselves (which would always produce ~50%)
-        const derivedH2Line = Math.round((paceH1 * 0.95 * 20) * 2) / 2;
-        effectiveH2Line = h2TotalLine ?? derivedH2Line;
-        const diff2H = proj2H - effectiveH2Line;
-        const raw2H = 50 + diff2H * 2.5 * 0.3;
-        over2HProb = parseFloat(Math.min(Math.max(raw2H, 1), 99).toFixed(1));
-      }
+      // ── 2H engine vs book probability (calc2HEngineProb) ─────────────────
+      // Use the dedicated calc2HEngineProb function which compares engine
+      // projection against real book odds. Only produces signal when a real
+      // book line exists — no derived-line noise.
+      const engineProb2H = (live2HLines && (live2HLines.source === "odds_api" || live2HLines.source === "action_network"))
+        ? calc2HEngineProb(live2HLines, game.homeScore, game.awayScore, projectedTotal)
+        : null;
+
+      // over2HProb: use engine result when we have a real book line, else null
+      let over2HProb: number | null = engineProb2H?.overProb ?? null;
+      // effectiveH2Line: real book line from live2HLines waterfall (not derived)
+      const effectiveH2Line: number | null = (live2HLines?.source === "odds_api" || live2HLines?.source === "action_network")
+        ? (live2HLines?.h2Total ?? null)
+        : null;
+
+      const h2EngineOverProb: number | null   = engineProb2H?.overProb ?? null;
+      const h2BookOverImplied: number | null  = engineProb2H?.bookOverImplied ?? null;
+      const h2BookUnderImplied: number | null = engineProb2H?.bookUnderImplied ?? null;
+      const h2OverEdge: number | null         = engineProb2H?.overEdge ?? null;
+      const h2UnderEdge: number | null        = engineProb2H?.underEdge ?? null;
+      const h2EdgeSide: "OVER" | "UNDER" | null = engineProb2H?.edgeSide ?? null;
+      const h2Proj: number | null             = engineProb2H?.h2Proj ?? null;
+      const h2OverPrice: number | null        = live2HLines?.h2OverPrice ?? null;
+      const h2UnderPrice: number | null       = live2HLines?.h2UnderPrice ?? null;
+      const h2OverPct: number | null          = live2HLines?.h2OverPct ?? null;
+      const h2UnderPct: number | null         = live2HLines?.h2UnderPct ?? null;
+      const h2LinesSource                     = live2HLines?.source ?? null;
 
       // Apply sanitizeProb — clamp to 1-99 and enforce early-game neutral
       // (post-halftime H1 99/1 is exempt: allowExtreme = true)
@@ -1192,6 +1231,18 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         handleSignal,
         desperation3s,
         intentionalFouling,
+        h2OverPrice,
+        h2UnderPrice,
+        h2OverPct,
+        h2UnderPct,
+        h2LinesSource,
+        h2EngineOverProb,
+        h2BookOverImplied,
+        h2BookUnderImplied,
+        h2OverEdge,
+        h2UnderEdge,
+        h2EdgeSide,
+        h2Proj,
         scoringByPeriod,
         teamStats,
       });

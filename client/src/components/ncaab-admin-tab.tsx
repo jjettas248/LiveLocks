@@ -47,6 +47,18 @@ interface NCAABPlay {
   h2Favorite: string;
   over2HProb: number | null;
   effectiveH2Line: number | null;
+  h2OverPrice: number | null;
+  h2UnderPrice: number | null;
+  h2OverPct: number | null;
+  h2UnderPct: number | null;
+  h2LinesSource: "odds_api" | "action_network" | "derived_h1_pace" | null;
+  h2EngineOverProb: number | null;
+  h2BookOverImplied: number | null;
+  h2BookUnderImplied: number | null;
+  h2OverEdge: number | null;
+  h2UnderEdge: number | null;
+  h2EdgeSide: "OVER" | "UNDER" | null;
+  h2Proj: number | null;
   homeGameTotalLine: number | null;
   awayGameTotalLine: number | null;
   homeGameTotalIsEstimated: boolean;
@@ -3827,95 +3839,238 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                 </p>
               </div>
               {halftimePlays.map(play => {
-                const spreadEdgeAbs = Math.abs(play.spreadEdge ?? 0);
-                const totalEdgeAbs  = Math.abs(play.totalEdge ?? 0);
-                const bestEdge = Math.max(spreadEdgeAbs, totalEdgeAbs);
-                const edgePillColor = bestEdge >= 15
-                  ? "text-green-400 bg-green-500/10 border-green-500/30"
-                  : bestEdge >= 8
-                  ? "text-yellow-400 bg-yellow-500/10 border-yellow-500/30"
-                  : "text-muted-foreground bg-secondary border-border";
+                // ── Primary call logic ──────────────────────────────────────
+                // Best 2H total call: only when we have a real book line + engine edge
+                const has2HCall = play.h2EngineOverProb !== null && (play.h2TotalLine ?? play.effectiveH2Line) !== null;
+                const h2Side = play.h2EdgeSide ?? (play.h2EngineOverProb !== null
+                  ? (play.h2EngineOverProb >= 55 ? "OVER" : play.h2EngineOverProb <= 45 ? "UNDER" : null)
+                  : null);
+                const h2Confidence = h2Side === "OVER"
+                  ? (play.h2EngineOverProb ?? 0)
+                  : h2Side === "UNDER"
+                  ? (100 - (play.h2EngineOverProb ?? 50))
+                  : null;
+                const h2DisplayLine = play.h2TotalLine ?? play.effectiveH2Line;
+                const h2ActiveEdge = h2Side === "OVER" ? play.h2OverEdge : play.h2UnderEdge;
+
+                // Best spread call
+                const spreadProb = play.spreadProb ?? 50;
+                const hasCoverCall = play.spread !== null && Math.abs(spreadProb - 50) >= 8;
+                const spreadSide = spreadProb >= 55 ? "COVER" : spreadProb <= 45 ? "FADE" : null;
+                const spreadConf = spreadSide === "COVER" ? spreadProb : spreadSide === "FADE" ? (100 - spreadProb) : null;
+
+                // Which is the stronger call
+                const primaryIs2H = has2HCall && h2Confidence !== null && (h2ActiveEdge ?? 0) >= 5;
+                const hasPrimaryCall = primaryIs2H || (hasCoverCall && spreadConf !== null && spreadConf >= 60);
+
+                // Edge color tiers
+                const edgeColor = (edge: number | null) => {
+                  if (edge === null) return "text-muted-foreground";
+                  if (edge >= 10) return "text-green-400";
+                  if (edge >= 5)  return "text-yellow-400";
+                  return "text-muted-foreground";
+                };
+                const confBg = (conf: number | null) => {
+                  if (conf === null) return "bg-secondary/60 text-muted-foreground";
+                  if (conf >= 70) return "bg-green-500/15 text-green-400 border border-green-500/30";
+                  if (conf >= 60) return "bg-yellow-500/10 text-yellow-400 border border-yellow-500/30";
+                  return "bg-secondary/60 text-muted-foreground border border-border";
+                };
+
+                // H2 projected breakdown per team
+                const awayH2Pts = play.awayProjected !== null ? Math.round(play.awayProjected - play.awayScore) : null;
+                const homeH2Pts = play.homeProjected !== null ? Math.round(play.homeProjected - play.homeScore) : null;
 
                 return (
-                  <div key={play.gameId} data-testid={`ncaab-2h-card-${play.gameId}`} className="bg-card border border-border rounded-xl p-4 space-y-3">
-                    {/* Header */}
-                    <div className="flex items-center justify-between">
+                  <div key={play.gameId} data-testid={`ncaab-2h-card-${play.gameId}`} className="bg-card border border-border rounded-xl overflow-hidden">
+
+                    {/* ── Header ────────────────────────────────────────────── */}
+                    <div className="px-4 pt-4 pb-3 flex items-start justify-between">
                       <div>
-                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Halftime</p>
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse" />
+                          <span className="text-[10px] font-semibold text-orange-400 uppercase tracking-wider">Halftime · 2H Plays</span>
+                        </div>
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-bold text-foreground">{play.awayTeamAbbr}</span>
-                          <span className="text-lg font-black tabular-nums">{play.awayScore}</span>
-                          <span className="text-xs text-muted-foreground">–</span>
-                          <span className="text-lg font-black tabular-nums">{play.homeScore}</span>
+                          <span className="text-xl font-black tabular-nums text-foreground">{play.awayScore}</span>
+                          <span className="text-sm text-muted-foreground">–</span>
+                          <span className="text-xl font-black tabular-nums text-foreground">{play.homeScore}</span>
                           <span className="text-sm font-bold text-foreground">{play.homeTeamAbbr}</span>
                         </div>
                         <p className="text-[10px] text-muted-foreground mt-0.5">{play.awayTeam} @ {play.homeTeam}</p>
                       </div>
-                      {bestEdge > 0 && (
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${edgePillColor}`}>
-                          +{bestEdge.toFixed(1)} edge
+                      {play.h2LinesSource && (
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${play.h2LinesSource === "odds_api" || play.h2LinesSource === "action_network" ? "text-green-400 bg-green-500/10 border-green-500/30" : "text-muted-foreground bg-secondary border-border"}`}>
+                          {play.h2LinesSource === "odds_api" ? "Live Odds" : play.h2LinesSource === "action_network" ? "Action Network" : "Est."}
                         </span>
                       )}
                     </div>
 
-                    {/* Spread */}
-                    {play.spread !== null && play.spreadProb !== null && (
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-muted-foreground">Spread — {play.favorite} {play.spread > 0 ? "+" : ""}{play.spread}</span>
-                          <span className={`font-semibold ${play.spreadProb >= 60 ? "text-green-400" : play.spreadProb <= 40 ? "text-red-400" : "text-foreground"}`}>
-                            {play.spreadProb.toFixed(0)}% cover
+                    {/* ── Primary call box ──────────────────────────────────── */}
+                    {primaryIs2H && h2Side && h2Confidence !== null && h2DisplayLine !== null ? (
+                      <div className="mx-4 mb-3 rounded-lg bg-secondary/40 border border-border p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">2H Best Play</p>
+                            <p className="text-base font-black text-foreground tracking-tight">
+                              {h2Side} {h2DisplayLine}
+                            </p>
+                          </div>
+                          <span className={`text-sm font-bold px-2.5 py-1 rounded-lg ${confBg(h2Confidence)}`}>
+                            {h2Confidence.toFixed(0)}%
                           </span>
                         </div>
-                        <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all ${play.spreadProb >= 60 ? "bg-green-500" : play.spreadProb <= 40 ? "bg-red-500" : "bg-primary"}`}
-                            style={{ width: `${Math.min(100, play.spreadProb)}%` }}
-                          />
+                        {/* Engine vs Book comparison */}
+                        {play.h2BookOverImplied !== null && (
+                          <div className="flex items-center gap-3 text-[10px]">
+                            <div className="flex items-center gap-1">
+                              <span className="text-muted-foreground">Engine:</span>
+                              <span className="font-semibold text-foreground">{(play.h2EngineOverProb ?? 0).toFixed(0)}% over</span>
+                            </div>
+                            <span className="text-border">|</span>
+                            <div className="flex items-center gap-1">
+                              <span className="text-muted-foreground">Book implied:</span>
+                              <span className="font-semibold text-foreground">{play.h2BookOverImplied.toFixed(0)}% over</span>
+                            </div>
+                            {h2ActiveEdge !== null && (
+                              <>
+                                <span className="text-border">|</span>
+                                <span className={`font-bold ${edgeColor(h2ActiveEdge)}`}>+{h2ActiveEdge.toFixed(1)} edge</span>
+                              </>
+                            )}
+                          </div>
+                        )}
+                        {/* Action Network betting % */}
+                        {play.h2OverPct !== null && play.h2UnderPct !== null && (
+                          <div className="space-y-0.5">
+                            <div className="flex justify-between text-[10px] text-muted-foreground">
+                              <span>Over {play.h2OverPct}%</span>
+                              <span>Under {play.h2UnderPct}%</span>
+                            </div>
+                            <div className="h-1 bg-secondary rounded-full overflow-hidden">
+                              <div className="h-full bg-primary/60 rounded-full" style={{ width: `${play.h2OverPct}%` }} />
+                            </div>
+                            <p className="text-[9px] text-muted-foreground/60">Betting % from Action Network</p>
+                          </div>
+                        )}
+                      </div>
+                    ) : hasCoverCall && spreadSide && spreadConf !== null ? (
+                      <div className="mx-4 mb-3 rounded-lg bg-secondary/40 border border-border p-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Spread Best Play</p>
+                            <p className="text-base font-black text-foreground">
+                              {spreadSide === "COVER" ? "Cover" : "Fade"} {play.favorite} {play.spread !== null ? `${play.spread > 0 ? "+" : ""}${play.spread}` : ""}
+                            </p>
+                          </div>
+                          <span className={`text-sm font-bold px-2.5 py-1 rounded-lg ${confBg(spreadConf)}`}>
+                            {spreadConf.toFixed(0)}%
+                          </span>
                         </div>
+                      </div>
+                    ) : (
+                      <div className="mx-4 mb-3 rounded-lg bg-secondary/20 border border-dashed border-border p-3 text-center">
+                        <p className="text-xs text-muted-foreground">Monitor — no strong 2H signal yet</p>
+                        {!play.h2TotalLine && <p className="text-[10px] text-muted-foreground/60 mt-0.5">Waiting for live 2H lines from books</p>}
                       </div>
                     )}
 
-                    {/* 2H O/U — uses over2HProb + book h2TotalLine or derived effectiveH2Line */}
-                    {play.over2HProb !== null && (() => {
-                      const displayLine = play.h2TotalLine ?? play.effectiveH2Line;
-                      const prob = play.over2HProb;
-                      return (
+                    {/* ── Market rows ───────────────────────────────────────── */}
+                    <div className="px-4 pb-3 space-y-2.5">
+
+                      {/* 2H Total — only when real book line */}
+                      {play.h2TotalLine !== null && play.h2EngineOverProb !== null && (
                         <div className="space-y-1">
                           <div className="flex items-center justify-between text-xs">
-                            <span className="text-muted-foreground">
-                              2H O/U{displayLine !== null ? ` — ${displayLine}` : " (derived)"}
-                              {play.h2TotalLine === null && <span className="ml-1 text-[10px] opacity-60">est.</span>}
-                            </span>
-                            <span className={`font-semibold ${prob >= 60 ? "text-green-400" : prob <= 40 ? "text-red-400" : "text-foreground"}`}>
-                              {prob.toFixed(0)}% over
+                            <span className="text-muted-foreground font-medium">2H Total O/U {play.h2TotalLine}</span>
+                            <div className="flex items-center gap-2">
+                              {play.h2OverPrice !== null && (
+                                <span className="text-[10px] text-muted-foreground/70">{play.h2OverPrice > 0 ? "+" : ""}{play.h2OverPrice} / {play.h2UnderPrice !== null ? (play.h2UnderPrice > 0 ? "+" : "") + play.h2UnderPrice : "—"}</span>
+                              )}
+                              <span className={`font-semibold ${play.h2EngineOverProb >= 60 ? "text-green-400" : play.h2EngineOverProb <= 40 ? "text-red-400" : "text-foreground"}`}>
+                                {play.h2EngineOverProb.toFixed(0)}% over
+                              </span>
+                            </div>
+                          </div>
+                          <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all ${play.h2EngineOverProb >= 60 ? "bg-green-500" : play.h2EngineOverProb <= 40 ? "bg-red-500" : "bg-primary"}`}
+                              style={{ width: `${Math.min(100, play.h2EngineOverProb)}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 2H Spread */}
+                      {play.h2SpreadLine !== null && play.spreadProb !== null && (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground font-medium">2H Spread — {play.h2Favorite} {play.h2SpreadLine > 0 ? "+" : ""}{play.h2SpreadLine}</span>
+                            <span className={`font-semibold ${play.spreadProb >= 60 ? "text-green-400" : play.spreadProb <= 40 ? "text-red-400" : "text-foreground"}`}>
+                              {play.spreadProb >= 50
+                                ? `${play.spreadProb.toFixed(0)}% cover`
+                                : `${(100 - play.spreadProb).toFixed(0)}% fade`}
                             </span>
                           </div>
                           <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
                             <div
-                              className={`h-full rounded-full transition-all ${prob >= 60 ? "bg-green-500" : prob <= 40 ? "bg-red-500" : "bg-primary"}`}
-                              style={{ width: `${Math.min(100, prob)}%` }}
+                              className={`h-full rounded-full transition-all ${play.spreadProb >= 60 ? "bg-green-500" : play.spreadProb <= 40 ? "bg-red-500" : "bg-primary"}`}
+                              style={{ width: `${Math.min(100, play.spreadProb)}%` }}
                             />
                           </div>
                         </div>
-                      );
-                    })()}
+                      )}
 
-                    {/* Team Totals */}
-                    {(play.awayProjected !== null || play.homeProjected !== null) && (
-                      <div className="flex gap-3">
-                        {play.awayProjected !== null && (
-                          <div className="flex-1 bg-secondary/40 rounded-lg px-3 py-2 text-center">
-                            <p className="text-[10px] text-muted-foreground">{play.awayTeamAbbr} Proj. Final</p>
-                            <p className="text-sm font-bold text-foreground">{Math.round(play.awayProjected)}</p>
+                      {/* Full-game spread fallback if no 2H spread */}
+                      {play.h2SpreadLine === null && play.spread !== null && play.spreadProb !== null && (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground font-medium">Spread — {play.favorite} {play.spread > 0 ? "+" : ""}{play.spread}</span>
+                            <span className={`font-semibold ${play.spreadProb >= 60 ? "text-green-400" : play.spreadProb <= 40 ? "text-red-400" : "text-foreground"}`}>
+                              {play.spreadProb.toFixed(0)}% cover
+                            </span>
                           </div>
-                        )}
-                        {play.homeProjected !== null && (
-                          <div className="flex-1 bg-secondary/40 rounded-lg px-3 py-2 text-center">
-                            <p className="text-[10px] text-muted-foreground">{play.homeTeamAbbr} Proj. Final</p>
-                            <p className="text-sm font-bold text-foreground">{Math.round(play.homeProjected)}</p>
+                          <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all ${play.spreadProb >= 60 ? "bg-green-500" : play.spreadProb <= 40 ? "bg-red-500" : "bg-primary"}`}
+                              style={{ width: `${Math.min(100, play.spreadProb)}%` }}
+                            />
                           </div>
-                        )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* ── H2 Projections ────────────────────────────────────── */}
+                    {(awayH2Pts !== null || homeH2Pts !== null) && (
+                      <div className="border-t border-border/50 px-4 py-3">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-2">
+                          H2 Projection{play.h2Proj !== null ? ` — ${play.h2Proj} combined pts` : ""}
+                        </p>
+                        <div className="flex gap-3">
+                          {awayH2Pts !== null && play.awayProjected !== null && (
+                            <div className="flex-1 bg-secondary/30 rounded-lg px-3 py-2">
+                              <p className="text-[10px] text-muted-foreground mb-0.5">{play.awayTeamAbbr}</p>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-xs text-muted-foreground">{play.awayScore}</span>
+                                <span className="text-[10px] text-green-400 font-semibold">+{awayH2Pts > 0 ? awayH2Pts : 0}</span>
+                                <span className="text-[10px] text-muted-foreground">=</span>
+                                <span className="text-sm font-bold text-foreground">{Math.round(play.awayProjected)}</span>
+                              </div>
+                            </div>
+                          )}
+                          {homeH2Pts !== null && play.homeProjected !== null && (
+                            <div className="flex-1 bg-secondary/30 rounded-lg px-3 py-2">
+                              <p className="text-[10px] text-muted-foreground mb-0.5">{play.homeTeamAbbr}</p>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-xs text-muted-foreground">{play.homeScore}</span>
+                                <span className="text-[10px] text-green-400 font-semibold">+{homeH2Pts > 0 ? homeH2Pts : 0}</span>
+                                <span className="text-[10px] text-muted-foreground">=</span>
+                                <span className="text-sm font-bold text-foreground">{Math.round(play.homeProjected)}</span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
