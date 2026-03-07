@@ -1915,6 +1915,10 @@ export default function Dashboard() {
                               const rowStyle = signalStyle
                                 ? { background: signalStyle.bg, boxShadow: `inset 3px 0 0 ${signalStyle.border}` }
                                 : undefined;
+                              // Color the combined-stat cell using the signal tier when it matches the active stat type
+                              const statCellColor = (signal && signal.statType === watchedStatType)
+                                ? SIGNAL_STYLES[signal.tier].dot
+                                : "#00d4aa";
                               return (
                                 <tr
                                   key={`player-${stat.playerId}`}
@@ -1942,7 +1946,7 @@ export default function Dashboard() {
                                     </span>
                                   </td>
                                   <td className="text-right px-3 py-2 font-mono text-muted-foreground">{stat.minutes}</td>
-                                  <td className="text-right px-3 py-2 font-mono font-bold text-primary">{statTotal}</td>
+                                  <td className="text-right px-3 py-2 font-mono font-bold" style={{ color: statCellColor }}>{statTotal}</td>
                                   <td className="text-right px-3 py-2 font-mono">{stat.points}</td>
                                   <td className="text-right px-3 py-2 font-mono">{stat.rebounds}</td>
                                   <td className="text-right px-3 py-2 font-mono">{stat.assists}</td>
