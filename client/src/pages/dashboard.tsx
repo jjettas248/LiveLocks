@@ -1829,6 +1829,7 @@ export default function Dashboard() {
                         type SignalTier = "green" | "red" | "yellow" | "teal";
                         type PlayerSignal = { tier: SignalTier; displayProb: number; betDirection: string; statType: string };
                         const playerSignalMap = new Map<string, PlayerSignal>();
+                        const statCellSignalMap = new Map<string, PlayerSignal>();
                         for (const play of (halftimePlaysData?.plays ?? [])) {
                           const dp = play.betDirection === "under"
                             ? Math.round((100 - play.probability) * 10) / 10
@@ -1839,9 +1840,17 @@ export default function Dashboard() {
                             dp >= 60 ? "teal" : null;
                           if (!tier) continue;
                           const key = play.playerName.toLowerCase();
+                          // Row-level: best signal across all stat types
                           const existing = playerSignalMap.get(key);
                           if (!existing || dp > existing.displayProb) {
                             playerSignalMap.set(key, { tier, displayProb: dp, betDirection: play.betDirection, statType: play.statType });
+                          }
+                          // Cell-level: only signals matching the active stat type column
+                          if (play.statType === watchedStatType) {
+                            const existingCell = statCellSignalMap.get(key);
+                            if (!existingCell || dp > existingCell.displayProb) {
+                              statCellSignalMap.set(key, { tier, displayProb: dp, betDirection: play.betDirection, statType: play.statType });
+                            }
                           }
                         }
 
@@ -1915,9 +1924,11 @@ export default function Dashboard() {
                               const rowStyle = signalStyle
                                 ? { background: signalStyle.bg, boxShadow: `inset 3px 0 0 ${signalStyle.border}` }
                                 : undefined;
-                              // Color the combined-stat cell using the signal tier when it matches the active stat type
-                              const statCellColor = (signal && signal.statType === watchedStatType)
-                                ? SIGNAL_STYLES[signal.tier].dot
+                              // Cell color: look up the stat-type-specific signal map (built above)
+                              // so the color always reflects the signal for the exact column on screen.
+                              const statCellSignal = statCellSignalMap.get(stat.playerName.toLowerCase()) ?? null;
+                              const statCellColor = statCellSignal
+                                ? SIGNAL_STYLES[statCellSignal.tier].dot
                                 : "#00d4aa";
                               return (
                                 <tr
