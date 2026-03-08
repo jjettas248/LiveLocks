@@ -101,8 +101,9 @@ const SPORTSBOOK_LABELS: Record<string, string> = {
   draftkings: "DraftKings",
   fanduel: "FanDuel",
   hardrockbet: "Hard Rock",
-  bet365: "Bet365",
   fanatics: "Fanatics",
+  prizepicks: "PrizePicks",
+  underdogfantasy: "Underdog",
 };
 
 const TEAM_FULL_NAMES: Record<string, string> = {
@@ -1231,26 +1232,22 @@ export default function Dashboard() {
   };
 
   const BOOK_OPTIONS = [
-    { key: "all",      abbr: "All",  label: "All Books" },
-    { key: "dk",       abbr: "DK",   label: "DraftKings" },
-    { key: "fd",       abbr: "FD",   label: "FanDuel" },
-    { key: "hr",       abbr: "HR",   label: "Hard Rock" },
-    { key: "b365",     abbr: "B365", label: "Bet365" },
-    { key: "fan",      abbr: "FAN",  label: "Fanatics" },
-    { key: "mgm",      abbr: "MGM",  label: "BetMGM" },
-    { key: "br",       abbr: "BR",   label: "BetRivers" },
-    { key: "espn",     abbr: "ESPN", label: "ESPN Bet" },
+    { key: "all", abbr: "All", label: "All Books" },
+    { key: "dk",  abbr: "DK",  label: "DraftKings" },
+    { key: "fd",  abbr: "FD",  label: "FanDuel" },
+    { key: "hr",  abbr: "HR",  label: "Hard Rock" },
+    { key: "pp",  abbr: "PP",  label: "PrizePicks" },
+    { key: "ud",  abbr: "UD",  label: "Underdog" },
+    { key: "fan", abbr: "FAN", label: "Fanatics" },
   ] as const;
 
   const bookKeyMap: Record<string, string[]> = {
-    dk:   ["draftkings", "draft_kings", "dk"],
-    fd:   ["fanduel", "fan_duel", "fd"],
-    hr:   ["hardrockbet", "hard_rock", "hardrock"],
-    b365: ["bet365"],
-    fan:  ["fanatics"],
-    mgm:  ["betmgm", "mgm", "bet_mgm"],
-    br:   ["betrivers", "bet_rivers", "br", "sugarhouse"],
-    espn: ["espnbet", "espn_bet", "espn"],
+    dk:  ["draftkings", "draft_kings", "dk"],
+    fd:  ["fanduel", "fan_duel", "fd"],
+    hr:  ["hardrockbet", "hard_rock", "hardrock"],
+    pp:  ["prizepicks", "prize_picks"],
+    ud:  ["underdogfantasy", "underdog_fantasy", "underdog"],
+    fan: ["fanatics"],
   };
 
   const filterByBook = (plays: any[], bookKey: string): any[] => {

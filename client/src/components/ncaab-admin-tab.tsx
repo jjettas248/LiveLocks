@@ -456,27 +456,21 @@ function H2HSection({
 }
 
 const BOOK_LABELS: Record<string, string> = {
-  fanduel:      "FD",
-  draftkings:   "DK",
-  betmgm:       "MGM",
-  betrivers:    "BR",
-  espnbet:      "ESPN",
-  hardrockbet:  "HRB",
-  bet365:       "365",
-  fanatics:     "FAN",
-  betonlineag:  "BOL",
+  fanduel:         "FD",
+  draftkings:      "DK",
+  hardrockbet:     "HRB",
+  fanatics:        "FAN",
+  prizepicks:      "PP",
+  underdogfantasy: "UD",
 };
 
 const BOOK_URLS: Record<string, string> = {
-  draftkings:  "https://sportsbook.draftkings.com",
-  fanduel:     "https://sportsbook.fanduel.com",
-  betmgm:      "https://sports.betmgm.com",
-  betrivers:   "https://www.betrivers.com",
-  espnbet:     "https://espnbet.com",
-  hardrockbet: "https://www.hardrock.bet",
-  bet365:      "https://www.bet365.com",
-  fanatics:    "https://sportsbook.fanatics.com",
-  betonlineag: "https://www.betonline.ag",
+  draftkings:      "https://sportsbook.draftkings.com",
+  fanduel:         "https://sportsbook.fanduel.com",
+  hardrockbet:     "https://www.hardrock.bet",
+  fanatics:        "https://sportsbook.fanatics.com",
+  prizepicks:      "https://app.prizepicks.com",
+  underdogfantasy: "https://underdogfantasy.com",
 };
 
 const WINDOW_COLORS: Record<string, string> = {
@@ -1287,9 +1281,12 @@ function NCAABGameCard({
     return play.spread !== null ? `${play.favorite} -${play.spread}` : "Spread";
   };
 
-  const mgmBook = play.bookLines.find(b => b.book === "betmgm");
-  const altBook = play.bookLines.find(b => b.book === "betrivers") ??
-                  play.bookLines.find(b => b.book === "fanduel") ??
+  const primaryBook = play.bookLines.find(b => b.book === "draftkings") ??
+                      play.bookLines.find(b => b.book === "fanduel") ??
+                      play.bookLines[0];
+  const altBook = play.bookLines.find(b => b.book === "hardrockbet") ??
+                  play.bookLines.find(b => b.book === "fanatics") ??
+                  play.bookLines.find(b => b.book !== primaryBook?.book) ??
                   play.bookLines[1];
   const altLabel = altBook ? (BOOK_LABELS[altBook.book] ?? altBook.book) : "—";
 
@@ -1860,7 +1857,7 @@ function NCAABGameCard({
         {/* ── BOOK PILLS ─────────────────────────────────────────────── */}
         <div className="flex gap-2 flex-wrap">
           {[
-            { label: "MGM", book: mgmBook, url: "https://sports.betmgm.com" },
+            { label: primaryBook ? (BOOK_LABELS[primaryBook.book] ?? primaryBook.book) : "—", book: primaryBook, url: primaryBook ? (BOOK_URLS[primaryBook.book] ?? "#") : "#" },
             { label: altLabel, book: altBook, url: altBook ? (BOOK_URLS[altBook.book] ?? "#") : "#" },
           ].filter(p => p.label !== "—").map(({ label, book, url }) => {
             const bookLineText = book

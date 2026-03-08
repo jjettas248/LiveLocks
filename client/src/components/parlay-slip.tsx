@@ -84,16 +84,22 @@ const SPORTSBOOK_INFO: Record<string, {
     color: "bg-[#b8860b] hover:bg-[#d4a017]",
     deeplink: () => "https://www.hardrock.bet/en-us/sports/basketball/nba/player-props",
   },
-  bet365: {
-    label: "Bet365",
-    color: "bg-[#016f2e] hover:bg-[#018a39]",
-    deeplink: () => "https://www.bet365.com/#/AC/B1/C1/D31/",
-    note: "Search player name manually",
-  },
   fanatics: {
     label: "Fanatics",
     color: "bg-[#cc0000] hover:bg-[#e60000]",
     deeplink: () => "https://sportsbook.fanatics.com/sports/basketball/nba",
+    note: "Search player name manually",
+  },
+  prizepicks: {
+    label: "PrizePicks",
+    color: "bg-[#7c3aed] hover:bg-[#8b5cf6]",
+    deeplink: () => "https://app.prizepicks.com",
+    note: "Search player name manually",
+  },
+  underdogfantasy: {
+    label: "Underdog",
+    color: "bg-[#f97316] hover:bg-[#fb923c]",
+    deeplink: () => "https://underdogfantasy.com",
     note: "Search player name manually",
   },
 };
@@ -132,8 +138,8 @@ function CorrelationBadge({ note }: { note: CorrelationNote }) {
 function SportsbookButtons({ picks, toast }: { picks: ParlayPickInput[]; toast: ReturnType<typeof useToast>["toast"] }) {
   const uniqueSportsbooks = Array.from(new Set(picks.map((p) => p.sportsbook).filter(Boolean))) as string[];
   const sbList = uniqueSportsbooks.length > 0
-    ? [...uniqueSportsbooks, "bet365", "fanatics"].filter((v, i, a) => a.indexOf(v) === i)
-    : ["draftkings", "fanduel", "hardrockbet", "bet365", "fanatics"];
+    ? [...uniqueSportsbooks, "fanatics", "prizepicks", "underdogfantasy"].filter((v, i, a) => a.indexOf(v) === i)
+    : ["draftkings", "fanduel", "hardrockbet", "fanatics", "prizepicks", "underdogfantasy"];
 
   const copyText = picks.map(p =>
     `${p.playerName} — ${STAT_LABELS[p.statType] ?? p.statType} ${p.betDirection === "over" ? "O" : "U"}${p.line}`

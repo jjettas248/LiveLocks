@@ -2,10 +2,9 @@ const ODDS_API_KEY = process.env.ODDS_API_KEY;
 const SGO_API_KEY  = process.env.SGO_API_KEY;
 const BASE_URL = "https://api.the-odds-api.com/v4/sports/basketball_nba";
 
-// Bookmakers to query for player props (ordered by reliability for NBA props)
-const PROP_BOOKMAKERS = "draftkings,fanduel,betmgm,betrivers,espnbet,hardrockbet,bet365,fanatics,betonlineag";
-// Regions: us covers DK/FD/MGM/BR/ESPN; uk covers bet365
-const PROP_REGIONS = "us,uk";
+// Bookmakers to query for player props — only the six supported books
+const PROP_BOOKMAKERS = "draftkings,fanduel,hardrockbet,fanatics,prizepicks,underdogfantasy";
+const PROP_REGIONS = "us";
 
 // Canonical team name lookup — The Odds API uses full city+nickname
 export const TEAM_FULL_NAMES: Record<string, string> = {
@@ -182,10 +181,7 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
   if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
 
   const inPlayParam = inPlay ? "&in_play=true" : "";
-  // For live (in-play) lines, also try pinnacle which offers live NBA props
-  const bookmakers = inPlay
-    ? `${PROP_BOOKMAKERS},pinnacle`
-    : PROP_BOOKMAKERS;
+  const bookmakers = PROP_BOOKMAKERS;
   const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=${PROP_REGIONS}&markets=${marketKey}&bookmakers=${bookmakers}&oddsFormat=american${inPlayParam}`;
 
   const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
@@ -218,7 +214,7 @@ export async function getRawOddsForDebug(oddsEventId: string): Promise<any> {
   const cached = cache.get(cacheKey);
   if (isFresh(cached, ODDS_TTL)) return cached!.data;
   if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
-  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${markets}&bookmakers=draftkings,fanduel,hardrockbet,bet365,fanatics&oddsFormat=american`;
+  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${markets}&bookmakers=${PROP_BOOKMAKERS}&oddsFormat=american`;
   const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!res.ok) { const body = await res.text(); throw new Error(`Odds fetch failed: ${res.status} — ${body}`); }
   const data = await res.json();
