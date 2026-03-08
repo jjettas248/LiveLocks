@@ -119,7 +119,8 @@ export function usePlayerOdds(
 ) {
   const enabled = !!playerTeam && !!opponentTeam && !!playerName && !!statType;
   return useQuery({
-    queryKey: ["/api/odds", playerTeam, opponentTeam, playerName, statType],
+    // Include isLive in the cache key so live and pre-game results don't collide
+    queryKey: ["/api/odds", playerTeam, opponentTeam, playerName, statType, isLive ? "live" : "pre"],
     queryFn: async (): Promise<Record<string, OddsLine> & { _quotaExhausted?: boolean }> => {
       if (!enabled) return {};
       const params = new URLSearchParams({
@@ -128,6 +129,8 @@ export function usePlayerOdds(
         playerName: playerName!,
         statType: statType!,
       });
+      // Pass inPlay flag to server so it fetches live halftime-adjusted lines for active games
+      if (isLive) params.set("inPlay", "true");
       const res = await fetch(`/api/odds?${params}`);
       if (!res.ok) return {};
       const data = await res.json();
@@ -138,7 +141,8 @@ export function usePlayerOdds(
       return data;
     },
     enabled,
-    staleTime: isLive ? 2 * 60 * 1000 : 5 * 60 * 1000,
+    // Live games: short stale time + auto-refetch to track line movement
+    staleTime: isLive ? 90 * 1000 : 5 * 60 * 1000,
     refetchInterval: isLive ? 90 * 1000 : false,
     retry: 1,
   });

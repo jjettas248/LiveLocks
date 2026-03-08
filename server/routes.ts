@@ -401,7 +401,7 @@ export async function registerRoutes(
     try {
       // Accept either full team names (homeTeam/awayTeam from game selection)
       // OR abbreviations (playerTeam/opponentTeam from player selection without a game).
-      const { homeTeam, awayTeam, playerTeam, opponentTeam, playerName, statType } = req.query;
+      const { homeTeam, awayTeam, playerTeam, opponentTeam, playerName, statType, inPlay } = req.query;
 
       if (!playerName || !statType) {
         return res.status(400).json({ message: "Missing required parameters: playerName, statType" });
@@ -426,11 +426,25 @@ export async function registerRoutes(
         return res.json({}); // No matching event found — graceful empty response
       }
 
-      const formattedOdds = await getPlayerOdds(oddsEventId, playerName as string, statType as string);
-      // Return quota sentinel as a 200 so the frontend can show a friendly message
+      // inPlay=true fetches live in-play lines (90-sec cache) rather than pre-game lines (5-min cache).
+      // If live returns no results (books haven't posted live props yet), fall back to pre-game lines.
+      const isInPlay = inPlay === "true";
+      let formattedOdds = await getPlayerOdds(oddsEventId, playerName as string, statType as string, isInPlay);
+
       if ((formattedOdds as any)._quotaExhausted) {
         return res.json({ _quotaExhausted: true });
       }
+
+      // Live fallback: if game is live but no live lines found yet, serve pre-game lines
+      const liveKeys = Object.keys(formattedOdds).filter(k => k !== "_quotaExhausted");
+      if (isInPlay && liveKeys.length === 0) {
+        console.log(`[Odds] No live lines for "${playerName}" (${statType}) — falling back to pre-game`);
+        formattedOdds = await getPlayerOdds(oddsEventId, playerName as string, statType as string, false);
+        if ((formattedOdds as any)._quotaExhausted) {
+          return res.json({ _quotaExhausted: true });
+        }
+      }
+
       res.json(formattedOdds);
     } catch (err: any) {
       console.error("[Odds API Error]", err.message);
