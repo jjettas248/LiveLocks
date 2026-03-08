@@ -229,7 +229,11 @@ export class DatabaseStorage implements IStorage {
         paceMultiplier = livePaceMultiplier * 0.6 + paceMultiplier * 0.4;
       }
     }
-    paceMultiplier = Math.max(0.78, Math.min(1.22, paceMultiplier));
+    // At halftime (full 2H remaining) cap the pace multiplier lower — the H1 observed
+    // rate already embeds H1 pace, so applying a full live-score-derived multiplier on
+    // top double-counts it. Cap at 1.12 instead of 1.22 when ≥22 min remain.
+    const halfTimePaceCap = gameMinutesRemaining >= 22 ? 1.12 : 1.22;
+    paceMultiplier = Math.max(0.78, Math.min(halfTimePaceCap, paceMultiplier));
 
     // ─── Game spread → garbage-time minute reduction ────────────────────────
     let spreadMinuteReduction = 1.0;
@@ -315,9 +319,15 @@ export class DatabaseStorage implements IStorage {
     const liveFg3a = req.liveFg3a ?? 0;
     const liveFg3m = req.liveFg3m ?? 0;
 
+    // At halftime the FGA sample is small (~8-12 attempts). Cap live weights so a hot
+    // or cold first half can't spike the modifier to its maximum before regression.
+    const isHalftimeContext = gameMinutesRemaining >= 22;
+    const maxFgWeight  = isHalftimeContext ? 0.25 : 0.50;
+    const maxFg3Weight = isHalftimeContext ? 0.25 : 0.55;
+
     if ((req.statType === "points" || req.statType.startsWith("pts")) && minutesPlayed >= 4) {
-      // Blend live FG% into season FG%; weight grows with attempts (max 50% live weight at 8+ FGA)
-      const fgWeight = Math.min(0.50, liveFga / 16);
+      // Blend live FG% into season FG%; weight grows with attempts (max varies by context)
+      const fgWeight = Math.min(maxFgWeight, liveFga / 16);
       const liveFgPct = liveFga > 0 ? liveFgm / liveFga : SEASON_FG_PCT;
       const blendedFgPct = liveFgPct * fgWeight + SEASON_FG_PCT * (1 - fgWeight);
       const fgMod = SEASON_FG_PCT > 0 ? blendedFgPct / SEASON_FG_PCT : 1.0;
@@ -331,7 +341,7 @@ export class DatabaseStorage implements IStorage {
       shootingModifier = fgMod * 0.65 + ftMod * 0.35;
       shootingModifier = Math.max(0.75, Math.min(1.25, shootingModifier));
     } else if (req.statType === "threes" && minutesPlayed >= 4) {
-      const fg3Weight = Math.min(0.55, liveFg3a / 8);
+      const fg3Weight = Math.min(maxFg3Weight, liveFg3a / 8);
       const live3pPct = liveFg3a > 0 ? liveFg3m / liveFg3a : SEASON_3P_PCT;
       const blended3pPct = live3pPct * fg3Weight + SEASON_3P_PCT * (1 - fg3Weight);
       const threeMod = SEASON_3P_PCT > 0 ? blended3pPct / SEASON_3P_PCT : 1.0;
@@ -344,18 +354,33 @@ export class DatabaseStorage implements IStorage {
       ? req.halftimeStat / minutesPlayed
       : 0;
 
+    // Usage-weight blend: HIGH-usage stars get MORE weight on observed because
+    // their H1 rates are more sample-stable and usage-consistent. LOW-usage bench
+    // players have noisier H1 numbers and must regress harder toward their season mean.
+    // This was previously inverted (bench players got 0.78 observed weight — wrong).
+    //
+    // Additionally, in halftime context (≥22 min remaining) we apply a regression
+    // multiplier to further reduce the observed weight — H1 hot streaks mean-revert.
     let observedW: number;
     let seasonW: number;
     if (!seasonPerMin) {
       observedW = 1.0; seasonW = 0.0;
     } else if (minutesPlayed < 5) {
-      if (usageRate >= 0.28)      { observedW = 0.30; seasonW = 0.70; }
-      else if (usageRate >= 0.22) { observedW = 0.40; seasonW = 0.60; }
-      else                        { observedW = 0.50; seasonW = 0.50; }
+      if (usageRate >= 0.28)      { observedW = 0.35; seasonW = 0.65; }
+      else if (usageRate >= 0.22) { observedW = 0.25; seasonW = 0.75; }
+      else                        { observedW = 0.15; seasonW = 0.85; }
     } else {
-      if (usageRate >= 0.28)      { observedW = 0.60; seasonW = 0.40; }
-      else if (usageRate >= 0.22) { observedW = 0.70; seasonW = 0.30; }
-      else                        { observedW = 0.78; seasonW = 0.22; }
+      if (usageRate >= 0.28)      { observedW = 0.65; seasonW = 0.35; }
+      else if (usageRate >= 0.22) { observedW = 0.55; seasonW = 0.45; }
+      else                        { observedW = 0.45; seasonW = 0.55; }
+    }
+
+    // Halftime regression: observed rate in a single half is high-variance.
+    // Pull 15% more weight toward season baseline when the full 2H is still ahead.
+    if (isHalftimeContext && seasonPerMin) {
+      const regressionFactor = 0.85;
+      observedW = observedW * regressionFactor;
+      seasonW   = 1 - observedW;
     }
 
     const blendedPerMin = observedPerMin * observedW + (seasonPerMin ?? 0) * seasonW;
@@ -367,18 +392,23 @@ export class DatabaseStorage implements IStorage {
     const difference = expectedTotal - req.liveLine;
 
     const usageNorm = usageRate / 0.22;
+    // Scale factors calibrated for halftime context (24 min remaining) vs. live Q3/Q4.
+    // Halftime base factors are reduced because there is much more uncertainty in
+    // projecting 2 full quarters than the final minutes of a live quarter.
+    // Live context uses the original (higher) factors.
     let scaleFactor: number;
     if (req.statType === "steals" || req.statType === "blocks" || req.statType === "stl_blk") {
-      scaleFactor = 14 * usageNorm * efficiencyIndex;
+      scaleFactor = isHalftimeContext ? 10 : 14;
     } else if (req.statType === "threes") {
-      scaleFactor = 12 * usageNorm * efficiencyIndex;
+      scaleFactor = isHalftimeContext ? 9 : 12;
     } else if (req.statType === "rebounds" || req.statType === "assists") {
-      scaleFactor = 10 * usageNorm * efficiencyIndex;
+      scaleFactor = isHalftimeContext ? 7.5 : 10;
     } else if (req.statType.includes("_")) {
-      scaleFactor = 5.5 * usageNorm * efficiencyIndex;
+      scaleFactor = isHalftimeContext ? 4.0 : 5.5;
     } else {
-      scaleFactor = 8 * usageNorm * efficiencyIndex;
+      scaleFactor = isHalftimeContext ? 6 : 8;
     }
+    scaleFactor = scaleFactor * usageNorm * efficiencyIndex;
     scaleFactor = Math.max(4, Math.min(20, scaleFactor));
 
     let probability = 50 + difference * scaleFactor;

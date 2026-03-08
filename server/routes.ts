@@ -1183,6 +1183,11 @@ export async function registerRoutes(
                   continue; // No real line available — never fabricate one
                 }
 
+                // Skip plays where the line has already been cleared at halftime —
+                // these are not actionable (over already won, under already lost).
+                // Check BEFORE running calculateProbability to save compute cost.
+                if (halftimeStat >= liveLine) continue;
+
                 const result = await storage.calculateProbability({
                   playerId: dbPlayer.id,
                   opponentTeam: opponentAbbr,
@@ -1196,12 +1201,11 @@ export async function registerRoutes(
                   gameClock: "12:00",
                 });
 
+                // Minimum edge threshold of 10 (was 5). The tighter filter eliminates
+                // marginal 55-65% signals that were padding the 70-79% display bucket
+                // without genuine statistical edge after the regression corrections above.
                 const edge = Math.abs(result.probability - 50);
-                if (edge < 5) continue;
-
-                // Skip plays where the line has already been cleared at halftime —
-                // these are not actionable (over already won, under already lost)
-                if (halftimeStat >= liveLine) continue;
+                if (edge < 10) continue;
 
                 const cacheKey2 = `${playerName}|${statType}`;
                 const oddsEntry2 = oddsPlayerCache.get(cacheKey2);
