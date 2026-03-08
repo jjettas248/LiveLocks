@@ -205,6 +205,10 @@ export class DatabaseStorage implements IStorage {
     const periodsFullyRemaining = Math.max(0, 4 - currentPeriod);
     const gameMinutesRemaining = periodsFullyRemaining * 12 + (currentPeriod >= 1 && currentPeriod <= 4 ? clockMins : 0);
 
+    // halftime context: ≥22 min remaining means we are at or before halftime.
+    // Used by pace cap, shooting modifier weights, scale factors, and rotation check.
+    const isHalftimeContext = gameMinutesRemaining >= 22;
+
     // Player's expected remaining minutes = fraction of game left × season avg
     // But subtract any "excess" minutes already played vs expectation
     const gameFraction = gameMinutesRemaining / 48;
@@ -353,7 +357,6 @@ export class DatabaseStorage implements IStorage {
 
     // At halftime the FGA sample is small (~8-12 attempts). Cap live weights so a hot
     // or cold first half can't spike the modifier to its maximum before regression.
-    const isHalftimeContext = gameMinutesRemaining >= 22;
     const maxFgWeight  = isHalftimeContext ? 0.25 : 0.50;
     const maxFg3Weight = isHalftimeContext ? 0.25 : 0.55;
 
