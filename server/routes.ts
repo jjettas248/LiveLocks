@@ -1606,7 +1606,10 @@ async function syncStatsFromNBA(): Promise<{ matched: number; unmatched: number 
       const existing = playerMap.get(o.PLAYER_ID) ?? {};
       playerMap.set(o.PLAYER_ID, {
         ...existing,
-        usageRate: o.USG_PCT != null ? (o.USG_PCT / 100).toString() : existing.usageRate,
+        // NBA.com Advanced endpoint returns USG_PCT as a decimal (e.g. 0.289 = 28.9%).
+        // Do NOT divide by 100 — NBaStuffer gets a percentage string and divides, ESPN
+        // computes from raw box score. Only this source needs the value used directly.
+        usageRate: o.USG_PCT != null ? o.USG_PCT.toString() : existing.usageRate,
         tsPct: o.TS_PCT?.toString(),
         offRating: o.OFF_RATING?.toString(),
       });
@@ -1838,11 +1841,92 @@ async function syncStatsFromESPN(): Promise<{ matched: number }> {
   }
 }
 
+// ── Live DvP sync from NBA.com opponent stats ──────────────────────────────
+// Replaces static editorial seed values with real current-season data.
+// Source: leaguedashteamstats?MeasureType=Opponent — OPP_PTS per team.
+// NBA.com returns TEAM_NAME (full name) not TEAM_ABBREVIATION for this endpoint.
+// Multiplier: team's OPP_PTS relative to league average → defRating.
+// Lower OPP_PTS = better defense = defRating < 1.0. Cap: 0.86 – 1.14.
+async function syncDvP(): Promise<void> {
+  console.log("[dvp-sync] Starting DvP sync from NBA.com opponent stats…");
+
+  // Map NBA.com full team names → our DB abbreviations
+  const NBA_NAME_TO_ABBR: Record<string, string> = {
+    "Atlanta Hawks": "ATL", "Boston Celtics": "BOS", "Brooklyn Nets": "BKN",
+    "Charlotte Hornets": "CHA", "Chicago Bulls": "CHI", "Cleveland Cavaliers": "CLE",
+    "Dallas Mavericks": "DAL", "Denver Nuggets": "DEN", "Detroit Pistons": "DET",
+    "Golden State Warriors": "GSW", "Houston Rockets": "HOU", "Indiana Pacers": "IND",
+    "LA Clippers": "LAC", "Los Angeles Clippers": "LAC", "Los Angeles Lakers": "LAL",
+    "Memphis Grizzlies": "MEM", "Miami Heat": "MIA", "Milwaukee Bucks": "MIL",
+    "Minnesota Timberwolves": "MIN", "New Orleans Pelicans": "NOP", "New York Knicks": "NYK",
+    "Oklahoma City Thunder": "OKC", "Orlando Magic": "ORL", "Philadelphia 76ers": "PHI",
+    "Phoenix Suns": "PHX", "Portland Trail Blazers": "POR", "Sacramento Kings": "SAC",
+    "San Antonio Spurs": "SAS", "Toronto Raptors": "TOR", "Utah Jazz": "UTA",
+    "Washington Wizards": "WAS",
+  };
+
+  try {
+    const url = `https://stats.nba.com/stats/leaguedashteamstats?MeasureType=Opponent&PerMode=PerGame&${NBA_PARAMS_BASE}`;
+    const res = await fetch(url, { headers: NBA_HEADERS, signal: AbortSignal.timeout(20000) });
+    if (!res.ok) throw new Error(`NBA.com opponent stats returned ${res.status}`);
+    const data = await res.json() as any;
+
+    const headers: string[] = data.resultSets?.[0]?.headers ?? [];
+    const rows: any[][] = data.resultSets?.[0]?.rowSet ?? [];
+    if (rows.length === 0) throw new Error("Empty result set from NBA.com opponent stats");
+
+    // NBA.com uses TEAM_NAME (full name) for this endpoint, not TEAM_ABBREVIATION
+    const iTeam = headers.indexOf("TEAM_NAME");
+    const iPts  = headers.indexOf("OPP_PTS");
+    if (iTeam < 0) throw new Error(`TEAM_NAME column not found. Available: ${headers.slice(0,5).join(',')}`);
+    if (iPts < 0)  throw new Error(`OPP_PTS column not found. Available: ${headers.slice(0,10).join(',')}`);
+
+    // Compute league average OPP_PTS across all teams
+    const allPts = rows.map(r => Number(r[iPts])).filter(n => n > 0);
+    const leagueAvg = allPts.reduce((a, b) => a + b, 0) / allPts.length;
+    console.log(`[dvp-sync] League avg OPP_PTS/g: ${leagueAvg.toFixed(1)} across ${allPts.length} teams`);
+
+    const positions = ["PG", "SG", "SF", "PF", "C"];
+    let updated = 0;
+    let skipped = 0;
+
+    for (const row of rows) {
+      const teamFullName = String(row[iTeam] ?? "");
+      const teamAbbr = NBA_NAME_TO_ABBR[teamFullName];
+      if (!teamAbbr) { skipped++; continue; }
+
+      const oppPts = Number(row[iPts]);
+      if (oppPts <= 0) continue;
+
+      // Base multiplier: how much does this team allow vs league avg
+      // Teams allowing more points → defRating > 1.0 (opponents score more)
+      // Teams allowing fewer points → defRating < 1.0 (opponents score less)
+      const rawRatio = oppPts / leagueAvg;
+      // Soft damp to prevent single extreme outliers from dominating
+      const baseDefRating = Math.max(0.86, Math.min(1.14, rawRatio));
+
+      for (const pos of positions) {
+        await storage.upsertTeamDefense(teamAbbr, pos, baseDefRating.toFixed(3));
+        updated++;
+      }
+    }
+
+    const teamsUpdated = updated / positions.length;
+    console.log(`[dvp-sync] Updated ${teamsUpdated} teams × ${positions.length} positions from live NBA.com data (${skipped} unmatched)`);
+    if (teamsUpdated < 25) {
+      console.warn(`[dvp-sync] Warning: only ${teamsUpdated} teams updated — expected 30`);
+    }
+  } catch (e) {
+    console.warn(`[dvp-sync] NBA.com sync failed — keeping existing DvP ratings: ${(e as any).message}`);
+  }
+}
+
 async function runFullStatSync(): Promise<void> {
   console.log("[stat-sync] Starting full stat sync chain…");
   await syncStatsFromNBA();
   await syncStatsFromNBAStuffer();
   await syncStatsFromESPN();
+  await syncDvP();
   console.log("[stat-sync] Full sync chain complete.");
 }
 

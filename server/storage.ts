@@ -79,6 +79,7 @@ export interface IStorage {
   getTeams(): Promise<string[]>;
   getTeamDefense(teamName: string, position: string): Promise<TeamDefense | undefined>;
   createTeamDefense(defense: InsertTeamDefense): Promise<TeamDefense>;
+  upsertTeamDefense(teamName: string, position: string, defRating: string): Promise<void>;
   calculateProbability(req: CalculateProbabilityRequest): Promise<CalculateProbabilityResponse>;
   getUserById(id: number): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
@@ -159,6 +160,18 @@ export class DatabaseStorage implements IStorage {
     return newDefense;
   }
 
+  async upsertTeamDefense(teamName: string, position: string, defRating: string): Promise<void> {
+    const existing = await this.getTeamDefense(teamName, position);
+    if (existing) {
+      await db
+        .update(teamDefense)
+        .set({ defRating })
+        .where(and(eq(teamDefense.teamName, teamName), eq(teamDefense.position, position)));
+    } else {
+      await db.insert(teamDefense).values({ teamName, position, defRating });
+    }
+  }
+
   async calculateProbability(req: CalculateProbabilityRequest): Promise<CalculateProbabilityResponse> {
     const player = await this.getPlayer(req.playerId);
     if (!player) throw new Error("Player not found");
@@ -201,6 +214,25 @@ export class DatabaseStorage implements IStorage {
     // ─── Foul trouble minute reduction ─────────────────────────────────────
     if (req.halftimeFouls >= 4) remainingMinutes *= 0.45;
     else if (req.halftimeFouls >= 3) remainingMinutes *= 0.70;
+
+    // ─── Situational rotation check (halftime context only) ─────────────────
+    // Compare actual H1 minutes played to what was expected. If a player
+    // played <75% of their expected H1 minutes they are in a reduced rotation
+    // tonight (foul trouble already handled above, so this catches: coach's
+    // doghouse, injury management, matchup-based sits, tanking lineups).
+    // In that case cap projected H2 minutes at 110% of their actual H1 minutes
+    // rather than the full season-average projection.
+    if (isHalftimeContext && minutesPlayed >= 3) {
+      const expectedH1Minutes = avgMinutes * (12 / 48); // season avg prorated to 1 half
+      const rotationRatio = minutesPlayed / Math.max(expectedH1Minutes, 1);
+      if (rotationRatio < 0.75) {
+        const cappedH2 = minutesPlayed * 1.1;
+        if (cappedH2 < remainingMinutes) {
+          console.log(`[calc] ${player.name}: rotation cap applied — H1 played ${minutesPlayed.toFixed(1)} min vs expected ${expectedH1Minutes.toFixed(1)} (${(rotationRatio * 100).toFixed(0)}%) → capping H2 at ${cappedH2.toFixed(1)} min`);
+          remainingMinutes = cappedH2;
+        }
+      }
+    }
 
     // ─── Team pace ─────────────────────────────────────────────────────────
     const playerTeamPace = TEAM_PACE[player.team] ?? LEAGUE_AVG_PACE;
@@ -295,13 +327,13 @@ export class DatabaseStorage implements IStorage {
     }
 
     // ─── Efficiency index ───────────────────────────────────────────────────
-    // Prefer NBA.com offRating (more reliable) over computed pts/usage ratio.
-    // NBA avg offRating ≈ 110; normalize so 110 → 1.0.
+    // NBA.com offRating (from Advanced sync) — normalize so 110 (avg) → 1.0.
+    // If offRating is unavailable, default to 1.0 (neutral).
+    // The previous fallback formula (ptsPerMin / usageRate) always clamped to
+    // 1.30 for any decent scorer, artificially inflating every signal.
     const efficiencyIndex = player.offRating
       ? Math.max(0.70, Math.min(1.30, Number(player.offRating) / 110))
-      : (ptsPerMin && usageRate > 0)
-        ? Math.max(0.70, Math.min(1.30, (ptsPerMin / usageRate) / 1.0))
-        : 1.0;
+      : 1.0;
 
     // ─── Live shooting efficiency modifier ──────────────────────────────────
     // Blends current-game shooting % against season baseline to adjust the
