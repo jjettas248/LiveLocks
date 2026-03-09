@@ -209,10 +209,17 @@ export class DatabaseStorage implements IStorage {
     // Used by pace cap, shooting modifier weights, scale factors, and rotation check.
     const isHalftimeContext = gameMinutesRemaining >= 22;
 
-    // Player's expected remaining minutes = fraction of game left × season avg
-    // But subtract any "excess" minutes already played vs expectation
-    const gameFraction = gameMinutesRemaining / 48;
-    const expectedMinutesFromHere = avgMinutes * gameFraction;
+    // ─── H2 baseline flag (declared early — needed for minute projection below) ─
+    const inSecondHalf = currentPeriod >= 3;
+    const h2Min = player.h2avgMinutes ? Number(player.h2avgMinutes) : null;
+    const useH2 = inSecondHalf && h2Min !== null && h2Min > 3;
+
+    // Player's expected remaining minutes = fraction of game left × season avg (or H2 avg)
+    // When H2 baselines are active use h2avgMinutes as the base (not full-game / 2)
+    // so that the per-minute rate and the time projection share the same denominator.
+    const minuteBase = useH2 ? h2Min! : avgMinutes;
+    const minuteGameFraction = useH2 ? gameMinutesRemaining / 24 : gameMinutesRemaining / 48;
+    const expectedMinutesFromHere = minuteBase * minuteGameFraction;
     let remainingMinutes = Math.max(0, expectedMinutesFromHere);
 
     // ─── Foul trouble minute reduction ─────────────────────────────────────
@@ -290,11 +297,7 @@ export class DatabaseStorage implements IStorage {
     remainingMinutes *= spreadMinuteReduction;
 
     // ─── H2 baseline selection ──────────────────────────────────────────────
-    // In Q3/Q4 use the actual season second-half averages if available.
-    // These are more accurate than extrapolating full-game rates to the H2.
-    const inSecondHalf = currentPeriod >= 3;
-    const h2Min = player.h2avgMinutes ? Number(player.h2avgMinutes) : null;
-    const useH2 = inSecondHalf && h2Min !== null && h2Min > 3;
+    // inSecondHalf / h2Min / useH2 are declared earlier (needed for minute projection).
     const baselineSource: "h2" | "fullGame" = useH2 ? "h2" : "fullGame";
 
     // Per-minute rates from the appropriate baseline
@@ -411,9 +414,10 @@ export class DatabaseStorage implements IStorage {
     }
 
     // Halftime regression: observed rate in a single half is high-variance.
-    // Pull 15% more weight toward season baseline when the full 2H is still ahead.
+    // Pull 8% more weight toward season baseline when the full 2H is still ahead.
+    // 0.92 (vs the former 0.85) avoids collapsing genuine H1 signals toward 50%.
     if (isHalftimeContext && seasonPerMin) {
-      const regressionFactor = 0.85;
+      const regressionFactor = 0.92;
       observedW = observedW * regressionFactor;
       seasonW   = 1 - observedW;
     }
@@ -433,15 +437,15 @@ export class DatabaseStorage implements IStorage {
     // Live context uses the original (higher) factors.
     let scaleFactor: number;
     if (req.statType === "steals" || req.statType === "blocks" || req.statType === "stl_blk") {
-      scaleFactor = isHalftimeContext ? 10 : 14;
+      scaleFactor = isHalftimeContext ? 12 : 14;
     } else if (req.statType === "threes") {
-      scaleFactor = isHalftimeContext ? 9 : 12;
+      scaleFactor = isHalftimeContext ? 10.5 : 12;
     } else if (req.statType === "rebounds" || req.statType === "assists") {
-      scaleFactor = isHalftimeContext ? 7.5 : 10;
+      scaleFactor = isHalftimeContext ? 8.5 : 10;
     } else if (req.statType.includes("_")) {
-      scaleFactor = isHalftimeContext ? 4.0 : 5.5;
+      scaleFactor = isHalftimeContext ? 4.8 : 5.5;
     } else {
-      scaleFactor = isHalftimeContext ? 6 : 8;
+      scaleFactor = isHalftimeContext ? 7.5 : 8;
     }
     scaleFactor = scaleFactor * usageNorm * efficiencyIndex;
     scaleFactor = Math.max(4, Math.min(20, scaleFactor));

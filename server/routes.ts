@@ -730,12 +730,18 @@ export async function registerRoutes(
       }
 
       const allDbPlayers = await storage.getPlayers();
-      const { getPlayerOdds, resolveOddsEventId, getSGOPlayerLine } = await import("./oddsService");
+      const { getPlayerOdds, resolveOddsEventId, getSGOPlayerLine, getGameLines } = await import("./oddsService");
 
       let oddsEventId: string | null = null;
       try {
         oddsEventId = await resolveOddsEventId(homeTeamAbbr, awayTeamAbbr);
       } catch { /* continue without odds event ID */ }
+
+      // Fetch game-level spread/total once per game for pace & garbage-time modifiers
+      let gameLines: { spread: number | null; total: number | null; favorite: string | null } | null = null;
+      if (oddsEventId && process.env.ODDS_API_KEY) {
+        try { gameLines = await getGameLines(oddsEventId); } catch { /* optional */ }
+      }
 
       const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[] } | null>();
 
@@ -756,6 +762,11 @@ export async function registerRoutes(
         if (!val) return 0;
         if (val.includes("-")) return parseInt(val.split("-")[0], 10) || 0;
         return parseInt(val, 10) || 0;
+      };
+      const parseAttempted = (val: string) => {
+        if (!val) return 0;
+        if (val.includes("-")) { const p = val.split("-"); return parseInt(p[1] ?? p[0], 10) || 0; }
+        return 0;
       };
 
       const allSignals: any[] = [];
@@ -790,7 +801,7 @@ export async function registerRoutes(
             dbPlayer = allDbPlayers.find(p => {
               const dbWords = p.name.toLowerCase().replace(/[^a-z ]/g, "").trim().split(/\s+/);
               return dbWords[0] === espnFirst && dbWords[dbWords.length - 1] === espnLast;
-            }) ?? null;
+            });
           }
           if (!dbPlayer) continue;
 
@@ -803,6 +814,14 @@ export async function registerRoutes(
             threes:   parseMade(statMap["3pt"] ?? statMap["fg3m"] ?? "0"),
           };
           const fouls = parseStat(statMap["pf"]);
+
+          // Live shooting splits for hot/cold efficiency modifier
+          const fgRaw  = statMap["fg"]  ?? "";
+          const ftRaw  = statMap["ft"]  ?? "";
+          const fg3Raw = statMap["3pt"] ?? statMap["fg3m"] ?? "";
+          const liveFgm  = parseMade(fgRaw);  const liveFga  = parseAttempted(fgRaw);
+          const liveFtm  = parseMade(ftRaw);  const liveFta  = parseAttempted(ftRaw);
+          const liveFg3m = parseMade(fg3Raw); const liveFg3a = parseAttempted(fg3Raw);
 
           for (const { statType, components } of LIVE_STAT_CONFIGS) {
             try {
@@ -853,6 +872,14 @@ export async function registerRoutes(
                 halftimeScore: scoreStr,
                 currentPeriod: period,
                 gameClock: displayClock,
+                gameSpread: gameLines?.spread ?? undefined,
+                gameTotalLine: gameLines?.total ?? undefined,
+                liveFgm,
+                liveFga,
+                liveFtm,
+                liveFta,
+                liveFg3m,
+                liveFg3a,
               });
 
               const edge = Math.abs(result.probability - 50);
@@ -1018,6 +1045,15 @@ export async function registerRoutes(
           oddsEventId = await resolveId(game.homeTeamAbbr, game.awayTeamAbbr);
         } catch { /* continue without odds */ }
 
+        // Fetch game-level spread/total for pace & garbage-time modifiers
+        let htGameLines: { spread: number | null; total: number | null; favorite: string | null } | null = null;
+        if (oddsEventId && process.env.ODDS_API_KEY) {
+          try {
+            const { getGameLines: fetchGameLines } = await import("./oddsService");
+            htGameLines = await fetchGameLines(oddsEventId);
+          } catch { /* optional */ }
+        }
+
         const bsRes = await fetch(
           `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${game.gameId}`,
           { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
@@ -1056,6 +1092,11 @@ export async function registerRoutes(
               if (val.includes("-")) return parseInt(val.split("-")[0], 10) || 0;
               return parseInt(val, 10) || 0;
             };
+            const parseAttempted = (val: string) => {
+              if (!val) return 0;
+              if (val.includes("-")) { const p = val.split("-"); return parseInt(p[1] ?? p[0], 10) || 0; }
+              return 0;
+            };
 
             const minStr: string = statMap["min"] || "0";
             const minParts = minStr.split(":");
@@ -1080,7 +1121,7 @@ export async function registerRoutes(
                 const dbFirst = dbWords[0] ?? "";
                 const dbLast = dbWords[dbWords.length - 1] ?? "";
                 return dbFirst === espnFirst && dbLast === espnLast;
-              }) ?? null;
+              });
             }
             if (!dbPlayer) {
               console.log(`[Halftime] Player not in DB: "${playerName}" (${teamAbbr})`);
@@ -1095,6 +1136,14 @@ export async function registerRoutes(
               blocks: parseStat(statMap["blk"]),
               threes: parseMade(statMap["3pt"] ?? statMap["fg3m"] ?? "0"),
             };
+
+            // H1 shooting splits for hot/cold efficiency modifier
+            const htFgRaw  = statMap["fg"]  ?? "";
+            const htFtRaw  = statMap["ft"]  ?? "";
+            const htFg3Raw = statMap["3pt"] ?? statMap["fg3m"] ?? "";
+            const htLiveFgm  = parseMade(htFgRaw);  const htLiveFga  = parseAttempted(htFgRaw);
+            const htLiveFtm  = parseMade(htFtRaw);  const htLiveFta  = parseAttempted(htFtRaw);
+            const htLiveFg3m = parseMade(htFg3Raw); const htLiveFg3a = parseAttempted(htFg3Raw);
 
             // Build season stat baselines from DB (fast) — fall back to ESPN live fetch only if null
             const dbSeasonStat: Record<string, number | null> = {
@@ -1213,6 +1262,14 @@ export async function registerRoutes(
                   halftimeScore: scoreStr,
                   currentPeriod: 3,
                   gameClock: "12:00",
+                  gameSpread: htGameLines?.spread ?? undefined,
+                  gameTotalLine: htGameLines?.total ?? undefined,
+                  liveFgm: htLiveFgm,
+                  liveFga: htLiveFga,
+                  liveFtm: htLiveFtm,
+                  liveFta: htLiveFta,
+                  liveFg3m: htLiveFg3m,
+                  liveFg3a: htLiveFg3a,
                 });
 
                 // Minimum edge threshold of 10 (was 5). The tighter filter eliminates
