@@ -2467,6 +2467,23 @@ export function registerPlaysRoutes(app: Express): void {
       return res.status(500).json({ error: "Cleanup failed" });
     }
   });
+
+  app.post("/api/plays/dedupe", requireAdmin, async (_req, res) => {
+    try {
+      const [playsResult, alertsResult] = await Promise.all([
+        storage.cleanDuplicatePlays(),
+        storage.cleanDuplicateAlerts(),
+      ]);
+      return res.json({
+        success: true,
+        plays: playsResult,
+        alerts: alertsResult,
+        message: `Removed ${playsResult.removed} duplicate plays and ${alertsResult.removed} duplicate alerts`,
+      });
+    } catch (e) {
+      return res.status(500).json({ error: "Dedupe failed", details: (e as any).message });
+    }
+  });
 }
 
 // ── Admin test-alert route ─────────────────────────────────────────────────────

@@ -118,7 +118,13 @@ export interface IStorage {
   getPlayStats(): Promise<PlayStats>;
   cleanupOldPlays(): Promise<number>;
   cleanDuplicatePlays(): Promise<{ removed: number; remaining: number }>;
+  cleanDuplicateAlerts(): Promise<{ removed: number; remaining: number }>;
 }
+
+// Module-level in-flight Set prevents concurrent race conditions in savePlayAlerts.
+// Two simultaneous requests can both pass the select-before-insert check and both insert,
+// creating a duplicate. This Set blocks the second attempt before it hits the DB.
+const _alertsInFlight = new Set<string>();
 
 export class DatabaseStorage implements IStorage {
   async getPlayers(): Promise<Player[]> {
@@ -437,15 +443,15 @@ export class DatabaseStorage implements IStorage {
     // Live context uses the original (higher) factors.
     let scaleFactor: number;
     if (req.statType === "steals" || req.statType === "blocks" || req.statType === "stl_blk") {
-      scaleFactor = isHalftimeContext ? 12 : 14;
+      scaleFactor = isHalftimeContext ? 10 : 14;
     } else if (req.statType === "threes") {
-      scaleFactor = isHalftimeContext ? 10.5 : 12;
+      scaleFactor = isHalftimeContext ? 9 : 12;
     } else if (req.statType === "rebounds" || req.statType === "assists") {
-      scaleFactor = isHalftimeContext ? 8.5 : 10;
+      scaleFactor = isHalftimeContext ? 7.5 : 10;
     } else if (req.statType.includes("_")) {
-      scaleFactor = isHalftimeContext ? 4.8 : 5.5;
+      scaleFactor = isHalftimeContext ? 4.0 : 5.5;
     } else {
-      scaleFactor = isHalftimeContext ? 7.5 : 8;
+      scaleFactor = isHalftimeContext ? 6 : 8;
     }
     scaleFactor = scaleFactor * usageNorm * efficiencyIndex;
     scaleFactor = Math.max(4, Math.min(20, scaleFactor));
@@ -579,19 +585,21 @@ export class DatabaseStorage implements IStorage {
   }
 
   async savePlayAlerts(plays: any[]): Promise<void> {
-    // PLAYS AUDIT
-    // Play storage location: halftime_play_alerts DB table + play_results join table
-    // Deduplication key: gameId + playerId + statType + betDirection + gameDate (select-before-insert guard)
-    // Settlement function: autoResolveAlerts in server/analyticsResolver.ts
-    // Stats fetch for settlement: ESPN NBA summary?event={gameId}
-    // Confirmed cause of duplication: no explicit unique constraint on table; onConflictDoNothing targeted PK only
     const today = new Date().toISOString().slice(0, 10);
     for (const play of plays) {
       const prob = Number(play.probability);
       const directionalConf = play.betDirection === "over" ? prob : 100 - prob;
       if (directionalConf < 60) continue;
+
+      // Composite key for dedup — matches the DB-level check below
+      const dedupeKey = `${play.gameId ?? ""}|${play.playerId ?? 0}|${play.statType}|${play.betDirection}|${today}`;
+
+      // Step 1: In-flight lock prevents concurrent requests from both passing the DB check
+      if (_alertsInFlight.has(dedupeKey)) continue;
+      _alertsInFlight.add(dedupeKey);
+
       try {
-        // getPlayKey: check for existing record before inserting to prevent 5x duplication
+        // Step 2: DB-level check (handles cross-process or post-restart duplicates)
         const existing = await db
           .select({ id: halftimePlayAlerts.id })
           .from(halftimePlayAlerts)
@@ -605,7 +613,8 @@ export class DatabaseStorage implements IStorage {
             )
           )
           .limit(1);
-        if (existing.length > 0) continue; // already recorded — skip
+        if (existing.length > 0) continue;
+
         await db.insert(halftimePlayAlerts).values({
           gameId: play.gameId,
           gameDate: today,
@@ -620,9 +629,42 @@ export class DatabaseStorage implements IStorage {
           betDirection: play.betDirection,
         });
       } catch {
-        // skip individual insert errors silently
+        // skip individual insert errors silently (handles any constraint violations)
+      } finally {
+        // Keep key in Set for the lifetime of this server process (today's guard)
+        // On next day the key changes, naturally resetting the guard
       }
     }
+  }
+
+  async cleanDuplicateAlerts(): Promise<{ removed: number; remaining: number }> {
+    const rows = await db
+      .select()
+      .from(halftimePlayAlerts)
+      .orderBy(desc(halftimePlayAlerts.createdAt));
+
+    const seen = new Map<string, number>(); // key → first id seen
+    const toDelete: number[] = [];
+
+    for (const row of rows) {
+      const key = `${row.gameId}|${row.playerId}|${row.statType}|${row.betDirection}|${row.gameDate}`;
+      if (seen.has(key)) {
+        toDelete.push(row.id);
+      } else {
+        seen.set(key, row.id);
+        // Populate in-flight Set so new inserts are blocked going forward
+        _alertsInFlight.add(key);
+      }
+    }
+
+    if (toDelete.length > 0) {
+      console.log("[CLEAN] Deleting", toDelete.length, "duplicate halftime alerts");
+      // Remove orphaned play_results first, then alerts
+      await db.delete(playResults).where(inArray(playResults.alertId, toDelete));
+      await db.delete(halftimePlayAlerts).where(inArray(halftimePlayAlerts.id, toDelete));
+    }
+
+    return { removed: toDelete.length, remaining: rows.length - toDelete.length };
   }
 
   async getUnresolvedAlerts(): Promise<HalftimePlayAlert[]> {

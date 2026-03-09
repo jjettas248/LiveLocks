@@ -99,6 +99,8 @@ export function AnalyticsTab() {
   const queryClient = useQueryClient();
   const [isSettling, setIsSettling] = useState(false);
   const [lastSynced, setLastSynced] = useState<string | null>(null);
+  const [isDeduping, setIsDeduping] = useState(false);
+  const [dedupeMsg, setDedupeMsg] = useState<string | null>(null);
 
   const { data: summary, isLoading: summaryLoading } = useQuery<AnalyticsSummary>({
     queryKey: ["/api/analytics/summary"],
@@ -116,6 +118,24 @@ export function AnalyticsTab() {
   });
 
   const alerts = alertsData?.alerts ?? [];
+
+  async function handleDedupe() {
+    setIsDeduping(true);
+    setDedupeMsg(null);
+    try {
+      const res = await apiRequest("POST", "/api/plays/dedupe");
+      const data = await res.json() as { plays: { removed: number }; alerts: { removed: number } };
+      await queryClient.invalidateQueries({ queryKey: ["/api/analytics/summary"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/analytics/alerts"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/plays"] });
+      setDedupeMsg(`Removed ${data.alerts.removed} dup alerts + ${data.plays.removed} dup plays`);
+    } catch (err) {
+      setDedupeMsg("Dedupe failed");
+      console.warn("[dedupe] Failed:", err);
+    } finally {
+      setIsDeduping(false);
+    }
+  }
 
   async function handleManualSettle() {
     setIsSettling(true);
@@ -147,18 +167,35 @@ export function AnalyticsTab() {
           </p>
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
-          <button
-            data-testid="button-settle-now"
-            onClick={handleManualSettle}
-            disabled={isSettling}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
-            style={{ background: "#181818", border: "1px solid #3f3f46", color: "#a1a1aa" }}
-            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "#71717a"; (e.currentTarget as HTMLElement).style.color = "#ffffff"; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "#3f3f46"; (e.currentTarget as HTMLElement).style.color = "#a1a1aa"; }}
-          >
-            <RefreshCw className={`w-3 h-3 ${isSettling ? "animate-spin" : ""}`} />
-            {isSettling ? "Settling..." : "↻ Settle Now"}
-          </button>
+          <div className="flex gap-2">
+            <button
+              data-testid="button-dedupe"
+              onClick={handleDedupe}
+              disabled={isDeduping}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
+              style={{ background: "#181818", border: "1px solid #3f3f46", color: "#a1a1aa" }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "#71717a"; (e.currentTarget as HTMLElement).style.color = "#ffffff"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "#3f3f46"; (e.currentTarget as HTMLElement).style.color = "#a1a1aa"; }}
+            >
+              <RefreshCw className={`w-3 h-3 ${isDeduping ? "animate-spin" : ""}`} />
+              {isDeduping ? "Deduping..." : "✕ Dedupe"}
+            </button>
+            <button
+              data-testid="button-settle-now"
+              onClick={handleManualSettle}
+              disabled={isSettling}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
+              style={{ background: "#181818", border: "1px solid #3f3f46", color: "#a1a1aa" }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "#71717a"; (e.currentTarget as HTMLElement).style.color = "#ffffff"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "#3f3f46"; (e.currentTarget as HTMLElement).style.color = "#a1a1aa"; }}
+            >
+              <RefreshCw className={`w-3 h-3 ${isSettling ? "animate-spin" : ""}`} />
+              {isSettling ? "Settling..." : "↻ Settle Now"}
+            </button>
+          </div>
+          {dedupeMsg && (
+            <span className="text-[10px]" style={{ color: "#22c55e" }}>{dedupeMsg}</span>
+          )}
           {lastSynced && (
             <span className="text-[10px]" style={{ color: "#52525b" }}>Last synced: {lastSynced}</span>
           )}

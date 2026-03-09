@@ -147,6 +147,10 @@ app.use((req, res, next) => {
   registerPlaysRoutes(app);
   registerTestAlertRoute(app);
 
+  // Remove duplicate plays and alerts once on startup (fire-and-forget)
+  storage.cleanDuplicatePlays().then(r => { if (r.removed > 0) console.log(`[startup] Cleaned ${r.removed} duplicate persisted plays`); }).catch(console.warn);
+  storage.cleanDuplicateAlerts().then(r => { if (r.removed > 0) console.log(`[startup] Cleaned ${r.removed} duplicate halftime alerts`); }).catch(console.warn);
+
   // Auto-resolve plays in background every 60 minutes; run once after 5 min delay on startup
   setTimeout(() => autoResolveAlerts(storage).catch(console.warn), 5 * 60 * 1000);
   setInterval(() => autoResolveAlerts(storage).catch(console.warn), 60 * 60 * 1000);
