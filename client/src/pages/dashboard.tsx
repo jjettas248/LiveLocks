@@ -2362,6 +2362,23 @@ export default function Dashboard() {
                     </div>
                   );
                 })()}
+
+                {user && !user.isAdmin && !user.subscriptionTier && (user.playsUsed ?? 0) >= 10 && (user.playsUsed ?? 0) < 15 && (
+                  <div data-testid="near-limit-reminder" className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-2.5 flex items-center gap-2">
+                    <span className="text-orange-400 text-sm">⚠️</span>
+                    <span className="text-xs text-orange-300">
+                      You have {15 - (user.playsUsed ?? 0)} free calculation{15 - (user.playsUsed ?? 0) === 1 ? "" : "s"} remaining.
+                    </span>
+                    <button
+                      type="button"
+                      data-testid="button-upgrade-near-limit"
+                      onClick={() => { setUpgradeModalState({ playsUsed: user.playsUsed ?? 0, limit: 15 }); setShowUpgradeModal(true); }}
+                      className="ml-auto text-[10px] font-bold text-orange-400 hover:text-orange-300 underline underline-offset-2 transition-colors whitespace-nowrap"
+                    >
+                      Go Pro →
+                    </button>
+                  </div>
+                )}
               </form>
             </div>
           </div>
@@ -2881,8 +2898,32 @@ export default function Dashboard() {
                 const totalPages = Math.max(1, Math.ceil(visibleHalftimeGroups.length / GAMES_PER_PAGE));
                 const pageStart = (currentHalftimePage - 1) * GAMES_PER_PAGE;
                 const pageGroups = visibleHalftimeGroups.slice(pageStart, pageStart + GAMES_PER_PAGE);
+
+                const totalSlateEdges = visibleHalftimeGroups.reduce((sum, g) => sum + filterByBook(g.plays.filter(filterPlay), nbaBookFilter).length, 0);
+                const totalVisibleEdges = visibleHalftimeGroups.reduce((sum, g) => {
+                  const filtered = filterByBook(g.plays.filter(filterPlay), nbaBookFilter);
+                  return sum + Math.min(filtered.length, isFreeUser ? visibleEdgeLimit : filtered.length);
+                }, 0);
+                const totalLockedEdges = isFreeUser ? totalSlateEdges - totalVisibleEdges : 0;
+
                 return (
                   <div className={isSmallScreen ? "pb-20" : "pb-0"}>
+                    {isFreeUser && totalSlateEdges > 0 && (
+                      <div data-testid="slate-edge-counter" className="rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 mb-5 flex items-center justify-between flex-wrap gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-primary text-lg">📊</span>
+                          <span className="text-sm font-semibold text-foreground">
+                            {totalSlateEdges} prop edge{totalSlateEdges !== 1 ? "s" : ""} detected tonight
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs">
+                          <span className="text-green-400 font-medium">{totalVisibleEdges} showing</span>
+                          {totalLockedEdges > 0 && (
+                            <span className="text-amber-400 font-medium">🔒 {totalLockedEdges} locked</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
                     <div className="space-y-8">
                       {pageGroups.map((group) => {
                         const isExiting = !!exitingGames[group.gameId];
@@ -3011,8 +3052,14 @@ export default function Dashboard() {
                               })()}
                               {gameUnlocked && groupFiltered.length > 0 && (() => {
                                 const lockedEdges = Math.max(0, groupFiltered.length - visibleEdgeLimit);
+                                const highestEdgeIdx = groupFiltered.slice(0, isFreeUser ? visibleEdgeLimit : groupFiltered.length).reduce((bestIdx: number, play: any, idx: number, arr: any[]) => play.edge > arr[bestIdx].edge ? idx : bestIdx, 0);
                                 return (
                                 <>
+                                {isFreeUser && (
+                                  <p data-testid="model-credibility-line" className="text-xs text-muted-foreground/70 italic mb-2">
+                                    LiveLocks typically detects 20+ prop edges per NBA game before sportsbooks adjust.
+                                  </p>
+                                )}
                                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                                   {groupFiltered.map((play: any, idx: number) => {
                                     const isLocked = isFreeUser && idx >= visibleEdgeLimit;
@@ -3020,18 +3067,21 @@ export default function Dashboard() {
                                     const isInjured = !isLocked && injuredPlayerNames.has(play.playerName.toLowerCase());
                                     const statLabel = STAT_TYPES.find(s => s.value === play.statType)?.label ?? play.statType;
                                     const hasLiveLine = play.lineSource === "odds_api";
+                                    const isHighestEdge = !isLocked && idx === highestEdgeIdx && groupFiltered.slice(0, isFreeUser ? visibleEdgeLimit : groupFiltered.length).length > 1;
                                     return (
                                       <div
                                         key={idx}
                                         data-testid={`halftime-play-${idx}`}
                                         className={`rounded-xl border p-4 space-y-2 relative cursor-pointer transition-all ${
                                           isLocked
-                                            ? "border-border/40 bg-secondary/20"
-                                            : isInjured
-                                              ? "border-red-500/40 bg-red-500/5 hover:border-red-500/60"
-                                              : "border-border/60 bg-secondary/30 hover:border-primary/40 hover:bg-secondary/50"
+                                            ? "border-amber-500/20 bg-secondary/20 hover:border-amber-500/40"
+                                            : isHighestEdge
+                                              ? "border-amber-500/50 bg-amber-500/5 hover:border-amber-500/70 ring-1 ring-amber-500/20"
+                                              : isInjured
+                                                ? "border-red-500/40 bg-red-500/5 hover:border-red-500/60"
+                                                : "border-border/60 bg-secondary/30 hover:border-primary/40 hover:bg-secondary/50"
                                         }`}
-                                        style={isLocked ? { opacity: 0.6 } : undefined}
+                                        style={isLocked ? { opacity: 0.75 } : undefined}
                                         onClick={() => {
                                           if (isLocked) {
                                             setUpgradeModalState({ playsUsed, limit: 15 });
@@ -3041,10 +3091,22 @@ export default function Dashboard() {
                                           }
                                         }}
                                       >
+                                        {isHighestEdge && (
+                                          <div data-testid={`badge-highest-edge-${idx}`} className="absolute -top-2.5 left-3 text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: "rgba(245,158,11,0.2)", border: "1px solid rgba(245,158,11,0.4)", color: "#f59e0b" }}>
+                                            🔥 Highest Edge Detected
+                                          </div>
+                                        )}
+                                        {isLocked && (
+                                          <div className="absolute top-3 right-3">
+                                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b" }}>
+                                              Premium Edge
+                                            </span>
+                                          </div>
+                                        )}
                                         <div className="absolute top-3 left-3 w-5 h-5 flex items-center justify-center" style={{ background: isLocked ? "#52525b" : "#1d4ed8", borderRadius: 8 }}>
                                           <span className="text-[9px] font-bold text-white leading-none">#{idx + 1}</span>
                                         </div>
-                                        <div className="flex items-start justify-between gap-2 pl-7">
+                                        <div className={`flex items-start justify-between gap-2 pl-7 ${isLocked ? "pr-24" : ""}`}>
                                           <div>
                                             <div className="font-semibold text-sm text-foreground">{play.playerName}</div>
                                             <div className="text-xs text-muted-foreground">{play.team} vs {play.opponent}</div>
@@ -3115,9 +3177,14 @@ export default function Dashboard() {
                                             {hasLiveLine ? "Live Line" : "Season Avg"}
                                           </span>
                                           {isLocked ? (
-                                            <span className="text-xs text-muted-foreground/40 flex items-center gap-1">
-                                              H1: {play.halftimeStat} · Proj: <Lock className="w-3 h-3" />
-                                            </span>
+                                            <>
+                                              <span className="text-xs" style={{ color: "#71717a" }}>
+                                                Proj: {play.expectedTotal?.toFixed(1)}
+                                              </span>
+                                              <span className="text-xs text-muted-foreground/40 font-mono">
+                                                🔒 Probability & Edge locked
+                                              </span>
+                                            </>
                                           ) : (
                                           <span className="text-xs" style={{ color: play.halftimeStat > 0 ? "#71717a" : "#52525b" }}>
                                             H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}
@@ -3126,9 +3193,14 @@ export default function Dashboard() {
                                           {idx === 0 && !isLocked && <span data-testid="hint-tap-verify" className="text-[10px] text-muted-foreground/50 italic">Tap to cross-check in calculator →</span>}
                                         </div>
                                         {isLocked ? (
-                                          <div data-testid={`text-upgrade-label-${idx}`} className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-semibold text-amber-400/80">
-                                            <Lock className="w-3 h-3" /> Upgrade to unlock
-                                          </div>
+                                          <>
+                                            <div className="text-[10px] text-amber-500/80 flex items-center gap-1 pt-1 border-t border-border/30">
+                                              🔒 Premium Edge — Upgrade to unlock projection & probability
+                                            </div>
+                                            <div data-testid={`text-upgrade-label-${idx}`} className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-semibold text-amber-400/80">
+                                              <Lock className="w-3 h-3" /> Upgrade to unlock
+                                            </div>
+                                          </>
                                         ) : (
                                         (() => {
                                           const inParlayIdx = parlayPicks.findIndex(p =>
@@ -3362,6 +3434,46 @@ export default function Dashboard() {
         )}
 
       </main>
+
+      {isFreeUser && activeTab === "calculator" && nbaSubTab === "halftime" && !isHalftimePlaysLoading && halftimePlaysData && halftimePlaysData.plays.length > 0 && (() => {
+        const stickyTotalLocked = visibleHalftimeGroups.reduce((sum, g) => {
+          const filtered = filterByBook(g.plays.filter(filterPlay), nbaBookFilter);
+          return sum + Math.max(0, filtered.length - visibleEdgeLimit);
+        }, 0);
+        if (stickyTotalLocked <= 0) return null;
+        return (
+          <div
+            data-testid="sticky-upgrade-banner"
+            style={{
+              position: "fixed",
+              bottom: 0,
+              left: 0,
+              right: 0,
+              zIndex: 45,
+              background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
+              borderTop: "1px solid rgba(245,158,11,0.3)",
+              padding: "12px 16px",
+              paddingBottom: "max(12px, env(safe-area-inset-bottom, 12px))",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 12,
+            }}
+          >
+            <span className="text-sm text-amber-300 font-medium">
+              🔒 {stickyTotalLocked} premium edge{stickyTotalLocked !== 1 ? "s" : ""} locked
+            </span>
+            <button
+              data-testid="button-unlock-all-edges"
+              onClick={() => { setUpgradeModalState({ playsUsed: user?.playsUsed ?? 0, limit: 15 }); setShowUpgradeModal(true); }}
+              className="px-4 py-2 rounded-lg text-sm font-bold transition-colors"
+              style={{ background: "#f59e0b", color: "#000", }}
+            >
+              Unlock All Edges
+            </button>
+          </div>
+        );
+      })()}
 
       {showUpgradeModal && (
         <UpgradeModal
