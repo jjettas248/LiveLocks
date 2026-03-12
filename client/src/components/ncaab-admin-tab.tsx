@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
-import { RefreshCw, AlertCircle, Clock, TrendingUp, CheckCircle, ChevronDown } from "lucide-react";
+import { RefreshCw, AlertCircle, Clock, TrendingUp, CheckCircle, ChevronDown, Info } from "lucide-react";
 import type { ParlayPickInput } from "@shared/schema";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
+import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
 interface BookLine {
   book: string;
@@ -435,6 +437,11 @@ function H2HSection({
             <p className="text-[10px] italic" style={{ color: "#52525b" }}>Limited history — 1 game found</p>
           </div>
         )}
+        {h2hData !== null && h2hData.length > 0 && h2hData.every(g => g.total === null) && (
+          <div className="px-3 py-2 text-center" style={{ borderTop: "1px solid #1a1a1a" }}>
+            <p className="text-[10px] italic" style={{ color: "#52525b" }}>O/U lines not available for this matchup.</p>
+          </div>
+        )}
         {h2hData !== null && h2hData.map((g, idx) => {
           const actualTotal = g.awayScore + g.homeScore;
           const ouResult = g.total !== null
@@ -485,15 +492,15 @@ function H2HSection({
               </div>
               {/* Right: dual badges stacked */}
               <div className="flex flex-col gap-1 items-end shrink-0">
-                <div className="text-right">
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded"
-                    style={{ background: ouBg, color: ouColor, border: `1px solid ${ouBorder}` }}>
-                    {ouResult}
-                  </span>
-                  {g.total !== null && (
+                {g.total !== null && (
+                  <div className="text-right">
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded"
+                      style={{ background: ouBg, color: ouColor, border: `1px solid ${ouBorder}` }}>
+                      {ouResult}
+                    </span>
                     <p className="text-[9px] mt-0.5" style={{ color: "#3f3f46" }}>O/U: {g.total}</p>
-                  )}
-                </div>
+                  </div>
+                )}
                 <div className="text-right">
                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded"
                     style={{ background: covBg, color: covColor, border: `1px solid ${covBorder}` }}>
@@ -539,9 +546,70 @@ const WINDOW_COLORS: Record<string, string> = {
   "NONE":        "text-muted-foreground bg-secondary border-border",
 };
 
+function getConfidenceTier(prob: number | null): { label: string; color: string; bg: string; border: string } | null {
+  if (prob == null) return null;
+  const confidence = Math.max(prob, 100 - prob);
+  if (confidence >= 85) return { label: "Elite", color: "#00d4aa", bg: "rgba(0,212,170,0.15)", border: "rgba(0,212,170,0.3)" };
+  if (confidence >= 70) return { label: "Strong", color: "#f59e0b", bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.3)" };
+  if (confidence >= 60) return { label: "Value", color: "#38bdf8", bg: "rgba(56,189,248,0.12)", border: "rgba(56,189,248,0.3)" };
+  return null;
+}
+
+const NCAAB_BOOK_OPTIONS = [
+  { key: "all", abbr: "All", label: "All Books" },
+  { key: "dk",  abbr: "DK",  label: "DraftKings" },
+  { key: "fd",  abbr: "FD",  label: "FanDuel" },
+  { key: "hr",  abbr: "HR",  label: "Hard Rock" },
+  { key: "pp",  abbr: "PP",  label: "PrizePicks" },
+  { key: "ud",  abbr: "UD",  label: "Underdog" },
+] as const;
+
+const ncaabBookKeyMap: Record<string, string[]> = {
+  dk:  ["draftkings", "draft_kings", "dk"],
+  fd:  ["fanduel", "fan_duel", "fd"],
+  hr:  ["hardrockbet", "hard_rock", "hardrock"],
+  pp:  ["prizepicks", "prize_picks"],
+  ud:  ["underdogfantasy", "underdog_fantasy", "underdog"],
+};
+
+function filterNcaabPlaysByBook(plays: NCAABPlay[], bookKey: string): NCAABPlay[] {
+  if (bookKey === "all") return plays;
+  const validKeys = ncaabBookKeyMap[bookKey] ?? [bookKey];
+  return plays.filter(play => {
+    return play.bookLines.some(bl => validKeys.some(vk => bl.book.toLowerCase().includes(vk)));
+  });
+}
+
+const TORVIK_TOOLTIPS: Record<string, string> = {
+  adjO: "Adjusted Offensive Efficiency — points scored per 100 possessions, adjusted for opponent strength",
+  adjD: "Adjusted Defensive Efficiency — points allowed per 100 possessions, adjusted for opponent strength",
+  barthag: "Barttorvik power rating — probability of beating an average D-I team on a neutral court",
+  tempo: "Tempo — average number of possessions per 40-minute game",
+  srs: "Simple Rating System — margin of victory adjusted for strength of schedule",
+  sos: "Strength of Schedule — average quality of opponents played this season",
+};
+
+function StatWithTooltip({ tooltip, children }: { label?: string; tooltip: string; children: React.ReactNode }) {
+  return (
+    <TooltipProvider delayDuration={200}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex items-center gap-0.5 cursor-help" style={{ borderBottom: "1px dotted #3f3f46" }}>
+            {children}
+            <Info className="w-2.5 h-2.5 shrink-0" style={{ color: "#3f3f46" }} />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-[220px] text-xs" style={{ background: "#1a1a1a", border: "1px solid #3f3f46", color: "#d4d4d8" }}>
+          <p>{tooltip}</p>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 // ── RadialGauge ───────────────────────────────────────────────────────────────
-function RadialGauge({ value, color, label, isParlayed, showFullGameLabel, displayDash }: {
-  value: number; color: string; label: string; isParlayed: boolean; showFullGameLabel?: boolean; displayDash?: boolean;
+function RadialGauge({ value, color, label, isParlayed, showFullGameLabel, displayDash, size }: {
+  value: number; color: string; label: string; isParlayed: boolean; showFullGameLabel?: boolean; displayDash?: boolean; size?: "sm" | "md" | "lg";
 }) {
   const cx = 80; const cy = 80;
   const rInner = 68; const rParlay = 80;
@@ -549,10 +617,12 @@ function RadialGauge({ value, color, label, isParlayed, showFullGameLabel, displ
   const pct = Math.max(0, Math.min(100, value));
   const dashOffset = circInner - (pct / 100) * circInner;
   const arcColor = displayDash ? "#52525b" : color;
+  const dim = size === "sm" ? 90 : size === "lg" ? 130 : 110;
+  const pctFontClass = size === "sm" ? "text-xl" : size === "lg" ? "text-4xl" : "text-3xl";
   return (
     <div className="flex flex-col items-center flex-shrink-0 gap-0.5">
-      <div className="relative" style={{ width: 110, height: 110 }}>
-        <svg viewBox="0 0 160 160" style={{ width: 110, height: 110, transform: "rotate(-90deg)" }}>
+      <div className="relative" style={{ width: dim, height: dim }}>
+        <svg viewBox="0 0 160 160" style={{ width: dim, height: dim, transform: "rotate(-90deg)" }}>
           <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#27272a" strokeWidth={10} />
           <circle
             cx={cx} cy={cy} r={rInner} fill="none"
@@ -573,9 +643,9 @@ function RadialGauge({ value, color, label, isParlayed, showFullGameLabel, displ
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
           {displayDash ? (
-            <span className="text-3xl font-black tabular-nums leading-none" style={{ color: "#52525b" }}>--</span>
+            <span className={`${pctFontClass} font-black tabular-nums leading-none`} style={{ color: "#52525b" }}>--</span>
           ) : (
-            <span className="text-3xl font-black tabular-nums leading-none" style={{ color }}>
+            <span className={`${pctFontClass} font-black tabular-nums leading-none`} style={{ color }}>
               {Math.round(pct)}%
             </span>
           )}
@@ -1400,8 +1470,8 @@ function NCAABGameCard({
         </button>
 
         {/* ── HEADER ─────────────────────────────────────────────────── */}
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex-1 min-w-0">
+        <div className="flex flex-col sm:flex-row items-start sm:justify-between gap-3">
+          <div className="flex-1 min-w-0 w-full">
             <div className="flex items-center gap-2 mb-1">
               <span className="relative flex h-2 w-2 flex-shrink-0">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
@@ -1427,6 +1497,19 @@ function NCAABGameCard({
               {play.awayScore} – {play.homeScore}
             </p>
             <div className="flex gap-1.5 mt-1.5 flex-wrap">
+              {(() => {
+                const tier = getConfidenceTier(play.overProb);
+                if (!tier) return null;
+                return (
+                  <span
+                    data-testid={`ncaab-live-tier-badge-${play.gameId}`}
+                    className="text-[9px] font-black px-2 py-0.5 rounded-full"
+                    style={{ background: tier.bg, color: tier.color, border: `1px solid ${tier.border}` }}
+                  >
+                    {tier.label}
+                  </span>
+                );
+              })()}
               {play.desperation3s && (
                 <span className="text-[9px] text-orange-400 bg-orange-500/10 border border-orange-500/20 px-1.5 py-0.5 rounded">⚠ Desperation 3s</span>
               )}
@@ -1435,7 +1518,8 @@ function NCAABGameCard({
               )}
             </div>
           </div>
-          <div className="flex flex-col items-center gap-1.5">
+          {/* Desktop: single gauge at default size */}
+          <div className="hidden sm:flex flex-col items-center gap-1.5">
             <RadialGauge
               value={isNeutral ? 50 : gaugeValue}
               color={isNeutral ? "#52525b" : gaugeColor}
@@ -1444,6 +1528,52 @@ function NCAABGameCard({
               showFullGameLabel
               displayDash={isNeutral}
             />
+            {enrichedData && enrichedData.sources.length > 0 && (
+              <span
+                data-testid={`ncaab-sources-badge-desktop-${play.gameId}`}
+                className="text-[9px] font-bold px-2 py-0.5 rounded-full"
+                style={{ background: "rgba(0,212,170,0.12)", color: "#00d4aa", border: "1px solid rgba(0,212,170,0.25)" }}
+              >
+                {enrichedData.sources.length} source{enrichedData.sources.length !== 1 ? "s" : ""}
+              </span>
+            )}
+            {enrichedLoading && !enrichedData && (
+              <span className="text-[9px]" style={{ color: "#3f3f46" }}>loading…</span>
+            )}
+          </div>
+          {/* Mobile: primary gauge (lg) + secondary gauges (sm) in 2-col row */}
+          <div className="flex sm:hidden flex-col items-center gap-1.5 self-center">
+            <RadialGauge
+              value={isNeutral ? 50 : gaugeValue}
+              color={isNeutral ? "#52525b" : gaugeColor}
+              label={isNeutral ? "EARLY GAME" : gaugeLabel}
+              isParlayed={isLegParlayed(selectedMarket)}
+              showFullGameLabel
+              displayDash={isNeutral}
+              size="lg"
+            />
+            {!isNeutral && (
+              <div className="grid grid-cols-2 gap-2">
+                {(["over", "under", "spread"] as const)
+                  .filter(m => m !== selectedMarket && (m !== "spread" || displaySpread !== null))
+                  .map(m => {
+                    const mVal = gaugeForMarket(m);
+                    const mColor = m === "over" ? "#00d4aa" : m === "under" ? "#ef4444" : "#94a3b8";
+                    const mLabel = m === "over" ? "OVER" : m === "under" ? "UNDER" : "COVER";
+                    return (
+                      <RadialGauge
+                        key={m}
+                        value={mVal}
+                        color={mColor}
+                        label={mLabel}
+                        isParlayed={isLegParlayed(m)}
+                        displayDash={false}
+                        size="sm"
+                      />
+                    );
+                  })}
+              </div>
+            )}
             {enrichedData && enrichedData.sources.length > 0 && (
               <span
                 data-testid={`ncaab-sources-badge-${play.gameId}`}
@@ -1500,7 +1630,7 @@ function NCAABGameCard({
           </div>
         )}
 
-        {/* ── SHARP MONEY SIGNAL ROW ─────────────────────────────────── */}
+        {/* ── MARKET SIGNAL SECTION (Handle + Sharp Money consolidated) ── */}
         {(() => {
           const sharp = detectSharpMoney({
             homeWinPct: play.espnHomeWinPct,
@@ -1508,25 +1638,68 @@ function NCAABGameCard({
             homeTeamName: play.homeTeam,
             awayTeamName: play.awayTeam,
           });
-          if (!sharp) return null;
-          const sharpColor = sharp.strength >= 15 ? "#ef4444" : "#f59e0b";
+          const handle = play.handleSignal;
+          const hasHandle = handle && handle.signal !== "unavailable" && handle.signal !== "neutral";
+          const hasSharp = !!sharp;
+
+          const handleSide = hasHandle
+            ? (handle.signal === "fade" ? "away" : handle.signal === "extreme" ? "home" : null)
+            : null;
+          const sharpSide = hasSharp ? sharp.sharpSide : null;
+
+          let synthesisLabel = "Signal unavailable";
+          let synthesisColor = "#52525b";
+          if (hasHandle && hasSharp) {
+            if (handleSide === sharpSide) {
+              const teamName = sharpSide === "home" ? play.homeTeam : play.awayTeam;
+              synthesisLabel = `Confirmed edge: ${teamName}`;
+              synthesisColor = "#00d4aa";
+            } else {
+              synthesisLabel = "Split market signal";
+              synthesisColor = "#f59e0b";
+            }
+          } else if (hasHandle) {
+            synthesisLabel = handle.label;
+            synthesisColor = handle.color;
+          } else if (hasSharp) {
+            synthesisLabel = sharp.label;
+            synthesisColor = sharp.strength >= 15 ? "#ef4444" : "#f59e0b";
+          }
+
           return (
-            <div
-              className="rounded-lg flex items-center justify-between gap-2"
-              style={{ background: "#0d0d0d", border: "1px solid #27272a", borderLeft: `3px solid ${sharpColor}`, padding: "12px 20px" }}
-            >
-              <div>
-                <p className="text-sm font-semibold" style={{ color: sharpColor }}>{sharp.label}</p>
-                <p className="text-xs" style={{ color: "#71717a" }}>
-                  ESPN model vs market spread · {sharp.teamName}
-                </p>
+            <div data-testid={`ncaab-market-signal-${play.gameId}`} className="rounded-lg overflow-hidden" style={{ border: "1px solid #27272a" }}>
+              <div className="flex items-center justify-between px-4 py-2.5" style={{ background: `${synthesisColor}0d`, borderBottom: "1px solid #27272a" }}>
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: synthesisColor }}>Market Signal</span>
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                  style={{ background: `${synthesisColor}18`, color: synthesisColor, border: `1px solid ${synthesisColor}40` }}>
+                  {synthesisLabel}
+                </span>
               </div>
-              <span
-                className="text-[10px] font-black px-2 py-0.5 rounded-full shrink-0"
-                style={{ background: `${sharpColor}22`, color: sharpColor, border: `1px solid ${sharpColor}44`, fontFamily: "monospace" }}
-              >
-                {sharp.sharpSide === "home" ? "↑" : "↓"} {sharp.teamName.split(" ").pop()}
-              </span>
+              <div className="px-4 py-2.5 space-y-2" style={{ background: "#0d0d0d" }}>
+                {hasHandle && (
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="text-[10px] font-semibold" style={{ color: handle.color }}>{handle.label}</p>
+                      <p className="text-[9px]" style={{ color: "#52525b" }}>Handle signal · {handle.pct != null ? `${handle.pct}%` : "N/A"}</p>
+                    </div>
+                  </div>
+                )}
+                {hasSharp && (() => {
+                  const sharpColor = sharp.strength >= 15 ? "#ef4444" : "#f59e0b";
+                  return (
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-[10px] font-semibold" style={{ color: sharpColor }}>{sharp.label}</p>
+                        <p className="text-[9px]" style={{ color: "#52525b" }}>ESPN model vs market · {sharp.teamName}</p>
+                      </div>
+                      <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0"
+                        style={{ background: `${sharpColor}22`, color: sharpColor, border: `1px solid ${sharpColor}44`, fontFamily: "monospace" }}>
+                        {sharp.sharpSide === "home" ? "↑" : "↓"} {sharp.teamName.split(" ").pop()}
+                      </span>
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
           );
         })()}
@@ -2021,7 +2194,10 @@ function NCAABGameCard({
           const pp = enrichedData.prizePicks;
           const ud = enrichedData.underdog;
           const tr = enrichedData.teamRankings;
-          if (!hasTorvik && !pp && !ud && !tr) return null;
+          const hcbb = enrichedData.cbbRef?.home;
+          const acbb = enrichedData.cbbRef?.away;
+          const hasCbbRef = hcbb || acbb;
+          if (!hasTorvik && !pp && !ud && !tr && !hasCbbRef) return null;
 
           const avgTempo = ht?.tempo && at?.tempo ? (ht.tempo + at.tempo) / 2 : null;
           const tempoLabel = avgTempo ? (avgTempo > 72 ? "Fast Pace" : avgTempo < 65 ? "Slow Pace" : "Average Pace") : null;
@@ -2053,28 +2229,48 @@ function NCAABGameCard({
                   { label: play.homeTeamAbbr, t: ht },
                   { label: play.awayTeamAbbr, t: at },
                 ].map(({ label, t }) => t && (
-                  <div key={label} className="flex items-center justify-between">
-                    <span className="text-[10px]" style={{ color: "#71717a" }}>{label} (Torvik)</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[9px] font-mono" style={{ color: "#a1a1aa" }}>
-                        AdjO <span style={{ color: "#00d4aa" }}>{t.adjO.toFixed(1)}</span>
-                        {" · "}
-                        AdjD <span style={{ color: "#ef4444" }}>{t.adjD.toFixed(1)}</span>
-                      </span>
-                      {t.rank < 400 && (
-                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded"
-                          style={{ background: "#1e293b", color: "#60a5fa", border: "1px solid #1e3a5f" }}>
-                          #{t.rank}
+                  <div key={label} className="space-y-0.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px]" style={{ color: "#71717a" }}>{label} (Torvik)</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[9px] font-mono" style={{ color: "#a1a1aa" }}>
+                          <StatWithTooltip label="AdjO" tooltip={TORVIK_TOOLTIPS.adjO}>
+                            <span>AdjO</span>
+                          </StatWithTooltip>{" "}
+                          <span style={{ color: "#00d4aa" }}>{t.adjO.toFixed(1)}</span>
+                          {" · "}
+                          <StatWithTooltip label="AdjD" tooltip={TORVIK_TOOLTIPS.adjD}>
+                            <span>AdjD</span>
+                          </StatWithTooltip>{" "}
+                          <span style={{ color: "#ef4444" }}>{t.adjD.toFixed(1)}</span>
                         </span>
-                      )}
+                        {t.rank < 400 && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded"
+                            style={{ background: "#1e293b", color: "#60a5fa", border: "1px solid #1e3a5f" }}>
+                            #{t.rank}
+                          </span>
+                        )}
+                      </div>
                     </div>
+                    {t.barthag != null && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px]" style={{ color: "#52525b" }}>
+                          <StatWithTooltip label="Barthag" tooltip={TORVIK_TOOLTIPS.barthag}>
+                            <span>Barthag</span>
+                          </StatWithTooltip>
+                        </span>
+                        <span className="text-[9px] font-mono" style={{ color: "#71717a" }}>{t.barthag.toFixed(4)}</span>
+                      </div>
+                    )}
                   </div>
                 ))}
 
                 {/* Tempo */}
                 {avgTempo && (
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px]" style={{ color: "#71717a" }}>Avg Tempo</span>
+                    <StatWithTooltip label="Tempo" tooltip={TORVIK_TOOLTIPS.tempo}>
+                      <span className="text-[10px]" style={{ color: "#71717a" }}>Avg Tempo</span>
+                    </StatWithTooltip>
                     <span className="text-[10px] font-mono" style={{ color: tempoColor }}>{avgTempo.toFixed(1)} poss/40min</span>
                   </div>
                 )}
@@ -2122,6 +2318,35 @@ function NCAABGameCard({
                     </span>
                   </div>
                 )}
+
+                {/* CBBReference SRS / SOS */}
+                {hasCbbRef && [
+                  { label: play.homeTeamAbbr, c: hcbb },
+                  { label: play.awayTeamAbbr, c: acbb },
+                ].map(({ label, c }) => c && (c.srs != null || c.sos != null) && (
+                  <div key={`cbb-${label}`} className="flex items-center justify-between">
+                    <span className="text-[10px]" style={{ color: "#71717a" }}>{label} (CBBRef)</span>
+                    <span className="text-[9px] font-mono" style={{ color: "#a1a1aa" }}>
+                      {c.srs != null && (
+                        <>
+                          <StatWithTooltip label="SRS" tooltip={TORVIK_TOOLTIPS.srs}>
+                            <span>SRS</span>
+                          </StatWithTooltip>{" "}
+                          <span style={{ color: c.srs > 0 ? "#00d4aa" : "#ef4444" }}>{c.srs.toFixed(1)}</span>
+                        </>
+                      )}
+                      {c.srs != null && c.sos != null && <span style={{ color: "#3f3f46" }}> · </span>}
+                      {c.sos != null && (
+                        <>
+                          <StatWithTooltip label="SOS" tooltip={TORVIK_TOOLTIPS.sos}>
+                            <span>SOS</span>
+                          </StatWithTooltip>{" "}
+                          <span style={{ color: c.sos > 0 ? "#00d4aa" : "#ef4444" }}>{c.sos.toFixed(1)}</span>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                ))}
 
                 {/* Composite projection vs live line */}
                 {compositeTotal && (
@@ -2889,7 +3114,26 @@ function GroupedGamesList({
                         <span className="text-[11px] font-medium" style={{ color: "#52525b" }}>Final</span>
                       ) : (
                         <div className="flex items-center gap-1.5">
-                          <span className="text-[11px]" style={{ color: "#52525b" }}>Scheduled</span>
+                          {g.enginePreGame?.overProb != null ? (
+                            <span
+                              data-testid={`ncaab-pregame-pill-${g.id}`}
+                              className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                              style={{ background: "rgba(0,212,170,0.08)", border: "1px solid rgba(0,212,170,0.2)", color: "#00d4aa" }}
+                            >
+                              Pre-game model · {g.enginePreGame.overProb > 50 ? "O" : "U"} {Math.round(Math.max(g.enginePreGame.overProb, 100 - g.enginePreGame.overProb))}%
+                            </span>
+                          ) : (
+                            <span className="text-[11px]" style={{ color: "#52525b" }}>
+                              {(() => {
+                                if (!g.startTime) return "Scheduled";
+                                const ms = new Date(g.startTime).getTime() - Date.now();
+                                if (ms <= 0) return formatTipoffTime(g.startTime);
+                                const h = Math.floor(ms / 3600000);
+                                const m = Math.floor((ms % 3600000) / 60000);
+                                return h > 0 ? `Tipoff in ${h}h ${m}m` : `Tipoff in ${m}m`;
+                              })()}
+                            </span>
+                          )}
                           <ChevronDown
                             className="w-3 h-3 transition-transform duration-200"
                             style={{ color: "#3f3f46", transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)" }}
@@ -3314,6 +3558,7 @@ interface NCAABAdminTabProps {
 
 export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABAdminTabProps) {
   const [ncaabSubTab, setNcaabSubTab] = useState<"live" | "halftime">("live");
+  const [ncaabBookFilter, setNcaabBookFilter] = useState<string>("all");
   const [cacheClearPending, setCacheClearPending] = useState(false);
   const [cacheClearMsg, setCacheClearMsg] = useState<string | null>(null);
 
@@ -3700,6 +3945,128 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
             </div>
           )}
 
+          {/* ── Top Plays Feed ──────────────────────────────────────────────── */}
+          {hasPlays && (() => {
+            const filteredPlays = filterNcaabPlaysByBook(plays, ncaabBookFilter);
+            const sortedPlays = filteredPlays;
+            return (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                    <p data-testid="text-top-plays-count" className="text-sm font-semibold text-foreground">
+                      Top Plays · {sortedPlays.length}
+                    </p>
+                  </div>
+                </div>
+                {/* Book filter pills */}
+                <div data-testid="ncaab-book-filter" className="flex gap-1.5 flex-wrap">
+                  {NCAAB_BOOK_OPTIONS.map(opt => {
+                    const isActive = ncaabBookFilter === opt.key;
+                    const count = opt.key === "all" ? plays.length : filterNcaabPlaysByBook(plays, opt.key).length;
+                    return (
+                      <button
+                        key={opt.key}
+                        data-testid={`ncaab-book-filter-${opt.key}`}
+                        onClick={() => setNcaabBookFilter(opt.key)}
+                        className="px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all duration-200"
+                        style={{
+                          background: isActive ? "rgba(0,212,170,0.15)" : "#111111",
+                          border: isActive ? "1px solid rgba(0,212,170,0.4)" : "1px solid #27272a",
+                          color: isActive ? "#00d4aa" : "#71717a",
+                        }}
+                      >
+                        {opt.abbr} {count > 0 && <span className="ml-0.5 tabular-nums">{count}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+                {/* Play cards */}
+                <div className="flex gap-3 overflow-x-auto pb-2" style={{ scrollSnapType: "x mandatory" }}>
+                  {sortedPlays.map(p => {
+                    const tier = getConfidenceTier(p.overProb);
+                    const confidence = Math.max(p.overProb ?? 50, 100 - (p.overProb ?? 50));
+                    const edgeSide = (p.overProb ?? 50) > 50 ? "Over" : "Under";
+                    const edgeColor = edgeSide === "Over" ? "#00d4aa" : "#ef4444";
+                    const halfLabel = p.half === 1 ? "H1" : p.half === 2 ? "H2" : "OT";
+                    return (
+                      <div
+                        key={p.gameId}
+                        data-testid={`ncaab-top-play-${p.gameId}`}
+                        className="flex-shrink-0 rounded-xl p-3.5 space-y-2"
+                        style={{
+                          width: 260,
+                          background: "#0a0a0a",
+                          border: `1px solid ${tier ? tier.border : "#27272a"}`,
+                          scrollSnapAlign: "start",
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-400" />
+                            </span>
+                            <span className="text-[10px] font-semibold" style={{ color: "#4ade80" }}>{halfLabel} · {p.clock}</span>
+                          </div>
+                          {tier && (
+                            <span
+                              data-testid={`ncaab-tier-badge-${p.gameId}`}
+                              className="text-[9px] font-black px-2 py-0.5 rounded-full"
+                              style={{ background: tier.bg, color: tier.color, border: `1px solid ${tier.border}` }}
+                            >
+                              {tier.label}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs font-bold text-white truncate">{p.awayTeamAbbr} @ {p.homeTeamAbbr}</p>
+                        <p className="text-lg font-black tabular-nums" style={{ color: "#ffffff" }}>{p.awayScore} – {p.homeScore}</p>
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <span className="text-sm font-bold" style={{ color: edgeColor }}>{edgeSide} {p.total ?? "—"}</span>
+                            <span className="text-xs ml-1.5 tabular-nums" style={{ color: edgeColor }}>{confidence.toFixed(0)}%</span>
+                          </div>
+                          {onAddToParlay && (
+                            <button
+                              data-testid={`ncaab-top-play-parlay-${p.gameId}`}
+                              onClick={() => {
+                                const line = p.total ?? 0;
+                                const prob = p.overProb ?? 50;
+                                const dir = prob > 50 ? "over" : "under";
+                                const rawOdds = prob >= 50
+                                  ? -Math.round((prob / (100 - prob)) * 100)
+                                  : Math.round(((100 - prob) / prob) * 100);
+                                onAddToParlay({
+                                  playerId: 0,
+                                  playerName: `${p.awayTeamAbbr} @ ${p.homeTeamAbbr} ${dir === "over" ? "Over" : "Under"} ${line}`,
+                                  playerTeam: "NCAAB",
+                                  statType: "ncaab_total",
+                                  line,
+                                  probability: prob,
+                                  betDirection: dir,
+                                  sportsbook: p.bookLines[0]?.book ?? "fanduel",
+                                  gameId: p.gameId,
+                                  oddsAmerican: rawOdds,
+                                });
+                              }}
+                              className="text-[10px] font-bold px-2.5 py-1 rounded-lg transition-colors"
+                              style={{ background: "rgba(0,212,170,0.12)", color: "#00d4aa", border: "1px solid rgba(0,212,170,0.25)" }}
+                            >
+                              + Parlay
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {filteredPlays.length === 0 && (
+                  <p className="text-xs text-center py-3" style={{ color: "#52525b" }}>No plays for this sportsbook filter</p>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Live play cards */}
           {hasPlays && (
             <div className="space-y-3">
@@ -3722,14 +4089,37 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
             </div>
           )}
 
-          {/* Empty state */}
-          {!hasPlays && !error && (
-            <div className="bg-card border border-border rounded-xl p-6 text-center space-y-2">
-              <Clock className="w-8 h-8 text-muted-foreground mx-auto" />
-              <p className="text-sm font-semibold text-foreground">No Live NCAAB Games Right Now</p>
-              <p className="text-xs text-muted-foreground">
-                The model will activate automatically when games go live. Check back during game time.
+          {/* Empty/no-games state */}
+          {!hasPlays && !error && liveGames.length === 0 && halftimePlays.length === 0 && (
+            <div className="bg-card border border-border rounded-xl p-8 text-center space-y-4">
+              <img
+                src={propPulseLogo}
+                alt="LiveLocks"
+                className="w-14 h-14 rounded-xl mx-auto"
+                style={{ boxShadow: "0 0 24px rgba(0,212,170,0.2)" }}
+              />
+              <p data-testid="text-no-games" className="text-sm font-semibold text-foreground">
+                {games.length === 0 ? "No NCAAB games scheduled today" : "No live NCAAB games right now"}
               </p>
+              {(() => {
+                const upcoming = games
+                  .filter(g => g.startTime && new Date(g.startTime).getTime() > Date.now())
+                  .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+                if (upcoming.length > 0) {
+                  const next = upcoming[0];
+                  const diff = new Date(next.startTime).getTime() - Date.now();
+                  const h = Math.floor(diff / 3600000);
+                  const m = Math.floor((diff % 3600000) / 60000);
+                  const timeStr = h > 0 ? `${h}h ${m}m` : `${m}m`;
+                  return (
+                    <p data-testid="text-next-tipoff" className="text-xs text-muted-foreground">
+                      Next game: <span className="font-semibold text-foreground">{next.awayTeamAbbr ?? next.awayTeam} @ {next.homeTeamAbbr ?? next.homeTeam}</span>
+                      {" "}— tipoff in <span style={{ color: "#00d4aa" }}>{timeStr}</span>
+                    </p>
+                  );
+                }
+                return <p className="text-xs text-muted-foreground">Check back during game time — the model activates automatically.</p>;
+              })()}
             </div>
           )}
 
