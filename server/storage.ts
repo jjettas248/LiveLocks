@@ -357,7 +357,7 @@ export class DatabaseStorage implements IStorage {
       else if (leadDelta > 12)  scriptOverride = 0.92;
     }
     if (scriptOverride !== null) {
-      remainingMinutes *= Math.min(spreadMinuteReduction, scriptOverride);
+      remainingMinutes *= scriptOverride;
     } else {
       remainingMinutes *= spreadMinuteReduction;
     }
