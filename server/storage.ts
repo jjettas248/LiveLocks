@@ -159,9 +159,8 @@ function calibrateProbability(
 
   if (context === "live") prob += LIVE_CONTEXT_LIFT;
 
-  const pctOver = prob * 100;
-  const pctResult = edge >= 0 ? pctOver : 100 - pctOver;
-  return Math.max(2, Math.min(98, Math.round(pctResult * 10) / 10));
+  const pct = prob * 100;
+  return Math.max(2, Math.min(98, Math.round(pct * 10) / 10));
 }
 
 // Module-level in-flight Set prevents concurrent race conditions in savePlayAlerts.
@@ -340,23 +339,27 @@ export class DatabaseStorage implements IStorage {
     if (currentPeriod === 4 && clockMins < 4 && absSpread > 12) {
       spreadMinuteReduction = Math.min(spreadMinuteReduction, 0.70);
     }
-    remainingMinutes *= spreadMinuteReduction;
-
     // ─── Game script divergence ──────────────────────────────────────────────
     // If the actual score gap exceeds the pre-game spread significantly,
-    // stars sit earlier than their normal rotation would predict.
+    // apply a minute reduction that OVERRIDES (not stacks with) the spread reduction.
     let parsedScoreDiff = 0;
     if (currentScore) {
       const sc = currentScore.split(/[- ]+/).map(Number);
       if (sc.length === 2 && !isNaN(sc[0]) && !isNaN(sc[1])) {
-        parsedScoreDiff = sc[1] - sc[0]; // homeScore - awayScore
+        parsedScoreDiff = sc[1] - sc[0];
       }
     }
+    let scriptOverride: number | null = null;
     if (req.gameSpread !== undefined) {
       const leadDelta = Math.abs(parsedScoreDiff) - Math.abs(req.gameSpread);
-      if (leadDelta > 25)       remainingMinutes *= 0.65;
-      else if (leadDelta > 18)  remainingMinutes *= 0.80;
-      else if (leadDelta > 12)  remainingMinutes *= 0.92;
+      if (leadDelta > 25)       scriptOverride = 0.65;
+      else if (leadDelta > 18)  scriptOverride = 0.80;
+      else if (leadDelta > 12)  scriptOverride = 0.92;
+    }
+    if (scriptOverride !== null) {
+      remainingMinutes *= Math.min(spreadMinuteReduction, scriptOverride);
+    } else {
+      remainingMinutes *= spreadMinuteReduction;
     }
 
     // ─── Close game minute boost (Step 6) ────────────────────────────────────
