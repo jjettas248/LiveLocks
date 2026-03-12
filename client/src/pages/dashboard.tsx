@@ -1220,6 +1220,8 @@ export default function Dashboard() {
   }
 
   const isFreeUser = !!user && !user.isAdmin && !user.subscriptionTier;
+  const playsUsed = user?.playsUsed ?? 0;
+  const visibleEdgeLimit = 5;
 
   const filterPlay = (play: any) => {
     if (slateFilterProp === "combo" && !play.statType.includes("_")) return false;
@@ -2887,7 +2889,7 @@ export default function Dashboard() {
                         const gameUnlocked = !isFreeUser || unlockedGameIds.has(group.gameId);
                         const groupFiltered = filterByBook(group.plays.filter(filterPlay), nbaBookFilter);
                         const isGameUnlocking = unlocking2hGame === group.gameId;
-                        const playsRemaining = Math.max(0, 15 - (user?.playsUsed ?? 0));
+                        const playsRemaining = Math.max(0, 15 - playsUsed);
                         return (
                           <div
                             key={group.gameId}
@@ -2952,6 +2954,27 @@ export default function Dashboard() {
                                 </div>
                               )}
 
+                              {/* Edge summary line for free users */}
+                              {gameUnlocked && isFreeUser && groupFiltered.length > 0 && (() => {
+                                const totalEdges = groupFiltered.length;
+                                const lockedEdges = Math.max(0, totalEdges - visibleEdgeLimit);
+                                return (
+                                  <div data-testid={`text-edge-summary-${group.gameId}`} className="flex items-center gap-2 mb-3 text-xs text-muted-foreground">
+                                    <span>{totalEdges} edges detected</span>
+                                    <span className="text-muted-foreground/40">·</span>
+                                    <span>{Math.min(totalEdges, visibleEdgeLimit)} showing</span>
+                                    {lockedEdges > 0 && (
+                                      <>
+                                        <span className="text-muted-foreground/40">·</span>
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.25)", color: "#f59e0b" }}>
+                                          <Lock className="w-3 h-3" /> {lockedEdges} locked
+                                        </span>
+                                      </>
+                                    )}
+                                  </div>
+                                );
+                              })()}
+
                               {/* Unlocked plays grid */}
                               {gameUnlocked && groupFiltered.length === 0 && (() => {
                                 const bookOpt = BOOK_OPTIONS.find(b => b.key === nbaBookFilter);
@@ -2986,11 +3009,15 @@ export default function Dashboard() {
                                   </div>
                                 );
                               })()}
-                              {gameUnlocked && groupFiltered.length > 0 && (
+                              {gameUnlocked && groupFiltered.length > 0 && (() => {
+                                const lockedEdges = Math.max(0, groupFiltered.length - visibleEdgeLimit);
+                                return (
+                                <>
                                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                                   {groupFiltered.map((play: any, idx: number) => {
+                                    const isLocked = isFreeUser && idx >= visibleEdgeLimit;
                                     const isOver = play.betDirection === "over";
-                                    const isInjured = injuredPlayerNames.has(play.playerName.toLowerCase());
+                                    const isInjured = !isLocked && injuredPlayerNames.has(play.playerName.toLowerCase());
                                     const statLabel = STAT_TYPES.find(s => s.value === play.statType)?.label ?? play.statType;
                                     const hasLiveLine = play.lineSource === "odds_api";
                                     return (
@@ -2998,13 +3025,23 @@ export default function Dashboard() {
                                         key={idx}
                                         data-testid={`halftime-play-${idx}`}
                                         className={`rounded-xl border p-4 space-y-2 relative cursor-pointer transition-all ${
-                                          isInjured
-                                            ? "border-red-500/40 bg-red-500/5 hover:border-red-500/60"
-                                            : "border-border/60 bg-secondary/30 hover:border-primary/40 hover:bg-secondary/50"
+                                          isLocked
+                                            ? "border-border/40 bg-secondary/20"
+                                            : isInjured
+                                              ? "border-red-500/40 bg-red-500/5 hover:border-red-500/60"
+                                              : "border-border/60 bg-secondary/30 hover:border-primary/40 hover:bg-secondary/50"
                                         }`}
-                                        onClick={() => loadPlayInCalculator(play)}
+                                        style={isLocked ? { opacity: 0.6 } : undefined}
+                                        onClick={() => {
+                                          if (isLocked) {
+                                            setUpgradeModalState({ playsUsed, limit: 15 });
+                                            setShowUpgradeModal(true);
+                                          } else {
+                                            loadPlayInCalculator(play);
+                                          }
+                                        }}
                                       >
-                                        <div className="absolute top-3 left-3 w-5 h-5 flex items-center justify-center" style={{ background: "#1d4ed8", borderRadius: 8 }}>
+                                        <div className="absolute top-3 left-3 w-5 h-5 flex items-center justify-center" style={{ background: isLocked ? "#52525b" : "#1d4ed8", borderRadius: 8 }}>
                                           <span className="text-[9px] font-bold text-white leading-none">#{idx + 1}</span>
                                         </div>
                                         <div className="flex items-start justify-between gap-2 pl-7">
@@ -3018,6 +3055,20 @@ export default function Dashboard() {
                                             )}
                                           </div>
                                           <div className="text-right flex-shrink-0">
+                                            {isLocked ? (
+                                              <>
+                                                <div className="text-xl font-bold font-mono text-muted-foreground/40 flex items-center justify-end gap-1">
+                                                  <Lock className="w-4 h-4" />
+                                                </div>
+                                                <div className="text-[9px] font-semibold text-muted-foreground/40">
+                                                  {isOver ? "Over %" : "Under %"}
+                                                </div>
+                                                <div className="text-xs text-muted-foreground/40 flex items-center justify-end gap-0.5">
+                                                  Edge: <Lock className="w-3 h-3" />
+                                                </div>
+                                              </>
+                                            ) : (
+                                            <>
                                             {(() => {
                                               const displayProb = play.betDirection === "under"
                                                 ? Math.round((100 - play.probability) * 10) / 10
@@ -3040,6 +3091,8 @@ export default function Dashboard() {
                                             <div className="text-xs text-muted-foreground">
                                               Edge: +{play.edge.toFixed(1)}%
                                             </div>
+                                            </>
+                                            )}
                                           </div>
                                         </div>
                                         <div className="flex items-center gap-2 flex-wrap">
@@ -3061,12 +3114,23 @@ export default function Dashboard() {
                                           >
                                             {hasLiveLine ? "Live Line" : "Season Avg"}
                                           </span>
+                                          {isLocked ? (
+                                            <span className="text-xs text-muted-foreground/40 flex items-center gap-1">
+                                              H1: {play.halftimeStat} · Proj: <Lock className="w-3 h-3" />
+                                            </span>
+                                          ) : (
                                           <span className="text-xs" style={{ color: play.halftimeStat > 0 ? "#71717a" : "#52525b" }}>
                                             H1: {play.halftimeStat} · Proj: {play.expectedTotal?.toFixed(1)}
                                           </span>
-                                          {idx === 0 && <span data-testid="hint-tap-verify" className="text-[10px] text-muted-foreground/50 italic">Tap to cross-check in calculator →</span>}
+                                          )}
+                                          {idx === 0 && !isLocked && <span data-testid="hint-tap-verify" className="text-[10px] text-muted-foreground/50 italic">Tap to cross-check in calculator →</span>}
                                         </div>
-                                        {(() => {
+                                        {isLocked ? (
+                                          <div data-testid={`text-upgrade-label-${idx}`} className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-semibold text-amber-400/80">
+                                            <Lock className="w-3 h-3" /> Upgrade to unlock
+                                          </div>
+                                        ) : (
+                                        (() => {
                                           const inParlayIdx = parlayPicks.findIndex(p =>
                                             p.playerId === play.playerId &&
                                             p.statType === play.statType &&
@@ -3109,12 +3173,28 @@ export default function Dashboard() {
                                               {isInParlay ? <>✓ Added</> : <><Plus className="w-3.5 h-3.5" />Add to Parlay</>}
                                             </button>
                                           );
-                                        })()}
+                                        })()
+                                        )}
                                       </div>
                                     );
                                   })}
                                 </div>
-                              )}
+                                {isFreeUser && lockedEdges > 0 && (
+                                  <div data-testid={`cta-unlock-all-${group.gameId}`} className="mt-4 flex flex-col items-center gap-2">
+                                    <p className="text-xs text-muted-foreground">{lockedEdges} more edge{lockedEdges !== 1 ? "s" : ""} available with Pro</p>
+                                    <button
+                                      data-testid={`button-unlock-all-${group.gameId}`}
+                                      onClick={() => { setUpgradeModalState({ playsUsed, limit: 15 }); setShowUpgradeModal(true); }}
+                                      className="px-5 py-2 rounded-xl text-sm font-bold transition-colors flex items-center gap-2"
+                                      style={{ background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b" }}
+                                    >
+                                      <Lock className="w-4 h-4" /> Unlock All Edges
+                                    </button>
+                                  </div>
+                                )}
+                                </>
+                                );
+                              })()}
                             </div>
 
                             {/* Exit overlay — "2H Underway" */}
