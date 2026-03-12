@@ -344,14 +344,16 @@ export class DatabaseStorage implements IStorage {
     // If the actual score gap exceeds the pre-game spread significantly,
     // apply a minute reduction that OVERRIDES (not stacks with) the spread reduction.
     let parsedScoreDiff = 0;
+    let hasScoreData = false;
     if (currentScore) {
       const sc = currentScore.split(/[- ]+/).map(Number);
       if (sc.length === 2 && !isNaN(sc[0]) && !isNaN(sc[1])) {
         parsedScoreDiff = sc[1] - sc[0];
+        hasScoreData = true;
       }
     }
     let scriptOverride: number | null = null;
-    if (req.gameSpread !== undefined) {
+    if (hasScoreData && req.gameSpread !== undefined) {
       const leadDelta = Math.abs(parsedScoreDiff) - Math.abs(req.gameSpread);
       if (leadDelta > 25)       scriptOverride = 0.65;
       else if (leadDelta > 18)  scriptOverride = 0.80;
@@ -364,8 +366,8 @@ export class DatabaseStorage implements IStorage {
     }
 
     // ─── Close game minute boost (Step 6) ────────────────────────────────────
-    // In close Q4+ games, star/rotation players close harder.
-    if (Math.abs(parsedScoreDiff) <= 8 && currentPeriod >= 4 && (usageRate >= 0.22 || avgMinutes >= 28)) {
+    // In close Q4+ games, star/rotation players close harder. Only when score data exists.
+    if (hasScoreData && Math.abs(parsedScoreDiff) <= 8 && currentPeriod >= 4 && (usageRate >= 0.22 || avgMinutes >= 28)) {
       remainingMinutes *= 1.05;
     }
 
@@ -497,7 +499,7 @@ export class DatabaseStorage implements IStorage {
     let expectedFromHere = blendedPerMin * remainingMinutes * contextModifier;
 
     // ─── Overtime probability boost (Step 3) ──────────────────────────────
-    if (currentPeriod === 4 && clockMins <= 2.0 && Math.abs(parsedScoreDiff) <= 3) {
+    if (hasScoreData && currentPeriod === 4 && clockMins <= 2.0 && Math.abs(parsedScoreDiff) <= 3) {
       if (parsedScoreDiff === 0 && clockMins <= 1.0) {
         expectedFromHere *= 1.05;
       } else {
