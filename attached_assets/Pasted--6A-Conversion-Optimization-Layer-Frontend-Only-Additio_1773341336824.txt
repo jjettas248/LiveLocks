@@ -1,0 +1,229 @@
+#6A — Conversion Optimization Layer (Frontend Only Additions)
+
+What & Why
+Enhance the existing edge-locking system with additional conversion mechanics that increase upgrade pressure while keeping the backend paywall (`FREE_PLAY_LIMIT`, `requirePlayAccess`, `PlayLimitError`) completely unchanged.
+
+These additions introduce psychological triggers used by high-performing betting SaaS dashboards: visibility of total model output, premium labeling, sticky upgrade CTAs, and teaser values on locked cards.
+
+All changes remain **frontend-only** and operate on the existing `groupFiltered` edge data.
+
+---
+
+## Done looks like
+
+Free users immediately see the scale of model output through a slate-wide edge counter and locked edge counters.
+
+Locked edges appear as **Premium Edges** rather than hidden cards.
+
+Locked cards reveal partial information to increase curiosity while protecting the key values (probability, projection, edge).
+
+A sticky upgrade banner reminds users that additional edges are available.
+
+Upgrade triggers are available in multiple locations:
+
+* locked card click
+* unlock-all button per game
+* sticky upgrade banner
+
+No backend logic or existing play-limit logic is modified.
+
+---
+
+## Tasks
+
+### 1 — Add Global Edge Counter (Slate Level)
+
+At the top of the NBA dashboard render a slate-wide edge counter for free users.
+
+Derive total edges from the existing game groups:
+
+```javascript
+const totalSlateEdges = groups.reduce(
+  (sum, group) => sum + group.plays.length,
+  0
+);
+```
+
+Render above the slate:
+
+```
+LiveLocks detected {totalSlateEdges} prop edges on tonight’s slate
+```
+
+Only display for free users.
+
+---
+
+### 2 — Add Global Locked Edge Counter
+
+Compute visible edges and locked edges across the slate.
+
+Example logic:
+
+```javascript
+const visiblePerGame = visibleEdgeLimit;
+const totalVisibleEdges = groups.reduce(
+  (sum, group) => sum + Math.min(group.plays.length, visiblePerGame),
+  0
+);
+
+const totalLockedEdges = Math.max(0, totalSlateEdges - totalVisibleEdges);
+```
+
+Render under the slate header:
+
+```
+Showing: {totalVisibleEdges}
+🔒 Locked: {totalLockedEdges}
+```
+
+---
+
+### 3 — Add “Premium Edge” Label to Locked Cards
+
+Locked cards should display a small badge indicating they are premium content.
+
+Example footer text inside the card:
+
+```
+🔒 Premium Edge
+Upgrade to unlock projection & probability
+```
+
+Do not hide the card structure.
+
+Keep visible:
+
+* player name
+* stat type
+* line
+
+Hide only:
+
+* probability
+* projection (`expectedTotal`)
+* edge value
+
+---
+
+### 4 — Reveal One Teaser Value on Locked Cards
+
+Instead of hiding all data fields, reveal exactly one teaser datapoint.
+
+Example locked card structure:
+
+```
+Jayson Tatum
+Under 32.5 PRA
+
+Projection: 27.1
+Probability: 🔒
+Edge: 🔒
+
+🔒 Premium Edge
+Upgrade to unlock
+```
+
+Or alternately:
+
+```
+Probability: 82%
+Projection: 🔒
+Edge: 🔒
+```
+
+This increases curiosity and perceived value.
+
+---
+
+### 5 — Add Sticky Upgrade Banner
+
+When a free user scrolls the dashboard, show a sticky banner at the bottom of the screen.
+
+Example UI:
+
+```
+🔒 Unlock {totalLockedEdges} additional edges detected tonight
+
+[ Unlock All Edges ]
+```
+
+Button action:
+
+```
+setShowUpgradeModal(true)
+```
+
+Hide this banner for paid users.
+
+---
+
+### 6 — Add Model Credibility Line
+
+Above the edge grid for each game render a credibility line reinforcing model strength:
+
+```
+LiveLocks typically detects 20+ prop edges per NBA game
+before sportsbooks adjust.
+```
+
+This text should appear only for free users.
+
+---
+
+### 7 — Highlight Highest Edge Among Visible Plays
+
+Among the first 5 visible edges, highlight the strongest edge detected.
+
+Example card badge:
+
+```
+🔥 Highest Edge Detected
+```
+
+Determine this by comparing `play.edge` values among the first visible edges.
+
+---
+
+### 8 — Upgrade Reminder When Near Play Limit
+
+If a free user has consumed most of their allowed plays:
+
+```
+if (playsUsed >= 10)
+```
+
+Render a soft banner:
+
+```
+You have {15 - playsUsed} free calculations remaining today
+```
+
+This prepares users for the backend paywall.
+
+---
+
+## Safety Constraints
+
+Do not modify:
+
+* `FREE_PLAY_LIMIT`
+* `requirePlayAccess`
+* `PlayLimitError`
+* `/api/calculator/calculate`
+* `/api/2h-game-view`
+* database schema
+* play-limit countdown logic
+* NCAAB tab
+* MLB tab
+* calculator EV boxes
+
+All functionality must remain compatible with the existing backend paywall.
+
+---
+
+## Relevant files
+
+client/src/pages/dashboard.tsx
+client/src/components/upgrade-modal.tsx
+client/src/lib/tierUtils.ts

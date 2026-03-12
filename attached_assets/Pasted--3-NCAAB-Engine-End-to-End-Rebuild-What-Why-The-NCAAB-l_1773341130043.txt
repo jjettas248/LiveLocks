@@ -1,0 +1,461 @@
+#3 - NCAAB Engine End-to-End Rebuild
+
+What & Why
+The NCAAB live engine has three related problems:
+1. Projection math sometimes diverges from what gets displayed
+2. Pick direction (Over/Under) can contradict the actual projection
+3. Probabilities lack calibration and sometimes produce inflated 80–90% edges that do not reflect reality
+
+The goal is to rebuild the engine in a modular, auditable way so that every displayed value traces directly back to the underlying calculation, with no silent contradictions.
+
+Important implementation rule
+Treat this task as a server-side engine integrity rebuild first.
+
+Do NOT:
+- redesign UI
+- add non-essential abstractions
+- introduce client-side recomputation
+
+until the following conditions are true:
+
+1. projection math is correct
+2. probabilities are calibrated
+3. pick direction is consistent
+4. output validation tests pass
+
+--------------------------------------------------
+
+Done looks like
+
+- The displayed projection, probability, and pick direction are always mathematically consistent
+- Over is never recommended when the projection is clearly below the line (and vice versa)
+- Probabilities rarely exceed realistic thresholds for NCAAB totals/spreads
+- Full game total, 1H total, 2H total, spread, team total, 1H team total, and 2H team total all use appropriate game-level accumulation logic
+- Every settled play logs the full diagnostic chain:
+  line
+  projection
+  final result
+  displayed side
+  raw probability
+  calibrated probability
+- Validation function catches contradictions at output time
+- Client renders only from final typed engine output returned by server
+- Test cases covering contradiction scenarios pass
+
+--------------------------------------------------
+
+Out of scope
+
+- Changing data sources (ESPN, SGO, Odds API, Torvik)
+- NCAAB player prop lines (this engine is game-level totals/spreads/team totals only)
+- Probability calibration foundation already built in Task #1
+- Redesigning NBA tab
+
+--------------------------------------------------
+
+Tasks
+
+1. Audit current mismatch points
+
+Trace projection path from:
+
+getNCAABPlays()
+→ getDynamicMultiplier()
+→ sanitizeProb()
+→ calc2HEngineProb()
+→ UI output
+
+Identify all possible drift points including:
+
+- mutable intermediate variables
+- client-side recomputation
+- stale state overwrites
+- rounding mismatches
+- side-selection mismatches
+- stale enrichment overriding engine output
+
+Return an audit report of these drift locations.
+
+--------------------------------------------------
+
+2. Define typed input/output contracts
+
+Create:
+
+NCAABGameInput
+NCAABGameOutput
+
+Location:
+shared/schema.ts OR new server/ncaabEngine.ts
+
+Input fields should include:
+
+gameId  
+sport  
+marketType  
+league  
+teamA  
+teamB  
+currentScoreA  
+currentScoreB  
+liveTotalLine  
+liveSpreadLine  
+liveTeamTotalA  
+liveTeamTotalB  
+firstHalfScoreA  
+firstHalfScoreB  
+gamePace  
+projectedPossessionsRemaining  
+foulsA  
+foulsB  
+injuryContext  
+torvik stats  
+SRS  
+SOS  
+source timestamps  
+
+Output fields must include:
+
+projectedTotal  
+projected1HTotal  
+projected2HTotal  
+projectedSpread  
+projectedTeamTotalA  
+projectedTeamTotalB  
+
+rawOverProb  
+rawUnderProb  
+rawSpreadProb  
+
+calibratedOverProb  
+calibratedUnderProb  
+
+over1HProb  
+over2HProb  
+
+impliedProbs  
+
+edgePcts  
+
+recommendedSide  
+
+confidenceTier  
+
+explanationBullets  
+
+displayProjection  
+displayProbability  
+displayPick  
+
+warnings  
+
+engineGeneratedAt  
+
+optional debug payload
+
+--------------------------------------------------
+
+3. Enforce single source of truth
+
+Client must render ONLY from final NCAABGameOutput returned by server.
+
+Rules:
+
+- no client-side probability calculation
+- no client-side projection calculation
+- no inferred pick direction
+- buildNCAABDisplayOutput() is the only serializer used for UI output
+
+--------------------------------------------------
+
+4. Rebuild projection layer
+
+Create pure function:
+
+calculateNCAABProjection(input: NCAABGameInput)
+
+Must return intermediate values:
+
+baseProjection  
+paceAdjustment  
+halfBlend  
+possessionAdjustment  
+marginAdjustment  
+
+finalProjectedTotal  
+finalProjectedSpread  
+finalProjectedTeamTotalA  
+finalProjectedTeamTotalB  
+
+Rules:
+
+- all modifiers bounded
+- no hidden mutation
+- no stacked multipliers
+- projection fully debuggable from returned values
+
+--------------------------------------------------
+
+5. Rebuild probability layer
+
+Create:
+
+calculateNCAABProbabilities(input, projectionResult)
+
+Replace linear formula:
+
+50 + diff * mult * 0.3
+
+Use realistic distribution model.
+
+Variance model:
+
+NCAAB scoring variance  
+σ = 12 points (default)
+
+Allow overrides later but start deterministic.
+
+Return:
+
+rawOverProb  
+rawUnderProb  
+rawSpreadProb  
+raw1HProb  
+raw2HProb  
+
+Then apply calibration:
+
+calibrateNCAABProbability(rawProbability, marketType, context)
+
+Guardrails:
+
+- probabilities rarely exceed 75–80%
+- if above threshold → emit warning to debug payload
+
+--------------------------------------------------
+
+6. Dynamic multiplier guardrail
+
+Clamp dynamic multiplier:
+
+0.6 ≤ multiplier ≤ 1.4
+
+Log warning if attempted value exceeds bounds.
+
+--------------------------------------------------
+
+7. Deterministic edge rule
+
+Recommended side must only be returned if BOTH conditions are met:
+
+absolute projection gap ≥ 2.0 points  
+calibrated probability ≥ 57%
+
+Otherwise return:
+
+NO_EDGE
+
+--------------------------------------------------
+
+8. Fix pick-direction logic
+
+Create function:
+
+determineRecommendedSide(projectedValue, line, overProb, underProb, edgeThreshold)
+
+Must:
+
+- compare projection vs line
+- compare calibrated probabilities
+- reject contradictions
+
+Contradictions to detect:
+
+projection below line but side = OVER  
+projection above line but side = UNDER  
+tiny edge but side returned  
+probability mismatch with displayed side  
+
+Allowed outputs:
+
+OVER  
+UNDER  
+NO_EDGE
+
+--------------------------------------------------
+
+9. Fix display output builder
+
+Create:
+
+buildNCAABDisplayOutput(engineOutput)
+
+Rules:
+
+Display must be built ONLY from final engine output.
+
+Add validation function:
+
+validateDisplayConsistency(input, engineOutput, displayOutput)
+
+Detect:
+
+projection mismatch  
+wrong side  
+probability mismatch  
+rounding contradiction  
+stale line mismatch  
+stale enrichment overwrite  
+client/server divergence  
+
+--------------------------------------------------
+
+10. Rounding rules
+
+Projection rounded to 1 decimal place before UI.
+
+Side selection uses unrounded value.
+
+Display rounding must never change recommended side.
+
+--------------------------------------------------
+
+11. Debug payload support
+
+Add optional debug fields:
+
+baseProjection  
+paceAdjustment  
+halfBlend  
+projectedPossessionsRemaining  
+varianceEstimate  
+rawProbability  
+calibratedProbability  
+sideDecisionReason  
+validationWarnings  
+
+Expose debug payload in dev/admin mode.
+
+--------------------------------------------------
+
+12. Market-level support
+
+Support game-level markets:
+
+full game total  
+1H total  
+2H total  
+spread  
+team total  
+1H team total  
+2H team total  
+
+Do NOT implement player props.
+
+Add light scaffolding for future variance tables if needed.
+
+--------------------------------------------------
+
+13. Stale-state safeguards
+
+In server/routes.ts:
+
+Attach engineGeneratedAt timestamp.
+
+Ensure stale enrichment or stale odds cannot overwrite newer engine output.
+
+Ensure /api/ncaab/plays returns a single finalized engine object per game.
+
+Do NOT merge partially built objects.
+
+--------------------------------------------------
+
+14. Diagnostic logging module
+
+Create:
+
+server/ncaabDiagnostics.ts
+
+Functions:
+
+logSettledPlay()  
+analyzeProjectionError()  
+analyzeCalibrationByBucket()  
+analyzeDisplayMismatchRate()  
+analyzeWrongSideRate()  
+detectDrift()  
+analyzeEdgeRealization()  
+
+Each settled play logs:
+
+marketType  
+line  
+final result  
+projection  
+projection error  
+displayed side  
+actual result side  
+raw probability  
+calibrated probability  
+display matched engine output  
+side selection consistency  
+timestamps  
+
+--------------------------------------------------
+
+15. Test cases
+
+Add tests covering:
+
+1. projection below line → must pick UNDER  
+2. projection above line → must pick OVER  
+3. tiny edge → NO_EDGE  
+4. rounding does not change side  
+5. stale line triggers warning  
+
+Additional tests:
+
+probability above threshold emits warning  
+display object matches engine output  
+stale enrichment cannot overwrite engine result  
+
+--------------------------------------------------
+
+Relevant files
+
+server/ncaabService.ts  
+server/ncaabEnrichment.ts  
+server/routes.ts  
+
+client/src/components/ncaab-admin-tab.tsx  
+client/src/pages/dashboard.tsx  
+
+shared/schema.ts  
+
+server/ncaabEngine.ts  
+server/ncaabDiagnostics.ts  
+
+--------------------------------------------------
+
+Dependencies
+
+Existing ESPN / SGO / Odds API / Torvik integrations remain unchanged.
+
+Use TypeScript.
+
+Prefer pure functions.
+
+Return:
+
+1. audit findings
+2. mismatch points
+3. file tree for rebuilt engine
+4. corrected types
+5. projection logic
+6. probability logic
+7. pick-direction logic
+8. display builder
+9. validation module
+10. diagnostics module
+11. test cases
+12. summary of fixes
