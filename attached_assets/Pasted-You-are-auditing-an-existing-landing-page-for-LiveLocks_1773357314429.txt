@@ -1,0 +1,114 @@
+You are auditing an existing landing page for LiveLocks.
+
+LiveLocks is a live sports betting detection engine that scans NBA games at halftime and surfaces the highest probability prop edges.
+
+The goal of this audit is NOT to redesign the site from scratch. The goal is to analyze the current landing page and identify what must change to improve conversion and visual credibility.
+
+Important context:
+
+• The landing page currently includes:
+  - Hero
+  - Dashboard preview
+  - Features grid
+  - 2H plays section
+  - SMS alerts section
+  - Pricing tiers
+  - CTA
+  - Footer
+
+• The app itself already exists and has a real dashboard UI.
+
+• The landing page should make the product feel REAL and ACTIVE, not conceptual.
+
+Your task is to perform a structured audit and output a report with 4 sections.
+
+---------------------------------------------------
+
+SECTION 1 — Conversion Audit
+
+Evaluate:
+
+• Hero clarity
+• Product credibility
+• Perceived product complexity
+• Emotional hook for bettors
+• CTA strength
+
+Explain:
+
+- What currently reduces trust
+- What causes friction
+- What prevents signups
+
+---------------------------------------------------
+
+SECTION 2 — Dashboard Preview Analysis
+
+Compare the two elements:
+
+A) Dashboard preview component
+B) SMS alert phone mockup
+
+Identify why the SMS section feels more compelling.
+
+Evaluate:
+
+• realism
+• UI density
+• information hierarchy
+• believability
+
+Determine:
+
+Should the dashboard preview:
+
+1) Use a real screenshot
+2) Use a simplified mock
+3) Use a hybrid
+
+Explain the reasoning.
+
+---------------------------------------------------
+
+SECTION 3 — Visual Hierarchy Problems
+
+Identify problems with:
+
+• spacing
+• section order
+• information overload
+• feature redundancy
+
+Answer:
+
+What sections should be simplified or removed?
+
+Which section currently sells the product the best?
+
+---------------------------------------------------
+
+SECTION 4 — Specific Changes (No Rebuild)
+
+Provide a list of **precise changes only**, not a redesign.
+
+Example format:
+
+Change 1:
+Replace dashboard preview component with a real screenshot of the LiveLocks NBA dashboard showing 3 edge cards.
+
+Change 2:
+Move SMS alert section directly under hero.
+
+Change 3:
+Reduce features grid to 3 bullets.
+
+Change 4:
+Adjust hero copy to emphasize halftime detection.
+
+Focus only on high-impact changes that improve:
+
+• credibility
+• clarity
+• conversion
+
+Do not introduce new features or sections.

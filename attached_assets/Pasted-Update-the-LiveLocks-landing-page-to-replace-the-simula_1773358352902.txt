@@ -1,0 +1,149 @@
+Update the LiveLocks landing page to replace the simulated UI preview components with real product screenshots.
+
+Goal:
+Improve credibility and conversion by showing actual product output instead of coded mockups.
+
+IMPORTANT:
+Do NOT change routing, layout structure, Tailwind styling system, authentication flow, or backend logic. Only update the visual assets used in the landing page preview sections.
+
+--------------------------------
+
+STEP 1 — Upload New Landing Images
+
+Add the following images to:
+
+client/public/
+
+Files to add:
+
+/dashboard-preview.png
+/sms-alerts.png
+
+These should be real screenshots of the product.
+
+dashboard-preview.png should show:
+• 2–3 prop edge cards
+• player name
+• prop line
+• hit probability %
+• edge %
+
+Crop the screenshot so ONLY the edge cards are visible.
+
+Do NOT include:
+• sidebar
+• navigation
+• admin controls
+• calculator inputs
+
+The goal is to show the **signal output**, not the tool interface.
+
+sms-alerts.png should show a phone-style SMS alert UI containing two alerts:
+
+HALFTIME ALERT — CLE vs DET
+Dennis Schroder — Points U13.5
+H1: 6 pts · Proj 2H: 9.6 · Need: 7.5
+Edge: +38.0%
+Hit Prob: 86.7%
+
+HALFTIME ALERT — CLE vs DET
+Jalen Duren — Pts+Reb O34.5
+H1: 26 · Proj 2H: 17.8 · Need: 8.5
+Edge: +35.1%
+Hit Prob: 85.1%
+
+--------------------------------
+
+STEP 2 — Replace DashboardPreview Component
+
+Open:
+
+client/src/components/DashboardPreview.tsx
+
+Remove the complex simulated UI code that renders tabs, cards, or fake prop data.
+
+Replace the entire component with a simple image-based preview.
+
+Example implementation:
+
+export default function DashboardPreview() {
+  return (
+    <div className="relative mx-auto max-w-5xl">
+      <div className="rounded-xl border border-neutral-800 shadow-2xl overflow-hidden">
+        <img
+          src="/dashboard-preview.png"
+          alt="LiveLocks live NBA prop detection dashboard"
+          className="w-full h-auto"
+        />
+      </div>
+    </div>
+  )
+}
+
+--------------------------------
+
+STEP 3 — Update SMS Alerts Section
+
+Open:
+
+client/src/pages/landing.tsx
+
+Locate the SMS alerts section.
+
+Replace the existing phone mockup or simulated message UI with an image reference.
+
+Example:
+
+<img
+  src="/sms-alerts.png"
+  alt="LiveLocks SMS halftime prop alerts"
+  className="rounded-xl shadow-xl border border-neutral-800"
+/>
+
+Ensure the image sits inside the existing two-column layout.
+
+Left column:
+phone image
+
+Right column:
+headline and bullet points
+
+Do NOT change the layout structure.
+
+--------------------------------
+
+STEP 4 — Verify Image Paths
+
+All images should reference:
+
+/dashboard-preview.png
+/sms-alerts.png
+
+These resolve automatically because they are placed in client/public/.
+
+--------------------------------
+
+STEP 5 — Keep Everything Else Identical
+
+Do not modify:
+
+• App routing
+• /auth logic
+• /dashboard logic
+• Pricing tiers
+• Feature grid
+• CTA banner
+• Footer
+• Tailwind styling
+
+Only replace visual preview assets.
+
+--------------------------------
+
+EXPECTED RESULT
+
+The landing page now shows:
+
+• a real screenshot of the LiveLocks edge detection dashboard
+• a realistic SMS alert phone preview
+• higher credibility and stronger visual proof that the product exists
