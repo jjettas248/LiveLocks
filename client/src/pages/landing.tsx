@@ -246,13 +246,13 @@ export default function LandingPage() {
         <div className="grid md:grid-cols-2 gap-16 items-center">
 
           <div className="flex flex-col items-center gap-4">
-            <div className="relative rounded-xl overflow-hidden border border-border shadow-2xl shadow-black/60">
-              <img
-                src="/sms-alerts.png"
-                alt="SMS alerts showing real-time halftime prop predictions sent directly to your phone"
-                className="w-full h-auto max-w-sm"
-              />
-            </div>
+            <img
+              src="/sms-alerts.png"
+              alt="SMS alerts showing real-time halftime prop predictions sent directly to your phone"
+              className="w-full max-w-md mx-auto rounded-xl border border-neutral-800 shadow-xl"
+              loading="lazy"
+              data-testid="img-sms-alerts"
+            />
             <p className="text-xs text-muted-foreground/50 text-center max-w-xs">
               Alerts fire the moment halftime data is confirmed. No refresh needed.
             </p>
