@@ -1,0 +1,73 @@
+Add two safeguards to the NCAAB UI integration (Task #8) to prevent ambiguity in spread verdict resolution and to enforce correct probability math/display separation. Do not modify engine logic; only adjust helper logic and UI usage patterns. Do not run npm scripts automatically. Return the patch diff only.
+
+1) ResolveSpreadVerdict Determinism Safeguard
+
+Ensure resolveSpreadVerdict returns a single deterministic spread verdict and avoids ambiguity if both `market` and `marketType` fields exist.
+
+Replace helper implementation with:
+
+function resolveSpreadVerdict(engineOutput) {
+  if (!engineOutput?.marketVerdicts) return null;
+
+  const verdict = engineOutput.marketVerdicts.find(
+    mv => mv.market === "spread" || mv.marketType === "spread"
+  );
+
+  if (!verdict && process.env.NODE_ENV !== "production") {
+    console.warn("NCAAB spread verdict missing", {
+      gameId: engineOutput?.gameId,
+      verdicts: engineOutput?.marketVerdicts
+    });
+  }
+
+  return verdict ?? null;
+}
+
+This helper must be used everywhere the UI reads spread lines.
+
+2) Probability Math / Display Separation Safeguard
+
+Ensure probability math uses numeric calibrated probabilities and UI text uses the displayOutput string only.
+
+Numeric logic must use:
+
+engineOutput.calibratedOverProb
+engineOutput.calibratedUnderProb
+engineOutput.calibratedSpreadProb
+
+Example numeric logic:
+
+const favProb = engineOutput.calibratedSpreadProb;
+const dogProb = 1 - favProb;
+
+Do NOT perform calculations like:
+
+100 - spreadProb
+
+because calibrated probabilities are normalized (0–1).
+
+User-facing probability text must use:
+
+engineOutput.displayOutput.displayProbability
+
+Fallback display should only be:
+
+displayOutput?.displayProbability ?? null
+
+Never compute UI probability text from numeric fields (no toFixed, no percentage math).
+
+3) Validation logging (dev only)
+
+Add a development-only check:
+
+if (process.env.NODE_ENV !== "production") {
+  console.warn("NCAAB probability contract check", {
+    gameId,
+    calibratedSpreadProb: engineOutput.calibratedSpreadProb,
+    displayProbability: engineOutput.displayOutput?.displayProbability
+  });
+}
+
+This ensures probability math and UI display remain contract-compliant.
+
+Stop after implementing these changes and return the patch diff.

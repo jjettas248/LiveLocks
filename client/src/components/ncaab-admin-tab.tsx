@@ -157,9 +157,20 @@ interface NCAABPlay {
 export type { ParlayPickInput as NCAABParlayPick };
 
 function resolveSpreadVerdict(engineOutput: NCAABPlay["engineOutput"]) {
-  return engineOutput?.marketVerdicts?.find(
+  if (!engineOutput?.marketVerdicts) return null;
+
+  const verdict = engineOutput.marketVerdicts.find(
     mv => mv.market === "spread" || mv.marketType === "spread"
   );
+
+  if (!verdict && process.env.NODE_ENV !== "production") {
+    console.warn("NCAAB spread verdict missing", {
+      gameId: (engineOutput as any)?.gameId,
+      verdicts: engineOutput.marketVerdicts,
+    });
+  }
+
+  return verdict ?? null;
 }
 
 interface TorvikStats {
@@ -965,6 +976,13 @@ function FullGameMarkets({
   const spreadLine  = spreadVerdict?.line ?? play.spread;
   if (spreadVerdict == null && play.spread != null) {
     console.warn("NCAAB spread fallback triggered", { gameId: play.gameId, fallbackLine: play.spread });
+  }
+  if (process.env.NODE_ENV !== "production") {
+    console.warn("NCAAB probability contract check", {
+      gameId: play.gameId,
+      calibratedSpreadProb: play.engineOutput?.calibratedSpreadProb,
+      displayProbability: play.engineOutput?.displayOutput?.displayProbability,
+    });
   }
   const absSpread = spreadLine != null ? Math.abs(spreadLine) : null;
   const resolvedSpreadTeam: "HOME" | "AWAY" | null = play.spreadTeam
