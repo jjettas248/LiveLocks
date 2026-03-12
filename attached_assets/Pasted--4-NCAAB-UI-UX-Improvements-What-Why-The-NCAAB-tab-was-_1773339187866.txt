@@ -1,0 +1,42 @@
+#4 - NCAAB UI/UX Improvements
+
+What & Why
+The NCAAB tab was built as a data-dense admin tool and has accumulated several UX gaps compared to the NBA tab: no top-plays feed, no book filter, cramped gauge layout on mobile, enrichment data shown in analyst jargon with no explanation, and scheduled games that show nothing useful. These changes bring the NCAAB tab up to the same usability standard as the NBA tab.
+
+Important sequencing rule
+Do not begin Task #4 until Task #3 is stable:
+- projection/display mismatch rate near zero
+- contradiction tests passing
+- server-side engine output is the single source of truth
+
+Done looks like
+- A Top Plays feed exists on the NCAAB tab, sorted and filterable like the NBA plays feed
+- Each play card shows a probability tier badge (Elite / Strong / Value) with consistent color coding
+- A sportsbook/book filter bar appears above the plays feed
+- Scheduled game tiles show the pre-game composite probability from the enrichment engine, clearly labeled as pre-game
+- The radial gauge layout is reorganized for mobile
+- Torvik/SRS/SOS stats have plain-English tooltips
+- Handle Signal and Sharp Money are grouped into a single Market Signal section with synthesis label
+- H2H history hides total-related text when total is null
+- An empty/no-games state renders a contextual message and next game countdown
+
+Out of scope
+- Changing the underlying engine math
+- Player-level NCAAB props
+- Redesigning the NBA tab
+
+Tasks
+1. Add Top Plays feed
+2. Add sportsbook filter bar
+3. Add probability tier badges
+4. Add pre-game enrichment pill on scheduled game tiles, labeled “Pre-game model”
+5. Reorganize radial gauge layout for mobile
+6. Add Torvik/advanced stat tooltips
+7. Consolidate Handle + Sharp Money into Market Signal section
+8. Clean up H2H history null-state display
+9. Add empty/no-games state
+
+Relevant files
+- client/src/components/ncaab-admin-tab.tsx
+- client/src/pages/dashboard.tsx
+- client/src/components/ui/tooltip.tsx

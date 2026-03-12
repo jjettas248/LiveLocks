@@ -1,0 +1,116 @@
+Implement a frontend-only paywall optimization in the dashboard without modifying backend logic or database structure.
+
+Context:
+
+* The backend already enforces a free play limit with `requirePlayAccess` and `FREE_PLAY_LIMIT = 15`.
+* `groupFiltered` already contains the full set of detected edges for each game.
+* Free users have `subscriptionTier = null`.
+* The upgrade modal is already triggered with `setShowUpgradeModal(true)`.
+
+Goal:
+Increase free → paid conversion by visually locking some edges before the user reaches the 15-play limit, while keeping the backend behavior unchanged.
+
+Steps:
+
+1. Add Paywall State Variables
+   In `client/src/pages/dashboard.tsx`, define:
+
+```
+const isFreeUser = !user?.subscriptionTier;
+const playsUsed = user?.playsUsed ?? 0;
+const visibleEdgeLimit = 5;
+```
+
+2. Determine Locked Edges
+   Inside the play rendering loop (`groupFiltered.map`), determine whether an edge should be locked:
+
+```
+const isLocked = isFreeUser && idx >= visibleEdgeLimit;
+```
+
+3. Modify Edge Card Rendering
+   If `isLocked` is true:
+
+* Keep the player name, stat type, and line visible
+* Blur or hide the following fields:
+
+  * probability
+  * projection (`expectedTotal`)
+  * edge value
+
+Example render logic:
+
+```
+{isLocked ? (
+  <div className="text-sm text-muted-foreground">
+    Projection: 🔒
+    Probability: 🔒
+    Edge: 🔒
+  </div>
+) : (
+  <div>
+    <span>{displayProb.toFixed(1)}%</span>
+    <span>Proj: {play.expectedTotal?.toFixed(1)}</span>
+    {play.edge && <span>Edge: +{play.edge.toFixed(1)}%</span>}
+  </div>
+)}
+```
+
+4. Add Upgrade Trigger on Locked Card Click
+   If a locked card is clicked, open the upgrade modal instead of loading the play:
+
+```
+onClick={() => {
+  if (isLocked) {
+    setShowUpgradeModal(true);
+  } else {
+    loadPlayInCalculator(play);
+  }
+}}
+```
+
+5. Add Locked Edge Counter
+   Above the edge list for each game group, display a summary for free users:
+
+```
+const totalEdges = groupFiltered.length;
+const lockedEdges = Math.max(0, totalEdges - visibleEdgeLimit);
+```
+
+Render a notice:
+
+```
+{isFreeUser && lockedEdges > 0 && (
+  <div className="text-xs text-muted-foreground">
+    🔒 {lockedEdges} additional edges locked — upgrade to view
+  </div>
+)}
+```
+
+6. Preserve Existing Play Limit Behavior
+   Do NOT modify:
+
+* `FREE_PLAY_LIMIT`
+* `requirePlayAccess`
+* `PlayLimitError`
+* the backend routes
+
+The backend must still enforce the 15-play limit exactly as it does now.
+
+7. Visual Styling
+   Locked cards should:
+
+* show a subtle blur (`blur-sm` or opacity)
+* display a lock icon
+* include a small “Upgrade to unlock” label
+
+Example:
+
+```
+<div className="opacity-60 cursor-pointer">
+  🔒 Upgrade to unlock this edge
+</div>
+```
+
+Result:
+Free users see a few real edges and many locked ones, creating curiosity and encouraging upgrades without altering the backend play limit system.

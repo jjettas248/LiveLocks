@@ -1,0 +1,270 @@
+Implement the Predictive Minutes Model for the LiveLocks NBA probability engine.
+
+Goal:
+Replace the fragile scaling formula (minuteBase × minuteGameFraction) and all minute-related modifier blocks with a dedicated rotation-based minutes model module.
+
+Do NOT modify API routes or frontend behavior.
+
+Files involved:
+server/storage.ts
+shared/schema.ts
+
+Create new module:
+server/minutesModel.ts
+
+
+STEP 1 — Create the Minutes Model Module
+
+Create file:
+
+server/minutesModel.ts
+
+Define interfaces:
+
+export interface MinutesContext {
+  playerId: number
+  currentPeriod: number
+  clockMins: number
+  minutesPlayed: number
+  foulCount: number
+  scoreDiff?: number
+  usageRate: number
+  avgMinutes: number
+  h2avgMinutes?: number
+  missingStarterCount?: number
+}
+
+export interface MinutesResult {
+  expectedRemainingMinutes: number
+  closingProbability: number
+  minutesConfidence: "low" | "medium" | "high"
+}
+
+Export main function:
+
+export function calculateRemainingMinutes(ctx: MinutesContext): MinutesResult
+
+
+STEP 2 — Base Rotation Projection
+
+Determine the base rotation minutes.
+
+If currentPeriod >= 3 and h2avgMinutes exists:
+
+baseRotationMinutes = h2avgMinutes
+
+Otherwise:
+
+baseRotationMinutes = avgMinutes
+
+Compute expected game fraction remaining:
+
+gameMinutesRemaining =
+  (4 - currentPeriod) * 12 + clockMins
+
+remainingMinutes =
+  baseRotationMinutes * (gameMinutesRemaining / 48)
+
+
+STEP 3 — Rotation Pattern Adjustment
+
+Estimate whether the player is tracking normally.
+
+expectedFirstHalfMinutes = avgMinutes / 2
+
+If minutesPlayed < expectedFirstHalfMinutes * 0.70
+
+remainingMinutes *= 0.85
+
+If minutesPlayed > expectedFirstHalfMinutes * 1.15
+
+remainingMinutes *= 1.10
+
+
+STEP 4 — Closing Lineup Probability
+
+Estimate closing probability based on rotation importance.
+
+closingProbability:
+
+if avgMinutes >= 34 → 0.95
+else if avgMinutes >= 30 → 0.85
+else if avgMinutes >= 26 → 0.70
+else → 0.40
+
+If usageRate >= 0.27 add +0.05
+
+Clamp closingProbability to maximum 0.98
+
+
+STEP 5 — Close Game Extension
+
+If scoreDiff exists AND
+
+abs(scoreDiff) <= 8 AND
+currentPeriod >= 4
+
+remainingMinutes *= (1 + closingProbability * 0.06)
+
+
+STEP 6 — Blowout Reduction
+
+If scoreDiff exists:
+
+if abs(scoreDiff) > 15
+remainingMinutes *= 0.85
+
+if abs(scoreDiff) > 22
+remainingMinutes *= 0.70
+
+
+STEP 7 — Foul Risk Adjustment
+
+If foulCount == 3
+remainingMinutes *= 0.85
+
+If foulCount >= 4
+remainingMinutes *= 0.60
+
+
+STEP 8 — Injury Rotation Expansion
+
+missingStarterCount defaults to 0 if undefined.
+
+If missingStarterCount >= 1
+remainingMinutes *= 1.05
+
+If missingStarterCount >= 2
+remainingMinutes *= 1.10
+
+
+STEP 9 — Clamp Bounds
+
+Maximum possible minutes remaining:
+
+maxRemainingMinutes =
+  (4 - currentPeriod) * 12 + clockMins
+
+Clamp:
+
+remainingMinutes =
+  Math.max(0, Math.min(remainingMinutes, maxRemainingMinutes))
+
+
+STEP 10 — Minutes Confidence
+
+Determine confidence level.
+
+If minutesPlayed < 5
+minutesConfidence = "low"
+
+Else if minutesPlayed <= 15
+minutesConfidence = "medium"
+
+Else
+minutesConfidence = "high"
+
+
+STEP 11 — Return Result
+
+Return:
+
+{
+  expectedRemainingMinutes: remainingMinutes,
+  closingProbability,
+  minutesConfidence
+}
+
+
+STEP 12 — Integrate Into Probability Engine
+
+Open:
+
+server/storage.ts
+
+Import module:
+
+import { calculateRemainingMinutes } from "./minutesModel"
+
+Inside calculateProbability() remove the following logic blocks entirely:
+
+• foul reduction
+• rotation cap
+• spread reduction
+• game script divergence
+• close game boost
+
+These are now handled by the minutes model.
+
+
+STEP 13 — Replace Remaining Minutes Calculation
+
+Remove the old calculation:
+
+remainingMinutes = minuteBase × minuteGameFraction
+
+Replace with:
+
+const minutesResult =
+  calculateRemainingMinutes({
+    playerId,
+    currentPeriod,
+    clockMins,
+    minutesPlayed,
+    foulCount,
+    scoreDiff,
+    usageRate,
+    avgMinutes,
+    h2avgMinutes,
+    missingStarterCount: 0
+  })
+
+const remainingMinutes =
+  minutesResult.expectedRemainingMinutes
+
+
+STEP 14 — Extend Debug Output
+
+Open:
+
+shared/schema.ts
+
+Extend CalcDebug interface:
+
+expectedRemainingMinutes?: number
+closingProbability?: number
+minutesConfidence?: "low" | "medium" | "high"
+
+
+STEP 15 — Populate Debug Fields
+
+Inside calculateProbability() debug return block add:
+
+expectedRemainingMinutes: minutesResult.expectedRemainingMinutes
+closingProbability: minutesResult.closingProbability
+minutesConfidence: minutesResult.minutesConfidence
+
+
+STEP 16 — Constraints
+
+Do NOT modify these endpoints:
+
+/api/halftime-plays
+/api/live-signals/:gameId
+
+Do NOT modify probability calibration logic.
+
+Do NOT add new database tables.
+
+Do NOT change response structures.
+
+
+STEP 17 — Validation
+
+Ensure TypeScript compiles.
+
+Confirm debug output now includes:
+
+expectedRemainingMinutes
+closingProbability
+minutesConfidence

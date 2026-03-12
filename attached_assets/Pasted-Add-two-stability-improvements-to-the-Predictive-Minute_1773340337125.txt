@@ -1,0 +1,86 @@
+Add two stability improvements to the Predictive Minutes Model.
+
+These are small guardrails that prevent unrealistic minute projections
+and reduce inflation for bench players in close games.
+
+Do NOT modify API routes or probability calibration logic.
+
+Only update server/minutesModel.ts.
+
+
+STEP A — Bench Player Close-Game Control
+
+Modify the close-game extension logic.
+
+Current logic:
+
+remainingMinutes *= (1 + closingProbability * 0.06)
+
+Replace with:
+
+remainingMinutes *= (1 + closingProbability * 0.05)
+
+Reason:
+Bench players should not receive the same minute extension
+as primary closing lineup players. The slightly lower multiplier
+reduces projection inflation.
+
+
+STEP B — Maximum Minutes Projection Guard
+
+After all minutes adjustments are applied
+(foul risk, blowout reduction, injury expansion, close-game extension),
+add a protection cap that prevents unrealistic total minutes projections.
+
+Insert the following logic before the bounds clamp:
+
+maxProjectedMinutes = avgMinutes * 1.25
+
+maxRemainingAllowed =
+  Math.max(0, maxProjectedMinutes - minutesPlayed)
+
+remainingMinutes =
+  Math.min(remainingMinutes, maxRemainingAllowed)
+
+Reason:
+Close games and stacked modifiers can push projections above
+realistic minute ceilings. This cap ensures projected minutes
+cannot exceed 125% of the player's season average.
+
+
+STEP C — Order of Operations
+
+Ensure the final minutes pipeline runs in this order:
+
+1. base rotation projection
+2. rotation pattern adjustment
+3. closing lineup probability
+4. close-game extension
+5. blowout reduction
+6. foul risk multiplier
+7. injury expansion
+8. MAX MINUTES GUARD (new)
+9. clamp to game time remaining
+10. determine minutesConfidence
+
+
+STEP D — Debug Output
+
+Ensure debug output continues returning:
+
+expectedRemainingMinutes
+closingProbability
+minutesConfidence
+
+No changes required to API responses.
+
+
+STEP E — Validation
+
+Run TypeScript compile check.
+
+Confirm remainingMinutes never produces unrealistic values such as:
+
+remainingMinutes > 25 late in the game
+or
+projectedTotalMinutes > avgMinutes * 1.25

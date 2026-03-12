@@ -1,0 +1,169 @@
+Add a predictive minutes model to the LiveLocks NBA probability engine.
+
+Create a new module:
+
+server/minutesModel.ts
+
+Export a function:
+
+calculateRemainingMinutes(context)
+
+Inputs:
+playerId
+currentPeriod
+clockMins
+minutesPlayed
+foulCount
+scoreDiff
+gameSpread
+usageRate
+avgMinutes
+teamId
+opponentId
+
+The function should estimate expectedRemainingMinutes using rotation modeling instead of simple scaling.
+
+--------------------------------
+
+STEP 1 — Base rotation projection
+
+Compute base rotation minutes:
+
+baseRotationMinutes = avgMinutes
+
+Adjust using second half splits if available.
+
+If currentPeriod >= 3:
+baseRotationMinutes = h2avgMinutes if present.
+
+--------------------------------
+
+STEP 2 — Rotation pattern adjustment
+
+Estimate typical substitution pattern using historical minutes splits.
+
+Add logic:
+
+if minutesPlayed < expectedFirstHalfMinutes * 0.70
+then remainingMinutes *= 0.85
+
+if minutesPlayed > expectedFirstHalfMinutes * 1.15
+then remainingMinutes *= 1.10
+
+--------------------------------
+
+STEP 3 — Closing lineup probability
+
+Estimate closing probability using usage and minutes.
+
+closingProbability =
+
+if avgMinutes >= 34 → 0.95
+if avgMinutes >= 30 → 0.85
+if avgMinutes >= 26 → 0.70
+else → 0.40
+
+If usageRate >= 0.27 increase by +0.05.
+
+--------------------------------
+
+STEP 4 — Close game extension
+
+If scoreDiff ≤ 8 AND period >= 4:
+
+remainingMinutes *= (1 + closingProbability × 0.06)
+
+--------------------------------
+
+STEP 5 — Blowout reduction
+
+If abs(scoreDiff) > 15:
+
+remainingMinutes *= 0.85
+
+If abs(scoreDiff) > 22:
+
+remainingMinutes *= 0.70
+
+--------------------------------
+
+STEP 6 — Foul risk adjustment
+
+If foulCount == 3:
+
+remainingMinutes *= 0.85
+
+If foulCount >= 4:
+
+remainingMinutes *= 0.60
+
+--------------------------------
+
+STEP 7 — Injury rotation expansion
+
+If missingStarterCount >= 1:
+
+remainingMinutes *= 1.05
+
+If missingStarterCount >= 2:
+
+remainingMinutes *= 1.10
+
+--------------------------------
+
+STEP 8 — Bounds
+
+Clamp remainingMinutes between:
+
+0
+and
+
+maxRemainingGameMinutes
+
+--------------------------------
+
+STEP 9 — Return result
+
+Return:
+
+{
+expectedRemainingMinutes,
+closingProbability,
+minutesConfidence
+}
+
+minutesConfidence = based on minutesPlayed sample size.
+
+--------------------------------
+
+STEP 10 — Integration
+
+Import the module into:
+
+server/storage.ts
+
+Replace the current remainingMinutes calculation:
+
+remainingMinutes = minuteBase × minuteGameFraction
+
+with:
+
+remainingMinutes = calculateRemainingMinutes(context)
+
+--------------------------------
+
+STEP 11 — Debug output
+
+Add to debug object:
+
+expectedRemainingMinutes
+closingProbability
+minutesConfidence
+
+--------------------------------
+
+IMPORTANT
+
+Do not change API endpoints.
+
+Only replace the minutes calculation inside calculateProbability().
