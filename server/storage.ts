@@ -1,4 +1,5 @@
 import { db } from "./db";
+import { calculateRemainingMinutes } from "./minutesModel";
 import {
   players,
   teamDefense,
@@ -263,36 +264,32 @@ export class DatabaseStorage implements IStorage {
     const h2Min = player.h2avgMinutes ? Number(player.h2avgMinutes) : null;
     const useH2 = inSecondHalf && h2Min !== null && h2Min > 3;
 
-    // Player's expected remaining minutes = fraction of game left × season avg (or H2 avg)
-    // When H2 baselines are active use h2avgMinutes as the base (not full-game / 2)
-    // so that the per-minute rate and the time projection share the same denominator.
-    const minuteBase = useH2 ? h2Min! : avgMinutes;
-    const minuteGameFraction = useH2 ? gameMinutesRemaining / 24 : gameMinutesRemaining / 48;
-    const expectedMinutesFromHere = minuteBase * minuteGameFraction;
-    let remainingMinutes = Math.max(0, expectedMinutesFromHere);
-
-    // ─── Foul trouble minute reduction ─────────────────────────────────────
-    if (req.halftimeFouls >= 4) remainingMinutes *= 0.45;
-    else if (req.halftimeFouls >= 3) remainingMinutes *= 0.70;
-
-    // ─── Situational rotation check (halftime context only) ─────────────────
-    // Compare actual H1 minutes played to what was expected. If a player
-    // played <75% of their expected H1 minutes they are in a reduced rotation
-    // tonight (foul trouble already handled above, so this catches: coach's
-    // doghouse, injury management, matchup-based sits, tanking lineups).
-    // In that case cap projected H2 minutes at 110% of their actual H1 minutes
-    // rather than the full season-average projection.
-    if (isHalftimeContext && minutesPlayed >= 3) {
-      const expectedH1Minutes = avgMinutes * (12 / 48); // season avg prorated to 1 half
-      const rotationRatio = minutesPlayed / Math.max(expectedH1Minutes, 1);
-      if (rotationRatio < 0.75) {
-        const cappedH2 = minutesPlayed * 1.1;
-        if (cappedH2 < remainingMinutes) {
-          console.log(`[calc] ${player.name}: rotation cap applied — H1 played ${minutesPlayed.toFixed(1)} min vs expected ${expectedH1Minutes.toFixed(1)} (${(rotationRatio * 100).toFixed(0)}%) → capping H2 at ${cappedH2.toFixed(1)} min`);
-          remainingMinutes = cappedH2;
-        }
+    // ─── Parse score diff (needed for minutes model + overtime boost) ──────
+    const currentScore = req.halftimeScore;
+    let parsedScoreDiff = 0;
+    let hasScoreData = false;
+    if (currentScore) {
+      const sc = currentScore.split(/[- ]+/).map(Number);
+      if (sc.length === 2 && !isNaN(sc[0]) && !isNaN(sc[1])) {
+        parsedScoreDiff = sc[1] - sc[0];
+        hasScoreData = true;
       }
     }
+
+    // ─── Predictive minutes model ───────────────────────────────────────────
+    const minutesResult = calculateRemainingMinutes({
+      playerId: req.playerId,
+      currentPeriod,
+      clockMins,
+      minutesPlayed,
+      foulCount: req.halftimeFouls,
+      scoreDiff: hasScoreData ? parsedScoreDiff : undefined,
+      usageRate,
+      avgMinutes,
+      h2avgMinutes: h2Min ?? undefined,
+      missingStarterCount: 0,
+    });
+    const remainingMinutes = minutesResult.expectedRemainingMinutes;
 
     // ─── Team pace ─────────────────────────────────────────────────────────
     const playerTeamPace = TEAM_PACE[player.team] ?? LEAGUE_AVG_PACE;
@@ -308,12 +305,10 @@ export class DatabaseStorage implements IStorage {
       paceMultiplier = totalBasedPace * 0.5 + paceMultiplier * 0.5;
     }
 
-    const currentScore = req.halftimeScore;
     if (currentScore) {
       const scores = currentScore.split(/[- ]+/).map(Number);
       if (scores.length === 2 && !isNaN(scores[0]) && !isNaN(scores[1])) {
         const scoreTotal = scores[0] + scores[1];
-        // Scale live score to full-game pace using elapsed game time
         const elapsedMins = 48 - gameMinutesRemaining;
         const impliedFullGame = elapsedMins > 0 ? (scoreTotal / elapsedMins) * 48 : EXPECTED_GAME_TOTAL;
         const impliedRef = req.gameTotalLine ? req.gameTotalLine : EXPECTED_GAME_TOTAL;
@@ -323,53 +318,6 @@ export class DatabaseStorage implements IStorage {
     }
     const halfTimePaceCap = gameMinutesRemaining >= 22 ? 1.10 : 1.18;
     paceMultiplier = Math.max(0.78, Math.min(halfTimePaceCap, paceMultiplier));
-
-    // ─── Game spread → garbage-time minute reduction ────────────────────────
-    let spreadMinuteReduction = 1.0;
-    const absSpread = req.gameSpread !== undefined ? Math.abs(req.gameSpread) : 0;
-    if (absSpread > 0) {
-      if (absSpread >= 20 && usageRate >= 0.25) {
-        spreadMinuteReduction = 0.82;
-      } else if (absSpread >= 15 && usageRate >= 0.25) {
-        spreadMinuteReduction = 0.90;
-      } else if (absSpread >= 15 && usageRate >= 0.20) {
-        spreadMinuteReduction = 0.95;
-      }
-    }
-    // Q4 late-game blowout: heavy star-sit risk when score is lopsided
-    if (currentPeriod === 4 && clockMins < 4 && absSpread > 12) {
-      spreadMinuteReduction = Math.min(spreadMinuteReduction, 0.70);
-    }
-    // ─── Game script divergence ──────────────────────────────────────────────
-    // If the actual score gap exceeds the pre-game spread significantly,
-    // apply a minute reduction that OVERRIDES (not stacks with) the spread reduction.
-    let parsedScoreDiff = 0;
-    let hasScoreData = false;
-    if (currentScore) {
-      const sc = currentScore.split(/[- ]+/).map(Number);
-      if (sc.length === 2 && !isNaN(sc[0]) && !isNaN(sc[1])) {
-        parsedScoreDiff = sc[1] - sc[0];
-        hasScoreData = true;
-      }
-    }
-    let scriptOverride: number | null = null;
-    if (hasScoreData && req.gameSpread !== undefined) {
-      const leadDelta = Math.abs(parsedScoreDiff) - Math.abs(req.gameSpread);
-      if (leadDelta > 25)       scriptOverride = 0.65;
-      else if (leadDelta > 18)  scriptOverride = 0.80;
-      else if (leadDelta > 12)  scriptOverride = 0.92;
-    }
-    if (scriptOverride !== null) {
-      remainingMinutes *= scriptOverride;
-    } else {
-      remainingMinutes *= spreadMinuteReduction;
-    }
-
-    // ─── Close game minute boost (Step 6) ────────────────────────────────────
-    // In close Q4+ games, star/rotation players close harder. Only when score data exists.
-    if (hasScoreData && Math.abs(parsedScoreDiff) <= 8 && currentPeriod >= 4 && (usageRate >= 0.22 || avgMinutes >= 28)) {
-      remainingMinutes *= 1.05;
-    }
 
     // ─── H2 baseline selection ──────────────────────────────────────────────
     // inSecondHalf / h2Min / useH2 are declared earlier (needed for minute projection).
@@ -530,6 +478,9 @@ export class DatabaseStorage implements IStorage {
       shootingModifier: Math.round(shootingModifier * 100) / 100,
       contextModifier: Math.round(contextModifier * 100) / 100,
       probabilityCalibrated: probability,
+      expectedRemainingMinutes: minutesResult.expectedRemainingMinutes,
+      closingProbability: minutesResult.closingProbability,
+      minutesConfidence: minutesResult.minutesConfidence,
     };
 
     return {

@@ -130,6 +130,9 @@ export interface CalcDebug {
   shootingModifier: number;
   contextModifier: number;
   probabilityCalibrated: number;
+  expectedRemainingMinutes?: number;
+  closingProbability?: number;
+  minutesConfidence?: "low" | "medium" | "high";
 }
 
 export interface CalculateProbabilityResponse {
