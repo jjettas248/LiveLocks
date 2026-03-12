@@ -159,7 +159,8 @@ function calibrateProbability(
 
   if (context === "live") prob += LIVE_CONTEXT_LIFT;
 
-  const pct = prob * 100;
+  const pctOver = prob * 100;
+  const pct = edge >= 0 ? pctOver : 100 - pctOver;
   return Math.max(2, Math.min(98, Math.round(pct * 10) / 10));
 }
 
