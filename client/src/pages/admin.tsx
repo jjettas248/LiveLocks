@@ -64,7 +64,7 @@ function AdminLink() {
         <div className="flex items-center gap-3">
           <button
             data-testid="link-dashboard"
-            onClick={() => navigate("/")}
+            onClick={() => navigate("/dashboard")}
             className="text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-lg border border-border hover:bg-muted"
           >
             Dashboard
@@ -307,7 +307,7 @@ export default function AdminPage() {
   }
 
   if (!user.isAdmin) {
-    navigate("/");
+    navigate("/dashboard");
     return null;
   }
 

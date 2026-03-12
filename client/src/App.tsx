@@ -9,6 +9,7 @@ import AuthPage from "@/pages/auth";
 import AdminPage from "@/pages/admin";
 import PrivacyPage from "@/pages/privacy";
 import TermsPage from "@/pages/terms";
+import LandingPage from "@/pages/landing";
 import { useAuth } from "@/hooks/use-auth";
 import { useEffect } from "react";
 
@@ -21,10 +22,10 @@ function ProtectedRouter() {
       navigate("/auth");
     }
     if (!isLoading && user && location === "/auth") {
-      navigate("/");
+      navigate("/dashboard");
     }
     if (!isLoading && user && !user.isAdmin && location === "/admin") {
-      navigate("/");
+      navigate("/dashboard");
     }
   }, [user, isLoading, location, navigate]);
 
@@ -40,10 +41,31 @@ function ProtectedRouter() {
     <Switch>
       <Route path="/auth" component={AuthPage} />
       <Route path="/admin" component={AdminPage} />
-      <Route path="/" component={Dashboard} />
+      <Route path="/dashboard" component={Dashboard} />
       <Route component={NotFound} />
     </Switch>
   );
+}
+
+function RootRedirect() {
+  const { user, isLoading } = useAuth();
+  const [, navigate] = useLocation();
+
+  useEffect(() => {
+    if (!isLoading && user) {
+      navigate("/dashboard");
+    }
+  }, [user, isLoading, navigate]);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return <LandingPage />;
 }
 
 function App() {
@@ -52,6 +74,8 @@ function App() {
       <TooltipProvider>
         <Toaster />
         <Switch>
+          <Route path="/" component={RootRedirect} />
+          <Route path="/landing" component={LandingPage} />
           <Route path="/privacy" component={PrivacyPage} />
           <Route path="/terms" component={TermsPage} />
           <Route component={ProtectedRouter} />

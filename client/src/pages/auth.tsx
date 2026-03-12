@@ -63,7 +63,7 @@ export default function AuthPage() {
         ? { phone: normalizePhone(identifier), password: data.password }
         : { email: identifier, password: data.password };
       await login(loginPayload);
-      navigate("/");
+      navigate("/dashboard");
     } catch (err: any) {
       setErrorMessage(err.message || "Something went wrong. Please try again.");
     }
@@ -78,7 +78,7 @@ export default function AuthPage() {
         smsConsent: data.smsConsent,
         phoneNumber: data.phoneNumber,
       });
-      navigate("/");
+      navigate("/dashboard");
     } catch (err: any) {
       setErrorMessage(err.message || "Something went wrong. Please try again.");
     }
