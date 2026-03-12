@@ -1,0 +1,126 @@
+Implement the frontend-only paywall optimization for free users in the NBA dashboard, keeping all backend logic unchanged.
+
+Context:
+- MLB will be a separate tab later. Do not touch MLB.
+- The current backend paywall already works and must remain untouched:
+  - `FREE_PLAY_LIMIT = 15`
+  - `requirePlayAccess`
+  - `PlayLimitError`
+  - `plays_used` in DB
+- `groupFiltered` already contains the full detected set of NBA edges for a game after user-selected filters.
+- The upgrade modal already exists and can be opened with `setShowUpgradeModal(true)`.
+
+Goal:
+Increase free-to-paid conversion by visually locking edges beyond the first 5 per NBA game for free users, while preserving the current 15-play backend limit and all existing calculator behavior.
+
+Requirements:
+1. Free users should see the first 5 edges per game fully revealed.
+2. Edges beyond the first 5 should still render as cards, but with locked values.
+3. Keep player name, stat type, and line visible on locked cards.
+4. Hide/lock these fields on locked cards:
+   - probability
+   - projection (`expectedTotal`)
+   - edge value
+5. Clicking a locked card should open the upgrade modal instead of loading the play into the calculator.
+6. Add a summary line above each game’s edge grid showing:
+   - total edges detected for that game
+   - how many are visible
+   - how many are locked
+7. Add an “Unlock All Edges” CTA below the locked section that opens the upgrade modal.
+8. Do not change:
+   - backend routes
+   - middleware
+   - DB schema
+   - `FREE_PLAY_LIMIT`
+   - calculator result cards
+   - NCAAB tab behavior
+   - MLB tab behavior
+
+Step-by-step implementation:
+
+Step 1 — Add paywall state in `client/src/pages/dashboard.tsx`
+Inside the Dashboard component, derive:
+- `isFreeUser = !user?.subscriptionTier`
+- `playsUsed = user?.playsUsed ?? 0`
+- `visibleEdgeLimit = 5`
+
+Step 2 — Use full filtered edge set
+In the NBA halftime/game edge rendering area around the existing:
+`const groupFiltered = filterByBook(group.plays.filter(filterPlay), nbaBookFilter);`
+keep this unchanged.
+
+Then derive:
+- `totalEdges = groupFiltered.length`
+- `lockedEdges = Math.max(0, totalEdges - visibleEdgeLimit)`
+
+Step 3 — Add summary line above the card grid
+For free users, above each game group’s cards, render something like:
+- `LiveLocks detected 18 prop edges in this game`
+- `Showing 5`
+- `🔒 13 locked`
+
+Only show the locked count if `lockedEdges > 0`.
+
+Step 4 — Lock edges after the first 5
+Inside `groupFiltered.map((play, idx) => ...)`, compute:
+- `isLocked = isFreeUser && idx >= visibleEdgeLimit`
+
+For locked cards:
+- keep visible:
+  - player name
+  - stat type
+  - line
+- replace:
+  - probability with `🔒`
+  - projection with `🔒`
+  - edge with `🔒`
+
+Do not remove the fields entirely. Keep the card structure intact so it looks like a real edge card with hidden premium values.
+
+Step 5 — Locked card styling
+Apply a subtle premium-lock style to locked cards:
+- reduced opacity
+- optional slight blur on locked values only
+- lock icon near premium values
+- small “Upgrade to unlock” label on the card
+
+Important:
+Do not make the whole card unreadable.
+The goal is curiosity, not hiding that an edge exists.
+
+Step 6 — Locked card click behavior
+Current unlocked cards call `loadPlayInCalculator(play)`.
+Change click handling so:
+- if `isLocked`, call `setShowUpgradeModal(true)`
+- otherwise keep existing behavior
+
+Step 7 — Add Unlock All CTA
+Below the edge grid, if `isFreeUser && lockedEdges > 0`, render:
+- `🔒 13 additional edges locked`
+- button/link: `Unlock All Edges`
+
+Clicking this CTA should call `setShowUpgradeModal(true)`.
+
+Step 8 — Preserve all current behavior
+Do not modify:
+- `requirePlayAccess`
+- `PlayLimitError`
+- `/api/calculator/calculate`
+- `/api/2h-game-view`
+- existing 15-play modal logic
+- per-game unlock gate logic if present elsewhere
+- NCAAB gating
+- MLB tab logic
+
+Step 9 — Keep implementation isolated
+Only change files needed for the NBA dashboard rendering and, if necessary, minor styling helpers.
+Primary file should be:
+- `client/src/pages/dashboard.tsx`
+
+Only touch `client/src/components/upgrade-modal.tsx` if needed for button text or compatibility, not for behavioral rewrites.
+
+Deliverables:
+1. Updated `dashboard.tsx`
+2. Brief summary of what changed
+3. Confirmation that no backend logic was modified
+4. Call out any places where the existing UI structure made this tricky

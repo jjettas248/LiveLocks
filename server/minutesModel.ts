@@ -78,10 +78,11 @@ export function calculateRemainingMinutes(ctx: MinutesContext): MinutesResult {
   // ── 5. Blowout reduction ─────────────────────────────────────────────
   if (scoreDiff !== undefined) {
     const absDiff = Math.abs(scoreDiff);
+    if (absDiff > 15) {
+      remainingMinutes *= 0.85;
+    }
     if (absDiff > 22) {
       remainingMinutes *= 0.70;
-    } else if (absDiff > 15) {
-      remainingMinutes *= 0.85;
     }
   }
 
