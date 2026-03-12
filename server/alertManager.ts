@@ -166,7 +166,7 @@ export async function checkAndSendAlerts(
   }
 
   // ── NCAAB halftime alerts — ONE per game, only when over2HProb ≥ 85% ─────────
-  for (const [gameId, play] of ncaabHalftimeByGame) {
+  for (const [gameId, play] of Array.from(ncaabHalftimeByGame)) {
     // Mark as alerted (in-memory dedup)
     alertedHalftimeGames.add(`${gameId}|${todayStr()}`);
 

@@ -3535,7 +3535,7 @@ export default function Dashboard() {
           onOpenAlertsPanel={() => {
             setShowAlertsModal(false);
             try { localStorage.setItem("ll_alerts_onboarded", "1"); } catch {}
-            setShowAlertsPanel(true);
+            setShowAlertsModal(true);
           }}
           hasSmsAccess={["all", "elite"].includes(user.subscriptionTier ?? "") || (user.isAdmin ?? false)}
           hasPhone={!!phoneInput}

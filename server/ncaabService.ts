@@ -1,3 +1,6 @@
+import { runNCAABEngine, type NCAABEngineOutput, type RecommendedSide } from "./ncaabEngine";
+import { logSettledPlay } from "./ncaabDiagnostics";
+
 const ODDS_API_KEY = process.env.ODDS_API_KEY;
 const SGO_API_KEY  = process.env.SGO_API_KEY;
 const ESPN_NCAAB = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball";
@@ -9,6 +12,8 @@ const NCAAB_2H_MARKETS   = "h2_totals,h2_spreads";
 
 interface CacheEntry { data: any; timestamp: number; }
 const cache = new Map<string, CacheEntry>();
+const lastEngineOutputByGame = new Map<string, { engineOutput: NCAABEngineOutput; line: number; side: RecommendedSide }>();
+const settledGameIds = new Set<string>();
 const GAMES_TTL   = 90 * 1000;
 const BOX_TTL     = 60 * 1000;
 const LINES_TTL   = 5 * 60 * 1000;
@@ -29,40 +34,6 @@ function normTeam(name: string): string {
 function teamsMatch(a: string, b: string): boolean {
   const na = normTeam(a); const nb = normTeam(b);
   return na === nb || na.includes(nb) || nb.includes(na);
-}
-
-function sigmoid(x: number): number { return 1 / (1 + Math.exp(-x)); }
-
-// ── Dynamic multiplier: scales certainty with game progress ──────────────────
-function getDynamicMultiplier(secsRemaining: number, totalSecs: number, period: number, maxPeriods: number): number {
-  if (period > maxPeriods) return 12.0; // overtime — max certainty
-  const progress = Math.min(Math.max(1 - secsRemaining / totalSecs, 0), 1);
-  if (progress < 0.10) return 3.0;
-  if (progress < 0.25) return 4.0;
-  if (progress < 0.50) return 5.0;
-  if (progress < 0.65) return 6.0;
-  if (progress < 0.75) return 7.0;
-  if (progress < 0.85) return 8.0;
-  if (progress < 0.92) return 10.0;
-  return 12.0;
-}
-
-function getH1Multiplier(h1Progress: number): number {
-  if (h1Progress < 0.10) return 3.0;
-  if (h1Progress < 0.25) return 4.0;
-  if (h1Progress < 0.50) return 5.0;
-  if (h1Progress < 0.65) return 6.0;
-  if (h1Progress < 0.75) return 7.0;
-  if (h1Progress < 0.85) return 8.0;
-  if (h1Progress < 0.92) return 10.0;
-  return 12.0;
-}
-
-// ── sanitizeProb: early-game guard + 1-99 clamp ──────────────────────────────
-function sanitizeProb(prob: number | null, secsElapsed: number, allowExtreme = false): number | null {
-  if (prob === null) return null;
-  if (secsElapsed < 60 && !allowExtreme) return 50; // < 1 min data: neutral
-  return Math.min(Math.max(prob, 1), 99);
 }
 
 // ── ESPN NCAAB Scoreboard ────────────────────────────────────────────────────
@@ -346,7 +317,7 @@ export async function getNCAABOddsLines(): Promise<any[]> {
     // Log which markets came back
     const returned = new Set<string>();
     data.forEach((ev: any) => ev.bookmakers?.forEach((b: any) => b.markets?.forEach((m: any) => returned.add(m.key))));
-    console.log(`[NCAAB] Odds API: ${data.length} events, markets: ${[...returned].join(",")}`);
+    console.log(`[NCAAB] Odds API: ${data.length} events, markets: ${Array.from(returned).join(",")}`);
     cache.set(key, { data, timestamp: Date.now() });
     return data;
   } catch (err) {
@@ -775,6 +746,10 @@ export interface NCAABPlay {
   // Raw box data
   scoringByPeriod: Record<string, number[]>;
   teamStats: Record<string, any>;
+
+  // Engine output (single source of truth — client renders from this)
+  engineOutput?: import("./ncaabEngine").NCAABEngineOutput;
+  engineGeneratedAt?: number;
 }
 
 const HALF_SECONDS = 1200;
@@ -847,6 +822,8 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
     getNCAABOddsLines(),
     getNCAABSGOLines(),
   ]);
+
+  settleFinishedGames(allGames).catch(e => console.warn("[NCAAB SETTLE]", e));
 
   const liveGames = allGames.filter(g => g.isLive);
   if (liveGames.length === 0) {
@@ -976,192 +953,113 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         }
       }
 
-      // ── Projections ──────────────────────────────────────────────────────
-      let projectedTotal: number | null = null;
-      let projectedMargin: number | null = null;
-      let proj1HTotal: number | null = null;
-
-      if (isHalftime) {
-        // Halftime: paceH1 is already capped, project H2
-        projectedTotal = h1Total + (paceH1 * 20) + projTotalBonus;
-        projectedMargin = currentMargin;
-
-      } else if (half === 1) {
-        // H1 window: blend live pace with historical NCAAB average
-        // Weight shifts from historical (0 elapsed) to live (12+ min elapsed)
-        const h1MinElapsed = (HALF_SECONDS - secondsLeft) / 60;
-        const rawPaceH1Live = h1MinElapsed > 0.5
-          ? currentTotal / h1MinElapsed
-          : NCAAB_AVG_PACE;
-
-        // blend = 0 at tip-off → 1.0 after 12 min elapsed
-        const blend = Math.min(1.0, h1MinElapsed / 12);
-        const blendedPace = rawPaceH1Live * blend + NCAAB_AVG_PACE * (1 - blend);
-
-        const remainH1Min = secondsLeft / 60;
-
-        // 1H projection: current score + remaining H1 at blended pace
-        proj1HTotal = Math.round((currentTotal + blendedPace * remainH1Min) * 10) / 10;
-
-        // Full game projection: projected H1 + estimated H2 at same blended pace
-        const projH1Full = currentTotal + blendedPace * remainH1Min;
-        projectedTotal = projH1Full + (blendedPace * 20) + projTotalBonus;
-
-        // H1 per-team projection to compute projected margin
-        const homeShareH1 = currentTotal > 0
-          ? (game.homeScore / currentTotal) * 0.6 + 0.5 * 0.4
-          : 0.5;
-        const remainingH1Scoring = blendedPace * remainH1Min;
-        const proj1HHomeScore = game.homeScore + remainingH1Scoring * homeShareH1;
-        const proj1HAwayScore = game.awayScore + remainingH1Scoring * (1 - homeShareH1);
-        projectedMargin = Math.round((proj1HHomeScore - proj1HAwayScore) * 10) / 10;
-
-      } else if (half === 2) {
-        // H2: 70/30 blend (live H2 pace × 0.7 + H1 pace × 0.3), cap live H2 pace
-        const h2MinElapsed = (HALF_SECONDS - secondsLeft) / 60;
-        const rawPaceH2Live = h2MinElapsed > 0 ? h2TotalSoFar / h2MinElapsed : paceH1;
-        const paceH2Live = Math.min(rawPaceH2Live, NCAAB_AVG_PACE * 1.5);
-        const paceH2 = paceH2Live * 0.70 + paceH1 * 0.30;
-        const remainMin = secondsLeft / 60;
-        projectedTotal = h1Total + h2TotalSoFar + (paceH2 * remainMin) + projTotalBonus;
-
-        const h2MarginSoFar = h2Home - h2Away;
-        const marginPerMin = h2MinElapsed > 0 ? h2MarginSoFar / h2MinElapsed : 0;
-        projectedMargin = currentMargin + (marginPerMin * remainMin);
-      }
-
-      // ── Team total split ─────────────────────────────────────────────────
-      let homeProjected: number | null = null;
-      let awayProjected: number | null = null;
-
-      if (projectedTotal !== null) {
-        // 60% live score share + 40% even split to dampen early-game swings
-        const homeShare = currentTotal > 0
-          ? (game.homeScore / currentTotal) * 0.6 + 0.5 * 0.4
-          : 0.5;
-        homeProjected = Math.round(projectedTotal * homeShare * 10) / 10;
-        awayProjected = Math.round(projectedTotal * (1 - homeShare) * 10) / 10;
-      }
-
       // ── 1H total line (API or fallback estimate) ──────────────────────────
       const h1TotalLine = rawH1TotalLine !== null
         ? rawH1TotalLine
         : total !== null ? Math.round(total * NCAAB_H1_FRACTION * 2) / 2 : null;
 
-      // ENGINE BUG AUDIT
-      // Score fields: game.homeScore (number), game.awayScore (number) — derived from ESPN home?.score / away?.score
-      // h1Home/h1Away: scoringByPeriod[abbr][0] ?? estimated from current score
-      // proj1HTotal: currentTotal + blendedPace * remainH1Min (H1 window only, half === 1)
-      // projectedTotal: projected H1 + H2 pace * 20 (full game)
-      // Cause A mitigated: h1Home/h1Away fallback uses current score estimate
-      // Cause D mitigated: separate proj1HTotal path for H1 vs full game
-      // Post-halftime H1 result: over1HProb not set post-H1 — fixed below with 99/1 exception
+      // ── Engine: single source of truth for projection + probability ──────
+      const engineInput: import("./ncaabEngine").NCAABGameInput = {
+        gameId: game.id,
+        sport: "ncaab",
+        league: "NCAAB",
+        homeTeam: game.homeTeam,
+        awayTeam: game.awayTeam,
+        homeTeamAbbr: homeAbbr,
+        awayTeamAbbr: awayAbbr,
+        homeScore: game.homeScore,
+        awayScore: game.awayScore,
+        period: game.period,
+        half,
+        clock: game.clock,
+        isHalftime,
+        secondsRemainingInHalf: secondsLeft,
+        status: game.status,
+        liveTotalLine: total,
+        liveSpreadLine: spread,
+        liveSpreadFavorite: favorite,
+        h1TotalLine,
+        h1SpreadLine,
+        h1Favorite,
+        h2TotalLine,
+        h2SpreadLine,
+        h2Favorite,
+        homeGameTotalLine,
+        awayGameTotalLine,
+        home1HTotalLine,
+        away1HTotalLine,
+        h1HomeScore: h1Home,
+        h1AwayScore: h1Away,
+        h2HomeScore: h2Home,
+        h2AwayScore: h2Away,
+        scoringByPeriod,
+        teamStats,
+        projTotalBonus,
+        volatilityBonus,
+        desperation3s,
+        intentionalFouling,
+        overOddsAmerican,
+        sourceTimestamps: {
+          odds: Date.now(),
+          scores: Date.now(),
+        },
+      };
 
-      // ── Dynamic multiplier probability ───────────────────────────────────
-      let volatility: number | null = null;
-      let spreadProb: number | null = null;
-      let overProb: number | null = null;
-      let spreadEdge: number | null = null;
-      let totalEdge: number | null = null;
-      let over1HProb: number | null = null;
-      let total1HEdge: number | null = null;
+      const engineOutput = runNCAABEngine(engineInput);
 
-      // Total NCAAB game = 2 halves × 1200s = 2400s
-      // secsRemaining = seconds left in entire game
-      const secsRemaining = isHalftime ? 1200 : (half === 2 ? secondsLeft : secondsLeft + 1200);
-      const secsElapsed   = Math.max(0, 2400 - secsRemaining);
-      const tooEarlyForData = secsElapsed < 60;
+      if (engineOutput.projectedTotal !== null && total !== null) {
+        lastEngineOutputByGame.set(game.id, {
+          engineOutput,
+          line: total,
+          side: engineOutput.recommendedSide ?? "NO_EDGE",
+        });
+      }
 
-      // Retain volatility for backward-compat (spread calc still uses sigmoid)
+      const projectedTotal = engineOutput.projectedTotal;
+      const projectedMargin = engineOutput.projectedSpread;
+      const proj1HTotal = engineOutput.projected1HTotal;
+      const homeProjected = engineOutput.projectedTeamTotalHome;
+      const awayProjected = engineOutput.projectedTeamTotalAway;
+      const overProb = engineOutput.calibratedOverProb;
+      const spreadProb = engineOutput.calibratedSpreadProb;
+      const over1HProb = engineOutput.over1HProb;
+
+      const spreadEdge = spreadProb !== null ? Math.round((spreadProb - 50) * 10) / 10 : null;
+      const totalEdge = overProb !== null ? Math.round((overProb - 50) * 10) / 10 : null;
+      const total1HEdge = over1HProb !== null ? Math.round((over1HProb - 50) * 10) / 10 : null;
+
+      // ── Volatility (backward-compat) ───────────────────────────────────
       const secsForVol = isHalftime ? 1200 : secondsLeft;
-      volatility = Math.max(4, 18 * (secsForVol / 2400)) + volatilityBonus;
+      const volatility = Math.max(4, 18 * (secsForVol / 2400)) + volatilityBonus;
 
-      if (projectedTotal !== null || projectedMargin !== null) {
-        const dynamicMult = getDynamicMultiplier(secsRemaining, 2400, game.period, 2);
+      // ── 2H data from engine output + live lines ──────────────────────────
+      const h2Verdict = engineOutput.marketVerdicts?.find(v => v.market === "h2_total");
+      const over2HProb: number | null = engineOutput.over2HProb;
+      const effectiveH2Line: number | null = h2Verdict?.line ?? live2HLines?.h2Total ?? null;
+      const h2EngineOverProb: number | null = engineOutput.over2HProb;
+      const h2Proj: number | null = engineOutput.projected2HTotal;
 
-        // Effective lines — use API line if available, otherwise fall back to
-        // projected total rounded to nearest 0.5 so we always produce a probability
-        const effectiveFGLine = total ?? (projectedTotal !== null ? Math.round(projectedTotal * 2) / 2 : null);
-        const effective1HLine = h1TotalLine ?? (proj1HTotal !== null ? Math.round(proj1HTotal * 2) / 2 : null);
-
-        if (projectedMargin !== null && spread !== null) {
-          if (tooEarlyForData) {
-            spreadProb = 50;
-          } else {
-            const adjustedSpread = teamsMatch(favorite, game.homeTeam) ? -spread : spread;
-            // Use sigmoid for spread (margin diff is smaller in scale)
-            spreadProb = Math.round(sigmoid((projectedMargin - adjustedSpread) / volatility) * 1000) / 10;
-          }
-          spreadEdge = Math.round((spreadProb - 50) * 10) / 10;
-        }
-
-        if (projectedTotal !== null && effectiveFGLine !== null) {
-          if (tooEarlyForData) {
-            overProb = 50;
-          } else {
-            const diff = projectedTotal - effectiveFGLine;
-            const raw = 50 + diff * dynamicMult * 0.3;
-            overProb = parseFloat(Math.min(Math.max(raw, 1), 99).toFixed(1));
-          }
-          totalEdge = Math.round((overProb - 50) * 10) / 10;
-        }
-
-        // 1H probability — computed during H1 using effective line
-        if (half === 1 && proj1HTotal !== null && effective1HLine !== null) {
-          if (tooEarlyForData) {
-            over1HProb = 50;
-          } else {
-            const h1MinElapsed = (HALF_SECONDS - secondsLeft) / 60;
-            const h1Progress = Math.min(Math.max(h1MinElapsed / 20, 0), 1);
-            const h1Mult = getH1Multiplier(h1Progress);
-            const diff1H = proj1HTotal - effective1HLine;
-            const raw1H = 50 + diff1H * h1Mult * 0.3;
-            over1HProb = parseFloat(Math.min(Math.max(raw1H, 1), 99).toFixed(1));
-          }
-          total1HEdge = Math.round((over1HProb - 50) * 10) / 10;
-        }
-      }
-
-      // Post-halftime H1: result is settled — show definitive 99/1
-      if ((isHalftime || half === 2) && h1TotalLine !== null && h1Total > 0) {
-        over1HProb = h1Total > h1TotalLine ? 99 : h1Total < h1TotalLine ? 1 : 50;
-        total1HEdge = Math.round((over1HProb - 50) * 10) / 10;
-      }
-
-      // ── 2H engine vs book probability (calc2HEngineProb) ─────────────────
-      // Use the dedicated calc2HEngineProb function which compares engine
-      // projection against real book odds. Only produces signal when a real
-      // book line exists — no derived-line noise.
-      const engineProb2H = (live2HLines && (live2HLines.source === "odds_api" || live2HLines.source === "action_network"))
-        ? calc2HEngineProb(live2HLines, game.homeScore, game.awayScore, projectedTotal)
-        : null;
-
-      // over2HProb: use engine result when we have a real book line, else null
-      let over2HProb: number | null = engineProb2H?.overProb ?? null;
-      // effectiveH2Line: real book line from live2HLines waterfall (not derived)
-      const effectiveH2Line: number | null = (live2HLines?.source === "odds_api" || live2HLines?.source === "action_network")
-        ? (live2HLines?.h2Total ?? null)
-        : null;
-
-      const h2EngineOverProb: number | null   = engineProb2H?.overProb ?? null;
-      const h2BookOverImplied: number | null  = engineProb2H?.bookOverImplied ?? null;
-      const h2BookUnderImplied: number | null = engineProb2H?.bookUnderImplied ?? null;
-      const h2OverEdge: number | null         = engineProb2H?.overEdge ?? null;
-      const h2UnderEdge: number | null        = engineProb2H?.underEdge ?? null;
-      const h2EdgeSide: "OVER" | "UNDER" | null = engineProb2H?.edgeSide ?? null;
-      const h2Proj: number | null             = engineProb2H?.h2Proj ?? null;
-      const h2OverPrice: number | null        = live2HLines?.h2OverPrice ?? null;
-      const h2UnderPrice: number | null       = live2HLines?.h2UnderPrice ?? null;
-      const h2OverPct: number | null          = live2HLines?.h2OverPct ?? null;
-      const h2UnderPct: number | null         = live2HLines?.h2UnderPct ?? null;
+      const mlToProb = (ml: number | null): number | null => {
+        if (ml == null) return null;
+        return parseFloat(
+          ml < 0
+            ? (Math.abs(ml) / (Math.abs(ml) + 100) * 100).toFixed(1)
+            : (100 / (ml + 100) * 100).toFixed(1)
+        );
+      };
+      const h2BookOverImplied: number | null = mlToProb(live2HLines?.h2OverPrice ?? null);
+      const h2BookUnderImplied: number | null = mlToProb(live2HLines?.h2UnderPrice ?? null);
+      const h2OverEdge: number | null = h2EngineOverProb != null && h2BookOverImplied != null
+        ? parseFloat((h2EngineOverProb - h2BookOverImplied).toFixed(1)) : null;
+      const h2UnderEdge: number | null = h2EngineOverProb != null && h2BookUnderImplied != null
+        ? parseFloat(((100 - h2EngineOverProb) - h2BookUnderImplied).toFixed(1)) : null;
+      const h2EdgeSide: "OVER" | "UNDER" | null = h2Verdict?.side === "OVER" ? "OVER"
+        : h2Verdict?.side === "UNDER" ? "UNDER" : null;
+      const h2OverPrice: number | null = live2HLines?.h2OverPrice ?? null;
+      const h2UnderPrice: number | null = live2HLines?.h2UnderPrice ?? null;
+      const h2OverPct: number | null = live2HLines?.h2OverPct ?? null;
+      const h2UnderPct: number | null = live2HLines?.h2UnderPct ?? null;
       const h2LinesSource                     = live2HLines?.source ?? null;
-
-      // Apply sanitizeProb — clamp to 1-99 and enforce early-game neutral
-      // (post-halftime H1 99/1 is exempt: allowExtreme = true)
-      const postH1Settled = (isHalftime || half === 2) && h1TotalLine !== null && h1Total > 0;
-      overProb   = sanitizeProb(overProb,   secsElapsed);
-      spreadProb = sanitizeProb(spreadProb, secsElapsed);
-      over1HProb = sanitizeProb(over1HProb, secsElapsed, postH1Settled);
 
       // ── Betting window ───────────────────────────────────────────────────
       let bettingWindow: NCAABPlay["bettingWindow"] = "NONE";
@@ -1245,6 +1143,8 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         h2Proj,
         scoringByPeriod,
         teamStats,
+        engineOutput,
+        engineGeneratedAt: engineOutput.engineGeneratedAt,
       });
     } catch (gameErr) {
       console.warn(`[NCAAB] Skipping game ${game.id} (${game.homeTeam} vs ${game.awayTeam}):`, (gameErr as any).message);
@@ -1258,7 +1158,37 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
   });
 
   console.log(`[NCAAB] Computed ${plays.length} live plays`);
+
   return plays;
+}
+
+async function settleFinishedGames(allGames: any[]) {
+  const finalGames = allGames.filter(g =>
+    !g.isLive && (g.status === "Final" || g.status === "Final/OT")
+  );
+  for (const game of finalGames) {
+    if (settledGameIds.has(game.id)) continue;
+    const cached = lastEngineOutputByGame.get(game.id);
+    if (!cached) continue;
+
+    const finalTotal = (game.homeScore ?? 0) + (game.awayScore ?? 0);
+    try {
+      const engineRecommended = cached.engineOutput.recommendedSide;
+      const displayMatchedEngine = cached.side === engineRecommended;
+      logSettledPlay(
+        cached.engineOutput,
+        cached.line,
+        finalTotal,
+        cached.side,
+        displayMatchedEngine
+      );
+      console.log(`[NCAAB SETTLED] ${game.id}: proj=${cached.engineOutput.projectedTotal} line=${cached.line} final=${finalTotal}`);
+    } catch (e) {
+      console.warn(`[NCAAB SETTLE ERROR] ${game.id}:`, e);
+    }
+    settledGameIds.add(game.id);
+    lastEngineOutputByGame.delete(game.id);
+  }
 }
 
 // ── 2H live line fetch (3-source waterfall) ───────────────────────────────────

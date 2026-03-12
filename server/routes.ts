@@ -189,9 +189,18 @@ export async function registerRoutes(
   app.get("/api/ncaab/plays", requireTier("all", "elite"), async (_req, res) => {
     try {
       const plays = await computeNCAABPlays();
-      res.json({ plays });
-      // Fire-and-forget: halftime edge alerts (one per game, ≥85% over2HProb)
-      checkAndSendAlerts(plays, storage).catch(console.warn);
+      const now = Date.now();
+      const MAX_ENGINE_AGE_MS = 30_000;
+      const freshPlays = plays.filter(play => {
+        if (!play.engineGeneratedAt) return true;
+        if ((now - play.engineGeneratedAt) > MAX_ENGINE_AGE_MS) {
+          console.warn(`[NCAAB STALE] Dropping stale play for ${play.gameId} — ${((now - play.engineGeneratedAt) / 1000).toFixed(0)}s old`);
+          return false;
+        }
+        return true;
+      });
+      res.json({ plays: freshPlays });
+      checkAndSendAlerts(freshPlays, storage).catch(console.warn);
     } catch (err: any) {
       console.error("[NCAAB plays]", err.message);
       return res.status(500).json({ error: err.message || "NCAAB service error" });

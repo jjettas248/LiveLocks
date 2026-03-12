@@ -24,7 +24,7 @@ I prefer clear and concise explanations. When implementing new features or makin
     - **NCAAB Games Strip**: A horizontal scrollable chip bar showing live scores and scheduled times, allowing quick navigation to specific games.
     - **Welcome Experience**: New Pro users see a `WelcomeBanner` and a "NEW" badge on the NCAAB tab for a limited time post-upgrade.
     - **Mobile UX**: Parlay Slip functions as a bottom sheet on mobile and a side column on desktop.
-    - **Progressive Probability Limits**: Engine probabilities are clamped to a narrowing range as the game progresses to account for data sufficiency.
+    - **Engine-Calibrated Probabilities**: Probabilities are calibrated server-side by the NCAAB engine (normal CDF with calibration cap at 78%, early-game neutral at 50%). Client displays engine values directly.
     - **Neutral State Handling**: If game progress is low and probabilities are near 50%, a "Insufficient Data" verdict is displayed.
 
 ### Backend
@@ -35,7 +35,7 @@ I prefer clear and concise explanations. When implementing new features or makin
 - **Access Control**: Role-based access control (e.g., `requireAuth`, `requireTier`, `requireAdmin`) is implemented for API endpoints to manage feature access based on user subscription tiers and admin status.
 - **SMS Alerts**: Integrated with Twilio for sending SMS notifications and handling opt-out requests via webhooks.
 - **NBA Probability Model**: Calculates player probabilities based on observed stats, season baseline, foul penalties, defensive ratings, and pace multipliers.
-- **NCAAB Engine**: Consolidates data from ESPN, The Odds API, and SGO to calculate game and player probabilities using dynamic multipliers and clamping functions.
+- **NCAAB Engine** (`server/ncaabEngine.ts`): Single source of truth for all NCAAB projection, probability, pick direction, and display output. Uses normal CDF probability model (σ=12, market-specific variance), calibration cap at 78%, contradiction rejection (projection vs probability disagreement → NO_EDGE), deterministic edge rules (gap ≥ 2.0 pts AND prob ≥ 57%), dynamic multiplier clamped 0.6–1.4. Client renders exclusively from `NCAABEngineOutput` — no client-side recomputation. Diagnostics module (`server/ncaabDiagnostics.ts`) provides settled-play logging, calibration analysis, and drift detection.
 - **Roster Sync**: An API endpoint to pull live ESPN rosters and map team abbreviations.
 
 ### Admin Panel

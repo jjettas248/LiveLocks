@@ -88,6 +88,65 @@ interface NCAABPlay {
   intentionalFouling: boolean;
   scoringByPeriod: Record<string, number[]>;
   teamStats: Record<string, any>;
+  engineOutput?: {
+    gameId: string;
+    sport: string;
+    marketType: string;
+    projectedTotal: number | null;
+    projected1HTotal: number | null;
+    projected2HTotal: number | null;
+    projectedSpread: number | null;
+    projectedTeamTotalHome: number | null;
+    projectedTeamTotalAway: number | null;
+    rawOverProb: number | null;
+    rawUnderProb: number | null;
+    rawSpreadProb: number | null;
+    calibratedOverProb: number | null;
+    calibratedUnderProb: number | null;
+    calibratedSpreadProb: number | null;
+    over1HProb: number | null;
+    over2HProb: number | null;
+    impliedBookOverProb: number | null;
+    impliedBookUnderProb: number | null;
+    edgePctOver: number | null;
+    edgePctUnder: number | null;
+    edgePctSpread: number | null;
+    recommendedSide: "OVER" | "UNDER" | "NO_EDGE";
+    confidenceTier: "HIGH" | "MEDIUM" | "LOW" | "NO_EDGE";
+    explanationBullets: string[];
+    dominantMarket: "over" | "under" | "spread";
+    displayProjection: string;
+    displayProbability: string;
+    displayPick: string;
+    marketVerdicts: Array<{
+      market: string;
+      projection: number | null;
+      line: number | null;
+      overProb: number | null;
+      underProb: number | null;
+      side: "OVER" | "UNDER" | "NO_EDGE";
+      confidenceTier: string;
+      edge: number | null;
+    }>;
+    displayOutput: {
+      projectedTotal: string;
+      projectedSpread: string;
+      overProb: string;
+      underProb: string;
+      spreadProb: string;
+      recommendedSide: string;
+      confidenceTier: string;
+      edgeLabelOver: string;
+      edgeLabelUnder: string;
+      edgeLabelSpread: string;
+      preGameConfidenceLabel: string;
+      explanationBullets: string[];
+      warnings: string[];
+    };
+    warnings: string[];
+    engineGeneratedAt: number;
+  };
+  engineGeneratedAt?: number;
 }
 
 export type { ParlayPickInput as NCAABParlayPick };
@@ -622,27 +681,6 @@ function computeGameProgress(play: NCAABPlay): number {
   return Math.min(Math.max(elapsed / totalMins, 0), 1);
 }
 
-function getProgressiveLimits(progress: number): { min: number; max: number } {
-  if (progress < 0.10) return { min: 30, max: 70 };
-  if (progress < 0.25) return { min: 20, max: 80 };
-  if (progress < 0.50) return { min: 10, max: 90 };
-  if (progress < 0.75) return { min:  5, max: 95 };
-  if (progress < 0.90) return { min:  3, max: 97 };
-  return { min: 1, max: 99 };
-}
-
-function limitedEngineProb(rawProb: number | null, progress: number, gameId?: string): number {
-  if (rawProb === null) return 50;
-  const { min, max } = getProgressiveLimits(progress);
-  const clamped = Math.min(Math.max(rawProb, min), max);
-  if (Math.abs(rawProb - clamped) > 10) {
-    console.warn(
-      `[ENGINE] Probability clamped: raw=${rawProb.toFixed(1)}% → limited=${clamped.toFixed(1)}% | game=${gameId ?? "?"} | ${(progress * 100).toFixed(0)}% elapsed`
-    );
-  }
-  return parseFloat(clamped.toFixed(1));
-}
-
 // ── Sharp money detection ─────────────────────────────────────────────────────
 function detectSharpMoney(opts: {
   homeWinPct: number | null;
@@ -677,33 +715,26 @@ function detectSharpMoney(opts: {
   return result;
 }
 
-// ── Team total probability helpers (T005) ────────────────────────────────────
-function calculateTeamTotalProb(proj: number, line: number): number {
-  const raw = 50 + (proj - line) * 2; // ~2pp per scoring point delta
-  return Math.min(Math.max(raw, 1), 99);
-}
-
 function getTeamTotalVerdict(
-  teamProj: number,
-  line: number,
   direction: "over" | "under",
-  isEstimated: boolean
+  isEstimated: boolean,
+  engineVerdict?: { overProb: number | null; underProb: number | null; edge: number | null; side?: string; confidenceTier?: string } | null
 ) {
-  const rawEngine = calculateTeamTotalProb(teamProj, line);
-  // Compress toward 50 by 40% when line is estimated (less confidence)
-  const engineProb = isEstimated ? 50 + (rawEngine - 50) * 0.6 : rawEngine;
-  // No real book odds for estimated lines; standard -110 vig otherwise
-  const bookImplied = isEstimated ? 50 : 52.4;
-  const edgeGap = parseFloat(Math.abs(engineProb - bookImplied).toFixed(1));
-  const edgeSide: "Over" | "Under" = engineProb > bookImplied ? "Over" : "Under";
+  const engineProb = engineVerdict?.overProb ?? 50;
+  const edgeVal = engineVerdict?.edge ?? 0;
+  const absEdge = Math.abs(edgeVal);
+  const edgeSide: "Over" | "Under" = edgeVal > 0 ? "Over" : "Under";
+  const tierFromEngine = engineVerdict?.confidenceTier;
+  const sideFromEngine = engineVerdict?.side;
   const directionSide = direction === "under" ? "Under" : "Over";
-  const edgeLabel = edgeGap >= 20 ? `Strong ${directionSide} EV`
-    : edgeGap >= 10 ? `Lean ${directionSide} EV`
-    : "Neutral — No Edge";
+  const edgeLabel = sideFromEngine === "NO_EDGE" || absEdge < 5
+    ? "Neutral — No Edge"
+    : tierFromEngine === "HIGH" ? `Strong ${directionSide} EV`
+    : `Lean ${directionSide} EV`;
   return {
     engineProb: parseFloat(engineProb.toFixed(1)),
-    bookImplied,
-    edgeGap,
+    bookImplied: isEstimated ? 50 : 52.4,
+    edgeGap: parseFloat(absEdge.toFixed(1)),
     edgeSide,
     edgeLabel,
     isEstimated,
@@ -711,44 +742,22 @@ function getTeamTotalVerdict(
 }
 
 // ── Pre-game confidence tier ──────────────────────────────────────────────────
-function getPreGameConfidenceTier(overProb: number | null | undefined) {
-  if (overProb == null) return null;
-  const edge = Math.abs(overProb - 50);
-  if (edge < 3) return {
-    label: "No Edge",
-    sublabel: "Model sees even matchup",
-    color: "#71717a",
-    bg: "rgba(255,255,255,0.04)",
-    border: "rgba(255,255,255,0.08)",
-  };
-  if (edge < 7) return {
-    label: "Low Confidence",
-    sublabel: "Slight lean — insufficient for signal",
-    color: "#71717a",
-    bg: "rgba(255,255,255,0.04)",
-    border: "rgba(255,255,255,0.08)",
-  };
-  if (edge < 12) return {
-    label: "Moderate Signal",
-    sublabel: "Pre-game lean — monitor at tipoff",
-    color: "#f59e0b",
-    bg: "rgba(245,158,11,0.08)",
-    border: "rgba(245,158,11,0.2)",
-  };
-  if (edge < 18) return {
-    label: "Strong Pre-Game Signal",
-    sublabel: "Model has clear lean before tipoff",
-    color: "#00d4aa",
-    bg: "rgba(0,212,170,0.08)",
-    border: "rgba(0,212,170,0.2)",
-  };
-  return {
-    label: "High Confidence",
-    sublabel: "Significant model edge pre-game",
-    color: "#00d4aa",
-    bg: "rgba(0,212,170,0.12)",
-    border: "rgba(0,212,170,0.25)",
-  };
+const CONFIDENCE_TIER_MAP: Record<string, { label: string; sublabel: string; color: string; bg: string; border: string }> = {
+  "No Edge": { label: "No Edge", sublabel: "Model sees even matchup", color: "#71717a", bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.08)" },
+  "Low": { label: "Low Confidence", sublabel: "Slight lean — insufficient for signal", color: "#71717a", bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.08)" },
+  "Moderate": { label: "Moderate Signal", sublabel: "Pre-game lean — monitor at tipoff", color: "#f59e0b", bg: "rgba(245,158,11,0.08)", border: "rgba(245,158,11,0.2)" },
+  "High": { label: "Strong Pre-Game Signal", sublabel: "Model has clear lean before tipoff", color: "#00d4aa", bg: "rgba(0,212,170,0.08)", border: "rgba(0,212,170,0.2)" },
+  "Extreme": { label: "High Confidence", sublabel: "Significant model edge pre-game", color: "#00d4aa", bg: "rgba(0,212,170,0.12)", border: "rgba(0,212,170,0.25)" },
+};
+
+function getPreGameConfidenceTier(labelOrProb: string | number | null | undefined) {
+  if (labelOrProb == null) return null;
+  if (typeof labelOrProb === "string") {
+    return CONFIDENCE_TIER_MAP[labelOrProb] ?? CONFIDENCE_TIER_MAP["No Edge"];
+  }
+  const edge = Math.abs(labelOrProb - 50);
+  const key = edge < 3 ? "No Edge" : edge < 7 ? "Low" : edge < 12 ? "Moderate" : edge < 18 ? "High" : "Extreme";
+  return CONFIDENCE_TIER_MAP[key];
 }
 
 // ── MarketRow: single O/U or single-side spread row ──────────────────────────
@@ -870,9 +879,9 @@ function FullGameMarkets({
   selectedLabel?: string | null;
 }) {
   const fullTotal   = play.total;
-  const overProb    = play.overProb;
-  const underProb   = overProb != null ? parseFloat((100 - overProb).toFixed(1)) : null;
-  const spreadProb  = play.spreadProb;
+  const overProb    = play.engineOutput?.calibratedOverProb ?? null;
+  const underProb   = play.engineOutput?.calibratedUnderProb ?? null;
+  const spreadProb  = play.engineOutput?.calibratedSpreadProb ?? null;
   const homeSpread  = play.spread != null ? -play.spread : null;
   const awaySpread  = play.spread != null ? play.spread : null;
   const homeTT      = play.homeGameTotalLine;
@@ -883,10 +892,12 @@ function FullGameMarkets({
   const sel = (label: string, eng: number | null | undefined, imp: number | null | undefined) =>
     onSelect?.({ label, enginePct: eng ?? null, impliedPct: imp ?? null, edge: eng != null && imp != null ? parseFloat((eng - imp).toFixed(1)) : null });
 
-  const homeTTOverProb  = homeTT && overProb ? parseFloat(Math.min(Math.max(overProb + 2, 1), 99).toFixed(1)) : null;
-  const homeTTUnderProb = homeTT && overProb ? parseFloat(Math.min(Math.max(100 - overProb - 2, 1), 99).toFixed(1)) : null;
-  const awayTTOverProb  = awayTT && overProb ? parseFloat(Math.min(Math.max(100 - overProb + 2, 1), 99).toFixed(1)) : null;
-  const awayTTUnderProb = awayTT && overProb ? parseFloat(Math.min(Math.max(overProb - 2, 1), 99).toFixed(1)) : null;
+  const homeTTVerdict = play.engineOutput?.marketVerdicts?.find(mv => mv.market === "team_total_home");
+  const awayTTVerdict = play.engineOutput?.marketVerdicts?.find(mv => mv.market === "team_total_away");
+  const homeTTOverProb  = homeTTVerdict?.overProb ?? null;
+  const homeTTUnderProb = homeTTVerdict?.underProb ?? null;
+  const awayTTOverProb  = awayTTVerdict?.overProb ?? null;
+  const awayTTUnderProb = awayTTVerdict?.underProb ?? null;
 
   return (
     <div style={{ borderRadius: 8, overflow: "hidden", border: "1px solid #1f1f1f", marginTop: 8 }}>
@@ -903,8 +914,11 @@ function FullGameMarkets({
         onSelectSide={() => sel(`${homeAbbr} Spread ${homeSpread && homeSpread > 0 ? "+" : ""}${homeSpread}`, spreadProb, 52.4)}
         isSelectedSide={selectedLabel === `${homeAbbr} Spread ${homeSpread && homeSpread > 0 ? "+" : ""}${homeSpread}`}
       />
-      <MarketRow label={`${awayAbbr} Spread`} line={awaySpread} singleSide coverProb={spreadProb != null ? parseFloat((100 - spreadProb).toFixed(1)) : null}
-        onSelectSide={() => sel(`${awayAbbr} Spread ${awaySpread && awaySpread > 0 ? "+" : ""}${awaySpread}`, spreadProb != null ? parseFloat((100 - spreadProb).toFixed(1)) : null, 52.4)}
+      <MarketRow label={`${awayAbbr} Spread`} line={awaySpread} singleSide coverProb={
+        play.engineOutput?.marketVerdicts?.find(mv => mv.market === "spread")?.underProb ?? null
+      }
+        onSelectSide={() => sel(`${awayAbbr} Spread ${awaySpread && awaySpread > 0 ? "+" : ""}${awaySpread}`,
+          play.engineOutput?.marketVerdicts?.find(mv => mv.market === "spread")?.underProb ?? null, 52.4)}
         isSelectedSide={selectedLabel === `${awayAbbr} Spread ${awaySpread && awaySpread > 0 ? "+" : ""}${awaySpread}`}
       />
       <MarketRow label={`${homeAbbr} Team Total`} line={homeTT} isEstimated={homeTTEst}
@@ -1049,24 +1063,14 @@ function NCAABGameCard({
 }) {
   const isH1 = play.half === 1 && !play.bettingWindow.includes("HALFTIME");
 
-  // T004: progressive limits applied to engine output
   const gameProgress = computeGameProgress(play);
-  const overProb     = limitedEngineProb(play.overProb, gameProgress, play.gameId);
-  const underProb    = parseFloat((100 - overProb).toFixed(1));
-  const spreadProb   = limitedEngineProb(play.spreadProb, gameProgress, play.gameId);
+  const overProb     = play.engineOutput?.calibratedOverProb ?? 50;
+  const underProb    = play.engineOutput?.calibratedUnderProb ?? 50;
+  const spreadProb   = play.engineOutput?.calibratedSpreadProb ?? 50;
 
-  // T005: neutral state — engine hasn't accumulated enough data
-  const rawOver   = play.overProb ?? 50;
-  const isNeutral = gameProgress < 0.10 && rawOver >= 45 && rawOver <= 55;
+  const isNeutral = gameProgress < 0.10 && overProb >= 45 && overProb <= 55;
 
-  const dominantMarket = ((): "over" | "under" | "spread" => {
-    const oe = Math.abs(overProb - 50);
-    const ue = Math.abs(underProb - 50);
-    const se = Math.abs(spreadProb - 50);
-    if (se > oe && se > ue && play.spread !== null) return "spread";
-    if (ue > oe) return "under";
-    return "over";
-  })();
+  const dominantMarket = play.engineOutput?.dominantMarket ?? "over";
 
   const [selectedMarket, setSelectedMarket] = useState<"over" | "under" | "spread">(dominantMarket);
   const [marketTab, setMarketTab]           = useState<"full" | "h1" | "h2">("full");
@@ -1198,11 +1202,16 @@ function NCAABGameCard({
   // T002/T003: market tab display derivations
   const effective2HLine    = play.h2TotalLine ?? null;
   const displayLine        = marketTab === "h1" ? effective1HLine : marketTab === "h2" ? effective2HLine : effectiveFGLine;
-  const displayOverProb    = marketTab === "h1" ? (play.over1HProb ?? overProb) : marketTab === "h2" ? (play.over2HProb ?? overProb) : overProb;
-  const displayUnderProb   = parseFloat((100 - displayOverProb).toFixed(4));
+  const h1Verdict = play.engineOutput?.marketVerdicts?.find(mv => mv.market === "h1_total");
+  const h2Verdict = play.engineOutput?.marketVerdicts?.find(mv => mv.market === "h2_total");
+  const displayOverProb    = marketTab === "h1" ? (h1Verdict?.overProb ?? play.engineOutput?.over1HProb ?? overProb)
+    : marketTab === "h2" ? (h2Verdict?.overProb ?? play.engineOutput?.over2HProb ?? overProb) : overProb;
+  const displayUnderProb   = marketTab === "h1" ? (h1Verdict?.underProb ?? 50)
+    : marketTab === "h2" ? (h2Verdict?.underProb ?? 50)
+    : underProb;
   const displaySpread      = marketTab === "h1" ? play.h1SpreadLine : marketTab === "h2" ? play.h2SpreadLine : play.spread;
   const displaySpreadFav   = marketTab === "h1" ? play.h1Favorite : marketTab === "h2" ? play.h2Favorite : play.favorite;
-  const displaySpreadProb  = (marketTab === "h1" || marketTab === "h2") ? null : play.spreadProb;
+  const displaySpreadProb  = (marketTab === "h1" || marketTab === "h2") ? null : (play.engineOutput?.calibratedSpreadProb ?? null);
   const h1ProjSplit        = play.proj1HTotal != null ? play.proj1HTotal / 2 : null;
   const displayAwayProj    = marketTab === "h1" ? h1ProjSplit : play.awayProjected;
   const displayHomeProj    = marketTab === "h1" ? h1ProjSplit : play.homeProjected;
@@ -1254,17 +1263,22 @@ function NCAABGameCard({
 
   const edgeGap = Math.abs(engineProb - bookImplied);
 
-  // T004: fix inverted direction — market-aware edgeSide
+  const engineEdgeLabel = selectedMarket === "spread"
+    ? play.engineOutput?.displayOutput?.edgeLabelSpread
+    : selectedMarket === "under"
+    ? play.engineOutput?.displayOutput?.edgeLabelUnder
+    : play.engineOutput?.displayOutput?.edgeLabelOver;
+
   const edgeSide: "Over" | "Under" =
     selectedMarket === "under"
       ? (engineProb > bookImplied ? "Under" : "Over")
       : (engineProb > bookImplied ? "Over" : "Under");
 
-  const edgeLabel = edgeGap >= 20
+  const edgeLabel = engineEdgeLabel || (edgeGap >= 20
     ? `Strong ${edgeSide} EV`
     : edgeGap >= 10
     ? `Lean ${edgeSide} EV`
-    : "Neutral — No Edge";
+    : "Neutral — No Edge");
   const edgeBelow = edgeGap < 5;
   const evColor   = edgeSide === "Under" ? "#ef4444" : "#00d4aa";
 
@@ -1319,7 +1333,9 @@ function NCAABGameCard({
     const { team, direction, line, isEstimated, teamAbbr } = selectedTeamMarket;
     const proj = team === "home" ? fullHomeProj : fullAwayProj;
     if (!proj) return;
-    const v = getTeamTotalVerdict(proj, line, direction, isEstimated);
+    const ttMarket = team === "home" ? "team_total_home" : "team_total_away";
+    const engineVerdict = play.engineOutput?.marketVerdicts?.find(mv => mv.market === ttMarket) ?? null;
+    const v = getTeamTotalVerdict(direction, isEstimated, engineVerdict);
     const prob = v.engineProb;
     const rawOdds = prob >= 50
       ? -Math.round((prob / (100 - prob)) * 100)
@@ -1520,7 +1536,9 @@ function NCAABGameCard({
           const { team, direction, line, isEstimated, teamAbbr } = selectedTeamMarket;
           const proj = team === "home" ? fullHomeProj : fullAwayProj;
           if (proj === null) return null;
-          const v = getTeamTotalVerdict(proj, line, direction, isEstimated);
+          const ttMarketKey = team === "home" ? "team_total_home" : "team_total_away";
+          const engineVerdict = play.engineOutput?.marketVerdicts?.find(mv => mv.market === ttMarketKey) ?? null;
+          const v = getTeamTotalVerdict(direction, isEstimated, engineVerdict);
           const ttColor = v.edgeSide === "Over" ? "#00d4aa" : "#ef4444";
           const ttEdgeBelow = v.edgeGap < 5;
           return (
@@ -2303,18 +2321,17 @@ function groupGamesByTipoff(games: NCAABGame[]) {
 // Returns color tier for chip border/bg based on play edge and probability
 function getChipColorTier(play: NCAABPlay | undefined): "green" | "yellow" | "red" | "neutral" {
   if (!play) return "neutral";
-  const edge = play.edge ?? 0;
-  const prob = play.overProb ?? 50;
+  const edge = Math.abs(play.totalEdge ?? 0);
+  const prob = play.engineOutput?.calibratedOverProb ?? 50;
   const confidence = Math.max(prob, 100 - prob);
   if (edge >= 10 || confidence >= 70) return "green";
   if (edge >= 5 || confidence >= 60) return "yellow";
   return "red";
 }
 
-// Returns value signal for a chip based on matched play data
 function getChipValueSignal(play: NCAABPlay | undefined): { label: string; color: string; bg: string } | null {
   if (!play) return null;
-  const edge = play.edge ?? 0;
+  const edge = Math.abs(play.totalEdge ?? 0);
   const bettingWindow = play.bettingWindow;
   if (bettingWindow === "HALFTIME" && edge >= 5) {
     return { label: "2H EDGE", color: "#00d4aa", bg: "rgba(0,212,170,0.15)" };
@@ -2667,8 +2684,9 @@ function NCAABGamesStrip({
       <>
       {/* ── Value legend row (only when any chip has a signal) ──────────── */}
       {(() => {
-        const hasTeal  = plays.some(p => (p.edge ?? 0) >= 10 || p.bettingWindow === "HALFTIME");
-        const hasAmber = plays.some(p => { const e = p.edge ?? 0; return e >= 5 && e < 10 && p.bettingWindow !== "HALFTIME"; });
+        const getEdge = (p: NCAABPlay) => Math.abs((p.engineOutput?.calibratedOverProb ?? 50) - 50);
+        const hasTeal  = plays.some(p => getEdge(p) >= 10 || p.bettingWindow === "HALFTIME");
+        const hasAmber = plays.some(p => { const e = getEdge(p); return e >= 5 && e < 10 && p.bettingWindow !== "HALFTIME"; });
         if (!hasTeal && !hasAmber) return null;
         return (
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, paddingLeft: 2 }}>
@@ -3851,7 +3869,7 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                 const h2ActiveEdge = h2Side === "OVER" ? play.h2OverEdge : play.h2UnderEdge;
 
                 // Best spread call
-                const spreadProb = play.spreadProb ?? 50;
+                const spreadProb = play.engineOutput?.calibratedSpreadProb ?? 50;
                 const hasCoverCall = play.spread !== null && Math.abs(spreadProb - 50) >= 8;
                 const spreadSide = spreadProb >= 55 ? "COVER" : spreadProb <= 45 ? "FADE" : null;
                 const spreadConf = spreadSide === "COVER" ? spreadProb : spreadSide === "FADE" ? (100 - spreadProb) : null;
@@ -4000,42 +4018,48 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                       )}
 
                       {/* 2H Spread */}
-                      {play.h2SpreadLine !== null && play.spreadProb !== null && (
+                      {play.h2SpreadLine !== null && play.engineOutput?.calibratedSpreadProb != null && (() => {
+                        const sp = play.engineOutput!.calibratedSpreadProb!;
+                        return (
                         <div className="space-y-1">
                           <div className="flex items-center justify-between text-xs">
-                            <span className="text-muted-foreground font-medium">2H Spread — {play.h2Favorite} {play.h2SpreadLine > 0 ? "+" : ""}{play.h2SpreadLine}</span>
-                            <span className={`font-semibold ${play.spreadProb >= 60 ? "text-green-400" : play.spreadProb <= 40 ? "text-red-400" : "text-foreground"}`}>
-                              {play.spreadProb >= 50
-                                ? `${play.spreadProb.toFixed(0)}% cover`
-                                : `${(100 - play.spreadProb).toFixed(0)}% fade`}
+                            <span className="text-muted-foreground font-medium">2H Spread — {play.h2Favorite} {play.h2SpreadLine! > 0 ? "+" : ""}{play.h2SpreadLine}</span>
+                            <span className={`font-semibold ${sp >= 60 ? "text-green-400" : sp <= 40 ? "text-red-400" : "text-foreground"}`}>
+                              {sp >= 50
+                                ? `${sp.toFixed(0)}% cover`
+                                : `${(100 - sp).toFixed(0)}% fade`}
                             </span>
                           </div>
                           <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
                             <div
-                              className={`h-full rounded-full transition-all ${play.spreadProb >= 60 ? "bg-green-500" : play.spreadProb <= 40 ? "bg-red-500" : "bg-primary"}`}
-                              style={{ width: `${Math.min(100, play.spreadProb)}%` }}
+                              className={`h-full rounded-full transition-all ${sp >= 60 ? "bg-green-500" : sp <= 40 ? "bg-red-500" : "bg-primary"}`}
+                              style={{ width: `${Math.min(100, sp)}%` }}
                             />
                           </div>
                         </div>
-                      )}
+                        );
+                      })()}
 
                       {/* Full-game spread fallback if no 2H spread */}
-                      {play.h2SpreadLine === null && play.spread !== null && play.spreadProb !== null && (
+                      {play.h2SpreadLine === null && play.spread !== null && play.engineOutput?.calibratedSpreadProb != null && (() => {
+                        const sp = play.engineOutput!.calibratedSpreadProb!;
+                        return (
                         <div className="space-y-1">
                           <div className="flex items-center justify-between text-xs">
-                            <span className="text-muted-foreground font-medium">Spread — {play.favorite} {play.spread > 0 ? "+" : ""}{play.spread}</span>
-                            <span className={`font-semibold ${play.spreadProb >= 60 ? "text-green-400" : play.spreadProb <= 40 ? "text-red-400" : "text-foreground"}`}>
-                              {play.spreadProb.toFixed(0)}% cover
+                            <span className="text-muted-foreground font-medium">Spread — {play.favorite} {play.spread! > 0 ? "+" : ""}{play.spread}</span>
+                            <span className={`font-semibold ${sp >= 60 ? "text-green-400" : sp <= 40 ? "text-red-400" : "text-foreground"}`}>
+                              {sp.toFixed(0)}% cover
                             </span>
                           </div>
                           <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
                             <div
-                              className={`h-full rounded-full transition-all ${play.spreadProb >= 60 ? "bg-green-500" : play.spreadProb <= 40 ? "bg-red-500" : "bg-primary"}`}
-                              style={{ width: `${Math.min(100, play.spreadProb)}%` }}
+                              className={`h-full rounded-full transition-all ${sp >= 60 ? "bg-green-500" : sp <= 40 ? "bg-red-500" : "bg-primary"}`}
+                              style={{ width: `${Math.min(100, sp)}%` }}
                             />
                           </div>
                         </div>
-                      )}
+                        );
+                      })()}
                     </div>
 
                     {/* ── H2 Projections ────────────────────────────────────── */}
