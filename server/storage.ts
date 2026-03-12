@@ -17,6 +17,7 @@ import {
   type Feedback,
   type CalculateProbabilityRequest,
   type CalculateProbabilityResponse,
+  type CalcDebug,
   type HalftimePlayAlert,
   type InsertHalftimePlayAlert,
   type AnalyticsSummary,
@@ -119,6 +120,48 @@ export interface IStorage {
   cleanupOldPlays(): Promise<number>;
   cleanDuplicatePlays(): Promise<{ removed: number; remaining: number }>;
   cleanDuplicateAlerts(): Promise<{ removed: number; remaining: number }>;
+}
+
+// ─── Calibrated probability lookup ─────────────────────────────────────────
+// Replaces the old linear formula (50 + diff × scaleFactor) with an interpolated
+// edge→probability table derived from historical hit-rate buckets.
+const HALFTIME_EDGE_BUCKETS: Array<[number, number]> = [
+  [0.5, 0.52], [1.0, 0.54], [1.5, 0.56], [2.0, 0.58], [2.5, 0.60],
+  [3.0, 0.62], [3.5, 0.64], [4.0, 0.66], [5.0, 0.69], [6.0, 0.72],
+];
+const LIVE_CONTEXT_LIFT = 0.015;
+
+function calibrateProbability(
+  edge: number,
+  _statType: string,
+  context: "halftime" | "live",
+): number {
+  const absEdge = Math.abs(edge);
+  if (absEdge < 0.01) return 50;
+
+  let prob: number;
+  const buckets = HALFTIME_EDGE_BUCKETS;
+  if (absEdge <= buckets[0][0]) {
+    prob = 0.50 + (absEdge / buckets[0][0]) * (buckets[0][1] - 0.50);
+  } else if (absEdge >= buckets[buckets.length - 1][0]) {
+    const last = buckets[buckets.length - 1];
+    const prev = buckets[buckets.length - 2];
+    const slope = (last[1] - prev[1]) / (last[0] - prev[0]);
+    prob = last[1] + slope * (absEdge - last[0]);
+  } else {
+    let lo = buckets[0], hi = buckets[1];
+    for (let i = 1; i < buckets.length; i++) {
+      if (buckets[i][0] >= absEdge) { hi = buckets[i]; lo = buckets[i - 1]; break; }
+    }
+    const t = (absEdge - lo[0]) / (hi[0] - lo[0]);
+    prob = lo[1] + t * (hi[1] - lo[1]);
+  }
+
+  if (context === "live") prob += LIVE_CONTEXT_LIFT;
+
+  const pctOver = prob * 100;
+  const pctResult = edge >= 0 ? pctOver : 100 - pctOver;
+  return Math.max(2, Math.min(98, Math.round(pctResult * 10) / 10));
 }
 
 // Module-level in-flight Set prevents concurrent race conditions in savePlayAlerts.
@@ -275,13 +318,10 @@ export class DatabaseStorage implements IStorage {
         const impliedFullGame = elapsedMins > 0 ? (scoreTotal / elapsedMins) * 48 : EXPECTED_GAME_TOTAL;
         const impliedRef = req.gameTotalLine ? req.gameTotalLine : EXPECTED_GAME_TOTAL;
         const livePaceMultiplier = impliedFullGame / impliedRef;
-        paceMultiplier = livePaceMultiplier * 0.6 + paceMultiplier * 0.4;
+        paceMultiplier = livePaceMultiplier * 0.35 + paceMultiplier * 0.65;
       }
     }
-    // At halftime (full 2H remaining) cap the pace multiplier lower — the H1 observed
-    // rate already embeds H1 pace, so applying a full live-score-derived multiplier on
-    // top double-counts it. Cap at 1.12 instead of 1.22 when ≥22 min remain.
-    const halfTimePaceCap = gameMinutesRemaining >= 22 ? 1.12 : 1.22;
+    const halfTimePaceCap = gameMinutesRemaining >= 22 ? 1.10 : 1.18;
     paceMultiplier = Math.max(0.78, Math.min(halfTimePaceCap, paceMultiplier));
 
     // ─── Game spread → garbage-time minute reduction ────────────────────────
@@ -301,6 +341,29 @@ export class DatabaseStorage implements IStorage {
       spreadMinuteReduction = Math.min(spreadMinuteReduction, 0.70);
     }
     remainingMinutes *= spreadMinuteReduction;
+
+    // ─── Game script divergence ──────────────────────────────────────────────
+    // If the actual score gap exceeds the pre-game spread significantly,
+    // stars sit earlier than their normal rotation would predict.
+    let parsedScoreDiff = 0;
+    if (currentScore) {
+      const sc = currentScore.split(/[- ]+/).map(Number);
+      if (sc.length === 2 && !isNaN(sc[0]) && !isNaN(sc[1])) {
+        parsedScoreDiff = sc[1] - sc[0]; // homeScore - awayScore
+      }
+    }
+    if (req.gameSpread !== undefined) {
+      const leadDelta = Math.abs(parsedScoreDiff) - Math.abs(req.gameSpread);
+      if (leadDelta > 25)       remainingMinutes *= 0.65;
+      else if (leadDelta > 18)  remainingMinutes *= 0.80;
+      else if (leadDelta > 12)  remainingMinutes *= 0.92;
+    }
+
+    // ─── Close game minute boost (Step 6) ────────────────────────────────────
+    // In close Q4+ games, star/rotation players close harder.
+    if (Math.abs(parsedScoreDiff) <= 8 && currentPeriod >= 4 && (usageRate >= 0.22 || avgMinutes >= 28)) {
+      remainingMinutes *= 1.05;
+    }
 
     // ─── H2 baseline selection ──────────────────────────────────────────────
     // inSecondHalf / h2Min / useH2 are declared earlier (needed for minute projection).
@@ -338,15 +401,6 @@ export class DatabaseStorage implements IStorage {
         default:            return null;
       }
     }
-
-    // ─── Efficiency index ───────────────────────────────────────────────────
-    // NBA.com offRating (from Advanced sync) — normalize so 110 (avg) → 1.0.
-    // If offRating is unavailable, default to 1.0 (neutral).
-    // The previous fallback formula (ptsPerMin / usageRate) always clamped to
-    // 1.30 for any decent scorer, artificially inflating every signal.
-    const efficiencyIndex = player.offRating
-      ? Math.max(0.70, Math.min(1.30, Number(player.offRating) / 110))
-      : 1.0;
 
     // ─── Live shooting efficiency modifier ──────────────────────────────────
     // Blends current-game shooting % against season baseline to adjust the
@@ -430,36 +484,47 @@ export class DatabaseStorage implements IStorage {
 
     const blendedPerMin = observedPerMin * observedW + (seasonPerMin ?? 0) * seasonW;
 
-    const expectedFromHere = blendedPerMin * remainingMinutes * defenseMultiplier * paceMultiplier * shootingModifier;
-    const expectedTotal    = req.halftimeStat + expectedFromHere;
+    // ─── Context modifier cap (Step 5) ────────────────────────────────────
+    // Combine defense, pace, and shooting into a single clamped modifier.
+    const rawContextModifier = defenseMultiplier * paceMultiplier * shootingModifier;
+    const contextClamp = isHalftimeContext ? { lo: 0.90, hi: 1.12 } : { lo: 0.88, hi: 1.18 };
+    const contextModifier = Math.max(contextClamp.lo, Math.min(contextClamp.hi, rawContextModifier));
 
-    // ─── Probability via sigmoid-style formula ─────────────────────────────
-    const difference = expectedTotal - req.liveLine;
+    let expectedFromHere = blendedPerMin * remainingMinutes * contextModifier;
 
-    const usageNorm = usageRate / 0.22;
-    // Scale factors calibrated for halftime context (24 min remaining) vs. live Q3/Q4.
-    // Halftime base factors are reduced because there is much more uncertainty in
-    // projecting 2 full quarters than the final minutes of a live quarter.
-    // Live context uses the original (higher) factors.
-    let scaleFactor: number;
-    if (req.statType === "steals" || req.statType === "blocks" || req.statType === "stl_blk") {
-      scaleFactor = isHalftimeContext ? 10 : 14;
-    } else if (req.statType === "threes") {
-      scaleFactor = isHalftimeContext ? 9 : 12;
-    } else if (req.statType === "rebounds" || req.statType === "assists") {
-      scaleFactor = isHalftimeContext ? 7.5 : 10;
-    } else if (req.statType.includes("_")) {
-      scaleFactor = isHalftimeContext ? 4.0 : 5.5;
-    } else {
-      scaleFactor = isHalftimeContext ? 6 : 8;
+    // ─── Overtime probability boost (Step 3) ──────────────────────────────
+    if (currentPeriod === 4 && clockMins <= 2.0 && Math.abs(parsedScoreDiff) <= 3) {
+      if (parsedScoreDiff === 0 && clockMins <= 1.0) {
+        expectedFromHere *= 1.05;
+      } else {
+        expectedFromHere *= 1.03;
+      }
     }
-    scaleFactor = scaleFactor * usageNorm * efficiencyIndex;
-    scaleFactor = Math.max(4, Math.min(20, scaleFactor));
 
-    let probability = 50 + difference * scaleFactor;
-    probability = Math.max(2, Math.min(98, probability));
+    const expectedTotal = req.halftimeStat + expectedFromHere;
 
-    console.log(`[calc] ${player.name}: period=${currentPeriod} clock=${req.gameClock ?? "n/a"} gameMinLeft=${gameMinutesRemaining.toFixed(1)} remainMin=${remainingMinutes.toFixed(1)} baseline=${baselineSource} usageRate=${usageRate.toFixed(3)} effIdx=${efficiencyIndex.toFixed(3)} prob=${probability.toFixed(1)}%`);
+    // ─── Calibrated probability (Step 1) ──────────────────────────────────
+    const edge = expectedTotal - req.liveLine;
+    const context: "halftime" | "live" = isHalftimeContext ? "halftime" : "live";
+    const probability = calibrateProbability(edge, req.statType, context);
+
+    console.log(`[calc] ${player.name}: period=${currentPeriod} clock=${req.gameClock ?? "n/a"} gameMinLeft=${gameMinutesRemaining.toFixed(1)} remainMin=${remainingMinutes.toFixed(1)} baseline=${baselineSource} edge=${edge.toFixed(2)} ctxMod=${contextModifier.toFixed(3)} prob=${probability.toFixed(1)}%`);
+
+    const debug: CalcDebug = {
+      projection: Math.round(expectedTotal * 10) / 10,
+      line: req.liveLine,
+      edge: Math.round(edge * 100) / 100,
+      seasonPerMin: seasonPerMin ? Math.round(seasonPerMin * 1000) / 1000 : null,
+      observedPerMin: Math.round(observedPerMin * 1000) / 1000,
+      observedWeight: Math.round(observedW * 100) / 100,
+      seasonWeight: Math.round(seasonW * 100) / 100,
+      remainingMinutes: Math.round(remainingMinutes * 10) / 10,
+      paceMultiplier: Math.round(paceMultiplier * 100) / 100,
+      defenseMultiplier: Math.round(defenseMultiplier * 100) / 100,
+      shootingModifier: Math.round(shootingModifier * 100) / 100,
+      contextModifier: Math.round(contextModifier * 100) / 100,
+      probabilityCalibrated: probability,
+    };
 
     return {
       probability: Math.round(probability * 10) / 10,
@@ -473,6 +538,7 @@ export class DatabaseStorage implements IStorage {
       gameMinutesRemaining: Math.round(gameMinutesRemaining * 10) / 10,
       inSecondHalf,
       baselineSource,
+      debug,
     };
   }
 

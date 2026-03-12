@@ -116,6 +116,22 @@ export const calculateProbabilitySchema = z.object({
 
 export type CalculateProbabilityRequest = z.infer<typeof calculateProbabilitySchema>;
 
+export interface CalcDebug {
+  projection: number;
+  line: number;
+  edge: number;
+  seasonPerMin: number | null;
+  observedPerMin: number;
+  observedWeight: number;
+  seasonWeight: number;
+  remainingMinutes: number;
+  paceMultiplier: number;
+  defenseMultiplier: number;
+  shootingModifier: number;
+  contextModifier: number;
+  probabilityCalibrated: number;
+}
+
 export interface CalculateProbabilityResponse {
   probability: number;
   expectedTotal: number;
@@ -128,6 +144,7 @@ export interface CalculateProbabilityResponse {
   gameMinutesRemaining?: number;
   inSecondHalf?: boolean;
   baselineSource?: "h2" | "fullGame";
+  debug?: CalcDebug;
 }
 
 export interface LiveGame {
