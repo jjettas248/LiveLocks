@@ -40,6 +40,7 @@ interface NCAABPlay {
   spread: number | null;
   total: number | null;
   favorite: string;
+  spreadTeam: "HOME" | "AWAY" | null;
   bookLines: BookLine[];
   h1TotalLine: number | null;
   h1SpreadLine: number | null;
@@ -122,6 +123,7 @@ interface NCAABPlay {
     displayPick: string;
     marketVerdicts: Array<{
       market: string;
+      marketType?: string;
       projection: number | null;
       line: number | null;
       overProb: number | null;
@@ -138,6 +140,7 @@ interface NCAABPlay {
       spreadProb: string;
       recommendedSide: string;
       confidenceTier: string;
+      displayProbability: string;
       edgeLabelOver: string;
       edgeLabelUnder: string;
       edgeLabelSpread: string;
@@ -152,6 +155,12 @@ interface NCAABPlay {
 }
 
 export type { ParlayPickInput as NCAABParlayPick };
+
+function resolveSpreadVerdict(engineOutput: NCAABPlay["engineOutput"]) {
+  return engineOutput?.marketVerdicts?.find(
+    mv => mv.market === "spread" || mv.marketType === "spread"
+  );
+}
 
 interface TorvikStats {
   adjO: number; adjD: number; tempo: number;
@@ -951,9 +960,36 @@ function FullGameMarkets({
   const fullTotal   = play.total;
   const overProb    = play.engineOutput?.calibratedOverProb ?? null;
   const underProb   = play.engineOutput?.calibratedUnderProb ?? null;
+  const spreadVerdict = resolveSpreadVerdict(play.engineOutput);
   const spreadProb  = play.engineOutput?.calibratedSpreadProb ?? null;
-  const homeSpread  = play.spread != null ? -play.spread : null;
-  const awaySpread  = play.spread != null ? play.spread : null;
+  const spreadLine  = spreadVerdict?.line ?? play.spread;
+  if (spreadVerdict == null && play.spread != null) {
+    console.warn("NCAAB spread fallback triggered", { gameId: play.gameId, fallbackLine: play.spread });
+  }
+  const absSpread = spreadLine != null ? Math.abs(spreadLine) : null;
+  const resolvedSpreadTeam: "HOME" | "AWAY" | null = play.spreadTeam
+    ?? (play.favorite === play.homeTeam ? "HOME"
+      : play.favorite === play.awayTeam ? "AWAY"
+      : null);
+  const isFavHome = resolvedSpreadTeam === "HOME";
+  const isFavAway = resolvedSpreadTeam === "AWAY";
+  const homeSpread  = absSpread != null
+    ? (isFavHome ? -absSpread : isFavAway ? absSpread : null)
+    : null;
+  const awaySpread  = absSpread != null
+    ? (isFavHome ? absSpread : isFavAway ? -absSpread : null)
+    : null;
+  if (process.env.NODE_ENV !== "production" && resolvedSpreadTeam == null && absSpread != null) {
+    console.warn("Spread sign resolution — unresolved spreadTeam", {
+      gameId: play.gameId,
+      homeTeam: homeAbbr,
+      awayTeam: awayAbbr,
+      spreadTeam: play.spreadTeam,
+      favorite: play.favorite,
+      resolvedHomeSpread: homeSpread,
+      resolvedAwaySpread: awaySpread,
+    });
+  }
   const homeTT      = play.homeGameTotalLine;
   const awayTT      = play.awayGameTotalLine;
   const homeTTEst   = play.homeGameTotalIsEstimated;
@@ -980,15 +1016,18 @@ function FullGameMarkets({
         isSelectedOver={selectedLabel === `Total Over ${fullTotal}`}
         isSelectedUnder={selectedLabel === `Total Under ${fullTotal}`}
       />
-      <MarketRow label={`${homeAbbr} Spread`} line={homeSpread} singleSide coverProb={spreadProb}
-        onSelectSide={() => sel(`${homeAbbr} Spread ${homeSpread && homeSpread > 0 ? "+" : ""}${homeSpread}`, spreadProb, 52.4)}
+      <MarketRow label={`${homeAbbr} Spread`} line={homeSpread} singleSide coverProb={
+        isFavHome ? spreadProb : isFavAway ? (spreadProb != null ? parseFloat((100 - spreadProb).toFixed(1)) : null) : null
+      }
+        onSelectSide={() => sel(`${homeAbbr} Spread ${homeSpread && homeSpread > 0 ? "+" : ""}${homeSpread}`,
+          isFavHome ? spreadProb : isFavAway ? (spreadProb != null ? parseFloat((100 - spreadProb).toFixed(1)) : null) : null, 52.4)}
         isSelectedSide={selectedLabel === `${homeAbbr} Spread ${homeSpread && homeSpread > 0 ? "+" : ""}${homeSpread}`}
       />
       <MarketRow label={`${awayAbbr} Spread`} line={awaySpread} singleSide coverProb={
-        play.engineOutput?.marketVerdicts?.find(mv => mv.market === "spread")?.underProb ?? null
+        isFavAway ? spreadProb : isFavHome ? (spreadProb != null ? parseFloat((100 - spreadProb).toFixed(1)) : null) : null
       }
         onSelectSide={() => sel(`${awayAbbr} Spread ${awaySpread && awaySpread > 0 ? "+" : ""}${awaySpread}`,
-          play.engineOutput?.marketVerdicts?.find(mv => mv.market === "spread")?.underProb ?? null, 52.4)}
+          isFavAway ? spreadProb : isFavHome ? (spreadProb != null ? parseFloat((100 - spreadProb).toFixed(1)) : null) : null, 52.4)}
         isSelectedSide={selectedLabel === `${awayAbbr} Spread ${awaySpread && awaySpread > 0 ? "+" : ""}${awaySpread}`}
       />
       <MarketRow label={`${homeAbbr} Team Total`} line={homeTT} isEstimated={homeTTEst}
@@ -1498,7 +1537,7 @@ function NCAABGameCard({
             </p>
             <div className="flex gap-1.5 mt-1.5 flex-wrap">
               {(() => {
-                const tier = getConfidenceTier(play.overProb);
+                const tier = getConfidenceTier(play.engineOutput?.calibratedOverProb ?? null);
                 if (!tier) return null;
                 return (
                   <span
@@ -3728,7 +3767,7 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
     setSummaryGames(prev => {
       if (prev.find(s => s.gameId === game.id)) return prev;
       const line     = play?.total ?? null;
-      const overProb = play?.overProb ?? null;
+      const overProb = play?.engineOutput?.calibratedOverProb ?? null;
       const edgeGap  = overProb !== null ? Math.abs(overProb - 50) : 0;
       return [...prev, {
         gameId: game.id,
@@ -3984,9 +4023,10 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                 {/* Play cards */}
                 <div className="flex gap-3 overflow-x-auto pb-2" style={{ scrollSnapType: "x mandatory" }}>
                   {sortedPlays.map(p => {
-                    const tier = getConfidenceTier(p.overProb);
-                    const confidence = Math.max(p.overProb ?? 50, 100 - (p.overProb ?? 50));
-                    const edgeSide = (p.overProb ?? 50) > 50 ? "Over" : "Under";
+                    const calibratedProb = p.engineOutput?.calibratedOverProb ?? null;
+                    const tier = getConfidenceTier(calibratedProb);
+                    const confidence = Math.max(calibratedProb ?? 50, 100 - (calibratedProb ?? 50));
+                    const edgeSide = (calibratedProb ?? 50) > 50 ? "Over" : "Under";
                     const edgeColor = edgeSide === "Over" ? "#00d4aa" : "#ef4444";
                     const halfLabel = p.half === 1 ? "H1" : p.half === 2 ? "H2" : "OT";
                     return (
@@ -4021,17 +4061,27 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                         </div>
                         <p className="text-xs font-bold text-white truncate">{p.awayTeamAbbr} @ {p.homeTeamAbbr}</p>
                         <p className="text-lg font-black tabular-nums" style={{ color: "#ffffff" }}>{p.awayScore} – {p.homeScore}</p>
+                        <div className="flex items-center justify-between text-[9px]" style={{ color: "#71717a" }}>
+                          <span data-testid={`ncaab-top-play-market-${p.gameId}`}>
+                            {p.engineOutput?.marketType === "h1_total" ? "1H Total"
+                              : p.engineOutput?.marketType === "h2_total" ? "2H Total"
+                              : "Full Game Total"}
+                          </span>
+                          {p.bookLines[0]?.book && (
+                            <span data-testid={`ncaab-top-play-book-${p.gameId}`} style={{ textTransform: "uppercase" }}>{p.bookLines[0].book}</span>
+                          )}
+                        </div>
                         <div className="flex items-center justify-between gap-2">
                           <div>
                             <span className="text-sm font-bold" style={{ color: edgeColor }}>{edgeSide} {p.total ?? "—"}</span>
-                            <span className="text-xs ml-1.5 tabular-nums" style={{ color: edgeColor }}>{confidence.toFixed(0)}%</span>
+                            <span className="text-xs ml-1.5 tabular-nums" style={{ color: edgeColor }}>{p.engineOutput?.displayOutput?.displayProbability ?? `${confidence.toFixed(0)}%`}</span>
                           </div>
                           {onAddToParlay && (
                             <button
                               data-testid={`ncaab-top-play-parlay-${p.gameId}`}
                               onClick={() => {
                                 const line = p.total ?? 0;
-                                const prob = p.overProb ?? 50;
+                                const prob = calibratedProb ?? 50;
                                 const dir = prob > 50 ? "over" : "under";
                                 const rawOdds = prob >= 50
                                   ? -Math.round((prob / (100 - prob)) * 100)
@@ -4052,7 +4102,7 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                               className="text-[10px] font-bold px-2.5 py-1 rounded-lg transition-colors"
                               style={{ background: "rgba(0,212,170,0.12)", color: "#00d4aa", border: "1px solid rgba(0,212,170,0.25)" }}
                             >
-                              + Parlay
+                              + Bet Card
                             </button>
                           )}
                         </div>
@@ -4366,7 +4416,7 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                           <div>
                             <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Spread Best Play</p>
                             <p className="text-base font-black text-foreground">
-                              {spreadSide === "COVER" ? "Cover" : "Fade"} {play.favorite} {play.spread !== null ? `${play.spread > 0 ? "+" : ""}${play.spread}` : ""}
+                              {spreadSide === "COVER" ? "Cover" : "Fade"} {play.favorite} {play.spread !== null ? `-${Math.abs(play.spread)}` : ""}
                             </p>
                           </div>
                           <span className={`text-sm font-bold px-2.5 py-1 rounded-lg ${confBg(spreadConf)}`}>
@@ -4408,12 +4458,18 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                       )}
 
                       {/* 2H Spread */}
-                      {play.h2SpreadLine !== null && play.engineOutput?.calibratedSpreadProb != null && (() => {
+                      {(() => {
+                        const sv = resolveSpreadVerdict(play.engineOutput);
+                        const h2SpLine = sv?.line ?? play.h2SpreadLine;
+                        if (h2SpLine == null || play.engineOutput?.calibratedSpreadProb == null) return null;
+                        if (sv == null && play.h2SpreadLine != null) {
+                          console.warn("NCAAB spread fallback triggered", { gameId: play.gameId, fallbackLine: play.h2SpreadLine });
+                        }
                         const sp = play.engineOutput!.calibratedSpreadProb!;
                         return (
                         <div className="space-y-1">
                           <div className="flex items-center justify-between text-xs">
-                            <span className="text-muted-foreground font-medium">2H Spread — {play.h2Favorite} {play.h2SpreadLine! > 0 ? "+" : ""}{play.h2SpreadLine}</span>
+                            <span className="text-muted-foreground font-medium">2H Spread — {play.h2Favorite} {h2SpLine > 0 ? "+" : ""}{h2SpLine}</span>
                             <span className={`font-semibold ${sp >= 60 ? "text-green-400" : sp <= 40 ? "text-red-400" : "text-foreground"}`}>
                               {sp >= 50
                                 ? `${sp.toFixed(0)}% cover`
@@ -4431,12 +4487,19 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                       })()}
 
                       {/* Full-game spread fallback if no 2H spread */}
-                      {play.h2SpreadLine === null && play.spread !== null && play.engineOutput?.calibratedSpreadProb != null && (() => {
+                      {play.h2SpreadLine === null && play.engineOutput?.calibratedSpreadProb != null && (() => {
+                        const fgSv = resolveSpreadVerdict(play.engineOutput);
+                        const fgSpreadLine = fgSv?.line ?? play.spread;
+                        if (fgSpreadLine == null) return null;
+                        if (fgSv == null && play.spread != null) {
+                          console.warn("NCAAB spread fallback triggered", { gameId: play.gameId, fallbackLine: play.spread });
+                        }
                         const sp = play.engineOutput!.calibratedSpreadProb!;
+                        const absFgSpread = Math.abs(fgSpreadLine);
                         return (
                         <div className="space-y-1">
                           <div className="flex items-center justify-between text-xs">
-                            <span className="text-muted-foreground font-medium">Spread — {play.favorite} {play.spread! > 0 ? "+" : ""}{play.spread}</span>
+                            <span className="text-muted-foreground font-medium">Spread — {play.favorite} -{absFgSpread}</span>
                             <span className={`font-semibold ${sp >= 60 ? "text-green-400" : sp <= 40 ? "text-red-400" : "text-foreground"}`}>
                               {sp.toFixed(0)}% cover
                             </span>

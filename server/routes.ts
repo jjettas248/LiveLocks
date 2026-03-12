@@ -199,6 +199,20 @@ export async function registerRoutes(
         }
         return true;
       });
+
+      if (process.env.NODE_ENV !== "production") {
+        for (const play of freshPlays) {
+          console.log("[NCAAB DEBUG]", {
+            gameId: play.gameId,
+            line: play.total,
+            projection: play.engineOutput?.projectedTotal ?? null,
+            recommendedSide: play.engineOutput?.recommendedSide ?? null,
+            displayProbability: play.engineOutput?.displayProbability ?? null,
+            marketVerdicts: play.engineOutput?.marketVerdicts ?? [],
+          });
+        }
+      }
+
       res.json({ plays: freshPlays });
       checkAndSendAlerts(freshPlays, storage).catch(console.warn);
     } catch (err: any) {

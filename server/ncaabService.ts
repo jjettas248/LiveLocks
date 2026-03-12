@@ -667,6 +667,7 @@ export interface NCAABPlay {
   spread: number | null;
   total: number | null;
   favorite: string;
+  spreadTeam: "HOME" | "AWAY" | null;
   bookLines: Array<{ book: string; spread: number | null; total: number | null; favorite: string; h1Total: number | null; h1Spread: number | null; h1Favorite: string }>;
   h1TotalLine: number | null;
   h1SpreadLine: number | null;
@@ -1093,6 +1094,9 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         spread,
         total,
         favorite,
+        spreadTeam: favorite && game.homeTeam && favorite.toLowerCase() === game.homeTeam.toLowerCase() ? "HOME" as const
+          : favorite && game.awayTeam && favorite.toLowerCase() === game.awayTeam.toLowerCase() ? "AWAY" as const
+          : null,
         bookLines,
         h1TotalLine,
         h1SpreadLine,
