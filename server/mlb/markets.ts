@@ -6,6 +6,7 @@ import type {
   MLBRecommendedSide,
   ProjectionLog,
 } from "./types";
+import { getPlayer, getPlayerByName } from "./rosterService";
 import {
   EXPERIMENTAL_MARKETS,
   CORE_MARKETS,
@@ -364,5 +365,35 @@ export function calculateMLBPropEdge(input: MLBPropInput): MLBPropOutput {
   if (!calculator) {
     throw new Error(`Unknown MLB market: ${input.market}`);
   }
-  return calculator(input);
+
+  // ── Roster hydration (Edit #4) ──────────────────────────────────────────────
+  // Fill missing identity/handedness fields from rosterService when available.
+  // Try by playerId first, fall back to playerName lookup (useful in admin tests).
+  const rosterPlayer = getPlayer(input.playerId) ?? getPlayerByName(input.playerName);
+  let resolvedInput: MLBPropInput = input;
+  if (rosterPlayer) {
+    resolvedInput = {
+      ...resolvedInput,
+      batterHand: resolvedInput.batterHand ?? rosterPlayer.bats,
+      team: resolvedInput.team || rosterPlayer.team,
+      playerName: resolvedInput.playerName || rosterPlayer.playerName,
+    };
+  }
+
+  // ── Required field validation ────────────────────────────────────────────────
+  const missingFields: string[] = [];
+  if (!resolvedInput.playerId) missingFields.push("playerId");
+  if (!resolvedInput.playerName) missingFields.push("playerName");
+  if (!resolvedInput.team) missingFields.push("team");
+  if (!resolvedInput.market) missingFields.push("market");
+  if (resolvedInput.bookLine == null) missingFields.push("bookLine");
+  const validationWarnings = missingFields.map((f) => `MISSING_FIELD:${f}`);
+
+  const output = calculator(resolvedInput);
+
+  if (validationWarnings.length > 0) {
+    output.warnings.push(...validationWarnings);
+  }
+
+  return output;
 }

@@ -23,6 +23,12 @@ import {
 } from "./mlb/diagnostics";
 import { runBacktest, runBatchInputs } from "./mlb/backtestHarness";
 import { ALL_MLB_MARKETS, type MLBPropInput, type MLBMarket } from "./mlb/types";
+import {
+  updatePlayerPool,
+  updateTeamRosters,
+  getPlayerPoolCount,
+  getTeamCount,
+} from "./mlb/rosterService";
 
 // ── Module-level play dedup guard (persists for process lifetime) ─────────────
 const recordedPlayKeys = new Set<string>();
@@ -514,6 +520,20 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("[MLB modifier-summary]", err.message);
       return res.status(500).json({ error: err.message || "Failed to fetch modifier summary" });
+    }
+  });
+
+  app.post("/api/mlb/sync-rosters", requireAdmin, async (_req, res) => {
+    try {
+      await updatePlayerPool();
+      await updateTeamRosters();
+      return res.json({
+        playersLoaded: getPlayerPoolCount(),
+        teamsLoaded: getTeamCount(),
+      });
+    } catch (err: any) {
+      console.error("[MLB sync-rosters]", err.message);
+      return res.status(500).json({ error: err.message || "Roster sync failed" });
     }
   });
 

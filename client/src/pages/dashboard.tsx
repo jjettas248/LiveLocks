@@ -14,6 +14,7 @@ import { UpgradeModal } from "@/components/upgrade-modal";
 import { FeedbackModal } from "@/components/feedback-modal";
 import { NCAABAdminTab } from "@/components/ncaab-admin-tab";
 import { AnalyticsTab } from "@/components/analytics-tab";
+import { MLBAdminTab } from "@/components/mlb-admin-tab";
 import { WelcomeBanner } from "@/components/welcome-banner";
 import { AlertsOnboardingModal } from "@/components/alerts-onboarding-modal";
 import { useAuth } from "@/hooks/use-auth";
@@ -384,7 +385,7 @@ export default function Dashboard() {
     }
   };
 
-  const [activeTab, setActiveTab] = useState<"calculator" | "ncaab" | "analytics">("calculator");
+  const [activeTab, setActiveTab] = useState<"calculator" | "ncaab" | "analytics" | "mlb">("calculator");
   const [nbaSubTab, setNbaSubTab] = useState<"live" | "halftime">("live");
   const [expandToGameId, setExpandToGameId] = useState<string | null>(null);
   const [showWelcomeBanner, setShowWelcomeBanner] = useState(false);
@@ -1556,15 +1557,30 @@ export default function Dashboard() {
                 📊 Analytics
               </button>
             )}
-            <button
-              data-testid="tab-mlb-locked"
-              onClick={() => setMlbPopoverOpen((v) => !v)}
-              className="px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 opacity-50 cursor-not-allowed text-muted-foreground"
-            >
-              <span role="img" aria-label="baseball">⚾</span>
-              MLB Live
-              <Lock className="w-3 h-3" />
-            </button>
+            {user?.isAdmin ? (
+              <button
+                data-testid="tab-mlb"
+                onClick={() => setActiveTab("mlb")}
+                className={`px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 transition-colors ${
+                  activeTab === "mlb"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <span role="img" aria-label="baseball">⚾</span>
+                MLB Live
+              </button>
+            ) : (
+              <button
+                data-testid="tab-mlb-locked"
+                onClick={() => setMlbPopoverOpen((v) => !v)}
+                className="px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 opacity-50 cursor-not-allowed text-muted-foreground"
+              >
+                <span role="img" aria-label="baseball">⚾</span>
+                MLB Live
+                <Lock className="w-3 h-3" />
+              </button>
+            )}
           </div>
 
           {/* NBA sub-tabs */}
@@ -3432,6 +3448,9 @@ export default function Dashboard() {
             <AnalyticsTab />
           </div>
         )}
+
+        {/* MLB Admin Tab — admin only (Phase A engine testing) */}
+        {activeTab === "mlb" && user?.isAdmin && <MLBAdminTab />}
 
       </main>
 
