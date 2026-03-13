@@ -1,0 +1,188 @@
+POST-IMPLEMENTATION VERIFICATION — NCAAB MARKET WIRING
+
+Do NOT modify code.
+Do NOT rebuild the project.
+Do NOT install packages.
+Return diagnostic findings only.
+
+Goal
+Verify that the newly added markets
+
+h1_spread
+h2_spread
+
+are correctly produced by the engine and consumed by the UI.
+
+--------------------------------------------------
+
+STEP 1 — Inspect engine output
+
+Locate the function:
+
+runNCAABEngine()
+
+in
+
+server/ncaabEngine.ts
+
+Identify where market verdicts are pushed into:
+
+engineOutput.marketVerdicts
+
+For ONE live game print:
+
+gameId
+homeTeam
+awayTeam
+engineOutput.marketVerdicts
+
+Expected markets:
+
+full_game_total
+spread
+h1_total
+h1_spread
+h2_total
+h2_spread
+
+Return the actual verdict list.
+
+--------------------------------------------------
+
+STEP 2 — Verify H1 spread generation
+
+Trace the H1 spread verdict code block.
+
+Return:
+
+h1SpreadLine
+proj1HTeamTotalHome
+proj1HTeamTotalAway
+computedProjectedSpread
+calculatedProbability
+favoriteTeam
+lineSign
+
+Confirm the verdict object pushed into marketVerdicts contains:
+
+market
+line
+probability
+favorite
+edge
+
+--------------------------------------------------
+
+STEP 3 — Verify H2 spread generation
+
+Trace the H2 spread verdict code block.
+
+Return:
+
+h2SpreadLine
+proj2HTeamTotalHome
+proj2HTeamTotalAway
+computedProjectedSpread
+calculatedProbability
+favoriteTeam
+lineSign
+
+Confirm the verdict object pushed into marketVerdicts contains:
+
+market
+line
+probability
+favorite
+edge
+
+--------------------------------------------------
+
+STEP 4 — Confirm UI consumption
+
+Inspect:
+
+client/src/components/ncaab-admin-tab.tsx
+
+Locate calls to:
+
+resolveVerdictForMarket()
+
+Return all lines where these markets are requested:
+
+"h1_spread"
+"h2_spread"
+
+For each instance show:
+
+requested market
+verdict source
+UI component rendering the value
+
+--------------------------------------------------
+
+STEP 5 — Verify spread market visibility rules
+
+Trace the code path that determines whether the spread market button renders.
+
+Return:
+
+displaySpreadProb
+marketTab
+h1SpreadVerdict
+h2SpreadVerdict
+
+Confirm that:
+
+H1 tab shows spread only if h1_spread verdict exists
+H2 tab shows spread only if h2_spread verdict exists
+
+--------------------------------------------------
+
+STEP 6 — Verify 2H Plays card
+
+Inspect the halftime play card.
+
+Return:
+
+line source
+probability source
+spread verdict source
+
+Confirm the 2H spread row reads only from:
+
+market === "h2_spread"
+
+and not from the full-game spread verdict.
+
+--------------------------------------------------
+
+STEP 7 — Return final report
+
+Provide the results in this structure:
+
+ENGINE OUTPUT
+(actual markets produced)
+
+UI VERDICT REQUESTS
+(markets requested by UI)
+
+SPREAD COMPUTATION
+(projected spreads and probabilities)
+
+UI DISPLAY PATH
+(how the verdict reaches the card)
+
+FINAL STATUS
+
+PASS if:
+
+h1_spread verdict produced
+h2_spread verdict produced
+UI requests both markets
+2H plays card uses h2_spread verdict
+no full-game spread fallback exists
+
+FAIL if any of these conditions are not met.
+
+Do not propose code changes yet.
+Return the diagnostic report only.
