@@ -4033,37 +4033,7 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
       {/* ── Live sub-tab ───────────────────────────────────────────────────── */}
       {ncaabSubTab === "live" && !loading && (
         <>
-          {/* ── Today's Games strip — FIRST in live tab ──────────────────── */}
-          {games.length > 0 && (
-            <div
-              style={{
-                background: "#0a0a0a",
-                paddingTop: 4,
-                paddingBottom: gamesStripCollapsed ? 4 : 8,
-                marginBottom: gamesStripCollapsed ? 0 : 4,
-                borderBottom: gamesStripCollapsed ? "none" : "1px solid #1c1c1e",
-              }}
-            >
-              <NCAABGamesStrip
-                games={games}
-                expandedGameId={expandedGameId}
-                onChipClick={handleChipClick}
-                plays={plays}
-                collapsed={gamesStripCollapsed}
-                onCollapsedChange={setGamesStripCollapsed}
-              />
-            </div>
-          )}
-
-          {/* Slate complete banner */}
-          {allFinal && games.length > 0 && (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: "rgba(0,212,170,0.08)", border: "1px solid rgba(0,212,170,0.2)" }}>
-              <CheckCircle className="w-4 h-4 shrink-0" style={{ color: "#00d4aa" }} />
-              <span className="text-xs font-semibold" style={{ color: "#00d4aa" }}>Slate Complete</span>
-            </div>
-          )}
-
-          {/* ── Top Plays Feed ──────────────────────────────────────────────── */}
+          {/* ── Top Plays Feed — FIRST in live tab ────────────────────────── */}
           {hasPlays && (() => {
             const filteredPlays = filterNcaabPlaysByBook(plays, ncaabBookFilter);
             const sortedPlays = filteredPlays;
@@ -4233,6 +4203,36 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
               </div>
             );
           })()}
+
+          {/* ── Today's Games strip ───────────────────────────────────────── */}
+          {games.length > 0 && (
+            <div
+              style={{
+                background: "#0a0a0a",
+                paddingTop: 4,
+                paddingBottom: gamesStripCollapsed ? 4 : 8,
+                marginBottom: gamesStripCollapsed ? 0 : 4,
+                borderBottom: gamesStripCollapsed ? "none" : "1px solid #1c1c1e",
+              }}
+            >
+              <NCAABGamesStrip
+                games={games}
+                expandedGameId={expandedGameId}
+                onChipClick={handleChipClick}
+                plays={plays}
+                collapsed={gamesStripCollapsed}
+                onCollapsedChange={setGamesStripCollapsed}
+              />
+            </div>
+          )}
+
+          {/* Slate complete banner */}
+          {allFinal && games.length > 0 && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: "rgba(0,212,170,0.08)", border: "1px solid rgba(0,212,170,0.2)" }}>
+              <CheckCircle className="w-4 h-4 shrink-0" style={{ color: "#00d4aa" }} />
+              <span className="text-xs font-semibold" style={{ color: "#00d4aa" }}>Slate Complete</span>
+            </div>
+          )}
 
           {/* Live play cards */}
           {hasPlays && (
