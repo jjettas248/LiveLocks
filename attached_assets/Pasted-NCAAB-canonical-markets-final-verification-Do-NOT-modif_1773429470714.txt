@@ -1,0 +1,159 @@
+NCAAB canonical markets — final verification
+
+Do NOT modify any code.
+Run a read-only verification of the implementation.
+
+Files to inspect:
+- server/ncaabEngine.ts
+- client/src/components/ncaab-admin-tab.tsx
+
+--------------------------------------------------
+ENGINE CONTRACT CHECKS
+--------------------------------------------------
+
+1) Confirm canonical markets construction.
+
+Verify runNCAABEngine builds exactly six markets:
+
+full_total
+full_spread
+h1_total
+h1_spread
+h2_total
+h2_spread
+
+They must exist in:
+
+engineOutput.markets
+
+All six keys must always exist even when unavailable.
+
+Return the code snippet where the markets object is constructed.
+
+--------------------------------------------------
+
+2) Confirm correct construction order.
+
+Required order:
+
+markets → marketVerdicts
+
+Verify that marketVerdicts is derived ONLY from markets using:
+
+Object.values(markets)
+
+There must be NO earlier push() calls to marketVerdicts.
+
+Return the snippet showing this derivation.
+
+--------------------------------------------------
+
+3) Verify Guardrail 7 (sportsbook odds validation).
+
+In buildMarket():
+
+If bookOdds is:
+
+null
+undefined
+0
+NaN
+or abs(bookOdds) > 2000
+
+Then the market must return:
+
+available: false
+bookImpliedProb: null
+edge: null
+
+Return the exact validation code.
+
+--------------------------------------------------
+
+4) Confirm probability safety.
+
+modelProb must be clamped to:
+
+[1, 99]
+
+Return the clamp implementation.
+
+--------------------------------------------------
+
+UI CONTRACT CHECKS
+--------------------------------------------------
+
+5) Confirm UI reads canonical markets only.
+
+Search for and verify there are NO render-time reads of:
+
+play.overProb
+play.spreadProb
+play.h2EngineOverProb
+play.h2SpreadLine
+
+Return grep results.
+
+--------------------------------------------------
+
+6) Confirm verdict lookups removed.
+
+Verify the UI does NOT use:
+
+marketVerdicts.find()
+
+Return grep results.
+
+--------------------------------------------------
+
+7) Confirm forbidden fallbacks removed.
+
+Verify the UI does NOT contain:
+
+?? 50
+
+Return grep results.
+
+--------------------------------------------------
+
+8) Confirm unavailable rendering.
+
+When market.available === false the UI must render:
+
+"Unavailable"
+
+Verify that the string "No line" does not appear.
+
+Return grep results.
+
+--------------------------------------------------
+
+TOP PLAYS CHECK
+
+9) Confirm Top Plays filter.
+
+Verify the filter logic is:
+
+if (!mkt?.available || mkt.edge === null) continue;
+
+Return the code snippet.
+
+--------------------------------------------------
+
+OUTPUT FORMAT
+
+Return a verification report containing:
+
+- markets construction snippet
+- marketVerdicts derivation snippet
+- odds validation snippet
+- probability clamp snippet
+- grep results for legacy fields
+- grep results for ?? 50
+- grep results for marketVerdicts.find
+- grep results for "No line"
+- Top Plays filter snippet
+
+Do not modify any files.
+Do not run builds.
+Return results only.

@@ -1,0 +1,174 @@
+You are a senior quantitative sports engineer building the Phase A MLB live prop engine for LiveLocks.
+
+We are NOT building a generic all-market baseball model.
+We are building a live signal engine that emulates a sharp bettor’s workflow.
+
+Phase A markets:
+1. Hits
+2. Total Bases
+3. Batter Strikeouts
+4. Pitcher Strikeouts
+5. Hits Allowed
+6. Home Runs (experimental)
+7. HRR (experimental)
+
+Data sources:
+- BallparkPal
+- Baseball Savant
+- MLB.com
+- ESPN.com
+
+Core live betting philosophy to emulate:
+
+FOR HITTING PROPS:
+- Primary approach is live contact quality + remaining opportunity
+- Strongest signals usually appear around innings 5–7
+- Use BallparkPal + Baseball Savant as primary signal sources
+- For any hitting prop, evaluate:
+  1. top exit velocity
+  2. top distances
+  3. launch angle
+  4. hit quality / how well the batter is seeing the ball
+  5. weather / park
+  6. pitcher pitch count and collapse risk
+  7. lineup pocket weakness from ESPN / matchup context
+- Standard rule: require minimum 2 AB before live-form boost activates
+- Exception: allow an early explosive-contact signal after 1 AB only if contact quality is elite and matchup context is strong
+
+FOR STRIKEOUT PROPS:
+- Run the logic in reverse
+- Use swing-and-miss profile, pitcher stuff, pitch-type mismatch, poor contact quality, and expected remaining PA
+- For pitcher Ks, also factor manager leash, pitch count, times-through-order, and upcoming lineup K pockets
+
+BUILD THE ENGINE IN THESE MODULES:
+server/mlb/
+  dataSources.ts
+  featureEngineering.ts
+  projections.ts
+  probability.ts
+  calibration.ts
+  markets.ts
+  diagnostics.ts
+  types.ts
+
+Main function:
+calculateMLBPropEdge(input: MLBPropInput): MLBPropOutput
+
+Create market calculators for:
+- calculateHitsEdge
+- calculateTBEdge
+- calculateBatterKEdge
+- calculatePitcherKEdge
+- calculateHitsAllowedEdge
+- calculateHREdge
+- calculateHRREdge
+
+IMPORTANT MODEL RULES
+
+1. HITS / TB MODEL
+Base projection should combine:
+- live contact quality today
+- expected remaining PA / AB
+- batter season skill
+- pitch count fatigue
+- pitch-type matchup
+- weather / park
+- bullpen downgrade risk
+- lineup slot / order context
+
+2. LIVE CONTACT QUALITY SCORE
+Build a live contact quality score from:
+- exit velo
+- launch angle
+- hit distance
+- hard-hit classification
+- barrel proxy
+- quality of previous ABs today
+
+3. TWO-AB RULE
+If currentAB >= 2:
+- activate full live-form adjustment
+If currentAB == 1:
+- only activate early explosive-contact mode if EV / LA / distance cross elite thresholds
+Else:
+- no live-form boost
+
+4. LINEUP / ORDER COLLAPSE
+Create a lineup context score based on:
+- batting order slot
+- hitters ahead getting on base
+- where the pitcher is weakest in the lineup
+- whether the order is turning over soon
+- whether the lineup section around the hitter is collapsing or creating opportunity
+
+5. STRIKEOUT LOGIC
+For batter K:
+- swing and miss
+- called strike / whiff indicators if available
+- pitcher pitch-type whiff fit
+- expected remaining PA
+- pitcher vs bullpen K environment
+
+For pitcher K:
+- pitch count
+- times through order
+- manager leash
+- opponent lineup K pockets
+- pitch-type dominance
+
+6. HR MODEL
+Treat HR as experimental.
+Use:
+- elite EV
+- ideal launch angle band
+- park / weather carry
+- pitcher HR tendency
+- strict thresholds
+Do not trigger many alerts here.
+
+7. HRR MODEL
+Treat HRR as experimental.
+Model separately:
+- expected additional hits
+- expected additional runs
+- expected additional RBIs
+Then sum.
+Must include lineup context and runners-on-base opportunity proxies.
+
+8. MODIFIER CAPS
+Do not allow all modifiers to stack freely.
+Structure every market as:
+final_projection =
+  base_projection
+  + capped_live_form_adjustment
+  + capped_pitcher_adjustment
+  + capped_pitch_type_adjustment
+  + capped_weather_park_adjustment
+  + capped_lineup_adjustment
+  + capped_bullpen_adjustment
+
+Add hard caps to prevent inflated projections.
+
+9. PROBABILITY
+Use calibrated probabilities, not inflated theoretical outputs.
+Build raw + calibrated probability.
+Avoid frequent fake 90%+ probabilities.
+
+10. DIAGNOSTICS
+Track:
+- projection vs final
+- projection error by market
+- live-form boost contribution
+- edge size by market
+- win rate by bucket
+- ROI by bucket
+- early explosive-contact mode performance vs normal 2-AB mode
+
+RETURN:
+1. Revised file tree
+2. Types
+3. Feature engineering logic
+4. Market calculators
+5. Threshold tables for standard mode vs early explosive-contact mode
+6. Diagnostics framework
+7. Notes on what should remain experimental in Phase A
