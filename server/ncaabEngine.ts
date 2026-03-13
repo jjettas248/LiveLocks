@@ -50,7 +50,13 @@ export interface NCAABGameInput {
   desperation3s: boolean;
   intentionalFouling: boolean;
 
+  // Per-market American odds — required by G7; null means unavailable
   overOddsAmerican: number | null;
+  spreadOddsAmerican: number | null;
+  h1OverOddsAmerican: number | null;
+  h1SpreadOddsAmerican: number | null;
+  h2OverOddsAmerican: number | null;
+  h2SpreadOddsAmerican: number | null;
 
   sourceTimestamps?: Record<string, number>;
 }
@@ -70,10 +76,51 @@ export type NCAABMarketType =
   | "h2_team_total_home"
   | "h2_team_total_away";
 
-export type RecommendedSide = "OVER" | "UNDER" | "NO_EDGE";
+export type RecommendedSide = "OVER" | "UNDER" | "COVER" | "FADE" | "NO_EDGE";
+export type MarketSide = "OVER" | "UNDER" | "HOME" | "AWAY" | null;
 
 // ── Confidence Tiers ──────────────────────────────────────────────────────────
 export type ConfidenceTier = "HIGH" | "MEDIUM" | "LOW" | "NO_EDGE";
+export type MarketConfidenceTier = "ELITE" | "STRONG" | "VALUE" | "NONE";
+
+// ── Canonical Market Keys (6 core markets) ───────────────────────────────────
+export type NCAABMarketKey =
+  | "full_total"
+  | "full_spread"
+  | "h1_total"
+  | "h1_spread"
+  | "h2_total"
+  | "h2_spread";
+
+export const ALL_MARKET_KEYS: NCAABMarketKey[] = [
+  "full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread",
+];
+
+// ── Canonical Market Object ──────────────────────────────────────────────────
+export interface NCAABMarket {
+  available: boolean;
+  marketKey: NCAABMarketKey;
+  label: string;
+  sportsbook: string | null;
+  bookLine: number | null;
+  projection: number | null;
+  modelProb: number | null;
+  bookImpliedProb: number | null;
+  edge: number | null;
+  side: MarketSide;
+  confidenceTier: MarketConfidenceTier;
+}
+
+export type NCAABMarkets = Record<NCAABMarketKey, NCAABMarket>;
+
+export interface NCAABDebugMarketEntry {
+  marketKey: NCAABMarketKey;
+  projection: number | null;
+  bookLine: number | null;
+  modelProb: number | null;
+  bookImpliedProb: number | null;
+  edge: number | null;
+}
 
 // ── Projection Result ─────────────────────────────────────────────────────────
 export interface NCAABProjectionResult {
@@ -116,18 +163,6 @@ export type NCAABCanonicalMarketKey =
   | "h1_spread"
   | "h2_total"
   | "h2_spread";
-
-// ── Canonical Market Object (Phase B) ─────────────────────────────────────────
-export interface NCAABMarket {
-  available: boolean;           // true only when valid book odds exist
-  projection: number | null;
-  line: number | null;
-  modelProb: number | null;     // over probability, clamped [1, 99]
-  impliedProb: number | null;   // book implied over prob; null when !available
-  edge: number | null;          // modelProb − impliedProb; null when !available
-  side: RecommendedSide;
-  confidenceTier: ConfidenceTier;
-}
 
 // ── Per-Market Verdict ────────────────────────────────────────────────────────
 export interface NCAABMarketVerdict {
@@ -179,8 +214,10 @@ export interface NCAABEngineOutput {
   displayProbability: string;
   displayPick: string;
 
-  markets: Record<NCAABCanonicalMarketKey, NCAABMarket>;
   marketVerdicts: NCAABMarketVerdict[];
+
+  markets: NCAABMarkets;
+  debugMarkets?: NCAABDebugMarketEntry[];
 
   displayOutput: NCAABDisplayOutput;
 
@@ -723,6 +760,55 @@ function getConfidenceTier(prob: number, gap: number): ConfidenceTier {
   return "NO_EDGE";
 }
 
+// ── Market Confidence Tier (edge-based, Guardrail 6) ─────────────────────────
+function getMarketConfidenceTier(edge: number | null): MarketConfidenceTier {
+  if (edge === null) return "NONE";
+  const absEdge = Math.abs(edge);
+  if (absEdge >= 12) return "ELITE";
+  if (absEdge >= 8) return "STRONG";
+  if (absEdge >= 4) return "VALUE";
+  return "NONE";
+}
+
+// ── Sportsbook odds validation (Guardrail 7) ─────────────────────────────────
+function isValidOdds(odds: number | null | undefined): odds is number {
+  if (odds == null || odds === 0) return false;
+  return odds >= -2000 && odds <= 2000;
+}
+
+// ── Probability safety clamp (Guardrail 2) ───────────────────────────────────
+function clampProb(p: number | null | undefined): number | null {
+  if (p == null || !isFinite(p) || isNaN(p)) return null;
+  return Math.min(99, Math.max(1, p));
+}
+
+// ── Unavailable market factory ───────────────────────────────────────────────
+function unavailableMarket(key: NCAABMarketKey, label: string): NCAABMarket {
+  return {
+    available: false,
+    marketKey: key,
+    label,
+    sportsbook: null,
+    bookLine: null,
+    projection: null,
+    modelProb: null,
+    bookImpliedProb: null,
+    edge: null,
+    side: null,
+    confidenceTier: "NONE",
+  };
+}
+
+// ── Market labels ────────────────────────────────────────────────────────────
+const MARKET_LABELS: Record<NCAABMarketKey, string> = {
+  full_total: "Full Game Total",
+  full_spread: "Full Game Spread",
+  h1_total: "1st Half Total",
+  h1_spread: "1st Half Spread",
+  h2_total: "2nd Half Total",
+  h2_spread: "2nd Half Spread",
+};
+
 // ── Full Engine Pipeline ──────────────────────────────────────────────────────
 export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
   const now = Date.now();
@@ -791,73 +877,11 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
     }
   }
 
-  // ── Phase B: Build canonical markets object FIRST ─────────────────────────
+  // Non-canonical marketVerdicts (team totals — outside the 6 canonical markets)
+  const marketVerdicts: NCAABMarketVerdict[] = [];
 
-  // full_total
-  const ftModelProb = clamp1_99(probabilities.calibratedOverProb);
-  const ftImplied = isValidAmericanOdds(input.overOddsAmerican)
-    ? round1(americanToImpliedPct(input.overOddsAmerican))
-    : null;
-  const ftOddsValid = ftImplied !== null;
-  const ftEdge = ftImplied !== null ? round1(ftModelProb - ftImplied) : null;
-
-  // full_spread
-  let fsProj: number | null = null;
-  let fsLine: number | null = null;
-  let fsModelProb: number | null = null;
-  let fsSide: RecommendedSide = "NO_EDGE";
-  let fsConfidence: ConfidenceTier = "NO_EDGE";
-  if (input.liveSpreadLine !== null) {
-    const adjustedSpreadLine = input.liveSpreadFavorite &&
-      input.liveSpreadFavorite.toLowerCase().includes(input.homeTeam.toLowerCase().split(" ").pop() ?? "")
-      ? -input.liveSpreadLine
-      : input.liveSpreadLine;
-    const spreadCalibOver = clamp1_99(probabilities.calibratedSpreadProb);
-    const spreadCalibUnder = round1(100 - spreadCalibOver);
-    const spreadGap = Math.abs(projection.finalProjectedSpread - adjustedSpreadLine);
-    const projectionFavorsHome = projection.finalProjectedSpread > adjustedSpreadLine;
-    const probFavorsHome = spreadCalibOver > 50;
-    const spreadContradiction = projectionFavorsHome !== probFavorsHome && spreadGap >= 1.0;
-    fsProj = round1(projection.finalProjectedSpread);
-    fsLine = adjustedSpreadLine;
-    fsModelProb = spreadCalibOver;
-    if (spreadContradiction) {
-      fsSide = "NO_EDGE";
-    } else if (spreadGap >= EDGE_MIN_GAP && spreadCalibOver >= EDGE_MIN_PROB) {
-      fsSide = "OVER";
-    } else if (spreadGap >= EDGE_MIN_GAP && spreadCalibUnder >= EDGE_MIN_PROB) {
-      fsSide = "UNDER";
-    } else {
-      fsSide = "NO_EDGE";
-    }
-    fsConfidence = getConfidenceTier(Math.max(spreadCalibOver, spreadCalibUnder), spreadGap);
-  }
-
-  // h1_total
-  let h1tProj: number | null = null;
-  let h1tLine: number | null = null;
-  let h1tModelProb: number | null = null;
-  let h1tSide: RecommendedSide = "NO_EDGE";
-  let h1tConfidence: ConfidenceTier = "NO_EDGE";
-  if (over1HProb !== null && projection.proj1HTotal !== null) {
-    const h1Line = input.h1TotalLine ?? Math.round(projection.proj1HTotal * 2) / 2;
-    const h1ModelProb = clamp1_99(over1HProb);
-    const h1Under = round1(100 - h1ModelProb);
-    const h1Gap = Math.abs(projection.proj1HTotal - h1Line);
-    h1tProj = round1(projection.proj1HTotal);
-    h1tLine = h1Line;
-    h1tModelProb = h1ModelProb;
-    h1tSide = h1Gap >= EDGE_MIN_GAP && h1ModelProb >= EDGE_MIN_PROB ? "OVER"
-      : h1Gap >= EDGE_MIN_GAP && h1Under >= EDGE_MIN_PROB ? "UNDER" : "NO_EDGE";
-    h1tConfidence = getConfidenceTier(Math.max(h1ModelProb, h1Under), h1Gap);
-  }
-
-  // h1_spread
-  let h1sProj: number | null = null;
-  let h1sLine: number | null = null;
-  let h1sModelProb: number | null = null;
-  let h1sSide: RecommendedSide = "NO_EDGE";
-  let h1sConfidence: ConfidenceTier = "NO_EDGE";
+  // H1 spread intermediate computation (used for canonical market)
+  let h1SpreadComputed: { line: number; projection: number; prob: number } | null = null;
   if (
     input.h1SpreadLine !== null &&
     projection.proj1HTeamTotalHome !== null &&
@@ -867,44 +891,18 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
     const adjustedH1SpreadLine = input.h1Favorite.toLowerCase() === "home"
       ? -input.h1SpreadLine
       : input.h1SpreadLine;
-    const h1SpreadGap = Math.abs(proj1HSpread - adjustedH1SpreadLine);
     const h1SpreadSigma = MARKET_VARIANCE.h1_spread / dynamicMult;
     const rawH1SpreadProb = normalCDF((proj1HSpread - adjustedH1SpreadLine) / h1SpreadSigma) * 100;
-    const calibH1SpreadOver = clamp1_99(round1(calibrateNCAABProbability(rawH1SpreadProb, "h1_spread", { secsElapsed })));
-    const calibH1SpreadUnder = round1(100 - calibH1SpreadOver);
-    h1sProj = proj1HSpread;
-    h1sLine = adjustedH1SpreadLine;
-    h1sModelProb = calibH1SpreadOver;
-    h1sSide = h1SpreadGap >= EDGE_MIN_GAP && calibH1SpreadOver >= EDGE_MIN_PROB ? "OVER"
-      : h1SpreadGap >= EDGE_MIN_GAP && calibH1SpreadUnder >= EDGE_MIN_PROB ? "UNDER" : "NO_EDGE";
-    h1sConfidence = getConfidenceTier(Math.max(calibH1SpreadOver, calibH1SpreadUnder), h1SpreadGap);
+    const calibH1SpreadOver = round1(calibrateNCAABProbability(rawH1SpreadProb, "h1_spread", { secsElapsed }));
+    h1SpreadComputed = { line: adjustedH1SpreadLine, projection: proj1HSpread, prob: calibH1SpreadOver };
   }
 
-  // h2_total
-  let h2tProj: number | null = null;
-  let h2tLine: number | null = null;
-  let h2tModelProb: number | null = null;
-  let h2tSide: RecommendedSide = "NO_EDGE";
-  let h2tConfidence: ConfidenceTier = "NO_EDGE";
-  if (probabilities.calibrated2HProb !== null && projection.proj2HTotal !== null) {
-    const h2Line = input.h2TotalLine ?? Math.round(projection.proj2HTotal * 2) / 2;
-    const h2ModelProb = clamp1_99(probabilities.calibrated2HProb);
-    const h2Under = round1(100 - h2ModelProb);
-    const h2Gap = Math.abs(projection.proj2HTotal - h2Line);
-    h2tProj = round1(projection.proj2HTotal);
-    h2tLine = h2Line;
-    h2tModelProb = h2ModelProb;
-    h2tSide = h2Gap >= EDGE_MIN_GAP && h2ModelProb >= EDGE_MIN_PROB ? "OVER"
-      : h2Gap >= EDGE_MIN_GAP && h2Under >= EDGE_MIN_PROB ? "UNDER" : "NO_EDGE";
-    h2tConfidence = getConfidenceTier(Math.max(h2ModelProb, h2Under), h2Gap);
-  }
+  // team_total_home and team_total_away are not canonical markets; they are NOT added to
+  // marketVerdicts here. marketVerdicts is populated solely from the canonical 6-market loop below.
 
-  // h2_spread
-  let h2sProj: number | null = null;
-  let h2sLine: number | null = null;
-  let h2sModelProb: number | null = null;
-  let h2sSide: RecommendedSide = "NO_EDGE";
-  let h2sConfidence: ConfidenceTier = "NO_EDGE";
+
+  // H2 spread intermediate computation (used for canonical market)
+  let h2SpreadComputed: { line: number; projection: number; prob: number } | null = null;
   if (
     input.h2SpreadLine !== null &&
     projection.proj2HTeamTotalHome !== null &&
@@ -914,148 +912,152 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
     const adjustedH2SpreadLine = input.h2Favorite.toLowerCase() === "home"
       ? -input.h2SpreadLine
       : input.h2SpreadLine;
-    const h2SpreadGap = Math.abs(proj2HSpread - adjustedH2SpreadLine);
     const h2SpreadSigma = MARKET_VARIANCE.h2_spread / dynamicMult;
     const rawH2SpreadProb = normalCDF((proj2HSpread - adjustedH2SpreadLine) / h2SpreadSigma) * 100;
-    const calibH2SpreadOver = clamp1_99(round1(calibrateNCAABProbability(rawH2SpreadProb, "h2_spread", { secsElapsed })));
-    const calibH2SpreadUnder = round1(100 - calibH2SpreadOver);
-    h2sProj = proj2HSpread;
-    h2sLine = adjustedH2SpreadLine;
-    h2sModelProb = calibH2SpreadOver;
-    h2sSide = h2SpreadGap >= EDGE_MIN_GAP && calibH2SpreadOver >= EDGE_MIN_PROB ? "OVER"
-      : h2SpreadGap >= EDGE_MIN_GAP && calibH2SpreadUnder >= EDGE_MIN_PROB ? "UNDER" : "NO_EDGE";
-    h2sConfidence = getConfidenceTier(Math.max(calibH2SpreadOver, calibH2SpreadUnder), h2SpreadGap);
+    const calibH2SpreadOver = round1(calibrateNCAABProbability(rawH2SpreadProb, "h2_spread", { secsElapsed }));
+    h2SpreadComputed = { line: adjustedH2SpreadLine, projection: proj2HSpread, prob: calibH2SpreadOver };
   }
 
-  // Assemble canonical markets object
-  const markets: Record<NCAABCanonicalMarketKey, NCAABMarket> = {
-    full_total: {
-      available: ftOddsValid,
-      projection: round1(projection.finalProjectedTotal),
-      line: effectiveLine,
-      modelProb: ftModelProb,
-      impliedProb: ftImplied,
-      edge: ftEdge,
-      side: sideResult.side,
-      confidenceTier,
-    },
-    full_spread: {
-      available: false,
-      projection: fsProj,
-      line: fsLine,
-      modelProb: fsModelProb,
-      impliedProb: null,
-      edge: null,
-      side: fsSide,
-      confidenceTier: fsConfidence,
-    },
-    h1_total: {
-      available: false,
-      projection: h1tProj,
-      line: h1tLine,
-      modelProb: h1tModelProb,
-      impliedProb: null,
-      edge: null,
-      side: h1tSide,
-      confidenceTier: h1tConfidence,
-    },
-    h1_spread: {
-      available: false,
-      projection: h1sProj,
-      line: h1sLine,
-      modelProb: h1sModelProb,
-      impliedProb: null,
-      edge: null,
-      side: h1sSide,
-      confidenceTier: h1sConfidence,
-    },
-    h2_total: {
-      available: false,
-      projection: h2tProj,
-      line: h2tLine,
-      modelProb: h2tModelProb,
-      impliedProb: null,
-      edge: null,
-      side: h2tSide,
-      confidenceTier: h2tConfidence,
-    },
-    h2_spread: {
-      available: false,
-      projection: h2sProj,
-      line: h2sLine,
-      modelProb: h2sModelProb,
-      impliedProb: null,
-      edge: null,
-      side: h2sSide,
-      confidenceTier: h2sConfidence,
-    },
+  // Team-total entries are NOT pushed to marketVerdicts — only canonical 6 markets populate it
+
+  // ── Build canonical markets object (6 keys, always present) ─────────────────
+  const isPreGameOrH1 = !input.isHalftime && input.half <= 1;
+  const hasHalftimeStarted = input.isHalftime || input.half >= 2;
+
+  function buildMarket(
+    key: NCAABMarketKey,
+    bookLine: number | null,
+    projectionVal: number | null,
+    modelProbRaw: number | null,
+    bookOdds: number | null | undefined,
+    sportsbook: string | null,
+  ): NCAABMarket {
+    const label = MARKET_LABELS[key];
+    const modelProb = clampProb(modelProbRaw);
+    if (modelProb === null || bookLine === null) {
+      return unavailableMarket(key, label);
+    }
+    // G7: odds that are 0, null, undefined, NaN, or outside [-2000, +2000] → unavailable.
+    // Valid odds are required to compute bookImpliedProb and edge.
+    const oddsInvalid =
+      bookOdds === null ||
+      bookOdds === undefined ||
+      bookOdds === 0 ||
+      Number.isNaN(bookOdds) ||
+      Math.abs(bookOdds) > 2000;
+    if (oddsInvalid) {
+      return unavailableMarket(key, label);
+    }
+    const bookImpliedProb = round1(americanToImpliedPct(bookOdds));
+    const edge = round1(modelProb - bookImpliedProb);
+    const isSpread = key.includes("spread");
+    const side: MarketSide = isSpread
+      ? (modelProb > 55 ? "HOME" : modelProb < 45 ? "AWAY" : null)
+      : (modelProb > 55 ? "OVER" : modelProb < 45 ? "UNDER" : null);
+    const confidenceTierVal = edge !== null ? getMarketConfidenceTier(edge) : "NONE";
+    const roundedProb = round1(modelProb);
+    return {
+      available: true,
+      marketKey: key,
+      label,
+      sportsbook,
+      bookLine,
+      projection: projectionVal !== null ? round1(projectionVal) : null,
+      modelProb: roundedProb,
+      bookImpliedProb,
+      edge,
+      side,
+      confidenceTier: confidenceTierVal,
+    };
+  }
+
+  const defaultSportsbook = "fanduel";
+
+  // full_total: available pre-game and during live play (G1)
+  const fullTotalMarket = input.liveTotalLine !== null
+    ? buildMarket("full_total", input.liveTotalLine, projection.finalProjectedTotal, probabilities.calibratedOverProb, input.overOddsAmerican, defaultSportsbook)
+    : unavailableMarket("full_total", MARKET_LABELS.full_total);
+
+  // full_spread: available pre-game and during live play (G1)
+  const fullSpreadMarket = input.liveSpreadLine !== null
+    ? (() => {
+        const adjustedLine = input.liveSpreadFavorite &&
+          input.liveSpreadFavorite.toLowerCase().includes(input.homeTeam.toLowerCase().split(" ").pop() ?? "")
+          ? -input.liveSpreadLine : input.liveSpreadLine;
+        return buildMarket("full_spread", adjustedLine, projection.finalProjectedSpread, probabilities.calibratedSpreadProb, input.spreadOddsAmerican, defaultSportsbook);
+      })()
+    : unavailableMarket("full_spread", MARKET_LABELS.full_spread);
+
+  // h1_total: available pre-game and during H1 only; unavailable once halftime begins (G1)
+  const h1TotalMarket = isPreGameOrH1 && input.h1TotalLine !== null && over1HProb !== null
+    ? buildMarket("h1_total", input.h1TotalLine, projection.proj1HTotal, over1HProb, input.h1OverOddsAmerican, defaultSportsbook)
+    : unavailableMarket("h1_total", MARKET_LABELS.h1_total);
+
+  // h1_spread: available pre-game and during H1 only (G1)
+  const h1SpreadMarket = isPreGameOrH1 && h1SpreadComputed
+    ? buildMarket("h1_spread", h1SpreadComputed.line, h1SpreadComputed.projection, h1SpreadComputed.prob, input.h1SpreadOddsAmerican, defaultSportsbook)
+    : unavailableMarket("h1_spread", MARKET_LABELS.h1_spread);
+
+  // h2_total: unavailable until halftime has started AND sportsbook H2 line exists (G1)
+  const h2TotalMarket = hasHalftimeStarted && input.h2TotalLine !== null && probabilities.calibrated2HProb !== null
+    ? buildMarket("h2_total", input.h2TotalLine, projection.proj2HTotal, probabilities.calibrated2HProb, input.h2OverOddsAmerican, defaultSportsbook)
+    : unavailableMarket("h2_total", MARKET_LABELS.h2_total);
+
+  // h2_spread: unavailable until halftime has started AND sportsbook H2 spread line exists (G1)
+  const h2SpreadMarket = hasHalftimeStarted && h2SpreadComputed
+    ? buildMarket("h2_spread", h2SpreadComputed.line, h2SpreadComputed.projection, h2SpreadComputed.prob, input.h2SpreadOddsAmerican, defaultSportsbook)
+    : unavailableMarket("h2_spread", MARKET_LABELS.h2_spread);
+
+  const markets: NCAABMarkets = {
+    full_total: fullTotalMarket,
+    full_spread: fullSpreadMarket,
+    h1_total: h1TotalMarket,
+    h1_spread: h1SpreadMarket,
+    h2_total: h2TotalMarket,
+    h2_spread: h2SpreadMarket,
   };
 
-  // ── Derive marketVerdicts from canonical markets ────────────────────────────
-  const marketVerdicts: NCAABMarketVerdict[] = (
-    Object.entries(markets) as [NCAABCanonicalMarketKey, NCAABMarket][]
-  )
-    .filter(([, m]) => m.projection !== null || m.line !== null)
-    .map(([key, m]) => marketToVerdict(key, m));
-
-  // ── Append team total verdicts (not part of canonical 6) ──────────────────
-  if (projection.finalProjectedTeamTotalA !== null && input.homeGameTotalLine !== null) {
-    const homeTTProb = computeTeamTotalProb(projection.finalProjectedTeamTotalA, input.homeGameTotalLine, secsRemaining);
-    const homeTTGap = Math.abs(projection.finalProjectedTeamTotalA - input.homeGameTotalLine);
+  const CANONICAL_VERDICT_MAP: Record<NCAABMarketKey, NCAABMarketType> = {
+    full_total: "full_game_total",
+    full_spread: "spread",
+    h1_total: "h1_total",
+    h1_spread: "h1_spread",
+    h2_total: "h2_total",
+    h2_spread: "h2_spread",
+  };
+  function marketSideToRecommended(s: MarketSide): RecommendedSide {
+    if (s === "OVER" || s === "HOME") return "OVER";
+    if (s === "UNDER" || s === "AWAY") return "UNDER";
+    return "NO_EDGE";
+  }
+  for (const key of ALL_MARKET_KEYS) {
+    const mkt = markets[key];
+    if (!mkt.available) continue;
+    const verdictMarket = CANONICAL_VERDICT_MAP[key];
     marketVerdicts.push({
-      market: "team_total_home",
-      projection: round1(projection.finalProjectedTeamTotalA),
-      line: input.homeGameTotalLine,
-      overProb: homeTTProb,
-      underProb: round1(100 - homeTTProb),
-      side: homeTTGap >= EDGE_MIN_GAP && homeTTProb >= EDGE_MIN_PROB ? "OVER"
-        : homeTTGap >= EDGE_MIN_GAP && (100 - homeTTProb) >= EDGE_MIN_PROB ? "UNDER" : "NO_EDGE",
-      confidenceTier: getConfidenceTier(Math.max(homeTTProb, 100 - homeTTProb), homeTTGap),
-      edge: round1(homeTTProb - 50),
+      market: verdictMarket,
+      projection: mkt.projection,
+      line: mkt.bookLine,
+      overProb: mkt.modelProb,
+      underProb: mkt.modelProb !== null ? round1(100 - mkt.modelProb) : null,
+      side: marketSideToRecommended(mkt.side),
+      confidenceTier: mkt.confidenceTier === "ELITE" ? "HIGH" : mkt.confidenceTier === "STRONG" ? "MEDIUM" : mkt.confidenceTier === "VALUE" ? "LOW" : "NO_EDGE",
+      edge: mkt.edge,
     });
   }
 
-  if (projection.finalProjectedTeamTotalB !== null && input.awayGameTotalLine !== null) {
-    const awayTTProb = computeTeamTotalProb(projection.finalProjectedTeamTotalB, input.awayGameTotalLine, secsRemaining);
-    const awayTTGap = Math.abs(projection.finalProjectedTeamTotalB - input.awayGameTotalLine);
-    marketVerdicts.push({
-      market: "team_total_away",
-      projection: round1(projection.finalProjectedTeamTotalB),
-      line: input.awayGameTotalLine,
-      overProb: awayTTProb,
-      underProb: round1(100 - awayTTProb),
-      side: awayTTGap >= EDGE_MIN_GAP && awayTTProb >= EDGE_MIN_PROB ? "OVER"
-        : awayTTGap >= EDGE_MIN_GAP && (100 - awayTTProb) >= EDGE_MIN_PROB ? "UNDER" : "NO_EDGE",
-      confidenceTier: getConfidenceTier(Math.max(awayTTProb, 100 - awayTTProb), awayTTGap),
-      edge: round1(awayTTProb - 50),
-    });
-  }
-
-  const halfTTEntries: Array<{ market: NCAABMarketType; proj: number | null; bookLine: number | null }> = [
-    { market: "h1_team_total_home", proj: projection.proj1HTeamTotalHome, bookLine: input.home1HTotalLine },
-    { market: "h1_team_total_away", proj: projection.proj1HTeamTotalAway, bookLine: input.away1HTotalLine },
-    { market: "h2_team_total_home", proj: projection.proj2HTeamTotalHome, bookLine: null },
-    { market: "h2_team_total_away", proj: projection.proj2HTeamTotalAway, bookLine: null },
-  ];
-  for (const entry of halfTTEntries) {
-    if (entry.proj !== null) {
-      const line = entry.bookLine ?? Math.round(entry.proj * 2) / 2;
-      const ttProb = computeTeamTotalProb(entry.proj, line, secsRemaining);
-      const ttGap = Math.abs(entry.proj - line);
-      const ttUnder = round1(100 - ttProb);
-      marketVerdicts.push({
-        market: entry.market,
-        projection: round1(entry.proj),
-        line,
-        overProb: ttProb,
-        underProb: ttUnder,
-        side: ttGap >= EDGE_MIN_GAP && ttProb >= EDGE_MIN_PROB ? "OVER"
-          : ttGap >= EDGE_MIN_GAP && ttUnder >= EDGE_MIN_PROB ? "UNDER" : "NO_EDGE",
-        confidenceTier: getConfidenceTier(Math.max(ttProb, ttUnder), ttGap),
-        edge: round1(ttProb - 50),
-      });
-    }
-  }
+  // Guardrail 8: debug markets (non-production only)
+  const debugMarkets: NCAABDebugMarketEntry[] | undefined =
+    process.env.NODE_ENV !== "production"
+      ? ALL_MARKET_KEYS.map(key => ({
+          marketKey: key,
+          projection: markets[key].projection,
+          bookLine: markets[key].bookLine,
+          modelProb: markets[key].modelProb,
+          bookImpliedProb: markets[key].bookImpliedProb,
+          edge: markets[key].edge,
+        }))
+      : undefined;
 
   const engineOutput: NCAABEngineOutput = {
     gameId: input.gameId,
@@ -1101,6 +1103,8 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
 
     markets,
     marketVerdicts,
+
+    ...(debugMarkets ? { debugMarkets } : {}),
 
     displayOutput: null as unknown as NCAABDisplayOutput,
 
@@ -1162,32 +1166,6 @@ function clamp1_99(v: number): number {
   return Math.max(1, Math.min(99, v));
 }
 
-const CANONICAL_TO_MARKET_TYPE: Record<NCAABCanonicalMarketKey, NCAABMarketType> = {
-  full_total: "full_game_total",
-  full_spread: "spread",
-  h1_total: "h1_total",
-  h1_spread: "h1_spread",
-  h2_total: "h2_total",
-  h2_spread: "h2_spread",
-};
-
-function marketToVerdict(key: NCAABCanonicalMarketKey, m: NCAABMarket): NCAABMarketVerdict {
-  const overProb = m.modelProb;
-  const underProb = overProb !== null ? round1(100 - overProb) : null;
-  const verdictEdge = m.available && m.edge !== null
-    ? round1(m.edge)
-    : overProb !== null ? round1(overProb - 50) : null;
-  return {
-    market: CANONICAL_TO_MARKET_TYPE[key],
-    projection: m.projection,
-    line: m.line,
-    overProb,
-    underProb,
-    side: m.side,
-    confidenceTier: m.confidenceTier,
-    edge: verdictEdge,
-  };
-}
 
 // ── Exports for testing ───────────────────────────────────────────────────────
 export { normalCDF, EDGE_MIN_GAP, EDGE_MIN_PROB, CALIBRATION_CAP, CALIBRATION_WARN_THRESHOLD, DEFAULT_VARIANCE };

@@ -505,6 +505,11 @@ function extractLines(oddsEvent: any, homeTeamName?: string): {
   h2SpreadLine: number | null;
   h2Favorite: string;
   overOddsAmerican: number | null;
+  spreadOddsAmerican: number | null;
+  h1OverOddsAmerican: number | null;
+  h1SpreadOddsAmerican: number | null;
+  h2OverOddsAmerican: number | null;
+  h2SpreadOddsAmerican: number | null;
   homeTTBookLine: number | null;
   awayTTBookLine: number | null;
 } {
@@ -518,6 +523,11 @@ function extractLines(oddsEvent: any, homeTeamName?: string): {
   let h2SpreadLine: number | null = null;
   let h2Favorite = "";
   let overOddsAmerican: number | null = null;
+  let spreadOddsAmerican: number | null = null;
+  let h1OverOddsAmerican: number | null = null;
+  let h1SpreadOddsAmerican: number | null = null;
+  let h2OverOddsAmerican: number | null = null;
+  let h2SpreadOddsAmerican: number | null = null;
   let homeTTBookLine: number | null = null;
   let awayTTBookLine: number | null = null;
   const homeLastWord = homeTeamName ? homeTeamName.toLowerCase().split(" ").pop() ?? "" : "";
@@ -551,12 +561,18 @@ function extractLines(oddsEvent: any, homeTeamName?: string): {
         bkSpread = Math.abs(sorted[0].point);
         bkFav = sorted[0].name;
       }
+      // Extract home team spread odds for G7 edge computation
+      if (spreadOddsAmerican === null && homeLastWord) {
+        const homeOutcome = (spreadsMarket.outcomes as any[]).find(
+          (o: any) => o.name?.toLowerCase().includes(homeLastWord)
+        );
+        if (homeOutcome?.price != null) spreadOddsAmerican = homeOutcome.price as number;
+      }
     }
     if (totalsMarket?.outcomes?.length >= 1) {
       const over = totalsMarket.outcomes.find((o: any) => o.name === "Over");
       if (over) {
         bkTotal = over.point as number;
-        // Extract American odds price for Over (e.g. -110) to compute bookImplied
         if (overOddsAmerican === null && over.price != null) {
           overOddsAmerican = over.price as number;
         }
@@ -564,7 +580,12 @@ function extractLines(oddsEvent: any, homeTeamName?: string): {
     }
     if (h1TotalsMarket?.outcomes?.length >= 1) {
       const over = h1TotalsMarket.outcomes.find((o: any) => o.name === "Over");
-      if (over) bkH1Total = over.point as number;
+      if (over) {
+        bkH1Total = over.point as number;
+        if (h1OverOddsAmerican === null && over.price != null) {
+          h1OverOddsAmerican = over.price as number;
+        }
+      }
     }
     if (h1SpreadsMarket?.outcomes?.length >= 2) {
       const favOutcome = h1SpreadsMarket.outcomes.find((o: any) => o.point < 0);
@@ -576,10 +597,21 @@ function extractLines(oddsEvent: any, homeTeamName?: string): {
         bkH1Spread = Math.abs(sorted[0].point);
         bkH1Fav = sorted[0].name;
       }
+      if (h1SpreadOddsAmerican === null && homeLastWord) {
+        const homeOutcome = (h1SpreadsMarket.outcomes as any[]).find(
+          (o: any) => o.name?.toLowerCase().includes(homeLastWord)
+        );
+        if (homeOutcome?.price != null) h1SpreadOddsAmerican = homeOutcome.price as number;
+      }
     }
     if (h2TotalsMarket?.outcomes?.length >= 1) {
       const over = h2TotalsMarket.outcomes.find((o: any) => o.name === "Over");
-      if (over) bkH2Total = over.point as number;
+      if (over) {
+        bkH2Total = over.point as number;
+        if (h2OverOddsAmerican === null && over.price != null) {
+          h2OverOddsAmerican = over.price as number;
+        }
+      }
     }
     if (h2SpreadsMarket?.outcomes?.length >= 2) {
       const favOutcome = h2SpreadsMarket.outcomes.find((o: any) => o.point < 0);
@@ -590,6 +622,12 @@ function extractLines(oddsEvent: any, homeTeamName?: string): {
         const sorted = [...h2SpreadsMarket.outcomes].sort((a: any, b: any) => Math.abs(a.point) - Math.abs(b.point));
         bkH2Spread = Math.abs(sorted[0].point);
         bkH2Fav = sorted[0].name;
+      }
+      if (h2SpreadOddsAmerican === null && homeLastWord) {
+        const homeOutcome = (h2SpreadsMarket.outcomes as any[]).find(
+          (o: any) => o.name?.toLowerCase().includes(homeLastWord)
+        );
+        if (homeOutcome?.price != null) h2SpreadOddsAmerican = homeOutcome.price as number;
       }
     }
 
@@ -622,7 +660,7 @@ function extractLines(oddsEvent: any, homeTeamName?: string): {
     console.log(`[NCAAB TT Odds API] home=${homeTTBookLine} away=${awayTTBookLine}`);
   }
 
-  return { spread, total, favorite, bookLines, h1TotalLine, h1SpreadLine, h1Favorite, h2TotalLine, h2SpreadLine, h2Favorite, overOddsAmerican, homeTTBookLine, awayTTBookLine };
+  return { spread, total, favorite, bookLines, h1TotalLine, h1SpreadLine, h1Favorite, h2TotalLine, h2SpreadLine, h2Favorite, overOddsAmerican, spreadOddsAmerican, h1OverOddsAmerican, h1SpreadOddsAmerican, h2OverOddsAmerican, h2SpreadOddsAmerican, homeTTBookLine, awayTTBookLine };
 }
 
 // ── Public handle signal ──────────────────────────────────────────────────────
@@ -840,9 +878,9 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       try { box = await getNCAABBoxScore(game.id); } catch { /* non-fatal */ }
 
       const oddsEvent = matchOddsEvent(game, oddsEvents);
-      const { spread, total, favorite, bookLines, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav, h2TotalLine: oddsH2Total, h2SpreadLine: oddsH2Spread, h2Favorite: oddsH2Fav, overOddsAmerican, homeTTBookLine, awayTTBookLine } = oddsEvent
+      const { spread, total, favorite, bookLines, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav, h2TotalLine: oddsH2Total, h2SpreadLine: oddsH2Spread, h2Favorite: oddsH2Fav, overOddsAmerican, spreadOddsAmerican, h1OverOddsAmerican, h1SpreadOddsAmerican, h2OverOddsAmerican, h2SpreadOddsAmerican, homeTTBookLine, awayTTBookLine } = oddsEvent
         ? extractLines(oddsEvent, game.homeTeam)
-        : { spread: null, total: null, favorite: "", bookLines: [], h1SpreadLine: null, h1Favorite: "", h2TotalLine: null, h2SpreadLine: null, h2Favorite: "", overOddsAmerican: null, homeTTBookLine: null, awayTTBookLine: null };
+        : { spread: null, total: null, favorite: "", bookLines: [], h1SpreadLine: null, h1Favorite: "", h2TotalLine: null, h2SpreadLine: null, h2Favorite: "", overOddsAmerican: null, spreadOddsAmerican: null, h1OverOddsAmerican: null, h1SpreadOddsAmerican: null, h2OverOddsAmerican: null, h2SpreadOddsAmerican: null, homeTTBookLine: null, awayTTBookLine: null };
 
       // SGO 1H + 2H lines (real book lines)
       const sgoEvent = matchSGOEvent(game, sgoEvents);
@@ -1000,6 +1038,11 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         desperation3s,
         intentionalFouling,
         overOddsAmerican,
+        spreadOddsAmerican,
+        h1OverOddsAmerican,
+        h1SpreadOddsAmerican,
+        h2OverOddsAmerican,
+        h2SpreadOddsAmerican,
         sourceTimestamps: {
           odds: Date.now(),
           scores: Date.now(),

@@ -57,6 +57,11 @@ function makeInput(overrides: Partial<NCAABGameInput> = {}): NCAABGameInput {
     desperation3s: false,
     intentionalFouling: false,
     overOddsAmerican: -110,
+    spreadOddsAmerican: -110,
+    h1OverOddsAmerican: -110,
+    h1SpreadOddsAmerican: -110,
+    h2OverOddsAmerican: -110,
+    h2SpreadOddsAmerican: -110,
     ...overrides,
   };
 }

@@ -24,6 +24,25 @@ interface HandleSignal {
   color: string;
 }
 
+type NCAABMarketKey = "full_total" | "full_spread" | "h1_total" | "h1_spread" | "h2_total" | "h2_spread";
+type MarketConfidenceTier = "ELITE" | "STRONG" | "VALUE" | "NONE";
+
+type MarketSide = "OVER" | "UNDER" | "HOME" | "AWAY" | null;
+
+interface NCAABMarketClient {
+  available: boolean;
+  marketKey: NCAABMarketKey;
+  label: string;
+  sportsbook: string | null;
+  bookLine: number | null;
+  projection: number | null;
+  modelProb: number | null;
+  bookImpliedProb: number | null;
+  edge: number | null;
+  side: MarketSide;
+  confidenceTier: MarketConfidenceTier;
+}
+
 interface NCAABPlay {
   gameId: string;
   homeTeam: string;
@@ -123,7 +142,6 @@ interface NCAABPlay {
     displayPick: string;
     marketVerdicts: Array<{
       market: string;
-      marketType?: string;
       projection: number | null;
       line: number | null;
       overProb: number | null;
@@ -132,6 +150,7 @@ interface NCAABPlay {
       confidenceTier: string;
       edge: number | null;
     }>;
+    markets: Record<NCAABMarketKey, NCAABMarketClient>;
     displayOutput: {
       projectedTotal: string;
       projectedSpread: string;
@@ -156,36 +175,6 @@ interface NCAABPlay {
 
 export type { ParlayPickInput as NCAABParlayPick };
 
-function resolveVerdictForMarket(
-  engineOutput: NCAABPlay["engineOutput"],
-  market: string,
-  gameId: string,
-  activeTab: string
-) {
-  if (!engineOutput?.marketVerdicts) return null;
-  const verdict = engineOutput.marketVerdicts.find(mv => mv.market === market) ?? null;
-  if (!verdict && process.env.NODE_ENV !== "production") {
-    console.warn("NCAAB market verdict missing for active tab", {
-      gameId,
-      activeTab,
-      requestedMarket: market,
-      availableVerdicts: engineOutput.marketVerdicts,
-    });
-  }
-  return verdict;
-}
-
-function resolveSpreadVerdict(engineOutput: NCAABPlay["engineOutput"]) {
-  if (!engineOutput?.marketVerdicts) return null;
-  const verdict = engineOutput.marketVerdicts.find(mv => mv.market === "spread") ?? null;
-  if (!verdict && process.env.NODE_ENV !== "production") {
-    console.warn("NCAAB spread verdict missing", {
-      gameId: (engineOutput as any)?.gameId,
-      verdicts: engineOutput.marketVerdicts,
-    });
-  }
-  return verdict;
-}
 
 interface TorvikStats {
   adjO: number; adjD: number; tempo: number;
@@ -589,6 +578,14 @@ function getConfidenceTier(prob: number | null): { label: string; color: string;
   return null;
 }
 
+function tierDisplayFromCanonical(tier: string | null | undefined): { label: string; color: string; bg: string; border: string } | null {
+  if (!tier || tier === "NONE") return null;
+  if (tier === "ELITE")  return { label: "Elite",  color: "#00d4aa", bg: "rgba(0,212,170,0.15)",  border: "rgba(0,212,170,0.3)" };
+  if (tier === "STRONG") return { label: "Strong", color: "#f59e0b", bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.3)" };
+  if (tier === "VALUE")  return { label: "Value",  color: "#38bdf8", bg: "rgba(56,189,248,0.12)", border: "rgba(56,189,248,0.3)" };
+  return null;
+}
+
 const NCAAB_BOOK_OPTIONS = [
   { key: "all", abbr: "All", label: "All Books" },
   { key: "dk",  abbr: "DK",  label: "DraftKings" },
@@ -824,8 +821,8 @@ function getTeamTotalVerdict(
   isEstimated: boolean,
   engineVerdict?: { overProb: number | null; underProb: number | null; edge: number | null; side?: string; confidenceTier?: string } | null
 ) {
-  const engineProb = engineVerdict?.overProb ?? 50;
-  const edgeVal = engineVerdict?.edge ?? 0;
+  const engineProb = engineVerdict?.overProb !== null && engineVerdict?.overProb !== undefined ? engineVerdict.overProb : 50;
+  const edgeVal = engineVerdict?.edge !== null && engineVerdict?.edge !== undefined ? engineVerdict.edge : 0;
   const absEdge = Math.abs(edgeVal);
   const edgeSide: "Over" | "Under" = edgeVal > 0 ? "Over" : "Under";
   const tierFromEngine = engineVerdict?.confidenceTier;
@@ -900,7 +897,7 @@ function MarketRow({
   if (!line) return (
     <div style={{ padding: "10px 16px", borderBottom: "1px solid #1a1a1a", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
       <span style={{ color: "#3f3f46", fontSize: 11, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>{label}</span>
-      <span style={{ color: "#3f3f46", fontSize: 11 }}>No line</span>
+      <span style={{ color: "#3f3f46", fontSize: 11 }}>Unavailable</span>
     </div>
   );
 
@@ -982,22 +979,13 @@ function FullGameMarkets({
   onSelect?: (m: SelMarket) => void;
   selectedLabel?: string | null;
 }) {
-  const fullTotal   = play.total;
-  const overProb    = play.engineOutput?.calibratedOverProb ?? null;
-  const underProb   = play.engineOutput?.calibratedUnderProb ?? null;
-  const spreadVerdict = resolveSpreadVerdict(play.engineOutput);
-  const spreadProb  = play.engineOutput?.calibratedSpreadProb ?? null;
-  const spreadLine  = spreadVerdict?.line ?? play.spread;
-  if (spreadVerdict == null && play.spread != null) {
-    console.warn("NCAAB spread fallback triggered", { gameId: play.gameId, fallbackLine: play.spread });
-  }
-  if (process.env.NODE_ENV !== "production") {
-    console.warn("NCAAB probability contract check", {
-      gameId: play.gameId,
-      calibratedSpreadProb: play.engineOutput?.calibratedSpreadProb,
-      displayProbability: play.engineOutput?.displayOutput?.displayProbability,
-    });
-  }
+  const ftMkt = play.engineOutput?.markets?.full_total;
+  const fullTotal   = ftMkt?.available ? ftMkt.bookLine : null;
+  const fsMkt = play.engineOutput?.markets?.full_spread;
+  const overProb    = ftMkt?.available ? ftMkt.modelProb : null;
+  const underProb   = ftMkt?.available && ftMkt.modelProb !== null ? Math.round((100 - ftMkt.modelProb) * 10) / 10 : null;
+  const spreadProb  = fsMkt?.available ? fsMkt.modelProb : null;
+  const spreadLine  = fsMkt?.available ? fsMkt.bookLine : null;
   const absSpread = spreadLine != null ? Math.abs(spreadLine) : null;
   const resolvedSpreadTeam: "HOME" | "AWAY" | null = play.spreadTeam
     ?? (play.favorite?.toLowerCase() === play.homeTeam?.toLowerCase() ? "HOME"
@@ -1030,12 +1018,10 @@ function FullGameMarkets({
   const sel = (label: string, eng: number | null | undefined, imp: number | null | undefined) =>
     onSelect?.({ label, enginePct: eng ?? null, impliedPct: imp ?? null, edge: eng != null && imp != null ? parseFloat((eng - imp).toFixed(1)) : null });
 
-  const homeTTVerdict = play.engineOutput?.marketVerdicts?.find(mv => mv.market === "team_total_home");
-  const awayTTVerdict = play.engineOutput?.marketVerdicts?.find(mv => mv.market === "team_total_away");
-  const homeTTOverProb  = homeTTVerdict?.overProb ?? null;
-  const homeTTUnderProb = homeTTVerdict?.underProb ?? null;
-  const awayTTOverProb  = awayTTVerdict?.overProb ?? null;
-  const awayTTUnderProb = awayTTVerdict?.underProb ?? null;
+  const homeTTOverProb  = null;
+  const homeTTUnderProb = null;
+  const awayTTOverProb  = null;
+  const awayTTUnderProb = null;
 
   return (
     <div style={{ borderRadius: 8, overflow: "hidden", border: "1px solid #1f1f1f", marginTop: 8 }}>
@@ -1088,10 +1074,12 @@ function H1Markets({
   onSelect?: (m: SelMarket) => void;
   selectedLabel?: string | null;
 }) {
-  const h1Line      = play.h1TotalLine;
-  const h1Over      = play.over1HProb;
-  const h1Under     = h1Over != null ? parseFloat((100 - h1Over).toFixed(1)) : null;
-  const h1Spread    = play.h1SpreadLine;
+  const h1TotalMktLocal   = play.engineOutput?.markets?.h1_total;
+  const h1SpreadMktLocal  = play.engineOutput?.markets?.h1_spread;
+  const h1Line      = h1TotalMktLocal?.available ? h1TotalMktLocal.bookLine : null;
+  const h1Over      = h1TotalMktLocal?.available ? h1TotalMktLocal.modelProb : null;
+  const h1Under     = h1TotalMktLocal?.available && h1TotalMktLocal.modelProb !== null ? Math.round((100 - h1TotalMktLocal.modelProb) * 10) / 10 : null;
+  const h1Spread    = h1SpreadMktLocal?.available ? h1SpreadMktLocal.bookLine : null;
   const h1SpreadFav = play.h1Favorite;
   const h1Home1HTL  = play.home1HTotalLine;
   const h1Away1HTL  = play.away1HTotalLine;
@@ -1192,12 +1180,15 @@ function Live2HPanel({
 function NCAABGameCard({
   play,
   onAddToParlay,
+  onAddToCard,
   h2hDataFromCache,
   isNewlyLive,
   onShiftDetected,
 }: {
   play: NCAABPlay;
   onAddToParlay?: (pick: ParlayPickInput) => void;
+  /** Canonical market pass-through: receives the NCAABMarket object directly */
+  onAddToCard?: (market: NCAABMarketClient) => void;
   h2hDataFromCache?: H2HGame[] | null;
   isNewlyLive?: boolean;
   onShiftDetected?: (gameId: string) => void;
@@ -1205,11 +1196,13 @@ function NCAABGameCard({
   const isH1 = play.half === 1 && !play.bettingWindow.includes("HALFTIME");
 
   const gameProgress = computeGameProgress(play);
-  const overProb     = play.engineOutput?.calibratedOverProb ?? 50;
-  const underProb    = play.engineOutput?.calibratedUnderProb ?? 50;
-  const spreadProb   = play.engineOutput?.calibratedSpreadProb ?? 50;
+  const ftMarket = play.engineOutput?.markets?.full_total;
+  const fsMarket = play.engineOutput?.markets?.full_spread;
+  const overProb     = ftMarket?.available ? ftMarket.modelProb : null;
+  const underProb    = ftMarket?.available && ftMarket.modelProb !== null ? Math.round((100 - ftMarket.modelProb) * 10) / 10 : null;
+  const spreadProb   = fsMarket?.available ? fsMarket.modelProb : null;
 
-  const isNeutral = gameProgress < 0.10 && overProb >= 45 && overProb <= 55;
+  const isNeutral = overProb === null || (gameProgress < 0.10 && overProb >= 45 && overProb <= 55);
 
   const dominantMarket = play.engineOutput?.dominantMarket ?? "over";
 
@@ -1292,7 +1285,7 @@ function NCAABGameCard({
         gameId: play.gameId,
         h1HomeScore: String(h1HomeScore),
         h1AwayScore: String(h1AwayScore),
-        ...(play.total != null ? { fullLine: String(play.total) } : {}),
+        ...(effectiveFGLine != null ? { fullLine: String(effectiveFGLine) } : {}),
       });
       try {
         const res = await fetch(`/api/ncaab/2h-lines?${params.toString()}`);
@@ -1312,6 +1305,7 @@ function NCAABGameCard({
   // Synchronous trigger of all animations (item 6): one event, no setTimeout chains
   useEffect(() => {
     const prev  = prevOverProb.current;
+    if (overProb === null || prev === null) { prevOverProb.current = overProb; return; }
     const delta = Math.abs(prev - overProb);
     if (delta > 0.5) {
       const directionChanged = (prev > 50) !== (overProb > 50); // crossing the 50-mark
@@ -1336,48 +1330,51 @@ function NCAABGameCard({
     }
   }, [overProb]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Rule 5: track whether each line comes from a real sportsbook line or engine projection
-  const fgLineFromBook   = play.total != null;
-  const h1LineFromBook   = play.h1TotalLine != null;
-  const h2LineFromBook   = play.h2TotalLine != null;
-  const effectiveFGLine  = play.total ?? (play.projectedTotal !== null ? Math.round(play.projectedTotal * 2) / 2 : null);
-  const effective1HLine  = play.h1TotalLine ?? (play.proj1HTotal !== null ? Math.round(play.proj1HTotal * 2) / 2 : null);
+  // Canonical markets lookup — direct reads, no cross-tab fallbacks
+  const h1TotalMkt = play.engineOutput?.markets?.h1_total;
+  const h2TotalMkt = play.engineOutput?.markets?.h2_total;
+  const h1SpreadMkt = play.engineOutput?.markets?.h1_spread;
+  const h2SpreadMkt = play.engineOutput?.markets?.h2_spread;
+
+  // Book lines sourced from canonical markets only (no play-level field fallbacks)
+  const fgLineFromBook   = ftMarket?.available ?? false;
+  const h1LineFromBook   = h1TotalMkt?.available ?? false;
+  const h2LineFromBook   = h2TotalMkt?.available ?? false;
+  const effectiveFGLine  = ftMarket?.available ? ftMarket.bookLine : null;
+  const effective1HLine  = h1TotalMkt?.available ? h1TotalMkt.bookLine : null;
   const effectiveLine    = isH1 ? effective1HLine : effectiveFGLine;
 
-  // T002/T003: market tab display derivations — Rules 1-3: strict market-specific verdict sourcing
-  const effective2HLine    = play.h2TotalLine ?? null;
+  // T002/T003: market tab display derivations — strict market-specific sourcing from canonical
+  const effective2HLine    = h2TotalMkt?.available ? h2TotalMkt.bookLine : null;
   const displayLine        = marketTab === "h1" ? effective1HLine : marketTab === "h2" ? effective2HLine : effectiveFGLine;
   const displayLineFromBook = marketTab === "h1" ? h1LineFromBook : marketTab === "h2" ? h2LineFromBook : fgLineFromBook;
 
-  // Rule 1+2: strict verdict lookup — no cross-tab fallbacks
-  const h1TotalVerdict = resolveVerdictForMarket(play.engineOutput, "h1_total", play.gameId, marketTab);
-  const h2TotalVerdict = resolveVerdictForMarket(play.engineOutput, "h2_total", play.gameId, marketTab);
-  const h1SpreadVerdict = resolveVerdictForMarket(play.engineOutput, "h1_spread", play.gameId, marketTab);
-  const h2SpreadVerdict = resolveVerdictForMarket(play.engineOutput, "h2_spread", play.gameId, marketTab);
-
-  // Rule 2: no ?? overProb fallback; null means "No data"
   const displayOverProb: number | null =
-    marketTab === "h1" ? (h1TotalVerdict?.overProb ?? null)
-    : marketTab === "h2" ? (h2TotalVerdict?.overProb ?? null)
+    marketTab === "h1" ? (h1TotalMkt?.available ? h1TotalMkt.modelProb : null)
+    : marketTab === "h2" ? (h2TotalMkt?.available ? h2TotalMkt.modelProb : null)
     : overProb;
   const displayUnderProb: number | null =
-    marketTab === "h1" ? (h1TotalVerdict?.underProb ?? null)
-    : marketTab === "h2" ? (h2TotalVerdict?.underProb ?? null)
+    marketTab === "h1" ? (h1TotalMkt?.available && h1TotalMkt.modelProb !== null ? Math.round((100 - h1TotalMkt.modelProb) * 10) / 10 : null)
+    : marketTab === "h2" ? (h2TotalMkt?.available && h2TotalMkt.modelProb !== null ? Math.round((100 - h2TotalMkt.modelProb) * 10) / 10 : null)
     : underProb;
 
-  // Rule 3: spread prob comes from period-specific verdict only; no full-game fallback for H1/H2
   const displaySpreadProb: number | null =
-    marketTab === "h1" ? (h1SpreadVerdict?.overProb ?? null)
-    : marketTab === "h2" ? (h2SpreadVerdict?.overProb ?? null)
-    : (play.engineOutput?.calibratedSpreadProb ?? null);
+    marketTab === "h1" ? (h1SpreadMkt?.available ? h1SpreadMkt.modelProb : null)
+    : marketTab === "h2" ? (h2SpreadMkt?.available ? h2SpreadMkt.modelProb : null)
+    : spreadProb;
 
-  const displaySpread      = marketTab === "h1" ? play.h1SpreadLine : marketTab === "h2" ? play.h2SpreadLine : play.spread;
+  const displaySpread      = marketTab === "h1"
+        ? (h1SpreadMkt?.available && h1SpreadMkt.bookLine !== null ? Math.abs(h1SpreadMkt.bookLine) : null)
+        : marketTab === "h2"
+        ? (h2SpreadMkt?.available && h2SpreadMkt.bookLine !== null ? Math.abs(h2SpreadMkt.bookLine) : null)
+        : (fsMarket?.available && fsMarket.bookLine !== null ? Math.abs(fsMarket.bookLine) : null);
   const displaySpreadFav   = marketTab === "h1" ? play.h1Favorite : marketTab === "h2" ? play.h2Favorite : play.favorite;
   const h1ProjSplit        = play.proj1HTotal != null ? play.proj1HTotal / 2 : null;
   const displayAwayProj    = marketTab === "h1" ? h1ProjSplit : play.awayProjected;
   const displayHomeProj    = marketTab === "h1" ? h1ProjSplit : play.homeProjected;
-  const h1DataUnavailable  = marketTab === "h1" && effective1HLine == null && play.over1HProb == null;
-  const h2DataUnavailable  = marketTab === "h2" && effective2HLine == null && play.over2HProb == null;
+  const h1DataUnavailable  = marketTab === "h1" && !play.engineOutput?.markets?.h1_total?.available;
+  const h2Mkt = play.engineOutput?.markets?.h2_total;
+  const h2DataUnavailable  = marketTab === "h2" && !h2Mkt?.available;
 
   // T004: derive team total lines — SGO/ESPN book line first, fallback to projection-derived
   function deriveTeamTotalLine(proj: number | null): number | null {
@@ -1406,41 +1403,34 @@ function NCAABGameCard({
 
   const gaugeForMarket = (m: "over" | "under" | "spread") =>
     m === "over" ? overProb : m === "under" ? underProb : spreadProb;
-  const gaugeValue  = gaugeForMarket(selectedMarket);
+  const gaugeValue     = gaugeForMarket(selectedMarket);
   const gaugeColor  = selectedMarket === "over" ? "#00d4aa" : selectedMarket === "under" ? "#ef4444" : "#94a3b8";
   const gaugeLabel  = selectedMarket === "over" ? "OVER" : selectedMarket === "under" ? "UNDER" : "COVER";
 
-  const engineProb  = gaugeValue;
+  // Read edge and confidence directly from canonical market — tab-aware (never recompute in UI)
+  const selectedMkt: NCAABMarketClient | undefined = (() => {
+    if (selectedMarket === "spread") {
+      const m = marketTab === "h1" ? h1SpreadMkt : marketTab === "h2" ? h2SpreadMkt : fsMarket;
+      return m?.available ? m : undefined;
+    }
+    const m = marketTab === "h1" ? h1TotalMkt : marketTab === "h2" ? h2TotalMkt : ftMarket;
+    return m?.available ? m : undefined;
+  })();
+  const canonicalEdge       = selectedMkt?.edge ?? null;
+  const canonicalConfTier   = selectedMkt?.confidenceTier ?? "NONE";
+  const canonicalSide       = selectedMkt?.side ?? null;
+  const bookImplied         = selectedMkt?.bookImpliedProb ?? null;
 
-  // T003: derive bookImplied from American odds price in Odds API response
-  function americanToImplied(odds: number): number {
-    return odds < 0
-      ? (Math.abs(odds) / (Math.abs(odds) + 100)) * 100
-      : (100 / (odds + 100)) * 100;
-  }
-  const bookImplied = play.overOddsAmerican != null
-    ? parseFloat(americanToImplied(play.overOddsAmerican).toFixed(1))
-    : 52.4; // standard -110 vig default
-
-  const edgeGap = Math.abs(engineProb - bookImplied);
-
-  const engineEdgeLabel = selectedMarket === "spread"
-    ? play.engineOutput?.displayOutput?.edgeLabelSpread
-    : selectedMarket === "under"
-    ? play.engineOutput?.displayOutput?.edgeLabelUnder
-    : play.engineOutput?.displayOutput?.edgeLabelOver;
-
+  const edgeGap   = canonicalEdge !== null ? Math.abs(canonicalEdge) : 0;
   const edgeSide: "Over" | "Under" =
-    selectedMarket === "under"
-      ? (engineProb > bookImplied ? "Under" : "Over")
-      : (engineProb > bookImplied ? "Over" : "Under");
-
-  const edgeLabel = engineEdgeLabel || (edgeGap >= 20
-    ? `Strong ${edgeSide} EV`
-    : edgeGap >= 10
-    ? `Lean ${edgeSide} EV`
-    : "Neutral — No Edge");
-  const edgeBelow = edgeGap < 5;
+    (canonicalSide === "UNDER" || canonicalSide === "AWAY") ? "Under" : "Over";
+  const edgeLabel =
+    canonicalEdge === null ? "Unavailable"
+    : canonicalConfTier === "ELITE" ? `Strong ${edgeSide} EV`
+    : canonicalConfTier === "STRONG" ? `Lean ${edgeSide} EV`
+    : canonicalConfTier === "VALUE" ? `Value ${edgeSide} EV`
+    : "Neutral — No Edge";
+  const edgeBelow = edgeGap < 4;
   const evColor   = edgeSide === "Under" ? "#ef4444" : "#00d4aa";
 
   const getLegId      = (m: string) => `${play.gameId}:${m}`;
@@ -1453,7 +1443,7 @@ function NCAABGameCard({
   const marketLabel = (m: "over" | "under" | "spread"): string => {
     if (m === "over")  return effectiveLine !== null ? `Over ${effectiveLine}` : "Over";
     if (m === "under") return effectiveLine !== null ? `Under ${effectiveLine}` : "Under";
-    return play.spread !== null ? `${play.favorite} -${play.spread}` : "Spread";
+    return displaySpread !== null ? `${play.favorite} -${displaySpread}` : "Spread";
   };
 
   const primaryBook = play.bookLines.find(b => b.book === "draftkings") ??
@@ -1469,24 +1459,31 @@ function NCAABGameCard({
   const bestEdge  = Math.max(Math.abs(play.spreadEdge ?? 0), Math.abs(play.totalEdge ?? 0));
 
   function addParlayPick(m: "over" | "under" | "spread") {
-    if (!onAddToParlay) return;
-    const line    = m === "spread" ? (play.spread ?? 0) : (effectiveLine ?? 0);
+    if (!onAddToParlay && !onAddToCard) return;
+    const line    = m === "spread" ? (displaySpread ?? 0) : (effectiveLine ?? 0);
     const prob    = gaugeForMarket(m);
+    if (prob === null) return;
     const rawOdds = prob >= 50
       ? -Math.round((prob / (100 - prob)) * 100)
       :  Math.round(((100 - prob) / prob) * 100);
-    onAddToParlay({
-      playerId: 0,
-      playerName: marketLabel(m),
-      playerTeam: "NCAAB",
-      statType: m === "spread" ? "ncaab_spread" : isH1 ? "ncaab_1h_total" : "ncaab_total",
-      line,
-      probability: prob,
-      betDirection: m === "under" ? "under" : "over",
-      sportsbook: play.bookLines[0]?.book ?? "fanduel",
-      gameId: play.gameId,
-      oddsAmerican: rawOdds,
-    });
+    if (onAddToParlay) {
+      onAddToParlay({
+        playerId: 0,
+        playerName: marketLabel(m),
+        playerTeam: "NCAAB",
+        statType: m === "spread" ? "ncaab_spread" : isH1 ? "ncaab_1h_total" : "ncaab_total",
+        line,
+        probability: prob,
+        betDirection: m === "under" ? "under" : "over",
+        sportsbook: play.bookLines[0]?.book ?? "fanduel",
+        gameId: play.gameId,
+        oddsAmerican: rawOdds,
+      });
+    }
+    // Pass canonical NCAABMarket object directly to the bet card action
+    if (onAddToCard && selectedMkt) {
+      onAddToCard(selectedMkt);
+    }
   }
 
   function addTeamTotalParlayPick() {
@@ -1494,9 +1491,7 @@ function NCAABGameCard({
     const { team, direction, line, isEstimated, teamAbbr } = selectedTeamMarket;
     const proj = team === "home" ? fullHomeProj : fullAwayProj;
     if (!proj) return;
-    const ttMarket = team === "home" ? "team_total_home" : "team_total_away";
-    const engineVerdict = play.engineOutput?.marketVerdicts?.find(mv => mv.market === ttMarket) ?? null;
-    const v = getTeamTotalVerdict(direction, isEstimated, engineVerdict);
+    const v = getTeamTotalVerdict(direction, isEstimated, null);
     const prob = v.engineProb;
     const rawOdds = prob >= 50
       ? -Math.round((prob / (100 - prob)) * 100)
@@ -1518,8 +1513,8 @@ function NCAABGameCard({
 
   // Animated stat grid colors (item 5): color transitions for Engine Over/Under% on direction flip
   // T004: always teal/red — never muted #71717a
-  const overColor  = overProb  > 50 ? "#00d4aa" : "#ef4444";
-  const underColor = underProb > 50 ? "#00d4aa" : "#ef4444";
+  const overColor  = overProb  === null ? "#71717a" : overProb  > 50 ? "#00d4aa" : "#ef4444";
+  const underColor = underProb === null ? "#71717a" : underProb > 50 ? "#00d4aa" : "#ef4444";
 
   return (
     <>
@@ -1589,7 +1584,8 @@ function NCAABGameCard({
             </p>
             <div className="flex gap-1.5 mt-1.5 flex-wrap">
               {(() => {
-                const tier = getConfidenceTier(play.engineOutput?.calibratedOverProb ?? null);
+                const ftMktTier = play.engineOutput?.markets?.full_total;
+                const tier = tierDisplayFromCanonical(ftMktTier?.available ? ftMktTier.confidenceTier : null);
                 if (!tier) return null;
                 return (
                   <span
@@ -1612,12 +1608,12 @@ function NCAABGameCard({
           {/* Desktop: single gauge at default size */}
           <div className="hidden sm:flex flex-col items-center gap-1.5">
             <RadialGauge
-              value={isNeutral ? 50 : gaugeValue}
-              color={isNeutral ? "#52525b" : gaugeColor}
-              label={isNeutral ? "EARLY GAME" : gaugeLabel}
+              value={isNeutral || gaugeValue === null ? 50 : gaugeValue}
+              color={isNeutral || gaugeValue === null ? "#52525b" : gaugeColor}
+              label={isNeutral ? "EARLY GAME" : gaugeValue === null ? "UNAVAILABLE" : gaugeLabel}
               isParlayed={isLegParlayed(selectedMarket)}
               showFullGameLabel
-              displayDash={isNeutral}
+              displayDash={isNeutral || gaugeValue === null}
             />
             {enrichedData && enrichedData.sources.length > 0 && (
               <span
@@ -1635,12 +1631,12 @@ function NCAABGameCard({
           {/* Mobile: primary gauge (lg) + secondary gauges (sm) in 2-col row */}
           <div className="flex sm:hidden flex-col items-center gap-1.5 self-center">
             <RadialGauge
-              value={isNeutral ? 50 : gaugeValue}
-              color={isNeutral ? "#52525b" : gaugeColor}
-              label={isNeutral ? "EARLY GAME" : gaugeLabel}
+              value={isNeutral || gaugeValue === null ? 50 : gaugeValue}
+              color={isNeutral || gaugeValue === null ? "#52525b" : gaugeColor}
+              label={isNeutral ? "EARLY GAME" : gaugeValue === null ? "UNAVAILABLE" : gaugeLabel}
               isParlayed={isLegParlayed(selectedMarket)}
               showFullGameLabel
-              displayDash={isNeutral}
+              displayDash={isNeutral || gaugeValue === null}
               size="lg"
             />
             {!isNeutral && (
@@ -1654,11 +1650,11 @@ function NCAABGameCard({
                     return (
                       <RadialGauge
                         key={m}
-                        value={mVal}
+                        value={mVal !== null ? mVal : 50}
                         color={mColor}
                         label={mLabel}
                         isParlayed={isLegParlayed(m)}
-                        displayDash={false}
+                        displayDash={mVal === null}
                         size="sm"
                       />
                     );
@@ -1695,7 +1691,7 @@ function NCAABGameCard({
               style={{ background: "#111111", border: "1px solid #27272a", borderLeft: `3px solid ${evColor}`, padding: "16px 20px" }}>
               <div>
                 <p className="text-sm font-semibold" style={{ color: evColor }}>{edgeLabel}</p>
-                <p className="text-xs" style={{ color: "#a1a1aa" }}>Engine {engineProb.toFixed(1)}% vs Book {bookImplied}%</p>
+                <p className="text-xs" style={{ color: "#a1a1aa" }}>Engine {gaugeValue !== null ? gaugeValue.toFixed(1) : "--"}% vs Book {bookImplied !== null ? bookImplied.toFixed(1) : "--"}%</p>
               </div>
               {edgeGap >= 5 && (
                 <span className="text-[10px] font-black px-2 py-0.5 rounded-full shrink-0"
@@ -1800,9 +1796,7 @@ function NCAABGameCard({
           const { team, direction, line, isEstimated, teamAbbr } = selectedTeamMarket;
           const proj = team === "home" ? fullHomeProj : fullAwayProj;
           if (proj === null) return null;
-          const ttMarketKey = team === "home" ? "team_total_home" : "team_total_away";
-          const engineVerdict = play.engineOutput?.marketVerdicts?.find(mv => mv.market === ttMarketKey) ?? null;
-          const v = getTeamTotalVerdict(direction, isEstimated, engineVerdict);
+          const v = getTeamTotalVerdict(direction, isEstimated, null);
           const ttColor = v.edgeSide === "Over" ? "#00d4aa" : "#ef4444";
           const ttEdgeBelow = v.edgeGap < 5;
           return (
@@ -1955,7 +1949,7 @@ function NCAABGameCard({
                   {displayLine != null ? String(displayLine) : "—"}
                 </span>
                 <span className="text-xs text-right truncate" style={{ color: "#a1a1aa" }}>
-                  {displayLine == null ? "No line" : displayLineFromBook ? "Sportsbook line" : "Engine est."}
+                  {displayLine == null ? "Unavailable" : displayLineFromBook ? "Sportsbook line" : "Engine est."}
                 </span>
               </div>
             );
@@ -1990,7 +1984,7 @@ function NCAABGameCard({
                 <span className="text-xs text-right truncate" style={{ color: "#a1a1aa" }}>
                   {displaySpread != null && displaySpreadProb != null ? (
                     <>{displaySpreadFav} cover:&nbsp;<AnimatedNumber value={displaySpreadProb} decimals={1} suffix="%" color="#a1a1aa" /></>
-                  ) : displaySpread != null ? `${displaySpreadFav} fav` : "No line"}
+                  ) : displaySpread != null ? `${displaySpreadFav} fav` : "Unavailable"}
                 </span>
               </div>
             );
@@ -2165,7 +2159,7 @@ function NCAABGameCard({
               ? (marketTab === "h1"
                   ? (book.h1Total != null ? `H1 O/U ${book.h1Total}` : "H1 Lines TBD")
                   : marketTab === "h2"
-                  ? (play.h2TotalLine != null ? `2H O/U ${play.h2TotalLine}` : "2H Lines TBD")
+                  ? (h2TotalMkt?.available && h2TotalMkt.bookLine != null ? `2H O/U ${h2TotalMkt.bookLine}` : "2H Lines TBD")
                   : (book.total != null ? `O/U ${book.total}` : "—"))
               : "—";
             return (
@@ -2240,8 +2234,8 @@ function NCAABGameCard({
           const an = enrichedData.actionNetwork!;
           const hasPublicPct = an.overPct != null && an.underPct != null;
           const hasMovement = an.openTotal != null && an.total != null;
-          const isSharpOver  = (an.overMoney ?? 0) > 60 && (an.overPct ?? 50) < 50;
-          const isSharpUnder = (an.underMoney ?? 0) > 60 && (an.underPct ?? 50) < 50;
+          const isSharpOver  = (an.overMoney !== null && an.overMoney !== undefined ? an.overMoney : 0) > 60 && (an.overPct !== null && an.overPct !== undefined ? an.overPct : 50) < 50;
+          const isSharpUnder = (an.underMoney !== null && an.underMoney !== undefined ? an.underMoney : 0) > 60 && (an.underPct !== null && an.underPct !== undefined ? an.underPct : 50) < 50;
           const sharpSide = isSharpOver ? "Over" : isSharpUnder ? "Under" : null;
           const movement = hasMovement ? parseFloat(((an.total ?? 0) - (an.openTotal ?? 0)).toFixed(1)) : null;
           return (
@@ -2313,7 +2307,7 @@ function NCAABGameCard({
           const tempoLabel = avgTempo ? (avgTempo > 72 ? "Fast Pace" : avgTempo < 65 ? "Slow Pace" : "Average Pace") : null;
           const tempoColor = avgTempo ? (avgTempo > 72 ? "#00d4aa" : avgTempo < 65 ? "#ef4444" : "#71717a") : "#71717a";
           const compositeTotal = enrichedData.composite?.projTotal;
-          const liveLine = play.total;
+          const liveLine = effectiveFGLine;
           const compositeLean = compositeTotal && liveLine ? parseFloat((compositeTotal - liveLine).toFixed(1)) : null;
 
           const leanColor = (diff: number | null) =>
@@ -2583,7 +2577,7 @@ function NCAABGameCard({
                     <div>
                       <p className="text-xs font-bold text-white">{play.awayTeamAbbr} @ {play.homeTeamAbbr}</p>
                       <p className="text-[11px]" style={{ color: "#71717a" }}>
-                        {marketLabel(m)} · Engine {gaugeForMarket(m).toFixed(1)}%
+                        {marketLabel(m)} · Engine {gaugeForMarket(m)?.toFixed(1) ?? "--"}%
                       </p>
                     </div>
                     <button
@@ -2613,7 +2607,7 @@ function NCAABGameCard({
                 onClick={() => {
                   const text = parlayLegs.map(legId => {
                     const m = legId.split(":")[1] as "over" | "under" | "spread";
-                    return `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} · ${marketLabel(m)} · Engine: ${gaugeForMarket(m).toFixed(1)}%`;
+                    return `${play.awayTeamAbbr} @ ${play.homeTeamAbbr} · ${marketLabel(m)} · Engine: ${gaugeForMarket(m)?.toFixed(1) ?? "--"}%`;
                   }).join("\n");
                   navigator.clipboard.writeText(text);
                 }}
@@ -2657,8 +2651,9 @@ function groupGamesByTipoff(games: NCAABGame[]) {
 function getChipColorTier(play: NCAABPlay | undefined): "green" | "yellow" | "red" | "neutral" {
   if (!play) return "neutral";
   const edge = Math.abs(play.totalEdge ?? 0);
-  const prob = play.engineOutput?.calibratedOverProb ?? 50;
-  const confidence = Math.max(prob, 100 - prob);
+  const ftMktChip = play.engineOutput?.markets?.full_total;
+  const prob = ftMktChip?.available ? ftMktChip.modelProb : null;
+  const confidence = prob !== null ? Math.max(prob, 100 - prob) : 0;
   if (edge >= 10 || confidence >= 70) return "green";
   if (edge >= 5 || confidence >= 60) return "yellow";
   return "red";
@@ -3019,7 +3014,10 @@ function NCAABGamesStrip({
       <>
       {/* ── Value legend row (only when any chip has a signal) ──────────── */}
       {(() => {
-        const getEdge = (p: NCAABPlay) => Math.abs((p.engineOutput?.calibratedOverProb ?? 50) - 50);
+        const getEdge = (p: NCAABPlay) => {
+          const ft = p.engineOutput?.markets?.full_total;
+          return ft?.available && ft.edge != null ? Math.abs(ft.edge) : 0;
+        };
         const hasTeal  = plays.some(p => getEdge(p) >= 10 || p.bettingWindow === "HALFTIME");
         const hasAmber = plays.some(p => { const e = getEdge(p); return e >= 5 && e < 10 && p.bettingWindow !== "HALFTIME"; });
         if (!hasTeal && !hasAmber) return null;
@@ -3131,6 +3129,7 @@ function GroupedGamesList({
   onExpandGame,
   onH2hReady,
   onAddToParlay,
+  onAddToCard,
   shiftedGames,
   onShiftDetected,
 }: {
@@ -3141,6 +3140,7 @@ function GroupedGamesList({
   onExpandGame: (id: string | null) => void;
   onH2hReady: (gameId: string, data: H2HGame[]) => void;
   onAddToParlay?: (pick: ParlayPickInput) => void;
+  onAddToCard?: (market: NCAABMarketClient) => void;
   shiftedGames: Record<string, boolean>;
   onShiftDetected?: (gameId: string) => void;
 }) {
@@ -3257,6 +3257,7 @@ function GroupedGamesList({
                     <NCAABGameCard
                       play={matchedPlay}
                       onAddToParlay={onAddToParlay}
+                      onAddToCard={onAddToCard}
                       h2hDataFromCache={null}
                       isNewlyLive={false}
                       onShiftDetected={onShiftDetected}
@@ -3341,8 +3342,9 @@ function PreGameCard({
     const underProbRaw = overProbRaw != null ? parseFloat((100 - overProbRaw).toFixed(1)) : null;
     const line = market === "total" ? (preChipOdds?.overUnder ?? 0) : 0;
     const prob = market === "total"
-      ? (direction === "over" ? overProbRaw ?? 50 : underProbRaw ?? 50)
-      : (preChipOdds?.homeWinPct ?? 50);
+      ? (direction === "over" ? overProbRaw : underProbRaw)
+      : (preChipOdds?.homeWinPct ?? null);
+    if (prob === null) return;
     const tier = getPreGameConfidenceTier(overProbRaw);
     const tierLabel = tier?.label ?? "Pre-Game";
     const legKey = `${market}:${direction}`;
@@ -3489,26 +3491,28 @@ function PreGameCard({
       {(() => {
         const overProb = game.enginePreGame?.overProb ?? null;
         const tier = getPreGameConfidenceTier(overProb);
-        const gaugeVal = overProb ?? 50;
+        const gaugeVal = overProb;
         const isLowTier = !tier || tier.label === "No Edge" || tier.label === "Low Confidence";
-        const gaugeColor = isLowTier ? "#52525b" : (gaugeVal > 50 ? "#00d4aa" : "#ef4444");
+        const gaugeColor = (gaugeVal === null || isLowTier) ? "#52525b" : (gaugeVal > 50 ? "#00d4aa" : "#ef4444");
         const circum = 2 * Math.PI * 68;
         return (
           <div className="flex items-center gap-4 py-1">
             <div style={{ position: "relative", width: 80, height: 80, flexShrink: 0 }}>
               <svg viewBox="0 0 160 160" style={{ width: 80, height: 80, transform: "rotate(-90deg)" }}>
                 <circle cx={80} cy={80} r={68} fill="none" stroke="#27272a" strokeWidth={10} />
-                <circle
-                  cx={80} cy={80} r={68} fill="none" stroke={gaugeColor} strokeWidth={10}
-                  strokeDasharray={String(circum)}
-                  strokeDashoffset={circum * (1 - gaugeVal / 100)}
-                  strokeLinecap="round"
-                  style={{ transition: "stroke-dashoffset 300ms ease, stroke 300ms ease" }}
-                />
+                {gaugeVal !== null && (
+                  <circle
+                    cx={80} cy={80} r={68} fill="none" stroke={gaugeColor} strokeWidth={10}
+                    strokeDasharray={String(circum)}
+                    strokeDashoffset={circum * (1 - gaugeVal / 100)}
+                    strokeLinecap="round"
+                    style={{ transition: "stroke-dashoffset 300ms ease, stroke 300ms ease" }}
+                  />
+                )}
               </svg>
               <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-                <span style={{ color: isLowTier ? "#52525b" : gaugeColor, fontSize: 18, fontWeight: 900, lineHeight: 1, fontFamily: "monospace" }}>
-                  {overProb != null ? `${Math.round(gaugeVal)}%` : "--"}
+                <span style={{ color: gaugeVal === null ? "#52525b" : (isLowTier ? "#52525b" : gaugeColor), fontSize: 18, fontWeight: 900, lineHeight: 1, fontFamily: "monospace" }}>
+                  {gaugeVal != null ? `${Math.round(gaugeVal)}%` : "--"}
                 </span>
                 <span style={{ color: "#71717a", fontSize: 8, textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 2 }}>PRE-GAME</span>
               </div>
@@ -3623,7 +3627,8 @@ function PreGameCard({
                         </button>
                         <button
                           onClick={() => {
-                            onAddToParlay!(buildPreGamePick("total", dir, line, mProb ?? 50, tier?.label ?? "Pre-Game"));
+                            if (mProb === null) return;
+                            onAddToParlay!(buildPreGamePick("total", dir, line, mProb, tier?.label ?? "Pre-Game"));
                             setAddedLegKey(legKey);
                             setPendingLeg(null);
                           }}
@@ -3662,11 +3667,13 @@ function PreGameCard({
 
 interface NCAABAdminTabProps {
   onAddToParlay?: (pick: ParlayPickInput) => void;
+  /** Canonical market pass-through: receives the NCAABMarket object directly */
+  onAddToCard?: (market: NCAABMarketClient) => void;
   isAdmin?: boolean;
   expandToGameId?: string | null;
 }
 
-export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABAdminTabProps) {
+export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAdmin }: NCAABAdminTabProps) {
   const [ncaabSubTab, setNcaabSubTab] = useState<"live" | "halftime">("live");
   const [ncaabBookFilter, setNcaabBookFilter] = useState<string>("all");
   const [cacheClearPending, setCacheClearPending] = useState(false);
@@ -3837,9 +3844,10 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
   const addToSummary = useCallback((game: NCAABGame, play: NCAABPlay | undefined) => {
     setSummaryGames(prev => {
       if (prev.find(s => s.gameId === game.id)) return prev;
-      const line     = play?.total ?? null;
-      const overProb = play?.engineOutput?.calibratedOverProb ?? null;
-      const edgeGap  = overProb !== null ? Math.abs(overProb - 50) : 0;
+      const ftMktSum = play?.engineOutput?.markets?.full_total;
+      const line     = ftMktSum?.available ? ftMktSum.bookLine : null;
+      const overProb = ftMktSum?.available ? ftMktSum.modelProb : null;
+      const edgeGap  = ftMktSum?.available && ftMktSum.edge != null ? Math.abs(ftMktSum.edge) : 0;
       return [...prev, {
         gameId: game.id,
         awayTeam: game.awayTeam, homeTeam: game.homeTeam,
@@ -4091,96 +4099,134 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                     );
                   })}
                 </div>
-                {/* Play cards */}
-                <div className="flex gap-3 overflow-x-auto pb-2" style={{ scrollSnapType: "x mandatory" }}>
-                  {sortedPlays.map(p => {
-                    const calibratedProb = p.engineOutput?.calibratedOverProb ?? null;
-                    const tier = getConfidenceTier(calibratedProb);
-                    const confidence = Math.max(calibratedProb ?? 50, 100 - (calibratedProb ?? 50));
-                    const edgeSide = (calibratedProb ?? 50) > 50 ? "Over" : "Under";
-                    const edgeColor = edgeSide === "Over" ? "#00d4aa" : "#ef4444";
-                    const halfLabel = p.half === 1 ? "H1" : p.half === 2 ? "H2" : "OT";
-                    return (
-                      <div
-                        key={p.gameId}
-                        data-testid={`ncaab-top-play-${p.gameId}`}
-                        className="flex-shrink-0 rounded-xl p-3.5 space-y-2"
-                        style={{
-                          width: 260,
-                          background: "#0a0a0a",
-                          border: `1px solid ${tier ? tier.border : "#27272a"}`,
-                          scrollSnapAlign: "start",
-                        }}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
-                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-400" />
-                            </span>
-                            <span className="text-[10px] font-semibold" style={{ color: "#4ade80" }}>{halfLabel} · {p.clock}</span>
+                {/* Play cards — canonical market-based Top Plays (Phase D) */}
+                {(() => {
+                  const MARKET_KEYS: NCAABMarketKey[] = ["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"];
+                  const TIER_STYLES: Record<string, { color: string; bg: string; border: string }> = {
+                    ELITE: { color: "#00d4aa", bg: "rgba(0,212,170,0.12)", border: "rgba(0,212,170,0.35)" },
+                    STRONG: { color: "#f59e0b", bg: "rgba(245,158,11,0.1)", border: "rgba(245,158,11,0.3)" },
+                    VALUE: { color: "#71717a", bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.1)" },
+                    NONE: { color: "#52525b", bg: "rgba(255,255,255,0.02)", border: "#27272a" },
+                  };
+                  type TopPlayEntry = { play: NCAABPlay; market: NCAABMarketClient };
+                  const allEntries: TopPlayEntry[] = [];
+                  for (const p of sortedPlays) {
+                    if (!p.engineOutput?.markets) continue;
+                    const seen = new Map<string, TopPlayEntry>();
+                    for (const key of MARKET_KEYS) {
+                      const mkt = p.engineOutput.markets[key];
+                      if (!mkt?.available || mkt.edge === null) continue;
+                      const existing = seen.get(key);
+                      if (existing && Math.abs(existing.market.edge ?? 0) >= Math.abs(mkt.edge)) continue;
+                      seen.set(key, { play: p, market: mkt });
+                    }
+                    Array.from(seen.values()).forEach(entry => allEntries.push(entry));
+                  }
+                  allEntries.sort((a, b) => Math.abs(b.market.edge ?? 0) - Math.abs(a.market.edge ?? 0));
+                  const topEntries = allEntries.slice(0, 20);
+
+                  if (topEntries.length === 0) return null;
+                  return (
+                    <div className="flex gap-3 overflow-x-auto pb-2" style={{ scrollSnapType: "x mandatory" }}>
+                      {topEntries.map((entry, idx) => {
+                        const { play: p, market: mkt } = entry;
+                        const tierStyle = TIER_STYLES[mkt.confidenceTier] ?? TIER_STYLES.NONE;
+                        const edgeSide = mkt.side === "OVER" ? "Over" : mkt.side === "UNDER" ? "Under" : mkt.side === "HOME" ? "Home" : mkt.side === "AWAY" ? "Away" : "—";
+                        const edgeColor = (mkt.side === "OVER" || mkt.side === "HOME") ? "#00d4aa" : (mkt.side === "UNDER" || mkt.side === "AWAY") ? "#ef4444" : "#71717a";
+                        const halfLabel = p.half === 1 ? "H1" : p.half === 2 ? "H2" : "OT";
+                        return (
+                          <div
+                            key={`${p.gameId}-${mkt.marketKey}-${idx}`}
+                            data-testid={`ncaab-top-play-${p.gameId}-${mkt.marketKey}`}
+                            className="flex-shrink-0 rounded-xl p-3.5 space-y-2"
+                            style={{
+                              width: 260,
+                              background: "#0a0a0a",
+                              border: `1px solid ${tierStyle.border}`,
+                              scrollSnapAlign: "start",
+                            }}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-400" />
+                                </span>
+                                <span className="text-[10px] font-semibold" style={{ color: "#4ade80" }}>{halfLabel} · {p.clock}</span>
+                              </div>
+                              {mkt.confidenceTier !== "NONE" && (
+                                <span
+                                  data-testid={`ncaab-tier-badge-${p.gameId}-${mkt.marketKey}`}
+                                  className="text-[9px] font-black px-2 py-0.5 rounded-full"
+                                  style={{ background: tierStyle.bg, color: tierStyle.color, border: `1px solid ${tierStyle.border}` }}
+                                >
+                                  {mkt.confidenceTier}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs font-bold text-white truncate">{p.awayTeamAbbr} @ {p.homeTeamAbbr}</p>
+                            <p className="text-lg font-black tabular-nums" style={{ color: "#ffffff" }}>{p.awayScore} – {p.homeScore}</p>
+                            <div className="flex items-center justify-between text-[9px]" style={{ color: "#71717a" }}>
+                              <span data-testid={`ncaab-top-play-market-${p.gameId}-${mkt.marketKey}`}>{mkt.label}</span>
+                              {mkt.sportsbook && (
+                                <span style={{ textTransform: "uppercase" }}>{mkt.sportsbook}</span>
+                              )}
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <div>
+                                <span className="text-sm font-bold" style={{ color: edgeColor }}>{edgeSide} {mkt.bookLine ?? "—"}</span>
+                                <span className="text-xs ml-1.5 tabular-nums" style={{ color: edgeColor }}>
+                                  {mkt.modelProb != null ? `${mkt.modelProb.toFixed(1)}%` : "—"}
+                                </span>
+                                {mkt.edge != null && Math.abs(mkt.edge) >= 4 && (
+                                  <span className="text-[10px] ml-1 tabular-nums" style={{ color: "#f59e0b" }}>
+                                    +{Math.abs(mkt.edge).toFixed(1)}pp
+                                  </span>
+                                )}
+                              </div>
+                              {(onAddToParlay || onAddToCard) && (
+                                <button
+                                  data-testid={`ncaab-top-play-parlay-${p.gameId}-${mkt.marketKey}`}
+                                  onClick={() => {
+                                    // Pass canonical NCAABMarket object directly
+                                    if (onAddToCard) onAddToCard(mkt);
+                                    if (onAddToParlay) {
+                                      if (mkt.modelProb === null) return;
+                                      const prob = mkt.modelProb;
+                                      const isSpread = mkt.marketKey.includes("spread");
+                                      const dir = isSpread
+                                        ? (mkt.side === "AWAY" ? "under" : "over")
+                                        : (mkt.side === "UNDER" ? "under" : "over");
+                                      const rawOdds = prob >= 50
+                                        ? -Math.round((prob / (100 - prob)) * 100)
+                                        : Math.round(((100 - prob) / prob) * 100);
+                                      onAddToParlay({
+                                        playerId: 0,
+                                        playerName: `${p.awayTeamAbbr} @ ${p.homeTeamAbbr} ${edgeSide} ${mkt.bookLine ?? ""}`,
+                                        playerTeam: "NCAAB",
+                                        statType: mkt.marketKey.includes("spread") ? "ncaab_spread" : "ncaab_total",
+                                        line: mkt.bookLine ?? 0,
+                                        probability: prob,
+                                        betDirection: dir,
+                                        sportsbook: mkt.sportsbook ?? "fanduel",
+                                        gameId: p.gameId,
+                                        oddsAmerican: rawOdds,
+                                      });
+                                    }
+                                  }}
+                                  className="text-[10px] font-bold px-2.5 py-1 rounded-lg transition-colors"
+                                  style={{ background: "rgba(0,212,170,0.12)", color: "#00d4aa", border: "1px solid rgba(0,212,170,0.25)" }}
+                                >
+                                  + Bet Card
+                                </button>
+                              )}
+                            </div>
                           </div>
-                          {tier && (
-                            <span
-                              data-testid={`ncaab-tier-badge-${p.gameId}`}
-                              className="text-[9px] font-black px-2 py-0.5 rounded-full"
-                              style={{ background: tier.bg, color: tier.color, border: `1px solid ${tier.border}` }}
-                            >
-                              {tier.label}
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-xs font-bold text-white truncate">{p.awayTeamAbbr} @ {p.homeTeamAbbr}</p>
-                        <p className="text-lg font-black tabular-nums" style={{ color: "#ffffff" }}>{p.awayScore} – {p.homeScore}</p>
-                        <div className="flex items-center justify-between text-[9px]" style={{ color: "#71717a" }}>
-                          <span data-testid={`ncaab-top-play-market-${p.gameId}`}>
-                            {p.engineOutput?.marketType === "h1_total" ? "1H Total"
-                              : p.engineOutput?.marketType === "h2_total" ? "2H Total"
-                              : "Full Game Total"}
-                          </span>
-                          {p.bookLines[0]?.book && (
-                            <span data-testid={`ncaab-top-play-book-${p.gameId}`} style={{ textTransform: "uppercase" }}>{p.bookLines[0].book}</span>
-                          )}
-                        </div>
-                        <div className="flex items-center justify-between gap-2">
-                          <div>
-                            <span className="text-sm font-bold" style={{ color: edgeColor }}>{edgeSide} {p.total ?? "—"}</span>
-                            <span className="text-xs ml-1.5 tabular-nums" style={{ color: edgeColor }}>{p.engineOutput?.displayOutput?.displayProbability ?? `${confidence.toFixed(0)}%`}</span>
-                          </div>
-                          {onAddToParlay && (
-                            <button
-                              data-testid={`ncaab-top-play-parlay-${p.gameId}`}
-                              onClick={() => {
-                                const line = p.total ?? 0;
-                                const prob = calibratedProb ?? 50;
-                                const dir = prob > 50 ? "over" : "under";
-                                const rawOdds = prob >= 50
-                                  ? -Math.round((prob / (100 - prob)) * 100)
-                                  : Math.round(((100 - prob) / prob) * 100);
-                                onAddToParlay({
-                                  playerId: 0,
-                                  playerName: `${p.awayTeamAbbr} @ ${p.homeTeamAbbr} ${dir === "over" ? "Over" : "Under"} ${line}`,
-                                  playerTeam: "NCAAB",
-                                  statType: "ncaab_total",
-                                  line,
-                                  probability: prob,
-                                  betDirection: dir,
-                                  sportsbook: p.bookLines[0]?.book ?? "fanduel",
-                                  gameId: p.gameId,
-                                  oddsAmerican: rawOdds,
-                                });
-                              }}
-                              className="text-[10px] font-bold px-2.5 py-1 rounded-lg transition-colors"
-                              style={{ background: "rgba(0,212,170,0.12)", color: "#00d4aa", border: "1px solid rgba(0,212,170,0.25)" }}
-                            >
-                              + Bet Card
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
                 {filteredPlays.length === 0 && (
                   <p className="text-xs text-center py-3" style={{ color: "#52525b" }}>No plays for this sportsbook filter</p>
                 )}
@@ -4202,6 +4248,7 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                   key={p.gameId}
                   play={p}
                   onAddToParlay={onAddToParlay}
+                  onAddToCard={onAddToCard}
                   h2hDataFromCache={h2hCache.current[p.gameId] ?? null}
                   isNewlyLive={newlyLiveIds.has(p.gameId)}
                   onShiftDetected={handleShiftDetected}
@@ -4266,7 +4313,7 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
               <div className="space-y-px">
                 {summaryResults.map(r => {
                   const isExpanded = expandedSummaryId === r.gameId;
-                  const engineCall = (r.overProb ?? 50) > 50 ? "under" : "over";
+                  const engineCall = r.overProb !== null && r.overProb > 50 ? "under" : "over";
                   const callLabel  = r.line !== null
                     ? `${engineCall === "under" ? "Under" : "Over"} ${r.line}`
                     : "—";
@@ -4336,6 +4383,7 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
               onExpandGame={handleExpandGame}
               onH2hReady={handleH2hReady}
               onAddToParlay={onAddToParlay}
+              onAddToCard={onAddToCard}
               shiftedGames={shiftedGames}
               onShiftDetected={handleShiftDetected}
             />
@@ -4365,28 +4413,27 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                 </p>
               </div>
               {halftimePlays.map(play => {
-                // ── Primary call logic ──────────────────────────────────────
-                // Rule 8: use engineOutput?.over2HProb instead of legacy play.h2EngineOverProb
-                const h2EngineOverProb = play.engineOutput?.over2HProb ?? null;
-                // Best 2H total call: only when we have a real book line + engine edge
-                const has2HCall = h2EngineOverProb !== null && (play.h2TotalLine ?? play.effectiveH2Line) !== null;
-                const h2Side = play.h2EdgeSide ?? (h2EngineOverProb !== null
-                  ? (h2EngineOverProb >= 55 ? "OVER" : h2EngineOverProb <= 45 ? "UNDER" : null)
-                  : null);
+                // ── Primary call logic — canonical h2_total market ────────────
+                const h2TotalMktHalf = play.engineOutput?.markets?.h2_total;
+                const h2EngineOverProb = h2TotalMktHalf?.available ? h2TotalMktHalf.modelProb : null;
+                const has2HCall = h2TotalMktHalf?.available === true && h2EngineOverProb !== null && h2TotalMktHalf.bookLine !== null;
+                const h2Side = h2TotalMktHalf?.available ? h2TotalMktHalf.side : null;
+                const h2UnderProb = h2TotalMktHalf?.available && h2TotalMktHalf.modelProb !== null ? Math.round((100 - h2TotalMktHalf.modelProb) * 10) / 10 : null;
                 const h2Confidence = h2Side === "OVER"
-                  ? (h2EngineOverProb ?? 0)
+                  ? h2EngineOverProb
                   : h2Side === "UNDER"
-                  ? (100 - (h2EngineOverProb ?? 50))
+                  ? h2UnderProb
                   : null;
-                const h2DisplayLine = play.h2TotalLine ?? play.effectiveH2Line;
-                const h2ActiveEdge = h2Side === "OVER" ? play.h2OverEdge : play.h2UnderEdge;
+                const h2DisplayLine = h2TotalMktHalf?.available ? h2TotalMktHalf.bookLine : null;
+                const h2ActiveEdge = h2TotalMktHalf?.available ? h2TotalMktHalf.edge : null;
 
-                // Best spread call — Rule 1: use h2_spread verdict only
-                const h2SpreadVerdict2H = resolveVerdictForMarket(play.engineOutput, "h2_spread", play.gameId, "h2");
-                const spreadProb2H = h2SpreadVerdict2H?.overProb ?? null;
-                const hasCoverCall = play.spread !== null && spreadProb2H !== null && Math.abs(spreadProb2H - 50) >= 8;
+                // Best spread call — canonical h2_spread market
+                const h2SpreadMktHalf = play.engineOutput?.markets?.h2_spread;
+                const spreadProb2H = h2SpreadMktHalf?.available ? h2SpreadMktHalf.modelProb : null;
+                const hasCoverCall = h2SpreadMktHalf?.available && h2SpreadMktHalf.bookLine !== null && spreadProb2H !== null && Math.abs(spreadProb2H - 50) >= 8;
                 const spreadSide = spreadProb2H !== null ? (spreadProb2H >= 55 ? "COVER" : spreadProb2H <= 45 ? "FADE" : null) : null;
-                const spreadConf = spreadSide === "COVER" ? spreadProb2H : spreadSide === "FADE" ? (100 - (spreadProb2H ?? 50)) : null;
+                const spreadUnder2H = h2SpreadMktHalf?.available && h2SpreadMktHalf.modelProb !== null ? Math.round((100 - h2SpreadMktHalf.modelProb) * 10) / 10 : null;
+                const spreadConf = spreadSide === "COVER" ? spreadProb2H : spreadSide === "FADE" ? spreadUnder2H : null;
 
                 // Which is the stronger call
                 const primaryIs2H = has2HCall && h2Confidence !== null && (h2ActiveEdge ?? 0) >= 5;
@@ -4490,7 +4537,7 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                           <div>
                             <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Spread Best Play</p>
                             <p className="text-base font-black text-foreground">
-                              {spreadSide === "COVER" ? "Cover" : "Fade"} {play.favorite} {play.spread !== null ? `-${Math.abs(play.spread)}` : ""}
+                              {spreadSide === "COVER" ? "Cover" : "Fade"} {play.favorite} {h2SpreadMktHalf?.bookLine !== null && h2SpreadMktHalf?.bookLine !== undefined ? `-${Math.abs(h2SpreadMktHalf.bookLine)}` : ""}
                             </p>
                           </div>
                           <span className={`text-sm font-bold px-2.5 py-1 rounded-lg ${confBg(spreadConf)}`}>
@@ -4501,18 +4548,18 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
                     ) : (
                       <div className="mx-4 mb-3 rounded-lg bg-secondary/20 border border-dashed border-border p-3 text-center">
                         <p className="text-xs text-muted-foreground">Monitor — no strong 2H signal yet</p>
-                        {!play.h2TotalLine && <p className="text-[10px] text-muted-foreground/60 mt-0.5">Waiting for live 2H lines from books</p>}
+                        {!h2TotalMktHalf?.available && <p className="text-[10px] text-muted-foreground/60 mt-0.5">Waiting for live 2H lines from books</p>}
                       </div>
                     )}
 
                     {/* ── Market rows ───────────────────────────────────────── */}
                     <div className="px-4 pb-3 space-y-2.5">
 
-                      {/* 2H Total — only when real book line; Rule 8: use engineOutput?.over2HProb */}
-                      {play.h2TotalLine !== null && h2EngineOverProb !== null && (
+                      {/* 2H Total — only when canonical h2_total market is available */}
+                      {h2TotalMktHalf?.available && h2TotalMktHalf.bookLine !== null && h2EngineOverProb !== null && (
                         <div className="space-y-1">
                           <div className="flex items-center justify-between text-xs">
-                            <span className="text-muted-foreground font-medium">2H Total O/U {play.h2TotalLine}</span>
+                            <span className="text-muted-foreground font-medium">2H Total O/U {h2TotalMktHalf.bookLine}</span>
                             <div className="flex items-center gap-2">
                               {play.h2OverPrice !== null && (
                                 <span className="text-[10px] text-muted-foreground/70">{play.h2OverPrice > 0 ? "+" : ""}{play.h2OverPrice} / {play.h2UnderPrice !== null ? (play.h2UnderPrice > 0 ? "+" : "") + play.h2UnderPrice : "—"}</span>
@@ -4533,7 +4580,7 @@ export function NCAABAdminTab({ onAddToParlay, expandToGameId, isAdmin }: NCAABA
 
                       {/* 2H Spread — Rule 1+4: h2_spread verdict only; no full-game fallback */}
                       {(() => {
-                        const h2SpLine = h2SpreadVerdict2H?.line ?? play.h2SpreadLine;
+                        const h2SpLine = h2SpreadMktHalf?.available ? h2SpreadMktHalf.bookLine : null;
                         if (h2SpLine == null || spreadProb2H == null) return null;
                         const sp = spreadProb2H;
                         return (
