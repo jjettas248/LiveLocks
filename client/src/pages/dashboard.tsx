@@ -14,7 +14,7 @@ import { UpgradeModal } from "@/components/upgrade-modal";
 import { FeedbackModal } from "@/components/feedback-modal";
 import { NCAABAdminTab } from "@/components/ncaab-admin-tab";
 import { AnalyticsTab } from "@/components/analytics-tab";
-import { MLBAdminTab } from "@/components/mlb-admin-tab";
+import MlbLivePage from "@/pages/mlb-live";
 import { WelcomeBanner } from "@/components/welcome-banner";
 import { AlertsOnboardingModal } from "@/components/alerts-onboarding-modal";
 import { useAuth } from "@/hooks/use-auth";
@@ -3449,8 +3449,8 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* MLB Admin Tab — admin only (Phase A engine testing) */}
-        {activeTab === "mlb" && user?.isAdmin && <MLBAdminTab />}
+        {/* MLB Live Tab — admin and All Sports users */}
+        {activeTab === "mlb" && (user?.isAdmin || user?.subscriptionTier === "elite") && <MlbLivePage />}
 
       </main>
 

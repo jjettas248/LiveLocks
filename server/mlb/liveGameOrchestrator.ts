@@ -10,6 +10,7 @@ import {
   getActiveGames,
   getGame,
 } from "./liveGameRegistry";
+import { mlbEdgeCache } from "./edgeCache";
 import {
   syncGameState,
   syncContactData,
@@ -408,6 +409,7 @@ export class LiveGameOrchestrator {
       }
     }
 
+    mlbEdgeCache.set(gameId, { outputs, updatedAt: Date.now() });
     console.log(`[MLB orchestrator] triggerEngine: game ${gameId} — ${outputs.length} outputs`);
     return outputs;
   }

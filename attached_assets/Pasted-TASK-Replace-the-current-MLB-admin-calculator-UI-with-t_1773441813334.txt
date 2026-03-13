@@ -1,0 +1,146 @@
+TASK: Replace the current MLB admin calculator UI with the production MLB Live dashboard.
+
+The MLB Live tab must mirror the NBA Live experience.
+
+Do NOT remove the admin tools — move them to /admin/mlb.
+
+--------------------------------------------------
+
+1. CREATE NEW PAGE
+
+client/src/pages/mlb-live.tsx
+
+Layout must match NBA Live architecture.
+
+Top structure:
+
+GameStrip
+InningTabs
+BoxScorePanel
+EdgeCards
+
+--------------------------------------------------
+
+2. GAME STRIP
+
+Fetch today's MLB games.
+
+Endpoint:
+GET /api/mlb/live-games
+
+Display:
+
+AWAY SCORE – HOME SCORE
+inning indicator
+
+Example:
+
+NYY 2–1 BOS   5th
+
+Auto refresh every 30s.
+
+Clicking a game loads the box score.
+
+--------------------------------------------------
+
+3. INNING TABS
+
+Tabs:
+
+Live Props
+3rd Inning
+5th Inning
+7th Inning
+
+Filtering logic:
+
+3rd inning tab → show props when inning ≥3
+5th inning tab → show props when inning ≥5
+7th inning tab → show props when inning ≥7
+
+--------------------------------------------------
+
+4. LIVE BOX SCORE
+
+Endpoint:
+
+GET /api/mlb/live-stats/:gameId
+
+Columns:
+
+Player
+AB
+H
+TB
+R
+RBI
+BB
+SB
+K
+
+--------------------------------------------------
+
+5. EDGE SIGNALS
+
+Every 90 seconds call:
+
+GET /api/mlb/live-signals/:gameId
+
+Color rows using probability tiers:
+
+Green ≥85%
+Yellow 70–84%
+Teal 60–69%
+Red ≥85% UNDER
+
+--------------------------------------------------
+
+6. EDGE CARDS
+
+Each signal should show:
+
+Player
+Market
+Line
+Engine %
+Book %
+Edge %
+
+Add "Add to Parlay" button.
+
+--------------------------------------------------
+
+7. REMOVE ADMIN CALCULATOR FROM MLB TAB
+
+Move existing tester UI to:
+
+/admin/mlb
+
+Admins only.
+
+--------------------------------------------------
+
+8. PERFORMANCE
+
+Game strip refresh: 30s
+Signals refresh: 90s
+Box score refresh: 30s
+
+--------------------------------------------------
+
+9. DESIGN
+
+Reuse components from:
+
+NBA Live dashboard
+
+Maintain identical UI/UX.
+
+--------------------------------------------------
+
+Goal:
+
+MLB Live must behave exactly like NBA Live:
+automatic engine
+automatic edge detection
+no manual input.

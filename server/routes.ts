@@ -35,7 +35,10 @@ import {
   syncPitcherContext,
   syncWeather,
   syncBullpenUsage,
+  mlbGameCache,
 } from "./mlb/dataPullService";
+import { getActiveGames } from "./mlb/liveGameRegistry";
+import { mlbEdgeCache } from "./mlb/edgeCache";
 import { liveOrchestrator } from "./mlb/liveGameOrchestrator";
 
 // ── Module-level play dedup guard (persists for process lifetime) ─────────────
@@ -320,6 +323,156 @@ export async function registerRoutes(
     clearEnrichmentCache();
     const stats = getEnrichmentCacheStats();
     return res.json({ ok: true, stats });
+  });
+
+  // ── MLB Live Routes (Auth-required, Phase B UI) ──────────────────────────────
+
+  const mlbLiveGamesCache = new Map<string, { ts: number; games: any[] }>();
+  const MLB_LIVE_GAMES_TTL = 30_000;
+
+  app.get("/api/mlb/live-games", requireAuth, async (_req, res) => {
+    const cached = mlbLiveGamesCache.get("games");
+    if (cached && Date.now() - cached.ts < MLB_LIVE_GAMES_TTL) {
+      return res.json(cached.games);
+    }
+    try {
+      const today = new Date();
+      const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+      const scheduleUrl = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${dateStr}&hydrate=linescore`;
+      const response = await fetch(scheduleUrl, {
+        headers: { "User-Agent": "LiveLocks/1.0" },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!response.ok) throw new Error(`MLB API ${response.status}`);
+      const data = (await response.json()) as any;
+      const registeredIds = new Set(getActiveGames().map((g) => g.gameId));
+
+      const games: any[] = [];
+      for (const date of data.dates ?? []) {
+        for (const game of date.games ?? []) {
+          const state = game.status?.abstractGameState as string;
+          if (state !== "Live" && state !== "Preview") continue;
+          const gameId = String(game.gamePk);
+          const linescore = game.linescore ?? {};
+          const inning: number = linescore.currentInning ?? 0;
+          const isTopInning: boolean = linescore.isTopInning ?? true;
+          const homeScore: number = linescore.teams?.home?.runs ?? 0;
+          const awayScore: number = linescore.teams?.away?.runs ?? 0;
+          const cachedState = mlbGameCache.gameState[gameId];
+          games.push({
+            gameId,
+            homeTeam: game.teams?.home?.team?.abbreviation ?? "",
+            awayTeam: game.teams?.away?.team?.abbreviation ?? "",
+            homeScore,
+            awayScore,
+            inning: cachedState?.inning ?? inning,
+            isTopInning: cachedState?.isTopInning ?? isTopInning,
+            status: state === "Live" ? "live" : "preview",
+            inRegisty: registeredIds.has(gameId),
+          });
+        }
+      }
+      mlbLiveGamesCache.set("games", { ts: Date.now(), games });
+      return res.json(games);
+    } catch (e: any) {
+      console.error("[mlb/live-games]", e.message);
+      return res.status(502).json({ error: "Live games unavailable", games: [] });
+    }
+  });
+
+  const mlbLiveStatsCache = new Map<string, { ts: number; players: any[] }>();
+  const MLB_LIVE_STATS_TTL = 30_000;
+
+  app.get("/api/mlb/live-stats/:gameId", requireAuth, async (req, res) => {
+    const gameId = req.params.gameId as string;
+    const cached = mlbLiveStatsCache.get(gameId);
+    if (cached && Date.now() - cached.ts < MLB_LIVE_STATS_TTL) {
+      return res.json(cached.players);
+    }
+    try {
+      const url = `https://statsapi.mlb.com/api/v1/game/${gameId}/boxscore`;
+      const response = await fetch(url, {
+        headers: { "User-Agent": "LiveLocks/1.0" },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!response.ok) throw new Error(`MLB boxscore API ${response.status}`);
+      const data = (await response.json()) as any;
+      const players: any[] = [];
+      for (const side of ["away", "home"] as const) {
+        const teamData = data.teams?.[side];
+        if (!teamData) continue;
+        const batters: number[] = teamData.batters ?? [];
+        const playerMap = teamData.players ?? {};
+        for (const batterId of batters) {
+          const entry = playerMap[`ID${batterId}`];
+          if (!entry) continue;
+          const batting = entry.stats?.batting ?? {};
+          const slotRaw: string = entry.battingOrder ?? "0";
+          const slot = Math.floor(parseInt(slotRaw, 10) / 100) || 0;
+          players.push({
+            playerId: String(batterId),
+            playerName: entry.person?.fullName ?? "",
+            teamAbbr: side === "home" ? data.teams?.home?.team?.abbreviation ?? "" : data.teams?.away?.team?.abbreviation ?? "",
+            battingOrderSlot: slot,
+            ab: batting.atBats ?? 0,
+            h: batting.hits ?? 0,
+            tb: batting.totalBases ?? 0,
+            r: batting.runs ?? 0,
+            rbi: batting.rbi ?? 0,
+            bb: batting.baseOnBalls ?? 0,
+            sb: batting.stolenBases ?? 0,
+            k: batting.strikeOuts ?? 0,
+          });
+        }
+      }
+      players.sort((a, b) => (a.battingOrderSlot || 99) - (b.battingOrderSlot || 99));
+      mlbLiveStatsCache.set(gameId, { ts: Date.now(), players });
+      return res.json(players);
+    } catch (e: any) {
+      console.error("[mlb/live-stats]", e.message);
+      return res.status(502).json({ error: "Live stats unavailable", players: [] });
+    }
+  });
+
+  const mlbSignalsCache = new Map<string, { ts: number; signals: any[]; updatedAt: number }>();
+  const MLB_SIGNALS_TTL = 90_000;
+
+  app.get("/api/mlb/live-signals/:gameId", requireAuth, async (req, res) => {
+    const gameId = req.params.gameId as string;
+    const cached = mlbSignalsCache.get(gameId);
+    if (cached && Date.now() - cached.ts < MLB_SIGNALS_TTL) {
+      return res.json({ signals: cached.signals, updatedAt: cached.updatedAt });
+    }
+    const entry = mlbEdgeCache.get(gameId);
+    const allOutputs = entry?.outputs ?? [];
+    const updatedAt = entry?.updatedAt ?? 0;
+
+    const signals = allOutputs
+      .filter((o) => o.bookLine > 0 && (o.calibratedProbabilityOver > 0 || o.calibratedProbabilityUnder > 0))
+      .filter((o) => Math.abs(o.edge) >= 5)
+      .map((o) => {
+        const hitProb =
+          o.recommendedSide === "OVER" ? o.calibratedProbabilityOver : o.calibratedProbabilityUnder;
+        let tier: "green" | "yellow" | "teal" | "red";
+        if (o.recommendedSide === "UNDER" && hitProb >= 85) tier = "red";
+        else if (hitProb >= 85) tier = "green";
+        else if (hitProb >= 70) tier = "yellow";
+        else tier = "teal";
+        return {
+          playerId: o.playerId,
+          playerName: o.playerName,
+          market: o.market,
+          bookLine: o.bookLine,
+          enginePct: Math.round(hitProb * 10) / 10,
+          edge: Math.round(Math.abs(o.edge) * 10) / 10,
+          recommendedSide: o.recommendedSide,
+          inning: mlbGameCache.gameState[gameId]?.inning ?? 0,
+          tier,
+        };
+      });
+
+    mlbSignalsCache.set(gameId, { ts: Date.now(), signals, updatedAt });
+    return res.json({ signals, updatedAt });
   });
 
   // ── MLB Routes (Admin-only in Phase A) ──────────────────────────────────────

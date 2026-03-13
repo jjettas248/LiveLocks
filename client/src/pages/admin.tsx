@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle, Trash2, Loader2, Settings, Bell, ChevronUp, Send } from "lucide-react";
+import { MLBAdminTab } from "@/components/mlb-admin-tab";
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
 const TEST_EMAIL_PATTERNS = [
@@ -103,7 +104,7 @@ function getNextResetDisplay(timeStr: string): string {
 export default function AdminPage() {
   const { user, isLoading: authLoading, logout } = useAuth();
   const [, navigate] = useLocation();
-  const [activeTab, setActiveTab] = useState<"users" | "feedback">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "feedback" | "mlb">("users");
   const [tierLoadingId, setTierLoadingId] = useState<number | null>(null);
   const { toast } = useToast();
   const [resetTime, setResetTime] = useState("06:00");
@@ -392,6 +393,13 @@ export default function AdminPage() {
           >
             Feedback
           </button>
+          <button
+            data-testid="tab-mlb-testing"
+            onClick={() => setActiveTab("mlb")}
+            className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${activeTab === "mlb" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+          >
+            MLB Testing
+          </button>
         </div>
 
         {/* Users table */}
@@ -669,6 +677,13 @@ export default function AdminPage() {
             </div>
           </div>
         </div>
+
+        {/* MLB Testing Tab */}
+        {activeTab === "mlb" && (
+          <div data-testid="panel-mlb-testing">
+            <MLBAdminTab />
+          </div>
+        )}
 
       </div>
     </div>
