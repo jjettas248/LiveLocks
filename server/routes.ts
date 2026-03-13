@@ -14,6 +14,15 @@ import { getVapidPublicKey, sendPush } from "./webpush";
 import { checkAndSendAlerts } from "./alertManager";
 import { autoResolveAlerts, autoSettlePersistedPlays } from "./analyticsResolver";
 import { syncMinutesProjections } from "./services/minutesProjectionService";
+import { calculateMLBPropEdge } from "./mlb/markets";
+import {
+  recordMLBDiagnostic,
+  getMLBDiagnosticSummary,
+  getMLBMarketReport,
+  getModifierContributionSummary,
+} from "./mlb/diagnostics";
+import { runBacktest, runBatchInputs } from "./mlb/backtestHarness";
+import { ALL_MLB_MARKETS, type MLBPropInput, type MLBMarket } from "./mlb/types";
 
 // ── Module-level play dedup guard (persists for process lifetime) ─────────────
 const recordedPlayKeys = new Set<string>();
@@ -297,6 +306,215 @@ export async function registerRoutes(
     clearEnrichmentCache();
     const stats = getEnrichmentCacheStats();
     return res.json({ ok: true, stats });
+  });
+
+  // ── MLB Routes (Admin-only in Phase A) ──────────────────────────────────────
+  app.post("/api/mlb/props", requireAdmin, async (req, res) => {
+    try {
+      const raw: Record<string, any> = { ...(req.body ?? {}) };
+
+      const safeStr = (key: string, fallback: string = ""): string => {
+        const v = raw[key];
+        return v != null ? String(v) : fallback;
+      };
+      const safeFloat = (key: string, fallback: number): number => {
+        const v = raw[key];
+        if (v == null) return fallback;
+        const n = parseFloat(String(v));
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const safeInt = (key: string, fallback: number): number => {
+        const v = raw[key];
+        if (v == null) return fallback;
+        const n = parseInt(String(v), 10);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const safeBool = (key: string, fallback: boolean = false): boolean => {
+        const v = raw[key];
+        if (v === true || v === "true") return true;
+        if (v === false || v === "false") return false;
+        return fallback;
+      };
+      const safeJsonArray = (key: string): any[] => {
+        const v = raw[key];
+        if (Array.isArray(v)) return v;
+        if (typeof v === "string" && v.length > 0) {
+          try { return JSON.parse(v); } catch { return []; }
+        }
+        return [];
+      };
+
+      const market = safeStr("market") as MLBMarket;
+      if (!market || !ALL_MLB_MARKETS.includes(market)) {
+        return res.status(400).json({ error: `Invalid market. Must be one of: ${ALL_MLB_MARKETS.join(", ")}` });
+      }
+
+      const bookLine = safeFloat("bookLine", NaN);
+      if (!Number.isFinite(bookLine)) {
+        return res.status(400).json({ error: "bookLine is required and must be a number" });
+      }
+
+      const input: MLBPropInput = {
+        playerId: safeStr("playerId"),
+        playerName: safeStr("playerName"),
+        team: safeStr("team"),
+        opponent: safeStr("opponent"),
+        gameId: safeStr("gameId"),
+        market,
+        bookLine,
+        seasonAvg: safeFloat("seasonAvg", 0),
+        plateAppearances: safeInt("plateAppearances", 0),
+        atBats: safeInt("atBats", 0),
+        currentStatValue: safeFloat("currentStatValue", 0),
+        remainingPA: safeInt("remainingPA", 4),
+        remainingAB: safeInt("remainingAB", 4),
+        completedAB: safeInt("completedAB", 0),
+        inning: safeInt("inning", 1),
+        isTopInning: safeBool("isTopInning"),
+        batterHand: (safeStr("batterHand") as "L" | "R" | "S") || null,
+        pitcherThrows: (raw.pitcherThrows === "L" || raw.pitcherThrows === "R") ? raw.pitcherThrows : undefined,
+        parkHistoryFactor: raw.parkHistoryFactor != null ? safeFloat("parkHistoryFactor", 0) : undefined,
+        bvpPlateAppearances: raw.bvpPlateAppearances != null ? safeInt("bvpPlateAppearances", 0) : undefined,
+        bvpOpsLikeFactor: raw.bvpOpsLikeFactor != null ? safeFloat("bvpOpsLikeFactor", 0) : undefined,
+        pitcherVsHandednessFactor: raw.pitcherVsHandednessFactor != null ? safeFloat("pitcherVsHandednessFactor", 0) : undefined,
+        lineupPocketWeakness: raw.lineupPocketWeakness != null ? safeFloat("lineupPocketWeakness", 0) : undefined,
+        contactQuality: raw.contactQuality && typeof raw.contactQuality === "object"
+          ? raw.contactQuality
+          : {
+              exitVelocity: raw.exitVelocity != null ? safeFloat("exitVelocity", 0) : null,
+              launchAngle: raw.launchAngle != null ? safeFloat("launchAngle", 0) : null,
+              hitDistance: raw.hitDistance != null ? safeFloat("hitDistance", 0) : null,
+              hardHitRateSeason: (raw.hardHitRateSeason ?? raw.hardHitRate) != null ? safeFloat(raw.hardHitRateSeason != null ? "hardHitRateSeason" : "hardHitRate", 0) : null,
+              barrelRateProxySeason: (raw.barrelRateProxySeason ?? raw.barrelRate) != null ? safeFloat(raw.barrelRateProxySeason != null ? "barrelRateProxySeason" : "barrelRate", 0) : null,
+              priorABResults: safeJsonArray("priorABResults"),
+            },
+        pitcher: raw.pitcher && typeof raw.pitcher === "object"
+          ? raw.pitcher
+          : {
+              pitchCount: safeInt("pitchCount", 0),
+              timesThrough: safeInt("timesThrough", 1),
+              era: raw.era != null ? safeFloat("era", 0) : null,
+              whip: raw.whip != null ? safeFloat("whip", 0) : null,
+              kPer9: raw.kPer9 != null ? safeFloat("kPer9", 0) : null,
+              bbPer9: raw.bbPer9 != null ? safeFloat("bbPer9", 0) : null,
+              managerLeashShort: safeBool("managerLeashShort"),
+              isPitcherCollapsing: safeBool("isPitcherCollapsing"),
+              pitchMix: safeJsonArray("pitchMix"),
+              throws: (safeStr("throws") as "L" | "R") || null,
+            },
+        lineup: raw.lineup && typeof raw.lineup === "object"
+          ? raw.lineup
+          : {
+              battingOrderSlot: safeInt("battingOrderSlot", 5),
+              orderTurnoverProximity: safeInt("orderTurnoverProximity", 5),
+              lineupSectionStrength: (safeStr("lineupSectionStrength", "neutral") as "strong" | "neutral" | "weak"),
+              hittersAheadOnBase: safeInt("hittersAheadOnBase", 0),
+              pocketWeakness: raw.pocketWeakness != null ? safeFloat("pocketWeakness", 0) : null,
+            },
+        weatherPark: raw.weatherPark && typeof raw.weatherPark === "object"
+          ? raw.weatherPark
+          : {
+              parkFactor: safeFloat("parkFactor", 1.0),
+              temperature: raw.temperature != null ? safeFloat("temperature", 0) : null,
+              windSpeed: raw.windSpeed != null ? safeFloat("windSpeed", 0) : null,
+              windDirection: (safeStr("windDirection") as "in" | "out" | "cross" | "calm") || null,
+              humidity: raw.humidity != null ? safeFloat("humidity", 0) : null,
+              isIndoors: safeBool("isIndoors"),
+              parkHistoryFactor: raw.parkHistoryFactor != null ? safeFloat("parkHistoryFactor", 0) : null,
+            },
+        bullpen: raw.bullpen && typeof raw.bullpen === "object"
+          ? raw.bullpen
+          : {
+              bullpenEra: raw.bullpenEra != null ? safeFloat("bullpenEra", 0) : null,
+              bullpenUsageLastThreeDays: raw.bullpenUsageLastThreeDays != null ? safeFloat("bullpenUsageLastThreeDays", 0) : null,
+              isTopRelieverAvailable: safeBool("isTopRelieverAvailable", true),
+            },
+        bvpHistory: raw.bvpHistory && typeof raw.bvpHistory === "object"
+          ? raw.bvpHistory
+          : undefined,
+        hrrComponents: raw.hrrComponents && typeof raw.hrrComponents === "object"
+          ? raw.hrrComponents
+          : (raw.hitsRate != null || raw.runsRate != null || raw.rbisRate != null)
+            ? {
+                hitsRate: safeFloat("hitsRate", 0),
+                runsRate: safeFloat("runsRate", 0),
+                rbisRate: safeFloat("rbisRate", 0),
+                currentHits: safeFloat("currentHits", 0),
+                currentRuns: safeFloat("currentRuns", 0),
+                currentRBIs: safeFloat("currentRBIs", 0),
+              }
+            : undefined,
+      };
+
+      const output = calculateMLBPropEdge(input);
+      recordMLBDiagnostic(output);
+      return res.json(output);
+    } catch (err: any) {
+      console.error("[MLB props]", err.message);
+      return res.status(400).json({ error: err.message || "MLB prop engine error" });
+    }
+  });
+
+  app.get("/api/mlb/diagnostics", requireAdmin, async (_req, res) => {
+    try {
+      const summary = getMLBDiagnosticSummary();
+      return res.json(summary);
+    } catch (err: any) {
+      console.error("[MLB diagnostics]", err.message);
+      return res.status(500).json({ error: err.message || "Failed to fetch MLB diagnostics" });
+    }
+  });
+
+  app.post("/api/mlb/backtest", requireAdmin, async (req, res) => {
+    try {
+      const body = req.body ?? {};
+
+      if (Array.isArray(body.inputs)) {
+        if (body.inputs.length === 0) {
+          return res.status(400).json({ error: "inputs array must not be empty" });
+        }
+        if (body.inputs.length > 200) {
+          return res.status(400).json({ error: "Maximum 200 inputs per batch request" });
+        }
+        const result = runBatchInputs(body.inputs);
+        return res.json(result);
+      }
+
+      const { cases } = body;
+      if (!Array.isArray(cases) || cases.length === 0) {
+        return res.status(400).json({
+          error: "Request body must contain either a non-empty 'cases' array (labeled backtest) or 'inputs' array (batch shadow test)",
+        });
+      }
+      if (cases.length > 200) {
+        return res.status(400).json({ error: "Maximum 200 cases per request" });
+      }
+      const result = runBacktest(cases);
+      return res.json(result);
+    } catch (err: any) {
+      console.error("[MLB backtest]", err.message);
+      return res.status(500).json({ error: err.message || "Backtest error" });
+    }
+  });
+
+  app.get("/api/mlb/market-report", requireAdmin, async (_req, res) => {
+    try {
+      const report = getMLBMarketReport();
+      return res.json(report);
+    } catch (err: any) {
+      console.error("[MLB market-report]", err.message);
+      return res.status(500).json({ error: err.message || "Failed to fetch market report" });
+    }
+  });
+
+  app.get("/api/mlb/modifier-summary", requireAdmin, async (_req, res) => {
+    try {
+      const summary = getModifierContributionSummary();
+      return res.json(summary);
+    } catch (err: any) {
+      console.error("[MLB modifier-summary]", err.message);
+      return res.status(500).json({ error: err.message || "Failed to fetch modifier summary" });
+    }
   });
 
   app.get("/api/admin/settings", requireAdmin, async (_req, res) => {
