@@ -9,6 +9,7 @@ export interface MinutesContext {
   avgMinutes: number;
   h2avgMinutes?: number;
   missingStarterCount?: number;
+  projectedMinutes?: number | null;
 }
 
 export interface MinutesResult {
@@ -34,7 +35,8 @@ export function calculateRemainingMinutes(ctx: MinutesContext): MinutesResult {
     (currentPeriod >= 1 && currentPeriod <= 4 ? clockMins : 0);
 
   // ── 1. Base rotation projection ──────────────────────────────────────
-  let baseRotationMinutes = avgMinutes;
+  const rotationBase = ctx.projectedMinutes ?? avgMinutes;
+  let baseRotationMinutes = rotationBase;
   if (currentPeriod >= 3 && ctx.h2avgMinutes !== undefined && ctx.h2avgMinutes > 3) {
     baseRotationMinutes = ctx.h2avgMinutes;
   }
@@ -101,7 +103,7 @@ export function calculateRemainingMinutes(ctx: MinutesContext): MinutesResult {
   }
 
   // ── 8. Max minutes guard ─────────────────────────────────────────────
-  const maxProjectedMinutes = avgMinutes * 1.25;
+  const maxProjectedMinutes = rotationBase * 1.25;
   const maxRemainingAllowed = Math.max(0, maxProjectedMinutes - minutesPlayed);
   remainingMinutes = Math.min(remainingMinutes, maxRemainingAllowed);
 

@@ -1,0 +1,158 @@
+NCAAB CANONICAL MARKET OBJECT REBUILD
+
+Goal
+Rebuild the NCAAB engine/UI contract around a single canonical market object model.
+
+The engine computes markets once.
+The UI renders them directly.
+No legacy fields.
+No UI inference.
+No silent fallbacks.
+
+------------------------------------------------
+
+MARKET CONTRACT
+
+engineOutput.markets = {
+  full_total,
+  full_spread,
+  h1_total,
+  h1_spread,
+  h2_total,
+  h2_spread
+}
+
+Each key is always present.
+
+If a sportsbook line is unavailable or the game state does not permit the market:
+
+available = false
+
+------------------------------------------------
+
+MARKET OBJECT
+
+NCAABMarket fields:
+
+available
+marketKey
+label
+sportsbook
+bookLine
+projection
+modelProb
+bookImpliedProb
+edge
+side
+
+Rules
+
+projection must never be rendered as a sportsbook line
+modelProb must be clamped to [1, 99]
+edge = modelProb - bookImpliedProb
+UI must never compute edge
+
+------------------------------------------------
+
+PHASE A — AUDIT
+
+Scan:
+
+server/ncaabEngine.ts
+server/ncaabService.ts
+client/src/components/ncaab-admin-tab.tsx
+
+List every UI render path reading:
+
+play.overProb
+play.spreadProb
+play.h2EngineOverProb
+play.h2SpreadLine
+marketVerdicts.find()
+
+Return the list with line numbers.
+
+No code changes yet.
+
+------------------------------------------------
+
+PHASE B — ENGINE MARKETS OBJECT
+
+Create NCAABMarket interface.
+
+Create NCAABMarkets record keyed by the six market keys.
+
+Add markets to NCAABEngineOutput.
+
+Populate markets inside runNCAABEngine.
+
+Rules
+
+available = true only when sportsbook line exists and market is valid for game state.
+
+Compute:
+
+bookImpliedProb
+edge
+
+Populate side explicitly.
+
+marketVerdicts should be generated from markets for compatibility.
+
+------------------------------------------------
+
+PHASE C — UI REBUILD
+
+Remove all marketVerdicts.find() calls.
+
+Remove all reads of:
+
+play.overProb
+play.spreadProb
+play.h2EngineOverProb
+play.h2SpreadLine
+
+Render market tabs directly from engineOutput.markets.
+
+If available === false:
+
+render "Unavailable".
+
+No fallback logic.
+
+------------------------------------------------
+
+PHASE D — TOP PLAYS
+
+Create Top Plays feed.
+
+Aggregate markets across all games.
+
+Filter:
+
+available === true
+
+Sort:
+
+Math.abs(edge) descending.
+
+------------------------------------------------
+
+PHASE E — DEAD CODE REMOVAL
+
+Delete:
+
+resolveSpreadVerdict
+resolveVerdictForMarket
+
+Delete:
+
+?? 50 fallbacks
+?? overProb fallbacks
+console guardrail fallbacks
+
+Verify via grep that banned fields are not used in UI rendering.
+
+------------------------------------------------
+
+Return the migration audit before implementing changes.

@@ -57,6 +57,9 @@ export const players = pgTable("players", {
   h2tpg: numeric("h2tpg"),
   h2avgMinutes: numeric("h2_avg_minutes"),
   statsUpdatedAt: timestamp("stats_updated_at"),
+  projectedMinutes: numeric("projected_minutes"),
+  projectionSource: text("projection_source"),
+  projectionUpdatedAt: timestamp("projection_updated_at"),
 });
 
 export const teamDefense = pgTable("team_defense", {
@@ -112,6 +115,7 @@ export const calculateProbabilitySchema = z.object({
   liveFta: z.coerce.number().optional(),
   liveFg3m: z.coerce.number().optional(),
   liveFg3a: z.coerce.number().optional(),
+  direction: z.enum(["OVER", "UNDER"]).optional(),
 });
 
 export type CalculateProbabilityRequest = z.infer<typeof calculateProbabilitySchema>;
@@ -133,6 +137,13 @@ export interface CalcDebug {
   expectedRemainingMinutes?: number;
   closingProbability?: number;
   minutesConfidence?: "low" | "medium" | "high";
+  projectedMinutes?: number | null;
+  projectionSource?: string;
+  volatilityFiltered?: boolean;
+  usageUnderPenaltyApplied?: boolean;
+  comboVariancePenaltyApplied?: boolean;
+  effectiveMinutesBase?: number;
+  rotationSource?: "projected" | "season_avg";
 }
 
 export interface CalculateProbabilityResponse {

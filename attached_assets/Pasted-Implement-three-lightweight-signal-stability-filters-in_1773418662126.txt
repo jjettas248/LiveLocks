@@ -1,0 +1,125 @@
+Implement three lightweight signal-stability filters in the LiveLocks probability engine.
+
+The goal is to reduce volatility from bench players, prevent inflated confidence on high-usage UNDER plays, and slightly account for combo-stat variance.
+
+Do NOT change the core model.
+Do NOT change probability calibration logic.
+Do NOT modify API routes.
+
+Only modify signal generation inside:
+
+server/storage.ts
+
+This logic should run AFTER probability is calculated but BEFORE the signal is surfaced to the user.
+
+
+STEP 1 — Bench Volatility Filter
+
+Bench players create extremely noisy projections due to unpredictable minutes.
+
+Add a filter that prevents signals from surfacing if the player has both:
+
+avgMinutes < 24
+AND
+minutesPlayed < 12
+
+Implementation:
+
+if (avgMinutes < 24 && minutesPlayed < 12) {
+  skipSignal = true
+}
+
+If skipSignal is true, do not return this play in the response.
+
+
+STEP 2 — High Usage UNDER Confidence Penalty
+
+UNDER plays break catastrophically when a high-usage player suddenly takes over late in games.
+
+Add a small confidence penalty for UNDER plays where:
+
+usageRate > 0.26
+
+Implementation:
+
+if (direction === "UNDER" && usageRate > 0.26) {
+  probability -= 3
+}
+
+Clamp probability so it never goes below 2 or above 98.
+
+
+STEP 3 — Combo Stat Variance Adjustment
+
+Combo stats such as PRA, PR, PA, and RA accumulate variance faster than single stats.
+
+Apply a small confidence reduction for combo stat types.
+
+Detect combo stats when statType contains "_".
+
+Implementation:
+
+if (statType.includes("_")) {
+  probability *= 0.97
+}
+
+
+STEP 4 — Execution Order
+
+Ensure filters run in this order:
+
+1. probability calculation
+2. UNDER usage penalty
+3. combo stat variance adjustment
+4. bench volatility filter
+5. edge threshold filtering
+
+
+STEP 5 — Debug Output
+
+Extend the debug object returned from calculateProbability() to include:
+
+volatilityFiltered
+usageUnderPenaltyApplied
+comboVariancePenaltyApplied
+
+Example debug:
+
+debug: {
+  projection,
+  line,
+  edge,
+  probabilityCalibrated,
+  volatilityFiltered,
+  usageUnderPenaltyApplied,
+  comboVariancePenaltyApplied
+}
+
+
+STEP 6 — Constraints
+
+Do NOT modify these systems:
+
+/api/halftime-plays
+/api/live-signals/:gameId
+
+Do NOT change:
+
+calibrateProbability()
+minutesModel.ts
+lineMovement.ts
+
+These filters are purely signal-stability adjustments.
+
+
+STEP 7 — Validation
+
+Ensure TypeScript compiles.
+
+Confirm the following behavior:
+
+Bench players with low minutes do not surface signals.
+
+High-usage UNDER plays have slightly reduced probabilities.
+
+Combo stat probabilities are reduced slightly but still pass edge thresholds if strong.

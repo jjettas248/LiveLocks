@@ -233,6 +233,19 @@ export class DatabaseStorage implements IStorage {
     const usageRate = player.usageRate ? Number(player.usageRate) : 0.22;
     const minutesPlayed = req.halftimeMinutes;
 
+    // ─── Projected minutes (staleness guard: discard if > 24 h old) ─────────
+    const PROJECTION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+    const projectionAge = player.projectionUpdatedAt
+      ? Date.now() - new Date(player.projectionUpdatedAt).getTime()
+      : Infinity;
+    const freshProjectedMinutes: number | null =
+      player.projectedMinutes != null && projectionAge <= PROJECTION_MAX_AGE_MS
+        ? Number(player.projectedMinutes)
+        : null;
+    const projectionSource: string = freshProjectedMinutes !== null
+      ? (player.projectionSource ?? "projected")
+      : "season_avg";
+
     // ─── Any-point remaining minutes calculation ────────────────────────────
     // Determines how many minutes the player is expected to play from now.
     // Handles any game state: pregame, Q1, Q2, halftime, Q3, Q4.
@@ -288,6 +301,7 @@ export class DatabaseStorage implements IStorage {
       avgMinutes,
       h2avgMinutes: h2Min ?? undefined,
       missingStarterCount: 0,
+      projectedMinutes: freshProjectedMinutes,
     });
     const remainingMinutes = minutesResult.expectedRemainingMinutes;
 
@@ -460,9 +474,35 @@ export class DatabaseStorage implements IStorage {
     // ─── Calibrated probability (Step 1) ──────────────────────────────────
     const edge = expectedTotal - req.liveLine;
     const context: "halftime" | "live" = isHalftimeContext ? "halftime" : "live";
-    const probability = calibrateProbability(edge, req.statType, context);
+    let probability = calibrateProbability(edge, req.statType, context);
 
-    console.log(`[calc] ${player.name}: period=${currentPeriod} clock=${req.gameClock ?? "n/a"} gameMinLeft=${gameMinutesRemaining.toFixed(1)} remainMin=${remainingMinutes.toFixed(1)} baseline=${baselineSource} edge=${edge.toFixed(2)} ctxMod=${contextModifier.toFixed(3)} prob=${probability.toFixed(1)}%`);
+    // ─── Signal stability filters (Steps 2-4) ─────────────────────────────
+    // Step 2 — UNDER usage penalty
+    const direction = req.direction ?? (probability < 50 ? "UNDER" : "OVER");
+    let usageUnderPenaltyApplied = false;
+    if (direction === "UNDER" && usageRate > 0.26) {
+      probability = Math.min(98, Math.max(2, probability - 3));
+      usageUnderPenaltyApplied = true;
+    }
+
+    // Step 3 — Combo stat variance
+    let comboVariancePenaltyApplied = false;
+    if (req.statType.includes("_")) {
+      probability = Math.min(98, Math.max(2, probability * 0.97));
+      comboVariancePenaltyApplied = true;
+    }
+
+    // Step 4 — Projected-minutes-aware bench volatility filter
+    const effectiveMinutesBase = freshProjectedMinutes ?? avgMinutes;
+    const rotationSource: "projected" | "season_avg" =
+      freshProjectedMinutes !== null ? "projected" : "season_avg";
+    let volatilityFiltered = false;
+    if (effectiveMinutesBase < 24 && minutesPlayed < 12) {
+      probability = Math.min(98, Math.max(2, probability * 0.92));
+      volatilityFiltered = true;
+    }
+
+    console.log(`[calc] ${player.name}: period=${currentPeriod} clock=${req.gameClock ?? "n/a"} gameMinLeft=${gameMinutesRemaining.toFixed(1)} remainMin=${remainingMinutes.toFixed(1)} baseline=${baselineSource} edge=${edge.toFixed(2)} ctxMod=${contextModifier.toFixed(3)} prob=${probability.toFixed(1)}% rotSrc=${rotationSource}`);
 
     const debug: CalcDebug = {
       projection: Math.round(expectedTotal * 10) / 10,
@@ -481,6 +521,13 @@ export class DatabaseStorage implements IStorage {
       expectedRemainingMinutes: minutesResult.expectedRemainingMinutes,
       closingProbability: minutesResult.closingProbability,
       minutesConfidence: minutesResult.minutesConfidence,
+      projectedMinutes: freshProjectedMinutes,
+      projectionSource,
+      volatilityFiltered,
+      usageUnderPenaltyApplied,
+      comboVariancePenaltyApplied,
+      effectiveMinutesBase,
+      rotationSource,
     };
 
     return {

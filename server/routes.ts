@@ -13,6 +13,7 @@ import { registerStripeRoutes } from "./stripeService";
 import { getVapidPublicKey, sendPush } from "./webpush";
 import { checkAndSendAlerts } from "./alertManager";
 import { autoResolveAlerts, autoSettlePersistedPlays } from "./analyticsResolver";
+import { syncMinutesProjections } from "./services/minutesProjectionService";
 
 // ── Module-level play dedup guard (persists for process lifetime) ─────────────
 const recordedPlayKeys = new Set<string>();
@@ -1620,7 +1621,28 @@ export async function registerRoutes(
     res.json({ message: "Stats sync started (NBA.com + NBaStuffer + ESPN)", status: "background" });
   });
 
+  app.post("/api/admin/sync-minutes-projections", requireAdmin, async (_req, res) => {
+    try {
+      const result = await syncMinutesProjections();
+      res.json({ message: "Minutes projection sync complete", ...result });
+    } catch (err: unknown) {
+      console.error("[admin] sync-minutes-projections error:", err);
+      res.status(500).json({ error: "Projection sync failed" });
+    }
+  });
+
   await seedDatabase();
+
+  // ── Projected minutes: sync on startup + every 30 min ───────────────────
+  syncMinutesProjections().catch((err: unknown) =>
+    console.error("[startup] Minutes projection sync failed:", err)
+  );
+  setInterval(() => {
+    syncMinutesProjections().catch((err: unknown) =>
+      console.error("[interval] Minutes projection sync failed:", err)
+    );
+  }, 30 * 60 * 1000);
+
   return httpServer;
 }
 

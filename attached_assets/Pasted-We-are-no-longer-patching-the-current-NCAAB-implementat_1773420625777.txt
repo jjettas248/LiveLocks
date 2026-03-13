@@ -1,0 +1,72 @@
+We are no longer patching the current NCAAB implementation.
+
+Rebuild the NCAAB engine/UI contract from scratch around a single canonical market object model.
+
+Goal:
+NCAAB should work like NBA/MLB:
+engine computes markets once, UI renders them directly, no legacy fields, no fallbacks, no inferred markets.
+
+Rules:
+- Do not patch old play-level fields
+- Do not add more fallbacks
+- Do not use arrays for market lookup if keyed objects can be used
+- Do not let the UI infer probabilities, lines, or sides
+- Do not let engine projections masquerade as sportsbook lines
+- If a market is unavailable, it should be explicitly unavailable
+
+Create this structure on engineOutput:
+
+engineOutput.markets = {
+  full_total: {
+    available,
+    marketKey,
+    label,
+    sportsbook,
+    bookLine,
+    projection,
+    modelProb,
+    bookImpliedProb,
+    edge,
+    side
+  },
+  full_spread: {...},
+  h1_total: {...},
+  h1_spread: {...},
+  h2_total: {...},
+  h2_spread: {...}
+}
+
+Requirements:
+1. Build a clean typed market object model in the engine
+2. Populate each market only if a real sportsbook line exists
+3. Add book implied probability and edge for each market
+4. Keep backward compatibility only if absolutely required, but do not let legacy fields drive the UI
+5. Rebuild the NCAAB UI to render directly from engineOutput.markets
+6. Remove all UI market reconstruction logic
+7. Remove all silent fallbacks to full-game values, 50%, or projected lines
+8. If no book line exists, render the market as unavailable
+9. Add a clean Top Plays section driven by edge, not by legacy sort fields
+10. Add Add to Bet Card support per market using the canonical market object
+
+Do this in phases:
+
+Phase A:
+Audit existing NCAAB engine and UI dependencies and list all legacy fields still driving the UI.
+
+Phase B:
+Implement engineOutput.markets and populate all six live markets:
+- full_total
+- full_spread
+- h1_total
+- h1_spread
+- h2_total
+- h2_spread
+
+Phase C:
+Rebuild the NCAAB UI to consume only engineOutput.markets.
+
+Phase D:
+Remove dead legacy reads and verify no UI component depends on play.overProb, play.spreadProb, play.h2EngineOverProb, play.h2SpreadLine, or inline probability formatting.
+
+Return the migration plan first before changing code.
+Do not run long validation loops automatically.
