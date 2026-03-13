@@ -1,4 +1,4 @@
-import { runNCAABEngine, type NCAABEngineOutput, type RecommendedSide } from "./ncaabEngine";
+import { runNCAABEngine, ALL_MARKET_KEYS, type NCAABEngineOutput, type RecommendedSide } from "./ncaabEngine";
 import { logSettledPlay } from "./ncaabDiagnostics";
 
 const ODDS_API_KEY = process.env.ODDS_API_KEY;
@@ -1050,6 +1050,16 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       };
 
       const engineOutput = runNCAABEngine(engineInput);
+
+      if (!engineOutput.markets) {
+        console.error("NCAAB canonical market contract violation", { gameId: game.id, missingKey: "markets" });
+      } else {
+        for (const key of ALL_MARKET_KEYS) {
+          if (!(key in engineOutput.markets)) {
+            console.error("NCAAB canonical market contract violation", { gameId: game.id, missingKey: key });
+          }
+        }
+      }
 
       if (engineOutput.projectedTotal !== null && total !== null) {
         lastEngineOutputByGame.set(game.id, {

@@ -120,6 +120,7 @@ export interface NCAABDebugMarketEntry {
   modelProb: number | null;
   bookImpliedProb: number | null;
   edge: number | null;
+  confidenceTier: MarketConfidenceTier;
 }
 
 // ── Projection Result ─────────────────────────────────────────────────────────
@@ -815,6 +816,15 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
   const warnings: string[] = [];
   const explanationBullets: string[] = [];
 
+  const oddsCache = new Map<number, number>();
+  function cachedAmericanToImpliedPct(odds: number): number {
+    const cached = oddsCache.get(odds);
+    if (cached !== undefined) return cached;
+    const result = americanToImpliedPct(odds);
+    oddsCache.set(odds, result);
+    return result;
+  }
+
   const projection = calculateNCAABProjection(input);
   const probabilities = calculateNCAABProbabilities(input, projection);
 
@@ -853,7 +863,7 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
   }
 
   const impliedBookOverProb = input.overOddsAmerican !== null
-    ? americanToImpliedPct(input.overOddsAmerican)
+    ? cachedAmericanToImpliedPct(input.overOddsAmerican)
     : null;
   const impliedBookUnderProb = impliedBookOverProb !== null
     ? round1(100 - impliedBookOverProb)
@@ -933,6 +943,9 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
     sportsbook: string | null,
   ): NCAABMarket {
     const label = MARKET_LABELS[key];
+    if (projectionVal !== null && (!isFinite(projectionVal) || isNaN(projectionVal))) {
+      return unavailableMarket(key, label);
+    }
     const modelProb = clampProb(modelProbRaw);
     if (modelProb === null || bookLine === null) {
       return unavailableMarket(key, label);
@@ -948,8 +961,11 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
     if (oddsInvalid) {
       return unavailableMarket(key, label);
     }
-    const bookImpliedProb = round1(americanToImpliedPct(bookOdds));
+    const bookImpliedProb = round1(cachedAmericanToImpliedPct(bookOdds));
     const edge = round1(modelProb - bookImpliedProb);
+    if (!isFinite(edge) || isNaN(edge)) {
+      return unavailableMarket(key, label);
+    }
     const isSpread = key.includes("spread");
     const side: MarketSide = isSpread
       ? (modelProb > 55 ? "HOME" : modelProb < 45 ? "AWAY" : null)
@@ -1056,6 +1072,7 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
           modelProb: markets[key].modelProb,
           bookImpliedProb: markets[key].bookImpliedProb,
           edge: markets[key].edge,
+          confidenceTier: markets[key].confidenceTier,
         }))
       : undefined;
 
@@ -1134,6 +1151,28 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
   engineOutput.displayOutput = buildNCAABDisplayOutput(engineOutput);
 
   return engineOutput;
+}
+
+export function buildTopPlaysFeed(
+  outputs: Array<NCAABEngineOutput & { gameId: string }>,
+): NCAABMarket[] {
+  const bestByKey = new Map<string, { market: NCAABMarket; absEdge: number }>();
+  for (const output of outputs) {
+    for (const key of ALL_MARKET_KEYS) {
+      const mkt = output.markets[key];
+      if (!mkt.available || mkt.edge === null) continue;
+      const absEdge = Math.abs(mkt.edge);
+      const dedupeKey = `${output.gameId}:${mkt.marketKey}`;
+      const existing = bestByKey.get(dedupeKey);
+      if (!existing || absEdge > existing.absEdge) {
+        bestByKey.set(dedupeKey, { market: mkt, absEdge });
+      }
+    }
+  }
+  return Array.from(bestByKey.values())
+    .sort((a, b) => b.absEdge - a.absEdge)
+    .slice(0, 20)
+    .map(e => e.market);
 }
 
 function computeTeamTotalProb(proj: number, line: number, secsRemaining: number): number {
