@@ -1,0 +1,444 @@
+Execute MLB Phase A automation infrastructure for LiveLocks.
+
+Goal
+Remove manual setup for MLB props by automatically discovering games, pulling live data, caching signals, and triggering engine recalculations.
+
+The MLB prop engine logic already exists.
+This task builds the **data automation layer + orchestrator + game discovery system**.
+
+---
+
+# CRITICAL DO NOT MODIFY
+
+Do NOT modify the following files:
+
+server/mlb/calibration.ts
+server/mlb/probability.ts
+server/mlb/projections.ts
+server/mlb/featureEngineering.ts
+server/mlb/diagnostics.ts
+server/mlb/dataSources.ts
+server/mlb/backtestHarness.ts
+
+Do NOT modify:
+
+NBA engine
+NCAAB engine
+
+This task only adds infrastructure around the engine.
+
+---
+
+# PART 1 — GAME DISCOVERY SERVICE (Task #21)
+
+Create:
+
+server/mlb/gameDiscoveryService.ts
+
+Purpose
+Automatically discover today's MLB games and register them with the live orchestrator.
+
+Use MLB Stats API.
+
+Endpoint:
+
+https://statsapi.mlb.com/api/v1/schedule?sportId=1
+
+Filter:
+
+games where
+status.abstractGameState === "Live" OR "Preview"
+
+Extract:
+
+gamePk
+home team
+away team
+probable pitchers
+game start time
+
+Structure:
+
+export interface MLBGame {
+
+gameId: string
+homeTeam: string
+awayTeam: string
+startTime: string
+homePitcher?: string
+awayPitcher?: string
+
+}
+
+Create:
+
+async function discoverTodaysGames(): Promise<MLBGame[]>
+
+Return list of MLBGame objects.
+
+---
+
+# PART 2 — LIVE GAME REGISTRY
+
+Create:
+
+server/mlb/liveGameRegistry.ts
+
+Purpose
+Track active games for the orchestrator.
+
+Store:
+
+const activeGames = new Map<string, MLBGame>()
+
+Functions:
+
+registerGame(game: MLBGame)
+
+removeGame(gameId: string)
+
+getActiveGames(): MLBGame[]
+
+clearRegistry()
+
+---
+
+# PART 3 — DATA PULL SERVICE
+
+Create:
+
+server/mlb/dataPullService.ts
+
+Cache object:
+
+const mlbGameCache = {
+
+gameState: {},
+contactData: {},
+pitcherContext: {},
+weather: {},
+bullpen: {}
+
+}
+
+Implement functions:
+
+syncGameState(gameId)
+
+Use:
+
+https://statsapi.mlb.com/api/v1.1/game/{gamePk}/feed/live
+
+Extract:
+
+inning
+top/bottom
+outs
+runners on base
+current batter
+batting order
+pitcher in game
+pitch count
+times through order
+
+Store result:
+
+mlbGameCache.gameState[gameId]
+
+---
+
+syncContactData(gameId)
+
+Source:
+
+https://baseballsavant.mlb.com/gf?game_pk={gamePk}
+
+Extract:
+
+exit velocity
+launch angle
+hit distance
+barrel %
+hard hit %
+
+Store:
+
+mlbGameCache.contactData[gameId]
+
+---
+
+syncPitcherContext(gameId)
+
+Extract:
+
+pitch mix
+pitch count
+velocity
+times through order
+
+Detect:
+
+velocity drop
+
+Store:
+
+mlbGameCache.pitcherContext[gameId]
+
+---
+
+syncWeather(gameId)
+
+Use ESPN or OpenWeather.
+
+Extract:
+
+wind speed
+wind direction
+temperature
+humidity
+
+Store:
+
+mlbGameCache.weather[gameId]
+
+---
+
+syncBullpenUsage(gameId)
+
+Extract:
+
+relievers used last 3 days
+bullpen ERA
+top reliever availability
+
+Store:
+
+mlbGameCache.bullpen[gameId]
+
+---
+
+All scrapers must:
+
+wrap requests in try/catch
+timeout after 8 seconds
+log errors but never crash server
+
+---
+
+# PART 4 — REMAINING PA ESTIMATOR
+
+Create:
+
+server/mlb/paEstimator.ts
+
+Function:
+
+estimateRemainingPA(
+
+inning: number
+isTopInning: boolean
+battingOrderSlot: number
+
+)
+
+Baseline assumption:
+
+4 plate appearances per game.
+
+Calculate:
+
+remainingInnings = 9 - inning
+
+Apply lineup multiplier:
+
+const slotMultiplier = {
+
+1:1.1,
+2:1.08,
+3:1.05,
+4:1.02,
+5:1.0,
+6:0.97,
+7:0.94,
+8:0.92,
+9:0.9
+
+}
+
+Return:
+
+remainingPA
+remainingAB
+
+---
+
+# PART 5 — LIVE GAME ORCHESTRATOR
+
+Create:
+
+server/mlb/liveGameOrchestrator.ts
+
+Purpose
+Central heartbeat of MLB engine.
+
+Responsibilities:
+
+discover games
+register games
+poll game data
+detect state changes
+trigger engine recalculations
+
+Structure:
+
+class LiveGameOrchestrator {
+
+activeGames: Set<string>
+
+start()
+
+stop()
+
+pollGames()
+
+pollGame(gameId)
+
+detectStateChange(oldState,newState)
+
+triggerEngine(gameId)
+
+}
+
+---
+
+# PART 6 — POLLING INTERVALS
+
+Implement timers:
+
+Game discovery:
+
+every 5 minutes
+
+discoverTodaysGames()
+
+register new games.
+
+---
+
+Game state polling:
+
+every 15 seconds
+
+syncGameState(gameId)
+
+---
+
+Contact quality polling:
+
+every 30 seconds
+
+syncContactData(gameId)
+
+---
+
+Weather polling:
+
+every 10 minutes
+
+syncWeather(gameId)
+
+---
+
+Bullpen updates:
+
+trigger on inning change.
+
+---
+
+# PART 7 — ENGINE TRIGGERS
+
+When state changes:
+
+new plate appearance
+ball in play
+inning change
+pitcher change
+runner state change
+
+Call:
+
+runMLBPropEngine(gameId)
+
+Engine recomputes all edges.
+
+---
+
+# PART 8 — ADMIN FORCE REFRESH
+
+Create route:
+
+POST /api/mlb/refresh-data
+
+Admin only.
+
+Body:
+
+gameId
+
+Execute:
+
+syncGameState
+syncContactData
+syncPitcherContext
+syncWeather
+syncBullpenUsage
+
+Then call:
+
+runMLBPropEngine(gameId)
+
+Return updated prop edges.
+
+---
+
+# PART 9 — ENGINE DATA SOURCE
+
+Modify engine input resolution to read from:
+
+mlbGameCache
+
+If cache exists, use cached values.
+
+If not, fallback to manual input.
+
+---
+
+# PART 10 — TYPESCRIPT
+
+Run:
+
+npm run check
+
+Must return:
+
+0 TypeScript errors.
+
+---
+
+# EXPECTED OUTPUT
+
+Replit should return:
+
+created files:
+
+server/mlb/gameDiscoveryService.ts
+server/mlb/liveGameRegistry.ts
+server/mlb/dataPullService.ts
+server/mlb/liveGameOrchestrator.ts
+server/mlb/paEstimator.ts
+
+modified:
+
+server/routes.ts
+
+Include diff summary of all changes.
