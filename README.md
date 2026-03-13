@@ -1,6 +1,6 @@
 # LiveLocks by PropPulse
 
-Real-time sports betting analytics for NBA and NCAAB. Live prop probabilities, halftime 2H plays, full-slate NCAAB coverage, and automatic edge detection in the live box score.
+Real-time sports betting analytics for NBA, NCAAB, and MLB. Live prop probabilities, halftime 2H plays, full-slate NCAAB coverage, MLB Phase A engine, and automatic edge detection in the live box score.
 
 **Live at**: `https://livelocks.replit.app`
 
@@ -8,17 +8,21 @@ Real-time sports betting analytics for NBA and NCAAB. Live prop probabilities, h
 
 ## What It Does
 
-LiveLocks pulls real-time game data, live box scores, and sportsbook odds to compute the probability of a player hitting a live prop line. It factors in current pace, defensive matchup, foul trouble, and game context — giving you an edge the sportsbook doesn't show you.
+LiveLocks pulls real-time game data, live box scores, and sportsbook odds to compute the probability of a player hitting a live prop line. It factors in current pace, defensive matchup, foul trouble, rotation-based projected minutes, and game context — giving you an edge the sportsbook doesn't show you.
 
 ### Key Features
 
 - **Live NBA box score** with real-time stats, color-coded row/cell highlights when the engine detects an edge on a player's prop line (any quarter, not just halftime)
 - **Live prop calculator** — click any player row to auto-fill; probability gauge updates instantly
-- **NBA 2H Plays** — halftime engine scans all live halftime games, runs each player's remaining-game probability against real book lines, surfaces top plays sorted by edge confidence
-- **NCAAB full slate** — all Division I games daily, live scores, 2H plays with spread/total/team-total projections, H2 engine vs. book comparison
+- **NBA 2H Plays** — halftime engine scans all live halftime games, runs each player's remaining-game probability against real book lines, surfaces top plays sorted by edge confidence. Free users see the first 5 edges; remaining plays are blurred with teaser values and an upgrade banner
+- **NCAAB full slate** — all Division I games daily, live scores, canonical market objects (Full Game, H1, H2), Top Plays feed displayed above Today's Games, book filter pills (All / DK / FD / HR / ESPN Bet), ELV/CLV enrichment labels, H2H matchup toggle
+- **MLB Phase A engine** — 7 live prop markets (strikeouts, total bases, hits, RBI, runs, walks, stolen bases), contact-quality signal pipeline, admin-only testing panel, roster service, automation infrastructure. Gated to All Sports subscribers
+- **Landing page** — public marketing page at `/` with real product screenshots (dashboard preview and SMS alerts), feature highlights, pricing cards, and CTA. Authenticated users redirect to `/dashboard`
+- **Signal stability filters** — 3 post-calibration filters: low-minute bench volatility dampener, high-usage UNDER collapse guard, combo-stat variance dampener
 - **Parlay builder** — correlation-adjusted parlays with deeplinks to DraftKings, FanDuel, Hard Rock
 - **Multi-channel alerts** — web push and SMS (Pro/All Sports) for high-confidence plays
 - **PWA** — installable on mobile, works offline for cached content
+- **SEO metadata** — OpenGraph and Twitter card tags planned for all public pages
 
 ---
 
@@ -51,15 +55,25 @@ LiveLocks pulls real-time game data, live box scores, and sportsbook odds to com
 │   │   └── manifest.json            # PWA manifest
 │   └── src/
 │       ├── pages/
-│       │   ├── dashboard.tsx        # Main app — NBA/NCAAB calculator, box score, parlay
-│       │   ├── admin.tsx            # Admin panel (user management, feedback, slate reset)
+│       │   ├── landing.tsx          # Public marketing landing page
+│       │   ├── dashboard.tsx        # Main app — NBA/NCAAB/MLB calculator, box score, parlay
+│       │   ├── admin.tsx            # Admin panel (user management, feedback, slate reset, MLB testing)
 │       │   ├── auth.tsx             # Login / Register
+│       │   ├── privacy.tsx          # Privacy policy
+│       │   ├── terms.tsx            # Terms of service
 │       │   └── not-found.tsx
 │       ├── components/
+│       │   ├── DashboardPreview.tsx # Landing page dashboard preview
 │       │   ├── ncaab-admin-tab.tsx  # Full NCAAB live tab component
+│       │   ├── mlb-admin-tab.tsx    # MLB admin testing panel
 │       │   ├── parlay-slip.tsx      # Parlay builder
 │       │   ├── upgrade-modal.tsx    # Paywall modal
 │       │   ├── feedback-modal.tsx   # User feedback form
+│       │   ├── alerts-onboarding-modal.tsx  # Post-login alert opt-in
+│       │   ├── welcome-banner.tsx   # New-user welcome banner
+│       │   ├── probability-ring.tsx # Circular probability gauge
+│       │   ├── stat-card.tsx        # Stat display card
+│       │   ├── analytics-tab.tsx    # Analytics view
 │       │   └── ui/                  # shadcn/ui components
 │       ├── hooks/
 │       │   ├── use-auth.ts          # Auth state + JWT
@@ -70,7 +84,7 @@ LiveLocks pulls real-time game data, live box scores, and sportsbook odds to com
 │   ├── index.ts                     # Express app setup, session, Stripe sync
 │   ├── routes.ts                    # All API endpoints + data scrapers
 │   ├── auth.ts                      # JWT, bcrypt, requireAuth/requireTier middleware
-│   ├── storage.ts                   # Database interface (Drizzle)
+│   ├── storage.ts                   # Database interface (Drizzle) + probability engine + stability filters
 │   ├── db.ts                        # Drizzle client
 │   ├── oddsService.ts               # The Odds API + SGO integration
 │   ├── ncaabService.ts              # NCAAB full-slate engine
@@ -78,14 +92,45 @@ LiveLocks pulls real-time game data, live box scores, and sportsbook odds to com
 │   ├── parlayService.ts             # Parlay correlation engine
 │   ├── stripeService.ts             # Stripe checkout + subscription sync
 │   ├── stripeClient.ts              # Stripe SDK client
-│   └── webhookHandlers.ts           # Stripe + Twilio webhook handlers
+│   ├── webhookHandlers.ts           # Stripe + Twilio webhook handlers
+│   └── mlb/                         # MLB Phase A engine
+│       ├── types.ts                 # MLB type definitions
+│       ├── markets.ts               # 7 prop market configs (K, TB, H, RBI, R, BB, SB)
+│       ├── rosterService.ts         # MLB roster sync from ESPN
+│       ├── probability.ts           # MLB prop probability model
+│       ├── projections.ts           # Player stat projections
+│       ├── calibration.ts           # Model calibration
+│       ├── featureEngineering.ts    # Contact-quality signal features
+│       ├── paEstimator.ts           # PA estimator
+│       ├── dataSources.ts           # External data source adapters
+│       ├── dataPullService.ts       # Periodic data pull orchestration
+│       ├── gameDiscoveryService.ts  # Live game detection
+│       ├── liveGameOrchestrator.ts  # Continuous live game polling
+│       ├── liveGameRegistry.ts      # Active game state registry
+│       ├── backtestHarness.ts       # Backtest framework
+│       └── diagnostics.ts          # Debug and diagnostic utilities
 ├── shared/
 │   ├── schema.ts                    # Drizzle schema + Zod types (shared)
 │   └── routes.ts                    # API route constants (shared)
-├── PRD.md                           # Full product requirements document
+├── PRD.md                           # Full product requirements document (v4.0)
+├── CHANGELOG.md                     # Reverse-chronological project changelog
 ├── README.md                        # This file
 └── replit.md                        # Architecture notes for Replit agent
 ```
+
+---
+
+## Routes
+
+| Path | Visibility | Description |
+|------|-----------|-------------|
+| `/` | Public | Landing page (redirects to `/dashboard` if authenticated) |
+| `/landing` | Public | Landing page (direct access) |
+| `/auth` | Public | Login / Register |
+| `/dashboard` | Authenticated | Main application (NBA, NCAAB, MLB tabs) |
+| `/admin` | Admin | Admin panel |
+| `/privacy` | Public | Privacy policy |
+| `/terms` | Public | Terms of service |
 
 ---
 
@@ -146,7 +191,7 @@ Set these in Replit's Secrets panel:
 |------|-------|-------------|--------|
 | Free | $0 | `null` | 15 probability calculations then paywall |
 | Pro | $40/mo | `"all"` | Unlimited NBA + NCAAB live + 2H Plays + SMS + Push |
-| All Sports | $65/mo | `"elite"` | Everything in Pro + MLB Live (coming soon) + Priority SMS |
+| All Sports | $65/mo | `"elite"` | Everything in Pro + MLB Live (Phase A — admin testing; public in Phase B) + Priority SMS |
 | Admin | — | — | Full access, no limits |
 
 ---
@@ -202,15 +247,26 @@ Set these in Replit's Secrets panel:
 
 ### NBA Live Props
 
+The engine uses a rotation-based minutes model that replaced the original scaling formula. It factors in projected minutes from daily ingestion, foul reduction curves, rotation patterns, and blowout adjustments.
+
 1. **Blended rate**: `observedRate × 0.7 + seasonBaseline × 0.3`
 2. **Foul penalty**: 3 fouls = 30% minute reduction; 4+ fouls = 55% reduction
-3. **Remaining minutes**: projected from current period + game clock
+3. **Remaining minutes**: rotation-based projection from current period + game clock, incorporating projected minutes (when fresh) or season average fallback
 4. **Expected total**: `currentStat + (projectedMinutes × blendedRate)`
 5. **Defense adjustment**: opponent `defRating` (0.88–1.12 scale)
 6. **Pace adjustment**: blends team historical pace with live game pace (score-based)
 7. **Probability**: `50 + difference × scaleFactor` (clamped 2–98%)
+8. **Calibration**: `calibrateProbability()` applies game-state intelligence (game script divergence, OT probability)
 
 Scale factors: points=8, rebounds/assists=10, steals/blocks=15, combos=6
+
+### Signal Stability Filters (Post-Calibration)
+
+Three filters run after calibration to reduce noise before signals reach users:
+
+1. **Low-minute bench volatility filter**: When `effectiveMinutesBase < 24 AND minutesPlayed < 12`, probability is multiplied by 0.92. Prevents noisy projections from low-minute bench players while preserving signal for expanded-role players.
+2. **High-usage UNDER collapse guard**: UNDER calls where `usageRate > 0.26` have probability reduced by 3 points. Guards against late-game collapses by high-usage stars.
+3. **Combo-stat variance dampener**: Combo markets (stat type contains `_`) have probability multiplied by 0.97. Accounts for inherently higher variance in multi-stat markets.
 
 ### Live Box Score Edge Signals (`/api/live-signals/:gameId`)
 
@@ -245,10 +301,10 @@ Scans all live halftime games simultaneously. For each player at halftime:
 
 | Source | Data | Refresh |
 |--------|------|---------|
-| ESPN API | Live scores, box scores, injuries, rosters | 30–90s |
+| ESPN API | Live scores, box scores, injuries, rosters (NBA + NCAAB + MLB) | 30–90s |
 | The Odds API | Prop lines (DK, FD, HR, FanDuel, ESPN Bet) | 90s live / 5min pre-game |
 | Sports Game Odds (SGO) | NCAAB 1H lines, team totals, fallback prop lines | 5 min |
-| NBA.com / ESPN stats | Season per-game averages, H2 splits | Daily (sync on demand) |
+| NBA.com / ESPN Stats | Season per-game averages, H2 splits | Daily (sync on demand) |
 
 ---
 
@@ -277,6 +333,7 @@ When you open the box score for any live NBA game, the app:
 
 | Checkpoint | Description |
 |-----------|-------------|
+| Current | MLB Phase A engine, NCAAB canonical market rebuild, signal stability filters, landing page with real screenshots |
 | `e6d58886523a1fb879e0abe54e1b579fa233d686` | Production deployment — live signals + NCAAB 2H engine |
 | `b9f431cd22f951b4f7aef34657876ee01dcdc336` | Stable NBA baseline pre-NCAAB |
 
@@ -286,7 +343,14 @@ To roll back: open Replit chat and ask to revert to a commit ID.
 
 ## Roadmap
 
-- MLB Live integration (All Sports tier gate already in place)
-- Player prop trend charts / historical hit rate
-- User notification history log
-- NFL Live (future)
+| Priority | Feature | Status |
+|----------|---------|--------|
+| High | MLB Phase B — expanded markets, public-facing tab, live game cards | Planned |
+| High | Projected minutes ingestion from RotoWire / free public sources | Planned |
+| High | Proof of Edges landing section — real-world edge outputs showcase | Planned |
+| Medium | SEO metadata and social sharing improvements | Planned |
+| Medium | Player prop trend charts / historical hit rate | Planned |
+| Medium | User notification history log | Planned |
+| Medium | Parlay builder deep-link improvements | Partial (DK/FD/HR/Bet365 live) |
+| Low | NFL Live integration | Future |
+| Low | Mobile app (React Native) | Future |

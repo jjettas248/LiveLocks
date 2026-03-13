@@ -1,14 +1,14 @@
 # LiveLocks by PropPulse — Product Requirements Document
 
-**Version**: 3.0
+**Version**: 4.0
 **Last Updated**: March 2026
-**Status**: Active — NBA + NCAAB Live, MLB Planned
+**Status**: Active — NBA + NCAAB Live, MLB Phase A (Admin), Planned expansion
 
 ---
 
 ## 1. Product Overview
 
-LiveLocks by PropPulse is a real-time sports betting analytics platform for serious NBA and NCAAB bettors. It surfaces live in-game probability models, 2nd-half play recommendations, and NCAAB full-slate coverage — delivered as a PWA with push notifications and SMS alerts.
+LiveLocks by PropPulse is a real-time sports betting analytics platform for serious NBA, NCAAB, and MLB bettors. It surfaces live in-game probability models, 2nd-half play recommendations, full-slate NCAAB coverage, and an MLB Phase A prop engine — delivered as a PWA with push notifications and SMS alerts.
 
 ### Vision
 
@@ -19,8 +19,10 @@ Give serious sports bettors a data edge through live statistical modeling they c
 - **Live prop calculator**: Real-time player prop probability updated as the game progresses, for any quarter (Q1–Q4)
 - **Live box score edge detection**: Automatic row/cell color-coding when the engine finds an edge on any player's book line — no manual input required
 - **2H Plays**: Halftime engine recalculates full-game prop projections for all live halftime games simultaneously, surfaces top plays sorted by confidence
-- **Full NCAAB slate**: All Division I games covered daily with 2H spread/total/team-total projections
+- **Full NCAAB slate**: All Division I games covered daily with canonical market objects, Top Plays feed, book filter pills, ELV/CLV enrichment
+- **MLB Phase A**: 7 live prop markets with contact-quality signal pipeline, admin-only testing, roster service, and automation infrastructure
 - **Multi-channel alerts**: Web push and SMS for high-confidence plays and new halftime triggers
+- **Landing page**: Public entry point with real product screenshots, feature highlights, pricing, and upgrade CTAs
 
 ---
 
@@ -30,11 +32,11 @@ Give serious sports bettors a data edge through live statistical modeling they c
 
 | Role | Access |
 |------|--------|
-| Guest (not logged in) | Registration and login pages only |
-| Free (registered, no subscription) | 15 live NBA prop calculations, then paywall |
+| Guest (not logged in) | Landing page, privacy, terms, registration and login pages |
+| Free (registered, no subscription) | 15 live NBA prop calculations, then paywall; first 5 2H Play edges visible, rest blurred |
 | Pro | Unlimited NBA + NCAAB live + 2H Plays + Push + SMS |
-| All Sports | Everything in Pro + MLB Live (coming soon) + Priority SMS |
-| Admin | Full access to all features + admin panel + no limits |
+| All Sports | Everything in Pro + MLB Live + Priority SMS |
+| Admin | Full access to all features + admin panel + MLB testing tab + no limits |
 
 **Admin account**: Set via `ADMIN_EMAIL` environment variable at registration time.
 
@@ -44,10 +46,10 @@ Give serious sports bettors a data edge through live statistical modeling they c
 |---------|------|-------------|-------------------|
 | NBA Live Props | 15 plays then paywall | Unlimited | Unlimited |
 | Live Box Score Edge Signals | No | Yes | Yes |
-| NBA 2H Plays | Teaser view (blurred) | Yes | Yes |
+| NBA 2H Plays | First 5 edges visible, rest blurred with teaser values | Yes | Yes |
 | NCAAB Live | No | Yes | Yes |
 | NCAAB 2H Plays | No | Yes | Yes |
-| MLB Live | No | No | Coming Soon |
+| MLB Live | No | No | Yes (Phase A — admin testing) |
 | Push Notifications | No | Yes | Yes |
 | SMS Alerts | No | Yes | Yes (Priority) |
 | Parlay Builder | Yes (within play limit) | Yes | Yes |
@@ -60,7 +62,29 @@ Free users may perform **15 live prop calculations** before hitting the upgrade 
 
 ---
 
-## 3. Navigation and Tab Structure
+## 3. Navigation and User Journey
+
+### 3.1 Landing Page Journey
+
+| Step | Route | Description |
+|------|-------|-------------|
+| 1 | `/` | Guest lands on the public landing page with real product screenshots, feature highlights, and pricing cards |
+| 2 | `/auth` | Guest clicks "Get Started" or "Sign Up" CTA and is taken to the auth page |
+| 3 | `/dashboard` | After login, user is redirected to the main dashboard. Returning authenticated users hitting `/` are auto-redirected to `/dashboard` |
+
+### 3.2 Route Table
+
+| Path | Auth Required | Description |
+|------|--------------|-------------|
+| `/` | No | Landing page (redirects to `/dashboard` if authenticated) |
+| `/landing` | No | Landing page (direct access) |
+| `/auth` | No | Login / Register |
+| `/dashboard` | Yes | Main application — NBA, NCAAB, MLB tabs |
+| `/admin` | Yes (Admin) | Admin panel — user management, feedback, MLB testing |
+| `/privacy` | No | Privacy policy |
+| `/terms` | No | Terms of service |
+
+### 3.3 Tab Structure
 
 ```
 Top navigation bar:
@@ -76,7 +100,7 @@ When NCAAB Live is active — sub-tab pill row appears below:
 **Visibility rules**:
 - **NBA Live**: visible to all logged-in users
 - **NCAAB Live**: visible to Pro, All Sports, and Admin users; hidden from free users
-- **MLB Live**: visible to all users with a lock indicator; clicking opens a "coming soon" popover
+- **MLB Live**: visible to all users with a lock indicator; clicking opens a "coming soon" popover. Admin users access the MLB testing panel
 
 ---
 
@@ -162,22 +186,28 @@ Appears as a sub-tab under NBA Live (labeled "2H Plays"). Fetches all live NBA g
 
 **Alert trigger**: Plays with edge ≥35 (≥85% hit implied) fire a push notification and/or SMS on first detection per player/stat/line per session.
 
-**Locking for free users**: Free users see one teaser card; remaining plays are blurred with an upgrade prompt overlay.
+**Locking for free users**: Free users see the first 5 edges with full detail. Remaining plays are blurred with teaser values (showing the stat type and a partially obscured probability) and an upgrade banner prompting subscription. This drives conversion while giving free users enough signal to evaluate the product.
 
 ### 4.4 NCAAB Live
 
 Available to Pro, All Sports, and Admin users.
 
-**Game strip**: Horizontal scrollable chip bar showing all live and scheduled NCAAB games. Clicking a chip scrolls to that game's card and highlights it.
+**Canonical market object**: The engine produces a structured `markets` object for each game containing three sub-objects — Full Game, H1, and H2 — each with spread, total, and team total data. This canonical structure ensures consistent behavior across the Live and 2H Plays tabs.
+
+**Top Plays feed**: Displayed first (above the Today's Games strip) to give high-confidence plays immediate visibility. Top Plays are sorted by edge confidence and show probability gauges, engine vs. book comparison, and add-to-slip buttons.
+
+**Game strip**: Horizontal scrollable chip bar showing all live and scheduled NCAAB games below the Top Plays feed. Clicking a chip scrolls to that game's card and highlights it.
+
+**Book filter pills**: Filter bar with pills for All / DK / FD / HR / ESPN Bet, allowing users to view lines from a specific sportsbook or the consensus across all books.
 
 **Game cards** display:
 - Team names, current score, period/clock
 - Market buttons: Spread, Total, H1 Total, H1 Spread
 - Radial probability gauges for each market
 - EV verdict label (Strong Over / Slight Under / etc.)
-- CLV indicator (Closing Line Value signal)
+- ELV/CLV enrichment labels — Expected Line Value and Closing Line Value indicators showing how the current line compares to opening and projected closing lines
 - Live win probability (based on score differential and pace)
-- H2H matchup history toggle
+- H2H matchup history toggle — shows recent head-to-head results with spread coverage and total trends
 - "Add to Slip" buttons for parlay builder
 
 **Data sources**: ESPN (live scores) + The Odds API (all available bookmakers, no restriction) + SGO (1H lines, team totals fallback).
@@ -189,16 +219,7 @@ Available to Pro, All Sports, and Admin users.
 - H2 projection display: `{H1 score} + ~{projected H2} = {projected final}` format
 - Alert deduplication: one alert per gameId per calendar day via in-memory set
 
-### 4.5 MLB Live
-
-Placeholder tab visible to all users. Clicking shows:
-- Free users: "Coming soon" popover with upgrade prompt
-- Pro/All Sports: "Coming soon for All Sports subscribers" message
-- All Sports: "Coming soon" with feature preview
-
-No live data until MLB season integration is built.
-
-### 4.6 Parlay Builder
+### 4.5 Parlay Builder
 
 **Activation**: "Add to Parlay" buttons appear below each prop and on NCAAB game cards.
 
@@ -208,6 +229,29 @@ No live data until MLB season integration is built.
 - On desktop: side column panel
 - Correlation adjustments: same-game parlays are discounted for known correlations (e.g. points and PRA from the same player)
 - Deeplinks: DraftKings, FanDuel, Hard Rock, Bet365 — picks copied to clipboard on click
+
+### 4.6 MLB Live (Phase A)
+
+**Status**: Phase A — admin testing and infrastructure. Public-facing tab shows "coming soon" for non-admin users. All Sports gate is in place for future public release.
+
+**7 Live Prop Markets**:
+1. Strikeouts (K)
+2. Total Bases (TB)
+3. Hits (H)
+4. RBI
+5. Runs (R)
+6. Walks (BB)
+7. Stolen Bases (SB)
+
+**Contact-quality signal pipeline**: Feature engineering layer that processes pitch-level and batted-ball data to derive quality-of-contact signals used in the probability model.
+
+**Roster service**: ESPN-based roster sync for MLB teams, providing player metadata (position, team, stats) needed for the prop engine.
+
+**Admin testing panel**: Accessible via the MLB tab in the admin panel. Allows admins to trigger roster syncs, view engine diagnostics, run backtests, and test the probability pipeline against live game data before the public launch.
+
+**Automation infrastructure**: Game discovery service for detecting live MLB games, a live game orchestrator for continuous data polling, and a live game registry for tracking active game state. These services enable the engine to run automatically without manual intervention.
+
+**Tier gating**: MLB Live is gated to All Sports (`"elite"`) subscribers. The gate is enforced server-side and ready for the public Phase B launch.
 
 ---
 
@@ -312,7 +356,7 @@ After first login, all users see an "Enable Alerts" modal:
 ### 7.3 Upgrade Modal
 
 - **Pro ($40/mo)** — badge: "Best Value" — features: NBA Live Unlimited, NCAAB Live, NBA + NCAAB 2H Plays, Push + SMS Alerts
-- **All Sports ($65/mo)** — badge: "Power Users" — features: everything in Pro + MLB Live (Coming Soon) + Priority SMS
+- **All Sports ($65/mo)** — badge: "Power Users" — features: everything in Pro + MLB Live + Priority SMS
 
 ---
 
@@ -320,7 +364,7 @@ After first login, all users see an "Enable Alerts" modal:
 
 | Source | Data | Cache TTL |
 |--------|------|-----------|
-| ESPN Scoreboard API | Live NBA/NCAAB scores | 30s |
+| ESPN Scoreboard API | Live NBA/NCAAB/MLB scores | 30s |
 | ESPN Summary API | Box score per game | 90s |
 | ESPN Injuries API | NBA injury report | 5 min |
 | The Odds API (live) | In-play prop lines | 90s |
@@ -368,6 +412,7 @@ The following ESPN team abbreviations are remapped to internal DB abbreviations:
 - `statType` — one of 11 supported types
 - `currentPeriod` — 1, 2, 3, or 4
 - `gameClock` — current display clock (e.g. "8:23")
+- `direction` — optional OVER/UNDER hint for stability filter application
 
 **Model steps**:
 1. Compute `gameMinutesRemaining` from period + clock
@@ -380,6 +425,12 @@ The following ESPN team abbreviations are remapped to internal DB abbreviations:
 8. `expectedTotal = halftimeStat + (projectedMinutes × blendedRate × defMult × paceMult)`
 9. `difference = expectedTotal - liveLine`
 10. `probability = clamp(50 + difference × scaleFactor, 2, 98)`
+11. `calibrateProbability()` — applies game-state intelligence (game script divergence, OT probability)
+
+**Rotation-based minutes model** (replaced old scaling formula):
+- Uses a dedicated minutes model module that factors in projected minutes (from daily ingestion when fresh, falling back to season average), foul reduction curves, rotation patterns, and blowout adjustments
+- `effectiveMinutesBase = freshProjectedMinutes ?? avgMinutes` — projected minutes are only used when `projectionUpdatedAt` is within 24 hours
+- `rotationSource` field in debug output indicates whether "projected" or "season_avg" minutes were used
 
 **Scale factors** (adjusts sensitivity by stat volatility):
 - Points: 8
@@ -392,7 +443,20 @@ The following ESPN team abbreviations are remapped to internal DB abbreviations:
 
 **Progressive clamping**: As the game nears the final minute, probability is clamped to a narrowing range (e.g., 55–90% max in last 2 minutes) to prevent overconfident projections from low remaining sample.
 
-### 9.2 NCAAB 2H Model
+### 9.2 Signal Stability Filters (Post-Calibration)
+
+Three lightweight filters run after `calibrateProbability()` and before the result is returned. They reduce noise without touching calibration or route logic.
+
+**Execution order**:
+1. `calibrateProbability()` — unchanged
+2. Resolve `direction` from `req.direction` or inference (`probability < 50 → "UNDER"`)
+3. **High-usage UNDER collapse guard**: `direction === "UNDER" && usageRate > 0.26` → subtract 3 points, clamp to [2, 98]. Guards against late-game collapses by high-usage stars.
+4. **Combo-stat variance dampener**: `statType` contains `_` → multiply by 0.97, clamp to [2, 98]. Accounts for higher inherent variance in multi-stat markets.
+5. **Low-minute bench volatility filter**: `effectiveMinutesBase < 24 && minutesPlayed < 12` → multiply by 0.92, clamp to [2, 98]. Prevents noisy projections from low-minute bench players while preserving signal for expanded-role players.
+
+**Debug output**: Five new fields — `volatilityFiltered`, `usageUnderPenaltyApplied`, `comboVariancePenaltyApplied`, `effectiveMinutesBase`, `rotationSource`.
+
+### 9.3 NCAAB 2H Model
 
 **Inputs**: H1 score, current spread, current total line, H1 pace, team identifiers
 
@@ -548,6 +612,7 @@ The following ESPN team abbreviations are remapped to internal DB abbreviations:
 - **Stripe webhooks**: Must be registered in Stripe Dashboard pointing to `https://<domain>/api/webhooks/stripe`.
 - **Live signals cache**: The `/api/live-signals/:gameId` endpoint caches results for 90 seconds to avoid repeated odds API calls while the box score refreshes every 2 minutes.
 - **Alert deduplication**: NBA alerts use an in-memory fingerprint `playerName|statType|line` per server session. NCAAB halftime alerts use a per-gameId set with a daily reset.
+- **Projected minutes staleness**: Projected minutes are only used when `projectionUpdatedAt` is within 24 hours. Stale projections fall through to season average minutes.
 
 ---
 
@@ -555,8 +620,11 @@ The following ESPN team abbreviations are remapped to internal DB abbreviations:
 
 | Priority | Feature | Status |
 |----------|---------|--------|
-| High | MLB Live data integration | Planned (All Sports gate ready) |
-| High | Player prop trend charts / historical hit rate | Planned |
+| High | MLB Phase B — expanded markets, public-facing tab, live game cards | Planned |
+| High | Projected minutes ingestion (RotoWire / free public sources) | Planned |
+| High | Proof of Edges landing section — real-world edge showcase | Planned |
+| Medium | SEO metadata improvements | Planned |
+| Medium | Player prop trend charts / historical hit rate | Planned |
 | Medium | User notification history log | Planned |
 | Medium | Parlay builder deep-link improvements | Partial (DK/FD/HR/Bet365 live) |
 | Low | NFL Live integration | Future |
