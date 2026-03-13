@@ -61,6 +61,8 @@ export type NCAABMarketType =
   | "h1_total"
   | "h2_total"
   | "spread"
+  | "h1_spread"
+  | "h2_spread"
   | "team_total_home"
   | "team_total_away"
   | "h1_team_total_home"
@@ -220,6 +222,8 @@ const MARKET_VARIANCE: Record<NCAABMarketType, number> = {
   h1_total: 8.0,
   h2_total: 8.0,
   spread: 10.0,
+  h1_spread: 8.0,
+  h2_spread: 8.0,
   team_total_home: 7.0,
   team_total_away: 7.0,
   h1_team_total_home: 5.0,
@@ -709,6 +713,7 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
   const secsRemaining = input.isHalftime
     ? 1200
     : (input.half === 2 ? input.secondsRemainingInHalf : input.secondsRemainingInHalf + 1200);
+  const secsElapsed = Math.max(0, TOTAL_GAME_SECONDS - secsRemaining);
   const { value: dynamicMult, clamped, attempted } = getDynamicMultiplier(secsRemaining, TOTAL_GAME_SECONDS, input.period, 2);
   if (clamped) {
     warnings.push(`Dynamic multiplier clamped: attempted=${attempted}, used=${dynamicMult}`);
@@ -830,6 +835,36 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
     });
   }
 
+  // H1 spread verdict — requires real book line + H1 team total projections
+  if (
+    input.h1SpreadLine !== null &&
+    projection.proj1HTeamTotalHome !== null &&
+    projection.proj1HTeamTotalAway !== null
+  ) {
+    const proj1HSpread = round1(projection.proj1HTeamTotalHome - projection.proj1HTeamTotalAway);
+    // Normalize book line to home-centric: negative = home favored (gives points)
+    const adjustedH1SpreadLine = input.h1Favorite.toLowerCase() === "home"
+      ? -input.h1SpreadLine
+      : input.h1SpreadLine;
+    const h1SpreadGap = Math.abs(proj1HSpread - adjustedH1SpreadLine);
+    const h1SpreadSigma = MARKET_VARIANCE.h1_spread / dynamicMult;
+    const rawH1SpreadProb = normalCDF((proj1HSpread - adjustedH1SpreadLine) / h1SpreadSigma) * 100;
+    const calibH1SpreadOver = round1(calibrateNCAABProbability(rawH1SpreadProb, "h1_spread", { secsElapsed }));
+    const calibH1SpreadUnder = round1(100 - calibH1SpreadOver);
+    const h1SpreadSide: RecommendedSide = h1SpreadGap >= EDGE_MIN_GAP && calibH1SpreadOver >= EDGE_MIN_PROB
+      ? "OVER" : h1SpreadGap >= EDGE_MIN_GAP && calibH1SpreadUnder >= EDGE_MIN_PROB ? "UNDER" : "NO_EDGE";
+    marketVerdicts.push({
+      market: "h1_spread",
+      projection: proj1HSpread,
+      line: adjustedH1SpreadLine,
+      overProb: calibH1SpreadOver,
+      underProb: calibH1SpreadUnder,
+      side: h1SpreadSide,
+      confidenceTier: getConfidenceTier(Math.max(calibH1SpreadOver, calibH1SpreadUnder), h1SpreadGap),
+      edge: round1(calibH1SpreadOver - 50),
+    });
+  }
+
   if (projection.finalProjectedTeamTotalA !== null && input.homeGameTotalLine !== null) {
     const homeTTProb = computeTeamTotalProb(projection.finalProjectedTeamTotalA, input.homeGameTotalLine, secsRemaining);
     const homeTTGap = Math.abs(projection.finalProjectedTeamTotalA - input.homeGameTotalLine);
@@ -878,6 +913,36 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
       side: h2Side,
       confidenceTier: getConfidenceTier(Math.max(h2Over, h2Under), h2Gap),
       edge: round1(h2Over - 50),
+    });
+  }
+
+  // H2 spread verdict — requires real book line + H2 team total projections
+  if (
+    input.h2SpreadLine !== null &&
+    projection.proj2HTeamTotalHome !== null &&
+    projection.proj2HTeamTotalAway !== null
+  ) {
+    const proj2HSpread = round1(projection.proj2HTeamTotalHome - projection.proj2HTeamTotalAway);
+    // Normalize book line to home-centric: negative = home favored (gives points)
+    const adjustedH2SpreadLine = input.h2Favorite.toLowerCase() === "home"
+      ? -input.h2SpreadLine
+      : input.h2SpreadLine;
+    const h2SpreadGap = Math.abs(proj2HSpread - adjustedH2SpreadLine);
+    const h2SpreadSigma = MARKET_VARIANCE.h2_spread / dynamicMult;
+    const rawH2SpreadProb = normalCDF((proj2HSpread - adjustedH2SpreadLine) / h2SpreadSigma) * 100;
+    const calibH2SpreadOver = round1(calibrateNCAABProbability(rawH2SpreadProb, "h2_spread", { secsElapsed }));
+    const calibH2SpreadUnder = round1(100 - calibH2SpreadOver);
+    const h2SpreadSide: RecommendedSide = h2SpreadGap >= EDGE_MIN_GAP && calibH2SpreadOver >= EDGE_MIN_PROB
+      ? "OVER" : h2SpreadGap >= EDGE_MIN_GAP && calibH2SpreadUnder >= EDGE_MIN_PROB ? "UNDER" : "NO_EDGE";
+    marketVerdicts.push({
+      market: "h2_spread",
+      projection: proj2HSpread,
+      line: adjustedH2SpreadLine,
+      overProb: calibH2SpreadOver,
+      underProb: calibH2SpreadUnder,
+      side: h2SpreadSide,
+      confidenceTier: getConfidenceTier(Math.max(calibH2SpreadOver, calibH2SpreadUnder), h2SpreadGap),
+      edge: round1(calibH2SpreadOver - 50),
     });
   }
 
