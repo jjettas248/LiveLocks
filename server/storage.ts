@@ -542,7 +542,7 @@ export class DatabaseStorage implements IStorage {
       gameMinutesRemaining: Math.round(gameMinutesRemaining * 10) / 10,
       inSecondHalf,
       baselineSource,
-      debug,
+      debug: req.isDebug ? debug : undefined,
     };
   }
 

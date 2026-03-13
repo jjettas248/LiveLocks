@@ -116,6 +116,7 @@ export const calculateProbabilitySchema = z.object({
   liveFg3m: z.coerce.number().optional(),
   liveFg3a: z.coerce.number().optional(),
   direction: z.enum(["OVER", "UNDER"]).optional(),
+  isDebug: z.boolean().optional(),
 });
 
 export type CalculateProbabilityRequest = z.infer<typeof calculateProbabilitySchema>;
