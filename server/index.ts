@@ -3,6 +3,7 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import pg from "pg";
 import { registerRoutes, registerAnalyticsRoutes, registerPlaysRoutes, registerTestAlertRoute } from "./routes";
+import { liveOrchestrator } from "./mlb/liveGameOrchestrator";
 import { autoResolveAlerts } from "./analyticsResolver";
 import { storage } from "./storage";
 import { serveStatic } from "./static";
@@ -146,6 +147,9 @@ app.use((req, res, next) => {
   registerAnalyticsRoutes(app);
   registerPlaysRoutes(app);
   registerTestAlertRoute(app);
+
+  // Start MLB live game orchestrator (Phase A — admin-only, fire-and-forget)
+  liveOrchestrator.start();
 
   // Remove duplicate plays and alerts once on startup (fire-and-forget)
   storage.cleanDuplicatePlays().then(r => { if (r.removed > 0) console.log(`[startup] Cleaned ${r.removed} duplicate persisted plays`); }).catch(console.warn);

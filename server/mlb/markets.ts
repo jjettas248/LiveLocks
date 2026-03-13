@@ -7,6 +7,8 @@ import type {
   ProjectionLog,
 } from "./types";
 import { getPlayer, getPlayerByName } from "./rosterService";
+import { mlbGameCache } from "./dataPullService";
+import { estimateRemainingPA } from "./paEstimator";
 import {
   EXPERIMENTAL_MARKETS,
   CORE_MARKETS,
@@ -377,6 +379,112 @@ export function calculateMLBPropEdge(input: MLBPropInput): MLBPropOutput {
       batterHand: resolvedInput.batterHand ?? rosterPlayer.bats,
       team: resolvedInput.team || rosterPlayer.team,
       playerName: resolvedInput.playerName || rosterPlayer.playerName,
+    };
+  }
+
+  // ── Cache integration (Correction 3: derive remainingPA/AB via estimateRemainingPA) ─
+  const gameId = resolvedInput.gameId;
+
+  // (a) Game state
+  const gameState = mlbGameCache.gameState?.[gameId];
+  if (gameState) {
+    const orderEntry = gameState.battingOrder.find((b) => b.playerId === resolvedInput.playerId);
+    const slot = orderEntry?.slot ?? resolvedInput.lineup.battingOrderSlot;
+    const { remainingPA, remainingAB } = estimateRemainingPA(
+      gameState.inning,
+      gameState.isTopInning,
+      slot
+    );
+    resolvedInput = {
+      ...resolvedInput,
+      inning: gameState.inning,
+      isTopInning: gameState.isTopInning,
+      remainingPA,
+      remainingAB,
+      lineup: {
+        ...resolvedInput.lineup,
+        battingOrderSlot: slot,
+        hittersAheadOnBase: gameState.runnersOnBase.length,
+      },
+      pitcher: {
+        ...resolvedInput.pitcher,
+        pitchCount: gameState.pitchCount || resolvedInput.pitcher.pitchCount,
+        timesThrough: gameState.timesThroughOrder || resolvedInput.pitcher.timesThrough,
+        throws: gameState.pitcherInGame?.throws ?? resolvedInput.pitcher.throws,
+      },
+    };
+  }
+
+  // (b) Contact quality — per-player from cache
+  const contactCache = mlbGameCache.contactData?.[gameId];
+  const playerContact = contactCache?.byPlayerId?.[resolvedInput.playerId];
+  if (playerContact) {
+    resolvedInput = {
+      ...resolvedInput,
+      contactQuality: {
+        exitVelocity: playerContact.exitVelocity ?? resolvedInput.contactQuality.exitVelocity,
+        launchAngle: playerContact.launchAngle ?? resolvedInput.contactQuality.launchAngle,
+        hitDistance: playerContact.hitDistance ?? resolvedInput.contactQuality.hitDistance,
+        hardHitRateSeason:
+          playerContact.hardHitPct != null
+            ? playerContact.hardHitPct / 100
+            : resolvedInput.contactQuality.hardHitRateSeason,
+        barrelRateProxySeason:
+          playerContact.barrelPct != null
+            ? playerContact.barrelPct / 100
+            : resolvedInput.contactQuality.barrelRateProxySeason,
+        priorABResults:
+          playerContact.priorABResults.length > 0
+            ? (playerContact.priorABResults as MLBPropInput["contactQuality"]["priorABResults"])
+            : resolvedInput.contactQuality.priorABResults,
+      },
+    };
+  }
+
+  // (c) Pitcher context — keyed by active pitcher ID
+  const pitcherCtxCache = mlbGameCache.pitcherContext?.[gameId];
+  const activePitcherId = gameState?.pitcherInGame?.playerId;
+  const pitcherCtx = activePitcherId ? pitcherCtxCache?.byPitcherId?.[activePitcherId] : undefined;
+  if (pitcherCtx) {
+    resolvedInput = {
+      ...resolvedInput,
+      pitcher: {
+        ...resolvedInput.pitcher,
+        pitchMix: pitcherCtx.pitchMix.length > 0 ? pitcherCtx.pitchMix : resolvedInput.pitcher.pitchMix,
+        pitchCount: pitcherCtx.pitchCount || resolvedInput.pitcher.pitchCount,
+        timesThrough: pitcherCtx.timesThroughOrder || resolvedInput.pitcher.timesThrough,
+        isPitcherCollapsing: pitcherCtx.velocityDrop !== null && pitcherCtx.velocityDrop > 2,
+        managerLeashShort: pitcherCtx.timesThroughOrder >= 3 && pitcherCtx.pitchCount > 80,
+      },
+    };
+  }
+
+  // (d) Weather
+  const weatherCache = mlbGameCache.weather?.[gameId];
+  if (weatherCache) {
+    resolvedInput = {
+      ...resolvedInput,
+      weatherPark: {
+        ...resolvedInput.weatherPark,
+        temperature: weatherCache.temperature ?? resolvedInput.weatherPark.temperature,
+        windSpeed: weatherCache.windSpeed ?? resolvedInput.weatherPark.windSpeed,
+        windDirection: weatherCache.windDirection ?? resolvedInput.weatherPark.windDirection,
+        humidity: weatherCache.humidity ?? resolvedInput.weatherPark.humidity,
+      },
+    };
+  }
+
+  // (e) Bullpen
+  const bullpenCache = mlbGameCache.bullpen?.[gameId];
+  if (bullpenCache) {
+    resolvedInput = {
+      ...resolvedInput,
+      bullpen: {
+        bullpenEra: bullpenCache.bullpenEra ?? resolvedInput.bullpen.bullpenEra,
+        bullpenUsageLastThreeDays:
+          bullpenCache.bullpenUsageLastThreeDays ?? resolvedInput.bullpen.bullpenUsageLastThreeDays,
+        isTopRelieverAvailable: bullpenCache.isTopRelieverAvailable,
+      },
     };
   }
 

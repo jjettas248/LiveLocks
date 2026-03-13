@@ -29,6 +29,14 @@ import {
   getPlayerPoolCount,
   getTeamCount,
 } from "./mlb/rosterService";
+import {
+  syncGameState,
+  syncContactData,
+  syncPitcherContext,
+  syncWeather,
+  syncBullpenUsage,
+} from "./mlb/dataPullService";
+import { liveOrchestrator } from "./mlb/liveGameOrchestrator";
 
 // ── Module-level play dedup guard (persists for process lifetime) ─────────────
 const recordedPlayKeys = new Set<string>();
@@ -520,6 +528,25 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("[MLB modifier-summary]", err.message);
       return res.status(500).json({ error: err.message || "Failed to fetch modifier summary" });
+    }
+  });
+
+  app.post("/api/mlb/refresh-data", requireAdmin, async (req, res) => {
+    try {
+      const { gameId } = req.body ?? {};
+      if (!gameId || typeof gameId !== "string") {
+        return res.status(400).json({ error: "gameId is required" });
+      }
+      await syncGameState(gameId);
+      await syncContactData(gameId);
+      await syncPitcherContext(gameId);
+      await syncWeather(gameId);
+      await syncBullpenUsage(gameId);
+      const outputs = await liveOrchestrator.triggerEngine(gameId);
+      return res.json(outputs);
+    } catch (err: any) {
+      console.error("[MLB refresh-data]", err.message);
+      return res.status(500).json({ error: err.message || "Refresh failed" });
     }
   });
 
