@@ -6,3 +6,15 @@ id = "2CrNM3tkp6j3l8D8OnsCL"
 uri = "file://NBA_Model_Logic.md"
 type = "text"
 title = "LiveLocks — NBA Model Logic"
+
+[[outputs]]
+id = "plGqpizUJRlYC7FJ6EBRr"
+uri = "file://PRD.md"
+type = "text"
+title = "LiveLocks PRD v4.0"
+
+[[outputs]]
+id = "KoSKuJtSYkgm2qjUf76HB"
+uri = "file://README.md"
+type = "text"
+title = "LiveLocks README"
