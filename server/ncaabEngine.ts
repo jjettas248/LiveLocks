@@ -57,6 +57,10 @@ export interface NCAABGameInput {
   h1SpreadOddsAmerican: number | null;
   h2OverOddsAmerican: number | null;
   h2SpreadOddsAmerican: number | null;
+  h1TotalOverOdds: number | null;
+  h1TotalUnderOdds: number | null;
+  h1SpreadHomeOdds: number | null;
+  h1SpreadAwayOdds: number | null;
 
   sourceTimestamps?: Record<string, number>;
 
@@ -1066,13 +1070,14 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
     : unavailableMarket("full_spread", MARKET_LABELS.full_spread);
 
   // h1_total: available pre-game and during H1 only; unavailable once halftime begins (G1)
+  const h1TotalOdds = input.h1TotalOverOdds ?? input.h1OverOddsAmerican;
   const h1TotalMarket = isPreGameOrH1 && input.h1TotalLine !== null && over1HProb !== null
-    ? buildMarket("h1_total", input.h1TotalLine, projection.proj1HTotal, over1HProb, input.h1OverOddsAmerican, defaultSportsbook)
+    ? buildMarket("h1_total", input.h1TotalLine, projection.proj1HTotal, over1HProb, h1TotalOdds, defaultSportsbook)
     : unavailableMarket("h1_total", MARKET_LABELS.h1_total);
 
-  // h1_spread: available pre-game and during H1 only (G1)
+  const h1SpreadOdds = input.h1SpreadHomeOdds ?? input.h1SpreadOddsAmerican;
   const h1SpreadMarket = isPreGameOrH1 && h1SpreadComputed
-    ? buildMarket("h1_spread", h1SpreadComputed.line, h1SpreadComputed.projection, h1SpreadComputed.prob, input.h1SpreadOddsAmerican, defaultSportsbook)
+    ? buildMarket("h1_spread", h1SpreadComputed.line, h1SpreadComputed.projection, h1SpreadComputed.prob, h1SpreadOdds, defaultSportsbook)
     : unavailableMarket("h1_spread", MARKET_LABELS.h1_spread);
 
   // h2_total: unavailable until halftime has started AND sportsbook H2 line exists (G1)

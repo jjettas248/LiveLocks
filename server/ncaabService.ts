@@ -28,6 +28,35 @@ function isFresh(e: CacheEntry | undefined, ttl: number) {
   return !!e && Date.now() - e.timestamp < ttl;
 }
 
+function normalizeMarketKey(key: string): string {
+  return key.toLowerCase().replace(/[_\-\s]/g, "");
+}
+
+function isH1TotalKey(key: string): boolean {
+  const n = normalizeMarketKey(key);
+  const isHalf = n.includes("1h") || n.includes("firsthalf") || n.includes("1sthalf");
+  const isTotal = n.includes("total") || n.includes("overunder") || n.includes("ou");
+  return isHalf && isTotal;
+}
+
+function isH1SpreadKey(key: string): boolean {
+  const n = normalizeMarketKey(key);
+  const isHalf = n.includes("1h") || n.includes("firsthalf") || n.includes("1sthalf");
+  const isSpread = n.includes("spread") || n.includes("handicap") || n.includes("sp");
+  if (isHalf && isSpread) return true;
+  if (isHalf && n.includes("line") && !n.includes("moneyline") && !n.includes("ml") && !n.includes("total") && !n.includes("ou")) return true;
+  return false;
+}
+
+function isTeamSpecificKey(key: string): boolean {
+  const n = normalizeMarketKey(key);
+  return n.includes("home") || n.includes("away");
+}
+
+function extractPrice(outcome: any): number | null {
+  return outcome?.price ?? outcome?.odds ?? null;
+}
+
 function normTeam(name: string): string {
   return name.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -396,18 +425,42 @@ function matchSGOEvent(game: any, sgoEvents: SGOEvent[]): SGOEvent | null {
 function extractSGO1HLines(sgoEvent: SGOEvent, game: any): SGO1HLines {
   const odds = sgoEvent.odds ?? {};
   const evHome = sgoEvent.teams?.home?.names?.long ?? "";
-  // true if SGO's "home" team maps to the ESPN game's homeTeam
   const homeIsGameHome = teamsMatch(game.homeTeam, evHome);
 
-  // 1H total
-  const ouOver = odds["points-all-1h-ou-over"];
+  const allOddsKeys = Object.keys(odds);
+  if (process.env.NODE_ENV !== "production") {
+    console.debug("Detected SGO sportsbook markets", { gameId: game.id, markets: allOddsKeys });
+  }
+
+  // 1H total — key-search logic using isH1TotalKey
+  let ouOver: any = odds["points-all-1h-ou-over"];
+  if (!ouOver) {
+    for (const k of allOddsKeys) {
+      if (isH1TotalKey(k) && !isTeamSpecificKey(k) && odds[k]?.bookOverUnder != null) {
+        console.debug(`[NCAAB SGO] H1 total matched via key: ${k}`, { gameId: game.id });
+        ouOver = odds[k];
+        break;
+      }
+    }
+  }
   const h1TotalLine: number | null = ouOver?.bookOverUnder != null
     ? parseFloat(ouOver.bookOverUnder)
     : null;
 
-  // 1H spread (negative bookSpread on home side = SGO home is favourite)
-  const spHome = odds["points-home-1h-sp-home"];
-  const spAway = odds["points-away-1h-sp-away"];
+  // 1H spread — key-search logic using isH1SpreadKey
+  let spHome: any = odds["points-home-1h-sp-home"];
+  let spAway: any = odds["points-away-1h-sp-away"];
+  if (!spHome && !spAway) {
+    for (const k of allOddsKeys) {
+      if (isH1SpreadKey(k) && odds[k]?.bookSpread != null) {
+        console.debug(`[NCAAB SGO] H1 spread matched via key: ${k}`, { gameId: game.id });
+        const nk = normalizeMarketKey(k);
+        if (nk.includes("home")) spHome = odds[k];
+        else if (nk.includes("away")) spAway = odds[k];
+        else if (!spHome) spHome = odds[k];
+      }
+    }
+  }
 
   let h1SpreadLine: number | null = null;
   let h1Favorite = "";
@@ -476,6 +529,10 @@ function extractSGO1HLines(sgoEvent: SGOEvent, game: any): SGO1HLines {
   const home1HTotalLine   = homeIsGameHome ? sgoHome1H : sgoAway1H;
   const away1HTotalLine   = homeIsGameHome ? sgoAway1H : sgoHome1H;
 
+  if ((h1TotalLine === null || h1SpreadLine === null) && allOddsKeys.some(k => /1h|half|1st/i.test(k))) {
+    console.warn("H1 market hydration failure", { gameId: game.id, h1TotalLine, h1SpreadLine, sportsbookMarkets: allOddsKeys });
+  }
+
   return { h1TotalLine, h1SpreadLine, h1Favorite, h1FavoriteName, h2TotalLine, h2SpreadLine, h2Favorite, h2FavoriteName, homeGameTotalLine, awayGameTotalLine, home1HTotalLine, away1HTotalLine };
 }
 
@@ -493,7 +550,7 @@ function matchOddsEvent(game: any, oddsEvents: any[]): any | null {
 }
 
 // ── Extract consensus spread / total + 1H lines ───────────────────────────────
-function extractLines(oddsEvent: any, homeTeamName?: string): {
+function extractLines(oddsEvent: any, homeTeamName?: string, awayTeamName?: string): {
   spread: number | null;
   total: number | null;
   favorite: string;
@@ -510,6 +567,10 @@ function extractLines(oddsEvent: any, homeTeamName?: string): {
   h1SpreadOddsAmerican: number | null;
   h2OverOddsAmerican: number | null;
   h2SpreadOddsAmerican: number | null;
+  h1TotalOverOdds: number | null;
+  h1TotalUnderOdds: number | null;
+  h1SpreadHomeOdds: number | null;
+  h1SpreadAwayOdds: number | null;
   homeTTBookLine: number | null;
   awayTTBookLine: number | null;
 } {
@@ -528,16 +589,30 @@ function extractLines(oddsEvent: any, homeTeamName?: string): {
   let h1SpreadOddsAmerican: number | null = null;
   let h2OverOddsAmerican: number | null = null;
   let h2SpreadOddsAmerican: number | null = null;
+  let h1TotalOverOdds: number | null = null;
+  let h1TotalUnderOdds: number | null = null;
+  let h1SpreadHomeOdds: number | null = null;
+  let h1SpreadAwayOdds: number | null = null;
   let homeTTBookLine: number | null = null;
   let awayTTBookLine: number | null = null;
   const homeLastWord = homeTeamName ? homeTeamName.toLowerCase().split(" ").pop() ?? "" : "";
+  const normalizedHomeTeam = homeTeamName ? normalizeMarketKey(homeTeamName) : "";
+  const awayLastWord = awayTeamName ? awayTeamName.toLowerCase().split(" ").pop() ?? "" : "";
+  const normalizedAwayTeam = awayTeamName ? normalizeMarketKey(awayTeamName) : "";
   const bookLines: Array<{ book: string; spread: number | null; total: number | null; favorite: string; h1Total: number | null; h1Spread: number | null; h1Favorite: string }> = [];
 
   for (const bk of (oddsEvent.bookmakers ?? [])) {
     const spreadsMarket   = (bk.markets ?? []).find((m: any) => m.key === "spreads");
     const totalsMarket    = (bk.markets ?? []).find((m: any) => m.key === "totals");
-    const h1TotalsMarket  = (bk.markets ?? []).find((m: any) => m.key === "h1_totals");
-    const h1SpreadsMarket = (bk.markets ?? []).find((m: any) => m.key === "h1_spreads");
+    let h1TotalsMarket: any = null;
+    let h1SpreadsMarket: any = null;
+    for (const m of (bk.markets ?? [])) {
+      if (!h1TotalsMarket && (m.key === "h1_totals" || isH1TotalKey(m.key ?? ""))) {
+        h1TotalsMarket = m;
+      } else if (!h1SpreadsMarket && (m.key === "h1_spreads" || isH1SpreadKey(m.key ?? ""))) {
+        h1SpreadsMarket = m;
+      }
+    }
     const h2TotalsMarket  = (bk.markets ?? []).find((m: any) => m.key === "h2_totals");
     const h2SpreadsMarket = (bk.markets ?? []).find((m: any) => m.key === "h2_spreads");
 
@@ -579,12 +654,31 @@ function extractLines(oddsEvent: any, homeTeamName?: string): {
       }
     }
     if (h1TotalsMarket?.outcomes?.length >= 1) {
-      const over = h1TotalsMarket.outcomes.find((o: any) => o.name === "Over");
+      const outcomes = h1TotalsMarket.outcomes as any[];
+      const over = outcomes.find(
+        (o: any) => (o.name ?? "").toLowerCase().includes("over")
+      );
+      const under = outcomes.find(
+        (o: any) => (o.name ?? "").toLowerCase().includes("under")
+      );
       if (over) {
         bkH1Total = over.point as number;
-        if (h1OverOddsAmerican === null && over.price != null) {
-          h1OverOddsAmerican = over.price as number;
+        const overPrice = extractPrice(over);
+        if (h1OverOddsAmerican === null && overPrice != null) {
+          h1OverOddsAmerican = overPrice;
         }
+        if (h1TotalOverOdds === null && overPrice != null) {
+          h1TotalOverOdds = overPrice;
+        }
+      }
+      if (under) {
+        const underPrice = extractPrice(under);
+        if (h1TotalUnderOdds === null && underPrice != null) {
+          h1TotalUnderOdds = underPrice;
+        }
+      }
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("H1 market outcomes detected", { gameId: oddsEvent.id, outcomes });
       }
     }
     if (h1SpreadsMarket?.outcomes?.length >= 2) {
@@ -597,11 +691,46 @@ function extractLines(oddsEvent: any, homeTeamName?: string): {
         bkH1Spread = Math.abs(sorted[0].point);
         bkH1Fav = sorted[0].name;
       }
-      if (h1SpreadOddsAmerican === null && homeLastWord) {
-        const homeOutcome = (h1SpreadsMarket.outcomes as any[]).find(
-          (o: any) => o.name?.toLowerCase().includes(homeLastWord)
+      const outcomes = h1SpreadsMarket.outcomes as any[];
+      let homeOutcome = outcomes.find(
+        (o: any) => normalizeMarketKey(o.name ?? "").includes("home")
+      );
+      if (!homeOutcome && normalizedHomeTeam) {
+        homeOutcome = outcomes.find(
+          (o: any) => normalizedHomeTeam.includes(normalizeMarketKey(o.name ?? "")) || normalizeMarketKey(o.name ?? "").includes(normalizedHomeTeam)
         );
-        if (homeOutcome?.price != null) h1SpreadOddsAmerican = homeOutcome.price as number;
+      }
+      if (!homeOutcome && homeLastWord) {
+        homeOutcome = outcomes.find(
+          (o: any) => normalizeMarketKey(o.name ?? "").includes(homeLastWord)
+        );
+      }
+      let awayOutcome = outcomes.find(
+        (o: any) => normalizeMarketKey(o.name ?? "").includes("away")
+      );
+      if (!awayOutcome && normalizedAwayTeam) {
+        awayOutcome = outcomes.find(
+          (o: any) => normalizedAwayTeam.includes(normalizeMarketKey(o.name ?? "")) || normalizeMarketKey(o.name ?? "").includes(normalizedAwayTeam)
+        );
+      }
+      if (!awayOutcome && awayLastWord) {
+        awayOutcome = outcomes.find(
+          (o: any) => normalizeMarketKey(o.name ?? "").includes(awayLastWord)
+        );
+      }
+      if (!awayOutcome && homeOutcome) {
+        awayOutcome = outcomes.find((o: any) => o !== homeOutcome);
+      }
+      if (!homeOutcome && !awayOutcome) {
+        console.warn("H1 spread outcome detection failure", { gameId: oddsEvent.id, marketKey: h1SpreadsMarket.key, outcomes });
+      }
+      const homePrice = extractPrice(homeOutcome);
+      const awayPrice = extractPrice(awayOutcome);
+      if (h1SpreadOddsAmerican === null && homePrice != null) h1SpreadOddsAmerican = homePrice;
+      if (h1SpreadHomeOdds === null && homePrice != null) h1SpreadHomeOdds = homePrice;
+      if (h1SpreadAwayOdds === null && awayPrice != null) h1SpreadAwayOdds = awayPrice;
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("H1 market outcomes detected", { gameId: oddsEvent.id, outcomes });
       }
     }
     if (h2TotalsMarket?.outcomes?.length >= 1) {
@@ -653,14 +782,38 @@ function extractLines(oddsEvent: any, homeTeamName?: string): {
     if (h1SpreadLine === null && bkH1Spread !== null) { h1SpreadLine = bkH1Spread; h1Favorite = bkH1Fav; }
     if (h2TotalLine === null && bkH2Total !== null) h2TotalLine = bkH2Total;
     if (h2SpreadLine === null && bkH2Spread !== null) { h2SpreadLine = bkH2Spread; h2Favorite = bkH2Fav; }
-    if (spread !== null && total !== null && h1TotalLine !== null && overOddsAmerican !== null) break;
+    if (spread !== null && total !== null && h1TotalLine !== null && h1SpreadLine !== null && overOddsAmerican !== null && h1TotalOverOdds !== null && h1SpreadHomeOdds !== null) break;
   }
 
   if (homeTTBookLine !== null || awayTTBookLine !== null) {
     console.log(`[NCAAB TT Odds API] home=${homeTTBookLine} away=${awayTTBookLine}`);
   }
 
-  return { spread, total, favorite, bookLines, h1TotalLine, h1SpreadLine, h1Favorite, h2TotalLine, h2SpreadLine, h2Favorite, overOddsAmerican, spreadOddsAmerican, h1OverOddsAmerican, h1SpreadOddsAmerican, h2OverOddsAmerican, h2SpreadOddsAmerican, homeTTBookLine, awayTTBookLine };
+  const allSportsbookMarketKeys = (oddsEvent.bookmakers ?? []).flatMap((bk: any) => (bk.markets ?? []).map((m: any) => m.key));
+  if (process.env.NODE_ENV !== "production") {
+    console.debug("Detected sportsbook markets", { gameId: oddsEvent.id, markets: allSportsbookMarketKeys });
+  }
+
+  const hasH1Keys = allSportsbookMarketKeys.some((k: string) => /1h|half|1st/i.test(k));
+  if ((h1TotalLine === null || h1SpreadLine === null) && hasH1Keys) {
+    console.warn("H1 market hydration failure", { gameId: oddsEvent.id, h1TotalLine, h1SpreadLine, sportsbookMarkets: allSportsbookMarketKeys });
+  }
+  if (h1TotalLine !== null && h1TotalOverOdds === null && h1TotalUnderOdds === null) {
+    const h1TotalMarketKeys = allSportsbookMarketKeys.filter((k: string) => isH1TotalKey(k));
+    const h1TotalOutcomes = (oddsEvent.bookmakers ?? []).flatMap((bk: any) =>
+      (bk.markets ?? []).filter((m: any) => isH1TotalKey(m.key ?? "")).flatMap((m: any) => m.outcomes ?? [])
+    );
+    console.warn("H1 odds hydration failure", { gameId: oddsEvent.id, marketKey: h1TotalMarketKeys, outcomes: h1TotalOutcomes });
+  }
+  if (h1SpreadLine !== null && h1SpreadHomeOdds === null && h1SpreadAwayOdds === null) {
+    const h1SpreadMarketKeys = allSportsbookMarketKeys.filter((k: string) => isH1SpreadKey(k));
+    const h1SpreadOutcomes = (oddsEvent.bookmakers ?? []).flatMap((bk: any) =>
+      (bk.markets ?? []).filter((m: any) => isH1SpreadKey(m.key ?? "")).flatMap((m: any) => m.outcomes ?? [])
+    );
+    console.warn("H1 odds hydration failure", { gameId: oddsEvent.id, marketKey: h1SpreadMarketKeys, outcomes: h1SpreadOutcomes });
+  }
+
+  return { spread, total, favorite, bookLines, h1TotalLine, h1SpreadLine, h1Favorite, h2TotalLine, h2SpreadLine, h2Favorite, overOddsAmerican, spreadOddsAmerican, h1OverOddsAmerican, h1SpreadOddsAmerican, h2OverOddsAmerican, h2SpreadOddsAmerican, h1TotalOverOdds, h1TotalUnderOdds, h1SpreadHomeOdds, h1SpreadAwayOdds, homeTTBookLine, awayTTBookLine };
 }
 
 // ── Public handle signal ──────────────────────────────────────────────────────
@@ -878,14 +1031,14 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       try { box = await getNCAABBoxScore(game.id); } catch { /* non-fatal */ }
 
       const oddsEvent = matchOddsEvent(game, oddsEvents);
-      const { spread, total, favorite, bookLines, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav, h2TotalLine: oddsH2Total, h2SpreadLine: oddsH2Spread, h2Favorite: oddsH2Fav, overOddsAmerican, spreadOddsAmerican, h1OverOddsAmerican, h1SpreadOddsAmerican, h2OverOddsAmerican, h2SpreadOddsAmerican, homeTTBookLine, awayTTBookLine } = oddsEvent
-        ? extractLines(oddsEvent, game.homeTeam)
-        : { spread: null, total: null, favorite: "", bookLines: [], h1SpreadLine: null, h1Favorite: "", h2TotalLine: null, h2SpreadLine: null, h2Favorite: "", overOddsAmerican: null, spreadOddsAmerican: null, h1OverOddsAmerican: null, h1SpreadOddsAmerican: null, h2OverOddsAmerican: null, h2SpreadOddsAmerican: null, homeTTBookLine: null, awayTTBookLine: null };
+      const { spread, total, favorite, bookLines, h1TotalLine: oddsH1Total, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav, h2TotalLine: oddsH2Total, h2SpreadLine: oddsH2Spread, h2Favorite: oddsH2Fav, overOddsAmerican, spreadOddsAmerican, h1OverOddsAmerican, h1SpreadOddsAmerican, h2OverOddsAmerican, h2SpreadOddsAmerican, h1TotalOverOdds, h1TotalUnderOdds, h1SpreadHomeOdds, h1SpreadAwayOdds, homeTTBookLine, awayTTBookLine } = oddsEvent
+        ? extractLines(oddsEvent, game.homeTeam, game.awayTeam)
+        : { spread: null, total: null, favorite: "", bookLines: [], h1TotalLine: null, h1SpreadLine: null, h1Favorite: "", h2TotalLine: null, h2SpreadLine: null, h2Favorite: "", overOddsAmerican: null, spreadOddsAmerican: null, h1OverOddsAmerican: null, h1SpreadOddsAmerican: null, h2OverOddsAmerican: null, h2SpreadOddsAmerican: null, h1TotalOverOdds: null, h1TotalUnderOdds: null, h1SpreadHomeOdds: null, h1SpreadAwayOdds: null, homeTTBookLine: null, awayTTBookLine: null };
 
       // SGO 1H + 2H lines (real book lines)
       const sgoEvent = matchSGOEvent(game, sgoEvents);
       const sgo1H = sgoEvent ? extractSGO1HLines(sgoEvent, game) : null;
-      const rawH1TotalLine  = sgo1H?.h1TotalLine ?? null;
+      const rawH1TotalLine  = sgo1H?.h1TotalLine ?? oddsH1Total ?? null;
       const h1SpreadLine    = sgo1H?.h1SpreadLine ?? oddsH1Spread ?? null;
       const h1Favorite      = sgo1H?.h1FavoriteName ?? oddsH1Fav ?? "";
       const h2TotalLine     = sgo1H?.h2TotalLine ?? oddsH2Total ?? null;
@@ -992,10 +1145,14 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         }
       }
 
-      // ── 1H total line (API or fallback estimate) ──────────────────────────
-      const h1TotalLine = rawH1TotalLine !== null
-        ? rawH1TotalLine
-        : total !== null ? Math.round(total * NCAAB_H1_FRACTION * 2) / 2 : null;
+      const h1TotalLine = rawH1TotalLine;
+
+      if (h1TotalLine !== null && h1TotalOverOdds === null && h1OverOddsAmerican === null) {
+        console.warn("H1 total odds hydration failure (post-merge)", { gameId: game.id, h1TotalLine });
+      }
+      if (h1SpreadLine !== null && h1SpreadHomeOdds === null && h1SpreadOddsAmerican === null) {
+        console.warn("H1 spread odds hydration failure (post-merge)", { gameId: game.id, h1SpreadLine });
+      }
 
       // ── Engine: single source of truth for projection + probability ──────
       const engineInput: import("./ncaabEngine").NCAABGameInput = {
@@ -1043,6 +1200,10 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         h1SpreadOddsAmerican,
         h2OverOddsAmerican,
         h2SpreadOddsAmerican,
+        h1TotalOverOdds,
+        h1TotalUnderOdds,
+        h1SpreadHomeOdds,
+        h1SpreadAwayOdds,
         sourceTimestamps: {
           odds: Date.now(),
           scores: Date.now(),
