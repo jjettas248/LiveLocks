@@ -1,0 +1,92 @@
+Before Task #24 can be approved, run a full verification pass against the implemented code and confirm that every required engine rule from the task specification is satisfied.
+
+Do NOT summarize the plan again. Instead inspect the actual code and output the relevant snippets that prove compliance.
+
+Run the following checks:
+
+1. Direction Derivation
+Verify that calibration direction is derived strictly from model probability and NOT from request input.
+Expected code pattern:
+const direction = probability >= 50 ? "OVER" : "UNDER"
+Confirm there is no usage of req.direction anywhere in the calibration step.
+
+2. Calibration Confidence Logic
+Confirm calibration is applied to directional confidence only:
+confidence = direction === "OVER" ? probability : 100 - probability
+calibrated = calibrateProbability(confidence)
+finalProbability = direction === "OVER" ? calibrated : 100 - calibrated
+Reject if calibrateProbability() is applied directly to probability.
+
+3. Market Anchoring
+Verify edge calculation uses the anchored mean:
+marketMean = req.liveLine + 0.5
+finalMean = 0.65 * expectedTotal + 0.35 * marketMean
+edge = finalMean - req.liveLine
+
+4. Tempo Model
+Verify possession tempo multiplier exists and does NOT algebraically cancel:
+baselinePPM = 2.1
+livePPM = estimatePossessionsPerMinute(period, scoreDiff)
+tempoMultiplier = livePPM / baselinePPM
+expectedFromHere = blendedPerMin * remainingMinutes * tempoMultiplier
+
+Reject if code divides blendedPerMin by ppm.
+
+5. Combo Variance Filter
+Confirm combo detection handles both formats:
+statType.includes("+") || statType.includes("_")
+Probability multiplied by 0.96 and clamped afterward.
+
+6. Bench Volatility Filter
+Confirm the filter uses effective minutes logic:
+effectiveMinutesBase = freshProjectedMinutes ?? avgMinutes
+if (effectiveMinutesBase < 26) probability *= 0.94
+
+Reject if it references projectedMinutes directly.
+
+7. Clamp Enforcement
+Verify probability clamp exists after:
+- combo filter
+- bench filter
+- calibration lookup
+
+Clamp must be:
+probability = Math.max(2, Math.min(98, probability))
+
+8. Real Odds Edge Check
+Confirm sportsbook implied probability uses real odds:
+sportsbookImplied = americanOddsToProb(req.bookOdds ?? -110) * 100
+edgeVsBook = finalProbability - sportsbookImplied
+noSignal = edgeVsBook < 3
+
+Verify noSignal appears in both the response object and debug output.
+
+9. Analytics Range Filtering
+Verify GET /api/analytics/summary reads the query parameter `range` and forwards it to getAnalyticsSummary(range).
+Confirm SQL filtering for:
+today
+yesterday
+7d
+30d
+all
+
+10. Calibration Diagnostics
+Verify analytics bucket output includes:
+expectedWinRate
+actualWinRate
+calibrationError
+
+expectedWinRate should be midpoint values:
+60–69 → 64.5
+70–79 → 74.5
+80–89 → 84.5
+90+ → 92
+
+11. Calc Log
+Confirm an in-memory capped array exists (size ≤ 500) storing each calculation and that it does not write to the database.
+
+Finally output:
+
+• The exact code snippets for each of the 11 checks
+• A short PASS / FAIL verdict for each check
+• The overall verdict: APPROVE or REJECT

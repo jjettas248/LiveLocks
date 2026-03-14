@@ -3093,9 +3093,12 @@ export function registerTestAlertRoute(app: Express): void {
 
 // Analytics routes (admin only)
 export function registerAnalyticsRoutes(app: Express): void {
-  app.get("/api/analytics/summary", requireAdmin, async (_req, res) => {
+  app.get("/api/analytics/summary", requireAdmin, async (req, res) => {
     try {
-      const summary = await storage.getAnalyticsSummary();
+      const range = (req.query.range as string) || "all";
+      const validRanges = ["today", "yesterday", "7d", "30d", "all"];
+      const effectiveRange = validRanges.includes(range) ? range as "today" | "yesterday" | "7d" | "30d" | "all" : "all";
+      const summary = await storage.getAnalyticsSummary(effectiveRange);
       res.json(summary);
     } catch (e) {
       res.status(500).json({ message: "Failed to load analytics summary" });

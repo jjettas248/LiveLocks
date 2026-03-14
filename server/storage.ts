@@ -104,7 +104,7 @@ export interface IStorage {
   savePlayAlerts(plays: any[]): Promise<void>;
   getUnresolvedAlerts(): Promise<HalftimePlayAlert[]>;
   savePlayResult(alertId: number, actualStat: number, hit: boolean): Promise<void>;
-  getAnalyticsSummary(): Promise<AnalyticsSummary>;
+  getAnalyticsSummary(range?: "today" | "yesterday" | "7d" | "30d" | "all"): Promise<AnalyticsSummary>;
   getRecentPlayAlerts(limit?: number): Promise<PlayAlertWithResult[]>;
   getAppSettings(): Promise<{ slateResetHour: number; slateResetMinute: number }>;
   saveAppSettings(hour: number, minute: number): Promise<void>;
@@ -123,6 +123,20 @@ export interface IStorage {
   cleanDuplicateAlerts(): Promise<{ removed: number; remaining: number }>;
 }
 
+// ─── Possession-based tempo model ─────────────────────────────────────────
+function estimatePossessionsPerMinute(period: number, scoreDiff: number): number {
+  let ppm = 2.1;
+  if (period === 4 && Math.abs(scoreDiff) <= 8) ppm = 1.7;
+  if (period === 4 && Math.abs(scoreDiff) >= 15) ppm = 1.5;
+  return ppm;
+}
+
+// ─── American odds → implied probability ──────────────────────────────────
+function americanOddsToProb(odds: number): number {
+  if (odds < 0) return Math.abs(odds) / (Math.abs(odds) + 100);
+  return 100 / (odds + 100);
+}
+
 // ─── Calibrated probability lookup ─────────────────────────────────────────
 // Replaces the old linear formula (50 + diff × scaleFactor) with an interpolated
 // edge→probability table derived from historical hit-rate buckets.
@@ -132,7 +146,7 @@ const HALFTIME_EDGE_BUCKETS: Array<[number, number]> = [
 ];
 const LIVE_CONTEXT_LIFT = 0.015;
 
-function calibrateProbability(
+function edgeToProbability(
   edge: number,
   _statType: string,
   context: "halftime" | "live",
@@ -164,6 +178,30 @@ function calibrateProbability(
   const pct = edge >= 0 ? pctOver : 100 - pctOver;
   return Math.max(2, Math.min(98, Math.round(pct * 10) / 10));
 }
+
+// ─── Calibration lookup (directional confidence → deflated confidence) ────
+function calibrateProbability(p: number): number {
+  if (p >= 90) return 72;
+  if (p >= 85) return 69;
+  if (p >= 80) return 66;
+  if (p >= 75) return 63;
+  if (p >= 70) return 60;
+  if (p >= 65) return 58;
+  if (p >= 60) return 56;
+  return p;
+}
+
+// ─── In-memory calc log (max 500 entries) ─────────────────────────────────
+interface CalcLogEntry {
+  player: string;
+  statType: string;
+  line: number;
+  probability: number;
+  bookOdds: number | null;
+  gameDate: string | null;
+  timestamp: Date;
+}
+const calcLogEntries: CalcLogEntry[] = [];
 
 // Module-level in-flight Set prevents concurrent race conditions in savePlayAlerts.
 // Two simultaneous requests can both pass the select-before-insert check and both insert,
@@ -458,7 +496,10 @@ export class DatabaseStorage implements IStorage {
     const contextClamp = isHalftimeContext ? { lo: 0.90, hi: 1.12 } : { lo: 0.88, hi: 1.18 };
     const contextModifier = Math.max(contextClamp.lo, Math.min(contextClamp.hi, rawContextModifier));
 
-    let expectedFromHere = blendedPerMin * remainingMinutes * contextModifier;
+    const baselinePPM = 2.1;
+    const livePPM = estimatePossessionsPerMinute(currentPeriod, parsedScoreDiff);
+    const tempoMultiplier = livePPM / baselinePPM;
+    let expectedFromHere = blendedPerMin * remainingMinutes * contextModifier * tempoMultiplier;
 
     // ─── Overtime probability boost (Step 3) ──────────────────────────────
     if (hasScoreData && currentPeriod === 4 && clockMins <= 2.0 && Math.abs(parsedScoreDiff) <= 3) {
@@ -471,38 +512,64 @@ export class DatabaseStorage implements IStorage {
 
     const expectedTotal = req.halftimeStat + expectedFromHere;
 
-    // ─── Calibrated probability (Step 1) ──────────────────────────────────
-    const edge = expectedTotal - req.liveLine;
-    const context: "halftime" | "live" = isHalftimeContext ? "halftime" : "live";
-    let probability = calibrateProbability(edge, req.statType, context);
+    // ─── Market anchoring ─────────────────────────────────────────────────
+    const marketMean = req.liveLine + 0.5;
+    const finalMean = 0.65 * expectedTotal + 0.35 * marketMean;
+    const edge = finalMean - req.liveLine;
 
-    // ─── Signal stability filters (Steps 2-4) ─────────────────────────────
-    // Step 2 — UNDER usage penalty
-    const direction = req.direction ?? (probability < 50 ? "UNDER" : "OVER");
-    let usageUnderPenaltyApplied = false;
-    if (direction === "UNDER" && usageRate > 0.26) {
-      probability = Math.min(98, Math.max(2, probability - 3));
-      usageUnderPenaltyApplied = true;
-    }
+    // ─── Probability pipeline ─────────────────────────────────────────────
+    // Step 1 — Edge → raw probability via interpolation
+    const edgeContext: "halftime" | "live" = isHalftimeContext ? "halftime" : "live";
+    let probability = edgeToProbability(edge, req.statType, edgeContext);
 
-    // Step 3 — Combo stat variance
+    // Step 2 — Combo variance filter
     let comboVariancePenaltyApplied = false;
-    if (req.statType.includes("_")) {
-      probability = Math.min(98, Math.max(2, probability * 0.97));
+    if (req.statType.includes("+") || req.statType.includes("_")) {
+      probability *= 0.96;
+      probability = Math.max(2, Math.min(98, probability));
       comboVariancePenaltyApplied = true;
     }
 
-    // Step 4 — Projected-minutes-aware bench volatility filter
+    // Step 3 — Bench volatility filter
     const effectiveMinutesBase = freshProjectedMinutes ?? avgMinutes;
     const rotationSource: "projected" | "season_avg" =
       freshProjectedMinutes !== null ? "projected" : "season_avg";
     let volatilityFiltered = false;
-    if (effectiveMinutesBase < 24 && minutesPlayed < 12) {
-      probability = Math.min(98, Math.max(2, probability * 0.92));
+    if (effectiveMinutesBase < 26) {
+      probability = Math.max(2, Math.min(98, probability * 0.94));
       volatilityFiltered = true;
     }
 
-    console.log(`[calc] ${player.name}: period=${currentPeriod} clock=${req.gameClock ?? "n/a"} gameMinLeft=${gameMinutesRemaining.toFixed(1)} remainMin=${remainingMinutes.toFixed(1)} baseline=${baselineSource} edge=${edge.toFixed(2)} ctxMod=${contextModifier.toFixed(3)} prob=${probability.toFixed(1)}% rotSrc=${rotationSource}`);
+    // Step 4 — Calibration lookup (directional confidence only)
+    const direction = probability >= 50 ? "OVER" : "UNDER";
+    const confidence = direction === "OVER" ? probability : 100 - probability;
+    const calibrated = calibrateProbability(confidence);
+    probability = direction === "OVER" ? calibrated : 100 - calibrated;
+    probability = Math.max(2, Math.min(98, probability));
+
+    // Step 5 — Edge sanity check using real odds
+    const sportsbookImplied = americanOddsToProb(req.bookOdds ?? -110) * 100;
+    const edgeVsBook = probability - sportsbookImplied;
+    const noSignal = edgeVsBook < 3;
+
+    let usageUnderPenaltyApplied = false;
+
+    console.log(`[calc] ${player.name}: period=${currentPeriod} clock=${req.gameClock ?? "n/a"} gameMinLeft=${gameMinutesRemaining.toFixed(1)} remainMin=${remainingMinutes.toFixed(1)} baseline=${baselineSource} edge=${edge.toFixed(2)} ctxMod=${contextModifier.toFixed(3)} prob=${probability.toFixed(1)}% rotSrc=${rotationSource} noSignal=${noSignal}`);
+
+    // ─── In-memory calc log ───────────────────────────────────────────────
+    const finalProbability = Math.round(probability * 10) / 10;
+    calcLogEntries.push({
+      player: player.name,
+      statType: req.statType,
+      line: req.liveLine,
+      probability: finalProbability,
+      bookOdds: req.bookOdds ?? null,
+      gameDate: req.gameDate ?? null,
+      timestamp: new Date(),
+    });
+    if (calcLogEntries.length > 500) {
+      calcLogEntries.splice(0, calcLogEntries.length - 500);
+    }
 
     const debug: CalcDebug = {
       projection: Math.round(expectedTotal * 10) / 10,
@@ -528,10 +595,11 @@ export class DatabaseStorage implements IStorage {
       comboVariancePenaltyApplied,
       effectiveMinutesBase,
       rotationSource,
+      noSignal,
     };
 
     return {
-      probability: Math.round(probability * 10) / 10,
+      probability: finalProbability,
       expectedTotal: Math.round(expectedTotal * 10) / 10,
       projectedSecondHalfMinutes: Math.round(remainingMinutes * 10) / 10,
       defenseMultiplier: Math.round(defenseMultiplier * 100) / 100,
@@ -542,6 +610,7 @@ export class DatabaseStorage implements IStorage {
       gameMinutesRemaining: Math.round(gameMinutesRemaining * 10) / 10,
       inSecondHalf,
       baselineSource,
+      noSignal,
       debug: req.isDebug ? debug : undefined,
     };
   }
@@ -754,8 +823,20 @@ export class DatabaseStorage implements IStorage {
     }).onConflictDoNothing();
   }
 
-  async getAnalyticsSummary(): Promise<AnalyticsSummary> {
-    const rows = await db
+  async getAnalyticsSummary(range?: "today" | "yesterday" | "7d" | "30d" | "all"): Promise<AnalyticsSummary> {
+    let dateFilter: ReturnType<typeof sql> | null = null;
+    const effectiveRange = range ?? "all";
+    if (effectiveRange === "today") {
+      dateFilter = sql`${halftimePlayAlerts.gameDate} = CURRENT_DATE::text`;
+    } else if (effectiveRange === "yesterday") {
+      dateFilter = sql`${halftimePlayAlerts.gameDate} = (CURRENT_DATE - INTERVAL '1 day')::date::text`;
+    } else if (effectiveRange === "7d") {
+      dateFilter = sql`${halftimePlayAlerts.gameDate} >= (CURRENT_DATE - INTERVAL '7 days')::date::text`;
+    } else if (effectiveRange === "30d") {
+      dateFilter = sql`${halftimePlayAlerts.gameDate} >= (CURRENT_DATE - INTERVAL '30 days')::date::text`;
+    }
+
+    let query = db
       .select({
         probability: halftimePlayAlerts.probability,
         betDirection: halftimePlayAlerts.betDirection,
@@ -764,14 +845,20 @@ export class DatabaseStorage implements IStorage {
       .from(halftimePlayAlerts)
       .innerJoin(playResults, eq(playResults.alertId, halftimePlayAlerts.id));
 
+    if (dateFilter) {
+      query = query.where(dateFilter) as typeof query;
+    }
+
+    const rows = await query;
+
     const BUCKETS = [
-      { label: "60-69%", min: 60, max: 69.99 },
-      { label: "70-79%", min: 70, max: 79.99 },
-      { label: "80-89%", min: 80, max: 89.99 },
-      { label: "90%+",   min: 90, max: 100 },
+      { label: "60-69%", min: 60, max: 69.99, expectedWinRate: 64.5 },
+      { label: "70-79%", min: 70, max: 79.99, expectedWinRate: 74.5 },
+      { label: "80-89%", min: 80, max: 89.99, expectedWinRate: 84.5 },
+      { label: "90%+",   min: 90, max: 100,   expectedWinRate: 92 },
     ];
 
-    const buckets = BUCKETS.map(({ label, min, max }) => {
+    const buckets = BUCKETS.map(({ label, min, max, expectedWinRate }) => {
       const inBucket = rows.filter((r) => {
         const prob = Number(r.probability);
         const conf = r.betDirection === "over" ? prob : 100 - prob;
@@ -781,7 +868,9 @@ export class DatabaseStorage implements IStorage {
       const total = inBucket.length;
       const winRate = total > 0 ? (hits / total) * 100 : 0;
       const roi = total > 0 ? ((hits * 90.91 - (total - hits) * 100) / total) : 0;
-      return { label, min, max, total, hits, winRate: Math.round(winRate * 10) / 10, roi: Math.round(roi * 10) / 10 };
+      const actualWinRate = Math.round(winRate * 10) / 10;
+      const calibrationError = Math.round((actualWinRate - expectedWinRate) * 10) / 10;
+      return { label, min, max, total, hits, winRate: actualWinRate, roi: Math.round(roi * 10) / 10, expectedWinRate, actualWinRate, calibrationError };
     });
 
     const totalResolved = rows.length;

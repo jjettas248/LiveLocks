@@ -117,6 +117,8 @@ export const calculateProbabilitySchema = z.object({
   liveFg3a: z.coerce.number().optional(),
   direction: z.enum(["OVER", "UNDER"]).optional(),
   isDebug: z.boolean().optional(),
+  bookOdds: z.coerce.number().optional(),
+  gameDate: z.string().optional(),
 });
 
 export type CalculateProbabilityRequest = z.infer<typeof calculateProbabilitySchema>;
@@ -145,6 +147,7 @@ export interface CalcDebug {
   comboVariancePenaltyApplied?: boolean;
   effectiveMinutesBase?: number;
   rotationSource?: "projected" | "season_avg";
+  noSignal?: boolean;
 }
 
 export interface CalculateProbabilityResponse {
@@ -159,6 +162,7 @@ export interface CalculateProbabilityResponse {
   gameMinutesRemaining?: number;
   inSecondHalf?: boolean;
   baselineSource?: "h2" | "fullGame";
+  noSignal?: boolean;
   debug?: CalcDebug;
 }
 
@@ -304,6 +308,9 @@ export interface BucketStat {
   hits: number;
   winRate: number;
   roi: number;
+  expectedWinRate: number;
+  actualWinRate: number;
+  calibrationError: number;
 }
 
 export interface AnalyticsSummary {
