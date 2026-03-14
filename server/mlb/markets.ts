@@ -327,12 +327,19 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   const rpa = input.remainingPA ?? 2;
   const expectedHits = parseFloat((adjustedRate * rpa).toFixed(2));
 
-  const neededHits = Math.max(0, input.bookLine - currentHits);
-  const binomialOver = binomialOverProbability(rpa, adjustedRate, neededHits);
-  const binomialUnder = 100 - binomialOver;
+  const neededHits = Math.max(0, Math.ceil(input.bookLine) - currentHits);
 
-  const rawProbabilityOver = Math.round(binomialOver * 100) / 100;
-  const rawProbabilityUnder = Math.round(binomialUnder * 100) / 100;
+  let rawProbabilityOver: number;
+  let rawProbabilityUnder: number;
+
+  if (neededHits === 0) {
+    rawProbabilityOver = 100;
+    rawProbabilityUnder = 0;
+  } else {
+    const binomialOver = binomialOverProbability(rpa, adjustedRate, neededHits);
+    rawProbabilityOver = Math.round(binomialOver * 100) / 100;
+    rawProbabilityUnder = Math.round((100 - binomialOver) * 100) / 100;
+  }
 
   let calibratedOver = calibrateProbability(rawProbabilityOver);
   let calibratedUnder = calibrateProbability(rawProbabilityUnder);
