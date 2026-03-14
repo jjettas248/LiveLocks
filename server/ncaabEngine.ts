@@ -59,6 +59,16 @@ export interface NCAABGameInput {
   h2SpreadOddsAmerican: number | null;
 
   sourceTimestamps?: Record<string, number>;
+
+  // Optional sportsbook line movement / public betting data
+  openSpread?: number | null;
+  closingSpread?: number | null;
+  liveSpread?: number | null;
+  openTotal?: number | null;
+  closingTotal?: number | null;
+  liveTotal?: number | null;
+  publicSpreadPct?: number | null;
+  publicTotalPct?: number | null;
 }
 
 // ── Market Types ──────────────────────────────────────────────────────────────
@@ -109,6 +119,11 @@ export interface NCAABMarket {
   edge: number | null;
   side: MarketSide;
   confidenceTier: MarketConfidenceTier;
+  clvEdge?: number | null;
+  publicBetPct?: number | null;
+  publicInflation?: boolean | null;
+  fadeRecommended?: boolean | null;
+  adjustedEdgeScore?: number | null;
 }
 
 export type NCAABMarkets = Record<NCAABMarketKey, NCAABMarket>;
@@ -121,6 +136,9 @@ export interface NCAABDebugMarketEntry {
   bookImpliedProb: number | null;
   edge: number | null;
   confidenceTier: MarketConfidenceTier;
+  clvEdge: number | null;
+  publicBetPct: number | null;
+  publicInflation: boolean | null;
 }
 
 // ── Projection Result ─────────────────────────────────────────────────────────
@@ -797,7 +815,45 @@ function unavailableMarket(key: NCAABMarketKey, label: string): NCAABMarket {
     edge: null,
     side: null,
     confidenceTier: "NONE",
+    clvEdge: null,
+    publicBetPct: null,
+    publicInflation: null,
+    fadeRecommended: null,
+    adjustedEdgeScore: null,
   };
+}
+
+function safeNum(val: number | null | undefined): number | null {
+  if (val === null || val === undefined || !isFinite(val) || isNaN(val)) return null;
+  return val;
+}
+
+function computeCLV(closingLine: number | null | undefined, liveLine: number | null | undefined): number | null {
+  const cl = safeNum(closingLine);
+  const ll = safeNum(liveLine);
+  if (cl === null || ll === null) return null;
+  return round1(Math.abs(ll - cl));
+}
+
+function lineMovedTowardPublic(openLine: number | null | undefined, closingLine: number | null | undefined, publicPct: number | null | undefined, isTotal: boolean): boolean | null {
+  const ol = safeNum(openLine);
+  const cl = safeNum(closingLine);
+  const pp = safeNum(publicPct);
+  if (ol === null || cl === null || pp === null) return null;
+  if (isTotal) {
+    if (pp > 50) {
+      return cl > ol;
+    } else if (pp < 50) {
+      return cl < ol;
+    }
+  } else {
+    if (pp > 50) {
+      return cl < ol;
+    } else if (pp < 50) {
+      return cl > ol;
+    }
+  }
+  return false;
 }
 
 // ── Market labels ────────────────────────────────────────────────────────────
@@ -984,6 +1040,11 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
       edge,
       side,
       confidenceTier: confidenceTierVal,
+      clvEdge: null,
+      publicBetPct: null,
+      publicInflation: null,
+      fadeRecommended: null,
+      adjustedEdgeScore: null,
     };
   }
 
@@ -1033,6 +1094,46 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
     h2_spread: h2SpreadMarket,
   };
 
+  const spreadCLV = computeCLV(input.closingSpread, input.liveSpread);
+  const totalCLV = computeCLV(input.closingTotal, input.liveTotal);
+  const publicInflationSpread = lineMovedTowardPublic(input.openSpread, input.closingSpread, input.publicSpreadPct, false);
+  const publicInflationTotal = lineMovedTowardPublic(input.openTotal, input.closingTotal, input.publicTotalPct, true);
+
+  function attachIntelligence(mkt: NCAABMarket, clv: number | null, pubPct: number | null | undefined, inflation: boolean | null): void {
+    if (!mkt.available) return;
+    const hasSportsbookData = clv !== null || inflation !== null || safeNum(pubPct ?? null) !== null;
+    if (!hasSportsbookData) return;
+
+    mkt.clvEdge = clv;
+    mkt.publicBetPct = safeNum(pubPct ?? null);
+    mkt.publicInflation = inflation;
+    mkt.fadeRecommended = inflation === true && clv !== null && clv >= 1.0 ? true : false;
+
+    const CLV_BONUS = 0.5;
+    const INFLATION_BONUS = 1.0;
+    let adjusted = mkt.edge ?? 0;
+    if (clv !== null) adjusted += clv * CLV_BONUS;
+    if (inflation === true) adjusted += INFLATION_BONUS;
+    mkt.adjustedEdgeScore = round1(adjusted);
+
+    if (clv !== null && clv >= 1.5 && inflation === true) {
+      const tierRank: Record<MarketConfidenceTier, number> = { NONE: 0, VALUE: 1, STRONG: 2, ELITE: 3 };
+      if (tierRank[mkt.confidenceTier] < tierRank["ELITE"]) {
+        mkt.confidenceTier = "ELITE";
+      }
+    }
+  }
+
+  const spreadKeys: NCAABMarketKey[] = ["full_spread", "h1_spread", "h2_spread"];
+  const totalKeys: NCAABMarketKey[] = ["full_total", "h1_total", "h2_total"];
+
+  for (const key of spreadKeys) {
+    attachIntelligence(markets[key], spreadCLV, input.publicSpreadPct, publicInflationSpread);
+  }
+  for (const key of totalKeys) {
+    attachIntelligence(markets[key], totalCLV, input.publicTotalPct, publicInflationTotal);
+  }
+
   const CANONICAL_VERDICT_MAP: Record<NCAABMarketKey, NCAABMarketType> = {
     full_total: "full_game_total",
     full_spread: "spread",
@@ -1073,6 +1174,9 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
           bookImpliedProb: markets[key].bookImpliedProb,
           edge: markets[key].edge,
           confidenceTier: markets[key].confidenceTier,
+          clvEdge: markets[key].clvEdge ?? null,
+          publicBetPct: markets[key].publicBetPct ?? null,
+          publicInflation: markets[key].publicInflation ?? null,
         }))
       : undefined;
 
