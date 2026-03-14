@@ -16,8 +16,8 @@ import {
   applyParkModifier,
   applyBullpenModifier,
   applyWeatherModifier,
-  binomialOverProbability,
 } from "./hitProbabilityModel";
+import { computeHitOutcomeProbability } from "./outcomeDistribution";
 import {
   EXPERIMENTAL_MARKETS,
   CORE_MARKETS,
@@ -344,13 +344,13 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
     rawProbabilityOver = 100;
     rawProbabilityUnder = 0;
   } else {
-    let weightedBinomial = 0;
+    let weightedProb = 0;
     for (const [paCountStr, paProb] of Object.entries(paDist)) {
       const paCount = Number(paCountStr);
-      weightedBinomial += binomialOverProbability(paCount, adjustedRate, neededHits) * paProb;
+      weightedProb += computeHitOutcomeProbability(paCount, adjustedRate, neededHits) * paProb;
     }
-    rawProbabilityOver = Math.round(weightedBinomial * 100) / 100;
-    rawProbabilityUnder = Math.round((100 - weightedBinomial) * 100) / 100;
+    rawProbabilityOver = Math.round(weightedProb * 100) / 100;
+    rawProbabilityUnder = Math.round((100 - weightedProb) * 100) / 100;
   }
 
   let calibratedOver = calibrateProbability(rawProbabilityOver);
