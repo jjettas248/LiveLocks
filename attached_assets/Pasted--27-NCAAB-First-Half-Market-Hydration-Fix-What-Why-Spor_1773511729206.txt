@@ -1,0 +1,86 @@
+#27 - NCAAB First-Half Market Hydration Fix
+
+What & Why
+Sportsbooks publish live first-half totals and spreads. The engine currently shows "1st Half lines unavailable" even during live games where these markets should exist.
+
+This indicates a hydration or market mapping issue between sportsbook data and the engine input layer.
+
+The goal is to ensure first-half sportsbook markets are correctly detected, mapped, and passed into runNCAABEngine so H1 markets build normally.
+
+The engine must NEVER fabricate synthetic lines when sportsbook markets exist.
+
+Done looks like
+When sportsbooks provide live H1 totals or spreads, the engine displays those markets normally
+The H1 TOTAL and H1 SPREAD rows populate with sportsbook bookLine values
+Engine probabilities and edges compute normally for H1 markets
+If sportsbooks truly do not provide the market, the UI still shows "Unavailable"
+Debug logs clearly indicate when H1 markets are missing from upstream data
+
+Out of scope
+Synthetic market generation
+Changes to CLV logic
+Changes to public fade logic
+Changes to model projections
+UI redesign
+
+Tasks
+
+Verify sportsbook market keys
+Ensure the ingestion layer correctly maps sportsbook identifiers such as:
+
+1H Total
+First Half Total
+1st Half Total
+H1 Total
+1H Spread
+First Half Spread
+1st Half Spread
+
+to the engine input fields.
+
+Extend market key matching
+Add tolerant key matching so minor variations from sportsbooks still hydrate correctly.
+
+Example mapping logic:
+
+if marketKey includes:
+"1H"
+"1st Half"
+"First Half"
+
+then classify the market as a first-half market.
+
+Ensure engine input hydration
+Confirm that the ingestion layer populates:
+
+h1TotalBookLine
+h1SpreadBookLine
+h1TotalOdds
+h1SpreadOdds
+
+before calling runNCAABEngine.
+
+Add hydration diagnostics
+If the sportsbook feed contains first-half markets but the engine input fields remain null, log:
+
+console.warn("H1 market hydration failure", { gameId, sportsbookMarkets })
+
+Add upstream visibility
+In non-production environments log detected sportsbook markets so debugging is possible.
+
+Example:
+
+console.debug("Detected sportsbook markets", {
+  gameId,
+  markets: sportsbookMarketKeys
+})
+
+Safety behavior
+If the sportsbook feed truly does not contain first-half markets, the engine should continue returning unavailableMarket() exactly as it does today.
+
+Relevant files
+
+server/ncaabEngine.ts
+server/ncaabService.ts
+sportsbook ingestion layer
+market normalization utilities

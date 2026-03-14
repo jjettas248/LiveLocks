@@ -1,0 +1,249 @@
+#26 - MLB Engine Upgrade: Lineup Turnover Opportunity Model + Binomial Threshold Fix
+
+Goal
+Improve MLB hit prop accuracy by replacing the deterministic plate appearance
+estimator with a probabilistic lineup turnover model.
+
+This produces a distribution of possible remaining plate appearances instead
+of a single averaged estimate, which significantly improves binomial modeling.
+
+System Philosophy (unchanged)
+
+Game State
+↓
+Opportunity Projection (Lineup Turnover Model)
+↓
+Adjusted Hit Probability
+↓
+Binomial Probability
+↓
+Calibration
+↓
+Edge vs Sportsbook
+
+Protected Files (DO NOT MODIFY)
+
+liveGameOrchestrator
+edgeCache
+mlbEdgeCache
+triggerEngine
+signal pipeline
+signal API
+calibration.ts
+probability.ts
+projections.ts
+featureEngineering.ts
+diagnostics.ts
+dataSources.ts
+backtestHarness.ts
+NBA/NCAAB engines
+
+Allowed Changes
+
+server/mlb/types.ts
+server/mlb/markets.ts
+server/mlb/paEstimator.ts
+new file: server/mlb/paDistribution.ts
+
+No frontend changes.
+
+-----------------------------------------------------
+
+1. Fix binomial threshold bug (integer hit requirement)
+
+In server/mlb/markets.ts inside calculateHitsEdge()
+
+Replace:
+
+neededHits = Math.max(0, input.bookLine - currentHits)
+
+With:
+
+neededHits = Math.max(0, Math.ceil(input.bookLine) - currentHits)
+
+Add short-circuit protection immediately after:
+
+if (neededHits === 0) {
+  rawProbabilityOver = 1
+  rawProbabilityUnder = 0
+}
+
+This prevents fractional thresholds and eliminates unnecessary binomial calls
+when the prop has already been won.
+
+-----------------------------------------------------
+
+2. Introduce Plate Appearance Distribution Model
+
+Create new file:
+
+server/mlb/paDistribution.ts
+
+Purpose:
+Return probability distribution for remaining plate appearances.
+
+Example output:
+
+{
+  1: 0.20,
+  2: 0.55,
+  3: 0.25
+}
+
+Implementation:
+
+export function estimatePADistribution(
+  inning: number,
+  battingOrderSlot: number,
+  currentRuns: number,
+  leagueAvgRuns: number
+) {
+
+  const inningsRemaining = 9 - inning
+
+  const basePA = inningsRemaining * 0.44
+
+  let slotAdj = 0
+
+  if (battingOrderSlot <= 2) slotAdj = 0.45
+  else if (battingOrderSlot <= 5) slotAdj = 0.30
+  else if (battingOrderSlot <= 7) slotAdj = 0.10
+  else slotAdj = -0.10
+
+  const paceFactor = Math.max(
+    0.85,
+    Math.min(1.15, currentRuns / leagueAvgRuns)
+  )
+
+  const expectedPA = (basePA + slotAdj) * paceFactor
+
+  const pa1 = Math.max(0, Math.min(1, 1 - (expectedPA - 1)))
+  const pa2 = Math.max(0, Math.min(1, expectedPA - pa1))
+  const pa3 = Math.max(0, 1 - pa1 - pa2)
+
+  return {
+    1: pa1,
+    2: pa2,
+    3: pa3
+  }
+}
+
+-----------------------------------------------------
+
+3. Update Hits Probability Calculation
+
+In server/mlb/markets.ts inside calculateHitsEdge()
+
+Import:
+
+import { estimatePADistribution } from "./paDistribution"
+
+Replace deterministic PA logic.
+
+Old model:
+
+probability = binomialOverProbability(
+  adjustedHitRate,
+  remainingPA,
+  neededHits
+)
+
+New model:
+
+const paDist = estimatePADistribution(
+  input.currentInning,
+  input.battingOrderSlot,
+  input.currentRuns,
+  input.leagueAvgRuns
+)
+
+let probabilityOver = 0
+
+for (const pa in paDist) {
+
+  const paCount = Number(pa)
+  const paProb = paDist[pa]
+
+  const p = binomialOverProbability(
+    adjustedHitRate,
+    paCount,
+    neededHits
+  )
+
+  probabilityOver += p * paProb
+}
+
+rawProbabilityOver = probabilityOver
+rawProbabilityUnder = 1 - probabilityOver
+
+-----------------------------------------------------
+
+4. Expected Hits Calculation
+
+Replace expectedHits logic with distribution-weighted expectation.
+
+expectedHits = 0
+
+for (const pa in paDist) {
+
+  const paCount = Number(pa)
+  const paProb = paDist[pa]
+
+  expectedHits += paCount * adjustedHitRate * paProb
+}
+
+-----------------------------------------------------
+
+5. Keep Existing Calibration Pipeline
+
+After raw probability is computed, continue with the same pipeline.
+
+rawProbabilityOver
+↓
+calibrateProbability()
+↓
+modelProbability
+↓
+edge calculation
+
+No calibration logic changes.
+
+-----------------------------------------------------
+
+6. Type Updates
+
+In server/mlb/types.ts update MLBPropOutput:
+
+expectedHits: number
+remainingPA: number | null
+adjustedHitRate: number | null
+paDistribution?: {
+  1: number
+  2: number
+  3: number
+}
+
+remainingPA should still return the weighted average:
+
+remainingPA =
+(1 * paDist[1]) +
+(2 * paDist[2]) +
+(3 * paDist[3])
+
+-----------------------------------------------------
+
+7. Validation
+
+After implementation verify:
+
+• TypeScript compiles with zero errors
+• No protected engine files modified
+• Signals pipeline remains unchanged
+• Edge calculations unchanged except improved PA model
+
+Expected result:
+
+More accurate hit probabilities
+Better calibration on 0.5 hit lines
+More realistic late-game projections
+No performance regression
