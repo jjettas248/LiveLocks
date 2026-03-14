@@ -222,6 +222,7 @@ export interface MLBPropOutput {
   remainingPA: number | null;
   adjustedHitRate: number | null;
   bookImplied: number | null;
+  paDistribution?: { 1: number; 2: number; 3: number };
 
   isExperimental: boolean;
   suppressed: boolean;

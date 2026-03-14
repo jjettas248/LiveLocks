@@ -9,6 +9,7 @@ import type {
 import { getPlayer, getPlayerByName } from "./rosterService";
 import { mlbGameCache } from "./dataPullService";
 import { estimateRemainingPA } from "./paEstimator";
+import { estimatePADistribution } from "./paDistribution";
 import {
   baseProbability,
   applyPitcherModifier,
@@ -324,8 +325,15 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   const temperature = input.weatherPark.temperature ?? 70;
   adjustedRate = applyWeatherModifier(adjustedRate, windOut, temperature);
 
-  const rpa = input.remainingPA ?? 2;
-  const expectedHits = parseFloat((adjustedRate * rpa).toFixed(2));
+  const paDist = estimatePADistribution(
+    input.inning,
+    input.lineup.battingOrderSlot,
+    input.currentRuns ?? 4.5,
+    input.leagueAvgRuns ?? 4.5
+  );
+
+  const expectedHits = paDist[1] * adjustedRate + paDist[2] * 2 * adjustedRate + paDist[3] * 3 * adjustedRate;
+  const rpa = (1 * paDist[1]) + (2 * paDist[2]) + (3 * paDist[3]);
 
   const neededHits = Math.max(0, Math.ceil(input.bookLine) - currentHits);
 
@@ -336,9 +344,13 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
     rawProbabilityOver = 100;
     rawProbabilityUnder = 0;
   } else {
-    const binomialOver = binomialOverProbability(rpa, adjustedRate, neededHits);
-    rawProbabilityOver = Math.round(binomialOver * 100) / 100;
-    rawProbabilityUnder = Math.round((100 - binomialOver) * 100) / 100;
+    let weightedBinomial = 0;
+    for (const [paCountStr, paProb] of Object.entries(paDist)) {
+      const paCount = Number(paCountStr);
+      weightedBinomial += binomialOverProbability(paCount, adjustedRate, neededHits) * paProb;
+    }
+    rawProbabilityOver = Math.round(weightedBinomial * 100) / 100;
+    rawProbabilityUnder = Math.round((100 - weightedBinomial) * 100) / 100;
   }
 
   let calibratedOver = calibrateProbability(rawProbabilityOver);
@@ -377,8 +389,9 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   output.suppressionReason = suppression.reason;
 
   output.adjustedHitRate = parseFloat(adjustedRate.toFixed(4));
-  output.expectedHits = expectedHits;
+  output.expectedHits = parseFloat(expectedHits.toFixed(2));
   output.remainingPA = rpa;
+  output.paDistribution = paDist;
 
   return output;
 }
