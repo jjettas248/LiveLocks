@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
-import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines, getSGOPlayerLine } from "./oddsService";
+import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines, getSGOPlayerLine, resolveMLBOddsEventId, getMLBPlayerOdds } from "./oddsService";
 import { computeNCAABPlays, getNCAABScoreboard, getNCAABH2H, getNCAABChipOdds, fetch2HLines, calc2HEngineProb } from "./ncaabService";
 import { enrichNCAABGameFull, clearEnrichmentCache, getEnrichmentCacheStats } from "./ncaabEnrichment";
 import { calculateParlay } from "./parlayService";
@@ -476,7 +476,7 @@ export async function registerRoutes(
   });
 
   // ── MLB Routes (Admin-only in Phase A) ──────────────────────────────────────
-  app.post("/api/mlb/props", requireAdmin, async (req, res) => {
+  app.post("/api/mlb/props", requireAuth, async (req, res) => {
     try {
       const raw: Record<string, any> = { ...(req.body ?? {}) };
 
@@ -516,10 +516,31 @@ export async function registerRoutes(
         return res.status(400).json({ error: `Invalid market. Must be one of: ${ALL_MLB_MARKETS.join(", ")}` });
       }
 
-      const bookLine = safeFloat("bookLine", NaN);
+      const rawLine = safeFloat("line", NaN);
+      const bookLine = Number.isFinite(rawLine) ? rawLine : safeFloat("bookLine", NaN);
       if (!Number.isFinite(bookLine)) {
-        return res.status(400).json({ error: "bookLine is required and must be a number" });
+        return res.status(400).json({ error: "line is required and must be a number" });
       }
+
+      const stats = raw.currentStats && typeof raw.currentStats === "object" ? raw.currentStats as Record<string, unknown> : null;
+      const statsAB = stats ? parseInt(String(stats.ab ?? 0), 10) || 0 : safeInt("atBats", 0);
+      const statsH = stats ? parseInt(String(stats.h ?? 0), 10) || 0 : 0;
+      const statsTB = stats ? parseInt(String(stats.tb ?? 0), 10) || 0 : 0;
+      const statsK = stats ? parseInt(String(stats.k ?? 0), 10) || 0 : 0;
+      const currentStatValue = stats
+        ? (market === "hits" ? statsH : market === "total_bases" ? statsTB : statsK)
+        : safeFloat("currentStatValue", 0);
+
+      const overOdds = safeFloat("overOdds", NaN);
+      let bookImplied: number | null = null;
+      if (Number.isFinite(overOdds)) {
+        bookImplied = overOdds < 0
+          ? Math.abs(overOdds) / (Math.abs(overOdds) + 100) * 100
+          : 100 / (overOdds + 100) * 100;
+        bookImplied = Math.round(bookImplied * 10) / 10;
+      }
+
+      const inning = raw.currentInning != null ? safeInt("currentInning", 1) : safeInt("inning", 1);
 
       const input: MLBPropInput = {
         playerId: safeStr("playerId"),
@@ -531,12 +552,12 @@ export async function registerRoutes(
         bookLine,
         seasonAvg: safeFloat("seasonAvg", 0),
         plateAppearances: safeInt("plateAppearances", 0),
-        atBats: safeInt("atBats", 0),
-        currentStatValue: safeFloat("currentStatValue", 0),
+        atBats: statsAB,
+        currentStatValue,
         remainingPA: safeInt("remainingPA", 4),
         remainingAB: safeInt("remainingAB", 4),
-        completedAB: safeInt("completedAB", 0),
-        inning: safeInt("inning", 1),
+        completedAB: statsAB,
+        inning,
         isTopInning: safeBool("isTopInning"),
         batterHand: (safeStr("batterHand") as "L" | "R" | "S") || null,
         pitcherThrows: (raw.pitcherThrows === "L" || raw.pitcherThrows === "R") ? raw.pitcherThrows : undefined,
@@ -613,12 +634,72 @@ export async function registerRoutes(
             : undefined,
       };
 
+      const cachedLiveGames = mlbLiveGamesCache.get("games");
+      if (cachedLiveGames) {
+        const liveGame = cachedLiveGames.games.find((g: any) => String(g.gameId) === input.gameId);
+        if (liveGame && liveGame.homeScore != null && liveGame.awayScore != null) {
+          input.currentRuns = liveGame.homeScore + liveGame.awayScore;
+          input.leagueAvgRuns = 8.5;
+        }
+      }
+
       const output = calculateMLBPropEdge(input);
+      if (bookImplied != null) {
+        output.bookImplied = bookImplied;
+      }
       recordMLBDiagnostic(output);
       return res.json(output);
     } catch (err: any) {
       console.error("[MLB props]", err.message);
       return res.status(400).json({ error: err.message || "MLB prop engine error" });
+    }
+  });
+
+  app.get("/api/mlb/odds", requireAuth, async (req, res) => {
+    try {
+      const { playerTeam, opponentTeam, playerName, statType, inPlay } = req.query;
+
+      if (!playerName || !statType) {
+        return res.status(400).json({ message: "Missing required parameters: playerName, statType" });
+      }
+
+      if (!process.env.ODDS_API_KEY) {
+        return res.status(503).json({ message: "ODDS_API_KEY not configured" });
+      }
+
+      const teamA = playerTeam as string | undefined;
+      const teamB = opponentTeam as string | undefined;
+
+      if (!teamA || !teamB) {
+        return res.json({});
+      }
+
+      const oddsEventId = await resolveMLBOddsEventId(teamA, teamB);
+
+      if (!oddsEventId) {
+        return res.json({});
+      }
+
+      const isInPlay = inPlay === "true";
+      let formattedOdds = await getMLBPlayerOdds(oddsEventId, playerName as string, statType as string, isInPlay);
+
+      if (formattedOdds._quotaExhausted) {
+        return res.json({ _quotaExhausted: true });
+      }
+
+      const liveKeys = Object.keys(formattedOdds).filter(k => k !== "_quotaExhausted");
+      if (isInPlay && liveKeys.length === 0) {
+        console.log(`[MLB Odds] No live lines for "${playerName}" (${statType}) — falling back to pre-game`);
+        formattedOdds = await getMLBPlayerOdds(oddsEventId, playerName as string, statType as string, false);
+        if (formattedOdds._quotaExhausted) {
+          return res.json({ _quotaExhausted: true });
+        }
+      }
+
+      res.json(formattedOdds);
+    } catch (err: any) {
+      console.error("[MLB Odds API Error]", err.message);
+      res.status(500).json({ message: err.message || "Failed to fetch MLB odds" });
     }
   });
 

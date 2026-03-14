@@ -548,10 +548,199 @@ export async function getSGOPlayerLine(
   }
 }
 
+// ─── MLB Odds Support ────────────────────────────────────────────────────────
+
+const MLB_BASE_URL = "https://api.the-odds-api.com/v4/sports/baseball_mlb";
+
+export const MLB_TEAM_FULL_NAMES: Record<string, string> = {
+  ARI: "Arizona Diamondbacks",
+  ATL: "Atlanta Braves",
+  BAL: "Baltimore Orioles",
+  BOS: "Boston Red Sox",
+  CHC: "Chicago Cubs",
+  CHW: "Chicago White Sox",
+  CIN: "Cincinnati Reds",
+  CLE: "Cleveland Guardians",
+  COL: "Colorado Rockies",
+  DET: "Detroit Tigers",
+  HOU: "Houston Astros",
+  KC: "Kansas City Royals",
+  KCR: "Kansas City Royals",
+  LAA: "Los Angeles Angels",
+  LAD: "Los Angeles Dodgers",
+  MIA: "Miami Marlins",
+  MIL: "Milwaukee Brewers",
+  MIN: "Minnesota Twins",
+  NYM: "New York Mets",
+  NYY: "New York Yankees",
+  OAK: "Oakland Athletics",
+  PHI: "Philadelphia Phillies",
+  PIT: "Pittsburgh Pirates",
+  SD: "San Diego Padres",
+  SDP: "San Diego Padres",
+  SF: "San Francisco Giants",
+  SFG: "San Francisco Giants",
+  SEA: "Seattle Mariners",
+  STL: "St. Louis Cardinals",
+  TB: "Tampa Bay Rays",
+  TBR: "Tampa Bay Rays",
+  TEX: "Texas Rangers",
+  TOR: "Toronto Blue Jays",
+  WSH: "Washington Nationals",
+  WAS: "Washington Nationals",
+};
+
+const MLB_MARKET_MAP: Record<string, string> = {
+  hits: "batter_hits",
+  total_bases: "batter_total_bases",
+  batter_strikeouts: "batter_strikeouts",
+};
+
+async function getMLBEvents(): Promise<any[]> {
+  const cacheKey = "mlb_events_list";
+  const cached = cache.get(cacheKey);
+  if (isFresh(cached, EVENTS_TTL)) return cached!.data;
+  if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
+
+  const res = await fetch(
+    `${MLB_BASE_URL}/events?apiKey=${ODDS_API_KEY}&dateFormat=iso`,
+    { signal: AbortSignal.timeout(8000) }
+  );
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`MLB events fetch failed: ${res.status} — ${body}`);
+  }
+  const data = await res.json();
+  cache.set(cacheKey, { data, timestamp: Date.now() });
+  console.log(`[Odds] Fetched ${data.length} MLB events`);
+  return data;
+}
+
+export async function resolveMLBOddsEventId(
+  playerTeamInput: string,
+  opponentTeamInput: string
+): Promise<string | null> {
+  try {
+    const events = await getMLBEvents();
+    const playerTeam = MLB_TEAM_FULL_NAMES[playerTeamInput.toUpperCase()] ?? playerTeamInput;
+    const opponentTeam = MLB_TEAM_FULL_NAMES[opponentTeamInput.toUpperCase()] ?? opponentTeamInput;
+
+    for (const ev of events) {
+      const evHome: string = ev.home_team ?? "";
+      const evAway: string = ev.away_team ?? "";
+      const playerIsHome = teamsMatch(playerTeam, evHome) && teamsMatch(opponentTeam, evAway);
+      const playerIsAway = teamsMatch(playerTeam, evAway) && teamsMatch(opponentTeam, evHome);
+      if (playerIsHome || playerIsAway) {
+        console.log(`[Odds MLB] Matched event: ${ev.away_team} @ ${ev.home_team} → ${ev.id}`);
+        return ev.id as string;
+      }
+    }
+
+    for (const ev of events) {
+      if (teamsMatch(playerTeam, ev.home_team ?? "") || teamsMatch(playerTeam, ev.away_team ?? "")) {
+        console.log(`[Odds MLB] Fuzzy team match: ${ev.away_team} @ ${ev.home_team} → ${ev.id}`);
+        return ev.id as string;
+      }
+    }
+
+    console.warn(`[Odds MLB] No event found for ${playerTeam} vs ${opponentTeam}`);
+    return null;
+  } catch (err) {
+    console.error("[Odds MLB] resolveMLBOddsEventId error:", err);
+    return null;
+  }
+}
+
+async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = false): Promise<any> {
+  const cacheKey = `mlb_odds_${inPlay ? "live" : "pre"}_${oddsEventId}_${marketKey}`;
+  const cached = cache.get(cacheKey);
+  const ttl = inPlay ? ODDS_LIVE_TTL : ODDS_TTL;
+  if (isFresh(cached, ttl)) return cached!.data;
+
+  const quotaCacheKey = `quota_exhausted`;
+  const quotaCached = cache.get(quotaCacheKey);
+  if (isFresh(quotaCached, QUOTA_TTL)) return QUOTA_EXHAUSTED;
+
+  if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
+
+  const inPlayParam = inPlay ? "&in_play=true" : "";
+  const bookmakers = "draftkings,fanduel,hardrockbet";
+  const url = `${MLB_BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=${PROP_REGIONS}&markets=${marketKey}&bookmakers=${bookmakers}&oddsFormat=american${inPlayParam}`;
+
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) {
+    const body = await res.text();
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed.error_code === "OUT_OF_USAGE_CREDITS" || res.status === 401) {
+        cache.set(quotaCacheKey, { data: QUOTA_EXHAUSTED, timestamp: Date.now() });
+        return QUOTA_EXHAUSTED;
+      }
+    } catch (_) {}
+    throw new Error(`MLB odds fetch failed: ${res.status} — ${body}`);
+  }
+  const data = await res.json();
+  cache.set(cacheKey, { data, timestamp: Date.now() });
+  return data;
+}
+
+type MLBOddsResult = Record<string, { line: number; overOdds: number; underOdds: number }> & { _quotaExhausted?: boolean };
+
+export async function getMLBPlayerOdds(
+  oddsEventId: string,
+  playerName: string,
+  statType: string,
+  inPlay = false
+): Promise<MLBOddsResult> {
+  const result: MLBOddsResult = {};
+
+  const marketKey = MLB_MARKET_MAP[statType];
+  if (!marketKey) return result;
+
+  const oddsData = await getMLBRawOdds(oddsEventId, marketKey, inPlay);
+  if (oddsData?._quotaExhausted) {
+    const exhausted: MLBOddsResult = {};
+    exhausted._quotaExhausted = true;
+    return exhausted;
+  }
+  if (!oddsData?.bookmakers) return result;
+
+  const normName = normPlayerName(playerName);
+  const nameParts = normName.split(" ");
+  const firstName = nameParts[0];
+  const lastName = nameParts[nameParts.length - 1];
+
+  for (const bookmaker of oddsData.bookmakers) {
+    const market = bookmaker.markets?.find((m: any) => m.key === marketKey);
+    if (!market?.outcomes) continue;
+
+    const playerOutcomes = market.outcomes.filter((o: any) => {
+      const desc = normPlayerName(o.description ?? o.name ?? "");
+      return desc === normName
+        || desc.includes(normName)
+        || (desc.includes(firstName) && desc.includes(lastName));
+    });
+
+    const over = playerOutcomes.find((o: any) => o.name === "Over");
+    const under = playerOutcomes.find((o: any) => o.name === "Under");
+
+    if (over && under) {
+      result[bookmaker.key] = {
+        line: over.point,
+        overOdds: over.price,
+        underOdds: under.price,
+      };
+    }
+  }
+
+  return result;
+}
+
 // Bust the event cache (call after a game starts or for testing)
 export function bustEventsCache(): void {
   cache.delete("events_list");
   cache.delete("sgo_nba_events");
+  cache.delete("mlb_events_list");
 }
 
 // Expose opening line cache size for diagnostics

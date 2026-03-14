@@ -137,6 +137,9 @@ export interface MLBPropInput {
   inning: number;
   isTopInning: boolean;
 
+  currentRuns?: number;
+  leagueAvgRuns?: number;
+
   batterHand: "L" | "R" | "S" | null;
 
   pitcherThrows?: "L" | "R" | null;
@@ -214,6 +217,11 @@ export interface MLBPropOutput {
   mode: "standard" | "early_explosive";
   completedAB: number;
   twoABRuleSatisfied: boolean;
+
+  expectedHits: number | null;
+  remainingPA: number | null;
+  adjustedHitRate: number | null;
+  bookImplied: number | null;
 
   isExperimental: boolean;
   suppressed: boolean;

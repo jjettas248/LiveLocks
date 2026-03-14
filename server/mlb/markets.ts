@@ -10,6 +10,14 @@ import { getPlayer, getPlayerByName } from "./rosterService";
 import { mlbGameCache } from "./dataPullService";
 import { estimateRemainingPA } from "./paEstimator";
 import {
+  baseProbability,
+  applyPitcherModifier,
+  applyParkModifier,
+  applyBullpenModifier,
+  applyWeatherModifier,
+  binomialOverProbability,
+} from "./hitProbabilityModel";
+import {
   EXPERIMENTAL_MARKETS,
   CORE_MARKETS,
   EXPERIMENTAL_CONFIDENCE_CEILING,
@@ -287,6 +295,10 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
     mode: projResult.mode,
     completedAB: input.completedAB,
     twoABRuleSatisfied: projResult.twoABRuleSatisfied,
+    expectedHits: null,
+    remainingPA: input.remainingPA ?? null,
+    adjustedHitRate: null,
+    bookImplied: null,
     isExperimental,
     suppressed: suppression.suppressed,
     suppressionReason: suppression.reason,
@@ -297,11 +309,87 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
 }
 
 export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
-  return buildOutput({ ...input, market: "hits" });
+  const currentHits = input.currentStatValue ?? 0;
+  const playerAB = input.atBats > 0 ? input.atBats : input.completedAB;
+
+  let adjustedRate = baseProbability(currentHits, playerAB);
+
+  const pitcherKRate = input.pitcher.kPer9 != null ? input.pitcher.kPer9 / 9 : 0.22;
+  const pitcherBABIP = 0.296;
+  adjustedRate = applyPitcherModifier(adjustedRate, pitcherKRate, pitcherBABIP);
+  adjustedRate = applyParkModifier(adjustedRate, input.weatherPark.parkFactor);
+  adjustedRate = applyBullpenModifier(adjustedRate, input.bullpen.bullpenEra);
+
+  const windOut = input.weatherPark.windDirection === "out";
+  const temperature = input.weatherPark.temperature ?? 70;
+  adjustedRate = applyWeatherModifier(adjustedRate, windOut, temperature);
+
+  const rpa = input.remainingPA ?? 2;
+  const expectedHits = parseFloat((adjustedRate * rpa).toFixed(2));
+
+  const neededHits = Math.max(0, input.bookLine - currentHits);
+  const binomialOver = binomialOverProbability(rpa, adjustedRate, neededHits);
+  const binomialUnder = 100 - binomialOver;
+
+  const rawProbabilityOver = Math.round(binomialOver * 100) / 100;
+  const rawProbabilityUnder = Math.round(binomialUnder * 100) / 100;
+
+  let calibratedOver = calibrateProbability(rawProbabilityOver);
+  let calibratedUnder = calibrateProbability(rawProbabilityUnder);
+
+  const calibratedSidedRaw = rawProbabilityOver >= rawProbabilityUnder ? calibratedOver : calibratedUnder;
+  const calibratedSided = applyProbabilityCeiling(calibratedSidedRaw, "hits");
+  const calibratedOpposite = Math.round((100 - calibratedSided) * 100) / 100;
+
+  const calibratedProbabilityOver = rawProbabilityOver >= rawProbabilityUnder ? calibratedSided : calibratedOpposite;
+  const calibratedProbabilityUnder = rawProbabilityOver >= rawProbabilityUnder ? calibratedOpposite : calibratedSided;
+  const calibratedDominant = Math.max(calibratedProbabilityOver, calibratedProbabilityUnder);
+  const dominantRawProb = Math.max(rawProbabilityOver, rawProbabilityUnder);
+
+  const edge = calibratedSided - 50;
+  const confidenceTier = determineConfidenceTier(edge);
+  const recommendedSide = determineSide(calibratedSided, confidenceTier);
+
+  const adjustedProjection = expectedHits + currentHits;
+  const suppression = checkSuppression({ ...input, market: "hits" }, edge, "hits", adjustedProjection);
+  const finalEdge = suppression.suppressed ? 0 : Math.round(edge * 100) / 100;
+
+  const output = buildOutput({ ...input, market: "hits" });
+
+  output.projection = parseFloat(adjustedProjection.toFixed(3));
+  output.rawProbabilityOver = rawProbabilityOver;
+  output.rawProbabilityUnder = rawProbabilityUnder;
+  output.calibratedProbabilityOver = Math.round(calibratedProbabilityOver * 100) / 100;
+  output.calibratedProbabilityUnder = Math.round(calibratedProbabilityUnder * 100) / 100;
+  output.rawProbability = Math.round(dominantRawProb * 100) / 100;
+  output.calibratedProbability = Math.round(calibratedDominant * 100) / 100;
+  output.edge = finalEdge;
+  output.confidenceTier = suppression.suppressed ? "NO_EDGE" : confidenceTier;
+  output.recommendedSide = suppression.suppressed ? "NO_EDGE" : recommendedSide;
+  output.suppressed = suppression.suppressed;
+  output.suppressionReason = suppression.reason;
+
+  output.adjustedHitRate = parseFloat(adjustedRate.toFixed(4));
+  output.expectedHits = expectedHits;
+  output.remainingPA = rpa;
+
+  return output;
 }
 
 export function calculateTBEdge(input: MLBPropInput): MLBPropOutput {
-  return buildOutput({ ...input, market: "total_bases" });
+  const output = buildOutput({ ...input, market: "total_bases" });
+
+  let tbRate = input.atBats > 0 ? (input.currentStatValue ?? 0) / input.atBats : 0.40;
+  tbRate = applyParkModifier(tbRate, input.weatherPark.parkFactor);
+  const windOut = input.weatherPark.windDirection === "out";
+  const temperature = input.weatherPark.temperature ?? 70;
+  tbRate = applyWeatherModifier(tbRate, windOut, temperature);
+
+  const rpa = input.remainingPA ?? 2;
+  output.expectedHits = parseFloat((tbRate * rpa).toFixed(2));
+  output.remainingPA = rpa;
+
+  return output;
 }
 
 export function calculateBatterKEdge(input: MLBPropInput): MLBPropOutput {
@@ -393,7 +481,9 @@ export function calculateMLBPropEdge(input: MLBPropInput): MLBPropOutput {
     const { remainingPA, remainingAB } = estimateRemainingPA(
       gameState.inning,
       gameState.isTopInning,
-      slot
+      slot,
+      resolvedInput.currentRuns,
+      resolvedInput.leagueAvgRuns
     );
     resolvedInput = {
       ...resolvedInput,
