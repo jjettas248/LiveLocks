@@ -235,6 +235,8 @@ export default function MlbLivePage() {
 
   useEffect(() => {
     setSelectedPlayer(null);
+    setCalcResult(null);
+    setSelectedLine(null);
   }, [selectedGame?.gameId]);
 
   const playerTierMap = new Map<string, string>();
@@ -294,6 +296,7 @@ export default function MlbLivePage() {
                     setSelectedGameId(game.gameId);
                     setSelectedPlayer(null);
                     setCalcResult(null);
+                    setSelectedLine(null);
                   }}
                   className={`flex-shrink-0 px-4 py-2.5 rounded-xl border text-xs font-medium transition-all ${
                     isActive
