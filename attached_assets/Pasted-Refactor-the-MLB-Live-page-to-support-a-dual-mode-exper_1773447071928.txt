@@ -1,0 +1,191 @@
+Refactor the MLB Live page to support a dual-mode experience identical to NBA Live while preserving the existing signals system.
+
+The MLB page must support two modes:
+
+1) automatic edge signals
+2) manual player probability calculator
+
+Do NOT modify the orchestrator, edgeCache, triggerEngine, or signal pipeline.
+
+--------------------------------------------------
+
+ENGINE BOUNDARY RULE
+
+All probability calculations must remain server-side.
+
+The frontend must NOT calculate remaining plate appearances or probabilities.
+
+The frontend should only send:
+
+playerId
+selected sportsbook line
+current inning
+current stats
+batting order slot
+
+The backend engine will calculate remainingPA, probabilities, and edge.
+
+--------------------------------------------------
+
+FEATURE 1 — OPEN CALCULATOR
+
+Each player row in the box score must be clickable.
+
+onClick={() => setSelectedPlayer(player)}
+
+Selecting a player switches the UI into calculator mode.
+
+Add state:
+
+const [selectedPlayer, setSelectedPlayer] = useState(null)
+
+Add button:
+
+← Back to Game
+
+which clears selectedPlayer.
+
+--------------------------------------------------
+
+FEATURE 2 — COLLAPSIBLE BOX SCORE
+
+Add state:
+
+const [boxExpanded, setBoxExpanded] = useState(true)
+
+Header:
+
+▾ Box Score
+
+Tapping toggles collapse.
+
+--------------------------------------------------
+
+FEATURE 3 — MATCHUP DETAILS PANEL
+
+When selectedPlayer !== null display:
+
+Player
+Team
+Opponent
+Batting Order Slot
+Current Inning
+
+Current stats
+
+AB
+H
+TB
+BB
+K
+SB
+
+This must use the same card layout used by the NBA matchup panel.
+
+--------------------------------------------------
+
+FEATURE 4 — LIVE SPORTSBOOK LINES
+
+Add endpoint:
+
+GET /api/mlb/odds
+
+Use sport key:
+
+baseball_mlb
+
+Return format:
+
+{
+bookmaker: {
+line,
+overOdds,
+underOdds
+}
+}
+
+Books displayed:
+
+FanDuel
+DraftKings
+Hard Rock
+
+Selecting a row highlights the selected line.
+
+--------------------------------------------------
+
+FEATURE 5 — CALCULATE PROBABILITY
+
+Button:
+
+Calculate Probability
+
+Calls:
+
+POST /api/mlb/props
+
+Payload:
+
+playerId
+market
+line
+currentStats
+inning
+battingOrderSlot
+
+The backend engine calculates:
+
+remainingPA
+expectedHits
+modelProbability
+edge vs sportsbook
+
+Frontend renders result using:
+
+ProbabilityRing
+Expected Hits
+Remaining PA
+Edge %
+
+Disable the button until a line is selected.
+
+--------------------------------------------------
+
+FEATURE 6 — PREDICTION RESULT PANEL
+
+Display:
+
+ProbabilityRing
+Edge %
+Expected hits
+Remaining plate appearances
+Book implied probability
+
+Reuse the same UI components used by NBA.
+
+--------------------------------------------------
+
+FEATURE 7 — SIGNALS MUST CONTINUE POLLING
+
+The signals engine must continue polling while the calculator view is open.
+
+EdgeCards are hidden visually but polling must continue in the background.
+
+--------------------------------------------------
+
+EXPECTED RESULT
+
+User flow:
+
+open MLB tab
+select game
+view signals and box score
+tap player
+open matchup calculator
+select sportsbook line
+calculate probability
+view prediction
+tap back
+return to signals
+
+This must work on desktop, tablet, and mobile with no horizontal scrolling.

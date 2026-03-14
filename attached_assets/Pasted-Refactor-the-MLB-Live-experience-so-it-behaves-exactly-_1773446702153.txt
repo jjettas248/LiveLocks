@@ -1,0 +1,386 @@
+Refactor the MLB Live experience so it behaves exactly like the NBA Live system across BOTH web and mobile.
+
+The MLB product must support two parallel modes:
+
+1) AUTOMATIC SIGNALS (existing system)
+2) MANUAL PLAYER PROBABILITY CALCULATION (NBA-style calculator)
+
+Do NOT remove the signal system.
+
+The MLB page must mirror the NBA Live UI/UX flow exactly.
+
+--------------------------------------------------
+
+DO NOT MODIFY THESE SYSTEMS
+
+These backend systems are already correct and must remain unchanged:
+
+orchestrator
+triggerEngine
+edgeCache
+mlbEdgeCache
+calculateMLBPropEdge
+liveGameRegistry
+
+Signals must still come from:
+
+GET /api/mlb/live-signals/:gameId
+
+Manual calculations must call:
+
+POST /api/mlb/props
+
+--------------------------------------------------
+
+WEB + MOBILE PARITY REQUIREMENT
+
+The MLB experience must behave the same on:
+
+desktop
+tablet
+mobile
+
+The layout must follow the same component architecture used by NBA Live.
+
+The MLB page must support:
+
+tap player
+open matchup details
+select sportsbook line
+calculate probability
+view prediction card
+return to signals
+
+This must work identically on desktop and mobile.
+
+--------------------------------------------------
+
+PAGE STRUCTURE
+
+Refactor:
+
+client/src/pages/mlb-live.tsx
+
+Page layout:
+
+MlbLivePage
+
+GameStrip
+InningTabs
+
+IF selectedPlayer == null
+
+    CollapsibleBoxScore
+    EdgeCards
+
+ELSE
+
+    MatchupDetailsPanel
+    LiveLineSelector
+    CalculateProbabilityButton
+    PredictionResultPanel
+
+--------------------------------------------------
+
+GAME STRIP
+
+Use existing endpoint:
+
+GET /api/mlb/live-games
+
+Auto-refresh every 30 seconds.
+
+On page load:
+
+select first live game
+else first preview game
+else show "No MLB games today"
+
+--------------------------------------------------
+
+COLLAPSIBLE BOX SCORE
+
+Component: BoxScorePanel
+
+Add state:
+
+const [boxExpanded, setBoxExpanded] = useState(true)
+
+Header must show:
+
+▾ Box Score
+
+Tapping header toggles collapse.
+
+When collapsed hide the table.
+
+Columns:
+
+Player
+AB
+H
+TB
+R
+RBI
+BB
+SB
+K
+
+Rows must be clickable.
+
+--------------------------------------------------
+
+PLAYER SELECTION
+
+Each player row must be clickable.
+
+onClick={() => setSelectedPlayer(player)}
+
+Add state:
+
+const [selectedPlayer, setSelectedPlayer] = useState(null)
+
+Selecting a player switches the page into calculator mode.
+
+Add a button:
+
+← Back to Game
+
+This clears selectedPlayer.
+
+--------------------------------------------------
+
+MATCHUP DETAILS PANEL
+
+Component: MatchupDetailsPanel
+
+Fields:
+
+Player
+Team
+Opponent
+Batting Order Slot
+Current Inning
+
+Current Stats
+
+AB
+Hits
+Total Bases
+Walks
+Strikeouts
+Stolen Bases
+
+Use the same card style used by the NBA matchup panel.
+
+--------------------------------------------------
+
+LIVE SPORTSBOOK LINE SELECTOR
+
+Component: LiveLineSelector
+
+Pull sportsbook lines from the same API used by NBA.
+
+Display rows:
+
+FanDuel
+DraftKings
+Hard Rock
+
+Each row shows:
+
+Line
+Over odds
+Under odds
+
+User selects a line.
+
+--------------------------------------------------
+
+CALCULATE PROBABILITY
+
+Button:
+
+Calculate Probability
+
+Calls:
+
+POST /api/mlb/props
+
+Payload:
+
+playerId
+market
+line
+inning
+currentStats
+battingOrderSlot
+team
+opponent
+
+--------------------------------------------------
+
+MLB PROBABILITY MODEL STRUCTURE
+
+The engine must calculate probability using plate appearance modeling.
+
+Do NOT use simple averages.
+
+Use this structure:
+
+--------------------------------------------------
+
+STEP 1 — PROJECT REMAINING PLATE APPEARANCES
+
+Expected remaining PA:
+
+remainingPA =
+(9 - currentInning) * 0.44
+
+Adjust for batting order:
+
+slot 1–2 → +0.4 PA
+slot 3–5 → +0.2 PA
+slot 6–9 → −0.1 PA
+
+Add current game pace adjustment:
+
+paceFactor =
+(currentRuns / leagueAvgRuns)
+
+remainingPA *= paceFactor
+
+Clamp:
+
+remainingPA between 1.0 and 3.5
+
+--------------------------------------------------
+
+STEP 2 — PLAYER HIT PROBABILITY
+
+Use player batting stats:
+
+hitProbability =
+playerHits / playerAB
+
+Blend with league average:
+
+leagueHitRate = .243
+
+blendedHitRate =
+(0.65 * hitProbability) +
+(0.35 * leagueHitRate)
+
+--------------------------------------------------
+
+STEP 3 — PROBABILITY OF AT LEAST ONE HIT
+
+Using binomial distribution:
+
+P(hit ≥ 1) =
+1 - (1 - blendedHitRate) ^ remainingPA
+
+--------------------------------------------------
+
+STEP 4 — EXPECTED HITS
+
+expectedHits =
+remainingPA * blendedHitRate
+
+--------------------------------------------------
+
+STEP 5 — EDGE CALCULATION
+
+Book implied probability:
+
+impliedProbability =
+americanOddsToProbability(bookOdds)
+
+Edge:
+
+edge =
+modelProbability - impliedProbability
+
+--------------------------------------------------
+
+PREDICTION RESULT PANEL
+
+Component: PredictionResultPanel
+
+Use same components used by NBA:
+
+ProbabilityRing
+EV Card
+Projection Cards
+Market Comparison
+CLV indicator
+
+Display:
+
+Over %
+Under %
+Expected Hits
+Remaining Plate Appearances
+Edge vs sportsbook
+
+--------------------------------------------------
+
+EDGE SIGNAL CARDS
+
+EdgeCards must remain visible when no player is selected.
+
+Signals come from:
+
+GET /api/mlb/live-signals/:gameId
+
+Each card displays:
+
+Player
+Market
+Line
+Engine %
+Book %
+Edge %
+
+Color tiers:
+
+≥85% OVER → green
+70–84% → yellow
+60–69% → teal
+≥85% UNDER → red
+
+Add button:
+
++ Add to Parlay
+
+--------------------------------------------------
+
+MOBILE UX REQUIREMENTS
+
+Ensure:
+
+box score collapsible
+player tap works
+calculator opens full width
+back button returns to signals
+cards stack vertically
+
+No horizontal scroll.
+
+--------------------------------------------------
+
+EXPECTED RESULT
+
+The MLB Live page must function exactly like NBA Live.
+
+User flow:
+
+open MLB tab
+select game
+view box score
+tap player
+open matchup calculator
+select sportsbook line
+calculate probability
+view projection
+return to signals
