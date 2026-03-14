@@ -2667,7 +2667,7 @@ export default function Dashboard() {
                   const statLabel = STAT_TYPES.find(s => s.value === rawStatType)?.label ?? rawStatType;
                   const line = form.getValues("liveLine");
                   const prob = result.probability;
-                  const isOver = prob >= 65;
+                  const isOver = prob >= 50;
                   const direction = isOver ? "Over" : "Under";
                   const directionProb = isOver ? prob.toFixed(0) : (100 - prob).toFixed(0);
                   const projection = result.expectedTotal.toFixed(1);
