@@ -2656,8 +2656,8 @@ export default function Dashboard() {
                   );
                 })()}
 
-                {/* Share prompt — shown on strong results */}
-                {(result.probability >= 62 || result.probability <= 38) && (() => {
+                {/* Share prompt — shown on all results */}
+                {(() => {
                   const playerName = (() => {
                     const id = form.getValues("playerId");
                     const p = (players ?? []).find(pl => pl.id === Number(id));
