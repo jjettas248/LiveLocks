@@ -1,0 +1,122 @@
+ADDENDUM — CRITICAL ENGINE SAFETY FIXES
+
+Implement the following three safeguards in the MLB probability engine to ensure correct probability calculations and prevent edge drift. These changes DO NOT alter the engine architecture or pipeline. They only add safety normalization.
+
+--------------------------------------------------
+FIX 1 — BINOMIAL HIT THRESHOLD NORMALIZATION
+--------------------------------------------------
+
+When calculating probability for the Hits market, sportsbook lines are fractional (ex: 0.5, 1.5, 2.5). The binomial model requires an integer number of hits needed to win the bet.
+
+Before calling binomialOverProbability, normalize the threshold:
+
+neededHits = ceil(bookLine) - currentHits
+
+Then clamp:
+
+neededHits = max(neededHits, 0)
+
+Example behavior:
+
+line = 1.5, currentHits = 1 → neededHits = 1  
+line = 2.5, currentHits = 1 → neededHits = 2  
+line = 0.5, currentHits = 0 → neededHits = 1  
+
+This prevents fractional thresholds from corrupting the binomial calculation.
+
+This normalization must occur inside:
+
+server/mlb/markets.ts → calculateHitsEdge()
+
+Do NOT move this logic to the frontend.
+
+--------------------------------------------------
+FIX 2 — CALIBRATION APPLIED TO PROBABILITY (NOT RATE)
+--------------------------------------------------
+
+Calibration must only be applied after computing the raw binomial probability.
+
+Correct pipeline:
+
+adjustedHitRate
+→ binomialOverProbability()
+→ rawProbability
+→ calibrate(rawProbability)
+→ modelProbability
+
+Incorrect implementation to avoid:
+
+calibrate(adjustedHitRate)
+
+Calibration functions operate on probabilities, not event rates.
+
+Verify calibration is applied inside the existing pipeline after the binomial calculation in calculateMLBPropEdge / calculateHitsEdge.
+
+--------------------------------------------------
+FIX 3 — PACE FACTOR SAFE DIVISION
+--------------------------------------------------
+
+The PA estimator currently uses:
+
+paceFactor = currentRuns / leagueAvgRuns
+
+This must guard against division-by-zero or missing data.
+
+Implement safe calculation:
+
+if (leagueAvgRuns > 0) {
+  paceFactor = currentRuns / leagueAvgRuns
+} else {
+  paceFactor = 1
+}
+
+Then clamp:
+
+paceFactor = clamp(paceFactor, 0.85, 1.15)
+
+This logic belongs inside:
+
+server/mlb/paEstimator.ts → estimateRemainingPA()
+
+This ensures early-game or missing-cache scenarios do not distort PA projections.
+
+--------------------------------------------------
+IMPLEMENTATION RULES
+--------------------------------------------------
+
+• These changes must NOT modify the engine architecture.
+• Do NOT touch:
+  liveGameOrchestrator
+  edgeCache
+  mlbEdgeCache
+  triggerEngine
+  signal pipeline
+  calibration.ts
+  probability.ts
+  projections.ts
+  featureEngineering.ts
+  diagnostics.ts
+  dataSources.ts
+  backtestHarness.ts
+
+• These are strictly safety corrections inside:
+  - markets.ts
+  - paEstimator.ts
+
+--------------------------------------------------
+EXPECTED RESULT
+--------------------------------------------------
+
+The engine continues to output:
+
+modelProbability  
+expectedHits  
+remainingPA  
+adjustedHitRate  
+edge  
+
+while ensuring:
+
+• correct binomial thresholds
+• proper calibration usage
+• safe pace factor computation
