@@ -1,0 +1,226 @@
+# MLB Engine Addendum — Poisson-Gamma Outcome Model
+
+Objective
+Enhance the MLB hits probability model by replacing the pure binomial outcome calculation with a Poisson-Gamma mixture model (Negative Binomial).
+
+This captures real-world variance in hit outcomes that the binomial model underestimates.
+
+The existing PA distribution model from Task #27 remains unchanged and feeds this model.
+
+The architecture remains:
+
+Game State → Opportunity Projection → Adjusted Hit Probability → Outcome Distribution → Expected Outcome → Edge vs Sportsbook
+
+The only change is how the Outcome Distribution step is calculated.
+
+--------------------------------------------------
+
+FILES TO MODIFY
+
+server/mlb/markets.ts
+
+NEW FILE
+
+server/mlb/outcomeDistribution.ts
+
+--------------------------------------------------
+
+DO NOT MODIFY
+
+liveGameOrchestrator
+edgeCache
+mlbEdgeCache
+signal pipeline
+calibration.ts
+probability.ts
+featureEngineering.ts
+diagnostics.ts
+dataSources.ts
+backtestHarness.ts
+paEstimator.ts
+paDistribution.ts
+NBA/NCAAB engines
+
+--------------------------------------------------
+
+STEP 1 — CREATE OUTCOME DISTRIBUTION MODULE
+
+Create file:
+
+server/mlb/outcomeDistribution.ts
+
+Export function:
+
+computeHitOutcomeProbability(
+  remainingPA: number,
+  adjustedHitRate: number,
+  neededHits: number
+)
+
+Return:
+
+number (probability of hitting OVER line)
+
+--------------------------------------------------
+
+STEP 2 — MODEL STRUCTURE
+
+Instead of assuming hits follow a simple binomial:
+
+Hits ~ Binomial(remainingPA, adjustedHitRate)
+
+Use a Poisson-Gamma mixture:
+
+λ ~ Gamma(shape = k, scale = θ)
+
+Hits ~ Poisson(λ)
+
+Resulting marginal distribution:
+
+Hits ~ NegativeBinomial
+
+This allows variance > mean.
+
+--------------------------------------------------
+
+STEP 3 — PARAMETERIZATION
+
+Mean hits:
+
+meanHits = remainingPA * adjustedHitRate
+
+Variance inflation factor:
+
+varianceMultiplier = 1.35
+
+Variance:
+
+variance = meanHits * varianceMultiplier
+
+Compute dispersion parameter:
+
+k = meanHits² / (variance - meanHits)
+
+If k < 1, clamp to 1.
+
+Compute success probability:
+
+p = k / (k + meanHits)
+
+--------------------------------------------------
+
+STEP 4 — NEGATIVE BINOMIAL PROBABILITY
+
+Compute probability of ≥ neededHits.
+
+Use cumulative Negative Binomial distribution:
+
+P(X ≥ neededHits)
+
+Implementation approach:
+
+Loop from neededHits to reasonable cap (e.g. 10 hits):
+
+prob += negativeBinomialPMF(x, k, p)
+
+--------------------------------------------------
+
+STEP 5 — NEGATIVE BINOMIAL PMF
+
+Implement helper:
+
+negativeBinomialPMF(x, k, p)
+
+Formula:
+
+PMF(x) =
+C(x + k - 1, x)
+*
+(1 - p)^x
+*
+p^k
+
+Where C is combination.
+
+Implement using log-gamma for numerical stability if available, otherwise factorial approximation.
+
+--------------------------------------------------
+
+STEP 6 — UPDATE calculateHitsEdge()
+
+Open:
+
+server/mlb/markets.ts
+
+Replace:
+
+binomialOverProbability()
+
+calls with:
+
+computeHitOutcomeProbability()
+
+However, keep the PA distribution weighting from Task #27.
+
+New logic:
+
+rawProbabilityOver = 0
+
+for each paCount in paDist:
+
+  rawProbabilityOver +=
+    computeHitOutcomeProbability(
+      paCount,
+      adjustedRate,
+      neededHits
+    ) * paProb
+
+--------------------------------------------------
+
+STEP 7 — EXPECTED HITS REMAIN UNCHANGED
+
+Expected hits remain:
+
+expectedHits =
+  paDist[1] * (1 * adjustedRate) +
+  paDist[2] * (2 * adjustedRate) +
+  paDist[3] * (3 * adjustedRate)
+
+Do not modify expectedHits calculation.
+
+--------------------------------------------------
+
+STEP 8 — REMAINING PA REMAINS UNCHANGED
+
+remainingPA remains:
+
+remainingPA =
+  (1 * paDist[1]) +
+  (2 * paDist[2]) +
+  (3 * paDist[3])
+
+--------------------------------------------------
+
+STEP 9 — FALLBACK SAFETY
+
+If dispersion calculation fails or produces NaN:
+
+Fallback to binomial model.
+
+--------------------------------------------------
+
+DONE CRITERIA
+
+TypeScript compiles with zero errors
+
+No protected engine files modified
+
+PA distribution model remains intact
+
+Hits probability now uses a Negative Binomial distribution
+
+Expected hits and remaining PA calculations unchanged
+
+Edge calculation remains identical
+
+Signal pipeline unaffected

@@ -1,0 +1,242 @@
+#27 - MLB: Plate Appearance Distribution Model (Lineup Turnover)
+
+Objective
+Upgrade the MLB hits probability engine by replacing the deterministic remaining plate appearance (PA) estimate with a probabilistic PA distribution model.
+
+Instead of a single averaged remainingPA value, the engine calculates a probability distribution across possible remaining plate appearances (1, 2, or 3). The final hit probability is computed as a distribution-weighted binomial probability.
+
+This improves model accuracy for:
+• 0.5 line props
+• late-game props
+• top-of-order hitters
+• lineup turnover dynamics
+
+The binomial threshold fix (Math.ceil(bookLine) and neededHits === 0 short-circuit) is already merged from Task #25. DO NOT re-apply or modify that logic.
+
+--------------------------------------------------
+
+FILES TO MODIFY
+
+server/mlb/markets.ts
+server/mlb/types.ts
+
+NEW FILE
+
+server/mlb/paDistribution.ts
+
+--------------------------------------------------
+
+OUT OF SCOPE
+
+Do NOT modify:
+liveGameOrchestrator
+edgeCache
+mlbEdgeCache
+signal pipeline
+calibration.ts
+probability.ts
+featureEngineering.ts
+diagnostics.ts
+dataSources.ts
+backtestHarness.ts
+NBA/NCAAB engines
+frontend code
+paEstimator.ts (remains for game state resolution)
+
+--------------------------------------------------
+
+STEP 1 — CREATE PA DISTRIBUTION MODEL
+
+Create a new file:
+
+server/mlb/paDistribution.ts
+
+Export the function:
+
+estimatePADistribution(
+  inning: number,
+  battingOrderSlot: number,
+  currentRuns: number,
+  leagueAvgRuns: number
+)
+
+Return type:
+
+{
+  1: number
+  2: number
+  3: number
+}
+
+--------------------------------------------------
+
+STEP 2 — COMPUTE GAME PACE FACTOR
+
+Compute run environment pace:
+
+paceFactor = clamp(currentRuns / leagueAvgRuns, 0.85, 1.15)
+
+Implement clamp helper if needed.
+
+--------------------------------------------------
+
+STEP 3 — SLOT ADJUSTMENT
+
+Define batting order adjustment:
+
+slot ≤ 2 → slotAdj = 0.20  
+slot ≤ 5 → slotAdj = 0.10  
+slot ≤ 7 → slotAdj = -0.05  
+slot ≥ 8 → slotAdj = -0.15
+
+--------------------------------------------------
+
+STEP 4 — COMPUTE RAW PA PROBABILITIES
+
+Compute base probabilities:
+
+pa1 = clamp(0.35 + slotAdj + (inning * -0.02), 0, 1)
+
+pa2 = clamp(0.45 + paceFactor * 0.05, 0, 1)
+
+pa3 = clamp(0.20 + (9 - inning) * 0.02, 0, 1)
+
+--------------------------------------------------
+
+STEP 5 — NORMALIZE PROBABILITIES
+
+Ensure probabilities sum exactly to 1.
+
+Compute:
+
+sum = pa1 + pa2 + pa3
+
+Then normalize:
+
+pa1 = pa1 / sum  
+pa2 = pa2 / sum  
+pa3 = pa3 / sum
+
+Return:
+
+{
+ 1: pa1,
+ 2: pa2,
+ 3: pa3
+}
+
+--------------------------------------------------
+
+STEP 6 — UPDATE calculateHitsEdge()
+
+Open:
+
+server/mlb/markets.ts
+
+Import the new distribution function:
+
+import { estimatePADistribution } from "./paDistribution"
+
+--------------------------------------------------
+
+STEP 7 — GENERATE PA DISTRIBUTION
+
+After computing adjustedHitRate inside calculateHitsEdge():
+
+const paDist = estimatePADistribution(
+  input.inning,
+  input.battingOrderSlot,
+  input.currentRuns,
+  leagueAvgRuns
+)
+
+--------------------------------------------------
+
+STEP 8 — DISTRIBUTION-WEIGHTED BINOMIAL PROBABILITY
+
+Replace the single deterministic binomial call with a weighted loop.
+
+Correct function signature:
+
+binomialOverProbability(remainingPA, adjustedHitRate, neededHits)
+
+Implementation:
+
+let rawProbabilityOver = 0
+
+for (const [paCountStr, paProb] of Object.entries(paDist)) {
+  const paCount = Number(paCountStr)
+
+  rawProbabilityOver +=
+    binomialOverProbability(
+      paCount,
+      adjustedHitRate,
+      neededHits
+    ) * paProb
+}
+
+Note: paCount is the number of remaining plate appearances.
+
+--------------------------------------------------
+
+STEP 9 — DISTRIBUTION-WEIGHTED EXPECTED HITS
+
+Compute expected hits:
+
+expectedHits =
+  paDist[1] * (1 * adjustedHitRate) +
+  paDist[2] * (2 * adjustedHitRate) +
+  paDist[3] * (3 * adjustedHitRate)
+
+--------------------------------------------------
+
+STEP 10 — COMPUTE EXPECTED REMAINING PA
+
+Calculate weighted expected remaining plate appearances:
+
+remainingPA =
+  (1 * paDist[1]) +
+  (2 * paDist[2]) +
+  (3 * paDist[3])
+
+remainingPA must remain a float (do NOT round).
+
+--------------------------------------------------
+
+STEP 11 — UPDATE OUTPUT TYPE
+
+Open:
+
+server/mlb/types.ts
+
+Add optional field to MLBPropOutput:
+
+paDistribution?: {
+ 1: number
+ 2: number
+ 3: number
+}
+
+--------------------------------------------------
+
+STEP 12 — INCLUDE DISTRIBUTION IN OUTPUT
+
+calculateHitsEdge() must now return:
+
+expectedHits
+remainingPA
+adjustedHitRate
+paDistribution
+
+All existing output fields must remain unchanged.
+
+--------------------------------------------------
+
+DONE CRITERIA
+
+• TypeScript compiles with zero errors
+• No protected engine files modified
+• Prior binomial threshold fix remains intact
+• Hits probability now uses distribution-weighted PA model
+• remainingPA equals weighted average of PA distribution
+• paDistribution is included in the output object
