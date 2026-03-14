@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ProbabilityRing } from "@/components/probability-ring";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -152,7 +152,16 @@ export default function MlbLivePage() {
 
   const signals = signalsResp?.signals ?? [];
   const updatedAt = signalsResp?.updatedAt ?? 0;
-  const selectedGame = games.find((g) => g.gameId === selectedGameId) ?? null;
+  const selectedGameRaw = games.find((g) => g.gameId === selectedGameId) ?? null;
+  const selectedGameRef = useRef<MLBGame | null>(null);
+
+  useEffect(() => {
+    if (selectedGameRaw) {
+      selectedGameRef.current = selectedGameRaw;
+    }
+  }, [selectedGameRaw]);
+
+  const selectedGame = selectedGameRaw ?? selectedGameRef.current;
 
   const opponentTeam = selectedPlayer && selectedGame
     ? (selectedPlayer.teamAbbr === selectedGame.homeTeam ? selectedGame.awayTeam : selectedGame.homeTeam)
@@ -223,6 +232,10 @@ export default function MlbLivePage() {
     setSelectedLine(null);
     setCalcResult(null);
   }, [calcMarket, selectedPlayer]);
+
+  useEffect(() => {
+    setSelectedPlayer(null);
+  }, [selectedGame?.gameId]);
 
   const playerTierMap = new Map<string, string>();
   for (const sig of signals) {
@@ -307,6 +320,10 @@ export default function MlbLivePage() {
 
       {selectedGameId && (
         <>
+          <h2 className="text-sm font-semibold text-foreground" data-testid="text-mlb-game-header">
+            {selectedGame?.awayTeam} @ {selectedGame?.homeTeam}
+          </h2>
+
           <div className="flex gap-1.5 flex-wrap">
             {INNING_TABS.map((tab) => {
               const disabled = tab.min > 0 && currentInning < tab.min;
@@ -331,17 +348,99 @@ export default function MlbLivePage() {
             })}
           </div>
 
+          <div style={{ display: selectedPlayer !== null ? "none" : "block" }}>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-foreground">Edge Signals</h2>
+              <div className="flex items-center gap-3">
+                {updatedAt > 0 && (
+                  <span className="text-xs text-muted-foreground" data-testid="text-mlb-signals-freshness">
+                    Updated {timeSince(updatedAt)}
+                  </span>
+                )}
+                {signalsLoading && (
+                  <span className="text-xs text-muted-foreground animate-pulse">Refreshing…</span>
+                )}
+              </div>
+            </div>
+
+            {!signalsLoading && filteredSignals.length === 0 ? (
+              <div className="px-5 py-8 rounded-xl border border-border bg-card text-center">
+                <p className="text-sm font-medium text-foreground">No edge signals yet</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {signals.length === 0
+                    ? "Engine is warming up — signals appear once the orchestrator detects game state changes."
+                    : `${signals.length} signal${signals.length !== 1 ? "s" : ""} available but none meet the ${inningTabMin > 0 ? `${inningTabMin}th inning` : ""} filter.`}
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {filteredSignals.map((sig) => {
+                  const style = TIER_STYLES[sig.tier];
+                  const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
+                  return (
+                    <div
+                      key={`${sig.playerId}-${sig.market}`}
+                      data-testid={`card-mlb-signal-${sig.playerId}-${sig.market}`}
+                      style={{ borderColor: style.border, backgroundColor: style.bg }}
+                      className="rounded-xl border p-4 space-y-3"
+                    >
+                      <div className="flex justify-between items-center gap-2">
+                        <div>
+                          <div className="text-sm font-semibold text-foreground">{sig.playerName}</div>
+                          <div className="text-xs text-muted-foreground mt-0.5">{marketLabel}</div>
+                        </div>
+                        <span
+                          className="text-xs font-bold px-2 py-0.5 rounded-full"
+                          style={{ color: style.dot, backgroundColor: `${style.dot}20` }}
+                        >
+                          {style.label}
+                        </span>
+                      </div>
+
+                      <div className="flex justify-between items-center">
+                        <div className="text-4xl font-bold" style={{ color: style.dot }}>
+                          {sig.enginePct.toFixed(1)}%
+                        </div>
+                        <div className="flex-1 grid grid-cols-2 gap-2 text-xs ml-4">
+                          <div className="text-center">
+                            <div className="text-muted-foreground mb-0.5">Line</div>
+                            <div className="font-semibold text-foreground">{sig.bookLine}</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-muted-foreground mb-0.5">Edge</div>
+                            <div className="font-semibold text-foreground">
+                              +{sig.edge.toFixed(1)}%
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-1 border-t border-border/30">
+                        <span className="text-xs font-bold tracking-wide" style={{ color: style.dot }}>
+                          {sig.recommendedSide} {sig.bookLine}
+                        </span>
+                        <button
+                          data-testid={`button-mlb-add-parlay-${sig.playerId}-${sig.market}`}
+                          className="text-xs px-3 py-1 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                        >
+                          + Parlay
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           <div className="bg-card border border-border rounded-xl overflow-hidden" style={{ display: selectedPlayer !== null ? "none" : "block" }}>
             <button
               data-testid="button-toggle-boxscore"
-              onClick={() => setBoxExpanded(!boxExpanded)}
+              onClick={() => setBoxExpanded(prev => !prev)}
               className="w-full px-4 py-3 border-b border-border/60 flex items-center justify-between hover:bg-muted/30 transition-colors"
             >
               <h2 className="text-sm font-semibold text-foreground">
-                {boxExpanded ? "▾" : "▸"}{" "}
-                {selectedGame
-                  ? `${selectedGame.awayTeam} @ ${selectedGame.homeTeam} — Box Score`
-                  : "Box Score"}
+                {boxExpanded ? "▾ Box Score" : "▸ Box Score"}
               </h2>
               {playersLoading && (
                 <span className="text-xs text-muted-foreground animate-pulse">Loading…</span>
@@ -385,7 +484,7 @@ export default function MlbLivePage() {
                                 setSelectedLine(null);
                               }}
                               style={style ? { backgroundColor: style.bg, borderLeft: `3px solid ${style.border}` } : {}}
-                              className={`border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors cursor-pointer ${
+                              className={`border-b border-border/30 last:border-0 cursor-pointer hover:bg-neutral-800 transition ${
                                 isSelected ? "ring-2 ring-primary ring-inset" : ""
                               }`}
                             >
@@ -604,97 +703,6 @@ export default function MlbLivePage() {
               )}
             </div>
           )}
-
-          <div style={{ display: selectedPlayer !== null ? "none" : "block" }}>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-foreground">Edge Signals</h2>
-              <div className="flex items-center gap-3">
-                {updatedAt > 0 && (
-                  <span className="text-xs text-muted-foreground" data-testid="text-mlb-signals-freshness">
-                    Updated {timeSince(updatedAt)}
-                  </span>
-                )}
-                {signalsLoading && (
-                  <span className="text-xs text-muted-foreground animate-pulse">Refreshing…</span>
-                )}
-              </div>
-            </div>
-
-            {!signalsLoading && filteredSignals.length === 0 ? (
-              <div className="px-5 py-8 rounded-xl border border-border bg-card text-center">
-                <p className="text-sm font-medium text-foreground">No edge signals yet</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {signals.length === 0
-                    ? "Engine is warming up — signals appear once the orchestrator detects game state changes."
-                    : `${signals.length} signal${signals.length !== 1 ? "s" : ""} available but none meet the ${inningTabMin > 0 ? `${inningTabMin}th inning` : ""} filter.`}
-                </p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {filteredSignals.map((sig, i) => {
-                  const style = TIER_STYLES[sig.tier];
-                  const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
-                  return (
-                    <div
-                      key={`${sig.playerId}-${sig.market}-${i}`}
-                      data-testid={`card-mlb-signal-${sig.playerId}-${sig.market}`}
-                      style={{ borderColor: style.border, backgroundColor: style.bg }}
-                      className="rounded-xl border p-4 space-y-3"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="text-sm font-semibold text-foreground">{sig.playerName}</div>
-                          <div className="text-xs text-muted-foreground mt-0.5">{marketLabel}</div>
-                        </div>
-                        <span
-                          className="text-xs font-bold px-2 py-0.5 rounded-full"
-                          style={{ color: style.dot, backgroundColor: `${style.dot}20` }}
-                        >
-                          {style.label}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-4">
-                        <div className="flex-shrink-0">
-                          <ProbabilityRing probability={sig.enginePct} size={56} />
-                        </div>
-                        <div className="flex-1 grid grid-cols-3 gap-2 text-xs">
-                          <div className="text-center">
-                            <div className="text-muted-foreground mb-0.5">Line</div>
-                            <div className="font-semibold text-foreground">{sig.bookLine}</div>
-                          </div>
-                          <div className="text-center">
-                            <div className="text-muted-foreground mb-0.5">Engine</div>
-                            <div className="font-semibold" style={{ color: style.dot }}>
-                              {sig.enginePct.toFixed(1)}%
-                            </div>
-                          </div>
-                          <div className="text-center">
-                            <div className="text-muted-foreground mb-0.5">Edge</div>
-                            <div className="font-semibold text-foreground">
-                              +{sig.edge.toFixed(1)}%
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between pt-1 border-t border-border/30">
-                        <span className="text-xs font-bold tracking-wide" style={{ color: style.dot }}>
-                          {sig.recommendedSide} {sig.bookLine}
-                        </span>
-                        <button
-                          data-testid={`button-mlb-add-parlay-${sig.playerId}-${sig.market}`}
-                          className="text-xs px-3 py-1 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                        >
-                          + Parlay
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
         </>
       )}
     </div>
