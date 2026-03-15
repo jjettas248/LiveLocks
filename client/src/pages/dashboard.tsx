@@ -1083,6 +1083,20 @@ export default function Dashboard() {
     setAutoFilledFields(new Set());
   }, [watchedPlayerId]);
 
+  useEffect(() => {
+    if (!selectedGameTeams || !watchedPlayerId) return;
+    const player = (players ?? []).find(p => String(p.id) === String(watchedPlayerId));
+    if (!player) return;
+    const playerTeamDb = player.team.toUpperCase();
+    const homeDb = espnToDb(selectedGameTeams.homeAbbr);
+    const awayDb = espnToDb(selectedGameTeams.awayAbbr);
+    if (playerTeamDb === homeDb) {
+      form.setValue("opponentTeam", awayDb);
+    } else if (playerTeamDb === awayDb) {
+      form.setValue("opponentTeam", homeDb);
+    }
+  }, [watchedPlayerId, selectedGameId]);
+
   // Auto-fill halftime stats from live box score when player or stat type changes
   useEffect(() => {
     if (skipAutoFillRef.current) { skipAutoFillRef.current = false; return; }
@@ -1696,10 +1710,6 @@ export default function Dashboard() {
                         if (game.period >= 2) {
                           form.setValue("halftimeScore", scoreStr);
                         }
-                        const homeDb = espnToDb(game.homeTeamAbbr);
-                        const awayDb = espnToDb(game.awayTeamAbbr);
-                        if (teams?.includes(homeDb)) form.setValue("opponentTeam", homeDb);
-                        else if (teams?.includes(awayDb)) form.setValue("opponentTeam", awayDb);
                       }
                     }}
                     className={`flex flex-col items-center px-3 py-2 rounded-lg border text-xs min-w-[130px] transition-all ${
