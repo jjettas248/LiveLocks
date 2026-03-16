@@ -1,0 +1,237 @@
+TASK: #37 MLB Live UI Architecture Repair
+
+Repair the MLB Live tab so its interaction model matches NBA Live.
+
+Current issues:
+
+• Game matchup tiles render blank teams
+• Box score renders below edge signals
+• Edge signals appear before a game is selected
+• Signal cards show fallback probability (18%)
+• Calculator does not call correct engine endpoint
+• Calculator fields are not auto-populated
+• Sportsbook lines are not displayed correctly
+• Auto-game-selection bypasses intended flow
+
+Do NOT modify anything in server/mlb/ (engine code is off-limits).
+
+--------------------------------------------------
+
+STEP 1 — Remove Auto Game Selection
+
+File:
+client/src/pages/mlb-live.tsx
+
+Delete the useEffect that automatically selects the first game.
+
+Page should load with:
+
+"Today's Games"
+
+Only.
+
+selectedGameId should remain null until user clicks a game.
+
+--------------------------------------------------
+
+STEP 2 — Fix Game Tile Rendering
+
+MLB Stats API uses:
+
+game.teams.away.team.name
+game.teams.home.team.name
+
+Update tile rendering:
+
+const awayTeam = game.teams?.away?.team?.name
+const homeTeam = game.teams?.home?.team?.name
+
+Display:
+
+{awayTeam} @ {homeTeam}
+
+Also show:
+
+score
+inning arrow
+game status (LIVE / Preview)
+
+--------------------------------------------------
+
+STEP 3 — Reorder Layout
+
+Current incorrect order:
+
+Game Header
+Edge Signals
+Box Score
+
+Correct order:
+
+Game Header
+Inning Tabs
+Box Score
+Edge Signals
+
+Move the box score component above the signals section.
+
+--------------------------------------------------
+
+STEP 4 — Scope Edge Signals to Selected Game
+
+Ensure signals render only when selectedGameId exists.
+
+Wrap signals section in:
+
+if (!selectedGameId) return null
+
+Filter signals:
+
+signals.filter(signal => signal.gameId === selectedGameId)
+
+--------------------------------------------------
+
+STEP 5 — Remove Fallback Probability
+
+Search in mlb-live.tsx for:
+
+18
+?? 18
+|| 18
+
+Remove all fallback probability values.
+
+Probability must only come from server responses.
+
+--------------------------------------------------
+
+STEP 6 — Add Engine Route Alias
+
+File:
+server/routes.ts
+
+Add:
+
+router.post("/api/mlb/calculate", async (req, res) => {
+  return propsHandler(req, res)
+})
+
+Alias this route to the existing /api/mlb/props handler.
+
+Both endpoints should function identically.
+
+--------------------------------------------------
+
+STEP 7 — Update Calculator Mutation
+
+Frontend must call:
+
+POST /api/mlb/calculate
+
+Payload must include:
+
+playerId
+playerName
+market
+line
+overOdds
+team
+opponent
+gameId
+currentInning
+isTopInning
+battingOrderSlot
+currentStats
+
+--------------------------------------------------
+
+STEP 8 — Auto Populate Calculator Context
+
+When user clicks a player row:
+
+Pre-fill:
+
+playerName
+team
+opponent
+battingOrderSlot
+currentHits
+currentAB
+inning
+
+User should only select:
+
+statType
+sportsbook line
+
+--------------------------------------------------
+
+STEP 9 — Restore Odds Display
+
+Call:
+
+GET /api/mlb/odds
+
+Params:
+
+playerId
+gameId
+market
+
+If no lines returned display:
+
+"No sportsbook line available"
+
+Do not hide section.
+
+--------------------------------------------------
+
+EXPECTED FINAL FLOW
+
+MLB Live
+
+Today's Games
+Yankees @ Red Sox
+Dodgers @ Padres
+Braves @ Mets
+
+User clicks game
+
+↓
+
+Game Header
+Inning Tabs
+Box Score
+Edge Signals
+
+User clicks player
+
+↓
+
+Calculator opens
+
+Fields pre-filled
+
+↓
+
+User clicks Calculate
+
+↓
+
+Server engine returns probability
+
+↓
+
+Probability renders in card
+
+--------------------------------------------------
+
+After repair confirm:
+
+• Matchups render correctly
+• Box score appears above signals
+• No signals before selecting a game
+• Signal probabilities differ per player
+• Calculator auto-fills player context
+• POST /api/mlb/calculate executes
+• Sportsbook lines render properly

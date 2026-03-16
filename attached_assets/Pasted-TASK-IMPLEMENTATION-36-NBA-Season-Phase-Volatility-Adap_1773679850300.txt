@@ -1,0 +1,196 @@
+TASK IMPLEMENTATION — #36 NBA Season-Phase Volatility Adapter
+
+Objective
+Introduce lightweight season-phase awareness to the NBA probability engine to reduce late-season UNDER volatility and restore confidence in playoffs without redesigning the core model.
+
+STRICT RULES
+Do NOT modify:
+- calibrateProbability()
+- lineMovement.ts
+- canonical market logic
+- API routes
+- NCAAB or MLB engines
+
+Only implement the adjustments described below.
+
+------------------------------------------------
+STEP 1 — Add getSeasonPhase() helper
+------------------------------------------------
+
+File: server/storage.ts
+
+Add helper above calculateProbability():
+
+function getSeasonPhase(gameDate?: string | Date): "early" | "mid" | "late" | "playoffs" {
+  const d = gameDate ? new Date(gameDate) : new Date();
+  const month = d.getMonth() + 1;
+
+  // Oct–Dec
+  if (month >= 10 || month <= 12) return "early";
+
+  // Jan–Feb
+  if (month >= 1 && month <= 2) return "mid";
+
+  // Mar–Apr regular season volatility window
+  if (month >= 3 && month <= 4) return "late";
+
+  return "playoffs";
+}
+
+------------------------------------------------
+STEP 2 — Resolve season phase inside calculateProbability()
+------------------------------------------------
+
+At the top of calculateProbability():
+
+const seasonPhase = getSeasonPhase(req.gameDate);
+
+Add to debug object later.
+
+
+------------------------------------------------
+STEP 3 — Late-season volatility penalties
+------------------------------------------------
+
+After existing filters execute:
+
+Existing order MUST remain:
+
+1. calibrateProbability()
+2. resolve direction
+3. high-usage UNDER penalty
+4. combo variance penalty
+5. bench volatility filter
+
+After those steps, add:
+
+const isUnder = direction === "UNDER";
+const isComboStat = req.statType.includes("_");
+const effectiveMinutesBase = freshProjectedMinutes ?? avgMinutes;
+const isLowRolePlayer = effectiveMinutesBase < 28;
+const isBenchVolatile = effectiveMinutesBase < 24 && minutesPlayed < 12;
+
+let lateSeasonPenaltyApplied = false;
+
+if (seasonPhase === "late" && isUnder) {
+
+  if (isLowRolePlayer) {
+    probability *= 0.94;
+    lateSeasonPenaltyApplied = true;
+  }
+
+  if (isComboStat) {
+    probability *= 0.95;
+    lateSeasonPenaltyApplied = true;
+  }
+
+  if (isBenchVolatile) {
+    probability *= 0.92;
+    lateSeasonPenaltyApplied = true;
+  }
+
+}
+
+Clamp probability to [2,98].
+
+------------------------------------------------
+STEP 4 — Tank team volatility penalty
+------------------------------------------------
+
+Add set:
+
+const HIGH_VOLATILITY_TEAMS = new Set(["BKN","WAS","CHA","POR","UTA","DET"]);
+
+let teamVolatilityPenaltyApplied = false;
+
+if (
+  seasonPhase === "late" &&
+  HIGH_VOLATILITY_TEAMS.has(playerTeam)
+) {
+  probability *= 0.96;
+  teamVolatilityPenaltyApplied = true;
+}
+
+Clamp probability to [2,98].
+
+------------------------------------------------
+STEP 5 — Playoff normalization boost
+------------------------------------------------
+
+let playoffBoostApplied = false;
+
+if (seasonPhase === "playoffs") {
+  probability *= 1.03;
+  playoffBoostApplied = true;
+}
+
+Clamp probability to [2,98].
+
+------------------------------------------------
+STEP 6 — Minutes model season adjustments
+------------------------------------------------
+
+File: server/minutesModel.ts
+
+Extend MinutesContext:
+
+seasonPhase?: "early" | "mid" | "late" | "playoffs"
+
+Late season adjustment:
+
+if (ctx.seasonPhase === "late" && baseRotationMinutes < 28) {
+  closeGameExtensionMultiplier *= 0.9;
+}
+
+Playoff adjustment:
+
+if (ctx.seasonPhase === "playoffs" && baseRotationMinutes >= 30) {
+  closingProbability = Math.min(0.99, closingProbability + 0.03);
+}
+
+------------------------------------------------
+STEP 7 — Pass seasonPhase into minutes model
+------------------------------------------------
+
+File: server/storage.ts
+
+When calling calculateRemainingMinutes():
+
+calculateRemainingMinutes({
+  ...
+  seasonPhase
+})
+
+------------------------------------------------
+STEP 8 — Extend debug schema
+------------------------------------------------
+
+File: shared/schema.ts
+
+Add fields to CalcDebug:
+
+seasonPhase?: "early" | "mid" | "late" | "playoffs"
+lateSeasonPenaltyApplied?: boolean
+playoffBoostApplied?: boolean
+teamVolatilityPenaltyApplied?: boolean
+
+Populate these values in calculateProbability() debug object.
+
+------------------------------------------------
+STEP 9 — Validation
+------------------------------------------------
+
+Run TypeScript compile.
+
+Test scenarios:
+
+1. Late-season bench UNDER
+2. Late-season combo UNDER
+3. Mid-season equivalent play
+4. Playoff star prop
+
+Expected behavior:
+
+Late season → lower UNDER probabilities for volatile roles  
+Playoffs → slightly restored confidence for star players  
+No route or schema regressions

@@ -1,0 +1,175 @@
+Install the resend and node-cron npm packages if not already present.
+
+Add RESEND_API_KEY to Replit Secrets. The value will be provided separately
+by the user — add a startup warning if it is missing:
+  if (!process.env.RESEND_API_KEY) {
+    console.warn("WARNING: RESEND_API_KEY is not set. Emails will not send.");
+  }
+
+Replace the entire contents of server/email.ts with the following:
+
+import { Resend } from "resend";
+
+const resend = new Resend(process.env.RESEND_API_KEY);
+const FROM = "LiveLocks <team@livelocksai.app>";
+
+export async function sendWelcomeEmail(to: string) {
+  return resend.emails.send({
+    from: FROM, to,
+    subject: "You're in. Here's how to use your 15 free plays.",
+    template: "livelocks-welcome",
+  });
+}
+
+export async function sendHowToEmail(to: string) {
+  return resend.emails.send({
+    from: FROM, to,
+    subject: "How to get the most out of LiveLocks.",
+    template: "how-to-walkthrough",
+  });
+}
+
+export async function sendNudgeEmail(to: string, playsUsed: number) {
+  return resend.emails.send({
+    from: FROM, to,
+    subject: `You've used ${playsUsed} of 15 plays. Here's where the real edge is.`,
+    template: "day-3-nudge",
+    variables: { plays_used: String(playsUsed), remaining: String(15 - playsUsed) },
+  });
+}
+
+export async function sendWallEmail(to: string, trialCode?: string) {
+  return resend.emails.send({
+    from: FROM, to,
+    subject: "You've hit the limit. Here's what unlocks next.",
+    template: "wall-hit",
+    variables: { trial_code: trialCode ?? "" },
+  });
+}
+
+export async function sendWinbackEmail(to: string) {
+  return resend.emails.send({
+    from: FROM, to,
+    subject: "You signed up two weeks ago and never ran a play.",
+    template: "win-back",
+  });
+}
+
+export async function sendProWelcomeEmail(to: string) {
+  return resend.emails.send({
+    from: FROM, to,
+    subject: "You're on Pro. Here's how to use everything you just unlocked.",
+    template: "pro-welcome",
+  });
+}
+
+export async function sendAllSportsWelcomeEmail(to: string) {
+  return resend.emails.send({
+    from: FROM, to,
+    subject: "You're on All Sports. Here's everything that's live and what's coming on opening day.",
+    template: "all-sports-welcome",
+  });
+}
+
+---
+
+Wire these functions into the existing codebase. Do not modify any existing
+auth, Stripe, calculate, or other logic. Add email calls alongside existing
+code only. Import all functions from server/email.ts wherever needed.
+
+PLACE 1 — POST /api/auth/register
+After a successful db.insert(users), add:
+  try {
+    await sendWelcomeEmail(newUser.email);
+    await sendHowToEmail(newUser.email);
+  } catch (err) {
+    console.error("Welcome email failed:", err);
+  }
+Both calls wrapped in one try/catch. Neither failure should break
+registration or return an error to the client.
+
+PLACE 2 — POST /api/calculate
+After plays_used is incremented in the database, add:
+  if (updatedPlaysUsed === 15) {
+    try {
+      await sendWallEmail(user.email);
+    } catch (err) {
+      console.error("Wall email failed:", err);
+    }
+  }
+Get the user's email from the authenticated user on the request.
+Must never affect the calculate response.
+
+PLACE 3 — POST /api/webhooks/stripe
+Inside customer.subscription.created, after subscription_tier is updated
+in the database, look up the user by stripe_customer_id and add:
+  try {
+    if (newTier === "all") await sendProWelcomeEmail(user.email);
+    if (newTier === "elite") await sendAllSportsWelcomeEmail(user.email);
+  } catch (err) {
+    console.error("Subscription welcome email failed:", err);
+  }
+
+Also handle customer.subscription.updated — if the previous tier was "all"
+and the new tier is "elite", call sendAllSportsWelcomeEmail only. Do not
+re-fire any welcome email on renewals. Wrap in try/catch.
+
+PLACE 4 — Daily cron job
+In server/index.ts, after the Express server starts listening, initialize
+a node-cron job that runs daily at 9am Eastern time:
+
+import cron from "node-cron";
+
+cron.schedule("0 9 * * *", async () => {
+  try {
+    const threeDaysAgo = new Date(Date.now() - 72 * 60 * 60 * 1000);
+    const fourDaysAgo = new Date(Date.now() - 96 * 60 * 60 * 1000);
+    const nudgeUsers = await db.select().from(users).where(
+      and(
+        isNull(users.subscriptionTier),
+        between(users.playsUsed, 1, 14),
+        between(users.createdAt, fourDaysAgo, threeDaysAgo)
+      )
+    );
+    for (const user of nudgeUsers) {
+      try { await sendNudgeEmail(user.email, user.playsUsed); }
+      catch (err) { console.error("Nudge email failed for", user.email, err); }
+    }
+
+    const fourteenDaysAgo = new Date(Date.now() - 336 * 60 * 60 * 1000);
+    const fifteenDaysAgo = new Date(Date.now() - 360 * 60 * 60 * 1000);
+    const winbackUsers = await db.select().from(users).where(
+      and(
+        isNull(users.subscriptionTier),
+        eq(users.playsUsed, 0),
+        between(users.createdAt, fifteenDaysAgo, fourteenDaysAgo)
+      )
+    );
+    for (const user of winbackUsers) {
+      try { await sendWinbackEmail(user.email); }
+      catch (err) { console.error("Winback email failed for", user.email, err); }
+    }
+  } catch (err) {
+    console.error("Email cron job failed:", err);
+  }
+}, { timezone: "America/New_York" });
+
+PLACE 5 — Test route
+Only register this route when process.env.NODE_ENV !== "production".
+Replit sets NODE_ENV=production on deployed apps automatically. This route
+will be active in the dev shell and disabled on deployment.
+
+GET /api/test-email?type=welcome&to=test@email.com
+
+Fire the corresponding email function based on the type query param:
+  welcome   → sendWelcomeEmail(to)
+  howto     → sendHowToEmail(to)
+  nudge     → sendNudgeEmail(to, 7)
+  wall      → sendWallEmail(to)
+  winback   → sendWinbackEmail(to)
+  pro       → sendProWelcomeEmail(to)
+  allsports → sendAllSportsWelcomeEmail(to)
+
+Return { success: true, type } on success.
+Return { success: false, error: err.message } on failure.
+Do not register this route at all when NODE_ENV === "production".
