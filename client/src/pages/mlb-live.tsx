@@ -7,6 +7,8 @@ type MLBGame = {
   gameId: string;
   homeTeam: string;
   awayTeam: string;
+  homeName: string;
+  awayName: string;
   homeScore: number;
   awayScore: number;
   inning: number;
@@ -126,7 +128,6 @@ function formatOdds(n: number): string {
 export default function MlbLivePage() {
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
   const [inningTabMin, setInningTabMin] = useState<number>(0);
-  const [autoSelected, setAutoSelected] = useState(false);
   const [boxExpanded, setBoxExpanded] = useState(true);
   const [selectedPlayer, setSelectedPlayer] = useState<MLBBatter | null>(null);
   const [calcMarket, setCalcMarket] = useState("hits");
@@ -209,24 +210,13 @@ export default function MlbLivePage() {
           sb: selectedPlayer.sb,
         },
       };
-      const res = await apiRequest("POST", "/api/mlb/props", body);
+      const res = await apiRequest("POST", "/api/mlb/calculate", body);
       return res.json();
     },
     onSuccess: (data) => {
       setCalcResult(data);
     },
   });
-
-  useEffect(() => {
-    if (autoSelected || games.length === 0) return;
-    const live = games.find((g) => g.status === "live");
-    const preview = games.find((g) => g.status === "preview");
-    const target = live ?? preview ?? null;
-    if (target) {
-      setSelectedGameId(target.gameId);
-      setAutoSelected(true);
-    }
-  }, [games, autoSelected]);
 
   useEffect(() => {
     setSelectedLine(null);
@@ -304,15 +294,23 @@ export default function MlbLivePage() {
                       : "border-border bg-card text-foreground hover:border-primary/40 hover:bg-muted"
                   }`}
                 >
-                  <div className="flex items-center gap-1.5 font-semibold text-sm">
-                    <span>{game.awayTeam}</span>
-                    <span className="text-muted-foreground">{game.awayScore}–{game.homeScore}</span>
-                    <span>{game.homeTeam}</span>
+                  <div className="font-semibold text-sm leading-tight">
+                    <span>{game.awayName || game.awayTeam}</span>
+                    <span className="text-muted-foreground"> @ </span>
+                    <span>{game.homeName || game.homeTeam}</span>
                   </div>
-                  <div className={`text-center mt-0.5 ${
-                    game.status === "live" ? "text-green-500" : "text-muted-foreground"
-                  }`}>
-                    {inningLabel(game)}
+                  <div className="flex items-center justify-center gap-1.5 mt-0.5">
+                    <span className="text-muted-foreground text-xs">{game.awayScore}–{game.homeScore}</span>
+                    <span className={`text-xs ${
+                      game.status === "live" ? "text-green-500" : "text-muted-foreground"
+                    }`}>
+                      {inningLabel(game)}
+                    </span>
+                    {game.status === "live" ? (
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-500">LIVE</span>
+                    ) : (
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Preview</span>
+                    )}
                   </div>
                 </button>
               );
@@ -324,7 +322,7 @@ export default function MlbLivePage() {
       {selectedGameId && (
         <>
           <h2 className="text-sm font-semibold text-foreground" data-testid="text-mlb-game-header">
-            {selectedGame?.awayTeam} @ {selectedGame?.homeTeam}
+            {selectedGame?.awayName || selectedGame?.awayTeam} @ {selectedGame?.homeName || selectedGame?.homeTeam}
           </h2>
 
           <div className="flex gap-1.5 flex-wrap">
@@ -351,7 +349,88 @@ export default function MlbLivePage() {
             })}
           </div>
 
-          <div style={{ display: selectedPlayer !== null ? "none" : "block" }}>
+          {selectedPlayer === null && (
+          <div className="bg-card border border-border rounded-xl overflow-hidden">
+            <button
+              data-testid="button-toggle-boxscore"
+              onClick={() => setBoxExpanded(prev => !prev)}
+              className="w-full px-4 py-3 border-b border-border/60 flex items-center justify-between hover:bg-muted/30 transition-colors"
+            >
+              <h2 className="text-sm font-semibold text-foreground">
+                {boxExpanded ? "▾ Box Score" : "▸ Box Score"}
+              </h2>
+              {playersLoading && (
+                <span className="text-xs text-muted-foreground animate-pulse">Loading…</span>
+              )}
+            </button>
+
+            {boxExpanded && (
+              <>
+                {!playersLoading && players.length === 0 ? (
+                  <div className="px-4 py-8 text-center text-sm text-muted-foreground" data-testid="text-no-boxscore">
+                    No box score data available yet.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-border/60 bg-muted/40">
+                          <th className="px-4 py-2 text-left font-semibold text-muted-foreground w-[180px]">Player</th>
+                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">AB</th>
+                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">H</th>
+                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">TB</th>
+                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">R</th>
+                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">RBI</th>
+                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">BB</th>
+                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">SB</th>
+                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">K</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {players.map((p) => {
+                          const tier = playerTierMap.get(p.playerId);
+                          const style = tier ? TIER_STYLES[tier] : null;
+                          const isSelected = selectedPlayer?.playerId === p.playerId;
+                          return (
+                            <tr
+                              key={p.playerId}
+                              data-testid={`row-mlb-batter-${p.playerId}`}
+                              onClick={() => {
+                                setSelectedPlayer(p);
+                                setCalcResult(null);
+                                setSelectedLine(null);
+                              }}
+                              style={style ? { backgroundColor: style.bg, borderLeft: `3px solid ${style.border}` } : {}}
+                              className={`border-b border-border/30 last:border-0 cursor-pointer hover:bg-neutral-800 transition ${
+                                isSelected ? "ring-2 ring-primary ring-inset" : ""
+                              }`}
+                            >
+                              <td className="px-4 py-2">
+                                <div className="font-medium text-foreground truncate max-w-[160px]">{p.playerName}</div>
+                                <div className="text-muted-foreground text-[10px]">{p.teamAbbr} · #{p.battingOrderSlot}</div>
+                              </td>
+                              <td className="px-3 py-2 text-center text-foreground">{p.ab}</td>
+                              <td className="px-3 py-2 text-center text-foreground">{p.h}</td>
+                              <td className="px-3 py-2 text-center text-foreground">{p.tb}</td>
+                              <td className="px-3 py-2 text-center text-foreground">{p.r}</td>
+                              <td className="px-3 py-2 text-center text-foreground">{p.rbi}</td>
+                              <td className="px-3 py-2 text-center text-foreground">{p.bb}</td>
+                              <td className="px-3 py-2 text-center text-foreground">{p.sb}</td>
+                              <td className="px-3 py-2 text-center text-foreground">{p.k}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          )}
+
+          {selectedPlayer === null && (
+          <div>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold text-foreground">Edge Signals</h2>
               <div className="flex items-center gap-3">
@@ -435,84 +514,7 @@ export default function MlbLivePage() {
               </div>
             )}
           </div>
-
-          <div className="bg-card border border-border rounded-xl overflow-hidden" style={{ display: selectedPlayer !== null ? "none" : "block" }}>
-            <button
-              data-testid="button-toggle-boxscore"
-              onClick={() => setBoxExpanded(prev => !prev)}
-              className="w-full px-4 py-3 border-b border-border/60 flex items-center justify-between hover:bg-muted/30 transition-colors"
-            >
-              <h2 className="text-sm font-semibold text-foreground">
-                {boxExpanded ? "▾ Box Score" : "▸ Box Score"}
-              </h2>
-              {playersLoading && (
-                <span className="text-xs text-muted-foreground animate-pulse">Loading…</span>
-              )}
-            </button>
-
-            {boxExpanded && (
-              <>
-                {!playersLoading && players.length === 0 ? (
-                  <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                    No box score data available yet.
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="border-b border-border/60 bg-muted/40">
-                          <th className="px-4 py-2 text-left font-semibold text-muted-foreground w-[180px]">Player</th>
-                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">AB</th>
-                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">H</th>
-                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">TB</th>
-                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">R</th>
-                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">RBI</th>
-                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">BB</th>
-                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">SB</th>
-                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">K</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {players.map((p) => {
-                          const tier = playerTierMap.get(p.playerId);
-                          const style = tier ? TIER_STYLES[tier] : null;
-                          const isSelected = selectedPlayer?.playerId === p.playerId;
-                          return (
-                            <tr
-                              key={p.playerId}
-                              data-testid={`row-mlb-batter-${p.playerId}`}
-                              onClick={() => {
-                                setSelectedPlayer(p);
-                                setCalcResult(null);
-                                setSelectedLine(null);
-                              }}
-                              style={style ? { backgroundColor: style.bg, borderLeft: `3px solid ${style.border}` } : {}}
-                              className={`border-b border-border/30 last:border-0 cursor-pointer hover:bg-neutral-800 transition ${
-                                isSelected ? "ring-2 ring-primary ring-inset" : ""
-                              }`}
-                            >
-                              <td className="px-4 py-2">
-                                <div className="font-medium text-foreground truncate max-w-[160px]">{p.playerName}</div>
-                                <div className="text-muted-foreground text-[10px]">{p.teamAbbr} · #{p.battingOrderSlot}</div>
-                              </td>
-                              <td className="px-3 py-2 text-center text-foreground">{p.ab}</td>
-                              <td className="px-3 py-2 text-center text-foreground">{p.h}</td>
-                              <td className="px-3 py-2 text-center text-foreground">{p.tb}</td>
-                              <td className="px-3 py-2 text-center text-foreground">{p.r}</td>
-                              <td className="px-3 py-2 text-center text-foreground">{p.rbi}</td>
-                              <td className="px-3 py-2 text-center text-foreground">{p.bb}</td>
-                              <td className="px-3 py-2 text-center text-foreground">{p.sb}</td>
-                              <td className="px-3 py-2 text-center text-foreground">{p.k}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+          )}
 
           {selectedPlayer !== null && selectedGame && (
             <div className="space-y-4">
@@ -588,8 +590,8 @@ export default function MlbLivePage() {
                 )}
 
                 {!oddsLoading && oddsEntries.length === 0 && (
-                  <p className="text-xs text-muted-foreground/60 bg-secondary/50 rounded-lg p-3 border border-border/40">
-                    No lines found — props may not be posted yet for this player/market.
+                  <p className="text-xs text-muted-foreground/60 bg-secondary/50 rounded-lg p-3 border border-border/40" data-testid="text-no-sportsbook-line">
+                    No sportsbook line available
                   </p>
                 )}
 

@@ -363,6 +363,8 @@ export async function registerRoutes(
             gameId,
             homeTeam: game.teams?.home?.team?.abbreviation ?? "",
             awayTeam: game.teams?.away?.team?.abbreviation ?? "",
+            homeName: game.teams?.home?.team?.name ?? "",
+            awayName: game.teams?.away?.team?.name ?? "",
             homeScore,
             awayScore,
             inning: cachedState?.inning ?? inning,
@@ -476,7 +478,7 @@ export async function registerRoutes(
   });
 
   // ── MLB Routes (Admin-only in Phase A) ──────────────────────────────────────
-  app.post("/api/mlb/props", requireAuth, async (req, res) => {
+  const mlbPropsHandler: import("express").RequestHandler = async (req, res) => {
     try {
       const raw: Record<string, any> = { ...(req.body ?? {}) };
 
@@ -653,7 +655,9 @@ export async function registerRoutes(
       console.error("[MLB props]", err.message);
       return res.status(400).json({ error: err.message || "MLB prop engine error" });
     }
-  });
+  };
+  app.post("/api/mlb/props", requireAuth, mlbPropsHandler);
+  app.post("/api/mlb/calculate", requireAuth, mlbPropsHandler);
 
   app.get("/api/mlb/odds", requireAuth, async (req, res) => {
     try {
