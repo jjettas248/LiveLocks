@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import { storage } from "./storage";
 import { insertUserEmailPasswordSchema } from "@shared/schema";
 import type { User } from "@shared/schema";
+import { sendWelcomeEmail, sendHowToEmail, sendWallEmail } from "./email";
 
 declare module "express-session" {
   interface SessionData {
@@ -81,6 +82,13 @@ export async function registerAuthRoutes(app: import("express").Express) {
       smsAlerts: smsConsent,
       ...(phoneNumber ? { phoneNumber } : {}),
     });
+
+    try {
+      await sendWelcomeEmail(user.email);
+      await sendHowToEmail(user.email);
+    } catch (emailErr: any) {
+      console.error("[email] Failed to send welcome/how-to emails:", emailErr.message);
+    }
 
     req.session.userId = user.id;
     const token = signToken(user.id);
@@ -192,6 +200,13 @@ export async function requirePlayAccess(req: Request, res: Response, next: NextF
 
   if (user.playsUsed < FREE_PLAY_LIMIT) {
     await storage.incrementPlaysUsed(user.id);
+    if (user.playsUsed + 1 === 15) {
+      try {
+        await sendWallEmail(user.email);
+      } catch (emailErr: any) {
+        console.error("[email] Failed to send wall email:", emailErr.message);
+      }
+    }
     return next();
   }
 

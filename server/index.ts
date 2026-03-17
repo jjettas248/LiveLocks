@@ -10,6 +10,19 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync } from "./stripeClient";
+import cron from "node-cron";
+import { db } from "./db";
+import { users } from "@shared/schema";
+import { and, between, isNull, eq, gte, lte } from "drizzle-orm";
+import {
+  sendWelcomeEmail,
+  sendHowToEmail,
+  sendNudgeEmail,
+  sendWallEmail,
+  sendWinbackEmail,
+  sendProWelcomeEmail,
+  sendAllSportsWelcomeEmail,
+} from "./email";
 
 const app = express();
 const httpServer = createServer(app);
@@ -159,6 +172,48 @@ app.use((req, res, next) => {
   setTimeout(() => autoResolveAlerts(storage).catch(console.warn), 5 * 60 * 1000);
   setInterval(() => autoResolveAlerts(storage).catch(console.warn), 60 * 60 * 1000);
 
+  if (process.env.NODE_ENV !== "production") {
+    app.get("/api/test-email", async (req: Request, res: Response) => {
+      const type = req.query.type as string;
+      const to = req.query.to as string;
+
+      if (!type || !to) {
+        return res.status(400).json({ success: false, error: "Missing 'type' or 'to' query params" });
+      }
+
+      try {
+        switch (type) {
+          case "welcome":
+            await sendWelcomeEmail(to);
+            break;
+          case "howto":
+            await sendHowToEmail(to);
+            break;
+          case "nudge":
+            await sendNudgeEmail(to, 7, 8);
+            break;
+          case "wall":
+            await sendWallEmail(to);
+            break;
+          case "winback":
+            await sendWinbackEmail(to);
+            break;
+          case "pro":
+            await sendProWelcomeEmail(to);
+            break;
+          case "allsports":
+            await sendAllSportsWelcomeEmail(to);
+            break;
+          default:
+            return res.status(400).json({ success: false, error: `Unknown email type: ${type}` });
+        }
+        return res.json({ success: true, type });
+      } catch (err: any) {
+        return res.status(500).json({ success: false, error: err.message });
+      }
+    });
+  }
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
@@ -189,5 +244,68 @@ app.use((req, res, next) => {
     () => {
       log(`serving on port ${port}`);
     },
+  );
+
+  cron.schedule(
+    "0 9 * * *",
+    async () => {
+      try {
+        const now = new Date();
+
+        const threeDaysAgo = new Date(now);
+        threeDaysAgo.setDate(threeDaysAgo.getDate() - 4);
+        const twoDaysAgo = new Date(now);
+        twoDaysAgo.setDate(twoDaysAgo.getDate() - 3);
+
+        const nudgeUsers = await db
+          .select()
+          .from(users)
+          .where(
+            and(
+              isNull(users.subscriptionTier),
+              between(users.createdAt, threeDaysAgo, twoDaysAgo),
+              gte(users.playsUsed, 1),
+              lte(users.playsUsed, 14)
+            )
+          );
+
+        for (const user of nudgeUsers) {
+          try {
+            await sendNudgeEmail(user.email, user.playsUsed, 15 - user.playsUsed);
+          } catch (err: any) {
+            console.error(`[cron] Failed to send nudge email to ${user.email}:`, err.message);
+          }
+        }
+
+        const fourteenDaysAgo = new Date(now);
+        fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 15);
+        const thirteenDaysAgo = new Date(now);
+        thirteenDaysAgo.setDate(thirteenDaysAgo.getDate() - 14);
+
+        const winbackUsers = await db
+          .select()
+          .from(users)
+          .where(
+            and(
+              isNull(users.subscriptionTier),
+              between(users.createdAt, fourteenDaysAgo, thirteenDaysAgo),
+              eq(users.playsUsed, 0)
+            )
+          );
+
+        for (const user of winbackUsers) {
+          try {
+            await sendWinbackEmail(user.email);
+          } catch (err: any) {
+            console.error(`[cron] Failed to send winback email to ${user.email}:`, err.message);
+          }
+        }
+
+        console.log(`[cron] Daily email job complete: ${nudgeUsers.length} nudge, ${winbackUsers.length} winback`);
+      } catch (err: any) {
+        console.error("[cron] Daily email job failed:", err.message);
+      }
+    },
+    { timezone: "America/New_York" }
   );
 })();

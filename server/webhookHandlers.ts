@@ -1,5 +1,6 @@
 import { getStripeSync } from "./stripeClient";
 import { storage } from "./storage";
+import { sendProWelcomeEmail, sendAllSportsWelcomeEmail } from "./email";
 
 export class WebhookHandlers {
   static async processWebhook(payload: Buffer, signature: string): Promise<void> {
@@ -25,6 +26,39 @@ export class WebhookHandlers {
         if (userId && tier) {
           await storage.updateUserSubscription(userId, tier, customerId, subscriptionId);
           console.log(`[webhook] Ungated user ${userId} → tier: ${tier}, isNewProUser: true, upgradedAt: ${new Date().toISOString()}`);
+
+          try {
+            const user = await storage.getUserById(userId);
+            if (user) {
+              if (tier === "all") {
+                await sendProWelcomeEmail(user.email);
+              } else if (tier === "elite") {
+                await sendAllSportsWelcomeEmail(user.email);
+              }
+            }
+          } catch (emailErr: any) {
+            console.error("[email] Failed to send subscription welcome email:", emailErr.message);
+          }
+        }
+      } else if (event.type === "customer.subscription.updated") {
+        const subscription = event.data?.object;
+        const previousAttributes = event.data?.previous_attributes;
+        const customerId = typeof subscription?.customer === "string" ? subscription.customer : "";
+
+        if (customerId && previousAttributes?.metadata?.tier) {
+          const previousTier = previousAttributes.metadata.tier;
+          const newTier = subscription?.metadata?.tier;
+
+          if (previousTier === "all" && newTier === "elite") {
+            try {
+              const user = await storage.getUserByStripeCustomerId(customerId);
+              if (user) {
+                await sendAllSportsWelcomeEmail(user.email);
+              }
+            } catch (emailErr: any) {
+              console.error("[email] Failed to send upgrade email:", emailErr.message);
+            }
+          }
         }
       } else if (event.type === "customer.subscription.deleted") {
         const subscription = event.data?.object;

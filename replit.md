@@ -50,4 +50,5 @@ I prefer clear and concise explanations. When implementing new features or makin
 - **Sports Game Odds (SGO)**: Used for 1H lines and team total lines.
 - **Stripe**: Payment gateway for subscription management, including product definitions and webhook processing.
 - **Twilio**: SMS service for user alerts and notifications.
+- **Resend**: Transactional email service for lifecycle emails (welcome, how-to, nudge, wall, winback, subscription welcome). Configured in `server/email.ts` with 7 send functions. Triggered on signup, 15th play, checkout, and daily cron (9 AM ET for nudge/winback). Dev test route at `GET /api/test-email`.
 - **PostgreSQL**: Relational database for storing all application data.
