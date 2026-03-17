@@ -467,6 +467,8 @@ export default function Dashboard() {
   const [nbaSubTab, setNbaSubTab] = useState<"live" | "halftime">("live");
   const [expandToGameId, setExpandToGameId] = useState<string | null>(null);
   const [showWelcomeBanner, setShowWelcomeBanner] = useState(false);
+  const [verifyBannerDismissed, setVerifyBannerDismissed] = useState(false);
+  const [resendingVerify, setResendingVerify] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [slateFilterProp, setSlateFilterProp] = useState<string>("all");
   const [slateFilterProb, setSlateFilterProb] = useState<string>("all");
@@ -903,6 +905,12 @@ export default function Dashboard() {
     if (calculateMutation.error instanceof PlayLimitError) {
       setUpgradeModalState({ playsUsed: calculateMutation.error.playsUsed, limit: calculateMutation.error.limit });
       setShowUpgradeModal(true);
+    } else if (calculateMutation.error.message?.toLowerCase().includes("verify your email")) {
+      toast({
+        title: "Email not verified",
+        description: "Check your inbox and click the verification link to unlock your plays.",
+        variant: "destructive",
+      });
     } else {
       toast({
         title: "Calculation failed",
@@ -1564,6 +1572,45 @@ export default function Dashboard() {
       )}
 
       <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-5">
+
+        {/* Email verification banner */}
+        {user && !user.emailVerified && !verifyBannerDismissed && (
+          <div
+            data-testid="banner-verify-email"
+            className="flex items-center justify-between gap-3 rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-4 py-3 text-sm"
+          >
+            <span className="text-yellow-200 leading-snug">
+              Your email isn&apos;t verified yet. Check your inbox and click the link to unlock your{" "}
+              <span className="font-semibold">3 free plays</span>.
+            </span>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                data-testid="button-resend-verify-dashboard"
+                disabled={resendingVerify}
+                onClick={async () => {
+                  setResendingVerify(true);
+                  try {
+                    await apiRequest("POST", "/api/auth/resend-verification");
+                    toast({ title: "Email sent", description: "Check your inbox for the verification link." });
+                  } catch {
+                    toast({ title: "Error", description: "Could not resend. Try again shortly.", variant: "destructive" });
+                  } finally {
+                    setResendingVerify(false);
+                  }
+                }}
+                className="text-xs font-medium text-yellow-300 hover:text-yellow-100 underline underline-offset-2 disabled:opacity-50"
+              >
+                {resendingVerify ? "Sending…" : "Resend email"}
+              </button>
+              <button
+                data-testid="button-dismiss-verify-banner"
+                onClick={() => setVerifyBannerDismissed(true)}
+                className="text-yellow-400 hover:text-yellow-200 text-xs leading-none"
+                aria-label="Dismiss"
+              >✕</button>
+            </div>
+          </div>
+        )}
 
         {/* Welcome banner — shown once after upgrade */}
         {showWelcomeBanner && (

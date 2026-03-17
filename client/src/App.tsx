@@ -10,6 +10,7 @@ import AdminPage from "@/pages/admin";
 import PrivacyPage from "@/pages/privacy";
 import TermsPage from "@/pages/terms";
 import LandingPage from "@/pages/landing";
+import VerifyPendingPage from "@/pages/verify-pending";
 import { useAuth } from "@/hooks/use-auth";
 import { useEffect } from "react";
 
@@ -78,6 +79,7 @@ function App() {
           <Route path="/landing" component={LandingPage} />
           <Route path="/privacy" component={PrivacyPage} />
           <Route path="/terms" component={TermsPage} />
+          <Route path="/verify-pending" component={VerifyPendingPage} />
           <Route component={ProtectedRouter} />
         </Switch>
       </TooltipProvider>

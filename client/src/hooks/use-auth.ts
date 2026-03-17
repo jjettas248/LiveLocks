@@ -9,6 +9,7 @@ export interface AuthUser {
   playsUsed: number;
   isNewProUser: boolean;
   upgradedAt: string | null;
+  emailVerified: boolean;
 }
 
 async function apiFetch(path: string, options?: RequestInit) {

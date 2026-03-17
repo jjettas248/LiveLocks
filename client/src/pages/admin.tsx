@@ -460,7 +460,7 @@ export default function AdminPage() {
                           {u.subscriptionTier || u.isAdmin ? (
                             <span className="text-xs text-muted-foreground/50">unlimited</span>
                           ) : (
-                            <span className={u.playsUsed >= 15 ? "text-destructive font-semibold" : ""}>{u.playsUsed} / 15</span>
+                            <span className={u.playsUsed >= 3 ? "text-destructive font-semibold" : ""}>{u.playsUsed} / 3</span>
                           )}
                         </td>
                         <td className="px-4 py-3">

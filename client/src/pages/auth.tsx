@@ -72,13 +72,17 @@ export default function AuthPage() {
   const onRegisterSubmit = async (data: RegisterForm) => {
     setErrorMessage(null);
     try {
-      await register({
+      const result = await register({
         email: data.email,
         password: data.password,
         smsConsent: data.smsConsent,
         phoneNumber: data.phoneNumber,
       });
-      navigate("/dashboard");
+      if (result && result.emailVerified === false) {
+        navigate("/verify-pending");
+      } else {
+        navigate("/dashboard");
+      }
     } catch (err: any) {
       setErrorMessage(err.message || "Something went wrong. Please try again.");
     }
@@ -266,7 +270,7 @@ export default function AuthPage() {
               </button>
 
               <p className="text-xs text-muted-foreground text-center">
-                New accounts get {15} free plays. Upgrade anytime to unlock unlimited access.
+                New accounts get {3} free plays. Upgrade anytime to unlock unlimited access.
               </p>
             </form>
           )}

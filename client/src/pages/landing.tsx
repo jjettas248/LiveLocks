@@ -114,7 +114,7 @@ export default function LandingPage() {
           </div>
 
           <p className="text-xs text-gray-400">
-            No credit card required &middot; 15 free probability calculations included
+            No credit card required &middot; 3 free probability calculations included
           </p>
         </header>
 
@@ -312,7 +312,7 @@ export default function LandingPage() {
             Simple, transparent pricing.
           </h2>
           <p className="text-muted-foreground text-base max-w-md mx-auto leading-relaxed">
-            Start free with 15 calculations. Upgrade when you are ready for unlimited access, SMS alerts, and multi-sport coverage.
+            Start free with 3 calculations. Upgrade when you are ready for unlimited access, SMS alerts, and multi-sport coverage.
           </p>
         </div>
 
@@ -376,7 +376,7 @@ export default function LandingPage() {
             Ready to find your edge?
           </h3>
           <p className="text-muted-foreground mb-8 max-w-sm mx-auto leading-relaxed">
-            Get full access to the live detection engine, SMS halftime alerts, and the prop calculator. Includes 15 free probability calculations to get started.
+            Get full access to the live detection engine, SMS halftime alerts, and the prop calculator. Includes 3 free probability calculations to get started.
           </p>
           <Link
             href="/auth"
@@ -385,7 +385,7 @@ export default function LandingPage() {
           >
             Sign Up Free — Get Started <ArrowRight size={15} />
           </Link>
-          <p className="text-xs text-muted-foreground/50 mt-4">No credit card required &middot; 15 free calculations included</p>
+          <p className="text-xs text-muted-foreground/50 mt-4">No credit card required &middot; 3 free calculations included</p>
         </div>
       </section>
 
