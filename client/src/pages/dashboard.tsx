@@ -1848,7 +1848,7 @@ export default function Dashboard() {
                         <th className="text-right px-3 py-2 font-medium">FGM-FGA</th>
                         <th className="text-right px-3 py-2 font-medium">FTM-FTA</th>
                         <th className="text-right px-3 py-2 font-medium">3PM-3PA</th>
-                        <th className="text-right px-3 py-2 font-medium">PF</th>
+                        
                       </tr>
                     </thead>
                     <tbody>
@@ -1911,7 +1911,7 @@ export default function Dashboard() {
                         const teams = Array.from(new Set(playedStats.map(s => s.teamAbbr)));
                         return teams.flatMap((team, ti) => [
                           <tr key={`team-${team}`} className={ti > 0 ? "border-t-2 border-border/60" : ""}>
-                            <td colSpan={10} className="px-4 py-1 text-muted-foreground/60 font-semibold uppercase tracking-wider text-[10px] bg-secondary/20">
+                            <td colSpan={9} className="px-4 py-1 text-muted-foreground/60 font-semibold uppercase tracking-wider text-[10px] bg-secondary/20">
                               {espnToDb(team)} — {TEAM_FULL_NAMES[espnToDb(team)] ?? team}
                             </td>
                           </tr>,
@@ -1964,7 +1964,7 @@ export default function Dashboard() {
                               const fg3Pct = stat.fg3a != null && stat.fg3a > 0 ? `${stat.fg3m ?? 0}-${stat.fg3a}` : "—";
                               const signalStyle = !isSelected && signal ? SIGNAL_STYLES[signal.tier] : null;
                               const rowStyle = signalStyle
-                                ? { background: signalStyle.bg, boxShadow: `inset 3px 0 0 ${signalStyle.border}` }
+                                ? { background: signalStyle.bg, boxShadow: `inset 4px 0 0 ${signalStyle.border}` }
                                 : undefined;
                               // Cell color: look up the stat-type-specific signal map (built above)
                               // so the color always reflects the signal for the exact column on screen.
@@ -2006,7 +2006,7 @@ export default function Dashboard() {
                                   <td className="text-right px-3 py-2 font-mono text-muted-foreground">{fgPct}</td>
                                   <td className="text-right px-3 py-2 font-mono text-muted-foreground">{ftPct}</td>
                                   <td className="text-right px-3 py-2 font-mono text-muted-foreground">{fg3Pct}</td>
-                                  <td className={`text-right px-3 py-2 font-mono ${stat.fouls >= 4 ? "text-red-400 font-bold" : "text-muted-foreground"}`}>{stat.fouls}</td>
+                                  
                                 </tr>
                               );
                             }),
