@@ -1866,9 +1866,14 @@ export async function registerRoutes(
         }
       }
 
-      // Sort by edge descending (highest edge = most confident call)
-      allPlays.sort((a, b) => b.edge - a.edge);
-      const topPlays = allPlays.slice(0, 20);
+      // Balance OVER/UNDER play selection — split into overs and unders,
+      // take up to 10 from each, then merge for final ranking.
+      const overs = allPlays.filter(p => p.betDirection === "over").sort((a, b) => b.edge - a.edge).slice(0, 10);
+      const unders = allPlays.filter(p => p.betDirection === "under").sort((a, b) => b.edge - a.edge).slice(0, 10);
+      const balancedPlays = [...overs, ...unders];
+      // Sort merged list by edge descending (highest edge = most confident call)
+      balancedPlays.sort((a, b) => b.edge - a.edge);
+      const topPlays = balancedPlays.slice(0, 20);
       res.json({ plays: topPlays });
       // Fire-and-forget: alerts + persist plays for analytics
       checkAndSendAlerts(topPlays, storage).catch(console.warn);

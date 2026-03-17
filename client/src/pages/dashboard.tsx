@@ -1891,6 +1891,19 @@ export default function Dashboard() {
                           }
                         }
 
+                        function getSignalTier(prob: number): "elite" | "strong" | "value" | "none" {
+                          if (prob >= 85) return "elite";
+                          if (prob >= 70) return "strong";
+                          if (prob >= 60) return "value";
+                          return "none";
+                        }
+
+                        const SIGNAL_TIER_STYLES: Record<"elite" | "strong" | "value", { border: string; bg: string; dot: string }> = {
+                          elite:  { border: "#22c55e", bg: "rgba(34,197,94,0.12)",   dot: "#22c55e" },
+                          strong: { border: "#eab308", bg: "rgba(234,179,8,0.12)",   dot: "#eab308" },
+                          value:  { border: "#3b82f6", bg: "rgba(59,130,246,0.12)",   dot: "#3b82f6" },
+                        };
+
                         const SIGNAL_STYLES: Record<SignalTier, { border: string; bg: string; dot: string }> = {
                           green:  { border: "#22c55e", bg: "rgba(34,197,94,0.12)",   dot: "#22c55e" },
                           red:    { border: "#ef4444", bg: "rgba(239,68,68,0.12)",   dot: "#ef4444" },
@@ -1989,12 +2002,27 @@ export default function Dashboard() {
                                       <span>{stat.playerName}</span>
                                       {isSelected && <span className="text-primary text-[10px] font-bold">●</span>}
                                       {!isSelected && signal && (
-                                        <span
-                                          title={`${STAT_LABEL_MAP[signal.statType] ?? signal.statType} ${signal.betDirection === "under" ? "Under" : "Over"} — ${signal.displayProb}% model confidence`}
-                                          data-testid={`signal-dot-${stat.playerId}`}
-                                          style={{ background: SIGNAL_STYLES[signal.tier].bg, color: SIGNAL_STYLES[signal.tier].dot, border: `1px solid ${SIGNAL_STYLES[signal.tier].border}` }}
-                                          className="text-[8px] font-bold cursor-help select-none px-1 py-0.5 rounded ml-0.5 whitespace-nowrap leading-none"
-                                        >{STAT_LABEL_MAP[signal.statType] ?? signal.statType} {signal.betDirection === "under" ? "dn" : "up"} {signal.displayProb}%</span>
+                                        (() => {
+                                          const sigTier = getSignalTier(signal.displayProb);
+                                          const tierStyle = sigTier !== "none" ? SIGNAL_TIER_STYLES[sigTier] : SIGNAL_STYLES[signal.tier];
+                                          const directionLabel = signal.betDirection === "under" ? "UNDER" : "OVER";
+                                          return (
+                                            <span
+                                              title={`${directionLabel} ${STAT_LABEL_MAP[signal.statType] ?? signal.statType} — ${signal.displayProb}% model confidence`}
+                                              data-testid={`signal-dot-${stat.playerId}`}
+                                              style={{
+                                                background: tierStyle.bg,
+                                                color: tierStyle.dot,
+                                                border: `1px solid ${tierStyle.border}`,
+                                                fontSize: "13px",
+                                                fontWeight: 600,
+                                                padding: "4px 8px",
+                                                borderRadius: "6px",
+                                              }}
+                                              className="cursor-help select-none ml-0.5 whitespace-nowrap leading-none"
+                                            >{directionLabel} {STAT_LABEL_MAP[signal.statType] ?? signal.statType} {signal.displayProb}%</span>
+                                          );
+                                        })()
                                       )}
                                     </span>
                                   </td>

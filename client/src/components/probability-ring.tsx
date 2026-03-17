@@ -80,7 +80,7 @@ export function ProbabilityRing({
           transition={{ delay: 0.8, duration: 0.5 }}
           className="text-sm text-muted-foreground uppercase tracking-wider mt-1 font-semibold"
         >
-          Hit Implied
+          Model Prob
         </motion.span>
       </div>
     </div>

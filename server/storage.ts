@@ -524,7 +524,14 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    const expectedTotal = req.halftimeStat + expectedFromHere;
+    let expectedTotal = req.halftimeStat + expectedFromHere;
+
+    // ─── Halftime regression factor ──────────────────────────────────────
+    // When a player has 16+ minutes in the first half, apply a regression-to-mean
+    // multiplier to prevent inflated UNDER signals from slow first halves.
+    if (minutesPlayed >= 16) {
+      expectedTotal *= 0.92;
+    }
 
     // ─── Market anchoring ─────────────────────────────────────────────────
     const marketMean = req.liveLine + 0.5;
@@ -665,6 +672,8 @@ export class DatabaseStorage implements IStorage {
 
     return {
       probability: finalProbability,
+      impliedProbability: finalProbability,
+      edge: Math.round(edgeVsBook * 10) / 10,
       expectedTotal: Math.round(expectedTotal * 10) / 10,
       projectedSecondHalfMinutes: Math.round(remainingMinutes * 10) / 10,
       defenseMultiplier: Math.round(defenseMultiplier * 100) / 100,
