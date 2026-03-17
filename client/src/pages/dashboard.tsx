@@ -623,7 +623,7 @@ export default function Dashboard() {
       });
       await apiRequest("POST", "/api/user/alerts/push-subscription", { subscription: sub.toJSON() });
       setPushSubscribed(true);
-      toast({ title: "Push alerts enabled!", description: "You'll be notified when plays hit ≥90% or 2H goes live." });
+      toast({ title: "Push alerts enabled!", description: "You'll be notified when plays hit ≥75% or 2H goes live." });
     } catch (err: any) {
       toast({ title: "Could not enable push", description: err.message, variant: "destructive" });
     } finally {
