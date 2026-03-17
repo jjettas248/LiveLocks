@@ -201,11 +201,9 @@ export async function requirePlayAccess(req: Request, res: Response, next: NextF
   if (user.playsUsed < FREE_PLAY_LIMIT) {
     await storage.incrementPlaysUsed(user.id);
     if (user.playsUsed + 1 === 15) {
-      try {
-        await sendWallEmail(user.email);
-      } catch (emailErr: any) {
+      sendWallEmail(user.email).catch((emailErr: any) => {
         console.error("[email] Failed to send wall email:", emailErr.message);
-      }
+      });
     }
     return next();
   }

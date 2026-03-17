@@ -252,10 +252,10 @@ app.use((req, res, next) => {
       try {
         const now = new Date();
 
+        const fourDaysAgo = new Date(now);
+        fourDaysAgo.setDate(fourDaysAgo.getDate() - 4);
         const threeDaysAgo = new Date(now);
-        threeDaysAgo.setDate(threeDaysAgo.getDate() - 4);
-        const twoDaysAgo = new Date(now);
-        twoDaysAgo.setDate(twoDaysAgo.getDate() - 3);
+        threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
 
         const nudgeUsers = await db
           .select()
@@ -263,7 +263,7 @@ app.use((req, res, next) => {
           .where(
             and(
               isNull(users.subscriptionTier),
-              between(users.createdAt, threeDaysAgo, twoDaysAgo),
+              between(users.createdAt, fourDaysAgo, threeDaysAgo),
               gte(users.playsUsed, 1),
               lte(users.playsUsed, 14)
             )
@@ -277,10 +277,10 @@ app.use((req, res, next) => {
           }
         }
 
+        const fifteenDaysAgo = new Date(now);
+        fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
         const fourteenDaysAgo = new Date(now);
-        fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 15);
-        const thirteenDaysAgo = new Date(now);
-        thirteenDaysAgo.setDate(thirteenDaysAgo.getDate() - 14);
+        fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
 
         const winbackUsers = await db
           .select()
@@ -288,7 +288,7 @@ app.use((req, res, next) => {
           .where(
             and(
               isNull(users.subscriptionTier),
-              between(users.createdAt, fourteenDaysAgo, thirteenDaysAgo),
+              between(users.createdAt, fifteenDaysAgo, fourteenDaysAgo),
               eq(users.playsUsed, 0)
             )
           );
