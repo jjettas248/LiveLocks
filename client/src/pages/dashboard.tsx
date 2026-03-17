@@ -250,21 +250,89 @@ export default function Dashboard() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
-  const [upgradeModalState, setUpgradeModalState] = useState<{ playsUsed: number; limit: number }>({ playsUsed: 15, limit: 15 });
+  const [upgradeModalState, setUpgradeModalState] = useState<{ playsUsed: number; limit: number }>({ playsUsed: 3, limit: 3 });
 
   const { data: players, isLoading: isPlayersLoading } = usePlayers();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
   const { data: liveGames, isLoading: isGamesLoading, refetch: refetchGames } = useLiveGames();
 
+  const [autoRunResult, setAutoRunResult] = useState<{ probability: number; projection: number; line: number; direction: string; playerName: string; statType: string; edge: number } | null>(null);
+  const [autoRunFallback, setAutoRunFallback] = useState<string | null>(null);
+  const [showConfidenceBadge, setShowConfidenceBadge] = useState(false);
+  const autoRunFiredRef = useRef(false);
+
+  const autoRunBestSignal = async () => {
+    try {
+      const token = getAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch("/api/halftime-plays", { credentials: "include", headers });
+      if (!res.ok) {
+        setAutoRunFallback("No strong edges right now — check again shortly");
+        return;
+      }
+      const data = await res.json();
+      const plays = data.plays ?? [];
+
+      const qualifiedPlays = plays
+        .filter((p: any) => {
+          const prob = parseFloat(p.probability);
+          return prob >= 65;
+        })
+        .sort((a: any, b: any) => {
+          const probA = parseFloat(a.probability);
+          const probB = parseFloat(b.probability);
+          if (probA >= 70 && probB < 70) return -1;
+          if (probB >= 70 && probA < 70) return 1;
+          const edgeA = parseFloat(a.edge ?? "0");
+          const edgeB = parseFloat(b.edge ?? "0");
+          if (probA === probB) return Math.abs(edgeB) - Math.abs(edgeA);
+          return probB - probA;
+        });
+
+      if (qualifiedPlays.length === 0) {
+        setAutoRunFallback("No strong edges right now — check again shortly");
+        return;
+      }
+
+      const best = qualifiedPlays[0];
+      const prob = parseFloat(best.probability);
+      const line = parseFloat(best.line);
+      const projection = parseFloat(best.projection ?? best.expectedTotal ?? "0");
+      const direction = best.betDirection?.toUpperCase() ?? (prob > 50 ? "OVER" : "UNDER");
+      const edge = parseFloat(best.edge ?? "0");
+
+      setAutoRunResult({
+        probability: prob,
+        projection,
+        line,
+        direction,
+        playerName: best.playerName ?? "Signal",
+        statType: best.statType ?? "",
+        edge,
+      });
+      setShowConfidenceBadge(true);
+    } catch {
+      setAutoRunFallback("No strong edges right now — check again shortly");
+    }
+  };
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("verified") === "1") {
+    const isVerified = params.get("verified") === "1";
+    if (isVerified) {
       toast({ title: "You're verified — let's find your first edge" });
       params.delete("verified");
       const newUrl = window.location.pathname + (params.toString() ? `?${params.toString()}` : "");
       window.history.replaceState({}, "", newUrl);
     }
-  }, []);
+
+    const shouldAutoRun = isVerified || (user && (user.playsUsed ?? 0) === 0);
+    if (shouldAutoRun && !autoRunFiredRef.current) {
+      autoRunFiredRef.current = true;
+      autoRunBestSignal();
+    }
+  }, [user?.playsUsed]);
 
   const [showResetOverlay, setShowResetOverlay] = useState(false);
   const [overlayVisible, setOverlayVisible] = useState(false);
@@ -844,11 +912,10 @@ export default function Dashboard() {
     }
   }, [calculateMutation.error]);
 
-  // Auto-show upgrade modal when free user uses their last play successfully
   useEffect(() => {
     if (!user || user.isAdmin || user.subscriptionTier) return;
-    if ((user.playsUsed ?? 0) >= 15) {
-      setUpgradeModalState({ playsUsed: user.playsUsed ?? 15, limit: 15 });
+    if ((user.playsUsed ?? 0) >= 3) {
+      setUpgradeModalState({ playsUsed: user.playsUsed ?? 3, limit: 3 });
       setShowUpgradeModal(true);
     }
   }, [user?.playsUsed]);
@@ -860,12 +927,23 @@ export default function Dashboard() {
     const tier = params.get("tier");
     const sessionId = params.get("session_id");
     if (payment === "success" && tier) {
-      window.history.replaceState({}, "", "/");
+      window.history.replaceState({}, "", "/dashboard");
       apiRequest("POST", "/api/stripe/checkout-complete", { tier, sessionId })
-        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] }))
+        .then(() => {
+          queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+          const authHeaders: Record<string, string> = {};
+          const tok = getAuthToken();
+          if (tok) authHeaders["Authorization"] = `Bearer ${tok}`;
+          Promise.all([
+            fetch("/api/auth/me", { credentials: "include", headers: authHeaders }).then(r => r.json()),
+            fetch("/api/me", { credentials: "include", headers: authHeaders }).then(r => r.json()),
+          ]).then(([authMe, me]) => {
+            setLocalTier(authMe.subscriptionTier ?? me.subscriptionTier ?? null);
+          }).catch(() => {});
+        })
         .catch(() => queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] }));
     } else if (payment === "cancelled") {
-      window.history.replaceState({}, "", "/");
+      window.history.replaceState({}, "", "/dashboard");
     }
   }, []);
 
@@ -1294,7 +1372,7 @@ export default function Dashboard() {
       });
       if (res.status === 402) {
         const err = await res.json().catch(() => ({}));
-        setUpgradeModalState({ playsUsed: err.playsUsed ?? user?.playsUsed ?? 0, limit: err.limit ?? 15 });
+        setUpgradeModalState({ playsUsed: err.playsUsed ?? user?.playsUsed ?? 0, limit: err.limit ?? 3 });
         setShowUpgradeModal(true);
       } else if (res.ok) {
         setUnlockedGameIds(prev => new Set(Array.from(prev).concat(gameId)));
@@ -1353,11 +1431,11 @@ export default function Dashboard() {
             {user && !user.isAdmin && !user.subscriptionTier && (
               <button
                 data-testid="button-plays-remaining"
-                onClick={() => { setUpgradeModalState({ playsUsed: user.playsUsed, limit: 15 }); setShowUpgradeModal(true); }}
+                onClick={() => { setUpgradeModalState({ playsUsed: user.playsUsed, limit: 3 }); setShowUpgradeModal(true); }}
                 className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-500 text-xs font-medium hover:bg-amber-500/20 transition-colors"
               >
                 <Zap className="w-3 h-3" />
-                {Math.max(0, 15 - user.playsUsed)} free plays left
+                {Math.max(0, 3 - user.playsUsed)} free plays left
               </button>
             )}
             {user && user.subscriptionTier && (
@@ -1497,6 +1575,80 @@ export default function Dashboard() {
           />
         )}
 
+        {autoRunResult && (
+          <div
+            data-testid="auto-run-result"
+            className="rounded-2xl border border-[#00d4aa]/30 bg-[#0a0a0a] p-5 animate-fade-in-up"
+          >
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-red-500/20 text-red-400">
+                LIVE EDGE 🚨
+              </span>
+              <span className="text-xs text-[#71717a]">{autoRunResult.playerName} · {autoRunResult.statType}</span>
+            </div>
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1">
+                <div className="text-5xl font-black text-white leading-none" data-testid="text-auto-run-probability">
+                  {autoRunResult.probability.toFixed(1)}%
+                </div>
+                <div className="mt-2 flex items-center gap-3">
+                  <span className="text-sm text-[#a1a1aa]">
+                    Projection <strong className="text-white">{autoRunResult.projection.toFixed(1)}</strong> vs. Line <strong className="text-white">{autoRunResult.line.toFixed(1)}</strong>
+                  </span>
+                </div>
+                <div className="mt-1.5">
+                  <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${
+                    autoRunResult.direction === "OVER"
+                      ? "bg-emerald-500/20 text-emerald-400"
+                      : "bg-red-500/20 text-red-400"
+                  }`}>
+                    {autoRunResult.direction === "OVER" ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                    {autoRunResult.direction}
+                  </span>
+                </div>
+              </div>
+              <div className="flex-shrink-0">
+                <ProbabilityRing probability={autoRunResult.probability} />
+              </div>
+            </div>
+            {showConfidenceBadge && (
+              <div
+                data-testid="badge-model-confidence"
+                className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#00d4aa]/10 border border-[#00d4aa]/20 text-[#00d4aa] text-xs font-medium"
+              >
+                <Target className="w-3 h-3" />
+                Model confidence is strong on this play
+              </div>
+            )}
+          </div>
+        )}
+
+        {autoRunFallback && !autoRunResult && (
+          <div
+            data-testid="auto-run-fallback"
+            className="rounded-xl border border-[#27272a] bg-[#0a0a0a] p-4 text-center"
+          >
+            <p className="text-sm text-[#71717a]">{autoRunFallback}</p>
+          </div>
+        )}
+
+        {isFreeUser && playsUsed === 1 && (
+          <div
+            data-testid="nudge-plays-remaining"
+            className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-2.5 text-center"
+          >
+            <p className="text-sm text-amber-400">2 more free edges remaining</p>
+          </div>
+        )}
+        {isFreeUser && playsUsed === 2 && (
+          <div
+            data-testid="nudge-last-play"
+            className="rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-2.5 text-center"
+          >
+            <p className="text-sm text-red-400 font-medium">One more edge — then you're locked out</p>
+          </div>
+        )}
+
         {/* Tab Navigation */}
         <div className="relative flex flex-col gap-0 w-full overflow-x-auto">
           <div className="flex gap-1 bg-secondary/40 border border-border/60 rounded-xl p-1 w-fit">
@@ -1515,7 +1667,7 @@ export default function Dashboard() {
               data-testid="tab-ncaab"
               onClick={() => {
                 if (!hasNcaabAccess) {
-                  setUpgradeModalState({ playsUsed: user?.playsUsed ?? 0, limit: 15 });
+                  setUpgradeModalState({ playsUsed: user?.playsUsed ?? 0, limit: 3 });
                   setShowUpgradeModal(true);
                   return;
                 }
@@ -2387,7 +2539,7 @@ export default function Dashboard() {
                 {/* Free play countdown — shown to free users only */}
                 {user && !user.isAdmin && !user.subscriptionTier && (() => {
                   const used = user.playsUsed ?? 0;
-                  const limit = 15;
+                  const limit = 3;
                   const remaining = Math.max(0, limit - used);
                   const pct = Math.round((used / limit) * 100);
                   return (
@@ -2419,16 +2571,16 @@ export default function Dashboard() {
                   );
                 })()}
 
-                {user && !user.isAdmin && !user.subscriptionTier && (user.playsUsed ?? 0) >= 10 && (user.playsUsed ?? 0) < 15 && (
+                {user && !user.isAdmin && !user.subscriptionTier && (user.playsUsed ?? 0) >= 1 && (user.playsUsed ?? 0) < 3 && (
                   <div data-testid="near-limit-reminder" className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-2.5 flex items-center gap-2">
                     <span className="text-orange-400 text-sm">⚠️</span>
                     <span className="text-xs text-orange-300">
-                      You have {15 - (user.playsUsed ?? 0)} free calculation{15 - (user.playsUsed ?? 0) === 1 ? "" : "s"} remaining.
+                      You have {3 - (user.playsUsed ?? 0)} free calculation{3 - (user.playsUsed ?? 0) === 1 ? "" : "s"} remaining.
                     </span>
                     <button
                       type="button"
                       data-testid="button-upgrade-near-limit"
-                      onClick={() => { setUpgradeModalState({ playsUsed: user.playsUsed ?? 0, limit: 15 }); setShowUpgradeModal(true); }}
+                      onClick={() => { setUpgradeModalState({ playsUsed: user.playsUsed ?? 0, limit: 3 }); setShowUpgradeModal(true); }}
                       className="ml-auto text-[10px] font-bold text-orange-400 hover:text-orange-300 underline underline-offset-2 transition-colors whitespace-nowrap"
                     >
                       Go Pro →
@@ -2473,7 +2625,9 @@ export default function Dashboard() {
                   <div className="flex flex-col md:flex-row items-center justify-between gap-5">
                     <div className="flex-1 space-y-3 z-10">
                       <div>
-                        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-1">Live Prediction</p>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span data-testid="badge-live-edge" className="text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-red-500/20 text-red-400">LIVE EDGE 🚨</span>
+                        </div>
                         <div className="text-2xl font-bold tracking-tight">
                           {selectedPlayer?.name ?? "Player"} —{" "}
                           {STAT_TYPES.find((s) => s.value === form.getValues("statType"))?.label}{" "}
@@ -2489,6 +2643,15 @@ export default function Dashboard() {
                             {Math.max(0, form.getValues("liveLine") - form.getValues("halftimeStat")).toFixed(1)}
                           </span>{" "}
                           more
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                        <span>Projection <strong className="text-foreground">{result.expectedTotal.toFixed(1)}</strong> vs. Line <strong className="text-foreground">{form.getValues("liveLine")}</strong></span>
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold ${
+                          result.probability > 50 ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"
+                        }`}>
+                          {result.probability > 50 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                          {result.probability > 50 ? "OVER" : "UNDER"}
                         </span>
                       </div>
                       {selectedPlayer?.ppg && (
@@ -2534,6 +2697,16 @@ export default function Dashboard() {
                     </div>
                   </div>
                 </div>
+
+                {result && (
+                  <div
+                    data-testid="badge-model-confidence-calc"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#00d4aa]/10 border border-[#00d4aa]/20 text-[#00d4aa] text-xs font-medium"
+                  >
+                    <Target className="w-3 h-3" />
+                    Model confidence is strong on this play
+                  </div>
+                )}
 
                 {/* EV% Box — shown directly below probability summary when a sportsbook is selected */}
                 {selectedSportsbook && selectedSportsbook !== "manual" && oddsData && result && (() => {
@@ -2986,7 +3159,7 @@ export default function Dashboard() {
                         const gameUnlocked = !isFreeUser || unlockedGameIds.has(group.gameId);
                         const groupFiltered = filterByBook(group.plays.filter(filterPlay), nbaBookFilter);
                         const isGameUnlocking = unlocking2hGame === group.gameId;
-                        const playsRemaining = Math.max(0, 15 - playsUsed);
+                        const playsRemaining = Math.max(0, 3 - playsUsed);
                         return (
                           <div
                             key={group.gameId}
@@ -3042,7 +3215,7 @@ export default function Dashboard() {
                                   {playsRemaining === 0 && (
                                     <button
                                       data-testid="button-halftime-upgrade"
-                                      onClick={() => { setUpgradeModalState({ playsUsed: user?.playsUsed ?? 0, limit: 15 }); setShowUpgradeModal(true); }}
+                                      onClick={() => { setUpgradeModalState({ playsUsed: user?.playsUsed ?? 0, limit: 3 }); setShowUpgradeModal(true); }}
                                       className="px-5 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition-colors"
                                     >
                                       View Plans →
@@ -3143,7 +3316,7 @@ export default function Dashboard() {
                                         style={isLocked ? { opacity: 0.75 } : undefined}
                                         onClick={() => {
                                           if (isLocked) {
-                                            setUpgradeModalState({ playsUsed, limit: 15 });
+                                            setUpgradeModalState({ playsUsed, limit: 3 });
                                             setShowUpgradeModal(true);
                                           } else {
                                             loadPlayInCalculator(play);
@@ -3315,7 +3488,7 @@ export default function Dashboard() {
                                     <p className="text-xs text-muted-foreground">{lockedEdges} more edge{lockedEdges !== 1 ? "s" : ""} available with Pro</p>
                                     <button
                                       data-testid={`button-unlock-all-${group.gameId}`}
-                                      onClick={() => { setUpgradeModalState({ playsUsed, limit: 15 }); setShowUpgradeModal(true); }}
+                                      onClick={() => { setUpgradeModalState({ playsUsed, limit: 3 }); setShowUpgradeModal(true); }}
                                       className="px-5 py-2 rounded-xl text-sm font-bold transition-colors flex items-center gap-2"
                                       style={{ background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b" }}
                                     >
@@ -3527,7 +3700,7 @@ export default function Dashboard() {
             </span>
             <button
               data-testid="button-unlock-all-edges"
-              onClick={() => { setUpgradeModalState({ playsUsed: user?.playsUsed ?? 0, limit: 15 }); setShowUpgradeModal(true); }}
+              onClick={() => { setUpgradeModalState({ playsUsed: user?.playsUsed ?? 0, limit: 3 }); setShowUpgradeModal(true); }}
               className="px-4 py-2 rounded-lg text-sm font-bold transition-colors"
               style={{ background: "#f59e0b", color: "#000", }}
             >

@@ -43,7 +43,7 @@ export function useTeams() {
 
 export class PlayLimitError extends Error {
   constructor(public playsUsed: number, public limit: number) {
-    super("play_limit_reached");
+    super("PAYWALL_TRIGGER");
     this.name = "PlayLimitError";
   }
 }
@@ -66,7 +66,7 @@ export function useCalculateProbability() {
       });
       if (res.status === 402) {
         const err = await res.json().catch(() => ({}));
-        throw new PlayLimitError(err.playsUsed ?? 10, err.limit ?? 10);
+        throw new PlayLimitError(err.playsUsed ?? 3, err.limit ?? 3);
       }
       if (res.status === 401) {
         throw new UnauthenticatedError();

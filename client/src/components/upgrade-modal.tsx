@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, Zap, Trophy, Clock, CheckCircle2 } from "lucide-react";
+import { X, Zap, Trophy, CheckCircle2, ShieldAlert, TrendingUp, Bell } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
 interface UpgradeModalProps {
@@ -7,39 +7,6 @@ interface UpgradeModalProps {
   limit: number;
   onClose: () => void;
 }
-
-const PLANS = [
-  {
-    id: "all",
-    name: "🏀 Pro",
-    price: "$40",
-    period: "/month",
-    badge: "Best Value",
-    icon: Trophy,
-    features: [
-      "Unlimited NBA prop calculations",
-      "NCAAB Live analytics",
-      "2H Plays — top halftime slate",
-      "Parlay builder with correlation scoring",
-      "Push notifications for high-confidence plays",
-      "SMS alerts for 2H plays & 90%+ confidence",
-    ],
-  },
-  {
-    id: "elite",
-    name: "🏀⚾ All Sports",
-    price: "$65",
-    period: "/month",
-    badge: "Includes MLB",
-    icon: Zap,
-    features: [
-      "Everything in Pro",
-      "MLB Live prop predictions",
-      "Priority SMS — fastest alerts",
-      "Early access to every new sport & feature",
-    ],
-  },
-];
 
 export function UpgradeModal({ playsUsed, limit, onClose }: UpgradeModalProps) {
   const [loadingTier, setLoadingTier] = useState<string | null>(null);
@@ -62,81 +29,136 @@ export function UpgradeModal({ playsUsed, limit, onClose }: UpgradeModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
       <div
         data-testid="upgrade-modal"
-        className="relative w-full max-w-md bg-card border border-border rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto"
+        className="relative w-full max-w-lg bg-[#0a0a0a] border border-[#27272a] rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto"
       >
         <button
           data-testid="button-close-upgrade"
           onClick={onClose}
-          className="absolute top-4 right-4 text-muted-foreground hover:text-foreground transition-colors z-10"
+          className="absolute top-4 right-4 text-[#71717a] hover:text-white transition-colors z-10"
         >
           <X className="w-5 h-5" />
         </button>
 
-        <div className="p-6 border-b border-border bg-gradient-to-br from-primary/10 to-background">
-          <div className="flex items-center gap-2 mb-1">
-            <Clock className="w-5 h-5 text-primary" />
-            <span className="text-sm font-medium text-primary">Free plays used up</span>
+        <div className="p-6 pb-4">
+          <div className="flex items-center gap-2 mb-3">
+            <ShieldAlert className="w-5 h-5 text-[#00d4aa]" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-[#00d4aa]">LiveLocks</span>
           </div>
-          <h2 className="text-xl font-bold text-foreground">You've used all {limit} free plays</h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            Unlock unlimited access and stay ahead of every line.
+          <h2
+            data-testid="text-upgrade-header"
+            className="text-2xl font-black text-white leading-tight"
+          >
+            You're seeing real edges.
+          </h2>
+          <p
+            data-testid="text-upgrade-hook"
+            className="text-sm font-medium text-[#f59e0b] mt-2"
+          >
+            This is exactly what sportsbooks don't want you seeing.
+          </p>
+          <p
+            data-testid="text-upgrade-subtext"
+            className="text-sm text-[#a1a1aa] mt-1"
+          >
+            You've unlocked {limit} live edges using the model.
           </p>
         </div>
 
-        <div className="p-4 space-y-3">
-          {PLANS.map((plan) => {
-            const Icon = plan.icon;
-            const isLoading = loadingTier === plan.id;
-            return (
-              <button
-                key={plan.id}
-                data-testid={`button-upgrade-${plan.id}`}
-                onClick={() => handleUpgrade(plan.id)}
-                disabled={!!loadingTier}
-                className="w-full text-left p-4 rounded-xl border border-border bg-background hover:border-primary hover:bg-primary/5 transition-all disabled:opacity-60 group relative"
-              >
-                <div className="flex items-start justify-between gap-3 mb-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Icon className="w-4 h-4 text-primary shrink-0" />
-                    <div className="flex flex-col">
-                      <span className="font-semibold text-foreground">{plan.name}</span>
-                      {plan.badge && (
-                        <span className="text-xs font-semibold text-primary mt-0.5">
-                          {plan.badge}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <span className="font-bold text-foreground shrink-0">
-                    {plan.price}
-                    <span className="text-xs font-normal text-muted-foreground">{plan.period}</span>
-                  </span>
-                </div>
-                <ul className="space-y-1 pl-0">
-                  {plan.features.map((f, i) => (
-                    <li key={i} className="flex items-start gap-1.5 text-xs text-muted-foreground">
-                      <CheckCircle2 className="w-3 h-3 text-primary/60 shrink-0 mt-0.5" />
-                      {f}
-                    </li>
-                  ))}
-                </ul>
-                {isLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-card/80 rounded-xl">
-                    <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                  </div>
-                )}
-              </button>
-            );
-          })}
+        <div className="px-6 pb-4">
+          <div className="space-y-2">
+            <div className="flex items-start gap-2.5">
+              <TrendingUp className="w-4 h-4 text-[#00d4aa] mt-0.5 shrink-0" />
+              <span className="text-sm text-[#d4d4d8]">Live halftime edges — model fires when lines are soft</span>
+            </div>
+            <div className="flex items-start gap-2.5">
+              <Zap className="w-4 h-4 text-[#00d4aa] mt-0.5 shrink-0" />
+              <span className="text-sm text-[#d4d4d8]">Real-time probability engine across NBA, NCAAB & MLB</span>
+            </div>
+            <div className="flex items-start gap-2.5">
+              <Bell className="w-4 h-4 text-[#00d4aa] mt-0.5 shrink-0" />
+              <span className="text-sm text-[#d4d4d8]">SMS alerts for high-confidence plays (All Sports tier)</span>
+            </div>
+          </div>
+        </div>
 
-          {error && (
-            <p data-testid="upgrade-error" className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">
+        <div className="px-6 pb-4 grid grid-cols-2 gap-3">
+          <button
+            data-testid="button-upgrade-all"
+            onClick={() => handleUpgrade("all")}
+            disabled={!!loadingTier}
+            className="relative text-left p-4 rounded-xl border border-[#27272a] bg-[#111] hover:border-[#00d4aa]/50 hover:bg-[#00d4aa]/5 transition-all disabled:opacity-60 group"
+          >
+            <div className="flex items-center gap-1.5 mb-1">
+              <Trophy className="w-4 h-4 text-[#00d4aa]" />
+              <span className="text-sm font-bold text-white">Pro</span>
+            </div>
+            <div className="text-2xl font-black text-white">
+              $40<span className="text-xs font-normal text-[#71717a]">/mo</span>
+            </div>
+            <p className="text-[11px] text-[#71717a] mt-1">NBA + NCAAB + 2H plays</p>
+            {loadingTier === "all" && (
+              <div className="absolute inset-0 flex items-center justify-center bg-[#111]/80 rounded-xl">
+                <div className="w-5 h-5 border-2 border-[#00d4aa] border-t-transparent rounded-full animate-spin" />
+              </div>
+            )}
+          </button>
+
+          <button
+            data-testid="button-upgrade-elite"
+            onClick={() => handleUpgrade("elite")}
+            disabled={!!loadingTier}
+            className="relative text-left p-4 rounded-xl border border-[#f59e0b]/30 bg-[#111] hover:border-[#f59e0b]/60 hover:bg-[#f59e0b]/5 transition-all disabled:opacity-60 group"
+          >
+            <div className="absolute -top-2 right-3">
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-[#f59e0b] text-black px-2 py-0.5 rounded-full">Popular</span>
+            </div>
+            <div className="flex items-center gap-1.5 mb-1">
+              <Zap className="w-4 h-4 text-[#f59e0b]" />
+              <span className="text-sm font-bold text-white">All Sports</span>
+            </div>
+            <div className="text-2xl font-black text-white">
+              $65<span className="text-xs font-normal text-[#71717a]">/mo</span>
+            </div>
+            <p className="text-[11px] text-[#71717a] mt-1">All sports + SMS alerts</p>
+            {loadingTier === "elite" && (
+              <div className="absolute inset-0 flex items-center justify-center bg-[#111]/80 rounded-xl">
+                <div className="w-5 h-5 border-2 border-[#f59e0b] border-t-transparent rounded-full animate-spin" />
+              </div>
+            )}
+          </button>
+        </div>
+
+        <div className="px-6 pb-4">
+          <button
+            data-testid="button-unlock-full-access"
+            onClick={() => handleUpgrade("all")}
+            disabled={!!loadingTier}
+            className="w-full py-3 rounded-xl text-sm font-bold transition-all disabled:opacity-60"
+            style={{ background: "#00d4aa", color: "#000" }}
+          >
+            {loadingTier ? "Redirecting to checkout..." : "Unlock Full Access"}
+          </button>
+        </div>
+
+        {error && (
+          <div className="px-6 pb-4">
+            <p data-testid="upgrade-error" className="text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">
               {error}
             </p>
-          )}
+          </div>
+        )}
+
+        <div className="px-6 pb-6">
+          <button
+            data-testid="button-dismiss-upgrade"
+            onClick={onClose}
+            className="w-full py-2.5 text-sm text-[#71717a] hover:text-[#a1a1aa] transition-colors"
+          >
+            Keep guessing without LiveLocks
+          </button>
         </div>
       </div>
     </div>

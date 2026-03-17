@@ -14,7 +14,7 @@ declare module "express-session" {
   }
 }
 
-const FREE_PLAY_LIMIT = 15;
+const FREE_PLAY_LIMIT = 3;
 const SALT_ROUNDS = 10;
 const JWT_SECRET = process.env.SESSION_SECRET || "livelocks-dev-secret";
 const JWT_EXPIRES = "30d";
@@ -375,7 +375,7 @@ export async function requirePlayAccess(req: Request, res: Response, next: NextF
 
   if (user.playsUsed < FREE_PLAY_LIMIT) {
     await storage.incrementPlaysUsed(user.id);
-    if (user.playsUsed + 1 === 15) {
+    if (user.playsUsed + 1 === FREE_PLAY_LIMIT) {
       sendWallEmail(user.email).catch((emailErr: any) => {
         console.error("[email] Failed to send wall email:", emailErr.message);
       });
@@ -384,7 +384,7 @@ export async function requirePlayAccess(req: Request, res: Response, next: NextF
   }
 
   return res.status(402).json({
-    error: "play_limit_reached",
+    error: "PAYWALL_TRIGGER",
     playsUsed: user.playsUsed,
     limit: FREE_PLAY_LIMIT,
   });

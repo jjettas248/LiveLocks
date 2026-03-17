@@ -32,8 +32,8 @@ export async function registerStripeRoutes(app: import("express").Express) {
       const sessionParams: any = {
         mode: "subscription",
         payment_method_types: ["card"],
-        success_url: `${origin}/?payment=success&tier=${tier}&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${origin}/?payment=cancelled`,
+        success_url: `${origin}/dashboard?payment=success&tier=${tier}&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${origin}/dashboard?payment=cancelled`,
         metadata: { userId: String(userId), tier },
       };
 
