@@ -869,12 +869,8 @@ export default function Dashboard() {
         const res = await fetch("/api/me", { credentials: "include", headers });
         if (!res.ok) return;
         const fresh = await res.json();
-        console.log("[TAB GATE] /api/me →", { subscriptionTier: fresh.subscriptionTier, requiresRefresh: fresh.requiresRefresh });
-        // Always sync localTier to DB value
         setLocalTier(fresh.subscriptionTier ?? null);
-        // If server flagged requiresRefresh, force auth query refresh
         if (fresh.requiresRefresh) {
-          console.log("[TAB GATE] requiresRefresh=true — invalidating auth cache");
           queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
         }
       } catch (_) {}
@@ -887,15 +883,6 @@ export default function Dashboard() {
       clearInterval(interval);
     };
   }, []);
-
-  // ── Debug: NCAAB tab gate state ───────────────────────────────────────────
-  useEffect(() => {
-    console.log("[TAB GATE] Raw tier from session:", effectiveTier);
-    console.log("[TAB GATE] hasProAccess:", hasProAccess(effectiveTier));
-    console.log("[TAB GATE] isAdmin:", user?.isAdmin ?? false);
-    console.log("[TAB GATE] hasNcaabAccess:", hasNcaabAccess);
-    console.log("[TAB GATE] NCAAB locked:", !hasNcaabAccess);
-  }, [hasNcaabAccess, effectiveTier]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Welcome banner + NEW badge system ────────────────────────────────────
   const { data: ncaabGamesRaw } = useQuery<{ games: Array<{ id: string; status: string; startTime?: string }> }>({
@@ -2573,7 +2560,7 @@ export default function Dashboard() {
                         </div>
                         <p className="text-xs text-muted-foreground mt-1">
                           Model <strong className="text-foreground">{result.probability.toFixed(1)}%</strong>
-                          {" vs "}{sbName} implied <strong className="text-foreground">{bestEV.implied.toFixed(1)}%</strong>
+                          {" vs "}{sbName} <strong className="text-foreground">{formatOdds(bestEV.side === "Over" ? mktOdds.overOdds : (mktOdds.underOdds ?? -110))}</strong>
                         </p>
                         <p className="text-[11px] text-muted-foreground/60 mt-0.5">
                           {absEV >= 6 ? "High conviction edge vs market."
@@ -2683,7 +2670,7 @@ export default function Dashboard() {
                         </div>
                         <p className="text-xs text-muted-foreground mt-1">
                           Model <strong className="text-foreground">{result.probability.toFixed(1)}%</strong>
-                          {" vs "}{sbName} implied <strong className="text-foreground">{overImplied.toFixed(1)}%</strong>
+                          {" vs "}{sbName} <strong className="text-foreground">{formatOdds(selected.overOdds)}</strong>
                         </p>
                         <p className="text-[11px] text-muted-foreground/60 mt-0.5">
                           {absEdge >= 6 ? "High conviction edge vs market."
@@ -3121,6 +3108,9 @@ export default function Dashboard() {
                                 )}
                                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                                   {groupFiltered.map((play: any, idx: number) => {
+                                    if (import.meta.env.DEV && play.probability == null) {
+                                      console.error("Missing engine probability for play", play);
+                                    }
                                     const isLocked = isFreeUser && idx >= visibleEdgeLimit;
                                     const isOver = play.betDirection === "over";
                                     const isInjured = !isLocked && injuredPlayerNames.has(play.playerName.toLowerCase());

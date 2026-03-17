@@ -156,7 +156,6 @@ export interface CalcDebug {
 
 export interface CalculateProbabilityResponse {
   probability: number;
-  impliedProbability: number;
   edge: number;
   expectedTotal: number;
   projectedSecondHalfMinutes: number;

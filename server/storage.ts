@@ -271,7 +271,7 @@ export class DatabaseStorage implements IStorage {
     return "playoffs";
   }
 
-  async calculateProbability(req: CalculateProbabilityRequest): Promise<CalculateProbabilityResponse> {
+  async calculateProbability(req: CalculateProbabilityRequest): Promise<CalculateProbabilityResponse & { impliedProbability: number }> {
     const seasonPhase = this.getSeasonPhase(req.gameDate);
 
     const player = await this.getPlayer(req.playerId);
@@ -610,7 +610,6 @@ export class DatabaseStorage implements IStorage {
     // Step 6 — Probability expansion
     const beforeExpansion = probability;
     probability = 50 + (probability - 50) * 1.65;
-    console.log("Probability expansion:", { before: beforeExpansion, after: probability });
 
     // Step 7 — Final clamp
     probability = Math.max(2, Math.min(98, probability));
@@ -625,6 +624,7 @@ export class DatabaseStorage implements IStorage {
     console.log(`[calc] ${player.name}: period=${currentPeriod} clock=${req.gameClock ?? "n/a"} gameMinLeft=${gameMinutesRemaining.toFixed(1)} remainMin=${remainingMinutes.toFixed(1)} baseline=${baselineSource} edge=${edge.toFixed(2)} ctxMod=${contextModifier.toFixed(3)} prob=${probability.toFixed(1)}% rotSrc=${rotationSource} noSignal=${noSignal}`);
 
     // ─── In-memory calc log ───────────────────────────────────────────────
+    probability = Math.max(2, Math.min(98, probability));
     const finalProbability = Math.round(probability * 10) / 10;
     calcLogEntries.push({
       player: player.name,

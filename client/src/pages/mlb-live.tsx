@@ -360,8 +360,6 @@ export default function MlbLivePage() {
     ? validatedSignals
     : validatedSignals.filter((s) => s.inning >= inningTabMin);
 
-  const bookImplied = calcResult?.bookImplied ?? null;
-
   const manualCanCalc = manualMode &&
     manualInputs.line.trim() !== "" && !isNaN(parseFloat(manualInputs.line)) &&
     manualInputs.overOdds.trim() !== "" && !isNaN(parseFloat(manualInputs.overOdds));
@@ -929,12 +927,6 @@ export default function MlbLivePage() {
                         {calcResult.edge > 0 ? "+" : ""}{calcResult.edge.toFixed(1)}%
                       </div>
                     </div>
-                    {bookImplied != null && (
-                      <div className="bg-secondary/40 rounded-lg p-3 text-center">
-                        <div className="text-muted-foreground mb-1">Book Implied</div>
-                        <div className="font-bold text-foreground text-lg">{bookImplied.toFixed(1)}%</div>
-                      </div>
-                    )}
                     {calcResult.market === "hits" && calcResult.expectedHits != null && (
                       <div className="bg-secondary/40 rounded-lg p-3 text-center">
                         <div className="text-muted-foreground mb-1">Expected Hits</div>
