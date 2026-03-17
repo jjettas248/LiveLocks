@@ -22,6 +22,8 @@ import {
   sendWinbackEmail,
   sendProWelcomeEmail,
   sendAllSportsWelcomeEmail,
+  sendVerificationEmail,
+  sendPaymentIssueEmail,
 } from "./email";
 
 const app = express();
@@ -155,6 +157,22 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  if (!process.env.RESEND_API_KEY) {
+    console.warn("[email] WARNING: RESEND_API_KEY is missing — no emails will be sent. Configure it in environment secrets and verify the sending domain team@livelocksai.app is set up in Resend.");
+  }
+
+  // Backfill: mark pre-existing users as email-verified so they are not blocked
+  // by the new emailVerified gate. Only affects users created before this feature.
+  try {
+    const backfillResult = await db
+      .update(users)
+      .set({ emailVerified: true })
+      .where(and(eq(users.emailVerified, false), isNull(users.emailVerificationToken)));
+    console.log("[startup] Legacy user email-verified backfill complete");
+  } catch (err: any) {
+    console.warn("[startup] Legacy user backfill skipped:", err.message);
+  }
+
   await initStripe();
   await registerRoutes(httpServer, app);
   registerAnalyticsRoutes(app);
@@ -203,6 +221,12 @@ app.use((req, res, next) => {
             break;
           case "allsports":
             await sendAllSportsWelcomeEmail(to);
+            break;
+          case "verify":
+            await sendVerificationEmail(to, "test-token-12345");
+            break;
+          case "payment_issue":
+            await sendPaymentIssueEmail(to);
             break;
           default:
             return res.status(400).json({ success: false, error: `Unknown email type: ${type}` });
@@ -270,11 +294,9 @@ app.use((req, res, next) => {
           );
 
         for (const user of nudgeUsers) {
-          try {
-            await sendNudgeEmail(user.email, user.playsUsed, 15 - user.playsUsed);
-          } catch (err: any) {
+          sendNudgeEmail(user.email, user.playsUsed, 15 - user.playsUsed).catch((err: any) => {
             console.error(`[cron] Failed to send nudge email to ${user.email}:`, err.message);
-          }
+          });
         }
 
         const fifteenDaysAgo = new Date(now);
@@ -294,16 +316,34 @@ app.use((req, res, next) => {
           );
 
         for (const user of winbackUsers) {
-          try {
-            await sendWinbackEmail(user.email);
-          } catch (err: any) {
+          sendWinbackEmail(user.email).catch((err: any) => {
             console.error(`[cron] Failed to send winback email to ${user.email}:`, err.message);
-          }
+          });
         }
 
         console.log(`[cron] Daily email job complete: ${nudgeUsers.length} nudge, ${winbackUsers.length} winback`);
       } catch (err: any) {
         console.error("[cron] Daily email job failed:", err.message);
+      }
+    },
+    { timezone: "America/New_York" }
+  );
+
+  // Daily cleanup: remove unverified accounts older than 24 hours.
+  // Strategy: hard-delete. Unverified users are blocked from plays (requirePlayAccess)
+  // so they cannot accumulate meaningful dependent rows. The only FK (sent_alerts.user_id)
+  // is cleaned up first inside deleteUnverifiedOlderThan.
+  cron.schedule(
+    "30 3 * * *",
+    async () => {
+      try {
+        const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const removed = await storage.deleteUnverifiedOlderThan(cutoff);
+        if (removed > 0) {
+          console.log(`[cron] Cleaned up ${removed} unverified accounts older than 24h`);
+        }
+      } catch (err: any) {
+        console.error("[cron] Unverified account cleanup failed:", err.message);
       }
     },
     { timezone: "America/New_York" }

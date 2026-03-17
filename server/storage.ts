@@ -26,7 +26,7 @@ import {
   type PersistedPlay,
   type PlayStats,
 } from "@shared/schema";
-import { eq, and, desc, isNull, sql, lt, lte, inArray } from "drizzle-orm";
+import { eq, and, desc, isNull, sql, lt, lte, inArray, ne } from "drizzle-orm";
 
 const HIGH_VOLATILITY_TEAMS = new Set(["BKN", "WAS", "CHA", "POR", "UTA", "DET"]);
 
@@ -103,6 +103,11 @@ export interface IStorage {
   clearRequiresRefresh(userId: number): Promise<void>;
   setUpgradedAt(userId: number, upgradedAt: string): Promise<void>;
   getUserByPhoneNumber(phone: string): Promise<User | undefined>;
+  getUserByNormalizedEmail(normalizedEmail: string): Promise<User | undefined>;
+  getUserByVerificationToken(token: string): Promise<User | undefined>;
+  updateUser(userId: number, data: Partial<User>): Promise<void>;
+  countUnverifiedByFingerprint(fingerprint: string): Promise<number>;
+  deleteUnverifiedOlderThan(cutoff: Date): Promise<number>;
   savePlayAlerts(plays: any[]): Promise<void>;
   getUnresolvedAlerts(): Promise<HalftimePlayAlert[]>;
   savePlayResult(alertId: number, actualStat: number, hit: boolean): Promise<void>;
@@ -795,6 +800,48 @@ export class DatabaseStorage implements IStorage {
   async getUserByPhoneNumber(phone: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.phoneNumber, phone));
     return user;
+  }
+
+  async getUserByNormalizedEmail(normalizedEmail: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.normalizedEmail, normalizedEmail));
+    return user;
+  }
+
+  async getUserByVerificationToken(token: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.emailVerificationToken, token));
+    return user;
+  }
+
+  async updateUser(userId: number, data: Partial<User>): Promise<void> {
+    await db.update(users).set(data).where(eq(users.id, userId));
+  }
+
+  async countUnverifiedByFingerprint(fingerprint: string): Promise<number> {
+    const rows = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.signupFingerprint, fingerprint), eq(users.emailVerified, false)));
+    return rows.length;
+  }
+
+  async deleteUnverifiedOlderThan(cutoff: Date): Promise<number> {
+    // Strategy: hard-delete unverified users older than the cutoff.
+    // The only FK referencing users.id is sent_alerts.user_id; since unverified
+    // users cannot access plays (blocked by requirePlayAccess), they will not have
+    // meaningful dependent rows. We delete sent_alerts rows first to satisfy FK constraints,
+    // then delete the user rows.
+    const unverified = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.emailVerified, false), lte(users.createdAt, cutoff)));
+
+    if (unverified.length === 0) return 0;
+
+    const ids = unverified.map(u => u.id);
+    const { sentAlerts } = await import("@shared/schema");
+    await db.delete(sentAlerts).where(inArray(sentAlerts.userId, ids));
+    await db.delete(users).where(inArray(users.id, ids));
+    return ids.length;
   }
 
   async savePlayAlerts(plays: any[]): Promise<void> {

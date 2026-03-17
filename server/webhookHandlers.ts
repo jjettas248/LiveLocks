@@ -1,6 +1,6 @@
 import { getStripeSync } from "./stripeClient";
 import { storage } from "./storage";
-import { sendProWelcomeEmail, sendAllSportsWelcomeEmail } from "./email";
+import { sendProWelcomeEmail, sendAllSportsWelcomeEmail, sendPaymentIssueEmail } from "./email";
 
 export class WebhookHandlers {
   static async processWebhook(payload: Buffer, signature: string): Promise<void> {
@@ -27,37 +27,37 @@ export class WebhookHandlers {
           await storage.updateUserSubscription(userId, tier, customerId, subscriptionId);
           console.log(`[webhook] Ungated user ${userId} → tier: ${tier}, isNewProUser: true, upgradedAt: ${new Date().toISOString()}`);
 
-          try {
-            const user = await storage.getUserById(userId);
-            if (user) {
-              if (tier === "all") {
-                await sendProWelcomeEmail(user.email);
-              } else if (tier === "elite") {
-                await sendAllSportsWelcomeEmail(user.email);
-              }
+          const user = await storage.getUserById(userId);
+          if (user) {
+            if (tier === "all") {
+              sendProWelcomeEmail(user.email).catch(console.error);
+            } else if (tier === "elite") {
+              sendAllSportsWelcomeEmail(user.email).catch(console.error);
             }
-          } catch (emailErr: any) {
-            console.error("[email] Failed to send subscription welcome email:", emailErr.message);
           }
         }
       } else if (event.type === "customer.subscription.updated") {
         const subscription = event.data?.object;
         const previousAttributes = event.data?.previous_attributes;
         const customerId = typeof subscription?.customer === "string" ? subscription.customer : "";
+        const status = subscription?.status;
 
         if (customerId && previousAttributes?.metadata?.tier) {
           const previousTier = previousAttributes.metadata.tier;
           const newTier = subscription?.metadata?.tier;
 
           if (previousTier === "all" && newTier === "elite") {
-            try {
-              const user = await storage.getUserByStripeCustomerId(customerId);
-              if (user) {
-                await sendAllSportsWelcomeEmail(user.email);
-              }
-            } catch (emailErr: any) {
-              console.error("[email] Failed to send upgrade email:", emailErr.message);
+            const user = await storage.getUserByStripeCustomerId(customerId);
+            if (user) {
+              sendAllSportsWelcomeEmail(user.email).catch(console.error);
             }
+          }
+        }
+
+        if (customerId && (status === "past_due" || status === "canceled")) {
+          const user = await storage.getUserByStripeCustomerId(customerId);
+          if (user) {
+            sendPaymentIssueEmail(user.email).catch(console.error);
           }
         }
       } else if (event.type === "customer.subscription.deleted") {
@@ -69,6 +69,7 @@ export class WebhookHandlers {
           if (user) {
             await storage.setUserSubscriptionTier(user.id, null);
             console.log(`[webhook] Downgraded user ${user.id} (subscription cancelled)`);
+            sendPaymentIssueEmail(user.email).catch(console.error);
           }
         }
       }
