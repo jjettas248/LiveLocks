@@ -11,9 +11,9 @@ import { createServer } from "http";
 import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync } from "./stripeClient";
 import cron from "node-cron";
-import { db } from "./db";
+import { db, pool } from "./db";
 import { users } from "@shared/schema";
-import { and, between, isNull, eq, gte, lte } from "drizzle-orm";
+import { and, between, isNull, eq, gte, lte, sql } from "drizzle-orm";
 import {
   sendWelcomeEmail,
   sendHowToEmail,
@@ -161,12 +161,32 @@ app.use((req, res, next) => {
     console.warn("[email] WARNING: RESEND_API_KEY is missing — no emails will be sent. Configure it in environment secrets and verify the sending domain team@livelocksai.app is set up in Resend.");
   }
 
-  // Backfill: mark pre-existing users as email-verified so they are not blocked
-  // by the new emailVerified gate. Only affects users created before this feature.
+  // Schema migration: add email-verification columns if they don't exist yet.
+  // Safe to run on every startup — uses IF NOT EXISTS so it's a no-op once applied.
   try {
-    const backfillResult = await db
+    await pool.query(`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS email_verified boolean NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS email_verification_token text,
+        ADD COLUMN IF NOT EXISTS original_email text,
+        ADD COLUMN IF NOT EXISTS normalized_email text,
+        ADD COLUMN IF NOT EXISTS signup_fingerprint text,
+        ADD COLUMN IF NOT EXISTS verification_last_sent_at timestamp;
+    `);
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS users_normalized_email_unique ON users(normalized_email);
+    `);
+    console.log("[startup] Schema migration: email-verification columns ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning:", err.message);
+  }
+
+  // Backfill: mark pre-existing users (no verification token) as email-verified
+  // so they are not locked out by the new emailVerified gate.
+  try {
+    await db
       .update(users)
-      .set({ emailVerified: true })
+      .set({ emailVerified: true, normalizedEmail: sql`LOWER(TRIM(${users.email}))` })
       .where(and(eq(users.emailVerified, false), isNull(users.emailVerificationToken)));
     console.log("[startup] Legacy user email-verified backfill complete");
   } catch (err: any) {
