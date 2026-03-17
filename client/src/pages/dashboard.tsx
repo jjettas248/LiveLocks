@@ -1994,7 +1994,7 @@ export default function Dashboard() {
                                           data-testid={`signal-dot-${stat.playerId}`}
                                           style={{ background: SIGNAL_STYLES[signal.tier].bg, color: SIGNAL_STYLES[signal.tier].dot, border: `1px solid ${SIGNAL_STYLES[signal.tier].border}` }}
                                           className="text-[8px] font-bold cursor-help select-none px-1 py-0.5 rounded ml-0.5 whitespace-nowrap leading-none"
-                                        >{STAT_LABEL_MAP[signal.statType] ?? signal.statType} {signal.betDirection === "under" ? "↓" : "↑"}{signal.displayProb}%</span>
+                                        >{STAT_LABEL_MAP[signal.statType] ?? signal.statType} {signal.betDirection === "under" ? "dn" : "up"} {signal.displayProb}%</span>
                                       )}
                                     </span>
                                   </td>
