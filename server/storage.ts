@@ -536,7 +536,15 @@ export class DatabaseStorage implements IStorage {
     const edgeContext: "halftime" | "live" = isHalftimeContext ? "halftime" : "live";
     let probability = edgeToProbability(edge, req.statType, edgeContext);
 
-    // Step 2 — Combo variance filter
+    const direction = probability >= 50 ? "OVER" : "UNDER";
+
+    // Step 2 — Calibration lookup (directional confidence only)
+    const confidence = direction === "OVER" ? probability : 100 - probability;
+    const calibrated = calibrateProbability(confidence);
+    probability = direction === "OVER" ? calibrated : 100 - calibrated;
+
+    // Step 3 — Penalties
+    // Step 3a — Combo variance filter
     let comboVariancePenaltyApplied = false;
     if (req.statType.includes("+") || req.statType.includes("_")) {
       probability *= 0.96;
@@ -544,7 +552,7 @@ export class DatabaseStorage implements IStorage {
       comboVariancePenaltyApplied = true;
     }
 
-    // Step 3 — Bench volatility filter
+    // Step 3b — Bench volatility filter
     const effectiveMinutesBase = freshProjectedMinutes ?? avgMinutes;
     const rotationSource: "projected" | "season_avg" =
       freshProjectedMinutes !== null ? "projected" : "season_avg";
@@ -554,13 +562,11 @@ export class DatabaseStorage implements IStorage {
       volatilityFiltered = true;
     }
 
-    // Step 3b — Late-season UNDER volatility penalties
+    // Step 4 — Season volatility adjustments
     const isLowRolePlayer = effectiveMinutesBase < 28;
     const isBenchVolatile = (freshProjectedMinutes ?? avgMinutes) < 24 && minutesPlayed < 12;
     const isComboStat = req.statType.includes("+") || req.statType.includes("_");
     let lateSeasonPenaltyApplied = false;
-
-    const direction = probability >= 50 ? "OVER" : "UNDER";
 
     if (seasonPhase === "late" && direction === "UNDER") {
       if (isLowRolePlayer) {
@@ -578,7 +584,7 @@ export class DatabaseStorage implements IStorage {
       probability = Math.max(2, Math.min(98, probability));
     }
 
-    // Step 3c — Tank-team late-season penalty
+    // Step 4b — Tank-team late-season penalty
     let teamVolatilityPenaltyApplied = false;
     if (seasonPhase === "late" && HIGH_VOLATILITY_TEAMS.has(player.team)) {
       probability *= 0.96;
@@ -586,7 +592,7 @@ export class DatabaseStorage implements IStorage {
       teamVolatilityPenaltyApplied = true;
     }
 
-    // Step 3d — Playoff normalization boost
+    // Step 5 — Playoff boost
     let playoffBoostApplied = false;
     if (seasonPhase === "playoffs") {
       probability *= 1.03;
@@ -594,10 +600,12 @@ export class DatabaseStorage implements IStorage {
       playoffBoostApplied = true;
     }
 
-    // Step 4 — Calibration lookup (directional confidence only)
-    const confidence = direction === "OVER" ? probability : 100 - probability;
-    const calibrated = calibrateProbability(confidence);
-    probability = direction === "OVER" ? calibrated : 100 - calibrated;
+    // Step 6 — Probability expansion
+    const beforeExpansion = probability;
+    probability = 50 + (probability - 50) * 1.65;
+    console.log("Probability expansion:", { before: beforeExpansion, after: probability });
+
+    // Step 7 — Final clamp
     probability = Math.max(2, Math.min(98, probability));
 
     // Step 5 — Edge sanity check using real odds

@@ -1513,6 +1513,18 @@ export async function registerRoutes(
       };
       const normAbbr = (a: string) => ESPN_TO_DB_LOCAL[a.toUpperCase()] ?? a.toUpperCase();
 
+      const parseClockToSeconds = (c: string | null | undefined): number => {
+        if (!c) return 0;
+        if (c.includes(":")) {
+          const [m, s] = c.split(":").map(Number);
+          return m * 60 + s;
+        }
+        if (c.includes(".")) {
+          return Math.floor(parseFloat(c));
+        }
+        return Number(c) || 0;
+      };
+
       const halftimeGames: any[] = [];
       for (const event of (gamesData.events ?? [])) {
         const comp = event.competitions?.[0];
@@ -1520,9 +1532,23 @@ export async function registerRoutes(
         const period = status?.period ?? 0;
         const clock = status?.displayClock ?? "";
         const statusDesc: string = status?.type?.description ?? "";
-        const isHalftime = statusDesc === "Halftime" ||
-          (period === 2 && (clock === "0:00" || clock === "00.0"));
+
+        const clockSeconds = parseClockToSeconds(clock);
+
+        const isHalftime =
+          (period === 2 && clockSeconds <= 10) ||
+          statusDesc === "Halftime" ||
+          statusDesc === "HALF" ||
+          statusDesc === "HALFTIME" ||
+          (period === 3 && clockSeconds === 720);
         if (!isHalftime) continue;
+
+        console.log("HALFTIME DETECTED:", {
+          home: comp?.competitors?.find((c: any) => c.homeAway === "home")?.team?.displayName,
+          away: comp?.competitors?.find((c: any) => c.homeAway === "away")?.team?.displayName,
+          period: period,
+          clock: clock
+        });
 
         const home = comp?.competitors?.find((c: any) => c.homeAway === "home");
         const away = comp?.competitors?.find((c: any) => c.homeAway === "away");
