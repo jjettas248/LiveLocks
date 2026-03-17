@@ -1,0 +1,174 @@
+Implement Task #44 — Enforce Engine Probability as Single Source of Truth
+
+Goal
+Guarantee that every probability displayed anywhere in the UI comes directly from the engine model output.
+
+Sportsbook implied probability must never reach a UI display component.
+
+Do NOT modify:
+- calibrateProbability()
+- canonical market logic
+- API route signatures
+- NCAAB or MLB engines
+
+
+==================================================
+PART 1 — Lock API Return Structure
+==================================================
+
+File: server/storage.ts
+Function: calculateProbability()
+
+Confirm ALL return paths use:
+
+return {
+  probability,
+  impliedProbability: probability,
+  edge: probability - marketImpliedProb,
+  direction,
+  projection,
+  liveLine
+}
+
+Important:
+marketImpliedProb must only be used internally for edge calculation.
+
+No other probability values should be returned.
+
+
+==================================================
+PART 2 — Prevent UI from Using Sportsbook Fields
+==================================================
+
+Search the entire frontend codebase for:
+
+marketImpliedProbability
+bookProbability
+sportsbookProbability
+
+If found in JSX rendering, replace with:
+
+play.probability
+or
+result.probability
+
+These sportsbook fields may remain in logic used for edge math only.
+
+
+==================================================
+PART 3 — Lock ProbabilityRing to Engine Values
+==================================================
+
+File:
+client/src/components/probability-ring.tsx
+
+Update component props so it only accepts:
+
+type ProbabilityRingProps = {
+  probability: number
+}
+
+Remove any props referencing:
+
+impliedProbability
+marketProbability
+
+Example usage:
+
+<ProbabilityRing probability={play.probability} />
+
+
+==================================================
+PART 4 — Enforce Engine Probability in Dashboard
+==================================================
+
+File:
+client/src/pages/dashboard.tsx
+
+Ensure the following elements use play.probability:
+
+• probability ring
+• edge cards
+• halftime play cards
+• quick signal badges
+
+Example:
+
+<span className="probabilityText">
+  {Math.round(play.probability)}%
+</span>
+
+
+==================================================
+PART 5 — Fix Matchup Calculator Output
+==================================================
+
+File:
+client/src/pages/dashboard.tsx
+
+Replace any display usage of:
+
+result.impliedProbability
+
+with:
+
+result.probability
+
+
+==================================================
+PART 6 — MLB Live Page Validation
+==================================================
+
+File:
+client/src/pages/mlb-live.tsx
+
+Confirm the same rule applies.
+
+All probability displays must use:
+
+play.probability
+
+
+==================================================
+PART 7 — Parlay Slip Consistency
+==================================================
+
+File:
+client/src/components/parlay-slip.tsx
+
+Ensure probability display uses:
+
+leg.probability
+
+
+==================================================
+PART 8 — Add Runtime Debug Verification
+==================================================
+
+File:
+client/src/pages/dashboard.tsx
+
+Add temporary debug logging inside the play card render loop:
+
+console.log("Engine probability displayed:", play.probability);
+
+
+==================================================
+VALIDATION
+==================================================
+
+Confirm the following:
+
+• Probability ring equals engine probability
+• Edge cards show engine probability
+• Quick signal badges show engine probability
+• Halftime play cards show engine probability
+• Matchup calculator shows engine probability
+• MLB live page shows engine probability
+• Parlay slip uses engine probability
+
+Edge math still correctly uses:
+
+edge = probability - marketImpliedProb
+
+TypeScript compiles without errors.
