@@ -73,7 +73,7 @@ export function useCalculateProbability() {
       }
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error((err as any).message || "Failed to calculate probability");
+        throw new Error((err as any).error || (err as any).message || "Failed to calculate probability");
       }
       return res.json();
     },
