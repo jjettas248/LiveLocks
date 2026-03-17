@@ -1,0 +1,205 @@
+#38 - MLB Premium UX + Data Wiring Repair
+
+What & Why
+The MLB Live tab still does not meet the LiveLocks product standard. It feels like a placeholder instead of a premium, production-grade experience. The current issues are not just styling problems — they are a mix of UI architecture problems, incomplete odds wiring, and signal payload failures.
+
+We need to bring MLB Live to the same premium UX level as NBA Live.
+
+Do NOT touch:
+- any file under server/mlb/ that changes engine math
+- calibration.ts
+- probability.ts
+- paEstimator.ts
+- markets.ts logic
+- liveGameOrchestrator
+- edgeCache / mlbEdgeCache
+- NBA Live tab behavior
+
+You MAY modify:
+- client/src/pages/mlb-live.tsx
+- server/routes.ts
+- server/oddsService.ts
+- any lightweight shared frontend helper needed for rendering parity
+
+--------------------------------------------------
+DONE LOOKS LIKE
+--------------------------------------------------
+
+1. MLB game strip visually matches NBA Live:
+- compact game chips
+- away/home abbreviations (NOT full names)
+- score shown inline
+- inning/status shown below
+- same density and spacing as NBA
+- no unnecessary horizontal scroll on desktop
+
+2. No game is auto-selected on load.
+Page opens showing only:
+- Today's Games
+Once a game is selected, render:
+- Game Header
+- Inning Tabs
+- Box Score
+- Edge Signals
+
+3. Edge signals render only real engine-backed data:
+- no repeated placeholder probabilities
+- no hardcoded 18 or any fallback
+- if live-signals payload is incomplete, show empty state instead of fake cards
+
+4. Edge signals are scoped to selected game only.
+
+5. Clicking a player row opens a premium matchup details card with:
+- player name
+- team abbreviation
+- opponent abbreviation
+- batting order slot
+- inning / top-bottom
+- current live stat summary
+- market selector for all supported MLB live markets currently wired
+- sportsbook lines panel
+- calculate button
+- prediction result panel
+
+6. Sportsbook lines are actually pulled and shown when available:
+- FanDuel
+- DraftKings
+- Hard Rock
+- any other supported books returned by API
+If none exist:
+- show “No sportsbook line available”
+- keep section visible
+- disable calculate until valid line exists
+
+7. Matchup details card feels like NBA:
+- compact, premium, structured
+- not sparse / unfinished
+- no broken empty layout
+
+--------------------------------------------------
+TASKS
+--------------------------------------------------
+
+1. Rebuild MLB game strip to mirror NBA chip layout
+
+In mlb-live.tsx:
+- use team abbreviations, not full names
+- if backend returns full names, map them to abbreviations before render
+- chip format should be:
+  AWAY 12-10 HOME
+  Q / inning / preview status below
+- reuse NBA spacing, border radius, chip sizing, font scale, and selection styling
+- prefer responsive wrap/grid on desktop before forcing scroll
+- horizontal scroll only when necessary on smaller widths
+
+2. Fix selected game presentation
+
+On load:
+- selectedGameId must be null
+- render only Today’s Games strip
+
+After click:
+- selectedGameId set
+- render in this strict order:
+  Game Header
+  Inning Tabs
+  Box Score
+  Edge Signals
+
+3. Remove all fake/fallback probabilities
+
+Search mlb-live.tsx and any local helpers it uses for:
+- 18
+- ?? 18
+- || 18
+- default probability constants
+
+Delete them.
+
+Signal cards must render probability only from the server response.
+
+If signal payload is missing probability:
+- do not render the card
+- or show a clean empty state
+
+4. Validate live-signals payload before rendering
+
+In mlb-live.tsx:
+- render signals only if:
+  sig.playerId
+  sig.market
+  sig.line
+  sig.enginePct
+  sig.edge
+  and selectedGameId match
+- if many cards share the same exact value because payload is incomplete/default, do not render them blindly
+- add a defensive filter layer on the client so only valid signal objects are shown
+
+5. Scope signals to selected game only
+
+Use selectedGameId gating and verify payload shape.
+If API returns mixed-game results, filter by selectedGameId before render.
+
+6. Upgrade matchup details card to NBA-quality structure
+
+When a player row is clicked:
+- prefill:
+  playerName
+  team
+  opponent
+  battingOrderSlot
+  current inning
+  top/bottom inning
+  current AB/H/TB/R/RBI/BB/SB/K as available
+- visually structure card like NBA:
+  header summary
+  matchup/context section
+  lines section
+  prediction section
+
+7. Fully wire sportsbook odds display
+
+In server/routes.ts and oddsService.ts:
+- verify GET /api/mlb/odds accepts and correctly uses:
+  playerTeam
+  opponentTeam
+  playerName
+  statType
+  inPlay
+- verify MLB market mapping covers all currently supported live markets on the frontend
+- verify returned shape matches frontend expectation exactly
+
+Frontend:
+- when player selected and market chosen, call /api/mlb/odds
+- display all returned books and lines
+- allow line selection
+- if no books return lines, show:
+  “No sportsbook line available”
+
+8. Ensure calculate flow uses real selected line
+
+The calculate button must:
+- stay disabled until a valid sportsbook line is selected
+- call POST /api/mlb/calculate
+- send full selected player/game context
+- render returned engine result in prediction panel
+
+9. Premium empty/loading states
+
+If no game selected:
+- only show Today’s Games
+
+If no signals for selected game:
+- show a clean “No live edges detected yet” state
+
+If no odds for selected player/market:
+- show “No sportsbook line available”
+
+Do NOT show broken empty cards or fake values.
+
+--------------------------------------------------
+RELEVANT FILES
+--------------------------------------------------
+client/src/pages/mlb-live.tsx
+server/routes.ts
+server/oddsService.ts
