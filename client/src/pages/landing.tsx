@@ -10,7 +10,7 @@ const PRICING_TIERS = [
     description: "Get started with the live prediction engine.",
     cta: "Sign Up Free",
     features: [
-      "15 probability calculations",
+      "3 probability calculations",
       "NBA Live dashboard access",
       "Live box score auto-fill",
       "Community access",
