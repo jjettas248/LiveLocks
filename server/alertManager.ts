@@ -188,8 +188,6 @@ export async function checkAndSendAlerts(
     const play = plays.find((p) => p.gameId === gameId);
     if (!play) continue;
 
-    await record2HAlert(gameId);
-
     const gameKey  = `2h|${gameId}`;
     const title    = "⏱ LiveLocks: 2H Plays Live";
     const pushBody = `${play.team} vs ${play.opponent} — 2H started. Check your slate.`;
@@ -207,6 +205,8 @@ export async function checkAndSendAlerts(
     for (const user of usersWithSms) {
       await sendSmsIfNew(user.id, user.phoneNumber, gameKey, smsBody);
     }
+
+    await record2HAlert(gameId);
   }
 
   // ── NCAAB halftime alerts — ONE per game, only when over2HProb ≥ 85% ─────
