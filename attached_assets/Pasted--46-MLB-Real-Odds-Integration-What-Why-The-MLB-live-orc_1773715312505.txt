@@ -1,0 +1,68 @@
+#46 - MLB Real Odds Integration
+
+What & Why
+The MLB live orchestrator currently computes edges using a static DEFAULT_BOOK_LINE instead of real sportsbook lines. This produces mathematically incorrect edges because model projections are compared against placeholder lines rather than market prices.
+
+The orchestrator must integrate real sportsbook lines so that automated signals use the actual market.
+
+Done looks like
+- MLB orchestrator uses sportsbook lines when computing edges
+- DEFAULT_BOOK_LINE is only used as a fallback when no market line is available
+- Signals reflect real sportsbook lines rather than placeholders
+- Edge calculations match those used in manual `/api/mlb/calculate` requests
+- TypeScript compiles cleanly
+- No existing MLB endpoints are broken
+
+Out of scope
+- Changing probability models
+- Changing calibration logic
+- Changing suppression rules or thresholds
+- Any frontend modifications
+
+Tasks
+
+1. Integrate sportsbook line retrieval
+Inspect:
+server/mlb/liveGameOrchestrator.ts
+server/oddsService.ts
+
+Modify the orchestrator so that before computing signals it retrieves the most recent sportsbook lines for each player/market.
+
+The order of precedence should be:
+
+1. cached sportsbook line from odds service
+2. previously user-supplied line
+3. DEFAULT_BOOK_LINE fallback
+
+2. Update orchestrator signal generation
+Locate the code where the orchestrator sets:
+
+bookLine = DEFAULT_BOOK_LINE
+
+Replace with:
+
+bookLine = sportsbookLine ?? DEFAULT_BOOK_LINE
+
+Ensure each market uses the correct sportsbook line.
+
+3. Preserve fallback behavior
+If no sportsbook data exists, allow DEFAULT_BOOK_LINE so signals can still compute.
+
+Log a warning if fallback is used.
+
+4. Confirm correct propagation
+Verify that the following fields use the new line:
+
+- bookLine
+- edge
+- projection comparison
+
+Relevant files
+server/mlb/liveGameOrchestrator.ts
+server/oddsService.ts
+server/mlb/markets.ts
+
+Validation
+- Automated MLB signals match manual `/api/mlb/calculate` results
+- Edge values change when sportsbook lines change
+- DEFAULT_BOOK_LINE is rarely used and clearly logged
