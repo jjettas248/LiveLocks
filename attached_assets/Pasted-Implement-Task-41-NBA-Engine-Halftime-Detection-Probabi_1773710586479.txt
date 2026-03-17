@@ -1,0 +1,124 @@
+Implement Task #41 — NBA Engine: Halftime Detection + Probability Expansion
+
+Goal:
+Fix two NBA engine issues:
+
+1. Halftime detection fails when ESPN emits period=2 and clock="0.0"
+2. Probability outputs are compressed around 43–56% and need controlled expansion
+
+Do NOT modify:
+- calibrateProbability()
+- canonical market logic
+- NCAAB or MLB engines
+- lineMovement.ts
+- API route signatures
+
+
+==================================================
+PART 1 — Fix Halftime Detection
+==================================================
+
+File: server/routes.ts
+Location: /api/halftime-plays route, around the halftimeGames filtering block
+
+Add this helper near the halftime detection logic if it does not already exist:
+
+function parseClockToSeconds(clock: string | null | undefined): number {
+  if (!clock) return 0;
+
+  if (clock.includes(":")) {
+    const [m, s] = clock.split(":").map(Number);
+    return m * 60 + s;
+  }
+
+  if (clock.includes(".")) {
+    return Math.floor(parseFloat(clock));
+  }
+
+  return Number(clock) || 0;
+}
+
+Replace the current isHalftime boolean with:
+
+const clockSeconds = parseClockToSeconds(game.clock);
+
+const isHalftime =
+  (game.period === 2 && clockSeconds <= 10) ||
+  game.status === "HALF" ||
+  game.status === "HALFTIME" ||
+  (game.period === 3 && clockSeconds === 720);
+
+When isHalftime is true, include the game in halftimeGames and add:
+
+console.log("HALFTIME DETECTED:", {
+  home: game.homeTeam,
+  away: game.awayTeam,
+  period: game.period,
+  clock: game.clock
+});
+
+Expected behavior:
+- "0.0"
+- "0:00"
+- "00:00"
+all count correctly as halftime when period === 2
+
+
+==================================================
+PART 2 — Add Probability Expansion
+==================================================
+
+File: server/storage.ts
+Location: calculateProbability(), near the end of the function after all existing adjustments
+
+Do NOT change the existing order before this point.
+
+The order must remain:
+
+1. calibrateProbability()
+2. direction resolution
+3. existing penalties
+4. season volatility / playoff adjustments
+
+Immediately BEFORE the final clamp and return, insert:
+
+const beforeExpansion = probability;
+
+probability = 50 + (probability - 50) * 1.65;
+
+console.log("Probability expansion:", {
+  before: beforeExpansion,
+  after: probability
+});
+
+Then ensure the final clamp is exactly:
+
+probability = Math.max(2, Math.min(98, probability));
+
+Final required order:
+
+calibrateProbability()
+→ penalties
+→ season volatility adjustments
+→ playoff boost
+→ probability expansion
+→ final clamp
+
+
+==================================================
+VALIDATION
+==================================================
+
+Confirm all of the following:
+
+1. Games showing Q2 0.0 appear in halftimeGames
+2. 2H Plays section populates for legitimate halftime games
+3. Probability outputs now span realistic tiers:
+   - 55–59 weak
+   - 60–69 value
+   - 70–79 strong
+   - 80–90 elite
+4. Console logs show:
+   - HALFTIME DETECTED
+   - Probability expansion
+5. TypeScript compiles without errors
