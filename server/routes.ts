@@ -470,6 +470,7 @@ export async function registerRoutes(
           recommendedSide: o.recommendedSide,
           inning: mlbGameCache.gameState[gameId]?.inning ?? 0,
           tier,
+          gameId,
         };
       });
 

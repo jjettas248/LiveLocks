@@ -41,6 +41,7 @@ type MLBSignal = {
   recommendedSide: "OVER" | "UNDER" | "NO_EDGE";
   inning: number;
   tier: "green" | "yellow" | "teal" | "red";
+  gameId?: string;
 };
 
 type SignalsResponse = {
@@ -68,6 +69,21 @@ type CalcResult = {
   adjustedHitRate: number | null;
   bookImplied: number | null;
   explanationBullets: string[];
+};
+
+type ManualInputs = {
+  line: string;
+  overOdds: string;
+  battingOrderSlot: string;
+  currentAB: string;
+  hits: string;
+  totalBases: string;
+  walks: string;
+  strikeouts: string;
+  rbis: string;
+  sb: string;
+  currentInning: string;
+  isTopInning: boolean;
 };
 
 const TIER_STYLES: Record<string, { border: string; bg: string; dot: string; label: string }> = {
@@ -125,6 +141,33 @@ function formatOdds(n: number): string {
   return n > 0 ? `+${n}` : String(n);
 }
 
+function isValidSignal(sig: MLBSignal, selectedGameId: string): boolean {
+  if (!sig.playerId) return false;
+  if (!sig.market) return false;
+  if (sig.bookLine == null) return false;
+  if (typeof sig.enginePct !== "number") return false;
+  if (typeof sig.edge !== "number") return false;
+  if (sig.gameId !== selectedGameId) return false;
+  return true;
+}
+
+function defaultManualInputs(player: MLBBatter | null, game: MLBGame | null): ManualInputs {
+  return {
+    line: "",
+    overOdds: "",
+    battingOrderSlot: player ? String(player.battingOrderSlot) : "",
+    currentAB: player ? String(player.ab) : "",
+    hits: player ? String(player.h) : "",
+    totalBases: player ? String(player.tb) : "",
+    walks: player ? String(player.bb) : "",
+    strikeouts: player ? String(player.k) : "",
+    rbis: player ? String(player.rbi) : "",
+    sb: player ? String(player.sb) : "",
+    currentInning: game ? String(game.inning) : "",
+    isTopInning: game ? game.isTopInning : true,
+  };
+}
+
 export default function MlbLivePage() {
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
   const [inningTabMin, setInningTabMin] = useState<number>(0);
@@ -133,6 +176,8 @@ export default function MlbLivePage() {
   const [calcMarket, setCalcMarket] = useState("hits");
   const [selectedLine, setSelectedLine] = useState<{ book: string; line: number; overOdds: number; underOdds: number } | null>(null);
   const [calcResult, setCalcResult] = useState<CalcResult | null>(null);
+  const [manualMode, setManualMode] = useState(false);
+  const [manualInputs, setManualInputs] = useState<ManualInputs>(defaultManualInputs(null, null));
 
   const { data: games = [], isLoading: gamesLoading } = useQuery<MLBGame[]>({
     queryKey: ["/api/mlb/live-games"],
@@ -188,7 +233,40 @@ export default function MlbLivePage() {
 
   const calcMutation = useMutation({
     mutationFn: async () => {
-      if (!selectedPlayer || !selectedLine || !selectedGame) throw new Error("Missing data");
+      if (!selectedPlayer || !selectedGame) throw new Error("Missing data");
+
+      if (manualMode) {
+        const line = parseFloat(manualInputs.line);
+        const overOdds = parseFloat(manualInputs.overOdds);
+        if (isNaN(line) || isNaN(overOdds)) throw new Error("Line and Over Odds are required");
+
+        const body = {
+          playerId: selectedPlayer.playerId,
+          playerName: selectedPlayer.playerName,
+          market: calcMarket,
+          line,
+          overOdds,
+          team: selectedPlayer.teamAbbr,
+          opponent: opponentTeam,
+          gameId: selectedGame.gameId,
+          currentInning: manualInputs.currentInning ? parseInt(manualInputs.currentInning, 10) : selectedGame.inning,
+          isTopInning: manualInputs.isTopInning,
+          battingOrderSlot: manualInputs.battingOrderSlot ? parseInt(manualInputs.battingOrderSlot, 10) : selectedPlayer.battingOrderSlot,
+          currentStats: {
+            ab: manualInputs.currentAB ? parseInt(manualInputs.currentAB, 10) : selectedPlayer.ab,
+            h: manualInputs.hits ? parseInt(manualInputs.hits, 10) : selectedPlayer.h,
+            tb: manualInputs.totalBases ? parseInt(manualInputs.totalBases, 10) : selectedPlayer.tb,
+            bb: manualInputs.walks ? parseInt(manualInputs.walks, 10) : selectedPlayer.bb,
+            k: manualInputs.strikeouts ? parseInt(manualInputs.strikeouts, 10) : selectedPlayer.k,
+            sb: manualInputs.sb ? parseInt(manualInputs.sb, 10) : selectedPlayer.sb,
+            rbi: manualInputs.rbis ? parseInt(manualInputs.rbis, 10) : selectedPlayer.rbi,
+          },
+        };
+        const res = await apiRequest("POST", "/api/mlb/calculate", body);
+        return res.json();
+      }
+
+      if (!selectedLine) throw new Error("Missing line selection");
       const body = {
         playerId: selectedPlayer.playerId,
         playerName: selectedPlayer.playerName,
@@ -221,13 +299,40 @@ export default function MlbLivePage() {
   useEffect(() => {
     setSelectedLine(null);
     setCalcResult(null);
-  }, [calcMarket, selectedPlayer]);
+    setManualMode(false);
+    setManualInputs(defaultManualInputs(selectedPlayer, selectedGame));
+  }, [calcMarket]);
+
+  useEffect(() => {
+    setSelectedLine(null);
+    setCalcResult(null);
+    setManualMode(false);
+    if (selectedPlayer) {
+      setManualInputs(defaultManualInputs(selectedPlayer, selectedGame));
+    }
+  }, [selectedPlayer?.playerId]);
 
   useEffect(() => {
     setSelectedPlayer(null);
     setCalcResult(null);
     setSelectedLine(null);
-  }, [selectedGame?.gameId]);
+    setCalcMarket("hits");
+    setManualMode(false);
+    setManualInputs(defaultManualInputs(null, null));
+  }, [selectedGameId]);
+
+  const oddsEntries = oddsData
+    ? Object.entries(oddsData).filter(([k]) => k !== "_quotaExhausted")
+    : [];
+
+  useEffect(() => {
+    if (!oddsLoading && oddsEntries.length === 0 && selectedPlayer) {
+      setManualMode(true);
+      setManualInputs(defaultManualInputs(selectedPlayer, selectedGame));
+    } else if (oddsEntries.length > 0) {
+      setManualMode(false);
+    }
+  }, [oddsLoading, oddsEntries.length, selectedPlayer?.playerId]);
 
   const playerTierMap = new Map<string, string>();
   for (const sig of signals) {
@@ -246,15 +351,22 @@ export default function MlbLivePage() {
   }
 
   const currentInning = selectedGame?.inning ?? 0;
+
+  const validatedSignals = selectedGameId
+    ? signals.filter((sig) => isValidSignal(sig, selectedGameId))
+    : [];
+
   const filteredSignals = inningTabMin === 0
-    ? signals
-    : signals.filter((s) => s.inning >= inningTabMin);
+    ? validatedSignals
+    : validatedSignals.filter((s) => s.inning >= inningTabMin);
 
   const bookImplied = calcResult?.bookImplied ?? null;
 
-  const oddsEntries = oddsData
-    ? Object.entries(oddsData).filter(([k]) => k !== "_quotaExhausted")
-    : [];
+  const manualCanCalc = manualMode &&
+    manualInputs.line.trim() !== "" && !isNaN(parseFloat(manualInputs.line)) &&
+    manualInputs.overOdds.trim() !== "" && !isNaN(parseFloat(manualInputs.overOdds));
+
+  const canCalculate = manualMode ? manualCanCalc : !!selectedLine;
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
@@ -270,46 +382,41 @@ export default function MlbLivePage() {
           <div className="flex items-center gap-3 px-5 py-8 rounded-xl border border-border bg-card text-center justify-center">
             <span className="text-2xl">⚾</span>
             <div>
-              <p className="text-sm font-medium text-foreground">No MLB games today</p>
+              <p className="text-sm font-medium text-foreground" data-testid="text-no-mlb-games">No MLB games today</p>
               <p className="text-xs text-muted-foreground mt-0.5">Check back when the season is active.</p>
             </div>
           </div>
         ) : (
-          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+          <div className="flex gap-2 flex-wrap">
             {games.map((game) => {
               const isActive = game.gameId === selectedGameId;
               return (
                 <button
                   key={game.gameId}
                   data-testid={`chip-mlb-game-${game.gameId}`}
-                  onClick={() => {
-                    setSelectedGameId(game.gameId);
-                    setSelectedPlayer(null);
-                    setCalcResult(null);
-                    setSelectedLine(null);
-                  }}
-                  className={`flex-shrink-0 px-4 py-2.5 rounded-xl border text-xs font-medium transition-all ${
+                  onClick={() => setSelectedGameId(game.gameId)}
+                  className={`px-3 py-2 rounded-lg border text-xs font-medium transition-all ${
                     isActive
                       ? "border-primary bg-primary/10 text-primary shadow-sm"
                       : "border-border bg-card text-foreground hover:border-primary/40 hover:bg-muted"
                   }`}
                 >
-                  <div className="font-semibold text-sm leading-tight">
-                    <span>{game.awayName || game.awayTeam}</span>
-                    <span className="text-muted-foreground"> @ </span>
-                    <span>{game.homeName || game.homeTeam}</span>
+                  <div className="flex items-center gap-1.5 font-semibold text-xs leading-tight">
+                    <span>{game.awayTeam}</span>
+                    <span className="text-muted-foreground">@</span>
+                    <span>{game.homeTeam}</span>
                   </div>
                   <div className="flex items-center justify-center gap-1.5 mt-0.5">
-                    <span className="text-muted-foreground text-xs">{game.awayScore}–{game.homeScore}</span>
-                    <span className={`text-xs ${
+                    <span className="font-mono text-muted-foreground text-[11px]">{game.awayScore}–{game.homeScore}</span>
+                    <span className={`text-[11px] ${
                       game.status === "live" ? "text-green-500" : "text-muted-foreground"
                     }`}>
                       {inningLabel(game)}
                     </span>
                     {game.status === "live" ? (
-                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-500">LIVE</span>
+                      <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-green-500/15 text-green-500">LIVE</span>
                     ) : (
-                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Preview</span>
+                      <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-muted text-muted-foreground">PRE</span>
                     )}
                   </div>
                 </button>
@@ -319,11 +426,19 @@ export default function MlbLivePage() {
         )}
       </div>
 
-      {selectedGameId && (
+      {selectedGameId && selectedGame && (
         <>
-          <h2 className="text-sm font-semibold text-foreground" data-testid="text-mlb-game-header">
-            {selectedGame?.awayName || selectedGame?.awayTeam} @ {selectedGame?.homeName || selectedGame?.homeTeam}
-          </h2>
+          <div className="flex items-center gap-3" data-testid="text-mlb-game-header">
+            <h2 className="text-sm font-semibold text-foreground">
+              {selectedGame.awayTeam} @ {selectedGame.homeTeam}
+            </h2>
+            <span className="text-xs text-muted-foreground font-mono">
+              {selectedGame.awayScore}–{selectedGame.homeScore}
+            </span>
+            <span className={`text-xs ${selectedGame.status === "live" ? "text-green-500" : "text-muted-foreground"}`}>
+              {inningLabel(selectedGame)}
+            </span>
+          </div>
 
           <div className="flex gap-1.5 flex-wrap">
             {INNING_TABS.map((tab) => {
@@ -390,7 +505,6 @@ export default function MlbLivePage() {
                         {players.map((p) => {
                           const tier = playerTierMap.get(p.playerId);
                           const style = tier ? TIER_STYLES[tier] : null;
-                          const isSelected = selectedPlayer?.playerId === p.playerId;
                           return (
                             <tr
                               key={p.playerId}
@@ -401,9 +515,7 @@ export default function MlbLivePage() {
                                 setSelectedLine(null);
                               }}
                               style={style ? { backgroundColor: style.bg, borderLeft: `3px solid ${style.border}` } : {}}
-                              className={`border-b border-border/30 last:border-0 cursor-pointer hover:bg-neutral-800 transition ${
-                                isSelected ? "ring-2 ring-primary ring-inset" : ""
-                              }`}
+                              className="border-b border-border/30 last:border-0 cursor-pointer hover:bg-neutral-800 transition"
                             >
                               <td className="px-4 py-2">
                                 <div className="font-medium text-foreground truncate max-w-[160px]">{p.playerName}</div>
@@ -446,12 +558,12 @@ export default function MlbLivePage() {
             </div>
 
             {!signalsLoading && filteredSignals.length === 0 ? (
-              <div className="px-5 py-8 rounded-xl border border-border bg-card text-center">
+              <div className="px-5 py-8 rounded-xl border border-border bg-card text-center" data-testid="text-no-signals">
                 <p className="text-sm font-medium text-foreground">No edge signals yet</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {signals.length === 0
+                  {validatedSignals.length === 0
                     ? "Engine is warming up — signals appear once the orchestrator detects game state changes."
-                    : `${signals.length} signal${signals.length !== 1 ? "s" : ""} available but none meet the ${inningTabMin > 0 ? `${inningTabMin}th inning` : ""} filter.`}
+                    : `${validatedSignals.length} signal${validatedSignals.length !== 1 ? "s" : ""} available but none meet the ${inningTabMin > 0 ? `${inningTabMin}th inning` : ""} filter.`}
                 </p>
               </div>
             ) : (
@@ -524,46 +636,83 @@ export default function MlbLivePage() {
                   setSelectedPlayer(null);
                   setCalcResult(null);
                   setSelectedLine(null);
+                  setManualMode(false);
                 }}
                 className="flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 transition-colors font-medium"
               >
                 ← Back to Game
               </button>
 
-              <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-                <h3 className="text-sm font-semibold text-foreground">Matchup Details</h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
-                  <div>
-                    <div className="text-muted-foreground mb-0.5">Player</div>
-                    <div className="font-semibold text-foreground">{selectedPlayer.playerName}</div>
-                  </div>
-                  <div>
-                    <div className="text-muted-foreground mb-0.5">Team</div>
-                    <div className="font-semibold text-foreground">{selectedPlayer.teamAbbr}</div>
-                  </div>
-                  <div>
-                    <div className="text-muted-foreground mb-0.5">Opponent</div>
-                    <div className="font-semibold text-foreground">{opponentTeam}</div>
-                  </div>
-                  <div>
-                    <div className="text-muted-foreground mb-0.5">Batting Order</div>
-                    <div className="font-semibold text-foreground">#{selectedPlayer.battingOrderSlot}</div>
-                  </div>
-                  <div>
-                    <div className="text-muted-foreground mb-0.5">Inning</div>
-                    <div className="font-semibold text-foreground">{inningLabel(selectedGame)}</div>
-                  </div>
-                  <div>
-                    <div className="text-muted-foreground mb-0.5">Today</div>
-                    <div className="font-semibold text-foreground">
-                      {selectedPlayer.ab} AB · {selectedPlayer.h} H · {selectedPlayer.tb} TB · {selectedPlayer.bb} BB · {selectedPlayer.k} K · {selectedPlayer.sb} SB
+              <div className="bg-card border border-border rounded-xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-border/40 flex items-center justify-between">
+                  <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Header Summary</h3>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                    selectedGame.status === "live"
+                      ? "bg-green-500/15 text-green-500"
+                      : "bg-muted text-muted-foreground"
+                  }`}>
+                    {selectedGame.status === "live" ? "LIVE" : "PREVIEW"}
+                  </span>
+                </div>
+                <div className="px-4 py-3 border-b border-border/40 flex items-center gap-3">
+                  <div className="flex-1">
+                    <div className="text-base font-bold text-foreground" data-testid="text-matchup-player">{selectedPlayer.playerName}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">
+                      {selectedPlayer.teamAbbr} vs {opponentTeam}
                     </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs text-muted-foreground">Inning</div>
+                    <div className="text-sm font-bold text-foreground">{inningLabel(selectedGame)}</div>
+                  </div>
+                </div>
+
+                <div className="px-4 py-3 border-b border-border/40">
+                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Matchup Context</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                    <div>
+                      <div className="text-muted-foreground text-[10px]">Batting Order</div>
+                      <div className="font-semibold text-foreground">#{selectedPlayer.battingOrderSlot}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-[10px]">Side</div>
+                      <div className="font-semibold text-foreground">{selectedGame.isTopInning ? "Top" : "Bottom"} {selectedGame.inning || "—"}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-[10px]">Score</div>
+                      <div className="font-semibold text-foreground">{selectedGame.awayTeam} {selectedGame.awayScore} – {selectedGame.homeTeam} {selectedGame.homeScore}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-[10px]">Status</div>
+                      <div className="font-semibold text-foreground">{selectedGame.status === "live" ? "In Progress" : "Preview"}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="px-4 py-3">
+                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Live Stat Summary</div>
+                  <div className="grid grid-cols-4 sm:grid-cols-8 gap-2 text-xs">
+                    {[
+                      { label: "AB", value: selectedPlayer.ab },
+                      { label: "H", value: selectedPlayer.h },
+                      { label: "TB", value: selectedPlayer.tb },
+                      { label: "BB", value: selectedPlayer.bb },
+                      { label: "K", value: selectedPlayer.k },
+                      { label: "RBI", value: selectedPlayer.rbi },
+                      { label: "SB", value: selectedPlayer.sb },
+                      { label: "R", value: selectedPlayer.r },
+                    ].map((stat) => (
+                      <div key={stat.label} className="bg-secondary/40 rounded-lg p-2 text-center">
+                        <div className="text-muted-foreground text-[10px]">{stat.label}</div>
+                        <div className="font-bold text-foreground">{stat.value}</div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>
 
               <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-                <h3 className="text-sm font-semibold text-foreground">Live Lines</h3>
+                <h3 className="text-sm font-semibold text-foreground">Market</h3>
 
                 <div className="flex gap-1.5 flex-wrap">
                   {CALC_MARKETS.map((m) => (
@@ -581,6 +730,17 @@ export default function MlbLivePage() {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-foreground">
+                    {manualMode ? "Manual Input" : "Sportsbook Lines"}
+                  </h3>
+                  {selectedGame.status === "live" && !manualMode && (
+                    <span className="text-[10px] font-bold text-green-500">· Live</span>
+                  )}
+                </div>
 
                 {oddsLoading && (
                   <div className="flex items-center gap-2 py-3">
@@ -589,13 +749,13 @@ export default function MlbLivePage() {
                   </div>
                 )}
 
-                {!oddsLoading && oddsEntries.length === 0 && (
+                {!oddsLoading && !manualMode && oddsEntries.length === 0 && (
                   <p className="text-xs text-muted-foreground/60 bg-secondary/50 rounded-lg p-3 border border-border/40" data-testid="text-no-sportsbook-line">
-                    No sportsbook line available
+                    No sportsbook lines found — use manual input below.
                   </p>
                 )}
 
-                {oddsEntries.length > 0 && (
+                {!oddsLoading && !manualMode && oddsEntries.length > 0 && (
                   <div className="space-y-1.5">
                     {oddsEntries.map(([sb, odds]) => {
                       const o = odds as OddsEntry;
@@ -626,9 +786,108 @@ export default function MlbLivePage() {
                   </div>
                 )}
 
+                {manualMode && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Line *</label>
+                        <input
+                          data-testid="input-manual-line"
+                          type="number"
+                          step="0.5"
+                          value={manualInputs.line}
+                          onChange={(e) => setManualInputs(prev => ({ ...prev, line: e.target.value }))}
+                          placeholder="e.g. 1.5"
+                          className="w-full mt-1 px-3 py-2 rounded-lg border border-border bg-secondary/30 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Over Odds *</label>
+                        <input
+                          data-testid="input-manual-over-odds"
+                          type="number"
+                          value={manualInputs.overOdds}
+                          onChange={(e) => setManualInputs(prev => ({ ...prev, overOdds: e.target.value }))}
+                          placeholder="e.g. -130"
+                          className="w-full mt-1 px-3 py-2 rounded-lg border border-border bg-secondary/30 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="border-t border-border/30 pt-3">
+                      <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Context (auto-filled from box score)</div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {[
+                          { key: "battingOrderSlot" as const, label: "Batting Order" },
+                          { key: "currentAB" as const, label: "Current AB" },
+                          { key: "hits" as const, label: "Hits" },
+                          { key: "totalBases" as const, label: "Total Bases" },
+                          { key: "walks" as const, label: "Walks" },
+                          { key: "strikeouts" as const, label: "Strikeouts" },
+                          { key: "rbis" as const, label: "RBIs" },
+                          { key: "sb" as const, label: "SB" },
+                        ].map(({ key, label }) => (
+                          <div key={key}>
+                            <label className="text-[9px] text-muted-foreground">{label}</label>
+                            <input
+                              data-testid={`input-manual-${key}`}
+                              type="number"
+                              value={manualInputs[key]}
+                              onChange={(e) => setManualInputs(prev => ({ ...prev, [key]: e.target.value }))}
+                              className="w-full mt-0.5 px-2 py-1.5 rounded border border-border/60 bg-secondary/20 text-xs text-foreground focus:outline-none focus:border-primary"
+                            />
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 mt-2">
+                        <div>
+                          <label className="text-[9px] text-muted-foreground">Current Inning</label>
+                          <input
+                            data-testid="input-manual-currentInning"
+                            type="number"
+                            value={manualInputs.currentInning}
+                            onChange={(e) => setManualInputs(prev => ({ ...prev, currentInning: e.target.value }))}
+                            className="w-full mt-0.5 px-2 py-1.5 rounded border border-border/60 bg-secondary/20 text-xs text-foreground focus:outline-none focus:border-primary"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] text-muted-foreground">Half</label>
+                          <div className="flex gap-1 mt-0.5">
+                            <button
+                              data-testid="button-manual-top"
+                              type="button"
+                              onClick={() => setManualInputs(prev => ({ ...prev, isTopInning: true }))}
+                              className={`flex-1 px-2 py-1.5 rounded border text-xs font-medium transition-colors ${
+                                manualInputs.isTopInning
+                                  ? "border-primary bg-primary/10 text-primary"
+                                  : "border-border/60 text-muted-foreground hover:text-foreground"
+                              }`}
+                            >
+                              Top ▲
+                            </button>
+                            <button
+                              data-testid="button-manual-bottom"
+                              type="button"
+                              onClick={() => setManualInputs(prev => ({ ...prev, isTopInning: false }))}
+                              className={`flex-1 px-2 py-1.5 rounded border text-xs font-medium transition-colors ${
+                                !manualInputs.isTopInning
+                                  ? "border-primary bg-primary/10 text-primary"
+                                  : "border-border/60 text-muted-foreground hover:text-foreground"
+                              }`}
+                            >
+                              Bot ▼
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <button
                   data-testid="button-calculate-mlb"
-                  disabled={!selectedLine || calcMutation.isPending}
+                  disabled={!canCalculate || calcMutation.isPending}
                   onClick={() => calcMutation.mutate()}
                   className="w-full h-10 rounded-lg bg-primary text-primary-foreground font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50 transition-opacity"
                 >
