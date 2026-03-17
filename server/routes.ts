@@ -1206,7 +1206,7 @@ export async function registerRoutes(
   // Game-specific endpoint that runs prop edge calculations for any live period,
   // not just halftime. Used to color box score rows/cells during the full game.
   const liveSignalsCache = new Map<string, { ts: number; signals: any[] }>();
-  const LIVE_SIGNALS_TTL = 90_000; // 90 seconds — matches client refetch interval
+  const LIVE_SIGNALS_TTL = 45_000;
 
   app.get("/api/live-signals/:gameId", requireAuth, async (req, res) => {
     const gameId = req.params.gameId as string;
@@ -1386,7 +1386,7 @@ export async function registerRoutes(
               if (!oddsEntry) continue;
               const liveLine = oddsEntry.line;
 
-              if (currentStat >= liveLine) continue; // line already cleared
+              
 
               const result = await storage.calculateProbability({
                 playerId: dbPlayer.id,

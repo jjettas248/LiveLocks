@@ -708,8 +708,8 @@ export default function Dashboard() {
   const { data: liveSignalsData } = useQuery<{ signals: any[] }>({
     queryKey: ["/api/live-signals", selectedGameId],
     enabled: !!selectedGameId && showBoxScore,
-    refetchInterval: 90_000,
-    staleTime: 80_000,
+    refetchInterval: 45_000,
+    staleTime: 40_000,
   });
 
   const halftimeGameGroups = useMemo(() => {
@@ -1874,7 +1874,7 @@ export default function Dashboard() {
                           const tier: SignalTier | null =
                             dp >= 85 ? (play.betDirection === "under" ? "red" : "green") :
                             dp >= 70 ? "yellow" :
-                            dp >= 60 ? "teal" : null;
+                            dp >= 55 ? "teal" : null;
                           if (!tier) continue;
                           const key = play.playerName.toLowerCase();
                           // Row-level: best signal across all stat types
@@ -1892,10 +1892,10 @@ export default function Dashboard() {
                         }
 
                         const SIGNAL_STYLES: Record<SignalTier, { border: string; bg: string; dot: string }> = {
-                          green:  { border: "#22c55e", bg: "rgba(34,197,94,0.07)",   dot: "#22c55e" },
-                          red:    { border: "#ef4444", bg: "rgba(239,68,68,0.07)",   dot: "#ef4444" },
-                          yellow: { border: "#eab308", bg: "rgba(234,179,8,0.07)",   dot: "#eab308" },
-                          teal:   { border: "#00d4aa", bg: "rgba(0,212,170,0.07)",   dot: "#00d4aa" },
+                          green:  { border: "#22c55e", bg: "rgba(34,197,94,0.12)",   dot: "#22c55e" },
+                          red:    { border: "#ef4444", bg: "rgba(239,68,68,0.12)",   dot: "#ef4444" },
+                          yellow: { border: "#eab308", bg: "rgba(234,179,8,0.12)",   dot: "#eab308" },
+                          teal:   { border: "#00d4aa", bg: "rgba(0,212,170,0.12)",   dot: "#00d4aa" },
                         };
 
                         const STAT_LABEL_MAP: Record<string, string> = {
@@ -1932,6 +1932,11 @@ export default function Dashboard() {
                                 if (watchedStatType === "stl_blk") return s.steals + s.blocks;
                                 return s.points;
                               };
+                              const sigA = playerSignalMap.get(a.playerName.toLowerCase());
+                              const sigB = playerSignalMap.get(b.playerName.toLowerCase());
+                              if (sigA && !sigB) return -1;
+                              if (!sigA && sigB) return 1;
+                              if (sigA && sigB) return sigB.displayProb - sigA.displayProb;
                               const sortVal = boxScoreSort === "minutes"
                                 ? parseMinDec(a.minutes) - parseMinDec(b.minutes)
                                 : getStatVal(a) - getStatVal(b);
@@ -1987,9 +1992,9 @@ export default function Dashboard() {
                                         <span
                                           title={`${STAT_LABEL_MAP[signal.statType] ?? signal.statType} ${signal.betDirection === "under" ? "Under" : "Over"} — ${signal.displayProb}% model confidence`}
                                           data-testid={`signal-dot-${stat.playerId}`}
-                                          style={{ color: SIGNAL_STYLES[signal.tier].dot }}
-                                          className="text-[9px] font-bold cursor-help select-none"
-                                        >●</span>
+                                          style={{ background: SIGNAL_STYLES[signal.tier].bg, color: SIGNAL_STYLES[signal.tier].dot, border: `1px solid ${SIGNAL_STYLES[signal.tier].border}` }}
+                                          className="text-[8px] font-bold cursor-help select-none px-1 py-0.5 rounded ml-0.5 whitespace-nowrap leading-none"
+                                        >{STAT_LABEL_MAP[signal.statType] ?? signal.statType} {signal.betDirection === "under" ? "↓" : "↑"}{signal.displayProb}%</span>
                                       )}
                                     </span>
                                   </td>
