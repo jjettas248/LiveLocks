@@ -1,0 +1,193 @@
+ADDENDUM — Lifecycle Email Flow and Stripe Event Integration
+
+This addendum modifies the email lifecycle logic defined in Task #51 to ensure:
+- Verification emails are sent before onboarding emails
+- Email sending does not block request performance
+- Stripe subscription events correctly trigger lifecycle emails
+
+Do NOT modify sports engine logic, alert systems, or play calculations.
+
+--------------------------------------------------
+
+SECTION 1 — CORRECT EMAIL LIFECYCLE ORDER
+
+Current plan sends:
+sendVerificationEmail + sendWelcomeEmail + sendHowToEmail during signup.
+
+Update flow to:
+
+REGISTER
+→ sendVerificationEmail ONLY
+
+VERIFY EMAIL
+→ sendWelcomeEmail
+→ sendHowToEmail
+
+Reason:
+Unverified users should not receive onboarding emails.
+
+Implementation:
+
+In POST /api/auth/register:
+
+await sendVerificationEmail(email, token)
+
+Remove welcome/how-to sends from this route.
+
+--------------------------------------------------
+
+SECTION 2 — EMAIL VERIFICATION EVENT
+
+In GET /api/auth/verify-email:
+
+After verifying token and setting:
+
+emailVerified = true
+
+Trigger onboarding emails:
+
+await sendWelcomeEmail(user.email)
+await sendHowToEmail(user.email)
+
+Wrap in try/catch with logging.
+
+--------------------------------------------------
+
+SECTION 3 — NON-BLOCKING EMAIL SENDS
+
+Only signup/verification emails should be awaited.
+
+All runtime emails must be non-blocking.
+
+Convert the following to fire-and-forget:
+
+sendWallEmail
+sendNudgeEmail
+sendWinbackEmail
+sendProWelcomeEmail
+sendAllSportsWelcomeEmail
+
+Pattern:
+
+sendWallEmail(email).catch(console.error)
+
+This prevents API latency caused by email requests.
+
+--------------------------------------------------
+
+SECTION 4 — STRIPE LIFECYCLE EMAIL EVENTS
+
+Ensure Stripe webhooks trigger lifecycle emails.
+
+Inspect:
+
+server/webhookHandlers.ts
+
+Implement email sends for:
+
+CHECKOUT COMPLETED
+
+tier === "all"
+→ sendProWelcomeEmail
+
+tier === "elite"
+→ sendAllSportsWelcomeEmail
+
+Use non-blocking pattern.
+
+--------------------------------------------------
+
+SECTION 5 — STRIPE UPGRADE EMAIL
+
+Inside:
+
+customer.subscription.updated
+
+If previous tier = "all"
+and new tier = "elite"
+
+Trigger:
+
+sendAllSportsWelcomeEmail
+
+Do NOT resend on renewals.
+
+--------------------------------------------------
+
+SECTION 6 — FAILED PAYMENT / DOWNGRADE EMAIL
+
+Add optional lifecycle email:
+
+customer.subscription.updated
+
+If subscription becomes:
+
+past_due OR canceled
+
+Trigger:
+
+sendPaymentIssueEmail(email)
+
+Create new function:
+
+sendPaymentIssueEmail()
+
+--------------------------------------------------
+
+SECTION 7 — DOMAIN VERIFICATION CHECK
+
+On server startup, log a warning if the sending domain is not verified.
+
+Example:
+
+console.warn("Resend domain may not be verified")
+
+Domain expected:
+
+team@livelocksai.app
+
+--------------------------------------------------
+
+SECTION 8 — TEST ROUTE EXTENSION
+
+Extend /api/test-email to support Stripe lifecycle emails.
+
+Allowed types:
+
+welcome
+howto
+wall
+nudge
+winback
+pro
+allsports
+verify
+payment_issue
+
+--------------------------------------------------
+
+VALIDATION
+
+After this addendum:
+
+Signup
+→ verification email sent
+
+Verification click
+→ welcome + how-to emails sent
+
+Stripe checkout
+→ correct tier welcome email sent
+
+Stripe upgrade
+→ upgrade email sent
+
+Stripe payment failure
+→ payment issue email sent
+
+Server logs display:
+
+EMAIL SENT: <address>
+EMAIL FAILED: <error>
+
+Resend dashboard shows email activity.

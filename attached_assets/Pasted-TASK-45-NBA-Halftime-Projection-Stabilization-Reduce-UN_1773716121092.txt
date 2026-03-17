@@ -1,0 +1,115 @@
+TASK #45 — NBA Halftime Projection Stabilization (Reduce UNDER Bias)
+
+Goal
+Reduce systematic UNDER bias in halftime signals by introducing second-half regression toward season averages and normalizing projections using pace-adjusted weighting.
+
+The engine should not artificially force OVER signals. Instead, projections should reflect realistic second-half performance expectations.
+
+
+Out of scope
+Do NOT modify:
+- calibrateProbability()
+- probability expansion logic
+- canonical market logic
+- API routes
+- NCAAB or MLB engines
+
+
+==================================================
+PART 1 — Add Season Regression to Projection
+==================================================
+
+File:
+server/storage.ts
+
+Location:
+calculateProbability()
+
+After the halftime projection is calculated (expectedTotal), apply regression toward the player’s season average.
+
+Replace the direct projection with:
+
+const regressionWeight = 0.35
+const paceWeight = 0.65
+
+expectedTotal =
+  paceWeight * expectedTotal +
+  regressionWeight * seasonAverage
+
+
+Explanation
+Players rarely continue exact first-half pace. This regression corrects projections when a player had an unusually slow or hot first half.
+
+
+==================================================
+PART 2 — Add Pace Normalization
+==================================================
+
+Still inside calculateProbability()
+
+Estimate the game pace relative to league average.
+
+Add:
+
+const leagueAvgPPM = 2.15
+const paceFactor = livePPM / leagueAvgPPM
+
+expectedTotal = expectedTotal * paceFactor
+
+
+Purpose
+High-tempo games should slightly increase projections while slow games decrease them.
+
+
+==================================================
+PART 3 — Guard Against Overcorrection
+==================================================
+
+Add a stabilization clamp so regression cannot distort projections too aggressively.
+
+Add after projection update:
+
+const maxAdjustment = seasonAverage * 0.25
+
+if (Math.abs(expectedTotal - seasonAverage) > maxAdjustment) {
+  expectedTotal =
+    seasonAverage +
+    Math.sign(expectedTotal - seasonAverage) * maxAdjustment
+}
+
+
+==================================================
+PART 4 — Debug Verification
+==================================================
+
+Add temporary debug logging:
+
+console.log("Projection stabilization", {
+  halftimeProjection: originalExpectedTotal,
+  seasonAverage,
+  stabilizedProjection: expectedTotal
+})
+
+
+==================================================
+PART 5 — Expected Behavior
+==================================================
+
+After this change:
+
+• Halftime signals should contain a healthier mix of OVER and UNDER plays  
+• Projections should no longer overreact to slow first halves  
+• Probability distribution should remain calibrated  
+• No existing APIs or schemas should change
+
+
+==================================================
+VALIDATION
+==================================================
+
+Confirm:
+
+• Both OVER and UNDER signals appear in halftime board
+• Engine probabilities remain within 2–98% bounds
+• No TypeScript errors
+• Projection debug logs show regression behavior
