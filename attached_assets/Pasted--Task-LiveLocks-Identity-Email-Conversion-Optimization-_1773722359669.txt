@@ -1,0 +1,326 @@
+# Task: LiveLocks Identity + Email + Conversion Optimization System
+
+We are implementing:
+1) Email verification (safe for existing users)
+2) Signup abuse protection
+3) Resend email wiring + lifecycle
+4) Stripe email lifecycle mapping
+5) Conversion optimization (reduce drop-off after verification)
+
+Do NOT modify:
+- sports engine
+- alert system
+- play logic
+
+--------------------------------------------------
+
+SECTION 1 — SAFE SCHEMA MIGRATION
+
+Add columns (nullable for legacy compatibility):
+
+email_verified BOOLEAN DEFAULT FALSE
+email_verification_token TEXT NULL
+original_email TEXT NULL
+normalized_email TEXT NULL
+signup_fingerprint TEXT NULL
+verification_last_sent_at TIMESTAMP NULL
+
+Add index:
+
+CREATE UNIQUE INDEX users_normalized_email_idx
+ON users(normalized_email)
+WHERE normalized_email IS NOT NULL;
+
+--------------------------------------------------
+
+SECTION 2 — BACKFILL EXISTING USERS
+
+Run immediately:
+
+UPDATE users
+SET email_verified = TRUE
+WHERE email_verified IS NULL;
+
+Add startup safeguard in server/index.ts:
+
+UPDATE users
+SET email_verified = TRUE
+WHERE email_verified = FALSE
+AND email_verification_token IS NULL;
+
+console.log("[startup] Legacy user email-verified backfill complete")
+
+--------------------------------------------------
+
+SECTION 3 — EMAIL NORMALIZATION (ANTI-ALIAS)
+
+normalizeEmail(email):
+
+- lowercase + trim
+- split local/domain
+- if gmail.com:
+  remove dots
+  remove anything after "+"
+- return normalized
+
+Store:
+original_email = input
+normalized_email = result
+
+--------------------------------------------------
+
+SECTION 4 — REGISTRATION HARDENING
+
+POST /api/auth/register:
+
+1. Rate limit (5/hr/IP)
+2. Honeypot check
+3. Normalize email
+4. Block disposable domains
+5. Reject duplicate normalized_email
+6. Optional Turnstile validation
+7. fingerprint = hash(ip + userAgent)
+8. Reject if 3+ UNVERIFIED users share fingerprint
+
+Create user:
+
+email_verified = false
+original_email
+normalized_email
+signup_fingerprint
+
+Generate:
+
+token = crypto.randomUUID()
+
+Store:
+email_verification_token
+verification_last_sent_at = now()
+
+Send:
+
+await sendVerificationEmail(email, token)
+
+DO NOT send onboarding emails yet
+
+--------------------------------------------------
+
+SECTION 5 — VERIFICATION + AUTO LOGIN (CRITICAL FOR CONVERSION)
+
+GET /api/auth/verify-email?token=
+
+Flow:
+
+1. find user
+2. if invalid → return error
+
+3. update:
+
+email_verified = true
+email_verification_token = NULL
+
+4. CREATE SESSION (IMPORTANT):
+
+- generate session token (or reuse your auth system)
+- log user in automatically
+
+5. fire emails (non-blocking):
+
+sendWelcomeEmail(email).catch(console.error)
+sendHowToEmail(email).catch(console.error)
+
+6. REDIRECT:
+
+redirect to:
+
+/dashboard?verified=1
+
+NOT /login
+
+--------------------------------------------------
+
+SECTION 6 — FRONTEND AUTO-CONVERSION SIGNAL
+
+On dashboard load:
+
+IF query param ?verified=1:
+
+- show toast:
+  "You're verified — let's find your first edge"
+
+- optionally trigger:
+  first free calculation automatically
+
+--------------------------------------------------
+
+SECTION 7 — BLOCK UNVERIFIED USERS
+
+In requirePlayAccess:
+
+if (!user.email_verified):
+  return 403
+
+if account age < 30s:
+  return 403
+
+--------------------------------------------------
+
+SECTION 8 — RESEND EMAIL SYSTEM
+
+In server/email.ts:
+
+const resend = new Resend(process.env.RESEND_API_KEY)
+
+If missing:
+console.warn("RESEND_API_KEY missing")
+
+All emails:
+
+await resend.emails.send({...})
+
+Logging:
+
+console.log("EMAIL SENT:", to)
+console.error("EMAIL FAILED:", error)
+
+--------------------------------------------------
+
+SECTION 9 — EMAIL TYPES
+
+Implement:
+
+sendVerificationEmail
+sendWelcomeEmail
+sendHowToEmail
+sendWallEmail
+sendNudgeEmail
+sendWinbackEmail
+sendProWelcomeEmail
+sendAllSportsWelcomeEmail
+sendPaymentIssueEmail
+
+--------------------------------------------------
+
+SECTION 10 — EMAIL FLOW (IMPORTANT)
+
+Signup:
+→ verification email ONLY
+
+Verification:
+→ welcome + how-to
+
+Runtime:
+→ wall, nudge, winback (non-blocking)
+
+Stripe:
+→ plan-based emails
+
+--------------------------------------------------
+
+SECTION 11 — STRIPE EMAIL MAPPING
+
+In webhookHandlers.ts:
+
+checkout.session.completed:
+
+IF subscription_tier === "all":
+→ sendProWelcomeEmail
+
+IF subscription_tier === "elite":
+→ sendAllSportsWelcomeEmail
+
+customer.subscription.updated:
+
+IF upgrade from "all" → "elite":
+→ sendAllSportsWelcomeEmail
+
+IF status = past_due OR canceled:
+→ sendPaymentIssueEmail
+
+ALL non-blocking
+
+--------------------------------------------------
+
+SECTION 12 — VERIFICATION RESEND PROTECTION
+
+If resend endpoint exists:
+
+IF < 60s since last send:
+→ return 429
+
+Else:
+→ send new token
+
+--------------------------------------------------
+
+SECTION 13 — CLEANUP CRON
+
+Daily:
+
+DELETE users WHERE:
+
+email_verified = false
+AND created_at < now() - 24h
+
+ONLY IF no dependent records
+
+Else:
+→ skip or soft-delete
+
+--------------------------------------------------
+
+SECTION 14 — TEST EMAIL ROUTE
+
+GET /api/test-email?type=&to=
+
+Types:
+
+welcome
+howto
+verify
+pro
+allsports
+payment_issue
+
+Only if NODE_ENV !== production
+
+--------------------------------------------------
+
+SECTION 15 — CONVERSION BOOST (KEY)
+
+After verification:
+
+- user is already logged in
+- lands on dashboard
+- sees value immediately
+- no login friction
+
+OPTIONAL:
+
+trigger first free calculation automatically
+
+--------------------------------------------------
+
+VALIDATION
+
+After implementation:
+
+Existing users:
+→ still work (backfilled)
+
+New users:
+→ must verify
+
+Verification:
+→ auto-login + dashboard redirect
+
+Emails:
+→ visible in Resend
+
+Abuse:
+→ significantly reduced
+
+Stripe:
+→ emails correct
+
+No system crashes on email failure
