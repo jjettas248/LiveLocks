@@ -256,6 +256,16 @@ export default function Dashboard() {
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
   const { data: liveGames, isLoading: isGamesLoading, refetch: refetchGames } = useLiveGames();
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("verified") === "1") {
+      toast({ title: "You're verified — let's find your first edge" });
+      params.delete("verified");
+      const newUrl = window.location.pathname + (params.toString() ? `?${params.toString()}` : "");
+      window.history.replaceState({}, "", newUrl);
+    }
+  }, []);
+
   const [showResetOverlay, setShowResetOverlay] = useState(false);
   const [overlayVisible, setOverlayVisible] = useState(false);
   const [resetStep, setResetStep] = useState(0);
@@ -549,7 +559,7 @@ export default function Dashboard() {
       setTimeout(() => setSelectedGameId(gameId), 400);
     }
     if (params.toString()) {
-      window.history.replaceState({}, "", "/");
+      window.history.replaceState({}, "", window.location.pathname);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

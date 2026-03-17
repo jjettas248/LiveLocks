@@ -217,7 +217,9 @@ export async function registerAuthRoutes(app: import("express").Express) {
     sendWelcomeEmail(user.email).catch(console.error);
     sendHowToEmail(user.email).catch(console.error);
 
-    return res.redirect("/login");
+    req.session.userId = user.id;
+
+    return res.redirect("/dashboard?verified=1");
   });
 
   app.post("/api/auth/resend-verification", async (req: Request, res: Response) => {
