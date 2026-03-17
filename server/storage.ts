@@ -28,6 +28,8 @@ import {
 } from "@shared/schema";
 import { eq, and, desc, isNull, sql, lt, lte, inArray } from "drizzle-orm";
 
+const HIGH_VOLATILITY_TEAMS = new Set(["BKN", "WAS", "CHA", "POR", "UTA", "DET"]);
+
 // 2025-26 NBA team pace (possessions per 48 minutes)
 export const TEAM_PACE: Record<string, number> = {
   ATL: 103.4,
@@ -260,7 +262,18 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  getSeasonPhase(gameDate?: string | Date): "early" | "mid" | "late" | "playoffs" {
+    const d = gameDate ? new Date(gameDate) : new Date();
+    const month = d.getMonth() + 1;
+    if (month >= 10 && month <= 12) return "early";
+    if (month >= 1 && month <= 2) return "mid";
+    if (month >= 3 && month <= 4) return "late";
+    return "playoffs";
+  }
+
   async calculateProbability(req: CalculateProbabilityRequest): Promise<CalculateProbabilityResponse> {
+    const seasonPhase = this.getSeasonPhase(req.gameDate);
+
     const player = await this.getPlayer(req.playerId);
     if (!player) throw new Error("Player not found");
 
@@ -340,6 +353,7 @@ export class DatabaseStorage implements IStorage {
       h2avgMinutes: h2Min ?? undefined,
       missingStarterCount: 0,
       projectedMinutes: freshProjectedMinutes,
+      seasonPhase,
     });
     const remainingMinutes = minutesResult.expectedRemainingMinutes;
 
@@ -540,8 +554,47 @@ export class DatabaseStorage implements IStorage {
       volatilityFiltered = true;
     }
 
-    // Step 4 — Calibration lookup (directional confidence only)
+    // Step 3b — Late-season UNDER volatility penalties
+    const isLowRolePlayer = effectiveMinutesBase < 28;
+    const isBenchVolatile = (freshProjectedMinutes ?? avgMinutes) < 24 && minutesPlayed < 12;
+    const isComboStat = req.statType.includes("+") || req.statType.includes("_");
+    let lateSeasonPenaltyApplied = false;
+
     const direction = probability >= 50 ? "OVER" : "UNDER";
+
+    if (seasonPhase === "late" && direction === "UNDER") {
+      if (isLowRolePlayer) {
+        probability *= 0.94;
+        lateSeasonPenaltyApplied = true;
+      }
+      if (isComboStat) {
+        probability *= 0.95;
+        lateSeasonPenaltyApplied = true;
+      }
+      if (isBenchVolatile) {
+        probability *= 0.92;
+        lateSeasonPenaltyApplied = true;
+      }
+      probability = Math.max(2, Math.min(98, probability));
+    }
+
+    // Step 3c — Tank-team late-season penalty
+    let teamVolatilityPenaltyApplied = false;
+    if (seasonPhase === "late" && HIGH_VOLATILITY_TEAMS.has(player.team)) {
+      probability *= 0.96;
+      probability = Math.max(2, Math.min(98, probability));
+      teamVolatilityPenaltyApplied = true;
+    }
+
+    // Step 3d — Playoff normalization boost
+    let playoffBoostApplied = false;
+    if (seasonPhase === "playoffs") {
+      probability *= 1.03;
+      probability = Math.max(2, Math.min(98, probability));
+      playoffBoostApplied = true;
+    }
+
+    // Step 4 — Calibration lookup (directional confidence only)
     const confidence = direction === "OVER" ? probability : 100 - probability;
     const calibrated = calibrateProbability(confidence);
     probability = direction === "OVER" ? calibrated : 100 - calibrated;
@@ -596,6 +649,10 @@ export class DatabaseStorage implements IStorage {
       effectiveMinutesBase,
       rotationSource,
       noSignal,
+      seasonPhase,
+      lateSeasonPenaltyApplied,
+      playoffBoostApplied,
+      teamVolatilityPenaltyApplied,
     };
 
     return {

@@ -10,6 +10,7 @@ export interface MinutesContext {
   h2avgMinutes?: number;
   missingStarterCount?: number;
   projectedMinutes?: number | null;
+  seasonPhase?: "early" | "mid" | "late" | "playoffs";
 }
 
 export interface MinutesResult {
@@ -68,13 +69,23 @@ export function calculateRemainingMinutes(ctx: MinutesContext): MinutesResult {
   if (usageRate >= 0.27) closingProbability += 0.05;
   closingProbability = Math.min(0.98, closingProbability);
 
+  // ── 3b. Season-phase adjustments to closing probability ─────────────
+  if (ctx.seasonPhase === "playoffs" && baseRotationMinutes >= 30) {
+    closingProbability = Math.min(0.99, closingProbability + 0.03);
+  }
+
   // ── 4. Close-game extension ──────────────────────────────────────────
+  let closeGameExtensionMultiplier = 0.05;
+  if (ctx.seasonPhase === "late" && baseRotationMinutes < 28) {
+    closeGameExtensionMultiplier *= 0.9;
+  }
+
   if (
     scoreDiff !== undefined &&
     Math.abs(scoreDiff) <= 8 &&
     currentPeriod >= 4
   ) {
-    remainingMinutes *= 1 + closingProbability * 0.05;
+    remainingMinutes *= 1 + closingProbability * closeGameExtensionMultiplier;
   }
 
   // ── 5. Blowout reduction ─────────────────────────────────────────────

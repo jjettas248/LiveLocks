@@ -148,6 +148,10 @@ export interface CalcDebug {
   effectiveMinutesBase?: number;
   rotationSource?: "projected" | "season_avg";
   noSignal?: boolean;
+  seasonPhase?: "early" | "mid" | "late" | "playoffs";
+  lateSeasonPenaltyApplied?: boolean;
+  playoffBoostApplied?: boolean;
+  teamVolatilityPenaltyApplied?: boolean;
 }
 
 export interface CalculateProbabilityResponse {
