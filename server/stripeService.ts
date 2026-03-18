@@ -28,9 +28,14 @@ export async function registerStripeRoutes(app: import("express").Express) {
       const user = await storage.getUserById(userId);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const priceId = await getPriceIdForTier(tier as "all" | "elite");
+      const plan = tier as "all" | "elite";
+      if (!PLAN_META[plan]) {
+        console.error("[stripe] Invalid plan:", plan);
+        return res.status(400).json({ error: "Invalid plan" });
+      }
+      const priceId = await getPriceIdForTier(plan);
       const origin = req.headers.origin || `${req.protocol}://${req.headers.host}`;
-      const meta = PLAN_META[tier as keyof typeof PLAN_META];
+      const meta = PLAN_META[plan];
 
       const sessionParams: any = {
         mode: "subscription",
