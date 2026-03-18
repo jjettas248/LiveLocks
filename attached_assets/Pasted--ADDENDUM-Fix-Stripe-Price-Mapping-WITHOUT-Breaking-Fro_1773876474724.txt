@@ -1,0 +1,121 @@
+# ADDENDUM — Fix Stripe Price Mapping WITHOUT Breaking Frontend ("all"/"elite")
+
+## OBJECTIVE
+Fix Stripe checkout 500 error while preserving existing frontend plan names:
+- "all" (currently used for Pro)
+- "elite" (currently used for All Sports)
+
+Add normalization layer so backend uses correct pricing safely.
+
+---
+
+## STEP 1 — CONFIRM ENV SECRETS (DO NOT MODIFY NAMES)
+
+Ensure these exist:
+
+STRIPE_PRO_PRICE_ID = price_1T6hh82ceUNmv10tdIMnFF5N
+STRIPE_ALL_SPORTS_PRICE_ID = price_1T6hh92ceUNmv10tShQlLUYt
+
+---
+
+## STEP 2 — UPDATE server/stripeService.ts (SAFE MAPPING)
+
+Replace PLAN_META with:
+
+const PLAN_META = {
+  all: {
+    // "all" = Pro tier (legacy frontend naming)
+    priceId:
+      process.env.STRIPE_PRO_PRICE_ID ||
+      "price_1T6hh82ceUNmv10tdIMnFF5N",
+  },
+  elite: {
+    // "elite" = All Sports tier
+    priceId:
+      process.env.STRIPE_ALL_SPORTS_PRICE_ID ||
+      "price_1T6hh92ceUNmv10tShQlLUYt",
+  },
+};
+
+---
+
+## STEP 3 — ADD SAFETY VALIDATION (CRITICAL)
+
+Before creating checkout session:
+
+const priceId = PLAN_META[plan]?.priceId;
+
+if (!priceId) {
+  console.error("[stripe] Invalid plan:", plan);
+  return res.status(400).json({ error: "Invalid plan" });
+}
+
+---
+
+## STEP 4 — STARTUP LOGGING
+
+Inside registerStripeRoutes:
+
+console.log("[stripe] Pro price ID:", process.env.STRIPE_PRO_PRICE_ID || "(fallback)");
+console.log("[stripe] All Sports price ID:", process.env.STRIPE_ALL_SPORTS_PRICE_ID || "(fallback)");
+
+---
+
+## STEP 5 — UPDATE server/routes.ts ADMIN_TIER_PRICES
+
+Replace values:
+
+const ADMIN_TIER_PRICES = {
+  all: {
+    stripePriceId:
+      process.env.STRIPE_PRO_PRICE_ID ||
+      "price_1T6hh82ceUNmv10tdIMnFF5N",
+  },
+  elite: {
+    stripePriceId:
+      process.env.STRIPE_ALL_SPORTS_PRICE_ID ||
+      "price_1T6hh92ceUNmv10tShQlLUYt",
+  },
+};
+
+---
+
+## STEP 6 — REMOVE ALL OLD PRICE IDS
+
+Search entire repo and REMOVE:
+
+price_1T6fl12cW8Vmrgt3B6ffBIuw
+price_1T6fly2cW8Vmrgt3WU9uHL7L
+
+They must not exist anywhere.
+
+---
+
+## STEP 7 — DO NOT MODIFY
+
+- server/stripeClient.ts
+- Checkout session creation logic
+- Frontend plan names ("all", "elite")
+- Any unrelated business logic
+
+---
+
+## DONE CRITERIA
+
+✔ No hardcoded invalid price IDs remain  
+✔ PLAN_META uses env-based IDs  
+✔ ADMIN_TIER_PRICES uses env-based IDs  
+✔ Server logs show correct price IDs  
+✔ Clicking "Unlock Full Access" redirects to Stripe (NO 500)  
+✔ Both "all" and "elite" checkout successfully  
+
+---
+
+## NOTE (IMPORTANT)
+
+This preserves backward compatibility with the current frontend naming.
+A future refactor should rename:
+- "all" → "pro"
+- "elite" → "all"
+
+But DO NOT do that in this fix.

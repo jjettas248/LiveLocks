@@ -1,0 +1,254 @@
+#43 - MLB Premium Experience Completion: Game Chips, Context Cards, and Market Wiring
+
+What & Why
+The MLB Live tab still does not meet the LiveLocks premium standard. The remaining issues are no longer simple styling bugs — they are product-completion issues across three areas:
+
+1. Game chips are still not correctly displaying the actual matchup
+2. Edge cards are still auto-populating with incorrect or incomplete data
+3. Matchup details cards are too thin and do not surface enough decision context
+4. MLB market coverage is still incomplete
+
+This task upgrades MLB Live into a true premium product experience without touching protected engine-math files.
+
+--------------------------------------------------
+DO NOT TOUCH
+--------------------------------------------------
+
+Any file under server/mlb/ that changes engine math
+calibration.ts
+probability.ts
+paEstimator.ts
+markets.ts logic
+liveGameOrchestrator
+edgeCache / mlbEdgeCache
+NBA Live tab behavior
+
+--------------------------------------------------
+MAY MODIFY
+--------------------------------------------------
+
+client/src/pages/mlb-live.tsx
+server/routes.ts
+server/oddsService.ts
+server/mlb/* ONLY for non-math data hydration helpers if needed
+any lightweight shared frontend helper needed for rendering parity
+
+--------------------------------------------------
+DONE LOOKS LIKE
+--------------------------------------------------
+
+1. Game chips correctly display both teams:
+- away abbreviation @ home abbreviation
+- score inline
+- inning/status below
+- no blank "@"
+
+2. Game chips also show quick-glance metadata:
+- park factor badge
+- starting pitcher(s)
+- weather summary
+
+3. Edge signals are fully scoped and valid:
+- only render for selected game
+- no repeated placeholder probabilities
+- no mismatched players
+- invalid payloads are dropped
+
+4. Player matchup detail card is premium and decision-useful:
+- player
+- team/opponent
+- inning / side
+- batting order
+- live stat summary
+- current form grade
+- pitcher context
+- park/weather context
+- market selector
+- sportsbook lines or manual fallback
+- prediction result panel
+
+5. All agreed MLB markets are wired
+
+Batter:
+- Hits
+- Total Bases
+- HRR
+- Strikeouts
+- HR
+
+Pitcher:
+- Strikeouts
+- Walks Allowed
+- Hits Allowed
+
+6. Sportsbook lines are shown when available; manual fallback remains when unavailable.
+
+--------------------------------------------------
+TASKS
+--------------------------------------------------
+
+1. Fix game chip matchup binding
+
+In mlb-live.tsx and/or server/routes.ts:
+- ensure the MLB games response includes:
+  away abbreviation
+  home abbreviation
+  away full name
+  home full name
+  score
+  inning/status
+- frontend must render:
+  AWAY @ HOME
+  score inline
+  inning/status below
+
+If backend response shape is inconsistent, normalize it in server/routes.ts before sending to frontend.
+
+Do NOT leave team extraction to ambiguous nested client parsing.
+
+2. Enrich game chips with premium quick-glance context
+
+For each game chip, add compact metadata rows/badges for:
+- park factor (or park name if factor unavailable)
+- probable / current starting pitcher
+- weather summary (temp + wind shorthand, e.g. 74° / Out 9mph)
+
+This must be compact, not oversized.
+Match NBA density and premium feel.
+
+If weather or pitcher is unavailable, show a neutral fallback badge rather than breaking layout.
+
+3. Strictly scope and validate edge signals
+
+Before rendering any signal card:
+- selectedGameId must exist
+- signal.gameId must match selectedGameId
+- signal.playerId must exist
+- signal.market must exist
+- signal.line must not be null/undefined
+- signal.enginePct must be a number
+- signal.edge must be a number
+
+Additionally:
+- if the player in the signal does not exist in the selected game’s box score / lineup context, drop the card
+- no fallback probability values anywhere
+- if no valid signals remain, show clean empty state:
+  “No live edges detected yet”
+
+4. Enrich player matchup details card
+
+When a player row is clicked, the detail card must include:
+
+HEADER SUMMARY
+- player name
+- team vs opponent
+- live status / inning
+
+MATCHUP CONTEXT
+- batting order
+- side (top/bottom)
+- score
+- status
+
+LIVE STAT SUMMARY
+- AB
+- H
+- TB
+- BB
+- K
+- RBI
+- SB
+- R
+
+CURRENT FORM
+- last AB result if available
+- recent contact quality if available
+- form grade badge (Hot / Neutral / Cold or A/B/C/F style)
+
+PITCHER CONTEXT
+- opposing pitcher name
+- throws hand
+- pitch count if available
+- K rate / hits allowed indicators if available
+
+PARK / WEATHER CONTEXT
+- park factor
+- temp
+- wind direction/speed
+
+MARKET
+- market selector
+
+SPORTSBOOK LINES
+- all returned books
+
+PREDICTION
+- result panel
+
+5. Add current form hydration
+
+Use already available APIs / sources where possible:
+- MLB.com / ESPN live box score
+- Baseball Savant derived context if already available through current data layer
+
+Add a lightweight current-form display for hitters:
+- last AB result if available
+- contact / recent form grade if available from existing data
+- if unavailable, display neutral fallback:
+  “Form data not available yet”
+
+This is presentation/data hydration only.
+Do NOT change engine math.
+
+6. Complete market wiring
+
+Ensure frontend market selector supports:
+
+BATTERS
+- hits
+- total_bases
+- hrr
+- batter_k
+- home_runs
+
+PITCHERS
+- pitcher_k
+- walks_allowed
+- hits_allowed
+
+Verify:
+- market labels are user-friendly
+- route params map correctly
+- oddsService market mapping covers all supported markets already available from books / current routing
+- if a market has no book support, still allow manual entry fallback
+
+7. Restore sportsbook + manual flow for all markets
+
+If odds exist:
+- show all returned books
+- selecting one populates line + over odds
+- calculate enabled
+
+If odds do not exist:
+- keep sportsbook section visible
+- show:
+  “No sportsbook line available”
+- render manual inputs:
+  line
+  over odds
+  and editable context fields not auto-filled
+- calculate enabled once required fields are filled
+
+8. Keep premium layout quality
+
+Use compact, structured, premium card layout.
+Do NOT create sparse, unfinished-looking sections.
+MLB should feel like the same product family as NBA.
+
+--------------------------------------------------
+RELEVANT FILES
+--------------------------------------------------
+
+client/src/pages/mlb-live.tsx
+server/routes.ts
+server/oddsService.ts

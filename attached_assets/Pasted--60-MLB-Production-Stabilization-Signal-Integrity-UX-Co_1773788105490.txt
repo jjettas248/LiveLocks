@@ -1,0 +1,264 @@
+#60 - MLB Production Stabilization (Signal Integrity → UX Completion)
+
+What & Why
+
+MLB Live is currently non-trustworthy due to invalid signal generation (duplicate probabilities like 18%) and incomplete UX wiring.
+
+This task enforces a strict 2-phase execution:
+
+PHASE 1 (MANDATORY): Fix signal integrity and engine orchestration
+PHASE 2: Upgrade UI/UX to NBA-level parity
+
+DO NOT START PHASE 2 until PHASE 1 produces clean, unique probabilities per player.
+
+--------------------------------------------------
+DO NOT TOUCH
+--------------------------------------------------
+
+server/mlb/calibration.ts
+server/mlb/probability.ts
+server/mlb/paEstimator.ts
+server/mlb/markets.ts (math logic)
+
+--------------------------------------------------
+PHASE 1 — SIGNAL INTEGRITY (BLOCKER)
+--------------------------------------------------
+
+1. Remove ALL fallback probability logic
+
+Search entire repo for:
+- ?? 18
+- || 18
+- any hardcoded probability defaults
+
+DELETE all of them.
+
+System must NEVER fabricate probability.
+
+--------------------------------------------------
+
+2. Enforce strict engine input validation
+
+Before calling engine:
+
+REQUIRE:
+- playerId
+- gameId
+- battingOrderSlot (infer if needed)
+- currentStats (AB, H, etc.)
+- inning + top/bottom
+
+If ANY missing:
+→ SKIP PLAYER
+→ DO NOT CREATE SIGNAL
+
+--------------------------------------------------
+
+3. Build deterministic playerContext
+
+For each player:
+
+const playerContext = {
+  playerId,
+  gameId,
+  battingOrderSlot,
+  stats,
+  inning,
+  pitcherContext,
+  parkFactor,
+}
+
+NO shared references
+NO mutation across players
+
+--------------------------------------------------
+
+4. Force independent engine execution
+
+For each player:
+
+const probability = runEngine(playerContext)
+
+if (!Number.isFinite(probability)) → SKIP
+
+--------------------------------------------------
+
+5. Decouple odds from probability
+
+const probability = runEngine(...)
+
+let edge = null
+
+if (odds exist) {
+  edge = calculateEdge(probability, odds)
+}
+
+RETURN:
+{
+  playerId,
+  gameId,
+  probability,
+  edge,
+  odds
+}
+
+NEVER:
+if (!odds) return fallbackProbability
+
+--------------------------------------------------
+
+6. Fix signal array mapping
+
+Each push MUST be new object:
+
+signals.push({
+  playerId,
+  probability,
+  edge,
+  ...
+})
+
+NO shared objects
+NO index reuse bugs
+
+--------------------------------------------------
+
+7. Add response-level validation
+
+Before returning /api/mlb/live-signals:
+
+signals = signals.filter(sig =>
+  sig.playerId &&
+  Number.isFinite(sig.probability) &&
+  sig.probability >= 0 &&
+  sig.probability <= 100 &&
+  sig.gameId === selectedGameId
+)
+
+--------------------------------------------------
+
+8. Add debug logging (TEMP)
+
+For each player:
+
+console.log({
+  playerId,
+  probability,
+  inputs: playerContext
+})
+
+--------------------------------------------------
+
+PHASE 1 SUCCESS CRITERIA
+--------------------------------------------------
+
+- NO repeated probabilities across players
+- NO constant values like 18%
+- Some players may have NO signal (this is correct)
+- Probability distribution looks natural (20–80 spread)
+
+--------------------------------------------------
+PHASE 2 — UX + PRODUCT COMPLETION
+--------------------------------------------------
+
+ONLY START AFTER PHASE 1 IS VERIFIED
+
+1. Fix game chips
+
+- AWAY @ HOME (abbreviations)
+- inline score
+- inning/status below
+- no blank values
+
+--------------------------------------------------
+
+2. Add premium metadata
+
+- park factor badge
+- pitcher name
+- weather summary
+
+Fallback to neutral badges if missing
+
+--------------------------------------------------
+
+3. Strict signal rendering
+
+Frontend validation:
+
+- playerId exists
+- market exists
+- line != null
+- enginePct is number
+- edge is number OR null
+- gameId matches selectedGameId
+
+If none valid:
+→ show "No live edges detected yet"
+
+--------------------------------------------------
+
+4. Upgrade matchup card
+
+Sections:
+
+- Header (player, teams, inning)
+- Matchup context (order, score, side)
+- Live stats (AB, H, TB, etc.)
+- Pitcher context
+- Park/weather
+- Market selector
+- Lines OR manual input
+- Prediction panel
+
+--------------------------------------------------
+
+5. Manual fallback (CRITICAL)
+
+If NO odds:
+
+Show inputs:
+
+REQUIRED:
+- Line
+- Over Odds
+
+OPTIONAL (prefill if available):
+- Batting Order
+- AB
+- Hits
+- TB
+- BB
+- K
+- RBI
+- SB
+- Inning
+- Top/Bottom
+
+Enable Calculate when:
+Line + Over Odds exist
+
+--------------------------------------------------
+
+6. Calculate flow
+
+POST /api/mlb/calculate with:
+
+- playerContext
+- selectedMarket
+- line
+- odds (manual OR sportsbook)
+
+Render result immediately
+
+--------------------------------------------------
+
+FINAL SUCCESS CRITERIA
+--------------------------------------------------
+
+- Clean, unique probabilities per player
+- No fallback values anywhere
+- Odds optional, not required
+- UI matches NBA quality
+- Manual mode fully functional
+- No fake signals ever shown
