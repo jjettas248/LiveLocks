@@ -137,8 +137,8 @@ export async function registerRoutes(
 
   const ADMIN_TIER_PRICES: Record<string, { label: string; pricePerMonth: number; stripePriceId: string | null }> = {
     "":      { label: "Free",                pricePerMonth: 0,  stripePriceId: null },
-    "all":   { label: "Pro ($40/mo)",        pricePerMonth: 40, stripePriceId: process.env.STRIPE_PRO_PRICE_ID        ?? "price_1T6hh82ceUNmv10tdIMnFF5N" },
-    "elite": { label: "All Sports ($65/mo)", pricePerMonth: 65, stripePriceId: process.env.STRIPE_ALL_SPORTS_PRICE_ID ?? "price_1T6hh92ceUNmv10tShQlLUYt" },
+    "all":   { label: "Pro ($40/mo)",        pricePerMonth: 40, stripePriceId: process.env.STRIPE_PRO_PRICE_ID        || "price_1T6hh82ceUNmv10tdIMnFF5N" },
+    "elite": { label: "All Sports ($65/mo)", pricePerMonth: 65, stripePriceId: process.env.STRIPE_ALL_SPORTS_PRICE_ID || "price_1T6hh92ceUNmv10tShQlLUYt" },
   };
 
   app.post("/api/admin/change-tier", requireAdmin, async (req, res) => {
