@@ -130,15 +130,15 @@ export async function registerRoutes(
   // STRIPE AUDIT
   // Client: getUncachableStripeClient() via Replit Connector — no STRIPE_SECRET_KEY env var
   // Existing calls: checkout.sessions, billingPortal.sessions, products/prices (setup-products)
-  // Price IDs (hardcoded in PLAN_META): all=$40 price_1T6fl12cW8Vmrgt3B6ffBIuw, elite=$65 price_1T6fly2cW8Vmrgt3WU9uHL7L
+  // Price IDs (env: STRIPE_PRO_PRICE_ID for all=$40, STRIPE_ALL_SPORTS_PRICE_ID for elite=$65)
   // User schema: subscriptionTier (null/"all"/"elite"), stripeCustomerId, stripeSubscriptionId, playsUsed
   // Storage: setUserSubscriptionTier, updateUserStripeCustomer, resetUserPlays
   // stripeCustomerId: yes, on user object
 
   const ADMIN_TIER_PRICES: Record<string, { label: string; pricePerMonth: number; stripePriceId: string | null }> = {
     "":      { label: "Free",                pricePerMonth: 0,  stripePriceId: null },
-    "all":   { label: "Pro ($40/mo)",        pricePerMonth: 40, stripePriceId: "price_1T6fl12cW8Vmrgt3B6ffBIuw" },
-    "elite": { label: "All Sports ($65/mo)", pricePerMonth: 65, stripePriceId: "price_1T6fly2cW8Vmrgt3WU9uHL7L" },
+    "all":   { label: "Pro ($40/mo)",        pricePerMonth: 40, stripePriceId: process.env.STRIPE_PRO_PRICE_ID        ?? "price_1T6hh82ceUNmv10tdIMnFF5N" },
+    "elite": { label: "All Sports ($65/mo)", pricePerMonth: 65, stripePriceId: process.env.STRIPE_ALL_SPORTS_PRICE_ID ?? "price_1T6hh92ceUNmv10tShQlLUYt" },
   };
 
   app.post("/api/admin/change-tier", requireAdmin, async (req, res) => {

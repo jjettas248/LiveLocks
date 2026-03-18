@@ -4,8 +4,8 @@ import { storage } from "./storage";
 import { getUncachableStripeClient } from "./stripeClient";
 
 const PLAN_META = {
-  all:   { name: "Pro – LiveLocks",        description: "Unlimited NBA + NCAAB Live analytics, 2H Plays, Parlay Builder, SMS Alerts, Push Notifications", amount: 4000, priceId: "price_1T6fl12cW8Vmrgt3B6ffBIuw" },
-  elite: { name: "All Sports – LiveLocks", description: "Everything in Pro + MLB Live prop predictions + Priority SMS",                                     amount: 6500, priceId: "price_1T6fly2cW8Vmrgt3WU9uHL7L" },
+  all:   { name: "Pro – LiveLocks",        description: "Unlimited NBA + NCAAB Live analytics, 2H Plays, Parlay Builder, SMS Alerts, Push Notifications", amount: 4000, priceId: process.env.STRIPE_PRO_PRICE_ID        ?? "price_1T6hh82ceUNmv10tdIMnFF5N" },
+  elite: { name: "All Sports – LiveLocks", description: "Everything in Pro + MLB Live prop predictions + Priority SMS",                                     amount: 6500, priceId: process.env.STRIPE_ALL_SPORTS_PRICE_ID ?? "price_1T6hh92ceUNmv10tShQlLUYt" },
 };
 
 async function getPriceIdForTier(tier: "all" | "elite"): Promise<string> {
@@ -13,6 +13,9 @@ async function getPriceIdForTier(tier: "all" | "elite"): Promise<string> {
 }
 
 export async function registerStripeRoutes(app: import("express").Express) {
+  console.log("[stripe] Pro:", process.env.STRIPE_PRO_PRICE_ID ?? "fallback");
+  console.log("[stripe] All Sports:", process.env.STRIPE_ALL_SPORTS_PRICE_ID ?? "fallback");
+
   app.post("/api/stripe/checkout", requireAuth, async (req: Request, res: Response) => {
     const { tier } = req.body;
     if (!tier || !PLAN_META[tier as keyof typeof PLAN_META]) {
@@ -25,7 +28,12 @@ export async function registerStripeRoutes(app: import("express").Express) {
       const user = await storage.getUserById(userId);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const priceId = await getPriceIdForTier(tier as "all" | "elite");
+      const plan = tier as "all" | "elite";
+      if (!PLAN_META[plan]) {
+        console.error("[stripe] Invalid plan:", plan);
+        return res.status(400).json({ error: "Invalid plan" });
+      }
+      const priceId = await getPriceIdForTier(plan);
       const origin = req.headers.origin || `${req.protocol}://${req.headers.host}`;
       const meta = PLAN_META[tier as keyof typeof PLAN_META];
 
