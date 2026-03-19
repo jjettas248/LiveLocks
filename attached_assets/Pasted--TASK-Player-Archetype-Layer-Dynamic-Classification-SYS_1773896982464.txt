@@ -1,0 +1,98 @@
+# TASK: Player Archetype Layer (Dynamic Classification)
+
+## SYSTEM:
+Core Engine (NBA)
+
+## OBJECTIVE:
+Introduce dynamic player archetype classification to adjust projections and probability outputs based on player role and volatility.
+
+## CONTEXT:
+Current engine is:
+- Stat-driven
+- Context-aware (tempo + calibration)
+
+Missing:
+- Player behavior modeling
+
+This task must NOT break existing pipeline order.
+
+## REQUIREMENTS:
+
+-------------------------------------
+1) Archetype Classification (NO HARDCODING)
+-------------------------------------
+
+File: server/storage.ts
+
+function getPlayerArchetype(
+  avgMinutes: number,
+  perMinuteProduction: number
+): string {
+
+  if (avgMinutes >= 34 && perMinuteProduction >= 1.1) return "superstar";
+  if (avgMinutes >= 32) return "primary";
+  if (avgMinutes >= 26) return "role";
+  if (avgMinutes >= 18) return "rotation";
+
+  return "volatile";
+}
+
+-------------------------------------
+2) Projection Adjustment (PRE-ANCHOR)
+-------------------------------------
+
+After usage compression (Task #25), before market anchoring:
+
+const archetype = getPlayerArchetype(avgMinutes, blendedPerMin);
+
+if (archetype === "superstar") expectedFromHere *= 1.08;
+if (archetype === "primary") expectedFromHere *= 1.03;
+
+-------------------------------------
+3) Unders Suppression (POST-CALIBRATION)
+-------------------------------------
+
+After calibration and clamp:
+
+if (direction === "UNDER") {
+  if (archetype === "volatile") probability *= 0.88;
+  if (archetype === "rotation") probability *= 0.93;
+}
+
+Re-clamp:
+
+probability = Math.max(2, Math.min(98, probability));
+
+-------------------------------------
+4) Debug Output
+-------------------------------------
+
+Add:
+
+archetype: string
+
+-------------------------------------
+5) Safety Constraints
+-------------------------------------
+
+- Do NOT hardcode player names
+- Do NOT change calibration logic
+- Do NOT move pipeline steps
+- Do NOT modify analytics or routes
+- Do NOT introduce DB writes
+
+-------------------------------------
+## SUCCESS CRITERIA:
+
+- Superstar unders decrease
+- Volatile player misses decrease
+- High-confidence errors (>75%) reduce
+- Engine stability improves across days
+
+-------------------------------------
+## OUTPUT:
+
+- Archetype function
+- Projection adjustment code
+- Probability suppression code
+- Debug field added
