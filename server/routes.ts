@@ -338,7 +338,7 @@ export async function registerRoutes(
     try {
       const today = new Date();
       const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-      const scheduleUrl = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${dateStr}&hydrate=linescore`;
+      const scheduleUrl = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${dateStr}&hydrate=linescore,probablePitcher,weather,venue`;
       const response = await fetch(scheduleUrl, {
         headers: { "User-Agent": "LiveLocks/1.0" },
         signal: AbortSignal.timeout(8000),
@@ -359,8 +359,31 @@ export async function registerRoutes(
           const homeScore: number = linescore.teams?.home?.runs ?? 0;
           const awayScore: number = linescore.teams?.away?.runs ?? 0;
           const cachedState = mlbGameCache.gameState[gameId];
+
+          // Probable pitchers
+          const awayPitcherObj = game.teams?.away?.probablePitcher;
+          const homePitcherObj = game.teams?.home?.probablePitcher;
+          const awayPitcher: string = awayPitcherObj?.fullName ?? "";
+          const homePitcher: string = homePitcherObj?.fullName ?? "";
+          const awayPitcherHand: string = awayPitcherObj?.pitchHand?.code ?? "";
+          const homePitcherHand: string = homePitcherObj?.pitchHand?.code ?? "";
+
+          // Weather summary (temp + condition)
+          const weatherData = game.weather ?? {};
+          const weatherParts: string[] = [];
+          if (weatherData.temp) weatherParts.push(`${weatherData.temp}°F`);
+          if (weatherData.condition) weatherParts.push(weatherData.condition);
+          if (weatherData.wind) weatherParts.push(weatherData.wind);
+          const weatherSummary: string = weatherParts.join(", ");
+
+          // Venue / park info
+          const parkName: string = game.venue?.name ?? "";
+          const parkFactor: number | null = null;
+
           games.push({
             gameId,
+            awayAbbr: game.teams?.away?.team?.abbreviation ?? "",
+            homeAbbr: game.teams?.home?.team?.abbreviation ?? "",
             homeTeam: game.teams?.home?.team?.abbreviation ?? "",
             awayTeam: game.teams?.away?.team?.abbreviation ?? "",
             homeName: game.teams?.home?.team?.name ?? "",
@@ -370,7 +393,14 @@ export async function registerRoutes(
             inning: cachedState?.inning ?? inning,
             isTopInning: cachedState?.isTopInning ?? isTopInning,
             status: state === "Live" ? "live" : "preview",
-            inRegisty: registeredIds.has(gameId),
+            inRegistry: registeredIds.has(gameId),
+            parkName,
+            parkFactor,
+            weatherSummary,
+            probableAwayPitcher: awayPitcher,
+            probableHomePitcher: homePitcher,
+            awayPitcherHand,
+            homePitcherHand,
           });
         }
       }
@@ -382,7 +412,7 @@ export async function registerRoutes(
     }
   });
 
-  const mlbLiveStatsCache = new Map<string, { ts: number; players: any[] }>();
+  const mlbLiveStatsCache = new Map<string, { ts: number; players: any[]; allRosterIds: Set<string> }>();
   const MLB_LIVE_STATS_TTL = 30_000;
 
   app.get("/api/mlb/live-stats/:gameId", requireAuth, async (req, res) => {
@@ -428,7 +458,12 @@ export async function registerRoutes(
         }
       }
       players.sort((a, b) => (a.battingOrderSlot || 99) - (b.battingOrderSlot || 99));
-      mlbLiveStatsCache.set(gameId, { ts: Date.now(), players });
+      const allRosterIds = new Set<string>(players.map((p: any) => String(p.playerId)));
+      for (const side of ["away", "home"] as const) {
+        const pitchers: number[] = data.teams?.[side]?.pitchers ?? [];
+        for (const pid of pitchers) allRosterIds.add(String(pid));
+      }
+      mlbLiveStatsCache.set(gameId, { ts: Date.now(), players, allRosterIds });
       return res.json(players);
     } catch (e: any) {
       console.error("[mlb/live-stats]", e.message);
@@ -441,20 +476,101 @@ export async function registerRoutes(
 
   app.get("/api/mlb/live-signals/:gameId", requireAuth, async (req, res) => {
     const gameId = req.params.gameId as string;
+
+    let gameStatus = "";
+    const cachedLiveGamesList = mlbLiveGamesCache.get("games");
+    if (cachedLiveGamesList) {
+      const liveGame = cachedLiveGamesList.games.find((g: any) => String(g.gameId) === gameId);
+      gameStatus = liveGame?.status ?? "";
+    } else {
+      try {
+        const schedUrl = `https://statsapi.mlb.com/api/v1/game/${gameId}/feed/live`;
+        const schedRes = await fetch(schedUrl, {
+          headers: { "User-Agent": "LiveLocks/1.0" },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (schedRes.ok) {
+          const schedData = (await schedRes.json()) as any;
+          const abstractState: string = schedData.gameData?.status?.abstractGameState ?? "";
+          gameStatus = abstractState === "Live" ? "live" : abstractState === "Preview" ? "preview" : abstractState.toLowerCase().replace(/\s+/g, "_");
+        }
+      } catch { /* fallback: gameStatus stays "" */ }
+    }
+
+    if (gameStatus !== "live" && gameStatus !== "in_progress") {
+      console.log(`[MLB signals] Game ${gameId} status="${gameStatus}" — returning empty`);
+      mlbSignalsCache.delete(gameId);
+      return res.json({ signals: [], updatedAt: 0 });
+    }
+
     const cached = mlbSignalsCache.get(gameId);
     if (cached && Date.now() - cached.ts < MLB_SIGNALS_TTL) {
       return res.json({ signals: cached.signals, updatedAt: cached.updatedAt });
     }
+
     const entry = mlbEdgeCache.get(gameId);
     const allOutputs = entry?.outputs ?? [];
     const updatedAt = entry?.updatedAt ?? 0;
 
-    const signals = allOutputs
-      .filter((o) => o.bookLine > 0 && (o.calibratedProbabilityOver > 0 || o.calibratedProbabilityUnder > 0))
-      .filter((o) => Math.abs(o.edge) >= 5)
+    let rosterPlayerIds: Set<string>;
+    const liveStatsEntry = mlbLiveStatsCache.get(gameId);
+    if (liveStatsEntry?.allRosterIds && liveStatsEntry.allRosterIds.size > 0) {
+      rosterPlayerIds = liveStatsEntry.allRosterIds;
+    } else {
+      try {
+        const boxUrl = `https://statsapi.mlb.com/api/v1/game/${gameId}/boxscore`;
+        const boxRes = await fetch(boxUrl, {
+          headers: { "User-Agent": "LiveLocks/1.0" },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (boxRes.ok) {
+          const boxData = (await boxRes.json()) as any;
+          rosterPlayerIds = new Set<string>();
+          for (const side of ["away", "home"] as const) {
+            const batters: number[] = boxData.teams?.[side]?.batters ?? [];
+            const pitchers: number[] = boxData.teams?.[side]?.pitchers ?? [];
+            for (const id of [...batters, ...pitchers]) rosterPlayerIds.add(String(id));
+          }
+        } else {
+          rosterPlayerIds = new Set<string>();
+        }
+      } catch {
+        rosterPlayerIds = new Set<string>();
+      }
+    }
+
+    for (const o of allOutputs) {
+      console.log(`[MLB signal debug] ${JSON.stringify({
+        playerId: o.playerId, playerName: o.playerName, market: o.market, gameId: o.gameId,
+        playerContext: {
+          bookLine: o.bookLine, projection: o.projection,
+          completedAB: o.completedAB, remainingPA: o.remainingPA,
+          expectedHits: o.expectedHits, adjustedHitRate: o.adjustedHitRate,
+          mode: o.mode, twoABRuleSatisfied: o.twoABRuleSatisfied,
+          modifiers: o.modifiers,
+          projectionLog: o.projectionLog
+        },
+        probabilityOutput: {
+          rawProbOver: o.rawProbabilityOver, rawProbUnder: o.rawProbabilityUnder,
+          calibProbOver: o.calibratedProbabilityOver, calibProbUnder: o.calibratedProbabilityUnder,
+          rawProb: o.rawProbability, calibProb: o.calibratedProbability,
+          edge: o.edge, side: o.recommendedSide, tier: o.confidenceTier,
+          bookImplied: o.bookImplied
+        },
+        suppressed: o.suppressed, suppressionReason: o.suppressionReason,
+        inRoster: rosterPlayerIds.has(String(o.playerId))
+      })}`);
+    }
+
+    const rawSignals = allOutputs
+      .filter((o) => o.calibratedProbabilityOver > 0 || o.calibratedProbabilityUnder > 0)
       .map((o) => {
         const hitProb =
           o.recommendedSide === "OVER" ? o.calibratedProbabilityOver : o.calibratedProbabilityUnder;
+
+        const hasOdds = o.bookLine > 0;
+        const edgeValue = hasOdds && Number.isFinite(o.edge) ? Math.round(Math.abs(o.edge) * 10) / 10 : null;
+
         let tier: "green" | "yellow" | "teal" | "red";
         if (o.recommendedSide === "UNDER" && hitProb >= 85) tier = "red";
         else if (hitProb >= 85) tier = "green";
@@ -464,18 +580,59 @@ export async function registerRoutes(
           playerId: o.playerId,
           playerName: o.playerName,
           market: o.market,
-          bookLine: o.bookLine,
+          bookLine: hasOdds ? o.bookLine : null,
           enginePct: Math.round(hitProb * 10) / 10,
-          edge: Math.round(Math.abs(o.edge) * 10) / 10,
+          edge: edgeValue,
+          odds: hasOdds ? { bookLine: o.bookLine } : null,
           recommendedSide: o.recommendedSide,
           inning: mlbGameCache.gameState[gameId]?.inning ?? 0,
           tier,
-          gameId,
+          gameId: o.gameId,
         };
       });
 
-    mlbSignalsCache.set(gameId, { ts: Date.now(), signals, updatedAt });
-    return res.json({ signals, updatedAt });
+    const filteredSignals = rawSignals.filter((sig) => {
+      if (!sig.playerId) {
+        console.warn(`[MLB signals] Dropping signal: missing playerId`);
+        return false;
+      }
+      if (!Number.isFinite(sig.enginePct)) {
+        console.warn(`[MLB signals] Dropping signal for ${sig.playerId}: non-finite probability`);
+        return false;
+      }
+      if (sig.enginePct < 0 || sig.enginePct > 100) {
+        console.warn(`[MLB signals] Dropping signal for ${sig.playerId}: probability ${sig.enginePct} outside 0-100`);
+        return false;
+      }
+      if (sig.gameId !== gameId) {
+        console.warn(`[MLB signals] Dropping signal for ${sig.playerId}: gameId mismatch (${sig.gameId} !== ${gameId})`);
+        return false;
+      }
+      return true;
+    });
+
+    const rosterLockedSignals = rosterPlayerIds.size > 0
+      ? filteredSignals.filter((sig) => {
+          if (!rosterPlayerIds.has(String(sig.playerId))) {
+            console.warn(`[MLB signals] Dropping signal for ${sig.playerId} "${sig.playerName}": not in game ${gameId} roster`);
+            return false;
+          }
+          return true;
+        })
+      : filteredSignals;
+
+    if (rosterLockedSignals.length > 5) {
+      const probValues = rosterLockedSignals.map((s) => s.enginePct);
+      const uniqueProbs = new Set(probValues);
+      if (uniqueProbs.size <= 2) {
+        console.error(`[MLB signals] PROBABILITY_COLLISION_DETECTED for game ${gameId} — ${rosterLockedSignals.length} signals but only ${uniqueProbs.size} unique probability values: [${probValues.join(", ")}]`);
+        mlbSignalsCache.set(gameId, { ts: Date.now(), signals: [], updatedAt });
+        return res.json({ signals: [], updatedAt });
+      }
+    }
+
+    mlbSignalsCache.set(gameId, { ts: Date.now(), signals: rosterLockedSignals, updatedAt });
+    return res.json({ signals: rosterLockedSignals, updatedAt });
   });
 
   // ── MLB Routes (Admin-only in Phase A) ──────────────────────────────────────
@@ -514,10 +671,14 @@ export async function registerRoutes(
         return [];
       };
 
-      const market = safeStr("market") as MLBMarket;
-      if (!market || !ALL_MLB_MARKETS.includes(market)) {
-        return res.status(400).json({ error: `Invalid market. Must be one of: ${ALL_MLB_MARKETS.join(", ")}` });
+      const MARKET_ALIASES: Record<string, MLBMarket> = { walks_allowed: "hits_allowed" };
+      const ACCEPTED_MARKETS = [...ALL_MLB_MARKETS, ...Object.keys(MARKET_ALIASES)];
+      const rawMarket = safeStr("market");
+      if (!rawMarket || !ACCEPTED_MARKETS.includes(rawMarket)) {
+        return res.status(400).json({ error: `Invalid market. Must be one of: ${ACCEPTED_MARKETS.join(", ")}` });
       }
+      const displayMarket = rawMarket;
+      const market: MLBMarket = MARKET_ALIASES[rawMarket] ?? rawMarket as MLBMarket;
 
       const rawLine = safeFloat("line", NaN);
       const bookLine = Number.isFinite(rawLine) ? rawLine : safeFloat("bookLine", NaN);
@@ -651,7 +812,7 @@ export async function registerRoutes(
         output.bookImplied = bookImplied;
       }
       recordMLBDiagnostic(output);
-      return res.json(output);
+      return res.json({ ...output, market: displayMarket });
     } catch (err: any) {
       console.error("[MLB props]", err.message);
       return res.status(400).json({ error: err.message || "MLB prop engine error" });

@@ -7,6 +7,8 @@ type MLBGame = {
   gameId: string;
   homeTeam: string;
   awayTeam: string;
+  awayAbbr: string;
+  homeAbbr: string;
   homeName: string;
   awayName: string;
   homeScore: number;
@@ -14,6 +16,13 @@ type MLBGame = {
   inning: number;
   isTopInning: boolean;
   status: "live" | "preview";
+  parkName?: string;
+  parkFactor?: number | null;
+  weatherSummary?: string;
+  probableAwayPitcher?: string;
+  probableHomePitcher?: string;
+  awayPitcherHand?: string;
+  homePitcherHand?: string;
 };
 
 type MLBBatter = {
@@ -35,9 +44,10 @@ type MLBSignal = {
   playerId: string;
   playerName: string;
   market: string;
-  bookLine: number;
+  bookLine: number | null;
   enginePct: number;
-  edge: number;
+  edge: number | null;
+  odds: { bookLine: number } | null;
   recommendedSide: "OVER" | "UNDER" | "NO_EDGE";
   inning: number;
   tier: "green" | "yellow" | "teal" | "red";
@@ -99,6 +109,7 @@ const MARKET_LABELS: Record<string, string> = {
   batter_strikeouts: "K (Batter)",
   pitcher_strikeouts: "K (Pitcher)",
   hits_allowed: "Hits Allowed",
+  walks_allowed: "Walks Allowed",
   home_runs: "Home Runs",
   hrr: "HRR",
 };
@@ -110,11 +121,21 @@ const INNING_TABS: { label: string; min: number }[] = [
   { label: "7th Inning", min: 7 },
 ];
 
-const CALC_MARKETS = [
+const BATTER_MARKETS = [
   { value: "hits", label: "Hits" },
   { value: "total_bases", label: "Total Bases" },
-  { value: "batter_strikeouts", label: "Strikeouts" },
+  { value: "home_runs", label: "Home Runs" },
+  { value: "hrr", label: "HRR" },
+  { value: "batter_strikeouts", label: "Strikeouts (B)" },
 ];
+
+const PITCHER_MARKETS = [
+  { value: "pitcher_strikeouts", label: "K (Pitcher)" },
+  { value: "walks_allowed", label: "Walks Allowed" },
+  { value: "hits_allowed", label: "Hits Allowed" },
+];
+
+const ALL_CALC_MARKETS = [...BATTER_MARKETS, ...PITCHER_MARKETS];
 
 const SPORTSBOOK_LABELS: Record<string, string> = {
   fanduel: "FanDuel",
@@ -141,13 +162,17 @@ function formatOdds(n: number): string {
   return n > 0 ? `+${n}` : String(n);
 }
 
-function isValidSignal(sig: MLBSignal, selectedGameId: string): boolean {
+const PITCHER_MARKET_SET = new Set(["pitcher_strikeouts", "hits_allowed", "walks_allowed"]);
+
+function isValidSignal(sig: MLBSignal, selectedGameId: string, rosterPlayerIds?: Set<string>): boolean {
   if (!sig.playerId) return false;
   if (!sig.market) return false;
   if (sig.bookLine == null) return false;
-  if (typeof sig.enginePct !== "number") return false;
-  if (typeof sig.edge !== "number") return false;
+  if (typeof sig.enginePct !== "number" || !Number.isFinite(sig.enginePct)) return false;
+  if (sig.enginePct < 0 || sig.enginePct > 100) return false;
+  if (sig.edge !== null && sig.edge !== undefined && (typeof sig.edge !== "number" || !Number.isFinite(sig.edge))) return false;
   if (sig.gameId !== selectedGameId) return false;
+  if (rosterPlayerIds && rosterPlayerIds.size > 0 && !PITCHER_MARKET_SET.has(sig.market) && !rosterPlayerIds.has(String(sig.playerId))) return false;
   return true;
 }
 
@@ -173,7 +198,7 @@ export default function MlbLivePage() {
   const [inningTabMin, setInningTabMin] = useState<number>(0);
   const [boxExpanded, setBoxExpanded] = useState(true);
   const [selectedPlayer, setSelectedPlayer] = useState<MLBBatter | null>(null);
-  const [calcMarket, setCalcMarket] = useState("hits");
+  const [selectedMarket, setSelectedMarket] = useState("hits");
   const [selectedLine, setSelectedLine] = useState<{ book: string; line: number; overOdds: number; underOdds: number } | null>(null);
   const [calcResult, setCalcResult] = useState<CalcResult | null>(null);
   const [manualMode, setManualMode] = useState(false);
@@ -210,11 +235,11 @@ export default function MlbLivePage() {
   const selectedGame = selectedGameRaw ?? selectedGameRef.current;
 
   const opponentTeam = selectedPlayer && selectedGame
-    ? (selectedPlayer.teamAbbr === selectedGame.homeTeam ? selectedGame.awayTeam : selectedGame.homeTeam)
+    ? (selectedPlayer.teamAbbr === selectedGame.homeAbbr ? selectedGame.awayAbbr : selectedGame.homeAbbr)
     : null;
 
   const { data: oddsData, isLoading: oddsLoading } = useQuery<Record<string, OddsEntry>>({
-    queryKey: ["/api/mlb/odds", selectedPlayer?.teamAbbr, opponentTeam, selectedPlayer?.playerName, calcMarket],
+    queryKey: ["/api/mlb/odds", selectedPlayer?.teamAbbr, opponentTeam, selectedPlayer?.playerName, selectedMarket],
     enabled: !!selectedPlayer && !!opponentTeam,
     refetchInterval: 120_000,
     queryFn: async () => {
@@ -222,7 +247,7 @@ export default function MlbLivePage() {
         playerTeam: selectedPlayer!.teamAbbr,
         opponentTeam: opponentTeam!,
         playerName: selectedPlayer!.playerName,
-        statType: calcMarket,
+        statType: selectedMarket,
         inPlay: selectedGame?.status === "live" ? "true" : "false",
       });
       const res = await fetch(`/api/mlb/odds?${params}`, { credentials: "include" });
@@ -243,7 +268,7 @@ export default function MlbLivePage() {
         const body = {
           playerId: selectedPlayer.playerId,
           playerName: selectedPlayer.playerName,
-          market: calcMarket,
+          market: selectedMarket,
           line,
           overOdds,
           team: selectedPlayer.teamAbbr,
@@ -270,7 +295,7 @@ export default function MlbLivePage() {
       const body = {
         playerId: selectedPlayer.playerId,
         playerName: selectedPlayer.playerName,
-        market: calcMarket,
+        market: selectedMarket,
         line: selectedLine.line,
         overOdds: selectedLine.overOdds,
         team: selectedPlayer.teamAbbr,
@@ -286,6 +311,7 @@ export default function MlbLivePage() {
           bb: selectedPlayer.bb,
           k: selectedPlayer.k,
           sb: selectedPlayer.sb,
+          rbi: selectedPlayer.rbi,
         },
       };
       const res = await apiRequest("POST", "/api/mlb/calculate", body);
@@ -301,7 +327,7 @@ export default function MlbLivePage() {
     setCalcResult(null);
     setManualMode(false);
     setManualInputs(defaultManualInputs(selectedPlayer, selectedGame));
-  }, [calcMarket]);
+  }, [selectedMarket]);
 
   useEffect(() => {
     setSelectedLine(null);
@@ -316,7 +342,7 @@ export default function MlbLivePage() {
     setSelectedPlayer(null);
     setCalcResult(null);
     setSelectedLine(null);
-    setCalcMarket("hits");
+    setSelectedMarket("hits");
     setManualMode(false);
     setManualInputs(defaultManualInputs(null, null));
   }, [selectedGameId]);
@@ -344,7 +370,8 @@ export default function MlbLivePage() {
         (s) => s.playerId === sig.playerId && s.tier === existing
       );
       const existingEdge = existingSignal?.edge ?? 0;
-      if (sig.edge > existingEdge) {
+      const sigEdge = sig.edge ?? 0;
+      if (sigEdge > existingEdge) {
         playerTierMap.set(sig.playerId, sig.tier);
       }
     }
@@ -352,8 +379,10 @@ export default function MlbLivePage() {
 
   const currentInning = selectedGame?.inning ?? 0;
 
+  const rosterPlayerIds = new Set<string>(players.map((p) => String(p.playerId)));
+
   const validatedSignals = selectedGameId
-    ? signals.filter((sig) => isValidSignal(sig, selectedGameId))
+    ? signals.filter((sig) => isValidSignal(sig, selectedGameId, rosterPlayerIds))
     : [];
 
   const filteredSignals = inningTabMin === 0
@@ -388,27 +417,28 @@ export default function MlbLivePage() {
           <div className="flex gap-2 flex-wrap">
             {games.map((game) => {
               const isActive = game.gameId === selectedGameId;
+              const awayAbbr = game.awayAbbr;
+              const homeAbbr = game.homeAbbr;
+              const pitcherBadge = game.probableAwayPitcher || game.probableHomePitcher
+                ? `${game.probableAwayPitcher?.split(" ").pop() ?? "—"} vs ${game.probableHomePitcher?.split(" ").pop() ?? "—"}`
+                : null;
               return (
                 <button
                   key={game.gameId}
                   data-testid={`chip-mlb-game-${game.gameId}`}
                   onClick={() => setSelectedGameId(game.gameId)}
-                  className={`px-3 py-2 rounded-lg border text-xs font-medium transition-all ${
+                  className={`px-3 py-2 rounded-lg border text-xs font-medium transition-all text-left ${
                     isActive
                       ? "border-primary bg-primary/10 text-primary shadow-sm"
                       : "border-border bg-card text-foreground hover:border-primary/40 hover:bg-muted"
                   }`}
                 >
                   <div className="flex items-center gap-1.5 font-semibold text-xs leading-tight">
-                    <span>{game.awayTeam}</span>
+                    <span>{awayAbbr}</span>
                     <span className="text-muted-foreground">@</span>
-                    <span>{game.homeTeam}</span>
-                  </div>
-                  <div className="flex items-center justify-center gap-1.5 mt-0.5">
-                    <span className="font-mono text-muted-foreground text-[11px]">{game.awayScore}–{game.homeScore}</span>
-                    <span className={`text-[11px] ${
-                      game.status === "live" ? "text-green-500" : "text-muted-foreground"
-                    }`}>
+                    <span>{homeAbbr}</span>
+                    <span className="font-mono text-muted-foreground">{game.awayScore}–{game.homeScore}</span>
+                    <span className={`${game.status === "live" ? "text-green-500" : "text-muted-foreground"}`}>
                       {inningLabel(game)}
                     </span>
                     {game.status === "live" ? (
@@ -416,6 +446,17 @@ export default function MlbLivePage() {
                     ) : (
                       <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-muted text-muted-foreground">PRE</span>
                     )}
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30">
+                      {game.parkName ? game.parkName.split(" ").slice(-1)[0] : "Park TBD"}
+                    </span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30">
+                      {pitcherBadge ?? "SP TBD"}
+                    </span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30">
+                      {game.weatherSummary || "Weather N/A"}
+                    </span>
                   </div>
                 </button>
               );
@@ -428,7 +469,7 @@ export default function MlbLivePage() {
         <>
           <div className="flex items-center gap-3" data-testid="text-mlb-game-header">
             <h2 className="text-sm font-semibold text-foreground">
-              {selectedGame.awayTeam} @ {selectedGame.homeTeam}
+              {selectedGame.awayAbbr} @ {selectedGame.homeAbbr}
             </h2>
             <span className="text-xs text-muted-foreground font-mono">
               {selectedGame.awayScore}–{selectedGame.homeScore}
@@ -436,6 +477,16 @@ export default function MlbLivePage() {
             <span className={`text-xs ${selectedGame.status === "live" ? "text-green-500" : "text-muted-foreground"}`}>
               {inningLabel(selectedGame)}
             </span>
+            {selectedGame.parkName && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground border border-border/40">
+                {selectedGame.parkName}
+              </span>
+            )}
+            {selectedGame.weatherSummary && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground border border-border/40">
+                {selectedGame.weatherSummary}
+              </span>
+            )}
           </div>
 
           <div className="flex gap-1.5 flex-wrap">
@@ -557,11 +608,13 @@ export default function MlbLivePage() {
 
             {!signalsLoading && filteredSignals.length === 0 ? (
               <div className="px-5 py-8 rounded-xl border border-border bg-card text-center" data-testid="text-no-signals">
-                <p className="text-sm font-medium text-foreground">No edge signals yet</p>
+                <p className="text-sm font-medium text-foreground">No live edges detected yet</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {validatedSignals.length === 0
-                    ? "Engine is warming up — signals appear once the orchestrator detects game state changes."
-                    : `${validatedSignals.length} signal${validatedSignals.length !== 1 ? "s" : ""} available but none meet the ${inningTabMin > 0 ? `${inningTabMin}th inning` : ""} filter.`}
+                  {selectedGame.status !== "live"
+                    ? "No live data available yet — signals appear once the game is in progress."
+                    : validatedSignals.length === 0
+                      ? "Engine is warming up — signals appear once the orchestrator detects game state changes."
+                      : `${validatedSignals.length} signal${validatedSignals.length !== 1 ? "s" : ""} available but none meet the ${inningTabMin > 0 ? `${inningTabMin}th inning` : ""} filter.`}
                 </p>
               </div>
             ) : (
@@ -596,12 +649,12 @@ export default function MlbLivePage() {
                         <div className="flex-1 grid grid-cols-2 gap-2 text-xs ml-4">
                           <div className="text-center">
                             <div className="text-muted-foreground mb-0.5">Line</div>
-                            <div className="font-semibold text-foreground">{sig.bookLine}</div>
+                            <div className="font-semibold text-foreground">{sig.bookLine != null ? sig.bookLine : "—"}</div>
                           </div>
                           <div className="text-center">
                             <div className="text-muted-foreground mb-0.5">Edge</div>
                             <div className="font-semibold text-foreground">
-                              +{sig.edge.toFixed(1)}%
+                              {sig.edge != null ? `+${sig.edge.toFixed(1)}%` : "—"}
                             </div>
                           </div>
                         </div>
@@ -609,7 +662,7 @@ export default function MlbLivePage() {
 
                       <div className="flex items-center justify-between pt-1 border-t border-border/30">
                         <span className="text-xs font-bold tracking-wide" style={{ color: style.dot }}>
-                          {sig.recommendedSide} {sig.bookLine}
+                          {sig.recommendedSide}{sig.bookLine != null ? ` ${sig.bookLine}` : ""}
                         </span>
                         <button
                           data-testid={`button-mlb-add-parlay-${sig.playerId}-${sig.market}`}
@@ -643,7 +696,7 @@ export default function MlbLivePage() {
 
               <div className="bg-card border border-border rounded-xl overflow-hidden">
                 <div className="px-4 py-3 border-b border-border/40 flex items-center justify-between">
-                  <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Header Summary</h3>
+                  <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Player Matchup</h3>
                   <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
                     selectedGame.status === "live"
                       ? "bg-green-500/15 text-green-500"
@@ -652,11 +705,12 @@ export default function MlbLivePage() {
                     {selectedGame.status === "live" ? "LIVE" : "PREVIEW"}
                   </span>
                 </div>
+
                 <div className="px-4 py-3 border-b border-border/40 flex items-center gap-3">
                   <div className="flex-1">
                     <div className="text-base font-bold text-foreground" data-testid="text-matchup-player">{selectedPlayer.playerName}</div>
                     <div className="text-xs text-muted-foreground mt-0.5">
-                      {selectedPlayer.teamAbbr} vs {opponentTeam}
+                      {selectedPlayer.teamAbbr} vs {opponentTeam} · #{selectedPlayer.battingOrderSlot}
                     </div>
                   </div>
                   <div className="text-right">
@@ -673,12 +727,12 @@ export default function MlbLivePage() {
                       <div className="font-semibold text-foreground">#{selectedPlayer.battingOrderSlot}</div>
                     </div>
                     <div>
-                      <div className="text-muted-foreground text-[10px]">Side</div>
-                      <div className="font-semibold text-foreground">{selectedGame.isTopInning ? "Top" : "Bottom"} {selectedGame.inning || "—"}</div>
+                      <div className="text-muted-foreground text-[10px]">Half</div>
+                      <div className="font-semibold text-foreground">{selectedGame.isTopInning ? "Top ▲" : "Bottom ▼"} {selectedGame.inning || "—"}</div>
                     </div>
                     <div>
                       <div className="text-muted-foreground text-[10px]">Score</div>
-                      <div className="font-semibold text-foreground">{selectedGame.awayTeam} {selectedGame.awayScore} – {selectedGame.homeTeam} {selectedGame.homeScore}</div>
+                      <div className="font-semibold text-foreground">{selectedGame.awayAbbr} {selectedGame.awayScore} – {selectedGame.homeAbbr} {selectedGame.homeScore}</div>
                     </div>
                     <div>
                       <div className="text-muted-foreground text-[10px]">Status</div>
@@ -687,8 +741,8 @@ export default function MlbLivePage() {
                   </div>
                 </div>
 
-                <div className="px-4 py-3">
-                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Live Stat Summary</div>
+                <div className="px-4 py-3 border-b border-border/40">
+                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Live Stats</div>
                   <div className="grid grid-cols-4 sm:grid-cols-8 gap-2 text-xs">
                     {[
                       { label: "AB", value: selectedPlayer.ab },
@@ -707,26 +761,142 @@ export default function MlbLivePage() {
                     ))}
                   </div>
                 </div>
+
+                <div className="px-4 py-3 border-b border-border/40">
+                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Current Form</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
+                    <div>
+                      <div className="text-muted-foreground text-[10px]">AVG</div>
+                      <div className="font-semibold text-foreground">
+                        {selectedPlayer.ab > 0 ? (selectedPlayer.h / selectedPlayer.ab).toFixed(3) : "—"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-[10px]">SLG</div>
+                      <div className="font-semibold text-foreground">
+                        {selectedPlayer.ab > 0 ? (selectedPlayer.tb / selectedPlayer.ab).toFixed(3) : "—"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-[10px]">PA</div>
+                      <div className="font-semibold text-foreground">
+                        {selectedPlayer.ab + selectedPlayer.bb}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-[10px]">K Rate</div>
+                      <div className="font-semibold text-foreground">
+                        {(selectedPlayer.ab + selectedPlayer.bb) > 0
+                          ? `${((selectedPlayer.k / (selectedPlayer.ab + selectedPlayer.bb)) * 100).toFixed(0)}%`
+                          : "—"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-[10px]">Form</div>
+                      <div className="font-semibold">
+                        {(() => {
+                          if (selectedPlayer.ab === 0) return <span className="text-muted-foreground">No AB</span>;
+                          const avg = selectedPlayer.h / selectedPlayer.ab;
+                          if (avg >= 0.400) return <span className="text-green-500">Hot</span>;
+                          if (avg >= 0.250) return <span className="text-yellow-500">Warm</span>;
+                          return <span className="text-red-400">Cold</span>;
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    Last AB: {selectedPlayer.ab > 0
+                      ? (selectedPlayer.h > 0 ? `${selectedPlayer.h}-for-${selectedPlayer.ab}` : `0-for-${selectedPlayer.ab}`)
+                      : "No at-bats yet"}
+                  </div>
+                </div>
+
+                <div className="px-4 py-3 border-b border-border/40">
+                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Park / Weather</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                    <div>
+                      <div className="text-muted-foreground text-[10px]">Venue</div>
+                      <div className="font-semibold text-foreground">{selectedGame.parkName || "Unknown"}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-[10px]">Park Factor</div>
+                      <div className="font-semibold text-foreground">{selectedGame.parkFactor != null ? selectedGame.parkFactor.toFixed(2) : "Neutral"}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-[10px]">Weather</div>
+                      <div className="font-semibold text-foreground">{selectedGame.weatherSummary || "Not available"}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="px-4 py-3">
+                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Pitcher Context</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div className="bg-secondary/30 rounded-lg p-2.5">
+                      <div className="text-muted-foreground text-[10px] mb-1">{selectedGame.awayAbbr} Starter</div>
+                      <div className="font-semibold text-foreground flex items-center gap-1.5">
+                        <span>{selectedGame.probableAwayPitcher || "TBD"}</span>
+                        {selectedGame.awayPitcherHand && (
+                          <span className="text-[9px] px-1 py-0.5 rounded bg-secondary border border-border/30 text-muted-foreground">
+                            {selectedGame.awayPitcherHand === "L" ? "LHP" : selectedGame.awayPitcherHand === "R" ? "RHP" : selectedGame.awayPitcherHand}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="bg-secondary/30 rounded-lg p-2.5">
+                      <div className="text-muted-foreground text-[10px] mb-1">{selectedGame.homeAbbr} Starter</div>
+                      <div className="font-semibold text-foreground flex items-center gap-1.5">
+                        <span>{selectedGame.probableHomePitcher || "TBD"}</span>
+                        {selectedGame.homePitcherHand && (
+                          <span className="text-[9px] px-1 py-0.5 rounded bg-secondary border border-border/30 text-muted-foreground">
+                            {selectedGame.homePitcherHand === "L" ? "LHP" : selectedGame.homePitcherHand === "R" ? "RHP" : selectedGame.homePitcherHand}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="bg-card border border-border rounded-xl p-4 space-y-3">
                 <h3 className="text-sm font-semibold text-foreground">Market</h3>
 
-                <div className="flex gap-1.5 flex-wrap">
-                  {CALC_MARKETS.map((m) => (
-                    <button
-                      key={m.value}
-                      data-testid={`button-market-${m.value}`}
-                      onClick={() => setCalcMarket(m.value)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
-                        calcMarket === m.value
-                          ? "bg-primary text-primary-foreground border-primary"
-                          : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
-                      }`}
-                    >
-                      {m.label}
-                    </button>
-                  ))}
+                <div className="space-y-2">
+                  <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Batters</div>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {BATTER_MARKETS.map((m) => (
+                      <button
+                        key={m.value}
+                        data-testid={`button-market-${m.value}`}
+                        onClick={() => setSelectedMarket(m.value)}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+                          selectedMarket === m.value
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
+                        }`}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider pt-1">Pitchers</div>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {PITCHER_MARKETS.map((m) => (
+                      <button
+                        key={m.value}
+                        data-testid={`button-market-${m.value}`}
+                        onClick={() => setSelectedMarket(m.value)}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+                          selectedMarket === m.value
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
+                        }`}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -749,7 +919,7 @@ export default function MlbLivePage() {
 
                 {!oddsLoading && !manualMode && oddsEntries.length === 0 && (
                   <p className="text-xs text-muted-foreground/60 bg-secondary/50 rounded-lg p-3 border border-border/40" data-testid="text-no-sportsbook-line">
-                    No sportsbook lines found — use manual input below.
+                    No sportsbook line available — enter values manually below.
                   </p>
                 )}
 
@@ -927,34 +1097,41 @@ export default function MlbLivePage() {
                         {calcResult.edge > 0 ? "+" : ""}{calcResult.edge.toFixed(1)}%
                       </div>
                     </div>
-                    {calcResult.market === "hits" && calcResult.expectedHits != null && (
-                      <div className="bg-secondary/40 rounded-lg p-3 text-center">
-                        <div className="text-muted-foreground mb-1">Expected Hits</div>
-                        <div className="font-bold text-foreground text-lg">{calcResult.expectedHits.toFixed(2)}</div>
+                    <div className="bg-secondary/40 rounded-lg p-3 text-center">
+                      <div className="text-muted-foreground mb-1">Book Implied</div>
+                      <div className="font-bold text-foreground text-lg">
+                        {calcResult.bookImplied != null ? `${calcResult.bookImplied.toFixed(1)}%` : "—"}
                       </div>
-                    )}
+                    </div>
+                    <div className="bg-secondary/40 rounded-lg p-3 text-center">
+                      <div className="text-muted-foreground mb-1">Over%</div>
+                      <div className="font-bold text-foreground text-lg">{calcResult.calibratedProbabilityOver.toFixed(1)}%</div>
+                    </div>
+                    <div className="bg-secondary/40 rounded-lg p-3 text-center">
+                      <div className="text-muted-foreground mb-1">Under%</div>
+                      <div className="font-bold text-foreground text-lg">{calcResult.calibratedProbabilityUnder.toFixed(1)}%</div>
+                    </div>
                     {calcResult.remainingPA != null && (
                       <div className="bg-secondary/40 rounded-lg p-3 text-center">
                         <div className="text-muted-foreground mb-1">Remaining PA</div>
-                        <div className="font-bold text-foreground text-lg">{calcResult.remainingPA.toFixed(1)}</div>
-                      </div>
-                    )}
-                    {calcResult.market === "hits" && calcResult.adjustedHitRate != null && (
-                      <div className="bg-secondary/40 rounded-lg p-3 text-center">
-                        <div className="text-muted-foreground mb-1">Adjusted Hit Rate</div>
-                        <div className="font-bold text-foreground text-lg">{(calcResult.adjustedHitRate * 100).toFixed(1)}%</div>
+                        <div className="font-bold text-foreground text-lg">{calcResult.remainingPA}</div>
                       </div>
                     )}
                   </div>
 
-                  <div className="flex items-center justify-end pt-1 border-t border-border/30">
-                    <button
-                      data-testid="button-mlb-add-parlay-calc"
-                      className="text-xs px-3 py-1 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                    >
-                      + Parlay
-                    </button>
-                  </div>
+                  {calcResult.explanationBullets.length > 0 && (
+                    <div className="space-y-1.5">
+                      <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Analysis</h4>
+                      <ul className="space-y-1">
+                        {calcResult.explanationBullets.map((bullet, i) => (
+                          <li key={i} className="text-xs text-muted-foreground flex gap-2">
+                            <span className="text-primary mt-0.5">·</span>
+                            <span>{bullet}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
