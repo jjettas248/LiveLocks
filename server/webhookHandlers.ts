@@ -46,13 +46,15 @@ export class WebhookHandlers {
         const customerId = typeof subscription?.customer === "string" ? subscription.customer : "";
         const status = subscription?.status;
 
-        if (customerId && previousAttributes?.metadata?.tier) {
-          const previousTier = previousAttributes.metadata.tier;
+        if (customerId) {
           const newTier = subscription?.metadata?.tier;
-
-          if (previousTier === "all" && newTier === "elite") {
-            const user = await storage.getUserByStripeCustomerId(customerId);
-            if (user && !user.sentAllSportsWelcome) {
+          const user = await storage.getUserByStripeCustomerId(customerId);
+          if (user && newTier) {
+            if (newTier === "all" && !user.sentProWelcome) {
+              sendProWelcomeEmail(user.email)
+                .then(() => storage.updateUserEmailFlags(user.id, { sentProWelcome: true }).catch(console.error))
+                .catch(console.error);
+            } else if (newTier === "elite" && !user.sentAllSportsWelcome) {
               sendAllSportsWelcomeEmail(user.email)
                 .then(() => storage.updateUserEmailFlags(user.id, { sentAllSportsWelcome: true }).catch(console.error))
                 .catch(console.error);

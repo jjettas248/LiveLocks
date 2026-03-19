@@ -214,6 +214,8 @@ export async function registerAuthRoutes(app: import("express").Express) {
 
     console.log("EMAIL VERIFIED:", user.email);
 
+    // Welcome email sent here (not at /register) because the app gates access
+    // behind email verification — sending welcome before verification would be premature.
     sendWelcomeEmail(user.email)
       .then(() => storage.updateUserEmailFlags(user.id, { sentWelcome: true }).catch(console.error))
       .catch(console.error);
