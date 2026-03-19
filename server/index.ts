@@ -296,20 +296,14 @@ app.use((req, res, next) => {
     const now = new Date();
     const h24 = now.getTime() - 24 * 60 * 60 * 1000;
     const h12 = now.getTime() - 12 * 60 * 60 * 1000;
-    const d3  = now.getTime() - 3  * 24 * 60 * 60 * 1000;
-    const d7  = now.getTime() - 7  * 24 * 60 * 60 * 1000;
 
+    // Only silence welcome/walkthrough — these were already handled by the old email flow.
+    // sentDay3 and sentWinback are intentionally NOT backfilled so the cron can send them.
     const rWelcome     = await db.update(users).set({ sentWelcome: true })
       .where(and(eq(users.emailVerified, true), eq(users.sentWelcome, false), lte(users.createdAt, new Date(h24))))
       .returning({ id: users.id });
     const rWalkthrough = await db.update(users).set({ sentWalkthrough: true })
       .where(and(eq(users.emailVerified, true), eq(users.sentWalkthrough, false), lte(users.createdAt, new Date(h12))))
-      .returning({ id: users.id });
-    const rDay3        = await db.update(users).set({ sentDay3: true })
-      .where(and(eq(users.emailVerified, true), isNull(users.subscriptionTier), eq(users.sentDay3, false), lte(users.createdAt, new Date(d3))))
-      .returning({ id: users.id });
-    const rWinback     = await db.update(users).set({ sentWinback: true })
-      .where(and(eq(users.emailVerified, true), isNull(users.subscriptionTier), eq(users.sentWinback, false), lte(users.createdAt, new Date(d7))))
       .returning({ id: users.id });
     const rPro         = await db.update(users).set({ sentProWelcome: true })
       .where(and(eq(users.subscriptionTier, "all"), eq(users.sentProWelcome, false)))
@@ -318,7 +312,39 @@ app.use((req, res, next) => {
       .where(and(eq(users.subscriptionTier, "elite"), eq(users.sentAllSportsWelcome, false)))
       .returning({ id: users.id });
 
-    console.log(`[email-backfill] Complete — welcome:${rWelcome.length} walkthrough:${rWalkthrough.length} day3:${rDay3.length} winback:${rWinback.length} proWelcome:${rPro.length} allSportsWelcome:${rAllSports.length} rows updated`);
+    console.log(`[email-backfill] Complete — welcome:${rWelcome.length} walkthrough:${rWalkthrough.length} proWelcome:${rPro.length} allSportsWelcome:${rAllSports.length} rows updated`);
+  }
+
+  // One-time correction: the initial backfill (2026-03-19) wrongly set sentDay3/sentWinback
+  // to true for pre-existing users without actually sending those emails.
+  // This resets those flags so the 15-min cron can send the correct emails.
+  // Scoped to users created before the system went live — safe to run on every startup.
+  async function runEmailFlagCorrection(): Promise<void> {
+    const systemLaunchDate = new Date("2026-03-19T06:00:00Z");
+
+    const rDay3 = await db.update(users).set({ sentDay3: false })
+      .where(and(
+        isNull(users.subscriptionTier),
+        eq(users.emailVerified, true),
+        eq(users.sentDay3, true),
+        gte(users.playsUsed, 1),
+        lte(users.createdAt, systemLaunchDate)
+      ))
+      .returning({ id: users.id });
+
+    const rWinback = await db.update(users).set({ sentWinback: false })
+      .where(and(
+        isNull(users.subscriptionTier),
+        eq(users.emailVerified, true),
+        eq(users.sentWinback, true),
+        eq(users.playsUsed, 0),
+        lte(users.createdAt, systemLaunchDate)
+      ))
+      .returning({ id: users.id });
+
+    if (rDay3.length > 0 || rWinback.length > 0) {
+      console.log(`[email-correction] Unsilenced day3:${rDay3.length} winback:${rWinback.length} users for cron pickup`);
+    }
   }
 
   async function runWallHitBlast(): Promise<void> {
@@ -452,6 +478,7 @@ app.use((req, res, next) => {
   // Startup sequence: backfill → blast → schedule 15-min lifecycle cron
   (async () => {
     try { await runEmailFlagBackfill(); } catch (e: any) { console.error("[email-backfill] failed:", e.message); }
+    try { await runEmailFlagCorrection(); } catch (e: any) { console.error("[email-correction] failed:", e.message); }
     try { await runWallHitBlast(); } catch (e: any) { console.error("[startup blast] failed:", e.message); }
     cron.schedule("*/15 * * * *", () => runLifecycleCron().catch(console.error), { timezone: "America/New_York" });
     console.log("[email-cron] Lifecycle cron scheduled (*/15)");

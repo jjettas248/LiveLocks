@@ -1,0 +1,100 @@
+# TASK: LiveLocks Free Tier Conversion Rebuild
+
+## SYSTEM:
+Conversion System / UX Layer
+
+## OBJECTIVE:
+Replace the current lifetime 3-play free model with a stronger activation and conversion model:
+- 3 free plays per day
+- daily reset
+- locked premium plays shown in UI
+- upgrade modal after daily limit is reached
+- NO missed-play alerts yet
+- NO 5-day expiration on free access
+
+## CONTEXT:
+Current issue:
+- Free users only get 3 total lifetime plays
+- This does not create a daily habit loop
+- Many users never fully activate
+- Checkout flow is being fixed separately and should not be modified here
+- Frontend / pricing structure already exists
+- Goal is to improve activation and paid conversion without breaking current product logic
+
+## REQUIREMENTS:
+
+### 1) Replace lifetime free play limit with daily limit
+- Free users should receive exactly 3 free plays per day
+- Reset usage automatically each calendar day
+- Do not allow rollover of unused plays
+- Pro users remain unlimited
+
+### 2) Preserve current paid tiers
+- Do not change Pro or All Sports pricing
+- Do not change Stripe or checkout logic in this task
+
+### 3) Add clear daily usage UI
+Show free users:
+- plays used today (ex: 2 / 3 today)
+- when their plays reset (ex: “Resets tomorrow” or equivalent)
+- if they hit limit, show that they have used all daily free plays
+
+### 4) Add locked premium plays section
+For free users only:
+- show a locked/blurred section beneath accessible plays
+- text example:
+  “🔒 More live edges detected”
+  “Upgrade to unlock full access”
+- do not reveal full premium details before upgrade
+- this should create visible FOMO without breaking UX
+
+### 5) Add upgrade modal after limit is reached
+When a free user attempts to access beyond 3 daily plays:
+- show upgrade modal
+- explain they have used all 3 free plays for today
+- reinforce that Pro users get full access to all live edges
+- include clear CTA to upgrade
+
+### 6) Add lightweight proof copy in dashboard
+For free users, add concise conversion copy near results or paywall:
+- “Free users get 3 plays per day”
+- “Pro users unlock all live edges”
+- Keep copy short and clean
+
+### 7) Do NOT add a time-limited free trial
+- Do not expire free access after 5 days
+- Do not add account-level countdown timers
+- The free tier should remain ongoing with a daily 3-play reset
+
+### 8) Data model / backend behavior
+Implement daily reset logic in a durable way:
+- usage should be tracked by date
+- if stored plays-used model is lifetime-based now, refactor it to daily-based safely
+- avoid hacks that require manual resets
+- admin tools can still reset if already supported, but default behavior must be automatic daily reset
+
+## DO NOT:
+- Break Stripe or checkout flows
+- Change pricing amounts
+- Add missed-play alerts
+- Add SMS or email automation in this task
+- Create duplicate play-limit systems
+- Leave old lifetime-limit logic active anywhere
+- Introduce hardcoded date-reset hacks
+
+## SUCCESS CRITERIA:
+- Free users get 3 plays per day, every day
+- Daily usage resets automatically
+- Pro users remain unlimited
+- Free users see locked premium plays in UI
+- Upgrade modal appears after daily free limit is reached
+- No 5-day expiration exists
+- Existing paid checkout flow remains untouched
+- TypeScript compiles cleanly
+- No duplicate limit logic remains in the codebase
+
+## OUTPUT:
+- Exact code changes
+- File-level diffs
+- Any data model changes required
+- No placeholders
