@@ -93,12 +93,16 @@ export function UpgradeModal({ playsUsed, limit, onClose }: UpgradeModalProps) {
           >
             <div className="flex items-center gap-1.5 mb-1">
               <Trophy className="w-4 h-4 text-[#00d4aa]" />
-              <span className="text-sm font-bold text-white">Pro</span>
+              <span className="text-sm font-bold text-white">PRO</span>
             </div>
             <div className="text-2xl font-black text-white">
-              $40<span className="text-xs font-normal text-[#71717a]">/mo</span>
+              $50<span className="text-xs font-normal text-[#71717a]">/mo</span>
             </div>
-            <p className="text-[11px] text-[#71717a] mt-1">NBA + NCAAB + 2H plays</p>
+            <ul className="mt-1.5 space-y-0.5">
+              <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#00d4aa] shrink-0" />Live halftime edges</li>
+              <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#00d4aa] shrink-0" />NBA & NCAAB 2H plays</li>
+              <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#00d4aa] shrink-0" />Real-time probability engine</li>
+            </ul>
             {loadingTier === "all" && (
               <div className="absolute inset-0 flex items-center justify-center bg-[#111]/80 rounded-xl">
                 <div className="w-5 h-5 border-2 border-[#00d4aa] border-t-transparent rounded-full animate-spin" />
@@ -117,12 +121,17 @@ export function UpgradeModal({ playsUsed, limit, onClose }: UpgradeModalProps) {
             </div>
             <div className="flex items-center gap-1.5 mb-1">
               <Zap className="w-4 h-4 text-[#f59e0b]" />
-              <span className="text-sm font-bold text-white">All Sports</span>
+              <span className="text-sm font-bold text-white">ALL SPORTS</span>
             </div>
             <div className="text-2xl font-black text-white">
               $65<span className="text-xs font-normal text-[#71717a]">/mo</span>
             </div>
-            <p className="text-[11px] text-[#71717a] mt-1">All sports + SMS alerts</p>
+            <ul className="mt-1.5 space-y-0.5">
+              <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#f59e0b] shrink-0" />NBA, NCAAB, MLB</li>
+              <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#f59e0b] shrink-0" />SMS alerts for every play</li>
+              <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#f59e0b] shrink-0" />All Pro features included</li>
+            </ul>
+            <p className="text-[10px] text-[#f59e0b]/70 mt-1.5 italic leading-tight">By the time the line moves — you're already on it.</p>
             {loadingTier === "elite" && (
               <div className="absolute inset-0 flex items-center justify-center bg-[#111]/80 rounded-xl">
                 <div className="w-5 h-5 border-2 border-[#f59e0b] border-t-transparent rounded-full animate-spin" />

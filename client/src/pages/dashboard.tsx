@@ -259,15 +259,22 @@ export default function Dashboard() {
   const [autoRunResult, setAutoRunResult] = useState<{ probability: number; projection: number; line: number; direction: string; playerName: string; statType: string; edge: number } | null>(null);
   const [autoRunFallback, setAutoRunFallback] = useState<string | null>(null);
   const [showConfidenceBadge, setShowConfidenceBadge] = useState(false);
+  const [scanningEdges, setScanningEdges] = useState(false);
   const autoRunFiredRef = useRef(false);
 
   const autoRunBestSignal = async () => {
+    setScanningEdges(true);
+    const scanStart = Date.now();
     try {
       const token = getAuthToken();
       const headers: Record<string, string> = {};
       if (token) headers["Authorization"] = `Bearer ${token}`;
       const res = await fetch("/api/halftime-plays", { credentials: "include", headers });
       if (!res.ok) {
+        const elapsed = Date.now() - scanStart;
+        const minDelay = 300 + Math.random() * 500;
+        if (elapsed < minDelay) await new Promise(r => setTimeout(r, minDelay - elapsed));
+        setScanningEdges(false);
         setAutoRunFallback("No strong edges right now — check again shortly");
         return;
       }
@@ -291,6 +298,10 @@ export default function Dashboard() {
         });
 
       if (qualifiedPlays.length === 0) {
+        const elapsed = Date.now() - scanStart;
+        const minDelay = 300 + Math.random() * 500;
+        if (elapsed < minDelay) await new Promise(r => setTimeout(r, minDelay - elapsed));
+        setScanningEdges(false);
         setAutoRunFallback("No strong edges right now — check again shortly");
         return;
       }
@@ -301,6 +312,11 @@ export default function Dashboard() {
       const projection = parseFloat(best.projection ?? best.expectedTotal ?? "0");
       const direction = best.betDirection?.toUpperCase() ?? (prob > 50 ? "OVER" : "UNDER");
       const edge = parseFloat(best.edge ?? "0");
+
+      const elapsed = Date.now() - scanStart;
+      const minDelay = 300 + Math.random() * 500;
+      if (elapsed < minDelay) await new Promise(r => setTimeout(r, minDelay - elapsed));
+      setScanningEdges(false);
 
       setAutoRunResult({
         probability: prob,
@@ -313,6 +329,10 @@ export default function Dashboard() {
       });
       setShowConfidenceBadge(true);
     } catch {
+      const elapsed = Date.now() - scanStart;
+      const minDelay = 300 + Math.random() * 500;
+      if (elapsed < minDelay) await new Promise(r => setTimeout(r, minDelay - elapsed));
+      setScanningEdges(false);
       setAutoRunFallback("No strong edges right now — check again shortly");
     }
   };
@@ -1622,6 +1642,16 @@ export default function Dashboard() {
           />
         )}
 
+        {scanningEdges && (
+          <div
+            data-testid="scanning-edges-loader"
+            className="rounded-xl border border-[#27272a] bg-[#0a0a0a] p-5 flex items-center gap-3 animate-pulse"
+          >
+            <Loader2 className="w-5 h-5 text-[#00d4aa] animate-spin" />
+            <span className="text-sm font-medium text-[#a1a1aa]">Scanning live edges...</span>
+          </div>
+        )}
+
         {autoRunResult && (
           <div
             data-testid="auto-run-result"
@@ -1676,6 +1706,18 @@ export default function Dashboard() {
             className="rounded-xl border border-[#27272a] bg-[#0a0a0a] p-4 text-center"
           >
             <p className="text-sm text-[#71717a]">{autoRunFallback}</p>
+          </div>
+        )}
+
+        {isFreeUser && (autoRunResult || autoRunFallback) && (
+          <div
+            data-testid="sms-teaser-free"
+            className="rounded-lg border border-[#27272a] bg-[#111] px-4 py-2.5 flex items-center gap-2"
+          >
+            <Bell className="w-4 h-4 text-[#f59e0b] shrink-0" />
+            <p className="text-xs text-[#71717a]">
+              <span className="text-[#a1a1aa] font-medium">Pro users already got alerted on plays like this.</span>
+            </p>
           </div>
         )}
 
