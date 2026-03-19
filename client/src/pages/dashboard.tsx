@@ -16,6 +16,7 @@ import { NCAABAdminTab } from "@/components/ncaab-admin-tab";
 import { AnalyticsTab } from "@/components/analytics-tab";
 import MlbLivePage from "@/pages/mlb-live";
 import { WelcomeBanner } from "@/components/welcome-banner";
+import { RecentWinsStrip } from "@/components/RecentWinsStrip";
 import { AlertsOnboardingModal } from "@/components/alerts-onboarding-modal";
 import { useAuth } from "@/hooks/use-auth";
 import { hasProAccess } from "@/lib/tierUtils";
@@ -2796,6 +2797,8 @@ export default function Dashboard() {
                     Model confidence is strong on this play
                   </div>
                 )}
+
+                {result && <RecentWinsStrip />}
 
                 {/* EV% Box — shown directly below probability summary when a sportsbook is selected */}
                 {selectedSportsbook && selectedSportsbook !== "manual" && oddsData && result && (() => {
