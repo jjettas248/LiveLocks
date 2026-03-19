@@ -38,10 +38,10 @@ async function main() {
     try {
       await sendWallEmail(user.email);
       await db.update(users).set({ sentWall: true }).where(eq(users.id, user.id));
-      console.log(`[blast] user ${user.id} (${user.email}) — wall email sent`);
+      console.log(`[blast] user ${user.id} — wall sent`);
       sent++;
     } catch (err: any) {
-      console.error(`[blast] user ${user.id} (${user.email}) — failed: ${err.message}`);
+      console.error(`[blast] user ${user.id} — wall failed: ${err.message}`);
       failed++;
     }
   }

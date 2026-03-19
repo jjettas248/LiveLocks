@@ -299,20 +299,14 @@ app.use((req, res, next) => {
     const d3  = now.getTime() - 3  * 24 * 60 * 60 * 1000;
     const d7  = now.getTime() - 7  * 24 * 60 * 60 * 1000;
 
-    await db.update(users).set({ sentWelcome: true })
-      .where(and(eq(users.emailVerified, true), eq(users.sentWelcome, false), lte(users.createdAt, new Date(h24))));
-    await db.update(users).set({ sentWalkthrough: true })
-      .where(and(eq(users.emailVerified, true), eq(users.sentWalkthrough, false), lte(users.createdAt, new Date(h12))));
-    await db.update(users).set({ sentDay3: true })
-      .where(and(eq(users.emailVerified, true), isNull(users.subscriptionTier), eq(users.sentDay3, false), lte(users.createdAt, new Date(d3))));
-    await db.update(users).set({ sentWinback: true })
-      .where(and(eq(users.emailVerified, true), isNull(users.subscriptionTier), eq(users.sentWinback, false), lte(users.createdAt, new Date(d7))));
-    await db.update(users).set({ sentProWelcome: true })
-      .where(and(eq(users.subscriptionTier, "all"), eq(users.sentProWelcome, false)));
-    await db.update(users).set({ sentAllSportsWelcome: true })
-      .where(and(eq(users.subscriptionTier, "elite"), eq(users.sentAllSportsWelcome, false)));
+    const rWelcome     = await pool.query(`UPDATE users SET sent_welcome=true            WHERE email_verified=true  AND sent_welcome=false            AND created_at < $1`, [new Date(h24)]);
+    const rWalkthrough = await pool.query(`UPDATE users SET sent_walkthrough=true        WHERE email_verified=true  AND sent_walkthrough=false        AND created_at < $1`, [new Date(h12)]);
+    const rDay3        = await pool.query(`UPDATE users SET sent_day3=true               WHERE email_verified=true  AND subscription_tier IS NULL AND sent_day3=false    AND created_at < $1`, [new Date(d3)]);
+    const rWinback     = await pool.query(`UPDATE users SET sent_winback=true            WHERE email_verified=true  AND subscription_tier IS NULL AND sent_winback=false  AND created_at < $1`, [new Date(d7)]);
+    const rPro         = await pool.query(`UPDATE users SET sent_pro_welcome=true        WHERE subscription_tier='all'   AND sent_pro_welcome=false`);
+    const rAllSports   = await pool.query(`UPDATE users SET sent_all_sports_welcome=true WHERE subscription_tier='elite' AND sent_all_sports_welcome=false`);
 
-    console.log("[email-backfill] Complete — existing users marked as emailed (no sends)");
+    console.log(`[email-backfill] Complete — welcome:${rWelcome.rowCount} walkthrough:${rWalkthrough.rowCount} day3:${rDay3.rowCount} winback:${rWinback.rowCount} proWelcome:${rPro.rowCount} allSportsWelcome:${rAllSports.rowCount} rows updated`);
   }
 
   async function runWallHitBlast(): Promise<void> {

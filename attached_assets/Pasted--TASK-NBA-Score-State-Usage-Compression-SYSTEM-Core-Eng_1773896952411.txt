@@ -1,0 +1,86 @@
+# TASK: NBA Score-State Usage Compression
+
+## SYSTEM:
+Core Engine (NBA)
+
+## OBJECTIVE:
+Adjust expected stat production based on score differential to reflect reduced usage and involvement in blowouts and preserved usage in close games.
+
+## CONTEXT:
+Current engine includes:
+- Tempo multiplier (possessions per minute)
+- Market anchoring
+- Calibration pipeline
+
+Missing:
+- Player usage reduction in blowouts
+
+This must be applied at the projection level only.
+
+## REQUIREMENTS:
+
+-------------------------------------
+1) Create Usage Compression Function
+-------------------------------------
+
+File: server/storage.ts
+
+function usageCompressionMultiplier(scoreDiff: number): number {
+  const diff = Math.abs(scoreDiff);
+
+  if (diff >= 25) return 0.65;
+  if (diff >= 20) return 0.72;
+  if (diff >= 15) return 0.82;
+  if (diff >= 10) return 0.92;
+
+  return 1.0;
+}
+
+-------------------------------------
+2) Apply to Projection (CRITICAL LOCATION)
+-------------------------------------
+
+Find expectedFromHere calculation.
+
+AFTER tempoMultiplier:
+
+const usageMultiplier = usageCompressionMultiplier(parsedScoreDiff);
+
+expectedFromHere =
+  blendedPerMin *
+  remainingMinutes *
+  contextModifier *
+  tempoMultiplier *
+  usageMultiplier;
+
+-------------------------------------
+3) Debug Output
+-------------------------------------
+
+Add to CalcDebug:
+
+usageMultiplier: number
+
+-------------------------------------
+4) Safety Constraints
+-------------------------------------
+
+- Do NOT modify probability pipeline
+- Do NOT change calibration logic
+- Do NOT move market anchoring
+- Do NOT touch analytics or routes
+
+-------------------------------------
+## SUCCESS CRITERIA:
+
+- Blowout overs decrease
+- Late-game projections are reduced appropriately
+- Close games remain unaffected
+- No TypeScript errors
+
+-------------------------------------
+## OUTPUT:
+
+- usageCompressionMultiplier function
+- updated expectedFromHere calculation
+- debug field added

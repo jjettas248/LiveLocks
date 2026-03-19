@@ -191,6 +191,12 @@ export async function registerAuthRoutes(app: import("express").Express) {
       console.error("[email] Failed to send verification email:", emailErr.message);
     }
 
+    // Welcome email sent at registration (not at verify-email). sentWelcome flag
+    // prevents double-send if the lifecycle cron fires before the user verifies.
+    sendWelcomeEmail(user.email)
+      .then(() => storage.updateUserEmailFlags(user.id, { sentWelcome: true }).catch(console.error))
+      .catch(console.error);
+
     req.session.userId = user.id;
     const token = signToken(user.id);
     return res.status(201).json({ ...safeUser(user), token });
@@ -213,12 +219,6 @@ export async function registerAuthRoutes(app: import("express").Express) {
     });
 
     console.log("EMAIL VERIFIED:", user.email);
-
-    // Welcome email sent here (not at /register) because the app gates access
-    // behind email verification — sending welcome before verification would be premature.
-    sendWelcomeEmail(user.email)
-      .then(() => storage.updateUserEmailFlags(user.id, { sentWelcome: true }).catch(console.error))
-      .catch(console.error);
 
     req.session.userId = user.id;
 
