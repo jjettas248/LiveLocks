@@ -1,0 +1,216 @@
+#51B — MASTER EMAIL LIFECYCLE WIRING + WALL HIT BLAST + ROI PROOF
+
+## SYSTEM:
+Retention / Conversion / Growth
+
+## OBJECTIVE:
+Fully wire the LiveLocks Resend lifecycle so all 7 existing email templates fire on the correct triggers, prevent duplicate sends with per-user flags, replace the old daily cron with a 15-minute lifecycle cron that respects the actual free-play limit of 3, and immediately send the Wall Hit email to all eligible free users using ROI proof image injection.
+
+## CONTEXT:
+Current state:
+- `server/email.ts` already contains all 7 email functions
+- `server/auth.ts` currently sends welcome + howto too early on signup
+- `server/auth.ts` sends wall email on limit hit but has no dedup flag
+- `server/index.ts` currently has a daily 9am ET lifecycle cron using outdated play-count assumptions
+- `server/webhookHandlers.ts` already handles plan upgrades but welcome emails need flag-based dedup
+- current free-play limit is 3
+- current stored paid tiers are `pro` and `all_sports` if code is normalized, but verify actual stored values before editing
+- ROI image file exists and must be served publicly from the app
+- Resend templates are already wired in; DO NOT rebuild email templates from scratch unless specifically required for wall email ROI injection
+
+Relevant files:
+- `shared/schema.ts`
+- `server/storage.ts`
+- `server/auth.ts`
+- `server/email.ts`
+- `server/webhookHandlers.ts`
+- `server/index.ts`
+- `server/routes.ts`
+- `package.json`
+- `client/public/`
+
+## REQUIREMENTS:
+
+### 1) Add email flag columns to users schema
+Add the following boolean columns to the users table with defaults `false`:
+- `sentWelcome`
+- `sentWalkthrough`
+- `sentDay3`
+- `sentWinback`
+- `sentWall`
+- `sentProWelcome`
+- `sentAllSportsWelcome`
+
+If the naming convention in the schema is snake_case, keep it consistent everywhere. Use whatever naming style the codebase already uses.
+
+Do NOT remove or rename existing columns.
+
+### 2) Add storage support for updating email flags
+In `server/storage.ts`, add a helper method that updates any subset of email flags for a user, e.g.:
+- `updateUserEmailFlags(userId, updates)`
+
+This must be reusable across auth, cron, and webhook flows.
+
+### 3) Fix signup email behavior
+In `server/auth.ts`:
+- On signup, send **welcome only**
+- Do NOT send how-to on signup
+- After successful send, set `sentWelcome = true`
+- Wrap send in try/catch so signup never crashes if email fails
+- If send fails, do not mark the flag true
+
+### 4) Keep how-to walkthrough as a delayed lifecycle email
+The how-to walkthrough must NOT send immediately on signup.
+It should send from the lifecycle cron when:
+- user is on free plan
+- `playsUsed === 0`
+- at least 12 hours have passed since signup
+- `sentWalkthrough === false`
+
+After successful send, set `sentWalkthrough = true`
+
+### 5) Fix wall email trigger and dedup
+In `server/auth.ts` / `requirePlayAccess`:
+- use the actual `FREE_PLAY_LIMIT = 3`
+- if a free user has hit the limit and `sentWall === false`, send wall email and then set `sentWall = true`
+- do not send wall email to paid users
+- do not send twice
+
+### 6) Fix upgrade welcome dedup in Stripe webhook flow
+In `server/webhookHandlers.ts`:
+- when a user upgrades to Pro, send Pro welcome only if `sentProWelcome === false`, then set it true
+- when a user upgrades to All Sports, send All Sports welcome only if `sentAllSportsWelcome === false`, then set it true
+- if existing code uses webhook metadata or lookup logic, preserve it
+- do not duplicate sends on renewals or unrelated subscription updates
+
+### 7) Replace old daily cron with a 15-minute lifecycle cron
+In `server/index.ts`, replace the old daily lifecycle cron logic with a cron that runs every 15 minutes.
+
+This cron must evaluate all free users and send the following emails exactly once using flags:
+
+#### Walkthrough
+Trigger:
+- free plan
+- `playsUsed === 0`
+- `hoursSince(createdAt) >= 12`
+- `sentWalkthrough === false`
+
+#### Day 3 Nudge
+Trigger:
+- free plan
+- `playsUsed > 0`
+- `playsUsed < FREE_PLAY_LIMIT`
+- `daysSince(createdAt) >= 3`
+- `sentDay3 === false`
+
+#### Winback
+Trigger:
+- free plan
+- `playsUsed === 0`
+- `daysSince(createdAt) >= 7`
+- `sentWinback === false`
+
+#### Wall Hit backup
+Trigger:
+- free plan
+- `playsUsed >= FREE_PLAY_LIMIT`
+- `sentWall === false`
+
+For each send:
+- send correct existing email function
+- set matching flag only on success
+- log success/failure
+- never crash the cron loop for one bad user
+
+### 8) Use the actual free-play limit everywhere
+Search all lifecycle trigger logic and replace outdated assumptions like 15 or <=14 with the real limit of 3.
+
+This includes:
+- wall trigger logic
+- day 3 logic
+- any playsRemaining calculations used in variables
+
+### 9) ROI image injection into wall email
+Add the ROI image to public assets:
+- copy the attached ROI image into `client/public/roi-march-16.png`
+
+Public URL must become:
+- `https://livelocksai.app/roi-march-16.png`
+
+Then modify the **wall email sending function** in `server/email.ts` so the sent Wall Hit email includes the ROI image and proof block.
+
+Because Resend templates are already wired, preserve as much of the existing wall email system as possible. If template-based content cannot support this image block from code, switch only the wall email function to inline HTML while keeping the rest of the email system unchanged.
+
+Insert the following proof section near the top of the wall email body:
+
+- "Here’s what the model did yesterday:"
+- ROI image
+- "+$1,053.75 profit"
+- "79.3% hit rate"
+- "+51.4% ROI"
+- "Every play tracked. No cherry picking."
+
+This is only for the wall email.
+
+### 10) Immediate one-time Wall Hit blast on startup
+Add a one-time startup routine in `server/index.ts` that runs after server boot and sends the Wall Hit email to all currently eligible free users where:
+
+- free plan
+- `playsUsed >= FREE_PLAY_LIMIT` OR `playsUsed >= FREE_PLAY_LIMIT - 1`
+- `sentWall === false`
+- email exists
+
+After success, set `sentWall = true`
+
+This startup blast should:
+- run once on boot
+- log how many eligible users were found
+- log send success/failure per user
+- not crash the app if one send fails
+
+### 11) Respect current paid plan naming
+Before editing trigger logic, inspect the actual stored tier values in the schema/storage/webhook code.
+Use the actual values already used by the app.
+Do NOT invent new tier strings.
+If the app truly uses `pro` and `all_sports`, keep those.
+If the app truly uses another existing internal mapping, preserve it.
+
+### 12) Add npm script for manual lifecycle testing if useful
+If it helps without duplicating systems, add a safe script entry in `package.json` for testing lifecycle or wall blast manually.
+Do not create a parallel email system.
+
+### 13) Logging
+Add useful logs:
+- lifecycle cron start/end
+- wall blast start/end
+- email sent success/failure
+- flags updated
+- count of users processed per segment
+
+## DO NOT:
+- Break existing auth logic
+- Break sports engine logic
+- Break Stripe billing logic
+- Introduce duplicate lifecycle systems
+- Create hardcoded fake plan values
+- Rebuild all email templates from scratch
+- Remove existing Resend integration
+- Send duplicate emails to the same user if a flag is already true
+
+## SUCCESS CRITERIA:
+- All 7 lifecycle emails are wired to the correct trigger moments
+- Welcome sends on signup only
+- How-to sends later via cron, not on signup
+- Wall email sends once when user hits or is near the real free-play limit
+- ROI image renders in the wall email
+- Pro / All Sports welcomes send once after upgrade
+- 15-minute lifecycle cron replaces outdated daily logic
+- Eligible current free users receive the one-time Wall Hit blast
+- No duplicate emails are sent once flags are set
+- App compiles and runs without breaking existing flows
+
+## OUTPUT:
+- Exact code changes
+- File-level diffs
+- No placeholders
+- Brief summary of what changed and how to test it
