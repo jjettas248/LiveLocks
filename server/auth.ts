@@ -6,7 +6,7 @@ import rateLimit from "express-rate-limit";
 import { storage } from "./storage";
 import { insertUserEmailPasswordSchema } from "@shared/schema";
 import type { User } from "@shared/schema";
-import { sendWelcomeEmail, sendHowToEmail, sendWallEmail, sendVerificationEmail } from "./email";
+import { sendWelcomeEmail, sendWallEmail, sendVerificationEmail } from "./email";
 
 declare module "express-session" {
   interface SessionData {
@@ -214,8 +214,9 @@ export async function registerAuthRoutes(app: import("express").Express) {
 
     console.log("EMAIL VERIFIED:", user.email);
 
-    sendWelcomeEmail(user.email).catch(console.error);
-    sendHowToEmail(user.email).catch(console.error);
+    sendWelcomeEmail(user.email)
+      .then(() => storage.updateUserEmailFlags(user.id, { sentWelcome: true }).catch(console.error))
+      .catch(console.error);
 
     req.session.userId = user.id;
 
@@ -375,10 +376,12 @@ export async function requirePlayAccess(req: Request, res: Response, next: NextF
 
   if (user.playsUsed < FREE_PLAY_LIMIT) {
     await storage.incrementPlaysUsed(user.id);
-    if (user.playsUsed + 1 === FREE_PLAY_LIMIT) {
-      sendWallEmail(user.email).catch((emailErr: any) => {
-        console.error("[email] Failed to send wall email:", emailErr.message);
-      });
+    if (!user.sentWall && user.playsUsed + 1 >= FREE_PLAY_LIMIT) {
+      sendWallEmail(user.email)
+        .then(() => storage.updateUserEmailFlags(user.id, { sentWall: true }).catch(console.error))
+        .catch((emailErr: any) => {
+          console.error("[email] Failed to send wall email:", emailErr.message);
+        });
     }
     return next();
   }

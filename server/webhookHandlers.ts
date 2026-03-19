@@ -29,10 +29,14 @@ export class WebhookHandlers {
 
           const user = await storage.getUserById(userId);
           if (user) {
-            if (tier === "all") {
-              sendProWelcomeEmail(user.email).catch(console.error);
-            } else if (tier === "elite") {
-              sendAllSportsWelcomeEmail(user.email).catch(console.error);
+            if (tier === "all" && !user.sentProWelcome) {
+              sendProWelcomeEmail(user.email)
+                .then(() => storage.updateUserEmailFlags(user.id, { sentProWelcome: true }).catch(console.error))
+                .catch(console.error);
+            } else if (tier === "elite" && !user.sentAllSportsWelcome) {
+              sendAllSportsWelcomeEmail(user.email)
+                .then(() => storage.updateUserEmailFlags(user.id, { sentAllSportsWelcome: true }).catch(console.error))
+                .catch(console.error);
             }
           }
         }
@@ -48,8 +52,10 @@ export class WebhookHandlers {
 
           if (previousTier === "all" && newTier === "elite") {
             const user = await storage.getUserByStripeCustomerId(customerId);
-            if (user) {
-              sendAllSportsWelcomeEmail(user.email).catch(console.error);
+            if (user && !user.sentAllSportsWelcome) {
+              sendAllSportsWelcomeEmail(user.email)
+                .then(() => storage.updateUserEmailFlags(user.id, { sentAllSportsWelcome: true }).catch(console.error))
+                .catch(console.error);
             }
           }
         }

@@ -106,6 +106,7 @@ export interface IStorage {
   getUserByNormalizedEmail(normalizedEmail: string): Promise<User | undefined>;
   getUserByVerificationToken(token: string): Promise<User | undefined>;
   updateUser(userId: number, data: Partial<User>): Promise<void>;
+  updateUserEmailFlags(userId: number, flags: Partial<Pick<User, "sentWelcome" | "sentWalkthrough" | "sentDay3" | "sentWinback" | "sentWall" | "sentProWelcome" | "sentAllSportsWelcome">>): Promise<void>;
   countUnverifiedByFingerprint(fingerprint: string): Promise<number>;
   deleteUnverifiedOlderThan(cutoff: Date): Promise<number>;
   savePlayAlerts(plays: any[]): Promise<void>;
@@ -814,6 +815,11 @@ export class DatabaseStorage implements IStorage {
 
   async updateUser(userId: number, data: Partial<User>): Promise<void> {
     await db.update(users).set(data).where(eq(users.id, userId));
+  }
+
+  async updateUserEmailFlags(userId: number, flags: Partial<Pick<User, "sentWelcome" | "sentWalkthrough" | "sentDay3" | "sentWinback" | "sentWall" | "sentProWelcome" | "sentAllSportsWelcome">>): Promise<void> {
+    if (Object.keys(flags).length === 0) return;
+    await db.update(users).set(flags).where(eq(users.id, userId));
   }
 
   async countUnverifiedByFingerprint(fingerprint: string): Promise<number> {

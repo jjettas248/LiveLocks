@@ -26,6 +26,13 @@ export const users = pgTable("users", {
   normalizedEmail: text("normalized_email").unique(),
   signupFingerprint: text("signup_fingerprint"),
   verificationLastSentAt: timestamp("verification_last_sent_at"),
+  sentWelcome: boolean("sent_welcome").notNull().default(false),
+  sentWalkthrough: boolean("sent_walkthrough").notNull().default(false),
+  sentDay3: boolean("sent_day3").notNull().default(false),
+  sentWinback: boolean("sent_winback").notNull().default(false),
+  sentWall: boolean("sent_wall").notNull().default(false),
+  sentProWelcome: boolean("sent_pro_welcome").notNull().default(false),
+  sentAllSportsWelcome: boolean("sent_all_sports_welcome").notNull().default(false),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });

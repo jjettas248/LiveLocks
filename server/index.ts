@@ -13,7 +13,7 @@ import { getStripeSync } from "./stripeClient";
 import cron from "node-cron";
 import { db, pool } from "./db";
 import { users } from "@shared/schema";
-import { and, between, isNull, eq, gte, lte, sql } from "drizzle-orm";
+import { and, isNull, eq, gte, sql } from "drizzle-orm";
 import {
   sendWelcomeEmail,
   sendHowToEmail,
@@ -290,64 +290,160 @@ app.use((req, res, next) => {
     },
   );
 
-  cron.schedule(
-    "0 9 * * *",
-    async () => {
+  // ─── Email lifecycle: backfill → blast → 15-min cron ───────────────────────
+
+  async function runEmailFlagBackfill(): Promise<void> {
+    const now = new Date();
+    const h24 = now.getTime() - 24 * 60 * 60 * 1000;
+    const h12 = now.getTime() - 12 * 60 * 60 * 1000;
+    const d3  = now.getTime() - 3  * 24 * 60 * 60 * 1000;
+    const d7  = now.getTime() - 7  * 24 * 60 * 60 * 1000;
+
+    const rWelcome     = await pool.query(`UPDATE users SET sent_welcome=true           WHERE email_verified=true AND sent_welcome=false           AND created_at < $1`, [new Date(h24)]);
+    const rWalkthrough = await pool.query(`UPDATE users SET sent_walkthrough=true       WHERE email_verified=true AND sent_walkthrough=false       AND created_at < $1`, [new Date(h12)]);
+    const rDay3        = await pool.query(`UPDATE users SET sent_day3=true              WHERE email_verified=true AND subscription_tier IS NULL AND sent_day3=false    AND created_at < $1`, [new Date(d3)]);
+    const rWinback     = await pool.query(`UPDATE users SET sent_winback=true           WHERE email_verified=true AND subscription_tier IS NULL AND sent_winback=false  AND created_at < $1`, [new Date(d7)]);
+    const rPro         = await pool.query(`UPDATE users SET sent_pro_welcome=true       WHERE subscription_tier='all'   AND sent_pro_welcome=false`);
+    const rAllSports   = await pool.query(`UPDATE users SET sent_all_sports_welcome=true WHERE subscription_tier='elite' AND sent_all_sports_welcome=false`);
+
+    console.log(`[email-backfill] Complete — welcome:${rWelcome.rowCount} walkthrough:${rWalkthrough.rowCount} day3:${rDay3.rowCount} winback:${rWinback.rowCount} proWelcome:${rPro.rowCount} allSportsWelcome:${rAllSports.rowCount} rows updated`);
+  }
+
+  async function runWallHitBlast(): Promise<void> {
+    console.log("[startup blast] Checking for eligible wall-hit users...");
+    const eligible = await db
+      .select()
+      .from(users)
+      .where(
+        and(
+          isNull(users.subscriptionTier),
+          eq(users.emailVerified, true),
+          eq(users.sentWall, false),
+          gte(users.playsUsed, 2)
+        )
+      );
+
+    console.log(`[startup blast] Found ${eligible.length} eligible users`);
+    let sent = 0;
+    for (const user of eligible) {
       try {
-        const now = new Date();
-
-        const fourDaysAgo = new Date(now);
-        fourDaysAgo.setDate(fourDaysAgo.getDate() - 4);
-        const threeDaysAgo = new Date(now);
-        threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
-
-        const nudgeUsers = await db
-          .select()
-          .from(users)
-          .where(
-            and(
-              isNull(users.subscriptionTier),
-              between(users.createdAt, fourDaysAgo, threeDaysAgo),
-              gte(users.playsUsed, 1),
-              lte(users.playsUsed, 14)
-            )
-          );
-
-        for (const user of nudgeUsers) {
-          sendNudgeEmail(user.email, user.playsUsed, 15 - user.playsUsed).catch((err: any) => {
-            console.error(`[cron] Failed to send nudge email to ${user.email}:`, err.message);
-          });
-        }
-
-        const fifteenDaysAgo = new Date(now);
-        fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
-        const fourteenDaysAgo = new Date(now);
-        fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
-
-        const winbackUsers = await db
-          .select()
-          .from(users)
-          .where(
-            and(
-              isNull(users.subscriptionTier),
-              between(users.createdAt, fifteenDaysAgo, fourteenDaysAgo),
-              eq(users.playsUsed, 0)
-            )
-          );
-
-        for (const user of winbackUsers) {
-          sendWinbackEmail(user.email).catch((err: any) => {
-            console.error(`[cron] Failed to send winback email to ${user.email}:`, err.message);
-          });
-        }
-
-        console.log(`[cron] Daily email job complete: ${nudgeUsers.length} nudge, ${winbackUsers.length} winback`);
+        await sendWallEmail(user.email);
+        await storage.updateUserEmailFlags(user.id, { sentWall: true });
+        console.log(`[startup blast] user ${user.id} — wall sent`);
+        sent++;
       } catch (err: any) {
-        console.error("[cron] Daily email job failed:", err.message);
+        console.error(`[startup blast] user ${user.id} — wall failed: ${err.message}`);
       }
-    },
-    { timezone: "America/New_York" }
-  );
+    }
+    console.log(`[startup blast] Complete — ${sent}/${eligible.length} sent`);
+  }
+
+  const FREE_PLAY_LIMIT = 3;
+
+  async function runLifecycleCron(): Promise<void> {
+    console.log("[email-cron] Starting lifecycle cycle");
+    const now = new Date();
+    const h24 = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const h12 = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+    const d3  = new Date(now.getTime() - 3  * 24 * 60 * 60 * 1000);
+    const d7  = new Date(now.getTime() - 7  * 24 * 60 * 60 * 1000);
+
+    const allVerified = await db.select().from(users).where(eq(users.emailVerified, true));
+
+    const counts = { welcome: 0, walkthrough: 0, day3: 0, winback: 0, wall: 0, proWelcome: 0, allSportsWelcome: 0 };
+
+    for (const user of allVerified) {
+      // Paid-tier welcome checks (independent of free-user waterfall)
+      if (user.subscriptionTier === "all" && !user.sentProWelcome) {
+        try {
+          await sendProWelcomeEmail(user.email);
+          await storage.updateUserEmailFlags(user.id, { sentProWelcome: true });
+          console.log(`[email-cron] user ${user.id} — proWelcome sent`);
+          counts.proWelcome++;
+        } catch (err: any) {
+          console.error(`[email-cron] user ${user.id} — proWelcome failed: ${err.message}`);
+        }
+        continue;
+      }
+
+      if (user.subscriptionTier === "elite" && !user.sentAllSportsWelcome) {
+        try {
+          await sendAllSportsWelcomeEmail(user.email);
+          await storage.updateUserEmailFlags(user.id, { sentAllSportsWelcome: true });
+          console.log(`[email-cron] user ${user.id} — allSportsWelcome sent`);
+          counts.allSportsWelcome++;
+        } catch (err: any) {
+          console.error(`[email-cron] user ${user.id} — allSportsWelcome failed: ${err.message}`);
+        }
+        continue;
+      }
+
+      // Free-user waterfall (one email per user per cycle)
+      if (user.subscriptionTier !== null) continue;
+
+      try {
+        const createdAt = user.createdAt ? new Date(user.createdAt) : null;
+
+        // A: Welcome recovery (recent signups only — last 24h)
+        if (!user.sentWelcome && createdAt && createdAt >= h24) {
+          await sendWelcomeEmail(user.email);
+          await storage.updateUserEmailFlags(user.id, { sentWelcome: true });
+          console.log(`[email-cron] user ${user.id} — welcome sent`);
+          counts.welcome++;
+          continue;
+        }
+
+        // B: Walkthrough (12h+ old, 0 plays)
+        if (!user.sentWalkthrough && user.playsUsed === 0 && createdAt && createdAt <= h12) {
+          await sendHowToEmail(user.email);
+          await storage.updateUserEmailFlags(user.id, { sentWalkthrough: true });
+          console.log(`[email-cron] user ${user.id} — walkthrough sent`);
+          counts.walkthrough++;
+          continue;
+        }
+
+        // C: Day-3 nudge (3+ days old, 1–2 plays)
+        if (!user.sentDay3 && user.playsUsed >= 1 && user.playsUsed < FREE_PLAY_LIMIT && createdAt && createdAt <= d3) {
+          await sendNudgeEmail(user.email, user.playsUsed, FREE_PLAY_LIMIT - user.playsUsed);
+          await storage.updateUserEmailFlags(user.id, { sentDay3: true });
+          console.log(`[email-cron] user ${user.id} — day3 sent`);
+          counts.day3++;
+          continue;
+        }
+
+        // D: Winback (7+ days old, 0 plays)
+        if (!user.sentWinback && user.playsUsed === 0 && createdAt && createdAt <= d7) {
+          await sendWinbackEmail(user.email);
+          await storage.updateUserEmailFlags(user.id, { sentWinback: true });
+          console.log(`[email-cron] user ${user.id} — winback sent`);
+          counts.winback++;
+          continue;
+        }
+
+        // E: Wall hit backup (near or at limit, not yet sent)
+        if (!user.sentWall && user.playsUsed >= 2) {
+          await sendWallEmail(user.email);
+          await storage.updateUserEmailFlags(user.id, { sentWall: true });
+          console.log(`[email-cron] user ${user.id} — wall sent`);
+          counts.wall++;
+          continue;
+        }
+
+      } catch (err: any) {
+        console.error(`[email-cron] user ${user.id} — cycle error: ${err.message}`);
+      }
+    }
+
+    console.log(`[email-cron] Cycle complete — welcome:${counts.welcome} walkthrough:${counts.walkthrough} day3:${counts.day3} winback:${counts.winback} wall:${counts.wall} proWelcome:${counts.proWelcome} allSportsWelcome:${counts.allSportsWelcome}`);
+  }
+
+  // Startup sequence: backfill → blast → schedule 15-min lifecycle cron
+  (async () => {
+    try { await runEmailFlagBackfill(); } catch (e: any) { console.error("[email-backfill] failed:", e.message); }
+    try { await runWallHitBlast(); } catch (e: any) { console.error("[startup blast] failed:", e.message); }
+    cron.schedule("*/15 * * * *", () => runLifecycleCron().catch(console.error), { timezone: "America/New_York" });
+    console.log("[email-cron] Lifecycle cron scheduled (*/15)");
+  })();
 
   // Daily cleanup: remove unverified accounts older than 24 hours.
   // Strategy: hard-delete. Unverified users are blocked from plays (requirePlayAccess)
