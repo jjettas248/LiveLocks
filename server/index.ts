@@ -181,6 +181,19 @@ app.use((req, res, next) => {
     console.warn("[startup] Schema migration warning:", err.message);
   }
 
+  // Schema migration: add daily-play-reset columns (Task #66) if they don't exist yet.
+  try {
+    await pool.query(`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS plays_used_today integer NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS plays_reset_date text,
+        ADD COLUMN IF NOT EXISTS unlocked_game_ids_today text NOT NULL DEFAULT '[]';
+    `);
+    console.log("[startup] Schema migration: daily-plays columns ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (daily-plays):", err.message);
+  }
+
   // Backfill: mark pre-existing users (no verification token) as email-verified
   // so they are not locked out by the new emailVerified gate.
   try {
