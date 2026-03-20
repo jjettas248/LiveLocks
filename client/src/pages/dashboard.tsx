@@ -276,7 +276,7 @@ export default function Dashboard() {
         const minDelay = 300 + Math.random() * 500;
         if (elapsed < minDelay) await new Promise(r => setTimeout(r, minDelay - elapsed));
         setScanningEdges(false);
-        setAutoRunFallback("No strong edges right now — check again shortly");
+        setAutoRunFallback("no_edges");
         return;
       }
       const data = await res.json();
@@ -303,7 +303,7 @@ export default function Dashboard() {
         const minDelay = 300 + Math.random() * 500;
         if (elapsed < minDelay) await new Promise(r => setTimeout(r, minDelay - elapsed));
         setScanningEdges(false);
-        setAutoRunFallback("No strong edges right now — check again shortly");
+        setAutoRunFallback("no_edges");
         return;
       }
 
@@ -334,7 +334,7 @@ export default function Dashboard() {
       const minDelay = 300 + Math.random() * 500;
       if (elapsed < minDelay) await new Promise(r => setTimeout(r, minDelay - elapsed));
       setScanningEdges(false);
-      setAutoRunFallback("No strong edges right now — check again shortly");
+      setAutoRunFallback("no_edges");
     }
   };
 
