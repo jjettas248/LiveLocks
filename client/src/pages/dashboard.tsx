@@ -949,6 +949,8 @@ export default function Dashboard() {
     }
   }, [user?.playsUsedToday]);
 
+  const handleUpgradeClick = () => { setShowUpgradeModal(true); };
+
   // ── Handle Stripe redirect back to app ────────────────────────────────────
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1592,7 +1594,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-5">
+      <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-5 pb-20">
 
         {/* Email verification banner */}
         {user && !user.emailVerified && !verifyBannerDismissed && (
@@ -1706,19 +1708,32 @@ export default function Dashboard() {
             data-testid="auto-run-fallback"
             className="rounded-xl border border-[#27272a] bg-[#0a0a0a] p-4 text-center"
           >
-            <p className="text-sm text-[#71717a]">{autoRunFallback}</p>
+            <p className="text-sm text-[#71717a]">No strong edges right now. 🔒 Pro users get alerted the moment edges appear.</p>
+            {isFreeUser && (
+              <button
+                data-testid="button-get-full-access-fallback"
+                onClick={handleUpgradeClick}
+                className="mt-3 px-4 py-2 rounded-lg text-sm font-bold bg-amber-500 text-black active:scale-95 transition-transform"
+              >
+                Get Full Access
+              </button>
+            )}
           </div>
         )}
 
-        {isFreeUser && (autoRunResult || autoRunFallback) && (
+        {isFreeUser && autoRunResult && (
           <div
             data-testid="sms-teaser-free"
-            className="rounded-lg border border-[#27272a] bg-[#111] px-4 py-2.5 flex items-center gap-2"
+            className="rounded-lg border border-[#27272a] bg-[#111] px-4 py-2.5 flex items-center justify-between gap-2"
           >
-            <Bell className="w-4 h-4 text-[#f59e0b] shrink-0" />
-            <p className="text-xs text-[#71717a]">
-              <span className="text-[#a1a1aa] font-medium">Pro users already got alerted on plays like this.</span>
-            </p>
+            <p className="text-xs text-[#a1a1aa] font-medium">You're seeing limited access. 🔒 More live edges are happening right now.</p>
+            <button
+              data-testid="button-unlock-full-access-strip"
+              onClick={handleUpgradeClick}
+              className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-black active:scale-95 transition-transform"
+            >
+              Unlock Full Access
+            </button>
           </div>
         )}
 
@@ -3782,45 +3797,20 @@ export default function Dashboard() {
 
       </main>
 
-      {isFreeUser && activeTab === "calculator" && nbaSubTab === "halftime" && !isHalftimePlaysLoading && halftimePlaysData && halftimePlaysData.plays.length > 0 && (() => {
-        const stickyTotalLocked = visibleHalftimeGroups.reduce((sum, g) => {
-          const filtered = filterByBook(g.plays.filter(filterPlay), nbaBookFilter);
-          return sum + Math.max(0, filtered.length - visibleEdgeLimit);
-        }, 0);
-        if (stickyTotalLocked <= 0) return null;
-        return (
-          <div
-            data-testid="sticky-upgrade-banner"
-            style={{
-              position: "fixed",
-              bottom: 0,
-              left: 0,
-              right: 0,
-              zIndex: 45,
-              background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
-              borderTop: "1px solid rgba(245,158,11,0.3)",
-              padding: "12px 16px",
-              paddingBottom: "max(12px, env(safe-area-inset-bottom, 12px))",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 12,
-            }}
+      {isFreeUser && (
+        <div
+          data-testid="fixed-upgrade-bar"
+          className="fixed bottom-0 inset-x-0 z-40 h-14 backdrop-blur bg-black/70 border-t border-white/10 flex items-center justify-center"
+        >
+          <button
+            data-testid="button-unlock-full-access-bar"
+            onClick={handleUpgradeClick}
+            className="px-5 py-2 rounded-lg text-sm font-bold bg-amber-500 text-black active:scale-95 transition-transform"
           >
-            <span className="text-sm text-amber-300 font-medium">
-              🔒 {stickyTotalLocked} premium edge{stickyTotalLocked !== 1 ? "s" : ""} locked
-            </span>
-            <button
-              data-testid="button-unlock-all-edges"
-              onClick={() => { setUpgradeModalState({ playsUsed: user?.playsUsedToday ?? 0, limit: 3 }); setShowUpgradeModal(true); }}
-              className="px-4 py-2 rounded-lg text-sm font-bold transition-colors"
-              style={{ background: "#f59e0b", color: "#000", }}
-            >
-              Unlock All Edges
-            </button>
-          </div>
-        );
-      })()}
+            Unlock Full Access
+          </button>
+        </div>
+      )}
 
       {showUpgradeModal && (
         <UpgradeModal
