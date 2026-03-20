@@ -16,6 +16,7 @@ declare module "express-session" {
 
 const FREE_PLAY_LIMIT = 3;
 const SALT_ROUNDS = 10;
+
 const JWT_SECRET = process.env.SESSION_SECRET || "livelocks-dev-secret";
 const JWT_EXPIRES = "30d";
 
@@ -83,6 +84,8 @@ function safeUser(user: User) {
     isAdmin: user.isAdmin,
     subscriptionTier: user.subscriptionTier,
     playsUsed: user.playsUsed,
+    playsUsedToday: user.playsUsedToday ?? 0,
+    playsResetDate: user.playsResetDate ?? null,
     isNewProUser: user.isNewProUser ?? false,
     upgradedAt: user.upgradedAt ?? null,
     emailVerified: user.emailVerified,
@@ -300,10 +303,13 @@ export async function registerAuthRoutes(app: import("express").Express) {
     if (!userId) {
       return res.status(401).json({ error: "Not authenticated" });
     }
-    const user = await storage.getUserById(userId);
-    if (!user) {
+    const rawUser = await storage.getUserById(userId);
+    if (!rawUser) {
       return res.status(401).json({ error: "Not authenticated" });
     }
+    const user = (!rawUser.subscriptionTier && !rawUser.isAdmin)
+      ? (await storage.resetDailyPlaysIfNeeded(userId) ?? rawUser)
+      : rawUser;
     return res.json(safeUser(user));
   });
 }
@@ -352,45 +358,75 @@ export async function requirePlayAccess(req: Request, res: Response, next: NextF
     return res.status(401).json({ error: "Not authenticated" });
   }
 
-  const user = await storage.getUserById(userId);
-  if (!user) {
+  const rawUser = await storage.getUserById(userId);
+  if (!rawUser) {
     return res.status(401).json({ error: "Not authenticated" });
   }
 
-  if (user.isAdmin) {
+  if (rawUser.isAdmin) {
+    (req as any).resolvedUserId = userId;
     return next();
   }
 
-  if (!user.emailVerified) {
+  if (!rawUser.emailVerified) {
     return res.status(403).json({ error: "Please verify your email to use LiveLocks." });
   }
 
-  if (user.createdAt) {
-    const ageMs = Date.now() - new Date(user.createdAt).getTime();
+  if (rawUser.createdAt) {
+    const ageMs = Date.now() - new Date(rawUser.createdAt).getTime();
     if (ageMs < 30_000) {
       return res.status(403).json({ error: "Account too new. Please wait a moment." });
     }
   }
 
-  if (user.subscriptionTier) {
+  if (rawUser.subscriptionTier) {
+    (req as any).resolvedUserId = userId;
     return next();
   }
 
-  if (user.playsUsed < FREE_PLAY_LIMIT) {
-    await storage.incrementPlaysUsed(user.id);
-    if (!user.sentWall && user.playsUsed + 1 >= FREE_PLAY_LIMIT) {
-      sendWallEmail(user.email)
-        .then(() => storage.updateUserEmailFlags(user.id, { sentWall: true }).catch(console.error))
-        .catch((emailErr: any) => {
-          console.error("[email] Failed to send wall email:", emailErr.message);
-        });
-    }
+  const refreshedUser = await storage.resetDailyPlaysIfNeeded(userId) ?? rawUser;
+  const today = new Date().toISOString().slice(0, 10);
+  const playsUsedToday = refreshedUser.playsUsedToday ?? 0;
+
+  const { gameId } = (req.body ?? {}) as { gameId?: string };
+  const bodyHash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(req.body ?? {}))
+    .digest("hex")
+    .slice(0, 16);
+  const consumeKey = gameId ?? `calc-${bodyHash}`;
+
+  const alreadyConsumed = await storage.isGameUnlockedToday(userId, consumeKey);
+  if (alreadyConsumed) {
+    (req as any).resolvedUserId = userId;
     return next();
   }
 
-  return res.status(402).json({
-    error: "PAYWALL_TRIGGER",
-    playsUsed: user.playsUsed,
-    limit: FREE_PLAY_LIMIT,
+  if (playsUsedToday >= FREE_PLAY_LIMIT) {
+    return res.status(402).json({
+      error: "PAYWALL_TRIGGER",
+      playsUsedToday,
+      playsResetDate: today,
+      limit: FREE_PLAY_LIMIT,
+    });
+  }
+
+  (req as any).resolvedUserId = userId;
+
+  res.on("finish", () => {
+    const statusCode = res.statusCode;
+    if (statusCode < 200 || statusCode >= 300) return;
+
+    storage.tryConsumeGamePlayToday(userId, consumeKey).then((result) => {
+      if (!result.allowed && !result.alreadyUnlocked) return;
+      storage.incrementPlaysUsed(userId).catch(console.error);
+      if (!rawUser.sentWall && result.playsUsedToday >= FREE_PLAY_LIMIT) {
+        sendWallEmail(rawUser.email)
+          .then(() => storage.updateUserEmailFlags(rawUser.id, { sentWall: true }).catch(console.error))
+          .catch((e: any) => console.error("[email] wall:", e.message));
+      }
+    }).catch(console.error);
   });
+
+  return next();
 }

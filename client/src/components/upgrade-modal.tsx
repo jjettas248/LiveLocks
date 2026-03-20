@@ -51,19 +51,21 @@ export function UpgradeModal({ playsUsed, limit, onClose }: UpgradeModalProps) {
             data-testid="text-upgrade-header"
             className="text-2xl font-black text-white leading-tight"
           >
-            You're seeing real edges.
+            {playsUsed >= limit ? "You've used all 3 free plays for today." : "You're seeing real edges."}
           </h2>
           <p
             data-testid="text-upgrade-hook"
             className="text-sm font-medium text-[#f59e0b] mt-2"
           >
-            This is exactly what sportsbooks don't want you seeing.
+            {playsUsed >= limit ? "Pro users get full access to all live edges." : "This is exactly what sportsbooks don't want you seeing."}
           </p>
           <p
             data-testid="text-upgrade-subtext"
             className="text-sm text-[#a1a1aa] mt-1"
           >
-            You've unlocked {limit} live edges using the model.
+            {playsUsed >= limit
+              ? "Your free plays reset tomorrow. Upgrade for unlimited access every day."
+              : `Free users get 3 plays per day · Pro users unlock all live edges.`}
           </p>
         </div>
 

@@ -7,6 +7,8 @@ export interface AuthUser {
   isAdmin: boolean;
   subscriptionTier: string | null;
   playsUsed: number;
+  playsUsedToday: number;
+  playsResetDate: string | null;
   isNewProUser: boolean;
   upgradedAt: string | null;
   emailVerified: boolean;

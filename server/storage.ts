@@ -90,6 +90,12 @@ export interface IStorage {
   getUserByStripeCustomerId(customerId: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   incrementPlaysUsed(userId: number): Promise<void>;
+  incrementPlaysUsedToday(userId: number): Promise<void>;
+  tryConsumePlayToday(userId: number): Promise<{ allowed: boolean; playsUsedToday: number }>;
+  tryConsumeGamePlayToday(userId: number, gameId: string): Promise<{ allowed: boolean; alreadyUnlocked: boolean; playsUsedToday: number }>;
+  resetDailyPlaysIfNeeded(userId: number): Promise<User | undefined>;
+  isGameUnlockedToday(userId: number, gameId: string): Promise<boolean>;
+  markGameUnlockedToday(userId: number, gameId: string): Promise<void>;
   updateUserSubscription(userId: number, tier: string, stripeCustomerId: string, stripeSubscriptionId: string): Promise<void>;
   updateUserStripeCustomer(userId: number, stripeCustomerId: string): Promise<void>;
   getAllUsers(): Promise<Omit<User, "passwordHash">[]>;
@@ -722,6 +728,95 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  async incrementPlaysUsedToday(userId: number): Promise<void> {
+    await db.update(users)
+      .set({ playsUsedToday: sql`${users.playsUsedToday} + 1` })
+      .where(eq(users.id, userId));
+  }
+
+  async tryConsumePlayToday(userId: number): Promise<{ allowed: boolean; playsUsedToday: number }> {
+    const today = new Date().toISOString().slice(0, 10);
+    const result = await db.execute(sql`
+      UPDATE users
+      SET plays_used_today = plays_used_today + 1
+      WHERE id = ${userId}
+        AND plays_used_today < 3
+        AND plays_reset_date = ${today}
+      RETURNING plays_used_today
+    `);
+    if (result.rows.length > 0) {
+      return { allowed: true, playsUsedToday: result.rows[0].plays_used_today as number };
+    }
+    const user = await this.getUserById(userId);
+    return { allowed: false, playsUsedToday: user?.playsUsedToday ?? 3 };
+  }
+
+  async tryConsumeGamePlayToday(userId: number, gameId: string): Promise<{ allowed: boolean; alreadyUnlocked: boolean; playsUsedToday: number }> {
+    const today = new Date().toISOString().slice(0, 10);
+    const result = await db.execute(sql`
+      UPDATE users
+      SET
+        plays_used_today = plays_used_today + 1,
+        unlocked_game_ids_today = (
+          SELECT jsonb_agg(elem)::text
+          FROM (
+            SELECT jsonb_array_elements_text(unlocked_game_ids_today::jsonb) AS elem
+            UNION ALL
+            SELECT ${gameId}::text
+          ) sub
+        )
+      WHERE id = ${userId}
+        AND plays_used_today < 3
+        AND plays_reset_date = ${today}
+        AND NOT (unlocked_game_ids_today::jsonb @> to_jsonb(${gameId}::text))
+      RETURNING plays_used_today
+    `);
+    if (result.rows.length > 0) {
+      return { allowed: true, alreadyUnlocked: false, playsUsedToday: result.rows[0].plays_used_today as number };
+    }
+    const user = await this.getUserById(userId);
+    const alreadyUnlocked = user ? (() => {
+      try { return (JSON.parse(user.unlockedGameIdsToday ?? "[]") as string[]).includes(gameId); } catch { return false; }
+    })() : false;
+    return { allowed: false, alreadyUnlocked, playsUsedToday: user?.playsUsedToday ?? 3 };
+  }
+
+  async resetDailyPlaysIfNeeded(userId: number): Promise<User | undefined> {
+    const user = await this.getUserById(userId);
+    if (!user) return undefined;
+    const today = new Date().toISOString().slice(0, 10);
+    if (user.playsResetDate !== today) {
+      await db.update(users).set({ playsUsedToday: 0, playsResetDate: today, unlockedGameIdsToday: "[]" }).where(eq(users.id, userId));
+      return { ...user, playsUsedToday: 0, playsResetDate: today, unlockedGameIdsToday: "[]" };
+    }
+    return user;
+  }
+
+  async isGameUnlockedToday(userId: number, gameId: string): Promise<boolean> {
+    const user = await this.getUserById(userId);
+    if (!user) return false;
+    try {
+      const ids: string[] = JSON.parse(user.unlockedGameIdsToday ?? "[]");
+      return ids.includes(gameId);
+    } catch {
+      return false;
+    }
+  }
+
+  async markGameUnlockedToday(userId: number, gameId: string): Promise<void> {
+    const user = await this.getUserById(userId);
+    if (!user) return;
+    try {
+      const ids: string[] = JSON.parse(user.unlockedGameIdsToday ?? "[]");
+      if (!ids.includes(gameId)) {
+        ids.push(gameId);
+        await db.update(users).set({ unlockedGameIdsToday: JSON.stringify(ids) }).where(eq(users.id, userId));
+      }
+    } catch {
+      await db.update(users).set({ unlockedGameIdsToday: JSON.stringify([gameId]) }).where(eq(users.id, userId));
+    }
+  }
+
   async updateUserSubscription(userId: number, tier: string, stripeCustomerId: string, stripeSubscriptionId: string): Promise<void> {
     await db.update(users).set({
       subscriptionTier: tier,
@@ -759,7 +854,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async resetUserPlays(userId: number): Promise<void> {
-    await db.update(users).set({ playsUsed: 0 }).where(eq(users.id, userId));
+    const today = new Date().toISOString().slice(0, 10);
+    await db.update(users).set({ playsUsed: 0, playsUsedToday: 0, playsResetDate: today }).where(eq(users.id, userId));
   }
 
   async deleteUser(userId: number): Promise<void> {

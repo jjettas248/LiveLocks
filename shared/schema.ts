@@ -9,6 +9,8 @@ export const users = pgTable("users", {
   isAdmin: boolean("is_admin").notNull().default(false),
   subscriptionTier: text("subscription_tier"),
   playsUsed: integer("plays_used").notNull().default(0),
+  playsUsedToday: integer("plays_used_today").notNull().default(0),
+  playsResetDate: text("plays_reset_date"),
   stripeCustomerId: text("stripe_customer_id"),
   stripeSubscriptionId: text("stripe_subscription_id"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -33,6 +35,7 @@ export const users = pgTable("users", {
   sentWall: boolean("sent_wall").notNull().default(false),
   sentProWelcome: boolean("sent_pro_welcome").notNull().default(false),
   sentAllSportsWelcome: boolean("sent_all_sports_welcome").notNull().default(false),
+  unlockedGameIdsToday: text("unlocked_game_ids_today").notNull().default("[]"),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });

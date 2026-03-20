@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1773898806067,
+      "tag": "0000_dashing_gunslinger",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1773899700000,
+      "tag": "0001_add_daily_plays_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1773900000000,
+      "tag": "0002_add_game_unlocks_column",
+      "breakpoints": true
+    }
+  ]
+}

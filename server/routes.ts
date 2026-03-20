@@ -1641,9 +1641,13 @@ export async function registerRoutes(
 
   // ── Per-game 2H view — consumes 1 free play for free users ─────────────────
   app.post("/api/2h-game-view", requirePlayAccess, async (req, res) => {
-    const userId = (req as any).resolvedUserId!;
-    const user = await storage.getUserById(userId);
-    res.json({ ok: true, playsUsed: user?.playsUsed ?? 0 });
+    try {
+      const userId = (req as any).resolvedUserId!;
+      const user = await storage.getUserById(userId);
+      res.json({ ok: true, playsUsed: user?.playsUsed ?? 0, playsUsedToday: user?.playsUsedToday ?? 0 });
+    } catch (err) {
+      res.status(500).json({ message: "Internal server error" });
+    }
   });
 
   // ── Halftime Best Plays ─────────────────────────────────────────────────────
