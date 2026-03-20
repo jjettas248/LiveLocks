@@ -1925,7 +1925,7 @@ function NCAABGameCard({
         </div>
 
         {/* ── LIVE 2H PANEL (halftime primary + H1 preview) ───────────── */}
-        {(play.bettingWindow === "HALFTIME" || play.half === 2) && (
+        {marketTab === "h2" && (play.bettingWindow === "HALFTIME" || play.half === 2) && (
           <Live2HPanel
             h2Lines={h2Lines}
             h2Engine={h2Engine}

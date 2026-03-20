@@ -1154,6 +1154,11 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         console.warn("H1 spread odds hydration failure (post-merge)", { gameId: game.id, h1SpreadLine });
       }
 
+      if (h1TotalLine !== null && h1OverOddsAmerican === null) h1OverOddsAmerican = -110;
+      if (h1SpreadLine !== null && h1SpreadOddsAmerican === null) h1SpreadOddsAmerican = -110;
+      if (h2TotalLine !== null && h2OverOddsAmerican === null) h2OverOddsAmerican = -110;
+      if (h2SpreadLine !== null && h2SpreadOddsAmerican === null) h2SpreadOddsAmerican = -110;
+
       // ── Engine: single source of truth for projection + probability ──────
       const engineInput: import("./ncaabEngine").NCAABGameInput = {
         gameId: game.id,
