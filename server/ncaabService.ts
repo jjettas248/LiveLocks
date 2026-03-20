@@ -1031,7 +1031,7 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       try { box = await getNCAABBoxScore(game.id); } catch { /* non-fatal */ }
 
       const oddsEvent = matchOddsEvent(game, oddsEvents);
-      const { spread, total, favorite, bookLines, h1TotalLine: oddsH1Total, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav, h2TotalLine: oddsH2Total, h2SpreadLine: oddsH2Spread, h2Favorite: oddsH2Fav, overOddsAmerican, spreadOddsAmerican, h1OverOddsAmerican, h1SpreadOddsAmerican, h2OverOddsAmerican, h2SpreadOddsAmerican, h1TotalOverOdds, h1TotalUnderOdds, h1SpreadHomeOdds, h1SpreadAwayOdds, homeTTBookLine, awayTTBookLine } = oddsEvent
+      let { spread, total, favorite, bookLines, h1TotalLine: oddsH1Total, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav, h2TotalLine: oddsH2Total, h2SpreadLine: oddsH2Spread, h2Favorite: oddsH2Fav, overOddsAmerican, spreadOddsAmerican, h1OverOddsAmerican, h1SpreadOddsAmerican, h2OverOddsAmerican, h2SpreadOddsAmerican, h1TotalOverOdds, h1TotalUnderOdds, h1SpreadHomeOdds, h1SpreadAwayOdds, homeTTBookLine, awayTTBookLine } = oddsEvent
         ? extractLines(oddsEvent, game.homeTeam, game.awayTeam)
         : { spread: null, total: null, favorite: "", bookLines: [], h1TotalLine: null, h1SpreadLine: null, h1Favorite: "", h2TotalLine: null, h2SpreadLine: null, h2Favorite: "", overOddsAmerican: null, spreadOddsAmerican: null, h1OverOddsAmerican: null, h1SpreadOddsAmerican: null, h2OverOddsAmerican: null, h2SpreadOddsAmerican: null, h1TotalOverOdds: null, h1TotalUnderOdds: null, h1SpreadHomeOdds: null, h1SpreadAwayOdds: null, homeTTBookLine: null, awayTTBookLine: null };
 
