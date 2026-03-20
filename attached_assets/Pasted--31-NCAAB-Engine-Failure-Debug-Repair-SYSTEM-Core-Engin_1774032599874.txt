@@ -1,0 +1,105 @@
+#31 - NCAAB Engine Failure Debug + Repair
+
+## SYSTEM:
+Core Engine / UX Layer
+
+## OBJECTIVE:
+Diagnose and fix why the NCAAB engine is showing projected/fallback market blocks while H1/H2 sportsbook lines and odds are unavailable or misrouted across tabs.
+
+## CONTEXT:
+Current symptoms from live UI:
+- 1st Half tab shows "1H lines unavailable"
+- 2nd Half tab shows "2H lines unavailable"
+- Book implied probability is missing ("—%")
+- 1st Half and 2nd Half tabs still render a "2ND HALF LINES ~projected" block
+- Halftime 2H cards say "Waiting for live 2H lines from books"
+- Model projections exist, so projection layer is alive
+- Failure is likely in sportsbook hydration + tab-to-market render routing
+
+Relevant files likely involved:
+- server/ncaabService.ts
+- server/ncaabEngine.ts
+- client/src/components/ncaab-admin-tab.tsx
+- any sportsbook market normalization helpers
+- any H1/H2 extraction functions
+
+## REQUIREMENTS:
+
+### Phase A — Read-only diagnosis first
+Do NOT modify code yet.
+
+Trace and report:
+
+1. For one live H1 game and one halftime game:
+   - raw sportsbook markets received
+   - extracted H1 line values
+   - extracted H1 odds values
+   - extracted H2 line values
+   - extracted H2 odds values
+   - engineOutput.markets for:
+     - h1_total
+     - h1_spread
+     - h2_total
+     - h2_spread
+
+2. Identify exactly why these markets are unavailable:
+   - missing raw sportsbook markets
+   - market key mismatch
+   - outcome parsing failure
+   - odds extraction failure
+   - game-state gating bug
+   - UI binding bug
+
+3. Trace the tab render logic in ncaab-admin-tab.tsx:
+   - what object is rendered in Full Game tab
+   - what object is rendered in 1st Half tab
+   - what object is rendered in 2nd Half tab
+   - why "2ND HALF LINES ~projected" appears in the 1st Half tab
+
+### Phase B — Fix market hydration
+Only after the diagnosis is returned and confirmed.
+
+Requirements:
+- H1 tabs must read only canonical H1 market objects
+- H2 tabs must read only canonical H2 market objects
+- If sportsbook H1/H2 lines exist, hydrate them correctly
+- If sportsbook odds exist, hydrate them correctly
+- If no market exists, return canonical unavailable state
+- Do NOT fabricate synthetic lines
+- Do NOT show projected 2H blocks inside the 1H tab
+
+### Phase C — Fix tab render routing
+- 1st Half tab must never render 2H projected content
+- 2nd Half tab must never render 1H content
+- Full Game tab must never render H1/H2 fallback blocks unless explicitly designed
+
+### Phase D — Verification
+Return:
+- exact root cause(s)
+- exact file(s) responsible
+- exact code changes made
+- verification that:
+  - H1 tab uses h1_total / h1_spread only
+  - H2 tab uses h2_total / h2_spread only
+  - projected block no longer leaks into wrong tabs
+  - sportsbook lines/odds hydrate when present
+
+## DO NOT:
+- Do not reopen old canonical market rebuild work unless directly necessary
+- Do not introduce synthetic first-half or second-half lines
+- Do not add UI redesigns
+- Do not create fallback values like ?? 50
+- Do not run long build loops automatically
+
+## SUCCESS CRITERIA:
+- H1 tab shows real H1 markets when books provide them
+- H2 tab shows real H2 markets when books provide them
+- Book implied probability appears when odds are present
+- No cross-tab projected block leakage
+- Canonical unavailable state is shown only when upstream data is truly absent
+
+## OUTPUT:
+- Root cause report first
+- Then exact code changes
+- File-level diffs
+- No placeholders

@@ -1,0 +1,113 @@
+#67 - NCAAB H1/H2 Market Repair (Final)
+
+## SYSTEM
+NCAAB Engine + Service Layer + UI Rendering
+
+## OBJECTIVE
+Fix two blocking issues causing H1/H2 markets to show as unavailable and preventing proper tab-based rendering:
+
+1) Missing odds → G7 invalidates markets
+2) 2H projected panel renders in wrong tabs
+
+This is a targeted repair. Do NOT refactor unrelated systems.
+
+---
+
+## ROOT CAUSES
+
+### Root Cause A — Missing odds → G7 invalidates markets
+
+- SGO provides valid H1/H2 lines:
+  - h1TotalLine
+  - h1SpreadLine
+  - h2TotalLine
+  - h2SpreadLine
+
+- BUT SGO does NOT provide odds
+- Odds API fails for H1/H2 (422 errors)
+
+→ buildMarket() enforces Guardrail 7:
+- odds must be valid (non-null, non-zero, within ±2000)
+- otherwise → unavailableMarket()
+
+Result:
+Markets show:
+- "Unavailable"
+- "Book —%"
+- No edge
+
+---
+
+### Root Cause B — 2H projected panel leaks into wrong tabs
+
+- <Live2HPanel> renders based only on game state:
+  - play.bettingWindow === "HALFTIME"
+  - OR play.half === 2
+
+- It is NOT gated by marketTab
+
+Result:
+- 2H projected panel appears in:
+  - Full Game tab
+  - 1st Half tab
+
+---
+
+## REQUIRED FIXES
+
+---
+
+### TASK 1 — Apply SGO-safe odds fallback (-110)
+
+File:
+server/ncaabService.ts
+
+Location:
+Inside computeNCAABPlays, AFTER SGO + Odds API merge, BEFORE runNCAABEngine()
+
+---
+
+#### RULE
+
+Apply -110 ONLY when:
+
+- A valid H1/H2 line exists
+- The corresponding odds field is null
+- The line originated from SGO or merged data WITHOUT odds
+
+DO NOT overwrite real odds.
+
+---
+
+#### APPLY TO
+
+H1 markets:
+- h1OverOddsAmerican
+- h1SpreadOddsAmerican
+
+H2 markets:
+- h2OverOddsAmerican
+- h2SpreadOddsAmerican
+
+---
+
+#### IMPLEMENTATION PATTERN
+
+Example:
+
+```ts
+if (game.h1TotalLine != null && game.h1OverOddsAmerican == null) {
+  game.h1OverOddsAmerican = -110;
+}
+
+if (game.h1SpreadLine != null && game.h1SpreadOddsAmerican == null) {
+  game.h1SpreadOddsAmerican = -110;
+}
+
+if (game.h2TotalLine != null && game.h2OverOddsAmerican == null) {
+  game.h2OverOddsAmerican = -110;
+}
+
+if (game.h2SpreadLine != null && game.h2SpreadOddsAmerican == null) {
+  game.h2SpreadOddsAmerican = -110;
+}
