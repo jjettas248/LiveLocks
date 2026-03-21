@@ -1,0 +1,200 @@
+# TASK: NCAAB End-to-End Engine + UI Recovery
+
+## SYSTEM:
+Core Engine + Service Layer + UX Layer :contentReference[oaicite:0]{index=0}
+
+## OBJECTIVE:
+Fully restore NCAAB so H1, H2, and Full Game markets:
+- hydrate correctly from sportsbook data
+- reach engineInput correctly
+- produce valid canonical markets
+- render correctly in UI tabs with no leakage or fallbacks
+
+This is a full pipeline repair — not a partial fix.
+
+---
+
+## EXECUTION RULES (MANDATORY)
+
+- DO NOT write code until Phase A is complete
+- DO NOT assume root cause
+- DO NOT skip logging
+- DO NOT fix only one layer
+- DO NOT declare success without runtime validation
+
+---
+
+## PHASE A — ROOT CAUSE DIAGNOSTIC (READ-ONLY)
+
+Add non-production logging in ncaabService.ts:
+
+Checkpoint A — After extractLines:
+Log:
+- sportsbookMarketKeys
+- h1TotalLine, h1SpreadLine
+- h2TotalLine, h2SpreadLine
+- all H1/H2 odds fields
+
+Checkpoint B — After SGO + Odds merge:
+Log merged values
+
+Checkpoint C — Before runNCAABEngine:
+Log engineInput values:
+- h1TotalLine, h1SpreadLine
+- h2TotalLine, h2SpreadLine
+- h1OverOddsAmerican, h1SpreadOddsAmerican
+- h2OverOddsAmerican, h2SpreadOddsAmerican
+
+Also log engineOutput.markets for:
+- h1_total
+- h1_spread
+- h2_total
+- h2_spread
+
+Capture:
+- one live H1 game
+- one halftime/2H game
+
+OUTPUT:
+- exact failure point (EXTRACTION vs MERGE vs ENGINE vs UI)
+- do not fix yet
+
+---
+
+## PHASE B — SERVICE LAYER HYDRATION FIX
+
+### 1. Remove premature break
+Delete break in extractLines bookmaker loop
+
+### 2. Add flexible H2 key matching
+Implement:
+- isH2TotalKey
+- isH2SpreadKey
+
+Use normalizeMarketKey()
+
+Replace exact matches:
+m.key === "h2_totals"
+m.key === "h2_spreads"
+
+### 3. Harden outcome parsing
+- Do NOT assume order
+- Detect:
+  - over / under
+  - home / away
+  - OR team names
+- Use:
+  extractPrice(outcome.price ?? outcome.odds)
+
+### 4. Preserve multi-book hydration
+- DO NOT overwrite non-null values
+- Allow:
+  book A → H1 total
+  book B → H1 spread
+  book C → H2
+
+### 5. Add H2 hydration warnings
+After loop:
+- warn if H2 keys exist but lines null
+- warn if lines exist but odds null
+
+---
+
+## PHASE C — ENGINE INPUT VALIDATION
+
+Add ONE debug block before runNCAABEngine:
+
+Log all 8 fields:
+- h1TotalLine
+- h1SpreadLine
+- h2TotalLine
+- h2SpreadLine
+- h1OverOddsAmerican
+- h1SpreadOddsAmerican
+- h2OverOddsAmerican
+- h2SpreadOddsAmerican
+
+### Verify:
+- If line exists and odds null → -110 fallback applied
+- DO NOT modify Guardrail G7
+
+---
+
+## PHASE D — UI RENDER FIX
+
+Audit ncaab-admin-tab.tsx:
+
+### Enforce strict binding:
+- Full tab → full_total / full_spread
+- H1 tab → h1_total / h1_spread
+- H2 tab → h2_total / h2_spread
+
+### Remove:
+- play.total
+- play.spread
+- ?? 50
+- any fallback rendering
+
+### Fix leakage:
+Live2HPanel must render ONLY if:
+marketTab === "h2"
+AND halftime/2H condition true
+
+NO exceptions
+
+---
+
+## PHASE E — VERIFICATION
+
+Validate using real or mocked game:
+
+### H1 tab:
+- line visible
+- book implied %
+- edge present
+
+### H2 tab:
+- line visible
+- book implied %
+- edge present
+
+### Full Game tab:
+- NO H2 panel
+
+### Logs confirm:
+- engineInput has non-null H1/H2 lines
+- engineOutput markets are available (not unavailableMarket)
+
+---
+
+## DO NOT
+
+- Do not fabricate synthetic H1/H2 lines
+- Do not weaken Guardrail G7
+- Do not modify NBA/MLB
+- Do not redesign UI
+- Do not skip phases
+
+---
+
+## SUCCESS CRITERIA
+
+- H1 markets render when sportsbook provides them
+- H2 markets render when sportsbook provides them
+- book implied probability shows (no —%)
+- edge is computed
+- no false "Unavailable"
+- no tab leakage
+- logs confirm correct data flow
+
+---
+
+## OUTPUT FORMAT :contentReference[oaicite:1]{index=1}
+
+1. Root cause report
+2. Exact code changes
+3. File-level diffs
+4. Runtime verification logs
+
+No placeholders
+No summaries without proof

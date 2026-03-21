@@ -1,0 +1,23 @@
+#70 - NCAAB H1/H2 Hydration Loop Fix
+What & Why
+The extractLines function in ncaabService.ts exits the bookmaker loop prematurely via a break condition (line 785) that fires as soon as full-game spread/total, H1 total/spread lines, and H1 odds are all populated. Because H2 lines (h2TotalLine, h2SpreadLine, h2OverOddsAmerican, h2SpreadOddsAmerican) are not part of that condition, the loop exits before later bookmakers — which may be the only ones offering H2 markets — are ever scanned. This causes buildMarket() to return unavailableMarket() due to missing h2TotalLine, not missing odds.
+
+Done looks like
+The bookmaker loop in extractLines never exits early; all bookmakers are always scanned
+H2 total and spread lines consistently reach engineInput when they exist in any bookmaker's data
+H1/H2 hydration warning logs fire correctly when markets are expected but missing
+H2-specific hydration warnings (mirroring the existing H1 warnings at lines 798–813) are added for observability
+No changes to buildMarket(), Guardrail G7, UI components, NBA, or MLB code paths
+Out of scope
+Any changes to buildMarket() or engine probability logic
+Guardrail G7 modifications
+UI component changes
+NBA or MLB code paths
+New APIs or external services
+Tasks
+Remove the premature break — Delete the break statement at line 785 in extractLines. All bookmaker entries must be fully iterated so every available H1 and H2 market is captured regardless of which book offers it.
+Add H2 hydration warnings — After the bookmaker loop, add warning logs for H2 hydration failures mirroring the existing H1 checks (lines 798–813): warn when H2 lines are expected (i.e., H2 market keys exist in any bookmaker) but h2TotalLine or h2SpreadLine remain null, and when H2 odds are missing despite lines being present.
+Verify no downstream breakage — Confirm engineInput fields h2TotalLine, h2SpreadLine, h2Favorite, h2OverOddsAmerican, and h2SpreadOddsAmerican are correctly populated by the now-complete loop. No structural changes needed — these fields are already wired at lines 1185–1187 and 1206–1207.
+Relevant files
+server/ncaabService.ts:553-817
+server/ncaabService.ts:1163-1216
