@@ -1207,7 +1207,17 @@ function NCAABGameCard({
   const dominantMarket = play.engineOutput?.dominantMarket ?? "over";
 
   const [selectedMarket, setSelectedMarket] = useState<"over" | "under" | "spread">(dominantMarket);
-  const [marketTab, setMarketTab]           = useState<"full" | "h1" | "h2">("full");
+  const [marketTab, setMarketTab]           = useState<"full" | "h1" | "h2">(() => {
+    const mkts = play.engineOutput?.markets;
+    if (!mkts) return "full";
+    const fgAvail  = mkts.full_total?.available  || mkts.full_spread?.available;
+    if (fgAvail) return "full";
+    const h1Avail  = mkts.h1_total?.available    || mkts.h1_spread?.available;
+    if (h1Avail) return "h1";
+    const h2Avail  = mkts.h2_total?.available    || mkts.h2_spread?.available;
+    if (h2Avail) return "h2";
+    return "full";
+  });
   const [mktCallout, setMktCallout]         = useState<SelMarket | null>(null);
   const [parlayLegs, setParlayLegs]         = useState<string[]>([]);
   const [showParlayDrawer, setShowParlayDrawer] = useState(false);
@@ -1238,6 +1248,32 @@ function NCAABGameCard({
 
   // Direction-flip state (item 5): triggers color transition on Engine Over/Under%
   const [isDirectionFlip, setIsDirectionFlip] = useState(false);
+
+  // Auto-switch to best available tab when canonical market availability changes
+  // (e.g., game transitions from H1 → halftime, or lines appear/disappear on refresh)
+  useEffect(() => {
+    const mkts = play.engineOutput?.markets;
+    if (!mkts) return;
+    const tabAvail = (tab: "full" | "h1" | "h2"): boolean => {
+      if (tab === "full") return !!(mkts.full_total?.available || mkts.full_spread?.available);
+      if (tab === "h1")  return !!(mkts.h1_total?.available   || mkts.h1_spread?.available);
+      return                      !!(mkts.h2_total?.available   || mkts.h2_spread?.available);
+    };
+    setMarketTab(prev => {
+      if (tabAvail(prev)) return prev;
+      if (tabAvail("full")) return "full";
+      if (tabAvail("h1"))   return "h1";
+      if (tabAvail("h2"))   return "h2";
+      return prev;
+    });
+  }, [
+    play.engineOutput?.markets?.full_total?.available,
+    play.engineOutput?.markets?.full_spread?.available,
+    play.engineOutput?.markets?.h1_total?.available,
+    play.engineOutput?.markets?.h1_spread?.available,
+    play.engineOutput?.markets?.h2_total?.available,
+    play.engineOutput?.markets?.h2_spread?.available,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Newly-live flash on mount (item 6): inline teal glow instead of toast
   useEffect(() => {
@@ -1329,6 +1365,29 @@ function NCAABGameCard({
       }
     }
   }, [overProb]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Phase D: verify canonical market object matches Top Plays selection on initial render
+  useEffect(() => {
+    const mkts = play.engineOutput?.markets;
+    if (!mkts) return;
+    const MARKET_KEYS = ["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"] as const;
+    let bestKey: typeof MARKET_KEYS[number] | null = null;
+    let bestAbsEdge = -1;
+    for (const key of MARKET_KEYS) {
+      const m = mkts[key];
+      if (!m?.available || m.edge == null) continue;
+      const absEdge = Math.abs(m.edge);
+      if (absEdge > bestAbsEdge) { bestAbsEdge = absEdge; bestKey = key; }
+    }
+    if (bestKey) {
+      console.debug("[NCAABGameCard Phase D] canonical market vs card binding", {
+        gameId: play.gameId,
+        selectedMarketKey: bestKey,
+        canonicalMarketObject: mkts[bestKey],
+        cardTabShowing: bestKey.startsWith("full") ? "full" : bestKey.startsWith("h1") ? "h1" : "h2",
+      });
+    }
+  }, [play.gameId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Canonical markets lookup — direct reads, no cross-tab fallbacks
   const h1TotalMkt = play.engineOutput?.markets?.h1_total;

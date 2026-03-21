@@ -1256,6 +1256,8 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         console.warn("H1 spread odds hydration failure (post-merge)", { gameId: game.id, h1SpreadLine });
       }
 
+      if (total !== null && overOddsAmerican === null) overOddsAmerican = -110;
+      if (spread !== null && spreadOddsAmerican === null) spreadOddsAmerican = -110;
       if (h1TotalLine !== null && h1OverOddsAmerican === null) h1OverOddsAmerican = -110;
       if (h1SpreadLine !== null && h1SpreadOddsAmerican === null) h1SpreadOddsAmerican = -110;
       if (h2TotalLine !== null && h2OverOddsAmerican === null) h2OverOddsAmerican = -110;
@@ -1345,11 +1347,31 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
           const mkts = engineOutput.markets as any;
           console.debug("[post-engine] canonical market availability", {
             gameId: game.id,
-            h1_total: { available: mkts.h1_total?.available, bookLine: mkts.h1_total?.bookLine, modelProb: mkts.h1_total?.modelProb },
-            h1_spread: { available: mkts.h1_spread?.available, bookLine: mkts.h1_spread?.bookLine, modelProb: mkts.h1_spread?.modelProb },
-            h2_total: { available: mkts.h2_total?.available, bookLine: mkts.h2_total?.bookLine, modelProb: mkts.h2_total?.modelProb },
-            h2_spread: { available: mkts.h2_spread?.available, bookLine: mkts.h2_spread?.bookLine, modelProb: mkts.h2_spread?.modelProb },
+            full_total: { available: mkts.full_total?.available, bookLine: mkts.full_total?.bookLine, modelProb: mkts.full_total?.modelProb, edge: mkts.full_total?.edge },
+            full_spread: { available: mkts.full_spread?.available, bookLine: mkts.full_spread?.bookLine, modelProb: mkts.full_spread?.modelProb, edge: mkts.full_spread?.edge },
+            h1_total: { available: mkts.h1_total?.available, bookLine: mkts.h1_total?.bookLine, modelProb: mkts.h1_total?.modelProb, edge: mkts.h1_total?.edge },
+            h1_spread: { available: mkts.h1_spread?.available, bookLine: mkts.h1_spread?.bookLine, modelProb: mkts.h1_spread?.modelProb, edge: mkts.h1_spread?.edge },
+            h2_total: { available: mkts.h2_total?.available, bookLine: mkts.h2_total?.bookLine, modelProb: mkts.h2_total?.modelProb, edge: mkts.h2_total?.edge },
+            h2_spread: { available: mkts.h2_spread?.available, bookLine: mkts.h2_spread?.bookLine, modelProb: mkts.h2_spread?.modelProb, edge: mkts.h2_spread?.edge },
           });
+          // Phase D: find the best canonical market (by |edge|) — same logic as Top Plays feed
+          const allMktKeys = ["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"] as const;
+          let bestKey: string | null = null;
+          let bestAbsEdge = -1;
+          for (const key of allMktKeys) {
+            const m = mkts[key];
+            if (!m?.available || m.edge === null) continue;
+            const absEdge = Math.abs(m.edge);
+            if (absEdge > bestAbsEdge) { bestAbsEdge = absEdge; bestKey = key; }
+          }
+          if (bestKey) {
+            console.debug("[post-engine Phase D] top-plays selected market vs card binding", {
+              gameId: game.id,
+              selectedMarketKey: bestKey,
+              canonicalMarketObject: mkts[bestKey],
+              cardTabWouldShow: bestKey.startsWith("full") ? "full" : bestKey.startsWith("h1") ? "h1" : "h2",
+            });
+          }
         }
       }
 
@@ -1506,9 +1528,39 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
     return eb - ea;
   });
 
-  console.log(`[NCAAB] Computed ${plays.length} live plays`);
+  // Sanity check: detect any duplicate gameId occurrences (should never happen since
+  // we push exactly once per liveGames entry, but guard against future regressions).
+  // When duplicates are found, keep the instance with the highest canonical edge across
+  // all 6 market keys so the play shown to the user matches what Top Plays would select.
+  const getMaxCanonicalEdge = (p: NCAABPlay): number => {
+    const mkts = p.engineOutput?.markets;
+    if (!mkts) return 0;
+    const keys: (keyof typeof mkts)[] = ["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"];
+    return keys.reduce((max, k) => {
+      const m = mkts[k];
+      return m?.available && m.edge !== null ? Math.max(max, Math.abs(m.edge)) : max;
+    }, 0);
+  };
+  const bestByGameId = new Map<string, NCAABPlay>();
+  for (const p of plays) {
+    const existing = bestByGameId.get(p.gameId);
+    if (existing) {
+      console.error(`[NCAAB DEDUP] Duplicate play detected for gameId=${p.gameId} — keeping instance with highest canonical edge. This indicates a bug in computeNCAABPlays.`);
+      if (getMaxCanonicalEdge(p) > getMaxCanonicalEdge(existing)) {
+        bestByGameId.set(p.gameId, p);
+      }
+    } else {
+      bestByGameId.set(p.gameId, p);
+    }
+  }
+  const dedupedPlays = Array.from(bestByGameId.values());
+  if (dedupedPlays.length !== plays.length) {
+    console.error(`[NCAAB DEDUP] Removed ${plays.length - dedupedPlays.length} duplicate plays. Card/feed divergence may have occurred.`);
+  }
 
-  return plays;
+  console.log(`[NCAAB] Computed ${dedupedPlays.length} live plays`);
+
+  return dedupedPlays;
 }
 
 async function settleFinishedGames(allGames: any[]) {
