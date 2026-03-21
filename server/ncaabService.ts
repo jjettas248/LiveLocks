@@ -500,14 +500,34 @@ function extractSGO1HLines(sgoEvent: SGOEvent, game: any): SGO1HLines {
     }
   }
 
-  // 2H total
-  const ouOver2H = odds["points-all-2h-ou-over"];
+  // 2H total — fixed key first, then tolerant key-search fallback (mirrors H1 logic)
+  let ouOver2H: any = odds["points-all-2h-ou-over"];
+  if (!ouOver2H) {
+    for (const k of allOddsKeys) {
+      if (isH2TotalKey(k) && !isTeamSpecificKey(k) && odds[k]?.bookOverUnder != null) {
+        console.log(`[NCAAB SGO] H2 total matched via tolerant key: ${k}`, { gameId: game.id });
+        ouOver2H = odds[k];
+        break;
+      }
+    }
+  }
   const h2TotalLine: number | null = ouOver2H?.bookOverUnder != null
     ? parseFloat(ouOver2H.bookOverUnder) : null;
 
-  // 2H spread
-  const sp2HHome = odds["points-home-2h-sp-home"];
-  const sp2HAway = odds["points-away-2h-sp-away"];
+  // 2H spread — fixed keys first, then tolerant key-search fallback (mirrors H1 logic)
+  let sp2HHome: any = odds["points-home-2h-sp-home"];
+  let sp2HAway: any = odds["points-away-2h-sp-away"];
+  if (!sp2HHome && !sp2HAway) {
+    for (const k of allOddsKeys) {
+      if (isH2SpreadKey(k) && odds[k]?.bookSpread != null) {
+        console.log(`[NCAAB SGO] H2 spread matched via tolerant key: ${k}`, { gameId: game.id });
+        const nk = normalizeMarketKey(k);
+        if (nk.includes("home")) sp2HHome = odds[k];
+        else if (nk.includes("away")) sp2HAway = odds[k];
+        else if (!sp2HHome) sp2HHome = odds[k];
+      }
+    }
+  }
   let h2SpreadLine: number | null = null;
   let h2Favorite = "";
   let h2FavoriteName = "";
@@ -664,15 +684,17 @@ function extractLines(oddsEvent: any, homeTeamName?: string, awayTeamName?: stri
         const homeOutcome = (spreadsMarket.outcomes as any[]).find(
           (o: any) => o.name?.toLowerCase().includes(homeLastWord)
         );
-        if (homeOutcome?.price != null) spreadOddsAmerican = homeOutcome.price as number;
+        const homeOdds = extractPrice(homeOutcome);
+        if (homeOdds != null) spreadOddsAmerican = homeOdds;
       }
     }
     if (totalsMarket?.outcomes?.length >= 1) {
-      const over = totalsMarket.outcomes.find((o: any) => o.name === "Over");
+      const over = totalsMarket.outcomes.find((o: any) => o.name === "Over" || (o.name ?? "").toLowerCase().includes("over"));
       if (over) {
         bkTotal = over.point as number;
-        if (overOddsAmerican === null && over.price != null) {
-          overOddsAmerican = over.price as number;
+        const overOdds = extractPrice(over);
+        if (overOddsAmerican === null && overOdds != null) {
+          overOddsAmerican = overOdds;
         }
       }
     }
@@ -1099,6 +1121,47 @@ export async function getNCAABChipOdds(gameId: string): Promise<{
   return { overUnder: data.overUnder, homeWinPct: data.homeWinPct, spreadDetails: data.spreadDetails };
 }
 
+// ── Phase B: Parse ESPN spreadDetails string into spread + favorite ────────────
+// ESPN pickcenter spreadDetails format: "TeamName -X.X" or "TeamName +X.X"
+// Sign semantics: negative means the listed team is the FAVORITE; positive means underdog.
+// "Duke -4.5" → Duke is favorite by 4.5. "UNC +3" → UNC is the underdog; the other team is favorite.
+function parseESPNSpreadDetails(
+  spreadDetails: string,
+  homeTeam: string,
+  awayTeam: string,
+): { spread: number; favorite: string } | null {
+  const match = spreadDetails.match(/^(.+?)\s+([-+]?\d+(?:\.\d+)?)$/);
+  if (!match) return null;
+  const teamPart = match[1].trim();
+  const pointVal = parseFloat(match[2]);
+  if (!isFinite(pointVal) || isNaN(pointVal)) return null;
+  const spreadAbs = Math.abs(pointVal);
+  const teamNorm = normalizeMarketKey(teamPart);
+  const homeNorm = normalizeMarketKey(homeTeam);
+  const awayNorm = normalizeMarketKey(awayTeam);
+  const homeLastWord = homeTeam.toLowerCase().split(" ").pop() ?? "";
+  const awayLastWord = awayTeam.toLowerCase().split(" ").pop() ?? "";
+  // Determine which team the listed name refers to using last-word and full-name matching
+  const listedIsHome = (homeLastWord && teamNorm.includes(homeLastWord)) ||
+    (homeNorm.length > 3 && (teamNorm.includes(homeNorm) || homeNorm.includes(teamNorm)));
+  const listedIsAway = (awayLastWord && teamNorm.includes(awayLastWord)) ||
+    (awayNorm.length > 3 && (teamNorm.includes(awayNorm) || awayNorm.includes(teamNorm)));
+  // Negative point value → listed team is the favorite
+  // Positive point value → listed team is the underdog → other team is the favorite
+  // When team identity cannot be resolved, return null rather than guessing favorite
+  let resolvedFavorite: string;
+  if (pointVal < 0) {
+    if (listedIsHome) resolvedFavorite = homeTeam;
+    else if (listedIsAway) resolvedFavorite = awayTeam;
+    else return null;
+  } else {
+    if (listedIsHome) resolvedFavorite = awayTeam;
+    else if (listedIsAway) resolvedFavorite = homeTeam;
+    else return null;
+  }
+  return { spread: spreadAbs, favorite: resolvedFavorite };
+}
+
 export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
   const [allGames, oddsEvents, sgoEvents] = await Promise.all([
     getNCAABScoreboard(),
@@ -1122,12 +1185,25 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       try { box = await getNCAABBoxScore(game.id); } catch { /* non-fatal */ }
 
       const oddsEvent = matchOddsEvent(game, oddsEvents);
+      if (!oddsEvent) {
+        console.log(`[NCAAB] Odds API miss for game ${game.id} (${game.awayTeam} @ ${game.homeTeam}) — no matching event found`);
+      }
       let { spread, total, favorite, bookLines, h1TotalLine: oddsH1Total, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav, h2TotalLine: oddsH2Total, h2SpreadLine: oddsH2Spread, h2Favorite: oddsH2Fav, overOddsAmerican, spreadOddsAmerican, h1OverOddsAmerican, h1SpreadOddsAmerican, h2OverOddsAmerican, h2SpreadOddsAmerican, h1TotalOverOdds, h1TotalUnderOdds, h1SpreadHomeOdds, h1SpreadAwayOdds, homeTTBookLine, awayTTBookLine } = oddsEvent
         ? extractLines(oddsEvent, game.homeTeam, game.awayTeam)
         : { spread: null, total: null, favorite: "", bookLines: [], h1TotalLine: null, h1SpreadLine: null, h1Favorite: "", h2TotalLine: null, h2SpreadLine: null, h2Favorite: "", overOddsAmerican: null, spreadOddsAmerican: null, h1OverOddsAmerican: null, h1SpreadOddsAmerican: null, h2OverOddsAmerican: null, h2SpreadOddsAmerican: null, h1TotalOverOdds: null, h1TotalUnderOdds: null, h1SpreadHomeOdds: null, h1SpreadAwayOdds: null, homeTTBookLine: null, awayTTBookLine: null };
 
+      if (oddsEvent && total === null) {
+        console.log(`[NCAAB] Odds API total null for game ${game.id} (${game.awayTeam} @ ${game.homeTeam}) — will attempt ESPN fallback`);
+      }
+      if (oddsEvent && spread === null) {
+        console.log(`[NCAAB] Odds API spread null for game ${game.id} (${game.awayTeam} @ ${game.homeTeam}) — will attempt ESPN fallback`);
+      }
+
       // SGO 1H + 2H lines (real book lines)
       const sgoEvent = matchSGOEvent(game, sgoEvents);
+      if (!sgoEvent) {
+        console.log(`[NCAAB] SGO miss for game ${game.id} (${game.awayTeam} @ ${game.homeTeam}) — no matching event found`);
+      }
       const sgo1H = sgoEvent ? extractSGO1HLines(sgoEvent, game) : null;
       const rawH1TotalLine  = sgo1H?.h1TotalLine ?? oddsH1Total ?? null;
       const h1SpreadLine    = sgo1H?.h1SpreadLine ?? oddsH1Spread ?? null;
@@ -1147,8 +1223,27 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       if (finalHomeGameTotalLine === null && homeTTBookLine !== null) finalHomeGameTotalLine = homeTTBookLine;
       if (finalAwayGameTotalLine === null && awayTTBookLine !== null) finalAwayGameTotalLine = awayTTBookLine;
 
-      // Fetch ESPN summary once per game — provides team totals fallback + win% for sharp signal
+      // Fetch ESPN summary once per game — provides full-game total/spread fallback + team totals + win%
       const espnSummary = await fetchESPNSummaryData(game.id);
+
+      // Phase B: ESPN pickcenter fallback for Full Game total when Odds API has no line
+      if (total === null && espnSummary.overUnder !== null) {
+        total = espnSummary.overUnder;
+        overOddsAmerican = -110;
+        console.log(`[NCAAB ESPN FG TOTAL FALLBACK] ${game.awayTeam} @ ${game.homeTeam}: overUnder=${total} (Odds API was null)`);
+      }
+
+      // Phase B: ESPN pickcenter fallback for Full Game spread when Odds API has no line
+      if (spread === null && espnSummary.spreadDetails) {
+        const parsed = parseESPNSpreadDetails(espnSummary.spreadDetails, game.homeTeam, game.awayTeam);
+        if (parsed !== null) {
+          spread = parsed.spread;
+          favorite = parsed.favorite;
+          spreadOddsAmerican = -110;
+          console.log(`[NCAAB ESPN FG SPREAD FALLBACK] ${game.awayTeam} @ ${game.homeTeam}: spread=${spread} fav=${favorite} (Odds API was null)`);
+        }
+      }
+
       if (finalHomeGameTotalLine === null && finalAwayGameTotalLine === null) {
         if (espnSummary.teamTotals.home !== null) finalHomeGameTotalLine = espnSummary.teamTotals.home;
         if (espnSummary.teamTotals.away !== null) finalAwayGameTotalLine = espnSummary.teamTotals.away;
@@ -1256,12 +1351,12 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         console.warn("H1 spread odds hydration failure (post-merge)", { gameId: game.id, h1SpreadLine });
       }
 
-      if (total !== null && overOddsAmerican === null) overOddsAmerican = -110;
-      if (spread !== null && spreadOddsAmerican === null) spreadOddsAmerican = -110;
-      if (h1TotalLine !== null && h1OverOddsAmerican === null) h1OverOddsAmerican = -110;
-      if (h1SpreadLine !== null && h1SpreadOddsAmerican === null) h1SpreadOddsAmerican = -110;
-      if (h2TotalLine !== null && h2OverOddsAmerican === null) h2OverOddsAmerican = -110;
-      if (h2SpreadLine !== null && h2SpreadOddsAmerican === null) h2SpreadOddsAmerican = -110;
+      if (total !== null && overOddsAmerican === null) { overOddsAmerican = -110; console.log(`[NCAAB] full_total line present but odds null — defaulting to -110 (gameId=${game.id})`); }
+      if (spread !== null && spreadOddsAmerican === null) { spreadOddsAmerican = -110; console.log(`[NCAAB] full_spread line present but odds null — defaulting to -110 (gameId=${game.id})`); }
+      if (h1TotalLine !== null && h1OverOddsAmerican === null) { h1OverOddsAmerican = -110; console.log(`[NCAAB] h1_total line present but odds null — defaulting to -110 (gameId=${game.id})`); }
+      if (h1SpreadLine !== null && h1SpreadOddsAmerican === null) { h1SpreadOddsAmerican = -110; console.log(`[NCAAB] h1_spread line present but odds null — defaulting to -110 (gameId=${game.id})`); }
+      if (h2TotalLine !== null && h2OverOddsAmerican === null) { h2OverOddsAmerican = -110; console.log(`[NCAAB] h2_total line present but odds null — defaulting to -110 (gameId=${game.id})`); }
+      if (h2SpreadLine !== null && h2SpreadOddsAmerican === null) { h2SpreadOddsAmerican = -110; console.log(`[NCAAB] h2_spread line present but odds null — defaulting to -110 (gameId=${game.id})`); }
 
       // ── Engine: single source of truth for projection + probability ──────
       const engineInput: import("./ncaabEngine").NCAABGameInput = {
@@ -1343,18 +1438,9 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
             console.error("NCAAB canonical market contract violation", { gameId: game.id, missingKey: key });
           }
         }
-        if (process.env.NODE_ENV !== "production") {
+        // Phase G: production-safe runtime verification — confirms Top Plays and detail card agree
+        {
           const mkts = engineOutput.markets as any;
-          console.debug("[post-engine] canonical market availability", {
-            gameId: game.id,
-            full_total: { available: mkts.full_total?.available, bookLine: mkts.full_total?.bookLine, modelProb: mkts.full_total?.modelProb, edge: mkts.full_total?.edge },
-            full_spread: { available: mkts.full_spread?.available, bookLine: mkts.full_spread?.bookLine, modelProb: mkts.full_spread?.modelProb, edge: mkts.full_spread?.edge },
-            h1_total: { available: mkts.h1_total?.available, bookLine: mkts.h1_total?.bookLine, modelProb: mkts.h1_total?.modelProb, edge: mkts.h1_total?.edge },
-            h1_spread: { available: mkts.h1_spread?.available, bookLine: mkts.h1_spread?.bookLine, modelProb: mkts.h1_spread?.modelProb, edge: mkts.h1_spread?.edge },
-            h2_total: { available: mkts.h2_total?.available, bookLine: mkts.h2_total?.bookLine, modelProb: mkts.h2_total?.modelProb, edge: mkts.h2_total?.edge },
-            h2_spread: { available: mkts.h2_spread?.available, bookLine: mkts.h2_spread?.bookLine, modelProb: mkts.h2_spread?.modelProb, edge: mkts.h2_spread?.edge },
-          });
-          // Phase D: find the best canonical market (by |edge|) — same logic as Top Plays feed
           const allMktKeys = ["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"] as const;
           let bestKey: string | null = null;
           let bestAbsEdge = -1;
@@ -1364,12 +1450,25 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
             const absEdge = Math.abs(m.edge);
             if (absEdge > bestAbsEdge) { bestAbsEdge = absEdge; bestKey = key; }
           }
-          if (bestKey) {
+          const availSnap: Record<string, boolean> = {};
+          for (const key of allMktKeys) availSnap[key] = !!mkts[key]?.available;
+          console.log(`[NCAAB G] ${game.awayTeam}@${game.homeTeam} gameId=${game.id} marketAvail=${JSON.stringify(availSnap)} topPlaysKey=${bestKey ?? "none"} topPlaysEdge=${bestKey ? mkts[bestKey]?.edge : null} topPlaysLine=${bestKey ? mkts[bestKey]?.bookLine : null} topPlaysModelProb=${bestKey ? mkts[bestKey]?.modelProb : null}`);
+
+          if (process.env.NODE_ENV !== "production") {
+            console.debug("[post-engine] canonical market availability", {
+              gameId: game.id,
+              full_total: { available: mkts.full_total?.available, bookLine: mkts.full_total?.bookLine, modelProb: mkts.full_total?.modelProb, edge: mkts.full_total?.edge },
+              full_spread: { available: mkts.full_spread?.available, bookLine: mkts.full_spread?.bookLine, modelProb: mkts.full_spread?.modelProb, edge: mkts.full_spread?.edge },
+              h1_total: { available: mkts.h1_total?.available, bookLine: mkts.h1_total?.bookLine, modelProb: mkts.h1_total?.modelProb, edge: mkts.h1_total?.edge },
+              h1_spread: { available: mkts.h1_spread?.available, bookLine: mkts.h1_spread?.bookLine, modelProb: mkts.h1_spread?.modelProb, edge: mkts.h1_spread?.edge },
+              h2_total: { available: mkts.h2_total?.available, bookLine: mkts.h2_total?.bookLine, modelProb: mkts.h2_total?.modelProb, edge: mkts.h2_total?.edge },
+              h2_spread: { available: mkts.h2_spread?.available, bookLine: mkts.h2_spread?.bookLine, modelProb: mkts.h2_spread?.modelProb, edge: mkts.h2_spread?.edge },
+            });
             console.debug("[post-engine Phase D] top-plays selected market vs card binding", {
               gameId: game.id,
               selectedMarketKey: bestKey,
-              canonicalMarketObject: mkts[bestKey],
-              cardTabWouldShow: bestKey.startsWith("full") ? "full" : bestKey.startsWith("h1") ? "h1" : "h2",
+              canonicalMarketObject: bestKey ? mkts[bestKey] : null,
+              cardTabWouldShow: bestKey ? (bestKey.startsWith("full") ? "full" : bestKey.startsWith("h1") ? "h1" : "h2") : null,
             });
           }
         }
