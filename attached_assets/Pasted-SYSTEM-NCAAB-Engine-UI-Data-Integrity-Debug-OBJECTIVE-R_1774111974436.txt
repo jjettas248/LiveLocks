@@ -1,0 +1,112 @@
+SYSTEM
+NCAAB Engine → UI Data Integrity Debug
+
+OBJECTIVE
+Resolve the mismatch where Top Plays shows valid markets but the NCAAB game detail card displays "Unavailable / No data" for the same game.
+
+This is NOT a data ingestion problem.
+This is a data flow / object binding problem.
+
+Phase A — Ground truth (no changes yet)
+
+For ONE live game that appears in Top Plays but is broken in the detail card (e.g. SLU @ Michigan):
+
+Log the following:
+
+1. Top Plays source
+- gameId
+- marketKey used (e.g. h1_total)
+- play.engineOutput.markets[marketKey]
+
+2. Detail card source
+- gameId
+- play object used in NCAABGameCard
+- play.engineOutput.markets snapshot
+
+3. Engine truth
+- engineOutput.markets for all 6 keys:
+  full_total
+  full_spread
+  h1_total
+  h1_spread
+  h2_total
+  h2_spread
+
+4. Identity check
+Log ALL play objects in the plays array matching this gameId:
+- index
+- reference
+- markets snapshot
+
+GOAL:
+Determine if mismatch is:
+(a) UI binding bug
+(b) engineOutput missing markets
+(c) duplicate play objects
+
+STOP after printing logs.
+
+---
+
+Phase B — Fix based on findings
+
+IF duplicate play objects:
+- Ensure only ONE play per gameId exists
+- Fix plays.find(...) to return correct instance
+
+IF UI binding bug:
+- Replace ALL detail card reads with:
+  play.engineOutput.markets[canonicalKey]
+- Remove ANY fallback to:
+  play.total
+  play.spread
+  ?? values
+
+IF engineOutput missing markets:
+- trace back to engineInput and fix hydration
+
+---
+
+Phase C — Enforce canonical mapping
+
+In NCAABGameCard:
+
+Full Game tab:
+→ markets.full_total / markets.full_spread
+
+1st Half tab:
+→ markets.h1_total / markets.h1_spread
+
+2nd Half tab:
+→ markets.h2_total / markets.h2_spread
+
+NO FALLBACKS ALLOWED
+
+---
+
+Phase D — Runtime verification
+
+Pick ONE live game:
+
+Confirm:
+Top Plays marketKey === detail card marketKey
+
+Print:
+- gameId
+- marketKey
+- Top Plays edge
+- Detail card edge
+
+They MUST match.
+
+---
+
+Constraints
+
+DO NOT:
+- Add ESPN fallback
+- Modify engine math
+- Add synthetic lines
+- Change Guardrail G7
+
+ONLY fix data flow + binding
