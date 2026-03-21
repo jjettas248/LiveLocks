@@ -1,0 +1,102 @@
+#71 - NCAAB Detail Card vs Top Plays Reconciliation
+
+## SYSTEM
+NCAAB Service Layer / Engine Output / UI Binding
+
+## OBJECTIVE
+Fix the mismatch where NCAAB Top Plays and live game tiles show valid plays, but the selected game detail card renders Full Game / 1st Half / 2nd Half as "Unavailable" / "No data".
+
+This is a reconciliation task between:
+- the list/top-plays/live-games data source
+- the selected game detail card data source
+
+## CONTEXT
+Observed runtime behavior:
+- NCAAB Top Plays feed is populated
+- Live game tiles are populated
+- Opening certain live games (e.g. UCF @ UCLA, UNI @ SJU) shows:
+  - Full Game unavailable
+  - 1st Half unavailable
+  - missing book implied %
+  - no edge
+- Therefore the engine is producing usable market data somewhere, but the detail card is not rendering the same usable market object
+
+## REQUIREMENTS
+
+### Phase A — Read-only comparison first
+Do NOT modify code yet.
+
+For one live game that appears in Top Plays / live tiles but renders unavailable in the detail card, trace and compare:
+
+1. The data object feeding:
+   - Top Plays cards
+   - Today’s Games live tiles
+   - Selected game detail card
+
+2. For that same game, print:
+   - gameId
+   - source endpoint / query
+   - engineOutput.markets
+   - full_total
+   - full_spread
+   - h1_total
+   - h1_spread
+   - h2_total
+   - h2_spread
+
+3. Identify whether:
+   - the detail card is using a different object than Top Plays
+   - the detail card has stale data
+   - the selected game lookup is missing engineOutput
+   - the selected game is being re-hydrated incorrectly
+   - canonical markets are present but not bound/rendered
+
+### Phase B — Fix selected game data source
+After root cause is confirmed:
+
+Ensure the selected NCAAB game detail card reads from the same fully enriched canonical game object used by Top Plays/live-game cards.
+
+If multiple game objects exist for the same game:
+- eliminate the stale path
+- bind the detail view to the enriched object
+- do not duplicate engine logic
+
+### Phase C — UI rendering contract
+Verify detail card tabs use only:
+- Full Game → full_total / full_spread
+- 1st Half → h1_total / h1_spread
+- 2nd Half → h2_total / h2_spread
+
+If canonical market exists and is available, the detail card must render:
+- line
+- model probability
+- book implied %
+- edge
+
+If canonical market is unavailable, render unavailable state only.
+
+### Phase D — Verification
+Return proof for one real live game that:
+- appears in Top Plays
+- appears in Today’s Games
+- opens in detail card
+- and now shows the same canonical market availability across all three surfaces
+
+## DO NOT
+- Do not redesign UI
+- Do not fabricate lines
+- Do not weaken Guardrail G7
+- Do not reopen unrelated NBA/MLB work
+- Do not patch blindly before Phase A comparison
+
+## SUCCESS CRITERIA
+For the same live NCAAB game:
+- Top Plays, game tile, and detail card all agree on market availability
+- detail card no longer shows false "Unavailable" when Top Plays has a valid market
+- canonical market object is the single source of truth
+
+## OUTPUT
+1. Root cause comparison report
+2. Exact code changes
+3. File-level diffs
+4. Runtime verification for one affected live game
