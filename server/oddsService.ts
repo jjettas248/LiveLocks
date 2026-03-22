@@ -174,7 +174,13 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
   const quotaCacheKey = `quota_exhausted`;
   const quotaCached = cache.get(quotaCacheKey);
   if (isFresh(quotaCached, QUOTA_TTL)) {
-    console.warn("[Odds API Error] Quota still exhausted — skipping API call");
+    console.warn("[Odds API Error] Quota still exhausted — checking last-known cache");
+    const lastKnown = lastKnownRawOdds.get(cacheKey);
+    if (lastKnown && Date.now() - lastKnown.timestamp < LAST_KNOWN_TTL) {
+      const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
+      console.log(`[Odds Fallback] Serving stale data for ${cacheKey} (age: ${ageSec}s)`);
+      return { ...lastKnown.data, _isDegraded: true };
+    }
     return QUOTA_EXHAUSTED;
   }
 
@@ -193,6 +199,12 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
       if (parsed.error_code === "OUT_OF_USAGE_CREDITS" || res.status === 401) {
         console.warn(`[Odds API Error] Quota exhausted — caching for 60 min`);
         cache.set(quotaCacheKey, { data: QUOTA_EXHAUSTED, timestamp: Date.now() });
+        const lastKnown = lastKnownRawOdds.get(cacheKey);
+        if (lastKnown && Date.now() - lastKnown.timestamp < LAST_KNOWN_TTL) {
+          const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
+          console.log(`[Odds Fallback] Quota hit — serving stale data for ${cacheKey} (age: ${ageSec}s)`);
+          return { ...lastKnown.data, _isDegraded: true };
+        }
         return QUOTA_EXHAUSTED;
       }
     } catch (_) {}
@@ -200,6 +212,7 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
   }
   const data = await res.json();
   cache.set(cacheKey, { data, timestamp: Date.now() });
+  lastKnownRawOdds.set(cacheKey, { data, timestamp: Date.now() });
 
   const books = (data.bookmakers ?? []).map((b: any) => b.key).join(", ");
   console.log(`[Odds] Fetched ${inPlay ? "LIVE" : "pre-game"} ${marketKey} odds for event ${oddsEventId}: bookmakers = ${books || "none"}`);
@@ -239,6 +252,11 @@ function normPlayerName(name: string): string {
 // Key: eventId:playerNorm:statType:bookmaker — Value: first line seen
 const openingLineCache = new Map<string, number>();
 
+// Last-known-good raw odds: stores the last successful API response per cache key.
+// Served as degraded fallback when quota is exhausted — expires after 5 minutes.
+const LAST_KNOWN_TTL = 5 * 60 * 1000;
+const lastKnownRawOdds = new Map<string, { data: any; timestamp: number }>();
+
 // Approximate win-probability change (%) per full point of line movement, by stat type.
 // Based on NBA distribution widths: points spread wider so each point matters less.
 const PROB_PER_POINT: Record<string, number> = {
@@ -269,6 +287,7 @@ export async function getPlayerOdds(
   const oddsData = await getRawOdds(oddsEventId, marketKey, inPlay);
   // Propagate quota exhaustion sentinel to caller
   if (oddsData?._quotaExhausted) return { _quotaExhausted: true } as any;
+  const isDegraded = oddsData?._isDegraded === true;
   if (!oddsData?.bookmakers) return result;
 
   const normName = normPlayerName(playerName);
@@ -339,6 +358,7 @@ export async function getPlayerOdds(
     }
   }
 
+  if (isDegraded) (result as any)._isDegraded = true;
   return result;
 }
 

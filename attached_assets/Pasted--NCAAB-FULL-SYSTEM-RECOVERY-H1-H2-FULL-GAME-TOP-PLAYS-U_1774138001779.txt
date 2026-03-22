@@ -1,0 +1,277 @@
+# NCAAB FULL SYSTEM RECOVERY — H1/H2 + FULL GAME + TOP PLAYS + UI
+
+## OBJECTIVE
+Restore full NCAAB functionality so:
+- Full Game, 1H, and 2H markets all hydrate correctly
+- Top Plays and Detail Card ALWAYS match
+- No false "Unavailable" when data exists
+- No synthetic markets introduced
+- No regression to Full Game (already working)
+
+---
+
+# 🔴 EXECUTION RULES
+
+- DO NOT modify:
+  - ncaabEngine.ts (no G7 changes)
+  - probability/calibration logic
+  - NBA / MLB pipelines
+
+- ONLY modify:
+  - server/ncaabService.ts
+  - client/src/components/ncaab-admin-tab.tsx
+
+- DO NOT guess — log first, then fix
+
+---
+
+# =========================
+# PHASE 1 — PIPELINE TRACE (MANDATORY)
+# =========================
+
+## Add BEFORE runNCAABEngine()
+
+console.log("[NCAAB TRACE PRE-ENGINE]", {
+  gameId,
+  h1TotalLine,
+  h1SpreadLine,
+  h2TotalLine,
+  h2SpreadLine,
+  h1OverOddsAmerican,
+  h1SpreadOddsAmerican,
+  h2OverOddsAmerican,
+  h2SpreadOddsAmerican,
+  sportsbookMarketKeys
+});
+
+## Add AFTER engine:
+
+console.log("[NCAAB TRACE POST-ENGINE]", {
+  gameId,
+  markets: engineOutput?.markets
+});
+
+---
+
+# =========================
+# PHASE 2 — SERVICE LAYER FIXES
+# =========================
+
+## 1. REMOVE PREMATURE LOOP EXIT (CRITICAL)
+
+File: server/ncaabService.ts
+
+- Find extractLines bookmaker loop
+- DELETE any break or early return
+
+Goal:
+→ Always iterate ALL bookmakers
+
+---
+
+## 2. ADD FLEXIBLE H2 KEY MATCHING
+
+Add helpers:
+
+function isH2TotalKey(key) {
+  const k = normalizeMarketKey(key);
+  return (
+    (k.includes("2h") || k.includes("secondhalf") || k.includes("2ndhalf")) &&
+    (k.includes("total") || k.includes("overunder") || k.includes("ou"))
+  );
+}
+
+function isH2SpreadKey(key) {
+  const k = normalizeMarketKey(key);
+  return (
+    (k.includes("2h") || k.includes("secondhalf") || k.includes("2ndhalf")) &&
+    (k.includes("spread") || k.includes("handicap") || k.includes("sp") || k.includes("line"))
+  );
+}
+
+Replace ALL strict checks:
+m.key === "h2_totals"
+m.key === "h2_spreads"
+
+---
+
+## 3. HARDEN OUTCOME + ODDS EXTRACTION
+
+Add:
+
+function extractPrice(o) {
+  return o?.price ?? o?.odds ?? null;
+}
+
+Ensure matching supports:
+- "over" / "under"
+- "home" / "away"
+- team names
+
+---
+
+## 4. ENFORCE FIRST-VALID-WINS
+
+Correct:
+
+if (h2TotalLine == null && foundLine != null) {
+  h2TotalLine = foundLine;
+}
+
+NEVER overwrite non-null values
+
+---
+
+## 5. ENSURE -110 FALLBACK (CRITICAL FOR G7)
+
+Before engine call:
+
+if (h1TotalLine != null && h1OverOddsAmerican == null) h1OverOddsAmerican = -110;
+if (h1SpreadLine != null && h1SpreadOddsAmerican == null) h1SpreadOddsAmerican = -110;
+
+if (h2TotalLine != null && h2OverOddsAmerican == null) h2OverOddsAmerican = -110;
+if (h2SpreadLine != null && h2SpreadOddsAmerican == null) h2SpreadOddsAmerican = -110;
+
+---
+
+## 6. ESPN FALLBACK (FULL GAME ONLY)
+
+if (total == null && espnSummary?.overUnder != null) {
+  total = espnSummary.overUnder;
+  if (overOddsAmerican == null) overOddsAmerican = -110;
+
+  console.log("[ESPN TOTAL FALLBACK]", { gameId, total });
+}
+
+---
+
+# =========================
+# PHASE 3 — TOP PLAYS INTEGRITY
+# =========================
+
+Ensure Top Plays ONLY uses:
+
+market.available === true && market.edge !== null
+
+Add log:
+
+console.log("[TOP PLAY]", {
+  gameId,
+  marketKey,
+  available: market.available,
+  edge: market.edge
+});
+
+---
+
+# =========================
+# PHASE 4 — UI FIX (CRITICAL)
+# =========================
+
+File: ncaab-admin-tab.tsx
+
+## REMOVE ALL NON-CANONICAL SOURCES
+
+Delete any usage of:
+- play.total
+- play.spread
+- ?? 50
+- derived fallback values
+
+---
+
+## ONLY USE:
+
+const market = play.engineOutput?.markets?.[key];
+
+---
+
+## TAB MAPPING (STRICT)
+
+Full Game → full_total / full_spread  
+1st Half → h1_total / h1_spread  
+2nd Half → h2_total / h2_spread  
+
+---
+
+## UNAVAILABLE RULE
+
+if (!market?.available) {
+  return "Unavailable";
+}
+
+---
+
+## ADD MISMATCH LOG
+
+console.warn("[CARD VS TOP PLAY MISMATCH]", {
+  gameId,
+  marketKey,
+  cardAvailable: market?.available
+});
+
+---
+
+# =========================
+# PHASE 5 — DUPLICATE PLAY CHECK
+# =========================
+
+Ensure one play per game:
+
+const seen = new Map();
+
+plays.forEach(p => {
+  if (seen.has(p.gameId)) {
+    console.warn("[DUPLICATE GAME]", p.gameId);
+  }
+  seen.set(p.gameId, true);
+});
+
+---
+
+# =========================
+# PHASE 6 — VERIFICATION
+# =========================
+
+For ONE live game:
+
+CONFIRM:
+
+1. PRE-ENGINE LOG:
+   - H1/H2 lines NOT null
+   - odds present (-110 if needed)
+
+2. POST-ENGINE:
+   - markets[key].available === true
+
+3. UI:
+   - line visible
+   - model %
+   - book %
+   - edge
+
+4. TOP PLAYS:
+   - same gameId
+   - same market key
+   - same edge
+
+---
+
+# SUCCESS CRITERIA
+
+✔ Full Game works  
+✔ H1 works  
+✔ H2 works  
+✔ Top Plays matches Detail Card  
+✔ No false "Unavailable"  
+✔ No synthetic values  
+
+---
+
+# STOP CONDITION
+
+- If lines are null → extraction issue  
+- If odds null → fallback issue  
+- If engine OK but UI broken → binding issue  
+
+Fix ONLY the failing layer
