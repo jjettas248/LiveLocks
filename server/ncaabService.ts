@@ -1414,19 +1414,23 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         },
       };
 
-      if (process.env.NODE_ENV !== "production") {
-        console.debug("[pre-engine] engineInput H1/H2 fields", {
-          gameId: game.id,
-          h1TotalLine: engineInput.h1TotalLine,
-          h1SpreadLine: engineInput.h1SpreadLine,
-          h2TotalLine: engineInput.h2TotalLine,
-          h2SpreadLine: engineInput.h2SpreadLine,
-          h1OverOddsAmerican: engineInput.h1OverOddsAmerican,
-          h1SpreadOddsAmerican: engineInput.h1SpreadOddsAmerican,
-          h2OverOddsAmerican: engineInput.h2OverOddsAmerican,
-          h2SpreadOddsAmerican: engineInput.h2SpreadOddsAmerican,
-        });
-      }
+      const sgoMarketKeys = sgoEvent ? Object.keys(sgoEvent.odds ?? {}) : [];
+      const oddsApiMarketKeys = oddsEvent
+        ? (oddsEvent.bookmakers ?? []).flatMap((bk: any) => (bk.markets ?? []).map((m: any) => m.key as string))
+        : [];
+      const combinedMarketKeys = Array.from(new Set([...sgoMarketKeys, ...oddsApiMarketKeys]));
+      console.log("[NCAAB TRACE PRE-ENGINE]", {
+        gameId: game.id,
+        h1TotalLine: engineInput.h1TotalLine,
+        h1SpreadLine: engineInput.h1SpreadLine,
+        h2TotalLine: engineInput.h2TotalLine,
+        h2SpreadLine: engineInput.h2SpreadLine,
+        h1OverOddsAmerican: engineInput.h1OverOddsAmerican,
+        h1SpreadOddsAmerican: engineInput.h1SpreadOddsAmerican,
+        h2OverOddsAmerican: engineInput.h2OverOddsAmerican,
+        h2SpreadOddsAmerican: engineInput.h2SpreadOddsAmerican,
+        detectedMarketKeys: combinedMarketKeys,
+      });
 
       const engineOutput = runNCAABEngine(engineInput);
 
@@ -1454,25 +1458,9 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
           for (const key of allMktKeys) availSnap[key] = !!mkts[key]?.available;
           console.log(`[NCAAB G] ${game.awayTeam}@${game.homeTeam} gameId=${game.id} marketAvail=${JSON.stringify(availSnap)} topPlaysKey=${bestKey ?? "none"} topPlaysEdge=${bestKey ? mkts[bestKey]?.edge : null} topPlaysLine=${bestKey ? mkts[bestKey]?.bookLine : null} topPlaysModelProb=${bestKey ? mkts[bestKey]?.modelProb : null}`);
 
-          if (process.env.NODE_ENV !== "production") {
-            console.debug("[post-engine] canonical market availability", {
-              gameId: game.id,
-              full_total: { available: mkts.full_total?.available, bookLine: mkts.full_total?.bookLine, modelProb: mkts.full_total?.modelProb, edge: mkts.full_total?.edge },
-              full_spread: { available: mkts.full_spread?.available, bookLine: mkts.full_spread?.bookLine, modelProb: mkts.full_spread?.modelProb, edge: mkts.full_spread?.edge },
-              h1_total: { available: mkts.h1_total?.available, bookLine: mkts.h1_total?.bookLine, modelProb: mkts.h1_total?.modelProb, edge: mkts.h1_total?.edge },
-              h1_spread: { available: mkts.h1_spread?.available, bookLine: mkts.h1_spread?.bookLine, modelProb: mkts.h1_spread?.modelProb, edge: mkts.h1_spread?.edge },
-              h2_total: { available: mkts.h2_total?.available, bookLine: mkts.h2_total?.bookLine, modelProb: mkts.h2_total?.modelProb, edge: mkts.h2_total?.edge },
-              h2_spread: { available: mkts.h2_spread?.available, bookLine: mkts.h2_spread?.bookLine, modelProb: mkts.h2_spread?.modelProb, edge: mkts.h2_spread?.edge },
-            });
-            console.debug("[post-engine Phase D] top-plays selected market vs card binding", {
-              gameId: game.id,
-              selectedMarketKey: bestKey,
-              canonicalMarketObject: bestKey ? mkts[bestKey] : null,
-              cardTabWouldShow: bestKey ? (bestKey.startsWith("full") ? "full" : bestKey.startsWith("h1") ? "h1" : "h2") : null,
-            });
-          }
         }
       }
+      console.log("[NCAAB TRACE POST-ENGINE]", { gameId: game.id, markets: engineOutput?.markets ?? null });
 
       if (engineOutput.projectedTotal !== null && total !== null) {
         lastEngineOutputByGame.set(game.id, {
@@ -1644,6 +1632,7 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
   for (const p of plays) {
     const existing = bestByGameId.get(p.gameId);
     if (existing) {
+      console.warn(`[DUPLICATE GAME] gameId=${p.gameId} — more than one play object found after assembly. Keeping instance with highest canonical edge.`);
       console.error(`[NCAAB DEDUP] Duplicate play detected for gameId=${p.gameId} — keeping instance with highest canonical edge. This indicates a bug in computeNCAABPlays.`);
       if (getMaxCanonicalEdge(p) > getMaxCanonicalEdge(existing)) {
         bestByGameId.set(p.gameId, p);

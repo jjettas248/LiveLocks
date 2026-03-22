@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw, AlertCircle, Clock, TrendingUp, CheckCircle, ChevronDown, Info } from "lucide-react";
@@ -1184,6 +1184,7 @@ function NCAABGameCard({
   h2hDataFromCache,
   isNewlyLive,
   onShiftDetected,
+  topPlaysSelectedKey,
 }: {
   play: NCAABPlay;
   onAddToParlay?: (pick: ParlayPickInput) => void;
@@ -1192,6 +1193,7 @@ function NCAABGameCard({
   h2hDataFromCache?: H2HGame[] | null;
   isNewlyLive?: boolean;
   onShiftDetected?: (gameId: string) => void;
+  topPlaysSelectedKey?: NCAABMarketKey | null;
 }) {
   const isH1 = play.half === 1 && !play.bettingWindow.includes("HALFTIME");
 
@@ -1366,28 +1368,13 @@ function NCAABGameCard({
     }
   }, [overProb]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Phase D: verify canonical market object matches Top Plays selection on initial render
   useEffect(() => {
-    const mkts = play.engineOutput?.markets;
-    if (!mkts) return;
-    const MARKET_KEYS = ["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"] as const;
-    let bestKey: typeof MARKET_KEYS[number] | null = null;
-    let bestAbsEdge = -1;
-    for (const key of MARKET_KEYS) {
-      const m = mkts[key];
-      if (!m?.available || m.edge == null) continue;
-      const absEdge = Math.abs(m.edge);
-      if (absEdge > bestAbsEdge) { bestAbsEdge = absEdge; bestKey = key; }
+    if (!topPlaysSelectedKey) return;
+    const cardMarket = play.engineOutput?.markets?.[topPlaysSelectedKey];
+    if (!cardMarket?.available) {
+      console.warn("[CARD VS TOP PLAY MISMATCH]", { gameId: play.gameId, topPlaysSelectedKey, cardMarketAvailable: cardMarket?.available ?? false, cardMarketObject: cardMarket ?? null });
     }
-    if (bestKey) {
-      console.debug("[NCAABGameCard Phase D] canonical market vs card binding", {
-        gameId: play.gameId,
-        selectedMarketKey: bestKey,
-        canonicalMarketObject: mkts[bestKey],
-        cardTabShowing: bestKey.startsWith("full") ? "full" : bestKey.startsWith("h1") ? "h1" : "h2",
-      });
-    }
-  }, [play.gameId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [play.gameId, topPlaysSelectedKey, play.engineOutput?.markets?.full_total?.available, play.engineOutput?.markets?.full_spread?.available, play.engineOutput?.markets?.h1_total?.available, play.engineOutput?.markets?.h1_spread?.available, play.engineOutput?.markets?.h2_total?.available, play.engineOutput?.markets?.h2_spread?.available]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Canonical markets lookup — direct reads, no cross-tab fallbacks
   const h1TotalMkt = play.engineOutput?.markets?.h1_total;
@@ -1515,7 +1502,13 @@ function NCAABGameCard({
   const altLabel = altBook ? (BOOK_LABELS[altBook.book] ?? altBook.book) : "—";
 
   const halfLabel = play.half === 1 ? "H1" : play.half === 2 ? "H2" : "OT";
-  const bestEdge  = Math.max(Math.abs(play.spreadEdge ?? 0), Math.abs(play.totalEdge ?? 0));
+  const bestEdge  = (() => {
+    const mkts = play.engineOutput?.markets;
+    if (!mkts) return 0;
+    return Math.max(...(["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"] as const).map(k => {
+      const m = mkts[k]; return m?.available && m.edge !== null ? Math.abs(m.edge) : 0;
+    }));
+  })();
 
   function addParlayPick(m: "over" | "under" | "spread") {
     if (!onAddToParlay && !onAddToCard) return;
@@ -2709,7 +2702,13 @@ function groupGamesByTipoff(games: NCAABGame[]) {
 // Returns color tier for chip border/bg based on play edge and probability
 function getChipColorTier(play: NCAABPlay | undefined): "green" | "yellow" | "red" | "neutral" {
   if (!play) return "neutral";
-  const edge = Math.abs(play.totalEdge ?? 0);
+  const mktsChip = play.engineOutput?.markets;
+  const canonicalEdge = mktsChip
+    ? Math.max(...(["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"] as const).map(k => {
+        const m = mktsChip[k]; return m?.available && m.edge !== null ? Math.abs(m.edge) : 0;
+      }))
+    : 0;
+  const edge = canonicalEdge;
   const ftMktChip = play.engineOutput?.markets?.full_total;
   const prob = ftMktChip?.available ? ftMktChip.modelProb : null;
   const confidence = prob !== null ? Math.max(prob, 100 - prob) : 0;
@@ -2720,7 +2719,13 @@ function getChipColorTier(play: NCAABPlay | undefined): "green" | "yellow" | "re
 
 function getChipValueSignal(play: NCAABPlay | undefined): { label: string; color: string; bg: string } | null {
   if (!play) return null;
-  const edge = Math.abs(play.totalEdge ?? 0);
+  const mktsVal = play.engineOutput?.markets;
+  const canonicalEdgeVal = mktsVal
+    ? Math.max(...(["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"] as const).map(k => {
+        const m = mktsVal[k]; return m?.available && m.edge !== null ? Math.abs(m.edge) : 0;
+      }))
+    : 0;
+  const edge = canonicalEdgeVal;
   const bettingWindow = play.bettingWindow;
   if (bettingWindow === "HALFTIME" && edge >= 5) {
     return { label: "2H EDGE", color: "#00d4aa", bg: "rgba(0,212,170,0.15)" };
@@ -3876,6 +3881,25 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
   const hasPlays      = plays.length > 0;
   const halftimePlays = plays.filter(p => p.bettingWindow === "HALFTIME");
 
+  const topPlaysKeyByGameId = useMemo(() => {
+    const MARKET_KEYS: NCAABMarketKey[] = ["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"];
+    const map = new Map<string, NCAABMarketKey>();
+    for (const p of plays) {
+      const mkts = p.engineOutput?.markets;
+      if (!mkts) continue;
+      let bestKey: NCAABMarketKey | null = null;
+      let bestAbsEdge = -1;
+      for (const key of MARKET_KEYS) {
+        const m = mkts[key];
+        if (!m?.available || m.edge == null) continue;
+        const absEdge = Math.abs(m.edge);
+        if (absEdge > bestAbsEdge) { bestAbsEdge = absEdge; bestKey = key; }
+      }
+      if (bestKey) map.set(p.gameId, bestKey);
+    }
+    return map;
+  }, [plays]);
+
   // ── Day reset (build step 6: lastSlateDate reset logic) ─────────────────────
   useEffect(() => {
     const today = new Date().toDateString();
@@ -4153,6 +4177,13 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                   }
                   allEntries.sort((a, b) => Math.abs(b.market.edge ?? 0) - Math.abs(a.market.edge ?? 0));
                   const topEntries = allEntries.slice(0, 20);
+                  topEntries.forEach(entry => {
+                    console.log("[TOP PLAY]", { gameId: entry.play.gameId, marketKey: entry.market.marketKey, available: entry.market.available, edge: entry.market.edge });
+                    const cardMarket = entry.play.engineOutput?.markets?.[entry.market.marketKey as NCAABMarketKey];
+                    if (!cardMarket?.available) {
+                      console.warn("[CARD VS TOP PLAY MISMATCH]", { gameId: entry.play.gameId, topPlaysSelectedKey: entry.market.marketKey, cardMarketAvailable: cardMarket?.available ?? false, cardMarketObject: cardMarket ?? null });
+                    }
+                  });
 
                   if (topEntries.length === 0) return null;
                   return (
@@ -4311,6 +4342,7 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                   h2hDataFromCache={h2hCache.current[p.gameId] ?? null}
                   isNewlyLive={newlyLiveIds.has(p.gameId)}
                   onShiftDetected={handleShiftDetected}
+                  topPlaysSelectedKey={topPlaysKeyByGameId.get(p.gameId) ?? null}
                 />
               ))}
             </div>
