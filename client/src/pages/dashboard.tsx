@@ -59,6 +59,12 @@ import {
   Sheet,
   SheetContent,
 } from "@/components/ui/sheet";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { SiX } from "react-icons/si";
 
 interface NotificationLog {
@@ -3516,14 +3522,22 @@ export default function Dashboard() {
                                             {hasLiveLine ? "Live Line" : "Season Avg"}
                                           </span>
                                           {play.isDegraded && (
-                                            <span
-                                              data-testid={`badge-stale-line-${idx}`}
-                                              className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
-                                              title="Line data may be up to 5 minutes old — confidence threshold raised"
-                                              style={{ background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.3)", color: "#fbbf24" }}
-                                            >
-                                              Stale Line
-                                            </span>
+                                            <TooltipProvider>
+                                              <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                  <span
+                                                    data-testid={`badge-stale-line-${idx}`}
+                                                    className="text-[10px] font-semibold px-1.5 py-0.5 rounded cursor-help"
+                                                    style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b" }}
+                                                  >
+                                                    Stale Line
+                                                  </span>
+                                                </TooltipTrigger>
+                                                <TooltipContent side="top" className="max-w-xs text-xs">
+                                                  Odds are from the last successful fetch and may be up to 5 minutes old. The live feed was unavailable when this play was generated.
+                                                </TooltipContent>
+                                              </Tooltip>
+                                            </TooltipProvider>
                                           )}
                                           {isLocked ? (
                                             <>

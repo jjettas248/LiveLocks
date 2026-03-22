@@ -1118,23 +1118,22 @@ export async function registerRoutes(
       // inPlay=true fetches live in-play lines (90-sec cache) rather than pre-game lines (5-min cache).
       // If live returns no results (books haven't posted live props yet), fall back to pre-game lines.
       const isInPlay = inPlay === "true";
-      let formattedOdds = await getPlayerOdds(oddsEventId, playerName as string, statType as string, isInPlay);
+      let oddsResult = await getPlayerOdds(oddsEventId, playerName as string, statType as string, isInPlay);
 
-      if ((formattedOdds as any)._quotaExhausted) {
+      if (oddsResult.quotaExhausted) {
         return res.json({ _quotaExhausted: true });
       }
 
       // Live fallback: if game is live but no live lines found yet, serve pre-game lines
-      const liveKeys = Object.keys(formattedOdds).filter(k => k !== "_quotaExhausted");
-      if (isInPlay && liveKeys.length === 0) {
+      if (isInPlay && Object.keys(oddsResult.books).length === 0 && !oddsResult.isDegraded) {
         console.log(`[Odds] No live lines for "${playerName}" (${statType}) — falling back to pre-game`);
-        formattedOdds = await getPlayerOdds(oddsEventId, playerName as string, statType as string, false);
-        if ((formattedOdds as any)._quotaExhausted) {
+        oddsResult = await getPlayerOdds(oddsEventId, playerName as string, statType as string, false);
+        if (oddsResult.quotaExhausted) {
           return res.json({ _quotaExhausted: true });
         }
       }
 
-      res.json(formattedOdds);
+      res.json(oddsResult.books);
     } catch (err: any) {
       console.error("[Odds API Error]", err.message);
       res.status(500).json({ message: err.message || "Failed to fetch odds" });
@@ -1432,7 +1431,7 @@ export async function registerRoutes(
         try { gameLines = await getGameLines(oddsEventId); } catch { /* optional */ }
       }
 
-      const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[]; isDegraded?: boolean } | null>();
+      const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[]; isDegraded: boolean } | null>();
 
       const LIVE_STAT_CONFIGS: Array<{ statType: string; components: string[] }> = [
         { statType: "points",      components: ["points"] },
@@ -1521,23 +1520,23 @@ export async function registerRoutes(
                 let resolved = false;
                 if (oddsEventId && process.env.ODDS_API_KEY) {
                   let oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, true);
-                  let bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
-                  if (bookKeys.length === 0) {
+                  let bookKeys = Object.keys(oddsResult.books);
+                  if (bookKeys.length === 0 && !oddsResult.isDegraded) {
                     oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, false);
-                    bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
+                    bookKeys = Object.keys(oddsResult.books);
                   }
                   if (bookKeys.length > 0) {
-                    const lines = bookKeys.map(k => (oddsResult as any)[k].line as number);
+                    const lines = bookKeys.map(k => oddsResult.books[k].line);
                     const sortedLines = [...lines].sort((a, b) => a - b);
                     const medianLine = sortedLines[Math.floor(sortedLines.length / 2)];
-                    oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys });
+                    oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys, isDegraded: oddsResult.isDegraded });
                     resolved = true;
                   }
                 }
                 if (!resolved && process.env.SGO_API_KEY) {
                   const sgoResult = await getSGOPlayerLine(homeTeamAbbr, awayTeamAbbr, playerName, statType);
                   if (sgoResult !== null) {
-                    oddsPlayerCache.set(lineCacheKey, { line: sgoResult, bookKeys: ["sgo"] });
+                    oddsPlayerCache.set(lineCacheKey, { line: sgoResult, bookKeys: ["sgo"], isDegraded: false });
                     resolved = true;
                   }
                 }
@@ -1758,7 +1757,7 @@ export async function registerRoutes(
       for (const game of halftimeGames) {
         // Resolve Odds API event ID for this game (for live prop lines)
         let oddsEventId: string | null = null;
-        const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[]; isDegraded?: boolean } | null>(); // "playerName|statType" → { line, bookKeys }
+        const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[]; isDegraded: boolean } | null>(); // "playerName|statType" → { line, bookKeys, isDegraded }
         try {
           const { resolveOddsEventId: resolveId } = await import("./oddsService");
           oddsEventId = await resolveId(game.homeTeamAbbr, game.awayTeamAbbr);
@@ -1914,6 +1913,7 @@ export async function registerRoutes(
                 // Multi-source line lookup: Odds API (live → pre-game) → SGO.
                 // If no real book line is found, skip this stat — we never invent a line.
                 let liveLine: number | null = null;
+                let lineIsDegraded = false;
                 const lineCacheKey = `${playerName}|${statType}`;
                 if (!oddsPlayerCache.has(lineCacheKey)) {
                   try {
@@ -1922,22 +1922,22 @@ export async function registerRoutes(
                     // Source 1 & 2: The Odds API (live in-play, then pre-game)
                     if (oddsEventId && process.env.ODDS_API_KEY) {
                       let oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, true);
-                      let bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
-                      if (bookKeys.length === 0) {
+                      let bookKeys = Object.keys(oddsResult.books);
+                      if (bookKeys.length === 0 && !oddsResult.isDegraded) {
                         oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, false);
-                        bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
+                        bookKeys = Object.keys(oddsResult.books);
                         if (bookKeys.length > 0) console.log(`[Halftime] Pre-game line for ${playerName} (${statType})`);
                       }
                       if (bookKeys.length > 0) {
-                        const books = bookKeys.map(k => (oddsResult as any)[k]);
-                        const lines = books.map((b: any) => b.line as number);
+                        const isDeg = oddsResult.isDegraded;
+                        const lines = bookKeys.map(k => oddsResult.books[k].line);
                         // Log every book → line so data integrity issues are visible
                         const lineDetail = bookKeys.map((k, i) => `${k}=${lines[i]}`).join(" | ");
-                        console.log(`[Halftime] Lines for ${playerName} (${statType}): ${lineDetail}`);
+                        console.log(`[Halftime] Lines for ${playerName} (${statType})${isDeg ? " [DEGRADED]" : ""}: ${lineDetail}`);
                         // Use median consensus — never pick extremes which amplify outlier/stale book data
                         const sortedLines = [...lines].sort((a, b) => a - b);
                         const medianLine = sortedLines[Math.floor(sortedLines.length / 2)];
-                        oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys, isDegraded: !!(oddsResult as any)._isDegraded });
+                        oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys, isDegraded: isDeg });
                         resolved = true;
                       }
                     }
@@ -1947,7 +1947,7 @@ export async function registerRoutes(
                       const sgoResult = await getSGOPlayerLine(game.homeTeamAbbr, game.awayTeamAbbr, playerName, statType);
                       if (sgoResult !== null) {
                         console.log(`[Halftime] SGO line for ${playerName} (${statType}): ${sgoResult}`);
-                        oddsPlayerCache.set(lineCacheKey, { line: sgoResult, bookKeys: ["sgo"] });
+                        oddsPlayerCache.set(lineCacheKey, { line: sgoResult, bookKeys: ["sgo"], isDegraded: false });
                         resolved = true;
                       }
                     }
@@ -1961,12 +1961,16 @@ export async function registerRoutes(
                 const oddsEntry = oddsPlayerCache.get(lineCacheKey);
                 if (oddsEntry != null) {
                   liveLine = oddsEntry.line;
-                  if (!liveLine) {
-                    console.log(`[ODDS FALLBACK] Zero/null line for ${playerName} (${statType}) — play suppressed`);
-                    continue;
-                  }
+                  lineIsDegraded = oddsEntry.isDegraded;
                 } else {
                   continue; // No real line available — never fabricate one
+                }
+
+                // Zero-line guard — a line of 0 is invalid and must not be passed to the engine.
+                // This can occur if a book returns a zero point value due to a data error.
+                if (!liveLine || liveLine === 0) {
+                  console.warn(`[ODDS FALLBACK] No valid line — play suppressed`, { gameId: game.gameId, playerName });
+                  continue;
                 }
 
                 // Skip plays where the line has already been cleared at halftime —
@@ -1998,11 +2002,26 @@ export async function registerRoutes(
                 // Minimum edge threshold of 10 (was 5). The tighter filter eliminates
                 // marginal 55-65% signals that were padding the 70-79% display bucket
                 // without genuine statistical edge after the regression corrections above.
-                const edge = Math.abs(result.probability - 50);
+                let edge = Math.abs(result.probability - 50);
+                if (edge < 10) continue;
+
+                // Confidence tier reduction for degraded lines:
+                // ELITE (edge>=20) → STRONG (edge 15-19), STRONG → VALUE (edge 10-14), VALUE → suppress
+                // This prevents a stale line from appearing as a high-confidence signal.
+                if (lineIsDegraded) {
+                  if (edge >= 20) {
+                    edge = Math.min(edge - 5, 19); // ELITE → STRONG
+                  } else if (edge >= 15) {
+                    edge = Math.min(edge - 5, 14); // STRONG → VALUE
+                  } else {
+                    // VALUE tier — suppress degraded plays with minimum edge
+                    console.log(`[ODDS FALLBACK] Degraded VALUE-tier play suppressed for ${playerName} (${statType})`);
+                    continue;
+                  }
+                }
+
                 const cacheKey2 = `${playerName}|${statType}`;
                 const oddsEntry2 = oddsPlayerCache.get(cacheKey2);
-                const isDegradedEntry = oddsEntry2?.isDegraded ?? false;
-                if (edge < (isDegradedEntry ? 15 : 10)) continue;
 
                 allPlays.push({
                   gameId: game.gameId,
@@ -2023,11 +2042,11 @@ export async function registerRoutes(
                   line: liveLine,
                   lineSource: "odds_api",
                   bookKeys: oddsEntry2?.bookKeys ?? [],
-                  isDegraded: isDegradedEntry,
                   probability: result.probability,
                   edge,
                   expectedTotal: result.expectedTotal,
                   betDirection: result.probability > 50 ? "over" : "under",
+                  isDegraded: lineIsDegraded,
                 });
               } catch {
                 // skip calc errors silently

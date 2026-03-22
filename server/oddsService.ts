@@ -46,6 +46,22 @@ interface CacheEntry {
   timestamp: number;
 }
 
+// A single bookmaker's line data for a player prop
+export interface OddsLine {
+  line: number;
+  overOdds: number;
+  underOdds: number;
+  openLine?: number;
+  lineMovement?: number;
+  edgeEstimate?: number;
+}
+
+// Discriminated union for getPlayerOdds return values
+export type PlayerOddsResult =
+  | { isDegraded: false; quotaExhausted: false; books: Record<string, OddsLine> }
+  | { isDegraded: true;  quotaExhausted: false; books: Record<string, OddsLine> }
+  | { isDegraded: false; quotaExhausted: true;  books: Record<string, never> };
+
 const cache = new Map<string, CacheEntry>();
 const EVENTS_TTL = 3 * 60 * 1000;       // 3 min (shorter so fresh games appear quickly)
 const ODDS_TTL = 5 * 60 * 1000;         // 5 min — pre-game line cache
@@ -252,10 +268,12 @@ function normPlayerName(name: string): string {
 // Key: eventId:playerNorm:statType:bookmaker — Value: first line seen
 const openingLineCache = new Map<string, number>();
 
-// Last-known-good raw odds: stores the last successful API response per cache key.
-// Served as degraded fallback when quota is exhausted — expires after 5 minutes.
-const LAST_KNOWN_TTL = 5 * 60 * 1000;
-const lastKnownRawOdds = new Map<string, { data: any; timestamp: number }>();
+// Last-known-good odds cache — stores the most recent successful getPlayerOdds result per event+player+market.
+// Key: "eventId|playerNorm|statType" — Value: { data: books, timestamp: ms }
+// Scoped to event ID so cross-game key collisions (same player in back-to-back games) cannot occur.
+// TTL: 5 minutes (same as ODDS_TTL). Used as fallback when quota is exhausted or a transient error occurs.
+const lastKnownOdds = new Map<string, { data: Record<string, OddsLine>; timestamp: number }>();
+const LAST_KNOWN_TTL = ODDS_TTL; // 5 minutes
 
 // Approximate win-probability change (%) per full point of line movement, by stat type.
 // Based on NBA distribution widths: points spread wider so each point matters less.
@@ -278,24 +296,51 @@ export async function getPlayerOdds(
   playerName: string,
   statType: string,
   inPlay = false
-): Promise<Record<string, { line: number; overOdds: number; underOdds: number; openLine?: number; lineMovement?: number; edgeEstimate?: number }>> {
-  const result: Record<string, { line: number; overOdds: number; underOdds: number; openLine?: number; lineMovement?: number; edgeEstimate?: number }> = {};
-
+): Promise<PlayerOddsResult> {
   const marketKey = MARKET_MAP[statType];
-  if (!marketKey) return result;
-
-  const oddsData = await getRawOdds(oddsEventId, marketKey, inPlay);
-  // Propagate quota exhaustion sentinel to caller
-  if (oddsData?._quotaExhausted) return { _quotaExhausted: true } as any;
-  const isDegraded = oddsData?._isDegraded === true;
-  if (!oddsData?.bookmakers) return result;
+  if (!marketKey) {
+    return { isDegraded: false, quotaExhausted: false, books: {} };
+  }
 
   const normName = normPlayerName(playerName);
+  const lastKnownKey = `${oddsEventId}|${normName}|${statType}`;
+
+  const makeDegraded = (books: Record<string, OddsLine>): PlayerOddsResult =>
+    ({ isDegraded: true, quotaExhausted: false, books });
+
+  let oddsData: any;
+  try {
+    oddsData = await getRawOdds(oddsEventId, marketKey, inPlay);
+  } catch (fetchErr) {
+    // Transient network error — attempt last-known fallback
+    const lk = lastKnownOdds.get(lastKnownKey);
+    if (lk && Date.now() - lk.timestamp < LAST_KNOWN_TTL) {
+      console.warn(`[ODDS FALLBACK] Network error for ${playerName} (${statType}) — using last-known line (degraded)`);
+      return makeDegraded(lk.data);
+    }
+    throw fetchErr;
+  }
+
+  // Quota exhaustion — try last-known cache before giving up
+  if (oddsData?._quotaExhausted) {
+    const lk = lastKnownOdds.get(lastKnownKey);
+    if (lk && Date.now() - lk.timestamp < LAST_KNOWN_TTL) {
+      console.warn(`[ODDS FALLBACK] Quota exhausted for ${playerName} (${statType}) — using last-known line (degraded)`);
+      return makeDegraded(lk.data);
+    }
+    return { isDegraded: false, quotaExhausted: true, books: {} };
+  }
+
+  if (!oddsData?.bookmakers) {
+    return { isDegraded: false, quotaExhausted: false, books: {} };
+  }
+
   const nameParts = normName.split(" ");
   const firstName = nameParts[0];
   const lastName = nameParts[nameParts.length - 1];
   const probPerPt = PROB_PER_POINT[statType] ?? 4.0;
 
+  const books: Record<string, OddsLine> = {};
   let foundForAnyBook = false;
 
   for (const bookmaker of oddsData.bookmakers) {
@@ -332,7 +377,7 @@ export async function getPlayerOdds(
       //   Positive movement = line rose    = Under bettor gained
       const edgeEstimate = parseFloat((-lineMovement * probPerPt).toFixed(1));
 
-      result[bookmaker.key] = {
+      books[bookmaker.key] = {
         line: currentLine,
         overOdds: over.price,
         underOdds: under.price,
@@ -358,8 +403,13 @@ export async function getPlayerOdds(
     }
   }
 
-  if (isDegraded) (result as any)._isDegraded = true;
-  return result;
+  // Write successful result to last-known-good cache so future quota/network errors
+  // can fall back to this data.
+  if (foundForAnyBook) {
+    lastKnownOdds.set(lastKnownKey, { data: books, timestamp: Date.now() });
+  }
+
+  return { isDegraded: false, quotaExhausted: false, books };
 }
 
 // Fetch game-level spread and total for a given Odds API event.
