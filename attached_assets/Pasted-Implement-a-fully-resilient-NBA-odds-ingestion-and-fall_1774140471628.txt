@@ -1,0 +1,25 @@
+Implement a fully resilient NBA odds ingestion and fallback system that prevents the product from going dark when Odds API credits are exhausted, while preserving model integrity and avoiding synthetic lines. This applies to NBA ONLY. Do not modify NCAAB or MLB pipelines. Do not introduce projection-derived lines. Do not change engine math, calibration, or probability logic.
+
+In server/oddsService.ts, create an in-memory Map called lastKnownOdds keyed by `${gameId}:${playerId}:${marketType}` storing { line, odds, timestamp }. Add helper function isFresh(entry) that returns true if Date.now() - entry.timestamp < 5 * 60 * 1000 (5 minutes). This cache represents the last-known-good real market data and is the only allowed fallback source.
+
+On every successful Odds API fetch, BEFORE writing to any existing cache layer, write the result into lastKnownOdds with the current timestamp so it always reflects the most recent valid sportsbook data.
+
+Before making ANY external Odds API request, ALWAYS check lastKnownOdds first. If a fresh entry exists, return it immediately with { line, odds, isDegraded: false } and skip the API call entirely. This is required to reduce quota burn and extend system uptime.
+
+Wrap all Odds API fetch logic with quota and error handling. If the API returns OUT_OF_USAGE_CREDITS or any fetch/network error occurs, do not propagate failure. Instead, check lastKnownOdds. If a fresh entry exists, return it with { line, odds, isDegraded: true }. If no fresh entry exists, return null. Never return stale entries older than 5 minutes. Never fabricate or estimate lines.
+
+Add a request-throttling safeguard so that per gameId the system does not call the Odds API more than once every 60 seconds. If a request occurs inside that window, return cached data instead of making a new API call.
+
+Before engine execution anywhere in the NBA pipeline, enforce a hard validation guard: if (!liveLine || liveLine === 0), log "[ODDS FALLBACK] No valid line — play suppressed" with gameId, player, and marketType, and return null. The engine must never run without a valid sportsbook line.
+
+Update the PlayResult type to include isDegraded: boolean and ensure this flag flows from oddsService through routes.ts into the final API response. Default isDegraded to false for all normal live odds cases.
+
+In play assembly logic, if isDegraded === true, reduce confidence tier by one level: ELITE becomes STRONG, STRONG becomes VALUE, and VALUE plays are suppressed entirely and not emitted. This prevents stale data from appearing as high-confidence edges.
+
+In the NBA UI component, if isDegraded === true, display a visible "Stale Line" badge next to the odds. Add tooltip text: "Line is from last successful fetch (≤5 minutes old). May not reflect current market." Do not hide degraded plays; only visually downgrade them.
+
+Globally enforce that the system never passes liveLine = 0 or null into the engine, never fabricates lines, and suppresses plays completely when no valid real or cached line exists.
+
+Ensure the system never returns an empty slate solely due to Odds API quota exhaustion if valid cached lines exist. If no cached lines exist (cold start with no credits), return a controlled empty state rather than breaking the UI.
+
+Success criteria: NBA plays continue rendering during Odds API outages, lastKnownOdds cache reliably serves recent data, API calls are reduced via cache-first and throttling logic, degraded plays are clearly flagged and confidence-adjusted, no invalid lines reach the engine, and normal live-odds behavior remains unchanged.
