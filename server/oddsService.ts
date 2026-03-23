@@ -64,8 +64,12 @@ export type PlayerOddsResult =
 
 const cache = new Map<string, CacheEntry>();
 const EVENTS_TTL = 3 * 60 * 1000;       // 3 min (shorter so fresh games appear quickly)
-const ODDS_TTL = 5 * 60 * 1000;         // 5 min — pre-game line cache
-const ODDS_LIVE_TTL = 90 * 1000;        // 90 sec — in-play line cache for halftime freshness
+// NBA-specific TTLs (reduced for near-real-time line updates)
+const NBA_ODDS_TTL = 2 * 60 * 1000;     // 2 min — pre-game line raw cache (NBA)
+const NBA_ODDS_LIVE_TTL = 30 * 1000;    // 30 sec — in-play line raw cache for halftime freshness (NBA)
+// MLB retains original longer TTLs (separate code path, out of scope for real-time changes)
+const MLB_ODDS_TTL = 5 * 60 * 1000;     // 5 min — pre-game line raw cache (MLB)
+const MLB_ODDS_LIVE_TTL = 90 * 1000;    // 90 sec — in-play line raw cache (MLB)
 
 function isFresh(entry: CacheEntry | undefined, ttl: number): boolean {
   return !!entry && Date.now() - entry.timestamp < ttl;
@@ -211,7 +215,7 @@ export function isMLBPropKey(key: string, statType: string): boolean {
 async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false): Promise<any> {
   const cacheKey = `odds_${inPlay ? "live" : "pre"}_${oddsEventId}_${marketKey}`;
   const cached = cache.get(cacheKey);
-  const ttl = inPlay ? ODDS_LIVE_TTL : ODDS_TTL;
+  const ttl = inPlay ? NBA_ODDS_LIVE_TTL : NBA_ODDS_TTL;
   if (isFresh(cached, ttl)) return cached!.data;
 
   // Quota errors are cached separately so we don't keep hitting the API
@@ -269,7 +273,7 @@ export async function getRawOddsForDebug(oddsEventId: string): Promise<any> {
   const markets = Object.values(MARKET_MAP).join(",");
   const cacheKey = `odds_debug_${oddsEventId}`;
   const cached = cache.get(cacheKey);
-  if (isFresh(cached, ODDS_TTL)) return cached!.data;
+  if (isFresh(cached, NBA_ODDS_TTL)) return cached!.data;
   if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
   const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${markets}&bookmakers=${PROP_BOOKMAKERS}&oddsFormat=american`;
   const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
@@ -299,14 +303,14 @@ const openingLineCache = new Map<string, number>();
 // Last-known-good odds cache — stores the most recent successful getPlayerOdds result per event+player+market.
 // Key: "eventId|playerNorm|statType" — Value: { data: books, timestamp: ms }
 // Scoped to event ID so cross-game key collisions (same player in back-to-back games) cannot occur.
-// TTL: 5 minutes (same as ODDS_TTL). Used as fallback when quota is exhausted or a transient error occurs.
+// TTL: 2 minutes (same as NBA_ODDS_TTL). Used as fallback when quota is exhausted or a transient error occurs.
 const lastKnownOdds = new Map<string, { data: Record<string, OddsLine>; timestamp: number }>();
-const LAST_KNOWN_TTL = ODDS_TTL; // 5 minutes
+const LAST_KNOWN_TTL = NBA_ODDS_TTL; // 2 minutes (NBA)
 
-// Per-gameId throttle — tracks the last time an Odds API fetch was issued per event.
-// Prevents multiple market-level fetches for the same game within a 60-second window.
+// Per-game+market throttle — tracks the last time an Odds API fetch was issued per event+market.
+// Prevents rapid re-fetches for the same game+market combination within a short window.
 const lastGameApiCall = new Map<string, number>();
-const GAME_API_THROTTLE_MS = 60_000; // 60 seconds
+const GAME_API_THROTTLE_MS = 10_000; // 10 seconds
 
 // Approximate win-probability change (%) per full point of line movement, by stat type.
 // Based on NBA distribution widths: points spread wider so each point matters less.
@@ -341,18 +345,22 @@ export async function getPlayerOdds(
   const makeDegraded = (books: Record<string, OddsLine>): PlayerOddsResult =>
     ({ isDegraded: true, quotaExhausted: false, books });
 
-  // Cache-first pre-check: if a fresh last-known entry exists (< 5 min), return it
-  // immediately as non-degraded and skip the API call entirely.
+  // Cache-first pre-check: if a fresh last-known entry exists within the active TTL window,
+  // return it immediately as non-degraded and skip the API call.
+  // Use the raw cache TTL as the window (live: 30s, pre-game: 2min) so manual refresh
+  // always gets fresh data once the underlying raw cache has expired.
+  const cacheFirstTTL = inPlay ? NBA_ODDS_LIVE_TTL : NBA_ODDS_TTL;
   const lkFresh = lastKnownOdds.get(lastKnownKey);
-  if (lkFresh && Date.now() - lkFresh.timestamp < LAST_KNOWN_TTL) {
+  if (lkFresh && Date.now() - lkFresh.timestamp < cacheFirstTTL) {
     console.log(`[ODDS CACHE-FIRST] Fresh cache hit for ${playerName} (${statType}) — skipping API call`);
     pipelineLog("NBA", oddsEventId, "odds:cacheHit", { player: playerName, statType, books: Object.keys(lkFresh.data) });
     return { isDegraded: false, quotaExhausted: false, books: lkFresh.data };
   }
 
-  // Per-gameId 60-second throttle: if a fetch was already issued for this event
-  // within the last 60 s, skip the API call and serve from last-known (degraded if present).
-  const lastCallTs = lastGameApiCall.get(oddsEventId);
+  // Per-game+market throttle: if a fetch was already issued for this event+market
+  // within the throttle window, skip the API call and serve from last-known (degraded if present).
+  const throttleKey = `${oddsEventId}:${marketKey}`;
+  const lastCallTs = lastGameApiCall.get(throttleKey);
   if (lastCallTs !== undefined && Date.now() - lastCallTs < GAME_API_THROTTLE_MS) {
     const lk = lastKnownOdds.get(lastKnownKey);
     if (lk) {
@@ -364,8 +372,8 @@ export async function getPlayerOdds(
   }
 
   // Stamp the throttle timestamp at issuance time so concurrent requests for the
-  // same event are blocked even before the first request resolves.
-  lastGameApiCall.set(oddsEventId, Date.now());
+  // same event+market are blocked even before the first request resolves.
+  lastGameApiCall.set(throttleKey, Date.now());
 
   let oddsData: any;
   try {
@@ -798,7 +806,7 @@ export async function resolveMLBOddsEventId(
 async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = false): Promise<any> {
   const cacheKey = `mlb_odds_${inPlay ? "live" : "pre"}_${oddsEventId}_${marketKey}`;
   const cached = cache.get(cacheKey);
-  const ttl = inPlay ? ODDS_LIVE_TTL : ODDS_TTL;
+  const ttl = inPlay ? MLB_ODDS_LIVE_TTL : MLB_ODDS_TTL;
   if (isFresh(cached, ttl)) return cached!.data;
 
   const quotaCacheKey = `quota_exhausted`;
@@ -806,7 +814,7 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
   if (isFresh(quotaCached, QUOTA_TTL)) {
     console.warn("[MLB Odds] Quota still exhausted — checking last-known raw cache");
     const lastKnown = lastKnownRawOdds.get(cacheKey);
-    if (lastKnown && Date.now() - lastKnown.timestamp < LAST_KNOWN_TTL) {
+    if (lastKnown && Date.now() - lastKnown.timestamp < MLB_LAST_KNOWN_TTL) {
       const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
       console.log(`[MLB Odds Fallback] Serving stale raw data for ${cacheKey} (age: ${ageSec}s)`);
       return { ...lastKnown.data, _isDegraded: true };
@@ -826,7 +834,7 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
   } catch (fetchErr) {
     console.warn(`[MLB Odds] Network error — checking last-known raw cache for ${cacheKey}`);
     const lastKnown = lastKnownRawOdds.get(cacheKey);
-    if (lastKnown && Date.now() - lastKnown.timestamp < LAST_KNOWN_TTL) {
+    if (lastKnown && Date.now() - lastKnown.timestamp < MLB_LAST_KNOWN_TTL) {
       const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
       console.log(`[MLB Odds Fallback] Network error — stale data for ${cacheKey} (age: ${ageSec}s)`);
       return { ...lastKnown.data, _isDegraded: true };
@@ -842,7 +850,7 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
         console.warn(`[MLB Odds] Quota exhausted — caching for 60 min`);
         cache.set(quotaCacheKey, { data: QUOTA_EXHAUSTED, timestamp: Date.now() });
         const lastKnown = lastKnownRawOdds.get(cacheKey);
-        if (lastKnown && Date.now() - lastKnown.timestamp < LAST_KNOWN_TTL) {
+        if (lastKnown && Date.now() - lastKnown.timestamp < MLB_LAST_KNOWN_TTL) {
           const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
           console.log(`[MLB Odds Fallback] Quota hit — stale data for ${cacheKey} (age: ${ageSec}s)`);
           return { ...lastKnown.data, _isDegraded: true };
@@ -871,7 +879,7 @@ function makeDegradedMLBResult(data: MLBOddsResult): MLBOddsResult {
 // Last-known-good MLB player odds cache (normalized level)
 // Key: "oddsEventId|playerNorm|statType" — mirrors the NBA lastKnownOdds pattern
 const lastKnownMLBOdds = new Map<string, { data: MLBOddsResult; timestamp: number }>();
-const MLB_LAST_KNOWN_TTL = ODDS_TTL; // 5 minutes
+const MLB_LAST_KNOWN_TTL = MLB_ODDS_TTL; // 5 minutes (MLB)
 
 export async function getMLBPlayerOdds(
   oddsEventId: string,
