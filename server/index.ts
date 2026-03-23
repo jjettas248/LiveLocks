@@ -370,7 +370,7 @@ app.use((req, res, next) => {
           isNull(users.subscriptionTier),
           eq(users.emailVerified, true),
           eq(users.sentWall, false),
-          gte(users.playsUsed, 2)
+          gte(users.playsUsed, 3)
         )
       );
 
@@ -471,8 +471,8 @@ app.use((req, res, next) => {
           continue;
         }
 
-        // E: Wall hit backup (near or at limit, not yet sent)
-        if (!user.sentWall && user.playsUsed >= 2) {
+        // E: Wall hit (at the play limit, not yet sent)
+        if (!user.sentWall && user.playsUsed >= FREE_PLAY_LIMIT) {
           await sendWallEmail(user.email);
           await storage.updateUserEmailFlags(user.id, { sentWall: true });
           console.log(`[email-cron] user ${user.id} — wall sent`);

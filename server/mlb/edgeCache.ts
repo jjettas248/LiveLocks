@@ -4,6 +4,7 @@
 // Cache key is the plain gameId string (e.g. "746376").
 
 import type { MLBPropOutput } from "./types";
+import { getActiveGames } from "./liveGameRegistry";
 
 export const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 export const MAX_CACHE_GAMES = 50;
@@ -22,11 +23,6 @@ const _cache = new Map<string, EdgeCacheEntry>();
 // Games leave the active registry when they reach a final/completed state.
 export function cleanupExpiredEntries(): void {
   const now = Date.now();
-  // Lazy require avoids a circular dependency at module load time.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { getActiveGames } = require("./liveGameRegistry") as {
-    getActiveGames: () => Array<{ gameId: string }>;
-  };
   const activeIds = new Set(getActiveGames().map((g) => g.gameId));
 
   for (const [key, entry] of _cache) {
