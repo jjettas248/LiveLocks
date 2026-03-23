@@ -2,7 +2,7 @@
  * Standalone email blast script — sends wall-hit emails to eligible free users.
  * Usage: npx tsx server/scripts/emailBlast.ts
  *
- * Eligible: free tier, email verified, sentWall=false, playsUsed >= 2
+ * Eligible: free tier, email verified, sentWall=false, playsUsed >= 3 (FREE_PLAY_LIMIT)
  */
 
 import "dotenv/config";
@@ -26,7 +26,7 @@ async function main() {
         isNull(users.subscriptionTier),
         eq(users.emailVerified, true),
         eq(users.sentWall, false),
-        gte(users.playsUsed, 2)
+        gte(users.playsUsed, 3)
       )
     );
 
