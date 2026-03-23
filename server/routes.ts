@@ -347,11 +347,22 @@ export async function registerRoutes(
       const data = (await response.json()) as any;
       const registeredIds = new Set(getActiveGames().map((g) => g.gameId));
 
+      // Canonical MLB status normalization helper
+      function normalizeMLBState(raw: string | undefined): "live" | "preview" | "final" | null {
+        if (!raw) return null;
+        const s = raw.toLowerCase().replace(/[\s_-]/g, "");
+        if (s === "live" || s === "inprogress") return "live";
+        if (s === "preview" || s === "pregame") return "preview";
+        if (s === "final") return "final";
+        return null;
+      }
+
       const games: any[] = [];
       for (const date of data.dates ?? []) {
         for (const game of date.games ?? []) {
           const state = game.status?.abstractGameState as string;
-          if (state !== "Live" && state !== "Preview") continue;
+          const canonicalState = normalizeMLBState(state);
+          if (canonicalState !== "live" && canonicalState !== "preview") continue;
           const gameId = String(game.gamePk);
           const linescore = game.linescore ?? {};
           const inning: number = linescore.currentInning ?? 0;
@@ -392,7 +403,7 @@ export async function registerRoutes(
             awayScore,
             inning: cachedState?.inning ?? inning,
             isTopInning: cachedState?.isTopInning ?? isTopInning,
-            status: state === "Live" ? "live" : "preview",
+            status: canonicalState ?? "preview",
             inRegistry: registeredIds.has(gameId),
             parkName,
             parkFactor,
@@ -492,12 +503,16 @@ export async function registerRoutes(
         if (schedRes.ok) {
           const schedData = (await schedRes.json()) as any;
           const abstractState: string = schedData.gameData?.status?.abstractGameState ?? "";
-          gameStatus = abstractState === "Live" ? "live" : abstractState === "Preview" ? "preview" : abstractState.toLowerCase().replace(/\s+/g, "_");
+          const s = abstractState.toLowerCase().replace(/[\s_-]/g, "");
+          if (s === "live" || s === "inprogress") gameStatus = "live";
+          else if (s === "preview" || s === "pregame") gameStatus = "preview";
+          else if (s === "final") gameStatus = "final";
+          else gameStatus = s || "unknown";
         }
       } catch { /* fallback: gameStatus stays "" */ }
     }
 
-    if (gameStatus !== "live" && gameStatus !== "in_progress") {
+    if (gameStatus !== "live") {
       console.log(`[MLB signals] Game ${gameId} status="${gameStatus}" — returning empty`);
       mlbSignalsCache.delete(gameId);
       return res.json({ signals: [], updatedAt: 0 });
@@ -631,8 +646,11 @@ export async function registerRoutes(
       }
     }
 
+    // Surface degraded-odds flag: true when some signals have no live book line
+    const isDegraded = rosterLockedSignals.some((s) => s.bookLine === null);
+
     mlbSignalsCache.set(gameId, { ts: Date.now(), signals: rosterLockedSignals, updatedAt });
-    return res.json({ signals: rosterLockedSignals, updatedAt });
+    return res.json({ signals: rosterLockedSignals, updatedAt, isDegraded });
   });
 
   // ── MLB Routes (Admin-only in Phase A) ──────────────────────────────────────
@@ -1547,7 +1565,14 @@ export async function registerRoutes(
               if (!oddsEntry) continue;
               const liveLine = oddsEntry.line;
 
-              
+              if (!liveLine || liveLine === 0) {
+                console.warn(`[NBA] No valid line — play suppressed`, { playerName: dbPlayer.name, statType });
+                continue;
+              }
+
+              if (process.env.DEBUG_PIPELINE === "true") {
+                console.log(`[PIPELINE][NBA] engineInput: player=${dbPlayer.name} stat=${statType} line=${liveLine} halftimeStat=${currentStat}`);
+              }
 
               const result = await storage.calculateProbability({
                 playerId: dbPlayer.id,
@@ -1977,6 +2002,10 @@ export async function registerRoutes(
                 // these are not actionable (over already won, under already lost).
                 // Check BEFORE running calculateProbability to save compute cost.
                 if (halftimeStat >= liveLine) continue;
+
+                if (process.env.DEBUG_PIPELINE === "true") {
+                  console.log(`[PIPELINE][NBA][HT] engineInput: player=${dbPlayer.name} stat=${statType} line=${liveLine} halftimeStat=${halftimeStat}`);
+                }
 
                 const result = await storage.calculateProbability({
                   playerId: dbPlayer.id,

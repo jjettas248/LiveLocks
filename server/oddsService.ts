@@ -177,6 +177,34 @@ const QUOTA_EXHAUSTED = { _quotaExhausted: true } as const;
 // How long to suppress retry attempts after a quota error (60 min)
 const QUOTA_TTL = 60 * 60 * 1000;
 
+// ── Debug pipeline logging ────────────────────────────────────────────────────
+// Gate all debug logs behind DEBUG_PIPELINE=true to keep production logs clean.
+const DEBUG_PIPELINE = process.env.DEBUG_PIPELINE === "true";
+function pipelineLog(sport: string, gameId: string, stage: string, payload: unknown): void {
+  if (!DEBUG_PIPELINE) return;
+  console.log(`[PIPELINE][${sport}][${gameId}] ${stage}:`, JSON.stringify(payload));
+}
+export { pipelineLog };
+
+// ── Last-known-good raw odds cache (raw API response level) ───────────────────
+// Stores most recent successful getRawOdds / getMLBRawOdds response per cache key.
+// Key: cacheKey used in getRawOdds/getMLBRawOdds — Value: { data, timestamp }
+const lastKnownRawOdds = new Map<string, { data: any; timestamp: number }>();
+
+// ── Flexible MLB prop key matcher ────────────────────────────────────────────
+// Bookmakers use varying key formats; avoid exact-string dependency.
+export function isMLBPropKey(key: string, statType: string): boolean {
+  const k = key.toLowerCase().replace(/[_\-\s]/g, "");
+  const s = statType.toLowerCase().replace(/[_\-\s]/g, "");
+  if (s === "hits" || s === "batterhits") return k.includes("batterhit") || k.includes("hitter") || (k.includes("hit") && !k.includes("pitcher") && !k.includes("allow") && !k.includes("home"));
+  if (s === "totalbases" || s === "total_bases" || s === "batttertotalbases") return k.includes("totalbase") || k.includes("totbase");
+  if (s === "batterstrikeouts" || s === "batter_strikeouts") return k.includes("batterstrikeout") || k.includes("batso") || (k.includes("strikeout") && k.includes("batter"));
+  if (s === "pitcherstrikeouts" || s === "pitcher_strikeouts") return k.includes("pitcherstrikeout") || k.includes("pitso") || (k.includes("strikeout") && k.includes("pitcher"));
+  if (s === "hitsallowed" || s === "hits_allowed") return k.includes("hitsallowed") || k.includes("hitallow");
+  if (s === "homeruns" || s === "home_runs") return k.includes("homerun") || k.includes("homer");
+  return k.includes(s);
+}
+
 // Fetch player prop odds for a single market (saves ~91% of API credits vs fetching all 11).
 // Returns QUOTA_EXHAUSTED sentinel when the key is out of credits — callers must check for it.
 // inPlay=true fetches live in-game lines (used for halftime plays) instead of pre-game lines.
@@ -729,7 +757,16 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
 
   const quotaCacheKey = `quota_exhausted`;
   const quotaCached = cache.get(quotaCacheKey);
-  if (isFresh(quotaCached, QUOTA_TTL)) return QUOTA_EXHAUSTED;
+  if (isFresh(quotaCached, QUOTA_TTL)) {
+    console.warn("[MLB Odds] Quota still exhausted — checking last-known raw cache");
+    const lastKnown = lastKnownRawOdds.get(cacheKey);
+    if (lastKnown && Date.now() - lastKnown.timestamp < LAST_KNOWN_TTL) {
+      const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
+      console.log(`[MLB Odds Fallback] Serving stale raw data for ${cacheKey} (age: ${ageSec}s)`);
+      return { ...lastKnown.data, _isDegraded: true };
+    }
+    return QUOTA_EXHAUSTED;
+  }
 
   if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
 
@@ -737,13 +774,33 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
   const bookmakers = "draftkings,fanduel,hardrockbet";
   const url = `${MLB_BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=${PROP_REGIONS}&markets=${marketKey}&bookmakers=${bookmakers}&oddsFormat=american${inPlayParam}`;
 
-  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  } catch (fetchErr) {
+    console.warn(`[MLB Odds] Network error — checking last-known raw cache for ${cacheKey}`);
+    const lastKnown = lastKnownRawOdds.get(cacheKey);
+    if (lastKnown && Date.now() - lastKnown.timestamp < LAST_KNOWN_TTL) {
+      const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
+      console.log(`[MLB Odds Fallback] Network error — stale data for ${cacheKey} (age: ${ageSec}s)`);
+      return { ...lastKnown.data, _isDegraded: true };
+    }
+    throw fetchErr;
+  }
+
   if (!res.ok) {
     const body = await res.text();
     try {
       const parsed = JSON.parse(body);
       if (parsed.error_code === "OUT_OF_USAGE_CREDITS" || res.status === 401) {
+        console.warn(`[MLB Odds] Quota exhausted — caching for 60 min`);
         cache.set(quotaCacheKey, { data: QUOTA_EXHAUSTED, timestamp: Date.now() });
+        const lastKnown = lastKnownRawOdds.get(cacheKey);
+        if (lastKnown && Date.now() - lastKnown.timestamp < LAST_KNOWN_TTL) {
+          const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
+          console.log(`[MLB Odds Fallback] Quota hit — stale data for ${cacheKey} (age: ${ageSec}s)`);
+          return { ...lastKnown.data, _isDegraded: true };
+        }
         return QUOTA_EXHAUSTED;
       }
     } catch (_) {}
@@ -751,10 +808,16 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
   }
   const data = await res.json();
   cache.set(cacheKey, { data, timestamp: Date.now() });
+  lastKnownRawOdds.set(cacheKey, { data, timestamp: Date.now() });
   return data;
 }
 
-type MLBOddsResult = Record<string, { line: number; overOdds: number; underOdds: number }> & { _quotaExhausted?: boolean };
+type MLBOddsResult = Record<string, { line: number; overOdds: number; underOdds: number }> & { _quotaExhausted?: boolean; _isDegraded?: boolean };
+
+// Last-known-good MLB player odds cache (normalized level)
+// Key: "oddsEventId|playerNorm|statType" — mirrors the NBA lastKnownOdds pattern
+const lastKnownMLBOdds = new Map<string, { data: MLBOddsResult; timestamp: number }>();
+const MLB_LAST_KNOWN_TTL = ODDS_TTL; // 5 minutes
 
 export async function getMLBPlayerOdds(
   oddsEventId: string,
@@ -762,26 +825,58 @@ export async function getMLBPlayerOdds(
   statType: string,
   inPlay = false
 ): Promise<MLBOddsResult> {
-  const result: MLBOddsResult = {};
+  const normName = normPlayerName(playerName);
+  const lastKnownKey = `${oddsEventId}|${normName}|${statType}`;
 
   const marketKey = MLB_MARKET_MAP[statType];
-  if (!marketKey) return result;
+  if (!marketKey) return {};
 
-  const oddsData = await getMLBRawOdds(oddsEventId, marketKey, inPlay);
+  let oddsData: any;
+  try {
+    oddsData = await getMLBRawOdds(oddsEventId, marketKey, inPlay);
+  } catch (fetchErr) {
+    const lk = lastKnownMLBOdds.get(lastKnownKey);
+    if (lk && Date.now() - lk.timestamp < MLB_LAST_KNOWN_TTL) {
+      console.warn(`[MLB Odds Fallback] Network error for ${playerName} (${statType}) — using last-known (degraded)`);
+      return { ...lk.data, _isDegraded: true };
+    }
+    throw fetchErr;
+  }
+
   if (oddsData?._quotaExhausted) {
+    const lk = lastKnownMLBOdds.get(lastKnownKey);
+    if (lk && Date.now() - lk.timestamp < MLB_LAST_KNOWN_TTL) {
+      console.warn(`[MLB Odds Fallback] Quota exhausted for ${playerName} (${statType}) — using last-known (degraded)`);
+      return { ...lk.data, _isDegraded: true };
+    }
     const exhausted: MLBOddsResult = {};
     exhausted._quotaExhausted = true;
     return exhausted;
   }
-  if (!oddsData?.bookmakers) return result;
 
-  const normName = normPlayerName(playerName);
+  // _isDegraded set by getMLBRawOdds when serving raw stale data
+  const isDegradedRaw = !!(oddsData?._isDegraded);
+
+  if (!oddsData?.bookmakers) {
+    const lk = lastKnownMLBOdds.get(lastKnownKey);
+    if (lk && Date.now() - lk.timestamp < MLB_LAST_KNOWN_TTL) {
+      console.warn(`[MLB Odds Fallback] Empty bookmakers for ${playerName} (${statType}) — using last-known (degraded)`);
+      return { ...lk.data, _isDegraded: true };
+    }
+    return {};
+  }
+
   const nameParts = normName.split(" ");
   const firstName = nameParts[0];
   const lastName = nameParts[nameParts.length - 1];
 
+  const result: MLBOddsResult = {};
+
   for (const bookmaker of oddsData.bookmakers) {
-    const market = bookmaker.markets?.find((m: any) => m.key === marketKey);
+    // Use flexible key matching instead of exact equality
+    const market = (bookmaker.markets ?? []).find(
+      (m: any) => m.key === marketKey || isMLBPropKey(m.key ?? "", statType)
+    );
     if (!market?.outcomes) continue;
 
     const playerOutcomes = market.outcomes.filter((o: any) => {
@@ -803,6 +898,11 @@ export async function getMLBPlayerOdds(
     }
   }
 
+  if (Object.keys(result).filter(k => !k.startsWith("_")).length > 0) {
+    lastKnownMLBOdds.set(lastKnownKey, { data: result, timestamp: Date.now() });
+  }
+
+  if (isDegradedRaw) result._isDegraded = true;
   return result;
 }
 

@@ -1432,6 +1432,10 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         detectedMarketKeys: combinedMarketKeys,
       });
 
+      if (process.env.DEBUG_PIPELINE === "true") {
+        console.log(`[PIPELINE][NCAAB] engineInput: gameId=${engineInput.gameId} half=${half} total=${engineInput.liveTotalLine} h2Total=${engineInput.h2TotalLine}`);
+      }
+
       const engineOutput = runNCAABEngine(engineInput);
 
       if (!engineOutput.markets) {

@@ -52,10 +52,19 @@ export async function discoverTodaysGames(): Promise<MLBGame[]> {
 
     const games: MLBGame[] = [];
 
+    // Canonical status normalization: MLB API returns "Live", "In Progress",
+    // "in_progress", "Preview", "Pre-Game", or "Final".
+    // Allow any live-equivalent state; only exclude finished/future games.
+    function isLiveOrPreview(state: string | undefined): boolean {
+      if (!state) return false;
+      const s = state.toLowerCase().replace(/[\s_-]/g, "");
+      return s === "live" || s === "inprogress" || s === "preview" || s === "pregame";
+    }
+
     for (const date of data.dates ?? []) {
       for (const game of date.games ?? []) {
         const state = game.status?.abstractGameState;
-        if (state !== "Live" && state !== "Preview") continue;
+        if (!isLiveOrPreview(state)) continue;
 
         games.push({
           gameId: String(game.gamePk),

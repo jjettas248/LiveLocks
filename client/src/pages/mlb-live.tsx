@@ -57,6 +57,7 @@ type MLBSignal = {
 type SignalsResponse = {
   signals: MLBSignal[];
   updatedAt: number;
+  isDegraded?: boolean;
 };
 
 type OddsEntry = {
@@ -223,6 +224,7 @@ export default function MlbLivePage() {
 
   const signals = signalsResp?.signals ?? [];
   const updatedAt = signalsResp?.updatedAt ?? 0;
+  const signalsDegraded = signalsResp?.isDegraded ?? false;
   const selectedGameRaw = games.find((g) => g.gameId === selectedGameId) ?? null;
   const selectedGameRef = useRef<MLBGame | null>(null);
 
@@ -605,6 +607,16 @@ export default function MlbLivePage() {
                 )}
               </div>
             </div>
+
+            {signalsDegraded && filteredSignals.length > 0 && (
+              <div
+                className="mb-3 flex items-center gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-600 dark:text-yellow-400"
+                data-testid="banner-mlb-degraded-odds"
+              >
+                <span className="font-semibold">Note:</span>
+                <span>Using last known lines — live odds temporarily unavailable. Edge calculations may be less precise.</span>
+              </div>
+            )}
 
             {!signalsLoading && filteredSignals.length === 0 ? (
               <div className="px-5 py-8 rounded-xl border border-border bg-card text-center" data-testid="text-no-signals">

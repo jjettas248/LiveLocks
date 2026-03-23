@@ -1,0 +1,328 @@
+# TASK: #76 - LiveLocks Full System Audit + Repair
+
+## SYSTEM:
+Core Engine + Data Pipeline + UX Failsafes + Analytics
+
+## OBJECTIVE:
+Perform a full stability and integrity audit across NBA, NCAAB, and MLB so the Engine → API → UI pipeline is verifiably healthy, gracefully degraded during odds failures, and MLB is production-ready before Wednesday.
+
+This is a hardening task, not a model rewrite.
+
+---
+
+## CONTEXT:
+LiveLocks currently needs a cross-sport audit and repair pass covering:
+- structured audit visibility
+- odds fallback resilience
+- MLB live-status normalization
+- safe engine input guard-rails
+- strict ESPN source boundaries
+- non-broken UI empty/degraded states
+- analytics endpoint verification
+
+This task must protect existing NBA behavior while fixing shared fragility across the stack.
+
+---
+
+## IN SCOPE:
+- Temporary structured audit logging for NBA, NCAAB, MLB
+- Odds fallback hardening in `server/oddsService.ts`
+- MLB prop key matcher hardening
+- MLB live status normalization
+- Shared engine input validation / safe skip behavior
+- ESPN source-boundary enforcement
+- UI degraded-state / empty-state rendering
+- `/api/analytics/summary` verification and repair
+- Final sport-by-sport verification
+- Cleanup or gating of temporary logs
+
+## OUT OF SCOPE:
+- New probability models
+- Calibration rewrites
+- NBA core engine logic rewrites
+- Rewriting intentional NBA first-valid-line early exit if confirmed by design
+- NCAAB H1/H2 loop work covered by Task #67
+- MLB premium UI or monetization changes
+- Hardcoded odds, props, or probabilities
+- New odds providers or external data sources
+
+---
+
+## CRITICAL IMPLEMENTATION RULES:
+- Do backend/service audit and fixes first
+- Do not patch UI to appear fixed before route/service outputs are verified
+- Do not introduce any new odds source
+- Do not weaken existing NBA extraction behavior unless required for shared safety protections
+- Do not allow fallback codepaths to return empty arrays if cached data exists
+- Any temporary logs must be gated behind a debug flag or removed at the end
+- All degraded responses must use a consistent `isDegraded` contract
+- If a market/player/game is invalid, skip safely with an explicit reason; never crash and never fail silently
+
+---
+
+## PHASE A — AUDIT INSTRUMENTATION
+Add temporary structured logs at four checkpoints for all three sports. Gate all logs behind a debug flag.
+
+### Required checkpoints:
+1. Raw ingestion
+   - bookmaker keys
+   - raw lines
+   - raw odds
+   - game status
+
+2. Post-processing
+   - extracted lines
+   - merged state
+   - normalized market data
+
+3. Pre-engine
+   - final `engineInput`
+
+4. Engine output
+   - probability
+   - edge
+   - market availability
+   - skip reason when not processed
+
+### Required log format:
+`[SPORT][GAME_ID] raw -> processed -> engineInput -> engineOutput`
+
+### Acceptance:
+- Logs appear for NBA, NCAAB, and MLB
+- Logs are gated behind a debug flag
+- Logging is structured enough to isolate where data is disappearing
+
+---
+
+## PHASE B — ODDS RESILIENCE HARDENING
+Audit and repair `server/oddsService.ts` so last-known-good fallback activates on all recoverable failure paths:
+- quota exhaustion
+- transient network errors
+- malformed payloads
+- empty upstream responses where cache exists
+
+### Requirements:
+- Always return cached values when available
+- Always set `isDegraded: true` on stale fallback responses
+- Never return an empty odds array if a valid cache exists
+- Verify raw-odds and normalized-odds caches cannot drift or conflict
+- Ensure fallback behavior is consistent across sports
+
+### Acceptance:
+- Quota/network/empty-response failures no longer blank the play feed when cache exists
+- Response shape remains valid and consistent
+- `isDegraded` is present and trustworthy
+
+---
+
+## PHASE C — MLB MARKET + LIVE STATUS HARDENING
+Repair MLB market detection and live gating.
+
+### Market detection:
+In `server/mlb/markets.ts` and related MLB extraction files:
+- implement `isMLBPropKey()`
+- add any missing helper matchers required for bookmaker alias variance
+- replace exact string equality checks for MLB prop market keys with matcher-based detection
+
+### Live status normalization:
+Wherever raw `abstractState` is used:
+- map `"Live"` → `live`
+- map `"In Progress"` → `live`
+- map `"in_progress"` → `live`
+- map `"Pre-Game"` → `pregame`
+- map `"Final"` → `final`
+
+### Requirements:
+- Live gating must allow canonical `live`
+- No valid live MLB game should be blocked because of raw status formatting differences
+
+### Acceptance:
+- MLB prop hydration no longer depends on exact key equality
+- MLB live games in all supported raw state formats pass gating correctly
+
+---
+
+## PHASE D — ENGINE INPUT GUARD-RAILS
+Before running the engine in NBA, NCAAB, and MLB, validate required inputs:
+- line
+- odds
+- minimum player context
+- minimum game context
+
+### Requirements:
+- If any required field is missing, log the exact skip reason
+- Skip safely
+- Continue processing remaining markets/players
+- No throws
+- No silent failures
+
+### Acceptance:
+- Engine never crashes due to missing line/odds/context
+- Missing-input cases are visible in logs
+- Other valid markets continue processing normally
+
+---
+
+## PHASE E — ESPN SOURCE-BOUNDARY ENFORCEMENT
+Audit all routes and services that touch:
+- props
+- odds
+- line values
+- market prices
+
+### Requirements:
+- ESPN may only contribute:
+  - scores
+  - game state
+  - schedule metadata
+- No prop/odds/line value from ESPN may flow into engine inputs
+- Remove any ESPN-derived odds/prop/line usage
+- Replace with:
+  - odds-service output, or
+  - cached degraded data, or
+  - explicit disabled-market behavior
+
+### Acceptance:
+- ESPN is no longer a hidden odds source anywhere in the pipeline
+- Engine inputs only receive odds/lines from approved odds-service paths
+
+---
+
+## PHASE F — UI FAILSAFE RENDERING
+After backend outputs are verified, update UI rendering in:
+- `client/src/pages/dashboard.tsx`
+- `client/src/pages/mlb-live.tsx`
+- `client/src/components/ncaab-admin-tab.tsx`
+- any shared play-list rendering logic discovered during implementation
+
+### Requirements:
+- Show `"Using last known lines"` when any displayed market is degraded
+- Show `"No strong edges right now"` when the play list is empty
+- Never render a blank area because data is undefined, null, malformed, or empty
+- Do not show degraded messaging when no degraded data is present
+- Do not duplicate banners/messages across stacked components
+
+### Acceptance:
+- Normal mode renders cleanly
+- Degraded mode renders cleanly
+- Empty-play mode renders cleanly
+- No blank or broken state appears
+
+---
+
+## PHASE G — ANALYTICS VERIFICATION
+Verify and repair `/api/analytics/summary` for:
+- `today`
+- `7d`
+- `30d`
+
+### Check:
+- query parsing
+- date filtering
+- aggregation logic
+- missing-field handling
+- empty-dataset behavior
+- error handling
+
+### Requirements:
+- Fix only what is necessary for stable valid responses
+- Preserve existing endpoint contract unless clearly broken
+
+### Acceptance:
+- Endpoint returns valid data for all three ranges
+- No unhandled exceptions
+- Empty or sparse data does not crash the response
+
+---
+
+## PHASE H — FINAL VERIFICATION + LOG CLEANUP
+Run one verification example per sport:
+
+### NBA
+- confirm plays still generate
+- confirm no meaningful regression caused by shared safety changes
+
+### NCAAB
+- confirm no silent empty-state due to missing inputs
+- confirm engine path remains visible in logs while debug is enabled
+
+### MLB
+- confirm canonical live status passes gating
+- confirm prop keys hydrate correctly
+- confirm degraded fallback works when odds fail
+
+### UI verification:
+Confirm behavior in:
+- normal mode
+- degraded mode
+- empty-play mode
+
+### Cleanup:
+- Remove temporary logs or leave them fully gated behind a debug flag
+- Do not leave noisy unconditional logs in production
+
+### Acceptance:
+- All three sports pass verification
+- UI states are stable
+- Temporary logging is cleaned up or properly gated
+
+---
+
+## RELEVANT FILES:
+- `server/oddsService.ts`
+- `server/ncaabService.ts`
+- `server/routes.ts`
+- `server/mlb/markets.ts`
+- `server/mlb/liveGameOrchestrator.ts`
+- `server/mlb/types.ts`
+- `client/src/pages/dashboard.tsx`
+- `client/src/pages/mlb-live.tsx`
+- `client/src/components/ncaab-admin-tab.tsx`
+- `client/src/components/analytics-tab.tsx`
+
+Also inspect any shared helpers involved in:
+- odds normalization
+- engine input construction
+- play serialization
+- route response shaping
+- UI play list rendering
+
+---
+
+## DO NOT:
+- Break existing working NBA logic
+- Introduce hardcoded fallback odds or probabilities
+- Add a new data provider
+- Mask backend failures with front-end-only fixes
+- Return empty arrays when cache exists
+- Leave temporary audit logs uncontrolled
+- Claim success without per-sport verification
+
+---
+
+## SUCCESS CRITERIA:
+- Structured audit logs exist for NBA, NCAAB, and MLB behind a debug flag
+- Odds failures no longer blank the feed if cache exists
+- All stale fallback responses consistently include `isDegraded: true`
+- MLB live status normalization is canonical and reliable
+- MLB prop detection is matcher-based, not exact-string fragile
+- Missing engine inputs are skipped safely with explicit reasons
+- ESPN is only used for score/state/schedule metadata
+- UI always renders a valid degraded, empty, or normal state
+- `/api/analytics/summary` works for `today`, `7d`, and `30d`
+- NBA output remains functionally intact
+- Temporary logs are gated or removed at completion
+
+---
+
+## OUTPUT:
+Return exactly:
+1. Root causes found
+2. Exact files changed
+3. File-level diffs
+4. Verification results for NBA, NCAAB, and MLB
+5. Any intentionally deferred issue
+
+Do not return vague summaries.
+Do not return pseudo-code.
+Do not stop at diagnosis; complete the repair.

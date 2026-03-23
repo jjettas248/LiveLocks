@@ -25,6 +25,23 @@ import { calculateMLBPropEdge } from "./markets";
 import { recordMLBDiagnostic } from "./diagnostics";
 import type { MLBPropInput, MLBPropOutput, MLBMarket } from "./types";
 
+// ── Debug pipeline logging ────────────────────────────────────────────────────
+const DEBUG_PIPELINE = process.env.DEBUG_PIPELINE === "true";
+function pLog(gameId: string, stage: string, payload: unknown): void {
+  if (!DEBUG_PIPELINE) return;
+  console.log(`[PIPELINE][MLB][${gameId}] ${stage}:`, JSON.stringify(payload));
+}
+
+// ── Engine input guard-rail ───────────────────────────────────────────────────
+// Returns null (with a log) if required fields are missing or invalid.
+function validateMLBInput(input: MLBPropInput): string | null {
+  if (!input.playerName) return "missing playerName";
+  if (!isFinite(input.bookLine) || input.bookLine <= 0) return `invalid bookLine=${input.bookLine}`;
+  if (!input.gameId) return "missing gameId";
+  if (!input.market) return "missing market";
+  return null; // valid
+}
+
 // ── Market scoping ────────────────────────────────────────────────────────────
 
 const BATTER_MARKETS: MLBMarket[] = [
@@ -296,8 +313,17 @@ export class LiveGameOrchestrator {
           },
         };
 
+        pLog(gameId, "engineInput", { player: input.playerName, market: input.market, bookLine: input.bookLine, inning: input.inning });
+
+        const guardError = validateMLBInput(input);
+        if (guardError) {
+          console.warn(`[MLB orchestrator] Skipping ${batter.playerName}/${market}: ${guardError}`);
+          continue;
+        }
+
         try {
           const output = calculateMLBPropEdge(input);
+          pLog(gameId, "engineOutput", { player: output.playerName, market: output.market, edge: output.edge, tier: output.confidenceTier, suppressed: output.suppressed });
           recordMLBDiagnostic(output);
           outputs.push(output);
         } catch (err: any) {
@@ -399,8 +425,17 @@ export class LiveGameOrchestrator {
           },
         };
 
+        pLog(gameId, "engineInput:pitcher", { player: input.playerName, market: input.market, bookLine: input.bookLine });
+
+        const guardError = validateMLBInput(input);
+        if (guardError) {
+          console.warn(`[MLB orchestrator] Skipping pitcher ${pitcherToEval.playerName}/${market}: ${guardError}`);
+          continue;
+        }
+
         try {
           const output = calculateMLBPropEdge(input);
+          pLog(gameId, "engineOutput:pitcher", { player: output.playerName, market: output.market, edge: output.edge, tier: output.confidenceTier });
           recordMLBDiagnostic(output);
           outputs.push(output);
         } catch (err: any) {
