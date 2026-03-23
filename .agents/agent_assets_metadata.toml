@@ -18,3 +18,9 @@ id = "KoSKuJtSYkgm2qjUf76HB"
 uri = "file://README.md"
 type = "text"
 title = "LiveLocks README"
+
+[[outputs]]
+id = "E1ddCP_KXAFG2WREwP9os"
+uri = "file://LiveLocks_Task76_Audit_Report.md"
+type = "text"
+title = "Task #76 — Full System Audit Report"
