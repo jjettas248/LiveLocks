@@ -53,7 +53,7 @@ const BATTER_MARKETS: MLBMarket[] = [
   "hrr",
 ];
 
-const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "hits_allowed"];
+const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "hits_allowed", "walks_allowed"];
 
 // ── Neutral book line defaults (last-resort fallback when no market line is available) ─
 const DEFAULT_BOOK_LINE: Record<MLBMarket, number> = {
@@ -62,6 +62,7 @@ const DEFAULT_BOOK_LINE: Record<MLBMarket, number> = {
   batter_strikeouts: 0.5,
   pitcher_strikeouts: 4.5,
   hits_allowed: 4.5,
+  walks_allowed: 1.5,
   home_runs: 0.5,
   hrr: 1.5,
 };

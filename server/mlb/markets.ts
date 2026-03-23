@@ -477,6 +477,10 @@ export function calculateHitsAllowedEdge(input: MLBPropInput): MLBPropOutput {
   return buildOutput({ ...input, market: "hits_allowed" });
 }
 
+export function calculateWalksAllowedEdge(input: MLBPropInput): MLBPropOutput {
+  return buildOutput({ ...input, market: "walks_allowed" });
+}
+
 export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
   const ev = input.contactQuality.exitVelocity ?? 0;
   const la = input.contactQuality.launchAngle ?? 0;
@@ -519,6 +523,7 @@ const MARKET_CALCULATORS: Record<MLBMarket, (input: MLBPropInput) => MLBPropOutp
   batter_strikeouts: calculateBatterKEdge,
   pitcher_strikeouts: calculatePitcherKEdge,
   hits_allowed: calculateHitsAllowedEdge,
+  walks_allowed: calculateWalksAllowedEdge,
   home_runs: calculateHREdge,
   hrr: calculateHRREdge,
 };

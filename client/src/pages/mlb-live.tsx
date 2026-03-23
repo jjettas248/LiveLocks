@@ -19,10 +19,14 @@ type MLBGame = {
   parkName?: string;
   parkFactor?: number | null;
   weatherSummary?: string;
+  weatherTemp?: number | null;
   probableAwayPitcher?: string;
   probableHomePitcher?: string;
   awayPitcherHand?: string;
   homePitcherHand?: string;
+  pitcherName?: string | null;
+  pitcherThrows?: "L" | "R" | null;
+  pitcherTeam?: string | null;
 };
 
 type MLBBatter = {
@@ -38,6 +42,7 @@ type MLBBatter = {
   bb: number;
   sb: number;
   k: number;
+  lastABOutcome?: "hit" | "out" | "strikeout" | "walk" | "hbp" | "error" | "other" | null;
 };
 
 type MLBSignal = {
@@ -108,7 +113,9 @@ const MARKET_LABELS: Record<string, string> = {
   hits: "Hits",
   total_bases: "Total Bases",
   batter_strikeouts: "K (Batter)",
+  batter_k: "Strikeouts",
   pitcher_strikeouts: "K (Pitcher)",
+  pitcher_k: "K (Pitcher)",
   hits_allowed: "Hits Allowed",
   walks_allowed: "Walks Allowed",
   home_runs: "Home Runs",
@@ -623,10 +630,10 @@ export default function MlbLivePage() {
                 <p className="text-sm font-medium text-foreground">No live edges detected yet</p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {selectedGame.status !== "live"
-                    ? "No live data available yet — signals appear once the game is in progress."
+                    ? "No live data available yet — edges appear once the game is in progress."
                     : validatedSignals.length === 0
-                      ? "Engine is warming up — signals appear once the orchestrator detects game state changes."
-                      : `${validatedSignals.length} signal${validatedSignals.length !== 1 ? "s" : ""} available but none meet the ${inningTabMin > 0 ? `${inningTabMin}th inning` : ""} filter.`}
+                      ? "Engine is warming up — edges appear once the orchestrator detects qualifying game state changes."
+                      : `${validatedSignals.length} signal${validatedSignals.length !== 1 ? "s" : ""} available but none meet the ${inningTabMin > 0 ? `${inningTabMin}th inning` : "current"} filter.`}
                 </p>
               </div>
             ) : (
@@ -816,32 +823,36 @@ export default function MlbLivePage() {
                       </div>
                     </div>
                   </div>
-                  <div className="mt-2 text-xs text-muted-foreground">
-                    Last AB: {selectedPlayer.ab > 0
-                      ? (selectedPlayer.h > 0 ? `${selectedPlayer.h}-for-${selectedPlayer.ab}` : `0-for-${selectedPlayer.ab}`)
-                      : "No at-bats yet"}
+                  <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
+                    {selectedPlayer.lastABOutcome ? (
+                      <>
+                        <span>Last AB:</span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                          selectedPlayer.lastABOutcome === "hit"
+                            ? "bg-green-500/15 text-green-500"
+                            : selectedPlayer.lastABOutcome === "strikeout"
+                            ? "bg-red-500/10 text-red-400"
+                            : selectedPlayer.lastABOutcome === "walk" || selectedPlayer.lastABOutcome === "hbp"
+                            ? "bg-blue-500/10 text-blue-400"
+                            : "bg-secondary text-muted-foreground"
+                        }`} data-testid="text-mlb-last-ab">
+                          {selectedPlayer.lastABOutcome.toUpperCase()}
+                        </span>
+                        {selectedPlayer.h > 0 && selectedPlayer.ab > 0 && (
+                          <span className="text-[10px]">{selectedPlayer.h}/{selectedPlayer.ab} today</span>
+                        )}
+                      </>
+                    ) : (
+                      <span>
+                        {selectedPlayer.ab > 0
+                          ? (selectedPlayer.h > 0 ? `${selectedPlayer.h}-for-${selectedPlayer.ab}` : `0-for-${selectedPlayer.ab}`)
+                          : "No at-bats yet"}
+                      </span>
+                    )}
                   </div>
                 </div>
 
                 <div className="px-4 py-3 border-b border-border/40">
-                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Park / Weather</div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
-                    <div>
-                      <div className="text-muted-foreground text-[10px]">Venue</div>
-                      <div className="font-semibold text-foreground">{selectedGame.parkName || "Unknown"}</div>
-                    </div>
-                    <div>
-                      <div className="text-muted-foreground text-[10px]">Park Factor</div>
-                      <div className="font-semibold text-foreground">{selectedGame.parkFactor != null ? selectedGame.parkFactor.toFixed(2) : "Neutral"}</div>
-                    </div>
-                    <div>
-                      <div className="text-muted-foreground text-[10px]">Weather</div>
-                      <div className="font-semibold text-foreground">{selectedGame.weatherSummary || "Not available"}</div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="px-4 py-3">
                   <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Pitcher Context</div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                     <div className="bg-secondary/30 rounded-lg p-2.5">
@@ -865,6 +876,40 @@ export default function MlbLivePage() {
                           </span>
                         )}
                       </div>
+                    </div>
+                  </div>
+                  {selectedGame.pitcherName && (
+                    <div className="mt-2 bg-secondary/30 rounded-lg p-2.5">
+                      <div className="text-muted-foreground text-[10px] mb-1">Current Pitcher</div>
+                      <div className="font-semibold text-foreground flex items-center gap-1.5 text-xs" data-testid="text-mlb-pitcher-name">
+                        <span>{selectedGame.pitcherName}</span>
+                        {selectedGame.pitcherThrows && (
+                          <span className="text-[9px] px-1 py-0.5 rounded bg-secondary border border-border/30 text-muted-foreground">
+                            {selectedGame.pitcherThrows === "L" ? "LHP" : "RHP"}
+                          </span>
+                        )}
+                        {selectedGame.pitcherTeam && (
+                          <span className="text-[9px] text-muted-foreground">({selectedGame.pitcherTeam})</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="px-4 py-3">
+                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Park / Weather</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                    <div>
+                      <div className="text-muted-foreground text-[10px]">Venue</div>
+                      <div className="font-semibold text-foreground" data-testid="text-mlb-venue">{selectedGame.parkName || "Unknown"}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-[10px]">Park Factor</div>
+                      <div className="font-semibold text-foreground">{selectedGame.parkFactor != null ? selectedGame.parkFactor.toFixed(2) : "Neutral"}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-[10px]">Weather</div>
+                      <div className="font-semibold text-foreground">{selectedGame.weatherSummary || "Not available"}</div>
                     </div>
                   </div>
                 </div>

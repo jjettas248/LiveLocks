@@ -4,6 +4,7 @@ export type MLBMarket =
   | "batter_strikeouts"
   | "pitcher_strikeouts"
   | "hits_allowed"
+  | "walks_allowed"
   | "home_runs"
   | "hrr";
 
@@ -13,6 +14,7 @@ export const ALL_MLB_MARKETS: MLBMarket[] = [
   "batter_strikeouts",
   "pitcher_strikeouts",
   "hits_allowed",
+  "walks_allowed",
   "home_runs",
   "hrr",
 ];
@@ -268,6 +270,7 @@ export const MARKET_SIGMA: Record<MLBMarket, number> = {
   batter_strikeouts: 0.55,
   pitcher_strikeouts: 1.40,
   hits_allowed: 1.20,
+  walks_allowed: 0.90,
   home_runs: 0.40,
   hrr: 1.50,
 };
@@ -284,6 +287,7 @@ export const SUPPRESSION_RULES: Record<MLBMarket, { minEdge: number; minComplete
   batter_strikeouts:  { minEdge: 2.5,  minCompletedAB: 0, requireContactData: false },
   pitcher_strikeouts: { minEdge: 2.5,  minCompletedAB: 0, requireContactData: false },
   hits_allowed:       { minEdge: 3.0,  minCompletedAB: 0, requireContactData: false },
+  walks_allowed:      { minEdge: 3.0,  minCompletedAB: 0, requireContactData: false },
   home_runs:          { minEdge: 4.0,  minCompletedAB: 1, requireContactData: true },
   hrr:                { minEdge: 3.0,  minCompletedAB: 1, requireContactData: false },
 };
@@ -294,6 +298,7 @@ export const MLB_MARKET_MIN_GAP: Record<MLBMarket, number> = {
   batter_strikeouts:  0.30,
   pitcher_strikeouts: 0.75,
   hits_allowed:       0.80,
+  walks_allowed:      0.60,
   home_runs:          0.10,
   hrr:                0.60,
 };

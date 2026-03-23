@@ -722,6 +722,13 @@ const MLB_MARKET_MAP: Record<string, string> = {
   hits: "batter_hits",
   total_bases: "batter_total_bases",
   batter_strikeouts: "batter_strikeouts",
+  batter_k: "batter_strikeouts",
+  home_runs: "batter_home_runs",
+  hrr: "",
+  pitcher_strikeouts: "pitcher_strikeouts",
+  pitcher_k: "pitcher_strikeouts",
+  walks_allowed: "pitcher_walks",
+  hits_allowed: "pitcher_hits_allowed",
 };
 
 async function getMLBEvents(): Promise<any[]> {

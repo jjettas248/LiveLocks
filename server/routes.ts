@@ -370,8 +370,9 @@ export async function registerRoutes(
           const homeScore: number = linescore.teams?.home?.runs ?? 0;
           const awayScore: number = linescore.teams?.away?.runs ?? 0;
           const cachedState = mlbGameCache.gameState[gameId];
+          const cachedWeather = mlbGameCache.weather[gameId];
+          const pitcherInGame = cachedState?.pitcherInGame ?? null;
 
-          // Probable pitchers
           const awayPitcherObj = game.teams?.away?.probablePitcher;
           const homePitcherObj = game.teams?.home?.probablePitcher;
           const awayPitcher: string = awayPitcherObj?.fullName ?? "";
@@ -379,15 +380,18 @@ export async function registerRoutes(
           const awayPitcherHand: string = awayPitcherObj?.pitchHand?.code ?? "";
           const homePitcherHand: string = homePitcherObj?.pitchHand?.code ?? "";
 
-          // Weather summary (temp + condition)
-          const weatherData = game.weather ?? {};
+          const apiWeather = game.weather ?? {};
           const weatherParts: string[] = [];
-          if (weatherData.temp) weatherParts.push(`${weatherData.temp}°F`);
-          if (weatherData.condition) weatherParts.push(weatherData.condition);
-          if (weatherData.wind) weatherParts.push(weatherData.wind);
+          const weatherTemp: number | null = cachedWeather?.temperature ?? (apiWeather.temp ? parseInt(apiWeather.temp) : null);
+          if (weatherTemp != null) weatherParts.push(`${weatherTemp}°F`);
+          if (apiWeather.condition) weatherParts.push(apiWeather.condition);
+          if (cachedWeather?.windSpeed != null && cachedWeather?.windDirection) {
+            weatherParts.push(`${cachedWeather.windSpeed}mph ${cachedWeather.windDirection}`);
+          } else if (apiWeather.wind) {
+            weatherParts.push(apiWeather.wind);
+          }
           const weatherSummary: string = weatherParts.join(", ");
 
-          // Venue / park info
           const parkName: string = game.venue?.name ?? "";
           const parkFactor: number | null = null;
 
@@ -408,10 +412,14 @@ export async function registerRoutes(
             parkName,
             parkFactor,
             weatherSummary,
+            weatherTemp,
             probableAwayPitcher: awayPitcher,
             probableHomePitcher: homePitcher,
             awayPitcherHand,
             homePitcherHand,
+            pitcherName: pitcherInGame?.playerName ?? null,
+            pitcherThrows: pitcherInGame?.throws ?? null,
+            pitcherTeam: pitcherInGame?.team ?? null,
           });
         }
       }
@@ -452,6 +460,11 @@ export async function registerRoutes(
           const batting = entry.stats?.batting ?? {};
           const slotRaw: string = entry.battingOrder ?? "0";
           const slot = Math.floor(parseInt(slotRaw, 10) / 100) || 0;
+          const contactEntry = mlbGameCache.contactData[gameId]?.byPlayerId?.[String(batterId)];
+          const priorABResults = contactEntry?.priorABResults ?? [];
+          const lastABOutcome = priorABResults.length > 0
+            ? priorABResults[priorABResults.length - 1].outcome
+            : null;
           players.push({
             playerId: String(batterId),
             playerName: entry.person?.fullName ?? "",
@@ -465,6 +478,7 @@ export async function registerRoutes(
             bb: batting.baseOnBalls ?? 0,
             sb: batting.stolenBases ?? 0,
             k: batting.strikeOuts ?? 0,
+            lastABOutcome,
           });
         }
       }
@@ -703,7 +717,7 @@ export async function registerRoutes(
         return [];
       };
 
-      const MARKET_ALIASES: Record<string, MLBMarket> = { walks_allowed: "hits_allowed" };
+      const MARKET_ALIASES: Record<string, MLBMarket> = {};
       const ACCEPTED_MARKETS = [...ALL_MLB_MARKETS, ...Object.keys(MARKET_ALIASES)];
       const rawMarket = safeStr("market");
       if (!rawMarket || !ACCEPTED_MARKETS.includes(rawMarket)) {
