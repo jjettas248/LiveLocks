@@ -3,11 +3,19 @@
  * Paid accounts (Pro / All Sports) are excluded.
  *
  * Usage:
- *   DRY_RUN=true npx tsx server/scripts/emailBlastRealUsers.ts   # preview
- *   npx tsx server/scripts/emailBlastRealUsers.ts                # live send
+ *   DRY_RUN=true npx tsx server/scripts/emailBlastRealUsers.ts --confirm   # preview
+ *   npx tsx server/scripts/emailBlastRealUsers.ts --confirm                # live send
+ *
+ * --confirm flag is REQUIRED to prevent accidental execution.
  */
 
 import { sendWallEmail } from "../email";
+
+if (!process.argv.includes("--confirm")) {
+  console.error("[blast-real] ABORTED: --confirm flag is required to run this script.");
+  console.error("[blast-real] Usage: npx tsx server/scripts/emailBlastRealUsers.ts --confirm");
+  process.exit(1);
+}
 
 const FREE_USERS = [
   "danielcole2006@yahoo.com",

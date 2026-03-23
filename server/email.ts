@@ -20,6 +20,14 @@ const TEMPLATES = {
   allSportsWelcome: process.env.RESEND_TEMPLATE_ALL_SPORTS_WELCOME || "all-sports-welcome",
 } as const;
 
+const UNSUBSCRIBE_URL = "https://livelocksai.app/unsubscribe";
+const UNSUBSCRIBE_EMAIL = "unsubscribe@livelocksai.app";
+
+const DELIVERABILITY_HEADERS = {
+  "List-Unsubscribe": `<mailto:${UNSUBSCRIBE_EMAIL}>, <${UNSUBSCRIBE_URL}>`,
+  "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+};
+
 type TemplateSendOptions = {
   from: string;
   to: string;
@@ -35,7 +43,10 @@ async function sendTemplateEmail(options: TemplateSendOptions): Promise<void> {
     console.warn("EMAIL SKIPPED (no API key):", options.to);
     return;
   }
-  await resend.emails.send(options as Parameters<typeof resend.emails.send>[0]);
+  await resend.emails.send({
+    ...(options as Parameters<typeof resend.emails.send>[0]),
+    headers: DELIVERABILITY_HEADERS,
+  });
 }
 
 export async function sendWelcomeEmail(to: string): Promise<void> {
