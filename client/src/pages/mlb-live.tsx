@@ -666,7 +666,7 @@ export default function MlbLivePage() {
                           <div className="text-center">
                             <div className="text-muted-foreground mb-0.5">Edge</div>
                             <div className="font-semibold text-foreground">
-                              {sig.edge != null ? `+${sig.edge.toFixed(1)}%` : "—"}
+                              {sig.edge != null ? `+${sig.edge.toFixed(1)}%` : <span className="text-muted-foreground font-normal">No line available</span>}
                             </div>
                           </div>
                         </div>

@@ -296,6 +296,24 @@ export class LiveGameOrchestrator {
     // ── Batter markets: evaluate each hitter in the starting lineup ────────────
     for (const market of BATTER_MARKETS) {
       for (const batter of state.battingOrder) {
+        // ── Input validation: skip player if required context is missing ─────
+        if (!batter.playerId || batter.playerId === "unknown") {
+          console.warn(`[MLB orchestrator] Skipping batter — missing playerId (market: ${market})`);
+          continue;
+        }
+        if (!batter.slot || batter.slot < 1 || batter.slot > 9) {
+          console.warn(`[MLB orchestrator] Skipping ${batter.playerName} — invalid battingOrderSlot: ${batter.slot} (market: ${market})`);
+          continue;
+        }
+        if (!gameId) {
+          console.warn(`[MLB orchestrator] Skipping ${batter.playerName} — missing gameId (market: ${market})`);
+          continue;
+        }
+        if (!state.inning || state.inning < 1) {
+          console.warn(`[MLB orchestrator] Skipping ${batter.playerName} — inning not set: ${state.inning} (market: ${market})`);
+          continue;
+        }
+
         const { remainingPA, remainingAB } = estimateRemainingPA(
           state.inning,
           state.isTopInning,
@@ -392,26 +410,27 @@ export class LiveGameOrchestrator {
           const output = calculateMLBPropEdge(input);
           pLog(gameId, "engineOutput", { player: output.playerName, market: output.market, edge: output.edge, tier: output.confidenceTier, suppressed: output.suppressed });
           recordMLBDiagnostic(output);
-          outputs.push(output);
+
+          // ── Per-player debug logging for signal integrity verification ──────
+          console.log(`[MLB engine] playerId=${batter.playerId} player="${batter.playerName}" market=${market} slot=${batter.slot} inning=${state.inning} remainingPA=${remainingPA} calibratedProbOver=${output.calibratedProbabilityOver.toFixed(2)} calibratedProbUnder=${output.calibratedProbabilityUnder.toFixed(2)} edge=${output.edge.toFixed(2)} side=${output.recommendedSide}`);
+
+          outputs.push({ ...output });
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for ${batter.playerName} / ${market}:`, err.message);
         }
       }
     }
 
-    // ── Pitcher markets: evaluate active pitcher (or fallback to probable) ─────
+    // ── Pitcher markets: evaluate active pitcher only (skip unknown) ────────────
     const activePitcher = state.pitcherInGame;
 
-    // Determine which team is pitching and find fallback probable pitcher from registry
-    const probableFallbackName = (() => {
-      if (!game) return undefined;
-      // If top inning, home team pitches; if bottom, away team pitches
-      return state.isTopInning ? game.homePitcher : game.awayPitcher;
-    })();
+    const pitcherToEval = activePitcher && activePitcher.playerId && activePitcher.playerId !== "unknown"
+      ? activePitcher
+      : null;
 
-    const pitcherToEval = activePitcher ?? (probableFallbackName
-      ? { playerId: "unknown", playerName: probableFallbackName, team: "", throws: null as "L" | "R" | null }
-      : null);
+    if (!pitcherToEval) {
+      console.warn(`[MLB orchestrator] Skipping pitcher markets — no identified active pitcher for game ${gameId}`);
+    }
 
     if (pitcherToEval) {
       const pitcherCtx = pitcherCtxCache?.byPitcherId?.[pitcherToEval.playerId];
@@ -506,7 +525,11 @@ export class LiveGameOrchestrator {
           const output = calculateMLBPropEdge(input);
           pLog(gameId, "engineOutput:pitcher", { player: output.playerName, market: output.market, edge: output.edge, tier: output.confidenceTier });
           recordMLBDiagnostic(output);
-          outputs.push(output);
+
+          // ── Per-player debug logging for signal integrity verification ──────
+          console.log(`[MLB engine] playerId=${pitcherToEval.playerId} player="${pitcherToEval.playerName}" market=${market} inning=${state.inning} remainingPA=${remainingPA} calibratedProbOver=${output.calibratedProbabilityOver.toFixed(2)} calibratedProbUnder=${output.calibratedProbabilityUnder.toFixed(2)} edge=${output.edge.toFixed(2)} side=${output.recommendedSide}`);
+
+          outputs.push({ ...output });
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for pitcher ${pitcherToEval.playerName} / ${market}:`, err.message);
         }

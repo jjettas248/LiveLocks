@@ -578,10 +578,22 @@ export async function registerRoutes(
     }
 
     const rawSignals = allOutputs
-      .filter((o) => o.calibratedProbabilityOver > 0 || o.calibratedProbabilityUnder > 0)
+      .filter((o) => !!o.playerId && o.playerId !== "unknown")
+      .filter((o) => {
+        const over = o.calibratedProbabilityOver;
+        const under = o.calibratedProbabilityUnder;
+        if (typeof over !== "number" || isNaN(over) || over < 0 || over > 100) return false;
+        if (typeof under !== "number" || isNaN(under) || under < 0 || under > 100) return false;
+        return true;
+      })
       .map((o) => {
         const hitProb =
           o.recommendedSide === "OVER" ? o.calibratedProbabilityOver : o.calibratedProbabilityUnder;
+
+        if (typeof hitProb !== "number" || isNaN(hitProb) || hitProb < 0 || hitProb > 100) {
+          console.warn(`[MLB signals] Dropping invalid hitProb for ${o.playerName}/${o.market}: ${hitProb}`);
+          return null;
+        }
 
         const hasOdds = o.bookLine > 0;
         const edgeValue = hasOdds && Number.isFinite(o.edge) ? Math.round(Math.abs(o.edge) * 10) / 10 : null;
@@ -591,6 +603,7 @@ export async function registerRoutes(
         else if (hitProb >= 85) tier = "green";
         else if (hitProb >= 70) tier = "yellow";
         else tier = "teal";
+
         return {
           playerId: o.playerId,
           playerName: o.playerName,
@@ -604,7 +617,8 @@ export async function registerRoutes(
           tier,
           gameId: o.gameId,
         };
-      });
+      })
+      .filter((s): s is NonNullable<typeof s> => s !== null);
 
     const filteredSignals = rawSignals.filter((sig) => {
       if (!sig.playerId) {
@@ -646,9 +660,9 @@ export async function registerRoutes(
       }
     }
 
-    // Surface degraded-odds flag: true when some signals have no live book line
     const isDegraded = rosterLockedSignals.some((s) => s.bookLine === null);
 
+    console.log(`[MLB signals] game=${gameId} rawOutputs=${allOutputs.length} validSignals=${rosterLockedSignals.length}`);
     mlbSignalsCache.set(gameId, { ts: Date.now(), signals: rosterLockedSignals, updatedAt });
     return res.json({ signals: rosterLockedSignals, updatedAt, isDegraded });
   });
@@ -2111,7 +2125,7 @@ export async function registerRoutes(
           market: p.statType,
           direction: p.betDirection,
           line: Number(p.line),
-          prob: Number(p.probability ?? p.prob ?? 50),
+          prob: Number(p.probability ?? p.prob ?? 0),
           engineProb: p.engineProb != null ? Number(p.engineProb) : undefined,
           bookImplied: p.bookImplied != null ? Number(p.bookImplied) : undefined,
           edgeGap: p.edge != null ? Number(p.edge) : undefined,
