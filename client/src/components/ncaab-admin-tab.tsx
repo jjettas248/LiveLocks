@@ -4116,6 +4116,11 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
       {/* ── Live sub-tab ───────────────────────────────────────────────────── */}
       {ncaabSubTab === "live" && !loading && (
         <>
+          {/* Note: No degraded-odds banner for NCAAB.
+              NCAAB uses Odds API / SGO exclusively; there is no stale-cache
+              fallback path in ncaabService.ts, so isDegraded is never true.
+              Games with no compliant line data are skipped entirely server-side.
+              Consistent with isDegraded semantics: stale odds cache only. */}
           {/* ── Top Plays Feed — FIRST in live tab ────────────────────────── */}
           {hasPlays && (() => {
             const filteredPlays = filterNcaabPlaysByBook(plays, ncaabBookFilter);
@@ -4345,6 +4350,17 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                   topPlaysSelectedKey={topPlaysKeyByGameId.get(p.gameId) ?? null}
                 />
               ))}
+            </div>
+          )}
+
+          {/* No strong edges yet — live games present but engine has not produced plays */}
+          {!hasPlays && !error && liveGames.length > 0 && halftimePlays.length === 0 && (
+            <div className="bg-card border border-border rounded-xl p-6 text-center space-y-2" data-testid="text-ncaab-no-strong-edges">
+              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse inline-block mb-2" />
+              <p className="text-sm font-semibold text-foreground">No strong edges right now</p>
+              <p className="text-xs text-muted-foreground">
+                {liveGames.length} live {liveGames.length === 1 ? "game" : "games"} in progress — edges appear once the model detects a qualifying opportunity.
+              </p>
             </div>
           )}
 

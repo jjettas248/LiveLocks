@@ -14,6 +14,8 @@ export interface EdgeCacheEntry {
   outputs: MLBPropOutput[];
   updatedAt: number;
   createdAt: number;
+  /** True when any market in this run used stale last-known-good odds (not a live fresh quote). */
+  isDegraded?: boolean;
 }
 
 const _cache = new Map<string, EdgeCacheEntry>();

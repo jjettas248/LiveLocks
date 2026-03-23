@@ -346,6 +346,7 @@ export async function getPlayerOdds(
   const lkFresh = lastKnownOdds.get(lastKnownKey);
   if (lkFresh && Date.now() - lkFresh.timestamp < LAST_KNOWN_TTL) {
     console.log(`[ODDS CACHE-FIRST] Fresh cache hit for ${playerName} (${statType}) — skipping API call`);
+    pipelineLog("NBA", oddsEventId, "odds:cacheHit", { player: playerName, statType, books: Object.keys(lkFresh.data) });
     return { isDegraded: false, quotaExhausted: false, books: lkFresh.data };
   }
 
@@ -389,7 +390,14 @@ export async function getPlayerOdds(
     return { isDegraded: false, quotaExhausted: true, books: {} };
   }
 
-  if (!oddsData?.bookmakers) {
+  const bookmakers: any[] = Array.isArray(oddsData?.bookmakers) ? oddsData.bookmakers : [];
+  if (bookmakers.length === 0) {
+    pipelineLog("NBA", oddsEventId, "odds:emptyBookmakers", { player: playerName, statType, hasData: !!oddsData });
+    const lk = lastKnownOdds.get(lastKnownKey);
+    if (lk && Date.now() - lk.timestamp < LAST_KNOWN_TTL) {
+      console.warn(`[ODDS FALLBACK] Empty/malformed bookmakers for ${playerName} (${statType}) — using last-known line (degraded)`);
+      return makeDegraded(lk.data);
+    }
     return { isDegraded: false, quotaExhausted: false, books: {} };
   }
 
@@ -401,7 +409,7 @@ export async function getPlayerOdds(
   const books: Record<string, OddsLine> = {};
   let foundForAnyBook = false;
 
-  for (const bookmaker of oddsData.bookmakers) {
+  for (const bookmaker of bookmakers) {
     const market = bookmaker.markets?.find((m: any) => m.key === marketKey);
     if (!market?.outcomes) continue;
 
@@ -467,6 +475,7 @@ export async function getPlayerOdds(
     lastKnownOdds.set(lastKnownKey, { data: books, timestamp: Date.now() });
   }
 
+  pipelineLog("NBA", oddsEventId, "odds:result", { player: playerName, statType, books: Object.keys(books), isDegraded: false, foundForAnyBook });
   return { isDegraded: false, quotaExhausted: false, books };
 }
 
@@ -851,6 +860,14 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
 
 type MLBOddsResult = Record<string, { line: number; overOdds: number; underOdds: number }> & { _quotaExhausted?: boolean; _isDegraded?: boolean };
 
+/** Create a degraded copy of an MLBOddsResult (stale-cache path). Uses Object.assign
+ *  rather than spread to avoid TypeScript index-signature conflict with the boolean flag. */
+function makeDegradedMLBResult(data: MLBOddsResult): MLBOddsResult {
+  const copy: MLBOddsResult = Object.assign({}, data);
+  copy._isDegraded = true;
+  return copy;
+}
+
 // Last-known-good MLB player odds cache (normalized level)
 // Key: "oddsEventId|playerNorm|statType" — mirrors the NBA lastKnownOdds pattern
 const lastKnownMLBOdds = new Map<string, { data: MLBOddsResult; timestamp: number }>();
@@ -875,7 +892,7 @@ export async function getMLBPlayerOdds(
     const lk = lastKnownMLBOdds.get(lastKnownKey);
     if (lk && Date.now() - lk.timestamp < MLB_LAST_KNOWN_TTL) {
       console.warn(`[MLB Odds Fallback] Network error for ${playerName} (${statType}) — using last-known (degraded)`);
-      return { ...lk.data, _isDegraded: true };
+      return makeDegradedMLBResult(lk.data);
     }
     throw fetchErr;
   }
@@ -884,7 +901,7 @@ export async function getMLBPlayerOdds(
     const lk = lastKnownMLBOdds.get(lastKnownKey);
     if (lk && Date.now() - lk.timestamp < MLB_LAST_KNOWN_TTL) {
       console.warn(`[MLB Odds Fallback] Quota exhausted for ${playerName} (${statType}) — using last-known (degraded)`);
-      return { ...lk.data, _isDegraded: true };
+      return makeDegradedMLBResult(lk.data);
     }
     const exhausted: MLBOddsResult = {};
     exhausted._quotaExhausted = true;
@@ -894,11 +911,12 @@ export async function getMLBPlayerOdds(
   // _isDegraded set by getMLBRawOdds when serving raw stale data
   const isDegradedRaw = !!(oddsData?._isDegraded);
 
-  if (!oddsData?.bookmakers) {
+  const mlbBookmakers: any[] = Array.isArray(oddsData?.bookmakers) ? oddsData.bookmakers : [];
+  if (mlbBookmakers.length === 0) {
     const lk = lastKnownMLBOdds.get(lastKnownKey);
     if (lk && Date.now() - lk.timestamp < MLB_LAST_KNOWN_TTL) {
-      console.warn(`[MLB Odds Fallback] Empty bookmakers for ${playerName} (${statType}) — using last-known (degraded)`);
-      return { ...lk.data, _isDegraded: true };
+      console.warn(`[MLB Odds Fallback] Empty/malformed bookmakers for ${playerName} (${statType}) — using last-known (degraded)`);
+      return makeDegradedMLBResult(lk.data);
     }
     return {};
   }
@@ -909,7 +927,7 @@ export async function getMLBPlayerOdds(
 
   const result: MLBOddsResult = {};
 
-  for (const bookmaker of oddsData.bookmakers) {
+  for (const bookmaker of mlbBookmakers) {
     // Use flexible key matching instead of exact equality
     const market = (bookmaker.markets ?? []).find(
       (m: any) => m.key === marketKey || isMLBPropKey(m.key ?? "", statType)

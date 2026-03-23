@@ -227,16 +227,9 @@ export async function registerRoutes(
         return true;
       });
 
-      if (process.env.NODE_ENV !== "production") {
+      if (process.env.DEBUG_PIPELINE === "true") {
         for (const play of freshPlays) {
-          console.log("[NCAAB DEBUG]", {
-            gameId: play.gameId,
-            line: play.total,
-            projection: play.engineOutput?.projectedTotal ?? null,
-            recommendedSide: play.engineOutput?.recommendedSide ?? null,
-            displayProbability: play.engineOutput?.displayProbability ?? null,
-            marketVerdicts: play.engineOutput?.marketVerdicts ?? [],
-          });
+          console.log(`[PIPELINE][NCAAB][${play.gameId}] engineOutput: line=${play.total} proj=${play.engineOutput?.projectedTotal ?? null} side=${play.engineOutput?.recommendedSide ?? null} prob=${play.engineOutput?.displayProbability ?? null} markets=${JSON.stringify(play.engineOutput?.marketVerdicts ?? [])}`);
         }
       }
 
@@ -348,11 +341,11 @@ export async function registerRoutes(
       const registeredIds = new Set(getActiveGames().map((g) => g.gameId));
 
       // Canonical MLB status normalization helper
-      function normalizeMLBState(raw: string | undefined): "live" | "preview" | "final" | null {
+      function normalizeMLBState(raw: string | undefined): "live" | "pregame" | "final" | null {
         if (!raw) return null;
         const s = raw.toLowerCase().replace(/[\s_-]/g, "");
         if (s === "live" || s === "inprogress") return "live";
-        if (s === "preview" || s === "pregame") return "preview";
+        if (s === "preview" || s === "pregame") return "pregame";
         if (s === "final") return "final";
         return null;
       }
@@ -362,7 +355,7 @@ export async function registerRoutes(
         for (const game of date.games ?? []) {
           const state = game.status?.abstractGameState as string;
           const canonicalState = normalizeMLBState(state);
-          if (canonicalState !== "live" && canonicalState !== "preview") continue;
+          if (canonicalState !== "live" && canonicalState !== "pregame") continue;
           const gameId = String(game.gamePk);
           const linescore = game.linescore ?? {};
           const inning: number = linescore.currentInning ?? 0;
@@ -407,7 +400,7 @@ export async function registerRoutes(
             awayScore,
             inning: cachedState?.inning ?? inning,
             isTopInning: cachedState?.isTopInning ?? isTopInning,
-            status: canonicalState ?? "preview",
+            status: canonicalState ?? "pregame",
             inRegistry: registeredIds.has(gameId),
             parkName,
             parkFactor,
@@ -496,7 +489,7 @@ export async function registerRoutes(
     }
   });
 
-  const mlbSignalsCache = new Map<string, { ts: number; signals: any[]; updatedAt: number }>();
+  const mlbSignalsCache = new Map<string, { ts: number; signals: any[]; updatedAt: number; isDegraded: boolean }>();
   const MLB_SIGNALS_TTL = 90_000;
 
   app.get("/api/mlb/live-signals/:gameId", requireAuth, async (req, res) => {
@@ -519,7 +512,7 @@ export async function registerRoutes(
           const abstractState: string = schedData.gameData?.status?.abstractGameState ?? "";
           const s = abstractState.toLowerCase().replace(/[\s_-]/g, "");
           if (s === "live" || s === "inprogress") gameStatus = "live";
-          else if (s === "preview" || s === "pregame") gameStatus = "preview";
+          else if (s === "preview" || s === "pregame") gameStatus = "pregame";
           else if (s === "final") gameStatus = "final";
           else gameStatus = s || "unknown";
         }
@@ -534,12 +527,13 @@ export async function registerRoutes(
 
     const cached = mlbSignalsCache.get(gameId);
     if (cached && Date.now() - cached.ts < MLB_SIGNALS_TTL) {
-      return res.json({ signals: cached.signals, updatedAt: cached.updatedAt });
+      return res.json({ signals: cached.signals, updatedAt: cached.updatedAt, isDegraded: cached.isDegraded });
     }
 
     const entry = mlbEdgeCache.get(gameId);
     const allOutputs = entry?.outputs ?? [];
     const updatedAt = entry?.updatedAt ?? 0;
+    const cachedIsDegraded = entry?.isDegraded ?? false;
 
     let rosterPlayerIds: Set<string>;
     const liveStatsEntry = mlbLiveStatsCache.get(gameId);
@@ -669,15 +663,16 @@ export async function registerRoutes(
       const uniqueProbs = new Set(probValues);
       if (uniqueProbs.size <= 2) {
         console.error(`[MLB signals] PROBABILITY_COLLISION_DETECTED for game ${gameId} — ${rosterLockedSignals.length} signals but only ${uniqueProbs.size} unique probability values: [${probValues.join(", ")}]`);
-        mlbSignalsCache.set(gameId, { ts: Date.now(), signals: [], updatedAt });
-        return res.json({ signals: [], updatedAt });
+        mlbSignalsCache.set(gameId, { ts: Date.now(), signals: [], updatedAt, isDegraded: false });
+        return res.json({ signals: [], updatedAt, isDegraded: false });
       }
     }
 
-    const isDegraded = rosterLockedSignals.some((s) => s.bookLine === null);
+    // isDegraded = true when stale last-known-good odds cache was used in this engine run
+    const isDegraded = cachedIsDegraded;
 
-    console.log(`[MLB signals] game=${gameId} rawOutputs=${allOutputs.length} validSignals=${rosterLockedSignals.length}`);
-    mlbSignalsCache.set(gameId, { ts: Date.now(), signals: rosterLockedSignals, updatedAt });
+    console.log(`[MLB signals] game=${gameId} rawOutputs=${allOutputs.length} validSignals=${rosterLockedSignals.length} isDegraded=${isDegraded}`);
+    mlbSignalsCache.set(gameId, { ts: Date.now(), signals: rosterLockedSignals, updatedAt, isDegraded });
     return res.json({ signals: rosterLockedSignals, updatedAt, isDegraded });
   });
 
@@ -1571,10 +1566,16 @@ export async function registerRoutes(
                     oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, false);
                     bookKeys = Object.keys(oddsResult.books);
                   }
+                  if (process.env.DEBUG_PIPELINE === "true") {
+                    console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] raw: player=${playerName} stat=${statType} books=${bookKeys.join(",") || "none"} isDegraded=${oddsResult.isDegraded}`);
+                  }
                   if (bookKeys.length > 0) {
                     const lines = bookKeys.map(k => oddsResult.books[k].line);
                     const sortedLines = [...lines].sort((a, b) => a - b);
                     const medianLine = sortedLines[Math.floor(sortedLines.length / 2)];
+                    if (process.env.DEBUG_PIPELINE === "true") {
+                      console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] processed: player=${playerName} stat=${statType} medianLine=${medianLine} isDegraded=${oddsResult.isDegraded}`);
+                    }
                     oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys, isDegraded: oddsResult.isDegraded });
                     resolved = true;
                   }
@@ -1582,11 +1583,19 @@ export async function registerRoutes(
                 if (!resolved && process.env.SGO_API_KEY) {
                   const sgoResult = await getSGOPlayerLine(homeTeamAbbr, awayTeamAbbr, playerName, statType);
                   if (sgoResult !== null) {
+                    if (process.env.DEBUG_PIPELINE === "true") {
+                      console.log(`[PIPELINE][NBA][sgo] processed: player=${playerName} stat=${statType} sgoLine=${sgoResult}`);
+                    }
                     oddsPlayerCache.set(lineCacheKey, { line: sgoResult, bookKeys: ["sgo"], isDegraded: false });
                     resolved = true;
                   }
                 }
-                if (!resolved) oddsPlayerCache.set(lineCacheKey, null);
+                if (!resolved) {
+                  if (process.env.DEBUG_PIPELINE === "true") {
+                    console.log(`[PIPELINE][NBA] raw: player=${playerName} stat=${statType} skipReason=noLineResolved`);
+                  }
+                  oddsPlayerCache.set(lineCacheKey, null);
+                }
               }
 
               const oddsEntry = oddsPlayerCache.get(lineCacheKey);
@@ -1594,12 +1603,15 @@ export async function registerRoutes(
               const liveLine = oddsEntry.line;
 
               if (!liveLine || liveLine === 0) {
+                if (process.env.DEBUG_PIPELINE === "true") {
+                  console.log(`[PIPELINE][NBA] engineInput: player=${dbPlayer.name} stat=${statType} skipReason=zeroLine`);
+                }
                 console.warn(`[NBA] No valid line — play suppressed`, { playerName: dbPlayer.name, statType });
                 continue;
               }
 
               if (process.env.DEBUG_PIPELINE === "true") {
-                console.log(`[PIPELINE][NBA] engineInput: player=${dbPlayer.name} stat=${statType} line=${liveLine} halftimeStat=${currentStat}`);
+                console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] engineInput: player=${dbPlayer.name} stat=${statType} line=${liveLine} halftimeStat=${currentStat} isDegraded=${oddsEntry.isDegraded ?? false}`);
               }
 
               const result = await storage.calculateProbability({
@@ -1624,6 +1636,9 @@ export async function registerRoutes(
               });
 
               const edge = Math.abs(result.probability - 50);
+              if (process.env.DEBUG_PIPELINE === "true") {
+                console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] engineOutput: player=${dbPlayer.name} stat=${statType} prob=${result.probability.toFixed(1)} edge=${edge.toFixed(1)} ${edge < 5 ? "skipReason=lowEdge" : "included=true"}`);
+              }
               if (edge < 5) continue;
 
               allSignals.push({
@@ -1636,7 +1651,12 @@ export async function registerRoutes(
                 line: liveLine,
                 currentStat,
               });
-            } catch { /* skip calc errors silently */ }
+            } catch (calcErr: any) {
+              console.warn(`[NBA][engineError] player=${dbPlayer?.name ?? playerName} stat=${statType} error=${calcErr?.message ?? String(calcErr)}`);
+              if (process.env.DEBUG_PIPELINE === "true") {
+                console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] engineOutput: player=${dbPlayer?.name ?? playerName} stat=${statType} skipReason=engineError error=${calcErr?.message ?? String(calcErr)}`);
+              }
+            }
           }
         }
       }
@@ -2105,8 +2125,8 @@ export async function registerRoutes(
                   betDirection: result.probability > 50 ? "over" : "under",
                   isDegraded: lineIsDegraded,
                 });
-              } catch {
-                // skip calc errors silently
+              } catch (calcErr2: any) {
+                console.warn(`[NBA][halftime][engineError] player=${dbPlayer?.name ?? playerName} stat=${statType} error=${calcErr2?.message ?? String(calcErr2)}`);
               }
             }
           }

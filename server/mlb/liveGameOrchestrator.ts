@@ -55,18 +55,6 @@ const BATTER_MARKETS: MLBMarket[] = [
 
 const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "hits_allowed", "walks_allowed"];
 
-// ── Neutral book line defaults (last-resort fallback when no market line is available) ─
-const DEFAULT_BOOK_LINE: Record<MLBMarket, number> = {
-  hits: 0.5,
-  total_bases: 1.5,
-  batter_strikeouts: 0.5,
-  pitcher_strikeouts: 4.5,
-  hits_allowed: 4.5,
-  walks_allowed: 1.5,
-  home_runs: 0.5,
-  hrr: 1.5,
-};
-
 // ── Previously-resolved line cache ───────────────────────────────────────────
 // Persists the last successfully fetched sportsbook line per event+player+market
 // within this server process. Used as the second-priority fallback when the
@@ -78,16 +66,23 @@ const priorResolvedLines = new Map<string, number>();
 // First match wins; unlisted bookmakers are used only as a last resort.
 const PREFERRED_BOOKMAKERS = ["draftkings", "fanduel", "hardrockbet"];
 
+type ResolvedLine = { line: number; isDegraded: boolean };
+
 // ── Resolve a real book line for a player/market ──────────────────────────────
 // Precedence:
-//   (1) Odds service cached line (getMLBPlayerOdds) — preferred book order
-//   (2) Previously resolved / user-supplied line (priorResolvedLines)
-//   (3) DEFAULT_BOOK_LINE fallback (last resort — warning is logged)
+//   (1) Odds service live/cached line (getMLBPlayerOdds) — preferred book order
+//       isDegraded=true when odds service served a stale last-known-good cache
+//   (2) Previously resolved line cache (real market line from earlier in session)
+//       isDegraded=true since it is not the current live quote
+//   (3) null — no compliant line available; caller must skip this market
+//
+// Synthetic/default hardcoded lines are NOT used. Markets without a real line
+// are explicitly skipped to avoid invalidated edge calculations.
 async function resolveBookLine(
   oddsEventId: string | null,
   playerName: string,
   market: MLBMarket
-): Promise<number> {
+): Promise<ResolvedLine | null> {
   const normName = playerName.toLowerCase().trim();
   const cacheKey = oddsEventId ? `${oddsEventId}|${normName}|${market}` : `unknown|${normName}|${market}`;
 
@@ -96,13 +91,15 @@ async function resolveBookLine(
     try {
       const oddsResult = await getMLBPlayerOdds(oddsEventId, playerName, market);
       const bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
+      const isOddsDegraded = !!(oddsResult._isDegraded);
       if (bookKeys.length > 0) {
         // Apply deterministic bookmaker preference order
         const preferred = PREFERRED_BOOKMAKERS.find(b => bookKeys.includes(b)) ?? bookKeys[0];
         const line = oddsResult[preferred].line;
         if (typeof line === "number" && isFinite(line) && line > 0) {
           priorResolvedLines.set(cacheKey, line);
-          return line;
+          pLog(oddsEventId, `odds:bookLine:${isOddsDegraded ? "degraded" : "live"}`, { player: playerName, market, line, book: preferred });
+          return { line, isDegraded: isOddsDegraded };
         }
       }
     } catch (err: any) {
@@ -110,16 +107,18 @@ async function resolveBookLine(
     }
   }
 
-  // (2) Fall back to previously resolved / user-supplied line
+  // (2) Fall back to previously resolved line (real market line from earlier in session — stale)
   const prior = priorResolvedLines.get(cacheKey);
   if (prior !== undefined) {
     console.warn(`[MLB orchestrator] Using prior known line for ${playerName}/${market}: ${prior}`);
-    return prior;
+    pLog(oddsEventId ?? "unknown", "odds:bookLine:priorResolved", { player: playerName, market, line: prior });
+    return { line: prior, isDegraded: true };
   }
 
-  // (3) Last resort: hardcoded default
-  console.warn(`[MLB orchestrator] No sportsbook line found for ${playerName}/${market} — using DEFAULT_BOOK_LINE fallback (${DEFAULT_BOOK_LINE[market]})`);
-  return DEFAULT_BOOK_LINE[market];
+  // (3) No compliant line available — skip this market
+  console.warn(`[MLB orchestrator] No sportsbook line for ${playerName}/${market} — market skipped (no synthetic fallback)`);
+  pLog(oddsEventId ?? "unknown", "odds:bookLine:skipped", { player: playerName, market, reason: "noCompliantLine" });
+  return null;
 }
 
 // ── State change trigger types ────────────────────────────────────────────────
@@ -271,6 +270,7 @@ export class LiveGameOrchestrator {
 
   async triggerEngine(gameId: string): Promise<MLBPropOutput[]> {
     const outputs: MLBPropOutput[] = [];
+    let anyDegraded = false; // true if any market used stale last-known-good odds
     const state = mlbGameCache.gameState[gameId];
     const game = getGame(gameId);
 
@@ -289,8 +289,10 @@ export class LiveGameOrchestrator {
     if (game) {
       try {
         oddsEventId = await resolveMLBOddsEventId(game.awayTeam, game.homeTeam);
+        pLog(gameId, "oddsEventId", { resolved: oddsEventId, home: game.homeTeam, away: game.awayTeam });
       } catch (err: any) {
         console.warn(`[MLB orchestrator] Could not resolve odds event ID for game ${gameId}:`, err.message);
+        pLog(gameId, "oddsEventId:error", { error: err.message });
       }
     }
 
@@ -336,7 +338,9 @@ export class LiveGameOrchestrator {
           ? pitcherCtx.timesThroughOrder >= 3 && pitcherCtx.pitchCount > 80
           : false;
 
-        const bookLine = await resolveBookLine(oddsEventId, batter.playerName, market);
+        const resolvedLine = await resolveBookLine(oddsEventId, batter.playerName, market);
+        if (resolvedLine === null) continue;
+        if (resolvedLine.isDegraded) anyDegraded = true;
 
         const input: MLBPropInput = {
           playerId: batter.playerId,
@@ -345,7 +349,7 @@ export class LiveGameOrchestrator {
           opponent: "",
           gameId,
           market,
-          bookLine,
+          bookLine: resolvedLine.line,
           seasonAvg: 1.0,
           plateAppearances: state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0,
           atBats: Math.max(0, state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0),
@@ -443,7 +447,9 @@ export class LiveGameOrchestrator {
           5 // neutral batting order slot for pitcher PA estimate
         );
 
-        const pitcherBookLine = await resolveBookLine(oddsEventId, pitcherToEval.playerName, market);
+        const resolvedPitcherLine = await resolveBookLine(oddsEventId, pitcherToEval.playerName, market);
+        if (resolvedPitcherLine === null) continue;
+        if (resolvedPitcherLine.isDegraded) anyDegraded = true;
 
         const input: MLBPropInput = {
           playerId: pitcherToEval.playerId,
@@ -452,7 +458,7 @@ export class LiveGameOrchestrator {
           opponent: "",
           gameId,
           market,
-          bookLine: pitcherBookLine,
+          bookLine: resolvedPitcherLine.line,
           seasonAvg: market === "pitcher_strikeouts" ? 6.0 : 5.0,
           plateAppearances: pitcherCtx?.pitchCount
             ? Math.floor(pitcherCtx.pitchCount / 4)
@@ -538,7 +544,7 @@ export class LiveGameOrchestrator {
     }
 
     const now = Date.now();
-    mlbEdgeCache.set(gameId, { gameId, outputs, updatedAt: now, createdAt: now });
+    mlbEdgeCache.set(gameId, { gameId, outputs, updatedAt: now, createdAt: now, isDegraded: anyDegraded });
     console.log(`[MLB orchestrator] triggerEngine: game ${gameId} — ${outputs.length} outputs`);
     return outputs;
   }

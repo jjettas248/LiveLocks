@@ -15,7 +15,7 @@ type MLBGame = {
   awayScore: number;
   inning: number;
   isTopInning: boolean;
-  status: "live" | "preview";
+  status: "live" | "pregame";
   parkName?: string;
   parkFactor?: number | null;
   weatherSummary?: string;
@@ -152,7 +152,7 @@ const SPORTSBOOK_LABELS: Record<string, string> = {
 };
 
 function inningLabel(game: MLBGame): string {
-  if (game.status === "preview") return "Preview";
+  if (game.status === "pregame") return "Pre-Game";
   if (!game.inning) return "—";
   const half = game.isTopInning ? "▲" : "▼";
   return `${half}${game.inning}`;
@@ -627,7 +627,7 @@ export default function MlbLivePage() {
 
             {!signalsLoading && filteredSignals.length === 0 ? (
               <div className="px-5 py-8 rounded-xl border border-border bg-card text-center" data-testid="text-no-signals">
-                <p className="text-sm font-medium text-foreground">No live edges detected yet</p>
+                <p className="text-sm font-medium text-foreground">No strong edges right now</p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {selectedGame.status !== "live"
                     ? "No live data available yet — edges appear once the game is in progress."

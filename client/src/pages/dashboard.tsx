@@ -3234,6 +3234,17 @@ export default function Dashboard() {
                 </div>
               )}
 
+              {/* Degraded-odds banner — shown when any play uses stale lines */}
+              {!isHalftimePlaysLoading && halftimePlaysData && halftimePlaysData.plays.some((p: any) => p.isDegraded) && (
+                <div
+                  data-testid="banner-nba-degraded-odds"
+                  className="mb-3 flex items-center gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-600 dark:text-yellow-400"
+                >
+                  <span className="font-semibold">Note:</span>
+                  <span>Using last known lines — live odds temporarily unavailable. Edge calculations may be less precise.</span>
+                </div>
+              )}
+
               {/* Per-game groups — paginated with exit animation */}
               {!isHalftimePlaysLoading && halftimePlaysData && halftimePlaysData.plays.length > 0 && (() => {
                 const GAMES_PER_PAGE = 4;

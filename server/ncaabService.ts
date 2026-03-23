@@ -1192,11 +1192,14 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         ? extractLines(oddsEvent, game.homeTeam, game.awayTeam)
         : { spread: null, total: null, favorite: "", bookLines: [], h1TotalLine: null, h1SpreadLine: null, h1Favorite: "", h2TotalLine: null, h2SpreadLine: null, h2Favorite: "", overOddsAmerican: null, spreadOddsAmerican: null, h1OverOddsAmerican: null, h1SpreadOddsAmerican: null, h2OverOddsAmerican: null, h2SpreadOddsAmerican: null, h1TotalOverOdds: null, h1TotalUnderOdds: null, h1SpreadHomeOdds: null, h1SpreadAwayOdds: null, homeTTBookLine: null, awayTTBookLine: null };
 
+      if (process.env.DEBUG_PIPELINE === "true") {
+        console.log(`[PIPELINE][NCAAB][${game.id}] raw: matchedOdds=${!!oddsEvent} total=${total ?? "null"} spread=${spread ?? "null"} books=${bookLines.length}`);
+      }
       if (oddsEvent && total === null) {
-        console.log(`[NCAAB] Odds API total null for game ${game.id} (${game.awayTeam} @ ${game.homeTeam}) — will attempt ESPN fallback`);
+        console.log(`[NCAAB] Odds API total null for game ${game.id} (${game.awayTeam} @ ${game.homeTeam}) — full_total market will be unavailable`);
       }
       if (oddsEvent && spread === null) {
-        console.log(`[NCAAB] Odds API spread null for game ${game.id} (${game.awayTeam} @ ${game.homeTeam}) — will attempt ESPN fallback`);
+        console.log(`[NCAAB] Odds API spread null for game ${game.id} (${game.awayTeam} @ ${game.homeTeam}) — full_spread market will be unavailable`);
       }
 
       // SGO 1H + 2H lines (real book lines)
@@ -1211,6 +1214,9 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       const h2TotalLine     = sgo1H?.h2TotalLine ?? oddsH2Total ?? null;
       const h2SpreadLine    = sgo1H?.h2SpreadLine ?? oddsH2Spread ?? null;
       const h2Favorite      = sgo1H?.h2FavoriteName ?? oddsH2Fav ?? "";
+      if (process.env.DEBUG_PIPELINE === "true") {
+        console.log(`[PIPELINE][NCAAB][${game.id}] processed: h1Total=${rawH1TotalLine ?? "null"} h2Total=${h2TotalLine ?? "null"} h2Spread=${h2SpreadLine ?? "null"} sgoMatched=${!!sgoEvent}`);
+      }
       if (h2TotalLine != null) {
         console.log(`[NCAAB 2H] ${game.awayTeam} @ ${game.homeTeam}: 2H total=${h2TotalLine}, spread=${h2SpreadLine} ${h2Favorite}`);
       }
@@ -1226,31 +1232,21 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       // Fetch ESPN summary once per game — provides full-game total/spread fallback + team totals + win%
       const espnSummary = await fetchESPNSummaryData(game.id);
 
-      // Phase B: ESPN pickcenter fallback for Full Game total when Odds API has no line
-      if (total === null && espnSummary.overUnder !== null) {
-        total = espnSummary.overUnder;
-        overOddsAmerican = -110;
-        console.log(`[NCAAB ESPN FG TOTAL FALLBACK] ${game.awayTeam} @ ${game.homeTeam}: overUnder=${total} (Odds API was null)`);
+      // ESPN source-boundary enforcement:
+      // All line/odds values must come from Odds API / SGO exclusively.
+      // ESPN is used only for game state, scores, and display context (win%, spread string).
+      // If no compliant odds source has any line data, skip this game entirely.
+      const hasAnyCompliantLine = total !== null || spread !== null || rawH1TotalLine !== null || h1SpreadLine !== null || h2TotalLine !== null || h2SpreadLine !== null;
+      if (!hasAnyCompliantLine) {
+        console.log(`[NCAAB] Skipping game ${game.id} (${game.awayTeam} @ ${game.homeTeam}) — no compliant odds data from Odds API or SGO`);
+        if (process.env.DEBUG_PIPELINE === "true") {
+          console.log(`[PIPELINE][NCAAB][${game.id}] engineInput: skipReason=noCompliantOddsData`);
+        }
+        continue;
       }
 
-      // Phase B: ESPN pickcenter fallback for Full Game spread when Odds API has no line
-      if (spread === null && espnSummary.spreadDetails) {
-        const parsed = parseESPNSpreadDetails(espnSummary.spreadDetails, game.homeTeam, game.awayTeam);
-        if (parsed !== null) {
-          spread = parsed.spread;
-          favorite = parsed.favorite;
-          spreadOddsAmerican = -110;
-          console.log(`[NCAAB ESPN FG SPREAD FALLBACK] ${game.awayTeam} @ ${game.homeTeam}: spread=${spread} fav=${favorite} (Odds API was null)`);
-        }
-      }
-
-      if (finalHomeGameTotalLine === null && finalAwayGameTotalLine === null) {
-        if (espnSummary.teamTotals.home !== null) finalHomeGameTotalLine = espnSummary.teamTotals.home;
-        if (espnSummary.teamTotals.away !== null) finalAwayGameTotalLine = espnSummary.teamTotals.away;
-        if (espnSummary.teamTotals.home !== null || espnSummary.teamTotals.away !== null) {
-          console.log(`[NCAAB ESPN TT] ${game.awayTeam} @ ${game.homeTeam}: homeTotal=${espnSummary.teamTotals.home}, awayTotal=${espnSummary.teamTotals.away}`);
-        }
-      }
+      // ESPN source-boundary: teamTotals from ESPN are display-only (not used as engine line inputs).
+      // Engine inputs homeGameTotalLine/awayGameTotalLine remain as-is from Odds API/SGO exclusively.
       const espnHomeWinPct = espnSummary.homeWinPct;
       const espnSpreadDetails = espnSummary.spreadDetails;
 
