@@ -536,7 +536,8 @@ export class LiveGameOrchestrator {
       }
     }
 
-    mlbEdgeCache.set(gameId, { outputs, updatedAt: Date.now() });
+    const now = Date.now();
+    mlbEdgeCache.set(gameId, { gameId, outputs, updatedAt: now, createdAt: now });
     console.log(`[MLB orchestrator] triggerEngine: game ${gameId} — ${outputs.length} outputs`);
     return outputs;
   }
