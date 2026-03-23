@@ -255,8 +255,8 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
     throw new Error(`Odds fetch failed: ${res.status} — ${body}`);
   }
   const data = await res.json();
-  cache.set(cacheKey, { data, timestamp: Date.now() });
   lastKnownRawOdds.set(cacheKey, { data, timestamp: Date.now() });
+  cache.set(cacheKey, { data, timestamp: Date.now() });
 
   const books = (data.bookmakers ?? []).map((b: any) => b.key).join(", ");
   console.log(`[Odds] Fetched ${inPlay ? "LIVE" : "pre-game"} ${marketKey} odds for event ${oddsEventId}: bookmakers = ${books || "none"}`);
@@ -303,6 +303,11 @@ const openingLineCache = new Map<string, number>();
 const lastKnownOdds = new Map<string, { data: Record<string, OddsLine>; timestamp: number }>();
 const LAST_KNOWN_TTL = ODDS_TTL; // 5 minutes
 
+// Per-gameId throttle — tracks the last time an Odds API fetch was issued per event.
+// Prevents multiple market-level fetches for the same game within a 60-second window.
+const lastGameApiCall = new Map<string, number>();
+const GAME_API_THROTTLE_MS = 60_000; // 60 seconds
+
 // Approximate win-probability change (%) per full point of line movement, by stat type.
 // Based on NBA distribution widths: points spread wider so each point matters less.
 const PROB_PER_POINT: Record<string, number> = {
@@ -335,6 +340,31 @@ export async function getPlayerOdds(
 
   const makeDegraded = (books: Record<string, OddsLine>): PlayerOddsResult =>
     ({ isDegraded: true, quotaExhausted: false, books });
+
+  // Cache-first pre-check: if a fresh last-known entry exists (< 5 min), return it
+  // immediately as non-degraded and skip the API call entirely.
+  const lkFresh = lastKnownOdds.get(lastKnownKey);
+  if (lkFresh && Date.now() - lkFresh.timestamp < LAST_KNOWN_TTL) {
+    console.log(`[ODDS CACHE-FIRST] Fresh cache hit for ${playerName} (${statType}) — skipping API call`);
+    return { isDegraded: false, quotaExhausted: false, books: lkFresh.data };
+  }
+
+  // Per-gameId 60-second throttle: if a fetch was already issued for this event
+  // within the last 60 s, skip the API call and serve from last-known (degraded if present).
+  const lastCallTs = lastGameApiCall.get(oddsEventId);
+  if (lastCallTs !== undefined && Date.now() - lastCallTs < GAME_API_THROTTLE_MS) {
+    const lk = lastKnownOdds.get(lastKnownKey);
+    if (lk) {
+      console.warn(`[ODDS THROTTLE] Event ${oddsEventId} throttled for ${playerName} (${statType}) — using last-known (degraded)`);
+      return makeDegraded(lk.data);
+    }
+    console.warn(`[ODDS THROTTLE] Event ${oddsEventId} throttled for ${playerName} (${statType}) — no last-known data, returning empty`);
+    return { isDegraded: false, quotaExhausted: false, books: {} };
+  }
+
+  // Stamp the throttle timestamp at issuance time so concurrent requests for the
+  // same event are blocked even before the first request resolves.
+  lastGameApiCall.set(oddsEventId, Date.now());
 
   let oddsData: any;
   try {
