@@ -137,6 +137,16 @@ export interface IStorage {
   cleanDuplicateAlerts(): Promise<{ removed: number; remaining: number }>;
 }
 
+// ─── Usage compression for blowout games ──────────────────────────────────
+function usageCompressionMultiplier(scoreDiff: number): number {
+  const abs = Math.abs(scoreDiff);
+  if (abs >= 25) return 0.65;
+  if (abs >= 20) return 0.72;
+  if (abs >= 15) return 0.82;
+  if (abs >= 10) return 0.92;
+  return 1.0;
+}
+
 // ─── Possession-based tempo model ─────────────────────────────────────────
 function estimatePossessionsPerMinute(period: number, scoreDiff: number): number {
   let ppm = 2.1;
@@ -525,7 +535,8 @@ export class DatabaseStorage implements IStorage {
     const baselinePPM = 2.1;
     const livePPM = estimatePossessionsPerMinute(currentPeriod, parsedScoreDiff);
     const tempoMultiplier = livePPM / baselinePPM;
-    let expectedFromHere = blendedPerMin * remainingMinutes * contextModifier * tempoMultiplier;
+    const usageMultiplier = usageCompressionMultiplier(parsedScoreDiff);
+    let expectedFromHere = blendedPerMin * remainingMinutes * contextModifier * tempoMultiplier * usageMultiplier;
 
     // ─── Overtime probability boost (Step 3) ──────────────────────────────
     if (hasScoreData && currentPeriod === 4 && clockMins <= 2.0 && Math.abs(parsedScoreDiff) <= 3) {
@@ -680,6 +691,7 @@ export class DatabaseStorage implements IStorage {
       lateSeasonPenaltyApplied,
       playoffBoostApplied,
       teamVolatilityPenaltyApplied,
+      usageMultiplier: Math.round(usageMultiplier * 1000) / 1000,
     };
 
     return {

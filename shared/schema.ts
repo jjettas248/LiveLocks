@@ -168,6 +168,7 @@ export interface CalcDebug {
   lateSeasonPenaltyApplied?: boolean;
   playoffBoostApplied?: boolean;
   teamVolatilityPenaltyApplied?: boolean;
+  usageMultiplier?: number;
 }
 
 export interface CalculateProbabilityResponse {
