@@ -24,6 +24,7 @@ import { estimateRemainingPA } from "./paEstimator";
 import { calculateMLBPropEdge } from "./markets";
 import { recordMLBDiagnostic } from "./diagnostics";
 import type { MLBPropInput, MLBPropOutput, MLBMarket } from "./types";
+import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
 
 // ── Debug pipeline logging ────────────────────────────────────────────────────
 const DEBUG_PIPELINE = process.env.DEBUG_PIPELINE === "true";
@@ -54,8 +55,7 @@ const BATTER_MARKETS: MLBMarket[] = [
 
 const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "hits_allowed"];
 
-// ── Neutral book line defaults (used for internal/diagnostic triggers) ─────────
-
+// ── Neutral book line defaults (last-resort fallback when no market line is available) ─
 const DEFAULT_BOOK_LINE: Record<MLBMarket, number> = {
   hits: 0.5,
   total_bases: 1.5,
@@ -65,6 +65,61 @@ const DEFAULT_BOOK_LINE: Record<MLBMarket, number> = {
   home_runs: 0.5,
   hrr: 1.5,
 };
+
+// ── Previously-resolved line cache ───────────────────────────────────────────
+// Persists the last successfully fetched sportsbook line per event+player+market
+// within this server process. Used as the second-priority fallback when the
+// odds service is unreachable or has no line posted yet.
+// Key: "oddsEventId|playerNameNorm|market" — Value: last known real line
+const priorResolvedLines = new Map<string, number>();
+
+// Preferred bookmaker order for deterministic line selection (matches manual flow).
+// First match wins; unlisted bookmakers are used only as a last resort.
+const PREFERRED_BOOKMAKERS = ["draftkings", "fanduel", "hardrockbet"];
+
+// ── Resolve a real book line for a player/market ──────────────────────────────
+// Precedence:
+//   (1) Odds service cached line (getMLBPlayerOdds) — preferred book order
+//   (2) Previously resolved / user-supplied line (priorResolvedLines)
+//   (3) DEFAULT_BOOK_LINE fallback (last resort — warning is logged)
+async function resolveBookLine(
+  oddsEventId: string | null,
+  playerName: string,
+  market: MLBMarket
+): Promise<number> {
+  const normName = playerName.toLowerCase().trim();
+  const cacheKey = oddsEventId ? `${oddsEventId}|${normName}|${market}` : `unknown|${normName}|${market}`;
+
+  // (1) Try odds service
+  if (oddsEventId) {
+    try {
+      const oddsResult = await getMLBPlayerOdds(oddsEventId, playerName, market);
+      const bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
+      if (bookKeys.length > 0) {
+        // Apply deterministic bookmaker preference order
+        const preferred = PREFERRED_BOOKMAKERS.find(b => bookKeys.includes(b)) ?? bookKeys[0];
+        const line = oddsResult[preferred].line;
+        if (typeof line === "number" && isFinite(line) && line > 0) {
+          priorResolvedLines.set(cacheKey, line);
+          return line;
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[MLB orchestrator] resolveBookLine odds error for ${playerName}/${market}:`, err.message);
+    }
+  }
+
+  // (2) Fall back to previously resolved / user-supplied line
+  const prior = priorResolvedLines.get(cacheKey);
+  if (prior !== undefined) {
+    console.warn(`[MLB orchestrator] Using prior known line for ${playerName}/${market}: ${prior}`);
+    return prior;
+  }
+
+  // (3) Last resort: hardcoded default
+  console.warn(`[MLB orchestrator] No sportsbook line found for ${playerName}/${market} — using DEFAULT_BOOK_LINE fallback (${DEFAULT_BOOK_LINE[market]})`);
+  return DEFAULT_BOOK_LINE[market];
+}
 
 // ── State change trigger types ────────────────────────────────────────────────
 
@@ -228,6 +283,16 @@ export class LiveGameOrchestrator {
     const weatherCache = mlbGameCache.weather[gameId];
     const bullpenCache = mlbGameCache.bullpen[gameId];
 
+    // ── Resolve MLB odds event ID once per game ────────────────────────────────
+    let oddsEventId: string | null = null;
+    if (game) {
+      try {
+        oddsEventId = await resolveMLBOddsEventId(game.awayTeam, game.homeTeam);
+      } catch (err: any) {
+        console.warn(`[MLB orchestrator] Could not resolve odds event ID for game ${gameId}:`, err.message);
+      }
+    }
+
     // ── Batter markets: evaluate each hitter in the starting lineup ────────────
     for (const market of BATTER_MARKETS) {
       for (const batter of state.battingOrder) {
@@ -252,6 +317,8 @@ export class LiveGameOrchestrator {
           ? pitcherCtx.timesThroughOrder >= 3 && pitcherCtx.pitchCount > 80
           : false;
 
+        const bookLine = await resolveBookLine(oddsEventId, batter.playerName, market);
+
         const input: MLBPropInput = {
           playerId: batter.playerId,
           playerName: batter.playerName,
@@ -259,7 +326,7 @@ export class LiveGameOrchestrator {
           opponent: "",
           gameId,
           market,
-          bookLine: DEFAULT_BOOK_LINE[market],
+          bookLine,
           seasonAvg: 1.0,
           plateAppearances: state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0,
           atBats: Math.max(0, state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0),
@@ -356,6 +423,8 @@ export class LiveGameOrchestrator {
           5 // neutral batting order slot for pitcher PA estimate
         );
 
+        const pitcherBookLine = await resolveBookLine(oddsEventId, pitcherToEval.playerName, market);
+
         const input: MLBPropInput = {
           playerId: pitcherToEval.playerId,
           playerName: pitcherToEval.playerName,
@@ -363,7 +432,7 @@ export class LiveGameOrchestrator {
           opponent: "",
           gameId,
           market,
-          bookLine: DEFAULT_BOOK_LINE[market],
+          bookLine: pitcherBookLine,
           seasonAvg: market === "pitcher_strikeouts" ? 6.0 : 5.0,
           plateAppearances: pitcherCtx?.pitchCount
             ? Math.floor(pitcherCtx.pitchCount / 4)
