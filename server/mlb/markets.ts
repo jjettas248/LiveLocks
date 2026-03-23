@@ -310,32 +310,34 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
 }
 
 export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
-  const currentHits = input.currentStatValue ?? 0;
-  const playerAB = input.atBats > 0 ? input.atBats : input.completedAB;
+  const hitsInput = { ...input, market: "hits" as MLBMarket };
+
+  const currentHits = hitsInput.currentStatValue ?? 0;
+  const playerAB = hitsInput.atBats > 0 ? hitsInput.atBats : hitsInput.completedAB;
 
   let adjustedRate = baseProbability(currentHits, playerAB);
 
-  const pitcherKRate = input.pitcher.kPer9 != null ? input.pitcher.kPer9 / 9 : 0.22;
+  const pitcherKRate = hitsInput.pitcher.kPer9 != null ? hitsInput.pitcher.kPer9 / 9 : 0.22;
   const pitcherBABIP = 0.296;
   adjustedRate = applyPitcherModifier(adjustedRate, pitcherKRate, pitcherBABIP);
-  adjustedRate = applyParkModifier(adjustedRate, input.weatherPark.parkFactor);
-  adjustedRate = applyBullpenModifier(adjustedRate, input.bullpen.bullpenEra);
+  adjustedRate = applyParkModifier(adjustedRate, hitsInput.weatherPark.parkFactor);
+  adjustedRate = applyBullpenModifier(adjustedRate, hitsInput.bullpen.bullpenEra);
 
-  const windOut = input.weatherPark.windDirection === "out";
-  const temperature = input.weatherPark.temperature ?? 70;
+  const windOut = hitsInput.weatherPark.windDirection === "out";
+  const temperature = hitsInput.weatherPark.temperature ?? 70;
   adjustedRate = applyWeatherModifier(adjustedRate, windOut, temperature);
 
   const paDist = estimatePADistribution(
-    input.inning,
-    input.lineup.battingOrderSlot,
-    input.currentRuns ?? 4.5,
-    input.leagueAvgRuns ?? 4.5
+    hitsInput.inning,
+    hitsInput.lineup.battingOrderSlot,
+    hitsInput.currentRuns ?? 4.5,
+    hitsInput.leagueAvgRuns ?? 4.5
   );
 
   const expectedHits = paDist[1] * adjustedRate + paDist[2] * 2 * adjustedRate + paDist[3] * 3 * adjustedRate;
   const rpa = (1 * paDist[1]) + (2 * paDist[2]) + (3 * paDist[3]);
 
-  const neededHits = Math.max(0, Math.ceil(input.bookLine) - currentHits);
+  const neededHits = Math.max(0, Math.ceil(hitsInput.bookLine) - currentHits);
 
   let rawProbabilityOver: number;
   let rawProbabilityUnder: number;
@@ -356,6 +358,15 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   let calibratedOver = calibrateProbability(rawProbabilityOver);
   let calibratedUnder = calibrateProbability(rawProbabilityUnder);
 
+  const isExperimental = EXPERIMENTAL_MARKETS.includes("hits" as MLBMarket);
+
+  if (isExperimental) {
+    calibratedOver = 50 + (calibratedOver - 50) * 0.75;
+    calibratedUnder = 50 + (calibratedUnder - 50) * 0.75;
+    calibratedOver = Math.round(calibratedOver * 100) / 100;
+    calibratedUnder = Math.round(calibratedUnder * 100) / 100;
+  }
+
   const calibratedSidedRaw = rawProbabilityOver >= rawProbabilityUnder ? calibratedOver : calibratedUnder;
   const calibratedSided = applyProbabilityCeiling(calibratedSidedRaw, "hits");
   const calibratedOpposite = Math.round((100 - calibratedSided) * 100) / 100;
@@ -366,34 +377,76 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   const dominantRawProb = Math.max(rawProbabilityOver, rawProbabilityUnder);
 
   const edge = calibratedSided - 50;
-  const confidenceTier = determineConfidenceTier(edge);
-  const recommendedSide = determineSide(calibratedSided, confidenceTier);
+  let confidenceTier = determineConfidenceTier(edge);
+  let recommendedSide = determineSide(calibratedSided, confidenceTier);
 
   const adjustedProjection = expectedHits + currentHits;
-  const suppression = checkSuppression({ ...input, market: "hits" }, edge, "hits", adjustedProjection);
+
+  const projResult = projectBaseValue(hitsInput);
+  const warnings = [...projResult.warnings];
+
+  if (isExperimental) {
+    confidenceTier = capConfidenceTier(confidenceTier, EXPERIMENTAL_CONFIDENCE_CEILING);
+    recommendedSide = determineSide(calibratedSided, confidenceTier);
+    warnings.push(`hits is experimental — confidence capped at ${EXPERIMENTAL_CONFIDENCE_CEILING}`);
+  }
+
+  const suppression = checkSuppression(hitsInput, edge, "hits", adjustedProjection);
   const finalEdge = suppression.suppressed ? 0 : Math.round(edge * 100) / 100;
 
-  const output = buildOutput({ ...input, market: "hits" });
+  if (suppression.suppressed) {
+    confidenceTier = "NO_EDGE";
+    recommendedSide = "NO_EDGE";
+  }
 
-  output.projection = parseFloat(adjustedProjection.toFixed(3));
-  output.rawProbabilityOver = rawProbabilityOver;
-  output.rawProbabilityUnder = rawProbabilityUnder;
-  output.calibratedProbabilityOver = Math.round(calibratedProbabilityOver * 100) / 100;
-  output.calibratedProbabilityUnder = Math.round(calibratedProbabilityUnder * 100) / 100;
-  output.rawProbability = Math.round(dominantRawProb * 100) / 100;
-  output.calibratedProbability = Math.round(calibratedDominant * 100) / 100;
-  output.edge = finalEdge;
-  output.confidenceTier = suppression.suppressed ? "NO_EDGE" : confidenceTier;
-  output.recommendedSide = suppression.suppressed ? "NO_EDGE" : recommendedSide;
-  output.suppressed = suppression.suppressed;
-  output.suppressionReason = suppression.reason;
+  const completeProjectionLog: ProjectionLog = {
+    ...projResult.projectionLog,
+    rawProbability: Math.round(dominantRawProb * 100) / 100,
+    calibratedProbability: Math.round(calibratedDominant * 100) / 100,
+    confidenceTier,
+    modeUsed: projResult.mode === "early_explosive" ? "EARLY_EXPLOSIVE" : "STANDARD",
+  };
 
-  output.adjustedHitRate = parseFloat(adjustedRate.toFixed(4));
-  output.expectedHits = parseFloat(expectedHits.toFixed(2));
-  output.remainingPA = rpa;
-  output.paDistribution = paDist;
+  const partialOutput: Partial<MLBPropOutput> = {
+    mode: projResult.mode,
+    isExperimental,
+  };
 
-  return output;
+  const explanationBullets = buildExplanationBullets(hitsInput, partialOutput);
+
+  return {
+    market: "hits",
+    playerId: hitsInput.playerId,
+    playerName: hitsInput.playerName,
+    gameId: hitsInput.gameId,
+    projection: parseFloat(adjustedProjection.toFixed(3)),
+    bookLine: hitsInput.bookLine,
+    modifiers: projResult.modifiers,
+    projectionLog: completeProjectionLog,
+    rawProbabilityOver: Math.round(rawProbabilityOver * 100) / 100,
+    rawProbabilityUnder: Math.round(rawProbabilityUnder * 100) / 100,
+    calibratedProbabilityOver: Math.round(calibratedProbabilityOver * 100) / 100,
+    calibratedProbabilityUnder: Math.round(calibratedProbabilityUnder * 100) / 100,
+    rawProbability: Math.round(dominantRawProb * 100) / 100,
+    calibratedProbability: Math.round(calibratedDominant * 100) / 100,
+    edge: finalEdge,
+    recommendedSide,
+    confidenceTier,
+    mode: projResult.mode,
+    completedAB: hitsInput.completedAB,
+    twoABRuleSatisfied: projResult.twoABRuleSatisfied,
+    expectedHits: parseFloat(expectedHits.toFixed(2)),
+    remainingPA: rpa,
+    adjustedHitRate: parseFloat(adjustedRate.toFixed(4)),
+    bookImplied: null,
+    paDistribution: paDist,
+    isExperimental,
+    suppressed: suppression.suppressed,
+    suppressionReason: suppression.reason,
+    explanationBullets,
+    warnings,
+    engineGeneratedAt: Date.now(),
+  };
 }
 
 export function calculateTBEdge(input: MLBPropInput): MLBPropOutput {
