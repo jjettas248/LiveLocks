@@ -1,0 +1,298 @@
+# TASK: LIVELOCKS FULL SYSTEM AUDIT + REPAIR + MLB READINESS
+
+## SYSTEM:
+ALL SYSTEMS (CORE ENGINE + DATA PIPELINE + UX + CONVERSION + ANALYTICS)
+
+---
+
+## OBJECTIVE:
+Fully audit, repair, and validate LiveLocks so that:
+- All sports (NBA, NCAAB, MLB) are producing plays
+- Engine → API → UI pipeline is fully wired
+- Odds failures do NOT break the system
+- MLB is production-ready before Wednesday
+- No silent failures or empty states occur
+
+---
+
+## CONTEXT:
+
+Current known issues:
+- NCAAB: No plays showing → engine likely not receiving valid inputs
+- NBA: Previously overconfident probabilities + possible pipeline drift
+- MLB: Incomplete live gating + possible status mismatch bug
+- Odds API:
+  - Quota exhaustion breaks entire UI
+  - No last-known-good fallback
+- ESPN:
+  - Does NOT provide prop lines → cannot be relied on for odds
+- UI:
+  - Empty states appear instead of degraded data
+- Possible root causes:
+  - Broken engineInput mapping
+  - Market keys mismatch (H1/H2 / MLB props)
+  - Bookmaker loop prematurely breaking
+  - Missing fallback systems
+  - Improper live game status normalization
+
+---
+
+## REQUIREMENTS:
+
+### 1. GLOBAL SYSTEM AUDIT (MANDATORY FIRST STEP)
+
+Add TEMPORARY LOGGING at 3 layers for ALL sports:
+
+A. Data ingestion layer
+- Raw bookmaker keys
+- Raw lines + odds
+- Game status
+
+B. Post-processing layer
+- Extracted lines (totals/spreads/props)
+- Merged state
+
+C. Pre-engine input
+- Final engineInput object
+
+D. Engine output
+- Probability
+- Edge
+- Market availability
+
+LOG FORMAT:
+[SPORT][GAME_ID]
+raw → processed → engineInput → engineOutput
+
+---
+
+### 2. ODDS API FAILURE FIX (CRITICAL)
+
+Implement LAST-KNOWN-GOOD CACHE:
+
+File: oddsService.ts
+
+- Store last valid odds per gameId
+- On failure (quota or fetch error):
+  - Return cached odds
+  - Add flag: isDegraded = true
+
+DO NOT:
+- Return empty array
+- Break pipeline
+
+SUCCESS:
+- Plays still generate even when API is down
+
+---
+
+### 3. REMOVE DATA PIPELINE BREAKS
+
+File: extractLines (ALL sports)
+
+- REMOVE any premature `break` inside bookmaker loops
+- Ensure ALL bookmakers are iterated
+
+SUCCESS:
+- No missing lines due to early exit
+
+---
+
+### 4. FLEXIBLE MARKET KEY MATCHING
+
+Implement helper matchers:
+
+- isH1TotalKey()
+- isH2TotalKey()
+- isSpreadKey()
+- isMLBPropKey()
+
+Replace ALL exact matches like:
+m.key === "h2_totals"
+
+With:
+flexible matcher functions
+
+SUCCESS:
+- H1/H2 + MLB props always detected
+
+---
+
+### 5. MLB LIVE STATUS NORMALIZATION FIX
+
+File: mlb live endpoint
+
+Fix:
+"abstractState.toLowerCase()" bug
+
+Map ALL possible statuses:
+
+"Live"
+"In Progress"
+"in_progress"
+"Final"
+"Pre-Game"
+
+→ normalized to:
+live | pregame | final
+
+Ensure gating allows:
+live + in_progress
+
+SUCCESS:
+- MLB games are not incorrectly blocked
+
+---
+
+### 6. ENGINE INPUT GUARANTEE
+
+Before running engine:
+
+IF missing:
+- line
+- odds
+- player context
+
+THEN:
+- log error
+- skip safely (do NOT crash pipeline)
+
+SUCCESS:
+- Engine never silently fails
+
+---
+
+### 7. ESPN LIMITATION FIX (IMPORTANT)
+
+DO NOT rely on ESPN for:
+- props
+- odds
+
+Instead:
+
+IF Odds API unavailable:
+- Use last-known-good cache
+- OR disable market (NOT full game)
+
+SUCCESS:
+- ESPN is only used for:
+  - scores
+  - game state
+
+---
+
+### 8. UI FAILSAFE LAYER
+
+If:
+- No fresh odds
+
+THEN:
+- Show cached plays
+- Label:
+"Using last known lines"
+
+If:
+- No plays
+
+THEN:
+- Show:
+"No strong edges right now"
+
+NEVER show:
+- blank screen
+- broken state
+
+---
+
+### 9. MLB ENGINE VALIDATION (PRE-WEDNESDAY REQUIREMENT)
+
+Ensure MLB engine supports:
+
+- Player props:
+  - Hits
+  - Total bases
+  - Strikeouts
+  - HR (if available)
+
+- Required inputs:
+  - batting order
+  - pitcher matchup
+  - park factor
+
+Add validation:
+
+IF missing context:
+→ exclude player safely
+
+SUCCESS:
+- MLB outputs valid plays before launch
+
+---
+
+### 10. ANALYTICS VERIFICATION
+
+Ensure:
+
+/api/analytics/summary
+
+Works for:
+- today
+- 7d
+- 30d
+
+Tracks:
+- hit rate
+- ROI
+- probability buckets
+
+SUCCESS:
+- No broken analytics endpoints
+
+---
+
+## DO NOT:
+
+- Do NOT introduce new systems
+- Do NOT hardcode odds or probabilities
+- Do NOT bypass engine logic
+- Do NOT break existing working NBA pipeline
+- Do NOT return empty arrays on failure
+
+---
+
+## SUCCESS CRITERIA:
+
+- NBA produces plays consistently
+- NCAAB H1/H2 markets populate correctly
+- MLB produces valid props + passes live gating
+- Odds API failure does NOT remove plays
+- UI NEVER shows blank state
+- Engine logs confirm full pipeline integrity
+- System is stable under degraded conditions
+
+---
+
+## OUTPUT (STRICT):
+
+Return ONLY:
+
+1. File-by-file diffs
+2. Exact code changes
+3. No explanations
+4. No placeholders
+5. No pseudo-code
+
+---
+
+## EXECUTION ORDER (MANDATORY):
+
+1. Audit logging
+2. Odds fallback
+3. Data extraction fixes
+4. Market matching fixes
+5. MLB status fix
+6. Engine validation
+7. UI failsafes
+8. Final verification
+
+STOP when complete.
