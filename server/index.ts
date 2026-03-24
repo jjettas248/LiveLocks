@@ -194,6 +194,17 @@ app.use((req, res, next) => {
     console.warn("[startup] Schema migration warning (daily-plays):", err.message);
   }
 
+  // Schema migration: add espn_athlete_id to players table (Task #83) if it doesn't exist yet.
+  try {
+    await pool.query(`
+      ALTER TABLE players
+        ADD COLUMN IF NOT EXISTS espn_athlete_id integer;
+    `);
+    console.log("[startup] Schema migration: espn_athlete_id column ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (espn-athlete-id):", err.message);
+  }
+
   // Backfill: mark pre-existing users (no verification token) as email-verified
   // so they are not locked out by the new emailVerified gate.
   try {
@@ -516,4 +527,7 @@ app.use((req, res, next) => {
     },
     { timezone: "America/New_York" }
   );
-})();
+})().catch((err: any) => {
+  console.error("[startup] Fatal unhandled error — process will exit:", err.message, err.stack);
+  process.exit(1);
+});
