@@ -83,6 +83,7 @@ interface LiveBoxscoreProps {
   lastRefreshed: Date;
   onRefresh: () => void;
   onRowClick: (stat: LivePlayerStat) => void;
+  currentGameId: string;
 }
 
 export function LiveBoxscore({
@@ -96,6 +97,7 @@ export function LiveBoxscore({
   lastRefreshed,
   onRefresh,
   onRowClick,
+  currentGameId,
 }: LiveBoxscoreProps) {
   const [showBoxScore, setShowBoxScore] = useState(true);
   const [boxScoreFilter, setBoxScoreFilter] = useState("");
@@ -116,9 +118,7 @@ export function LiveBoxscore({
   for (const play of signalSource) {
     const pid: number | undefined = play.playerId;
     if (!pid) continue;
-    const dp = play.betDirection === "under"
-      ? Math.round((100 - play.probability) * 10) / 10
-      : Math.round(play.probability * 10) / 10;
+    const dp = Math.round(play.probability * 10) / 10;
     const tier: SignalTier | null =
       dp >= 85 ? (play.betDirection === "under" ? "red" : "green") :
       dp >= 70 ? "yellow" :
@@ -294,8 +294,13 @@ export function LiveBoxscore({
                         {espnToDb(team)} — {TEAM_FULL_NAMES[espnToDb(team)] ?? team}
                       </td>
                     </tr>,
-                    ...playedStats
-                      .filter(s => s.teamAbbr === team)
+                    ...Array.from(
+                      new Map(
+                        playedStats
+                          .filter(s => s.teamAbbr === team && s.gameId === currentGameId)
+                          .map(s => [`${s.gameId}:${s.teamAbbr}:${s.playerId ?? s.playerName}`, s])
+                      ).values()
+                    )
                       .sort((a, b) => {
                         const pid_a = a.playerId as number | null;
                         const pid_b = b.playerId as number | null;
@@ -335,9 +340,7 @@ export function LiveBoxscore({
                         // Badge display derived from engineEntry (probability badge — decoupled from highlight)
                         let badgeElement: JSX.Element | null = null;
                         if (!isSelected && engineEntry) {
-                          const dp = engineEntry.betDirection === "UNDER"
-                            ? Math.round((100 - engineEntry.probability) * 10) / 10
-                            : Math.round(engineEntry.probability * 10) / 10;
+                          const dp = Math.round(engineEntry.probability * 10) / 10;
                           const sigTierKey = getSignalTier(dp);
                           const tierStyle = sigTierKey !== "none"
                             ? SIGNAL_TIER_STYLES[sigTierKey]

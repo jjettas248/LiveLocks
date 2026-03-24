@@ -1670,6 +1670,7 @@ export async function registerRoutes(
             playerId: dbPlayerId,
             playerName: athlete.athlete.displayName,
             teamAbbr: teamAbbr,
+            gameId,
             minutes: statMap["min"] || "0",
             points: parseStat(statMap["pts"]),
             rebounds: parseStat(statMap["reb"]),
@@ -1938,27 +1939,34 @@ export async function registerRoutes(
               }
 
               // Populate engineOutput for ALL players with valid results (no edge filter)
+              const engineBetDirection: "OVER" | "UNDER" =
+                result.recommendedSide === "UNDER" ? "UNDER" :
+                result.recommendedSide === "OVER" ? "OVER" :
+                (result.probability >= 50 ? "OVER" : "UNDER");
+
               engineOutput[dbPlayer.id][statType] = {
-                probability: result.probability,
-                betDirection: result.probability > 50 ? "OVER" : "UNDER",
+                probability: result.displayConfidence ?? Math.abs(result.probability - 50) + 50,
+                betDirection: engineBetDirection,
                 edge,
                 line: liveLine,
                 statType,
               };
 
-              // signals[] keeps the edge >= 5 filter for the halftime panel
-              if (edge < 5) continue;
-
-              allSignals.push({
-                playerName: dbPlayer.name,
-                playerId: dbPlayer.id,
-                statType,
-                probability: result.probability,
-                betDirection: result.probability > 50 ? "over" : "under",
-                edge,
-                line: liveLine,
-                currentStat,
-              });
+              // Only push genuine OVER or UNDER plays — NO_SIGNAL and noSignal entries must never enter signals[]
+              if (result.noSignal || result.recommendedSide === "NO_SIGNAL") {
+                // do not push
+              } else if (edge >= 5) {
+                allSignals.push({
+                  playerName: dbPlayer.name,
+                  playerId: dbPlayer.id,
+                  statType,
+                  probability: result.displayConfidence ?? result.probability,
+                  betDirection: result.recommendedSide === "UNDER" ? "under" : "over",
+                  edge,
+                  line: liveLine,
+                  currentStat,
+                });
+              }
             } catch (calcErr: any) {
               console.warn(`[NBA][engineError] player=${dbPlayer?.name ?? playerName} stat=${statType} error=${calcErr?.message ?? String(calcErr)}`);
               if (process.env.DEBUG_PIPELINE === "true") {
@@ -1995,6 +2003,14 @@ export async function registerRoutes(
           .map(a => a.teamAbbr)
       );
       console.log(`[live-signals] totalPlayers=${totalAttempted} enginePlayers=${enginePlayerCount} teams=${[...teamAbbrsPresent].join(",")}`);
+
+      const overSignals = allSignals.filter(s => s.betDirection === "over").length;
+      const underSignals = allSignals.filter(s => s.betDirection === "under").length;
+      console.log(
+        `[live-signals-summary] totalPlayers=${totalAttempted} enginePlayers=${enginePlayerCount} ` +
+        `overSignals=${overSignals} underSignals=${underSignals} ` +
+        `noSignals=${totalAttempted - overSignals - underSignals}`
+      );
 
       allSignals.sort((a, b) => b.edge - a.edge);
       liveSignalsCache.set(gameId, { ts: Date.now(), signals: allSignals, engineOutput });
@@ -3890,8 +3906,7 @@ export function registerAnalyticsRoutes(app: Express): void {
           mismatch,
           archetype: e.archetype,
           avgMinutes: e.avgMinutes,
-          isVolatileFiltered: e.isVolatileFiltered,
-          isEdgeRejected: e.isEdgeRejected,
+          warnings: e.warnings ?? [],
           bookImplied: e.bookImplied,
           edgeVsBook: e.edgeVsBook,
         };
@@ -3989,10 +4004,8 @@ export function registerAnalyticsRoutes(app: Express): void {
 
       // ── Section D: Post-filter results summary ──────────────────────────
       const totalEntries = entries.length;
-      const noSignalTotal            = entries.filter(e => e.noSignal).length;
-      const volatileFilteredCount    = entries.filter(e => e.isVolatileFiltered).length;
-      const edgeRejectedCount        = entries.filter(e => e.isEdgeRejected).length;
-      const superstarUnderReduced    = entries.filter(e => e.isSuperstarUnderReduced).length;
+      const noSignalTotal                  = entries.filter(e => e.noSignal).length;
+      const projectionMismatchCount        = entries.filter(e => (e.warnings ?? []).includes("direction_projection_mismatch")).length;
 
       const audit = {
         meta: {
@@ -4023,9 +4036,7 @@ export function registerAnalyticsRoutes(app: Express): void {
         },
         postFilterSummary: {
           noSignalTotal,
-          volatileFiltered: volatileFilteredCount,
-          edgeRejected: edgeRejectedCount,
-          superstarUnderReduced,
+          projectionMismatch: projectionMismatchCount,
         },
         pipelineTrace,
       };

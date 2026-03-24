@@ -230,9 +230,9 @@ interface CalcLogEntry {
   edgeVsBook: number;
   archetype: "superstar" | "primary" | "role" | "rotation" | "volatile";
   avgMinutes: number;
-  isVolatileFiltered: boolean;
-  isEdgeRejected: boolean;
-  isSuperstarUnderReduced: boolean;
+  recommendedSide: "OVER" | "UNDER" | "NO_SIGNAL";
+  displayConfidence: number | null;
+  warnings: string[];
   noSignal: boolean;
   gameDate: string | null;
   timestamp: Date;
@@ -661,40 +661,59 @@ export class DatabaseStorage implements IStorage {
     }
     const archetype = classifyArchetype(avgMinutes);
 
-    // ─── Safe post-calibration risk filters ──────────────────────────────
-    // Applied after calibration + penalties + expansion, before final return.
-    // All filters are reversible and logged.
-
-    // Filter A — Volatile block
-    let isVolatileFiltered = false;
-    if (avgMinutes < 22 && probability > 70) {
-      isVolatileFiltered = true;
-    }
-
-    // Filter B — Superstar-under dampener (×0.93)
-    let isSuperstarUnderReduced = false;
-    if (archetype === "superstar" && direction === "UNDER" && probability > 65) {
-      probability = probability * 0.93;
-      isSuperstarUnderReduced = true;
-    }
-
-    // Filter C — Extreme under guard
-    let isEdgeRejected = false;
-    if (probability < 25) {
-      isEdgeRejected = true;
-    }
-
     // Filter D — Final clamp
     probability = Math.max(2, Math.min(98, probability));
 
-    // Edge sanity check using real odds
+    // ─── Directional semantics ─────────────────────────────────────────────
+    // "probability" is a raw directional lean (0-100, OVER likelihood).
+    // Never use it directly as display confidence. All UI and routing uses displayConfidence.
+    const overLeanProbability = probability;
+
+    const overConfidence = overLeanProbability;
+    const underConfidence = 100 - overLeanProbability;
+
+    const recommendedSide: "OVER" | "UNDER" | "NO_SIGNAL" =
+      overLeanProbability > 50 ? "OVER" :
+      overLeanProbability < 50 ? "UNDER" :
+      "NO_SIGNAL";
+
+    const displayConfidence: number | null =
+      recommendedSide === "NO_SIGNAL" ? null :
+      recommendedSide === "OVER" ? overConfidence :
+      underConfidence;
+
+    // ─── Integrity guard ───────────────────────────────────────────────────
+    const warnings: string[] = [];
+    if (recommendedSide === "OVER" && expectedTotal <= req.liveLine) {
+      warnings.push("direction_projection_mismatch");
+    }
+    if (recommendedSide === "UNDER" && expectedTotal >= req.liveLine) {
+      warnings.push("direction_projection_mismatch");
+    }
+    const hasProjectionMismatch = warnings.includes("direction_projection_mismatch");
+
+    // Edge sanity check using real odds — use displayConfidence for symmetric OVER/UNDER comparison.
+    // probability (OVER-lean, 0-100) would make all UNDER signals fail the gate since prob < 50.
+    // displayConfidence is always the winning-side confidence (>= 50 for both directions).
     const sportsbookImplied = americanOddsToProb(req.bookOdds ?? -110) * 100;
-    const edgeVsBook = probability - sportsbookImplied;
-    const noSignal = edgeVsBook < 3 || isVolatileFiltered || isEdgeRejected;
+    const edgeVsBook = (displayConfidence !== null ? displayConfidence : Math.abs(probability - 50) + 50) - sportsbookImplied;
+
+    const MIN_DISPLAY_CONFIDENCE = 55;
+    const noSignal = edgeVsBook < 3
+      || (displayConfidence !== null && displayConfidence < MIN_DISPLAY_CONFIDENCE)
+      || hasProjectionMismatch;
 
     let usageUnderPenaltyApplied = false;
 
-    console.log(`[calc] ${player.name}: period=${currentPeriod} clock=${req.gameClock ?? "n/a"} gameMinLeft=${gameMinutesRemaining.toFixed(1)} remainMin=${remainingMinutes.toFixed(1)} baseline=${baselineSource} edge=${edge.toFixed(2)} ctxMod=${contextModifier.toFixed(3)} prob=${probability.toFixed(1)}% archetype=${archetype} rotSrc=${rotationSource} noSignal=${noSignal} isVolatileFiltered=${isVolatileFiltered} isEdgeRejected=${isEdgeRejected}`);
+    if (process.env.DEBUG_PIPELINE === "true" || noSignal) {
+      console.log(
+        `[calc] ${player.name}: period=${currentPeriod} remainMin=${remainingMinutes.toFixed(1)} ` +
+        `proj=${expectedTotal.toFixed(1)} line=${req.liveLine} side=${recommendedSide} ` +
+        `overConf=${overConfidence.toFixed(1)} underConf=${underConfidence.toFixed(1)} ` +
+        `dispConf=${displayConfidence?.toFixed(1) ?? "null"} edgeVsBook=${edgeVsBook.toFixed(1)} ` +
+        `archetype=${archetype} noSignal=${noSignal} warnings=${warnings.join(",") || "none"}`
+      );
+    }
 
     // ─── In-memory calc log ───────────────────────────────────────────────
     const finalProbability = Math.round(probability * 10) / 10;
@@ -710,9 +729,9 @@ export class DatabaseStorage implements IStorage {
       edgeVsBook: Math.round(edgeVsBook * 10) / 10,
       archetype,
       avgMinutes,
-      isVolatileFiltered,
-      isEdgeRejected,
-      isSuperstarUnderReduced,
+      recommendedSide,
+      displayConfidence: displayConfidence !== null ? Math.round(displayConfidence * 10) / 10 : null,
+      warnings,
       noSignal,
       gameDate: req.gameDate ?? null,
       timestamp: new Date(),
@@ -752,13 +771,21 @@ export class DatabaseStorage implements IStorage {
       teamVolatilityPenaltyApplied,
       usageMultiplier: Math.round(usageMultiplier * 1000) / 1000,
       archetype,
-      isVolatileFiltered,
-      isEdgeRejected,
+      overConfidence: Math.round(overConfidence * 10) / 10,
+      underConfidence: Math.round(underConfidence * 10) / 10,
+      displayConfidence: displayConfidence !== null ? Math.round(displayConfidence * 10) / 10 : null,
+      recommendedSide,
+      warnings,
     };
 
     return {
       probability: finalProbability,
       impliedProbability: finalProbability,
+      overConfidence: Math.round(overConfidence * 10) / 10,
+      underConfidence: Math.round(underConfidence * 10) / 10,
+      displayConfidence: displayConfidence !== null ? Math.round(displayConfidence * 10) / 10 : null,
+      recommendedSide,
+      warnings,
       edge: Math.round(edgeVsBook * 10) / 10,
       expectedTotal: Math.round(expectedTotal * 10) / 10,
       projectedSecondHalfMinutes: Math.round(remainingMinutes * 10) / 10,

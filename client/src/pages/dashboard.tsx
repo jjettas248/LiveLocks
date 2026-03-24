@@ -2019,6 +2019,7 @@ export default function Dashboard() {
             lastRefreshed={lastRefreshed}
             onRefresh={() => { refetchLiveStats(); setLastRefreshed(new Date()); }}
             onRowClick={handleBoxScoreClick}
+            currentGameId={selectedGameId ?? ""}
           />
         )}
 

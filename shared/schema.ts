@@ -171,8 +171,11 @@ export interface CalcDebug {
   teamVolatilityPenaltyApplied?: boolean;
   usageMultiplier?: number;
   archetype?: "superstar" | "primary" | "role" | "rotation" | "volatile";
-  isVolatileFiltered?: boolean;
-  isEdgeRejected?: boolean;
+  overConfidence?: number;
+  underConfidence?: number;
+  displayConfidence?: number | null;
+  recommendedSide?: "OVER" | "UNDER" | "NO_SIGNAL";
+  warnings?: string[];
 }
 
 export interface CalculateProbabilityResponse {
@@ -189,6 +192,11 @@ export interface CalculateProbabilityResponse {
   inSecondHalf?: boolean;
   baselineSource?: "h2" | "fullGame";
   noSignal?: boolean;
+  recommendedSide?: "OVER" | "UNDER" | "NO_SIGNAL";
+  displayConfidence?: number | null;
+  overConfidence?: number;
+  underConfidence?: number;
+  warnings?: string[];
   debug?: CalcDebug;
 }
 
@@ -210,6 +218,7 @@ export interface LivePlayerStat {
   playerId: number | null;
   playerName: string;
   teamAbbr: string;
+  gameId?: string;
   minutes: string;
   points: number;
   rebounds: number;
