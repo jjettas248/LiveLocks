@@ -39,7 +39,7 @@ import {
 } from "./mlb/dataPullService";
 import { getActiveGames } from "./mlb/liveGameRegistry";
 import { mlbEdgeCache } from "./mlb/edgeCache";
-import { liveOrchestrator } from "./mlb/liveGameOrchestrator";
+import { liveOrchestrator, normalizeMlbStatus } from "./mlb/liveGameOrchestrator";
 
 // ── Module-level play dedup guard (persists for process lifetime) ─────────────
 const recordedPlayKeys = new Set<string>();
@@ -323,12 +323,80 @@ export async function registerRoutes(
   const mlbLiveGamesCache = new Map<string, { ts: number; games: any[] }>();
   const MLB_LIVE_GAMES_TTL = 30_000;
 
-  app.get("/api/mlb/live-games", requireAuth, async (_req, res) => {
+  // ── MLB preview player generator ─────────────────────────────────────────────
+  // Derives preview cards from REAL game data only — no fabricated names/matchups.
+  // Uses probable pitchers from scheduled/live games as the preview content shape.
+  function generatePreviewPlayers(games: any[]): any[] {
+    const previews: any[] = [];
+
+    for (const game of games) {
+      const matchup = `${game.awayAbbr || game.awayTeam} @ ${game.homeAbbr || game.homeTeam}`;
+      const isLive = game.status === "live";
+
+      // Add away probable pitcher if known
+      if (game.probableAwayPitcher) {
+        previews.push({
+          playerName: game.probableAwayPitcher,
+          matchup,
+          projection: "6.5+ K",
+          tags: [
+            game.awayPitcherHand === "L" ? "LHP" : game.awayPitcherHand === "R" ? "RHP" : "Pitcher",
+            isLive ? "Live" : "Preview",
+          ].filter(Boolean),
+        });
+      }
+
+      // Add home probable pitcher if known and different from away
+      if (game.probableHomePitcher && game.probableHomePitcher !== game.probableAwayPitcher) {
+        previews.push({
+          playerName: game.probableHomePitcher,
+          matchup,
+          projection: "6.5+ K",
+          tags: [
+            game.homePitcherHand === "L" ? "LHP" : game.homePitcherHand === "R" ? "RHP" : "Pitcher",
+            isLive ? "Live" : "Preview",
+          ].filter(Boolean),
+        });
+      }
+
+      if (previews.length >= 6) break;
+    }
+
+    // If no pitcher data available, return safe game-level previews with no player names
+    if (previews.length === 0) {
+      for (const game of games.slice(0, 3)) {
+        const matchup = `${game.awayAbbr || game.awayTeam} @ ${game.homeAbbr || game.homeTeam}`;
+        previews.push({
+          playerName: null,
+          matchup,
+          projection: "Edges Forming",
+          tags: [game.status === "live" ? "Live" : "Preview"],
+        });
+      }
+    }
+
+    return previews.slice(0, 6);
+  }
+
+  app.get("/api/mlb/live-games", requireAuth, async (req, res) => {
     const cached = mlbLiveGamesCache.get("games");
     if (cached && Date.now() - cached.ts < MLB_LIVE_GAMES_TTL) {
-      return res.json(cached.games);
+      const user = (req as any).user ?? (req as any).resolvedUser ?? null;
+      const tier = user?.subscriptionTier ?? null;
+      const games = cached.games;
+      const hasAnyOdds = games.some((g: any) => g.hasOdds === true);
+      if (!hasAnyOdds) {
+        return res.json({ mode: "preview", games, previewPlayers: generatePreviewPlayers(games) });
+      }
+      if (tier !== "elite" && !user?.isAdmin) {
+        return res.json({ mode: "preview_locked", games, previewPlayers: generatePreviewPlayers(games).slice(0, 6) });
+      }
+      return res.json({ mode: "live", games });
     }
     try {
+      const user = (req as any).user ?? (req as any).resolvedUser ?? null;
+      const tier = user?.subscriptionTier ?? null;
+
       const today = new Date();
       const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
       const scheduleUrl = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${dateStr}&hydrate=linescore,probablePitcher,weather,venue`;
@@ -340,21 +408,11 @@ export async function registerRoutes(
       const data = (await response.json()) as any;
       const registeredIds = new Set(getActiveGames().map((g) => g.gameId));
 
-      // Canonical MLB status normalization helper
-      function normalizeMLBState(raw: string | undefined): "live" | "pregame" | "final" | null {
-        if (!raw) return null;
-        const s = raw.toLowerCase().replace(/[\s_-]/g, "");
-        if (s === "live" || s === "inprogress") return "live";
-        if (s === "preview" || s === "pregame") return "pregame";
-        if (s === "final") return "final";
-        return null;
-      }
-
       const games: any[] = [];
       for (const date of data.dates ?? []) {
         for (const game of date.games ?? []) {
-          const state = game.status?.abstractGameState as string;
-          const canonicalState = normalizeMLBState(state);
+          const rawState = game.status?.abstractGameState as string;
+          const canonicalState = normalizeMlbStatus(rawState);
           if (canonicalState !== "live" && canonicalState !== "pregame") continue;
           const gameId = String(game.gamePk);
           const linescore = game.linescore ?? {};
@@ -388,6 +446,10 @@ export async function registerRoutes(
           const parkName: string = game.venue?.name ?? "";
           const parkFactor: number | null = null;
 
+          // hasOdds: true if there are signals in the edge cache with real book lines for this game
+          const cacheEntry = mlbEdgeCache.get(gameId);
+          const hasOdds = !!(cacheEntry && cacheEntry.outputs.some((o) => o.bookLine > 0));
+
           games.push({
             gameId,
             awayAbbr: game.teams?.away?.team?.abbreviation ?? "",
@@ -400,7 +462,7 @@ export async function registerRoutes(
             awayScore,
             inning: cachedState?.inning ?? inning,
             isTopInning: cachedState?.isTopInning ?? isTopInning,
-            status: canonicalState ?? "pregame",
+            status: canonicalState === "live" ? "live" : "pregame",
             inRegistry: registeredIds.has(gameId),
             parkName,
             parkFactor,
@@ -413,11 +475,20 @@ export async function registerRoutes(
             pitcherName: pitcherInGame?.playerName ?? null,
             pitcherThrows: pitcherInGame?.throws ?? null,
             pitcherTeam: pitcherInGame?.team ?? null,
+            hasOdds,
           });
         }
       }
       mlbLiveGamesCache.set("games", { ts: Date.now(), games });
-      return res.json(games);
+
+      const hasAnyOdds = games.some((g: any) => g.hasOdds === true);
+      if (!hasAnyOdds) {
+        return res.json({ mode: "preview", games, previewPlayers: generatePreviewPlayers(games) });
+      }
+      if (tier !== "elite" && !user?.isAdmin) {
+        return res.json({ mode: "preview_locked", games, previewPlayers: generatePreviewPlayers(games).slice(0, 6) });
+      }
+      return res.json({ mode: "live", games });
     } catch (e: any) {
       console.error("[mlb/live-games]", e.message);
       return res.status(502).json({ error: "Live games unavailable", games: [] });
@@ -495,6 +566,13 @@ export async function registerRoutes(
   app.get("/api/mlb/live-signals/:gameId", requireAuth, async (req, res) => {
     const gameId = req.params.gameId as string;
 
+    // Tier guard — only elite/admin users may access live signal data
+    const reqUser = (req as any).user ?? (req as any).resolvedUser ?? null;
+    const reqTier = reqUser?.subscriptionTier ?? null;
+    if (reqTier !== "elite" && !reqUser?.isAdmin) {
+      return res.json({ mode: "preview_locked", signals: [], updatedAt: Date.now() });
+    }
+
     let gameStatus = "";
     const cachedLiveGamesList = mlbLiveGamesCache.get("games");
     if (cachedLiveGamesList) {
@@ -520,14 +598,15 @@ export async function registerRoutes(
     }
 
     if (gameStatus !== "live") {
-      console.log(`[MLB signals] Game ${gameId} status="${gameStatus}" — returning empty`);
+      console.log(`[MLB signals] Game ${gameId} status="${gameStatus}" — returning mode:no_lines`);
       mlbSignalsCache.delete(gameId);
-      return res.json({ signals: [], updatedAt: 0 });
+      return res.json({ mode: "no_lines", signals: [], updatedAt: 0 });
     }
 
     const cached = mlbSignalsCache.get(gameId);
     if (cached && Date.now() - cached.ts < MLB_SIGNALS_TTL) {
-      return res.json({ signals: cached.signals, updatedAt: cached.updatedAt, isDegraded: cached.isDegraded });
+      const cachedMode = cached.signals.length > 0 ? "live" : "no_lines";
+      return res.json({ mode: cachedMode, signals: cached.signals, updatedAt: cached.updatedAt, isDegraded: cached.isDegraded });
     }
 
     const entry = mlbEdgeCache.get(gameId);
@@ -588,10 +667,17 @@ export async function registerRoutes(
     const rawSignals = allOutputs
       .filter((o) => !!o.playerId && o.playerId !== "unknown")
       .filter((o) => {
+        // Explicit numeric invariants — both probs must be finite and strictly > 0
         const over = o.calibratedProbabilityOver;
         const under = o.calibratedProbabilityUnder;
-        if (typeof over !== "number" || isNaN(over) || over < 0 || over > 100) return false;
-        if (typeof under !== "number" || isNaN(under) || under < 0 || under > 100) return false;
+        if (typeof over !== "number" || !Number.isFinite(over) || over <= 0 || over > 100) {
+          console.warn(`[MLB signals] Dropping ${o.playerName}/${o.market}: calibratedProbOver=${over} fails > 0 guard`);
+          return false;
+        }
+        if (typeof under !== "number" || !Number.isFinite(under) || under <= 0 || under > 100) {
+          console.warn(`[MLB signals] Dropping ${o.playerName}/${o.market}: calibratedProbUnder=${under} fails > 0 guard`);
+          return false;
+        }
         return true;
       })
       .map((o) => {
@@ -645,6 +731,15 @@ export async function registerRoutes(
         console.warn(`[MLB signals] Dropping signal for ${sig.playerId}: gameId mismatch (${sig.gameId} !== ${gameId})`);
         return false;
       }
+      // Hard guard: must have real book line > 0 and edge >= 5
+      if (!sig.bookLine || sig.bookLine <= 0) {
+        console.warn(`[MLB signals] Hard guard: dropping ${sig.playerId} — bookLine=${sig.bookLine}`);
+        return false;
+      }
+      if (sig.edge === null || sig.edge === undefined || Math.abs(sig.edge) < 5) {
+        console.warn(`[MLB signals] Hard guard: dropping ${sig.playerId} — edge=${sig.edge} (must be >= 5)`);
+        return false;
+      }
       return true;
     });
 
@@ -664,8 +759,15 @@ export async function registerRoutes(
       if (uniqueProbs.size <= 2) {
         console.error(`[MLB signals] PROBABILITY_COLLISION_DETECTED for game ${gameId} — ${rosterLockedSignals.length} signals but only ${uniqueProbs.size} unique probability values: [${probValues.join(", ")}]`);
         mlbSignalsCache.set(gameId, { ts: Date.now(), signals: [], updatedAt, isDegraded: false });
-        return res.json({ signals: [], updatedAt, isDegraded: false });
+        return res.json({ mode: "no_lines", signals: [], updatedAt });
       }
+    }
+
+    // If no signals pass all guards, return no_lines
+    if (rosterLockedSignals.length === 0) {
+      console.log(`[MLB signals] game=${gameId} — no signals passed guards, returning mode:no_lines`);
+      mlbSignalsCache.set(gameId, { ts: Date.now(), signals: [], updatedAt, isDegraded: false });
+      return res.json({ mode: "no_lines", signals: [], updatedAt });
     }
 
     // isDegraded = true when stale last-known-good odds cache was used in this engine run
@@ -673,7 +775,167 @@ export async function registerRoutes(
 
     console.log(`[MLB signals] game=${gameId} rawOutputs=${allOutputs.length} validSignals=${rosterLockedSignals.length} isDegraded=${isDegraded}`);
     mlbSignalsCache.set(gameId, { ts: Date.now(), signals: rosterLockedSignals, updatedAt, isDegraded });
-    return res.json({ signals: rosterLockedSignals, updatedAt, isDegraded });
+    return res.json({ mode: "live", signals: rosterLockedSignals, updatedAt, isDegraded });
+  });
+
+  // ── MLB Manual Calculation Route ─────────────────────────────────────────────
+  app.post("/api/mlb/calculate-manual", requireAuth, async (req, res) => {
+    try {
+      const raw: Record<string, any> = req.body ?? {};
+
+      const safeStr = (key: string, fallback: string = ""): string => {
+        const v = raw[key];
+        return v != null ? String(v) : fallback;
+      };
+      const safeFloat = (key: string, fallback: number): number => {
+        const v = raw[key];
+        if (v == null) return fallback;
+        const n = parseFloat(String(v));
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const safeInt = (key: string, fallback: number): number => {
+        const v = raw[key];
+        if (v == null) return fallback;
+        const n = parseInt(String(v), 10);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const safeBool = (key: string, fallback: boolean = false): boolean => {
+        const v = raw[key];
+        if (v === true || v === "true") return true;
+        if (v === false || v === "false") return false;
+        return fallback;
+      };
+
+      // Market alias resolution — canonical backend values use different names than frontend aliases
+      const MANUAL_MARKET_ALIASES: Record<string, MLBMarket> = {
+        hr: "home_runs",
+        batter_k: "batter_strikeouts",
+        pitcher_k: "pitcher_strikeouts",
+      };
+      const rawMarket = safeStr("market");
+      const resolvedMarket: string = MANUAL_MARKET_ALIASES[rawMarket] ?? rawMarket;
+      if (!resolvedMarket || !ALL_MLB_MARKETS.includes(resolvedMarket as MLBMarket)) {
+        return res.status(400).json({ error: `Invalid market. Must be one of: ${[...ALL_MLB_MARKETS, "hr", "batter_k", "pitcher_k"].join(", ")}` });
+      }
+      const market = resolvedMarket as MLBMarket;
+
+      const bookLine = safeFloat("bookLine", NaN);
+      if (!Number.isFinite(bookLine) || bookLine <= 0) {
+        return res.status(400).json({ error: "bookLine must be a positive number" });
+      }
+
+      const currentStats = raw.currentStats && typeof raw.currentStats === "object" ? raw.currentStats as Record<string, unknown> : {};
+      const pitcherProps = raw.pitcherProps && typeof raw.pitcherProps === "object" ? raw.pitcherProps as Record<string, unknown> : {};
+      const gameContext = raw.gameContext && typeof raw.gameContext === "object" ? raw.gameContext as Record<string, unknown> : {};
+
+      const statsAB = parseInt(String(currentStats.pa ?? currentStats.ab ?? 0), 10) || 0;
+      const statsH = parseInt(String(currentStats.hits ?? currentStats.h ?? 0), 10) || 0;
+      const statsTB = parseInt(String(currentStats.totalBases ?? currentStats.tb ?? 0), 10) || 0;
+      const statsK = parseInt(String(currentStats.k ?? 0), 10) || 0;
+      const statsWalks = parseInt(String(currentStats.walks ?? currentStats.bb ?? 0), 10) || 0;
+
+      const inning = parseInt(String(gameContext.inning ?? raw.currentInning ?? 1), 10) || 1;
+      const isTopInning = gameContext.isTopInning === true || gameContext.isTopInning === "true" || safeBool("isTopInning", true);
+      const battingOrderSlot = parseInt(String(currentStats.battingOrder ?? raw.battingOrderSlot ?? 5), 10) || 5;
+      const runners = parseInt(String(gameContext.runners ?? 0), 10) || 0;
+
+      // Parse pitcher props — all optional fields enriching the engine input
+      const pitchCount = parseInt(String(pitcherProps.pitchCount ?? 0), 10) || 0;
+      const pitcherIP = pitcherProps.ip != null ? parseFloat(String(pitcherProps.ip)) : null;
+      const pitcherK = pitcherProps.k != null ? parseInt(String(pitcherProps.k), 10) : null;
+      const pitcherHitsAllowed = pitcherProps.hitsAllowed != null ? parseInt(String(pitcherProps.hitsAllowed), 10) : null;
+      const pitcherWalks = pitcherProps.walks != null ? parseInt(String(pitcherProps.walks), 10) : null;
+
+      // For pitcher markets, currentStatValue is the accumulated pitcher stat
+      const isPitcherMarketManual = market === "pitcher_strikeouts" || market === "hits_allowed" || market === "walks_allowed";
+      let currentStatValue: number;
+      if (isPitcherMarketManual) {
+        if (market === "pitcher_strikeouts") currentStatValue = pitcherK != null ? pitcherK : 0;
+        else if (market === "hits_allowed") currentStatValue = pitcherHitsAllowed != null ? pitcherHitsAllowed : 0;
+        else currentStatValue = pitcherWalks != null ? pitcherWalks : 0;
+      } else {
+        currentStatValue = market === "hits" ? statsH : market === "total_bases" ? statsTB : statsK;
+      }
+
+      // Estimate times through order from IP (≈ 1 time through every 3 innings)
+      const timesThrough = pitcherIP != null && pitcherIP > 0
+        ? Math.floor(pitcherIP / 3) + 1
+        : Math.floor(pitchCount / 27) + 1;
+
+      const input: MLBPropInput = {
+        playerId: safeStr("playerId"),
+        playerName: safeStr("playerName"),
+        team: safeStr("team"),
+        opponent: safeStr("opponent"),
+        gameId: safeStr("gameId"),
+        market,
+        bookLine,
+        seasonAvg: 0,
+        plateAppearances: statsAB + statsWalks,
+        atBats: statsAB,
+        currentStatValue,
+        remainingPA: Math.max(0, 4 - Math.floor(inning / 3)),
+        remainingAB: Math.max(0, 4 - Math.floor(inning / 3)),
+        completedAB: statsAB,
+        inning,
+        isTopInning,
+        batterHand: null,
+        contactQuality: {
+          exitVelocity: null,
+          launchAngle: null,
+          hitDistance: null,
+          hardHitRateSeason: null,
+          barrelRateProxySeason: null,
+          priorABResults: [],
+        },
+        pitcher: {
+          pitchCount,
+          timesThrough,
+          era: null,
+          whip: null,
+          kPer9: pitcherK != null && pitcherIP != null && pitcherIP > 0 ? (pitcherK / pitcherIP) * 9 : null,
+          bbPer9: pitcherWalks != null && pitcherIP != null && pitcherIP > 0 ? (pitcherWalks / pitcherIP) * 9 : null,
+          managerLeashShort: timesThrough >= 3 && pitchCount > 80,
+          isPitcherCollapsing: false,
+          pitchMix: [],
+          throws: null,
+        },
+        lineup: {
+          battingOrderSlot,
+          orderTurnoverProximity: 0.5,
+          lineupSectionStrength: battingOrderSlot <= 3 ? "strong" : battingOrderSlot <= 6 ? "neutral" : "weak",
+          hittersAheadOnBase: runners,
+          pocketWeakness: null,
+        },
+        weatherPark: {
+          parkFactor: 1.0,
+          temperature: null,
+          windSpeed: null,
+          windDirection: null,
+          humidity: null,
+          isIndoors: false,
+          parkHistoryFactor: null,
+        },
+        bullpen: {
+          bullpenEra: null,
+          bullpenUsageLastThreeDays: null,
+          isTopRelieverAvailable: true,
+        },
+      };
+
+      const output = calculateMLBPropEdge(input);
+      recordMLBDiagnostic(output);
+
+      return res.json({
+        ...output,
+        mode: "manual",
+        isManual: true,
+        label: "Manual Projection (No Live Odds)",
+      });
+    } catch (err: any) {
+      console.error("[MLB calculate-manual]", err.message);
+      return res.status(400).json({ error: err.message || "Manual calculation error" });
+    }
   });
 
   // ── MLB Routes (Admin-only in Phase A) ──────────────────────────────────────
@@ -983,7 +1245,23 @@ export async function registerRoutes(
       await syncPitcherContext(gameId);
       await syncWeather(gameId);
       await syncBullpenUsage(gameId);
-      const outputs = await liveOrchestrator.triggerEngine(gameId);
+      // Admin manual trigger — fetch actual status; engine only runs if genuinely live
+      // Default to "unknown" — engine will skip unless status resolves to "live"
+      let adminNormalizedStatus: "live" | "pregame" | "final" | "unknown" = "unknown";
+      try {
+        const adminStatusRes = await fetch(`https://statsapi.mlb.com/api/v1/game/${gameId}/feed/live`, {
+          headers: { "User-Agent": "LiveLocks/1.0" },
+          signal: AbortSignal.timeout(4000),
+        });
+        if (adminStatusRes.ok) {
+          const adminStatusData = (await adminStatusRes.json()) as any;
+          const adminRawState: string = adminStatusData.gameData?.status?.abstractGameState ?? "";
+          adminNormalizedStatus = normalizeMlbStatus(adminRawState);
+        }
+      } catch {
+        console.warn(`[MLB admin refresh] Could not fetch status for game ${gameId} — status unknown, engine will skip`);
+      }
+      const outputs = await liveOrchestrator.triggerEngine(gameId, adminNormalizedStatus);
       return res.json(outputs);
     } catch (err: any) {
       console.error("[MLB refresh-data]", err.message);

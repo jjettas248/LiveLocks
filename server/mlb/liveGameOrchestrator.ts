@@ -121,6 +121,16 @@ async function resolveBookLine(
   return null;
 }
 
+// ── MLB status normalization ──────────────────────────────────────────────────
+export function normalizeMlbStatus(raw: string | undefined): "live" | "pregame" | "final" | "unknown" {
+  if (!raw) return "unknown";
+  const s = raw.toLowerCase().replace(/[\s_-]/g, "");
+  if (s === "live" || s === "inprogress") return "live";
+  if (s === "preview" || s === "pregame" || s === "scheduled") return "pregame";
+  if (s === "final" || s === "gameover" || s === "completed") return "final";
+  return "unknown";
+}
+
 // ── State change trigger types ────────────────────────────────────────────────
 
 export type StateChangeTrigger =
@@ -207,7 +217,7 @@ export class LiveGameOrchestrator {
   async pollGame(gameId: string): Promise<void> {
     const prevState = this.previousStates.get(gameId);
 
-    // Sync all three data sources (Correction 1)
+    // Sync all three data sources
     await syncGameState(gameId);
     await syncContactData(gameId);
     await syncPitcherContext(gameId);
@@ -215,17 +225,37 @@ export class LiveGameOrchestrator {
     const newState = mlbGameCache.gameState[gameId];
     if (!newState) return;
 
+    // Fetch and normalize live game status before triggering engine
+    // Engine must only run for genuinely live games
+    let normalizedStatus: "live" | "pregame" | "final" | "unknown" = "unknown";
+    try {
+      const statusUrl = `https://statsapi.mlb.com/api/v1/game/${gameId}/feed/live`;
+      const statusRes = await fetch(statusUrl, {
+        headers: { "User-Agent": "LiveLocks/1.0" },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (statusRes.ok) {
+        const statusData = (await statusRes.json()) as any;
+        const rawAbstractState: string = statusData.gameData?.status?.abstractGameState ?? "";
+        normalizedStatus = normalizeMlbStatus(rawAbstractState);
+      }
+    } catch {
+      // If status fetch fails, remain "unknown" — engine will be skipped
+      console.warn(`[MLB orchestrator] pollGame: could not fetch status for game ${gameId} — skipping engine`);
+    }
+
     if (prevState) {
       const triggers = this.detectStateChange(prevState, newState);
       if (triggers.length > 0) {
-        console.log(`[MLB orchestrator] State change for game ${gameId}: ${triggers.join(", ")}`);
+        console.log(`[MLB orchestrator] State change for game ${gameId} (status=${normalizedStatus}): ${triggers.join(", ")}`);
 
         // On inning change, also sync bullpen
         if (triggers.includes("inning_change")) {
           await syncBullpenUsage(gameId);
         }
 
-        await this.triggerEngine(gameId);
+        // Only trigger engine when game is confirmed live
+        await this.triggerEngine(gameId, normalizedStatus);
       }
     }
 
@@ -268,11 +298,19 @@ export class LiveGameOrchestrator {
     return triggers;
   }
 
-  async triggerEngine(gameId: string): Promise<MLBPropOutput[]> {
+  async triggerEngine(gameId: string, normalizedStatus: "live" | "pregame" | "final" | "unknown"): Promise<MLBPropOutput[]> {
     const outputs: MLBPropOutput[] = [];
     let anyDegraded = false; // true if any market used stale last-known-good odds
     const state = mlbGameCache.gameState[gameId];
     const game = getGame(gameId);
+
+    // Strict status gate — engine MUST receive explicit "live" status.
+    // If status is undefined, unknown, pregame, or final — skip entirely.
+    // This prevents fabricated signals for non-live games.
+    if (normalizedStatus !== "live") {
+      console.log(`[MLB orchestrator] triggerEngine skipped for game ${gameId}: normalizedStatus=${normalizedStatus ?? "undefined"} (must be "live")`);
+      return outputs;
+    }
 
     if (!state) {
       console.warn(`[MLB orchestrator] triggerEngine: no game state cached for ${gameId}`);
@@ -411,6 +449,30 @@ export class LiveGameOrchestrator {
           continue;
         }
 
+        // ── Structured per-player input log ────────────────────────────────
+        console.log(`[MLB engine:input] ${JSON.stringify({
+          playerId: batter.playerId,
+          playerContext: {
+            gameId,
+            battingOrderSlot: batter.slot,
+            inning: state.inning,
+            isTopInning: state.isTopInning,
+            currentStats: {
+              ab: input.atBats,
+              h: input.currentStatValue,
+              remainingPA,
+            },
+            pitcherContext: {
+              pitchCount: input.pitcher.pitchCount,
+              timesThrough: input.pitcher.timesThrough,
+              isPitcherCollapsing: input.pitcher.isPitcherCollapsing,
+            },
+            parkFactor: input.weatherPark.parkFactor,
+          },
+          bookLine: input.bookLine,
+          market,
+        })}`);
+
         try {
           const output = calculateMLBPropEdge(input);
           pLog(gameId, "engineOutput", { player: output.playerName, market: output.market, edge: output.edge, tier: output.confidenceTier, suppressed: output.suppressed });
@@ -543,10 +605,29 @@ export class LiveGameOrchestrator {
       }
     }
 
+    // ── Edge cache write filter — explicit numeric invariants ─────────────────
+    // bookLine must be a finite positive number.
+    // Both calibrated probabilities must be explicitly > 0 (not just truthy).
+    const validatedOutputs = outputs.filter((o) => {
+      if (typeof o.bookLine !== "number" || !Number.isFinite(o.bookLine) || o.bookLine <= 0) {
+        console.warn(`[MLB orchestrator] Cache filter: dropping ${o.playerName}/${o.market} — bookLine=${o.bookLine}`);
+        return false;
+      }
+      if (typeof o.calibratedProbabilityOver !== "number" || !Number.isFinite(o.calibratedProbabilityOver) || o.calibratedProbabilityOver <= 0) {
+        console.warn(`[MLB orchestrator] Cache filter: dropping ${o.playerName}/${o.market} — calibratedProbabilityOver=${o.calibratedProbabilityOver}`);
+        return false;
+      }
+      if (typeof o.calibratedProbabilityUnder !== "number" || !Number.isFinite(o.calibratedProbabilityUnder) || o.calibratedProbabilityUnder <= 0) {
+        console.warn(`[MLB orchestrator] Cache filter: dropping ${o.playerName}/${o.market} — calibratedProbabilityUnder=${o.calibratedProbabilityUnder}`);
+        return false;
+      }
+      return true;
+    });
+
     const now = Date.now();
-    mlbEdgeCache.set(gameId, { gameId, outputs, updatedAt: now, createdAt: now, isDegraded: anyDegraded });
-    console.log(`[MLB orchestrator] triggerEngine: game ${gameId} — ${outputs.length} outputs`);
-    return outputs;
+    mlbEdgeCache.set(gameId, { gameId, outputs: validatedOutputs, updatedAt: now, createdAt: now, isDegraded: anyDegraded });
+    console.log(`[MLB orchestrator] triggerEngine: game ${gameId} — ${outputs.length} raw outputs, ${validatedOutputs.length} cache-validated outputs`);
+    return validatedOutputs;
   }
 }
 
