@@ -1328,6 +1328,13 @@ export async function registerRoutes(
       const boxscore = data.boxscore;
       if (!boxscore) throw new Error("Boxscore data not found");
 
+      // Build ESPN athlete ID → DB player ID lookup map
+      const allDbPlayers = await storage.getPlayers();
+      const espnToDbId = new Map<number, number>();
+      for (const p of allDbPlayers) {
+        if (p.espnAthleteId) espnToDbId.set(p.espnAthleteId, p.id);
+      }
+
       const players: any[] = [];
       const teams = boxscore.players || [];
 
@@ -1376,8 +1383,13 @@ export async function registerRoutes(
           const ftRaw = statMap["ft"] ?? statMap["ftm"] ?? "";
           const fg3Raw = statMap["3pt"] ?? statMap["fg3m"] ?? statMap["3ptm"] ?? "";
 
+          const espnAthId = parseInt(athlete.athlete.id, 10);
+          const dbPlayerId = espnToDbId.get(espnAthId) ?? null;
+          if (!dbPlayerId) {
+            console.warn(`[live-stats] Could not resolve ESPN athlete ${espnAthId} (${athlete.athlete.displayName}) to DB player — playerId will be null`);
+          }
           players.push({
-            playerId: parseInt(athlete.athlete.id, 10),
+            playerId: dbPlayerId,
             playerName: athlete.athlete.displayName,
             teamAbbr: teamAbbr,
             minutes: statMap["min"] || "0",
@@ -1423,7 +1435,6 @@ export async function registerRoutes(
         PHO: "PHX", UTH: "UTA", UTAH: "UTA", WSH: "WAS", CHO: "CHA",
       };
       const normAbbr = (a: string) => ESPN_TO_DB_LOCAL[a.toUpperCase()] ?? a.toUpperCase();
-      const normDb = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
 
       const summaryRes = await fetch(
         `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${gameId}`,
@@ -1501,39 +1512,46 @@ export async function registerRoutes(
       const allSignals: any[] = [];
       const engineOutput: Record<number, Record<string, any>> = {};
 
+      // Build ESPN athlete ID → DB player map for O(1) lookup
+      const espnIdToDbPlayer = new Map<number, typeof allDbPlayers[0]>();
+      for (const p of allDbPlayers) {
+        if (p.espnAthleteId) espnIdToDbPlayer.set(p.espnAthleteId, p);
+      }
+
+      // Flatten both teams' players into a single list for uniform processing
+      const allAthletes: Array<{ athlete: any; statMap: Record<string, any>; teamAbbr: string; opponentAbbr: string; minutes: number }> = [];
       for (const teamData of (boxscore.players ?? [])) {
         const teamAbbr = normAbbr(teamData.team?.abbreviation ?? "");
         const opponentAbbr = teamAbbr === homeTeamAbbr ? awayTeamAbbr : homeTeamAbbr;
         const athletes = teamData.statistics?.[0]?.athletes ?? [];
         const labels: string[] = teamData.statistics?.[0]?.labels ?? [];
-
         for (const athlete of athletes) {
           if (!athlete.athlete) continue;
           const stats = athlete.stats ?? [];
           const statMap: Record<string, any> = {};
           labels.forEach((label: string, idx: number) => { statMap[label.toLowerCase()] = stats[idx]; });
-
           const minStr: string = statMap["min"] || "0";
           const minParts = minStr.split(":");
           const minutes = minParts.length === 2
             ? parseInt(minParts[0]) + parseInt(minParts[1]) / 60
             : parseFloat(minStr) || 0;
+          allAthletes.push({ athlete, statMap, teamAbbr, opponentAbbr, minutes });
+        }
+      }
+
+      for (const { athlete, statMap, teamAbbr, opponentAbbr, minutes } of allAthletes) {
           if (minutes < 3) continue;
 
           const playerName: string = athlete.athlete.displayName ?? "";
-          const normPlayerName = normDb(playerName);
-
-          let dbPlayer = allDbPlayers.find(p => normDb(p.name) === normPlayerName);
+          const espnAthId = parseInt(athlete.athlete.id, 10);
+          const dbPlayer = espnIdToDbPlayer.get(espnAthId);
           if (!dbPlayer) {
-            const espnWords = playerName.toLowerCase().replace(/[^a-z ]/g, "").trim().split(/\s+/);
-            const espnFirst = espnWords[0] ?? "";
-            const espnLast = espnWords[espnWords.length - 1] ?? "";
-            dbPlayer = allDbPlayers.find(p => {
-              const dbWords = p.name.toLowerCase().replace(/[^a-z ]/g, "").trim().split(/\s+/);
-              return dbWords[0] === espnFirst && dbWords[dbWords.length - 1] === espnLast;
-            });
+            console.warn(`[live-signals] No DB match for ESPN athlete ${espnAthId} (${playerName}) — skipping`);
+            continue;
           }
-          if (!dbPlayer) continue;
+
+          // Initialize engineOutput entry for this player
+          if (!engineOutput[dbPlayer.id]) engineOutput[dbPlayer.id] = {};
 
           const liveStats: Record<string, number> = {
             points:   parseStat(statMap["pts"]),
@@ -1642,7 +1660,6 @@ export async function registerRoutes(
               }
 
               // Populate engineOutput for ALL players with valid results (no edge filter)
-              if (!engineOutput[dbPlayer.id]) engineOutput[dbPlayer.id] = {};
               engineOutput[dbPlayer.id][statType] = {
                 probability: result.probability,
                 betDirection: result.probability > 50 ? "OVER" : "UNDER",
@@ -1671,8 +1688,35 @@ export async function registerRoutes(
               }
             }
           }
+      }
+
+      // Safety pass: ensure all attempted players have an engineOutput entry
+      for (const { athlete, minutes } of allAthletes) {
+        if (!athlete.athlete) continue;
+        const espnAthId = parseInt(athlete.athlete.id, 10);
+        const dbPlayer = espnIdToDbPlayer.get(espnAthId);
+        if (dbPlayer && minutes >= 3 && !engineOutput[dbPlayer.id]) {
+          engineOutput[dbPlayer.id] = {};
         }
       }
+
+      // Debug validation: confirm both teams covered and counts match
+      const enginePlayerCount = Object.keys(engineOutput).length;
+      const totalAttempted = allAthletes.filter(a => {
+        if (!a.athlete.athlete) return false;
+        const espnAthId = parseInt(a.athlete.athlete.id, 10);
+        return espnIdToDbPlayer.has(espnAthId) && a.minutes >= 3;
+      }).length;
+      const teamAbbrsPresent = new Set(
+        allAthletes
+          .filter(a => {
+            if (!a.athlete.athlete) return false;
+            const espnAthId = parseInt(a.athlete.athlete.id, 10);
+            return espnIdToDbPlayer.has(espnAthId) && a.minutes >= 3;
+          })
+          .map(a => a.teamAbbr)
+      );
+      console.log(`[live-signals] totalPlayers=${totalAttempted} enginePlayers=${enginePlayerCount} teams=${[...teamAbbrsPresent].join(",")}`);
 
       allSignals.sort((a, b) => b.edge - a.edge);
       liveSignalsCache.set(gameId, { ts: Date.now(), signals: allSignals, engineOutput });
@@ -2337,14 +2381,18 @@ export async function registerRoutes(
             const name: string = a.displayName ?? a.fullName ?? "";
             if (!name) continue;
             const pos = ESPN_POS[(a.position?.abbreviation ?? "").toUpperCase()] ?? "SF";
+            const espnId = a.id ? parseInt(a.id, 10) : null;
             const match = dbPlayers.find(p => normRA(p.name) === normRA(name));
             if (match && !seen.has(match.id)) {
               seen.add(match.id);
-              if (match.team !== dbTeam) { await storage.updatePlayerStats(match.id, { team: dbTeam } as any); match.team = dbTeam; updated++; }
+              const updates: Record<string, any> = {};
+              if (match.team !== dbTeam) { updates.team = dbTeam; match.team = dbTeam; }
+              if (espnId && match.espnAthleteId !== espnId) { updates.espnAthleteId = espnId; match.espnAthleteId = espnId; }
+              if (Object.keys(updates).length > 0) { await storage.updatePlayerStats(match.id, updates as any); updated++; }
               else skipped++;
             } else if (!match) {
-              await storage.createPlayer({ name, team: dbTeam, position: pos, avgMinutes: "20.0", avgFouls: "2.0" });
-              dbPlayers.push({ id: -1, name, team: dbTeam, position: pos, avgMinutes: "20.0", avgFouls: "2.0" } as any);
+              const created = await storage.createPlayer({ name, team: dbTeam, position: pos, avgMinutes: "20.0", avgFouls: "2.0", ...(espnId ? { espnAthleteId: espnId } : {}) } as any);
+              dbPlayers.push({ ...created } as any);
               added++;
             }
           }
@@ -2743,6 +2791,7 @@ async function syncStatsFromESPN(): Promise<{ matched: number }> {
             const avgTOV = stats.avgTurnovers ?? 0;
             const usageRate = avgMin > 0 ? (avgFGA + 0.44 * avgFTA + avgTOV) / ((avgMin / 48) * 110) : 0.22;
 
+            const espnAthleteId = athlete.id ? parseInt(athlete.id, 10) : null;
             await storage.updatePlayerStats(dbMatch.id, {
               ppg: (stats.avgPoints ?? 0).toFixed(1),
               rpg: (stats.avgRebounds ?? 0).toFixed(1),
@@ -2754,6 +2803,7 @@ async function syncStatsFromESPN(): Promise<{ matched: number }> {
               avgFouls: (stats.avgFouls ?? 2.0).toFixed(1),
               usageRate: usageRate.toFixed(4),
               statsUpdatedAt: new Date(),
+              ...(espnAthleteId ? { espnAthleteId } : {}),
             } as any);
             matched++;
           } catch { /* skip athlete on error */ }
@@ -2861,6 +2911,46 @@ async function runFullStatSync(): Promise<void> {
   console.log("[stat-sync] Full sync chain complete.");
 }
 
+async function syncEspnAthleteIds(): Promise<void> {
+  console.log("[espn-id-sync] Seeding ESPN athlete IDs for existing players…");
+  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+  const normalizeName = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/['.'\-\s]+/g, "").replace(/jr$|sr$|ii$|iii$|iv$/, "");
+  try {
+    const teamsRes = await fetch("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams?limit=32", { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(10000) });
+    if (!teamsRes.ok) { console.error("[espn-id-sync] Teams fetch failed"); return; }
+    const teamsData = await teamsRes.json() as any;
+    const espnTeams: any[] = teamsData.sports?.[0]?.leagues?.[0]?.teams ?? [];
+    const dbPlayers = await storage.getPlayers();
+    const needsId = dbPlayers.filter(p => !p.espnAthleteId);
+    if (needsId.length === 0) { console.log("[espn-id-sync] All players already have ESPN IDs — skipping"); return; }
+    let seeded = 0;
+    for (const teamWrapper of espnTeams) {
+      const espnTeam = teamWrapper.team;
+      try {
+        const rosterRes = await fetch(`https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/${espnTeam.id}/roster`, { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) });
+        if (!rosterRes.ok) continue;
+        const rosterData = await rosterRes.json() as any;
+        const athletes: any[] = Array.isArray(rosterData.athletes) ? rosterData.athletes.flat() : [];
+        for (const a of athletes) {
+          const name: string = a.displayName ?? a.fullName ?? "";
+          if (!name || !a.id) continue;
+          const espnId = parseInt(a.id, 10);
+          const dbMatch = needsId.find(p => normalizeName(p.name) === normalizeName(name));
+          if (dbMatch) {
+            await storage.updatePlayerStats(dbMatch.id, { espnAthleteId: espnId });
+            dbMatch.espnAthleteId = espnId;
+            seeded++;
+          }
+        }
+      } catch { /* skip team on error */ }
+      await sleep(80);
+    }
+    console.log(`[espn-id-sync] Seeded ESPN IDs for ${seeded} players`);
+  } catch (e) {
+    console.error("[espn-id-sync] Error:", (e as any).message);
+  }
+}
+
 async function seedDatabase() {
   const existingPlayers = await storage.getPlayers();
 
@@ -2868,6 +2958,11 @@ async function seedDatabase() {
   if (existingPlayers.length > 0 && existingPlayers.some(p => !p.ppg)) {
     console.log("[startup] Detected players with null stats — triggering full stat sync in background…");
     runFullStatSync().catch(console.error);
+  }
+
+  // Seed ESPN athlete IDs for players that lack them (runs in background)
+  if (existingPlayers.length > 0 && existingPlayers.some(p => !p.espnAthleteId)) {
+    syncEspnAthleteIds().catch(console.error);
   }
 
   {

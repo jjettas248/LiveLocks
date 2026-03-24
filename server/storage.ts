@@ -78,6 +78,7 @@ function getPaceLabel(pace: number): string {
 export interface IStorage {
   getPlayers(): Promise<Player[]>;
   getPlayer(id: number): Promise<Player | undefined>;
+  findPlayerByEspnId(espnAthleteId: number): Promise<Player | undefined>;
   createPlayer(player: InsertPlayer): Promise<Player>;
   updatePlayerStats(id: number, stats: Partial<InsertPlayer>): Promise<void>;
   getTeams(): Promise<string[]>;
@@ -239,6 +240,11 @@ export class DatabaseStorage implements IStorage {
 
   async getPlayer(id: number): Promise<Player | undefined> {
     const [player] = await db.select().from(players).where(eq(players.id, id));
+    return player;
+  }
+
+  async findPlayerByEspnId(espnAthleteId: number): Promise<Player | undefined> {
+    const [player] = await db.select().from(players).where(eq(players.espnAthleteId, espnAthleteId));
     return player;
   }
 

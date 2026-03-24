@@ -54,6 +54,7 @@ export const players = pgTable("players", {
   position: text("position").notNull(),
   avgMinutes: numeric("avg_minutes").notNull(),
   avgFouls: numeric("avg_fouls").notNull(),
+  espnAthleteId: integer("espn_athlete_id"),
   // Season stats — synced from NBA.com + NBaStuffer + ESPN
   ppg: numeric("ppg"),
   rpg: numeric("rpg"),
