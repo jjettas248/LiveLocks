@@ -1,0 +1,253 @@
+# ADDENDUM — Persisted Plays Grading + Calibration Dashboard (Non-Model Tracking)
+
+## SYSTEM:
+Analytics + Retention (Isolated from Core Engine Performance)
+
+## OBJECTIVE:
+Grade all persisted plays and expose them in a separate calibration dashboard WITHOUT affecting model performance metrics.
+
+---
+
+## CORE RULE:
+
+Persisted plays MUST:
+- be graded
+- be stored
+- be visible
+
+BUT MUST NOT:
+- influence model accuracy
+- be included in performance KPIs
+- affect optimization loops
+
+This is a STRICT separation.
+
+---
+
+## IMPLEMENTATION
+
+--------------------------------------------------
+1. EXTEND SCHEMA (persisted_plays)
+--------------------------------------------------
+
+Add fields:
+
+result: "WIN" | "LOSS" | "PUSH" | null
+actualValue: number | null
+gradedAt: timestamp | null
+
+NO changes to model performance tables.
+
+---
+
+--------------------------------------------------
+2. BUILD GRADING SERVICE
+--------------------------------------------------
+
+Create:
+
+server/services/gradePersistedPlays.ts
+
+Logic:
+
+for each play where result IS NULL:
+  fetch final game stats
+  compute actual stat
+  compare vs line
+  assign result
+  persist result + actualValue + gradedAt
+
+---
+
+--------------------------------------------------
+3. STAT MAPPING
+--------------------------------------------------
+
+PTS → points  
+REB → rebounds  
+AST → assists  
+
+P+R → points + rebounds  
+P+A → points + assists  
+R+A → rebounds + assists  
+P+R+A → points + rebounds + assists  
+
+3PM → threesMade  
+
+---
+
+--------------------------------------------------
+4. RESULT LOGIC
+--------------------------------------------------
+
+OVER:
+  actual > line → WIN
+  actual < line → LOSS
+  actual == line → PUSH
+
+UNDER:
+  actual < line → WIN
+  actual > line → LOSS
+  actual == line → PUSH
+
+---
+
+--------------------------------------------------
+5. PLAYER MATCHING (CRITICAL)
+--------------------------------------------------
+
+Use ONLY:
+
+play.playerId (DB ID from #83 fix)
+
+DO NOT:
+- use player name
+- use fuzzy matching
+
+---
+
+--------------------------------------------------
+6. FINAL GAME CHECK
+--------------------------------------------------
+
+Only grade when:
+
+game.status === "FINAL"
+
+Skip otherwise.
+
+---
+
+--------------------------------------------------
+7. GRADING TRIGGER
+--------------------------------------------------
+
+Implement:
+
+Option A:
+Trigger grading when game transitions to FINAL
+
+Option B:
+Cron job (every 2–5 min):
+
+gradePersistedPlays()
+
+---
+
+--------------------------------------------------
+8. CREATE CALIBRATION DATA API
+--------------------------------------------------
+
+New endpoint:
+
+GET /api/persisted-plays/calibration
+
+Returns:
+
+- all graded plays
+- filters (date, sport, market)
+- aggregated metrics
+
+---
+
+--------------------------------------------------
+9. CALIBRATION METRICS (SEPARATE SYSTEM)
+--------------------------------------------------
+
+Compute:
+
+- winRate = wins / (wins + losses)
+- pushRate
+- avgEdge
+- avgProbability
+- ROI (optional)
+
+GROUP BY:
+
+- statType
+- edge bucket (0–5%, 5–10%, 10%+)
+- probability bucket (50–60, 60–70, etc.)
+
+---
+
+--------------------------------------------------
+10. FRONTEND: CALIBRATION DASHBOARD
+--------------------------------------------------
+
+Create new component:
+
+client/src/components/calibration-dashboard.tsx
+
+Display:
+
+TABLE:
+- Player
+- Market
+- Line
+- Actual
+- Result (colored)
+- Edge
+- Probability
+
+SUMMARY PANEL:
+- Win rate
+- Total plays
+- Edge buckets performance
+- Probability calibration
+
+---
+
+--------------------------------------------------
+11. VISUALIZATION (CRITICAL FOR CALIBRATION)
+--------------------------------------------------
+
+Add:
+
+Calibration curve:
+- X = predicted probability
+- Y = actual win rate
+
+Example:
+70% bucket → actual hit rate 62% → model overestimating
+
+---
+
+--------------------------------------------------
+12. HARD ISOLATION FROM MODEL PERFORMANCE
+--------------------------------------------------
+
+DO NOT:
+
+- join persisted_plays with model_performance tables
+- include persisted plays in accuracy calculations
+- use persisted plays for training or optimization
+
+This system is READ-ONLY ANALYTICS.
+
+---
+
+## DO NOT
+
+- Do not alter engine logic
+- Do not mix systems
+- Do not use fuzzy matching
+- Do not auto-correct model based on this data
+
+---
+
+## SUCCESS CRITERIA
+
+- All persisted plays are graded
+- Result column populated (no “—”)
+- Separate calibration dashboard exists
+- Model performance remains unchanged
+- Clear visibility into real-world play outcomes
+- Enables evaluation of edge vs actual results
+
+---
+
+## OUTPUT
+
+- Fully working grading system
+- Independent calibration analytics layer
+- Clear separation of execution vs model quality
