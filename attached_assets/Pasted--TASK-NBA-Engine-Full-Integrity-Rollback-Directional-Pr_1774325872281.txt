@@ -1,0 +1,255 @@
+# TASK: NBA Engine Full Integrity Rollback + Directional Probability Reconstruction + Live Box Score Repair
+
+## SYSTEM:
+Core Engine (PRIMARY) + UX/Data Mapping (SECONDARY)
+
+## OBJECTIVE:
+Restore the NBA engine to its last known stable state by reversing the broken probability refactor and filter logic that caused:
+
+- Extreme UNDER bias and suppression of OVER plays
+- Contradictory probability display (UI mismatch)
+- Incorrect projections on obvious near-clears
+- Collapse of highlighted plays in live box score
+- Players from both teams rendering under a single team section
+
+This is NOT an optimization task. This is a system integrity recovery.
+
+---
+
+## CONTEXT:
+
+Recent refactor removed:
+- directionalConfidence
+- rawProbability
+- postCalibrationProbability
+
+And replaced logic with:
+- a generic "probability"
+- hard filters (probability > 70, probability < 25)
+- asymmetric UNDER reduction (superstar dampening)
+
+Resulting failures:
+- OVER plays nearly eliminated
+- Probability semantics inconsistent across engine, UI, and filters
+- Projection vs probability contradictions (example: halftime near-clears showing strong UNDER)
+- Live box score grouping failure (players from both teams mixed)
+
+The system is currently in a split state where:
+- Engine logic, UI display, and filters are not using the same probability meaning
+- Player grouping is leaking across teams due to improper filtering
+
+---
+
+## REQUIREMENTS:
+
+### 1. RESTORE DIRECTIONAL PROBABILITY SYSTEM (SINGLE SOURCE OF TRUTH)
+
+Reconstruct directional probability semantics:
+
+- underConfidence = probability player finishes UNDER line
+- overConfidence = 100 - underConfidence
+
+DO NOT use any ambiguous "probability" variable in final logic.
+
+Side selection MUST be projection-based:
+
+if (projection > line) side = "OVER";
+else if (projection < line) side = "UNDER";
+else side = "NO_SIGNAL";
+
+Display confidence:
+
+displayConfidence =
+  side === "OVER" ? overConfidence :
+  side === "UNDER" ? underConfidence :
+  null;
+
+MANDATORY RULES:
+- UI ring uses displayConfidence ONLY
+- OVER button uses overConfidence
+- UNDER button uses underConfidence
+- Persisted data uses the same structure
+- Remove any legacy probability fields from UI and decision logic
+
+---
+
+### 2. REMOVE BROKEN FILTER LOGIC (ELIMINATE BIAS)
+
+DELETE ALL of the following:
+- probability > 70 filters
+- probability < 25 filters
+- superstar UNDER reduction
+- directional bias filters
+- asymmetric probability scaling
+- any logic using a generic probability without directional meaning
+
+REPLACE WITH symmetric gating ONLY:
+
+if (!Number.isFinite(projection) || !Number.isFinite(line)) return noSignal;
+
+if (!Number.isFinite(overConfidence) || !Number.isFinite(underConfidence)) return noSignal;
+
+const edge = Math.abs(projection - line);
+
+if (edge < MIN_EDGE) return noSignal;
+
+if (Math.max(overConfidence, underConfidence) < MIN_CONFIDENCE) return noSignal;
+
+Use existing stable thresholds. Do NOT invent new ones.
+
+---
+
+### 3. NORMALIZE FINAL ENGINE OUTPUT (STRICT CONTRACT)
+
+All outputs MUST follow:
+
+type EngineDecision = {
+  projection: number;
+  line: number;
+  recommendedSide: "OVER" | "UNDER" | "NO_SIGNAL";
+  overConfidence: number;
+  underConfidence: number;
+  displayConfidence: number | null;
+  edge: number;
+  warnings?: string[];
+};
+
+STRICT CONSISTENCY:
+- recommendedSide MUST match projection vs line
+- displayConfidence MUST match recommendedSide
+- No duplicate or ambiguous probability fields allowed
+
+---
+
+### 4. ADD HARD INTEGRITY GUARDS (BLOCK BAD OUTPUT)
+
+Before returning any play:
+
+if (side === "OVER" && projection <= line) {
+  side = "NO_SIGNAL";
+  warnings.push("direction_projection_mismatch");
+}
+
+if (side === "UNDER" && projection >= line) {
+  side = "NO_SIGNAL";
+  warnings.push("direction_projection_mismatch");
+}
+
+No contradictory plays allowed in UI.
+
+---
+
+### 5. TRACE ENGINE FOR BROKEN CASES (DEBUG REQUIRED)
+
+Add structured debug logging at final decision stage:
+
+{
+  player,
+  market,
+  liveStat,
+  line,
+  projection,
+  remainingMinutes,
+  seasonRate,
+  liveRate,
+  h2Rate,
+  paceMultiplier,
+  usageMultiplier,
+  blowoutAdjustment,
+  overConfidence,
+  underConfidence,
+  displayConfidence,
+  recommendedSide,
+  edge,
+  warnings
+}
+
+This must explain failures like:
+- players needing only a small amount at halftime still projecting UNDER heavily
+
+---
+
+### 6. FIX LIVE BOX SCORE TEAM GROUPING (DATA INTEGRITY)
+
+Locate box score rendering and enforce strict filtering:
+
+const teamPlayers = allPlayers.filter(
+  (p) => p.gameId === currentGameId && p.teamId === currentTeamId
+);
+
+Then dedupe:
+
+const uniquePlayers = Array.from(
+  new Map(teamPlayers.map(p => [p.playerId, p])).values()
+);
+
+DO NOT:
+- group by team abbreviation only
+- reuse global player arrays
+- merge cross-game data
+- render without filtering
+
+---
+
+### 7. RESTORE LIVE EDGE VOLUME
+
+After fixes:
+
+- Ensure both OVER and UNDER signals are produced
+- Ensure highlight logic uses corrected EngineDecision
+- Confirm normal volume of edges (not collapsed to a few rows)
+
+---
+
+### 8. ADD TEMP DIAGNOSTIC SUMMARY (VALIDATION)
+
+Add temporary debug summary:
+
+{
+  totalPlayers,
+  validLines,
+  overSignals,
+  underSignals,
+  noSignals,
+  filteredLowEdge,
+  filteredLowConfidence,
+  filteredMismatch
+}
+
+Used only for validation.
+
+---
+
+## DO NOT:
+- Introduce new probability systems
+- Keep multiple probability meanings active
+- Apply UNDER-only adjustments
+- Use generic "probability" without direction
+- Render players without strict team/game filtering
+- Optimize before integrity is restored
+
+---
+
+## SUCCESS CRITERIA:
+
+- OVER plays are generated again
+- UNDER bias is eliminated
+- Probability display matches recommended side
+- No projection vs direction contradictions
+- Halftime near-clear scenarios behave logically
+- Live box score shows correct team players only
+- Highlighted plays return to normal volume
+- Debug summary shows balanced signal distribution
+
+---
+
+## OUTPUT:
+
+- Exact code changes
+- File-level diffs
+- Root cause summary:
+  - probability semantic collapse
+  - asymmetric filter bias
+  - UI using mismatched probability fields
+  - player grouping leak across teams
+- No placeholders
