@@ -1,0 +1,78 @@
+# TASK: Live Boxscore Multi-Player Enrichment Fix
+
+## SYSTEM:
+UX Layer + Core Engine Integration
+
+## OBJECTIVE:
+Fix the live boxscore so enrichment (probability + pick tags like "OVER PTS 63.2%") applies to ALL players instead of only one.
+
+## CONTEXT:
+The boxscore is rendering all player stats correctly, but only one player receives enrichment. This indicates a failure in the transformation layer between engineOutput and UI rendering.
+
+Likely causes:
+- .find() used instead of .map()
+- Early return/break inside iteration
+- setState using a single object instead of array
+- engineOutput being consumed incorrectly
+
+Target files:
+- client/src/components/live-boxscore.tsx
+- Any enrichment helper used in this file
+
+## REQUIREMENTS:
+
+- Replace ANY .find() usage in enrichment pipeline with .map()
+- Ensure enrichment runs across full players array
+- Remove ANY early return or break inside loops
+- Ensure setPlayers receives FULL array, not single object
+- Ensure engineOutput is accessed via player.id key mapping
+- Ensure UI renders via players.map(), not a single player
+- Add temporary console logs to verify lengths match
+
+## DO NOT:
+- Break existing engine logic
+- Modify probability calculations
+- Filter or reduce player list
+- Introduce new state structures
+- Hardcode player data
+
+## SUCCESS CRITERIA:
+- All players display enrichment tags (not just one)
+- Enriched players count matches raw players count
+- No missing rows in UI
+- No console errors
+- Live updates continue functioning
+
+## OUTPUT:
+
+// FIX ENRICHMENT PIPELINE
+const enrichedPlayers = players.map((player) => {
+  const model = engineOutput?.[player.id]
+
+  if (!model) return player
+
+  return {
+    ...player,
+    probability: model.probability,
+    edge: model.edge,
+    pick: model.recommendedSide,
+  }
+})
+
+// FIX STATE ASSIGNMENT
+setPlayers(enrichedPlayers)
+
+// VALIDATE ENGINE OUTPUT
+if (!engineOutput || typeof engineOutput !== "object") {
+  console.error("Invalid engine output")
+}
+
+// DEBUG LOGS (TEMP)
+console.log("players:", players.length)
+console.log("engine keys:", Object.keys(engineOutput || {}).length)
+console.log("enriched:", enrichedPlayers.length)
+
+// FIX RENDER
+{players.map((player) => (
+  <PlayerRow key={player.id} player={player} />
+))}
