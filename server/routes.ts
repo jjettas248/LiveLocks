@@ -1407,14 +1407,14 @@ export async function registerRoutes(
   // ── Live Prop Signals (any game state: Q1–Q4) ───────────────────────────────
   // Game-specific endpoint that runs prop edge calculations for any live period,
   // not just halftime. Used to color box score rows/cells during the full game.
-  const liveSignalsCache = new Map<string, { ts: number; signals: any[] }>();
+  const liveSignalsCache = new Map<string, { ts: number; signals: any[]; engineOutput: Record<number, Record<string, any>> }>();
   const LIVE_SIGNALS_TTL = 45_000;
 
   app.get("/api/live-signals/:gameId", requireAuth, async (req, res) => {
     const gameId = req.params.gameId as string;
     const cached = liveSignalsCache.get(gameId);
     if (cached && Date.now() - cached.ts < LIVE_SIGNALS_TTL) {
-      return res.json({ signals: cached.signals });
+      return res.json({ signals: cached.signals, engineOutput: cached.engineOutput ?? {} });
     }
 
     try {
@@ -1435,8 +1435,8 @@ export async function registerRoutes(
       const boxscore = summaryData.boxscore;
       const header = summaryData.header;
       if (!boxscore || !header) {
-        liveSignalsCache.set(gameId, { ts: Date.now(), signals: [] });
-        return res.json({ signals: [] });
+        liveSignalsCache.set(gameId, { ts: Date.now(), signals: [], engineOutput: {} });
+        return res.json({ signals: [], engineOutput: {} });
       }
 
       const comp = header.competitions?.[0];
@@ -1454,8 +1454,8 @@ export async function registerRoutes(
       // Only run for genuinely in-progress games (not final, not scheduled)
       const inProgress = statusDesc === "In Progress" || statusDesc === "Halftime";
       if (!inProgress) {
-        liveSignalsCache.set(gameId, { ts: Date.now(), signals: [] });
-        return res.json({ signals: [] });
+        liveSignalsCache.set(gameId, { ts: Date.now(), signals: [], engineOutput: {} });
+        return res.json({ signals: [], engineOutput: {} });
       }
 
       const allDbPlayers = await storage.getPlayers();
@@ -1499,6 +1499,7 @@ export async function registerRoutes(
       };
 
       const allSignals: any[] = [];
+      const engineOutput: Record<number, Record<string, any>> = {};
 
       for (const teamData of (boxscore.players ?? [])) {
         const teamAbbr = normAbbr(teamData.team?.abbreviation ?? "");
@@ -1639,6 +1640,18 @@ export async function registerRoutes(
               if (process.env.DEBUG_PIPELINE === "true") {
                 console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] engineOutput: player=${dbPlayer.name} stat=${statType} prob=${result.probability.toFixed(1)} edge=${edge.toFixed(1)} ${edge < 5 ? "skipReason=lowEdge" : "included=true"}`);
               }
+
+              // Populate engineOutput for ALL players with valid results (no edge filter)
+              if (!engineOutput[dbPlayer.id]) engineOutput[dbPlayer.id] = {};
+              engineOutput[dbPlayer.id][statType] = {
+                probability: result.probability,
+                betDirection: result.probability > 50 ? "OVER" : "UNDER",
+                edge,
+                line: liveLine,
+                statType,
+              };
+
+              // signals[] keeps the edge >= 5 filter for the halftime panel
               if (edge < 5) continue;
 
               allSignals.push({
@@ -1662,12 +1675,12 @@ export async function registerRoutes(
       }
 
       allSignals.sort((a, b) => b.edge - a.edge);
-      liveSignalsCache.set(gameId, { ts: Date.now(), signals: allSignals });
-      res.json({ signals: allSignals });
+      liveSignalsCache.set(gameId, { ts: Date.now(), signals: allSignals, engineOutput });
+      res.json({ signals: allSignals, engineOutput });
     } catch (e) {
       console.warn(`[LiveSignals] Error for game ${gameId}:`, (e as any).message);
-      liveSignalsCache.set(gameId, { ts: Date.now(), signals: [] });
-      res.json({ signals: [] });
+      liveSignalsCache.set(gameId, { ts: Date.now(), signals: [], engineOutput: {} });
+      res.json({ signals: [], engineOutput: {} });
     }
   });
 
