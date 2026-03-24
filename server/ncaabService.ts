@@ -598,6 +598,7 @@ function extractLines(oddsEvent: any, homeTeamName?: string, awayTeamName?: stri
   h2SpreadLine: number | null;
   h2Favorite: string;
   overOddsAmerican: number | null;
+  underOddsAmerican: number | null;
   spreadOddsAmerican: number | null;
   h1OverOddsAmerican: number | null;
   h1SpreadOddsAmerican: number | null;
@@ -620,6 +621,7 @@ function extractLines(oddsEvent: any, homeTeamName?: string, awayTeamName?: stri
   let h2SpreadLine: number | null = null;
   let h2Favorite = "";
   let overOddsAmerican: number | null = null;
+  let underOddsAmerican: number | null = null;
   let spreadOddsAmerican: number | null = null;
   let h1OverOddsAmerican: number | null = null;
   let h1SpreadOddsAmerican: number | null = null;
@@ -690,11 +692,18 @@ function extractLines(oddsEvent: any, homeTeamName?: string, awayTeamName?: stri
     }
     if (totalsMarket?.outcomes?.length >= 1) {
       const over = totalsMarket.outcomes.find((o: any) => o.name === "Over" || (o.name ?? "").toLowerCase().includes("over"));
+      const under = totalsMarket.outcomes.find((o: any) => o.name === "Under" || (o.name ?? "").toLowerCase().includes("under"));
       if (over) {
         bkTotal = over.point as number;
         const overOdds = extractPrice(over);
         if (overOddsAmerican === null && overOdds != null) {
           overOddsAmerican = overOdds;
+        }
+      }
+      if (under) {
+        const underOdds = extractPrice(under);
+        if (underOddsAmerican === null && underOdds != null) {
+          underOddsAmerican = underOdds;
         }
       }
     }
@@ -926,7 +935,7 @@ function extractLines(oddsEvent: any, homeTeamName?: string, awayTeamName?: stri
     });
   }
 
-  return { spread, total, favorite, bookLines, h1TotalLine, h1SpreadLine, h1Favorite, h2TotalLine, h2SpreadLine, h2Favorite, overOddsAmerican, spreadOddsAmerican, h1OverOddsAmerican, h1SpreadOddsAmerican, h2OverOddsAmerican, h2SpreadOddsAmerican, h1TotalOverOdds, h1TotalUnderOdds, h1SpreadHomeOdds, h1SpreadAwayOdds, homeTTBookLine, awayTTBookLine };
+  return { spread, total, favorite, bookLines, h1TotalLine, h1SpreadLine, h1Favorite, h2TotalLine, h2SpreadLine, h2Favorite, overOddsAmerican, underOddsAmerican, spreadOddsAmerican, h1OverOddsAmerican, h1SpreadOddsAmerican, h2OverOddsAmerican, h2SpreadOddsAmerican, h1TotalOverOdds, h1TotalUnderOdds, h1SpreadHomeOdds, h1SpreadAwayOdds, homeTTBookLine, awayTTBookLine };
 }
 
 // ── Public handle signal ──────────────────────────────────────────────────────
@@ -1162,6 +1171,19 @@ function parseESPNSpreadDetails(
   return { spread: spreadAbs, favorite: resolvedFavorite };
 }
 
+// ── Per-market engine input validation ───────────────────────────────────────
+function validateEngineInput(
+  params: { line: number | null; odds: number | null; gameId: string }
+): { valid: boolean; reason: string | null } {
+  const { line, odds, gameId } = params;
+  if (!gameId) return { valid: false, reason: "missing gameId" };
+  if (line == null) return { valid: false, reason: "missing line" };
+  if (!Number.isFinite(line)) return { valid: false, reason: "invalid line" };
+  if (odds == null) return { valid: false, reason: "missing odds" };
+  if (!Number.isFinite(odds)) return { valid: false, reason: "invalid odds" };
+  return { valid: true, reason: null };
+}
+
 export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
   const [allGames, oddsEvents, sgoEvents] = await Promise.all([
     getNCAABScoreboard(),
@@ -1188,9 +1210,9 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       if (!oddsEvent) {
         console.log(`[NCAAB] Odds API miss for game ${game.id} (${game.awayTeam} @ ${game.homeTeam}) — no matching event found`);
       }
-      let { spread, total, favorite, bookLines, h1TotalLine: oddsH1Total, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav, h2TotalLine: oddsH2Total, h2SpreadLine: oddsH2Spread, h2Favorite: oddsH2Fav, overOddsAmerican, spreadOddsAmerican, h1OverOddsAmerican, h1SpreadOddsAmerican, h2OverOddsAmerican, h2SpreadOddsAmerican, h1TotalOverOdds, h1TotalUnderOdds, h1SpreadHomeOdds, h1SpreadAwayOdds, homeTTBookLine, awayTTBookLine } = oddsEvent
+      let { spread, total, favorite, bookLines, h1TotalLine: oddsH1Total, h1SpreadLine: oddsH1Spread, h1Favorite: oddsH1Fav, h2TotalLine: oddsH2Total, h2SpreadLine: oddsH2Spread, h2Favorite: oddsH2Fav, overOddsAmerican, underOddsAmerican, spreadOddsAmerican, h1OverOddsAmerican, h1SpreadOddsAmerican, h2OverOddsAmerican, h2SpreadOddsAmerican, h1TotalOverOdds, h1TotalUnderOdds, h1SpreadHomeOdds, h1SpreadAwayOdds, homeTTBookLine, awayTTBookLine } = oddsEvent
         ? extractLines(oddsEvent, game.homeTeam, game.awayTeam)
-        : { spread: null, total: null, favorite: "", bookLines: [], h1TotalLine: null, h1SpreadLine: null, h1Favorite: "", h2TotalLine: null, h2SpreadLine: null, h2Favorite: "", overOddsAmerican: null, spreadOddsAmerican: null, h1OverOddsAmerican: null, h1SpreadOddsAmerican: null, h2OverOddsAmerican: null, h2SpreadOddsAmerican: null, h1TotalOverOdds: null, h1TotalUnderOdds: null, h1SpreadHomeOdds: null, h1SpreadAwayOdds: null, homeTTBookLine: null, awayTTBookLine: null };
+        : { spread: null, total: null, favorite: "", bookLines: [], h1TotalLine: null, h1SpreadLine: null, h1Favorite: "", h2TotalLine: null, h2SpreadLine: null, h2Favorite: "", overOddsAmerican: null, underOddsAmerican: null, spreadOddsAmerican: null, h1OverOddsAmerican: null, h1SpreadOddsAmerican: null, h2OverOddsAmerican: null, h2SpreadOddsAmerican: null, h1TotalOverOdds: null, h1TotalUnderOdds: null, h1SpreadHomeOdds: null, h1SpreadAwayOdds: null, homeTTBookLine: null, awayTTBookLine: null };
 
       if (process.env.DEBUG_PIPELINE === "true") {
         console.log(`[PIPELINE][NCAAB][${game.id}] raw: matchedOdds=${!!oddsEvent} total=${total ?? "null"} spread=${spread ?? "null"} books=${bookLines.length}`);
@@ -1353,6 +1375,48 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       if (h1SpreadLine !== null && h1SpreadOddsAmerican === null) { h1SpreadOddsAmerican = -110; console.log(`[NCAAB] h1_spread line present but odds null — defaulting to -110 (gameId=${game.id})`); }
       if (h2TotalLine !== null && h2OverOddsAmerican === null) { h2OverOddsAmerican = -110; console.log(`[NCAAB] h2_total line present but odds null — defaulting to -110 (gameId=${game.id})`); }
       if (h2SpreadLine !== null && h2SpreadOddsAmerican === null) { h2SpreadOddsAmerican = -110; console.log(`[NCAAB] h2_spread line present but odds null — defaulting to -110 (gameId=${game.id})`); }
+
+      // ── Per-market validation loop ────────────────────────────────────────
+      // Validates full_total and full_spread markets individually.
+      // Invalid markets are nullified so the engine treats them as unavailable.
+      // Per-market `continue` skips only the failing market — the game still runs.
+      for (const marketType of ["total", "spread"] as const) {
+        if (marketType !== "total" && marketType !== "spread") {
+          console.log(`[NCAAB SKIP][${game.id}][unknown] invalid marketType`);
+          continue;
+        }
+
+        let liveLine: number | null;
+        let liveOdds: number | null;
+
+        if (marketType === "total") {
+          liveLine = total;
+          liveOdds = overOddsAmerican;
+        } else {
+          liveLine = spread;
+          liveOdds = spreadOddsAmerican;
+        }
+
+        if (marketType === "total" && overOddsAmerican == null && underOddsAmerican == null) {
+          console.log(`[NCAAB SKIP][${game.id}][total] missing both sides`);
+          total = null;
+          overOddsAmerican = null;
+          continue;
+        }
+
+        const validation = validateEngineInput({ line: liveLine, odds: liveOdds, gameId: game.id });
+        if (!validation.valid) {
+          console.log(`[NCAAB SKIP][${game.id}][${marketType}] ${validation.reason}`);
+          if (marketType === "total") {
+            total = null;
+            overOddsAmerican = null;
+          } else {
+            spread = null;
+            spreadOddsAmerican = null;
+          }
+          continue;
+        }
+      }
 
       // ── Engine: single source of truth for projection + probability ──────
       const engineInput: import("./ncaabEngine").NCAABGameInput = {

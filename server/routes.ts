@@ -4069,6 +4069,37 @@ export function registerAnalyticsRoutes(app: Express): void {
     }
   });
 
+  app.get("/api/analytics/verify", requireAdmin, async (_req, res) => {
+    try {
+      const [summary, unresolved, nbaResult, ncaabResult, mlbResult] = await Promise.all([
+        storage.getAnalyticsSummary("all"),
+        storage.getUnresolvedAlerts(),
+        storage.getPlays({ sport: "nba", limit: 500 }),
+        storage.getPlays({ sport: "ncaab", limit: 500 }),
+        storage.getPlays({ sport: "mlb", limit: 500 }),
+      ]);
+
+      const rawTotal = summary?.totalPlays;
+      const totalRecords = Number.isFinite(rawTotal) && rawTotal != null ? rawTotal : 0;
+
+      const rawUnresolved = unresolved?.length;
+      const unresolvedAlerts = Number.isFinite(rawUnresolved) && rawUnresolved != null ? rawUnresolved : 0;
+
+      const rawNba = nbaResult?.total;
+      const rawNcaab = ncaabResult?.total;
+      const rawMlb = mlbResult?.total;
+      const bySport: { nba: number; ncaab: number; mlb: number } = {
+        nba: Number.isFinite(rawNba) && rawNba != null ? rawNba : 0,
+        ncaab: Number.isFinite(rawNcaab) && rawNcaab != null ? rawNcaab : 0,
+        mlb: Number.isFinite(rawMlb) && rawMlb != null ? rawMlb : 0,
+      };
+
+      res.json({ totalRecords, bySport, unresolvedAlerts });
+    } catch (e) {
+      res.status(500).json({ message: "Failed to load analytics verification" });
+    }
+  });
+
   // Manual settle: trigger autoResolveAlerts on-demand and return count
   app.post("/api/analytics/settle", requireAdmin, async (_req, res) => {
     try {
