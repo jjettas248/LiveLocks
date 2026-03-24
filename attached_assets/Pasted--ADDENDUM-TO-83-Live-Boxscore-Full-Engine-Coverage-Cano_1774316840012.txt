@@ -1,0 +1,257 @@
+# ADDENDUM TO #83 — Live Boxscore Full Engine Coverage (Canonical ID + Multi-Team Fix)
+
+## SYSTEM
+Live Stats → Live Signals Engine → Boxscore UI
+
+## OBJECTIVE
+Fix the live boxscore so BOTH teams (home + away) receive full engine enrichment by eliminating player identity mismatches and guaranteeing full engine coverage.
+
+---
+
+## ROOT CAUSE (CRITICAL)
+Two conflicting player ID systems exist:
+
+- /api/live-stats uses ESPN athleteId
+- /api/live-signals uses DB player.id
+
+This causes:
+- engineOutput keys do not match frontend playerId
+- away team fails resolution more often
+- bottom half of boxscore renders with no badges
+
+Fuzzy/name matching is currently masking this issue and must be removed.
+
+---
+
+## REQUIRED FIXES
+
+--------------------------------------------------
+1. UNIFY PLAYER ID SYSTEM (MANDATORY)
+--------------------------------------------------
+
+In: server/routes.ts (live-stats endpoint)
+
+REPLACE ESPN ID usage with DB ID mapping
+
+BEFORE:
+player.playerId = espnAthleteId
+
+AFTER:
+const dbPlayer = await findPlayerByEspnId(espnAthleteId)
+
+player.playerId = dbPlayer?.id ?? null
+
+REQUIREMENT:
+- Frontend must ONLY receive DB player IDs
+- Backend engineOutput must use same DB IDs
+
+NO MIXED ID SYSTEMS ALLOWED
+
+---
+
+--------------------------------------------------
+2. REMOVE ALL NAME / FUZZY MATCHING (HARD REQUIREMENT)
+--------------------------------------------------
+
+DELETE:
+- normDb comparisons
+- first/last token matching
+- substring matching
+- Jaro-Winkler or any fuzzy logic
+
+REPLACE WITH STRICT ID CHECK:
+
+if (!player.playerId) {
+  console.error("[PLAYER UNRESOLVED]", {
+    espnId: espnAthleteId,
+    name: player.name
+  })
+  continue
+}
+
+NO FALLBACK MATCHING PERMITTED
+
+---
+
+--------------------------------------------------
+3. ENSURE BOTH TEAMS ARE INCLUDED (DATA INGEST FIX)
+--------------------------------------------------
+
+In: /api/live-signals/:gameId
+
+REPLACE any single-team extraction:
+
+const players = game.homeTeam.players
+
+OR
+
+const players = boxscore[0].players
+
+WITH:
+
+const players = [
+  ...(game.homeTeam?.players || []),
+  ...(game.awayTeam?.players || [])
+]
+
+OR (PREFERRED):
+
+const players = boxscore.flatMap(team => team.players || [])
+
+REQUIREMENT:
+- BOTH teams must always be processed
+- No conditional skips
+
+---
+
+--------------------------------------------------
+4. FULL ENGINE LOOP COVERAGE (NO PLAYER DROPS)
+--------------------------------------------------
+
+Engine must process ALL players:
+
+for (const player of players) {
+  if (!engineOutput[player.playerId]) {
+    engineOutput[player.playerId] = {}
+  }
+
+  for (const statType of statTypes) {
+    const input = buildEngineInput(player, statType)
+
+    if (!input || input.line == null || !Number.isFinite(input.line)) {
+      engineOutput[player.playerId][statType] = null
+      continue
+    }
+
+    const result = runEngine(input)
+
+    engineOutput[player.playerId][statType] = {
+      probability: result.probability,
+      betDirection: result.betDirection,
+      edge: result.edge,
+      line: input.line,
+      statType
+    }
+  }
+}
+
+---
+
+--------------------------------------------------
+5. REMOVE EARLY TERMINATION (CRITICAL)
+--------------------------------------------------
+
+SEARCH AND REMOVE:
+
+break
+return
+
+inside:
+- player loops
+- team loops
+- engine loops
+
+REPLACE WITH:
+
+continue
+
+REQUIREMENT:
+- No loop can terminate early
+- All players must be attempted
+
+---
+
+--------------------------------------------------
+6. ENGINE COVERAGE SAFETY PASS (POST LOOP)
+--------------------------------------------------
+
+After engine execution:
+
+for (const player of players) {
+  if (!engineOutput[player.playerId]) {
+    engineOutput[player.playerId] = {}
+  }
+}
+
+PURPOSE:
+- Prevent missing-key lookups on frontend
+- DOES NOT replace real coverage (only safety)
+
+---
+
+--------------------------------------------------
+7. DEBUG VALIDATION LOGS (MANDATORY)
+--------------------------------------------------
+
+Add after engine loop:
+
+console.log("[ENGINE DEBUG]", {
+  totalPlayers: players.length,
+  enginePlayers: Object.keys(engineOutput).length,
+  teams: [...new Set(players.map(p => p.team))]
+})
+
+EXPECTED:
+- totalPlayers === enginePlayers
+- teams includes BOTH teams
+
+---
+
+--------------------------------------------------
+8. FRONTEND SAFE LOOKUP (CONFIRMATION)
+--------------------------------------------------
+
+In: client/src/components/live-boxscore.tsx
+
+const engineEntry =
+  engineOutput?.[player.playerId]?.[watchedStatType] ?? null
+
+REQUIREMENT:
+- Must use SAME DB playerId as backend
+- No ESPN IDs allowed
+
+---
+
+--------------------------------------------------
+9. MINUTES THRESHOLD HARDENING
+--------------------------------------------------
+
+const minutes =
+  typeof stat.minutes === "number"
+    ? stat.minutes
+    : parseFloat(stat.minutes)
+
+const shouldRenderBadge =
+  engineEntry && minutes >= 3
+
+---
+
+## DO NOT
+
+- Do NOT introduce fuzzy matching
+- Do NOT use player names for identity
+- Do NOT mix ESPN IDs and DB IDs
+- Do NOT modify probability logic
+- Do NOT modify thresholds
+- Do NOT alter halftime panel
+- Do NOT affect MLB or NCAAB systems
+
+---
+
+## SUCCESS CRITERIA
+
+- Both teams fully visible in boxscore
+- Top AND bottom halves show badges
+- engineOutput contains ALL player IDs
+- No missing opponent players
+- Debug logs confirm full coverage
+- No regression in UI or signals
+
+---
+
+## RESULT
+
+- Single canonical ID system
+- Deterministic player matching
+- Full multi-team engine coverage
+- Zero silent failures
