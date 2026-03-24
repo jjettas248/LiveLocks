@@ -223,11 +223,21 @@ interface CalcLogEntry {
   statType: string;
   line: number;
   probability: number;
+  direction: string;
   bookOdds: number | null;
+  bookImplied: number | null;
+  edgeRaw: number;
+  edgeVsBook: number;
+  archetype: "superstar" | "primary" | "role" | "rotation" | "volatile";
+  avgMinutes: number;
+  isVolatileFiltered: boolean;
+  isEdgeRejected: boolean;
+  isSuperstarUnderReduced: boolean;
+  noSignal: boolean;
   gameDate: string | null;
   timestamp: Date;
 }
-const calcLogEntries: CalcLogEntry[] = [];
+export const calcLogEntries: CalcLogEntry[] = [];
 
 // Module-level in-flight Set prevents concurrent race conditions in savePlayAlerts.
 // Two simultaneous requests can both pass the select-before-insert check and both insert,
@@ -638,30 +648,72 @@ export class DatabaseStorage implements IStorage {
     }
 
     // Step 6 — Probability expansion
-    const beforeExpansion = probability;
     probability = 50 + (probability - 50) * 1.65;
 
-    // Step 7 — Final clamp
+    // ─── Archetype classification ─────────────────────────────────────────
+    type Archetype = "superstar" | "primary" | "role" | "rotation" | "volatile";
+    function classifyArchetype(mins: number): Archetype {
+      if (mins >= 32) return "superstar";
+      if (mins >= 26) return "primary";
+      if (mins >= 20) return "role";
+      if (mins >= 15) return "rotation";
+      return "volatile";
+    }
+    const archetype = classifyArchetype(avgMinutes);
+
+    // ─── Safe post-calibration risk filters ──────────────────────────────
+    // Applied after calibration + penalties + expansion, before final return.
+    // All filters are reversible and logged.
+
+    // Filter A — Volatile block
+    let isVolatileFiltered = false;
+    if (avgMinutes < 22 && probability > 70) {
+      isVolatileFiltered = true;
+    }
+
+    // Filter B — Superstar-under dampener (×0.93)
+    let isSuperstarUnderReduced = false;
+    if (archetype === "superstar" && direction === "UNDER" && probability > 65) {
+      probability = probability * 0.93;
+      isSuperstarUnderReduced = true;
+    }
+
+    // Filter C — Extreme under guard
+    let isEdgeRejected = false;
+    if (probability < 25) {
+      isEdgeRejected = true;
+    }
+
+    // Filter D — Final clamp
     probability = Math.max(2, Math.min(98, probability));
 
-    // Step 5 — Edge sanity check using real odds
+    // Edge sanity check using real odds
     const sportsbookImplied = americanOddsToProb(req.bookOdds ?? -110) * 100;
     const edgeVsBook = probability - sportsbookImplied;
-    const noSignal = edgeVsBook < 3;
+    const noSignal = edgeVsBook < 3 || isVolatileFiltered || isEdgeRejected;
 
     let usageUnderPenaltyApplied = false;
 
-    console.log(`[calc] ${player.name}: period=${currentPeriod} clock=${req.gameClock ?? "n/a"} gameMinLeft=${gameMinutesRemaining.toFixed(1)} remainMin=${remainingMinutes.toFixed(1)} baseline=${baselineSource} edge=${edge.toFixed(2)} ctxMod=${contextModifier.toFixed(3)} prob=${probability.toFixed(1)}% rotSrc=${rotationSource} noSignal=${noSignal}`);
+    console.log(`[calc] ${player.name}: period=${currentPeriod} clock=${req.gameClock ?? "n/a"} gameMinLeft=${gameMinutesRemaining.toFixed(1)} remainMin=${remainingMinutes.toFixed(1)} baseline=${baselineSource} edge=${edge.toFixed(2)} ctxMod=${contextModifier.toFixed(3)} prob=${probability.toFixed(1)}% archetype=${archetype} rotSrc=${rotationSource} noSignal=${noSignal} isVolatileFiltered=${isVolatileFiltered} isEdgeRejected=${isEdgeRejected}`);
 
     // ─── In-memory calc log ───────────────────────────────────────────────
-    probability = Math.max(2, Math.min(98, probability));
     const finalProbability = Math.round(probability * 10) / 10;
     calcLogEntries.push({
       player: player.name,
       statType: req.statType,
       line: req.liveLine,
       probability: finalProbability,
+      direction,
       bookOdds: req.bookOdds ?? null,
+      bookImplied: Math.round(sportsbookImplied * 10) / 10,
+      edgeRaw: Math.round(edge * 100) / 100,
+      edgeVsBook: Math.round(edgeVsBook * 10) / 10,
+      archetype,
+      avgMinutes,
+      isVolatileFiltered,
+      isEdgeRejected,
+      isSuperstarUnderReduced,
+      noSignal,
       gameDate: req.gameDate ?? null,
       timestamp: new Date(),
     });
@@ -699,6 +751,9 @@ export class DatabaseStorage implements IStorage {
       playoffBoostApplied,
       teamVolatilityPenaltyApplied,
       usageMultiplier: Math.round(usageMultiplier * 1000) / 1000,
+      archetype,
+      isVolatileFiltered,
+      isEdgeRejected,
     };
 
     return {

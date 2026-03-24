@@ -170,6 +170,9 @@ export interface CalcDebug {
   playoffBoostApplied?: boolean;
   teamVolatilityPenaltyApplied?: boolean;
   usageMultiplier?: number;
+  archetype?: "superstar" | "primary" | "role" | "rotation" | "volatile";
+  isVolatileFiltered?: boolean;
+  isEdgeRejected?: boolean;
 }
 
 export interface CalculateProbabilityResponse {

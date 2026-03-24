@@ -1,0 +1,179 @@
+#86-B — NBA SAFE RISK FILTER IMPLEMENTATION (POST-AUDIT)
+
+STRICT RULES:
+- DO NOT modify projection logic
+- DO NOT modify calibration logic
+- DO NOT change edge calculation method
+- ONLY apply post-calibration risk filters
+- ALL filters must be reversible and logged
+
+--------------------------------------------------
+OBJECTIVE
+--------------------------------------------------
+
+Reduce false positives and misleading plays WITHOUT
+affecting core model performance or win rate.
+
+--------------------------------------------------
+IMPLEMENTATION LOCATION
+--------------------------------------------------
+
+File: server/storage.ts  
+Function: calculateProbability()
+
+Apply filters AFTER:
+- calibration
+- penalties
+- expansion
+
+Apply BEFORE:
+- final response return
+
+--------------------------------------------------
+STEP 1 — ADD ARCHETYPE CLASSIFICATION
+--------------------------------------------------
+
+Add helper:
+
+function getArchetype(avgMinutes: number): string {
+  if (avgMinutes >= 32) return "superstar";
+  if (avgMinutes >= 26) return "primary";
+  if (avgMinutes >= 20) return "role";
+  if (avgMinutes >= 15) return "rotation";
+  return "volatile";
+}
+
+--------------------------------------------------
+STEP 2 — ADD FILTER FLAGS
+--------------------------------------------------
+
+Initialize:
+
+let isVolatileFiltered = false;
+let isEdgeRejected = false;
+let isSuperstarUnderReduced = false;
+
+--------------------------------------------------
+STEP 3 — APPLY FILTERS (ORDER MATTERS)
+--------------------------------------------------
+
+ASSUME:
+- probability = finalProbability
+- edgeDisplayed = Math.abs(probability - 50)
+
+-------------------------
+FILTER A — VOLATILE BLOCK
+-------------------------
+
+IF avgMinutes < 22 AND probability > 70:
+  → RETURN noSignal result
+  → isVolatileFiltered = true
+
+-------------------------
+FILTER B — SUPERSTAR UNDER DAMPENER
+-------------------------
+
+IF archetype === "superstar"
+AND direction === "UNDER"
+AND probability > 65:
+
+  probability = probability * 0.93
+  isSuperstarUnderReduced = true
+
+-------------------------
+FILTER C — EXTREME UNDER GUARD
+-------------------------
+
+IF probability < 25:
+  → RETURN noSignal result
+  → isEdgeRejected = true
+
+(THIS replaces the ambiguous "edge > 25 && probability < 40")
+
+-------------------------
+FILTER D — FINAL CLAMP
+-------------------------
+
+probability = Math.max(2, Math.min(98, probability))
+
+--------------------------------------------------
+STEP 4 — EXTEND DEBUG OBJECT
+--------------------------------------------------
+
+Update CalcDebug output:
+
+{
+  archetype,
+  isVolatileFiltered,
+  isEdgeRejected
+}
+
+(Do NOT include isSuperstarUnderReduced in response — internal only)
+
+--------------------------------------------------
+STEP 5 — LOG FILTER IMPACT
+--------------------------------------------------
+
+In calcLogEntries.push():
+
+Add:
+
+{
+  archetype,
+  isVolatileFiltered,
+  isEdgeRejected,
+  isSuperstarUnderReduced
+}
+
+--------------------------------------------------
+STEP 6 — NO UI CHANGES YET
+--------------------------------------------------
+
+DO NOT:
+- change edge display
+- change frontend logic
+- change analytics structure
+
+This is backend-only stabilization.
+
+--------------------------------------------------
+SUCCESS CRITERIA
+--------------------------------------------------
+
+✔ Engine output unchanged for normal plays  
+✔ Volatile + extreme low-probability plays removed  
+✔ Superstar UNDER plays slightly reduced (not eliminated)  
+✔ No TypeScript errors  
+✔ Win rate remains within 65–75% band over next sample  
+
+--------------------------------------------------
+POST-DEPLOY VALIDATION
+--------------------------------------------------
+
+Track next 50 plays:
+
+- Win rate
+- Under vs Over split
+- % plays filtered
+- Avg probability of remaining plays
+
+Expected:
+
+- Slightly fewer plays
+- Higher quality signals
+- Same or improved win rate
+
+--------------------------------------------------
+ROLLBACK CONDITION
+--------------------------------------------------
+
+IF win rate drops below 60% over 50 plays:
+
+→ REMOVE FILTER B FIRST (superstar dampener)
+→ RE-EVALUATE
+
+IF still degraded:
+
+→ DISABLE FILTER C
+
+DO NOT TOUCH MODEL

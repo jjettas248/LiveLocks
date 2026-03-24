@@ -3577,6 +3577,188 @@ export function registerCalibrationRoutes(app: Express): void {
 
 // Analytics routes (admin only)
 export function registerAnalyticsRoutes(app: Express): void {
+  // ── NBA Engine Audit endpoint ────────────────────────────────────────────
+  // Returns directional pipeline trace (5 UNDER plays), full audit object,
+  // and post-filter results summary from the in-memory calc log + persisted plays.
+  app.get("/api/analytics/nba-audit", requireAdmin, async (_req, res) => {
+    try {
+      const { calcLogEntries } = await import("./storage");
+      const entries = [...calcLogEntries];
+
+      // ── Section A: Directional pipeline trace — 5 UNDER plays ──────────
+      // For each UNDER play, log the probability as returned (response),
+      // the edge raw (model edge), the probability as persisted (same value),
+      // and the persisted edge (|probability - 50|).
+      // Mismatch = direction label disagrees with probability position.
+      const underEntries = entries.filter(e => e.direction === "UNDER");
+      const tracePlays = underEntries.slice(-5);
+      const pipelineTrace = tracePlays.map(e => {
+        const responseProbability = e.probability;
+        const edgeInputProbability = e.edgeRaw;
+        const persistedProbability = e.probability;
+        const persistedEdge = Math.abs(e.probability - 50);
+        const mismatch: "YES" | "NO" =
+          (e.direction === "UNDER" && e.probability >= 50) ||
+          (e.direction === "OVER" && e.probability < 50)
+            ? "YES" : "NO";
+        return {
+          player: e.player,
+          direction: "UNDER",
+          responseProbability,
+          edgeInputProbability,
+          persistedProbability,
+          persistedEdge,
+          noSignal: e.noSignal,
+          mismatch,
+          archetype: e.archetype,
+          avgMinutes: e.avgMinutes,
+          isVolatileFiltered: e.isVolatileFiltered,
+          isEdgeRejected: e.isEdgeRejected,
+          bookImplied: e.bookImplied,
+          edgeVsBook: e.edgeVsBook,
+        };
+      });
+
+      for (const t of pipelineTrace) {
+        console.log(`[NBA-AUDIT] Player: ${t.player}`);
+        console.log(`[NBA-AUDIT] Direction: UNDER`);
+        console.log(`[NBA-AUDIT] Response probability: ${t.responseProbability}`);
+        console.log(`[NBA-AUDIT] Edge input probability: ${t.edgeInputProbability}`);
+        console.log(`[NBA-AUDIT] Persisted probability: ${t.persistedProbability}`);
+        console.log(`[NBA-AUDIT] Persisted edge: ${t.persistedEdge}`);
+        console.log(`[NBA-AUDIT] noSignal: ${t.noSignal}`);
+        console.log(`[NBA-AUDIT] Mismatch: ${t.mismatch}`);
+      }
+      const mismatchFound = pipelineTrace.some(t => t.mismatch === "YES");
+
+      // ── Section B: Full audit object from persisted plays ───────────────
+      // Win rates, archetype win rates, probability bucket accuracy, and miss
+      // breakdown are computed from the persisted_plays table (settled plays only).
+      const gradedPlays = await storage.getGradedPlaysForCalibration({ sport: "nba" });
+
+      const settledNBA = gradedPlays.filter(p => p.result === "hit" || p.result === "miss");
+      const nbaHits   = settledNBA.filter(p => p.result === "hit").length;
+      const nbaTotal  = settledNBA.length;
+      const overallWinRate = nbaTotal > 0 ? Math.round((nbaHits / nbaTotal) * 1000) / 10 : 0;
+
+      const overPlays  = settledNBA.filter(p => p.direction === "over");
+      const underPlays = settledNBA.filter(p => p.direction === "under");
+      const overWinRate = overPlays.length > 0
+        ? Math.round((overPlays.filter(p => p.result === "hit").length / overPlays.length) * 1000) / 10 : 0;
+      const underWinRate = underPlays.length > 0
+        ? Math.round((underPlays.filter(p => p.result === "hit").length / underPlays.length) * 1000) / 10 : 0;
+      const underRate = nbaTotal > 0 ? Math.round((underPlays.length / nbaTotal) * 1000) / 10 : 0;
+      const overRate  = nbaTotal > 0 ? Math.round((overPlays.length / nbaTotal) * 1000) / 10 : 0;
+
+      // Probability bucket accuracy from persisted plays
+      function persistedBucket(label: string, minP: number, maxP: number) {
+        const inBucket = settledNBA.filter(p => {
+          const prob = Number(p.prob);
+          const conf = p.direction === "over" ? prob : 100 - prob;
+          return conf >= minP && conf <= maxP;
+        });
+        const hits = inBucket.filter(p => p.result === "hit").length;
+        const total = inBucket.length;
+        const winRate = total > 0 ? Math.round((hits / total) * 1000) / 10 : 0;
+        return { label, total, hits, winRate };
+      }
+      const probabilityBuckets = [
+        persistedBucket("60s", 60, 69.99),
+        persistedBucket("70s", 70, 79.99),
+        persistedBucket("80+", 80, 100),
+      ];
+
+      // Miss breakdown — from persisted plays (categories approximated from edge data)
+      const misses = settledNBA.filter(p => p.result === "miss");
+      const volatileMisses   = misses.filter(p => p.edgeGap != null && Number(p.edgeGap) >= 20).length;
+      const superstarssMisses = misses.filter(p => p.edgeGap != null && Number(p.prob) >= 75 && p.direction === "under").length;
+      const blowoutMisses    = misses.filter(p => p.edgeGap != null && Number(p.edgeGap) < 10).length;
+      const standardMisses   = misses.length - volatileMisses - superstarssMisses - blowoutMisses;
+
+      // Archetype win rates — join persisted plays to player avgMinutes to classify
+      const allPlayers = await storage.getPlayers();
+      const playerMinutesMap = new Map<string, number>();
+      for (const p of allPlayers) {
+        if (p.id != null && p.avgMinutes != null) {
+          playerMinutesMap.set(String(p.id), Number(p.avgMinutes));
+        }
+      }
+      function classifyArchetypeForAudit(mins: number): string {
+        if (mins >= 32) return "superstar";
+        if (mins >= 26) return "primary";
+        if (mins >= 20) return "role";
+        if (mins >= 15) return "rotation";
+        return "volatile";
+      }
+      type Archetype = "superstar" | "primary" | "role" | "rotation" | "volatile";
+      const archetypes: Archetype[] = ["superstar", "primary", "role", "rotation", "volatile"];
+      const archetypeStats: Record<string, { total: number; hits: number; misses: number; winRate: number }> = {};
+      for (const arch of archetypes) {
+        const archPlays = settledNBA.filter(p => {
+          const mins = p.playerId ? playerMinutesMap.get(String(p.playerId)) : undefined;
+          if (mins == null) return false;
+          return classifyArchetypeForAudit(mins) === arch;
+        });
+        const hits = archPlays.filter(p => p.result === "hit").length;
+        const total = archPlays.length;
+        archetypeStats[arch] = {
+          total,
+          hits,
+          misses: total - hits,
+          winRate: total > 0 ? Math.round((hits / total) * 1000) / 10 : 0,
+        };
+      }
+
+      // ── Section D: Post-filter results summary ──────────────────────────
+      const totalEntries = entries.length;
+      const noSignalTotal            = entries.filter(e => e.noSignal).length;
+      const volatileFilteredCount    = entries.filter(e => e.isVolatileFiltered).length;
+      const edgeRejectedCount        = entries.filter(e => e.isEdgeRejected).length;
+      const superstarUnderReduced    = entries.filter(e => e.isSuperstarUnderReduced).length;
+
+      const audit = {
+        meta: {
+          totalCalcLogEntries: totalEntries,
+          totalPersistedNBAPlays: nbaTotal,
+          snapshotTime: new Date().toISOString(),
+        },
+        plumbingAudit: {
+          mismatchFound,
+          scenario: mismatchFound ? "Scenario 1 (Plumbing mismatch detected)" : "Scenario 2 (No mismatch)",
+          finding: mismatchFound
+            ? "At least one UNDER play shows edgeRaw > 0 (model favours OVER) but direction is UNDER — directional inversion detected."
+            : "All three values (response probability, edge input probability, persisted probability) flow from the same finalProbability. No directional inversion detected.",
+        },
+        directionalSplit: {
+          underRate, overRate,
+          underCount: underPlays.length, overCount: overPlays.length,
+          underWinRate, overWinRate, overallWinRate,
+        },
+        archetypeWinRates: archetypeStats,
+        probabilityBuckets,
+        missBreakdown: {
+          total: misses.length,
+          volatile: volatileMisses,
+          superstar: superstarssMisses,
+          blowout: blowoutMisses,
+          standard: Math.max(0, standardMisses),
+        },
+        postFilterSummary: {
+          noSignalTotal,
+          volatileFiltered: volatileFilteredCount,
+          edgeRejected: edgeRejectedCount,
+          superstarUnderReduced,
+        },
+        pipelineTrace,
+      };
+
+      return res.json(audit);
+    } catch (e: any) {
+      console.error("[nba-audit]", e.message);
+      return res.status(500).json({ error: "Audit failed", details: e.message });
+    }
+  });
+
   app.get("/api/analytics/summary", requireAdmin, async (req, res) => {
     try {
       const range = (req.query.range as string) || "all";
