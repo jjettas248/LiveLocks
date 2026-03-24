@@ -1,0 +1,371 @@
+# TASK: MLB PRODUCTION HARDENING + MONETIZATION + PREMIUM UI (ALL-IN-ONE)
+
+REFERENCE SPEC:
+#87 - MLB Master Rebuild: Signal Integrity + Monetization + Premium UI
+
+--------------------------------------------------
+OBJECTIVE
+--------------------------------------------------
+Perform a full production-grade rebuild of the MLB system covering:
+
+1. Signal Integrity (zero fake data)
+2. Preview Monetization (Free + Pro locked experience)
+3. Elite-Only Live Signals (All Sports only)
+4. Premium UI Upgrade (game chips + UX parity with NBA)
+5. System Stability (no blank states, no broken flows)
+
+This is NOT a refactor.
+This is a strict correctness + monetization + UX enforcement layer.
+
+--------------------------------------------------
+GLOBAL RULES (NON-NEGOTIABLE)
+--------------------------------------------------
+- NO fabricated probabilities
+- NO fallback lines
+- NO default values (18%, etc)
+- NO signal without:
+  - valid sportsbook line (> 0)
+  - valid player stats
+- NO live signals for non-elite users
+- NO debug-looking UI
+- NO auto-selected game on load
+- If invalid → DROP signal (do not patch it)
+
+--------------------------------------------------
+PART 1 — SIGNAL INTEGRITY (BACKEND)
+--------------------------------------------------
+
+FILES:
+server/routes.ts
+server/mlb/liveGameOrchestrator.ts
+
+STRICT VALIDATION:
+
+const hasValidLine = line != null && line > 0
+const hasValidStats = playerContext?.currentStats != null
+const hasValidPlayer = !!playerId
+
+if (!hasValidLine || !hasValidStats || !hasValidPlayer) {
+  return null
+}
+
+REMOVE COMPLETELY:
+- ?? 18
+- || 18
+- fallback probabilities
+- fake edges
+- synthetic lines
+
+RULES:
+- Probability can exist without odds
+- Edge ONLY exists if odds exist
+- Edge = nullable if no odds
+
+DROP SIGNAL IF:
+- no line
+- no stats
+- no playerId
+- invalid probability
+- clustered probabilities
+- mismatched gameId
+
+STATUS GATE:
+
+if (normalizeMlbStatus(game.status) !== "live") return null
+
+--------------------------------------------------
+PART 2 — EDGE CACHE FILTER
+--------------------------------------------------
+
+FILE: server/mlb/liveGameOrchestrator.ts
+
+Before writing:
+
+const validSignals = outputs.filter(s =>
+  s.bookLine > 0 &&
+  s.calibratedProbabilityOver > 0 &&
+  s.calibratedProbabilityUnder > 0
+)
+
+ONLY store validSignals
+
+--------------------------------------------------
+PART 3 — LIVE SIGNALS ROUTE GUARD
+--------------------------------------------------
+
+GET /api/mlb/live-signals/:gameId
+
+const filtered = signals.filter(s =>
+  s.bookLine > 0 &&
+  s.calibratedProbabilityOver > 0 &&
+  s.calibratedProbabilityUnder > 0 &&
+  Math.abs(s.edge) >= 5
+)
+
+if (filtered.length === 0) {
+  return { mode: "no_lines", signals: [] }
+}
+
+--------------------------------------------------
+PART 4 — PREVIEW MODE (NO ODDS)
+--------------------------------------------------
+
+const hasAnyOdds = games.some(g => g.hasOdds === true)
+
+IF FALSE:
+
+return {
+  mode: "preview",
+  games,
+  previewPlayers
+}
+
+PREVIEW PLAYER SHAPE:
+
+{
+  playerName,
+  matchup,
+  projection,
+  tags
+}
+
+NEVER INCLUDE:
+- probability
+- edge
+- bet
+
+--------------------------------------------------
+PART 5 — LOCKED PREVIEW (FREE + PRO)
+--------------------------------------------------
+
+if (user.subscriptionTier !== "elite") {
+  return {
+    mode: "preview_locked",
+    games,
+    previewPlayers: previewPlayers.slice(0, 6)
+  }
+}
+
+--------------------------------------------------
+PART 6 — ELITE LIVE SIGNAL MODE
+--------------------------------------------------
+
+ONLY IF:
+
+mode === "live"
+AND user.subscriptionTier === "elite"
+
+AND signal has:
+- real line
+- real probability
+- real edge
+
+--------------------------------------------------
+PART 7 — GAME CHIP UI REDESIGN
+--------------------------------------------------
+
+FILE: client/src/pages/mlb-live.tsx
+
+REMOVE:
+- "@ 0-0 Preview"
+- "Field / Stadium / Park" labels
+- raw strings
+- horizontal scroll chips
+- inconsistent layout
+
+NEW CHIP STRUCTURE:
+
+ROW 1 (PRIMARY):
+AWAY_ABBR @ HOME_ABBR     [LIVE/PRE]
+
+ROW 2:
+Score (3 – 2)
+Top 7th / Bottom 5th / Final
+
+ROW 3:
+Park • Pitchers • Weather
+
+Example:
+Fenway • Cole vs Sale • 72°, Wind Out
+
+STYLING:
+
+className="
+flex flex-col
+p-3
+rounded-xl
+border border-white/10
+bg-white/[0.02]
+hover:border-white/20
+hover:bg-white/[0.05]
+transition
+"
+
+GRID RULES:
+- 2–3 per row desktop
+- no horizontal scroll
+- equal height
+- tight spacing
+
+REQUIRED DATA SHAPE:
+
+{
+  gameId,
+  awayAbbr,
+  homeAbbr,
+  awayScore,
+  homeScore,
+  inning,
+  isTopInning,
+  status,
+  parkName,
+  probableAwayPitcher,
+  probableHomePitcher,
+  weatherSummary,
+  hasOdds
+}
+
+--------------------------------------------------
+PART 8 — UI MODE SWITCHING
+--------------------------------------------------
+
+ON LOAD:
+
+selectedGameId = null
+
+SHOW:
+- ONLY game chips
+
+--------------------------------
+
+MODE: preview / preview_locked
+
+HEADER:
+Projected Opportunities
+
+CARD:
+- Player
+- Matchup
+- Projection
+- Tags
+
+LOCKED:
+Probability 🔒
+Edge 🔒
+
+CTA:
+Unlock MLB Edges
+
+--------------------------------
+
+MODE: live (elite only)
+
+SHOW:
+- probability
+- edge
+- recommendation
+
+--------------------------------
+
+MODE: no_lines
+
+"No live edges yet.
+Lines are still forming.
+
+All Sports users get alerted instantly."
+
+CTA: Upgrade
+
+--------------------------------
+
+MODE: manual
+
+"Manual Projection (No Live Odds)"
+
+--------------------------------------------------
+PART 9 — MANUAL FALLBACK SYSTEM
+--------------------------------------------------
+
+POST /api/mlb/calculate-manual
+
+INPUT:
+
+HITTERS:
+- PA
+- hits
+- total bases
+- walks
+- strikeouts
+- batting order
+
+PITCHERS:
+- pitch count
+- innings pitched
+- Ks
+- hits allowed
+- walks
+
+GAME:
+- inning
+- score
+- outs
+- optional runners
+
+RESPONSE:
+
+{
+  mode: "manual",
+  isManual: true,
+  projection,
+  confidence
+}
+
+--------------------------------------------------
+PART 10 — EMPTY STATE
+--------------------------------------------------
+
+IF no signals:
+
+"No live edges yet.
+Lines are still forming.
+
+All Sports users get alerted instantly."
+
+CTA: Upgrade
+
+--------------------------------------------------
+SUCCESS CRITERIA
+--------------------------------------------------
+
+PRE-ODDS:
+- no signals shown
+- clean preview cards
+- locked UX
+- premium chips
+
+POST-ODDS:
+- only real signals
+- no probability clustering
+- no fake edges
+- elite-only access
+- NBA-level UI quality
+
+--------------------------------------------------
+OUTPUT REQUIREMENTS
+--------------------------------------------------
+
+- minimal diffs
+- no placeholder data
+- no regressions to NBA/NCAAB
+- production-ready
+
+--------------------------------------------------
+FINAL RULE
+--------------------------------------------------
+
+If data is invalid:
+- DO NOT GUESS
+- DO NOT FILL
+- DO NOT PATCH
+
+RETURN PREVIEW MODE INSTEAD
