@@ -1,0 +1,388 @@
+# TASK: MLB Master Rebuild — Signal Integrity + Monetization + Premium UI
+
+## SYSTEM:
+Core Engine (MLB) + Conversion System + UX Layer
+
+## OBJECTIVE:
+Rebuild the MLB system so that:
+- NO fake signals are ever generated
+- Free/Pro users see a high-quality locked preview instead of empty or broken UI
+- All Sports (elite) users receive ONLY real, odds-backed live signals
+- UI matches NBA-level polish and clarity
+- System is stable pre-odds, post-odds, and during live play
+
+This is a production hardening task — not a feature experiment.
+
+---
+
+## CONTEXT:
+:contentReference[oaicite:0]{index=0}
+
+Relevant files:
+- server/mlb/liveGameOrchestrator.ts
+- server/mlb/markets.ts
+- server/mlb/probability.ts
+- server/mlb/edgeCache.ts
+- server/routes.ts
+- client/src/pages/mlb-live.tsx
+- client/src/pages/dashboard.tsx
+
+---
+
+## REQUIREMENTS:
+
+# -------------------------------
+# PHASE 1 — SIGNAL INTEGRITY
+# -------------------------------
+
+### Engine Guards
+
+- REMOVE ALL fallback probability logic:
+  - ?? 18
+  - || 18
+  - hardcoded defaults
+
+- Add strict validation BEFORE signal creation:
+
+const hasValidLine = line != null && line > 0
+const hasValidStats = playerContext?.currentStats != null
+const hasValidPlayer = !!playerId
+
+if (!hasValidLine || !hasValidStats || !hasValidPlayer) {
+  return null
+}
+
+---
+
+### Player Context Integrity
+
+- Each player MUST use a fresh object
+- NO shared mutation across players
+- NO index reuse patterns
+
+---
+
+### Probability Rules
+
+- Probability is computed independently of odds
+- Edge is ONLY computed when odds exist
+- Edge must be nullable when odds are absent
+
+---
+
+### Status Gating
+
+Implement normalizeMlbStatus:
+
+ONLY allow:
+normalizedStatus === "live"
+
+All other states:
+→ return []
+
+---
+
+### Signal Drop Rules
+
+Drop signal if:
+- missing playerId
+- invalid probability
+- probability clustering detected
+- mismatched gameId
+- missing stats or line
+
+---
+
+### Edge Cache Write Filter
+
+Before writing to cache:
+
+const validSignals = outputs.filter(s =>
+  s.bookLine != null &&
+  s.bookLine > 0 &&
+  s.calibratedProbabilityOver > 0 &&
+  s.calibratedProbabilityUnder > 0
+)
+
+ONLY store validSignals
+
+NO synthetic data allowed in cache
+
+---
+
+### Live Signals Route Guard
+
+GET /api/mlb/live-signals/:gameId
+
+Filter:
+
+const filtered = signals.filter(s =>
+  s.bookLine > 0 &&
+  s.calibratedProbabilityOver > 0 &&
+  s.calibratedProbabilityUnder > 0 &&
+  Math.abs(s.edge) >= 5
+)
+
+IF EMPTY:
+return { mode: "no_lines", signals: [] }
+
+---
+
+# -------------------------------
+# PHASE 2 — PREVIEW MONETIZATION
+# -------------------------------
+
+### Detect Odds
+
+const hasAnyOdds = games.some(g => g.hasOdds === true)
+
+---
+
+### Preview Mode (NO ODDS)
+
+IF hasAnyOdds === false:
+
+return {
+  mode: "preview",
+  games,
+  previewPlayers
+}
+
+Preview player shape:
+
+{
+  playerName,
+  matchup,
+  projection,
+  tags
+}
+
+DO NOT INCLUDE:
+- probability
+- edge
+- bet recommendation
+
+---
+
+### Locked Preview (Free + Pro)
+
+IF user.subscriptionTier !== "elite":
+
+return {
+  mode: "preview_locked",
+  games,
+  previewPlayers: previewPlayers.slice(0, 6)
+}
+
+---
+
+### Elite Mode
+
+ONLY allow full signals if:
+
+mode === "live"
+AND user.subscriptionTier === "elite"
+
+---
+
+### Critical Rule
+
+NO ODDS → NO SIGNALS → ONLY PREVIEW
+
+---
+
+# -------------------------------
+# PHASE 3 — UI / UX REBUILD
+# -------------------------------
+
+## Game Chips Redesign (CRITICAL)
+
+FILE: mlb-live.tsx
+
+### REMOVE:
+
+- "@ 0-0 Preview"
+- "Field / Stadium / Park"
+- raw/debug strings
+- horizontal scroll chips
+- broken layout
+
+---
+
+### NEW CHIP STRUCTURE:
+
+ROW 1:
+AWAY_ABBR @ HOME_ABBR      [LIVE / PRE]
+
+ROW 2:
+Score (3 – 2)
+Top 7th / Bottom 5th
+
+ROW 3:
+Park • Pitchers • Weather
+
+Example:
+Fenway • Cole vs Sale • 72°, Wind Out
+
+---
+
+### STYLING:
+
+flex flex-col
+p-3
+rounded-xl
+border border-white/10
+bg-white/[0.02]
+hover:border-white/20
+hover:bg-white/[0.05]
+
+---
+
+### GRID:
+
+- 2–3 chips per row
+- NO horizontal scroll
+- equal heights
+
+---
+
+### REQUIRED GAME DATA:
+
+{
+  gameId,
+  awayAbbr,
+  homeAbbr,
+  awayScore,
+  homeScore,
+  inning,
+  isTopInning,
+  status,
+  parkName,
+  probableAwayPitcher,
+  probableHomePitcher,
+  weatherSummary,
+  hasOdds
+}
+
+---
+
+## UI MODE SWITCHING
+
+### On Load
+
+selectedGameId = null
+
+SHOW:
+→ only game chips
+
+---
+
+### Preview / Locked Mode
+
+HEADER:
+Projected Opportunities
+
+CARDS:
+- player
+- matchup
+- projection
+- tags
+
+LOCKED:
+Probability 🔒
+Edge 🔒
+
+CTA:
+Unlock MLB Edges
+
+---
+
+### Live Mode (Elite Only)
+
+SHOW:
+- probability
+- edge
+- bet recommendation
+
+---
+
+### No Lines Mode
+
+"No live edges yet.
+Lines are still forming.
+
+All Sports users get alerted instantly."
+
+CTA: Upgrade
+
+---
+
+### Manual Mode
+
+"Manual Projection (No Live Odds)"
+
+---
+
+# -------------------------------
+# PHASE 4 — MANUAL FALLBACK
+# -------------------------------
+
+POST /api/mlb/calculate-manual
+
+INPUT:
+
+Hitters:
+- PA, hits, total bases, walks, strikeouts, batting order
+
+Pitchers:
+- pitch count, IP, Ks, hits allowed, walks
+
+Game:
+- inning, score, outs, optional runners
+
+---
+
+### RESPONSE:
+
+{
+  mode: "manual",
+  isManual: true,
+  projection,
+  confidence
+}
+
+---
+
+# -------------------------------
+# SUCCESS CRITERIA
+# -------------------------------
+
+PRE-ODDS:
+- no signals
+- preview only
+- locked experience
+- premium UI
+
+POST-ODDS:
+- real signals only
+- no clustering bug
+- no fake edges
+- elite-only access
+- stable edge cache
+
+---
+
+## DO NOT:
+- break NBA or NCAAB
+- modify engine math
+- fabricate data
+- auto-select games
+- show signals without odds
+
+---
+
+## OUTPUT:
+- exact code changes
+- minimal diffs
+- production-safe
+- no placeholders
