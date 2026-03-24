@@ -2,9 +2,10 @@ import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import pg from "pg";
-import { registerRoutes, registerAnalyticsRoutes, registerPlaysRoutes, registerTestAlertRoute } from "./routes";
+import { registerRoutes, registerAnalyticsRoutes, registerPlaysRoutes, registerTestAlertRoute, registerCalibrationRoutes } from "./routes";
 import { liveOrchestrator } from "./mlb/liveGameOrchestrator";
 import { autoResolveAlerts } from "./analyticsResolver";
+import { gradePersistedPlays } from "./services/gradePersistedPlays";
 import { storage } from "./storage";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -222,6 +223,7 @@ app.use((req, res, next) => {
   registerAnalyticsRoutes(app);
   registerPlaysRoutes(app);
   registerTestAlertRoute(app);
+  registerCalibrationRoutes(app);
 
   // Start MLB live game orchestrator (Phase A — admin-only, fire-and-forget)
   liveOrchestrator.start();
@@ -230,9 +232,13 @@ app.use((req, res, next) => {
   storage.cleanDuplicatePlays().then(r => { if (r.removed > 0) console.log(`[startup] Cleaned ${r.removed} duplicate persisted plays`); }).catch(console.warn);
   storage.cleanDuplicateAlerts().then(r => { if (r.removed > 0) console.log(`[startup] Cleaned ${r.removed} duplicate halftime alerts`); }).catch(console.warn);
 
-  // Auto-resolve plays in background every 60 minutes; run once after 5 min delay on startup
+  // Auto-resolve halftime alerts every 60 minutes; run once after 5 min delay on startup
   setTimeout(() => autoResolveAlerts(storage).catch(console.warn), 5 * 60 * 1000);
   setInterval(() => autoResolveAlerts(storage).catch(console.warn), 60 * 60 * 1000);
+
+  // Grade persisted plays every 3 minutes; run once after 2 min delay on startup
+  setTimeout(() => gradePersistedPlays(storage).catch(console.warn), 2 * 60 * 1000);
+  setInterval(() => gradePersistedPlays(storage).catch(console.warn), 3 * 60 * 1000);
 
   if (process.env.NODE_ENV !== "production") {
     app.get("/api/test-email", async (req: Request, res: Response) => {

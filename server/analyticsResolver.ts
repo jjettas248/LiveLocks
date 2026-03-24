@@ -244,89 +244,13 @@ export async function autoResolveAlerts(storage: IStorage): Promise<void> {
   }
 }
 
-// ── Settle persisted_plays table ──────────────────────────────────────────────
+// ── Settle persisted_plays table — superseded by gradePersistedPlays service ──
+// This function is kept for backward compatibility but delegates to the canonical
+// grading path in server/services/gradePersistedPlays.ts.
 export async function autoSettlePersistedPlays(
   storage: IStorage
 ): Promise<{ settled: number; failed: number }> {
-  let settled = 0;
-  let failed = 0;
-
-  try {
-    const { plays: pending } = await storage.getPlays({
-      sport: "nba", limit: 500, settled: "pending",
-    });
-    if (pending.length === 0) return { settled, failed };
-
-    console.log("[SETTLE/plays] Pending plays to settle:", pending.length);
-
-    const byGame = new Map<string, typeof pending>();
-    for (const play of pending) {
-      if (!play.gameId) { failed++; continue; }
-      const list = byGame.get(play.gameId) ?? [];
-      list.push(play);
-      byGame.set(play.gameId, list);
-    }
-
-    for (const [gameId, plays] of Array.from(byGame)) {
-      try {
-        const data = await fetchBoxScore(gameId);
-        if (!data) { continue; }
-
-        const playerMap = buildPlayerStatsFromBoxScore(data);
-        console.log("[SETTLE/plays] Player stats built for", playerMap.size, "players");
-
-        for (const play of plays) {
-          const entry = findPlayer(play.playerId, play.playerName, playerMap);
-
-          if (!entry) {
-            console.warn("[SETTLE/plays] Player not found:", play.playerName,
-              "(id:", play.playerId, ")",
-              "— Available IDs:", Array.from(playerMap.keys()).slice(0, 5).join(", "));
-            failed++;
-            continue;
-          }
-
-          const canonical = buildCanonicalStats(entry.rawStats);
-          const marketKey = (play.market ?? "").toLowerCase().trim();
-          const finalStat = computeFinalStat(canonical, marketKey);
-
-          if (finalStat === null) {
-            console.warn("[SETTLE/plays] Market not found:", marketKey,
-              "— Available:", Object.keys(canonical).join(", "));
-            failed++;
-            continue;
-          }
-
-          const line = Number(play.line);
-          const direction = (play.direction ?? "").toLowerCase().trim();
-
-          console.log("[SETTLE/plays]", play.playerName, marketKey,
-            "final:", finalStat, "vs line:", line, "direction:", direction);
-
-          let result: "hit" | "miss" | "push";
-          if (finalStat === line) {
-            result = "push";
-          } else if (direction === "over" && finalStat > line) {
-            result = "hit";
-          } else if (direction === "under" && finalStat < line) {
-            result = "hit";
-          } else {
-            result = "miss";
-          }
-
-          await storage.settlePlay(play.id, result, finalStat, new Date());
-          console.log("[SETTLE/plays] Settled:", play.playerName, marketKey,
-            "→", result.toUpperCase(), `(${finalStat} vs ${line})`);
-          settled++;
-        }
-      } catch (err) {
-        console.warn("[SETTLE/plays] Failed game", gameId, ":", (err as any).message);
-        failed++;
-      }
-    }
-  } catch (err) {
-    console.warn("[SETTLE/plays] Error:", (err as any).message);
-  }
-
-  return { settled, failed };
+  const { gradePersistedPlays } = await import("./services/gradePersistedPlays");
+  const result = await gradePersistedPlays(storage);
+  return { settled: result.settled, failed: result.failed };
 }

@@ -131,6 +131,7 @@ export interface IStorage {
     duplicateGuard: string;
   }): Promise<{ id: string; isDuplicate: boolean }>;
   getPlays(opts: { sport?: string; limit?: number; settled?: string; date?: string }): Promise<{ plays: PersistedPlay[]; total: number }>;
+  getGradedPlaysForCalibration(opts: { sport?: string; market?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]>;
   settlePlay(id: string, result: string, finalStat: number | null, settledAt: Date): Promise<PersistedPlay | null>;
   getPlayStats(): Promise<PlayStats>;
   cleanupOldPlays(): Promise<number>;
@@ -1207,6 +1208,19 @@ export class DatabaseStorage implements IStorage {
     if (conditions.length > 0) query = query.where(and(...conditions));
     const rows = await query.orderBy(desc(persistedPlays.timestamp)).limit(limit);
     return { plays: rows, total: rows.length };
+  }
+
+  async getGradedPlaysForCalibration(opts: { sport?: string; market?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]> {
+    const conds = [sql`${persistedPlays.result} IS NOT NULL`];
+    if (opts.sport) conds.push(sql`${persistedPlays.sport} = ${opts.sport}`);
+    if (opts.market) conds.push(sql`${persistedPlays.market} = ${opts.market}`);
+    if (opts.startDate) conds.push(sql`${persistedPlays.gameDate} >= ${opts.startDate}`);
+    if (opts.endDate) conds.push(sql`${persistedPlays.gameDate} <= ${opts.endDate}`);
+    return await db
+      .select()
+      .from(persistedPlays)
+      .where(and(...conds))
+      .orderBy(desc(persistedPlays.timestamp));
   }
 
   async settlePlay(id: string, result: string, finalStat: number | null, settledAt: Date): Promise<PersistedPlay | null> {

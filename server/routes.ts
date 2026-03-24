@@ -3502,6 +3502,79 @@ export function registerTestAlertRoute(app: Express): void {
   });
 }
 
+// Calibration routes (admin only)
+export function registerCalibrationRoutes(app: Express): void {
+  app.get("/api/persisted-plays/calibration", requireAdmin, async (req, res) => {
+    try {
+      const { sport, market, startDate, endDate } = req.query as Record<string, string>;
+
+      const plays = await storage.getGradedPlaysForCalibration({
+        sport: sport || undefined,
+        market: market || undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+      });
+
+      type PersistedPlay = (typeof plays)[0];
+
+      const totalPlays = plays.length;
+      const wins = plays.filter((p: PersistedPlay) => p.result === "hit").length;
+      const pushes = plays.filter((p: PersistedPlay) => p.result === "push").length;
+      const nonPushes = totalPlays - pushes;
+      const winRate = nonPushes > 0 ? Math.round((wins / nonPushes) * 1000) / 10 : 0;
+      const pushRate = totalPlays > 0 ? Math.round((pushes / totalPlays) * 1000) / 10 : 0;
+
+      const playsWithEdge = plays.filter((p: PersistedPlay) => p.edgeGap != null);
+      const edgeValues = playsWithEdge.map((p: PersistedPlay) => Number(p.edgeGap));
+      const probValues = plays.map((p: PersistedPlay) => Number(p.prob ?? 0));
+      const avgEdge = edgeValues.length > 0
+        ? Math.round(edgeValues.reduce((a: number, b: number) => a + b, 0) / edgeValues.length * 10) / 10
+        : 0;
+      const avgProbability = probValues.length > 0
+        ? Math.round(probValues.reduce((a: number, b: number) => a + b, 0) / probValues.length * 10) / 10
+        : 0;
+
+      function makeBucketStats(
+        items: PersistedPlay[],
+        label: string,
+        filterFn: (p: PersistedPlay) => boolean
+      ) {
+        const bucket = items.filter(filterFn);
+        const bTotal = bucket.length;
+        const bWins = bucket.filter((p: PersistedPlay) => p.result === "hit").length;
+        const bPushes = bucket.filter((p: PersistedPlay) => p.result === "push").length;
+        const bNonPush = bTotal - bPushes;
+        const bWinRate = bNonPush > 0 ? Math.round((bWins / bNonPush) * 1000) / 10 : 0;
+        const bPushRate = bTotal > 0 ? Math.round((bPushes / bTotal) * 1000) / 10 : 0;
+        return { label, total: bTotal, wins: bWins, pushes: bPushes, winRate: bWinRate, pushRate: bPushRate };
+      }
+
+      const edgeBuckets = [
+        makeBucketStats(plays, "0–5%",  (p: PersistedPlay) => p.edgeGap != null && Number(p.edgeGap) >= 0 && Number(p.edgeGap) < 5),
+        makeBucketStats(plays, "5–10%", (p: PersistedPlay) => p.edgeGap != null && Number(p.edgeGap) >= 5 && Number(p.edgeGap) < 10),
+        makeBucketStats(plays, "10%+",  (p: PersistedPlay) => p.edgeGap != null && Number(p.edgeGap) >= 10),
+      ];
+
+      const probBuckets = [
+        makeBucketStats(plays, "50–60",  (p: PersistedPlay) => { const prob = Number(p.prob); return prob >= 50 && prob < 60; }),
+        makeBucketStats(plays, "60–70",  (p: PersistedPlay) => { const prob = Number(p.prob); return prob >= 60 && prob < 70; }),
+        makeBucketStats(plays, "70–80",  (p: PersistedPlay) => { const prob = Number(p.prob); return prob >= 70 && prob < 80; }),
+        makeBucketStats(plays, "80–100", (p: PersistedPlay) => { const prob = Number(p.prob); return prob >= 80 && prob <= 100; }),
+      ];
+
+      return res.json({
+        plays,
+        summary: { totalPlays, winRate, pushRate, avgEdge, avgProbability },
+        edgeBuckets,
+        probBuckets,
+      });
+    } catch (e) {
+      console.error("[calibration]", (e as Error).message);
+      return res.status(500).json({ error: "Failed to load calibration data" });
+    }
+  });
+}
+
 // Analytics routes (admin only)
 export function registerAnalyticsRoutes(app: Express): void {
   app.get("/api/analytics/summary", requireAdmin, async (req, res) => {
