@@ -1,0 +1,195 @@
+# TASK: NBA Engine Audit + Targeted Risk Filters (SAFE MODE)
+
+## SYSTEM:
+Core Engine (NBA)
+
+## OBJECTIVE:
+1. Audit current engine performance WITHOUT altering core math
+2. Identify directional bias, archetype performance, and miss clusters
+3. Apply ONLY targeted filters to eliminate high-risk losing scenarios
+4. Preserve existing win rate (65–75%) and avoid global behavior shifts
+
+--------------------------------------------------
+## PART 1 — AUDIT ENGINE (READ + ANALYZE)
+--------------------------------------------------
+
+### 1) Directional Distribution
+
+Compute:
+- totalPlays
+- underCount
+- overCount
+
+Return:
+underRate = underCount / totalPlays
+overRate = overCount / totalPlays
+
+--------------------------------------------------
+
+### 2) Win Rate by Direction
+
+Compute:
+- underWins / underTotal
+- overWins / overTotal
+
+Return:
+underWinRate
+overWinRate
+
+--------------------------------------------------
+
+### 3) Archetype Classification (FOR ANALYTICS ONLY)
+
+Add helper:
+
+function getPlayerArchetype(avgMinutes: number): string {
+  if (avgMinutes >= 34) return "superstar";
+  if (avgMinutes >= 30) return "primary";
+  if (avgMinutes >= 24) return "role";
+  if (avgMinutes >= 18) return "rotation";
+  return "volatile";
+}
+
+For each play:
+- assign archetype
+
+Compute win rate per:
+- superstar
+- primary
+- role
+- rotation
+- volatile
+
+--------------------------------------------------
+
+### 4) Probability Bucket Accuracy
+
+Group plays into:
+- 60–69
+- 70–79
+- 80+
+
+For each:
+- total
+- wins
+- winRate
+
+--------------------------------------------------
+
+### 5) Miss Classification (CRITICAL)
+
+For each MISS, tag:
+
+IF avgMinutes < 22 → "volatile_miss"
+IF avgMinutes >= 34 → "superstar_miss"
+IF scoreDiff >= 15 → "blowout_miss"
+ELSE → "standard_miss"
+
+Return counts per category.
+
+--------------------------------------------------
+
+### 6) Output Audit Report
+
+Return structured object:
+
+{
+  directional: { underRate, overRate, underWinRate, overWinRate },
+  archetypes: { superstar, primary, role, rotation, volatile },
+  buckets: { 60s, 70s, 80plus },
+  missBreakdown: { volatile, superstar, blowout, standard }
+}
+
+DO NOT modify existing analytics endpoint.
+This is internal logging or console output.
+
+--------------------------------------------------
+## PART 2 — SAFE FILTERS (NO CORE CHANGES)
+--------------------------------------------------
+
+Apply AFTER calibration and BEFORE final response.
+
+-------------------------------------
+1) Volatile Player Filter
+-------------------------------------
+
+if (
+  avgMinutes < 22 &&
+  probability > 70
+) {
+  noSignal = true;
+}
+
+-------------------------------------
+2) Superstar Under Suppression
+-------------------------------------
+
+const archetype = getPlayerArchetype(avgMinutes);
+
+if (
+  archetype === "superstar" &&
+  direction === "UNDER" &&
+  probability > 65
+) {
+  probability *= 0.93;
+}
+
+-------------------------------------
+3) Extreme Edge Guard (CRITICAL)
+-------------------------------------
+
+if (
+  edge > 25 &&
+  probability < 40
+) {
+  noSignal = true;
+}
+
+-------------------------------------
+4) Final Clamp
+-------------------------------------
+
+probability = Math.max(2, Math.min(98, probability));
+
+--------------------------------------------------
+## DEBUG ADDITIONS
+--------------------------------------------------
+
+Add to CalcDebug:
+
+archetype: string
+isVolatileFiltered: boolean
+isEdgeRejected: boolean
+
+--------------------------------------------------
+## SAFETY RULES
+--------------------------------------------------
+
+- DO NOT modify projection model
+- DO NOT modify market anchoring
+- DO NOT modify calibration logic
+- DO NOT introduce directional balancing yet
+- DO NOT boost overs artificially
+- DO NOT reorder pipeline
+- DO NOT write to DB
+
+--------------------------------------------------
+## SUCCESS CRITERIA
+--------------------------------------------------
+
+- Current win rate (65–75%) is preserved
+- Volatile player misses decrease
+- Superstar misses decrease
+- Extreme fake edges removed
+- Under bias remains but is safer
+- No increase in bad overs
+
+--------------------------------------------------
+## OUTPUT
+--------------------------------------------------
+
+Return:
+- audit summary object
+- applied filter logic
+- debug additions
+- confirmation TypeScript compiles clean

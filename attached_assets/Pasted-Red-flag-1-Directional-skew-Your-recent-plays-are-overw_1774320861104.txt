@@ -1,0 +1,140 @@
+Red flag #1: Directional skew
+
+Your recent plays are overwhelmingly UNDERS. A healthy engine can lean one way on a given slate, but when the model is repeatedly generating mostly one direction across many players and markets, that usually means a systematic bias in expected value generation, not just noisy late-season rotations.
+
+Red flag #2: Probability/edge mismatch in persisted plays
+
+This is the more serious issue.
+
+In the persisted table, you have entries like:
+
+Dir = U
+
+Prob = 16%–39%
+
+Edge = +13pp to +33pp
+
+That combination is logically inconsistent unless the stored probability is the opposite side’s probability or the edge is being computed against the wrong directional confidence.
+
+Example: if the pick is UNDER, the surfaced confidence should generally be the under confidence, not 16% or 31%. If you are storing the displayed Prob as one side and computing Edge from the other side, the engine can look massively under-heavy and “profitable” on paper while actually being mis-specified in output formatting or downstream persistence.
+
+That is the first thing I would audit.
+
+Red flag #3: The miss pattern is clustered, not random
+
+Your misses are not evenly distributed. They cluster around:
+
+star unders
+
+volatile role/bench players
+
+combo unders on players with spiky scoring profiles
+
+That is a structural pattern, not just late-season chaos.
+
+What this likely means
+
+You probably have two overlapping issues:
+
+1. Real model under-bias
+
+Your projection stack is likely still too low on:
+
+superstars
+
+high-usage closers
+
+volatile microwave scorers
+
+That would naturally create too many unders.
+
+2. Output-side directional bug
+
+Your persisted Prob/Edge values strongly suggest a directional confidence inversion or mismatch somewhere between:
+
+calculateProbability()
+
+response shaping
+
+persistence to the new table
+
+analytics rendering
+
+That needs to be checked before you tune the model further.
+
+This is why I would audit first
+
+In sports modeling, calibration matters more than raw “accuracy”; a 70% bucket should behave like a 70% bucket over time, otherwise the probabilities are not trustworthy.
+
+If you start layering more filters before confirming that:
+
+under probability is the same value used for edge
+
+persisted probability matches surfaced probability
+
+analytics bucketing uses directional confidence consistently
+
+you risk tuning around a plumbing bug instead of a model problem.
+
+My verdict
+
+The engine is off, but I would not blame end-of-season variance first.
+I would assign the causes roughly like this:
+
+60–70%: structural under-bias + superstar/volatile-player handling
+
+20–30%: late-season rotation volatility
+
+10–20%: possible persistence/rendering mismatch on directional probability/edge
+
+What to inspect immediately
+
+Audit these in order:
+
+For every UNDER play, confirm the system uses:
+
+underConfidence for displayed probability
+
+the same underConfidence for edge sanity
+
+the same directional confidence when persisting to the table
+
+Compare three values for the same play:
+
+response payload from calculateProbability()
+
+persisted row in the new plays table
+
+analytics bucket input
+
+Pick 5 examples like:
+
+Kevin Durant U
+
+LeBron U
+
+SGA U
+
+Jarace Walker U
+
+Sandro U
+
+and trace:
+
+raw probability
+
+direction
+
+confidence
+
+finalProbability
+
+noSignal
+
+persisted Prob
+
+persisted Edge
+
+If those disagree, that is the first fix.
+
+If you want, send me the raw calculateProbability() response for one UNDER play plus the persisted row for that same play, and I’ll tell you exactly where the mismatch is.
