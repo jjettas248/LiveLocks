@@ -774,15 +774,7 @@ export default function MlbLivePage() {
               </div>
             </div>
 
-            {signalsDegraded && filteredSignals.length > 0 && (
-              <div
-                className="mb-3 flex items-center gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-600 dark:text-yellow-400"
-                data-testid="banner-mlb-degraded-odds"
-              >
-                <span className="font-semibold">Note:</span>
-                <span>Using last known lines — live odds temporarily unavailable. Edge calculations may be less precise.</span>
-              </div>
-            )}
+            <p className="text-xs text-muted-foreground mb-3">Lines recently updated. Tracking movement…</p>
 
             {/* preview_locked — non-elite, odds exist */}
             {(!isElite) && (
