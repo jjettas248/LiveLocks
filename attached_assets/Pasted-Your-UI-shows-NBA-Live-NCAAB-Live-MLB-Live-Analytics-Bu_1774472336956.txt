@@ -1,0 +1,140 @@
+Your UI shows:
+
+NBA Live
+NCAAB Live
+MLB Live
+Analytics
+
+But inside Analytics, there is no MLB filter/toggle.
+
+This is not a bug in rendering
+
+It’s a missing feature in the Analytics pipeline, not the UI.
+
+Root Cause
+
+Your Analytics system is currently:
+
+🔒 Hardcoded to NBA
+
+Evidence:
+
+Title: “NBA Live 2H Plays”
+Data source: NBA-only settled plays
+No league dimension in filters
+
+So even though MLB exists in navigation, Analytics is:
+
+WHERE league = "NBA"
+
+implicitly or explicitly.
+
+What’s Missing
+
+You do not have a league selector wired into Analytics.
+
+Specifically missing:
+
+1. State
+
+No selectedLeague in Analytics page
+
+2. Backend support
+
+Endpoints likely:
+
+/api/analytics
+/api/settled-plays
+
+are returning NBA only
+
+3. UI toggle
+
+No MLB/NBA/NCAAB toggle component inside Analytics view
+
+Correct Implementation (Clean + Scalable)
+SYSTEM CLASSIFICATION
+
+👉 Analytics System (per )
+
+This is a data segmentation + UI control issue, not engine logic.
+
+Implementation Plan
+1. Add League Toggle to Analytics UI
+File:
+
+client/src/pages/analytics.tsx
+
+Add state:
+const [selectedLeague, setSelectedLeague] = useState<"NBA" | "MLB" | "NCAAB">("NBA");
+Add toggle UI (top of page, next to title)
+<div className="flex gap-2 mb-4">
+  {["NBA", "MLB", "NCAAB"].map((league) => (
+    <button
+      key={league}
+      onClick={() => setSelectedLeague(league as any)}
+      className={`px-3 py-1 rounded ${
+        selectedLeague === league ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"
+      }`}
+    >
+      {league}
+    </button>
+  ))}
+</div>
+2. Pass League to Backend
+
+Where you fetch analytics data:
+
+BEFORE:
+fetch("/api/analytics")
+AFTER:
+fetch(`/api/analytics?league=${selectedLeague}`)
+3. Update Backend Route
+File:
+
+server/routes.ts
+
+Find analytics endpoint.
+
+BEFORE:
+const plays = await getSettledPlays("NBA");
+AFTER:
+const league = req.query.league || "NBA";
+
+const plays = await getSettledPlays(league);
+4. Update Data Layer
+File:
+
+server/storage.ts
+
+Ensure:
+
+getSettledPlays(league: string)
+
+filters correctly:
+
+return db.plays.filter(p => p.league === league);
+5. Ensure MLB Plays Exist
+
+If toggle shows but no data:
+
+Check:
+
+MLB plays are being stored with league: "MLB"
+settlement logic is writing MLB results
+
+If not, fix ingestion:
+
+league: game.sport === "MLB" ? "MLB" : "NBA"
+Expected Outcome
+
+After this:
+
+UI
+Analytics tab shows toggle:
+NBA | MLB | NCAAB
+Behavior
+Metrics update per league
+Win rate recalculates
+ROI recalculates
+Recent plays table filters correctly

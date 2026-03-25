@@ -1,0 +1,234 @@
+You are executing a FULL MLB SYSTEM CORRECTION.
+
+This is NOT a patch. This is a SYSTEM REALIGNMENT.
+
+The MLB engine must match how a sharp bettor actually evaluates live MLB props using:
+- BaseballSavant (contact quality)
+- BallparkPal (environment)
+- ESPN (game state + lineup)
+
+---
+
+CRITICAL REQUIREMENT:
+The system must ALWAYS render TODAY’S MLB GAMES.
+
+Zero games is a FAILURE state.
+
+---
+
+PHASE 1 — DISCOVERY FIX (BLOCKER)
+
+Update ESPN ingestion:
+
+- Use scoreboard endpoint with date param:
+  https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=YYYYMMDD
+
+- DO NOT filter for live-only games
+- Include ALL games (pregame + live)
+
+Team mapping MUST use fallback chain:
+
+awayTeam =
+  away.team.displayName ||
+  away.team.shortDisplayName ||
+  away.team.name
+
+homeTeam =
+  home.team.displayName ||
+  home.team.shortDisplayName ||
+  home.team.name
+
+If after fallback both teams are still missing → DROP GAME
+
+Add log:
+[MLB DISCOVERY] rawEvents=X builtGames=Y
+
+REQUIREMENT:
+builtGames must never be 0 unless ESPN returns 0.
+
+---
+
+PHASE 2 — ENGINE REALIGNMENT (MATCH USER LOGIC)
+
+The engine must reflect THIS logic:
+
+User betting model (from spec):
+:contentReference[oaicite:0]{index=0}
+
+Core principle:
+We are NOT modeling season averages.
+We are modeling LIVE CONTACT QUALITY + OPPORTUNITY.
+
+---
+
+IMPLEMENT HITTER ENGINE:
+
+For each hitter, compute:
+
+contactQualityScore:
+- exit velocity (EV)
+- launch angle
+- hit distance
+- hard-hit classification
+- barrel likelihood
+- prior AB quality (today only)
+
+opportunityScore:
+- batting order slot
+- expected remaining plate appearances
+- inning
+- pitcher pitch count
+- bullpen likelihood
+
+environmentScore:
+- BallparkPal park factor
+- weather
+- handedness splits
+
+pitcherVulnerabilityScore:
+- times through order
+- pitch count
+- contact allowed today
+- lineup pocket weakness
+
+finalScore =
+  contactQualityScore
++ opportunityScore
++ environmentScore
++ pitcherVulnerabilityScore
+
+---
+
+MODES:
+
+Mode 1 (Standard):
+- require >= 2 ABs
+
+Mode 2 (Early Explosion):
+- allow 1 AB ONLY if:
+  EV >= elite threshold
+  AND strong environment score
+
+---
+
+MARKET PRIORITY:
+
+Tier 1:
+- Hits
+- Total Bases
+- Batter Ks
+- Pitcher Ks
+
+Tier 2:
+- Hits Allowed
+
+Tier 3 (experimental):
+- HR
+- HRR
+
+HR + HRR MUST have stricter thresholds.
+
+---
+
+PHASE 3 — ODDS + SIGNAL GATING
+
+Signals ONLY allowed if:
+
+- hasRealOdds
+- projection is finite
+- at least one odds side valid
+- timestamps < 120 seconds
+
+Edge requirement:
+abs(edge) >= 5%
+
+---
+
+PHASE 4 — RENDER CONTRACT (STRICT)
+
+Every game must resolve to ONE:
+
+INVALID:
+- missing team names → DO NOT RENDER
+
+PREVIEW:
+- no valid odds
+- render:
+  teams
+  pitchers
+  "Awaiting live lines"
+
+NO_SIGNAL:
+- odds exist BUT no edge
+- render:
+  teams
+  pitchers
+  "No strong edge"
+
+SIGNAL:
+- odds + projection + edge
+- render:
+  projection
+  edge
+  probability
+
+---
+
+PHASE 5 — UI GUARANTEES
+
+- NEVER show empty screen if games exist
+- NEVER show "@"
+- NEVER show fallback strings ("N/A", "0", etc)
+- Pitcher pill ONLY if both pitchers exist
+
+---
+
+PHASE 6 — ADMIN OVERRIDE
+
+If user is admin:
+
+- DO NOT lock probability or edge
+- DO NOT hide data
+- ALWAYS show full signal values
+
+---
+
+PHASE 7 — LOGGING (MANDATORY)
+
+Add:
+
+[MLB DISCOVERY]
+[MLB MARKET INPUT]
+[MLB MARKET SKIP]
+[MLB MARKET OUTPUT]
+
+Each must include:
+- gameId
+- market
+- reason (if skipped)
+
+---
+
+FINAL REQUIREMENTS:
+
+- MLB page must ALWAYS show today’s games (pregame minimum)
+- Engine must reflect live betting logic (Savant + BallparkPal driven)
+- Signals must ONLY appear when real conditions are met
+- UI must be deterministic and never partially render
+
+FAIL CONDITIONS:
+
+- 0 games rendered
+- fake signals
+- stale signals shown
+- missing team names in UI
+
+Execute all fixes across:
+- gameDiscoveryService.ts
+- routes.ts
+- liveGameOrchestrator.ts
+- markets.ts
+- probability.ts
+- mlb-live.tsx
+
+Do not summarize. Implement directly.

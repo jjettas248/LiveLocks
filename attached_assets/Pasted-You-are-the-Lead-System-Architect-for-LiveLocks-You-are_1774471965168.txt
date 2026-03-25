@@ -1,0 +1,354 @@
+You are the Lead System Architect for LiveLocks.
+
+You are operating inside a production sports analytics system with 3 independent engines:
+- NBA Engine (player props)
+- NCAAB Engine (game + 2H markets)
+- MLB Engine (live props)
+
+Your job is to refactor, unify, and harden all engines to production-grade integrity.
+
+Follow ALL instructions exactly.
+
+--------------------------------------------------
+SYSTEM PRIORITY
+--------------------------------------------------
+
+This is a CORE ENGINE task.
+
+You MUST:
+- Prioritize data integrity over feature expansion
+- Eliminate silent failures
+- Enforce strict output contracts
+- Ensure every engine is observable and testable
+
+DO NOT:
+- Break existing working logic
+- Introduce duplicate data pipelines
+- Use fake or placeholder values
+- Allow null or invalid outputs to reach UI
+
+--------------------------------------------------
+OBJECTIVE
+--------------------------------------------------
+
+Rebuild all three engines so that:
+
+1. Every signal is based on REAL sportsbook lines (or explicitly flagged derived lines)
+2. Every engine uses a standardized data ingestion + normalization layer
+3. Every output is consistent, validated, and traceable
+4. Every play can be tracked and graded
+5. NCAAB supports TRUE 2H lines (not just projections)
+
+--------------------------------------------------
+PHASE 1 — UNIFIED DATA LAYER
+--------------------------------------------------
+
+Create:
+
+/services/dataLayer.ts
+
+This service must aggregate:
+
+NBA:
+- ESPN scoreboard + boxscore
+- NBA Stats (usage, advanced metrics)
+
+NCAAB:
+- ESPN scoreboard
+- Efficiency data (Torvik or KenPom fallback)
+
+MLB:
+- MLB Stats API
+- Baseball Savant (xBA, EV, LA, pitch data)
+
+ALL SPORTS:
+- Odds API (multi-book: FanDuel, DraftKings, Bet365, HardRock, Fanatics)
+
+--------------------------------------------------
+PHASE 2 — ODDS NORMALIZATION LAYER
+--------------------------------------------------
+
+Create:
+
+/services/oddsService.ts
+
+Requirements:
+
+- Fetch all available books
+- Normalize into:
+
+{
+  medianLine,
+  bestOverOdds,
+  bestUnderOdds,
+  booksAvailable,
+  lineVariance,
+  marketType,
+  sportsbookSources[]
+}
+
+- Reject invalid markets:
+  - line == null → skip
+  - !Number.isFinite(line) → skip
+  - odds missing → skip
+
+- Support markets:
+
+NBA:
+- player_props
+
+NCAAB:
+- full_total
+- spread
+- team_total
+- totals_2h (CRITICAL)
+
+MLB:
+- hits
+- total_bases
+- strikeouts
+- hits_allowed
+
+--------------------------------------------------
+PHASE 3 — ENGINE INPUT BUILDER
+--------------------------------------------------
+
+Create:
+
+/services/engineInputBuilder.ts
+
+This must standardize inputs across all engines:
+
+{
+  gameId,
+  sport,
+  playerId?,
+  teamId?,
+  marketType,
+  line,
+  odds,
+  context: {
+    score,
+    timeRemaining,
+    pace,
+    efficiency,
+    usage,
+    matchup,
+    fatigue,
+    weather,
+    etc
+  }
+}
+
+--------------------------------------------------
+PHASE 4 — ENGINE REFACTOR (ALL 3)
+
+--------------------------------------------------
+
+NBA ENGINE REQUIREMENTS
+
+- Use real usage (not static baseline)
+- Include:
+  - on/off impact
+  - defensive matchup
+  - pace adjustment
+  - shooting regression
+
+- Projection:
+
+projection =
+(per_min_rate * usage_adjustment)
+× remaining_minutes
+× pace
+× defense
+× shooting_regression
+
+- Probability:
+  - Non-linear mapping
+  - Clamp 2%–98%
+
+- Reject:
+  - No sportsbook line
+  - Invalid projection
+
+--------------------------------------------------
+
+NCAAB ENGINE REQUIREMENTS (CRITICAL FIX)
+
+- Must support TRUE 2H markets
+
+IF 2H line exists:
+→ use sportsbook line
+
+IF NOT:
+→ derive:
+  2H line = full_total - current_score
+→ flag:
+  derivedLine = true
+  confidence penalty applied
+
+- Use:
+  - possessions remaining
+  - efficiency (Torvik/KenPom)
+  - foul rate adjustment
+
+- Projection:
+
+projection =
+possessions_remaining
+× points_per_possession
+± game_state_adjustments
+
+- Probability:
+  - distribution-based (NOT linear)
+  - cap ~80%
+
+- NEVER skip entire game due to missing line
+- Skip per market only
+
+--------------------------------------------------
+
+MLB ENGINE REQUIREMENTS
+
+- Use Baseball Savant as primary signal driver
+
+Include:
+- xBA
+- EV
+- LA
+- pitch mix
+- pitcher fatigue
+- bullpen state
+- weather + park factor
+
+- Enforce:
+
+Two-AB Rule:
+- boosts only after 2 ABs
+
+Explosive Contact Override:
+- EV > 95 + optimal LA triggers early boost
+
+- Probability:
+  - capped ~82%
+
+- Reject:
+  - missing odds
+  - invalid stat context
+
+--------------------------------------------------
+PHASE 5 — OUTPUT CONTRACT (STRICT)
+
+Every engine MUST return:
+
+{
+  id,
+  sport,
+  market,
+  player?,
+  team?,
+  line,
+  projection,
+  probability,
+  edge,
+  recommendedSide,
+  confidence,
+  sportsbook,
+  derivedLine: boolean,
+  createdAt
+}
+
+IF ANY FIELD INVALID:
+→ DO NOT RETURN SIGNAL
+
+--------------------------------------------------
+PHASE 6 — PLAY TRACKING SYSTEM
+
+Create:
+
+/services/playTracker.ts
+
+On user action:
+
+- Save play:
+
+{
+  id,
+  sport,
+  market,
+  line,
+  projection,
+  probability,
+  edge,
+  sportsbook,
+  createdAt,
+  status: "PENDING",
+}
+
+- On game final:
+  - auto-grade:
+    WIN / LOSS / PUSH
+  - store actual result
+
+--------------------------------------------------
+PHASE 7 — DEBUG + OBSERVABILITY (MANDATORY)
+
+Add logs:
+
+[ENGINE START]
+[ENGINE INPUT]
+[ENGINE PROJECTION]
+[ENGINE PROBABILITY]
+[ENGINE OUTPUT VALID]
+[ENGINE OUTPUT SKIPPED]
+
+Create endpoints:
+
+GET /api/debug/nba
+GET /api/debug/ncaab
+GET /api/debug/mlb
+
+Return:
+
+{
+  gamesProcessed,
+  marketsEvaluated,
+  signalsGenerated,
+  signalsSkipped,
+  failureReasons[],
+  avgLatency
+}
+
+--------------------------------------------------
+PHASE 8 — UI CONTRACT
+
+- Invalid → DO NOT RENDER
+- No odds → show preview state
+- Valid → full signal card
+
+- Add to play card:
+  - sportsbook
+  - line source
+  - derived flag
+  - timestamp
+
+--------------------------------------------------
+SUCCESS CRITERIA
+
+- All engines produce only valid, traceable signals
+- NCAAB 2H works with real or flagged derived lines
+- Every play can be tracked and graded
+- You can answer:
+  - “Which sportsbook produced this line?”
+  - “How many signals were skipped and why?”
+  - “What is real win rate vs predicted probability?”
+
+--------------------------------------------------
+OUTPUT REQUIRED
+
+- Exact file-level changes
+- New services created
+- Updated engine logic
+- No placeholders
+- No pseudo code
+- Production-ready TypeScript only

@@ -1,0 +1,173 @@
+TASK: Stripe Upgrade + Access Sync + Gating Fix
+
+SYSTEM:
+
+Conversion System (Stripe + Access Control)
+
+OBJECTIVE:
+Fix MLB gating after purchase
+Ensure correct tier assignment (pro_all)
+Ensure upgrades charge only difference
+Ensure instant unlock after purchase
+CONTEXT:
+MLB is gated behind pro_all
+Users are successfully paying but not receiving access
+Stripe is connected but not fully authoritative
+ROOT CAUSE YOU ARE EXPERIENCING:
+
+Your system is doing one of these:
+
+❌ user.plan never updated after purchase
+❌ webhook not firing or failing silently
+❌ wrong plan string stored (ex: "pro" instead of "pro_all")
+❌ frontend still using cached user state
+❌ gating logic checking wrong condition
+✅ FULL FIX IMPLEMENTATION
+1. STRIPE CHECKOUT SESSION (CREATE)
+
+Make sure metadata includes userId:
+
+const session = await stripe.checkout.sessions.create({
+  mode: 'subscription',
+  customer: customerId,
+  line_items: [{ price: PRICE_ID, quantity: 1 }],
+  success_url: `${APP_URL}/dashboard?success=true`,
+  cancel_url: `${APP_URL}/pricing`,
+  metadata: {
+    userId: user.id,
+    plan: 'pro_all',
+  },
+});
+2. CRITICAL: WEBHOOK (THIS IS YOUR MAIN BUG)
+If this is wrong → EVERYTHING breaks
+app.post('/api/stripe/webhook', async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('Webhook signature failed');
+    return res.sendStatus(400);
+  }
+
+  // ✅ HANDLE CHECKOUT COMPLETION
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+
+    const userId = session.metadata.userId;
+    const plan = session.metadata.plan;
+
+    const subscriptionId = session.subscription;
+    const customerId = session.customer;
+
+    // 🔥 UPDATE USER — THIS IS WHAT YOU ARE MISSING
+    await db.users.update({
+      where: { id: userId },
+      data: {
+        plan: plan, // must be EXACT string: 'pro_all'
+        stripeCustomerId: customerId,
+        stripeSubscriptionId: subscriptionId,
+        subscriptionStatus: 'active',
+      },
+    });
+
+    console.log('[STRIPE] User upgraded:', userId, plan);
+  }
+
+  // ✅ HANDLE SUBSCRIPTION UPDATES
+  if (event.type === 'customer.subscription.updated') {
+    const sub = event.data.object;
+
+    const customerId = sub.customer;
+
+    const user = await db.users.findFirst({
+      where: { stripeCustomerId: customerId },
+    });
+
+    if (user) {
+      await db.users.update({
+        where: { id: user.id },
+        data: {
+          subscriptionStatus: sub.status,
+        },
+      });
+    }
+  }
+
+  res.json({ received: true });
+});
+3. FIX YOUR GATING LOGIC (THIS IS PROBABLY WRONG RIGHT NOW)
+❌ BAD (what you likely have)
+if (!user.hasProAccess) block()
+✅ REPLACE WITH THIS:
+const hasNBAAccess =
+  user.plan === 'pro_nba' || user.plan === 'pro_all';
+
+const hasMLBAccess =
+  user.plan === 'pro_all';
+
+if (route === 'MLB' && !hasMLBAccess) {
+  throw new Error('UPGRADE_REQUIRED');
+}
+4. FRONTEND FIX (REQUIRED)
+
+After Stripe redirect:
+
+useEffect(() => {
+  if (window.location.search.includes('success=true')) {
+    refetchUser(); // or reload
+  }
+}, []);
+
+If you skip this → user stays gated even if backend is correct
+
+5. UPGRADE (PRORATION FIX)
+
+When upgrading:
+
+await stripe.subscriptions.update(subscriptionId, {
+  items: [{
+    id: subscriptionItemId,
+    price: NEW_PRICE_ID,
+  }],
+  proration_behavior: 'create_prorations',
+  billing_cycle_anchor: 'unchanged',
+});
+6. SAFETY FALLBACK (PREVENT LOCKED USERS)
+
+On login or /api/auth/me:
+
+if (user.stripeCustomerId && user.plan === 'free') {
+  const subs = await stripe.subscriptions.list({
+    customer: user.stripeCustomerId,
+  });
+
+  const activeSub = subs.data.find(s => s.status === 'active');
+
+  if (activeSub) {
+    await db.users.update({
+      where: { id: user.id },
+      data: { plan: 'pro_all' }, // infer from price if needed
+    });
+  }
+}
+🚨 MOST IMPORTANT DEBUG STEP (DO THIS NOW)
+
+Run this on your live user:
+
+SELECT email, plan, stripeCustomerId, stripeSubscriptionId
+FROM users
+WHERE email = 'that_user_email';
+You will likely see:
+plan = 'free'
+
+👉 That confirms webhook failure or mapping issue
+
+🎯 SUCCESS CRITERIA
+User pays → immediately sees MLB
+No refresh confusion
+No duplicate subscriptions
+No manual fixes needed
+Stripe = single source of truth

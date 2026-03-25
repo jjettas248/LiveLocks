@@ -1,0 +1,263 @@
+NBA ENGINE — DATA EXPANSION (HIGH IMPACT)
+🔴 CURRENT GAP
+
+You rely heavily on:
+
+Box score
+Basic pace
+Static player baselines
+
+This misses real-time volatility drivers:
+
+Defensive matchup
+Rotation changes
+Shot quality vs results
+✅ ADD THESE APIs
+1. NBA Advanced Tracking (CRITICAL)
+Source
+NBA Stats API (stats.nba.com)
+playerdashptshots
+leaguedashplayerstats
+boxscoreadvancedv2
+Add Fields
+Usage rate (real-time vs season)
+Touches / time of possession
+Shot distance
+Catch & shoot vs pull-up
+Why
+Current model assumes static efficiency
+Reality = role shifts mid-game
+Impact
+Fixes false overs when usage drops
+Identifies hidden unders (bench role)
+2. Defensive Matchup Data
+Source
+NBA Stats: leaguedashteamstats
+Optional: Third-party matchup datasets
+Add Fields
+Defensive rating vs position
+Opponent pace allowed
+Rebound rate allowed
+Why
+Defense is currently underweighted
+Impact
+Fixes inflated projections vs elite defenses
+Sharpens PRA / rebound props
+3. On/Off + Rotation Data (EDGE DRIVER)
+Source
+NBA Stats API
+pbpstats (optional advanced)
+Add Fields
+On/off court usage
+Lineup combinations
+Minutes volatility
+Why
+Injuries + rotations = biggest edge in NBA betting
+Impact
+Detects hidden usage spikes
+Prevents overvaluing starters losing minutes
+4. Closing Line / Market Movement (OPTIONAL BUT POWERFUL)
+Source
+Odds API historical snapshots
+Add Fields
+Opening line
+Current line
+Line movement %
+Why
+Market movement = sharp signal proxy
+Impact
+Avoids betting into sharp resistance
+Adds confidence weighting
+5. Referee Data (UNDERRATED EDGE)
+Source
+NBA referee assignments
+Add Fields
+Foul rate
+FT rate per game
+Impact
+Points props (FT heavy games)
+Pace adjustments
+NCAAB ENGINE — DATA EXPANSION (MOST IMPORTANT)
+🔴 CURRENT GAP
+
+You are running:
+
+Possession model
+Score-based projections
+
+You are missing:
+
+Efficiency truth
+Tempo variance
+Team identity
+✅ ADD THESE APIs
+1. KenPom / Efficiency Data (CRITICAL)
+Source
+KenPom (paid)
+BartTorvik (free alternative)
+Add Fields
+Offensive efficiency
+Defensive efficiency
+Tempo
+Luck factor
+Why
+NCAAB without efficiency = blind model
+Impact
+Fixes totals massively
+Removes fake pace inflation
+2. Shot Quality / eFG Data
+Source
+BartTorvik / Haslametrics
+Add Fields
+eFG%
+3P rate
+Rim vs perimeter distribution
+Impact
+Detects regression candidates
+Prevents overreaction to hot shooting
+3. Foul Rate + FT Dependency
+Source
+NCAA stats
+Add Fields
+FT rate
+Foul rate per possession
+Why
+End-of-game fouling = biggest total distortion
+Impact
+Critical for 2H totals (your focus)
+4. Lineup / Injury Data (HUGE EDGE)
+Source
+Rotowire / scraping / manual feed
+Add Fields
+Starter status
+Minutes share
+Impact
+NCAAB lines lag injuries heavily
+Major edge opportunity
+5. 2H Market Data (YOU MUST ADD)
+Source
+Odds API
+Add Fields
+2H total
+2H spread
+Impact
+Enables real 2H engine (your requirement)
+MLB ENGINE — DATA EXPANSION (MOST UPSIDE)
+🔴 CURRENT GAP
+
+You have:
+
+Basic stat feed
+Savant partial
+
+You’re missing:
+
+Pitch-level context
+Bullpen impact
+Batter vs pitch type
+✅ ADD THESE APIs
+1. FULL BASEBALL SAVANT (NON-NEGOTIABLE)
+Source
+Baseball Savant API
+Add Fields
+xBA (expected batting avg)
+xSLG
+Hard hit %
+Barrel %
+Why
+Current model uses results
+You need expected outcomes
+Impact
+Identifies unlucky hitters (edge)
+Avoids chasing noise
+2. Pitch-Level Data
+Source
+Savant
+Add Fields
+Pitch mix %
+Velocity drop
+Spin rate
+Why
+Pitcher fatigue = massive signal
+Impact
+Strikeout props
+Hits allowed
+3. Batter vs Pitch Type
+Source
+Savant splits
+Add Fields
+Performance vs fastball/slider/etc
+Impact
+Matchup-specific edges
+Massive for props
+4. Bullpen Data (CRITICAL)
+Source
+MLB Stats API
+Add Fields
+Bullpen ERA
+Usage last 3 days
+Fatigue
+Why
+Late-game props depend on bullpen, not starter
+5. Weather + Park Factors
+Source
+Weather API + Statcast park factors
+Add Fields
+Wind direction
+Park HR factor
+Impact
+HR props
+Total bases
+3. UNIVERSAL DATA YOU SHOULD ADD (ALL SPORTS)
+1. ODDS AGGREGATION LAYER (MANDATORY)
+
+You must normalize:
+
+{
+  medianLine,
+  bestOver,
+  bestUnder,
+  lineVariance,
+  booksAvailable
+}
+2. HISTORICAL RESULT TRACKING
+
+You already started this — expand it:
+
+Add
+Closing line vs your line
+CLV (closing line value)
+Why
+CLV = true model validation
+3. LATENCY + TIMESTAMP TRACKING
+
+Add to every output:
+
+{
+  dataFreshnessMs,
+  oddsTimestamp,
+  engineTimestamp
+}
+4. PRIORITY ORDER (DO THIS EXACTLY)
+TIER 1 (IMMEDIATE — BIGGEST IMPACT)
+Odds API (multi-book)
+NCAAB efficiency (KenPom/BartTorvik)
+MLB Savant full integration
+NBA usage + rotation data
+TIER 2
+Defensive matchup (NBA)
+Bullpen + pitch data (MLB)
+2H market wiring (NCAAB)
+TIER 3
+Line movement tracking
+Referee data
+Advanced splits
+5. FINAL TRUTH (IMPORTANT)
+
+Right now your models are:
+
+Good structure + incomplete inputs
+
+After this upgrade they become:
+
+Market-aware + context-aware + predictive
