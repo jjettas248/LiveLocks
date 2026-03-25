@@ -3090,6 +3090,44 @@ export default function Dashboard() {
                                     </div>
                                   );
                                 }
+                                // If the engine has plays but filters hide all of them,
+                                // fall back to the lowest available tier (all unfiltered plays)
+                                // rather than showing a blank empty state.
+                                if (group.plays.length > 0) {
+                                  const fallbackPlays = filterByBook(group.plays, "all");
+                                  if (fallbackPlays.length > 0) {
+                                    return (
+                                      <div>
+                                        <div className="flex items-center justify-between mb-2">
+                                          <p className="text-xs text-muted-foreground/70 italic">Showing all available plays — no plays match current filters.</p>
+                                          <button
+                                            data-testid="button-clear-filters-fallback"
+                                            onClick={() => { setSlateFilterProp("all"); setSlateFilterProb("all"); setNbaBookFilter("all"); }}
+                                            className="text-xs text-primary hover:underline"
+                                          >
+                                            Clear filters
+                                          </button>
+                                        </div>
+                                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                          {fallbackPlays.slice(0, isFreeUser ? visibleEdgeLimit : fallbackPlays.length).map((play: any, idx: number) => {
+                                            const isLocked = isFreeUser && idx >= visibleEdgeLimit;
+                                            return (
+                                              <div
+                                                key={`fallback-${play.playerId ?? play.playerName}-${play.statType}`}
+                                                data-testid={`play-card-fallback-${idx}`}
+                                                className={`rounded-xl border border-border/60 bg-card p-3 ${isLocked ? "opacity-50 pointer-events-none" : ""}`}
+                                              >
+                                                <p className="text-xs font-semibold text-foreground">{play.playerName}</p>
+                                                <p className="text-[10px] text-muted-foreground">{play.statType} · {play.betDirection?.toUpperCase()} {play.line}</p>
+                                                <p className="text-xs font-bold text-primary mt-1">{Math.round(play.probability)}%</p>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+                                }
                                 const activePropFilter = slateFilterProp !== "all";
                                 const activeConfFilter = slateFilterProb !== "all";
                                 const filterDesc = [

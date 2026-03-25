@@ -2011,8 +2011,13 @@ export async function registerRoutes(
         `overSignals=${overSignals} underSignals=${underSignals} ` +
         `noSignals=${totalAttempted - overSignals - underSignals}`
       );
+      console.log(`[QUICK VIEW DEBUG] live-signals total engine plays: ${allSignals.length}`);
+      console.log(`[QUICK VIEW DEBUG] live-signals final rendered: ${allSignals.length} (no further filtering)`);
 
-      allSignals.sort((a, b) => b.edge - a.edge);
+      allSignals.sort((a, b) => {
+        if (b.edge !== a.edge) return b.edge - a.edge;
+        return b.probability - a.probability;
+      });
       liveSignalsCache.set(gameId, { ts: Date.now(), signals: allSignals, engineOutput });
       res.json({ signals: allSignals, engineOutput });
     } catch (e) {
@@ -2164,6 +2169,9 @@ export async function registerRoutes(
       const oddsCache = new Map<string, Map<string, number | null>>();
 
       const allPlays: any[] = [];
+      const volatilePlays: any[] = []; // Plays suppressed by degraded-line VALUE-tier filter — used in low-supply mode
+      console.log(`[QUICK VIEW DEBUG] halftime games detected: ${halftimeGames.length} (${halftimeGames.map(g => `${g.awayTeamAbbr}@${g.homeTeamAbbr}`).join(", ")})`);
+      console.log(`[QUICK VIEW DEBUG] data source: same calculateProbability engine as main plays feed (/api/live-signals)`);
       const ALL_STAT_CONFIGS: Array<{ statType: string; components: string[] }> = [
         { statType: "points",      components: ["points"] },
         { statType: "rebounds",    components: ["rebounds"] },
@@ -2427,31 +2435,31 @@ export async function registerRoutes(
                   liveFg3a: htLiveFg3a,
                 });
 
-                // Minimum edge threshold of 10 (was 5). The tighter filter eliminates
-                // marginal 55-65% signals that were padding the 70-79% display bucket
-                // without genuine statistical edge after the regression corrections above.
                 let edge = Math.abs(result.probability - 50);
-                if (edge < 10) continue;
+
+                // Skip plays with edge below absolute minimum (< 6) — not actionable
+                if (edge < 6) continue;
 
                 // Confidence tier reduction for degraded lines:
-                // ELITE (edge>=20) → STRONG (edge 15-19), STRONG → VALUE (edge 10-14), VALUE → suppress
+                // ELITE (edge>=20) → STRONG (edge 15-19), STRONG → VALUE (edge 10-14), VALUE → volatile pool
                 // This prevents a stale line from appearing as a high-confidence signal.
+                let isVolatile = false;
                 if (lineIsDegraded) {
                   if (edge >= 20) {
                     edge = Math.min(edge - 5, 19); // ELITE → STRONG
                   } else if (edge >= 15) {
                     edge = Math.min(edge - 5, 14); // STRONG → VALUE
                   } else {
-                    // VALUE tier — suppress degraded plays with minimum edge
-                    console.log(`[ODDS FALLBACK] Degraded VALUE-tier play suppressed for ${playerName} (${statType})`);
-                    continue;
+                    // VALUE tier with degraded line — move to volatile pool for low-supply mode
+                    console.log(`[QUICK VIEW DEBUG][ODDS FALLBACK] Degraded VALUE-tier play moved to volatile pool for ${playerName} (${statType})`);
+                    isVolatile = true;
                   }
                 }
 
                 const cacheKey2 = `${playerName}|${statType}`;
                 const oddsEntry2 = oddsPlayerCache.get(cacheKey2);
 
-                allPlays.push({
+                const playEntry = {
                   gameId: game.gameId,
                   homeTeamAbbr: game.homeTeamAbbr,
                   awayTeamAbbr: game.awayTeamAbbr,
@@ -2475,7 +2483,12 @@ export async function registerRoutes(
                   expectedTotal: result.expectedTotal,
                   betDirection: result.probability > 50 ? "over" : "under",
                   isDegraded: lineIsDegraded,
-                });
+                };
+                if (isVolatile) {
+                  volatilePlays.push(playEntry);
+                } else {
+                  allPlays.push(playEntry);
+                }
               } catch (calcErr2: any) {
                 console.warn(`[NBA][halftime][engineError] player=${dbPlayer?.name ?? playerName} stat=${statType} error=${calcErr2?.message ?? String(calcErr2)}`);
               }
@@ -2484,14 +2497,49 @@ export async function registerRoutes(
         }
       }
 
-      // Balance OVER/UNDER play selection — split into overs and unders,
-      // take up to 10 from each, then merge for final ranking.
-      const overs = allPlays.filter(p => p.betDirection === "over").sort((a, b) => b.edge - a.edge).slice(0, 10);
-      const unders = allPlays.filter(p => p.betDirection === "under").sort((a, b) => b.edge - a.edge).slice(0, 10);
-      const balancedPlays = [...overs, ...unders];
-      // Sort merged list by edge descending (highest edge = most confident call)
-      balancedPlays.sort((a, b) => b.edge - a.edge);
-      const topPlays = balancedPlays.slice(0, 20);
+      console.log(`[QUICK VIEW DEBUG] total engine plays after validation: ${allPlays.length} (volatile pool: ${volatilePlays.length})`);
+
+      // Tiered selection: Tier A (edge >= 15), Tier B (edge >= 10), Tier C (edge >= 6)
+      // Always include Tier A + B; include Tier C only if combined count < 8
+      const tierA = allPlays.filter(p => p.edge >= 15);
+      const tierB = allPlays.filter(p => p.edge >= 10 && p.edge < 15);
+      const tierC = allPlays.filter(p => p.edge >= 6 && p.edge < 10);
+
+      let selectedPlays = [...tierA, ...tierB];
+      console.log(`[QUICK VIEW DEBUG] after tiering (A+B): ${selectedPlays.length} plays (A=${tierA.length}, B=${tierB.length}, C=${tierC.length})`);
+
+      if (selectedPlays.length < 8) {
+        selectedPlays = [...selectedPlays, ...tierC];
+        console.log(`[QUICK VIEW DEBUG] after adding Tier C: ${selectedPlays.length} plays`);
+      }
+
+      // Low-supply mode: if still below 6, widen the probability band by including
+      // volatile plays (degraded-line VALUE-tier plays previously suppressed) and
+      // all edge >= 6 plays from allPlays. This relaxes quality constraints to
+      // ensure the display is never empty when the engine has produced valid plays.
+      if (selectedPlays.length < 6) {
+        selectedPlays = [...allPlays, ...volatilePlays];
+        console.log(`[QUICK VIEW DEBUG] low-supply mode activated — widened to include volatile plays, pool=${selectedPlays.length}`);
+      }
+
+      // Deduplicate by playerId+statType (keeps best edge for each unique combo)
+      const dedupMap = new Map<string, typeof selectedPlays[0]>();
+      for (const p of selectedPlays) {
+        const key = `${p.playerId ?? p.playerName}|${p.statType}`;
+        const existing = dedupMap.get(key);
+        if (!existing || p.edge > existing.edge) dedupMap.set(key, p);
+      }
+      selectedPlays = Array.from(dedupMap.values());
+      console.log(`[QUICK VIEW DEBUG] after dedup (player+market): ${selectedPlays.length} plays`);
+
+      // Sort by edge DESC, then probability DESC
+      selectedPlays.sort((a, b) => {
+        if (b.edge !== a.edge) return b.edge - a.edge;
+        return b.probability - a.probability;
+      });
+
+      const topPlays = selectedPlays.slice(0, 20);
+      console.log(`[QUICK VIEW DEBUG] final rendered: ${topPlays.length} plays`);
       res.json({ plays: topPlays });
       // Fire-and-forget: alerts + persist plays for analytics
       checkAndSendAlerts(topPlays, storage).catch(console.warn);
