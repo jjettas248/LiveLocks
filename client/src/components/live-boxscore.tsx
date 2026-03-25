@@ -220,16 +220,14 @@ export function LiveBoxscore({
           </div>
         ) : liveStats && playedStats.length > 0 ? (
           <div>
-            {/* Signal legend — only shown when halftime plays exist */}
-            {(halftimePlaysData?.plays?.length ?? 0) > 0 && (
-              <div className="px-4 pt-2 pb-1 flex items-center gap-3 text-[10px] text-muted-foreground/70 border-b border-border/20 flex-wrap">
-                <span className="font-medium uppercase tracking-wider">Signal Key:</span>
-                <span className="flex items-center gap-1"><span style={{ color: "#22c55e" }}>●</span> Over ≥85%</span>
-                <span className="flex items-center gap-1"><span style={{ color: "#ef4444" }}>●</span> Under ≥85%</span>
-                <span className="flex items-center gap-1"><span style={{ color: "#eab308" }}>●</span> 70–84%</span>
-                <span className="flex items-center gap-1"><span style={{ color: "#00d4aa" }}>●</span> 60–69%</span>
-              </div>
-            )}
+            {/* Signal legend — always rendered when box score is visible; highlights only appear when halftime plays exist */}
+            <div className="px-4 pt-2 pb-1 flex items-center gap-3 text-[10px] text-muted-foreground/70 border-b border-border/20 flex-wrap">
+              <span className="font-medium uppercase tracking-wider">Signal Key:</span>
+              <span className="flex items-center gap-1"><span style={{ color: "#22c55e" }}>●</span> Over ≥85%</span>
+              <span className="flex items-center gap-1"><span style={{ color: "#ef4444" }}>●</span> Under ≥85%</span>
+              <span className="flex items-center gap-1"><span style={{ color: "#eab308" }}>●</span> 70–84%</span>
+              <span className="flex items-center gap-1"><span style={{ color: "#00d4aa" }}>●</span> 60–69%</span>
+            </div>
 
             {/* Filter + Sort Controls */}
             <div className="px-4 py-2 border-b border-border/40 flex items-center gap-2">

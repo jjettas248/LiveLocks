@@ -264,6 +264,88 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
 
   const books = (data.bookmakers ?? []).map((b: any) => b.key).join(", ");
   console.log(`[Odds] Fetched ${inPlay ? "LIVE" : "pre-game"} ${marketKey} odds for event ${oddsEventId}: bookmakers = ${books || "none"}`);
+
+  // Audit second-half market ingestion when fetching in-play lines
+  if (inPlay) {
+    const bookmakersList: any[] = Array.isArray(data.bookmakers) ? data.bookmakers : [];
+    const marketKeysFound: string[] = [];
+    // Track how many bookmakers actually have the requested market key present with outcomes
+    let booksWithRequestedMarket = 0;
+    let totalPlayerOutcomes = 0;
+    // Track validation rejections: markets found but with 0 outcomes (possible period encoding mismatch)
+    let booksWithMarketButNoOutcomes = 0;
+    // Collect sample period encoding from outcome descriptions/keys for diagnosis
+    const periodEncodingSamples: string[] = [];
+    for (const bm of bookmakersList) {
+      for (const market of (bm.markets ?? [])) {
+        if (!marketKeysFound.includes(market.key)) marketKeysFound.push(market.key);
+        const outcomes: any[] = market.outcomes ?? [];
+        const outcomeCount = outcomes.length;
+        totalPlayerOutcomes += outcomeCount;
+        if (market.key === marketKey) {
+          if (outcomeCount > 0) {
+            booksWithRequestedMarket++;
+            // Sample period encoding: look for period/half hints in outcome descriptions or market key
+            if (periodEncodingSamples.length < 3) {
+              const sample = outcomes[0];
+              const periodHint = sample?.description ?? sample?.name ?? market.key;
+              if (periodHint && !periodEncodingSamples.includes(String(periodHint))) {
+                periodEncodingSamples.push(String(periodHint));
+              }
+            }
+          } else {
+            booksWithMarketButNoOutcomes++;
+          }
+        }
+      }
+    }
+    // Determine if the 2H market is genuinely absent from source vs present but empty
+    const absentFromSource = bookmakersList.length === 0;
+    const marketPresentWithData = booksWithRequestedMarket > 0;
+    // Diagnose period encoding: does marketKey contain a 2h/half/period suffix vs not?
+    const has2hSuffix = marketKey.includes("2h") || marketKey.includes("_half") || marketKey.includes("second");
+    const periodEncodingNote = has2hSuffix
+      ? `Market key has explicit 2H suffix ('${marketKey}') — check if source uses different period encoding`
+      : `Market key has no period suffix ('${marketKey}') — in_play=true parameter used to request live/2H-adjusted lines`;
+    const source = absentFromSource ? "absent_from_source"
+      : marketPresentWithData ? "present_with_outcomes"
+      : booksWithMarketButNoOutcomes > 0 ? "present_but_outcomes_empty_validation_reject"
+      : "present_but_market_key_not_matched";
+    console.log("[SECOND_HALF_MARKET_AUDIT]", {
+      eventId: oddsEventId,
+      marketKey,
+      inPlay: true,
+      bookmakerCount: bookmakersList.length,
+      marketKeysFound,
+      booksWithRequestedMarket,
+      booksWithMarketButNoOutcomes,
+      totalPlayerOutcomes,
+      periodEncodingSamples,
+      periodEncodingNote,
+      absent: absentFromSource,
+    });
+    console.log("[SECOND_HALF_MARKET_RESULT]", {
+      eventId: oddsEventId,
+      marketKey,
+      totalMarkets: booksWithRequestedMarket + booksWithMarketButNoOutcomes,
+      secondHalfMarkets: booksWithRequestedMarket,
+      absenceConfirmed: absentFromSource,
+      eligible2HMarketCount: booksWithRequestedMarket,
+      bookmakerCount: bookmakersList.length,
+      validationRejections: booksWithMarketButNoOutcomes,
+      totalPlayerOutcomes,
+      source,
+      periodEncodingNote,
+      diagnosis: absentFromSource
+        ? "No bookmakers returned for in-play fetch — 2H lines unavailable from source"
+        : booksWithMarketButNoOutcomes > 0 && !marketPresentWithData
+        ? `Market key '${marketKey}' found in ${booksWithMarketButNoOutcomes} book(s) but 0 outcomes — validation rejection or market suspended`
+        : !marketPresentWithData
+        ? `Bookmakers returned but market key '${marketKey}' not found — possible key mismatch (found keys: ${marketKeysFound.slice(0, 5).join(", ")})`
+        : `${booksWithRequestedMarket} book(s) have live lines for '${marketKey}'`,
+    });
+  }
+
   return data;
 }
 

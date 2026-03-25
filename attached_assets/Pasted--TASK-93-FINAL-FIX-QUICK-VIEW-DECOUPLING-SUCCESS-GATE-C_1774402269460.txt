@@ -1,0 +1,174 @@
+# TASK #93 FINAL FIX: QUICK VIEW DECOUPLING + SUCCESS GATE CORRECTION
+
+## OBJECTIVE:
+Resolve final validation failures by:
+1) fully decoupling Quick View from 2H gating
+2) correcting the second-half success condition
+3) adding aggregated halftime detection proof
+4) confirming single active pipeline
+
+This is a PATCH — not a redesign.
+
+---
+
+# STEP 1 — REMOVE QUICK VIEW HARD GATES (CRITICAL)
+
+FILES:
+- dashboard.tsx
+- live-boxscore.tsx
+
+FIND and REMOVE any logic like:
+
+```ts
+if (!isHalftime) return null;
+if (!hasSecondHalfLines) return null;
+if (!plays.length) return null;
+
+OR any equivalent early return tied to:
+
+halftime
+2H markets
+empty derived datasets
+REPLACE WITH:
+
+Quick View must ALWAYS render using box score input.
+
+Only guard for:
+
+if (!gameData) return null;
+ADD RENDER ASSERT:
+console.log("[QUICK_VIEW_RENDER_ASSERT]", {
+  inputGames: games?.length ?? 0,
+  renderedGames: renderedGames?.length ?? 0
+});
+STEP 2 — FIX SECOND HALF SUCCESS CONDITION
+CURRENT (WRONG):
+twoHMarketCount > 0
+REPLACE WITH:
+const secondHalfConditionMet =
+  secondHalfMarkets.length > 0 ||
+  secondHalfSourceAbsenceConfirmed === true;
+DEFINE absence detection:
+
+In odds parsing:
+
+const secondHalfSourceAbsenceConfirmed =
+  allMarketsChecked === true &&
+  secondHalfMarkets.length === 0;
+ADD LOG:
+console.log("[SECOND_HALF_MARKET_RESULT]", {
+  totalMarkets: parsedMarkets.length,
+  secondHalfMarkets: secondHalfMarkets.length,
+  absenceConfirmed: secondHalfSourceAbsenceConfirmed
+});
+STEP 3 — ADD AGGREGATED HALFTIME PROOF
+
+After detection:
+
+const halftimeGames = games.filter(g => g.isHalftime);
+
+console.log("[HALFTIME_DETECTION_RESULT]", {
+  totalGames: games.length,
+  halftimeGames: halftimeGames.length,
+  ids: halftimeGames.map(g => g.id)
+});
+STEP 4 — SINGLE PIPELINE VERIFICATION
+
+At route entry:
+
+console.log("[HT_ENDPOINT_HIT]", {
+  path: req.path,
+  query: req.query,
+  timestamp: Date.now()
+});
+CONFIRM ONLY ONE ROUTE EXISTS
+
+Search:
+
+/api/halftime-plays
+
+If multiple:
+
+log all
+identify active
+ignore others
+STEP 5 — CORRECT SUCCESS GATE
+FINAL LOGIC:
+const successGate = {
+  halftimeDetected: halftimeGames.length > 0,
+  secondHalfValid: secondHalfConditionMet,
+  serverHasPlays: plays.length > 0,
+  clientReceived: false, // NEVER assume true
+  quickViewRendered: false // NEVER assume true
+};
+FINAL STATUS RULE:
+ALWAYS default:
+console.log("STATUS: HALFTIME PIPELINE STILL BLOCKED — REASON: awaiting full validation");
+ONLY emit RESTORED if ALL are proven:
+halftimeDetected
+secondHalfValid
+serverHasPlays
+clientReceived === true
+quickViewRendered === true
+DO NOT:
+Do not require 2H markets to exist
+Do not block Quick View on halftime
+Do not assume client success from server
+Do not add new endpoints
+Do not modify engine math
+SUCCESS CRITERIA:
+
+You PASS only if:
+
+Quick View renders regardless of 2H
+[SECOND_HALF_MARKET_RESULT].absenceConfirmed works
+[HALFTIME_DETECTION_RESULT] exists with ids
+[HT_ENDPOINT_HIT] proves active route
+System no longer falsely requires 2H markets
+STATUS remains BLOCKED unless ALL conditions proven
+OUTPUT:
+
+Return:
+
+exact removed Quick View guards
+updated success gate logic
+[HALFTIME_DETECTION_RESULT] log sample
+[SECOND_HALF_MARKET_RESULT] log sample
+confirmation Quick View renders without 2H
+final STATUS output
+
+---
+
+# 🧠 What this fixes (cleanly)
+
+| Issue | Fix |
+|------|-----|
+| Quick View empty | Remove gating |
+| False 2H dependency | Add absence condition |
+| No halftime proof | Add aggregated log |
+| Pipeline ambiguity | Endpoint verification |
+| Premature success | Strict gate |
+
+---
+
+# Expected outcome after this patch
+
+### UI:
+- Quick View works immediately
+- Halftime games appear
+
+### Logs:
+- show whether 2H exists OR not (both valid)
+
+### Status:
+- likely still **BLOCKED** (and that’s OK)
+
+---
+
+# Bottom line
+
+You are **one patch away**.
+
+This is no longer debugging — this is **compliance with the contract**.
+
+Run this exactly and your validation will pass.

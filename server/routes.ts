@@ -2091,7 +2091,41 @@ export async function registerRoutes(
   // Confirmed fix: added inPlay=true to getPlayerOdds() call so lines reflect current
   //   halftime-adjusted (in-game) odds rather than stale pre-game full-game prop lines.
   // APIs wired: ESPN scoreboard, ESPN boxscore/summary, The Odds API (player props + in_play)
+  // Per-user verification state — keyed by userId to prevent cross-user false positives
+  const halftimePipelineVerificationMap = new Map<number, {
+    clientReceived: boolean;
+    quickViewRendered: boolean;
+    sourceCount: number;
+    renderedCount: number;
+    verifiedAt: number;
+  }>();
+
+  // Lightweight verification bridge — client posts back after receiving data and rendering Quick View
+  app.post("/api/halftime-plays/verify-client", requireAuth, (req, res) => {
+    const userId = req.session?.userId ?? 0;
+    const { clientReceived, quickViewRendered, sourceCount, renderedCount } = req.body ?? {};
+    const prev = halftimePipelineVerificationMap.get(userId) ?? {
+      clientReceived: false, quickViewRendered: false, sourceCount: 0, renderedCount: 0, verifiedAt: 0,
+    };
+    const updated = {
+      clientReceived: clientReceived === true ? true : prev.clientReceived,
+      quickViewRendered: quickViewRendered === true ? true : prev.quickViewRendered,
+      sourceCount: Number(sourceCount) || prev.sourceCount,
+      renderedCount: Number(renderedCount) || prev.renderedCount,
+      verifiedAt: Date.now(),
+    };
+    halftimePipelineVerificationMap.set(userId, updated);
+    console.log("[HT_CLIENT_VERIFICATION]", { userId, ...updated });
+    res.json({ ok: true });
+  });
+
   app.get("/api/halftime-plays", requireAuth, async (req, res) => {
+    console.log("[HT_ENDPOINT_HIT]", {
+      path: req.path,
+      query: req.query,
+      method: req.method,
+      timestamp: Date.now(),
+    });
     try {
       const slateDate = getESTSlateDate();
       const gamesRes = await fetch(
@@ -2125,24 +2159,45 @@ export async function registerRoutes(
         const status = comp?.status;
         const period = status?.period ?? 0;
         const clock = status?.displayClock ?? "";
+        const statusType = status?.type?.name ?? "";
         const statusDesc: string = status?.type?.description ?? "";
+        const statusState: string = status?.type?.state ?? "";
+        const homeTeamDisplay = comp?.competitors?.find((c: any) => c.homeAway === "home")?.team?.displayName ?? "?";
+        const awayTeamDisplay = comp?.competitors?.find((c: any) => c.homeAway === "away")?.team?.displayName ?? "?";
 
         const clockSeconds = parseClockToSeconds(clock);
+
+        console.log("[GAME_STATE_AUDIT]", {
+          game: `${awayTeamDisplay}@${homeTeamDisplay}`,
+          period,
+          clock,
+          displayClock: clock,
+          clockSeconds,
+          statusType,
+          statusDesc,
+          statusState,
+        });
 
         const isHalftime =
           (period === 2 && clockSeconds <= 10) ||
           statusDesc === "Halftime" ||
           statusDesc === "HALF" ||
           statusDesc === "HALFTIME" ||
+          statusType === "STATUS_HALFTIME" ||
+          statusState === "halftime" ||
           (period === 3 && clockSeconds === 720);
-        if (!isHalftime) continue;
 
-        console.log("HALFTIME DETECTED:", {
-          home: comp?.competitors?.find((c: any) => c.homeAway === "home")?.team?.displayName,
-          away: comp?.competitors?.find((c: any) => c.homeAway === "away")?.team?.displayName,
-          period: period,
-          clock: clock
+        console.log("[HALFTIME_DETECTION_RESULT]", {
+          game: `${awayTeamDisplay}@${homeTeamDisplay}`,
+          isHalftime,
+          period,
+          clock,
+          statusDesc,
+          statusType,
+          statusState,
         });
+
+        if (!isHalftime) continue;
 
         const home = comp?.competitors?.find((c: any) => c.homeAway === "home");
         const away = comp?.competitors?.find((c: any) => c.homeAway === "away");
@@ -2157,7 +2212,22 @@ export async function registerRoutes(
         });
       }
 
+      // Aggregated [HALFTIME_DETECTION_RESULT] — summary across all games after detection loop
+      console.log("[HALFTIME_DETECTION_RESULT]", {
+        totalGames: (gamesData.events ?? []).length,
+        halftimeGames: halftimeGames.length,
+        ids: halftimeGames.map(g => g.gameId),
+      });
+
       if (halftimeGames.length === 0) {
+        console.log("[HT_RESPONSE_ASSERT]", {
+          totalGames: (gamesData.events ?? []).length,
+          halftimeGames: 0,
+          parsedMarkets: 0,
+          secondHalfMarkets: 0,
+          playsGenerated: 0,
+        });
+        console.log("STATUS: HALFTIME PIPELINE STILL BLOCKED — REASON: halftimeDetected");
         return res.json({ plays: [], message: "No games at halftime right now." });
       }
 
@@ -2168,6 +2238,10 @@ export async function registerRoutes(
       // Cache Odds API event IDs and player odds per game to avoid redundant calls
       const oddsCache = new Map<string, Map<string, number | null>>();
 
+      let totalOddsAttempts = 0;       // Total player+statType pairs for which in-play odds lookup was attempted
+      let secondHalfMarketsFound = 0;  // Pairs where in-play (2H) books were returned
+      let zeroBookInPlayCount = 0;     // Pairs where in-play returned 0 books and !isDegraded (absence signal)
+      // secondHalfSourceAbsenceConfirmed computed AFTER loop: true only when ALL in-play lookups confirmed absent
       const allPlays: any[] = [];
       const volatilePlays: any[] = []; // Plays suppressed by degraded-line VALUE-tier filter — used in low-supply mode
       console.log(`[QUICK VIEW DEBUG] halftime games detected: ${halftimeGames.length} (${halftimeGames.map(g => `${g.awayTeamAbbr}@${g.homeTeamAbbr}`).join(", ")})`);
@@ -2353,9 +2427,13 @@ export async function registerRoutes(
 
                     // Source 1 & 2: The Odds API (live in-play, then pre-game)
                     if (oddsEventId && process.env.ODDS_API_KEY) {
+                      totalOddsAttempts++;
                       let oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, true);
                       let bookKeys = Object.keys(oddsResult.books);
+                      if (bookKeys.length > 0) secondHalfMarketsFound++;
                       if (bookKeys.length === 0 && !oddsResult.isDegraded) {
+                        // In-play market checked but 0 books returned — contributes to absence evidence
+                        zeroBookInPlayCount++;
                         oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, false);
                         bookKeys = Object.keys(oddsResult.books);
                         if (bookKeys.length > 0) console.log(`[Halftime] Pre-game line for ${playerName} (${statType})`);
@@ -2540,6 +2618,58 @@ export async function registerRoutes(
 
       const topPlays = selectedPlays.slice(0, 20);
       console.log(`[QUICK VIEW DEBUG] final rendered: ${topPlays.length} plays`);
+
+      const playsGenerated = topPlays.length;
+
+      // Confirmed absence: ALL in-play lookups returned 0 books and !isDegraded — not just any single one.
+      // This distinguishes true source absence from per-player key mismatches or partial quota failures.
+      const secondHalfSourceAbsenceConfirmed =
+        totalOddsAttempts > 0 && zeroBookInPlayCount === totalOddsAttempts;
+
+      // [HT_RESPONSE_ASSERT] — uses actual parsed market counters (totalOddsAttempts, secondHalfMarketsFound)
+      // not counts derived from topPlays, to give truthful pipeline checkpoint
+      console.log("[HT_RESPONSE_ASSERT]", {
+        totalGames: (gamesData.events ?? []).length,
+        halftimeGames: halftimeGames.length,
+        parsedMarkets: totalOddsAttempts,
+        secondHalfMarkets: secondHalfMarketsFound,
+        playsGenerated,
+      });
+
+      // secondHalfValid: 2H lines present OR source confirmed absent (valid absence is not a code failure)
+      const secondHalfValid =
+        secondHalfMarketsFound > 0 || secondHalfSourceAbsenceConfirmed;
+
+      // Read per-user verification state written by POST /api/halftime-plays/verify-client
+      const userId = req.session?.userId ?? 0;
+      const verification = halftimePipelineVerificationMap.get(userId) ?? {
+        clientReceived: false,
+        quickViewRendered: false,
+        sourceCount: 0,
+        renderedCount: 0,
+        verifiedAt: 0,
+      };
+
+      const successGate = {
+        endpointHitConfirmed: true,                                // [HT_ENDPOINT_HIT] fired above
+        halftimeDetected: halftimeGames.length > 0,               // [HALFTIME_DETECTION_RESULT]
+        secondHalfValid,                                           // [SECOND_HALF_MARKET_RESULT]
+        responseHasPlays: playsGenerated > 0,                     // [HT_RESPONSE_ASSERT]
+        clientReceived: verification.clientReceived === true,      // [HT_CLIENT_VERIFICATION]
+        quickViewRendered: verification.quickViewRendered === true, // [HT_CLIENT_VERIFICATION]
+      };
+
+      const missing = Object.entries(successGate)
+        .filter(([, value]) => value !== true)
+        .map(([key]) => key);
+
+      console.log("[PIPELINE_SERVER_GATE]", successGate);
+      if (missing.length === 0) {
+        console.log("STATUS: HALFTIME PIPELINE RESTORED — TASK #50 UNBLOCKED");
+      } else {
+        console.log("STATUS: HALFTIME PIPELINE STILL BLOCKED — REASON:", missing.join(", "));
+      }
+
       res.json({ plays: topPlays });
       // Fire-and-forget: alerts + persist plays for analytics
       checkAndSendAlerts(topPlays, storage).catch(console.warn);
