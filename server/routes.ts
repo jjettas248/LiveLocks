@@ -1969,19 +1969,38 @@ export async function registerRoutes(
                 liveFg3a,
               });
 
-              // SIGNAL EVALUATION CONTRACT — evaluation order is strict, do not reorder:
-              // Step 1: finite guard — must run before any arithmetic on result.probability
+              // SIGNAL EVALUATION CONTRACT — strict sequential continues.
+              // Do not reorder steps. Do not insert any side effects before step 5.
+              //
+              // Step 1: finite guard — must run before any arithmetic on result.probability.
+              // NaN arithmetic silently produces NaN, which would corrupt all downstream values.
               if (!Number.isFinite(result.probability)) continue;
 
-              // Step 2: compute edge — only after finite check
+              // Step 2: compute edge (only after finite check)
               const edge = Math.abs(result.probability - 50);
-              if (process.env.DEBUG_PIPELINE === "true") {
-                console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] engineOutput: player=${dbPlayer.name} stat=${statType} prob=${result.probability.toFixed(1)} edge=${edge.toFixed(1)} ${edge < 5 ? "skipReason=lowEdge" : "included=true"}`);
+
+              // Step 3: threshold gate — plays below minimum edge are not actionable
+              if (edge < 5) {
+                if (process.env.DEBUG_PIPELINE === "true") {
+                  console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] player=${dbPlayer.name} stat=${statType} prob=${result.probability.toFixed(1)} edge=${edge.toFixed(1)} skipReason=lowEdge`);
+                }
+                continue;
               }
 
-              // Populate engineOutput for ALL players with valid results (no edge filter).
-              // Fallback direction uses strict > 50 (NO_SIGNAL plays get "UNDER" — acceptable
-              // since they are never pushed to allSignals).
+              // Step 4a: explicit zero-edge exclusion — belt-and-suspenders, implied by step 3
+              // (prob===50 → edge===0 < 5) but required by evaluation contract.
+              if (result.probability === 50) continue;
+
+              // Step 4b: no-conviction guard — noSignal or NO_SIGNAL plays must never enter
+              // allSignals or engineOutput; they produce zero side effects.
+              if (result.noSignal || result.recommendedSide === "NO_SIGNAL") continue;
+
+              // Step 5: direction — derive from recommendedSide (strict > 50 / < 50 already
+              // applied in storage.calculateProbability). All continue guards have passed.
+              if (process.env.DEBUG_PIPELINE === "true") {
+                console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] player=${dbPlayer.name} stat=${statType} prob=${result.probability.toFixed(1)} edge=${edge.toFixed(1)} included=true`);
+              }
+
               const engineBetDirection: "OVER" | "UNDER" =
                 result.recommendedSide === "UNDER" ? "UNDER" :
                 result.recommendedSide === "OVER" ? "OVER" :
@@ -1995,25 +2014,16 @@ export async function registerRoutes(
                 statType,
               };
 
-              // Step 3 + 4: threshold gate, zero-edge exclusion, NO_SIGNAL/noSignal guard.
-              // All three skip conditions produce zero side effects on allSignals.
-              // Note: probability===50 → recommendedSide=NO_SIGNAL (engine contract),
-              // so the explicit check is belt-and-suspenders for the evaluation contract.
-              if (result.probability === 50 || result.noSignal || result.recommendedSide === "NO_SIGNAL") {
-                // Step 4: zero-edge or no-conviction — do not push, no side effects
-              } else if (edge >= 5) {
-                // Step 5: direction is already classified in recommendedSide (strict > 50 / < 50)
-                allSignals.push({
-                  playerName: dbPlayer.name,
-                  playerId: dbPlayer.id,
-                  statType,
-                  probability: result.displayConfidence ?? result.probability,
-                  betDirection: result.recommendedSide === "UNDER" ? "under" : "over",
-                  edge,
-                  line: liveLine,
-                  currentStat,
-                });
-              }
+              allSignals.push({
+                playerName: dbPlayer.name,
+                playerId: dbPlayer.id,
+                statType,
+                probability: result.displayConfidence ?? result.probability,
+                betDirection: result.recommendedSide === "UNDER" ? "under" : "over",
+                edge,
+                line: liveLine,
+                currentStat,
+              });
             } catch (calcErr: any) {
               console.warn(`[NBA][engineError] player=${dbPlayer?.name ?? playerName} stat=${statType} error=${calcErr?.message ?? String(calcErr)}`);
               if (process.env.DEBUG_PIPELINE === "true") {

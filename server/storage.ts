@@ -745,15 +745,17 @@ export class DatabaseStorage implements IStorage {
     }
 
     // ─── In-memory calc log ───────────────────────────────────────────────
-    // CALC LOG CONTRACT (STRICT):
-    // - Only store final, post-validation values: final probability, final edge, final direction.
-    // - Never store raw, intermediate, or pre-calibration values here.
-    // - Audit endpoints must treat calcLogEntries as the single source of truth.
-    // - Any future change to signal logic must update both the production handler
-    //   and this log push simultaneously.
-    // - Plays with recommendedSide="NO_SIGNAL" (probability===50, zero-edge) are excluded:
-    //   they must not appear in calcLogEntries so the audit log contains only valid signals.
-    if (recommendedSide !== "NO_SIGNAL") {
+    // CALC LOG CONTRACT (STRICT — DO NOT VIOLATE):
+    // - Only push final, post-calibration values (probability, edge, direction).
+    //   Never store raw, pre-calibration, or intermediate values.
+    // - Excluded plays (produce zero side effects — must NOT appear in calcLogEntries):
+    //     • noSignal === true: edgeVsBook < 3, displayConfidence < 55, or projection mismatch
+    //     • recommendedSide === "NO_SIGNAL": probability === 50, zero-edge
+    //   Both conditions are checked so that all "skipped" plays are excluded, matching the
+    //   skip behavior of the production signal evaluation path in routes.ts.
+    // - Audit endpoints must treat calcLogEntries as the single source of truth and must
+    //   never reimplement signal evaluation logic.
+    if (!noSignal && recommendedSide !== "NO_SIGNAL") {
       const finalProbability = Math.round(probability * 10) / 10;
       calcLogEntries.push({
         player: player.name,
