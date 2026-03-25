@@ -2573,6 +2573,18 @@ export async function registerRoutes(
                 const cacheKey2 = `${playerName}|${statType}`;
                 const oddsEntry2 = oddsPlayerCache.get(cacheKey2);
 
+                // NO_SIGNAL guard: skip plays where engine has no directional conviction
+                if (result.recommendedSide === "NO_SIGNAL") {
+                  console.log(`[HT_NO_SIGNAL] Skipping ${dbPlayer.name} (${statType}) — engine returned NO_SIGNAL`);
+                  continue;
+                }
+
+                // Use displayConfidence (always direction-correct, >= 50 for any valid signal)
+                // so filters, sorts, and client display all work symmetrically for OVER and UNDER.
+                // Raw result.probability (<50 for UNDER plays) is NOT sent to client.
+                const displayConfidence = (result as any).displayConfidence ?? result.probability;
+                const betDirection = (result as any).recommendedSide?.toLowerCase() ?? (result.probability > 50 ? "over" : "under");
+
                 const playEntry = {
                   gameId: game.gameId,
                   homeTeamAbbr: game.homeTeamAbbr,
@@ -2592,10 +2604,11 @@ export async function registerRoutes(
                   line: liveLine,
                   lineSource: "odds_api",
                   bookKeys: oddsEntry2?.bookKeys ?? [],
-                  probability: result.probability,
+                  probability: displayConfidence,
+                  rawProbability: result.probability,
                   edge,
                   expectedTotal: result.expectedTotal,
-                  betDirection: result.probability > 50 ? "over" : "under",
+                  betDirection,
                   isDegraded: lineIsDegraded,
                 };
                 if (isVolatile) {
@@ -2647,6 +2660,8 @@ export async function registerRoutes(
       console.log(`[QUICK VIEW DEBUG] after dedup (player+market): ${selectedPlays.length} plays`);
 
       // Sort by edge DESC, then probability DESC
+      // Both OVER and UNDER plays now have probability = displayConfidence (always >= 50)
+      // so the secondary sort is direction-neutral — no OVER/UNDER bias.
       selectedPlays.sort((a, b) => {
         if (b.edge !== a.edge) return b.edge - a.edge;
         return b.probability - a.probability;
@@ -2654,6 +2669,18 @@ export async function registerRoutes(
 
       const topPlays = selectedPlays.slice(0, 20);
       console.log(`[QUICK VIEW DEBUG] final rendered: ${topPlays.length} plays`);
+
+      // [HT_SORTED_TOP20] — confirms whether the edge sort is itself OVER/UNDER heavy
+      const sortedTop20 = topPlays.map(p => ({
+        player: p.playerName,
+        stat: p.statType,
+        dir: p.betDirection,
+        prob: p.probability,
+        edge: p.edge,
+      }));
+      const top20Over = topPlays.filter(p => p.betDirection === "over").length;
+      const top20Under = topPlays.filter(p => p.betDirection === "under").length;
+      console.log("[HT_SORTED_TOP20]", { total: topPlays.length, over: top20Over, under: top20Under, plays: sortedTop20 });
 
       const playsGenerated = topPlays.length;
 
@@ -2705,6 +2732,24 @@ export async function registerRoutes(
       } else {
         console.log("STATUS: HALFTIME PIPELINE STILL BLOCKED — REASON:", missing.join(", "));
       }
+
+      // [HT_RESPONSE_FINAL] — final plays leaving server: counts + 10-play sample
+      const finalOver = topPlays.filter(p => p.betDirection === "over").length;
+      const finalUnder = topPlays.filter(p => p.betDirection === "under").length;
+      console.log("[HT_RESPONSE_FINAL]", {
+        total: topPlays.length,
+        over: finalOver,
+        under: finalUnder,
+        sample: topPlays.slice(0, 10).map(p => ({
+          player: p.playerName,
+          stat: p.statType,
+          dir: p.betDirection,
+          prob: p.probability,
+          edge: p.edge,
+          proj: p.expectedTotal,
+          line: p.line,
+        })),
+      });
 
       res.json({ plays: topPlays });
       // Fire-and-forget: alerts + persist plays for analytics

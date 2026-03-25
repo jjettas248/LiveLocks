@@ -288,8 +288,9 @@ export default function Dashboard() {
       }
       const data = await res.json();
       const plays = data.plays ?? [];
-      console.log("[HT_CLIENT_ASSERT]", { received: plays.length });
-      // Post clientReceived verification (auto-scan path)
+      const autoScanOver = plays.filter((p: any) => p.betDirection === "over").length;
+      const autoScanUnder = plays.filter((p: any) => p.betDirection === "under").length;
+      console.log("[HT_CLIENT_FETCHED]", { source: "auto-scan", received: plays.length, over: autoScanOver, under: autoScanUnder });
       if (plays.length > 0) {
         fetch("/api/halftime-plays/verify-client", { credentials: "include",
           method: "POST",
@@ -301,6 +302,8 @@ export default function Dashboard() {
         }).catch(() => {/* fire-and-forget */});
       }
 
+      // With displayConfidence, probability is always direction-correct (>= 50 for any valid play).
+      // prob >= 65 now correctly includes both OVER and UNDER plays with sufficient confidence.
       const qualifiedPlays = plays
         .filter((p: any) => {
           const prob = parseFloat(p.probability);
@@ -330,7 +333,7 @@ export default function Dashboard() {
       const prob = parseFloat(best.probability);
       const line = parseFloat(best.line);
       const projection = parseFloat(best.projection ?? best.expectedTotal ?? "0");
-      const direction = best.betDirection?.toUpperCase() ?? (prob > 50 ? "OVER" : "UNDER");
+      const direction = best.betDirection?.toUpperCase() ?? "OVER";
       const edge = parseFloat(best.edge ?? "0");
 
       const elapsed = Date.now() - scanStart;
@@ -825,8 +828,9 @@ export default function Dashboard() {
   useEffect(() => {
     if (halftimePlaysData !== undefined) {
       const plays = halftimePlaysData.plays ?? [];
-      console.log("[HT_CLIENT_ASSERT]", { received: plays.length });
-      // Post clientReceived only — quickViewRendered is posted separately after actual render
+      const fetchedOver = plays.filter((p: any) => p.betDirection === "over").length;
+      const fetchedUnder = plays.filter((p: any) => p.betDirection === "under").length;
+      console.log("[HT_CLIENT_FETCHED]", { received: plays.length, over: fetchedOver, under: fetchedUnder });
       if (plays.length > 0) {
         fetch("/api/halftime-plays/verify-client", { credentials: "include",
           method: "POST",
@@ -921,6 +925,15 @@ export default function Dashboard() {
   useEffect(() => {
     if (visibleHalftimeGroups.length > 0) {
       const plays = halftimePlaysData?.plays ?? [];
+      const renderedPlays = visibleHalftimeGroups.flatMap(g => g.plays);
+      const renderedOver = renderedPlays.filter((p: any) => p.betDirection === "over").length;
+      const renderedUnder = renderedPlays.filter((p: any) => p.betDirection === "under").length;
+      console.log("[HT_CLIENT_RENDERED]", {
+        games: visibleHalftimeGroups.length,
+        totalPlays: renderedPlays.length,
+        over: renderedOver,
+        under: renderedUnder,
+      });
       fetch("/api/halftime-plays/verify-client", { credentials: "include",
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1414,7 +1427,7 @@ export default function Dashboard() {
   const filterPlay = (play: any) => {
     if (slateFilterProp === "combo" && !play.statType.includes("_")) return false;
     if (slateFilterProp !== "all" && slateFilterProp !== "combo" && play.statType !== slateFilterProp) return false;
-    const dp = play.betDirection === "under" ? (100 - play.probability) : play.probability;
+    const dp = play.probability;
     if (slateFilterProb === "elite" && dp < 85) return false;
     if (slateFilterProb === "strong" && (dp < 70 || dp >= 85)) return false;
     if (slateFilterProb === "value" && (dp < 60 || dp >= 70)) return false;
@@ -3305,9 +3318,9 @@ export default function Dashboard() {
                                             ) : (
                                             <>
                                             {(() => {
-                                              const displayProb = play.betDirection === "under"
-                                                ? Math.round((100 - play.probability) * 10) / 10
-                                                : play.probability;
+                                              const displayProb = typeof play.probability === "number"
+                                                ? Math.round(play.probability * 10) / 10
+                                                : 0;
                                               const probColor =
                                                 displayProb >= 85 ? (play.betDirection === "under" ? "text-red-400" : "text-green-400") :
                                                 displayProb >= 70 ? "text-yellow-400" :
