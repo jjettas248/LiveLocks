@@ -1,9 +1,36 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Component, type ReactNode } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ProbabilityRing } from "@/components/probability-ring";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { MLBScheduleList } from "@/components/mlb/MLBScheduleList";
+
+class MLBErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, message: "" };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, message: error?.message ?? "Unknown error" };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="max-w-5xl mx-auto px-4 py-12 text-center space-y-3">
+          <div className="text-sm font-semibold text-foreground">Something went wrong loading MLB</div>
+          <div className="text-xs text-muted-foreground">{this.state.message}</div>
+          <button
+            className="text-xs text-primary underline"
+            onClick={() => this.setState({ hasError: false, message: "" })}
+          >
+            Try again
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 type MLBGameMarket = {
   line: number | null;
@@ -295,8 +322,8 @@ function defaultManualInputs(player: MLBBatter | null, game: MLBGame | null): Ma
   };
 }
 
-export default function MlbLivePage() {
-  const { user } = useAuth();
+function MlbLiveInner() {
+  const { user, isLoading: authLoading } = useAuth();
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
   const [inningTabMin, setInningTabMin] = useState<number>(0);
   const [boxExpanded, setBoxExpanded] = useState(true);
@@ -526,6 +553,14 @@ export default function MlbLivePage() {
 
   const uiMode = getUiMode();
 
+  if (authLoading) {
+    return (
+      <div className="max-w-5xl mx-auto px-4 py-12 flex items-center justify-center">
+        <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
       {/* Schedule layer — always rendered when games exist, independent of signal state */}
@@ -575,7 +610,7 @@ export default function MlbLivePage() {
                     <div className="text-xs text-muted-foreground mt-0.5">{p.playerName ? p.matchup : "Edges forming"}</div>
                   </div>
                   <div className="flex gap-1 flex-wrap justify-end">
-                    {p.tags.map((tag, ti) => (
+                    {(p.tags ?? []).map((tag, ti) => (
                       <span key={ti} className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
                         {tag}
                       </span>
@@ -871,7 +906,7 @@ export default function MlbLivePage() {
                 {panelState === "SIGNAL" && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {filteredSignals.map((sig) => {
-                      const style = TIER_STYLES[sig.tier];
+                      const style = TIER_STYLES[sig.tier] ?? TIER_STYLES.yellow;
                       const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
                       return (
                         <div
@@ -1515,5 +1550,13 @@ export default function MlbLivePage() {
         </>
       )}
     </div>
+  );
+}
+
+export default function MlbLivePage() {
+  return (
+    <MLBErrorBoundary>
+      <MlbLiveInner />
+    </MLBErrorBoundary>
   );
 }
