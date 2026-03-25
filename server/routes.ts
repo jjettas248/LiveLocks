@@ -877,6 +877,51 @@ export async function registerRoutes(
 
     console.log(`[MLB signals] game=${gameId} rawOutputs=${allOutputs.length} validSignals=${rosterLockedSignals.length} isDegraded=${isDegraded}`);
     mlbSignalsCache.set(gameId, { ts: Date.now(), signals: rosterLockedSignals, updatedAt, isDegraded });
+
+    // Fire-and-forget: persist MLB signals to persisted_plays for analytics
+    // Req 4 — stale signal protection: skip all persistence if engine data is older than 30s
+    const STALE_THRESHOLD_MS = 30_000;
+    if (updatedAt > 0 && Date.now() - updatedAt > STALE_THRESHOLD_MS) {
+      console.warn(`[MLB PERSIST BLOCKED — STALE SIGNAL] game=${gameId} updatedAt=${updatedAt} age=${Date.now() - updatedAt}ms > ${STALE_THRESHOLD_MS}ms`);
+    } else {
+      const today = new Date().toISOString().slice(0, 10);
+      const validSides = new Set(["over", "under"]);
+      for (const sig of rosterLockedSignals) {
+        const direction = (sig.recommendedSide ?? "").toLowerCase();
+        // Req 1 — pre-persist validation
+        if (!Number.isFinite(sig.enginePct) || sig.enginePct < 2 || sig.enginePct > 80) {
+          console.warn(`[MLB PERSIST BLOCKED — INVALID SIGNAL] game=${gameId} player=${sig.playerName} market=${sig.market} — enginePct=${sig.enginePct} outside [2,80]`);
+          continue;
+        }
+        if (!sig.bookLine || sig.bookLine <= 0) {
+          console.warn(`[MLB PERSIST BLOCKED — INVALID SIGNAL] game=${gameId} player=${sig.playerName} market=${sig.market} — bookLine=${sig.bookLine} invalid`);
+          continue;
+        }
+        if (!validSides.has(direction)) {
+          console.warn(`[MLB PERSIST BLOCKED — INVALID SIGNAL] game=${gameId} player=${sig.playerName} market=${sig.market} — recommendedSide="${sig.recommendedSide}" invalid`);
+          continue;
+        }
+        const key = `${sig.playerId}|${sig.market}|${sig.bookLine}|${direction}|${gameId}|${today}`;
+        storage.recordPlay({
+          id: `play-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          gameId,
+          playerId: String(sig.playerId),
+          playerName: sig.playerName,
+          team: undefined,
+          sport: "mlb",
+          market: sig.market,
+          direction,
+          line: sig.bookLine,
+          prob: sig.enginePct,
+          edgeGap: sig.edge != null ? sig.edge : undefined,
+          engineVersion: "mlb_v1.0",
+          gameDate: today,
+          timestamp: new Date(),
+          duplicateGuard: key,
+        }).catch(console.warn);
+      }
+    }
+
     return res.json({ mode: "live", signals: rosterLockedSignals, updatedAt, isDegraded });
   });
 

@@ -219,6 +219,17 @@ app.use((req, res, next) => {
     console.warn("[startup] Schema migration warning (stripe-events):", err.message);
   }
 
+  // Schema migration: add engine_version to persisted_plays table (Task #100) if it doesn't exist yet.
+  try {
+    await pool.query(`
+      ALTER TABLE persisted_plays
+        ADD COLUMN IF NOT EXISTS engine_version text;
+    `);
+    console.log("[startup] Schema migration: engine_version column ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (engine-version):", err.message);
+  }
+
   // Backfill: mark pre-existing users (no verification token) as email-verified
   // so they are not locked out by the new emailVerified gate.
   try {

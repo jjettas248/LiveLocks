@@ -381,6 +381,7 @@ export const persistedPlays = pgTable("persisted_plays", {
   engineProb: numeric("engine_prob"),
   bookImplied: numeric("book_implied"),
   edgeGap: numeric("edge_gap"),
+  engineVersion: text("engine_version"),
   gameDate: text("game_date").notNull(),
   timestamp: timestamp("timestamp").notNull(),
   result: text("result"),

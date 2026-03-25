@@ -1,0 +1,121 @@
+❌ Gap 1 — Missing GLOBAL Duplicate Guard (Critical)
+
+You mentioned a duplicate key, but you did NOT confirm:
+
+Required:
+ON CONFLICT DO NOTHING
+
+or
+
+if (exists) return;
+Why this matters:
+
+Your endpoint is:
+
+/api/mlb/live-signals/:gameId
+
+This likely fires:
+
+multiple times per inning
+multiple polling cycles
+possibly per user session
+
+Without a hard DB-level or service-level guard → duplicates WILL happen
+
+Result if not fixed:
+Inflated play count
+Fake win rates
+Broken ROI
+❌ Gap 2 — Missing Probability Snapshot Freeze
+
+You persist:
+
+prob
+
+But you did NOT confirm it is:
+
+Required:
+prob: signal.probabilityAtTimeOfServe
+
+NOT:
+
+prob: recomputedProb
+Why this matters:
+
+If your engine recalculates:
+
+your stored probability ≠ what user saw
+Result:
+calibration curve becomes invalid
+model appears miscalibrated even if it isn’t
+🧠 Optional but HIGH VALUE (Makes It Elite)
+Add this (not required for shipping, but major upgrade):
+Persist:
+edge: signal.edge
+engineVersion: "mlb_v1.0"
+Why:
+Enables regression tracking
+Lets you compare model versions later
+Critical for long-term credibility
+🧾 Final Verdict
+Current State:
+
+9.3 / 10
+
+After fixing 2 gaps:
+
+10 / 10 production-grade analytics pipeline
+
+🔧 Final Addendum (Paste This Into Replit)
+FINAL HARDENING ADDENDUM — MLB ANALYTICS PIPELINE
+
+1. GLOBAL DUPLICATE GUARD (REQUIRED)
+
+At persistence layer, enforce hard deduplication:
+
+Key:
+{playerId}|{market}|{line}|{direction}|{gameId}|{date}
+
+Implementation (choose one):
+
+A. Database-level (preferred):
+INSERT ... ON CONFLICT DO NOTHING
+
+B. Service-level:
+- Check existing record before insert
+- If exists → skip
+
+No MLB signal may be persisted more than once.
+
+
+2. PROBABILITY SNAPSHOT FREEZE (REQUIRED)
+
+Persist ONLY the probability at time of signal generation:
+
+prob = signal.probability
+
+DO NOT:
+- Recompute
+- Recalculate
+- Mutate later
+
+Stored probability must exactly match what user saw.
+
+
+3. OPTIONAL — ENGINE VERSION + EDGE
+
+Persist:
+- edge
+- engineVersion (e.g. "mlb_v1.0")
+
+Used for:
+- Calibration debugging
+- Model comparison
+- Future improvements
+
+
+SUCCESS CRITERIA
+
+- No duplicate MLB plays under any polling conditions
+- Stored probability exactly matches displayed probability
+- Analytics dashboard reflects true model performance

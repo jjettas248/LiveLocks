@@ -127,7 +127,7 @@ export interface IStorage {
   recordPlay(play: {
     id: string; gameId: string; playerId?: string; playerName: string; team?: string;
     sport: string; market: string; direction: string; line: number; prob: number;
-    engineProb?: number; bookImplied?: number; edgeGap?: number;
+    engineProb?: number; bookImplied?: number; edgeGap?: number; engineVersion?: string;
     gameDate: string; timestamp: Date;
     duplicateGuard: string;
   }): Promise<{ id: string; isDuplicate: boolean }>;
@@ -1301,9 +1301,10 @@ export class DatabaseStorage implements IStorage {
   async recordPlay(play: {
     id: string; gameId: string; playerId?: string; playerName: string; team?: string;
     sport: string; market: string; direction: string; line: number; prob: number;
-    engineProb?: number; bookImplied?: number; edgeGap?: number;
+    engineProb?: number; bookImplied?: number; edgeGap?: number; engineVersion?: string;
     gameDate: string; timestamp: Date; duplicateGuard: string;
   }): Promise<{ id: string; isDuplicate: boolean }> {
+    // Service-level pre-check (fast path) + DB-level ON CONFLICT DO NOTHING (race-safe)
     const existing = await db
       .select({ id: persistedPlays.id })
       .from(persistedPlays)
@@ -1324,10 +1325,11 @@ export class DatabaseStorage implements IStorage {
       engineProb: play.engineProb != null ? String(play.engineProb) : null,
       bookImplied: play.bookImplied != null ? String(play.bookImplied) : null,
       edgeGap: play.edgeGap != null ? String(play.edgeGap) : null,
+      engineVersion: play.engineVersion ?? null,
       gameDate: play.gameDate,
       timestamp: play.timestamp,
       duplicateGuard: play.duplicateGuard,
-    });
+    }).onConflictDoNothing({ target: persistedPlays.duplicateGuard });
     return { id: play.id, isDuplicate: false };
   }
 

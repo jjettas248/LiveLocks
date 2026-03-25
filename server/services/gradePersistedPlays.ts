@@ -1,5 +1,175 @@
 import type { IStorage } from "../storage";
 
+// ── MLB Stats API typed interfaces ────────────────────────────────────────────
+
+interface MlbGameStatusData {
+  gameData?: {
+    status?: {
+      abstractGameState?: string;
+      codedGameState?: string;
+    };
+  };
+}
+
+interface MlbPlayerStatsBlock {
+  batting?: Record<string, unknown>;
+  pitching?: Record<string, unknown>;
+}
+
+interface MlbBoxscorePlayerData {
+  person?: { id?: number | string; fullName?: string };
+  stats?: MlbPlayerStatsBlock;
+}
+
+interface MlbBoxscoreTeam {
+  players?: Record<string, MlbBoxscorePlayerData>;
+}
+
+interface MlbBoxscoreData {
+  teams?: {
+    away?: MlbBoxscoreTeam;
+    home?: MlbBoxscoreTeam;
+  };
+}
+
+// ── MLB market → boxscore field mapping ───────────────────────────────────────
+
+// Maps persisted market names (from MLBMarket type in server/mlb/types.ts) to
+// their corresponding field names in the MLB Stats API boxscore response.
+// Batting stats come from playerData.stats.batting; pitching from playerData.stats.pitching.
+// The "source" field distinguishes which side of the boxscore to look at.
+// "composite" markets (hrr = hits+runs+rbi) require multi-field summation.
+interface MlbStatMappingSingle {
+  kind: "single";
+  source: "batting" | "pitching";
+  field: string;
+}
+
+interface MlbStatMappingComposite {
+  kind: "composite";
+  source: "batting";
+  fields: string[];
+}
+
+type MlbStatMapping = MlbStatMappingSingle | MlbStatMappingComposite;
+
+const MLB_STAT_KEY_MAP: Record<string, MlbStatMapping> = {
+  // Batter markets (single-field)
+  hits:               { kind: "single",    source: "batting",  field: "hits" },
+  total_bases:        { kind: "single",    source: "batting",  field: "totalBases" },
+  batter_strikeouts:  { kind: "single",    source: "batting",  field: "strikeOuts" },
+  home_runs:          { kind: "single",    source: "batting",  field: "homeRuns" },
+  rbis:               { kind: "single",    source: "batting",  field: "rbi" },
+  rbi:                { kind: "single",    source: "batting",  field: "rbi" },
+  walks:              { kind: "single",    source: "batting",  field: "baseOnBalls" },
+  // hrr = hits + runs + rbi (composite batting market)
+  hrr:                { kind: "composite", source: "batting",  fields: ["hits", "runs", "rbi"] },
+  // Pitcher markets (single-field)
+  pitcher_strikeouts: { kind: "single",    source: "pitching", field: "strikeOuts" },
+  hits_allowed:       { kind: "single",    source: "pitching", field: "hits" },
+  walks_allowed:      { kind: "single",    source: "pitching", field: "baseOnBalls" },
+  earned_runs:        { kind: "single",    source: "pitching", field: "earnedRuns" },
+  outs_recorded:      { kind: "single",    source: "pitching", field: "outs" },
+};
+
+async function fetchMlbBoxScore(gameId: string): Promise<MlbBoxscoreData | null> {
+  const statusUrl = `https://statsapi.mlb.com/api/v1/game/${gameId}/feed/live`;
+  console.log("[GRADE MLB] Checking game status:", statusUrl);
+  try {
+    const statusRes = await fetch(statusUrl, {
+      headers: { "User-Agent": "LiveLocks/1.0" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!statusRes.ok) {
+      console.error("[GRADE MLB] Status API returned:", statusRes.status, "for game", gameId);
+      return null;
+    }
+    const statusData = (await statusRes.json()) as MlbGameStatusData;
+    const abstractState: string = statusData.gameData?.status?.abstractGameState ?? "";
+    const codedState: string = statusData.gameData?.status?.codedGameState ?? "";
+    const isFinal = abstractState.toLowerCase() === "final" || codedState === "F";
+    if (!isFinal) {
+      console.log("[GRADE MLB] Game not final yet:", gameId, "abstractState:", abstractState);
+      return null;
+    }
+  } catch (err) {
+    console.error("[GRADE MLB] Status fetch failed for game", gameId, ":", (err as Error).message);
+    return null;
+  }
+
+  const boxUrl = `https://statsapi.mlb.com/api/v1/game/${gameId}/boxscore`;
+  console.log("[GRADE MLB] Fetching box score:", boxUrl);
+  try {
+    const boxRes = await fetch(boxUrl, {
+      headers: { "User-Agent": "LiveLocks/1.0" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!boxRes.ok) {
+      console.error("[GRADE MLB] Box score API returned:", boxRes.status, "for game", gameId);
+      return null;
+    }
+    return (await boxRes.json()) as MlbBoxscoreData;
+  } catch (err) {
+    console.error("[GRADE MLB] Box score fetch failed for game", gameId, ":", (err as Error).message);
+    return null;
+  }
+}
+
+interface MlbPlayerEntry {
+  id: string;
+  name: string;
+  batting: Record<string, number>;
+  pitching: Record<string, number>;
+}
+
+function parseNumericStats(raw: Record<string, unknown>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === "number") {
+      out[k] = v;
+    } else if (typeof v === "string" && v !== "" && !isNaN(Number(v))) {
+      out[k] = Number(v);
+    }
+  }
+  return out;
+}
+
+function buildMlbPlayerStats(boxData: MlbBoxscoreData): Map<string, MlbPlayerEntry> {
+  const playerMap = new Map<string, MlbPlayerEntry>();
+  for (const side of ["away", "home"] as const) {
+    const teamPlayers = boxData.teams?.[side]?.players ?? {};
+    for (const playerData of Object.values(teamPlayers)) {
+      const playerId = String(playerData.person?.id ?? "");
+      if (!playerId || playerId === "undefined") continue;
+      const playerName: string = playerData.person?.fullName ?? "";
+      const batting = parseNumericStats(playerData.stats?.batting ?? {});
+      const pitching = parseNumericStats(playerData.stats?.pitching ?? {});
+      playerMap.set(playerId, { id: playerId, name: playerName, batting, pitching });
+    }
+  }
+  return playerMap;
+}
+
+function getMlbStatValue(entry: MlbPlayerEntry, market: string): number | null {
+  const mapping = MLB_STAT_KEY_MAP[market.toLowerCase().trim()];
+  if (!mapping) return null;
+  const sourceStats = entry[mapping.source];
+  if (mapping.kind === "composite") {
+    let total = 0;
+    for (const field of mapping.fields) {
+      const v = sourceStats[field];
+      if (v === undefined || v === null || isNaN(v)) return null;
+      total += v;
+    }
+    return total;
+  }
+  const val = sourceStats[mapping.field];
+  if (val === undefined || val === null || isNaN(val)) return null;
+  return val;
+}
+
+// ── ESPN Stats API integration ─────────────────────────────────────────────────
+
 const ESPN_KEY_MAP: Record<string, string> = {
   PTS: "points",       POINTS: "points",
   REB: "rebounds",     TOTALREBOUNDS: "rebounds",  REBOUNDS: "rebounds",
@@ -170,6 +340,95 @@ export async function gradePersistedPlays(
 
     for (const [gameKey, plays] of Array.from(byGameAndSport)) {
       const [sport, gameId] = gameKey.split("::") as [string, string];
+
+      // ── MLB branch ───────────────────────────────────────────────────────
+      if (sport === "mlb") {
+        let mlbData: MlbBoxscoreData | null = null;
+        try {
+          mlbData = await fetchMlbBoxScore(gameId);
+        } catch (err) {
+          console.warn("[GRADE MLB] Error fetching box score for game", gameId, ":", (err as Error).message);
+          failed += plays.length;
+          continue;
+        }
+
+        if (!mlbData) {
+          continue;
+        }
+
+        const mlbPlayerMap = buildMlbPlayerStats(mlbData);
+        console.log("[GRADE MLB] Player stats built for", mlbPlayerMap.size, "players, game:", gameId);
+
+        for (const play of plays) {
+          try {
+            // Req 2 — idempotent grading lock: belt-and-suspenders in case query let a settled play through
+            if (play.settledAt !== null && play.settledAt !== undefined) {
+              console.warn("[GRADE MLB] Play already settled, skipping:", play.id, play.playerName);
+              skipped++;
+              continue;
+            }
+
+            const playerEntry = mlbPlayerMap.get(String(play.playerId!));
+            if (!playerEntry) {
+              console.warn("[GRADE MLB] playerId", play.playerId, "not found in box score for game", gameId,
+                "— available IDs:", Array.from(mlbPlayerMap.keys()).slice(0, 5).join(", "));
+              failed++;
+              continue;
+            }
+
+            const market = (play.market ?? "").trim();
+            const finalStat = getMlbStatValue(playerEntry, market);
+            if (finalStat === null) {
+              const availableBatting = Object.keys(playerEntry.batting).join(", ");
+              const availablePitching = Object.keys(playerEntry.pitching).join(", ");
+              console.warn("[GRADE MLB] Could not resolve market:", market,
+                "player:", play.playerName,
+                "— batting:", availableBatting, "pitching:", availablePitching);
+              skipped++;
+              continue;
+            }
+
+            const line = Number(play.line);
+            const direction = (play.direction ?? "").toLowerCase().trim();
+
+            let result: "hit" | "miss" | "push";
+            if (finalStat === line) {
+              result = "push";
+            } else if (direction === "over" && finalStat > line) {
+              result = "hit";
+            } else if (direction === "under" && finalStat < line) {
+              result = "hit";
+            } else {
+              result = "miss";
+            }
+
+            // Req 5 — post-grade validation: ensure finalStat is finite and result is valid
+            const VALID_RESULTS = new Set<string>(["hit", "miss", "push"]);
+            if (!Number.isFinite(finalStat)) {
+              console.error(`[MLB GRADE FAILURE] play=${play.id} player=${play.playerName} — finalStat=${finalStat} is not finite`);
+              failed++;
+              continue;
+            }
+            if (!VALID_RESULTS.has(result)) {
+              console.error(`[MLB GRADE FAILURE] play=${play.id} player=${play.playerName} — result="${result}" is not a valid outcome`);
+              failed++;
+              continue;
+            }
+
+            console.log("[GRADE MLB]", play.playerName, market,
+              "final:", finalStat, "vs line:", line, "direction:", direction, "→", result);
+
+            await storage.settlePlay(play.id, result, finalStat, new Date());
+            settled++;
+          } catch (err) {
+            console.warn("[GRADE MLB] Error grading play", play.id, ":", (err as Error).message);
+            failed++;
+          }
+        }
+        continue;
+      }
+
+      // ── NBA / NCAAB branch (ESPN) ─────────────────────────────────────────
       let data: unknown | null = null;
       try {
         data = await fetchBoxScore(gameId, sport);

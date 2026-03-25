@@ -1,0 +1,95 @@
+------------------------------------------------------------
+ADDENDUM — FINAL PRODUCTION SAFETY LOCKS
+------------------------------------------------------------
+
+1. PRE-PERSIST VALIDATION (MANDATORY)
+
+Before ANY MLB signal is persisted:
+
+IF:
+- projection is NaN OR null
+- probability is NaN OR < 2 OR > 80
+- line is null
+- recommendedSide invalid vs projection
+
+THEN:
+- DO NOT persist
+- Log:
+
+[MLB PERSIST BLOCKED — INVALID SIGNAL]
+
+------------------------------------------------------------
+2. IDPOTENT GRADING LOCK (NON-NEGOTIABLE)
+------------------------------------------------------------
+
+In grading loop:
+
+IF play.settledAt EXISTS:
+→ SKIP (DO NOT RE-GRADE)
+
+This MUST be enforced at query OR loop level.
+
+------------------------------------------------------------
+3. FINAL STATE CONFIRMATION (STRICT)
+------------------------------------------------------------
+
+Before grading MLB play:
+
+Game MUST satisfy:
+
+status === "Final"
+
+If NOT:
+→ SKIP grading
+
+------------------------------------------------------------
+4. STALE SIGNAL PROTECTION
+------------------------------------------------------------
+
+Each persisted play MUST include:
+
+engineGeneratedAt
+
+Before persisting:
+
+IF currentTime - engineGeneratedAt > 30s:
+→ DO NOT persist
+
+------------------------------------------------------------
+5. POST-GRADE VALIDATION CHECK
+------------------------------------------------------------
+
+After grading:
+
+Ensure:
+
+- finalStat is finite
+- result is one of: WIN | LOSS | PUSH
+
+IF NOT:
+→ Log [MLB GRADE FAILURE]
+→ DO NOT update record
+
+------------------------------------------------------------
+6. ANALYTICS INTEGRITY LOCK
+------------------------------------------------------------
+
+Analytics queries MUST use:
+
+WHERE result IS NOT NULL
+
+Pending plays MUST NEVER affect:
+- winRate
+- ROI
+- calibration
+
+------------------------------------------------------------
+FINAL SHIP CONDITION
+------------------------------------------------------------
+
+System is ONLY shippable if:
+
+- No invalid signals are persisted
+- No play is graded more than once
+- No stale data is persisted
+- Analytics only reflects settled plays
