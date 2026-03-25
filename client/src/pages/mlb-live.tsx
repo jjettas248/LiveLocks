@@ -5,36 +5,32 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 
 type MLBGameMarket = {
-  line: number;
+  line: number | null;
   odds: { overOdds: number | null; underOdds: number | null } | null;
-  projection: number;
-  edge: number;
-  probability: number;
-  oddsUpdatedAt: string;
-  projectionUpdatedAt: string;
+  projection: number | null;
+  edge: number | null;
+  probability: number | null;
+  oddsUpdatedAt: string | null;
+  projectionUpdatedAt: string | null;
 };
 
 type MLBGame = {
   gameId: string;
-  homeTeam: string;
-  awayTeam: string;
-  awayAbbr: string;
-  homeAbbr: string;
-  homeName: string;
-  awayName: string;
-  homeScore: number;
-  awayScore: number;
+  homeTeam: string | null;
+  awayTeam: string | null;
+  awayAbbr: string | null;
+  homeAbbr: string | null;
+  homeScore: number | null;
+  awayScore: number | null;
   inning: number;
   isTopInning: boolean;
-  status: "live" | "pregame";
-  parkName?: string;
-  parkFactor?: number | null;
-  weatherSummary?: string;
-  weatherTemp?: number | null;
-  probableAwayPitcher?: string;
-  probableHomePitcher?: string;
-  awayPitcherHand?: string;
-  homePitcherHand?: string;
+  status: "live" | "pregame" | null;
+  venue?: string | null;
+  weatherSummary?: string | null;
+  pitcherAway?: string | null;
+  pitcherHome?: string | null;
+  awayPitcherHand?: string | null;
+  homePitcherHand?: string | null;
   pitcherName?: string | null;
   pitcherThrows?: "L" | "R" | null;
   pitcherTeam?: string | null;
@@ -84,6 +80,7 @@ function hasEdge(market: MLBGameMarket | null | undefined): boolean {
 
 function resolveRenderState(game: MLBGame): RenderState {
   if (!game.awayTeam || !game.homeTeam) return "INVALID";
+  if (game.awayTeam.trim().length < 3 || game.homeTeam.trim().length < 3) return "INVALID";
   if (!game.awayAbbr || game.awayAbbr.length < 2 || !game.homeAbbr || game.homeAbbr.length < 2) return "INVALID";
   const market = game.market ?? null;
   const realOdds = hasRealOdds(market);
@@ -305,7 +302,9 @@ function defaultManualInputs(player: MLBBatter | null, game: MLBGame | null): Ma
     },
     context: {
       inning: game ? String(game.inning) : "1",
-      score: game ? `${game.awayScore}-${game.homeScore}` : "0-0",
+      score: game && game.status === "live" && game.awayScore != null && game.homeScore != null
+        ? `${game.awayScore}-${game.homeScore}`
+        : "0-0",
       outs: "0",
       runners: "0",
       isTopInning: game ? game.isTopInning : true,
@@ -423,7 +422,10 @@ export default function MlbLivePage() {
             isTopInning: manualInputs.context.isTopInning,
             runners: manualInputs.context.runners ? parseInt(manualInputs.context.runners, 10) : 0,
             outs: manualInputs.context.outs ? parseInt(manualInputs.context.outs, 10) : 0,
-            score: manualInputs.context.score || `${selectedGame.awayScore}-${selectedGame.homeScore}`,
+            score: manualInputs.context.score ||
+              (selectedGame.status === "live" && selectedGame.awayScore != null && selectedGame.homeScore != null
+                ? `${selectedGame.awayScore}-${selectedGame.homeScore}`
+                : "0-0"),
           },
         };
         const res = await apiRequest("POST", "/api/mlb/calculate-manual", body);
@@ -568,8 +570,8 @@ export default function MlbLivePage() {
               if (renderState === "INVALID") return null;
 
               const isActive = game.gameId === selectedGameId;
-              const pitcherAway = game.probableAwayPitcher;
-              const pitcherHome = game.probableHomePitcher;
+              const pitcherAway = game.pitcherAway;
+              const pitcherHome = game.pitcherHome;
               const awayLastName = pitcherAway ? pitcherAway.split(" ").pop() : null;
               const homeLastName = pitcherHome ? pitcherHome.split(" ").pop() : null;
               const pitcherPill = pitcherAway && pitcherHome && awayLastName && homeLastName ? (
@@ -601,9 +603,11 @@ export default function MlbLivePage() {
                     )}
                   </div>
 
-                  {/* Row 2: score + inning position */}
+                  {/* Row 2: score + inning position — only for live games */}
                   <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono">
-                    <span>{game.awayScore} – {game.homeScore}</span>
+                    {game.status === "live" && game.awayScore != null && game.homeScore != null && (
+                      <span>{game.awayScore} – {game.homeScore}</span>
+                    )}
                     {game.status === "live" && game.inning > 0 && (
                       <span className="text-green-400 font-semibold">
                         {game.isTopInning ? "▲" : "▼"}{game.inning}
@@ -717,15 +721,17 @@ export default function MlbLivePage() {
             <h2 className="text-sm font-semibold text-foreground">
               {selectedGame.awayAbbr} @ {selectedGame.homeAbbr}
             </h2>
-            <span className="text-xs text-muted-foreground font-mono">
-              {selectedGame.awayScore}–{selectedGame.homeScore}
-            </span>
+            {selectedGame.status === "live" && selectedGame.awayScore != null && selectedGame.homeScore != null && (
+              <span className="text-xs text-muted-foreground font-mono">
+                {selectedGame.awayScore}–{selectedGame.homeScore}
+              </span>
+            )}
             <span className={`text-xs ${selectedGame.status === "live" ? "text-green-500" : "text-muted-foreground"}`}>
               {inningLabel(selectedGame)}
             </span>
-            {selectedGame.parkName && (
+            {selectedGame.venue && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground border border-border/40">
-                {selectedGame.parkName}
+                {selectedGame.venue}
               </span>
             )}
             {selectedGame.weatherSummary && (
@@ -1066,7 +1072,11 @@ export default function MlbLivePage() {
                     </div>
                     <div>
                       <div className="text-muted-foreground text-[10px]">Score</div>
-                      <div className="font-semibold text-foreground">{selectedGame.awayAbbr} {selectedGame.awayScore} – {selectedGame.homeAbbr} {selectedGame.homeScore}</div>
+                      <div className="font-semibold text-foreground">
+                        {selectedGame.status === "live" && selectedGame.awayScore != null && selectedGame.homeScore != null
+                          ? `${selectedGame.awayAbbr} ${selectedGame.awayScore} – ${selectedGame.homeAbbr} ${selectedGame.homeScore}`
+                          : "Pre-Game"}
+                      </div>
                     </div>
                     <div>
                       <div className="text-muted-foreground text-[10px]">Status</div>
@@ -1168,7 +1178,7 @@ export default function MlbLivePage() {
                     <div className="bg-secondary/30 rounded-lg p-2.5">
                       <div className="text-muted-foreground text-[10px] mb-1">{selectedGame.awayAbbr} Starter</div>
                       <div className="font-semibold text-foreground flex items-center gap-1.5">
-                        <span>{selectedGame.probableAwayPitcher || "TBD"}</span>
+                        <span>{selectedGame.pitcherAway || "TBD"}</span>
                         {selectedGame.awayPitcherHand && (
                           <span className="text-[9px] px-1 py-0.5 rounded bg-secondary border border-border/30 text-muted-foreground">
                             {selectedGame.awayPitcherHand === "L" ? "LHP" : selectedGame.awayPitcherHand === "R" ? "RHP" : selectedGame.awayPitcherHand}
@@ -1179,7 +1189,7 @@ export default function MlbLivePage() {
                     <div className="bg-secondary/30 rounded-lg p-2.5">
                       <div className="text-muted-foreground text-[10px] mb-1">{selectedGame.homeAbbr} Starter</div>
                       <div className="font-semibold text-foreground flex items-center gap-1.5">
-                        <span>{selectedGame.probableHomePitcher || "TBD"}</span>
+                        <span>{selectedGame.pitcherHome || "TBD"}</span>
                         {selectedGame.homePitcherHand && (
                           <span className="text-[9px] px-1 py-0.5 rounded bg-secondary border border-border/30 text-muted-foreground">
                             {selectedGame.homePitcherHand === "L" ? "LHP" : selectedGame.homePitcherHand === "R" ? "RHP" : selectedGame.homePitcherHand}
@@ -1208,14 +1218,10 @@ export default function MlbLivePage() {
 
                 <div className="px-4 py-3">
                   <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Park / Weather</div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                  <div className="grid grid-cols-2 gap-3 text-xs">
                     <div>
                       <div className="text-muted-foreground text-[10px]">Venue</div>
-                      <div className="font-semibold text-foreground" data-testid="text-mlb-venue">{selectedGame.parkName || "Unknown"}</div>
-                    </div>
-                    <div>
-                      <div className="text-muted-foreground text-[10px]">Park Factor</div>
-                      <div className="font-semibold text-foreground">{selectedGame.parkFactor != null ? selectedGame.parkFactor.toFixed(2) : "Neutral"}</div>
+                      <div className="font-semibold text-foreground" data-testid="text-mlb-venue">{selectedGame.venue ?? "—"}</div>
                     </div>
                     <div>
                       <div className="text-muted-foreground text-[10px]">Weather</div>

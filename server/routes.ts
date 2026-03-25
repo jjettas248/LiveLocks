@@ -484,28 +484,37 @@ export async function registerRoutes(
             projectionUpdatedAt: new Date(bestEdgeOutput.projectionUpdatedAt).toISOString(),
           } : null;
 
+          // ── Identity validation — spec requires non-empty team names ────────
+          const awayTeamName = game.teams?.away?.team?.name ?? null;
+          const homeTeamName = game.teams?.home?.team?.name ?? null;
+          if (!awayTeamName || !homeTeamName) {
+            console.warn(`[MLB DROP][${gameId}] missing awayTeam/homeTeam — awayTeam=${awayTeamName} homeTeam=${homeTeamName}`);
+            continue;
+          }
+          const awayAbbrVal = game.teams?.away?.team?.abbreviation ?? null;
+          const homeAbbrVal = game.teams?.home?.team?.abbreviation ?? null;
+          if (!awayAbbrVal || !homeAbbrVal) {
+            console.warn(`[MLB DROP][${gameId}] missing awayAbbr/homeAbbr — awayAbbr=${awayAbbrVal} homeAbbr=${homeAbbrVal}`);
+            continue;
+          }
+
           games.push({
             gameId,
-            awayAbbr: game.teams?.away?.team?.abbreviation ?? "",
-            homeAbbr: game.teams?.home?.team?.abbreviation ?? "",
-            homeTeam: game.teams?.home?.team?.abbreviation ?? "",
-            awayTeam: game.teams?.away?.team?.abbreviation ?? "",
-            homeName: game.teams?.home?.team?.name ?? "",
-            awayName: game.teams?.away?.team?.name ?? "",
-            homeScore,
-            awayScore,
+            awayTeam: awayTeamName,
+            homeTeam: homeTeamName,
+            awayAbbr: awayAbbrVal,
+            homeAbbr: homeAbbrVal,
+            homeScore: canonicalState === "live" ? homeScore : null,
+            awayScore: canonicalState === "live" ? awayScore : null,
             inning: cachedState?.inning ?? inning,
             isTopInning: cachedState?.isTopInning ?? isTopInning,
             status: canonicalState === "live" ? "live" : "pregame",
-            inRegistry: registeredIds.has(gameId),
-            parkName,
-            parkFactor,
-            weatherSummary,
-            weatherTemp,
-            probableAwayPitcher: awayPitcher,
-            probableHomePitcher: homePitcher,
-            awayPitcherHand,
-            homePitcherHand,
+            venue: parkName || null,
+            weatherSummary: weatherSummary || null,
+            pitcherAway: awayPitcher || null,
+            pitcherHome: homePitcher || null,
+            awayPitcherHand: awayPitcherHand || null,
+            homePitcherHand: homePitcherHand || null,
             pitcherName: pitcherInGame?.playerName ?? null,
             pitcherThrows: pitcherInGame?.throws ?? null,
             pitcherTeam: pitcherInGame?.team ?? null,
@@ -972,6 +981,63 @@ export async function registerRoutes(
       console.error("[MLB calculate-manual]", err.message);
       return res.status(400).json({ error: err.message || "Manual calculation error" });
     }
+  });
+
+  // ── MLB Admin Debug Endpoint (Phase 8) ───────────────────────────────────────
+  app.get("/api/mlb/debug", requireAuth, async (req, res) => {
+    const reqUser = (req as any).user ?? (req as any).resolvedUser ?? null;
+    if (!reqUser?.isAdmin) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const activeGames = getActiveGames();
+    const allGameIds = activeGames.map((g) => g.gameId);
+
+    const gamesDebug = allGameIds.map((gameId) => {
+      const edgeCacheEntry = mlbEdgeCache.get(gameId);
+      const liveGamesEntry = mlbLiveGamesCache.get("games");
+      const gameInfo = liveGamesEntry?.games.find((g: any) => String(g.gameId) === gameId) ?? null;
+
+      return {
+        gameId,
+        gameInfo: gameInfo ? {
+          awayTeam: gameInfo.awayTeam,
+          homeTeam: gameInfo.homeTeam,
+          awayAbbr: gameInfo.awayAbbr,
+          homeAbbr: gameInfo.homeAbbr,
+          status: gameInfo.status,
+          inning: gameInfo.inning,
+          venue: gameInfo.venue,
+        } : null,
+        edgeCache: edgeCacheEntry ? {
+          updatedAt: new Date(edgeCacheEntry.updatedAt).toISOString(),
+          outputCount: edgeCacheEntry.outputs.length,
+          isDegraded: edgeCacheEntry.isDegraded,
+          outputs: edgeCacheEntry.outputs.map((o) => ({
+            playerName: o.playerName,
+            playerId: o.playerId,
+            market: o.market,
+            bookLine: o.bookLine,
+            projection: o.projection,
+            edge: o.edge,
+            calibratedProbOver: o.calibratedProbabilityOver,
+            calibratedProbUnder: o.calibratedProbabilityUnder,
+            recommendedSide: o.recommendedSide,
+            suppressed: o.suppressed,
+            suppressionReason: o.suppressionReason,
+            overOdds: o.overOdds,
+            underOdds: o.underOdds,
+          })),
+        } : null,
+      };
+    });
+
+    return res.json({
+      ts: new Date().toISOString(),
+      activeGameCount: allGameIds.length,
+      activeGameIds: allGameIds,
+      games: gamesDebug,
+    });
   });
 
   // ── MLB Routes (Admin-only in Phase A) ──────────────────────────────────────

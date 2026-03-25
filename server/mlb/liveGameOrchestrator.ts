@@ -399,14 +399,20 @@ export class LiveGameOrchestrator {
           ? pitcherCtx.timesThroughOrder >= 3 && pitcherCtx.pitchCount > 80
           : false;
 
+        console.log(`[MLB MARKET INPUT][${gameId}][${market}] { playerName: "${batter.playerName}", playerId: "${batter.playerId}", inning: ${state.inning} }`);
+
         const resolvedLine = await resolveBookLine(oddsEventId, batter.playerName, market);
-        if (resolvedLine === null) continue;
+        if (resolvedLine === null) {
+          console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "no_book_line" }`);
+          continue;
+        }
         if (resolvedLine.isDegraded) anyDegraded = true;
 
         // hasRealOdds gate — skip signal computation if odds are not valid
         const resolvedMarketObj = { line: resolvedLine.line, odds: (resolvedLine.overOdds !== null || resolvedLine.underOdds !== null) ? { overOdds: resolvedLine.overOdds, underOdds: resolvedLine.underOdds } : null };
         if (!hasRealOdds(resolvedMarketObj)) {
           console.warn(`[MLB orchestrator] hasRealOdds failed for ${batter.playerName}/${market} — signalLocked=false, skipping computation`);
+          console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "no_real_odds", line: ${resolvedLine.line} }`);
           continue;
         }
 
@@ -478,6 +484,7 @@ export class LiveGameOrchestrator {
         const guardError = validateMLBInput(input);
         if (guardError) {
           console.warn(`[MLB orchestrator] Skipping ${batter.playerName}/${market}: ${guardError}`);
+          console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "guard_error:${guardError}" }`);
           continue;
         }
 
@@ -512,10 +519,12 @@ export class LiveGameOrchestrator {
 
           // ── Per-player debug logging for signal integrity verification ──────
           console.log(`[MLB engine] playerId=${batter.playerId} player="${batter.playerName}" market=${market} slot=${batter.slot} inning=${state.inning} remainingPA=${remainingPA} calibratedProbOver=${output.calibratedProbabilityOver.toFixed(2)} calibratedProbUnder=${output.calibratedProbabilityUnder.toFixed(2)} edge=${output.edge.toFixed(2)} side=${output.recommendedSide}`);
+          console.log(`[MLB MARKET OUTPUT][${gameId}][${market}] { playerName: "${batter.playerName}", projection: ${output.projection}, probability: ${output.calibratedProbabilityOver.toFixed(2)}, edge: ${output.edge.toFixed(2)}, line: ${output.bookLine}, overOdds: ${output.overOdds ?? null}, underOdds: ${output.underOdds ?? null} }`);
 
           outputs.push({ ...output });
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for ${batter.playerName} / ${market}:`, err.message);
+          console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "engine_error:${(err as any).message}" }`);
         }
       }
     }
@@ -541,14 +550,20 @@ export class LiveGameOrchestrator {
           5 // neutral batting order slot for pitcher PA estimate
         );
 
+        console.log(`[MLB MARKET INPUT][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", playerId: "${pitcherToEval.playerId}", inning: ${state.inning} }`);
+
         const resolvedPitcherLine = await resolveBookLine(oddsEventId, pitcherToEval.playerName, market);
-        if (resolvedPitcherLine === null) continue;
+        if (resolvedPitcherLine === null) {
+          console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", reason: "no_book_line" }`);
+          continue;
+        }
         if (resolvedPitcherLine.isDegraded) anyDegraded = true;
 
         // hasRealOdds gate — skip signal computation if odds are not valid
         const resolvedPitcherMarketObj = { line: resolvedPitcherLine.line, odds: (resolvedPitcherLine.overOdds !== null || resolvedPitcherLine.underOdds !== null) ? { overOdds: resolvedPitcherLine.overOdds, underOdds: resolvedPitcherLine.underOdds } : null };
         if (!hasRealOdds(resolvedPitcherMarketObj)) {
           console.warn(`[MLB orchestrator] hasRealOdds failed for pitcher ${pitcherToEval.playerName}/${market} — signalLocked=false, skipping computation`);
+          console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", reason: "no_real_odds", line: ${resolvedPitcherLine.line} }`);
           continue;
         }
 
@@ -628,6 +643,7 @@ export class LiveGameOrchestrator {
         const guardError = validateMLBInput(input);
         if (guardError) {
           console.warn(`[MLB orchestrator] Skipping pitcher ${pitcherToEval.playerName}/${market}: ${guardError}`);
+          console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", reason: "guard_error:${guardError}" }`);
           continue;
         }
 
@@ -638,10 +654,12 @@ export class LiveGameOrchestrator {
 
           // ── Per-player debug logging for signal integrity verification ──────
           console.log(`[MLB engine] playerId=${pitcherToEval.playerId} player="${pitcherToEval.playerName}" market=${market} inning=${state.inning} remainingPA=${remainingPA} calibratedProbOver=${output.calibratedProbabilityOver.toFixed(2)} calibratedProbUnder=${output.calibratedProbabilityUnder.toFixed(2)} edge=${output.edge.toFixed(2)} side=${output.recommendedSide}`);
+          console.log(`[MLB MARKET OUTPUT][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", projection: ${output.projection}, probability: ${output.calibratedProbabilityOver.toFixed(2)}, edge: ${output.edge.toFixed(2)}, line: ${output.bookLine}, overOdds: ${output.overOdds ?? null}, underOdds: ${output.underOdds ?? null} }`);
 
           outputs.push({ ...output });
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for pitcher ${pitcherToEval.playerName} / ${market}:`, err.message);
+          console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", reason: "engine_error:${(err as any).message}" }`);
         }
       }
     }
