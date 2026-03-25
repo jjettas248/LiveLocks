@@ -533,11 +533,11 @@ export class DatabaseStorage implements IStorage {
     }
 
     // Halftime regression: observed rate in a single half is high-variance.
-    // Pull 8% more weight toward season baseline when the full 2H is still ahead.
-    // 0.92 (vs the former 0.85) avoids collapsing genuine H1 signals toward 50%.
+    // Pull 4% more weight toward season baseline when the full 2H is still ahead.
+    // Changed from 0.92 → 0.96 to reduce compounded UNDER suppression.
     if (isHalftimeContext && seasonPerMin) {
-      const regressionFactor = 0.92;
-      observedW = observedW * regressionFactor;
+      const halftimeRegressionFactor = 0.96;
+      observedW = observedW * halftimeRegressionFactor;
       seasonW   = 1 - observedW;
     }
 
@@ -545,8 +545,11 @@ export class DatabaseStorage implements IStorage {
 
     // ─── Context modifier cap (Step 5) ────────────────────────────────────
     // Combine defense, pace, and shooting into a single clamped modifier.
+    // Clamp tightened at halftime: [0.92, 1.08] (was [0.90, 1.12]) to prevent
+    // compounded multipliers from driving systematic UNDER bias.
     const rawContextModifier = defenseMultiplier * paceMultiplier * shootingModifier;
-    const contextClamp = isHalftimeContext ? { lo: 0.90, hi: 1.12 } : { lo: 0.88, hi: 1.18 };
+    const suppressionRaw = rawContextModifier; // alias for trace log
+    const contextClamp = isHalftimeContext ? { lo: 0.92, hi: 1.08 } : { lo: 0.88, hi: 1.18 };
     const contextModifier = Math.max(contextClamp.lo, Math.min(contextClamp.hi, rawContextModifier));
 
     const baselinePPM = 2.1;
@@ -566,11 +569,13 @@ export class DatabaseStorage implements IStorage {
 
     let expectedTotal = req.halftimeStat + expectedFromHere;
 
-    // ─── Halftime regression factor ──────────────────────────────────────
-    // When a player has 16+ minutes in the first half, apply a regression-to-mean
-    // multiplier to prevent inflated UNDER signals from slow first halves.
-    if (minutesPlayed >= 16) {
-      expectedTotal *= 0.92;
+    // ─── Halftime total regression ────────────────────────────────────────
+    // When a player has 16+ minutes in the first half, apply a mild regression-to-mean
+    // multiplier on expectedTotal. Changed from 0.92 → 0.96 to match halftimeRegressionFactor
+    // adjustment and reduce compounded UNDER suppression for starters (who nearly always
+    // play 20+ minutes in H1, causing this to fire on almost every halftime play).
+    if (minutesPlayed >= 16 && isHalftimeContext) {
+      expectedTotal *= 0.96;
     }
 
     // ─── Market anchoring ─────────────────────────────────────────────────
@@ -584,6 +589,27 @@ export class DatabaseStorage implements IStorage {
     let probability = edgeToProbability(edge, req.statType, edgeContext);
 
     const direction = probability >= 50 ? "OVER" : "UNDER";
+
+    // [HT_SUPPRESSION_TRACE] — halftime-only trace of suppression multipliers
+    // Fires only in halftime context so live-signal noise is not added.
+    // suppressionRaw = defenseMultiplier * paceMultiplier * shootingModifier (before clamp)
+    // suppressionClamped = contextModifier (after [0.92, 1.08] clamp)
+    if (isHalftimeContext && process.env.DEBUG_PIPELINE === "true") {
+      console.log("[HT_SUPPRESSION_TRACE]", {
+        player: player.name,
+        market: req.statType,
+        baseProjection: Math.round(blendedPerMin * remainingMinutes * 100) / 100,
+        paceMultiplier: Math.round(paceMultiplier * 1000) / 1000,
+        defenseMultiplier: Math.round(defenseMultiplier * 1000) / 1000,
+        shootingModifier: Math.round(shootingModifier * 1000) / 1000,
+        suppressionRaw: Math.round(suppressionRaw * 1000) / 1000,
+        suppressionClamped: Math.round(contextModifier * 1000) / 1000,
+        finalProjection: Math.round(expectedTotal * 100) / 100,
+        line: req.liveLine,
+        direction,
+        edge: Math.round(edge * 100) / 100,
+      });
+    }
 
     // Step 2 — Calibration lookup (directional confidence only)
     const confidence = direction === "OVER" ? probability : 100 - probability;
