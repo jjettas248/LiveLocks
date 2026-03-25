@@ -1,0 +1,424 @@
+#93 - MLB Full Wiring Audit + Engine/UI/Market Generation Repair
+
+You are fixing MLB end-to-end.
+This is a full production wiring audit and repair pass.
+
+GOAL:
+- MLB game cards render correctly
+- MLB prop markets generate correctly
+- Engine logic is followed exactly
+- No broken UI or partial hydration
+- ESPN / OddsAPI / BaseballSavant / BallparkPal are wired into the correct stages
+- Canonical MLB objects are complete before render
+- No fake signals, no empty teams, no silent market drops
+
+NON-NEGOTIABLE RULES
+- Do not fabricate teams, pitchers, venue, lines, odds, projections, or probabilities
+- Do not allow client-side recomputation of engine outputs
+- Do not let UI render partially hydrated MLB cards
+- Do not let prop markets generate unless required inputs are present for that market
+- Reuse existing helpers where possible
+- Minimal surface area changes only
+- Output must be implementation-ready and Replit-ready
+
+==================================================
+PHASE 1 — TRACE THE MLB PIPELINE END TO END
+==================================================
+
+Audit and verify the full MLB flow from source ingestion to UI render:
+
+1. ESPN
+   Must supply:
+   - gameId
+   - awayTeam
+   - homeTeam
+   - awayAbbr
+   - homeAbbr
+   - pitcherAway
+   - pitcherHome
+   - venue
+   - status
+   - scores if live
+
+2. OddsAPI
+   Must supply:
+   - market line
+   - overOdds
+   - underOdds
+   - sportsbook timestamp / updatedAt
+
+3. BaseballSavant
+   Must supply model inputs only:
+   - pitcher/batter performance inputs
+   - quality-of-contact / matchup features
+   - strikeout / hit / total bases / hits allowed relevant features
+   These are projection inputs only, not UI display fields.
+
+4. BallparkPal
+   Must supply model inputs only:
+   - park factor
+   - run environment
+   - contextual environment adjustments
+   These are projection modifiers only, not UI display fields.
+
+5. Internal engine
+   Must compute:
+   - projection
+   - probability
+   - edge
+   - timestamps
+   - direction if applicable
+
+6. Final live-games response
+   Must expose one canonical object per game that the client can trust directly.
+
+==================================================
+PHASE 2 — DEFINE THE CANONICAL MLB GAME CONTRACT
+==================================================
+
+Create or enforce one canonical MLB game shape returned by the server:
+
+type MLBGameMarket = {
+  line: number | null;
+  odds: {
+    overOdds: number | null;
+    underOdds: number | null;
+  } | null;
+  projection: number | null;
+  probability: number | null;
+  edge: number | null;
+  oddsUpdatedAt: string | null;
+  projectionUpdatedAt: string | null;
+};
+
+type MLBGame = {
+  gameId: string;
+  awayTeam: string | null;
+  homeTeam: string | null;
+  awayAbbr: string | null;
+  homeAbbr: string | null;
+  pitcherAway: string | null;
+  pitcherHome: string | null;
+  venue: string | null;
+  status: string | null;
+  awayScore: number | null;
+  homeScore: number | null;
+  signalLocked: boolean;
+  market: MLBGameMarket | null;
+};
+
+Rules:
+- Client must render from this shape only
+- Client must not know ESPN/OddsAPI/Savant/BallparkPal raw schemas
+- If awayTeam/homeTeam are missing, the game is INVALID and does not render
+- awayAbbr/homeAbbr are optional display helpers only, not primary validity keys unless explicitly used for display
+
+==================================================
+PHASE 3 — SERVER NORMALIZATION REPAIR
+==================================================
+
+File in scope:
+- server/mlb/liveGameOrchestrator.ts
+- any MLB routes returning live games
+- any helper that builds the live game payload
+
+Implement a single normalization function that maps raw ESPN + OddsAPI + engine output into MLBGame.
+
+Requirements:
+1. Teams, pitchers, venue, status, scores must come from ESPN mapping only
+2. line / overOdds / underOdds / oddsUpdatedAt must come from OddsAPI only
+3. projection / probability / edge / projectionUpdatedAt must come from engine output only
+4. Savant + BallparkPal must affect only projection inputs/modifiers, not display fields
+5. Return null / skip game if required core identity fields are missing:
+   - gameId
+   - awayTeam
+   - homeTeam
+
+Add explicit logs for dropped games:
+[MLB DROP][gameId] missing awayTeam/homeTeam
+[MLB DROP][gameId] missing canonical market object
+[MLB DROP][gameId] invalid odds payload
+
+==================================================
+PHASE 4 — MLB PROP MARKET GENERATION AUDIT
+==================================================
+
+Files in scope:
+- server/mlb/markets.ts
+- server/mlb/probability.ts
+- server/mlb/* prop engine files
+- any buildOutput / calculateHitsEdge / market generation helpers
+
+Audit every supported MLB prop market and verify it can generate correctly.
+
+At minimum verify and repair these markets if they exist:
+- Hits
+- Total Bases
+- Batter Strikeouts
+- Pitcher Strikeouts
+- Hits Allowed
+- Any currently exposed live prop market in the UI
+
+For EACH market:
+1. Define required inputs
+2. If required inputs are missing, skip the market cleanly with a reason log
+3. If required inputs are present, generate:
+   - projection
+   - probability
+   - edge
+   - timestamps
+   - real book line / odds when required by MLB rules
+
+Rules:
+- No market should emit output with null team identity
+- No market should emit rawProbability without clamp
+- No projection should leave the engine unclamped
+- No market should use probability values as sportsbook odds
+- No market should render in UI unless the market output is complete and valid
+
+Add structured logs:
+[MLB MARKET INPUT][gameId][marketType]
+[MLB MARKET SKIP][gameId][marketType][reason]
+[MLB MARKET OUTPUT][gameId][marketType] { projection, probability, edge, line, overOdds, underOdds }
+
+==================================================
+PHASE 5 — CLAMP + VALIDATION ENFORCEMENT
+==================================================
+
+Ensure all MLB probability/projection paths apply:
+- clampProjection(p): projection >= 0, non-finite => 0
+- clampProbability(prob): 2 <= probability <= 98, non-finite => 2
+
+Apply to:
+- calculateHitsEdge
+- buildOutput
+- any other market output builders
+- any calibrated probability output
+- any final response payload that exposes projection/probability
+
+Create or verify these helpers:
+- isFiniteNumber
+- hasAtLeastOneValidOddsSide
+- hasRealOdds
+- isFresh
+- canShowSignal
+
+MLB rules:
+- hasRealOdds requires:
+  - finite line
+  - present odds object
+  - at least one finite side: overOdds or underOdds
+  - fresh oddsUpdatedAt
+- canShowSignal requires:
+  - hasRealOdds
+  - finite projection
+  - fresh projectionUpdatedAt
+
+==================================================
+PHASE 6 — LIVE GAMES RENDER STATE ENGINE
+==================================================
+
+File:
+- client/src/pages/mlb-live.tsx
+
+Enforce one render resolver:
+
+type RenderState = "INVALID" | "PREVIEW" | "NO_SIGNAL" | "SIGNAL";
+
+Rules:
+- INVALID:
+  - missing awayTeam/homeTeam
+  - trimmed team names shorter than 3 chars
+- PREVIEW:
+  - valid game
+  - no real odds
+  - not signalLocked
+- NO_SIGNAL:
+  - no real odds and signalLocked
+  - OR stale odds/projection
+  - OR no qualifying edge
+- SIGNAL:
+  - hasRealOdds
+  - canShowSignal
+  - hasEdge where abs(edge) >= 5
+
+Client helpers must use:
+- game.market.line
+- game.market.odds.overOdds
+- game.market.odds.underOdds
+- game.market.projection
+- game.market.probability
+- game.market.edge
+- game.market.oddsUpdatedAt
+- game.market.projectionUpdatedAt
+
+Do not use stubbed helpers.
+Do not use flat aggregate fields.
+Do not use signalLocked alone to render signals.
+
+==================================================
+PHASE 7 — MLB UI / UX REPAIR
+==================================================
+
+Repair the MLB live page UI completely.
+
+Game card requirements:
+1. Header must show:
+   - awayTeam @ homeTeam
+   Never render undefined values.
+   Never use fallback strings like "N/A".
+
+2. Pitcher pill:
+   - render only when pitcherAway and pitcherHome both exist
+   - must appear in PREVIEW / NO_SIGNAL / SIGNAL
+   - do not fabricate or truncate with placeholders
+
+3. Venue:
+   - show only if present
+   - do not render raw object
+   - use canonical venue string only
+
+4. Score:
+   - show only when valid for live/in-progress state
+   - no default 0-0 placeholders for non-live games unless the upstream feed explicitly says 0-0
+
+5. PREVIEW UI:
+   - teams
+   - pitcher pill if valid
+   - status
+   - label: "Awaiting live lines"
+   - no projection/edge/probability/direction
+
+6. NO_SIGNAL UI:
+   - teams
+   - pitcher pill if valid
+   - status
+   - label: "No strong edge"
+   - no direction/probability breakdown beyond allowed fields
+
+7. SIGNAL UI:
+   - teams
+   - pitcher pill if valid
+   - status
+   - projection
+   - edge
+   - probability
+   - no extra labels like "Edge active"
+
+8. Remove all fallback strings globally:
+   - "vs" fallback
+   - "N/A"
+   - "0"
+   - "|| 0"
+   - broken empty header output
+
+==================================================
+PHASE 8 — MARKET GENERATION VISIBILITY IN ADMIN / ANALYTICS
+==================================================
+
+Ensure admin-only analytics can distinguish MLB from NBA.
+
+If MLB persisted/signaled calls are already stored:
+- add / verify sport filtering at the data layer
+- MLB analytics must not mix with NBA analytics
+
+If MLB prop signals are not being persisted correctly:
+- repair persistence path
+- include sport = "mlb"
+- include marketType
+- include line, projection, probability, edge, result placeholders where applicable
+
+Add an admin-only MLB debug view or endpoint:
+GET /api/mlb/debug
+
+Per game return:
+{
+  gameId,
+  awayTeam,
+  homeTeam,
+  pitcherAway,
+  pitcherHome,
+  hasOdds,
+  oddsFresh,
+  projectionFresh,
+  hasEdge,
+  edge,
+  probability,
+  renderState,
+  line,
+  overOdds,
+  underOdds,
+  oddsUpdatedAt,
+  projectionUpdatedAt
+}
+
+Also return aggregate:
+{
+  totalGames,
+  validGames,
+  previewGames,
+  noSignalGames,
+  signalGames,
+  avgEdge,
+  avgProbability
+}
+
+==================================================
+PHASE 9 — DEDUP / LOCK / STABILITY
+==================================================
+
+In liveGameOrchestrator:
+- preserve dedup lock
+- do not recompute the same game within the existing 30-second window
+- signalLocked may preserve UI consistency, but must never override freshness or real-odds requirements
+- stale or invalid data must downgrade correctly
+
+==================================================
+PHASE 10 — ACCEPTANCE TESTS
+==================================================
+
+Before marking complete, verify all of the following:
+
+A. Game identity / render
+- No card renders as "@"
+- No card renders "undefined @ undefined"
+- No card renders broken venue object
+- Pitchers show when both exist
+- Invalid games do not render
+
+B. Odds / signal gating
+- No SIGNAL without real odds
+- No SIGNAL with stale odds
+- No SIGNAL with stale projection
+- PREVIEW appears when teams exist but no real odds
+- NO_SIGNAL appears when odds exist but edge < 5 or freshness fails
+
+C. Market generation
+- At least one live MLB game with valid market inputs generates a proper market output
+- Market logs show input → output for supported prop types
+- Missing-input markets skip cleanly, not silently
+- No market uses probabilities as odds
+
+D. UI fidelity
+- PREVIEW / NO_SIGNAL / SIGNAL all render correctly
+- No fallback strings exist
+- No extra non-spec SIGNAL labels remain
+
+E. Admin / analytics
+- MLB and NBA analytics separated
+- MLB debug endpoint reflects true state
+
+==================================================
+OUTPUT FORMAT
+==================================================
+
+Return:
+1. exact files changed
+2. exact code edits
+3. any inserted helper functions
+4. any route changes
+5. concise verification summary
+
+Do not summarize conceptually.
+Do not give advice.
+Implement the repair.
