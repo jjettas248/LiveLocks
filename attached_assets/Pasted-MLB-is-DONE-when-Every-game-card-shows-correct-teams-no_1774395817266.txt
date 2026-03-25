@@ -1,0 +1,243 @@
+MLB is DONE when:
+
+✅ Every game card shows:
+correct teams (no partial strings)
+correct matchup (Pitcher A vs Pitcher B)
+correct game state (LIVE / PRE)
+✅ Signals only appear if:
+real odds exist
+projection is valid
+edge is calculated correctly
+✅ If not:
+clean Preview mode
+NO probability
+NO edge
+NO fake stats
+2. Your current failure (from screenshot)
+
+You have:
+
+❌ Broken binding
+“Booser vs Holm…”
+truncated / fallback strings
+❌ Fake rendering
+UI renders even when data incomplete
+❌ No gating
+system shows content when it should show nothing
+3. Root cause (this is what’s actually wrong)
+
+You have no strict input validation layer
+
+Right now:
+
+renderGame(game)
+
+Should be:
+
+if (!isValidGame(game)) return null;
+4. Fix the pipeline (THIS is the gold master move)
+STEP 1 — HARD VALIDATION LAYER
+
+Create this function:
+
+function isValidMLBGame(game) {
+  return (
+    game &&
+    game.awayTeam &&
+    game.homeTeam &&
+    game.awayTeam.length > 2 &&
+    game.homeTeam.length > 2 &&
+    game.pitcherAway &&
+    game.pitcherHome
+  );
+}
+Then:
+if (!isValidMLBGame(game)) {
+  return null; // DO NOT RENDER
+}
+
+👉 This alone will eliminate 50% of your UI issues
+
+STEP 2 — SIGNAL GATING (MOST IMPORTANT)
+
+This is where your system is currently failing.
+
+function canShowSignal(game) {
+  return (
+    game.odds != null &&
+    Number.isFinite(game.odds.line) &&
+    game.projection != null &&
+    Number.isFinite(game.projection)
+  );
+}
+STEP 3 — PREVIEW MODE (fallback)
+if (!canShowSignal(game)) {
+  return {
+    mode: "PREVIEW",
+    label: "Awaiting live lines",
+    showStats: false,
+    showEdge: false,
+    showProbability: false
+  };
+}
+STEP 4 — STRICT RENDERING (no partial UI)
+BAD (what you have now):
+<p>{game.pitcherAway || "vs"}</p>
+FIX:
+if (!game.pitcherAway || !game.pitcherHome) return null;
+
+👉 No fallback strings. Ever.
+
+STEP 5 — REMOVE FAKE DEFAULTS
+
+Search your codebase for:
+
+"0"
+"N/A"
+"vs"
+fallback strings
+placeholder projections
+
+Delete them.
+
+👉 If data is missing → don’t render
+
+STEP 6 — ENGINE LOCK (critical)
+
+Your MLB engine MUST NOT run unless:
+
+if (!hasRealOdds) return null;
+
+This prevents:
+
+fake probabilities
+fake edges
+bad alerts later
+5. UI CONTRACT (this is how it should behave)
+Case 1 — Valid game, no odds
+
+→ Show:
+
+teams
+pitchers
+status
+“Preview — awaiting lines”
+Case 2 — Valid game, valid odds
+
+→ Show:
+
+projection
+edge
+probability
+direction
+Case 3 — Invalid game
+
+→ Show NOTHING
+
+6. Replit MASTER PROMPT (MLB GOLD MASTER)
+
+Paste this exactly:
+
+# TASK: MLB GOLD MASTER — STRICT DATA + SIGNAL INTEGRITY
+
+## OBJECTIVE:
+Fix MLB rendering and signal pipeline to production-level integrity.
+NO fake data. NO partial rendering. NO invalid signals.
+
+---
+
+## PART 1 — HARD GAME VALIDATION
+
+Create function:
+
+isValidMLBGame(game):
+- requires:
+  - awayTeam (string length > 2)
+  - homeTeam (string length > 2)
+  - pitcherAway
+  - pitcherHome
+
+If invalid:
+- DO NOT render the game card
+
+---
+
+## PART 2 — SIGNAL GATING
+
+Create function:
+
+canShowSignal(game):
+- requires:
+  - odds exists
+  - odds.line is finite number
+  - projection exists
+  - projection is finite number
+
+If false:
+- DO NOT compute edge
+- DO NOT compute probability
+
+---
+
+## PART 3 — PREVIEW MODE
+
+If game valid but signal invalid:
+- render preview card
+- show:
+  - teams
+  - pitchers
+  - status
+  - label: "Awaiting live lines"
+- hide:
+  - edge
+  - probability
+  - direction
+
+---
+
+## PART 4 — REMOVE FALLBACK STRINGS
+
+Delete ALL fallback UI such as:
+- "vs"
+- "N/A"
+- "0"
+- placeholder projections
+
+If data missing:
+- do not render that element
+
+---
+
+## PART 5 — ENGINE LOCK
+
+MLB engine MUST NOT run unless:
+- real odds exist
+
+If no odds:
+- skip engine entirely
+
+---
+
+## PART 6 — STRICT RENDERING
+
+No partial rendering allowed:
+- if pitcher missing → do not render matchup
+- if teams invalid → skip card
+
+---
+
+## SUCCESS CRITERIA:
+
+- no broken text (e.g. truncated names)
+- no fake projections
+- no signals without odds
+- clean preview state for all games without lines
+- consistent UI across all cards
+
+---
+
+## OUTPUT:
+
+- exact code changes
+- file-level diffs
+- no placeholders

@@ -1,0 +1,240 @@
+#89 - NCAAB Full Pipeline Repair (Gold Master Fix — FINAL COPY/PASTE)
+
+## SYSTEM:
+Core Engine
+
+## OBJECTIVE:
+Restore NCAAB so every live game ALWAYS produces valid engineInput → engineOutput → plays.
+Fix must be server-side, deterministic, and preserve engine integrity.
+
+---
+
+## ROOT CAUSE:
+- extractLines can return null markets
+- validation is incomplete and inconsistent
+- no guaranteed fallback when sportsbook total is missing
+- engine receives empty/invalid inputs → returns zero available markets
+
+---
+
+## IMPLEMENTATION (EXECUTE EXACTLY)
+
+==================================================
+STEP 1 — FULL GAME TOTAL DERIVATION (CORE FIX)
+==================================================
+
+File: server/ncaabService.ts  
+Location: Inside computeNCAABPlays()  
+Insert AFTER odds fallback block  
+Insert BEFORE validation loop
+
+```ts
+let liveTotalSource: "book" | "derived" = total != null ? "book" : "book";
+
+const homeScoreNum = Number(game.homeScore ?? 0);
+const awayScoreNum = Number(game.awayScore ?? 0);
+const currentTotalScore = homeScoreNum + awayScoreNum;
+
+const elapsedSecondsRaw = Number(game.elapsedSeconds ?? 0);
+const totalGameSeconds = 2400; // 40 minutes
+const safeElapsedSeconds = Math.max(1, Math.min(elapsedSecondsRaw, totalGameSeconds));
+
+const isLiveGame =
+  game.status === "live" ||
+  game.status === "in_progress" ||
+  game.period != null ||
+  elapsedSecondsRaw > 0;
+
+if (
+  total == null &&
+  isLiveGame &&
+  Number.isFinite(currentTotalScore) &&
+  safeElapsedSeconds > 0
+) {
+  const projectedTotalRaw = (currentTotalScore / safeElapsedSeconds) * totalGameSeconds;
+  const projectedTotal = Math.max(100, Math.min(200, projectedTotalRaw));
+
+  if (Number.isFinite(projectedTotal)) {
+    total = projectedTotal;
+    overOddsAmerican = Number.isFinite(Number(overOddsAmerican))
+      ? Number(overOddsAmerican)
+      : -110;
+    underOddsAmerican = Number.isFinite(Number(underOddsAmerican))
+      ? Number(underOddsAmerican)
+      : -110;
+    liveTotalSource = "derived";
+
+    console.log(
+      `[NCAAB DERIVED] total=${projectedTotal.toFixed(
+        2
+      )} gameId=${game.id} score=${homeScoreNum}-${awayScoreNum} elapsed=${safeElapsedSeconds}`
+    );
+  }
+}
+==================================================
+STEP 2 — FULL MARKET VALIDATION (ALL 6 MARKETS)
+
+File: server/ncaabService.ts
+Replace existing validation loop with:
+
+type MarketValidationTarget =
+  | "full_total"
+  | "full_spread"
+  | "h1_total"
+  | "h1_spread"
+  | "h2_total"
+  | "h2_spread";
+
+for (const marketType of [
+  "full_total",
+  "full_spread",
+  "h1_total",
+  "h1_spread",
+  "h2_total",
+  "h2_spread",
+] as MarketValidationTarget[]) {
+  if (marketType === "full_total") {
+    if (!(total != null && Number.isFinite(Number(total)))) {
+      total = null;
+      overOddsAmerican = null;
+      underOddsAmerican = null;
+      console.log(`[NCAAB SKIP][${game.id}][full_total] invalid`);
+    }
+    continue;
+  }
+
+  if (marketType === "full_spread") {
+    if (!(spread != null && Number.isFinite(Number(spread)))) {
+      spread = null;
+      spreadOddsAmerican = null;
+      console.log(`[NCAAB SKIP][${game.id}][full_spread] invalid`);
+    }
+    continue;
+  }
+
+  if (marketType === "h1_total") {
+    if (!(h1TotalLine != null && Number.isFinite(Number(h1TotalLine)))) {
+      h1TotalLine = null;
+      h1OverOddsAmerican = null;
+      h1UnderOddsAmerican = null;
+    }
+    continue;
+  }
+
+  if (marketType === "h1_spread") {
+    if (!(h1SpreadLine != null && Number.isFinite(Number(h1SpreadLine)))) {
+      h1SpreadLine = null;
+      h1SpreadOddsAmerican = null;
+    }
+    continue;
+  }
+
+  if (marketType === "h2_total") {
+    if (!(h2TotalLine != null && Number.isFinite(Number(h2TotalLine)))) {
+      h2TotalLine = null;
+      h2OverOddsAmerican = null;
+      h2UnderOddsAmerican = null;
+    }
+    continue;
+  }
+
+  if (marketType === "h2_spread") {
+    if (!(h2SpreadLine != null && Number.isFinite(Number(h2SpreadLine)))) {
+      h2SpreadLine = null;
+      h2SpreadOddsAmerican = null;
+    }
+    continue;
+  }
+}
+
+CRITICAL:
+
+Only line invalidates market
+Odds NEVER invalidate market
+H1/H2 NEVER affect full game markets
+==================================================
+STEP 3 — ENGINE INPUT EXTENSION
+
+File: server/ncaabEngine.ts
+
+Add to interface:
+
+liveTotalSource?: "book" | "derived";
+
+File: server/ncaabService.ts
+When building engineInput:
+
+liveTotalSource,
+
+NO ENGINE LOGIC CHANGES
+
+==================================================
+STEP 4 — PRE-ENGINE TRACE (FULL VISIBILITY)
+
+File: server/ncaabService.ts
+Replace existing trace with:
+
+console.log(`[NCAAB TRACE PRE-ENGINE][${game.id}]`, {
+  total,
+  spread,
+  h1TotalLine,
+  h1SpreadLine,
+  h2TotalLine,
+  h2SpreadLine,
+
+  overOddsAmerican,
+  underOddsAmerican,
+  spreadOddsAmerican,
+
+  h1OverOddsAmerican,
+  h1UnderOddsAmerican,
+  h1SpreadOddsAmerican,
+
+  h2OverOddsAmerican,
+  h2UnderOddsAmerican,
+  h2SpreadOddsAmerican,
+
+  liveTotalSource,
+});
+==================================================
+STEP 5 — HARD FAILURE DETECTION
+
+File: server/ncaabService.ts
+After runNCAABEngine():
+
+const hasAvailableMarkets =
+  !!engineOutput?.markets?.some((m) => m && m.available === true);
+
+if (isLiveGame && !hasAvailableMarkets) {
+  console.error(`[NCAAB FAILURE] zero markets gameId=${game.id}`);
+}
+==================================================
+STEP 6 — SGO KEY TRACE (DIAGNOSTIC ONLY)
+
+File: server/ncaabService.ts
+Inside key loops:
+
+console.log(`[NCAAB SGO TRACE][${game.id}]`, attemptedKeysArray);
+
+DO NOT MODIFY LOGIC
+DO NOT REMOVE break
+
+DO NOT:
+Modify buildMarket()
+Modify Guardrail G7
+Add UI fixes
+Create fallback spreads
+Create fallback H1/H2
+Treat missing odds as invalid
+Allow H1/H2 failure to cascade
+Divide by zero
+SUCCESS CRITERIA:
+Every live game produces ≥1 valid market
+Engine output NEVER empty for live games
+Top plays card returns
+“No strong edges” disappears during active games
+Logs confirm derived or book total used
+Pipeline stable across all games
+FILES TO MODIFY:
+server/ncaabService.ts
+server/ncaabEngine.ts
