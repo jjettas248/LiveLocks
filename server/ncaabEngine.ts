@@ -64,6 +64,8 @@ export interface NCAABGameInput {
 
   sourceTimestamps?: Record<string, number>;
 
+  liveTotalSource?: "book" | "derived";
+
   // Optional sportsbook line movement / public betting data
   openSpread?: number | null;
   closingSpread?: number | null;

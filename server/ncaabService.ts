@@ -459,6 +459,7 @@ function extractSGO1HLines(sgoEvent: SGOEvent, game: any): SGO1HLines {
       }
     }
   }
+  console.log(`[NCAAB SGO TRACE H1 total][${game.id}]`, allOddsKeys.filter(k => isH1TotalKey(k)));
   const h1TotalLine: number | null = ouOver?.bookOverUnder != null
     ? parseFloat(ouOver.bookOverUnder)
     : null;
@@ -511,6 +512,7 @@ function extractSGO1HLines(sgoEvent: SGOEvent, game: any): SGO1HLines {
       }
     }
   }
+  console.log(`[NCAAB SGO TRACE H2 total][${game.id}]`, allOddsKeys.filter(k => isH2TotalKey(k)));
   const h2TotalLine: number | null = ouOver2H?.bookOverUnder != null
     ? parseFloat(ouOver2H.bookOverUnder) : null;
 
@@ -1231,10 +1233,10 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       }
       const sgo1H = sgoEvent ? extractSGO1HLines(sgoEvent, game) : null;
       const rawH1TotalLine  = sgo1H?.h1TotalLine ?? oddsH1Total ?? null;
-      const h1SpreadLine    = sgo1H?.h1SpreadLine ?? oddsH1Spread ?? null;
+      let h1SpreadLine    = sgo1H?.h1SpreadLine ?? oddsH1Spread ?? null;
       const h1Favorite      = sgo1H?.h1FavoriteName ?? oddsH1Fav ?? "";
-      const h2TotalLine     = sgo1H?.h2TotalLine ?? oddsH2Total ?? null;
-      const h2SpreadLine    = sgo1H?.h2SpreadLine ?? oddsH2Spread ?? null;
+      let h2TotalLine     = sgo1H?.h2TotalLine ?? oddsH2Total ?? null;
+      let h2SpreadLine    = sgo1H?.h2SpreadLine ?? oddsH2Spread ?? null;
       const h2Favorite      = sgo1H?.h2FavoriteName ?? oddsH2Fav ?? "";
       if (process.env.DEBUG_PIPELINE === "true") {
         console.log(`[PIPELINE][NCAAB][${game.id}] processed: h1Total=${rawH1TotalLine ?? "null"} h2Total=${h2TotalLine ?? "null"} h2Spread=${h2SpreadLine ?? "null"} sgoMatched=${!!sgoEvent}`);
@@ -1360,7 +1362,7 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         }
       }
 
-      const h1TotalLine = rawH1TotalLine;
+      let h1TotalLine = rawH1TotalLine;
 
       if (h1TotalLine !== null && h1TotalOverOdds === null && h1OverOddsAmerican === null) {
         console.warn("H1 total odds hydration failure (post-merge)", { gameId: game.id, h1TotalLine });
@@ -1376,43 +1378,94 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       if (h2TotalLine !== null && h2OverOddsAmerican === null) { h2OverOddsAmerican = -110; console.log(`[NCAAB] h2_total line present but odds null — defaulting to -110 (gameId=${game.id})`); }
       if (h2SpreadLine !== null && h2SpreadOddsAmerican === null) { h2SpreadOddsAmerican = -110; console.log(`[NCAAB] h2_spread line present but odds null — defaulting to -110 (gameId=${game.id})`); }
 
-      // ── Per-market validation loop ────────────────────────────────────────
-      // Validates full_total and full_spread markets individually.
-      // Invalid markets are nullified so the engine treats them as unavailable.
-      // Per-market `continue` skips only the failing market — the game still runs.
-      for (const marketType of ["total", "spread"] as const) {
-        if (marketType !== "total" && marketType !== "spread") {
-          console.log(`[NCAAB SKIP][${game.id}][unknown] invalid marketType`);
+      // ── Step 1: Full game total derivation (pace-based fallback) ─────────
+      let liveTotalSource: "book" | "derived" = total != null ? "book" : "book";
+
+      const homeScoreNum = Number(game.homeScore ?? 0);
+      const awayScoreNum = Number(game.awayScore ?? 0);
+      const currentTotalScore = homeScoreNum + awayScoreNum;
+
+      const elapsedSecondsRaw = Number(game.elapsedSeconds ?? 0);
+      const totalGameSeconds = 2400; // 40 minutes
+      const safeElapsedSeconds = Math.max(1, Math.min(elapsedSecondsRaw, totalGameSeconds));
+
+      const isLiveGame =
+        game.status === "live" ||
+        game.status === "in_progress" ||
+        game.period != null;
+
+      if (
+        total == null &&
+        isLiveGame &&
+        Number.isFinite(currentTotalScore) &&
+        safeElapsedSeconds > 0
+      ) {
+        const projectedTotalRaw = (currentTotalScore / safeElapsedSeconds) * totalGameSeconds;
+        const projectedTotal = Math.max(100, Math.min(200, projectedTotalRaw));
+
+        if (Number.isFinite(projectedTotal)) {
+          total = projectedTotal;
+          overOddsAmerican = Number.isFinite(Number(overOddsAmerican)) ? Number(overOddsAmerican) : -110;
+          underOddsAmerican = Number.isFinite(Number(underOddsAmerican)) ? Number(underOddsAmerican) : -110;
+          liveTotalSource = "derived";
+          console.log(
+            `[NCAAB DERIVED] total=${projectedTotal.toFixed(2)} gameId=${game.id} score=${homeScoreNum}-${awayScoreNum} elapsed=${safeElapsedSeconds}`
+          );
+        }
+      }
+
+      // ── Step 2: Per-market validation loop (all 6 markets) ───────────────
+      type MarketValidationTarget =
+        | "full_total"
+        | "full_spread"
+        | "h1_total"
+        | "h1_spread"
+        | "h2_total"
+        | "h2_spread";
+
+      for (const marketType of [
+        "full_total",
+        "full_spread",
+        "h1_total",
+        "h1_spread",
+        "h2_total",
+        "h2_spread",
+      ] as MarketValidationTarget[]) {
+        if (marketType === "full_total") {
+          if (!(typeof total === "number" && Number.isFinite(total))) {
+            total = null; overOddsAmerican = null; underOddsAmerican = null;
+            console.log(`[NCAAB SKIP][${game.id}][full_total] invalid`);
+          }
           continue;
         }
-
-        let liveLine: number | null;
-        let liveOdds: number | null;
-
-        if (marketType === "total") {
-          liveLine = total;
-          liveOdds = overOddsAmerican;
-        } else {
-          liveLine = spread;
-          liveOdds = spreadOddsAmerican;
-        }
-
-        if (marketType === "total" && overOddsAmerican == null && underOddsAmerican == null) {
-          console.log(`[NCAAB SKIP][${game.id}][total] missing both sides`);
-          total = null;
-          overOddsAmerican = null;
+        if (marketType === "full_spread") {
+          if (!(typeof spread === "number" && Number.isFinite(spread))) {
+            spread = null; spreadOddsAmerican = null;
+            console.log(`[NCAAB SKIP][${game.id}][full_spread] invalid`);
+          }
           continue;
         }
-
-        const validation = validateEngineInput({ line: liveLine, odds: liveOdds, gameId: game.id });
-        if (!validation.valid) {
-          console.log(`[NCAAB SKIP][${game.id}][${marketType}] ${validation.reason}`);
-          if (marketType === "total") {
-            total = null;
-            overOddsAmerican = null;
-          } else {
-            spread = null;
-            spreadOddsAmerican = null;
+        if (marketType === "h1_total") {
+          if (!(typeof h1TotalLine === "number" && Number.isFinite(h1TotalLine))) {
+            h1TotalLine = null; h1OverOddsAmerican = null;
+          }
+          continue;
+        }
+        if (marketType === "h1_spread") {
+          if (!(typeof h1SpreadLine === "number" && Number.isFinite(h1SpreadLine))) {
+            h1SpreadLine = null; h1SpreadOddsAmerican = null;
+          }
+          continue;
+        }
+        if (marketType === "h2_total") {
+          if (!(typeof h2TotalLine === "number" && Number.isFinite(h2TotalLine))) {
+            h2TotalLine = null; h2OverOddsAmerican = null;
+          }
+          continue;
+        }
+        if (marketType === "h2_spread") {
+          if (!(typeof h2SpreadLine === "number" && Number.isFinite(h2SpreadLine))) {
+            h2SpreadLine = null; h2SpreadOddsAmerican = null;
           }
           continue;
         }
@@ -1472,24 +1525,24 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
           odds: Date.now(),
           scores: Date.now(),
         },
+        liveTotalSource,
       };
 
-      const sgoMarketKeys = sgoEvent ? Object.keys(sgoEvent.odds ?? {}) : [];
-      const oddsApiMarketKeys = oddsEvent
-        ? (oddsEvent.bookmakers ?? []).flatMap((bk: any) => (bk.markets ?? []).map((m: any) => m.key as string))
-        : [];
-      const combinedMarketKeys = Array.from(new Set([...sgoMarketKeys, ...oddsApiMarketKeys]));
-      console.log("[NCAAB TRACE PRE-ENGINE]", {
-        gameId: game.id,
-        h1TotalLine: engineInput.h1TotalLine,
-        h1SpreadLine: engineInput.h1SpreadLine,
-        h2TotalLine: engineInput.h2TotalLine,
-        h2SpreadLine: engineInput.h2SpreadLine,
-        h1OverOddsAmerican: engineInput.h1OverOddsAmerican,
-        h1SpreadOddsAmerican: engineInput.h1SpreadOddsAmerican,
-        h2OverOddsAmerican: engineInput.h2OverOddsAmerican,
-        h2SpreadOddsAmerican: engineInput.h2SpreadOddsAmerican,
-        detectedMarketKeys: combinedMarketKeys,
+      console.log(`[NCAAB TRACE PRE-ENGINE][${game.id}]`, {
+        total,
+        spread,
+        h1TotalLine,
+        h1SpreadLine,
+        h2TotalLine,
+        h2SpreadLine,
+        overOddsAmerican,
+        underOddsAmerican,
+        spreadOddsAmerican,
+        h1OverOddsAmerican,
+        h1SpreadOddsAmerican,
+        h2OverOddsAmerican,
+        h2SpreadOddsAmerican,
+        liveTotalSource,
       });
 
       if (process.env.DEBUG_PIPELINE === "true") {
@@ -1497,6 +1550,19 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       }
 
       const engineOutput = runNCAABEngine(engineInput);
+
+      const hasAvailableMarkets =
+        !!engineOutput?.markets && Object.values(engineOutput.markets).some((m: any) => m && m.available === true);
+
+      const isLiveCheck =
+        game.status === "live" ||
+        game.status === "in_progress" ||
+        game.period != null ||
+        Number(game.elapsedSeconds ?? 0) > 0;
+
+      if (isLiveCheck && !hasAvailableMarkets) {
+        console.error(`[NCAAB FAILURE] zero markets gameId=${game.id}`);
+      }
 
       if (!engineOutput.markets) {
         console.error("NCAAB canonical market contract violation", { gameId: game.id, missingKey: "markets" });
