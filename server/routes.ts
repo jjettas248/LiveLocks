@@ -1969,16 +1969,23 @@ export async function registerRoutes(
                 liveFg3a,
               });
 
+              // SIGNAL EVALUATION CONTRACT — evaluation order is strict, do not reorder:
+              // Step 1: finite guard — must run before any arithmetic on result.probability
+              if (!Number.isFinite(result.probability)) continue;
+
+              // Step 2: compute edge — only after finite check
               const edge = Math.abs(result.probability - 50);
               if (process.env.DEBUG_PIPELINE === "true") {
                 console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] engineOutput: player=${dbPlayer.name} stat=${statType} prob=${result.probability.toFixed(1)} edge=${edge.toFixed(1)} ${edge < 5 ? "skipReason=lowEdge" : "included=true"}`);
               }
 
-              // Populate engineOutput for ALL players with valid results (no edge filter)
+              // Populate engineOutput for ALL players with valid results (no edge filter).
+              // Fallback direction uses strict > 50 (NO_SIGNAL plays get "UNDER" — acceptable
+              // since they are never pushed to allSignals).
               const engineBetDirection: "OVER" | "UNDER" =
                 result.recommendedSide === "UNDER" ? "UNDER" :
                 result.recommendedSide === "OVER" ? "OVER" :
-                (result.probability >= 50 ? "OVER" : "UNDER");
+                (result.probability > 50 ? "OVER" : "UNDER");
 
               engineOutput[dbPlayer.id][statType] = {
                 probability: result.displayConfidence ?? Math.abs(result.probability - 50) + 50,
@@ -1988,10 +1995,14 @@ export async function registerRoutes(
                 statType,
               };
 
-              // Only push genuine OVER or UNDER plays — NO_SIGNAL and noSignal entries must never enter signals[]
-              if (result.noSignal || result.recommendedSide === "NO_SIGNAL") {
-                // do not push
+              // Step 3 + 4: threshold gate, zero-edge exclusion, NO_SIGNAL/noSignal guard.
+              // All three skip conditions produce zero side effects on allSignals.
+              // Note: probability===50 → recommendedSide=NO_SIGNAL (engine contract),
+              // so the explicit check is belt-and-suspenders for the evaluation contract.
+              if (result.probability === 50 || result.noSignal || result.recommendedSide === "NO_SIGNAL") {
+                // Step 4: zero-edge or no-conviction — do not push, no side effects
               } else if (edge >= 5) {
+                // Step 5: direction is already classified in recommendedSide (strict > 50 / < 50)
                 allSignals.push({
                   playerName: dbPlayer.name,
                   playerId: dbPlayer.id,
@@ -2549,10 +2560,21 @@ export async function registerRoutes(
                   liveFg3a: htLiveFg3a,
                 });
 
+                // SIGNAL EVALUATION CONTRACT — evaluation order is strict, do not reorder:
+                // Step 1: finite guard — must run before any arithmetic on result.probability.
+                // NaN < 6 === false in JS, so without this guard a NaN probability would silently
+                // pass the threshold check below and enter allPlays with garbage data.
+                if (!Number.isFinite(result.probability)) continue;
+
+                // Step 2: compute edge — only after finite check
                 let edge = Math.abs(result.probability - 50);
 
-                // Skip plays with edge below absolute minimum (< 6) — not actionable
+                // Step 3: threshold gate — plays below minimum edge are not actionable
                 if (edge < 6) continue;
+
+                // Step 4: explicit zero-edge exclusion (belt-and-suspenders; redundant with step 3
+                // since prob===50 → edge===0 < 6, but required by evaluation contract).
+                if (result.probability === 50) continue;
 
                 // Confidence tier reduction for degraded lines:
                 // ELITE (edge>=20) → STRONG (edge 15-19), STRONG → VALUE (edge 10-14), VALUE → volatile pool
@@ -4133,6 +4155,16 @@ export function registerAnalyticsRoutes(app: Express): void {
   // ── NBA Engine Audit endpoint ────────────────────────────────────────────
   // Returns directional pipeline trace (5 UNDER plays), full audit object,
   // and post-filter results summary from the in-memory calc log + persisted plays.
+  //
+  // AUDIT ENDPOINT CONTRACT (STRICT — DO NOT VIOLATE):
+  // - This endpoint reads signal results from calcLogEntries ONLY.
+  // - It must NEVER reimplement, recompute, or approximate any helper logic
+  //   from the production signal evaluation path (routes.ts live-signals /
+  //   halftime handler, or storage.ts calculateProbability).
+  // - Direction classification here must mirror the production rule exactly:
+  //   probability > 50 → OVER, probability < 50 → UNDER, probability === 50 → excluded.
+  // - Any future change to signal evaluation logic must update BOTH the production
+  //   handler and this endpoint simultaneously to prevent audit drift.
   app.get("/api/analytics/nba-audit", requireAdmin, async (_req, res) => {
     try {
       const { calcLogEntries } = await import("./storage");
@@ -4143,15 +4175,18 @@ export function registerAnalyticsRoutes(app: Express): void {
       // the edge raw (model edge), the probability as persisted (same value),
       // and the persisted edge (|probability - 50|).
       // Mismatch = direction label disagrees with probability position.
-      const underEntries = entries.filter(e => e.direction === "UNDER");
+      // Entries with probability === 50 are excluded (zero-edge, NO_SIGNAL —
+      // they should not be in calcLogEntries at all per the calc log contract).
+      const underEntries = entries.filter(e => e.direction === "UNDER" && e.probability !== 50);
       const tracePlays = underEntries.slice(-5);
       const pipelineTrace = tracePlays.map(e => {
         const responseProbability = e.probability;
         const edgeInputProbability = e.edgeRaw;
         const persistedProbability = e.probability;
         const persistedEdge = Math.abs(e.probability - 50);
+        // DIRECTION CONTRACT: strict > 50 / < 50 — probability === 50 is excluded above.
         const mismatch: "YES" | "NO" =
-          (e.direction === "UNDER" && e.probability >= 50) ||
+          (e.direction === "UNDER" && e.probability > 50) ||
           (e.direction === "OVER" && e.probability < 50)
             ? "YES" : "NO";
         return {

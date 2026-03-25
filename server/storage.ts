@@ -588,7 +588,10 @@ export class DatabaseStorage implements IStorage {
     const edgeContext: "halftime" | "live" = isHalftimeContext ? "halftime" : "live";
     let probability = edgeToProbability(edge, req.statType, edgeContext);
 
-    const direction = probability >= 50 ? "OVER" : "UNDER";
+    // DIRECTION CONTRACT: strict > 50 / < 50 rule.
+    // probability === 50 maps to "UNDER" here only for calibration arithmetic;
+    // it will produce recommendedSide="NO_SIGNAL" and be excluded from all signals.
+    const direction = probability > 50 ? "OVER" : "UNDER";
 
     // [HT_SUPPRESSION_TRACE] — halftime-only trace of suppression multipliers
     // Fires only in halftime context so live-signal noise is not added.
@@ -742,28 +745,38 @@ export class DatabaseStorage implements IStorage {
     }
 
     // ─── In-memory calc log ───────────────────────────────────────────────
-    const finalProbability = Math.round(probability * 10) / 10;
-    calcLogEntries.push({
-      player: player.name,
-      statType: req.statType,
-      line: req.liveLine,
-      probability: finalProbability,
-      direction,
-      bookOdds: req.bookOdds ?? null,
-      bookImplied: Math.round(sportsbookImplied * 10) / 10,
-      edgeRaw: Math.round(edge * 100) / 100,
-      edgeVsBook: Math.round(edgeVsBook * 10) / 10,
-      archetype,
-      avgMinutes,
-      recommendedSide,
-      displayConfidence: displayConfidence !== null ? Math.round(displayConfidence * 10) / 10 : null,
-      warnings,
-      noSignal,
-      gameDate: req.gameDate ?? null,
-      timestamp: new Date(),
-    });
-    if (calcLogEntries.length > 500) {
-      calcLogEntries.splice(0, calcLogEntries.length - 500);
+    // CALC LOG CONTRACT (STRICT):
+    // - Only store final, post-validation values: final probability, final edge, final direction.
+    // - Never store raw, intermediate, or pre-calibration values here.
+    // - Audit endpoints must treat calcLogEntries as the single source of truth.
+    // - Any future change to signal logic must update both the production handler
+    //   and this log push simultaneously.
+    // - Plays with recommendedSide="NO_SIGNAL" (probability===50, zero-edge) are excluded:
+    //   they must not appear in calcLogEntries so the audit log contains only valid signals.
+    if (recommendedSide !== "NO_SIGNAL") {
+      const finalProbability = Math.round(probability * 10) / 10;
+      calcLogEntries.push({
+        player: player.name,
+        statType: req.statType,
+        line: req.liveLine,
+        probability: finalProbability,
+        direction,
+        bookOdds: req.bookOdds ?? null,
+        bookImplied: Math.round(sportsbookImplied * 10) / 10,
+        edgeRaw: Math.round(edge * 100) / 100,
+        edgeVsBook: Math.round(edgeVsBook * 10) / 10,
+        archetype,
+        avgMinutes,
+        recommendedSide,
+        displayConfidence: displayConfidence !== null ? Math.round(displayConfidence * 10) / 10 : null,
+        warnings,
+        noSignal,
+        gameDate: req.gameDate ?? null,
+        timestamp: new Date(),
+      });
+      if (calcLogEntries.length > 500) {
+        calcLogEntries.splice(0, calcLogEntries.length - 500);
+      }
     }
 
     const debug: CalcDebug = {
