@@ -7,6 +7,7 @@ import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
 import AuthPage from "@/pages/auth";
 import AdminPage from "@/pages/admin";
+import AnalyticsPage from "@/pages/analytics";
 import PrivacyPage from "@/pages/privacy";
 import TermsPage from "@/pages/terms";
 import LandingPage from "@/pages/landing";
@@ -28,6 +29,9 @@ function ProtectedRouter() {
     if (!isLoading && user && !user.isAdmin && location === "/admin") {
       navigate("/dashboard");
     }
+    if (!isLoading && user && !user.isAdmin && location === "/analytics") {
+      navigate("/dashboard");
+    }
   }, [user, isLoading, location, navigate]);
 
   if (isLoading) {
@@ -42,6 +46,7 @@ function ProtectedRouter() {
     <Switch>
       <Route path="/auth" component={AuthPage} />
       <Route path="/admin" component={AdminPage} />
+      <Route path="/analytics" component={AnalyticsPage} />
       <Route path="/dashboard" component={Dashboard} />
       <Route component={NotFound} />
     </Switch>

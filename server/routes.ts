@@ -4614,10 +4614,66 @@ export function registerAnalyticsRoutes(app: Express): void {
   app.get("/api/analytics/summary", requireAdmin, async (req, res) => {
     try {
       const range = (req.query.range as string) || "all";
-      const validRanges = ["today", "yesterday", "7d", "30d", "all"];
-      const effectiveRange = validRanges.includes(range) ? range as "today" | "yesterday" | "7d" | "30d" | "all" : "all";
-      const summary = await storage.getAnalyticsSummary(effectiveRange);
-      res.json(summary);
+      const leagueRaw = ((req.query.league as string) || "NBA").toUpperCase();
+      const league = ["NBA", "MLB", "NCAAB"].includes(leagueRaw) ? leagueRaw : "NBA";
+      const sport = league.toLowerCase();
+
+      const now = new Date();
+      let startDate: string | undefined;
+      if (range === "7d") {
+        const d = new Date(now); d.setDate(d.getDate() - 7);
+        startDate = d.toISOString().slice(0, 10);
+      } else if (range === "30d") {
+        const d = new Date(now); d.setDate(d.getDate() - 30);
+        startDate = d.toISOString().slice(0, 10);
+      } else if (range === "today") {
+        startDate = now.toISOString().slice(0, 10);
+      }
+
+      const [settled, recentResult] = await Promise.all([
+        storage.getGradedPlaysForCalibration({ sport, startDate }),
+        storage.getPlays({ sport, limit: 20 }),
+      ]);
+
+      const hits = settled.filter((p) => p.result === "hit").length;
+      const total = settled.length;
+      const winRate = total > 0 ? Math.round((hits / total) * 1000) / 10 : 0;
+      const roi = total > 0
+        ? Math.round(((hits * 90.91 - (total - hits) * 100) / total) * 10) / 10
+        : 0;
+
+      const pending = recentResult.plays.filter((p) => p.result === null).length;
+
+      const overPlays = settled.filter((p) => p.direction === "over");
+      const underPlays = settled.filter((p) => p.direction === "under");
+      const overWinRate = overPlays.length > 0
+        ? Math.round((overPlays.filter((p) => p.result === "hit").length / overPlays.length) * 1000) / 10 : 0;
+      const underWinRate = underPlays.length > 0
+        ? Math.round((underPlays.filter((p) => p.result === "hit").length / underPlays.length) * 1000) / 10 : 0;
+
+      res.json({
+        league,
+        range,
+        winRate,
+        totalSettled: total,
+        totalHits: hits,
+        roi,
+        pending,
+        overWinRate,
+        underWinRate,
+        recentPlays: recentResult.plays.slice(0, 20).map((p) => ({
+          id: p.id,
+          playerName: p.playerName,
+          team: p.team,
+          market: p.market,
+          direction: p.direction,
+          line: p.line,
+          prob: p.prob,
+          gameDate: p.gameDate,
+          result: p.result,
+          finalStat: p.finalStat,
+        })),
+      });
     } catch (e) {
       res.status(500).json({ message: "Failed to load analytics summary" });
     }
