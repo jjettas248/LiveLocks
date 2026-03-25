@@ -1,0 +1,242 @@
+# TASK: NBA HALFTIME DIRECTIONAL BIAS — FORENSIC GOLD MASTER (NON-DESTRUCTIVE)
+
+## SYSTEM:
+Core Engine (NBA Logic)
+
+## OBJECTIVE:
+Identify and correct the exact source of halftime UNDER bias **without breaking existing engine contracts**.
+
+This is a **forensic, surgical fix**:
+- Preserve current probability + edge semantics
+- Do NOT redefine core math blindly
+- Add full observability
+- Patch ONLY the asymmetry point once proven
+
+Target outcome:
+- Balanced OVER/UNDER distribution when justified by data
+- No artificial forcing or fake balancing
+- Zero regression in ROI, edge ranking, or UI contracts
+
+---
+
+## ROOT CAUSE (WORKING HYPOTHESIS):
+One (or more) of the following is creating structural UNDER bias:
+
+1. Projection suppression (halftime regression + multipliers stacking)
+2. Directional remapping asymmetry (probability → direction)
+3. Edge calculation asymmetry (signed vs absolute misuse)
+4. Legacy UNDER-only filters still active
+5. UI or post-processing re-deriving direction incorrectly
+
+We DO NOT assume which one. We TRACE and PROVE.
+
+---
+
+## IMPLEMENTATION:
+
+# PHASE 1 — TRACE THE EXACT PIPELINE (MANDATORY, NO LOGIC CHANGES)
+
+## Step 1: Instrument Full Halftime Signal Pipeline
+
+FILE: server/nbaService.ts (or exact engine file where plays are finalized)
+
+Locate the FINAL loop where plays are pushed (e.g. plays.push or return array).
+
+Immediately BEFORE pushing each halftime play, inject:
+
+```ts
+const isHalftime =
+  game.period === 2 ||
+  game.gamePhase === "HALFTIME" ||
+  game.clock === "HALFTIME" ||
+  game.isHalftime === true;
+
+if (isHalftime) {
+  console.log("[HT_TRACE]", {
+    player: player.name,
+    market,
+    line,
+    projection,
+
+    // include ALL available probability stages (only if they exist)
+    rawProbability: typeof rawProbability !== "undefined" ? rawProbability : null,
+    calibratedProbability: typeof calibratedProbability !== "undefined" ? calibratedProbability : null,
+    finalProbability: typeof probability !== "undefined" ? probability : null,
+
+    direction,
+    edge,
+
+    // key modifiers (if available)
+    paceMultiplier: typeof paceMultiplier !== "undefined" ? paceMultiplier : null,
+    defenseMultiplier: typeof defenseMultiplier !== "undefined" ? defenseMultiplier : null,
+    shootingAdj: typeof shootingAdj !== "undefined" ? shootingAdj : null,
+    regressionFactor: typeof halftimeRegressionFactor !== "undefined" ? halftimeRegressionFactor : null,
+  });
+}
+Step 2: Log Halftime Distribution (GLOBAL)
+
+AFTER all plays are built:
+
+const halftimePlays = plays.filter(p => p && p.isHalftime === true || p.gamePhase === "HALFTIME");
+
+if (halftimePlays.length > 0) {
+  const overs = halftimePlays.filter(p => p.direction === "OVER").length;
+  const unders = halftimePlays.filter(p => p.direction === "UNDER").length;
+
+  console.log("[HT_DISTRIBUTION]", {
+    total: halftimePlays.length,
+    overs,
+    unders,
+    overPct: ((overs / halftimePlays.length) * 100).toFixed(1),
+    underPct: ((unders / halftimePlays.length) * 100).toFixed(1),
+  });
+}
+Step 3: Log Top Edge Diagnostics
+const topHT = [...halftimePlays]
+  .sort((a, b) => (b.edge || 0) - (a.edge || 0))
+  .slice(0, 10);
+
+console.log("[HT_TOP_EDGES]", topHT.map(p => ({
+  player: p.playerName,
+  market: p.market,
+  line: p.line,
+  projection: p.projection,
+  probability: p.probability,
+  direction: p.direction,
+  edge: p.edge
+})));
+PHASE 2 — IDENTIFY THE FAILURE POINT
+
+After running one live halftime slate, inspect logs and determine:
+
+Case A — Projection Bias
+
+If:
+
+projections consistently < lines
+→ root cause = suppression
+Case B — Direction Mapping Bug
+
+If:
+
+projection > line but direction = UNDER
+→ mapping bug
+Case C — Edge Inflation Bias
+
+If:
+
+UNDERS consistently have larger edges than equivalent OVERS
+→ edge asymmetry
+Case D — Filter Bias
+
+If:
+
+plays dropped disproportionately on OVER side
+→ filter issue
+PHASE 3 — APPLY TARGETED FIX (ONLY ONE PATH)
+FIX A — Projection Suppression (MOST COMMON)
+
+Find halftime regression:
+
+const halftimeRegressionFactor = 0.92;
+
+Update:
+
+const halftimeRegressionFactor = 0.96;
+
+Clamp combined suppression (CRITICAL):
+
+const suppressionRaw =
+  defenseMultiplier *
+  shootingAdj *
+  paceMultiplier;
+
+const suppression = Math.max(0.92, Math.min(1.08, suppressionRaw));
+
+projection *= suppression;
+FIX B — Direction Mapping (ONLY IF BROKEN)
+
+Locate:
+
+const direction = probability < 50 ? "UNDER" : "OVER";
+
+VERIFY:
+
+probability is true directional midpoint (0–100)
+
+If NOT, fix ONLY mapping layer:
+
+const midpointProbability = probability;
+
+const direction = midpointProbability < 50 ? "UNDER" : "OVER";
+
+DO NOT alter upstream probability generation.
+
+FIX C — Edge Asymmetry (ONLY IF CONFIRMED)
+
+If logs show:
+
+UNDER edges disproportionately larger for same distance
+
+Then normalize display edge ONLY:
+
+const displayEdge = Math.abs(probability - 50) * 2;
+
+BUT:
+
+KEEP original edge internally
+ONLY override display field if needed
+FIX D — REMOVE LEGACY UNDER FILTERS
+
+Search and DELETE:
+
+isSuperstarUnderReduced
+probability * 0.93
+UNDER-only conditionals
+probability < 25 → noSignal (if asymmetrical)
+PHASE 4 — LOCK ENGINE CONTRACT (CRITICAL)
+
+Ensure:
+
+Engine is SINGLE source of truth
+UI does NOT recompute:
+direction
+edge
+probability
+
+Search frontend and remove:
+
+probability < 50 ? "UNDER" : "OVER"
+100 - probability
+PHASE 5 — VALIDATION
+
+Run 2 live slates and confirm:
+
+Distribution:
+40–60% OVER/UNDER (not forced, but natural)
+Logs:
+HT_TRACE shows correct projection vs line relationships
+HT_DISTRIBUTION no longer skewed 80%+
+No regression:
+Edge ordering unchanged structurally
+ROI tracking unaffected
+UI rendering unchanged except balance
+DO NOT:
+Do NOT redefine edge globally without proof
+Do NOT redefine probability pipeline blindly
+Do NOT force 50/50 distribution
+Do NOT touch MLB or NCAAB
+Do NOT introduce randomness
+Do NOT add multiple pipelines
+SUCCESS CRITERIA:
+Halftime slates no longer overwhelmingly UNDER
+Projection aligns logically with direction
+Edge remains consistent with model strength
+Diagnostics clearly show cause and correction
+No contract breaks between engine and UI
+OUTPUT REQUIRED FROM REPLIT:
+Exact root cause identified (A, B, C, or D)
+Exact lines changed
+Before vs after halftime distribution logs
+Top 10 play diagnostics before vs after
+Confirmation that UI uses engine values directly
