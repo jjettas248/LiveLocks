@@ -213,6 +213,43 @@ export async function registerRoutes(
     }
   });
 
+  // ── Admin: Debug user Stripe state ──────────────────────────────────────────
+  app.get("/api/admin/debug-user/:id", requireAdmin, async (req, res) => {
+    try {
+      const userId = parseInt(String(req.params.id), 10);
+      const user = await storage.getUserById(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      let stripeInfo: any = null;
+      if (user.stripeCustomerId) {
+        try {
+          const { getUncachableStripeClient } = await import("./stripeClient");
+          const stripe = await getUncachableStripeClient();
+          const subs = await stripe.subscriptions.list({ customer: user.stripeCustomerId, status: "all", limit: 5 });
+          stripeInfo = subs.data.map((s: any) => ({
+            subscriptionId: s.id,
+            status: s.status,
+            priceId: s.items.data[0]?.price?.id ?? null,
+          }));
+        } catch (stripeErr: any) {
+          stripeInfo = { error: stripeErr.message };
+        }
+      }
+
+      return res.json({
+        userId: user.id,
+        email: user.email,
+        plan: user.subscriptionTier ?? null,
+        stripeCustomerId: user.stripeCustomerId ?? null,
+        stripeSubscriptionId: user.stripeSubscriptionId ?? null,
+        stripeSubscriptions: stripeInfo,
+      });
+    } catch (err: any) {
+      console.error("[admin/debug-user]", err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── Admin: NBA Simulation Mode ────────────────────────────────────────────────
   app.get("/api/admin/simulation-config", requireAdmin, (_req, res) => {
     return res.json(getSimulationConfig());
@@ -1469,8 +1506,30 @@ export async function registerRoutes(
   app.get("/api/me", requireAuth, async (req, res) => {
     try {
       const userId = (req as any).resolvedUserId as number;
-      const user = await storage.getUserById(userId);
+      let user = await storage.getUserById(userId);
       if (!user) return res.status(404).json({ error: "User not found" });
+
+      if (!user.subscriptionTier && user.stripeCustomerId) {
+        try {
+          const { getUncachableStripeClient } = await import("./stripeClient");
+          const { getTierFromPriceId } = await import("./billing/planMap");
+          const stripe = await getUncachableStripeClient();
+          const subs = await stripe.subscriptions.list({ customer: user.stripeCustomerId, status: "active" });
+          if (subs.data.length > 0) {
+            const activeSub = subs.data[0];
+            const priceId = activeSub.items.data[0]?.price?.id ?? "";
+            const repairedTier = getTierFromPriceId(priceId);
+            if (repairedTier) {
+              await storage.updateUserSubscription(userId, repairedTier, user.stripeCustomerId, activeSub.id);
+              console.log(`[stripe-fallback] repaired tier for user ${userId} → ${repairedTier}`);
+              user = await storage.getUserById(userId) ?? user;
+            }
+          }
+        } catch (stripeErr: any) {
+          console.warn(`[stripe-fallback] Stripe lookup failed for user ${userId}:`, stripeErr.message);
+        }
+      }
+
       const tier = user.subscriptionTier;
       return res.json({
         id: user.id,

@@ -9,6 +9,7 @@ import {
   halftimePlayAlerts,
   playResults,
   persistedPlays,
+  stripeEvents,
   type Player,
   type InsertPlayer,
   type TeamDefense,
@@ -137,6 +138,8 @@ export interface IStorage {
   cleanupOldPlays(): Promise<number>;
   cleanDuplicatePlays(): Promise<{ removed: number; remaining: number }>;
   cleanDuplicateAlerts(): Promise<{ removed: number; remaining: number }>;
+  hasProcessedStripeEvent(eventId: string): Promise<boolean>;
+  recordStripeEvent(eventId: string): Promise<void>;
 }
 
 // ─── Usage compression for blowout games ──────────────────────────────────
@@ -1442,6 +1445,15 @@ export class DatabaseStorage implements IStorage {
     }
 
     return { removed: toDelete.length, remaining: rows.length - toDelete.length };
+  }
+
+  async hasProcessedStripeEvent(eventId: string): Promise<boolean> {
+    const rows = await db.select().from(stripeEvents).where(eq(stripeEvents.id, eventId)).limit(1);
+    return rows.length > 0;
+  }
+
+  async recordStripeEvent(eventId: string): Promise<void> {
+    await db.insert(stripeEvents).values({ id: eventId }).onConflictDoNothing();
   }
 }
 

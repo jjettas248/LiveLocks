@@ -1045,19 +1045,13 @@ export default function Dashboard() {
     if (payment === "success" && tier) {
       window.history.replaceState({}, "", "/dashboard");
       apiRequest("POST", "/api/stripe/checkout-complete", { tier, sessionId })
-        .then(() => {
-          queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-          const authHeaders: Record<string, string> = {};
-          const tok = getAuthToken();
-          if (tok) authHeaders["Authorization"] = `Bearer ${tok}`;
-          Promise.all([
-            fetch("/api/auth/me", { credentials: "include", headers: authHeaders }).then(r => r.json()),
-            fetch("/api/me", { credentials: "include", headers: authHeaders }).then(r => r.json()),
-          ]).then(([authMe, me]) => {
-            setLocalTier(authMe.subscriptionTier ?? me.subscriptionTier ?? null);
-          }).catch(() => {});
+        .then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          const confirmedTier = data.subscriptionTier ?? tier;
+          setLocalTier(confirmedTier);
+          queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
         })
-        .catch(() => queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] }));
+        .catch(() => queryClient.refetchQueries({ queryKey: ["/api/auth/me"] }));
     } else if (payment === "cancelled") {
       window.history.replaceState({}, "", "/dashboard");
     }
@@ -3717,7 +3711,7 @@ export default function Dashboard() {
         )}
 
         {/* MLB Live Tab — admin and All Sports users */}
-        {activeTab === "mlb" && (user?.isAdmin || user?.subscriptionTier === "elite") && <MlbLivePage />}
+        {activeTab === "mlb" && (user?.isAdmin || effectiveTier === "elite") && <MlbLivePage />}
 
       </main>
 
@@ -3743,6 +3737,8 @@ export default function Dashboard() {
           onClose={() => setShowUpgradeModal(false)}
           lockedEdgesCount={slateLockedEdgesCount}
           topLockedEdge={slateTopLockedEdge}
+          currentTier={effectiveTier ?? user?.subscriptionTier ?? null}
+          onUpgradeSuccess={(tier) => setLocalTier(tier)}
         />
       )}
 

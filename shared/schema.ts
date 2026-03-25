@@ -1,4 +1,4 @@
-import { pgTable, text, serial, numeric, integer, timestamp, boolean, index } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, numeric, integer, timestamp, boolean, index, primaryKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -36,6 +36,11 @@ export const users = pgTable("users", {
   sentProWelcome: boolean("sent_pro_welcome").notNull().default(false),
   sentAllSportsWelcome: boolean("sent_all_sports_welcome").notNull().default(false),
   unlockedGameIdsToday: text("unlocked_game_ids_today").notNull().default("[]"),
+});
+
+export const stripeEvents = pgTable("stripe_events", {
+  id: text("id").primaryKey(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });

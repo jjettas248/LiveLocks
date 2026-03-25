@@ -206,6 +206,19 @@ app.use((req, res, next) => {
     console.warn("[startup] Schema migration warning (espn-athlete-id):", err.message);
   }
 
+  // Schema migration: create stripe_events idempotency table if it doesn't exist.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS stripe_events (
+        id TEXT PRIMARY KEY,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL
+      );
+    `);
+    console.log("[startup] Schema migration: stripe_events table ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (stripe-events):", err.message);
+  }
+
   // Backfill: mark pre-existing users (no verification token) as email-verified
   // so they are not locked out by the new emailVerified gate.
   try {

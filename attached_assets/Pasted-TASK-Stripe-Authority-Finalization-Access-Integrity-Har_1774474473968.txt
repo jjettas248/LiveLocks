@@ -1,0 +1,144 @@
+TASK: Stripe Authority Finalization + Access Integrity Hardening
+
+SYSTEM:
+
+Conversion + Access Control (FINAL LAYER)
+
+OBJECTIVE:
+Make Stripe the ONLY authority
+Eliminate all gating inconsistencies
+Remove plan drift permanently
+Ensure MLB unlock is deterministic
+🔥 CRITICAL CHANGES
+1. 🔒 REMOVE DB WRITE FROM UPGRADE ROUTE
+❌ DELETE THIS:
+// DO NOT DO THIS
+await db.users.update({
+  plan: 'pro_all'
+});
+✅ REPLACE WITH:
+// Only trigger Stripe update — no DB mutation
+await stripe.subscriptions.update(...)
+
+👉 DB updates ONLY happen in webhook
+
+2. 🔥 WEBHOOK = SINGLE SOURCE OF TRUTH
+MUST overwrite user EVERY time:
+const sub = await stripe.subscriptions.retrieve(subscriptionId);
+
+const priceId = sub.items.data[0].price.id;
+const plan = getPlanFromPrice(priceId);
+
+await db.users.update({
+  where: { stripeCustomerId: sub.customer },
+  data: {
+    plan,
+    subscriptionStatus: sub.status,
+    stripeSubscriptionId: sub.id,
+  },
+});
+
+👉 No conditionals
+👉 No “if null” checks
+👉 ALWAYS overwrite
+
+3. 🔥 ADD IDEMPOTENCY PROTECTION
+
+At top of webhook:
+
+const eventId = event.id;
+
+const existing = await db.stripeEvents.findUnique({
+  where: { eventId },
+});
+
+if (existing) return res.json({ received: true });
+
+await db.stripeEvents.create({
+  data: { eventId },
+});
+
+👉 Prevents duplicate processing
+
+4. 🔥 HARD PLAN NORMALIZATION (MANDATORY)
+Create ONE mapping file
+export const PLAN_MAP = {
+  [STRIPE_PRO_PRICE_ID]: 'pro_nba',
+  [STRIPE_ALL_SPORTS_PRICE_ID]: 'pro_all',
+};
+NEVER hardcode strings elsewhere
+5. 🔥 CLEAN GATING (FINAL FORM)
+Backend:
+const hasMLBAccess = user.plan === 'pro_all';
+Frontend:
+const hasMLBAccess = user.subscriptionTier === 'pro_all';
+Optional UX bridge ONLY:
+const hasMLBAccess =
+  user.subscriptionTier === 'pro_all' ||
+  localTier === 'pro_all';
+
+👉 This is acceptable ONLY for instant unlock
+
+6. 🔥 FORCE CONSISTENT REFETCH FLOW
+
+After checkout:
+
+await queryClient.invalidateQueries(['/api/auth/me']);
+await refetchUser();
+7. 🔥 ADD STRIPE SYNC GUARD (VERY IMPORTANT)
+
+On /api/auth/me:
+
+if (user.stripeCustomerId) {
+  const subs = await stripe.subscriptions.list({
+    customer: user.stripeCustomerId,
+    status: 'active',
+  });
+
+  if (subs.data.length > 0) {
+    const sub = subs.data[0];
+    const priceId = sub.items.data[0].price.id;
+
+    const plan = getPlanFromPrice(priceId);
+
+    if (user.plan !== plan) {
+      await db.users.update({
+        where: { id: user.id },
+        data: { plan },
+      });
+
+      console.log('[STRIPE REPAIR]', user.id, plan);
+    }
+  }
+}
+
+👉 This fixes any missed webhook permanently
+
+8. 🔥 HANDLE FAILED / CANCELED SUBS
+
+Webhook must include:
+
+if (sub.status === 'canceled' || sub.status === 'unpaid') {
+  await db.users.update({
+    plan: 'free',
+  });
+}
+9. 🔥 ADD DEBUG VISIBILITY
+
+You already added endpoint — good.
+
+Add logging:
+
+console.log('[PLAN SYNC]', {
+  userId,
+  priceId,
+  plan,
+  status: sub.status,
+});
+🎯 FINAL SUCCESS CRITERIA
+User upgrades → MLB unlocks instantly
+Refresh → still unlocked
+New device → still unlocked
+Failed payment → access removed correctly
+No plan mismatch EVER
+No manual fixes required

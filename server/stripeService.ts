@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import Stripe from "stripe";
 import { requireAuth } from "./auth";
 import { storage } from "./storage";
 import { getUncachableStripeClient } from "./stripeClient";
@@ -118,6 +119,62 @@ export async function registerStripeRoutes(app: import("express").Express) {
     } catch (err: any) {
       console.error("[Stripe portal error]", err.message);
       return res.status(500).json({ error: err.message || "Failed to open billing portal" });
+    }
+  });
+
+  app.post("/api/stripe/upgrade", requireAuth, async (req: Request, res: Response) => {
+    const { tier } = req.body;
+    if (!tier || !PLAN_META[tier as keyof typeof PLAN_META]) {
+      return res.status(400).json({ error: "Invalid subscription tier. Must be 'all' or 'elite'." });
+    }
+
+    const userId = (req as any).resolvedUserId!;
+    const user = await storage.getUserById(userId);
+    if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+    try {
+      const stripe = await getUncachableStripeClient();
+      const plan = tier as "all" | "elite";
+      const newPriceId = await getPriceIdForTier(plan);
+
+      if (user.stripeSubscriptionId) {
+        try {
+          const subscription = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
+          const item = subscription.items.data[0];
+          if (item && subscription.status === "active") {
+            await stripe.subscriptions.update(user.stripeSubscriptionId, {
+              proration_behavior: "create_prorations",
+              billing_cycle_anchor: "unchanged",
+              items: [{ id: item.id, price: newPriceId }],
+            });
+
+            console.log(`[stripe-upgrade] User ${userId} triggered Stripe upgrade to tier="${tier}" — DB update deferred to webhook`);
+            return res.json({ success: true, tier });
+          }
+          console.warn(`[stripe-upgrade] Subscription ${user.stripeSubscriptionId} not active (status=${subscription.status}) — falling back to checkout`);
+        } catch (subErr: any) {
+          console.warn(`[stripe-upgrade] Could not retrieve/update subscription ${user.stripeSubscriptionId}: ${subErr.message} — falling back to checkout`);
+        }
+      }
+
+      // No valid subscription to upgrade — fall back to checkout session
+      const origin = req.headers.origin || `${req.protocol}://${req.headers.host}`;
+      const sessionParams: Stripe.Checkout.SessionCreateParams = {
+        mode: "subscription",
+        payment_method_types: ["card"],
+        success_url: `${origin}/dashboard?payment=success&tier=${tier}&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${origin}/dashboard?payment=cancelled`,
+        metadata: { userId: String(userId), tier },
+        line_items: [{ price: newPriceId, quantity: 1 }],
+        ...(user.stripeCustomerId
+          ? { customer: user.stripeCustomerId }
+          : { customer_email: user.email }),
+      };
+      const checkoutSession = await stripe.checkout.sessions.create(sessionParams);
+      return res.json({ url: checkoutSession.url });
+    } catch (err: any) {
+      console.error("[stripe-upgrade error]", err.message);
+      return res.status(500).json({ error: err.message || "Failed to upgrade subscription" });
     }
   });
 

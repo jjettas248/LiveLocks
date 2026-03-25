@@ -303,10 +303,32 @@ export async function registerAuthRoutes(app: import("express").Express) {
     if (!userId) {
       return res.status(401).json({ error: "Not authenticated" });
     }
-    const rawUser = await storage.getUserById(userId);
+    let rawUser = await storage.getUserById(userId);
     if (!rawUser) {
       return res.status(401).json({ error: "Not authenticated" });
     }
+
+    if (!rawUser.subscriptionTier && rawUser.stripeCustomerId) {
+      try {
+        const { getUncachableStripeClient } = await import("./stripeClient");
+        const { getTierFromPriceId } = await import("./billing/planMap");
+        const stripe = await getUncachableStripeClient();
+        const subs = await stripe.subscriptions.list({ customer: rawUser.stripeCustomerId, status: "active" });
+        if (subs.data.length > 0) {
+          const activeSub = subs.data[0];
+          const priceId = activeSub.items.data[0]?.price?.id ?? "";
+          const repairedTier = getTierFromPriceId(priceId);
+          if (repairedTier) {
+            await storage.updateUserSubscription(userId, repairedTier, rawUser.stripeCustomerId, activeSub.id);
+            console.log(`[stripe-fallback] repaired tier for user ${userId} → ${repairedTier}`);
+            rawUser = await storage.getUserById(userId) ?? rawUser;
+          }
+        }
+      } catch (stripeErr: any) {
+        console.warn(`[stripe-fallback] Stripe lookup failed for user ${userId}:`, stripeErr.message);
+      }
+    }
+
     const user = (!rawUser.subscriptionTier && !rawUser.isAdmin)
       ? (await storage.resetDailyPlaysIfNeeded(userId) ?? rawUser)
       : rawUser;

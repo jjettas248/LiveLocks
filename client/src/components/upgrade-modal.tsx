@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { X, Zap, Trophy, CheckCircle2, ShieldAlert, TrendingUp, Bell, Lock, XCircle } from "lucide-react";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 interface TopLockedEdge {
   playerName?: string;
@@ -17,20 +18,39 @@ interface UpgradeModalProps {
   onClose: () => void;
   lockedEdgesCount?: number;
   topLockedEdge?: TopLockedEdge;
+  currentTier?: string | null;
+  onUpgradeSuccess?: (tier: string) => void;
 }
 
-export function UpgradeModal({ playsUsed, limit, onClose, lockedEdgesCount, topLockedEdge }: UpgradeModalProps) {
+export function UpgradeModal({ playsUsed, limit, onClose, lockedEdgesCount, topLockedEdge, currentTier, onUpgradeSuccess }: UpgradeModalProps) {
   const [loadingTier, setLoadingTier] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { toast } = useToast();
 
   const handleUpgrade = async (tier: string) => {
     setLoadingTier(tier);
     setError(null);
     try {
-      const res = await apiRequest("POST", "/api/stripe/checkout", { tier });
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
+      if (currentTier === "all" && tier === "elite") {
+        const res = await apiRequest("POST", "/api/stripe/upgrade", { tier });
+        const data = await res.json();
+        if (data.success) {
+          const confirmedTier = data.tier ?? tier;
+          onUpgradeSuccess?.(confirmedTier);
+          queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
+          toast({ title: "Upgraded!", description: "You now have All Sports access." });
+          onClose();
+        } else if (data.url) {
+          window.location.href = data.url;
+        } else {
+          throw new Error(data.error || "Upgrade failed");
+        }
+      } else {
+        const res = await apiRequest("POST", "/api/stripe/checkout", { tier });
+        const data = await res.json();
+        if (data.url) {
+          window.location.href = data.url;
+        }
       }
     } catch (err: any) {
       setError(err.message || "Something went wrong. Please try again.");
