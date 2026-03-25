@@ -4,6 +4,16 @@ import { ProbabilityRing } from "@/components/probability-ring";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 
+type MLBGameMarket = {
+  line: number;
+  odds: { overOdds: number | null; underOdds: number | null } | null;
+  projection: number;
+  edge: number;
+  probability: number;
+  oddsUpdatedAt: string;
+  projectionUpdatedAt: string;
+};
+
 type MLBGame = {
   gameId: string;
   homeTeam: string;
@@ -29,7 +39,65 @@ type MLBGame = {
   pitcherThrows?: "L" | "R" | null;
   pitcherTeam?: string | null;
   hasOdds?: boolean;
+  signalLocked?: boolean;
+  market?: MLBGameMarket | null;
 };
+
+// ── Client-side render state engine ──────────────────────────────────────────
+
+type RenderState = "INVALID" | "PREVIEW" | "NO_SIGNAL" | "SIGNAL";
+
+const STALE_MS = 120_000;
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isFresh(ts?: string | null): boolean {
+  if (!ts) return false;
+  const ms = new Date(ts).getTime();
+  if (!Number.isFinite(ms)) return false;
+  return Date.now() - ms <= STALE_MS;
+}
+
+function hasRealOdds(market: MLBGameMarket | null | undefined): boolean {
+  if (!market) return false;
+  if (!isFiniteNumber(market.line)) return false;
+  if (!market.odds) return false;
+  const hasSide = isFiniteNumber(market.odds.overOdds) || isFiniteNumber(market.odds.underOdds);
+  if (!hasSide) return false;
+  if (!isFresh(market.oddsUpdatedAt)) return false;
+  return true;
+}
+
+function canShowSignal(market: MLBGameMarket | null | undefined): boolean {
+  if (!hasRealOdds(market)) return false;
+  if (!market) return false;
+  if (!isFiniteNumber(market.projection)) return false;
+  if (!isFresh(market.projectionUpdatedAt)) return false;
+  return true;
+}
+
+function hasEdge(market: MLBGameMarket | null | undefined): boolean {
+  return isFiniteNumber(market?.edge) && Math.abs(market!.edge) >= 5;
+}
+
+function resolveRenderState(game: MLBGame): RenderState {
+  if (!game.awayTeam || !game.homeTeam) return "INVALID";
+  if (!game.awayAbbr || game.awayAbbr.length < 2 || !game.homeAbbr || game.homeAbbr.length < 2) return "INVALID";
+  const market = game.market ?? null;
+  const realOdds = hasRealOdds(market);
+  if (!realOdds) {
+    return game.signalLocked ? "NO_SIGNAL" : "PREVIEW";
+  }
+  if (!canShowSignal(market)) {
+    return "NO_SIGNAL";
+  }
+  if (hasEdge(market)) {
+    return "SIGNAL";
+  }
+  return "NO_SIGNAL";
+}
 
 type MLBGamesResponse = {
   mode: "live" | "preview" | "preview_locked";
@@ -496,14 +564,19 @@ export default function MlbLivePage() {
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {games.map((game) => {
+              const renderState = resolveRenderState(game);
+              if (renderState === "INVALID") return null;
+
               const isActive = game.gameId === selectedGameId;
-              const awayAbbr = game.awayAbbr || game.awayTeam;
-              const homeAbbr = game.homeAbbr || game.homeTeam;
-              const awayLastName = game.probableAwayPitcher?.split(" ").pop() ?? "—";
-              const homeLastName = game.probableHomePitcher?.split(" ").pop() ?? "—";
-              const pitcherPill = `${awayLastName} vs ${homeLastName}`;
-              const parkShort = game.parkName ? game.parkName.split(" ").slice(-1)[0] : "Park TBD";
-              const weatherPill = game.weatherSummary || "Weather N/A";
+              const pitcherAway = game.probableAwayPitcher;
+              const pitcherHome = game.probableHomePitcher;
+              const awayLastName = pitcherAway ? pitcherAway.split(" ").pop() : null;
+              const homeLastName = pitcherHome ? pitcherHome.split(" ").pop() : null;
+              const pitcherPill = pitcherAway && pitcherHome && awayLastName && homeLastName ? (
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30 truncate max-w-[90px]">
+                  {awayLastName} vs {homeLastName}
+                </span>
+              ) : null;
 
               return (
                 <button
@@ -519,7 +592,7 @@ export default function MlbLivePage() {
                   {/* Row 1: AWAY @ HOME + status badge */}
                   <div className="flex items-center justify-between gap-1">
                     <span className="text-xs font-bold text-foreground">
-                      {awayAbbr} @ {homeAbbr}
+                      {game.awayAbbr} @ {game.homeAbbr}
                     </span>
                     {game.status === "live" ? (
                       <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-500">LIVE</span>
@@ -538,20 +611,29 @@ export default function MlbLivePage() {
                     )}
                   </div>
 
-                  {/* Row 3: context pills */}
-                  <div className="flex items-center gap-1 flex-wrap">
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30 truncate max-w-[80px]">
-                      {parkShort}
-                    </span>
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30 truncate max-w-[90px]">
+                  {/* Row 3: state-driven content */}
+                  {renderState === "PREVIEW" && (
+                    <div className="mt-1 flex flex-col gap-0.5">
                       {pitcherPill}
-                    </span>
-                    {weatherPill !== "Weather N/A" && (
-                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30 truncate max-w-[80px]">
-                        {weatherPill}
-                      </span>
-                    )}
-                  </div>
+                      <div className="text-[9px] text-zinc-400">Awaiting live lines</div>
+                    </div>
+                  )}
+
+                  {renderState === "NO_SIGNAL" && (
+                    <div className="mt-1 flex flex-col gap-0.5">
+                      {pitcherPill}
+                      <div className="text-[9px] text-zinc-300">No strong edge</div>
+                    </div>
+                  )}
+
+                  {renderState === "SIGNAL" && game.market && (
+                    <div className="mt-1 flex flex-col gap-0.5">
+                      {pitcherPill}
+                      <div className="text-[9px] text-muted-foreground font-mono">Projection: {game.market.projection.toFixed(1)}</div>
+                      <div className="text-[9px] text-green-400 font-mono">Edge: {game.market.edge.toFixed(1)}%</div>
+                      <div className="text-[9px] text-muted-foreground font-mono">Probability: {game.market.probability.toFixed(1)}%</div>
+                    </div>
+                  )}
                 </button>
               );
             })}

@@ -16,6 +16,8 @@ export interface EdgeCacheEntry {
   createdAt: number;
   /** True when any market in this run used stale last-known-good odds (not a live fresh quote). */
   isDegraded?: boolean;
+  /** True when at least one output passes canShowSignal and has edge >= 5%. */
+  signalLocked?: boolean;
 }
 
 const _cache = new Map<string, EdgeCacheEntry>();

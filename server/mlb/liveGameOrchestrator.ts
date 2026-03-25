@@ -21,10 +21,20 @@ import {
   type GameStateCache,
 } from "./dataPullService";
 import { estimateRemainingPA } from "./paEstimator";
-import { calculateMLBPropEdge } from "./markets";
+import { calculateMLBPropEdge, hasRealOdds, canShowSignal } from "./markets";
 import { recordMLBDiagnostic } from "./diagnostics";
 import type { MLBPropInput, MLBPropOutput, MLBMarket } from "./types";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
+
+// ── Engine dedup lock ─────────────────────────────────────────────────────────
+const LAST_RUN = new Map<string, number>();
+const DEDUP_WINDOW_MS = 30_000;
+
+function shouldSkip(gameId: string): boolean {
+  const last = LAST_RUN.get(gameId);
+  if (last === undefined) return false;
+  return Date.now() - last < DEDUP_WINDOW_MS;
+}
 
 // ── Debug pipeline logging ────────────────────────────────────────────────────
 const DEBUG_PIPELINE = process.env.DEBUG_PIPELINE === "true";
@@ -66,7 +76,7 @@ const priorResolvedLines = new Map<string, number>();
 // First match wins; unlisted bookmakers are used only as a last resort.
 const PREFERRED_BOOKMAKERS = ["draftkings", "fanduel", "hardrockbet"];
 
-type ResolvedLine = { line: number; isDegraded: boolean };
+type ResolvedLine = { line: number; overOdds: number | null; underOdds: number | null; isDegraded: boolean };
 
 // ── Resolve a real book line for a player/market ──────────────────────────────
 // Precedence:
@@ -95,11 +105,17 @@ async function resolveBookLine(
       if (bookKeys.length > 0) {
         // Apply deterministic bookmaker preference order
         const preferred = PREFERRED_BOOKMAKERS.find(b => bookKeys.includes(b)) ?? bookKeys[0];
-        const line = oddsResult[preferred].line;
+        const entry = oddsResult[preferred];
+        const line = entry.line;
         if (typeof line === "number" && isFinite(line) && line > 0) {
           priorResolvedLines.set(cacheKey, line);
           pLog(oddsEventId, `odds:bookLine:${isOddsDegraded ? "degraded" : "live"}`, { player: playerName, market, line, book: preferred });
-          return { line, isDegraded: isOddsDegraded };
+          return {
+            line,
+            overOdds: typeof entry.overOdds === "number" && isFinite(entry.overOdds) ? entry.overOdds : null,
+            underOdds: typeof entry.underOdds === "number" && isFinite(entry.underOdds) ? entry.underOdds : null,
+            isDegraded: isOddsDegraded,
+          };
         }
       }
     } catch (err: any) {
@@ -112,7 +128,7 @@ async function resolveBookLine(
   if (prior !== undefined) {
     console.warn(`[MLB orchestrator] Using prior known line for ${playerName}/${market}: ${prior}`);
     pLog(oddsEventId ?? "unknown", "odds:bookLine:priorResolved", { player: playerName, market, line: prior });
-    return { line: prior, isDegraded: true };
+    return { line: prior, overOdds: null, underOdds: null, isDegraded: true };
   }
 
   // (3) No compliant line available — skip this market
@@ -312,6 +328,13 @@ export class LiveGameOrchestrator {
       return outputs;
     }
 
+    // Dedup lock — skip if engine ran within the last 30 seconds for this game.
+    if (shouldSkip(gameId)) {
+      console.log(`[MLB orchestrator] triggerEngine dedup-skipped for game ${gameId} (ran within ${DEDUP_WINDOW_MS}ms)`);
+      return outputs;
+    }
+    LAST_RUN.set(gameId, Date.now());
+
     if (!state) {
       console.warn(`[MLB orchestrator] triggerEngine: no game state cached for ${gameId}`);
       return outputs;
@@ -380,6 +403,13 @@ export class LiveGameOrchestrator {
         if (resolvedLine === null) continue;
         if (resolvedLine.isDegraded) anyDegraded = true;
 
+        // hasRealOdds gate — skip signal computation if odds are not valid
+        const resolvedMarketObj = { line: resolvedLine.line, odds: (resolvedLine.overOdds !== null || resolvedLine.underOdds !== null) ? { overOdds: resolvedLine.overOdds, underOdds: resolvedLine.underOdds } : null };
+        if (!hasRealOdds(resolvedMarketObj)) {
+          console.warn(`[MLB orchestrator] hasRealOdds failed for ${batter.playerName}/${market} — signalLocked=false, skipping computation`);
+          continue;
+        }
+
         const input: MLBPropInput = {
           playerId: batter.playerId,
           playerName: batter.playerName,
@@ -388,6 +418,8 @@ export class LiveGameOrchestrator {
           gameId,
           market,
           bookLine: resolvedLine.line,
+          overOdds: resolvedLine.overOdds,
+          underOdds: resolvedLine.underOdds,
           seasonAvg: 1.0,
           plateAppearances: state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0,
           atBats: Math.max(0, state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0),
@@ -513,6 +545,13 @@ export class LiveGameOrchestrator {
         if (resolvedPitcherLine === null) continue;
         if (resolvedPitcherLine.isDegraded) anyDegraded = true;
 
+        // hasRealOdds gate — skip signal computation if odds are not valid
+        const resolvedPitcherMarketObj = { line: resolvedPitcherLine.line, odds: (resolvedPitcherLine.overOdds !== null || resolvedPitcherLine.underOdds !== null) ? { overOdds: resolvedPitcherLine.overOdds, underOdds: resolvedPitcherLine.underOdds } : null };
+        if (!hasRealOdds(resolvedPitcherMarketObj)) {
+          console.warn(`[MLB orchestrator] hasRealOdds failed for pitcher ${pitcherToEval.playerName}/${market} — signalLocked=false, skipping computation`);
+          continue;
+        }
+
         const input: MLBPropInput = {
           playerId: pitcherToEval.playerId,
           playerName: pitcherToEval.playerName,
@@ -521,6 +560,8 @@ export class LiveGameOrchestrator {
           gameId,
           market,
           bookLine: resolvedPitcherLine.line,
+          overOdds: resolvedPitcherLine.overOdds,
+          underOdds: resolvedPitcherLine.underOdds,
           seasonAvg: market === "pitcher_strikeouts" ? 6.0 : 5.0,
           plateAppearances: pitcherCtx?.pitchCount
             ? Math.floor(pitcherCtx.pitchCount / 4)
@@ -625,7 +666,21 @@ export class LiveGameOrchestrator {
     });
 
     const now = Date.now();
-    mlbEdgeCache.set(gameId, { gameId, outputs: validatedOutputs, updatedAt: now, createdAt: now, isDegraded: anyDegraded });
+
+    // Compute signalLocked: true if any validated output passes canShowSignal and has edge >= 5%
+    const signalLocked = validatedOutputs.some((o) =>
+      canShowSignal({
+        line: o.bookLine,
+        odds: (o.overOdds !== null || o.underOdds !== null)
+          ? { overOdds: o.overOdds, underOdds: o.underOdds }
+          : null,
+        projection: o.projection,
+        oddsUpdatedAt: o.oddsUpdatedAt,
+        projectionUpdatedAt: o.projectionUpdatedAt,
+      }) && Math.abs(o.edge) >= 5
+    );
+
+    mlbEdgeCache.set(gameId, { gameId, outputs: validatedOutputs, updatedAt: now, createdAt: now, isDegraded: anyDegraded, signalLocked });
     console.log(`[MLB orchestrator] triggerEngine: game ${gameId} — ${outputs.length} raw outputs, ${validatedOutputs.length} cache-validated outputs`);
     return validatedOutputs;
   }

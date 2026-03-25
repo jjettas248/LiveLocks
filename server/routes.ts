@@ -14,7 +14,7 @@ import { getVapidPublicKey, sendPush } from "./webpush";
 import { checkAndSendAlerts } from "./alertManager";
 import { autoResolveAlerts, autoSettlePersistedPlays } from "./analyticsResolver";
 import { syncMinutesProjections } from "./services/minutesProjectionService";
-import { calculateMLBPropEdge } from "./mlb/markets";
+import { calculateMLBPropEdge, canShowSignal } from "./mlb/markets";
 import {
   recordMLBDiagnostic,
   getMLBDiagnosticSummary,
@@ -449,6 +449,40 @@ export async function registerRoutes(
           // hasOdds: true if there are signals in the edge cache with real book lines for this game
           const cacheEntry = mlbEdgeCache.get(gameId);
           const hasOdds = !!(cacheEntry && cacheEntry.outputs.some((o) => o.bookLine > 0));
+          // signalLocked: recomputed at serve-time using real book odds + freshness (120s window)
+          const freshValidOutputs = cacheEntry ? cacheEntry.outputs.filter((o) =>
+            canShowSignal({
+              line: o.bookLine,
+              odds: (o.overOdds !== null || o.underOdds !== null)
+                ? { overOdds: o.overOdds, underOdds: o.underOdds }
+                : null,
+              projection: o.projection,
+              oddsUpdatedAt: o.oddsUpdatedAt,
+              projectionUpdatedAt: o.projectionUpdatedAt,
+            })
+          ) : [];
+          const signalLocked = freshValidOutputs.some((o) => Math.abs(o.edge) >= 5);
+
+          // Aggregate best-signal fields for client chip rendering
+          const bestEdgeOutput = freshValidOutputs.reduce<typeof freshValidOutputs[0] | null>((best, o) =>
+            best === null || Math.abs(o.edge) > Math.abs(best.edge) ? o : best, null
+          );
+          // Build the market object for client-side signal validation.
+          // Only populated when a fresh valid output exists with real book odds.
+          const bestMarket = bestEdgeOutput ? {
+            line: bestEdgeOutput.bookLine,
+            odds: (bestEdgeOutput.overOdds !== null || bestEdgeOutput.underOdds !== null)
+              ? { overOdds: bestEdgeOutput.overOdds, underOdds: bestEdgeOutput.underOdds }
+              : null,
+            projection: bestEdgeOutput.projection,
+            edge: bestEdgeOutput.edge,
+            probability: Math.max(
+              bestEdgeOutput.calibratedProbabilityOver,
+              bestEdgeOutput.calibratedProbabilityUnder
+            ),
+            oddsUpdatedAt: new Date(bestEdgeOutput.oddsUpdatedAt).toISOString(),
+            projectionUpdatedAt: new Date(bestEdgeOutput.projectionUpdatedAt).toISOString(),
+          } : null;
 
           games.push({
             gameId,
@@ -476,6 +510,8 @@ export async function registerRoutes(
             pitcherThrows: pitcherInGame?.throws ?? null,
             pitcherTeam: pitcherInGame?.team ?? null,
             hasOdds,
+            signalLocked,
+            market: bestMarket,
           });
         }
       }

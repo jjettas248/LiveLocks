@@ -1,6 +1,18 @@
 import type { MLBMarket } from "./types";
 import { MARKET_SIGMA } from "./types";
 
+// ── Value clamps ──────────────────────────────────────────────────────────────
+
+export function clampProjection(p: number): number {
+  if (!Number.isFinite(p)) return 0;
+  return Math.max(0, p);
+}
+
+export function clampProbability(prob: number): number {
+  if (!Number.isFinite(prob)) return 2;
+  return Math.min(98, Math.max(2, prob));
+}
+
 function normalCDF(x: number): number {
   const a1 = 0.254829592;
   const a2 = -0.284496736;
@@ -26,13 +38,14 @@ export function computeRawProbability(
   market: MLBMarket
 ): { overProb: number; underProb: number } {
   const sigma = MARKET_SIGMA[market];
-  const diff = projection - bookLine;
+  const clampedProjection = clampProjection(projection);
+  const diff = clampedProjection - bookLine;
   const zScore = diff / sigma;
-  const overProb = normalCDF(zScore) * 100;
-  const underProb = 100 - overProb;
+  const rawOver = normalCDF(zScore) * 100;
+  const rawUnder = 100 - rawOver;
 
   return {
-    overProb: Math.round(overProb * 100) / 100,
-    underProb: Math.round(underProb * 100) / 100,
+    overProb: Math.round(clampProbability(rawOver) * 100) / 100,
+    underProb: Math.round(clampProbability(rawUnder) * 100) / 100,
   };
 }

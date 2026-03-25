@@ -127,6 +127,8 @@ export interface MLBPropInput {
 
   market: MLBMarket;
   bookLine: number;
+  overOdds?: number | null;
+  underOdds?: number | null;
 
   seasonAvg: number;
   plateAppearances: number;
@@ -202,6 +204,8 @@ export interface MLBPropOutput {
 
   projection: number;
   bookLine: number;
+  overOdds: number | null;
+  underOdds: number | null;
   modifiers: ModifierBreakdown;
   projectionLog: ProjectionLog;
 
@@ -232,6 +236,8 @@ export interface MLBPropOutput {
   explanationBullets: string[];
   warnings: string[];
   engineGeneratedAt: number;
+  oddsUpdatedAt: number;
+  projectionUpdatedAt: number;
 }
 
 export const STANDARD_THRESHOLDS = {

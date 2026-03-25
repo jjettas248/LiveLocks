@@ -8,6 +8,46 @@ import type {
 } from "./types";
 import { getPlayer, getPlayerByName } from "./rosterService";
 import { mlbGameCache } from "./dataPullService";
+
+// ── Odds validation helpers ───────────────────────────────────────────────────
+
+export function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+export function hasAtLeastOneValidOddsSide(odds: { overOdds?: unknown; underOdds?: unknown } | null | undefined): boolean {
+  if (!odds) return false;
+  return isFiniteNumber(odds.overOdds) || isFiniteNumber(odds.underOdds);
+}
+
+export function hasRealOdds(market: { line?: unknown; odds?: { overOdds?: unknown; underOdds?: unknown } | null }): boolean {
+  if (!isFiniteNumber(market.line)) return false;
+  if (!market.odds) return false;
+  return hasAtLeastOneValidOddsSide(market.odds);
+}
+
+// ── Freshness gate ────────────────────────────────────────────────────────────
+
+const FRESHNESS_WINDOW_MS = 120_000;
+
+export function isFresh(timestamp: number | null | undefined): boolean {
+  if (!isFiniteNumber(timestamp)) return false;
+  return Date.now() - timestamp < FRESHNESS_WINDOW_MS;
+}
+
+export function canShowSignal(market: {
+  line?: unknown;
+  odds?: { overOdds?: unknown; underOdds?: unknown } | null;
+  projection?: unknown;
+  oddsUpdatedAt?: number | null;
+  projectionUpdatedAt?: number | null;
+}): boolean {
+  if (!hasRealOdds(market)) return false;
+  if (!isFiniteNumber(market.projection)) return false;
+  if (!isFresh(market.oddsUpdatedAt)) return false;
+  if (!isFresh(market.projectionUpdatedAt)) return false;
+  return true;
+}
 import { estimateRemainingPA } from "./paEstimator";
 import { estimatePADistribution } from "./paDistribution";
 import {
@@ -38,7 +78,7 @@ import {
   computeHandednessMatchupScore,
 } from "./featureEngineering";
 import { projectBaseValue } from "./projections";
-import { computeRawProbability } from "./probability";
+import { computeRawProbability, clampProjection, clampProbability } from "./probability";
 import { calibrateProbability } from "./calibration";
 
 function determineConfidenceTier(edge: number): MLBConfidenceTier {
@@ -206,9 +246,10 @@ function buildExplanationBullets(input: MLBPropInput, output: Partial<MLBPropOut
 
 function buildOutput(input: MLBPropInput): MLBPropOutput {
   const projResult = projectBaseValue(input);
+  const safeProjection = clampProjection(projResult.projection);
 
   const { overProb, underProb } = computeRawProbability(
-    projResult.projection,
+    safeProjection,
     input.bookLine,
     input.market
   );
@@ -234,8 +275,8 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
   const calibratedSided = applyProbabilityCeiling(calibratedSidedRaw, input.market);
   const calibratedOpposite = Math.round((100 - calibratedSided) * 100) / 100;
 
-  const calibratedProbabilityOver = overProb >= underProb ? calibratedSided : calibratedOpposite;
-  const calibratedProbabilityUnder = overProb >= underProb ? calibratedOpposite : calibratedSided;
+  const calibratedProbabilityOver = clampProbability(overProb >= underProb ? calibratedSided : calibratedOpposite);
+  const calibratedProbabilityUnder = clampProbability(overProb >= underProb ? calibratedOpposite : calibratedSided);
 
   const calibratedDominant = Math.max(calibratedProbabilityOver, calibratedProbabilityUnder);
 
@@ -251,7 +292,7 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
     warnings.push(`${input.market} is experimental — confidence capped at ${EXPERIMENTAL_CONFIDENCE_CEILING}`);
   }
 
-  const suppression = checkSuppression(input, edge, input.market, projResult.projection);
+  const suppression = checkSuppression(input, edge, input.market, safeProjection);
 
   if (suppression.suppressed) {
     confidenceTier = "NO_EDGE";
@@ -275,13 +316,16 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
 
   const explanationBullets = buildExplanationBullets(input, partialOutput);
 
+  const nowTs = Date.now();
   return {
     market: input.market,
     playerId: input.playerId,
     playerName: input.playerName,
     gameId: input.gameId,
-    projection: projResult.projection,
+    projection: safeProjection,
     bookLine: input.bookLine,
+    overOdds: input.overOdds ?? null,
+    underOdds: input.underOdds ?? null,
     modifiers: projResult.modifiers,
     projectionLog: completeProjectionLog,
     rawProbabilityOver: Math.round(rawProbabilityOver * 100) / 100,
@@ -305,7 +349,9 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
     suppressionReason: suppression.reason,
     explanationBullets,
     warnings,
-    engineGeneratedAt: Date.now(),
+    engineGeneratedAt: nowTs,
+    oddsUpdatedAt: nowTs,
+    projectionUpdatedAt: nowTs,
   };
 }
 
@@ -343,16 +389,16 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   let rawProbabilityUnder: number;
 
   if (neededHits === 0) {
-    rawProbabilityOver = 100;
-    rawProbabilityUnder = 0;
+    rawProbabilityOver = clampProbability(100);
+    rawProbabilityUnder = clampProbability(0);
   } else {
     let weightedProb = 0;
     for (const [paCountStr, paProb] of Object.entries(paDist)) {
       const paCount = Number(paCountStr);
       weightedProb += computeHitOutcomeProbability(paCount, adjustedRate, neededHits) * paProb;
     }
-    rawProbabilityOver = Math.round(weightedProb * 100) / 100;
-    rawProbabilityUnder = Math.round((100 - weightedProb) * 100) / 100;
+    rawProbabilityOver = Math.round(clampProbability(weightedProb) * 100) / 100;
+    rawProbabilityUnder = Math.round(clampProbability(100 - weightedProb) * 100) / 100;
   }
 
   let calibratedOver = calibrateProbability(rawProbabilityOver);
@@ -371,8 +417,8 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   const calibratedSided = applyProbabilityCeiling(calibratedSidedRaw, "hits");
   const calibratedOpposite = Math.round((100 - calibratedSided) * 100) / 100;
 
-  const calibratedProbabilityOver = rawProbabilityOver >= rawProbabilityUnder ? calibratedSided : calibratedOpposite;
-  const calibratedProbabilityUnder = rawProbabilityOver >= rawProbabilityUnder ? calibratedOpposite : calibratedSided;
+  const calibratedProbabilityOver = clampProbability(rawProbabilityOver >= rawProbabilityUnder ? calibratedSided : calibratedOpposite);
+  const calibratedProbabilityUnder = clampProbability(rawProbabilityOver >= rawProbabilityUnder ? calibratedOpposite : calibratedSided);
   const calibratedDominant = Math.max(calibratedProbabilityOver, calibratedProbabilityUnder);
   const dominantRawProb = Math.max(rawProbabilityOver, rawProbabilityUnder);
 
@@ -380,7 +426,7 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   let confidenceTier = determineConfidenceTier(edge);
   let recommendedSide = determineSide(calibratedSided, confidenceTier);
 
-  const adjustedProjection = expectedHits + currentHits;
+  const adjustedProjection = clampProjection(expectedHits + currentHits);
 
   const projResult = projectBaseValue(hitsInput);
   const warnings = [...projResult.warnings];
@@ -421,6 +467,8 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
     gameId: hitsInput.gameId,
     projection: parseFloat(adjustedProjection.toFixed(3)),
     bookLine: hitsInput.bookLine,
+    overOdds: hitsInput.overOdds ?? null,
+    underOdds: hitsInput.underOdds ?? null,
     modifiers: projResult.modifiers,
     projectionLog: completeProjectionLog,
     rawProbabilityOver: Math.round(rawProbabilityOver * 100) / 100,
@@ -446,6 +494,8 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
     explanationBullets,
     warnings,
     engineGeneratedAt: Date.now(),
+    oddsUpdatedAt: Date.now(),
+    projectionUpdatedAt: Date.now(),
   };
 }
 
