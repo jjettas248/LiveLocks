@@ -1,0 +1,243 @@
+🚨 GLOBAL RULES (NON-NEGOTIABLE)
+DO NOT fabricate data
+DO NOT compute signals without real odds
+DO NOT render partial UI
+EVERY game must resolve to EXACTLY ONE state:
+INVALID
+PREVIEW
+NO_SIGNAL
+SIGNAL
+1. STRICT ODDS VALIDATION (SERVER)
+ADD to server/mlb/markets.ts
+export function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+export function hasAtLeastOneValidOddsSide(
+  odds?: { overOdds?: number | null; underOdds?: number | null } | null
+): boolean {
+  if (!odds) return false;
+  return isFiniteNumber(odds.overOdds) || isFiniteNumber(odds.underOdds);
+}
+
+export function hasRealOdds(market: any): boolean {
+  if (!market) return false;
+
+  if (!isFiniteNumber(market.line)) return false;
+
+  if (!market.odds) return false;
+
+  if (!hasAtLeastOneValidOddsSide(market.odds)) return false;
+
+  return true;
+}
+2. STALE DATA PROTECTION (SERVER)
+ADD
+const STALE_MS = 120_000;
+
+export function isFresh(timestamp?: string | number | Date | null): boolean {
+  if (!timestamp) return false;
+
+  const ms = new Date(timestamp).getTime();
+  if (!Number.isFinite(ms)) return false;
+
+  return Date.now() - ms <= STALE_MS;
+}
+UPDATE canShowSignal
+export function canShowSignal(market: any): boolean {
+  if (!market) return false;
+
+  if (!hasRealOdds(market)) return false;
+
+  if (!isFiniteNumber(market.projection)) return false;
+
+  if (!isFresh(market.oddsUpdatedAt)) return false;
+
+  if (!isFresh(market.projectionUpdatedAt)) return false;
+
+  return true;
+}
+3. ENGINE DEDUP + LOCK (SERVER)
+ADD to liveGameOrchestrator.ts
+const LAST_RUN = new Map<string, number>();
+const DEDUP_MS = 30_000;
+
+function shouldSkip(gameId: string): boolean {
+  const now = Date.now();
+  const last = LAST_RUN.get(gameId);
+
+  if (last && now - last < DEDUP_MS) {
+    return true;
+  }
+
+  LAST_RUN.set(gameId, now);
+  return false;
+}
+UPDATE orchestrator
+export async function runLiveGameOrchestrator(gameId: string) {
+  const game = await getLiveGame(gameId);
+  if (!game) return null;
+
+  if (shouldSkip(gameId)) return null;
+
+  const market = await evaluateLiveMLBMarket(game);
+
+  if (!hasRealOdds(market)) {
+    return {
+      ...game,
+      market,
+      signalLocked: false,
+    };
+  }
+
+  const hasEdge =
+    canShowSignal(market) &&
+    typeof market.edge === "number" &&
+    Math.abs(market.edge) >= 5;
+
+  return {
+    ...game,
+    market,
+    signalLocked: hasEdge ? true : Boolean(game.signalLocked),
+  };
+}
+4. PROJECTION + PROBABILITY CLAMPS (SERVER)
+UPDATE probability.ts
+export function clampProjection(p: number): number {
+  if (!Number.isFinite(p)) return 0;
+  return Math.max(0, p);
+}
+
+export function clampProbability(prob: number): number {
+  if (!Number.isFinite(prob)) return 2;
+  return Math.min(98, Math.max(2, prob));
+}
+APPLY inside calculation
+const projection = clampProjection(rawProjection);
+const probability = clampProbability(rawProbability);
+5. TIMESTAMP ENFORCEMENT (SERVER)
+ENSURE ALL MARKETS INCLUDE:
+return {
+  line,
+  odds,
+  oddsUpdatedAt: new Date().toISOString(),
+  projection,
+  projectionUpdatedAt: new Date().toISOString(),
+  probability,
+  edge,
+};
+6. RENDER STATE ENGINE (CLIENT)
+ADD to mlb-live.tsx
+type RenderState = "INVALID" | "PREVIEW" | "NO_SIGNAL" | "SIGNAL";
+ADD HELPERS
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function hasRealOdds(market: any): boolean {
+  if (!market) return false;
+
+  if (!isFiniteNumber(market.line)) return false;
+
+  if (!market.odds) return false;
+
+  return (
+    isFiniteNumber(market.odds.overOdds) ||
+    isFiniteNumber(market.odds.underOdds)
+  );
+}
+
+function canShowSignal(market: any): boolean {
+  if (!market) return false;
+
+  if (!hasRealOdds(market)) return false;
+
+  if (!isFiniteNumber(market.projection)) return false;
+
+  return true;
+}
+
+function hasEdge(market: any): boolean {
+  return isFiniteNumber(market?.edge) && Math.abs(market.edge) >= 5;
+}
+ADD STATE RESOLVER
+function resolveRenderState(game: any): RenderState {
+  if (!game.awayTeam || !game.homeTeam) return "INVALID";
+
+  const market = game.market;
+
+  if (!hasRealOdds(market)) {
+    return game.signalLocked ? "NO_SIGNAL" : "PREVIEW";
+  }
+
+  if (!canShowSignal(market)) {
+    return "NO_SIGNAL";
+  }
+
+  if (hasEdge(market)) {
+    return "SIGNAL";
+  }
+
+  return "NO_SIGNAL";
+}
+7. UI RENDER ENFORCEMENT
+UPDATE CARD RENDER
+const state = resolveRenderState(game);
+
+if (state === "INVALID") return null;
+PREVIEW
+{state === "PREVIEW" && (
+  <div className="mt-4 text-zinc-400">
+    Awaiting live lines
+  </div>
+)}
+NO SIGNAL
+{state === "NO_SIGNAL" && (
+  <div className="mt-4 text-zinc-300">
+    No strong edge
+  </div>
+)}
+SIGNAL
+{state === "SIGNAL" && (
+  <>
+    <div>Projection: {game.market.projection.toFixed(1)}</div>
+    <div>Edge: {game.market.edge.toFixed(1)}%</div>
+    <div>Probability: {game.market.probability.toFixed(1)}%</div>
+  </>
+)}
+8. MATCHUP PILL RULE
+{game.pitcherAway && game.pitcherHome && (
+  <div>{game.pitcherAway} vs {game.pitcherHome}</div>
+)}
+9. REMOVE ALL FALLBACK STRINGS
+DELETE ALL:
+|| "vs"
+|| "N/A"
+|| "0"
+|| 0
+RULE:
+
+If data missing → DO NOT RENDER ELEMENT
+
+10. HARD GUARANTEES (FINAL)
+
+System MUST enforce:
+
+INVALID → return null
+
+PREVIEW → valid teams, no odds
+
+NO_SIGNAL → valid odds, no edge
+
+SIGNAL → valid odds + edge
+✅ END STATE
+
+After this patch:
+
+No broken cards
+No fake signals
+No stale signals
+No placeholder UI
+No recompute spam
+Deterministic rendering
+Full engine integrity

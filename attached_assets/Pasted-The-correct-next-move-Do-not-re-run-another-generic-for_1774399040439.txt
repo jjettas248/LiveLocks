@@ -1,0 +1,268 @@
+The correct next move
+Do not re-run another generic “forensic fix”
+
+That would waste time.
+
+Do this instead:
+
+Run a live path verification audit.
+
+You need to prove these 4 things:
+
+Which endpoint the halftime UI is actually calling
+Which server file constructs the returned halftime plays
+What the engine distribution is before response
+What the client distribution is after all UI transforms
+Best diagnosis
+
+Given your screenshot history and current symptoms, I think the most likely reality is:
+
+The engine path and the UI path are no longer perfectly aligned.
+
+Meaning:
+
+halftime engine may already be fixed or instrumented
+but the displayed plays are being narrowed later by:
+sort order
+top-play selection
+quick-view suppression
+edge/ranking mismatch
+stale field mapping
+
+So this is now probably a Core Engine ↔ UX contract mismatch, not a fresh engine math problem.
+
+What you should tell Replit next
+
+Use this exact prompt.
+
+# TASK: NBA Halftime Active Path Verification + Display Contract Audit
+
+## SYSTEM:
+Core Engine + UX Layer
+
+## OBJECTIVE:
+Prove whether the NBA halftime UNDER bias is still originating in the active engine output or whether it is being introduced downstream in the response/UI pipeline.
+
+We already have Task #50 forensic instrumentation/fix work. Do NOT repeat it. Do NOT create a new generic forensic patch. Instead, verify the exact live path now used by the halftime UI and reconcile server output vs client-rendered output.
+
+## ROOT CAUSE:
+Task #50 appears to already exist in the codebase, which means repeated forensic prompts are now redundant. If halftime cards are still heavily UNDER-weighted, the remaining likely causes are:
+1. The UI is not using the instrumented/active halftime engine path
+2. The response contract is transforming plays after engine output
+3. Sorting/filtering/deduping is suppressing OVER plays downstream
+4. The frontend is still re-deriving or misreading engine fields
+
+This is now an active-path verification task, not a fresh engine rewrite.
+
+## IMPLEMENTATION:
+
+### Step 1:
+Identify the exact endpoint the halftime UI calls.
+
+Search the client for:
+- halftime
+- /api/halftime
+- fetch(
+- useQuery(
+- axios
+- getHalftime
+- halftime plays
+- top plays
+
+Output:
+- exact client file(s)
+- exact endpoint URL(s)
+- exact hook/function used to fetch halftime data
+
+### Step 2:
+Trace that exact endpoint back to the server handler.
+
+For the endpoint actually used by the UI, identify:
+- exact server file
+- exact route handler
+- exact function(s) building the halftime plays
+- whether it is the same path instrumented in Task #50
+
+Add a console log at the final response return point:
+
+```ts
+console.log("[HT_RESPONSE_FINAL]", {
+  count: plays.length,
+  overs: plays.filter((p) => p.direction === "OVER").length,
+  unders: plays.filter((p) => p.direction === "UNDER").length,
+  sample: plays.slice(0, 10).map((p) => ({
+    playerName: p.playerName,
+    market: p.market,
+    direction: p.direction,
+    probability: p.probability,
+    edge: p.edge,
+    projection: p.projection,
+    line: p.line,
+  })),
+});
+
+This must be added in the actual live response path used by the client, not a dead or alternate route.
+
+Step 3:
+
+Instrument the client immediately after fetch and immediately before render.
+
+In the actual halftime UI component, log the dataset in two places:
+
+A. Right after fetch/useQuery resolves:
+
+console.log("[HT_CLIENT_FETCHED]", {
+  count: data?.length ?? 0,
+  overs: (data ?? []).filter((p) => p.direction === "OVER").length,
+  unders: (data ?? []).filter((p) => p.direction === "UNDER").length,
+});
+
+B. Immediately before render, after all local transforms:
+
+console.log("[HT_CLIENT_RENDERED]", {
+  count: renderedPlays?.length ?? 0,
+  overs: (renderedPlays ?? []).filter((p) => p.direction === "OVER").length,
+  unders: (renderedPlays ?? []).filter((p) => p.direction === "UNDER").length,
+});
+
+If there are intermediate transforms such as:
+
+filter
+sort
+slice
+dedupe
+map into display cards
+
+log counts after each stage.
+
+Step 4:
+
+Audit for downstream suppression.
+
+Search the client halftime UI path for:
+
+.filter(
+.sort(
+.slice(
+uniqBy
+dedupe
+probability < 50
+100 - probability
+projection > line
+top plays
+featured plays
+best bets
+
+Document every transform in order.
+
+For each transform, record:
+
+input count
+output count
+over count
+under count
+Step 5:
+
+Verify engine contract usage.
+
+In the client halftime card/render layer, confirm whether the UI directly uses:
+
+direction from engine
+probability from engine
+edge from engine
+
+Search and remove any client-side re-derivation like:
+
+const direction = probability < 50 ? "UNDER" : "OVER";
+const displayProbability = probability < 50 ? 100 - probability : probability;
+
+The client must render the engine-emitted values only.
+
+Step 6:
+
+Check whether top-play ranking is distorting directionality.
+
+If the UI sorts by edge descending, verify whether the engine’s current edge field is naturally under-heavy even after Task #50.
+
+Add this server log in the final response path:
+
+const sorted = [...plays].sort((a, b) => (Number(b.edge) || 0) - (Number(a.edge) || 0));
+
+console.log("[HT_SORTED_TOP20]", sorted.slice(0, 20).map((p) => ({
+  playerName: p.playerName,
+  market: p.market,
+  direction: p.direction,
+  edge: p.edge,
+  probability: p.probability,
+  projection: p.projection,
+  line: p.line,
+})));
+
+This determines whether the problem is:
+
+bad engine distribution overall
+or
+healthy distribution with under-heavy top ranking only
+Step 7:
+
+Produce a final root-cause classification.
+
+Classify the issue as exactly one of:
+
+A. Engine output still biased
+B. Response path mismatch
+C. Client transforms suppressing OVER plays
+D. Client re-derivation corrupting direction/probability
+E. Top-play sort/ranking naturally selecting under-heavy plays despite broader engine balance
+
+Step 8:
+
+Apply only the minimal fix for the confirmed class.
+
+Rules:
+
+If A: patch only the proven active engine path, not all engine files
+If B: repoint UI to the correct endpoint/path
+If C: remove or correct the exact suppressive transform
+If D: delete client re-derivation and use engine fields directly
+If E: do not alter engine math globally; adjust only the UI selection/ranking contract if needed
+DO NOT:
+Do not rerun Task #50 from scratch
+Do not rewrite halftime math unless the active response path proves the engine is still biased
+Do not touch MLB or NCAAB
+Do not add fake balancing
+Do not add multiple pipelines
+Do not patch dead code paths
+SUCCESS CRITERIA:
+We can reconcile counts at all 3 layers:
+engine/final server output
+client fetched dataset
+client rendered dataset
+Exact source of halftime under-weighting is proven
+Only the active path is modified
+No contract breaks to ROI, logs, or edge ordering
+OUTPUT:
+
+Return:
+
+Exact client file calling the halftime endpoint
+Exact server route serving that endpoint
+[HT_RESPONSE_FINAL] log
+[HT_CLIENT_FETCHED] log
+[HT_CLIENT_RENDERED] log
+All transform stages with counts
+Confirmed root cause classification: A/B/C/D/E
+Exact minimal code diff applied
+
+---
+
+# Bottom line
+
+You do **not** need another “final forensic gold master” for the same engine issue.
+
+You need a **live path verification audit** because the most likely problem now is:
+- wrong path
+- wrong contract
+- or downstream suppression after the engine
+
+That is the highest-signal next move.
