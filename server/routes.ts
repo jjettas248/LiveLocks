@@ -333,10 +333,10 @@ export async function registerRoutes(
       const matchup = `${game.awayAbbr || game.awayTeam} @ ${game.homeAbbr || game.homeTeam}`;
       const isLive = game.status === "live";
 
-      // Add away probable pitcher if known
-      if (game.probableAwayPitcher) {
+      // Add away probable pitcher if known (canonical field: pitcherAway)
+      if (game.pitcherAway) {
         previews.push({
-          playerName: game.probableAwayPitcher,
+          playerName: game.pitcherAway,
           matchup,
           projection: "6.5+ K",
           tags: [
@@ -346,10 +346,10 @@ export async function registerRoutes(
         });
       }
 
-      // Add home probable pitcher if known and different from away
-      if (game.probableHomePitcher && game.probableHomePitcher !== game.probableAwayPitcher) {
+      // Add home probable pitcher if known and different from away (canonical field: pitcherHome)
+      if (game.pitcherHome && game.pitcherHome !== game.pitcherAway) {
         previews.push({
-          playerName: game.probableHomePitcher,
+          playerName: game.pitcherHome,
           matchup,
           projection: "6.5+ K",
           tags: [

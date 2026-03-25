@@ -39,8 +39,8 @@ export async function discoverTodaysGames(): Promise<MLBGame[]> {
           gameDate: string;
           status: { abstractGameState: string };
           teams: {
-            home: { team: { abbreviation: string } };
-            away: { team: { abbreviation: string } };
+            home: { team: { abbreviation?: string; name?: string; clubName?: string } };
+            away: { team: { abbreviation?: string; name?: string; clubName?: string } };
           };
           probablePitchers?: {
             home?: { fullName: string };
@@ -66,10 +66,20 @@ export async function discoverTodaysGames(): Promise<MLBGame[]> {
         const state = game.status?.abstractGameState;
         if (!isLiveOrPreview(state)) continue;
 
+        const homeAbbr = game.teams?.home?.team?.abbreviation?.trim() ?? "";
+        const awayAbbr = game.teams?.away?.team?.abbreviation?.trim() ?? "";
+        const homeName = homeAbbr || game.teams?.home?.team?.name?.trim() || game.teams?.home?.team?.clubName?.trim() || "";
+        const awayName = awayAbbr || game.teams?.away?.team?.name?.trim() || game.teams?.away?.team?.clubName?.trim() || "";
+
+        if (!homeName || !awayName) {
+          console.warn(`[MLB discovery] Skipping game ${game.gamePk} — missing team identifiers (home="${homeName}" away="${awayName}")`);
+          continue;
+        }
+
         games.push({
           gameId: String(game.gamePk),
-          homeTeam: game.teams?.home?.team?.abbreviation ?? "",
-          awayTeam: game.teams?.away?.team?.abbreviation ?? "",
+          homeTeam: homeName,
+          awayTeam: awayName,
           startTime: game.gameDate ?? "",
           homePitcher: game.probablePitchers?.home?.fullName,
           awayPitcher: game.probablePitchers?.away?.fullName,

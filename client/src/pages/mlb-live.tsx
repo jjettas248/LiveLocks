@@ -633,9 +633,15 @@ export default function MlbLivePage() {
                   {renderState === "SIGNAL" && game.market && (
                     <div className="mt-1 flex flex-col gap-0.5">
                       {pitcherPill}
-                      <div className="text-[9px] text-muted-foreground font-mono">Projection: {game.market.projection.toFixed(1)}</div>
-                      <div className="text-[9px] text-green-400 font-mono">Edge: {game.market.edge.toFixed(1)}%</div>
-                      <div className="text-[9px] text-muted-foreground font-mono">Probability: {game.market.probability.toFixed(1)}%</div>
+                      {game.market.projection != null && (
+                        <div className="text-[9px] text-muted-foreground font-mono">Projection: {game.market.projection.toFixed(1)}</div>
+                      )}
+                      {game.market.edge != null && (
+                        <div className="text-[9px] text-green-400 font-mono">Edge: {game.market.edge.toFixed(1)}%</div>
+                      )}
+                      {game.market.probability != null && (
+                        <div className="text-[9px] text-muted-foreground font-mono">Probability: {game.market.probability.toFixed(1)}%</div>
+                      )}
                     </div>
                   )}
                 </button>
@@ -658,7 +664,9 @@ export default function MlbLivePage() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {previewPlayers.map((p, i) => (
+            {previewPlayers.map((p, i) => {
+              if (!p.playerName && !p.matchup) return null;
+              return (
               <div
                 key={i}
                 data-testid={`card-mlb-preview-${i}`}
@@ -678,20 +686,19 @@ export default function MlbLivePage() {
                   </div>
                 </div>
                 <div className="text-xs font-medium text-foreground">{p.projection}</div>
-                <div className="mt-3 flex items-center gap-3">
-                  <div className="flex-1 h-6 bg-secondary/30 rounded flex items-center justify-center relative overflow-hidden">
-                    <div className="absolute inset-0 flex items-center justify-center">
+                {!isElite && (
+                  <div className="mt-3 flex items-center gap-3">
+                    <div className="flex-1 h-6 bg-secondary/30 rounded flex items-center justify-center">
                       <span className="text-[10px] text-muted-foreground/50 font-medium">Probability locked</span>
                     </div>
-                  </div>
-                  <div className="flex-1 h-6 bg-secondary/30 rounded flex items-center justify-center relative overflow-hidden">
-                    <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="flex-1 h-6 bg-secondary/30 rounded flex items-center justify-center">
                       <span className="text-[10px] text-muted-foreground/50 font-medium">Edge locked</span>
                     </div>
                   </div>
-                </div>
+                )}
               </div>
-            ))}
+              );
+            })}
           </div>
 
           {!isElite && (
@@ -869,7 +876,9 @@ export default function MlbLivePage() {
               <div className="space-y-4">
                 {previewPlayers.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {previewPlayers.map((p, i) => (
+                    {previewPlayers.map((p, i) => {
+                      if (!p.playerName && !p.matchup) return null;
+                      return (
                       <div
                         key={i}
                         data-testid={`card-mlb-preview-signal-${i}`}
@@ -900,7 +909,8 @@ export default function MlbLivePage() {
                           </div>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="px-5 py-8 rounded-xl border border-border bg-card text-center">
