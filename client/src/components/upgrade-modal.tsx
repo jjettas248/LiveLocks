@@ -1,14 +1,25 @@
 import { useState } from "react";
-import { X, Zap, Trophy, CheckCircle2, ShieldAlert, TrendingUp, Bell } from "lucide-react";
+import { X, Zap, Trophy, CheckCircle2, ShieldAlert, TrendingUp, Bell, Lock, XCircle } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+
+interface TopLockedEdge {
+  playerName?: string;
+  statType?: string;
+  probability?: number;
+  edge?: number;
+  betDirection?: string;
+  line?: number;
+}
 
 interface UpgradeModalProps {
   playsUsed: number;
   limit: number;
   onClose: () => void;
+  lockedEdgesCount?: number;
+  topLockedEdge?: TopLockedEdge;
 }
 
-export function UpgradeModal({ playsUsed, limit, onClose }: UpgradeModalProps) {
+export function UpgradeModal({ playsUsed, limit, onClose, lockedEdgesCount, topLockedEdge }: UpgradeModalProps) {
   const [loadingTier, setLoadingTier] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -26,6 +37,9 @@ export function UpgradeModal({ playsUsed, limit, onClose }: UpgradeModalProps) {
       setLoadingTier(null);
     }
   };
+
+  const isLockedOut = playsUsed >= limit;
+  const hasLockedEdges = (lockedEdgesCount ?? 0) > 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -51,23 +65,56 @@ export function UpgradeModal({ playsUsed, limit, onClose }: UpgradeModalProps) {
             data-testid="text-upgrade-header"
             className="text-2xl font-black text-white leading-tight"
           >
-            {playsUsed >= limit ? "You've used all 3 free plays for today." : "You're seeing real edges."}
+            {isLockedOut ? "You've used all 3 free plays today." : "You're seeing real edges."}
           </h2>
           <p
             data-testid="text-upgrade-hook"
             className="text-sm font-medium text-[#f59e0b] mt-2"
           >
-            {playsUsed >= limit ? "Pro users get full access to all live edges." : "This is exactly what sportsbooks don't want you seeing."}
+            {isLockedOut
+              ? hasLockedEdges
+                ? `You're now locked out of ${lockedEdgesCount} live edge${lockedEdgesCount !== 1 ? "s" : ""}. Several high-confidence plays are active right now.`
+                : "Pro users get full access to all live edges."
+              : "This is exactly what sportsbooks don't want you seeing."}
           </p>
           <p
             data-testid="text-upgrade-subtext"
             className="text-sm text-[#a1a1aa] mt-1"
           >
-            {playsUsed >= limit
+            {isLockedOut
               ? "Your free plays reset tomorrow. Upgrade for unlimited access every day."
               : `Free users get 3 plays per day · Pro users unlock all live edges.`}
           </p>
         </div>
+
+        {/* Locked edge preview — shows first hidden play when available */}
+        {isLockedOut && topLockedEdge && topLockedEdge.playerName && (
+          <div className="px-6 pb-4">
+            <div
+              data-testid="locked-edge-preview"
+              className="rounded-xl border border-[#f59e0b]/20 bg-[#f59e0b]/5 p-3 flex items-center justify-between gap-3 relative overflow-hidden"
+            >
+              <div className="absolute inset-0 backdrop-blur-[2px] bg-[#0a0a0a]/40 flex items-center justify-center z-10 rounded-xl">
+                <div className="flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5 text-[#f59e0b]" />
+                  <span className="text-[11px] font-bold text-[#f59e0b] uppercase tracking-wide">Locked Edge</span>
+                </div>
+              </div>
+              <div className="z-0">
+                <p className="text-sm font-bold text-white">{topLockedEdge.playerName}</p>
+                <p className="text-[11px] text-[#a1a1aa]">
+                  {topLockedEdge.statType} · {topLockedEdge.betDirection?.toUpperCase()} {topLockedEdge.line}
+                </p>
+              </div>
+              <div className="text-right z-0">
+                <p className="text-lg font-black text-[#00d4aa]">{Math.round(topLockedEdge.probability ?? 0)}%</p>
+                {(topLockedEdge.edge ?? 0) > 0 && (
+                  <p className="text-[10px] text-[#a1a1aa]">+{(topLockedEdge.edge ?? 0).toFixed(1)}% edge</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="px-6 pb-4">
           <div className="space-y-2">
@@ -98,12 +145,13 @@ export function UpgradeModal({ playsUsed, limit, onClose }: UpgradeModalProps) {
               <span className="text-sm font-bold text-white">PRO</span>
             </div>
             <div className="text-2xl font-black text-white">
-              $50<span className="text-xs font-normal text-[#71717a]">/mo</span>
+              $40<span className="text-xs font-normal text-[#71717a]">/mo</span>
             </div>
             <ul className="mt-1.5 space-y-0.5">
               <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#00d4aa] shrink-0" />Live halftime edges</li>
               <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#00d4aa] shrink-0" />NBA & NCAAB 2H plays</li>
               <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#00d4aa] shrink-0" />Real-time probability engine</li>
+              <li className="text-[11px] text-[#71717a] flex items-center gap-1"><XCircle className="w-3 h-3 text-[#52525b] shrink-0" />MLB props (not included)</li>
             </ul>
             {loadingTier === "all" && (
               <div className="absolute inset-0 flex items-center justify-center bg-[#111]/80 rounded-xl">

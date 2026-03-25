@@ -1,0 +1,293 @@
+# TASK: LiveLocks Conversion System V2 — Daily Limit + Hard Paywall + Stripe Integration
+
+## SYSTEM:
+Conversion + UX + Payments + Core Engine
+
+## OBJECTIVE:
+Increase free → paid conversion with:
+- 3 free plays per day (reset daily)
+- Only 2 visible edges for free users
+- Locked edge preview + dynamic count
+- Manual checkout (no auto redirect)
+- Correct pricing ($40 Pro / $65 All Sports)
+- MLB restricted to All Sports tier
+- Fully working Stripe checkout + webhook activation
+
+---
+
+## CONTEXT:
+- playsUsed already exists
+- 402 gating already exists
+- Upgrade modal already exists
+- Edges array already exists
+- Stripe partially wired (needs verification + completion)
+
+---
+
+## REQUIREMENTS:
+
+---
+
+# 1. DAILY FREE PLAY RESET
+
+Add to users table:
+- lastResetAt TIMESTAMP
+
+Middleware:
+- If new day → reset playsUsed = 0
+- Update lastResetAt
+
+Limit:
+- FREE_DAILY_LIMIT = 3
+
+---
+
+# 2. REMOVE AUTO REDIRECT
+
+Delete:
+- Any auto Stripe redirect on modal open
+- Any "Redirecting..." UI
+
+---
+
+# 3. MANUAL CTA BUTTONS
+
+Add:
+
+- Upgrade to Pro — $40/mo
+- Unlock All Sports — $65/mo
+
+Each calls:
+
+startCheckout("pro")
+startCheckout("all")
+
+---
+
+# 4. FIX PRICING (GLOBAL)
+
+Set constants:
+
+PRO_PRICE = 40
+ALL_SPORTS_PRICE = 65
+
+Ensure consistency across:
+- UI
+- Stripe products
+- Checkout session metadata
+
+---
+
+# 5. EDGE LOCK SYSTEM
+
+FREE_VISIBLE_EDGES = 2
+
+- Show first 2 edges
+- Blur all others
+
+---
+
+# 6. LOCKED EDGE COUNT
+
+lockedEdgesCount = edges.length - 2
+
+Display dynamically in modal
+
+---
+
+# 7. LOCKED EDGE PREVIEW
+
+topLockedEdge = edges[2]
+
+Display:
+- edge %
+- projected margin
+
+---
+
+# 8. MODAL COPY (REPLACE)
+
+HEADER:
+"You've used all 3 free plays today."
+
+SUBTEXT:
+"You're now locked out of {lockedEdgesCount} live edges.
+Several high-confidence plays are active right now."
+
+VALUE:
+- Live halftime edges
+- Real-time probability engine
+- MLB props (All Sports only)
+- SMS alerts
+
+---
+
+# 9. USAGE BANNER
+
+"You have {3 - playsUsed} free plays remaining today"
+
+---
+
+# 10. MLB POSITIONING
+
+- MLB ONLY in All Sports
+- NOT in Pro
+
+Add:
+"MLB props (not included in Pro)"
+
+---
+
+# 11. FOOTER TEXT
+
+"Or keep guessing without LiveLocks"
+
+---
+
+# 12. STRIPE CHECKOUT (CRITICAL)
+
+## Create products in Stripe:
+
+Product 1:
+- Name: LiveLocks Pro
+- Price: $40/month
+- Price ID: price_pro_monthly
+
+Product 2:
+- Name: LiveLocks All Sports
+- Price: $65/month
+- Price ID: price_all_sports_monthly
+
+---
+
+## Backend: Create Checkout Session
+
+Endpoint: POST /api/stripe/create-checkout-session
+
+Logic:
+
+- Accept tier ("pro" or "all")
+- Map to correct priceId
+- Attach userId in metadata
+
+Example:
+
+const session = await stripe.checkout.sessions.create({
+  mode: "subscription",
+  payment_method_types: ["card"],
+  line_items: [
+    {
+      price: priceId,
+      quantity: 1
+    }
+  ],
+  success_url: `${DOMAIN}/dashboard?success=true`,
+  cancel_url: `${DOMAIN}/dashboard?canceled=true`,
+  metadata: {
+    userId: user.id,
+    tier: selectedTier
+  }
+})
+
+Return:
+{ url: session.url }
+
+---
+
+## Frontend: startCheckout()
+
+const startCheckout = async (tier) => {
+  const res = await fetch("/api/stripe/create-checkout-session", {
+    method: "POST",
+    body: JSON.stringify({ tier }),
+    headers: { "Content-Type": "application/json" }
+  })
+
+  const data = await res.json()
+  window.location.href = data.url
+}
+
+---
+
+# 13. STRIPE WEBHOOK (REQUIRED)
+
+Endpoint: POST /api/stripe/webhook
+
+Handle:
+
+checkout.session.completed
+
+---
+
+## Webhook Logic:
+
+- Extract:
+  userId = session.metadata.userId
+  tier = session.metadata.tier
+
+- Update user:
+
+if tier === "pro":
+  set subscriptionTier = "pro_nba"
+
+if tier === "all":
+  set subscriptionTier = "pro_all"
+
+- Set:
+  subscriptionStatus = "active"
+
+---
+
+## IMPORTANT:
+
+- Verify webhook signature
+- Use raw body (no JSON parsing before verification)
+
+---
+
+# 14. ACCESS CONTROL
+
+Update:
+
+hasProAccess =
+  user.subscriptionTier === "pro_nba" OR "pro_all"
+
+hasAllSportsAccess =
+  user.subscriptionTier === "pro_all"
+
+---
+
+# 15. MLB GATING
+
+If NOT hasAllSportsAccess:
+- Block MLB tab
+- Show upgrade modal
+
+---
+
+# DO NOT:
+
+- Do NOT auto-upgrade users without webhook confirmation
+- Do NOT hardcode subscription access
+- Do NOT skip webhook verification
+- Do NOT expose >2 edges to free users
+
+---
+
+# SUCCESS CRITERIA:
+
+- Free users blocked after 3 plays
+- Only 2 edges visible
+- Stripe checkout opens on button click
+- Webhook correctly upgrades user
+- MLB locked behind All Sports
+- Pricing consistent everywhere
+- No auto redirect behavior
+
+---
+
+# OUTPUT:
+
+- Fully working Stripe checkout
+- Correct subscription activation
+- Clean integration with modal + gating

@@ -1431,7 +1431,14 @@ export default function Dashboard() {
 
   const isFreeUser = !!user && !user.isAdmin && !user.subscriptionTier;
   const playsUsed = user?.playsUsedToday ?? 0;
-  const visibleEdgeLimit = 5;
+  const visibleEdgeLimit = 2;
+
+  // Derived from the flat halftime plays array for the upgrade modal locked-edge preview.
+  // visibleEdgeLimit (2) applies per game but we use the full plays list here as a proxy
+  // for the total locked count, so the modal copy reflects the real slate breadth.
+  const slateAllPlays = halftimePlaysData?.plays ?? [];
+  const slateLockedEdgesCount = isFreeUser ? Math.max(0, slateAllPlays.length - visibleEdgeLimit) : 0;
+  const slateTopLockedEdge = isFreeUser ? slateAllPlays[visibleEdgeLimit] : undefined;
 
   const filterPlay = (play: any) => {
     if (slateFilterProp === "combo" && !play.statType.includes("_")) return false;
@@ -3734,6 +3741,8 @@ export default function Dashboard() {
           playsUsed={upgradeModalState.playsUsed}
           limit={upgradeModalState.limit}
           onClose={() => setShowUpgradeModal(false)}
+          lockedEdgesCount={slateLockedEdgesCount}
+          topLockedEdge={slateTopLockedEdge}
         />
       )}
 
