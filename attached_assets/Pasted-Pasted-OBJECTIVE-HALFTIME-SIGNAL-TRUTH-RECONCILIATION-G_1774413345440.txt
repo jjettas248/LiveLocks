@@ -1,0 +1,89 @@
+Pasted--OBJECTIVE-HALFTIME-SIGNAL-TRUTH-RECONCILIATION-GOAL-De_1774399366279.txt
+# OBJECTIVE: HALFTIME SIGNAL TRUTH RECONCILIATION
+
+## GOAL:
+Determine exactly where NBA halftime UNDER bias is being introduced in the ACTIVE pipeline and fix ONLY that point with zero unnecessary changes.
+
+This is NOT a new build.
+This is NOT a rewrite.
+This is a reconciliation of:
+ENGINE OUTPUT → API RESPONSE → CLIENT FETCH → CLIENT RENDER
+
+---
+
+## WHAT WE ARE TRYING TO PROVE:
+
+We must reconcile THREE layers:
+
+1. ENGINE OUTPUT (server before response)
+2. CLIENT FETCHED DATA (raw API response)
+3. CLIENT RENDERED DATA (after all UI transforms)
+
+We are identifying where directional imbalance is introduced:
+- If bias exists at layer 1 → ENGINE ISSUE
+- If bias appears at layer 2 → RESPONSE / PATH ISSUE
+- If bias appears at layer 3 → UI TRANSFORM ISSUE
+
+---
+
+## SUCCESS DEFINITION:
+
+We will have:
+- Exact OVER/UNDER counts at each layer
+- A clear delta between layers (if any)
+- A single confirmed root cause (A/B/C/D/E)
+
+And we will apply ONLY ONE FIX at the correct layer.
+
+---
+
+## ROOT CAUSE CLASSIFICATION:
+
+A = Engine output is biased  
+B = Wrong endpoint / wrong path used by UI  
+C = Client filtering / slicing / dedup suppressing OVERS  
+D = Client re-deriving direction or probability incorrectly  
+E = Sorting/top-play selection skewing visible distribution  
+
+We MUST assign exactly one of these before changing logic.
+
+---
+
+## CONSTRAINTS:
+
+- DO NOT rewrite engine math unless A is proven
+- DO NOT rerun Task #50 forensic instrumentation globally
+- DO NOT modify MLB or NCAAB
+- DO NOT introduce artificial balancing
+- DO NOT change multiple layers at once
+- DO NOT patch unused or dead code paths
+
+---
+
+## END STATE:
+
+After fix:
+- Server output, fetched data, and rendered data all align
+- Halftime signals reflect true model output
+- No unexplained UNDER bias remains
+- No regression in edge ranking, ROI tracking, or UI behavior
+
+---
+
+## EXECUTION RULE:
+
+Trace → Compare → Identify → Patch ONE point → Verify
+
+NOT:
+Trace → Guess → Rewrite → Hope
+
+---
+
+## OUTPUT REQUIRED:
+
+1. Engine distribution log
+2. Client fetched distribution log
+3. Client rendered distribution log
+4. Transform-by-transform breakdown (if applicable)
+5. Root cause classification (A/B/C/D/E)
+6. Exact minimal code diff applied

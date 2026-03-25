@@ -872,7 +872,16 @@ export default function Dashboard() {
       }
       gameMap.get(play.gameId)!.plays.push(play);
     }
-    return Array.from(gameMap.values());
+    const groups = Array.from(gameMap.values());
+    const stage1Plays = groups.flatMap(g => g.plays);
+    console.log("[HT_STAGE_1_GROUP]", {
+      input: plays.length,
+      output: stage1Plays.length,
+      games: groups.length,
+      over: stage1Plays.filter(p => p.betDirection === "over").length,
+      under: stage1Plays.filter(p => p.betDirection === "under").length,
+    });
+    return groups;
   }, [halftimePlaysData]);
 
   useEffect(() => {
@@ -3042,6 +3051,49 @@ export default function Dashboard() {
                   inputGames: visibleHalftimeGroups.length,
                   renderedGames: pageGroups.length,
                   renderedCount: renderedPlays.length,
+                });
+
+                // ── Transform stage logs: [HT_STAGE_X] — input/output/OVER/UNDER at each step ──
+                // Stage 2: filterPlay (stat type + probability tier filter)
+                const stage2Plays = sourcePlays.filter(filterPlay);
+                console.log("[HT_STAGE_2_FILTER]", {
+                  input: sourcePlays.length,
+                  output: stage2Plays.length,
+                  over: stage2Plays.filter((p: any) => p.betDirection === "over").length,
+                  under: stage2Plays.filter((p: any) => p.betDirection === "under").length,
+                  activeFilter: `prop=${slateFilterProp} prob=${slateFilterProb}`,
+                });
+
+                // Stage 3: filterByBook (book provider filter)
+                const stage3Plays = filterByBook(stage2Plays, nbaBookFilter);
+                console.log("[HT_STAGE_3_BOOK]", {
+                  input: stage2Plays.length,
+                  output: stage3Plays.length,
+                  over: stage3Plays.filter((p: any) => p.betDirection === "over").length,
+                  under: stage3Plays.filter((p: any) => p.betDirection === "under").length,
+                  bookFilter: nbaBookFilter,
+                });
+
+                // Stage 4: visibleEdgeLimit (free-user play cap per group)
+                const stage4Plays = isFreeUser ? stage3Plays.slice(0, visibleEdgeLimit) : stage3Plays;
+                console.log("[HT_STAGE_4_LIMIT]", {
+                  input: stage3Plays.length,
+                  output: stage4Plays.length,
+                  over: stage4Plays.filter((p: any) => p.betDirection === "over").length,
+                  under: stage4Plays.filter((p: any) => p.betDirection === "under").length,
+                  limited: isFreeUser,
+                  limit: visibleEdgeLimit,
+                });
+
+                // Stage 5: pagination slice (current page only)
+                const stage5Plays = pageGroups.flatMap(g => g.plays ?? []);
+                console.log("[HT_STAGE_5_PAGE]", {
+                  input: renderedPlays.length,
+                  output: stage5Plays.length,
+                  over: stage5Plays.filter((p: any) => p.betDirection === "over").length,
+                  under: stage5Plays.filter((p: any) => p.betDirection === "under").length,
+                  page: currentHalftimePage,
+                  totalPages,
                 });
 
                 const totalSlateEdges = visibleHalftimeGroups.reduce((sum, g) => sum + filterByBook(g.plays.filter(filterPlay), nbaBookFilter).length, 0);
