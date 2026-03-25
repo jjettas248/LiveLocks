@@ -4,7 +4,7 @@ import { apiRequest, queryClient, getAuthToken } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
-import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle, Trash2, Loader2, Settings, Bell, ChevronUp, Send, Target } from "lucide-react";
+import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle, Trash2, Loader2, Settings, Bell, ChevronUp, Send, Target, FlaskConical } from "lucide-react";
 import { MLBAdminTab } from "@/components/mlb-admin-tab";
 import { CalibrationDashboard } from "@/components/calibration-dashboard";
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
@@ -112,6 +112,50 @@ export default function AdminPage() {
   const [resetTimeSaving, setResetTimeSaving] = useState(false);
   const [verifyResults, setVerifyResults] = useState<Record<number, { dbTier: string | null; hasNcaabAccess: boolean; requiresRefresh: boolean } | "error">>({});
   const [verifyLoadingId, setVerifyLoadingId] = useState<number | null>(null);
+
+  // Simulation Mode state
+  const [simEnabled, setSimEnabled] = useState(false);
+  const [simScenario, setSimScenario] = useState<"neutral" | "cold" | "hot">("neutral");
+  const [simApplying, setSimApplying] = useState(false);
+
+  useEffect(() => {
+    const token = getAuthToken();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    fetch("/api/admin/simulation-config", { credentials: "include", headers })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data) {
+          setSimEnabled(!!data.enabled);
+          setSimScenario(data.scenario ?? "neutral");
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleApplySimulation = async () => {
+    setSimApplying(true);
+    try {
+      const token = getAuthToken();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch("/api/admin/simulation-config", {
+        method: "POST",
+        headers,
+        credentials: "include",
+        body: JSON.stringify({ enabled: simEnabled, scenario: simScenario }),
+      });
+      if (!res.ok) throw new Error("Failed to update simulation config");
+      const data = await res.json();
+      setSimEnabled(!!data.enabled);
+      setSimScenario(data.scenario ?? "neutral");
+      toast({ title: data.enabled ? `Simulation ON — ${data.scenario}` : "Simulation disabled" });
+    } catch (e: any) {
+      toast({ title: "Failed to update simulation", description: e.message, variant: "destructive" });
+    } finally {
+      setSimApplying(false);
+    }
+  };
 
   // Alert Tester state
   const [alertTesterOpen, setAlertTesterOpen] = useState(false);
@@ -621,6 +665,53 @@ export default function AdminPage() {
             )}
           </div>
         )}
+        {/* Simulation Mode */}
+        <div className="bg-card border border-border rounded-xl p-4" data-testid="simulation-mode-section">
+          <div className="flex items-center gap-2 mb-1">
+            <FlaskConical className="w-4 h-4 text-primary" />
+            <h3 className="text-sm font-semibold text-foreground">Simulation Mode</h3>
+            {simEnabled && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 font-medium uppercase tracking-wide">Active</span>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mb-4">Test the NBA engine with deterministic mock inputs. Invisible to non-admin users.</p>
+          <div className="flex items-center gap-4 flex-wrap">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                data-testid="checkbox-sim-enabled"
+                type="checkbox"
+                checked={simEnabled}
+                onChange={e => setSimEnabled(e.target.checked)}
+                className="w-4 h-4 rounded accent-primary cursor-pointer"
+              />
+              <span className="text-sm text-foreground">Enable Simulation</span>
+            </label>
+            <div className="relative">
+              <select
+                data-testid="select-sim-scenario"
+                value={simScenario}
+                onChange={e => setSimScenario(e.target.value as "neutral" | "cold" | "hot")}
+                disabled={!simEnabled}
+                className="text-xs px-3 py-1.5 pr-7 rounded-lg bg-background border border-border text-foreground appearance-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-primary/50"
+              >
+                <option value="neutral">Neutral</option>
+                <option value="cold">Cold Shooting</option>
+                <option value="hot">Hot Shooting</option>
+              </select>
+              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground pointer-events-none" />
+            </div>
+            <button
+              data-testid="button-apply-simulation"
+              onClick={handleApplySimulation}
+              disabled={simApplying}
+              className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50 hover:bg-primary/90 transition-colors"
+            >
+              {simApplying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FlaskConical className="w-3.5 h-3.5" />}
+              Apply
+            </button>
+          </div>
+        </div>
+
         {/* Slate Settings */}
         <div className="bg-card border border-border rounded-xl p-5" data-testid="slate-settings-section">
           <div className="flex items-center gap-2 mb-1" style={{ borderTop: "none" }}>

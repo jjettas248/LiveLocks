@@ -1,0 +1,129 @@
+❗ Issue #1 — Your commit summary is WRONG (important)
+
+You are still documenting:
+
+sim:<gameId>:<scenario>
+
+But your patch says:
+
+sim:SIM_<scenario>
+
+Why this matters
+
+This creates:
+
+confusion for future debugging
+incorrect assumptions about cache behavior
+potential reintroduction of the bug later
+Fix (update your commit + docs)
+
+Replace:
+
+Simulation cache uses sim:<gameId>:<scenario>
+
+With:
+
+Simulation cache uses sim:SIM_<scenario> (scenario-only, no real gameId dependency)
+❗ Issue #2 — You still aren’t testing the FULL pipeline
+
+Right now you:
+
+generate players
+run calculateProbability
+log outputs
+But question:
+
+Are you running:
+
+sorting?
+edge filtering?
+top play selection?
+If NOT → this is incomplete
+
+Because your real system behavior depends on:
+
+.sort(by edge)
+.filter(edge threshold)
+.slice(top plays)
+Fix (critical for accuracy)
+
+After simulation:
+
+const results = players
+  .map(p => calculateProbability(p))
+  .filter(r => Math.abs(r.edge) >= EDGE_THRESHOLD)
+  .sort((a, b) => Math.abs(b.edge) - Math.abs(a.edge))
+  .slice(0, 10);
+
+Then log:
+
+console.log("[SIM_BOARD_SUMMARY]", {
+  total: results.length,
+  overs: results.filter(r => r.direction === "OVER").length,
+  unders: results.filter(r => r.direction === "UNDER").length
+});
+Why this matters
+
+Without this:
+
+you may fix projection
+but still get ALL UNDERS in UI
+
+Because selection logic dominates final output.
+
+⚠️ Issue #3 — You don’t yet have a “distribution check”
+
+This is the most important metric for your current problem.
+
+Add this (must-have)
+const overs = results.filter(r => r.direction === "OVER").length;
+const unders = results.filter(r => r.direction === "UNDER").length;
+
+console.log("[SIM_DISTRIBUTION]", {
+  overs,
+  unders,
+  ratio: overs / (overs + unders)
+});
+Why this matters
+
+Your core problem was:
+
+structural UNDER bias
+
+This is how you verify it is gone.
+
+🧪 What you should do right now
+Step 1 — Run baseline (before shooting fix)
+
+Run:
+
+neutral scenario
+cold scenario
+
+Capture:
+
+projection vs line
+direction counts
+Step 2 — Apply shooting-weight fix
+const halftimeShootingWeight = 0.7;
+shootingModifier = 1 + (shootingModifier - 1) * halftimeShootingWeight;
+Step 3 — Re-run simulation
+
+Compare:
+
+Metric	Expectation
+projections	slightly higher
+unders	decrease
+overs	increase
+distribution	moves toward 40–60
+🎯 What “correct” looks like now
+
+Not:
+
+50/50 forced
+
+But:
+
+mixed board
+varied edges
+no systematic skew

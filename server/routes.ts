@@ -40,6 +40,7 @@ import {
 import { getActiveGames } from "./mlb/liveGameRegistry";
 import { mlbEdgeCache } from "./mlb/edgeCache";
 import { liveOrchestrator, normalizeMlbStatus } from "./mlb/liveGameOrchestrator";
+import { getSimulationConfig, setSimulationConfig, getMockBoard } from "./simulationState";
 
 // ── Module-level play dedup guard (persists for process lifetime) ─────────────
 const recordedPlayKeys = new Set<string>();
@@ -210,6 +211,24 @@ export async function registerRoutes(
       console.error("[admin/delete-user]", err);
       return res.status(500).json({ error: "Failed to delete user" });
     }
+  });
+
+  // ── Admin: NBA Simulation Mode ────────────────────────────────────────────────
+  app.get("/api/admin/simulation-config", requireAdmin, (_req, res) => {
+    return res.json(getSimulationConfig());
+  });
+
+  app.post("/api/admin/simulation-config", requireAdmin, (req, res) => {
+    const { enabled, scenario } = req.body as { enabled?: boolean; scenario?: string };
+    if (typeof enabled !== "boolean") {
+      return res.status(400).json({ error: "enabled must be a boolean" });
+    }
+    if (!["neutral", "cold", "hot"].includes(scenario ?? "")) {
+      return res.status(400).json({ error: "scenario must be neutral, cold, or hot" });
+    }
+    setSimulationConfig({ enabled, scenario: scenario as "neutral" | "cold" | "hot" });
+    console.log(`[SIMULATION_MODE] config updated: enabled=${enabled} scenario=${scenario}`);
+    return res.json(getSimulationConfig());
   });
 
   // ── NCAAB Routes (Pro "all" + Elite "elite" + Admin) ────────────────────────
@@ -1806,6 +1825,172 @@ export async function registerRoutes(
 
   app.get("/api/live-signals/:gameId", requireAuth, async (req, res) => {
     const gameId = req.params.gameId as string;
+
+    // ── Simulation mode: admin-only, runs before any live API calls ───────────
+    // Check if the requesting user is an admin first; non-admins always get live path.
+    const requestUserId = (req as any).resolvedUserId ?? null;
+    let requestUserIsAdmin = false;
+    if (requestUserId) {
+      const requestUser = await storage.getUserById(requestUserId);
+      requestUserIsAdmin = requestUser?.isAdmin ?? false;
+    }
+
+    const simConfig = getSimulationConfig();
+    if (simConfig.enabled && requestUserIsAdmin) {
+      // Simulation is purely scenario-keyed — no real gameId dependency.
+      // This makes results stateless and deterministic across any gameId hit.
+      const simGameId = `SIM_${simConfig.scenario}`;
+      const simCacheKey = `sim:${simGameId}`;
+      const simCached = liveSignalsCache.get(simCacheKey);
+      if (simCached && Date.now() - simCached.ts < LIVE_SIGNALS_TTL) {
+        return res.json({ gameId: simGameId, isSimulation: true, scenario: simConfig.scenario, signals: simCached.signals, engineOutput: simCached.engineOutput ?? {} });
+      }
+
+      try {
+        console.log(`[SIMULATION_MODE] ${simConfig.scenario}`);
+        const board = getMockBoard(simConfig.scenario);
+        const allDbPlayers = await storage.getPlayers();
+        const simSignals: any[] = [];
+        const simEngineOutput: Record<number, Record<string, any>> = {};
+
+        const simStatTypes = ["points", "rebounds", "assists", "threes", "pts_reb_ast"] as const;
+        const simStatComponents: Record<string, string[]> = {
+          points:      ["points"],
+          rebounds:    ["rebounds"],
+          assists:     ["assists"],
+          threes:      ["threes"],
+          pts_reb_ast: ["points", "rebounds", "assists"],
+        };
+
+        // Map each archetype to a real DB player (by index) so calculateProbability
+        // can access season stats (ppg, rpg, etc.). The archetype overrides live
+        // shooting inputs and current stat, making results scenario-driven.
+        for (let i = 0; i < board.players.length; i++) {
+          const archetype = board.players[i];
+          const dbPlayer = allDbPlayers[i];
+          if (!dbPlayer) continue;
+
+          simEngineOutput[dbPlayer.id] = {};
+
+          for (const statType of simStatTypes) {
+            const liveLine = archetype.lines[statType];
+            const components = simStatComponents[statType];
+            const currentStat = components.reduce((sum, c) => {
+              return sum + (archetype.stats[c as keyof typeof archetype.stats] ?? 0);
+            }, 0);
+
+            console.log(`[SIM_BEFORE] archetype=${archetype.label} stat=${statType} line=${liveLine} currentStat=${currentStat} direction=?`);
+
+            try {
+              const result = await storage.calculateProbability({
+                playerId: dbPlayer.id,
+                opponentTeam: board.opponentTeam,
+                halftimeMinutes: archetype.minutes,
+                halftimeFouls: archetype.fouls,
+                halftimeStat: currentStat,
+                liveLine,
+                statType,
+                halftimeScore: `${board.gameState.awayScore}-${board.gameState.homeScore}`,
+                currentPeriod: board.gameState.period,
+                gameClock: board.gameState.displayClock,
+                gameTotalLine: board.gameTotalLine,
+                liveFgm:  archetype.shooting.liveFgm,
+                liveFga:  archetype.shooting.liveFga,
+                liveFtm:  archetype.shooting.liveFtm,
+                liveFta:  archetype.shooting.liveFta,
+                liveFg3m: archetype.shooting.liveFg3m,
+                liveFg3a: archetype.shooting.liveFg3a,
+              });
+
+              const edge = Number.isFinite(result.probability) ? Math.abs(result.probability - 50) : 0;
+              const direction = result.recommendedSide === "UNDER" ? "UNDER" : result.recommendedSide === "OVER" ? "OVER" : (result.probability > 50 ? "OVER" : "UNDER");
+
+              console.log(`[SIM_AFTER] archetype=${archetype.label} stat=${statType} prob=${result.probability?.toFixed(1)} edge=${edge.toFixed(1)} direction=${direction}`);
+
+              if (!Number.isFinite(result.probability)) continue;
+              if (edge < 5) continue;
+              if (result.probability === 50) continue;
+              if (result.noSignal || result.recommendedSide === "NO_SIGNAL") continue;
+
+              simEngineOutput[dbPlayer.id][statType] = {
+                probability: result.displayConfidence ?? Math.abs(result.probability - 50) + 50,
+                betDirection: direction,
+                edge,
+                line: liveLine,
+                statType,
+              };
+
+              simSignals.push({
+                playerName: `${dbPlayer.name} [${archetype.label}]`,
+                playerId: dbPlayer.id,
+                statType,
+                probability: result.displayConfidence ?? result.probability,
+                betDirection: direction.toLowerCase(),
+                edge,
+                line: liveLine,
+                currentStat,
+              });
+            } catch (calcErr: any) {
+              console.warn(`[SIM] engine error archetype=${archetype.label} stat=${statType}:`, calcErr?.message);
+            }
+          }
+        }
+
+        // STEP 1 — CLEAN + VALIDATE
+        const validPlays = simSignals.filter(s =>
+          s &&
+          Number.isFinite(s.probability) &&
+          Number.isFinite(s.edge) &&
+          s.edge >= 5 &&
+          s.betDirection &&
+          (s.betDirection === "over" || s.betDirection === "under")
+        );
+
+        // STEP 2 — SORT (STRONGEST EDGE FIRST)
+        validPlays.sort((a, b) => {
+          const edgeDiff = Math.abs(b.edge) - Math.abs(a.edge);
+          if (edgeDiff !== 0) return edgeDiff;
+          return Math.abs(b.probability - 50) - Math.abs(a.probability - 50);
+        });
+
+        // STEP 3 — HARD CAP
+        const topPlays = validPlays.slice(0, 10);
+
+        // STEP 4 — DISTRIBUTION ANALYSIS
+        const overCount = validPlays.filter(s => s.betDirection === "over").length;
+        const underCount = validPlays.filter(s => s.betDirection === "under").length;
+        const totalCount = validPlays.length;
+        const overRatio = totalCount > 0 ? overCount / totalCount : 0;
+        const underRatio = totalCount > 0 ? underCount / totalCount : 0;
+
+        // STEP 5 — SIMULATION DIAGNOSTICS
+        console.log(`[SIM_DISTRIBUTION] total=${totalCount} over=${overCount} under=${underCount} overRatio=${overRatio.toFixed(2)} underRatio=${underRatio.toFixed(2)}`);
+
+        // STEP 6 — BOARD SUMMARY
+        const avgEdge = totalCount > 0
+          ? validPlays.reduce((sum, s) => sum + Math.abs(s.edge), 0) / totalCount
+          : 0;
+        console.log(`[SIM_BOARD_SUMMARY] plays=${totalCount} avgEdge=${avgEdge.toFixed(2)} topPlays=${topPlays.length}`);
+
+        // STEP 7 — BIAS DETECTION
+        if (totalCount > 5) {
+          if (underRatio > 0.70) {
+            console.warn("[BIAS_ALERT] HEAVY UNDER BIAS DETECTED");
+          } else if (overRatio > 0.70) {
+            console.warn("[BIAS_ALERT] HEAVY OVER BIAS DETECTED");
+          } else {
+            console.log("[BIAS_STATUS] BALANCED");
+          }
+        }
+
+        liveSignalsCache.set(simCacheKey, { ts: Date.now(), signals: topPlays, engineOutput: simEngineOutput });
+        return res.json({ gameId: simGameId, isSimulation: true, scenario: simConfig.scenario, signals: topPlays, engineOutput: simEngineOutput });
+      } catch (simErr) {
+        console.warn(`[SimulationMode] Error:`, (simErr as any).message);
+        return res.json({ gameId: simGameId, isSimulation: true, scenario: simConfig.scenario, signals: [], engineOutput: {} });
+      }
+    }
+
     const cached = liveSignalsCache.get(gameId);
     if (cached && Date.now() - cached.ts < LIVE_SIGNALS_TTL) {
       return res.json({ signals: cached.signals, engineOutput: cached.engineOutput ?? {} });

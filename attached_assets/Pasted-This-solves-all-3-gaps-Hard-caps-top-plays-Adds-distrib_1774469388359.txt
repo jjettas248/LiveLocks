@@ -1,0 +1,159 @@
+This solves all 3 gaps:
+
+✅ Hard caps top plays
+✅ Adds distribution diagnostics (root cause visibility)
+✅ Gives you directional balance confirmation
+🔥 REPLIT MASTER PROMPT (FINAL)
+/**
+ * ============================================
+ * NBA ENGINE — FINAL DIAGNOSTIC + BALANCE PATCH
+ * ============================================
+ * Fixes:
+ * 1. No top-play cap → adds slice(0, 10)
+ * 2. No distribution visibility → adds SIM_DISTRIBUTION
+ * 3. No board summary → adds SIM_BOARD_SUMMARY
+ * 4. Detects UNDER bias immediately
+ */
+
+if (!Array.isArray(plays)) {
+  console.warn("[ENGINE_ERROR] plays is not array");
+  return [];
+}
+
+// STEP 1 — CLEAN + VALIDATE
+const validPlays = plays.filter(p =>
+  p &&
+  Number.isFinite(p.probability) &&
+  Number.isFinite(p.edge) &&
+  p.recommendedSide &&
+  (p.recommendedSide === "OVER" || p.recommendedSide === "UNDER")
+);
+
+// STEP 2 — SORT (STRONGEST EDGE FIRST)
+validPlays.sort((a, b) => {
+  const edgeDiff = Math.abs(b.edge) - Math.abs(a.edge);
+  if (edgeDiff !== 0) return edgeDiff;
+  return Math.abs(b.probability - 50) - Math.abs(a.probability - 50);
+});
+
+// STEP 3 — HARD CAP (CRITICAL FIX)
+const TOP_PLAYS = validPlays.slice(0, 10);
+
+// STEP 4 — DISTRIBUTION ANALYSIS (CRITICAL)
+const overCount = validPlays.filter(p => p.recommendedSide === "OVER").length;
+const underCount = validPlays.filter(p => p.recommendedSide === "UNDER").length;
+const totalCount = validPlays.length;
+
+const overRatio = totalCount > 0 ? overCount / totalCount : 0;
+const underRatio = totalCount > 0 ? underCount / totalCount : 0;
+
+// STEP 5 — SIMULATION DIAGNOSTICS (ADMIN ONLY LOGGING SAFE)
+console.log(`[SIM_DISTRIBUTION] total=${totalCount} over=${overCount} under=${underCount} overRatio=${overRatio.toFixed(2)} underRatio=${underRatio.toFixed(2)}`);
+
+// STEP 6 — TOP BOARD SUMMARY
+const avgEdge = totalCount > 0
+  ? (validPlays.reduce((sum, p) => sum + Math.abs(p.edge), 0) / totalCount)
+  : 0;
+
+console.log(`[SIM_BOARD_SUMMARY] plays=${totalCount} avgEdge=${avgEdge.toFixed(2)} topPlays=${TOP_PLAYS.length}`);
+
+// STEP 7 — BIAS DETECTION (THIS IS THE TRUTH SIGNAL)
+if (totalCount > 5) {
+  if (underRatio > 0.70) {
+    console.warn("[BIAS_ALERT] HEAVY UNDER BIAS DETECTED");
+  } else if (overRatio > 0.70) {
+    console.warn("[BIAS_ALERT] HEAVY OVER BIAS DETECTED");
+  } else {
+    console.log("[BIAS_STATUS] BALANCED");
+  }
+}
+
+// STEP 8 — RETURN ONLY TOP PLAYS
+return TOP_PLAYS;
+🧠 WHAT THIS ACTUALLY FIXES
+1. Your current problem is NOT UI
+
+It’s not rendering.
+
+It’s not sorting.
+
+👉 It’s distribution bias in the engine output
+
+2. Why you're seeing all UNDERS
+
+From your screenshot:
+
+Tons of low probabilities (16%, 21%, 29%)
+
+Engine maps:
+
+prob < 50 → UNDER
+prob > 50 → OVER
+
+So if your model is outputting:
+
+mean probability ~30–40
+
+You will ALWAYS get:
+
+UNDER-heavy board
+3. This patch gives you truth immediately
+
+After this runs, your logs will show:
+
+Case A — Broken (current likely)
+[SIM_DISTRIBUTION] total=42 over=6 under=36 overRatio=0.14 underRatio=0.86
+[BIAS_ALERT] HEAVY UNDER BIAS DETECTED
+Case B — Fixed
+[SIM_DISTRIBUTION] total=38 over=19 under=19 overRatio=0.50 underRatio=0.50
+[BIAS_STATUS] BALANCED
+🔧 WHAT TO DO NEXT (EXECUTION PLAN)
+Step 1 — Run Simulation Mode (NOW POSSIBLE)
+
+Admin panel → enable:
+
+Neutral
+Cold
+Hot
+
+Check logs each time.
+
+Step 2 — Interpret Results
+If ALL scenarios = UNDER heavy
+
+→ Your projection model is too low
+
+If only cold = UNDER heavy
+
+→ Your model is correct
+
+If hot still shows UNDER bias
+
+→ Your probability mapping is broken
+
+Step 3 — If still broken (likely)
+
+Then your issue is HERE:
+
+probability = someFunction(projection, line)
+
+You likely have:
+
+Too aggressive regression
+Pace underestimation
+Defensive multiplier too strong
+OR sigmoid scaling off
+⚠️ IMPORTANT (WHAT MOST PEOPLE MISS)
+
+Even if your math is correct:
+
+If your projection distribution mean < sportsbook lines → system will always lean UNDER
+
+So this becomes a calibration issue, not a logic issue.
+
+🏁 FINAL STATE YOU WANT
+Distribution ~45–55% OVER/UNDER
+No bias alert logs
+Top 10 plays only
+Clean board
+Simulation behaves predictably
