@@ -1,0 +1,110 @@
+Right now your mistake was:
+
+Reusing NBA “Today’s Games” container → tied to engine logic
+
+The correct approach:
+
+MLB “Today’s Games” = schedule-only UI (no projections, no edges)
+
+Correct Architecture (What You implement)
+Split MLB into 2 layers:
+1. Schedule Layer (NEW — what you just asked for)
+Always renders
+Shows:
+Teams
+Start times
+Game status
+Zero betting logic
+2. Signal Layer (Existing)
+Only renders when:
+Odds exist
+Projection exists
+Shows:
+Edge %
+Probability
+Direction
+Implementation (Replit-Ready)
+TASK: MLB “Today’s Games” Schedule Layer
+# TASK: MLB Schedule + Signal Split
+
+## SYSTEM:
+UX Layer
+
+## OBJECTIVE:
+Add a clean "Today's Games" schedule view to MLB without contaminating betting signal integrity
+
+## CONTEXT:
+- MLB tab currently broken / empty
+- Needs consistent user experience like NBA
+- BUT must not fake signals or reuse NBA logic
+
+## IMPLEMENTATION:
+
+1. Create Schedule Component
+
+/components/mlb/MLBScheduleList.tsx
+
+export function MLBScheduleList({ games }) {
+  if (!games?.length) return null;
+
+  return (
+    <div>
+      <h2>Today's Games</h2>
+      {games.map(game => (
+        <div key={game.id}>
+          {game.awayTeam} @ {game.homeTeam}
+          <div>{formatTime(game.startTime)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+---
+
+2. Update MLB Page
+
+/mlb/page.tsx (or route component)
+
+const hasSchedule = mlbGames?.length > 0;
+const hasSignals = mlbProps?.length > 0;
+
+return (
+  <>
+    {hasSchedule && <MLBScheduleList games={mlbGames} />}
+
+    {hasSignals ? (
+      <MLBGameList props={mlbProps} />
+    ) : (
+      <div className="empty-state">
+        No strong edges right now
+      </div>
+    )}
+  </>
+);
+
+---
+
+3. REMOVE old fallback:
+
+❌ "No MLB games today"
+❌ Generic NBA-style container
+❌ Shared GameList component
+
+---
+
+## SUCCESS CRITERIA:
+
+- MLB ALWAYS shows schedule if games exist
+- Signals ONLY show when valid
+- No fake edges
+- No reused NBA UI
+Why This Is the Correct Move
+Before (Broken)
+MLB tab = empty or misleading
+Users think product is dead
+No engagement
+After (Correct)
+MLB tab = alive even without edges
+Builds habit → user checks daily
+Signals feel rare + valuable
