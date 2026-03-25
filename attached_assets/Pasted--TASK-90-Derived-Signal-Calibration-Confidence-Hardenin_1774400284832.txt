@@ -1,0 +1,78 @@
+# TASK: #90 - Derived Signal Calibration + Confidence Hardening (Phase 2)
+
+## SYSTEM:
+Core Engine (NCAAB)
+
+## OBJECTIVE:
+Improve signal quality and prevent misleading edges generated from derived totals introduced in Task #89. Ensure fallback markets remain reliable, calibrated, and lower confidence than sportsbook-backed markets.
+
+## CONTEXT:
+Task #89 successfully restored pipeline integrity by introducing:
+- Pace-based derived total fallback when sportsbook lines are missing
+- Independent 6-market validation (no cascade failures)
+- Full pre-engine trace logging and failure detection :contentReference[oaicite:0]{index=0}
+
+Current issue:
+- Derived totals use naive pace extrapolation
+- This creates inflated projections early in games
+- Engine treats derived lines the same as sportsbook lines → leads to fake high-confidence edges
+
+## REQUIREMENTS:
+
+### 1. Derived Total Calibration (server/ncaabService.ts)
+- Replace naive projectedTotalRaw usage with regressed projection:
+  - Blend projectedTotalRaw with league baseline (~135)
+  - Use time-based weighting:
+    - Early game → heavier baseline weighting
+    - Late game → heavier live weighting
+- Example logic:
+  - regressionWeight = min(0.35, elapsedSeconds / totalGameSeconds)
+  - regressedTotal = (1 - regressionWeight) * 135 + regressionWeight * projectedTotalRaw
+- Clamp final total to [100, 200]
+- Preserve existing logging and liveTotalSource behavior
+
+### 2. Derived Edge Suppression (server/ncaabEngine.ts OR post-processing layer)
+- When engineInput.liveTotalSource === "derived":
+  - Multiply edge by ~0.65
+  - Adjust probability toward 50 using same factor:
+    probability = 50 + (probability - 50) * 0.65
+- Must be applied AFTER core probability calculation (no change to base model)
+
+### 3. Output Flagging (non-breaking)
+- Add optional field to market output:
+  isDerived?: boolean
+- Set true when liveTotalSource === "derived"
+- Do NOT modify UI yet — this is for future filtering and analytics
+
+### 4. Early-Game Guardrail
+- If liveTotalSource === "derived" AND elapsedSeconds < 300:
+  - Suppress full_total market (mark unavailable or skip creation)
+- Prevents unstable projections in first ~5 minutes
+
+### 5. Sanity Enforcement
+- Ensure recommendedSide always aligns with projection vs line:
+  - OVER only if projection > line
+  - UNDER only if projection < line
+- Reject or null invalid signals before final output
+
+## DO NOT:
+- Modify buildMarket() in ncaabEngine.ts
+- Introduce new fallback spreads or H1/H2 derived lines
+- Change sportsbook ingestion or odds API logic
+- Add UI changes or frontend logic
+- Create duplicate probability pipelines
+
+## SUCCESS CRITERIA:
+- Derived totals no longer produce extreme early-game projections
+- Derived plays show reduced edge/probability vs book-based plays
+- No increase in zero-market failures
+- Logs clearly distinguish "book" vs "derived" behavior
+- No contradictions between projection and recommended side
+
+## OUTPUT:
+- Exact code changes
+- File-level diffs for:
+  - server/ncaabService.ts
+  - server/ncaabEngine.ts (if used for suppression)
+- No placeholders
+- No pseudocode
