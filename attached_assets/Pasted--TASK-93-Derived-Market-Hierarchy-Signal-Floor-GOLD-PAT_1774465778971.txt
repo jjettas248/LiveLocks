@@ -1,0 +1,150 @@
+✅ TASK #93 — Derived Market Hierarchy + Signal Floor (GOLD PATCH)
+OBJECTIVE
+Prevent derived markets from competing with real sportsbook lines
+Eliminate weak derived signals entirely
+Ensure only high-integrity edges reach UI
+🔧 DROP-IN PATCH (FULL BLOCK)
+// ==============================
+// TASK #93 — DERIVED MARKET HARDENING (GOLD)
+// ==============================
+
+// Helper: detect if any REAL sportsbook-backed total exists
+const hasRealFullTotal = markets.full_total?.some(
+  (m) => m.available && m.isDerived !== true
+);
+
+// Apply hierarchy + signal floor rules
+if (markets.full_total) {
+  for (const market of markets.full_total) {
+
+    // Only operate on derived markets
+    if (market.isDerived === true) {
+
+      // ----------------------------------------
+      // RULE 1 — HARD DEPRIORITIZATION
+      // If ANY real market exists, derived cannot compete
+      // ----------------------------------------
+      if (hasRealFullTotal) {
+        market.available = false;
+
+        console.log(
+          `[NCAAB DERIVED BLOCKED] game=${gameId} reason=real_market_exists`
+        );
+
+        continue;
+      }
+
+      // ----------------------------------------
+      // RULE 2 — MINIMUM CONFIDENCE FLOOR
+      // Kill weak derived edges
+      // ----------------------------------------
+      const edgeFrom50 = Math.abs((market.modelProb ?? 50) - 50);
+
+      if (edgeFrom50 < 12) {
+        market.available = false;
+
+        console.log(
+          `[NCAAB DERIVED FILTERED] game=${gameId} reason=low_confidence edge=${edgeFrom50.toFixed(
+            2
+          )}`
+        );
+
+        continue;
+      }
+
+      // ----------------------------------------
+      // RULE 3 — FINAL SAFETY (DIRECTIONAL SANITY RECHECK)
+      // (Defensive redundancy — protects against upstream drift)
+      // ----------------------------------------
+      if (
+        (market.side === "OVER" && market.projection <= market.bookLine) ||
+        (market.side === "UNDER" && market.projection >= market.bookLine)
+      ) {
+        market.available = false;
+        market.side = null;
+
+        console.log(
+          `[NCAAB DERIVED INVALIDATED] game=${gameId} reason=projection_mismatch`
+        );
+
+        continue;
+      }
+
+      // ----------------------------------------
+      // RULE 4 — FINAL CLAMP (OPTIONAL BUT SAFE)
+      // Prevent any inflated derived confidence from slipping through
+      // ----------------------------------------
+      if (market.modelProb != null) {
+        market.modelProb = Math.max(
+          35,
+          Math.min(65, market.modelProb)
+        );
+      }
+    }
+  }
+}
+🧠 WHY THIS PATCH IS NON-NEGOTIABLE
+1. Hierarchy Enforcement
+
+Without this:
+
+Derived lines will out-rank real books
+You get fake “top plays”
+Product loses trust immediately
+2. Signal Floor
+
+Without this:
+
+55–60% plays leak through
+These are not bettable edges
+They dilute perceived model sharpness
+3. Redundant Sanity Check
+
+Even though you already added one:
+
+This protects against future regressions
+Prevents silent failures from upstream changes
+4. Probability Clamp (35–65)
+
+This ensures:
+
+Derived markets NEVER show fake conviction
+Keeps them visually and mathematically “secondary”
+✅ EXPECTED POST-PATCH BEHAVIOR
+Early Game (0–5 min)
+❌ No totals shown
+Logs: [NCAAB DERIVED SUPPRESSED]
+Mid Game (no sportsbook line)
+✅ Derived appears
+BUT:
+Fewer plays
+Lower confidence
+Clearly fallback behavior
+When Books Exist
+❌ Derived completely removed
+Only real lines compete
+UI Result
+Fewer plays
+Higher trust
+Cleaner “top edges”
+🔥 FINAL VALIDATION CHECKLIST (DO THIS TODAY)
+
+Run 2–3 live games and confirm:
+
+ No early-game totals
+ Derived only appears when books missing
+ Derived NEVER shows as strongest edge when real lines exist
+ No 55–60% plays
+ No OVER/UNDER contradictions
+ Logs firing correctly:
+[DERIVED BLOCKED]
+[DERIVED FILTERED]
+[DERIVED INVALIDATED]
+🚀 FINAL STATUS AFTER THIS PATCH
+Layer	Status
+Engine integrity	✅
+Derived fallback	✅
+Calibration	✅
+Market sanity	✅
+Selection hierarchy	✅ (this patch)
+Signal quality	✅ (this patch)

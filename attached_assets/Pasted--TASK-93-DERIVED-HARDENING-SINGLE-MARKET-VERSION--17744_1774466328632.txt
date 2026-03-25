@@ -1,0 +1,78 @@
+// ==============================
+// TASK #93 — DERIVED HARDENING (SINGLE MARKET VERSION)
+// ==============================
+
+const totalMarket = markets.full_total;
+
+if (totalMarket) {
+  const isDerived = totalMarket.isDerived === true;
+  const hasBookLine = totalMarket.bookLine != null && totalMarket.liveTotalSource !== "derived";
+
+  // ----------------------------------------
+  // RULE 1 — HIERARCHY ENFORCEMENT
+  // If a real sportsbook line exists, NEVER allow derived logic
+  // ----------------------------------------
+  if (isDerived && hasBookLine) {
+    totalMarket.available = false;
+
+    console.log(
+      `[NCAAB DERIVED BLOCKED] game=${gameId} reason=real_line_exists`
+    );
+  }
+
+  // ----------------------------------------
+  // RULE 2 — MIN CONFIDENCE FLOOR
+  // Remove weak derived edges
+  // ----------------------------------------
+  if (isDerived && totalMarket.available) {
+    const edgeFrom50 = Math.abs((totalMarket.modelProb ?? 50) - 50);
+
+    if (edgeFrom50 < 12) {
+      totalMarket.available = false;
+
+      console.log(
+        `[NCAAB DERIVED FILTERED] game=${gameId} edge=${edgeFrom50.toFixed(2)}`
+      );
+    }
+  }
+
+  // ----------------------------------------
+  // RULE 3 — DIRECTIONAL SANITY (REDUNDANT GUARD)
+  // ----------------------------------------
+  if (totalMarket.available) {
+    if (
+      (totalMarket.side === "OVER" && totalMarket.projection <= totalMarket.bookLine) ||
+      (totalMarket.side === "UNDER" && totalMarket.projection >= totalMarket.bookLine)
+    ) {
+      totalMarket.available = false;
+      totalMarket.side = null;
+
+      console.log(
+        `[NCAAB DERIVED INVALIDATED] game=${gameId} reason=projection_mismatch`
+      );
+    }
+  }
+
+  // ----------------------------------------
+  // RULE 4 — PROBABILITY CLAMP (DERIVED ONLY)
+  // ----------------------------------------
+  if (isDerived && totalMarket.modelProb != null) {
+    totalMarket.modelProb = Math.max(
+      35,
+      Math.min(65, totalMarket.modelProb)
+    );
+  }
+}
+🧠 Key Adjustment Explained
+Why hasBookLine replaces array comparison
+
+In your system:
+
+There is only one full_total
+It can either be:
+sportsbook-backed (liveTotalSource !== "derived")
+OR derived
+
+So instead of comparing multiple markets:
+
+You enforce hierarchy by checking source of truth

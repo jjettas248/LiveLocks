@@ -130,6 +130,7 @@ export interface NCAABMarket {
   publicInflation?: boolean | null;
   fadeRecommended?: boolean | null;
   adjustedEdgeScore?: number | null;
+  isDerived?: boolean;
 }
 
 export type NCAABMarkets = Record<NCAABMarketKey, NCAABMarket>;
@@ -1139,6 +1140,88 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
   }
   for (const key of totalKeys) {
     attachIntelligence(markets[key], totalCLV, input.publicTotalPct, publicInflationTotal);
+  }
+
+  // ── Post-processing: derived total dampening, isDerived flag, side sanity ───
+
+  // Task 4: mark full_total as isDerived when sourced from pace derivation
+  // Set regardless of available status so analytics can track provenance on all full_total objects
+  if (input.liveTotalSource === "derived") {
+    markets.full_total.isDerived = true;
+  }
+
+  // Task 3: dampen edge and probability for derived full_total markets
+  if (markets.full_total.marketKey === "full_total" && input.liveTotalSource === "derived" && markets.full_total.available) {
+    const mkt = markets.full_total;
+    const prevEdge = mkt.edge;
+    const prevProb = mkt.modelProb;
+    mkt.edge = mkt.edge !== null ? round1(mkt.edge * 0.65) : null;
+    mkt.modelProb = mkt.modelProb !== null ? round1(50 + (mkt.modelProb - 50) * 0.65) : null;
+    mkt.confidenceTier = mkt.edge !== null ? getMarketConfidenceTier(mkt.edge) : "NONE";
+    console.log(
+      `[NCAAB DERIVED SUPPRESS] gameId=${input.gameId} edgeAdj=0.65 probAdj=0.65 edge=${prevEdge}→${mkt.edge} prob=${prevProb}→${mkt.modelProb}`
+    );
+  }
+
+  // Task 5: recommendedSide sanity enforcement on full_total (book or derived)
+  if (markets.full_total.available) {
+    const mkt = markets.full_total;
+    const proj = mkt.projection;
+    const line = mkt.bookLine;
+    if (proj !== null && line !== null) {
+      const sideOk =
+        (mkt.side === "OVER" && proj > line) ||
+        (mkt.side === "UNDER" && proj < line) ||
+        mkt.side === null;
+      if (!sideOk) {
+        mkt.side = null;
+        mkt.available = false;
+      }
+    }
+  }
+
+  // ── Task #93: Derived Market Hierarchy + Signal Floor (single-market) ───────
+
+  const totalMarket = markets.full_total;
+
+  if (totalMarket) {
+    const isDerived = totalMarket.isDerived === true;
+    // A real sportsbook line exists when bookLine is present and source is not derived
+    const hasBookLine = totalMarket.bookLine != null && input.liveTotalSource !== "derived";
+
+    // Rule 1 — Hierarchy enforcement: real sportsbook line wins unconditionally
+    if (isDerived && hasBookLine) {
+      totalMarket.available = false;
+      console.log(`[NCAAB DERIVED BLOCKED] gameId=${input.gameId} reason=real_line_exists`);
+    }
+
+    // Rule 2 — Minimum confidence floor: suppress weak derived edges (edgeFrom50 < 12)
+    if (isDerived && totalMarket.available) {
+      const edgeFrom50 = Math.abs((totalMarket.modelProb ?? 50) - 50);
+      if (edgeFrom50 < 12) {
+        totalMarket.available = false;
+        console.log(
+          `[NCAAB DERIVED FILTERED] gameId=${input.gameId} edge=${edgeFrom50.toFixed(2)}`
+        );
+      }
+    }
+
+    // Rule 3 — Directional sanity (redundant guard against upstream drift)
+    if (totalMarket.available && totalMarket.projection !== null && totalMarket.bookLine !== null) {
+      if (
+        (totalMarket.side === "OVER" && totalMarket.projection <= totalMarket.bookLine) ||
+        (totalMarket.side === "UNDER" && totalMarket.projection >= totalMarket.bookLine)
+      ) {
+        totalMarket.available = false;
+        totalMarket.side = null;
+        console.log(`[NCAAB DERIVED INVALIDATED] gameId=${input.gameId} reason=projection_mismatch`);
+      }
+    }
+
+    // Rule 4 — Probability clamp (derived only): prevent inflated conviction (35–65)
+    if (isDerived && totalMarket.modelProb != null) {
+      totalMarket.modelProb = round1(Math.max(35, Math.min(65, totalMarket.modelProb)));
+    }
   }
 
   const CANONICAL_VERDICT_MAP: Record<NCAABMarketKey, NCAABMarketType> = {

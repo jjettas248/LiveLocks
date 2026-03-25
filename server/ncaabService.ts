@@ -1400,17 +1400,27 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         Number.isFinite(currentTotalScore) &&
         safeElapsedSeconds > 0
       ) {
-        const projectedTotalRaw = (currentTotalScore / safeElapsedSeconds) * totalGameSeconds;
-        const projectedTotal = Math.max(100, Math.min(200, projectedTotalRaw));
-
-        if (Number.isFinite(projectedTotal)) {
-          total = projectedTotal;
-          overOddsAmerican = Number.isFinite(Number(overOddsAmerican)) ? Number(overOddsAmerican) : -110;
-          underOddsAmerican = Number.isFinite(Number(underOddsAmerican)) ? Number(underOddsAmerican) : -110;
-          liveTotalSource = "derived";
+        // Early-game suppression guardrail: skip derived total in first 5 minutes
+        if (safeElapsedSeconds < 300) {
           console.log(
-            `[NCAAB DERIVED] total=${projectedTotal.toFixed(2)} gameId=${game.id} score=${homeScoreNum}-${awayScoreNum} elapsed=${safeElapsedSeconds}`
+            `[NCAAB DERIVED SUPPRESSED] gameId=${game.id} elapsed=${safeElapsedSeconds}s (<300s threshold) — full_total suppressed`
           );
+        } else {
+          const projectedTotalRaw = (currentTotalScore / safeElapsedSeconds) * totalGameSeconds;
+          // Regressed pace projection: time-weighted regression toward 135 league baseline
+          const regressionWeight = Math.min(0.75, safeElapsedSeconds / totalGameSeconds);
+          const regressedTotal = (1 - regressionWeight) * 135 + regressionWeight * projectedTotalRaw;
+          const projectedTotal = Math.max(100, Math.min(200, regressedTotal));
+
+          if (Number.isFinite(projectedTotal)) {
+            total = projectedTotal;
+            overOddsAmerican = Number.isFinite(Number(overOddsAmerican)) ? Number(overOddsAmerican) : -110;
+            underOddsAmerican = Number.isFinite(Number(underOddsAmerican)) ? Number(underOddsAmerican) : -110;
+            liveTotalSource = "derived";
+            console.log(
+              `[NCAAB DERIVED] total=${projectedTotal.toFixed(2)} gameId=${game.id} score=${homeScoreNum}-${awayScoreNum} elapsed=${safeElapsedSeconds} regressionWeight=${regressionWeight.toFixed(3)}`
+            );
+          }
         }
       }
 
