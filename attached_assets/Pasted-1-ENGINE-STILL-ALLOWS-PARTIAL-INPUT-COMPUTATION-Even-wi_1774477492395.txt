@@ -1,0 +1,267 @@
+1. ❌ ENGINE STILL ALLOWS “PARTIAL INPUT COMPUTATION”
+
+Even with your fixes, the engine can still run when:
+
+Savant data partially missing
+contact events incomplete
+pitcher context lagging
+
+👉 You will still generate low-quality or fake projections
+
+2. ❌ NO EXPLICIT “NO DATA” STATE
+
+Right now:
+
+no engine output = NO_SIGNAL
+
+That is WRONG.
+
+There are 3 distinct states:
+
+NO_DATA     → engine cannot compute
+NO_SIGNAL   → engine computed but no edge
+SIGNAL      → valid edge
+
+You are collapsing the first two.
+
+👉 This will confuse users and hide real failures
+
+3. ❌ MARKET ENGINE IS STILL NOT HARD SEGMENTED
+
+You improved logic, but you did NOT enforce:
+
+marketType → dedicated engine
+
+So:
+
+contact logic still leaks into Ks
+HR still not strict enough
+pitcher logic not isolated enough
+
+👉 This will degrade long-term ROI
+
+4. ❌ GLOBAL ENGINE HEALTH IS STILL INVISIBLE
+
+Right now:
+
+Savant fails → system degrades silently
+OddsAPI stalls → stale signals risk
+mapping mismatch → partial failure
+
+👉 There is NO system-level fail state
+
+5. ❌ FRESHNESS IS ONLY ENFORCED AT RESPONSE LEVEL
+
+You added:
+
+<120s check in live-signals
+
+But NOT:
+
+at engine computation
+at cache write
+
+👉 stale data can still propagate internally
+
+⚠️ WHY THIS MATTERS
+
+You’ve now crossed the threshold where:
+
+bugs are no longer obvious — they’re subtle
+
+And subtle = dangerous:
+
+user trusts system
+edges degrade silently
+you won’t notice until ROI drops
+🔥 FINAL GOLD MASTER ADDENDUM (THIS GETS YOU TO 10/10)
+
+This is the missing integrity layer
+
+You are executing FINAL MLB ENGINE HARDENING — PRODUCTION LOCK.
+
+This is the last step before public release.
+
+Do NOT refactor architecture.
+Add ONLY strict enforcement and fail-safes.
+
+---
+
+PHASE 1 — HARD INPUT VALIDATION (BLOCK ENGINE EXECUTION)
+
+Before ANY market calculation:
+
+Require ALL:
+
+- contactEvents.length > 0
+- pitcherContext != null
+- gameState != null
+
+If ANY missing:
+
+RETURN null
+LOG:
+[MLB ENGINE BLOCKED][gameId][market] reason=missing_input
+
+DO NOT compute projection.
+
+---
+
+PHASE 2 — MARKET-ISOLATED ENGINES (STRICT ROUTING)
+
+Replace shared scoring usage with strict routing:
+
+switch (marketType):
+
+"HITS"
+"TOTAL_BASES":
+  require contactQualityScore > 0
+  require AB >= 2 OR early explosion condition
+  break
+
+"HOME_RUN":
+  require EV >= HR_EV_THRESHOLD
+  require launchAngle in HR band
+  require environmentScore >= HR_ENV_THRESHOLD
+  break
+
+"BATTER_STRIKEOUTS":
+  DO NOT use contactQualityScore
+  require whiffRate + pitchMismatch
+  break
+
+"PITCHER_STRIKEOUTS":
+  require pitcherWhiffRate
+  require pitchCount < fatigueThreshold
+  break
+
+"HITS_ALLOWED":
+  require contactAllowed + pitchCount
+  break
+
+If condition fails:
+RETURN null
+
+---
+
+PHASE 3 — ENGINE OUTPUT VALIDATION
+
+After computing:
+
+If ANY:
+
+- projection == null
+- !Number.isFinite(projection)
+- probability == null
+- edge == null
+
+Then:
+
+RETURN null
+LOG:
+[MLB ENGINE INVALID][gameId][market]
+
+---
+
+PHASE 4 — ADD NEW STATE: NO_DATA
+
+Update render + API:
+
+If market output == null:
+
+state = "NO_DATA"
+
+UI:
+"Waiting for data"
+
+DO NOT show:
+"No strong edge"
+
+---
+
+PHASE 5 — GLOBAL ENGINE HEALTH SYSTEM
+
+Track per game:
+
+hasContactData
+hasPitcherData
+hasOddsData
+
+If 1 missing:
+gameHealth = "DEGRADED"
+
+If 2+ missing:
+gameHealth = "DOWN"
+
+---
+
+UI behavior:
+
+DEGRADED:
+- render games
+- suppress signals
+
+DOWN:
+- show banner:
+"Live MLB data temporarily unavailable"
+
+---
+
+PHASE 6 — FRESHNESS ENFORCED AT SOURCE
+
+At ENGINE OUTPUT:
+
+If:
+
+(now - oddsUpdatedAt) > 120s
+OR
+(now - projectionUpdatedAt) > 120s
+
+Then:
+
+DO NOT STORE OUTPUT
+LOG:
+[MLB STALE BLOCKED]
+
+---
+
+PHASE 7 — NO PARTIAL SIGNAL GUARANTEE
+
+A signal is ONLY valid if ALL:
+
+- hasRealOdds
+- projection valid
+- probability valid
+- edge valid
+- freshness valid
+
+Else:
+
+return null
+
+---
+
+FINAL REQUIREMENTS:
+
+System must NEVER:
+
+- compute on partial data
+- show stale signals
+- mix market logic
+- hide data failures
+
+System must ALWAYS:
+
+- fail visibly
+- degrade safely
+- preserve signal integrity
+
+Execute across:
+
+- featureEngineering.ts
+- markets.ts
+- liveGameOrchestrator.ts
+- routes.ts
+- mlb-live.tsx
+
+Do not summarize. Implement directly.

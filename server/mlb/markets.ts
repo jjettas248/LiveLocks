@@ -76,6 +76,9 @@ import {
   computeWeatherParkScore,
   computeBullpenScore,
   computeHandednessMatchupScore,
+  compositeHitterScore,
+  COMPOSITE_TIER1_THRESHOLD,
+  COMPOSITE_TIER3_THRESHOLD,
 } from "./featureEngineering";
 import { projectBaseValue } from "./projections";
 import { computeRawProbability, clampProjection, clampProbability } from "./probability";
@@ -125,6 +128,11 @@ function applyProbabilityCeiling(
   return calibratedSided;
 }
 
+// ── Tier 1 markets (high priority, standard composite threshold) ──────────────
+const TIER1_MARKETS = new Set<MLBMarket>(["hits", "total_bases", "batter_strikeouts", "pitcher_strikeouts"]);
+// ── Tier 3 markets (home runs / HRR, stricter composite threshold) ────────────
+const TIER3_MARKETS = new Set<MLBMarket>(["home_runs", "hrr"]);
+
 function checkSuppression(
   input: MLBPropInput,
   edge: number,
@@ -165,6 +173,26 @@ function checkSuppression(
       return {
         suppressed: true,
         reason: `${market} requires contact quality data (EV or distance)`,
+      };
+    }
+  }
+
+  // ── Composite scoring gate ────────────────────────────────────────────────
+  // Tier 3 (HR, HRR) requires a higher composite threshold than Tier 1.
+  // Pitcher markets are excluded from this gate (no contact quality input).
+  const isPitcherMarket = market === "pitcher_strikeouts" || market === "hits_allowed" || market === "walks_allowed";
+  if (!isPitcherMarket) {
+    const composite = compositeHitterScore(input);
+    if (TIER3_MARKETS.has(market) && composite < COMPOSITE_TIER3_THRESHOLD) {
+      return {
+        suppressed: true,
+        reason: `${market} requires composite score ≥ ${COMPOSITE_TIER3_THRESHOLD} (got ${composite.toFixed(2)})`,
+      };
+    }
+    if (TIER1_MARKETS.has(market) && composite < COMPOSITE_TIER1_THRESHOLD) {
+      return {
+        suppressed: true,
+        reason: `${market} requires composite score ≥ ${COMPOSITE_TIER1_THRESHOLD} (got ${composite.toFixed(2)})`,
       };
     }
   }

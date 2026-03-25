@@ -535,6 +535,11 @@ export default function MlbLivePage() {
           <span className="text-xs text-muted-foreground animate-pulse">Loading…</span>
         </div>
       )}
+      {!gamesLoading && games.length === 0 && (
+        <div className="text-xs text-muted-foreground py-3" data-testid="text-no-mlb-games-today">
+          No MLB games scheduled today. Check back soon.
+        </div>
+      )}
       {!gamesLoading && games.length > 0 && (
         <MLBScheduleList
           games={games}
@@ -618,7 +623,7 @@ export default function MlbLivePage() {
         <>
           <div className="flex items-center gap-3" data-testid="text-mlb-game-header">
             <h2 className="text-sm font-semibold text-foreground">
-              {selectedGame.awayAbbr} @ {selectedGame.homeAbbr}
+              {selectedGame.awayAbbr} vs {selectedGame.homeAbbr}
             </h2>
             {selectedGame.status === "live" && selectedGame.awayScore != null && selectedGame.homeScore != null && (
               <span className="text-xs text-muted-foreground font-mono">
@@ -742,175 +747,189 @@ export default function MlbLivePage() {
           </div>
           )}
 
-          {/* Signal/preview panel — mode-branched */}
-          {selectedPlayer === null && (
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-foreground">
-                {!isElite || signalMode !== "live" ? "Projected Opportunities" : "Edge Signals"}
-              </h2>
-              <div className="flex items-center gap-3">
-                {updatedAt > 0 && isElite && (
-                  <span className="text-xs text-muted-foreground" data-testid="text-mlb-signals-freshness">
-                    Updated {timeSince(updatedAt)}
-                  </span>
-                )}
-                {signalsLoading && (
-                  <span className="text-xs text-muted-foreground animate-pulse">Refreshing…</span>
-                )}
+          {/* Signal/preview panel — deterministic render contract ─────────────────
+              Resolves to exactly ONE of: PREVIEW | NO_SIGNAL | SIGNAL
+              - PREVIEW:   no valid odds for this game yet
+              - NO_SIGNAL: odds exist + no qualifying edge (signalMode is not "live", or live with 0 filtered signals)
+              - SIGNAL:    odds exist + signalMode === "live" + filteredSignals.length > 0
+              NOTE: entitlement (isElite) is an overlay — it renders a paywall inside each state,
+              not a separate state. This keeps state semantics tied to data, not access tier. */}
+          {selectedPlayer === null && (() => {
+            // Compute single panel state — mutually exclusive; strictly based on data availability
+            const panelState: "PREVIEW" | "NO_SIGNAL" | "SIGNAL" = (() => {
+              if (!selectedGame.hasOdds) return "PREVIEW";
+              if (signalMode === "live" && filteredSignals.length > 0) return "SIGNAL";
+              return "NO_SIGNAL";
+            })();
+
+            const pitcherBothPresent =
+              !!(selectedGame.pitcherAway?.trim() && selectedGame.pitcherHome?.trim());
+
+            const gameStatusBadge = (
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                selectedGame.status === "live"
+                  ? "bg-green-500/15 text-green-500"
+                  : "bg-muted text-muted-foreground"
+              }`}>
+                {selectedGame.status === "live" ? "LIVE" : "PRE-GAME"}
+              </span>
+            );
+
+            const gameTeamHeader = (
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-foreground">
+                    {selectedGame.awayAbbr} vs {selectedGame.homeAbbr}
+                  </div>
+                  {selectedGame.awayTeam && selectedGame.homeTeam && (
+                    <div className="text-xs text-muted-foreground mt-0.5">
+                      {selectedGame.awayTeam} vs {selectedGame.homeTeam}
+                    </div>
+                  )}
+                </div>
+                {gameStatusBadge}
               </div>
-            </div>
+            );
 
-            <p className="text-xs text-muted-foreground mb-3">Lines recently updated. Tracking movement…</p>
+            const pitcherPill = pitcherBothPresent ? (
+              <div className="flex gap-2 text-xs">
+                <span className="px-2 py-1 rounded bg-secondary/50 border border-border/30 text-muted-foreground">
+                  {selectedGame.pitcherAway}
+                </span>
+                <span className="self-center text-muted-foreground/40">vs</span>
+                <span className="px-2 py-1 rounded bg-secondary/50 border border-border/30 text-muted-foreground">
+                  {selectedGame.pitcherHome}
+                </span>
+              </div>
+            ) : null;
 
-            {/* preview_locked — non-elite, odds exist */}
-            {(!isElite) && (
-              <div className="space-y-4">
-                {previewPlayers.length > 0 ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {previewPlayers.map((p, i) => {
-                      if (!p.playerName && !p.matchup) return null;
-                      return (
-                      <div
-                        key={i}
-                        data-testid={`card-mlb-preview-signal-${i}`}
-                        className="rounded-xl border border-border/40 bg-card p-4"
-                      >
-                        <div className="flex justify-between items-start mb-2">
-                          <div>
-                            <div className="text-sm font-semibold text-foreground">{p.playerName ?? p.matchup}</div>
-                            <div className="text-xs text-muted-foreground">{p.playerName ? p.matchup : "Edges forming"}</div>
-                          </div>
-                          <div className="flex gap-1 flex-wrap justify-end">
-                            {p.tags.map((tag, ti) => (
-                              <span key={ti} className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
-                                {tag}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="text-xs font-medium text-foreground mb-3">{p.projection}</div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="bg-secondary/30 rounded p-2 text-center">
-                            <div className="text-[9px] text-muted-foreground">Probability</div>
-                            <div className="text-xs font-bold text-muted-foreground/40 mt-0.5">••••</div>
-                          </div>
-                          <div className="bg-secondary/30 rounded p-2 text-center">
-                            <div className="text-[9px] text-muted-foreground">Edge</div>
-                            <div className="text-xs font-bold text-muted-foreground/40 mt-0.5">••••</div>
-                          </div>
-                        </div>
+            return (
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-sm font-semibold text-foreground">
+                    {panelState === "SIGNAL" ? "Edge Signals" : "Projected Opportunities"}
+                  </h2>
+                  <div className="flex items-center gap-3">
+                    {updatedAt > 0 && isElite && (
+                      <span className="text-xs text-muted-foreground" data-testid="text-mlb-signals-freshness">
+                        Updated {timeSince(updatedAt)}
+                      </span>
+                    )}
+                    {signalsLoading && (
+                      <span className="text-xs text-muted-foreground animate-pulse">Refreshing…</span>
+                    )}
+                  </div>
+                </div>
+
+                {panelState === "PREVIEW" && (
+                  <div>
+                    <div
+                      data-testid="card-mlb-game-preview"
+                      className="rounded-xl border border-border/40 bg-card p-5 space-y-3"
+                    >
+                      {gameTeamHeader}
+                      {pitcherPill}
+                      <div className="text-xs text-muted-foreground/70 font-medium" data-testid="text-mlb-awaiting-lines">
+                        Awaiting live lines
                       </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="px-5 py-8 rounded-xl border border-border bg-card text-center">
-                    <p className="text-sm font-medium text-foreground">Projected Opportunities</p>
-                    <p className="text-xs text-muted-foreground mt-1">Edges are forming — select a game to see projections.</p>
+                    </div>
+                    {!isElite && (
+                      <div className="rounded-xl border border-primary/20 bg-primary/5 p-5 text-center space-y-3 mt-4">
+                        <div className="text-sm font-bold text-foreground">Unlock MLB Edges</div>
+                        <div className="text-xs text-muted-foreground">
+                          Upgrade to All Sports to see live probabilities, edge percentages, and bet recommendations.
+                        </div>
+                        <a
+                          href="/upgrade"
+                          data-testid="link-mlb-upgrade-cta-signals"
+                          className="inline-block px-5 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors"
+                        >
+                          Upgrade to All Sports →
+                        </a>
+                      </div>
+                    )}
                   </div>
                 )}
-                <div className="rounded-xl border border-primary/20 bg-primary/5 p-5 text-center space-y-3">
-                  <div className="text-sm font-bold text-foreground">Unlock MLB Edges</div>
-                  <div className="text-xs text-muted-foreground">
-                    Upgrade to All Sports to see live probabilities, edge percentages, and bet recommendations.
-                  </div>
-                  <a
-                    href="/upgrade"
-                    data-testid="link-mlb-upgrade-cta-signals"
-                    className="inline-block px-5 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors"
+
+                {panelState === "NO_SIGNAL" && (
+                  <div
+                    data-testid="card-mlb-game-no-signal"
+                    className="rounded-xl border border-border/40 bg-card p-5 space-y-3"
                   >
-                    Upgrade to All Sports →
-                  </a>
-                </div>
-              </div>
-            )}
+                    {gameTeamHeader}
+                    {pitcherPill}
+                    <div className="text-xs text-muted-foreground" data-testid="text-no-signals">
+                      {selectedGame.status !== "live"
+                        ? "No live data available yet — edges appear once the game is in progress."
+                        : validatedSignals.length === 0
+                          ? "No strong edge detected. Lines are still forming — check back as the game progresses."
+                          : `${validatedSignals.length} signal${validatedSignals.length !== 1 ? "s" : ""} available but none meet the current filter.`}
+                    </div>
+                  </div>
+                )}
 
-            {/* no_lines — elite tier, no valid edges */}
-            {isElite && signalMode === "no_lines" && (
-              <div className="px-5 py-8 rounded-xl border border-border bg-card text-center" data-testid="text-no-signals">
-                <p className="text-sm font-medium text-foreground">No strong edges right now</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Lines are still forming. Check back as the game progresses.
-                </p>
-              </div>
-            )}
-
-            {/* live — elite tier, signals present */}
-            {isElite && signalMode === "live" && (
-              filteredSignals.length === 0 ? (
-                <div className="px-5 py-8 rounded-xl border border-border bg-card text-center" data-testid="text-no-signals">
-                  <p className="text-sm font-medium text-foreground">No strong edges right now</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {selectedGame.status !== "live"
-                      ? "No live data available yet — edges appear once the game is in progress."
-                      : validatedSignals.length === 0
-                        ? "Engine is warming up — edges appear once the orchestrator detects qualifying game state changes."
-                        : `${validatedSignals.length} signal${validatedSignals.length !== 1 ? "s" : ""} available but none meet the current filter.`}
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {filteredSignals.map((sig) => {
-                    const style = TIER_STYLES[sig.tier];
-                    const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
-                    return (
-                      <div
-                        key={`${sig.playerId}-${sig.market}`}
-                        data-testid={`card-mlb-signal-${sig.playerId}-${sig.market}`}
-                        style={{ borderColor: style.border, backgroundColor: style.bg }}
-                        className="rounded-xl border p-4 space-y-3"
-                      >
-                        <div className="flex justify-between items-center gap-2">
-                          <div>
-                            <div className="text-sm font-semibold text-foreground">{sig.playerName}</div>
-                            <div className="text-xs text-muted-foreground mt-0.5">{marketLabel}</div>
-                          </div>
-                          <span
-                            className="text-xs font-bold px-2 py-0.5 rounded-full"
-                            style={{ color: style.dot, backgroundColor: `${style.dot}20` }}
-                          >
-                            {style.label}
-                          </span>
-                        </div>
-
-                        <div className="flex justify-between items-center">
-                          <div className="text-4xl font-bold" style={{ color: style.dot }}>
-                            {sig.enginePct.toFixed(1)}%
-                          </div>
-                          <div className="flex-1 grid grid-cols-2 gap-2 text-xs ml-4">
-                            <div className="text-center">
-                              <div className="text-muted-foreground mb-0.5">Line</div>
-                              <div className="font-semibold text-foreground">{sig.bookLine != null ? sig.bookLine : "—"}</div>
+                {panelState === "SIGNAL" && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {filteredSignals.map((sig) => {
+                      const style = TIER_STYLES[sig.tier];
+                      const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
+                      return (
+                        <div
+                          key={`${sig.playerId}-${sig.market}`}
+                          data-testid={`card-mlb-signal-${sig.playerId}-${sig.market}`}
+                          style={{ borderColor: style.border, backgroundColor: style.bg }}
+                          className="rounded-xl border p-4 space-y-3"
+                        >
+                          <div className="flex justify-between items-center gap-2">
+                            <div>
+                              <div className="text-sm font-semibold text-foreground">{sig.playerName}</div>
+                              <div className="text-xs text-muted-foreground mt-0.5">{marketLabel}</div>
                             </div>
-                            <div className="text-center">
-                              <div className="text-muted-foreground mb-0.5">Edge</div>
-                              <div className="font-semibold text-foreground">
-                                {sig.edge != null ? `+${sig.edge.toFixed(1)}%` : <span className="text-muted-foreground font-normal">No line</span>}
+                            <span
+                              className="text-xs font-bold px-2 py-0.5 rounded-full"
+                              style={{ color: style.dot, backgroundColor: `${style.dot}20` }}
+                            >
+                              {style.label}
+                            </span>
+                          </div>
+
+                          <div className="flex justify-between items-center">
+                            <div className="text-4xl font-bold" style={{ color: style.dot }}>
+                              {sig.enginePct.toFixed(1)}%
+                            </div>
+                            <div className="flex-1 grid grid-cols-2 gap-2 text-xs ml-4">
+                              <div className="text-center">
+                                <div className="text-muted-foreground mb-0.5">Line</div>
+                                <div className="font-semibold text-foreground">{sig.bookLine != null ? sig.bookLine : "—"}</div>
+                              </div>
+                              <div className="text-center">
+                                <div className="text-muted-foreground mb-0.5">Edge</div>
+                                <div className="font-semibold text-foreground">
+                                  {sig.edge != null ? `+${sig.edge.toFixed(1)}%` : <span className="text-muted-foreground font-normal">—</span>}
+                                </div>
                               </div>
                             </div>
                           </div>
-                        </div>
 
-                        <div className="flex items-center justify-between pt-1 border-t border-border/30">
-                          <span className="text-xs font-bold tracking-wide" style={{ color: style.dot }}>
-                            {sig.recommendedSide}{sig.bookLine != null ? ` ${sig.bookLine}` : ""}
-                          </span>
-                          <button
-                            data-testid={`button-mlb-add-parlay-${sig.playerId}-${sig.market}`}
-                            className="text-xs px-3 py-1 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                          >
-                            + Parlay
-                          </button>
+                          <div className="flex items-center justify-between pt-1 border-t border-border/30">
+                            <span className="text-xs font-bold tracking-wide" style={{ color: style.dot }}>
+                              {sig.recommendedSide}{sig.bookLine != null ? ` ${sig.bookLine}` : ""}
+                            </span>
+                            <button
+                              data-testid={`button-mlb-add-parlay-${sig.playerId}-${sig.market}`}
+                              className="text-xs px-3 py-1 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                            >
+                              + Parlay
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )
-            )}
-          </div>
-          )}
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Matchup detail + calc panel */}
           {selectedPlayer !== null && selectedGame && (

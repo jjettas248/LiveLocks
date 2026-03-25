@@ -14,7 +14,7 @@ import { getVapidPublicKey, sendPush } from "./webpush";
 import { checkAndSendAlerts } from "./alertManager";
 import { autoResolveAlerts, autoSettlePersistedPlays } from "./analyticsResolver";
 import { syncMinutesProjections } from "./services/minutesProjectionService";
-import { calculateMLBPropEdge, canShowSignal } from "./mlb/markets";
+import { calculateMLBPropEdge, canShowSignal, hasRealOdds } from "./mlb/markets";
 import {
   recordMLBDiagnostic,
   getMLBDiagnosticSummary,
@@ -386,7 +386,7 @@ export async function registerRoutes(
     const previews: any[] = [];
 
     for (const game of games) {
-      const matchup = `${game.awayAbbr || game.awayTeam} @ ${game.homeAbbr || game.homeTeam}`;
+      const matchup = `${game.awayAbbr || game.awayTeam} vs ${game.homeAbbr || game.homeTeam}`;
       const isLive = game.status === "live";
 
       // Add away probable pitcher if known (canonical field: pitcherAway)
@@ -421,7 +421,7 @@ export async function registerRoutes(
     // If no pitcher data available, return safe game-level previews with no player names
     if (previews.length === 0) {
       for (const game of games.slice(0, 3)) {
-        const matchup = `${game.awayAbbr || game.awayTeam} @ ${game.homeAbbr || game.homeTeam}`;
+        const matchup = `${game.awayAbbr || game.awayTeam} vs ${game.homeAbbr || game.homeTeam}`;
         previews.push({
           playerName: null,
           matchup,
@@ -453,133 +453,166 @@ export async function registerRoutes(
       const user = (req as any).user ?? (req as any).resolvedUser ?? null;
       const tier = user?.subscriptionTier ?? null;
 
+      // ── Fetch from ESPN scoreboard — same endpoint and fallback chain as gameDiscoveryService ──
       const today = new Date();
-      const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-      const scheduleUrl = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${dateStr}&hydrate=linescore,probablePitcher,weather,venue`;
-      const response = await fetch(scheduleUrl, {
+      const espnDateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
+      const espnUrl = `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${espnDateStr}`;
+      const response = await fetch(espnUrl, {
         headers: { "User-Agent": "LiveLocks/1.0" },
         signal: AbortSignal.timeout(8000),
       });
-      if (!response.ok) throw new Error(`MLB API ${response.status}`);
+      if (!response.ok) throw new Error(`ESPN scoreboard ${response.status}`);
       const data = (await response.json()) as any;
-      const registeredIds = new Set(getActiveGames().map((g) => g.gameId));
+
+      const rawEvents: number = data.events?.length ?? 0;
+      console.log(`[MLB DISCOVERY] live-games rawEvents=${rawEvents}`);
+
+      // ── Team name fallback chain: displayName → shortDisplayName → name ──
+      function resolveTeamName(team: any): string {
+        if (!team) return "";
+        return (
+          (team.displayName?.trim() || "") ||
+          (team.shortDisplayName?.trim() || "") ||
+          (team.name?.trim() || "") ||
+          ""
+        );
+      }
 
       const games: any[] = [];
-      for (const date of data.dates ?? []) {
-        for (const game of date.games ?? []) {
-          const rawState = game.status?.abstractGameState as string;
-          const canonicalState = normalizeMlbStatus(rawState);
-          if (canonicalState !== "live" && canonicalState !== "pregame") continue;
-          const gameId = String(game.gamePk);
-          const linescore = game.linescore ?? {};
-          const inning: number = linescore.currentInning ?? 0;
-          const isTopInning: boolean = linescore.isTopInning ?? true;
-          const homeScore: number = linescore.teams?.home?.runs ?? 0;
-          const awayScore: number = linescore.teams?.away?.runs ?? 0;
-          const cachedState = mlbGameCache.gameState[gameId];
-          const cachedWeather = mlbGameCache.weather[gameId];
-          const pitcherInGame = cachedState?.pitcherInGame ?? null;
+      for (const event of data.events ?? []) {
+        const competition = event.competitions?.[0];
+        if (!competition) continue;
 
-          const awayPitcherObj = game.teams?.away?.probablePitcher;
-          const homePitcherObj = game.teams?.home?.probablePitcher;
-          const awayPitcher: string = awayPitcherObj?.fullName ?? "";
-          const homePitcher: string = homePitcherObj?.fullName ?? "";
-          const awayPitcherHand: string = awayPitcherObj?.pitchHand?.code ?? "";
-          const homePitcherHand: string = homePitcherObj?.pitchHand?.code ?? "";
+        const statusName: string = competition.status?.type?.name ?? event.status?.type?.name ?? "STATUS_SCHEDULED";
+        const isLive = statusName === "STATUS_IN_PROGRESS" || statusName === "STATUS_DELAYED";
+        const isFinal = statusName === "STATUS_FINAL" || statusName === "STATUS_FORFEIT";
+        const canonicalState = isFinal ? "final" : isLive ? "live" : "pregame";
+        const gameId = String(event.id);
 
-          const apiWeather = game.weather ?? {};
-          const weatherParts: string[] = [];
-          const weatherTemp: number | null = cachedWeather?.temperature ?? (apiWeather.temp ? parseInt(apiWeather.temp) : null);
-          if (weatherTemp != null) weatherParts.push(`${weatherTemp}°F`);
-          if (apiWeather.condition) weatherParts.push(apiWeather.condition);
-          if (cachedWeather?.windSpeed != null && cachedWeather?.windDirection) {
-            weatherParts.push(`${cachedWeather.windSpeed}mph ${cachedWeather.windDirection}`);
-          } else if (apiWeather.wind) {
-            weatherParts.push(apiWeather.wind);
-          }
-          const weatherSummary: string = weatherParts.join(", ");
+        const homeCompetitor = competition.competitors?.find((c: any) => c.homeAway === "home");
+        const awayCompetitor = competition.competitors?.find((c: any) => c.homeAway === "away");
 
-          const parkName: string = game.venue?.name ?? "";
-          const parkFactor: number | null = null;
-
-          // hasOdds: true if there are signals in the edge cache with real book lines for this game
-          const cacheEntry = mlbEdgeCache.get(gameId);
-          const hasOdds = !!(cacheEntry && cacheEntry.outputs.some((o) => o.bookLine > 0));
-          // signalLocked: recomputed at serve-time using real book odds + freshness (120s window)
-          const freshValidOutputs = cacheEntry ? cacheEntry.outputs.filter((o) =>
-            canShowSignal({
-              line: o.bookLine,
-              odds: (o.overOdds !== null || o.underOdds !== null)
-                ? { overOdds: o.overOdds, underOdds: o.underOdds }
-                : null,
-              projection: o.projection,
-              oddsUpdatedAt: o.oddsUpdatedAt,
-              projectionUpdatedAt: o.projectionUpdatedAt,
-            })
-          ) : [];
-          const signalLocked = freshValidOutputs.some((o) => Math.abs(o.edge) >= 5);
-
-          // Aggregate best-signal fields for client chip rendering
-          const bestEdgeOutput = freshValidOutputs.reduce<typeof freshValidOutputs[0] | null>((best, o) =>
-            best === null || Math.abs(o.edge) > Math.abs(best.edge) ? o : best, null
-          );
-          // Build the market object for client-side signal validation.
-          // Only populated when a fresh valid output exists with real book odds.
-          const bestMarket = bestEdgeOutput ? {
-            line: bestEdgeOutput.bookLine,
-            odds: (bestEdgeOutput.overOdds !== null || bestEdgeOutput.underOdds !== null)
-              ? { overOdds: bestEdgeOutput.overOdds, underOdds: bestEdgeOutput.underOdds }
-              : null,
-            projection: bestEdgeOutput.projection,
-            edge: bestEdgeOutput.edge,
-            probability: Math.max(
-              bestEdgeOutput.calibratedProbabilityOver,
-              bestEdgeOutput.calibratedProbabilityUnder
-            ),
-            oddsUpdatedAt: new Date(bestEdgeOutput.oddsUpdatedAt).toISOString(),
-            projectionUpdatedAt: new Date(bestEdgeOutput.projectionUpdatedAt).toISOString(),
-          } : null;
-
-          // ── Identity validation — spec requires non-empty team names ────────
-          const awayTeamName = game.teams?.away?.team?.name ?? null;
-          const homeTeamName = game.teams?.home?.team?.name ?? null;
-          if (!awayTeamName || !homeTeamName) {
-            console.warn(`[MLB DROP][${gameId}] missing awayTeam/homeTeam — awayTeam=${awayTeamName} homeTeam=${homeTeamName}`);
-            continue;
-          }
-          const awayAbbrVal = game.teams?.away?.team?.abbreviation ?? null;
-          const homeAbbrVal = game.teams?.home?.team?.abbreviation ?? null;
-          if (!awayAbbrVal || !homeAbbrVal) {
-            console.warn(`[MLB DROP][${gameId}] missing awayAbbr/homeAbbr — awayAbbr=${awayAbbrVal} homeAbbr=${homeAbbrVal}`);
-            continue;
-          }
-
-          games.push({
-            gameId,
-            awayTeam: awayTeamName,
-            homeTeam: homeTeamName,
-            awayAbbr: awayAbbrVal,
-            homeAbbr: homeAbbrVal,
-            homeScore: canonicalState === "live" ? homeScore : null,
-            awayScore: canonicalState === "live" ? awayScore : null,
-            inning: cachedState?.inning ?? inning,
-            isTopInning: cachedState?.isTopInning ?? isTopInning,
-            status: canonicalState === "live" ? "live" : "pregame",
-            startTime: game.gameDate ?? null,
-            venue: parkName || null,
-            weatherSummary: weatherSummary || null,
-            pitcherAway: awayPitcher || null,
-            pitcherHome: homePitcher || null,
-            awayPitcherHand: awayPitcherHand || null,
-            homePitcherHand: homePitcherHand || null,
-            pitcherName: pitcherInGame?.playerName ?? null,
-            pitcherThrows: pitcherInGame?.throws ?? null,
-            pitcherTeam: pitcherInGame?.team ?? null,
-            hasOdds,
-            signalLocked,
-            market: bestMarket,
-          });
+        const awayTeamName = resolveTeamName(awayCompetitor?.team);
+        const homeTeamName = resolveTeamName(homeCompetitor?.team);
+        if (!awayTeamName && !homeTeamName) {
+          console.warn(`[MLB DROP][${gameId}] both team names empty after fallback chain — dropping event`);
+          continue;
         }
+
+        const awayAbbrVal: string = awayCompetitor?.team?.abbreviation ?? "";
+        const homeAbbrVal: string = homeCompetitor?.team?.abbreviation ?? "";
+
+        // Scores
+        const homeScore: number = isLive ? (parseFloat(homeCompetitor?.score ?? "0") || 0) : 0;
+        const awayScore: number = isLive ? (parseFloat(awayCompetitor?.score ?? "0") || 0) : 0;
+
+        // Inning from cached game state (orchestrator-maintained) — fallback to ESPN status detail
+        const cachedState = mlbGameCache.gameState[gameId];
+        const statusDetail: string = competition.status?.type?.shortDetail ?? "";
+        const inningFromEspn = (() => {
+          const m = statusDetail.match(/(\d+)/);
+          return m ? parseInt(m[1]) : 0;
+        })();
+        const isTopInningFromEspn = /^T/i.test(statusDetail) || competition.status?.type?.shortDetail?.includes("Top");
+
+        // Weather from cached weather data (orchestrator-maintained)
+        const cachedWeather = mlbGameCache.weather[gameId];
+        const weatherParts: string[] = [];
+        if (cachedWeather?.temperature != null) weatherParts.push(`${cachedWeather.temperature}°F`);
+        if (cachedWeather?.windSpeed != null && cachedWeather?.windDirection) {
+          weatherParts.push(`${cachedWeather.windSpeed}mph ${cachedWeather.windDirection}`);
+        }
+        const weatherSummary = weatherParts.join(", ");
+
+        // Venue from ESPN event or competition
+        const parkName: string = competition.venue?.fullName ?? event.venue?.fullName ?? "";
+
+        const pitcherInGame = cachedState?.pitcherInGame ?? null;
+
+        // Probable pitchers from ESPN competition situation
+        const probableHome = competition.situation?.probable?.home?.athlete;
+        const probableAway = competition.situation?.probable?.away?.athlete;
+        const awayPitcher: string = probableAway?.fullName ?? probableAway?.displayName ?? "";
+        const homePitcher: string = probableHome?.fullName ?? probableHome?.displayName ?? "";
+
+        // hasOdds: true if edge cache has at least one output passing hasRealOdds + freshness (canShowSignal)
+        // Aligns with signal-serve semantics so PREVIEW vs NO_SIGNAL boundary is based on valid+fresh odds
+        const cacheEntry = mlbEdgeCache.get(gameId);
+        const hasOdds = !!(cacheEntry && cacheEntry.outputs.some((o) =>
+          canShowSignal({
+            line: o.bookLine,
+            odds: (o.overOdds !== null || o.underOdds !== null)
+              ? { overOdds: o.overOdds, underOdds: o.underOdds }
+              : null,
+            projection: o.projection,
+            oddsUpdatedAt: o.oddsUpdatedAt,
+            projectionUpdatedAt: o.projectionUpdatedAt,
+          })
+        ));
+        // signalLocked: recomputed at serve-time using real book odds + freshness (120s window)
+        const freshValidOutputs = cacheEntry ? cacheEntry.outputs.filter((o) =>
+          canShowSignal({
+            line: o.bookLine,
+            odds: (o.overOdds !== null || o.underOdds !== null)
+              ? { overOdds: o.overOdds, underOdds: o.underOdds }
+              : null,
+            projection: o.projection,
+            oddsUpdatedAt: o.oddsUpdatedAt,
+            projectionUpdatedAt: o.projectionUpdatedAt,
+          })
+        ) : [];
+        const signalLocked = freshValidOutputs.some((o) => Math.abs(o.edge) >= 5);
+
+        // Best-signal market for chip-level rendering
+        const bestEdgeOutput = freshValidOutputs.reduce<typeof freshValidOutputs[0] | null>((best, o) =>
+          best === null || Math.abs(o.edge) > Math.abs(best.edge) ? o : best, null
+        );
+        const bestMarket = bestEdgeOutput ? {
+          line: bestEdgeOutput.bookLine,
+          odds: (bestEdgeOutput.overOdds !== null || bestEdgeOutput.underOdds !== null)
+            ? { overOdds: bestEdgeOutput.overOdds, underOdds: bestEdgeOutput.underOdds }
+            : null,
+          projection: bestEdgeOutput.projection,
+          edge: bestEdgeOutput.edge,
+          probability: Math.max(
+            bestEdgeOutput.calibratedProbabilityOver,
+            bestEdgeOutput.calibratedProbabilityUnder
+          ),
+          oddsUpdatedAt: new Date(bestEdgeOutput.oddsUpdatedAt).toISOString(),
+          projectionUpdatedAt: new Date(bestEdgeOutput.projectionUpdatedAt).toISOString(),
+        } : null;
+
+        games.push({
+          gameId,
+          awayTeam: awayTeamName,
+          homeTeam: homeTeamName,
+          awayAbbr: awayAbbrVal,
+          homeAbbr: homeAbbrVal,
+          homeScore: canonicalState === "live" ? homeScore : null,
+          awayScore: canonicalState === "live" ? awayScore : null,
+          inning: cachedState?.inning ?? inningFromEspn,
+          isTopInning: cachedState?.isTopInning ?? isTopInningFromEspn,
+          status: canonicalState === "live" ? "live" : "pregame",
+          startTime: event.date ?? null,
+          venue: parkName || null,
+          weatherSummary: weatherSummary || null,
+          pitcherAway: awayPitcher || null,
+          pitcherHome: homePitcher || null,
+          awayPitcherHand: null,
+          homePitcherHand: null,
+          pitcherName: pitcherInGame?.playerName ?? null,
+          pitcherThrows: pitcherInGame?.throws ?? null,
+          pitcherTeam: pitcherInGame?.team ?? null,
+          hasOdds,
+          signalLocked,
+          market: bestMarket,
+        });
+      }
+
+      const builtGames = games.length;
+      console.log(`[MLB DISCOVERY] live-games builtGames=${builtGames}`);
+      if (builtGames === 0) {
+        console.warn(`[MLB DISCOVERY] WARNING: live-games builtGames=0 for date=${espnDateStr}`);
       }
       mlbLiveGamesCache.set("games", { ts: Date.now(), games });
 
@@ -607,7 +640,9 @@ export async function registerRoutes(
       return res.json(cached.players);
     }
     try {
-      const url = `https://statsapi.mlb.com/api/v1/game/${gameId}/boxscore`;
+      const registeredLiveGame = getActiveGames().find((g) => g.gameId === gameId);
+      const liveStatsPk: string = registeredLiveGame?.gamePk ?? gameId;
+      const url = `https://statsapi.mlb.com/api/v1/game/${liveStatsPk}/boxscore`;
       const response = await fetch(url, {
         headers: { "User-Agent": "LiveLocks/1.0" },
         signal: AbortSignal.timeout(8000),
@@ -676,13 +711,17 @@ export async function registerRoutes(
     }
 
     let gameStatus = "";
+    // Resolve statsPk (MLB gamePk) for Stats API calls in this endpoint
+    const liveSignalsGame = getActiveGames().find((g) => g.gameId === gameId);
+    const liveSignalsStatsPk: string = liveSignalsGame?.gamePk ?? gameId;
+
     const cachedLiveGamesList = mlbLiveGamesCache.get("games");
     if (cachedLiveGamesList) {
       const liveGame = cachedLiveGamesList.games.find((g: any) => String(g.gameId) === gameId);
       gameStatus = liveGame?.status ?? "";
     } else {
       try {
-        const schedUrl = `https://statsapi.mlb.com/api/v1/game/${gameId}/feed/live`;
+        const schedUrl = `https://statsapi.mlb.com/api/v1/game/${liveSignalsStatsPk}/feed/live`;
         const schedRes = await fetch(schedUrl, {
           headers: { "User-Agent": "LiveLocks/1.0" },
           signal: AbortSignal.timeout(5000),
@@ -716,13 +755,22 @@ export async function registerRoutes(
     const updatedAt = entry?.updatedAt ?? 0;
     const cachedIsDegraded = entry?.isDegraded ?? false;
 
+    // Freshness gate: signals older than 120s are considered stale at serve-time
+    const SIGNAL_FRESHNESS_MS = 120_000;
+    if (updatedAt > 0 && Date.now() - updatedAt > SIGNAL_FRESHNESS_MS) {
+      const staleAge = Math.round((Date.now() - updatedAt) / 1000);
+      console.warn(`[MLB signals] game=${gameId} — engine outputs are ${staleAge}s old (>${SIGNAL_FRESHNESS_MS / 1000}s limit); returning no_lines`);
+      mlbSignalsCache.set(gameId, { ts: Date.now(), signals: [], updatedAt, isDegraded: true });
+      return res.json({ mode: "no_lines", signals: [], updatedAt, isDegraded: true });
+    }
+
     let rosterPlayerIds: Set<string>;
     const liveStatsEntry = mlbLiveStatsCache.get(gameId);
     if (liveStatsEntry?.allRosterIds && liveStatsEntry.allRosterIds.size > 0) {
       rosterPlayerIds = liveStatsEntry.allRosterIds;
     } else {
       try {
-        const boxUrl = `https://statsapi.mlb.com/api/v1/game/${gameId}/boxscore`;
+        const boxUrl = `https://statsapi.mlb.com/api/v1/game/${liveSignalsStatsPk}/boxscore`;
         const boxRes = await fetch(boxUrl, {
           headers: { "User-Agent": "LiveLocks/1.0" },
           signal: AbortSignal.timeout(5000),
@@ -1444,16 +1492,18 @@ export async function registerRoutes(
       if (!gameId || typeof gameId !== "string") {
         return res.status(400).json({ error: "gameId is required" });
       }
-      await syncGameState(gameId);
-      await syncContactData(gameId);
-      await syncPitcherContext(gameId);
-      await syncWeather(gameId);
-      await syncBullpenUsage(gameId);
+      const adminRegisteredGame = getActiveGames().find((g) => g.gameId === gameId);
+      const adminStatsPk: string = adminRegisteredGame?.gamePk ?? gameId;
+      await syncGameState(adminStatsPk, gameId);
+      await syncContactData(adminStatsPk, gameId);
+      await syncPitcherContext(adminStatsPk, gameId);
+      await syncWeather(adminStatsPk, gameId);
+      await syncBullpenUsage(adminStatsPk, gameId);
       // Admin manual trigger — fetch actual status; engine only runs if genuinely live
       // Default to "unknown" — engine will skip unless status resolves to "live"
       let adminNormalizedStatus: "live" | "pregame" | "final" | "unknown" = "unknown";
       try {
-        const adminStatusRes = await fetch(`https://statsapi.mlb.com/api/v1/game/${gameId}/feed/live`, {
+        const adminStatusRes = await fetch(`https://statsapi.mlb.com/api/v1/game/${adminStatsPk}/feed/live`, {
           headers: { "User-Agent": "LiveLocks/1.0" },
           signal: AbortSignal.timeout(4000),
         });

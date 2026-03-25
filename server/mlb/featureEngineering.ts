@@ -166,20 +166,24 @@ export function applyTwoABRule(input: MLBPropInput): TwoABRuleResult {
     const strongContextScore = computeStrongContextScore(input);
     const hasStrongContext = strongContextScore >= EARLY_EXPLOSIVE_THRESHOLDS.strongContextScoreMin;
 
-    if (meetsMetrics && hasStrongContext) {
+    // Explicit environment gate: Early Explosion also requires strong environmentScore
+    const envScore = environmentScore(input);
+    const hasStrongEnvironment = envScore >= EARLY_EXPLOSIVE_THRESHOLDS.environmentScoreMin;
+
+    if (meetsMetrics && hasStrongContext && hasStrongEnvironment) {
       return {
         liveFormAllowed: true,
         mode: "early_explosive",
-        reason: `Early explosive mode: EV=${ev}, LA=${la}°, Dist=${dist}ft cross elite thresholds; context score=${strongContextScore.toFixed(2)} ≥ ${EARLY_EXPLOSIVE_THRESHOLDS.strongContextScoreMin}`,
+        reason: `Early explosive mode: EV=${ev}, LA=${la}°, Dist=${dist}ft cross elite thresholds; context score=${strongContextScore.toFixed(2)} ≥ ${EARLY_EXPLOSIVE_THRESHOLDS.strongContextScoreMin}, envScore=${envScore.toFixed(2)} ≥ ${EARLY_EXPLOSIVE_THRESHOLDS.environmentScoreMin}`,
         strongContextScore,
       };
     }
 
-    if (meetsMetrics && !hasStrongContext) {
+    if (meetsMetrics && (!hasStrongContext || !hasStrongEnvironment)) {
       return {
         liveFormAllowed: false,
         mode: "standard",
-        reason: `Elite contact at ${completedAB} AB but context score ${strongContextScore.toFixed(2)} < ${EARLY_EXPLOSIVE_THRESHOLDS.strongContextScoreMin} required`,
+        reason: `Elite contact at ${completedAB} AB but gate failed — context=${strongContextScore.toFixed(2)} (min ${EARLY_EXPLOSIVE_THRESHOLDS.strongContextScoreMin}), envScore=${envScore.toFixed(2)} (min ${EARLY_EXPLOSIVE_THRESHOLDS.environmentScoreMin})`,
         strongContextScore,
       };
     }
@@ -390,3 +394,207 @@ export function computeLineupPocketWeaknessScore(input: MLBPropInput): number {
 
   return 0;
 }
+
+// ── Composite four-dimension scoring model ────────────────────────────────────
+// Each function returns a normalized [0, 1] score. The composite finalScore is
+// the sum of the four dimensions and is used directly for signal generation
+// thresholds and Early Explosion mode gating.
+
+/**
+ * contactQualityScore — Exit velocity, launch angle, hard-hit rate, barrel
+ * likelihood, and prior AB quality today.
+ * Range: [0, 1]
+ */
+export function contactQualityScore(input: MLBPropInput): number {
+  const metrics = input.contactQuality;
+  const ev = metrics.exitVelocity ?? 0;
+  const la = metrics.launchAngle ?? 0;
+  const hhr = metrics.hardHitRateSeason ?? 0;
+  const barrel = metrics.barrelRateProxySeason ?? 0;
+
+  let score = 0;
+
+  // Exit velocity contribution (0–0.35)
+  if (ev >= EARLY_EXPLOSIVE_THRESHOLDS.exitVelocity) score += 0.35;
+  else if (ev >= STANDARD_THRESHOLDS.exitVelocity.elite) score += 0.28;
+  else if (ev >= STANDARD_THRESHOLDS.exitVelocity.hard) score += 0.18;
+  else if (ev >= STANDARD_THRESHOLDS.exitVelocity.medium) score += 0.08;
+
+  // Launch angle sweet spot contribution (0–0.20)
+  const inSweetSpot =
+    la >= STANDARD_THRESHOLDS.launchAngle.sweetSpotMin &&
+    la <= STANDARD_THRESHOLDS.launchAngle.sweetSpotMax;
+  if (inSweetSpot) score += 0.20;
+  else if (la > 0 && la < STANDARD_THRESHOLDS.launchAngle.sweetSpotMin) score += 0.08;
+
+  // Hard-hit rate contribution (0–0.25)
+  if (hhr >= STANDARD_THRESHOLDS.hardHitRate.elite) score += 0.25;
+  else if (hhr >= STANDARD_THRESHOLDS.hardHitRate.hard) score += 0.15;
+  else if (hhr >= STANDARD_THRESHOLDS.hardHitRate.medium) score += 0.07;
+
+  // Barrel rate contribution (0–0.10)
+  if (barrel >= 0.10) score += 0.10;
+  else if (barrel >= 0.05) score += 0.05;
+
+  // Prior AB quality today (0–0.10)
+  const priorABs = metrics.priorABResults;
+  if (priorABs.length > 0) {
+    const hardHits = priorABs.filter(
+      (ab) => (ab.exitVelocity ?? 0) >= STANDARD_THRESHOLDS.exitVelocity.hard
+    ).length;
+    const frac = hardHits / priorABs.length;
+    score += frac * 0.10;
+  }
+
+  return Math.min(1, score);
+}
+
+/**
+ * opportunityScore — Batting order slot, remaining PA estimate, inning,
+ * pitch count proxy for bullpen likelihood.
+ * Range: [0, 1]
+ */
+export function opportunityScore(input: MLBPropInput): number {
+  let score = 0;
+
+  const slot = input.lineup.battingOrderSlot;
+  const remainingPA = input.remainingPA ?? 1;
+  const inning = input.inning;
+  const pitchCount = input.pitcher.pitchCount;
+
+  // Batting order slot (0–0.30)
+  if (slot <= 2) score += 0.30;
+  else if (slot <= 4) score += 0.22;
+  else if (slot <= 6) score += 0.14;
+  else score += 0.06;
+
+  // Remaining PA estimate — normalized against typical max of 3.5 (0–0.30)
+  const paNorm = Math.min(1, remainingPA / 3.5);
+  score += paNorm * 0.30;
+
+  // Inning — earlier innings have more opportunity (0–0.20)
+  if (inning <= 3) score += 0.20;
+  else if (inning <= 5) score += 0.14;
+  else if (inning <= 7) score += 0.08;
+  else score += 0.02;
+
+  // High pitch count suggests bullpen entry soon → more PA opportunity vs. fresh arms (0–0.20)
+  if (pitchCount >= 90) score += 0.20;
+  else if (pitchCount >= 75) score += 0.14;
+  else if (pitchCount >= 60) score += 0.08;
+
+  return Math.min(1, score);
+}
+
+/**
+ * environmentScore — Park factor, weather, handedness splits.
+ * Range: [0, 1]
+ */
+export function environmentScore(input: MLBPropInput): number {
+  let score = 0;
+
+  const parkFactor = input.weatherPark.parkFactor;
+  const isIndoors = input.weatherPark.isIndoors;
+  const temp = input.weatherPark.temperature;
+  const windSpeed = input.weatherPark.windSpeed;
+  const windDir = input.weatherPark.windDirection;
+
+  // Park factor contribution (0–0.35)
+  if (parkFactor >= 1.10) score += 0.35;
+  else if (parkFactor >= 1.05) score += 0.25;
+  else if (parkFactor >= 1.00) score += 0.18;
+  else if (parkFactor >= 0.95) score += 0.10;
+  else score += 0.04;
+
+  // Weather contribution (0–0.35)
+  if (!isIndoors) {
+    if (temp !== null) {
+      if (temp >= 85) score += 0.15;
+      else if (temp >= 75) score += 0.10;
+      else if (temp <= 45) score += 0; // suppress
+      else score += 0.07;
+    } else {
+      score += 0.07; // neutral
+    }
+
+    if (windDir === "out" && windSpeed !== null) {
+      if (windSpeed >= 15) score += 0.20;
+      else if (windSpeed >= 10) score += 0.14;
+      else if (windSpeed >= 5) score += 0.07;
+    } else if (windDir === "in" && windSpeed !== null && windSpeed >= 10) {
+      score -= 0.10; // headwind suppresses
+    } else {
+      score += 0.07; // neutral/calm
+    }
+  } else {
+    // Indoor: apply neutral baseline
+    score += 0.30;
+  }
+
+  // Handedness contribution (0–0.30)
+  const handedness = computeHandednessMatchupScore(input);
+  if (handedness >= 0.06) score += 0.30;
+  else if (handedness >= 0.03) score += 0.20;
+  else if (handedness >= 0) score += 0.12;
+  else score += 0.05; // unfavorable
+
+  return Math.min(1, Math.max(0, score));
+}
+
+/**
+ * pitcherVulnerabilityScore — Times through order, pitch count, contact
+ * allowed today, and lineup pocket weakness.
+ * Range: [0, 1]
+ */
+export function pitcherVulnerabilityScore(input: MLBPropInput): number {
+  let score = 0;
+
+  const pitcher = input.pitcher;
+  const timesThrough = pitcher.timesThrough;
+  const pitchCount = pitcher.pitchCount;
+  const isCollapsing = pitcher.isPitcherCollapsing;
+  const leashShort = pitcher.managerLeashShort;
+
+  // Times through order (0–0.30)
+  if (timesThrough >= 3) score += 0.30;
+  else if (timesThrough >= 2) score += 0.18;
+  else score += 0.06;
+
+  // Pitch count (0–0.25)
+  if (pitchCount >= 90) score += 0.25;
+  else if (pitchCount >= 75) score += 0.18;
+  else if (pitchCount >= 60) score += 0.10;
+  else score += 0.04;
+
+  // Pitcher collapsing / velocity drop (0–0.25)
+  if (isCollapsing) score += 0.25;
+  else if (leashShort) score += 0.10;
+
+  // Contact allowed today — approximated via prior AB results against this pitcher
+  // (uses lineup pocket weakness as proxy since batter-level data is shared)
+  const pw = input.lineup.pocketWeakness ?? 0;
+  if (pw >= 0.7) score += 0.20;
+  else if (pw >= 0.5) score += 0.12;
+  else score += 0.04;
+
+  return Math.min(1, score);
+}
+
+/**
+ * compositeHitterScore — Sum of all four dimension scores.
+ * Drives signal generation thresholds. Range: [0, 4]
+ */
+export function compositeHitterScore(input: MLBPropInput): number {
+  return (
+    contactQualityScore(input) +
+    opportunityScore(input) +
+    environmentScore(input) +
+    pitcherVulnerabilityScore(input)
+  );
+}
+
+// ── Tier 1 vs Tier 3 market priority thresholds ───────────────────────────────
+// Tier 1 (hits, total_bases, batter_strikeouts, pitcher_strikeouts): standard composite gate
+// Tier 3 (home_runs, hrr): stricter composite gate
+export const COMPOSITE_TIER1_THRESHOLD = 1.2;
+export const COMPOSITE_TIER3_THRESHOLD = 2.0;

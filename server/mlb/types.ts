@@ -254,6 +254,7 @@ export const EARLY_EXPLOSIVE_THRESHOLDS = {
   launchAngle: { min: 15, max: 35 },
   distance: 400,
   strongContextScoreMin: 0.65,
+  environmentScoreMin: 0.35,
 } as const;
 
 export const MODIFIER_CAPS = {

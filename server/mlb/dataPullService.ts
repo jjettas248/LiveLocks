@@ -137,9 +137,10 @@ function inferOutcome(event: string | undefined): PlayerContactData["priorABResu
 
 // ── syncGameState ─────────────────────────────────────────────────────────────
 
-export async function syncGameState(gameId: string): Promise<void> {
+export async function syncGameState(statsPk: string, cacheKey?: string): Promise<void> {
+  const gameId = cacheKey ?? statsPk;
   try {
-    const data = await fetchJson(LIVE_FEED_URL(gameId));
+    const data = await fetchJson(LIVE_FEED_URL(statsPk));
     const liveData = data.liveData ?? {};
     const linescore = liveData.linescore ?? {};
     const plays = liveData.plays ?? {};
@@ -231,9 +232,10 @@ export async function syncGameState(gameId: string): Promise<void> {
 
 // ── syncContactData ───────────────────────────────────────────────────────────
 
-export async function syncContactData(gameId: string): Promise<void> {
+export async function syncContactData(statsPk: string, cacheKey?: string): Promise<void> {
+  const gameId = cacheKey ?? statsPk;
   try {
-    const data = await fetchJson(SAVANT_GF_URL(gameId));
+    const data = await fetchJson(SAVANT_GF_URL(statsPk));
 
     const byPlayerId: Record<string, PlayerContactData> = {};
 
@@ -300,9 +302,10 @@ export async function syncContactData(gameId: string): Promise<void> {
 
 // ── syncPitcherContext ────────────────────────────────────────────────────────
 
-export async function syncPitcherContext(gameId: string): Promise<void> {
+export async function syncPitcherContext(statsPk: string, cacheKey?: string): Promise<void> {
+  const gameId = cacheKey ?? statsPk;
   try {
-    const data = await fetchJson(LIVE_FEED_URL(gameId));
+    const data = await fetchJson(LIVE_FEED_URL(statsPk));
     const liveData = data.liveData ?? {};
     const boxTeams = liveData.boxscore?.teams ?? {};
     const allPlays = liveData.plays?.allPlays ?? [];
@@ -384,9 +387,10 @@ export async function syncPitcherContext(gameId: string): Promise<void> {
 
 // ── syncWeather ───────────────────────────────────────────────────────────────
 
-export async function syncWeather(gameId: string): Promise<void> {
+export async function syncWeather(statsPk: string, cacheKey?: string): Promise<void> {
+  const gameId = cacheKey ?? statsPk;
   try {
-    const data = await fetchJson(LIVE_FEED_URL(gameId));
+    const data = await fetchJson(LIVE_FEED_URL(statsPk));
     const weather = data.gameData?.weather ?? {};
     const venue = data.gameData?.venue ?? {};
 
@@ -420,9 +424,10 @@ export async function syncWeather(gameId: string): Promise<void> {
 // Fields that cannot be reliably derived (usage last 3 days, top reliever
 // availability) default to safe neutral values.
 
-export async function syncBullpenUsage(gameId: string): Promise<void> {
+export async function syncBullpenUsage(statsPk: string, cacheKey?: string): Promise<void> {
+  const gameId = cacheKey ?? statsPk;
   try {
-    const data = await fetchJson(LIVE_FEED_URL(gameId));
+    const data = await fetchJson(LIVE_FEED_URL(statsPk));
     const liveData = data.liveData ?? {};
     const boxTeams = liveData.boxscore?.teams ?? {};
 

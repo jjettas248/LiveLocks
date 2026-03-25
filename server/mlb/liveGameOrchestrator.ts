@@ -194,7 +194,8 @@ export class LiveGameOrchestrator {
     this.timers.push(
       setInterval(() => {
         for (const game of getActiveGames()) {
-          syncWeather(game.gameId).catch(console.error);
+          const pk = game.gamePk ?? game.gameId;
+          syncWeather(pk, game.gameId).catch(console.error);
         }
       }, WEATHER_MS)
     );
@@ -233,10 +234,14 @@ export class LiveGameOrchestrator {
   async pollGame(gameId: string): Promise<void> {
     const prevState = this.previousStates.get(gameId);
 
-    // Sync all three data sources
-    await syncGameState(gameId);
-    await syncContactData(gameId);
-    await syncPitcherContext(gameId);
+    // Look up the registered game to get the MLB Stats gamePk (may differ from ESPN event ID)
+    const registeredGame = getGame(gameId);
+    const statsPk: string = registeredGame?.gamePk ?? gameId;
+
+    // Sync all three data sources using MLB Stats gamePk
+    await syncGameState(statsPk, gameId);
+    await syncContactData(statsPk, gameId);
+    await syncPitcherContext(statsPk, gameId);
 
     const newState = mlbGameCache.gameState[gameId];
     if (!newState) return;
@@ -245,7 +250,7 @@ export class LiveGameOrchestrator {
     // Engine must only run for genuinely live games
     let normalizedStatus: "live" | "pregame" | "final" | "unknown" = "unknown";
     try {
-      const statusUrl = `https://statsapi.mlb.com/api/v1/game/${gameId}/feed/live`;
+      const statusUrl = `https://statsapi.mlb.com/api/v1/game/${statsPk}/feed/live`;
       const statusRes = await fetch(statusUrl, {
         headers: { "User-Agent": "LiveLocks/1.0" },
         signal: AbortSignal.timeout(4000),
@@ -267,7 +272,7 @@ export class LiveGameOrchestrator {
 
         // On inning change, also sync bullpen
         if (triggers.includes("inning_change")) {
-          await syncBullpenUsage(gameId);
+          await syncBullpenUsage(statsPk, gameId);
         }
 
         // Only trigger engine when game is confirmed live
@@ -684,6 +689,20 @@ export class LiveGameOrchestrator {
     });
 
     const now = Date.now();
+
+    // Sort outputs: Tier 1 markets surface first (hits, total_bases, batter_strikeouts, pitcher_strikeouts),
+    // then remaining Tier 3 markets (home_runs, hrr, hits_allowed, walks_allowed)
+    const TIER1_MARKET_ORDER: Record<string, number> = {
+      hits: 0,
+      total_bases: 1,
+      batter_strikeouts: 2,
+      pitcher_strikeouts: 3,
+    };
+    validatedOutputs.sort((a, b) => {
+      const rankA = TIER1_MARKET_ORDER[a.market] ?? 10;
+      const rankB = TIER1_MARKET_ORDER[b.market] ?? 10;
+      return rankA - rankB;
+    });
 
     // Compute signalLocked: true if any validated output passes canShowSignal and has edge >= 5%
     const signalLocked = validatedOutputs.some((o) =>
