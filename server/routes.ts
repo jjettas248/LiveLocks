@@ -2001,6 +2001,13 @@ export async function registerRoutes(
                 console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] player=${dbPlayer.name} stat=${statType} prob=${result.probability.toFixed(1)} edge=${edge.toFixed(1)} included=true`);
               }
 
+              // NOTE: engineOutput is only populated for plays that pass all gates above.
+              // Plays skipped by the continue guards will NOT have a stat-specific entry here.
+              // The safety pass below (~line 2026) sets engineOutput[id] = {} for all
+              // players that attempted calculation, ensuring top-level presence for all;
+              // only per-stat data (engineOutput[id][statType]) is gate-guarded.
+              // This is intentional: low-edge and noSignal plays are not actionable and
+              // should not appear as candidate signals in any consumer.
               const engineBetDirection: "OVER" | "UNDER" =
                 result.recommendedSide === "UNDER" ? "UNDER" :
                 result.recommendedSide === "OVER" ? "OVER" :

@@ -757,12 +757,15 @@ export class DatabaseStorage implements IStorage {
     //   never reimplement signal evaluation logic.
     if (!noSignal && recommendedSide !== "NO_SIGNAL") {
       // finalProbability: post-calibration, post-penalty, post-clamp probability.
-      // finalEdge: |finalProbability - 50| — this is the final gating edge used in routes.ts.
+      // finalEdge: |finalProbability - 50| — the final gating edge used in routes.ts.
       // direction: derived from recommendedSide (post-calibration) not the early `direction`
       //   variable, so it reflects the same classification as allSignals/allPlays in routes.ts.
       const finalProbability = Math.round(probability * 10) / 10;
       const finalEdge = Math.round(Math.abs(finalProbability - 50) * 10) / 10;
-      calcLogEntries.push({
+      // Explicit finite guard: NaN would cause NaN > 50 === false in recommendedSide ternary,
+      // which resolves to "NO_SIGNAL" and is already excluded above — but this guard makes
+      // the exclusion explicit so the logging contract is self-evident in isolation.
+      if (Number.isFinite(finalProbability)) calcLogEntries.push({
         player: player.name,
         statType: req.statType,
         line: req.liveLine,
