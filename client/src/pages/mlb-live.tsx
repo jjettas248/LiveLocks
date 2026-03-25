@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { ProbabilityRing } from "@/components/probability-ring";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
+import { MLBScheduleList } from "@/components/mlb/MLBScheduleList";
 
 type MLBGameMarket = {
   line: number | null;
@@ -25,6 +26,7 @@ type MLBGame = {
   inning: number;
   isTopInning: boolean;
   status: "live" | "pregame" | null;
+  startTime?: string | null;
   venue?: string | null;
   weatherSummary?: string | null;
   pitcherAway?: string | null;
@@ -39,9 +41,7 @@ type MLBGame = {
   market?: MLBGameMarket | null;
 };
 
-// ── Client-side render state engine ──────────────────────────────────────────
-
-type RenderState = "INVALID" | "PREVIEW" | "NO_SIGNAL" | "SIGNAL";
+// ── Client-side signal helpers ────────────────────────────────────────────────
 
 const STALE_MS = 120_000;
 
@@ -76,24 +76,6 @@ function canShowSignal(market: MLBGameMarket | null | undefined): boolean {
 
 function hasEdge(market: MLBGameMarket | null | undefined): boolean {
   return isFiniteNumber(market?.edge) && Math.abs(market!.edge) >= 5;
-}
-
-function resolveRenderState(game: MLBGame): RenderState {
-  if (!game.awayTeam || !game.homeTeam) return "INVALID";
-  if (game.awayTeam.trim().length < 3 || game.homeTeam.trim().length < 3) return "INVALID";
-  if (!game.awayAbbr || game.awayAbbr.length < 2 || !game.homeAbbr || game.homeAbbr.length < 2) return "INVALID";
-  const market = game.market ?? null;
-  const realOdds = hasRealOdds(market);
-  if (!realOdds) {
-    return game.signalLocked ? "NO_SIGNAL" : "PREVIEW";
-  }
-  if (!canShowSignal(market)) {
-    return "NO_SIGNAL";
-  }
-  if (hasEdge(market)) {
-    return "SIGNAL";
-  }
-  return "NO_SIGNAL";
 }
 
 type MLBGamesResponse = {
@@ -546,110 +528,20 @@ export default function MlbLivePage() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
-      {/* Game chip strip */}
-      <div>
-        <div className="flex items-center gap-2 mb-3">
+      {/* Schedule layer — always rendered when games exist, independent of signal state */}
+      {gamesLoading && (
+        <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-foreground">Today's Games</span>
-          {gamesLoading && (
-            <span className="text-xs text-muted-foreground animate-pulse">Loading…</span>
-          )}
+          <span className="text-xs text-muted-foreground animate-pulse">Loading…</span>
         </div>
-
-        {!gamesLoading && games.length === 0 ? (
-          <div className="flex items-center gap-3 px-5 py-8 rounded-xl border border-border bg-card text-center justify-center">
-            <span className="text-2xl">⚾</span>
-            <div>
-              <p className="text-sm font-medium text-foreground" data-testid="text-no-mlb-games">No MLB games today</p>
-              <p className="text-xs text-muted-foreground mt-0.5">Check back when the season is active.</p>
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {games.map((game) => {
-              const renderState = resolveRenderState(game);
-              if (renderState === "INVALID") return null;
-
-              const isActive = game.gameId === selectedGameId;
-              const pitcherAway = game.pitcherAway;
-              const pitcherHome = game.pitcherHome;
-              const awayLastName = pitcherAway ? pitcherAway.split(" ").pop() : null;
-              const homeLastName = pitcherHome ? pitcherHome.split(" ").pop() : null;
-              const pitcherPill = pitcherAway && pitcherHome && awayLastName && homeLastName ? (
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30 truncate max-w-[90px]">
-                  {awayLastName} vs {homeLastName}
-                </span>
-              ) : null;
-
-              return (
-                <button
-                  key={game.gameId}
-                  data-testid={`chip-mlb-game-${game.gameId}`}
-                  onClick={() => setSelectedGameId(game.gameId)}
-                  className={`p-3 rounded-xl border text-left transition-all flex flex-col gap-1 ${
-                    isActive
-                      ? "border-primary bg-primary/10"
-                      : "border-white/10 hover:border-white/20 hover:bg-white/5"
-                  }`}
-                >
-                  {/* Row 1: AWAY @ HOME + status badge */}
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="text-xs font-bold text-foreground">
-                      {game.awayAbbr} @ {game.homeAbbr}
-                    </span>
-                    {game.status === "live" ? (
-                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-500">LIVE</span>
-                    ) : (
-                      <span className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">PRE</span>
-                    )}
-                  </div>
-
-                  {/* Row 2: score + inning position — only for live games */}
-                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono">
-                    {game.status === "live" && game.awayScore != null && game.homeScore != null && (
-                      <span>{game.awayScore} – {game.homeScore}</span>
-                    )}
-                    {game.status === "live" && game.inning > 0 && (
-                      <span className="text-green-400 font-semibold">
-                        {game.isTopInning ? "▲" : "▼"}{game.inning}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Row 3: state-driven content */}
-                  {renderState === "PREVIEW" && (
-                    <div className="mt-1 flex flex-col gap-0.5">
-                      {pitcherPill}
-                      <div className="text-[9px] text-zinc-400">Awaiting live lines</div>
-                    </div>
-                  )}
-
-                  {renderState === "NO_SIGNAL" && (
-                    <div className="mt-1 flex flex-col gap-0.5">
-                      {pitcherPill}
-                      <div className="text-[9px] text-zinc-300">No strong edge</div>
-                    </div>
-                  )}
-
-                  {renderState === "SIGNAL" && game.market && (
-                    <div className="mt-1 flex flex-col gap-0.5">
-                      {pitcherPill}
-                      {game.market.projection != null && (
-                        <div className="text-[9px] text-muted-foreground font-mono">Projection: {game.market.projection.toFixed(1)}</div>
-                      )}
-                      {game.market.edge != null && (
-                        <div className="text-[9px] text-green-400 font-mono">Edge: {game.market.edge.toFixed(1)}%</div>
-                      )}
-                      {game.market.probability != null && (
-                        <div className="text-[9px] text-muted-foreground font-mono">Probability: {game.market.probability.toFixed(1)}%</div>
-                      )}
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      )}
+      {!gamesLoading && games.length > 0 && (
+        <MLBScheduleList
+          games={games}
+          selectedGameId={selectedGameId}
+          onSelectGame={setSelectedGameId}
+        />
+      )}
 
       {/* Preview/locked state when no game selected */}
       {!selectedGameId && (responseMode === "preview" || responseMode === "preview_locked") && previewPlayers.length > 0 && (
@@ -934,21 +826,13 @@ export default function MlbLivePage() {
               </div>
             )}
 
-            {/* no_lines — elite tier, odds not present */}
+            {/* no_lines — elite tier, no valid edges */}
             {isElite && signalMode === "no_lines" && (
               <div className="px-5 py-8 rounded-xl border border-border bg-card text-center" data-testid="text-no-signals">
-                <p className="text-sm font-medium text-foreground">No live edges yet</p>
+                <p className="text-sm font-medium text-foreground">No strong edges right now</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Lines are still forming. All Sports users get alerted instantly when edges appear.
+                  Lines are still forming. Check back as the game progresses.
                 </p>
-                <div className="mt-4">
-                  <a
-                    href="/upgrade"
-                    className="inline-block px-4 py-2 rounded-lg bg-primary/10 text-primary font-semibold text-xs border border-primary/20 hover:bg-primary/20 transition-colors"
-                  >
-                    Enable Push Alerts →
-                  </a>
-                </div>
               </div>
             )}
 

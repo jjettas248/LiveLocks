@@ -1,0 +1,134 @@
+🔴 Issue 1: You Still Have Hidden Coupling to Engine State
+Problem
+
+You said:
+
+“renderState removed from schedule”
+
+But:
+
+resolveRenderState still exists
+Signal panel still implicitly tied to it
+UI behavior still varies based on backend state classification
+
+This creates:
+
+inconsistent UX across sports
+hard-to-debug “why is this not showing” bugs
+same class of issue you just fixed
+Fix (Hard Separation — Required)
+Replace ALL renderState usage with explicit conditions
+// ❌ REMOVE THIS ENTIRE PATTERN
+const renderState = resolveRenderState(game);
+
+// ✅ REPLACE WITH:
+const hasValidOdds = Number.isFinite(game.line);
+const hasProjection = Number.isFinite(game.projection);
+const hasEdge = Number.isFinite(game.edge) && Math.abs(game.edge) >= 10;
+
+Then:
+
+const hasSignals = hasValidOdds && hasProjection && hasEdge;
+Why This Matters
+
+You want:
+
+deterministic UI
+
+Not:
+
+state machine guessing what to show
+
+🔴 Issue 2: Schedule Still Has Implicit Filtering (Subtle but Critical)
+
+You wrote:
+
+“Filters only on whether abbreviations are present”
+
+That’s correct BUT incomplete
+
+Missing Constraint
+
+You must enforce:
+
+game.homeTeam &&
+game.awayTeam &&
+game.startTime
+
+Otherwise you’ll get:
+
+blank times
+weird chips
+partial data (same problem you fixed in MLB Gold Master)
+Fix
+
+In MLBScheduleList.tsx:
+
+const validGames = games.filter(game =>
+  game.homeTeam &&
+  game.awayTeam &&
+  game.startTime
+);
+
+Render only validGames
+
+🟡 Issue 3 (Optimization): Schedule Should Not Rerender on Signal Updates
+
+Right now:
+
+signals update frequently
+schedule re-renders unnecessarily
+Fix (Simple Memoization)
+export const MLBScheduleList = React.memo(function MLBScheduleList({ games }) {
+  ...
+});
+🟢 What You Got Exactly Right
+This is now correct product behavior:
+Layer	Behavior
+Schedule	Always visible
+Signals	Only when real
+Empty State	“No strong edges right now”
+MLB UX	No fake activity
+
+This is 10x better for retention.
+
+🧠 Strategic Insight (Important)
+
+You just unlocked this:
+
+Before
+
+MLB tab = dead → no user habit
+
+Now
+
+MLB tab = daily check → even without bets
+
+This is how:
+
+ESPN works
+sportsbooks work
+real betting behavior forms
+🧩 Final Architecture (You should lock this in)
+MLB Page should now look like:
+<>
+  {/* ALWAYS */}
+  <MLBScheduleList games={games} />
+
+  {/* CONDITIONAL */}
+  {hasSignals ? (
+    <MLBSignalPanel props={props} />
+  ) : (
+    <EmptyState text="No strong edges right now" />
+  )}
+</>
+🔥 Final Answer
+Approve or Deny?
+
+APPROVE — with required patch:
+
+Must fix immediately:
+Remove resolveRenderState usage entirely
+Add strict schedule validation (teams + startTime)
+Optional but recommended:
+Memoize schedule component

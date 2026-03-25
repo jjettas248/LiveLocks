@@ -509,6 +509,7 @@ export async function registerRoutes(
             inning: cachedState?.inning ?? inning,
             isTopInning: cachedState?.isTopInning ?? isTopInning,
             status: canonicalState === "live" ? "live" : "pregame",
+            startTime: game.gameDate ?? null,
             venue: parkName || null,
             weatherSummary: weatherSummary || null,
             pitcherAway: awayPitcher || null,
