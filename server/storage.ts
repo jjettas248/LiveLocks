@@ -756,16 +756,21 @@ export class DatabaseStorage implements IStorage {
     // - Audit endpoints must treat calcLogEntries as the single source of truth and must
     //   never reimplement signal evaluation logic.
     if (!noSignal && recommendedSide !== "NO_SIGNAL") {
+      // finalProbability: post-calibration, post-penalty, post-clamp probability.
+      // finalEdge: |finalProbability - 50| — this is the final gating edge used in routes.ts.
+      // direction: derived from recommendedSide (post-calibration) not the early `direction`
+      //   variable, so it reflects the same classification as allSignals/allPlays in routes.ts.
       const finalProbability = Math.round(probability * 10) / 10;
+      const finalEdge = Math.round(Math.abs(finalProbability - 50) * 10) / 10;
       calcLogEntries.push({
         player: player.name,
         statType: req.statType,
         line: req.liveLine,
         probability: finalProbability,
-        direction,
+        direction: recommendedSide as "OVER" | "UNDER",
         bookOdds: req.bookOdds ?? null,
         bookImplied: Math.round(sportsbookImplied * 10) / 10,
-        edgeRaw: Math.round(edge * 100) / 100,
+        edgeRaw: finalEdge,
         edgeVsBook: Math.round(edgeVsBook * 10) / 10,
         archetype,
         avgMinutes,
