@@ -1833,12 +1833,13 @@ export default function Dashboard() {
                 }
               }}
             />
-            <TrustTrackRecordPanel />
+            {user?.isAdmin && <TrustTrackRecordPanel />}
           </div>
           <UserStatusRail
             tier={effectiveTier ?? "free"}
             playsUsed={playsUsed}
             playsLimit={3}
+            isAdmin={!!user?.isAdmin}
             onUpgradeClick={() => {
               setUpgradeModalState({ playsUsed: user?.playsUsedToday ?? 0, limit: 3 });
               setShowUpgradeModal(true);

@@ -5,6 +5,7 @@ type UserStatusRailProps = {
   tier: string;
   playsUsed: number;
   playsLimit: number;
+  isAdmin?: boolean;
   onUpgradeClick?: () => void;
 };
 
@@ -14,8 +15,8 @@ const TIER_LABELS: Record<string, { label: string; color: string }> = {
   elite: { label: "All Sports", color: "bg-primary/15 text-primary" },
 };
 
-export function UserStatusRail({ tier, playsUsed, playsLimit, onUpgradeClick }: UserStatusRailProps) {
-  const { data: analytics } = usePublicAnalytics();
+export function UserStatusRail({ tier, playsUsed, playsLimit, isAdmin, onUpgradeClick }: UserStatusRailProps) {
+  const { data: analytics } = usePublicAnalytics(!!isAdmin);
   const { data: counts } = useLiveSignalCounts();
 
   const tierInfo = TIER_LABELS[tier] ?? TIER_LABELS.free;
@@ -39,7 +40,7 @@ export function UserStatusRail({ tier, playsUsed, playsLimit, onUpgradeClick }: 
         )}
       </div>
 
-      <div className="grid grid-cols-3 gap-2 text-center">
+      <div className={`grid ${isAdmin ? "grid-cols-3" : "grid-cols-2"} gap-2 text-center`}>
         <div>
           <div className="text-[9px] text-muted-foreground">Plays</div>
           <div className="text-xs font-bold text-foreground">
@@ -50,10 +51,12 @@ export function UserStatusRail({ tier, playsUsed, playsLimit, onUpgradeClick }: 
           <div className="text-[9px] text-muted-foreground">Live Signals</div>
           <div className="text-xs font-bold text-foreground">{totalLive}</div>
         </div>
-        <div>
-          <div className="text-[9px] text-muted-foreground">7d Win</div>
-          <div className={`text-xs font-bold ${winRate >= 55 ? "text-green-400" : "text-foreground"}`}>{winRate}%</div>
-        </div>
+        {isAdmin && (
+          <div>
+            <div className="text-[9px] text-muted-foreground">7d Win</div>
+            <div className={`text-xs font-bold ${winRate >= 55 ? "text-green-400" : "text-foreground"}`}>{winRate}%</div>
+          </div>
+        )}
       </div>
     </div>
   );

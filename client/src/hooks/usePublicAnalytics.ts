@@ -17,9 +17,10 @@ export type PublicAnalyticsSummary = {
   }>;
 };
 
-export function usePublicAnalytics() {
+export function usePublicAnalytics(enabled = true) {
   return useQuery<PublicAnalyticsSummary>({
     queryKey: ["/api/public-analytics/summary"],
     refetchInterval: 300_000,
+    enabled,
   });
 }
