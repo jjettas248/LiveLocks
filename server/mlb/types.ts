@@ -90,8 +90,8 @@ export const EXPERIMENTAL_MARKETS: MLBMarket[] = ["home_runs", "hrr"];
 export const EXPERIMENTAL_CONFIDENCE_CEILING: MLBConfidenceTier = "LEAN";
 
 export const MARKET_PROBABILITY_CEILINGS: Record<"core" | "experimental", number> = {
-  core: 82,
-  experimental: 70,
+  core: 92,
+  experimental: 78,
 };
 
 export type ContactQualityTier = "ELITE" | "HARD" | "MEDIUM" | "SOFT";
@@ -352,20 +352,20 @@ export const MARKET_SIGMA: Record<MLBMarket, number> = {
 };
 
 export const EDGE_THRESHOLDS = {
-  elite: 8.0,
-  strong: 5.0,
-  lean: 2.5,
+  elite: 6.0,
+  strong: 3.5,
+  lean: 1.5,
 } as const;
 
 export const SUPPRESSION_RULES: Record<MLBMarket, { minEdge: number; minCompletedAB: number; requireContactData: boolean }> = {
-  hits:               { minEdge: 2.0,  minCompletedAB: 0, requireContactData: false },
-  total_bases:        { minEdge: 2.0,  minCompletedAB: 0, requireContactData: false },
-  batter_strikeouts:  { minEdge: 2.5,  minCompletedAB: 0, requireContactData: false },
-  pitcher_strikeouts: { minEdge: 2.5,  minCompletedAB: 0, requireContactData: false },
-  hits_allowed:       { minEdge: 3.0,  minCompletedAB: 0, requireContactData: false },
-  walks_allowed:      { minEdge: 3.0,  minCompletedAB: 0, requireContactData: false },
-  home_runs:          { minEdge: 4.0,  minCompletedAB: 1, requireContactData: true },
-  hrr:                { minEdge: 3.0,  minCompletedAB: 1, requireContactData: false },
+  hits:               { minEdge: 1.0,  minCompletedAB: 0, requireContactData: false },
+  total_bases:        { minEdge: 1.0,  minCompletedAB: 0, requireContactData: false },
+  batter_strikeouts:  { minEdge: 1.5,  minCompletedAB: 0, requireContactData: false },
+  pitcher_strikeouts: { minEdge: 1.5,  minCompletedAB: 0, requireContactData: false },
+  hits_allowed:       { minEdge: 2.0,  minCompletedAB: 0, requireContactData: false },
+  walks_allowed:      { minEdge: 2.0,  minCompletedAB: 0, requireContactData: false },
+  home_runs:          { minEdge: 2.0,  minCompletedAB: 0, requireContactData: false },
+  hrr:                { minEdge: 2.0,  minCompletedAB: 0, requireContactData: false },
 };
 
 export type FormIndicator = "hot" | "warm" | "neutral" | "cold" | "extreme_cold";

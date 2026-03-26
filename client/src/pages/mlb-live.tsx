@@ -237,15 +237,17 @@ function heatGlow(form: string | null | undefined): string {
 
 function edgeColor(edge: number | null): string {
   if (edge == null) return "text-muted-foreground";
-  if (Math.abs(edge) >= 8) return "text-green-400";
-  if (Math.abs(edge) >= 5) return "text-yellow-400";
+  if (Math.abs(edge) >= 6) return "text-green-400";
+  if (Math.abs(edge) >= 3.5) return "text-yellow-400";
+  if (Math.abs(edge) >= 1.5) return "text-blue-400";
   return "text-muted-foreground";
 }
 
 function edgeBg(edge: number | null): string {
   if (edge == null) return "bg-muted/30";
-  if (Math.abs(edge) >= 8) return "bg-green-500/10";
-  if (Math.abs(edge) >= 5) return "bg-yellow-500/10";
+  if (Math.abs(edge) >= 6) return "bg-green-500/10";
+  if (Math.abs(edge) >= 3.5) return "bg-yellow-500/10";
+  if (Math.abs(edge) >= 1.5) return "bg-blue-500/10";
   return "bg-muted/30";
 }
 
@@ -799,7 +801,7 @@ function MlbLiveInner() {
           {edgeFeedSignals.length === 0 ? (
             <div className="rounded-xl border border-border/40 bg-card p-8 text-center">
               <div className="text-sm text-muted-foreground">No edges above threshold</div>
-              <div className="text-xs text-muted-foreground/60 mt-1">Edges require 5%+ edge with verified odds. They appear as live games progress and sportsbook lines update.</div>
+              <div className="text-xs text-muted-foreground/60 mt-1">Edges require 3%+ edge with verified odds. They appear as live games progress and sportsbook lines update.</div>
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1047,7 +1049,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
       {signals.length === 0 && game.status === "live" && (
         <div className="rounded-xl border border-border/40 bg-card p-6 text-center">
           <div className="text-sm text-muted-foreground">No qualified edges for this game</div>
-          <div className="text-xs text-muted-foreground/60 mt-1">Edges require 5%+ edge with verified sportsbook odds. The engine re-evaluates every cycle as lines update.</div>
+          <div className="text-xs text-muted-foreground/60 mt-1">Edges require 3%+ edge with verified sportsbook odds. The engine re-evaluates every cycle as lines update.</div>
         </div>
       )}
 

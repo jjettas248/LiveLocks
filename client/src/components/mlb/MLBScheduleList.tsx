@@ -77,8 +77,8 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
           const homeAbbr = game.homeAbbr ?? "";
           const pitcherAway = game.pitcherAway?.trim() || null;
           const pitcherHome = game.pitcherHome?.trim() || null;
-          const awayLast = pitcherAway ? pitcherAway.split(" ").pop() : "TBD";
-          const homeLast = pitcherHome ? pitcherHome.split(" ").pop() : "TBD";
+          const awayLast = pitcherAway ? pitcherAway.split(" ").pop() : (game.status === "live" ? "Resolving" : "Pending");
+          const homeLast = pitcherHome ? pitcherHome.split(" ").pop() : (game.status === "live" ? "Resolving" : "Pending");
           const heat = pitcherHeatEmoji(game.pitcherContext);
 
           const weatherLine = game.weather?.temperature != null

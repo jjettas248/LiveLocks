@@ -107,11 +107,11 @@ export async function fetchBaseballSavantData(
   if (cached && Date.now() - cached.fetchedAt < SAVANT_TTL) return cached.data;
 
   try {
-    // Batter expected stats endpoint
+    const currentYear = new Date().getFullYear();
     const batterUrl =
-      `https://baseballsavant.mlb.com/percentile-rankings?type=batter&year=2025&position=&team=&csv=true`;
+      `https://baseballsavant.mlb.com/percentile-rankings?type=batter&year=${currentYear}&position=&team=&csv=true`;
     const pitcherUrl =
-      `https://baseballsavant.mlb.com/percentile-rankings?type=pitcher&year=2025&position=&team=&csv=true`;
+      `https://baseballsavant.mlb.com/percentile-rankings?type=pitcher&year=${currentYear}&position=&team=&csv=true`;
 
     // Fetch batter Statcast data
     const [batterRes, pitcherRes] = await Promise.allSettled([

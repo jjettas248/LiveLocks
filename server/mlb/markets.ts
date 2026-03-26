@@ -278,6 +278,21 @@ function buildExplanationBullets(input: MLBPropInput, output: Partial<MLBPropOut
   return translateToScoutReport(input, output);
 }
 
+function americanOddsToImplied(odds: number | null | undefined): number {
+  if (odds == null || !Number.isFinite(odds)) return 50;
+  if (odds < 0) return (Math.abs(odds) / (Math.abs(odds) + 100)) * 100;
+  if (odds > 0) return (100 / (odds + 100)) * 100;
+  return 50;
+}
+
+function computeBookImplied(input: MLBPropInput, isOverFavored: boolean): number {
+  if (isOverFavored && input.overOdds != null) return americanOddsToImplied(input.overOdds);
+  if (!isOverFavored && input.underOdds != null) return americanOddsToImplied(input.underOdds);
+  if (input.overOdds != null) return americanOddsToImplied(input.overOdds);
+  if (input.underOdds != null) return americanOddsToImplied(input.underOdds);
+  return 50;
+}
+
 function buildOutput(input: MLBPropInput): MLBPropOutput {
   const projResult = projectBaseValue(input);
   const safeProjection = clampProjection(projResult.projection);
@@ -314,7 +329,9 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
 
   const calibratedDominant = Math.max(calibratedProbabilityOver, calibratedProbabilityUnder);
 
-  const edge = calibratedSided - 50;
+  const isOverFavored = overProb >= underProb;
+  const bookImplied = computeBookImplied(input, isOverFavored);
+  const edge = calibratedSided - bookImplied;
   let confidenceTier = determineConfidenceTier(edge);
   let recommendedSide = determineSide(calibratedSided, confidenceTier);
 
@@ -393,7 +410,7 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
     expectedHits: null,
     remainingPA: input.remainingPA ?? null,
     adjustedHitRate: null,
-    bookImplied: null,
+    bookImplied: Math.round(bookImplied * 100) / 100,
     isExperimental,
     suppressed: suppression.suppressed,
     suppressionReason: suppression.reason,
@@ -482,7 +499,9 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   const calibratedDominant = Math.max(calibratedProbabilityOver, calibratedProbabilityUnder);
   const dominantRawProb = Math.max(rawProbabilityOver, rawProbabilityUnder);
 
-  const edge = calibratedSided - 50;
+  const isOverFavored = rawProbabilityOver >= rawProbabilityUnder;
+  const bookImplied = computeBookImplied(hitsInput, isOverFavored);
+  const edge = calibratedSided - bookImplied;
   let confidenceTier = determineConfidenceTier(edge);
   let recommendedSide = determineSide(calibratedSided, confidenceTier);
 
@@ -546,7 +565,7 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
     expectedHits: parseFloat(expectedHits.toFixed(2)),
     remainingPA: rpa,
     adjustedHitRate: parseFloat(adjustedRate.toFixed(4)),
-    bookImplied: null,
+    bookImplied: Math.round(bookImplied * 100) / 100,
     paDistribution: paDist,
     isExperimental,
     suppressed: suppression.suppressed,
@@ -601,43 +620,12 @@ export function calculateWalksAllowedEdge(input: MLBPropInput): MLBPropOutput {
 }
 
 export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
-  const ev = input.contactQuality.exitVelocity ?? 0;
-  const la = input.contactQuality.launchAngle ?? 0;
-  const dist = input.contactQuality.hitDistance ?? 0;
-  const weatherParkScore = computeWeatherParkScore(input.weatherPark);
-  const pitcherCtxScore = computePitcherContextScore(input.pitcher);
+  const output = buildOutput({ ...input, market: "home_runs" });
 
-  const meetsStrictThresholds =
-    ev >= 98 &&
-    la >= 10 &&
-    la <= 35 &&
-    dist >= 360 &&
-    weatherParkScore > 0 &&
-    pitcherCtxScore > -0.2;
+  const { factors: hrFactors } = meetsHRQualificationGate(input);
+  output.hrFactors = { count: hrFactors.count, labels: hrFactors.labels };
 
-  const { passes: meetsHRGate, factors: hrFactors } = meetsHRQualificationGate(input);
-
-  if (!meetsStrictThresholds || !meetsHRGate) {
-    const reasons: string[] = [];
-    if (!meetsStrictThresholds) {
-      reasons.push(`HR guardrails not met — EV≥98 (${ev}), LA 10-35° (${la}°), dist≥360ft (${dist}ft)`);
-    }
-    if (!meetsHRGate) {
-      reasons.push(`HR requires ${3}+ qualifying factors (got ${hrFactors.count}: ${hrFactors.labels.join(", ") || "none"})`);
-    }
-    const suppReason = reasons.join("; ");
-    const baseOutput = buildOutput({ ...input, market: "home_runs" });
-    baseOutput.confidenceTier = "NO_EDGE";
-    baseOutput.recommendedSide = "NO_EDGE";
-    baseOutput.edge = 0;
-    baseOutput.suppressed = true;
-    baseOutput.suppressionReason = suppReason;
-    baseOutput.projectionLog = { ...baseOutput.projectionLog, confidenceTier: "NO_EDGE" };
-    baseOutput.warnings.push(suppReason);
-    return baseOutput;
-  }
-
-  return buildOutput({ ...input, market: "home_runs" });
+  return output;
 }
 
 export function calculateHRREdge(input: MLBPropInput): MLBPropOutput {

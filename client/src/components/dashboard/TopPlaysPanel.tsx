@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { useTopPlays, type UnifiedTopPlay } from "@/hooks/useTopPlays";
 import { SportSignalCard } from "@/components/signals/SportSignalCard";
 import { SignalSkeletonCard } from "@/components/signals/SignalSkeletonCard";
+import { Zap, X, ChevronUp } from "lucide-react";
 
 type TopPlaysPanelProps = {
   isElite?: boolean;
@@ -8,96 +10,99 @@ type TopPlaysPanelProps = {
 };
 
 export function TopPlaysPanel({ isElite, onNavigateToSport }: TopPlaysPanelProps) {
-  const { data, isLoading, isError } = useTopPlays();
+  const { data, isLoading } = useTopPlays();
   const plays = data?.plays ?? [];
+  const [isOpen, setIsOpen] = useState(false);
 
-  if (isLoading) {
-    return (
-      <div className="space-y-3" data-testid="panel-top-plays-loading">
-        <h2 className="text-sm font-bold text-foreground uppercase tracking-wider">Top Plays</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <SignalSkeletonCard />
-          <SignalSkeletonCard />
-          <SignalSkeletonCard />
-        </div>
-      </div>
-    );
-  }
-
-  if (isError) {
-    return (
-      <div className="space-y-3" data-testid="panel-top-plays-error">
-        <h2 className="text-sm font-bold text-foreground uppercase tracking-wider">Top Plays</h2>
-        <div className="rounded-xl border border-border/40 bg-card p-8 text-center">
-          <div className="text-sm text-muted-foreground">Unable to load top plays. Retrying shortly.</div>
-        </div>
-      </div>
-    );
-  }
-
-  if (plays.length === 0) {
-    return (
-      <div className="space-y-3" data-testid="panel-top-plays-empty">
-        <h2 className="text-sm font-bold text-foreground uppercase tracking-wider">Top Plays</h2>
-        <div className="rounded-xl border border-border/40 bg-card p-8 text-center">
-          <div className="text-sm text-muted-foreground">No live signals right now</div>
-          <div className="text-xs text-muted-foreground/60 mt-1">
-            Edges appear when games are live and sportsbook lines are available. Check back at game time.
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const bestPlay = plays[0];
-  const restPlays = plays.slice(1);
+  const hasPlays = plays.length > 0;
 
   return (
-    <div className="space-y-3" data-testid="panel-top-plays">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-bold text-foreground uppercase tracking-wider">Top Plays</h2>
-        <span className="text-[10px] text-muted-foreground">{plays.length} play{plays.length !== 1 ? "s" : ""} across all sports</span>
-      </div>
+    <>
+      <button
+        data-testid="button-live-edge-feed"
+        onClick={() => setIsOpen(!isOpen)}
+        className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border transition-all ${
+          hasPlays
+            ? "border-green-500/40 bg-green-500/5 shadow-[0_0_15px_rgba(34,197,94,0.15)] hover:shadow-[0_0_25px_rgba(34,197,94,0.25)]"
+            : "border-border/40 bg-card/50 hover:bg-card/80"
+        }`}
+      >
+        <div className="flex items-center gap-2.5">
+          <div className={`relative flex items-center justify-center w-8 h-8 rounded-lg ${
+            hasPlays ? "bg-green-500/20" : "bg-muted/50"
+          }`}>
+            <Zap className={`w-4 h-4 ${hasPlays ? "text-green-400" : "text-muted-foreground"}`} />
+            {hasPlays && (
+              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-green-500 text-[9px] font-bold text-black flex items-center justify-center animate-pulse">
+                {plays.length}
+              </span>
+            )}
+          </div>
+          <div className="text-left">
+            <span className={`text-sm font-bold ${hasPlays ? "text-green-400" : "text-muted-foreground"}`}>
+              {hasPlays ? "Live Edge Feed" : "Edge Feed"}
+            </span>
+            <span className="block text-[10px] text-muted-foreground/70">
+              {isLoading ? "Scanning..." : hasPlays ? `${plays.length} edge${plays.length !== 1 ? "s" : ""} across all sports` : "No edges detected right now"}
+            </span>
+          </div>
+        </div>
+        <ChevronUp className={`w-4 h-4 text-muted-foreground transition-transform ${isOpen ? "" : "rotate-180"}`} />
+      </button>
 
-      {bestPlay && (
-        <SportSignalCard
-          sport={bestPlay.sport}
-          playerOrTeam={bestPlay.playerOrTeam}
-          marketLabel={bestPlay.marketLabel}
-          side={bestPlay.side}
-          line={bestPlay.line}
-          projection={bestPlay.projection}
-          probability={bestPlay.probability}
-          edge={bestPlay.edge}
-          badgeTier={bestPlay.confidenceTier}
-          summary={bestPlay.summary ?? undefined}
-          isBestBet
-          locked={!isElite && bestPlay.sport !== "NBA"}
-          onPrimaryAction={onNavigateToSport ? () => onNavigateToSport(bestPlay.routeTarget) : undefined}
-        />
-      )}
+      {isOpen && (
+        <div className="space-y-3 animate-in slide-in-from-top-2 duration-200" data-testid="panel-top-plays">
+          <div className="flex items-center justify-between px-1">
+            <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Live Edges</h2>
+            <button
+              data-testid="button-close-edge-feed"
+              onClick={() => setIsOpen(false)}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
 
-      {restPlays.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {restPlays.map((play) => (
-            <SportSignalCard
-              key={play.id}
-              sport={play.sport}
-              playerOrTeam={play.playerOrTeam}
-              marketLabel={play.marketLabel}
-              side={play.side}
-              line={play.line}
-              projection={play.projection}
-              probability={play.probability}
-              edge={play.edge}
-              badgeTier={play.confidenceTier}
-              summary={play.summary ?? undefined}
-              locked={!isElite && play.sport !== "NBA"}
-              onPrimaryAction={onNavigateToSport ? () => onNavigateToSport(play.routeTarget) : undefined}
-            />
-          ))}
+          {isLoading && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <SignalSkeletonCard />
+              <SignalSkeletonCard />
+            </div>
+          )}
+
+          {!isLoading && plays.length === 0 && (
+            <div className="rounded-xl border border-border/40 bg-card p-6 text-center">
+              <div className="text-sm text-muted-foreground">No live signals right now</div>
+              <div className="text-xs text-muted-foreground/60 mt-1">
+                Edges appear when games are live and sportsbook lines are available.
+              </div>
+            </div>
+          )}
+
+          {!isLoading && plays.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {plays.map((play, i) => (
+                <SportSignalCard
+                  key={play.id}
+                  sport={play.sport}
+                  playerOrTeam={play.playerOrTeam}
+                  marketLabel={play.marketLabel}
+                  side={play.side}
+                  line={play.line}
+                  projection={play.projection}
+                  probability={play.probability}
+                  edge={play.edge}
+                  badgeTier={play.confidenceTier}
+                  summary={play.summary ?? undefined}
+                  isBestBet={i === 0}
+                  locked={!isElite && play.sport !== "NBA"}
+                  onPrimaryAction={onNavigateToSport ? () => onNavigateToSport(play.routeTarget) : undefined}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
-    </div>
+    </>
   );
 }

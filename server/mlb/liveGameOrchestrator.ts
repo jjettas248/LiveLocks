@@ -131,9 +131,26 @@ async function resolveBookLine(
     return { line: prior, overOdds: null, underOdds: null, isDegraded: true };
   }
 
-  // (3) No compliant line available — skip this market
-  console.warn(`[MLB orchestrator] No sportsbook line for ${playerName}/${market} — market skipped (no synthetic fallback)`);
-  pLog(oddsEventId ?? "unknown", "odds:bookLine:skipped", { player: playerName, market, reason: "noCompliantLine" });
+  // (3) Use standard derived line as fallback — allows engine to generate signals for all markets
+  const DERIVED_LINES: Record<string, number> = {
+    hits: 0.5,
+    total_bases: 1.5,
+    batter_strikeouts: 0.5,
+    pitcher_strikeouts: 4.5,
+    hits_allowed: 5.5,
+    walks_allowed: 2.5,
+    home_runs: 0.5,
+    hrr: 1.5,
+  };
+  const derivedLine = DERIVED_LINES[market];
+  if (derivedLine !== undefined) {
+    console.log(`[MLB orchestrator] Using derived line for ${playerName}/${market}: ${derivedLine}`);
+    pLog(oddsEventId ?? "unknown", "odds:bookLine:derived", { player: playerName, market, line: derivedLine });
+    return { line: derivedLine, overOdds: -110, underOdds: -110, isDegraded: true };
+  }
+
+  console.warn(`[MLB orchestrator] No line available for ${playerName}/${market} — market skipped`);
+  pLog(oddsEventId ?? "unknown", "odds:bookLine:skipped", { player: playerName, market, reason: "noLineAvailable" });
   return null;
 }
 
@@ -750,12 +767,12 @@ export class LiveGameOrchestrator {
         projection: o.projection,
         oddsUpdatedAt: o.oddsUpdatedAt,
         projectionUpdatedAt: o.projectionUpdatedAt,
-      }) && Math.abs(o.edge) >= 5 && !o.suppressed
+      }) && o.edge >= 3 && !o.suppressed
     );
     const signalLocked = qualifiedOutputs.length > 0;
 
     mlbEdgeCache.set(gameId, { gameId, outputs: validatedOutputs, updatedAt: now, createdAt: now, isDegraded: anyDegraded, signalLocked });
-    console.log(`[MLB orchestrator] triggerEngine: game ${gameId} — ${outputs.length} raw → ${validatedOutputs.length} validated → ${qualifiedOutputs.length} qualified (edge≥5%, not suppressed)`);
+    console.log(`[MLB orchestrator] triggerEngine: game ${gameId} — ${outputs.length} raw → ${validatedOutputs.length} validated → ${qualifiedOutputs.length} qualified (edge≥3%, not suppressed)`);
     return validatedOutputs;
   }
 }

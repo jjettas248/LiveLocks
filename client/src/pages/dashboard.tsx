@@ -1473,6 +1473,14 @@ export default function Dashboard() {
   );
   const allGames = liveGames ?? [];
 
+  const hasLiveNba = activeGames.some((g) => g.status === "In Progress" || g.status === "Halftime" || g.status === "End of Period");
+
+  const { data: mlbGamesData } = useQuery<{ games: { status: string }[] }>({
+    queryKey: ["/api/mlb/live-games"],
+    refetchInterval: 60_000,
+  });
+  const hasLiveMlb = (mlbGamesData?.games ?? []).some((g: any) => g.status === "live");
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -1962,12 +1970,13 @@ export default function Dashboard() {
             <button
               onClick={() => { setActiveTab("calculator"); }}
               data-testid="tab-calculator"
-              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
+              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors relative ${
                 activeTab === "calculator"
                   ? "bg-primary text-primary-foreground border-glow"
                   : "text-muted-foreground hover:text-foreground"
-              }`}
+              } ${hasLiveNba && activeTab !== "calculator" ? "shadow-[0_0_12px_rgba(34,197,94,0.3)]" : ""}`}
             >
+              {hasLiveNba && <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-green-500 animate-pulse" />}
               🏀 NBA Live
             </button>
             <button
@@ -2035,12 +2044,13 @@ export default function Dashboard() {
                   setShowMlbUpgradeModal(true);
                 }
               }}
-              className={`px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 transition-colors ${
+              className={`px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 transition-colors relative ${
                 activeTab === "mlb"
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground"
-              }`}
+              } ${hasLiveMlb && activeTab !== "mlb" ? "shadow-[0_0_12px_rgba(34,197,94,0.3)]" : ""}`}
             >
+              {hasLiveMlb && <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-green-500 animate-pulse" />}
               <span role="img" aria-label="baseball">⚾</span>
               MLB Live
               {!user?.isAdmin && user?.subscriptionTier !== "elite" && (

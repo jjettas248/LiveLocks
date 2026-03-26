@@ -699,13 +699,13 @@ export async function registerRoutes(
         ) : [];
         const MAX_CARD_SIGNALS = 3;
         const qualifiedOutputs = freshValidOutputs.filter((o) =>
-          Math.abs(o.edge) >= 5 && !o.suppressed
+          o.edge >= 3 && !o.suppressed
         );
         const cappedSignalCount = Math.min(qualifiedOutputs.length, MAX_CARD_SIGNALS);
         const signalLocked = qualifiedOutputs.length > 0;
 
         const bestEdgeOutput = qualifiedOutputs.reduce<typeof qualifiedOutputs[0] | null>((best, o) =>
-          best === null || Math.abs(o.edge) > Math.abs(best.edge) ? o : best, null
+          best === null || o.edge > (best?.edge ?? 0) ? o : best, null
         );
         const bestMarket = bestEdgeOutput ? {
           line: bestEdgeOutput.bookLine,
@@ -1017,7 +1017,7 @@ export async function registerRoutes(
         }
 
         const hasOdds = o.bookLine > 0;
-        const edgeValue = hasOdds && Number.isFinite(o.edge) ? Math.round(Math.abs(o.edge) * 10) / 10 : null;
+        const edgeValue = hasOdds && Number.isFinite(o.edge) ? Math.round(o.edge * 10) / 10 : null;
 
         let tier: "green" | "yellow" | "teal" | "red";
         if (o.recommendedSide === "UNDER" && hitProb >= 85) tier = "red";
@@ -1069,13 +1069,12 @@ export async function registerRoutes(
         console.warn(`[MLB signals] Dropping signal for ${sig.playerId}: gameId mismatch (${sig.gameId} !== ${gameId})`);
         return false;
       }
-      // Hard guard: must have real book line > 0 and edge >= 5
       if (!sig.bookLine || sig.bookLine <= 0) {
         console.warn(`[MLB signals] Hard guard: dropping ${sig.playerId} — bookLine=${sig.bookLine}`);
         return false;
       }
-      if (sig.edge === null || sig.edge === undefined || Math.abs(sig.edge) < 5) {
-        console.warn(`[MLB signals] Hard guard: dropping ${sig.playerId} — edge=${sig.edge} (must be >= 5)`);
+      if (sig.edge === null || sig.edge === undefined || sig.edge < 3) {
+        console.warn(`[MLB signals] Hard guard: dropping ${sig.playerId} — edge=${sig.edge} (must be >= 3)`);
         return false;
       }
       return true;
@@ -1296,7 +1295,7 @@ export async function registerRoutes(
                 projection: o.projection,
                 oddsUpdatedAt: o.oddsUpdatedAt,
                 projectionUpdatedAt: o.projectionUpdatedAt,
-              }) && Math.abs(o.edge) >= 5 && !o.suppressed
+              }) && o.edge >= 3 && !o.suppressed
             );
             for (const o of qualified.slice(0, 3)) {
               const hitProb = Math.max(o.calibratedProbabilityOver, o.calibratedProbabilityUnder);
@@ -2470,7 +2469,7 @@ export async function registerRoutes(
           s &&
           Number.isFinite(s.probability) &&
           Number.isFinite(s.edge) &&
-          s.edge >= 5 &&
+          s.edge >= 3 &&
           s.betDirection &&
           (s.betDirection === "over" || s.betDirection === "under")
         );
@@ -5095,7 +5094,7 @@ export function registerAnalyticsRoutes(app: Express): void {
             projection: o.projection,
             oddsUpdatedAt: o.oddsUpdatedAt,
             projectionUpdatedAt: o.projectionUpdatedAt,
-          }) && Math.abs(o.edge) >= 5 && !o.suppressed
+          }) && o.edge >= 3 && !o.suppressed
         );
         for (const o of qualified) {
           const hitProb = Math.max(o.calibratedProbabilityOver ?? 0, o.calibratedProbabilityUnder ?? 0);
@@ -5181,7 +5180,7 @@ export function registerAnalyticsRoutes(app: Express): void {
             projection: o.projection,
             oddsUpdatedAt: o.oddsUpdatedAt,
             projectionUpdatedAt: o.projectionUpdatedAt,
-          }) && Math.abs(o.edge) >= 5 && !o.suppressed
+          }) && o.edge >= 3 && !o.suppressed
         );
         for (const o of qualified) {
           totalLive++;
