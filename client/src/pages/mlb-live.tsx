@@ -813,7 +813,12 @@ function MlbLiveInner() {
               not a separate state. This keeps state semantics tied to data, not access tier. */}
           {selectedPlayer === null && (() => {
             // Compute single panel state — mutually exclusive; strictly based on data availability
-            const panelState: "PREVIEW" | "NO_SIGNAL" | "SIGNAL" = (() => {
+            // PRE_GAME: game hasn't started yet
+            // PREVIEW:  game is LIVE but no valid odds yet (awaiting lines)
+            // NO_SIGNAL: live + odds exist but no qualifying edge
+            // SIGNAL:    live + odds + qualifying edge
+            const panelState: "PRE_GAME" | "PREVIEW" | "NO_SIGNAL" | "SIGNAL" = (() => {
+              if (selectedGame.status !== "live") return "PRE_GAME";
               if (!selectedGame.hasOdds) return "PREVIEW";
               if (signalMode === "live" && filteredSignals.length > 0) return "SIGNAL";
               return "NO_SIGNAL";
@@ -878,6 +883,41 @@ function MlbLiveInner() {
                   </div>
                 </div>
 
+                {panelState === "PRE_GAME" && (
+                  <div>
+                    <div
+                      data-testid="card-mlb-game-pregame"
+                      className="rounded-xl border border-border/40 bg-card p-5 space-y-3"
+                    >
+                      {gameTeamHeader}
+                      {pitcherPill}
+                      {selectedGame.startTime && (
+                        <div className="text-xs text-muted-foreground/70 font-medium" data-testid="text-mlb-start-time-detail">
+                          First pitch: {new Date(selectedGame.startTime).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZoneName: "short" })}
+                        </div>
+                      )}
+                      <div className="text-xs text-muted-foreground/70" data-testid="text-mlb-pregame-msg">
+                        Live edges will appear once the game begins.
+                      </div>
+                    </div>
+                    {!isElite && (
+                      <div className="rounded-xl border border-primary/20 bg-primary/5 p-5 text-center space-y-3 mt-4">
+                        <div className="text-sm font-bold text-foreground">Unlock MLB Edges</div>
+                        <div className="text-xs text-muted-foreground">
+                          Upgrade to All Sports to see live probabilities, edge percentages, and bet recommendations.
+                        </div>
+                        <a
+                          href="/upgrade"
+                          data-testid="link-mlb-upgrade-cta-signals"
+                          className="inline-block px-5 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors"
+                        >
+                          Upgrade to All Sports →
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {panelState === "PREVIEW" && (
                   <div>
                     <div
@@ -916,11 +956,9 @@ function MlbLiveInner() {
                     {gameTeamHeader}
                     {pitcherPill}
                     <div className="text-xs text-muted-foreground" data-testid="text-no-signals">
-                      {selectedGame.status !== "live"
-                        ? "No live data available yet — edges appear once the game is in progress."
-                        : validatedSignals.length === 0
-                          ? "No strong edge detected. Lines are still forming — check back as the game progresses."
-                          : `${validatedSignals.length} signal${validatedSignals.length !== 1 ? "s" : ""} available but none meet the current filter.`}
+                      {validatedSignals.length === 0
+                        ? "No strong edge detected. Lines are still forming — check back as the game progresses."
+                        : `${validatedSignals.length} signal${validatedSignals.length !== 1 ? "s" : ""} available but none meet the current filter.`}
                     </div>
                   </div>
                 )}

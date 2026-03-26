@@ -123,8 +123,11 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
                 </span>
               )}
 
-              {renderState === "PREVIEW" && (
+              {renderState === "PREVIEW" && game.status === "live" && (
                 <span className="text-[9px] text-muted-foreground/60 mt-0.5">Awaiting live lines</span>
+              )}
+              {renderState === "PREVIEW" && game.status !== "live" && (
+                <span className="text-[9px] text-muted-foreground/60 mt-0.5">Lines forming</span>
               )}
               {renderState === "NO_SIGNAL" && (
                 <span className="text-[9px] text-muted-foreground/60 mt-0.5">No strong edge</span>

@@ -593,9 +593,14 @@ export async function registerRoutes(
         if (!competition) continue;
 
         const statusName: string = competition.status?.type?.name ?? event.status?.type?.name ?? "STATUS_SCHEDULED";
-        const isLive = statusName === "STATUS_IN_PROGRESS" || statusName === "STATUS_DELAYED";
+        const isLiveEspn = statusName === "STATUS_IN_PROGRESS" || statusName === "STATUS_DELAYED";
         const isFinal = statusName === "STATUS_FINAL" || statusName === "STATUS_FORFEIT";
+        // Time-based fallback: if ESPN still shows SCHEDULED but start time has passed, treat as LIVE
+        const gameStartMs = event.date ? new Date(event.date).getTime() : 0;
+        const startedByTime = gameStartMs > 0 && Date.now() >= gameStartMs;
+        const isLive = isLiveEspn || startedByTime;
         const canonicalState = isFinal ? "final" : isLive ? "live" : "pregame";
+        console.log(`[MLB STATUS] ${statusName} → ${canonicalState} (espnLive=${isLiveEspn} timeLive=${startedByTime}) ${event.date ?? "no-time"}`);
         const gameId = String(event.id);
 
         const homeCompetitor = competition.competitors?.find((c: any) => c.homeAway === "home");
