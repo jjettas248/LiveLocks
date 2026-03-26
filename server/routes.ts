@@ -750,7 +750,11 @@ export async function registerRoutes(
     }
     try {
       const registeredLiveGame = getActiveGames().find((g) => g.gameId === gameId);
-      const liveStatsPk: string = registeredLiveGame?.gamePk ?? gameId;
+      const liveStatsPk: string | undefined = registeredLiveGame?.gamePk;
+      if (!liveStatsPk) {
+        console.log(`[mlb/live-stats] gameId=${gameId}: gamePk not yet resolved — returning empty players`);
+        return res.json([]);
+      }
       const url = `https://statsapi.mlb.com/api/v1/game/${liveStatsPk}/boxscore`;
       const response = await fetch(url, {
         headers: { "User-Agent": "LiveLocks/1.0" },
@@ -822,7 +826,12 @@ export async function registerRoutes(
     let gameStatus = "";
     // Resolve statsPk (MLB gamePk) for Stats API calls in this endpoint
     const liveSignalsGame = getActiveGames().find((g) => g.gameId === gameId);
-    const liveSignalsStatsPk: string = liveSignalsGame?.gamePk ?? gameId;
+    const liveSignalsStatsPk: string | undefined = liveSignalsGame?.gamePk;
+
+    if (!liveSignalsStatsPk) {
+      console.log(`[MLB signals] gameId=${gameId}: gamePk not yet resolved — returning mode:no_lines`);
+      return res.json({ mode: "no_lines", signals: [], updatedAt: 0 });
+    }
 
     const cachedLiveGamesList = mlbLiveGamesCache.get("games");
     if (cachedLiveGamesList) {

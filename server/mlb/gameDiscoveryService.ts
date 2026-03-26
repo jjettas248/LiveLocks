@@ -50,6 +50,9 @@ function resolveTeamName(team: {
 const ESPN_TO_MLB_ABBR: Record<string, string> = {
   CHW: "CWS",  // White Sox: ESPN=CHW, Stats API=CWS  (confirmed 2026-03-26)
   ARI: "AZ",   // Diamondbacks: ESPN=ARI, Stats API=AZ (confirmed 2026-03-26)
+  SF:  "SFG",  // Giants: ESPN=SF, Stats API=SFG        (confirmed 2026-03-26)
+  WSH: "WAS",  // Nationals: ESPN=WSH, Stats API=WAS    (confirmed 2026-03-26)
+  TB:  "TBR",  // Rays: ESPN=TB, Stats API=TBR          (confirmed 2026-03-26)
 };
 
 function normalizeAbbr(abbr: string): string {
