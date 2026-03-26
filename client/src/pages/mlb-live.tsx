@@ -70,6 +70,7 @@ type MLBGame = {
   signalLocked?: boolean;
   signalCount?: number;
   market?: MLBGameMarket | null;
+  gameCardTags?: string[];
 };
 
 type ABResultEntry = {
@@ -129,6 +130,11 @@ type MLBSignal = {
   homeAbbr?: string | null;
   bvp?: { atBats: number; hits: number; avg: number | null; homeRuns: number; strikeouts: number } | null;
   modifiers?: { liveForm: number; pitcher: number; pitchType: number; weatherPark: number; lineup: number } | null;
+  signalScore?: number | null;
+  confidenceTier?: "ELITE" | "STRONG" | "SOLID" | "WATCHLIST" | null;
+  signalTags?: string[];
+  feedTags?: string[];
+  playerGlowEligible?: boolean;
 };
 
 type SignalsResponse = {
@@ -136,6 +142,7 @@ type SignalsResponse = {
   signals: MLBSignal[];
   updatedAt: number;
   isDegraded?: boolean;
+  gameCardTags?: string[];
 };
 
 type EdgeFeedResponse = {
@@ -243,6 +250,21 @@ function heatGlow(form: string | null | undefined): string {
   if (f === "COLD") return "shadow-[0_0_8px_rgba(59,130,246,0.2)]";
   if (f === "EXTREME_COLD" || f === "ICE_COLD") return "shadow-[0_0_10px_rgba(37,99,235,0.3)]";
   return "";
+}
+
+function signalTagStyle(tag: string): string {
+  switch (tag) {
+    case "HOT OVER": return "bg-green-500/20 text-green-400";
+    case "COLD UNDER": return "bg-blue-500/20 text-blue-400";
+    case "HR WATCH": return "bg-orange-500/20 text-orange-400";
+    case "LIVE EDGE": return "bg-emerald-500/15 text-emerald-400";
+    case "STRONG MATCHUP": return "bg-purple-500/15 text-purple-400";
+    case "ATTACKABLE PITCHER": return "bg-red-500/15 text-red-400";
+    case "LIVE SIGNALS": return "bg-primary/15 text-primary";
+    case "HOT BATS": return "bg-green-500/15 text-green-400";
+    case "PITCHER ATTACKABLE": return "bg-red-500/15 text-red-400";
+    default: return "bg-muted/30 text-muted-foreground";
+  }
 }
 
 function edgeColor(edge: number | null): string {
@@ -473,11 +495,14 @@ function BatterCard({ player, signals, game, isElite, onSelect }: {
   const abResults = player.priorABResults ?? [];
   const matchup = bestSignal?.matchupTag ?? null;
   const mods = bestSignal?.modifiers;
+  const glowEligible = playerSignals.some(s => s.playerGlowEligible);
+  const allSignalTags = [...new Set(playerSignals.flatMap(s => s.signalTags ?? []))];
+  const bestTier = bestSignal?.confidenceTier ?? null;
 
   return (
     <div
       data-testid={`card-mlb-batter-${player.playerId}`}
-      className={`rounded-xl border border-border/40 bg-card overflow-hidden cursor-pointer hover:border-primary/40 transition-all ${heatGlow(form)}`}
+      className={`rounded-xl border overflow-hidden cursor-pointer hover:border-primary/40 transition-all ${glowEligible ? "border-green-500/60 shadow-[0_0_12px_rgba(34,197,94,0.25)]" : `border-border/40 ${heatGlow(form)}`}`}
       onClick={onSelect}
     >
       <div className="p-3 space-y-2.5">
@@ -490,12 +515,22 @@ function BatterCard({ player, signals, game, isElite, onSelect }: {
                   {heatEmoji(form)} {form.replace("EXTREME_COLD", "ICE")}
                 </span>
               )}
+              {bestTier && bestTier !== "WATCHLIST" && (
+                <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-full ${bestTier === "ELITE" ? "bg-green-500/20 text-green-400" : bestTier === "STRONG" ? "bg-yellow-500/20 text-yellow-400" : "bg-blue-500/15 text-blue-400"}`}>
+                  {bestTier}
+                </span>
+              )}
             </div>
-            <div className="flex items-center gap-1.5 mt-0.5">
+            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
               <span className="text-[10px] text-muted-foreground">{player.teamAbbr} · #{player.battingOrderSlot}</span>
               {matchup && (
                 <span className="text-[9px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium">{matchup}</span>
               )}
+              {allSignalTags.map(tag => (
+                <span key={tag} data-testid={`signal-tag-${tag.replace(/\s+/g, "-").toLowerCase()}`} className={`text-[8px] font-bold px-1 py-0.5 rounded ${signalTagStyle(tag)}`}>
+                  {tag}
+                </span>
+              ))}
             </div>
           </div>
           {bestSignal && (

@@ -397,3 +397,31 @@ export const MLB_MARKET_MIN_GAP: Record<MLBMarket, number> = {
   home_runs:          0.10,
   hrr:                0.60,
 };
+
+export type SignalConfidenceTier = "ELITE" | "STRONG" | "SOLID" | "WATCHLIST" | "NO_SIGNAL";
+
+export interface MLBQualifiedSignal {
+  id: string;
+  gameId: string;
+  playerId: string;
+  playerName: string;
+  team: string;
+  market: MLBMarket;
+  side: MLBRecommendedSide;
+  sportsbook: string | null;
+  line: number;
+  impliedProbability: number | null;
+  engineProbability: number;
+  projection: number;
+  evPct: number;
+  confidenceTier: SignalConfidenceTier;
+  signalScore: number;
+  reasons: string[];
+  feedTags: string[];
+  signalTags: string[];
+  playerGlowEligible: boolean;
+  gameCardSignalTags: string[];
+  formIndicator: FormIndicator;
+  isExperimental: boolean;
+  engineGeneratedAt: number;
+}

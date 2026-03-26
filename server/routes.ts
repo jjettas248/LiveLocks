@@ -775,6 +775,7 @@ export async function registerRoutes(
           hasOdds,
           signalLocked,
           market: bestMarket,
+          gameCardTags: cacheEntry?.gameCardTags ?? [],
         });
       }
 
@@ -931,7 +932,8 @@ export async function registerRoutes(
     const cached = mlbSignalsCache.get(gameId);
     if (cached && Date.now() - cached.ts < MLB_SIGNALS_TTL) {
       const cachedMode = cached.signals.length > 0 ? "live" : "no_lines";
-      return res.json({ mode: cachedMode, signals: cached.signals, updatedAt: cached.updatedAt, isDegraded: cached.isDegraded });
+      const cachedEntry = mlbEdgeCache.get(gameId);
+      return res.json({ mode: cachedMode, signals: cached.signals, updatedAt: cached.updatedAt, isDegraded: cached.isDegraded, gameCardTags: cachedEntry?.gameCardTags ?? [] });
     }
 
     const entry = mlbEdgeCache.get(gameId);
@@ -1032,6 +1034,10 @@ export async function registerRoutes(
         else if (hitProb >= 70) tier = "yellow";
         else tier = "teal";
 
+        const qSig = entry?.qualifiedSignals?.find(
+          (qs) => qs.playerId === o.playerId && qs.market === o.market
+        );
+
         return {
           playerId: o.playerId,
           playerName: o.playerName,
@@ -1062,6 +1068,11 @@ export async function registerRoutes(
             weatherPark: o.modifiers.weatherPark ?? 0,
             lineup: o.modifiers.lineup ?? 0,
           } : null,
+          signalScore: qSig?.signalScore ?? null,
+          confidenceTier: qSig?.confidenceTier ?? null,
+          signalTags: qSig?.signalTags ?? [],
+          feedTags: qSig?.feedTags ?? [],
+          playerGlowEligible: qSig?.playerGlowEligible ?? false,
         };
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
@@ -1207,12 +1218,13 @@ export async function registerRoutes(
       booksAvailable: mlbRawOutputs.length > 0 ? 1 : 0,
     });
 
-    // Phase 16: Signal Priority Engine — rank by confidence tier, then edge, then consensus strength
-    const CONFIDENCE_RANK: Record<string, number> = { ELITE: 4, STRONG: 3, LEAN: 2, VALUE: 1, NO_EDGE: 0, HIGH: 3, MEDIUM: 2, LOW: 1 };
+    const CONFIDENCE_RANK: Record<string, number> = { ELITE: 4, STRONG: 3, SOLID: 2, WATCHLIST: 1, NO_SIGNAL: 0, LEAN: 2, VALUE: 1, NO_EDGE: 0 };
     const MAX_SIGNALS_PER_GAME = 3;
     const prioritizedMlbSignals = [...validatedMlbSignals]
       .sort((a, b) => {
-        const tierDiff = (CONFIDENCE_RANK[b.tier ?? "LEAN"] ?? 0) - (CONFIDENCE_RANK[a.tier ?? "LEAN"] ?? 0);
+        const aTier = (a as any).confidenceTier ?? "NO_SIGNAL";
+        const bTier = (b as any).confidenceTier ?? "NO_SIGNAL";
+        const tierDiff = (CONFIDENCE_RANK[bTier] ?? 0) - (CONFIDENCE_RANK[aTier] ?? 0);
         if (tierDiff !== 0) return tierDiff;
         const edgeDiff = (b.edge ?? 0) - (a.edge ?? 0);
         if (Math.abs(edgeDiff) > 0.01) return edgeDiff;
@@ -1269,7 +1281,7 @@ export async function registerRoutes(
       }
     }
 
-    return res.json({ mode: "live", signals: prioritizedMlbSignals, updatedAt, isDegraded });
+    return res.json({ mode: "live", signals: prioritizedMlbSignals, updatedAt, isDegraded, gameCardTags: entry?.gameCardTags ?? [] });
   });
 
   app.get("/api/mlb/edge-feed", requireMLBAccess, async (req, res) => {

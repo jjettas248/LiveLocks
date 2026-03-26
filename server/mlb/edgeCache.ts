@@ -3,7 +3,7 @@
 // Read by /api/mlb/live-signals/:gameId — no recomputation on request.
 // Cache key is the plain gameId string (e.g. "746376").
 
-import type { MLBPropOutput } from "./types";
+import type { MLBPropOutput, MLBQualifiedSignal } from "./types";
 import { getActiveGames } from "./liveGameRegistry";
 
 export const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
@@ -12,11 +12,11 @@ export const MAX_CACHE_GAMES = 50;
 export interface EdgeCacheEntry {
   gameId: string;
   outputs: MLBPropOutput[];
+  qualifiedSignals: MLBQualifiedSignal[];
+  gameCardTags: string[];
   updatedAt: number;
   createdAt: number;
-  /** True when any market in this run used stale last-known-good odds (not a live fresh quote). */
   isDegraded?: boolean;
-  /** True when at least one output passes canShowSignal and has edge >= 5%. */
   signalLocked?: boolean;
 }
 

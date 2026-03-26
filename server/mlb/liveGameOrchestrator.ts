@@ -28,7 +28,8 @@ import {
 import { estimateRemainingPA } from "./paEstimator";
 import { calculateMLBPropEdge, hasRealOdds, canShowSignal } from "./markets";
 import { recordMLBDiagnostic } from "./diagnostics";
-import type { MLBPropInput, MLBPropOutput, MLBMarket } from "./types";
+import type { MLBPropInput, MLBPropOutput, MLBMarket, MLBQualifiedSignal } from "./types";
+import { computeSignalScore, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible } from "./signalScore";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
 
 // ── Engine dedup lock ─────────────────────────────────────────────────────────
@@ -396,6 +397,7 @@ export class LiveGameOrchestrator {
 
   async triggerEngine(gameId: string, normalizedStatus: "live" | "pregame" | "final" | "unknown"): Promise<MLBPropOutput[]> {
     const outputs: MLBPropOutput[] = [];
+    const inputOutputPairs: Array<{ input: MLBPropInput; output: MLBPropOutput }> = [];
     let anyDegraded = false; // true if any market used stale last-known-good odds
     const state = mlbGameCache.gameState[gameId];
     const game = getGame(gameId);
@@ -644,6 +646,7 @@ export class LiveGameOrchestrator {
           console.log(`[MLB MARKET OUTPUT][${gameId}][${market}] { playerName: "${batter.playerName}", projection: ${output.projection}, probability: ${output.calibratedProbabilityOver.toFixed(2)}, edge: ${output.edge.toFixed(2)}, line: ${output.bookLine}, overOdds: ${output.overOdds ?? null}, underOdds: ${output.underOdds ?? null} }`);
 
           outputs.push({ ...output });
+          inputOutputPairs.push({ input, output });
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for ${batter.playerName} / ${market}:`, err.message);
           console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "engine_error:${(err as any).message}" }`);
@@ -790,6 +793,7 @@ export class LiveGameOrchestrator {
           console.log(`[MLB MARKET OUTPUT][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", projection: ${output.projection}, probability: ${output.calibratedProbabilityOver.toFixed(2)}, edge: ${output.edge.toFixed(2)}, line: ${output.bookLine}, overOdds: ${output.overOdds ?? null}, underOdds: ${output.underOdds ?? null} }`);
 
           outputs.push({ ...output });
+          inputOutputPairs.push({ input, output });
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for pitcher ${pitcherToEval.playerName} / ${market}:`, err.message);
           console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", reason: "engine_error:${(err as any).message}" }`);
@@ -847,8 +851,62 @@ export class LiveGameOrchestrator {
     );
     const signalLocked = qualifiedOutputs.length > 0;
 
-    mlbEdgeCache.set(gameId, { gameId, outputs: validatedOutputs, updatedAt: now, createdAt: now, isDegraded: anyDegraded, signalLocked });
-    console.log(`[MLB orchestrator] triggerEngine: game ${gameId} — ${outputs.length} raw → ${validatedOutputs.length} validated → ${qualifiedOutputs.length} qualified (prob≥60%, not suppressed)`);
+    const qualifiedSignals: MLBQualifiedSignal[] = [];
+    for (const qOutput of qualifiedOutputs) {
+      const pair = inputOutputPairs.find(
+        (p) => p.output.playerId === qOutput.playerId && p.output.market === qOutput.market
+      );
+      if (!pair) continue;
+
+      const scoreBreakdown = computeSignalScore(pair.input, qOutput);
+      if (scoreBreakdown.confidenceTier === "NO_SIGNAL") continue;
+
+      const signalTags = deriveSignalTags(pair.input, qOutput, scoreBreakdown);
+      const feedTags = deriveFeedTags(pair.input, qOutput, scoreBreakdown);
+      const glowEligible = isPlayerGlowEligible(scoreBreakdown, signalTags);
+
+      const signal: MLBQualifiedSignal = {
+        id: `${gameId}_${qOutput.playerId}_${qOutput.market}`,
+        gameId,
+        playerId: qOutput.playerId,
+        playerName: qOutput.playerName,
+        team: (qOutput as any).team ?? pair.input.team ?? "",
+        market: qOutput.market,
+        side: qOutput.recommendedSide,
+        sportsbook: qOutput.sportsbook,
+        line: qOutput.bookLine,
+        impliedProbability: null,
+        engineProbability: qOutput.calibratedProbability,
+        projection: qOutput.projection,
+        evPct: qOutput.evPct,
+        confidenceTier: scoreBreakdown.confidenceTier,
+        signalScore: scoreBreakdown.total,
+        reasons: qOutput.explanationBullets,
+        feedTags: feedTags as string[],
+        signalTags: signalTags as string[],
+        playerGlowEligible: glowEligible,
+        gameCardSignalTags: [],
+        formIndicator: qOutput.formIndicator,
+        isExperimental: qOutput.isExperimental,
+        engineGeneratedAt: qOutput.engineGeneratedAt,
+      };
+      qualifiedSignals.push(signal);
+    }
+
+    const gameCardTags = deriveGameCardTags(
+      qualifiedSignals.map((s) => ({
+        signalTags: s.signalTags as any,
+        market: s.market,
+        recommendedSide: s.side,
+        signalScore: s.signalScore,
+      }))
+    );
+    for (const sig of qualifiedSignals) {
+      sig.gameCardSignalTags = gameCardTags as string[];
+    }
+
+    mlbEdgeCache.set(gameId, { gameId, outputs: validatedOutputs, qualifiedSignals, gameCardTags: gameCardTags as string[], updatedAt: now, createdAt: now, isDegraded: anyDegraded, signalLocked });
+    console.log(`[MLB orchestrator] triggerEngine: game ${gameId} — ${outputs.length} raw → ${validatedOutputs.length} validated → ${qualifiedOutputs.length} qualified → ${qualifiedSignals.length} signals (prob≥60%, not suppressed)`);
     return validatedOutputs;
   }
 }

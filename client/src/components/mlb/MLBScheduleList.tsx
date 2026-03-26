@@ -18,6 +18,7 @@ type MLBScheduleGame = {
   hasOdds?: boolean;
   signalLocked?: boolean;
   signalCount?: number;
+  gameCardTags?: string[];
   weather?: {
     temperature: number | null;
     windSpeed: number | null;
@@ -55,6 +56,16 @@ function pitcherHeatEmoji(ctx: MLBScheduleGame["pitcherContext"]): string {
   if (ctx.timesThroughOrder >= 3 || ctx.pitchCount >= 85) return "❄️";
   if (ctx.pitchCount <= 30) return "🔥";
   return "🟡";
+}
+
+function gameTagStyle(tag: string): string {
+  switch (tag) {
+    case "LIVE SIGNALS": return "bg-primary/15 text-primary";
+    case "HOT BATS": return "bg-green-500/15 text-green-400";
+    case "PITCHER ATTACKABLE": return "bg-red-500/15 text-red-400";
+    case "HR WATCH": return "bg-orange-500/15 text-orange-400";
+    default: return "bg-muted/30 text-muted-foreground";
+  }
 }
 
 export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGameId, onSelectGame }: MLBScheduleListProps) {
@@ -174,7 +185,7 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
                 </span>
               )}
 
-              <div className="mt-0.5">
+              <div className="mt-0.5 flex items-center gap-1 flex-wrap">
                 {game.signalLocked ? (
                   <span className="text-[9px] font-bold text-green-400">
                     {game.signalCount ? `${game.signalCount} Edge${game.signalCount !== 1 ? "s" : ""} Detected` : "Edge Detected"}
@@ -186,6 +197,11 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
                 ) : (
                   <span className="text-[9px] text-muted-foreground/60">Pre-game</span>
                 )}
+                {(game.gameCardTags ?? []).map(tag => (
+                  <span key={tag} data-testid={`game-tag-${tag.replace(/\s+/g, "-").toLowerCase()}`} className={`text-[8px] font-bold px-1 py-0.5 rounded ${gameTagStyle(tag)}`}>
+                    {tag}
+                  </span>
+                ))}
               </div>
             </button>
           );
