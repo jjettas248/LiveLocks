@@ -1107,6 +1107,33 @@ export default function Dashboard() {
     };
   }, []);
 
+  const { pullDistance, isRefreshing: isPullRefreshing } = usePullRefresh({
+    onRefresh: async () => {
+      const token = getAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      try {
+        const res = await fetch("/api/me", { credentials: "include", headers });
+        if (res.ok) {
+          const fresh = await res.json();
+          setLocalTier(fresh.subscriptionTier ?? null);
+          const currentUser = queryClient.getQueryData<any>(["/api/auth/me"]);
+          if (currentUser) {
+            queryClient.setQueryData(["/api/auth/me"], {
+              ...currentUser,
+              subscriptionTier: fresh.subscriptionTier ?? currentUser.subscriptionTier,
+              hasNBA: fresh.hasNBA,
+              hasNCAAB: fresh.hasNCAAB,
+              hasMLB: fresh.hasMLB,
+              hasUnlimited: fresh.hasUnlimited,
+            });
+          }
+        }
+      } catch {}
+      await queryClient.invalidateQueries();
+    },
+  });
+
   // ── Welcome banner + NEW badge system ────────────────────────────────────
   const { data: ncaabGamesRaw } = useQuery<{ games: Array<{ id: string; status: string; startTime?: string }> }>({
     queryKey: ["/api/ncaab/games"],
@@ -1535,7 +1562,27 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="min-h-screen pb-20 bg-background">
+    <div
+      className="min-h-screen pb-20 bg-background transition-transform duration-200"
+      style={{ transform: (pullDistance > 0 || isPullRefreshing) ? `translateY(${isPullRefreshing ? 56 : pullDistance}px)` : undefined }}
+    >
+      {(pullDistance > 0 || isPullRefreshing) && (
+        <div
+          className="fixed top-0 left-0 right-0 z-[100] flex items-center justify-center pointer-events-none"
+          style={{ height: isPullRefreshing ? 56 : pullDistance, transform: `translateY(-${isPullRefreshing ? 56 : pullDistance}px)` }}
+          data-testid="pull-refresh-indicator"
+        >
+          <div className={`flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/20 backdrop-blur-sm ${isPullRefreshing ? "animate-pulse" : ""}`}>
+            <RefreshCw
+              className={`w-4 h-4 text-primary transition-transform duration-200 ${isPullRefreshing ? "animate-spin" : ""}`}
+              style={{ transform: isPullRefreshing ? undefined : `rotate(${Math.min(pullDistance / 80 * 360, 360)}deg)` }}
+            />
+            <span className="text-xs font-medium text-primary">
+              {isPullRefreshing ? "Refreshing..." : pullDistance >= 80 ? "Release to refresh" : "Pull to refresh"}
+            </span>
+          </div>
+        </div>
+      )}
       {showResetOverlay && (
         <NewSlateOverlay
           step={resetStep}

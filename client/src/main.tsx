@@ -5,21 +5,33 @@ import "./index.css";
 createRoot(document.getElementById("root")!).render(<App />);
 
 if ("serviceWorker" in navigator) {
+  let refreshing = false;
+
+  function promptUpdate(worker: ServiceWorker) {
+    worker.postMessage({ type: "SKIP_WAITING" });
+  }
+
   window.addEventListener("load", async () => {
     try {
       const reg = await navigator.serviceWorker.register("/sw.js");
+
+      if (reg.waiting && navigator.serviceWorker.controller) {
+        promptUpdate(reg.waiting);
+      }
 
       reg.addEventListener("updatefound", () => {
         const newWorker = reg.installing;
         if (!newWorker) return;
         newWorker.addEventListener("statechange", () => {
           if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
-            newWorker.postMessage({ type: "SKIP_WAITING" });
+            promptUpdate(newWorker);
           }
         });
       });
 
       navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (refreshing) return;
+        refreshing = true;
         window.location.reload();
       });
 

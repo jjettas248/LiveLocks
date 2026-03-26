@@ -23,7 +23,8 @@ I prefer clear and concise explanations. When implementing new features or makin
     - **H2H Matchup History**: Displays historical game results and spread coverage for teams.
     - **NCAAB Games Strip**: A horizontal scrollable chip bar showing live scores and scheduled times, allowing quick navigation to specific games.
     - **Welcome Experience**: New Pro users see a `WelcomeBanner` and a "NEW" badge on the NCAAB tab for a limited time post-upgrade.
-    - **Mobile UX**: Parlay Slip functions as a bottom sheet on mobile and a side column on desktop.
+    - **Mobile UX**: Parlay Slip functions as a bottom sheet on mobile and a side column on desktop. Pull-to-refresh gesture on mobile/PWA triggers subscription tier refresh + full data reload.
+    - **PWA Updates**: Service worker (`sw.js`, cache `livelocks-v6`) uses client-driven `skipWaiting` lifecycle. `main.tsx` checks for updates on page load, visibility change, and every 5 minutes. Navigation requests use network-first strategy with offline fallback. `overscroll-behavior-y: none` prevents native pull-to-refresh conflicts.
     - **Engine-Calibrated Probabilities**: Probabilities are calibrated server-side by the NCAAB engine (normal CDF with calibration cap at 78%, early-game neutral at 50%). Client displays engine values directly.
     - **Neutral State Handling**: If game progress is low and probabilities are near 50%, a "Insufficient Data" verdict is displayed.
 

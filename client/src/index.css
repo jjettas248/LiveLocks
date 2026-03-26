@@ -5,6 +5,11 @@
 @tailwind utilities;
 
 @layer base {
+  html, body {
+    overscroll-behavior-y: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
   :root {
     --font-sans: 'Inter', sans-serif;
     --font-display: 'Outfit', sans-serif;
