@@ -1192,8 +1192,8 @@ export async function registerRoutes(
       const validSides = new Set(["over", "under"]);
       for (const sig of prioritizedMlbSignals) {
         const direction = (sig.recommendedSide ?? "").toLowerCase();
-        if (!Number.isFinite(sig.enginePct) || sig.enginePct < 2 || sig.enginePct > 80) {
-          console.warn(`[MLB PERSIST BLOCKED — INVALID SIGNAL] game=${gameId} player=${sig.playerName} market=${sig.market} — enginePct=${sig.enginePct} outside [2,80]`);
+        if (!Number.isFinite(sig.enginePct) || sig.enginePct < 1 || sig.enginePct > 99) {
+          console.warn(`[MLB PERSIST BLOCKED — INVALID SIGNAL] game=${gameId} player=${sig.playerName} market=${sig.market} — enginePct=${sig.enginePct} outside [1,99]`);
           continue;
         }
         if (!sig.bookLine || sig.bookLine <= 0) {
@@ -2757,11 +2757,23 @@ export async function registerRoutes(
 
       const overSignals = allSignals.filter(s => s.betDirection === "over").length;
       const underSignals = allSignals.filter(s => s.betDirection === "under").length;
+      const totalSignals = overSignals + underSignals;
+      const overRatio = totalSignals > 0 ? overSignals / totalSignals : 0;
+      const underRatio = totalSignals > 0 ? underSignals / totalSignals : 0;
+      const avgEdgeOver = overSignals > 0 ? allSignals.filter(s => s.betDirection === "over").reduce((sum, s) => sum + s.edge, 0) / overSignals : 0;
+      const avgEdgeUnder = underSignals > 0 ? allSignals.filter(s => s.betDirection === "under").reduce((sum, s) => sum + s.edge, 0) / underSignals : 0;
       console.log(
         `[live-signals-summary] totalPlayers=${totalAttempted} enginePlayers=${enginePlayerCount} ` +
-        `overSignals=${overSignals} underSignals=${underSignals} ` +
-        `noSignals=${totalAttempted - overSignals - underSignals}`
+        `overCount=${overSignals} underCount=${underSignals} ` +
+        `overRatio=${overRatio.toFixed(2)} underRatio=${underRatio.toFixed(2)} ` +
+        `avgEdgeOver=${avgEdgeOver.toFixed(1)} avgEdgeUnder=${avgEdgeUnder.toFixed(1)} ` +
+        `noSignals=${totalAttempted - totalSignals}`
       );
+      if (totalSignals > 4 && underRatio > 0.75) {
+        console.warn(`[NBA SKEW WARNING] Under-heavy distribution detected: underRatio=${underRatio.toFixed(2)} (${underSignals}/${totalSignals})`);
+      } else if (totalSignals > 4 && overRatio > 0.75) {
+        console.warn(`[NBA SKEW WARNING] Over-heavy distribution detected: overRatio=${overRatio.toFixed(2)} (${overSignals}/${totalSignals})`);
+      }
       console.log(`[QUICK VIEW DEBUG] live-signals total engine plays: ${allSignals.length}`);
       console.log(`[QUICK VIEW DEBUG] live-signals final rendered: ${allSignals.length} (no further filtering)`);
 
