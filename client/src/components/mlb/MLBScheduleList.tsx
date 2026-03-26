@@ -50,7 +50,8 @@ function formatStartTime(startTime: string | null | undefined): string | null {
 }
 
 export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGameId, onSelectGame }: MLBScheduleListProps) {
-  const renderedGames = games.filter((g) => resolveGameRenderState(g) !== "INVALID");
+  const safeGames = Array.isArray(games) ? games : [];
+  const renderedGames = safeGames.filter((g) => g && g.gameId && resolveGameRenderState(g) !== "INVALID");
 
   return (
     <div>
@@ -64,6 +65,7 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
       )}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
         {renderedGames.map((game) => {
+          if (!game || !game.gameId) return null;
           const renderState = resolveGameRenderState(game);
           if (renderState === "INVALID") return null;
 

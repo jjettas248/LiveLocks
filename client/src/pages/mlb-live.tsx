@@ -13,6 +13,9 @@ class MLBErrorBoundary extends Component<{ children: ReactNode }, { hasError: bo
   static getDerivedStateFromError(error: Error) {
     return { hasError: true, message: error?.message ?? "Unknown error" };
   }
+  componentDidCatch(error: Error, info: { componentStack: string }) {
+    console.error("[MLBErrorBoundary] caught:", error, info.componentStack);
+  }
   render() {
     if (this.state.hasError) {
       return (
@@ -340,16 +343,17 @@ function MlbLiveInner() {
   });
 
   const responseMode = gamesResp?.mode ?? "preview";
-  const games = gamesResp?.games ?? [];
-  const previewPlayers = gamesResp?.previewPlayers ?? [];
-  const hasAnyOdds = games.some((g) => g.hasOdds === true);
+  const games = Array.isArray(gamesResp?.games) ? gamesResp!.games : [];
+  const previewPlayers = Array.isArray(gamesResp?.previewPlayers) ? gamesResp!.previewPlayers : [];
+  const hasAnyOdds = games.some((g) => g?.hasOdds === true);
   const isElite = user?.isAdmin || user?.subscriptionTier === "elite";
 
-  const { data: players = [], isLoading: playersLoading } = useQuery<MLBBatter[]>({
+  const { data: playersRaw, isLoading: playersLoading } = useQuery<MLBBatter[]>({
     queryKey: ["/api/mlb/live-stats", selectedGameId],
     enabled: !!selectedGameId,
     refetchInterval: 30_000,
   });
+  const players = Array.isArray(playersRaw) ? playersRaw : [];
 
   const { data: signalsResp, isLoading: signalsLoading } = useQuery<SignalsResponse>({
     queryKey: ["/api/mlb/live-signals", selectedGameId],
@@ -358,10 +362,10 @@ function MlbLiveInner() {
   });
 
   const signalMode = signalsResp?.mode ?? "no_lines";
-  const signals = signalsResp?.signals ?? [];
+  const signals = Array.isArray(signalsResp?.signals) ? signalsResp!.signals : [];
   const updatedAt = signalsResp?.updatedAt ?? 0;
   const signalsDegraded = signalsResp?.isDegraded ?? false;
-  const selectedGameRaw = games.find((g) => g.gameId === selectedGameId) ?? null;
+  const selectedGameRaw = games.find((g) => g?.gameId === selectedGameId) ?? null;
   const selectedGameRef = useRef<MLBGame | null>(null);
 
   useEffect(() => {
@@ -513,11 +517,12 @@ function MlbLiveInner() {
 
   const playerTierMap = new Map<string, string>();
   for (const sig of signals) {
+    if (!sig || !sig.playerId) continue;
     const existing = playerTierMap.get(sig.playerId);
     if (!existing) {
       playerTierMap.set(sig.playerId, sig.tier);
     } else {
-      const existingSignal = signals.find((s) => s.playerId === sig.playerId && s.tier === existing);
+      const existingSignal = signals.find((s) => s?.playerId === sig.playerId && s?.tier === existing);
       const existingEdge = existingSignal?.edge ?? 0;
       const sigEdge = sig.edge ?? 0;
       if (sigEdge > existingEdge) {
@@ -527,15 +532,15 @@ function MlbLiveInner() {
   }
 
   const currentInning = selectedGame?.inning ?? 0;
-  const rosterPlayerIds = new Set<string>(players.map((p) => String(p.playerId)));
+  const rosterPlayerIds = new Set<string>(players.filter((p) => p && p.playerId != null).map((p) => String(p.playerId)));
 
   const validatedSignals = selectedGameId
-    ? signals.filter((sig) => isValidSignal(sig, selectedGameId, rosterPlayerIds))
+    ? signals.filter((sig) => sig && isValidSignal(sig, selectedGameId, rosterPlayerIds))
     : [];
 
   const filteredSignals = inningTabMin === 0
     ? validatedSignals
-    : validatedSignals.filter((s) => s.inning >= inningTabMin);
+    : validatedSignals.filter((s) => s && s.inning >= inningTabMin);
 
   const isPitcherMarket = PITCHER_MARKET_SET.has(selectedMarket);
   const manualCanCalc = manualMode && manualInputs.bookLine.trim() !== "" && !isNaN(parseFloat(manualInputs.bookLine)) && parseFloat(manualInputs.bookLine) > 0;
@@ -553,10 +558,11 @@ function MlbLiveInner() {
 
   const uiMode = getUiMode();
 
-  if (authLoading) {
+  if (authLoading || gamesLoading) {
     return (
-      <div className="max-w-5xl mx-auto px-4 py-12 flex items-center justify-center">
+      <div className="max-w-5xl mx-auto px-4 py-12 flex flex-col items-center justify-center gap-3">
         <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        <span className="text-sm text-muted-foreground">Loading MLB…</span>
       </div>
     );
   }
@@ -597,7 +603,7 @@ function MlbLiveInner() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {previewPlayers.map((p, i) => {
-              if (!p.playerName && !p.matchup) return null;
+              if (!p || (!p.playerName && !p.matchup)) return null;
               return (
               <div
                 key={i}
@@ -610,7 +616,7 @@ function MlbLiveInner() {
                     <div className="text-xs text-muted-foreground mt-0.5">{p.playerName ? p.matchup : "Edges forming"}</div>
                   </div>
                   <div className="flex gap-1 flex-wrap justify-end">
-                    {(p.tags ?? []).map((tag, ti) => (
+                    {(Array.isArray(p.tags) ? p.tags : []).map((tag, ti) => (
                       <span key={ti} className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
                         {tag}
                       </span>
@@ -744,6 +750,7 @@ function MlbLiveInner() {
                       </thead>
                       <tbody>
                         {players.map((p) => {
+                          if (!p || !p.playerId) return null;
                           const tier = playerTierMap.get(p.playerId);
                           const style = tier ? TIER_STYLES[tier] : null;
                           return (
@@ -905,7 +912,8 @@ function MlbLiveInner() {
 
                 {panelState === "SIGNAL" && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {filteredSignals.map((sig) => {
+                    {(Array.isArray(filteredSignals) ? filteredSignals : []).map((sig) => {
+                      if (!sig || !sig.playerId || !sig.market) return null;
                       const style = TIER_STYLES[sig.tier] ?? TIER_STYLES.yellow;
                       const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
                       return (
@@ -1530,7 +1538,7 @@ function MlbLiveInner() {
                     )}
                   </div>
 
-                  {calcResult.explanationBullets.length > 0 && (
+                  {Array.isArray(calcResult.explanationBullets) && calcResult.explanationBullets.length > 0 && (
                     <div className="space-y-1.5">
                       <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Analysis</h4>
                       <ul className="space-y-1">
