@@ -78,6 +78,36 @@ export interface BullpenCache {
   fetchedAt: number;
 }
 
+export interface PitcherSeasonStats {
+  era: number | null;
+  whip: number | null;
+  kPer9: number | null;
+  bbPer9: number | null;
+  inningsPitched: number | null;
+  wins: number | null;
+  losses: number | null;
+  fetchedAt: number;
+}
+
+export interface BatterRollingStats {
+  last7: { avg: number | null; ops: number | null; games: number };
+  last15: { avg: number | null; ops: number | null; games: number };
+  last30: { avg: number | null; ops: number | null; games: number };
+  seasonAvg: number | null;
+  seasonOps: number | null;
+  fetchedAt: number;
+}
+
+export interface BvPMatchupStats {
+  atBats: number;
+  hits: number;
+  homeRuns: number;
+  strikeouts: number;
+  avg: number | null;
+  ops: number | null;
+  fetchedAt: number;
+}
+
 // ── In-memory cache ───────────────────────────────────────────────────────────
 
 export const mlbGameCache: {
@@ -93,6 +123,20 @@ export const mlbGameCache: {
   weather: {},
   bullpen: {},
 };
+
+export const mlbPlayerCache: {
+  pitcherSeasonStats: Record<string, PitcherSeasonStats>;
+  batterRollingStats: Record<string, BatterRollingStats>;
+  bvpMatchups: Record<string, BvPMatchupStats>;
+} = {
+  pitcherSeasonStats: {},
+  batterRollingStats: {},
+  bvpMatchups: {},
+};
+
+const PITCHER_SEASON_TTL = 30 * 60 * 1000;
+const BATTER_ROLLING_TTL = 20 * 60 * 1000;
+const BVP_TTL = 60 * 60 * 1000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -115,6 +159,19 @@ function safeNum(v: unknown): number | null {
   if (v == null) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+function parseBaseballInnings(raw: unknown): number | null {
+  if (raw == null) return null;
+  const str = String(raw);
+  const parts = str.split(".");
+  const whole = parseInt(parts[0], 10);
+  if (!Number.isFinite(whole)) return null;
+  if (parts.length === 1) return whole;
+  const frac = parseInt(parts[1], 10);
+  if (frac === 1) return whole + 1 / 3;
+  if (frac === 2) return whole + 2 / 3;
+  return whole;
 }
 
 function normalizeWindDirection(raw: string | undefined): "in" | "out" | "cross" | "calm" | null {
@@ -566,5 +623,186 @@ export async function syncBullpenUsage(statsPk: string, cacheKey?: string): Prom
     console.log(`[MLB pull] syncBullpenUsage: game ${gameId} — ${relieversUsed.length} relievers used, ERA ${bullpenEra ?? "unknown"}, 3-day pitches ${bullpenUsageLastThreeDays ?? "unknown"}`);
   } catch (err: any) {
     console.error(`[MLB pull] syncBullpenUsage(${gameId}) error:`, err.message);
+  }
+}
+
+// ── syncPitcherSeasonStats ──────────────────────────────────────────────────
+export async function syncPitcherSeasonStats(pitcherId: string): Promise<void> {
+  if (!pitcherId || pitcherId === "unknown") return;
+
+  const cached = mlbPlayerCache.pitcherSeasonStats[pitcherId];
+  if (cached && Date.now() - cached.fetchedAt < PITCHER_SEASON_TTL) return;
+
+  try {
+    const currentYear = new Date().getFullYear();
+    const url = `https://statsapi.mlb.com/api/v1/people/${pitcherId}/stats?stats=season&season=${currentYear}&group=pitching`;
+    const data = await fetchJson(url);
+    const splits = data.stats?.[0]?.splits ?? [];
+    const stat = splits[0]?.stat;
+
+    if (!stat) {
+      mlbPlayerCache.pitcherSeasonStats[pitcherId] = {
+        era: null, whip: null, kPer9: null, bbPer9: null,
+        inningsPitched: null, wins: null, losses: null,
+        fetchedAt: Date.now(),
+      };
+      return;
+    }
+
+    const ipRaw = stat.inningsPitched;
+    const ip = parseBaseballInnings(ipRaw);
+    const so = safeNum(stat.strikeOuts) ?? 0;
+    const bb = safeNum(stat.baseOnBalls) ?? 0;
+    const kPer9 = safeNum(stat.strikeoutsPer9Inn) ?? (ip && ip > 0 ? parseFloat(((so / ip) * 9).toFixed(2)) : null);
+    const bbPer9 = safeNum(stat.walksPer9Inn) ?? (ip && ip > 0 ? parseFloat(((bb / ip) * 9).toFixed(2)) : null);
+
+    mlbPlayerCache.pitcherSeasonStats[pitcherId] = {
+      era: safeNum(stat.era),
+      whip: safeNum(stat.whip),
+      kPer9: kPer9 ?? null,
+      bbPer9: bbPer9 ?? null,
+      inningsPitched: ip,
+      wins: safeNum(stat.wins),
+      losses: safeNum(stat.losses),
+      fetchedAt: Date.now(),
+    };
+
+    console.log(`[MLB pull] syncPitcherSeasonStats: pitcher ${pitcherId} — ERA=${stat.era} WHIP=${stat.whip} K/9=${kPer9} BB/9=${bbPer9}`);
+  } catch (err: any) {
+    console.error(`[MLB pull] syncPitcherSeasonStats(${pitcherId}) error:`, err.message);
+  }
+}
+
+// ── syncBatterRollingStats ──────────────────────────────────────────────────
+export async function syncBatterRollingStats(playerId: string): Promise<void> {
+  if (!playerId || playerId === "unknown") return;
+
+  const cached = mlbPlayerCache.batterRollingStats[playerId];
+  if (cached && Date.now() - cached.fetchedAt < BATTER_ROLLING_TTL) return;
+
+  try {
+    const currentYear = new Date().getFullYear();
+    const url = `https://statsapi.mlb.com/api/v1/people/${playerId}/stats?stats=gameLog&season=${currentYear}&group=hitting`;
+    const data = await fetchJson(url);
+    const splits = data.stats?.[0]?.splits ?? [];
+
+    if (splits.length === 0) {
+      mlbPlayerCache.batterRollingStats[playerId] = {
+        last7: { avg: null, ops: null, games: 0 },
+        last15: { avg: null, ops: null, games: 0 },
+        last30: { avg: null, ops: null, games: 0 },
+        seasonAvg: null, seasonOps: null, fetchedAt: Date.now(),
+      };
+      return;
+    }
+
+    function computeRolling(games: any[]): { avg: number | null; ops: number | null; games: number } {
+      if (games.length === 0) return { avg: null, ops: null, games: 0 };
+      let totalAB = 0, totalH = 0, totalPA = 0, totalTB = 0, totalOBP_num = 0;
+      for (const g of games) {
+        const s = g.stat;
+        const ab = safeNum(s.atBats) ?? 0;
+        const h = safeNum(s.hits) ?? 0;
+        const bb = safeNum(s.baseOnBalls) ?? 0;
+        const hbp = safeNum(s.hitByPitch) ?? 0;
+        const sf = safeNum(s.sacFlies) ?? 0;
+        const doubles = safeNum(s.doubles) ?? 0;
+        const triples = safeNum(s.triples) ?? 0;
+        const hr = safeNum(s.homeRuns) ?? 0;
+        const singles = h - doubles - triples - hr;
+        totalAB += ab;
+        totalH += h;
+        totalPA += ab + bb + hbp + sf;
+        totalTB += singles + (doubles * 2) + (triples * 3) + (hr * 4);
+        totalOBP_num += h + bb + hbp;
+      }
+      const avg = totalAB > 0 ? parseFloat((totalH / totalAB).toFixed(3)) : null;
+      const obp = totalPA > 0 ? totalOBP_num / totalPA : 0;
+      const slg = totalAB > 0 ? totalTB / totalAB : 0;
+      const ops = (obp + slg) > 0 ? parseFloat((obp + slg).toFixed(3)) : null;
+      return { avg, ops, games: games.length };
+    }
+
+    const now = new Date();
+    function filterByDays(days: number): any[] {
+      const cutoff = new Date(now);
+      cutoff.setDate(cutoff.getDate() - days);
+      const cutoffStr = cutoff.toISOString().slice(0, 10);
+      return splits.filter((g: any) => {
+        const gameDate = g.date ?? g.gameDate ?? "";
+        return gameDate >= cutoffStr;
+      });
+    }
+
+    const last7 = computeRolling(filterByDays(7));
+    const last15 = computeRolling(filterByDays(15));
+    const last30 = computeRolling(filterByDays(30));
+
+    const allGames = computeRolling(splits);
+    const seasonAvg = allGames.avg;
+    const seasonOps = allGames.ops;
+
+    mlbPlayerCache.batterRollingStats[playerId] = {
+      last7, last15, last30, seasonAvg, seasonOps, fetchedAt: Date.now(),
+    };
+
+    console.log(`[MLB pull] syncBatterRollingStats: player ${playerId} — L7=${last7.avg} L15=${last15.avg} L30=${last30.avg} Season=${seasonAvg} (${splits.length} games)`);
+  } catch (err: any) {
+    console.error(`[MLB pull] syncBatterRollingStats(${playerId}) error:`, err.message);
+  }
+}
+
+// ── syncBvPMatchup ──────────────────────────────────────────────────────────
+export async function syncBvPMatchup(batterId: string, pitcherId: string): Promise<void> {
+  if (!batterId || !pitcherId || batterId === "unknown" || pitcherId === "unknown") return;
+
+  const cacheKey = `${batterId}_vs_${pitcherId}`;
+  const cached = mlbPlayerCache.bvpMatchups[cacheKey];
+  if (cached && Date.now() - cached.fetchedAt < BVP_TTL) return;
+
+  try {
+    const url = `https://statsapi.mlb.com/api/v1/people/${batterId}/stats?stats=vsPlayer&opposingPlayerId=${pitcherId}&group=hitting`;
+    const data = await fetchJson(url);
+    const splits = data.stats?.[0]?.splits ?? [];
+
+    let totalAB = 0, totalH = 0, totalHR = 0, totalSO = 0;
+    let totalPA = 0, totalTB = 0, totalOBP_num = 0;
+
+    for (const split of splits) {
+      const s = split.stat;
+      const ab = safeNum(s.atBats) ?? 0;
+      const h = safeNum(s.hits) ?? 0;
+      const hr = safeNum(s.homeRuns) ?? 0;
+      const so = safeNum(s.strikeOuts) ?? 0;
+      const bb = safeNum(s.baseOnBalls) ?? 0;
+      const hbp = safeNum(s.hitByPitch) ?? 0;
+      const sf = safeNum(s.sacFlies) ?? 0;
+      const doubles = safeNum(s.doubles) ?? 0;
+      const triples = safeNum(s.triples) ?? 0;
+      const singles = h - doubles - triples - hr;
+      totalAB += ab;
+      totalH += h;
+      totalHR += hr;
+      totalSO += so;
+      totalPA += ab + bb + hbp + sf;
+      totalTB += singles + (doubles * 2) + (triples * 3) + (hr * 4);
+      totalOBP_num += h + bb + hbp;
+    }
+
+    const avg = totalAB > 0 ? parseFloat((totalH / totalAB).toFixed(3)) : null;
+    const obp = totalPA > 0 ? totalOBP_num / totalPA : 0;
+    const slg = totalAB > 0 ? totalTB / totalAB : 0;
+    const ops = (obp + slg) > 0 ? parseFloat((obp + slg).toFixed(3)) : null;
+
+    mlbPlayerCache.bvpMatchups[cacheKey] = {
+      atBats: totalAB, hits: totalH, homeRuns: totalHR, strikeouts: totalSO,
+      avg, ops, fetchedAt: Date.now(),
+    };
+
+    if (totalAB > 0) {
+      console.log(`[MLB pull] syncBvPMatchup: ${batterId} vs ${pitcherId} — ${totalAB} AB, ${totalH} H, AVG=${avg} OPS=${ops}`);
+    }
+  } catch (err: any) {
+    console.error(`[MLB pull] syncBvPMatchup(${batterId} vs ${pitcherId}) error:`, err.message);
   }
 }

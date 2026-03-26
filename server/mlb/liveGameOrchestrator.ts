@@ -17,7 +17,11 @@ import {
   syncPitcherContext,
   syncWeather,
   syncBullpenUsage,
+  syncPitcherSeasonStats,
+  syncBatterRollingStats,
+  syncBvPMatchup,
   mlbGameCache,
+  mlbPlayerCache,
   type GameStateCache,
 } from "./dataPullService";
 import { estimateRemainingPA } from "./paEstimator";
@@ -262,10 +266,29 @@ export class LiveGameOrchestrator {
       return;
     }
 
-    // Sync all three data sources using MLB Stats gamePk
     await syncGameState(statsPk, gameId);
     await syncContactData(statsPk, gameId);
     await syncPitcherContext(statsPk, gameId);
+
+    const stateAfterSync = mlbGameCache.gameState[gameId];
+    if (stateAfterSync) {
+      const playerSyncPromises: Promise<void>[] = [];
+
+      if (stateAfterSync.pitcherInGame?.playerId) {
+        playerSyncPromises.push(syncPitcherSeasonStats(stateAfterSync.pitcherInGame.playerId));
+      }
+
+      for (const batter of stateAfterSync.battingOrder) {
+        if (batter.playerId && batter.playerId !== "unknown") {
+          playerSyncPromises.push(syncBatterRollingStats(batter.playerId));
+          if (stateAfterSync.pitcherInGame?.playerId) {
+            playerSyncPromises.push(syncBvPMatchup(batter.playerId, stateAfterSync.pitcherInGame.playerId));
+          }
+        }
+      }
+
+      await Promise.allSettled(playerSyncPromises);
+    }
 
     const newState = mlbGameCache.gameState[gameId];
     if (!newState) return;
@@ -471,6 +494,15 @@ export class LiveGameOrchestrator {
           continue;
         }
 
+        const rollingStats = mlbPlayerCache.batterRollingStats[batter.playerId];
+        const pitcherSeasonStats = pitcher ? mlbPlayerCache.pitcherSeasonStats[pitcher.playerId] : undefined;
+        const bvpKey = pitcher ? `${batter.playerId}_vs_${pitcher.playerId}` : null;
+        const bvpData = bvpKey ? mlbPlayerCache.bvpMatchups[bvpKey] : undefined;
+
+        const batterSeasonAvg = rollingStats?.seasonAvg ?? 1.0;
+        const rollingAvg = rollingStats?.last15?.avg;
+        const effectiveSeasonAvg = rollingAvg != null ? rollingAvg : batterSeasonAvg;
+
         const input: MLBPropInput = {
           playerId: batter.playerId,
           playerName: batter.playerName,
@@ -481,7 +513,7 @@ export class LiveGameOrchestrator {
           bookLine: resolvedLine.line,
           overOdds: resolvedLine.overOdds,
           underOdds: resolvedLine.underOdds,
-          seasonAvg: 1.0,
+          seasonAvg: effectiveSeasonAvg,
           plateAppearances: state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0,
           atBats: Math.max(0, state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0),
           currentStatValue: 0,
@@ -504,15 +536,33 @@ export class LiveGameOrchestrator {
           pitcher: {
             pitchCount: pitcher ? state.pitchCount : 0,
             timesThrough: pitcherCtx?.timesThroughOrder ?? 1,
-            era: null,
-            whip: null,
-            kPer9: null,
-            bbPer9: null,
+            era: pitcherSeasonStats?.era ?? null,
+            whip: pitcherSeasonStats?.whip ?? null,
+            kPer9: pitcherSeasonStats?.kPer9 ?? null,
+            bbPer9: pitcherSeasonStats?.bbPer9 ?? null,
             managerLeashShort,
             isPitcherCollapsing,
             pitchMix: pitcherCtx?.pitchMix ?? [],
             throws: pitcher?.throws ?? null,
           },
+          ...(bvpData && bvpData.atBats > 0 ? {
+            bvpHistory: {
+              atBats: bvpData.atBats,
+              hits: bvpData.hits,
+              homeRuns: bvpData.homeRuns,
+              strikeouts: bvpData.strikeouts,
+              avg: bvpData.avg,
+            },
+          } : {}),
+          ...(rollingStats ? {
+            rollingForm: {
+              last7Avg: rollingStats.last7.avg,
+              last15Avg: rollingStats.last15.avg,
+              last30Avg: rollingStats.last30.avg,
+              last7Ops: rollingStats.last7.ops,
+              last15Ops: rollingStats.last15.ops,
+            },
+          } : {}),
           lineup: {
             battingOrderSlot: batter.slot,
             orderTurnoverProximity: 0.5,
@@ -624,6 +674,15 @@ export class LiveGameOrchestrator {
           continue;
         }
 
+        const pitcherSeasonForPitcherMarket = mlbPlayerCache.pitcherSeasonStats[pitcherToEval.playerId];
+
+        const pitcherKper9 = pitcherSeasonForPitcherMarket?.kPer9;
+        const pitcherSeasonAvg = market === "pitcher_strikeouts"
+          ? (pitcherKper9 != null ? pitcherKper9 : 6.0)
+          : market === "hits_allowed"
+            ? (pitcherSeasonForPitcherMarket?.whip != null ? pitcherSeasonForPitcherMarket.whip * 0.72 * 6 : 5.0)
+            : 5.0;
+
         const input: MLBPropInput = {
           playerId: pitcherToEval.playerId,
           playerName: pitcherToEval.playerName,
@@ -634,7 +693,7 @@ export class LiveGameOrchestrator {
           bookLine: resolvedPitcherLine.line,
           overOdds: resolvedPitcherLine.overOdds,
           underOdds: resolvedPitcherLine.underOdds,
-          seasonAvg: market === "pitcher_strikeouts" ? 6.0 : 5.0,
+          seasonAvg: pitcherSeasonAvg,
           plateAppearances: pitcherCtx?.pitchCount
             ? Math.floor(pitcherCtx.pitchCount / 4)
             : 0,
@@ -661,10 +720,10 @@ export class LiveGameOrchestrator {
           pitcher: {
             pitchCount: state.pitchCount,
             timesThrough: pitcherCtx?.timesThroughOrder ?? 1,
-            era: null,
-            whip: null,
-            kPer9: null,
-            bbPer9: null,
+            era: pitcherSeasonForPitcherMarket?.era ?? null,
+            whip: pitcherSeasonForPitcherMarket?.whip ?? null,
+            kPer9: pitcherSeasonForPitcherMarket?.kPer9 ?? null,
+            bbPer9: pitcherSeasonForPitcherMarket?.bbPer9 ?? null,
             managerLeashShort: pitcherCtx
               ? pitcherCtx.timesThroughOrder >= 3 && pitcherCtx.pitchCount > 80
               : false,

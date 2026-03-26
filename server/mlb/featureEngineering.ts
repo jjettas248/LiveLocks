@@ -657,7 +657,22 @@ export function computeFormScore(input: MLBPropInput): number {
     const hardHits = priorABs.filter((ab) => (ab.exitVelocity ?? 0) >= 95).length;
     abBonus = (hits / priorABs.length) * 0.3 + (hardHits / priorABs.length) * 0.2;
   }
-  return Math.min(1, contact * 0.35 + pitcher * 0.20 + env * 0.15 + abBonus + 0.10);
+
+  let rollingBonus = 0;
+  if (input.rollingForm) {
+    const rf = input.rollingForm;
+    const leagueAvg = 0.250;
+    const recent = rf.last7Avg ?? rf.last15Avg;
+    if (recent != null) {
+      if (recent >= 0.350) rollingBonus = 0.12;
+      else if (recent >= 0.300) rollingBonus = 0.08;
+      else if (recent >= leagueAvg) rollingBonus = 0.03;
+      else if (recent < 0.180) rollingBonus = -0.08;
+      else if (recent < 0.200) rollingBonus = -0.04;
+    }
+  }
+
+  return Math.min(1, contact * 0.30 + pitcher * 0.18 + env * 0.12 + abBonus + rollingBonus + 0.10);
 }
 
 export function classifyForm(input: MLBPropInput): FormIndicator {

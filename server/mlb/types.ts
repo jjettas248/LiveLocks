@@ -221,6 +221,14 @@ export interface MLBPropInput {
 
   bvpHistory?: BatterVsPitcherHistory;
   hrrComponents?: HRRComponents;
+
+  rollingForm?: {
+    last7Avg: number | null;
+    last15Avg: number | null;
+    last30Avg: number | null;
+    last7Ops: number | null;
+    last15Ops: number | null;
+  };
 }
 
 export interface ModifierBreakdown {

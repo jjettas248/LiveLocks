@@ -885,8 +885,8 @@ function MlbLiveInner() {
           </div>
           {edgeFeedSignals.length === 0 ? (
             <div className="rounded-xl border border-border/40 bg-card p-8 text-center">
-              <div className="text-sm text-muted-foreground">No edges above threshold</div>
-              <div className="text-xs text-muted-foreground/60 mt-1">Edges require 3%+ edge with verified odds. They appear as live games progress and sportsbook lines update.</div>
+              <div className="text-sm text-muted-foreground">No signals above threshold</div>
+              <div className="text-xs text-muted-foreground/60 mt-1">Signals require ≥60% model confidence. They appear as live games progress and projections update.</div>
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1168,7 +1168,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
       {signals.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-foreground">Edge Signals</h3>
+            <h3 className="text-sm font-bold text-foreground">Signals</h3>
             <div className="flex items-center gap-2">
               {updatedAt > 0 && isElite && (
                 <span className="text-[10px] text-muted-foreground">
