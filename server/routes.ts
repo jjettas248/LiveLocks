@@ -2483,7 +2483,13 @@ export async function registerRoutes(
         { statType: "rebounds",    components: ["rebounds"] },
         { statType: "assists",     components: ["assists"] },
         { statType: "threes",      components: ["threes"] },
+        { statType: "steals",      components: ["steals"] },
+        { statType: "blocks",      components: ["blocks"] },
         { statType: "pts_reb_ast", components: ["points", "rebounds", "assists"] },
+        { statType: "pts_reb",     components: ["points", "rebounds"] },
+        { statType: "pts_ast",     components: ["points", "assists"] },
+        { statType: "reb_ast",     components: ["rebounds", "assists"] },
+        { statType: "stl_blk",     components: ["steals", "blocks"] },
       ];
 
       const parseStat = (val: string) => {

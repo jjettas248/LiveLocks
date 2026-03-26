@@ -440,22 +440,23 @@ export async function getPlayerOdds(
   }
 
   // Per-game+market throttle: if a fetch was already issued for this event+market
-  // within the throttle window, skip the API call and serve from last-known (degraded if present).
+  // within the throttle window, check last-known first; if absent, fall through to
+  // getRawOdds (which has its own cache) and extract data for this player from the
+  // cached response. Never return empty when cached data exists.
   const throttleKey = `${oddsEventId}:${marketKey}`;
   const lastCallTs = lastGameApiCall.get(throttleKey);
   if (lastCallTs !== undefined && Date.now() - lastCallTs < GAME_API_THROTTLE_MS) {
     const lk = lastKnownOdds.get(lastKnownKey);
     if (lk) {
-      console.warn(`[ODDS THROTTLE] Event ${oddsEventId} throttled for ${playerName} (${statType}) — using last-known (degraded)`);
       return makeDegraded(lk.data);
     }
-    console.warn(`[ODDS THROTTLE] Event ${oddsEventId} throttled for ${playerName} (${statType}) — no last-known data, returning empty`);
-    return { isDegraded: false, quotaExhausted: false, books: {} };
+    // No per-player last-known, but the raw odds cache may have data for this player
+    // from a previous fetch. Fall through to getRawOdds which will serve from cache.
+  } else {
+    // Stamp the throttle timestamp at issuance time so concurrent requests for the
+    // same event+market are blocked even before the first request resolves.
+    lastGameApiCall.set(throttleKey, Date.now());
   }
-
-  // Stamp the throttle timestamp at issuance time so concurrent requests for the
-  // same event+market are blocked even before the first request resolves.
-  lastGameApiCall.set(throttleKey, Date.now());
 
   let oddsData: any;
   try {
