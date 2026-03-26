@@ -1,0 +1,199 @@
+You are fixing a CRITICAL mobile crash in the MLB frontend.
+
+The MLB page is blacking out due to React runtime errors from unsafe rendering (undefined data, race conditions, or missing guards).
+
+Your job:
+ELIMINATE ALL POSSIBLE RENDER CRASHES.
+DO NOT REFACTOR ARCHITECTURE.
+ONLY ADD SAFETY + STABILITY.
+
+---
+
+STEP 1 — HARD GUARD ALL MAP OPERATIONS
+
+Find ALL `.map(` usages in:
+
+- mlb-live.tsx
+- GameCard components
+- any MLB child components
+
+Replace with:
+
+const safeArray = Array.isArray(data) ? data : [];
+
+safeArray.map(...)
+
+OR:
+
+{Array.isArray(games) && games.length > 0 ? (
+  games.map(...)
+) : (
+  <div className="text-gray-400 text-center py-6">
+    No data available
+  </div>
+)}
+
+DO NOT allow `.map()` on undefined/null EVER.
+
+---
+
+STEP 2 — DEFAULT ALL API DATA
+
+Where MLB data is fetched:
+
+Ensure response is normalized BEFORE render:
+
+const games = response?.games ?? [];
+const signals = response?.signals ?? [];
+
+NEVER allow undefined into component tree.
+
+---
+
+STEP 3 — ADD LOADING STATE (BLOCK EMPTY RENDER)
+
+At top of mlb-live.tsx:
+
+if (isLoading || !data) {
+  return (
+    <div className="flex items-center justify-center h-screen text-white">
+      Loading MLB...
+    </div>
+  );
+}
+
+---
+
+STEP 4 — ADD ERROR BOUNDARY (CRITICAL)
+
+Create:
+
+components/ErrorBoundary.tsx
+
+Code:
+
+import React from "react";
+
+export class ErrorBoundary extends React.Component<any, { hasError: boolean }> {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error) {
+    console.error("[MLB UI CRASH]", error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="text-white p-6 text-center">
+          Something went wrong loading MLB.
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+---
+
+STEP 5 — WRAP MLB PAGE
+
+In router or page entry:
+
+<ErrorBoundary>
+  <MLBLive />
+</ErrorBoundary>
+
+---
+
+STEP 6 — FIX AUTH LOADING RACE (WOUTER)
+
+Find auth gate:
+
+if (!user) return null;
+
+REPLACE WITH:
+
+if (isLoadingAuth) {
+  return <div className="text-white p-4">Loading...</div>;
+}
+
+if (!user) {
+  return <Redirect to="/auth" />;
+}
+
+---
+
+STEP 7 — SAFE SIGNAL ACCESS
+
+Anywhere:
+
+game.signals.map(...)
+
+REPLACE WITH:
+
+const signals = Array.isArray(game.signals) ? game.signals : [];
+
+signals.map(...)
+
+---
+
+STEP 8 — PREVENT EMPTY OBJECT CRASHES
+
+Before rendering any game:
+
+if (!game || !game.gameId) return null;
+
+---
+
+STEP 9 — CSS FIX FOR MOBILE SAFARI
+
+Find any:
+
+height: 100vh;
+
+REPLACE WITH:
+
+min-height: 100vh;
+overflow-y: auto;
+
+---
+
+STEP 10 — FINAL SAFETY WRAP
+
+At top of MLBLive component:
+
+try {
+  // existing render
+} catch (e) {
+  console.error("[MLB RENDER FAILURE]", e);
+  return <div className="text-white p-4">Failed to load MLB</div>;
+}
+
+---
+
+SUCCESS CRITERIA:
+
+- MLB page NEVER renders blank
+- Mobile no longer blacks out
+- Errors show fallback UI instead of crashing
+- No `.map()` crashes possible
+- Auth loading never returns null screen
+
+DO NOT skip steps.
+DO NOT refactor logic.
+ONLY stabilize rendering.
+
+Execute immediately.
+⚡ What This Fix Does
+Eliminates all undefined crashes
+Handles mobile Safari strict rendering
+Fixes auth race conditions
+Adds fail-safe UI instead of blank screen
