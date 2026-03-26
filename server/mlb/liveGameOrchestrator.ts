@@ -256,6 +256,7 @@ export class LiveGameOrchestrator {
     // Fetch and normalize live game status before triggering engine
     // Engine must only run for genuinely live games
     let normalizedStatus: "live" | "pregame" | "final" | "unknown" = "unknown";
+    let statusSource = "none";
     try {
       const statusUrl = `https://statsapi.mlb.com/api/v1/game/${statsPk}/feed/live`;
       const statusRes = await fetch(statusUrl, {
@@ -266,16 +267,37 @@ export class LiveGameOrchestrator {
         const statusData = (await statusRes.json()) as any;
         const rawAbstractState: string = statusData.gameData?.status?.abstractGameState ?? "";
         normalizedStatus = normalizeMlbStatus(rawAbstractState);
+        if (normalizedStatus !== "unknown") statusSource = "mlbStatsApi";
       }
     } catch {
-      // If status fetch fails, remain "unknown" — engine will be skipped
-      console.warn(`[MLB orchestrator] pollGame: could not fetch status for game ${gameId} — skipping engine`);
+      console.warn(`[MLB orchestrator] pollGame: MLB Stats API status fetch failed for game ${gameId}`);
+    }
+
+    // Fallback: if MLB Stats API returned unknown, use ESPN status from discovery
+    if (normalizedStatus === "unknown" && registeredGame) {
+      const espnRaw = registeredGame.espnStatus ?? "";
+      if (espnRaw === "STATUS_IN_PROGRESS" || espnRaw === "STATUS_DELAYED") {
+        normalizedStatus = "live";
+        statusSource = "espnFallback";
+      } else if (espnRaw === "STATUS_FINAL" || espnRaw === "STATUS_FORFEIT") {
+        normalizedStatus = "final";
+        statusSource = "espnFallback";
+      } else if (registeredGame.startTime) {
+        const startMs = new Date(registeredGame.startTime).getTime();
+        if (startMs > 0 && Date.now() >= startMs) {
+          normalizedStatus = "live";
+          statusSource = "timeFallback";
+        }
+      }
+      if (statusSource !== "none") {
+        console.log(`[MLB orchestrator] Status fallback for game ${gameId}: ${normalizedStatus} (source=${statusSource}, espnStatus=${espnRaw})`);
+      }
     }
 
     if (prevState) {
       const triggers = this.detectStateChange(prevState, newState);
       if (triggers.length > 0) {
-        console.log(`[MLB orchestrator] State change for game ${gameId} (status=${normalizedStatus}): ${triggers.join(", ")}`);
+        console.log(`[MLB orchestrator] State change for game ${gameId} (status=${normalizedStatus}, source=${statusSource}): ${triggers.join(", ")}`);
 
         // On inning change, also sync bullpen
         if (triggers.includes("inning_change")) {
@@ -285,6 +307,10 @@ export class LiveGameOrchestrator {
         // Only trigger engine when game is confirmed live
         await this.triggerEngine(gameId, normalizedStatus);
       }
+    } else if (normalizedStatus === "live") {
+      // First time seeing this game — if it's already live, trigger engine immediately
+      console.log(`[MLB orchestrator] First poll for live game ${gameId} (status=${normalizedStatus}, source=${statusSource}) — triggering engine`);
+      await this.triggerEngine(gameId, normalizedStatus);
     }
 
     this.previousStates.set(gameId, { ...newState });

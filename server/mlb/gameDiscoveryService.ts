@@ -11,6 +11,7 @@ export interface MLBGame {
   startTime: string;
   homePitcher?: string;
   awayPitcher?: string;
+  espnStatus?: string;
 }
 
 function todayDateStrEspn(): string {
@@ -68,19 +69,18 @@ interface MlbScheduleEntry {
   homeName: string;
 }
 
+function yesterdayDateStrMlb(): string {
+  const d = new Date(Date.now() - 86_400_000);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 async function fetchMlbGamePkMap(dateStr: string): Promise<Map<string, MlbScheduleEntry[]>> {
   const pkMap = new Map<string, MlbScheduleEntry[]>();
-  try {
-    const url = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${dateStr}&hydrate=team`;
-    const res = await fetch(url, {
-      headers: { "User-Agent": "LiveLocks/1.0" },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) {
-      console.warn(`[MLB DISCOVERY] MLB Stats schedule HTTP ${res.status} — gamePk mapping unavailable`);
-      return pkMap;
-    }
-    const data = (await res.json()) as any;
+
+  function ingestSchedule(data: any): void {
     for (const date of data.dates ?? []) {
       for (const game of date.games ?? []) {
         const awayAbbr: string = game.teams?.away?.team?.abbreviation ?? "";
@@ -93,10 +93,36 @@ async function fetchMlbGamePkMap(dateStr: string): Promise<Map<string, MlbSchedu
         if (awayAbbr && homeAbbr && gamePk && gamePk !== "0") {
           const key = `${awayAbbr}|${homeAbbr}`;
           const existing = pkMap.get(key) ?? [];
-          existing.push({ gamePk, gameTime, gameNumber, awayName, homeName });
-          pkMap.set(key, existing);
+          if (!existing.some(e => e.gamePk === gamePk)) {
+            existing.push({ gamePk, gameTime, gameNumber, awayName, homeName });
+            pkMap.set(key, existing);
+          }
         }
       }
+    }
+  }
+
+  try {
+    const yesterdayStr = yesterdayDateStrMlb();
+    const [todayRes, yesterdayRes] = await Promise.all([
+      fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${dateStr}&hydrate=team`, {
+        headers: { "User-Agent": "LiveLocks/1.0" },
+        signal: AbortSignal.timeout(8000),
+      }),
+      fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${yesterdayStr}&hydrate=team`, {
+        headers: { "User-Agent": "LiveLocks/1.0" },
+        signal: AbortSignal.timeout(8000),
+      }).catch(() => null),
+    ]);
+
+    if (!todayRes.ok) {
+      console.warn(`[MLB DISCOVERY] MLB Stats schedule HTTP ${todayRes.status} — gamePk mapping unavailable`);
+    } else {
+      ingestSchedule(await todayRes.json());
+    }
+
+    if (yesterdayRes?.ok) {
+      ingestSchedule(await yesterdayRes.json());
     }
   } catch (err: any) {
     console.warn(`[MLB DISCOVERY] fetchMlbGamePkMap error: ${err.message}`);
@@ -185,14 +211,19 @@ function resolveGamePk(
 export async function discoverTodaysGames(): Promise<MLBGame[]> {
   const espnDateStr = todayDateStrEspn();
   const mlbDateStr = todayDateStrMlb();
-  const url = `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${espnDateStr}`;
+  const espnTodayUrl = `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${espnDateStr}`;
+  const espnActiveUrl = `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard`;
 
   try {
-    const [espnRes, pkMap] = await Promise.all([
-      fetch(url, {
+    const [espnRes, activeRes, pkMap] = await Promise.all([
+      fetch(espnTodayUrl, {
         headers: { "User-Agent": "LiveLocks/1.0" },
         signal: AbortSignal.timeout(8000),
       }),
+      fetch(espnActiveUrl, {
+        headers: { "User-Agent": "LiveLocks/1.0" },
+        signal: AbortSignal.timeout(8000),
+      }).catch(() => null),
       fetchMlbGamePkMap(mlbDateStr),
     ]);
 
@@ -225,10 +256,27 @@ export async function discoverTodaysGames(): Promise<MLBGame[]> {
       }>;
     };
 
-    const rawEvents = data.events?.length ?? 0;
+    const activeData = activeRes?.ok ? ((await activeRes.json()) as any) : { events: [] };
+
+    const seenIds = new Set<string>();
+    const mergedEvents: any[] = [];
+    for (const event of data.events ?? []) {
+      seenIds.add(String(event.id));
+      mergedEvents.push(event);
+    }
+    for (const event of activeData.events ?? []) {
+      if (!seenIds.has(String(event.id))) {
+        seenIds.add(String(event.id));
+        mergedEvents.push(event);
+        console.log(`[MLB DISCOVERY] Active-feed game ${event.id} not in today's date feed — merged in`);
+      }
+    }
+
+    const rawEvents = mergedEvents.length;
+    console.log(`[MLB DISCOVERY] rawEvents=${rawEvents} (today=${data.events?.length ?? 0} active=${activeData.events?.length ?? 0})`);
     const games: MLBGame[] = [];
 
-    for (const event of data.events ?? []) {
+    for (const event of mergedEvents) {
       const competition = event.competitions?.[0];
       if (!competition) continue;
 
@@ -266,6 +314,10 @@ export async function discoverTodaysGames(): Promise<MLBGame[]> {
         console.log(`[MLB DISCOVERY] Mapped ${awayAbbrRaw}|${homeAbbrRaw} (espnId=${event.id}) → gamePk=${gamePk}`);
       }
 
+      const espnStatusName: string = event.status?.type?.name
+        ?? competition.status?.type?.name
+        ?? "";
+
       games.push({
         gameId: event.id,
         gamePk,
@@ -274,6 +326,7 @@ export async function discoverTodaysGames(): Promise<MLBGame[]> {
         startTime: event.date ?? "",
         homePitcher,
         awayPitcher,
+        espnStatus: espnStatusName,
       });
     }
 

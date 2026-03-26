@@ -562,19 +562,41 @@ export async function registerRoutes(
       const user = (req as any).user ?? (req as any).resolvedUser ?? null;
       const tier = user?.subscriptionTier ?? null;
 
-      // ── Fetch from ESPN scoreboard — same endpoint and fallback chain as gameDiscoveryService ──
+      // ── Fetch from ESPN scoreboard ──
+      // ESPN lists games by US date, so a late-night game (e.g. 10 PM ET start)
+      // may appear under yesterday's date even though it's still live right now.
+      // Solution: fetch BOTH today's dated feed AND the default (no-date) feed
+      // which always includes currently active games, then merge by gameId.
       const today = new Date();
       const espnDateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
-      const espnUrl = `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${espnDateStr}`;
-      const response = await fetch(espnUrl, {
-        headers: { "User-Agent": "LiveLocks/1.0" },
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!response.ok) throw new Error(`ESPN scoreboard ${response.status}`);
-      const data = (await response.json()) as any;
+      const espnTodayUrl = `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${espnDateStr}`;
+      const espnActiveUrl = `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard`;
 
-      const rawEvents: number = data.events?.length ?? 0;
-      console.log(`[MLB DISCOVERY] live-games rawEvents=${rawEvents}`);
+      const [todayRes, activeRes] = await Promise.all([
+        fetch(espnTodayUrl, { headers: { "User-Agent": "LiveLocks/1.0" }, signal: AbortSignal.timeout(8000) }),
+        fetch(espnActiveUrl, { headers: { "User-Agent": "LiveLocks/1.0" }, signal: AbortSignal.timeout(8000) }),
+      ]);
+
+      if (!todayRes.ok) throw new Error(`ESPN scoreboard ${todayRes.status}`);
+      const todayData = (await todayRes.json()) as any;
+      const activeData = activeRes.ok ? ((await activeRes.json()) as any) : { events: [] };
+
+      const seenIds = new Set<string>();
+      const mergedEvents: any[] = [];
+      for (const event of todayData.events ?? []) {
+        seenIds.add(String(event.id));
+        mergedEvents.push(event);
+      }
+      for (const event of activeData.events ?? []) {
+        if (!seenIds.has(String(event.id))) {
+          seenIds.add(String(event.id));
+          mergedEvents.push(event);
+          console.log(`[MLB DISCOVERY] Active-feed game ${event.id} not in today's date feed — merged in`);
+        }
+      }
+
+      const rawEvents: number = mergedEvents.length;
+      console.log(`[MLB DISCOVERY] live-games rawEvents=${rawEvents} (today=${todayData.events?.length ?? 0} active=${activeData.events?.length ?? 0})`);
 
       // ── Team name fallback chain: displayName → shortDisplayName → name ──
       function resolveTeamName(team: any): string {
@@ -588,7 +610,7 @@ export async function registerRoutes(
       }
 
       const games: any[] = [];
-      for (const event of data.events ?? []) {
+      for (const event of mergedEvents) {
         const competition = event.competitions?.[0];
         if (!competition) continue;
 
