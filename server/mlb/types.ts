@@ -362,6 +362,17 @@ export const SUPPRESSION_RULES: Record<MLBMarket, { minEdge: number; minComplete
   hrr:                { minEdge: 3.0,  minCompletedAB: 1, requireContactData: false },
 };
 
+export type FormIndicator = "hot" | "warm" | "neutral" | "cold" | "extreme_cold";
+
+export const FORM_THRESHOLDS = {
+  hot: 0.65,
+  warm: 0.40,
+  cold: 0.20,
+  extremeCold: 0.08,
+} as const;
+
+export const HR_MIN_QUALIFYING_FACTORS = 3;
+
 export const MLB_MARKET_MIN_GAP: Record<MLBMarket, number> = {
   hits:               0.25,
   total_bases:        0.35,

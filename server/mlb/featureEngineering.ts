@@ -6,8 +6,9 @@ import type {
   WeatherParkContext,
   MLBPropInput,
   BatterVsPitcherHistory,
+  FormIndicator,
 } from "./types";
-import { STANDARD_THRESHOLDS, EARLY_EXPLOSIVE_THRESHOLDS } from "./types";
+import { STANDARD_THRESHOLDS, EARLY_EXPLOSIVE_THRESHOLDS, FORM_THRESHOLDS, HR_MIN_QUALIFYING_FACTORS } from "./types";
 import { normalizePercentage } from "../services/normalizationService";
 
 function clampRange(val: number, min: number, max: number): number {
@@ -644,3 +645,118 @@ export function compositeHitterScore(input: MLBPropInput): number {
 // Tier 3 (home_runs, hrr): stricter composite gate
 export const COMPOSITE_TIER1_THRESHOLD = 1.2;
 export const COMPOSITE_TIER3_THRESHOLD = 2.0;
+
+export function computeFormScore(input: MLBPropInput): number {
+  const contact = contactQualityScore(input);
+  const pitcher = pitcherVulnerabilityScore(input);
+  const env = environmentScore(input);
+  const priorABs = input.contactQuality.priorABResults;
+  let abBonus = 0;
+  if (priorABs.length > 0) {
+    const hits = priorABs.filter((ab) => ab.outcome === "hit").length;
+    const hardHits = priorABs.filter((ab) => (ab.exitVelocity ?? 0) >= 95).length;
+    abBonus = (hits / priorABs.length) * 0.3 + (hardHits / priorABs.length) * 0.2;
+  }
+  return Math.min(1, contact * 0.35 + pitcher * 0.20 + env * 0.15 + abBonus + 0.10);
+}
+
+export function classifyForm(input: MLBPropInput): FormIndicator {
+  const score = computeFormScore(input);
+  if (score >= FORM_THRESHOLDS.hot) return "hot";
+  if (score >= FORM_THRESHOLDS.warm) return "warm";
+  if (score <= FORM_THRESHOLDS.extremeCold) return "extreme_cold";
+  if (score <= FORM_THRESHOLDS.cold) return "cold";
+  return "neutral";
+}
+
+export interface HRQualifyingFactors {
+  hardHitContact: boolean;
+  favorableWind: boolean;
+  hrPronePitcher: boolean;
+  strongPitchMatchup: boolean;
+  batterParkSuccess: boolean;
+  fatiguePitcher: boolean;
+  deepFlyout: boolean;
+  count: number;
+  labels: string[];
+}
+
+export function computeHRQualifyingFactors(input: MLBPropInput): HRQualifyingFactors {
+  const factors: HRQualifyingFactors = {
+    hardHitContact: false,
+    favorableWind: false,
+    hrPronePitcher: false,
+    strongPitchMatchup: false,
+    batterParkSuccess: false,
+    fatiguePitcher: false,
+    deepFlyout: false,
+    count: 0,
+    labels: [],
+  };
+
+  const priorABs = input.contactQuality.priorABResults;
+  const hardHits = priorABs.filter((ab) => (ab.exitVelocity ?? 0) >= 100);
+  if (hardHits.length > 0) {
+    factors.hardHitContact = true;
+    const bestEv = Math.max(...hardHits.map((h) => h.exitVelocity ?? 0));
+    factors.labels.push(`${hardHits.length} Hard-Hit Ball${hardHits.length > 1 ? "s" : ""} (${Math.round(bestEv)}+ EV)`);
+  }
+
+  if (
+    !input.weatherPark.isIndoors &&
+    input.weatherPark.windDirection === "out" &&
+    (input.weatherPark.windSpeed ?? 0) >= 8
+  ) {
+    factors.favorableWind = true;
+    factors.labels.push(`Wind Out (${input.weatherPark.windSpeed} mph)`);
+  }
+
+  const era = input.pitcher.era;
+  const hrPer9 = era !== null && era >= 4.5;
+  if (hrPer9 || input.pitcher.isPitcherCollapsing) {
+    factors.hrPronePitcher = true;
+    factors.labels.push("HR-Prone Pitcher");
+  }
+
+  const handedness = computeHandednessMatchupScore(input);
+  if (handedness >= 0.04) {
+    factors.strongPitchMatchup = true;
+    factors.labels.push("Strong Pitch Matchup");
+  }
+
+  const parkHistory = input.weatherPark.parkHistoryFactor ?? input.parkHistoryFactor;
+  if (parkHistory !== null && parkHistory !== undefined && parkHistory >= 1.08) {
+    factors.batterParkSuccess = true;
+    factors.labels.push("Crushes This Park");
+  }
+
+  if (input.pitcher.pitchCount >= 80 || input.pitcher.timesThrough >= 3) {
+    factors.fatiguePitcher = true;
+    factors.labels.push("Pitcher Fatigue");
+  }
+
+  const deepFlys = priorABs.filter(
+    (ab) => ab.outcome === "out" && (ab.distance ?? 0) >= 350 && (ab.launchAngle ?? 0) >= 20
+  );
+  if (deepFlys.length > 0) {
+    factors.deepFlyout = true;
+    factors.labels.push(`${deepFlys.length} Deep Flyout${deepFlys.length > 1 ? "s" : ""}`);
+  }
+
+  factors.count = [
+    factors.hardHitContact,
+    factors.favorableWind,
+    factors.hrPronePitcher,
+    factors.strongPitchMatchup,
+    factors.batterParkSuccess,
+    factors.fatiguePitcher,
+    factors.deepFlyout,
+  ].filter(Boolean).length;
+
+  return factors;
+}
+
+export function meetsHRQualificationGate(input: MLBPropInput): { passes: boolean; factors: HRQualifyingFactors } {
+  const factors = computeHRQualifyingFactors(input);
+  return { passes: factors.count >= HR_MIN_QUALIFYING_FACTORS, factors };
+}
