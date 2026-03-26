@@ -41,6 +41,7 @@ interface NCAABMarketClient {
   edge: number | null;
   side: MarketSide;
   confidenceTier: MarketConfidenceTier;
+  fallback?: boolean;
 }
 
 interface NCAABPlay {
@@ -4159,7 +4160,7 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                 </div>
                 {/* Play cards — canonical market-based Top Plays (Phase D) */}
                 {(() => {
-                  const MARKET_KEYS: NCAABMarketKey[] = ["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"];
+                  const OTHER_MARKET_KEYS: NCAABMarketKey[] = ["full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"];
                   const TIER_STYLES: Record<string, { color: string; bg: string; border: string }> = {
                     ELITE: { color: "#00d4aa", bg: "rgba(0,212,170,0.12)", border: "rgba(0,212,170,0.35)" },
                     STRONG: { color: "#f59e0b", bg: "rgba(245,158,11,0.1)", border: "rgba(245,158,11,0.3)" },
@@ -4167,23 +4168,34 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                     NONE: { color: "#52525b", bg: "rgba(255,255,255,0.02)", border: "#27272a" },
                   };
                   type TopPlayEntry = { play: NCAABPlay; market: NCAABMarketClient };
-                  const allEntries: TopPlayEntry[] = [];
+
+                  // 1. Collect all games with a full_total market (includes fallback markets).
+                  //    Sort by abs(modelProb - 50) descending — strongest lean pinned first.
+                  //    This is the primary ranking criterion per task spec.
+                  const gamesWithFullTotal: { play: NCAABPlay; ftMkt: NCAABMarketClient; ftEdge: number }[] = [];
                   for (const p of sortedPlays) {
+                    const ftMkt = p.engineOutput?.markets?.full_total;
+                    if (!ftMkt) continue;
+                    const ftEdge = Math.abs((ftMkt.modelProb ?? 50) - 50);
+                    gamesWithFullTotal.push({ play: p, ftMkt, ftEdge });
+                  }
+                  gamesWithFullTotal.sort((a, b) => b.ftEdge - a.ftEdge);
+
+                  // 2. Build top entries: for each game, the full_total market card is always first.
+                  //    Then append any other available markets for that game.
+                  const allEntries: TopPlayEntry[] = [];
+                  for (const { play: p, ftMkt } of gamesWithFullTotal) {
+                    allEntries.push({ play: p, market: ftMkt });
                     if (!p.engineOutput?.markets) continue;
-                    const seen = new Map<string, TopPlayEntry>();
-                    for (const key of MARKET_KEYS) {
+                    for (const key of OTHER_MARKET_KEYS) {
                       const mkt = p.engineOutput.markets[key];
                       if (!mkt?.available || mkt.edge === null) continue;
-                      const existing = seen.get(key);
-                      if (existing && Math.abs(existing.market.edge ?? 0) >= Math.abs(mkt.edge)) continue;
-                      seen.set(key, { play: p, market: mkt });
+                      allEntries.push({ play: p, market: mkt });
                     }
-                    Array.from(seen.values()).forEach(entry => allEntries.push(entry));
                   }
-                  allEntries.sort((a, b) => Math.abs(b.market.edge ?? 0) - Math.abs(a.market.edge ?? 0));
                   const topEntries = allEntries.slice(0, 20);
                   topEntries.forEach(entry => {
-                    console.log("[TOP PLAY]", { gameId: entry.play.gameId, marketKey: entry.market.marketKey, available: entry.market.available, edge: entry.market.edge });
+                    console.log("[TOP PLAY]", { gameId: entry.play.gameId, marketKey: entry.market.marketKey, available: entry.market.available, edge: entry.market.edge, fallback: entry.market.fallback ?? false });
                     const cardMarket = entry.play.engineOutput?.markets?.[entry.market.marketKey as NCAABMarketKey];
                     if (!cardMarket?.available) {
                       console.warn("[CARD VS TOP PLAY MISMATCH]", { gameId: entry.play.gameId, topPlaysSelectedKey: entry.market.marketKey, cardMarketAvailable: cardMarket?.available ?? false, cardMarketObject: cardMarket ?? null });
@@ -4195,10 +4207,14 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                     <div className="flex gap-3 overflow-x-auto pb-2" style={{ scrollSnapType: "x mandatory" }}>
                       {topEntries.map((entry, idx) => {
                         const { play: p, market: mkt } = entry;
+                        const isFallback = mkt.fallback === true;
                         const tierStyle = TIER_STYLES[mkt.confidenceTier] ?? TIER_STYLES.NONE;
+                        const fallbackStyle = { color: "#71717a", bg: "rgba(113,113,122,0.1)", border: "rgba(113,113,122,0.3)" };
+                        const cardStyle = isFallback ? fallbackStyle : tierStyle;
                         const edgeSide = mkt.side === "OVER" ? "Over" : mkt.side === "UNDER" ? "Under" : mkt.side === "HOME" ? "Home" : mkt.side === "AWAY" ? "Away" : "—";
-                        const edgeColor = (mkt.side === "OVER" || mkt.side === "HOME") ? "#00d4aa" : (mkt.side === "UNDER" || mkt.side === "AWAY") ? "#ef4444" : "#71717a";
+                        const edgeColor = isFallback ? "#71717a" : (mkt.side === "OVER" || mkt.side === "HOME") ? "#00d4aa" : (mkt.side === "UNDER" || mkt.side === "AWAY") ? "#ef4444" : "#71717a";
                         const halfLabel = p.half === 1 ? "H1" : p.half === 2 ? "H2" : "OT";
+                        const confidenceDisplay = isFallback ? "Low" : mkt.modelProb != null ? `${mkt.modelProb.toFixed(1)}%` : "—";
                         return (
                           <div
                             key={`${p.gameId}-${mkt.marketKey}-${idx}`}
@@ -4207,7 +4223,7 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                             style={{
                               width: 260,
                               background: "#0a0a0a",
-                              border: `1px solid ${tierStyle.border}`,
+                              border: `1px solid ${cardStyle.border}`,
                               scrollSnapAlign: "start",
                             }}
                           >
@@ -4219,7 +4235,15 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                                 </span>
                                 <span className="text-[10px] font-semibold" style={{ color: "#4ade80" }}>{halfLabel} · {p.clock}</span>
                               </div>
-                              {mkt.confidenceTier !== "NONE" && (
+                              {isFallback ? (
+                                <span
+                                  data-testid={`ncaab-fallback-badge-${p.gameId}-${mkt.marketKey}`}
+                                  className="text-[9px] font-black px-2 py-0.5 rounded-full"
+                                  style={{ background: "rgba(113,113,122,0.12)", color: "#71717a", border: "1px solid rgba(113,113,122,0.3)" }}
+                                >
+                                  Lean · Low Confidence
+                                </span>
+                              ) : mkt.confidenceTier !== "NONE" && (
                                 <span
                                   data-testid={`ncaab-tier-badge-${p.gameId}-${mkt.marketKey}`}
                                   className="text-[9px] font-black px-2 py-0.5 rounded-full"
@@ -4241,9 +4265,9 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                               <div>
                                 <span className="text-sm font-bold" style={{ color: edgeColor }}>{edgeSide} {mkt.bookLine ?? "—"}</span>
                                 <span className="text-xs ml-1.5 tabular-nums" style={{ color: edgeColor }}>
-                                  {mkt.modelProb != null ? `${mkt.modelProb.toFixed(1)}%` : "—"}
+                                  {confidenceDisplay}
                                 </span>
-                                {mkt.edge != null && Math.abs(mkt.edge) >= 4 && (
+                                {!isFallback && mkt.edge != null && Math.abs(mkt.edge) >= 4 && (
                                   <span className="text-[10px] ml-1 tabular-nums" style={{ color: "#f59e0b" }}>
                                     +{Math.abs(mkt.edge).toFixed(1)}pp
                                   </span>

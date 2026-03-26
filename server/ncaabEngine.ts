@@ -131,6 +131,7 @@ export interface NCAABMarket {
   fadeRecommended?: boolean | null;
   adjustedEdgeScore?: number | null;
   isDerived?: boolean;
+  fallback?: boolean;
 }
 
 export type NCAABMarkets = Record<NCAABMarketKey, NCAABMarket>;
@@ -1225,6 +1226,44 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
     if (isDerived && totalMarket.modelProb != null) {
       totalMarket.modelProb = round1(Math.max(35, Math.min(65, totalMarket.modelProb)));
     }
+  }
+
+  // ── Fallback Exposure Layer ───────────────────────────────────────────────
+  // When no qualified edge cleared guardrails but full_total data exists,
+  // surface the market as a labeled fallback play (low confidence).
+  // All guardrails above remain intact — this only changes exposure, not math.
+  const fallbackProj = markets.full_total.projection ?? round1(projection.finalProjectedTotal);
+  if (!markets.full_total.available && input.liveTotalLine !== null && isFinite(fallbackProj) && !isNaN(fallbackProj)) {
+    const mkt = markets.full_total;
+    const proj = fallbackProj;
+    const line = input.liveTotalLine;
+
+    // Infer lean direction from projection vs line
+    const leanOver = proj > line;
+    const inferredSide: MarketSide = leanOver ? "OVER" : "UNDER";
+
+    // Clamp modelProb to 42–48 (lean under) or 52–58 (lean over) to convey low conviction
+    const rawProb = mkt.modelProb ?? (leanOver ? 53 : 47);
+    const clampedProb = leanOver
+      ? round1(Math.max(52, Math.min(58, rawProb)))
+      : round1(Math.max(42, Math.min(48, rawProb)));
+
+    mkt.available = true;
+    mkt.fallback = true;
+    if (mkt.side === null) {
+      mkt.side = inferredSide;
+    }
+    mkt.modelProb = clampedProb;
+    mkt.bookLine = line;
+    mkt.projection = proj;
+    // "NONE" is the correct tier for fallbacks — the union only has ELITE|STRONG|VALUE|NONE.
+    // Low-confidence semantics are signaled to the UI via mkt.fallback===true, not via tier.
+    mkt.confidenceTier = "NONE";
+    mkt.edge = round1(Math.abs(clampedProb - 50));
+
+    console.log(
+      `[NCAAB FALLBACK EXPOSED] gameId=${input.gameId} side=${inferredSide} prob=${clampedProb} line=${line} proj=${proj}`
+    );
   }
 
   const CANONICAL_VERDICT_MAP: Record<NCAABMarketKey, NCAABMarketType> = {

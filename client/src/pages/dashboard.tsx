@@ -1127,7 +1127,8 @@ export default function Dashboard() {
   const ncaabSubtitle = (() => {
     const live = ncaabGames.filter(g => g.status === "In Progress").length;
     const halftime = ncaabGames.filter(g => g.status === "Halftime").length;
-    if (live > 0) return { text: `${live} game${live === 1 ? "" : "s"} live now — engine is running`, color: "#00d4aa" };
+    // Top play is always visible when games are live — strong edge or labeled fallback lean
+    if (live > 0) return { text: `${live} game${live === 1 ? "" : "s"} live — top play always on`, color: "#00d4aa" };
     if (halftime > 0) return { text: "Games at halftime — 2H edges ready", color: "#f59e0b" };
     return { text: "NCAAB Live + full access now active", color: "#a1a1aa" };
   })();
@@ -3723,7 +3724,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* NCAAB Tab — live data for Pro, All Sports, and Admin */}
+        {/* NCAAB Tab — top plays feed always renders (real edge or fallback lean); requires Pro, All Sports, or Admin */}
         {activeTab === "ncaab" && hasNcaabAccess && (
           <NCAABAdminTab
             key={ncaabResetKey}
