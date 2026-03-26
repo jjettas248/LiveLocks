@@ -50,6 +50,14 @@ I prefer clear and concise explanations. When implementing new features or makin
 - **MLB Cross-Date Fix**: ESPN lists late-night US games (e.g. west coast 10PM+ ET) under yesterday's US date in their dated feed. Discovery service (`gameDiscoveryService.ts`) now fetches BOTH the today-dated ESPN feed AND the default active feed (no date param), merging by gameId to capture cross-date games. Also fetches yesterday's MLB Stats API schedule for gamePk resolution. The orchestrator (`liveGameOrchestrator.ts`) uses ESPN `STATUS_IN_PROGRESS` as a fallback when MLB Stats API `feed/live` returns empty for a gamePk, and fires the engine immediately on first poll when a game is detected as live.
 - **Roster Sync**: An API endpoint to pull live ESPN rosters and map team abbreviations.
 
+### Decision Engine Dashboard
+- **Top Plays Panel**: Cross-sport feed aggregating NBA, NCAAB, and MLB signals ranked by edge + probability. Uses `SportSignalCard` shared component with `ConfidenceBadge` (ELITE/STRONG/VALUE/NO_EDGE tiers). API: `GET /api/top-plays`.
+- **Trust Track Record Panel**: Public-facing 7-day win rate, ROI, and per-sport breakdown sourced from `persisted_plays`. Pushes excluded from win-rate denominator. API: `GET /api/public-analytics/summary`.
+- **User Status Rail**: Shows tier badge, plays used, live signal counts, 7-day win rate. API: `GET /api/live-signal-counts`.
+- **Live Update Toast**: Notifies users of new ELITE edges detected across sports.
+- **Shared Signal Components**: `SportSignalCard`, `ConfidenceBadge`, `SignalSkeletonCard`, `ShareSignalButton`, `CopyBetButton` in `client/src/components/signals/`. Used across all sports.
+- **Backend Services**: `topPlaysService.ts` (buildTopPlays aggregator), `publicAnalyticsService.ts` (getPublicAnalyticsSummary from persisted_plays).
+
 ### Admin Panel
 - Provides an interface to view users, manage subscription tiers, reset play counts, and review user feedback.
 - Allows configuration of the daily slate reset time.

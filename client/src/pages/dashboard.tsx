@@ -23,6 +23,10 @@ import { useAuth } from "@/hooks/use-auth";
 import { usePullRefresh } from "@/hooks/use-pull-refresh";
 import { hasProAccess } from "@/lib/tierUtils";
 import { useLocation } from "wouter";
+import { TopPlaysPanel } from "@/components/dashboard/TopPlaysPanel";
+import { TrustTrackRecordPanel } from "@/components/dashboard/TrustTrackRecordPanel";
+import { UserStatusRail } from "@/components/dashboard/UserStatusRail";
+import { LiveUpdateToast } from "@/components/common/LiveUpdateToast";
 import {
   Activity,
   Clock,
@@ -1808,6 +1812,39 @@ export default function Dashboard() {
             subtitleColor={ncaabSubtitle.color}
           />
         )}
+
+        <LiveUpdateToast />
+
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-4">
+          <div className="space-y-4">
+            <TopPlaysPanel
+              isElite={effectiveTier === "elite" || !!user?.isAdmin}
+              onNavigateToSport={(sport) => {
+                if (sport === "nba") setActiveTab("calculator");
+                else if (sport === "ncaab") {
+                  if (!hasNcaabAccess) {
+                    setUpgradeModalState({ playsUsed: user?.playsUsedToday ?? 0, limit: 3 });
+                    setShowUpgradeModal(true);
+                    return;
+                  }
+                  setActiveTab("ncaab");
+                } else if (sport === "mlb") {
+                  setActiveTab("calculator");
+                }
+              }}
+            />
+            <TrustTrackRecordPanel />
+          </div>
+          <UserStatusRail
+            tier={effectiveTier ?? "free"}
+            playsUsed={playsUsed}
+            playsLimit={3}
+            onUpgradeClick={() => {
+              setUpgradeModalState({ playsUsed: user?.playsUsedToday ?? 0, limit: 3 });
+              setShowUpgradeModal(true);
+            }}
+          />
+        </div>
 
         {scanningEdges && (
           <div

@@ -5037,6 +5037,101 @@ export function registerAnalyticsRoutes(app: Express): void {
   //
   // AUDIT ENDPOINT CONTRACT (STRICT — DO NOT VIOLATE):
   // - This endpoint reads signal results from calcLogEntries ONLY.
+  app.get("/api/top-plays", requireAuth, async (_req, res) => {
+    try {
+      const { buildTopPlays } = await import("./services/topPlaysService");
+
+      const mlbSignals: any[] = [];
+      for (const [, cached] of mlbSignalsCache) {
+        if (cached && cached.signals?.length > 0) {
+          for (const sig of cached.signals) mlbSignals.push(sig);
+        }
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      const { plays: recentPlays } = await storage.getPlays({ date: today, settled: "pending", limit: 50 });
+      const nbaSignals = recentPlays
+        .filter((p: any) => p.sport === "nba" && p.prob)
+        .map((p: any) => ({
+          playerId: p.playerId,
+          playerName: p.playerName,
+          market: p.market,
+          enginePct: parseFloat(String(p.prob)),
+          edge: p.edgeGap ? parseFloat(String(p.edgeGap)) : 0,
+          bookLine: p.line ? parseFloat(String(p.line)) : null,
+          projection: p.projection ? parseFloat(String(p.projection)) : null,
+          recommendedSide: p.direction?.toUpperCase() ?? "OVER",
+          gameId: p.gameId,
+          updatedAt: p.timestamp?.toISOString() ?? new Date().toISOString(),
+        }));
+
+      const ncaabSignals = recentPlays
+        .filter((p: any) => p.sport === "ncaab" && p.prob)
+        .map((p: any) => ({
+          gameId: p.gameId,
+          teamName: p.playerName ?? p.team ?? "NCAAB",
+          market: p.market,
+          probability: parseFloat(String(p.prob)),
+          edge: p.edgeGap ? parseFloat(String(p.edgeGap)) : 0,
+          line: p.line ? parseFloat(String(p.line)) : null,
+          projection: p.projection ? parseFloat(String(p.projection)) : null,
+          side: p.direction?.toUpperCase() ?? "OVER",
+          updatedAt: p.timestamp?.toISOString() ?? new Date().toISOString(),
+        }));
+
+      const plays = buildTopPlays(nbaSignals, ncaabSignals, mlbSignals, 10);
+      return res.json({ plays });
+    } catch (e: any) {
+      console.error("[top-plays]", e.message);
+      return res.json({ plays: [] });
+    }
+  });
+
+  app.get("/api/public-analytics/summary", async (_req, res) => {
+    try {
+      const { getPublicAnalyticsSummary } = await import("./services/publicAnalyticsService");
+      const summary = await getPublicAnalyticsSummary();
+      return res.json(summary);
+    } catch (e: any) {
+      console.error("[public-analytics]", e.message);
+      return res.json({
+        last7Days: { winRate: 0, roi: 0, plays: 0 },
+        bySport: [],
+        recentResults: [],
+      });
+    }
+  });
+
+  app.get("/api/live-signal-counts", requireAuth, async (_req, res) => {
+    try {
+      let nbaElite = 0, ncaabElite = 0, mlbElite = 0, totalLive = 0;
+
+      for (const [, cached] of mlbSignalsCache) {
+        if (cached?.signals) {
+          for (const sig of cached.signals) {
+            totalLive++;
+            if (typeof sig.enginePct === "number" && sig.enginePct >= 75) mlbElite++;
+          }
+        }
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      const { plays: recentPlays } = await storage.getPlays({ date: today, settled: "pending", limit: 100 });
+      for (const p of recentPlays) {
+        if (p.sport === "mlb") continue;
+        const prob = p.prob ? parseFloat(String(p.prob)) : 0;
+        totalLive++;
+        if (p.sport === "nba" && prob >= 75) nbaElite++;
+        if (p.sport === "ncaab" && prob >= 75) ncaabElite++;
+      }
+
+      return res.json({ nbaElite, ncaabElite, mlbElite, totalLive });
+    } catch (e: any) {
+      console.error("[live-signal-counts]", e.message);
+      return res.json({ nbaElite: 0, ncaabElite: 0, mlbElite: 0, totalLive: 0 });
+    }
+  });
+
   // - It must NEVER reimplement, recompute, or approximate any helper logic
   //   from the production signal evaluation path (routes.ts live-signals /
   //   halftime handler, or storage.ts calculateProbability).
