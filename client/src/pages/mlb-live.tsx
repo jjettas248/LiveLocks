@@ -305,6 +305,45 @@ function formatOdds(n: number): string {
   return n > 0 ? `+${n}` : String(n);
 }
 
+function generateTweet(sig: MLBSignal, isElite: boolean): string {
+  const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
+  const side = sig.recommendedSide;
+  const line = sig.bookLine != null ? sig.bookLine : "";
+  const pct = sig.enginePct.toFixed(1);
+  const edge = sig.edge != null ? `+${sig.edge.toFixed(1)}%` : "";
+
+  const bullets = sig.explanationBullets ?? [];
+  const topBullets = bullets.slice(0, 2).map((b) => `- ${b}`).join("\n");
+
+  const formTag = sig.formIndicator && sig.formIndicator !== "NEUTRAL" ? ` [${sig.formIndicator}]` : "";
+  const matchup = sig.matchupTag ? ` (${sig.matchupTag})` : "";
+
+  if (isElite) {
+    const evLine = sig.evPct != null ? `EV: ${sig.evPct > 0 ? "+" : ""}${sig.evPct.toFixed(1)}%` : "";
+    const hrLine = sig.hrFactors && sig.hrFactors.count > 0
+      ? `HR Factors: ${sig.hrFactors.labels.join(", ")}`
+      : "";
+
+    return [
+      `${sig.playerName}${formTag} | ${marketLabel} ${side} ${line}`,
+      `Engine: ${pct}% | Edge: ${edge}${evLine ? ` | ${evLine}` : ""}`,
+      matchup ? `Matchup: ${matchup.trim().replace(/[()]/g, "")}` : "",
+      hrLine,
+      topBullets,
+      "",
+      "Powered by LiveLocks",
+    ].filter(Boolean).join("\n");
+  }
+
+  return [
+    `${sig.playerName} | ${marketLabel} ${side} ${line}`,
+    `Engine: ${pct}%${edge ? ` | Edge: ${edge}` : ""}`,
+    topBullets,
+    "",
+    "Powered by LiveLocks",
+  ].filter(Boolean).join("\n");
+}
+
 function isValidSignal(sig: MLBSignal, selectedGameId: string, rosterPlayerIds?: Set<string>): boolean {
   if (!sig.playerId) return false;
   if (!sig.market) return false;
@@ -1191,12 +1230,32 @@ function MlbLiveInner() {
                             <span className="text-xs font-bold tracking-wide" style={{ color: style.dot }}>
                               {sig.recommendedSide}{sig.bookLine != null ? ` ${sig.bookLine}` : ""}
                             </span>
-                            <button
-                              data-testid={`button-mlb-add-parlay-${sig.playerId}-${sig.market}`}
-                              className="text-xs px-3 py-1 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                            >
-                              + Parlay
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                data-testid={`button-mlb-tweet-${sig.playerId}-${sig.market}`}
+                                className="text-xs px-3 py-1 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                                onClick={() => {
+                                  const tweet = generateTweet(sig, isElite);
+                                  if (navigator.clipboard && navigator.clipboard.writeText) {
+                                    navigator.clipboard.writeText(tweet).then(() => {
+                                      const btn = document.querySelector(`[data-testid="button-mlb-tweet-${sig.playerId}-${sig.market}"]`);
+                                      if (btn) {
+                                        btn.textContent = "Copied!";
+                                        setTimeout(() => { btn.textContent = "Tweet"; }, 1500);
+                                      }
+                                    }).catch(() => {});
+                                  }
+                                }}
+                              >
+                                Tweet
+                              </button>
+                              <button
+                                data-testid={`button-mlb-add-parlay-${sig.playerId}-${sig.market}`}
+                                className="text-xs px-3 py-1 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                              >
+                                + Parlay
+                              </button>
+                            </div>
                           </div>
 
                           {(sig.bestOdds?.sportsbook || sig.sportsbook) && sig.bookLine != null && (() => {

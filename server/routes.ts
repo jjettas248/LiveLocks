@@ -1000,7 +1000,7 @@ export async function registerRoutes(
           sportsbook: o.sportsbook ?? null,
           derivedLine: o.isDerivedLine ?? false,
           signalTimestamp: o.signalTimestamp ?? o.engineGeneratedAt ?? Date.now(),
-          formIndicator: o.formIndicator ?? null,
+          formIndicator: o.formIndicator ? o.formIndicator.toUpperCase().replace("EXTREME_COLD", "COLD") : null,
           formScore: o.formScore ?? null,
           evPct: o.evPct ?? null,
           hrFactors: o.hrFactors ?? null,
