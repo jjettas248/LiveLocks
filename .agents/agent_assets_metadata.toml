@@ -24,3 +24,9 @@ id = "E1ddCP_KXAFG2WREwP9os"
 uri = "file://LiveLocks_Task76_Audit_Report.md"
 type = "text"
 title = "Task #76 — Full System Audit Report"
+
+[[outputs]]
+id = "JYjmu5fwDliyk_Y1XYPyU"
+uri = "file://.local/product_audit.md"
+type = "text"
+title = "LiveLocks Full Product + UX Audit"
