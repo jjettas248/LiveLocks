@@ -301,6 +301,12 @@ export interface MLBPropOutput {
   sportsbook: string | null;
   isDerivedLine: boolean;
   signalTimestamp: number;
+  formIndicator: FormIndicator;
+  formScore: number;
+  evPct: number;
+  hrFactors?: { count: number; labels: string[] };
+  contextScore: number;
+  matchupTag: string | null;
 }
 
 export const STANDARD_THRESHOLDS = {

@@ -1000,6 +1000,13 @@ export async function registerRoutes(
           sportsbook: o.sportsbook ?? null,
           derivedLine: o.isDerivedLine ?? false,
           signalTimestamp: o.signalTimestamp ?? o.engineGeneratedAt ?? Date.now(),
+          formIndicator: o.formIndicator ?? null,
+          formScore: o.formScore ?? null,
+          evPct: o.evPct ?? null,
+          hrFactors: o.hrFactors ?? null,
+          contextScore: o.contextScore ?? null,
+          matchupTag: o.matchupTag ?? null,
+          explanationBullets: o.explanationBullets ?? [],
         };
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);

@@ -81,6 +81,10 @@ import {
   compositeHitterScore,
   COMPOSITE_TIER1_THRESHOLD,
   COMPOSITE_TIER3_THRESHOLD,
+  classifyForm,
+  computeFormScore,
+  computeHRQualifyingFactors,
+  meetsHRQualificationGate,
 } from "./featureEngineering";
 import { projectBaseValue } from "./projections";
 import { computeRawProbability, clampProjection, clampProbability } from "./probability";
@@ -202,76 +206,76 @@ function checkSuppression(
   return { suppressed: false, reason: null };
 }
 
-function buildExplanationBullets(input: MLBPropInput, output: Partial<MLBPropOutput>): string[] {
+function translateToScoutReport(input: MLBPropInput, output: Partial<MLBPropOutput>): string[] {
   const bullets: string[] = [];
+  const priorABs = input.contactQuality.priorABResults;
 
-  const ev = input.contactQuality.exitVelocity;
-  const la = input.contactQuality.launchAngle;
-  const contactTier = classifyContactQuality(input.contactQuality);
-
-  if (ev !== null && la !== null && (contactTier === "ELITE" || contactTier === "HARD")) {
-    bullets.push(`${contactTier === "ELITE" ? "Elite" : "Hard"} contact quality today (${ev} mph EV / ${la}° launch angle)`);
+  const hardHits = priorABs.filter((ab) => (ab.exitVelocity ?? 0) >= 100);
+  if (hardHits.length > 0) {
+    const bestEv = Math.max(...hardHits.map((h) => h.exitVelocity ?? 0));
+    bullets.push(`${hardHits.length} Hard-Hit Ball${hardHits.length > 1 ? "s" : ""} (${Math.round(bestEv)}+ EV)`);
   } else {
-    bullets.push(`Contact quality: ${contactTier.toLowerCase()} (EV ${ev ?? "N/A"} mph)`);
+    const contactTier = classifyContactQuality(input.contactQuality);
+    if (contactTier === "ELITE" || contactTier === "HARD") {
+      bullets.push("Quality contact today");
+    }
   }
 
-  const pitcherScore = computePitcherContextScore(input.pitcher);
   if (input.pitcher.pitchCount >= 90) {
-    bullets.push(`Starter at high pitch count (${input.pitcher.pitchCount}) — fatigue risk elevated`);
+    bullets.push("Fatigue — High Pitch Count");
   } else if (input.pitcher.isPitcherCollapsing) {
-    bullets.push("Pitcher currently collapsing — elevated edge for hitter-friendly markets");
-  } else if (pitcherScore > 0.08) {
-    bullets.push("Pitch count and times-through-order suggest starter fatigue risk");
-  } else {
-    bullets.push(`Pitcher context: ${input.pitcher.pitchCount} pitches, ${input.pitcher.timesThrough}x through order`);
-  }
-
-  const lineupSlot = input.lineup.battingOrderSlot;
-  const pocketWeakness = input.lineup.pocketWeakness;
-  if (pocketWeakness !== null && pocketWeakness >= 0.6) {
-    bullets.push("Lineup pocket vulnerability detected around this batting slot");
-  } else if (lineupSlot <= 3 && input.lineup.lineupSectionStrength === "strong") {
-    bullets.push(`Top-${lineupSlot} slot in a strong lineup section — high PA opportunity`);
-  } else {
-    bullets.push(`Batting ${lineupSlot} in a ${input.lineup.lineupSectionStrength} lineup section`);
+    bullets.push("Pitcher Collapsing");
+  } else if (input.pitcher.timesThrough >= 3) {
+    bullets.push("Third Time Through Order");
+  } else if (input.pitcher.pitchCount >= 75) {
+    bullets.push("Pitcher Tiring");
   }
 
   const wp = input.weatherPark;
-  if (!wp.isIndoors) {
-    const windNote = wp.windDirection === "out" && (wp.windSpeed ?? 0) >= 10;
-    const tempNote = (wp.temperature ?? 70) >= 85;
-    const parkNote = wp.parkFactor >= 1.05;
-    if (windNote || tempNote || parkNote) {
-      const factors: string[] = [];
-      if (windNote) factors.push(`wind out at ${wp.windSpeed} mph`);
-      if (tempNote) factors.push(`${wp.temperature}°F`);
-      if (parkNote) factors.push(`park factor ${wp.parkFactor.toFixed(2)}`);
-      bullets.push(`Weather and park conditions favor extra-base production (${factors.join(", ")})`);
-    } else {
-      bullets.push(`Park factor ${wp.parkFactor.toFixed(2)} — neutral conditions`);
-    }
-  } else {
-    bullets.push("Indoor venue — weather factors not applicable");
+  if (!wp.isIndoors && wp.windDirection === "out" && (wp.windSpeed ?? 0) >= 8) {
+    bullets.push(`Wind Out (${wp.windSpeed} mph)`);
+  }
+  if (!wp.isIndoors && (wp.temperature ?? 70) >= 85) {
+    bullets.push("Hot Weather — Ball Carries");
+  }
+  if (wp.parkFactor >= 1.08) {
+    bullets.push("Hitter-Friendly Park");
+  }
+
+  const era = input.pitcher.era;
+  if (era !== null && era >= 4.5) {
+    bullets.push("HR-Prone Pitcher");
+  }
+
+  const handedness = computeHandednessMatchupScore(input);
+  if (handedness >= 0.04) {
+    bullets.push("Favorable Matchup");
   }
 
   const bullpenScore = computeBullpenScore(input.bullpen);
   if (bullpenScore >= 0.07) {
-    bullets.push("Bullpen downgrade expected — high usage and/or depleted relievers");
+    bullets.push("Bullpen Depleted");
   }
 
-  const handedness = computeHandednessMatchupScore(input);
-  const pitcherThrowsDisplay = input.pitcherThrows ?? input.pitcher.throws ?? "?";
-  if (handedness >= 0.06) {
-    bullets.push(`Favorable handedness matchup (${input.batterHand} batter vs. ${pitcherThrowsDisplay} pitcher)`);
-  } else if (handedness <= -0.03) {
-    bullets.push(`Handedness mismatch reduces edge (${input.batterHand} batter vs. ${pitcherThrowsDisplay} pitcher)`);
+  const parkHistory = wp.parkHistoryFactor ?? input.parkHistoryFactor;
+  if (parkHistory !== null && parkHistory !== undefined && parkHistory >= 1.08) {
+    bullets.push("Crushes This Park");
+  }
+
+  const deepFlys = priorABs.filter((ab) => ab.outcome === "out" && (ab.distance ?? 0) >= 350 && (ab.launchAngle ?? 0) >= 20);
+  if (deepFlys.length > 0) {
+    bullets.push(`${deepFlys.length} Deep Flyout${deepFlys.length > 1 ? "s" : ""}`);
   }
 
   if (output.mode === "early_explosive") {
-    bullets.push("Early explosive-contact mode active — elite exit velocity and ideal launch angle in first AB");
+    bullets.push("Explosive Contact — 1st AB");
   }
 
-  return bullets.slice(0, 5);
+  return bullets.slice(0, 6);
+}
+
+function buildExplanationBullets(input: MLBPropInput, output: Partial<MLBPropOutput>): string[] {
+  return translateToScoutReport(input, output);
 }
 
 function buildOutput(input: MLBPropInput): MLBPropOutput {
@@ -346,6 +350,22 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
 
   const explanationBullets = buildExplanationBullets(input, partialOutput);
 
+  const form = classifyForm(input);
+  const fScore = computeFormScore(input);
+  const evPct = Math.round((calibratedDominant / 100 - 0.5) * 100 * 10) / 10;
+  const ctxScore = computeStrongContextScore(input);
+
+  let matchupTag: string | null = null;
+  if (input.pitcher.timesThrough >= 3) matchupTag = "vs 3rd Time Through";
+  else if (input.pitcher.pitchCount >= 80) matchupTag = "vs Fatigue";
+  else if (input.pitcher.isPitcherCollapsing) matchupTag = "vs Collapsing Pitcher";
+  else if (input.pitcher.era !== null && input.pitcher.era >= 4.5) matchupTag = `vs ${input.pitcher.throws ?? ""}HP (${input.pitcher.era.toFixed(1)} ERA)`;
+  else if (input.pitcher.throws) matchupTag = `vs ${input.pitcher.throws}HP`;
+
+  const hrFactors = (input.market === "home_runs" || input.market === "hrr")
+    ? (() => { const f = computeHRQualifyingFactors(input); return { count: f.count, labels: f.labels }; })()
+    : undefined;
+
   const nowTs = Date.now();
   return {
     market: input.market,
@@ -385,6 +405,12 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
     sportsbook: null,
     isDerivedLine: false,
     signalTimestamp: nowTs,
+    formIndicator: form,
+    formScore: Math.round(fScore * 100) / 100,
+    evPct,
+    hrFactors,
+    contextScore: Math.round(ctxScore * 100) / 100,
+    matchupTag,
   };
 }
 
@@ -533,6 +559,11 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
     sportsbook: null,
     isDerivedLine: false,
     signalTimestamp: Date.now(),
+    formIndicator: classifyForm(hitsInput),
+    formScore: Math.round(computeFormScore(hitsInput) * 100) / 100,
+    evPct: Math.round((calibratedDominant / 100 - 0.5) * 100 * 10) / 10,
+    contextScore: Math.round(computeStrongContextScore(hitsInput) * 100) / 100,
+    matchupTag: hitsInput.pitcher.timesThrough >= 3 ? "vs 3rd Time Through" : hitsInput.pitcher.pitchCount >= 80 ? "vs Fatigue" : hitsInput.pitcher.throws ? `vs ${hitsInput.pitcher.throws}HP` : null,
   };
 }
 
@@ -584,9 +615,17 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
     weatherParkScore > 0 &&
     pitcherCtxScore > -0.2;
 
-  if (!meetsStrictThresholds) {
-    const suppReason =
-      `HR guardrails not met — requires EV≥98 (${ev}), LA 10-35° (${la}°), dist≥360ft (${dist}ft), weatherPark>0 (${weatherParkScore.toFixed(3)}), pitcherCtx>-0.2 (${pitcherCtxScore.toFixed(3)})`;
+  const { passes: meetsHRGate, factors: hrFactors } = meetsHRQualificationGate(input);
+
+  if (!meetsStrictThresholds || !meetsHRGate) {
+    const reasons: string[] = [];
+    if (!meetsStrictThresholds) {
+      reasons.push(`HR guardrails not met — EV≥98 (${ev}), LA 10-35° (${la}°), dist≥360ft (${dist}ft)`);
+    }
+    if (!meetsHRGate) {
+      reasons.push(`HR requires ${3}+ qualifying factors (got ${hrFactors.count}: ${hrFactors.labels.join(", ") || "none"})`);
+    }
+    const suppReason = reasons.join("; ");
     const baseOutput = buildOutput({ ...input, market: "home_runs" });
     baseOutput.confidenceTier = "NO_EDGE";
     baseOutput.recommendedSide = "NO_EDGE";

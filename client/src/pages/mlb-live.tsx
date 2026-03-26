@@ -152,11 +152,17 @@ type MLBSignal = {
   sportsbook?: string | null;
   derivedLine?: boolean;
   signalTimestamp?: number | null;
-  // Phase 8: truth layer additions
   lineSource?: "sportsbook" | "inferred" | "derived" | null;
   availableBooks?: string[] | null;
   bestOdds?: { overOdds: number | null; underOdds: number | null; sportsbook: string | null } | null;
   lineVariance?: number | null;
+  formIndicator?: "HOT" | "WARM" | "COLD" | "NEUTRAL" | null;
+  formScore?: number | null;
+  evPct?: number | null;
+  hrFactors?: { count: number; labels: string[] } | null;
+  contextScore?: number | null;
+  matchupTag?: string | null;
+  explanationBullets?: string[];
 };
 
 type SignalsResponse = {
@@ -244,11 +250,12 @@ const MARKET_LABELS: Record<string, string> = {
   hrr: "HRR",
 };
 
-const INNING_TABS: { label: string; min: number }[] = [
+const INNING_TABS: { label: string; min: number; filter?: string }[] = [
   { label: "Live Props", min: 0 },
   { label: "3rd Inning", min: 3 },
   { label: "5th Inning", min: 5 },
   { label: "7th Inning", min: 7 },
+  { label: "HR", min: 0, filter: "hr" },
 ];
 
 const BATTER_MARKETS = [
@@ -344,6 +351,7 @@ function MlbLiveInner() {
   const { user, isLoading: authLoading } = useAuth();
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
   const [inningTabMin, setInningTabMin] = useState<number>(0);
+  const [marketFilter, setMarketFilter] = useState<string | null>(null);
   const [boxExpanded, setBoxExpanded] = useState(true);
   const [selectedPlayer, setSelectedPlayer] = useState<MLBBatter | null>(null);
   const [selectedMarket, setSelectedMarket] = useState("hits");
@@ -582,9 +590,15 @@ function MlbLiveInner() {
     ? signals.filter((sig) => sig && isValidSignal(sig, selectedGameId, rosterPlayerIds))
     : [];
 
-  const filteredSignals = inningTabMin === 0
-    ? validatedSignals
-    : validatedSignals.filter((s) => s && s.inning >= inningTabMin);
+  const filteredSignals = (() => {
+    let sigs = validatedSignals;
+    if (marketFilter === "hr") {
+      sigs = sigs.filter((s) => s && (s.market === "home_runs" || s.market === "hr" || s.market === "hrr"));
+    } else if (inningTabMin > 0) {
+      sigs = sigs.filter((s) => s && s.inning >= inningTabMin);
+    }
+    return sigs;
+  })();
 
   const isPitcherMarket = PITCHER_MARKET_SET.has(selectedMarket);
   const manualCanCalc = manualMode && manualInputs.bookLine.trim() !== "" && !isNaN(parseFloat(manualInputs.bookLine)) && parseFloat(manualInputs.bookLine) > 0;
@@ -757,20 +771,34 @@ function MlbLiveInner() {
 
           <div className="flex gap-1.5 flex-wrap">
             {INNING_TABS.map((tab) => {
-              const disabled = tab.min > 0 && currentInning < tab.min;
-              const active = inningTabMin === tab.min;
+              const isHrTab = tab.filter === "hr";
+              const disabled = !isHrTab && tab.min > 0 && currentInning < tab.min;
+              const active = isHrTab ? marketFilter === "hr" : (marketFilter === null && inningTabMin === tab.min);
               return (
                 <button
-                  key={tab.min}
-                  data-testid={`tab-mlb-inning-${tab.min}`}
-                  onClick={() => !disabled && setInningTabMin(tab.min)}
+                  key={isHrTab ? "hr" : tab.min}
+                  data-testid={`tab-mlb-inning-${isHrTab ? "hr" : tab.min}`}
+                  onClick={() => {
+                    if (disabled) return;
+                    if (isHrTab) {
+                      setMarketFilter(marketFilter === "hr" ? null : "hr");
+                      setInningTabMin(0);
+                    } else {
+                      setMarketFilter(null);
+                      setInningTabMin(tab.min);
+                    }
+                  }}
                   disabled={disabled}
                   className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
                     active
-                      ? "bg-primary text-primary-foreground border-primary"
+                      ? isHrTab
+                        ? "bg-orange-500 text-white border-orange-500"
+                        : "bg-primary text-primary-foreground border-primary"
                       : disabled
                         ? "border-border/40 text-muted-foreground/40 cursor-not-allowed"
-                        : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
+                        : isHrTab
+                          ? "border-orange-500/40 text-orange-400 hover:text-orange-300 hover:border-orange-500/60"
+                          : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
                   }`}
                 >
                   {tab.label}
@@ -1023,6 +1051,14 @@ function MlbLiveInner() {
                       if (!sig || !sig.playerId || !sig.market) return null;
                       const style = TIER_STYLES[sig.tier] ?? TIER_STYLES.yellow;
                       const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
+                      const isHrMarket = sig.market === "home_runs" || sig.market === "hr" || sig.market === "hrr";
+                      const formColors: Record<string, { bg: string; text: string }> = {
+                        HOT: { bg: "rgba(239,68,68,0.15)", text: "#ef4444" },
+                        WARM: { bg: "rgba(251,191,36,0.12)", text: "#fbbf24" },
+                        COLD: { bg: "rgba(59,130,246,0.12)", text: "#3b82f6" },
+                        NEUTRAL: { bg: "rgba(161,161,170,0.1)", text: "#a1a1aa" },
+                      };
+                      const formStyle = sig.formIndicator ? formColors[sig.formIndicator] ?? formColors.NEUTRAL : null;
                       return (
                         <div
                           key={`${sig.playerId}-${sig.market}`}
@@ -1030,13 +1066,34 @@ function MlbLiveInner() {
                           style={{ borderColor: style.border, backgroundColor: style.bg }}
                           className="rounded-xl border p-4 space-y-3"
                         >
-                          <div className="flex justify-between items-center gap-2">
+                          <div className="flex justify-between items-start gap-2">
                             <div>
-                              <div className="text-sm font-semibold text-foreground">{sig.playerName}</div>
-                              <div className="text-xs text-muted-foreground mt-0.5">{marketLabel}</div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-semibold text-foreground">{sig.playerName}</span>
+                                {formStyle && sig.formIndicator && (
+                                  <span
+                                    data-testid={`badge-mlb-form-${sig.playerId}`}
+                                    className="text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider"
+                                    style={{ background: formStyle.bg, color: formStyle.text }}
+                                  >
+                                    {sig.formIndicator}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span className="text-xs text-muted-foreground">{marketLabel}</span>
+                                {sig.matchupTag && (
+                                  <span
+                                    data-testid={`badge-mlb-matchup-${sig.playerId}-${sig.market}`}
+                                    className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30"
+                                  >
+                                    {sig.matchupTag}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                             <span
-                              className="text-xs font-bold px-2 py-0.5 rounded-full"
+                              className="text-xs font-bold px-2 py-0.5 rounded-full shrink-0"
                               style={{ color: style.dot, backgroundColor: `${style.dot}20` }}
                             >
                               {style.label}
@@ -1044,8 +1101,17 @@ function MlbLiveInner() {
                           </div>
 
                           <div className="flex justify-between items-center">
-                            <div className="text-4xl font-bold" style={{ color: style.dot }}>
-                              {sig.enginePct.toFixed(1)}%
+                            <div>
+                              <div className="text-3xl font-bold" style={{ color: style.dot }}>
+                                {sig.enginePct.toFixed(1)}%
+                              </div>
+                              {sig.evPct != null && (
+                                <div className="text-xs text-muted-foreground mt-0.5">
+                                  EV: <span className={`font-semibold ${sig.evPct > 0 ? "text-green-400" : sig.evPct < -3 ? "text-red-400" : "text-muted-foreground"}`}>
+                                    {sig.evPct > 0 ? "+" : ""}{sig.evPct.toFixed(1)}%
+                                  </span>
+                                </div>
+                              )}
                             </div>
                             <div className="flex-1 grid grid-cols-2 gap-2 text-xs ml-4">
                               <div className="text-center">
@@ -1060,6 +1126,38 @@ function MlbLiveInner() {
                               </div>
                             </div>
                           </div>
+
+                          {isHrMarket && sig.hrFactors && sig.hrFactors.count > 0 && (
+                            <div
+                              data-testid={`badge-mlb-hrfactors-${sig.playerId}`}
+                              className="rounded-lg p-2 space-y-1"
+                              style={{ background: "rgba(249,115,22,0.08)", border: "1px solid rgba(249,115,22,0.2)" }}
+                            >
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-orange-400">
+                                  {sig.hrFactors.count} HR Factor{sig.hrFactors.count !== 1 ? "s" : ""}
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap gap-1">
+                                {sig.hrFactors.labels.map((label, i) => (
+                                  <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-300 border border-orange-500/20">
+                                    {label}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {sig.explanationBullets && sig.explanationBullets.length > 0 && (
+                            <div className="space-y-1 pt-1" data-testid={`text-mlb-bullets-${sig.playerId}-${sig.market}`}>
+                              {sig.explanationBullets.slice(0, 4).map((bullet, i) => (
+                                <div key={i} className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+                                  <span className="text-muted-foreground/50 mt-px">•</span>
+                                  <span>{bullet}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
 
                           <div className="flex items-center gap-1.5 flex-wrap pb-1">
                             {sig.sportsbook && (
@@ -1080,43 +1178,12 @@ function MlbLiveInner() {
                                 Derived
                               </span>
                             )}
-                            {sig.lineSource && sig.lineSource !== "sportsbook" && (
-                              <span
-                                data-testid={`badge-mlb-linesource-${sig.playerId}-${sig.market}`}
-                                className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
-                                style={{
-                                  background: sig.lineSource === "inferred" ? "rgba(251,191,36,0.1)" : "rgba(139,92,246,0.12)",
-                                  border: `1px solid ${sig.lineSource === "inferred" ? "rgba(251,191,36,0.3)" : "rgba(139,92,246,0.3)"}`,
-                                  color: sig.lineSource === "inferred" ? "#fbbf24" : "#a78bfa",
-                                }}
-                              >
-                                {sig.lineSource === "inferred" ? "Inferred" : "Derived Line"}
-                              </span>
-                            )}
-                            {sig.availableBooks && sig.availableBooks.length > 0 && (
-                              <span
-                                data-testid={`text-mlb-books-${sig.playerId}-${sig.market}`}
-                                className="text-[10px] text-muted-foreground/50"
-                                title={sig.availableBooks.join(", ")}
-                              >
-                                {sig.availableBooks.length} book{sig.availableBooks.length > 1 ? "s" : ""}
-                              </span>
-                            )}
                             {sig.signalTimestamp && (
                               <span
                                 data-testid={`text-mlb-signal-time-${sig.playerId}-${sig.market}`}
                                 className="text-[10px] text-muted-foreground/50"
                               >
                                 {new Date(sig.signalTimestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-                              </span>
-                            )}
-                            {sig.bestOdds?.sportsbook && (
-                              <span
-                                data-testid={`text-mlb-best-odds-${sig.playerId}-${sig.market}`}
-                                className="text-[10px] text-muted-foreground/50"
-                              >
-                                Best: {SPORTSBOOK_LABELS[sig.bestOdds.sportsbook] ?? sig.bestOdds.sportsbook}
-                                {sig.bestOdds.overOdds != null ? ` O${sig.bestOdds.overOdds > 0 ? "+" : ""}${sig.bestOdds.overOdds}` : ""}
                               </span>
                             )}
                           </div>
@@ -1132,7 +1199,6 @@ function MlbLiveInner() {
                             </button>
                           </div>
 
-                          {/* Phase 15: How to Bet execution block */}
                           {(sig.bestOdds?.sportsbook || sig.sportsbook) && sig.bookLine != null && (() => {
                             const execBook = sig.bestOdds?.sportsbook ?? sig.sportsbook ?? "";
                             const execOdds = sig.recommendedSide === "UNDER"
