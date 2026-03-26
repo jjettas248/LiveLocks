@@ -15,7 +15,7 @@ import { buildEngineInput } from "./services/engineInputBuilder";
 import { computeNCAABPlays, getNCAABScoreboard, getNCAABH2H, getNCAABChipOdds, fetch2HLines, calc2HEngineProb } from "./ncaabService";
 import { enrichNCAABGameFull, clearEnrichmentCache, getEnrichmentCacheStats } from "./ncaabEnrichment";
 import { calculateParlay } from "./parlayService";
-import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin, requireTier } from "./auth";
+import { registerAuthRoutes, requirePlayAccess, requireMLBAccess, requireAuth, requireAdmin, requireTier } from "./auth";
 import { resolveAccess } from "./utils/access";
 import { registerStripeRoutes } from "./stripeService";
 import { getVapidPublicKey, sendPush } from "./webpush";
@@ -544,7 +544,7 @@ export async function registerRoutes(
     return previews.slice(0, 6);
   }
 
-  app.get("/api/mlb/live-games", requireTier("elite"), async (req, res) => {
+  app.get("/api/mlb/live-games", requireAuth, async (req, res) => {
     const cached = mlbLiveGamesCache.get("games");
     if (cached && Date.now() - cached.ts < MLB_LIVE_GAMES_TTL) {
       const games = cached.games;
@@ -767,7 +767,7 @@ export async function registerRoutes(
   const mlbLiveStatsCache = new Map<string, { ts: number; players: any[]; allRosterIds: Set<string> }>();
   const MLB_LIVE_STATS_TTL = 30_000;
 
-  app.get("/api/mlb/live-stats/:gameId", requireTier("elite"), async (req, res) => {
+  app.get("/api/mlb/live-stats/:gameId", requireMLBAccess, async (req, res) => {
     const gameId = req.params.gameId as string;
     const cached = mlbLiveStatsCache.get(gameId);
     if (cached && Date.now() - cached.ts < MLB_LIVE_STATS_TTL) {
@@ -838,7 +838,7 @@ export async function registerRoutes(
   const mlbSignalsCache = new Map<string, { ts: number; signals: any[]; updatedAt: number; isDegraded: boolean }>();
   const MLB_SIGNALS_TTL = 90_000;
 
-  app.get("/api/mlb/live-signals/:gameId", requireTier("elite"), async (req, res) => {
+  app.get("/api/mlb/live-signals/:gameId", requireMLBAccess, async (req, res) => {
     const gameId = req.params.gameId as string;
 
     let gameStatus = "";
@@ -1216,7 +1216,7 @@ export async function registerRoutes(
   });
 
   // ── MLB Manual Calculation Route ─────────────────────────────────────────────
-  app.post("/api/mlb/calculate-manual", requireTier("elite"), async (req, res) => {
+  app.post("/api/mlb/calculate-manual", requireMLBAccess, async (req, res) => {
     try {
       const raw: Record<string, any> = req.body ?? {};
 
@@ -1617,10 +1617,10 @@ export async function registerRoutes(
       return res.status(400).json({ error: err.message || "MLB prop engine error" });
     }
   };
-  app.post("/api/mlb/props", requireTier("elite"), mlbPropsHandler);
-  app.post("/api/mlb/calculate", requireTier("elite"), mlbPropsHandler);
+  app.post("/api/mlb/props", requireMLBAccess, mlbPropsHandler);
+  app.post("/api/mlb/calculate", requireMLBAccess, mlbPropsHandler);
 
-  app.get("/api/mlb/odds", requireTier("elite"), async (req, res) => {
+  app.get("/api/mlb/odds", requireAuth, async (req, res) => {
     try {
       const { playerTeam, opponentTeam, playerName, statType, inPlay } = req.query;
 

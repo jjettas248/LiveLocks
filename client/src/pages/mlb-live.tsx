@@ -351,6 +351,7 @@ function MlbLiveInner() {
   const [calcResult, setCalcResult] = useState<CalcResult | null>(null);
   const [manualMode, setManualMode] = useState(false);
   const [manualInputs, setManualInputs] = useState<ManualInputState>(defaultManualInputs(null, null));
+  const [mlbUpgradeNeeded, setMlbUpgradeNeeded] = useState(false);
 
   const { data: gamesResp, isLoading: gamesLoading } = useQuery<MLBGamesResponse>({
     queryKey: ["/api/mlb/live-games"],
@@ -363,18 +364,38 @@ function MlbLiveInner() {
   const hasAnyOdds = games.some((g) => g?.hasOdds === true);
   const isElite = user?.hasMLB === true;
 
-  const { data: playersRaw, isLoading: playersLoading } = useQuery<MLBBatter[]>({
+  const { data: playersRaw, isLoading: playersLoading, error: playersError } = useQuery<MLBBatter[]>({
     queryKey: ["/api/mlb/live-stats", selectedGameId],
-    enabled: !!selectedGameId,
+    enabled: !!selectedGameId && !mlbUpgradeNeeded,
     refetchInterval: 30_000,
+    retry: (failureCount, error: any) => {
+      if (error?.message?.includes("MLB_UPGRADE_REQUIRED") || error?.status === 402) return false;
+      return failureCount < 2;
+    },
   });
   const players = Array.isArray(playersRaw) ? playersRaw : [];
 
-  const { data: signalsResp, isLoading: signalsLoading } = useQuery<SignalsResponse>({
+  useEffect(() => {
+    if (playersError && ((playersError as any)?.message?.includes("MLB_UPGRADE_REQUIRED") || (playersError as any)?.status === 402)) {
+      setMlbUpgradeNeeded(true);
+    }
+  }, [playersError]);
+
+  const { data: signalsResp, isLoading: signalsLoading, error: signalsError } = useQuery<SignalsResponse>({
     queryKey: ["/api/mlb/live-signals", selectedGameId],
-    enabled: !!selectedGameId,
+    enabled: !!selectedGameId && !mlbUpgradeNeeded,
     refetchInterval: 90_000,
+    retry: (failureCount, error: any) => {
+      if (error?.message?.includes("MLB_UPGRADE_REQUIRED") || error?.status === 402) return false;
+      return failureCount < 2;
+    },
   });
+
+  useEffect(() => {
+    if (signalsError && ((signalsError as any)?.message?.includes("MLB_UPGRADE_REQUIRED") || (signalsError as any)?.status === 402)) {
+      setMlbUpgradeNeeded(true);
+    }
+  }, [signalsError]);
 
   const signalMode = signalsResp?.mode ?? "no_lines";
   const signals = Array.isArray(signalsResp?.signals) ? signalsResp!.signals : [];
@@ -407,7 +428,10 @@ function MlbLiveInner() {
         statType: selectedMarket,
         inPlay: selectedGame?.status === "live" ? "true" : "false",
       });
-      const res = await fetch(`/api/mlb/odds?${params}`, { credentials: "include" });
+      const token = localStorage.getItem("ll_auth_token");
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch(`/api/mlb/odds?${params}`, { credentials: "include", headers });
       if (!res.ok) throw new Error("Failed to fetch odds");
       return res.json();
     },
@@ -488,6 +512,11 @@ function MlbLiveInner() {
     },
     onSuccess: (data) => {
       setCalcResult(data);
+    },
+    onError: (error: any) => {
+      if (error?.message?.includes("MLB_UPGRADE_REQUIRED") || error?.status === 402) {
+        setMlbUpgradeNeeded(true);
+      }
     },
   });
 
@@ -578,6 +607,31 @@ function MlbLiveInner() {
       <div className="max-w-5xl mx-auto px-4 py-12 flex flex-col items-center justify-center gap-3">
         <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
         <span className="text-sm text-muted-foreground">Loading MLB…</span>
+      </div>
+    );
+  }
+
+  if (mlbUpgradeNeeded) {
+    return (
+      <div className="max-w-5xl mx-auto px-4 py-12 flex flex-col items-center justify-center gap-4">
+        <span className="text-4xl">⚾</span>
+        <h3 className="text-lg font-bold text-foreground">MLB Preview Limit Reached</h3>
+        <p className="text-sm text-muted-foreground text-center max-w-sm">
+          You've used your 2 free MLB preview plays for today. Upgrade to All Sports for unlimited MLB access.
+        </p>
+        <div className="bg-secondary/40 border border-border/40 rounded-xl p-3 text-xs text-muted-foreground space-y-1.5 w-full max-w-xs">
+          <div className="flex items-center gap-2"><span className="text-green-500">&#10003;</span> Unlimited MLB prop predictions</div>
+          <div className="flex items-center gap-2"><span className="text-green-500">&#10003;</span> Everything in Pro (NBA + NCAAB)</div>
+          <div className="flex items-center gap-2"><span className="text-green-500">&#10003;</span> Priority SMS alerts</div>
+        </div>
+        <a
+          href="/pricing"
+          data-testid="link-mlb-upgrade-pricing"
+          className="w-full max-w-xs py-2.5 px-4 rounded-xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition-colors text-center block"
+        >
+          Upgrade to All Sports — $65/mo
+        </a>
+        <p className="text-xs text-muted-foreground">Preview resets daily at midnight ET</p>
       </div>
     );
   }

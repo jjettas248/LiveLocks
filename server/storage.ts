@@ -95,7 +95,7 @@ export interface IStorage {
   incrementPlaysUsed(userId: number): Promise<void>;
   incrementPlaysUsedToday(userId: number): Promise<void>;
   tryConsumePlayToday(userId: number): Promise<{ allowed: boolean; playsUsedToday: number }>;
-  tryConsumeGamePlayToday(userId: number, gameId: string): Promise<{ allowed: boolean; alreadyUnlocked: boolean; playsUsedToday: number }>;
+  tryConsumeGamePlayToday(userId: number, gameId: string, limit?: number): Promise<{ allowed: boolean; alreadyUnlocked: boolean; playsUsedToday: number }>;
   resetDailyPlaysIfNeeded(userId: number): Promise<User | undefined>;
   isGameUnlockedToday(userId: number, gameId: string): Promise<boolean>;
   markGameUnlockedToday(userId: number, gameId: string): Promise<void>;
@@ -916,7 +916,7 @@ export class DatabaseStorage implements IStorage {
     return { allowed: false, playsUsedToday: user?.playsUsedToday ?? 3 };
   }
 
-  async tryConsumeGamePlayToday(userId: number, gameId: string): Promise<{ allowed: boolean; alreadyUnlocked: boolean; playsUsedToday: number }> {
+  async tryConsumeGamePlayToday(userId: number, gameId: string, limit: number = 3): Promise<{ allowed: boolean; alreadyUnlocked: boolean; playsUsedToday: number }> {
     const today = new Date().toISOString().slice(0, 10);
     const result = await db.execute(sql`
       UPDATE users
@@ -931,7 +931,7 @@ export class DatabaseStorage implements IStorage {
           ) sub
         )
       WHERE id = ${userId}
-        AND plays_used_today < 3
+        AND plays_used_today < ${limit}
         AND plays_reset_date = ${today}
         AND NOT (unlocked_game_ids_today::jsonb @> to_jsonb(${gameId}::text))
       RETURNING plays_used_today
@@ -943,7 +943,7 @@ export class DatabaseStorage implements IStorage {
     const alreadyUnlocked = user ? (() => {
       try { return (JSON.parse(user.unlockedGameIdsToday ?? "[]") as string[]).includes(gameId); } catch { return false; }
     })() : false;
-    return { allowed: false, alreadyUnlocked, playsUsedToday: user?.playsUsedToday ?? 3 };
+    return { allowed: false, alreadyUnlocked, playsUsedToday: user?.playsUsedToday ?? limit };
   }
 
   async resetDailyPlaysIfNeeded(userId: number): Promise<User | undefined> {

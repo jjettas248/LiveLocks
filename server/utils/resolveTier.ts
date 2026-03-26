@@ -1,9 +1,18 @@
-import { getTierFromPriceId } from "../billing/planMap";
+import { getTierFromPriceId, getTierFromProductId } from "../billing/planMap";
 
 export function resolveTierFromSubscription(subscription: any): "all" | "elite" | null {
   if (!subscription?.items?.data?.length) return null;
-  const priceId: string = subscription.items.data[0]?.price?.id ?? "";
+  const item = subscription.items.data[0];
+  const priceId: string = item?.price?.id ?? "";
   const tier = getTierFromPriceId(priceId);
   if (tier === "all" || tier === "elite") return tier;
+  const productId: string =
+    typeof item?.price?.product === "string"
+      ? item.price.product
+      : item?.price?.product?.id ?? "";
+  if (productId) {
+    const productTier = getTierFromProductId(productId);
+    if (productTier === "all" || productTier === "elite") return productTier;
+  }
   return null;
 }

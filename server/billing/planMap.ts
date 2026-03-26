@@ -6,6 +6,15 @@ export const PLAN_MAP: Record<string, string> = {
   [ALL_SPORTS_PRICE_ID]: "elite",
 };
 
+export const PRODUCT_MAP: Record<string, string> = {
+  [process.env.STRIPE_PRO_PRODUCT_ID || "prod_placeholder_pro"]: "all",
+  [process.env.STRIPE_ALL_SPORTS_PRODUCT_ID || "prod_U4rPSI6tQ4CGz7"]: "elite",
+};
+
 export function getTierFromPriceId(priceId: string): string | null {
   return PLAN_MAP[priceId] ?? null;
+}
+
+export function getTierFromProductId(productId: string): string | null {
+  return PRODUCT_MAP[productId] ?? null;
 }

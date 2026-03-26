@@ -403,6 +403,47 @@ export function requireTier(...tiers: string[]) {
   };
 }
 
+const MLB_PREVIEW_LIMIT = 2;
+
+export async function requireMLBAccess(req: Request, res: Response, next: NextFunction) {
+  const userId = getUserIdFromRequest(req);
+  if (!userId) return res.status(401).json({ error: "Not authenticated" });
+  const user = await storage.getUserById(userId);
+  if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+  (req as any).resolvedUserId = userId;
+  (req as any).resolvedUser = user;
+
+  if (user.isAdmin || user.subscriptionTier === "elite") return next();
+
+  await storage.resetDailyPlaysIfNeeded(userId);
+
+  const gameId = (req.params as any)?.gameId ?? (req.body as any)?.gameId;
+  if (!gameId) {
+    return res.status(400).json({ error: "Missing gameId for MLB preview access" });
+  }
+  const consumeKey = `mlb-${gameId}`;
+
+  const alreadyUnlocked = await storage.isGameUnlockedToday(userId, consumeKey);
+  if (alreadyUnlocked) return next();
+
+  const consumeResult = await storage.tryConsumeGamePlayToday(userId, consumeKey, MLB_PREVIEW_LIMIT);
+  if (!consumeResult.allowed && !consumeResult.alreadyUnlocked) {
+    return res.status(402).json({
+      error: "MLB_UPGRADE_REQUIRED",
+      message: "Upgrade to All Sports ($65/mo) for unlimited MLB access.",
+      playsUsedToday: consumeResult.playsUsedToday,
+      limit: MLB_PREVIEW_LIMIT,
+    });
+  }
+
+  if (consumeResult.allowed) {
+    storage.incrementPlaysUsed(userId).catch(console.error);
+  }
+
+  return next();
+}
+
 export async function requirePlayAccess(req: Request, res: Response, next: NextFunction) {
   const userId = getUserIdFromRequest(req);
   if (!userId) {

@@ -597,6 +597,7 @@ export default function Dashboard() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const [mlbPopoverOpen, setMlbPopoverOpen] = useState(false);
+  const [showMlbUpgradeModal, setShowMlbUpgradeModal] = useState(false);
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const skipAutoFillRef = useRef(false);
 
@@ -1988,30 +1989,26 @@ export default function Dashboard() {
                 📊 Analytics
               </button>
             )}
-            {user?.isAdmin ? (
-              <button
-                data-testid="tab-mlb"
-                onClick={() => setActiveTab("mlb")}
-                className={`px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 transition-colors ${
-                  activeTab === "mlb"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <span role="img" aria-label="baseball">⚾</span>
-                MLB Live
-              </button>
-            ) : (
-              <button
-                data-testid="tab-mlb-locked"
-                onClick={() => setMlbPopoverOpen((v) => !v)}
-                className="px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 opacity-50 cursor-not-allowed text-muted-foreground"
-              >
-                <span role="img" aria-label="baseball">⚾</span>
-                MLB Live
-                <Lock className="w-3 h-3" />
-              </button>
-            )}
+            <button
+              data-testid="tab-mlb"
+              onClick={() => {
+                setActiveTab("mlb");
+                if (!user?.isAdmin && user?.subscriptionTier !== "elite") {
+                  setShowMlbUpgradeModal(true);
+                }
+              }}
+              className={`px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 transition-colors ${
+                activeTab === "mlb"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <span role="img" aria-label="baseball">⚾</span>
+              MLB Live
+              {!user?.isAdmin && user?.subscriptionTier !== "elite" && (
+                <Lock className="w-3 h-3 opacity-50" />
+              )}
+            </button>
           </div>
 
           {/* NBA sub-tabs */}
@@ -2043,37 +2040,52 @@ export default function Dashboard() {
           )}
 
 
-          {/* MLB locked popover */}
-          {mlbPopoverOpen && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setMlbPopoverOpen(false)} />
+          {/* MLB Upgrade Modal */}
+          {showMlbUpgradeModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowMlbUpgradeModal(false)}>
               <div
-                className="absolute top-full left-0 mt-2 z-50 w-72 bg-card border border-border/60 rounded-xl p-4 shadow-2xl animate-fade-in-up"
-                style={{ boxShadow: "0 0 20px -4px hsl(var(--primary) / 0.2), 0 8px 32px -4px hsl(0 0% 0% / 0.5)" }}
+                className="relative w-full max-w-md mx-4 bg-card border border-border/60 rounded-2xl p-6 shadow-2xl"
+                style={{ boxShadow: "0 0 40px -8px hsl(var(--primary) / 0.3), 0 16px 48px -8px hsl(0 0% 0% / 0.6)" }}
+                onClick={(e) => e.stopPropagation()}
               >
-                <p className="text-sm font-semibold text-foreground mb-1 flex items-center gap-1.5">
-                  <span role="img" aria-label="baseball">⚾</span> MLB Live
+                <button
+                  data-testid="button-close-mlb-modal"
+                  onClick={() => setShowMlbUpgradeModal(false)}
+                  className="absolute top-3 right-3 text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+                <div className="text-center mb-4">
+                  <span className="text-3xl">⚾</span>
+                  <h3 className="text-lg font-bold text-foreground mt-2">Unlock MLB Live</h3>
+                </div>
+                <p className="text-sm text-muted-foreground text-center mb-4">
+                  Get real-time MLB prop predictions, live signals, and edge detection with the All Sports plan.
                 </p>
-                {user?.hasMLB ? (
-                  <p className="text-xs text-muted-foreground">
-                    MLB Live prop predictions are launching soon. You'll be the first to know as an All Sports subscriber.
-                  </p>
-                ) : (
-                  <>
-                    <p className="text-xs text-muted-foreground mb-3">
-                      MLB Live prop predictions are included in the All Sports plan ($65/mo). Your current plan does not include MLB access.
-                    </p>
-                    <button
-                      data-testid="button-mlb-upgrade"
-                      onClick={() => { setMlbPopoverOpen(false); setShowUpgradeModal(true); }}
-                      className="w-full py-1.5 px-3 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors"
-                    >
-                      Upgrade to All Sports — $65/mo
-                    </button>
-                  </>
-                )}
+                <div className="bg-secondary/40 border border-border/40 rounded-xl p-3 mb-4 text-xs text-muted-foreground space-y-1.5">
+                  <div className="flex items-center gap-2"><span className="text-green-500">&#10003;</span> Live MLB prop predictions</div>
+                  <div className="flex items-center gap-2"><span className="text-green-500">&#10003;</span> Everything in Pro (NBA + NCAAB)</div>
+                  <div className="flex items-center gap-2"><span className="text-green-500">&#10003;</span> Priority SMS alerts</div>
+                </div>
+                <p className="text-xs text-center text-muted-foreground mb-3">
+                  You have a 2-play preview — explore MLB games below!
+                </p>
+                <button
+                  data-testid="button-mlb-upgrade"
+                  onClick={() => { setShowMlbUpgradeModal(false); setShowUpgradeModal(true); }}
+                  className="w-full py-2.5 px-4 rounded-xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition-colors"
+                >
+                  Upgrade to All Sports — $65/mo
+                </button>
+                <button
+                  data-testid="button-mlb-preview"
+                  onClick={() => setShowMlbUpgradeModal(false)}
+                  className="w-full mt-2 py-2 px-4 rounded-xl text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Continue with Preview
+                </button>
               </div>
-            </>
+            </div>
           )}
         </div>
 
@@ -3818,8 +3830,8 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* MLB Live Tab — admin and All Sports users */}
-        {activeTab === "mlb" && (user?.isAdmin || effectiveTier === "elite") && <MlbLivePage />}
+        {/* MLB Live Tab — all authenticated users (preview gated on backend) */}
+        {activeTab === "mlb" && <MlbLivePage />}
 
       </main>
 
