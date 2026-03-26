@@ -44,20 +44,33 @@ function resolveTeamName(team: {
   );
 }
 
+// ── Abbreviation normalization ─────────────────────────────────────────────────
+// Normalize ESPN abbreviations to their MLB Stats API equivalents before lookup.
+// Verified by calling both ESPN scoreboard + statsapi.mlb.com/api/v1/teams/{id} for each.
+const ESPN_TO_MLB_ABBR: Record<string, string> = {
+  CHW: "CWS",  // White Sox: ESPN=CHW, Stats API=CWS  (confirmed 2026-03-26)
+  ARI: "AZ",   // Diamondbacks: ESPN=ARI, Stats API=AZ (confirmed 2026-03-26)
+};
+
+function normalizeAbbr(abbr: string): string {
+  return ESPN_TO_MLB_ABBR[abbr] ?? abbr;
+}
+
 // ── Fetch MLB Stats gamePk map for today ──────────────────────────────────────
-// Returns a map keyed by "awayAbbr|homeAbbr" → MlbScheduleEntry[]
+// Returns a map keyed by "awayAbbr|homeAbbr" (normalized) → MlbScheduleEntry[]
 // Array value supports doubleheaders (same teams, same day, different times)
-// MLB Stats schedule game entry with start time and doubleheader number for disambiguation
 interface MlbScheduleEntry {
   gamePk: string;
-  gameTime: string; // ISO datetime
+  gameTime: string;   // ISO datetime
   gameNumber: number; // 1 or 2 for doubleheaders
+  awayName: string;   // team name for fallback matching
+  homeName: string;
 }
 
 async function fetchMlbGamePkMap(dateStr: string): Promise<Map<string, MlbScheduleEntry[]>> {
   const pkMap = new Map<string, MlbScheduleEntry[]>();
   try {
-    const url = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${dateStr}`;
+    const url = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${dateStr}&hydrate=team`;
     const res = await fetch(url, {
       headers: { "User-Agent": "LiveLocks/1.0" },
       signal: AbortSignal.timeout(8000),
@@ -71,13 +84,15 @@ async function fetchMlbGamePkMap(dateStr: string): Promise<Map<string, MlbSchedu
       for (const game of date.games ?? []) {
         const awayAbbr: string = game.teams?.away?.team?.abbreviation ?? "";
         const homeAbbr: string = game.teams?.home?.team?.abbreviation ?? "";
+        const awayName: string = game.teams?.away?.team?.name ?? "";
+        const homeName: string = game.teams?.home?.team?.name ?? "";
         const gamePk: string = String(game.gamePk ?? "");
         const gameTime: string = game.gameDate ?? "";
         const gameNumber: number = game.gameNumber ?? 1;
         if (awayAbbr && homeAbbr && gamePk && gamePk !== "0") {
           const key = `${awayAbbr}|${homeAbbr}`;
           const existing = pkMap.get(key) ?? [];
-          existing.push({ gamePk, gameTime, gameNumber });
+          existing.push({ gamePk, gameTime, gameNumber, awayName, homeName });
           pkMap.set(key, existing);
         }
       }
@@ -86,6 +101,84 @@ async function fetchMlbGamePkMap(dateStr: string): Promise<Map<string, MlbSchedu
     console.warn(`[MLB DISCOVERY] fetchMlbGamePkMap error: ${err.message}`);
   }
   return pkMap;
+}
+
+// ── gamePk resolution with multi-layer fallback ────────────────────────────────
+// Layer 1: Exact key (normalized abbreviations)
+// Layer 2: All entries — match by team name substring
+// Layer 3: All entries — closest start time within ±2 hours
+function resolveGamePk(
+  awayAbbrRaw: string,
+  homeAbbrRaw: string,
+  awayTeamName: string,
+  homeTeamName: string,
+  espnTime: number,
+  pkMap: Map<string, MlbScheduleEntry[]>,
+  espnId: string,
+): string | undefined {
+  const awayAbbr = normalizeAbbr(awayAbbrRaw);
+  const homeAbbr = normalizeAbbr(homeAbbrRaw);
+
+  // Layer 1: normalized exact key
+  const exact = pkMap.get(`${awayAbbr}|${homeAbbr}`) ?? [];
+  if (exact.length === 1) return exact[0].gamePk;
+  if (exact.length > 1) {
+    // Doubleheader: pick closest start time
+    if (espnTime > 0) {
+      const best = exact.reduce((a, b) =>
+        Math.abs(new Date(a.gameTime).getTime() - espnTime) <=
+        Math.abs(new Date(b.gameTime).getTime() - espnTime) ? a : b
+      );
+      console.log(`[MLB DISCOVERY] Doubleheader resolution for ${awayAbbr}|${homeAbbr} (espnId=${espnId}): picked gamePk=${best.gamePk} (${exact.length} candidates)`);
+      return best.gamePk;
+    }
+    return exact[0].gamePk;
+  }
+
+  // Layer 2: team name substring match across ALL pkMap entries
+  const awayLower = awayTeamName.toLowerCase();
+  const homeLower = homeTeamName.toLowerCase();
+  const nameMatches: MlbScheduleEntry[] = [];
+  for (const entries of pkMap.values()) {
+    for (const e of entries) {
+      const eAway = e.awayName.toLowerCase();
+      const eHome = e.homeName.toLowerCase();
+      const awayMatch = awayLower && (eAway.includes(awayLower) || awayLower.includes(eAway));
+      const homeMatch = homeLower && (eHome.includes(homeLower) || homeLower.includes(eHome));
+      if (awayMatch && homeMatch) nameMatches.push(e);
+    }
+  }
+  if (nameMatches.length === 1) {
+    console.log(`[MLB DISCOVERY] Name-fallback match for ${awayAbbrRaw}|${homeAbbrRaw} (espnId=${espnId}): gamePk=${nameMatches[0].gamePk} via team names`);
+    return nameMatches[0].gamePk;
+  }
+  if (nameMatches.length > 1 && espnTime > 0) {
+    const best = nameMatches.reduce((a, b) =>
+      Math.abs(new Date(a.gameTime).getTime() - espnTime) <=
+      Math.abs(new Date(b.gameTime).getTime() - espnTime) ? a : b
+    );
+    console.log(`[MLB DISCOVERY] Name-fallback multi-match for ${awayAbbrRaw}|${homeAbbrRaw} (espnId=${espnId}): picked gamePk=${best.gamePk}`);
+    return best.gamePk;
+  }
+
+  // Layer 3: time-proximity across ALL pkMap entries (±2 hours)
+  if (espnTime > 0) {
+    const TWO_HOURS = 2 * 60 * 60 * 1000;
+    const timeMatches: MlbScheduleEntry[] = [];
+    for (const entries of pkMap.values()) {
+      for (const e of entries) {
+        const diff = Math.abs(new Date(e.gameTime).getTime() - espnTime);
+        if (diff <= TWO_HOURS) timeMatches.push(e);
+      }
+    }
+    if (timeMatches.length === 1) {
+      console.log(`[MLB DISCOVERY] Time-proximity fallback for ${awayAbbrRaw}|${homeAbbrRaw} (espnId=${espnId}): gamePk=${timeMatches[0].gamePk}`);
+      return timeMatches[0].gamePk;
+    }
+  }
+
+  console.warn(`[MLB MAPPING FAILED] ${awayAbbrRaw} ${homeAbbrRaw} espnId=${espnId} — all fallback layers exhausted`);
+  return undefined;
 }
 
 export async function discoverTodaysGames(): Promise<MLBGame[]> {
@@ -154,31 +247,22 @@ export async function discoverTodaysGames(): Promise<MLBGame[]> {
       const awayPitcher =
         competition.situation?.probable?.away?.athlete?.fullName ?? undefined;
 
-      // Map ESPN event ID to MLB Stats gamePk via team abbreviation key
-      // Doubleheader-safe: if multiple entries for same matchup, pick closest start time
-      const awayAbbr: string = awayCompetitor?.team?.abbreviation ?? "";
-      const homeAbbr: string = homeCompetitor?.team?.abbreviation ?? "";
-      const candidates = pkMap.get(`${awayAbbr}|${homeAbbr}`) ?? [];
-      let gamePk: string | undefined;
-      if (candidates.length === 1) {
-        gamePk = candidates[0].gamePk;
-      } else if (candidates.length > 1) {
-        // For doubleheaders: pick the candidate whose start time is closest to ESPN event start time
-        const espnTime = event.date ? new Date(event.date).getTime() : 0;
-        if (espnTime > 0) {
-          const best = candidates.reduce((a, b) => {
-            const aDiff = Math.abs(new Date(a.gameTime).getTime() - espnTime);
-            const bDiff = Math.abs(new Date(b.gameTime).getTime() - espnTime);
-            return aDiff <= bDiff ? a : b;
-          });
-          gamePk = best.gamePk;
-          console.log(`[MLB DISCOVERY] Doubleheader resolution for ${awayAbbr}|${homeAbbr} (espnId=${event.id}): picked gamePk=${gamePk} (${candidates.length} candidates)`);
-        } else {
-          gamePk = candidates[0].gamePk;
-        }
-      }
-      if (!gamePk) {
-        console.warn(`[MLB DISCOVERY] No gamePk found for ${awayAbbr}|${homeAbbr} (espnId=${event.id}) — Stats API calls will use ESPN ID as fallback`);
+      const awayAbbrRaw: string = awayCompetitor?.team?.abbreviation ?? "";
+      const homeAbbrRaw: string = homeCompetitor?.team?.abbreviation ?? "";
+      const espnTime = event.date ? new Date(event.date).getTime() : 0;
+
+      const gamePk = resolveGamePk(
+        awayAbbrRaw,
+        homeAbbrRaw,
+        awayTeam,
+        homeTeam,
+        espnTime,
+        pkMap,
+        event.id,
+      );
+
+      if (gamePk) {
+        console.log(`[MLB DISCOVERY] Mapped ${awayAbbrRaw}|${homeAbbrRaw} (espnId=${event.id}) → gamePk=${gamePk}`);
       }
 
       games.push({
@@ -193,7 +277,8 @@ export async function discoverTodaysGames(): Promise<MLBGame[]> {
     }
 
     const builtGames = games.length;
-    console.log(`[MLB DISCOVERY] rawEvents=${rawEvents} builtGames=${builtGames}`);
+    const mappedCount = games.filter((g) => !!g.gamePk).length;
+    console.log(`[MLB DISCOVERY] rawEvents=${rawEvents} builtGames=${builtGames} mapped=${mappedCount} unmapped=${builtGames - mappedCount}`);
     if (builtGames === 0) {
       console.warn(`[MLB DISCOVERY] WARNING: builtGames=0 for date=${espnDateStr} — no games returned from ESPN scoreboard`);
     }

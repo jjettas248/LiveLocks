@@ -190,12 +190,12 @@ export class LiveGameOrchestrator {
       }, GAME_STATE_MS)
     );
 
-    // Weather every 10 minutes
+    // Weather every 10 minutes — only for games with a resolved gamePk
     this.timers.push(
       setInterval(() => {
         for (const game of getActiveGames()) {
-          const pk = game.gamePk ?? game.gameId;
-          syncWeather(pk, game.gameId).catch(console.error);
+          if (!game.gamePk) continue;
+          syncWeather(game.gamePk, game.gameId).catch(console.error);
         }
       }, WEATHER_MS)
     );
@@ -236,7 +236,14 @@ export class LiveGameOrchestrator {
 
     // Look up the registered game to get the MLB Stats gamePk (may differ from ESPN event ID)
     const registeredGame = getGame(gameId);
-    const statsPk: string = registeredGame?.gamePk ?? gameId;
+    const statsPk: string | undefined = registeredGame?.gamePk;
+
+    // Guard: only call Stats API when a valid gamePk is known.
+    // Using the ESPN event ID as a fake gamePk would cause 404s against the Stats API.
+    if (!statsPk) {
+      console.log(`[MLB orchestrator] pollGame(${gameId}): gamePk not yet resolved — skipping Stats API calls`);
+      return;
+    }
 
     // Sync all three data sources using MLB Stats gamePk
     await syncGameState(statsPk, gameId);

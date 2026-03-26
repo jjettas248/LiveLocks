@@ -6,8 +6,11 @@ import type { MLBGame } from "./gameDiscoveryService";
 const activeGames = new Map<string, MLBGame>();
 
 export function registerGame(game: MLBGame): void {
-  if (!activeGames.has(game.gameId)) {
-    console.log(`[MLB registry] Registered game ${game.gameId}: ${game.awayTeam} @ ${game.homeTeam}`);
+  const existing = activeGames.get(game.gameId);
+  if (!existing) {
+    console.log(`[MLB registry] Registered game ${game.gameId}: ${game.awayTeam} @ ${game.homeTeam}${game.gamePk ? ` (gamePk=${game.gamePk})` : " (gamePk=PENDING)"}`);
+  } else if (!existing.gamePk && game.gamePk) {
+    console.log(`[MLB registry] gamePk resolved for game ${game.gameId}: ${game.awayTeam} @ ${game.homeTeam} → gamePk=${game.gamePk}`);
   }
   activeGames.set(game.gameId, game);
 }
