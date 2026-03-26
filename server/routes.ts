@@ -572,28 +572,35 @@ export async function registerRoutes(
       const espnTodayUrl = `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${espnDateStr}`;
       const espnActiveUrl = `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard`;
 
-      const [todayRes, activeRes] = await Promise.all([
-        fetch(espnTodayUrl, { headers: { "User-Agent": "LiveLocks/1.0" }, signal: AbortSignal.timeout(8000) }),
-        fetch(espnActiveUrl, { headers: { "User-Agent": "LiveLocks/1.0" }, signal: AbortSignal.timeout(8000) }),
-      ]);
-
+      const todayRes = await fetch(espnTodayUrl, { headers: { "User-Agent": "LiveLocks/1.0" }, signal: AbortSignal.timeout(8000) });
       if (!todayRes.ok) throw new Error(`ESPN scoreboard ${todayRes.status}`);
       const todayData = (await todayRes.json()) as any;
-      const activeData = activeRes.ok ? ((await activeRes.json()) as any) : { events: [] };
 
-      const seenIds = new Set<string>();
-      const mergedEvents: any[] = [];
+      let activeData: any = { events: [] };
+      try {
+        const activeRes = await fetch(espnActiveUrl, { headers: { "User-Agent": "LiveLocks/1.0" }, signal: AbortSignal.timeout(8000) });
+        if (activeRes.ok) activeData = await activeRes.json();
+      } catch { /* active feed is supplementary — continue with today-only */ }
+
+      const eventMap = new Map<string, any>();
       for (const event of todayData.events ?? []) {
-        seenIds.add(String(event.id));
-        mergedEvents.push(event);
+        eventMap.set(String(event.id), event);
       }
       for (const event of activeData.events ?? []) {
-        if (!seenIds.has(String(event.id))) {
-          seenIds.add(String(event.id));
-          mergedEvents.push(event);
-          console.log(`[MLB DISCOVERY] Active-feed game ${event.id} not in today's date feed — merged in`);
+        const eid = String(event.id);
+        if (!eventMap.has(eid)) {
+          eventMap.set(eid, event);
+          console.log(`[MLB DISCOVERY] Active-feed game ${eid} not in today's date feed — merged in`);
+        } else {
+          const existing = eventMap.get(eid)!;
+          const activeStatus = event.competitions?.[0]?.status ?? event.status;
+          if (activeStatus) {
+            if (existing.competitions?.[0]) existing.competitions[0].status = activeStatus;
+            if (existing.status) existing.status = activeStatus;
+          }
         }
       }
+      const mergedEvents = Array.from(eventMap.values());
 
       const rawEvents: number = mergedEvents.length;
       console.log(`[MLB DISCOVERY] live-games rawEvents=${rawEvents} (today=${todayData.events?.length ?? 0} active=${activeData.events?.length ?? 0})`);
