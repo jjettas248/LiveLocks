@@ -544,24 +544,17 @@ export async function registerRoutes(
     return previews.slice(0, 6);
   }
 
-  app.get("/api/mlb/live-games", requireAuth, async (req, res) => {
+  app.get("/api/mlb/live-games", requireTier("elite"), async (req, res) => {
     const cached = mlbLiveGamesCache.get("games");
     if (cached && Date.now() - cached.ts < MLB_LIVE_GAMES_TTL) {
-      const user = (req as any).user ?? (req as any).resolvedUser ?? null;
-      const tier = user?.subscriptionTier ?? null;
       const games = cached.games;
       const hasAnyOdds = games.some((g: any) => g.hasOdds === true);
       if (!hasAnyOdds) {
         return res.json({ mode: "preview", games, previewPlayers: generatePreviewPlayers(games) });
       }
-      if (tier !== "elite" && !user?.isAdmin) {
-        return res.json({ mode: "preview_locked", games, previewPlayers: generatePreviewPlayers(games).slice(0, 6) });
-      }
       return res.json({ mode: "live", games });
     }
     try {
-      const user = (req as any).user ?? (req as any).resolvedUser ?? null;
-      const tier = user?.subscriptionTier ?? null;
 
       // ── Fetch from ESPN scoreboard ──
       // ESPN lists games by US date, so a late-night game (e.g. 10 PM ET start)
@@ -764,9 +757,6 @@ export async function registerRoutes(
       if (!hasAnyOdds) {
         return res.json({ mode: "preview", games, previewPlayers: generatePreviewPlayers(games) });
       }
-      if (tier !== "elite" && !user?.isAdmin) {
-        return res.json({ mode: "preview_locked", games, previewPlayers: generatePreviewPlayers(games).slice(0, 6) });
-      }
       return res.json({ mode: "live", games });
     } catch (e: any) {
       console.error("[mlb/live-games]", e.message);
@@ -777,7 +767,7 @@ export async function registerRoutes(
   const mlbLiveStatsCache = new Map<string, { ts: number; players: any[]; allRosterIds: Set<string> }>();
   const MLB_LIVE_STATS_TTL = 30_000;
 
-  app.get("/api/mlb/live-stats/:gameId", requireAuth, async (req, res) => {
+  app.get("/api/mlb/live-stats/:gameId", requireTier("elite"), async (req, res) => {
     const gameId = req.params.gameId as string;
     const cached = mlbLiveStatsCache.get(gameId);
     if (cached && Date.now() - cached.ts < MLB_LIVE_STATS_TTL) {
@@ -848,15 +838,8 @@ export async function registerRoutes(
   const mlbSignalsCache = new Map<string, { ts: number; signals: any[]; updatedAt: number; isDegraded: boolean }>();
   const MLB_SIGNALS_TTL = 90_000;
 
-  app.get("/api/mlb/live-signals/:gameId", requireAuth, async (req, res) => {
+  app.get("/api/mlb/live-signals/:gameId", requireTier("elite"), async (req, res) => {
     const gameId = req.params.gameId as string;
-
-    // Tier guard — only elite/admin users may access live signal data
-    const reqUser = (req as any).user ?? (req as any).resolvedUser ?? null;
-    const reqTier = reqUser?.subscriptionTier ?? null;
-    if (reqTier !== "elite" && !reqUser?.isAdmin) {
-      return res.json({ mode: "preview_locked", signals: [], updatedAt: Date.now() });
-    }
 
     let gameStatus = "";
     // Resolve statsPk (MLB gamePk) for Stats API calls in this endpoint
@@ -1233,7 +1216,7 @@ export async function registerRoutes(
   });
 
   // ── MLB Manual Calculation Route ─────────────────────────────────────────────
-  app.post("/api/mlb/calculate-manual", requireAuth, async (req, res) => {
+  app.post("/api/mlb/calculate-manual", requireTier("elite"), async (req, res) => {
     try {
       const raw: Record<string, any> = req.body ?? {};
 
@@ -1634,10 +1617,10 @@ export async function registerRoutes(
       return res.status(400).json({ error: err.message || "MLB prop engine error" });
     }
   };
-  app.post("/api/mlb/props", requireAuth, mlbPropsHandler);
-  app.post("/api/mlb/calculate", requireAuth, mlbPropsHandler);
+  app.post("/api/mlb/props", requireTier("elite"), mlbPropsHandler);
+  app.post("/api/mlb/calculate", requireTier("elite"), mlbPropsHandler);
 
-  app.get("/api/mlb/odds", requireAuth, async (req, res) => {
+  app.get("/api/mlb/odds", requireTier("elite"), async (req, res) => {
     try {
       const { playerTeam, opponentTeam, playerName, statType, inPlay } = req.query;
 
