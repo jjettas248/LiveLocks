@@ -150,7 +150,6 @@ function usageCompressionMultiplier(scoreDiff: number): number {
   if (abs >= 25) return 0.78;
   if (abs >= 20) return 0.82;
   if (abs >= 15) return 0.88;
-  if (abs >= 10) return 0.94;
   return 1.0;
 }
 

@@ -347,13 +347,14 @@ export function LiveBoxscore({
 
                           if (allEntries.length > 0) {
                             const rotationIndex = Math.floor(Date.now() / 45000);
-                            const watchedEntry = allEntries.find(e => e.statType === watchedStatType);
-                            const nonWatched = allEntries.filter(e => e.statType !== watchedStatType);
-                            const pickedEntry = watchedEntry
-                              ? watchedEntry
-                              : nonWatched.length > 0
-                                ? nonWatched[rotationIndex % nonWatched.length]
-                                : allEntries[0];
+                            const watchedIdx = allEntries.findIndex(e => e.statType === watchedStatType);
+                            let pickedEntry: typeof allEntries[0];
+                            if (watchedIdx >= 0 && allEntries.length > 1) {
+                              const cycle = rotationIndex % allEntries.length;
+                              pickedEntry = cycle === 0 ? allEntries[watchedIdx] : allEntries.filter((_, i) => i !== watchedIdx)[(cycle - 1) % (allEntries.length - 1)];
+                            } else {
+                              pickedEntry = allEntries[rotationIndex % allEntries.length];
+                            }
                             const entry = pickedEntry;
                             const dp = Math.round(entry.probability * 10) / 10;
                             const sigTierKey = getSignalTier(dp);
