@@ -110,18 +110,39 @@ export interface BvPMatchupStats {
 
 // ── In-memory cache ───────────────────────────────────────────────────────────
 
+export interface GameBoxScorePlayer {
+  playerId: string;
+  playerName: string;
+  team: string;
+  hits: number;
+  hr: number;
+  ab: number;
+  bb: number;
+  rbi: number;
+  so: number;
+  tb: number;
+  runs: number;
+}
+
+export interface GameBoxScoreCache {
+  byPlayerId: Record<string, GameBoxScorePlayer>;
+  fetchedAt: number;
+}
+
 export const mlbGameCache: {
   gameState: Record<string, GameStateCache>;
   contactData: Record<string, ContactDataCache>;
   pitcherContext: Record<string, PitcherContextCache>;
   weather: Record<string, WeatherCache>;
   bullpen: Record<string, BullpenCache>;
+  gameBoxScore: Record<string, GameBoxScoreCache>;
 } = {
   gameState: {},
   contactData: {},
   pitcherContext: {},
   weather: {},
   bullpen: {},
+  gameBoxScore: {},
 };
 
 export const mlbPlayerCache: {
@@ -287,6 +308,84 @@ export async function syncGameState(statsPk: string, cacheKey?: string): Promise
     console.log(`[MLB pull] syncGameState: game ${gameId} — inning ${inning}${isTopInning ? "T" : "B"}, ${battingOrder.length} batters`);
   } catch (err: any) {
     console.error(`[MLB pull] syncGameState(${gameId}) error:`, err.message);
+  }
+}
+
+// ── syncGameBoxScore ──────────────────────────────────────────────────────────
+// Pulls per-player hitting stats from the MLB Stats API boxscore for the current game.
+// Falls back to Tank01 API if MLB Stats API returns no player data.
+
+export async function syncGameBoxScore(statsPk: string, cacheKey?: string): Promise<void> {
+  const gameId = cacheKey ?? statsPk;
+  try {
+    const data = await fetchJson(LIVE_FEED_URL(statsPk));
+    const boxTeams = data?.liveData?.boxscore?.teams ?? {};
+    const gameDataTeams = data?.gameData?.teams ?? {};
+    const byPlayerId: Record<string, GameBoxScorePlayer> = {};
+
+    for (const side of ["home", "away"] as const) {
+      const team = boxTeams[side];
+      if (!team?.players) continue;
+      const teamAbbrev: string = gameDataTeams[side]?.abbreviation ?? side;
+
+      for (const [key, pdata] of Object.entries(team.players)) {
+        const p = pdata as any;
+        const batting = p?.stats?.batting;
+        if (!batting) continue;
+        const pid = key.replace("ID", "");
+        const hits = safeNum(batting.hits) ?? 0;
+        const doubles = safeNum(batting.doubles) ?? 0;
+        const triples = safeNum(batting.triples) ?? 0;
+        const hr = safeNum(batting.homeRuns) ?? 0;
+        const singles = hits - doubles - triples - hr;
+        const tb = singles + doubles * 2 + triples * 3 + hr * 4;
+        byPlayerId[pid] = {
+          playerId: pid,
+          playerName: p?.person?.fullName ?? pid,
+          team: teamAbbrev,
+          hits,
+          hr,
+          ab: safeNum(batting.atBats) ?? 0,
+          bb: safeNum(batting.baseOnBalls) ?? 0,
+          rbi: safeNum(batting.rbi) ?? 0,
+          so: safeNum(batting.strikeOuts) ?? 0,
+          tb,
+          runs: safeNum(batting.runs) ?? 0,
+        };
+      }
+    }
+
+    if (Object.keys(byPlayerId).length === 0) {
+      try {
+        const { fetchTank01BoxScore } = await import("./tank01Service");
+        const tank01Box = await fetchTank01BoxScore(gameId);
+        if (tank01Box?.players) {
+          for (const p of tank01Box.players) {
+            byPlayerId[p.playerId] = {
+              playerId: p.playerId,
+              playerName: p.playerName,
+              team: p.team,
+              hits: p.hits,
+              hr: p.hr,
+              ab: p.ab,
+              bb: p.bb,
+              rbi: p.rbi,
+              so: p.so,
+              tb: p.hits + p.hr * 3,
+              runs: 0,
+            };
+          }
+          console.log(`[MLB pull] syncGameBoxScore: game ${gameId} — Tank01 fallback provided ${tank01Box.players.length} players`);
+        }
+      } catch (err: any) {
+        console.warn(`[MLB pull] syncGameBoxScore Tank01 fallback error:`, err.message);
+      }
+    }
+
+    mlbGameCache.gameBoxScore[gameId] = { byPlayerId, fetchedAt: Date.now() };
+    console.log(`[MLB pull] syncGameBoxScore: game ${gameId} — ${Object.keys(byPlayerId).length} players with box stats`);
+  } catch (err: any) {
+    console.error(`[MLB pull] syncGameBoxScore(${gameId}) error:`, err.message);
   }
 }
 

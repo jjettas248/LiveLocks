@@ -61,6 +61,8 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
   const safeGames = Array.isArray(games) ? games : [];
   const renderedGames = safeGames.filter((g) => g && g.gameId && (g.awayTeam || g.homeTeam));
 
+  const isCompact = selectedGameId !== null;
+
   return (
     <div>
       {renderedGames.length === 0 && (
@@ -68,7 +70,10 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
           No games scheduled today. Check back soon.
         </div>
       )}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className={isCompact
+        ? "flex gap-2 overflow-x-auto pb-2 -mx-1 px-1 scrollbar-thin"
+        : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"
+      }>
         {renderedGames.map((game) => {
           if (!game || !game.gameId) return null;
           const isActive = game.gameId === selectedGameId;
@@ -84,6 +89,34 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
           const weatherLine = game.weather?.temperature != null
             ? `${game.weather.temperature}°${game.weather.windSpeed != null && game.weather.windDirection ? ` | Wind ${game.weather.windDirection} ${game.weather.windSpeed}mph` : ""}`
             : null;
+
+          if (isCompact) {
+            return (
+              <button
+                key={game.gameId}
+                data-testid={`chip-mlb-schedule-${game.gameId}`}
+                onClick={() => onSelectGame(game.gameId)}
+                className={`flex-shrink-0 px-3 py-2 rounded-lg border text-left transition-all flex items-center gap-2 ${
+                  isActive
+                    ? "border-primary bg-primary/10 ring-1 ring-primary/30"
+                    : "border-border/40 hover:border-primary/30 hover:bg-card/80"
+                }`}
+              >
+                <span className="text-xs font-bold text-foreground whitespace-nowrap">
+                  {awayAbbr} @ {homeAbbr}
+                </span>
+                {game.status === "live" && game.awayScore != null && game.homeScore != null ? (
+                  <span className="text-[10px] font-mono font-bold text-foreground whitespace-nowrap">
+                    {game.awayScore}–{game.homeScore}
+                    {game.inning > 0 && <span className="text-green-400 ml-1">{game.isTopInning ? "▲" : "▼"}{game.inning}</span>}
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-muted-foreground whitespace-nowrap">{startTimeFormatted ?? "TBD"}</span>
+                )}
+                {game.signalLocked && <span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0" />}
+              </button>
+            );
+          }
 
           return (
             <button

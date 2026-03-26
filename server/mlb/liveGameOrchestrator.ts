@@ -13,6 +13,7 @@ import {
 import { mlbEdgeCache } from "./edgeCache";
 import {
   syncGameState,
+  syncGameBoxScore,
   syncContactData,
   syncPitcherContext,
   syncWeather,
@@ -267,6 +268,7 @@ export class LiveGameOrchestrator {
     }
 
     await syncGameState(statsPk, gameId);
+    await syncGameBoxScore(statsPk, gameId);
     await syncContactData(statsPk, gameId);
     await syncPitcherContext(statsPk, gameId);
 
@@ -499,9 +501,22 @@ export class LiveGameOrchestrator {
         const bvpKey = pitcher ? `${batter.playerId}_vs_${pitcher.playerId}` : null;
         const bvpData = bvpKey ? mlbPlayerCache.bvpMatchups[bvpKey] : undefined;
 
-        const batterSeasonAvg = rollingStats?.seasonAvg ?? 1.0;
+        const batterSeasonAvg = rollingStats?.seasonAvg ?? 0.250;
         const rollingAvg = rollingStats?.last15?.avg;
         const effectiveSeasonAvg = rollingAvg != null ? rollingAvg : batterSeasonAvg;
+
+        const boxScorePlayer = mlbGameCache.gameBoxScore[gameId]?.byPlayerId?.[batter.playerId];
+        let currentStatForMarket = 0;
+        if (boxScorePlayer) {
+          switch (market) {
+            case "hits": currentStatForMarket = boxScorePlayer.hits; break;
+            case "home_runs": case "hrr": currentStatForMarket = boxScorePlayer.hr; break;
+            case "total_bases": currentStatForMarket = boxScorePlayer.tb; break;
+            case "batter_strikeouts": currentStatForMarket = boxScorePlayer.so; break;
+            case "pitcher_strikeouts": case "hits_allowed": case "walks_allowed": currentStatForMarket = 0; break;
+            default: currentStatForMarket = boxScorePlayer.hits; break;
+          }
+        }
 
         const input: MLBPropInput = {
           playerId: batter.playerId,
@@ -515,8 +530,8 @@ export class LiveGameOrchestrator {
           underOdds: resolvedLine.underOdds,
           seasonAvg: effectiveSeasonAvg,
           plateAppearances: state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0,
-          atBats: Math.max(0, state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0),
-          currentStatValue: 0,
+          atBats: boxScorePlayer ? boxScorePlayer.ab : Math.max(0, state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0),
+          currentStatValue: currentStatForMarket,
           remainingPA,
           remainingAB,
           completedAB: Math.max(0, 4 - remainingAB),
