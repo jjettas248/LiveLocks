@@ -1190,8 +1190,8 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
 
   if (totalMarket) {
     const isDerived = totalMarket.isDerived === true;
-    // A real sportsbook line exists when bookLine is present and source is not derived
-    const hasBookLine = totalMarket.bookLine != null && input.liveTotalSource !== "derived";
+    // A real sportsbook line exists whenever bookLine is present on the market object
+    const hasBookLine = totalMarket.bookLine != null;
 
     // Rule 1 — Hierarchy enforcement: real sportsbook line wins unconditionally
     if (isDerived && hasBookLine) {
@@ -1233,10 +1233,10 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
   // surface the market as a labeled fallback play (low confidence).
   // All guardrails above remain intact — this only changes exposure, not math.
   const fallbackProj = markets.full_total.projection ?? round1(projection.finalProjectedTotal);
-  if (!markets.full_total.available && input.liveTotalLine !== null && isFinite(fallbackProj) && !isNaN(fallbackProj)) {
+  if (!markets.full_total.available && totalMarket.bookLine != null && isFinite(fallbackProj) && !isNaN(fallbackProj)) {
     const mkt = markets.full_total;
     const proj = fallbackProj;
-    const line = input.liveTotalLine;
+    const line = totalMarket.bookLine!;
 
     // Infer lean direction from projection vs line
     const leanOver = proj > line;

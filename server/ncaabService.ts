@@ -1637,7 +1637,7 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
           let bestAbsEdge = -1;
           for (const key of allMktKeys) {
             const m = mkts[key];
-            if (!m?.available || m.edge === null) continue;
+            if (m?.bookLine == null || m.edge === null) continue;
             const absEdge = Math.abs(m.edge);
             if (absEdge > bestAbsEdge) { bestAbsEdge = absEdge; bestKey = key; }
           }

@@ -3892,7 +3892,7 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
       let bestAbsEdge = -1;
       for (const key of MARKET_KEYS) {
         const m = mkts[key];
-        if (!m?.available || m.edge == null) continue;
+        if (m?.bookLine == null || m.edge == null) continue;
         const absEdge = Math.abs(m.edge);
         if (absEdge > bestAbsEdge) { bestAbsEdge = absEdge; bestKey = key; }
       }
@@ -4189,7 +4189,7 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                     if (!p.engineOutput?.markets) continue;
                     for (const key of OTHER_MARKET_KEYS) {
                       const mkt = p.engineOutput.markets[key];
-                      if (!mkt?.available || mkt.edge === null) continue;
+                      if (mkt?.bookLine == null || mkt.edge === null) continue;
                       allEntries.push({ play: p, market: mkt });
                     }
                   }
@@ -4197,7 +4197,7 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                   topEntries.forEach(entry => {
                     console.log("[TOP PLAY]", { gameId: entry.play.gameId, marketKey: entry.market.marketKey, available: entry.market.available, edge: entry.market.edge, fallback: entry.market.fallback ?? false });
                     const cardMarket = entry.play.engineOutput?.markets?.[entry.market.marketKey as NCAABMarketKey];
-                    if (!cardMarket?.available) {
+                    if (cardMarket?.bookLine == null) {
                       console.warn("[CARD VS TOP PLAY MISMATCH]", { gameId: entry.play.gameId, topPlaysSelectedKey: entry.market.marketKey, cardMarketAvailable: cardMarket?.available ?? false, cardMarketObject: cardMarket ?? null });
                     }
                   });
@@ -4378,7 +4378,7 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
           )}
 
           {/* No strong edges yet — live games present but engine has not produced plays */}
-          {!hasPlays && !error && liveGames.length > 0 && halftimePlays.length === 0 && (
+          {!error && liveGames.length > 0 && halftimePlays.length === 0 && !plays.some(p => p.engineOutput?.markets?.full_total?.bookLine != null) && (
             <div className="bg-card border border-border rounded-xl p-6 text-center space-y-2" data-testid="text-ncaab-no-strong-edges">
               <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse inline-block mb-2" />
               <p className="text-sm font-semibold text-foreground">No strong edges right now</p>
