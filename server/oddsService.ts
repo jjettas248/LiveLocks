@@ -1062,3 +1062,90 @@ export function bustEventsCache(): void {
 export function getOpeningLineCacheSize(): number {
   return openingLineCache.size;
 }
+
+// ── Odds Normalization Layer ───────────────────────────────────────────────────
+// Takes the raw per-book odds dict and produces a canonical NormalizedOdds object.
+// Rejects any entry with a non-finite or missing line; handles empty dicts gracefully.
+
+export interface NormalizedOdds {
+  medianLine: number | null;
+  bestOverOdds: number | null;
+  bestUnderOdds: number | null;
+  lineVariance: number | null;
+  booksAvailable: number;
+  sportsbookSources: string[];
+}
+
+export function normalizeOdds(
+  books: Record<string, { line: number; overOdds: number; underOdds: number }>
+): NormalizedOdds {
+  const validEntries = Object.entries(books).filter(([, v]) => {
+    return (
+      v != null &&
+      Number.isFinite(v.line) &&
+      Number.isFinite(v.overOdds) &&
+      Number.isFinite(v.underOdds)
+    );
+  });
+
+  if (validEntries.length === 0) {
+    return {
+      medianLine: null,
+      bestOverOdds: null,
+      bestUnderOdds: null,
+      lineVariance: null,
+      booksAvailable: 0,
+      sportsbookSources: [],
+    };
+  }
+
+  const lines = validEntries.map(([, v]) => v.line).sort((a, b) => a - b);
+  const mid = Math.floor(lines.length / 2);
+  const medianLine =
+    lines.length % 2 === 0
+      ? parseFloat(((lines[mid - 1] + lines[mid]) / 2).toFixed(1))
+      : lines[mid];
+
+  // Best over odds = highest absolute value (most generous payout for Over)
+  // In American odds: -100 is better than -110 for bettors; +100 > -100
+  const bestOverOdds = validEntries.reduce<number | null>((best, [, v]) => {
+    if (best === null) return v.overOdds;
+    return v.overOdds > best ? v.overOdds : best;
+  }, null);
+
+  const bestUnderOdds = validEntries.reduce<number | null>((best, [, v]) => {
+    if (best === null) return v.underOdds;
+    return v.underOdds > best ? v.underOdds : best;
+  }, null);
+
+  const lineVariance =
+    lines.length >= 2
+      ? parseFloat((lines[lines.length - 1] - lines[0]).toFixed(2))
+      : 0;
+
+  const sportsbookSources = validEntries.map(([book]) => book);
+
+  pipelineLog("ODDS", "normalize", "odds:normalized", {
+    booksAvailable: validEntries.length,
+    medianLine,
+    lineVariance,
+    bestOverOdds,
+    bestUnderOdds,
+    sources: sportsbookSources,
+  });
+
+  return {
+    medianLine,
+    bestOverOdds,
+    bestUnderOdds,
+    lineVariance,
+    booksAvailable: validEntries.length,
+    sportsbookSources,
+  };
+}
+
+export function normalizeMLBOdds(
+  books: Record<string, { line: number; overOdds: number; underOdds: number }>
+): NormalizedOdds {
+  return normalizeOdds(books);
+}

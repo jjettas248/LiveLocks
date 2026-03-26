@@ -56,6 +56,8 @@ import {
   applyParkModifier,
   applyBullpenModifier,
   applyWeatherModifier,
+  applyXBAModifier,
+  applyXSLGModifier,
 } from "./hitProbabilityModel";
 import { computeHitOutcomeProbability } from "./outcomeDistribution";
 import {
@@ -380,6 +382,9 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
     engineGeneratedAt: nowTs,
     oddsUpdatedAt: nowTs,
     projectionUpdatedAt: nowTs,
+    sportsbook: null,
+    isDerivedLine: false,
+    signalTimestamp: nowTs,
   };
 }
 
@@ -396,6 +401,7 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   adjustedRate = applyPitcherModifier(adjustedRate, pitcherKRate, pitcherBABIP);
   adjustedRate = applyParkModifier(adjustedRate, hitsInput.weatherPark.parkFactor);
   adjustedRate = applyBullpenModifier(adjustedRate, hitsInput.bullpen.bullpenEra);
+  adjustedRate = applyXBAModifier(adjustedRate, hitsInput.contactQuality.xBA, playerAB);
 
   const windOut = hitsInput.weatherPark.windDirection === "out";
   const temperature = hitsInput.weatherPark.temperature ?? 70;
@@ -524,6 +530,9 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
     engineGeneratedAt: Date.now(),
     oddsUpdatedAt: Date.now(),
     projectionUpdatedAt: Date.now(),
+    sportsbook: null,
+    isDerivedLine: false,
+    signalTimestamp: Date.now(),
   };
 }
 
@@ -535,6 +544,7 @@ export function calculateTBEdge(input: MLBPropInput): MLBPropOutput {
   const windOut = input.weatherPark.windDirection === "out";
   const temperature = input.weatherPark.temperature ?? 70;
   tbRate = applyWeatherModifier(tbRate, windOut, temperature);
+  tbRate = applyXSLGModifier(tbRate, input.contactQuality.xSLG, input.atBats);
 
   const rpa = input.remainingPA ?? 2;
   output.expectedHits = parseFloat((tbRate * rpa).toFixed(2));
@@ -683,6 +693,8 @@ export function calculateMLBPropEdge(input: MLBPropInput): MLBPropOutput {
           playerContact.priorABResults.length > 0
             ? (playerContact.priorABResults as MLBPropInput["contactQuality"]["priorABResults"])
             : resolvedInput.contactQuality.priorABResults,
+        xBA: playerContact.xBA ?? resolvedInput.contactQuality.xBA,
+        xSLG: playerContact.xSLG ?? resolvedInput.contactQuality.xSLG,
       },
     };
   }

@@ -8,6 +8,7 @@ import type {
   BatterVsPitcherHistory,
 } from "./types";
 import { STANDARD_THRESHOLDS, EARLY_EXPLOSIVE_THRESHOLDS } from "./types";
+import { normalizePercentage } from "../services/normalizationService";
 
 function clampRange(val: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, val));
@@ -240,14 +241,59 @@ export function computePitchTypeScore(pitcher: PitcherContext): number {
   if (pitcher.pitchMix.length === 0) return 0;
 
   let score = 0;
+  // pitchMix.percentage may be on 0-100 or 0-1 scale; normalizePercentage auto-detects
   const fastballPct = pitcher.pitchMix
     .filter((p) => p.pitchType === "FF" || p.pitchType === "SI")
-    .reduce((sum, p) => sum + p.percentage, 0);
+    .reduce((sum, p) => sum + normalizePercentage(p.percentage), 0);
 
   if (fastballPct >= 0.65) {
     score += 0.06;
   } else if (fastballPct <= 0.35) {
     score -= 0.04;
+  }
+
+  return score;
+}
+
+/**
+ * Batter-vs-pitch-type split modifier.
+ * Cross-references the pitcher's pitch mix profile with the batter's contact quality
+ * (hard-hit rate as a proxy for power vs. contact profile) to estimate the matchup effect.
+ *
+ * Logic:
+ * - Power hitters (hardHitRate >= 0.45) benefit more from fastball-heavy pitchers
+ *   and are relatively disadvantaged vs. breaking-ball-heavy pitchers
+ * - Contact hitters (hardHitRate <= 0.35) are more consistent vs. breaking-ball pitchers
+ * - Balanced profiles (0.35-0.45) get near-zero adjustment
+ */
+export function computeBatterVsPitchTypeSplit(input: MLBPropInput): number {
+  const pitchMix = input.pitcher.pitchMix;
+  const hardHitRate = input.contactQuality.hardHitRateSeason;
+
+  if (pitchMix.length === 0 || hardHitRate == null) return 0;
+
+  // normalizePercentage auto-detects 0-100 vs 0-1 scale
+  const fastballPct = pitchMix
+    .filter((p) => p.pitchType === "FF" || p.pitchType === "SI")
+    .reduce((sum, p) => sum + normalizePercentage(p.percentage), 0);
+
+  const breakingPct = pitchMix
+    .filter((p) => p.pitchType === "SL" || p.pitchType === "CU" || p.pitchType === "KC" || p.pitchType === "CS")
+    .reduce((sum, p) => sum + normalizePercentage(p.percentage), 0);
+
+  const isPowerHitter = hardHitRate >= 0.45;
+  const isContactHitter = hardHitRate <= 0.35;
+
+  let score = 0;
+
+  if (fastballPct >= 0.60) {
+    if (isPowerHitter) score += 0.04;    // power hitter vs fastball-heavy = favorable
+    else if (isContactHitter) score += 0.01; // contact hitter vs fastball = slight edge
+  }
+
+  if (breakingPct >= 0.40) {
+    if (isPowerHitter) score -= 0.03;    // power hitter vs breaking-heavy = unfavorable
+    else if (isContactHitter) score += 0.02; // contact hitter vs breaking = slight edge
   }
 
   return score;

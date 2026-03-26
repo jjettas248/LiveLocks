@@ -149,6 +149,14 @@ type MLBSignal = {
   inning: number;
   tier: "green" | "yellow" | "teal" | "red";
   gameId?: string;
+  sportsbook?: string | null;
+  derivedLine?: boolean;
+  signalTimestamp?: number | null;
+  // Phase 8: truth layer additions
+  lineSource?: "sportsbook" | "inferred" | "derived" | null;
+  availableBooks?: string[] | null;
+  bestOdds?: { overOdds: number | null; underOdds: number | null; sportsbook: string | null } | null;
+  lineVariance?: number | null;
 };
 
 type SignalsResponse = {
@@ -260,6 +268,13 @@ const SPORTSBOOK_LABELS: Record<string, string> = {
   fanduel: "FanDuel",
   draftkings: "DraftKings",
   hardrockbet: "Hard Rock",
+  betmgm: "BetMGM",
+  caesars: "Caesars",
+  pointsbet: "PointsBet",
+  bet365: "Bet365",
+  betrivers: "BetRivers",
+  prizepicks: "PrizePicks",
+  underdog: "Underdog",
 };
 
 const PITCHER_MARKET_SET = new Set(["pitcher_k", "pitcher_strikeouts", "hits_allowed", "walks_allowed"]);
@@ -954,6 +969,65 @@ function MlbLiveInner() {
                             </div>
                           </div>
 
+                          <div className="flex items-center gap-1.5 flex-wrap pb-1">
+                            {sig.sportsbook && (
+                              <span
+                                data-testid={`badge-mlb-sportsbook-${sig.playerId}-${sig.market}`}
+                                className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+                                style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#71717a" }}
+                              >
+                                {SPORTSBOOK_LABELS[sig.sportsbook] ?? sig.sportsbook}
+                              </span>
+                            )}
+                            {sig.derivedLine && (
+                              <span
+                                data-testid={`badge-mlb-derived-${sig.playerId}-${sig.market}`}
+                                className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+                                style={{ background: "rgba(139,92,246,0.12)", border: "1px solid rgba(139,92,246,0.3)", color: "#a78bfa" }}
+                              >
+                                Derived
+                              </span>
+                            )}
+                            {sig.lineSource && sig.lineSource !== "sportsbook" && (
+                              <span
+                                data-testid={`badge-mlb-linesource-${sig.playerId}-${sig.market}`}
+                                className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+                                style={{
+                                  background: sig.lineSource === "inferred" ? "rgba(251,191,36,0.1)" : "rgba(139,92,246,0.12)",
+                                  border: `1px solid ${sig.lineSource === "inferred" ? "rgba(251,191,36,0.3)" : "rgba(139,92,246,0.3)"}`,
+                                  color: sig.lineSource === "inferred" ? "#fbbf24" : "#a78bfa",
+                                }}
+                              >
+                                {sig.lineSource === "inferred" ? "Inferred" : "Derived Line"}
+                              </span>
+                            )}
+                            {sig.availableBooks && sig.availableBooks.length > 0 && (
+                              <span
+                                data-testid={`text-mlb-books-${sig.playerId}-${sig.market}`}
+                                className="text-[10px] text-muted-foreground/50"
+                                title={sig.availableBooks.join(", ")}
+                              >
+                                {sig.availableBooks.length} book{sig.availableBooks.length > 1 ? "s" : ""}
+                              </span>
+                            )}
+                            {sig.signalTimestamp && (
+                              <span
+                                data-testid={`text-mlb-signal-time-${sig.playerId}-${sig.market}`}
+                                className="text-[10px] text-muted-foreground/50"
+                              >
+                                {new Date(sig.signalTimestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                              </span>
+                            )}
+                            {sig.bestOdds?.sportsbook && (
+                              <span
+                                data-testid={`text-mlb-best-odds-${sig.playerId}-${sig.market}`}
+                                className="text-[10px] text-muted-foreground/50"
+                              >
+                                Best: {SPORTSBOOK_LABELS[sig.bestOdds.sportsbook] ?? sig.bestOdds.sportsbook}
+                                {sig.bestOdds.overOdds != null ? ` O${sig.bestOdds.overOdds > 0 ? "+" : ""}${sig.bestOdds.overOdds}` : ""}
+                              </span>
+                            )}
+                          </div>
                           <div className="flex items-center justify-between pt-1 border-t border-border/30">
                             <span className="text-xs font-bold tracking-wide" style={{ color: style.dot }}>
                               {sig.recommendedSide}{sig.bookLine != null ? ` ${sig.bookLine}` : ""}
@@ -965,6 +1039,57 @@ function MlbLiveInner() {
                               + Parlay
                             </button>
                           </div>
+
+                          {/* Phase 15: How to Bet execution block */}
+                          {(sig.bestOdds?.sportsbook || sig.sportsbook) && sig.bookLine != null && (() => {
+                            const execBook = sig.bestOdds?.sportsbook ?? sig.sportsbook ?? "";
+                            const execOdds = sig.recommendedSide === "UNDER"
+                              ? (sig.bestOdds?.underOdds ?? null)
+                              : (sig.bestOdds?.overOdds ?? null);
+                            const execLine = sig.bookLine;
+                            const betStr = `${SPORTSBOOK_LABELS[execBook] ?? execBook}: ${sig.recommendedSide} ${execLine}${execOdds != null ? ` (${execOdds > 0 ? "+" : ""}${execOdds})` : ""}`;
+                            return (
+                              <div
+                                className="mt-2 rounded-lg p-2.5 flex items-center justify-between gap-2"
+                                style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}
+                              >
+                                <div className="flex flex-col gap-0.5 min-w-0">
+                                  <span className="text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">How to Bet</span>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span
+                                      data-testid={`text-mlb-execbook-${sig.playerId}-${sig.market}`}
+                                      className="text-xs font-bold text-foreground/90"
+                                    >
+                                      {SPORTSBOOK_LABELS[execBook] ?? execBook}
+                                    </span>
+                                    <span className="text-xs text-muted-foreground">·</span>
+                                    <span
+                                      data-testid={`text-mlb-execbet-${sig.playerId}-${sig.market}`}
+                                      className="text-xs font-semibold"
+                                      style={{ color: style.dot }}
+                                    >
+                                      {sig.recommendedSide} {execLine}
+                                      {execOdds != null && (
+                                        <span className="text-muted-foreground font-normal ml-1">
+                                          ({execOdds > 0 ? "+" : ""}{execOdds})
+                                        </span>
+                                      )}
+                                    </span>
+                                  </div>
+                                </div>
+                                <button
+                                  data-testid={`button-mlb-copy-bet-${sig.playerId}-${sig.market}`}
+                                  className="shrink-0 text-[10px] px-2 py-1 rounded-md border border-border/50 text-muted-foreground hover:text-foreground hover:border-border transition-colors"
+                                  title="Copy bet to clipboard"
+                                  onClick={() => {
+                                    navigator.clipboard?.writeText(betStr).catch(() => {});
+                                  }}
+                                >
+                                  Copy
+                                </button>
+                              </div>
+                            );
+                          })()}
                         </div>
                       );
                     })}

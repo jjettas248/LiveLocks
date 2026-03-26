@@ -3,6 +3,7 @@
 // All functions: 8-second timeout, try/catch, log-and-return on error.
 
 import type { PitchMixEntry } from "./types";
+import { fetchBaseballSavantData } from "./dataSources";
 
 // ── Cache type definitions ────────────────────────────────────────────────────
 
@@ -32,6 +33,8 @@ export interface PlayerContactData {
   hitDistance: number | null;
   hardHitPct: number | null;
   barrelPct: number | null;
+  xBA: number | null;
+  xSLG: number | null;
   priorABResults: Array<{
     exitVelocity: number | null;
     launchAngle: number | null;
@@ -256,6 +259,8 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
             hitDistance: null,
             hardHitPct: null,
             barrelPct: null,
+            xBA: null,
+            xSLG: null,
             priorABResults: [],
           };
         }
@@ -291,6 +296,26 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
           if (entry.barrelPct === null) entry.barrelPct = parseFloat((barrels * 100).toFixed(1));
         }
       }
+    }
+
+    // Enrich xBA/xSLG for each player from Baseball Savant seasonal stats (non-blocking)
+    const playerIds = Object.keys(byPlayerId);
+    if (playerIds.length > 0) {
+      const savantResults = await Promise.allSettled(
+        playerIds.map((pid) => fetchBaseballSavantData(pid, gameId))
+      );
+      for (let i = 0; i < playerIds.length; i++) {
+        const result = savantResults[i];
+        if (result.status === "fulfilled" && result.value) {
+          const entry = byPlayerId[playerIds[i]];
+          if (entry) {
+            if (entry.xBA === null && result.value.xBA != null) entry.xBA = result.value.xBA;
+            if (entry.xSLG === null && result.value.xSLG != null) entry.xSLG = result.value.xSLG;
+          }
+        }
+      }
+      const enrichedCount = playerIds.filter((pid) => byPlayerId[pid]?.xBA != null || byPlayerId[pid]?.xSLG != null).length;
+      console.log(`[MLB pull] syncContactData Savant enrichment: game ${gameId} — ${enrichedCount}/${playerIds.length} players with xBA/xSLG`);
     }
 
     mlbGameCache.contactData[gameId] = { byPlayerId, fetchedAt: Date.now() };
@@ -420,9 +445,60 @@ export async function syncWeather(statsPk: string, cacheKey?: string): Promise<v
 }
 
 // ── syncBullpenUsage ──────────────────────────────────────────────────────────
-// Only extracts what is reliably available from the live feed boxscore.
-// Fields that cannot be reliably derived (usage last 3 days, top reliever
-// availability) default to safe neutral values.
+// Extracts current-game bullpen usage from live feed boxscore.
+// Also fetches prior 3-day appearances from the MLB Stats API schedule endpoint
+// to compute a bullpen fatigue score for the active relievers.
+
+const BULLPEN_3DAY_TTL = 10 * 60 * 1000; // 10 min cache for schedule lookups
+
+async function fetchTeamRelieverUsageLastThreeDays(
+  teamId: string | number,
+  gameDate: string
+): Promise<number | null> {
+  try {
+    const date = new Date(gameDate);
+    const pastDates: string[] = [];
+    for (let d = 3; d >= 1; d--) {
+      const past = new Date(date);
+      past.setDate(date.getDate() - d);
+      pastDates.push(past.toISOString().slice(0, 10));
+    }
+
+    let totalPitchCount = 0;
+    let foundAny = false;
+
+    for (const d of pastDates) {
+      const url = `https://statsapi.mlb.com/api/v1/schedule?teamId=${teamId}&date=${d}&hydrate=boxscore&sportId=1`;
+      try {
+        const data = await fetchJson(url);
+        const games = data.dates?.[0]?.games ?? [];
+        for (const game of games) {
+          const boxscore = game.teams;
+          if (!boxscore) continue;
+          for (const side of ["home", "away"]) {
+            if (String(boxscore[side]?.team?.id) !== String(teamId)) continue;
+            const pitchers: number[] = boxscore[side]?.pitchers ?? [];
+            const relieverIds = pitchers.slice(1); // skip starter
+            for (const pid of relieverIds) {
+              const playerBox = boxscore[side]?.players?.[`ID${pid}`];
+              if (!playerBox) continue;
+              const pitches = safeNum(playerBox.stats?.pitching?.numberOfPitches) ?? 0;
+              totalPitchCount += pitches;
+              if (pitches > 0) foundAny = true;
+            }
+          }
+        }
+      } catch {
+        // Skip individual date failures
+      }
+    }
+
+    return foundAny ? totalPitchCount : null;
+  } catch (err: any) {
+    console.warn(`[MLB pull] fetchTeamRelieverUsageLastThreeDays error:`, err.message);
+    return null;
+  }
+}
 
 export async function syncBullpenUsage(statsPk: string, cacheKey?: string): Promise<void> {
   const gameId = cacheKey ?? statsPk;
@@ -430,14 +506,19 @@ export async function syncBullpenUsage(statsPk: string, cacheKey?: string): Prom
     const data = await fetchJson(LIVE_FEED_URL(statsPk));
     const liveData = data.liveData ?? {};
     const boxTeams = liveData.boxscore?.teams ?? {};
+    const gameDate: string = data.gameData?.datetime?.officialDate
+      ?? new Date().toISOString().slice(0, 10);
 
     const relieversUsed: BullpenCache["relieversUsed"] = [];
     let bullpenEra: number | null = null;
     const eraValues: number[] = [];
+    const teamIds: string[] = [];
 
     for (const side of ["home", "away"] as const) {
       const team = boxTeams[side] ?? {};
       const pitcherIds: number[] = team.pitchers ?? [];
+      const teamId = String(data.gameData?.teams?.[side]?.id ?? "");
+      if (teamId) teamIds.push(teamId);
 
       // Skip the first pitcher (starter) — rest are relievers
       const relieverIds = pitcherIds.slice(1);
@@ -460,15 +541,29 @@ export async function syncBullpenUsage(statsPk: string, cacheKey?: string): Prom
       bullpenEra = parseFloat((eraValues.reduce((a, b) => a + b, 0) / eraValues.length).toFixed(2));
     }
 
+    // Fetch prior 3-day pitch counts for each team's bullpen
+    let bullpenUsageLastThreeDays: number | null = null;
+    if (teamIds.length > 0) {
+      const usageCounts = await Promise.all(
+        teamIds.map((tid) => fetchTeamRelieverUsageLastThreeDays(tid, gameDate))
+      );
+      const validCounts = usageCounts.filter((c): c is number => c != null);
+      if (validCounts.length > 0) {
+        bullpenUsageLastThreeDays = Math.round(
+          validCounts.reduce((a, b) => a + b, 0) / validCounts.length
+        );
+      }
+    }
+
     mlbGameCache.bullpen[gameId] = {
       bullpenEra,
-      bullpenUsageLastThreeDays: null,
-      isTopRelieverAvailable: true,
+      bullpenUsageLastThreeDays,
+      isTopRelieverAvailable: relieversUsed.length < 3,
       relieversUsed,
       fetchedAt: Date.now(),
     };
 
-    console.log(`[MLB pull] syncBullpenUsage: game ${gameId} — ${relieversUsed.length} relievers used, ERA ${bullpenEra ?? "unknown"}`);
+    console.log(`[MLB pull] syncBullpenUsage: game ${gameId} — ${relieversUsed.length} relievers used, ERA ${bullpenEra ?? "unknown"}, 3-day pitches ${bullpenUsageLastThreeDays ?? "unknown"}`);
   } catch (err: any) {
     console.error(`[MLB pull] syncBullpenUsage(${gameId}) error:`, err.message);
   }

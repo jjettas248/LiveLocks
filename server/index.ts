@@ -230,6 +230,19 @@ app.use((req, res, next) => {
     console.warn("[startup] Schema migration warning (engine-version):", err.message);
   }
 
+  // Schema migration: add projection/sportsbook/derived_line to persisted_plays (Task #97)
+  try {
+    await pool.query(`
+      ALTER TABLE persisted_plays
+        ADD COLUMN IF NOT EXISTS projection numeric,
+        ADD COLUMN IF NOT EXISTS sportsbook text,
+        ADD COLUMN IF NOT EXISTS derived_line boolean;
+    `);
+    console.log("[startup] Schema migration: persisted_plays signal snapshot columns ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (persisted-plays-snapshot):", err.message);
+  }
+
   // Backfill: mark pre-existing users (no verification token) as email-verified
   // so they are not locked out by the new emailVerified gate.
   try {

@@ -1,5 +1,6 @@
 import { db } from "./db";
 import { calculateRemainingMinutes } from "./minutesModel";
+import { getPlayerUsage, getTeamDefenseMatchup, computeUsageAdjustment, computeDefenseMultiplier } from "./services/nbaStatsService";
 import {
   players,
   teamDefense,
@@ -128,6 +129,7 @@ export interface IStorage {
     id: string; gameId: string; playerId?: string; playerName: string; team?: string;
     sport: string; market: string; direction: string; line: number; prob: number;
     engineProb?: number; bookImplied?: number; edgeGap?: number; engineVersion?: string;
+    projection?: number; sportsbook?: string | null; derivedLine?: boolean;
     gameDate: string; timestamp: Date;
     duplicateGuard: string;
   }): Promise<{ id: string; isDuplicate: boolean }>;
@@ -320,10 +322,23 @@ export class DatabaseStorage implements IStorage {
     if (!player) throw new Error("Player not found");
 
     const defense = await this.getTeamDefense(req.opponentTeam, player.position);
-    const defenseMultiplier = defense ? Number(defense.defRating) : 1.0;
+    const dbDefenseMultiplier = defense ? Number(defense.defRating) : 1.0;
+
+    // ─── NBA Stats API: enriched defense matchup + usage (non-blocking) ─────
+    const [nbaDefenseMatchup, nbaPlayerUsage] = await Promise.all([
+      getTeamDefenseMatchup(req.opponentTeam).catch(() => null),
+      getPlayerUsage(player.name, String(player.id)).catch(() => null),
+    ]);
+    const nbaDefMultiplier = nbaDefenseMatchup ? computeDefenseMultiplier(nbaDefenseMatchup, player.position ?? undefined) : dbDefenseMultiplier;
+    const defenseMultiplier = nbaDefenseMatchup
+      ? nbaDefMultiplier * 0.6 + dbDefenseMultiplier * 0.4
+      : dbDefenseMultiplier;
 
     const avgMinutes = Number(player.avgMinutes);
-    const usageRate = player.usageRate ? Number(player.usageRate) : 0.22;
+    const usageRate = nbaPlayerUsage?.usageRate != null
+      ? nbaPlayerUsage.usageRate / 100
+      : player.usageRate ? Number(player.usageRate) : 0.22;
+    const nbaUsageAdjustment = nbaPlayerUsage ? computeUsageAdjustment(nbaPlayerUsage) : 1.0;
     const minutesPlayed = req.halftimeMinutes;
 
     // ─── Projected minutes (staleness guard: discard if > 24 h old) ─────────
@@ -559,7 +574,9 @@ export class DatabaseStorage implements IStorage {
     const livePPM = estimatePossessionsPerMinute(currentPeriod, parsedScoreDiff);
     const tempoMultiplier = livePPM / baselinePPM;
     const usageMultiplier = usageCompressionMultiplier(parsedScoreDiff);
-    let expectedFromHere = blendedPerMin * remainingMinutes * contextModifier * tempoMultiplier * usageMultiplier;
+    // Apply NBA Stats usage adjustment (clamped to [0.92, 1.08] to prevent overcorrection)
+    const clampedNbaUsage = Math.max(0.92, Math.min(1.08, nbaUsageAdjustment));
+    let expectedFromHere = blendedPerMin * remainingMinutes * contextModifier * tempoMultiplier * usageMultiplier * clampedNbaUsage;
 
     // ─── Overtime probability boost (Step 3) ──────────────────────────────
     if (hasScoreData && currentPeriod === 4 && clockMins <= 2.0 && Math.abs(parsedScoreDiff) <= 3) {
@@ -831,8 +848,8 @@ export class DatabaseStorage implements IStorage {
     };
 
     return {
-      probability: finalProbability,
-      impliedProbability: finalProbability,
+      probability: Math.round(probability * 10) / 10,
+      impliedProbability: Math.round(probability * 10) / 10,
       overConfidence: Math.round(overConfidence * 10) / 10,
       underConfidence: Math.round(underConfidence * 10) / 10,
       displayConfidence: displayConfidence !== null ? Math.round(displayConfidence * 10) / 10 : null,
@@ -1302,6 +1319,7 @@ export class DatabaseStorage implements IStorage {
     id: string; gameId: string; playerId?: string; playerName: string; team?: string;
     sport: string; market: string; direction: string; line: number; prob: number;
     engineProb?: number; bookImplied?: number; edgeGap?: number; engineVersion?: string;
+    projection?: number; sportsbook?: string | null; derivedLine?: boolean;
     gameDate: string; timestamp: Date; duplicateGuard: string;
   }): Promise<{ id: string; isDuplicate: boolean }> {
     // Service-level pre-check (fast path) + DB-level ON CONFLICT DO NOTHING (race-safe)
@@ -1326,6 +1344,9 @@ export class DatabaseStorage implements IStorage {
       bookImplied: play.bookImplied != null ? String(play.bookImplied) : null,
       edgeGap: play.edgeGap != null ? String(play.edgeGap) : null,
       engineVersion: play.engineVersion ?? null,
+      projection: play.projection != null ? String(play.projection) : null,
+      sportsbook: play.sportsbook ?? null,
+      derivedLine: play.derivedLine ?? null,
       gameDate: play.gameDate,
       timestamp: play.timestamp,
       duplicateGuard: play.duplicateGuard,

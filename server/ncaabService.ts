@@ -1,5 +1,8 @@
 import { runNCAABEngine, ALL_MARKET_KEYS, type NCAABEngineOutput, type RecommendedSide } from "./ncaabEngine";
 import { logSettledPlay } from "./ncaabDiagnostics";
+import { fetchBartTorvik } from "./ncaabEnrichment";
+import { computeEfficiencyAdjustment, computeH2EfficiencyBonus } from "./services/bartTorvik";
+import { normalizeOdds } from "./oddsService";
 
 const ODDS_API_KEY = process.env.ODDS_API_KEY;
 const SGO_API_KEY  = process.env.SGO_API_KEY;
@@ -937,6 +940,19 @@ function extractLines(oddsEvent: any, homeTeamName?: string, awayTeamName?: stri
     });
   }
 
+  // Apply normalizeOdds for a statistically robust consensus total line
+  // across all available bookmakers (replaces first-book-wins selection)
+  const normalizedOddsBooks: Record<string, { line: number; overOdds: number; underOdds: number }> = {};
+  for (const bl of bookLines) {
+    if (bl.total != null && Number.isFinite(bl.total) && overOddsAmerican != null && underOddsAmerican != null) {
+      normalizedOddsBooks[bl.book] = { line: bl.total, overOdds: overOddsAmerican, underOdds: underOddsAmerican };
+    }
+  }
+  if (Object.keys(normalizedOddsBooks).length > 0) {
+    const norm = normalizeOdds(normalizedOddsBooks);
+    if (norm.medianLine != null) total = norm.medianLine;
+  }
+
   return { spread, total, favorite, bookLines, h1TotalLine, h1SpreadLine, h1Favorite, h2TotalLine, h2SpreadLine, h2Favorite, overOddsAmerican, underOddsAmerican, spreadOddsAmerican, h1OverOddsAmerican, h1SpreadOddsAmerican, h2OverOddsAmerican, h2SpreadOddsAmerican, h1TotalOverOdds, h1TotalUnderOdds, h1SpreadHomeOdds, h1SpreadAwayOdds, homeTTBookLine, awayTTBookLine };
 }
 
@@ -1338,9 +1354,37 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       const homeStats = teamStats[homeAbbr] ?? {};
       const awayStats = teamStats[awayAbbr] ?? {};
 
+      // ── BartTorvik efficiency adjustment (non-blocking) ──────────────────
+      let bartTorvikBonus = 0;
+      try {
+        const [homeTorvik, awayTorvik] = await Promise.allSettled([
+          fetchBartTorvik(game.homeTeam),
+          fetchBartTorvik(game.awayTeam),
+        ]);
+        const homeEff = homeTorvik.status === "fulfilled" ? homeTorvik.value : null;
+        const awayEff = awayTorvik.status === "fulfilled" ? awayTorvik.value : null;
+
+        if (homeEff && awayEff) {
+          const currentTotalForBT = game.homeScore + game.awayScore;
+          const baseProj = isHalftime
+            ? currentTotalForBT + (currentTotalForBT / 20) * 20
+            : currentTotalForBT;
+          const homeEffBT = { ...homeEff, teamName: game.homeTeam, source: "barttorvik" as const };
+          const awayEffBT = { ...awayEff, teamName: game.awayTeam, source: "barttorvik" as const };
+          const efficiencyAdj = computeEfficiencyAdjustment(homeEffBT, awayEffBT, baseProj);
+          const h2FoulBonus = half === 2 ? computeH2EfficiencyBonus(homeEffBT, awayEffBT) : 0;
+          bartTorvikBonus = efficiencyAdj + h2FoulBonus;
+          if (process.env.DEBUG_PIPELINE === "true") {
+            console.log(`[PIPELINE][NCAAB BartTorvik][${game.id}] adjO(home)=${homeEff.adjO} adjD(home)=${homeEff.adjD} tempo(home)=${homeEff.tempo} effAdj=${efficiencyAdj.toFixed(2)} h2FoulBonus=${h2FoulBonus.toFixed(2)} total=${bartTorvikBonus.toFixed(2)}`);
+          }
+        }
+      } catch (btErr: any) {
+        console.warn(`[NCAAB BartTorvik] fetchBartTorvik error for ${game.id}:`, btErr.message);
+      }
+
       // ── Coaching tendency modifiers ──────────────────────────────────────
       let volatilityBonus = 0;
-      let projTotalBonus = 0;
+      let projTotalBonus = bartTorvikBonus;
       let desperation3s = false;
       let intentionalFouling = false;
 
@@ -1371,12 +1415,14 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
         console.warn("H1 spread odds hydration failure (post-merge)", { gameId: game.id, h1SpreadLine });
       }
 
-      if (total !== null && overOddsAmerican === null) { overOddsAmerican = -110; console.log(`[NCAAB] full_total line present but odds null — defaulting to -110 (gameId=${game.id})`); }
-      if (spread !== null && spreadOddsAmerican === null) { spreadOddsAmerican = -110; console.log(`[NCAAB] full_spread line present but odds null — defaulting to -110 (gameId=${game.id})`); }
-      if (h1TotalLine !== null && h1OverOddsAmerican === null) { h1OverOddsAmerican = -110; console.log(`[NCAAB] h1_total line present but odds null — defaulting to -110 (gameId=${game.id})`); }
-      if (h1SpreadLine !== null && h1SpreadOddsAmerican === null) { h1SpreadOddsAmerican = -110; console.log(`[NCAAB] h1_spread line present but odds null — defaulting to -110 (gameId=${game.id})`); }
-      if (h2TotalLine !== null && h2OverOddsAmerican === null) { h2OverOddsAmerican = -110; console.log(`[NCAAB] h2_total line present but odds null — defaulting to -110 (gameId=${game.id})`); }
-      if (h2SpreadLine !== null && h2SpreadOddsAmerican === null) { h2SpreadOddsAmerican = -110; console.log(`[NCAAB] h2_spread line present but odds null — defaulting to -110 (gameId=${game.id})`); }
+      // Reject markets with a line but no real odds — do NOT fabricate -110 defaults.
+      // Signals built without verified odds will fail EngineSignal validation downstream.
+      if (total !== null && overOddsAmerican === null) { console.warn(`[NCAAB] full_total line present but odds null — nulling line (gameId=${game.id})`); total = null; }
+      if (spread !== null && spreadOddsAmerican === null) { console.warn(`[NCAAB] full_spread line present but odds null — nulling line (gameId=${game.id})`); spread = null; }
+      if (h1TotalLine !== null && h1OverOddsAmerican === null) { console.warn(`[NCAAB] h1_total line present but odds null — nulling line (gameId=${game.id})`); h1TotalLine = null; }
+      if (h1SpreadLine !== null && h1SpreadOddsAmerican === null) { console.warn(`[NCAAB] h1_spread line present but odds null — nulling line (gameId=${game.id})`); h1SpreadLine = null; }
+      if (h2TotalLine !== null && h2OverOddsAmerican === null) { console.warn(`[NCAAB] h2_total line present but odds null — nulling line (gameId=${game.id})`); h2TotalLine = null; }
+      if (h2SpreadLine !== null && h2SpreadOddsAmerican === null) { console.warn(`[NCAAB] h2_spread line present but odds null — nulling line (gameId=${game.id})`); h2SpreadLine = null; }
 
       // ── Step 1: Full game total derivation (pace-based fallback) ─────────
       let liveTotalSource: "book" | "derived" = total != null ? "book" : "book";
@@ -1414,8 +1460,9 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
 
           if (Number.isFinite(projectedTotal)) {
             total = projectedTotal;
-            overOddsAmerican = Number.isFinite(Number(overOddsAmerican)) ? Number(overOddsAmerican) : -110;
-            underOddsAmerican = Number.isFinite(Number(underOddsAmerican)) ? Number(underOddsAmerican) : -110;
+            // Keep real odds if available; do NOT fabricate -110 fallback for derived lines
+            overOddsAmerican = Number.isFinite(Number(overOddsAmerican)) ? Number(overOddsAmerican) : null;
+            underOddsAmerican = Number.isFinite(Number(underOddsAmerican)) ? Number(underOddsAmerican) : null;
             liveTotalSource = "derived";
             console.log(
               `[NCAAB DERIVED] total=${projectedTotal.toFixed(2)} gameId=${game.id} score=${homeScoreNum}-${awayScoreNum} elapsed=${safeElapsedSeconds} regressionWeight=${regressionWeight.toFixed(3)}`

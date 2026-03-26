@@ -5,6 +5,7 @@ import {
   computeLineupContextScore,
   computePitcherContextScore,
   computePitchTypeScore,
+  computeBatterVsPitchTypeSplit,
   computeWeatherParkScore,
   computeBullpenScore,
   computeParkHistoryAdjustment,
@@ -110,7 +111,8 @@ export function projectBaseValue(input: MLBPropInput): ProjectionResult {
   }
 
   const rawPitcher = computePitcherContextScore(input.pitcher);
-  const rawPitchType = computePitchTypeScore(input.pitcher);
+  // pitchType includes both pitcher pitch-mix perspective + batter-vs-pitch-type split
+  const rawPitchType = computePitchTypeScore(input.pitcher) + computeBatterVsPitchTypeSplit(input);
   const rawWeatherPark = computeWeatherParkScore(input.weatherPark);
   const rawLineup = computeLineupContextScore(input.lineup);
   const shouldApplyBullpen =

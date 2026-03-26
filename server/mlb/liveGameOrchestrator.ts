@@ -455,6 +455,8 @@ export class LiveGameOrchestrator {
             hardHitRateSeason: playerContact?.hardHitPct != null ? playerContact.hardHitPct / 100 : null,
             barrelRateProxySeason: playerContact?.barrelPct != null ? playerContact.barrelPct / 100 : null,
             priorABResults: (playerContact?.priorABResults ?? []) as MLBPropInput["contactQuality"]["priorABResults"],
+            xBA: playerContact?.xBA ?? null,
+            xSLG: playerContact?.xSLG ?? null,
           },
           pitcher: {
             pitchCount: pitcher ? state.pitchCount : 0,
@@ -610,6 +612,8 @@ export class LiveGameOrchestrator {
             hardHitRateSeason: null,
             barrelRateProxySeason: null,
             priorABResults: [],
+            xBA: null,
+            xSLG: null,
           },
           pitcher: {
             pitchCount: state.pitchCount,

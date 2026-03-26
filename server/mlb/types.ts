@@ -19,6 +19,64 @@ export const ALL_MLB_MARKETS: MLBMarket[] = [
   "hrr",
 ];
 
+// ── Phase 5: Game-level markets (team/game totals, F5) ────────────────────────
+export type MLBGameMarket =
+  | "full_game_total"
+  | "f5_total"
+  | "team_total_home"
+  | "team_total_away";
+
+export const ALL_MLB_GAME_MARKETS: MLBGameMarket[] = [
+  "full_game_total",
+  "f5_total",
+  "team_total_home",
+  "team_total_away",
+];
+
+export interface MLBGameMarketInput {
+  gameId: string;
+  inning: number;
+  isTopInning: boolean;
+  homeScore: number;
+  awayScore: number;
+  homeTeam: string;
+  awayTeam: string;
+  pitchCount: number;
+  timesThrough: number;
+  starterEra: number | null;
+  parkFactor: number;
+  // Sportsbook lines — null if unavailable
+  fullGameLine: number | null;
+  f5Line: number | null;
+  teamTotalHomeLine: number | null;
+  teamTotalAwayLine: number | null;
+  fullGameOverOdds: number | null;
+  fullGameUnderOdds: number | null;
+  f5OverOdds: number | null;
+  f5UnderOdds: number | null;
+  sportsbook: string | null;
+  lineSource: "sportsbook" | "inferred" | "derived";
+}
+
+export interface MLBGameMarketOutput {
+  market: MLBGameMarket;
+  gameId: string;
+  homeTeam: string;
+  awayTeam: string;
+  bookLine: number;
+  projection: number;
+  edge: number;
+  recommendedSide: "OVER" | "UNDER" | "NO_EDGE";
+  confidenceTier: MLBConfidenceTier;
+  overOdds: number | null;
+  underOdds: number | null;
+  sportsbook: string | null;
+  lineSource: "sportsbook" | "inferred" | "derived";
+  engineGeneratedAt: number;
+  signalTimestamp: number;
+  isDerivedLine: boolean;
+}
+
 export const CORE_MARKETS: MLBMarket[] = [
   "hits",
   "total_bases",
@@ -49,6 +107,8 @@ export interface ContactQualityMetrics {
   hardHitRateSeason: number | null;
   barrelRateProxySeason: number | null;
   priorABResults: ABResult[];
+  xBA: number | null;
+  xSLG: number | null;
 }
 
 export interface ABResult {
@@ -238,6 +298,9 @@ export interface MLBPropOutput {
   engineGeneratedAt: number;
   oddsUpdatedAt: number;
   projectionUpdatedAt: number;
+  sportsbook: string | null;
+  isDerivedLine: boolean;
+  signalTimestamp: number;
 }
 
 export const STANDARD_THRESHOLDS = {

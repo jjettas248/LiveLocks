@@ -3433,6 +3433,41 @@ export default function Dashboard() {
                                               </Tooltip>
                                             </TooltipProvider>
                                           )}
+                                          {play.isDerivedLine && !isLocked && (
+                                            <TooltipProvider>
+                                              <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                  <span
+                                                    data-testid={`badge-derived-line-${idx}`}
+                                                    className="text-[10px] font-semibold px-1.5 py-0.5 rounded cursor-help"
+                                                    style={{ background: "rgba(139,92,246,0.12)", border: "1px solid rgba(139,92,246,0.3)", color: "#a78bfa" }}
+                                                  >
+                                                    Derived
+                                                  </span>
+                                                </TooltipTrigger>
+                                                <TooltipContent side="top" className="max-w-xs text-xs">
+                                                  Line projected from live scoring pace — no direct book line available.
+                                                </TooltipContent>
+                                              </Tooltip>
+                                            </TooltipProvider>
+                                          )}
+                                          {play.sportsbook && !isLocked && (
+                                            <span
+                                              data-testid={`badge-sportsbook-${idx}`}
+                                              className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+                                              style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#71717a" }}
+                                            >
+                                              {play.sportsbook}
+                                            </span>
+                                          )}
+                                          {play.signalTimestamp && !isLocked && (
+                                            <span
+                                              data-testid={`text-signal-time-${idx}`}
+                                              className="text-[10px] text-muted-foreground/50"
+                                            >
+                                              {new Date(play.signalTimestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                                            </span>
+                                          )}
                                           {isLocked ? (
                                             <>
                                               <span className="text-xs" style={{ color: "#71717a" }}>

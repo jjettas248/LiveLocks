@@ -250,6 +250,9 @@ export interface NCAABEngineOutput {
   warnings: string[];
   engineGeneratedAt: number;
 
+  // Phase 4: line source provenance
+  lineSource?: "sportsbook" | "inferred" | "derived";
+
   debug?: NCAABDebugPayload;
 }
 
@@ -1270,6 +1273,13 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
         }))
       : undefined;
 
+  // Phase 4 — lineSource provenance from liveTotalSource
+  const lineSource: "sportsbook" | "inferred" | "derived" =
+    input.liveTotalSource === "derived" ? "derived" :
+    input.h2TotalLine !== null && input.h2TotalLine !== undefined && input.liveTotalLine !== null ? "inferred" :
+    "sportsbook";
+  console.log(`[NCAAB LINE SOURCE] gameId=${input.gameId} type=${lineSource} liveTotalSource=${input.liveTotalSource ?? "n/a"}`);
+
   const engineOutput: NCAABEngineOutput = {
     gameId: input.gameId,
     sport: "ncaab",
@@ -1321,6 +1331,7 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
 
     warnings,
     engineGeneratedAt: now,
+    lineSource,
 
     debug: {
       baseProjection: projection.baseProjection,

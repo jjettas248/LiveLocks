@@ -4,7 +4,14 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
-import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines, getSGOPlayerLine, resolveMLBOddsEventId, getMLBPlayerOdds } from "./oddsService";
+import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines, getSGOPlayerLine, resolveMLBOddsEventId, getMLBPlayerOdds, normalizeOdds } from "./oddsService";
+import { getEngineDebugSummary, recordEngineRun, resetEngineStats } from "./services/engineStats";
+import { filterValidSignals } from "./services/engineSignal";
+import { filterValidEngineOutputs } from "./services/engineValidation";
+import { isValidTimingWindow } from "./services/timingService";
+import { filterFreshLines, getBestBet } from "./services/sportsbookService";
+import { trackPlay } from "./services/playTracker";
+import { buildEngineInput } from "./services/engineInputBuilder";
 import { computeNCAABPlays, getNCAABScoreboard, getNCAABH2H, getNCAABChipOdds, fetch2HLines, calc2HEngineProb } from "./ncaabService";
 import { enrichNCAABGameFull, clearEnrichmentCache, getEnrichmentCacheStats } from "./ncaabEnrichment";
 import { calculateParlay } from "./parlayService";
@@ -289,7 +296,109 @@ export async function registerRoutes(
         }
       }
 
-      res.json({ plays: freshPlays });
+      // ─── Engine stats observability ──────────────────────────────────────
+      const ncaabEngineStart = Date.now();
+      console.log(`[ENGINE START][NCAAB] games=${freshPlays.length}`);
+      const ncaabValidationAcc = { skipped: 0, failureReasons: [] as string[] };
+      const ncaabOutputAcc = { rejected: 0, rejectionReasons: [] as string[] };
+      const ncaabRawOutputs = freshPlays.map((p) => {
+        // Phase 13/17: Timing gate — only generate signals at halftime or < 5 min remaining
+        // NCAABPlay exposes bettingWindow ("HALFTIME" | "LATE_WINDOW" | "1H_WINDOW" | "NONE")
+        const bettingWindow = (p as any).bettingWindow as string | undefined;
+        const timingValid = bettingWindow === "HALFTIME" || bettingWindow === "LATE_WINDOW";
+        if (!timingValid) console.log(`[TIMING GATE][NCAAB] Suppressed game=${p.gameId} bettingWindow=${bettingWindow ?? "unknown"}`);
+        const isDerived = !p.total;
+        // Phase 4: lineSource from engine output or inferred from derivedLine flag
+        const lineSource: "sportsbook" | "inferred" | "derived" =
+          p.engineOutput?.lineSource ?? (isDerived ? "derived" : "sportsbook");
+        console.log(`[NCAAB LINE SOURCE] game=${p.gameId} type=${lineSource} timingValid=${timingValid}`);
+        const input = buildEngineInput({
+          gameId: p.gameId ?? "",
+          sport: "ncaab",
+          teamId: p.homeTeam ?? p.awayTeam ?? undefined,
+          marketType: "total",
+          line: p.total ?? null,
+          derivedLine: isDerived,
+          lineSource,
+          context: {
+            score: { home: p.homeScore ?? 0, away: p.awayScore ?? 0 },
+          },
+        });
+        const line = input.line;
+        const projection = p.engineOutput?.projectedTotal ?? null;
+        // Apply confidence penalty when derivedLine — reduce probability toward 50 (neutral)
+        const rawProb = typeof p.engineOutput?.displayProbability === "number" ? p.engineOutput.displayProbability : null;
+        const penalizedProb = rawProb != null
+          ? 50 + (rawProb - 50) * input.confidencePenalty
+          : null;
+        const prob = penalizedProb != null ? penalizedProb / 100 : null;
+        const edge = penalizedProb != null ? Math.abs(penalizedProb - 50) / 100 : null;
+        const side = (p.engineOutput?.recommendedSide === "UNDER" ? "UNDER" : "OVER") as "OVER" | "UNDER";
+        // Phase 7: compute confidence tier from probability
+        const probPct = penalizedProb ?? 50;
+        const confidenceTier = probPct >= 75 && !isDerived ? "ELITE" as const
+          : probPct >= 65 ? "STRONG" as const
+          : probPct >= 55 ? "LEAN" as const
+          : "NO_EDGE" as const;
+        console.log(`[ENGINE INPUT][NCAAB] game=${p.gameId} line=${line} proj=${projection} prob=${rawProb} penalizedProb=${penalizedProb} edge=${edge} derivedLine=${isDerived} lineSource=${lineSource} confidence=${confidenceTier}`);
+        return {
+          id: p.gameId ?? "",
+          sport: "ncaab" as const,
+          market: "total",
+          team: p.homeTeam ?? p.awayTeam ?? undefined,
+          playerName: p.gameId ?? "",
+          gameId: p.gameId ?? "",
+          line,
+          projection,
+          probability: prob,
+          edge,
+          recommendedSide: side,
+          confidence: confidenceTier,
+          sportsbook: "consensus",
+          derivedLine: isDerived,
+          lineSource,
+          signalTimestamp: input.createdAt,
+          timingValid,
+          createdAt: input.createdAt,
+        };
+      });
+      // Phase 3+8: validate output consistency before signal promotion
+      const ncaabConsistentOutputs = filterValidEngineOutputs(ncaabRawOutputs, ncaabOutputAcc);
+      // Convert to EngineSignal shape for filterValidSignals
+      const ncaabEngineSignals = ncaabConsistentOutputs.map(({ playerName: _pn, gameId: _gid, ...rest }) => rest);
+      const validNcaabEngineSignals = filterValidSignals(ncaabEngineSignals, ncaabValidationAcc);
+      const validNcaabGameIds = new Set(validNcaabEngineSignals.map((s) => s.id));
+      const validatedPlays = freshPlays.filter((p) => validNcaabGameIds.has(p.gameId ?? ""));
+      for (const sig of validNcaabEngineSignals) console.log(`[ENGINE OUTPUT VALID][NCAAB] game=${sig.id} line=${sig.line} proj=${sig.projection} sportsbook=${sig.sportsbook}`);
+      if (ncaabValidationAcc.skipped > 0) console.warn(`[ENGINE OUTPUT SKIPPED][NCAAB] count=${ncaabValidationAcc.skipped} reasons=${ncaabValidationAcc.failureReasons.join("; ")}`);
+      if (ncaabOutputAcc.rejected > 0) console.warn(`[ENGINE OUTPUT SKIPPED][NCAAB] outputValidation rejected=${ncaabOutputAcc.rejected} reasons=${ncaabOutputAcc.rejectionReasons.join("; ")}`);
+      // Phase 10: tally lineSource distribution across all NCAAB plays
+      const ncaabLineSources = ncaabRawOutputs.map((o) => (o as any).lineSource ?? "sportsbook");
+      const ncaabDerivedCount = ncaabLineSources.filter((s: string) => s === "derived").length;
+      const ncaabInferredCount = ncaabLineSources.filter((s: string) => s === "inferred").length;
+      recordEngineRun("ncaab", {
+        gamesProcessed: freshPlays.length,
+        signalsGenerated: validNcaabEngineSignals.length,
+        signalsSkipped: ncaabValidationAcc.skipped,
+        rejectedSignals: ncaabOutputAcc.rejected,
+        rejectionReasons: ncaabOutputAcc.rejectionReasons,
+        failureReasons: ncaabValidationAcc.failureReasons,
+        latencyMs: Date.now() - ncaabEngineStart,
+        lineSource: ncaabDerivedCount > 0 ? "derived" : ncaabInferredCount > 0 ? "inferred" : "sportsbook",
+      });
+
+      // Phase 16: Signal Priority Engine — rank NCAAB plays by probability then edge, max 10 global
+      const MAX_NCAAB_SIGNALS = 10;
+      const prioritizedNcaabPlays = [...validatedPlays]
+        .sort((a, b) => {
+          const probA = parseFloat(String(a.engineOutput?.displayProbability ?? "50")) || 50;
+          const probB = parseFloat(String(b.engineOutput?.displayProbability ?? "50")) || 50;
+          return Math.abs(probB - 50) - Math.abs(probA - 50);
+        })
+        .slice(0, MAX_NCAAB_SIGNALS);
+      console.log(`[SIGNAL PRIORITY][NCAAB] before=${validatedPlays.length} after=${prioritizedNcaabPlays.length}`);
+
+      res.json({ plays: prioritizedNcaabPlays });
       checkAndSendAlerts(freshPlays, storage).catch(console.warn);
     } catch (err: any) {
       console.error("[NCAAB plays]", err.message);
@@ -853,6 +962,7 @@ export async function registerRoutes(
           playerName: o.playerName,
           market: o.market,
           bookLine: hasOdds ? o.bookLine : null,
+          projection: o.projection ?? null,
           enginePct: Math.round(hitProb * 10) / 10,
           edge: edgeValue,
           odds: hasOdds ? { bookLine: o.bookLine } : null,
@@ -860,6 +970,9 @@ export async function registerRoutes(
           inning: mlbGameCache.gameState[gameId]?.inning ?? 0,
           tier,
           gameId: o.gameId,
+          sportsbook: o.sportsbook ?? null,
+          derivedLine: o.isDerivedLine ?? false,
+          signalTimestamp: o.signalTimestamp ?? o.engineGeneratedAt ?? Date.now(),
         };
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
@@ -924,19 +1037,118 @@ export async function registerRoutes(
     const isDegraded = cachedIsDegraded;
 
     console.log(`[MLB signals] game=${gameId} rawOutputs=${allOutputs.length} validSignals=${rosterLockedSignals.length} isDegraded=${isDegraded}`);
-    mlbSignalsCache.set(gameId, { ts: Date.now(), signals: rosterLockedSignals, updatedAt, isDegraded });
 
-    // Fire-and-forget: persist MLB signals to persisted_plays for analytics
-    // Req 4 — stale signal protection: skip all persistence if engine data is older than 30s
+    // ─── Engine stats observability ──────────────────────────────────────────
+    const mlbEngineStart = Date.now();
+    console.log(`[ENGINE START][MLB] game=${gameId} signals=${rosterLockedSignals.length}`);
+    const mlbValidationAcc = { skipped: 0, failureReasons: [] as string[] };
+    const mlbOutputAcc = { rejected: 0, rejectionReasons: [] as string[] };
+    const mlbRawOutputs = rosterLockedSignals.map((s) => {
+      // Phase 13/17: MLB timing gate — after inning 1 OR pitcher > 75 pitches OR 3rd time through
+      const sAny = s as any;
+      const mlbTimingValid = isValidTimingWindow({
+        sport: "mlb",
+        mlb: {
+          inning: sAny.inning ?? 1,
+          isTopOfInning: true,
+          pitchCount: sAny.pitchCount ?? 0,
+          timesThrough: sAny.timesThrough ?? 1,
+        },
+      });
+      const isDerived = s.derivedLine ?? false;
+      // Phase 4: lineSource from signal — player prop signals from sportsbook unless explicitly derived
+      const lineSource: "sportsbook" | "inferred" | "derived" =
+        isDerived ? "derived" : s.sportsbook ? "sportsbook" : "derived";
+      const input = buildEngineInput({
+        gameId,
+        sport: "mlb",
+        playerId: String(s.playerId),
+        marketType: s.market,
+        line: s.bookLine ?? null,
+        derivedLine: isDerived,
+        lineSource,
+      });
+      const line = input.line;
+      const projection = s.projection ?? null;
+      const edge = s.edge ?? null;
+      // Phase 7: confidence tier based on probability (ELITE=75%+, STRONG=65-74%, LEAN=55-64%)
+      const probPct = s.enginePct;
+      const confidenceTier = probPct >= 75 && !isDerived ? "ELITE" as const
+        : probPct >= 65 ? "STRONG" as const
+        : probPct >= 55 ? "LEAN" as const
+        : "NO_EDGE" as const;
+      console.log(`[ENGINE INPUT][MLB] player=${s.playerName} market=${s.market} line=${line} proj=${projection} edge=${edge} sportsbook=${s.sportsbook ?? "consensus"} derivedLine=${isDerived} lineSource=${lineSource} confidence=${confidenceTier}`);
+      return {
+        id: `${s.playerId}_${s.market}`,
+        sport: "mlb" as const,
+        market: s.market,
+        player: s.playerName,
+        playerName: s.playerName,
+        gameId: String(s.gameId ?? gameId),
+        line,
+        projection,
+        probability: s.enginePct / 100,
+        edge,
+        recommendedSide: (s.recommendedSide === "UNDER" ? "UNDER" : "OVER") as "OVER" | "UNDER",
+        confidence: confidenceTier,
+        sportsbook: s.sportsbook ?? "consensus",
+        derivedLine: isDerived,
+        lineSource,
+        signalTimestamp: input.createdAt,
+        timingValid: mlbTimingValid,
+        createdAt: input.createdAt,
+      };
+    });
+    // Phase 3+8: consistency check before signal promotion
+    const mlbConsistentOutputs = filterValidEngineOutputs(mlbRawOutputs, mlbOutputAcc);
+    const mlbEngineSignals = mlbConsistentOutputs.map(({ playerName: _pn, gameId: _gid, ...rest }) => rest);
+    const validMlbEngineSignals = filterValidSignals(mlbEngineSignals, mlbValidationAcc);
+    const validMlbSignalIds = new Set(validMlbEngineSignals.map((s) => s.id));
+    const validatedMlbSignals = rosterLockedSignals.filter((s) => validMlbSignalIds.has(`${s.playerId}_${s.market}`));
+    for (const sig of validMlbEngineSignals) console.log(`[ENGINE OUTPUT VALID][MLB] player=${sig.player} market=${sig.market} line=${sig.line} sportsbook=${sig.sportsbook}`);
+    if (mlbValidationAcc.skipped > 0) console.warn(`[ENGINE OUTPUT SKIPPED][MLB] count=${mlbValidationAcc.skipped} reasons=${mlbValidationAcc.failureReasons.join("; ")}`);
+    if (mlbOutputAcc.rejected > 0) console.warn(`[ENGINE OUTPUT SKIPPED][MLB] outputValidation rejected=${mlbOutputAcc.rejected} reasons=${mlbOutputAcc.rejectionReasons.join("; ")}`);
+    // Phase 10: tally lineSource distribution for MLB signals
+    const mlbLineSources = mlbRawOutputs.map((o) => (o as any).lineSource ?? "sportsbook");
+    const mlbDerivedCount = mlbLineSources.filter((s: string) => s === "derived").length;
+    recordEngineRun("mlb", {
+      gamesProcessed: 1,
+      signalsGenerated: validMlbEngineSignals.length,
+      signalsSkipped: mlbValidationAcc.skipped,
+      rejectedSignals: mlbOutputAcc.rejected,
+      rejectionReasons: mlbOutputAcc.rejectionReasons,
+      failureReasons: mlbValidationAcc.failureReasons,
+      latencyMs: Date.now() - mlbEngineStart,
+      lineSource: mlbDerivedCount > 0 ? "derived" : "sportsbook",
+      booksAvailable: mlbRawOutputs.length > 0 ? 1 : 0,
+    });
+
+    // Phase 16: Signal Priority Engine — rank by confidence tier, then edge, then consensus strength
+    const CONFIDENCE_RANK: Record<string, number> = { ELITE: 4, STRONG: 3, LEAN: 2, VALUE: 1, NO_EDGE: 0, HIGH: 3, MEDIUM: 2, LOW: 1 };
+    const MAX_SIGNALS_PER_GAME = 3;
+    const prioritizedMlbSignals = [...validatedMlbSignals]
+      .sort((a, b) => {
+        const tierDiff = (CONFIDENCE_RANK[b.tier ?? "LEAN"] ?? 0) - (CONFIDENCE_RANK[a.tier ?? "LEAN"] ?? 0);
+        if (tierDiff !== 0) return tierDiff;
+        const edgeDiff = (b.edge ?? 0) - (a.edge ?? 0);
+        if (Math.abs(edgeDiff) > 0.01) return edgeDiff;
+        return (b.enginePct ?? 0) - (a.enginePct ?? 0);
+      })
+      .slice(0, MAX_SIGNALS_PER_GAME);
+    console.log(`[SIGNAL PRIORITY][MLB] game=${gameId} before=${validatedMlbSignals.length} after=${prioritizedMlbSignals.length}`);
+
+    mlbSignalsCache.set(gameId, { ts: Date.now(), signals: prioritizedMlbSignals, updatedAt, isDegraded });
+
+    // Fire-and-forget: persist validated MLB signals to persisted_plays for analytics
+    // Stale signal protection: skip all persistence if engine data is older than 30s
     const STALE_THRESHOLD_MS = 30_000;
     if (updatedAt > 0 && Date.now() - updatedAt > STALE_THRESHOLD_MS) {
       console.warn(`[MLB PERSIST BLOCKED — STALE SIGNAL] game=${gameId} updatedAt=${updatedAt} age=${Date.now() - updatedAt}ms > ${STALE_THRESHOLD_MS}ms`);
     } else {
       const today = new Date().toISOString().slice(0, 10);
       const validSides = new Set(["over", "under"]);
-      for (const sig of rosterLockedSignals) {
+      for (const sig of prioritizedMlbSignals) {
         const direction = (sig.recommendedSide ?? "").toLowerCase();
-        // Req 1 — pre-persist validation
         if (!Number.isFinite(sig.enginePct) || sig.enginePct < 2 || sig.enginePct > 80) {
           console.warn(`[MLB PERSIST BLOCKED — INVALID SIGNAL] game=${gameId} player=${sig.playerName} market=${sig.market} — enginePct=${sig.enginePct} outside [2,80]`);
           continue;
@@ -962,6 +1174,9 @@ export async function registerRoutes(
           line: sig.bookLine,
           prob: sig.enginePct,
           edgeGap: sig.edge != null ? sig.edge : undefined,
+          projection: sig.projection ?? undefined,
+          sportsbook: sig.sportsbook ?? null,
+          derivedLine: sig.derivedLine ?? false,
           engineVersion: "mlb_v1.0",
           gameDate: today,
           timestamp: new Date(),
@@ -970,7 +1185,7 @@ export async function registerRoutes(
       }
     }
 
-    return res.json({ mode: "live", signals: rosterLockedSignals, updatedAt, isDegraded });
+    return res.json({ mode: "live", signals: prioritizedMlbSignals, updatedAt, isDegraded });
   });
 
   // ── MLB Manual Calculation Route ─────────────────────────────────────────────
@@ -1082,6 +1297,8 @@ export async function registerRoutes(
           hardHitRateSeason: null,
           barrelRateProxySeason: null,
           priorABResults: [],
+          xBA: null,
+          xSLG: null,
         },
         pitcher: {
           pitchCount,
@@ -2310,11 +2527,21 @@ export async function registerRoutes(
                     console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] raw: player=${playerName} stat=${statType} books=${bookKeys.join(",") || "none"} isDegraded=${oddsResult.isDegraded}`);
                   }
                   if (bookKeys.length > 0) {
-                    const lines = bookKeys.map(k => oddsResult.books[k].line);
-                    const sortedLines = [...lines].sort((a, b) => a - b);
-                    const medianLine = sortedLines[Math.floor(sortedLines.length / 2)];
+                    const oddsBookDict: Record<string, { line: number; overOdds: number; underOdds: number }> = {};
+                    for (const k of bookKeys) {
+                      const b = oddsResult.books[k];
+                      if (b && Number.isFinite(b.line) && Number.isFinite(b.overOdds) && Number.isFinite(b.underOdds)) {
+                        oddsBookDict[k] = { line: b.line, overOdds: b.overOdds, underOdds: b.underOdds };
+                      }
+                    }
+                    const normalized = normalizeOdds(oddsBookDict);
+                    const medianLine = normalized.medianLine ?? (() => {
+                      const lines = bookKeys.map(k => oddsResult.books[k].line);
+                      const sortedLines = [...lines].sort((a, b) => a - b);
+                      return sortedLines[Math.floor(sortedLines.length / 2)];
+                    })();
                     if (process.env.DEBUG_PIPELINE === "true") {
-                      console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] processed: player=${playerName} stat=${statType} medianLine=${medianLine} isDegraded=${oddsResult.isDegraded}`);
+                      console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] processed: player=${playerName} stat=${statType} medianLine=${medianLine} books=${normalized.booksAvailable} isDegraded=${oddsResult.isDegraded}`);
                     }
                     oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys, isDegraded: oddsResult.isDegraded });
                     resolved = true;
@@ -2342,7 +2569,18 @@ export async function registerRoutes(
               if (!oddsEntry) continue;
               const liveLine = oddsEntry.line;
 
-              if (!liveLine || liveLine === 0) {
+              // buildEngineInput is the canonical gate for engine computation: called BEFORE
+              // calculateProbability so that engineInput.line (not raw oddsEntry.line) drives the calc.
+              const nbaPreInput = buildEngineInput({
+                gameId,
+                sport: "nba",
+                playerId: String(dbPlayer.id),
+                marketType: statType,
+                line: liveLine,
+              });
+              const canonicalLine = nbaPreInput.line ?? liveLine;
+
+              if (!canonicalLine || canonicalLine === 0) {
                 if (process.env.DEBUG_PIPELINE === "true") {
                   console.log(`[PIPELINE][NBA] engineInput: player=${dbPlayer.name} stat=${statType} skipReason=zeroLine`);
                 }
@@ -2351,7 +2589,7 @@ export async function registerRoutes(
               }
 
               if (process.env.DEBUG_PIPELINE === "true") {
-                console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] engineInput: player=${dbPlayer.name} stat=${statType} line=${liveLine} halftimeStat=${currentStat} isDegraded=${oddsEntry.isDegraded ?? false}`);
+                console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] engineInput: player=${dbPlayer.name} stat=${statType} canonicalLine=${canonicalLine} rawLine=${liveLine} halftimeStat=${currentStat} isDegraded=${oddsEntry.isDegraded ?? false}`);
               }
 
               const result = await storage.calculateProbability({
@@ -2360,7 +2598,7 @@ export async function registerRoutes(
                 halftimeMinutes: Math.round(minutes * 10) / 10,
                 halftimeFouls: fouls,
                 halftimeStat: currentStat,
-                liveLine,
+                liveLine: canonicalLine,
                 statType,
                 halftimeScore: scoreStr,
                 currentPeriod: period,
@@ -2423,7 +2661,7 @@ export async function registerRoutes(
                 probability: result.displayConfidence ?? Math.abs(result.probability - 50) + 50,
                 betDirection: engineBetDirection,
                 edge,
-                line: liveLine,
+                line: canonicalLine,
                 statType,
               };
 
@@ -2434,7 +2672,7 @@ export async function registerRoutes(
                 probability: result.displayConfidence ?? result.probability,
                 betDirection: result.recommendedSide === "UNDER" ? "under" : "over",
                 edge,
-                line: liveLine,
+                line: canonicalLine,
                 currentStat,
               });
             } catch (calcErr: any) {
@@ -2488,8 +2726,65 @@ export async function registerRoutes(
         if (b.edge !== a.edge) return b.edge - a.edge;
         return b.probability - a.probability;
       });
-      liveSignalsCache.set(gameId, { ts: Date.now(), signals: allSignals, engineOutput });
-      res.json({ signals: allSignals, engineOutput });
+
+      // ─── Engine stats observability ────────────────────────────────────────
+      const nbaEngineStart = Date.now();
+      console.log(`[ENGINE START][NBA] game=${gameId} signals=${allSignals.length}`);
+      const nbaValidationAcc = { skipped: 0, failureReasons: [] as string[] };
+      const nbaOutputAcc = { rejected: 0, rejectionReasons: [] as string[] };
+      const nbaRawOutputs = allSignals.map((s) => {
+        const input = buildEngineInput({
+          gameId,
+          sport: "nba",
+          playerId: String(s.playerId),
+          marketType: s.statType,
+          line: s.line,
+        });
+        const line = input.line;
+        const projection = line != null ? line + (s.edge * (s.betDirection === "over" ? 1 : -1)) : null;
+        const edge = Number.isFinite(s.edge) ? s.edge : null;
+        const side = (s.betDirection === "over" ? "OVER" : "UNDER") as "OVER" | "UNDER";
+        console.log(`[ENGINE INPUT][NBA] player=${s.playerName} stat=${s.statType} line=${line} proj=${projection} edge=${edge}`);
+        console.log(`[ENGINE PROJECTION][NBA] player=${s.playerName} stat=${s.statType} projection=${projection} side=${side}`);
+        return {
+          id: `${s.playerId}_${s.statType}`,
+          sport: "nba" as const,
+          market: s.statType,
+          player: s.playerName,
+          playerName: s.playerName,
+          gameId,
+          line,
+          projection,
+          probability: s.probability / 100,
+          edge,
+          recommendedSide: side,
+          confidence: s.edge >= 10 ? "ELITE" as const : s.edge >= 7 ? "STRONG" as const : "LEAN" as const,
+          sportsbook: "consensus",
+          derivedLine: false,
+          createdAt: input.createdAt,
+        };
+      });
+      // Phase 3+8: validate projection/line consistency before signal promotion
+      const nbaConsistentOutputs = filterValidEngineOutputs(nbaRawOutputs, nbaOutputAcc);
+      const nbaEngineSignals = nbaConsistentOutputs.map(({ playerName: _pn, gameId: _gid, ...rest }) => rest);
+      const validNbaEngineSignals = filterValidSignals(nbaEngineSignals, nbaValidationAcc);
+      const validNbaSignalIds = new Set(validNbaEngineSignals.map((s) => s.id));
+      const validatedNbaSignals = allSignals.filter((s) => validNbaSignalIds.has(`${s.playerId}_${s.statType}`));
+      for (const sig of validNbaEngineSignals) console.log(`[ENGINE OUTPUT VALID][NBA] player=${sig.player} stat=${sig.market} line=${sig.line} proj=${sig.projection}`);
+      if (nbaValidationAcc.skipped > 0) console.warn(`[ENGINE OUTPUT SKIPPED][NBA] count=${nbaValidationAcc.skipped} reasons=${nbaValidationAcc.failureReasons.join("; ")}`);
+      if (nbaOutputAcc.rejected > 0) console.warn(`[ENGINE OUTPUT SKIPPED][NBA] outputValidation rejected=${nbaOutputAcc.rejected} reasons=${nbaOutputAcc.rejectionReasons.join("; ")}`);
+      recordEngineRun("nba", {
+        gamesProcessed: 1,
+        signalsGenerated: validNbaEngineSignals.length,
+        signalsSkipped: nbaValidationAcc.skipped,
+        rejectedSignals: nbaOutputAcc.rejected,
+        rejectionReasons: nbaOutputAcc.rejectionReasons,
+        failureReasons: nbaValidationAcc.failureReasons,
+        latencyMs: Date.now() - nbaEngineStart,
+      });
+
+      liveSignalsCache.set(gameId, { ts: Date.now(), signals: validatedNbaSignals, engineOutput });
+      res.json({ signals: validatedNbaSignals, engineOutput });
     } catch (e) {
       console.warn(`[LiveSignals] Error for game ${gameId}:`, (e as any).message);
       liveSignalsCache.set(gameId, { ts: Date.now(), signals: [], engineOutput: {} });
@@ -3200,28 +3495,24 @@ export async function registerRoutes(
       // Fire-and-forget: alerts + persist plays for analytics
       checkAndSendAlerts(topPlays, storage).catch(console.warn);
       storage.savePlayAlerts(topPlays).catch(console.warn);
-      // Persist each play to persisted_plays table
-      const today = new Date().toISOString().slice(0, 10);
+      // Persist each play to persisted_plays table via play tracker (dedup + snapshot)
       for (const p of topPlays) {
-        const key = `${p.playerId ?? p.playerName}|${p.statType}|${p.line}|${p.betDirection}|${p.gameId ?? ""}|${today}`;
-        storage.recordPlay({
-          id: `play-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        trackPlay({
           gameId: p.gameId ?? "",
-          playerId: p.playerId ? String(p.playerId) : undefined,
+          playerId: p.playerId ? String(p.playerId) : null,
           playerName: p.playerName,
-          team: p.team,
+          team: p.team ?? null,
           sport: "nba",
           market: p.statType,
-          direction: p.betDirection,
+          direction: p.betDirection as "over" | "under",
           line: Number(p.line),
-          prob: Number(p.probability ?? p.prob ?? 0),
-          engineProb: p.engineProb != null ? Number(p.engineProb) : undefined,
-          bookImplied: p.bookImplied != null ? Number(p.bookImplied) : undefined,
-          edgeGap: p.edge != null ? Number(p.edge) : undefined,
-          gameDate: today,
-          timestamp: new Date(),
-          duplicateGuard: key,
-        }).catch(console.warn);
+          projection: Number(p.line) + (p.edge != null ? Number(p.edge) * (p.betDirection === "over" ? 1 : -1) : 0),
+          probability: Number(p.probability ?? p.prob ?? 0),
+          edge: p.edge != null ? Number(p.edge) : 0,
+          sportsbook: null,
+          derivedLine: false,
+          createdAt: Date.now(),
+        }, storage).catch(console.warn);
       }
     } catch (e) {
       res.status(502).json({ message: "Halftime plays unavailable", details: (e as any).message });
@@ -4364,6 +4655,23 @@ export function registerPlaysRoutes(app: Express): void {
         timestamp: body.timestamp ? new Date(body.timestamp) : new Date(),
         duplicateGuard,
       });
+      // Persist full signal snapshot to play tracker on explicit user save action
+      trackPlay({
+        gameId: body.gameId ?? "",
+        playerId: body.playerId ? String(body.playerId) : null,
+        playerName: body.playerName,
+        team: body.team ?? null,
+        sport: body.sport ?? "nba",
+        market: body.market,
+        direction: body.direction as "over" | "under",
+        line: Number(body.line),
+        projection: body.projection != null ? Number(body.projection) : Number(body.line),
+        probability: Number(body.prob),
+        edge: body.edgeGap != null ? Number(body.edgeGap) : 0,
+        sportsbook: body.sportsbook ?? null,
+        derivedLine: Boolean(body.derivedLine ?? false),
+        createdAt: body.timestamp ? new Date(body.timestamp).getTime() : Date.now(),
+      }, storage).catch(console.warn);
       return res.json({ success: true, ...result });
     } catch (e) {
       return res.status(500).json({ error: "Failed to record play", details: (e as any).message });
@@ -4884,6 +5192,77 @@ export function registerAnalyticsRoutes(app: Express): void {
       res.json({ settled, stillPending });
     } catch (e) {
       res.status(500).json({ message: "Settle failed", error: (e as any).message });
+    }
+  });
+
+  // ── Engine Debug + Observability Endpoints ────────────────────────────────────
+  // Returns in-memory engine run stats, quota/cache status, and signal counts.
+  // Available only to admin users.
+
+  app.get("/api/debug/nba", requireAdmin, (_req, res) => {
+    try {
+      const summary = getEngineDebugSummary("nba");
+      res.json({
+        sport: "nba",
+        ...summary,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/debug/ncaab", requireAdmin, (_req, res) => {
+    try {
+      const summary = getEngineDebugSummary("ncaab");
+      res.json({
+        sport: "ncaab",
+        ...summary,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/debug/mlb", requireAdmin, async (_req, res) => {
+    try {
+      const summary = getEngineDebugSummary("mlb");
+      const mlbDiag = getMLBDiagnosticSummary();
+      res.json({
+        sport: "mlb",
+        ...summary,
+        mlbDiagnostics: mlbDiag,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/debug/reset/:sport", requireAdmin, (req, res) => {
+    const sport = req.params.sport as "nba" | "ncaab" | "mlb";
+    if (!["nba", "ncaab", "mlb"].includes(sport)) {
+      return res.status(400).json({ error: "Invalid sport — must be nba, ncaab, or mlb" });
+    }
+    resetEngineStats(sport);
+    res.json({ reset: true, sport, resetAt: new Date().toISOString() });
+  });
+
+  app.get("/api/debug/odds/normalize", requireAdmin, async (req, res) => {
+    try {
+      const line = parseFloat(String(req.query.line ?? "0"));
+      const overOdds = parseFloat(String(req.query.overOdds ?? "-110"));
+      const underOdds = parseFloat(String(req.query.underOdds ?? "-110"));
+      const sampleBooks = {
+        draftkings: { line, overOdds, underOdds },
+        fanduel: { line: line + 0.5, overOdds, underOdds },
+        hardrockbet: { line: line - 0.5, overOdds, underOdds },
+      };
+      const normalized = normalizeOdds(sampleBooks);
+      res.json({ input: sampleBooks, normalized });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
   });
 }
