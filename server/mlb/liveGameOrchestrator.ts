@@ -767,12 +767,14 @@ export class LiveGameOrchestrator {
         projection: o.projection,
         oddsUpdatedAt: o.oddsUpdatedAt,
         projectionUpdatedAt: o.projectionUpdatedAt,
-      }) && o.edge >= 3 && !o.suppressed
+        calibratedProbabilityOver: o.calibratedProbabilityOver,
+        calibratedProbabilityUnder: o.calibratedProbabilityUnder,
+      }) && Math.max(o.calibratedProbabilityOver, o.calibratedProbabilityUnder) >= 60 && !o.suppressed
     );
     const signalLocked = qualifiedOutputs.length > 0;
 
     mlbEdgeCache.set(gameId, { gameId, outputs: validatedOutputs, updatedAt: now, createdAt: now, isDegraded: anyDegraded, signalLocked });
-    console.log(`[MLB orchestrator] triggerEngine: game ${gameId} — ${outputs.length} raw → ${validatedOutputs.length} validated → ${qualifiedOutputs.length} qualified (edge≥3%, not suppressed)`);
+    console.log(`[MLB orchestrator] triggerEngine: game ${gameId} — ${outputs.length} raw → ${validatedOutputs.length} validated → ${qualifiedOutputs.length} qualified (prob≥60%, not suppressed)`);
     return validatedOutputs;
   }
 }

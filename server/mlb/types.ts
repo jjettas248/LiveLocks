@@ -358,14 +358,14 @@ export const EDGE_THRESHOLDS = {
 } as const;
 
 export const SUPPRESSION_RULES: Record<MLBMarket, { minEdge: number; minCompletedAB: number; requireContactData: boolean }> = {
-  hits:               { minEdge: 1.0,  minCompletedAB: 0, requireContactData: false },
-  total_bases:        { minEdge: 1.0,  minCompletedAB: 0, requireContactData: false },
-  batter_strikeouts:  { minEdge: 1.5,  minCompletedAB: 0, requireContactData: false },
-  pitcher_strikeouts: { minEdge: 1.5,  minCompletedAB: 0, requireContactData: false },
-  hits_allowed:       { minEdge: 2.0,  minCompletedAB: 0, requireContactData: false },
-  walks_allowed:      { minEdge: 2.0,  minCompletedAB: 0, requireContactData: false },
-  home_runs:          { minEdge: 2.0,  minCompletedAB: 0, requireContactData: false },
-  hrr:                { minEdge: 2.0,  minCompletedAB: 0, requireContactData: false },
+  hits:               { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
+  total_bases:        { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
+  batter_strikeouts:  { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
+  pitcher_strikeouts: { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
+  hits_allowed:       { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
+  walks_allowed:      { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
+  home_runs:          { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
+  hrr:                { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
 };
 
 export type FormIndicator = "hot" | "warm" | "neutral" | "cold" | "extreme_cold";

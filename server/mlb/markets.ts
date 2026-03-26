@@ -41,11 +41,18 @@ export function canShowSignal(market: {
   projection?: unknown;
   oddsUpdatedAt?: number | null;
   projectionUpdatedAt?: number | null;
+  calibratedProbabilityOver?: number;
+  calibratedProbabilityUnder?: number;
 }): boolean {
-  if (!hasRealOdds(market)) return false;
   if (!isFiniteNumber(market.projection)) return false;
-  if (!isFresh(market.oddsUpdatedAt)) return false;
   if (!isFresh(market.projectionUpdatedAt)) return false;
+  const prob = Math.max(
+    isFiniteNumber(market.calibratedProbabilityOver) ? market.calibratedProbabilityOver : 0,
+    isFiniteNumber(market.calibratedProbabilityUnder) ? market.calibratedProbabilityUnder : 0,
+  );
+  if (prob >= 60) return true;
+  if (!hasRealOdds(market)) return false;
+  if (!isFresh(market.oddsUpdatedAt)) return false;
   return true;
 }
 import { estimateRemainingPA } from "./paEstimator";

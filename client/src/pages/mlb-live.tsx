@@ -118,7 +118,7 @@ type MLBSignal = {
   sportsbook?: string | null;
   derivedLine?: boolean;
   signalTimestamp?: number | null;
-  formIndicator?: "HOT" | "WARM" | "COLD" | "NEUTRAL" | null;
+  formIndicator?: "HOT" | "WARM" | "COLD" | "NEUTRAL" | "EXTREME_COLD" | null;
   formScore?: number | null;
   evPct?: number | null;
   hrFactors?: { count: number; labels: string[] } | null;
@@ -127,6 +127,8 @@ type MLBSignal = {
   explanationBullets?: string[];
   awayAbbr?: string | null;
   homeAbbr?: string | null;
+  bvp?: { atBats: number; hits: number; avg: number | null; homeRuns: number; strikeouts: number } | null;
+  modifiers?: { liveForm: number; pitcher: number; pitchType: number; weatherPark: number; lineup: number } | null;
 };
 
 type SignalsResponse = {
@@ -215,39 +217,45 @@ type MainTab = "games" | "edge_feed" | "inning_feed" | "hr_radar";
 
 function heatEmoji(form: string | null | undefined): string {
   if (!form) return "";
-  if (form === "HOT") return "🔥";
-  if (form === "WARM") return "🟡";
-  if (form === "COLD") return "❄️";
+  const f = form.toUpperCase();
+  if (f === "HOT") return "🔥";
+  if (f === "WARM") return "🟡";
+  if (f === "COLD") return "❄️";
+  if (f === "EXTREME_COLD" || f === "ICE_COLD") return "🥶";
   return "";
 }
 
 function heatColor(form: string | null | undefined): string {
-  if (form === "HOT") return "text-green-400";
-  if (form === "WARM") return "text-yellow-400";
-  if (form === "COLD") return "text-blue-400";
+  if (!form) return "text-muted-foreground";
+  const f = form.toUpperCase();
+  if (f === "HOT") return "text-green-400";
+  if (f === "WARM") return "text-yellow-400";
+  if (f === "COLD") return "text-blue-400";
+  if (f === "EXTREME_COLD" || f === "ICE_COLD") return "text-blue-600";
   return "text-muted-foreground";
 }
 
 function heatGlow(form: string | null | undefined): string {
-  if (form === "HOT") return "shadow-[0_0_12px_rgba(34,197,94,0.3)]";
-  if (form === "WARM") return "shadow-[0_0_8px_rgba(234,179,8,0.2)]";
-  if (form === "COLD") return "shadow-[0_0_8px_rgba(59,130,246,0.2)]";
+  if (!form) return "";
+  const f = form.toUpperCase();
+  if (f === "HOT") return "shadow-[0_0_12px_rgba(34,197,94,0.3)]";
+  if (f === "WARM") return "shadow-[0_0_8px_rgba(234,179,8,0.2)]";
+  if (f === "COLD") return "shadow-[0_0_8px_rgba(59,130,246,0.2)]";
+  if (f === "EXTREME_COLD" || f === "ICE_COLD") return "shadow-[0_0_10px_rgba(37,99,235,0.3)]";
   return "";
 }
 
 function edgeColor(edge: number | null): string {
   if (edge == null) return "text-muted-foreground";
-  if (Math.abs(edge) >= 6) return "text-green-400";
-  if (Math.abs(edge) >= 3.5) return "text-yellow-400";
-  if (Math.abs(edge) >= 1.5) return "text-blue-400";
-  return "text-muted-foreground";
+  if (edge >= 8) return "text-green-400";
+  if (edge >= 5) return "text-yellow-400";
+  return "text-muted-foreground/70";
 }
 
 function edgeBg(edge: number | null): string {
   if (edge == null) return "bg-muted/30";
-  if (Math.abs(edge) >= 6) return "bg-green-500/10";
-  if (Math.abs(edge) >= 3.5) return "bg-yellow-500/10";
-  if (Math.abs(edge) >= 1.5) return "bg-blue-500/10";
+  if (edge >= 8) return "bg-green-500/10";
+  if (edge >= 5) return "bg-yellow-500/10";
   return "bg-muted/30";
 }
 

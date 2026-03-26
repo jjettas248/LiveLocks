@@ -684,6 +684,8 @@ export async function registerRoutes(
             projection: o.projection,
             oddsUpdatedAt: o.oddsUpdatedAt,
             projectionUpdatedAt: o.projectionUpdatedAt,
+            calibratedProbabilityOver: o.calibratedProbabilityOver,
+            calibratedProbabilityUnder: o.calibratedProbabilityUnder,
           })
         ));
         const freshValidOutputs = cacheEntry ? cacheEntry.outputs.filter((o) =>
@@ -695,12 +697,15 @@ export async function registerRoutes(
             projection: o.projection,
             oddsUpdatedAt: o.oddsUpdatedAt,
             projectionUpdatedAt: o.projectionUpdatedAt,
+            calibratedProbabilityOver: o.calibratedProbabilityOver,
+            calibratedProbabilityUnder: o.calibratedProbabilityUnder,
           })
         ) : [];
         const MAX_CARD_SIGNALS = 3;
-        const qualifiedOutputs = freshValidOutputs.filter((o) =>
-          o.edge >= 3 && !o.suppressed
-        );
+        const qualifiedOutputs = freshValidOutputs.filter((o) => {
+          const prob = Math.max(o.calibratedProbabilityOver, o.calibratedProbabilityUnder);
+          return prob >= 60 && !o.suppressed;
+        });
         const cappedSignalCount = Math.min(qualifiedOutputs.length, MAX_CARD_SIGNALS);
         const signalLocked = qualifiedOutputs.length > 0;
 
@@ -1069,12 +1074,8 @@ export async function registerRoutes(
         console.warn(`[MLB signals] Dropping signal for ${sig.playerId}: gameId mismatch (${sig.gameId} !== ${gameId})`);
         return false;
       }
-      if (!sig.bookLine || sig.bookLine <= 0) {
-        console.warn(`[MLB signals] Hard guard: dropping ${sig.playerId} — bookLine=${sig.bookLine}`);
-        return false;
-      }
-      if (sig.edge === null || sig.edge === undefined || sig.edge < 3) {
-        console.warn(`[MLB signals] Hard guard: dropping ${sig.playerId} — edge=${sig.edge} (must be >= 3)`);
+      if (sig.enginePct < 60) {
+        console.warn(`[MLB signals] Hard guard: dropping ${sig.playerId} — probability=${sig.enginePct} (must be >= 60)`);
         return false;
       }
       return true;
@@ -1288,15 +1289,18 @@ export async function registerRoutes(
             const FEED_FRESHNESS_MS = 120_000;
             if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) continue;
             const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);
-            const qualified = edgeEntry.outputs.filter((o) =>
-              canShowSignal({
+            const qualified = edgeEntry.outputs.filter((o) => {
+              const prob = Math.max(o.calibratedProbabilityOver, o.calibratedProbabilityUnder);
+              return canShowSignal({
                 line: o.bookLine,
                 odds: (o.overOdds !== null || o.underOdds !== null) ? { overOdds: o.overOdds, underOdds: o.underOdds } : null,
                 projection: o.projection,
                 oddsUpdatedAt: o.oddsUpdatedAt,
                 projectionUpdatedAt: o.projectionUpdatedAt,
-              }) && o.edge >= 3 && !o.suppressed
-            );
+                calibratedProbabilityOver: o.calibratedProbabilityOver,
+                calibratedProbabilityUnder: o.calibratedProbabilityUnder,
+              }) && prob >= 60 && !o.suppressed;
+            });
             for (const o of qualified.slice(0, 3)) {
               const hitProb = Math.max(o.calibratedProbabilityOver, o.calibratedProbabilityUnder);
               allSignals.push({
@@ -5087,15 +5091,18 @@ export function registerAnalyticsRoutes(app: Express): void {
       for (const [, entry] of mlbEdgeCache.entries()) {
         const FRESHNESS_MS = 120_000;
         if (entry.updatedAt > 0 && Date.now() - entry.updatedAt > FRESHNESS_MS) continue;
-        const qualified = entry.outputs.filter((o: any) =>
-          canShowSignal({
+        const qualified = entry.outputs.filter((o: any) => {
+          const prob = Math.max(o.calibratedProbabilityOver ?? 0, o.calibratedProbabilityUnder ?? 0);
+          return canShowSignal({
             line: o.bookLine,
             odds: (o.overOdds !== null || o.underOdds !== null) ? { overOdds: o.overOdds, underOdds: o.underOdds } : null,
             projection: o.projection,
             oddsUpdatedAt: o.oddsUpdatedAt,
             projectionUpdatedAt: o.projectionUpdatedAt,
-          }) && o.edge >= 3 && !o.suppressed
-        );
+            calibratedProbabilityOver: o.calibratedProbabilityOver,
+            calibratedProbabilityUnder: o.calibratedProbabilityUnder,
+          }) && prob >= 60 && !o.suppressed;
+        });
         for (const o of qualified) {
           const hitProb = Math.max(o.calibratedProbabilityOver ?? 0, o.calibratedProbabilityUnder ?? 0);
           mlbSignals.push({
@@ -5173,15 +5180,18 @@ export function registerAnalyticsRoutes(app: Express): void {
       for (const [, entry] of mlbEdgeCache.entries()) {
         const FRESHNESS_MS = 120_000;
         if (entry.updatedAt > 0 && Date.now() - entry.updatedAt > FRESHNESS_MS) continue;
-        const qualified = entry.outputs.filter((o: any) =>
-          canShowSignal({
+        const qualified = entry.outputs.filter((o: any) => {
+          const prob = Math.max(o.calibratedProbabilityOver ?? 0, o.calibratedProbabilityUnder ?? 0);
+          return canShowSignal({
             line: o.bookLine,
             odds: (o.overOdds !== null || o.underOdds !== null) ? { overOdds: o.overOdds, underOdds: o.underOdds } : null,
             projection: o.projection,
             oddsUpdatedAt: o.oddsUpdatedAt,
             projectionUpdatedAt: o.projectionUpdatedAt,
-          }) && o.edge >= 3 && !o.suppressed
-        );
+            calibratedProbabilityOver: o.calibratedProbabilityOver,
+            calibratedProbabilityUnder: o.calibratedProbabilityUnder,
+          }) && prob >= 60 && !o.suppressed;
+        });
         for (const o of qualified) {
           totalLive++;
           const prob = Math.max(o.calibratedProbabilityOver ?? 0, o.calibratedProbabilityUnder ?? 0);

@@ -67,6 +67,8 @@ interface MlbScheduleEntry {
   gameNumber: number; // 1 or 2 for doubleheaders
   awayName: string;   // team name for fallback matching
   homeName: string;
+  awayProbablePitcher?: string;
+  homeProbablePitcher?: string;
 }
 
 function yesterdayDateStrMlb(): string {
@@ -90,11 +92,13 @@ async function fetchMlbGamePkMap(dateStr: string): Promise<Map<string, MlbSchedu
         const gamePk: string = String(game.gamePk ?? "");
         const gameTime: string = game.gameDate ?? "";
         const gameNumber: number = game.gameNumber ?? 1;
+        const awayProbablePitcher: string | undefined = game.teams?.away?.probablePitcher?.fullName ?? undefined;
+        const homeProbablePitcher: string | undefined = game.teams?.home?.probablePitcher?.fullName ?? undefined;
         if (awayAbbr && homeAbbr && gamePk && gamePk !== "0") {
           const key = `${awayAbbr}|${homeAbbr}`;
           const existing = pkMap.get(key) ?? [];
           if (!existing.some(e => e.gamePk === gamePk)) {
-            existing.push({ gamePk, gameTime, gameNumber, awayName, homeName });
+            existing.push({ gamePk, gameTime, gameNumber, awayName, homeName, awayProbablePitcher, homeProbablePitcher });
             pkMap.set(key, existing);
           }
         }
@@ -105,11 +109,11 @@ async function fetchMlbGamePkMap(dateStr: string): Promise<Map<string, MlbSchedu
   try {
     const yesterdayStr = yesterdayDateStrMlb();
     const [todayRes, yesterdayRes] = await Promise.all([
-      fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${dateStr}&hydrate=team`, {
+      fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${dateStr}&hydrate=team,probablePitcher`, {
         headers: { "User-Agent": "LiveLocks/1.0" },
         signal: AbortSignal.timeout(8000),
       }),
-      fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${yesterdayStr}&hydrate=team`, {
+      fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${yesterdayStr}&hydrate=team,probablePitcher`, {
         headers: { "User-Agent": "LiveLocks/1.0" },
         signal: AbortSignal.timeout(8000),
       }).catch(() => null),
@@ -134,7 +138,13 @@ async function fetchMlbGamePkMap(dateStr: string): Promise<Map<string, MlbSchedu
 // Layer 1: Exact key (normalized abbreviations)
 // Layer 2: All entries — match by team name substring
 // Layer 3: All entries — closest start time within ±2 hours
-function resolveGamePk(
+interface GamePkResult {
+  gamePk: string;
+  awayProbablePitcher?: string;
+  homeProbablePitcher?: string;
+}
+
+function resolveGamePkFull(
   awayAbbrRaw: string,
   homeAbbrRaw: string,
   awayTeamName: string,
@@ -142,24 +152,27 @@ function resolveGamePk(
   espnTime: number,
   pkMap: Map<string, MlbScheduleEntry[]>,
   espnId: string,
-): string | undefined {
+): GamePkResult | undefined {
   const awayAbbr = normalizeAbbr(awayAbbrRaw);
   const homeAbbr = normalizeAbbr(homeAbbrRaw);
 
+  function entryToResult(entry: MlbScheduleEntry): GamePkResult {
+    return { gamePk: entry.gamePk, awayProbablePitcher: entry.awayProbablePitcher, homeProbablePitcher: entry.homeProbablePitcher };
+  }
+
   // Layer 1: normalized exact key
   const exact = pkMap.get(`${awayAbbr}|${homeAbbr}`) ?? [];
-  if (exact.length === 1) return exact[0].gamePk;
+  if (exact.length === 1) return entryToResult(exact[0]);
   if (exact.length > 1) {
-    // Doubleheader: pick closest start time
     if (espnTime > 0) {
       const best = exact.reduce((a, b) =>
         Math.abs(new Date(a.gameTime).getTime() - espnTime) <=
         Math.abs(new Date(b.gameTime).getTime() - espnTime) ? a : b
       );
       console.log(`[MLB DISCOVERY] Doubleheader resolution for ${awayAbbr}|${homeAbbr} (espnId=${espnId}): picked gamePk=${best.gamePk} (${exact.length} candidates)`);
-      return best.gamePk;
+      return entryToResult(best);
     }
-    return exact[0].gamePk;
+    return entryToResult(exact[0]);
   }
 
   // Layer 2: team name substring match across ALL pkMap entries
@@ -177,7 +190,7 @@ function resolveGamePk(
   }
   if (nameMatches.length === 1) {
     console.log(`[MLB DISCOVERY] Name-fallback match for ${awayAbbrRaw}|${homeAbbrRaw} (espnId=${espnId}): gamePk=${nameMatches[0].gamePk} via team names`);
-    return nameMatches[0].gamePk;
+    return entryToResult(nameMatches[0]);
   }
   if (nameMatches.length > 1 && espnTime > 0) {
     const best = nameMatches.reduce((a, b) =>
@@ -185,7 +198,7 @@ function resolveGamePk(
       Math.abs(new Date(b.gameTime).getTime() - espnTime) ? a : b
     );
     console.log(`[MLB DISCOVERY] Name-fallback multi-match for ${awayAbbrRaw}|${homeAbbrRaw} (espnId=${espnId}): picked gamePk=${best.gamePk}`);
-    return best.gamePk;
+    return entryToResult(best);
   }
 
   // Layer 3: time-proximity across ALL pkMap entries (±2 hours)
@@ -200,7 +213,7 @@ function resolveGamePk(
     }
     if (timeMatches.length === 1) {
       console.log(`[MLB DISCOVERY] Time-proximity fallback for ${awayAbbrRaw}|${homeAbbrRaw} (espnId=${espnId}): gamePk=${timeMatches[0].gamePk}`);
-      return timeMatches[0].gamePk;
+      return entryToResult(timeMatches[0]);
     }
   }
 
@@ -305,7 +318,7 @@ export async function discoverTodaysGames(): Promise<MLBGame[]> {
       const homeAbbrRaw: string = homeCompetitor?.team?.abbreviation ?? "";
       const espnTime = event.date ? new Date(event.date).getTime() : 0;
 
-      const gamePk = resolveGamePk(
+      const pkResult = resolveGamePkFull(
         awayAbbrRaw,
         homeAbbrRaw,
         awayTeam,
@@ -315,8 +328,18 @@ export async function discoverTodaysGames(): Promise<MLBGame[]> {
         event.id,
       );
 
+      const gamePk = pkResult?.gamePk;
       if (gamePk) {
         console.log(`[MLB DISCOVERY] Mapped ${awayAbbrRaw}|${homeAbbrRaw} (espnId=${event.id}) → gamePk=${gamePk}`);
+      }
+
+      const resolvedHomePitcher = homePitcher || pkResult?.homeProbablePitcher || undefined;
+      const resolvedAwayPitcher = awayPitcher || pkResult?.awayProbablePitcher || undefined;
+      if (!homePitcher && pkResult?.homeProbablePitcher) {
+        console.log(`[MLB DISCOVERY] Pitcher fallback from Stats API: home=${pkResult.homeProbablePitcher} for ${event.id}`);
+      }
+      if (!awayPitcher && pkResult?.awayProbablePitcher) {
+        console.log(`[MLB DISCOVERY] Pitcher fallback from Stats API: away=${pkResult.awayProbablePitcher} for ${event.id}`);
       }
 
       const espnStatusName: string = event.status?.type?.name
@@ -329,8 +352,8 @@ export async function discoverTodaysGames(): Promise<MLBGame[]> {
         homeTeam,
         awayTeam,
         startTime: event.date ?? "",
-        homePitcher,
-        awayPitcher,
+        homePitcher: resolvedHomePitcher,
+        awayPitcher: resolvedAwayPitcher,
         espnStatus: espnStatusName,
       });
     }
