@@ -1049,6 +1049,17 @@ export default function Dashboard() {
           const data = await res.json().catch(() => ({}));
           const confirmedTier = data.subscriptionTier ?? tier;
           setLocalTier(confirmedTier);
+          const currentUser = queryClient.getQueryData<any>(["/api/auth/me"]);
+          if (currentUser && data.hasNBA !== undefined) {
+            queryClient.setQueryData(["/api/auth/me"], {
+              ...currentUser,
+              subscriptionTier: confirmedTier,
+              hasNBA: data.hasNBA,
+              hasNCAAB: data.hasNCAAB,
+              hasMLB: data.hasMLB,
+              hasUnlimited: data.hasUnlimited,
+            });
+          }
           queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
         })
         .catch(() => queryClient.refetchQueries({ queryKey: ["/api/auth/me"] }));
@@ -1068,8 +1079,21 @@ export default function Dashboard() {
         if (!res.ok) return;
         const fresh = await res.json();
         setLocalTier(fresh.subscriptionTier ?? null);
-        if (fresh.requiresRefresh) {
-          queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+        if (fresh.requiresRefresh || fresh.hasNBA !== undefined) {
+          const currentUser = queryClient.getQueryData<any>(["/api/auth/me"]);
+          if (currentUser && fresh.hasNBA !== undefined) {
+            queryClient.setQueryData(["/api/auth/me"], {
+              ...currentUser,
+              subscriptionTier: fresh.subscriptionTier ?? currentUser.subscriptionTier,
+              hasNBA: fresh.hasNBA,
+              hasNCAAB: fresh.hasNCAAB,
+              hasMLB: fresh.hasMLB,
+              hasUnlimited: fresh.hasUnlimited,
+            });
+          }
+          if (fresh.requiresRefresh) {
+            queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+          }
         }
       } catch (_) {}
     };

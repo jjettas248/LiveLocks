@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import { requireAuth } from "./auth";
 import { storage } from "./storage";
 import { getUncachableStripeClient } from "./stripeClient";
+import { resolveAccess } from "./utils/access";
 
 const PLAN_META = {
   all:   { name: "Pro – LiveLocks",        description: "Unlimited NBA + NCAAB Live analytics, 2H Plays, Parlay Builder, SMS Alerts, Push Notifications", amount: 4000, priceId: process.env.STRIPE_PRO_PRICE_ID        || "price_1T6hh82ceUNmv10tdIMnFF5N" },
@@ -209,8 +210,16 @@ export async function registerStripeRoutes(app: import("express").Express) {
 
       await storage.updateUserSubscription(userId, tier, stripeCustomerId, stripeSubscriptionId);
       const user = await storage.getUserById(userId);
+      const access = resolveAccess(user?.subscriptionTier, user?.isAdmin ?? false);
       console.log(`[checkout-complete] User ${userId} activated tier="${tier}" customer=${stripeCustomerId}`);
-      return res.json({ success: true, subscriptionTier: user?.subscriptionTier });
+      return res.json({
+        success: true,
+        subscriptionTier: user?.subscriptionTier,
+        hasNBA: access.hasNBA,
+        hasNCAAB: access.hasNCAAB,
+        hasMLB: access.hasMLB,
+        hasUnlimited: access.hasUnlimited,
+      });
     } catch (err: any) {
       console.error("[checkout-complete] Error:", err.message);
       return res.status(500).json({ error: err.message });
