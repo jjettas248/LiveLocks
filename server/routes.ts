@@ -16,6 +16,7 @@ import { computeNCAABPlays, getNCAABScoreboard, getNCAABH2H, getNCAABChipOdds, f
 import { enrichNCAABGameFull, clearEnrichmentCache, getEnrichmentCacheStats } from "./ncaabEnrichment";
 import { calculateParlay } from "./parlayService";
 import { registerAuthRoutes, requirePlayAccess, requireAuth, requireAdmin, requireTier } from "./auth";
+import { resolveAccess } from "./utils/access";
 import { registerStripeRoutes } from "./stripeService";
 import { getVapidPublicKey, sendPush } from "./webpush";
 import { checkAndSendAlerts } from "./alertManager";
@@ -1842,10 +1843,13 @@ export async function registerRoutes(
       const user = await storage.getUserById(userId);
       if (!user) return res.status(404).json({ error: "User not found" });
       const tier = user.subscriptionTier;
-      const hasNcaabAccess = user.isAdmin || tier === "all" || tier === "elite";
+      const access = resolveAccess(tier, user.isAdmin ?? false);
       return res.json({
         dbTier: tier ?? null,
-        hasNcaabAccess,
+        hasNcaabAccess: access.hasNCAAB,
+        hasNBA: access.hasNBA,
+        hasMLB: access.hasMLB,
+        hasUnlimited: access.hasUnlimited,
         requiresRefresh: user.requiresRefresh ?? false,
         email: user.email,
         isAdmin: user.isAdmin,
@@ -1886,13 +1890,18 @@ export async function registerRoutes(
       }
 
       const tier = user.subscriptionTier;
+      const access = resolveAccess(tier, user.isAdmin ?? false);
       return res.json({
         id: user.id,
         email: user.email,
         isAdmin: user.isAdmin,
         subscriptionTier: tier ?? null,
         requiresRefresh: user.requiresRefresh ?? false,
-        hasNcaabAccess: user.isAdmin || tier === "all" || tier === "elite",
+        hasNcaabAccess: access.hasNCAAB,
+        hasNBA: access.hasNBA,
+        hasNCAAB: access.hasNCAAB,
+        hasMLB: access.hasMLB,
+        hasUnlimited: access.hasUnlimited,
       });
     } catch (err: any) {
       console.error("[/api/me]", err);
@@ -1907,14 +1916,17 @@ export async function registerRoutes(
       const user = await storage.getUserById(userId);
       if (!user) return res.status(404).json({ error: "User not found" });
       const rawTier = user.subscriptionTier ?? null;
-      const hasNcaabAccess = user.isAdmin || rawTier === "all" || rawTier === "elite";
-      // Clear requiresRefresh after client has acknowledged it
+      const access = resolveAccess(rawTier, user.isAdmin ?? false);
       if (user.requiresRefresh) {
         await storage.clearRequiresRefresh(userId);
       }
       return res.json({
         tier: rawTier,
-        hasNcaabAccess,
+        hasNcaabAccess: access.hasNCAAB,
+        hasNBA: access.hasNBA,
+        hasNCAAB: access.hasNCAAB,
+        hasMLB: access.hasMLB,
+        hasUnlimited: access.hasUnlimited,
         userId,
         requiresRefresh: user.requiresRefresh ?? false,
         refreshedAt: new Date().toISOString(),
