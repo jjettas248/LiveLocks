@@ -395,10 +395,112 @@ export class LiveGameOrchestrator {
     return triggers;
   }
 
+  private qualifySignal(gameId: string, input: MLBPropInput, output: MLBPropOutput): MLBQualifiedSignal | null {
+    if (output.recommendedSide !== "OVER" && output.recommendedSide !== "UNDER") {
+      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — invalid side="${output.recommendedSide}"`);
+      return null;
+    }
+
+    if (typeof output.bookLine !== "number" || !Number.isFinite(output.bookLine) || output.bookLine <= 0) {
+      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — invalid bookLine=${output.bookLine}`);
+      return null;
+    }
+    if (typeof output.calibratedProbabilityOver !== "number" || !Number.isFinite(output.calibratedProbabilityOver) || output.calibratedProbabilityOver <= 0) {
+      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — invalid probOver=${output.calibratedProbabilityOver}`);
+      return null;
+    }
+    if (typeof output.calibratedProbabilityUnder !== "number" || !Number.isFinite(output.calibratedProbabilityUnder) || output.calibratedProbabilityUnder <= 0) {
+      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — invalid probUnder=${output.calibratedProbabilityUnder}`);
+      return null;
+    }
+
+    if (output.suppressed) {
+      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — suppressed`);
+      return null;
+    }
+
+    const sideProbability = output.recommendedSide === "OVER"
+      ? output.calibratedProbabilityOver
+      : output.calibratedProbabilityUnder;
+    if (sideProbability < 60) {
+      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — prob=${sideProbability.toFixed(1)} < 60 gate`);
+      return null;
+    }
+
+    const hydrationOk = canShowSignal({
+      line: output.bookLine,
+      odds: (output.overOdds !== null || output.underOdds !== null)
+        ? { overOdds: output.overOdds, underOdds: output.underOdds }
+        : null,
+      projection: output.projection,
+      oddsUpdatedAt: output.oddsUpdatedAt,
+      projectionUpdatedAt: output.projectionUpdatedAt,
+      calibratedProbabilityOver: output.calibratedProbabilityOver,
+      calibratedProbabilityUnder: output.calibratedProbabilityUnder,
+    });
+    if (!hydrationOk) {
+      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — hydration gate failed`);
+      return null;
+    }
+
+    if (output.recommendedSide === "OVER" && output.projection < output.bookLine) {
+      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — side inconsistency: OVER but proj=${output.projection} < line=${output.bookLine}`);
+      return null;
+    }
+    if (output.recommendedSide === "UNDER" && output.projection > output.bookLine) {
+      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — side inconsistency: UNDER but proj=${output.projection} > line=${output.bookLine}`);
+      return null;
+    }
+
+    const scoreBreakdown = computeSignalScore(input, output);
+
+    if (scoreBreakdown.total < 55) {
+      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — signalScore=${scoreBreakdown.total} < 55 gate (tier=${scoreBreakdown.confidenceTier})`);
+      return null;
+    }
+
+    const signalTags = deriveSignalTags(input, output, scoreBreakdown);
+    const feedTags = deriveFeedTags(input, output, scoreBreakdown);
+    const glowEligible = isPlayerGlowEligible(scoreBreakdown, signalTags);
+
+    const signal: MLBQualifiedSignal = {
+      id: `${gameId}_${output.playerId}_${output.market}`,
+      gameId,
+      playerId: output.playerId,
+      playerName: output.playerName,
+      team: (output as any).team ?? input.team ?? "",
+      market: output.market,
+      side: output.recommendedSide,
+      sportsbook: output.sportsbook,
+      line: output.bookLine,
+      impliedProbability: null,
+      engineProbability: output.calibratedProbability,
+      projection: output.projection,
+      evPct: output.evPct,
+      confidenceTier: scoreBreakdown.confidenceTier,
+      signalScore: scoreBreakdown.total,
+      reasons: output.explanationBullets,
+      feedTags: feedTags as string[],
+      signalTags: signalTags as string[],
+      playerGlowEligible: glowEligible,
+      gameCardSignalTags: [],
+      formIndicator: output.formIndicator,
+      isExperimental: output.isExperimental,
+      engineGeneratedAt: output.engineGeneratedAt,
+    };
+
+    console.log(`[MLB QUALIFY OK][${gameId}] ${output.playerName}/${output.market} side=${output.recommendedSide} score=${scoreBreakdown.total} tier=${scoreBreakdown.confidenceTier} tags=[${signalTags.join(",")}]`);
+    return signal;
+  }
+
   async triggerEngine(gameId: string, normalizedStatus: "live" | "pregame" | "final" | "unknown"): Promise<MLBPropOutput[]> {
     const outputs: MLBPropOutput[] = [];
-    const inputOutputPairs: Array<{ input: MLBPropInput; output: MLBPropOutput }> = [];
-    let anyDegraded = false; // true if any market used stale last-known-good odds
+    const qualifiedSignals: MLBQualifiedSignal[] = [];
+    let marketsEvaluated = 0;
+    let signalsQualified = 0;
+    let signalsRejected = 0;
+    let scoreSum = 0;
+    let anyDegraded = false;
     const state = mlbGameCache.gameState[gameId];
     const game = getGame(gameId);
 
@@ -638,15 +740,22 @@ export class LiveGameOrchestrator {
 
         try {
           const output = calculateMLBPropEdge(input);
+          marketsEvaluated++;
           pLog(gameId, "engineOutput", { player: output.playerName, market: output.market, edge: output.edge, tier: output.confidenceTier, suppressed: output.suppressed });
           recordMLBDiagnostic(output);
 
-          // ── Per-player debug logging for signal integrity verification ──────
           console.log(`[MLB engine] playerId=${batter.playerId} player="${batter.playerName}" market=${market} slot=${batter.slot} inning=${state.inning} remainingPA=${remainingPA} calibratedProbOver=${output.calibratedProbabilityOver.toFixed(2)} calibratedProbUnder=${output.calibratedProbabilityUnder.toFixed(2)} edge=${output.edge.toFixed(2)} side=${output.recommendedSide}`);
-          console.log(`[MLB MARKET OUTPUT][${gameId}][${market}] { playerName: "${batter.playerName}", projection: ${output.projection}, probability: ${output.calibratedProbabilityOver.toFixed(2)}, edge: ${output.edge.toFixed(2)}, line: ${output.bookLine}, overOdds: ${output.overOdds ?? null}, underOdds: ${output.underOdds ?? null} }`);
 
           outputs.push({ ...output });
-          inputOutputPairs.push({ input, output });
+
+          const qResult = this.qualifySignal(gameId, input, output);
+          if (qResult) {
+            qualifiedSignals.push(qResult);
+            signalsQualified++;
+            scoreSum += qResult.signalScore;
+          } else {
+            signalsRejected++;
+          }
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for ${batter.playerName} / ${market}:`, err.message);
           console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "engine_error:${(err as any).message}" }`);
@@ -788,12 +897,19 @@ export class LiveGameOrchestrator {
           pLog(gameId, "engineOutput:pitcher", { player: output.playerName, market: output.market, edge: output.edge, tier: output.confidenceTier });
           recordMLBDiagnostic(output);
 
-          // ── Per-player debug logging for signal integrity verification ──────
           console.log(`[MLB engine] playerId=${pitcherToEval.playerId} player="${pitcherToEval.playerName}" market=${market} inning=${state.inning} remainingPA=${remainingPA} calibratedProbOver=${output.calibratedProbabilityOver.toFixed(2)} calibratedProbUnder=${output.calibratedProbabilityUnder.toFixed(2)} edge=${output.edge.toFixed(2)} side=${output.recommendedSide}`);
-          console.log(`[MLB MARKET OUTPUT][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", projection: ${output.projection}, probability: ${output.calibratedProbabilityOver.toFixed(2)}, edge: ${output.edge.toFixed(2)}, line: ${output.bookLine}, overOdds: ${output.overOdds ?? null}, underOdds: ${output.underOdds ?? null} }`);
 
           outputs.push({ ...output });
-          inputOutputPairs.push({ input, output });
+          marketsEvaluated++;
+
+          const qResult = this.qualifySignal(gameId, input, output);
+          if (qResult) {
+            qualifiedSignals.push(qResult);
+            signalsQualified++;
+            scoreSum += qResult.signalScore;
+          } else {
+            signalsRejected++;
+          }
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for pitcher ${pitcherToEval.playerName} / ${market}:`, err.message);
           console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", reason: "engine_error:${(err as any).message}" }`);
@@ -801,97 +917,8 @@ export class LiveGameOrchestrator {
       }
     }
 
-    // ── Edge cache write filter — explicit numeric invariants ─────────────────
-    // bookLine must be a finite positive number.
-    // Both calibrated probabilities must be explicitly > 0 (not just truthy).
-    const validatedOutputs = outputs.filter((o) => {
-      if (typeof o.bookLine !== "number" || !Number.isFinite(o.bookLine) || o.bookLine <= 0) {
-        console.warn(`[MLB orchestrator] Cache filter: dropping ${o.playerName}/${o.market} — bookLine=${o.bookLine}`);
-        return false;
-      }
-      if (typeof o.calibratedProbabilityOver !== "number" || !Number.isFinite(o.calibratedProbabilityOver) || o.calibratedProbabilityOver <= 0) {
-        console.warn(`[MLB orchestrator] Cache filter: dropping ${o.playerName}/${o.market} — calibratedProbabilityOver=${o.calibratedProbabilityOver}`);
-        return false;
-      }
-      if (typeof o.calibratedProbabilityUnder !== "number" || !Number.isFinite(o.calibratedProbabilityUnder) || o.calibratedProbabilityUnder <= 0) {
-        console.warn(`[MLB orchestrator] Cache filter: dropping ${o.playerName}/${o.market} — calibratedProbabilityUnder=${o.calibratedProbabilityUnder}`);
-        return false;
-      }
-      return true;
-    });
-
     const now = Date.now();
-
-    // Sort outputs: Tier 1 markets surface first (hits, total_bases, batter_strikeouts, pitcher_strikeouts),
-    // then remaining Tier 3 markets (home_runs, hrr, hits_allowed, walks_allowed)
-    const TIER1_MARKET_ORDER: Record<string, number> = {
-      hits: 0,
-      total_bases: 1,
-      batter_strikeouts: 2,
-      pitcher_strikeouts: 3,
-    };
-    validatedOutputs.sort((a, b) => {
-      const rankA = TIER1_MARKET_ORDER[a.market] ?? 10;
-      const rankB = TIER1_MARKET_ORDER[b.market] ?? 10;
-      return rankA - rankB;
-    });
-
-    const qualifiedOutputs = validatedOutputs.filter((o) =>
-      canShowSignal({
-        line: o.bookLine,
-        odds: (o.overOdds !== null || o.underOdds !== null)
-          ? { overOdds: o.overOdds, underOdds: o.underOdds }
-          : null,
-        projection: o.projection,
-        oddsUpdatedAt: o.oddsUpdatedAt,
-        projectionUpdatedAt: o.projectionUpdatedAt,
-        calibratedProbabilityOver: o.calibratedProbabilityOver,
-        calibratedProbabilityUnder: o.calibratedProbabilityUnder,
-      }) && Math.max(o.calibratedProbabilityOver, o.calibratedProbabilityUnder) >= 60 && !o.suppressed
-    );
-    const signalLocked = qualifiedOutputs.length > 0;
-
-    const qualifiedSignals: MLBQualifiedSignal[] = [];
-    for (const qOutput of qualifiedOutputs) {
-      const pair = inputOutputPairs.find(
-        (p) => p.output.playerId === qOutput.playerId && p.output.market === qOutput.market
-      );
-      if (!pair) continue;
-
-      const scoreBreakdown = computeSignalScore(pair.input, qOutput);
-      if (scoreBreakdown.confidenceTier === "NO_SIGNAL") continue;
-
-      const signalTags = deriveSignalTags(pair.input, qOutput, scoreBreakdown);
-      const feedTags = deriveFeedTags(pair.input, qOutput, scoreBreakdown);
-      const glowEligible = isPlayerGlowEligible(scoreBreakdown, signalTags);
-
-      const signal: MLBQualifiedSignal = {
-        id: `${gameId}_${qOutput.playerId}_${qOutput.market}`,
-        gameId,
-        playerId: qOutput.playerId,
-        playerName: qOutput.playerName,
-        team: (qOutput as any).team ?? pair.input.team ?? "",
-        market: qOutput.market,
-        side: qOutput.recommendedSide,
-        sportsbook: qOutput.sportsbook,
-        line: qOutput.bookLine,
-        impliedProbability: null,
-        engineProbability: qOutput.calibratedProbability,
-        projection: qOutput.projection,
-        evPct: qOutput.evPct,
-        confidenceTier: scoreBreakdown.confidenceTier,
-        signalScore: scoreBreakdown.total,
-        reasons: qOutput.explanationBullets,
-        feedTags: feedTags as string[],
-        signalTags: signalTags as string[],
-        playerGlowEligible: glowEligible,
-        gameCardSignalTags: [],
-        formIndicator: qOutput.formIndicator,
-        isExperimental: qOutput.isExperimental,
-        engineGeneratedAt: qOutput.engineGeneratedAt,
-      };
-      qualifiedSignals.push(signal);
-    }
+    const signalLocked = qualifiedSignals.length > 0;
 
     const gameCardTags = deriveGameCardTags(
       qualifiedSignals.map((s) => ({
@@ -905,9 +932,20 @@ export class LiveGameOrchestrator {
       sig.gameCardSignalTags = gameCardTags as string[];
     }
 
-    mlbEdgeCache.set(gameId, { gameId, outputs: validatedOutputs, qualifiedSignals, gameCardTags: gameCardTags as string[], updatedAt: now, createdAt: now, isDegraded: anyDegraded, signalLocked });
-    console.log(`[MLB orchestrator] triggerEngine: game ${gameId} — ${outputs.length} raw → ${validatedOutputs.length} validated → ${qualifiedOutputs.length} qualified → ${qualifiedSignals.length} signals (prob≥60%, not suppressed)`);
-    return validatedOutputs;
+    mlbEdgeCache.set(gameId, {
+      gameId,
+      outputs,
+      qualifiedSignals,
+      gameCardTags: gameCardTags as string[],
+      updatedAt: now,
+      createdAt: now,
+      isDegraded: anyDegraded,
+      signalLocked,
+    });
+
+    const avgScore = signalsQualified > 0 ? Math.round(scoreSum / signalsQualified) : 0;
+    console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=${signalsQualified} rejected=${signalsRejected} avgScore=${avgScore} gameCardTags=[${gameCardTags.join(",")}]`);
+    return outputs;
   }
 }
 

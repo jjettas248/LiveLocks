@@ -674,59 +674,29 @@ export async function registerRoutes(
         const awayPitcher: string = espnAwayPitcher || registeredGame?.awayPitcher || "";
         const homePitcher: string = espnHomePitcher || registeredGame?.homePitcher || "";
 
-        // hasOdds: true if edge cache has at least one output passing hasRealOdds + freshness (canShowSignal)
-        // Aligns with signal-serve semantics so PREVIEW vs NO_SIGNAL boundary is based on valid+fresh odds
         const cacheEntry = mlbEdgeCache.get(gameId);
-        const hasOdds = !!(cacheEntry && cacheEntry.outputs.some((o) =>
-          canShowSignal({
-            line: o.bookLine,
-            odds: (o.overOdds !== null || o.underOdds !== null)
-              ? { overOdds: o.overOdds, underOdds: o.underOdds }
-              : null,
-            projection: o.projection,
-            oddsUpdatedAt: o.oddsUpdatedAt,
-            projectionUpdatedAt: o.projectionUpdatedAt,
-            calibratedProbabilityOver: o.calibratedProbabilityOver,
-            calibratedProbabilityUnder: o.calibratedProbabilityUnder,
-          })
-        ));
-        const freshValidOutputs = cacheEntry ? cacheEntry.outputs.filter((o) =>
-          canShowSignal({
-            line: o.bookLine,
-            odds: (o.overOdds !== null || o.underOdds !== null)
-              ? { overOdds: o.overOdds, underOdds: o.underOdds }
-              : null,
-            projection: o.projection,
-            oddsUpdatedAt: o.oddsUpdatedAt,
-            projectionUpdatedAt: o.projectionUpdatedAt,
-            calibratedProbabilityOver: o.calibratedProbabilityOver,
-            calibratedProbabilityUnder: o.calibratedProbabilityUnder,
-          })
-        ) : [];
+        const qualifiedSigs = cacheEntry?.qualifiedSignals ?? [];
         const MAX_CARD_SIGNALS = 3;
-        const qualifiedOutputs = freshValidOutputs.filter((o) => {
-          const prob = Math.max(o.calibratedProbabilityOver, o.calibratedProbabilityUnder);
-          return prob >= 60 && !o.suppressed;
-        });
-        const cappedSignalCount = Math.min(qualifiedOutputs.length, MAX_CARD_SIGNALS);
-        const signalLocked = qualifiedOutputs.length > 0;
+        const hasOdds = qualifiedSigs.length > 0;
+        const cappedSignalCount = Math.min(qualifiedSigs.length, MAX_CARD_SIGNALS);
+        const signalLocked = qualifiedSigs.length > 0;
 
-        const bestEdgeOutput = qualifiedOutputs.reduce<typeof qualifiedOutputs[0] | null>((best, o) =>
-          best === null || o.edge > (best?.edge ?? 0) ? o : best, null
-        );
-        const bestMarket = bestEdgeOutput ? {
-          line: bestEdgeOutput.bookLine,
-          odds: (bestEdgeOutput.overOdds !== null || bestEdgeOutput.underOdds !== null)
-            ? { overOdds: bestEdgeOutput.overOdds, underOdds: bestEdgeOutput.underOdds }
+        const bestQualified = qualifiedSigs.length > 0
+          ? qualifiedSigs.reduce((best, qs) => (qs.signalScore > best.signalScore ? qs : best), qualifiedSigs[0])
+          : null;
+        const bestRawOutput = bestQualified
+          ? cacheEntry?.outputs?.find((o) => o.playerId === bestQualified.playerId && o.market === bestQualified.market)
+          : null;
+        const bestMarket = bestQualified ? {
+          line: bestQualified.line,
+          odds: bestRawOutput && (bestRawOutput.overOdds !== null || bestRawOutput.underOdds !== null)
+            ? { overOdds: bestRawOutput.overOdds, underOdds: bestRawOutput.underOdds }
             : null,
-          projection: bestEdgeOutput.projection,
-          edge: bestEdgeOutput.edge,
-          probability: Math.max(
-            bestEdgeOutput.calibratedProbabilityOver,
-            bestEdgeOutput.calibratedProbabilityUnder
-          ),
-          oddsUpdatedAt: new Date(bestEdgeOutput.oddsUpdatedAt).toISOString(),
-          projectionUpdatedAt: new Date(bestEdgeOutput.projectionUpdatedAt).toISOString(),
+          projection: bestQualified.projection,
+          edge: bestRawOutput?.edge ?? null,
+          probability: bestQualified.engineProbability ?? bestQualified.signalScore,
+          oddsUpdatedAt: bestRawOutput ? new Date(bestRawOutput.oddsUpdatedAt).toISOString() : null,
+          projectionUpdatedAt: bestRawOutput ? new Date(bestRawOutput.projectionUpdatedAt).toISOString() : null,
         } : null;
 
         const pitcherCtx = mlbGameCache.pitcherContext[gameId];
@@ -937,326 +907,116 @@ export async function registerRoutes(
     }
 
     const entry = mlbEdgeCache.get(gameId);
-    const allOutputs = entry?.outputs ?? [];
     const updatedAt = entry?.updatedAt ?? 0;
     const cachedIsDegraded = entry?.isDegraded ?? false;
 
-    // Freshness gate: signals older than 120s are considered stale at serve-time
     const SIGNAL_FRESHNESS_MS = 120_000;
     if (updatedAt > 0 && Date.now() - updatedAt > SIGNAL_FRESHNESS_MS) {
       const staleAge = Math.round((Date.now() - updatedAt) / 1000);
-      console.warn(`[MLB signals] game=${gameId} — engine outputs are ${staleAge}s old (>${SIGNAL_FRESHNESS_MS / 1000}s limit); returning no_lines`);
+      console.warn(`[MLB signals] game=${gameId} — engine data ${staleAge}s old (>${SIGNAL_FRESHNESS_MS / 1000}s limit); returning no_lines`);
       mlbSignalsCache.set(gameId, { ts: Date.now(), signals: [], updatedAt, isDegraded: true });
       return res.json({ mode: "no_lines", signals: [], updatedAt, isDegraded: true });
     }
 
-    let rosterPlayerIds: Set<string>;
-    const liveStatsEntry = mlbLiveStatsCache.get(gameId);
-    if (liveStatsEntry?.allRosterIds && liveStatsEntry.allRosterIds.size > 0) {
-      rosterPlayerIds = liveStatsEntry.allRosterIds;
-    } else {
-      try {
-        const boxUrl = `https://statsapi.mlb.com/api/v1/game/${liveSignalsStatsPk}/boxscore`;
-        const boxRes = await fetch(boxUrl, {
-          headers: { "User-Agent": "LiveLocks/1.0" },
-          signal: AbortSignal.timeout(5000),
-        });
-        if (boxRes.ok) {
-          const boxData = (await boxRes.json()) as any;
-          rosterPlayerIds = new Set<string>();
-          for (const side of ["away", "home"] as const) {
-            const batters: number[] = boxData.teams?.[side]?.batters ?? [];
-            const pitchers: number[] = boxData.teams?.[side]?.pitchers ?? [];
-            for (const id of [...batters, ...pitchers]) rosterPlayerIds.add(String(id));
-          }
-        } else {
-          rosterPlayerIds = new Set<string>();
-        }
-      } catch {
-        rosterPlayerIds = new Set<string>();
-      }
-    }
+    const engineQualified = entry?.qualifiedSignals ?? [];
 
-    for (const o of allOutputs) {
-      console.log(`[MLB signal debug] ${JSON.stringify({
-        playerId: o.playerId, playerName: o.playerName, market: o.market, gameId: o.gameId,
-        playerContext: {
-          bookLine: o.bookLine, projection: o.projection,
-          completedAB: o.completedAB, remainingPA: o.remainingPA,
-          expectedHits: o.expectedHits, adjustedHitRate: o.adjustedHitRate,
-          mode: o.mode, twoABRuleSatisfied: o.twoABRuleSatisfied,
-          modifiers: o.modifiers,
-          projectionLog: o.projectionLog
-        },
-        probabilityOutput: {
-          rawProbOver: o.rawProbabilityOver, rawProbUnder: o.rawProbabilityUnder,
-          calibProbOver: o.calibratedProbabilityOver, calibProbUnder: o.calibratedProbabilityUnder,
-          rawProb: o.rawProbability, calibProb: o.calibratedProbability,
-          edge: o.edge, side: o.recommendedSide, tier: o.confidenceTier,
-          bookImplied: o.bookImplied
-        },
-        suppressed: o.suppressed, suppressionReason: o.suppressionReason,
-        inRoster: rosterPlayerIds.has(String(o.playerId))
-      })}`);
-    }
-
-    const rawSignals = allOutputs
-      .filter((o) => !!o.playerId && o.playerId !== "unknown")
-      .filter((o) => {
-        // Explicit numeric invariants — both probs must be finite and strictly > 0
-        const over = o.calibratedProbabilityOver;
-        const under = o.calibratedProbabilityUnder;
-        if (typeof over !== "number" || !Number.isFinite(over) || over <= 0 || over > 100) {
-          console.warn(`[MLB signals] Dropping ${o.playerName}/${o.market}: calibratedProbOver=${over} fails > 0 guard`);
-          return false;
-        }
-        if (typeof under !== "number" || !Number.isFinite(under) || under <= 0 || under > 100) {
-          console.warn(`[MLB signals] Dropping ${o.playerName}/${o.market}: calibratedProbUnder=${under} fails > 0 guard`);
-          return false;
-        }
-        return true;
-      })
-      .map((o) => {
-        const hitProb =
-          o.recommendedSide === "OVER" ? o.calibratedProbabilityOver : o.calibratedProbabilityUnder;
-
-        if (typeof hitProb !== "number" || isNaN(hitProb) || hitProb < 0 || hitProb > 100) {
-          console.warn(`[MLB signals] Dropping invalid hitProb for ${o.playerName}/${o.market}: ${hitProb}`);
-          return null;
-        }
-
-        const hasOdds = o.bookLine > 0;
-        const edgeValue = hasOdds && Number.isFinite(o.edge) ? Math.round(o.edge * 10) / 10 : null;
-
-        let tier: "green" | "yellow" | "teal" | "red";
-        if (o.recommendedSide === "UNDER" && hitProb >= 85) tier = "red";
-        else if (hitProb >= 85) tier = "green";
-        else if (hitProb >= 70) tier = "yellow";
-        else tier = "teal";
-
-        const qSig = entry?.qualifiedSignals?.find(
-          (qs) => qs.playerId === o.playerId && qs.market === o.market
-        );
-
-        return {
-          playerId: o.playerId,
-          playerName: o.playerName,
-          market: o.market,
-          bookLine: hasOdds ? o.bookLine : null,
-          projection: o.projection ?? null,
-          enginePct: Math.round(hitProb * 10) / 10,
-          edge: edgeValue,
-          odds: hasOdds ? { bookLine: o.bookLine } : null,
-          recommendedSide: o.recommendedSide,
-          inning: mlbGameCache.gameState[gameId]?.inning ?? 0,
-          tier,
-          gameId: o.gameId,
-          sportsbook: o.sportsbook ?? null,
-          derivedLine: o.isDerivedLine ?? false,
-          signalTimestamp: o.signalTimestamp ?? o.engineGeneratedAt ?? Date.now(),
-          formIndicator: o.formIndicator ? o.formIndicator.toUpperCase() : null,
-          formScore: o.formScore ?? null,
-          evPct: o.evPct ?? null,
-          hrFactors: o.hrFactors ?? null,
-          contextScore: o.contextScore ?? null,
-          matchupTag: o.matchupTag ?? null,
-          explanationBullets: o.explanationBullets ?? [],
-          modifiers: o.modifiers ? {
-            liveForm: o.modifiers.liveForm ?? 0,
-            pitcher: o.modifiers.pitcher ?? 0,
-            pitchType: o.modifiers.pitchType ?? 0,
-            weatherPark: o.modifiers.weatherPark ?? 0,
-            lineup: o.modifiers.lineup ?? 0,
-          } : null,
-          signalScore: qSig?.signalScore ?? null,
-          confidenceTier: qSig?.confidenceTier ?? null,
-          signalTags: qSig?.signalTags ?? [],
-          feedTags: qSig?.feedTags ?? [],
-          playerGlowEligible: qSig?.playerGlowEligible ?? false,
-        };
-      })
-      .filter((s): s is NonNullable<typeof s> => s !== null);
-
-    const filteredSignals = rawSignals.filter((sig) => {
-      if (!sig.playerId) {
-        console.warn(`[MLB signals] Dropping signal: missing playerId`);
-        return false;
-      }
-      if (!Number.isFinite(sig.enginePct)) {
-        console.warn(`[MLB signals] Dropping signal for ${sig.playerId}: non-finite probability`);
-        return false;
-      }
-      if (sig.enginePct < 0 || sig.enginePct > 100) {
-        console.warn(`[MLB signals] Dropping signal for ${sig.playerId}: probability ${sig.enginePct} outside 0-100`);
-        return false;
-      }
-      if (sig.gameId !== gameId) {
-        console.warn(`[MLB signals] Dropping signal for ${sig.playerId}: gameId mismatch (${sig.gameId} !== ${gameId})`);
-        return false;
-      }
-      if (sig.enginePct < 60) {
-        console.warn(`[MLB signals] Hard guard: dropping ${sig.playerId} — probability=${sig.enginePct} (must be >= 60)`);
-        return false;
-      }
-      return true;
-    });
-
-    const rosterLockedSignals = rosterPlayerIds.size > 0
-      ? filteredSignals.filter((sig) => {
-          if (!rosterPlayerIds.has(String(sig.playerId))) {
-            console.warn(`[MLB signals] Dropping signal for ${sig.playerId} "${sig.playerName}": not in game ${gameId} roster`);
-            return false;
-          }
-          return true;
-        })
-      : filteredSignals;
-
-    if (rosterLockedSignals.length > 5) {
-      const probValues = rosterLockedSignals.map((s) => s.enginePct);
-      const uniqueProbs = new Set(probValues);
-      if (uniqueProbs.size <= 2) {
-        console.error(`[MLB signals] PROBABILITY_COLLISION_DETECTED for game ${gameId} — ${rosterLockedSignals.length} signals but only ${uniqueProbs.size} unique probability values: [${probValues.join(", ")}]`);
-        mlbSignalsCache.set(gameId, { ts: Date.now(), signals: [], updatedAt, isDegraded: false });
-        return res.json({ mode: "no_lines", signals: [], updatedAt });
-      }
-    }
-
-    // If no signals pass all guards, return no_lines
-    if (rosterLockedSignals.length === 0) {
-      console.log(`[MLB signals] game=${gameId} — no signals passed guards, returning mode:no_lines`);
+    if (engineQualified.length === 0) {
+      console.log(`[MLB signals] game=${gameId} — no qualified signals from engine, returning mode:no_lines`);
       mlbSignalsCache.set(gameId, { ts: Date.now(), signals: [], updatedAt, isDegraded: false });
       return res.json({ mode: "no_lines", signals: [], updatedAt });
     }
 
-    // isDegraded = true when stale last-known-good odds cache was used in this engine run
-    const isDegraded = cachedIsDegraded;
-
-    console.log(`[MLB signals] game=${gameId} rawOutputs=${allOutputs.length} validSignals=${rosterLockedSignals.length} isDegraded=${isDegraded}`);
-
-    // ─── Engine stats observability ──────────────────────────────────────────
-    const mlbEngineStart = Date.now();
-    console.log(`[ENGINE START][MLB] game=${gameId} signals=${rosterLockedSignals.length}`);
-    const mlbValidationAcc = { skipped: 0, failureReasons: [] as string[] };
-    const mlbOutputAcc = { rejected: 0, rejectionReasons: [] as string[] };
-    const mlbRawOutputs = rosterLockedSignals.map((s) => {
-      // Phase 13/17: MLB timing gate — after inning 1 OR pitcher > 75 pitches OR 3rd time through
-      const sAny = s as any;
-      const mlbTimingValid = isValidTimingWindow({
-        sport: "mlb",
-        mlb: {
-          inning: sAny.inning ?? 1,
-          isTopOfInning: true,
-          pitchCount: sAny.pitchCount ?? 0,
-          timesThrough: sAny.timesThrough ?? 1,
-        },
-      });
-      const isDerived = s.derivedLine ?? false;
-      // Phase 4: lineSource from signal — player prop signals from sportsbook unless explicitly derived
-      const lineSource: "sportsbook" | "inferred" | "derived" =
-        isDerived ? "derived" : s.sportsbook ? "sportsbook" : "derived";
-      const input = buildEngineInput({
-        gameId,
-        sport: "mlb",
-        playerId: String(s.playerId),
-        marketType: s.market,
-        line: s.bookLine ?? null,
-        derivedLine: isDerived,
-        lineSource,
-      });
-      const line = input.line;
-      const projection = s.projection ?? null;
-      const edge = s.edge ?? null;
-      // Phase 7: confidence tier based on probability (ELITE=75%+, STRONG=65-74%, LEAN=55-64%)
-      const probPct = s.enginePct;
-      const confidenceTier = probPct >= 75 && !isDerived ? "ELITE" as const
-        : probPct >= 65 ? "STRONG" as const
-        : probPct >= 55 ? "LEAN" as const
-        : "NO_EDGE" as const;
-      console.log(`[ENGINE INPUT][MLB] player=${s.playerName} market=${s.market} line=${line} proj=${projection} edge=${edge} sportsbook=${s.sportsbook ?? "consensus"} derivedLine=${isDerived} lineSource=${lineSource} confidence=${confidenceTier}`);
-      return {
-        id: `${s.playerId}_${s.market}`,
-        sport: "mlb" as const,
-        market: s.market,
-        player: s.playerName,
-        playerName: s.playerName,
-        gameId: String(s.gameId ?? gameId),
-        line,
-        projection,
-        probability: s.enginePct / 100,
-        edge,
-        recommendedSide: (s.recommendedSide === "UNDER" ? "UNDER" : "OVER") as "OVER" | "UNDER",
-        confidence: confidenceTier,
-        sportsbook: s.sportsbook ?? "consensus",
-        derivedLine: isDerived,
-        lineSource,
-        signalTimestamp: input.createdAt,
-        timingValid: mlbTimingValid,
-        createdAt: input.createdAt,
-      };
-    });
-    // Phase 3+8: consistency check before signal promotion
-    const mlbConsistentOutputs = filterValidEngineOutputs(mlbRawOutputs, mlbOutputAcc);
-    const mlbEngineSignals = mlbConsistentOutputs.map(({ playerName: _pn, gameId: _gid, ...rest }) => rest);
-    const validMlbEngineSignals = filterValidSignals(mlbEngineSignals, mlbValidationAcc);
-    const validMlbSignalIds = new Set(validMlbEngineSignals.map((s) => s.id));
-    const validatedMlbSignals = rosterLockedSignals.filter((s) => validMlbSignalIds.has(`${s.playerId}_${s.market}`));
-    for (const sig of validMlbEngineSignals) console.log(`[ENGINE OUTPUT VALID][MLB] player=${sig.player} market=${sig.market} line=${sig.line} sportsbook=${sig.sportsbook}`);
-    if (mlbValidationAcc.skipped > 0) console.warn(`[ENGINE OUTPUT SKIPPED][MLB] count=${mlbValidationAcc.skipped} reasons=${mlbValidationAcc.failureReasons.join("; ")}`);
-    if (mlbOutputAcc.rejected > 0) console.warn(`[ENGINE OUTPUT SKIPPED][MLB] outputValidation rejected=${mlbOutputAcc.rejected} reasons=${mlbOutputAcc.rejectionReasons.join("; ")}`);
-    // Phase 10: tally lineSource distribution for MLB signals
-    const mlbLineSources = mlbRawOutputs.map((o) => (o as any).lineSource ?? "sportsbook");
-    const mlbDerivedCount = mlbLineSources.filter((s: string) => s === "derived").length;
-    recordEngineRun("mlb", {
-      gamesProcessed: 1,
-      signalsGenerated: validMlbEngineSignals.length,
-      signalsSkipped: mlbValidationAcc.skipped,
-      rejectedSignals: mlbOutputAcc.rejected,
-      rejectionReasons: mlbOutputAcc.rejectionReasons,
-      failureReasons: mlbValidationAcc.failureReasons,
-      latencyMs: Date.now() - mlbEngineStart,
-      lineSource: mlbDerivedCount > 0 ? "derived" : "sportsbook",
-      booksAvailable: mlbRawOutputs.length > 0 ? 1 : 0,
-    });
-
-    const CONFIDENCE_RANK: Record<string, number> = { ELITE: 4, STRONG: 3, SOLID: 2, WATCHLIST: 1, NO_SIGNAL: 0, LEAN: 2, VALUE: 1, NO_EDGE: 0 };
+    const CONFIDENCE_RANK: Record<string, number> = { ELITE: 4, STRONG: 3, SOLID: 2, WATCHLIST: 1, NO_SIGNAL: 0 };
     const MAX_SIGNALS_PER_GAME = 3;
-    const prioritizedMlbSignals = [...validatedMlbSignals]
+
+    const apiSignals = engineQualified
+      .map((qs) => {
+        const hitProb = qs.side === "OVER"
+          ? (qs.engineProbability ?? qs.signalScore)
+          : (qs.engineProbability ?? qs.signalScore);
+        const enginePct = Math.round((hitProb ?? 0) * 10) / 10;
+
+        let tier: "green" | "yellow" | "teal" | "red";
+        if (qs.side === "UNDER" && enginePct >= 85) tier = "red";
+        else if (enginePct >= 85) tier = "green";
+        else if (enginePct >= 70) tier = "yellow";
+        else tier = "teal";
+
+        const rawOutput = entry?.outputs?.find(
+          (o) => o.playerId === qs.playerId && o.market === qs.market
+        );
+
+        return {
+          playerId: qs.playerId,
+          playerName: qs.playerName,
+          market: qs.market,
+          bookLine: qs.line > 0 ? qs.line : null,
+          projection: qs.projection ?? null,
+          enginePct,
+          edge: rawOutput ? (Number.isFinite(rawOutput.edge) ? Math.round(rawOutput.edge * 10) / 10 : null) : null,
+          odds: qs.line > 0 ? { bookLine: qs.line } : null,
+          recommendedSide: qs.side,
+          inning: mlbGameCache.gameState[gameId]?.inning ?? 0,
+          tier,
+          gameId: qs.gameId,
+          sportsbook: qs.sportsbook ?? null,
+          derivedLine: rawOutput?.isDerivedLine ?? false,
+          signalTimestamp: rawOutput?.signalTimestamp ?? rawOutput?.engineGeneratedAt ?? Date.now(),
+          formIndicator: qs.formIndicator ? qs.formIndicator.toUpperCase() : null,
+          formScore: rawOutput?.formScore ?? null,
+          evPct: qs.evPct ?? null,
+          hrFactors: rawOutput?.hrFactors ?? null,
+          contextScore: rawOutput?.contextScore ?? null,
+          matchupTag: rawOutput?.matchupTag ?? null,
+          explanationBullets: qs.reasons ?? [],
+          modifiers: rawOutput?.modifiers ? {
+            liveForm: rawOutput.modifiers.liveForm ?? 0,
+            pitcher: rawOutput.modifiers.pitcher ?? 0,
+            pitchType: rawOutput.modifiers.pitchType ?? 0,
+            weatherPark: rawOutput.modifiers.weatherPark ?? 0,
+            lineup: rawOutput.modifiers.lineup ?? 0,
+          } : null,
+          signalScore: qs.signalScore,
+          confidenceTier: qs.confidenceTier,
+          signalTags: qs.signalTags,
+          feedTags: qs.feedTags,
+          playerGlowEligible: qs.playerGlowEligible,
+        };
+      })
       .sort((a, b) => {
-        const aTier = (a as any).confidenceTier ?? "NO_SIGNAL";
-        const bTier = (b as any).confidenceTier ?? "NO_SIGNAL";
-        const tierDiff = (CONFIDENCE_RANK[bTier] ?? 0) - (CONFIDENCE_RANK[aTier] ?? 0);
+        const tierDiff = (CONFIDENCE_RANK[b.confidenceTier ?? "NO_SIGNAL"] ?? 0) - (CONFIDENCE_RANK[a.confidenceTier ?? "NO_SIGNAL"] ?? 0);
         if (tierDiff !== 0) return tierDiff;
-        const edgeDiff = (b.edge ?? 0) - (a.edge ?? 0);
-        if (Math.abs(edgeDiff) > 0.01) return edgeDiff;
-        return (b.enginePct ?? 0) - (a.enginePct ?? 0);
+        return (b.signalScore ?? 0) - (a.signalScore ?? 0);
       })
       .slice(0, MAX_SIGNALS_PER_GAME);
-    console.log(`[SIGNAL PRIORITY][MLB] game=${gameId} before=${validatedMlbSignals.length} after=${prioritizedMlbSignals.length}`);
 
-    mlbSignalsCache.set(gameId, { ts: Date.now(), signals: prioritizedMlbSignals, updatedAt, isDegraded });
+    console.log(`[MLB signals] game=${gameId} qualifiedFromEngine=${engineQualified.length} served=${apiSignals.length} isDegraded=${cachedIsDegraded}`);
 
-    // Fire-and-forget: persist validated MLB signals to persisted_plays for analytics
-    // Stale signal protection: skip all persistence if engine data is older than 30s
+    recordEngineRun("mlb", {
+      gamesProcessed: 1,
+      signalsGenerated: apiSignals.length,
+      signalsSkipped: 0,
+      rejectedSignals: 0,
+      rejectionReasons: [],
+      failureReasons: [],
+      latencyMs: 0,
+      lineSource: "sportsbook",
+      booksAvailable: apiSignals.length > 0 ? 1 : 0,
+    });
+
+    mlbSignalsCache.set(gameId, { ts: Date.now(), signals: apiSignals, updatedAt, isDegraded: cachedIsDegraded });
+
     const STALE_THRESHOLD_MS = 30_000;
     if (updatedAt > 0 && Date.now() - updatedAt > STALE_THRESHOLD_MS) {
       console.warn(`[MLB PERSIST BLOCKED — STALE SIGNAL] game=${gameId} updatedAt=${updatedAt} age=${Date.now() - updatedAt}ms > ${STALE_THRESHOLD_MS}ms`);
     } else {
       const today = new Date().toISOString().slice(0, 10);
       const validSides = new Set(["over", "under"]);
-      for (const sig of prioritizedMlbSignals) {
+      for (const sig of apiSignals) {
         const direction = (sig.recommendedSide ?? "").toLowerCase();
-        if (!Number.isFinite(sig.enginePct) || sig.enginePct < 1 || sig.enginePct > 99) {
-          console.warn(`[MLB PERSIST BLOCKED — INVALID SIGNAL] game=${gameId} player=${sig.playerName} market=${sig.market} — enginePct=${sig.enginePct} outside [1,99]`);
-          continue;
-        }
-        if (!sig.bookLine || sig.bookLine <= 0) {
-          console.warn(`[MLB PERSIST BLOCKED — INVALID SIGNAL] game=${gameId} player=${sig.playerName} market=${sig.market} — bookLine=${sig.bookLine} invalid`);
-          continue;
-        }
-        if (!validSides.has(direction)) {
-          console.warn(`[MLB PERSIST BLOCKED — INVALID SIGNAL] game=${gameId} player=${sig.playerName} market=${sig.market} — recommendedSide="${sig.recommendedSide}" invalid`);
-          continue;
-        }
+        if (!Number.isFinite(sig.enginePct) || sig.enginePct < 1 || sig.enginePct > 99) continue;
+        if (!sig.bookLine || sig.bookLine <= 0) continue;
+        if (!validSides.has(direction)) continue;
         const key = `${sig.playerId}|${sig.market}|${sig.bookLine}|${direction}|${gameId}|${today}`;
         storage.recordPlay({
           id: `play-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -1273,7 +1033,7 @@ export async function registerRoutes(
           projection: sig.projection ?? undefined,
           sportsbook: sig.sportsbook ?? null,
           derivedLine: sig.derivedLine ?? false,
-          engineVersion: "mlb_v1.0",
+          engineVersion: "mlb_v1.5",
           gameDate: today,
           timestamp: new Date(),
           duplicateGuard: key,
@@ -1281,7 +1041,7 @@ export async function registerRoutes(
       }
     }
 
-    return res.json({ mode: "live", signals: prioritizedMlbSignals, updatedAt, isDegraded, gameCardTags: entry?.gameCardTags ?? [] });
+    return res.json({ mode: "live", signals: apiSignals, updatedAt, isDegraded: cachedIsDegraded, gameCardTags: entry?.gameCardTags ?? [] });
   });
 
   app.get("/api/mlb/edge-feed", requireMLBAccess, async (req, res) => {
@@ -1306,40 +1066,34 @@ export async function registerRoutes(
           }
         } else {
           const edgeEntry = mlbEdgeCache.get(gid);
-          if (edgeEntry && edgeEntry.outputs.length > 0) {
+          if (edgeEntry && edgeEntry.qualifiedSignals && edgeEntry.qualifiedSignals.length > 0) {
             const FEED_FRESHNESS_MS = 120_000;
             if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) continue;
             const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);
-            const qualified = edgeEntry.outputs.filter((o) => {
-              const prob = Math.max(o.calibratedProbabilityOver, o.calibratedProbabilityUnder);
-              return canShowSignal({
-                line: o.bookLine,
-                odds: (o.overOdds !== null || o.underOdds !== null) ? { overOdds: o.overOdds, underOdds: o.underOdds } : null,
-                projection: o.projection,
-                oddsUpdatedAt: o.oddsUpdatedAt,
-                projectionUpdatedAt: o.projectionUpdatedAt,
-                calibratedProbabilityOver: o.calibratedProbabilityOver,
-                calibratedProbabilityUnder: o.calibratedProbabilityUnder,
-              }) && prob >= 60 && !o.suppressed;
-            });
-            for (const o of qualified.slice(0, 3)) {
-              const hitProb = Math.max(o.calibratedProbabilityOver, o.calibratedProbabilityUnder);
+            const rawOutputLookup = new Map((edgeEntry.outputs ?? []).map((o) => [`${o.playerId}_${o.market}`, o]));
+            for (const qs of edgeEntry.qualifiedSignals.slice(0, 3)) {
+              const raw = rawOutputLookup.get(`${qs.playerId}_${qs.market}`);
               allSignals.push({
-                playerId: o.playerId,
-                playerName: o.playerName,
-                market: o.market,
-                bookLine: o.bookLine,
-                projection: o.projection ?? null,
-                enginePct: Math.round(hitProb * 10) / 10,
-                edge: Math.round(o.edge * 100) / 100,
-                recommendedSide: o.recommendedSide,
+                playerId: qs.playerId,
+                playerName: qs.playerName,
+                market: qs.market,
+                bookLine: qs.line,
+                projection: qs.projection ?? null,
+                enginePct: Math.round((qs.engineProbability ?? 0) * 10) / 10,
+                edge: raw ? Math.round(raw.edge * 100) / 100 : null,
+                recommendedSide: qs.side,
                 inning: 0,
                 gameId: gid,
-                sportsbook: o.sportsbook ?? null,
-                hrFactors: o.hrFactors ?? null,
+                sportsbook: qs.sportsbook ?? null,
+                hrFactors: raw?.hrFactors ?? null,
                 awayAbbr: game?.awayAbbr ?? null,
                 homeAbbr: game?.homeAbbr ?? null,
                 gameStatus: game?.status ?? null,
+                signalScore: qs.signalScore,
+                confidenceTier: qs.confidenceTier,
+                signalTags: qs.signalTags,
+                feedTags: qs.feedTags,
+                playerGlowEligible: qs.playerGlowEligible,
               });
             }
           }
@@ -5112,30 +4866,21 @@ export function registerAnalyticsRoutes(app: Express): void {
       for (const [, entry] of mlbEdgeCache.entries()) {
         const FRESHNESS_MS = 120_000;
         if (entry.updatedAt > 0 && Date.now() - entry.updatedAt > FRESHNESS_MS) continue;
-        const qualified = entry.outputs.filter((o: any) => {
-          const prob = Math.max(o.calibratedProbabilityOver ?? 0, o.calibratedProbabilityUnder ?? 0);
-          return canShowSignal({
-            line: o.bookLine,
-            odds: (o.overOdds !== null || o.underOdds !== null) ? { overOdds: o.overOdds, underOdds: o.underOdds } : null,
-            projection: o.projection,
-            oddsUpdatedAt: o.oddsUpdatedAt,
-            projectionUpdatedAt: o.projectionUpdatedAt,
-            calibratedProbabilityOver: o.calibratedProbabilityOver,
-            calibratedProbabilityUnder: o.calibratedProbabilityUnder,
-          }) && prob >= 60 && !o.suppressed;
-        });
-        for (const o of qualified) {
-          const hitProb = Math.max(o.calibratedProbabilityOver ?? 0, o.calibratedProbabilityUnder ?? 0);
+        const qs = entry.qualifiedSignals ?? [];
+        for (const sig of qs) {
+          const rawOutput = entry.outputs?.find((o) => o.playerId === sig.playerId && o.market === sig.market);
           mlbSignals.push({
-            playerId: o.playerId,
-            playerName: o.playerName,
-            market: o.market,
-            enginePct: Math.round(hitProb * 10) / 10,
-            edge: Math.round(o.edge * 100) / 100,
-            bookLine: o.bookLine,
-            projection: o.projection ?? null,
-            recommendedSide: o.recommendedSide,
-            gameId: o.gameId,
+            playerId: sig.playerId,
+            playerName: sig.playerName,
+            market: sig.market,
+            enginePct: Math.round((sig.engineProbability ?? 0) * 10) / 10,
+            edge: rawOutput ? Math.round(rawOutput.edge * 100) / 100 : null,
+            bookLine: sig.line,
+            projection: sig.projection ?? null,
+            recommendedSide: sig.side,
+            gameId: sig.gameId,
+            signalScore: sig.signalScore,
+            confidenceTier: sig.confidenceTier,
           });
         }
       }
@@ -5201,22 +4946,10 @@ export function registerAnalyticsRoutes(app: Express): void {
       for (const [, entry] of mlbEdgeCache.entries()) {
         const FRESHNESS_MS = 120_000;
         if (entry.updatedAt > 0 && Date.now() - entry.updatedAt > FRESHNESS_MS) continue;
-        const qualified = entry.outputs.filter((o: any) => {
-          const prob = Math.max(o.calibratedProbabilityOver ?? 0, o.calibratedProbabilityUnder ?? 0);
-          return canShowSignal({
-            line: o.bookLine,
-            odds: (o.overOdds !== null || o.underOdds !== null) ? { overOdds: o.overOdds, underOdds: o.underOdds } : null,
-            projection: o.projection,
-            oddsUpdatedAt: o.oddsUpdatedAt,
-            projectionUpdatedAt: o.projectionUpdatedAt,
-            calibratedProbabilityOver: o.calibratedProbabilityOver,
-            calibratedProbabilityUnder: o.calibratedProbabilityUnder,
-          }) && prob >= 60 && !o.suppressed;
-        });
-        for (const o of qualified) {
+        const qs = entry.qualifiedSignals ?? [];
+        for (const sig of qs) {
           totalLive++;
-          const prob = Math.max(o.calibratedProbabilityOver ?? 0, o.calibratedProbabilityUnder ?? 0);
-          if (prob >= 75) mlbElite++;
+          if (sig.confidenceTier === "ELITE" || sig.confidenceTier === "STRONG") mlbElite++;
         }
       }
 
