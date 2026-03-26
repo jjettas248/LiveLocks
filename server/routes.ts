@@ -2463,7 +2463,7 @@ export async function registerRoutes(
       }
 
       const allDbPlayers = await storage.getPlayers();
-      const { getPlayerOdds, resolveOddsEventId, getSGOPlayerLine, getGameLines } = await import("./oddsService");
+      const { getPlayerOdds, resolveOddsEventId, getSGOPlayerLine, getGameLines, preWarmOddsCache } = await import("./oddsService");
 
       let oddsEventId: string | null = null;
       try {
@@ -2491,6 +2491,11 @@ export async function registerRoutes(
         { statType: "reb_ast",     components: ["rebounds", "assists"] },
         { statType: "stl_blk",     components: ["steals", "blocks"] },
       ];
+
+      if (oddsEventId && process.env.ODDS_API_KEY) {
+        const allStatTypes = LIVE_STAT_CONFIGS.map(c => c.statType);
+        await preWarmOddsCache(oddsEventId, allStatTypes, true);
+      }
 
       const parseStat = (val: string) => {
         if (!val) return 0;

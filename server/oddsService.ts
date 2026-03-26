@@ -349,6 +349,22 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
   return data;
 }
 
+export async function preWarmOddsCache(
+  oddsEventId: string,
+  statTypes: string[],
+  inPlay = false
+): Promise<void> {
+  const uniqueMarketKeys = [...new Set(
+    statTypes.map(st => MARKET_MAP[st]).filter(Boolean)
+  )];
+  const results = await Promise.allSettled(
+    uniqueMarketKeys.map(mk => getRawOdds(oddsEventId, mk, inPlay))
+  );
+  const fetched = results.filter(r => r.status === "fulfilled").length;
+  const failed = results.filter(r => r.status === "rejected").length;
+  console.log(`[ODDS PRE-WARM] eventId=${oddsEventId} inPlay=${inPlay} markets=${uniqueMarketKeys.length} fetched=${fetched} failed=${failed}`);
+}
+
 // Return raw bookmaker/market data for diagnostics — used by /api/debug/odds-raw
 export async function getRawOddsForDebug(oddsEventId: string): Promise<any> {
   // Debug endpoint fetches all markets for inspection — uses combined cache key
