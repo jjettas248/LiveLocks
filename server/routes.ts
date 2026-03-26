@@ -719,6 +719,11 @@ export async function registerRoutes(
           projectionUpdatedAt: new Date(bestEdgeOutput.projectionUpdatedAt).toISOString(),
         } : null;
 
+        const pitcherCtx = mlbGameCache.pitcherContext[gameId];
+        const activePitcherId = pitcherInGame?.playerId ?? null;
+        const activePitcherCtx = activePitcherId && pitcherCtx?.byPitcherId?.[activePitcherId]
+          ? pitcherCtx.byPitcherId[activePitcherId] : null;
+
         games.push({
           gameId,
           awayTeam: awayTeamName,
@@ -733,6 +738,12 @@ export async function registerRoutes(
           startTime: event.date ?? null,
           venue: parkName || null,
           weatherSummary: weatherSummary || null,
+          weather: cachedWeather ? {
+            temperature: cachedWeather.temperature,
+            windSpeed: cachedWeather.windSpeed,
+            windDirection: cachedWeather.windDirection,
+            humidity: cachedWeather.humidity,
+          } : null,
           pitcherAway: awayPitcher || null,
           pitcherHome: homePitcher || null,
           awayPitcherHand: null,
@@ -740,6 +751,17 @@ export async function registerRoutes(
           pitcherName: pitcherInGame?.playerName ?? null,
           pitcherThrows: pitcherInGame?.throws ?? null,
           pitcherTeam: pitcherInGame?.team ?? null,
+          pitcherContext: activePitcherCtx ? {
+            pitchCount: activePitcherCtx.pitchCount,
+            timesThroughOrder: activePitcherCtx.timesThroughOrder,
+            avgVelocity: activePitcherCtx.avgVelocity,
+            velocityDrop: activePitcherCtx.velocityDrop,
+          } : null,
+          gameState: cachedState ? {
+            outs: cachedState.outs,
+            runnersOnBase: cachedState.runnersOnBase,
+          } : null,
+          signalCount: freshValidOutputs.length,
           hasOdds,
           signalLocked,
           market: bestMarket,
@@ -808,6 +830,7 @@ export async function registerRoutes(
             playerId: String(batterId),
             playerName: entry.person?.fullName ?? "",
             teamAbbr: side === "home" ? data.teams?.home?.team?.abbreviation ?? "" : data.teams?.away?.team?.abbreviation ?? "",
+            teamSide: side,
             battingOrderSlot: slot,
             ab: batting.atBats ?? 0,
             h: batting.hits ?? 0,
@@ -818,6 +841,17 @@ export async function registerRoutes(
             sb: batting.stolenBases ?? 0,
             k: batting.strikeOuts ?? 0,
             lastABOutcome,
+            exitVelocity: contactEntry?.exitVelocity ?? null,
+            barrelPct: contactEntry?.barrelPct ?? null,
+            xBA: contactEntry?.xBA ?? null,
+            xSLG: contactEntry?.xSLG ?? null,
+            hardHitPct: contactEntry?.hardHitPct ?? null,
+            priorABResults: priorABResults.map(ab => ({
+              outcome: ab.outcome,
+              exitVelocity: ab.exitVelocity,
+              launchAngle: ab.launchAngle,
+              distance: ab.distance,
+            })),
           });
         }
       }
@@ -1220,6 +1254,42 @@ export async function registerRoutes(
     }
 
     return res.json({ mode: "live", signals: prioritizedMlbSignals, updatedAt, isDegraded });
+  });
+
+  app.get("/api/mlb/edge-feed", requireMLBAccess, async (req, res) => {
+    try {
+      const allSignals: any[] = [];
+      const cachedLiveGames = mlbLiveGamesCache.get("games");
+      const liveGameIds = cachedLiveGames
+        ? cachedLiveGames.games.filter((g: any) => g.status === "live").map((g: any) => g.gameId)
+        : [];
+
+      for (const gid of liveGameIds) {
+        const cached = mlbSignalsCache.get(gid);
+        if (cached && cached.signals.length > 0) {
+          const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);
+          for (const sig of cached.signals) {
+            allSignals.push({
+              ...sig,
+              awayAbbr: game?.awayAbbr ?? null,
+              homeAbbr: game?.homeAbbr ?? null,
+              gameStatus: game?.status ?? null,
+            });
+          }
+        }
+      }
+
+      allSignals.sort((a, b) => {
+        const edgeDiff = Math.abs(b.edge ?? 0) - Math.abs(a.edge ?? 0);
+        if (Math.abs(edgeDiff) > 0.01) return edgeDiff;
+        return (b.enginePct ?? 0) - (a.enginePct ?? 0);
+      });
+
+      return res.json({ signals: allSignals.slice(0, 20) });
+    } catch (e: any) {
+      console.error("[mlb/edge-feed]", e.message);
+      return res.json({ signals: [] });
+    }
   });
 
   // ── MLB Manual Calculation Route ─────────────────────────────────────────────

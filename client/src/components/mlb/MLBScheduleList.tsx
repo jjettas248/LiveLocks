@@ -12,10 +12,24 @@ type MLBScheduleGame = {
   isTopInning: boolean;
   status: "live" | "pregame" | null;
   startTime?: string | null;
+  venue?: string | null;
   pitcherAway?: string | null;
   pitcherHome?: string | null;
   hasOdds?: boolean;
   signalLocked?: boolean;
+  signalCount?: number;
+  weather?: {
+    temperature: number | null;
+    windSpeed: number | null;
+    windDirection: string | null;
+    humidity: number | null;
+  } | null;
+  pitcherContext?: {
+    pitchCount: number;
+    timesThroughOrder: number;
+    avgVelocity: number | null;
+    velocityDrop: number | null;
+  } | null;
 };
 
 type MLBScheduleListProps = {
@@ -24,117 +38,122 @@ type MLBScheduleListProps = {
   onSelectGame: (gameId: string) => void;
 };
 
-type GameRenderState = "INVALID" | "PREVIEW" | "NO_SIGNAL" | "SIGNAL";
-
-function resolveGameRenderState(game: MLBScheduleGame): GameRenderState {
-  const hasValidTeams = !!(game.awayTeam && game.homeTeam);
-
-  if (!hasValidTeams) return "INVALID";
-
-  if (!game.hasOdds) return "PREVIEW";
-
-  if (game.signalLocked) return "SIGNAL";
-
-  return "NO_SIGNAL";
-}
-
 function formatStartTime(startTime: string | null | undefined): string | null {
   if (!startTime) return null;
   try {
     const date = new Date(startTime);
     if (!Number.isFinite(date.getTime())) return null;
-    return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+    return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   } catch {
     return null;
   }
 }
 
+function pitcherHeatEmoji(ctx: MLBScheduleGame["pitcherContext"]): string {
+  if (!ctx) return "";
+  if (ctx.velocityDrop && ctx.velocityDrop >= 3) return "🥶";
+  if (ctx.timesThroughOrder >= 3 || ctx.pitchCount >= 85) return "❄️";
+  if (ctx.pitchCount <= 30) return "🔥";
+  return "🟡";
+}
+
 export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGameId, onSelectGame }: MLBScheduleListProps) {
   const safeGames = Array.isArray(games) ? games : [];
-  const renderedGames = safeGames.filter((g) => g && g.gameId && resolveGameRenderState(g) !== "INVALID");
+  const renderedGames = safeGames.filter((g) => g && g.gameId && (g.awayTeam || g.homeTeam));
 
   return (
     <div>
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-sm font-semibold text-foreground">Today's Games</span>
-      </div>
       {renderedGames.length === 0 && (
         <div className="text-xs text-muted-foreground py-3" data-testid="text-no-mlb-games">
           No games scheduled today. Check back soon.
         </div>
       )}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {renderedGames.map((game) => {
           if (!game || !game.gameId) return null;
-          const renderState = resolveGameRenderState(game);
-          if (renderState === "INVALID") return null;
-
           const isActive = game.gameId === selectedGameId;
           const startTimeFormatted = formatStartTime(game.startTime);
+          const awayAbbr = game.awayAbbr ?? "";
+          const homeAbbr = game.homeAbbr ?? "";
+          const pitcherAway = game.pitcherAway?.trim() || null;
+          const pitcherHome = game.pitcherHome?.trim() || null;
+          const awayLast = pitcherAway ? pitcherAway.split(" ").pop() : "TBD";
+          const homeLast = pitcherHome ? pitcherHome.split(" ").pop() : "TBD";
+          const heat = pitcherHeatEmoji(game.pitcherContext);
 
-          const awayAbbr = game.awayAbbr!;
-          const homeAbbr = game.homeAbbr!;
-
-          const pitcherAway = game.pitcherAway && game.pitcherAway.trim() ? game.pitcherAway : null;
-          const pitcherHome = game.pitcherHome && game.pitcherHome.trim() ? game.pitcherHome : null;
-          const showPitcherPill = !!(pitcherAway && pitcherHome);
-          const awayLastName = pitcherAway ? pitcherAway.split(" ").pop() : null;
-          const homeLastName = pitcherHome ? pitcherHome.split(" ").pop() : null;
+          const weatherLine = game.weather?.temperature != null
+            ? `${game.weather.temperature}°${game.weather.windSpeed != null && game.weather.windDirection ? ` | Wind ${game.weather.windDirection} ${game.weather.windSpeed}mph` : ""}`
+            : null;
 
           return (
             <button
               key={game.gameId}
               data-testid={`chip-mlb-schedule-${game.gameId}`}
               onClick={() => onSelectGame(game.gameId)}
-              className={`p-3 rounded-xl border text-left transition-all flex flex-col gap-1 ${
+              className={`p-3.5 rounded-xl border text-left transition-all flex flex-col gap-1.5 ${
                 isActive
-                  ? "border-primary bg-primary/10"
-                  : "border-white/10 hover:border-white/20 hover:bg-white/5"
+                  ? "border-primary bg-primary/10 ring-1 ring-primary/30"
+                  : "border-border/40 hover:border-primary/30 hover:bg-card/80"
               }`}
             >
               <div className="flex items-center justify-between gap-1">
-                <span className="text-xs font-bold text-foreground">
+                <span className="text-sm font-bold text-foreground tracking-tight">
                   {awayAbbr} vs {homeAbbr}
                 </span>
                 {game.status === "live" ? (
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-500">LIVE</span>
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-500 animate-pulse">LIVE</span>
                 ) : (
                   <span className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">PRE</span>
                 )}
               </div>
 
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono">
-                {game.status === "live" && game.awayScore != null && game.homeScore != null && (
-                  <span>{game.awayScore} – {game.homeScore}</span>
-                )}
-                {game.status === "live" && game.inning > 0 && (
-                  <span className="text-green-400 font-semibold">
-                    {game.isTopInning ? "▲" : "▼"}{game.inning}
-                  </span>
-                )}
-                {game.status !== "live" && startTimeFormatted && (
-                  <span data-testid={`text-mlb-start-time-${game.gameId}`}>{startTimeFormatted}</span>
-                )}
-              </div>
+              {game.status === "live" && game.awayScore != null && game.homeScore != null && (
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="font-mono font-bold text-foreground">{game.awayScore} – {game.homeScore}</span>
+                  {game.inning > 0 && (
+                    <span className="text-green-400 font-semibold">
+                      {game.isTopInning ? "▲" : "▼"}{game.inning}
+                    </span>
+                  )}
+                </div>
+              )}
 
-              {showPitcherPill && (
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30 truncate max-w-[90px]">
-                  {awayLastName} vs {homeLastName}
+              {game.status !== "live" && startTimeFormatted && (
+                <span className="text-xs text-muted-foreground" data-testid={`text-mlb-start-time-${game.gameId}`}>
+                  {startTimeFormatted}
                 </span>
               )}
 
-              {renderState === "PREVIEW" && game.status === "live" && (
-                <span className="text-[9px] text-muted-foreground/60 mt-0.5">Awaiting live lines</span>
+              <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                <span className="truncate">{awayLast} vs {homeLast}</span>
+                {heat && <span>{heat}</span>}
+              </div>
+
+              {weatherLine && (
+                <span className="text-[10px] text-muted-foreground/70">
+                  {weatherLine}
+                </span>
               )}
-              {renderState === "PREVIEW" && game.status !== "live" && (
-                <span className="text-[9px] text-muted-foreground/60 mt-0.5">Lines forming</span>
+
+              {game.venue && (
+                <span className="text-[10px] text-muted-foreground/50 truncate">
+                  {game.venue}
+                </span>
               )}
-              {renderState === "NO_SIGNAL" && (
-                <span className="text-[9px] text-muted-foreground/60 mt-0.5">No strong edge</span>
-              )}
-              {renderState === "SIGNAL" && (
-                <span className="text-[9px] font-semibold text-primary mt-0.5">Edge detected</span>
-              )}
+
+              <div className="mt-0.5">
+                {game.signalLocked ? (
+                  <span className="text-[9px] font-bold text-green-400">
+                    {game.signalCount ? `${game.signalCount} Edge${game.signalCount !== 1 ? "s" : ""} Detected` : "Edge Detected"}
+                  </span>
+                ) : game.hasOdds ? (
+                  <span className="text-[9px] text-muted-foreground/60">No strong edge</span>
+                ) : game.status === "live" ? (
+                  <span className="text-[9px] text-muted-foreground/60">Awaiting lines</span>
+                ) : (
+                  <span className="text-[9px] text-muted-foreground/60">Pre-game</span>
+                )}
+              </div>
             </button>
           );
         })}
