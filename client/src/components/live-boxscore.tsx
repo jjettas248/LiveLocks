@@ -149,18 +149,18 @@ export function LiveBoxscore({
     .filter(s => s.minutes !== "0" && s.minutes !== "0:00")
     .filter(s => !filterLower || s.playerName.toLowerCase().includes(filterLower));
 
-  // TEMPORARY validation logging — remove after confirming enrichment coverage
   const totalLiveStatsCount = (liveStats ?? []).length;
   const badgeCount = (liveStats ?? []).filter(s => {
     const pid = s.playerId;
     if (!pid) return false;
     if (parseMinDec(s.minutes) < 3) return false;
-    return !!resolvedEngineOutput[pid]?.[watchedStatType];
+    const pData = resolvedEngineOutput[pid as number];
+    return pData && Object.keys(pData).length > 0;
   }).length;
   const highlightedCount = (liveStats ?? []).filter(s => s.playerId != null && playerSignalMap.has(s.playerId as number)).length;
   console.log(`[boxscore] liveStats players: ${totalLiveStatsCount}`);
   console.log(`[boxscore] engineOutput playerIds: ${Object.keys(resolvedEngineOutput).length}`);
-  console.log(`[boxscore] badges rendered for ${watchedStatType}: ${badgeCount}`);
+  console.log(`[boxscore] badges rendered (all stats): ${badgeCount}`);
   console.log(`[boxscore] highlighted players: ${highlightedCount}`);
 
   const getStatVal = (s: LivePlayerStat, statType: string): number => {
@@ -319,10 +319,9 @@ export function LiveBoxscore({
                         // Row highlight: ID-keyed from signals[] (edge >= 5 filtered — strong signals only)
                         const signal = pid != null ? playerSignalMap.get(pid) ?? null : null;
 
-                        // Badge: ID-keyed from engineOutput (no edge filter — shows all valid entries, minutes >= 3 required)
                         const minutesDecimal = parseMinDec(stat.minutes);
-                        const engineEntry = (pid != null && minutesDecimal >= 3)
-                          ? resolvedEngineOutput[pid]?.[watchedStatType] ?? null
+                        const playerEngineData = (pid != null && minutesDecimal >= 3)
+                          ? resolvedEngineOutput[pid] ?? null
                           : null;
 
                         const statTotal = getStatVal(stat, watchedStatType);
@@ -335,33 +334,52 @@ export function LiveBoxscore({
                           ? { background: signalStyle.bg, boxShadow: `inset 4px 0 0 ${signalStyle.border}` }
                           : undefined;
 
-                        // Badge display derived from engineEntry (probability badge — decoupled from highlight)
                         let badgeElement: JSX.Element | null = null;
-                        if (!isSelected && engineEntry) {
-                          const dp = Math.round(engineEntry.probability * 10) / 10;
-                          const sigTierKey = getSignalTier(dp);
-                          const tierStyle = sigTierKey !== "none"
-                            ? SIGNAL_TIER_STYLES[sigTierKey]
-                            : SIGNAL_STYLES["teal"];
-                          const directionLabel = engineEntry.betDirection === "UNDER" ? "UNDER" : "OVER";
-                          badgeElement = (
-                            <span
-                              title={`${directionLabel} ${STAT_LABEL_MAP[watchedStatType] ?? watchedStatType} — ${dp}% model confidence`}
-                              data-testid={`signal-dot-${pid}`}
-                              style={{
-                                background: tierStyle.bg,
-                                color: tierStyle.dot,
-                                border: `1px solid ${tierStyle.border}`,
-                                fontSize: "13px",
-                                fontWeight: 600,
-                                padding: "4px 8px",
-                                borderRadius: "6px",
-                              }}
-                              className="cursor-help select-none ml-0.5 whitespace-nowrap leading-none"
-                            >
-                              {directionLabel} {STAT_LABEL_MAP[watchedStatType] ?? watchedStatType} {dp}%
-                            </span>
-                          );
+                        if (!isSelected && playerEngineData) {
+                          const allEntries = Object.entries(playerEngineData)
+                            .filter(([, v]) => v && Number.isFinite((v as EngineEntry).probability))
+                            .map(([st, v]) => ({ statType: st, ...(v as EngineEntry) }))
+                            .sort((a, b) => {
+                              if (a.statType === watchedStatType && b.statType !== watchedStatType) return -1;
+                              if (b.statType === watchedStatType && a.statType !== watchedStatType) return 1;
+                              return b.probability - a.probability;
+                            });
+
+                          if (allEntries.length > 0) {
+                            badgeElement = (
+                              <span className="flex items-center gap-1 flex-wrap">
+                                {allEntries.map((entry) => {
+                                  const dp = Math.round(entry.probability * 10) / 10;
+                                  const sigTierKey = getSignalTier(dp);
+                                  const tierStyle = sigTierKey !== "none"
+                                    ? SIGNAL_TIER_STYLES[sigTierKey]
+                                    : SIGNAL_STYLES["teal"];
+                                  const directionLabel = entry.betDirection === "UNDER" ? "U" : "O";
+                                  const isWatched = entry.statType === watchedStatType;
+                                  return (
+                                    <span
+                                      key={`${pid}-${entry.statType}`}
+                                      title={`${entry.betDirection === "UNDER" ? "UNDER" : "OVER"} ${STAT_LABEL_MAP[entry.statType] ?? entry.statType} — ${dp}% model confidence`}
+                                      data-testid={`signal-dot-${pid}-${entry.statType}`}
+                                      style={{
+                                        background: tierStyle.bg,
+                                        color: tierStyle.dot,
+                                        border: `1px solid ${tierStyle.border}`,
+                                        fontSize: isWatched ? "12px" : "10px",
+                                        fontWeight: isWatched ? 700 : 500,
+                                        padding: isWatched ? "3px 7px" : "2px 5px",
+                                        borderRadius: "5px",
+                                        opacity: isWatched ? 1 : 0.8,
+                                      }}
+                                      className="cursor-help select-none whitespace-nowrap leading-none"
+                                    >
+                                      {directionLabel} {STAT_LABEL_MAP[entry.statType] ?? entry.statType} {dp}%
+                                    </span>
+                                  );
+                                })}
+                              </span>
+                            );
+                          }
                         }
 
                         // Stat cell color: use stat-type-specific signal for exact column color
