@@ -342,41 +342,54 @@ export function LiveBoxscore({
                             .sort((a, b) => {
                               if (a.statType === watchedStatType && b.statType !== watchedStatType) return -1;
                               if (b.statType === watchedStatType && a.statType !== watchedStatType) return 1;
-                              return b.probability - a.probability;
+                              return (b.edge ?? 0) - (a.edge ?? 0);
                             });
 
                           if (allEntries.length > 0) {
+                            const rotationIndex = Math.floor(Date.now() / 45000);
+                            const watchedEntry = allEntries.find(e => e.statType === watchedStatType);
+                            const nonWatched = allEntries.filter(e => e.statType !== watchedStatType);
+                            const pickedEntry = watchedEntry
+                              ? watchedEntry
+                              : nonWatched.length > 0
+                                ? nonWatched[rotationIndex % nonWatched.length]
+                                : allEntries[0];
+                            const entry = pickedEntry;
+                            const dp = Math.round(entry.probability * 10) / 10;
+                            const sigTierKey = getSignalTier(dp);
+                            const tierStyle = sigTierKey !== "none"
+                              ? SIGNAL_TIER_STYLES[sigTierKey]
+                              : SIGNAL_STYLES["teal"];
+                            const directionLabel = entry.betDirection === "UNDER" ? "U" : "O";
                             badgeElement = (
-                              <span className="flex items-center gap-1 flex-wrap">
-                                {allEntries.map((entry) => {
-                                  const dp = Math.round(entry.probability * 10) / 10;
-                                  const sigTierKey = getSignalTier(dp);
-                                  const tierStyle = sigTierKey !== "none"
-                                    ? SIGNAL_TIER_STYLES[sigTierKey]
-                                    : SIGNAL_STYLES["teal"];
-                                  const directionLabel = entry.betDirection === "UNDER" ? "U" : "O";
-                                  const isWatched = entry.statType === watchedStatType;
-                                  return (
-                                    <span
-                                      key={`${pid}-${entry.statType}`}
-                                      title={`${entry.betDirection === "UNDER" ? "UNDER" : "OVER"} ${STAT_LABEL_MAP[entry.statType] ?? entry.statType} — ${dp}% model confidence`}
-                                      data-testid={`signal-dot-${pid}-${entry.statType}`}
-                                      style={{
-                                        background: tierStyle.bg,
-                                        color: tierStyle.dot,
-                                        border: `1px solid ${tierStyle.border}`,
-                                        fontSize: isWatched ? "12px" : "10px",
-                                        fontWeight: isWatched ? 700 : 500,
-                                        padding: isWatched ? "3px 7px" : "2px 5px",
-                                        borderRadius: "5px",
-                                        opacity: isWatched ? 1 : 0.8,
-                                      }}
-                                      className="cursor-help select-none whitespace-nowrap leading-none"
-                                    >
-                                      {directionLabel} {STAT_LABEL_MAP[entry.statType] ?? entry.statType} {dp}%
-                                    </span>
-                                  );
-                                })}
+                              <span className="flex items-center gap-1">
+                                <span
+                                  key={`${pid}-${entry.statType}`}
+                                  title={`${entry.betDirection === "UNDER" ? "UNDER" : "OVER"} ${STAT_LABEL_MAP[entry.statType] ?? entry.statType} — ${dp}% model confidence (${allEntries.length} signals)`}
+                                  data-testid={`signal-dot-${pid}-${entry.statType}`}
+                                  style={{
+                                    background: tierStyle.bg,
+                                    color: tierStyle.dot,
+                                    border: `1px solid ${tierStyle.border}`,
+                                    fontSize: "12px",
+                                    fontWeight: 700,
+                                    padding: "3px 7px",
+                                    borderRadius: "5px",
+                                  }}
+                                  className="cursor-help select-none whitespace-nowrap leading-none"
+                                >
+                                  {directionLabel} {STAT_LABEL_MAP[entry.statType] ?? entry.statType} {dp}%
+                                </span>
+                                {allEntries.length > 1 && (
+                                  <span
+                                    className="text-muted-foreground select-none"
+                                    style={{ fontSize: "9px", opacity: 0.6 }}
+                                    title={allEntries.map(e => `${e.betDirection === "UNDER" ? "U" : "O"} ${STAT_LABEL_MAP[e.statType] ?? e.statType}`).join(", ")}
+                                    data-testid={`signal-count-${pid}`}
+                                  >
+                                    +{allEntries.length - 1}
+                                  </span>
+                                )}
                               </span>
                             );
                           }

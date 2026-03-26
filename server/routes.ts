@@ -2785,12 +2785,21 @@ export async function registerRoutes(
       const underRatio = totalSignals > 0 ? underSignals / totalSignals : 0;
       const avgEdgeOver = overSignals > 0 ? allSignals.filter(s => s.betDirection === "over").reduce((sum, s) => sum + s.edge, 0) / overSignals : 0;
       const avgEdgeUnder = underSignals > 0 ? allSignals.filter(s => s.betDirection === "under").reduce((sum, s) => sum + s.edge, 0) / underSignals : 0;
+      const engineOverCount = Object.values(engineOutput).reduce((sum, pData) => {
+        return sum + Object.values(pData).filter((v: any) => v?.betDirection === "OVER").length;
+      }, 0);
+      const engineUnderCount = Object.values(engineOutput).reduce((sum, pData) => {
+        return sum + Object.values(pData).filter((v: any) => v?.betDirection === "UNDER").length;
+      }, 0);
+      const engineTotal = engineOverCount + engineUnderCount;
+      const engineOverRatio = engineTotal > 0 ? engineOverCount / engineTotal : 0;
       console.log(
         `[live-signals-summary] totalPlayers=${totalAttempted} enginePlayers=${enginePlayerCount} ` +
         `overCount=${overSignals} underCount=${underSignals} ` +
         `overRatio=${overRatio.toFixed(2)} underRatio=${underRatio.toFixed(2)} ` +
         `avgEdgeOver=${avgEdgeOver.toFixed(1)} avgEdgeUnder=${avgEdgeUnder.toFixed(1)} ` +
-        `noSignals=${totalAttempted - totalSignals}`
+        `noSignals=${totalAttempted - totalSignals} ` +
+        `engineOverUnder=${engineOverCount}/${engineUnderCount} engineOverRatio=${engineOverRatio.toFixed(2)}`
       );
       if (totalSignals > 4 && underRatio > 0.75) {
         console.warn(`[NBA SKEW WARNING] Under-heavy distribution detected: underRatio=${underRatio.toFixed(2)} (${underSignals}/${totalSignals})`);

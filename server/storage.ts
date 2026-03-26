@@ -147,10 +147,10 @@ export interface IStorage {
 // ─── Usage compression for blowout games ──────────────────────────────────
 function usageCompressionMultiplier(scoreDiff: number): number {
   const abs = Math.abs(scoreDiff);
-  if (abs >= 25) return 0.65;
-  if (abs >= 20) return 0.72;
-  if (abs >= 15) return 0.82;
-  if (abs >= 10) return 0.92;
+  if (abs >= 25) return 0.78;
+  if (abs >= 20) return 0.82;
+  if (abs >= 15) return 0.88;
+  if (abs >= 10) return 0.94;
   return 1.0;
 }
 
@@ -563,11 +563,11 @@ export class DatabaseStorage implements IStorage {
 
     // ─── Context modifier cap (Step 5) ────────────────────────────────────
     // Combine defense, pace, and shooting into a single clamped modifier.
-    // Clamp tightened at halftime: [0.92, 1.08] (was [0.90, 1.12]) to prevent
-    // compounded multipliers from driving systematic UNDER bias.
+    // Halftime clamp widened to [0.90, 1.12] (was [0.92, 1.08]) to allow
+    // stronger over-indicators to lift projections and reduce UNDER skew.
     const rawContextModifier = defenseMultiplier * paceMultiplier * shootingModifier;
     const suppressionRaw = rawContextModifier; // alias for trace log
-    const contextClamp = isHalftimeContext ? { lo: 0.92, hi: 1.08 } : { lo: 0.88, hi: 1.18 };
+    const contextClamp = isHalftimeContext ? { lo: 0.90, hi: 1.12 } : { lo: 0.88, hi: 1.18 };
     const contextModifier = Math.max(contextClamp.lo, Math.min(contextClamp.hi, rawContextModifier));
 
     const baselinePPM = 2.1;
@@ -589,14 +589,10 @@ export class DatabaseStorage implements IStorage {
 
     let expectedTotal = req.halftimeStat + expectedFromHere;
 
-    // ─── Halftime total regression ────────────────────────────────────────
-    // When a player has 16+ minutes in the first half, apply a mild regression-to-mean
-    // multiplier on expectedTotal. Changed from 0.92 → 0.96 to match halftimeRegressionFactor
-    // adjustment and reduce compounded UNDER suppression for starters (who nearly always
-    // play 20+ minutes in H1, causing this to fire on almost every halftime play).
-    if (minutesPlayed >= 16 && isHalftimeContext) {
-      expectedTotal *= 0.96;
-    }
+    // ─── Halftime total regression (REMOVED) ─────────────────────────────
+    // Previously applied expectedTotal *= 0.96 for 16+ min players at halftime.
+    // This double-dipped with the halftimeRegressionFactor (0.96) already applied
+    // to observedW above, creating systematic UNDER bias for starters.
 
     // ─── Market anchoring ─────────────────────────────────────────────────
     const marketMean = req.liveLine + 0.5;
