@@ -3506,6 +3506,7 @@ export async function registerRoutes(
       storage.savePlayAlerts(topPlays).catch(console.warn);
       // Persist each play to persisted_plays table via play tracker (dedup + snapshot)
       for (const p of topPlays) {
+        const sbSource: string = (p as any).bookKeys?.[0] ?? (p as any).lineSource ?? "odds_api";
         trackPlay({
           gameId: p.gameId ?? "",
           playerId: p.playerId ? String(p.playerId) : null,
@@ -3515,10 +3516,10 @@ export async function registerRoutes(
           market: p.statType,
           direction: p.betDirection as "over" | "under",
           line: Number(p.line),
-          projection: Number(p.line) + (p.edge != null ? Number(p.edge) * (p.betDirection === "over" ? 1 : -1) : 0),
+          projection: Number(p.expectedTotal ?? p.line),
           probability: Number(p.probability ?? p.prob ?? 0),
           edge: p.edge != null ? Number(p.edge) : 0,
-          sportsbook: null,
+          sportsbook: sbSource,
           derivedLine: false,
           createdAt: Date.now(),
         }, storage).catch(console.warn);

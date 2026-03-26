@@ -445,11 +445,40 @@ export async function gradePersistedPlays(
       const playerMap = buildPlayerStatsFromBoxScore(data);
       console.log("[GRADE] Player stats built for", playerMap.size, "players, game:", gameId, "sport:", sport);
 
+      // Build internal DB player ID → ESPN athlete ID mapping for this batch
+      const internalToEspnId = new Map<number, number>();
+      for (const play of plays) {
+        if (play.playerId && !internalToEspnId.has(play.playerId)) {
+          const dbPlayer = await storage.getPlayer(play.playerId).catch(() => undefined);
+          if (dbPlayer?.espnAthleteId) {
+            internalToEspnId.set(play.playerId, dbPlayer.espnAthleteId);
+          }
+        }
+      }
+
+      const normalizeName = (s: string) =>
+        s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+          .replace(/['.'\-\s]+/g, "").replace(/jr$|sr$|ii$|iii$|iv$/, "");
+
       for (const play of plays) {
         try {
-          const byId = playerMap.get(String(play.playerId!));
+          const espnId = play.playerId ? internalToEspnId.get(play.playerId) : undefined;
+          let byId = espnId != null ? playerMap.get(String(espnId)) : undefined;
+
+          // Fallback: name-based lookup when ESPN ID is missing or not found in box score
+          if (!byId && play.playerName) {
+            const normalTarget = normalizeName(play.playerName);
+            byId = Array.from(playerMap.values()).find(
+              entry => normalizeName(entry.name) === normalTarget
+            );
+            if (byId) {
+              console.log("[GRADE] Name-fallback match for", play.playerName, "→ espnId", byId.id);
+            }
+          }
+
           if (!byId) {
-            console.warn("[GRADE] playerId", play.playerId, "not found in box score for game", gameId,
+            console.warn("[GRADE] playerId", play.playerId, "(espnId:", espnId ?? "not found",
+              ") not found in box score for game", gameId,
               "— available IDs:", Array.from(playerMap.keys()).slice(0, 5).join(", "));
             failed++;
             continue;
