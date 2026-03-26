@@ -1982,7 +1982,7 @@ export default function Dashboard() {
                 <p className="text-sm font-semibold text-foreground mb-1 flex items-center gap-1.5">
                   <span role="img" aria-label="baseball">⚾</span> MLB Live
                 </p>
-                {user?.subscriptionTier === "elite" || user?.isAdmin ? (
+                {user?.hasMLB ? (
                   <p className="text-xs text-muted-foreground">
                     MLB Live prop predictions are launching soon. You'll be the first to know as an All Sports subscriber.
                   </p>

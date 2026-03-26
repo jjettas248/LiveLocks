@@ -7,6 +7,12 @@ import { storage } from "./storage";
 import { insertUserEmailPasswordSchema } from "@shared/schema";
 import type { User } from "@shared/schema";
 import { sendWelcomeEmail, sendWallEmail, sendVerificationEmail } from "./email";
+import { resolveAccess } from "./utils/access";
+
+// ── Stripe tier-check TTL cache ────────────────────────────────────────────────
+// Limits Stripe API calls to once per 5 minutes per user.
+const STRIPE_CHECK_TTL_MS = 5 * 60 * 1000;
+const stripeCheckCache = new Map<number, number>(); // userId → lastCheckTs
 
 declare module "express-session" {
   interface SessionData {
@@ -78,6 +84,7 @@ function getUserIdFromRequest(req: Request): number | null {
 }
 
 function safeUser(user: User) {
+  const access = resolveAccess(user.subscriptionTier, user.isAdmin ?? false);
   return {
     id: user.id,
     email: user.email,
@@ -89,6 +96,10 @@ function safeUser(user: User) {
     isNewProUser: user.isNewProUser ?? false,
     upgradedAt: user.upgradedAt ?? null,
     emailVerified: user.emailVerified,
+    hasNBA: access.hasNBA,
+    hasNCAAB: access.hasNCAAB,
+    hasMLB: access.hasMLB,
+    hasUnlimited: access.hasUnlimited,
   };
 }
 
@@ -308,26 +319,42 @@ export async function registerAuthRoutes(app: import("express").Express) {
       return res.status(401).json({ error: "Not authenticated" });
     }
 
-    if (!rawUser.subscriptionTier && rawUser.stripeCustomerId) {
+    // ── Stripe backstop: verify active subscription against DB tier (TTL: 5min) ─
+    // Catches cases where webhook failed or DB has a stale/wrong tier.
+    const lastStripeCheck = stripeCheckCache.get(userId) ?? 0;
+    const stripeCheckDue = Date.now() - lastStripeCheck > STRIPE_CHECK_TTL_MS;
+    if (rawUser.stripeCustomerId && stripeCheckDue) {
       try {
         const { getUncachableStripeClient } = await import("./stripeClient");
-        const { getTierFromPriceId } = await import("./billing/planMap");
+        const { resolveTierFromSubscription } = await import("./utils/resolveTier");
         const stripe = await getUncachableStripeClient();
-        const subs = await stripe.subscriptions.list({ customer: rawUser.stripeCustomerId, status: "active" });
+        const subs = await stripe.subscriptions.list({ customer: rawUser.stripeCustomerId, status: "active", limit: 1 });
         if (subs.data.length > 0) {
           const activeSub = subs.data[0];
-          const priceId = activeSub.items.data[0]?.price?.id ?? "";
-          const repairedTier = getTierFromPriceId(priceId);
-          if (repairedTier) {
-            await storage.updateUserSubscription(userId, repairedTier, rawUser.stripeCustomerId, activeSub.id);
-            console.log(`[stripe-fallback] repaired tier for user ${userId} → ${repairedTier}`);
+          const stripeTier = resolveTierFromSubscription(activeSub);
+          if (stripeTier && stripeTier !== rawUser.subscriptionTier) {
+            await storage.updateUserSubscription(userId, stripeTier, rawUser.stripeCustomerId, activeSub.id);
+            console.log(`[STRIPE REPAIR]`, { userId, dbTier: rawUser.subscriptionTier, stripeTier });
             rawUser = await storage.getUserById(userId) ?? rawUser;
           }
+        } else if (!subs.data.length && rawUser.subscriptionTier) {
+          // No active Stripe sub but DB shows a paid tier — revoke
+          console.warn(`[STRIPE REPAIR] No active sub for user ${userId} but DB tier=${rawUser.subscriptionTier} — revoking`);
+          await storage.setUserSubscriptionTier(userId, null);
+          rawUser = await storage.getUserById(userId) ?? rawUser;
         }
+        stripeCheckCache.set(userId, Date.now());
       } catch (stripeErr: any) {
         console.warn(`[stripe-fallback] Stripe lookup failed for user ${userId}:`, stripeErr.message);
       }
     }
+
+    console.log("[ACCESS DEBUG]", {
+      email: rawUser.email,
+      tier: rawUser.subscriptionTier,
+      isAdmin: rawUser.isAdmin,
+      access: resolveAccess(rawUser.subscriptionTier, rawUser.isAdmin ?? false),
+    });
 
     const user = (!rawUser.subscriptionTier && !rawUser.isAdmin)
       ? (await storage.resetDailyPlaysIfNeeded(userId) ?? rawUser)

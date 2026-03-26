@@ -361,7 +361,7 @@ function MlbLiveInner() {
   const games = Array.isArray(gamesResp?.games) ? gamesResp!.games : [];
   const previewPlayers = Array.isArray(gamesResp?.previewPlayers) ? gamesResp!.previewPlayers : [];
   const hasAnyOdds = games.some((g) => g?.hasOdds === true);
-  const isElite = user?.isAdmin || user?.subscriptionTier === "elite";
+  const isElite = user?.hasMLB === true;
 
   const { data: playersRaw, isLoading: playersLoading } = useQuery<MLBBatter[]>({
     queryKey: ["/api/mlb/live-stats", selectedGameId],

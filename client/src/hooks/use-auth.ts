@@ -12,6 +12,10 @@ export interface AuthUser {
   isNewProUser: boolean;
   upgradedAt: string | null;
   emailVerified: boolean;
+  hasNBA: boolean;
+  hasNCAAB: boolean;
+  hasMLB: boolean;
+  hasUnlimited: boolean;
 }
 
 async function apiFetch(path: string, options?: RequestInit) {

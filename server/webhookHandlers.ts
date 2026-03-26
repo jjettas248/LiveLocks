@@ -1,7 +1,7 @@
 import { getStripeSync, getUncachableStripeClient } from "./stripeClient";
 import { storage } from "./storage";
 import { sendProWelcomeEmail, sendAllSportsWelcomeEmail, sendPaymentIssueEmail } from "./email";
-import { getTierFromPriceId } from "./billing/planMap";
+import { resolveTierFromSubscription } from "./utils/resolveTier";
 
 const HANDLED_EVENTS = new Set([
   "checkout.session.completed",
@@ -30,14 +30,17 @@ async function syncSubscriptionToDb(stripe: any, subscriptionId: string): Promis
   }
 
   const priceId = sub.items.data[0]?.price?.id ?? "";
-  const tier = getTierFromPriceId(priceId);
-  if (!tier) return;
+  const tier = resolveTierFromSubscription(sub);
+  if (!tier) {
+    console.warn("[STRIPE SYNC] Unknown priceId — cannot resolve tier:", priceId);
+    return;
+  }
 
   const user = await storage.getUserByStripeCustomerId(customerId);
   if (!user) return;
 
   await storage.updateUserSubscription(user.id, tier, customerId, subscriptionId);
-  console.log("[PLAN UPDATE]", { userId: user.id, priceId, tier, status: sub.status });
+  console.log("[STRIPE SYNC]", { userId: user.id, priceId, resolvedTier: tier, status: sub.status });
 
   if (tier === "all" && !user.sentProWelcome) {
     sendProWelcomeEmail(user.email)
