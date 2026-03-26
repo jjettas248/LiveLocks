@@ -87,11 +87,11 @@ export const CORE_MARKETS: MLBMarket[] = [
 
 export const EXPERIMENTAL_MARKETS: MLBMarket[] = ["home_runs", "hrr"];
 
-export const EXPERIMENTAL_CONFIDENCE_CEILING: MLBConfidenceTier = "LEAN";
+export const EXPERIMENTAL_CONFIDENCE_CEILING: MLBConfidenceTier = "STRONG";
 
 export const MARKET_PROBABILITY_CEILINGS: Record<"core" | "experimental", number> = {
   core: 92,
-  experimental: 78,
+  experimental: 85,
 };
 
 export type ContactQualityTier = "ELITE" | "HARD" | "MEDIUM" | "SOFT";

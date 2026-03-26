@@ -47,6 +47,7 @@ VAPID_PUBLIC_KEY = "BIe80vx9giceRRA7D4ME-POsEQuqUnGb7_lQhz-Ueyj98gQb-xLIirnZfctr
 STRIPE_PRO_PRICE_ID = "price_1T6hh82ceUNmv10tdIMnFF5N"
 STRIPE_ALL_SPORTS_PRICE_ID = "price_1T6hh92ceUNmv10tShQlLUYt"
 VAPID_PRIVATE_KEY = "3Yu8VEwTqOh2T-QyWut1FxJKKgeXM8m8t3Pvapdsmls"
+TANK01_RAPIDAPI_KEY = "3da622e553msh3b409c0a76b5f91p1891a3jsn2825f5b28437"
 
 [agent]
 integrations = ["stripe:2.0.0", "javascript_stripe:1.0.0"]

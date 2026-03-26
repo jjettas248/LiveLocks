@@ -629,6 +629,7 @@ function MlbLiveInner() {
   const [manualBookLine, setManualBookLine] = useState("");
   const [mlbUpgradeNeeded, setMlbUpgradeNeeded] = useState(false);
   const [inningFeedTab, setInningFeedTab] = useState<3 | 5 | 7>(3);
+  const gameDetailRef = useRef<HTMLDivElement>(null);
 
   const isElite = user?.hasMLB === true;
 
@@ -747,6 +748,11 @@ function MlbLiveInner() {
   }, [selectedPlayer?.playerId]);
   useEffect(() => {
     setSelectedPlayer(null); setCalcResult(null); setSelectedLine(null); setSelectedMarket("hits"); setManualMode(false);
+    if (selectedGameId) {
+      setTimeout(() => {
+        gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 100);
+    }
   }, [selectedGameId]);
   useEffect(() => {
     if ((!oddsLoading && oddsEntries.length === 0 && selectedPlayer) || !hasAnyOdds) setManualMode(true);
@@ -837,6 +843,7 @@ function MlbLiveInner() {
           )}
 
           {selectedGameId && selectedGame && selectedPlayer === null && (
+            <div ref={gameDetailRef}>
             <GameDetailView
               game={selectedGame}
               players={players}
@@ -848,6 +855,7 @@ function MlbLiveInner() {
               onSelectPlayer={(p) => setSelectedPlayer(p)}
               onBack={() => setSelectedGameId(null)}
             />
+            </div>
           )}
 
           {selectedGameId && selectedGame && selectedPlayer !== null && (

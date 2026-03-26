@@ -321,8 +321,8 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
   const isExperimental = EXPERIMENTAL_MARKETS.includes(input.market);
 
   if (isExperimental) {
-    calibratedOver = 50 + (calibratedOver - 50) * 0.75;
-    calibratedUnder = 50 + (calibratedUnder - 50) * 0.75;
+    calibratedOver = 50 + (calibratedOver - 50) * 0.90;
+    calibratedUnder = 50 + (calibratedUnder - 50) * 0.90;
     calibratedOver = Math.round(calibratedOver * 100) / 100;
     calibratedUnder = Math.round(calibratedUnder * 100) / 100;
   }
@@ -491,8 +491,8 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   const isExperimental = EXPERIMENTAL_MARKETS.includes("hits" as MLBMarket);
 
   if (isExperimental) {
-    calibratedOver = 50 + (calibratedOver - 50) * 0.75;
-    calibratedUnder = 50 + (calibratedUnder - 50) * 0.75;
+    calibratedOver = 50 + (calibratedOver - 50) * 0.90;
+    calibratedUnder = 50 + (calibratedUnder - 50) * 0.90;
     calibratedOver = Math.round(calibratedOver * 100) / 100;
     calibratedUnder = Math.round(calibratedUnder * 100) / 100;
   }
