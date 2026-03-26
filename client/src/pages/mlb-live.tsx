@@ -668,7 +668,8 @@ function MlbLiveInner() {
 
   const rosterPlayerIds = new Set<string>(players.filter(p => p?.playerId).map(p => String(p.playerId)));
   const validatedSignals = selectedGameId ? signals.filter(sig => sig && isValidSignal(sig, selectedGameId, rosterPlayerIds)) : [];
-  const canCalculate = manualMode ? (manualBookLine.trim() !== "" && !isNaN(parseFloat(manualBookLine)) && parseFloat(manualBookLine) > 0) : !!selectedLine;
+  const pitchersResolved = !!(selectedGame?.pitcherAway || selectedGame?.pitcherHome);
+  const canCalculate = pitchersResolved && (manualMode ? (manualBookLine.trim() !== "" && !isNaN(parseFloat(manualBookLine)) && parseFloat(manualBookLine) > 0) : !!selectedLine);
 
   if (authLoading || gamesLoading) {
     return (
@@ -797,8 +798,8 @@ function MlbLiveInner() {
           </div>
           {edgeFeedSignals.length === 0 ? (
             <div className="rounded-xl border border-border/40 bg-card p-8 text-center">
-              <div className="text-sm text-muted-foreground">No valid signals yet</div>
-              <div className="text-xs text-muted-foreground/60 mt-1">Edges will appear as live games progress and lines are available.</div>
+              <div className="text-sm text-muted-foreground">No edges above threshold</div>
+              <div className="text-xs text-muted-foreground/60 mt-1">Edges require 5%+ edge with verified odds. They appear as live games progress and sportsbook lines update.</div>
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -833,8 +834,8 @@ function MlbLiveInner() {
             const filtered = edgeFeedSignals.filter(s => s.inning >= inningFeedTab);
             return filtered.length === 0 ? (
               <div className="rounded-xl border border-border/40 bg-card p-8 text-center">
-                <div className="text-sm text-muted-foreground">No valid signals yet</div>
-                <div className="text-xs text-muted-foreground/60 mt-1">Inning-specific edges appear as games reach the {inningFeedTab}th inning and fatigue/AB data accumulates.</div>
+                <div className="text-sm text-muted-foreground">No edges from inning {inningFeedTab}+</div>
+                <div className="text-xs text-muted-foreground/60 mt-1">Edges for later innings appear as games progress and pitcher fatigue data accumulates.</div>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -850,21 +851,59 @@ function MlbLiveInner() {
       {mainTab === "hr_radar" && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-foreground" style={{ color: "#f97316" }}>🔥 HR Radar</h2>
+            <h2 className="text-sm font-bold text-foreground" style={{ color: "#f97316" }}>HR Radar</h2>
           </div>
           {(() => {
             const hrSignals = edgeFeedSignals.filter(s => s.market === "home_runs" || s.market === "hr" || s.market === "hrr");
-            return hrSignals.length === 0 ? (
-              <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-8 text-center">
-                <div className="text-sm text-muted-foreground">No HR candidates detected</div>
-                <div className="text-xs text-muted-foreground/60 mt-1">HR Radar activates when batters meet the 3-factor qualification gate (hard contact, favorable conditions, vulnerable pitcher).</div>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {hrSignals.map(sig => (
-                  <SignalCard key={`${sig.playerId}-${sig.market}-${sig.gameId}`} sig={sig} isElite={isElite} compact />
-                ))}
-              </div>
+            const hrEnvironmentSignals = edgeFeedSignals.filter(s =>
+              s.hrFactors && s.hrFactors.count >= 1 &&
+              !(s.market === "home_runs" || s.market === "hr" || s.market === "hrr")
+            );
+            return (
+              <>
+                {hrSignals.length > 0 ? (
+                  <div className="space-y-2">
+                    <h3 className="text-xs font-semibold text-green-400 uppercase tracking-wider">Bettable HR Edges</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {hrSignals.map(sig => (
+                        <SignalCard key={`${sig.playerId}-${sig.market}-${sig.gameId}`} sig={sig} isElite={isElite} compact />
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-6 text-center">
+                    <div className="text-sm text-muted-foreground">No HR edges above threshold</div>
+                    <div className="text-xs text-muted-foreground/60 mt-1">HR edges require 3+ qualifying factors (hard contact, favorable park/weather, vulnerable pitcher). See environment context below.</div>
+                  </div>
+                )}
+
+                {hrEnvironmentSignals.length > 0 && (
+                  <div className="space-y-2 mt-4">
+                    <h3 className="text-xs font-semibold text-orange-400 uppercase tracking-wider">HR Environment Watchlist</h3>
+                    <div className="text-[10px] text-muted-foreground/70 mb-1">Players with HR-favorable context (hard contact, wind, park factors) but in non-HR markets</div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {hrEnvironmentSignals.map(sig => (
+                        <div key={`hr-env-${sig.playerId}-${sig.market}-${sig.gameId}`}
+                          className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-3">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-bold text-foreground">{sig.playerName}</span>
+                            <span className="text-[10px] text-orange-400">{sig.hrFactors?.labels?.join(", ")}</span>
+                          </div>
+                          <div className="text-[10px] text-muted-foreground">
+                            {sig.market} | {sig.hrFactors?.count} HR factor{sig.hrFactors?.count !== 1 ? "s" : ""}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {hrSignals.length === 0 && hrEnvironmentSignals.length === 0 && (
+                  <div className="text-xs text-muted-foreground/60 text-center py-2">
+                    No players with HR-favorable context detected yet. Watchlist populates as games progress and contact data accumulates.
+                  </div>
+                )}
+              </>
             );
           })()}
         </div>
@@ -937,11 +976,11 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
         <div className="grid grid-cols-2 gap-0 border-b border-border/30">
           <div className="p-3 border-r border-border/20">
             <div className="text-[10px] text-muted-foreground mb-1">{game.awayAbbr} Pitcher</div>
-            <div className="text-xs font-bold text-foreground">{game.pitcherAway || "TBD"}</div>
+            <div className="text-xs font-bold text-foreground">{game.pitcherAway || (game.status === "pregame" ? "Pending" : "Resolving…")}</div>
           </div>
           <div className="p-3">
             <div className="text-[10px] text-muted-foreground mb-1">{game.homeAbbr} Pitcher</div>
-            <div className="text-xs font-bold text-foreground">{game.pitcherHome || "TBD"}</div>
+            <div className="text-xs font-bold text-foreground">{game.pitcherHome || (game.status === "pregame" ? "Pending" : "Resolving…")}</div>
           </div>
         </div>
 
@@ -1007,8 +1046,8 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
 
       {signals.length === 0 && game.status === "live" && (
         <div className="rounded-xl border border-border/40 bg-card p-6 text-center">
-          <div className="text-sm text-muted-foreground">No valid signals yet</div>
-          <div className="text-xs text-muted-foreground/60 mt-1">Engine is analyzing live data. Signals appear when edges meet minimum thresholds.</div>
+          <div className="text-sm text-muted-foreground">No qualified edges for this game</div>
+          <div className="text-xs text-muted-foreground/60 mt-1">Edges require 5%+ edge with verified sportsbook odds. The engine re-evaluates every cycle as lines update.</div>
         </div>
       )}
 
@@ -1026,7 +1065,10 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
         </div>
 
         {!playersLoading && players.length === 0 && (
-          <div className="text-xs text-muted-foreground py-3">No batter data available yet.</div>
+          <div className="rounded-lg border border-border/30 bg-card/50 p-4 text-center">
+            <div className="text-xs text-muted-foreground">No contact data available</div>
+            <div className="text-[10px] text-muted-foreground/50 mt-1">{game.status === "pregame" ? "Batter data populates once the game starts and at-bats are recorded." : "Batter data is loading. Contact stats update as at-bats are recorded."}</div>
+          </div>
         )}
 
         {(awayPlayers.length > 0 || homePlayers.length > 0) && (
@@ -1298,6 +1340,9 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
             <><div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />Calculating…</>
           ) : manualMode ? "Calculate Manual Projection" : "Calculate Probability"}
         </button>
+        {!(game.pitcherAway || game.pitcherHome) && (
+          <div className="text-[10px] text-muted-foreground/60 text-center mt-1">Calculator requires pitcher data to be resolved</div>
+        )}
       </div>
 
       {calcResult && (

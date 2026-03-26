@@ -686,7 +686,6 @@ export async function registerRoutes(
             projectionUpdatedAt: o.projectionUpdatedAt,
           })
         ));
-        // signalLocked: recomputed at serve-time using real book odds + freshness (120s window)
         const freshValidOutputs = cacheEntry ? cacheEntry.outputs.filter((o) =>
           canShowSignal({
             line: o.bookLine,
@@ -698,10 +697,14 @@ export async function registerRoutes(
             projectionUpdatedAt: o.projectionUpdatedAt,
           })
         ) : [];
-        const signalLocked = freshValidOutputs.some((o) => Math.abs(o.edge) >= 5);
+        const MAX_CARD_SIGNALS = 3;
+        const qualifiedOutputs = freshValidOutputs.filter((o) =>
+          Math.abs(o.edge) >= 5 && !o.suppressed
+        );
+        const cappedSignalCount = Math.min(qualifiedOutputs.length, MAX_CARD_SIGNALS);
+        const signalLocked = qualifiedOutputs.length > 0;
 
-        // Best-signal market for chip-level rendering
-        const bestEdgeOutput = freshValidOutputs.reduce<typeof freshValidOutputs[0] | null>((best, o) =>
+        const bestEdgeOutput = qualifiedOutputs.reduce<typeof qualifiedOutputs[0] | null>((best, o) =>
           best === null || Math.abs(o.edge) > Math.abs(best.edge) ? o : best, null
         );
         const bestMarket = bestEdgeOutput ? {
@@ -761,13 +764,17 @@ export async function registerRoutes(
             outs: cachedState.outs,
             runnersOnBase: cachedState.runnersOnBase,
           } : null,
-          signalCount: freshValidOutputs.length,
+          signalCount: cappedSignalCount,
           hasOdds,
           signalLocked,
           market: bestMarket,
         });
       }
 
+      for (const g of games) {
+        const gAny = g as any;
+        console.log(`[MLB HYDRATION] game=${gAny.gameId} status=${gAny.status} pitcherAway=${gAny.pitcherAway || "MISSING"} pitcherHome=${gAny.pitcherHome || "MISSING"} hasOdds=${gAny.hasOdds} signalCount=${gAny.signalCount} signalLocked=${gAny.signalLocked}`);
+      }
       const builtGames = games.length;
       console.log(`[MLB DISCOVERY] live-games builtGames=${builtGames}`);
       if (builtGames === 0) {
@@ -1275,6 +1282,42 @@ export async function registerRoutes(
               homeAbbr: game?.homeAbbr ?? null,
               gameStatus: game?.status ?? null,
             });
+          }
+        } else {
+          const edgeEntry = mlbEdgeCache.get(gid);
+          if (edgeEntry && edgeEntry.outputs.length > 0) {
+            const FEED_FRESHNESS_MS = 120_000;
+            if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) continue;
+            const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);
+            const qualified = edgeEntry.outputs.filter((o) =>
+              canShowSignal({
+                line: o.bookLine,
+                odds: (o.overOdds !== null || o.underOdds !== null) ? { overOdds: o.overOdds, underOdds: o.underOdds } : null,
+                projection: o.projection,
+                oddsUpdatedAt: o.oddsUpdatedAt,
+                projectionUpdatedAt: o.projectionUpdatedAt,
+              }) && Math.abs(o.edge) >= 5 && !o.suppressed
+            );
+            for (const o of qualified.slice(0, 3)) {
+              const hitProb = Math.max(o.calibratedProbabilityOver, o.calibratedProbabilityUnder);
+              allSignals.push({
+                playerId: o.playerId,
+                playerName: o.playerName,
+                market: o.market,
+                bookLine: o.bookLine,
+                projection: o.projection ?? null,
+                enginePct: Math.round(hitProb * 10) / 10,
+                edge: Math.round(o.edge * 100) / 100,
+                recommendedSide: o.recommendedSide,
+                inning: 0,
+                gameId: gid,
+                sportsbook: o.sportsbook ?? null,
+                hrFactors: o.hrFactors ?? null,
+                awayAbbr: game?.awayAbbr ?? null,
+                homeAbbr: game?.homeAbbr ?? null,
+                gameStatus: game?.status ?? null,
+              });
+            }
           }
         }
       }
@@ -5042,9 +5085,31 @@ export function registerAnalyticsRoutes(app: Express): void {
       const { buildTopPlays } = await import("./services/topPlaysService");
 
       const mlbSignals: any[] = [];
-      for (const [, cached] of mlbSignalsCache) {
-        if (cached && cached.signals?.length > 0) {
-          for (const sig of cached.signals) mlbSignals.push(sig);
+      for (const [, entry] of mlbEdgeCache.entries()) {
+        const FRESHNESS_MS = 120_000;
+        if (entry.updatedAt > 0 && Date.now() - entry.updatedAt > FRESHNESS_MS) continue;
+        const qualified = entry.outputs.filter((o: any) =>
+          canShowSignal({
+            line: o.bookLine,
+            odds: (o.overOdds !== null || o.underOdds !== null) ? { overOdds: o.overOdds, underOdds: o.underOdds } : null,
+            projection: o.projection,
+            oddsUpdatedAt: o.oddsUpdatedAt,
+            projectionUpdatedAt: o.projectionUpdatedAt,
+          }) && Math.abs(o.edge) >= 5 && !o.suppressed
+        );
+        for (const o of qualified) {
+          const hitProb = Math.max(o.calibratedProbabilityOver ?? 0, o.calibratedProbabilityUnder ?? 0);
+          mlbSignals.push({
+            playerId: o.playerId,
+            playerName: o.playerName,
+            market: o.market,
+            enginePct: Math.round(hitProb * 10) / 10,
+            edge: Math.round(o.edge * 100) / 100,
+            bookLine: o.bookLine,
+            projection: o.projection ?? null,
+            recommendedSide: o.recommendedSide,
+            gameId: o.gameId,
+          });
         }
       }
 
@@ -5106,12 +5171,22 @@ export function registerAnalyticsRoutes(app: Express): void {
     try {
       let nbaElite = 0, ncaabElite = 0, mlbElite = 0, totalLive = 0;
 
-      for (const [, cached] of mlbSignalsCache) {
-        if (cached?.signals) {
-          for (const sig of cached.signals) {
-            totalLive++;
-            if (typeof sig.enginePct === "number" && sig.enginePct >= 75) mlbElite++;
-          }
+      for (const [, entry] of mlbEdgeCache.entries()) {
+        const FRESHNESS_MS = 120_000;
+        if (entry.updatedAt > 0 && Date.now() - entry.updatedAt > FRESHNESS_MS) continue;
+        const qualified = entry.outputs.filter((o: any) =>
+          canShowSignal({
+            line: o.bookLine,
+            odds: (o.overOdds !== null || o.underOdds !== null) ? { overOdds: o.overOdds, underOdds: o.underOdds } : null,
+            projection: o.projection,
+            oddsUpdatedAt: o.oddsUpdatedAt,
+            projectionUpdatedAt: o.projectionUpdatedAt,
+          }) && Math.abs(o.edge) >= 5 && !o.suppressed
+        );
+        for (const o of qualified) {
+          totalLive++;
+          const prob = Math.max(o.calibratedProbabilityOver ?? 0, o.calibratedProbabilityUnder ?? 0);
+          if (prob >= 75) mlbElite++;
         }
       }
 

@@ -83,4 +83,7 @@ export const mlbEdgeCache = {
   get size(): number {
     return _cache.size;
   },
+  entries(): IterableIterator<[string, EdgeCacheEntry]> {
+    return _cache.entries();
+  },
 };

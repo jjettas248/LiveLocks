@@ -741,8 +741,7 @@ export class LiveGameOrchestrator {
       return rankA - rankB;
     });
 
-    // Compute signalLocked: true if any validated output passes canShowSignal and has edge >= 5%
-    const signalLocked = validatedOutputs.some((o) =>
+    const qualifiedOutputs = validatedOutputs.filter((o) =>
       canShowSignal({
         line: o.bookLine,
         odds: (o.overOdds !== null || o.underOdds !== null)
@@ -751,11 +750,12 @@ export class LiveGameOrchestrator {
         projection: o.projection,
         oddsUpdatedAt: o.oddsUpdatedAt,
         projectionUpdatedAt: o.projectionUpdatedAt,
-      }) && Math.abs(o.edge) >= 5
+      }) && Math.abs(o.edge) >= 5 && !o.suppressed
     );
+    const signalLocked = qualifiedOutputs.length > 0;
 
     mlbEdgeCache.set(gameId, { gameId, outputs: validatedOutputs, updatedAt: now, createdAt: now, isDegraded: anyDegraded, signalLocked });
-    console.log(`[MLB orchestrator] triggerEngine: game ${gameId} — ${outputs.length} raw outputs, ${validatedOutputs.length} cache-validated outputs`);
+    console.log(`[MLB orchestrator] triggerEngine: game ${gameId} — ${outputs.length} raw → ${validatedOutputs.length} validated → ${qualifiedOutputs.length} qualified (edge≥5%, not suppressed)`);
     return validatedOutputs;
   }
 }
