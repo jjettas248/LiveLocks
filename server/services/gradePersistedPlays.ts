@@ -178,6 +178,8 @@ const ESPN_KEY_MAP: Record<string, string> = {
   STL: "steals",       STEALS: "steals",
   "3PM": "threes",     "3PT": "threes",            TPM: "threes",
   THREEPOINTERSMADE: "threes",
+  "THREEPOINTFIELDGOALSMADE-THREEPOINTFIELDGOALSATTEMPTED": "threes",
+  THREEPOINTFIELDGOALSMADE: "threes",
 };
 
 const STAT_COMPONENTS: Record<string, string[]> = {
