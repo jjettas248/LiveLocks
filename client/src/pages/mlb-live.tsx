@@ -445,6 +445,18 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
   );
 }
 
+function modifierLabel(val: number): string {
+  if (val > 0.03) return "text-green-400";
+  if (val < -0.03) return "text-red-400";
+  return "text-muted-foreground";
+}
+
+function probColor(pct: number): string {
+  if (pct >= 75) return "text-green-400";
+  if (pct >= 65) return "text-yellow-400";
+  return "text-foreground";
+}
+
 function BatterCard({ player, signals, game, isElite, onSelect }: {
   player: MLBBatter;
   signals: MLBSignal[];
@@ -452,90 +464,155 @@ function BatterCard({ player, signals, game, isElite, onSelect }: {
   isElite: boolean;
   onSelect: () => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const playerSignals = signals.filter(s => s.playerId === player.playerId);
   const bestSignal = playerSignals.length > 0
-    ? playerSignals.reduce((best, s) => Math.abs(s.edge ?? 0) > Math.abs(best.edge ?? 0) ? s : best)
+    ? playerSignals.reduce((best, s) => (s.enginePct ?? 0) > (best.enginePct ?? 0) ? s : best)
     : null;
   const form = bestSignal?.formIndicator ?? null;
   const abResults = player.priorABResults ?? [];
+  const matchup = bestSignal?.matchupTag ?? null;
+  const mods = bestSignal?.modifiers;
 
   return (
     <div
       data-testid={`card-mlb-batter-${player.playerId}`}
-      className={`rounded-xl border border-border/40 bg-card p-4 space-y-3 cursor-pointer hover:border-primary/40 transition-all ${heatGlow(form)}`}
+      className={`rounded-xl border border-border/40 bg-card overflow-hidden cursor-pointer hover:border-primary/40 transition-all ${heatGlow(form)}`}
       onClick={onSelect}
     >
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-bold text-foreground">{player.playerName}</span>
-            {form && form !== "NEUTRAL" && (
-              <span className={`text-xs font-bold ${heatColor(form)}`}>
-                {heatEmoji(form)} {form}
+      <div className="p-3 space-y-2.5">
+        <div className="flex items-center justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-sm font-bold text-foreground truncate">{player.playerName}</span>
+              {form && form !== "NEUTRAL" && (
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${heatColor(form)} bg-secondary/50`}>
+                  {heatEmoji(form)} {form.replace("EXTREME_COLD", "ICE")}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span className="text-[10px] text-muted-foreground">{player.teamAbbr} · #{player.battingOrderSlot}</span>
+              {matchup && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium">{matchup}</span>
+              )}
+            </div>
+          </div>
+          {bestSignal && (
+            <div className="text-right flex-shrink-0">
+              <div className={`text-xl font-black ${probColor(bestSignal.enginePct)}`}>{Math.round(bestSignal.enginePct)}%</div>
+              <div className="text-[10px]">
+                {bestSignal.edge != null && bestSignal.edge > 0 ? (
+                  <span className={`font-bold ${edgeColor(bestSignal.edge)}`}>+{bestSignal.edge.toFixed(1)}% edge</span>
+                ) : (
+                  <span className="text-muted-foreground">model only</span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {abResults.length > 0 && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-[9px] text-muted-foreground shrink-0">ABs</span>
+            <div className="flex gap-0.5">
+              {abResults.slice(-5).map((ab, i) => (
+                <ABOutcomePill key={i} outcome={ab.outcome} />
+              ))}
+            </div>
+            {abResults.length > 0 && abResults.some(ab => ab.exitVelocity) && (
+              <span className="text-[9px] text-muted-foreground ml-auto">
+                avg EV: {Math.round(abResults.filter(ab => ab.exitVelocity).reduce((sum, ab) => sum + (ab.exitVelocity ?? 0), 0) / Math.max(1, abResults.filter(ab => ab.exitVelocity).length))}
               </span>
             )}
           </div>
-          <div className="text-[10px] text-muted-foreground mt-0.5">
-            {player.teamAbbr} · #{player.battingOrderSlot}
+        )}
+
+        <div className="grid grid-cols-5 gap-1 text-[10px]">
+          <div className="bg-secondary/30 rounded-md p-1 text-center">
+            <div className="text-[8px] text-muted-foreground">EV</div>
+            <div className={`font-bold ${player.exitVelocity && player.exitVelocity >= 95 ? "text-green-400" : player.exitVelocity && player.exitVelocity >= 88 ? "text-yellow-400" : "text-foreground"}`}>
+              {player.exitVelocity != null ? player.exitVelocity.toFixed(1) : "—"}
+            </div>
+          </div>
+          <div className="bg-secondary/30 rounded-md p-1 text-center">
+            <div className="text-[8px] text-muted-foreground">Barrel</div>
+            <div className={`font-bold ${player.barrelPct && player.barrelPct >= 12 ? "text-green-400" : player.barrelPct && player.barrelPct >= 6 ? "text-yellow-400" : "text-foreground"}`}>
+              {player.barrelPct != null ? `${Math.round(player.barrelPct)}%` : "—"}
+            </div>
+          </div>
+          <div className="bg-secondary/30 rounded-md p-1 text-center">
+            <div className="text-[8px] text-muted-foreground">xBA</div>
+            <div className={`font-bold ${player.xBA && player.xBA >= 0.280 ? "text-green-400" : player.xBA && player.xBA >= 0.240 ? "text-yellow-400" : "text-foreground"}`}>
+              {player.xBA != null ? `.${(player.xBA * 1000).toFixed(0).padStart(3, "0")}` : "—"}
+            </div>
+          </div>
+          <div className="bg-secondary/30 rounded-md p-1 text-center">
+            <div className="text-[8px] text-muted-foreground">Hard%</div>
+            <div className={`font-bold ${player.hardHitPct && player.hardHitPct >= 45 ? "text-green-400" : player.hardHitPct && player.hardHitPct >= 35 ? "text-yellow-400" : "text-foreground"}`}>
+              {player.hardHitPct != null ? `${Math.round(player.hardHitPct)}%` : "—"}
+            </div>
+          </div>
+          <div className="bg-secondary/30 rounded-md p-1 text-center">
+            <div className="text-[8px] text-muted-foreground">H/AB</div>
+            <div className="font-bold text-foreground">{player.ab > 0 ? `${player.h}/${player.ab}` : "—"}</div>
           </div>
         </div>
-        {bestSignal && (
-          <div className="text-right">
-            <div className={`text-lg font-bold ${edgeColor(bestSignal.edge)}`}>{Math.round(bestSignal.enginePct)}%</div>
-            <div className="text-[10px] text-muted-foreground">
-              {bestSignal.edge != null && <span className={edgeColor(bestSignal.edge)}>+{bestSignal.edge.toFixed(1)}%</span>}
+
+        {playerSignals.length > 0 && (
+          <div className="space-y-1 pt-1.5 border-t border-border/20">
+            {playerSignals.slice(0, expanded ? 8 : 2).map(sig => (
+              <div key={`${sig.playerId}-${sig.market}`} className={`flex items-center justify-between text-[11px] rounded-md px-2 py-1 ${edgeBg(sig.edge)}`}>
+                <div className="flex items-center gap-1.5">
+                  <span className={`font-bold text-[10px] px-1 py-0.5 rounded ${sig.recommendedSide === "OVER" ? "bg-green-500/20 text-green-400" : sig.recommendedSide === "UNDER" ? "bg-red-500/20 text-red-400" : "bg-muted/30 text-muted-foreground"}`}>
+                    {sig.recommendedSide === "OVER" ? "O" : sig.recommendedSide === "UNDER" ? "U" : "—"}
+                  </span>
+                  <span className="text-muted-foreground">{MARKET_LABELS[sig.market] ?? sig.market}</span>
+                  {sig.bookLine != null && <span className="text-foreground font-semibold">{sig.bookLine}</span>}
+                  {sig.derivedLine && <span className="text-[8px] text-muted-foreground/60">est</span>}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className={`font-bold ${probColor(sig.enginePct)}`}>{Math.round(sig.enginePct)}%</span>
+                  {sig.edge != null && sig.edge > 0 && (
+                    <span className={`text-[9px] font-bold ${edgeColor(sig.edge)}`}>+{sig.edge.toFixed(1)}%</span>
+                  )}
+                </div>
+              </div>
+            ))}
+            {playerSignals.length > 2 && (
+              <button
+                data-testid={`btn-expand-signals-${player.playerId}`}
+                className="text-[9px] text-primary hover:underline w-full text-center pt-0.5"
+                onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+              >
+                {expanded ? "Show less" : `+${playerSignals.length - 2} more markets`}
+              </button>
+            )}
+          </div>
+        )}
+
+        {mods && expanded && (
+          <div className="pt-1 border-t border-border/20">
+            <div className="text-[9px] text-muted-foreground mb-1">Modifier Breakdown</div>
+            <div className="grid grid-cols-5 gap-1 text-[9px]">
+              {[
+                { label: "Form", val: mods.liveForm },
+                { label: "Pitcher", val: mods.pitcher },
+                { label: "Pitch", val: mods.pitchType },
+                { label: "Park/Wx", val: mods.weatherPark },
+                { label: "Lineup", val: mods.lineup },
+              ].map(m => (
+                <div key={m.label} className="text-center">
+                  <div className="text-[8px] text-muted-foreground">{m.label}</div>
+                  <div className={`font-bold ${modifierLabel(m.val)}`}>
+                    {m.val > 0 ? "+" : ""}{(m.val * 100).toFixed(0)}%
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}
       </div>
-
-      {abResults.length > 0 && (
-        <div>
-          <div className="text-[10px] text-muted-foreground mb-1">Last ABs</div>
-          <div className="flex gap-1">
-            {abResults.slice(-5).map((ab, i) => (
-              <ABOutcomePill key={i} outcome={ab.outcome} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="grid grid-cols-4 gap-2 text-xs">
-        <div className="bg-secondary/30 rounded-lg p-1.5 text-center">
-          <div className="text-[9px] text-muted-foreground">EV</div>
-          <div className="font-bold text-foreground">{player.exitVelocity != null ? `${player.exitVelocity}` : "—"}</div>
-        </div>
-        <div className="bg-secondary/30 rounded-lg p-1.5 text-center">
-          <div className="text-[9px] text-muted-foreground">Barrel%</div>
-          <div className="font-bold text-foreground">{player.barrelPct != null ? `${Math.round(player.barrelPct)}%` : "—"}</div>
-        </div>
-        <div className="bg-secondary/30 rounded-lg p-1.5 text-center">
-          <div className="text-[9px] text-muted-foreground">xBA</div>
-          <div className="font-bold text-foreground">{player.xBA != null ? `.${(player.xBA * 1000).toFixed(0).padStart(3, "0")}` : "—"}</div>
-        </div>
-        <div className="bg-secondary/30 rounded-lg p-1.5 text-center">
-          <div className="text-[9px] text-muted-foreground">H/AB</div>
-          <div className="font-bold text-foreground">{player.ab > 0 ? `${player.h}/${player.ab}` : "—"}</div>
-        </div>
-      </div>
-
-      {playerSignals.length > 0 && (
-        <div className="space-y-1.5 pt-1 border-t border-border/20">
-          {playerSignals.slice(0, 2).map(sig => (
-            <div key={`${sig.playerId}-${sig.market}`} className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2">
-                <span className={`font-bold ${edgeColor(sig.edge)}`}>{sig.recommendedSide}</span>
-                <span className="text-muted-foreground">{MARKET_LABELS[sig.market] ?? sig.market}</span>
-                <span className="text-foreground font-semibold">{sig.bookLine}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className={`font-bold ${edgeColor(sig.edge)}`}>{Math.round(sig.enginePct)}%</span>
-                {sig.edge != null && <span className={`text-[10px] ${edgeColor(sig.edge)}`}>+{sig.edge.toFixed(1)}%</span>}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -922,6 +999,61 @@ function MlbLiveInner() {
   );
 }
 
+function TeamBatterSection({ teamAbbr, pitcher, players, signals, game, isElite, onSelectPlayer, side, score }: {
+  teamAbbr: string;
+  pitcher: string | null;
+  players: MLBBatter[];
+  signals: MLBSignal[];
+  game: MLBGame;
+  isElite: boolean;
+  onSelectPlayer: (p: MLBBatter) => void;
+  side: "home" | "away";
+  score: number | null;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const teamSignals = signals.filter(s => players.some(p => p.playerId === s.playerId));
+  const signalCount = teamSignals.length;
+  const highProbCount = teamSignals.filter(s => s.enginePct >= 70).length;
+
+  return (
+    <div className="rounded-xl border border-border/30 bg-card/50 overflow-hidden" data-testid={`section-team-${side}`}>
+      <button
+        data-testid={`btn-toggle-team-${side}`}
+        className="w-full flex items-center justify-between px-3 py-2 hover:bg-secondary/20 transition-colors"
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-bold text-foreground">{teamAbbr}</span>
+          {score != null && <span className="text-xs font-bold text-foreground/80">{score}</span>}
+          {pitcher && <span className="text-[10px] text-muted-foreground">· {pitcher}</span>}
+        </div>
+        <div className="flex items-center gap-2">
+          {signalCount > 0 && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-bold">
+              {signalCount} signal{signalCount !== 1 ? "s" : ""}
+            </span>
+          )}
+          {highProbCount > 0 && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-green-500/15 text-green-400 font-bold">
+              {highProbCount} 70%+
+            </span>
+          )}
+          <span className="text-muted-foreground text-xs">{collapsed ? "▸" : "▾"}</span>
+        </div>
+      </button>
+      {!collapsed && (
+        <div className="px-2 pb-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {players.map(p => (
+              <BatterCard key={p.playerId} player={p} signals={signals} game={game} isElite={isElite} onSelect={() => onSelectPlayer(p)} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GameDetailView({ game, players, signals, isElite, signalsLoading, playersLoading, updatedAt, onSelectPlayer, onBack }: {
   game: MLBGame;
   players: MLBBatter[];
@@ -1056,22 +1188,27 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
 
       {signals.length === 0 && game.status === "live" && (
         <div className="rounded-xl border border-border/40 bg-card p-6 text-center">
-          <div className="text-sm text-muted-foreground">No qualified edges for this game</div>
-          <div className="text-xs text-muted-foreground/60 mt-1">Edges require 3%+ edge with verified sportsbook odds. The engine re-evaluates every cycle as lines update.</div>
+          <div className="text-sm text-muted-foreground">No qualified signals for this game</div>
+          <div className="text-xs text-muted-foreground/60 mt-1">Signals require ≥60% model confidence. The engine re-evaluates every cycle.</div>
         </div>
       )}
 
       {signals.length === 0 && game.status === "pregame" && (
         <div className="rounded-xl border border-border/40 bg-card p-6 text-center">
           <div className="text-sm text-muted-foreground">Pre-Game</div>
-          <div className="text-xs text-muted-foreground/60 mt-1">Live edges will appear once the game begins and odds are available.</div>
+          <div className="text-xs text-muted-foreground/60 mt-1">Signals will appear once the game begins and the model generates projections.</div>
         </div>
       )}
 
-      <div className="space-y-3">
+      <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-foreground">Batters</h3>
-          {playersLoading && <span className="text-[10px] text-muted-foreground animate-pulse">Loading…</span>}
+          <h3 className="text-sm font-bold text-foreground">Lineup</h3>
+          <div className="flex items-center gap-2">
+            {playersLoading && <span className="text-[10px] text-muted-foreground animate-pulse">Loading…</span>}
+            {players.length > 0 && (
+              <span className="text-[10px] text-muted-foreground">{players.length} batters</span>
+            )}
+          </div>
         </div>
 
         {!playersLoading && players.length === 0 && (
@@ -1083,26 +1220,28 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
 
         {(awayPlayers.length > 0 || homePlayers.length > 0) && (
           <>
-            {awayPlayers.length > 0 && (
-              <div className="space-y-2">
-                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{game.awayAbbr}</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {awayPlayers.map(p => (
-                    <BatterCard key={p.playerId} player={p} signals={signals} game={game} isElite={isElite} onSelect={() => onSelectPlayer(p)} />
-                  ))}
-                </div>
-              </div>
-            )}
-            {homePlayers.length > 0 && (
-              <div className="space-y-2">
-                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{game.homeAbbr}</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {homePlayers.map(p => (
-                    <BatterCard key={p.playerId} player={p} signals={signals} game={game} isElite={isElite} onSelect={() => onSelectPlayer(p)} />
-                  ))}
-                </div>
-              </div>
-            )}
+            <TeamBatterSection
+              teamAbbr={game.awayAbbr ?? "AWAY"}
+              pitcher={game.pitcherAway ?? null}
+              players={awayPlayers}
+              signals={signals}
+              game={game}
+              isElite={isElite}
+              onSelectPlayer={onSelectPlayer}
+              side="away"
+              score={game.awayScore}
+            />
+            <TeamBatterSection
+              teamAbbr={game.homeAbbr ?? "HOME"}
+              pitcher={game.pitcherHome ?? null}
+              players={homePlayers}
+              signals={signals}
+              game={game}
+              isElite={isElite}
+              onSelectPlayer={onSelectPlayer}
+              side="home"
+              score={game.homeScore}
+            />
           </>
         )}
 

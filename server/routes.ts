@@ -666,11 +666,13 @@ export async function registerRoutes(
 
         const pitcherInGame = cachedState?.pitcherInGame ?? null;
 
-        // Probable pitchers from ESPN competition situation
         const probableHome = competition.situation?.probable?.home?.athlete;
         const probableAway = competition.situation?.probable?.away?.athlete;
-        const awayPitcher: string = probableAway?.fullName ?? probableAway?.displayName ?? "";
-        const homePitcher: string = probableHome?.fullName ?? probableHome?.displayName ?? "";
+        const espnAwayPitcher: string = probableAway?.fullName ?? probableAway?.displayName ?? "";
+        const espnHomePitcher: string = probableHome?.fullName ?? probableHome?.displayName ?? "";
+        const registeredGame = getActiveGames().find((g) => g.gameId === gameId);
+        const awayPitcher: string = espnAwayPitcher || registeredGame?.awayPitcher || "";
+        const homePitcher: string = espnHomePitcher || registeredGame?.homePitcher || "";
 
         // hasOdds: true if edge cache has at least one output passing hasRealOdds + freshness (canShowSignal)
         // Aligns with signal-serve semantics so PREVIEW vs NO_SIGNAL boundary is based on valid+fresh odds
@@ -1046,13 +1048,20 @@ export async function registerRoutes(
           sportsbook: o.sportsbook ?? null,
           derivedLine: o.isDerivedLine ?? false,
           signalTimestamp: o.signalTimestamp ?? o.engineGeneratedAt ?? Date.now(),
-          formIndicator: o.formIndicator ? o.formIndicator.toUpperCase().replace("EXTREME_COLD", "COLD") : null,
+          formIndicator: o.formIndicator ? o.formIndicator.toUpperCase() : null,
           formScore: o.formScore ?? null,
           evPct: o.evPct ?? null,
           hrFactors: o.hrFactors ?? null,
           contextScore: o.contextScore ?? null,
           matchupTag: o.matchupTag ?? null,
           explanationBullets: o.explanationBullets ?? [],
+          modifiers: o.modifiers ? {
+            liveForm: o.modifiers.liveForm ?? 0,
+            pitcher: o.modifiers.pitcher ?? 0,
+            pitchType: o.modifiers.pitchType ?? 0,
+            weatherPark: o.modifiers.weatherPark ?? 0,
+            lineup: o.modifiers.lineup ?? 0,
+          } : null,
         };
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
