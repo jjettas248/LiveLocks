@@ -1,4 +1,4 @@
-const CACHE_NAME = "livelocks-v5";
+const CACHE_NAME = "livelocks-v6";
 const APP_SHELL = ["/", "/index.html", "/favicon.png", "/manifest.json"];
 
 self.addEventListener("install", (event) => {
@@ -28,17 +28,26 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith(
     caches.match(request).then((cached) => {
-      if (cached) return cached;
-      return fetch(request).then((response) => {
-        if (!response || response.status !== 200 || response.type === "opaque") {
-          return response;
+      const fetchPromise = fetch(request).then((response) => {
+        if (response && response.status === 200 && response.type !== "opaque") {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
         }
-        const clone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
         return response;
-      });
+      }).catch(() => cached);
+
+      return cached || fetchPromise;
     })
   );
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
+  if (event.data && event.data.type === "CHECK_UPDATE") {
+    self.registration.update().catch(() => {});
+  }
 });
 
 self.addEventListener("push", (event) => {
@@ -85,7 +94,6 @@ self.addEventListener("notificationclick", (event) => {
 
   const data = event.notification.data || {};
 
-  // Build deep-link URL with query params
   const params = new URLSearchParams();
   if (data.tab) params.set("tab", data.tab);
   if (data.gameId) params.set("gameId", data.gameId);
@@ -97,7 +105,6 @@ self.addEventListener("notificationclick", (event) => {
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
-      // App already open — focus and send navigation message
       for (const client of clientList) {
         if (client.url.includes(self.location.origin) && "focus" in client) {
           client.focus();
@@ -105,7 +112,6 @@ self.addEventListener("notificationclick", (event) => {
           return;
         }
       }
-      // App not open — open with deep-link params
       if (self.clients.openWindow) {
         return self.clients.openWindow(targetUrl);
       }

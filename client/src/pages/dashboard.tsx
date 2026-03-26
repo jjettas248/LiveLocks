@@ -20,6 +20,7 @@ import { RecentWinsStrip } from "@/components/RecentWinsStrip";
 import { LiveBoxscore } from "@/components/live-boxscore";
 import { AlertsOnboardingModal } from "@/components/alerts-onboarding-modal";
 import { useAuth } from "@/hooks/use-auth";
+import { usePullRefresh } from "@/hooks/use-pull-refresh";
 import { hasProAccess } from "@/lib/tierUtils";
 import { useLocation } from "wouter";
 import {
