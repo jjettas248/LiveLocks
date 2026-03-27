@@ -830,8 +830,9 @@ function getTeamTotalVerdict(
   const tierFromEngine = engineVerdict?.confidenceTier;
   const sideFromEngine = engineVerdict?.side;
   const directionSide = direction === "under" ? "Under" : "Over";
-  const edgeLabel = sideFromEngine === "NO_EDGE" || absEdge < 5
-    ? "Neutral — No Edge"
+  const edgeLabel = sideFromEngine === "NO_EDGE" || absEdge < 2
+    ? "Even — Monitoring"
+    : absEdge < 5 ? `Slight ${directionSide} Lean`
     : tierFromEngine === "HIGH" ? `Strong ${directionSide} EV`
     : `Lean ${directionSide} EV`;
   return {
@@ -846,8 +847,8 @@ function getTeamTotalVerdict(
 
 // ── Pre-game confidence tier ──────────────────────────────────────────────────
 const CONFIDENCE_TIER_MAP: Record<string, { label: string; sublabel: string; color: string; bg: string; border: string }> = {
-  "No Edge": { label: "No Edge", sublabel: "Model sees even matchup", color: "#71717a", bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.08)" },
-  "Low": { label: "Low Confidence", sublabel: "Slight lean — insufficient for signal", color: "#71717a", bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.08)" },
+  "No Edge": { label: "Monitoring", sublabel: "Even matchup — watching for movement", color: "#71717a", bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.08)" },
+  "Low": { label: "Slight Lean", sublabel: "Early signal — watching for confirmation", color: "#71717a", bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.08)" },
   "Moderate": { label: "Moderate Signal", sublabel: "Pre-game lean — monitor at tipoff", color: "#f59e0b", bg: "rgba(245,158,11,0.08)", border: "rgba(245,158,11,0.2)" },
   "High": { label: "Strong Pre-Game Signal", sublabel: "Model has clear lean before tipoff", color: "#00d4aa", bg: "rgba(0,212,170,0.08)", border: "rgba(0,212,170,0.2)" },
   "Extreme": { label: "High Confidence", sublabel: "Significant model edge pre-game", color: "#00d4aa", bg: "rgba(0,212,170,0.12)", border: "rgba(0,212,170,0.25)" },
@@ -1477,7 +1478,8 @@ function NCAABGameCard({
     : canonicalConfTier === "ELITE" ? `Strong ${edgeSide} EV`
     : canonicalConfTier === "STRONG" ? `Lean ${edgeSide} EV`
     : canonicalConfTier === "VALUE" ? `Value ${edgeSide} EV`
-    : "Neutral — No Edge";
+    : edgeGap >= 2 ? `Slight ${edgeSide} Lean`
+    : "Even — Monitoring";
   const edgeBelow = edgeGap < 4;
   const evColor   = edgeSide === "Under" ? "#ef4444" : "#00d4aa";
 
@@ -3563,7 +3565,7 @@ function PreGameCard({
         const overProb = game.enginePreGame?.overProb ?? null;
         const tier = getPreGameConfidenceTier(overProb);
         const gaugeVal = overProb;
-        const isLowTier = !tier || tier.label === "No Edge" || tier.label === "Low Confidence";
+        const isLowTier = !tier || tier.label === "Monitoring" || tier.label === "Slight Lean";
         const gaugeColor = (gaugeVal === null || isLowTier) ? "#52525b" : (gaugeVal > 50 ? "#00d4aa" : "#ef4444");
         const circum = 2 * Math.PI * 68;
         return (
@@ -3608,14 +3610,15 @@ function PreGameCard({
         const overProb = game.enginePreGame!.overProb;
         const tier = getPreGameConfidenceTier(overProb);
         if (!tier) return null;
-        const isLowTier = tier.label === "No Edge" || tier.label === "Low Confidence";
+        const isLowTier = tier.label === "Monitoring" || tier.label === "Slight Lean";
         const edgeGap = parseFloat(Math.abs(overProb - 50).toFixed(1));
         const edgeSide = overProb > 50 ? "Over" : "Under";
         const evColor = isLowTier ? "#52525b" : (overProb > 50 ? "#00d4aa" : "#ef4444");
         const edgeLabel = edgeGap >= 18 ? `Strong ${edgeSide} EV`
           : edgeGap >= 10 ? `Lean ${edgeSide} EV`
           : edgeGap >= 5 ? `Slight ${edgeSide} Lean`
-          : "Neutral — No Edge";
+          : edgeGap >= 2 ? `Slight ${edgeSide} Lean`
+          : "Even — Monitoring";
         return (
           <div
             className="rounded-lg flex items-center justify-between gap-2"
@@ -3720,11 +3723,11 @@ function PreGameCard({
       {/* ── Pre-game signal note ─────────────────────────────────────────── */}
       {(() => {
         const tier = getPreGameConfidenceTier(game.enginePreGame?.overProb ?? null);
-        const isLow = !tier || tier.label === "No Edge" || tier.label === "Low Confidence";
+        const isLow = !tier || tier.label === "Monitoring" || tier.label === "Slight Lean";
         return (
           <p className="text-xs italic" style={{ color: "#52525b", paddingTop: 2 }}>
             {isLow
-              ? "Pre-game signal · Insufficient edge — check back at tipoff"
+              ? "Pre-game signal · Watching for movement — updates at tipoff"
               : "Pre-game signal · Updates live at tipoff"}
           </p>
         );
@@ -3898,10 +3901,11 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
       let bestScore = -Infinity;
       for (const key of MARKET_KEYS) {
         const m = mkts[key];
-        if (m?.bookLine == null) continue;
+        if (!m?.available) continue;
+        const hasLine = m.bookLine != null;
         const isQualified = m.qualifiedEdge === true;
         const edgeFrom50 = Math.abs((m.modelProb ?? 50) - 50);
-        const score = (isQualified ? 1000 : 0) + edgeFrom50;
+        const score = (hasLine ? 500 : 0) + (isQualified ? 1000 : 0) + edgeFrom50;
         if (score > bestScore) { bestScore = score; bestKey = key; }
       }
       if (bestKey) map.set(p.gameId, bestKey);
@@ -4196,9 +4200,11 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                     const candidates: Candidate[] = [];
                     for (const key of ALL_TOP_MARKET_KEYS) {
                       const mkt = p.engineOutput.markets[key];
-                      if (mkt?.bookLine == null) continue;
+                      if (!mkt?.available) continue;
+                      const hasLine = mkt.bookLine != null;
                       const isFb = mkt.fallback === true;
                       let score = Math.abs((mkt.modelProb ?? 50) - 50);
+                      if (hasLine) score += 15;
                       if (mkt.qualifiedEdge === true) score += 10;
                       if (isH2Market(key)) score += 5;
                       if (isH2Market(key) && isHalftimePlay(p)) score += 5;
@@ -4224,7 +4230,17 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                   const topEntries = allEntries.slice(0, 20);
                   console.log("[NCAAB_RENDER]", sortedPlays.length, "plays,", topEntries.length, "top entries");
 
-                  if (topEntries.length === 0) return null;
+                  if (topEntries.length === 0) return (
+                    <div className="flex items-center justify-center gap-2 py-4 rounded-xl" style={{ background: "#0a0a0a", border: "1px solid #1c1c1e" }}>
+                      <span className="relative flex h-1.5 w-1.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-400" />
+                      </span>
+                      <p className="text-xs font-medium" style={{ color: "#71717a" }}>
+                        Scanning {sortedPlays.length} live {sortedPlays.length === 1 ? "game" : "games"} for edge signals…
+                      </p>
+                    </div>
+                  );
                   return (
                     <div className="flex gap-3 overflow-x-auto pb-2" style={{ scrollSnapType: "x mandatory" }}>
                       {topEntries.map((entry, idx) => {
@@ -4314,14 +4330,13 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                                   </span>
                                 )}
                               </div>
-                              {(onAddToParlay || onAddToCard) && (
+                              {(onAddToParlay || onAddToCard) && mkt.bookLine != null && (
                                 <button
                                   data-testid={`ncaab-top-play-parlay-${p.gameId}-${mkt.marketKey}`}
                                   onClick={() => {
-                                    // Pass canonical NCAABMarket object directly
                                     if (onAddToCard) onAddToCard(mkt);
                                     if (onAddToParlay) {
-                                      if (mkt.modelProb === null) return;
+                                      if (mkt.modelProb === null || mkt.bookLine == null) return;
                                       const prob = mkt.modelProb;
                                       const isSpread = mkt.marketKey.includes("spread");
                                       const dir = isSpread
@@ -4418,15 +4433,15 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
             </div>
           )}
 
-          {!error && liveGames.length > 0 && halftimePlays.length === 0 && !plays.some(p => p.engineOutput?.markets?.full_total?.bookLine != null) && (
+          {!error && liveGames.length > 0 && !hasPlays && (
             <div className="bg-card border border-border rounded-xl p-6 text-center space-y-2" data-testid="text-ncaab-monitoring">
               <span className="relative flex h-2 w-2 mx-auto mb-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
               </span>
-              <p className="text-sm font-semibold text-foreground">Monitoring {liveGames.length} live {liveGames.length === 1 ? "game" : "games"}</p>
+              <p className="text-sm font-semibold text-foreground">Scanning {liveGames.length} live {liveGames.length === 1 ? "game" : "games"}</p>
               <p className="text-xs text-muted-foreground">
-                Signals appear once the model detects a qualifying opportunity.
+                Live plays populate automatically as odds data streams in.
               </p>
             </div>
           )}
