@@ -41,6 +41,7 @@ interface NCAABMarketClient {
   edge: number | null;
   side: MarketSide;
   confidenceTier: MarketConfidenceTier;
+  qualifiedEdge?: boolean;
   fallback?: boolean;
 }
 
@@ -3889,12 +3890,14 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
       const mkts = p.engineOutput?.markets;
       if (!mkts) continue;
       let bestKey: NCAABMarketKey | null = null;
-      let bestAbsEdge = -1;
+      let bestScore = -Infinity;
       for (const key of MARKET_KEYS) {
         const m = mkts[key];
-        if (m?.bookLine == null || m.edge == null) continue;
-        const absEdge = Math.abs(m.edge);
-        if (absEdge > bestAbsEdge) { bestAbsEdge = absEdge; bestKey = key; }
+        if (m?.bookLine == null) continue;
+        const isQualified = m.qualifiedEdge === true;
+        const edgeFrom50 = Math.abs((m.modelProb ?? 50) - 50);
+        const score = (isQualified ? 1000 : 0) + edgeFrom50;
+        if (score > bestScore) { bestScore = score; bestKey = key; }
       }
       if (bestKey) map.set(p.gameId, bestKey);
     }
@@ -4189,10 +4192,18 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                     if (!p.engineOutput?.markets) continue;
                     for (const key of OTHER_MARKET_KEYS) {
                       const mkt = p.engineOutput.markets[key];
-                      if (mkt?.bookLine == null || mkt.edge === null) continue;
+                      if (mkt?.bookLine == null) continue;
                       allEntries.push({ play: p, market: mkt });
                     }
                   }
+                  allEntries.sort((a, b) => {
+                    const aQ = a.market.qualifiedEdge === true ? 1 : 0;
+                    const bQ = b.market.qualifiedEdge === true ? 1 : 0;
+                    if (aQ !== bQ) return bQ - aQ;
+                    const aEdge = Math.abs((a.market.modelProb ?? 50) - 50);
+                    const bEdge = Math.abs((b.market.modelProb ?? 50) - 50);
+                    return bEdge - aEdge;
+                  });
                   const topEntries = allEntries.slice(0, 20);
                   topEntries.forEach(entry => {
                     console.log("[TOP PLAY]", { gameId: entry.play.gameId, marketKey: entry.market.marketKey, available: entry.market.available, edge: entry.market.edge, fallback: entry.market.fallback ?? false });

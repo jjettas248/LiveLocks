@@ -125,6 +125,7 @@ export interface NCAABMarket {
   edge: number | null;
   side: MarketSide;
   confidenceTier: MarketConfidenceTier;
+  qualifiedEdge?: boolean;
   clvEdge?: number | null;
   publicBetPct?: number | null;
   publicInflation?: boolean | null;
@@ -1106,6 +1107,15 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
     h2_spread: h2SpreadMarket,
   };
 
+  const inputLines: Record<NCAABMarketKey, { line: number | null; proj: number | null }> = {
+    full_total: { line: input.liveTotalLine ?? null, proj: projection.finalProjectedTotal },
+    full_spread: { line: input.liveSpreadLine != null ? (input.liveSpreadFavorite && input.liveSpreadFavorite.toLowerCase().includes(input.homeTeam.toLowerCase().split(" ").pop() ?? "") ? -input.liveSpreadLine : input.liveSpreadLine) : null, proj: projection.finalProjectedSpread },
+    h1_total: { line: isPreGameOrH1 ? (input.h1TotalLine ?? null) : null, proj: projection.proj1HTotal },
+    h1_spread: { line: isPreGameOrH1 && h1SpreadComputed ? h1SpreadComputed.line : null, proj: h1SpreadComputed?.projection ?? null },
+    h2_total: { line: hasHalftimeStarted ? (input.h2TotalLine ?? null) : null, proj: projection.proj2HTotal },
+    h2_spread: { line: hasHalftimeStarted && h2SpreadComputed ? h2SpreadComputed.line : null, proj: h2SpreadComputed?.projection ?? null },
+  };
+
   const spreadCLV = computeCLV(input.closingSpread, input.liveSpread);
   const totalCLV = computeCLV(input.closingTotal, input.liveTotal);
   const publicInflationSpread = lineMovedTowardPublic(input.openSpread, input.closingSpread, input.publicSpreadPct, false);
@@ -1148,13 +1158,10 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
 
   // ── Post-processing: derived total dampening, isDerived flag, side sanity ───
 
-  // Task 4: mark full_total as isDerived when sourced from pace derivation
-  // Set regardless of available status so analytics can track provenance on all full_total objects
   if (input.liveTotalSource === "derived") {
     markets.full_total.isDerived = true;
   }
 
-  // Task 3: dampen edge and probability for derived full_total markets
   if (markets.full_total.marketKey === "full_total" && input.liveTotalSource === "derived" && markets.full_total.available) {
     const mkt = markets.full_total;
     const prevEdge = mkt.edge;
@@ -1167,7 +1174,6 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
     );
   }
 
-  // Task 5: recommendedSide sanity enforcement on full_total (book or derived)
   if (markets.full_total.available) {
     const mkt = markets.full_total;
     const proj = mkt.projection;
@@ -1179,91 +1185,117 @@ export function runNCAABEngine(input: NCAABGameInput): NCAABEngineOutput {
         mkt.side === null;
       if (!sideOk) {
         mkt.side = null;
-        mkt.available = false;
       }
     }
   }
 
-  // ── Task #93: Derived Market Hierarchy + Signal Floor (single-market) ───────
+  // ── Task #93: Derived Market Hierarchy (math adjustments only, no market hiding) ──
 
   const totalMarket = markets.full_total;
 
   if (totalMarket) {
     const isDerived = totalMarket.isDerived === true;
-    // A real sportsbook line exists whenever bookLine is present on the market object
-    const hasBookLine = totalMarket.bookLine != null;
 
-    // Rule 1 — Hierarchy enforcement: real sportsbook line wins unconditionally
-    if (isDerived && hasBookLine) {
-      totalMarket.available = false;
-      console.log(`[NCAAB DERIVED BLOCKED] gameId=${input.gameId} reason=real_line_exists`);
-    }
-
-    // Rule 2 — Minimum confidence floor: suppress weak derived edges (edgeFrom50 < 12)
-    if (isDerived && totalMarket.available) {
-      const edgeFrom50 = Math.abs((totalMarket.modelProb ?? 50) - 50);
-      if (edgeFrom50 < 12) {
-        totalMarket.available = false;
-        console.log(
-          `[NCAAB DERIVED FILTERED] gameId=${input.gameId} edge=${edgeFrom50.toFixed(2)}`
-        );
-      }
-    }
-
-    // Rule 3 — Directional sanity (redundant guard against upstream drift)
-    if (totalMarket.available && totalMarket.projection !== null && totalMarket.bookLine !== null) {
+    if (isDerived && totalMarket.projection !== null && totalMarket.bookLine !== null) {
       if (
         (totalMarket.side === "OVER" && totalMarket.projection <= totalMarket.bookLine) ||
         (totalMarket.side === "UNDER" && totalMarket.projection >= totalMarket.bookLine)
       ) {
-        totalMarket.available = false;
         totalMarket.side = null;
-        console.log(`[NCAAB DERIVED INVALIDATED] gameId=${input.gameId} reason=projection_mismatch`);
+        console.log(`[NCAAB DERIVED SIDE RESET] gameId=${input.gameId} reason=projection_mismatch`);
       }
     }
 
-    // Rule 4 — Probability clamp (derived only): prevent inflated conviction (35–65)
     if (isDerived && totalMarket.modelProb != null) {
       totalMarket.modelProb = round1(Math.max(35, Math.min(65, totalMarket.modelProb)));
     }
   }
 
-  // ── Fallback Exposure Layer ───────────────────────────────────────────────
-  // When no qualified edge cleared guardrails but full_total data exists,
-  // surface the market as a labeled fallback play (low confidence).
-  // All guardrails above remain intact — this only changes exposure, not math.
-  const fallbackProj = markets.full_total.projection ?? round1(projection.finalProjectedTotal);
-  if (!markets.full_total.available && totalMarket.bookLine != null && isFinite(fallbackProj) && !isNaN(fallbackProj)) {
-    const mkt = markets.full_total;
-    const proj = fallbackProj;
-    const line = totalMarket.bookLine!;
+  // ── Qualification Pass: separate market existence from edge strength ─────
+  // Rule: bookLine != null → available = true (market exists)
+  // qualifiedEdge = edgeFrom50 >= 12
+  // fallback = !qualifiedEdge
+  for (const key of ALL_MARKET_KEYS) {
+    const mkt = markets[key];
+    const origLine = inputLines[key].line;
+    const origProj = inputLines[key].proj;
 
-    // Infer lean direction from projection vs line
-    const leanOver = proj > line;
-    const inferredSide: MarketSide = leanOver ? "OVER" : "UNDER";
+    if (mkt.bookLine == null && origLine == null) {
+      mkt.available = false;
+      mkt.qualifiedEdge = false;
+      mkt.fallback = false;
+      continue;
+    }
 
-    // Clamp modelProb to 42–48 (lean under) or 52–58 (lean over) to convey low conviction
-    const rawProb = mkt.modelProb ?? (leanOver ? 53 : 47);
-    const clampedProb = leanOver
-      ? round1(Math.max(52, Math.min(58, rawProb)))
-      : round1(Math.max(42, Math.min(48, rawProb)));
+    if (mkt.bookLine == null && origLine != null) {
+      mkt.available = true;
+      mkt.bookLine = origLine;
+      mkt.projection = origProj != null ? round1(origProj) : null;
+      const leanOver = origProj != null ? origProj > origLine : true;
+      const inferredSide: MarketSide = key.includes("spread")
+        ? (leanOver ? "HOME" : "AWAY")
+        : (leanOver ? "OVER" : "UNDER");
+      mkt.modelProb = leanOver ? 52 : 48;
+      mkt.side = inferredSide;
+      mkt.confidenceTier = "NONE";
+      mkt.qualifiedEdge = false;
+      mkt.fallback = true;
+      mkt.edge = round1(Math.abs(mkt.modelProb - 50));
+      console.log(`[NCAAB RECOVERED] gameId=${input.gameId} market=${key} side=${inferredSide} prob=${mkt.modelProb} line=${origLine} proj=${origProj}`);
+      continue;
+    }
 
     mkt.available = true;
-    mkt.fallback = true;
-    if (mkt.side === null) {
-      mkt.side = inferredSide;
-    }
-    mkt.modelProb = clampedProb;
-    mkt.bookLine = line;
-    mkt.projection = proj;
-    // "NONE" is the correct tier for fallbacks — the union only has ELITE|STRONG|VALUE|NONE.
-    // Low-confidence semantics are signaled to the UI via mkt.fallback===true, not via tier.
-    mkt.confidenceTier = "NONE";
-    mkt.edge = round1(Math.abs(clampedProb - 50));
 
-    console.log(
-      `[NCAAB FALLBACK EXPOSED] gameId=${input.gameId} side=${inferredSide} prob=${clampedProb} line=${line} proj=${proj}`
-    );
+    if (mkt.modelProb == null && mkt.projection != null) {
+      const leanOver = mkt.projection > mkt.bookLine!;
+      const inferredSide: MarketSide = key.includes("spread")
+        ? (leanOver ? "HOME" : "AWAY")
+        : (leanOver ? "OVER" : "UNDER");
+      mkt.modelProb = leanOver ? 52 : 48;
+      if (mkt.side === null) mkt.side = inferredSide;
+      mkt.confidenceTier = "NONE";
+      mkt.qualifiedEdge = false;
+      mkt.fallback = true;
+      mkt.edge = round1(Math.abs(mkt.modelProb - 50));
+      console.log(`[NCAAB LEAN SURFACED] gameId=${input.gameId} market=${key} side=${inferredSide} prob=${mkt.modelProb} line=${mkt.bookLine}`);
+      continue;
+    }
+
+    if (mkt.modelProb == null) {
+      mkt.qualifiedEdge = false;
+      mkt.fallback = true;
+      mkt.confidenceTier = "NONE";
+      continue;
+    }
+
+    const edgeFrom50 = Math.abs(mkt.modelProb - 50);
+
+    if (edgeFrom50 >= 12) {
+      mkt.qualifiedEdge = true;
+      mkt.fallback = false;
+      console.log(`[NCAAB QUALIFIED EDGE] gameId=${input.gameId} market=${key} edgeFrom50=${edgeFrom50.toFixed(1)} prob=${mkt.modelProb} side=${mkt.side}`);
+    } else {
+      mkt.qualifiedEdge = false;
+      mkt.fallback = true;
+
+      if (mkt.side === null && mkt.projection != null) {
+        const leanOver = mkt.projection > mkt.bookLine!;
+        mkt.side = key.includes("spread")
+          ? (leanOver ? "HOME" : "AWAY")
+          : (leanOver ? "OVER" : "UNDER");
+      }
+      mkt.confidenceTier = "NONE";
+      console.log(`[NCAAB FALLBACK SURFACED] gameId=${input.gameId} market=${key} edgeFrom50=${edgeFrom50.toFixed(1)} prob=${mkt.modelProb} line=${mkt.bookLine}`);
+    }
+  }
+
+  let anyLineBackedMarket = false;
+  for (const key of ALL_MARKET_KEYS) {
+    if (markets[key].bookLine != null) { anyLineBackedMarket = true; break; }
+  }
+  if (!anyLineBackedMarket) {
+    console.log(`[NCAAB FAILURE] zero markets gameId=${input.gameId} — no valid line-backed markets exist`);
   }
 
   const CANONICAL_VERDICT_MAP: Record<NCAABMarketKey, NCAABMarketType> = {
