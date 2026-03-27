@@ -720,7 +720,21 @@ function MlbLiveInner() {
   }, [selectedGameId]);
   useEffect(() => {
     if ((!oddsLoading && oddsEntries.length === 0 && selectedPlayer) || !hasAnyOdds) setManualMode(true);
-    else if (oddsEntries.length > 0) setManualMode(false);
+    else if (oddsEntries.length > 0) {
+      setManualMode(false);
+      if (!selectedLine && oddsEntries.length > 0) {
+        const sorted = [...oddsEntries].sort((a, b) => {
+          const oA = (a[1] as OddsEntry).overOdds ?? -999;
+          const oB = (b[1] as OddsEntry).overOdds ?? -999;
+          return oB - oA;
+        });
+        const [bestBook, bestOdds] = sorted[0];
+        const o = bestOdds as OddsEntry;
+        if (o.line != null && o.overOdds != null && o.underOdds != null) {
+          setSelectedLine({ book: bestBook, line: o.line, overOdds: o.overOdds, underOdds: o.underOdds });
+        }
+      }
+    }
   }, [oddsLoading, oddsEntries.length, selectedPlayer?.playerId, hasAnyOdds]);
 
   const rosterPlayerIds = new Set<string>(players.filter(p => p?.playerId).map(p => String(p.playerId)));
@@ -1516,7 +1530,13 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
                 </button>
               );
             })}
-            <button data-testid="button-switch-to-manual" onClick={() => { setManualMode(true); setSelectedLine(null); }}
+            <button data-testid="button-switch-to-manual" onClick={() => {
+                setManualMode(true); setSelectedLine(null);
+                if (oddsEntries.length > 0) {
+                  const lines = oddsEntries.map(([, o]) => (o as OddsEntry).line).filter(l => l != null).sort((a, b) => a - b);
+                  if (lines.length > 0) setManualBookLine(String(lines[Math.floor(lines.length / 2)]));
+                }
+              }}
               className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors py-1">
               Enter line manually instead
             </button>
