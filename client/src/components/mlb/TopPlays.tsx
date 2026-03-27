@@ -55,15 +55,19 @@ export function TopPlays({ signals }: { signals: MLBSignal[] }) {
 
   if (topPlays.length === 0) {
     return (
-      <div className="rounded-xl p-4 space-y-2" style={{ background: "#0a0a0a", border: "1px solid #1a1a2e" }} data-testid="mlb-top-plays-monitoring">
+      <div className="rounded-xl p-4 space-y-3" style={{ background: "#0a0a0a", border: "1px solid #1a1a2e" }} data-testid="mlb-top-plays-monitoring">
+        <div className="flex items-center gap-2">
+          <Flame className="w-4 h-4 text-orange-400" />
+          <span className="text-sm font-bold text-white">Top Plays</span>
+        </div>
         <div className="flex items-center gap-2">
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
           </span>
-          <span className="text-xs font-semibold text-blue-400">Monitoring opportunities</span>
+          <span className="text-xs font-semibold text-blue-400">Engine processing live markets</span>
         </div>
-        <p className="text-[11px] text-muted-foreground">Engine is evaluating live markets — signals will appear here as they surface.</p>
+        <p className="text-[11px] text-muted-foreground">Switch to the Games tab to select any game and run manual calculations on player props while the engine evaluates all markets.</p>
       </div>
     );
   }

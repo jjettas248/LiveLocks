@@ -77,10 +77,10 @@ export function TopPlaysPanel({ isElite, onNavigateToSport }: TopPlaysPanelProps
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
                 </span>
-                Monitoring opportunities
+                Processing live markets
               </div>
               <div className="text-xs text-muted-foreground/60 mt-1">
-                Signals appear as games go live and sportsbook lines are available.
+                Open any sport tab to view markets, run manual calculations, and see engine probabilities in real time.
               </div>
             </div>
           )}

@@ -1223,17 +1223,22 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
         </div>
       )}
 
-      {signals.length === 0 && game.status === "live" && (
-        <div className="rounded-xl border border-border/40 bg-card p-6 text-center">
-          <div className="text-sm text-muted-foreground">No qualified signals for this game</div>
-          <div className="text-xs text-muted-foreground/60 mt-1">Signals require ≥60% model confidence. The engine re-evaluates every cycle.</div>
-        </div>
-      )}
-
-      {signals.length === 0 && game.status === "pregame" && (
-        <div className="rounded-xl border border-border/40 bg-card p-6 text-center">
-          <div className="text-sm text-muted-foreground">Pre-Game</div>
-          <div className="text-xs text-muted-foreground/60 mt-1">Signals will appear once the game begins and the model generates projections.</div>
+      {signals.length === 0 && (
+        <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4 space-y-3" data-testid="mlb-game-signal-cta">
+          <div className="flex items-center gap-2">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
+            </span>
+            <span className="text-xs font-semibold text-blue-400">
+              {game.status === "live" ? "Engine evaluating markets" : "Pre-game analysis available"}
+            </span>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {game.status === "live"
+              ? "Select any batter below to run a manual calculation on their prop markets — odds, projections, and probability are available now."
+              : "Select a batter below once the game starts to calculate real-time prop probabilities. Matchup data and lineups are loading."}
+          </p>
         </div>
       )}
 

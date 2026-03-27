@@ -494,10 +494,21 @@ export class LiveGameOrchestrator {
   }
 
   private buildWatchSignal(gameId: string, input: MLBPropInput, output: MLBPropOutput): MLBQualifiedSignal | null {
-    if (output.recommendedSide !== "OVER" && output.recommendedSide !== "UNDER") return null;
-    if (typeof output.bookLine !== "number" || !Number.isFinite(output.bookLine) || output.bookLine <= 0) return null;
+    let effectiveSide = output.recommendedSide;
+    if (effectiveSide !== "OVER" && effectiveSide !== "UNDER") {
+      const overP = output.calibratedProbabilityOver ?? 0;
+      const underP = output.calibratedProbabilityUnder ?? 0;
+      if (overP > underP && overP > 0) effectiveSide = "OVER";
+      else if (underP > 0) effectiveSide = "UNDER";
+      else return null;
+    }
 
-    const sideProbability = output.recommendedSide === "OVER"
+    const bookLine = typeof output.bookLine === "number" && Number.isFinite(output.bookLine) && output.bookLine > 0
+      ? output.bookLine
+      : (typeof output.projection === "number" && Number.isFinite(output.projection) ? Math.round(output.projection * 2) / 2 : null);
+    if (bookLine === null) return null;
+
+    const sideProbability = effectiveSide === "OVER"
       ? output.calibratedProbabilityOver
       : output.calibratedProbabilityUnder;
     if (!Number.isFinite(sideProbability) || sideProbability <= 0) return null;
@@ -513,9 +524,9 @@ export class LiveGameOrchestrator {
       playerName: output.playerName,
       team: (output as any).team ?? input.team ?? "",
       market: output.market,
-      side: output.recommendedSide,
+      side: effectiveSide as "OVER" | "UNDER",
       sportsbook: output.sportsbook,
-      line: output.bookLine,
+      line: bookLine,
       impliedProbability: null,
       engineProbability: output.calibratedProbability,
       projection: output.projection,
