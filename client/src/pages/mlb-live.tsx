@@ -995,9 +995,15 @@ function MlbLiveInner() {
                     </div>
                   </div>
                 ) : (
-                  <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-6 text-center">
-                    <div className="text-sm text-muted-foreground">No HR edges above threshold</div>
-                    <div className="text-xs text-muted-foreground/60 mt-1">HR edges require 3+ qualifying factors (hard contact, favorable park/weather, vulnerable pitcher). See environment context below.</div>
+                  <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-4 text-center space-y-2">
+                    <div className="flex items-center justify-center gap-2 text-sm text-orange-400">
+                      <span className="relative flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75" />
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-400" />
+                      </span>
+                      Scanning HR markets
+                    </div>
+                    <div className="text-xs text-muted-foreground/60">HR signals surface when hard contact, park/weather factors, and pitcher vulnerability data align. See environment context below.</div>
                   </div>
                 )}
 
@@ -1024,7 +1030,7 @@ function MlbLiveInner() {
 
                 {hrSignals.length === 0 && hrEnvironmentSignals.length === 0 && (
                   <div className="text-xs text-muted-foreground/60 text-center py-2">
-                    No players with HR-favorable context detected yet. Watchlist populates as games progress and contact data accumulates.
+                    HR context data accumulates as games progress and contact data is recorded. Select a game to run manual HR market calculations.
                   </div>
                 )}
               </>
@@ -1255,8 +1261,14 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
 
         {!playersLoading && players.length === 0 && (
           <div className="rounded-lg border border-border/30 bg-card/50 p-4 text-center">
-            <div className="text-xs text-muted-foreground">No contact data available</div>
-            <div className="text-[10px] text-muted-foreground/50 mt-1">{game.status === "pregame" ? "Batter data populates once the game starts and at-bats are recorded." : "Batter data is loading. Contact stats update as at-bats are recorded."}</div>
+            <div className="flex items-center justify-center gap-2 text-xs text-blue-400">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-400" />
+              </span>
+              {game.status === "pregame" ? "Lineup loading" : "Resolving batter data"}
+            </div>
+            <div className="text-[10px] text-muted-foreground/50 mt-1">{game.status === "pregame" ? "Batter data populates once the game starts and at-bats are recorded." : "Contact stats and box score data are syncing from live feeds."}</div>
           </div>
         )}
 
