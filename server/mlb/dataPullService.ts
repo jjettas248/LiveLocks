@@ -40,6 +40,8 @@ export interface PlayerContactData {
     launchAngle: number | null;
     distance: number | null;
     outcome: "hit" | "out" | "strikeout" | "walk" | "hbp" | "error" | "other";
+    pitchType: string | null;
+    pitchSpeed: number | null;
   }>;
 }
 
@@ -425,8 +427,9 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
         const la = safeNum(bip.hit_angle ?? bip.launch_angle);
         const dist = safeNum(bip.hit_distance ?? bip.distance);
         const event: string = bip.result ?? bip.event ?? "";
+        const pitchType: string | null = bip.pitch_type ?? bip.pitch_name ?? null;
+        const pitchSpeed: number | null = safeNum(bip.pitch_speed ?? bip.release_speed);
 
-        // Track best EV this game per player (most recent hard-contact event)
         if (ev !== null && (byPlayerId[playerId].exitVelocity === null || ev > (byPlayerId[playerId].exitVelocity ?? 0))) {
           byPlayerId[playerId].exitVelocity = ev;
           byPlayerId[playerId].launchAngle = la;
@@ -438,6 +441,8 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
           launchAngle: la,
           distance: dist,
           outcome: inferOutcome(event),
+          pitchType,
+          pitchSpeed,
         });
       }
 

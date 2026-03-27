@@ -116,6 +116,8 @@ export interface ABResult {
   launchAngle: number | null;
   distance: number | null;
   outcome: "hit" | "out" | "strikeout" | "walk" | "hbp" | "error" | "other";
+  pitchType?: string | null;
+  pitchSpeed?: number | null;
 }
 
 export interface PitcherContext {
@@ -385,7 +387,7 @@ export const FORM_THRESHOLDS = {
   extremeCold: 0.08,
 } as const;
 
-export const HR_MIN_QUALIFYING_FACTORS = 3;
+export const HR_MIN_QUALIFYING_FACTORS = 2;
 
 export const MLB_MARKET_MIN_GAP: Record<MLBMarket, number> = {
   hits:               0.25,

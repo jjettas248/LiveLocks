@@ -836,6 +836,8 @@ export async function registerRoutes(
               exitVelocity: ab.exitVelocity,
               launchAngle: ab.launchAngle,
               distance: ab.distance,
+              pitchType: ab.pitchType ?? null,
+              pitchSpeed: ab.pitchSpeed ?? null,
             })),
           });
         }
