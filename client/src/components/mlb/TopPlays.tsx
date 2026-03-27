@@ -23,6 +23,7 @@ type MLBSignal = {
 const MARKET_LABELS: Record<string, string> = {
   hits: "Hits",
   total_bases: "Total Bases",
+  hrr: "H+R+RBI",
   hr: "Home Runs",
   rbi: "RBIs",
   runs: "Runs",

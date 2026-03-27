@@ -5,7 +5,8 @@ export type MLBMarket =
   | "hits_allowed"
   | "walks_allowed"
   | "home_runs"
-  | "hrr";
+  | "hrr"
+  | "pitcher_outs";
 
 export const ALL_MLB_MARKETS: MLBMarket[] = [
   "hits",
@@ -15,6 +16,7 @@ export const ALL_MLB_MARKETS: MLBMarket[] = [
   "walks_allowed",
   "home_runs",
   "hrr",
+  "pitcher_outs",
 ];
 
 // ── Phase 5: Game-level markets (team/game totals, F5) ────────────────────────
@@ -78,11 +80,13 @@ export interface MLBGameMarketOutput {
 export const CORE_MARKETS: MLBMarket[] = [
   "hits",
   "total_bases",
+  "hrr",
   "pitcher_strikeouts",
   "hits_allowed",
+  "pitcher_outs",
 ];
 
-export const EXPERIMENTAL_MARKETS: MLBMarket[] = ["home_runs", "hrr"];
+export const EXPERIMENTAL_MARKETS: MLBMarket[] = ["home_runs"];
 
 export const EXPERIMENTAL_CONFIDENCE_CEILING: MLBConfidenceTier = "STRONG";
 
@@ -355,6 +359,7 @@ export const MARKET_SIGMA: Record<MLBMarket, number> = {
   walks_allowed: 0.90,
   home_runs: 0.40,
   hrr: 1.50,
+  pitcher_outs: 2.50,
 };
 
 export const EDGE_THRESHOLDS = {
@@ -371,6 +376,7 @@ export const SUPPRESSION_RULES: Record<MLBMarket, { minEdge: number; minComplete
   walks_allowed:      { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
   home_runs:          { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
   hrr:                { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
+  pitcher_outs:       { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
 };
 
 export type FormIndicator = "hot" | "warm" | "neutral" | "cold" | "extreme_cold";
@@ -392,6 +398,7 @@ export const MLB_MARKET_MIN_GAP: Record<MLBMarket, number> = {
   walks_allowed:      0.60,
   home_runs:          0.10,
   hrr:                0.60,
+  pitcher_outs:       1.00,
 };
 
 export type SignalConfidenceTier = "ELITE" | "STRONG" | "SOLID" | "WATCHLIST" | "NO_SIGNAL";

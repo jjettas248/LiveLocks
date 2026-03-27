@@ -47,7 +47,7 @@ function computeProjectionComponent(projection: number, bookLine: number, market
   const gap = recommendedSide === "UNDER" ? -rawGap : rawGap;
   const normalizedGap = market === "home_runs" || market === "hrr"
     ? gap / 0.3
-    : market === "pitcher_strikeouts"
+    : market === "pitcher_strikeouts" || market === "pitcher_outs"
       ? gap / 1.5
       : gap / 0.5;
 
@@ -154,9 +154,10 @@ function computeOpportunityComponent(input: MLBPropInput): number {
 
 function computeMarketReliabilityComponent(market: MLBMarket): number {
   if (market === "hits" || market === "total_bases") return 80;
-  if (market === "pitcher_strikeouts") return 70;
+  if (market === "pitcher_strikeouts" || market === "pitcher_outs") return 70;
   if (market === "hits_allowed" || market === "walks_allowed") return 55;
-  if (market === "home_runs" || market === "hrr") return 40;
+  if (market === "hrr") return 65;
+  if (market === "home_runs") return 40;
   return 50;
 }
 

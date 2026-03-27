@@ -62,6 +62,11 @@ function computeBaseValue(input: MLBPropInput, market: MLBMarket): number {
       const estimatedIPRemainingW = Math.max(0, (remainingAB / 4.3));
       return currentStatValue + walksPerIP * estimatedIPRemainingW;
     }
+    case "pitcher_outs": {
+      const outsPerBF = seasonAvg > 0 ? seasonAvg : 0.65;
+      const estimatedBFRemaining = remainingAB > 0 ? remainingAB : 10;
+      return currentStatValue + outsPerBF * estimatedBFRemaining;
+    }
     case "home_runs": {
       const hrRate = seasonAvg > 0 ? seasonAvg : 0.035;
       return currentStatValue + hrRate * remainingAB;

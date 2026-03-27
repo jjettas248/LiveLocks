@@ -68,7 +68,7 @@ const BATTER_MARKETS: MLBMarket[] = [
   "hrr",
 ];
 
-const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "hits_allowed", "walks_allowed"];
+const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed"];
 
 // ── Previously-resolved line cache ───────────────────────────────────────────
 // Persists the last successfully fetched sportsbook line per event+player+market
@@ -141,6 +141,7 @@ async function resolveBookLine(
     hits: 0.5,
     total_bases: 1.5,
     pitcher_strikeouts: 4.5,
+    pitcher_outs: 16.5,
     hits_allowed: 5.5,
     walks_allowed: 2.5,
     home_runs: 0.5,
@@ -858,6 +859,8 @@ export class LiveGameOrchestrator {
         const pitcherKper9 = pitcherSeasonForPitcherMarket?.kPer9;
         const pitcherSeasonAvg = market === "pitcher_strikeouts"
           ? (pitcherKper9 != null ? pitcherKper9 : 6.0)
+          : market === "pitcher_outs"
+            ? 0.65
           : market === "hits_allowed"
             ? (pitcherSeasonForPitcherMarket?.whip != null ? pitcherSeasonForPitcherMarket.whip * 0.72 * 6 : 5.0)
             : 5.0;

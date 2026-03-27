@@ -205,6 +205,8 @@ export function isMLBPropKey(key: string, statType: string): boolean {
   if (s === "pitcherstrikeouts" || s === "pitcher_strikeouts") return k.includes("pitcherstrikeout") || k.includes("pitso") || (k.includes("strikeout") && k.includes("pitcher"));
   if (s === "hitsallowed" || s === "hits_allowed") return k.includes("hitsallowed") || k.includes("hitallow");
   if (s === "homeruns" || s === "home_runs") return k.includes("homerun") || k.includes("homer");
+  if (s === "pitcherouts" || s === "pitcher_outs") return k.includes("pitcherout") || k.includes("pitouts") || (k.includes("outs") && k.includes("pitcher")) || k.includes("recording") || k.includes("totalouts");
+  if (s === "hrr" || s === "hitsrunsrbis" || s === "hits_runs_rbis") return k.includes("hitsrunsrbi") || k.includes("hrr") || (k.includes("hit") && k.includes("run") && k.includes("rbi"));
   return k.includes(s);
 }
 
@@ -837,9 +839,10 @@ const MLB_MARKET_MAP: Record<string, string> = {
   hits: "batter_hits",
   total_bases: "batter_total_bases",
   home_runs: "batter_home_runs",
-  hrr: "",
+  hrr: "batter_hits_runs_rbis",
   pitcher_strikeouts: "pitcher_strikeouts",
   pitcher_k: "pitcher_strikeouts",
+  pitcher_outs: "pitcher_outs",
   walks_allowed: "pitcher_walks",
   hits_allowed: "pitcher_hits_allowed",
 };

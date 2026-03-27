@@ -136,9 +136,9 @@ function applyProbabilityCeiling(
 }
 
 // ── Tier 1 markets (high priority, standard composite threshold) ──────────────
-const TIER1_MARKETS = new Set<MLBMarket>(["hits", "total_bases", "pitcher_strikeouts"]);
-// ── Tier 3 markets (home runs / HRR, stricter composite threshold) ────────────
-const TIER3_MARKETS = new Set<MLBMarket>(["home_runs", "hrr"]);
+const TIER1_MARKETS = new Set<MLBMarket>(["hits", "total_bases", "hrr", "pitcher_strikeouts", "pitcher_outs"]);
+// ── Tier 3 markets (home runs, stricter composite threshold) ────────────
+const TIER3_MARKETS = new Set<MLBMarket>(["home_runs"]);
 
 function checkSuppression(
   input: MLBPropInput,
@@ -608,6 +608,10 @@ export function calculatePitcherKEdge(input: MLBPropInput): MLBPropOutput {
   return buildOutput({ ...input, market: "pitcher_strikeouts" });
 }
 
+export function calculatePitcherOutsEdge(input: MLBPropInput): MLBPropOutput {
+  return buildOutput({ ...input, market: "pitcher_outs" });
+}
+
 export function calculateHitsAllowedEdge(input: MLBPropInput): MLBPropOutput {
   return buildOutput({ ...input, market: "hits_allowed" });
 }
@@ -633,6 +637,7 @@ const MARKET_CALCULATORS: Record<MLBMarket, (input: MLBPropInput) => MLBPropOutp
   hits: calculateHitsEdge,
   total_bases: calculateTBEdge,
   pitcher_strikeouts: calculatePitcherKEdge,
+  pitcher_outs: calculatePitcherOutsEdge,
   hits_allowed: calculateHitsAllowedEdge,
   walks_allowed: calculateWalksAllowedEdge,
   home_runs: calculateHREdge,

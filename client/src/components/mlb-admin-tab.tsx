@@ -9,6 +9,7 @@ type MLBMarket =
   | "hits"
   | "total_bases"
   | "pitcher_strikeouts"
+  | "pitcher_outs"
   | "hits_allowed"
   | "home_runs"
   | "hrr";
@@ -121,19 +122,21 @@ interface MLBPropInput {
 const MLB_MARKETS: MLBMarket[] = [
   "hits",
   "total_bases",
+  "hrr",
   "pitcher_strikeouts",
+  "pitcher_outs",
   "hits_allowed",
   "home_runs",
-  "hrr",
 ];
 
 const MARKET_LABELS: Record<MLBMarket, string> = {
   hits: "Hits",
   total_bases: "Total Bases",
+  hrr: "H+R+RBI",
   pitcher_strikeouts: "Pitcher Strikeouts",
+  pitcher_outs: "Pitcher Outs",
   hits_allowed: "Hits Allowed",
   home_runs: "Home Runs (Experimental)",
-  hrr: "HRR (Experimental)",
 };
 
 // ── Form type ─────────────────────────────────────────────────────────────────

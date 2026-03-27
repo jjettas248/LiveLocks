@@ -26,10 +26,10 @@ const MARKET_LABELS: Record<string, string> = {
   points: "Points", rebounds: "Rebounds", assists: "Assists", threes: "Threes",
   steals: "Steals", blocks: "Blocks", pts_reb: "PTS+REB", pts_ast: "PTS+AST",
   pts_reb_ast: "PTS+REB+AST", reb_ast: "REB+AST", stl_blk: "STL+BLK",
-  hits: "Hits", total_bases: "Total Bases",
-  pitcher_k: "K (Pitcher)",
+  hits: "Hits", total_bases: "Total Bases", hrr: "H+R+RBI",
+  pitcher_k: "K (Pitcher)", pitcher_outs: "Pitcher Outs",
   pitcher_strikeouts: "K (Pitcher)", hits_allowed: "Hits Allowed",
-  walks_allowed: "Walks Allowed", hr: "Home Runs", home_runs: "Home Runs", hrr: "HRR",
+  walks_allowed: "Walks Allowed", hr: "Home Runs", home_runs: "Home Runs",
   total: "Total", spread: "Spread", "1h_total": "1H Total", "1h_spread": "1H Spread",
   "2h_total": "2H Total", "2h_spread": "2H Spread",
 };

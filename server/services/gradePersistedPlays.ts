@@ -58,6 +58,7 @@ const MLB_STAT_KEY_MAP: Record<string, MlbStatMapping> = {
   hits:               { kind: "single",    source: "batting",  field: "hits" },
   total_bases:        { kind: "single",    source: "batting",  field: "totalBases" },
   batter_strikeouts:  { kind: "single",    source: "batting",  field: "strikeOuts" },
+  pitcher_outs:       { kind: "single",    source: "pitching", field: "outs" },
   home_runs:          { kind: "single",    source: "batting",  field: "homeRuns" },
   rbis:               { kind: "single",    source: "batting",  field: "rbi" },
   rbi:                { kind: "single",    source: "batting",  field: "rbi" },

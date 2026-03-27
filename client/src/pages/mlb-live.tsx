@@ -198,9 +198,10 @@ function canShowSignal(market: MLBGameMarket | null | undefined): boolean {
 }
 
 const MARKET_LABELS: Record<string, string> = {
-  hits: "Hits", total_bases: "Total Bases",
-  pitcher_k: "K (Pitcher)", pitcher_strikeouts: "K (Pitcher)", hits_allowed: "Hits Allowed",
-  walks_allowed: "Walks Allowed", hr: "Home Runs", home_runs: "Home Runs", hrr: "HRR",
+  hits: "Hits", total_bases: "Total Bases", hrr: "H+R+RBI",
+  pitcher_k: "K (Pitcher)", pitcher_strikeouts: "K (Pitcher)", pitcher_outs: "Pitcher Outs",
+  hits_allowed: "Hits Allowed", walks_allowed: "Walks Allowed",
+  hr: "Home Runs", home_runs: "Home Runs",
 };
 
 const SPORTSBOOK_LABELS: Record<string, string> = {
@@ -210,16 +211,18 @@ const SPORTSBOOK_LABELS: Record<string, string> = {
   fanatics: "Fanatics",
 };
 
-const PITCHER_MARKET_SET = new Set(["pitcher_k", "pitcher_strikeouts", "hits_allowed", "walks_allowed"]);
+const PITCHER_MARKET_SET = new Set(["pitcher_k", "pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed"]);
 
 const BATTER_MARKETS = [
   { value: "hits", label: "Hits" },
   { value: "total_bases", label: "Total Bases" },
+  { value: "hrr", label: "H+R+RBI" },
   { value: "hr", label: "Home Runs" },
 ];
 
 const PITCHER_MARKETS = [
   { value: "pitcher_k", label: "K (Pitcher)" },
+  { value: "pitcher_outs", label: "Outs" },
   { value: "walks_allowed", label: "Walks Allowed" },
   { value: "hits_allowed", label: "Hits Allowed" },
 ];
