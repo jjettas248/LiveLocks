@@ -351,6 +351,9 @@ export interface MLBPropOutput {
   hrFactors?: { count: number; labels: string[] };
   contextScore: number;
   matchupTag: string | null;
+  featureScores?: Record<string, number>;
+  computedBadges?: string[];
+  computedRiskFlags?: string[];
 }
 
 export const STANDARD_THRESHOLDS = {

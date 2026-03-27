@@ -494,14 +494,15 @@ export class LiveGameOrchestrator {
       formIndicator: output.formIndicator,
       isExperimental: output.isExperimental,
       engineGeneratedAt: output.engineGeneratedAt,
-      badges: [],
-      riskFlags: [],
+      badges: output.computedBadges ?? [],
+      riskFlags: output.computedRiskFlags ?? [],
       drivers: {
         edge: output.edge,
         probability: output.calibratedProbability,
         projection: output.projection,
         formScore: output.formScore,
         contextScore: output.contextScore,
+        ...(output.featureScores ?? {}),
       },
       timestamps: {
         engineGeneratedAt: new Date(output.engineGeneratedAt).toISOString(),
@@ -510,7 +511,7 @@ export class LiveGameOrchestrator {
       },
     };
 
-    console.log(`[MLB QUALIFY OK][${gameId}] ${output.playerName}/${output.market} side=${output.recommendedSide} score=${scoreBreakdown.total} tier=${scoreBreakdown.confidenceTier} tags=[${signalTags.join(",")}]`);
+    console.log(`[MLB QUALIFY OK][${gameId}] ${output.playerName}/${output.market} side=${output.recommendedSide} score=${scoreBreakdown.total} tier=${scoreBreakdown.confidenceTier} badges=[${(output.computedBadges ?? []).join(",")}] tags=[${signalTags.join(",")}]`);
     return signal;
   }
 
@@ -566,14 +567,15 @@ export class LiveGameOrchestrator {
       formIndicator: output.formIndicator,
       isExperimental: output.isExperimental,
       engineGeneratedAt: output.engineGeneratedAt,
-      badges: [],
-      riskFlags: [],
+      badges: output.computedBadges ?? [],
+      riskFlags: output.computedRiskFlags ?? [],
       drivers: {
         edge: output.edge,
         probability: output.calibratedProbability,
         projection: output.projection,
         formScore: output.formScore,
         contextScore: output.contextScore,
+        ...(output.featureScores ?? {}),
       },
       timestamps: {
         engineGeneratedAt: new Date(output.engineGeneratedAt).toISOString(),

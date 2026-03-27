@@ -93,6 +93,13 @@ import {
   computeFormScore,
   computeHRQualifyingFactors,
   meetsHRQualificationGate,
+  computeFullFeatureLayer,
+  computeBatSpeedEngine,
+  computeSpecPitcherDeterioration,
+  computeSpecPitchBlendMatchup,
+  computeSpecParkEnv,
+  computeBadges,
+  type FeatureLayer,
 } from "./featureEngineering";
 import { projectBaseValue } from "./projections";
 import { computeRawProbability, clampProjection, clampProbability } from "./probability";
@@ -298,9 +305,154 @@ function computeBookImplied(input: MLBPropInput, isOverFavored: boolean): number
   return 50;
 }
 
+function applyMarketFeatureWeights(
+  baseProjection: number,
+  features: FeatureLayer,
+  market: MLBMarket,
+  input: MLBPropInput
+): number {
+  const batSpeed = computeBatSpeedEngine(input);
+  const deterioration = computeSpecPitcherDeterioration(input);
+
+  let featureMultiplier = 1.0;
+
+  switch (market) {
+    case "hits": {
+      const pregameSkill =
+        0.30 * features.contactQuality +
+        0.18 * features.handednessMatchup +
+        0.16 * features.pitchBlendMatchup +
+        0.10 * features.parkEnv +
+        0.08 * features.bvp +
+        0.08 * features.hotColdForm +
+        0.06 * features.lineupOpportunity +
+        0.04 * batSpeed.batSpeedPowerScore;
+      const liveAdj =
+        1 +
+        0.18 * deterioration.hitsAllowed +
+        0.12 * features.bullpenFactor +
+        0.10 * (features.contactQuality > 0.6 ? features.contactQuality - 0.5 : 0) +
+        0.06 * (features.lineupOpportunity > 0.5 ? 0.1 : 0);
+      featureMultiplier = (0.5 + pregameSkill) * liveAdj;
+      featureMultiplier *= (1 - 0.3 * features.pitcherSuppression);
+      break;
+    }
+    case "total_bases": {
+      const damageSkill =
+        0.26 * features.contactQuality +
+        0.18 * ((input.contactQuality.barrelRateProxySeason ?? 0.05) > 0.08 ? 0.7 : 0.4) +
+        0.16 * batSpeed.batSpeedPowerScore +
+        0.14 * features.handednessMatchup +
+        0.12 * features.pitchBlendMatchup +
+        0.08 * computeSpecParkEnv(input, "tb") +
+        0.06 * features.hotColdForm;
+      const tbBoost =
+        1 +
+        0.22 * deterioration.hitsAllowed +
+        0.18 * deterioration.hrAllowed +
+        0.10 * features.bullpenFactor;
+      featureMultiplier = (0.5 + damageSkill) * tbBoost;
+      featureMultiplier *= (1 - 0.25 * features.pitcherSuppression);
+      break;
+    }
+    case "home_runs": {
+      const barrel = input.contactQuality.barrelRateProxySeason ?? 0.05;
+      const hrSkill =
+        0.28 * Math.min(1, barrel / 0.12) +
+        0.18 * features.contactQuality +
+        0.16 * ((input.contactQuality.exitVelocity ?? 88) > 95 ? 0.7 : 0.35) +
+        0.16 * batSpeed.batSpeedPowerScore +
+        0.10 * computeSpecParkEnv(input, "hr") +
+        0.06 * features.handednessMatchup +
+        0.04 * features.pitchBlendMatchup +
+        0.02 * features.hotColdForm;
+      const liveHRAdj =
+        1 +
+        0.25 * deterioration.hrAllowed +
+        0.12 * (deterioration.overall > 0.5 ? deterioration.overall - 0.4 : 0) +
+        0.08 * (features.parkEnv > 0.6 ? 0.2 : 0);
+      featureMultiplier = (0.4 + hrSkill) * liveHRAdj;
+      featureMultiplier *= (1 - 0.35 * features.pitcherSuppression);
+      break;
+    }
+    case "hrr": {
+      const hrrSkill =
+        0.25 * features.contactQuality +
+        0.15 * features.handednessMatchup +
+        0.15 * features.pitchBlendMatchup +
+        0.12 * features.parkEnv +
+        0.10 * batSpeed.batSpeedPowerScore +
+        0.08 * features.hotColdForm +
+        0.08 * features.lineupOpportunity +
+        0.07 * features.bvp;
+      featureMultiplier = (0.5 + hrrSkill) * (1 + 0.15 * deterioration.hitsAllowed);
+      break;
+    }
+    case "pitcher_strikeouts": {
+      const kSkill =
+        0.26 * Math.min(1, (input.pitcher.kPer9 ?? 8) / 12) +
+        0.20 * (input.pitcher.whip != null ? 1 - Math.min(1, input.pitcher.whip / 1.5) : 0.5) +
+        0.16 * computeSpecPitchBlendMatchup(input, "whiff") +
+        0.14 * (1 - features.contactQuality) +
+        0.10 * features.handednessMatchup +
+        0.08 * Math.min(1, (input.pitcher.kPer9 ?? 8) / 10) +
+        0.06 * (1 - features.hotColdForm);
+      const kDecay = 1 - 0.18 * deterioration.kDropoff - 0.08 * (input.pitcher.timesThrough >= 3 ? 0.5 : 0);
+      featureMultiplier = (0.5 + kSkill) * Math.max(0.6, kDecay);
+      break;
+    }
+    case "pitcher_outs": {
+      const outsSkill =
+        0.24 * (1 - Math.min(1, input.pitcher.pitchCount / 100)) +
+        0.18 * (input.pitcher.managerLeashShort ? 0.3 : 0.7) +
+        0.16 * features.pitcherSuppression +
+        0.12 * (1 - Math.min(1, (input.pitcher.bbPer9 ?? 3) / 5)) +
+        0.10 * (1 - features.contactQuality) +
+        0.10 * (input.pitcher.timesThrough <= 2 ? 0.7 : 0.3) +
+        0.10 * (1 - features.hotColdForm);
+      featureMultiplier = (0.5 + outsSkill) * (1 - 0.3 * deterioration.outsRisk);
+      break;
+    }
+    case "hits_allowed": {
+      const oppContactThreat =
+        0.24 * features.contactQuality +
+        0.18 * features.handednessMatchup +
+        0.16 * (features.lineupOpportunity > 0.5 ? 0.7 : 0.4) +
+        0.14 * features.parkEnv +
+        0.12 * features.pitchBlendMatchup +
+        0.10 * features.hotColdForm +
+        0.06 * features.bvp;
+      const pitcherSupp = Math.max(0.3, features.pitcherSuppression);
+      const hitsAllowedRisk = 1 + 0.22 * deterioration.hitsAllowed + 0.14 * deterioration.overall;
+      featureMultiplier = (0.5 + oppContactThreat) / (0.5 + pitcherSupp) * hitsAllowedRisk;
+      break;
+    }
+    case "walks_allowed": {
+      const walkExposure =
+        0.28 * Math.min(1, (input.pitcher.bbPer9 ?? 3) / 5) +
+        0.18 * (1 - Math.min(1, (input.pitcher.kPer9 ?? 8) / 12)) +
+        0.16 * (1 - features.contactQuality * 0.3) +
+        0.12 * features.handednessMatchup +
+        0.10 * deterioration.walksAllowed +
+        0.08 * (features.hotColdForm > 0.6 ? 0.6 : 0.4) +
+        0.08 * (1 - features.pitcherSuppression);
+      featureMultiplier = 0.5 + walkExposure;
+      break;
+    }
+    default:
+      featureMultiplier = 1.0;
+  }
+
+  return baseProjection * Math.max(0.5, Math.min(2.0, featureMultiplier));
+}
+
 function buildOutput(input: MLBPropInput): MLBPropOutput {
+  const features = computeFullFeatureLayer(input);
   const projResult = projectBaseValue(input);
-  const safeProjection = clampProjection(projResult.projection);
+  const featureAdjustedProjection = applyMarketFeatureWeights(
+    projResult.projection, features, input.market, input
+  );
+  const safeProjection = clampProjection(featureAdjustedProjection);
 
   const { overProb, underProb } = computeRawProbability(
     safeProjection,
@@ -388,6 +540,22 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
     ? (() => { const f = computeHRQualifyingFactors(input); return { count: f.count, labels: f.labels }; })()
     : undefined;
 
+  const badgeResult = computeBadges(input, features);
+
+  const featureScores: Record<string, number> = {
+    contactQuality: Math.round(features.contactQuality * 1000) / 1000,
+    batSpeedPower: Math.round(features.batSpeedPower * 1000) / 1000,
+    handednessMatchup: Math.round(features.handednessMatchup * 1000) / 1000,
+    pitchBlendMatchup: Math.round(features.pitchBlendMatchup * 1000) / 1000,
+    hotColdForm: Math.round(features.hotColdForm * 1000) / 1000,
+    parkEnv: Math.round(features.parkEnv * 1000) / 1000,
+    bvp: Math.round(features.bvp * 1000) / 1000,
+    lineupOpportunity: Math.round(features.lineupOpportunity * 1000) / 1000,
+    bullpenFactor: Math.round(features.bullpenFactor * 1000) / 1000,
+    pitcherSuppression: Math.round(features.pitcherSuppression * 1000) / 1000,
+    pitcherDeterioration: Math.round(features.pitcherDeterioration * 1000) / 1000,
+  };
+
   const nowTs = Date.now();
   return {
     market: input.market,
@@ -433,11 +601,18 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
     hrFactors,
     contextScore: Math.round(ctxScore * 100) / 100,
     matchupTag,
+    featureScores,
+    computedBadges: badgeResult.positive,
+    computedRiskFlags: badgeResult.negative,
   };
 }
 
 export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   const hitsInput = { ...input, market: "hits" as MLBMarket };
+
+  const features = computeFullFeatureLayer(hitsInput);
+  const batSpeed = computeBatSpeedEngine(hitsInput);
+  const deterioration = computeSpecPitcherDeterioration(hitsInput);
 
   const currentHits = hitsInput.currentStatValue ?? 0;
   const playerAB = hitsInput.atBats > 0 ? hitsInput.atBats : hitsInput.completedAB;
@@ -454,6 +629,19 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   const windOut = hitsInput.weatherPark.windDirection === "out";
   const temperature = hitsInput.weatherPark.temperature ?? 70;
   adjustedRate = applyWeatherModifier(adjustedRate, windOut, temperature);
+
+  const featureAdj =
+    1 +
+    0.12 * (features.contactQuality - 0.5) +
+    0.08 * (features.handednessMatchup - 0.5) +
+    0.06 * (features.pitchBlendMatchup - 0.5) +
+    0.05 * (features.hotColdForm - 0.5) +
+    0.04 * (features.bvp - 0.5) +
+    0.03 * (batSpeed.batSpeedPowerScore - 0.5) +
+    0.06 * deterioration.hitsAllowed +
+    0.04 * features.bullpenFactor -
+    0.08 * features.pitcherSuppression;
+  adjustedRate *= Math.max(0.7, Math.min(1.3, featureAdj));
 
   const paDist = estimatePADistribution(
     hitsInput.inning,
@@ -588,6 +776,21 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
     evPct: Math.round((calibratedDominant / 100 - 0.5) * 100 * 10) / 10,
     contextScore: Math.round(computeStrongContextScore(hitsInput) * 100) / 100,
     matchupTag: hitsInput.pitcher.timesThrough >= 3 ? "vs 3rd Time Through" : hitsInput.pitcher.pitchCount >= 80 ? "vs Fatigue" : hitsInput.pitcher.throws ? `vs ${hitsInput.pitcher.throws}HP` : null,
+    featureScores: {
+      contactQuality: Math.round(features.contactQuality * 1000) / 1000,
+      batSpeedPower: Math.round(features.batSpeedPower * 1000) / 1000,
+      handednessMatchup: Math.round(features.handednessMatchup * 1000) / 1000,
+      pitchBlendMatchup: Math.round(features.pitchBlendMatchup * 1000) / 1000,
+      hotColdForm: Math.round(features.hotColdForm * 1000) / 1000,
+      parkEnv: Math.round(features.parkEnv * 1000) / 1000,
+      bvp: Math.round(features.bvp * 1000) / 1000,
+      lineupOpportunity: Math.round(features.lineupOpportunity * 1000) / 1000,
+      bullpenFactor: Math.round(features.bullpenFactor * 1000) / 1000,
+      pitcherSuppression: Math.round(features.pitcherSuppression * 1000) / 1000,
+      pitcherDeterioration: Math.round(features.pitcherDeterioration * 1000) / 1000,
+    },
+    computedBadges: computeBadges(hitsInput, features).positive,
+    computedRiskFlags: computeBadges(hitsInput, features).negative,
   };
 }
 
