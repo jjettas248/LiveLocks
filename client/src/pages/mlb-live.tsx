@@ -1096,7 +1096,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
         </div>
 
         <div className="flex items-center gap-3 px-3 py-1.5 border-b border-border/20 text-[10px] text-muted-foreground overflow-x-auto">
-          <span className="shrink-0">{game.pitcherAway?.split(" ").pop() ?? "TBD"} vs {game.pitcherHome?.split(" ").pop() ?? "TBD"}</span>
+          <span className="shrink-0">{game.pitcherAway?.split(" ").pop() || "Loading..."} vs {game.pitcherHome?.split(" ").pop() || "Loading..."}</span>
           {game.pitcherContext && (
             <>
               <span className={game.pitcherContext.pitchCount >= 85 ? "text-red-400 font-semibold" : ""}>{game.pitcherContext.pitchCount}P</span>
@@ -1190,13 +1190,13 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
               <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
             </span>
             <span className="text-xs font-semibold text-blue-400">
-              {game.status === "live" ? "Engine evaluating markets" : "Pre-game analysis available"}
+              {game.status === "live" ? "No qualified signals yet" : "Waiting for game start"}
             </span>
           </div>
           <p className="text-[10px] text-muted-foreground">
             {game.status === "live"
               ? "Select any batter below to run a manual calculation on their prop markets."
-              : "Select a batter below once the game starts to calculate prop probabilities."}
+              : "Signals will generate once the game begins and live data flows in."}
           </p>
         </div>
       )}
@@ -1322,29 +1322,69 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
         )}
 
         <div className="px-4 py-3 border-b border-border/30">
-          <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Contact Quality</div>
-          <div className="grid grid-cols-5 gap-2 text-xs">
-            <div className="bg-secondary/30 rounded-lg p-2 text-center">
-              <div className="text-[9px] text-muted-foreground">EV</div>
-              <div className="font-bold text-foreground">{player.exitVelocity != null ? `${player.exitVelocity}` : "—"}</div>
-            </div>
-            <div className="bg-secondary/30 rounded-lg p-2 text-center">
-              <div className="text-[9px] text-muted-foreground">Barrel%</div>
-              <div className="font-bold text-foreground">{player.barrelPct != null ? `${Math.round(player.barrelPct)}%` : "—"}</div>
-            </div>
-            <div className="bg-secondary/30 rounded-lg p-2 text-center">
-              <div className="text-[9px] text-muted-foreground">xBA</div>
-              <div className="font-bold text-foreground">{player.xBA != null ? `.${(player.xBA * 1000).toFixed(0).padStart(3, "0")}` : "—"}</div>
-            </div>
-            <div className="bg-secondary/30 rounded-lg p-2 text-center">
-              <div className="text-[9px] text-muted-foreground">xSLG</div>
-              <div className="font-bold text-foreground">{player.xSLG != null ? `.${(player.xSLG * 1000).toFixed(0).padStart(3, "0")}` : "—"}</div>
-            </div>
-            <div className="bg-secondary/30 rounded-lg p-2 text-center">
-              <div className="text-[9px] text-muted-foreground">Hard Hit</div>
-              <div className="font-bold text-foreground">{player.hardHitPct != null ? `${Math.round(player.hardHitPct)}%` : "—"}</div>
-            </div>
-          </div>
+          {(() => {
+            const hasLive = player.exitVelocity != null || player.hardHitPct != null || player.barrelPct != null;
+            const hasRecent = player.xBA != null || player.xSLG != null;
+            if (!hasLive && !hasRecent) {
+              return (
+                <div className="text-xs text-muted-foreground py-1">Contact quality not available yet</div>
+              );
+            }
+            return (
+              <>
+                {hasLive && (
+                  <div className="mb-2">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Contact Quality</span>
+                      <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-400">LIVE</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      {player.exitVelocity != null && (
+                        <div className="bg-secondary/30 rounded-lg p-2 text-center">
+                          <div className="text-[9px] text-muted-foreground">EV</div>
+                          <div className="font-bold text-foreground">{player.exitVelocity}</div>
+                        </div>
+                      )}
+                      {player.barrelPct != null && (
+                        <div className="bg-secondary/30 rounded-lg p-2 text-center">
+                          <div className="text-[9px] text-muted-foreground">Barrel%</div>
+                          <div className="font-bold text-foreground">{Math.round(player.barrelPct)}%</div>
+                        </div>
+                      )}
+                      {player.hardHitPct != null && (
+                        <div className="bg-secondary/30 rounded-lg p-2 text-center">
+                          <div className="text-[9px] text-muted-foreground">Hard Hit</div>
+                          <div className="font-bold text-foreground">{Math.round(player.hardHitPct)}%</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {hasRecent && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      {!hasLive && <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Contact Quality</span>}
+                      <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">RECENT FORM</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      {player.xBA != null && (
+                        <div className="bg-secondary/30 rounded-lg p-2 text-center">
+                          <div className="text-[9px] text-muted-foreground">xBA</div>
+                          <div className="font-bold text-foreground">.{(player.xBA * 1000).toFixed(0).padStart(3, "0")}</div>
+                        </div>
+                      )}
+                      {player.xSLG != null && (
+                        <div className="bg-secondary/30 rounded-lg p-2 text-center">
+                          <div className="text-[9px] text-muted-foreground">xSLG</div>
+                          <div className="font-bold text-foreground">.{(player.xSLG * 1000).toFixed(0).padStart(3, "0")}</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
 
         <div className="px-4 py-3 border-b border-border/30">
@@ -1364,26 +1404,38 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
         </div>
 
         <div className="px-4 py-3">
-          <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Game Info</div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-            <div>
-              <div className="text-muted-foreground text-[10px]">Score</div>
-              <div className="font-semibold text-foreground">
-                {game.status === "live" && game.awayScore != null && game.homeScore != null
-                  ? `${game.awayAbbr} ${game.awayScore} – ${game.homeAbbr} ${game.homeScore}` : "Pre-Game"}
+          <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Game Context</div>
+          <div className="space-y-2 text-xs">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 bg-secondary/30 rounded-lg px-3 py-1.5">
+                {game.status === "live" && game.awayScore != null && game.homeScore != null ? (
+                  <>
+                    <span className="font-bold text-foreground">{game.awayAbbr} {game.awayScore}</span>
+                    <span className="text-muted-foreground">–</span>
+                    <span className="font-bold text-foreground">{game.homeScore} {game.homeAbbr}</span>
+                    <span className="text-[9px] text-muted-foreground ml-1">{inningLabel(game)}</span>
+                  </>
+                ) : (
+                  <span className="font-semibold text-muted-foreground">Waiting for first pitch</span>
+                )}
               </div>
+              {game.status === "live" && (
+                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-400">LIVE</span>
+              )}
             </div>
-            <div>
-              <div className="text-muted-foreground text-[10px]">Venue</div>
-              <div className="font-semibold text-foreground">{game.venue ?? "—"}</div>
-            </div>
-            <div>
-              <div className="text-muted-foreground text-[10px]">Weather</div>
-              <div className="font-semibold text-foreground">{game.weatherSummary || "—"}</div>
-            </div>
-            <div>
-              <div className="text-muted-foreground text-[10px]">Pitcher</div>
-              <div className="font-semibold text-foreground">{game.pitcherName ?? "—"}</div>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="bg-secondary/20 rounded-lg px-2.5 py-1.5">
+                <div className="text-[9px] text-muted-foreground">Pitcher</div>
+                <div className="font-semibold text-foreground truncate">{game.pitcherName || "Pitchers loading..."}</div>
+              </div>
+              <div className="bg-secondary/20 rounded-lg px-2.5 py-1.5">
+                <div className="text-[9px] text-muted-foreground">Venue</div>
+                <div className="font-semibold text-foreground truncate">{game.venue ?? "—"}</div>
+              </div>
+              <div className="bg-secondary/20 rounded-lg px-2.5 py-1.5">
+                <div className="text-[9px] text-muted-foreground">Weather</div>
+                <div className="font-semibold text-foreground truncate">{game.weatherSummary || "Syncing..."}</div>
+              </div>
             </div>
           </div>
         </div>
