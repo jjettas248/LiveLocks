@@ -6,6 +6,7 @@ import type {
   MLBRecommendedSide,
   ProjectionLog,
 } from "./types";
+import { MARKET_PROBABILITY_CAPS } from "./types";
 import { getPlayer, getPlayerByName } from "./rosterService";
 import { mlbGameCache } from "./dataPullService";
 
@@ -131,8 +132,10 @@ function capConfidenceTier(
 
 function applyProbabilityCeiling(
   calibratedSided: number,
-  _market: MLBMarket
+  market: MLBMarket
 ): number {
+  const cap = MARKET_PROBABILITY_CAPS[market];
+  if (cap && calibratedSided > cap) return cap;
   return calibratedSided;
 }
 

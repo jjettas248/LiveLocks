@@ -1,0 +1,93 @@
+import type { MLBPropOutput, MLBMarket } from "./types";
+import { MARKET_PROJECTION_TOLERANCE, MARKET_PROBABILITY_CAPS } from "./types";
+
+export interface FirewallResult {
+  passed: boolean;
+  hardReject: boolean;
+  rejections: string[];
+  warnings: string[];
+  cappedOutput: MLBPropOutput;
+}
+
+export function runIntegrityFirewall(output: MLBPropOutput): FirewallResult {
+  const rejections: string[] = [];
+  const warnings: string[] = [];
+  const cappedOutput = { ...output };
+
+  if (!Number.isFinite(output.projection)) {
+    rejections.push(`projection not finite: ${output.projection}`);
+  }
+
+  if (!Number.isFinite(output.bookLine) || output.bookLine <= 0) {
+    rejections.push(`bookLine invalid: ${output.bookLine}`);
+  }
+
+  if (!Number.isFinite(output.calibratedProbabilityOver) || !Number.isFinite(output.calibratedProbabilityUnder)) {
+    rejections.push(`probability not finite: over=${output.calibratedProbabilityOver} under=${output.calibratedProbabilityUnder}`);
+  }
+
+  if (!Number.isFinite(output.edge)) {
+    rejections.push(`edge not finite: ${output.edge}`);
+  }
+
+  const ageMs = Date.now() - output.engineGeneratedAt;
+  if (ageMs > 600_000) {
+    rejections.push(`stale engine output: ${Math.round(ageMs / 1000)}s old`);
+  }
+
+  if (rejections.length > 0) {
+    return { passed: false, hardReject: true, rejections, warnings, cappedOutput };
+  }
+
+  const cap = MARKET_PROBABILITY_CAPS[output.market];
+  if (cap) {
+    if (cappedOutput.calibratedProbabilityOver > cap) {
+      cappedOutput.calibratedProbabilityOver = cap;
+      cappedOutput.calibratedProbabilityUnder = Math.max(2, 100 - cap);
+    }
+    if (cappedOutput.calibratedProbabilityUnder > cap) {
+      cappedOutput.calibratedProbabilityUnder = cap;
+      cappedOutput.calibratedProbabilityOver = Math.max(2, 100 - cap);
+    }
+    cappedOutput.calibratedProbability = Math.max(cappedOutput.calibratedProbabilityOver, cappedOutput.calibratedProbabilityUnder);
+
+    const impliedOver = cappedOutput.calibratedProbabilityOver / 100;
+    const impliedUnder = cappedOutput.calibratedProbabilityUnder / 100;
+    const bookImplied = output.bookImplied ?? 0.50;
+    const sidedImplied = cappedOutput.recommendedSide === "OVER" ? impliedOver : impliedUnder;
+    cappedOutput.edge = Math.round(((sidedImplied - bookImplied) / Math.max(bookImplied, 0.01)) * 100 * 100) / 100;
+    if (!Number.isFinite(cappedOutput.edge)) cappedOutput.edge = 0;
+  }
+
+  const tolerance = MARKET_PROJECTION_TOLERANCE[output.market] ?? 0.10;
+  if (cappedOutput.recommendedSide === "OVER" && cappedOutput.projection < cappedOutput.bookLine - tolerance) {
+    warnings.push(`side/projection tension: OVER but proj=${cappedOutput.projection.toFixed(2)} < line=${cappedOutput.bookLine} - tol=${tolerance}`);
+  }
+  if (cappedOutput.recommendedSide === "UNDER" && cappedOutput.projection > cappedOutput.bookLine + tolerance) {
+    warnings.push(`side/projection tension: UNDER but proj=${cappedOutput.projection.toFixed(2)} > line=${cappedOutput.bookLine} + tol=${tolerance}`);
+  }
+
+  if (cappedOutput.recommendedSide === "OVER" && cappedOutput.calibratedProbabilityOver < cappedOutput.calibratedProbabilityUnder) {
+    warnings.push(`side/probability tension after cap: OVER but P(over)=${cappedOutput.calibratedProbabilityOver.toFixed(1)} < P(under)=${cappedOutput.calibratedProbabilityUnder.toFixed(1)}`);
+  }
+  if (cappedOutput.recommendedSide === "UNDER" && cappedOutput.calibratedProbabilityUnder < cappedOutput.calibratedProbabilityOver) {
+    warnings.push(`side/probability tension after cap: UNDER but P(under)=${cappedOutput.calibratedProbabilityUnder.toFixed(1)} < P(over)=${cappedOutput.calibratedProbabilityOver.toFixed(1)}`);
+  }
+
+  return {
+    passed: rejections.length === 0 && warnings.length === 0,
+    hardReject: rejections.length > 0,
+    rejections,
+    warnings,
+    cappedOutput,
+  };
+}
+
+export function logFirewallResult(gameId: string, playerName: string, market: MLBMarket, result: FirewallResult): void {
+  for (const r of result.rejections) {
+    console.warn(`[MLB FIREWALL REJECT][${gameId}] ${playerName}/${market} — ${r}`);
+  }
+  for (const w of result.warnings) {
+    console.log(`[MLB FIREWALL WARN][${gameId}] ${playerName}/${market} — ${w}`);
+  }
+}

@@ -29,6 +29,8 @@ import { estimateRemainingPA, estimatePitcherRemainingBF } from "./paEstimator";
 import { calculateMLBPropEdge, hasRealOdds, canShowSignal } from "./markets";
 import { recordMLBDiagnostic } from "./diagnostics";
 import type { MLBPropInput, MLBPropOutput, MLBMarket, MLBQualifiedSignal } from "./types";
+import { MARKET_QUALIFY_FLOOR } from "./types";
+import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
 import { computeSignalScore, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible } from "./signalScore";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
 
@@ -421,8 +423,9 @@ export class LiveGameOrchestrator {
     const sideProbability = output.recommendedSide === "OVER"
       ? output.calibratedProbabilityOver
       : output.calibratedProbabilityUnder;
-    if (sideProbability < 60) {
-      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — prob=${sideProbability.toFixed(1)} < 60 gate`);
+    const qualifyFloor = MARKET_QUALIFY_FLOOR[output.market] ?? 60;
+    if (sideProbability < qualifyFloor) {
+      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — prob=${sideProbability.toFixed(1)} < ${qualifyFloor} gate`);
       return null;
     }
 
@@ -491,6 +494,20 @@ export class LiveGameOrchestrator {
       formIndicator: output.formIndicator,
       isExperimental: output.isExperimental,
       engineGeneratedAt: output.engineGeneratedAt,
+      badges: [],
+      riskFlags: [],
+      drivers: {
+        edge: output.edge,
+        probability: output.calibratedProbability,
+        projection: output.projection,
+        formScore: output.formScore,
+        contextScore: output.contextScore,
+      },
+      timestamps: {
+        engineGeneratedAt: new Date(output.engineGeneratedAt).toISOString(),
+        oddsUpdatedAt: new Date(output.oddsUpdatedAt).toISOString(),
+        gameStateUpdatedAt: new Date(output.projectionUpdatedAt).toISOString(),
+      },
     };
 
     console.log(`[MLB QUALIFY OK][${gameId}] ${output.playerName}/${output.market} side=${output.recommendedSide} score=${scoreBreakdown.total} tier=${scoreBreakdown.confidenceTier} tags=[${signalTags.join(",")}]`);
@@ -549,6 +566,20 @@ export class LiveGameOrchestrator {
       formIndicator: output.formIndicator,
       isExperimental: output.isExperimental,
       engineGeneratedAt: output.engineGeneratedAt,
+      badges: [],
+      riskFlags: [],
+      drivers: {
+        edge: output.edge,
+        probability: output.calibratedProbability,
+        projection: output.projection,
+        formScore: output.formScore,
+        contextScore: output.contextScore,
+      },
+      timestamps: {
+        engineGeneratedAt: new Date(output.engineGeneratedAt).toISOString(),
+        oddsUpdatedAt: new Date(output.oddsUpdatedAt).toISOString(),
+        gameStateUpdatedAt: new Date(output.projectionUpdatedAt).toISOString(),
+      },
     };
   }
 
@@ -798,8 +829,20 @@ export class LiveGameOrchestrator {
         })}`);
 
         try {
-          const output = calculateMLBPropEdge(input);
+          const rawOutput = calculateMLBPropEdge(input);
           marketsEvaluated++;
+
+          const fwResult = runIntegrityFirewall(rawOutput);
+          logFirewallResult(gameId, rawOutput.playerName, market, fwResult);
+
+          if (fwResult.hardReject) {
+            signalsRejected++;
+            console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "firewall_hard_reject" }`);
+            continue;
+          }
+
+          const output = fwResult.cappedOutput;
+
           pLog(gameId, "engineOutput", { player: output.playerName, market: output.market, edge: output.edge, tier: output.confidenceTier, suppressed: output.suppressed });
           recordMLBDiagnostic(output);
 
@@ -959,7 +1002,19 @@ export class LiveGameOrchestrator {
         }
 
         try {
-          const output = calculateMLBPropEdge(input);
+          const rawOutput = calculateMLBPropEdge(input);
+
+          const fwResult = runIntegrityFirewall(rawOutput);
+          logFirewallResult(gameId, rawOutput.playerName, market, fwResult);
+
+          if (fwResult.hardReject) {
+            signalsRejected++;
+            console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", reason: "firewall_hard_reject" }`);
+            continue;
+          }
+
+          const output = fwResult.cappedOutput;
+
           pLog(gameId, "engineOutput:pitcher", { player: output.playerName, market: output.market, edge: output.edge, tier: output.confidenceTier });
           recordMLBDiagnostic(output);
 

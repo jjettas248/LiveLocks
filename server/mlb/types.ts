@@ -95,6 +95,39 @@ export const MARKET_PROBABILITY_CEILINGS: Record<"core" | "experimental", number
   experimental: 85,
 };
 
+export const MARKET_PROBABILITY_CAPS: Record<MLBMarket, number> = {
+  hits: 78,
+  total_bases: 74,
+  home_runs: 42,
+  hrr: 74,
+  pitcher_strikeouts: 79,
+  pitcher_outs: 80,
+  walks_allowed: 72,
+  hits_allowed: 77,
+};
+
+export const MARKET_PROJECTION_TOLERANCE: Record<MLBMarket, number> = {
+  hits: 0.08,
+  total_bases: 0.15,
+  home_runs: 0.05,
+  hrr: 0.15,
+  pitcher_strikeouts: 0.30,
+  pitcher_outs: 0.50,
+  walks_allowed: 0.20,
+  hits_allowed: 0.30,
+};
+
+export const MARKET_QUALIFY_FLOOR: Record<MLBMarket, number> = {
+  hits: 60,
+  total_bases: 60,
+  home_runs: 35,
+  hrr: 58,
+  pitcher_strikeouts: 60,
+  pitcher_outs: 60,
+  walks_allowed: 58,
+  hits_allowed: 58,
+};
+
 export type ContactQualityTier = "ELITE" | "HARD" | "MEDIUM" | "SOFT";
 
 export type MLBConfidenceTier = "ELITE" | "STRONG" | "LEAN" | "NO_EDGE";
@@ -427,4 +460,13 @@ export interface MLBQualifiedSignal {
   formIndicator: FormIndicator;
   isExperimental: boolean;
   engineGeneratedAt: number;
+
+  badges: string[];
+  riskFlags: string[];
+  drivers: Record<string, number>;
+  timestamps: {
+    engineGeneratedAt: string;
+    oddsUpdatedAt: string;
+    gameStateUpdatedAt: string;
+  };
 }
