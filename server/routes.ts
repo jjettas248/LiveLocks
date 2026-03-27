@@ -98,6 +98,16 @@ export async function registerRoutes(
 
   // ── Admin Routes ──────────────────────────────────────────────────────────
 
+  app.get("/api/admin/churn", requireAdmin, async (_req, res) => {
+    try {
+      const churned = await storage.getChurnedUsers();
+      return res.json(churned);
+    } catch (err) {
+      console.error("[admin/churn]", err);
+      return res.status(500).json({ error: "Failed to fetch churn data" });
+    }
+  });
+
   app.get("/api/admin/users", requireAdmin, async (_req, res) => {
     try {
       const allUsers = await storage.getAllUsers();

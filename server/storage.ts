@@ -28,7 +28,7 @@ import {
   type PersistedPlay,
   type PlayStats,
 } from "@shared/schema";
-import { eq, and, desc, isNull, sql, lt, lte, inArray, ne } from "drizzle-orm";
+import { eq, and, desc, isNull, isNotNull, sql, lt, lte, inArray, ne } from "drizzle-orm";
 
 const HIGH_VOLATILITY_TEAMS = new Set(["BKN", "WAS", "CHA", "POR", "UTA", "DET"]);
 
@@ -142,6 +142,8 @@ export interface IStorage {
   cleanDuplicateAlerts(): Promise<{ removed: number; remaining: number }>;
   hasProcessedStripeEvent(eventId: string): Promise<boolean>;
   recordStripeEvent(eventId: string): Promise<void>;
+  recordChurn(userId: number, previousTier: string | null): Promise<void>;
+  getChurnedUsers(): Promise<Array<{ id: number; email: string; churnedAt: Date; churnedFromTier: string | null; createdAt: Date | null }>>;
 }
 
 // ─── Usage compression for blowout games ──────────────────────────────────
@@ -1472,6 +1474,28 @@ export class DatabaseStorage implements IStorage {
 
   async recordStripeEvent(eventId: string): Promise<void> {
     await db.insert(stripeEvents).values({ id: eventId }).onConflictDoNothing();
+  }
+
+  async recordChurn(userId: number, previousTier: string | null): Promise<void> {
+    await db.update(users).set({
+      churnedAt: new Date(),
+      churnedFromTier: previousTier,
+    }).where(eq(users.id, userId));
+  }
+
+  async getChurnedUsers(): Promise<Array<{ id: number; email: string; churnedAt: Date; churnedFromTier: string | null; createdAt: Date | null }>> {
+    const rows = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        churnedAt: users.churnedAt,
+        churnedFromTier: users.churnedFromTier,
+        createdAt: users.createdAt,
+      })
+      .from(users)
+      .where(isNotNull(users.churnedAt))
+      .orderBy(desc(users.churnedAt));
+    return rows as Array<{ id: number; email: string; churnedAt: Date; churnedFromTier: string | null; createdAt: Date | null }>;
   }
 }
 

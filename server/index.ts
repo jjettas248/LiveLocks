@@ -243,6 +243,17 @@ app.use((req, res, next) => {
     console.warn("[startup] Schema migration warning (persisted-plays-snapshot):", err.message);
   }
 
+  try {
+    await pool.query(`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS churned_at timestamp,
+        ADD COLUMN IF NOT EXISTS churned_from_tier text;
+    `);
+    console.log("[startup] Schema migration: churn tracking columns ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (churn-tracking):", err.message);
+  }
+
   // Backfill: mark pre-existing users (no verification token) as email-verified
   // so they are not locked out by the new emailVerified gate.
   try {

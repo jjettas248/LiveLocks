@@ -36,6 +36,8 @@ export const users = pgTable("users", {
   sentProWelcome: boolean("sent_pro_welcome").notNull().default(false),
   sentAllSportsWelcome: boolean("sent_all_sports_welcome").notNull().default(false),
   unlockedGameIdsToday: text("unlocked_game_ids_today").notNull().default("[]"),
+  churnedAt: timestamp("churned_at"),
+  churnedFromTier: text("churned_from_tier"),
 });
 
 export const stripeEvents = pgTable("stripe_events", {

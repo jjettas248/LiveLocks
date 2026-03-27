@@ -112,7 +112,7 @@ function getNextResetDisplay(timeStr: string): string {
 export default function AdminPage() {
   const { user, isLoading: authLoading, logout } = useAuth();
   const [, navigate] = useLocation();
-  const [activeTab, setActiveTab] = useState<"users" | "feedback" | "mlb" | "calibration">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "feedback" | "mlb" | "calibration" | "churn">("users");
   const [tierLoadingId, setTierLoadingId] = useState<number | null>(null);
   const { toast } = useToast();
   const [resetTime, setResetTime] = useState("06:00");
@@ -218,6 +218,12 @@ export default function AdminPage() {
   const { data: allFeedback, isLoading: feedbackLoading } = useQuery<FeedbackRow[]>({
     queryKey: ["/api/admin/feedback"],
     enabled: !!user?.isAdmin && activeTab === "feedback",
+  });
+
+  type ChurnUser = { id: number; email: string; churnedAt: string; churnedFromTier: string | null; createdAt: string | null };
+  const { data: churnedUsers, isLoading: churnLoading } = useQuery<ChurnUser[]>({
+    queryKey: ["/api/admin/churn"],
+    enabled: !!user?.isAdmin && activeTab === "churn",
   });
 
   const handleTierChange = async (userId: number, newTierKey: string) => {
@@ -451,6 +457,14 @@ export default function AdminPage() {
             className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${activeTab === "mlb" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
           >
             MLB Testing
+          </button>
+          <button
+            data-testid="tab-churn"
+            onClick={() => setActiveTab("churn")}
+            className={`flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${activeTab === "churn" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+          >
+            <AlertCircle className="w-3.5 h-3.5" />
+            Churn
           </button>
           <button
             data-testid="tab-calibration"
@@ -789,6 +803,77 @@ export default function AdminPage() {
         {activeTab === "mlb" && (
           <div data-testid="panel-mlb-testing">
             <MLBAdminTab />
+          </div>
+        )}
+
+        {/* Churn Tab */}
+        {activeTab === "churn" && (
+          <div data-testid="panel-churn" className="bg-card border border-border rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-border/60">
+              <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-destructive" /> Churned Users
+              </h2>
+              <p className="text-xs text-muted-foreground mt-1">Users who cancelled their paid subscription</p>
+            </div>
+            {churnLoading ? (
+              <div className="p-8 flex justify-center"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
+            ) : !churnedUsers?.length ? (
+              <div className="p-8 text-center text-sm text-muted-foreground">No churned users yet</div>
+            ) : (
+              <>
+                <div className="px-4 py-2 border-b border-border/40 flex items-center gap-4 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-destructive" />
+                    <span className="font-medium">{churnedUsers.length} total churned</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-yellow-500" />
+                    <span className="font-medium">{churnedUsers.filter(u => u.churnedFromTier === "elite").length} from All Sports</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-primary" />
+                    <span className="font-medium">{churnedUsers.filter(u => u.churnedFromTier === "all").length} from Pro</span>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border/40 bg-muted/30">
+                        <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Email</th>
+                        <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Previous Tier</th>
+                        <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Churned</th>
+                        <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Signed Up</th>
+                        <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Lifetime</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {churnedUsers.map((u) => {
+                        const churnDate = new Date(u.churnedAt);
+                        const signupDate = u.createdAt ? new Date(u.createdAt) : null;
+                        const lifetimeDays = signupDate ? Math.round((churnDate.getTime() - signupDate.getTime()) / 86400000) : null;
+                        return (
+                          <tr key={u.id} data-testid={`churn-row-${u.id}`} className="border-b border-border/20 hover:bg-muted/20 transition-colors">
+                            <td className="px-4 py-2.5 font-medium text-foreground">{u.email}</td>
+                            <td className="px-4 py-2.5">
+                              <TierBadge tier={u.churnedFromTier} />
+                            </td>
+                            <td className="px-4 py-2.5 text-muted-foreground tabular-nums">
+                              {churnDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                            </td>
+                            <td className="px-4 py-2.5 text-muted-foreground tabular-nums">
+                              {signupDate ? signupDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}
+                            </td>
+                            <td className="px-4 py-2.5 text-muted-foreground tabular-nums">
+                              {lifetimeDays != null ? `${lifetimeDays}d` : "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
         )}
 

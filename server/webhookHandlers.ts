@@ -1,6 +1,6 @@
 import { getStripeSync, getUncachableStripeClient } from "./stripeClient";
 import { storage } from "./storage";
-import { sendProWelcomeEmail, sendAllSportsWelcomeEmail, sendPaymentIssueEmail } from "./email";
+import { sendProWelcomeEmail, sendAllSportsWelcomeEmail, sendPaymentIssueEmail, sendChurnEmail } from "./email";
 import { resolveTierFromSubscription } from "./utils/resolveTier";
 
 const HANDLED_EVENTS = new Set([
@@ -81,14 +81,11 @@ export class WebhookHandlers {
 
     if (!HANDLED_EVENTS.has(event.type)) return;
 
-    // DB-backed idempotency: guarantees every Stripe event is processed exactly once,
-    // across server restarts and duplicate deliveries.
     const alreadyProcessed = await storage.hasProcessedStripeEvent(event.id);
     if (alreadyProcessed) {
       console.log("[webhook] Skipping duplicate event", { id: event.id, type: event.type });
       return;
     }
-    await storage.recordStripeEvent(event.id);
 
     console.log("[STRIPE EVENT] received", { type: event.type, id: event.id });
 
@@ -143,12 +140,16 @@ export class WebhookHandlers {
         if (customerId) {
           const user = await storage.getUserByStripeCustomerId(customerId);
           if (user) {
+            const previousTier = user.subscriptionTier ?? resolveTierFromSubscription(subscription);
             await storage.setUserSubscriptionTier(user.id, null);
-            console.log("[PLAN UPDATE]", { userId: user.id, tier: null, event: "subscription.deleted" });
-            sendPaymentIssueEmail(user.email).catch(console.error);
+            await storage.recordChurn(user.id, previousTier);
+            console.log("[CHURN]", { userId: user.id, email: user.email, previousTier, event: "subscription.deleted" });
+            sendChurnEmail(user.email, previousTier ?? "subscription").catch(console.error);
           }
         }
       }
+
+      await storage.recordStripeEvent(event.id);
     } catch (err: any) {
       console.error("[webhook] Custom event handler error:", err.message);
     }
