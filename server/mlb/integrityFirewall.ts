@@ -60,18 +60,34 @@ export function runIntegrityFirewall(output: MLBPropOutput): FirewallResult {
   }
 
   const tolerance = MARKET_PROJECTION_TOLERANCE[output.market] ?? 0.10;
+
   if (cappedOutput.recommendedSide === "OVER" && cappedOutput.projection < cappedOutput.bookLine - tolerance) {
     warnings.push(`side/projection tension: OVER but proj=${cappedOutput.projection.toFixed(2)} < line=${cappedOutput.bookLine} - tol=${tolerance}`);
+    cappedOutput.recommendedSide = cappedOutput.projection > cappedOutput.bookLine + tolerance ? "OVER"
+      : cappedOutput.projection < cappedOutput.bookLine - tolerance ? "UNDER"
+      : "NO_EDGE" as any;
+    if (cappedOutput.recommendedSide === "UNDER") {
+      warnings.push(`firewall corrected side from OVER → UNDER based on projection`);
+    } else if (cappedOutput.recommendedSide === "NO_EDGE") {
+      cappedOutput.confidenceTier = "NO_EDGE";
+      warnings.push(`firewall corrected side to NO_EDGE — projection within tolerance`);
+    }
   }
   if (cappedOutput.recommendedSide === "UNDER" && cappedOutput.projection > cappedOutput.bookLine + tolerance) {
     warnings.push(`side/projection tension: UNDER but proj=${cappedOutput.projection.toFixed(2)} > line=${cappedOutput.bookLine} + tol=${tolerance}`);
+    cappedOutput.recommendedSide = "OVER" as any;
+    warnings.push(`firewall corrected side from UNDER → OVER based on projection`);
   }
 
   if (cappedOutput.recommendedSide === "OVER" && cappedOutput.calibratedProbabilityOver < cappedOutput.calibratedProbabilityUnder) {
     warnings.push(`side/probability tension after cap: OVER but P(over)=${cappedOutput.calibratedProbabilityOver.toFixed(1)} < P(under)=${cappedOutput.calibratedProbabilityUnder.toFixed(1)}`);
+    cappedOutput.recommendedSide = "UNDER" as any;
+    warnings.push(`firewall corrected side to match probability direction`);
   }
   if (cappedOutput.recommendedSide === "UNDER" && cappedOutput.calibratedProbabilityUnder < cappedOutput.calibratedProbabilityOver) {
     warnings.push(`side/probability tension after cap: UNDER but P(under)=${cappedOutput.calibratedProbabilityUnder.toFixed(1)} < P(over)=${cappedOutput.calibratedProbabilityOver.toFixed(1)}`);
+    cappedOutput.recommendedSide = "OVER" as any;
+    warnings.push(`firewall corrected side to match probability direction`);
   }
 
   return {
