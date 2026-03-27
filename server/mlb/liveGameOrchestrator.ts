@@ -25,7 +25,7 @@ import {
   mlbPlayerCache,
   type GameStateCache,
 } from "./dataPullService";
-import { estimateRemainingPA } from "./paEstimator";
+import { estimateRemainingPA, estimatePitcherRemainingBF } from "./paEstimator";
 import { calculateMLBPropEdge, hasRealOdds, canShowSignal } from "./markets";
 import { recordMLBDiagnostic } from "./diagnostics";
 import type { MLBPropInput, MLBPropOutput, MLBMarket, MLBQualifiedSignal } from "./types";
@@ -840,11 +840,13 @@ export class LiveGameOrchestrator {
       const pitcherCtx = pitcherCtxCache?.byPitcherId?.[pitcherToEval.playerId];
 
       for (const market of PITCHER_MARKETS) {
-        const { remainingPA, remainingAB } = estimateRemainingPA(
+        const currentPitchCount = pitcherCtx?.pitchCount ?? state.pitchCount ?? 0;
+        const { remainingBF, remainingIP } = estimatePitcherRemainingBF(
           state.inning,
-          state.isTopInning,
-          5 // neutral batting order slot for pitcher PA estimate
+          currentPitchCount
         );
+        const remainingPA = remainingBF;
+        const remainingAB = remainingBF;
 
         console.log(`[MLB MARKET INPUT][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", playerId: "${pitcherToEval.playerId}", inning: ${state.inning} }`);
 

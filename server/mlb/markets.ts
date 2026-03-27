@@ -107,10 +107,11 @@ function determineConfidenceTier(edge: number): MLBConfidenceTier {
 
 function determineSide(
   calibratedProb: number,
-  tier: MLBConfidenceTier
+  tier: MLBConfidenceTier,
+  isOverFavored: boolean = true
 ): MLBRecommendedSide {
   if (tier === "NO_EDGE") return "NO_EDGE";
-  return calibratedProb >= 50 ? "OVER" : "UNDER";
+  return isOverFavored ? "OVER" : "UNDER";
 }
 
 const CONFIDENCE_RANK: Record<MLBConfidenceTier, number> = {
@@ -334,13 +335,13 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
   const bookImplied = computeBookImplied(input, isOverFavored);
   const edge = calibratedSided - bookImplied;
   let confidenceTier = determineConfidenceTier(edge);
-  let recommendedSide = determineSide(calibratedSided, confidenceTier);
+  let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
 
   const warnings = [...projResult.warnings];
 
   if (isExperimental) {
     confidenceTier = capConfidenceTier(confidenceTier, EXPERIMENTAL_CONFIDENCE_CEILING);
-    recommendedSide = determineSide(calibratedSided, confidenceTier);
+    recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
     warnings.push(`${input.market} is experimental — confidence capped at ${EXPERIMENTAL_CONFIDENCE_CEILING}`);
   }
 
@@ -504,7 +505,7 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   const bookImplied = computeBookImplied(hitsInput, isOverFavored);
   const edge = calibratedSided - bookImplied;
   let confidenceTier = determineConfidenceTier(edge);
-  let recommendedSide = determineSide(calibratedSided, confidenceTier);
+  let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
 
   const adjustedProjection = clampProjection(expectedHits + currentHits);
 
@@ -513,7 +514,7 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
 
   if (isExperimental) {
     confidenceTier = capConfidenceTier(confidenceTier, EXPERIMENTAL_CONFIDENCE_CEILING);
-    recommendedSide = determineSide(calibratedSided, confidenceTier);
+    recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
     warnings.push(`hits is experimental — confidence capped at ${EXPERIMENTAL_CONFIDENCE_CEILING}`);
   }
 

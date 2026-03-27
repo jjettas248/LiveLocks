@@ -47,25 +47,24 @@ function computeBaseValue(input: MLBPropInput, market: MLBMarket): number {
     }
     case "pitcher_strikeouts": {
       const kPer9 = input.pitcher.kPer9 ?? 8.0;
-      const estimatedBFRemaining = remainingAB > 0 ? remainingAB : 10;
-      return currentStatValue + (kPer9 / 9) * (estimatedBFRemaining / 4.3);
+      const estimatedIPRemaining = remainingAB / 4.3;
+      return currentStatValue + (kPer9 / 9) * estimatedIPRemaining;
     }
     case "hits_allowed": {
       const whip = input.pitcher.whip ?? 1.30;
       const hitsPerIP = whip * 0.72;
-      const estimatedIPRemaining = Math.max(0, (remainingAB / 4.3));
+      const estimatedIPRemaining = remainingAB / 4.3;
       return currentStatValue + hitsPerIP * estimatedIPRemaining;
     }
     case "walks_allowed": {
       const whipW = input.pitcher.whip ?? 1.30;
       const walksPerIP = whipW * 0.28;
-      const estimatedIPRemainingW = Math.max(0, (remainingAB / 4.3));
+      const estimatedIPRemainingW = remainingAB / 4.3;
       return currentStatValue + walksPerIP * estimatedIPRemainingW;
     }
     case "pitcher_outs": {
       const outsPerBF = seasonAvg > 0 ? seasonAvg : 0.65;
-      const estimatedBFRemaining = remainingAB > 0 ? remainingAB : 10;
-      return currentStatValue + outsPerBF * estimatedBFRemaining;
+      return currentStatValue + outsPerBF * remainingAB;
     }
     case "home_runs": {
       const hrRate = seasonAvg > 0 ? seasonAvg : 0.035;

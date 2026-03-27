@@ -34,3 +34,27 @@ export function estimateRemainingPA(
 
   return { remainingPA: parseFloat(remainingPA.toFixed(2)), remainingAB };
 }
+
+export function estimatePitcherRemainingBF(
+  inning: number,
+  pitchCount: number,
+  expectedIP: number = 5.5
+): { remainingBF: number; remainingIP: number } {
+  const BF_PER_INNING = 4.3;
+  const completedInnings = Math.max(0, inning - 1);
+  const remainingIP = Math.max(0.5, expectedIP - completedInnings);
+
+  let adjustedIP = remainingIP;
+  if (pitchCount > 90) {
+    adjustedIP *= 0.7;
+  } else if (pitchCount > 75) {
+    adjustedIP *= 0.85;
+  }
+
+  const remainingBF = Math.max(3, Math.round(adjustedIP * BF_PER_INNING));
+
+  return {
+    remainingBF,
+    remainingIP: parseFloat(adjustedIP.toFixed(1)),
+  };
+}

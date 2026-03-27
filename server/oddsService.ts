@@ -839,6 +839,7 @@ const MLB_MARKET_MAP: Record<string, string> = {
   hits: "batter_hits",
   total_bases: "batter_total_bases",
   home_runs: "batter_home_runs",
+  hr: "batter_home_runs",
   hrr: "batter_hits_runs_rbis",
   pitcher_strikeouts: "pitcher_strikeouts",
   pitcher_k: "pitcher_strikeouts",
