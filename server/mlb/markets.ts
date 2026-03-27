@@ -404,14 +404,14 @@ function applyMarketFeatureWeights(
     case "home_runs": {
       const barrel = input.contactQuality.barrelRateProxySeason ?? 0.05;
       const hrSkill =
-        0.28 * Math.min(1, barrel / 0.12) +
-        0.18 * features.contactQuality +
-        0.16 * ((input.contactQuality.exitVelocity ?? 88) > 95 ? 0.7 : 0.35) +
-        0.16 * batSpeed.batSpeedPowerScore +
+        0.24 * Math.min(1, barrel / 0.12) +
+        0.16 * features.contactQuality +
+        0.14 * ((input.contactQuality.exitVelocity ?? 88) > 95 ? 0.7 : 0.35) +
+        0.20 * batSpeed.batSpeedPowerScore +
         0.10 * computeSpecParkEnv(input, "hr") +
         0.06 * features.handednessMatchup +
-        0.04 * features.pitchBlendMatchup +
-        0.02 * features.hotColdForm;
+        0.06 * features.pitchBlendMatchup +
+        0.04 * features.hotColdForm;
       const liveHRAdj =
         1 +
         0.25 * deterioration.hrAllowed +

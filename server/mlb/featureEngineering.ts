@@ -843,16 +843,20 @@ export function computeSpecContactQuality(input: MLBPropInput): number {
     recentContactForm = normalize01(hardHits / priorABs.length, 0, 0.6);
   }
 
+  const batSpeedData = computeBatSpeedEngine(input);
+  const batSpeedAdjusted = batSpeedData.batSpeedPowerScore;
+
   const score =
-    0.22 * evLaSurface +
-    0.16 * xBASkill +
-    0.14 * xwOBASkill +
-    0.14 * barrelScore +
-    0.10 * hardHitScore +
-    0.08 * sweetSpotScore +
-    0.08 * ev50Score +
+    0.20 * evLaSurface +
+    0.14 * xBASkill +
+    0.13 * xwOBASkill +
+    0.13 * barrelScore +
+    0.10 * batSpeedAdjusted +
+    0.09 * hardHitScore +
+    0.07 * sweetSpotScore +
+    0.07 * ev50Score +
     0.04 * adjustedEVScore +
-    0.04 * recentContactForm;
+    0.03 * recentContactForm;
 
   return clamp(score, 0, 1);
 }
