@@ -775,3 +775,560 @@ export function meetsHRQualificationGate(input: MLBPropInput): { passes: boolean
   const factors = computeHRQualifyingFactors(input);
   return { passes: factors.count >= HR_MIN_QUALIFYING_FACTORS, factors };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SPEC-COMPLIANT FEATURE LAYER (Phase 2)
+// All scores normalized to [0, 1] for use as market engine inputs
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const LEAGUE_AVG_BAT_SPEED = 72.0;
+const BAT_SPEED_STD_DEV = 4.5;
+const LEAGUE_AVG_FAST_SWING_RATE = 0.45;
+const FAST_SWING_STD_DEV = 0.12;
+
+function sigmoid(x: number): number {
+  return 1 / (1 + Math.exp(-x));
+}
+
+function clamp(val: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, val));
+}
+
+function normalize01(val: number, min: number, max: number): number {
+  if (max <= min) return 0.5;
+  return clamp((val - min) / (max - min), 0, 1);
+}
+
+export interface FeatureLayer {
+  contactQuality: number;
+  batSpeedPower: number;
+  batSpeedMultiplier: number;
+  handednessMatchup: number;
+  pitchBlendMatchup: number;
+  hotColdForm: number;
+  parkEnv: number;
+  bvp: number;
+  lineupOpportunity: number;
+  bullpenFactor: number;
+  pitcherSuppression: number;
+  pitcherDeterioration: number;
+}
+
+export function computeSpecContactQuality(input: MLBPropInput): number {
+  const cq = input.contactQuality;
+  const ev = cq.exitVelocity ?? 88;
+  const hhr = cq.hardHitRateSeason ?? 0.30;
+  const barrel = cq.barrelRateProxySeason ?? 0.05;
+  const xBA = cq.xBA ?? 0.250;
+  const xSLG = cq.xSLG ?? 0.400;
+
+  const la = cq.launchAngle ?? 12;
+  const inSweetSpot = la >= 10 && la <= 30;
+  const sweetSpotScore = inSweetSpot ? normalize01(la, 10, 25) : 0.2;
+
+  const evLaSurface = normalize01(ev, 80, 110) * (inSweetSpot ? 1.0 : 0.6);
+
+  const xBASkill = normalize01(xBA, 0.200, 0.320);
+  const xwOBASkill = normalize01(xSLG, 0.300, 0.550);
+  const barrelScore = normalize01(barrel, 0.02, 0.15);
+  const hardHitScore = normalize01(hhr, 0.25, 0.55);
+
+  const ev50Score = normalize01(ev, 85, 100);
+  const adjustedEVScore = normalize01(ev, 88, 105);
+
+  let recentContactForm = 0.5;
+  const priorABs = cq.priorABResults;
+  if (priorABs.length > 0) {
+    const hardHits = priorABs.filter((ab) => (ab.exitVelocity ?? 0) >= 95).length;
+    recentContactForm = normalize01(hardHits / priorABs.length, 0, 0.6);
+  }
+
+  const score =
+    0.22 * evLaSurface +
+    0.16 * xBASkill +
+    0.14 * xwOBASkill +
+    0.14 * barrelScore +
+    0.10 * hardHitScore +
+    0.08 * sweetSpotScore +
+    0.08 * ev50Score +
+    0.04 * adjustedEVScore +
+    0.04 * recentContactForm;
+
+  return clamp(score, 0, 1);
+}
+
+export function computeBatSpeedEngine(input: MLBPropInput): {
+  batSpeedPowerScore: number;
+  batSpeedMultiplier: number;
+  fastSwingMultiplier: number;
+  batSpeedZ: number;
+  isConditionallyAmplified: boolean;
+} {
+  const ev = input.contactQuality.exitVelocity ?? 88;
+  const hhr = input.contactQuality.hardHitRateSeason ?? 0.30;
+  const barrel = input.contactQuality.barrelRateProxySeason ?? 0.05;
+
+  const estimatedBatSpeed = 55 + (ev - 80) * 0.57;
+  const batSpeed = clamp(estimatedBatSpeed, 60, 85);
+  const fastSwingRate = clamp(hhr * 0.8 + barrel * 0.5, 0.2, 0.8);
+
+  const batSpeedZ = clamp((batSpeed - LEAGUE_AVG_BAT_SPEED) / BAT_SPEED_STD_DEV, -2, 2);
+  const fastSwingZ = clamp((fastSwingRate - LEAGUE_AVG_FAST_SWING_RATE) / FAST_SWING_STD_DEV, -2, 2);
+
+  const batSpeedMultiplier = 1 + 0.12 * Math.tanh(batSpeedZ);
+  const fastSwingMultiplier = 1 + 0.08 * Math.tanh(fastSwingZ);
+
+  let batSpeedPowerScore = 0.65 * sigmoid(batSpeedZ) + 0.35 * sigmoid(fastSwingZ);
+
+  const hasStrongContact = barrel >= 0.08 || ev >= 95 || hhr >= 0.40;
+  const hasWeakContact = ev < 88 && hhr < 0.28;
+  const isConditionallyAmplified = hasStrongContact;
+
+  if (hasWeakContact) {
+    batSpeedPowerScore *= 0.45;
+  } else if (!hasStrongContact) {
+    batSpeedPowerScore *= 0.55;
+  }
+
+  return {
+    batSpeedPowerScore: clamp(batSpeedPowerScore, 0, 1),
+    batSpeedMultiplier,
+    fastSwingMultiplier,
+    batSpeedZ,
+    isConditionallyAmplified,
+  };
+}
+
+export function computeSpecHandednessMatchup(input: MLBPropInput): number {
+  const batterHand = input.batterHand;
+  const pitcherThrows = input.pitcherThrows ?? input.pitcher.throws;
+
+  let batterSplitAdvantage = 0.5;
+  if (batterHand && pitcherThrows) {
+    if (batterHand === "S") {
+      batterSplitAdvantage = 0.58;
+    } else if (
+      (batterHand === "R" && pitcherThrows === "L") ||
+      (batterHand === "L" && pitcherThrows === "R")
+    ) {
+      batterSplitAdvantage = 0.68;
+    } else {
+      batterSplitAdvantage = 0.35;
+    }
+  }
+
+  let pitcherAllowedSplitWeakness = 0.5;
+  if (pitcherThrows && batterHand) {
+    const era = input.pitcher.era ?? 4.0;
+    if (
+      (batterHand === "L" && pitcherThrows === "R") ||
+      (batterHand === "R" && pitcherThrows === "L")
+    ) {
+      pitcherAllowedSplitWeakness = normalize01(era, 2.5, 5.5);
+    } else {
+      pitcherAllowedSplitWeakness = normalize01(era, 3.0, 6.0) * 0.7;
+    }
+  }
+
+  const lineupHandednessEnv = 0.5;
+
+  const score =
+    0.50 * batterSplitAdvantage +
+    0.35 * pitcherAllowedSplitWeakness +
+    0.15 * lineupHandednessEnv;
+
+  return clamp(score, 0, 1);
+}
+
+export function computeSpecPitchBlendMatchup(input: MLBPropInput, mode: "damage" | "whiff" = "damage"): number {
+  const pitchMix = input.pitcher.pitchMix;
+  const hhr = input.contactQuality.hardHitRateSeason ?? 0.30;
+  const xSLG = input.contactQuality.xSLG ?? 0.400;
+  const era = input.pitcher.era ?? 4.0;
+
+  if (pitchMix.length === 0) return 0.5;
+
+  const pitcherQualityMod = normalize01(era, 2.0, 5.5);
+
+  let matchupScore = 0;
+  let totalWeight = 0;
+
+  for (const pitch of pitchMix) {
+    const pct = normalizePercentage(pitch.percentage);
+    if (pct < 0.05) continue;
+
+    const isFastball = pitch.pitchType === "FF" || pitch.pitchType === "SI" || pitch.pitchType === "FC";
+    const isBreaking = pitch.pitchType === "SL" || pitch.pitchType === "CU" || pitch.pitchType === "KC" || pitch.pitchType === "CS" || pitch.pitchType === "SV";
+    const isOffspeed = pitch.pitchType === "CH" || pitch.pitchType === "FS";
+
+    let batterPerf = 0.5;
+    if (mode === "damage") {
+      if (isFastball) {
+        batterPerf = hhr >= 0.40 ? 0.72 : hhr >= 0.32 ? 0.55 : 0.38;
+      } else if (isBreaking) {
+        batterPerf = xSLG >= 0.450 ? 0.60 : xSLG >= 0.380 ? 0.48 : 0.35;
+      } else if (isOffspeed) {
+        batterPerf = hhr >= 0.38 ? 0.58 : 0.42;
+      }
+    } else {
+      if (isFastball) {
+        batterPerf = hhr >= 0.42 ? 0.35 : hhr >= 0.32 ? 0.50 : 0.65;
+      } else if (isBreaking) {
+        batterPerf = xSLG >= 0.420 ? 0.40 : xSLG >= 0.350 ? 0.55 : 0.70;
+      } else if (isOffspeed) {
+        batterPerf = hhr >= 0.35 ? 0.42 : 0.60;
+      }
+    }
+
+    matchupScore += pct * batterPerf * (0.6 + 0.4 * pitcherQualityMod);
+    totalWeight += pct;
+  }
+
+  if (totalWeight > 0) matchupScore /= totalWeight;
+  return clamp(matchupScore, 0, 1);
+}
+
+export function computeSpecHotColdForm(input: MLBPropInput): number {
+  const priorABs = input.contactQuality.priorABResults;
+  const rf = input.rollingForm;
+
+  let recentEVTrend = 0.5;
+  let recentBarrelTrend = 0.5;
+  let recentHardHitTrend = 0.5;
+  let recentSweetSpotTrend = 0.5;
+  let recentDisciplineTrend = 0.5;
+  let recentBoxResultTrend = 0.5;
+
+  if (priorABs.length > 0) {
+    const avgEV = priorABs.reduce((s, ab) => s + (ab.exitVelocity ?? 85), 0) / priorABs.length;
+    recentEVTrend = normalize01(avgEV, 82, 100);
+
+    const barrels = priorABs.filter((ab) => {
+      const ev = ab.exitVelocity ?? 0;
+      const la = ab.launchAngle ?? 0;
+      return ev >= 98 && la >= 15 && la <= 35;
+    }).length;
+    recentBarrelTrend = normalize01(barrels / priorABs.length, 0, 0.4);
+
+    const hardHits = priorABs.filter((ab) => (ab.exitVelocity ?? 0) >= 95).length;
+    recentHardHitTrend = normalize01(hardHits / priorABs.length, 0, 0.5);
+
+    const sweetSpots = priorABs.filter((ab) => {
+      const la = ab.launchAngle ?? 0;
+      return la >= 10 && la <= 30;
+    }).length;
+    recentSweetSpotTrend = normalize01(sweetSpots / priorABs.length, 0.2, 0.7);
+
+    const walks = priorABs.filter((ab) => ab.outcome === "walk").length;
+    const ks = priorABs.filter((ab) => ab.outcome === "strikeout").length;
+    recentDisciplineTrend = normalize01((walks - ks * 0.5) / priorABs.length + 0.5, 0, 1);
+
+    const hits = priorABs.filter((ab) => ab.outcome === "hit").length;
+    recentBoxResultTrend = normalize01(hits / priorABs.length, 0, 0.4);
+  }
+
+  if (rf) {
+    const recent = rf.last7Avg ?? rf.last15Avg;
+    if (recent != null) {
+      recentBoxResultTrend = normalize01(recent, 0.150, 0.350);
+    }
+    const recentOps = rf.last7Ops ?? rf.last15Ops;
+    if (recentOps != null) {
+      recentEVTrend = recentEVTrend * 0.5 + normalize01(recentOps, 0.550, 0.950) * 0.5;
+    }
+  }
+
+  const score =
+    0.35 * recentEVTrend +
+    0.20 * recentBarrelTrend +
+    0.15 * recentHardHitTrend +
+    0.15 * recentSweetSpotTrend +
+    0.10 * recentDisciplineTrend +
+    0.05 * recentBoxResultTrend;
+
+  return clamp(score, 0, 1);
+}
+
+export function computeSpecParkEnv(input: MLBPropInput, marketType: "hits" | "tb" | "hr" = "hits"): number {
+  const wp = input.weatherPark;
+  const parkBase = wp.parkFactor;
+
+  let parkScore: number;
+  if (marketType === "hr") {
+    parkScore = normalize01(parkBase, 0.85, 1.20);
+  } else if (marketType === "tb") {
+    parkScore = normalize01(parkBase, 0.90, 1.15);
+  } else {
+    parkScore = normalize01(parkBase, 0.92, 1.12);
+  }
+
+  let weatherFactor = 0.5;
+  if (!wp.isIndoors) {
+    const temp = wp.temperature ?? 72;
+    const tempScore = normalize01(temp, 40, 95);
+
+    let windScore = 0.5;
+    if (wp.windDirection === "out" && wp.windSpeed != null) {
+      windScore = normalize01(wp.windSpeed, 0, 20);
+    } else if (wp.windDirection === "in" && wp.windSpeed != null) {
+      windScore = 1 - normalize01(wp.windSpeed, 0, 20);
+    }
+
+    const humidityScore = wp.humidity != null ? normalize01(wp.humidity, 20, 80) : 0.5;
+
+    if (marketType === "hr") {
+      weatherFactor = 0.35 * tempScore + 0.45 * windScore + 0.20 * humidityScore;
+    } else {
+      weatherFactor = 0.50 * tempScore + 0.30 * windScore + 0.20 * humidityScore;
+    }
+  } else {
+    weatherFactor = 0.55;
+  }
+
+  return clamp(parkScore * weatherFactor * 2, 0, 1);
+}
+
+export function computeSpecBvP(input: MLBPropInput): number {
+  const bvp = input.bvpHistory;
+  if (!bvp || bvp.atBats < 10) return 0.50;
+
+  const avg = bvp.avg ?? (bvp.atBats > 0 ? bvp.hits / bvp.atBats : 0.250);
+  const leagueAvg = 0.250;
+
+  if (bvp.atBats < 20) {
+    const delta = avg - leagueAvg;
+    return clamp(0.50 + delta * 0.5, 0.46, 0.54);
+  }
+
+  return clamp(0.50 + (avg - leagueAvg) * 1.0, 0.42, 0.58);
+}
+
+export function computeSpecLineupOpportunity(input: MLBPropInput): number {
+  const slot = input.lineup.battingOrderSlot;
+  const remainingPA = input.remainingPA ?? 2;
+  const inning = input.inning;
+
+  const slotScore = slot <= 2 ? 0.85 : slot <= 4 ? 0.70 : slot <= 6 ? 0.55 : slot <= 8 ? 0.35 : 0.20;
+  const paScore = normalize01(remainingPA, 0.5, 4.0);
+  const inningScore = normalize01(9 - inning, 0, 8);
+
+  const bullpenPath = input.pitcher.pitchCount >= 80 || input.pitcher.timesThrough >= 3 ? 0.7 : 0.4;
+
+  return clamp(
+    0.30 * slotScore +
+    0.30 * paScore +
+    0.20 * inningScore +
+    0.20 * bullpenPath,
+    0, 1
+  );
+}
+
+export function computeSpecBullpenFactor(input: MLBPropInput): number {
+  const bp = input.bullpen;
+  const eraScore = bp.bullpenEra != null ? normalize01(bp.bullpenEra, 2.5, 5.5) : 0.5;
+  const usageScore = bp.bullpenUsageLastThreeDays != null
+    ? normalize01(bp.bullpenUsageLastThreeDays, 2, 8) : 0.5;
+  const relieverAvail = bp.isTopRelieverAvailable ? 0.35 : 0.65;
+
+  return clamp(
+    0.45 * eraScore +
+    0.30 * usageScore +
+    0.25 * relieverAvail,
+    0, 1
+  );
+}
+
+export function computeSpecPitcherSuppression(input: MLBPropInput): number {
+  const pitcher = input.pitcher;
+  const era = pitcher.era ?? 4.0;
+  const whip = pitcher.whip ?? 1.30;
+  const kPer9 = pitcher.kPer9 ?? 8.0;
+
+  const evAllowed = normalize01(era, 2.0, 5.5);
+  const weakContactGen = 1 - normalize01(whip, 0.90, 1.50);
+  const command = 1 - normalize01(pitcher.bbPer9 ?? 3.0, 1.5, 5.0);
+  const velocityStability = pitcher.pitchCount < 60 ? 0.7 : pitcher.pitchCount < 80 ? 0.5 : 0.3;
+  const groundballEscape = 1 - normalize01(era, 2.5, 5.0);
+  const handednessSuppression = 0.5;
+
+  const suppressionSkill =
+    0.25 * (1 - evAllowed) +
+    0.22 * weakContactGen +
+    0.18 * command +
+    0.15 * velocityStability +
+    0.12 * groundballEscape +
+    0.08 * handednessSuppression;
+
+  return clamp(suppressionSkill, 0, 1);
+}
+
+export interface PitcherDeteriorationScores {
+  overall: number;
+  hitsAllowed: number;
+  kDropoff: number;
+  walksAllowed: number;
+  hrAllowed: number;
+  outsRisk: number;
+}
+
+export function computeSpecPitcherDeterioration(input: MLBPropInput): PitcherDeteriorationScores {
+  const pitcher = input.pitcher;
+  const inning = input.inning;
+  const pitchCount = pitcher.pitchCount;
+  const tto = pitcher.timesThrough;
+
+  const inningRisk = normalize01(inning, 1, 8);
+  const pitchCountFatigue = normalize01(pitchCount, 40, 105);
+  const ttoCurve = tto >= 3 ? 0.85 : tto >= 2 ? 0.55 : 0.15;
+
+  const slot = input.lineup.battingOrderSlot;
+  const lineupSlotDanger = slot <= 3 ? 0.75 : slot <= 6 ? 0.55 : 0.30;
+
+  const handednessFatigue = 0.5;
+
+  const velocityDrop = pitcher.isPitcherCollapsing ? 0.85 : pitchCount >= 90 ? 0.55 : pitchCount >= 75 ? 0.35 : 0.10;
+  const movementDrop = pitchCount >= 85 ? 0.50 : pitchCount >= 70 ? 0.30 : 0.10;
+  const commandDecay = pitcher.bbPer9 != null && pitcher.bbPer9 >= 4.0 ? 0.65 :
+    pitchCount >= 80 ? 0.45 : 0.15;
+
+  const overall =
+    0.22 * inningRisk +
+    0.20 * pitchCountFatigue +
+    0.18 * ttoCurve +
+    0.14 * lineupSlotDanger +
+    0.10 * handednessFatigue +
+    0.08 * velocityDrop +
+    0.05 * movementDrop +
+    0.03 * commandDecay;
+
+  const hitsAllowed = overall * 1.15;
+  const kDropoff = clamp(
+    0.30 * ttoCurve +
+    0.25 * pitchCountFatigue +
+    0.20 * velocityDrop +
+    0.15 * commandDecay +
+    0.10 * inningRisk,
+    0, 1
+  );
+  const walksAllowed = clamp(
+    0.35 * commandDecay +
+    0.25 * pitchCountFatigue +
+    0.20 * ttoCurve +
+    0.20 * inningRisk,
+    0, 1
+  );
+  const hrAllowed = clamp(
+    0.30 * velocityDrop +
+    0.25 * pitchCountFatigue +
+    0.20 * ttoCurve +
+    0.15 * lineupSlotDanger +
+    0.10 * movementDrop,
+    0, 1
+  );
+  const outsRisk = clamp(
+    0.28 * pitchCountFatigue +
+    0.22 * lineupSlotDanger +
+    0.18 * ttoCurve +
+    0.16 * walksAllowed +
+    0.16 * hitsAllowed,
+    0, 1
+  );
+
+  return {
+    overall: clamp(overall, 0, 1),
+    hitsAllowed: clamp(hitsAllowed, 0, 1),
+    kDropoff,
+    walksAllowed,
+    hrAllowed,
+    outsRisk,
+  };
+}
+
+export function computeFullFeatureLayer(input: MLBPropInput): FeatureLayer {
+  const contactQuality = computeSpecContactQuality(input);
+  const batSpeedResult = computeBatSpeedEngine(input);
+  const handednessMatchup = computeSpecHandednessMatchup(input);
+  const pitchBlendMatchup = computeSpecPitchBlendMatchup(input, "damage");
+  const hotColdForm = computeSpecHotColdForm(input);
+  const parkEnv = computeSpecParkEnv(input);
+  const bvp = computeSpecBvP(input);
+  const lineupOpportunity = computeSpecLineupOpportunity(input);
+  const bullpenFactor = computeSpecBullpenFactor(input);
+  const pitcherSuppression = computeSpecPitcherSuppression(input);
+  const deterioration = computeSpecPitcherDeterioration(input);
+
+  return {
+    contactQuality,
+    batSpeedPower: batSpeedResult.batSpeedPowerScore,
+    batSpeedMultiplier: batSpeedResult.batSpeedMultiplier,
+    handednessMatchup,
+    pitchBlendMatchup,
+    hotColdForm,
+    parkEnv,
+    bvp,
+    lineupOpportunity,
+    bullpenFactor,
+    pitcherSuppression,
+    pitcherDeterioration: deterioration.overall,
+  };
+}
+
+export interface BadgeResult {
+  positive: string[];
+  negative: string[];
+  all: string[];
+}
+
+export function computeBadges(input: MLBPropInput, features: FeatureLayer): BadgeResult {
+  const positive: string[] = [];
+  const negative: string[] = [];
+
+  if (features.contactQuality >= 0.72) positive.push("Good Contact");
+  if (features.contactQuality >= 0.85) positive.push("Strong EV");
+
+  const batSpeed = computeBatSpeedEngine(input);
+  if (batSpeed.batSpeedPowerScore >= 0.76) positive.push("High Bat Speed");
+  if (batSpeed.batSpeedZ >= 1.28) positive.push("Elite Bat Speed");
+  if (batSpeed.batSpeedZ >= 1.88) positive.push("Explosive Bat Speed");
+  if (batSpeed.batSpeedZ <= -1.0) negative.push("Low Bat Speed");
+
+  const barrel = input.contactQuality.barrelRateProxySeason ?? 0;
+  if (barrel >= 0.10) positive.push("High Barrel");
+
+  if (features.handednessMatchup >= 0.70) positive.push("Handedness Edge");
+  if (features.handednessMatchup <= 0.30) negative.push("Poor Split");
+
+  if (features.pitchBlendMatchup >= 0.70) positive.push("Pitch-Type Edge");
+  if (features.pitchBlendMatchup <= 0.30) negative.push("Pitch-Type Risk");
+
+  if (features.parkEnv >= 0.70) positive.push("Park Boost");
+  if (features.parkEnv <= 0.30) negative.push("Bad Park");
+
+  if (features.hotColdForm >= 0.70) positive.push("Hot Form");
+  if (features.hotColdForm <= 0.25) negative.push("Cold Form");
+
+  if (features.pitcherDeterioration >= 0.60) positive.push("Pitcher Deterioration Spot");
+
+  if (features.bullpenFactor >= 0.65) positive.push("Bullpen Boost");
+  if (features.bullpenFactor <= 0.25) negative.push("Tough Bullpen");
+
+  if (features.pitcherSuppression >= 0.70) negative.push("Pitcher Suppression Risk");
+
+  if (features.bvp >= 0.56) positive.push("BvP Boost");
+
+  if (features.lineupOpportunity <= 0.25) negative.push("Late-Lineup Risk");
+
+  const priorABs = input.contactQuality.priorABResults;
+  const ks = priorABs.filter((ab) => ab.outcome === "strikeout").length;
+  if (priorABs.length >= 2 && ks / priorABs.length >= 0.5) negative.push("High K Risk");
+  if (features.contactQuality <= 0.25) negative.push("Weak Contact");
+
+  const sweepLaAngle = input.contactQuality.launchAngle ?? 12;
+  if (sweepLaAngle >= 15 && sweepLaAngle <= 28 && barrel >= 0.08) positive.push("Sweet Spot Lift");
+
+  return {
+    positive,
+    negative,
+    all: [...positive, ...negative],
+  };
+}
