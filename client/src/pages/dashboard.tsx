@@ -1918,7 +1918,7 @@ export default function Dashboard() {
             data-testid="auto-run-fallback"
             className="rounded-xl border border-[#27272a] bg-[#0a0a0a] p-4 text-center"
           >
-            <p className="text-sm text-[#71717a]">No strong edges right now. 🔒 Pro users get alerted the moment edges appear.</p>
+            <p className="text-sm text-[#71717a]">Monitoring opportunities — signals appear as games go live.</p>
             {isFreeUser && (
               <button
                 data-testid="button-get-full-access-fallback"

@@ -493,9 +493,50 @@ export class LiveGameOrchestrator {
     return signal;
   }
 
+  private buildWatchSignal(gameId: string, input: MLBPropInput, output: MLBPropOutput): MLBQualifiedSignal | null {
+    if (output.recommendedSide !== "OVER" && output.recommendedSide !== "UNDER") return null;
+    if (typeof output.bookLine !== "number" || !Number.isFinite(output.bookLine) || output.bookLine <= 0) return null;
+
+    const sideProbability = output.recommendedSide === "OVER"
+      ? output.calibratedProbabilityOver
+      : output.calibratedProbabilityUnder;
+    if (!Number.isFinite(sideProbability) || sideProbability <= 0) return null;
+
+    const scoreBreakdown = computeSignalScore(input, output);
+    const signalTags = deriveSignalTags(input, output, scoreBreakdown);
+    const feedTags = deriveFeedTags(input, output, scoreBreakdown);
+
+    return {
+      id: `${gameId}_${output.playerId}_${output.market}`,
+      gameId,
+      playerId: output.playerId,
+      playerName: output.playerName,
+      team: (output as any).team ?? input.team ?? "",
+      market: output.market,
+      side: output.recommendedSide,
+      sportsbook: output.sportsbook,
+      line: output.bookLine,
+      impliedProbability: null,
+      engineProbability: output.calibratedProbability,
+      projection: output.projection,
+      evPct: output.evPct,
+      confidenceTier: scoreBreakdown.total >= 55 ? scoreBreakdown.confidenceTier : "WATCHLIST" as any,
+      signalScore: scoreBreakdown.total,
+      reasons: output.explanationBullets,
+      feedTags: feedTags as string[],
+      signalTags: signalTags as string[],
+      playerGlowEligible: false,
+      gameCardSignalTags: [],
+      formIndicator: output.formIndicator,
+      isExperimental: output.isExperimental,
+      engineGeneratedAt: output.engineGeneratedAt,
+    };
+  }
+
   async triggerEngine(gameId: string, normalizedStatus: "live" | "pregame" | "final" | "unknown"): Promise<MLBPropOutput[]> {
     const outputs: MLBPropOutput[] = [];
     const qualifiedSignals: MLBQualifiedSignal[] = [];
+    const allSignals: MLBQualifiedSignal[] = [];
     let marketsEvaluated = 0;
     let signalsQualified = 0;
     let signalsRejected = 0;
@@ -751,10 +792,13 @@ export class LiveGameOrchestrator {
           const qResult = this.qualifySignal(gameId, input, output);
           if (qResult) {
             qualifiedSignals.push(qResult);
+            allSignals.push(qResult);
             signalsQualified++;
             scoreSum += qResult.signalScore;
           } else {
             signalsRejected++;
+            const watchSig = this.buildWatchSignal(gameId, input, output);
+            if (watchSig) allSignals.push(watchSig);
           }
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for ${batter.playerName} / ${market}:`, err.message);
@@ -905,10 +949,13 @@ export class LiveGameOrchestrator {
           const qResult = this.qualifySignal(gameId, input, output);
           if (qResult) {
             qualifiedSignals.push(qResult);
+            allSignals.push(qResult);
             signalsQualified++;
             scoreSum += qResult.signalScore;
           } else {
             signalsRejected++;
+            const watchSig = this.buildWatchSignal(gameId, input, output);
+            if (watchSig) allSignals.push(watchSig);
           }
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for pitcher ${pitcherToEval.playerName} / ${market}:`, err.message);
@@ -918,7 +965,7 @@ export class LiveGameOrchestrator {
     }
 
     const now = Date.now();
-    const signalLocked = qualifiedSignals.length > 0;
+    const signalLocked = allSignals.length > 0;
 
     const gameCardTags = deriveGameCardTags(
       qualifiedSignals.map((s) => ({
@@ -932,10 +979,13 @@ export class LiveGameOrchestrator {
       sig.gameCardSignalTags = gameCardTags as string[];
     }
 
+    allSignals.sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
+
     mlbEdgeCache.set(gameId, {
       gameId,
       outputs,
       qualifiedSignals,
+      allSignals,
       gameCardTags: gameCardTags as string[],
       updatedAt: now,
       createdAt: now,
@@ -944,7 +994,7 @@ export class LiveGameOrchestrator {
     });
 
     const avgScore = signalsQualified > 0 ? Math.round(scoreSum / signalsQualified) : 0;
-    console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=${signalsQualified} rejected=${signalsRejected} avgScore=${avgScore} gameCardTags=[${gameCardTags.join(",")}]`);
+    console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=${signalsQualified} rejected=${signalsRejected} allSignals=${allSignals.length} avgScore=${avgScore} gameCardTags=[${gameCardTags.join(",")}]`);
     return outputs;
   }
 }

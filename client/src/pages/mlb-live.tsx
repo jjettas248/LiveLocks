@@ -4,6 +4,8 @@ import { ProbabilityRing } from "@/components/probability-ring";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { MLBScheduleList } from "@/components/mlb/MLBScheduleList";
+import { TopPlays } from "@/components/mlb/TopPlays";
+import { LiveBoard } from "@/components/mlb/LiveBoard";
 
 class MLBErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
   constructor(props: { children: ReactNode }) {
@@ -138,7 +140,7 @@ type MLBSignal = {
 };
 
 type SignalsResponse = {
-  mode: "live" | "no_lines" | "preview" | "preview_locked";
+  mode: "live" | "no_lines" | "preview" | "preview_locked" | "monitoring";
   signals: MLBSignal[];
   updatedAt: number;
   isDegraded?: boolean;
@@ -921,23 +923,9 @@ function MlbLiveInner() {
       )}
 
       {mainTab === "edge_feed" && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-foreground">Live Edge Feed</h2>
-            <span className="text-[10px] text-muted-foreground">{edgeFeedSignals.length} signal{edgeFeedSignals.length !== 1 ? "s" : ""} across all games</span>
-          </div>
-          {edgeFeedSignals.length === 0 ? (
-            <div className="rounded-xl border border-border/40 bg-card p-8 text-center">
-              <div className="text-sm text-muted-foreground">No signals above threshold</div>
-              <div className="text-xs text-muted-foreground/60 mt-1">Signals require ≥60% model confidence. They appear as live games progress and projections update.</div>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {edgeFeedSignals.map(sig => (
-                <SignalCard key={`${sig.playerId}-${sig.market}-${sig.gameId}`} sig={sig} isElite={isElite} compact />
-              ))}
-            </div>
-          )}
+        <div className="space-y-6">
+          <TopPlays signals={edgeFeedSignals} />
+          <LiveBoard signals={edgeFeedSignals} />
         </div>
       )}
 
@@ -964,8 +952,14 @@ function MlbLiveInner() {
             const filtered = edgeFeedSignals.filter(s => s.inning >= inningFeedTab);
             return filtered.length === 0 ? (
               <div className="rounded-xl border border-border/40 bg-card p-8 text-center">
-                <div className="text-sm text-muted-foreground">No edges from inning {inningFeedTab}+</div>
-                <div className="text-xs text-muted-foreground/60 mt-1">Edges for later innings appear as games progress and pitcher fatigue data accumulates.</div>
+                <div className="flex items-center justify-center gap-2 text-sm text-blue-400">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
+                  </span>
+                  Monitoring inning {inningFeedTab}+ signals
+                </div>
+                <div className="text-xs text-muted-foreground/60 mt-1">Signals appear as games progress and pitcher fatigue data accumulates.</div>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

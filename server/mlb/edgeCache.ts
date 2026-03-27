@@ -13,6 +13,7 @@ export interface EdgeCacheEntry {
   gameId: string;
   outputs: MLBPropOutput[];
   qualifiedSignals: MLBQualifiedSignal[];
+  allSignals: MLBQualifiedSignal[];
   gameCardTags: string[];
   updatedAt: number;
   createdAt: number;

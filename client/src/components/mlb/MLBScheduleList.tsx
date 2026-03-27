@@ -188,12 +188,15 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
               <div className="mt-0.5 flex items-center gap-1 flex-wrap">
                 {game.signalLocked ? (
                   <span className="text-[9px] font-bold text-green-400">
-                    {game.signalCount ? `${game.signalCount} Edge${game.signalCount !== 1 ? "s" : ""} Detected` : "Edge Detected"}
+                    {game.signalCount ? `${game.signalCount} Signal${game.signalCount !== 1 ? "s" : ""}` : "Signals Active"}
+                  </span>
+                ) : game.status === "live" ? (
+                  <span className="text-[9px] text-blue-400/70 flex items-center gap-1">
+                    <span className="w-1 h-1 rounded-full bg-blue-400 animate-pulse" />
+                    Monitoring
                   </span>
                 ) : game.hasOdds ? (
-                  <span className="text-[9px] text-muted-foreground/60">No strong edge</span>
-                ) : game.status === "live" ? (
-                  <span className="text-[9px] text-muted-foreground/60">Awaiting lines</span>
+                  <span className="text-[9px] text-muted-foreground/60">Scanning</span>
                 ) : (
                   <span className="text-[9px] text-muted-foreground/60">Pre-game</span>
                 )}

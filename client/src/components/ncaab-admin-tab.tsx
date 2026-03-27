@@ -4388,13 +4388,15 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
             </div>
           )}
 
-          {/* No strong edges yet — live games present but engine has not produced plays */}
           {!error && liveGames.length > 0 && halftimePlays.length === 0 && !plays.some(p => p.engineOutput?.markets?.full_total?.bookLine != null) && (
-            <div className="bg-card border border-border rounded-xl p-6 text-center space-y-2" data-testid="text-ncaab-no-strong-edges">
-              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse inline-block mb-2" />
-              <p className="text-sm font-semibold text-foreground">No strong edges right now</p>
+            <div className="bg-card border border-border rounded-xl p-6 text-center space-y-2" data-testid="text-ncaab-monitoring">
+              <span className="relative flex h-2 w-2 mx-auto mb-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
+              </span>
+              <p className="text-sm font-semibold text-foreground">Monitoring {liveGames.length} live {liveGames.length === 1 ? "game" : "games"}</p>
               <p className="text-xs text-muted-foreground">
-                {liveGames.length} live {liveGames.length === 1 ? "game" : "games"} in progress — edges appear once the model detects a qualifying opportunity.
+                Signals appear once the model detects a qualifying opportunity.
               </p>
             </div>
           )}

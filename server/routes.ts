@@ -918,18 +918,17 @@ export async function registerRoutes(
       return res.json({ mode: "no_lines", signals: [], updatedAt, isDegraded: true });
     }
 
-    const engineQualified = entry?.qualifiedSignals ?? [];
+    const engineAll = entry?.allSignals ?? entry?.qualifiedSignals ?? [];
 
-    if (engineQualified.length === 0) {
-      console.log(`[MLB signals] game=${gameId} — no qualified signals from engine, returning mode:no_lines`);
+    if (engineAll.length === 0) {
+      console.log(`[MLB signals] game=${gameId} — no signals from engine, returning mode:monitoring`);
       mlbSignalsCache.set(gameId, { ts: Date.now(), signals: [], updatedAt, isDegraded: false });
-      return res.json({ mode: "no_lines", signals: [], updatedAt });
+      return res.json({ mode: "monitoring", signals: [], updatedAt });
     }
 
     const CONFIDENCE_RANK: Record<string, number> = { ELITE: 4, STRONG: 3, SOLID: 2, WATCHLIST: 1, NO_SIGNAL: 0 };
-    const MAX_SIGNALS_PER_GAME = 3;
 
-    const apiSignals = engineQualified
+    const apiSignals = engineAll
       .map((qs) => {
         const hitProb = qs.side === "OVER"
           ? (qs.engineProbability ?? qs.signalScore)
@@ -987,10 +986,9 @@ export async function registerRoutes(
         const tierDiff = (CONFIDENCE_RANK[b.confidenceTier ?? "NO_SIGNAL"] ?? 0) - (CONFIDENCE_RANK[a.confidenceTier ?? "NO_SIGNAL"] ?? 0);
         if (tierDiff !== 0) return tierDiff;
         return (b.signalScore ?? 0) - (a.signalScore ?? 0);
-      })
-      .slice(0, MAX_SIGNALS_PER_GAME);
+      });
 
-    console.log(`[MLB signals] game=${gameId} qualifiedFromEngine=${engineQualified.length} served=${apiSignals.length} isDegraded=${cachedIsDegraded}`);
+    console.log(`[MLB signals] game=${gameId} allFromEngine=${engineAll.length} served=${apiSignals.length} isDegraded=${cachedIsDegraded}`);
 
     recordEngineRun("mlb", {
       gamesProcessed: 1,
@@ -1066,12 +1064,13 @@ export async function registerRoutes(
           }
         } else {
           const edgeEntry = mlbEdgeCache.get(gid);
-          if (edgeEntry && edgeEntry.qualifiedSignals && edgeEntry.qualifiedSignals.length > 0) {
+          const edgeFeedSignals = edgeEntry?.allSignals ?? edgeEntry?.qualifiedSignals ?? [];
+          if (edgeFeedSignals.length > 0) {
             const FEED_FRESHNESS_MS = 120_000;
-            if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) continue;
+            if (edgeEntry!.updatedAt > 0 && Date.now() - edgeEntry!.updatedAt > FEED_FRESHNESS_MS) continue;
             const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);
-            const rawOutputLookup = new Map((edgeEntry.outputs ?? []).map((o) => [`${o.playerId}_${o.market}`, o]));
-            for (const qs of edgeEntry.qualifiedSignals.slice(0, 3)) {
+            const rawOutputLookup = new Map((edgeEntry!.outputs ?? []).map((o) => [`${o.playerId}_${o.market}`, o]));
+            for (const qs of edgeFeedSignals) {
               const raw = rawOutputLookup.get(`${qs.playerId}_${qs.market}`);
               allSignals.push({
                 playerId: qs.playerId,
@@ -1106,7 +1105,7 @@ export async function registerRoutes(
         return (b.enginePct ?? 0) - (a.enginePct ?? 0);
       });
 
-      return res.json({ signals: allSignals.slice(0, 20) });
+      return res.json({ signals: allSignals });
     } catch (e: any) {
       console.error("[mlb/edge-feed]", e.message);
       return res.json({ signals: [] });

@@ -43,7 +43,7 @@ export function TopPlaysPanel({ isElite, onNavigateToSport }: TopPlaysPanelProps
               {hasPlays ? "Live Edge Feed" : "Edge Feed"}
             </span>
             <span className="block text-[10px] text-muted-foreground/70">
-              {isLoading ? "Scanning..." : hasPlays ? `${plays.length} edge${plays.length !== 1 ? "s" : ""} across all sports` : "No edges detected right now"}
+              {isLoading ? "Scanning..." : hasPlays ? `${plays.length} signal${plays.length !== 1 ? "s" : ""} across all sports` : "Monitoring opportunities"}
             </span>
           </div>
         </div>
@@ -72,9 +72,15 @@ export function TopPlaysPanel({ isElite, onNavigateToSport }: TopPlaysPanelProps
 
           {!isLoading && plays.length === 0 && (
             <div className="rounded-xl border border-border/40 bg-card p-6 text-center">
-              <div className="text-sm text-muted-foreground">No live signals right now</div>
+              <div className="flex items-center justify-center gap-2 text-sm text-blue-400">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
+                </span>
+                Monitoring opportunities
+              </div>
               <div className="text-xs text-muted-foreground/60 mt-1">
-                Edges appear when games are live and sportsbook lines are available.
+                Signals appear as games go live and sportsbook lines are available.
               </div>
             </div>
           )}
