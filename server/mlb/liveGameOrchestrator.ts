@@ -442,6 +442,11 @@ export class LiveGameOrchestrator {
       return null;
     }
 
+    if ((output.market === "hr" || output.market === "home_runs") && output.recommendedSide === "UNDER") {
+      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — HR UNDER suppressed (unplayable odds)`);
+      return null;
+    }
+
     if (output.recommendedSide === "OVER" && output.projection < output.bookLine) {
       console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — side inconsistency: OVER but proj=${output.projection} < line=${output.bookLine}`);
       return null;
@@ -500,6 +505,10 @@ export class LiveGameOrchestrator {
       if (overP > underP && overP > 0) effectiveSide = "OVER";
       else if (underP > 0) effectiveSide = "UNDER";
       else return null;
+    }
+
+    if ((output.market === "hr" || output.market === "home_runs") && effectiveSide === "UNDER") {
+      return null;
     }
 
     const bookLine = typeof output.bookLine === "number" && Number.isFinite(output.bookLine) && output.bookLine > 0
