@@ -1155,13 +1155,12 @@ export async function registerRoutes(
       // Market alias resolution — canonical backend values use different names than frontend aliases
       const MANUAL_MARKET_ALIASES: Record<string, MLBMarket> = {
         hr: "home_runs",
-        batter_k: "batter_strikeouts",
         pitcher_k: "pitcher_strikeouts",
       };
       const rawMarket = safeStr("market");
       const resolvedMarket: string = MANUAL_MARKET_ALIASES[rawMarket] ?? rawMarket;
       if (!resolvedMarket || !ALL_MLB_MARKETS.includes(resolvedMarket as MLBMarket)) {
-        return res.status(400).json({ error: `Invalid market. Must be one of: ${[...ALL_MLB_MARKETS, "hr", "batter_k", "pitcher_k"].join(", ")}` });
+        return res.status(400).json({ error: `Invalid market. Must be one of: ${[...ALL_MLB_MARKETS, "hr", "pitcher_k"].join(", ")}` });
       }
       const market = resolvedMarket as MLBMarket;
 

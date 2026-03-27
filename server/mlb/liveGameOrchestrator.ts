@@ -64,7 +64,6 @@ function validateMLBInput(input: MLBPropInput): string | null {
 const BATTER_MARKETS: MLBMarket[] = [
   "hits",
   "total_bases",
-  "batter_strikeouts",
   "home_runs",
   "hrr",
 ];
@@ -141,7 +140,6 @@ async function resolveBookLine(
   const DERIVED_LINES: Record<string, number> = {
     hits: 0.5,
     total_bases: 1.5,
-    batter_strikeouts: 0.5,
     pitcher_strikeouts: 4.5,
     hits_allowed: 5.5,
     walks_allowed: 2.5,
@@ -668,7 +666,6 @@ export class LiveGameOrchestrator {
             case "hits": currentStatForMarket = boxScorePlayer.hits; break;
             case "home_runs": case "hrr": currentStatForMarket = boxScorePlayer.hr; break;
             case "total_bases": currentStatForMarket = boxScorePlayer.tb; break;
-            case "batter_strikeouts": currentStatForMarket = boxScorePlayer.so; break;
             case "pitcher_strikeouts": case "hits_allowed": case "walks_allowed": currentStatForMarket = 0; break;
             default: currentStatForMarket = boxScorePlayer.hits; break;
           }

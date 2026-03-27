@@ -837,8 +837,6 @@ export const MLB_TEAM_FULL_NAMES: Record<string, string> = {
 const MLB_MARKET_MAP: Record<string, string> = {
   hits: "batter_hits",
   total_bases: "batter_total_bases",
-  batter_strikeouts: "batter_strikeouts",
-  batter_k: "batter_strikeouts",
   home_runs: "batter_home_runs",
   hrr: "",
   pitcher_strikeouts: "pitcher_strikeouts",

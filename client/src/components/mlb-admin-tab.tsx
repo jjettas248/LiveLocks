@@ -8,7 +8,6 @@ import { apiRequest } from "@/lib/queryClient";
 type MLBMarket =
   | "hits"
   | "total_bases"
-  | "batter_strikeouts"
   | "pitcher_strikeouts"
   | "hits_allowed"
   | "home_runs"
@@ -122,7 +121,6 @@ interface MLBPropInput {
 const MLB_MARKETS: MLBMarket[] = [
   "hits",
   "total_bases",
-  "batter_strikeouts",
   "pitcher_strikeouts",
   "hits_allowed",
   "home_runs",
@@ -132,7 +130,6 @@ const MLB_MARKETS: MLBMarket[] = [
 const MARKET_LABELS: Record<MLBMarket, string> = {
   hits: "Hits",
   total_bases: "Total Bases",
-  batter_strikeouts: "Batter Strikeouts",
   pitcher_strikeouts: "Pitcher Strikeouts",
   hits_allowed: "Hits Allowed",
   home_runs: "Home Runs (Experimental)",

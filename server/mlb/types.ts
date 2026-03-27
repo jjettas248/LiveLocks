@@ -1,7 +1,6 @@
 export type MLBMarket =
   | "hits"
   | "total_bases"
-  | "batter_strikeouts"
   | "pitcher_strikeouts"
   | "hits_allowed"
   | "walks_allowed"
@@ -11,7 +10,6 @@ export type MLBMarket =
 export const ALL_MLB_MARKETS: MLBMarket[] = [
   "hits",
   "total_bases",
-  "batter_strikeouts",
   "pitcher_strikeouts",
   "hits_allowed",
   "walks_allowed",
@@ -80,7 +78,6 @@ export interface MLBGameMarketOutput {
 export const CORE_MARKETS: MLBMarket[] = [
   "hits",
   "total_bases",
-  "batter_strikeouts",
   "pitcher_strikeouts",
   "hits_allowed",
 ];
@@ -353,7 +350,6 @@ export const MODIFIER_CAPS = {
 export const MARKET_SIGMA: Record<MLBMarket, number> = {
   hits: 0.65,
   total_bases: 1.10,
-  batter_strikeouts: 0.55,
   pitcher_strikeouts: 1.40,
   hits_allowed: 1.20,
   walks_allowed: 0.90,
@@ -370,7 +366,6 @@ export const EDGE_THRESHOLDS = {
 export const SUPPRESSION_RULES: Record<MLBMarket, { minEdge: number; minCompletedAB: number; requireContactData: boolean }> = {
   hits:               { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
   total_bases:        { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
-  batter_strikeouts:  { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
   pitcher_strikeouts: { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
   hits_allowed:       { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
   walks_allowed:      { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
@@ -392,7 +387,6 @@ export const HR_MIN_QUALIFYING_FACTORS = 2;
 export const MLB_MARKET_MIN_GAP: Record<MLBMarket, number> = {
   hits:               0.25,
   total_bases:        0.35,
-  batter_strikeouts:  0.30,
   pitcher_strikeouts: 0.75,
   hits_allowed:       0.80,
   walks_allowed:      0.60,

@@ -198,7 +198,7 @@ function canShowSignal(market: MLBGameMarket | null | undefined): boolean {
 }
 
 const MARKET_LABELS: Record<string, string> = {
-  hits: "Hits", total_bases: "Total Bases", batter_k: "K (Batter)", batter_strikeouts: "K (Batter)",
+  hits: "Hits", total_bases: "Total Bases",
   pitcher_k: "K (Pitcher)", pitcher_strikeouts: "K (Pitcher)", hits_allowed: "Hits Allowed",
   walks_allowed: "Walks Allowed", hr: "Home Runs", home_runs: "Home Runs", hrr: "HRR",
 };
@@ -215,7 +215,6 @@ const BATTER_MARKETS = [
   { value: "hits", label: "Hits" },
   { value: "total_bases", label: "Total Bases" },
   { value: "hr", label: "Home Runs" },
-  { value: "batter_k", label: "Strikeouts (B)" },
 ];
 
 const PITCHER_MARKETS = [

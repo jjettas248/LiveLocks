@@ -154,7 +154,7 @@ function computeOpportunityComponent(input: MLBPropInput): number {
 
 function computeMarketReliabilityComponent(market: MLBMarket): number {
   if (market === "hits" || market === "total_bases") return 80;
-  if (market === "pitcher_strikeouts" || market === "batter_strikeouts") return 70;
+  if (market === "pitcher_strikeouts") return 70;
   if (market === "hits_allowed" || market === "walks_allowed") return 55;
   if (market === "home_runs" || market === "hrr") return 40;
   return 50;

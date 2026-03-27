@@ -130,19 +130,13 @@ function capConfidenceTier(
 
 function applyProbabilityCeiling(
   calibratedSided: number,
-  market: MLBMarket
+  _market: MLBMarket
 ): number {
-  const ceiling = EXPERIMENTAL_MARKETS.includes(market)
-    ? MARKET_PROBABILITY_CEILINGS.experimental
-    : MARKET_PROBABILITY_CEILINGS.core;
-
-  if (calibratedSided > ceiling) return ceiling;
-  if (calibratedSided < 100 - ceiling) return 100 - ceiling;
   return calibratedSided;
 }
 
 // ── Tier 1 markets (high priority, standard composite threshold) ──────────────
-const TIER1_MARKETS = new Set<MLBMarket>(["hits", "total_bases", "batter_strikeouts", "pitcher_strikeouts"]);
+const TIER1_MARKETS = new Set<MLBMarket>(["hits", "total_bases", "pitcher_strikeouts"]);
 // ── Tier 3 markets (home runs / HRR, stricter composite threshold) ────────────
 const TIER3_MARKETS = new Set<MLBMarket>(["home_runs", "hrr"]);
 
@@ -610,10 +604,6 @@ export function calculateTBEdge(input: MLBPropInput): MLBPropOutput {
   return output;
 }
 
-export function calculateBatterKEdge(input: MLBPropInput): MLBPropOutput {
-  return buildOutput({ ...input, market: "batter_strikeouts" });
-}
-
 export function calculatePitcherKEdge(input: MLBPropInput): MLBPropOutput {
   return buildOutput({ ...input, market: "pitcher_strikeouts" });
 }
@@ -642,7 +632,6 @@ export function calculateHRREdge(input: MLBPropInput): MLBPropOutput {
 const MARKET_CALCULATORS: Record<MLBMarket, (input: MLBPropInput) => MLBPropOutput> = {
   hits: calculateHitsEdge,
   total_bases: calculateTBEdge,
-  batter_strikeouts: calculateBatterKEdge,
   pitcher_strikeouts: calculatePitcherKEdge,
   hits_allowed: calculateHitsAllowedEdge,
   walks_allowed: calculateWalksAllowedEdge,

@@ -45,10 +45,6 @@ function computeBaseValue(input: MLBPropInput, market: MLBMarket): number {
       const tbRate = seasonAvg > 0 ? seasonAvg : 0.40;
       return currentStatValue + tbRate * remainingAB;
     }
-    case "batter_strikeouts": {
-      const kRate = seasonAvg > 0 ? seasonAvg : 0.22;
-      return currentStatValue + kRate * remainingPA;
-    }
     case "pitcher_strikeouts": {
       const kPer9 = input.pitcher.kPer9 ?? 8.0;
       const estimatedBFRemaining = remainingAB > 0 ? remainingAB : 10;
