@@ -1954,19 +1954,24 @@ function NCAABGameCard({
             </button>
             {(play.bettingWindow === "HALFTIME" || play.half === 2) && (
               <button
+                data-testid={`ncaab-h2-tab-${play.gameId}`}
                 onClick={() => setMarketTab("h2")}
                 style={{
-                  background: marketTab === "h2" ? "#27272a" : "transparent",
-                  color: marketTab === "h2" ? "#ffffff" : "#71717a",
+                  background: marketTab === "h2"
+                    ? (play.bettingWindow === "HALFTIME" ? "rgba(245,158,11,0.15)" : "#27272a")
+                    : "transparent",
+                  color: marketTab === "h2"
+                    ? (play.bettingWindow === "HALFTIME" ? "#f59e0b" : "#ffffff")
+                    : (play.bettingWindow === "HALFTIME" ? "#f59e0b" : "#71717a"),
                   borderRadius: 6,
                   padding: "4px 12px",
                   fontSize: 12,
-                  fontWeight: 500,
-                  border: "none",
+                  fontWeight: 600,
+                  border: play.bettingWindow === "HALFTIME" ? "1px solid rgba(245,158,11,0.3)" : "none",
                   cursor: "pointer",
                 }}
               >
-                2nd Half
+                {play.bettingWindow === "HALFTIME" ? "LIVE 2H" : "2nd Half"}
               </button>
             )}
           </div>
@@ -4161,57 +4166,63 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                     );
                   })}
                 </div>
-                {/* Play cards — canonical market-based Top Plays (Phase D) */}
+                {/* Play cards — canonical market-based Top Plays (Phase D + Phase 2 Enhancement) */}
                 {(() => {
-                  const OTHER_MARKET_KEYS: NCAABMarketKey[] = ["full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"];
+                  const ALL_TOP_MARKET_KEYS: NCAABMarketKey[] = ["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"];
                   const TIER_STYLES: Record<string, { color: string; bg: string; border: string }> = {
                     ELITE: { color: "#00d4aa", bg: "rgba(0,212,170,0.12)", border: "rgba(0,212,170,0.35)" },
-                    STRONG: { color: "#f59e0b", bg: "rgba(245,158,11,0.1)", border: "rgba(245,158,11,0.3)" },
+                    STRONG: { color: "#2dd4bf", bg: "rgba(45,212,191,0.1)", border: "rgba(45,212,191,0.3)" },
                     VALUE: { color: "#71717a", bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.1)" },
                     NONE: { color: "#52525b", bg: "rgba(255,255,255,0.02)", border: "#27272a" },
                   };
-                  type TopPlayEntry = { play: NCAABPlay; market: NCAABMarketClient };
+                  type TopPlayEntry = { play: NCAABPlay; market: NCAABMarketClient; score: number };
 
-                  // 1. Collect all games with a full_total market (includes fallback markets).
-                  //    Sort by abs(modelProb - 50) descending — strongest lean pinned first.
-                  //    This is the primary ranking criterion per task spec.
-                  const gamesWithFullTotal: { play: NCAABPlay; ftMkt: NCAABMarketClient; ftEdge: number }[] = [];
-                  for (const p of sortedPlays) {
-                    const ftMkt = p.engineOutput?.markets?.full_total;
-                    if (!ftMkt) continue;
-                    const ftEdge = Math.abs((ftMkt.modelProb ?? 50) - 50);
-                    gamesWithFullTotal.push({ play: p, ftMkt, ftEdge });
+                  const isH2Market = (key: string) => key.startsWith("h2_");
+                  const isHalftimePlay = (p: NCAABPlay) => p.bettingWindow === "HALFTIME";
+
+                  function computeDisplayTier(mkt: NCAABMarketClient): { label: string; style: { color: string; bg: string; border: string } } {
+                    const edgeFrom50 = Math.abs((mkt.modelProb ?? 50) - 50);
+                    if (edgeFrom50 >= 20) return { label: "ELITE", style: TIER_STYLES.ELITE };
+                    if (edgeFrom50 >= 12) return { label: "STRONG", style: TIER_STYLES.STRONG };
+                    return { label: "LEAN", style: { color: "#a1a1aa", bg: "rgba(161,161,170,0.08)", border: "rgba(161,161,170,0.2)" } };
                   }
-                  gamesWithFullTotal.sort((a, b) => b.ftEdge - a.ftEdge);
 
-                  // 2. Build top entries: for each game, the full_total market card is always first.
-                  //    Then append any other available markets for that game.
                   const allEntries: TopPlayEntry[] = [];
-                  for (const { play: p, ftMkt } of gamesWithFullTotal) {
-                    allEntries.push({ play: p, market: ftMkt });
+
+                  for (const p of sortedPlays) {
                     if (!p.engineOutput?.markets) continue;
-                    for (const key of OTHER_MARKET_KEYS) {
+
+                    type Candidate = { mkt: NCAABMarketClient; key: string; score: number; isFb: boolean };
+                    const candidates: Candidate[] = [];
+                    for (const key of ALL_TOP_MARKET_KEYS) {
                       const mkt = p.engineOutput.markets[key];
                       if (mkt?.bookLine == null) continue;
-                      allEntries.push({ play: p, market: mkt });
+                      const isFb = mkt.fallback === true;
+                      let score = Math.abs((mkt.modelProb ?? 50) - 50);
+                      if (mkt.qualifiedEdge === true) score += 10;
+                      if (isH2Market(key)) score += 5;
+                      if (isH2Market(key) && isHalftimePlay(p)) score += 5;
+                      if ((mkt as any).isDerived === true) score -= 3;
+                      if (isFb) score -= 2;
+                      candidates.push({ mkt, key, score, isFb });
+                    }
+
+                    candidates.sort((a, b) => b.score - a.score);
+
+                    let picked = 0;
+                    let fbPicked = 0;
+                    for (const c of candidates) {
+                      if (picked >= 3) break;
+                      if (c.isFb && fbPicked >= 1) continue;
+                      allEntries.push({ play: p, market: c.mkt, score: c.score });
+                      picked++;
+                      if (c.isFb) fbPicked++;
                     }
                   }
-                  allEntries.sort((a, b) => {
-                    const aQ = a.market.qualifiedEdge === true ? 1 : 0;
-                    const bQ = b.market.qualifiedEdge === true ? 1 : 0;
-                    if (aQ !== bQ) return bQ - aQ;
-                    const aEdge = Math.abs((a.market.modelProb ?? 50) - 50);
-                    const bEdge = Math.abs((b.market.modelProb ?? 50) - 50);
-                    return bEdge - aEdge;
-                  });
+
+                  allEntries.sort((a, b) => b.score - a.score);
                   const topEntries = allEntries.slice(0, 20);
-                  topEntries.forEach(entry => {
-                    console.log("[TOP PLAY]", { gameId: entry.play.gameId, marketKey: entry.market.marketKey, available: entry.market.available, edge: entry.market.edge, fallback: entry.market.fallback ?? false });
-                    const cardMarket = entry.play.engineOutput?.markets?.[entry.market.marketKey as NCAABMarketKey];
-                    if (cardMarket?.bookLine == null) {
-                      console.warn("[CARD VS TOP PLAY MISMATCH]", { gameId: entry.play.gameId, topPlaysSelectedKey: entry.market.marketKey, cardMarketAvailable: cardMarket?.available ?? false, cardMarketObject: cardMarket ?? null });
-                    }
-                  });
+                  console.log("[NCAAB_RENDER]", sortedPlays.length, "plays,", topEntries.length, "top entries");
 
                   if (topEntries.length === 0) return null;
                   return (
@@ -4219,13 +4230,16 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                       {topEntries.map((entry, idx) => {
                         const { play: p, market: mkt } = entry;
                         const isFallback = mkt.fallback === true;
-                        const tierStyle = TIER_STYLES[mkt.confidenceTier] ?? TIER_STYLES.NONE;
-                        const fallbackStyle = { color: "#71717a", bg: "rgba(113,113,122,0.1)", border: "rgba(113,113,122,0.3)" };
-                        const cardStyle = isFallback ? fallbackStyle : tierStyle;
+                        const tier = computeDisplayTier(mkt);
+                        const cardStyle = isFallback
+                          ? { color: "#a1a1aa", bg: "rgba(161,161,170,0.08)", border: "rgba(161,161,170,0.2)" }
+                          : tier.style;
                         const edgeSide = mkt.side === "OVER" ? "Over" : mkt.side === "UNDER" ? "Under" : mkt.side === "HOME" ? "Home" : mkt.side === "AWAY" ? "Away" : "—";
-                        const edgeColor = isFallback ? "#71717a" : (mkt.side === "OVER" || mkt.side === "HOME") ? "#00d4aa" : (mkt.side === "UNDER" || mkt.side === "AWAY") ? "#ef4444" : "#71717a";
+                        const edgeColor = isFallback ? "#a1a1aa" : tier.label === "ELITE" ? "#00d4aa" : tier.label === "STRONG" ? "#2dd4bf" : "#a1a1aa";
                         const halfLabel = p.half === 1 ? "H1" : p.half === 2 ? "H2" : "OT";
                         const confidenceDisplay = isFallback ? "Low" : mkt.modelProb != null ? `${mkt.modelProb.toFixed(1)}%` : "—";
+                        const is2H = isH2Market(mkt.marketKey);
+                        const isLive2H = is2H && isHalftimePlay(p);
                         return (
                           <div
                             key={`${p.gameId}-${mkt.marketKey}-${idx}`}
@@ -4246,28 +4260,44 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                                 </span>
                                 <span className="text-[10px] font-semibold" style={{ color: "#4ade80" }}>{halfLabel} · {p.clock}</span>
                               </div>
-                              {isFallback ? (
-                                <span
-                                  data-testid={`ncaab-fallback-badge-${p.gameId}-${mkt.marketKey}`}
-                                  className="text-[9px] font-black px-2 py-0.5 rounded-full"
-                                  style={{ background: "rgba(113,113,122,0.12)", color: "#71717a", border: "1px solid rgba(113,113,122,0.3)" }}
-                                >
-                                  Lean · Low Confidence
-                                </span>
-                              ) : mkt.confidenceTier !== "NONE" && (
-                                <span
-                                  data-testid={`ncaab-tier-badge-${p.gameId}-${mkt.marketKey}`}
-                                  className="text-[9px] font-black px-2 py-0.5 rounded-full"
-                                  style={{ background: tierStyle.bg, color: tierStyle.color, border: `1px solid ${tierStyle.border}` }}
-                                >
-                                  {mkt.confidenceTier}
-                                </span>
-                              )}
+                              <div className="flex items-center gap-1">
+                                {isLive2H && (
+                                  <span
+                                    data-testid={`ncaab-live-2h-badge-${p.gameId}-${mkt.marketKey}`}
+                                    className="text-[9px] font-black px-2 py-0.5 rounded-full"
+                                    style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b", border: "1px solid rgba(245,158,11,0.4)" }}
+                                  >
+                                    LIVE 2H
+                                  </span>
+                                )}
+                                {isFallback ? (
+                                  <span
+                                    data-testid={`ncaab-fallback-badge-${p.gameId}-${mkt.marketKey}`}
+                                    className="text-[9px] font-black px-2 py-0.5 rounded-full"
+                                    style={{ background: cardStyle.bg, color: cardStyle.color, border: `1px solid ${cardStyle.border}` }}
+                                  >
+                                    LEAN
+                                  </span>
+                                ) : (
+                                  <span
+                                    data-testid={`ncaab-tier-badge-${p.gameId}-${mkt.marketKey}`}
+                                    className="text-[9px] font-black px-2 py-0.5 rounded-full"
+                                    style={{ background: tier.style.bg, color: tier.style.color, border: `1px solid ${tier.style.border}` }}
+                                  >
+                                    {tier.label}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                             <p className="text-xs font-bold text-white truncate">{p.awayTeamAbbr} @ {p.homeTeamAbbr}</p>
                             <p className="text-lg font-black tabular-nums" style={{ color: "#ffffff" }}>{p.awayScore} – {p.homeScore}</p>
                             <div className="flex items-center justify-between text-[9px]" style={{ color: "#71717a" }}>
-                              <span data-testid={`ncaab-top-play-market-${p.gameId}-${mkt.marketKey}`}>{mkt.label}</span>
+                              <span data-testid={`ncaab-top-play-market-${p.gameId}-${mkt.marketKey}`}>
+                                {mkt.label}
+                                {is2H && mkt.bookLine != null && (
+                                  <span style={{ color: "#f59e0b", marginLeft: 4 }}>2H Line: {mkt.bookLine}</span>
+                                )}
+                              </span>
                               {mkt.sportsbook && (
                                 <span style={{ textTransform: "uppercase" }}>{mkt.sportsbook}</span>
                               )}

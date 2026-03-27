@@ -1709,6 +1709,10 @@ export async function computeNCAABPlays(): Promise<NCAABPlay[]> {
       if (isHalftime) {
         bettingWindow = "HALFTIME";
         bettingWindowLabel = "Halftime Window";
+        console.log(`[NCAAB_HALFTIME_ENGINE] gameId=${game.id} ${awayAbbr}@${homeAbbr} score=${game.awayScore}-${game.homeScore} h2TotalLine=${effectiveH2Line} h2Proj=${h2Proj} h2EngineOverProb=${h2EngineOverProb} h2EdgeSide=${h2EdgeSide} h2OverEdge=${h2OverEdge}`);
+        if (effectiveH2Line != null) {
+          console.log(`[NCAAB_HALFTIME_PRICED] gameId=${game.id} 2H market priced against real line=${effectiveH2Line} source=${h2LinesSource} overPrice=${h2OverPrice} underPrice=${h2UnderPrice}`);
+        }
       } else if (half === 1 && secondsLeft <= 600) {
         bettingWindow = "1H_WINDOW";
         bettingWindowLabel = "1H Window (≤10 min left)";
