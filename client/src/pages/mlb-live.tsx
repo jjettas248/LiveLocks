@@ -448,21 +448,34 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
             <span>{new Date(sig.signalTimestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
           )}
         </div>
-        <button
-          data-testid={`button-mlb-tweet-${sig.playerId}-${sig.market}`}
-          className="text-xs px-3 py-1 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-          onClick={() => {
-            const tweet = generateTweet(sig, isElite);
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-              navigator.clipboard.writeText(tweet).then(() => {
-                const btn = document.querySelector(`[data-testid="button-mlb-tweet-${sig.playerId}-${sig.market}"]`);
-                if (btn) { btn.textContent = "Copied!"; setTimeout(() => { btn.textContent = "Tweet"; }, 1500); }
-              }).catch(() => {});
-            }
-          }}
-        >
-          Tweet
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            data-testid={`button-mlb-tweet-${sig.playerId}-${sig.market}`}
+            className="text-xs px-3 py-1 rounded-lg border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 transition-colors text-blue-400 hover:text-blue-300 font-semibold"
+            onClick={() => {
+              const tweet = generateTweet(sig, isElite);
+              const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`;
+              window.open(url, "_blank", "noopener,noreferrer,width=550,height=420");
+            }}
+          >
+            𝕏 Tweet
+          </button>
+          <button
+            data-testid={`button-mlb-copy-${sig.playerId}-${sig.market}`}
+            className="text-xs px-2 py-1 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+            onClick={() => {
+              const tweet = generateTweet(sig, isElite);
+              if (navigator.clipboard?.writeText) {
+                navigator.clipboard.writeText(tweet).then(() => {
+                  const btn = document.querySelector(`[data-testid="button-mlb-copy-${sig.playerId}-${sig.market}"]`);
+                  if (btn) { btn.textContent = "✓"; setTimeout(() => { btn.textContent = "Copy"; }, 1500); }
+                }).catch(() => {});
+              }
+            }}
+          >
+            Copy
+          </button>
+        </div>
       </div>
     </div>
   );
