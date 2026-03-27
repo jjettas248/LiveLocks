@@ -6,7 +6,9 @@ export type MLBMarket =
   | "walks_allowed"
   | "home_runs"
   | "hrr"
-  | "pitcher_outs";
+  | "pitcher_outs"
+  | "batter_strikeouts"
+  | "hr_allowed";
 
 export const ALL_MLB_MARKETS: MLBMarket[] = [
   "hits",
@@ -17,6 +19,8 @@ export const ALL_MLB_MARKETS: MLBMarket[] = [
   "home_runs",
   "hrr",
   "pitcher_outs",
+  "batter_strikeouts",
+  "hr_allowed",
 ];
 
 // ── Phase 5: Game-level markets (team/game totals, F5) ────────────────────────
@@ -86,7 +90,7 @@ export const CORE_MARKETS: MLBMarket[] = [
   "pitcher_outs",
 ];
 
-export const EXPERIMENTAL_MARKETS: MLBMarket[] = ["home_runs"];
+export const EXPERIMENTAL_MARKETS: MLBMarket[] = ["home_runs", "batter_strikeouts", "hr_allowed"];
 
 export const EXPERIMENTAL_CONFIDENCE_CEILING: MLBConfidenceTier = "STRONG";
 
@@ -104,6 +108,8 @@ export const MARKET_PROBABILITY_CAPS: Record<MLBMarket, number> = {
   pitcher_outs: 80,
   walks_allowed: 72,
   hits_allowed: 77,
+  batter_strikeouts: 76,
+  hr_allowed: 42,
 };
 
 export const MARKET_PROJECTION_TOLERANCE: Record<MLBMarket, number> = {
@@ -115,6 +121,8 @@ export const MARKET_PROJECTION_TOLERANCE: Record<MLBMarket, number> = {
   pitcher_outs: 0.50,
   walks_allowed: 0.20,
   hits_allowed: 0.30,
+  batter_strikeouts: 0.15,
+  hr_allowed: 0.10,
 };
 
 export const MARKET_QUALIFY_FLOOR: Record<MLBMarket, number> = {
@@ -126,6 +134,8 @@ export const MARKET_QUALIFY_FLOOR: Record<MLBMarket, number> = {
   pitcher_outs: 60,
   walks_allowed: 58,
   hits_allowed: 58,
+  batter_strikeouts: 58,
+  hr_allowed: 35,
 };
 
 export type ContactQualityTier = "ELITE" | "HARD" | "MEDIUM" | "SOFT";
@@ -255,6 +265,7 @@ export interface MLBPropInput {
   weatherPark: WeatherParkContext;
   bullpen: BullpenContext;
 
+  oddsUpdatedAt?: number | null;
   bvpHistory?: BatterVsPitcherHistory;
   hrrComponents?: HRRComponents;
 
@@ -396,6 +407,8 @@ export const MARKET_SIGMA: Record<MLBMarket, number> = {
   home_runs: 0.40,
   hrr: 1.50,
   pitcher_outs: 2.50,
+  batter_strikeouts: 0.70,
+  hr_allowed: 0.50,
 };
 
 export const EDGE_THRESHOLDS = {
@@ -413,6 +426,8 @@ export const SUPPRESSION_RULES: Record<MLBMarket, { minEdge: number; minComplete
   home_runs:          { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
   hrr:                { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
   pitcher_outs:       { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
+  batter_strikeouts:  { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
+  hr_allowed:         { minEdge: 0,    minCompletedAB: 0, requireContactData: false },
 };
 
 export type FormIndicator = "hot" | "warm" | "neutral" | "cold" | "extreme_cold";
@@ -435,6 +450,8 @@ export const MLB_MARKET_MIN_GAP: Record<MLBMarket, number> = {
   home_runs:          0.10,
   hrr:                0.60,
   pitcher_outs:       1.00,
+  batter_strikeouts:  0.25,
+  hr_allowed:         0.10,
 };
 
 export type SignalConfidenceTier = "ELITE" | "STRONG" | "SOLID" | "WATCHLIST" | "NO_SIGNAL";

@@ -12,7 +12,10 @@ type MLBMarket =
   | "pitcher_outs"
   | "hits_allowed"
   | "home_runs"
-  | "hrr";
+  | "hrr"
+  | "walks_allowed"
+  | "batter_strikeouts"
+  | "hr_allowed";
 
 type MLBConfidenceTier = "ELITE" | "STRONG" | "LEAN" | "NO_EDGE";
 type MLBRecommendedSide = "OVER" | "UNDER" | "NO_EDGE";
@@ -127,9 +130,12 @@ const MLB_MARKETS: MLBMarket[] = [
   "pitcher_outs",
   "hits_allowed",
   "home_runs",
+  "walks_allowed",
+  "batter_strikeouts",
+  "hr_allowed",
 ];
 
-const MARKET_LABELS: Record<MLBMarket, string> = {
+const MARKET_LABELS: Record<string, string> = {
   hits: "Hits",
   total_bases: "Total Bases",
   hrr: "H+R+RBI",
@@ -137,6 +143,9 @@ const MARKET_LABELS: Record<MLBMarket, string> = {
   pitcher_outs: "Pitcher Outs",
   hits_allowed: "Hits Allowed",
   home_runs: "Home Runs (Experimental)",
+  walks_allowed: "Walks Allowed",
+  batter_strikeouts: "Batter Strikeouts",
+  hr_allowed: "HR Allowed",
 };
 
 // ── Form type ─────────────────────────────────────────────────────────────────

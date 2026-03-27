@@ -29,7 +29,7 @@ import { estimateRemainingPA, estimatePitcherRemainingBF } from "./paEstimator";
 import { calculateMLBPropEdge, hasRealOdds, canShowSignal } from "./markets";
 import { recordMLBDiagnostic } from "./diagnostics";
 import type { MLBPropInput, MLBPropOutput, MLBMarket, MLBQualifiedSignal } from "./types";
-import { MARKET_QUALIFY_FLOOR } from "./types";
+import { MARKET_QUALIFY_FLOOR, ALL_MLB_MARKETS } from "./types";
 import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
 import { computeSignalScore, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible } from "./signalScore";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
@@ -68,9 +68,10 @@ const BATTER_MARKETS: MLBMarket[] = [
   "total_bases",
   "home_runs",
   "hrr",
+  "batter_strikeouts",
 ];
 
-const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed"];
+const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"];
 
 // ── Previously-resolved line cache ───────────────────────────────────────────
 // Persists the last successfully fetched sportsbook line per event+player+market
@@ -148,6 +149,8 @@ async function resolveBookLine(
     walks_allowed: 2.5,
     home_runs: 0.5,
     hrr: 1.5,
+    batter_strikeouts: 0.5,
+    hr_allowed: 0.5,
   };
   const derivedLine = DERIVED_LINES[market];
   if (derivedLine !== undefined) {
@@ -178,7 +181,29 @@ export type StateChangeTrigger =
   | "ball_in_play"
   | "inning_change"
   | "pitcher_change"
-  | "runner_change";
+  | "runner_change"
+  | "pitch_count_threshold"
+  | "tto_shift"
+  | "lineup_substitution"
+  | "hard_hit_event"
+  | "odds_update";
+
+const HIGH_IMPACT_TRIGGERS = new Set<StateChangeTrigger>([
+  "inning_change", "pitcher_change", "tto_shift", "lineup_substitution",
+]);
+
+const TRIGGER_IMPACTED_MARKETS: Record<StateChangeTrigger, MLBMarket[] | "all"> = {
+  new_ab: "all",
+  ball_in_play: ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts", "hits_allowed", "hr_allowed"],
+  inning_change: "all",
+  pitcher_change: "all",
+  runner_change: ["hits", "total_bases", "hrr"],
+  pitch_count_threshold: ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"],
+  tto_shift: "all",
+  lineup_substitution: "all",
+  hard_hit_event: ["hits", "total_bases", "home_runs", "hrr", "hits_allowed", "hr_allowed"],
+  odds_update: "all",
+};
 
 // ── Polling intervals ─────────────────────────────────────────────────────────
 
@@ -343,16 +368,13 @@ export class LiveGameOrchestrator {
       if (triggers.length > 0) {
         console.log(`[MLB orchestrator] State change for game ${gameId} (status=${normalizedStatus}, source=${statusSource}): ${triggers.join(", ")}`);
 
-        // On inning change, also sync bullpen
         if (triggers.includes("inning_change")) {
           await syncBullpenUsage(statsPk, gameId);
         }
 
-        // Only trigger engine when game is confirmed live
-        await this.triggerEngine(gameId, normalizedStatus);
+        await this.triggerEngine(gameId, normalizedStatus, triggers);
       }
     } else if (normalizedStatus === "live") {
-      // First time seeing this game — if it's already live, trigger engine immediately
       console.log(`[MLB orchestrator] First poll for live game ${gameId} (status=${normalizedStatus}, source=${statusSource}) — triggering engine`);
       await this.triggerEngine(gameId, normalizedStatus);
     }
@@ -366,34 +388,66 @@ export class LiveGameOrchestrator {
   ): StateChangeTrigger[] {
     const triggers: StateChangeTrigger[] = [];
 
-    // Inning change
     if (oldState.inning !== newState.inning || oldState.isTopInning !== newState.isTopInning) {
       triggers.push("inning_change");
     }
 
-    // New AB (current batter changed)
     if (oldState.currentBatter?.playerId !== newState.currentBatter?.playerId) {
       triggers.push("new_ab");
     }
 
-    // Pitcher change
     if (oldState.pitcherInGame?.playerId !== newState.pitcherInGame?.playerId) {
       triggers.push("pitcher_change");
     }
 
-    // Runner state change
     const oldRunners = JSON.stringify((oldState.runnersOnBase ?? []).sort());
     const newRunners = JSON.stringify((newState.runnersOnBase ?? []).sort());
     if (oldRunners !== newRunners) {
       triggers.push("runner_change");
     }
 
-    // Ball in play (pitch count went up — proxy detection)
     if (newState.pitchCount > oldState.pitchCount) {
       triggers.push("ball_in_play");
     }
 
+    const pitchCountThresholds = [50, 65, 75, 85, 95, 105];
+    for (const threshold of pitchCountThresholds) {
+      if (oldState.pitchCount < threshold && newState.pitchCount >= threshold) {
+        triggers.push("pitch_count_threshold");
+        break;
+      }
+    }
+
+    const oldTTO = (oldState as any).timesThrough ?? 1;
+    const newTTO = (newState as any).timesThrough ?? 1;
+    if (newTTO > oldTTO) {
+      triggers.push("tto_shift");
+    }
+
+    const oldBatterCount = (oldState as any).battingOrder?.length ?? 0;
+    const newBatterCount = (newState as any).battingOrder?.length ?? 0;
+    if (newBatterCount !== oldBatterCount && oldBatterCount > 0) {
+      triggers.push("lineup_substitution");
+    }
+
     return triggers;
+  }
+
+  private computeImpactedMarkets(triggers: StateChangeTrigger[]): Set<MLBMarket> {
+    const impacted = new Set<MLBMarket>();
+    for (const t of triggers) {
+      const markets = TRIGGER_IMPACTED_MARKETS[t];
+      if (markets === "all") {
+        return new Set(ALL_MLB_MARKETS);
+      }
+      for (const m of markets) impacted.add(m);
+    }
+    return impacted;
+  }
+
+  private getDedupWindow(triggers: StateChangeTrigger[]): number {
+    const hasHighImpact = triggers.some(t => HIGH_IMPACT_TRIGGERS.has(t));
+    return hasHighImpact ? 10_000 : DEDUP_WINDOW_MS;
   }
 
   private qualifySignal(gameId: string, input: MLBPropInput, output: MLBPropOutput): MLBQualifiedSignal | null {
@@ -585,7 +639,7 @@ export class LiveGameOrchestrator {
     };
   }
 
-  async triggerEngine(gameId: string, normalizedStatus: "live" | "pregame" | "final" | "unknown"): Promise<MLBPropOutput[]> {
+  async triggerEngine(gameId: string, normalizedStatus: "live" | "pregame" | "final" | "unknown", triggers?: StateChangeTrigger[]): Promise<MLBPropOutput[]> {
     const outputs: MLBPropOutput[] = [];
     const qualifiedSignals: MLBQualifiedSignal[] = [];
     const allSignals: MLBQualifiedSignal[] = [];
@@ -597,20 +651,23 @@ export class LiveGameOrchestrator {
     const state = mlbGameCache.gameState[gameId];
     const game = getGame(gameId);
 
-    // Strict status gate — engine MUST receive explicit "live" status.
-    // If status is undefined, unknown, pregame, or final — skip entirely.
-    // This prevents fabricated signals for non-live games.
     if (normalizedStatus !== "live") {
       console.log(`[MLB orchestrator] triggerEngine skipped for game ${gameId}: normalizedStatus=${normalizedStatus ?? "undefined"} (must be "live")`);
       return outputs;
     }
 
-    // Dedup lock — skip if engine ran within the last 30 seconds for this game.
-    if (shouldSkip(gameId)) {
-      console.log(`[MLB orchestrator] triggerEngine dedup-skipped for game ${gameId} (ran within ${DEDUP_WINDOW_MS}ms)`);
+    const effectiveDedup = triggers ? this.getDedupWindow(triggers) : DEDUP_WINDOW_MS;
+    const last = LAST_RUN.get(gameId);
+    if (last !== undefined && Date.now() - last < effectiveDedup) {
+      console.log(`[MLB orchestrator] triggerEngine dedup-skipped for game ${gameId} (ran within ${effectiveDedup}ms)`);
       return outputs;
     }
     LAST_RUN.set(gameId, Date.now());
+
+    const impactedMarkets = triggers ? this.computeImpactedMarkets(triggers) : new Set(ALL_MLB_MARKETS);
+    if (triggers) {
+      console.log(`[MLB orchestrator] Event-driven recalc for game ${gameId}: triggers=[${triggers.join(",")}] impactedMarkets=[${[...impactedMarkets].join(",")}]`);
+    }
 
     if (!state) {
       console.warn(`[MLB orchestrator] triggerEngine: no game state cached for ${gameId}`);
@@ -636,6 +693,7 @@ export class LiveGameOrchestrator {
 
     // ── Batter markets: evaluate each hitter in the starting lineup ────────────
     for (const market of BATTER_MARKETS) {
+      if (!impactedMarkets.has(market)) continue;
       for (const batter of state.battingOrder) {
         // ── Input validation: skip player if required context is missing ─────
         if (!batter.playerId || batter.playerId === "unknown") {
@@ -709,7 +767,8 @@ export class LiveGameOrchestrator {
             case "hits": currentStatForMarket = boxScorePlayer.hits; break;
             case "home_runs": case "hrr": currentStatForMarket = boxScorePlayer.hr; break;
             case "total_bases": currentStatForMarket = boxScorePlayer.tb; break;
-            case "pitcher_strikeouts": case "hits_allowed": case "walks_allowed": currentStatForMarket = 0; break;
+            case "batter_strikeouts": currentStatForMarket = (boxScorePlayer as any).strikeouts ?? 0; break;
+            case "pitcher_strikeouts": case "hits_allowed": case "walks_allowed": case "hr_allowed": currentStatForMarket = 0; break;
             default: currentStatForMarket = boxScorePlayer.hits; break;
           }
         }
@@ -885,6 +944,7 @@ export class LiveGameOrchestrator {
       const pitcherCtx = pitcherCtxCache?.byPitcherId?.[pitcherToEval.playerId];
 
       for (const market of PITCHER_MARKETS) {
+        if (!impactedMarkets.has(market)) continue;
         const currentPitchCount = pitcherCtx?.pitchCount ?? state.pitchCount ?? 0;
         const { remainingBF, remainingIP } = estimatePitcherRemainingBF(
           state.inning,
@@ -919,6 +979,8 @@ export class LiveGameOrchestrator {
             ? 0.65
           : market === "hits_allowed"
             ? (pitcherSeasonForPitcherMarket?.whip != null ? pitcherSeasonForPitcherMarket.whip * 0.72 * 6 : 5.0)
+          : market === "hr_allowed"
+            ? (pitcherSeasonForPitcherMarket?.era != null ? Math.max(0.3, pitcherSeasonForPitcherMarket.era / 9 * 1.1) : 0.8)
             : 5.0;
 
         const input: MLBPropInput = {

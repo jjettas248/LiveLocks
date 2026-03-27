@@ -86,6 +86,15 @@ function computeBaseValue(input: MLBPropInput, market: MLBMarket): number {
         (hitsRate + runsRate + rbiRate) * remainingAB
       );
     }
+    case "batter_strikeouts": {
+      const kRate = seasonAvg > 0 ? seasonAvg : 0.22;
+      return currentStatValue + kRate * remainingAB;
+    }
+    case "hr_allowed": {
+      const hrPerIP = seasonAvg > 0 ? seasonAvg : 0.10;
+      const estimatedIPRemainingHR = remainingAB / 4.3;
+      return currentStatValue + hrPerIP * estimatedIPRemainingHR;
+    }
     default:
       return currentStatValue;
   }

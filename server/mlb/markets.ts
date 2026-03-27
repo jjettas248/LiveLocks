@@ -105,7 +105,54 @@ import { projectBaseValue } from "./projections";
 import { computeRawProbability, clampProjection, clampProbability } from "./probability";
 import { calibrateProbability } from "./calibration";
 
-function determineConfidenceTier(edge: number): MLBConfidenceTier {
+function computeSpecConfidenceScore(
+  edge: number,
+  features: FeatureLayer,
+  badges: { positive: string[]; negative: string[] },
+  oddsAge: number,
+): number {
+  const edgeStrength = Math.min(1, Math.abs(edge) / 10);
+
+  const featureValues = [
+    features.contactQuality, features.batSpeedPower, features.handednessMatchup,
+    features.pitchBlendMatchup, features.hotColdForm, features.parkEnv,
+    features.pitcherSuppression, features.pitcherDeterioration,
+  ];
+  const mean = featureValues.reduce((s, v) => s + v, 0) / featureValues.length;
+  const variance = featureValues.reduce((s, v) => s + (v - mean) ** 2, 0) / featureValues.length;
+  const agreementCount = featureValues.filter(v => (edge > 0 ? v > 0.55 : v < 0.45)).length;
+  const signalAgreement = Math.min(1, agreementCount / featureValues.length);
+
+  const dataFreshness = Math.max(0, 1 - oddsAge / 600_000);
+
+  const lowVarianceProfile = Math.max(0, 1 - variance * 4);
+
+  const badgeSupport = Math.min(1,
+    (badges.positive.length * 0.15 - badges.negative.length * 0.10 + 0.3)
+  );
+
+  return (
+    0.35 * edgeStrength +
+    0.20 * signalAgreement +
+    0.15 * dataFreshness +
+    0.15 * lowVarianceProfile +
+    0.15 * Math.max(0, badgeSupport)
+  );
+}
+
+function determineConfidenceTier(
+  edge: number,
+  features?: FeatureLayer,
+  badges?: { positive: string[]; negative: string[] },
+  oddsAge?: number,
+): MLBConfidenceTier {
+  if (features && badges) {
+    const score = computeSpecConfidenceScore(edge, features, badges, oddsAge ?? 0);
+    if (score >= 0.70) return "ELITE";
+    if (score >= 0.50) return "STRONG";
+    if (score >= 0.30) return "LEAN";
+    return "NO_EDGE";
+  }
   const absEdge = Math.abs(edge);
   if (absEdge >= EDGE_THRESHOLDS.elite) return "ELITE";
   if (absEdge >= EDGE_THRESHOLDS.strong) return "STRONG";
@@ -148,8 +195,7 @@ function applyProbabilityCeiling(
 
 // ── Tier 1 markets (high priority, standard composite threshold) ──────────────
 const TIER1_MARKETS = new Set<MLBMarket>(["hits", "total_bases", "hrr", "pitcher_strikeouts", "pitcher_outs"]);
-// ── Tier 3 markets (home runs, stricter composite threshold) ────────────
-const TIER3_MARKETS = new Set<MLBMarket>(["home_runs"]);
+const TIER3_MARKETS = new Set<MLBMarket>(["home_runs", "batter_strikeouts", "hr_allowed"]);
 
 function checkSuppression(
   input: MLBPropInput,
@@ -439,6 +485,43 @@ function applyMarketFeatureWeights(
       featureMultiplier = 0.5 + walkExposure;
       break;
     }
+    case "batter_strikeouts": {
+      const whiffRate = input.contactQuality.hardHitRateSeason != null
+        ? Math.max(0, 1 - input.contactQuality.hardHitRateSeason) : 0.5;
+      const batterKExposure =
+        0.28 * (1 - features.contactQuality) +
+        0.18 * whiffRate +
+        0.14 * computeSpecPitchBlendMatchup(input, "whiff") +
+        0.12 * (1 - features.handednessMatchup) +
+        0.10 * (features.hotColdForm <= 0.3 ? 0.7 : 0.35) +
+        0.08 * (1 - features.bvp) +
+        0.06 * (batSpeed.batSpeedZ > 1 && whiffRate > 0.5 ? 0.7 : 0.3) +
+        0.04 * (1 - features.lineupOpportunity);
+      const pitcherPutaway =
+        0.30 * Math.min(1, (input.pitcher.kPer9 ?? 8) / 12) +
+        0.22 * (input.pitcher.whip != null ? 1 - Math.min(1, input.pitcher.whip / 1.5) : 0.5) +
+        0.16 * computeSpecPitchBlendMatchup(input, "whiff") +
+        0.12 * features.handednessMatchup +
+        0.10 * Math.min(1, (input.pitcher.kPer9 ?? 8) / 10) +
+        0.10 * features.pitcherSuppression;
+      featureMultiplier = (0.5 + batterKExposure) * (0.5 + pitcherPutaway);
+      break;
+    }
+    case "hr_allowed": {
+      const barrelAllowed = input.contactQuality.barrelRateProxySeason != null
+        ? Math.min(1, (input.contactQuality.barrelRateProxySeason) / 0.12) : 0.5;
+      const pitcherHRRisk =
+        0.24 * barrelAllowed +
+        0.18 * features.contactQuality +
+        0.14 * computeSpecParkEnv(input, "hr") +
+        0.12 * features.handednessMatchup +
+        0.12 * features.pitchBlendMatchup +
+        0.10 * deterioration.hrAllowed +
+        0.10 * (deterioration.overall > 0.5 ? deterioration.overall - 0.3 : 0);
+      featureMultiplier = 0.5 + pitcherHRRisk;
+      featureMultiplier *= (1 - 0.25 * features.pitcherSuppression);
+      break;
+    }
     default:
       featureMultiplier = 1.0;
   }
@@ -489,7 +572,9 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
   const isOverFavored = overProb >= underProb;
   const bookImplied = computeBookImplied(input, isOverFavored);
   const edge = calibratedSided - bookImplied;
-  let confidenceTier = determineConfidenceTier(edge);
+  const badgeResult = computeBadges(input, features);
+  const oddsAge = input.oddsUpdatedAt ? Date.now() - input.oddsUpdatedAt : 0;
+  let confidenceTier = determineConfidenceTier(edge, features, badgeResult, oddsAge);
   let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
 
   const warnings = [...projResult.warnings];
@@ -539,8 +624,6 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
   const hrFactors = (input.market === "home_runs" || input.market === "hrr")
     ? (() => { const f = computeHRQualifyingFactors(input); return { count: f.count, labels: f.labels }; })()
     : undefined;
-
-  const badgeResult = computeBadges(input, features);
 
   const featureScores: Record<string, number> = {
     contactQuality: Math.round(features.contactQuality * 1000) / 1000,
@@ -840,6 +923,14 @@ export function calculateHRREdge(input: MLBPropInput): MLBPropOutput {
   return buildOutput({ ...input, market: "hrr" });
 }
 
+export function calculateBatterStrikeoutsEdge(input: MLBPropInput): MLBPropOutput {
+  return buildOutput({ ...input, market: "batter_strikeouts" });
+}
+
+export function calculateHRAllowedEdge(input: MLBPropInput): MLBPropOutput {
+  return buildOutput({ ...input, market: "hr_allowed" });
+}
+
 const MARKET_CALCULATORS: Record<MLBMarket, (input: MLBPropInput) => MLBPropOutput> = {
   hits: calculateHitsEdge,
   total_bases: calculateTBEdge,
@@ -849,6 +940,8 @@ const MARKET_CALCULATORS: Record<MLBMarket, (input: MLBPropInput) => MLBPropOutp
   walks_allowed: calculateWalksAllowedEdge,
   home_runs: calculateHREdge,
   hrr: calculateHRREdge,
+  batter_strikeouts: calculateBatterStrikeoutsEdge,
+  hr_allowed: calculateHRAllowedEdge,
 };
 
 export function calculateMLBPropEdge(input: MLBPropInput): MLBPropOutput {

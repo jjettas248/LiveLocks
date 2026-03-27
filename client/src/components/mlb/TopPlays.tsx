@@ -36,6 +36,8 @@ const MARKET_LABELS: Record<string, string> = {
   walks_allowed: "BB Allowed",
   hits_allowed: "Hits Allowed",
   earned_runs: "Earned Runs",
+  batter_strikeouts: "Strikeouts",
+  hr_allowed: "HR Allowed",
 };
 
 const TIER_COLORS: Record<string, { bg: string; border: string; text: string; badge: string }> = {

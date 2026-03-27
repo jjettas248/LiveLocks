@@ -202,6 +202,7 @@ const MARKET_LABELS: Record<string, string> = {
   pitcher_k: "K (Pitcher)", pitcher_strikeouts: "K (Pitcher)", pitcher_outs: "Pitcher Outs",
   hits_allowed: "Hits Allowed", walks_allowed: "Walks Allowed",
   hr: "Home Runs", home_runs: "Home Runs",
+  batter_strikeouts: "Strikeouts", hr_allowed: "HR Allowed",
 };
 
 const SPORTSBOOK_LABELS: Record<string, string> = {
@@ -211,13 +212,14 @@ const SPORTSBOOK_LABELS: Record<string, string> = {
   fanatics: "Fanatics",
 };
 
-const PITCHER_MARKET_SET = new Set(["pitcher_k", "pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed"]);
+const PITCHER_MARKET_SET = new Set(["pitcher_k", "pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"]);
 
 const BATTER_MARKETS = [
   { value: "hits", label: "Hits" },
   { value: "total_bases", label: "Total Bases" },
   { value: "hrr", label: "H+R+RBI" },
   { value: "hr", label: "Home Runs" },
+  { value: "batter_strikeouts", label: "Strikeouts" },
 ];
 
 const PITCHER_MARKETS = [
@@ -225,6 +227,7 @@ const PITCHER_MARKETS = [
   { value: "pitcher_outs", label: "Outs" },
   { value: "walks_allowed", label: "Walks Allowed" },
   { value: "hits_allowed", label: "Hits Allowed" },
+  { value: "hr_allowed", label: "HR Allowed" },
 ];
 
 type MainTab = "games" | "edge_feed" | "inning_feed" | "hr_radar";
