@@ -869,8 +869,8 @@ function MlbLiveInner() {
 
       {mainTab === "edge_feed" && (
         <div className="space-y-6">
-          <TopPlays signals={edgeFeedSignals} />
-          <LiveBoard signals={edgeFeedSignals} />
+          <TopPlays signals={edgeFeedSignals} onPlayerClick={(gameId) => { setSelectedGameId(gameId); setMainTab("games"); }} />
+          <LiveBoard signals={edgeFeedSignals} onPlayerClick={(gameId) => { setSelectedGameId(gameId); setMainTab("games"); }} />
         </div>
       )}
 

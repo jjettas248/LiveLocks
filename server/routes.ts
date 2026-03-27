@@ -1072,6 +1072,8 @@ export async function registerRoutes(
               awayAbbr: game?.awayAbbr ?? null,
               homeAbbr: game?.homeAbbr ?? null,
               gameStatus: game?.status ?? null,
+              reasons: sig.reasons ?? sig.explanationBullets ?? [],
+              formIndicator: sig.formIndicator ?? null,
             });
           }
         } else {
@@ -1092,6 +1094,7 @@ export async function registerRoutes(
                 projection: qs.projection ?? null,
                 enginePct: Math.round((qs.engineProbability ?? 0) * 10) / 10,
                 edge: raw ? Math.round(raw.edge * 100) / 100 : null,
+                evPct: raw ? Math.round((raw.evPct ?? 0) * 100) / 100 : null,
                 recommendedSide: qs.side,
                 inning: 0,
                 gameId: gid,
@@ -1105,6 +1108,8 @@ export async function registerRoutes(
                 signalTags: qs.signalTags,
                 feedTags: qs.feedTags,
                 playerGlowEligible: qs.playerGlowEligible,
+                formIndicator: qs.formIndicator ?? null,
+                reasons: qs.reasons ?? [],
               });
             }
           }
