@@ -67,9 +67,8 @@ const EVENTS_TTL = 3 * 60 * 1000;       // 3 min (shorter so fresh games appear 
 // NBA-specific TTLs (reduced for near-real-time line updates)
 const NBA_ODDS_TTL = 2 * 60 * 1000;     // 2 min — pre-game line raw cache (NBA)
 const NBA_ODDS_LIVE_TTL = 30 * 1000;    // 30 sec — in-play line raw cache for halftime freshness (NBA)
-// MLB retains original longer TTLs (separate code path, out of scope for real-time changes)
-const MLB_ODDS_TTL = 5 * 60 * 1000;     // 5 min — pre-game line raw cache (MLB)
-const MLB_ODDS_LIVE_TTL = 90 * 1000;    // 90 sec — in-play line raw cache (MLB)
+const MLB_ODDS_TTL = 2 * 60 * 1000;     // 2 min — pre-game line raw cache (MLB, matched to NBA)
+const MLB_ODDS_LIVE_TTL = 30 * 1000;    // 30 sec — in-play line raw cache (MLB, matched to NBA)
 
 function isFresh(entry: CacheEntry | undefined, ttl: number): boolean {
   return !!entry && Date.now() - entry.timestamp < ttl;
@@ -922,8 +921,7 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
   if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
 
   const inPlayParam = inPlay ? "&in_play=true" : "";
-  const bookmakers = "draftkings,fanduel,hardrockbet";
-  const url = `${MLB_BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=${PROP_REGIONS}&markets=${marketKey}&bookmakers=${bookmakers}&oddsFormat=american${inPlayParam}`;
+  const url = `${MLB_BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=${PROP_REGIONS}&markets=${marketKey}&bookmakers=${PROP_BOOKMAKERS}&oddsFormat=american${inPlayParam}`;
 
   let res: Response;
   try {
@@ -976,7 +974,7 @@ function makeDegradedMLBResult(data: MLBOddsResult): MLBOddsResult {
 // Last-known-good MLB player odds cache (normalized level)
 // Key: "oddsEventId|playerNorm|statType" — mirrors the NBA lastKnownOdds pattern
 const lastKnownMLBOdds = new Map<string, { data: MLBOddsResult; timestamp: number }>();
-const MLB_LAST_KNOWN_TTL = MLB_ODDS_TTL; // 5 minutes (MLB)
+const MLB_LAST_KNOWN_TTL = MLB_ODDS_TTL; // 2 minutes (MLB, matched to NBA)
 
 export async function getMLBPlayerOdds(
   oddsEventId: string,

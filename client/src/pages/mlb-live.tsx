@@ -206,7 +206,8 @@ const MARKET_LABELS: Record<string, string> = {
 const SPORTSBOOK_LABELS: Record<string, string> = {
   fanduel: "FanDuel", draftkings: "DraftKings", hardrockbet: "Hard Rock", betmgm: "BetMGM",
   caesars: "Caesars", pointsbet: "PointsBet", bet365: "Bet365", betrivers: "BetRivers",
-  prizepicks: "PrizePicks", underdog: "Underdog",
+  prizepicks: "PrizePicks", underdog: "Underdog", underdogfantasy: "Underdog",
+  fanatics: "Fanatics",
 };
 
 const PITCHER_MARKET_SET = new Set(["pitcher_k", "pitcher_strikeouts", "hits_allowed", "walks_allowed"]);
