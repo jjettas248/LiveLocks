@@ -1141,6 +1141,7 @@ export async function registerRoutes(
               reasons: sig.reasons ?? sig.explanationBullets ?? [],
               formIndicator: sig.formIndicator ?? null,
               currentStats: sig.currentStats ?? null,
+              lastABContact: sig.lastABContact ?? null,
             });
           }
         } else {
@@ -1178,6 +1179,7 @@ export async function registerRoutes(
                 formIndicator: qs.formIndicator ?? null,
                 reasons: qs.reasons ?? [],
                 currentStats: qs.currentStats ?? null,
+                lastABContact: qs.lastABContact ?? null,
               });
             }
           }

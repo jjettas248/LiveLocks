@@ -12,7 +12,8 @@ const SPORT_BADGE: Record<string, { label: string; color: string }> = {
 const EDGE_COLOR = (edge: number): string => {
   if (edge >= 8) return "text-green-400";
   if (edge >= 5) return "text-yellow-400";
-  return "text-muted-foreground";
+  if (edge >= 0) return "text-muted-foreground";
+  return "text-red-400";
 };
 
 export type SportSignalCardProps = {
@@ -35,6 +36,15 @@ export type SportSignalCardProps = {
   footerSlot?: ReactNode;
   detailSlot?: ReactNode;
   currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
+  lastABContact?: {
+    exitVelo: number | null;
+    launchAngle: number | null;
+    batSpeed: number | null;
+    distance: number | null;
+    barrelPct: number | null;
+    hardHitPct: number | null;
+    outcome: string | null;
+  } | null;
   matchup?: string;
 };
 

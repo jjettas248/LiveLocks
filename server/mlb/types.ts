@@ -499,4 +499,13 @@ export interface MLBQualifiedSignal {
     k: number;
     sb: number;
   } | null;
+  lastABContact?: {
+    exitVelo: number | null;
+    launchAngle: number | null;
+    batSpeed: number | null;
+    distance: number | null;
+    barrelPct: number | null;
+    hardHitPct: number | null;
+    outcome: string | null;
+  } | null;
 }

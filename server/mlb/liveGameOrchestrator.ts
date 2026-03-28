@@ -917,9 +917,23 @@ export class LiveGameOrchestrator {
             k: boxScorePlayer.so, sb: 0,
           } : null;
 
+          const lastAB = playerContact?.priorABResults?.length
+            ? playerContact.priorABResults[playerContact.priorABResults.length - 1]
+            : null;
+          const lastABContact = lastAB || playerContact ? {
+            exitVelo: lastAB?.exitVelocity ?? playerContact?.exitVelocity ?? null,
+            launchAngle: lastAB?.launchAngle ?? playerContact?.launchAngle ?? null,
+            batSpeed: null,
+            distance: lastAB?.distance ?? playerContact?.hitDistance ?? null,
+            barrelPct: playerContact?.barrelPct ?? null,
+            hardHitPct: playerContact?.hardHitPct ?? null,
+            outcome: lastAB?.outcome ?? null,
+          } : null;
+
           const qResult = this.qualifySignal(gameId, input, output);
           if (qResult) {
             qResult.currentStats = batterStats;
+            qResult.lastABContact = lastABContact;
             qualifiedSignals.push(qResult);
             allSignals.push(qResult);
             signalsQualified++;
@@ -927,7 +941,7 @@ export class LiveGameOrchestrator {
           } else {
             signalsRejected++;
             const watchSig = this.buildWatchSignal(gameId, input, output);
-            if (watchSig) { watchSig.currentStats = batterStats; allSignals.push(watchSig); }
+            if (watchSig) { watchSig.currentStats = batterStats; watchSig.lastABContact = lastABContact; allSignals.push(watchSig); }
           }
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for ${batter.playerName} / ${market}:`, err.message);

@@ -140,6 +140,15 @@ type MLBSignal = {
   feedTags?: string[];
   playerGlowEligible?: boolean;
   currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
+  lastABContact?: {
+    exitVelo: number | null;
+    launchAngle: number | null;
+    batSpeed: number | null;
+    distance: number | null;
+    barrelPct: number | null;
+    hardHitPct: number | null;
+    outcome: string | null;
+  } | null;
 };
 
 type SignalsResponse = {
@@ -354,7 +363,7 @@ function ABOutcomePill({ outcome, pitchType, pitchSpeed, exitVelocity }: { outco
 
 function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolean; compact?: boolean }) {
   const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
-  const isHrMarket = sig.market === "home_runs" || sig.market === "hr" || sig.market === "hrr";
+  const isHrMarket = sig.market === "home_runs" || sig.market === "hr";
   const form = sig.formIndicator;
   const probWhole = Math.round(sig.enginePct);
 
@@ -414,21 +423,80 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
       </div>
 
       {sig.edge != null && (
-        <div className={`text-center py-1.5 rounded-lg text-xs font-bold ${edgeBg(sig.edge)} ${edgeColor(sig.edge)}`}>
-          Edge: +{sig.edge.toFixed(1)}%
+        <div className={`text-center py-1.5 rounded-lg text-xs font-bold ${edgeBg(sig.edge)} ${sig.edge >= 0 ? "text-green-400" : "text-red-400"}`}>
+          Edge: {sig.edge >= 0 ? "+" : ""}{sig.edge.toFixed(1)}%
         </div>
       )}
 
-      {sig.currentStats && (
-        <div className="flex items-center gap-3 py-1.5 px-2 rounded-lg bg-secondary/40 border border-border/30">
-          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider shrink-0">Today</span>
+      {sig.currentStats && (() => {
+        const cs = sig.currentStats;
+        const line = sig.bookLine ?? 0;
+        const currentVal = sig.market === "hits" ? cs.h
+          : sig.market === "home_runs" || sig.market === "hr" ? cs.hr
+          : sig.market === "total_bases" ? cs.tb
+          : sig.market === "hrr" ? (cs.h + (cs as any).runs + cs.rbi)
+          : cs.h;
+        const alreadyOver = currentVal >= line && line > 0;
+        const edgeHit = sig.recommendedSide === "OVER" && alreadyOver;
+        return (
+          <div className={`flex items-center gap-3 py-1.5 px-2 rounded-lg border ${
+            edgeHit
+              ? "bg-green-500/10 border-green-500/30"
+              : alreadyOver
+                ? "bg-yellow-500/10 border-yellow-500/30"
+                : "bg-secondary/40 border-border/30"
+          }`}>
+            <span className={`text-[10px] font-semibold uppercase tracking-wider shrink-0 ${
+              edgeHit ? "text-green-400" : "text-muted-foreground"
+            }`}>{edgeHit ? "HIT" : "Today"}</span>
+            <div className="flex items-center gap-2 flex-wrap text-[11px]">
+              <span className={`font-semibold ${alreadyOver ? "text-green-400" : "text-foreground"}`}>
+                {cs.ab > 0 ? `${cs.h}-${cs.ab}` : "0 AB"}
+              </span>
+              {cs.hr > 0 && <span className="text-orange-400 font-bold">{cs.hr} HR</span>}
+              {cs.rbi > 0 && <span className="text-muted-foreground">{cs.rbi} RBI</span>}
+              {cs.bb > 0 && <span className="text-muted-foreground">{cs.bb} BB</span>}
+              {cs.k > 0 && <span className="text-red-400">{cs.k} K</span>}
+              {cs.tb > 0 && <span className="text-muted-foreground">{cs.tb} TB</span>}
+            </div>
+          </div>
+        );
+      })()}
+
+      {sig.lastABContact && (sig.lastABContact.exitVelo || sig.lastABContact.launchAngle || sig.lastABContact.barrelPct) && (
+        <div className="flex items-center gap-3 py-1.5 px-2 rounded-lg bg-secondary/30 border border-border/20">
+          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider shrink-0">Last AB</span>
           <div className="flex items-center gap-2 flex-wrap text-[11px]">
-            <span className="text-foreground font-semibold">{sig.currentStats.ab > 0 ? `${sig.currentStats.h}-${sig.currentStats.ab}` : "0 AB"}</span>
-            {sig.currentStats.hr > 0 && <span className="text-orange-400 font-bold">{sig.currentStats.hr} HR</span>}
-            {sig.currentStats.rbi > 0 && <span className="text-muted-foreground">{sig.currentStats.rbi} RBI</span>}
-            {sig.currentStats.bb > 0 && <span className="text-muted-foreground">{sig.currentStats.bb} BB</span>}
-            {sig.currentStats.k > 0 && <span className="text-muted-foreground">{sig.currentStats.k} K</span>}
-            {sig.currentStats.tb > 0 && <span className="text-muted-foreground">{sig.currentStats.tb} TB</span>}
+            {sig.lastABContact.exitVelo != null && (
+              <span className={sig.lastABContact.exitVelo >= 95 ? "text-green-400 font-bold" : sig.lastABContact.exitVelo >= 88 ? "text-yellow-400" : "text-muted-foreground"}>
+                {sig.lastABContact.exitVelo.toFixed(0)} mph
+              </span>
+            )}
+            {sig.lastABContact.launchAngle != null && (
+              <span className={sig.lastABContact.launchAngle >= 10 && sig.lastABContact.launchAngle <= 30 ? "text-green-400" : "text-muted-foreground"}>
+                {sig.lastABContact.launchAngle.toFixed(0)}° LA
+              </span>
+            )}
+            {sig.lastABContact.distance != null && sig.lastABContact.distance > 0 && (
+              <span className={sig.lastABContact.distance >= 340 ? "text-green-400" : "text-muted-foreground"}>
+                {sig.lastABContact.distance.toFixed(0)} ft
+              </span>
+            )}
+            {sig.lastABContact.barrelPct != null && sig.lastABContact.barrelPct > 0 && (
+              <span className={sig.lastABContact.barrelPct >= 10 ? "text-green-400" : "text-muted-foreground"}>
+                {sig.lastABContact.barrelPct.toFixed(0)}% Barrel
+              </span>
+            )}
+            {sig.lastABContact.hardHitPct != null && sig.lastABContact.hardHitPct > 0 && (
+              <span className={sig.lastABContact.hardHitPct >= 40 ? "text-green-400" : "text-muted-foreground"}>
+                {sig.lastABContact.hardHitPct.toFixed(0)}% HH
+              </span>
+            )}
+            {sig.lastABContact.outcome && (
+              <span className={sig.lastABContact.outcome === "hit" ? "text-green-400 font-bold" : sig.lastABContact.outcome === "strikeout" ? "text-red-400" : "text-muted-foreground"}>
+                {sig.lastABContact.outcome === "hit" ? "HIT" : sig.lastABContact.outcome === "strikeout" ? "K" : sig.lastABContact.outcome.toUpperCase()}
+              </span>
+            )}
           </div>
         </div>
       )}
