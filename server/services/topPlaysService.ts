@@ -2,6 +2,7 @@ export type TopPlayItem = {
   id: string;
   sport: "NBA" | "NCAAB" | "MLB";
   playerOrTeam: string;
+  market?: string;
   marketLabel: string;
   side: string;
   line?: number | string;
@@ -14,6 +15,15 @@ export type TopPlayItem = {
   confidenceTier: "ELITE" | "STRONG" | "VALUE" | "NO_EDGE";
   updatedAt: string;
   currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
+  lastABContact?: {
+    exitVelo: number | null;
+    launchAngle: number | null;
+    batSpeed: number | null;
+    distance: number | null;
+    barrelPct: number | null;
+    hardHitPct: number | null;
+    outcome: string | null;
+  } | null;
   matchup?: string;
 };
 
@@ -54,6 +64,7 @@ export function buildTopPlays(
       id: `nba_${sig.playerId ?? sig.player}_${sig.market}`,
       sport: "NBA",
       playerOrTeam: sig.playerName ?? sig.player ?? "Unknown",
+      market: sig.market,
       marketLabel: MARKET_LABELS[sig.market] ?? sig.market ?? "Props",
       side: sig.recommendedSide ?? sig.side ?? "OVER",
       line: sig.bookLine ?? sig.line,
@@ -77,6 +88,7 @@ export function buildTopPlays(
       id: `ncaab_${sig.gameId}_${sig.market}`,
       sport: "NCAAB",
       playerOrTeam: sig.teamName ?? sig.matchup ?? "NCAAB Game",
+      market: sig.market,
       marketLabel: MARKET_LABELS[sig.market] ?? sig.market ?? "Game",
       side: sig.side ?? sig.recommendedSide ?? "OVER",
       line: sig.line ?? sig.bookLine,
@@ -99,6 +111,7 @@ export function buildTopPlays(
       id: `mlb_${sig.playerId}_${sig.market}`,
       sport: "MLB",
       playerOrTeam: sig.playerName ?? "Unknown",
+      market: sig.market,
       marketLabel: MARKET_LABELS[sig.market] ?? sig.market ?? "Props",
       side: sig.recommendedSide ?? "OVER",
       line: sig.bookLine,
@@ -111,6 +124,7 @@ export function buildTopPlays(
       confidenceTier: classifyTier(sig.enginePct),
       updatedAt: sig.updatedAt ?? new Date().toISOString(),
       currentStats: sig.currentStats ?? null,
+      lastABContact: sig.lastABContact ?? null,
     });
   }
 

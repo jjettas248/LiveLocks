@@ -4,6 +4,7 @@ export type UnifiedTopPlay = {
   id: string;
   sport: "NBA" | "NCAAB" | "MLB";
   playerOrTeam: string;
+  market?: string;
   marketLabel: string;
   side: string;
   line?: number | string;
@@ -15,6 +16,15 @@ export type UnifiedTopPlay = {
   confidenceTier: "ELITE" | "STRONG" | "VALUE" | "NO_EDGE";
   updatedAt: string;
   currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
+  lastABContact?: {
+    exitVelo: number | null;
+    launchAngle: number | null;
+    batSpeed: number | null;
+    distance: number | null;
+    barrelPct: number | null;
+    hardHitPct: number | null;
+    outcome: string | null;
+  } | null;
   matchup?: string;
 };
 

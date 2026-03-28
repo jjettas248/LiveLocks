@@ -103,7 +103,9 @@ export function TopPlaysPanel({ isElite, onNavigateToSport }: TopPlaysPanelProps
                   isBestBet={i === 0}
                   locked={!isElite && play.sport !== "NBA"}
                   onPrimaryAction={onNavigateToSport ? () => onNavigateToSport(play.routeTarget) : undefined}
+                  market={play.market}
                   currentStats={play.currentStats}
+                  lastABContact={play.lastABContact}
                   matchup={play.matchup}
                 />
               ))}

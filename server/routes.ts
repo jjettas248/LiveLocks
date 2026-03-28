@@ -4967,6 +4967,7 @@ export function registerAnalyticsRoutes(app: Express): void {
             signalScore: sig.signalScore,
             confidenceTier: sig.confidenceTier,
             currentStats: sig.currentStats ?? null,
+            lastABContact: sig.lastABContact ?? null,
           });
         }
       }

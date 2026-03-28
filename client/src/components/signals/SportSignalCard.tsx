@@ -35,6 +35,7 @@ export type SportSignalCardProps = {
   onCopy?: () => void;
   footerSlot?: ReactNode;
   detailSlot?: ReactNode;
+  market?: string;
   currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
   lastABContact?: {
     exitVelo: number | null;
@@ -65,7 +66,9 @@ export function SportSignalCard({
   onPrimaryAction,
   footerSlot,
   detailSlot,
+  market: marketKey,
   currentStats,
+  lastABContact,
   matchup,
 }: SportSignalCardProps) {
   const sportBadge = SPORT_BADGE[sport] ?? SPORT_BADGE.NBA;
@@ -125,16 +128,71 @@ export function SportSignalCard({
           )}
         </div>
 
-        {currentStats && (
-          <div className="flex items-center gap-3 py-1.5 px-2 rounded-lg bg-secondary/40 border border-border/30">
-            <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider shrink-0">Today</span>
+        {currentStats && (() => {
+          const cs = currentStats;
+          const lineNum = typeof line === "number" ? line : 0;
+          const mk = marketKey?.toLowerCase() ?? marketLabel.toLowerCase();
+          const currentVal = mk === "hits" || mk.includes("hit") ? cs.h
+            : mk === "home_runs" || mk === "hr" ? cs.hr
+            : mk === "total_bases" || mk.includes("total base") ? cs.tb
+            : mk === "hrr" ? (cs.h + cs.hr + cs.rbi)
+            : cs.h;
+          const alreadyOver = currentVal >= lineNum && lineNum > 0;
+          const edgeHit = (side === "OVER" || side === "YES") && alreadyOver;
+          return (
+            <div className={`flex items-center gap-3 py-1.5 px-2 rounded-lg border ${
+              edgeHit
+                ? "bg-green-500/10 border-green-500/30"
+                : alreadyOver
+                  ? "bg-yellow-500/10 border-yellow-500/30"
+                  : "bg-secondary/40 border-border/30"
+            }`}>
+              <span className={`text-[10px] font-semibold uppercase tracking-wider shrink-0 ${
+                edgeHit ? "text-green-400" : "text-muted-foreground"
+              }`}>{edgeHit ? "HIT" : "Today"}</span>
+              <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                <span className={`font-semibold ${alreadyOver ? "text-green-400" : "text-foreground"}`}>
+                  {cs.ab > 0 ? `${cs.h}-${cs.ab}` : "0 AB"}
+                </span>
+                {cs.hr > 0 && <span className="text-orange-400 font-bold">{cs.hr} HR</span>}
+                {cs.rbi > 0 && <span className="text-muted-foreground">{cs.rbi} RBI</span>}
+                {cs.bb > 0 && <span className="text-muted-foreground">{cs.bb} BB</span>}
+                {cs.k > 0 && <span className="text-red-400">{cs.k} K</span>}
+                {cs.tb > 0 && <span className="text-muted-foreground">{cs.tb} TB</span>}
+              </div>
+            </div>
+          );
+        })()}
+
+        {lastABContact && sport === "MLB" && (lastABContact.exitVelo || lastABContact.launchAngle || lastABContact.barrelPct) && (
+          <div className="flex items-center gap-3 py-1.5 px-2 rounded-lg bg-secondary/30 border border-border/20">
+            <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider shrink-0">Last AB</span>
             <div className="flex items-center gap-2 flex-wrap text-[11px]">
-              <span className="text-foreground font-semibold">{currentStats.ab > 0 ? `${currentStats.h}-${currentStats.ab}` : "0 AB"}</span>
-              {currentStats.hr > 0 && <span className="text-orange-400 font-bold">{currentStats.hr} HR</span>}
-              {currentStats.rbi > 0 && <span className="text-muted-foreground">{currentStats.rbi} RBI</span>}
-              {currentStats.bb > 0 && <span className="text-muted-foreground">{currentStats.bb} BB</span>}
-              {currentStats.k > 0 && <span className="text-muted-foreground">{currentStats.k} K</span>}
-              {currentStats.tb > 0 && <span className="text-muted-foreground">{currentStats.tb} TB</span>}
+              {lastABContact.exitVelo != null && (
+                <span className={lastABContact.exitVelo >= 95 ? "text-green-400 font-bold" : lastABContact.exitVelo >= 88 ? "text-yellow-400" : "text-muted-foreground"}>
+                  {lastABContact.exitVelo.toFixed(0)} mph
+                </span>
+              )}
+              {lastABContact.launchAngle != null && (
+                <span className={lastABContact.launchAngle >= 10 && lastABContact.launchAngle <= 30 ? "text-green-400" : "text-muted-foreground"}>
+                  {lastABContact.launchAngle.toFixed(0)}° LA
+                </span>
+              )}
+              {lastABContact.barrelPct != null && lastABContact.barrelPct > 0 && (
+                <span className={lastABContact.barrelPct >= 10 ? "text-green-400" : "text-muted-foreground"}>
+                  {lastABContact.barrelPct.toFixed(0)}% Barrel
+                </span>
+              )}
+              {lastABContact.hardHitPct != null && lastABContact.hardHitPct > 0 && (
+                <span className={lastABContact.hardHitPct >= 40 ? "text-green-400" : "text-muted-foreground"}>
+                  {lastABContact.hardHitPct.toFixed(0)}% HH
+                </span>
+              )}
+              {lastABContact.outcome && (
+                <span className={lastABContact.outcome === "hit" ? "text-green-400 font-bold" : lastABContact.outcome === "strikeout" ? "text-red-400" : "text-muted-foreground"}>
+                  {lastABContact.outcome === "hit" ? "HIT" : lastABContact.outcome === "strikeout" ? "K" : lastABContact.outcome.toUpperCase()}
+                </span>
+              )}
             </div>
           </div>
         )}

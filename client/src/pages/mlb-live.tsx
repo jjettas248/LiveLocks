@@ -277,14 +277,16 @@ function edgeColor(edge: number | null): string {
   if (edge == null) return "text-muted-foreground";
   if (edge >= 8) return "text-green-400";
   if (edge >= 5) return "text-yellow-400";
-  return "text-muted-foreground/70";
+  if (edge >= 0) return "text-muted-foreground/70";
+  return "text-red-400";
 }
 
 function edgeBg(edge: number | null): string {
   if (edge == null) return "bg-muted/30";
   if (edge >= 8) return "bg-green-500/10";
   if (edge >= 5) return "bg-yellow-500/10";
-  return "bg-muted/30";
+  if (edge >= 0) return "bg-muted/30";
+  return "bg-red-500/10";
 }
 
 function inningLabel(game: MLBGame): string {
@@ -434,7 +436,7 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
         const currentVal = sig.market === "hits" ? cs.h
           : sig.market === "home_runs" || sig.market === "hr" ? cs.hr
           : sig.market === "total_bases" ? cs.tb
-          : sig.market === "hrr" ? (cs.h + (cs as any).runs + cs.rbi)
+          : sig.market === "hrr" ? (cs.h + cs.hr + cs.rbi)
           : cs.h;
         const alreadyOver = currentVal >= line && line > 0;
         const edgeHit = sig.recommendedSide === "OVER" && alreadyOver;
