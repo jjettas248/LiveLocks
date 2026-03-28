@@ -14,6 +14,8 @@ export type UnifiedTopPlay = {
   routeTarget: string;
   confidenceTier: "ELITE" | "STRONG" | "VALUE" | "NO_EDGE";
   updatedAt: string;
+  currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
+  matchup?: string;
 };
 
 export function useTopPlays() {

@@ -911,8 +911,15 @@ export class LiveGameOrchestrator {
 
           outputs.push({ ...output });
 
+          const batterStats = boxScorePlayer ? {
+            ab: boxScorePlayer.ab, h: boxScorePlayer.hits, hr: boxScorePlayer.hr,
+            tb: boxScorePlayer.tb, bb: boxScorePlayer.bb, rbi: boxScorePlayer.rbi,
+            k: boxScorePlayer.so, sb: 0,
+          } : null;
+
           const qResult = this.qualifySignal(gameId, input, output);
           if (qResult) {
+            qResult.currentStats = batterStats;
             qualifiedSignals.push(qResult);
             allSignals.push(qResult);
             signalsQualified++;
@@ -920,7 +927,7 @@ export class LiveGameOrchestrator {
           } else {
             signalsRejected++;
             const watchSig = this.buildWatchSignal(gameId, input, output);
-            if (watchSig) allSignals.push(watchSig);
+            if (watchSig) { watchSig.currentStats = batterStats; allSignals.push(watchSig); }
           }
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for ${batter.playerName} / ${market}:`, err.message);

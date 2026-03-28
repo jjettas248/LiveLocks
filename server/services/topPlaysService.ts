@@ -13,6 +13,8 @@ export type TopPlayItem = {
   routeTarget: string;
   confidenceTier: "ELITE" | "STRONG" | "VALUE" | "NO_EDGE";
   updatedAt: string;
+  currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
+  matchup?: string;
 };
 
 function classifyTier(prob: number): "ELITE" | "STRONG" | "VALUE" | "NO_EDGE" {
@@ -32,6 +34,8 @@ const MARKET_LABELS: Record<string, string> = {
   walks_allowed: "Walks Allowed", hr: "Home Runs", home_runs: "Home Runs",
   total: "Total", spread: "Spread", "1h_total": "1H Total", "1h_spread": "1H Spread",
   "2h_total": "2H Total", "2h_spread": "2H Spread",
+  full_total: "Total", full_spread: "Spread", h1_total: "1H Total", h1_spread: "1H Spread",
+  h2_total: "2H Total", h2_spread: "2H Spread",
 };
 
 export function buildTopPlays(
@@ -106,6 +110,7 @@ export function buildTopPlays(
       routeTarget: "mlb",
       confidenceTier: classifyTier(sig.enginePct),
       updatedAt: sig.updatedAt ?? new Date().toISOString(),
+      currentStats: sig.currentStats ?? null,
     });
   }
 

@@ -53,6 +53,9 @@ import { getSimulationConfig, setSimulationConfig, getMockBoard } from "./simula
 // ── Module-level play dedup guard (persists for process lifetime) ─────────────
 const recordedPlayKeys = new Set<string>();
 
+// ── NCAAB live signal cache (populated by /api/ncaab/plays, read by /api/top-plays) ──
+const ncaabLiveSignals: { signals: any[]; updatedAt: number } = { signals: [], updatedAt: 0 };
+
 function getPlayKey(p: {
   playerId?: string | number | null;
   playerName: string;
@@ -411,6 +414,69 @@ export async function registerRoutes(
 
       res.json({ plays: prioritizedNcaabPlays });
       checkAndSendAlerts(freshPlays, storage).catch(console.warn);
+
+      const ncaabTopPlaySignals: any[] = [];
+      for (const p of prioritizedNcaabPlays) {
+        const eo = p.engineOutput;
+        if (!eo?.markets) continue;
+        const mktKeys = ["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"] as const;
+        for (const key of mktKeys) {
+          const mkt = (eo.markets as any)[key];
+          if (!mkt?.available || mkt.modelProb == null) continue;
+          if (Math.abs((mkt.modelProb ?? 50) - 50) < 5) continue;
+          const isSpreadMkt = key.includes("spread");
+          const displaySide = isSpreadMkt
+            ? (mkt.side === "HOME" ? "HOME" : mkt.side === "AWAY" ? "AWAY" : "OVER")
+            : (mkt.side === "UNDER" ? "UNDER" : "OVER");
+          ncaabTopPlaySignals.push({
+            gameId: p.gameId,
+            teamName: `${p.awayTeamAbbr ?? p.awayTeam} @ ${p.homeTeamAbbr ?? p.homeTeam}`,
+            market: key,
+            probability: mkt.modelProb,
+            edge: mkt.edge ?? 0,
+            line: mkt.bookLine ?? null,
+            projection: mkt.projection ?? null,
+            side: displaySide,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+      ncaabLiveSignals.signals = ncaabTopPlaySignals;
+      ncaabLiveSignals.updatedAt = Date.now();
+
+      for (const p of prioritizedNcaabPlays) {
+        const eo = p.engineOutput;
+        if (!eo) continue;
+        const mkts = eo.markets;
+        if (!mkts) continue;
+        const MARKET_KEYS = ["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"] as const;
+        for (const key of MARKET_KEYS) {
+          const mkt = (mkts as any)[key];
+          if (!mkt?.available) continue;
+          if (mkt.modelProb == null || Math.abs((mkt.modelProb ?? 50) - 50) < 5) continue;
+          if (mkt.bookLine == null || !Number.isFinite(mkt.bookLine)) continue;
+          const isSpread = key.includes("spread");
+          const dir = isSpread
+            ? (mkt.side === "AWAY" ? "under" : "over")
+            : (mkt.side === "UNDER" ? "under" : "over");
+          trackPlay({
+            gameId: p.gameId ?? "",
+            playerId: null,
+            playerName: `${p.awayTeamAbbr ?? p.awayTeam} @ ${p.homeTeamAbbr ?? p.homeTeam}`,
+            team: null,
+            sport: "ncaab",
+            market: key,
+            direction: dir as "over" | "under",
+            line: Number(mkt.bookLine),
+            projection: Number(mkt.projection ?? mkt.bookLine),
+            probability: Number(mkt.modelProb ?? 0),
+            edge: mkt.edge != null ? Number(mkt.edge) : 0,
+            sportsbook: mkt.sportsbook ?? "consensus",
+            derivedLine: mkt.isDerived === true,
+            createdAt: Date.now(),
+          }, storage).catch(console.warn);
+        }
+      }
     } catch (err: any) {
       console.error("[NCAAB plays]", err.message);
       return res.status(500).json({ error: err.message || "NCAAB service error" });
@@ -1074,6 +1140,7 @@ export async function registerRoutes(
               gameStatus: game?.status ?? null,
               reasons: sig.reasons ?? sig.explanationBullets ?? [],
               formIndicator: sig.formIndicator ?? null,
+              currentStats: sig.currentStats ?? null,
             });
           }
         } else {
@@ -1110,6 +1177,7 @@ export async function registerRoutes(
                 playerGlowEligible: qs.playerGlowEligible,
                 formIndicator: qs.formIndicator ?? null,
                 reasons: qs.reasons ?? [],
+                currentStats: qs.currentStats ?? null,
               });
             }
           }
@@ -4896,6 +4964,7 @@ export function registerAnalyticsRoutes(app: Express): void {
             gameId: sig.gameId,
             signalScore: sig.signalScore,
             confidenceTier: sig.confidenceTier,
+            currentStats: sig.currentStats ?? null,
           });
         }
       }
@@ -4917,7 +4986,7 @@ export function registerAnalyticsRoutes(app: Express): void {
           updatedAt: p.timestamp?.toISOString() ?? new Date().toISOString(),
         }));
 
-      const ncaabSignals = recentPlays
+      const ncaabStorageSignals = recentPlays
         .filter((p: any) => p.sport === "ncaab" && p.prob)
         .map((p: any) => ({
           gameId: p.gameId,
@@ -4930,6 +4999,14 @@ export function registerAnalyticsRoutes(app: Express): void {
           side: p.direction?.toUpperCase() ?? "OVER",
           updatedAt: p.timestamp?.toISOString() ?? new Date().toISOString(),
         }));
+
+      const NCAAB_FRESHNESS_MS = 120_000;
+      const ncaabLive = (Date.now() - ncaabLiveSignals.updatedAt < NCAAB_FRESHNESS_MS) ? ncaabLiveSignals.signals : [];
+      const ncaabSeenKeys = new Set(ncaabLive.map((s: any) => `${s.gameId}_${s.market}`));
+      const ncaabSignals = [
+        ...ncaabLive,
+        ...ncaabStorageSignals.filter((s: any) => !ncaabSeenKeys.has(`${s.gameId}_${s.market}`)),
+      ];
 
       const plays = buildTopPlays(nbaSignals, ncaabSignals, mlbSignals, 10);
       return res.json({ plays });

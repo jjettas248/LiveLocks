@@ -139,6 +139,7 @@ type MLBSignal = {
   signalTags?: string[];
   feedTags?: string[];
   playerGlowEligible?: boolean;
+  currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
 };
 
 type SignalsResponse = {
@@ -415,6 +416,20 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
       {sig.edge != null && (
         <div className={`text-center py-1.5 rounded-lg text-xs font-bold ${edgeBg(sig.edge)} ${edgeColor(sig.edge)}`}>
           Edge: +{sig.edge.toFixed(1)}%
+        </div>
+      )}
+
+      {sig.currentStats && (
+        <div className="flex items-center gap-3 py-1.5 px-2 rounded-lg bg-secondary/40 border border-border/30">
+          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider shrink-0">Today</span>
+          <div className="flex items-center gap-2 flex-wrap text-[11px]">
+            <span className="text-foreground font-semibold">{sig.currentStats.ab > 0 ? `${sig.currentStats.h}-${sig.currentStats.ab}` : "0 AB"}</span>
+            {sig.currentStats.hr > 0 && <span className="text-orange-400 font-bold">{sig.currentStats.hr} HR</span>}
+            {sig.currentStats.rbi > 0 && <span className="text-muted-foreground">{sig.currentStats.rbi} RBI</span>}
+            {sig.currentStats.bb > 0 && <span className="text-muted-foreground">{sig.currentStats.bb} BB</span>}
+            {sig.currentStats.k > 0 && <span className="text-muted-foreground">{sig.currentStats.k} K</span>}
+            {sig.currentStats.tb > 0 && <span className="text-muted-foreground">{sig.currentStats.tb} TB</span>}
+          </div>
         </div>
       )}
 
@@ -1031,10 +1046,10 @@ function MlbLiveInner() {
             <h2 className="text-sm font-bold text-foreground" style={{ color: "#f97316" }}>HR Radar</h2>
           </div>
           {(() => {
-            const hrSignals = edgeFeedSignals.filter(s => s.market === "home_runs" || s.market === "hr" || s.market === "hrr");
+            const hrSignals = edgeFeedSignals.filter(s => s.market === "home_runs" || s.market === "hr");
             const hrEnvironmentSignals = edgeFeedSignals.filter(s =>
               s.hrFactors && s.hrFactors.count >= 1 &&
-              !(s.market === "home_runs" || s.market === "hr" || s.market === "hrr")
+              !(s.market === "home_runs" || s.market === "hr")
             );
             return (
               <>

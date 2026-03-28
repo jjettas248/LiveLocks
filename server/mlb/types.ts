@@ -489,4 +489,14 @@ export interface MLBQualifiedSignal {
     oddsUpdatedAt: string;
     gameStateUpdatedAt: string;
   };
+  currentStats?: {
+    ab: number;
+    h: number;
+    hr: number;
+    tb: number;
+    bb: number;
+    rbi: number;
+    k: number;
+    sb: number;
+  } | null;
 }

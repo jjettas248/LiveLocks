@@ -34,6 +34,8 @@ export type SportSignalCardProps = {
   onCopy?: () => void;
   footerSlot?: ReactNode;
   detailSlot?: ReactNode;
+  currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
+  matchup?: string;
 };
 
 export function SportSignalCard({
@@ -53,6 +55,8 @@ export function SportSignalCard({
   onPrimaryAction,
   footerSlot,
   detailSlot,
+  currentStats,
+  matchup,
 }: SportSignalCardProps) {
   const sportBadge = SPORT_BADGE[sport] ?? SPORT_BADGE.NBA;
   const probWhole = Math.round(probability);
@@ -111,6 +115,20 @@ export function SportSignalCard({
           )}
         </div>
 
+        {currentStats && (
+          <div className="flex items-center gap-3 py-1.5 px-2 rounded-lg bg-secondary/40 border border-border/30">
+            <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider shrink-0">Today</span>
+            <div className="flex items-center gap-2 flex-wrap text-[11px]">
+              <span className="text-foreground font-semibold">{currentStats.ab > 0 ? `${currentStats.h}-${currentStats.ab}` : "0 AB"}</span>
+              {currentStats.hr > 0 && <span className="text-orange-400 font-bold">{currentStats.hr} HR</span>}
+              {currentStats.rbi > 0 && <span className="text-muted-foreground">{currentStats.rbi} RBI</span>}
+              {currentStats.bb > 0 && <span className="text-muted-foreground">{currentStats.bb} BB</span>}
+              {currentStats.k > 0 && <span className="text-muted-foreground">{currentStats.k} K</span>}
+              {currentStats.tb > 0 && <span className="text-muted-foreground">{currentStats.tb} TB</span>}
+            </div>
+          </div>
+        )}
+
         {summary && (
           <p className="text-[11px] text-muted-foreground leading-snug">{summary}</p>
         )}
@@ -134,6 +152,25 @@ export function SportSignalCard({
               <CopyBetButton
                 data={{ playerOrTeam, side, marketLabel, line: typeof line === "number" ? line : undefined, probability, edge }}
               />
+              <button
+                data-testid={`button-tweet-${sport.toLowerCase()}-${playerOrTeam.replace(/\s+/g, "-").toLowerCase()}`}
+                className="text-[11px] px-2.5 py-1 rounded-lg border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 transition-colors text-blue-400 hover:text-blue-300 font-semibold"
+                onClick={() => {
+                  const tweetLines = [
+                    `🔒 ${playerOrTeam}`,
+                    `${side} ${marketLabel}${typeof line === "number" ? ` ${line}` : ""}`,
+                    `${Math.round(probability)}% prob · ${edge > 0 ? "+" : ""}${edge.toFixed(1)}% edge`,
+                    ...(projection != null ? [`Proj: ${typeof projection === "number" ? projection.toFixed(1) : projection}`] : []),
+                    ...(matchup ? [matchup] : []),
+                    "",
+                    "Powered by @LiveLocks_",
+                  ];
+                  const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetLines.join("\n"))}`;
+                  window.open(url, "_blank", "noopener,noreferrer,width=550,height=420");
+                }}
+              >
+                𝕏 Tweet
+              </button>
             </>
           )}
         </div>
