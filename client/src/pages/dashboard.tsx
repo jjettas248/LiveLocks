@@ -24,7 +24,6 @@ import { usePullRefresh } from "@/hooks/use-pull-refresh";
 import { hasProAccess } from "@/lib/tierUtils";
 import { useLocation } from "wouter";
 import { TopPlaysPanel } from "@/components/dashboard/TopPlaysPanel";
-import { TrustTrackRecordPanel } from "@/components/dashboard/TrustTrackRecordPanel";
 import { UserStatusRail } from "@/components/dashboard/UserStatusRail";
 import { LiveUpdateToast } from "@/components/common/LiveUpdateToast";
 import {
@@ -1899,7 +1898,6 @@ export default function Dashboard() {
                 }
               }}
             />
-            {user?.isAdmin && <TrustTrackRecordPanel />}
           </div>
           <UserStatusRail
             tier={effectiveTier ?? "free"}
