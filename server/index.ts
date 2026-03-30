@@ -404,36 +404,11 @@ app.use((req, res, next) => {
     console.log(`[email-backfill] Complete — welcome:${rWelcome.length} walkthrough:${rWalkthrough.length} proWelcome:${rPro.length} allSportsWelcome:${rAllSports.length} rows updated`);
   }
 
-  // One-time correction: the initial backfill (2026-03-19) wrongly set sentDay3/sentWinback
-  // to true for pre-existing users without actually sending those emails.
-  // This resets those flags so the 15-min cron can send the correct emails.
-  // Scoped to users created before the system went live — safe to run on every startup.
+  // One-time correction: DISABLED — this was resetting sentDay3/sentWinback on every restart,
+  // causing those emails to be re-sent repeatedly. The correction was applied successfully
+  // and should not run again.
   async function runEmailFlagCorrection(): Promise<void> {
-    const systemLaunchDate = new Date("2026-03-19T06:00:00Z");
-
-    const rDay3 = await db.update(users).set({ sentDay3: false })
-      .where(and(
-        isNull(users.subscriptionTier),
-        eq(users.emailVerified, true),
-        eq(users.sentDay3, true),
-        gte(users.playsUsed, 1),
-        lte(users.createdAt, systemLaunchDate)
-      ))
-      .returning({ id: users.id });
-
-    const rWinback = await db.update(users).set({ sentWinback: false })
-      .where(and(
-        isNull(users.subscriptionTier),
-        eq(users.emailVerified, true),
-        eq(users.sentWinback, true),
-        eq(users.playsUsed, 0),
-        lte(users.createdAt, systemLaunchDate)
-      ))
-      .returning({ id: users.id });
-
-    if (rDay3.length > 0 || rWinback.length > 0) {
-      console.log(`[email-correction] Unsilenced day3:${rDay3.length} winback:${rWinback.length} users for cron pickup`);
-    }
+    console.log("[email-correction] Skipped — one-time correction already applied");
   }
 
   async function runWallHitBlast(): Promise<void> {
@@ -479,80 +454,73 @@ app.use((req, res, next) => {
 
     const counts = { welcome: 0, walkthrough: 0, day3: 0, winback: 0, wall: 0, proWelcome: 0, allSportsWelcome: 0 };
 
+    async function claimAndSend(
+      userId: number,
+      email: string,
+      flagKey: string,
+      sendFn: () => Promise<any>,
+      label: string
+    ): Promise<boolean> {
+      const flagObj: Record<string, boolean> = { [flagKey]: true };
+      await storage.updateUserEmailFlags(userId, flagObj as any);
+      try {
+        await sendFn();
+        console.log(`[email-cron] user ${userId} — ${label} sent`);
+        return true;
+      } catch (err: any) {
+        await storage.updateUserEmailFlags(userId, { [flagKey]: false } as any).catch(() => {});
+        console.error(`[email-cron] user ${userId} — ${label} failed (flag rolled back): ${err.message}`);
+        return false;
+      }
+    }
+
     for (const user of allVerified) {
-      // Paid-tier welcome checks (independent of free-user waterfall)
       if (user.subscriptionTier === "all" && !user.sentProWelcome) {
-        try {
-          await sendProWelcomeEmail(user.email);
-          await storage.updateUserEmailFlags(user.id, { sentProWelcome: true });
-          console.log(`[email-cron] user ${user.id} — proWelcome sent`);
-          counts.proWelcome++;
-        } catch (err: any) {
-          console.error(`[email-cron] user ${user.id} — proWelcome failed: ${err.message}`);
+        const fresh = await storage.getUserById(user.id);
+        if (fresh && !fresh.sentProWelcome && fresh.subscriptionTier === "all") {
+          if (await claimAndSend(user.id, user.email, "sentProWelcome", () => sendProWelcomeEmail(user.email), "proWelcome")) counts.proWelcome++;
         }
         continue;
       }
 
       if (user.subscriptionTier === "elite" && !user.sentAllSportsWelcome) {
-        try {
-          await sendAllSportsWelcomeEmail(user.email);
-          await storage.updateUserEmailFlags(user.id, { sentAllSportsWelcome: true });
-          console.log(`[email-cron] user ${user.id} — allSportsWelcome sent`);
-          counts.allSportsWelcome++;
-        } catch (err: any) {
-          console.error(`[email-cron] user ${user.id} — allSportsWelcome failed: ${err.message}`);
+        const fresh = await storage.getUserById(user.id);
+        if (fresh && !fresh.sentAllSportsWelcome && fresh.subscriptionTier === "elite") {
+          if (await claimAndSend(user.id, user.email, "sentAllSportsWelcome", () => sendAllSportsWelcomeEmail(user.email), "allSportsWelcome")) counts.allSportsWelcome++;
         }
         continue;
       }
 
-      // Free-user waterfall (one email per user per cycle)
       if (user.subscriptionTier !== null) continue;
 
       try {
         const createdAt = user.createdAt ? new Date(user.createdAt) : null;
 
-        // A: Welcome recovery (recent signups only — last 24h)
-        if (!user.sentWelcome && createdAt && createdAt >= h24) {
-          await sendWelcomeEmail(user.email);
-          await storage.updateUserEmailFlags(user.id, { sentWelcome: true });
-          console.log(`[email-cron] user ${user.id} — welcome sent`);
-          counts.welcome++;
+        if (!user.sentWelcome) {
+          const fresh = await storage.getUserById(user.id);
+          if (fresh && !fresh.sentWelcome) {
+            if (await claimAndSend(user.id, user.email, "sentWelcome", () => sendWelcomeEmail(user.email), "welcome")) counts.welcome++;
+          }
           continue;
         }
 
-        // B: Walkthrough (12h+ old, 0 plays)
         if (!user.sentWalkthrough && user.playsUsed === 0 && createdAt && createdAt <= h12) {
-          await sendHowToEmail(user.email);
-          await storage.updateUserEmailFlags(user.id, { sentWalkthrough: true });
-          console.log(`[email-cron] user ${user.id} — walkthrough sent`);
-          counts.walkthrough++;
+          if (await claimAndSend(user.id, user.email, "sentWalkthrough", () => sendHowToEmail(user.email), "walkthrough")) counts.walkthrough++;
           continue;
         }
 
-        // C: Day-3 nudge (3+ days old, 1–2 plays)
         if (!user.sentDay3 && user.playsUsed >= 1 && user.playsUsed < FREE_PLAY_LIMIT && createdAt && createdAt <= d3) {
-          await sendNudgeEmail(user.email, user.playsUsed, FREE_PLAY_LIMIT - user.playsUsed);
-          await storage.updateUserEmailFlags(user.id, { sentDay3: true });
-          console.log(`[email-cron] user ${user.id} — day3 sent`);
-          counts.day3++;
+          if (await claimAndSend(user.id, user.email, "sentDay3", () => sendNudgeEmail(user.email, user.playsUsed, FREE_PLAY_LIMIT - user.playsUsed), "day3")) counts.day3++;
           continue;
         }
 
-        // D: Winback (7+ days old, 0 plays)
         if (!user.sentWinback && user.playsUsed === 0 && createdAt && createdAt <= d7) {
-          await sendWinbackEmail(user.email);
-          await storage.updateUserEmailFlags(user.id, { sentWinback: true });
-          console.log(`[email-cron] user ${user.id} — winback sent`);
-          counts.winback++;
+          if (await claimAndSend(user.id, user.email, "sentWinback", () => sendWinbackEmail(user.email), "winback")) counts.winback++;
           continue;
         }
 
-        // E: Wall hit (at the play limit, not yet sent)
         if (!user.sentWall && user.playsUsed >= FREE_PLAY_LIMIT) {
-          await sendWallEmail(user.email);
-          await storage.updateUserEmailFlags(user.id, { sentWall: true });
-          console.log(`[email-cron] user ${user.id} — wall sent`);
-          counts.wall++;
+          if (await claimAndSend(user.id, user.email, "sentWall", () => sendWallEmail(user.email), "wall")) counts.wall++;
           continue;
         }
 

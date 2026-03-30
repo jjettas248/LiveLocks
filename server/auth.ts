@@ -6,7 +6,7 @@ import rateLimit from "express-rate-limit";
 import { storage } from "./storage";
 import { insertUserEmailPasswordSchema } from "@shared/schema";
 import type { User } from "@shared/schema";
-import { sendWelcomeEmail, sendWallEmail, sendVerificationEmail, sendPasswordResetEmail } from "./email";
+import { sendWallEmail, sendVerificationEmail, sendPasswordResetEmail } from "./email";
 import { resolveAccess } from "./utils/access";
 
 // ── Stripe tier-check TTL cache ────────────────────────────────────────────────
@@ -205,11 +205,8 @@ export async function registerAuthRoutes(app: import("express").Express) {
       console.error("[email] Failed to send verification email:", emailErr.message);
     }
 
-    // Welcome email sent at registration (not at verify-email). sentWelcome flag
-    // prevents double-send if the lifecycle cron fires before the user verifies.
-    sendWelcomeEmail(user.email)
-      .then(() => storage.updateUserEmailFlags(user.id, { sentWelcome: true }).catch(console.error))
-      .catch(console.error);
+    // Welcome email is now handled by the lifecycle cron after email verification.
+    // Sending it here caused duplicates when cron also fired for the same user.
 
     req.session.userId = user.id;
     const token = signToken(user.id);

@@ -43,13 +43,19 @@ async function syncSubscriptionToDb(stripe: any, subscriptionId: string): Promis
   console.log("[STRIPE SYNC]", { userId: user.id, priceId, resolvedTier: tier, status: sub.status });
 
   if (tier === "all" && !user.sentProWelcome) {
-    sendProWelcomeEmail(user.email)
-      .then(() => storage.updateUserEmailFlags(user.id, { sentProWelcome: true }).catch(console.error))
-      .catch(console.error);
+    storage.updateUserEmailFlags(user.id, { sentProWelcome: true })
+      .then(() => sendProWelcomeEmail(user.email))
+      .catch((err) => {
+        storage.updateUserEmailFlags(user.id, { sentProWelcome: false }).catch(() => {});
+        console.error("[webhook] proWelcome send failed (flag rolled back):", err.message);
+      });
   } else if (tier === "elite" && !user.sentAllSportsWelcome) {
-    sendAllSportsWelcomeEmail(user.email)
-      .then(() => storage.updateUserEmailFlags(user.id, { sentAllSportsWelcome: true }).catch(console.error))
-      .catch(console.error);
+    storage.updateUserEmailFlags(user.id, { sentAllSportsWelcome: true })
+      .then(() => sendAllSportsWelcomeEmail(user.email))
+      .catch((err) => {
+        storage.updateUserEmailFlags(user.id, { sentAllSportsWelcome: false }).catch(() => {});
+        console.error("[webhook] allSportsWelcome send failed (flag rolled back):", err.message);
+      });
   }
 }
 
@@ -106,13 +112,19 @@ export class WebhookHandlers {
           const user = await storage.getUserById(userId);
           if (user) {
             if (metaTier === "all" && !user.sentProWelcome) {
-              sendProWelcomeEmail(user.email)
-                .then(() => storage.updateUserEmailFlags(user.id, { sentProWelcome: true }).catch(console.error))
-                .catch(console.error);
+              storage.updateUserEmailFlags(user.id, { sentProWelcome: true })
+                .then(() => sendProWelcomeEmail(user.email))
+                .catch((err) => {
+                  storage.updateUserEmailFlags(user.id, { sentProWelcome: false }).catch(() => {});
+                  console.error("[webhook] proWelcome send failed (flag rolled back):", err.message);
+                });
             } else if (metaTier === "elite" && !user.sentAllSportsWelcome) {
-              sendAllSportsWelcomeEmail(user.email)
-                .then(() => storage.updateUserEmailFlags(user.id, { sentAllSportsWelcome: true }).catch(console.error))
-                .catch(console.error);
+              storage.updateUserEmailFlags(user.id, { sentAllSportsWelcome: true })
+                .then(() => sendAllSportsWelcomeEmail(user.email))
+                .catch((err) => {
+                  storage.updateUserEmailFlags(user.id, { sentAllSportsWelcome: false }).catch(() => {});
+                  console.error("[webhook] allSportsWelcome send failed (flag rolled back):", err.message);
+                });
             }
           }
         }
