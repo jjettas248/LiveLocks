@@ -27,6 +27,9 @@ export interface EngineDiagnostics {
   playerVolatilityScore?: number;
   comboCovarianceEstimate?: number | null;
   engineVersion?: string;
+  mu?: number;
+  sigma?: number;
+  zScore?: number;
 }
 
 export interface TrackableSignal {
@@ -118,6 +121,9 @@ export async function trackPlay(
     playerVolatilityScore: d?.playerVolatilityScore,
     comboCovarianceEstimate: d?.comboCovarianceEstimate,
     engineVersion: d?.engineVersion,
+    mu: d?.mu,
+    sigma: d?.sigma,
+    zScore: d?.zScore,
   });
 
   if (!result.isDuplicate) {

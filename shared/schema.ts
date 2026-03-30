@@ -419,6 +419,9 @@ export const persistedPlays = pgTable("persisted_plays", {
   comboCovarianceEstimate: numeric("combo_covariance_estimate"),
   fragilityPenalty: numeric("fragility_penalty"),
   fragilityReasons: text("fragility_reasons"),
+  mu: numeric("mu"),
+  sigma: numeric("sigma"),
+  zScore: numeric("z_score"),
 }, (table) => ({
   gameDateIdx: index("persisted_plays_game_date_idx").on(table.gameDate),
   resultIdx: index("persisted_plays_result_idx").on(table.result),

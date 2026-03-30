@@ -183,6 +183,7 @@ export interface IStorage {
     minutesExpected?: number; minutesVariance?: number;
     marketType?: string; playerVolatilityScore?: number;
     comboCovarianceEstimate?: number | null;
+    mu?: number; sigma?: number; zScore?: number;
   }): Promise<{ id: string; isDuplicate: boolean }>;
   getPlays(opts: { sport?: string; limit?: number; settled?: string; date?: string }): Promise<{ plays: PersistedPlay[]; total: number }>;
   getGradedPlaysForCalibration(opts: { sport?: string; market?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]>;
@@ -773,6 +774,12 @@ export class DatabaseStorage implements IStorage {
 
     const direction = rawSide === "NO_SIGNAL" ? "UNDER" : rawSide;
 
+    const modelEdgeRaw = P_side_raw - 0.50;
+    let preCalibrationNoSignal = false;
+    if (modelEdgeRaw < 0.04 && rawSide !== "NO_SIGNAL") {
+      preCalibrationNoSignal = true;
+    }
+
     // [HT_SUPPRESSION_TRACE]
     if (isHalftimeContext && process.env.DEBUG_PIPELINE === "true") {
       console.log("[HT_SUPPRESSION_TRACE]", {
@@ -872,6 +879,7 @@ export class DatabaseStorage implements IStorage {
     const MIN_DISPLAY_CONFIDENCE = 58;
     const modelEdgeFinal = displayConfidence !== null ? (displayConfidence - 50) : 0;
     const noSignal = rawSide === "NO_SIGNAL"
+      || preCalibrationNoSignal
       || (displayConfidence !== null && displayConfidence < MIN_DISPLAY_CONFIDENCE)
       || modelEdgeFinal < 4
       || hasProjectionMismatch;
@@ -994,6 +1002,9 @@ export class DatabaseStorage implements IStorage {
       marketType: isComboStat ? "combo" : "single",
       playerVolatilityScore: Math.round(fragilityScore * 1000) / 1000,
       engineVersion: "v2_cdf",
+      mu: Math.round(finalMean * 100) / 100,
+      sigma: Math.round(sigma * 100) / 100,
+      zScore: Math.round(z * 1000) / 1000,
     };
 
     if (!noSignal && req.sport === "nba") {
@@ -1513,6 +1524,7 @@ export class DatabaseStorage implements IStorage {
     minutesExpected?: number; minutesVariance?: number;
     marketType?: string; playerVolatilityScore?: number;
     comboCovarianceEstimate?: number | null;
+    mu?: number; sigma?: number; zScore?: number;
   }): Promise<{ id: string; isDuplicate: boolean }> {
     const existing = await db
       .select({ id: persistedPlays.id })
@@ -1564,6 +1576,9 @@ export class DatabaseStorage implements IStorage {
       comboCovarianceEstimate: play.comboCovarianceEstimate != null ? String(play.comboCovarianceEstimate) : null,
       fragilityPenalty: play.fragilityPenalty != null ? String(play.fragilityPenalty) : null,
       fragilityReasons: play.fragilityReasons ?? null,
+      mu: play.mu != null ? String(play.mu) : null,
+      sigma: play.sigma != null ? String(play.sigma) : null,
+      zScore: play.zScore != null ? String(play.zScore) : null,
     }).onConflictDoNothing({ target: persistedPlays.duplicateGuard });
     return { id: play.id, isDuplicate: false };
   }

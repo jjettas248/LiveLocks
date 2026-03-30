@@ -262,6 +262,18 @@ app.use((req, res, next) => {
 
   try {
     await pool.query(`
+      ALTER TABLE persisted_plays
+        ADD COLUMN IF NOT EXISTS mu numeric,
+        ADD COLUMN IF NOT EXISTS sigma numeric,
+        ADD COLUMN IF NOT EXISTS z_score numeric;
+    `);
+    console.log("[startup] Schema migration: persisted_plays mu/sigma/zScore columns ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (full-diagnostics):", err.message);
+  }
+
+  try {
+    await pool.query(`
       ALTER TABLE users
         ADD COLUMN IF NOT EXISTS churned_at timestamp,
         ADD COLUMN IF NOT EXISTS churned_from_tier text;

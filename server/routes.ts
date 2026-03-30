@@ -5,7 +5,7 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
 import { computeFamilyPenaltyFactor } from "./nba/marketFamily";
-import { recordSurfacedSignal, seedFromSettledPlays } from "./nba/directionalBias";
+import { recordSurfacedSignal, seedFromSettledPlays, getDirectionalSplit } from "./nba/directionalBias";
 import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines, getSGOPlayerLine, resolveMLBOddsEventId, getMLBPlayerOdds, normalizeOdds } from "./oddsService";
 import { getEngineDebugSummary, recordEngineRun, resetEngineStats } from "./services/engineStats";
 import { filterValidSignals } from "./services/engineSignal";
@@ -2866,15 +2866,7 @@ export async function registerRoutes(
         }
       }
 
-      console.log("[DIRECTIONAL_SPLIT]", JSON.stringify({
-        overCount: overSignals,
-        underCount: underSignals,
-        overWinRate: null,
-        underWinRate: null,
-        overHighConfidenceCount: allSignals.filter(s => s.betDirection === "over" && s.probability >= 70).length,
-        underHighConfidenceCount: allSignals.filter(s => s.betDirection === "under" && s.probability >= 70).length,
-        underBiasCorrectionActive: underRatio > 0.62,
-      }));
+      console.log("[DIRECTIONAL_SPLIT]", JSON.stringify(getDirectionalSplit()));
       console.log(`[QUICK VIEW DEBUG] live-signals final rendered: ${allSignals.length}`);
 
       allSignals.sort((a, b) => {
