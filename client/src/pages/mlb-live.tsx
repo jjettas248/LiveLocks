@@ -132,6 +132,7 @@ type MLBSignal = {
   contextScore?: number | null;
   matchupTag?: string | null;
   explanationBullets?: string[];
+  reasons?: string[];
   awayAbbr?: string | null;
   homeAbbr?: string | null;
   bvp?: { atBats: number; hits: number; avg: number | null; homeRuns: number; strikeouts: number } | null;
@@ -153,6 +154,11 @@ type MLBSignal = {
   } | null;
   alreadyHit?: boolean;
   pitchMix?: PitchMixEntry[] | null;
+  badges?: string[];
+  riskFlags?: string[];
+  drivers?: Record<string, number>;
+  overOdds?: number | null;
+  underOdds?: number | null;
 };
 
 type SignalState = "actionable" | "already_hit" | "watchlist" | "stale";
@@ -401,14 +407,17 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
   onClickThrough?: (sig: MLBSignal) => void;
   onAddToSlip?: (sig: MLBSignal) => void;
 }) {
+  const [reasonsOpen, setReasonsOpen] = useState(false);
   const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
   const isHrMarket = sig.market === "home_runs" || sig.market === "hr";
   const form = sig.formIndicator;
   const probWhole = Math.round(sig.enginePct);
   const state = deriveSignalState(sig);
+  const edgeVal = sig.edge ?? 0;
+  const hasPositiveEdge = edgeVal > 0;
   const glowEligible = sig.playerGlowEligible &&
     (sig.confidenceTier === "ELITE" || sig.confidenceTier === "STRONG") &&
-    (sig.edge ?? 0) >= 10;
+    edgeVal >= 5;
   const glowClass = glowEligible
     ? (sig.recommendedSide === "OVER"
       ? "border-green-500/50 shadow-[0_0_16px_rgba(34,197,94,0.25)]"
@@ -425,10 +434,15 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
     ? "border-border/30 bg-secondary/20"
     : "";
 
+  const allReasons = sig.explanationBullets?.length ? sig.explanationBullets : sig.reasons?.length ? sig.reasons : [];
+  const badges = sig.badges ?? [];
+  const riskFlags = sig.riskFlags ?? [];
+  const drivers = sig.drivers as Record<string, number> | undefined;
+
   return (
     <div
       data-testid={`card-mlb-signal-${sig.playerId}-${sig.market}`}
-      className={`rounded-xl border p-4 sm:p-5 space-y-3 transition-all ${stateStyles} ${glowClass || heatGlow(form)} ${edgeBg(sig.edge)} border-border/40 ${onClickThrough ? "cursor-pointer hover:border-primary/40 active:scale-[0.99]" : ""}`}
+      className={`rounded-xl border p-4 sm:p-5 space-y-3 transition-all ${stateStyles} ${glowClass || heatGlow(form)} ${hasPositiveEdge ? edgeBg(sig.edge) : ""} border-border/40 ${onClickThrough ? "cursor-pointer hover:border-primary/40 active:scale-[0.99]" : ""}`}
       onClick={() => onClickThrough?.(sig)}
     >
       {state === "already_hit" && (
@@ -448,7 +462,7 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1.5 mt-1">
+          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
             <span className="text-xs text-muted-foreground">{marketLabel}</span>
             {compact && sig.awayAbbr && sig.homeAbbr && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30">
@@ -458,6 +472,11 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
             {sig.matchupTag && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30">
                 {sig.matchupTag}
+              </span>
+            )}
+            {sig.inning > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30">
+                Inn {sig.inning}
               </span>
             )}
           </div>
@@ -470,7 +489,7 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
               "bg-blue-500/15 text-blue-400"
             }`}>{sig.confidenceTier}</span>
           )}
-          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${edgeColor(sig.edge)} ${edgeBg(sig.edge)}`}>
+          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${sig.recommendedSide === "OVER" ? "bg-green-500/20 text-green-400" : sig.recommendedSide === "UNDER" ? "bg-blue-500/20 text-blue-400" : "bg-muted/30 text-muted-foreground"}`}>
             {sig.recommendedSide}
           </span>
         </div>
@@ -479,17 +498,17 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
       <div className="grid grid-cols-4 gap-3 text-center">
         <div>
           <div className="text-[10px] text-muted-foreground">Prob</div>
-          <div className={`text-base sm:text-lg font-bold ${edgeColor(sig.edge)}`}>{probWhole}%</div>
+          <div className={`text-base sm:text-lg font-bold ${probColor(probWhole)}`}>{probWhole}%</div>
         </div>
         <div>
-          <div className="text-[10px] text-muted-foreground">EV%</div>
-          <div className={`text-base sm:text-lg font-bold ${sig.evPct != null && sig.evPct > 0 ? "text-green-400" : "text-muted-foreground"}`}>
-            {sig.evPct != null ? `${sig.evPct > 0 ? "+" : ""}${sig.evPct.toFixed(1)}` : "—"}
+          <div className="text-[10px] text-muted-foreground">Edge</div>
+          <div className={`text-base sm:text-lg font-bold ${hasPositiveEdge ? "text-green-400" : edgeVal < 0 ? "text-red-400/60" : "text-muted-foreground"}`}>
+            {sig.edge != null ? `${edgeVal > 0 ? "+" : ""}${edgeVal.toFixed(1)}%` : "—"}
           </div>
         </div>
         <div>
           <div className="text-[10px] text-muted-foreground">Proj</div>
-          <div className="text-base sm:text-lg font-bold text-foreground">{sig.projection != null ? sig.projection.toFixed(1) : "—"}</div>
+          <div className="text-base sm:text-lg font-bold text-foreground">{sig.projection != null ? sig.projection.toFixed(2) : "—"}</div>
         </div>
         <div>
           <div className="text-[10px] text-muted-foreground">Line</div>
@@ -497,9 +516,18 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
         </div>
       </div>
 
-      {sig.edge != null && (
-        <div className={`text-center py-2 rounded-lg text-xs font-bold ${edgeBg(sig.edge)} ${sig.edge >= 0 ? "text-green-400" : "text-red-400"}`}>
-          Edge: {sig.edge >= 0 ? "+" : ""}{sig.edge.toFixed(1)}%
+      {(badges.length > 0 || riskFlags.length > 0) && (
+        <div className="flex flex-wrap gap-1">
+          {badges.map((b, i) => (
+            <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-400 border border-green-500/20 font-semibold">
+              {b}
+            </span>
+          ))}
+          {riskFlags.map((f, i) => (
+            <span key={`rf-${i}`} className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20 font-semibold">
+              {f}
+            </span>
+          ))}
         </div>
       )}
 
@@ -540,11 +568,11 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
 
       {sig.lastABContact && (sig.lastABContact.exitVelo || sig.lastABContact.launchAngle || sig.lastABContact.barrelPct) && (
         <div className="flex items-center gap-3 py-2 px-3 rounded-lg bg-secondary/30 border border-border/20">
-          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider shrink-0">Last AB</span>
+          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider shrink-0">Contact</span>
           <div className="flex items-center gap-2 flex-wrap text-[11px]">
             {sig.lastABContact.exitVelo != null && (
               <span className={sig.lastABContact.exitVelo >= 95 ? "text-green-400 font-bold" : sig.lastABContact.exitVelo >= 88 ? "text-yellow-400" : "text-muted-foreground"}>
-                {sig.lastABContact.exitVelo.toFixed(0)} mph
+                {sig.lastABContact.exitVelo.toFixed(0)} mph EV
               </span>
             )}
             {sig.lastABContact.launchAngle != null && (
@@ -616,14 +644,35 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
         </div>
       )}
 
-      {sig.explanationBullets && sig.explanationBullets.length > 0 && (
-        <div className="space-y-1 pt-1">
-          {sig.explanationBullets.slice(0, 3).map((bullet, i) => (
-            <div key={i} className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
-              <span className="text-muted-foreground/50 mt-px">•</span>
-              <span>{bullet}</span>
+      {allReasons.length > 0 && (
+        <div onClick={e => e.stopPropagation()}>
+          <button
+            data-testid={`btn-reasons-${sig.playerId}-${sig.market}`}
+            className="flex items-center gap-1.5 text-[10px] text-primary hover:text-primary/80 font-semibold transition-colors w-full"
+            onClick={() => setReasonsOpen(!reasonsOpen)}
+          >
+            <span>{reasonsOpen ? "▾" : "▸"}</span>
+            <span>Why this signal? ({allReasons.length} reason{allReasons.length !== 1 ? "s" : ""})</span>
+          </button>
+          {reasonsOpen && (
+            <div className="space-y-1 pt-1.5 pl-3 animate-in slide-in-from-top-1 duration-200">
+              {allReasons.map((bullet, i) => (
+                <div key={i} className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+                  <span className="text-primary/50 mt-px">•</span>
+                  <span>{bullet}</span>
+                </div>
+              ))}
+              {drivers && Object.keys(drivers).length > 0 && (
+                <div className="flex flex-wrap gap-1 pt-1">
+                  {Object.entries(drivers).filter(([_, v]) => typeof v === "number" && v > 0.3).slice(0, 5).map(([k, v]) => (
+                    <span key={k} className="text-[8px] px-1 py-0.5 rounded bg-secondary/50 text-muted-foreground">
+                      {k}: {(v as number).toFixed(2)}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
-          ))}
+          )}
         </div>
       )}
 
@@ -643,9 +692,12 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
           {sig.signalTimestamp && (
             <span className="shrink-0">{new Date(sig.signalTimestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
           )}
+          {sig.signalScore != null && (
+            <span className="shrink-0 font-semibold">Score: {sig.signalScore}</span>
+          )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          {state === "actionable" && onAddToSlip && (
+          {onAddToSlip && (state === "actionable" || state === "already_hit") && (
             <button
               data-testid={`button-mlb-slip-${sig.playerId}-${sig.market}`}
               className="text-xs px-3 py-1.5 rounded-lg border border-green-500/30 bg-green-500/10 hover:bg-green-500/20 transition-colors text-green-400 hover:text-green-300 font-semibold"
@@ -849,6 +901,22 @@ function BatterCard({ player, signals, game, isElite, onSelect }: {
               </div>
             )}
 
+            {bestSignal && (
+              <div className="flex items-center gap-2 text-[9px] flex-wrap">
+                {bestSignal.projection != null && bestSignal.bookLine != null && (
+                  <span className={`font-semibold ${bestSignal.projection > bestSignal.bookLine ? "text-green-400" : "text-muted-foreground"}`}>
+                    Proj {bestSignal.projection.toFixed(2)} / Line {bestSignal.bookLine}
+                  </span>
+                )}
+                {bestSignal.edge != null && bestSignal.edge > 0 && (
+                  <span className={`font-bold ${edgeColor(bestSignal.edge)}`}>+{bestSignal.edge.toFixed(1)}% edge</span>
+                )}
+                {bestSignal.matchupTag && (
+                  <span className="text-muted-foreground">{bestSignal.matchupTag}</span>
+                )}
+              </div>
+            )}
+
             {abResults.length > 0 && (
               <div className="flex items-center gap-1">
                 {abResults.slice(-5).map((ab, i) => (
@@ -862,7 +930,7 @@ function BatterCard({ player, signals, game, isElite, onSelect }: {
         {playerSignals.length > 0 && (
           <div className="space-y-0.5 pt-1 border-t border-border/20">
             {playerSignals.slice(0, expanded ? 8 : 2).map(sig => (
-              <div key={`${sig.playerId}-${sig.market}`} className="flex items-center justify-between text-[10px] px-1.5 py-0.5 rounded">
+              <div key={`${sig.playerId}-${sig.market}`} className="flex items-center justify-between text-[10px] px-1.5 py-0.5 rounded hover:bg-secondary/20 transition-colors">
                 <div className="flex items-center gap-1">
                   <span className={`font-bold px-1 py-0.5 rounded text-[9px] ${sig.recommendedSide === "OVER" ? "bg-green-500/20 text-green-400" : sig.recommendedSide === "UNDER" ? "bg-blue-500/20 text-blue-400" : "bg-muted/30 text-muted-foreground"}`}>
                     {sig.recommendedSide === "OVER" ? "O" : sig.recommendedSide === "UNDER" ? "U" : "—"}
@@ -870,8 +938,11 @@ function BatterCard({ player, signals, game, isElite, onSelect }: {
                   <span className="text-muted-foreground">{MARKET_LABELS[sig.market] ?? sig.market}</span>
                   {sig.bookLine != null && <span className="text-foreground font-semibold">{sig.bookLine}</span>}
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1.5">
                   <span className={`font-bold ${probColor(sig.enginePct)}`}>{Math.round(sig.enginePct)}%</span>
+                  {sig.edge != null && sig.edge > 0 && (
+                    <span className={`text-[9px] font-bold ${edgeColor(sig.edge)}`}>+{sig.edge.toFixed(1)}%</span>
+                  )}
                   <button
                     data-testid={`btn-tweet-inline-${sig.playerId}-${sig.market}`}
                     className="text-[8px] px-1 py-0.5 rounded border border-blue-500/20 text-blue-400/70 hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
@@ -968,7 +1039,7 @@ function MlbLiveInner() {
   const { data: signalsResp, isLoading: signalsLoading, error: signalsError } = useQuery<SignalsResponse>({
     queryKey: ["/api/mlb/live-signals", selectedGameId],
     enabled: !!selectedGameId && !mlbUpgradeNeeded,
-    refetchInterval: 90_000,
+    refetchInterval: 45_000,
     retry: (fc, err: any) => !(err?.message?.includes("MLB_UPGRADE_REQUIRED") || err?.status === 402) && fc < 2,
   });
 
@@ -983,7 +1054,7 @@ function MlbLiveInner() {
   const { data: edgeFeedResp } = useQuery<EdgeFeedResponse>({
     queryKey: ["/api/mlb/edge-feed"],
     enabled: mainTab === "live_feed" || mainTab === "edge_feed" || mainTab === "inning_feed" || mainTab === "hr_radar",
-    refetchInterval: 60_000,
+    refetchInterval: 45_000,
   });
   const edgeFeedSignals = Array.isArray(edgeFeedResp?.signals) ? edgeFeedResp!.signals : [];
 
@@ -999,7 +1070,7 @@ function MlbLiveInner() {
   const { data: oddsData, isLoading: oddsLoading } = useQuery<Record<string, OddsEntry>>({
     queryKey: ["/api/mlb/odds", selectedPlayer?.teamAbbr, opponentTeam, selectedPlayer?.playerName, selectedMarket],
     enabled: !!selectedPlayer && !!opponentTeam,
-    refetchInterval: 120_000,
+    refetchInterval: 90_000,
     queryFn: async () => {
       const params = new URLSearchParams({
         playerTeam: selectedPlayer!.teamAbbr, opponentTeam: opponentTeam!, playerName: selectedPlayer!.playerName,
@@ -1378,6 +1449,151 @@ type HRRadarResponse = {
   }>;
 };
 
+function HREdgeCard({ edge }: { edge: any }) {
+  const [expanded, setExpanded] = useState(false);
+  const reasons = edge.explanationBullets ?? edge.reasons ?? [];
+  const hrFactors = edge.hrFactors;
+  const edgeVal = edge.edge ?? 0;
+  const hasPositiveEdge = edgeVal > 0;
+
+  return (
+    <div
+      data-testid={`card-hr-edge-${edge.playerId}`}
+      className={`rounded-xl border p-4 space-y-2.5 cursor-pointer transition-all hover:border-green-500/50 ${hasPositiveEdge ? "border-green-500/30 bg-green-500/5" : "border-orange-500/30 bg-orange-500/5"}`}
+      onClick={() => setExpanded(!expanded)}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-bold text-foreground">{edge.playerName}</span>
+          <span className="text-[10px] text-muted-foreground">{edge.team}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+            edge.confidenceTier === "ELITE" ? "bg-green-500/20 text-green-400" :
+            edge.confidenceTier === "STRONG" ? "bg-yellow-500/20 text-yellow-400" :
+            "bg-blue-500/20 text-blue-400"
+          }`}>{edge.confidenceTier}</span>
+          <span className="text-muted-foreground text-xs">{expanded ? "▾" : "▸"}</span>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 text-[10px]">
+        <span className="text-green-400 font-bold">{edge.side} {edge.line?.toFixed(1)}</span>
+        <span className="text-muted-foreground">•</span>
+        <span className={`font-bold ${hasPositiveEdge ? "text-green-400" : "text-muted-foreground"}`}>
+          {edgeVal > 0 ? "+" : ""}{edgeVal.toFixed(1)}% Edge
+        </span>
+        <span className="text-muted-foreground">•</span>
+        <span className="text-foreground">{edge.engineProbability?.toFixed(1)}% Prob</span>
+        <span className="text-muted-foreground">•</span>
+        <span className="text-muted-foreground">Score: {edge.signalScore}</span>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 text-center">
+        <div className="bg-secondary/30 rounded-lg p-1.5">
+          <div className="text-[8px] text-muted-foreground">Projection</div>
+          <div className="text-xs font-bold text-foreground">{edge.projection?.toFixed(2) ?? "—"}</div>
+        </div>
+        <div className="bg-secondary/30 rounded-lg p-1.5">
+          <div className="text-[8px] text-muted-foreground">Edge</div>
+          <div className={`text-xs font-bold ${hasPositiveEdge ? "text-green-400" : "text-red-400/60"}`}>
+            {edgeVal > 0 ? "+" : ""}{edgeVal.toFixed(1)}%
+          </div>
+        </div>
+        <div className="bg-secondary/30 rounded-lg p-1.5">
+          <div className="text-[8px] text-muted-foreground">Signal</div>
+          <div className="text-xs font-bold text-foreground">{edge.signalScore}/100</div>
+        </div>
+      </div>
+
+      {hrFactors && hrFactors.count > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {hrFactors.labels.map((label: string, i: number) => (
+            <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-300 border border-orange-500/20 font-semibold">
+              {label}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {Array.isArray(edge.badges) && edge.badges.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {edge.badges.map((b: string) => (
+            <span key={b} className="text-[9px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-400 font-semibold">{b}</span>
+          ))}
+        </div>
+      )}
+
+      {edge.currentStats && (
+        <div className="flex items-center gap-2 py-1.5 px-2 rounded-lg bg-secondary/40 border border-border/30 text-[10px]">
+          <span className="text-muted-foreground font-semibold">Today:</span>
+          <span className="text-foreground font-semibold">{edge.currentStats.h}-{edge.currentStats.ab}</span>
+          {edge.currentStats.hr > 0 && <span className="text-orange-400 font-bold">{edge.currentStats.hr} HR</span>}
+          {edge.currentStats.tb > 0 && <span className="text-muted-foreground">{edge.currentStats.tb} TB</span>}
+          {edge.currentStats.k > 0 && <span className="text-red-400">{edge.currentStats.k} K</span>}
+        </div>
+      )}
+
+      {expanded && (
+        <div className="space-y-2 pt-1 border-t border-border/20 animate-in slide-in-from-top-1 duration-200">
+          {reasons.length > 0 && (
+            <div className="space-y-1">
+              <div className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">Why This Signal</div>
+              {reasons.map((r: string, i: number) => (
+                <div key={i} className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+                  <span className="text-orange-400/50 mt-px">•</span>
+                  <span>{r}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {edge.lastABContact && (
+            <div className="flex items-center gap-2 text-[10px]">
+              <span className="text-muted-foreground font-semibold">Contact:</span>
+              {edge.lastABContact.exitVelo != null && (
+                <span className={edge.lastABContact.exitVelo >= 95 ? "text-green-400 font-bold" : "text-muted-foreground"}>
+                  {edge.lastABContact.exitVelo.toFixed(0)} mph
+                </span>
+              )}
+              {edge.lastABContact.launchAngle != null && (
+                <span className={edge.lastABContact.launchAngle >= 10 && edge.lastABContact.launchAngle <= 30 ? "text-green-400" : "text-muted-foreground"}>
+                  {edge.lastABContact.launchAngle.toFixed(0)}° LA
+                </span>
+              )}
+              {edge.lastABContact.distance != null && edge.lastABContact.distance > 0 && (
+                <span className={edge.lastABContact.distance >= 340 ? "text-green-400 font-bold" : "text-muted-foreground"}>
+                  {edge.lastABContact.distance.toFixed(0)} ft
+                </span>
+              )}
+            </div>
+          )}
+
+          {edge.drivers && Object.keys(edge.drivers).length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {Object.entries(edge.drivers).filter(([_, v]) => typeof v === "number" && (v as number) > 0.3).slice(0, 5).map(([k, v]) => (
+                <span key={k} className="text-[8px] px-1 py-0.5 rounded bg-secondary/50 text-muted-foreground">
+                  {k}: {(v as number).toFixed(2)}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {edge.signalTags && edge.signalTags.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {edge.signalTags.map((tag: string) => (
+                <span key={tag} className="text-[9px] px-1.5 py-0.5 rounded bg-secondary/50 text-muted-foreground border border-border/20">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HRRadarSection({ isElite }: { isElite: boolean }) {
   const { data: hrData, isLoading } = useQuery<HRRadarResponse>({
     queryKey: ["/api/mlb/hr-radar"],
@@ -1404,37 +1620,7 @@ function HRRadarSection({ isElite }: { isElite: boolean }) {
           <h3 className="text-xs font-semibold text-green-400 uppercase tracking-wider" data-testid="text-hr-edges-title">Bettable HR Edges</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {hrEdges.map(edge => (
-              <div key={`hr-edge-${edge.playerId}-${edge.market}-${edge.gameId}`}
-                data-testid={`card-hr-edge-${edge.playerId}`}
-                className="rounded-xl border border-green-500/30 bg-green-500/5 p-3 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-foreground">{edge.playerName}</span>
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                    edge.confidenceTier === "ELITE" ? "bg-green-500/20 text-green-400" :
-                    edge.confidenceTier === "STRONG" ? "bg-yellow-500/20 text-yellow-400" :
-                    "bg-blue-500/20 text-blue-400"
-                  }`}>{edge.confidenceTier}</span>
-                </div>
-                <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                  <span>{edge.team}</span>
-                  <span>•</span>
-                  <span>{MARKET_LABELS[edge.market] ?? edge.market}</span>
-                  <span>•</span>
-                  <span className="text-green-400">{edge.side} {edge.line?.toFixed(1)}</span>
-                </div>
-                <div className="flex items-center gap-3 text-[10px]">
-                  <span className="text-foreground">Prob: {edge.engineProbability?.toFixed(1)}%</span>
-                  {edge.edge != null && <span className="text-green-400">Edge: {edge.edge > 0 ? "+" : ""}{edge.edge.toFixed(1)}%</span>}
-                  <span className="text-muted-foreground">Score: {edge.signalScore}</span>
-                </div>
-                {Array.isArray(edge.badges) && edge.badges.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {edge.badges.map(b => (
-                      <span key={b} className="text-[9px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-400">{b}</span>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <HREdgeCard key={`hr-edge-${edge.playerId}-${edge.market}-${edge.gameId}`} edge={edge} />
             ))}
           </div>
         </div>

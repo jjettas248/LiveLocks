@@ -1140,6 +1140,16 @@ export async function registerRoutes(
           signalTags: qs.signalTags,
           feedTags: qs.feedTags,
           playerGlowEligible: qs.playerGlowEligible,
+          reasons: qs.reasons ?? [],
+          badges: qs.badges ?? [],
+          riskFlags: qs.riskFlags ?? [],
+          drivers: qs.drivers ?? {},
+          currentStats: qs.currentStats ?? null,
+          lastABContact: qs.lastABContact ?? null,
+          alreadyHit: qs.alreadyHit ?? false,
+          pitchMix: rawOutput?.pitchMix ?? null,
+          overOdds: rawOutput?.overOdds ?? null,
+          underOdds: rawOutput?.underOdds ?? null,
         };
       })
       .sort((a, b) => {
@@ -1264,13 +1274,17 @@ export async function registerRoutes(
           const formRaw = qs.formIndicator;
           const formUpper = formRaw ? String(formRaw).toUpperCase() : null;
 
+          const sidedProb = qs.side === "OVER"
+            ? (raw?.calibratedProbabilityOver ?? qs.engineProbability ?? 0)
+            : (raw?.calibratedProbabilityUnder ?? qs.engineProbability ?? 0);
+
           allSignals.push({
             playerId: qs.playerId,
             playerName: qs.playerName,
             market: qs.market,
             bookLine: qs.line,
             projection: qs.projection ?? null,
-            enginePct: Math.round((qs.engineProbability ?? 0) * 10) / 10,
+            enginePct: Math.round(sidedProb * 10) / 10,
             edge: raw ? Math.round(raw.edge * 100) / 100 : null,
             evPct: raw ? Math.round((raw.evPct ?? 0) * 100) / 100 : null,
             recommendedSide: qs.side,
@@ -1288,6 +1302,7 @@ export async function registerRoutes(
             playerGlowEligible: qs.playerGlowEligible,
             formIndicator: formUpper,
             reasons: qs.reasons ?? [],
+            explanationBullets: raw?.explanationBullets ?? qs.reasons ?? [],
             currentStats: qs.currentStats ?? null,
             lastABContact: qs.lastABContact ?? null,
             badges: qs.badges ?? [],
@@ -1296,14 +1311,22 @@ export async function registerRoutes(
             alreadyHit,
             pitchMix,
             signalTimestamp: qs.engineGeneratedAt ?? raw?.engineGeneratedAt ?? Date.now(),
+            overOdds: raw?.overOdds ?? null,
+            underOdds: raw?.underOdds ?? null,
+            matchupTag: raw?.matchupTag ?? null,
           });
         }
       }
 
       allSignals.sort((a, b) => {
-        const edgeDiff = Math.abs(b.edge ?? 0) - Math.abs(a.edge ?? 0);
-        if (Math.abs(edgeDiff) > 0.01) return edgeDiff;
-        return (b.enginePct ?? 0) - (a.enginePct ?? 0);
+        const aEdge = a.edge ?? 0;
+        const bEdge = b.edge ?? 0;
+        const aPos = aEdge > 0 ? 1 : 0;
+        const bPos = bEdge > 0 ? 1 : 0;
+        if (aPos !== bPos) return bPos - aPos;
+        const scoreDiff = (b.signalScore ?? 0) - (a.signalScore ?? 0);
+        if (Math.abs(scoreDiff) > 0) return scoreDiff;
+        return bEdge - aEdge;
       });
 
       console.log(`[MLB EDGE-FEED] total=${allSignals.length} generated=${totalGenerated} droppedStale=${totalDropped} feedTags=${JSON.stringify(feedTagDist)}`);
@@ -1342,6 +1365,9 @@ export async function registerRoutes(
           const playerContact = contactCache?.byPlayerId?.[qs.playerId];
 
           if (isHRMarket && (qs.feedTags ?? []).includes("hr_radar")) {
+            const hrSidedProb = qs.side === "OVER"
+              ? (raw?.calibratedProbabilityOver ?? qs.engineProbability ?? 0)
+              : (raw?.calibratedProbabilityUnder ?? qs.engineProbability ?? 0);
             hrEdges.push({
               playerId: qs.playerId,
               playerName: qs.playerName,
@@ -1350,15 +1376,21 @@ export async function registerRoutes(
               side: qs.side,
               line: qs.line,
               projection: qs.projection,
-              engineProbability: qs.engineProbability,
+              engineProbability: Math.round(hrSidedProb * 10) / 10,
               edge: raw ? Math.round(raw.edge * 100) / 100 : null,
               signalScore: qs.signalScore,
               confidenceTier: qs.confidenceTier,
               badges: qs.badges ?? [],
-              reasons: qs.reasons ?? [],
+              reasons: raw?.explanationBullets ?? qs.reasons ?? [],
+              explanationBullets: raw?.explanationBullets ?? qs.reasons ?? [],
+              hrFactors: raw?.hrFactors ?? null,
               gameId: gid,
               awayAbbr: game?.awayAbbr ?? null,
               homeAbbr: game?.homeAbbr ?? null,
+              currentStats: qs.currentStats ?? null,
+              lastABContact: qs.lastABContact ?? null,
+              drivers: qs.drivers ?? {},
+              signalTags: qs.signalTags ?? [],
             });
           }
 

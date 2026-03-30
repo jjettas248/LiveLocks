@@ -71,11 +71,11 @@ export function runIntegrityFirewall(output: MLBPropOutput): FirewallResult {
     }
     cappedOutput.calibratedProbability = Math.max(cappedOutput.calibratedProbabilityOver, cappedOutput.calibratedProbabilityUnder);
 
-    const impliedOver = cappedOutput.calibratedProbabilityOver / 100;
-    const impliedUnder = cappedOutput.calibratedProbabilityUnder / 100;
-    const bookImplied = output.bookImplied ?? 0.50;
-    const sidedImplied = cappedOutput.recommendedSide === "OVER" ? impliedOver : impliedUnder;
-    cappedOutput.edge = Math.round(((sidedImplied - bookImplied) / Math.max(bookImplied, 0.01)) * 100 * 100) / 100;
+    const sidedPct = cappedOutput.recommendedSide === "OVER"
+      ? cappedOutput.calibratedProbabilityOver
+      : cappedOutput.calibratedProbabilityUnder;
+    const bookImpliedPct = output.bookImplied ?? 50;
+    cappedOutput.edge = Math.round(((sidedPct - bookImpliedPct) / Math.max(bookImpliedPct, 1)) * 100 * 100) / 100;
     if (!Number.isFinite(cappedOutput.edge)) cappedOutput.edge = 0;
   }
 
