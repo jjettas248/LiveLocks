@@ -12,6 +12,7 @@ import PrivacyPage from "@/pages/privacy";
 import TermsPage from "@/pages/terms";
 import LandingPage from "@/pages/landing";
 import VerifyPendingPage from "@/pages/verify-pending";
+import ResetPasswordPage from "@/pages/reset-password";
 import { useAuth } from "@/hooks/use-auth";
 import { useEffect } from "react";
 
@@ -85,6 +86,7 @@ function App() {
           <Route path="/privacy" component={PrivacyPage} />
           <Route path="/terms" component={TermsPage} />
           <Route path="/verify-pending" component={VerifyPendingPage} />
+          <Route path="/reset-password" component={ResetPasswordPage} />
           <Route component={ProtectedRouter} />
         </Switch>
       </TooltipProvider>

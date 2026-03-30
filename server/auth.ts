@@ -6,7 +6,7 @@ import rateLimit from "express-rate-limit";
 import { storage } from "./storage";
 import { insertUserEmailPasswordSchema } from "@shared/schema";
 import type { User } from "@shared/schema";
-import { sendWelcomeEmail, sendWallEmail, sendVerificationEmail } from "./email";
+import { sendWelcomeEmail, sendWallEmail, sendVerificationEmail, sendPasswordResetEmail } from "./email";
 import { resolveAccess } from "./utils/access";
 
 // ── Stripe tier-check TTL cache ────────────────────────────────────────────────
@@ -360,6 +360,80 @@ export async function registerAuthRoutes(app: import("express").Express) {
       ? (await storage.resetDailyPlaysIfNeeded(userId) ?? rawUser)
       : rawUser;
     return res.json(safeUser(user));
+  });
+
+  const forgotPasswordLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    message: { error: "Too many password reset requests. Please try again later." },
+  });
+
+  function hashToken(raw: string): string {
+    return crypto.createHash("sha256").update(raw).digest("hex");
+  }
+
+  app.post("/api/auth/forgot-password", forgotPasswordLimiter, async (req: Request, res: Response) => {
+    const { email } = req.body;
+    if (!email || typeof email !== "string") {
+      return res.status(400).json({ error: "Email is required" });
+    }
+
+    const normalizedInput = email.toLowerCase().trim();
+    const user = await storage.getUserByEmail(normalizedInput)
+      ?? await storage.getUserByNormalizedEmail(normalizedInput);
+    res.json({ message: "If an account with that email exists, a password reset link has been sent." });
+
+    if (!user) return;
+
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = hashToken(rawToken);
+    const expiry = new Date(Date.now() + 60 * 60 * 1000);
+
+    try {
+      await storage.updateUser(user.id, {
+        resetPasswordToken: tokenHash,
+        resetPasswordExpiry: expiry,
+      });
+      await sendPasswordResetEmail(user.email, rawToken);
+      console.log(`[auth] Password reset email sent to ${user.email}`);
+    } catch (err: any) {
+      console.error("[auth] Failed to send password reset email:", err.message);
+    }
+  });
+
+  const resetPasswordLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { error: "Too many reset attempts. Please try again later." },
+  });
+
+  app.post("/api/auth/reset-password", resetPasswordLimiter, async (req: Request, res: Response) => {
+    const { token, password } = req.body;
+    if (!token || typeof token !== "string") {
+      return res.status(400).json({ error: "Reset token is required" });
+    }
+    if (!password || typeof password !== "string" || password.length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters" });
+    }
+
+    const tokenHash = hashToken(token);
+    const fullUser = await storage.getUserByResetToken(tokenHash);
+    if (!fullUser) {
+      return res.status(400).json({ error: "Invalid or expired reset link" });
+    }
+    if (!fullUser.resetPasswordExpiry || new Date(fullUser.resetPasswordExpiry) < new Date()) {
+      return res.status(400).json({ error: "This reset link has expired. Please request a new one." });
+    }
+
+    const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+    await storage.updateUser(fullUser.id, {
+      passwordHash,
+      resetPasswordToken: null,
+      resetPasswordExpiry: null,
+    });
+
+    console.log(`[auth] Password reset complete for user ${fullUser.id}`);
+    return res.json({ message: "Password has been reset successfully. You can now sign in." });
   });
 }
 

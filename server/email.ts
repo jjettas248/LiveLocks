@@ -189,6 +189,18 @@ export async function sendVerificationEmail(to: string, token: string): Promise<
   }
 }
 
+export async function sendPasswordResetEmail(to: string, token: string): Promise<void> {
+  const baseUrl = process.env.APP_BASE_URL || "https://livelocksai.app";
+  const resetUrl = `${baseUrl}/reset-password?token=${token}`;
+  const html = wrap(`
+    <h1>Reset Your Password</h1>
+    <p>We received a request to reset your LiveLocks password. Click the button below to choose a new password.</p>
+    <a href="${resetUrl}" class="cta">Reset Password</a>
+    <p>This link expires in 1 hour. If you didn't request a password reset, you can safely ignore this email.</p>
+  `);
+  await sendHtmlEmail(to, "Reset your LiveLocks password", html);
+}
+
 export async function sendPaymentIssueEmail(to: string): Promise<void> {
   const html = wrap(`
     <h1>Payment Issue</h1>

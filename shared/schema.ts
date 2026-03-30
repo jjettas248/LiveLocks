@@ -38,6 +38,8 @@ export const users = pgTable("users", {
   unlockedGameIdsToday: text("unlocked_game_ids_today").notNull().default("[]"),
   churnedAt: timestamp("churned_at"),
   churnedFromTier: text("churned_from_tier"),
+  resetPasswordToken: text("reset_password_token"),
+  resetPasswordExpiry: timestamp("reset_password_expiry"),
 });
 
 export const stripeEvents = pgTable("stripe_events", {

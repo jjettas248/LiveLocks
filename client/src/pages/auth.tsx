@@ -39,6 +39,10 @@ type RegisterForm = z.infer<typeof registerSchema>;
 export default function AuthPage() {
   const [tab, setTab] = useState<"login" | "register">("login");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotStatus, setForgotStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const [forgotError, setForgotError] = useState<string | null>(null);
   const { login, loginPending, register, registerPending } = useAuth();
   const [, navigate] = useLocation();
 
@@ -179,6 +183,17 @@ export default function AuthPage() {
                   <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
                 ) : "Sign In"}
               </button>
+
+              <div className="text-center">
+                <button
+                  data-testid="link-forgot-password"
+                  type="button"
+                  onClick={() => setForgotOpen(true)}
+                  className="text-xs text-muted-foreground hover:text-primary transition-colors"
+                >
+                  Forgot your password?
+                </button>
+              </div>
             </form>
           )}
 
@@ -275,6 +290,92 @@ export default function AuthPage() {
             </form>
           )}
         </div>
+
+        {forgotOpen && (
+          <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
+            {forgotStatus === "sent" ? (
+              <div className="text-center space-y-3">
+                <div className="w-10 h-10 rounded-full bg-green-500/15 flex items-center justify-center mx-auto">
+                  <svg className="w-5 h-5 text-green-400" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
+                  </svg>
+                </div>
+                <h3 className="text-sm font-bold text-foreground">Check Your Email</h3>
+                <p className="text-xs text-muted-foreground">If an account exists with that email, we've sent a password reset link. Check your inbox (and spam folder).</p>
+                <button
+                  data-testid="button-back-to-login-from-forgot"
+                  type="button"
+                  onClick={() => { setForgotOpen(false); setForgotStatus("idle"); setForgotEmail(""); }}
+                  className="text-xs text-primary hover:text-primary/80 transition-colors font-medium"
+                >
+                  Back to Sign In
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="text-center">
+                  <h3 className="text-sm font-bold text-foreground">Forgot Password</h3>
+                  <p className="text-xs text-muted-foreground mt-1">Enter your email and we'll send you a link to reset your password.</p>
+                </div>
+                <div>
+                  <input
+                    data-testid="input-forgot-email"
+                    type="email"
+                    autoComplete="email"
+                    placeholder="you@example.com"
+                    value={forgotEmail}
+                    onChange={(e) => setForgotEmail(e.target.value)}
+                    className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                  />
+                </div>
+                {forgotError && (
+                  <div className="text-sm text-destructive bg-destructive/10 rounded-lg px-3 py-2">{forgotError}</div>
+                )}
+                <button
+                  data-testid="button-send-reset"
+                  type="button"
+                  disabled={forgotStatus === "sending" || !forgotEmail.trim()}
+                  onClick={async () => {
+                    setForgotStatus("sending");
+                    setForgotError(null);
+                    try {
+                      const res = await fetch("/api/auth/forgot-password", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ email: forgotEmail.trim() }),
+                      });
+                      if (!res.ok) {
+                        const data = await res.json();
+                        setForgotError(data.error || "Something went wrong.");
+                        setForgotStatus("error");
+                      } else {
+                        setForgotStatus("sent");
+                      }
+                    } catch {
+                      setForgotError("Network error. Please try again.");
+                      setForgotStatus("error");
+                    }
+                  }}
+                  className="w-full py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {forgotStatus === "sending" ? (
+                    <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                  ) : "Send Reset Link"}
+                </button>
+                <div className="text-center">
+                  <button
+                    data-testid="button-cancel-forgot"
+                    type="button"
+                    onClick={() => { setForgotOpen(false); setForgotStatus("idle"); setForgotError(null); }}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    Back to Sign In
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         <div
           data-testid="mlb-teaser"

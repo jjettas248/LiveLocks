@@ -114,6 +114,7 @@ export interface IStorage {
   getUserByPhoneNumber(phone: string): Promise<User | undefined>;
   getUserByNormalizedEmail(normalizedEmail: string): Promise<User | undefined>;
   getUserByVerificationToken(token: string): Promise<User | undefined>;
+  getUserByResetToken(token: string): Promise<User | undefined>;
   updateUser(userId: number, data: Partial<User>): Promise<void>;
   updateUserEmailFlags(userId: number, flags: Partial<Pick<User, "sentWelcome" | "sentWalkthrough" | "sentDay3" | "sentWinback" | "sentWall" | "sentProWelcome" | "sentAllSportsWelcome">>): Promise<void>;
   countUnverifiedByFingerprint(fingerprint: string): Promise<number>;
@@ -1073,6 +1074,11 @@ export class DatabaseStorage implements IStorage {
 
   async getUserByVerificationToken(token: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.emailVerificationToken, token));
+    return user;
+  }
+
+  async getUserByResetToken(token: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.resetPasswordToken, token));
     return user;
   }
 

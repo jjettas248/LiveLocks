@@ -254,6 +254,17 @@ app.use((req, res, next) => {
     console.warn("[startup] Schema migration warning (churn-tracking):", err.message);
   }
 
+  try {
+    await pool.query(`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS reset_password_token text,
+        ADD COLUMN IF NOT EXISTS reset_password_expiry timestamp;
+    `);
+    console.log("[startup] Schema migration: password reset columns ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (password-reset):", err.message);
+  }
+
   // Backfill: mark pre-existing users (no verification token) as email-verified
   // so they are not locked out by the new emailVerified gate.
   try {
