@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
+import { computeFamilyPenaltyFactor } from "./nba/marketFamily";
 import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines, getSGOPlayerLine, resolveMLBOddsEventId, getMLBPlayerOdds, normalizeOdds } from "./oddsService";
 import { getEngineDebugSummary, recordEngineRun, resetEngineStats } from "./services/engineStats";
 import { filterValidSignals } from "./services/engineSignal";
@@ -89,6 +90,50 @@ async function recordPlayOnce(play: Parameters<typeof import("./storage").storag
   } catch (err) {
     console.warn("[recordPlayOnce] DB write failed:", (err as any).message);
   }
+}
+
+interface BatchSignal {
+  playerId: number;
+  playerName: string;
+  statType: string;
+  probability: number;
+  betDirection: string;
+  edge: number;
+  line: number;
+  currentStat?: number;
+  gameId?: string;
+  [key: string]: any;
+}
+
+function applyBatchFamilySuppression<T extends BatchSignal>(signals: T[]): T[] {
+  const familyMap = new Map<string, T[]>();
+  for (const s of signals) {
+    const dir = s.betDirection.toLowerCase();
+    const key = `${s.playerId}_${s.gameId ?? "unknown"}_${dir}`;
+    if (!familyMap.has(key)) familyMap.set(key, []);
+    familyMap.get(key)!.push(s);
+  }
+
+  const result: T[] = [];
+  for (const [familyId, members] of familyMap) {
+    members.sort((a, b) => b.edge - a.edge);
+    for (let i = 0; i < members.length; i++) {
+      const m = members[i];
+      const rank = i + 1;
+      const penalty = computeFamilyPenaltyFactor(rank);
+
+      if (rank > 1) {
+        const adjustedConf = 50 + (m.probability - 50) * penalty;
+        const adjustedEdge = adjustedConf - 50;
+        if (adjustedConf < 64 || adjustedEdge < 4) {
+          console.log(`[FAMILY_SUPPRESS] ${m.playerName} ${m.statType} rank=${rank} adjConf=${adjustedConf.toFixed(1)} adjEdge=${adjustedEdge.toFixed(1)} — suppressed`);
+          continue;
+        }
+      }
+      result.push(m);
+    }
+  }
+  return result;
 }
 
 export async function registerRoutes(
@@ -2773,7 +2818,25 @@ export async function registerRoutes(
         console.warn(`[NBA SKEW WARNING] Over-heavy distribution detected: overRatio=${overRatio.toFixed(2)} (${overSignals}/${totalSignals})`);
       }
       console.log(`[QUICK VIEW DEBUG] live-signals total engine plays: ${allSignals.length}`);
-      console.log(`[QUICK VIEW DEBUG] live-signals final rendered: ${allSignals.length} (no further filtering)`);
+
+      const preSuppressionCount = allSignals.length;
+      const suppressedSignals = applyBatchFamilySuppression(allSignals);
+      allSignals.length = 0;
+      allSignals.push(...suppressedSignals);
+      console.log(`[FAMILY_SUPPRESS] live-signals: ${preSuppressionCount} → ${allSignals.length} after family suppression`);
+
+      const survivingKeys = new Set(allSignals.map(s => `${s.playerId}|${s.statType}`));
+      for (const pid of Object.keys(engineOutput)) {
+        const pData = engineOutput[Number(pid)];
+        if (!pData) continue;
+        for (const st of Object.keys(pData)) {
+          if (!survivingKeys.has(`${pid}|${st}`)) {
+            delete pData[st];
+          }
+        }
+      }
+
+      console.log(`[QUICK VIEW DEBUG] live-signals final rendered: ${allSignals.length}`);
 
       allSignals.sort((a, b) => {
         if (b.edge !== a.edge) return b.edge - a.edge;
@@ -3418,6 +3481,18 @@ export async function registerRoutes(
       }
 
       console.log(`[QUICK VIEW DEBUG] total engine plays after validation: ${allPlays.length} (volatile pool: ${volatilePlays.length})`);
+
+      const htPreSuppression = allPlays.length;
+      const htSuppressed = applyBatchFamilySuppression(allPlays);
+      allPlays.length = 0;
+      allPlays.push(...htSuppressed);
+
+      const volPreSuppression = volatilePlays.length;
+      const volSuppressed = applyBatchFamilySuppression(volatilePlays);
+      volatilePlays.length = 0;
+      volatilePlays.push(...volSuppressed);
+
+      console.log(`[FAMILY_SUPPRESS] halftime-plays: ${htPreSuppression} → ${allPlays.length}, volatile: ${volPreSuppression} → ${volatilePlays.length}`);
 
       // Tiered selection: Tier A (edge >= 15), Tier B (edge >= 10), Tier C (edge >= 6)
       // Always include Tier A + B; include Tier C only if combined count < 8

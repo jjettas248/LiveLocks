@@ -179,7 +179,7 @@ export interface CalcDebug {
   playoffBoostApplied?: boolean;
   teamVolatilityPenaltyApplied?: boolean;
   usageMultiplier?: number;
-  archetype?: "superstar" | "primary" | "role" | "rotation" | "volatile";
+  archetype?: "superstar" | "primary" | "role" | "rotation" | "volatile" | "stable_star" | "stable_starter" | "volatile_starter" | "bench_microwave" | "low_minute_big" | "lineup_impacted" | "role_uncertain";
   overConfidence?: number;
   underConfidence?: number;
   displayConfidence?: number | null;

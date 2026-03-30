@@ -1,6 +1,8 @@
 import { db } from "./db";
 import { calculateRemainingMinutes } from "./minutesModel";
 import { getPlayerUsage, getTeamDefenseMatchup, computeUsageAdjustment, computeDefenseMultiplier } from "./services/nbaStatsService";
+import { classifyArchetype as classifyNBAArchetype, type NBAArchetype, VARIANCE_MULTIPLIERS, MINUTES_FRAGILITY_MULTIPLIERS, CORRELATION_DEFAULTS, COMBO_VARIANCE_EXTRA, isVolatileArchetype, isImpactedArchetype, getSafetyCeiling } from "./nba/archetypes";
+import { isUnderBiasCorrectionActive } from "./nba/directionalBias";
 import {
   players,
   teamDefense,
@@ -31,6 +33,44 @@ import {
 import { eq, and, desc, isNull, isNotNull, sql, lt, lte, inArray, ne } from "drizzle-orm";
 
 const HIGH_VOLATILITY_TEAMS = new Set(["BKN", "WAS", "CHA", "POR", "UTA", "DET"]);
+
+// ─── Normal CDF (standard normal) ───────────────────────────────────────────
+function phiCDF(z: number): number {
+  const a1 =  0.254829592;
+  const a2 = -0.284496736;
+  const a3 =  1.421413741;
+  const a4 = -1.453152027;
+  const a5 =  1.061405429;
+  const p  =  0.3275911;
+  const sign = z < 0 ? -1 : 1;
+  const x = Math.abs(z) / Math.SQRT2;
+  const t = 1.0 / (1.0 + p * x);
+  const y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+  return 0.5 * (1.0 + sign * y);
+}
+
+// ─── Stat sigma floors (v2 engine) ──────────────────────────────────────────
+const STAT_SIGMA_FLOORS_V2: Record<string, number> = {
+  points: 3.0,
+  rebounds: 2.0,
+  assists: 1.8,
+  steals: 0.8,
+  blocks: 0.8,
+  threes: 1.2,
+};
+
+function getDefaultCorrelation(
+  a: string, b: string,
+  defaults: { rho_PR: number; rho_PA: number; rho_RA: number },
+): number {
+  const pair = [a, b].sort().join(",");
+  const map: Record<string, number> = {
+    "assists,points": defaults.rho_PA,
+    "points,rebounds": defaults.rho_PR,
+    "assists,rebounds": defaults.rho_RA,
+  };
+  return map[pair] ?? 0;
+}
 
 // 2025-26 NBA team pace (possessions per 48 minutes)
 export const TEAM_PACE: Record<string, number> = {
@@ -235,7 +275,7 @@ interface CalcLogEntry {
   bookImplied: number | null;
   edgeRaw: number;
   edgeVsBook: number;
-  archetype: "superstar" | "primary" | "role" | "rotation" | "volatile";
+  archetype: string;
   avgMinutes: number;
   recommendedSide: "OVER" | "UNDER" | "NO_SIGNAL";
   displayConfidence: number | null;
@@ -601,20 +641,129 @@ export class DatabaseStorage implements IStorage {
     const finalMean = 0.65 * expectedTotal + 0.35 * marketMean;
     const edge = finalMean - req.liveLine;
 
-    // ─── Probability pipeline ─────────────────────────────────────────────
-    // Step 1 — Edge → raw probability via interpolation
-    const edgeContext: "halftime" | "live" = isHalftimeContext ? "halftime" : "live";
-    let probability = edgeToProbability(edge, req.statType, edgeContext);
+    // ─── NEW: Distribution-based probability engine (v2) ─────────────────
+    // Uses normal CDF instead of bucket interpolation. No post-calibration expansion.
+    const isComboStat = req.statType.includes("_") || req.statType.includes("+");
 
-    // DIRECTION CONTRACT: strict > 50 / < 50 rule.
-    // probability === 50 maps to "UNDER" here only for calibration arithmetic;
-    // it will produce recommendedSide="NO_SIGNAL" and be excluded from all signals.
-    const direction = probability > 50 ? "OVER" : "UNDER";
+    // Archetype classification (new 7-level system)
+    const effectiveMinutesBase = freshProjectedMinutes ?? avgMinutes;
+    const rotationSource: "projected" | "season_avg" =
+      freshProjectedMinutes !== null ? "projected" : "season_avg";
+    const nbaArchetype = classifyNBAArchetype({
+      avgMinutes,
+      recentMinutesVariance: 0,
+      seasonMinutesVariance: 0,
+      isStarter: avgMinutes >= 25,
+      usageRate,
+      position: player.position ?? undefined,
+      lineupDisrupted: false,
+    });
+    const archetype = nbaArchetype;
 
-    // [HT_SUPPRESSION_TRACE] — halftime-only trace of suppression multipliers
-    // Fires only in halftime context so live-signal noise is not added.
-    // suppressionRaw = defenseMultiplier * paceMultiplier * shootingModifier (before clamp)
-    // suppressionClamped = contextModifier (after [0.92, 1.08] clamp)
+    // Variance computation for the distribution
+    const varianceMultiplier = VARIANCE_MULTIPLIERS[nbaArchetype];
+    const minutesFragility = MINUTES_FRAGILITY_MULTIPLIERS[nbaArchetype];
+
+    // Per-minute variance rate (estimated from stat type)
+    function estimateVarianceRate(statType: string): number {
+      switch (statType) {
+        case "points":   return 0.45;
+        case "rebounds":  return 0.18;
+        case "assists":   return 0.15;
+        case "steals":    return 0.06;
+        case "blocks":    return 0.06;
+        case "threes":    return 0.10;
+        default:          return 0.30;
+      }
+    }
+
+    // Compute sigma for the stat distribution
+    let sigma: number;
+    if (isComboStat) {
+      // Combo variance with covariance
+      const components: string[] = [];
+      if (req.statType.includes("pts")) components.push("points");
+      if (req.statType.includes("reb")) components.push("rebounds");
+      if (req.statType.includes("ast")) components.push("assists");
+      if (req.statType.includes("stl")) components.push("steals");
+      if (req.statType.includes("blk")) components.push("blocks");
+
+      let totalVariance = 0;
+      const componentSigmas: Record<string, number> = {};
+      for (const comp of components) {
+        const vRate = estimateVarianceRate(comp);
+        const rate = comp === "points" ? (ptsPerMin ?? 0) :
+                     comp === "rebounds" ? (rebPerMin ?? 0) :
+                     comp === "assists" ? (astPerMin ?? 0) :
+                     comp === "steals" ? (stlPerMin ?? 0) :
+                     comp === "blocks" ? (blkPerMin ?? 0) : 0;
+        const minVar = (minutesFragility * 2.5) ** 2;
+        const rawVar = remainingMinutes * vRate + (rate * rate) * minVar;
+        const adjVar = rawVar * varianceMultiplier;
+        const floor = (STAT_SIGMA_FLOORS_V2[comp] ?? 1.0) ** 2;
+        const finalVar = Math.max(adjVar, floor);
+        totalVariance += finalVar;
+        componentSigmas[comp] = Math.sqrt(finalVar);
+      }
+
+      // Add covariance terms
+      const correlations = CORRELATION_DEFAULTS[nbaArchetype];
+      const covExtra = COMBO_VARIANCE_EXTRA[nbaArchetype];
+      for (let i = 0; i < components.length; i++) {
+        for (let j = i + 1; j < components.length; j++) {
+          const a = components[i], b = components[j];
+          const rho = getDefaultCorrelation(a, b, correlations);
+          totalVariance += 2 * rho * componentSigmas[a] * componentSigmas[b];
+        }
+      }
+      totalVariance *= covExtra;
+
+      // Combo inflation factors
+      const comboInflation = req.statType === "pts_reb" ? 1.05 :
+                             req.statType === "pts_ast" ? 1.08 :
+                             req.statType === "reb_ast" ? 1.08 :
+                             req.statType === "pts_reb_ast" ? 1.12 : 1.0;
+      totalVariance *= comboInflation;
+
+      sigma = Math.sqrt(Math.max(totalVariance, 4.0));
+    } else {
+      // Single-stat variance
+      const vRate = estimateVarianceRate(req.statType);
+      const rate = seasonPerMin ?? 0;
+      const minVar = (minutesFragility * 2.5) ** 2;
+      const rawVar = remainingMinutes * vRate + (rate * rate) * minVar;
+      const adjVar = rawVar * varianceMultiplier;
+      const floor = (STAT_SIGMA_FLOORS_V2[req.statType] ?? 1.0) ** 2;
+      sigma = Math.sqrt(Math.max(adjVar, floor));
+    }
+
+    // Normal CDF probability
+    const threshold = req.liveLine + 0.5;
+    const z = (finalMean - threshold) / sigma;
+    const P_over_raw = phiCDF(z);
+    const P_under_raw = 1 - P_over_raw;
+
+    // Side selection with epsilon guard
+    const epsilon = isComboStat ? 0.60 : 0.35;
+    const separation = Math.abs(finalMean - req.liveLine);
+
+    let rawSide: "OVER" | "UNDER" | "NO_SIGNAL";
+    let P_side_raw: number;
+
+    if (finalMean > req.liveLine && separation >= epsilon) {
+      rawSide = "OVER";
+      P_side_raw = P_over_raw;
+    } else if (finalMean < req.liveLine && separation >= epsilon) {
+      rawSide = "UNDER";
+      P_side_raw = P_under_raw;
+    } else {
+      rawSide = "NO_SIGNAL";
+      P_side_raw = Math.max(P_over_raw, P_under_raw);
+    }
+
+    const direction = rawSide === "NO_SIGNAL" ? "UNDER" : rawSide;
+
+    // [HT_SUPPRESSION_TRACE]
     if (isHalftimeContext && process.env.DEBUG_PIPELINE === "true") {
       console.log("[HT_SUPPRESSION_TRACE]", {
         player: player.name,
@@ -629,97 +778,65 @@ export class DatabaseStorage implements IStorage {
         line: req.liveLine,
         direction,
         edge: Math.round(edge * 100) / 100,
+        sigma: Math.round(sigma * 100) / 100,
+        z: Math.round(z * 1000) / 1000,
+        P_over_raw: Math.round(P_over_raw * 10000) / 10000,
+        archetype: nbaArchetype,
       });
     }
 
-    // Step 2 — Calibration lookup (directional confidence only)
-    const confidence = direction === "OVER" ? probability : 100 - probability;
-    const calibrated = calibrateProbability(confidence);
-    probability = direction === "OVER" ? calibrated : 100 - calibrated;
+    // Fragility penalty
+    const isBlowout = Math.abs(parsedScoreDiff) > 15;
+    const fragilityScore = Math.max(0, Math.min(1,
+      0.25 * (effectiveMinutesBase < 20 ? 0.8 : effectiveMinutesBase < 26 ? 0.4 : 0.1) +
+      0.20 * (avgMinutes < 22 ? 0.6 : 0.1) +
+      0.20 * 0.1 +
+      0.15 * (isBlowout ? 0.7 : 0.0) +
+      0.10 * 0.0 +
+      0.10 * (seasonPhase === "late" ? 0.4 : 0.0)
+    ));
+    const fragilityPenalty = 0.45 * fragilityScore;
+    const P_side_fragile = 0.5 + (P_side_raw - 0.5) * (1 - fragilityPenalty);
 
-    // Step 3 — Penalties
-    // Step 3a — Combo variance filter
-    let comboVariancePenaltyApplied = false;
-    if (req.statType.includes("+") || req.statType.includes("_")) {
-      probability *= 0.96;
-      probability = Math.max(2, Math.min(98, probability));
-      comboVariancePenaltyApplied = true;
+    // Calibration (split by single/combo, archetype)
+    const calibrationShrink = isComboStat ? 0.78 : 0.88;
+    let P_side_calibrated = 0.5 + (P_side_fragile - 0.5) * calibrationShrink;
+    let calibrationTrack = isComboStat ? "combo_0.78" : "single_0.88";
+
+    if (isVolatileArchetype(nbaArchetype) || isImpactedArchetype(nbaArchetype)) {
+      P_side_calibrated = 0.5 + (P_side_calibrated - 0.5) * 0.90;
+      calibrationTrack += "+volatile_0.90";
     }
 
-    // Step 3b — Bench volatility filter
-    const effectiveMinutesBase = freshProjectedMinutes ?? avgMinutes;
-    const rotationSource: "projected" | "season_avg" =
-      freshProjectedMinutes !== null ? "projected" : "season_avg";
-    let volatilityFiltered = false;
-    if (effectiveMinutesBase < 26) {
-      probability = Math.max(2, Math.min(98, probability * 0.94));
-      volatilityFiltered = true;
+    // Directional bias correction
+    const underBiasActive = isUnderBiasCorrectionActive();
+    if (rawSide === "UNDER" && underBiasActive) {
+      P_side_calibrated = 0.5 + (P_side_calibrated - 0.5) * 0.92;
+      calibrationTrack += "+under_bias_0.92";
     }
 
-    // Step 4 — Season volatility adjustments
-    const isLowRolePlayer = effectiveMinutesBase < 28;
-    const isBenchVolatile = (freshProjectedMinutes ?? avgMinutes) < 24 && minutesPlayed < 12;
-    const isComboStat = req.statType.includes("+") || req.statType.includes("_");
-    let lateSeasonPenaltyApplied = false;
+    // Safety ceiling
+    const ceiling = getSafetyCeiling(nbaArchetype, isComboStat);
+    let P_side_final = Math.min(P_side_calibrated, ceiling);
+    let confidenceCeilingApplied = P_side_calibrated > ceiling;
+    let ceilingReason = confidenceCeilingApplied
+      ? `${nbaArchetype}_${isComboStat ? "combo" : "single"}_cap_${ceiling}`
+      : null;
 
-    if (seasonPhase === "late" && direction === "UNDER") {
-      if (isLowRolePlayer) {
-        probability *= 0.94;
-        lateSeasonPenaltyApplied = true;
-      }
-      if (isComboStat) {
-        probability *= 0.95;
-        lateSeasonPenaltyApplied = true;
-      }
-      if (isBenchVolatile) {
-        probability *= 0.92;
-        lateSeasonPenaltyApplied = true;
-      }
-      probability = Math.max(2, Math.min(98, probability));
-    }
+    // Convert to percentage scale for compatibility
+    let probability = rawSide === "OVER"
+      ? P_side_final * 100
+      : (1 - P_side_final) * 100;
 
-    // Step 4b — Tank-team late-season penalty
-    let teamVolatilityPenaltyApplied = false;
-    if (seasonPhase === "late" && HIGH_VOLATILITY_TEAMS.has(player.team)) {
-      probability *= 0.96;
-      probability = Math.max(2, Math.min(98, probability));
-      teamVolatilityPenaltyApplied = true;
-    }
-
-    // Step 5 — Playoff boost
-    let playoffBoostApplied = false;
-    if (seasonPhase === "playoffs") {
-      probability *= 1.03;
-      probability = Math.max(2, Math.min(98, probability));
-      playoffBoostApplied = true;
-    }
-
-    // Step 6 — Probability expansion
-    probability = 50 + (probability - 50) * 1.65;
-
-    // ─── Archetype classification ─────────────────────────────────────────
-    type Archetype = "superstar" | "primary" | "role" | "rotation" | "volatile";
-    function classifyArchetype(mins: number): Archetype {
-      if (mins >= 32) return "superstar";
-      if (mins >= 26) return "primary";
-      if (mins >= 20) return "role";
-      if (mins >= 15) return "rotation";
-      return "volatile";
-    }
-    const archetype = classifyArchetype(avgMinutes);
-
-    // Filter D — Final clamp
     probability = Math.max(2, Math.min(98, probability));
 
-    // ─── Directional semantics ─────────────────────────────────────────────
-    // "probability" is a raw directional lean (0-100, OVER likelihood).
-    // Never use it directly as display confidence. All UI and routing uses displayConfidence.
+    // Directional semantics
     const overLeanProbability = probability;
-
     const overConfidence = overLeanProbability;
     const underConfidence = 100 - overLeanProbability;
 
     const recommendedSide: "OVER" | "UNDER" | "NO_SIGNAL" =
+      rawSide === "NO_SIGNAL" ? "NO_SIGNAL" :
       overLeanProbability > 50 ? "OVER" :
       overLeanProbability < 50 ? "UNDER" :
       "NO_SIGNAL";
@@ -729,7 +846,7 @@ export class DatabaseStorage implements IStorage {
       recommendedSide === "OVER" ? overConfidence :
       underConfidence;
 
-    // ─── Integrity guard ───────────────────────────────────────────────────
+    // Integrity guard
     const warnings: string[] = [];
     if (recommendedSide === "OVER" && expectedTotal <= req.liveLine) {
       warnings.push("direction_projection_mismatch");
@@ -739,18 +856,22 @@ export class DatabaseStorage implements IStorage {
     }
     const hasProjectionMismatch = warnings.includes("direction_projection_mismatch");
 
-    // Edge sanity check using real odds — use displayConfidence for symmetric OVER/UNDER comparison.
-    // probability (OVER-lean, 0-100) would make all UNDER signals fail the gate since prob < 50.
-    // displayConfidence is always the winning-side confidence (>= 50 for both directions).
     const sportsbookImplied = americanOddsToProb(req.bookOdds ?? -110) * 100;
     const edgeVsBook = (displayConfidence !== null ? displayConfidence : Math.abs(probability - 50) + 50) - sportsbookImplied;
 
-    const MIN_DISPLAY_CONFIDENCE = 55;
-    const noSignal = edgeVsBook < 3
+    const MIN_DISPLAY_CONFIDENCE = 58;
+    const modelEdgeFinal = displayConfidence !== null ? (displayConfidence - 50) : 0;
+    const noSignal = rawSide === "NO_SIGNAL"
       || (displayConfidence !== null && displayConfidence < MIN_DISPLAY_CONFIDENCE)
+      || modelEdgeFinal < 4
       || hasProjectionMismatch;
 
     let usageUnderPenaltyApplied = false;
+    let comboVariancePenaltyApplied = isComboStat;
+    let volatilityFiltered = isVolatileArchetype(nbaArchetype);
+    let lateSeasonPenaltyApplied = seasonPhase === "late" && fragilityScore > 0.2;
+    let teamVolatilityPenaltyApplied = seasonPhase === "late" && HIGH_VOLATILITY_TEAMS.has(player.team);
+    let playoffBoostApplied = false;
 
     if (process.env.DEBUG_PIPELINE === "true" || noSignal) {
       console.log(
