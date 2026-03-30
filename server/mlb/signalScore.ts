@@ -273,7 +273,7 @@ export function deriveFeedTags(
   if (input.inning >= 4 && input.inning <= 6) tags.push("inning_5");
   if (input.inning >= 6 && input.inning <= 8) tags.push("inning_7");
 
-  if (output.market === "home_runs" || output.market === "hrr") {
+  if (output.market === "home_runs") {
     if (output.calibratedProbability >= 55 || scoreBreakdown.total >= 55) {
       tags.push("hr_radar");
     } else if (scoreBreakdown.liveContext >= 60 || scoreBreakdown.matchup >= 60) {

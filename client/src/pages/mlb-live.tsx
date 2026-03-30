@@ -1142,6 +1142,7 @@ function MlbLiveInner() {
               gameHydrated={gameHydrated}
               playerHydrated={playerHydrated}
               lineValid={lineValid}
+              lineupReady={lineupReady}
               calcMutation={calcMutation}
               calcResult={calcResult}
               setCalcResult={setCalcResult}
@@ -1814,14 +1815,14 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
 
 function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoading, selectedMarket, setSelectedMarket,
   selectedLine, setSelectedLine, manualMode, setManualMode, manualBookLine, setManualBookLine, hasAnyOdds, canCalculate,
-  gameHydrated, playerHydrated, lineValid,
+  gameHydrated, playerHydrated, lineValid, lineupReady,
   calcMutation, calcResult, setCalcResult, opponentTeam, onBack }: {
   player: MLBBatter; game: MLBGame; signals: MLBSignal[]; isElite: boolean;
   oddsEntries: [string, OddsEntry][]; oddsLoading: boolean; selectedMarket: string;
   setSelectedMarket: (m: string) => void; selectedLine: any; setSelectedLine: (l: any) => void;
   manualMode: boolean; setManualMode: (m: boolean) => void; manualBookLine: string;
   setManualBookLine: (v: string) => void; hasAnyOdds: boolean; canCalculate: boolean;
-  gameHydrated: boolean; playerHydrated: boolean; lineValid: boolean;
+  gameHydrated: boolean; playerHydrated: boolean; lineValid: boolean; lineupReady: boolean;
   calcMutation: any; calcResult: CalcResult | null; setCalcResult: (r: CalcResult | null) => void; opponentTeam: string | null; onBack: () => void;
 }) {
   const playerSignals = signals.filter(s => s.playerId === player.playerId);
@@ -1847,21 +1848,10 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
             </div>
             <div className="text-xs text-muted-foreground mt-0.5">{player.teamAbbr} vs {opponentTeam} · #{player.battingOrderSlot}</div>
           </div>
-          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${game.status === "live" ? "bg-green-500/15 text-green-500" : "bg-muted text-muted-foreground"}`}>
-            {game.status === "live" ? `LIVE ${inningLabel(game)}` : "PRE"}
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${game.status === "live" || (game.awayScore != null && game.homeScore != null) ? "bg-green-500/15 text-green-500" : "bg-muted text-muted-foreground"}`}>
+            {game.status === "live" || (game.awayScore != null && game.homeScore != null) ? `LIVE ${inningLabel(game)}` : "PRE"}
           </span>
         </div>
-
-        {abResults.length > 0 && (
-          <div className="px-4 py-3 border-b border-border/30">
-            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">At-Bat Results</div>
-            <div className="flex gap-2 flex-wrap">
-              {abResults.map((ab, i) => (
-                <ABOutcomePill key={i} outcome={ab.outcome} pitchType={ab.pitchType} pitchSpeed={ab.pitchSpeed} exitVelocity={ab.exitVelocity} />
-              ))}
-            </div>
-          </div>
-        )}
 
         {(() => {
           const bvpData = bestSignal?.bvp;
@@ -1900,6 +1890,17 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
             </div>
           );
         })()}
+
+        {abResults.length > 0 && (
+          <div className="px-4 py-3 border-b border-border/30">
+            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">At-Bat Results</div>
+            <div className="flex gap-2 flex-wrap">
+              {abResults.map((ab, i) => (
+                <ABOutcomePill key={i} outcome={ab.outcome} pitchType={ab.pitchType} pitchSpeed={ab.pitchSpeed} exitVelocity={ab.exitVelocity} />
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="px-4 py-3 border-b border-border/30">
           {(() => {
@@ -1987,12 +1988,12 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
           <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Game Context</div>
           <div className="space-y-2 text-xs">
             <div className="flex items-center gap-3 bg-secondary/30 rounded-lg px-3 py-2">
-              {game.status === "live" && game.awayScore != null && game.homeScore != null ? (
+              {(game.status === "live" || (game.awayScore != null && game.homeScore != null)) ? (
                 <>
                   <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-400 shrink-0">LIVE</span>
-                  <span className="font-bold text-foreground">{game.awayAbbr} {game.awayScore}</span>
+                  <span className="font-bold text-foreground">{game.awayAbbr} {game.awayScore ?? 0}</span>
                   <span className="text-muted-foreground">–</span>
-                  <span className="font-bold text-foreground">{game.homeScore} {game.homeAbbr}</span>
+                  <span className="font-bold text-foreground">{game.homeScore ?? 0} {game.homeAbbr}</span>
                   <span className="text-[9px] text-muted-foreground ml-auto">{inningLabel(game)}</span>
                 </>
               ) : (
@@ -2145,7 +2146,10 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
 
         {!canCalculate && !calcMutation.isPending && (
           <div className="text-[10px] text-muted-foreground/70 text-center py-1">
-            {!gameHydrated ? "Waiting for game data to load…" : !playerHydrated ? "Waiting for player stats…" : !lineValid ? "Select a line or enter manual line" : ""}
+            {!gameHydrated
+              ? (!lineupReady ? "Waiting for lineup" : !(game.pitcherAway || game.pitcherHome) ? "Waiting for pitcher matchup" : "Waiting for game data…")
+              : !playerHydrated ? "Waiting for player stats…"
+              : !lineValid ? "Select a line or enter manual line" : ""}
           </div>
         )}
         <button data-testid="button-calculate-mlb" disabled={!canCalculate || calcMutation.isPending}
