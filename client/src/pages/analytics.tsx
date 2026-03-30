@@ -3,10 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { getAuthToken } from "@/lib/queryClient";
-import { TrendingUp, CheckCircle, Clock, Target, ArrowUp, ArrowDown } from "lucide-react";
+import { TrendingUp, CheckCircle, Clock, Target, ArrowUp, ArrowDown, BarChart3 } from "lucide-react";
 
 type League = "NBA" | "MLB" | "NCAAB";
 type Range = "7d" | "30d" | "all";
+type BucketFilter = { direction: string; marketType: string; archetype: string; flagship: string };
 
 type RecentPlay = {
   id: string;
@@ -57,6 +58,96 @@ function directionIcon(direction: string) {
   if (direction === "over") return <ArrowUp className="w-3 h-3 text-green-400 inline-block mr-0.5" />;
   if (direction === "under") return <ArrowDown className="w-3 h-3 text-red-400 inline-block mr-0.5" />;
   return null;
+}
+
+function ConfidenceBuckets() {
+  const [filters, setFilters] = useState<BucketFilter>({ direction: "", marketType: "", archetype: "", flagship: "" });
+
+  const queryStr = Object.entries(filters)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}=${v}`)
+    .join("&");
+
+  const { data, isLoading } = useQuery<{ buckets: { label: string; total: number; wins: number; losses: number; pushes: number; winRate: number }[] }>({
+    queryKey: ["/api/analytics/confidence-buckets", queryStr],
+    queryFn: async () => {
+      const token = getAuthToken();
+      const res = await fetch(`/api/analytics/confidence-buckets?sport=nba${queryStr ? "&" + queryStr : ""}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+  });
+
+  const filterBtn = (label: string, key: keyof BucketFilter, value: string) => (
+    <button
+      data-testid={`button-bucket-filter-${key}-${value || "all"}`}
+      onClick={() => setFilters(f => ({ ...f, [key]: f[key] === value ? "" : value }))}
+      className={`px-2 py-0.5 text-[10px] rounded border transition-colors ${
+        filters[key] === value
+          ? "bg-primary/20 text-primary border-primary/30"
+          : "bg-card text-muted-foreground border-border hover:text-foreground"
+      }`}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div>
+      <h2 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-2">
+        <BarChart3 className="w-4 h-4 text-muted-foreground" />
+        Confidence Buckets
+      </h2>
+      <div className="flex flex-wrap gap-1.5 mb-3">
+        {filterBtn("Over", "direction", "over")}
+        {filterBtn("Under", "direction", "under")}
+        <span className="w-px bg-border" />
+        {filterBtn("Single", "marketType", "single")}
+        {filterBtn("Combo", "marketType", "combo")}
+        <span className="w-px bg-border" />
+        {filterBtn("Flagship", "flagship", "flagship")}
+        {filterBtn("Derivative", "flagship", "derivative")}
+        <span className="w-px bg-border" />
+        {filterBtn("Stable", "archetype", "stable_star")}
+        {filterBtn("Volatile", "archetype", "volatile_starter")}
+      </div>
+
+      {isLoading ? (
+        <div className="rounded-xl border border-border bg-card p-4 animate-pulse h-24" />
+      ) : !data?.buckets ? null : (
+        <div className="rounded-xl border border-border overflow-hidden">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border bg-muted/30">
+                <th className="px-3 py-2 text-left font-medium text-muted-foreground">Bucket</th>
+                <th className="px-3 py-2 text-center font-medium text-muted-foreground">Total</th>
+                <th className="px-3 py-2 text-center font-medium text-muted-foreground">W</th>
+                <th className="px-3 py-2 text-center font-medium text-muted-foreground">L</th>
+                <th className="px-3 py-2 text-center font-medium text-muted-foreground">P</th>
+                <th className="px-3 py-2 text-center font-medium text-muted-foreground">Win%</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.buckets.map((b, i) => (
+                <tr key={b.label} data-testid={`row-bucket-${b.label}`} className={`border-b border-border/50 ${i % 2 === 0 ? "" : "bg-muted/10"}`}>
+                  <td className="px-3 py-1.5 font-medium text-foreground">{b.label}</td>
+                  <td className="px-3 py-1.5 text-center text-muted-foreground">{b.total}</td>
+                  <td className="px-3 py-1.5 text-center text-green-400">{b.wins}</td>
+                  <td className="px-3 py-1.5 text-center text-red-400">{b.losses}</td>
+                  <td className="px-3 py-1.5 text-center text-muted-foreground">{b.pushes}</td>
+                  <td className="px-3 py-1.5 text-center font-semibold" style={{ color: b.winRate >= 55 ? "#4ade80" : b.winRate >= 50 ? "#facc15" : "#f87171" }}>
+                    {b.winRate > 0 ? `${b.winRate}%` : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function AnalyticsPage() {
@@ -168,6 +259,8 @@ export default function AnalyticsPage() {
               sub="OVER win% / UNDER win%"
             />
           </div>
+
+          {league === "NBA" && <ConfidenceBuckets />}
 
           <div>
             <h2 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">

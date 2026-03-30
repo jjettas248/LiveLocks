@@ -117,10 +117,22 @@ function applyBatchFamilySuppression<T extends BatchSignal>(signals: T[]): T[] {
   const result: T[] = [];
   for (const [familyId, members] of familyMap) {
     members.sort((a, b) => b.edge - a.edge);
+    const siblingCount = members.length;
     for (let i = 0; i < members.length; i++) {
       const m = members[i];
       const rank = i + 1;
       const penalty = computeFamilyPenaltyFactor(rank);
+      const role = rank === 1 ? "flagship" : "derivative";
+
+      const diag = (m as any).engineDiagnostics ?? {};
+      (m as any).engineDiagnostics = {
+        ...diag,
+        familyId,
+        siblingCount,
+        siblingRank: rank,
+        flagshipOrDerivative: role,
+        familyPenaltyFactor: penalty,
+      };
 
       if (rank > 1) {
         const adjustedConf = 50 + (m.probability - 50) * penalty;
@@ -2751,6 +2763,9 @@ export async function registerRoutes(
                 edge,
                 line: canonicalLine,
                 currentStat,
+                gameId,
+                team: teamAbbr,
+                engineDiagnostics: (result as any).engineDiagnostics ?? undefined,
               });
             } catch (calcErr: any) {
               console.warn(`[NBA][engineError] player=${dbPlayer?.name ?? playerName} stat=${statType} error=${calcErr?.message ?? String(calcErr)}`);
@@ -2836,6 +2851,15 @@ export async function registerRoutes(
         }
       }
 
+      console.log("[DIRECTIONAL_SPLIT]", JSON.stringify({
+        overCount: overSignals,
+        underCount: underSignals,
+        overWinRate: null,
+        underWinRate: null,
+        overHighConfidenceCount: allSignals.filter(s => s.betDirection === "over" && s.probability >= 70).length,
+        underHighConfidenceCount: allSignals.filter(s => s.betDirection === "under" && s.probability >= 70).length,
+        underBiasCorrectionActive: underRatio > 0.62,
+      }));
       console.log(`[QUICK VIEW DEBUG] live-signals final rendered: ${allSignals.length}`);
 
       allSignals.sort((a, b) => {
@@ -2898,6 +2922,43 @@ export async function registerRoutes(
         failureReasons: nbaValidationAcc.failureReasons,
         latencyMs: Date.now() - nbaEngineStart,
       });
+
+      for (const s of validatedNbaSignals) {
+        const diag = (s as any).engineDiagnostics;
+        trackPlay({
+          gameId: (s as any).gameId || gameId,
+          playerId: s.playerId ? String(s.playerId) : null,
+          playerName: s.playerName,
+          team: (s as any).team ?? null,
+          sport: "nba",
+          market: s.statType,
+          direction: s.betDirection as "over" | "under",
+          line: Number(s.line),
+          projection: Number(s.line) + (s.edge * (s.betDirection === "over" ? 1 : -1)),
+          probability: Number(s.probability ?? 0),
+          edge: s.edge != null ? Number(s.edge) : 0,
+          sportsbook: "consensus",
+          derivedLine: false,
+          createdAt: Date.now(),
+          diagnostics: diag ? {
+            archetype: diag.archetype,
+            fragilityScore: diag.fragilityScore,
+            familyId: diag.familyId,
+            siblingCount: diag.siblingCount,
+            siblingRank: diag.siblingRank,
+            flagshipOrDerivative: diag.flagshipOrDerivative,
+            familyPenaltyFactor: diag.familyPenaltyFactor,
+            calibrationTrack: diag.calibrationTrack,
+            confidenceCeilingApplied: diag.confidenceCeilingApplied,
+            ceilingReason: diag.ceilingReason,
+            rawProbOver: diag.rawProbOver,
+            rawProbUnder: diag.rawProbUnder,
+            modelEdge: diag.modelEdge,
+            minutesExpected: diag.minutesExpected,
+            minutesVariance: diag.minutesVariance,
+          } : undefined,
+        }, storage).catch(console.warn);
+      }
 
       liveSignalsCache.set(gameId, { ts: Date.now(), signals: validatedNbaSignals, engineOutput });
       res.json({ signals: validatedNbaSignals, engineOutput });
@@ -3466,6 +3527,7 @@ export async function registerRoutes(
                   expectedTotal: result.expectedTotal,
                   betDirection,
                   isDegraded: lineIsDegraded,
+                  engineDiagnostics: (result as any).engineDiagnostics ?? undefined,
                 };
                 if (isVolatile) {
                   volatilePlays.push(playEntry);
@@ -3493,6 +3555,28 @@ export async function registerRoutes(
       volatilePlays.push(...volSuppressed);
 
       console.log(`[FAMILY_SUPPRESS] halftime-plays: ${htPreSuppression} → ${allPlays.length}, volatile: ${volPreSuppression} → ${volatilePlays.length}`);
+
+      const familyMap = new Map<string, { player: string; gameId: string; familyId: string; markets: string[]; flagship: string | null; derivatives: string[] }>();
+      for (const p of allPlays) {
+        const fid = `${p.playerName}|${p.gameId}|${p.betDirection}`;
+        if (!familyMap.has(fid)) familyMap.set(fid, { player: p.playerName, gameId: p.gameId, familyId: fid, markets: [], flagship: null, derivatives: [] });
+        const f = familyMap.get(fid)!;
+        f.markets.push(p.statType);
+        if (f.markets.length === 1) f.flagship = p.statType;
+        else f.derivatives.push(p.statType);
+      }
+      for (const [, fam] of familyMap) {
+        if (fam.markets.length > 1) {
+          console.log("[MARKET_FAMILY]", JSON.stringify({
+            player: fam.player,
+            gameId: fam.gameId,
+            familyId: fam.familyId,
+            surfacedMarkets: fam.markets,
+            flagshipMarket: fam.flagship,
+            derivativeMarkets: fam.derivatives,
+          }));
+        }
+      }
 
       // Tiered selection: Tier A (edge >= 15), Tier B (edge >= 10), Tier C (edge >= 6)
       // Always include Tier A + B; include Tier C only if combined count < 8
@@ -3626,6 +3710,7 @@ export async function registerRoutes(
       // Persist each play to persisted_plays table via play tracker (dedup + snapshot)
       for (const p of topPlays) {
         const sbSource: string = (p as any).bookKeys?.[0] ?? (p as any).lineSource ?? "odds_api";
+        const diag = (p as any).engineDiagnostics;
         trackPlay({
           gameId: p.gameId ?? "",
           playerId: p.playerId ? String(p.playerId) : null,
@@ -3641,6 +3726,23 @@ export async function registerRoutes(
           sportsbook: sbSource,
           derivedLine: false,
           createdAt: Date.now(),
+          diagnostics: diag ? {
+            archetype: diag.archetype,
+            fragilityScore: diag.fragilityScore,
+            familyId: diag.familyId,
+            siblingCount: diag.siblingCount,
+            siblingRank: diag.siblingRank,
+            flagshipOrDerivative: diag.flagshipOrDerivative,
+            familyPenaltyFactor: diag.familyPenaltyFactor,
+            calibrationTrack: diag.calibrationTrack,
+            confidenceCeilingApplied: diag.confidenceCeilingApplied,
+            ceilingReason: diag.ceilingReason,
+            rawProbOver: diag.rawProbOver,
+            rawProbUnder: diag.rawProbUnder,
+            modelEdge: diag.modelEdge,
+            minutesExpected: diag.minutesExpected,
+            minutesVariance: diag.minutesVariance,
+          } : undefined,
         }, storage).catch(console.warn);
       }
     } catch (e) {
@@ -5232,8 +5334,10 @@ export function registerAnalyticsRoutes(app: Express): void {
         return { label, total, hits, winRate };
       }
       const probabilityBuckets = [
-        persistedBucket("60s", 60, 69.99),
-        persistedBucket("70s", 70, 79.99),
+        persistedBucket("60-64", 60, 64.99),
+        persistedBucket("65-69", 65, 69.99),
+        persistedBucket("70-74", 70, 74.99),
+        persistedBucket("75-79", 75, 79.99),
         persistedBucket("80+", 80, 100),
       ];
 
@@ -5321,6 +5425,125 @@ export function registerAnalyticsRoutes(app: Express): void {
     } catch (e: any) {
       console.error("[nba-audit]", e.message);
       return res.status(500).json({ error: "Audit failed", details: e.message });
+    }
+  });
+
+  app.get("/api/analytics/confidence-buckets", requireAdmin, async (req, res) => {
+    try {
+      const { sport, direction, marketType, archetype: archFilter, flagship, startDate, endDate } = req.query as Record<string, string>;
+      const gradedPlays = await storage.getGradedPlaysForCalibration({
+        sport: sport || "nba",
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+      });
+      let settled = gradedPlays.filter(p => p.result === "hit" || p.result === "miss" || p.result === "push");
+      if (direction) settled = settled.filter(p => p.direction === direction);
+      if (marketType) {
+        const combos = ["pts_reb", "pts_ast", "reb_ast", "pts_reb_ast"];
+        if (marketType === "single") settled = settled.filter(p => !combos.includes(p.market));
+        else if (marketType === "combo") settled = settled.filter(p => combos.includes(p.market));
+      }
+      if (archFilter) settled = settled.filter(p => (p as any).archetype === archFilter);
+      if (flagship === "flagship") settled = settled.filter(p => (p as any).flagshipOrDerivative === "flagship");
+      if (flagship === "derivative") settled = settled.filter(p => (p as any).flagshipOrDerivative === "derivative");
+
+      const bucketRanges = [
+        { label: "60-64", min: 60, max: 64.99 },
+        { label: "65-69", min: 65, max: 69.99 },
+        { label: "70-74", min: 70, max: 74.99 },
+        { label: "75-79", min: 75, max: 79.99 },
+        { label: "80+", min: 80, max: 100 },
+      ];
+      const buckets = bucketRanges.map(({ label, min, max }) => {
+        const inBucket = settled.filter(p => {
+          const prob = Number(p.prob);
+          const conf = p.direction === "over" ? prob : 100 - prob;
+          return conf >= min && conf <= max;
+        });
+        const wins = inBucket.filter(p => p.result === "hit").length;
+        const losses = inBucket.filter(p => p.result === "miss").length;
+        const pushes = inBucket.filter(p => p.result === "push").length;
+        const total = inBucket.length;
+        const winRate = total > 0 ? Math.round((wins / total) * 1000) / 10 : 0;
+        return { label, total, wins, losses, pushes, winRate };
+      });
+      return res.json({ buckets, filters: { sport: sport || "nba", direction: direction || "all", marketType: marketType || "all", archetype: archFilter || "all", flagship: flagship || "all" } });
+    } catch (e: any) {
+      return res.status(500).json({ error: "Confidence buckets failed", details: e.message });
+    }
+  });
+
+  app.get("/api/analytics/calibration-views", requireAdmin, async (req, res) => {
+    try {
+      const { sport, startDate, endDate, view } = req.query as Record<string, string>;
+      const gradedPlays = await storage.getGradedPlaysForCalibration({
+        sport: sport || "nba",
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+      });
+      const settled = gradedPlays.filter(p => p.result === "hit" || p.result === "miss" || p.result === "push");
+
+      const viewMode = view || "row";
+
+      if (viewMode === "row") {
+        const rows = settled.map(p => ({
+          id: p.id,
+          player: p.playerName,
+          market: p.market,
+          direction: p.direction,
+          line: Number(p.line),
+          prob: Number(p.prob),
+          result: p.result,
+          finalStat: p.finalStat != null ? Number(p.finalStat) : null,
+          gameDate: p.gameDate,
+          archetype: (p as any).archetype ?? null,
+          flagshipOrDerivative: (p as any).flagshipOrDerivative ?? null,
+          familyId: (p as any).familyId ?? null,
+          calibrationTrack: (p as any).calibrationTrack ?? null,
+        }));
+        return res.json({ view: "row", total: rows.length, rows });
+      }
+
+      if (viewMode === "player-game") {
+        const pgMap = new Map<string, { player: string; gameId: string; gameDate: string; plays: number; wins: number; losses: number; pushes: number }>();
+        for (const p of settled) {
+          const key = `${p.playerName}|${p.gameId}`;
+          if (!pgMap.has(key)) pgMap.set(key, { player: p.playerName, gameId: p.gameId, gameDate: p.gameDate, plays: 0, wins: 0, losses: 0, pushes: 0 });
+          const entry = pgMap.get(key)!;
+          entry.plays++;
+          if (p.result === "hit") entry.wins++;
+          else if (p.result === "miss") entry.losses++;
+          else entry.pushes++;
+        }
+        const rows = Array.from(pgMap.values()).map(e => ({
+          ...e,
+          winRate: e.plays > 0 ? Math.round((e.wins / e.plays) * 1000) / 10 : 0,
+        }));
+        return res.json({ view: "player-game", total: rows.length, rows });
+      }
+
+      if (viewMode === "market-family") {
+        const fMap = new Map<string, { player: string; gameId: string; familyId: string; direction: string; markets: string[]; plays: number; wins: number; losses: number; pushes: number }>();
+        for (const p of settled) {
+          const fid = (p as any).familyId || `${p.playerName}|${p.gameId}|${p.direction}`;
+          if (!fMap.has(fid)) fMap.set(fid, { player: p.playerName, gameId: p.gameId, familyId: fid, direction: p.direction, markets: [], plays: 0, wins: 0, losses: 0, pushes: 0 });
+          const entry = fMap.get(fid)!;
+          if (!entry.markets.includes(p.market)) entry.markets.push(p.market);
+          entry.plays++;
+          if (p.result === "hit") entry.wins++;
+          else if (p.result === "miss") entry.losses++;
+          else entry.pushes++;
+        }
+        const rows = Array.from(fMap.values()).map(e => ({
+          ...e,
+          winRate: e.plays > 0 ? Math.round((e.wins / e.plays) * 1000) / 10 : 0,
+        }));
+        return res.json({ view: "market-family", total: rows.length, rows });
+      }
+
+      return res.status(400).json({ error: "Invalid view parameter. Use: row, player-game, or market-family" });
+    } catch (e: any) {
+      return res.status(500).json({ error: "Calibration views failed", details: e.message });
     }
   });
 

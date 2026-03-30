@@ -1,15 +1,24 @@
-// ── Play Tracker ──────────────────────────────────────────────────────────────
-// On user "save play" action, persists the full signal snapshot to the database.
-// On game Final detection, auto-grades each tracked play as WIN, LOSS, or PUSH.
-// Grading is delegated to gradePersistedPlays.ts (existing canonical path).
-//
-// Phase 9: trackPlay is guarded — will refuse to persist if:
-//   - sportsbook is null or empty (no market source)
-//   - line is not a finite number (not a canonical line)
-
 import type { IStorage } from "../storage";
 import { gradePersistedPlays } from "./gradePersistedPlays";
 import { nanoid } from "nanoid";
+
+export interface EngineDiagnostics {
+  archetype?: string;
+  fragilityScore?: number;
+  familyId?: string;
+  siblingCount?: number;
+  siblingRank?: number;
+  flagshipOrDerivative?: string;
+  familyPenaltyFactor?: number;
+  calibrationTrack?: string;
+  confidenceCeilingApplied?: boolean;
+  ceilingReason?: string;
+  rawProbOver?: number;
+  rawProbUnder?: number;
+  modelEdge?: number;
+  minutesExpected?: number;
+  minutesVariance?: number;
+}
 
 export interface TrackableSignal {
   gameId: string;
@@ -26,13 +35,13 @@ export interface TrackableSignal {
   sportsbook: string | null;
   derivedLine: boolean;
   createdAt: number;
+  diagnostics?: EngineDiagnostics;
 }
 
 export async function trackPlay(
   signal: TrackableSignal,
   storage: IStorage
 ): Promise<{ id: string; isDuplicate: boolean }> {
-  // Phase 9 validation: reject plays with missing or non-canonical data
   if (!signal.sportsbook || signal.sportsbook.trim() === "") {
     console.warn(`[PlayTracker] REJECTED — missing sportsbook for ${signal.playerName} ${signal.market}. Play not persisted.`);
     return { id: "", isDuplicate: true };
@@ -54,6 +63,8 @@ export async function trackPlay(
     today,
   ].join("|");
 
+  const d = signal.diagnostics;
+
   const result = await storage.recordPlay({
     id,
     gameId: signal.gameId,
@@ -74,6 +85,21 @@ export async function trackPlay(
     gameDate: today,
     timestamp: new Date(signal.createdAt),
     duplicateGuard,
+    archetype: d?.archetype,
+    fragilityScore: d?.fragilityScore,
+    familyId: d?.familyId,
+    siblingCount: d?.siblingCount,
+    siblingRank: d?.siblingRank,
+    flagshipOrDerivative: d?.flagshipOrDerivative,
+    familyPenaltyFactor: d?.familyPenaltyFactor,
+    calibrationTrack: d?.calibrationTrack,
+    confidenceCeilingApplied: d?.confidenceCeilingApplied,
+    ceilingReason: d?.ceilingReason,
+    rawProbOver: d?.rawProbOver,
+    rawProbUnder: d?.rawProbUnder,
+    modelEdge: d?.modelEdge,
+    minutesExpected: d?.minutesExpected,
+    minutesVariance: d?.minutesVariance,
   });
 
   if (!result.isDuplicate) {
