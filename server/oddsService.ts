@@ -4,7 +4,9 @@ const BASE_URL = "https://api.the-odds-api.com/v4/sports/basketball_nba";
 
 // Bookmakers to query for player props — only the six supported books
 const PROP_BOOKMAKERS = "draftkings,fanduel,hardrockbet,fanatics,prizepicks,underdogfantasy";
+const PROP_BOOKMAKERS_SET = new Set(PROP_BOOKMAKERS.split(","));
 const PROP_REGIONS = "us";
+const BOOKMAKER_STALE_MS = 10 * 60 * 1000;
 
 // Canonical team name lookup — The Odds API uses full city+nickname
 export const TEAM_FULL_NAMES: Record<string, string> = {
@@ -517,11 +519,16 @@ export async function getPlayerOdds(
   const books: Record<string, OddsLine> = {};
   let foundForAnyBook = false;
 
+  const now = Date.now();
   for (const bookmaker of bookmakers) {
+    const bKey: string = bookmaker.key ?? "";
+    if (!PROP_BOOKMAKERS_SET.has(bKey)) continue;
+    const lastUpdate = bookmaker.last_update ? new Date(bookmaker.last_update).getTime() : 0;
+    if (lastUpdate > 0 && now - lastUpdate > BOOKMAKER_STALE_MS) continue;
+
     const market = bookmaker.markets?.find((m: any) => m.key === marketKey);
     if (!market?.outcomes) continue;
 
-    // Find outcomes matching this player
     const playerOutcomes = market.outcomes.filter((o: any) => {
       const desc = normPlayerName(o.description ?? o.name ?? "");
       return desc === normName
@@ -1033,9 +1040,18 @@ export async function getMLBPlayerOdds(
   const lastName = nameParts[nameParts.length - 1];
 
   const result: MLBOddsResult = {};
+  const now = Date.now();
 
   for (const bookmaker of mlbBookmakers) {
-    // Use flexible key matching instead of exact equality
+    const bKey: string = bookmaker.key ?? "";
+    if (!PROP_BOOKMAKERS_SET.has(bKey)) continue;
+
+    const lastUpdate = bookmaker.last_update ? new Date(bookmaker.last_update).getTime() : 0;
+    if (lastUpdate > 0 && now - lastUpdate > BOOKMAKER_STALE_MS) {
+      console.warn(`[MLB Odds] Rejecting stale row from ${bKey} (age: ${Math.round((now - lastUpdate) / 1000)}s)`);
+      continue;
+    }
+
     const market = (bookmaker.markets ?? []).find(
       (m: any) => m.key === marketKey || isMLBPropKey(m.key ?? "", statType)
     );
@@ -1052,7 +1068,7 @@ export async function getMLBPlayerOdds(
     const under = playerOutcomes.find((o: any) => o.name === "Under");
 
     if (over && under) {
-      result[bookmaker.key] = {
+      result[bKey] = {
         line: over.point,
         overOdds: over.price,
         underOdds: under.price,

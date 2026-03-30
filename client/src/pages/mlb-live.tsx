@@ -971,7 +971,21 @@ function MlbLiveInner() {
   const rosterPlayerIds = new Set<string>(players.filter(p => p?.playerId).map(p => String(p.playerId)));
   const validatedSignals = selectedGameId ? signals.filter(sig => sig && isValidSignal(sig, selectedGameId, rosterPlayerIds)) : [];
   const pitchersResolved = !!(selectedGame?.pitcherAway || selectedGame?.pitcherHome);
-  const canCalculate = pitchersResolved && (manualMode ? (manualBookLine.trim() !== "" && !isNaN(parseFloat(manualBookLine)) && parseFloat(manualBookLine) > 0) : !!selectedLine);
+  const gameHydrated = !!(
+    pitchersResolved &&
+    selectedGame?.status != null &&
+    (selectedGame?.status !== "live" || (selectedGame?.inning != null && selectedGame.inning >= 1)) &&
+    players.length > 0
+  );
+  const playerHydrated = !!(
+    selectedPlayer &&
+    selectedPlayer.ab != null &&
+    selectedPlayer.battingOrderSlot > 0
+  );
+  const lineValid = manualMode
+    ? (manualBookLine.trim() !== "" && !isNaN(parseFloat(manualBookLine)) && parseFloat(manualBookLine) > 0)
+    : !!selectedLine;
+  const canCalculate = gameHydrated && playerHydrated && lineValid;
 
   if (authLoading || gamesLoading) {
     return (
@@ -1085,6 +1099,9 @@ function MlbLiveInner() {
               setManualBookLine={setManualBookLine}
               hasAnyOdds={hasAnyOdds}
               canCalculate={canCalculate}
+              gameHydrated={gameHydrated}
+              playerHydrated={playerHydrated}
+              lineValid={lineValid}
               calcMutation={calcMutation}
               calcResult={calcResult}
               setCalcResult={setCalcResult}
@@ -1736,12 +1753,14 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
 
 function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoading, selectedMarket, setSelectedMarket,
   selectedLine, setSelectedLine, manualMode, setManualMode, manualBookLine, setManualBookLine, hasAnyOdds, canCalculate,
+  gameHydrated, playerHydrated, lineValid,
   calcMutation, calcResult, setCalcResult, opponentTeam, onBack }: {
   player: MLBBatter; game: MLBGame; signals: MLBSignal[]; isElite: boolean;
   oddsEntries: [string, OddsEntry][]; oddsLoading: boolean; selectedMarket: string;
   setSelectedMarket: (m: string) => void; selectedLine: any; setSelectedLine: (l: any) => void;
   manualMode: boolean; setManualMode: (m: boolean) => void; manualBookLine: string;
   setManualBookLine: (v: string) => void; hasAnyOdds: boolean; canCalculate: boolean;
+  gameHydrated: boolean; playerHydrated: boolean; lineValid: boolean;
   calcMutation: any; calcResult: CalcResult | null; setCalcResult: (r: CalcResult | null) => void; opponentTeam: string | null; onBack: () => void;
 }) {
   const playerSignals = signals.filter(s => s.playerId === player.playerId);
@@ -2025,6 +2044,11 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
           </div>
         )}
 
+        {!canCalculate && !calcMutation.isPending && (
+          <div className="text-[10px] text-muted-foreground/70 text-center py-1">
+            {!gameHydrated ? "Waiting for game data to load…" : !playerHydrated ? "Waiting for player stats…" : !lineValid ? "Select a line or enter manual line" : ""}
+          </div>
+        )}
         <button data-testid="button-calculate-mlb" disabled={!canCalculate || calcMutation.isPending}
           onClick={() => calcMutation.mutate()}
           className="w-full h-10 rounded-lg bg-primary text-primary-foreground font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50 transition-opacity">
