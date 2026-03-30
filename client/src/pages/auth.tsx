@@ -66,8 +66,12 @@ export default function AuthPage() {
       const loginPayload = isPhone
         ? { phone: normalizePhone(identifier), password: data.password }
         : { email: identifier, password: data.password };
-      await login(loginPayload);
-      navigate("/dashboard");
+      const result = await login(loginPayload);
+      if (result && result.emailVerified === false) {
+        navigate("/verify-pending");
+      } else {
+        navigate("/dashboard");
+      }
     } catch (err: any) {
       setErrorMessage(err.message || "Something went wrong. Please try again.");
     }

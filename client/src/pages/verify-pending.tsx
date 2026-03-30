@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { Mail, RefreshCw, CheckCircle } from "lucide-react";
+import { Mail, RefreshCw, CheckCircle, AlertTriangle } from "lucide-react";
 
 const RESEND_COOLDOWN_SECONDS = 60;
 
@@ -56,6 +56,18 @@ export default function VerifyPendingPage() {
           </p>
         </div>
 
+        <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4 flex items-start gap-3" data-testid="spam-warning-banner">
+          <AlertTriangle className="w-5 h-5 text-yellow-500 shrink-0 mt-0.5" />
+          <div className="text-left text-sm leading-relaxed">
+            <p className="font-semibold text-yellow-500">Check your Spam or Junk folder</p>
+            <p className="text-muted-foreground mt-1">
+              Our verification email may land in Spam. If you find it there,
+              mark it as <span className="font-medium text-foreground">"Not Spam"</span> so
+              you receive future alerts.
+            </p>
+          </div>
+        </div>
+
         <div className="space-y-3">
           <button
             data-testid="button-resend-verification"
@@ -90,10 +102,6 @@ export default function VerifyPendingPage() {
             </Link>
           </p>
         </div>
-
-        <p className="text-xs text-muted-foreground/60">
-          Didn&apos;t receive it? Check your spam folder or resend above.
-        </p>
       </div>
     </div>
   );
