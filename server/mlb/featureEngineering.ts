@@ -847,12 +847,12 @@ export function computeSpecContactQuality(input: MLBPropInput): number {
   const batSpeedAdjusted = batSpeedData.batSpeedPowerScore;
 
   const score =
-    0.20 * evLaSurface +
-    0.14 * xBASkill +
+    0.21 * evLaSurface +
+    0.15 * xBASkill +
     0.13 * xwOBASkill +
     0.13 * barrelScore +
-    0.10 * batSpeedAdjusted +
-    0.09 * hardHitScore +
+    0.07 * batSpeedAdjusted +
+    0.10 * hardHitScore +
     0.07 * sweetSpotScore +
     0.07 * ev50Score +
     0.04 * adjustedEVScore +

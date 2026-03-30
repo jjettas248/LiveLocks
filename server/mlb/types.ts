@@ -101,8 +101,8 @@ export const MARKET_PROBABILITY_CEILINGS: Record<"core" | "experimental", number
 
 export const MARKET_PROBABILITY_CAPS: Record<MLBMarket, number> = {
   hits: 78,
-  total_bases: 74,
-  home_runs: 42,
+  total_bases: 72,
+  home_runs: 40,
   hrr: 74,
   pitcher_strikeouts: 79,
   pitcher_outs: 80,
