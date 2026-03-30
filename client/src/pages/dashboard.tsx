@@ -2036,6 +2036,27 @@ export default function Dashboard() {
               🏀 NBA Live
             </button>
             <button
+              data-testid="tab-mlb"
+              onClick={() => {
+                setActiveTab("mlb");
+                if (!user?.isAdmin && user?.subscriptionTier !== "elite") {
+                  setShowMlbUpgradeModal(true);
+                }
+              }}
+              className={`px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 transition-colors relative ${
+                activeTab === "mlb"
+                  ? "bg-primary text-primary-foreground border-glow"
+                  : "text-muted-foreground hover:text-foreground"
+              } ${hasLiveMlb && activeTab !== "mlb" ? "shadow-[0_0_12px_rgba(34,197,94,0.3)]" : ""}`}
+            >
+              {hasLiveMlb && <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-green-500 animate-pulse" />}
+              <span role="img" aria-label="baseball">⚾</span>
+              MLB Live
+              {!user?.isAdmin && user?.subscriptionTier !== "elite" && (
+                <Lock className="w-3 h-3 opacity-50" />
+              )}
+            </button>
+            <button
               data-testid="tab-ncaab"
               onClick={() => {
                 if (!hasNcaabAccess) {
@@ -2092,27 +2113,6 @@ export default function Dashboard() {
                 📊 Analytics
               </button>
             )}
-            <button
-              data-testid="tab-mlb"
-              onClick={() => {
-                setActiveTab("mlb");
-                if (!user?.isAdmin && user?.subscriptionTier !== "elite") {
-                  setShowMlbUpgradeModal(true);
-                }
-              }}
-              className={`px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 transition-colors relative ${
-                activeTab === "mlb"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              } ${hasLiveMlb && activeTab !== "mlb" ? "shadow-[0_0_12px_rgba(34,197,94,0.3)]" : ""}`}
-            >
-              {hasLiveMlb && <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-green-500 animate-pulse" />}
-              <span role="img" aria-label="baseball">⚾</span>
-              MLB Live
-              {!user?.isAdmin && user?.subscriptionTier !== "elite" && (
-                <Lock className="w-3 h-3 opacity-50" />
-              )}
-            </button>
           </div>
 
           {/* NBA sub-tabs */}

@@ -935,14 +935,14 @@ export async function registerRoutes(
     const gameId = req.params.gameId as string;
     const cached = mlbLiveStatsCache.get(gameId);
     if (cached && Date.now() - cached.ts < MLB_LIVE_STATS_TTL) {
-      return res.json(cached.players);
+      return res.json({ ready: true, reason: null, players: cached.players });
     }
     try {
       const registeredLiveGame = getActiveGames().find((g) => g.gameId === gameId);
       const liveStatsPk: string | undefined = registeredLiveGame?.gamePk;
       if (!liveStatsPk) {
-        console.log(`[mlb/live-stats] gameId=${gameId}: gamePk not yet resolved — returning empty players`);
-        return res.json([]);
+        console.log(`[mlb/live-stats] gameId=${gameId}: gamePk not yet resolved — returning readiness metadata`);
+        return res.json({ ready: false, reason: "Waiting for official box score", players: [] });
       }
       const url = `https://statsapi.mlb.com/api/v1/game/${liveStatsPk}/boxscore`;
       const response = await fetch(url, {
@@ -1006,10 +1006,11 @@ export async function registerRoutes(
         for (const pid of pitchers) allRosterIds.add(String(pid));
       }
       mlbLiveStatsCache.set(gameId, { ts: Date.now(), players, allRosterIds });
-      return res.json(players);
+      console.log(`[mlb/live-stats] gameId=${gameId}: hydrated ${players.length} players from gamePk=${liveStatsPk}`);
+      return res.json({ ready: true, reason: null, players });
     } catch (e: any) {
       console.error("[mlb/live-stats]", e.message);
-      return res.status(502).json({ error: "Live stats unavailable", players: [] });
+      return res.status(502).json({ ready: false, reason: "Live stats unavailable", players: [] });
     }
   });
 
@@ -1308,7 +1309,7 @@ export async function registerRoutes(
 
         for (const qs of (edgeEntry.allSignals ?? [])) {
           const raw = rawOutputLookup.get(`${qs.playerId}_${qs.market}`);
-          const isHRMarket = qs.market === "home_runs" || qs.market === "hrr";
+          const isHRMarket = qs.market === "home_runs";
           const playerContact = contactCache?.byPlayerId?.[qs.playerId];
 
           if (isHRMarket && (qs.feedTags ?? []).includes("hr_radar")) {

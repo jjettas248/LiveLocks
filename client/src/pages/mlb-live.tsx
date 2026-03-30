@@ -240,7 +240,7 @@ const PITCHER_MARKETS = [
   { value: "hr_allowed", label: "HR Allowed" },
 ];
 
-type MainTab = "games" | "edge_feed" | "inning_feed" | "hr_radar";
+type MainTab = "games" | "edge_feed" | "inning_feed" | "hr_radar" | "live_feed";
 
 function heatEmoji(form: string | null | undefined): string {
   if (!form) return "";
@@ -287,6 +287,19 @@ function edgeBg(edge: number | null): string {
   if (edge >= 5) return "bg-yellow-500/10";
   if (edge >= 0) return "bg-muted/30";
   return "bg-red-500/10";
+}
+
+function ordinal(n: number): string {
+  if (n === 1) return "1st";
+  if (n === 2) return "2nd";
+  if (n === 3) return "3rd";
+  return `${n}th`;
+}
+
+function passLabel(n: number): string {
+  if (n === 1) return "First look";
+  if (n === 2) return "Second look";
+  return `${ordinal(n)} time through`;
 }
 
 function inningLabel(game: MLBGame): string {
@@ -375,7 +388,7 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
     ? (sig.recommendedSide === "OVER"
       ? "border-green-500/50 shadow-[0_0_16px_rgba(34,197,94,0.25)]"
       : sig.recommendedSide === "UNDER"
-      ? "border-red-500/50 shadow-[0_0_16px_rgba(239,68,68,0.25)]"
+      ? "border-blue-500/50 shadow-[0_0_16px_rgba(59,130,246,0.25)]"
       : "border-green-500/40 shadow-[0_0_12px_rgba(34,197,94,0.2)]")
     : "";
 
@@ -633,7 +646,7 @@ function BatterCard({ player, signals, game, isElite, onSelect }: {
   const sideColor = bestSignal?.recommendedSide === "OVER"
     ? "border-green-500/40 shadow-[0_0_14px_rgba(34,197,94,0.15)]"
     : bestSignal?.recommendedSide === "UNDER"
-    ? "border-red-500/40 shadow-[0_0_14px_rgba(239,68,68,0.15)]"
+    ? "border-blue-500/40 shadow-[0_0_14px_rgba(59,130,246,0.15)]"
     : "";
 
   return (
@@ -774,7 +787,7 @@ function BatterCard({ player, signals, game, isElite, onSelect }: {
             {playerSignals.slice(0, expanded ? 8 : 2).map(sig => (
               <div key={`${sig.playerId}-${sig.market}`} className="flex items-center justify-between text-[10px] px-1.5 py-0.5 rounded">
                 <div className="flex items-center gap-1">
-                  <span className={`font-bold px-1 py-0.5 rounded text-[9px] ${sig.recommendedSide === "OVER" ? "bg-green-500/20 text-green-400" : sig.recommendedSide === "UNDER" ? "bg-red-500/20 text-red-400" : "bg-muted/30 text-muted-foreground"}`}>
+                  <span className={`font-bold px-1 py-0.5 rounded text-[9px] ${sig.recommendedSide === "OVER" ? "bg-green-500/20 text-green-400" : sig.recommendedSide === "UNDER" ? "bg-blue-500/20 text-blue-400" : "bg-muted/30 text-muted-foreground"}`}>
                     {sig.recommendedSide === "OVER" ? "O" : sig.recommendedSide === "UNDER" ? "U" : "—"}
                   </span>
                   <span className="text-muted-foreground">{MARKET_LABELS[sig.market] ?? sig.market}</span>
@@ -836,13 +849,15 @@ function MlbLiveInner() {
   const games = Array.isArray(gamesResp?.games) ? gamesResp!.games : [];
   const hasAnyOdds = games.some(g => g?.hasOdds === true);
 
-  const { data: playersRaw, isLoading: playersLoading, error: playersError } = useQuery<MLBBatter[]>({
+  const { data: playersRaw, isLoading: playersLoading, error: playersError } = useQuery<{ ready: boolean; reason: string | null; players: MLBBatter[] }>({
     queryKey: ["/api/mlb/live-stats", selectedGameId],
     enabled: !!selectedGameId && !mlbUpgradeNeeded,
     refetchInterval: 30_000,
     retry: (fc, err: any) => !(err?.message?.includes("MLB_UPGRADE_REQUIRED") || err?.status === 402) && fc < 2,
   });
-  const players = Array.isArray(playersRaw) ? playersRaw : [];
+  const lineupReady = playersRaw?.ready ?? false;
+  const lineupReason = playersRaw?.reason ?? null;
+  const players = Array.isArray(playersRaw?.players) ? playersRaw!.players : (Array.isArray(playersRaw) ? (playersRaw as any as MLBBatter[]) : []);
 
   useEffect(() => {
     if (playersError && ((playersError as any)?.message?.includes("MLB_UPGRADE_REQUIRED") || (playersError as any)?.status === 402))
@@ -866,7 +881,7 @@ function MlbLiveInner() {
 
   const { data: edgeFeedResp } = useQuery<EdgeFeedResponse>({
     queryKey: ["/api/mlb/edge-feed"],
-    enabled: mainTab === "edge_feed" || mainTab === "inning_feed" || mainTab === "hr_radar",
+    enabled: mainTab === "live_feed" || mainTab === "edge_feed" || mainTab === "inning_feed" || mainTab === "hr_radar",
     refetchInterval: 60_000,
   });
   const edgeFeedSignals = Array.isArray(edgeFeedResp?.signals) ? edgeFeedResp!.signals : [];
@@ -1014,32 +1029,54 @@ function MlbLiveInner() {
 
   const TABS: { key: MainTab; label: string; color?: string }[] = [
     { key: "games", label: "Games" },
-    { key: "edge_feed", label: "Live Edge Feed" },
-    { key: "inning_feed", label: "Inning Edge Feed" },
+    { key: "live_feed", label: "Live Feed" },
     { key: "hr_radar", label: "HR Radar", color: "orange" },
   ];
 
+  const [liveFeedSub, setLiveFeedSub] = useState<"all" | "3rd" | "5th" | "7th">("all");
+
+  const handleRefresh = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/mlb/live-games"] });
+    if (selectedGameId) {
+      queryClient.invalidateQueries({ queryKey: ["/api/mlb/live-stats", selectedGameId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/mlb/live-signals", selectedGameId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/mlb/odds"] });
+    }
+    queryClient.invalidateQueries({ queryKey: ["/api/mlb/edge-feed"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar"] });
+  };
+
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-5">
-      <div className="flex gap-1.5 flex-wrap" data-testid="nav-mlb-tabs">
-        {TABS.map(tab => {
-          const active = mainTab === tab.key;
-          const isOrange = tab.color === "orange";
-          return (
-            <button
-              key={tab.key}
-              data-testid={`tab-mlb-${tab.key}`}
-              onClick={() => { setMainTab(tab.key); if (tab.key !== "games") setSelectedGameId(null); }}
-              className={`px-4 py-2 text-xs font-semibold rounded-full border transition-all ${
-                active
-                  ? isOrange ? "bg-orange-500 text-white border-orange-500" : "bg-primary text-primary-foreground border-primary"
-                  : isOrange ? "border-orange-500/40 text-orange-400 hover:text-orange-300 hover:border-orange-500/60" : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
-              }`}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
+      <div className="flex items-center justify-between gap-3 flex-wrap" data-testid="nav-mlb-tabs">
+        <div className="flex gap-1.5 flex-wrap">
+          {TABS.map(tab => {
+            const active = mainTab === tab.key || (tab.key === "live_feed" && (mainTab === "edge_feed" || mainTab === "inning_feed"));
+            const isOrange = tab.color === "orange";
+            return (
+              <button
+                key={tab.key}
+                data-testid={`tab-mlb-${tab.key}`}
+                onClick={() => { setMainTab(tab.key); if (tab.key !== "games") setSelectedGameId(null); }}
+                className={`px-4 py-2 text-xs font-semibold rounded-full border transition-all ${
+                  active
+                    ? isOrange ? "bg-orange-500 text-white border-orange-500" : "bg-primary text-primary-foreground border-primary"
+                    : isOrange ? "border-orange-500/40 text-orange-400 hover:text-orange-300 hover:border-orange-500/60" : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+        <button
+          data-testid="button-mlb-refresh"
+          onClick={handleRefresh}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-border/60 text-muted-foreground hover:text-foreground hover:border-primary/40 transition-all"
+        >
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+          Refresh
+        </button>
       </div>
 
       {mainTab === "games" && (
@@ -1075,8 +1112,11 @@ function MlbLiveInner() {
               signalsLoading={signalsLoading}
               playersLoading={playersLoading}
               updatedAt={updatedAt}
+              lineupReady={lineupReady}
+              lineupReason={lineupReason}
               onSelectPlayer={(p) => setSelectedPlayer(p)}
               onBack={() => setSelectedGameId(null)}
+              onRefresh={handleRefresh}
             />
             </div>
           )}
@@ -1112,37 +1152,36 @@ function MlbLiveInner() {
         </>
       )}
 
-      {mainTab === "edge_feed" && (
-        <div className="space-y-6">
-          <TopPlays signals={edgeFeedSignals} onPlayerClick={(gameId) => { setSelectedGameId(gameId); setMainTab("games"); }} />
-          <LiveBoard signals={edgeFeedSignals} onPlayerClick={(gameId) => { setSelectedGameId(gameId); setMainTab("games"); }} />
-        </div>
-      )}
-
-      {mainTab === "inning_feed" && (
+      {(mainTab === "live_feed" || mainTab === "edge_feed" || mainTab === "inning_feed") && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-foreground">Inning Edge Feed</h2>
-          </div>
-          <div className="flex gap-1.5">
-            {([3, 5, 7] as const).map(inn => (
+          <div className="flex gap-1.5 flex-wrap">
+            {(["all", "3rd", "5th", "7th"] as const).map(sub => (
               <button
-                key={inn}
-                data-testid={`tab-inning-${inn}`}
-                onClick={() => setInningFeedTab(inn)}
-                className={`px-4 py-2 text-xs font-semibold rounded-full border transition-all ${
-                  inningFeedTab === inn ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:text-foreground"
+                key={sub}
+                data-testid={`tab-feed-${sub}`}
+                onClick={() => setLiveFeedSub(sub)}
+                className={`px-3.5 py-1.5 text-xs font-semibold rounded-full border transition-all ${
+                  liveFeedSub === sub ? "bg-background text-foreground border-primary/50 shadow-sm" : "border-border/50 text-muted-foreground hover:text-foreground"
                 }`}
               >
-                {inn === 3 ? "3rd Inning" : inn === 5 ? "5th Inning" : "7th Inning"}
+                {sub === "all" ? "All Signals" : sub === "3rd" ? "3rd Inning" : sub === "5th" ? "5th Inning" : "7th Inning"}
               </button>
             ))}
           </div>
           {(() => {
-            const feedTagKey = inningFeedTab === 3 ? "inning_3" : inningFeedTab === 5 ? "inning_5" : "inning_7";
-            const filtered = edgeFeedSignals.filter(s =>
-              (s.feedTags ?? []).includes(feedTagKey)
-            );
+            let filtered = edgeFeedSignals;
+            if (liveFeedSub !== "all") {
+              const feedTagKey = liveFeedSub === "3rd" ? "inning_3" : liveFeedSub === "5th" ? "inning_5" : "inning_7";
+              filtered = edgeFeedSignals.filter(s => (s.feedTags ?? []).includes(feedTagKey));
+            }
+            if (liveFeedSub === "all") {
+              return (
+                <div className="space-y-6">
+                  <TopPlays signals={filtered} onPlayerClick={(gameId) => { setSelectedGameId(gameId); setMainTab("games"); }} />
+                  <LiveBoard signals={filtered} onPlayerClick={(gameId) => { setSelectedGameId(gameId); setMainTab("games"); }} />
+                </div>
+              );
+            }
             return filtered.length === 0 ? (
               <div className="rounded-xl border border-border/40 bg-card p-8 text-center">
                 <div className="flex items-center justify-center gap-2 text-sm text-blue-400">
@@ -1150,7 +1189,7 @@ function MlbLiveInner() {
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
                   </span>
-                  Monitoring {feedTagKey.replace("_", " ")} signals
+                  Monitoring {liveFeedSub} inning signals
                 </div>
                 <div className="text-xs text-muted-foreground/60 mt-1">Signals appear as games progress and pitcher fatigue data accumulates.</div>
               </div>
@@ -1369,9 +1408,9 @@ function PitcherCard({ game, side, signals, isElite }: {
                   </div>
                 </div>
                 <div className="bg-secondary/30 rounded-lg p-1.5 text-center">
-                  <div className="text-[8px] text-muted-foreground">TTO</div>
+                  <div className="text-[8px] text-muted-foreground">Lineup Pass</div>
                   <div className={`text-xs font-bold ${ctx.timesThroughOrder >= 3 ? "text-red-400" : "text-foreground"}`}>
-                    {ctx.timesThroughOrder}x
+                    {ordinal(ctx.timesThroughOrder)}
                   </div>
                 </div>
                 {ctx.avgVelocity != null && (
@@ -1397,7 +1436,7 @@ function PitcherCard({ game, side, signals, isElite }: {
                 {pitcherSignals.map(sig => (
                   <div key={`${sig.playerId}-${sig.market}`} className="flex items-center justify-between text-[10px] px-2 py-1 rounded bg-secondary/20">
                     <div className="flex items-center gap-1.5">
-                      <span className={`font-bold px-1 py-0.5 rounded text-[9px] ${sig.recommendedSide === "OVER" ? "bg-green-500/20 text-green-400" : sig.recommendedSide === "UNDER" ? "bg-red-500/20 text-red-400" : "bg-muted/30 text-muted-foreground"}`}>
+                      <span className={`font-bold px-1 py-0.5 rounded text-[9px] ${sig.recommendedSide === "OVER" ? "bg-green-500/20 text-green-400" : sig.recommendedSide === "UNDER" ? "bg-blue-500/20 text-blue-400" : "bg-muted/30 text-muted-foreground"}`}>
                         {sig.recommendedSide === "OVER" ? "O" : sig.recommendedSide === "UNDER" ? "U" : "—"}
                       </span>
                       <span className="text-muted-foreground">{MARKET_LABELS[sig.market] ?? sig.market}</span>
@@ -1494,7 +1533,7 @@ function TeamBatterSection({ teamAbbr, pitcher, players, signals, game, isElite,
   );
 }
 
-function GameDetailView({ game, players, signals, isElite, signalsLoading, playersLoading, updatedAt, onSelectPlayer, onBack }: {
+function GameDetailView({ game, players, signals, isElite, signalsLoading, playersLoading, updatedAt, lineupReady, lineupReason, onSelectPlayer, onBack, onRefresh }: {
   game: MLBGame;
   players: MLBBatter[];
   signals: MLBSignal[];
@@ -1502,8 +1541,11 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
   signalsLoading: boolean;
   playersLoading: boolean;
   updatedAt: number;
+  lineupReady: boolean;
+  lineupReason: string | null;
   onSelectPlayer: (p: MLBBatter) => void;
   onBack: () => void;
+  onRefresh: () => void;
 }) {
   const awayPlayers = players.filter(p => p.teamSide === "away" || (game.awayAbbr && p.teamAbbr === game.awayAbbr));
   const homePlayers = players.filter(p => p.teamSide === "home" || (game.homeAbbr && p.teamAbbr === game.homeAbbr));
@@ -1569,7 +1611,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
           {game.pitcherContext && (
             <>
               <span className={game.pitcherContext.pitchCount >= 85 ? "text-red-400 font-semibold" : ""}>{game.pitcherContext.pitchCount}P</span>
-              <span className={game.pitcherContext.timesThroughOrder >= 3 ? "text-red-400 font-semibold" : ""}>{game.pitcherContext.timesThroughOrder}x TTO</span>
+              <span className={game.pitcherContext.timesThroughOrder >= 3 ? "text-red-400 font-semibold" : ""}>{passLabel(game.pitcherContext.timesThroughOrder)}</span>
               {game.pitcherContext.avgVelocity != null && <span>{game.pitcherContext.avgVelocity.toFixed(1)}mph</span>}
               {game.pitcherContext.velocityDrop != null && game.pitcherContext.velocityDrop > 0 && (
                 <span className="text-red-400 font-semibold">-{game.pitcherContext.velocityDrop.toFixed(1)}</span>
@@ -1582,6 +1624,25 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
             <span>Wind {game.weather.windDirection} {game.weather.windSpeed}mph</span>
           )}
         </div>
+      </div>
+
+      <div className="flex items-center justify-between px-3 py-1.5">
+        <div className="flex items-center gap-2 text-[10px]">
+          {lineupReady ? (
+            <span className="text-green-400 font-semibold flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+              Lineup ready
+            </span>
+          ) : playersLoading ? (
+            <span className="text-muted-foreground font-medium animate-pulse">Lineup syncing…</span>
+          ) : (
+            <span className="text-yellow-400 font-medium">{lineupReason || "Waiting for official box score"}</span>
+          )}
+        </div>
+        <button data-testid="button-game-refresh" onClick={onRefresh}
+          className="text-[10px] px-2 py-0.5 rounded border border-border/50 text-muted-foreground hover:text-foreground transition-colors">
+          Refresh
+        </button>
       </div>
 
       {signals.length > 0 && (
@@ -1615,7 +1676,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
               .sort((a, b) => (b.enginePct ?? 0) - (a.enginePct ?? 0))
               .map((sig, idx) => {
                 const sideColor = sig.recommendedSide === "OVER" ? { accent: "#22c55e", bg: "rgba(34,197,94,0.08)", border: "rgba(34,197,94,0.3)" }
-                  : { accent: "#ef4444", bg: "rgba(239,68,68,0.08)", border: "rgba(239,68,68,0.3)" };
+                  : { accent: "#3b82f6", bg: "rgba(59,130,246,0.08)", border: "rgba(59,130,246,0.3)" };
                 const tier = sig.confidenceTier;
                 const glowClass = sig.playerGlowEligible && (tier === "ELITE" || tier === "STRONG") && (sig.edge ?? 0) >= 10
                   ? "shadow-[0_0_10px_rgba(34,197,94,0.25)]" : "";
@@ -1802,6 +1863,44 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
           </div>
         )}
 
+        {(() => {
+          const bvpData = bestSignal?.bvp;
+          if (!bvpData || bvpData.atBats === 0) return null;
+          return (
+            <div className="px-4 py-3 border-b border-border/30">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Batter vs Pitcher</span>
+                <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400">MATCHUP</span>
+              </div>
+              <div className="grid grid-cols-5 gap-2 text-xs">
+                <div className="bg-secondary/30 rounded-lg p-2 text-center">
+                  <div className="text-[9px] text-muted-foreground">AB</div>
+                  <div className="font-bold text-foreground">{bvpData.atBats}</div>
+                </div>
+                <div className="bg-secondary/30 rounded-lg p-2 text-center">
+                  <div className="text-[9px] text-muted-foreground">H</div>
+                  <div className="font-bold text-foreground">{bvpData.hits}</div>
+                </div>
+                <div className="bg-secondary/30 rounded-lg p-2 text-center">
+                  <div className="text-[9px] text-muted-foreground">AVG</div>
+                  <div className="font-bold text-foreground">{bvpData.avg != null ? `.${(bvpData.avg * 1000).toFixed(0).padStart(3, "0")}` : "—"}</div>
+                </div>
+                <div className="bg-secondary/30 rounded-lg p-2 text-center">
+                  <div className="text-[9px] text-muted-foreground">HR</div>
+                  <div className="font-bold text-foreground">{bvpData.homeRuns}</div>
+                </div>
+                <div className="bg-secondary/30 rounded-lg p-2 text-center">
+                  <div className="text-[9px] text-muted-foreground">K</div>
+                  <div className="font-bold text-foreground">{bvpData.strikeouts}</div>
+                </div>
+              </div>
+              {bvpData.atBats < 10 && (
+                <div className="text-[9px] text-muted-foreground mt-1.5">Small sample ({bvpData.atBats} AB) — use with caution</div>
+              )}
+            </div>
+          );
+        })()}
+
         <div className="px-4 py-3 border-b border-border/30">
           {(() => {
             const hasLive = player.exitVelocity != null || player.hardHitPct != null || player.barrelPct != null;
@@ -1920,7 +2019,7 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
               {game.pitcherContext?.pitchCount != null && game.pitcherContext.pitchCount > 0 && (
                 <span className="text-[9px] text-muted-foreground ml-auto shrink-0">
                   {game.pitcherContext.pitchCount} pitches
-                  {game.pitcherContext.timesThroughOrder > 0 && ` · ${game.pitcherContext.timesThroughOrder}x thru`}
+                  {game.pitcherContext.timesThroughOrder > 0 && ` · ${ordinal(game.pitcherContext.timesThroughOrder)} pass`}
                 </span>
               )}
             </div>
