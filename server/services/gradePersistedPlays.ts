@@ -1,4 +1,5 @@
 import type { IStorage } from "../storage";
+import { recordResult as recordDirectionalResult } from "../nba/directionalBias";
 
 // ── MLB Stats API typed interfaces ────────────────────────────────────────────
 
@@ -523,6 +524,12 @@ export async function gradePersistedPlays(
             "final:", finalStat, "vs line:", line, "direction:", direction, "→", result);
 
           await storage.settlePlay(play.id, result, finalStat, new Date());
+          if (play.sport === "nba") {
+            const d = direction.toUpperCase();
+            if (d === "OVER" || d === "UNDER") {
+              recordDirectionalResult(d, result === "hit");
+            }
+          }
           settled++;
         } catch (err) {
           console.warn("[GRADE] Error grading play", play.id, ":", (err as Error).message);

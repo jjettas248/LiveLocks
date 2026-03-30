@@ -172,12 +172,17 @@ export interface IStorage {
     engineProb?: number; bookImplied?: number; edgeGap?: number; engineVersion?: string;
     projection?: number; sportsbook?: string | null; derivedLine?: boolean;
     gameDate: string; timestamp: Date; duplicateGuard: string;
-    archetype?: string; fragilityScore?: number; familyId?: string;
+    archetype?: string; fragilityScore?: number; fragilityPenalty?: number;
+    fragilityReasons?: string; familyId?: string;
     siblingCount?: number; siblingRank?: number; flagshipOrDerivative?: string;
     familyPenaltyFactor?: number; calibrationTrack?: string;
     confidenceCeilingApplied?: boolean; ceilingReason?: string;
-    rawProbOver?: number; rawProbUnder?: number; modelEdge?: number;
+    rawProbOver?: number; rawProbUnder?: number;
+    finalProbOver?: number; finalProbUnder?: number;
+    displayConfidence?: number; modelEdge?: number;
     minutesExpected?: number; minutesVariance?: number;
+    marketType?: string; playerVolatilityScore?: number;
+    comboCovarianceEstimate?: number | null;
   }): Promise<{ id: string; isDuplicate: boolean }>;
   getPlays(opts: { sport?: string; limit?: number; settled?: string; date?: string }): Promise<{ plays: PersistedPlay[]; total: number }>;
   getGradedPlaysForCalibration(opts: { sport?: string; market?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]>;
@@ -974,14 +979,21 @@ export class DatabaseStorage implements IStorage {
     const engineDiagnostics = {
       archetype,
       fragilityScore: Math.round(fragilityScore * 1000) / 1000,
+      fragilityPenalty: Math.round(fragilityPenalty * 1000) / 1000,
       calibrationTrack,
       confidenceCeilingApplied,
       ceilingReason,
       rawProbOver: Math.round(P_over_raw * 10000) / 10000,
       rawProbUnder: Math.round(P_under_raw * 10000) / 10000,
+      finalProbOver: Math.round((rawSide === "OVER" ? P_side_final : 1 - P_side_final) * 10000) / 10000,
+      finalProbUnder: Math.round((rawSide === "UNDER" ? P_side_final : 1 - P_side_final) * 10000) / 10000,
+      displayConfidence: displayConfidence !== null ? Math.round(displayConfidence * 10) / 10 : null,
       modelEdge: Math.round(modelEdgeFinal * 100) / 100,
       minutesExpected: Math.round(remainingMinutes * 10) / 10,
       minutesVariance: Math.round(minVar * 100) / 100,
+      marketType: isComboStat ? "combo" : "single",
+      playerVolatilityScore: Math.round(fragilityScore * 1000) / 1000,
+      engineVersion: "v2_cdf",
     };
 
     if (!noSignal && req.sport === "nba") {
@@ -995,13 +1007,14 @@ export class DatabaseStorage implements IStorage {
         line: req.liveLine,
         rawProbabilityOver: engineDiagnostics.rawProbOver,
         rawProbabilityUnder: engineDiagnostics.rawProbUnder,
-        finalProbabilityOver: Math.round(overConfidence * 10) / 10,
-        finalProbabilityUnder: Math.round(underConfidence * 10) / 10,
-        displayConfidence: displayConfidence !== null ? Math.round(displayConfidence * 10) / 10 : null,
+        finalProbabilityOver: engineDiagnostics.finalProbOver,
+        finalProbabilityUnder: engineDiagnostics.finalProbUnder,
+        displayConfidence: engineDiagnostics.displayConfidence,
         modelEdge: engineDiagnostics.modelEdge,
         archetype,
         minutesExpected: engineDiagnostics.minutesExpected,
         minutesVariance: engineDiagnostics.minutesVariance,
+        playerVolatilityScore: engineDiagnostics.playerVolatilityScore,
         fragilityScore: engineDiagnostics.fragilityScore,
         calibrationTrack,
         confidenceCeilingApplied,
@@ -1489,12 +1502,17 @@ export class DatabaseStorage implements IStorage {
     engineProb?: number; bookImplied?: number; edgeGap?: number; engineVersion?: string;
     projection?: number; sportsbook?: string | null; derivedLine?: boolean;
     gameDate: string; timestamp: Date; duplicateGuard: string;
-    archetype?: string; fragilityScore?: number; familyId?: string;
+    archetype?: string; fragilityScore?: number; fragilityPenalty?: number;
+    fragilityReasons?: string; familyId?: string;
     siblingCount?: number; siblingRank?: number; flagshipOrDerivative?: string;
     familyPenaltyFactor?: number; calibrationTrack?: string;
     confidenceCeilingApplied?: boolean; ceilingReason?: string;
-    rawProbOver?: number; rawProbUnder?: number; modelEdge?: number;
+    rawProbOver?: number; rawProbUnder?: number;
+    finalProbOver?: number; finalProbUnder?: number;
+    displayConfidence?: number; modelEdge?: number;
     minutesExpected?: number; minutesVariance?: number;
+    marketType?: string; playerVolatilityScore?: number;
+    comboCovarianceEstimate?: number | null;
   }): Promise<{ id: string; isDuplicate: boolean }> {
     const existing = await db
       .select({ id: persistedPlays.id })
@@ -1538,6 +1556,14 @@ export class DatabaseStorage implements IStorage {
       modelEdge: play.modelEdge != null ? String(play.modelEdge) : null,
       minutesExpected: play.minutesExpected != null ? String(play.minutesExpected) : null,
       minutesVariance: play.minutesVariance != null ? String(play.minutesVariance) : null,
+      marketType: play.marketType ?? null,
+      finalProbOver: play.finalProbOver != null ? String(play.finalProbOver) : null,
+      finalProbUnder: play.finalProbUnder != null ? String(play.finalProbUnder) : null,
+      displayConfidence: play.displayConfidence != null ? String(play.displayConfidence) : null,
+      playerVolatilityScore: play.playerVolatilityScore != null ? String(play.playerVolatilityScore) : null,
+      comboCovarianceEstimate: play.comboCovarianceEstimate != null ? String(play.comboCovarianceEstimate) : null,
+      fragilityPenalty: play.fragilityPenalty != null ? String(play.fragilityPenalty) : null,
+      fragilityReasons: play.fragilityReasons ?? null,
     }).onConflictDoNothing({ target: persistedPlays.duplicateGuard });
     return { id: play.id, isDuplicate: false };
   }

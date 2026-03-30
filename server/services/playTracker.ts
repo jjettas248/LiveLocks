@@ -5,6 +5,8 @@ import { nanoid } from "nanoid";
 export interface EngineDiagnostics {
   archetype?: string;
   fragilityScore?: number;
+  fragilityPenalty?: number;
+  fragilityReasons?: string[];
   familyId?: string;
   siblingCount?: number;
   siblingRank?: number;
@@ -15,9 +17,16 @@ export interface EngineDiagnostics {
   ceilingReason?: string;
   rawProbOver?: number;
   rawProbUnder?: number;
+  finalProbOver?: number;
+  finalProbUnder?: number;
+  displayConfidence?: number;
   modelEdge?: number;
   minutesExpected?: number;
   minutesVariance?: number;
+  marketType?: string;
+  playerVolatilityScore?: number;
+  comboCovarianceEstimate?: number | null;
+  engineVersion?: string;
 }
 
 export interface TrackableSignal {
@@ -87,6 +96,8 @@ export async function trackPlay(
     duplicateGuard,
     archetype: d?.archetype,
     fragilityScore: d?.fragilityScore,
+    fragilityPenalty: d?.fragilityPenalty,
+    fragilityReasons: d?.fragilityReasons?.join(";"),
     familyId: d?.familyId,
     siblingCount: d?.siblingCount,
     siblingRank: d?.siblingRank,
@@ -97,9 +108,16 @@ export async function trackPlay(
     ceilingReason: d?.ceilingReason,
     rawProbOver: d?.rawProbOver,
     rawProbUnder: d?.rawProbUnder,
+    finalProbOver: d?.finalProbOver,
+    finalProbUnder: d?.finalProbUnder,
+    displayConfidence: d?.displayConfidence,
     modelEdge: d?.modelEdge,
     minutesExpected: d?.minutesExpected,
     minutesVariance: d?.minutesVariance,
+    marketType: d?.marketType,
+    playerVolatilityScore: d?.playerVolatilityScore,
+    comboCovarianceEstimate: d?.comboCovarianceEstimate,
+    engineVersion: d?.engineVersion,
   });
 
   if (!result.isDuplicate) {

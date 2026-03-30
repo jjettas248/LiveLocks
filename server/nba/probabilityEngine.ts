@@ -221,7 +221,9 @@ function computeSingleStatMeanAndVariance(
     stat, input.varianceRateRecent, input.varianceRateSeason, input.varianceRateRole,
   );
 
-  const Var_min = input.minutes.variance;
+  const sigma_min = Math.max(1.5, Math.sqrt(Math.max(input.minutes.variance, 0)));
+  const sigma_min_adj = sigma_min * MINUTES_FRAGILITY_MULTIPLIERS[input.archetype];
+  const Var_min = sigma_min_adj * sigma_min_adj;
   const rawVariance = E_min * vRate + (rate * rate) * Var_min;
 
   const archetypeMultiplier = VARIANCE_MULTIPLIERS[input.archetype];

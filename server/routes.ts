@@ -5,6 +5,7 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput } from "@shared/schema";
 import { computeFamilyPenaltyFactor } from "./nba/marketFamily";
+import { recordSurfacedSignal, seedFromSettledPlays } from "./nba/directionalBias";
 import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines, getSGOPlayerLine, resolveMLBOddsEventId, getMLBPlayerOdds, normalizeOdds } from "./oddsService";
 import { getEngineDebugSummary, recordEngineRun, resetEngineStats } from "./services/engineStats";
 import { filterValidSignals } from "./services/engineSignal";
@@ -155,6 +156,20 @@ export async function registerRoutes(
 
   await registerAuthRoutes(app);
   await registerStripeRoutes(app);
+
+  storage.getPlays({ sport: "nba", limit: 200, settled: "settled" }).then(({ plays }) => {
+    const recent7d = plays.filter(p => {
+      const d = p.gameDate;
+      const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      return d >= cutoff;
+    });
+    seedFromSettledPlays(recent7d.map(p => ({
+      direction: p.direction,
+      result: p.result,
+      displayConfidence: p.prob ? Number(p.prob) : null,
+    })));
+    console.log(`[directional-bias] Seeded from ${recent7d.length} settled NBA plays (7d)`);
+  }).catch(e => console.warn("[directional-bias] Seed failed:", (e as any).message));
 
   // ── Admin Routes ──────────────────────────────────────────────────────────
 
@@ -2924,6 +2939,10 @@ export async function registerRoutes(
       });
 
       for (const s of validatedNbaSignals) {
+        const dir = (s.betDirection ?? "").toUpperCase();
+        if (dir === "OVER" || dir === "UNDER") {
+          recordSurfacedSignal(dir, Number(s.probability ?? 50) / 100);
+        }
         const diag = (s as any).engineDiagnostics;
         trackPlay({
           gameId: (s as any).gameId || gameId,
@@ -2943,6 +2962,8 @@ export async function registerRoutes(
           diagnostics: diag ? {
             archetype: diag.archetype,
             fragilityScore: diag.fragilityScore,
+            fragilityPenalty: diag.fragilityPenalty,
+            fragilityReasons: diag.fragilityReasons,
             familyId: diag.familyId,
             siblingCount: diag.siblingCount,
             siblingRank: diag.siblingRank,
@@ -2953,9 +2974,16 @@ export async function registerRoutes(
             ceilingReason: diag.ceilingReason,
             rawProbOver: diag.rawProbOver,
             rawProbUnder: diag.rawProbUnder,
+            finalProbOver: diag.finalProbOver,
+            finalProbUnder: diag.finalProbUnder,
+            displayConfidence: diag.displayConfidence,
             modelEdge: diag.modelEdge,
             minutesExpected: diag.minutesExpected,
             minutesVariance: diag.minutesVariance,
+            marketType: diag.marketType,
+            playerVolatilityScore: diag.playerVolatilityScore,
+            comboCovarianceEstimate: diag.comboCovarianceEstimate,
+            engineVersion: diag.engineVersion,
           } : undefined,
         }, storage).catch(console.warn);
       }
@@ -3707,7 +3735,12 @@ export async function registerRoutes(
       // Fire-and-forget: alerts + persist plays for analytics
       checkAndSendAlerts(topPlays, storage).catch(console.warn);
       storage.savePlayAlerts(topPlays).catch(console.warn);
-      // Persist each play to persisted_plays table via play tracker (dedup + snapshot)
+      for (const p of topPlays) {
+        const pDir = (p.betDirection ?? "").toUpperCase();
+        if (pDir === "OVER" || pDir === "UNDER") {
+          recordSurfacedSignal(pDir, Number(p.probability ?? p.prob ?? 50) / 100);
+        }
+      }
       for (const p of topPlays) {
         const sbSource: string = (p as any).bookKeys?.[0] ?? (p as any).lineSource ?? "odds_api";
         const diag = (p as any).engineDiagnostics;
@@ -3729,6 +3762,8 @@ export async function registerRoutes(
           diagnostics: diag ? {
             archetype: diag.archetype,
             fragilityScore: diag.fragilityScore,
+            fragilityPenalty: diag.fragilityPenalty,
+            fragilityReasons: diag.fragilityReasons,
             familyId: diag.familyId,
             siblingCount: diag.siblingCount,
             siblingRank: diag.siblingRank,
@@ -3739,9 +3774,16 @@ export async function registerRoutes(
             ceilingReason: diag.ceilingReason,
             rawProbOver: diag.rawProbOver,
             rawProbUnder: diag.rawProbUnder,
+            finalProbOver: diag.finalProbOver,
+            finalProbUnder: diag.finalProbUnder,
+            displayConfidence: diag.displayConfidence,
             modelEdge: diag.modelEdge,
             minutesExpected: diag.minutesExpected,
             minutesVariance: diag.minutesVariance,
+            marketType: diag.marketType,
+            playerVolatilityScore: diag.playerVolatilityScore,
+            comboCovarianceEstimate: diag.comboCovarianceEstimate,
+            engineVersion: diag.engineVersion,
           } : undefined,
         }, storage).catch(console.warn);
       }

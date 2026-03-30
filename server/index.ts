@@ -245,6 +245,23 @@ app.use((req, res, next) => {
 
   try {
     await pool.query(`
+      ALTER TABLE persisted_plays
+        ADD COLUMN IF NOT EXISTS market_type text,
+        ADD COLUMN IF NOT EXISTS final_prob_over numeric,
+        ADD COLUMN IF NOT EXISTS final_prob_under numeric,
+        ADD COLUMN IF NOT EXISTS display_confidence numeric,
+        ADD COLUMN IF NOT EXISTS player_volatility_score numeric,
+        ADD COLUMN IF NOT EXISTS combo_covariance_estimate numeric,
+        ADD COLUMN IF NOT EXISTS fragility_penalty numeric,
+        ADD COLUMN IF NOT EXISTS fragility_reasons text;
+    `);
+    console.log("[startup] Schema migration: persisted_plays full diagnostics columns ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (full-diagnostics):", err.message);
+  }
+
+  try {
+    await pool.query(`
       ALTER TABLE users
         ADD COLUMN IF NOT EXISTS churned_at timestamp,
         ADD COLUMN IF NOT EXISTS churned_from_tier text;
