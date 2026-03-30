@@ -38,6 +38,7 @@ import {
   updateTeamRosters,
   getPlayerPoolCount,
   getTeamCount,
+  getPlayerByName,
 } from "./mlb/rosterService";
 import {
   syncGameState,
@@ -824,9 +825,7 @@ export async function registerRoutes(
 
         const cacheEntry = mlbEdgeCache.get(gameId);
         const qualifiedSigs = cacheEntry?.qualifiedSignals ?? [];
-        const MAX_CARD_SIGNALS = 3;
         const hasOdds = qualifiedSigs.length > 0;
-        const cappedSignalCount = Math.min(qualifiedSigs.length, MAX_CARD_SIGNALS);
         const signalLocked = qualifiedSigs.length > 0;
 
         const bestQualified = qualifiedSigs.length > 0
@@ -874,8 +873,18 @@ export async function registerRoutes(
           } : null,
           pitcherAway: awayPitcher || null,
           pitcherHome: homePitcher || null,
-          awayPitcherHand: null,
-          homePitcherHand: null,
+          awayPitcherHand: (() => {
+            const awayP = registeredGame?.awayPitcher || espnAwayPitcher;
+            if (!awayP) return null;
+            const rp = getPlayerByName(awayP);
+            return rp?.throws ?? null;
+          })(),
+          homePitcherHand: (() => {
+            const homeP = registeredGame?.homePitcher || espnHomePitcher;
+            if (!homeP) return null;
+            const rp = getPlayerByName(homeP);
+            return rp?.throws ?? null;
+          })(),
           pitcherName: pitcherInGame?.playerName ?? null,
           pitcherThrows: pitcherInGame?.throws ?? null,
           pitcherTeam: pitcherInGame?.team ?? null,
@@ -889,7 +898,7 @@ export async function registerRoutes(
             outs: cachedState.outs,
             runnersOnBase: cachedState.runnersOnBase,
           } : null,
-          signalCount: cappedSignalCount,
+          signalCount: qualifiedSigs.length,
           hasOdds,
           signalLocked,
           market: bestMarket,
@@ -1200,61 +1209,64 @@ export async function registerRoutes(
         ? cachedLiveGames.games.filter((g: any) => g.status === "live").map((g: any) => g.gameId)
         : [];
 
+      let totalGenerated = 0;
+      let totalDropped = 0;
+      const feedTagDist: Record<string, number> = {};
+
       for (const gid of liveGameIds) {
-        const cached = mlbSignalsCache.get(gid);
-        if (cached && cached.signals.length > 0) {
-          const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);
-          for (const sig of cached.signals) {
-            allSignals.push({
-              ...sig,
-              awayAbbr: game?.awayAbbr ?? null,
-              homeAbbr: game?.homeAbbr ?? null,
-              gameStatus: game?.status ?? null,
-              reasons: sig.reasons ?? sig.explanationBullets ?? [],
-              formIndicator: sig.formIndicator ?? null,
-              currentStats: sig.currentStats ?? null,
-              lastABContact: sig.lastABContact ?? null,
-            });
+        const edgeEntry = mlbEdgeCache.get(gid);
+        if (!edgeEntry) continue;
+
+        const FEED_FRESHNESS_MS = 120_000;
+        if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) {
+          totalDropped++;
+          continue;
+        }
+
+        const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);
+        const rawOutputLookup = new Map((edgeEntry.outputs ?? []).map((o: any) => [`${o.playerId}_${o.market}`, o]));
+
+        const signalSource = edgeEntry.allSignals ?? edgeEntry.qualifiedSignals ?? [];
+        totalGenerated += signalSource.length;
+
+        for (const qs of signalSource) {
+          const raw = rawOutputLookup.get(`${qs.playerId}_${qs.market}`);
+          const gameState = mlbGameCache.gameState[gid];
+
+          for (const ft of (qs.feedTags ?? [])) {
+            feedTagDist[ft] = (feedTagDist[ft] ?? 0) + 1;
           }
-        } else {
-          const edgeEntry = mlbEdgeCache.get(gid);
-          const edgeFeedSignals = edgeEntry?.allSignals ?? edgeEntry?.qualifiedSignals ?? [];
-          if (edgeFeedSignals.length > 0) {
-            const FEED_FRESHNESS_MS = 120_000;
-            if (edgeEntry!.updatedAt > 0 && Date.now() - edgeEntry!.updatedAt > FEED_FRESHNESS_MS) continue;
-            const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);
-            const rawOutputLookup = new Map((edgeEntry!.outputs ?? []).map((o) => [`${o.playerId}_${o.market}`, o]));
-            for (const qs of edgeFeedSignals) {
-              const raw = rawOutputLookup.get(`${qs.playerId}_${qs.market}`);
-              allSignals.push({
-                playerId: qs.playerId,
-                playerName: qs.playerName,
-                market: qs.market,
-                bookLine: qs.line,
-                projection: qs.projection ?? null,
-                enginePct: Math.round((qs.engineProbability ?? 0) * 10) / 10,
-                edge: raw ? Math.round(raw.edge * 100) / 100 : null,
-                evPct: raw ? Math.round((raw.evPct ?? 0) * 100) / 100 : null,
-                recommendedSide: qs.side,
-                inning: 0,
-                gameId: gid,
-                sportsbook: qs.sportsbook ?? null,
-                hrFactors: raw?.hrFactors ?? null,
-                awayAbbr: game?.awayAbbr ?? null,
-                homeAbbr: game?.homeAbbr ?? null,
-                gameStatus: game?.status ?? null,
-                signalScore: qs.signalScore,
-                confidenceTier: qs.confidenceTier,
-                signalTags: qs.signalTags,
-                feedTags: qs.feedTags,
-                playerGlowEligible: qs.playerGlowEligible,
-                formIndicator: qs.formIndicator ?? null,
-                reasons: qs.reasons ?? [],
-                currentStats: qs.currentStats ?? null,
-                lastABContact: qs.lastABContact ?? null,
-              });
-            }
-          }
+
+          allSignals.push({
+            playerId: qs.playerId,
+            playerName: qs.playerName,
+            market: qs.market,
+            bookLine: qs.line,
+            projection: qs.projection ?? null,
+            enginePct: Math.round((qs.engineProbability ?? 0) * 10) / 10,
+            edge: raw ? Math.round(raw.edge * 100) / 100 : null,
+            evPct: raw ? Math.round((raw.evPct ?? 0) * 100) / 100 : null,
+            recommendedSide: qs.side,
+            inning: gameState?.inning ?? 0,
+            gameId: gid,
+            sportsbook: qs.sportsbook ?? null,
+            hrFactors: raw?.hrFactors ?? null,
+            awayAbbr: game?.awayAbbr ?? null,
+            homeAbbr: game?.homeAbbr ?? null,
+            gameStatus: game?.status ?? null,
+            signalScore: qs.signalScore,
+            confidenceTier: qs.confidenceTier,
+            signalTags: qs.signalTags,
+            feedTags: qs.feedTags,
+            playerGlowEligible: qs.playerGlowEligible,
+            formIndicator: qs.formIndicator ?? null,
+            reasons: qs.reasons ?? [],
+            currentStats: qs.currentStats ?? null,
+            lastABContact: qs.lastABContact ?? null,
+            badges: qs.badges ?? [],
+            riskFlags: qs.riskFlags ?? [],
+            drivers: qs.drivers ?? {},
+          });
         }
       }
 
@@ -1264,10 +1276,92 @@ export async function registerRoutes(
         return (b.enginePct ?? 0) - (a.enginePct ?? 0);
       });
 
+      console.log(`[MLB EDGE-FEED] total=${allSignals.length} generated=${totalGenerated} droppedStale=${totalDropped} feedTags=${JSON.stringify(feedTagDist)}`);
+
       return res.json({ signals: allSignals });
     } catch (e: any) {
       console.error("[mlb/edge-feed]", e.message);
       return res.json({ signals: [] });
+    }
+  });
+
+  // ── MLB HR Radar Route ───────────────────────────────────────────────────────
+  app.get("/api/mlb/hr-radar", requireMLBAccess, async (req, res) => {
+    try {
+      const hrEdges: any[] = [];
+      const hrWatchlist: any[] = [];
+
+      const cachedLiveGames = mlbLiveGamesCache.get("games");
+      const liveGameIds = cachedLiveGames
+        ? cachedLiveGames.games.filter((g: any) => g.status === "live").map((g: any) => g.gameId)
+        : [];
+
+      for (const gid of liveGameIds) {
+        const edgeEntry = mlbEdgeCache.get(gid);
+        if (!edgeEntry) continue;
+
+        const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);
+        const rawOutputLookup = new Map((edgeEntry.outputs ?? []).map((o: any) => [`${o.playerId}_${o.market}`, o]));
+        const gameState = mlbGameCache.gameState[gid];
+        const contactCache = mlbGameCache.contactData[gid];
+        const weather = mlbGameCache.weather[gid];
+
+        for (const qs of (edgeEntry.allSignals ?? [])) {
+          const raw = rawOutputLookup.get(`${qs.playerId}_${qs.market}`);
+          const isHRMarket = qs.market === "home_runs" || qs.market === "hrr";
+          const playerContact = contactCache?.byPlayerId?.[qs.playerId];
+
+          if (isHRMarket && (qs.feedTags ?? []).includes("hr_radar")) {
+            hrEdges.push({
+              playerId: qs.playerId,
+              playerName: qs.playerName,
+              team: qs.team,
+              market: qs.market,
+              side: qs.side,
+              line: qs.line,
+              projection: qs.projection,
+              engineProbability: qs.engineProbability,
+              edge: raw ? Math.round(raw.edge * 100) / 100 : null,
+              signalScore: qs.signalScore,
+              confidenceTier: qs.confidenceTier,
+              badges: qs.badges ?? [],
+              reasons: qs.reasons ?? [],
+              gameId: gid,
+              awayAbbr: game?.awayAbbr ?? null,
+              homeAbbr: game?.homeAbbr ?? null,
+            });
+          }
+
+          if (isHRMarket && (qs.feedTags ?? []).includes("hr_watchlist")) {
+            const hardHitCount = (playerContact?.priorABResults ?? []).filter(
+              (ab: any) => (ab.exitVelocity ?? 0) >= 95
+            ).length;
+
+            hrWatchlist.push({
+              playerId: qs.playerId,
+              playerName: qs.playerName,
+              team: qs.team,
+              hrProbability: qs.engineProbability,
+              hardHitEvents: hardHitCount,
+              parkFactor: weather ? 1.0 : null,
+              windFactor: weather?.windDirection === "out" ? "favorable" : weather?.windDirection === "in" ? "unfavorable" : "neutral",
+              reasons: qs.reasons ?? [],
+              gameId: gid,
+              awayAbbr: game?.awayAbbr ?? null,
+              homeAbbr: game?.homeAbbr ?? null,
+              badges: qs.badges ?? [],
+            });
+          }
+        }
+      }
+
+      hrEdges.sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
+      hrWatchlist.sort((a, b) => (b.hrProbability ?? 0) - (a.hrProbability ?? 0));
+
+      return res.json({ hrEdges, hrWatchlist });
+    } catch (e: any) {
+      console.error("[mlb/hr-radar]", e.message);
+      return res.json({ hrEdges: [], hrWatchlist: [] });
     }
   });
 

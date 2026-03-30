@@ -368,11 +368,21 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
   const isHrMarket = sig.market === "home_runs" || sig.market === "hr";
   const form = sig.formIndicator;
   const probWhole = Math.round(sig.enginePct);
+  const glowEligible = sig.playerGlowEligible &&
+    (sig.confidenceTier === "ELITE" || sig.confidenceTier === "STRONG") &&
+    (sig.edge ?? 0) >= 10;
+  const glowClass = glowEligible
+    ? (sig.recommendedSide === "OVER"
+      ? "border-green-500/50 shadow-[0_0_16px_rgba(34,197,94,0.25)]"
+      : sig.recommendedSide === "UNDER"
+      ? "border-red-500/50 shadow-[0_0_16px_rgba(239,68,68,0.25)]"
+      : "border-green-500/40 shadow-[0_0_12px_rgba(34,197,94,0.2)]")
+    : "";
 
   return (
     <div
       data-testid={`card-mlb-signal-${sig.playerId}-${sig.market}`}
-      className={`rounded-xl border p-4 space-y-3 ${heatGlow(form)} ${edgeBg(sig.edge)} border-border/40`}
+      className={`rounded-xl border p-4 space-y-3 ${glowClass || heatGlow(form)} ${edgeBg(sig.edge)} border-border/40`}
     >
       <div className="flex justify-between items-start gap-2">
         <div>
@@ -398,9 +408,18 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
             )}
           </div>
         </div>
-        <span className={`text-xs font-bold px-2 py-0.5 rounded-full shrink-0 ${edgeColor(sig.edge)} ${edgeBg(sig.edge)}`}>
-          {sig.recommendedSide}
-        </span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {sig.confidenceTier && sig.confidenceTier !== "WATCHLIST" && (
+            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${
+              sig.confidenceTier === "ELITE" ? "bg-green-500/20 text-green-400" :
+              sig.confidenceTier === "STRONG" ? "bg-yellow-500/20 text-yellow-400" :
+              "bg-blue-500/15 text-blue-400"
+            }`}>{sig.confidenceTier}</span>
+          )}
+          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${edgeColor(sig.edge)} ${edgeBg(sig.edge)}`}>
+            {sig.recommendedSide}
+          </span>
+        </div>
       </div>
 
       <div className="grid grid-cols-4 gap-2 text-center">
@@ -529,6 +548,16 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
         </div>
       )}
 
+      {sig.signalTags && sig.signalTags.length > 0 && (
+        <div className="flex flex-wrap gap-1 pt-0.5">
+          {sig.signalTags.map(tag => (
+            <span key={tag} className="text-[9px] px-1.5 py-0.5 rounded bg-secondary/50 text-muted-foreground border border-border/20">
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+
       <div className="flex items-center justify-between pt-1 border-t border-border/30">
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
           {sig.sportsbook && <span className="font-semibold">{SPORTSBOOK_LABELS[sig.sportsbook] ?? sig.sportsbook}</span>}
@@ -591,14 +620,20 @@ function BatterCard({ player, signals, game, isElite, onSelect }: {
     : null;
   const form = bestSignal?.formIndicator ?? null;
   const abResults = player.priorABResults ?? [];
-  const glowEligible = playerSignals.some(s => s.playerGlowEligible);
+  const glowEligible = playerSignals.some(s =>
+    s.playerGlowEligible &&
+    (s.confidenceTier === "ELITE" || s.confidenceTier === "STRONG") &&
+    (s.edge ?? 0) >= 10
+  );
   const bestTier = bestSignal?.confidenceTier ?? null;
 
-  const hasContact = player.exitVelocity != null || player.barrelPct != null || player.xBA != null || player.hardHitPct != null;
+  const hasLiveContact = player.exitVelocity != null || player.barrelPct != null || player.hardHitPct != null;
+  const hasRecentForm = player.xBA != null || player.xSLG != null;
+  const hasContact = hasLiveContact || hasRecentForm;
   const sideColor = bestSignal?.recommendedSide === "OVER"
-    ? "border-green-500/40 shadow-[0_0_14px_rgba(34,197,94,0.2)]"
+    ? "border-green-500/40 shadow-[0_0_14px_rgba(34,197,94,0.15)]"
     : bestSignal?.recommendedSide === "UNDER"
-    ? "border-red-500/40 shadow-[0_0_14px_rgba(239,68,68,0.2)]"
+    ? "border-red-500/40 shadow-[0_0_14px_rgba(239,68,68,0.15)]"
     : "";
 
   return (
@@ -1087,7 +1122,10 @@ function MlbLiveInner() {
             ))}
           </div>
           {(() => {
-            const filtered = edgeFeedSignals.filter(s => s.inning >= inningFeedTab);
+            const feedTagKey = inningFeedTab === 3 ? "inning_3" : inningFeedTab === 5 ? "inning_5" : "inning_7";
+            const filtered = edgeFeedSignals.filter(s =>
+              (s.feedTags ?? []).includes(feedTagKey)
+            );
             return filtered.length === 0 ? (
               <div className="rounded-xl border border-border/40 bg-card p-8 text-center">
                 <div className="flex items-center justify-center gap-2 text-sm text-blue-400">
@@ -1095,7 +1133,7 @@ function MlbLiveInner() {
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
                   </span>
-                  Monitoring inning {inningFeedTab}+ signals
+                  Monitoring {feedTagKey.replace("_", " ")} signals
                 </div>
                 <div className="text-xs text-muted-foreground/60 mt-1">Signals appear as games progress and pitcher fatigue data accumulates.</div>
               </div>
@@ -1111,69 +1149,136 @@ function MlbLiveInner() {
       )}
 
       {mainTab === "hr_radar" && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-foreground" style={{ color: "#f97316" }}>HR Radar</h2>
+        <HRRadarSection isElite={isElite} />
+      )}
+    </div>
+  );
+}
+
+type HRRadarResponse = {
+  hrEdges: Array<{
+    playerId: string; playerName: string; team: string; market: string; side: string;
+    line: number; projection: number; engineProbability: number; edge: number | null;
+    signalScore: number; confidenceTier: string; badges: string[]; reasons: string[];
+    gameId: string; awayAbbr: string | null; homeAbbr: string | null;
+  }>;
+  hrWatchlist: Array<{
+    playerId: string; playerName: string; team: string; hrProbability: number;
+    hardHitEvents: number; parkFactor: number | null; windFactor: string;
+    reasons: string[]; gameId: string; awayAbbr: string | null; homeAbbr: string | null;
+    badges: string[];
+  }>;
+};
+
+function HRRadarSection({ isElite }: { isElite: boolean }) {
+  const { data: hrData, isLoading } = useQuery<HRRadarResponse>({
+    queryKey: ["/api/mlb/hr-radar"],
+    refetchInterval: 60_000,
+  });
+
+  const hrEdges = hrData?.hrEdges ?? [];
+  const hrWatchlist = hrData?.hrWatchlist ?? [];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-bold text-foreground" style={{ color: "#f97316" }} data-testid="text-hr-radar-title">HR Radar</h2>
+      </div>
+
+      {isLoading && (
+        <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-4 text-center">
+          <div className="text-xs text-orange-400 animate-pulse">Loading HR radar data...</div>
+        </div>
+      )}
+
+      {!isLoading && hrEdges.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold text-green-400 uppercase tracking-wider" data-testid="text-hr-edges-title">Bettable HR Edges</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {hrEdges.map(edge => (
+              <div key={`hr-edge-${edge.playerId}-${edge.market}-${edge.gameId}`}
+                data-testid={`card-hr-edge-${edge.playerId}`}
+                className="rounded-xl border border-green-500/30 bg-green-500/5 p-3 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-foreground">{edge.playerName}</span>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    edge.confidenceTier === "ELITE" ? "bg-green-500/20 text-green-400" :
+                    edge.confidenceTier === "STRONG" ? "bg-yellow-500/20 text-yellow-400" :
+                    "bg-blue-500/20 text-blue-400"
+                  }`}>{edge.confidenceTier}</span>
+                </div>
+                <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                  <span>{edge.team}</span>
+                  <span>•</span>
+                  <span>{MARKET_LABELS[edge.market] ?? edge.market}</span>
+                  <span>•</span>
+                  <span className="text-green-400">{edge.side} {edge.line?.toFixed(1)}</span>
+                </div>
+                <div className="flex items-center gap-3 text-[10px]">
+                  <span className="text-foreground">Prob: {edge.engineProbability?.toFixed(1)}%</span>
+                  {edge.edge != null && <span className="text-green-400">Edge: {edge.edge > 0 ? "+" : ""}{edge.edge.toFixed(1)}%</span>}
+                  <span className="text-muted-foreground">Score: {edge.signalScore}</span>
+                </div>
+                {Array.isArray(edge.badges) && edge.badges.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {edge.badges.map(b => (
+                      <span key={b} className="text-[9px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-400">{b}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
-          {(() => {
-            const hrSignals = edgeFeedSignals.filter(s => s.market === "home_runs" || s.market === "hr");
-            const hrEnvironmentSignals = edgeFeedSignals.filter(s =>
-              s.hrFactors && s.hrFactors.count >= 1 &&
-              !(s.market === "home_runs" || s.market === "hr")
-            );
-            return (
-              <>
-                {hrSignals.length > 0 ? (
-                  <div className="space-y-2">
-                    <h3 className="text-xs font-semibold text-green-400 uppercase tracking-wider">Bettable HR Edges</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {hrSignals.map(sig => (
-                        <SignalCard key={`${sig.playerId}-${sig.market}-${sig.gameId}`} sig={sig} isElite={isElite} compact />
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-4 text-center space-y-2">
-                    <div className="flex items-center justify-center gap-2 text-sm text-orange-400">
-                      <span className="relative flex h-2 w-2">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75" />
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-400" />
-                      </span>
-                      Scanning HR markets
-                    </div>
-                    <div className="text-xs text-muted-foreground/60">HR signals surface when hard contact, park/weather factors, and pitcher vulnerability data align. See environment context below.</div>
-                  </div>
-                )}
+        </div>
+      )}
 
-                {hrEnvironmentSignals.length > 0 && (
-                  <div className="space-y-2 mt-4">
-                    <h3 className="text-xs font-semibold text-orange-400 uppercase tracking-wider">HR Environment Watchlist</h3>
-                    <div className="text-[10px] text-muted-foreground/70 mb-1">Players with HR-favorable context (hard contact, wind, park factors) but in non-HR markets</div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {hrEnvironmentSignals.map(sig => (
-                        <div key={`hr-env-${sig.playerId}-${sig.market}-${sig.gameId}`}
-                          className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-3">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs font-bold text-foreground">{sig.playerName}</span>
-                            <span className="text-[10px] text-orange-400">{sig.hrFactors?.labels?.join(", ")}</span>
-                          </div>
-                          <div className="text-[10px] text-muted-foreground">
-                            {sig.market} | {sig.hrFactors?.count} HR factor{sig.hrFactors?.count !== 1 ? "s" : ""}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+      {!isLoading && hrEdges.length === 0 && (
+        <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-4 text-center space-y-2">
+          <div className="flex items-center justify-center gap-2 text-sm text-orange-400">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-400" />
+            </span>
+            Scanning HR markets
+          </div>
+          <div className="text-xs text-muted-foreground/60">HR edges surface when hard contact, park/weather factors, and pitcher vulnerability data align.</div>
+        </div>
+      )}
 
-                {hrSignals.length === 0 && hrEnvironmentSignals.length === 0 && (
-                  <div className="text-xs text-muted-foreground/60 text-center py-2">
-                    HR context data accumulates as games progress and contact data is recorded. Select a game to run manual HR market calculations.
+      {!isLoading && hrWatchlist.length > 0 && (
+        <div className="space-y-2 mt-4">
+          <h3 className="text-xs font-semibold text-orange-400 uppercase tracking-wider" data-testid="text-hr-watchlist-title">HR Watchlist</h3>
+          <div className="text-[10px] text-muted-foreground/70 mb-1">Players with HR-favorable context</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {hrWatchlist.map(w => (
+              <div key={`hr-watch-${w.playerId}-${w.gameId}`}
+                data-testid={`card-hr-watch-${w.playerId}`}
+                className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-3">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-foreground">{w.playerName}</span>
+                  <span className="text-[10px] text-orange-400">{w.team}</span>
+                </div>
+                <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                  <span>HR Prob: {w.hrProbability?.toFixed(1)}%</span>
+                  {w.hardHitEvents > 0 && <span>• {w.hardHitEvents} hard hits</span>}
+                  <span>• Wind: {w.windFactor}</span>
+                </div>
+                {Array.isArray(w.badges) && w.badges.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {w.badges.map(b => (
+                      <span key={b} className="text-[9px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400">{b}</span>
+                    ))}
                   </div>
                 )}
-              </>
-            );
-          })()}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!isLoading && hrEdges.length === 0 && hrWatchlist.length === 0 && (
+        <div className="text-xs text-muted-foreground/60 text-center py-2">
+          HR context data accumulates as games progress and contact data is recorded.
         </div>
       )}
     </div>
@@ -1196,7 +1301,11 @@ function PitcherCard({ game, side, signals, isElite }: {
   const bestSig = pitcherSignals.length > 0
     ? pitcherSignals.reduce((b, s) => (s.enginePct ?? 0) > (b.enginePct ?? 0) ? s : b)
     : null;
-  const glowEligible = pitcherSignals.some(s => s.playerGlowEligible);
+  const glowEligible = pitcherSignals.some(s =>
+    s.playerGlowEligible &&
+    (s.confidenceTier === "ELITE" || s.confidenceTier === "STRONG") &&
+    (s.edge ?? 0) >= 10
+  );
 
   if (!pitcherName) return null;
 
@@ -1491,7 +1600,8 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
                 const sideColor = sig.recommendedSide === "OVER" ? { accent: "#22c55e", bg: "rgba(34,197,94,0.08)", border: "rgba(34,197,94,0.3)" }
                   : { accent: "#ef4444", bg: "rgba(239,68,68,0.08)", border: "rgba(239,68,68,0.3)" };
                 const tier = sig.confidenceTier;
-                const glowClass = sig.playerGlowEligible ? "shadow-[0_0_10px_rgba(34,197,94,0.25)]" : "";
+                const glowClass = sig.playerGlowEligible && (tier === "ELITE" || tier === "STRONG") && (sig.edge ?? 0) >= 10
+                  ? "shadow-[0_0_10px_rgba(34,197,94,0.25)]" : "";
                 return (
                   <div
                     key={`sig-${sig.playerId}-${sig.market}-${idx}`}
@@ -1758,35 +1868,57 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
         <div className="px-4 py-3">
           <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Game Context</div>
           <div className="space-y-2 text-xs">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 bg-secondary/30 rounded-lg px-3 py-1.5">
-                {game.status === "live" && game.awayScore != null && game.homeScore != null ? (
-                  <>
-                    <span className="font-bold text-foreground">{game.awayAbbr} {game.awayScore}</span>
-                    <span className="text-muted-foreground">–</span>
-                    <span className="font-bold text-foreground">{game.homeScore} {game.homeAbbr}</span>
-                    <span className="text-[9px] text-muted-foreground ml-1">{inningLabel(game)}</span>
-                  </>
-                ) : (
-                  <span className="font-semibold text-muted-foreground">Waiting for first pitch</span>
-                )}
-              </div>
-              {game.status === "live" && (
-                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-400">LIVE</span>
+            <div className="flex items-center gap-3 bg-secondary/30 rounded-lg px-3 py-2">
+              {game.status === "live" && game.awayScore != null && game.homeScore != null ? (
+                <>
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-400 shrink-0">LIVE</span>
+                  <span className="font-bold text-foreground">{game.awayAbbr} {game.awayScore}</span>
+                  <span className="text-muted-foreground">–</span>
+                  <span className="font-bold text-foreground">{game.homeScore} {game.homeAbbr}</span>
+                  <span className="text-[9px] text-muted-foreground ml-auto">{inningLabel(game)}</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-muted text-muted-foreground shrink-0">PRE</span>
+                  <span className="font-semibold text-muted-foreground">{game.awayAbbr} @ {game.homeAbbr}</span>
+                  {game.startTime && (
+                    <span className="text-[9px] text-muted-foreground ml-auto">
+                      {new Date(game.startTime).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                    </span>
+                  )}
+                </>
               )}
             </div>
-            <div className="grid grid-cols-3 gap-2">
-              <div className="bg-secondary/20 rounded-lg px-2.5 py-1.5">
-                <div className="text-[9px] text-muted-foreground">Pitcher</div>
-                <div className="font-semibold text-foreground truncate">{game.pitcherName || "Pitchers loading..."}</div>
-              </div>
+
+            <div className="bg-secondary/20 rounded-lg px-3 py-2 flex items-center gap-3">
+              <div className="text-[9px] text-muted-foreground shrink-0">Pitcher</div>
+              <div className="font-semibold text-foreground truncate">{game.pitcherName || "TBD"}</div>
+              {game.pitcherThrows && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30 shrink-0">
+                  {game.pitcherThrows}HP
+                </span>
+              )}
+              {game.pitcherContext?.pitchCount != null && game.pitcherContext.pitchCount > 0 && (
+                <span className="text-[9px] text-muted-foreground ml-auto shrink-0">
+                  {game.pitcherContext.pitchCount} pitches
+                  {game.pitcherContext.timesThroughOrder > 0 && ` · ${game.pitcherContext.timesThroughOrder}x thru`}
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
               <div className="bg-secondary/20 rounded-lg px-2.5 py-1.5">
                 <div className="text-[9px] text-muted-foreground">Venue</div>
                 <div className="font-semibold text-foreground truncate">{game.venue ?? "—"}</div>
               </div>
               <div className="bg-secondary/20 rounded-lg px-2.5 py-1.5">
                 <div className="text-[9px] text-muted-foreground">Weather</div>
-                <div className="font-semibold text-foreground truncate">{game.weatherSummary || "Syncing..."}</div>
+                <div className="font-semibold text-foreground truncate">
+                  {game.weather?.temperature != null
+                    ? `${game.weather.temperature}°F`
+                    : game.weatherSummary || "—"}
+                  {game.weather?.windSpeed != null && ` · ${game.weather.windSpeed}mph ${game.weather.windDirection ?? ""}`}
+                </div>
               </div>
             </div>
           </div>

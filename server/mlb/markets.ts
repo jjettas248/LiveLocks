@@ -371,8 +371,8 @@ function applyMarketFeatureWeights(
         0.10 * features.parkEnv +
         0.08 * features.bvp +
         0.08 * features.hotColdForm +
-        0.06 * features.lineupOpportunity +
-        0.04 * batSpeed.batSpeedPowerScore;
+        0.08 * features.lineupOpportunity +
+        0.02 * batSpeed.batSpeedPowerScore;
       const liveAdj =
         1 +
         0.18 * deterioration.hitsAllowed +
@@ -387,8 +387,8 @@ function applyMarketFeatureWeights(
       const damageSkill =
         0.26 * features.contactQuality +
         0.18 * ((input.contactQuality.barrelRateProxySeason ?? 0.05) > 0.08 ? 0.7 : 0.4) +
-        0.16 * batSpeed.batSpeedPowerScore +
-        0.14 * features.handednessMatchup +
+        0.14 * batSpeed.batSpeedPowerScore +
+        0.16 * features.handednessMatchup +
         0.12 * features.pitchBlendMatchup +
         0.08 * computeSpecParkEnv(input, "tb") +
         0.06 * features.hotColdForm;
@@ -407,8 +407,8 @@ function applyMarketFeatureWeights(
         0.24 * Math.min(1, barrel / 0.12) +
         0.16 * features.contactQuality +
         0.14 * ((input.contactQuality.exitVelocity ?? 88) > 95 ? 0.7 : 0.35) +
-        0.20 * batSpeed.batSpeedPowerScore +
-        0.10 * computeSpecParkEnv(input, "hr") +
+        0.18 * batSpeed.batSpeedPowerScore +
+        0.12 * computeSpecParkEnv(input, "hr") +
         0.06 * features.handednessMatchup +
         0.06 * features.pitchBlendMatchup +
         0.04 * features.hotColdForm;
@@ -497,6 +497,13 @@ function applyMarketFeatureWeights(
         0.08 * (1 - features.bvp) +
         0.06 * (batSpeed.batSpeedZ > 1 && whiffRate > 0.5 ? 0.7 : 0.3) +
         0.04 * (1 - features.lineupOpportunity);
+
+      const chaseRate = input.contactQuality.hardHitRateSeason != null ? Math.max(0, 1 - input.contactQuality.hardHitRateSeason) : 0.5;
+      const aggressionRisk = batSpeed.batSpeedZ * whiffRate * chaseRate;
+      const adjustedKExposure = batterKExposure * (1 + 0.08 * aggressionRisk);
+      if (batSpeed.batSpeedZ > 1 && whiffRate > 0.5) {
+        featureMultiplier *= 1.05;
+      }
       const pitcherPutaway =
         0.30 * Math.min(1, (input.pitcher.kPer9 ?? 8) / 12) +
         0.22 * (input.pitcher.whip != null ? 1 - Math.min(1, input.pitcher.whip / 1.5) : 0.5) +
@@ -504,7 +511,7 @@ function applyMarketFeatureWeights(
         0.12 * features.handednessMatchup +
         0.10 * Math.min(1, (input.pitcher.kPer9 ?? 8) / 10) +
         0.10 * features.pitcherSuppression;
-      featureMultiplier = (0.5 + batterKExposure) * (0.5 + pitcherPutaway);
+      featureMultiplier = (0.5 + adjustedKExposure) * (0.5 + pitcherPutaway);
       break;
     }
     case "hr_allowed": {
@@ -559,6 +566,11 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
     calibratedOver = Math.round(calibratedOver * 100) / 100;
     calibratedUnder = Math.round(calibratedUnder * 100) / 100;
   }
+
+  if (input.market === "home_runs" && calibratedOver > 40) calibratedOver = 40;
+  if (input.market === "home_runs" && calibratedUnder > 40) calibratedUnder = 40;
+  if (input.market === "total_bases" && calibratedOver > 72) calibratedOver = 72;
+  if (input.market === "total_bases" && calibratedUnder > 72) calibratedUnder = 72;
 
   const calibratedSidedRaw = overProb >= underProb ? calibratedOver : calibratedUnder;
   const calibratedSided = applyProbabilityCeiling(calibratedSidedRaw, input.market);
@@ -1088,6 +1100,18 @@ export function calculateMLBPropEdge(input: MLBPropInput): MLBPropOutput {
   if (validationWarnings.length > 0) {
     output.warnings.push(...validationWarnings);
   }
+
+  console.log(`[MLB_ENGINE] ${JSON.stringify({
+    player: output.playerName,
+    market: output.market,
+    projection: Math.round(output.projection * 1000) / 1000,
+    line: output.bookLine,
+    probability: Math.round(output.calibratedProbability * 100) / 100,
+    edge: Math.round(output.edge * 100) / 100,
+    recommendedSide: output.recommendedSide,
+    confidenceTier: output.confidenceTier,
+    suppressed: output.suppressed,
+  })}`);
 
   return output;
 }

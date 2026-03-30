@@ -35,6 +35,26 @@ export function runIntegrityFirewall(output: MLBPropOutput): FirewallResult {
     rejections.push(`stale engine output: ${Math.round(ageMs / 1000)}s old`);
   }
 
+  if (
+    Number.isFinite(output.projection) && Number.isFinite(output.bookLine) &&
+    output.recommendedSide === "OVER" && output.projection < output.bookLine
+  ) {
+    rejections.push(`directional contradiction: OVER but projection=${output.projection.toFixed(3)} < line=${output.bookLine}`);
+  }
+  if (
+    Number.isFinite(output.projection) && Number.isFinite(output.bookLine) &&
+    output.recommendedSide === "UNDER" && output.projection > output.bookLine
+  ) {
+    rejections.push(`directional contradiction: UNDER but projection=${output.projection.toFixed(3)} > line=${output.bookLine}`);
+  }
+
+  if (Number.isFinite(output.calibratedProbabilityOver) && Number.isFinite(output.calibratedProbabilityUnder)) {
+    const maxProb = Math.max(output.calibratedProbabilityOver, output.calibratedProbabilityUnder);
+    if (Math.abs(maxProb - 50) > 40) {
+      rejections.push(`extreme probability: maxProb=${maxProb.toFixed(1)} (|maxProb-50|=${Math.abs(maxProb - 50).toFixed(1)} > 40 cap)`);
+    }
+  }
+
   if (rejections.length > 0) {
     return { passed: false, hardReject: true, rejections, warnings, cappedOutput };
   }

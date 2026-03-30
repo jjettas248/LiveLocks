@@ -879,20 +879,17 @@ export function computeBatSpeedEngine(input: MLBPropInput): {
   const batSpeedZ = clamp((batSpeed - LEAGUE_AVG_BAT_SPEED) / BAT_SPEED_STD_DEV, -2, 2);
   const fastSwingZ = clamp((fastSwingRate - LEAGUE_AVG_FAST_SWING_RATE) / FAST_SWING_STD_DEV, -2, 2);
 
-  const batSpeedMultiplier = 1 + 0.12 * Math.tanh(batSpeedZ);
-  const fastSwingMultiplier = 1 + 0.08 * Math.tanh(fastSwingZ);
+  const batSpeedMultiplier = 1 + 0.10 * Math.tanh(batSpeedZ);
+  const fastSwingMultiplier = 1 + 0.06 * Math.tanh(fastSwingZ);
 
-  let batSpeedPowerScore = 0.65 * sigmoid(batSpeedZ) + 0.35 * sigmoid(fastSwingZ);
+  const contactStrength = clamp((ev - 80) / (100 - 80), 0, 1);
+  const continuousScale = 0.45 + 0.55 * contactStrength;
+
+  let batSpeedPowerScore = (0.65 * sigmoid(batSpeedZ) + 0.35 * sigmoid(fastSwingZ)) * continuousScale;
 
   const hasStrongContact = barrel >= 0.08 || ev >= 95 || hhr >= 0.40;
   const hasWeakContact = ev < 88 && hhr < 0.28;
   const isConditionallyAmplified = hasStrongContact;
-
-  if (hasWeakContact) {
-    batSpeedPowerScore *= 0.45;
-  } else if (!hasStrongContact) {
-    batSpeedPowerScore *= 0.55;
-  }
 
   return {
     batSpeedPowerScore: clamp(batSpeedPowerScore, 0, 1),
@@ -901,6 +898,21 @@ export function computeBatSpeedEngine(input: MLBPropInput): {
     batSpeedZ,
     isConditionallyAmplified,
   };
+}
+
+export function computeLineupSplitAdvantage(input: MLBPropInput, pitcherThrows: string | null): number {
+  if (!pitcherThrows) return 0.5;
+
+  const lineup = input.lineup;
+  const slot = lineup.battingOrderSlot;
+
+  if (slot <= 3) {
+    return pitcherThrows === "L" ? 0.62 : 0.55;
+  } else if (slot <= 6) {
+    return pitcherThrows === "L" ? 0.56 : 0.50;
+  } else {
+    return pitcherThrows === "L" ? 0.48 : 0.44;
+  }
 }
 
 export function computeSpecHandednessMatchup(input: MLBPropInput): number {
@@ -934,7 +946,7 @@ export function computeSpecHandednessMatchup(input: MLBPropInput): number {
     }
   }
 
-  const lineupHandednessEnv = 0.5;
+  const lineupHandednessEnv = computeLineupSplitAdvantage(input, pitcherThrows);
 
   const score =
     0.50 * batterSplitAdvantage +
@@ -1104,7 +1116,7 @@ export function computeSpecBvP(input: MLBPropInput): number {
     return clamp(0.50 + delta * 0.5, 0.46, 0.54);
   }
 
-  return clamp(0.50 + (avg - leagueAvg) * 1.0, 0.42, 0.58);
+  return clamp(0.50 + (avg - leagueAvg) * 1.0, 0.44, 0.56);
 }
 
 export function computeSpecLineupOpportunity(input: MLBPropInput): number {
@@ -1288,7 +1300,8 @@ export function computeBadges(input: MLBPropInput, features: FeatureLayer): Badg
   const negative: string[] = [];
 
   if (features.contactQuality >= 0.72) positive.push("Good Contact");
-  if (features.contactQuality >= 0.85) positive.push("Strong EV");
+  const evForBadge = input.contactQuality.exitVelocity ?? 0;
+  if (evForBadge >= 95) positive.push("Strong EV");
 
   const batSpeed = computeBatSpeedEngine(input);
   if (batSpeed.batSpeedPowerScore >= 0.76) positive.push("High Bat Speed");
