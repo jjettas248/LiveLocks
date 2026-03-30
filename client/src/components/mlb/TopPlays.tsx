@@ -49,7 +49,7 @@ const TIER_COLORS: Record<string, { bg: string; border: string; text: string; ba
 
 const SIDE_STYLES = {
   OVER: { accent: "#22c55e", bg: "rgba(34,197,94,0.08)", border: "rgba(34,197,94,0.35)", label: "OVER" },
-  UNDER: { accent: "#ef4444", bg: "rgba(239,68,68,0.08)", border: "rgba(239,68,68,0.35)", label: "UNDER" },
+  UNDER: { accent: "#3b82f6", bg: "rgba(59,130,246,0.08)", border: "rgba(59,130,246,0.35)", label: "UNDER" },
 };
 
 function formBadge(form: string | null): { label: string; color: string } | null {
@@ -120,8 +120,8 @@ export function TopPlays({ signals, onPlayerClick }: { signals: MLBSignal[]; onP
       {underPlays.length > 0 && (
         <div className="space-y-1.5">
           <div className="flex items-center gap-1.5 px-1">
-            <span className="w-2 h-2 rounded-full" style={{ background: "#ef4444" }} />
-            <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "#ef4444" }}>Under Plays</span>
+            <span className="w-2 h-2 rounded-full" style={{ background: "#3b82f6" }} />
+            <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "#3b82f6" }}>Under Plays</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {underPlays.map((sig, idx) => (

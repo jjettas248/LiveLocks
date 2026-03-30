@@ -679,6 +679,13 @@ export function classifyForm(input: MLBPropInput): FormIndicator {
   const score = computeFormScore(input);
   if (score >= FORM_THRESHOLDS.hot) return "hot";
   if (score >= FORM_THRESHOLDS.warm) return "warm";
+
+  const priorABs = input.contactQuality.priorABResults;
+  const hasHR = priorABs.some((ab) => ab.outcome === "home_run" || ab.outcome === "hr");
+  const hardHits = priorABs.filter((ab) => (ab.exitVelocity ?? 0) >= 95).length;
+  const hasStrongContact = hardHits >= 2 || (input.contactQuality.exitVelocity ?? 0) >= 95;
+  if (hasHR || hasStrongContact) return "neutral";
+
   if (score <= FORM_THRESHOLDS.extremeCold) return "extreme_cold";
   if (score <= FORM_THRESHOLDS.cold) return "cold";
   return "neutral";

@@ -1238,6 +1238,32 @@ export async function registerRoutes(
             feedTagDist[ft] = (feedTagDist[ft] ?? 0) + 1;
           }
 
+          const cs = qs.currentStats as { ab?: number; h?: number; hr?: number; tb?: number; bb?: number; rbi?: number; k?: number; sb?: number; r?: number } | null;
+          const line = qs.line ?? 0;
+          let currentStatVal = 0;
+          if (cs && line > 0) {
+            if (qs.market === "hits") currentStatVal = cs.h ?? 0;
+            else if (qs.market === "home_runs" || qs.market === "hr") currentStatVal = cs.hr ?? 0;
+            else if (qs.market === "total_bases") currentStatVal = cs.tb ?? 0;
+            else if (qs.market === "rbi") currentStatVal = cs.rbi ?? 0;
+            else if (qs.market === "runs") currentStatVal = cs.r ?? 0;
+            else if (qs.market === "stolen_bases") currentStatVal = cs.sb ?? 0;
+            else if (qs.market === "batter_strikeouts") currentStatVal = cs.k ?? 0;
+            else if (qs.market === "hrr") currentStatVal = (cs.h ?? 0) + (cs.r ?? 0) + (cs.rbi ?? 0);
+            else currentStatVal = cs.h ?? 0;
+          }
+          const alreadyHit = cs != null && line > 0 && currentStatVal >= line;
+
+          const pitcherCtxCache = mlbGameCache.pitcherContext[gid];
+          let pitchMix = raw?.pitchMix ?? (raw as any)?.pitcher?.pitchMix ?? null;
+          if (!pitchMix && pitcherCtxCache?.byPitcherId) {
+            const firstPitcher = Object.values(pitcherCtxCache.byPitcherId)[0];
+            pitchMix = (firstPitcher as any)?.pitchMix ?? null;
+          }
+
+          const formRaw = qs.formIndicator;
+          const formUpper = formRaw ? String(formRaw).toUpperCase() : null;
+
           allSignals.push({
             playerId: qs.playerId,
             playerName: qs.playerName,
@@ -1260,13 +1286,16 @@ export async function registerRoutes(
             signalTags: qs.signalTags,
             feedTags: qs.feedTags,
             playerGlowEligible: qs.playerGlowEligible,
-            formIndicator: qs.formIndicator ?? null,
+            formIndicator: formUpper,
             reasons: qs.reasons ?? [],
             currentStats: qs.currentStats ?? null,
             lastABContact: qs.lastABContact ?? null,
             badges: qs.badges ?? [],
             riskFlags: qs.riskFlags ?? [],
             drivers: qs.drivers ?? {},
+            alreadyHit,
+            pitchMix,
+            signalTimestamp: qs.engineGeneratedAt ?? raw?.engineGeneratedAt ?? Date.now(),
           });
         }
       }

@@ -107,6 +107,8 @@ type MLBBatter = {
   priorABResults?: ABResultEntry[];
 };
 
+type PitchMixEntry = { pitchType: string; percentage: number; avgVelocity: number | null };
+
 type MLBSignal = {
   playerId: string;
   playerName: string;
@@ -149,6 +151,24 @@ type MLBSignal = {
     hardHitPct: number | null;
     outcome: string | null;
   } | null;
+  alreadyHit?: boolean;
+  pitchMix?: PitchMixEntry[] | null;
+};
+
+type SignalState = "actionable" | "already_hit" | "watchlist" | "stale";
+
+function deriveSignalState(sig: MLBSignal): SignalState {
+  if (sig.alreadyHit && sig.recommendedSide === "OVER") return "already_hit";
+  const age = sig.signalTimestamp ? Date.now() - sig.signalTimestamp : 0;
+  if (age > 180_000) return "stale";
+  if (sig.confidenceTier === "WATCHLIST" || (sig.signalScore ?? 0) < 40) return "watchlist";
+  return "actionable";
+}
+
+const PITCH_LABELS: Record<string, string> = {
+  FF: "4-Seam", SI: "Sinker", FC: "Cutter", SL: "Slider",
+  CU: "Curve", CH: "Change", FS: "Splitter", KC: "Knuckle Curve",
+  KN: "Knuckle", EP: "Eephus", ST: "Sweeper", SV: "Slurve",
 };
 
 type SignalsResponse = {
@@ -376,11 +396,16 @@ function ABOutcomePill({ outcome, pitchType, pitchSpeed, exitVelocity }: { outco
   );
 }
 
-function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolean; compact?: boolean }) {
+function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
+  sig: MLBSignal; isElite: boolean; compact?: boolean;
+  onClickThrough?: (sig: MLBSignal) => void;
+  onAddToSlip?: (sig: MLBSignal) => void;
+}) {
   const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
   const isHrMarket = sig.market === "home_runs" || sig.market === "hr";
   const form = sig.formIndicator;
   const probWhole = Math.round(sig.enginePct);
+  const state = deriveSignalState(sig);
   const glowEligible = sig.playerGlowEligible &&
     (sig.confidenceTier === "ELITE" || sig.confidenceTier === "STRONG") &&
     (sig.edge ?? 0) >= 10;
@@ -392,22 +417,38 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
       : "border-green-500/40 shadow-[0_0_12px_rgba(34,197,94,0.2)]")
     : "";
 
+  const stateStyles = state === "already_hit"
+    ? "border-emerald-500/40 bg-emerald-500/5"
+    : state === "stale"
+    ? "opacity-50 border-border/20"
+    : state === "watchlist"
+    ? "border-border/30 bg-secondary/20"
+    : "";
+
   return (
     <div
       data-testid={`card-mlb-signal-${sig.playerId}-${sig.market}`}
-      className={`rounded-xl border p-4 space-y-3 ${glowClass || heatGlow(form)} ${edgeBg(sig.edge)} border-border/40`}
+      className={`rounded-xl border p-4 sm:p-5 space-y-3 transition-all ${stateStyles} ${glowClass || heatGlow(form)} ${edgeBg(sig.edge)} border-border/40 ${onClickThrough ? "cursor-pointer hover:border-primary/40 active:scale-[0.99]" : ""}`}
+      onClick={() => onClickThrough?.(sig)}
     >
+      {state === "already_hit" && (
+        <div className="flex items-center gap-2 py-1.5 px-3 rounded-lg bg-emerald-500/15 border border-emerald-500/30 mb-1">
+          <span className="text-emerald-400 text-xs font-black tracking-wider">ALREADY HIT</span>
+          <span className="text-emerald-400/70 text-[10px]">Player cleared the line</span>
+        </div>
+      )}
+
       <div className="flex justify-between items-start gap-2">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-bold text-foreground">{sig.playerName}</span>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-bold text-foreground truncate">{sig.playerName}</span>
             {form && form !== "NEUTRAL" && (
               <span className={`text-xs font-bold ${heatColor(form)}`}>
                 {heatEmoji(form)} {form}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1.5 mt-0.5">
+          <div className="flex items-center gap-1.5 mt-1">
             <span className="text-xs text-muted-foreground">{marketLabel}</span>
             {compact && sig.awayAbbr && sig.homeAbbr && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30">
@@ -429,35 +470,35 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
               "bg-blue-500/15 text-blue-400"
             }`}>{sig.confidenceTier}</span>
           )}
-          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${edgeColor(sig.edge)} ${edgeBg(sig.edge)}`}>
+          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${edgeColor(sig.edge)} ${edgeBg(sig.edge)}`}>
             {sig.recommendedSide}
           </span>
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-2 text-center">
+      <div className="grid grid-cols-4 gap-3 text-center">
         <div>
-          <div className="text-[10px] text-muted-foreground">Probability</div>
-          <div className={`text-lg font-bold ${edgeColor(sig.edge)}`}>{probWhole}%</div>
+          <div className="text-[10px] text-muted-foreground">Prob</div>
+          <div className={`text-base sm:text-lg font-bold ${edgeColor(sig.edge)}`}>{probWhole}%</div>
         </div>
         <div>
           <div className="text-[10px] text-muted-foreground">EV%</div>
-          <div className={`text-lg font-bold ${sig.evPct != null && sig.evPct > 0 ? "text-green-400" : "text-muted-foreground"}`}>
+          <div className={`text-base sm:text-lg font-bold ${sig.evPct != null && sig.evPct > 0 ? "text-green-400" : "text-muted-foreground"}`}>
             {sig.evPct != null ? `${sig.evPct > 0 ? "+" : ""}${sig.evPct.toFixed(1)}` : "—"}
           </div>
         </div>
         <div>
-          <div className="text-[10px] text-muted-foreground">Projection</div>
-          <div className="text-lg font-bold text-foreground">{sig.projection != null ? sig.projection.toFixed(2) : "—"}</div>
+          <div className="text-[10px] text-muted-foreground">Proj</div>
+          <div className="text-base sm:text-lg font-bold text-foreground">{sig.projection != null ? sig.projection.toFixed(1) : "—"}</div>
         </div>
         <div>
           <div className="text-[10px] text-muted-foreground">Line</div>
-          <div className="text-lg font-bold text-foreground">{sig.bookLine ?? "—"}</div>
+          <div className="text-base sm:text-lg font-bold text-foreground">{sig.bookLine ?? "—"}</div>
         </div>
       </div>
 
       {sig.edge != null && (
-        <div className={`text-center py-1.5 rounded-lg text-xs font-bold ${edgeBg(sig.edge)} ${sig.edge >= 0 ? "text-green-400" : "text-red-400"}`}>
+        <div className={`text-center py-2 rounded-lg text-xs font-bold ${edgeBg(sig.edge)} ${sig.edge >= 0 ? "text-green-400" : "text-red-400"}`}>
           Edge: {sig.edge >= 0 ? "+" : ""}{sig.edge.toFixed(1)}%
         </div>
       )}
@@ -473,7 +514,7 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
         const alreadyOver = currentVal >= line && line > 0;
         const edgeHit = sig.recommendedSide === "OVER" && alreadyOver;
         return (
-          <div className={`flex items-center gap-3 py-1.5 px-2 rounded-lg border ${
+          <div className={`flex items-center gap-3 py-2 px-3 rounded-lg border ${
             edgeHit
               ? "bg-green-500/10 border-green-500/30"
               : alreadyOver
@@ -498,7 +539,7 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
       })()}
 
       {sig.lastABContact && (sig.lastABContact.exitVelo || sig.lastABContact.launchAngle || sig.lastABContact.barrelPct) && (
-        <div className="flex items-center gap-3 py-1.5 px-2 rounded-lg bg-secondary/30 border border-border/20">
+        <div className="flex items-center gap-3 py-2 px-3 rounded-lg bg-secondary/30 border border-border/20">
           <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider shrink-0">Last AB</span>
           <div className="flex items-center gap-2 flex-wrap text-[11px]">
             {sig.lastABContact.exitVelo != null && (
@@ -535,8 +576,33 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
         </div>
       )}
 
+      {sig.pitchMix && sig.pitchMix.length > 0 && (
+        <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20 space-y-1.5">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Pitcher Arsenal</div>
+          <div className="flex flex-wrap gap-1.5">
+            {sig.pitchMix.slice(0, 5).map((p, i) => (
+              <span key={i} className="text-[10px] px-2 py-0.5 rounded bg-secondary/60 text-foreground border border-border/30">
+                {PITCH_LABELS[p.pitchType] ?? p.pitchType} {Math.round(p.percentage)}%
+                {p.avgVelocity != null && <span className="text-muted-foreground ml-1">{p.avgVelocity.toFixed(0)}mph</span>}
+              </span>
+            ))}
+          </div>
+          {(() => {
+            const era = (sig as any).pitcherEra;
+            const attackable = (sig.signalTags ?? []).includes("ATTACKABLE PITCHER");
+            if (!attackable && !era) return null;
+            return (
+              <div className={`text-[10px] font-semibold mt-0.5 ${attackable ? "text-green-400" : "text-muted-foreground"}`}>
+                {attackable ? "Attackable" : "Neutral"} Matchup
+                {era != null && <span className="text-muted-foreground ml-1">ERA {era.toFixed(2)}</span>}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
       {isHrMarket && sig.hrFactors && sig.hrFactors.count > 0 && (
-        <div className="rounded-lg p-2 space-y-1" style={{ background: "rgba(249,115,22,0.08)", border: "1px solid rgba(249,115,22,0.2)" }}>
+        <div className="rounded-lg p-2.5 space-y-1" style={{ background: "rgba(249,115,22,0.08)", border: "1px solid rgba(249,115,22,0.2)" }}>
           <div className="text-[10px] font-bold uppercase tracking-wider text-orange-400">
             {sig.hrFactors.count} HR Factor{sig.hrFactors.count !== 1 ? "s" : ""}
           </div>
@@ -571,18 +637,28 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
         </div>
       )}
 
-      <div className="flex items-center justify-between pt-1 border-t border-border/30">
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-          {sig.sportsbook && <span className="font-semibold">{SPORTSBOOK_LABELS[sig.sportsbook] ?? sig.sportsbook}</span>}
+      <div className="flex items-center justify-between pt-2 border-t border-border/30 gap-2" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground min-w-0">
+          {sig.sportsbook && <span className="font-semibold truncate">{SPORTSBOOK_LABELS[sig.sportsbook] ?? sig.sportsbook}</span>}
           {sig.signalTimestamp && (
-            <span>{new Date(sig.signalTimestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+            <span className="shrink-0">{new Date(sig.signalTimestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
           )}
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 shrink-0">
+          {state === "actionable" && onAddToSlip && (
+            <button
+              data-testid={`button-mlb-slip-${sig.playerId}-${sig.market}`}
+              className="text-xs px-3 py-1.5 rounded-lg border border-green-500/30 bg-green-500/10 hover:bg-green-500/20 transition-colors text-green-400 hover:text-green-300 font-semibold"
+              onClick={(e) => { e.stopPropagation(); onAddToSlip(sig); }}
+            >
+              + Slip
+            </button>
+          )}
           <button
             data-testid={`button-mlb-tweet-${sig.playerId}-${sig.market}`}
-            className="text-xs px-3 py-1 rounded-lg border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 transition-colors text-blue-400 hover:text-blue-300 font-semibold"
-            onClick={() => {
+            className="text-xs px-3 py-1.5 rounded-lg border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 transition-colors text-blue-400 hover:text-blue-300 font-semibold"
+            onClick={(e) => {
+              e.stopPropagation();
               const tweet = generateTweet(sig, isElite);
               const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`;
               window.open(url, "_blank", "noopener,noreferrer,width=550,height=420");
@@ -592,8 +668,9 @@ function SignalCard({ sig, isElite, compact }: { sig: MLBSignal; isElite: boolea
           </button>
           <button
             data-testid={`button-mlb-copy-${sig.playerId}-${sig.market}`}
-            className="text-xs px-2 py-1 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-            onClick={() => {
+            className="text-xs px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+            onClick={(e) => {
+              e.stopPropagation();
               const tweet = generateTweet(sig, isElite);
               if (navigator.clipboard?.writeText) {
                 navigator.clipboard.writeText(tweet).then(() => {
@@ -838,6 +915,30 @@ function MlbLiveInner() {
   const [mlbUpgradeNeeded, setMlbUpgradeNeeded] = useState(false);
   const [inningFeedTab, setInningFeedTab] = useState<3 | 5 | 7>(3);
   const gameDetailRef = useRef<HTMLDivElement>(null);
+  const [mlbSlipPicks, setMlbSlipPicks] = useState<Array<{ playerId: string; playerName: string; market: string; line: number; side: string; sportsbook: string; edge: number | null; enginePct: number; gameId: string }>>([]);
+
+  const handleAddToSlip = (sig: MLBSignal) => {
+    if (mlbSlipPicks.length >= 10) return;
+    const exists = mlbSlipPicks.find(p => p.playerId === sig.playerId && p.market === sig.market);
+    if (exists) return;
+    setMlbSlipPicks(prev => [...prev, {
+      playerId: sig.playerId, playerName: sig.playerName, market: sig.market,
+      line: sig.bookLine ?? 0, side: sig.recommendedSide,
+      sportsbook: sig.sportsbook ?? "draftkings", edge: sig.edge,
+      enginePct: sig.enginePct, gameId: sig.gameId ?? "",
+    }]);
+  };
+
+  const handleSignalClickThrough = (sig: MLBSignal) => {
+    if (sig.gameId) {
+      setSelectedGameId(sig.gameId);
+      setMainTab("games");
+      if (sig.market) setSelectedMarket(sig.market);
+      setTimeout(() => {
+        gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 150);
+    }
+  };
 
   const isElite = user?.hasMLB === true;
 
@@ -1178,8 +1279,8 @@ function MlbLiveInner() {
             if (liveFeedSub === "all") {
               return (
                 <div className="space-y-6">
-                  <TopPlays signals={filtered} onPlayerClick={(gameId) => { setSelectedGameId(gameId); setMainTab("games"); }} />
-                  <LiveBoard signals={filtered} onPlayerClick={(gameId) => { setSelectedGameId(gameId); setMainTab("games"); }} />
+                  <TopPlays signals={filtered} onPlayerClick={(gameId, _playerId) => { setSelectedGameId(gameId); setMainTab("games"); setTimeout(() => gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 150); }} />
+                  <LiveBoard signals={filtered} onPlayerClick={(gameId, _playerId) => { setSelectedGameId(gameId); setMainTab("games"); setTimeout(() => gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 150); }} />
                 </div>
               );
             }
@@ -1197,7 +1298,7 @@ function MlbLiveInner() {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {filtered.map(sig => (
-                  <SignalCard key={`${sig.playerId}-${sig.market}-${sig.gameId}`} sig={sig} isElite={isElite} compact />
+                  <SignalCard key={`${sig.playerId}-${sig.market}-${sig.gameId}`} sig={sig} isElite={isElite} compact onClickThrough={handleSignalClickThrough} onAddToSlip={handleAddToSlip} />
                 ))}
               </div>
             );
@@ -1207,6 +1308,56 @@ function MlbLiveInner() {
 
       {mainTab === "hr_radar" && (
         <HRRadarSection isElite={isElite} />
+      )}
+
+      {mlbSlipPicks.length > 0 && (
+        <div className="fixed bottom-4 right-4 left-4 sm:left-auto sm:w-96 z-50" data-testid="mlb-bet-slip">
+          <div className="rounded-xl border border-green-500/30 bg-card shadow-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-bold text-foreground">MLB Bet Slip ({mlbSlipPicks.length})</span>
+              <button
+                data-testid="button-clear-mlb-slip"
+                className="text-xs text-muted-foreground hover:text-foreground"
+                onClick={() => setMlbSlipPicks([])}
+              >Clear All</button>
+            </div>
+            <div className="space-y-2 max-h-48 overflow-y-auto">
+              {mlbSlipPicks.map((pick, idx) => (
+                <div key={`${pick.playerId}-${pick.market}`} className="flex items-center justify-between text-xs py-1.5 px-2 rounded-lg bg-secondary/40 border border-border/30">
+                  <div className="min-w-0">
+                    <span className="font-semibold text-foreground truncate block">{pick.playerName}</span>
+                    <span className="text-muted-foreground">{MARKET_LABELS[pick.market] ?? pick.market} {pick.side} {pick.line}</span>
+                  </div>
+                  <button
+                    data-testid={`button-remove-slip-${idx}`}
+                    className="text-muted-foreground hover:text-red-400 shrink-0 ml-2 p-1"
+                    onClick={() => setMlbSlipPicks(prev => prev.filter((_, i) => i !== idx))}
+                  >✕</button>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <button
+                data-testid="button-copy-mlb-slip"
+                className="flex-1 text-xs py-2 rounded-lg border border-border hover:bg-muted transition-colors text-foreground font-semibold"
+                onClick={() => {
+                  const text = mlbSlipPicks.map(p => `${p.playerName} — ${MARKET_LABELS[p.market] ?? p.market} ${p.side} ${p.line}`).join("\n");
+                  navigator.clipboard?.writeText(text);
+                }}
+              >Copy All</button>
+              <a
+                data-testid="link-mlb-slip-dk"
+                href="https://sportsbook.draftkings.com/leagues/baseball/mlb?category=player-props"
+                target="_blank" rel="noopener noreferrer"
+                className="flex-1 text-xs py-2 rounded-lg bg-[#1a6f3c] hover:bg-[#1a8f4c] text-white text-center font-semibold transition-colors"
+                onClick={() => {
+                  const text = mlbSlipPicks.map(p => `${p.playerName} — ${MARKET_LABELS[p.market] ?? p.market} ${p.side} ${p.line}`).join("\n");
+                  navigator.clipboard?.writeText(text);
+                }}
+              >Open DraftKings</a>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -2049,7 +2200,7 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
           <h3 className="text-sm font-bold text-foreground">Engine Signals</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {playerSignals.map(sig => (
-              <SignalCard key={`${sig.playerId}-${sig.market}`} sig={sig} isElite={isElite} />
+              <SignalCard key={`${sig.playerId}-${sig.market}`} sig={sig} isElite={isElite} onAddToSlip={handleAddToSlip} />
             ))}
           </div>
         </div>

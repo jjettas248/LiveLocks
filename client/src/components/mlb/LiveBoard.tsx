@@ -45,7 +45,7 @@ const MARKET_LABELS: Record<string, string> = {
 
 const SIDE_COLORS = {
   OVER: { accent: "#22c55e", bg: "rgba(34,197,94,0.06)", border: "rgba(34,197,94,0.25)" },
-  UNDER: { accent: "#ef4444", bg: "rgba(239,68,68,0.06)", border: "rgba(239,68,68,0.25)" },
+  UNDER: { accent: "#3b82f6", bg: "rgba(59,130,246,0.06)", border: "rgba(59,130,246,0.25)" },
 };
 
 type TierConfig = {
@@ -140,7 +140,7 @@ export function LiveBoard({ signals, onPlayerClick }: { signals: MLBSignal[]; on
                   </span>
                 )}
                 {items.under.length > 0 && (
-                  <span className="text-[9px] px-1 py-0.5 rounded" style={{ color: "#ef4444", background: "rgba(239,68,68,0.1)" }}>
+                  <span className="text-[9px] px-1 py-0.5 rounded" style={{ color: "#3b82f6", background: "rgba(59,130,246,0.1)" }}>
                     {items.under.length} U
                   </span>
                 )}
