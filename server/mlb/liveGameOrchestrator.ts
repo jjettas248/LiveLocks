@@ -26,6 +26,7 @@ import {
   type GameStateCache,
 } from "./dataPullService";
 import { estimateRemainingPA, estimatePitcherRemainingBF } from "./paEstimator";
+import { getMarketParkFactor, isVenueIndoors } from "./dataSources";
 import { calculateMLBPropEdge, hasRealOdds, canShowSignal } from "./markets";
 import { recordMLBDiagnostic } from "./diagnostics";
 import type { MLBPropInput, MLBPropOutput, MLBMarket, MLBQualifiedSignal } from "./types";
@@ -302,21 +303,44 @@ export class LiveGameOrchestrator {
     const stateAfterSync = mlbGameCache.gameState[gameId];
     if (stateAfterSync) {
       const playerSyncPromises: Promise<void>[] = [];
+      let bvpCount = 0;
+      let rollingCount = 0;
+      let batterCount = 0;
 
       if (stateAfterSync.pitcherInGame?.playerId) {
-        playerSyncPromises.push(syncPitcherSeasonStats(stateAfterSync.pitcherInGame.playerId));
+        playerSyncPromises.push(
+          syncPitcherSeasonStats(stateAfterSync.pitcherInGame.playerId).then(() => {
+            const stats = mlbPlayerCache.pitcherSeasonStats[stateAfterSync.pitcherInGame!.playerId];
+            if (stats) {
+              console.log(`[MLB_PITCHER_HYDRATE] game=${gameId} pitcher=${stateAfterSync.pitcherInGame!.playerName ?? stateAfterSync.pitcherInGame!.playerId} ERA=${stats.era ?? "?"} WHIP=${stats.whip ?? "?"} K9=${stats.kPer9 ?? "?"}`);
+            }
+          })
+        );
       }
 
       for (const batter of stateAfterSync.battingOrder) {
         if (batter.playerId && batter.playerId !== "unknown") {
-          playerSyncPromises.push(syncBatterRollingStats(batter.playerId));
+          batterCount++;
+          playerSyncPromises.push(
+            syncBatterRollingStats(batter.playerId).then(() => {
+              if (mlbPlayerCache.batterRollingStats[batter.playerId]) rollingCount++;
+            })
+          );
           if (stateAfterSync.pitcherInGame?.playerId) {
-            playerSyncPromises.push(syncBvPMatchup(batter.playerId, stateAfterSync.pitcherInGame.playerId));
+            const bvpKey = `${batter.playerId}_vs_${stateAfterSync.pitcherInGame.playerId}`;
+            playerSyncPromises.push(
+              syncBvPMatchup(batter.playerId, stateAfterSync.pitcherInGame.playerId).then(() => {
+                if (mlbPlayerCache.bvpMatchups[bvpKey]) bvpCount++;
+              })
+            );
           }
         }
       }
 
       await Promise.allSettled(playerSyncPromises);
+      if (batterCount > 0) {
+        console.log(`[MLB_BVP_HYDRATE] game=${gameId} batters=${batterCount} withBvP=${bvpCount} withRolling=${rollingCount}`);
+      }
     }
 
     const newState = mlbGameCache.gameState[gameId];
@@ -599,6 +623,8 @@ export class LiveGameOrchestrator {
       signal.actionable = false;
     }
 
+    (signal as any).isDegraded = !!(input as any).isDegraded;
+
     this.sanitizeUserFacingFields(signal);
 
     if (signal.fallbackUsed) {
@@ -793,6 +819,13 @@ export class LiveGameOrchestrator {
     const weatherCache = mlbGameCache.weather[gameId];
     const bullpenCache = mlbGameCache.bullpen[gameId];
 
+    if (weatherCache?.venueName) {
+      const _pf = getMarketParkFactor(weatherCache.venueName);
+      const _hrF = getMarketParkFactor(weatherCache.venueName, "home_runs");
+      const _hitsF = getMarketParkFactor(weatherCache.venueName, "hits");
+      console.log(`[MLB_PARK] game=${gameId} venue="${weatherCache.venueName}" overall=${_pf} hr=${_hrF} hits=${_hitsF}`);
+    }
+
     // ── Resolve MLB odds event ID once per game ────────────────────────────────
     let oddsEventId: string | null = null;
     if (game) {
@@ -963,12 +996,12 @@ export class LiveGameOrchestrator {
             pocketWeakness: null,
           },
           weatherPark: {
-            parkFactor: 1.0,
+            parkFactor: getMarketParkFactor(weatherCache?.venueName, market),
             temperature: weatherCache?.temperature ?? null,
             windSpeed: weatherCache?.windSpeed ?? null,
             windDirection: weatherCache?.windDirection ?? null,
             humidity: weatherCache?.humidity ?? null,
-            isIndoors: false,
+            isIndoors: weatherCache?.isIndoors ?? isVenueIndoors(weatherCache?.venueName),
             parkHistoryFactor: null,
           },
           bullpen: {
@@ -978,7 +1011,26 @@ export class LiveGameOrchestrator {
           },
         };
 
-        pLog(gameId, "engineInput", { player: input.playerName, market: input.market, bookLine: input.bookLine, inning: input.inning });
+        pLog(gameId, "engineInput", { player: input.playerName, market: input.market, bookLine: input.bookLine, inning: input.inning, parkFactor: input.weatherPark.parkFactor, venue: weatherCache?.venueName });
+
+        const qualityLayers = {
+          parkFactor: weatherCache?.venueName != null,
+          weather: weatherCache?.temperature != null,
+          pitcherERA: input.pitcher.era != null,
+          pitcherWHIP: input.pitcher.whip != null,
+          contactEV: input.contactQuality.exitVelocity != null,
+          xBA: input.contactQuality.xBA != null,
+          xSLG: input.contactQuality.xSLG != null,
+          bvp: !!(input as any).bvpHistory,
+          rollingForm: !!(input as any).rollingForm,
+          bullpen: bullpenCache?.bullpenEra != null,
+        };
+        const realCount = Object.values(qualityLayers).filter(Boolean).length;
+        const isDegraded = realCount <= 5;
+        if (isDegraded) {
+          console.warn(`[MLB_INPUT_QUALITY] DEGRADED game=${gameId} player=${input.playerName} market=${market} real=${realCount}/10 layers=${JSON.stringify(qualityLayers)}`);
+        }
+        (input as any).isDegraded = isDegraded;
 
         const guardError = validateMLBInput(input);
         if (guardError) {
@@ -1063,7 +1115,7 @@ export class LiveGameOrchestrator {
           } else {
             signalsRejected++;
             const watchSig = this.buildWatchSignal(gameId, input, output);
-            if (watchSig) { watchSig.currentStats = batterStats; watchSig.lastABContact = lastABContact; allSignals.push(watchSig); }
+            if (watchSig) { watchSig.currentStats = batterStats; watchSig.lastABContact = lastABContact; (watchSig as any).isDegraded = !!(input as any).isDegraded; allSignals.push(watchSig); }
           }
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for ${batter.playerName} / ${market}:`, err.message);
@@ -1184,12 +1236,12 @@ export class LiveGameOrchestrator {
             pocketWeakness: null,
           },
           weatherPark: {
-            parkFactor: 1.0,
+            parkFactor: getMarketParkFactor(weatherCache?.venueName, market),
             temperature: weatherCache?.temperature ?? null,
             windSpeed: weatherCache?.windSpeed ?? null,
             windDirection: weatherCache?.windDirection ?? null,
             humidity: weatherCache?.humidity ?? null,
-            isIndoors: false,
+            isIndoors: weatherCache?.isIndoors ?? isVenueIndoors(weatherCache?.venueName),
             parkHistoryFactor: null,
           },
           bullpen: {
@@ -1199,7 +1251,22 @@ export class LiveGameOrchestrator {
           },
         };
 
-        pLog(gameId, "engineInput:pitcher", { player: input.playerName, market: input.market, bookLine: input.bookLine });
+        pLog(gameId, "engineInput:pitcher", { player: input.playerName, market: input.market, bookLine: input.bookLine, parkFactor: input.weatherPark.parkFactor });
+
+        const pitcherQualityLayers = {
+          parkFactor: weatherCache?.venueName != null,
+          weather: weatherCache?.temperature != null,
+          pitcherERA: input.pitcher.era != null,
+          pitcherWHIP: input.pitcher.whip != null,
+          pitcherK9: input.pitcher.kPer9 != null,
+          bullpen: bullpenCache?.bullpenEra != null,
+        };
+        const pitcherRealCount = Object.values(pitcherQualityLayers).filter(Boolean).length;
+        const pitcherIsDegraded = pitcherRealCount <= 3;
+        if (pitcherIsDegraded) {
+          console.warn(`[MLB_INPUT_QUALITY] DEGRADED:pitcher game=${gameId} player=${input.playerName} market=${market} real=${pitcherRealCount}/6 layers=${JSON.stringify(pitcherQualityLayers)}`);
+        }
+        (input as any).isDegraded = pitcherIsDegraded;
 
         const guardError = validateMLBInput(input);
         if (guardError) {
@@ -1239,7 +1306,7 @@ export class LiveGameOrchestrator {
           } else {
             signalsRejected++;
             const watchSig = this.buildWatchSignal(gameId, input, output);
-            if (watchSig) allSignals.push(watchSig);
+            if (watchSig) { (watchSig as any).isDegraded = !!(input as any).isDegraded; allSignals.push(watchSig); }
           }
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for pitcher ${pitcherToEval.playerName} / ${market}:`, err.message);
@@ -1263,7 +1330,12 @@ export class LiveGameOrchestrator {
       sig.gameCardSignalTags = gameCardTags as string[];
     }
 
-    allSignals.sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
+    allSignals.sort((a, b) => {
+      const aDeg = (a as any).isDegraded ? 1 : 0;
+      const bDeg = (b as any).isDegraded ? 1 : 0;
+      if (aDeg !== bDeg) return aDeg - bDeg;
+      return (b.signalScore ?? 0) - (a.signalScore ?? 0);
+    });
 
     mlbEdgeCache.set(gameId, {
       gameId,

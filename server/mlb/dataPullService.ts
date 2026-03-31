@@ -70,6 +70,8 @@ export interface WeatherCache {
   windDirection: "in" | "out" | "cross" | "calm" | null;
   humidity: number | null;
   fetchedAt: number;
+  venueName: string | null;
+  isIndoors: boolean;
 }
 
 export interface BullpenCache {
@@ -589,17 +591,21 @@ export async function syncWeather(statsPk: string, cacheKey?: string): Promise<v
     const windDirection = normalizeWindDirection(weather.wind);
     const humidity: number | null = safeNum(weather.condition === "Roof Closed" ? 50 : null);
 
+    const venueName: string | null = venue.name ?? null;
+    const isIndoors = (venue.fieldInfo?.roofType ?? "").toLowerCase().includes("retractable")
+      || (data.gameData?.weather?.condition ?? "").toLowerCase().includes("roof closed");
+
     mlbGameCache.weather[gameId] = {
       temperature: temperature ?? null,
       windSpeed: windSpeed ?? null,
       windDirection: windDirection ?? "cross",
       humidity: humidity,
       fetchedAt: Date.now(),
+      venueName,
+      isIndoors,
     };
 
-    const isIndoors = (venue.fieldInfo?.roofType ?? "").toLowerCase().includes("retractable")
-      || (data.gameData?.weather?.condition ?? "").toLowerCase().includes("roof closed");
-    console.log(`[MLB pull] syncWeather: game ${gameId} — ${temperature}°F, wind ${windSpeed}mph ${windDirection ?? "unknown"}${isIndoors ? " (indoors)" : ""}`);
+    console.log(`[MLB pull] syncWeather: game ${gameId} — ${temperature}°F, wind ${windSpeed}mph ${windDirection ?? "unknown"} venue="${venueName}"${isIndoors ? " (indoors)" : ""}`);
   } catch (err: any) {
     console.error(`[MLB pull] syncWeather(${gameId}) error:`, err.message);
   }

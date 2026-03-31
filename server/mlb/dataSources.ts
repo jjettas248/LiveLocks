@@ -63,16 +63,114 @@ function safeNum(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+interface ParkFactors {
+  overall: number;
+  hr: number;
+  hits: number;
+  runs: number;
+  isIndoors: boolean;
+}
+
+const PARK_FACTORS: Record<string, ParkFactors> = {
+  "Coors Field":              { overall: 1.28, hr: 1.35, hits: 1.18, runs: 1.30, isIndoors: false },
+  "Fenway Park":              { overall: 1.08, hr: 0.98, hits: 1.12, runs: 1.10, isIndoors: false },
+  "Yankee Stadium":           { overall: 1.10, hr: 1.20, hits: 1.02, runs: 1.12, isIndoors: false },
+  "Citizens Bank Park":       { overall: 1.07, hr: 1.15, hits: 1.04, runs: 1.08, isIndoors: false },
+  "Great American Ball Park": { overall: 1.10, hr: 1.22, hits: 1.03, runs: 1.12, isIndoors: false },
+  "Globe Life Field":         { overall: 1.02, hr: 1.08, hits: 0.98, runs: 1.03, isIndoors: true },
+  "Wrigley Field":            { overall: 1.05, hr: 1.10, hits: 1.03, runs: 1.06, isIndoors: false },
+  "Guaranteed Rate Field":    { overall: 1.04, hr: 1.12, hits: 0.99, runs: 1.05, isIndoors: false },
+  "Kauffman Stadium":         { overall: 1.06, hr: 1.10, hits: 1.02, runs: 1.05, isIndoors: false },
+  "Minute Maid Park":         { overall: 1.03, hr: 1.08, hits: 1.00, runs: 1.04, isIndoors: true },
+  "American Family Field":    { overall: 1.02, hr: 1.06, hits: 1.00, runs: 1.03, isIndoors: true },
+  "Target Field":             { overall: 1.00, hr: 1.02, hits: 0.99, runs: 1.00, isIndoors: false },
+  "Truist Park":              { overall: 0.99, hr: 1.04, hits: 0.97, runs: 0.99, isIndoors: false },
+  "Nationals Park":           { overall: 0.99, hr: 1.05, hits: 0.96, runs: 1.00, isIndoors: false },
+  "Busch Stadium":            { overall: 0.97, hr: 0.95, hits: 0.98, runs: 0.96, isIndoors: false },
+  "Angel Stadium":            { overall: 0.96, hr: 0.92, hits: 0.97, runs: 0.95, isIndoors: false },
+  "Comerica Park":            { overall: 0.96, hr: 0.90, hits: 0.98, runs: 0.95, isIndoors: false },
+  "PNC Park":                 { overall: 0.95, hr: 0.92, hits: 0.97, runs: 0.94, isIndoors: false },
+  "T-Mobile Park":            { overall: 0.94, hr: 0.88, hits: 0.97, runs: 0.93, isIndoors: true },
+  "Dodger Stadium":           { overall: 0.97, hr: 1.00, hits: 0.96, runs: 0.97, isIndoors: false },
+  "loanDepot park":           { overall: 0.93, hr: 0.88, hits: 0.96, runs: 0.92, isIndoors: true },
+  "Oracle Park":              { overall: 0.88, hr: 0.82, hits: 0.92, runs: 0.87, isIndoors: false },
+  "Petco Park":               { overall: 0.92, hr: 0.88, hits: 0.95, runs: 0.91, isIndoors: false },
+  "Chase Field":              { overall: 1.05, hr: 1.10, hits: 1.02, runs: 1.06, isIndoors: true },
+  "Rogers Centre":            { overall: 1.03, hr: 1.08, hits: 1.00, runs: 1.04, isIndoors: true },
+  "Citi Field":               { overall: 0.95, hr: 0.95, hits: 0.96, runs: 0.94, isIndoors: false },
+  "Progressive Field":        { overall: 0.98, hr: 0.96, hits: 0.99, runs: 0.97, isIndoors: false },
+  "Tropicana Field":          { overall: 0.96, hr: 0.92, hits: 0.97, runs: 0.95, isIndoors: true },
+  "Sutter Health Park":       { overall: 1.12, hr: 1.15, hits: 1.08, runs: 1.14, isIndoors: false },
+  "Oriole Park at Camden Yards": { overall: 1.04, hr: 1.12, hits: 1.00, runs: 1.05, isIndoors: false },
+};
+
+const VENUE_ALIASES: Record<string, string> = {
+  "Camden Yards": "Oriole Park at Camden Yards",
+  "Loan Depot Park": "loanDepot park",
+  "LoanDepot Park": "loanDepot park",
+  "Miami Marlins Park": "loanDepot park",
+  "Marlins Park": "loanDepot park",
+  "Oakland Coliseum": "Sutter Health Park",
+  "Oakland-Alameda County Coliseum": "Sutter Health Park",
+  "RingCentral Coliseum": "Sutter Health Park",
+  "SkyDome": "Rogers Centre",
+  "US Cellular Field": "Guaranteed Rate Field",
+  "Miller Park": "American Family Field",
+  "Safeco Field": "T-Mobile Park",
+};
+
+function resolveVenue(venueName: string): ParkFactors | null {
+  if (PARK_FACTORS[venueName]) return PARK_FACTORS[venueName];
+  const alias = VENUE_ALIASES[venueName];
+  if (alias && PARK_FACTORS[alias]) return PARK_FACTORS[alias];
+  const lower = venueName.toLowerCase();
+  for (const [name, factors] of Object.entries(PARK_FACTORS)) {
+    if (lower.includes(name.toLowerCase().split(" ")[0]) || name.toLowerCase().includes(lower.split(" ")[0])) {
+      return factors;
+    }
+  }
+  return null;
+}
+
+export function getMarketParkFactor(venueName: string | null | undefined, market?: string): number {
+  if (!venueName) return 1.0;
+  const factors = resolveVenue(venueName);
+  if (!factors) return 1.0;
+
+  if (!market) return factors.overall;
+
+  const m = market.toLowerCase();
+  if (m === "home_runs" || m === "hr" || m === "hr_allowed") return factors.hr;
+  if (m === "hits" || m === "hits_allowed") return factors.hits;
+  if (m === "hrr") return (factors.hits + factors.runs + factors.hr) / 3;
+  if (m === "total_bases") return (factors.hits + factors.hr) / 2;
+  return factors.overall;
+}
+
+export function getVenueParkFactors(venueName: string | null | undefined): ParkFactors | null {
+  if (!venueName) return null;
+  return resolveVenue(venueName);
+}
+
+export function isVenueIndoors(venueName: string | null | undefined): boolean {
+  if (!venueName) return false;
+  const factors = resolveVenue(venueName);
+  return factors?.isIndoors ?? false;
+}
+
 export async function fetchBallparkPalData(
-  _gameId: string
+  _gameId: string,
+  venueName?: string | null
 ): Promise<BallparkPalData> {
+  const pf = venueName ? getMarketParkFactor(venueName) : 1.0;
+  const indoor = isVenueIndoors(venueName);
   return {
-    parkFactor: 1.0,
+    parkFactor: pf,
     temperature: null,
     windSpeed: null,
     windDirection: null,
     humidity: null,
-    isIndoors: false,
+    isIndoors: indoor,
   };
 }
 
@@ -232,23 +330,39 @@ export async function fetchBaseballSavantData(
   }
 }
 
-export async function fetchMLBComData(
-  _playerId: string,
-  _gameId: string
-): Promise<MLBComData> {
+export function getPlayerLiveStats(
+  playerId: string,
+  gameId: string,
+  gameCache: {
+    gameBoxScore: Record<string, { byPlayerId: Record<string, { hits: number; hr: number; ab: number; bb: number; rbi: number; so: number; tb: number; runs: number }> }>;
+    gameState: Record<string, { inning: number; isTopInning: boolean }>;
+  },
+  battingOrderSlot?: number
+): MLBComData {
+  const boxScore = gameCache.gameBoxScore[gameId];
+  const state = gameCache.gameState[gameId];
+  const player = boxScore?.byPlayerId?.[playerId];
+
   return {
-    battingOrderSlot: 5,
+    battingOrderSlot: battingOrderSlot ?? 5,
     pitchCount: 0,
     timesThrough: 1,
-    inning: 1,
-    isTopInning: true,
-    currentHits: 0,
-    currentTotalBases: 0,
-    currentStrikeouts: 0,
-    currentHomeRuns: 0,
-    plateAppearances: 0,
-    atBats: 0,
+    inning: state?.inning ?? 1,
+    isTopInning: state?.isTopInning ?? true,
+    currentHits: player?.hits ?? 0,
+    currentTotalBases: player?.tb ?? 0,
+    currentStrikeouts: player?.so ?? 0,
+    currentHomeRuns: player?.hr ?? 0,
+    plateAppearances: (player?.ab ?? 0) + (player?.bb ?? 0),
+    atBats: player?.ab ?? 0,
   };
+}
+
+export async function fetchMLBComData(
+  playerId: string,
+  gameId: string
+): Promise<MLBComData> {
+  return getPlayerLiveStats(playerId, gameId, { gameBoxScore: {}, gameState: {} });
 }
 
 export async function fetchESPNMLBData(
