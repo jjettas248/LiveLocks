@@ -25,6 +25,7 @@ import { checkAndSendAlerts } from "./alertManager";
 import { autoResolveAlerts, autoSettlePersistedPlays } from "./analyticsResolver";
 import { syncMinutesProjections } from "./services/minutesProjectionService";
 import { calculateMLBPropEdge, canShowSignal, hasRealOdds } from "./mlb/markets";
+import { getMarketParkFactor } from "./mlb/dataSources";
 import {
   recordMLBDiagnostic,
   getMLBDiagnosticSummary,
@@ -903,6 +904,8 @@ export async function registerRoutes(
           signalLocked,
           market: bestMarket,
           gameCardTags: cacheEntry?.gameCardTags ?? [],
+          parkFactor: parkName ? getMarketParkFactor(parkName) : null,
+          isIndoors: cachedWeather?.isIndoors ?? false,
         });
       }
 
@@ -1105,10 +1108,21 @@ export async function registerRoutes(
           (o) => o.playerId === qs.playerId && o.market === qs.market
         );
 
+        const overO = rawOutput?.overOdds ?? null;
+        const underO = rawOutput?.underOdds ?? null;
+        let bookImplied: number | null = null;
+        if (qs.side === "OVER" && overO != null && overO !== 0) {
+          bookImplied = overO < 0 ? Math.abs(overO) / (Math.abs(overO) + 100) * 100 : 100 / (overO + 100) * 100;
+        } else if (qs.side === "UNDER" && underO != null && underO !== 0) {
+          bookImplied = underO < 0 ? Math.abs(underO) / (Math.abs(underO) + 100) * 100 : 100 / (underO + 100) * 100;
+        }
+
+        const normalizedMarket = qs.market === "hr" ? "home_runs" : qs.market;
+
         return {
           playerId: qs.playerId,
           playerName: qs.playerName,
-          market: qs.market,
+          market: normalizedMarket,
           bookLine: qs.line > 0 ? qs.line : null,
           projection: qs.projection ?? null,
           enginePct,
@@ -1147,9 +1161,17 @@ export async function registerRoutes(
           currentStats: qs.currentStats ?? null,
           lastABContact: qs.lastABContact ?? null,
           alreadyHit: qs.alreadyHit ?? false,
+          actionable: qs.actionable ?? true,
+          stale: qs.stale ?? false,
+          watchlist: qs.watchlist ?? false,
+          isDegraded: (qs as any).isDegraded ?? false,
+          bookImplied: bookImplied != null ? Math.round(bookImplied * 10) / 10 : null,
+          bvp: (qs as any).bvpHistory ?? null,
+          rollingForm: (qs as any).rollingForm ?? null,
           pitchMix: rawOutput?.pitchMix ?? null,
-          overOdds: rawOutput?.overOdds ?? null,
-          underOdds: rawOutput?.underOdds ?? null,
+          overOdds: overO,
+          underOdds: underO,
+          priorABResults: rawOutput?.priorABResults ?? (qs as any).priorABResults ?? null,
         };
       })
       .sort((a, b) => {
@@ -1280,10 +1302,12 @@ export async function registerRoutes(
 
           const qsAny = qs as any;
 
+          const normalizedMkt = qs.market === "hr" ? "home_runs" : qs.market;
+
           allSignals.push({
             playerId: qs.playerId,
             playerName: qs.playerName,
-            market: qs.market,
+            market: normalizedMkt,
             bookLine: qs.line,
             projection: qs.projection ?? null,
             enginePct: Math.round(sidedProb * 10) / 10,
@@ -1332,6 +1356,9 @@ export async function registerRoutes(
             completedAB: qsAny.completedAB ?? 0,
             bookImplied: qsAny.bookImplied ?? null,
             priorABResults: qsAny.priorABResults ?? [],
+            isDegraded: qsAny.isDegraded ?? false,
+            bvp: qsAny.bvpHistory ?? null,
+            rollingForm: qsAny.rollingForm ?? null,
           });
         }
       }

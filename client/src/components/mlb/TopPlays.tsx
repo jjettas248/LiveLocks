@@ -21,6 +21,17 @@ type MLBSignal = {
   reasons?: string[];
   awayAbbr?: string | null;
   homeAbbr?: string | null;
+  currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
+  bvp?: { atBats: number; hits: number; avg: number | null; homeRuns: number; strikeouts: number } | null;
+  overOdds?: number | null;
+  underOdds?: number | null;
+  bookImplied?: number | null;
+  isDegraded?: boolean;
+  alreadyHit?: boolean;
+  actionable?: boolean;
+  stale?: boolean;
+  watchlist?: boolean;
+  badges?: string[];
   [key: string]: any;
 };
 
@@ -29,6 +40,7 @@ const MARKET_LABELS: Record<string, string> = {
   total_bases: "Total Bases",
   hrr: "H+R+RBI",
   hr: "Home Runs",
+  home_runs: "Home Runs",
   rbi: "RBIs",
   runs: "Runs",
   stolen_bases: "Stolen Bases",
@@ -135,9 +147,29 @@ export function TopPlays({ signals, onPlayerClick, onAddToSlip }: { signals: MLB
   );
 }
 
+function formatOdds(odds: number | null | undefined): string {
+  if (odds == null) return "";
+  return odds > 0 ? `+${odds}` : `${odds}`;
+}
+
+function getCurrentStatForMarket(sig: MLBSignal): { label: string; value: number } | null {
+  const cs = sig.currentStats;
+  if (!cs) return null;
+  switch (sig.market) {
+    case "hits": return { label: "H", value: cs.h };
+    case "home_runs": case "hr": return { label: "HR", value: cs.hr };
+    case "total_bases": return { label: "TB", value: cs.tb };
+    case "rbi": return { label: "RBI", value: cs.rbi };
+    case "stolen_bases": return { label: "SB", value: cs.sb };
+    case "batter_strikeouts": return { label: "K", value: cs.k };
+    case "hrr": return { label: "H+R+RBI", value: cs.h + ((cs as any).r ?? 0) + cs.rbi };
+    default: return { label: "H", value: cs.h };
+  }
+}
+
 function SignalCard({ sig, onPlayerClick, onAddToSlip }: { sig: MLBSignal; onPlayerClick?: (gameId: string, playerId: string) => void; onAddToSlip?: (sig: MLBSignal) => void }) {
   const [expanded, setExpanded] = useState(false);
-  const tier = TIER_COLORS[sig.confidenceTier] ?? TIER_COLORS.WATCHLIST;
+  const tier = TIER_COLORS[sig.confidenceTier ?? "WATCHLIST"] ?? TIER_COLORS.WATCHLIST;
   const side = SIDE_STYLES[sig.recommendedSide as keyof typeof SIDE_STYLES] ?? SIDE_STYLES.OVER;
   const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
   const tags = (sig.signalTags ?? []).slice(0, 3);
@@ -145,12 +177,15 @@ function SignalCard({ sig, onPlayerClick, onAddToSlip }: { sig: MLBSignal; onPla
   const form = formBadge(sig.formIndicator);
   const reasons = sig.reasons ?? [];
   const isClickable = !!onPlayerClick;
+  const liveStat = getCurrentStatForMarket(sig);
+  const sideOdds = sig.recommendedSide === "OVER" ? sig.overOdds : sig.underOdds;
+  const cardOpacity = sig.stale ? 0.5 : sig.alreadyHit ? 0.7 : 1;
 
   return (
     <div
       data-testid={`mlb-top-play-${sig.playerId}-${sig.market}`}
       className={`rounded-xl p-3.5 space-y-2 transition-all ${isClickable ? "cursor-pointer hover:brightness-110" : ""}`}
-      style={{ background: side.bg, border: `1px solid ${side.border}` }}
+      style={{ background: side.bg, border: `1px solid ${side.border}`, opacity: cardOpacity }}
       onClick={isClickable ? () => onPlayerClick(sig.gameId, sig.playerId) : undefined}
     >
       <div className="flex items-center justify-between">
@@ -172,6 +207,24 @@ function SignalCard({ sig, onPlayerClick, onAddToSlip }: { sig: MLBSignal; onPla
               {form.label}
             </span>
           )}
+          {sig.alreadyHit && (
+            <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full" style={{ color: "#22c55e", background: "rgba(34,197,94,0.15)" }}>
+              HIT ✓
+            </span>
+          )}
+          {sig.stale && !sig.alreadyHit && (
+            <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full" style={{ color: "#71717a", background: "rgba(113,113,122,0.15)" }}>
+              STALE
+            </span>
+          )}
+          {sig.watchlist && !sig.stale && !sig.alreadyHit && (
+            <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full" style={{ color: "#71717a", background: "rgba(113,113,122,0.1)" }}>
+              WATCH
+            </span>
+          )}
+          {sig.isDegraded && (
+            <span className="text-[8px] text-amber-500/70 px-1 py-0.5 rounded" style={{ background: "rgba(245,158,11,0.08)" }}>⚠</span>
+          )}
         </div>
         {matchup && <span className="text-[9px] text-muted-foreground">{matchup}</span>}
       </div>
@@ -180,38 +233,73 @@ function SignalCard({ sig, onPlayerClick, onAddToSlip }: { sig: MLBSignal; onPla
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
             <p className="text-xs font-bold text-white truncate">{sig.playerName}</p>
+            {sig.playerGlowEligible && (
+              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: tier.text, boxShadow: `0 0 6px ${tier.text}` }} />
+            )}
             {isClickable && <ChevronRight className="w-3 h-3 text-muted-foreground flex-shrink-0" />}
           </div>
           <p className="text-[10px] font-medium" style={{ color: side.accent }}>
             {marketLabel} {side.label} {sig.bookLine}
+            {sideOdds != null && <span className="text-muted-foreground/60 ml-1">({formatOdds(sideOdds)})</span>}
           </p>
         </div>
         <div className="flex flex-col items-end flex-shrink-0">
           <span className="text-lg font-black tabular-nums" style={{ color: side.accent }}>
             {sig.enginePct.toFixed(0)}%
           </span>
+          {sig.bookImplied != null && (
+            <span className="text-[9px] text-muted-foreground/50">Book: {sig.bookImplied.toFixed(0)}%</span>
+          )}
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-2 text-center">
+      <div className="grid grid-cols-4 gap-2 text-center">
         <div>
-          <div className="text-[9px] text-muted-foreground/70">EV%</div>
-          <div className="text-[11px] font-bold" style={{ color: (sig.evPct ?? sig.edge ?? 0) > 0 ? "#22c55e" : "#ef4444" }}>
-            {(sig.evPct ?? sig.edge ?? 0) > 0 ? "+" : ""}{(sig.evPct ?? sig.edge ?? 0).toFixed(1)}
+          <div className="text-[9px] text-muted-foreground/70">Edge</div>
+          <div className="text-[11px] font-bold" style={{ color: (sig.edge ?? 0) > 0 ? "#22c55e" : "#ef4444" }}>
+            {(sig.edge ?? 0) > 0 ? "+" : ""}{(sig.edge ?? 0).toFixed(1)}%
           </div>
         </div>
         <div>
-          <div className="text-[9px] text-muted-foreground/70">Projection</div>
+          <div className="text-[9px] text-muted-foreground/70">Proj</div>
           <div className="text-[11px] font-bold text-white">{sig.projection != null ? sig.projection.toFixed(2) : "—"}</div>
         </div>
+        {liveStat ? (
+          <div>
+            <div className="text-[9px] text-muted-foreground/70">{liveStat.label}</div>
+            <div className="text-[11px] font-bold" style={{ color: liveStat.value >= (sig.bookLine ?? 99) ? "#22c55e" : "#ffffff" }}>
+              {liveStat.value}/{sig.bookLine}
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div className="text-[9px] text-muted-foreground/70">Line</div>
+            <div className="text-[11px] font-bold text-white">{sig.bookLine ?? "—"}</div>
+          </div>
+        )}
         <div>
-          <div className="text-[9px] text-muted-foreground/70">Line</div>
-          <div className="text-[11px] font-bold text-white">{sig.bookLine ?? "—"}</div>
+          <div className="text-[9px] text-muted-foreground/70">Score</div>
+          <div className="text-[11px] font-bold text-white">{sig.signalScore ?? 0}</div>
         </div>
       </div>
 
-      {tags.length > 0 && (
+      {sig.bvp && sig.bvp.atBats > 0 && (
+        <div className="text-[9px] px-2 py-1 rounded" style={{ background: "rgba(255,255,255,0.03)" }}>
+          <span className="text-muted-foreground/70">BvP: </span>
+          <span className="text-white font-semibold">{sig.bvp.hits}/{sig.bvp.atBats}</span>
+          <span className="text-muted-foreground/50 ml-1">({sig.bvp.avg != null ? sig.bvp.avg.toFixed(3) : "—"})</span>
+          {sig.bvp.homeRuns > 0 && <span className="text-orange-400 ml-1.5 font-semibold">{sig.bvp.homeRuns} HR</span>}
+          {sig.bvp.strikeouts > 0 && <span className="text-muted-foreground/50 ml-1.5">{sig.bvp.strikeouts} K</span>}
+        </div>
+      )}
+
+      {(tags.length > 0 || (sig.badges ?? []).length > 0) && (
         <div className="flex flex-wrap gap-1">
+          {(sig.badges ?? []).slice(0, 2).map((badge) => (
+            <span key={badge} className="text-[8px] px-1.5 py-0.5 rounded-full font-semibold" style={{ background: "rgba(234,179,8,0.1)", color: "#eab308" }}>
+              {badge}
+            </span>
+          ))}
           {tags.map((tag) => (
             <span key={tag} className="flex items-center gap-0.5 text-[8px] px-1.5 py-0.5 rounded-full" style={{ background: "rgba(255,255,255,0.06)", color: "#d4d4d8" }}>
               {getTagIcon(tag)}
@@ -225,6 +313,7 @@ function SignalCard({ sig, onPlayerClick, onAddToSlip }: { sig: MLBSignal; onPla
         <div onClick={(e) => e.stopPropagation()}>
           <button
             className="flex items-center gap-1 text-[9px] text-muted-foreground/70 hover:text-muted-foreground transition-colors w-full"
+            data-testid={`button-expand-reasons-${sig.playerId}-${sig.market}`}
             onClick={() => setExpanded(!expanded)}
           >
             {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
@@ -244,13 +333,15 @@ function SignalCard({ sig, onPlayerClick, onAddToSlip }: { sig: MLBSignal; onPla
       )}
 
       <div className="flex items-center justify-between pt-0.5 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
-        <span className="text-[9px] text-muted-foreground/50">Score: {sig.signalScore}</span>
         <div className="flex items-center gap-2">
-          {sig.edge != null && (
-            <span className="text-[9px] text-muted-foreground/50">
-              Edge: {sig.edge > 0 ? "+" : ""}{sig.edge.toFixed(1)}%
-            </span>
+          {sig.isDegraded && (
+            <span className="text-[8px] text-amber-500/70">Limited data</span>
           )}
+          {sig.sportsbook && (
+            <span className="text-[8px] text-muted-foreground/40">{sig.sportsbook}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
           {onAddToSlip && (
             <button
               data-testid={`button-top-play-slip-${sig.playerId}-${sig.market}`}

@@ -1,4 +1,4 @@
-import { Target, TrendingUp, Eye, Flame, ChevronDown, ChevronUp, ChevronRight } from "lucide-react";
+import { Target, TrendingUp, Eye, Flame, ChevronDown, ChevronUp, ChevronRight, AlertTriangle } from "lucide-react";
 import { useState } from "react";
 
 type MLBSignal = {
@@ -22,13 +22,24 @@ type MLBSignal = {
   awayAbbr?: string | null;
   homeAbbr?: string | null;
   playerGlowEligible?: boolean;
+  currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
+  lastABContact?: { exitVelo: number | null; launchAngle: number | null; outcome: string | null } | null;
+  bvp?: { atBats: number; hits: number; avg: number | null; homeRuns: number; strikeouts: number } | null;
+  overOdds?: number | null;
+  underOdds?: number | null;
+  bookImplied?: number | null;
+  isDegraded?: boolean;
+  alreadyHit?: boolean;
+  actionable?: boolean;
+  stale?: boolean;
+  watchlist?: boolean;
+  badges?: string[];
 };
 
 const MARKET_LABELS: Record<string, string> = {
   hits: "Hits",
   total_bases: "Total Bases",
   hrr: "H+R+RBI",
-  hr: "Home Runs",
   home_runs: "Home Runs",
   rbi: "RBIs",
   runs: "Runs",
@@ -82,6 +93,34 @@ function formBadge(form: string | null | undefined): { label: string; color: str
   if (f === "COLD") return { label: "❄️", color: "#60a5fa" };
   if (f === "EXTREME_COLD") return { label: "🧊", color: "#818cf8" };
   return null;
+}
+
+function signalStateLabel(sig: MLBSignal): { label: string; color: string; bg: string } | null {
+  if (sig.alreadyHit) return { label: "HIT ✓", color: "#22c55e", bg: "rgba(34,197,94,0.15)" };
+  if (sig.stale) return { label: "STALE", color: "#71717a", bg: "rgba(113,113,122,0.15)" };
+  if (sig.watchlist) return { label: "WATCH", color: "#71717a", bg: "rgba(113,113,122,0.1)" };
+  return null;
+}
+
+function getCurrentStatForMarket(sig: MLBSignal): { label: string; value: number } | null {
+  const cs = sig.currentStats;
+  if (!cs) return null;
+  switch (sig.market) {
+    case "hits": return { label: "H", value: cs.h };
+    case "home_runs": return { label: "HR", value: cs.hr };
+    case "total_bases": return { label: "TB", value: cs.tb };
+    case "rbi": return { label: "RBI", value: cs.rbi };
+    case "runs": return { label: "R", value: (cs as any).r ?? 0 };
+    case "stolen_bases": return { label: "SB", value: cs.sb };
+    case "batter_strikeouts": return { label: "K", value: cs.k };
+    case "hrr": return { label: "H+R+RBI", value: cs.h + ((cs as any).r ?? 0) + cs.rbi };
+    default: return { label: "H", value: cs.h };
+  }
+}
+
+function formatOdds(odds: number | null | undefined): string {
+  if (odds == null) return "";
+  return odds > 0 ? `+${odds}` : `${odds}`;
 }
 
 export function LiveBoard({ signals, onPlayerClick }: { signals: MLBSignal[]; onPlayerClick?: (gameId: string, playerId: string) => void }) {
@@ -195,12 +234,17 @@ function BoardCard({ sig, tierConfig, onPlayerClick }: { sig: MLBSignal; tierCon
   const form = formBadge(sig.formIndicator);
   const reasons = (sig.reasons ?? []).slice(0, 2);
   const isClickable = !!(onPlayerClick && sig.gameId);
+  const stateLabel = signalStateLabel(sig);
+  const liveStat = getCurrentStatForMarket(sig);
+  const sideOdds = sig.recommendedSide === "OVER" ? sig.overOdds : sig.underOdds;
+
+  const cardOpacity = sig.stale ? 0.5 : sig.alreadyHit ? 0.7 : 1;
 
   return (
     <div
       data-testid={`mlb-board-signal-${sig.playerId}-${sig.market}`}
       className={`rounded-lg p-3 space-y-1.5 transition-all ${isClickable ? "cursor-pointer hover:brightness-110" : ""}`}
-      style={{ background: side.bg, border: `1px solid ${side.border}` }}
+      style={{ background: side.bg, border: `1px solid ${side.border}`, opacity: cardOpacity }}
       onClick={isClickable ? () => onPlayerClick(sig.gameId!, sig.playerId) : undefined}
     >
       <div className="flex items-center justify-between">
@@ -210,16 +254,25 @@ function BoardCard({ sig, tierConfig, onPlayerClick }: { sig: MLBSignal; tierCon
           {sig.playerGlowEligible && (
             <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: tierConfig.color, boxShadow: `0 0 6px ${tierConfig.color}` }} />
           )}
+          {sig.isDegraded && <AlertTriangle className="w-3 h-3 text-amber-500/60 flex-shrink-0" />}
           {isClickable && <ChevronRight className="w-3 h-3 text-muted-foreground flex-shrink-0" />}
         </div>
-        <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full flex-shrink-0" style={{ color: side.accent, background: "rgba(255,255,255,0.04)", border: `1px solid ${side.border}` }}>
-          {sig.recommendedSide}
-        </span>
+        <div className="flex items-center gap-1.5">
+          {stateLabel && (
+            <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full" style={{ color: stateLabel.color, background: stateLabel.bg }}>
+              {stateLabel.label}
+            </span>
+          )}
+          <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full flex-shrink-0" style={{ color: side.accent, background: "rgba(255,255,255,0.04)", border: `1px solid ${side.border}` }}>
+            {sig.recommendedSide}
+          </span>
+        </div>
       </div>
 
       <div className="flex items-center justify-between">
         <div className="text-[10px] text-muted-foreground">
           {marketLabel} {sig.recommendedSide} {sig.bookLine}
+          {sideOdds != null && <span className="text-muted-foreground/60 ml-1">({formatOdds(sideOdds)})</span>}
           {matchup && <span className="text-muted-foreground/50 ml-1">· {matchup}</span>}
         </div>
         <div className="flex items-baseline gap-1.5">
@@ -234,7 +287,22 @@ function BoardCard({ sig, tierConfig, onPlayerClick }: { sig: MLBSignal; tierCon
         </div>
       </div>
 
-      {sig.projection != null && (
+      {liveStat && (
+        <div className="flex items-center gap-3 text-[9px]">
+          <span className="font-semibold" style={{ color: liveStat.value >= (sig.bookLine ?? 99) ? "#22c55e" : "#a1a1aa" }}>
+            {liveStat.label}: {liveStat.value}/{sig.bookLine}
+          </span>
+          {sig.projection != null && (
+            <span className="text-muted-foreground/70">Proj: <span className="text-white font-semibold">{sig.projection.toFixed(2)}</span></span>
+          )}
+          {sig.bookImplied != null && (
+            <span className="text-muted-foreground/70">Book: <span className="text-white font-semibold">{sig.bookImplied.toFixed(0)}%</span></span>
+          )}
+          <span className="text-muted-foreground/70">S: <span className="text-white font-semibold">{sig.signalScore ?? 0}</span></span>
+        </div>
+      )}
+
+      {!liveStat && sig.projection != null && (
         <div className="flex items-center gap-3 text-[9px]">
           <span className="text-muted-foreground/70">Proj: <span className="text-white font-semibold">{sig.projection.toFixed(2)}</span></span>
           <span className="text-muted-foreground/70">Line: <span className="text-white font-semibold">{sig.bookLine}</span></span>
@@ -242,8 +310,20 @@ function BoardCard({ sig, tierConfig, onPlayerClick }: { sig: MLBSignal; tierCon
         </div>
       )}
 
-      {tags.length > 0 && (
+      {sig.bvp && sig.bvp.atBats > 0 && (
+        <div className="text-[8px] text-muted-foreground/70">
+          BvP: {sig.bvp.hits}/{sig.bvp.atBats} ({sig.bvp.avg != null ? sig.bvp.avg.toFixed(3) : "—"})
+          {sig.bvp.homeRuns > 0 && <span className="text-orange-400 ml-1">{sig.bvp.homeRuns} HR</span>}
+        </div>
+      )}
+
+      {(tags.length > 0 || (sig.badges ?? []).length > 0) && (
         <div className="flex flex-wrap gap-1">
+          {(sig.badges ?? []).slice(0, 2).map((badge) => (
+            <span key={badge} className="text-[8px] px-1 py-0.5 rounded font-semibold" style={{ background: "rgba(234,179,8,0.1)", color: "#eab308" }}>
+              {badge}
+            </span>
+          ))}
           {tags.map((tag) => (
             <span key={tag} className="text-[8px] px-1 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.05)", color: "#a1a1aa" }}>
               {tag}

@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { CloudRain, Wind, Thermometer } from "lucide-react";
 
 type MLBScheduleGame = {
   gameId: string;
@@ -13,8 +14,11 @@ type MLBScheduleGame = {
   status: "live" | "pregame" | null;
   startTime?: string | null;
   venue?: string | null;
+  weatherSummary?: string | null;
   pitcherAway?: string | null;
   pitcherHome?: string | null;
+  awayPitcherHand?: string | null;
+  homePitcherHand?: string | null;
   hasOdds?: boolean;
   signalLocked?: boolean;
   signalCount?: number;
@@ -31,6 +35,8 @@ type MLBScheduleGame = {
     avgVelocity: number | null;
     velocityDrop: number | null;
   } | null;
+  parkFactor?: number | null;
+  isIndoors?: boolean;
 };
 
 type MLBScheduleListProps = {
@@ -56,6 +62,12 @@ function lastName(name: string | null | undefined): string {
   return trimmed.split(" ").pop() || trimmed;
 }
 
+function pitcherLabel(name: string | null | undefined, hand: string | null | undefined): string {
+  const last = lastName(name);
+  if (hand) return `${last} (${hand})`;
+  return last;
+}
+
 function tagStyle(tag: string): string {
   switch (tag) {
     case "LIVE SIGNALS": return "bg-primary/15 text-primary";
@@ -64,6 +76,15 @@ function tagStyle(tag: string): string {
     case "HR WATCH": return "bg-orange-500/15 text-orange-400";
     default: return "bg-muted/30 text-muted-foreground";
   }
+}
+
+function parkFactorLabel(pf: number | null | undefined): { label: string; color: string } | null {
+  if (pf == null) return null;
+  if (pf >= 1.15) return { label: "Hitter+", color: "#f97316" };
+  if (pf >= 1.05) return { label: "Hit-lean", color: "#eab308" };
+  if (pf <= 0.85) return { label: "Pitcher+", color: "#3b82f6" };
+  if (pf <= 0.95) return { label: "Pitch-lean", color: "#60a5fa" };
+  return null;
 }
 
 export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGameId, onSelectGame }: MLBScheduleListProps) {
@@ -108,6 +129,11 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
               ) : (
                 <span className="text-[10px] text-muted-foreground whitespace-nowrap">{formatStartTime(game.startTime) ?? "TBD"}</span>
               )}
+              {(game.signalCount ?? 0) > 0 && (
+                <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-400 whitespace-nowrap">
+                  {game.signalCount}
+                </span>
+              )}
               {game.signalLocked && <span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0" />}
             </button>
           );
@@ -126,63 +152,97 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
         const homeAbbr = game.homeAbbr ?? "";
         const tags = game.gameCardTags ?? [];
         const topTag = tags[0] ?? null;
+        const pf = parkFactorLabel(game.parkFactor);
+        const weather = game.weather;
+        const hasWeatherInfo = weather && (weather.temperature != null || weather.windSpeed != null);
 
         return (
           <button
             key={game.gameId}
             data-testid={`chip-mlb-schedule-${game.gameId}`}
             onClick={() => onSelectGame(game.gameId)}
-            className={`w-full flex items-center gap-3 px-4 py-3 min-h-[44px] rounded-lg border text-left transition-all ${
+            className={`w-full px-4 py-3 min-h-[44px] rounded-lg border text-left transition-all ${
               isActive
                 ? "border-primary bg-primary/10 ring-1 ring-primary/30"
                 : "border-border/30 hover:border-primary/30 hover:bg-card/80"
             }`}
           >
-            <div className="flex items-center gap-1 min-w-0 shrink-0" style={{ width: "100px" }}>
-              <div className="text-xs font-bold text-foreground">{awayAbbr}</div>
-              {game.status === "live" && game.awayScore != null && game.homeScore != null ? (
-                <span className="text-[11px] font-mono font-bold text-foreground mx-1">
-                  {game.awayScore}–{game.homeScore}
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1 min-w-0 shrink-0" style={{ width: "100px" }}>
+                <div className="text-xs font-bold text-foreground">{awayAbbr}</div>
+                {game.status === "live" && game.awayScore != null && game.homeScore != null ? (
+                  <span className="text-[11px] font-mono font-bold text-foreground mx-1">
+                    {game.awayScore}–{game.homeScore}
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-muted-foreground mx-1">vs</span>
+                )}
+                <div className="text-xs font-bold text-foreground">{homeAbbr}</div>
+              </div>
+
+              {game.status === "live" && game.inning > 0 ? (
+                <span className="text-[10px] font-bold text-green-400 shrink-0 w-8 text-center">
+                  {game.isTopInning ? "▲" : "▼"}{game.inning}
                 </span>
               ) : (
-                <span className="text-[10px] text-muted-foreground mx-1">vs</span>
+                <span className="text-[10px] text-muted-foreground shrink-0 w-12 text-center">
+                  {startTimeFormatted ?? "TBD"}
+                </span>
               )}
-              <div className="text-xs font-bold text-foreground">{homeAbbr}</div>
+
+              <div className="text-[10px] text-muted-foreground truncate min-w-0 flex-1 hidden sm:block">
+                {pitcherLabel(game.pitcherAway, game.awayPitcherHand)} vs {pitcherLabel(game.pitcherHome, game.homePitcherHand)}
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0 ml-auto">
+                {pf && (
+                  <span className="text-[8px] font-semibold px-1.5 py-0.5 rounded" style={{ color: pf.color, background: `${pf.color}15` }}>
+                    {pf.label}
+                  </span>
+                )}
+                {topTag && (
+                  <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded ${tagStyle(topTag)}`}>
+                    {topTag}
+                  </span>
+                )}
+                {game.signalLocked ? (
+                  <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-green-500/15 text-green-400" data-testid={`signal-count-${game.gameId}`}>
+                    {game.signalCount ?? 0}
+                  </span>
+                ) : game.status === "live" ? (
+                  <span className="relative flex h-2 w-2" title="Monitoring">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
+                  </span>
+                ) : (
+                  <span className="text-[9px] text-muted-foreground/50">PRE</span>
+                )}
+              </div>
             </div>
 
-            {game.status === "live" && game.inning > 0 ? (
-              <span className="text-[10px] font-bold text-green-400 shrink-0 w-8 text-center">
-                {game.isTopInning ? "▲" : "▼"}{game.inning}
-              </span>
-            ) : (
-              <span className="text-[10px] text-muted-foreground shrink-0 w-12 text-center">
-                {startTimeFormatted ?? "TBD"}
-              </span>
+            {!isCompact && (hasWeatherInfo || game.venue) && (
+              <div className="flex items-center gap-2 mt-1.5 text-[9px] text-muted-foreground/60">
+                {game.venue && (
+                  <span className="truncate max-w-[140px]">{game.venue}</span>
+                )}
+                {weather?.temperature != null && (
+                  <span className="flex items-center gap-0.5 shrink-0">
+                    <Thermometer className="w-2.5 h-2.5" />
+                    {weather.temperature}°F
+                  </span>
+                )}
+                {weather?.windSpeed != null && weather.windSpeed > 0 && (
+                  <span className="flex items-center gap-0.5 shrink-0">
+                    <Wind className="w-2.5 h-2.5" />
+                    {weather.windSpeed} mph
+                    {weather.windDirection && <span className="text-muted-foreground/40">{weather.windDirection}</span>}
+                  </span>
+                )}
+                {game.isIndoors && (
+                  <span className="text-muted-foreground/40">Dome</span>
+                )}
+              </div>
             )}
-
-            <div className="text-[10px] text-muted-foreground truncate min-w-0 flex-1 hidden sm:block">
-              {lastName(game.pitcherAway)} vs {lastName(game.pitcherHome)}
-            </div>
-
-            <div className="flex items-center gap-1.5 shrink-0 ml-auto">
-              {topTag && (
-                <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded ${tagStyle(topTag)}`}>
-                  {topTag}
-                </span>
-              )}
-              {game.signalLocked ? (
-                <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-green-500/15 text-green-400" data-testid={`signal-count-${game.gameId}`}>
-                  {game.signalCount ?? 0}
-                </span>
-              ) : game.status === "live" ? (
-                <span className="relative flex h-2 w-2" title="Monitoring">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
-                </span>
-              ) : (
-                <span className="text-[9px] text-muted-foreground/50">PRE</span>
-              )}
-            </div>
           </button>
         );
       })}
