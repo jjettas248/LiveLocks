@@ -446,16 +446,16 @@ export const FORM_THRESHOLDS = {
 export const HR_MIN_QUALIFYING_FACTORS = 2;
 
 export const MLB_MARKET_MIN_GAP: Record<MLBMarket, number> = {
-  hits:               0.25,
-  total_bases:        0.35,
-  pitcher_strikeouts: 0.75,
-  hits_allowed:       0.80,
-  walks_allowed:      0.60,
-  home_runs:          0.10,
-  hrr:                0.60,
-  pitcher_outs:       1.00,
-  batter_strikeouts:  0.25,
-  hr_allowed:         0.10,
+  hits:               0.10,
+  total_bases:        0.15,
+  pitcher_strikeouts: 0.30,
+  hits_allowed:       0.30,
+  walks_allowed:      0.20,
+  home_runs:          0.05,
+  hrr:                0.20,
+  pitcher_outs:       0.50,
+  batter_strikeouts:  0.05,
+  hr_allowed:         0.05,
 };
 
 export type SignalConfidenceTier = "ELITE" | "STRONG" | "SOLID" | "WATCHLIST" | "NO_SIGNAL";

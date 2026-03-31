@@ -1073,7 +1073,7 @@ export async function registerRoutes(
     const updatedAt = entry?.updatedAt ?? 0;
     const cachedIsDegraded = entry?.isDegraded ?? false;
 
-    const SIGNAL_FRESHNESS_MS = 120_000;
+    const SIGNAL_FRESHNESS_MS = 300_000;
     if (updatedAt > 0 && Date.now() - updatedAt > SIGNAL_FRESHNESS_MS) {
       const staleAge = Math.round((Date.now() - updatedAt) / 1000);
       console.warn(`[MLB signals] game=${gameId} — engine data ${staleAge}s old (>${SIGNAL_FRESHNESS_MS / 1000}s limit); returning no_lines`);
@@ -1238,19 +1238,16 @@ export async function registerRoutes(
     try {
       const allSignals: any[] = [];
       const cachedLiveGames = mlbLiveGamesCache.get("games");
-      const liveGameIds = cachedLiveGames
-        ? cachedLiveGames.games.filter((g: any) => g.status === "live").map((g: any) => g.gameId)
-        : [];
 
       let totalGenerated = 0;
       let totalDropped = 0;
+      let totalEdgeCacheEntries = 0;
       const feedTagDist: Record<string, number> = {};
 
-      for (const gid of liveGameIds) {
-        const edgeEntry = mlbEdgeCache.get(gid);
-        if (!edgeEntry) continue;
+      for (const [gid, edgeEntry] of mlbEdgeCache.entries()) {
+        totalEdgeCacheEntries++;
 
-        const FEED_FRESHNESS_MS = 120_000;
+        const FEED_FRESHNESS_MS = 300_000;
         if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) {
           totalDropped++;
           continue;
@@ -1374,7 +1371,7 @@ export async function registerRoutes(
         return bEdge - aEdge;
       });
 
-      console.log(`[MLB EDGE-FEED] total=${allSignals.length} generated=${totalGenerated} droppedStale=${totalDropped} feedTags=${JSON.stringify(feedTagDist)}`);
+      console.log(`[MLB EDGE-FEED] edgeCacheEntries=${totalEdgeCacheEntries} total=${allSignals.length} generated=${totalGenerated} droppedStale=${totalDropped} feedTags=${JSON.stringify(feedTagDist)}`);
 
       return res.json({ signals: allSignals });
     } catch (e: any) {
@@ -1390,13 +1387,10 @@ export async function registerRoutes(
       const hrWatchlist: any[] = [];
 
       const cachedLiveGames = mlbLiveGamesCache.get("games");
-      const liveGameIds = cachedLiveGames
-        ? cachedLiveGames.games.filter((g: any) => g.status === "live").map((g: any) => g.gameId)
-        : [];
 
-      for (const gid of liveGameIds) {
-        const edgeEntry = mlbEdgeCache.get(gid);
-        if (!edgeEntry) continue;
+      for (const [gid, edgeEntry] of mlbEdgeCache.entries()) {
+        const FEED_FRESHNESS_MS = 300_000;
+        if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) continue;
 
         const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);
         const rawOutputLookup = new Map((edgeEntry.outputs ?? []).map((o: any) => [`${o.playerId}_${o.market}`, o]));
@@ -5394,7 +5388,7 @@ export function registerAnalyticsRoutes(app: Express): void {
 
       const mlbSignals: any[] = [];
       for (const [, entry] of mlbEdgeCache.entries()) {
-        const FRESHNESS_MS = 120_000;
+        const FRESHNESS_MS = 300_000;
         if (entry.updatedAt > 0 && Date.now() - entry.updatedAt > FRESHNESS_MS) continue;
         const qs = entry.qualifiedSignals ?? [];
         for (const sig of qs) {
@@ -5484,7 +5478,7 @@ export function registerAnalyticsRoutes(app: Express): void {
       let nbaElite = 0, ncaabElite = 0, mlbElite = 0, totalLive = 0;
 
       for (const [, entry] of mlbEdgeCache.entries()) {
-        const FRESHNESS_MS = 120_000;
+        const FRESHNESS_MS = 300_000;
         if (entry.updatedAt > 0 && Date.now() - entry.updatedAt > FRESHNESS_MS) continue;
         const qs = entry.qualifiedSignals ?? [];
         for (const sig of qs) {

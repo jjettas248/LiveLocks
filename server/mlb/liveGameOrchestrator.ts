@@ -489,8 +489,8 @@ export class LiveGameOrchestrator {
   private sanitizeUserFacingFields(signal: MLBQualifiedSignal): void {
     const clean = (arr: string[]): string[] =>
       arr
-        .filter(s => !MLBLiveGameOrchestrator.JARGON_REMOVE.has(s))
-        .map(s => MLBLiveGameOrchestrator.JARGON_MAP[s] ?? s);
+        .filter(s => !LiveGameOrchestrator.JARGON_REMOVE.has(s))
+        .map(s => LiveGameOrchestrator.JARGON_MAP[s] ?? s);
 
     signal.reasons = clean(signal.reasons);
     signal.badges = clean(signal.badges);

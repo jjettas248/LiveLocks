@@ -244,19 +244,25 @@ function checkSuppression(
   // ── Composite scoring gate ────────────────────────────────────────────────
   // Tier 3 (HR, HRR) requires a higher composite threshold than Tier 1.
   // Pitcher markets are excluded from this gate (no contact quality input).
-  const isPitcherMarket = market === "pitcher_strikeouts" || market === "hits_allowed" || market === "walks_allowed";
+  // When contact data is missing (degraded), relax the gate — the low composite
+  // is a data gap, not a signal quality issue.
+  const isPitcherMarket = market === "pitcher_strikeouts" || market === "pitcher_outs" || market === "hits_allowed" || market === "walks_allowed" || market === "hr_allowed";
   if (!isPitcherMarket) {
     const composite = compositeHitterScore(input);
-    if (TIER3_MARKETS.has(market) && composite < COMPOSITE_TIER3_THRESHOLD) {
+    const hasContactData = input.contactQuality.exitVelocity !== null || input.contactQuality.hardHitRateSeason !== null;
+    const degradedMultiplier = hasContactData ? 1.0 : 0.5;
+    const tier3Gate = COMPOSITE_TIER3_THRESHOLD * degradedMultiplier;
+    const tier1Gate = COMPOSITE_TIER1_THRESHOLD * degradedMultiplier;
+    if (TIER3_MARKETS.has(market) && composite < tier3Gate) {
       return {
         suppressed: true,
-        reason: `${market} requires composite score ≥ ${COMPOSITE_TIER3_THRESHOLD} (got ${composite.toFixed(2)})`,
+        reason: `${market} requires composite score ≥ ${tier3Gate.toFixed(2)} (got ${composite.toFixed(2)})`,
       };
     }
-    if (TIER1_MARKETS.has(market) && composite < COMPOSITE_TIER1_THRESHOLD) {
+    if (TIER1_MARKETS.has(market) && composite < tier1Gate) {
       return {
         suppressed: true,
-        reason: `${market} requires composite score ≥ ${COMPOSITE_TIER1_THRESHOLD} (got ${composite.toFixed(2)})`,
+        reason: `${market} requires composite score ≥ ${tier1Gate.toFixed(2)} (got ${composite.toFixed(2)})`,
       };
     }
   }
