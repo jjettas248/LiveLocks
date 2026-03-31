@@ -153,22 +153,46 @@ type MLBSignal = {
     outcome: string | null;
   } | null;
   alreadyHit?: boolean;
+  actionable?: boolean;
+  stale?: boolean;
+  watchlist?: boolean;
+  bookImplied?: number | null;
   pitchMix?: PitchMixEntry[] | null;
   badges?: string[];
   riskFlags?: string[];
   drivers?: Record<string, number>;
   overOdds?: number | null;
   underOdds?: number | null;
+  priorABResults?: ABResultEntry[];
 };
 
 type SignalState = "actionable" | "already_hit" | "watchlist" | "stale";
 
 function deriveSignalState(sig: MLBSignal): SignalState {
+  if (sig.alreadyHit === true) return "already_hit";
+  if (sig.stale === true) return "stale";
+  if (sig.watchlist === true) return "watchlist";
+  if (sig.actionable === true) return "actionable";
   if (sig.alreadyHit && sig.recommendedSide === "OVER") return "already_hit";
   const age = sig.signalTimestamp ? Date.now() - sig.signalTimestamp : 0;
   if (age > 180_000) return "stale";
   if (sig.confidenceTier === "WATCHLIST" || (sig.signalScore ?? 0) < 40) return "watchlist";
   return "actionable";
+}
+
+function confidenceTierColor(tier: string | null | undefined): string {
+  if (!tier) return "bg-muted/30 text-muted-foreground";
+  if (tier === "ELITE") return "bg-yellow-500/20 text-yellow-400";
+  if (tier === "STRONG") return "bg-green-500/20 text-green-400";
+  if (tier === "SOLID") return "bg-teal-500/20 text-teal-400";
+  return "bg-muted/30 text-muted-foreground";
+}
+
+function ttoLabel(n: number): string {
+  if (n === 1) return "First look at lineup";
+  if (n === 2) return "Second time through order";
+  if (n === 3) return "Third time through — elevated risk";
+  return `${n}th time through — high fatigue`;
 }
 
 const PITCH_LABELS: Record<string, string> = {
@@ -303,8 +327,7 @@ function edgeColor(edge: number | null): string {
   if (edge == null) return "text-muted-foreground";
   if (edge >= 8) return "text-green-400";
   if (edge >= 5) return "text-yellow-400";
-  if (edge >= 0) return "text-muted-foreground/70";
-  return "text-red-400";
+  return "text-muted-foreground/70";
 }
 
 function edgeBg(edge: number | null): string {
@@ -439,10 +462,19 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
   const riskFlags = sig.riskFlags ?? [];
   const drivers = sig.drivers as Record<string, number> | undefined;
 
+  const sideAccent = sig.recommendedSide === "OVER" ? "border-l-green-500" : sig.recommendedSide === "UNDER" ? "border-l-blue-500" : "border-l-muted";
+  const cardBg = state === "already_hit"
+    ? "bg-emerald-500/5"
+    : state === "stale"
+    ? "bg-card/40"
+    : state === "watchlist"
+    ? "bg-secondary/20"
+    : "bg-card";
+
   return (
     <div
       data-testid={`card-mlb-signal-${sig.playerId}-${sig.market}`}
-      className={`rounded-xl border p-4 sm:p-5 space-y-3 transition-all ${stateStyles} ${glowClass || heatGlow(form)} ${hasPositiveEdge ? edgeBg(sig.edge) : ""} border-border/40 ${onClickThrough ? "cursor-pointer hover:border-primary/40 active:scale-[0.99]" : ""}`}
+      className={`rounded-xl border border-l-4 ${sideAccent} p-4 sm:p-5 space-y-3 transition-all ${stateStyles} ${glowClass || heatGlow(form)} ${cardBg} border-border/40 ${onClickThrough ? "cursor-pointer hover:border-primary/40 active:scale-[0.99]" : ""} w-full`}
       onClick={() => onClickThrough?.(sig)}
     >
       {state === "already_hit" && (
@@ -483,11 +515,7 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           {sig.confidenceTier && sig.confidenceTier !== "WATCHLIST" && (
-            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${
-              sig.confidenceTier === "ELITE" ? "bg-green-500/20 text-green-400" :
-              sig.confidenceTier === "STRONG" ? "bg-yellow-500/20 text-yellow-400" :
-              "bg-blue-500/15 text-blue-400"
-            }`}>{sig.confidenceTier}</span>
+            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${confidenceTierColor(sig.confidenceTier)}`}>{sig.confidenceTier}</span>
           )}
           <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${sig.recommendedSide === "OVER" ? "bg-green-500/20 text-green-400" : sig.recommendedSide === "UNDER" ? "bg-blue-500/20 text-blue-400" : "bg-muted/30 text-muted-foreground"}`}>
             {sig.recommendedSide}
@@ -502,7 +530,7 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
         </div>
         <div>
           <div className="text-[10px] text-muted-foreground">Edge</div>
-          <div className={`text-base sm:text-lg font-bold ${hasPositiveEdge ? "text-green-400" : edgeVal < 0 ? "text-red-400/60" : "text-muted-foreground"}`}>
+          <div className={`text-base sm:text-lg font-bold ${hasPositiveEdge ? "text-green-400" : "text-muted-foreground"}`}>
             {sig.edge != null ? `${edgeVal > 0 ? "+" : ""}${edgeVal.toFixed(1)}%` : "—"}
           </div>
         </div>
@@ -516,6 +544,14 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
         </div>
       </div>
 
+      {(sig.overOdds != null || sig.underOdds != null || sig.bookImplied != null) && (
+        <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+          {sig.overOdds != null && <span>O {formatOdds(sig.overOdds)}</span>}
+          {sig.underOdds != null && <span>U {formatOdds(sig.underOdds)}</span>}
+          {sig.bookImplied != null && <span>Book Implied: {sig.bookImplied.toFixed(1)}%</span>}
+        </div>
+      )}
+
       {(badges.length > 0 || riskFlags.length > 0) && (
         <div className="flex flex-wrap gap-1">
           {badges.map((b, i) => (
@@ -524,8 +560,8 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
             </span>
           ))}
           {riskFlags.map((f, i) => (
-            <span key={`rf-${i}`} className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20 font-semibold">
-              {f}
+            <span key={`rf-${i}`} className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-semibold">
+              ⚠ {f}
             </span>
           ))}
         </div>
@@ -700,7 +736,7 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
           {onAddToSlip && (state === "actionable" || state === "already_hit") && (
             <button
               data-testid={`button-mlb-slip-${sig.playerId}-${sig.market}`}
-              className="text-xs px-3 py-1.5 rounded-lg border border-green-500/30 bg-green-500/10 hover:bg-green-500/20 transition-colors text-green-400 hover:text-green-300 font-semibold"
+              className="text-xs px-3 py-2 min-h-[44px] rounded-lg border border-green-500/30 bg-green-500/10 hover:bg-green-500/20 transition-colors text-green-400 hover:text-green-300 font-semibold"
               onClick={(e) => { e.stopPropagation(); onAddToSlip(sig); }}
             >
               + Slip
@@ -708,7 +744,7 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
           )}
           <button
             data-testid={`button-mlb-tweet-${sig.playerId}-${sig.market}`}
-            className="text-xs px-3 py-1.5 rounded-lg border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 transition-colors text-blue-400 hover:text-blue-300 font-semibold"
+            className="text-xs px-3 py-2 min-h-[44px] rounded-lg border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 transition-colors text-blue-400 hover:text-blue-300 font-semibold"
             onClick={(e) => {
               e.stopPropagation();
               const tweet = generateTweet(sig, isElite);
@@ -720,7 +756,7 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
           </button>
           <button
             data-testid={`button-mlb-copy-${sig.playerId}-${sig.market}`}
-            className="text-xs px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+            className="text-xs px-2.5 py-2 min-h-[44px] rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
             onClick={(e) => {
               e.stopPropagation();
               const tweet = generateTweet(sig, isElite);
@@ -785,10 +821,10 @@ function BatterCard({ player, signals, game, isElite, onSelect }: {
         glowEligible ? sideColor || "border-green-500/60 shadow-[0_0_10px_rgba(34,197,94,0.2)]" : "border-border/30 hover:border-primary/40"
       }`}
     >
-      <div className="px-3 py-2 space-y-1.5">
+      <div className="px-3 py-2.5 space-y-1.5">
         <div className="flex items-center justify-between gap-2">
           <div
-            className="flex items-center gap-1.5 min-w-0 cursor-pointer"
+            className="flex items-center gap-1.5 min-w-0 cursor-pointer min-h-[44px] py-1"
             onClick={(e) => { e.stopPropagation(); setShowDetail(!showDetail); }}
           >
             <span className="text-xs font-bold text-foreground truncate">{player.playerName}</span>
@@ -797,7 +833,7 @@ function BatterCard({ player, signals, game, isElite, onSelect }: {
               <span className={`text-[9px] font-bold shrink-0 ${heatColor(form)}`}>{heatEmoji(form)}</span>
             )}
             {bestTier && bestTier !== "WATCHLIST" && (
-              <span className={`text-[8px] font-black px-1 py-0.5 rounded shrink-0 ${bestTier === "ELITE" ? "bg-green-500/20 text-green-400" : bestTier === "STRONG" ? "bg-yellow-500/20 text-yellow-400" : "bg-blue-500/15 text-blue-400"}`}>
+              <span className={`text-[8px] font-black px-1 py-0.5 rounded shrink-0 ${confidenceTierColor(bestTier)}`}>
                 {bestTier}
               </span>
             )}
@@ -814,7 +850,7 @@ function BatterCard({ player, signals, game, isElite, onSelect }: {
             )}
             <button
               data-testid={`btn-calc-${player.playerId}`}
-              className="text-[8px] px-1.5 py-0.5 rounded bg-primary/15 text-primary font-bold hover:bg-primary/25 transition-colors"
+              className="text-[9px] px-2.5 py-1.5 min-h-[44px] rounded bg-primary/15 text-primary font-bold hover:bg-primary/25 transition-colors"
               onClick={(e) => { e.stopPropagation(); onSelect(); }}
             >
               CALC
@@ -986,7 +1022,7 @@ function MlbLiveInner() {
   const [mlbUpgradeNeeded, setMlbUpgradeNeeded] = useState(false);
   const [inningFeedTab, setInningFeedTab] = useState<3 | 5 | 7>(3);
   const gameDetailRef = useRef<HTMLDivElement>(null);
-  const [mlbSlipPicks, setMlbSlipPicks] = useState<Array<{ playerId: string; playerName: string; market: string; line: number; side: string; sportsbook: string; edge: number | null; enginePct: number; gameId: string }>>([]);
+  const [mlbSlipPicks, setMlbSlipPicks] = useState<Array<{ playerId: string; playerName: string; market: string; line: number; side: string; sportsbook: string; edge: number | null; enginePct: number; gameId: string; overOdds?: number | null; underOdds?: number | null }>>([]);
 
   const handleAddToSlip = (sig: MLBSignal) => {
     if (mlbSlipPicks.length >= 10) return;
@@ -997,6 +1033,7 @@ function MlbLiveInner() {
       line: sig.bookLine ?? 0, side: sig.recommendedSide,
       sportsbook: sig.sportsbook ?? "draftkings", edge: sig.edge,
       enginePct: sig.enginePct, gameId: sig.gameId ?? "",
+      overOdds: sig.overOdds, underOdds: sig.underOdds,
     }]);
   };
 
@@ -1005,6 +1042,13 @@ function MlbLiveInner() {
       setSelectedGameId(sig.gameId);
       setMainTab("games");
       if (sig.market) setSelectedMarket(sig.market);
+      const matchedPlayer = players.find(p => String(p.playerId) === String(sig.playerId));
+      if (matchedPlayer) {
+        setSelectedPlayer(matchedPlayer);
+      }
+      if (sig.overOdds != null && sig.underOdds != null && sig.bookLine != null && sig.sportsbook) {
+        setSelectedLine({ book: sig.sportsbook, line: sig.bookLine, overOdds: sig.overOdds, underOdds: sig.underOdds });
+      }
       setTimeout(() => {
         gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 150);
@@ -1230,7 +1274,7 @@ function MlbLiveInner() {
                 key={tab.key}
                 data-testid={`tab-mlb-${tab.key}`}
                 onClick={() => { setMainTab(tab.key); if (tab.key !== "games") setSelectedGameId(null); }}
-                className={`px-4 py-2 text-xs font-semibold rounded-full border transition-all ${
+                className={`px-4 py-2.5 min-h-[44px] text-xs font-semibold rounded-full border transition-all ${
                   active
                     ? isOrange ? "bg-orange-500 text-white border-orange-500" : "bg-primary text-primary-foreground border-primary"
                     : isOrange ? "border-orange-500/40 text-orange-400 hover:text-orange-300 hover:border-orange-500/60" : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
@@ -1244,7 +1288,7 @@ function MlbLiveInner() {
         <button
           data-testid="button-mlb-refresh"
           onClick={handleRefresh}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-border/60 text-muted-foreground hover:text-foreground hover:border-primary/40 transition-all"
+          className="flex items-center gap-1.5 px-3 py-2.5 min-h-[44px] text-xs font-medium rounded-lg border border-border/60 text-muted-foreground hover:text-foreground hover:border-primary/40 transition-all"
         >
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
           Refresh
@@ -1333,7 +1377,7 @@ function MlbLiveInner() {
                 key={sub}
                 data-testid={`tab-feed-${sub}`}
                 onClick={() => setLiveFeedSub(sub)}
-                className={`px-3.5 py-1.5 text-xs font-semibold rounded-full border transition-all ${
+                className={`px-3.5 py-2.5 min-h-[44px] text-xs font-semibold rounded-full border transition-all ${
                   liveFeedSub === sub ? "bg-background text-foreground border-primary/50 shadow-sm" : "border-border/50 text-muted-foreground hover:text-foreground"
                 }`}
               >
@@ -1350,7 +1394,7 @@ function MlbLiveInner() {
             if (liveFeedSub === "all") {
               return (
                 <div className="space-y-6">
-                  <TopPlays signals={filtered} onPlayerClick={(gameId, _playerId) => { setSelectedGameId(gameId); setMainTab("games"); setTimeout(() => gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 150); }} />
+                  <TopPlays signals={filtered} onPlayerClick={(gameId, _playerId) => { setSelectedGameId(gameId); setMainTab("games"); setTimeout(() => gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 150); }} onAddToSlip={(sig) => handleAddToSlip(sig)} />
                   <LiveBoard signals={filtered} onPlayerClick={(gameId, _playerId) => { setSelectedGameId(gameId); setMainTab("games"); setTimeout(() => gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 150); }} />
                 </div>
               );
@@ -1397,11 +1441,17 @@ function MlbLiveInner() {
                 <div key={`${pick.playerId}-${pick.market}`} className="flex items-center justify-between text-xs py-1.5 px-2 rounded-lg bg-secondary/40 border border-border/30">
                   <div className="min-w-0">
                     <span className="font-semibold text-foreground truncate block">{pick.playerName}</span>
-                    <span className="text-muted-foreground">{MARKET_LABELS[pick.market] ?? pick.market} {pick.side} {pick.line}</span>
+                    <div className="flex items-center gap-1.5 text-muted-foreground flex-wrap">
+                      <span className={`font-bold ${pick.side === "OVER" ? "text-green-400" : "text-blue-400"}`}>{pick.side}</span>
+                      <span>{MARKET_LABELS[pick.market] ?? pick.market} {pick.line}</span>
+                      {pick.edge != null && pick.edge > 0 && <span className="text-green-400 font-semibold">+{pick.edge.toFixed(1)}%</span>}
+                      {pick.overOdds != null && pick.side === "OVER" && <span>({formatOdds(pick.overOdds)})</span>}
+                      {pick.underOdds != null && pick.side === "UNDER" && <span>({formatOdds(pick.underOdds)})</span>}
+                    </div>
                   </div>
                   <button
                     data-testid={`button-remove-slip-${idx}`}
-                    className="text-muted-foreground hover:text-red-400 shrink-0 ml-2 p-1"
+                    className="text-muted-foreground hover:text-red-400 shrink-0 ml-2 p-2 min-w-[44px] min-h-[44px] flex items-center justify-center"
                     onClick={() => setMlbSlipPicks(prev => prev.filter((_, i) => i !== idx))}
                   >✕</button>
                 </div>
@@ -1410,7 +1460,7 @@ function MlbLiveInner() {
             <div className="flex gap-2">
               <button
                 data-testid="button-copy-mlb-slip"
-                className="flex-1 text-xs py-2 rounded-lg border border-border hover:bg-muted transition-colors text-foreground font-semibold"
+                className="flex-1 text-xs py-3 min-h-[44px] rounded-lg border border-border hover:bg-muted transition-colors text-foreground font-semibold"
                 onClick={() => {
                   const text = mlbSlipPicks.map(p => `${p.playerName} — ${MARKET_LABELS[p.market] ?? p.market} ${p.side} ${p.line}`).join("\n");
                   navigator.clipboard?.writeText(text);
@@ -1420,7 +1470,7 @@ function MlbLiveInner() {
                 data-testid="link-mlb-slip-dk"
                 href="https://sportsbook.draftkings.com/leagues/baseball/mlb?category=player-props"
                 target="_blank" rel="noopener noreferrer"
-                className="flex-1 text-xs py-2 rounded-lg bg-[#1a6f3c] hover:bg-[#1a8f4c] text-white text-center font-semibold transition-colors"
+                className="flex-1 text-xs py-3 min-h-[44px] rounded-lg bg-[#1a6f3c] hover:bg-[#1a8f4c] text-white text-center font-semibold transition-colors"
                 onClick={() => {
                   const text = mlbSlipPicks.map(p => `${p.playerName} — ${MARKET_LABELS[p.market] ?? p.market} ${p.side} ${p.line}`).join("\n");
                   navigator.clipboard?.writeText(text);
@@ -1468,11 +1518,7 @@ function HREdgeCard({ edge }: { edge: any }) {
           <span className="text-[10px] text-muted-foreground">{edge.team}</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-            edge.confidenceTier === "ELITE" ? "bg-green-500/20 text-green-400" :
-            edge.confidenceTier === "STRONG" ? "bg-yellow-500/20 text-yellow-400" :
-            "bg-blue-500/20 text-blue-400"
-          }`}>{edge.confidenceTier}</span>
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${confidenceTierColor(edge.confidenceTier)}`}>{edge.confidenceTier}</span>
           <span className="text-muted-foreground text-xs">{expanded ? "▾" : "▸"}</span>
         </div>
       </div>
@@ -1496,7 +1542,7 @@ function HREdgeCard({ edge }: { edge: any }) {
         </div>
         <div className="bg-secondary/30 rounded-lg p-1.5">
           <div className="text-[8px] text-muted-foreground">Edge</div>
-          <div className={`text-xs font-bold ${hasPositiveEdge ? "text-green-400" : "text-red-400/60"}`}>
+          <div className={`text-xs font-bold ${hasPositiveEdge ? "text-green-400" : "text-muted-foreground"}`}>
             {edgeVal > 0 ? "+" : ""}{edgeVal.toFixed(1)}%
           </div>
         </div>
@@ -1652,11 +1698,18 @@ function HRRadarSection({ isElite }: { isElite: boolean }) {
                   <span className="text-xs font-bold text-foreground">{w.playerName}</span>
                   <span className="text-[10px] text-orange-400">{w.team}</span>
                 </div>
-                <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                  <span>HR Prob: {w.hrProbability?.toFixed(1)}%</span>
-                  {w.hardHitEvents > 0 && <span>• {w.hardHitEvents} hard hits</span>}
+                <div className="flex items-center gap-2 text-[10px] text-muted-foreground flex-wrap">
+                  {w.hardHitEvents > 0 && <span>{w.hardHitEvents} hard hit event{w.hardHitEvents !== 1 ? "s" : ""}</span>}
+                  {w.parkFactor != null && w.parkFactor > 1 && <span>• HR-friendly park</span>}
                   <span>• Wind: {w.windFactor}</span>
                 </div>
+                {Array.isArray(w.reasons) && w.reasons.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {w.reasons.slice(0, 3).map((r, i) => (
+                      <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-300 border border-orange-500/15">{r}</span>
+                    ))}
+                  </div>
+                )}
                 {Array.isArray(w.badges) && w.badges.length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-1">
                     {w.badges.map(b => (
@@ -1745,10 +1798,10 @@ function PitcherCard({ game, side, signals, isElite }: {
                     {ctx.pitchCount}
                   </div>
                 </div>
-                <div className="bg-secondary/30 rounded-lg p-1.5 text-center">
-                  <div className="text-[8px] text-muted-foreground">Lineup Pass</div>
-                  <div className={`text-xs font-bold ${ctx.timesThroughOrder >= 3 ? "text-red-400" : "text-foreground"}`}>
-                    {ordinal(ctx.timesThroughOrder)}
+                <div className="bg-secondary/30 rounded-lg p-1.5 text-center col-span-2">
+                  <div className="text-[8px] text-muted-foreground">Times Through</div>
+                  <div className={`text-[10px] font-bold ${ctx.timesThroughOrder >= 3 ? "text-amber-400" : "text-foreground"}`}>
+                    {ttoLabel(ctx.timesThroughOrder)}
                   </div>
                 </div>
                 {ctx.avgVelocity != null && (
@@ -1836,7 +1889,7 @@ function TeamBatterSection({ teamAbbr, pitcher, players, signals, game, isElite,
     <div className="rounded-xl border border-border/30 bg-card/50 overflow-hidden" data-testid={`section-team-${side}`}>
       <button
         data-testid={`btn-toggle-team-${side}`}
-        className="w-full flex items-center justify-between px-3 py-2 hover:bg-secondary/20 transition-colors"
+        className="w-full flex items-center justify-between px-3 py-3 min-h-[44px] hover:bg-secondary/20 transition-colors"
         onClick={() => setCollapsed(!collapsed)}
       >
         <div className="flex items-center gap-2">
@@ -1908,7 +1961,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
   return (
     <div className="space-y-3">
       <button data-testid="button-back-to-games" onClick={onBack}
-        className="flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 transition-colors font-medium">
+        className="flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 transition-colors font-medium min-h-[44px] py-2">
         ← Back to Games
       </button>
 
@@ -1949,7 +2002,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
           {game.pitcherContext && (
             <>
               <span className={game.pitcherContext.pitchCount >= 85 ? "text-red-400 font-semibold" : ""}>{game.pitcherContext.pitchCount}P</span>
-              <span className={game.pitcherContext.timesThroughOrder >= 3 ? "text-red-400 font-semibold" : ""}>{passLabel(game.pitcherContext.timesThroughOrder)}</span>
+              <span className={game.pitcherContext.timesThroughOrder >= 3 ? "text-amber-400 font-semibold" : ""}>{passLabel(game.pitcherContext.timesThroughOrder)}</span>
               {game.pitcherContext.avgVelocity != null && <span>{game.pitcherContext.avgVelocity.toFixed(1)}mph</span>}
               {game.pitcherContext.velocityDrop != null && game.pitcherContext.velocityDrop > 0 && (
                 <span className="text-red-400 font-semibold">-{game.pitcherContext.velocityDrop.toFixed(1)}</span>
@@ -1978,7 +2031,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
           )}
         </div>
         <button data-testid="button-game-refresh" onClick={onRefresh}
-          className="text-[10px] px-2 py-0.5 rounded border border-border/50 text-muted-foreground hover:text-foreground transition-colors">
+          className="text-[10px] px-3 py-2 min-h-[44px] rounded border border-border/50 text-muted-foreground hover:text-foreground transition-colors">
           Refresh
         </button>
       </div>
@@ -1994,7 +2047,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
             {signals.length > 0 && (
               <button
                 data-testid="button-tweet-all-signals"
-                className="text-[10px] px-2.5 py-1 rounded-lg border border-blue-500/30 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 transition-colors font-semibold"
+                className="text-[10px] px-3 py-2 min-h-[44px] rounded-lg border border-blue-500/30 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 transition-colors font-semibold"
                 onClick={() => {
                   const tweetParts = signals
                     .sort((a, b) => (b.enginePct ?? 0) - (a.enginePct ?? 0))
@@ -2027,7 +2080,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
                   >
                     <div className="flex items-center justify-between">
                       {tier && tier !== "WATCHLIST" && (
-                        <span className={`text-[7px] font-black px-1 py-0.5 rounded ${tier === "ELITE" ? "bg-green-500/20 text-green-400" : tier === "STRONG" ? "bg-yellow-500/20 text-yellow-400" : "bg-blue-500/15 text-blue-400"}`}>
+                        <span className={`text-[7px] font-black px-1 py-0.5 rounded ${confidenceTierColor(tier)}`}>
                           {tier}
                         </span>
                       )}
@@ -2170,7 +2223,7 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
   return (
     <div className="space-y-4">
       <button data-testid="button-back-to-game" onClick={onBack}
-        className="flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 transition-colors font-medium">
+        className="flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 transition-colors font-medium min-h-[44px] py-2">
         ← Back to Game
       </button>
 
@@ -2399,7 +2452,7 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
           <div className="flex gap-1.5 flex-wrap">
             {BATTER_MARKETS.map(m => (
               <button key={m.value} data-testid={`button-market-${m.value}`} onClick={() => setSelectedMarket(m.value)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+                className={`px-3 py-2.5 min-h-[44px] text-xs font-medium rounded-full border transition-colors ${
                   selectedMarket === m.value ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
                 }`}>{m.label}</button>
             ))}
@@ -2408,7 +2461,7 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
           <div className="flex gap-1.5 flex-wrap">
             {PITCHER_MARKETS.map(m => (
               <button key={m.value} data-testid={`button-market-${m.value}`} onClick={() => setSelectedMarket(m.value)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+                className={`px-3 py-2.5 min-h-[44px] text-xs font-medium rounded-full border transition-colors ${
                   selectedMarket === m.value ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
                 }`}>{m.label}</button>
             ))}
@@ -2448,7 +2501,7 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
               return (
                 <button key={sb} type="button" data-testid={`button-mlb-odds-${sb}`}
                   onClick={() => { setSelectedLine({ book: sb, line: o.line, overOdds: o.overOdds, underOdds: o.underOdds }); setCalcResult(null); }}
-                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg border text-xs transition-all ${
+                  className={`w-full flex items-center justify-between px-3 py-3 min-h-[44px] rounded-lg border text-xs transition-all ${
                     isActive ? "border-primary bg-primary/10" : "border-border/50 bg-secondary/30 hover:bg-secondary/60"
                   }`}>
                   <span className="font-semibold text-foreground">{SPORTSBOOK_LABELS[sb] ?? sb}</span>
@@ -2491,7 +2544,7 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
         )}
         <button data-testid="button-calculate-mlb" disabled={!canCalculate || calcMutation.isPending}
           onClick={() => calcMutation.mutate()}
-          className="w-full h-10 rounded-lg bg-primary text-primary-foreground font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50 transition-opacity">
+          className="w-full min-h-[48px] rounded-lg bg-primary text-primary-foreground font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50 transition-opacity">
           {calcMutation.isPending ? (
             <><div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />Calculating…</>
           ) : manualMode ? "Calculate Manual Projection" : "Calculate Probability"}

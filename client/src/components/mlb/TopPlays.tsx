@@ -1,4 +1,5 @@
-import { Flame, TrendingUp, Target, Eye, ChevronRight } from "lucide-react";
+import { useState } from "react";
+import { Flame, TrendingUp, Target, Eye, ChevronRight, ChevronDown, Plus } from "lucide-react";
 
 type MLBSignal = {
   playerId: string;
@@ -41,9 +42,9 @@ const MARKET_LABELS: Record<string, string> = {
 };
 
 const TIER_COLORS: Record<string, { bg: string; border: string; text: string; badge: string }> = {
-  ELITE: { bg: "rgba(0,212,170,0.08)", border: "rgba(0,212,170,0.4)", text: "#00d4aa", badge: "ELITE" },
-  STRONG: { bg: "rgba(250,204,21,0.08)", border: "rgba(250,204,21,0.4)", text: "#facc15", badge: "STRONG" },
-  SOLID: { bg: "rgba(56,189,248,0.08)", border: "rgba(56,189,248,0.4)", text: "#38bdf8", badge: "EDGE" },
+  ELITE: { bg: "rgba(234,179,8,0.08)", border: "rgba(234,179,8,0.4)", text: "#eab308", badge: "ELITE" },
+  STRONG: { bg: "rgba(34,197,94,0.08)", border: "rgba(34,197,94,0.4)", text: "#22c55e", badge: "STRONG" },
+  SOLID: { bg: "rgba(20,184,166,0.08)", border: "rgba(20,184,166,0.4)", text: "#14b8a6", badge: "SOLID" },
   WATCHLIST: { bg: "rgba(113,113,122,0.06)", border: "rgba(113,113,122,0.3)", text: "#71717a", badge: "WATCH" },
 };
 
@@ -69,7 +70,7 @@ function getTagIcon(tag: string) {
   return <Eye className="w-3 h-3" />;
 }
 
-export function TopPlays({ signals, onPlayerClick }: { signals: MLBSignal[]; onPlayerClick?: (gameId: string, playerId: string) => void }) {
+export function TopPlays({ signals, onPlayerClick, onAddToSlip }: { signals: MLBSignal[]; onPlayerClick?: (gameId: string, playerId: string) => void; onAddToSlip?: (sig: MLBSignal) => void }) {
   const sorted = [...signals].sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
   const topPlays = sorted.slice(0, 6);
 
@@ -111,7 +112,7 @@ export function TopPlays({ signals, onPlayerClick }: { signals: MLBSignal[]; onP
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {overPlays.map((sig, idx) => (
-              <SignalCard key={`over-${sig.gameId}-${sig.playerId}-${sig.market}-${idx}`} sig={sig} onPlayerClick={onPlayerClick} />
+              <SignalCard key={`over-${sig.gameId}-${sig.playerId}-${sig.market}-${idx}`} sig={sig} onPlayerClick={onPlayerClick} onAddToSlip={onAddToSlip} />
             ))}
           </div>
         </div>
@@ -125,7 +126,7 @@ export function TopPlays({ signals, onPlayerClick }: { signals: MLBSignal[]; onP
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {underPlays.map((sig, idx) => (
-              <SignalCard key={`under-${sig.gameId}-${sig.playerId}-${sig.market}-${idx}`} sig={sig} onPlayerClick={onPlayerClick} />
+              <SignalCard key={`under-${sig.gameId}-${sig.playerId}-${sig.market}-${idx}`} sig={sig} onPlayerClick={onPlayerClick} onAddToSlip={onAddToSlip} />
             ))}
           </div>
         </div>
@@ -134,14 +135,15 @@ export function TopPlays({ signals, onPlayerClick }: { signals: MLBSignal[]; onP
   );
 }
 
-function SignalCard({ sig, onPlayerClick }: { sig: MLBSignal; onPlayerClick?: (gameId: string, playerId: string) => void }) {
+function SignalCard({ sig, onPlayerClick, onAddToSlip }: { sig: MLBSignal; onPlayerClick?: (gameId: string, playerId: string) => void; onAddToSlip?: (sig: MLBSignal) => void }) {
+  const [expanded, setExpanded] = useState(false);
   const tier = TIER_COLORS[sig.confidenceTier] ?? TIER_COLORS.WATCHLIST;
   const side = SIDE_STYLES[sig.recommendedSide as keyof typeof SIDE_STYLES] ?? SIDE_STYLES.OVER;
   const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
   const tags = (sig.signalTags ?? []).slice(0, 3);
   const matchup = sig.awayAbbr && sig.homeAbbr ? `${sig.awayAbbr} vs ${sig.homeAbbr}` : null;
   const form = formBadge(sig.formIndicator);
-  const reasons = (sig.reasons ?? []).slice(0, 2);
+  const reasons = sig.reasons ?? [];
   const isClickable = !!onPlayerClick;
 
   return (
@@ -220,22 +222,46 @@ function SignalCard({ sig, onPlayerClick }: { sig: MLBSignal; onPlayerClick?: (g
       )}
 
       {reasons.length > 0 && (
-        <div className="space-y-0.5 pt-0.5">
-          {reasons.map((r, i) => (
-            <p key={i} className="text-[9px] text-muted-foreground/80 leading-tight">
-              {r}
-            </p>
-          ))}
+        <div onClick={(e) => e.stopPropagation()}>
+          <button
+            className="flex items-center gap-1 text-[9px] text-muted-foreground/70 hover:text-muted-foreground transition-colors w-full"
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            <span>{reasons.length} reason{reasons.length !== 1 ? "s" : ""}</span>
+          </button>
+          {expanded && (
+            <div className="space-y-0.5 pt-1 animate-in slide-in-from-top-1 duration-200">
+              {reasons.map((r, i) => (
+                <p key={i} className="text-[9px] text-muted-foreground/80 leading-tight flex items-start gap-1">
+                  <span className="mt-px" style={{ color: side.accent }}>•</span>
+                  <span>{r}</span>
+                </p>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       <div className="flex items-center justify-between pt-0.5 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
         <span className="text-[9px] text-muted-foreground/50">Score: {sig.signalScore}</span>
-        {sig.edge != null && (
-          <span className="text-[9px] text-muted-foreground/50">
-            Edge: {sig.edge > 0 ? "+" : ""}{sig.edge.toFixed(1)}%
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {sig.edge != null && (
+            <span className="text-[9px] text-muted-foreground/50">
+              Edge: {sig.edge > 0 ? "+" : ""}{sig.edge.toFixed(1)}%
+            </span>
+          )}
+          {onAddToSlip && (
+            <button
+              data-testid={`button-top-play-slip-${sig.playerId}-${sig.market}`}
+              className="text-[9px] px-2.5 py-1.5 rounded-full font-semibold transition-colors flex items-center gap-0.5 min-h-[44px]"
+              style={{ background: "rgba(34,197,94,0.15)", color: "#22c55e", border: "1px solid rgba(34,197,94,0.3)" }}
+              onClick={(e) => { e.stopPropagation(); onAddToSlip(sig); }}
+            >
+              <Plus className="w-3 h-3" /> Slip
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

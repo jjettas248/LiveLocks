@@ -60,9 +60,9 @@ type TierConfig = {
 };
 
 const TIERS: TierConfig[] = [
-  { key: "elite", label: "Elite", min: 75, max: 100, color: "#00d4aa", bg: "rgba(0,212,170,0.06)", border: "rgba(0,212,170,0.3)", icon: Flame },
-  { key: "edge", label: "Edge", min: 65, max: 74, color: "#facc15", bg: "rgba(250,204,21,0.06)", border: "rgba(250,204,21,0.3)", icon: Target },
-  { key: "lean", label: "Lean", min: 55, max: 64, color: "#38bdf8", bg: "rgba(56,189,248,0.06)", border: "rgba(56,189,248,0.3)", icon: TrendingUp },
+  { key: "elite", label: "Elite", min: 75, max: 100, color: "#eab308", bg: "rgba(234,179,8,0.06)", border: "rgba(234,179,8,0.3)", icon: Flame },
+  { key: "edge", label: "Strong", min: 65, max: 74, color: "#22c55e", bg: "rgba(34,197,94,0.06)", border: "rgba(34,197,94,0.3)", icon: Target },
+  { key: "lean", label: "Solid", min: 55, max: 64, color: "#14b8a6", bg: "rgba(20,184,166,0.06)", border: "rgba(20,184,166,0.3)", icon: TrendingUp },
   { key: "watch", label: "Watch", min: 0, max: 54, color: "#71717a", bg: "rgba(113,113,122,0.04)", border: "rgba(113,113,122,0.2)", icon: Eye },
 ];
 
@@ -125,7 +125,7 @@ export function LiveBoard({ signals, onPlayerClick }: { signals: MLBSignal[]; on
             <button
               onClick={() => toggleTier(tier.key)}
               data-testid={`button-toggle-tier-${tier.key}`}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-lg transition-colors hover:opacity-80"
+              className="w-full flex items-center justify-between px-3 py-3 min-h-[44px] rounded-lg transition-colors hover:opacity-80"
               style={{ background: tier.bg, border: `1px solid ${tier.border}` }}
             >
               <div className="flex items-center gap-2">
