@@ -689,6 +689,7 @@ export class DatabaseStorage implements IStorage {
     }
 
     // Compute sigma for the stat distribution
+    const minVar = (minutesFragility * 2.5) ** 2;
     let sigma: number;
     if (isComboStat) {
       // Combo variance with covariance
@@ -708,7 +709,6 @@ export class DatabaseStorage implements IStorage {
                      comp === "assists" ? (astPerMin ?? 0) :
                      comp === "steals" ? (stlPerMin ?? 0) :
                      comp === "blocks" ? (blkPerMin ?? 0) : 0;
-        const minVar = (minutesFragility * 2.5) ** 2;
         const rawVar = remainingMinutes * vRate + (rate * rate) * minVar;
         const adjVar = rawVar * varianceMultiplier;
         const floor = (STAT_SIGMA_FLOORS_V2[comp] ?? 1.0) ** 2;
@@ -741,7 +741,6 @@ export class DatabaseStorage implements IStorage {
       // Single-stat variance
       const vRate = estimateVarianceRate(req.statType);
       const rate = seasonPerMin ?? 0;
-      const minVar = (minutesFragility * 2.5) ** 2;
       const rawVar = remainingMinutes * vRate + (rate * rate) * minVar;
       const adjVar = rawVar * varianceMultiplier;
       const floor = (STAT_SIGMA_FLOORS_V2[req.statType] ?? 1.0) ** 2;
