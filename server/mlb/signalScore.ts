@@ -243,7 +243,7 @@ export function deriveSignalTags(
     tags.push("COLD UNDER");
   }
 
-  if ((output.market === "home_runs" || output.market === "hrr") && output.calibratedProbability >= 55) {
+  if (output.market === "home_runs" && output.calibratedProbability >= 55) {
     tags.push("HR WATCH");
   }
 
@@ -279,6 +279,8 @@ export function deriveFeedTags(
     } else if (scoreBreakdown.liveContext >= 60 || scoreBreakdown.matchup >= 60) {
       tags.push("hr_watchlist");
     }
+  } else if (output.market === "hrr") {
+    tags.push("edge_feed");
   }
 
   return tags;

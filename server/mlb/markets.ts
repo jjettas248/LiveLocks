@@ -567,8 +567,6 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
     calibratedUnder = Math.round(calibratedUnder * 100) / 100;
   }
 
-  if (input.market === "home_runs" && calibratedOver > 40) calibratedOver = 40;
-  if (input.market === "home_runs" && calibratedUnder > 40) calibratedUnder = 40;
   if (input.market === "total_bases" && calibratedOver > 72) calibratedOver = 72;
   if (input.market === "total_bases" && calibratedUnder > 72) calibratedUnder = 72;
 
@@ -699,6 +697,7 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
     featureScores,
     computedBadges: badgeResult.positive,
     computedRiskFlags: badgeResult.negative,
+    fallbackUsed: projResult.fallbackUsed,
   };
 }
 
@@ -886,6 +885,7 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
     },
     computedBadges: computeBadges(hitsInput, features).positive,
     computedRiskFlags: computeBadges(hitsInput, features).negative,
+    fallbackUsed: projResult.fallbackUsed,
   };
 }
 

@@ -655,7 +655,7 @@ export function computeFormScore(input: MLBPropInput): number {
   if (priorABs.length > 0) {
     const hits = priorABs.filter((ab) => ab.outcome === "hit").length;
     const hardHits = priorABs.filter((ab) => (ab.exitVelocity ?? 0) >= 95).length;
-    abBonus = (hits / priorABs.length) * 0.3 + (hardHits / priorABs.length) * 0.2;
+    abBonus = (hits / priorABs.length) * 0.4 + (hardHits / priorABs.length) * 0.25;
   }
 
   let rollingBonus = 0;
@@ -681,10 +681,18 @@ export function classifyForm(input: MLBPropInput): FormIndicator {
   if (score >= FORM_THRESHOLDS.warm) return "warm";
 
   const priorABs = input.contactQuality.priorABResults;
-  const hasHR = priorABs.some((ab) => ab.outcome === "home_run" || ab.outcome === "hr");
+  const hasHR = priorABs.some((ab) =>
+    ab.outcome === "home_run" || ab.outcome === "hr" || ab.outcome === "homerun"
+  );
+  const hasBoxScoreHR = (input.currentGameHR ?? 0) > 0;
+
   const hardHits = priorABs.filter((ab) => (ab.exitVelocity ?? 0) >= 95).length;
   const hasStrongContact = hardHits >= 2 || (input.contactQuality.exitVelocity ?? 0) >= 95;
-  if (hasHR || hasStrongContact) return "neutral";
+
+  if (hasHR || hasBoxScoreHR || hasStrongContact) {
+    console.log(`[MLB_FORM_OVERRIDE] ${input.playerName} — prevented COLD label (HR=${hasHR || hasBoxScoreHR}, hardHits=${hardHits}, score=${score.toFixed(3)})`);
+    return "warm";
+  }
 
   if (score <= FORM_THRESHOLDS.extremeCold) return "extreme_cold";
   if (score <= FORM_THRESHOLDS.cold) return "cold";
@@ -1280,15 +1288,21 @@ export function computeFullFeatureLayer(input: MLBPropInput): FeatureLayer {
   const pitcherSuppression = computeSpecPitcherSuppression(input);
   const deterioration = computeSpecPitcherDeterioration(input);
 
+  let seed = 0;
+  for (let i = 0; i < input.playerId.length; i++) {
+    seed = ((seed << 5) - seed + input.playerId.charCodeAt(i)) | 0;
+  }
+  const microNoise = ((seed % 1000) / 1000) * 0.04 - 0.02;
+
   return {
-    contactQuality,
-    batSpeedPower: batSpeedResult.batSpeedPowerScore,
+    contactQuality: clampRange(contactQuality + microNoise, 0, 1),
+    batSpeedPower: clampRange(batSpeedResult.batSpeedPowerScore + microNoise * 0.8, 0, 1),
     batSpeedMultiplier: batSpeedResult.batSpeedMultiplier,
-    handednessMatchup,
-    pitchBlendMatchup,
-    hotColdForm,
+    handednessMatchup: clampRange(handednessMatchup + microNoise * 0.5, 0, 1),
+    pitchBlendMatchup: clampRange(pitchBlendMatchup + microNoise * 0.6, 0, 1),
+    hotColdForm: clampRange(hotColdForm + microNoise * 0.7, 0, 1),
     parkEnv,
-    bvp,
+    bvp: clampRange(bvp + microNoise * 0.3, 0, 1),
     lineupOpportunity,
     bullpenFactor,
     pitcherSuppression,

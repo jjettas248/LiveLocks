@@ -450,6 +450,31 @@ export class LiveGameOrchestrator {
     return hasHighImpact ? 10_000 : DEDUP_WINDOW_MS;
   }
 
+  private static readonly JARGON_MAP: Record<string, string> = {
+    "1xTTO": "First look at lineup",
+    "tto_1": "First look at lineup",
+    "2xTTO": "Second time through order",
+    "tto_2": "Second time through order",
+    "3xTTO": "Third time through — elevated risk",
+    "tto_3": "Third time through — elevated risk",
+    "NO_EDGE": "No actionable signal",
+  };
+
+  private static readonly JARGON_REMOVE = new Set(["EXPERIMENTAL", "SUPPRESSED"]);
+
+  private sanitizeUserFacingFields(signal: MLBQualifiedSignal): void {
+    const clean = (arr: string[]): string[] =>
+      arr
+        .filter(s => !MLBLiveGameOrchestrator.JARGON_REMOVE.has(s))
+        .map(s => MLBLiveGameOrchestrator.JARGON_MAP[s] ?? s);
+
+    signal.reasons = clean(signal.reasons);
+    signal.badges = clean(signal.badges);
+    signal.signalTags = clean(signal.signalTags);
+    signal.feedTags = clean(signal.feedTags);
+    signal.riskFlags = clean(signal.riskFlags);
+  }
+
   private qualifySignal(gameId: string, input: MLBPropInput, output: MLBPropOutput): MLBQualifiedSignal | null {
     if (output.recommendedSide !== "OVER" && output.recommendedSide !== "UNDER") {
       console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — invalid side="${output.recommendedSide}"`);
@@ -524,6 +549,8 @@ export class LiveGameOrchestrator {
     const feedTags = deriveFeedTags(input, output, scoreBreakdown);
     const glowEligible = isPlayerGlowEligible(scoreBreakdown, signalTags);
 
+    const stateFields = this.computeSignalState(gameId, input, output, scoreBreakdown);
+
     const signal: MLBQualifiedSignal = {
       id: `${gameId}_${output.playerId}_${output.market}`,
       gameId,
@@ -563,10 +590,90 @@ export class LiveGameOrchestrator {
         oddsUpdatedAt: new Date(output.oddsUpdatedAt).toISOString(),
         gameStateUpdatedAt: new Date(output.projectionUpdatedAt).toISOString(),
       },
+      ...stateFields,
     };
 
-    console.log(`[MLB QUALIFY OK][${gameId}] ${output.playerName}/${output.market} side=${output.recommendedSide} score=${scoreBreakdown.total} tier=${scoreBreakdown.confidenceTier} badges=[${(output.computedBadges ?? []).join(",")}] tags=[${signalTags.join(",")}]`);
+    if (signal.fallbackUsed) {
+      signal.confidenceTier = "WATCHLIST" as any;
+      signal.watchlist = true;
+      signal.actionable = false;
+    }
+
+    this.sanitizeUserFacingFields(signal);
+
+    if (signal.fallbackUsed) {
+      console.log(`[MLB_FALLBACK_USED] player=${output.playerName} market=${output.market} defaultRate=fallback`);
+    }
+
+    if (process.env.DEBUG_PIPELINE === "true") {
+      console.log(`[MLB_SIGNAL_BUILT] gameId=${gameId} player=${output.playerName} market=${output.market} prob=${output.calibratedProbability?.toFixed(1)} edge=${output.edge?.toFixed(1)} actionable=${signal.actionable} fallback=${signal.fallbackUsed}`);
+    }
+
     return signal;
+  }
+
+  private computeSignalState(
+    gameId: string,
+    input: MLBPropInput,
+    output: MLBPropOutput,
+    scoreBreakdown: { total: number; confidenceTier: string }
+  ) {
+    const gameState = mlbGameCache.gameState[gameId];
+    const boxScore = mlbGameCache.gameBoxScore?.[gameId];
+    const boxPlayer = boxScore?.byPlayerId?.[input.playerId];
+
+    const currentStat = input.currentStatValue ?? 0;
+    const line = output.bookLine;
+    const alreadyHit = currentStat >= line && line > 0;
+
+    const isFallback = output.fallbackUsed === true;
+    const isStale = output.engineGeneratedAt > 0 && (Date.now() - output.engineGeneratedAt) > 120_000;
+    const isWatchlist = scoreBreakdown.confidenceTier === "WATCHLIST" || scoreBreakdown.total < 55 || isFallback;
+    const isActionable = !alreadyHit && !isStale && !isWatchlist && !isFallback
+      && output.edge > 0 && (output.overOdds !== null || output.underOdds !== null);
+
+    const pitcher = gameState?.pitcherInGame;
+    const pitcherCtxCache = mlbGameCache.pitcherContext?.[gameId];
+    const pitcherCtx = pitcher?.playerId ? pitcherCtxCache?.byPitcherId?.[pitcher.playerId] : undefined;
+
+    const contactCache = mlbGameCache.contactData?.[gameId];
+    const playerContactData = contactCache?.byPlayerId?.[input.playerId];
+    const priorABResults = (playerContactData?.priorABResults ?? []).map((ab: any) => ({
+      outcome: ab.outcome ?? "unknown",
+      exitVelocity: ab.exitVelocity ?? null,
+      launchAngle: ab.launchAngle ?? null,
+      pitchType: ab.pitchType ?? null,
+      pitchSpeed: ab.pitchSpeed ?? null,
+    }));
+
+    const oddsAge = output.oddsUpdatedAt ? Date.now() - output.oddsUpdatedAt : 0;
+    const oddsStale = oddsAge > 900_000;
+    if (oddsStale) {
+      console.log(`[MLB_ODDS_STALE] player=${input.playerName} market=${input.market} ageMs=${oddsAge}`);
+    }
+
+    return {
+      fallbackUsed: isFallback,
+      actionable: isActionable && !oddsStale,
+      alreadyHit,
+      stale: isStale || oddsStale,
+      watchlist: isWatchlist,
+      overOdds: output.overOdds ?? null,
+      underOdds: output.underOdds ?? null,
+      oddsTimestamp: output.oddsUpdatedAt ?? null,
+      pitcherName: pitcher?.playerName ?? null,
+      pitcherHand: pitcher?.throws ?? null,
+      pitcherPitchCount: pitcherCtx?.pitchCount ?? gameState?.pitchCount ?? null,
+      pitcherTimesThrough: pitcherCtx?.timesThroughOrder ?? null,
+      homeScore: gameState?.homeScore ?? 0,
+      awayScore: gameState?.awayScore ?? 0,
+      inning: gameState?.inning ?? input.inning,
+      isTopInning: gameState?.isTopInning ?? input.isTopInning,
+      currentStat,
+      completedAB: input.completedAB,
+      bookImplied: output.bookImplied ?? null,
+      priorABResults,
+    };
   }
 
   private buildWatchSignal(gameId: string, input: MLBPropInput, output: MLBPropOutput): MLBQualifiedSignal | null {
@@ -596,8 +703,9 @@ export class LiveGameOrchestrator {
     const scoreBreakdown = computeSignalScore(input, output);
     const signalTags = deriveSignalTags(input, output, scoreBreakdown);
     const feedTags = deriveFeedTags(input, output, scoreBreakdown);
+    const stateFields = this.computeSignalState(gameId, input, output, scoreBreakdown);
 
-    return {
+    const watchSignal: MLBQualifiedSignal = {
       id: `${gameId}_${output.playerId}_${output.market}`,
       gameId,
       playerId: output.playerId,
@@ -636,7 +744,13 @@ export class LiveGameOrchestrator {
         oddsUpdatedAt: new Date(output.oddsUpdatedAt).toISOString(),
         gameStateUpdatedAt: new Date(output.projectionUpdatedAt).toISOString(),
       },
+      ...stateFields,
+      watchlist: true,
+      actionable: false,
     };
+
+    this.sanitizeUserFacingFields(watchSignal);
+    return watchSignal;
   }
 
   async triggerEngine(gameId: string, normalizedStatus: "live" | "pregame" | "final" | "unknown", triggers?: StateChangeTrigger[]): Promise<MLBPropOutput[]> {
@@ -765,13 +879,19 @@ export class LiveGameOrchestrator {
         if (boxScorePlayer) {
           switch (market) {
             case "hits": currentStatForMarket = boxScorePlayer.hits; break;
-            case "home_runs": case "hrr": currentStatForMarket = boxScorePlayer.hr; break;
+            case "home_runs": currentStatForMarket = boxScorePlayer.hr; break;
+            case "hrr": currentStatForMarket = (boxScorePlayer.hr ?? 0) + ((boxScorePlayer as any).r ?? 0) + ((boxScorePlayer as any).rbi ?? 0); break;
             case "total_bases": currentStatForMarket = boxScorePlayer.tb; break;
             case "batter_strikeouts": currentStatForMarket = (boxScorePlayer as any).strikeouts ?? 0; break;
             case "pitcher_strikeouts": case "hits_allowed": case "walks_allowed": case "hr_allowed": currentStatForMarket = 0; break;
             default: currentStatForMarket = boxScorePlayer.hits; break;
           }
         }
+
+        const currentGameHR = boxScorePlayer ? boxScorePlayer.hr : 0;
+        const hardHitCount = playerContact
+          ? (playerContact.priorABResults ?? []).filter((ab: any) => (ab.exitVelocity ?? 0) >= 95).length
+          : 0;
 
         const input: MLBPropInput = {
           playerId: batter.playerId,
@@ -792,6 +912,8 @@ export class LiveGameOrchestrator {
           completedAB: Math.max(0, 4 - remainingAB),
           inning: state.inning,
           isTopInning: state.isTopInning,
+          currentGameHR,
+          hardHitCount,
           batterHand: null,
           contactQuality: {
             exitVelocity: playerContact?.exitVelocity ?? null,

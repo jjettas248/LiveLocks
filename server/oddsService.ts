@@ -1109,15 +1109,22 @@ export interface NormalizedOdds {
   sportsbookSources: string[];
 }
 
+const APPROVED_BOOKS = new Set([
+  "draftkings", "fanduel", "hard_rock", "betmgm", "caesars",
+  "DraftKings", "FanDuel", "Hard Rock", "BetMGM", "Caesars",
+  "dk", "fd", "hr", "mgm",
+]);
+
 export function normalizeOdds(
   books: Record<string, { line: number; overOdds: number; underOdds: number }>
 ): NormalizedOdds {
-  const validEntries = Object.entries(books).filter(([, v]) => {
+  const validEntries = Object.entries(books).filter(([book, v]) => {
     return (
       v != null &&
       Number.isFinite(v.line) &&
       Number.isFinite(v.overOdds) &&
-      Number.isFinite(v.underOdds)
+      Number.isFinite(v.underOdds) &&
+      APPROVED_BOOKS.has(book)
     );
   });
 

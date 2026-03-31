@@ -102,14 +102,14 @@ export const MARKET_PROBABILITY_CEILINGS: Record<"core" | "experimental", number
 export const MARKET_PROBABILITY_CAPS: Record<MLBMarket, number> = {
   hits: 78,
   total_bases: 72,
-  home_runs: 40,
+  home_runs: 55,
   hrr: 74,
   pitcher_strikeouts: 79,
   pitcher_outs: 80,
   walks_allowed: 72,
   hits_allowed: 77,
-  batter_strikeouts: 76,
-  hr_allowed: 42,
+  batter_strikeouts: 65,
+  hr_allowed: 55,
 };
 
 export const MARKET_PROJECTION_TOLERANCE: Record<MLBMarket, number> = {
@@ -250,6 +250,9 @@ export interface MLBPropInput {
   currentRuns?: number;
   leagueAvgRuns?: number;
 
+  currentGameHR?: number;
+  hardHitCount?: number;
+
   batterHand: "L" | "R" | "S" | null;
 
   pitcherThrows?: "L" | "R" | null;
@@ -365,6 +368,7 @@ export interface MLBPropOutput {
   featureScores?: Record<string, number>;
   computedBadges?: string[];
   computedRiskFlags?: string[];
+  fallbackUsed?: boolean;
 }
 
 export const STANDARD_THRESHOLDS = {
@@ -489,6 +493,39 @@ export interface MLBQualifiedSignal {
     oddsUpdatedAt: string;
     gameStateUpdatedAt: string;
   };
+
+  fallbackUsed: boolean;
+  actionable: boolean;
+  alreadyHit: boolean;
+  stale: boolean;
+  watchlist: boolean;
+
+  overOdds: number | null;
+  underOdds: number | null;
+  oddsTimestamp: number | null;
+
+  pitcherName: string | null;
+  pitcherHand: string | null;
+  pitcherPitchCount: number | null;
+  pitcherTimesThrough: number | null;
+
+  homeScore: number;
+  awayScore: number;
+  inning: number;
+  isTopInning: boolean;
+
+  currentStat: number;
+  completedAB: number;
+  bookImplied: number | null;
+
+  priorABResults: Array<{
+    outcome: string;
+    exitVelocity: number | null;
+    launchAngle: number | null;
+    pitchType: string | null;
+    pitchSpeed: number | null;
+  }>;
+
   currentStats?: {
     ab: number;
     h: number;

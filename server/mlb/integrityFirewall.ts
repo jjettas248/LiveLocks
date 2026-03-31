@@ -50,8 +50,8 @@ export function runIntegrityFirewall(output: MLBPropOutput): FirewallResult {
 
   if (Number.isFinite(output.calibratedProbabilityOver) && Number.isFinite(output.calibratedProbabilityUnder)) {
     const maxProb = Math.max(output.calibratedProbabilityOver, output.calibratedProbabilityUnder);
-    if (Math.abs(maxProb - 50) > 40) {
-      rejections.push(`extreme probability: maxProb=${maxProb.toFixed(1)} (|maxProb-50|=${Math.abs(maxProb - 50).toFixed(1)} > 40 cap)`);
+    if (Math.abs(maxProb - 50) > 45) {
+      rejections.push(`extreme probability: maxProb=${maxProb.toFixed(1)} (|maxProb-50|=${Math.abs(maxProb - 50).toFixed(1)} > 45 cap)`);
     }
   }
 
@@ -108,6 +108,10 @@ export function runIntegrityFirewall(output: MLBPropOutput): FirewallResult {
     warnings.push(`side/probability tension after cap: UNDER but P(under)=${cappedOutput.calibratedProbabilityUnder.toFixed(1)} < P(over)=${cappedOutput.calibratedProbabilityOver.toFixed(1)}`);
     cappedOutput.recommendedSide = "OVER" as any;
     warnings.push(`firewall corrected side to match probability direction`);
+  }
+
+  if (process.env.DEBUG_PIPELINE === "true") {
+    console.log(`[MLB_FIREWALL] player=${output.playerName} market=${output.market} rejected=${rejections.length > 0} warnings=${warnings.length}`);
   }
 
   return {

@@ -31,6 +31,7 @@ export interface ProjectionResult {
   mode: "standard" | "early_explosive";
   twoABRuleSatisfied: boolean;
   warnings: string[];
+  fallbackUsed: boolean;
 }
 
 function computeBaseValue(input: MLBPropInput, market: MLBMarket): number {
@@ -68,6 +69,9 @@ function computeBaseValue(input: MLBPropInput, market: MLBMarket): number {
     }
     case "home_runs": {
       const hrRate = seasonAvg > 0 ? seasonAvg : 0.035;
+      if (seasonAvg <= 0) {
+        console.log(`[MLB FALLBACK] home_runs: using static hrRate=0.035 for player (no seasonAvg)`);
+      }
       return currentStatValue + hrRate * remainingAB;
     }
     case "hrr": {
@@ -188,6 +192,11 @@ export function projectBaseValue(input: MLBPropInput): ProjectionResult {
     modeUsed: twoABResult.mode === "early_explosive" ? "EARLY_EXPLOSIVE" : "STANDARD",
   };
 
+  const fallbackUsed = input.seasonAvg <= 0;
+  if (fallbackUsed) {
+    warnings.push(`FALLBACK_RATE: ${market} using static fallback (no player season data)`);
+  }
+
   return {
     baseValue,
     projection: Math.round(projection * 100) / 100,
@@ -196,5 +205,6 @@ export function projectBaseValue(input: MLBPropInput): ProjectionResult {
     mode: twoABResult.mode,
     twoABRuleSatisfied: twoABResult.liveFormAllowed,
     warnings,
+    fallbackUsed,
   };
 }

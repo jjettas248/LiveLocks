@@ -1278,6 +1278,8 @@ export async function registerRoutes(
             ? (raw?.calibratedProbabilityOver ?? qs.engineProbability ?? 0)
             : (raw?.calibratedProbabilityUnder ?? qs.engineProbability ?? 0);
 
+          const qsAny = qs as any;
+
           allSignals.push({
             playerId: qs.playerId,
             playerName: qs.playerName,
@@ -1288,7 +1290,8 @@ export async function registerRoutes(
             edge: raw ? Math.round(raw.edge * 100) / 100 : null,
             evPct: raw ? Math.round((raw.evPct ?? 0) * 100) / 100 : null,
             recommendedSide: qs.side,
-            inning: gameState?.inning ?? 0,
+            inning: qsAny.inning ?? gameState?.inning ?? 0,
+            isTopInning: qsAny.isTopInning ?? gameState?.isTopInning ?? true,
             gameId: gid,
             sportsbook: qs.sportsbook ?? null,
             hrFactors: raw?.hrFactors ?? null,
@@ -1308,12 +1311,27 @@ export async function registerRoutes(
             badges: qs.badges ?? [],
             riskFlags: qs.riskFlags ?? [],
             drivers: qs.drivers ?? {},
-            alreadyHit,
+            alreadyHit: qsAny.alreadyHit ?? alreadyHit,
+            actionable: qsAny.actionable ?? !alreadyHit,
+            stale: qsAny.stale ?? false,
+            watchlist: qsAny.watchlist ?? false,
+            fallbackUsed: qsAny.fallbackUsed ?? false,
             pitchMix,
             signalTimestamp: qs.engineGeneratedAt ?? raw?.engineGeneratedAt ?? Date.now(),
-            overOdds: raw?.overOdds ?? null,
-            underOdds: raw?.underOdds ?? null,
+            overOdds: qsAny.overOdds ?? raw?.overOdds ?? null,
+            underOdds: qsAny.underOdds ?? raw?.underOdds ?? null,
+            oddsTimestamp: qsAny.oddsTimestamp ?? null,
             matchupTag: raw?.matchupTag ?? null,
+            pitcherName: qsAny.pitcherName ?? null,
+            pitcherHand: qsAny.pitcherHand ?? null,
+            pitcherPitchCount: qsAny.pitcherPitchCount ?? null,
+            pitcherTimesThrough: qsAny.pitcherTimesThrough ?? null,
+            homeScore: qsAny.homeScore ?? 0,
+            awayScore: qsAny.awayScore ?? 0,
+            currentStat: qsAny.currentStat ?? currentStatVal,
+            completedAB: qsAny.completedAB ?? 0,
+            bookImplied: qsAny.bookImplied ?? null,
+            priorABResults: qsAny.priorABResults ?? [],
           });
         }
       }
@@ -1368,6 +1386,7 @@ export async function registerRoutes(
             const hrSidedProb = qs.side === "OVER"
               ? (raw?.calibratedProbabilityOver ?? qs.engineProbability ?? 0)
               : (raw?.calibratedProbabilityUnder ?? qs.engineProbability ?? 0);
+            const hrQsAny = qs as any;
             hrEdges.push({
               playerId: qs.playerId,
               playerName: qs.playerName,
@@ -1391,6 +1410,17 @@ export async function registerRoutes(
               lastABContact: qs.lastABContact ?? null,
               drivers: qs.drivers ?? {},
               signalTags: qs.signalTags ?? [],
+              actionable: hrQsAny.actionable ?? true,
+              alreadyHit: hrQsAny.alreadyHit ?? false,
+              stale: hrQsAny.stale ?? false,
+              watchlist: false,
+              fallbackUsed: hrQsAny.fallbackUsed ?? false,
+              overOdds: hrQsAny.overOdds ?? raw?.overOdds ?? null,
+              underOdds: hrQsAny.underOdds ?? raw?.underOdds ?? null,
+              pitcherName: hrQsAny.pitcherName ?? null,
+              pitcherHand: hrQsAny.pitcherHand ?? null,
+              inning: hrQsAny.inning ?? gameState?.inning ?? 0,
+              formIndicator: qs.formIndicator ? String(qs.formIndicator).toUpperCase() : null,
             });
           }
 
@@ -1398,6 +1428,7 @@ export async function registerRoutes(
             const hardHitCount = (playerContact?.priorABResults ?? []).filter(
               (ab: any) => (ab.exitVelocity ?? 0) >= 95
             ).length;
+            const wlQsAny = qs as any;
 
             hrWatchlist.push({
               playerId: qs.playerId,
@@ -1412,6 +1443,11 @@ export async function registerRoutes(
               awayAbbr: game?.awayAbbr ?? null,
               homeAbbr: game?.homeAbbr ?? null,
               badges: qs.badges ?? [],
+              watchlist: true,
+              actionable: false,
+              fallbackUsed: wlQsAny.fallbackUsed ?? false,
+              formIndicator: qs.formIndicator ? String(qs.formIndicator).toUpperCase() : null,
+              inning: wlQsAny.inning ?? gameState?.inning ?? 0,
             });
           }
         }
@@ -1420,10 +1456,12 @@ export async function registerRoutes(
       hrEdges.sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
       hrWatchlist.sort((a, b) => (b.hrProbability ?? 0) - (a.hrProbability ?? 0));
 
-      return res.json({ hrEdges, hrWatchlist });
+      console.log(`[MLB_HR_RADAR] bettable=${hrEdges.length} watchlist=${hrWatchlist.length} total=${hrEdges.length + hrWatchlist.length}`);
+
+      return res.json({ bettableHR: hrEdges, hrWatchlist, hrEdges });
     } catch (e: any) {
       console.error("[mlb/hr-radar]", e.message);
-      return res.json({ hrEdges: [], hrWatchlist: [] });
+      return res.json({ bettableHR: [], hrEdges: [], hrWatchlist: [] });
     }
   });
 
