@@ -15,6 +15,11 @@ export type UnifiedTopPlay = {
   routeTarget: string;
   confidenceTier: "ELITE" | "STRONG" | "VALUE" | "NO_EDGE";
   updatedAt: string;
+  gameId?: string;
+  playerId?: string | number;
+  team?: string;
+  sportsbook?: string;
+  betDirection?: string;
   currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
   lastABContact?: {
     exitVelo: number | null;

@@ -334,12 +334,11 @@ export default function Dashboard() {
         }).catch(() => {/* fire-and-forget */});
       }
 
-      // With displayConfidence, probability is always direction-correct (>= 50 for any valid play).
-      // prob >= 65 now correctly includes both OVER and UNDER plays with sufficient confidence.
       const qualifiedPlays = plays
         .filter((p: any) => {
           const prob = parseFloat(p.probability);
-          return prob >= 65;
+          const edge = parseFloat(p.edge ?? "0");
+          return prob >= 55 && edge >= 5;
         })
         .sort((a: any, b: any) => {
           const probA = parseFloat(a.probability);
@@ -351,6 +350,7 @@ export default function Dashboard() {
           if (probA === probB) return Math.abs(edgeB) - Math.abs(edgeA);
           return probB - probA;
         });
+      console.log(`[NBA_RENDER_FILTER] autoScan: received=${plays.length} qualified=${qualifiedPlays.length} (prob>=55 & edge>=5)`);
 
       if (qualifiedPlays.length === 0) {
         const elapsed = Date.now() - scanStart;
@@ -1896,6 +1896,37 @@ export default function Dashboard() {
                 } else if (sport === "mlb") {
                   setActiveTab("calculator");
                 }
+              }}
+              onAddToSlip={(play) => {
+                if (parlayPicks.length >= 10) return;
+                const parsedPlayerId = typeof play.playerId === "number" ? play.playerId : Number(play.playerId);
+                if (!play.market || !play.side) {
+                  console.warn("[NBA_CLICK_FLOW] Skipping add-to-slip — missing market or side", { player: play.playerOrTeam });
+                  return;
+                }
+                const parsedLine = typeof play.line === "number" ? play.line : parseFloat(String(play.line ?? ""));
+                if (!Number.isFinite(parsedLine)) {
+                  console.warn("[NBA_CLICK_FLOW] Skipping add-to-slip — invalid line", { player: play.playerOrTeam, line: play.line });
+                  return;
+                }
+                const normalizedSide = play.betDirection?.toLowerCase() ?? play.side?.toLowerCase() ?? "";
+                const betDirection: "over" | "under" = normalizedSide.includes("under") ? "under" : "over";
+                console.log("[NBA_CLICK_FLOW] TopPlays add-to-slip", { sport: play.sport, player: play.playerOrTeam, market: play.market, side: betDirection });
+                const pick: ParlayPickInput = {
+                  playerId: Number.isFinite(parsedPlayerId) ? parsedPlayerId : 0,
+                  playerName: play.playerOrTeam,
+                  playerTeam: play.team ?? "",
+                  statType: play.market,
+                  line: parsedLine,
+                  probability: play.probability,
+                  betDirection,
+                  sportsbook: play.sportsbook ?? "",
+                  oddsAmerican: -110,
+                  gameId: play.gameId,
+                  confidenceTier: play.confidenceTier,
+                };
+                setParlayPicks((prev) => [...prev, pick]);
+                setShowParlay(true);
               }}
             />
           </div>

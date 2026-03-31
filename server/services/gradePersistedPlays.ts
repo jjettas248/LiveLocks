@@ -320,6 +320,7 @@ export async function gradePersistedPlays(
 
   try {
     const { plays: pending } = await storage.getPlays({ limit: 500, settled: "pending" });
+    console.log("[ANALYTICS_QUERY] getPlays(pending) returned", pending.length, "plays");
     if (pending.length === 0) return { settled, failed, skipped };
 
     console.log("[GRADE] Pending persisted plays to grade:", pending.length);
@@ -423,6 +424,7 @@ export async function gradePersistedPlays(
               "final:", finalStat, "vs line:", line, "direction:", direction, "→", result);
 
             await storage.settlePlay(play.id, result, finalStat, new Date());
+            console.log("[GRADING_RESULT]", JSON.stringify({ sport: "MLB", playId: play.id, player: play.playerName, market, line, direction, finalStat, result, gameId, persisted: true }));
             settled++;
           } catch (err) {
             console.warn("[GRADE MLB] Error grading play", play.id, ":", (err as Error).message);
@@ -524,6 +526,7 @@ export async function gradePersistedPlays(
             "final:", finalStat, "vs line:", line, "direction:", direction, "→", result);
 
           await storage.settlePlay(play.id, result, finalStat, new Date());
+          console.log("[GRADING_RESULT]", JSON.stringify({ sport: play.sport?.toUpperCase(), playId: play.id, player: play.playerName, market: marketKey, line, direction, finalStat, result, gameId, persisted: true }));
           if (play.sport === "nba") {
             const d = direction.toUpperCase();
             if (d === "OVER" || d === "UNDER") {

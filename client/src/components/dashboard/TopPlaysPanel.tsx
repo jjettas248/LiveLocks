@@ -7,9 +7,10 @@ import { Zap, X, ChevronUp } from "lucide-react";
 type TopPlaysPanelProps = {
   isElite?: boolean;
   onNavigateToSport?: (sport: string) => void;
+  onAddToSlip?: (play: UnifiedTopPlay) => void;
 };
 
-export function TopPlaysPanel({ isElite, onNavigateToSport }: TopPlaysPanelProps) {
+export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPlaysPanelProps) {
   const { data, isLoading } = useTopPlays();
   const plays = data?.plays ?? [];
   const [isOpen, setIsOpen] = useState(false);
@@ -103,7 +104,10 @@ export function TopPlaysPanel({ isElite, onNavigateToSport }: TopPlaysPanelProps
                   isBestBet={i === 0}
                   locked={!isElite && play.sport !== "NBA"}
                   onPrimaryAction={onNavigateToSport ? () => onNavigateToSport(play.routeTarget) : undefined}
+                  onAddToSlip={onAddToSlip && !((!isElite && play.sport !== "NBA")) ? () => onAddToSlip(play) : undefined}
                   market={play.market}
+                  gameId={play.gameId}
+                  playerId={play.playerId}
                   currentStats={play.currentStats}
                   lastABContact={play.lastABContact}
                   matchup={play.matchup}

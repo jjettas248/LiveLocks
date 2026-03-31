@@ -31,11 +31,14 @@ export type SportSignalCardProps = {
   locked?: boolean;
   isBestBet?: boolean;
   onPrimaryAction?: () => void;
+  onAddToSlip?: () => void;
   onShare?: () => void;
   onCopy?: () => void;
   footerSlot?: ReactNode;
   detailSlot?: ReactNode;
   market?: string;
+  gameId?: string;
+  playerId?: string | number;
   currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
   lastABContact?: {
     exitVelo: number | null;
@@ -64,6 +67,7 @@ export function SportSignalCard({
   locked,
   isBestBet,
   onPrimaryAction,
+  onAddToSlip,
   footerSlot,
   detailSlot,
   market: marketKey,
@@ -212,6 +216,15 @@ export function SportSignalCard({
 
       <div className="px-4 py-2.5 border-t border-border/30 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
+          {!locked && onAddToSlip && (
+            <button
+              data-testid={`button-add-slip-${sport.toLowerCase()}-${playerOrTeam.replace(/\s+/g, "-").toLowerCase()}`}
+              onClick={(e) => { e.stopPropagation(); onAddToSlip(); console.log(`[NBA_CLICK_FLOW] addToSlip player=${playerOrTeam} market=${marketKey ?? marketLabel} side=${side}`); }}
+              className="text-[11px] font-semibold px-3 py-1.5 min-h-[44px] rounded-lg border border-primary/30 bg-primary/10 hover:bg-primary/20 transition-colors text-primary"
+            >
+              + Slip
+            </button>
+          )}
           {!locked && (
             <>
               <ShareSignalButton

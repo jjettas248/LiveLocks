@@ -11,6 +11,9 @@ export type TopPlayItem = {
   projection?: number | null;
   summary?: string;
   gameId?: string;
+  playerId?: string | number;
+  team?: string;
+  betDirection?: string;
   routeTarget: string;
   confidenceTier: "ELITE" | "STRONG" | "VALUE" | "NO_EDGE";
   updatedAt: string;
@@ -73,6 +76,9 @@ export function buildTopPlays(
       projection: sig.projection ?? null,
       summary: sig.explanationBullets?.[0] ?? null,
       gameId: sig.gameId,
+      playerId: sig.playerId,
+      team: sig.team,
+      betDirection: sig.recommendedSide?.toLowerCase() ?? sig.side?.toLowerCase() ?? "over",
       routeTarget: "nba",
       confidenceTier: classifyTier(sig.enginePct),
       updatedAt: sig.updatedAt ?? new Date().toISOString(),

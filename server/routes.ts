@@ -2974,8 +2974,13 @@ export async function registerRoutes(
                 currentStat,
                 gameId,
                 team: teamAbbr,
+                expectedTotal: result.expectedTotal,
+                impliedProbability: result.impliedProbability ?? null,
+                engineGeneratedAt: Date.now(),
+                timingContext: "live" as const,
                 engineDiagnostics: (result as any).engineDiagnostics ?? undefined,
               });
+              console.log(`[ENGINE_OUTPUT] sport=nba player=${dbPlayer.name} market=${statType} side=${engineBetDirection} prob=${(result.displayConfidence ?? result.probability).toFixed(1)} edge=${edge.toFixed(1)} proj=${result.expectedTotal ?? "null"} line=${canonicalLine} timing=live`);
             } catch (calcErr: any) {
               console.warn(`[NBA][engineError] player=${dbPlayer?.name ?? playerName} stat=${statType} error=${calcErr?.message ?? String(calcErr)}`);
               if (process.env.DEBUG_PIPELINE === "true") {
@@ -3127,9 +3132,11 @@ export async function registerRoutes(
       for (const s of validatedNbaSignals) {
         const dir = (s.betDirection ?? "").toUpperCase();
         if (dir === "OVER" || dir === "UNDER") {
-          recordSurfacedSignal(dir, Number(s.probability ?? 50) / 100);
+          recordSurfacedSignal(dir, Number(s.probability ?? 50) / 100, s.statType, s.edge, (s as any).timingContext ?? "live");
         }
         const diag = (s as any).engineDiagnostics;
+        const engineProjection = (s as any).expectedTotal != null ? Number((s as any).expectedTotal) : Number(s.line) + (s.edge * (s.betDirection === "over" ? 1 : -1));
+        console.log(`[PERSIST_CHECK] sport=nba player=${s.playerName} market=${s.statType} proj=${engineProjection} line=${s.line} timing=${(s as any).timingContext ?? "live"}`);
         trackPlay({
           gameId: (s as any).gameId || gameId,
           playerId: s.playerId ? String(s.playerId) : null,
@@ -3139,12 +3146,12 @@ export async function registerRoutes(
           market: s.statType,
           direction: s.betDirection as "over" | "under",
           line: Number(s.line),
-          projection: Number(s.line) + (s.edge * (s.betDirection === "over" ? 1 : -1)),
+          projection: engineProjection,
           probability: Number(s.probability ?? 0),
           edge: s.edge != null ? Number(s.edge) : 0,
           sportsbook: "consensus",
           derivedLine: false,
-          createdAt: Date.now(),
+          createdAt: (s as any).engineGeneratedAt ?? Date.now(),
           diagnostics: diag ? {
             archetype: diag.archetype,
             fragilityScore: diag.fragilityScore,
@@ -3739,10 +3746,14 @@ export async function registerRoutes(
                   rawProbability: result.probability,
                   edge,
                   expectedTotal: result.expectedTotal,
+                  impliedProbability: (result as any).impliedProbability ?? null,
                   betDirection,
                   isDegraded: lineIsDegraded,
+                  engineGeneratedAt: Date.now(),
+                  timingContext: "halftime" as const,
                   engineDiagnostics: (result as any).engineDiagnostics ?? undefined,
                 };
+                console.log(`[ENGINE_OUTPUT] sport=nba player=${dbPlayer.name} market=${statType} side=${betDirection.toUpperCase()} prob=${displayConfidence.toFixed(1)} edge=${edge.toFixed(1)} proj=${result.expectedTotal ?? "null"} line=${liveLine} timing=halftime`);
                 if (isVolatile) {
                   volatilePlays.push(playEntry);
                 } else {
@@ -3924,12 +3935,14 @@ export async function registerRoutes(
       for (const p of topPlays) {
         const pDir = (p.betDirection ?? "").toUpperCase();
         if (pDir === "OVER" || pDir === "UNDER") {
-          recordSurfacedSignal(pDir, Number(p.probability ?? p.prob ?? 50) / 100);
+          recordSurfacedSignal(pDir, Number(p.probability ?? p.prob ?? 50) / 100, p.statType, p.edge, (p as any).timingContext ?? "halftime");
         }
       }
       for (const p of topPlays) {
         const sbSource: string = (p as any).bookKeys?.[0] ?? (p as any).lineSource ?? "odds_api";
         const diag = (p as any).engineDiagnostics;
+        const htProjection = Number(p.expectedTotal ?? p.line);
+        console.log(`[PERSIST_CHECK] sport=nba player=${p.playerName} market=${p.statType} proj=${htProjection} line=${p.line} timing=${(p as any).timingContext ?? "halftime"}`);
         trackPlay({
           gameId: p.gameId ?? "",
           playerId: p.playerId ? String(p.playerId) : null,
@@ -3939,12 +3952,12 @@ export async function registerRoutes(
           market: p.statType,
           direction: p.betDirection as "over" | "under",
           line: Number(p.line),
-          projection: Number(p.expectedTotal ?? p.line),
+          projection: htProjection,
           probability: Number(p.probability ?? p.prob ?? 0),
           edge: p.edge != null ? Number(p.edge) : 0,
           sportsbook: sbSource,
           derivedLine: false,
-          createdAt: Date.now(),
+          createdAt: (p as any).engineGeneratedAt ?? Date.now(),
           diagnostics: diag ? {
             archetype: diag.archetype,
             fragilityScore: diag.fragilityScore,
