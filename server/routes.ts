@@ -1496,9 +1496,12 @@ export async function registerRoutes(
       hrEdges.sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
       hrWatchlist.sort((a, b) => (b.hrProbability ?? 0) - (a.hrProbability ?? 0));
 
-      console.log(`[MLB_HR_RADAR] bettable=${hrEdges.length} watchlist=${hrWatchlist.length} total=${hrEdges.length + hrWatchlist.length}`);
+      const bettable = hrEdges.filter((s: any) => !s.alreadyHit);
+      const activity = hrEdges.filter((s: any) => s.alreadyHit);
 
-      return res.json({ bettableHR: hrEdges, hrWatchlist, hrEdges });
+      console.log(`[MLB_HR_RADAR] bettable=${bettable.length} activity=${activity.length} watchlist=${hrWatchlist.length} total=${hrEdges.length + hrWatchlist.length}`);
+
+      return res.json({ bettableHR: bettable, hrWatchlist, hrEdges, activity });
     } catch (e: any) {
       console.error("[mlb/hr-radar]", e.message);
       return res.json({ bettableHR: [], hrEdges: [], hrWatchlist: [] });

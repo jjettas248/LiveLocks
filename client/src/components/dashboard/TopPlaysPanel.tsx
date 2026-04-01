@@ -12,7 +12,8 @@ type TopPlaysPanelProps = {
 
 export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPlaysPanelProps) {
   const { data, isLoading } = useTopPlays();
-  const plays = data?.plays ?? [];
+  const allPlays = data?.plays ?? [];
+  const plays = allPlays.slice(0, 6);
   const [isOpen, setIsOpen] = useState(false);
 
   const hasPlays = plays.length > 0;

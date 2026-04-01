@@ -115,21 +115,27 @@ export function SportSignalCard({
           </div>
         </div>
 
-        <div className="flex items-baseline gap-4">
+        <div className="flex items-end gap-5">
           <div>
-            <div className="text-[10px] text-muted-foreground">Prob</div>
-            <div className={`text-xl font-bold ${EDGE_COLOR(edge)}`}>{probWhole}%</div>
-          </div>
-          <div>
-            <div className="text-[10px] text-muted-foreground">Edge</div>
-            <div className={`text-xl font-bold ${EDGE_COLOR(edge)}`}>{edgeStr}</div>
+            <div className={`text-2xl font-bold ${EDGE_COLOR(edge)}`}>{probWhole}%</div>
+            <div className="text-[10px] text-muted-foreground">Probability</div>
           </div>
           {projection != null && (
             <div>
+              <div className="text-sm font-semibold text-foreground">{typeof projection === "number" ? projection.toFixed(1) : projection}</div>
               <div className="text-[10px] text-muted-foreground">Proj</div>
-              <div className="text-xl font-bold text-foreground">{typeof projection === "number" ? projection.toFixed(1) : projection}</div>
             </div>
           )}
+          {line != null && (
+            <div>
+              <div className="text-sm font-semibold text-foreground">{line}</div>
+              <div className="text-[10px] text-muted-foreground">Line</div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3 text-[11px]">
+          <span className={`font-medium ${EDGE_COLOR(edge)}`}>EV: {edgeStr}</span>
         </div>
 
         {currentStats && (() => {

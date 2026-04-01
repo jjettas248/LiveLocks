@@ -254,43 +254,26 @@ export function MlbSignalCard({
           </p>
         </div>
         <div className="flex flex-col items-end flex-shrink-0">
-          <span className="text-lg font-black tabular-nums" style={{ color: side.accent }}>
+          <span className="text-xl font-black tabular-nums" style={{ color: side.accent }}>
             {sig.enginePct.toFixed(0)}%
           </span>
-          {sig.bookImplied != null && (
-            <span className="text-[9px] text-muted-foreground/50">Book: {sig.bookImplied.toFixed(0)}%</span>
-          )}
+          <span className="text-[8px] text-muted-foreground/50">Probability</span>
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-2 text-center">
-        <div>
-          <div className="text-[9px] text-muted-foreground/70">Edge</div>
-          <div className="text-[11px] font-bold" style={{ color: (sig.edge ?? 0) > 0 ? "#22c55e" : "#ef4444" }}>
-            {(sig.edge ?? 0) > 0 ? "+" : ""}{(sig.edge ?? 0).toFixed(1)}%
-          </div>
-        </div>
-        <div>
-          <div className="text-[9px] text-muted-foreground/70">Proj</div>
-          <div className="text-[11px] font-bold text-white">{sig.projection != null ? sig.projection.toFixed(2) : "\u2014"}</div>
-        </div>
-        {liveStat ? (
-          <div>
-            <div className="text-[9px] text-muted-foreground/70">{liveStat.label}</div>
-            <div className="text-[11px] font-bold" style={{ color: liveStat.value >= (sig.bookLine ?? 99) ? "#22c55e" : "#ffffff" }}>
-              {liveStat.value}/{sig.bookLine}
-            </div>
-          </div>
-        ) : (
-          <div>
-            <div className="text-[9px] text-muted-foreground/70">Line</div>
-            <div className="text-[11px] font-bold text-white">{sig.bookLine ?? "\u2014"}</div>
-          </div>
+      <div className="flex items-center gap-4 text-[10px]">
+        {sig.projection != null && (
+          <span className="text-muted-foreground/70">Proj: <span className="text-white font-semibold">{sig.projection.toFixed(2)}</span></span>
         )}
-        <div>
-          <div className="text-[9px] text-muted-foreground/70">Score</div>
-          <div className="text-[11px] font-bold text-white">{sig.signalScore ?? 0}</div>
-        </div>
+        {liveStat ? (
+          <span className="text-muted-foreground/70">{liveStat.label}: <span className="font-semibold" style={{ color: liveStat.value >= (sig.bookLine ?? 99) ? "#22c55e" : "#ffffff" }}>{liveStat.value}/{sig.bookLine}</span></span>
+        ) : (
+          <span className="text-muted-foreground/70">Line: <span className="text-white font-semibold">{sig.bookLine ?? "\u2014"}</span></span>
+        )}
+        {sig.edge != null && (
+          <span className="text-muted-foreground/70">EV: <span className="font-medium" style={{ color: sig.edge > 0 ? "#22c55e" : "#ef4444" }}>{sig.edge > 0 ? "+" : ""}{sig.edge.toFixed(1)}%</span></span>
+        )}
+        <span className="text-muted-foreground/70">S: <span className="text-white font-semibold">{sig.signalScore ?? 0}</span></span>
       </div>
 
       {sig.bvp && sig.bvp.atBats > 0 && (

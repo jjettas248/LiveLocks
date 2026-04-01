@@ -1666,7 +1666,10 @@ type HRRadarResponse = {
     line: number; projection: number; engineProbability: number; edge: number | null;
     signalScore: number; confidenceTier: string; badges: string[]; reasons: string[];
     gameId: string; awayAbbr: string | null; homeAbbr: string | null;
+    alreadyHit?: boolean;
   }>;
+  bettableHR: Array<any>;
+  activity?: Array<any>;
   hrWatchlist: Array<{
     playerId: string; playerName: string; team: string; hrProbability: number;
     hardHitEvents: number; parkFactor: number | null; windFactor: string;
@@ -1822,7 +1825,8 @@ function HRRadarSection({ isElite }: { isElite: boolean }) {
     refetchInterval: 60_000,
   });
 
-  const hrEdges = hrData?.hrEdges ?? [];
+  const bettable = hrData?.bettableHR ?? [];
+  const activity = hrData?.activity ?? [];
   const hrWatchlist = hrData?.hrWatchlist ?? [];
 
   return (
@@ -1837,27 +1841,32 @@ function HRRadarSection({ isElite }: { isElite: boolean }) {
         </div>
       )}
 
-      {!isLoading && hrEdges.length > 0 && (
+      {!isLoading && (
         <div className="space-y-2">
-          <h3 className="text-xs font-semibold text-green-400 uppercase tracking-wider" data-testid="text-hr-edges-title">Bettable HR Edges</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {hrEdges.map(edge => (
-              <HREdgeCard key={`hr-edge-${edge.playerId}-${edge.market}-${edge.gameId}`} edge={edge} />
-            ))}
-          </div>
+          <h3 className="text-sm font-bold text-orange-400 mb-2" data-testid="text-hr-edges-title">BETTABLE HR EDGES</h3>
+          {bettable.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No bettable HR signals right now</p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {bettable.map(edge => (
+                <HREdgeCard key={`hr-edge-${edge.playerId}-${edge.market}-${edge.gameId}`} edge={edge} />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      {!isLoading && hrEdges.length === 0 && (
-        <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-4 text-center space-y-2">
-          <div className="flex items-center justify-center gap-2 text-sm text-orange-400">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-400" />
-            </span>
-            Scanning HR markets
+      {!isLoading && activity.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-bold text-muted-foreground mt-6 mb-2">HR ACTIVITY TODAY</h3>
+          <p className="text-[10px] text-muted-foreground/60 mb-2">Already homered — context only</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {activity.map(edge => (
+              <div key={`hr-activity-${edge.playerId}-${edge.market}-${edge.gameId}`} className="opacity-60">
+                <HREdgeCard edge={edge} />
+              </div>
+            ))}
           </div>
-          <div className="text-xs text-muted-foreground/60">HR edges surface when hard contact, park/weather factors, and pitcher vulnerability data align.</div>
         </div>
       )}
 
@@ -1899,7 +1908,7 @@ function HRRadarSection({ isElite }: { isElite: boolean }) {
         </div>
       )}
 
-      {!isLoading && hrEdges.length === 0 && hrWatchlist.length === 0 && (
+      {!isLoading && bettable.length === 0 && activity.length === 0 && hrWatchlist.length === 0 && (
         <div className="text-xs text-muted-foreground/60 text-center py-2">
           HR context data accumulates as games progress and contact data is recorded.
         </div>
