@@ -8,7 +8,6 @@ import { TopPlays } from "@/components/mlb/TopPlays";
 import { LiveBoard } from "@/components/mlb/LiveBoard";
 import { SkeletonCard } from "@/components/sports/SkeletonCard";
 import { EmptyState } from "@/components/sports/EmptyState";
-import { SimulationBanner } from "@/components/sports/SimulationBanner";
 
 function MiniProbRing({ pct, size = 36 }: { pct: number; size?: number }) {
   const sw = 4;
@@ -1124,10 +1123,6 @@ function MlbLiveInner() {
   const [mlbUpgradeNeeded, setMlbUpgradeNeeded] = useState(false);
   const [inningFeedTab, setInningFeedTab] = useState<3 | 5 | 7>(3);
   const [liveFeedSub, setLiveFeedSub] = useState<"all" | "3rd" | "5th" | "7th">("all");
-  const { data: simConfig } = useQuery<{ enabled: boolean; scenario?: string }>({
-    queryKey: ["/api/admin/simulation-config"],
-    refetchInterval: 60000,
-  });
   const gameDetailRef = useRef<HTMLDivElement>(null);
   const [mlbSlipPicks, setMlbSlipPicks] = useState<Array<{ playerId: string; playerName: string; market: string; line: number; side: string; sportsbook: string; edge: number | null; enginePct: number; gameId: string; overOdds?: number | null; underOdds?: number | null }>>([]);
 
@@ -1368,7 +1363,6 @@ function MlbLiveInner() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-5">
-      <SimulationBanner enabled={!!simConfig?.enabled} scenario={simConfig?.scenario} />
       <div className="flex items-center justify-between gap-3 flex-wrap" data-testid="nav-mlb-tabs">
         <div className="flex gap-1.5 flex-wrap">
           {TABS.map(tab => {
