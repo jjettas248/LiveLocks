@@ -589,7 +589,7 @@ export class LiveGameOrchestrator {
       return null;
     }
 
-    if ((output.market === "hr" || output.market === "home_runs") && output.recommendedSide === "UNDER") {
+    if (((output.market as string) === "hr" || output.market === "home_runs") && output.recommendedSide === "UNDER") {
       console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — HR UNDER suppressed (unplayable odds)`);
       return null;
     }
@@ -732,8 +732,8 @@ export class LiveGameOrchestrator {
       pitcherHand: pitcher?.throws ?? null,
       pitcherPitchCount: pitcherCtx?.pitchCount ?? gameState?.pitchCount ?? null,
       pitcherTimesThrough: pitcherCtx?.timesThroughOrder ?? null,
-      homeScore: gameState?.homeScore ?? 0,
-      awayScore: gameState?.awayScore ?? 0,
+      homeScore: (gameState as any)?.homeScore ?? 0,
+      awayScore: (gameState as any)?.awayScore ?? 0,
       inning: gameState?.inning ?? input.inning,
       isTopInning: gameState?.isTopInning ?? input.isTopInning,
       currentStat,
@@ -753,7 +753,7 @@ export class LiveGameOrchestrator {
       else return null;
     }
 
-    if ((output.market === "hr" || output.market === "home_runs") && effectiveSide === "UNDER") {
+    if (((output.market as string) === "hr" || output.market === "home_runs") && effectiveSide === "UNDER") {
       return null;
     }
 
@@ -847,7 +847,7 @@ export class LiveGameOrchestrator {
 
     const impactedMarkets = triggers ? this.computeImpactedMarkets(triggers) : new Set(ALL_MLB_MARKETS);
     if (triggers) {
-      console.log(`[MLB orchestrator] Event-driven recalc for game ${gameId}: triggers=[${triggers.join(",")}] impactedMarkets=[${[...impactedMarkets].join(",")}]`);
+      console.log(`[MLB orchestrator] Event-driven recalc for game ${gameId}: triggers=[${triggers.join(",")}] impactedMarkets=[${Array.from(impactedMarkets).join(",")}]`);
     }
 
     if (!state) {

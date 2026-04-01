@@ -55,7 +55,7 @@ export function computeConsensus(
   if (lines.length === 0) return null;
 
   const allLines = lines.map((l) => l.line);
-  const availableBooks = [...new Set(lines.map((l) => l.sportsbook))];
+  const availableBooks = Array.from(new Set(lines.map((l) => l.sportsbook)));
   const canonicalLine = median(allLines);
   const lineMin = Math.min(...allLines);
   const lineMax = Math.max(...allLines);

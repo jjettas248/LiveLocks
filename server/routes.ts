@@ -118,8 +118,8 @@ function applyBatchFamilySuppression<T extends BatchSignal>(signals: T[]): T[] {
   }
 
   const result: T[] = [];
-  for (const [familyId, members] of familyMap) {
-    members.sort((a, b) => b.edge - a.edge);
+  for (const [familyId, members] of Array.from(familyMap.entries())) {
+    members.sort((a: any, b: any) => b.edge - a.edge);
     const siblingCount = members.length;
     for (let i = 0; i < members.length; i++) {
       const m = members[i];
@@ -754,7 +754,7 @@ export async function registerRoutes(
       console.log(`[MLB DISCOVERY] live-games rawEvents=${rawEvents} (today=${todayData.events?.length ?? 0} active=${activeData.events?.length ?? 0})`);
 
       // ── Team name fallback chain: displayName → shortDisplayName → name ──
-      function resolveTeamName(team: any): string {
+      const resolveTeamName = (team: any): string => {
         if (!team) return "";
         return (
           (team.displayName?.trim() || "") ||
@@ -1121,7 +1121,7 @@ export async function registerRoutes(
           bookImplied = underO < 0 ? Math.abs(underO) / (Math.abs(underO) + 100) * 100 : 100 / (underO + 100) * 100;
         }
 
-        const normalizedMarket = qs.market === "hr" ? "home_runs" : qs.market;
+        const normalizedMarket = (qs.market as string) === "hr" ? "home_runs" : qs.market;
 
         return {
           playerId: qs.playerId,
@@ -1172,10 +1172,10 @@ export async function registerRoutes(
           bookImplied: bookImplied != null ? Math.round(bookImplied * 10) / 10 : null,
           bvp: (qs as any).bvpHistory ?? null,
           rollingForm: (qs as any).rollingForm ?? null,
-          pitchMix: rawOutput?.pitchMix ?? null,
+          pitchMix: (rawOutput as any)?.pitchMix ?? null,
           overOdds: overO,
           underOdds: underO,
-          priorABResults: rawOutput?.priorABResults ?? (qs as any).priorABResults ?? null,
+          priorABResults: (rawOutput as any)?.priorABResults ?? (qs as any).priorABResults ?? null,
         };
       })
       .sort((a, b) => {
@@ -1248,7 +1248,7 @@ export async function registerRoutes(
       let totalEdgeCacheEntries = 0;
       const feedTagDist: Record<string, number> = {};
 
-      for (const [gid, edgeEntry] of mlbEdgeCache.entries()) {
+      for (const [gid, edgeEntry] of Array.from(mlbEdgeCache.entries())) {
         totalEdgeCacheEntries++;
 
         const FEED_FRESHNESS_MS = 300_000;
@@ -1276,11 +1276,11 @@ export async function registerRoutes(
           let currentStatVal = 0;
           if (cs && line > 0) {
             if (qs.market === "hits") currentStatVal = cs.h ?? 0;
-            else if (qs.market === "home_runs" || qs.market === "hr") currentStatVal = cs.hr ?? 0;
+            else if (qs.market === "home_runs" || (qs.market as string) === "hr") currentStatVal = cs.hr ?? 0;
             else if (qs.market === "total_bases") currentStatVal = cs.tb ?? 0;
-            else if (qs.market === "rbi") currentStatVal = cs.rbi ?? 0;
-            else if (qs.market === "runs") currentStatVal = cs.r ?? 0;
-            else if (qs.market === "stolen_bases") currentStatVal = cs.sb ?? 0;
+            else if ((qs.market as string) === "rbi") currentStatVal = cs.rbi ?? 0;
+            else if ((qs.market as string) === "runs") currentStatVal = cs.r ?? 0;
+            else if ((qs.market as string) === "stolen_bases") currentStatVal = cs.sb ?? 0;
             else if (qs.market === "batter_strikeouts") currentStatVal = cs.k ?? 0;
             else if (qs.market === "hrr") currentStatVal = (cs.h ?? 0) + (cs.r ?? 0) + (cs.rbi ?? 0);
             else currentStatVal = cs.h ?? 0;
@@ -1303,7 +1303,7 @@ export async function registerRoutes(
 
           const qsAny = qs as any;
 
-          const normalizedMkt = qs.market === "hr" ? "home_runs" : qs.market;
+          const normalizedMkt = (qs.market as string) === "hr" ? "home_runs" : qs.market;
 
           allSignals.push({
             playerId: qs.playerId,
@@ -1392,7 +1392,7 @@ export async function registerRoutes(
 
       const cachedLiveGames = mlbLiveGamesCache.get("games");
 
-      for (const [gid, edgeEntry] of mlbEdgeCache.entries()) {
+      for (const [gid, edgeEntry] of Array.from(mlbEdgeCache.entries())) {
         const FEED_FRESHNESS_MS = 300_000;
         if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) continue;
 
@@ -3041,7 +3041,7 @@ export async function registerRoutes(
           })
           .map(a => a.teamAbbr)
       );
-      console.log(`[live-signals] totalPlayers=${totalAttempted} enginePlayers=${enginePlayerCount} teams=${[...teamAbbrsPresent].join(",")}`);
+      console.log(`[live-signals] totalPlayers=${totalAttempted} enginePlayers=${enginePlayerCount} teams=${Array.from(teamAbbrsPresent).join(",")}`);
 
       const overSignals = allSignals.filter(s => s.betDirection === "over").length;
       const underSignals = allSignals.filter(s => s.betDirection === "under").length;
@@ -3815,7 +3815,7 @@ export async function registerRoutes(
         if (f.markets.length === 1) f.flagship = p.statType;
         else f.derivatives.push(p.statType);
       }
-      for (const [, fam] of familyMap) {
+      for (const [, fam] of Array.from(familyMap.entries())) {
         if (fam.markets.length > 1) {
           console.log("[MARKET_FAMILY]", JSON.stringify({
             player: fam.player,
@@ -5337,11 +5337,11 @@ export function registerCalibrationRoutes(app: Express): void {
         ? Math.round(probValues.reduce((a: number, b: number) => a + b, 0) / probValues.length * 10) / 10
         : 0;
 
-      function makeBucketStats(
+      const makeBucketStats = (
         items: PersistedPlay[],
         label: string,
         filterFn: (p: PersistedPlay) => boolean
-      ) {
+      ) => {
         const bucket = items.filter(filterFn);
         const bTotal = bucket.length;
         const bWins = bucket.filter((p: PersistedPlay) => p.result === "hit").length;
@@ -5391,12 +5391,12 @@ export function registerAnalyticsRoutes(app: Express): void {
       const { buildTopPlays } = await import("./services/topPlaysService");
 
       const mlbSignals: any[] = [];
-      for (const [, entry] of mlbEdgeCache.entries()) {
+      for (const [, entry] of Array.from(mlbEdgeCache.entries())) {
         const FRESHNESS_MS = 300_000;
         if (entry.updatedAt > 0 && Date.now() - entry.updatedAt > FRESHNESS_MS) continue;
         const qs = entry.qualifiedSignals ?? [];
         for (const sig of qs) {
-          const rawOutput = entry.outputs?.find((o) => o.playerId === sig.playerId && o.market === sig.market);
+          const rawOutput = entry.outputs?.find((o: any) => o.playerId === sig.playerId && o.market === sig.market);
           mlbSignals.push({
             playerId: sig.playerId,
             playerName: sig.playerName,
@@ -5481,7 +5481,7 @@ export function registerAnalyticsRoutes(app: Express): void {
     try {
       let nbaElite = 0, ncaabElite = 0, mlbElite = 0, totalLive = 0;
 
-      for (const [, entry] of mlbEdgeCache.entries()) {
+      for (const [, entry] of Array.from(mlbEdgeCache.entries())) {
         const FRESHNESS_MS = 300_000;
         if (entry.updatedAt > 0 && Date.now() - entry.updatedAt > FRESHNESS_MS) continue;
         const qs = entry.qualifiedSignals ?? [];
@@ -5588,7 +5588,7 @@ export function registerAnalyticsRoutes(app: Express): void {
       const overRate  = nbaTotal > 0 ? Math.round((overPlays.length / nbaTotal) * 1000) / 10 : 0;
 
       // Probability bucket accuracy from persisted plays
-      function persistedBucket(label: string, minP: number, maxP: number) {
+      const persistedBucket = (label: string, minP: number, maxP: number) => {
         const inBucket = settledNBA.filter(p => {
           const prob = Number(p.prob);
           const conf = p.direction === "over" ? prob : 100 - prob;
@@ -5622,7 +5622,7 @@ export function registerAnalyticsRoutes(app: Express): void {
           playerMinutesMap.set(String(p.id), Number(p.avgMinutes));
         }
       }
-      function classifyArchetypeForAudit(mins: number): string {
+      const classifyArchetypeForAudit = (mins: number): string => {
         if (mins >= 32) return "superstar";
         if (mins >= 26) return "primary";
         if (mins >= 20) return "role";

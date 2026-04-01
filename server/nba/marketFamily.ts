@@ -65,11 +65,11 @@ export function groupIntoFamilies(
   }
 
   const families: MarketFamily[] = [];
-  for (const [familyId, data] of familyMap) {
-    data.members.sort((a, b) => b.modelEdge - a.modelEdge);
+  for (const [familyId, data] of Array.from(familyMap.entries())) {
+    data.members.sort((a: any, b: any) => b.modelEdge - a.modelEdge);
 
     const flagship = data.members[0].market;
-    const derivatives = data.members.slice(1).map(m => m.market);
+    const derivatives = data.members.slice(1).map((m: any) => m.market);
 
     families.push({
       familyId,

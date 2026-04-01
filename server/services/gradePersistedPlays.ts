@@ -454,10 +454,10 @@ export async function gradePersistedPlays(
       // Build internal DB player ID → ESPN athlete ID mapping for this batch
       const internalToEspnId = new Map<number, number>();
       for (const play of plays) {
-        if (play.playerId && !internalToEspnId.has(play.playerId)) {
-          const dbPlayer = await storage.getPlayer(play.playerId).catch(() => undefined);
+        if (play.playerId && !internalToEspnId.has(Number(play.playerId))) {
+          const dbPlayer = await storage.getPlayer(Number(play.playerId)).catch(() => undefined);
           if (dbPlayer?.espnAthleteId) {
-            internalToEspnId.set(play.playerId, dbPlayer.espnAthleteId);
+            internalToEspnId.set(Number(play.playerId), dbPlayer.espnAthleteId);
           }
         }
       }
@@ -468,7 +468,7 @@ export async function gradePersistedPlays(
 
       for (const play of plays) {
         try {
-          const espnId = play.playerId ? internalToEspnId.get(play.playerId) : undefined;
+          const espnId = play.playerId ? internalToEspnId.get(Number(play.playerId)) : undefined;
           let byId = espnId != null ? playerMap.get(String(espnId)) : undefined;
 
           // Fallback: name-based lookup when ESPN ID is missing or not found in box score

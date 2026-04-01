@@ -357,9 +357,9 @@ export async function preWarmOddsCache(
   statTypes: string[],
   inPlay = false
 ): Promise<void> {
-  const uniqueMarketKeys = [...new Set(
+  const uniqueMarketKeys = Array.from(new Set(
     statTypes.map(st => MARKET_MAP[st]).filter(Boolean)
-  )];
+  ));
   const results = await Promise.allSettled(
     uniqueMarketKeys.map(mk => getRawOdds(oddsEventId, mk, inPlay))
   );

@@ -145,7 +145,7 @@ export function getDirectionalSplit(): {
   const underTotal = rolling7d.underWins + rolling7d.underLosses;
 
   const mb: Record<string, { over: number; under: number; overRatio: number; avgOverEdge: number; avgUnderEdge: number }> = {};
-  for (const [market, ms] of marketStats) {
+  for (const [market, ms] of Array.from(marketStats.entries())) {
     const mTotal = ms.overCount + ms.underCount;
     mb[market] = {
       over: ms.overCount,

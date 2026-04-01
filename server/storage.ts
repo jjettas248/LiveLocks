@@ -1006,9 +1006,9 @@ export class DatabaseStorage implements IStorage {
       zScore: Math.round(z * 1000) / 1000,
     };
 
-    if (!noSignal && req.sport === "nba") {
+    if (!noSignal && (req as any).sport === "nba") {
       console.log("[ENGINE_OUTPUT]", JSON.stringify({
-        player: req.playerName,
+        player: (req as any).playerName,
         gameId: req.gameId,
         market: req.statType,
         marketType: isComboStat ? "combo" : "single",
@@ -1053,8 +1053,8 @@ export class DatabaseStorage implements IStorage {
       baselineSource,
       noSignal,
       debug: req.isDebug ? debug : undefined,
-      engineDiagnostics,
-    };
+      ...(engineDiagnostics ? { engineDiagnostics } : {}),
+    } as any;
   }
 
   async getUserById(id: number): Promise<User | undefined> {
