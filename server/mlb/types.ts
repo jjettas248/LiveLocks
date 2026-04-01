@@ -159,7 +159,7 @@ export interface ABResult {
   exitVelocity: number | null;
   launchAngle: number | null;
   distance: number | null;
-  outcome: "hit" | "out" | "strikeout" | "walk" | "hbp" | "error" | "other";
+  outcome: "hit" | "out" | "strikeout" | "walk" | "hbp" | "error" | "other" | "home_run" | "hr" | "homerun";
   pitchType?: string | null;
   pitchSpeed?: number | null;
 }

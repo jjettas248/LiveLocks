@@ -7,7 +7,7 @@ createRoot(document.getElementById("root")!).render(<App />);
 if ("serviceWorker" in navigator) {
   let refreshing = false;
 
-  function promptUpdate(worker: ServiceWorker) {
+  const promptUpdate = (worker: ServiceWorker) => {
     worker.postMessage({ type: "SKIP_WAITING" });
   }
 

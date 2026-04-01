@@ -3,7 +3,7 @@
 // All functions: 8-second timeout, try/catch, log-and-return on error.
 
 import type { PitchMixEntry } from "./types";
-import { fetchBaseballSavantData } from "./dataSources";
+import { fetchBaseballSavantData, getStadiumCoords, windDirectionRelativeToField, isVenueIndoors } from "./dataSources";
 
 // ── Cache type definitions ────────────────────────────────────────────────────
 
@@ -806,7 +806,7 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
       return;
     }
 
-    function computeRolling(games: any[]): { avg: number | null; ops: number | null; games: number } {
+    const computeRolling = (games: any[]): { avg: number | null; ops: number | null; games: number } => {
       if (games.length === 0) return { avg: null, ops: null, games: 0 };
       let totalAB = 0, totalH = 0, totalPA = 0, totalTB = 0, totalOBP_num = 0;
       for (const g of games) {
@@ -834,7 +834,7 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
     }
 
     const now = new Date();
-    function filterByDays(days: number): any[] {
+    const filterByDays = (days: number): any[] => {
       const cutoff = new Date(now);
       cutoff.setDate(cutoff.getDate() - days);
       const cutoffStr = cutoff.toISOString().slice(0, 10);
@@ -859,6 +859,147 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
     console.log(`[MLB pull] syncBatterRollingStats: player ${playerId} — L7=${last7.avg} L15=${last15.avg} L30=${last30.avg} Season=${seasonAvg} (${splits.length} games)`);
   } catch (err: any) {
     console.error(`[MLB pull] syncBatterRollingStats(${playerId}) error:`, err.message);
+  }
+}
+
+// ── syncSavantSeasonForLineup ─────────────────────────────────────────────────
+// Pre-hydrates Savant season stats (xBA, xSLG, EV, barrel%) for ALL batters in
+// the lineup — including those with 0 AB who have no BIP events yet.
+// This fills the gap where syncContactData only enriches players with BIP data.
+export async function syncSavantSeasonForLineup(gameId: string): Promise<void> {
+  const state = mlbGameCache.gameState[gameId];
+  if (!state || !state.battingOrder || state.battingOrder.length === 0) return;
+
+  const contactData = mlbGameCache.contactData[gameId]?.byPlayerId ?? {};
+  const needsEnrichment: string[] = [];
+
+  for (const batter of state.battingOrder) {
+    if (!batter.playerId || batter.playerId === "unknown") continue;
+    const existing = contactData[batter.playerId];
+    if (!existing || (existing.xBA === null && existing.xSLG === null)) {
+      needsEnrichment.push(batter.playerId);
+    }
+  }
+
+  if (needsEnrichment.length === 0) return;
+
+  console.log(`[MLB_SAVANT_PREHYDRATE] game=${gameId} enriching ${needsEnrichment.length} batters without Savant data`);
+
+  const results = await Promise.allSettled(
+    needsEnrichment.map((pid) => fetchBaseballSavantData(pid, gameId))
+  );
+
+  let enriched = 0;
+  for (let i = 0; i < needsEnrichment.length; i++) {
+    const result = results[i];
+    if (result.status !== "fulfilled" || !result.value) continue;
+    const pid = needsEnrichment[i];
+    const savant = result.value;
+    if (savant.xBA === null && savant.xSLG === null) continue;
+
+    if (!mlbGameCache.contactData[gameId]) {
+      mlbGameCache.contactData[gameId] = { byPlayerId: {}, fetchedAt: Date.now() };
+    }
+    if (!mlbGameCache.contactData[gameId].byPlayerId[pid]) {
+      mlbGameCache.contactData[gameId].byPlayerId[pid] = {
+        exitVelocity: savant.exitVelocity,
+        launchAngle: savant.launchAngle,
+        hitDistance: savant.hitDistance,
+        hardHitPct: savant.hardHitRateSeason,
+        barrelPct: savant.barrelRateProxySeason,
+        xBA: savant.xBA,
+        xSLG: savant.xSLG,
+        priorABResults: [],
+      };
+    } else {
+      const entry = mlbGameCache.contactData[gameId].byPlayerId[pid];
+      if (entry.xBA === null && savant.xBA != null) entry.xBA = savant.xBA;
+      if (entry.xSLG === null && savant.xSLG != null) entry.xSLG = savant.xSLG;
+      if (entry.exitVelocity === null && savant.exitVelocity != null) entry.exitVelocity = savant.exitVelocity;
+      if (entry.hardHitPct === null && savant.hardHitRateSeason != null) entry.hardHitPct = savant.hardHitRateSeason;
+      if (entry.barrelPct === null && savant.barrelRateProxySeason != null) entry.barrelPct = savant.barrelRateProxySeason;
+    }
+    enriched++;
+  }
+
+  console.log(`[MLB_SAVANT_PREHYDRATE] game=${gameId} enriched ${enriched}/${needsEnrichment.length} batters with season Savant data`);
+}
+
+// ── syncOpenMeteoWeather ─────────────────────────────────────────────────────
+// Fetches pre-game weather from Open-Meteo API using stadium coordinates.
+// Used as a fallback when MLB Stats API live feed weather is not yet available.
+const openMeteoCache = new Map<string, { data: WeatherCache; fetchedAt: number }>();
+const OPEN_METEO_TTL = 30 * 60 * 1000;
+
+export async function syncOpenMeteoWeather(gameId: string, venueName: string | null): Promise<void> {
+  if (!venueName) return;
+  if (isVenueIndoors(venueName)) {
+    if (!mlbGameCache.weather[gameId]) {
+      mlbGameCache.weather[gameId] = {
+        temperature: 72,
+        windSpeed: 0,
+        windDirection: "calm",
+        humidity: 50,
+        fetchedAt: Date.now(),
+        venueName,
+        isIndoors: true,
+      };
+      console.log(`[MLB_WEATHER_OPENMETEO] game=${gameId} venue="${venueName}" → indoor stadium, using defaults`);
+    }
+    return;
+  }
+
+  const cached = openMeteoCache.get(gameId);
+  if (cached && Date.now() - cached.fetchedAt < OPEN_METEO_TTL) {
+    if (!mlbGameCache.weather[gameId]) {
+      mlbGameCache.weather[gameId] = cached.data;
+    }
+    return;
+  }
+
+  const coords = getStadiumCoords(venueName);
+  if (!coords) {
+    console.warn(`[MLB_WEATHER_OPENMETEO] No coordinates for venue "${venueName}" — skipping`);
+    return;
+  }
+
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m&temperature_unit=fahrenheit&wind_speed_unit=mph`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "LiveLocks/1.0" },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json() as any;
+    const current = data.current ?? {};
+
+    const temperature = safeNum(current.temperature_2m);
+    const windSpeed = safeNum(current.wind_speed_10m);
+    const humidity = safeNum(current.relative_humidity_2m);
+    const windDeg = safeNum(current.wind_direction_10m);
+
+    const windDirection = windDeg != null
+      ? windDirectionRelativeToField(windDeg, coords.orientation)
+      : "cross";
+
+    const weatherData: WeatherCache = {
+      temperature,
+      windSpeed,
+      windDirection: windSpeed != null && windSpeed < 3 ? "calm" : windDirection,
+      humidity,
+      fetchedAt: Date.now(),
+      venueName,
+      isIndoors: false,
+    };
+
+    openMeteoCache.set(gameId, { data: weatherData, fetchedAt: Date.now() });
+
+    if (!mlbGameCache.weather[gameId] || mlbGameCache.weather[gameId].temperature === null) {
+      mlbGameCache.weather[gameId] = weatherData;
+      console.log(`[MLB_WEATHER_OPENMETEO] game=${gameId} venue="${venueName}" — ${temperature}°F, wind ${windSpeed}mph ${windDirection}, humidity ${humidity}%`);
+    }
+  } catch (err: any) {
+    console.warn(`[MLB_WEATHER_OPENMETEO] game=${gameId} error: ${err.message}`);
   }
 }
 

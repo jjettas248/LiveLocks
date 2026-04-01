@@ -21,6 +21,8 @@ import {
   syncPitcherSeasonStats,
   syncBatterRollingStats,
   syncBvPMatchup,
+  syncSavantSeasonForLineup,
+  syncOpenMeteoWeather,
   mlbGameCache,
   mlbPlayerCache,
   type GameStateCache,
@@ -264,9 +266,13 @@ export class LiveGameOrchestrator {
       const discovered = await discoverTodaysGames();
       const discoveredIds = new Set(discovered.map((g) => g.gameId));
 
-      // Register new games
+      // Register new games + pre-hydrate pitcher stats and weather
       for (const game of discovered) {
+        const isNew = !getGame(game.gameId);
         registerGame(game);
+        if (isNew && game.gamePk) {
+          this.preHydrateNewGame(game).catch(console.error);
+        }
       }
 
       // Remove games no longer active
@@ -279,6 +285,39 @@ export class LiveGameOrchestrator {
     } catch (err: any) {
       console.error("[MLB orchestrator] pollGames error:", err.message);
     }
+  }
+
+  private async preHydrateNewGame(game: import("./gameDiscoveryService").MLBGame): Promise<void> {
+    const { gameId, gamePk } = game;
+    if (!gamePk) return;
+    console.log(`[MLB_PREHYDRATE] Starting pre-hydration for game ${gameId} (gamePk=${gamePk})`);
+
+    const phase1: Promise<void>[] = [];
+
+    phase1.push(
+      syncGameState(gamePk, gameId).then(async () => {
+        const state = mlbGameCache.gameState[gameId];
+        if (!state) return;
+
+        if (state.pitcherInGame?.playerId) {
+          await syncPitcherSeasonStats(state.pitcherInGame.playerId);
+          const stats = mlbPlayerCache.pitcherSeasonStats[state.pitcherInGame.playerId];
+          console.log(`[MLB_PREHYDRATE] Pitcher ${state.pitcherInGame.playerName}: ERA=${stats?.era ?? "?"} WHIP=${stats?.whip ?? "?"}`);
+        }
+      })
+    );
+
+    phase1.push(
+      syncWeather(gamePk, gameId).then(async () => {
+        const weather = mlbGameCache.weather[gameId];
+        if (weather?.venueName) {
+          await syncOpenMeteoWeather(gameId, weather.venueName);
+        }
+      })
+    );
+
+    await Promise.allSettled(phase1);
+    console.log(`[MLB_PREHYDRATE] Completed pre-hydration for game ${gameId}`);
   }
 
   async pollGame(gameId: string): Promise<void> {
@@ -336,6 +375,8 @@ export class LiveGameOrchestrator {
           }
         }
       }
+
+      playerSyncPromises.push(syncSavantSeasonForLineup(gameId));
 
       await Promise.allSettled(playerSyncPromises);
       if (batterCount > 0) {

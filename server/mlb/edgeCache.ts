@@ -30,7 +30,7 @@ export function cleanupExpiredEntries(): void {
   const now = Date.now();
   const activeIds = new Set(getActiveGames().map((g) => g.gameId));
 
-  for (const [key, entry] of _cache) {
+  for (const [key, entry] of Array.from(_cache.entries())) {
     if (now - entry.createdAt > CACHE_TTL_MS || !activeIds.has(entry.gameId)) {
       _cache.delete(key);
     }

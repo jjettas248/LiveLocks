@@ -363,6 +363,10 @@ export async function registerRoutes(
     return res.json(getSimulationConfig());
   });
 
+  app.get("/api/admin/nba-bias", requireAdmin, (_req, res) => {
+    return res.json(getDirectionalSplit());
+  });
+
   // ── NCAAB Routes (Pro "all" + Elite "elite" + Admin) ────────────────────────
   app.get("/api/ncaab/plays", requireTier("all", "elite"), async (_req, res) => {
     try {

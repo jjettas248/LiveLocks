@@ -28,31 +28,6 @@ export interface BaseballSavantData {
   };
 }
 
-export interface MLBComData {
-  battingOrderSlot: number;
-  pitchCount: number;
-  timesThrough: number;
-  inning: number;
-  isTopInning: boolean;
-  currentHits: number;
-  currentTotalBases: number;
-  currentStrikeouts: number;
-  currentHomeRuns: number;
-  plateAppearances: number;
-  atBats: number;
-}
-
-export interface ESPNMLBData {
-  gameStatus: string;
-  homeTeam: string;
-  awayTeam: string;
-  homeScore: number;
-  awayScore: number;
-  inning: number;
-  isTopInning: boolean;
-  playerStats: Record<string, any>;
-}
-
 // Cache for Savant data (updated infrequently — season stats)
 const savantCache = new Map<string, { data: BaseballSavantData; fetchedAt: number }>();
 const SAVANT_TTL = 30 * 60 * 1000; // 30 min
@@ -117,6 +92,8 @@ const VENUE_ALIASES: Record<string, string> = {
   "US Cellular Field": "Guaranteed Rate Field",
   "Miller Park": "American Family Field",
   "Safeco Field": "T-Mobile Park",
+  "Daikin Park": "Minute Maid Park",
+  "UNIQLO Field at Dodger Stadium": "Dodger Stadium",
 };
 
 function resolveVenue(venueName: string): ParkFactors | null {
@@ -330,52 +307,60 @@ export async function fetchBaseballSavantData(
   }
 }
 
-export function getPlayerLiveStats(
-  playerId: string,
-  gameId: string,
-  gameCache: {
-    gameBoxScore: Record<string, { byPlayerId: Record<string, { hits: number; hr: number; ab: number; bb: number; rbi: number; so: number; tb: number; runs: number }> }>;
-    gameState: Record<string, { inning: number; isTopInning: boolean }>;
-  },
-  battingOrderSlot?: number
-): MLBComData {
-  const boxScore = gameCache.gameBoxScore[gameId];
-  const state = gameCache.gameState[gameId];
-  const player = boxScore?.byPlayerId?.[playerId];
+// ── Stadium Coordinates (for Open-Meteo weather pre-hydration) ────────────────
+export const STADIUM_COORDS: Record<string, { lat: number; lon: number; orientation: number }> = {
+  "Coors Field":              { lat: 39.7559, lon: -104.9942, orientation: 20 },
+  "Fenway Park":              { lat: 42.3467, lon: -71.0972, orientation: 68 },
+  "Yankee Stadium":           { lat: 40.8296, lon: -73.9262, orientation: 52 },
+  "Citizens Bank Park":       { lat: 39.9061, lon: -75.1665, orientation: 45 },
+  "Great American Ball Park": { lat: 39.0974, lon: -84.5082, orientation: 10 },
+  "Globe Life Field":         { lat: 32.7473, lon: -97.0845, orientation: 18 },
+  "Wrigley Field":            { lat: 41.9484, lon: -87.6553, orientation: 30 },
+  "Guaranteed Rate Field":    { lat: 41.8299, lon: -87.6338, orientation: 20 },
+  "Kauffman Stadium":         { lat: 39.0517, lon: -94.4803, orientation: 10 },
+  "Minute Maid Park":         { lat: 29.7573, lon: -95.3555, orientation: 20 },
+  "American Family Field":    { lat: 43.0280, lon: -87.9712, orientation: 50 },
+  "Target Field":             { lat: 44.9817, lon: -93.2778, orientation: 30 },
+  "Truist Park":              { lat: 33.8907, lon: -84.4677, orientation: 10 },
+  "Nationals Park":           { lat: 38.8730, lon: -77.0074, orientation: 40 },
+  "Busch Stadium":            { lat: 38.6226, lon: -90.1928, orientation: 15 },
+  "Angel Stadium":            { lat: 33.8003, lon: -117.8827, orientation: 30 },
+  "Comerica Park":            { lat: 42.3390, lon: -83.0485, orientation: 30 },
+  "PNC Park":                 { lat: 40.4469, lon: -80.0057, orientation: 25 },
+  "T-Mobile Park":            { lat: 47.5914, lon: -122.3325, orientation: 5 },
+  "Dodger Stadium":           { lat: 34.0739, lon: -118.2400, orientation: 22 },
+  "loanDepot park":           { lat: 25.7781, lon: -80.2196, orientation: 20 },
+  "Oracle Park":              { lat: 37.7786, lon: -122.3893, orientation: 30 },
+  "Petco Park":               { lat: 32.7076, lon: -117.1570, orientation: 20 },
+  "Chase Field":              { lat: 33.4455, lon: -112.0667, orientation: 15 },
+  "Rogers Centre":            { lat: 43.6414, lon: -79.3894, orientation: 45 },
+  "Citi Field":               { lat: 40.7571, lon: -73.8458, orientation: 50 },
+  "Progressive Field":        { lat: 41.4962, lon: -81.6852, orientation: 20 },
+  "Tropicana Field":          { lat: 27.7682, lon: -82.6534, orientation: 40 },
+  "Sutter Health Park":       { lat: 38.5805, lon: -121.5009, orientation: 25 },
+  "Oriole Park at Camden Yards": { lat: 39.2838, lon: -76.6216, orientation: 30 },
+};
 
-  return {
-    battingOrderSlot: battingOrderSlot ?? 5,
-    pitchCount: 0,
-    timesThrough: 1,
-    inning: state?.inning ?? 1,
-    isTopInning: state?.isTopInning ?? true,
-    currentHits: player?.hits ?? 0,
-    currentTotalBases: player?.tb ?? 0,
-    currentStrikeouts: player?.so ?? 0,
-    currentHomeRuns: player?.hr ?? 0,
-    plateAppearances: (player?.ab ?? 0) + (player?.bb ?? 0),
-    atBats: player?.ab ?? 0,
-  };
+export function getStadiumCoords(venueName: string | null | undefined): { lat: number; lon: number; orientation: number } | null {
+  if (!venueName) return null;
+  if (STADIUM_COORDS[venueName]) return STADIUM_COORDS[venueName];
+  const alias = VENUE_ALIASES[venueName];
+  if (alias && STADIUM_COORDS[alias]) return STADIUM_COORDS[alias];
+  const lower = venueName.toLowerCase();
+  for (const [name, coords] of Object.entries(STADIUM_COORDS)) {
+    if (lower.includes(name.toLowerCase().split(" ")[0]) || name.toLowerCase().includes(lower.split(" ")[0])) {
+      return coords;
+    }
+  }
+  return null;
 }
 
-export async function fetchMLBComData(
-  playerId: string,
-  gameId: string
-): Promise<MLBComData> {
-  return getPlayerLiveStats(playerId, gameId, { gameBoxScore: {}, gameState: {} });
-}
-
-export async function fetchESPNMLBData(
-  _gameId: string
-): Promise<ESPNMLBData> {
-  return {
-    gameStatus: "In Progress",
-    homeTeam: "",
-    awayTeam: "",
-    homeScore: 0,
-    awayScore: 0,
-    inning: 1,
-    isTopInning: true,
-    playerStats: {},
-  };
+export function windDirectionRelativeToField(
+  windDegrees: number,
+  fieldOrientation: number
+): "in" | "out" | "cross" | "calm" {
+  const relative = ((windDegrees - fieldOrientation) % 360 + 360) % 360;
+  if (relative >= 150 && relative <= 210) return "out";
+  if (relative >= 330 || relative <= 30) return "in";
+  return "cross";
 }

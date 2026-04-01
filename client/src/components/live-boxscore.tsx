@@ -338,7 +338,7 @@ export function LiveBoxscore({
                         if (!isSelected && playerEngineData) {
                           const allEntries = Object.entries(playerEngineData)
                             .filter(([, v]) => v && Number.isFinite((v as EngineEntry).probability))
-                            .map(([st, v]) => ({ statType: st, ...(v as EngineEntry) }))
+                            .map(([st, v]) => ({ ...(v as EngineEntry), statType: st }))
                             .sort((a, b) => {
                               if (a.statType === watchedStatType && b.statType !== watchedStatType) return -1;
                               if (b.statType === watchedStatType && a.statType !== watchedStatType) return 1;

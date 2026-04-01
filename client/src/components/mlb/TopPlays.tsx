@@ -12,7 +12,9 @@ type MLBSignal = {
   evPct?: number | null;
   recommendedSide: string;
   tier?: string;
-  gameId: string;
+  gameId?: string;
+  odds?: { bookLine: number } | null;
+  inning?: number;
   signalScore?: number | null;
   confidenceTier?: string;
   signalTags?: string[];
@@ -174,7 +176,7 @@ function SignalCard({ sig, onPlayerClick, onAddToSlip }: { sig: MLBSignal; onPla
   const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
   const tags = (sig.signalTags ?? []).slice(0, 3);
   const matchup = sig.awayAbbr && sig.homeAbbr ? `${sig.awayAbbr} vs ${sig.homeAbbr}` : null;
-  const form = formBadge(sig.formIndicator);
+  const form = formBadge(sig.formIndicator ?? null);
   const reasons = sig.reasons ?? [];
   const isClickable = !!onPlayerClick;
   const liveStat = getCurrentStatForMarket(sig);
@@ -186,7 +188,7 @@ function SignalCard({ sig, onPlayerClick, onAddToSlip }: { sig: MLBSignal; onPla
       data-testid={`mlb-top-play-${sig.playerId}-${sig.market}`}
       className={`rounded-xl p-3.5 space-y-2 transition-all ${isClickable ? "cursor-pointer hover:brightness-110" : ""}`}
       style={{ background: side.bg, border: `1px solid ${side.border}`, opacity: cardOpacity }}
-      onClick={isClickable ? () => onPlayerClick(sig.gameId, sig.playerId) : undefined}
+      onClick={isClickable && sig.gameId ? () => onPlayerClick!(sig.gameId!, sig.playerId) : undefined}
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">

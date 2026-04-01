@@ -179,7 +179,7 @@ function resolveGamePkFull(
   const awayLower = awayTeamName.toLowerCase();
   const homeLower = homeTeamName.toLowerCase();
   const nameMatches: MlbScheduleEntry[] = [];
-  for (const entries of pkMap.values()) {
+  for (const entries of Array.from(pkMap.values())) {
     for (const e of entries) {
       const eAway = e.awayName.toLowerCase();
       const eHome = e.homeName.toLowerCase();
@@ -205,7 +205,7 @@ function resolveGamePkFull(
   if (espnTime > 0) {
     const TWO_HOURS = 2 * 60 * 60 * 1000;
     const timeMatches: MlbScheduleEntry[] = [];
-    for (const entries of pkMap.values()) {
+    for (const entries of Array.from(pkMap.values())) {
       for (const e of entries) {
         const diff = Math.abs(new Date(e.gameTime).getTime() - espnTime);
         if (diff <= TWO_HOURS) timeMatches.push(e);
@@ -298,8 +298,8 @@ export async function discoverTodaysGames(): Promise<MLBGame[]> {
       const competition = event.competitions?.[0];
       if (!competition) continue;
 
-      const homeCompetitor = competition.competitors?.find((c) => c.homeAway === "home");
-      const awayCompetitor = competition.competitors?.find((c) => c.homeAway === "away");
+      const homeCompetitor = competition.competitors?.find((c: any) => c.homeAway === "home");
+      const awayCompetitor = competition.competitors?.find((c: any) => c.homeAway === "away");
 
       const homeTeam = resolveTeamName(homeCompetitor?.team);
       const awayTeam = resolveTeamName(awayCompetitor?.team);

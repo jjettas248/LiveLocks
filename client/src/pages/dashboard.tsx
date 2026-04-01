@@ -1496,7 +1496,7 @@ export default function Dashboard() {
   const result = calculateMutation.data;
 
   const tweetTemplateIndexRef = useRef<number | null>(null);
-  const lastResultRef = useRef<typeof result>(null);
+  const lastResultRef = useRef<typeof result | null>(null);
   const [tweetSnippet, setTweetSnippet] = useState("");
 
   useEffect(() => {

@@ -1364,6 +1364,7 @@ function MlbLiveInner() {
               setCalcResult={setCalcResult}
               opponentTeam={opponentTeam}
               onBack={() => { setSelectedPlayer(null); setCalcResult(null); setSelectedLine(null); setManualMode(false); }}
+              onAddToSlip={handleAddToSlip}
             />
           )}
         </>
@@ -1394,7 +1395,7 @@ function MlbLiveInner() {
             if (liveFeedSub === "all") {
               return (
                 <div className="space-y-6">
-                  <TopPlays signals={filtered} onPlayerClick={(gameId, _playerId) => { setSelectedGameId(gameId); setMainTab("games"); setTimeout(() => gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 150); }} onAddToSlip={(sig) => handleAddToSlip(sig)} />
+                  <TopPlays signals={filtered as any} onPlayerClick={(gameId, _playerId) => { setSelectedGameId(gameId); setMainTab("games"); setTimeout(() => gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 150); }} onAddToSlip={(sig) => handleAddToSlip(sig as any)} />
                   <LiveBoard signals={filtered} onPlayerClick={(gameId, _playerId) => { setSelectedGameId(gameId); setMainTab("games"); setTimeout(() => gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 150); }} />
                 </div>
               );
@@ -2206,7 +2207,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
 function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoading, selectedMarket, setSelectedMarket,
   selectedLine, setSelectedLine, manualMode, setManualMode, manualBookLine, setManualBookLine, hasAnyOdds, canCalculate,
   gameHydrated, playerHydrated, lineValid, lineupReady,
-  calcMutation, calcResult, setCalcResult, opponentTeam, onBack }: {
+  calcMutation, calcResult, setCalcResult, opponentTeam, onBack, onAddToSlip }: {
   player: MLBBatter; game: MLBGame; signals: MLBSignal[]; isElite: boolean;
   oddsEntries: [string, OddsEntry][]; oddsLoading: boolean; selectedMarket: string;
   setSelectedMarket: (m: string) => void; selectedLine: any; setSelectedLine: (l: any) => void;
@@ -2214,6 +2215,7 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
   setManualBookLine: (v: string) => void; hasAnyOdds: boolean; canCalculate: boolean;
   gameHydrated: boolean; playerHydrated: boolean; lineValid: boolean; lineupReady: boolean;
   calcMutation: any; calcResult: CalcResult | null; setCalcResult: (r: CalcResult | null) => void; opponentTeam: string | null; onBack: () => void;
+  onAddToSlip?: (sig: MLBSignal) => void;
 }) {
   const playerSignals = signals.filter(s => s.playerId === player.playerId);
   const bestSignal = playerSignals.length > 0 ? playerSignals.reduce((b, s) => Math.abs(s.edge ?? 0) > Math.abs(b.edge ?? 0) ? s : b) : null;
@@ -2439,7 +2441,7 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
           <h3 className="text-sm font-bold text-foreground">Engine Signals</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {playerSignals.map(sig => (
-              <SignalCard key={`${sig.playerId}-${sig.market}`} sig={sig} isElite={isElite} onAddToSlip={handleAddToSlip} />
+              <SignalCard key={`${sig.playerId}-${sig.market}`} sig={sig} isElite={isElite} onAddToSlip={onAddToSlip} />
             ))}
           </div>
         </div>
