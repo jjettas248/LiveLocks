@@ -775,9 +775,9 @@ export async function registerRoutes(
         const awayAbbrVal: string = awayCompetitor?.team?.abbreviation ?? "";
         const homeAbbrVal: string = homeCompetitor?.team?.abbreviation ?? "";
 
-        // Scores
-        const homeScore: number = isLive ? (parseFloat(homeCompetitor?.score ?? "0") || 0) : 0;
-        const awayScore: number = isLive ? (parseFloat(awayCompetitor?.score ?? "0") || 0) : 0;
+        // Scores — parse for live and final games
+        const homeScore: number = (isLive || isFinal) ? (parseFloat(homeCompetitor?.score ?? "0") || 0) : 0;
+        const awayScore: number = (isLive || isFinal) ? (parseFloat(awayCompetitor?.score ?? "0") || 0) : 0;
 
         // Inning from cached game state (orchestrator-maintained) — fallback to ESPN status detail
         const cachedState = mlbGameCache.gameState[gameId];
@@ -844,11 +844,11 @@ export async function registerRoutes(
           homeTeam: homeTeamName,
           awayAbbr: awayAbbrVal,
           homeAbbr: homeAbbrVal,
-          homeScore: canonicalState === "live" ? homeScore : null,
-          awayScore: canonicalState === "live" ? awayScore : null,
+          homeScore: (canonicalState === "live" || canonicalState === "final") ? homeScore : null,
+          awayScore: (canonicalState === "live" || canonicalState === "final") ? awayScore : null,
           inning: cachedState?.inning ?? inningFromEspn,
           isTopInning: cachedState?.isTopInning ?? isTopInningFromEspn,
-          status: canonicalState === "live" ? "live" : "pregame",
+          status: canonicalState as "live" | "pregame" | "final",
           startTime: event.date ?? null,
           venue: parkName || null,
           weatherSummary: weatherSummary || null,

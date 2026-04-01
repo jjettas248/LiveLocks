@@ -11,7 +11,7 @@ type MLBScheduleGame = {
   awayScore: number | null;
   inning: number;
   isTopInning: boolean;
-  status: "live" | "pregame" | null;
+  status: "live" | "pregame" | "final" | null;
   startTime?: string | null;
   venue?: string | null;
   weatherSummary?: string | null;
@@ -97,7 +97,7 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
   const preGames = renderedGames
     .filter(g => g.status === "pregame" || g.status === null)
     .sort((a, b) => new Date(a.startTime ?? "").getTime() - new Date(b.startTime ?? "").getTime());
-  const finalGames = renderedGames.filter(g => (g.status as string) === "final");
+  const finalGames = renderedGames.filter(g => g.status === "final");
 
   const isCompact = selectedGameId !== null;
 
@@ -129,10 +129,11 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
               <span className="text-xs font-bold text-foreground whitespace-nowrap">
                 {game.awayAbbr ?? ""} @ {game.homeAbbr ?? ""}
               </span>
-              {game.status === "live" && game.awayScore != null && game.homeScore != null ? (
-                <span className="text-[10px] font-mono font-bold text-foreground whitespace-nowrap">
+              {(game.status === "live" || game.status === "final") && game.awayScore != null && game.homeScore != null ? (
+                <span className={`text-[10px] font-mono font-bold whitespace-nowrap ${game.status === "final" ? "text-muted-foreground" : "text-foreground"}`}>
                   {game.awayScore}–{game.homeScore}
-                  {game.inning > 0 && <span className="text-green-400 ml-1">{game.isTopInning ? "▲" : "▼"}{game.inning}</span>}
+                  {game.status === "live" && game.inning > 0 && <span className="text-green-400 ml-1">{game.isTopInning ? "▲" : "▼"}{game.inning}</span>}
+                  {game.status === "final" && <span className="text-muted-foreground/50 ml-1">F</span>}
                 </span>
               ) : (
                 <span className="text-[10px] text-muted-foreground whitespace-nowrap">{formatStartTime(game.startTime) ?? "TBD"}</span>
@@ -157,6 +158,7 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
     const awayAbbr = game.awayAbbr ?? "";
     const homeAbbr = game.homeAbbr ?? "";
     const isLive = game.status === "live";
+    const isFinal = game.status === "final";
     const pf = isLive ? parkFactorLabel(game.parkFactor) : null;
     const weather = game.weather;
     const hasWeatherInfo = weather && (weather.temperature != null || weather.windSpeed != null);
@@ -176,8 +178,8 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1 min-w-0 shrink-0" style={{ width: "100px" }}>
             <div className="text-xs font-bold text-foreground">{awayAbbr}</div>
-            {isLive && game.awayScore != null && game.homeScore != null ? (
-              <span className="text-[11px] font-mono font-bold text-foreground mx-1">
+            {(isLive || isFinal) && game.awayScore != null && game.homeScore != null ? (
+              <span className={`text-[11px] font-mono font-bold mx-1 ${isFinal ? "text-muted-foreground" : "text-foreground"}`}>
                 {game.awayScore}–{game.homeScore}
               </span>
             ) : (
@@ -189,6 +191,10 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
           {isLive && game.inning > 0 ? (
             <span className="text-[10px] font-bold text-green-400 shrink-0 w-8 text-center">
               {game.isTopInning ? "▲" : "▼"}{game.inning}
+            </span>
+          ) : isFinal ? (
+            <span className="text-[10px] font-bold text-muted-foreground/50 shrink-0 w-12 text-center">
+              Final
             </span>
           ) : (
             <span className="text-[10px] text-muted-foreground shrink-0 w-12 text-center">
@@ -217,6 +223,8 @@ export const MLBScheduleList = memo(function MLBScheduleList({ games, selectedGa
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
               </span>
+            ) : isFinal ? (
+              <span className="text-[9px] text-muted-foreground/40">FIN</span>
             ) : (
               <span className="text-[9px] text-muted-foreground/50">PRE</span>
             )}

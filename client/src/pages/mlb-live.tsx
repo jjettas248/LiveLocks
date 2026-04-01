@@ -74,7 +74,7 @@ type MLBGame = {
   awayScore: number | null;
   inning: number;
   isTopInning: boolean;
-  status: "live" | "pregame" | null;
+  status: "live" | "pregame" | "final" | null;
   startTime?: string | null;
   venue?: string | null;
   weatherSummary?: string | null;
@@ -416,6 +416,7 @@ function passLabel(n: number): string {
 
 function inningLabel(game: MLBGame): string {
   if (game.status === "pregame") return "Pre-Game";
+  if (game.status === "final") return "Final";
   if (!game.inning) return "—";
   return `${game.isTopInning ? "▲" : "▼"}${game.inning}`;
 }
@@ -2149,14 +2150,14 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
       <div className="rounded-lg border border-border/30 bg-card overflow-hidden" data-testid="card-mlb-game-detail">
         <div className="flex items-center justify-between px-3 py-2 border-b border-border/20">
           <div className="flex items-center gap-3">
-            {game.status === "live" && game.awayScore != null && game.homeScore != null ? (
+            {(game.status === "live" || game.status === "final") && game.awayScore != null && game.homeScore != null ? (
               <div className="flex items-center gap-2">
                 <span className="text-sm font-bold text-foreground">{game.awayAbbr}</span>
-                <span className="text-lg font-black text-foreground">{game.awayScore}</span>
+                <span className={`text-lg font-black ${game.status === "final" ? "text-muted-foreground" : "text-foreground"}`}>{game.awayScore}</span>
                 <span className="text-muted-foreground/40">–</span>
-                <span className="text-lg font-black text-foreground">{game.homeScore}</span>
+                <span className={`text-lg font-black ${game.status === "final" ? "text-muted-foreground" : "text-foreground"}`}>{game.homeScore}</span>
                 <span className="text-sm font-bold text-foreground">{game.homeAbbr}</span>
-                {game.inning > 0 && (
+                {game.status === "live" && game.inning > 0 && (
                   <span className="text-xs font-bold text-green-400 ml-1">{game.isTopInning ? "▲" : "▼"}{game.inning}</span>
                 )}
               </div>
@@ -2173,6 +2174,8 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
           </div>
           {game.status === "live" ? (
             <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-500 animate-pulse">LIVE</span>
+          ) : game.status === "final" ? (
+            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground/60">FIN</span>
           ) : (
             <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-muted text-muted-foreground">PRE</span>
           )}
@@ -2292,12 +2295,14 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
               <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
             </span>
             <span className="text-xs font-semibold text-blue-400">
-              {game.status === "live" ? "No qualified signals yet" : "Waiting for game start"}
+              {game.status === "live" ? "No qualified signals yet" : game.status === "final" ? "Game complete" : "Waiting for game start"}
             </span>
           </div>
           <p className="text-[10px] text-muted-foreground">
             {game.status === "live"
               ? "Select any batter below to run a manual calculation on their prop markets."
+              : game.status === "final"
+              ? "This game has ended. Review final stats below."
               : "Signals will generate once the game begins and live data flows in."}
           </p>
         </div>
@@ -2329,7 +2334,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-400" />
               </span>
-              {game.status === "pregame" ? "Lineup loading" : "Resolving batter data"}
+              {game.status === "pregame" ? "Lineup loading" : game.status === "final" ? "No lineup data" : "Resolving batter data"}
             </div>
           </div>
         )}
@@ -2422,8 +2427,12 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
             </div>
             <div className="text-xs text-muted-foreground mt-0.5">{player.teamAbbr} vs {opponentTeam} · #{player.battingOrderSlot}</div>
           </div>
-          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${game.status === "live" || (game.awayScore != null && game.homeScore != null) ? "bg-green-500/15 text-green-500" : "bg-muted text-muted-foreground"}`}>
-            {game.status === "live" || (game.awayScore != null && game.homeScore != null) ? `LIVE ${inningLabel(game)}` : "PRE"}
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+            game.status === "live" ? "bg-green-500/15 text-green-500"
+            : game.status === "final" ? "bg-muted/50 text-muted-foreground/60"
+            : "bg-muted text-muted-foreground"
+          }`}>
+            {game.status === "live" ? `LIVE ${inningLabel(game)}` : game.status === "final" ? "FIN" : "PRE"}
           </span>
         </div>
 
@@ -2562,13 +2571,21 @@ function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoa
           <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Game Context</div>
           <div className="space-y-2 text-xs">
             <div className="flex items-center gap-3 bg-secondary/30 rounded-lg px-3 py-2">
-              {(game.status === "live" || (game.awayScore != null && game.homeScore != null)) ? (
+              {game.status === "live" ? (
                 <>
                   <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-400 shrink-0">LIVE</span>
                   <span className="font-bold text-foreground">{game.awayAbbr} {game.awayScore ?? 0}</span>
                   <span className="text-muted-foreground">–</span>
                   <span className="font-bold text-foreground">{game.homeScore ?? 0} {game.homeAbbr}</span>
                   <span className="text-[9px] text-muted-foreground ml-auto">{inningLabel(game)}</span>
+                </>
+              ) : game.status === "final" ? (
+                <>
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground/60 shrink-0">FIN</span>
+                  <span className="font-bold text-muted-foreground">{game.awayAbbr} {game.awayScore ?? 0}</span>
+                  <span className="text-muted-foreground/50">–</span>
+                  <span className="font-bold text-muted-foreground">{game.homeScore ?? 0} {game.homeAbbr}</span>
+                  <span className="text-[9px] text-muted-foreground/50 ml-auto">Final</span>
                 </>
               ) : (
                 <>
