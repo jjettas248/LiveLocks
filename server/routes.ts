@@ -13,6 +13,7 @@ import { filterValidEngineOutputs } from "./services/engineValidation";
 import { isValidTimingWindow } from "./services/timingService";
 import { filterFreshLines, getBestBet } from "./services/sportsbookService";
 import { trackPlay } from "./services/playTracker";
+import { gradePersistedPlays } from "./services/gradePersistedPlays";
 import { buildEngineInput } from "./services/engineInputBuilder";
 import { computeNCAABPlays, getNCAABScoreboard, getNCAABH2H, getNCAABChipOdds, fetch2HLines, calc2HEngineProb } from "./ncaabService";
 import { enrichNCAABGameFull, clearEnrichmentCache, getEnrichmentCacheStats } from "./ncaabEnrichment";
@@ -1203,7 +1204,7 @@ export async function registerRoutes(
     const STALE_THRESHOLD_MS = 30_000;
     if (updatedAt > 0 && Date.now() - updatedAt > STALE_THRESHOLD_MS) {
       console.warn(`[MLB PERSIST BLOCKED — STALE SIGNAL] game=${gameId} updatedAt=${updatedAt} age=${Date.now() - updatedAt}ms > ${STALE_THRESHOLD_MS}ms`);
-    } else {
+    } else if (liveSignalsStatsPk) {
       const today = new Date().toISOString().slice(0, 10);
       const validSides = new Set(["over", "under"]);
       for (const sig of apiSignals) {
@@ -1211,10 +1212,10 @@ export async function registerRoutes(
         if (!Number.isFinite(sig.enginePct) || sig.enginePct < 1 || sig.enginePct > 99) continue;
         if (!sig.bookLine || sig.bookLine <= 0) continue;
         if (!validSides.has(direction)) continue;
-        const key = `${sig.playerId}|${sig.market}|${sig.bookLine}|${direction}|${gameId}|${today}`;
+        const key = `${sig.playerId}|${sig.market}|${sig.bookLine}|${direction}|${liveSignalsStatsPk}|${today}`;
         storage.recordPlay({
           id: `play-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          gameId,
+          gameId: liveSignalsStatsPk,
           playerId: String(sig.playerId),
           playerName: sig.playerName,
           team: undefined,
@@ -1227,7 +1228,7 @@ export async function registerRoutes(
           projection: sig.projection ?? undefined,
           sportsbook: sig.sportsbook ?? null,
           derivedLine: sig.derivedLine ?? false,
-          engineVersion: "mlb_v1.5",
+          engineVersion: "mlb_v2.0",
           gameDate: today,
           timestamp: new Date(),
           duplicateGuard: key,
@@ -5492,13 +5493,13 @@ export function registerAnalyticsRoutes(app: Express): void {
       }
 
       const today = new Date().toISOString().slice(0, 10);
-      const { plays: recentPlays } = await storage.getPlays({ date: today, settled: "pending", limit: 100 });
+      const { plays: recentPlays } = await storage.getPlays({ date: today, settled: "pending", limit: 200 });
       for (const p of recentPlays) {
-        if (p.sport === "mlb") continue;
         const prob = p.prob ? parseFloat(String(p.prob)) : 0;
         totalLive++;
         if (p.sport === "nba" && prob >= 75) nbaElite++;
         if (p.sport === "ncaab" && prob >= 75) ncaabElite++;
+        if (p.sport === "mlb" && prob >= 65) mlbElite++;
       }
 
       return res.json({ nbaElite, ncaabElite, mlbElite, totalLive });
@@ -5932,6 +5933,89 @@ export function registerAnalyticsRoutes(app: Express): void {
       res.json({ settled, stillPending });
     } catch (e) {
       res.status(500).json({ message: "Settle failed", error: (e as any).message });
+    }
+  });
+
+  app.post("/api/admin/mlb/grade", requireAdmin, async (_req, res) => {
+    try {
+      const result = await gradePersistedPlays(storage);
+      res.json({ ...result, triggeredAt: new Date().toISOString() });
+    } catch (e: any) {
+      res.status(500).json({ error: "MLB grading failed", details: e.message });
+    }
+  });
+
+  app.get("/api/admin/mlb/grading-summary", requireAdmin, async (req, res) => {
+    try {
+      const range = (req.query.range as string) || "7d";
+      const now = new Date();
+      let startDate: string | undefined;
+      if (range === "7d") { const d = new Date(now); d.setDate(d.getDate() - 7); startDate = d.toISOString().slice(0, 10); }
+      else if (range === "30d") { const d = new Date(now); d.setDate(d.getDate() - 30); startDate = d.toISOString().slice(0, 10); }
+      else if (range === "today") { startDate = now.toISOString().slice(0, 10); }
+
+      const [graded, pendingResult] = await Promise.all([
+        storage.getGradedPlaysForCalibration({ sport: "mlb", startDate }),
+        storage.getPlays({ sport: "mlb", settled: "pending", limit: 500 }),
+      ]);
+
+      const hits = graded.filter(p => p.result === "hit").length;
+      const misses = graded.filter(p => p.result === "miss").length;
+      const pushes = graded.filter(p => p.result === "push").length;
+      const decided = hits + misses;
+      const winRate = decided > 0 ? Math.round((hits / decided) * 1000) / 10 : 0;
+      const roi = decided > 0 ? Math.round(((hits * 0.909 - misses) / decided) * 1000) / 10 : 0;
+
+      const byMarket = new Map<string, { wins: number; losses: number; pushes: number; total: number }>();
+      for (const p of graded) {
+        const m = p.market || "unknown";
+        if (!byMarket.has(m)) byMarket.set(m, { wins: 0, losses: 0, pushes: 0, total: 0 });
+        const e = byMarket.get(m)!;
+        e.total++;
+        if (p.result === "hit") e.wins++;
+        else if (p.result === "miss") e.losses++;
+        else e.pushes++;
+      }
+
+      const byDirection = { over: { wins: 0, losses: 0, total: 0 }, under: { wins: 0, losses: 0, total: 0 } };
+      for (const p of graded) {
+        const dir = (p.direction ?? "").toLowerCase() as "over" | "under";
+        if (dir !== "over" && dir !== "under") continue;
+        byDirection[dir].total++;
+        if (p.result === "hit") byDirection[dir].wins++;
+        else if (p.result === "miss") byDirection[dir].losses++;
+      }
+
+      const recentGraded = graded.slice(0, 20).map(p => ({
+        id: p.id,
+        player: p.playerName,
+        market: p.market,
+        direction: p.direction,
+        line: Number(p.line),
+        prob: p.prob ? parseFloat(String(p.prob)) : 0,
+        result: p.result,
+        finalStat: p.finalStat != null ? parseFloat(String(p.finalStat)) : null,
+        gameDate: p.gameDate,
+        settledAt: p.settledAt?.toISOString() ?? null,
+      }));
+
+      res.json({
+        range,
+        totalGraded: graded.length,
+        pending: pendingResult.plays.length,
+        hits, misses, pushes, winRate, roi,
+        byMarket: Object.fromEntries(Array.from(byMarket.entries()).map(([m, d]) => {
+          const dec = d.wins + d.losses;
+          return [m, { ...d, winRate: dec > 0 ? Math.round((d.wins / dec) * 1000) / 10 : 0 }];
+        })),
+        byDirection: {
+          over: { ...byDirection.over, winRate: byDirection.over.total > 0 ? Math.round((byDirection.over.wins / (byDirection.over.wins + byDirection.over.losses || 1)) * 1000) / 10 : 0 },
+          under: { ...byDirection.under, winRate: byDirection.under.total > 0 ? Math.round((byDirection.under.wins / (byDirection.under.wins + byDirection.under.losses || 1)) * 1000) / 10 : 0 },
+        },
+        recentGraded,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: "MLB grading summary failed", details: e.message });
     }
   });
 

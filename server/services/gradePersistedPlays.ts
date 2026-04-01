@@ -72,10 +72,102 @@ const MLB_STAT_KEY_MAP: Record<string, MlbStatMapping> = {
   walks_allowed:      { kind: "single",    source: "pitching", field: "baseOnBalls" },
   earned_runs:        { kind: "single",    source: "pitching", field: "earnedRuns" },
   outs_recorded:      { kind: "single",    source: "pitching", field: "outs" },
+  hr_allowed:         { kind: "single",    source: "pitching", field: "homeRuns" },
 };
 
+const espnToGamePkCache = new Map<string, { value: string | null; ts: number }>();
+const CACHE_TTL_OK = 24 * 60 * 60 * 1000;
+const CACHE_TTL_FAIL = 10 * 60 * 1000;
+
+async function resolveGamePk(gameIdOrEspnId: string): Promise<string | null> {
+  const cached = espnToGamePkCache.get(gameIdOrEspnId);
+  if (cached) {
+    const ttl = cached.value ? CACHE_TTL_OK : CACHE_TTL_FAIL;
+    if (Date.now() - cached.ts < ttl) return cached.value;
+    espnToGamePkCache.delete(gameIdOrEspnId);
+  }
+
+  const checkUrl = `https://statsapi.mlb.com/api/v1.1/game/${gameIdOrEspnId}/feed/live`;
+  try {
+    const res = await fetch(checkUrl, {
+      headers: { "User-Agent": "LiveLocks/1.0" },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as any;
+      const state = data.gameData?.status?.abstractGameState ?? "";
+      if (state && state !== "Other") {
+        espnToGamePkCache.set(gameIdOrEspnId, { value: gameIdOrEspnId, ts: Date.now() });
+        return gameIdOrEspnId;
+      }
+    }
+  } catch { /* fall through */ }
+
+  try {
+    const espnUrl = `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/summary?event=${gameIdOrEspnId}`;
+    const espnRes = await fetch(espnUrl, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!espnRes.ok) {
+      console.warn("[GRADE MLB] ESPN summary returned", espnRes.status, "for", gameIdOrEspnId);
+      espnToGamePkCache.set(gameIdOrEspnId, { value: null, ts: Date.now() });
+      return null;
+    }
+    const espnData = (await espnRes.json()) as any;
+    const header = espnData.header?.competitions?.[0];
+    const gameDate = header?.date ? new Date(header.date).toISOString().slice(0, 10) : null;
+    const awayAbbr: string | undefined = header?.competitors?.find((c: any) => c.homeAway === "away")?.team?.abbreviation;
+    const homeAbbr: string | undefined = header?.competitors?.find((c: any) => c.homeAway === "home")?.team?.abbreviation;
+
+    if (!gameDate || !awayAbbr || !homeAbbr) {
+      console.warn("[GRADE MLB] Cannot extract team/date from ESPN event", gameIdOrEspnId);
+      espnToGamePkCache.set(gameIdOrEspnId, { value: null, ts: Date.now() });
+      return null;
+    }
+
+    const schedUrl = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${gameDate}&hydrate=team`;
+    const schedRes = await fetch(schedUrl, {
+      headers: { "User-Agent": "LiveLocks/1.0" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!schedRes.ok) {
+      espnToGamePkCache.set(gameIdOrEspnId, { value: null, ts: Date.now() });
+      return null;
+    }
+    const schedData = (await schedRes.json()) as any;
+    const games: any[] = schedData.dates?.[0]?.games ?? [];
+    const ESPN_TO_MLB: Record<string, string> = { CHW: "CWS", ARI: "AZ", ATH: "OAK" };
+    const normalizeAbbr = (a: string) => (ESPN_TO_MLB[a.toUpperCase()] ?? a).toUpperCase();
+    const matchedGame = games.find((g: any) => {
+      const away = normalizeAbbr(String(g.teams?.away?.team?.abbreviation ?? ""));
+      const home = normalizeAbbr(String(g.teams?.home?.team?.abbreviation ?? ""));
+      return (away === normalizeAbbr(awayAbbr) && home === normalizeAbbr(homeAbbr));
+    });
+    if (matchedGame) {
+      const pk = String(matchedGame.gamePk);
+      console.log(`[GRADE MLB] Resolved ESPN ${gameIdOrEspnId} → gamePk ${pk} (${awayAbbr}@${homeAbbr})`);
+      espnToGamePkCache.set(gameIdOrEspnId, { value: pk, ts: Date.now() });
+      return pk;
+    }
+    console.warn(`[GRADE MLB] No gamePk match for ESPN ${gameIdOrEspnId} (${awayAbbr}@${homeAbbr} on ${gameDate})`);
+    espnToGamePkCache.set(gameIdOrEspnId, { value: null, ts: Date.now() });
+    return null;
+  } catch (err) {
+    console.error("[GRADE MLB] resolveGamePk failed for", gameIdOrEspnId, ":", (err as Error).message);
+    espnToGamePkCache.set(gameIdOrEspnId, { value: null, ts: Date.now() });
+    return null;
+  }
+}
+
 async function fetchMlbBoxScore(gameId: string): Promise<MlbBoxscoreData | null> {
-  const statusUrl = `https://statsapi.mlb.com/api/v1/game/${gameId}/feed/live`;
+  const gamePk = await resolveGamePk(gameId);
+  if (!gamePk) {
+    console.warn("[GRADE MLB] Could not resolve gamePk for gameId:", gameId);
+    return null;
+  }
+
+  const statusUrl = `https://statsapi.mlb.com/api/v1.1/game/${gamePk}/feed/live`;
   console.log("[GRADE MLB] Checking game status:", statusUrl);
   try {
     const statusRes = await fetch(statusUrl, {
@@ -83,7 +175,7 @@ async function fetchMlbBoxScore(gameId: string): Promise<MlbBoxscoreData | null>
       signal: AbortSignal.timeout(8000),
     });
     if (!statusRes.ok) {
-      console.error("[GRADE MLB] Status API returned:", statusRes.status, "for game", gameId);
+      console.error("[GRADE MLB] Status API returned:", statusRes.status, "for gamePk", gamePk);
       return null;
     }
     const statusData = (await statusRes.json()) as MlbGameStatusData;
@@ -91,15 +183,15 @@ async function fetchMlbBoxScore(gameId: string): Promise<MlbBoxscoreData | null>
     const codedState: string = statusData.gameData?.status?.codedGameState ?? "";
     const isFinal = abstractState.toLowerCase() === "final" || codedState === "F";
     if (!isFinal) {
-      console.log("[GRADE MLB] Game not final yet:", gameId, "abstractState:", abstractState);
+      console.log("[GRADE MLB] Game not final yet:", gamePk, "abstractState:", abstractState);
       return null;
     }
   } catch (err) {
-    console.error("[GRADE MLB] Status fetch failed for game", gameId, ":", (err as Error).message);
+    console.error("[GRADE MLB] Status fetch failed for gamePk", gamePk, ":", (err as Error).message);
     return null;
   }
 
-  const boxUrl = `https://statsapi.mlb.com/api/v1/game/${gameId}/boxscore`;
+  const boxUrl = `https://statsapi.mlb.com/api/v1/game/${gamePk}/boxscore`;
   console.log("[GRADE MLB] Fetching box score:", boxUrl);
   try {
     const boxRes = await fetch(boxUrl, {
@@ -107,12 +199,12 @@ async function fetchMlbBoxScore(gameId: string): Promise<MlbBoxscoreData | null>
       signal: AbortSignal.timeout(8000),
     });
     if (!boxRes.ok) {
-      console.error("[GRADE MLB] Box score API returned:", boxRes.status, "for game", gameId);
+      console.error("[GRADE MLB] Box score API returned:", boxRes.status, "for gamePk", gamePk);
       return null;
     }
     return (await boxRes.json()) as MlbBoxscoreData;
   } catch (err) {
-    console.error("[GRADE MLB] Box score fetch failed for game", gameId, ":", (err as Error).message);
+    console.error("[GRADE MLB] Box score fetch failed for gamePk", gamePk, ":", (err as Error).message);
     return null;
   }
 }
