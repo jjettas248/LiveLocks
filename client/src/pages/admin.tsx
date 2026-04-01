@@ -7,6 +7,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle, Trash2, Loader2, Settings, Bell, ChevronUp, Send, Target, FlaskConical } from "lucide-react";
 import { MLBAdminTab } from "@/components/mlb-admin-tab";
 import { CalibrationDashboard } from "@/components/calibration-dashboard";
+import { SimulationBanner } from "@/components/sports/SimulationBanner";
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
 const TEST_EMAIL_PATTERNS = [
@@ -374,6 +375,7 @@ export default function AdminPage() {
     <div className="min-h-screen bg-background">
       <AdminLink />
       <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6 space-y-4">
+        <SimulationBanner enabled={simEnabled} scenario={simScenario} />
 
         {/* Summary pills */}
         <div className="flex gap-3 flex-wrap">

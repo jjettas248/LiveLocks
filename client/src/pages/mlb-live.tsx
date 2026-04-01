@@ -6,6 +6,9 @@ import { useAuth } from "@/hooks/use-auth";
 import { MLBScheduleList } from "@/components/mlb/MLBScheduleList";
 import { TopPlays } from "@/components/mlb/TopPlays";
 import { LiveBoard } from "@/components/mlb/LiveBoard";
+import { SkeletonCard } from "@/components/sports/SkeletonCard";
+import { EmptyState } from "@/components/sports/EmptyState";
+import { SimulationBanner } from "@/components/sports/SimulationBanner";
 
 function MiniProbRing({ pct, size = 36 }: { pct: number; size?: number }) {
   const sw = 4;
@@ -1120,6 +1123,11 @@ function MlbLiveInner() {
   const [manualBookLine, setManualBookLine] = useState("");
   const [mlbUpgradeNeeded, setMlbUpgradeNeeded] = useState(false);
   const [inningFeedTab, setInningFeedTab] = useState<3 | 5 | 7>(3);
+  const [liveFeedSub, setLiveFeedSub] = useState<"all" | "3rd" | "5th" | "7th">("all");
+  const { data: simConfig } = useQuery<{ enabled: boolean; scenario?: string }>({
+    queryKey: ["/api/admin/simulation-config"],
+    refetchInterval: 60000,
+  });
   const gameDetailRef = useRef<HTMLDivElement>(null);
   const [mlbSlipPicks, setMlbSlipPicks] = useState<Array<{ playerId: string; playerName: string; market: string; line: number; side: string; sportsbook: string; edge: number | null; enginePct: number; gameId: string; overOdds?: number | null; underOdds?: number | null }>>([]);
 
@@ -1319,9 +1327,8 @@ function MlbLiveInner() {
 
   if (authLoading || gamesLoading) {
     return (
-      <div className="max-w-5xl mx-auto px-4 py-12 flex flex-col items-center justify-center gap-3">
-        <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-        <span className="text-sm text-muted-foreground">Loading MLB…</span>
+      <div className="max-w-5xl mx-auto px-4 py-12 space-y-3">
+        <SkeletonCard count={4} />
       </div>
     );
   }
@@ -1329,11 +1336,11 @@ function MlbLiveInner() {
   if (mlbUpgradeNeeded) {
     return (
       <div className="max-w-5xl mx-auto px-4 py-12 flex flex-col items-center justify-center gap-4">
-        <span className="text-4xl">⚾</span>
-        <h3 className="text-lg font-bold text-foreground">MLB Preview Limit Reached</h3>
-        <p className="text-sm text-muted-foreground text-center max-w-sm">
-          You've used your 2 free MLB preview plays for today. Upgrade to All Sports for unlimited MLB access.
-        </p>
+        <EmptyState
+          icon="⚾"
+          title="MLB Preview Limit Reached"
+          description="You've used your 2 free MLB preview plays for today. Upgrade to All Sports for unlimited MLB access."
+        />
         <a href="/pricing" data-testid="link-mlb-upgrade-pricing"
           className="w-full max-w-xs py-2.5 px-4 rounded-xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition-colors text-center block">
           Upgrade to All Sports — $65/mo
@@ -1348,8 +1355,6 @@ function MlbLiveInner() {
     { key: "hr_radar", label: "HR Radar", color: "orange" },
   ];
 
-  const [liveFeedSub, setLiveFeedSub] = useState<"all" | "3rd" | "5th" | "7th">("all");
-
   const handleRefresh = () => {
     queryClient.invalidateQueries({ queryKey: ["/api/mlb/live-games"] });
     if (selectedGameId) {
@@ -1363,6 +1368,7 @@ function MlbLiveInner() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-5">
+      <SimulationBanner enabled={!!simConfig?.enabled} scenario={simConfig?.scenario} />
       <div className="flex items-center justify-between gap-3 flex-wrap" data-testid="nav-mlb-tabs">
         <div className="flex gap-1.5 flex-wrap">
           {TABS.map(tab => {

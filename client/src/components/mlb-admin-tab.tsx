@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { RefreshCw, AlertCircle, CheckCircle, ChevronDown, ChevronRight } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { MLB_MARKET_LABELS } from "@/lib/mlbFormatters";
 
 // ── Local type definitions (mirrors server/mlb/types.ts) ─────────────────────
 
@@ -135,18 +136,7 @@ const MLB_MARKETS: MLBMarket[] = [
   "hr_allowed",
 ];
 
-const MARKET_LABELS: Record<string, string> = {
-  hits: "Hits",
-  total_bases: "Total Bases",
-  hrr: "H+R+RBI",
-  pitcher_strikeouts: "Pitcher Strikeouts",
-  pitcher_outs: "Pitcher Outs",
-  hits_allowed: "Hits Allowed",
-  home_runs: "Home Runs (Experimental)",
-  walks_allowed: "Walks Allowed",
-  batter_strikeouts: "Batter Strikeouts",
-  hr_allowed: "HR Allowed",
-};
+const MARKET_LABELS = MLB_MARKET_LABELS;
 
 // ── Form type ─────────────────────────────────────────────────────────────────
 
@@ -353,170 +343,174 @@ export function MLBAdminTab() {
         </p>
 
         {testerOpen && (
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Player Name <span className="text-destructive">*</span>
-                </label>
-                <input
-                  data-testid="input-mlb-player-name"
-                  type="text"
-                  value={form.playerName}
-                  onChange={(e) => handleFormChange("playerName", e.target.value)}
-                  placeholder="e.g. Aaron Judge"
-                  required
-                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <fieldset className="space-y-3">
+              <legend className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Player Identity</legend>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">
+                    Player Name <span className="text-destructive">*</span>
+                  </label>
+                  <input
+                    data-testid="input-mlb-player-name"
+                    type="text"
+                    value={form.playerName}
+                    onChange={(e) => handleFormChange("playerName", e.target.value)}
+                    placeholder="e.g. Aaron Judge"
+                    required
+                    className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">
+                    Player ID <span className="text-muted-foreground text-xs">(optional — for roster lookup)</span>
+                  </label>
+                  <input
+                    data-testid="input-mlb-player-id"
+                    type="text"
+                    value={form.playerId}
+                    onChange={(e) => handleFormChange("playerId", e.target.value)}
+                    placeholder="e.g. 592450"
+                    className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">
+                    Team <span className="text-destructive">*</span>
+                  </label>
+                  <input
+                    data-testid="input-mlb-team"
+                    type="text"
+                    value={form.team}
+                    onChange={(e) => handleFormChange("team", e.target.value)}
+                    placeholder="e.g. NYY"
+                    required
+                    className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">
+                    Opponent <span className="text-muted-foreground text-xs">(optional)</span>
+                  </label>
+                  <input
+                    data-testid="input-mlb-opponent"
+                    type="text"
+                    value={form.opponent}
+                    onChange={(e) => handleFormChange("opponent", e.target.value)}
+                    placeholder="e.g. BOS"
+                    className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">
+                    Batter Hand <span className="text-muted-foreground text-xs">(optional — auto-hydrated from roster)</span>
+                  </label>
+                  <select
+                    data-testid="select-mlb-batter-hand"
+                    value={form.batterHand ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      handleFormChange("batterHand", v === "" ? null : (v as "L" | "R" | "S"));
+                    }}
+                    className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    <option value="">Unknown / auto-hydrate</option>
+                    <option value="L">Left (L)</option>
+                    <option value="R">Right (R)</option>
+                    <option value="S">Switch (S)</option>
+                  </select>
+                </div>
               </div>
+            </fieldset>
 
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Player ID <span className="text-muted-foreground text-xs">(optional — for roster lookup)</span>
-                </label>
-                <input
-                  data-testid="input-mlb-player-id"
-                  type="text"
-                  value={form.playerId}
-                  onChange={(e) => handleFormChange("playerId", e.target.value)}
-                  placeholder="e.g. 592450"
-                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
+            <fieldset className="space-y-3">
+              <legend className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Market Settings</legend>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">
+                    Market <span className="text-destructive">*</span>
+                  </label>
+                  <select
+                    data-testid="select-mlb-market"
+                    value={form.market}
+                    onChange={(e) => handleFormChange("market", e.target.value as MLBMarket)}
+                    className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    {MLB_MARKETS.map((m) => (
+                      <option key={m} value={m}>{MARKET_LABELS[m]}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">
+                    Book Line <span className="text-destructive">*</span>
+                  </label>
+                  <input
+                    data-testid="input-mlb-book-line"
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    value={form.bookLine}
+                    onChange={(e) => handleFormChange("bookLine", parseFloat(e.target.value) || 0)}
+                    className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">
+                    Season Avg (per game) <span className="text-destructive">*</span>
+                  </label>
+                  <input
+                    data-testid="input-mlb-season-avg"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={form.seasonAvg}
+                    onChange={(e) => handleFormChange("seasonAvg", parseFloat(e.target.value) || 0)}
+                    className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
               </div>
+            </fieldset>
 
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Team <span className="text-destructive">*</span>
-                </label>
-                <input
-                  data-testid="input-mlb-team"
-                  type="text"
-                  value={form.team}
-                  onChange={(e) => handleFormChange("team", e.target.value)}
-                  placeholder="e.g. NYY"
-                  required
-                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
+            <fieldset className="space-y-3">
+              <legend className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Line Context</legend>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">Remaining AB</label>
+                  <input
+                    data-testid="input-mlb-remaining-ab"
+                    type="number"
+                    min="0"
+                    value={form.remainingAB}
+                    onChange={(e) => handleFormChange("remainingAB", parseInt(e.target.value) || 0)}
+                    className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">Completed AB</label>
+                  <input
+                    data-testid="input-mlb-completed-ab"
+                    type="number"
+                    min="0"
+                    value={form.completedAB}
+                    onChange={(e) => handleFormChange("completedAB", parseInt(e.target.value) || 0)}
+                    className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">Inning</label>
+                  <input
+                    data-testid="input-mlb-inning"
+                    type="number"
+                    min="1"
+                    max="9"
+                    value={form.inning}
+                    onChange={(e) => handleFormChange("inning", parseInt(e.target.value) || 1)}
+                    className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
               </div>
-
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Opponent <span className="text-muted-foreground text-xs">(optional)</span>
-                </label>
-                <input
-                  data-testid="input-mlb-opponent"
-                  type="text"
-                  value={form.opponent}
-                  onChange={(e) => handleFormChange("opponent", e.target.value)}
-                  placeholder="e.g. BOS"
-                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Market <span className="text-destructive">*</span>
-                </label>
-                <select
-                  data-testid="select-mlb-market"
-                  value={form.market}
-                  onChange={(e) => handleFormChange("market", e.target.value as MLBMarket)}
-                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                  {MLB_MARKETS.map((m) => (
-                    <option key={m} value={m}>{MARKET_LABELS[m]}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Book Line <span className="text-destructive">*</span>
-                </label>
-                <input
-                  data-testid="input-mlb-book-line"
-                  type="number"
-                  step="0.5"
-                  min="0"
-                  value={form.bookLine}
-                  onChange={(e) => handleFormChange("bookLine", parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Season Avg (per game) <span className="text-destructive">*</span>
-                </label>
-                <input
-                  data-testid="input-mlb-season-avg"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={form.seasonAvg}
-                  onChange={(e) => handleFormChange("seasonAvg", parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">Remaining AB</label>
-                <input
-                  data-testid="input-mlb-remaining-ab"
-                  type="number"
-                  min="0"
-                  value={form.remainingAB}
-                  onChange={(e) => handleFormChange("remainingAB", parseInt(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">Completed AB</label>
-                <input
-                  data-testid="input-mlb-completed-ab"
-                  type="number"
-                  min="0"
-                  value={form.completedAB}
-                  onChange={(e) => handleFormChange("completedAB", parseInt(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">Inning</label>
-                <input
-                  data-testid="input-mlb-inning"
-                  type="number"
-                  min="1"
-                  max="9"
-                  value={form.inning}
-                  onChange={(e) => handleFormChange("inning", parseInt(e.target.value) || 1)}
-                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Batter Hand <span className="text-muted-foreground text-xs">(optional — auto-hydrated from roster)</span>
-                </label>
-                <select
-                  data-testid="select-mlb-batter-hand"
-                  value={form.batterHand ?? ""}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    handleFormChange("batterHand", v === "" ? null : (v as "L" | "R" | "S"));
-                  }}
-                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                  <option value="">Unknown / auto-hydrate</option>
-                  <option value="L">Left (L)</option>
-                  <option value="R">Right (R)</option>
-                  <option value="S">Switch (S)</option>
-                </select>
-              </div>
-            </div>
+            </fieldset>
 
             <button
               data-testid="button-mlb-test-submit"
