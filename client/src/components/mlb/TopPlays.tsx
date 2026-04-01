@@ -344,6 +344,16 @@ function SignalCard({ sig, onPlayerClick, onAddToSlip }: { sig: MLBSignal; onPla
           )}
         </div>
         <div className="flex items-center gap-2">
+          <button
+            data-testid={`button-top-play-tweet-${sig.playerId}-${sig.market}`}
+            className="text-[9px] px-2 py-1.5 rounded-full font-semibold transition-colors min-h-[44px]"
+            style={{ background: "rgba(59,130,246,0.1)", color: "#60a5fa", border: "1px solid rgba(59,130,246,0.2)" }}
+            onClick={(e) => {
+              e.stopPropagation();
+              const tweet = `${sig.playerName} ${sig.recommendedSide} ${MARKET_LABELS[sig.market] ?? sig.market} ${sig.bookLine ?? ""} — ${sig.enginePct.toFixed(0)}% prob${(sig.edge ?? 0) > 0 ? `, +${(sig.edge ?? 0).toFixed(1)}% edge` : ""}\n\nPowered by LiveLocks`;
+              window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`, "_blank", "noopener,noreferrer,width=550,height=420");
+            }}
+          >𝕏</button>
           {onAddToSlip && (
             <button
               data-testid={`button-top-play-slip-${sig.playerId}-${sig.market}`}

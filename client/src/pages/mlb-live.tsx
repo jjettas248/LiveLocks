@@ -7,6 +7,24 @@ import { MLBScheduleList } from "@/components/mlb/MLBScheduleList";
 import { TopPlays } from "@/components/mlb/TopPlays";
 import { LiveBoard } from "@/components/mlb/LiveBoard";
 
+function MiniProbRing({ pct, size = 36 }: { pct: number; size?: number }) {
+  const sw = 4;
+  const r = (size - sw) / 2;
+  const c = r * 2 * Math.PI;
+  const offset = c - (Math.min(pct, 100) / 100) * c;
+  const color = pct >= 70 ? "#22c55e" : pct >= 55 ? "#14b8a6" : pct >= 40 ? "#eab308" : "#ef4444";
+  return (
+    <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
+      <svg className="absolute inset-0 -rotate-90" width={size} height={size}>
+        <circle cx={size/2} cy={size/2} r={r} strokeWidth={sw} className="stroke-muted/30 fill-transparent" />
+        <circle cx={size/2} cy={size/2} r={r} strokeWidth={sw} strokeDasharray={c} strokeDashoffset={offset}
+          className="fill-transparent" style={{ stroke: color }} strokeLinecap="round" />
+      </svg>
+      <span className="text-[10px] font-black" style={{ color }}>{Math.round(pct)}</span>
+    </div>
+  );
+}
+
 class MLBErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
   constructor(props: { children: ReactNode }) {
     super(props);
@@ -523,24 +541,23 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-3 text-center">
-        <div>
-          <div className="text-[10px] text-muted-foreground">Prob</div>
-          <div className={`text-base sm:text-lg font-bold ${probColor(probWhole)}`}>{probWhole}%</div>
-        </div>
-        <div>
-          <div className="text-[10px] text-muted-foreground">Edge</div>
-          <div className={`text-base sm:text-lg font-bold ${hasPositiveEdge ? "text-green-400" : "text-muted-foreground"}`}>
-            {sig.edge != null ? `${edgeVal > 0 ? "+" : ""}${edgeVal.toFixed(1)}%` : "—"}
+      <div className="flex items-center gap-3">
+        <MiniProbRing pct={probWhole} size={48} />
+        <div className="grid grid-cols-3 gap-3 text-center flex-1">
+          <div>
+            <div className="text-[10px] text-muted-foreground">Edge</div>
+            <div className={`text-base sm:text-lg font-bold ${hasPositiveEdge ? "text-green-400" : "text-muted-foreground"}`}>
+              {sig.edge != null ? `${edgeVal > 0 ? "+" : ""}${edgeVal.toFixed(1)}%` : "—"}
+            </div>
           </div>
-        </div>
-        <div>
-          <div className="text-[10px] text-muted-foreground">Proj</div>
-          <div className="text-base sm:text-lg font-bold text-foreground">{sig.projection != null ? sig.projection.toFixed(2) : "—"}</div>
-        </div>
-        <div>
-          <div className="text-[10px] text-muted-foreground">Line</div>
-          <div className="text-base sm:text-lg font-bold text-foreground">{sig.bookLine ?? "—"}</div>
+          <div>
+            <div className="text-[10px] text-muted-foreground">Proj</div>
+            <div className="text-base sm:text-lg font-bold text-foreground">{sig.projection != null ? sig.projection.toFixed(2) : "—"}</div>
+          </div>
+          <div>
+            <div className="text-[10px] text-muted-foreground">Line</div>
+            <div className="text-base sm:text-lg font-bold text-foreground">{sig.bookLine ?? "—"}</div>
+          </div>
         </div>
       </div>
 
@@ -783,12 +800,13 @@ function probColor(pct: number): string {
   return "text-foreground";
 }
 
-function BatterCard({ player, signals, game, isElite, onSelect }: {
+function BatterCard({ player, signals, game, isElite, onSelect, onAddToSlip }: {
   player: MLBBatter;
   signals: MLBSignal[];
   game: MLBGame;
   isElite: boolean;
   onSelect: () => void;
+  onAddToSlip?: (sig: MLBSignal) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
@@ -979,6 +997,13 @@ function BatterCard({ player, signals, game, isElite, onSelect }: {
                   {sig.edge != null && sig.edge > 0 && (
                     <span className={`text-[9px] font-bold ${edgeColor(sig.edge)}`}>+{sig.edge.toFixed(1)}%</span>
                   )}
+                  {onAddToSlip && (
+                    <button
+                      data-testid={`btn-slip-inline-${sig.playerId}-${sig.market}`}
+                      className="text-[8px] px-1 py-0.5 rounded border border-green-500/20 text-green-400/70 hover:text-green-400 hover:bg-green-500/10 transition-colors"
+                      onClick={(e) => { e.stopPropagation(); onAddToSlip(sig); }}
+                    >+</button>
+                  )}
                   <button
                     data-testid={`btn-tweet-inline-${sig.playerId}-${sig.market}`}
                     className="text-[8px] px-1 py-0.5 rounded border border-blue-500/20 text-blue-400/70 hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
@@ -1097,7 +1122,7 @@ function MlbLiveInner() {
 
   const { data: edgeFeedResp } = useQuery<EdgeFeedResponse>({
     queryKey: ["/api/mlb/edge-feed"],
-    enabled: mainTab === "live_feed" || mainTab === "edge_feed" || mainTab === "inning_feed" || mainTab === "hr_radar",
+    enabled: mainTab === "live_feed" || mainTab === "edge_feed" || mainTab === "inning_feed" || mainTab === "hr_radar" || mainTab === "games",
     refetchInterval: 45_000,
   });
   const edgeFeedSignals = Array.isArray(edgeFeedResp?.signals) ? edgeFeedResp!.signals : [];
@@ -1309,7 +1334,12 @@ function MlbLiveInner() {
             <div className="rounded-xl border border-primary/20 bg-primary/5 p-5 text-center space-y-3">
               <div className="text-sm font-bold text-foreground">Unlock MLB Edges</div>
               <div className="text-xs text-muted-foreground">
-                Upgrade to All Sports to see live probabilities, edge percentages, and bet recommendations for every MLB game.
+                {(() => {
+                  const liveCount = games.filter(g => g.status === "live").length || games.length;
+                  return edgeFeedSignals.length > 0
+                    ? `${edgeFeedSignals.length} live signal${edgeFeedSignals.length !== 1 ? "s" : ""} across ${liveCount} game${liveCount !== 1 ? "s" : ""} — upgrade to see them all.`
+                    : `${games.length} game${games.length !== 1 ? "s" : ""} today — upgrade to see live probabilities, edge percentages, and bet recommendations.`;
+                })()}
               </div>
               <a href="/upgrade" data-testid="link-mlb-upgrade-cta"
                 className="inline-block px-5 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors">
@@ -1333,6 +1363,7 @@ function MlbLiveInner() {
               onSelectPlayer={(p) => setSelectedPlayer(p)}
               onBack={() => setSelectedGameId(null)}
               onRefresh={handleRefresh}
+              onAddToSlip={handleAddToSlip}
             />
             </div>
           )}
@@ -1393,6 +1424,35 @@ function MlbLiveInner() {
               filtered = edgeFeedSignals.filter(s => (s.feedTags ?? []).includes(feedTagKey));
             }
             if (liveFeedSub === "all") {
+              if (!isElite && filtered.length > 0) {
+                const visibleSlice = filtered.slice(0, 1);
+                return (
+                  <div className="space-y-6">
+                    <TopPlays signals={visibleSlice as any} onPlayerClick={(gameId, _playerId) => { setSelectedGameId(gameId); setMainTab("games"); setTimeout(() => gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 150); }} onAddToSlip={(sig) => handleAddToSlip(sig as any)} />
+                    {filtered.length > 1 && (
+                      <div className="relative">
+                        <div className="filter blur-[6px] pointer-events-none select-none" aria-hidden="true">
+                          <LiveBoard signals={filtered.slice(1, 6)} />
+                        </div>
+                        <div className="absolute inset-0 flex flex-col items-center justify-center z-10">
+                          <div className="rounded-xl border border-primary/30 bg-card/95 backdrop-blur-sm p-5 text-center space-y-3 max-w-sm shadow-xl">
+                            <div className="text-sm font-bold text-foreground">
+                              {filtered.length - 1} more signal{filtered.length - 1 !== 1 ? "s" : ""} available
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Unlock all MLB edges, probabilities, and bet recommendations with All Sports.
+                            </div>
+                            <a href="/upgrade" data-testid="link-mlb-all-feed-upgrade"
+                              className="inline-block px-5 py-2.5 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors">
+                              Upgrade to All Sports →
+                            </a>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
               return (
                 <div className="space-y-6">
                   <TopPlays signals={filtered as any} onPlayerClick={(gameId, _playerId) => { setSelectedGameId(gameId); setMainTab("games"); setTimeout(() => gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 150); }} onAddToSlip={(sig) => handleAddToSlip(sig as any)} />
@@ -1412,10 +1472,35 @@ function MlbLiveInner() {
                 <div className="text-xs text-muted-foreground/60 mt-1">Signals appear as games progress and pitcher fatigue data accumulates.</div>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {filtered.map(sig => (
-                  <SignalCard key={`${sig.playerId}-${sig.market}-${sig.gameId}`} sig={sig} isElite={isElite} compact onClickThrough={handleSignalClickThrough} onAddToSlip={handleAddToSlip} />
-                ))}
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {(isElite ? filtered : filtered.slice(0, 1)).map(sig => (
+                    <SignalCard key={`${sig.playerId}-${sig.market}-${sig.gameId}`} sig={sig} isElite={isElite} compact onClickThrough={handleSignalClickThrough} onAddToSlip={handleAddToSlip} />
+                  ))}
+                </div>
+                {!isElite && filtered.length > 1 && (
+                  <div className="relative">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 filter blur-[6px] pointer-events-none select-none" aria-hidden="true">
+                      {filtered.slice(1, 3).map(sig => (
+                        <SignalCard key={`blur-${sig.playerId}-${sig.market}-${sig.gameId}`} sig={sig} isElite={false} compact />
+                      ))}
+                    </div>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center z-10">
+                      <div className="rounded-xl border border-primary/30 bg-card/95 backdrop-blur-sm p-5 text-center space-y-3 max-w-sm shadow-xl">
+                        <div className="text-sm font-bold text-foreground">
+                          {filtered.length - 1} more signal{filtered.length - 1 !== 1 ? "s" : ""} available
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          Unlock all MLB edges, probabilities, and bet recommendations with All Sports.
+                        </div>
+                        <a href="/upgrade" data-testid="link-mlb-feed-upgrade"
+                          className="inline-block px-5 py-2.5 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors">
+                          Upgrade to All Sports →
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })()}
@@ -1461,12 +1546,12 @@ function MlbLiveInner() {
             <div className="flex gap-2">
               <button
                 data-testid="button-copy-mlb-slip"
-                className="flex-1 text-xs py-3 min-h-[44px] rounded-lg border border-border hover:bg-muted transition-colors text-foreground font-semibold"
+                className="text-xs py-3 min-h-[44px] rounded-lg border border-border hover:bg-muted transition-colors text-foreground font-semibold px-3"
                 onClick={() => {
                   const text = mlbSlipPicks.map(p => `${p.playerName} — ${MARKET_LABELS[p.market] ?? p.market} ${p.side} ${p.line}`).join("\n");
                   navigator.clipboard?.writeText(text);
                 }}
-              >Copy All</button>
+              >Copy</button>
               <a
                 data-testid="link-mlb-slip-dk"
                 href="https://sportsbook.draftkings.com/leagues/baseball/mlb?category=player-props"
@@ -1476,7 +1561,17 @@ function MlbLiveInner() {
                   const text = mlbSlipPicks.map(p => `${p.playerName} — ${MARKET_LABELS[p.market] ?? p.market} ${p.side} ${p.line}`).join("\n");
                   navigator.clipboard?.writeText(text);
                 }}
-              >Open DraftKings</a>
+              >DraftKings</a>
+              <a
+                data-testid="link-mlb-slip-fd"
+                href="https://sportsbook.fanduel.com/baseball?tab=player-props"
+                target="_blank" rel="noopener noreferrer"
+                className="flex-1 text-xs py-3 min-h-[44px] rounded-lg bg-[#1493ff] hover:bg-[#0d7ee6] text-white text-center font-semibold transition-colors"
+                onClick={() => {
+                  const text = mlbSlipPicks.map(p => `${p.playerName} — ${MARKET_LABELS[p.market] ?? p.market} ${p.side} ${p.line}`).join("\n");
+                  navigator.clipboard?.writeText(text);
+                }}
+              >FanDuel</a>
             </div>
           </div>
         </div>
@@ -1870,7 +1965,7 @@ function PitcherCard({ game, side, signals, isElite }: {
   );
 }
 
-function TeamBatterSection({ teamAbbr, pitcher, players, signals, game, isElite, onSelectPlayer, side, score }: {
+function TeamBatterSection({ teamAbbr, pitcher, players, signals, game, isElite, onSelectPlayer, onAddToSlip, side, score }: {
   teamAbbr: string;
   pitcher: string | null;
   players: MLBBatter[];
@@ -1878,6 +1973,7 @@ function TeamBatterSection({ teamAbbr, pitcher, players, signals, game, isElite,
   game: MLBGame;
   isElite: boolean;
   onSelectPlayer: (p: MLBBatter) => void;
+  onAddToSlip?: (sig: MLBSignal) => void;
   side: "home" | "away";
   score: number | null;
 }) {
@@ -1916,7 +2012,7 @@ function TeamBatterSection({ teamAbbr, pitcher, players, signals, game, isElite,
         <div className="px-2 pb-2">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
             {players.map(p => (
-              <BatterCard key={p.playerId} player={p} signals={signals} game={game} isElite={isElite} onSelect={() => onSelectPlayer(p)} />
+              <BatterCard key={p.playerId} player={p} signals={signals} game={game} isElite={isElite} onSelect={() => onSelectPlayer(p)} onAddToSlip={onAddToSlip} />
             ))}
           </div>
         </div>
@@ -1925,7 +2021,7 @@ function TeamBatterSection({ teamAbbr, pitcher, players, signals, game, isElite,
   );
 }
 
-function GameDetailView({ game, players, signals, isElite, signalsLoading, playersLoading, updatedAt, lineupReady, lineupReason, onSelectPlayer, onBack, onRefresh }: {
+function GameDetailView({ game, players, signals, isElite, signalsLoading, playersLoading, updatedAt, lineupReady, lineupReason, onSelectPlayer, onBack, onRefresh, onAddToSlip }: {
   game: MLBGame;
   players: MLBBatter[];
   signals: MLBSignal[];
@@ -1938,6 +2034,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
   onSelectPlayer: (p: MLBBatter) => void;
   onBack: () => void;
   onRefresh: () => void;
+  onAddToSlip?: (sig: MLBSignal) => void;
 }) {
   const awayPlayers = players.filter(p => p.teamSide === "away" || (game.awayAbbr && p.teamAbbr === game.awayAbbr));
   const homePlayers = players.filter(p => p.teamSide === "home" || (game.homeAbbr && p.teamAbbr === game.homeAbbr));
@@ -2164,6 +2261,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
               game={game}
               isElite={isElite}
               onSelectPlayer={onSelectPlayer}
+              onAddToSlip={onAddToSlip}
               side="away"
               score={game.awayScore}
             />
@@ -2175,6 +2273,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
               game={game}
               isElite={isElite}
               onSelectPlayer={onSelectPlayer}
+              onAddToSlip={onAddToSlip}
               side="home"
               score={game.homeScore}
             />
@@ -2184,7 +2283,7 @@ function GameDetailView({ game, players, signals, isElite, signalsLoading, playe
         {awayPlayers.length === 0 && homePlayers.length === 0 && players.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
             {players.map(p => (
-              <BatterCard key={p.playerId} player={p} signals={signals} game={game} isElite={isElite} onSelect={() => onSelectPlayer(p)} />
+              <BatterCard key={p.playerId} player={p} signals={signals} game={game} isElite={isElite} onSelect={() => onSelectPlayer(p)} onAddToSlip={onAddToSlip} />
             ))}
           </div>
         )}

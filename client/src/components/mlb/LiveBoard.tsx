@@ -341,6 +341,19 @@ function BoardCard({ sig, tierConfig, onPlayerClick }: { sig: MLBSignal; tierCon
           ))}
         </div>
       )}
+
+      <div className="flex items-center justify-end pt-0.5 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
+        <button
+          data-testid={`button-board-tweet-${sig.playerId}-${sig.market}`}
+          className="text-[8px] px-2 py-1 rounded font-semibold transition-colors"
+          style={{ background: "rgba(59,130,246,0.1)", color: "#60a5fa", border: "1px solid rgba(59,130,246,0.2)" }}
+          onClick={(e) => {
+            e.stopPropagation();
+            const tweet = `${sig.playerName} ${sig.recommendedSide} ${marketLabel} ${sig.bookLine ?? ""} — ${sig.enginePct.toFixed(0)}% prob${(sig.edge ?? 0) > 0 ? `, +${(sig.edge ?? 0).toFixed(1)}% edge` : ""}\n\nPowered by LiveLocks`;
+            window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`, "_blank", "noopener,noreferrer,width=550,height=420");
+          }}
+        >𝕏 Share</button>
+      </div>
     </div>
   );
 }
