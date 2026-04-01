@@ -545,4 +545,19 @@ export interface MLBQualifiedSignal {
     hardHitPct: number | null;
     outcome: string | null;
   } | null;
+
+  batterArchetype?: string | null;
+  pitcherArchetype?: string | null;
+  thesis?: string | null;
+  triggerType?: string | null;
+  familyId?: string | null;
+  familyRank?: number | null;
+  isFlagship?: boolean | null;
+  familyPenaltyFactor?: number | null;
+  safetyCeilingApplied?: boolean | null;
+  varianceTier?: string | null;
+  calibrationShrinkage?: number | null;
+  directionalBiasAdjusted?: boolean | null;
+  isDegraded?: boolean | null;
+  dataQuality?: "full" | "partial" | "degraded" | null;
 }

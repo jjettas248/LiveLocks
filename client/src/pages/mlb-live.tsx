@@ -182,6 +182,16 @@ type MLBSignal = {
   overOdds?: number | null;
   underOdds?: number | null;
   priorABResults?: ABResultEntry[];
+  batterArchetype?: string | null;
+  pitcherArchetype?: string | null;
+  thesis?: string | null;
+  isFlagship?: boolean | null;
+  familyId?: string | null;
+  familyRank?: number | null;
+  safetyCeilingApplied?: boolean | null;
+  varianceTier?: string | null;
+  isDegraded?: boolean | null;
+  dataQuality?: "full" | "partial" | "degraded" | null;
 };
 
 type SignalState = "actionable" | "already_hit" | "watchlist" | "stale";
@@ -204,6 +214,39 @@ function confidenceTierColor(tier: string | null | undefined): string {
   if (tier === "STRONG") return "bg-green-500/20 text-green-400";
   if (tier === "SOLID") return "bg-teal-500/20 text-teal-400";
   return "bg-muted/30 text-muted-foreground";
+}
+
+function tierCardBorder(tier: string | null | undefined): string {
+  if (tier === "ELITE") return "border-l-4 border-l-yellow-500 shadow-[0_0_12px_rgba(234,179,8,0.15)]";
+  if (tier === "STRONG") return "border-l-4 border-l-emerald-500";
+  if (tier === "SOLID") return "border-l-4 border-l-teal-500/60";
+  return "border-l-2 border-l-muted/40";
+}
+
+const ARCHETYPE_LABELS: Record<string, string> = {
+  elite_contact: "Elite Contact",
+  power_first: "Power First",
+  stable_regular: "Stable Regular",
+  contact_specialist: "Contact Specialist",
+  platoon_hitter: "Platoon Bat",
+  hot_streak: "Hot Streak",
+  cold_streak: "Cold Streak",
+  limited_sample: "Limited Sample",
+  ace: "Ace",
+  quality_starter: "Quality Starter",
+  mid_rotation: "Mid Rotation",
+  back_end: "Back End",
+  opener_bulk: "Opener/Bulk",
+  reliever: "Reliever",
+};
+
+function archetypeColor(arch: string): string {
+  if (arch === "elite_contact" || arch === "ace") return "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
+  if (arch === "power_first" || arch === "quality_starter") return "bg-emerald-500/20 text-emerald-400 border-emerald-500/30";
+  if (arch === "hot_streak") return "bg-orange-500/20 text-orange-400 border-orange-500/30";
+  if (arch === "cold_streak") return "bg-blue-500/20 text-blue-400 border-blue-500/30";
+  if (arch === "limited_sample" || arch === "back_end") return "bg-muted/40 text-muted-foreground border-muted/30";
+  return "bg-muted/30 text-muted-foreground border-muted/20";
 }
 
 function ttoLabel(n: number): string {
@@ -480,7 +523,7 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
   const riskFlags = sig.riskFlags ?? [];
   const drivers = sig.drivers as Record<string, number> | undefined;
 
-  const sideAccent = sig.recommendedSide === "OVER" ? "border-l-green-500" : sig.recommendedSide === "UNDER" ? "border-l-blue-500" : "border-l-muted";
+  const tierBorder = tierCardBorder(sig.confidenceTier);
   const cardBg = state === "already_hit"
     ? "bg-emerald-500/5"
     : state === "stale"
@@ -492,7 +535,7 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
   return (
     <div
       data-testid={`card-mlb-signal-${sig.playerId}-${sig.market}`}
-      className={`rounded-xl border border-l-4 ${sideAccent} p-4 sm:p-5 space-y-3 transition-all ${stateStyles} ${glowClass || heatGlow(form)} ${cardBg} border-border/40 ${onClickThrough ? "cursor-pointer hover:border-primary/40 active:scale-[0.99]" : ""} w-full`}
+      className={`rounded-xl border ${tierBorder} p-4 sm:p-5 space-y-3 transition-all ${stateStyles} ${glowClass || heatGlow(form)} ${cardBg} border-border/40 ${onClickThrough ? "cursor-pointer hover:border-primary/40 active:scale-[0.99]" : ""} w-full`}
       onClick={() => onClickThrough?.(sig)}
     >
       {state === "already_hit" && (
@@ -527,6 +570,21 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
             {sig.inning > 0 && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30">
                 Inn {sig.inning}
+              </span>
+            )}
+            {sig.batterArchetype && ARCHETYPE_LABELS[sig.batterArchetype] && (
+              <span data-testid={`badge-archetype-${sig.playerId}`} className={`text-[10px] px-1.5 py-0.5 rounded border ${archetypeColor(sig.batterArchetype)}`}>
+                {ARCHETYPE_LABELS[sig.batterArchetype]}
+              </span>
+            )}
+            {sig.pitcherArchetype && !sig.batterArchetype && ARCHETYPE_LABELS[sig.pitcherArchetype] && (
+              <span data-testid={`badge-archetype-${sig.playerId}`} className={`text-[10px] px-1.5 py-0.5 rounded border ${archetypeColor(sig.pitcherArchetype)}`}>
+                {ARCHETYPE_LABELS[sig.pitcherArchetype]}
+              </span>
+            )}
+            {sig.isFlagship && (
+              <span data-testid={`badge-flagship-${sig.playerId}`} className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/15 text-yellow-400 border border-yellow-500/25 font-semibold">
+                Flagship
               </span>
             )}
           </div>
@@ -569,16 +627,32 @@ function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
         </div>
       )}
 
-      {(badges.length > 0 || riskFlags.length > 0) && (
+      {sig.thesis && state === "actionable" && (
+        <div data-testid={`thesis-${sig.playerId}-${sig.market}`} className="text-[11px] text-muted-foreground leading-relaxed px-3 py-2 rounded-lg bg-secondary/30 border border-border/20 italic">
+          {sig.thesis}
+        </div>
+      )}
+
+      {(badges.length > 0 || riskFlags.length > 0 || sig.safetyCeilingApplied || sig.dataQuality === "partial" || sig.dataQuality === "degraded" || sig.isDegraded) && (
         <div className="flex flex-wrap gap-1">
           {badges.map((b, i) => (
             <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-400 border border-green-500/20 font-semibold">
               {b}
             </span>
           ))}
+          {sig.safetyCeilingApplied && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20 font-semibold">
+              Ceiling Applied
+            </span>
+          )}
+          {(sig.dataQuality === "partial" || sig.dataQuality === "degraded" || sig.isDegraded) && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-semibold">
+              {sig.dataQuality === "degraded" || sig.isDegraded ? "Degraded Data" : "Partial Data"}
+            </span>
+          )}
           {riskFlags.map((f, i) => (
             <span key={`rf-${i}`} className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-semibold">
-              ⚠ {f}
+              {f}
             </span>
           ))}
         </div>

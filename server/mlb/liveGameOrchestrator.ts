@@ -36,6 +36,17 @@ import { MARKET_QUALIFY_FLOOR, ALL_MLB_MARKETS } from "./types";
 import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
 import { computeSignalScore, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible } from "./signalScore";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
+import {
+  classifyBatterArchetype,
+  classifyPitcherArchetype,
+  generateThesis,
+  MARKET_VOLATILITY,
+  type MLBBatterArchetype,
+  type MLBPitcherArchetype,
+} from "./archetypes";
+import { applySafetyCeiling, applyDirectionalBias } from "./calibration";
+import { applyFamilySuppression } from "./marketFamily";
+import { trackSignalDirection } from "./directionalBias";
 
 // ── Engine dedup lock ─────────────────────────────────────────────────────────
 const LAST_RUN = new Map<string, number>();
@@ -879,6 +890,48 @@ export class LiveGameOrchestrator {
       }
     }
 
+    const batterArchetypeCache = new Map<string, MLBBatterArchetype>();
+    let pitcherArch: MLBPitcherArchetype | null = null;
+
+    {
+      const activePitcherForArch = state.pitcherInGame;
+      if (activePitcherForArch?.playerId) {
+        const pStats = mlbPlayerCache.pitcherSeasonStats[activePitcherForArch.playerId];
+        if (pStats) {
+          const gs = pStats.gamesStarted ?? null;
+          const ip = pStats.inningsPitched ?? null;
+          pitcherArch = classifyPitcherArchetype({
+            era: pStats.era ?? null,
+            whip: pStats.whip ?? null,
+            kPer9: pStats.kPer9 ?? null,
+            inningsPitched: ip,
+            gamesStarted: gs,
+            avgInningsPerStart: gs != null && gs > 0 && ip != null ? ip / gs : null,
+          });
+          console.log(`[MLB_ARCHETYPE] pitcher=${activePitcherForArch.playerName} archetype=${pitcherArch} ERA=${pStats.era ?? "?"}`);
+        }
+      }
+    }
+
+    for (const batter of state.battingOrder) {
+      if (!batter.playerId || batter.playerId === "unknown") continue;
+      const rollingStatsForArch = mlbPlayerCache.batterRollingStats[batter.playerId];
+      const contactForArch = contactCache?.byPlayerId?.[batter.playerId];
+      const bArch = classifyBatterArchetype({
+        xBA: contactForArch?.xBA ?? null,
+        barrelRate: contactForArch?.barrelPct != null ? contactForArch.barrelPct / 100 : null,
+        exitVelocity: contactForArch?.exitVelocity ?? null,
+        battingOrderSlot: batter.slot ?? 5,
+        seasonPA: rollingStatsForArch?.last30?.games != null ? rollingStatsForArch.last30.games * 4 : 200,
+        seasonOPS: rollingStatsForArch?.seasonOps ?? null,
+        last7OPS: rollingStatsForArch?.last7?.ops ?? null,
+        last15OPS: rollingStatsForArch?.last15?.ops ?? null,
+        platoonGap: null,
+        isStarting: true,
+      });
+      batterArchetypeCache.set(batter.playerId, bArch);
+    }
+
     // ── Batter markets: evaluate each hitter in the starting lineup ────────────
     for (const market of BATTER_MARKETS) {
       if (!impactedMarkets.has(market)) continue;
@@ -1119,10 +1172,48 @@ export class LiveGameOrchestrator {
 
           const output = fwResult.cappedOutput;
 
-          pLog(gameId, "engineOutput", { player: output.playerName, market: output.market, edge: output.edge, tier: output.confidenceTier, suppressed: output.suppressed });
+          const bArch = batterArchetypeCache.get(batter.playerId) ?? "stable_regular";
+
+          const ceilResult = applySafetyCeiling(
+            output.calibratedProbability,
+            bArch,
+            market
+          );
+          if (ceilResult.ceilingApplied) {
+            output.calibratedProbability = ceilResult.probability;
+            if (output.recommendedSide === "OVER") {
+              output.calibratedProbabilityOver = Math.min(output.calibratedProbabilityOver, ceilResult.ceiling);
+              output.calibratedProbabilityUnder = Math.round((100 - output.calibratedProbabilityOver) * 100) / 100;
+            } else {
+              output.calibratedProbabilityUnder = Math.min(output.calibratedProbabilityUnder, ceilResult.ceiling);
+              output.calibratedProbabilityOver = Math.round((100 - output.calibratedProbabilityUnder) * 100) / 100;
+            }
+            console.log(`[MLB_CEILING] player=${batter.playerName} market=${market} archetype=${bArch} capped=${ceilResult.ceiling}`);
+          }
+
+          if (output.recommendedSide === "OVER" || output.recommendedSide === "UNDER") {
+            trackSignalDirection(market, output.recommendedSide);
+          }
+
+          const bvpAvg = bvpData?.avg ?? null;
+          const thesis = generateThesis(
+            bArch,
+            pitcherArch,
+            market,
+            output.recommendedSide === "OVER" || output.recommendedSide === "UNDER" ? output.recommendedSide : "OVER",
+            [],
+            input.weatherPark.parkFactor,
+            bvpAvg,
+            output.formIndicator ?? null,
+            input.pitcher.pitchCount,
+            input.pitcher.timesThrough,
+            input.weatherPark.windDirection ?? null
+          );
+
+          pLog(gameId, "engineOutput", { player: output.playerName, market: output.market, edge: output.edge, tier: output.confidenceTier, suppressed: output.suppressed, archetype: bArch });
           recordMLBDiagnostic(output);
 
-          console.log(`[MLB engine] playerId=${batter.playerId} player="${batter.playerName}" market=${market} slot=${batter.slot} inning=${state.inning} remainingPA=${remainingPA} calibratedProbOver=${output.calibratedProbabilityOver.toFixed(2)} calibratedProbUnder=${output.calibratedProbabilityUnder.toFixed(2)} edge=${output.edge.toFixed(2)} side=${output.recommendedSide}`);
+          console.log(`[MLB engine] playerId=${batter.playerId} player="${batter.playerName}" market=${market} slot=${batter.slot} inning=${state.inning} remainingPA=${remainingPA} calibratedProbOver=${output.calibratedProbabilityOver.toFixed(2)} calibratedProbUnder=${output.calibratedProbabilityUnder.toFixed(2)} edge=${output.edge.toFixed(2)} side=${output.recommendedSide} arch=${bArch}`);
 
           outputs.push({ ...output });
 
@@ -1149,6 +1240,19 @@ export class LiveGameOrchestrator {
           if (qResult) {
             qResult.currentStats = batterStats;
             qResult.lastABContact = lastABContact;
+            qResult.batterArchetype = bArch;
+            qResult.pitcherArchetype = pitcherArch;
+            qResult.thesis = thesis;
+            qResult.safetyCeilingApplied = ceilResult.ceilingApplied;
+            qResult.varianceTier = MARKET_VOLATILITY[market] ?? "mid";
+            qResult.isDegraded = !!(input as any).isDegraded;
+            qResult.dataQuality = !!(input as any).isDegraded ? "degraded" : (Object.values({
+              parkFactor: weatherCache?.venueName != null,
+              weather: weatherCache?.temperature != null,
+              pitcherERA: input.pitcher.era != null,
+              xBA: input.contactQuality.xBA != null,
+              bvp: !!bvpData,
+            }).filter(Boolean).length >= 4 ? "full" : "partial");
             qualifiedSignals.push(qResult);
             allSignals.push(qResult);
             signalsQualified++;
@@ -1156,7 +1260,15 @@ export class LiveGameOrchestrator {
           } else {
             signalsRejected++;
             const watchSig = this.buildWatchSignal(gameId, input, output);
-            if (watchSig) { watchSig.currentStats = batterStats; watchSig.lastABContact = lastABContact; (watchSig as any).isDegraded = !!(input as any).isDegraded; allSignals.push(watchSig); }
+            if (watchSig) {
+              watchSig.currentStats = batterStats;
+              watchSig.lastABContact = lastABContact;
+              watchSig.batterArchetype = bArch;
+              watchSig.pitcherArchetype = pitcherArch;
+              watchSig.thesis = thesis;
+              watchSig.isDegraded = !!(input as any).isDegraded;
+              allSignals.push(watchSig);
+            }
           }
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for ${batter.playerName} / ${market}:`, err.message);
@@ -1330,16 +1442,43 @@ export class LiveGameOrchestrator {
 
           const output = fwResult.cappedOutput;
 
-          pLog(gameId, "engineOutput:pitcher", { player: output.playerName, market: output.market, edge: output.edge, tier: output.confidenceTier });
+          const pArchForMarket = pitcherArch ?? "mid_rotation";
+          const pitcherCeilResult = applySafetyCeiling(
+            output.calibratedProbability,
+            pArchForMarket,
+            market
+          );
+          if (pitcherCeilResult.ceilingApplied) {
+            output.calibratedProbability = pitcherCeilResult.probability;
+            if (output.recommendedSide === "OVER") {
+              output.calibratedProbabilityOver = Math.min(output.calibratedProbabilityOver, pitcherCeilResult.ceiling);
+              output.calibratedProbabilityUnder = Math.round((100 - output.calibratedProbabilityOver) * 100) / 100;
+            } else {
+              output.calibratedProbabilityUnder = Math.min(output.calibratedProbabilityUnder, pitcherCeilResult.ceiling);
+              output.calibratedProbabilityOver = Math.round((100 - output.calibratedProbabilityUnder) * 100) / 100;
+            }
+            console.log(`[MLB_CEILING] pitcher=${pitcherToEval.playerName} market=${market} archetype=${pArchForMarket} capped=${pitcherCeilResult.ceiling}`);
+          }
+
+          if (output.recommendedSide === "OVER" || output.recommendedSide === "UNDER") {
+            trackSignalDirection(market, output.recommendedSide);
+          }
+
+          pLog(gameId, "engineOutput:pitcher", { player: output.playerName, market: output.market, edge: output.edge, tier: output.confidenceTier, archetype: pArchForMarket });
           recordMLBDiagnostic(output);
 
-          console.log(`[MLB engine] playerId=${pitcherToEval.playerId} player="${pitcherToEval.playerName}" market=${market} inning=${state.inning} remainingPA=${remainingPA} calibratedProbOver=${output.calibratedProbabilityOver.toFixed(2)} calibratedProbUnder=${output.calibratedProbabilityUnder.toFixed(2)} edge=${output.edge.toFixed(2)} side=${output.recommendedSide}`);
+          console.log(`[MLB engine] playerId=${pitcherToEval.playerId} player="${pitcherToEval.playerName}" market=${market} inning=${state.inning} remainingPA=${remainingPA} calibratedProbOver=${output.calibratedProbabilityOver.toFixed(2)} calibratedProbUnder=${output.calibratedProbabilityUnder.toFixed(2)} edge=${output.edge.toFixed(2)} side=${output.recommendedSide} arch=${pArchForMarket}`);
 
           outputs.push({ ...output });
           marketsEvaluated++;
 
           const qResult = this.qualifySignal(gameId, input, output);
           if (qResult) {
+            qResult.pitcherArchetype = pArchForMarket;
+            qResult.safetyCeilingApplied = pitcherCeilResult.ceilingApplied;
+            qResult.varianceTier = MARKET_VOLATILITY[market] ?? "mid";
+            qResult.isDegraded = !!(input as any).isDegraded;
+            qResult.dataQuality = !!(input as any).isDegraded ? "degraded" : "partial";
             qualifiedSignals.push(qResult);
             allSignals.push(qResult);
             signalsQualified++;
@@ -1347,7 +1486,11 @@ export class LiveGameOrchestrator {
           } else {
             signalsRejected++;
             const watchSig = this.buildWatchSignal(gameId, input, output);
-            if (watchSig) { (watchSig as any).isDegraded = !!(input as any).isDegraded; allSignals.push(watchSig); }
+            if (watchSig) {
+              watchSig.pitcherArchetype = pArchForMarket;
+              watchSig.isDegraded = !!(input as any).isDegraded;
+              allSignals.push(watchSig);
+            }
           }
         } catch (err: any) {
           console.warn(`[MLB orchestrator] engine error for pitcher ${pitcherToEval.playerName} / ${market}:`, err.message);
@@ -1371,10 +1514,34 @@ export class LiveGameOrchestrator {
       sig.gameCardSignalTags = gameCardTags as string[];
     }
 
+    const familyEnriched = applyFamilySuppression(allSignals);
+    let flagshipCount = 0;
+    for (const enriched of familyEnriched) {
+      const sig = allSignals.find(s => s.id === enriched.id);
+      if (sig) {
+        sig.familyId = enriched.familyResult.familyId;
+        sig.familyRank = enriched.familyResult.siblingRank;
+        sig.isFlagship = enriched.familyResult.isFlagship;
+        sig.familyPenaltyFactor = enriched.familyResult.familyPenaltyFactor;
+        if (enriched.familyResult.isFlagship) flagshipCount++;
+        if (!enriched.familyResult.isFlagship && enriched.familyResult.familyPenaltyFactor < 1) {
+          sig.signalScore = Math.round(sig.signalScore * enriched.familyResult.familyPenaltyFactor);
+          if (sig.signalScore < 55) {
+            sig.confidenceTier = "WATCHLIST";
+            sig.watchlist = true;
+          }
+        }
+      }
+    }
+    console.log(`[MLB_FAMILY_SUPPRESSION][${gameId}] signals=${allSignals.length} flagships=${flagshipCount}`);
+
     allSignals.sort((a, b) => {
-      const aDeg = (a as any).isDegraded ? 1 : 0;
-      const bDeg = (b as any).isDegraded ? 1 : 0;
+      const aDeg = a.isDegraded ? 1 : 0;
+      const bDeg = b.isDegraded ? 1 : 0;
       if (aDeg !== bDeg) return aDeg - bDeg;
+      const aFlagship = a.isFlagship ? 0 : 1;
+      const bFlagship = b.isFlagship ? 0 : 1;
+      if (aFlagship !== bFlagship) return aFlagship - bFlagship;
       return (b.signalScore ?? 0) - (a.signalScore ?? 0);
     });
 
