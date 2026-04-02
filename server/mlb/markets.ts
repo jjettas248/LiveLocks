@@ -56,7 +56,7 @@ export function canShowSignal(market: {
   if (!isFresh(market.oddsUpdatedAt)) return false;
   return true;
 }
-import { estimateRemainingPA, estimatePitcherRemainingBF } from "./paEstimator";
+import { estimateRemainingPA } from "./paEstimator";
 import { estimatePADistribution, estimateRichPADistribution, estimateRichBFDistribution } from "./paDistribution";
 import {
   baseProbability,
@@ -83,7 +83,6 @@ import {
   computeHRDistribution,
 } from "./outcomeDistribution";
 import type { ProjectionSource, ProjectionQuality, DistributionModelMethod } from "./types";
-import { USER_FACING_MLB_MARKETS } from "./types";
 import {
   EXPERIMENTAL_MARKETS,
   CORE_MARKETS,
@@ -220,15 +219,6 @@ function calibrateDistributionProb(rawProb: number, market?: MLBMarket): number 
   return Math.round(calibrated * 100) / 100;
 }
 
-function applyOverRegression(
-  projection: number,
-  baselineProjection: number,
-  quality: ProjectionQuality,
-  side: string
-): number {
-  if (side !== "OVER" || quality === "HIGH") return projection;
-  return 0.70 * baselineProjection + 0.30 * projection;
-}
 
 // ── Tier 1 markets (high priority, standard composite threshold) ──────────────
 const TIER1_MARKETS = new Set<MLBMarket>(["hits", "total_bases", "hrr", "pitcher_strikeouts", "pitcher_outs"]);

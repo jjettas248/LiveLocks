@@ -137,7 +137,6 @@ export function buildTopPlays(
     if (!sig || typeof sig.enginePct !== "number" || !Number.isFinite(sig.enginePct)) continue;
     if (sig.enginePct < 55) continue;
     const edge = typeof sig.edge === "number" && Number.isFinite(sig.edge) ? sig.edge : 0;
-    const trustScore = typeof sig.trustScore === "number" ? sig.trustScore : 0.5;
     plays.push({
       id: `mlb_${sig.playerId}_${sig.market}`,
       sport: "MLB",
