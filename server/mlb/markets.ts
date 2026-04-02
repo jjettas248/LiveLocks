@@ -67,7 +67,6 @@ import {
   applyXBAModifier,
   applyXSLGModifier,
 } from "./hitProbabilityModel";
-import { computeHitOutcomeProbability } from "./outcomeDistribution";
 import {
   EXPERIMENTAL_MARKETS,
   CORE_MARKETS,
@@ -102,8 +101,9 @@ import {
   type FeatureLayer,
 } from "./featureEngineering";
 import { projectBaseValue } from "./projections";
-import { computeRawProbability, clampProjection, clampProbability } from "./probability";
-import { calibrateProbability } from "./calibration";
+import { clampProjection, clampProbability } from "./probability";
+import { computeFullModelProbability, computeModelProbability } from "./probabilityEngine";
+import type { FullProbabilityResult } from "./probabilityEngine";
 
 function computeSpecConfidenceScore(
   edge: number,
@@ -550,42 +550,30 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
   );
   const safeProjection = clampProjection(featureAdjustedProjection);
 
-  const { overProb, underProb } = computeRawProbability(
-    safeProjection,
-    input.bookLine,
-    input.market
-  );
-
-  const rawProbabilityOver = overProb;
-  const rawProbabilityUnder = underProb;
-
-  const dominantRawProb = overProb >= underProb ? overProb : underProb;
-
-  let calibratedOver = calibrateProbability(overProb);
-  let calibratedUnder = calibrateProbability(underProb);
-
   const isExperimental = EXPERIMENTAL_MARKETS.includes(input.market);
 
-  if (isExperimental) {
-    calibratedOver = 50 + (calibratedOver - 50) * 0.90;
-    calibratedUnder = 50 + (calibratedUnder - 50) * 0.90;
-    calibratedOver = Math.round(calibratedOver * 100) / 100;
-    calibratedUnder = Math.round(calibratedUnder * 100) / 100;
-  }
+  const probResult: FullProbabilityResult = computeFullModelProbability(
+    {
+      projection: safeProjection,
+      threshold: input.bookLine,
+      market: input.market,
+    },
+    null,
+    input.market,
+    false,
+    isExperimental
+  );
 
-  if (input.market === "total_bases" && calibratedOver > 72) calibratedOver = 72;
-  if (input.market === "total_bases" && calibratedUnder > 72) calibratedUnder = 72;
+  const rawProbabilityOver = probResult.rawOverProbability;
+  const rawProbabilityUnder = probResult.rawUnderProbability;
+  const dominantRawProb = probResult.dominantRawProbability;
+  const calibratedProbabilityOver = probResult.calibratedOverProbability;
+  const calibratedProbabilityUnder = probResult.calibratedUnderProbability;
+  const calibratedDominant = probResult.dominantCalibratedProbability;
+  const isOverFavored = probResult.isOverFavored;
 
-  const calibratedSidedRaw = overProb >= underProb ? calibratedOver : calibratedUnder;
-  const calibratedSided = applyProbabilityCeiling(calibratedSidedRaw, input.market);
-  const calibratedOpposite = Math.round((100 - calibratedSided) * 100) / 100;
+  const calibratedSided = isOverFavored ? calibratedProbabilityOver : calibratedProbabilityUnder;
 
-  const calibratedProbabilityOver = clampProbability(overProb >= underProb ? calibratedSided : calibratedOpposite);
-  const calibratedProbabilityUnder = clampProbability(overProb >= underProb ? calibratedOpposite : calibratedSided);
-
-  const calibratedDominant = Math.max(calibratedProbabilityOver, calibratedProbabilityUnder);
-
-  const isOverFavored = overProb >= underProb;
   const bookImplied = computeBookImplied(input, isOverFavored);
   const edge = calibratedSided - bookImplied;
   const badgeResult = computeBadges(input, features);
@@ -753,46 +741,34 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   const expectedHits = paDist[1] * adjustedRate + paDist[2] * 2 * adjustedRate + paDist[3] * 3 * adjustedRate;
   const rpa = (1 * paDist[1]) + (2 * paDist[2]) + (3 * paDist[3]);
 
-  const neededHits = Math.max(0, Math.ceil(hitsInput.bookLine) - currentHits);
-
-  let rawProbabilityOver: number;
-  let rawProbabilityUnder: number;
-
-  if (neededHits === 0) {
-    rawProbabilityOver = clampProbability(100);
-    rawProbabilityUnder = clampProbability(0);
-  } else {
-    let weightedProb = 0;
-    for (const [paCountStr, paProb] of Object.entries(paDist)) {
-      const paCount = Number(paCountStr);
-      weightedProb += computeHitOutcomeProbability(paCount, adjustedRate, neededHits) * paProb;
-    }
-    rawProbabilityOver = Math.round(clampProbability(weightedProb) * 100) / 100;
-    rawProbabilityUnder = Math.round(clampProbability(100 - weightedProb) * 100) / 100;
-  }
-
-  let calibratedOver = calibrateProbability(rawProbabilityOver);
-  let calibratedUnder = calibrateProbability(rawProbabilityUnder);
-
   const isExperimental = EXPERIMENTAL_MARKETS.includes("hits" as MLBMarket);
 
-  if (isExperimental) {
-    calibratedOver = 50 + (calibratedOver - 50) * 0.90;
-    calibratedUnder = 50 + (calibratedUnder - 50) * 0.90;
-    calibratedOver = Math.round(calibratedOver * 100) / 100;
-    calibratedUnder = Math.round(calibratedUnder * 100) / 100;
-  }
+  const probResult: FullProbabilityResult = computeFullModelProbability(
+    {
+      projection: expectedHits + (hitsInput.currentStatValue ?? 0),
+      threshold: hitsInput.bookLine,
+      market: "hits",
+      remainingPA: rpa,
+      adjustedRate,
+      currentStatValue: currentHits,
+      paDistribution: paDist as unknown as Record<number, number>,
+    },
+    null,
+    "hits",
+    false,
+    isExperimental
+  );
 
-  const calibratedSidedRaw = rawProbabilityOver >= rawProbabilityUnder ? calibratedOver : calibratedUnder;
-  const calibratedSided = applyProbabilityCeiling(calibratedSidedRaw, "hits");
-  const calibratedOpposite = Math.round((100 - calibratedSided) * 100) / 100;
+  const rawProbabilityOver = probResult.rawOverProbability;
+  const rawProbabilityUnder = probResult.rawUnderProbability;
+  const calibratedProbabilityOver = probResult.calibratedOverProbability;
+  const calibratedProbabilityUnder = probResult.calibratedUnderProbability;
+  const calibratedDominant = probResult.dominantCalibratedProbability;
+  const dominantRawProb = probResult.dominantRawProbability;
+  const isOverFavored = probResult.isOverFavored;
 
-  const calibratedProbabilityOver = clampProbability(rawProbabilityOver >= rawProbabilityUnder ? calibratedSided : calibratedOpposite);
-  const calibratedProbabilityUnder = clampProbability(rawProbabilityOver >= rawProbabilityUnder ? calibratedOpposite : calibratedSided);
-  const calibratedDominant = Math.max(calibratedProbabilityOver, calibratedProbabilityUnder);
-  const dominantRawProb = Math.max(rawProbabilityOver, rawProbabilityUnder);
+  const calibratedSided = isOverFavored ? calibratedProbabilityOver : calibratedProbabilityUnder;
 
-  const isOverFavored = rawProbabilityOver >= rawProbabilityUnder;
   const bookImplied = computeBookImplied(hitsInput, isOverFavored);
   const edge = calibratedSided - bookImplied;
   let confidenceTier = determineConfidenceTier(edge);
