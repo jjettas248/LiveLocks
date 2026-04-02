@@ -1,0 +1,62 @@
+# TASK: MLB UI Consistency Refactor
+
+## SYSTEM:
+UX Layer
+
+## OBJECTIVE:
+Refactor the MLB experience so it uses the same UI grammar, shared components, loading states, empty states, validation patterns, and simulation visibility standards as the rest of LiveLocks.
+
+## CONTEXT:
+Audit the current codebase and update these files:
+- client/src/pages/mlb-live.tsx
+- client/src/components/mlb/MLBScheduleList.tsx
+- client/src/components/mlb/LiveBoard.tsx
+- client/src/components/mlb/TopPlays.tsx
+- client/src/components/mlb-admin-tab.tsx
+- client/src/pages/admin.tsx
+- server/simulationState.ts
+
+Add these shared files:
+- client/src/components/sports/SportPageShell.tsx
+- client/src/components/sports/EmptyState.tsx
+- client/src/components/sports/SkeletonCard.tsx
+- client/src/components/sports/SimulationBanner.tsx
+- client/src/components/mlb/MlbSignalCard.tsx
+- client/src/lib/mlbFormatters.ts
+- client/src/lib/mlbValidation.ts
+
+## REQUIREMENTS:
+- Extract duplicated MLB label / odds / stat formatting logic into shared utils.
+- Replace bespoke MLB card shells with reusable sport-shell primitives.
+- Move `liveFeedSub` hook above all early returns in `client/src/pages/mlb-live.tsx`.
+- Standardize loading states with skeleton cards.
+- Standardize empty states with a shared empty-state component.
+- Add a visible simulation-mode banner that can be reused in MLB and admin contexts.
+- Refactor `TopPlays` and `LiveBoard` to use a shared `MlbSignalCard` component.
+- Add signal validation utility and ensure invalid/stale/no-edge signals are filtered in one place before rendering.
+- Convert the MLB admin tester into grouped sections:
+  - General Info
+  - Player Inputs
+  - Projection Inputs
+  - Simulation Settings
+- Add inline validation and autocomplete-ready field structure to the MLB admin tester.
+- Keep existing engine/API behavior intact.
+
+## DO NOT:
+- Break existing query keys or API endpoints.
+- Change engine math.
+- Introduce hardcoded fake odds or fake signals.
+- Create another duplicate MLB formatter layer.
+
+## SUCCESS CRITERIA:
+- MLB looks and behaves like a first-class sport surface, not a custom one-off.
+- No duplicated MLB market label / odds / stat formatting helpers remain across page/components.
+- `TopPlays` and `LiveBoard` share the same signal-card system.
+- `mlb-live.tsx` is slimmer and delegates UI primitives to shared components.
+- MLB admin testing form is grouped, more readable, and validation-safe.
+- Simulation mode is clearly visible.
+
+## OUTPUT:
+- Exact code changes
+- File-level diffs
+- No placeholders
