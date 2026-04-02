@@ -1490,8 +1490,8 @@ export async function registerRoutes(
       } else {
         if (market === "hits") currentStatValue = statsH;
         else if (market === "total_bases") currentStatValue = statsTB;
-        else if (market === "home_runs" || market === "hr") currentStatValue = stats ? parseInt(String((stats as any).hr ?? 0), 10) || 0 : 0;
-        else if (market === "hrr") currentStatValue = statsH + (stats ? parseInt(String((stats as any).rbi ?? 0), 10) || 0 : 0) + (stats ? parseInt(String((stats as any).r ?? 0), 10) || 0 : 0);
+        else if (market === "home_runs" || market === "hr") currentStatValue = currentStats ? parseInt(String((currentStats as any).hr ?? 0), 10) || 0 : 0;
+        else if (market === "hrr") currentStatValue = statsH + (currentStats ? parseInt(String((currentStats as any).rbi ?? 0), 10) || 0 : 0) + (currentStats ? parseInt(String((currentStats as any).r ?? 0), 10) || 0 : 0);
         else if (market === "batter_strikeouts") currentStatValue = statsK;
         else currentStatValue = 0;
       }

@@ -103,4 +103,5 @@ export interface MLBSignal {
 
   smartTags: string[];
   primaryReason: string;
+  pitchMatchupRatings: Record<string, "strong" | "neutral" | "weak"> | null;
 }

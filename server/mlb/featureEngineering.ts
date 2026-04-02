@@ -831,13 +831,15 @@ export interface FeatureLayer {
 
 export function computeSpecContactQuality(input: MLBPropInput): number {
   const cq = input.contactQuality;
-  const ev = cq.exitVelocity ?? 88;
-  const hhr = cq.hardHitRateSeason ?? 0.30;
-  const barrel = cq.barrelRateProxySeason ?? 0.05;
-  const xBA = cq.xBA ?? 0.250;
-  const xSLG = cq.xSLG ?? 0.400;
+  const hasEV = cq.exitVelocity != null;
+  const hasSeasonStats = cq.xBA != null || cq.xSLG != null || cq.hardHitRateSeason != null || cq.barrelRateProxySeason != null;
+  const ev = cq.exitVelocity ?? 90;
+  const hhr = cq.hardHitRateSeason ?? 0.35;
+  const barrel = cq.barrelRateProxySeason ?? 0.07;
+  const xBA = cq.xBA ?? 0.265;
+  const xSLG = cq.xSLG ?? 0.430;
 
-  const la = cq.launchAngle ?? 12;
+  const la = cq.launchAngle ?? 14;
   const inSweetSpot = la >= 10 && la <= 30;
   const sweetSpotScore = inSweetSpot ? normalize01(la, 10, 25) : 0.2;
 
@@ -861,7 +863,7 @@ export function computeSpecContactQuality(input: MLBPropInput): number {
   const batSpeedData = computeBatSpeedEngine(input);
   const batSpeedAdjusted = batSpeedData.batSpeedPowerScore;
 
-  const score =
+  let score =
     0.21 * evLaSurface +
     0.15 * xBASkill +
     0.13 * xwOBASkill +
@@ -873,6 +875,10 @@ export function computeSpecContactQuality(input: MLBPropInput): number {
     0.04 * adjustedEVScore +
     0.03 * recentContactForm;
 
+  if (!hasSeasonStats && !hasEV) {
+    score = 0.45 + score * 0.2;
+  }
+
   return clamp(score, 0, 1);
 }
 
@@ -883,9 +889,10 @@ export function computeBatSpeedEngine(input: MLBPropInput): {
   batSpeedZ: number;
   isConditionallyAmplified: boolean;
 } {
-  const ev = input.contactQuality.exitVelocity ?? 88;
-  const hhr = input.contactQuality.hardHitRateSeason ?? 0.30;
-  const barrel = input.contactQuality.barrelRateProxySeason ?? 0.05;
+  const ev = input.contactQuality.exitVelocity ?? 90;
+  const hhr = input.contactQuality.hardHitRateSeason ?? 0.35;
+  const barrel = input.contactQuality.barrelRateProxySeason ?? 0.07;
+  const hasMeasuredData = input.contactQuality.exitVelocity != null || input.contactQuality.hardHitRateSeason != null || input.contactQuality.barrelRateProxySeason != null;
 
   const estimatedBatSpeed = 55 + (ev - 80) * 0.57;
   const batSpeed = clamp(estimatedBatSpeed, 60, 85);
@@ -901,6 +908,10 @@ export function computeBatSpeedEngine(input: MLBPropInput): {
   const continuousScale = 0.45 + 0.55 * contactStrength;
 
   let batSpeedPowerScore = (0.65 * sigmoid(batSpeedZ) + 0.35 * sigmoid(fastSwingZ)) * continuousScale;
+
+  if (!hasMeasuredData) {
+    batSpeedPowerScore = 0.45 + batSpeedPowerScore * 0.2;
+  }
 
   const hasStrongContact = barrel >= 0.08 || ev >= 95 || hhr >= 0.40;
   const hasWeakContact = ev < 88 && hhr < 0.28;
@@ -973,8 +984,8 @@ export function computeSpecHandednessMatchup(input: MLBPropInput): number {
 
 export function computeSpecPitchBlendMatchup(input: MLBPropInput, mode: "damage" | "whiff" = "damage"): number {
   const pitchMix = input.pitcher.pitchMix;
-  const hhr = input.contactQuality.hardHitRateSeason ?? 0.30;
-  const xSLG = input.contactQuality.xSLG ?? 0.400;
+  const hhr = input.contactQuality.hardHitRateSeason ?? 0.35;
+  const xSLG = input.contactQuality.xSLG ?? 0.430;
   const era = input.pitcher.era ?? 4.0;
 
   if (pitchMix.length === 0) return 0.5;

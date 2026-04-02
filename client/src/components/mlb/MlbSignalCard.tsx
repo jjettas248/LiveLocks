@@ -289,12 +289,29 @@ export function MlbSignalCard({
                 {sig.pitcherName ? `${sig.pitcherName} Arsenal` : "Pitcher Arsenal"}
               </div>
               <div className="flex flex-wrap gap-1">
-                {sig.pitchMix.slice(0, 5).map((p, i) => (
-                  <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-secondary/60 text-foreground border border-border/30">
-                    {PITCH_LABELS[p.pitchType] ?? p.pitchType} {Math.round(p.percentage)}%
-                    {p.avgVelocity != null && <span className="text-muted-foreground ml-1">{p.avgVelocity.toFixed(0)}mph</span>}
-                  </span>
-                ))}
+                {sig.pitchMix.slice(0, 5).map((p, i) => {
+                  const rating = sig.pitchMatchupRatings?.[p.pitchType] ?? "neutral";
+                  const ratingStyle = rating === "strong"
+                    ? { borderColor: "rgba(34,197,94,0.5)", color: "#bbf7d0" }
+                    : rating === "weak"
+                    ? { borderColor: "rgba(239,68,68,0.4)", color: "#fecaca" }
+                    : { borderColor: "rgba(148,163,184,0.3)", color: "#e4e4e7" };
+                  return (
+                    <span
+                      key={i}
+                      className="text-[9px] px-1.5 py-0.5 rounded bg-secondary/60 border"
+                      style={{ borderColor: ratingStyle.borderColor, color: ratingStyle.color }}
+                    >
+                      {PITCH_LABELS[p.pitchType] ?? p.pitchType} {Math.round(p.percentage)}%
+                      {p.avgVelocity != null && <span className="opacity-60 ml-1">{p.avgVelocity.toFixed(0)}mph</span>}
+                      {rating !== "neutral" && (
+                        <span className="ml-0.5 text-[8px]" style={{ color: rating === "strong" ? "#22c55e" : "#ef4444" }}>
+                          {rating === "strong" ? "▲" : "▼"}
+                        </span>
+                      )}
+                    </span>
+                  );
+                })}
               </div>
             </div>
           )}

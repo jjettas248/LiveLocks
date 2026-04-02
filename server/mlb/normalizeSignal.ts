@@ -52,6 +52,10 @@ function generateSmartTags(
   const lastAB = qs.lastABContact;
   const form = qs.formIndicator ? String(qs.formIndicator).toUpperCase() : null;
   const isPitcher = market.startsWith("pitcher_") || market === "hits_allowed" || market === "walks_allowed" || market === "hr_allowed";
+  const pitchCount = qs.pitcherPitchCount ?? 0;
+  const timesThrough = qs.pitcherTimesThrough ?? 0;
+  const line = qs.line ?? 0;
+  const currentStatVal = qs.currentStat ?? computeCurrentStatVal(market, qs.currentStats ?? null);
 
   if (badges.includes("Explosive Bat Speed") || badges.includes("Elite Bat Speed")) {
     tags.push("⚡ Elite Power");
@@ -71,44 +75,60 @@ function generateSmartTags(
     }
   }
 
-  if (drivers.handednessMatchup >= 0.65 || drivers.pitchBlendMatchup >= 0.65) {
-    tags.push("🎯 Pitch Matchup");
+  if (drivers.handednessMatchup >= 0.55 || drivers.pitchBlendMatchup >= 0.55) {
+    tags.push("🎯 Matchup Edge");
   }
 
-  if (drivers.pitchBlendMatchup >= 0.7) {
+  if (drivers.pitchBlendMatchup >= 0.60) {
     tags.push("🧠 Arsenal Edge");
   }
 
-  if (isPitcher && drivers.pitcherSuppression >= 0.65) {
+  if (isPitcher && drivers.pitcherSuppression >= 0.55) {
     tags.push("❄️ High Whiff");
   }
 
-  if (isPitcher && drivers.pitcherDeterioration >= 0.6) {
+  if (!isPitcher && pitchCount >= 75) {
+    tags.push("⚠️ Pitcher Tiring");
+  } else if (!isPitcher && timesThrough >= 3) {
+    tags.push("🔄 3rd Time Through");
+  }
+
+  if (isPitcher && drivers.pitcherDeterioration >= 0.50) {
     tags.push("⚠️ Fatigue");
   }
 
-  if (drivers.parkEnv >= 0.65) {
+  if (drivers.parkEnv >= 0.55) {
     tags.push("🏟️ Park Boost");
+  } else if (drivers.parkEnv <= 0.30) {
+    tags.push("🏟️ Tough Park");
   }
 
-  if (drivers.hotColdForm >= 0.7 || form === "HOT") {
+  if (drivers.hotColdForm >= 0.55 || form === "HOT") {
     tags.push("🔥 Hot Streak");
+  } else if (form === "WARM") {
+    tags.push("🔥 Warming Up");
   }
 
-  if (drivers.bvp >= 0.7) {
+  if (drivers.bvp >= 0.55) {
     tags.push("📊 BvP Edge");
   }
 
-  if (drivers.contactQuality >= 0.7) {
+  if (drivers.contactQuality >= 0.65) {
     tags.push("🎯 Elite Contact");
+  } else if (drivers.contactQuality >= 0.55) {
+    tags.push("🎯 Solid Contact");
   }
 
-  if (drivers.lineupOpportunity >= 0.7) {
+  if (drivers.lineupOpportunity >= 0.55) {
     tags.push("📈 Lineup Spot");
   }
 
-  if (drivers.bullpenFactor >= 0.65) {
+  if (drivers.bullpenFactor >= 0.55) {
     tags.push("🎯 Bullpen Edge");
+  }
+
+  if (line > 0 && currentStatVal >= line - 1 && currentStatVal < line && !qs.alreadyHit) {
+    tags.push("📍 1 Away");
   }
 
   if (qs.inning <= 2 && !qs.alreadyHit) {
@@ -131,32 +151,42 @@ function generatePrimaryReason(
 ): string {
   const side = qs.side === "UNDER" ? "UNDER" : "OVER";
 
-  if (qs.thesis && typeof qs.thesis === "string" && qs.thesis.length > 10) {
-    return qs.thesis.length > 80 ? qs.thesis.slice(0, 77) + "…" : qs.thesis;
+  const thesis = qs.thesis && typeof qs.thesis === "string" && qs.thesis.length > 10 ? qs.thesis : null;
+  const isGenericThesis = thesis != null && (
+    thesis.startsWith("Limited sample") ||
+    thesis.startsWith("Model projection based")
+  );
+
+  if (thesis && !isGenericThesis) {
+    return thesis.length > 80 ? thesis.slice(0, 77) + "…" : thesis;
   }
 
   const parts: string[] = [];
   const drivers = qs.drivers ?? {};
   const isPitcher = market.startsWith("pitcher_") || market === "hits_allowed" || market === "walks_allowed" || market === "hr_allowed";
 
-  if (drivers.contactQuality >= 0.65 && !isPitcher) parts.push("elite contact");
-  else if (drivers.contactQuality >= 0.55 && !isPitcher) parts.push("solid contact");
+  if (drivers.contactQuality >= 0.55 && !isPitcher) parts.push("solid contact");
+  if (drivers.batSpeedPower >= 0.55 && !isPitcher) parts.push("power profile");
 
-  if (drivers.batSpeedPower >= 0.65 && !isPitcher) parts.push("power profile");
-
-  if (drivers.handednessMatchup >= 0.65 || drivers.pitchBlendMatchup >= 0.65) {
+  if (drivers.handednessMatchup >= 0.55 || drivers.pitchBlendMatchup >= 0.55) {
     parts.push("favorable matchup");
   }
 
-  if (drivers.parkEnv >= 0.6) parts.push("park boost");
+  if (drivers.parkEnv >= 0.55) parts.push("park boost");
+  if (drivers.hotColdForm >= 0.55) parts.push("hot form");
 
-  if (drivers.hotColdForm >= 0.65) parts.push("hot form");
+  if (isPitcher && drivers.pitcherSuppression >= 0.50) parts.push("dominant stuff");
+  if (isPitcher && drivers.pitcherDeterioration >= 0.45) parts.push("pitcher fading");
 
-  if (isPitcher && drivers.pitcherSuppression >= 0.6) parts.push("dominant stuff");
-  if (isPitcher && drivers.pitcherDeterioration >= 0.55) parts.push("pitcher fading");
+  if (drivers.bvp >= 0.55) parts.push("BvP history");
+  if (drivers.bullpenFactor >= 0.50) parts.push("bullpen advantage");
 
-  if (drivers.bvp >= 0.65) parts.push("BvP history");
-  if (drivers.bullpenFactor >= 0.6) parts.push("bullpen advantage");
+  if (!isPitcher) {
+    const pitchCount = qs.pitcherPitchCount ?? 0;
+    const timesThrough = qs.pitcherTimesThrough ?? 0;
+    if (pitchCount >= 75) parts.push("pitcher fatigued");
+    else if (timesThrough >= 3) parts.push("3rd time through order");
+  }
 
   if (parts.length === 0) {
     const bullets = raw?.explanationBullets;
@@ -204,6 +234,32 @@ export function normalizeMLBSignal(
 
   const smartTags = generateSmartTags(qs, raw, normalizedMkt);
   const primaryReason = generatePrimaryReason(qs, raw, normalizedMkt);
+
+  const drivers = qs.drivers ?? {};
+  let pitchMatchupRatings: Record<string, "strong" | "neutral" | "weak"> | null = null;
+  if (pitchMix && Array.isArray(pitchMix) && pitchMix.length > 0) {
+    const cq = drivers.contactQuality ?? 0.5;
+    const bp = drivers.batSpeedPower ?? 0.5;
+    const pbm = drivers.pitchBlendMatchup ?? 0.5;
+    pitchMatchupRatings = {};
+    for (const p of pitchMix) {
+      const pt = p.pitchType;
+      const isFastball = pt === "FF" || pt === "SI" || pt === "FC";
+      const isBreaking = pt === "SL" || pt === "CU" || pt === "KC" || pt === "CS" || pt === "SV" || pt === "ST";
+      let rating: "strong" | "neutral" | "weak" = "neutral";
+      if (isFastball) {
+        if (bp >= 0.55 && cq >= 0.50) rating = "strong";
+        else if (bp < 0.40 || cq < 0.40) rating = "weak";
+      } else if (isBreaking) {
+        if (cq >= 0.55 && pbm >= 0.50) rating = "strong";
+        else if (cq < 0.40 || pbm < 0.40) rating = "weak";
+      } else {
+        if (cq >= 0.55) rating = "strong";
+        else if (cq < 0.40) rating = "weak";
+      }
+      pitchMatchupRatings[pt] = rating;
+    }
+  }
 
   return {
     playerId: qs.playerId,
@@ -280,5 +336,6 @@ export function normalizeMLBSignal(
 
     smartTags,
     primaryReason,
+    pitchMatchupRatings,
   };
 }

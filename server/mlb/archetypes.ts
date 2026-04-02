@@ -303,17 +303,28 @@ export function generateThesis(
   const parts: string[] = [];
 
   if (batterArchetype) {
-    const archetypeLabel: Record<MLBBatterArchetype, string> = {
-      elite_contact: "Elite contact profile",
-      power_first: "Power-first bat",
-      stable_regular: "Consistent regular starter",
-      contact_specialist: "Contact specialist",
-      platoon_hitter: "Platoon matchup edge",
-      hot_streak: "Hot streak active",
-      cold_streak: "Cold streak drag",
-      limited_sample: "Limited sample — proceed with caution",
-    };
-    parts.push(archetypeLabel[batterArchetype]);
+    if (batterArchetype === "limited_sample") {
+      const mktContext: Record<string, string> = {
+        hits: "projecting hit upside",
+        total_bases: "projecting base production",
+        home_runs: "targeting HR potential",
+        batter_strikeouts: "modeling K exposure",
+        hrr: "projecting H+R+RBI combo",
+      };
+      const sideContext = side === "UNDER" ? "suppression lean" : (mktContext[market] ?? "early-season model lean");
+      parts.push(sideContext);
+    } else {
+      const archetypeLabel: Record<string, string> = {
+        elite_contact: "Elite contact profile",
+        power_first: "Power-first bat",
+        stable_regular: "Consistent regular starter",
+        contact_specialist: "Contact specialist",
+        platoon_hitter: "Platoon matchup edge",
+        hot_streak: "Hot streak active",
+        cold_streak: "Cold streak drag",
+      };
+      if (archetypeLabel[batterArchetype]) parts.push(archetypeLabel[batterArchetype]);
+    }
   }
 
   if (pitcherArchetype) {
