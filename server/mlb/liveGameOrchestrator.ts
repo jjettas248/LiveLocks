@@ -47,6 +47,8 @@ import {
 import { applySafetyCeiling, applyDirectionalBias } from "./calibration";
 import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
+import { evaluateHRAlert, markAlertSent, type HRAlertInput } from "./evaluateHRAlert";
+import { storage } from "../storage";
 
 // ── Engine dedup lock ─────────────────────────────────────────────────────────
 const LAST_RUN = new Map<string, number>();
@@ -1332,6 +1334,45 @@ export class LiveGameOrchestrator {
               watchSig.thesis = thesis;
               watchSig.isDegraded = !!(input as any).isDegraded;
               allSignals.push(watchSig);
+            }
+          }
+
+          if (market === "home_runs" && output.hrBuildScore != null && output.hrBuildScore > 0) {
+            const hrFactorsBuild = typeof output.hrFactors === "object" && output.hrFactors?.build
+              ? output.hrFactors.build
+              : { avgEV: null, maxEV: null, avgLA: null, barrels: 0, hardHits: 0, deepFlyouts: 0, batSpeedScore: 0, pitcherFatigueBoost: 0, parkWindBoost: 0, platoonBoost: 0 };
+            const alertInput: HRAlertInput = {
+              playerId: batter.playerId,
+              playerName: batter.playerName,
+              teamAbbr: batter.team,
+              gameId,
+              hrBuildScore: output.hrBuildScore,
+              hrIntensity: output.hrIntensity ?? "weak",
+              factors: hrFactorsBuild as any,
+              inning: state.inning,
+              priorABResults: (playerContact?.priorABResults ?? []).map((ab: any) => ({
+                exitVelocity: ab.exitVelocity ?? null,
+                launchAngle: ab.launchAngle ?? null,
+                distance: ab.distance ?? null,
+                outcome: ab.outcome ?? "out",
+              })),
+            };
+            const alertResult = evaluateHRAlert(alertInput);
+            if (alertResult.level === "ALERT" || alertResult.level === "WATCH") {
+              console.log(`[HR_ALERT_TRIGGER] ${alertResult.level} ${batter.playerName} score=${output.hrBuildScore} reason=${alertResult.triggerReason} game=${gameId} inn=${state.inning}`);
+              markAlertSent(batter.playerId, gameId);
+              storage.insertAlert({
+                playerId: batter.playerId,
+                playerName: batter.playerName,
+                teamAbbr: batter.team,
+                gameId,
+                alertType: alertResult.level === "ALERT" ? "HR_EARLY" : "HR_WATCH",
+                triggerReason: alertResult.triggerReason,
+                hrBuildScore: output.hrBuildScore,
+                hrIntensity: output.hrIntensity ?? "weak",
+                inning: state.inning,
+                factors: JSON.stringify(hrFactorsBuild),
+              }).catch(err => console.warn(`[HR_ALERT] persist failed: ${err.message}`));
             }
           }
         } catch (err: any) {

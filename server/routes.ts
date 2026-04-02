@@ -1038,6 +1038,27 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/mlb/alerts", requireMLBAccess, async (req, res) => {
+    try {
+      const minutes = Math.max(1, Math.min(parseInt(req.query.minutes as string) || 30, 120));
+      const alerts = await storage.getRecentAlerts(minutes);
+      return res.json({
+        alerts: alerts.map(a => {
+          let factors = null;
+          try { factors = a.factors ? JSON.parse(a.factors) : null; } catch {}
+          return {
+            ...a,
+            hrBuildScore: a.hrBuildScore != null ? parseFloat(a.hrBuildScore) : null,
+            factors,
+          };
+        }),
+      });
+    } catch (e: any) {
+      console.error("[mlb/alerts]", e.message);
+      return res.json({ alerts: [] });
+    }
+  });
+
   const mlbSignalsCache = new Map<string, { ts: number; signals: any[]; updatedAt: number; isDegraded: boolean }>();
   const MLB_SIGNALS_TTL = 30_000;
 

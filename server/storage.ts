@@ -14,6 +14,7 @@ import {
   persistedPlays,
   contactEvents,
   gamePlayerStats,
+  persistedAlerts,
   stripeEvents,
   type Player,
   type InsertPlayer,
@@ -32,7 +33,7 @@ import {
   type PersistedPlay,
   type PlayStats,
 } from "@shared/schema";
-import { eq, and, desc, isNull, isNotNull, sql, lt, lte, inArray, ne } from "drizzle-orm";
+import { eq, and, desc, isNull, isNotNull, sql, lt, lte, gte, inArray, ne } from "drizzle-orm";
 
 const HIGH_VOLATILITY_TEAMS = new Set(["BKN", "WAS", "CHA", "POR", "UTA", "DET"]);
 
@@ -1842,6 +1843,60 @@ export class DatabaseStorage implements IStorage {
       .where(eq(gamePlayerStats.playerId, playerId))
       .orderBy(desc(gamePlayerStats.createdAt))
       .limit(limit);
+    return rows;
+  }
+
+  async insertAlert(alert: {
+    playerId: string;
+    playerName: string;
+    teamAbbr?: string | null;
+    gameId: string;
+    alertType: string;
+    triggerReason?: string | null;
+    hrBuildScore?: number | null;
+    hrIntensity?: string | null;
+    inning?: number | null;
+    factors?: string | null;
+  }): Promise<void> {
+    try {
+      await db.insert(persistedAlerts).values({
+        playerId: alert.playerId,
+        playerName: alert.playerName,
+        teamAbbr: alert.teamAbbr ?? null,
+        gameId: alert.gameId,
+        alertType: alert.alertType,
+        triggerReason: alert.triggerReason ?? null,
+        hrBuildScore: alert.hrBuildScore != null ? String(alert.hrBuildScore) : null,
+        hrIntensity: alert.hrIntensity ?? null,
+        inning: alert.inning ?? null,
+        factors: alert.factors ?? null,
+      });
+      console.log(`[HR_ALERT] Persisted alert: ${alert.playerName} (${alert.alertType}) score=${alert.hrBuildScore} game=${alert.gameId}`);
+    } catch (err: any) {
+      console.warn(`[HR_ALERT] Failed to persist alert: ${err.message}`);
+    }
+  }
+
+  async getRecentAlerts(minutesBack = 30): Promise<Array<{
+    id: number;
+    playerId: string;
+    playerName: string;
+    teamAbbr: string | null;
+    gameId: string;
+    alertType: string;
+    triggerReason: string | null;
+    hrBuildScore: string | null;
+    hrIntensity: string | null;
+    inning: number | null;
+    factors: string | null;
+    outcome: string | null;
+    createdAt: Date | null;
+  }>> {
+    const cutoff = new Date(Date.now() - minutesBack * 60 * 1000);
+    const rows = await db.select().from(persistedAlerts)
+      .where(gte(persistedAlerts.createdAt, cutoff))
+      .orderBy(desc(persistedAlerts.createdAt))
+      .limit(50);
     return rows;
   }
 

@@ -10,7 +10,7 @@ import type { MLBSignal } from "@shared/mlbSignal";
 import { ProbabilityRing } from "@/components/probability-ring";
 import { SkeletonCard } from "@/components/sports/SkeletonCard";
 import { EmptyState } from "@/components/sports/EmptyState";
-import { Radio, Target, RefreshCw, Calculator, Loader2 } from "lucide-react";
+import { Radio, Target, RefreshCw, Calculator, Loader2, Flame, Zap, TrendingUp } from "lucide-react";
 
 class MLBErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
   constructor(props: { children: ReactNode }) {
@@ -139,6 +139,154 @@ function gameLeanBadge(signals: MlbSignalData[], gameId: string): { label: strin
   if (pitcherCount > batterCount) return { label: "Pitch", color: "#3b82f6" };
   if (batterCount > pitcherCount) return { label: "Hit", color: "#f97316" };
   return { label: "Mixed", color: "#71717a" };
+}
+
+interface HRAlert {
+  id: number;
+  playerId: string;
+  playerName: string;
+  teamAbbr: string | null;
+  gameId: string;
+  alertType: string;
+  triggerReason: string | null;
+  hrBuildScore: number | null;
+  hrIntensity: string | null;
+  inning: number | null;
+  factors: {
+    avgEV: number | null;
+    maxEV: number | null;
+    avgLA: number | null;
+    barrels: number;
+    hardHits: number;
+    deepFlyouts: number;
+  } | null;
+  createdAt: string | null;
+}
+
+function EarlyHRAlerts({ isElite }: { isElite: boolean }) {
+  const { data, isLoading } = useQuery<{ alerts: HRAlert[] }>({
+    queryKey: ["/api/mlb/alerts"],
+    refetchInterval: 15_000,
+  });
+
+  const alerts = data?.alerts ?? [];
+  const activeAlerts = alerts.filter(a => a.alertType === "HR_EARLY");
+  const watchAlerts = alerts.filter(a => a.alertType === "HR_WATCH");
+
+  if (isLoading || (activeAlerts.length === 0 && watchAlerts.length === 0)) return null;
+
+  return (
+    <div className="bg-card border border-red-500/30 rounded-xl overflow-hidden" data-testid="mlb-hr-alerts">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-red-500/20 bg-red-500/5">
+        <Flame className="w-4 h-4 text-red-500 animate-pulse" />
+        <span className="text-xs font-bold text-red-400 uppercase tracking-wider">Early HR Alerts</span>
+        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 font-bold">{activeAlerts.length + watchAlerts.length}</span>
+      </div>
+      <div className="p-3 space-y-2">
+        {activeAlerts.map(alert => (
+          <HRAlertCard key={alert.id} alert={alert} isElite={isElite} />
+        ))}
+        {watchAlerts.map(alert => (
+          <HRAlertCard key={alert.id} alert={alert} isElite={isElite} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HRAlertCard({ alert, isElite }: { alert: HRAlert; isElite: boolean }) {
+  const isHardAlert = alert.alertType === "HR_EARLY";
+  const score = alert.hrBuildScore ?? 0;
+  const ago = alert.createdAt ? Math.round((Date.now() - new Date(alert.createdAt).getTime()) / 60000) : null;
+
+  const triggerLabel = (alert.triggerReason ?? "").split(":")[0]
+    .replace("hard_trigger", "Contact Surge")
+    .replace("repeat_contact", "Repeat Contact")
+    .replace("leaderboard", "Leaderboard Hit")
+    .replace("late_game_spike", "Late Game Spike")
+    .replace("soft_trigger", "Building");
+
+  return (
+    <div
+      data-testid={`hr-alert-card-${alert.id}`}
+      className={`rounded-lg p-3 border transition-all ${
+        isHardAlert
+          ? "border-red-500/40 bg-red-500/5 shadow-[0_0_20px_-6px_rgba(239,68,68,0.3)] animate-pulse-slow"
+          : "border-yellow-500/30 bg-yellow-500/5"
+      }`}
+    >
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="flex items-center gap-2">
+          {isHardAlert ? (
+            <Flame className="w-3.5 h-3.5 text-red-500" />
+          ) : (
+            <Zap className="w-3.5 h-3.5 text-yellow-500" />
+          )}
+          <span className="text-sm font-bold text-foreground" data-testid={`text-alert-player-${alert.id}`}>
+            {alert.playerName}
+          </span>
+          {alert.teamAbbr && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground font-semibold">
+              {alert.teamAbbr}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+            isHardAlert ? "bg-red-500/15 text-red-400" : "bg-yellow-500/15 text-yellow-400"
+          }`}>
+            {isHardAlert ? "ALERT" : "WATCH"}
+          </span>
+          {ago != null && (
+            <span className="text-[9px] text-muted-foreground/60 tabular-nums">{ago}m ago</span>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 text-[10px] text-muted-foreground mb-1.5">
+        <span className="flex items-center gap-1">
+          <TrendingUp className="w-3 h-3" />
+          Build: <span className={`font-bold ${score >= 5 ? "text-red-400" : score >= 3.5 ? "text-yellow-400" : "text-muted-foreground"}`}>{score.toFixed(1)}</span>/10
+        </span>
+        {alert.inning && <span>Inn {alert.inning}</span>}
+        <span className={`font-semibold ${isHardAlert ? "text-red-400" : "text-yellow-400"}`}>{triggerLabel}</span>
+      </div>
+
+      {isElite && alert.factors && (
+        <div className="flex flex-wrap gap-1.5 mt-1">
+          {(alert.factors.avgEV ?? 0) > 0 && (
+            <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${
+              (alert.factors.avgEV ?? 0) >= 95 ? "bg-red-500/10 text-red-400" : "bg-secondary/60 text-muted-foreground"
+            }`} data-testid={`badge-avgEV-${alert.id}`}>
+              Avg EV: {alert.factors.avgEV?.toFixed(1)}
+            </span>
+          )}
+          {(alert.factors.maxEV ?? 0) > 0 && (
+            <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${
+              (alert.factors.maxEV ?? 0) >= 105 ? "bg-red-500/10 text-red-400" : "bg-secondary/60 text-muted-foreground"
+            }`} data-testid={`badge-maxEV-${alert.id}`}>
+              Max EV: {alert.factors.maxEV?.toFixed(1)}
+            </span>
+          )}
+          {alert.factors.barrels > 0 && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold bg-red-500/10 text-red-400" data-testid={`badge-barrels-${alert.id}`}>
+              {alert.factors.barrels} Barrel{alert.factors.barrels > 1 ? "s" : ""}
+            </span>
+          )}
+          {alert.factors.hardHits > 0 && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold bg-orange-500/10 text-orange-400" data-testid={`badge-hardHits-${alert.id}`}>
+              {alert.factors.hardHits} Hard Hit{alert.factors.hardHits > 1 ? "s" : ""}
+            </span>
+          )}
+          {alert.factors.deepFlyouts > 0 && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold bg-orange-500/10 text-orange-400">
+              {alert.factors.deepFlyouts} Deep Fly
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function LivePulse({ updatedAt }: { updatedAt: number }) {
@@ -714,6 +862,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-5">
       {activeSubTab === "games" && (
         <>
+          <EarlyHRAlerts isElite={isElite} />
           {games.length === 0 ? (
             <div className="text-xs text-muted-foreground py-3" data-testid="text-no-mlb-games-today">
               No MLB games scheduled today. Check back soon.

@@ -502,6 +502,30 @@ export const insertGamePlayerStatsSchema = createInsertSchema(gamePlayerStats).o
 export type GamePlayerStat = typeof gamePlayerStats.$inferSelect;
 export type InsertGamePlayerStat = z.infer<typeof insertGamePlayerStatsSchema>;
 
+export const persistedAlerts = pgTable("persisted_alerts", {
+  id: serial("id").primaryKey(),
+  playerId: text("player_id").notNull(),
+  playerName: text("player_name").notNull(),
+  teamAbbr: text("team_abbr"),
+  gameId: text("game_id").notNull(),
+  alertType: text("alert_type").notNull(),
+  triggerReason: text("trigger_reason"),
+  hrBuildScore: numeric("hr_build_score"),
+  hrIntensity: text("hr_intensity"),
+  inning: integer("inning"),
+  factors: text("factors"),
+  outcome: text("outcome"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  gameIdx: index("persisted_alerts_game_idx").on(table.gameId),
+  playerGameIdx: index("persisted_alerts_player_game_idx").on(table.playerId, table.gameId),
+  createdIdx: index("persisted_alerts_created_idx").on(table.createdAt),
+}));
+
+export const insertPersistedAlertSchema = createInsertSchema(persistedAlerts).omit({ id: true, createdAt: true });
+export type PersistedAlert = typeof persistedAlerts.$inferSelect;
+export type InsertPersistedAlert = z.infer<typeof insertPersistedAlertSchema>;
+
 export interface PlayStats {
   buckets: {
     "60-69": { total: number; hits: number; misses: number; winRate: number };
