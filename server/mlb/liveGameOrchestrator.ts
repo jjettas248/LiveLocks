@@ -276,15 +276,77 @@ export class LiveGameOrchestrator {
         }
       }
 
-      // Remove games no longer active
+      // Remove games no longer active — snapshot stats before removal
       for (const existing of getActiveGames()) {
         if (!discoveredIds.has(existing.gameId)) {
+          this.snapshotGamePlayerStats(existing.gameId, existing.gamePk).catch(err =>
+            console.warn(`[MLB orchestrator] snapshot failed for ${existing.gameId}:`, err.message)
+          );
           removeGame(existing.gameId);
           this.previousStates.delete(existing.gameId);
         }
       }
     } catch (err: any) {
       console.error("[MLB orchestrator] pollGames error:", err.message);
+    }
+  }
+
+  private async snapshotGamePlayerStats(gameId: string, gamePk?: string): Promise<void> {
+    const { storage } = await import("../storage");
+    if (!gamePk) {
+      console.log(`[MLB snapshot] No gamePk for ${gameId}, skipping snapshot`);
+      return;
+    }
+    try {
+      const url = `https://statsapi.mlb.com/api/v1/game/${gamePk}/boxscore`;
+      const response = await fetch(url, {
+        headers: { "User-Agent": "LiveLocks/1.0" },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!response.ok) throw new Error(`MLB boxscore API ${response.status}`);
+      const data = (await response.json()) as any;
+      const gameDate = new Date().toISOString().slice(0, 10);
+      const stats: Array<any> = [];
+
+      for (const side of ["away", "home"] as const) {
+        const teamData = data.teams?.[side];
+        if (!teamData) continue;
+        const batters: number[] = teamData.batters ?? [];
+        const playerMap = teamData.players ?? {};
+        const teamAbbr = teamData.team?.abbreviation ?? "";
+        for (const batterId of batters) {
+          const entry = playerMap[`ID${batterId}`];
+          if (!entry) continue;
+          const batting = entry.stats?.batting ?? {};
+          const slotRaw: string = entry.battingOrder ?? "0";
+          const slot = Math.floor(parseInt(slotRaw, 10) / 100) || 0;
+          const contactEntry = mlbGameCache.contactData[gameId]?.byPlayerId?.[String(batterId)];
+          const priorABResults = contactEntry?.priorABResults ?? [];
+          stats.push({
+            gameId,
+            gamePk,
+            playerId: String(batterId),
+            playerName: entry.person?.fullName ?? "",
+            teamAbbr,
+            teamSide: side,
+            battingOrderSlot: slot,
+            ab: batting.atBats ?? 0,
+            h: batting.hits ?? 0,
+            tb: batting.totalBases ?? 0,
+            r: batting.runs ?? 0,
+            rbi: batting.rbi ?? 0,
+            bb: batting.baseOnBalls ?? 0,
+            k: batting.strikeOuts ?? 0,
+            sb: batting.stolenBases ?? 0,
+            abResults: priorABResults.length > 0 ? JSON.stringify(priorABResults) : null,
+            gameDate,
+          });
+        }
+      }
+      await storage.persistGamePlayerStats(stats);
+      console.log(`[MLB snapshot] Persisted ${stats.length} players for game ${gameId}`);
+    } catch (err: any) {
+      console.error(`[MLB snapshot] Failed for game ${gameId}:`, err.message);
     }
   }
 

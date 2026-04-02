@@ -1006,6 +1006,38 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/mlb/game-stats/:gameId", requireMLBAccess, async (req, res) => {
+    try {
+      const gameId = req.params.gameId as string;
+      const stats = await storage.getGamePlayerStats(gameId);
+      const players = stats.map(s => ({
+        ...s,
+        priorABResults: s.abResults ? JSON.parse(s.abResults) : [],
+      }));
+      return res.json({ ready: true, players });
+    } catch (e: any) {
+      console.error("[mlb/game-stats]", e.message);
+      return res.status(500).json({ ready: false, players: [] });
+    }
+  });
+
+  app.get("/api/mlb/player-history/:playerId", requireMLBAccess, async (req, res) => {
+    try {
+      const playerId = req.params.playerId as string;
+      const limit = Math.min(parseInt(req.query.limit as string) || 10, 50);
+      const games = await storage.getPlayerHistory(playerId, limit);
+      return res.json({
+        games: games.map(g => ({
+          ...g,
+          priorABResults: g.abResults ? JSON.parse(g.abResults) : [],
+        })),
+      });
+    } catch (e: any) {
+      console.error("[mlb/player-history]", e.message);
+      return res.status(500).json({ games: [] });
+    }
+  });
+
   const mlbSignalsCache = new Map<string, { ts: number; signals: any[]; updatedAt: number; isDegraded: boolean }>();
   const MLB_SIGNALS_TTL = 90_000;
 

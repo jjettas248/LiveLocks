@@ -13,6 +13,7 @@ import {
   playResults,
   persistedPlays,
   contactEvents,
+  gamePlayerStats,
   stripeEvents,
   type Player,
   type InsertPlayer,
@@ -1755,6 +1756,93 @@ export class DatabaseStorage implements IStorage {
     } catch (err: any) {
       console.warn(`[ContactEvent] insert failed: ${err.message}`);
     }
+  }
+
+  async persistGamePlayerStats(stats: Array<{
+    gameId: string;
+    gamePk?: string | null;
+    playerId: string;
+    playerName: string;
+    teamAbbr?: string | null;
+    teamSide?: string | null;
+    battingOrderSlot?: number | null;
+    ab?: number;
+    h?: number;
+    tb?: number;
+    r?: number;
+    rbi?: number;
+    bb?: number;
+    k?: number;
+    sb?: number;
+    abResults?: string | null;
+    gameDate?: string | null;
+  }>): Promise<void> {
+    if (stats.length === 0) return;
+    try {
+      for (const s of stats) {
+        await db.insert(gamePlayerStats).values({
+          gameId: s.gameId,
+          gamePk: s.gamePk ?? null,
+          playerId: s.playerId,
+          playerName: s.playerName,
+          teamAbbr: s.teamAbbr ?? null,
+          teamSide: s.teamSide ?? null,
+          battingOrderSlot: s.battingOrderSlot ?? null,
+          ab: s.ab ?? 0,
+          h: s.h ?? 0,
+          tb: s.tb ?? 0,
+          r: s.r ?? 0,
+          rbi: s.rbi ?? 0,
+          bb: s.bb ?? 0,
+          k: s.k ?? 0,
+          sb: s.sb ?? 0,
+          abResults: s.abResults ?? null,
+          gameDate: s.gameDate ?? null,
+        }).onConflictDoNothing();
+      }
+      console.log(`[GamePlayerStats] Persisted ${stats.length} player stats for game ${stats[0]?.gameId}`);
+    } catch (err: any) {
+      console.warn(`[GamePlayerStats] persist failed: ${err.message}`);
+    }
+  }
+
+  async getGamePlayerStats(gameId: string): Promise<Array<{
+    playerId: string;
+    playerName: string;
+    teamAbbr: string | null;
+    teamSide: string | null;
+    battingOrderSlot: number | null;
+    ab: number | null;
+    h: number | null;
+    tb: number | null;
+    r: number | null;
+    rbi: number | null;
+    bb: number | null;
+    k: number | null;
+    sb: number | null;
+    abResults: string | null;
+    gameDate: string | null;
+  }>> {
+    const rows = await db.select().from(gamePlayerStats).where(eq(gamePlayerStats.gameId, gameId));
+    return rows;
+  }
+
+  async getPlayerHistory(playerId: string, limit = 10): Promise<Array<{
+    gameId: string;
+    playerName: string;
+    teamAbbr: string | null;
+    ab: number | null;
+    h: number | null;
+    tb: number | null;
+    k: number | null;
+    abResults: string | null;
+    gameDate: string | null;
+  }>> {
+    const rows = await db.select().from(gamePlayerStats)
+      .where(eq(gamePlayerStats.playerId, playerId))
+      .orderBy(desc(gamePlayerStats.createdAt))
+      .limit(limit);
+    return rows;
   }
 
   async getChurnedUsers(): Promise<Array<{ id: number; email: string; churnedAt: Date; churnedFromTier: string | null; createdAt: Date | null }>> {

@@ -1,4 +1,4 @@
-import { pgTable, text, serial, numeric, integer, timestamp, boolean, index, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, numeric, integer, timestamp, boolean, index, primaryKey, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -470,6 +470,37 @@ export const contactEvents = pgTable("contact_events", {
 export const insertContactEventSchema = createInsertSchema(contactEvents).omit({ id: true, timestamp: true });
 export type ContactEvent = typeof contactEvents.$inferSelect;
 export type InsertContactEvent = z.infer<typeof insertContactEventSchema>;
+
+export const gamePlayerStats = pgTable("game_player_stats", {
+  id: serial("id").primaryKey(),
+  gameId: text("game_id").notNull(),
+  gamePk: text("game_pk"),
+  playerId: text("player_id").notNull(),
+  playerName: text("player_name").notNull(),
+  teamAbbr: text("team_abbr"),
+  teamSide: text("team_side"),
+  battingOrderSlot: integer("batting_order_slot"),
+  ab: integer("ab").default(0),
+  h: integer("h").default(0),
+  tb: integer("tb").default(0),
+  r: integer("r").default(0),
+  rbi: integer("rbi").default(0),
+  bb: integer("bb").default(0),
+  k: integer("k").default(0),
+  sb: integer("sb").default(0),
+  abResults: text("ab_results"),
+  gameDate: text("game_date"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  gamePlayerIdx: uniqueIndex("game_player_stats_game_player_idx").on(table.gameId, table.playerId),
+  gameIdx: index("game_player_stats_game_idx").on(table.gameId),
+  playerIdx: index("game_player_stats_player_idx").on(table.playerId),
+  dateIdx: index("game_player_stats_date_idx").on(table.gameDate),
+}));
+
+export const insertGamePlayerStatsSchema = createInsertSchema(gamePlayerStats).omit({ id: true, createdAt: true });
+export type GamePlayerStat = typeof gamePlayerStats.$inferSelect;
+export type InsertGamePlayerStat = z.infer<typeof insertGamePlayerStatsSchema>;
 
 export interface PlayStats {
   buckets: {
