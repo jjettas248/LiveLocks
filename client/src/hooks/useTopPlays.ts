@@ -31,10 +31,6 @@ export type UnifiedTopPlay = {
     outcome: string | null;
   } | null;
   matchup?: string;
-  expansionTier?: string;
-  projectionSource?: string;
-  projectionQuality?: string;
-  projectionTrustScore?: number;
 };
 
 export function useTopPlays() {

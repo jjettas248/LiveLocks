@@ -8,7 +8,6 @@ import {
   isImpactedArchetype,
   getSafetyCeiling,
 } from "./archetypes";
-import { assessNBAProjectionIntegrity, type NBAProjectionTrust } from "../projectionIntegrity";
 
 const STAT_SIGMA_FLOORS: Record<string, number> = {
   points: 3.0,
@@ -152,8 +151,6 @@ export interface EngineOutput {
   noSignal: boolean;
   noSignalReasons: string[];
   warnings: string[];
-
-  projectionTrust?: NBAProjectionTrust;
 }
 
 function getBlendedRate(
@@ -210,32 +207,15 @@ const COMBO_COMPONENTS: Record<string, SingleStat[]> = {
   stl_blk: ["steals", "blocks"],
 };
 
-const MU_CEILING_PER_MINUTE: Record<string, number> = {
-  points: 1.8,
-  rebounds: 0.6,
-  assists: 0.5,
-  steals: 0.15,
-  blocks: 0.15,
-  threes: 0.35,
-};
-
 function computeSingleStatMeanAndVariance(
   stat: SingleStat,
   input: EngineInput,
-): { mu: number; variance: number; rate: number; muBounded: boolean } {
+): { mu: number; variance: number; rate: number } {
   const rate = getBlendedRate(
     stat, input.rateRecent, input.rateSeason, input.rateRole, input.recentGameCount,
   );
   const E_min = Math.max(8, input.minutes.expected);
-  let mu = rate * E_min;
-
-  const ceilingPerMin = MU_CEILING_PER_MINUTE[stat] ?? 1.0;
-  const muCeiling = ceilingPerMin * E_min;
-  let muBounded = false;
-  if (mu > muCeiling) {
-    mu = muCeiling;
-    muBounded = true;
-  }
+  const mu = rate * E_min;
 
   const vRate = getBlendedVarianceRate(
     stat, input.varianceRateRecent, input.varianceRateSeason, input.varianceRateRole,
@@ -253,7 +233,7 @@ function computeSingleStatMeanAndVariance(
   const floorVariance = floor * floor;
   if (adjVariance < floorVariance) adjVariance = floorVariance;
 
-  return { mu, variance: adjVariance, rate, muBounded };
+  return { mu, variance: adjVariance, rate };
 }
 
 function getCorrelation(
@@ -494,24 +474,6 @@ export function computeProbability(
 
   const playerVolatilityScore = fragilityScore;
 
-  const hasRateData = Object.values(input.rateRecent).some(v => v != null && v > 0) ||
-    Object.values(input.rateSeason).some(v => v != null && v > 0);
-
-  const projTrust = assessNBAProjectionIntegrity({
-    minutesExpected: input.minutes.expected,
-    minutesVariance: input.minutes.variance,
-    minutesPlayed: input.minutesPlayed,
-    recentGameCount: input.recentGameCount,
-    fragilityScore,
-    archetype: input.archetype,
-    projection,
-    line: input.line,
-    direction: direction === "NO_SIGNAL" ? "UNDER" : direction,
-    mu,
-    currentStat: input.currentStat,
-    rateDataPresent: hasRateData,
-  });
-
   return {
     market: input.market,
     direction,
@@ -547,8 +509,6 @@ export function computeProbability(
     noSignal,
     noSignalReasons,
     warnings,
-
-    projectionTrust: projTrust,
   };
 }
 

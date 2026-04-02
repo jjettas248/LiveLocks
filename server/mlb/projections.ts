@@ -1,6 +1,5 @@
 import type { MLBPropInput, MLBMarket, ModifierBreakdown, ProjectionLog } from "./types";
 import { MODIFIER_CAPS } from "./types";
-import { assessMLBProjectionIntegrity, type MLBProjectionTrust } from "../projectionIntegrity";
 import {
   computeLiveContactQualityScore,
   computeLineupContextScore,
@@ -33,7 +32,6 @@ export interface ProjectionResult {
   twoABRuleSatisfied: boolean;
   warnings: string[];
   fallbackUsed: boolean;
-  integrity: MLBProjectionTrust;
 }
 
 function computeBaseValue(input: MLBPropInput, market: MLBMarket): number {
@@ -199,40 +197,14 @@ export function projectBaseValue(input: MLBPropInput): ProjectionResult {
     warnings.push(`FALLBACK_RATE: ${market} using static fallback (no player season data)`);
   }
 
-  const side = projection > input.bookLine ? "OVER" : "UNDER";
-  const isOver = side === "OVER";
-  const hasLiveContact = !!(input.contactQuality &&
-    (input.contactQuality.avgExitVelo > 0 || input.contactQuality.hardHitPct > 0));
-
-  let finalProjection = projection;
-  const integrity = assessMLBProjectionIntegrity({
-    seasonAvg: input.seasonAvg,
-    market,
-    remainingAB: input.remainingAB,
-    currentStatValue: input.currentStatValue,
-    hasLiveContactData: hasLiveContact,
-    fallbackUsed,
-    projection: finalProjection,
-    line: input.bookLine,
-    side,
-  });
-
-  if (isOver && integrity.overRegressionApplied) {
-    const baselineProjection = baseValue;
-    finalProjection = integrity.baselineWeight * baselineProjection +
-      integrity.liveWeight * projection;
-    warnings.push(`over_regression: blended baseline(${integrity.baselineWeight}) + live(${integrity.liveWeight})`);
-  }
-
   return {
     baseValue,
-    projection: Math.round(finalProjection * 100) / 100,
+    projection: Math.round(projection * 100) / 100,
     modifiers,
     projectionLog,
     mode: twoABResult.mode,
     twoABRuleSatisfied: twoABResult.liveFormAllowed,
     warnings,
     fallbackUsed,
-    integrity,
   };
 }
