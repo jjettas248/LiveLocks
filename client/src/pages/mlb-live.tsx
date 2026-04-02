@@ -748,41 +748,51 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                         >✕</button>
                       </div>
                       {calcPlayer.priorABResults && calcPlayer.priorABResults.length > 0 && (
-                        <div className="flex items-center gap-1 flex-wrap" data-testid="calc-player-ab-results">
-                          <span className="text-[9px] text-muted-foreground/60 uppercase font-semibold mr-0.5">ABs:</span>
-                          {calcPlayer.priorABResults.map((ab, i) => {
-                            const isHit = ab.outcome === "hit" || ab.outcome === "home_run" || ab.outcome === "hr" || ab.outcome === "homerun";
-                            const isHR = ab.outcome === "home_run" || ab.outcome === "hr" || ab.outcome === "homerun";
-                            const isK = ab.outcome === "strikeout";
-                            const isWalk = ab.outcome === "walk" || ab.outcome === "hbp";
-                            const label = isHR ? "HR" : isHit ? "H" : isK ? "K" : isWalk ? "BB" : "O";
-                            const evLabel = ab.exitVelocity ? `${Math.round(ab.exitVelocity)}` : null;
-                            const color = isHR
-                              ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/40"
-                              : isHit
-                              ? "bg-green-500/20 text-green-400 border-green-500/40"
-                              : isK
-                              ? "bg-red-500/20 text-red-400 border-red-500/40"
-                              : isWalk
-                              ? "bg-blue-500/20 text-blue-400 border-blue-500/40"
-                              : "bg-secondary/40 text-muted-foreground border-border/40";
-                            return (
-                              <span
-                                key={i}
-                                data-testid={`ab-result-${i}`}
-                                className={`inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded border ${color}`}
-                                title={[
-                                  `AB ${i + 1}: ${ab.outcome}`,
-                                  ab.exitVelocity ? `EV: ${ab.exitVelocity} mph` : null,
-                                  ab.launchAngle != null ? `LA: ${ab.launchAngle}°` : null,
-                                  ab.distance ? `Dist: ${ab.distance} ft` : null,
-                                ].filter(Boolean).join(" · ")}
-                              >
-                                {label}
-                                {evLabel && <span className="text-[8px] font-normal opacity-70">{evLabel}</span>}
-                              </span>
-                            );
-                          })}
+                        <div className="space-y-1" data-testid="calc-player-ab-results">
+                          <span className="text-[9px] text-muted-foreground/60 uppercase font-semibold tracking-wider">At-Bat Log</span>
+                          <div className="space-y-0.5">
+                            {calcPlayer.priorABResults.map((ab, i) => {
+                              const isHit = ab.outcome === "hit" || ab.outcome === "home_run" || ab.outcome === "hr" || ab.outcome === "homerun";
+                              const isHR = ab.outcome === "home_run" || ab.outcome === "hr" || ab.outcome === "homerun";
+                              const isK = ab.outcome === "strikeout";
+                              const isWalk = ab.outcome === "walk" || ab.outcome === "hbp";
+                              const label = isHR ? "HR" : isHit ? "H" : isK ? "K" : isWalk ? "BB" : "Out";
+                              const dotColor = isHR ? "bg-yellow-400" : isHit ? "bg-green-400" : isK ? "bg-red-400" : isWalk ? "bg-blue-400" : "bg-muted-foreground/40";
+                              const textColor = isHR ? "text-yellow-400" : isHit ? "text-green-400" : isK ? "text-red-400" : isWalk ? "text-blue-400" : "text-muted-foreground";
+                              return (
+                                <div key={i} data-testid={`ab-result-${i}`} className="flex items-center gap-1.5 text-[9px]">
+                                  <span className="text-muted-foreground/40 w-3 text-right tabular-nums">{i + 1}</span>
+                                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} />
+                                  <span className={`font-bold w-6 ${textColor}`}>{label}</span>
+                                  {ab.exitVelocity != null && (
+                                    <span className="text-muted-foreground">
+                                      {Math.round(ab.exitVelocity)} mph
+                                    </span>
+                                  )}
+                                  {ab.launchAngle != null && (
+                                    <span className="text-muted-foreground/60">
+                                      {Math.round(ab.launchAngle)}°
+                                    </span>
+                                  )}
+                                  {ab.distance != null && ab.distance > 0 && (
+                                    <span className="text-muted-foreground/60">
+                                      {Math.round(ab.distance)} ft
+                                    </span>
+                                  )}
+                                  {ab.pitchType && (
+                                    <span className="text-muted-foreground/40 ml-auto">
+                                      {ab.pitchType}{ab.pitchSpeed ? ` ${Math.round(ab.pitchSpeed)}` : ""}
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      {(!calcPlayer.priorABResults || calcPlayer.priorABResults.length === 0) && calcPlayer.ab > 0 && (
+                        <div className="text-[9px] text-muted-foreground/50 italic" data-testid="calc-player-no-contact">
+                          Contact data not yet available
                         </div>
                       )}
                     </div>
