@@ -24,6 +24,7 @@ const EV_BARREL_THRESHOLD = 98;
 const EV_HARD_HIT_THRESHOLD = 95;
 const LA_SWEET_SPOT_LOW = 20;
 const LA_SWEET_SPOT_HIGH = 35;
+const DEEP_FLY_DISTANCE = 350;
 
 function classifyIntensity(score: number): HRIntensity {
   if (score >= 7.5) return "imminent";
@@ -65,9 +66,13 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
 
   const deepFlyouts = priorABs.filter(ab =>
     ab.outcome === "out" || ab.outcome === "other"
-  ).filter(ab =>
-    (ab.launchAngle ?? 0) >= 20 && (ab.exitVelocity ?? 0) >= 95
-  ).length;
+  ).filter(ab => {
+    const la = ab.launchAngle ?? 0;
+    const ev = ab.exitVelocity ?? 0;
+    const dist = ab.distance ?? 0;
+    if (dist > 0) return dist >= DEEP_FLY_DISTANCE && la >= 20;
+    return la >= 20 && ev >= 95;
+  }).length;
 
   score += hardHits * 0.5;
 
