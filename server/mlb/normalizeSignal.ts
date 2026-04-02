@@ -248,14 +248,14 @@ export function normalizeMLBSignal(
       const isBreaking = pt === "SL" || pt === "CU" || pt === "KC" || pt === "CS" || pt === "SV" || pt === "ST";
       let rating: "strong" | "neutral" | "weak" = "neutral";
       if (isFastball) {
-        if (bp >= 0.55 && cq >= 0.50) rating = "strong";
-        else if (bp < 0.40 || cq < 0.40) rating = "weak";
+        if (bp >= 0.50 && cq >= 0.47) rating = "strong";
+        else if (bp < 0.42 && cq < 0.42) rating = "weak";
       } else if (isBreaking) {
-        if (cq >= 0.55 && pbm >= 0.50) rating = "strong";
-        else if (cq < 0.40 || pbm < 0.40) rating = "weak";
+        if (cq >= 0.50 && pbm >= 0.47) rating = "strong";
+        else if (cq < 0.42 && pbm < 0.42) rating = "weak";
       } else {
-        if (cq >= 0.55) rating = "strong";
-        else if (cq < 0.40) rating = "weak";
+        if (cq >= 0.50) rating = "strong";
+        else if (cq < 0.42) rating = "weak";
       }
       pitchMatchupRatings[pt] = rating;
     }

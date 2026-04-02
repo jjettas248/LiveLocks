@@ -708,18 +708,8 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
             />
           )}
 
-          {selectedGameId && selectedGame && (
-            <MlbBoxScore
-              gameId={selectedGameId}
-              signals={edgeFeedSignals}
-              onPlayerClick={handleBoxScoreClick}
-              awayAbbr={selectedGame.awayAbbr}
-              homeAbbr={selectedGame.homeAbbr}
-            />
-          )}
-
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-            <div className="lg:col-span-4 order-1 lg:order-1">
+            <div className="lg:col-span-4 order-2 lg:order-1">
               <div className="rounded-xl border border-border bg-card" data-testid="mlb-calculator">
                 <div className="flex items-center gap-2 px-4 py-3 border-b border-border/40">
                   <Calculator className="w-4 h-4 text-primary" />
@@ -843,11 +833,34 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
               </div>
             </div>
 
-            <div className="lg:col-span-8 order-2 lg:order-2">
-              {calcResult ? (
-                <div className="rounded-xl border border-border bg-card p-6 space-y-5 animate-in slide-in-from-top-2 duration-300" data-testid="mlb-calc-results">
+            <div className="lg:col-span-8 order-1 lg:order-2">
+              {selectedGameId && selectedGame ? (
+                <MlbBoxScore
+                  gameId={selectedGameId}
+                  signals={edgeFeedSignals}
+                  onPlayerClick={handleBoxScoreClick}
+                  awayAbbr={selectedGame.awayAbbr}
+                  homeAbbr={selectedGame.homeAbbr}
+                  onAddToSlip={handleAddToSlip}
+                />
+              ) : (
+                <div className="rounded-xl border border-border/40 bg-card p-8 text-center space-y-3" data-testid="mlb-games-empty-state">
+                  <Target className="w-10 h-10 text-muted-foreground/30 mx-auto" />
+                  <div className="text-sm font-bold text-foreground">Ready to Predict</div>
+                  <div className="text-xs text-muted-foreground">Select a game above to get started</div>
+                  <div className="text-[11px] text-muted-foreground/60 space-y-1 max-w-xs mx-auto text-left">
+                    <div className="flex items-center gap-2"><span className="text-primary">◎</span> Click a game tile above</div>
+                    <div className="flex items-center gap-2"><span className="text-primary">◎</span> Click a player in the box score</div>
+                    <div className="flex items-center gap-2"><span className="text-primary">◎</span> Pick a stat type & live line</div>
+                    <div className="flex items-center gap-2"><span className="text-primary">◎</span> Hit Calculate</div>
+                  </div>
+                </div>
+              )}
+
+              {calcResult && (
+                <div className="mt-4 rounded-xl border border-border bg-card p-6 space-y-5 animate-in slide-in-from-top-2 duration-300" data-testid="mlb-calc-results">
                   <div className="flex items-center justify-center">
-                    <ProbabilityRing probability={calcResult.probability ?? calcResult.modelProbability ?? 50} size={160} strokeWidth={14} />
+                    <ProbabilityRing probability={calcResult.probability ?? calcResult.modelProbability ?? 50} size={140} strokeWidth={12} />
                   </div>
 
                   <div className="grid grid-cols-3 gap-3 text-center">
@@ -896,7 +909,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
 
                   {calcResult.featureScores && Object.keys(calcResult.featureScores).length > 0 && (
                     <div className="rounded-lg p-3 bg-secondary/20 border border-border/20">
-                      <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Driver Scores</div>
+                      <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Analysis Scores</div>
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
                         {Object.entries(calcResult.featureScores as Record<string, number>)
                           .filter(([, v]) => Math.abs(v - 0.5) >= 0.03)
@@ -904,10 +917,10 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                           .slice(0, 8)
                           .map(([key, val]) => {
                             const label: Record<string, string> = {
-                              contactQuality: "Contact", batSpeedPower: "Power", handednessMatchup: "Matchup",
+                              contactQuality: "Contact", batSpeedPower: "Power", handednessMatchup: "Platoon",
                               pitchBlendMatchup: "Pitch Mix", hotColdForm: "Form", parkEnv: "Park/Env",
-                              bvp: "BvP", lineupOpportunity: "Lineup", bullpenFactor: "Bullpen",
-                              pitcherSuppression: "Pitcher", pitcherDeterioration: "Fatigue",
+                              bvp: "vs Pitcher", lineupOpportunity: "Lineup", bullpenFactor: "Bullpen",
+                              pitcherSuppression: "Stuff", pitcherDeterioration: "Fatigue",
                             };
                             const color = val >= 0.65 ? "#22c55e" : val >= 0.55 ? "#a3e635" : val >= 0.45 ? "#94a3b8" : val >= 0.35 ? "#f59e0b" : "#ef4444";
                             return (
@@ -945,30 +958,6 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                       + Add to Bet Slip
                     </button>
                   )}
-                </div>
-              ) : (
-                <div className="rounded-xl border border-border/40 bg-card p-8 text-center space-y-3" data-testid="mlb-games-empty-state">
-                  <Target className="w-10 h-10 text-muted-foreground/30 mx-auto" />
-                  <div className="text-sm font-bold text-foreground">Ready to Predict</div>
-                  <div className="text-xs text-muted-foreground">
-                    {!selectedGameId ? "Select a game above to get started" : "Fill in the calculator and hit Calculate"}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground/60 space-y-1 max-w-xs mx-auto text-left">
-                    <div className="flex items-center gap-2"><span className="text-primary">◎</span> Click a game tile above</div>
-                    <div className="flex items-center gap-2"><span className="text-primary">◎</span> Click a player in the box score</div>
-                    <div className="flex items-center gap-2"><span className="text-primary">◎</span> Pick a stat type & live line</div>
-                    <div className="flex items-center gap-2"><span className="text-primary">◎</span> Hit Calculate</div>
-                  </div>
-                </div>
-              )}
-
-              {selectedGameId && selectedGame && gameSignals.length > 0 && (
-                <div className="mt-4">
-                  <GameSignalsPanel
-                    signals={gameSignals}
-                    isElite={isElite}
-                    onAddToSlip={handleAddToSlip}
-                  />
                 </div>
               )}
             </div>

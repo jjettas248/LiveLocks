@@ -304,15 +304,22 @@ export function generateThesis(
 
   if (batterArchetype) {
     if (batterArchetype === "limited_sample") {
-      const mktContext: Record<string, string> = {
-        hits: "projecting hit upside",
-        total_bases: "projecting base production",
-        home_runs: "targeting HR potential",
-        batter_strikeouts: "modeling K exposure",
-        hrr: "projecting H+R+RBI combo",
+      const overContext: Record<string, string> = {
+        hits: "Projecting hit upside",
+        total_bases: "Projecting base production",
+        home_runs: "Targeting HR potential",
+        batter_strikeouts: "Modeling K exposure",
+        hrr: "Projecting H+R+RBI combo",
       };
-      const sideContext = side === "UNDER" ? "suppression lean" : (mktContext[market] ?? "early-season model lean");
-      parts.push(sideContext);
+      const underContext: Record<string, string> = {
+        hits: "Low hit probability this matchup",
+        total_bases: "Limited base upside here",
+        home_runs: "HR unlikely in this spot",
+        batter_strikeouts: "K suppression play",
+        hrr: "Limited counting stats expected",
+      };
+      const ctx = side === "UNDER" ? underContext : overContext;
+      parts.push(ctx[market] ?? (side === "UNDER" ? "Model favors the under" : "Early-season projection lean"));
     } else {
       const archetypeLabel: Record<string, string> = {
         elite_contact: "Elite contact profile",
