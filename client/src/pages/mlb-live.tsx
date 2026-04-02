@@ -151,13 +151,8 @@ const MARKET_LABELS: Record<string, string> = {
 const MLB_CALC_MARKETS = [
   { value: "hits", label: "Hits" },
   { value: "total_bases", label: "Total Bases" },
+  { value: "pitcher_strikeouts", label: "Pitcher Ks" },
   { value: "home_runs", label: "Home Runs" },
-  { value: "hrr", label: "H+R+RBI" },
-  { value: "batter_strikeouts", label: "Batter K" },
-  { value: "pitcher_strikeouts", label: "Pitcher K" },
-  { value: "pitcher_outs", label: "Pitcher Outs" },
-  { value: "hits_allowed", label: "Hits Allowed" },
-  { value: "walks_allowed", label: "Walks Allowed" },
 ];
 
 const MLB_ODDS_STAT_MAP: Record<string, string> = {
@@ -603,6 +598,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
   const gameSignals = edgeFeedSignals.filter(s => s.gameId === selectedGameId);
 
   const [calcPlayer, setCalcPlayer] = useState<MlbPlayerStat | null>(null);
+  const [calcPlayerName, setCalcPlayerName] = useState("");
   const [calcMarket, setCalcMarket] = useState("hits");
   const [calcBookLine, setCalcBookLine] = useState("");
   const [calcResult, setCalcResult] = useState<{
@@ -615,23 +611,26 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     bookImplied?: number;
   } | null>(null);
 
+  const activeCalcName = calcPlayer?.playerName ?? calcPlayerName;
+  const activeCalcTeam = calcPlayer?.teamAbbr ?? "";
+
   type OddsEntry = { line: number; overOdds: number; underOdds: number; sportsbook: string };
   const { data: oddsData, isLoading: oddsLoading, isError: oddsError } = useQuery<Record<string, OddsEntry>>({
-    queryKey: ["/api/mlb/odds", calcPlayer?.playerName, calcMarket, selectedGame?.awayAbbr, selectedGame?.homeAbbr],
+    queryKey: ["/api/mlb/odds", activeCalcName, calcMarket, selectedGame?.awayAbbr, selectedGame?.homeAbbr],
     queryFn: async () => {
-      if (!calcPlayer || !selectedGame) return {};
+      if (!activeCalcName.trim() || !selectedGame) return {};
       const params = new URLSearchParams({
-        playerName: calcPlayer.playerName,
+        playerName: activeCalcName,
         statType: MLB_ODDS_STAT_MAP[calcMarket] ?? calcMarket,
-        playerTeam: calcPlayer.teamAbbr,
-        opponentTeam: calcPlayer.teamSide === "home" ? (selectedGame.awayAbbr ?? "") : (selectedGame.homeAbbr ?? ""),
+        playerTeam: activeCalcTeam,
+        opponentTeam: calcPlayer?.teamSide === "home" ? (selectedGame.awayAbbr ?? "") : (selectedGame.homeAbbr ?? ""),
         inPlay: selectedGame.status === "live" ? "true" : "false",
       });
       const res = await fetch(`/api/mlb/odds?${params}`);
       if (!res.ok) throw new Error("Failed to fetch odds");
       return res.json();
     },
-    enabled: !!calcPlayer && !!selectedGame,
+    enabled: !!activeCalcName.trim() && !!selectedGame,
     staleTime: 60_000,
   });
   const oddsEntries = Object.entries(oddsData ?? {})
@@ -648,30 +647,31 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
 
   const handleBoxScoreClick = (player: MlbPlayerStat) => {
     setCalcPlayer(player);
+    setCalcPlayerName(player.playerName);
     setCalcResult(null);
     setCalcBookLine("");
   };
 
   const handleCalculate = () => {
-    if (!calcPlayer || !selectedGame) return;
+    if (!activeCalcName.trim() || !selectedGame) return;
     const line = parseFloat(calcBookLine);
     if (!Number.isFinite(line) || line <= 0) return;
     calcMutation.mutate({
-      playerId: calcPlayer.playerId,
-      playerName: calcPlayer.playerName,
-      team: calcPlayer.teamAbbr,
-      opponent: calcPlayer.teamSide === "home" ? (selectedGame.awayAbbr ?? "") : (selectedGame.homeAbbr ?? ""),
+      playerId: calcPlayer?.playerId ?? "",
+      playerName: activeCalcName,
+      team: activeCalcTeam,
+      opponent: calcPlayer?.teamSide === "home" ? (selectedGame.awayAbbr ?? "") : (selectedGame.homeAbbr ?? ""),
       gameId: selectedGameId,
       market: calcMarket,
       bookLine: line,
-      currentStats: {
+      currentStats: calcPlayer ? {
         ab: calcPlayer.ab,
         h: calcPlayer.h,
         tb: calcPlayer.tb,
         k: calcPlayer.k,
         bb: calcPlayer.bb,
         battingOrder: calcPlayer.battingOrderSlot,
-      },
+      } : undefined,
       gameContext: {
         inning: selectedGame.inning ?? 1,
         isTopInning: selectedGame.isTopInning ?? true,
@@ -740,11 +740,235 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
             <GameChipStrip
               games={games}
               selectedGameId={selectedGameId}
-              onSelectGame={setSelectedGameId}
+              onSelectGame={(id) => { setSelectedGameId(id); setCalcPlayer(null); setCalcPlayerName(""); setCalcResult(null); setCalcBookLine(""); }}
               edgeFeedSignals={edgeFeedSignals}
               onRefresh={handleRefresh}
             />
           )}
+
+          {selectedGameId && selectedGame && (
+            <MlbBoxScore
+              gameId={selectedGameId}
+              signals={edgeFeedSignals}
+              onPlayerClick={handleBoxScoreClick}
+              awayAbbr={selectedGame.awayAbbr}
+              homeAbbr={selectedGame.homeAbbr}
+            />
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            <div className="lg:col-span-4 order-1 lg:order-1">
+              <div className="rounded-xl border border-border bg-card" data-testid="mlb-calculator">
+                <div className="flex items-center gap-2 px-4 py-3 border-b border-border/40">
+                  <Calculator className="w-4 h-4 text-primary" />
+                  <span className="text-xs font-bold text-foreground">Matchup Details</span>
+                </div>
+
+                <div className="p-4 space-y-4">
+                  <div>
+                    <label htmlFor="calc-player-name" className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Player</label>
+                    <input
+                      id="calc-player-name"
+                      type="text"
+                      data-testid="input-calc-player-name"
+                      value={calcPlayer ? calcPlayer.playerName : calcPlayerName}
+                      onChange={(e) => { setCalcPlayer(null); setCalcPlayerName(e.target.value); setCalcResult(null); }}
+                      placeholder="Type name or click box score row"
+                      className="w-full px-3 py-2.5 text-xs rounded-lg bg-secondary/60 border border-border/40 text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    />
+                  </div>
+
+                  {calcPlayer && (
+                    <div className="flex items-center gap-2 p-2 rounded-lg bg-secondary/30 border border-border/30">
+                      <div className="text-[10px] text-muted-foreground flex items-center gap-2 flex-wrap flex-1">
+                        <span className="font-semibold text-foreground">{calcPlayer.teamAbbr}</span>
+                        <span>#{calcPlayer.battingOrderSlot || "—"}</span>
+                        <span>{calcPlayer.ab} AB</span>
+                        <span>{calcPlayer.h} H</span>
+                        <span>{calcPlayer.tb} TB</span>
+                        <span>{calcPlayer.k} K</span>
+                      </div>
+                      <button
+                        data-testid="button-clear-calc-player"
+                        onClick={() => { setCalcPlayer(null); setCalcPlayerName(""); setCalcResult(null); }}
+                        className="text-muted-foreground hover:text-foreground text-[10px] px-1.5 py-0.5"
+                      >✕</button>
+                    </div>
+                  )}
+
+                  <div>
+                    <label htmlFor="calc-market" className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Stat Type</label>
+                    <select
+                      id="calc-market"
+                      data-testid="select-calc-market"
+                      value={calcMarket}
+                      onChange={(e) => { setCalcMarket(e.target.value); setCalcResult(null); setCalcBookLine(""); }}
+                      className="w-full px-3 py-2.5 text-xs rounded-lg bg-secondary/60 border border-border/40 text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    >
+                      {MLB_CALC_MARKETS.map(m => (
+                        <option key={m.value} value={m.value}>{m.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label htmlFor="calc-book-line" className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Live Line</label>
+                    <input
+                      id="calc-book-line"
+                      type="number"
+                      step="0.5"
+                      min="0"
+                      data-testid="input-calc-book-line"
+                      value={calcBookLine}
+                      onChange={(e) => setCalcBookLine(e.target.value)}
+                      placeholder="e.g. 1.5"
+                      className="w-full px-3 py-2.5 text-xs rounded-lg bg-secondary/60 border border-border/40 text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    />
+                  </div>
+
+                  {oddsEntries.length > 0 && (
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Sportsbook Lines</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {oddsEntries.map((o) => (
+                          <button
+                            key={o.sportsbook}
+                            data-testid={`button-odds-${o.sportsbook}`}
+                            onClick={() => setCalcBookLine(String(o.line))}
+                            className={`text-[10px] px-2.5 py-1.5 rounded-lg border transition-colors ${
+                              calcBookLine === String(o.line)
+                                ? "border-primary/50 bg-primary/10 text-primary"
+                                : "border-border/40 bg-secondary/30 text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            <span className="font-semibold">{o.sportsbook}</span>
+                            <span className="ml-1.5">{o.line}</span>
+                            <span className="ml-1 text-green-400">O {formatOdds(o.overOdds)}</span>
+                            <span className="ml-1 text-blue-400">U {formatOdds(o.underOdds)}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {oddsLoading && (
+                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                      <Loader2 className="w-3 h-3 animate-spin" /> Loading odds...
+                    </div>
+                  )}
+                  {oddsError && !oddsLoading && (
+                    <div className="text-[10px] text-muted-foreground/60">Could not load live odds — enter a line manually.</div>
+                  )}
+
+                  <button
+                    data-testid="button-calculate-mlb"
+                    onClick={handleCalculate}
+                    disabled={calcMutation.isPending || !activeCalcName.trim() || !calcBookLine || parseFloat(calcBookLine) <= 0 || !selectedGame}
+                    className="w-full py-3 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 min-h-[44px]"
+                  >
+                    {calcMutation.isPending ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /> Calculating...</>
+                    ) : (
+                      <><Calculator className="w-4 h-4" /> Calculate Probability</>
+                    )}
+                  </button>
+
+                  {calcMutation.isError && (
+                    <div className="text-center text-xs text-red-400 py-2">
+                      {(calcMutation.error as Error)?.message || "Calculation failed — check inputs"}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="lg:col-span-8 order-2 lg:order-2">
+              {calcResult ? (
+                <div className="rounded-xl border border-border bg-card p-6 space-y-5 animate-in slide-in-from-top-2 duration-300" data-testid="mlb-calc-results">
+                  <div className="flex items-center justify-center">
+                    <ProbabilityRing probability={calcResult.probability ?? calcResult.modelProbability ?? 50} size={160} strokeWidth={14} />
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3 text-center">
+                    <div className="bg-secondary/30 rounded-lg p-3">
+                      <div className="text-[9px] text-muted-foreground uppercase font-semibold">Side</div>
+                      <div className={`text-lg font-black ${
+                        calcResult.recommendedSide === "OVER" ? "text-green-400" : calcResult.recommendedSide === "UNDER" ? "text-blue-400" : "text-muted-foreground"
+                      }`}>
+                        {calcResult.recommendedSide ?? "—"}
+                      </div>
+                    </div>
+                    <div className="bg-secondary/30 rounded-lg p-3">
+                      <div className="text-[9px] text-muted-foreground uppercase font-semibold">Edge</div>
+                      <div className={`text-lg font-black ${
+                        (calcResult.edge ?? 0) > 0 ? "text-green-400" : "text-muted-foreground"
+                      }`}>
+                        {calcResult.edge != null ? `${calcResult.edge > 0 ? "+" : ""}${calcResult.edge.toFixed(1)}%` : "—"}
+                      </div>
+                    </div>
+                    <div className="bg-secondary/30 rounded-lg p-3">
+                      <div className="text-[9px] text-muted-foreground uppercase font-semibold">Projection</div>
+                      <div className="text-lg font-black text-foreground">
+                        {calcResult.projection?.toFixed(2) ?? calcResult.expectedTotal?.toFixed(2) ?? "—"}
+                      </div>
+                    </div>
+                  </div>
+
+                  {calcResult.probability != null && (
+                    <div className="text-center text-xs text-muted-foreground">
+                      <span>Model: <strong className="text-foreground">{(calcResult.probability ?? calcResult.modelProbability ?? 0).toFixed(1)}%</strong> Over {calcBookLine}</span>
+                      {calcResult.bookImplied != null && (
+                        <span className="ml-2">· Book Implied: <strong className="text-foreground">{(calcResult.bookImplied * 100).toFixed(1)}%</strong></span>
+                      )}
+                    </div>
+                  )}
+
+                  {calcResult.recommendedSide && calcResult.recommendedSide !== "NO_EDGE" && (
+                    <button
+                      data-testid="button-add-calc-to-slip"
+                      onClick={() => handleAddToSlip({
+                        playerId: calcPlayer?.playerId ?? "",
+                        playerName: activeCalcName,
+                        market: calcMarket,
+                        bookLine: parseFloat(calcBookLine),
+                        enginePct: calcResult.probability ?? calcResult.modelProbability ?? 0,
+                        edge: calcResult.edge ?? null,
+                        recommendedSide: calcResult.recommendedSide ?? "",
+                        gameId: selectedGameId ?? "",
+                        sportsbook: "manual",
+                      })}
+                      className="w-full py-2.5 rounded-lg border border-green-500/30 bg-green-500/10 text-green-400 font-semibold text-xs hover:bg-green-500/20 transition-colors min-h-[44px]"
+                    >
+                      + Add to Bet Slip
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-border/40 bg-card p-8 text-center space-y-3" data-testid="mlb-games-empty-state">
+                  <Target className="w-10 h-10 text-muted-foreground/30 mx-auto" />
+                  <div className="text-sm font-bold text-foreground">Ready to Predict</div>
+                  <div className="text-xs text-muted-foreground">
+                    {!selectedGameId ? "Select a game above to get started" : "Fill in the calculator and hit Calculate"}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground/60 space-y-1 max-w-xs mx-auto text-left">
+                    <div className="flex items-center gap-2"><span className="text-primary">◎</span> Click a game tile above</div>
+                    <div className="flex items-center gap-2"><span className="text-primary">◎</span> Click a player in the box score</div>
+                    <div className="flex items-center gap-2"><span className="text-primary">◎</span> Pick a stat type & live line</div>
+                    <div className="flex items-center gap-2"><span className="text-primary">◎</span> Hit Calculate</div>
+                  </div>
+                </div>
+              )}
+
+              {selectedGameId && selectedGame && gameSignals.length > 0 && (
+                <div className="mt-4">
+                  <GameSignalsPanel
+                    signals={gameSignals}
+                    isElite={isElite}
+                    onAddToSlip={handleAddToSlip}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
 
           {!selectedGameId && !isElite && games.length > 0 && (
             <div className="rounded-xl border border-primary/20 bg-primary/5 p-5 text-center space-y-3">
@@ -758,227 +982,6 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                 className="inline-block px-5 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors">
                 Upgrade to All Sports →
               </a>
-            </div>
-          )}
-
-          {!selectedGameId && games.length > 0 && (
-            <div className="rounded-xl border border-border/40 bg-card p-8 text-center space-y-3" data-testid="mlb-games-empty-state">
-              <Target className="w-10 h-10 text-muted-foreground/30 mx-auto" />
-              <div className="text-sm font-bold text-foreground">Ready to Predict</div>
-              <div className="text-xs text-muted-foreground">Select a game above to view signals</div>
-              <div className="text-[11px] text-muted-foreground/60 space-y-1 max-w-xs mx-auto text-left">
-                <div className="flex items-center gap-2"><span className="text-primary">◎</span> Click a game tile above</div>
-                <div className="flex items-center gap-2"><span className="text-primary">◎</span> Signals load automatically</div>
-                <div className="flex items-center gap-2"><span className="text-primary">◎</span> Add strong plays to your Parlay Slip</div>
-              </div>
-            </div>
-          )}
-
-          {selectedGameId && selectedGame && (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-              <div className="lg:col-span-4 space-y-4">
-                <GameContextPanel game={selectedGame} signalCount={gameSignals.length} />
-                <GameSignalsPanel
-                  signals={gameSignals}
-                  isElite={isElite}
-                  onAddToSlip={handleAddToSlip}
-                />
-              </div>
-              <div className="lg:col-span-8 space-y-4">
-                <MlbBoxScore
-                  gameId={selectedGameId}
-                  signals={edgeFeedSignals}
-                  onPlayerClick={handleBoxScoreClick}
-                  awayAbbr={selectedGame.awayAbbr}
-                  homeAbbr={selectedGame.homeAbbr}
-                />
-
-                <div className="rounded-xl border border-border bg-card" data-testid="mlb-calculator">
-                  <div className="flex items-center gap-2 px-4 py-3 border-b border-border/40">
-                    <Calculator className="w-4 h-4 text-primary" />
-                    <span className="text-xs font-bold text-foreground">Manual Calculator</span>
-                    {calcPlayer && (
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary font-semibold">
-                        {calcPlayer.playerName}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="p-4 space-y-4">
-                    {!calcPlayer ? (
-                      <div className="text-center py-4">
-                        <p className="text-xs text-muted-foreground">Tap a player in the box score above to start calculating.</p>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex items-center gap-3 p-3 rounded-lg bg-secondary/30 border border-border/30">
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm font-bold text-foreground">{calcPlayer.playerName}</div>
-                            <div className="text-[10px] text-muted-foreground flex items-center gap-2 flex-wrap">
-                              <span>{calcPlayer.teamAbbr}</span>
-                              <span>#{calcPlayer.battingOrderSlot || "—"}</span>
-                              <span>{calcPlayer.ab} AB</span>
-                              <span>{calcPlayer.h} H</span>
-                              <span>{calcPlayer.tb} TB</span>
-                              <span>{calcPlayer.k} K</span>
-                            </div>
-                          </div>
-                          <button
-                            data-testid="button-clear-calc-player"
-                            onClick={() => { setCalcPlayer(null); setCalcResult(null); }}
-                            className="text-muted-foreground hover:text-foreground text-xs px-2 py-1"
-                          >Clear</button>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label htmlFor="calc-market" className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Market</label>
-                            <select
-                              id="calc-market"
-                              data-testid="select-calc-market"
-                              value={calcMarket}
-                              onChange={(e) => { setCalcMarket(e.target.value); setCalcResult(null); setCalcBookLine(""); }}
-                              className="w-full px-3 py-2.5 text-xs rounded-lg bg-secondary/60 border border-border/40 text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-                            >
-                              {MLB_CALC_MARKETS.map(m => (
-                                <option key={m.value} value={m.value}>{m.label}</option>
-                              ))}
-                            </select>
-                          </div>
-                          <div>
-                            <label htmlFor="calc-book-line" className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Book Line</label>
-                            <input
-                              id="calc-book-line"
-                              type="number"
-                              step="0.5"
-                              min="0"
-                              data-testid="input-calc-book-line"
-                              value={calcBookLine}
-                              onChange={(e) => setCalcBookLine(e.target.value)}
-                              placeholder="e.g. 1.5"
-                              className="w-full px-3 py-2.5 text-xs rounded-lg bg-secondary/60 border border-border/40 text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/50"
-                            />
-                          </div>
-                        </div>
-
-                        {oddsEntries.length > 0 && (
-                          <div className="space-y-1.5">
-                            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Live Lines</div>
-                            <div className="flex flex-wrap gap-1.5">
-                              {oddsEntries.map((o) => (
-                                <button
-                                  key={o.sportsbook}
-                                  data-testid={`button-odds-${o.sportsbook}`}
-                                  onClick={() => setCalcBookLine(String(o.line))}
-                                  className={`text-[10px] px-2.5 py-1.5 rounded-lg border transition-colors ${
-                                    calcBookLine === String(o.line)
-                                      ? "border-primary/50 bg-primary/10 text-primary"
-                                      : "border-border/40 bg-secondary/30 text-muted-foreground hover:text-foreground"
-                                  }`}
-                                >
-                                  <span className="font-semibold">{o.sportsbook}</span>
-                                  <span className="ml-1.5">{o.line}</span>
-                                  <span className="ml-1 text-green-400">O {formatOdds(o.overOdds)}</span>
-                                  <span className="ml-1 text-blue-400">U {formatOdds(o.underOdds)}</span>
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                        {oddsLoading && (
-                          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                            <Loader2 className="w-3 h-3 animate-spin" /> Loading odds...
-                          </div>
-                        )}
-                        {oddsError && !oddsLoading && (
-                          <div className="text-[10px] text-muted-foreground/60">Could not load live odds — enter a line manually.</div>
-                        )}
-
-                        <button
-                          data-testid="button-calculate-mlb"
-                          onClick={handleCalculate}
-                          disabled={calcMutation.isPending || !calcBookLine || parseFloat(calcBookLine) <= 0}
-                          className="w-full py-3 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 min-h-[44px]"
-                        >
-                          {calcMutation.isPending ? (
-                            <><Loader2 className="w-4 h-4 animate-spin" /> Calculating...</>
-                          ) : (
-                            <><Calculator className="w-4 h-4" /> Calculate Probability</>
-                          )}
-                        </button>
-
-                        {calcResult && (
-                          <div className="space-y-4 pt-2 border-t border-border/30 animate-in slide-in-from-top-2 duration-300">
-                            <div className="flex items-center justify-center">
-                              <ProbabilityRing probability={calcResult.probability ?? calcResult.modelProbability ?? 50} size={140} strokeWidth={12} />
-                            </div>
-
-                            <div className="grid grid-cols-3 gap-2 text-center">
-                              <div className="bg-secondary/30 rounded-lg p-2.5">
-                                <div className="text-[8px] text-muted-foreground uppercase">Side</div>
-                                <div className={`text-sm font-black ${
-                                  calcResult.recommendedSide === "OVER" ? "text-green-400" : calcResult.recommendedSide === "UNDER" ? "text-blue-400" : "text-muted-foreground"
-                                }`}>
-                                  {calcResult.recommendedSide ?? "—"}
-                                </div>
-                              </div>
-                              <div className="bg-secondary/30 rounded-lg p-2.5">
-                                <div className="text-[8px] text-muted-foreground uppercase">Edge</div>
-                                <div className={`text-sm font-black ${
-                                  (calcResult.edge ?? 0) > 0 ? "text-green-400" : "text-muted-foreground"
-                                }`}>
-                                  {calcResult.edge != null ? `${calcResult.edge > 0 ? "+" : ""}${calcResult.edge.toFixed(1)}%` : "—"}
-                                </div>
-                              </div>
-                              <div className="bg-secondary/30 rounded-lg p-2.5">
-                                <div className="text-[8px] text-muted-foreground uppercase">Projection</div>
-                                <div className="text-sm font-black text-foreground">
-                                  {calcResult.projection?.toFixed(2) ?? calcResult.expectedTotal?.toFixed(2) ?? "—"}
-                                </div>
-                              </div>
-                            </div>
-
-                            {calcResult.probability != null && (
-                              <div className="text-center text-xs text-muted-foreground">
-                                <span>Model: <strong className="text-foreground">{(calcResult.probability ?? calcResult.modelProbability ?? 0).toFixed(1)}%</strong> Over {calcBookLine}</span>
-                                {calcResult.bookImplied != null && (
-                                  <span className="ml-2">· Book Implied: <strong className="text-foreground">{(calcResult.bookImplied * 100).toFixed(1)}%</strong></span>
-                                )}
-                              </div>
-                            )}
-
-                            {calcResult.recommendedSide && calcResult.recommendedSide !== "NO_EDGE" && (
-                              <button
-                                data-testid="button-add-calc-to-slip"
-                                onClick={() => handleAddToSlip({
-                                  playerId: calcPlayer.playerId,
-                                  playerName: calcPlayer.playerName,
-                                  market: calcMarket,
-                                  bookLine: parseFloat(calcBookLine),
-                                  enginePct: calcResult.probability ?? calcResult.modelProbability ?? 0,
-                                  edge: calcResult.edge ?? null,
-                                  recommendedSide: calcResult.recommendedSide,
-                                  gameId: selectedGameId ?? "",
-                                  sportsbook: "manual",
-                                })}
-                                className="w-full py-2.5 rounded-lg border border-green-500/30 bg-green-500/10 text-green-400 font-semibold text-xs hover:bg-green-500/20 transition-colors min-h-[44px]"
-                              >
-                                + Add to Bet Slip
-                              </button>
-                            )}
-                          </div>
-                        )}
-
-                        {calcMutation.isError && (
-                          <div className="text-center text-xs text-red-400 py-2">
-                            {(calcMutation.error as Error)?.message || "Calculation failed — check inputs"}
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
             </div>
           )}
         </>
