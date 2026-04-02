@@ -626,7 +626,7 @@ export async function registerRoutes(
   // ── MLB Live Routes (Auth-required, Phase B UI) ──────────────────────────────
 
   const mlbLiveGamesCache = new Map<string, { ts: number; games: any[] }>();
-  const MLB_LIVE_GAMES_TTL = 30_000;
+  const MLB_LIVE_GAMES_TTL = 15_000;
 
   // ── MLB preview player generator ─────────────────────────────────────────────
   // Derives preview cards from REAL game data only — no fabricated names/matchups.
@@ -921,7 +921,7 @@ export async function registerRoutes(
   });
 
   const mlbLiveStatsCache = new Map<string, { ts: number; players: any[]; allRosterIds: Set<string> }>();
-  const MLB_LIVE_STATS_TTL = 30_000;
+  const MLB_LIVE_STATS_TTL = 15_000;
 
   app.get("/api/mlb/live-stats/:gameId", requireMLBAccess, async (req, res) => {
     const gameId = req.params.gameId as string;
@@ -1039,7 +1039,7 @@ export async function registerRoutes(
   });
 
   const mlbSignalsCache = new Map<string, { ts: number; signals: any[]; updatedAt: number; isDegraded: boolean }>();
-  const MLB_SIGNALS_TTL = 90_000;
+  const MLB_SIGNALS_TTL = 30_000;
 
   app.get("/api/mlb/live-signals/:gameId", requireMLBAccess, async (req, res) => {
     const gameId = req.params.gameId as string;
@@ -1094,7 +1094,7 @@ export async function registerRoutes(
     const updatedAt = entry?.updatedAt ?? 0;
     const cachedIsDegraded = entry?.isDegraded ?? false;
 
-    const SIGNAL_FRESHNESS_MS = 300_000;
+    const SIGNAL_FRESHNESS_MS = 120_000;
     if (updatedAt > 0 && Date.now() - updatedAt > SIGNAL_FRESHNESS_MS) {
       const staleAge = Math.round((Date.now() - updatedAt) / 1000);
       console.warn(`[MLB signals] game=${gameId} — engine data ${staleAge}s old (>${SIGNAL_FRESHNESS_MS / 1000}s limit); returning no_lines`);
@@ -1283,7 +1283,7 @@ export async function registerRoutes(
       for (const [gid, edgeEntry] of Array.from(mlbEdgeCache.entries())) {
         totalEdgeCacheEntries++;
 
-        const FEED_FRESHNESS_MS = 300_000;
+        const FEED_FRESHNESS_MS = 120_000;
         if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) {
           totalDropped++;
           continue;
@@ -1349,7 +1349,7 @@ export async function registerRoutes(
       const cachedLiveGames = mlbLiveGamesCache.get("games");
 
       for (const [gid, edgeEntry] of Array.from(mlbEdgeCache.entries())) {
-        const FEED_FRESHNESS_MS = 300_000;
+        const FEED_FRESHNESS_MS = 120_000;
         if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) continue;
 
         const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);

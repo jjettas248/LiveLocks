@@ -94,9 +94,9 @@ export function MlbBoxScore({
   const [sortBy, setSortBy] = useState<"order" | "ab" | "h" | "tb" | "k">("order");
   const [activeTab, setActiveTab] = useState<"all" | "away" | "home" | "signals">("all");
 
-  const { data, isLoading, isRefetching } = useQuery<LiveStatsResponse>({
+  const { data, isLoading, isRefetching, dataUpdatedAt } = useQuery<LiveStatsResponse>({
     queryKey: ["/api/mlb/live-stats", gameId],
-    refetchInterval: 60_000,
+    refetchInterval: 15_000,
     enabled: !!gameId,
   });
 
@@ -157,9 +157,14 @@ export function MlbBoxScore({
     <div className="rounded-xl border border-border bg-card" data-testid="mlb-box-score">
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/40">
         <div className="flex items-center gap-2">
-          <Activity className="w-3.5 h-3.5 text-primary" />
+          <Activity className={`w-3.5 h-3.5 text-primary ${isRefetching ? "animate-spin" : ""}`} />
           <span className="text-xs font-bold text-foreground">Live Box Score</span>
           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary font-semibold">{players.length}</span>
+          {dataUpdatedAt > 0 && (
+            <span className="text-[9px] text-muted-foreground/70 tabular-nums" data-testid="text-boxscore-updated">
+              {new Date(dataUpdatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true })}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {activeTab !== "signals" && (

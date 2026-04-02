@@ -881,8 +881,8 @@ export default function Dashboard() {
   const { data: liveSignalsData } = useQuery<{ signals: any[]; engineOutput: Record<number, Record<string, any>> }>({
     queryKey: ["/api/live-signals", selectedGameId],
     enabled: !!selectedGameId,
-    refetchInterval: 45_000,
-    staleTime: 40_000,
+    refetchInterval: 20_000,
+    staleTime: 15_000,
   });
 
   const halftimeGameGroups = useMemo(() => {

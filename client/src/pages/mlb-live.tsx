@@ -141,18 +141,38 @@ function gameLeanBadge(signals: MlbSignalData[], gameId: string): { label: strin
   return { label: "Mixed", color: "#71717a" };
 }
 
-function GameChipStrip({ games, selectedGameId, onSelectGame, edgeFeedSignals, onRefresh }: {
+function LivePulse({ updatedAt }: { updatedAt: number }) {
+  const [, forceUpdate] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => forceUpdate(n => n + 1), 5_000);
+    return () => clearInterval(id);
+  }, []);
+  if (!updatedAt) return null;
+  const ago = Math.round((Date.now() - updatedAt) / 1000);
+  const label = ago < 5 ? "Just now" : ago < 60 ? `${ago}s ago` : `${Math.floor(ago / 60)}m ago`;
+  const isStale = ago > 30;
+  return (
+    <span className={`flex items-center gap-1 text-[10px] tabular-nums ${isStale ? "text-yellow-500" : "text-green-500/80"}`} data-testid="text-live-pulse">
+      <span className={`w-1.5 h-1.5 rounded-full ${isStale ? "bg-yellow-500" : "bg-green-500 animate-pulse"}`} />
+      {label}
+    </span>
+  );
+}
+
+function GameChipStrip({ games, selectedGameId, onSelectGame, edgeFeedSignals, onRefresh, dataUpdatedAt }: {
   games: MLBGame[];
   selectedGameId: string | null;
   onSelectGame: (id: string | null) => void;
   edgeFeedSignals: MlbSignalData[];
   onRefresh: () => void;
+  dataUpdatedAt: number;
 }) {
   return (
     <div className="bg-card border border-border rounded-xl p-4" data-testid="mlb-games-strip">
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
           <Radio className="w-3.5 h-3.5 text-green-500" /> Today's Games
+          <LivePulse updatedAt={dataUpdatedAt} />
         </h2>
         <button
           onClick={onRefresh}
@@ -437,7 +457,7 @@ function HREdgeCard({ edge }: { edge: any }) {
 function HRRadarSection({ isElite }: { isElite: boolean }) {
   const { data: hrData, isLoading } = useQuery<HRRadarResponse>({
     queryKey: ["/api/mlb/hr-radar"],
-    refetchInterval: 60_000,
+    refetchInterval: 20_000,
   });
 
   if (isLoading) return <SkeletonCard count={3} />;
@@ -538,15 +558,15 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
 
   const isElite = user?.hasMLB === true;
 
-  const { data: gamesResp, isLoading: gamesLoading } = useQuery<MLBGamesResponse>({
+  const { data: gamesResp, isLoading: gamesLoading, dataUpdatedAt: gamesUpdatedAt } = useQuery<MLBGamesResponse>({
     queryKey: ["/api/mlb/live-games"],
-    refetchInterval: 30_000,
+    refetchInterval: 15_000,
   });
   const games = Array.isArray(gamesResp?.games) ? gamesResp!.games : [];
 
   const { data: edgeFeedResp } = useQuery<EdgeFeedResponse>({
     queryKey: ["/api/mlb/edge-feed"],
-    refetchInterval: 45_000,
+    refetchInterval: 20_000,
   });
   const edgeFeedSignals: MlbSignalData[] = Array.isArray(edgeFeedResp?.signals)
     ? (edgeFeedResp!.signals as MlbSignalData[])
@@ -705,6 +725,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
               onSelectGame={(id) => { setSelectedGameId(id); setCalcPlayer(null); setCalcPlayerName(""); setCalcResult(null); setCalcBookLine(""); }}
               edgeFeedSignals={edgeFeedSignals}
               onRefresh={handleRefresh}
+              dataUpdatedAt={gamesUpdatedAt}
             />
           )}
 

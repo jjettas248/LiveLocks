@@ -50,7 +50,7 @@ import { trackSignalDirection } from "./directionalBias";
 
 // ── Engine dedup lock ─────────────────────────────────────────────────────────
 const LAST_RUN = new Map<string, number>();
-const DEDUP_WINDOW_MS = 30_000;
+const DEDUP_WINDOW_MS = 15_000;
 
 function shouldSkip(gameId: string): boolean {
   const last = LAST_RUN.get(gameId);
@@ -212,7 +212,7 @@ const TRIGGER_IMPACTED_MARKETS: Record<StateChangeTrigger, MLBMarket[] | "all"> 
 // ── Polling intervals ─────────────────────────────────────────────────────────
 
 const GAME_DISCOVERY_MS = 5 * 60 * 1000;   // 5 minutes
-const GAME_STATE_MS = 15 * 1000;            // 15 seconds (via pollGame)
+const GAME_STATE_MS = 10 * 1000;            // 10 seconds (via pollGame)
 const WEATHER_MS = 10 * 60 * 1000;          // 10 minutes
 
 // ── Orchestrator class ────────────────────────────────────────────────────────
@@ -220,6 +220,7 @@ const WEATHER_MS = 10 * 60 * 1000;          // 10 minutes
 export class LiveGameOrchestrator {
   private timers: ReturnType<typeof setInterval>[] = [];
   private previousStates: Map<string, GameStateCache> = new Map();
+  private pollInFlight: Set<string> = new Set();
 
   start(): void {
     console.log("[MLB orchestrator] Starting...");
@@ -253,7 +254,7 @@ export class LiveGameOrchestrator {
       }, WEATHER_MS)
     );
 
-    console.log("[MLB orchestrator] Started — discovery 5m, state/contact/pitcher 15s, weather 10m");
+    console.log(`[MLB orchestrator] Started — discovery ${GAME_DISCOVERY_MS / 1000}s, state/contact/pitcher ${GAME_STATE_MS / 1000}s, weather ${WEATHER_MS / 1000}s`);
   }
 
   stop(): void {
@@ -384,14 +385,21 @@ export class LiveGameOrchestrator {
   }
 
   async pollGame(gameId: string): Promise<void> {
+    if (this.pollInFlight.has(gameId)) return;
+    this.pollInFlight.add(gameId);
+    try {
+      await this._pollGameInner(gameId);
+    } finally {
+      this.pollInFlight.delete(gameId);
+    }
+  }
+
+  private async _pollGameInner(gameId: string): Promise<void> {
     const prevState = this.previousStates.get(gameId);
 
-    // Look up the registered game to get the MLB Stats gamePk (may differ from ESPN event ID)
     const registeredGame = getGame(gameId);
     const statsPk: string | undefined = registeredGame?.gamePk;
 
-    // Guard: only call Stats API when a valid gamePk is known.
-    // Using the ESPN event ID as a fake gamePk would cause 404s against the Stats API.
     if (!statsPk) {
       console.log(`[MLB orchestrator] pollGame(${gameId}): gamePk not yet resolved — skipping Stats API calls`);
       return;
@@ -575,7 +583,7 @@ export class LiveGameOrchestrator {
 
   private getDedupWindow(triggers: StateChangeTrigger[]): number {
     const hasHighImpact = triggers.some(t => HIGH_IMPACT_TRIGGERS.has(t));
-    return hasHighImpact ? 10_000 : DEDUP_WINDOW_MS;
+    return hasHighImpact ? 5_000 : DEDUP_WINDOW_MS;
   }
 
   private static readonly JARGON_MAP: Record<string, string> = {

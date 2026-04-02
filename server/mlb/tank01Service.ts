@@ -58,7 +58,7 @@ export interface Tank01GameScore {
 }
 
 const tank01Cache = new Map<string, { data: any; ts: number }>();
-const CACHE_TTL_MS = 60_000;
+const CACHE_TTL_MS = 30_000;
 
 async function tank01Fetch<T>(path: string, params: Record<string, string> = {}): Promise<T | null> {
   const qs = new URLSearchParams(params).toString();

@@ -10,6 +10,6 @@ export type LiveSignalCounts = {
 export function useLiveSignalCounts() {
   return useQuery<LiveSignalCounts>({
     queryKey: ["/api/live-signal-counts"],
-    refetchInterval: 60_000,
+    refetchInterval: 20_000,
   });
 }
