@@ -81,7 +81,6 @@ const BATTER_MARKETS: MLBMarket[] = [
   "hits",
   "total_bases",
   "home_runs",
-  "hrr",
   "batter_strikeouts",
 ];
 
