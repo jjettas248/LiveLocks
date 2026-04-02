@@ -1,16 +1,9 @@
 import { useState, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { useTopPlays, type UnifiedTopPlay } from "@/hooks/useTopPlays";
+import { useLiveSignalCounts } from "@/hooks/useLiveSignalCounts";
 import { SportSignalCard } from "@/components/signals/SportSignalCard";
 import { SignalSkeletonCard } from "@/components/signals/SignalSkeletonCard";
 import { Zap, X, ChevronUp, Lock, Sparkles } from "lucide-react";
-
-type LiveSignalCounts = {
-  nbaElite: number;
-  ncaabElite: number;
-  mlbElite: number;
-  totalLive: number;
-};
 
 type TopPlaysPanelProps = {
   isElite?: boolean;
@@ -26,10 +19,7 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPl
   const [hasSeenModal, setHasSeenModal] = useState(false);
   const [showModal, setShowModal] = useState(false);
 
-  const { data: signalCounts } = useQuery<LiveSignalCounts>({
-    queryKey: ["/api/live-signal-counts"],
-    refetchInterval: 60_000,
-  });
+  const { data: signalCounts } = useLiveSignalCounts();
 
   const totalSignals = signalCounts?.totalLive ?? 0;
 
