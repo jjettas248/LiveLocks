@@ -204,7 +204,7 @@ function generatePrimaryReason(
   }
 
   const sentence = parts.slice(0, 3).join(" + ");
-  const prefix = side === "UNDER" ? "Suppression driven by " : "";
+  const prefix = side === "UNDER" ? "Under driven by " : "";
   const result = prefix + sentence;
   return result.charAt(0).toUpperCase() + result.slice(1);
 }
@@ -241,21 +241,34 @@ export function normalizeMLBSignal(
     const cq = drivers.contactQuality ?? 0.5;
     const bp = drivers.batSpeedPower ?? 0.5;
     const pbm = drivers.pitchBlendMatchup ?? 0.5;
+    const hand = drivers.handednessMatchup ?? 0.5;
     pitchMatchupRatings = {};
+    const pitchScores: { pt: string; score: number }[] = [];
     for (const p of pitchMix) {
       const pt = p.pitchType;
       const isFastball = pt === "FF" || pt === "SI" || pt === "FC";
       const isBreaking = pt === "SL" || pt === "CU" || pt === "KC" || pt === "CS" || pt === "SV" || pt === "ST";
-      let rating: "strong" | "neutral" | "weak" = "neutral";
+      let score: number;
       if (isFastball) {
-        if (bp >= 0.50 && cq >= 0.47) rating = "strong";
-        else if (bp < 0.42 && cq < 0.42) rating = "weak";
+        score = bp * 0.55 + cq * 0.30 + hand * 0.15;
       } else if (isBreaking) {
-        if (cq >= 0.50 && pbm >= 0.47) rating = "strong";
-        else if (cq < 0.42 && pbm < 0.42) rating = "weak";
+        score = pbm * 0.45 + cq * 0.25 + hand * 0.30;
       } else {
-        if (cq >= 0.50) rating = "strong";
-        else if (cq < 0.42) rating = "weak";
+        score = cq * 0.45 + pbm * 0.30 + bp * 0.25;
+      }
+      pitchScores.push({ pt, score });
+    }
+    const maxScore = Math.max(...pitchScores.map(s => s.score));
+    const minScore = Math.min(...pitchScores.map(s => s.score));
+    const spread = maxScore - minScore;
+    for (const { pt, score } of pitchScores) {
+      let rating: "strong" | "neutral" | "weak" = "neutral";
+      if (spread >= 0.03) {
+        if (score >= maxScore - 0.01 && score > 0.52) rating = "strong";
+        else if (score <= minScore + 0.01 && score < 0.48) rating = "weak";
+      } else {
+        if (score > 0.56) rating = "strong";
+        else if (score < 0.42) rating = "weak";
       }
       pitchMatchupRatings[pt] = rating;
     }
