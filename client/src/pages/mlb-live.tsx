@@ -6,6 +6,7 @@ import { TopPlays } from "@/components/mlb/TopPlays";
 import { LiveBoard } from "@/components/mlb/LiveBoard";
 import { MlbSignalCard, type MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { MlbBoxScore, type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
+import type { MLBSignal } from "@shared/mlbSignal";
 import { ProbabilityRing } from "@/components/probability-ring";
 import { SkeletonCard } from "@/components/sports/SkeletonCard";
 import { EmptyState } from "@/components/sports/EmptyState";
@@ -60,57 +61,6 @@ type MLBGame = {
   hasOdds?: boolean;
   signalCount?: number;
   gameCardTags?: string[];
-};
-
-type MLBSignal = {
-  playerId: string;
-  playerName: string;
-  market: string;
-  bookLine: number | null;
-  projection?: number | null;
-  enginePct: number;
-  edge: number | null;
-  odds: { bookLine: number } | null;
-  recommendedSide: "OVER" | "UNDER" | "NO_EDGE";
-  inning: number;
-  tier: string;
-  gameId?: string;
-  sportsbook?: string | null;
-  signalTimestamp?: number | null;
-  formIndicator?: string | null;
-  evPct?: number | null;
-  hrFactors?: { count: number; labels: string[] } | null;
-  matchupTag?: string | null;
-  explanationBullets?: string[];
-  reasons?: string[];
-  awayAbbr?: string | null;
-  homeAbbr?: string | null;
-  bvp?: { atBats: number; hits: number; avg: number | null; homeRuns: number; strikeouts: number } | null;
-  signalScore?: number | null;
-  confidenceTier?: "ELITE" | "STRONG" | "SOLID" | "WATCHLIST" | null;
-  signalTags?: string[];
-  feedTags?: string[];
-  playerGlowEligible?: boolean;
-  currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
-  lastABContact?: { exitVelo: number | null; launchAngle: number | null; batSpeed: number | null; distance: number | null; barrelPct: number | null; hardHitPct: number | null; outcome: string | null } | null;
-  alreadyHit?: boolean;
-  actionable?: boolean;
-  stale?: boolean;
-  watchlist?: boolean;
-  bookImplied?: number | null;
-  pitchMix?: Array<{ pitchType: string; percentage: number; avgVelocity: number | null }>;
-  badges?: string[];
-  riskFlags?: string[];
-  drivers?: Record<string, number>;
-  overOdds?: number | null;
-  underOdds?: number | null;
-  batterArchetype?: string | null;
-  pitcherArchetype?: string | null;
-  thesis?: string | null;
-  isFlagship?: boolean | null;
-  safetyCeilingApplied?: boolean | null;
-  isDegraded?: boolean | null;
-  dataQuality?: "full" | "partial" | "degraded" | null;
 };
 
 type MLBGamesResponse = {
@@ -989,7 +939,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                         recommendedSide: calcResult.recommendedSide ?? "",
                         gameId: selectedGameId ?? "",
                         sportsbook: "manual",
-                      })}
+                      } as MlbSignalData)}
                       className="w-full py-2.5 rounded-lg border border-green-500/30 bg-green-500/10 text-green-400 font-semibold text-xs hover:bg-green-500/20 transition-colors min-h-[44px]"
                     >
                       + Add to Bet Slip

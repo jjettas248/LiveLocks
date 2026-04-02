@@ -55,6 +55,7 @@ import {
 import { getActiveGames } from "./mlb/liveGameRegistry";
 import { mlbEdgeCache } from "./mlb/edgeCache";
 import { liveOrchestrator, normalizeMlbStatus } from "./mlb/liveGameOrchestrator";
+import { normalizeMLBSignal } from "./mlb/normalizeSignal";
 
 // ── Module-level play dedup guard (persists for process lifetime) ─────────────
 const recordedPlayKeys = new Set<string>();
@@ -1268,103 +1269,20 @@ export async function registerRoutes(
             feedTagDist[ft] = (feedTagDist[ft] ?? 0) + 1;
           }
 
-          const cs = qs.currentStats as { ab?: number; h?: number; hr?: number; tb?: number; bb?: number; rbi?: number; k?: number; sb?: number; r?: number } | null;
-          const line = qs.line ?? 0;
-          let currentStatVal = 0;
-          if (cs && line > 0) {
-            if (qs.market === "hits") currentStatVal = cs.h ?? 0;
-            else if (qs.market === "home_runs" || (qs.market as string) === "hr") currentStatVal = cs.hr ?? 0;
-            else if (qs.market === "total_bases") currentStatVal = cs.tb ?? 0;
-            else if ((qs.market as string) === "rbi") currentStatVal = cs.rbi ?? 0;
-            else if ((qs.market as string) === "runs") currentStatVal = cs.r ?? 0;
-            else if ((qs.market as string) === "stolen_bases") currentStatVal = cs.sb ?? 0;
-            else if (qs.market === "batter_strikeouts") currentStatVal = cs.k ?? 0;
-            else if (qs.market === "hrr") currentStatVal = (cs.h ?? 0) + (cs.r ?? 0) + (cs.rbi ?? 0);
-            else currentStatVal = cs.h ?? 0;
-          }
-          const alreadyHit = cs != null && line > 0 && currentStatVal >= line;
-
           const pitcherCtxCache = mlbGameCache.pitcherContext[gid];
-          let pitchMix = raw?.pitchMix ?? (raw as any)?.pitcher?.pitchMix ?? null;
-          if (!pitchMix && pitcherCtxCache?.byPitcherId) {
+          let pitchMixFallback: any = null;
+          if (!raw?.pitchMix && !raw?.pitcher?.pitchMix && pitcherCtxCache?.byPitcherId) {
             const firstPitcher = Object.values(pitcherCtxCache.byPitcherId)[0];
-            pitchMix = (firstPitcher as any)?.pitchMix ?? null;
+            pitchMixFallback = (firstPitcher as any)?.pitchMix ?? null;
           }
 
-          const formRaw = qs.formIndicator;
-          const formUpper = formRaw ? String(formRaw).toUpperCase() : null;
-
-          const sidedProb = qs.side === "OVER"
-            ? (raw?.calibratedProbabilityOver ?? qs.engineProbability ?? 0)
-            : (raw?.calibratedProbabilityUnder ?? qs.engineProbability ?? 0);
-
-          const qsAny = qs as any;
-
-          const normalizedMkt = (qs.market as string) === "hr" ? "home_runs" : qs.market;
-
-          allSignals.push({
-            playerId: qs.playerId,
-            playerName: qs.playerName,
-            market: normalizedMkt,
-            bookLine: qs.line,
-            projection: qs.projection ?? null,
-            enginePct: Math.round(sidedProb * 10) / 10,
-            edge: raw ? Math.round(raw.edge * 100) / 100 : null,
-            evPct: raw ? Math.round((raw.evPct ?? 0) * 100) / 100 : null,
-            recommendedSide: qs.side,
-            inning: qsAny.inning ?? gameState?.inning ?? 0,
-            isTopInning: qsAny.isTopInning ?? gameState?.isTopInning ?? true,
+          allSignals.push(normalizeMLBSignal(qs, {
             gameId: gid,
-            sportsbook: qs.sportsbook ?? null,
-            hrFactors: raw?.hrFactors ?? null,
-            awayAbbr: game?.awayAbbr ?? null,
-            homeAbbr: game?.homeAbbr ?? null,
-            gameStatus: game?.status ?? null,
-            signalScore: qs.signalScore,
-            confidenceTier: qs.confidenceTier,
-            signalTags: qs.signalTags,
-            feedTags: qs.feedTags,
-            playerGlowEligible: qs.playerGlowEligible,
-            formIndicator: formUpper,
-            reasons: qs.reasons ?? [],
-            explanationBullets: raw?.explanationBullets ?? qs.reasons ?? [],
-            currentStats: qs.currentStats ?? null,
-            lastABContact: qs.lastABContact ?? null,
-            badges: qs.badges ?? [],
-            riskFlags: qs.riskFlags ?? [],
-            drivers: qs.drivers ?? {},
-            alreadyHit: qsAny.alreadyHit ?? alreadyHit,
-            actionable: qsAny.actionable ?? !alreadyHit,
-            stale: qsAny.stale ?? false,
-            watchlist: qsAny.watchlist ?? false,
-            fallbackUsed: qsAny.fallbackUsed ?? false,
-            pitchMix,
-            signalTimestamp: qs.engineGeneratedAt ?? raw?.engineGeneratedAt ?? Date.now(),
-            overOdds: qsAny.overOdds ?? raw?.overOdds ?? null,
-            underOdds: qsAny.underOdds ?? raw?.underOdds ?? null,
-            oddsTimestamp: qsAny.oddsTimestamp ?? null,
-            matchupTag: raw?.matchupTag ?? null,
-            pitcherName: qsAny.pitcherName ?? null,
-            pitcherHand: qsAny.pitcherHand ?? null,
-            pitcherPitchCount: qsAny.pitcherPitchCount ?? null,
-            pitcherTimesThrough: qsAny.pitcherTimesThrough ?? null,
-            homeScore: qsAny.homeScore ?? 0,
-            awayScore: qsAny.awayScore ?? 0,
-            currentStat: qsAny.currentStat ?? currentStatVal,
-            completedAB: qsAny.completedAB ?? 0,
-            bookImplied: qsAny.bookImplied ?? null,
-            priorABResults: qsAny.priorABResults ?? [],
-            isDegraded: qsAny.isDegraded ?? false,
-            batterArchetype: qs.batterArchetype ?? null,
-            pitcherArchetype: qs.pitcherArchetype ?? null,
-            thesis: qs.thesis ?? null,
-            isFlagship: qs.isFlagship ?? false,
-            familyPenaltyFactor: qs.familyPenaltyFactor ?? null,
-            safetyCeilingApplied: qs.safetyCeilingApplied ?? false,
-            dataQuality: qs.dataQuality ?? null,
-            bvp: qsAny.bvpHistory ?? null,
-            rollingForm: qsAny.rollingForm ?? null,
-          });
+            rawOutput: raw ?? null,
+            gameState: gameState ?? null,
+            game: game ?? null,
+            pitchMixFallback,
+          }));
         }
       }
 

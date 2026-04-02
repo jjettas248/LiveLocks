@@ -10,51 +10,9 @@ import {
   generateShareTweet,
   openShareWindow,
 } from "@/lib/mlbFormatters";
+import type { MLBSignal } from "@shared/mlbSignal";
 
-export type MlbSignalData = {
-  playerId: string;
-  playerName: string;
-  market: string;
-  bookLine: number | null;
-  projection?: number | null;
-  enginePct: number;
-  edge: number | null;
-  evPct?: number | null;
-  recommendedSide: string;
-  tier?: string;
-  gameId?: string;
-  odds?: { bookLine: number } | null;
-  inning?: number;
-  signalScore?: number | null;
-  confidenceTier?: string;
-  signalTags?: string[];
-  feedTags?: string[];
-  formIndicator?: string | null;
-  reasons?: string[];
-  explanationBullets?: string[];
-  awayAbbr?: string | null;
-  homeAbbr?: string | null;
-  playerGlowEligible?: boolean;
-  currentStats?: { ab?: number; h?: number; hr?: number; tb?: number; bb?: number; rbi?: number; k?: number; sb?: number; r?: number } | null;
-  lastABContact?: { exitVelo: number | null; launchAngle: number | null; outcome: string | null } | null;
-  bvp?: { atBats: number; hits: number; avg: number | null; homeRuns: number; strikeouts: number } | null;
-  overOdds?: number | null;
-  underOdds?: number | null;
-  bookImplied?: number | null;
-  isDegraded?: boolean;
-  alreadyHit?: boolean;
-  actionable?: boolean;
-  stale?: boolean;
-  watchlist?: boolean;
-  badges?: string[];
-  riskFlags?: string[];
-  sportsbook?: string | null;
-  pitchMix?: Array<{ pitchType: string; percentage: number; avgVelocity: number | null }>;
-  safetyCeilingApplied?: boolean;
-  dataQuality?: string | null;
-  drivers?: Record<string, number>;
-  [key: string]: any;
-};
+export type MlbSignalData = MLBSignal;
 
 const PITCH_LABELS: Record<string, string> = {
   FF: "4-Seam", SI: "Sinker", FC: "Cutter", SL: "Slider",
