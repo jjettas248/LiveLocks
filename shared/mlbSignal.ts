@@ -100,4 +100,7 @@ export interface MLBSignal {
   signalTimestamp: number;
   hrFactors: Record<string, any> | null;
   rollingForm: Record<string, any> | null;
+
+  smartTags: string[];
+  primaryReason: string;
 }
