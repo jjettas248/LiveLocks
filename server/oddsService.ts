@@ -2,8 +2,8 @@ const ODDS_API_KEY = process.env.ODDS_API_KEY;
 const SGO_API_KEY  = process.env.SGO_API_KEY;
 const BASE_URL = "https://api.the-odds-api.com/v4/sports/basketball_nba";
 
-// Bookmakers to query for player props — only the six supported books
-const PROP_BOOKMAKERS = "draftkings,fanduel,hardrockbet,fanatics,prizepicks,underdogfantasy";
+// Bookmakers to query for player props — only the five whitelisted books
+const PROP_BOOKMAKERS = "draftkings,fanduel,hardrockbet,prizepicks,underdogfantasy";
 const PROP_BOOKMAKERS_SET = new Set(PROP_BOOKMAKERS.split(","));
 const PROP_REGIONS = "us";
 const BOOKMAKER_STALE_MS = 10 * 60 * 1000;

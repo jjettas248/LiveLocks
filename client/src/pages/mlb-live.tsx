@@ -162,6 +162,14 @@ const MLB_ODDS_STAT_MAP: Record<string, string> = {
   hits_allowed: "hits_allowed", walks_allowed: "walks_allowed",
 };
 
+const BOOK_DISPLAY: Record<string, string> = {
+  draftkings: "DraftKings",
+  fanduel: "FanDuel",
+  hardrockbet: "Hard Rock",
+  prizepicks: "PrizePicks",
+  underdogfantasy: "Underdog",
+};
+
 function formatOdds(n: number): string {
   return n > 0 ? `+${n}` : String(n);
 }
@@ -636,7 +644,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     staleTime: 60_000,
   });
   const oddsEntries = Object.entries(oddsData ?? {})
-    .filter(([k]) => k !== "_quotaExhausted")
+    .filter(([k]) => !k.startsWith("_"))
     .map(([book, v]) => ({ sportsbook: book, ...(v as OddsEntry) }));
 
   const calcMutation = useMutation({
@@ -843,7 +851,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                                 : "border-border/40 bg-secondary/30 text-muted-foreground hover:text-foreground"
                             }`}
                           >
-                            <span className="font-semibold">{o.sportsbook}</span>
+                            <span className="font-semibold">{BOOK_DISPLAY[o.sportsbook] ?? o.sportsbook}</span>
                             <span className="ml-1.5">{o.line}</span>
                             <span className="ml-1 text-green-400">O {formatOdds(o.overOdds)}</span>
                             <span className="ml-1 text-blue-400">U {formatOdds(o.underOdds)}</span>
