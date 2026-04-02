@@ -100,34 +100,17 @@ export class WebhookHandlers {
 
       if (event.type === "checkout.session.completed") {
         const session = event.data?.object;
-        const userId = parseInt(session?.metadata?.userId || "0", 10);
-        const metaTier = session?.metadata?.tier;
-        const customerId = typeof session?.customer === "string" ? session.customer : "";
         const subscriptionId = typeof session?.subscription === "string" ? session.subscription : "";
+        const customerId = typeof session?.customer === "string" ? session.customer : "";
 
-        if (userId && metaTier) {
-          await storage.updateUserSubscription(userId, metaTier, customerId, subscriptionId);
-          console.log("[PLAN UPDATE]", { userId, tier: metaTier, customerId, event: "checkout.session.completed" });
+        console.log("[STRIPE SYNC]", {
+          source: "webhook:checkout.session.completed",
+          customerId,
+          subscriptionId,
+          metadataTier: session?.metadata?.tier,
+          metadataUserId: session?.metadata?.userId,
+        });
 
-          const user = await storage.getUserById(userId);
-          if (user) {
-            if (metaTier === "all" && !user.sentProWelcome) {
-              storage.updateUserEmailFlags(user.id, { sentProWelcome: true })
-                .then(() => sendProWelcomeEmail(user.email))
-                .catch((err) => {
-                  storage.updateUserEmailFlags(user.id, { sentProWelcome: false }).catch(() => {});
-                  console.error("[webhook] proWelcome send failed (flag rolled back):", err.message);
-                });
-            } else if (metaTier === "elite" && !user.sentAllSportsWelcome) {
-              storage.updateUserEmailFlags(user.id, { sentAllSportsWelcome: true })
-                .then(() => sendAllSportsWelcomeEmail(user.email))
-                .catch((err) => {
-                  storage.updateUserEmailFlags(user.id, { sentAllSportsWelcome: false }).catch(() => {});
-                  console.error("[webhook] allSportsWelcome send failed (flag rolled back):", err.message);
-                });
-            }
-          }
-        }
         if (subscriptionId) {
           await syncSubscriptionToDb(stripe, subscriptionId).catch(console.error);
         }

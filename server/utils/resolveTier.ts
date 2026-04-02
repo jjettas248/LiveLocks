@@ -14,5 +14,9 @@ export function resolveTierFromSubscription(subscription: any): "all" | "elite" 
     const productTier = getTierFromProductId(productId);
     if (productTier === "all" || productTier === "elite") return productTier;
   }
+  console.warn("[resolveTierFromSubscription] Unknown Stripe subscription mapping", {
+    priceId,
+    productId,
+  });
   return null;
 }

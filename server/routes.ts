@@ -2182,21 +2182,35 @@ export async function registerRoutes(
       let user = await storage.getUserById(userId);
       if (!user) return res.status(404).json({ error: "User not found" });
 
-      if (!user.subscriptionTier && user.stripeCustomerId) {
+      if (user.stripeCustomerId) {
         try {
           const { getUncachableStripeClient } = await import("./stripeClient");
-          const { getTierFromPriceId } = await import("./billing/planMap");
+          const { resolveTierFromSubscription } = await import("./utils/resolveTier");
           const stripe = await getUncachableStripeClient();
-          const subs = await stripe.subscriptions.list({ customer: user.stripeCustomerId, status: "active" });
+          const subs = await stripe.subscriptions.list({
+            customer: user.stripeCustomerId,
+            status: "active",
+            limit: 1,
+          });
           if (subs.data.length > 0) {
             const activeSub = subs.data[0];
-            const priceId = activeSub.items.data[0]?.price?.id ?? "";
-            const repairedTier = getTierFromPriceId(priceId);
-            if (repairedTier) {
-              await storage.updateUserSubscription(userId, repairedTier, user.stripeCustomerId, activeSub.id);
-              console.log(`[stripe-fallback] repaired tier for user ${userId} → ${repairedTier}`);
+            const stripeTier = resolveTierFromSubscription(activeSub);
+            if (stripeTier && stripeTier !== user.subscriptionTier) {
+              await storage.updateUserSubscription(userId, stripeTier, user.stripeCustomerId, activeSub.id);
               user = await storage.getUserById(userId) ?? user;
+              console.log("[stripe-fallback] repaired tier", {
+                userId: user.id,
+                dbTier: user.subscriptionTier,
+                stripeTier,
+              });
             }
+          } else if (user.subscriptionTier) {
+            await storage.setUserSubscriptionTier(user.id, null);
+            user = await storage.getUserById(userId) ?? user;
+            console.warn("[stripe-fallback] revoked stale paid tier", {
+              userId: user.id,
+              previousTier: user.subscriptionTier,
+            });
           }
         } catch (stripeErr: any) {
           console.warn(`[stripe-fallback] Stripe lookup failed for user ${userId}:`, stripeErr.message);

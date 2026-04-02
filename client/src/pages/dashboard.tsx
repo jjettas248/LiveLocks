@@ -1081,13 +1081,15 @@ export default function Dashboard() {
       apiRequest("POST", "/api/stripe/checkout-complete", { tier, sessionId })
         .then(async (res) => {
           const data = await res.json().catch(() => ({}));
-          const confirmedTier = data.subscriptionTier ?? tier;
-          setLocalTier(confirmedTier);
+          const confirmedTier = data.subscriptionTier ?? null;
+          if (confirmedTier) {
+            setLocalTier(confirmedTier);
+          }
           const currentUser = queryClient.getQueryData<any>(["/api/auth/me"]);
           if (currentUser && data.hasNBA !== undefined) {
             queryClient.setQueryData(["/api/auth/me"], {
               ...currentUser,
-              subscriptionTier: confirmedTier,
+              ...(confirmedTier ? { subscriptionTier: confirmedTier } : {}),
               hasNBA: data.hasNBA,
               hasNCAAB: data.hasNCAAB,
               hasMLB: data.hasMLB,
@@ -2071,7 +2073,7 @@ export default function Dashboard() {
               data-testid="tab-mlb"
               onClick={() => {
                 setActiveTab("mlb");
-                if (!user?.isAdmin && user?.subscriptionTier !== "elite") {
+                if (!user?.isAdmin && effectiveTier !== "elite") {
                   setShowMlbUpgradeModal(true);
                 }
               }}
@@ -2084,7 +2086,7 @@ export default function Dashboard() {
               {hasLiveMlb && <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-green-500 animate-pulse" />}
               <span role="img" aria-label="baseball">⚾</span>
               MLB Live
-              {!user?.isAdmin && user?.subscriptionTier !== "elite" && (
+              {!user?.isAdmin && effectiveTier !== "elite" && (
                 <Lock className="w-3 h-3 opacity-50" />
               )}
             </button>

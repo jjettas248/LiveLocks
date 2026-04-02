@@ -138,7 +138,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
       const plan = tier as "all" | "elite";
       const newPriceId = await getPriceIdForTier(plan);
 
-      if (user.stripeSubscriptionId) {
+      if (user.stripeSubscriptionId && user.subscriptionTier === "all" && tier === "elite") {
         try {
           const subscription = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
           const item = subscription.items.data[0];
@@ -149,7 +149,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
               items: [{ id: item.id, price: newPriceId }],
             });
 
-            console.log(`[stripe-upgrade] User ${userId} triggered Stripe upgrade to tier="${tier}" — DB update deferred to webhook`);
+            console.log(`[stripe-upgrade] User ${userId} prorated upgrade all→elite — DB update deferred to webhook`);
             return res.json({ success: true, tier });
           }
           console.warn(`[stripe-upgrade] Subscription ${user.stripeSubscriptionId} not active (status=${subscription.status}) — falling back to checkout`);
@@ -208,10 +208,37 @@ export async function registerStripeRoutes(app: import("express").Express) {
         }
       }
 
-      await storage.updateUserSubscription(userId, tier, stripeCustomerId, stripeSubscriptionId);
+      let resolvedTier: string | null = null;
+
+      if (stripeSubscriptionId) {
+        try {
+          const stripeClient = await getUncachableStripeClient();
+          const subscription = await stripeClient.subscriptions.retrieve(stripeSubscriptionId, {
+            expand: ["items.data.price"],
+          });
+          const { resolveTierFromSubscription } = await import("./utils/resolveTier");
+          resolvedTier = resolveTierFromSubscription(subscription);
+        } catch (resolveErr: any) {
+          console.error("[checkout-complete] Stripe subscription resolve failed:", resolveErr.message);
+        }
+      }
+
+      if (!resolvedTier) {
+        resolvedTier = tier;
+        console.warn(`[checkout-complete] Could not resolve tier from Stripe subscription — falling back to request tier="${tier}"`);
+      }
+
+      await storage.updateUserSubscription(userId, resolvedTier!, stripeCustomerId, stripeSubscriptionId);
       const user = await storage.getUserById(userId);
       const access = resolveAccess(user?.subscriptionTier, user?.isAdmin ?? false);
-      console.log(`[checkout-complete] User ${userId} activated tier="${tier}" customer=${stripeCustomerId}`);
+      console.log("[checkout-complete]", {
+        userId,
+        sessionId,
+        stripeCustomerId,
+        stripeSubscriptionId,
+        resolvedTier,
+        dbTier: user?.subscriptionTier,
+      });
       return res.json({
         success: true,
         subscriptionTier: user?.subscriptionTier,
