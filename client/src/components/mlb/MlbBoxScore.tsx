@@ -4,6 +4,14 @@ import { Activity, RefreshCw, Search } from "lucide-react";
 import { queryClient } from "@/lib/queryClient";
 import type { MlbSignalData } from "./MlbSignalCard";
 
+const SHORT_MARKET_LABELS: Record<string, string> = {
+  hits: "H", total_bases: "TB", hrr: "HRR",
+  pitcher_k: "PK", pitcher_strikeouts: "PK", pitcher_outs: "PO",
+  hits_allowed: "HA", walks_allowed: "BB",
+  hr: "HR", home_runs: "HR",
+  batter_strikeouts: "K", hr_allowed: "HRA",
+};
+
 type MlbPlayerStat = {
   playerId: string;
   playerName: string;
@@ -252,7 +260,7 @@ export function MlbBoxScore({
                       <div className="flex items-center justify-center gap-1">
                         <span className="w-2 h-2 rounded-full" style={{ background: tierStyle.dot }} />
                         <span className="text-[9px] font-bold" style={{ color: tierStyle.dot }}>
-                          {sig.prob.toFixed(0)}%
+                          {SHORT_MARKET_LABELS[sig.market] ?? sig.market} {sig.prob.toFixed(0)}%
                         </span>
                       </div>
                     ) : (

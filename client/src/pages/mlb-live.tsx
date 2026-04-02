@@ -928,9 +928,6 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                   {calcResult.probability != null && (
                     <div className="text-center text-xs text-muted-foreground">
                       <span>Model: <strong className="text-foreground">{(calcResult.probability ?? calcResult.modelProbability ?? 0).toFixed(1)}%</strong> Over {calcBookLine}</span>
-                      {calcResult.bookImplied != null && (
-                        <span className="ml-2">· Book Implied: <strong className="text-foreground">{(calcResult.bookImplied * 100).toFixed(1)}%</strong></span>
-                      )}
                     </div>
                   )}
 
