@@ -38,6 +38,7 @@ import { ALL_MLB_MARKETS, type MLBPropInput, type MLBMarket } from "./mlb/types"
 import {
   updatePlayerPool,
   updateTeamRosters,
+  getPlayer,
   getPlayerPoolCount,
   getTeamCount,
   getPlayerByName,
@@ -49,6 +50,7 @@ import {
   syncWeather,
   syncBullpenUsage,
   mlbGameCache,
+  mlbPlayerCache,
 } from "./mlb/dataPullService";
 import { getActiveGames } from "./mlb/liveGameRegistry";
 import { mlbEdgeCache } from "./mlb/edgeCache";
@@ -1195,11 +1197,14 @@ export async function registerRoutes(
     } else if (liveSignalsStatsPk) {
       const today = new Date().toISOString().slice(0, 10);
       const validSides = new Set(["over", "under"]);
+      let persistCount = 0;
+      let skipCount = 0;
       for (const sig of apiSignals) {
         const direction = (sig.recommendedSide ?? "").toLowerCase();
-        if (!Number.isFinite(sig.enginePct) || sig.enginePct < 1 || sig.enginePct > 99) continue;
-        if (!sig.bookLine || sig.bookLine <= 0) continue;
-        if (!validSides.has(direction)) continue;
+        if (!Number.isFinite(sig.enginePct) || sig.enginePct < 1 || sig.enginePct > 99) { skipCount++; continue; }
+        if (!sig.bookLine || sig.bookLine <= 0) { skipCount++; continue; }
+        if (!validSides.has(direction)) { skipCount++; continue; }
+        persistCount++;
         const key = `${sig.playerId}|${sig.market}|${sig.bookLine}|${direction}|${liveSignalsStatsPk}|${today}`;
         storage.recordPlay({
           id: `play-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -1216,11 +1221,14 @@ export async function registerRoutes(
           projection: sig.projection ?? undefined,
           sportsbook: sig.sportsbook ?? null,
           derivedLine: sig.derivedLine ?? false,
-          engineVersion: "mlb_v2.0",
+          engineVersion: "mlb_v2.1",
           gameDate: today,
           timestamp: new Date(),
           duplicateGuard: key,
         }).catch(console.warn);
+      }
+      if (persistCount > 0 || skipCount > 0) {
+        console.log(`[MLB_PERSIST_CHECK] game=${gameId} persisted=${persistCount} skipped=${skipCount} total=${apiSignals.length}`);
       }
     }
 
@@ -1549,14 +1557,12 @@ export async function registerRoutes(
       const battingOrderSlot = parseInt(String(currentStats.battingOrder ?? raw.battingOrderSlot ?? 5), 10) || 5;
       const runners = parseInt(String(gameContext.runners ?? 0), 10) || 0;
 
-      // Parse pitcher props — all optional fields enriching the engine input
       const pitchCount = parseInt(String(pitcherProps.pitchCount ?? 0), 10) || 0;
       const pitcherIP = pitcherProps.ip != null ? parseFloat(String(pitcherProps.ip)) : null;
       const pitcherK = pitcherProps.k != null ? parseInt(String(pitcherProps.k), 10) : null;
       const pitcherHitsAllowed = pitcherProps.hitsAllowed != null ? parseInt(String(pitcherProps.hitsAllowed), 10) : null;
       const pitcherWalks = pitcherProps.walks != null ? parseInt(String(pitcherProps.walks), 10) : null;
 
-      // For pitcher markets, currentStatValue is the accumulated pitcher stat
       const isPitcherMarketManual = market === "pitcher_strikeouts" || market === "hits_allowed" || market === "walks_allowed";
       let currentStatValue: number;
       if (isPitcherMarketManual) {
@@ -1564,23 +1570,60 @@ export async function registerRoutes(
         else if (market === "hits_allowed") currentStatValue = pitcherHitsAllowed != null ? pitcherHitsAllowed : 0;
         else currentStatValue = pitcherWalks != null ? pitcherWalks : 0;
       } else {
-        currentStatValue = market === "hits" ? statsH : market === "total_bases" ? statsTB : statsK;
+        if (market === "hits") currentStatValue = statsH;
+        else if (market === "total_bases") currentStatValue = statsTB;
+        else if (market === "home_runs" || market === "hr") currentStatValue = stats ? parseInt(String((stats as any).hr ?? 0), 10) || 0 : 0;
+        else if (market === "hrr") currentStatValue = statsH + (stats ? parseInt(String((stats as any).rbi ?? 0), 10) || 0 : 0) + (stats ? parseInt(String((stats as any).r ?? 0), 10) || 0 : 0);
+        else if (market === "batter_strikeouts") currentStatValue = statsK;
+        else currentStatValue = 0;
       }
 
-      // Estimate times through order from IP (≈ 1 time through every 3 innings)
       const timesThrough = pitcherIP != null && pitcherIP > 0
         ? Math.floor(pitcherIP / 3) + 1
         : Math.floor(pitchCount / 27) + 1;
 
+      const rawPlayerId = safeStr("playerId");
+      const rawPlayerName = safeStr("playerName");
+      const rosterPlayer = (rawPlayerId ? getPlayer(rawPlayerId) : null) ?? getPlayerByName(rawPlayerName);
+      const resolvedPlayerId = rosterPlayer?.playerId ?? rawPlayerId;
+      const resolvedPlayerName = rosterPlayer?.playerName ?? rawPlayerName;
+      const resolvedTeam = safeStr("team") || rosterPlayer?.team || "";
+      const resolvedBatterHand = rosterPlayer?.bats ?? null;
+
+      const gameId = safeStr("gameId");
+      const rolling = resolvedPlayerId ? mlbPlayerCache.batterRollingStats[resolvedPlayerId] : null;
+      const MLB_LEAGUE_AVG_BA = 0.248;
+      const resolvedSeasonAvg = rolling?.seasonAvg ?? rolling?.last30?.avg ?? rolling?.last15?.avg ?? MLB_LEAGUE_AVG_BA;
+
+      const gameState = gameId ? mlbGameCache.gameState?.[gameId] : null;
+      const activePitcherId = gameState?.pitcherInGame?.playerId;
+      const pitcherSeason = activePitcherId ? mlbPlayerCache.pitcherSeasonStats[activePitcherId] : null;
+
+      const weatherCache = gameId ? mlbGameCache.weather?.[gameId] : null;
+      const parkFactor = weatherCache?.venueName
+        ? getMarketParkFactor(weatherCache.venueName, market)
+        : 1.0;
+
+      console.log(`[MLB_CALC_INPUT] ${JSON.stringify({
+        resolvedPlayerId, resolvedPlayerName, resolvedTeam, gameId, market, bookLine,
+        seasonAvg: resolvedSeasonAvg,
+        hasBatterHand: !!resolvedBatterHand,
+        hasRolling: !!rolling,
+        hasPitcherSeason: !!pitcherSeason,
+        hasGameState: !!gameState,
+        hasWeather: !!weatherCache,
+        parkFactor,
+      })}`);
+
       const input: MLBPropInput = {
-        playerId: safeStr("playerId"),
-        playerName: safeStr("playerName"),
-        team: safeStr("team"),
+        playerId: resolvedPlayerId,
+        playerName: resolvedPlayerName,
+        team: resolvedTeam,
         opponent: safeStr("opponent"),
-        gameId: safeStr("gameId"),
+        gameId,
         market,
         bookLine,
-        seasonAvg: 0,
+        seasonAvg: resolvedSeasonAvg,
         plateAppearances: statsAB + statsWalks,
         atBats: statsAB,
         currentStatValue,
@@ -1589,7 +1632,7 @@ export async function registerRoutes(
         completedAB: statsAB,
         inning,
         isTopInning,
-        batterHand: null,
+        batterHand: resolvedBatterHand,
         contactQuality: {
           exitVelocity: null,
           launchAngle: null,
@@ -1603,14 +1646,14 @@ export async function registerRoutes(
         pitcher: {
           pitchCount,
           timesThrough,
-          era: null,
-          whip: null,
-          kPer9: pitcherK != null && pitcherIP != null && pitcherIP > 0 ? (pitcherK / pitcherIP) * 9 : null,
-          bbPer9: pitcherWalks != null && pitcherIP != null && pitcherIP > 0 ? (pitcherWalks / pitcherIP) * 9 : null,
+          era: pitcherSeason?.era ?? null,
+          whip: pitcherSeason?.whip ?? null,
+          kPer9: pitcherSeason?.kPer9 ?? (pitcherK != null && pitcherIP != null && pitcherIP > 0 ? (pitcherK / pitcherIP) * 9 : null),
+          bbPer9: pitcherSeason?.bbPer9 ?? (pitcherWalks != null && pitcherIP != null && pitcherIP > 0 ? (pitcherWalks / pitcherIP) * 9 : null),
           managerLeashShort: timesThrough >= 3 && pitchCount > 80,
           isPitcherCollapsing: false,
           pitchMix: [],
-          throws: null,
+          throws: gameState?.pitcherInGame?.throws ?? null,
         },
         lineup: {
           battingOrderSlot,
@@ -1620,12 +1663,12 @@ export async function registerRoutes(
           pocketWeakness: null,
         },
         weatherPark: {
-          parkFactor: 1.0,
-          temperature: null,
-          windSpeed: null,
-          windDirection: null,
-          humidity: null,
-          isIndoors: false,
+          parkFactor,
+          temperature: weatherCache?.temperature ?? null,
+          windSpeed: weatherCache?.windSpeed ?? null,
+          windDirection: weatherCache?.windDirection ?? null,
+          humidity: weatherCache?.humidity ?? null,
+          isIndoors: weatherCache?.isIndoors ?? false,
           parkHistoryFactor: null,
         },
         bullpen: {
@@ -1637,6 +1680,14 @@ export async function registerRoutes(
 
       const output = calculateMLBPropEdge(input);
       recordMLBDiagnostic(output);
+
+      console.log(`[MLB_CALC_OUTPUT] ${JSON.stringify({
+        player: output.playerName, market: output.market,
+        probability: Math.round(output.calibratedProbability * 100) / 100,
+        projection: Math.round(output.projection * 1000) / 1000,
+        edge: Math.round(output.edge * 100) / 100,
+        side: output.recommendedSide, tier: output.confidenceTier,
+      })}`);
 
       return res.json({
         ...output,
@@ -1764,7 +1815,7 @@ export async function registerRoutes(
       const statsTB = stats ? parseInt(String(stats.tb ?? 0), 10) || 0 : 0;
       const statsK = stats ? parseInt(String(stats.k ?? 0), 10) || 0 : 0;
       const currentStatValue = stats
-        ? (market === "hits" ? statsH : market === "total_bases" ? statsTB : statsK)
+        ? (market === "hits" ? statsH : market === "total_bases" ? statsTB : (market === "home_runs" || market === "hr") ? parseInt(String((stats as any).hr ?? 0), 10) || 0 : market === "hrr" ? statsH + (parseInt(String((stats as any).rbi ?? 0), 10) || 0) + (parseInt(String((stats as any).r ?? 0), 10) || 0) : market === "batter_strikeouts" ? statsK : 0)
         : safeFloat("currentStatValue", 0);
 
       const overOdds = safeFloat("overOdds", NaN);

@@ -542,7 +542,14 @@ function applyMarketFeatureWeights(
   return baseProjection * Math.max(0.5, Math.min(2.0, featureMultiplier));
 }
 
-function buildOutput(input: MLBPropInput): MLBPropOutput {
+interface DistributionParams {
+  adjustedRate?: number;
+  remainingPA?: number;
+  currentStatValue?: number;
+  paDistribution?: Record<number, number>;
+}
+
+function buildOutput(input: MLBPropInput, distParams?: DistributionParams): MLBPropOutput {
   const features = computeFullFeatureLayer(input);
   const projResult = projectBaseValue(input);
   const featureAdjustedProjection = applyMarketFeatureWeights(
@@ -557,6 +564,10 @@ function buildOutput(input: MLBPropInput): MLBPropOutput {
       projection: safeProjection,
       threshold: input.bookLine,
       market: input.market,
+      ...(distParams?.adjustedRate != null ? { adjustedRate: distParams.adjustedRate } : {}),
+      ...(distParams?.remainingPA != null ? { remainingPA: distParams.remainingPA } : {}),
+      ...(distParams?.currentStatValue != null ? { currentStatValue: distParams.currentStatValue } : {}),
+      ...(distParams?.paDistribution ? { paDistribution: distParams.paDistribution } : {}),
     },
     null,
     input.market,
@@ -872,8 +883,6 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
 }
 
 export function calculateTBEdge(input: MLBPropInput): MLBPropOutput {
-  const output = buildOutput({ ...input, market: "total_bases" });
-
   let tbRate = input.atBats > 0 ? (input.currentStatValue ?? 0) / input.atBats : 0.40;
   tbRate = applyParkModifier(tbRate, input.weatherPark.parkFactor);
   const windOut = input.weatherPark.windDirection === "out";
@@ -882,6 +891,13 @@ export function calculateTBEdge(input: MLBPropInput): MLBPropOutput {
   tbRate = applyXSLGModifier(tbRate, input.contactQuality.xSLG, input.atBats);
 
   const rpa = input.remainingPA ?? 2;
+
+  const output = buildOutput({ ...input, market: "total_bases" }, {
+    adjustedRate: tbRate,
+    remainingPA: rpa,
+    currentStatValue: input.currentStatValue ?? 0,
+  });
+
   output.expectedHits = parseFloat((tbRate * rpa).toFixed(2));
   output.remainingPA = rpa;
 
@@ -889,11 +905,26 @@ export function calculateTBEdge(input: MLBPropInput): MLBPropOutput {
 }
 
 export function calculatePitcherKEdge(input: MLBPropInput): MLBPropOutput {
-  return buildOutput({ ...input, market: "pitcher_strikeouts" });
+  const kPer9 = input.pitcher.kPer9 ?? 8.5;
+  const kPerBatter = kPer9 / (9 * 4.3);
+  const remainingBatters = Math.max(1, (input.remainingPA ?? 18));
+
+  return buildOutput({ ...input, market: "pitcher_strikeouts" }, {
+    adjustedRate: kPerBatter,
+    remainingPA: remainingBatters,
+    currentStatValue: input.currentStatValue ?? 0,
+  });
 }
 
 export function calculatePitcherOutsEdge(input: MLBPropInput): MLBPropOutput {
-  return buildOutput({ ...input, market: "pitcher_outs" });
+  const outsPerBatter = 0.65;
+  const remainingBatters = Math.max(1, (input.remainingPA ?? 18));
+
+  return buildOutput({ ...input, market: "pitcher_outs" }, {
+    adjustedRate: outsPerBatter,
+    remainingPA: remainingBatters,
+    currentStatValue: input.currentStatValue ?? 0,
+  });
 }
 
 export function calculateHitsAllowedEdge(input: MLBPropInput): MLBPropOutput {
@@ -905,7 +936,14 @@ export function calculateWalksAllowedEdge(input: MLBPropInput): MLBPropOutput {
 }
 
 export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
-  const output = buildOutput({ ...input, market: "home_runs" });
+  const hrRate = input.contactQuality.barrelRateProxySeason ?? 0.035;
+  const rpa = input.remainingPA ?? 2;
+
+  const output = buildOutput({ ...input, market: "home_runs" }, {
+    adjustedRate: hrRate,
+    remainingPA: rpa,
+    currentStatValue: input.currentStatValue ?? 0,
+  });
 
   const { factors: hrFactors } = meetsHRQualificationGate(input);
   output.hrFactors = { count: hrFactors.count, labels: hrFactors.labels };
@@ -914,15 +952,37 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
 }
 
 export function calculateHRREdge(input: MLBPropInput): MLBPropOutput {
-  return buildOutput({ ...input, market: "hrr" });
+  let hrrRate = input.atBats > 0 ? (input.currentStatValue ?? 0) / input.atBats : 0.50;
+  hrrRate = applyParkModifier(hrrRate, input.weatherPark.parkFactor);
+  const rpa = input.remainingPA ?? 2;
+
+  return buildOutput({ ...input, market: "hrr" }, {
+    adjustedRate: hrrRate,
+    remainingPA: rpa,
+    currentStatValue: input.currentStatValue ?? 0,
+  });
 }
 
 export function calculateBatterStrikeoutsEdge(input: MLBPropInput): MLBPropOutput {
-  return buildOutput({ ...input, market: "batter_strikeouts" });
+  const pitcherKRate = input.pitcher.kPer9 != null ? input.pitcher.kPer9 / (9 * 4.3) : 0.22;
+  const rpa = input.remainingPA ?? 2;
+
+  return buildOutput({ ...input, market: "batter_strikeouts" }, {
+    adjustedRate: pitcherKRate,
+    remainingPA: rpa,
+    currentStatValue: input.currentStatValue ?? 0,
+  });
 }
 
 export function calculateHRAllowedEdge(input: MLBPropInput): MLBPropOutput {
-  return buildOutput({ ...input, market: "hr_allowed" });
+  const hrAllowedRate = 0.035;
+  const remainingBatters = Math.max(1, (input.remainingPA ?? 18));
+
+  return buildOutput({ ...input, market: "hr_allowed" }, {
+    adjustedRate: hrAllowedRate,
+    remainingPA: remainingBatters,
+    currentStatValue: input.currentStatValue ?? 0,
+  });
 }
 
 const MARKET_CALCULATORS: Record<MLBMarket, (input: MLBPropInput) => MLBPropOutput> = {

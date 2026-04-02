@@ -155,6 +155,26 @@ export function computeModelProbability(input: ProbabilityInput): ProbabilityOut
     return computeHRDistributionProbability(input);
   }
 
+  if (market === "hr_allowed" && input.adjustedRate != null && input.remainingPA != null) {
+    return computeHRDistributionProbability(input);
+  }
+
+  if (market === "total_bases" && input.remainingPA != null && input.adjustedRate != null) {
+    return computeTBDistributionProbability(input);
+  }
+
+  if ((market === "batter_strikeouts") && input.remainingPA != null && input.adjustedRate != null) {
+    return computeBinomialMarketProbability(input, "binomial");
+  }
+
+  if ((market === "pitcher_strikeouts" || market === "pitcher_outs") && input.remainingPA != null && input.adjustedRate != null) {
+    return computeBinomialMarketProbability(input, "binomial");
+  }
+
+  if (market === "hrr" && input.remainingPA != null && input.adjustedRate != null) {
+    return computeTBDistributionProbability(input);
+  }
+
   return computeNormalCDFProbability(projection, threshold, market);
 }
 
@@ -253,6 +273,84 @@ function computeHRDistributionProbability(input: ProbabilityInput): ProbabilityO
     dominantProbability: Math.max(overProb, underProb),
     isOverFavored,
     method: "hr_binomial",
+    purityTag: PROBABILITY_PURITY_TAG,
+  };
+}
+
+function computeTBDistributionProbability(input: ProbabilityInput): ProbabilityOutput {
+  const { currentStatValue = 0, adjustedRate = 0.40, threshold } = input;
+  const neededTB = Math.max(0, Math.ceil(threshold) - currentStatValue);
+
+  if (neededTB === 0) {
+    return {
+      overProbability: clampProbability(100),
+      underProbability: clampProbability(0),
+      dominantProbability: clampProbability(100),
+      isOverFavored: true,
+      method: "negative_binomial",
+      purityTag: PROBABILITY_PURITY_TAG,
+    };
+  }
+
+  let rawOver: number;
+
+  if (input.paDistribution && Object.keys(input.paDistribution).length > 0) {
+    let weightedProb = 0;
+    for (const [paCountStr, paProb] of Object.entries(input.paDistribution)) {
+      const paCount = Number(paCountStr);
+      weightedProb += negativeBinomialOverProbability(paCount, adjustedRate, neededTB) * paProb;
+    }
+    rawOver = weightedProb;
+  } else {
+    const remainingPA = input.remainingPA ?? 2;
+    rawOver = negativeBinomialOverProbability(remainingPA, adjustedRate, neededTB);
+  }
+
+  const overProb = Math.round(clampProbability(rawOver) * 100) / 100;
+  const underProb = Math.round(clampProbability(100 - rawOver) * 100) / 100;
+  const isOverFavored = overProb >= underProb;
+
+  return {
+    overProbability: overProb,
+    underProbability: underProb,
+    dominantProbability: Math.max(overProb, underProb),
+    isOverFavored,
+    method: "negative_binomial",
+    purityTag: PROBABILITY_PURITY_TAG,
+  };
+}
+
+function computeBinomialMarketProbability(
+  input: ProbabilityInput,
+  method: "binomial"
+): ProbabilityOutput {
+  const { currentStatValue = 0, adjustedRate = 0.20, threshold } = input;
+  const needed = Math.max(0, Math.ceil(threshold) - currentStatValue);
+
+  if (needed === 0) {
+    return {
+      overProbability: clampProbability(100),
+      underProbability: clampProbability(0),
+      dominantProbability: clampProbability(100),
+      isOverFavored: true,
+      method: "binomial",
+      purityTag: PROBABILITY_PURITY_TAG,
+    };
+  }
+
+  const remainingPA = input.remainingPA ?? 2;
+  const rawOver = binomialOverProbability(remainingPA, adjustedRate, needed);
+
+  const overProb = Math.round(clampProbability(rawOver) * 100) / 100;
+  const underProb = Math.round(clampProbability(100 - rawOver) * 100) / 100;
+  const isOverFavored = overProb >= underProb;
+
+  return {
+    overProbability: overProb,
+    underProbability: underProb,
+    dominantProbability: Math.max(overProb, underProb),
+    isOverFavored,
+    method: "binomial",
     purityTag: PROBABILITY_PURITY_TAG,
   };
 }

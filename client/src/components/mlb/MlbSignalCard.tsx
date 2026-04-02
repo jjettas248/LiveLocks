@@ -62,6 +62,36 @@ const PITCH_LABELS: Record<string, string> = {
   KN: "Knuckle", EP: "Eephus", ST: "Sweeper", SV: "Slurve",
 };
 
+const DRIVER_LABELS: Record<string, string> = {
+  contactQuality: "Contact",
+  batSpeedPower: "Power",
+  handednessMatchup: "Matchup",
+  pitchBlendMatchup: "Pitch Mix",
+  hotColdForm: "Form",
+  parkEnv: "Park/Env",
+  bvp: "BvP",
+  lineupOpportunity: "Lineup",
+  bullpenFactor: "Bullpen",
+  pitcherSuppression: "Pitcher",
+  pitcherDeterioration: "Fatigue",
+};
+
+function driverColor(val: number): string {
+  if (val >= 0.65) return "#22c55e";
+  if (val >= 0.55) return "#a3e635";
+  if (val >= 0.45) return "#94a3b8";
+  if (val >= 0.35) return "#f59e0b";
+  return "#ef4444";
+}
+
+function stabilityLabel(score: number | null | undefined): { text: string; color: string } | null {
+  if (score == null) return null;
+  if (score >= 80) return { text: "LOCKED", color: "#22c55e" };
+  if (score >= 60) return { text: "STABLE", color: "#a3e635" };
+  if (score >= 40) return { text: "FLUID", color: "#f59e0b" };
+  return { text: "VOLATILE", color: "#ef4444" };
+}
+
 export function MlbSignalCard({
   sig,
   onPlayerClick,
@@ -96,6 +126,13 @@ export function MlbSignalCard({
   const riskFlags = sig.riskFlags ?? [];
 
   const inningText = sig.inning && sig.inning > 0 ? `Inn ${sig.inning}` : null;
+
+  const detectionLabel = `${sig.recommendedSide} ${sig.bookLine ?? ""} ${marketLabel}`.trim();
+  const stability = stabilityLabel(sig.signalScore);
+  const drivers = sig.drivers ?? {};
+  const activeDrivers = Object.entries(drivers)
+    .filter(([k, v]) => DRIVER_LABELS[k] && Math.abs(v - 0.5) >= 0.05)
+    .sort(([, a], [, b]) => Math.abs(b - 0.5) - Math.abs(a - 0.5));
 
   return (
     <div
@@ -153,16 +190,20 @@ export function MlbSignalCard({
               <span className="text-xs font-bold text-foreground truncate">{sig.playerName}</span>
               {isClickable && <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
             </div>
-            <p className="text-[10px] text-muted-foreground">
-              {marketLabel} {sig.bookLine != null ? sig.bookLine : ""}
-              {sideOdds != null && <span className="ml-1">({formatAmericanOdds(sideOdds)})</span>}
+            <p className="text-[10px] font-semibold" style={{ color: side.accent }}>
+              {detectionLabel}
+              {sideOdds != null && <span className="ml-1 text-muted-foreground font-normal">({formatAmericanOdds(sideOdds)})</span>}
             </p>
           </div>
           <div className="flex flex-col items-end shrink-0">
             <span className="text-lg font-black tabular-nums" style={{ color: side.accent }}>
               {sig.enginePct.toFixed(0)}%
             </span>
-            <span className="text-[8px] text-muted-foreground/50">Probability</span>
+            {stability && (
+              <span className="text-[8px] font-bold" style={{ color: stability.color }}>
+                {stability.text}
+              </span>
+            )}
           </div>
         </div>
 
@@ -262,6 +303,30 @@ export function MlbSignalCard({
                     <span>{r}</span>
                   </p>
                 ))}
+              </div>
+            )}
+
+            {activeDrivers.length > 0 && (
+              <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20">
+                <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Driver Scores</div>
+                <div className="grid grid-cols-3 gap-x-3 gap-y-1">
+                  {activeDrivers.slice(0, 6).map(([key, val]) => (
+                    <div key={key} className="flex items-center justify-between gap-1">
+                      <span className="text-[8px] text-muted-foreground truncate">{DRIVER_LABELS[key]}</span>
+                      <div className="flex items-center gap-1">
+                        <div className="w-8 h-1 rounded-full bg-secondary/60 overflow-hidden">
+                          <div
+                            className="h-full rounded-full"
+                            style={{ width: `${Math.round(val * 100)}%`, backgroundColor: driverColor(val) }}
+                          />
+                        </div>
+                        <span className="text-[7px] font-bold tabular-nums" style={{ color: driverColor(val) }}>
+                          {(val * 100).toFixed(0)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>

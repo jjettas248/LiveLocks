@@ -617,6 +617,8 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     projection?: number;
     expectedTotal?: number;
     bookImplied?: number;
+    confidenceTier?: string;
+    featureScores?: Record<string, number>;
   } | null>(null);
 
   const activeCalcName = calcPlayer?.playerName ?? calcPlayerName;
@@ -929,6 +931,51 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                       {calcResult.bookImplied != null && (
                         <span className="ml-2">· Book Implied: <strong className="text-foreground">{(calcResult.bookImplied * 100).toFixed(1)}%</strong></span>
                       )}
+                    </div>
+                  )}
+
+                  {calcResult.confidenceTier && (
+                    <div className="text-center">
+                      <span className={`text-[10px] font-black px-3 py-1 rounded-full ${
+                        calcResult.confidenceTier === "ELITE" ? "bg-yellow-500/20 text-yellow-400 border border-yellow-500/30" :
+                        calcResult.confidenceTier === "STRONG" ? "bg-green-500/20 text-green-400 border border-green-500/30" :
+                        calcResult.confidenceTier === "SOLID" ? "bg-blue-500/20 text-blue-400 border border-blue-500/30" :
+                        "bg-secondary/40 text-muted-foreground border border-border/30"
+                      }`}>
+                        {calcResult.confidenceTier}
+                      </span>
+                    </div>
+                  )}
+
+                  {calcResult.featureScores && Object.keys(calcResult.featureScores).length > 0 && (
+                    <div className="rounded-lg p-3 bg-secondary/20 border border-border/20">
+                      <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Driver Scores</div>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                        {Object.entries(calcResult.featureScores as Record<string, number>)
+                          .filter(([, v]) => Math.abs(v - 0.5) >= 0.03)
+                          .sort(([, a], [, b]) => Math.abs(b - 0.5) - Math.abs(a - 0.5))
+                          .slice(0, 8)
+                          .map(([key, val]) => {
+                            const label: Record<string, string> = {
+                              contactQuality: "Contact", batSpeedPower: "Power", handednessMatchup: "Matchup",
+                              pitchBlendMatchup: "Pitch Mix", hotColdForm: "Form", parkEnv: "Park/Env",
+                              bvp: "BvP", lineupOpportunity: "Lineup", bullpenFactor: "Bullpen",
+                              pitcherSuppression: "Pitcher", pitcherDeterioration: "Fatigue",
+                            };
+                            const color = val >= 0.65 ? "#22c55e" : val >= 0.55 ? "#a3e635" : val >= 0.45 ? "#94a3b8" : val >= 0.35 ? "#f59e0b" : "#ef4444";
+                            return (
+                              <div key={key} className="flex items-center justify-between gap-1">
+                                <span className="text-[9px] text-muted-foreground">{label[key] ?? key}</span>
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-12 h-1.5 rounded-full bg-secondary/60 overflow-hidden">
+                                    <div className="h-full rounded-full" style={{ width: `${Math.round(val * 100)}%`, backgroundColor: color }} />
+                                  </div>
+                                  <span className="text-[8px] font-bold tabular-nums" style={{ color }}>{(val * 100).toFixed(0)}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                      </div>
                     </div>
                   )}
 
