@@ -9,8 +9,8 @@ export function clampProjection(p: number): number {
 }
 
 export function clampProbability(prob: number): number {
-  if (!Number.isFinite(prob)) return 2;
-  return Math.min(98, Math.max(2, prob));
+  if (!Number.isFinite(prob)) return 5;
+  return Math.min(96, Math.max(5, prob));
 }
 
 function normalCDF(x: number): number {

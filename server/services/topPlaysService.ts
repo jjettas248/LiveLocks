@@ -37,6 +37,30 @@ function classifyTier(prob: number): "ELITE" | "STRONG" | "VALUE" | "NO_EDGE" {
   return "NO_EDGE";
 }
 
+const TIER_WEIGHT: Record<string, number> = {
+  ELITE: 1.0,
+  STRONG: 0.75,
+  VALUE: 0.50,
+  NO_EDGE: 0.10,
+};
+
+const MARKET_STABILITY: Record<string, number> = {
+  hits: 0.90,
+  total_bases: 0.80,
+  pitcher_strikeouts: 0.85,
+  home_runs: 0.60,
+  points: 0.85,
+  rebounds: 0.80,
+  assists: 0.75,
+};
+
+function computeRankScore(play: TopPlayItem): number {
+  const edgePart = Math.abs(play.edge);
+  const tierPart = TIER_WEIGHT[play.confidenceTier] ?? 0.50;
+  const stability = MARKET_STABILITY[play.market ?? ""] ?? 0.70;
+  return edgePart * tierPart * stability;
+}
+
 const MARKET_LABELS: Record<string, string> = {
   points: "Points", rebounds: "Rebounds", assists: "Assists", threes: "Threes",
   steals: "Steals", blocks: "Blocks", pts_reb: "PTS+REB", pts_ast: "PTS+AST",
@@ -113,6 +137,7 @@ export function buildTopPlays(
     if (!sig || typeof sig.enginePct !== "number" || !Number.isFinite(sig.enginePct)) continue;
     if (sig.enginePct < 55) continue;
     const edge = typeof sig.edge === "number" && Number.isFinite(sig.edge) ? sig.edge : 0;
+    const trustScore = typeof sig.trustScore === "number" ? sig.trustScore : 0.5;
     plays.push({
       id: `mlb_${sig.playerId}_${sig.market}`,
       sport: "MLB",
@@ -135,8 +160,9 @@ export function buildTopPlays(
   }
 
   plays.sort((a, b) => {
-    const edgeDiff = Math.abs(b.edge) - Math.abs(a.edge);
-    if (Math.abs(edgeDiff) > 0.5) return edgeDiff;
+    const aRank = computeRankScore(a);
+    const bRank = computeRankScore(b);
+    if (Math.abs(bRank - aRank) > 0.01) return bRank - aRank;
     return b.probability - a.probability;
   });
 

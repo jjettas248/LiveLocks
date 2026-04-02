@@ -81,13 +81,17 @@ export interface MLBGameMarketOutput {
   isDerivedLine: boolean;
 }
 
+export const USER_FACING_MLB_MARKETS: MLBMarket[] = [
+  "hits",
+  "total_bases",
+  "pitcher_strikeouts",
+  "home_runs",
+];
+
 export const CORE_MARKETS: MLBMarket[] = [
   "hits",
   "total_bases",
-  "hrr",
   "pitcher_strikeouts",
-  "hits_allowed",
-  "pitcher_outs",
 ];
 
 export const EXPERIMENTAL_MARKETS: MLBMarket[] = ["home_runs", "batter_strikeouts", "hr_allowed"];
@@ -95,22 +99,39 @@ export const EXPERIMENTAL_MARKETS: MLBMarket[] = ["home_runs", "batter_strikeout
 export const EXPERIMENTAL_CONFIDENCE_CEILING: MLBConfidenceTier = "STRONG";
 
 export const MARKET_PROBABILITY_CEILINGS: Record<"core" | "experimental", number> = {
-  core: 92,
-  experimental: 85,
+  core: 96,
+  experimental: 90,
 };
 
 export const MARKET_PROBABILITY_CAPS: Record<MLBMarket, number> = {
-  hits: 78,
-  total_bases: 72,
-  home_runs: 55,
-  hrr: 74,
-  pitcher_strikeouts: 79,
-  pitcher_outs: 80,
-  walks_allowed: 72,
-  hits_allowed: 77,
-  batter_strikeouts: 65,
-  hr_allowed: 55,
+  hits: 96,
+  total_bases: 96,
+  home_runs: 85,
+  hrr: 90,
+  pitcher_strikeouts: 96,
+  pitcher_outs: 90,
+  walks_allowed: 85,
+  hits_allowed: 90,
+  batter_strikeouts: 85,
+  hr_allowed: 80,
 };
+
+export type ProjectionSource =
+  | "engine_live_context"
+  | "engine_live_plus_baseline"
+  | "baseline_only"
+  | "fallback_static";
+
+export type ProjectionQuality = "HIGH" | "MEDIUM" | "LOW";
+
+export type DistributionModelMethod =
+  | "hit_distribution"
+  | "tb_distribution"
+  | "pitcher_k_distribution"
+  | "hr_distribution"
+  | "negative_binomial"
+  | "binomial"
+  | "normal_cdf";
 
 export const MARKET_PROJECTION_TOLERANCE: Record<MLBMarket, number> = {
   hits: 0.08,
@@ -369,6 +390,12 @@ export interface MLBPropOutput {
   computedBadges?: string[];
   computedRiskFlags?: string[];
   fallbackUsed?: boolean;
+
+  projectionSource?: ProjectionSource;
+  projectionQuality?: ProjectionQuality;
+  projectionTrustScore?: number;
+  modelMethod?: DistributionModelMethod;
+  variance?: number;
 }
 
 export const STANDARD_THRESHOLDS = {

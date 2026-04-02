@@ -1747,6 +1747,11 @@ export async function registerRoutes(
             suppressionReason: o.suppressionReason,
             overOdds: o.overOdds,
             underOdds: o.underOdds,
+            projectionSource: (o as any).projectionSource ?? null,
+            projectionQuality: (o as any).projectionQuality ?? null,
+            trustScore: (o as any).projectionTrustScore ?? null,
+            modelMethod: (o as any).modelMethod ?? null,
+            variance: (o as any).variance ?? null,
           })),
         } : null,
       };

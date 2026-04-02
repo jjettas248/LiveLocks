@@ -25,8 +25,8 @@ function normalCDF(x: number): number {
 }
 
 function clampProbability(prob: number): number {
-  if (!Number.isFinite(prob)) return 2;
-  return Math.min(98, Math.max(2, prob));
+  if (!Number.isFinite(prob)) return 5;
+  return Math.min(96, Math.max(5, prob));
 }
 
 function binomialCoeff(n: number, k: number): number {
@@ -355,7 +355,7 @@ function computeBinomialMarketProbability(
   };
 }
 
-const DEFAULT_SHRINK = 0.92;
+const DEFAULT_SHRINK = 0.96;
 
 export function calibrateModelProbability(
   rawProb: number,
@@ -371,7 +371,7 @@ export function calibrateModelProbability(
 
   const shifted = rawProb - 50;
   const calibrated = 50 + shifted * shrinkage;
-  return Math.round(Math.min(99, Math.max(1, calibrated)) * 100) / 100;
+  return Math.round(Math.min(96, Math.max(5, calibrated)) * 100) / 100;
 }
 
 export function applyModelSafetyCeiling(

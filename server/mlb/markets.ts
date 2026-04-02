@@ -56,8 +56,8 @@ export function canShowSignal(market: {
   if (!isFresh(market.oddsUpdatedAt)) return false;
   return true;
 }
-import { estimateRemainingPA } from "./paEstimator";
-import { estimatePADistribution } from "./paDistribution";
+import { estimateRemainingPA, estimatePitcherRemainingBF } from "./paEstimator";
+import { estimatePADistribution, estimateRichPADistribution, estimateRichBFDistribution } from "./paDistribution";
 import {
   baseProbability,
   applyPitcherModifier,
@@ -67,6 +67,23 @@ import {
   applyXBAModifier,
   applyXSLGModifier,
 } from "./hitProbabilityModel";
+import {
+  computeHitRate,
+  computeHitTypeDistribution,
+  computeKRatePerBF,
+  computeHRRatePerPA,
+  determineProjectionSource,
+  determineProjectionQuality,
+  computeTrustScore,
+} from "./eventRates";
+import {
+  computeHitCountDistribution,
+  computeTBDistribution,
+  computeKCountDistribution,
+  computeHRDistribution,
+} from "./outcomeDistribution";
+import type { ProjectionSource, ProjectionQuality, DistributionModelMethod } from "./types";
+import { USER_FACING_MLB_MARKETS } from "./types";
 import {
   EXPERIMENTAL_MARKETS,
   CORE_MARKETS,
@@ -191,6 +208,26 @@ function applyProbabilityCeiling(
   const cap = MARKET_PROBABILITY_CAPS[market];
   if (cap && calibratedSided > cap) return cap;
   return calibratedSided;
+}
+
+function calibrateDistributionProb(rawProb: number, market?: MLBMarket): number {
+  const shifted = rawProb - 50;
+  let calibrated = 50 + shifted * 0.96;
+  calibrated = Math.min(96, Math.max(5, calibrated));
+  if (market) {
+    calibrated = applyProbabilityCeiling(calibrated, market);
+  }
+  return Math.round(calibrated * 100) / 100;
+}
+
+function applyOverRegression(
+  projection: number,
+  baselineProjection: number,
+  quality: ProjectionQuality,
+  side: string
+): number {
+  if (side !== "OVER" || quality === "HIGH") return projection;
+  return 0.70 * baselineProjection + 0.30 * projection;
 }
 
 // ── Tier 1 markets (high priority, standard composite threshold) ──────────────
@@ -654,6 +691,10 @@ function buildOutput(input: MLBPropInput, distParams?: DistributionParams): MLBP
     pitcherDeterioration: Math.round(features.pitcherDeterioration * 1000) / 1000,
   };
 
+  const projSource = determineProjectionSource(input);
+  const projQuality = determineProjectionQuality(projSource, input);
+  const trustScore = computeTrustScore(projQuality, projSource, projResult.fallbackUsed);
+
   const nowTs = Date.now();
   return {
     market: input.market,
@@ -703,6 +744,10 @@ function buildOutput(input: MLBPropInput, distParams?: DistributionParams): MLBP
     computedBadges: badgeResult.positive,
     computedRiskFlags: badgeResult.negative,
     fallbackUsed: projResult.fallbackUsed,
+    projectionSource: projSource,
+    projectionQuality: projQuality,
+    projectionTrustScore: trustScore,
+    modelMethod: probResult.method as DistributionModelMethod,
   };
 }
 
@@ -710,115 +755,74 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   const hitsInput = { ...input, market: "hits" as MLBMarket };
 
   const features = computeFullFeatureLayer(hitsInput);
-  const batSpeed = computeBatSpeedEngine(hitsInput);
-  const deterioration = computeSpecPitcherDeterioration(hitsInput);
-
   const currentHits = hitsInput.currentStatValue ?? 0;
-  const playerAB = hitsInput.atBats > 0 ? hitsInput.atBats : hitsInput.completedAB;
 
-  let adjustedRate = baseProbability(currentHits, playerAB);
+  const adjustedRate = computeHitRate(hitsInput);
 
-  const pitcherKRate = hitsInput.pitcher.kPer9 != null ? hitsInput.pitcher.kPer9 / 9 : 0.22;
-  const pitcherBABIP = 0.296;
-  adjustedRate = applyPitcherModifier(adjustedRate, pitcherKRate, pitcherBABIP);
-  adjustedRate = applyParkModifier(adjustedRate, hitsInput.weatherPark.parkFactor);
-  adjustedRate = applyBullpenModifier(adjustedRate, hitsInput.bullpen.bullpenEra);
-  adjustedRate = applyXBAModifier(adjustedRate, hitsInput.contactQuality.xBA, playerAB);
-
-  const windOut = hitsInput.weatherPark.windDirection === "out";
-  const temperature = hitsInput.weatherPark.temperature ?? 70;
-  adjustedRate = applyWeatherModifier(adjustedRate, windOut, temperature);
-
-  const featureAdj =
-    1 +
-    0.12 * (features.contactQuality - 0.5) +
-    0.08 * (features.handednessMatchup - 0.5) +
-    0.06 * (features.pitchBlendMatchup - 0.5) +
-    0.05 * (features.hotColdForm - 0.5) +
-    0.04 * (features.bvp - 0.5) +
-    0.03 * (batSpeed.batSpeedPowerScore - 0.5) +
-    0.06 * deterioration.hitsAllowed +
-    0.04 * features.bullpenFactor -
-    0.08 * features.pitcherSuppression;
-  adjustedRate *= Math.max(0.7, Math.min(1.3, featureAdj));
-
-  const paDist = estimatePADistribution(
+  const paDist = estimateRichPADistribution(
     hitsInput.inning,
     hitsInput.lineup.battingOrderSlot,
     hitsInput.currentRuns ?? 4.5,
-    hitsInput.leagueAvgRuns ?? 4.5
+    hitsInput.leagueAvgRuns ?? 4.5,
+    hitsInput.isTopInning
   );
 
-  const expectedHits = paDist[1] * adjustedRate + paDist[2] * 2 * adjustedRate + paDist[3] * 3 * adjustedRate;
-  const rpa = (1 * paDist[1]) + (2 * paDist[2]) + (3 * paDist[3]);
+  const distResult = computeHitCountDistribution(paDist, adjustedRate, currentHits, hitsInput.bookLine);
 
-  const isExperimental = EXPERIMENTAL_MARKETS.includes("hits" as MLBMarket);
+  const rawOverProb = distResult.overProbability;
+  const rawUnderProb = distResult.underProbability;
+  const isOverFavored = rawOverProb >= rawUnderProb;
+  const dominantRaw = Math.max(rawOverProb, rawUnderProb);
 
-  const probResult: FullProbabilityResult = computeFullModelProbability(
-    {
-      projection: expectedHits + (hitsInput.currentStatValue ?? 0),
-      threshold: hitsInput.bookLine,
-      market: "hits",
-      remainingPA: rpa,
-      adjustedRate,
-      currentStatValue: currentHits,
-      paDistribution: paDist as unknown as Record<number, number>,
-    },
-    null,
-    "hits",
-    false,
-    isExperimental
-  );
+  const projSource = determineProjectionSource(hitsInput);
+  const projQuality = determineProjectionQuality(projSource, hitsInput);
+  const projResult = projectBaseValue(hitsInput);
+  const trustScore = computeTrustScore(projQuality, projSource, projResult.fallbackUsed);
 
-  const rawProbabilityOver = probResult.rawOverProbability;
-  const rawProbabilityUnder = probResult.rawUnderProbability;
-  const calibratedProbabilityOver = probResult.calibratedOverProbability;
-  const calibratedProbabilityUnder = probResult.calibratedUnderProbability;
-  const calibratedDominant = probResult.dominantCalibratedProbability;
-  const dominantRawProb = probResult.dominantRawProbability;
-  const isOverFavored = probResult.isOverFavored;
-
-  const calibratedSided = isOverFavored ? calibratedProbabilityOver : calibratedProbabilityUnder;
+  const calibratedOver = calibrateDistributionProb(rawOverProb, "hits");
+  const calibratedUnder = calibrateDistributionProb(rawUnderProb, "hits");
+  const calibratedDominant = Math.max(calibratedOver, calibratedUnder);
+  const calibratedSided = isOverFavored ? calibratedOver : calibratedUnder;
 
   const bookImplied = computeBookImplied(hitsInput, isOverFavored);
   const edge = calibratedSided - bookImplied;
-  let confidenceTier = determineConfidenceTier(edge);
+  const badgeResult = computeBadges(hitsInput, features);
+  const oddsAge = hitsInput.oddsUpdatedAt ? Date.now() - hitsInput.oddsUpdatedAt : 0;
+  let confidenceTier = determineConfidenceTier(edge, features, badgeResult, oddsAge);
   let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
 
-  const adjustedProjection = clampProjection(expectedHits + currentHits);
-
-  const projResult = projectBaseValue(hitsInput);
   const warnings = [...projResult.warnings];
-
-  if (isExperimental) {
-    confidenceTier = capConfidenceTier(confidenceTier, EXPERIMENTAL_CONFIDENCE_CEILING);
-    recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
-    warnings.push(`hits is experimental — confidence capped at ${EXPERIMENTAL_CONFIDENCE_CEILING}`);
-  }
+  const adjustedProjection = clampProjection(distResult.expectedHits);
 
   const suppression = checkSuppression(hitsInput, edge, "hits", adjustedProjection);
   const finalEdge = suppression.suppressed ? 0 : Math.round(edge * 100) / 100;
-
   if (suppression.suppressed) {
     confidenceTier = "NO_EDGE";
     recommendedSide = "NO_EDGE";
   }
 
+  if (projQuality === "LOW" && confidenceTier === "ELITE") {
+    confidenceTier = "STRONG";
+    warnings.push("TRUST_GATE: LOW quality cannot surface ELITE");
+  }
+
   const completeProjectionLog: ProjectionLog = {
     ...projResult.projectionLog,
-    rawProbability: Math.round(dominantRawProb * 100) / 100,
+    rawProbability: Math.round(dominantRaw * 100) / 100,
     calibratedProbability: Math.round(calibratedDominant * 100) / 100,
     confidenceTier,
     modeUsed: projResult.mode === "early_explosive" ? "EARLY_EXPLOSIVE" : "STANDARD",
   };
 
-  const partialOutput: Partial<MLBPropOutput> = {
-    mode: projResult.mode,
-    isExperimental,
-  };
+  const explanationBullets = buildExplanationBullets(hitsInput, { mode: projResult.mode, isExperimental: false });
 
-  const explanationBullets = buildExplanationBullets(hitsInput, partialOutput);
+  const rpa = Object.entries(paDist).reduce((s, [k, v]) => s + Number(k) * v, 0);
+  const legacyPaDist = estimatePADistribution(
+    hitsInput.inning, hitsInput.lineup.battingOrderSlot,
+    hitsInput.currentRuns ?? 4.5, hitsInput.leagueAvgRuns ?? 4.5
+  );
 
+  const nowTs = Date.now();
   return {
     market: "hits",
     playerId: hitsInput.playerId,
@@ -830,11 +834,11 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
     underOdds: hitsInput.underOdds ?? null,
     modifiers: projResult.modifiers,
     projectionLog: completeProjectionLog,
-    rawProbabilityOver: Math.round(rawProbabilityOver * 100) / 100,
-    rawProbabilityUnder: Math.round(rawProbabilityUnder * 100) / 100,
-    calibratedProbabilityOver: Math.round(calibratedProbabilityOver * 100) / 100,
-    calibratedProbabilityUnder: Math.round(calibratedProbabilityUnder * 100) / 100,
-    rawProbability: Math.round(dominantRawProb * 100) / 100,
+    rawProbabilityOver: Math.round(rawOverProb * 100) / 100,
+    rawProbabilityUnder: Math.round(rawUnderProb * 100) / 100,
+    calibratedProbabilityOver: Math.round(calibratedOver * 100) / 100,
+    calibratedProbabilityUnder: Math.round(calibratedUnder * 100) / 100,
+    rawProbability: Math.round(dominantRaw * 100) / 100,
     calibratedProbability: Math.round(calibratedDominant * 100) / 100,
     edge: finalEdge,
     recommendedSide,
@@ -842,22 +846,22 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
     mode: projResult.mode,
     completedAB: hitsInput.completedAB,
     twoABRuleSatisfied: projResult.twoABRuleSatisfied,
-    expectedHits: parseFloat(expectedHits.toFixed(2)),
+    expectedHits: parseFloat((distResult.expectedHits - currentHits).toFixed(2)),
     remainingPA: rpa,
     adjustedHitRate: parseFloat(adjustedRate.toFixed(4)),
     bookImplied: Math.round(bookImplied * 100) / 100,
-    paDistribution: paDist,
-    isExperimental,
+    paDistribution: legacyPaDist,
+    isExperimental: false,
     suppressed: suppression.suppressed,
     suppressionReason: suppression.reason,
     explanationBullets,
     warnings,
-    engineGeneratedAt: Date.now(),
-    oddsUpdatedAt: Date.now(),
-    projectionUpdatedAt: Date.now(),
+    engineGeneratedAt: nowTs,
+    oddsUpdatedAt: nowTs,
+    projectionUpdatedAt: nowTs,
     sportsbook: null,
     isDerivedLine: false,
-    signalTimestamp: Date.now(),
+    signalTimestamp: nowTs,
     formIndicator: classifyForm(hitsInput),
     formScore: Math.round(computeFormScore(hitsInput) * 100) / 100,
     evPct: Math.round((calibratedDominant / 100 - 0.5) * 100 * 10) / 10,
@@ -876,44 +880,282 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
       pitcherSuppression: Math.round(features.pitcherSuppression * 1000) / 1000,
       pitcherDeterioration: Math.round(features.pitcherDeterioration * 1000) / 1000,
     },
-    computedBadges: computeBadges(hitsInput, features).positive,
-    computedRiskFlags: computeBadges(hitsInput, features).negative,
+    computedBadges: badgeResult.positive,
+    computedRiskFlags: badgeResult.negative,
     fallbackUsed: projResult.fallbackUsed,
+    projectionSource: projSource,
+    projectionQuality: projQuality,
+    projectionTrustScore: trustScore,
+    modelMethod: "hit_distribution",
+    variance: Math.round(distResult.variance * 1000) / 1000,
   };
 }
 
 export function calculateTBEdge(input: MLBPropInput): MLBPropOutput {
-  let tbRate = input.atBats > 0 ? (input.currentStatValue ?? 0) / input.atBats : 0.40;
-  tbRate = applyParkModifier(tbRate, input.weatherPark.parkFactor);
-  const windOut = input.weatherPark.windDirection === "out";
-  const temperature = input.weatherPark.temperature ?? 70;
-  tbRate = applyWeatherModifier(tbRate, windOut, temperature);
-  tbRate = applyXSLGModifier(tbRate, input.contactQuality.xSLG, input.atBats);
+  const tbInput = { ...input, market: "total_bases" as MLBMarket };
+  const features = computeFullFeatureLayer(tbInput);
+  const currentTB = tbInput.currentStatValue ?? 0;
 
-  const rpa = input.remainingPA ?? 2;
+  const hitRate = computeHitRate(tbInput);
+  const hitTypeSplits = computeHitTypeDistribution(tbInput);
 
-  const output = buildOutput({ ...input, market: "total_bases" }, {
-    adjustedRate: tbRate,
+  const paDist = estimateRichPADistribution(
+    tbInput.inning,
+    tbInput.lineup.battingOrderSlot,
+    tbInput.currentRuns ?? 4.5,
+    tbInput.leagueAvgRuns ?? 4.5,
+    tbInput.isTopInning
+  );
+
+  const distResult = computeTBDistribution(paDist, hitRate, hitTypeSplits, currentTB, tbInput.bookLine);
+
+  const rawOverProb = distResult.overProbability;
+  const rawUnderProb = distResult.underProbability;
+  const isOverFavored = rawOverProb >= rawUnderProb;
+  const dominantRaw = Math.max(rawOverProb, rawUnderProb);
+
+  const projSource = determineProjectionSource(tbInput);
+  const projQuality = determineProjectionQuality(projSource, tbInput);
+  const projResult = projectBaseValue(tbInput);
+  const trustScore = computeTrustScore(projQuality, projSource, projResult.fallbackUsed);
+
+  const calibratedOver = calibrateDistributionProb(rawOverProb, "total_bases");
+  const calibratedUnder = calibrateDistributionProb(rawUnderProb, "total_bases");
+  const calibratedDominant = Math.max(calibratedOver, calibratedUnder);
+  const calibratedSided = isOverFavored ? calibratedOver : calibratedUnder;
+
+  const bookImplied = computeBookImplied(tbInput, isOverFavored);
+  const edge = calibratedSided - bookImplied;
+  const badgeResult = computeBadges(tbInput, features);
+  const oddsAge = tbInput.oddsUpdatedAt ? Date.now() - tbInput.oddsUpdatedAt : 0;
+  let confidenceTier = determineConfidenceTier(edge, features, badgeResult, oddsAge);
+  let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
+
+  const warnings = [...projResult.warnings];
+  const adjustedProjection = clampProjection(distResult.expectedTB);
+
+  const suppression = checkSuppression(tbInput, edge, "total_bases", adjustedProjection);
+  const finalEdge = suppression.suppressed ? 0 : Math.round(edge * 100) / 100;
+  if (suppression.suppressed) {
+    confidenceTier = "NO_EDGE";
+    recommendedSide = "NO_EDGE";
+  }
+
+  if (projQuality === "LOW" && confidenceTier === "ELITE") {
+    confidenceTier = "STRONG";
+    warnings.push("TRUST_GATE: LOW quality cannot surface ELITE");
+  }
+
+  const completeProjectionLog: ProjectionLog = {
+    ...projResult.projectionLog,
+    rawProbability: Math.round(dominantRaw * 100) / 100,
+    calibratedProbability: Math.round(calibratedDominant * 100) / 100,
+    confidenceTier,
+    modeUsed: projResult.mode === "early_explosive" ? "EARLY_EXPLOSIVE" : "STANDARD",
+  };
+
+  const explanationBullets = buildExplanationBullets(tbInput, { mode: projResult.mode, isExperimental: false });
+  const rpa = Object.entries(paDist).reduce((s, [k, v]) => s + Number(k) * v, 0);
+
+  const nowTs = Date.now();
+  return {
+    market: "total_bases",
+    playerId: tbInput.playerId,
+    playerName: tbInput.playerName,
+    gameId: tbInput.gameId,
+    projection: parseFloat(adjustedProjection.toFixed(3)),
+    bookLine: tbInput.bookLine,
+    overOdds: tbInput.overOdds ?? null,
+    underOdds: tbInput.underOdds ?? null,
+    modifiers: projResult.modifiers,
+    projectionLog: completeProjectionLog,
+    rawProbabilityOver: Math.round(rawOverProb * 100) / 100,
+    rawProbabilityUnder: Math.round(rawUnderProb * 100) / 100,
+    calibratedProbabilityOver: Math.round(calibratedOver * 100) / 100,
+    calibratedProbabilityUnder: Math.round(calibratedUnder * 100) / 100,
+    rawProbability: Math.round(dominantRaw * 100) / 100,
+    calibratedProbability: Math.round(calibratedDominant * 100) / 100,
+    edge: finalEdge,
+    recommendedSide,
+    confidenceTier,
+    mode: projResult.mode,
+    completedAB: tbInput.completedAB,
+    twoABRuleSatisfied: projResult.twoABRuleSatisfied,
+    expectedHits: parseFloat((distResult.expectedTB - currentTB).toFixed(2)),
     remainingPA: rpa,
-    currentStatValue: input.currentStatValue ?? 0,
-  });
-
-  output.expectedHits = parseFloat((tbRate * rpa).toFixed(2));
-  output.remainingPA = rpa;
-
-  return output;
+    adjustedHitRate: parseFloat(hitRate.toFixed(4)),
+    bookImplied: Math.round(bookImplied * 100) / 100,
+    isExperimental: false,
+    suppressed: suppression.suppressed,
+    suppressionReason: suppression.reason,
+    explanationBullets,
+    warnings,
+    engineGeneratedAt: nowTs,
+    oddsUpdatedAt: nowTs,
+    projectionUpdatedAt: nowTs,
+    sportsbook: null,
+    isDerivedLine: false,
+    signalTimestamp: nowTs,
+    formIndicator: classifyForm(tbInput),
+    formScore: Math.round(computeFormScore(tbInput) * 100) / 100,
+    evPct: Math.round((calibratedDominant / 100 - 0.5) * 100 * 10) / 10,
+    contextScore: Math.round(computeStrongContextScore(tbInput) * 100) / 100,
+    matchupTag: tbInput.pitcher.timesThrough >= 3 ? "vs 3rd Time Through" : tbInput.pitcher.pitchCount >= 80 ? "vs Fatigue" : tbInput.pitcher.throws ? `vs ${tbInput.pitcher.throws}HP` : null,
+    featureScores: {
+      contactQuality: Math.round(features.contactQuality * 1000) / 1000,
+      batSpeedPower: Math.round(features.batSpeedPower * 1000) / 1000,
+      handednessMatchup: Math.round(features.handednessMatchup * 1000) / 1000,
+      pitchBlendMatchup: Math.round(features.pitchBlendMatchup * 1000) / 1000,
+      hotColdForm: Math.round(features.hotColdForm * 1000) / 1000,
+      parkEnv: Math.round(features.parkEnv * 1000) / 1000,
+      bvp: Math.round(features.bvp * 1000) / 1000,
+      lineupOpportunity: Math.round(features.lineupOpportunity * 1000) / 1000,
+      bullpenFactor: Math.round(features.bullpenFactor * 1000) / 1000,
+      pitcherSuppression: Math.round(features.pitcherSuppression * 1000) / 1000,
+      pitcherDeterioration: Math.round(features.pitcherDeterioration * 1000) / 1000,
+    },
+    computedBadges: badgeResult.positive,
+    computedRiskFlags: badgeResult.negative,
+    fallbackUsed: projResult.fallbackUsed,
+    projectionSource: projSource,
+    projectionQuality: projQuality,
+    projectionTrustScore: trustScore,
+    modelMethod: "tb_distribution",
+    variance: Math.round(distResult.variance * 1000) / 1000,
+  };
 }
 
 export function calculatePitcherKEdge(input: MLBPropInput): MLBPropOutput {
-  const kPer9 = input.pitcher.kPer9 ?? 8.5;
-  const kPerBatter = kPer9 / (9 * 4.3);
-  const remainingBatters = Math.max(1, (input.remainingPA ?? 18));
+  const kInput = { ...input, market: "pitcher_strikeouts" as MLBMarket };
+  const features = computeFullFeatureLayer(kInput);
+  const currentK = kInput.currentStatValue ?? 0;
 
-  return buildOutput({ ...input, market: "pitcher_strikeouts" }, {
-    adjustedRate: kPerBatter,
-    remainingPA: remainingBatters,
-    currentStatValue: input.currentStatValue ?? 0,
-  });
+  const kRatePerBF = computeKRatePerBF(kInput);
+
+  const bfDist = estimateRichBFDistribution(
+    kInput.inning,
+    kInput.pitcher.pitchCount,
+    kInput.pitcher.kPer9 ?? 8.5,
+    kInput.pitcher.timesThrough,
+    kInput.pitcher.managerLeashShort
+  );
+
+  const distResult = computeKCountDistribution(bfDist, kRatePerBF, currentK, kInput.bookLine);
+
+  const rawOverProb = distResult.overProbability;
+  const rawUnderProb = distResult.underProbability;
+  const isOverFavored = rawOverProb >= rawUnderProb;
+  const dominantRaw = Math.max(rawOverProb, rawUnderProb);
+
+  const projSource = determineProjectionSource(kInput);
+  const projQuality = determineProjectionQuality(projSource, kInput);
+  const projResult = projectBaseValue(kInput);
+  const trustScore = computeTrustScore(projQuality, projSource, projResult.fallbackUsed);
+
+  const calibratedOver = calibrateDistributionProb(rawOverProb, "pitcher_strikeouts");
+  const calibratedUnder = calibrateDistributionProb(rawUnderProb, "pitcher_strikeouts");
+  const calibratedDominant = Math.max(calibratedOver, calibratedUnder);
+  const calibratedSided = isOverFavored ? calibratedOver : calibratedUnder;
+
+  const bookImplied = computeBookImplied(kInput, isOverFavored);
+  const edge = calibratedSided - bookImplied;
+  const badgeResult = computeBadges(kInput, features);
+  const oddsAge = kInput.oddsUpdatedAt ? Date.now() - kInput.oddsUpdatedAt : 0;
+  let confidenceTier = determineConfidenceTier(edge, features, badgeResult, oddsAge);
+  let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
+
+  const warnings = [...projResult.warnings];
+  const adjustedProjection = clampProjection(distResult.expectedK);
+
+  const suppression = checkSuppression(kInput, edge, "pitcher_strikeouts", adjustedProjection);
+  const finalEdge = suppression.suppressed ? 0 : Math.round(edge * 100) / 100;
+  if (suppression.suppressed) {
+    confidenceTier = "NO_EDGE";
+    recommendedSide = "NO_EDGE";
+  }
+
+  if (projQuality === "LOW" && confidenceTier === "ELITE") {
+    confidenceTier = "STRONG";
+    warnings.push("TRUST_GATE: LOW quality cannot surface ELITE");
+  }
+
+  const completeProjectionLog: ProjectionLog = {
+    ...projResult.projectionLog,
+    rawProbability: Math.round(dominantRaw * 100) / 100,
+    calibratedProbability: Math.round(calibratedDominant * 100) / 100,
+    confidenceTier,
+    modeUsed: projResult.mode === "early_explosive" ? "EARLY_EXPLOSIVE" : "STANDARD",
+  };
+
+  const explanationBullets = buildExplanationBullets(kInput, { mode: projResult.mode, isExperimental: false });
+  const meanBF = Object.entries(bfDist).reduce((s, [k, v]) => s + Number(k) * v, 0);
+
+  const nowTs = Date.now();
+  return {
+    market: "pitcher_strikeouts",
+    playerId: kInput.playerId,
+    playerName: kInput.playerName,
+    gameId: kInput.gameId,
+    projection: parseFloat(adjustedProjection.toFixed(3)),
+    bookLine: kInput.bookLine,
+    overOdds: kInput.overOdds ?? null,
+    underOdds: kInput.underOdds ?? null,
+    modifiers: projResult.modifiers,
+    projectionLog: completeProjectionLog,
+    rawProbabilityOver: Math.round(rawOverProb * 100) / 100,
+    rawProbabilityUnder: Math.round(rawUnderProb * 100) / 100,
+    calibratedProbabilityOver: Math.round(calibratedOver * 100) / 100,
+    calibratedProbabilityUnder: Math.round(calibratedUnder * 100) / 100,
+    rawProbability: Math.round(dominantRaw * 100) / 100,
+    calibratedProbability: Math.round(calibratedDominant * 100) / 100,
+    edge: finalEdge,
+    recommendedSide,
+    confidenceTier,
+    mode: projResult.mode,
+    completedAB: kInput.completedAB,
+    twoABRuleSatisfied: projResult.twoABRuleSatisfied,
+    expectedHits: parseFloat((distResult.expectedK - currentK).toFixed(2)),
+    remainingPA: meanBF,
+    adjustedHitRate: parseFloat(kRatePerBF.toFixed(4)),
+    bookImplied: Math.round(bookImplied * 100) / 100,
+    isExperimental: false,
+    suppressed: suppression.suppressed,
+    suppressionReason: suppression.reason,
+    explanationBullets,
+    warnings,
+    engineGeneratedAt: nowTs,
+    oddsUpdatedAt: nowTs,
+    projectionUpdatedAt: nowTs,
+    sportsbook: null,
+    isDerivedLine: false,
+    signalTimestamp: nowTs,
+    formIndicator: classifyForm(kInput),
+    formScore: Math.round(computeFormScore(kInput) * 100) / 100,
+    evPct: Math.round((calibratedDominant / 100 - 0.5) * 100 * 10) / 10,
+    contextScore: Math.round(computeStrongContextScore(kInput) * 100) / 100,
+    matchupTag: kInput.pitcher.timesThrough >= 3 ? "vs 3rd Time Through" : kInput.pitcher.pitchCount >= 80 ? "vs Fatigue" : kInput.pitcher.throws ? `vs ${kInput.pitcher.throws}HP` : null,
+    featureScores: {
+      contactQuality: Math.round(features.contactQuality * 1000) / 1000,
+      batSpeedPower: Math.round(features.batSpeedPower * 1000) / 1000,
+      handednessMatchup: Math.round(features.handednessMatchup * 1000) / 1000,
+      pitchBlendMatchup: Math.round(features.pitchBlendMatchup * 1000) / 1000,
+      hotColdForm: Math.round(features.hotColdForm * 1000) / 1000,
+      parkEnv: Math.round(features.parkEnv * 1000) / 1000,
+      bvp: Math.round(features.bvp * 1000) / 1000,
+      lineupOpportunity: Math.round(features.lineupOpportunity * 1000) / 1000,
+      bullpenFactor: Math.round(features.bullpenFactor * 1000) / 1000,
+      pitcherSuppression: Math.round(features.pitcherSuppression * 1000) / 1000,
+      pitcherDeterioration: Math.round(features.pitcherDeterioration * 1000) / 1000,
+    },
+    computedBadges: badgeResult.positive,
+    computedRiskFlags: badgeResult.negative,
+    fallbackUsed: projResult.fallbackUsed,
+    projectionSource: projSource,
+    projectionQuality: projQuality,
+    projectionTrustScore: trustScore,
+    modelMethod: "pitcher_k_distribution",
+    variance: Math.round(distResult.variance * 1000) / 1000,
+  };
 }
 
 export function calculatePitcherOutsEdge(input: MLBPropInput): MLBPropOutput {
@@ -936,19 +1178,139 @@ export function calculateWalksAllowedEdge(input: MLBPropInput): MLBPropOutput {
 }
 
 export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
-  const hrRate = input.contactQuality.barrelRateProxySeason ?? 0.035;
-  const rpa = input.remainingPA ?? 2;
+  const hrInput = { ...input, market: "home_runs" as MLBMarket };
+  const features = computeFullFeatureLayer(hrInput);
+  const currentHR = hrInput.currentStatValue ?? 0;
 
-  const output = buildOutput({ ...input, market: "home_runs" }, {
-    adjustedRate: hrRate,
+  const hrRatePerPA = computeHRRatePerPA(hrInput);
+
+  const paDist = estimateRichPADistribution(
+    hrInput.inning,
+    hrInput.lineup.battingOrderSlot,
+    hrInput.currentRuns ?? 4.5,
+    hrInput.leagueAvgRuns ?? 4.5,
+    hrInput.isTopInning
+  );
+
+  const distResult = computeHRDistribution(paDist, hrRatePerPA, currentHR, hrInput.bookLine);
+
+  const rawOverProb = distResult.overProbability;
+  const rawUnderProb = distResult.underProbability;
+  const isOverFavored = rawOverProb >= rawUnderProb;
+  const dominantRaw = Math.max(rawOverProb, rawUnderProb);
+
+  const projSource = determineProjectionSource(hrInput);
+  const projQuality = determineProjectionQuality(projSource, hrInput);
+  const projResult = projectBaseValue(hrInput);
+  const trustScore = computeTrustScore(projQuality, projSource, projResult.fallbackUsed);
+
+  const calibratedOver = calibrateDistributionProb(rawOverProb, "home_runs");
+  const calibratedUnder = calibrateDistributionProb(rawUnderProb, "home_runs");
+  const calibratedDominant = Math.max(calibratedOver, calibratedUnder);
+  const calibratedSided = isOverFavored ? calibratedOver : calibratedUnder;
+
+  const bookImplied = computeBookImplied(hrInput, isOverFavored);
+  const edge = calibratedSided - bookImplied;
+  const badgeResult = computeBadges(hrInput, features);
+  const oddsAge = hrInput.oddsUpdatedAt ? Date.now() - hrInput.oddsUpdatedAt : 0;
+  let confidenceTier = determineConfidenceTier(edge, features, badgeResult, oddsAge);
+  let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
+
+  const warnings = [...projResult.warnings];
+  const adjustedProjection = clampProjection(distResult.expectedHR);
+
+  const suppression = checkSuppression(hrInput, edge, "home_runs", adjustedProjection);
+  const finalEdge = suppression.suppressed ? 0 : Math.round(edge * 100) / 100;
+  if (suppression.suppressed) {
+    confidenceTier = "NO_EDGE";
+    recommendedSide = "NO_EDGE";
+  }
+
+  if (projQuality === "LOW" && confidenceTier === "ELITE") {
+    confidenceTier = "STRONG";
+    warnings.push("TRUST_GATE: LOW quality cannot surface ELITE");
+  }
+
+  const completeProjectionLog: ProjectionLog = {
+    ...projResult.projectionLog,
+    rawProbability: Math.round(dominantRaw * 100) / 100,
+    calibratedProbability: Math.round(calibratedDominant * 100) / 100,
+    confidenceTier,
+    modeUsed: projResult.mode === "early_explosive" ? "EARLY_EXPLOSIVE" : "STANDARD",
+  };
+
+  const explanationBullets = buildExplanationBullets(hrInput, { mode: projResult.mode, isExperimental: false });
+  const rpa = Object.entries(paDist).reduce((s, [k, v]) => s + Number(k) * v, 0);
+
+  const { factors: hrFactors } = meetsHRQualificationGate(hrInput);
+
+  const nowTs = Date.now();
+  return {
+    market: "home_runs",
+    playerId: hrInput.playerId,
+    playerName: hrInput.playerName,
+    gameId: hrInput.gameId,
+    projection: parseFloat(adjustedProjection.toFixed(3)),
+    bookLine: hrInput.bookLine,
+    overOdds: hrInput.overOdds ?? null,
+    underOdds: hrInput.underOdds ?? null,
+    modifiers: projResult.modifiers,
+    projectionLog: completeProjectionLog,
+    rawProbabilityOver: Math.round(rawOverProb * 100) / 100,
+    rawProbabilityUnder: Math.round(rawUnderProb * 100) / 100,
+    calibratedProbabilityOver: Math.round(calibratedOver * 100) / 100,
+    calibratedProbabilityUnder: Math.round(calibratedUnder * 100) / 100,
+    rawProbability: Math.round(dominantRaw * 100) / 100,
+    calibratedProbability: Math.round(calibratedDominant * 100) / 100,
+    edge: finalEdge,
+    recommendedSide,
+    confidenceTier,
+    mode: projResult.mode,
+    completedAB: hrInput.completedAB,
+    twoABRuleSatisfied: projResult.twoABRuleSatisfied,
+    expectedHits: parseFloat((distResult.expectedHR - currentHR).toFixed(2)),
     remainingPA: rpa,
-    currentStatValue: input.currentStatValue ?? 0,
-  });
-
-  const { factors: hrFactors } = meetsHRQualificationGate(input);
-  output.hrFactors = { count: hrFactors.count, labels: hrFactors.labels };
-
-  return output;
+    adjustedHitRate: parseFloat(hrRatePerPA.toFixed(4)),
+    bookImplied: Math.round(bookImplied * 100) / 100,
+    isExperimental: false,
+    suppressed: suppression.suppressed,
+    suppressionReason: suppression.reason,
+    explanationBullets,
+    warnings,
+    engineGeneratedAt: nowTs,
+    oddsUpdatedAt: nowTs,
+    projectionUpdatedAt: nowTs,
+    sportsbook: null,
+    isDerivedLine: false,
+    signalTimestamp: nowTs,
+    formIndicator: classifyForm(hrInput),
+    formScore: Math.round(computeFormScore(hrInput) * 100) / 100,
+    evPct: Math.round((calibratedDominant / 100 - 0.5) * 100 * 10) / 10,
+    hrFactors: { count: hrFactors.count, labels: hrFactors.labels },
+    contextScore: Math.round(computeStrongContextScore(hrInput) * 100) / 100,
+    matchupTag: hrInput.pitcher.timesThrough >= 3 ? "vs 3rd Time Through" : hrInput.pitcher.pitchCount >= 80 ? "vs Fatigue" : hrInput.pitcher.throws ? `vs ${hrInput.pitcher.throws}HP` : null,
+    featureScores: {
+      contactQuality: Math.round(features.contactQuality * 1000) / 1000,
+      batSpeedPower: Math.round(features.batSpeedPower * 1000) / 1000,
+      handednessMatchup: Math.round(features.handednessMatchup * 1000) / 1000,
+      pitchBlendMatchup: Math.round(features.pitchBlendMatchup * 1000) / 1000,
+      hotColdForm: Math.round(features.hotColdForm * 1000) / 1000,
+      parkEnv: Math.round(features.parkEnv * 1000) / 1000,
+      bvp: Math.round(features.bvp * 1000) / 1000,
+      lineupOpportunity: Math.round(features.lineupOpportunity * 1000) / 1000,
+      bullpenFactor: Math.round(features.bullpenFactor * 1000) / 1000,
+      pitcherSuppression: Math.round(features.pitcherSuppression * 1000) / 1000,
+      pitcherDeterioration: Math.round(features.pitcherDeterioration * 1000) / 1000,
+    },
+    computedBadges: badgeResult.positive,
+    computedRiskFlags: badgeResult.negative,
+    fallbackUsed: projResult.fallbackUsed,
+    projectionSource: projSource,
+    projectionQuality: projQuality,
+    projectionTrustScore: trustScore,
+    modelMethod: "hr_distribution",
+    variance: Math.round(distResult.variance * 1000) / 1000,
+  };
 }
 
 export function calculateHRREdge(input: MLBPropInput): MLBPropOutput {
