@@ -156,10 +156,10 @@ const MLB_CALC_MARKETS = [
 ];
 
 const MLB_ODDS_STAT_MAP: Record<string, string> = {
-  hits: "batter_hits", total_bases: "batter_total_bases", home_runs: "batter_home_runs",
-  hrr: "batter_hits_runs_rbis", batter_strikeouts: "batter_strikeouts",
-  pitcher_strikeouts: "pitcher_strikeouts", pitcher_outs: "pitcher_outs_recorded",
-  hits_allowed: "pitcher_hits_allowed", walks_allowed: "pitcher_walks",
+  hits: "hits", total_bases: "total_bases", home_runs: "home_runs",
+  hrr: "hrr", batter_strikeouts: "batter_strikeouts",
+  pitcher_strikeouts: "pitcher_strikeouts", pitcher_outs: "pitcher_outs",
+  hits_allowed: "hits_allowed", walks_allowed: "walks_allowed",
 };
 
 function formatOdds(n: number): string {
@@ -622,11 +622,13 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
       const params = new URLSearchParams({
         playerName: activeCalcName,
         statType: MLB_ODDS_STAT_MAP[calcMarket] ?? calcMarket,
-        playerTeam: activeCalcTeam,
-        opponentTeam: calcPlayer?.teamSide === "home" ? (selectedGame.awayAbbr ?? "") : (selectedGame.homeAbbr ?? ""),
+        playerTeam: activeCalcTeam || (selectedGame.homeAbbr ?? ""),
+        opponentTeam: calcPlayer
+          ? (calcPlayer.teamSide === "home" ? (selectedGame.awayAbbr ?? "") : (selectedGame.homeAbbr ?? ""))
+          : (selectedGame.awayAbbr ?? ""),
         inPlay: selectedGame.status === "live" ? "true" : "false",
       });
-      const res = await fetch(`/api/mlb/odds?${params}`);
+      const res = await fetch(`/api/mlb/odds?${params}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch odds");
       return res.json();
     },
