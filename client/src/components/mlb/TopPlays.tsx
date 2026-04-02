@@ -27,7 +27,7 @@ export function TopPlays({
           </span>
           <span className="text-xs font-semibold text-blue-400">Engine processing live markets</span>
         </div>
-        <p className="text-[11px] text-muted-foreground">Switch to the Games tab to select any game and run manual calculations on player props while the engine evaluates all markets.</p>
+        <p className="text-[11px] text-muted-foreground">Switch to the Games tab to select any game and view signals while the engine evaluates all markets.</p>
       </div>
     );
   }
@@ -54,7 +54,6 @@ export function TopPlays({
               <MlbSignalCard
                 key={`over-${sig.gameId}-${sig.playerId}-${sig.market}-${idx}`}
                 sig={sig}
-                variant="featured"
                 onPlayerClick={onPlayerClick}
                 onAddToSlip={onAddToSlip}
               />
@@ -74,7 +73,6 @@ export function TopPlays({
               <MlbSignalCard
                 key={`under-${sig.gameId}-${sig.playerId}-${sig.market}-${idx}`}
                 sig={sig}
-                variant="featured"
                 onPlayerClick={onPlayerClick}
                 onAddToSlip={onAddToSlip}
               />

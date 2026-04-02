@@ -536,6 +536,7 @@ export default function Dashboard() {
 
   const [activeTab, setActiveTab] = useState<"calculator" | "ncaab" | "analytics" | "mlb">("calculator");
   const [nbaSubTab, setNbaSubTab] = useState<"live" | "halftime">("live");
+  const [mlbSubTab, setMlbSubTab] = useState<"games" | "live_feed" | "hr_radar">("games");
   const [expandToGameId, setExpandToGameId] = useState<string | null>(null);
   const [showWelcomeBanner, setShowWelcomeBanner] = useState(false);
   const [verifyBannerDismissed, setVerifyBannerDismissed] = useState(false);
@@ -2146,7 +2147,6 @@ export default function Dashboard() {
             )}
           </div>
 
-          {/* NBA sub-tabs */}
           {activeTab === "calculator" && (
             <div className="flex gap-1 mt-2 w-fit bg-secondary/40 border border-border/60 rounded-xl p-1">
               <button
@@ -2171,6 +2171,29 @@ export default function Dashboard() {
               >
                 ⏱ 2H Plays
               </button>
+            </div>
+          )}
+
+          {activeTab === "mlb" && (
+            <div className="flex gap-1 mt-2 w-fit bg-secondary/40 border border-border/60 rounded-xl p-1">
+              {([
+                { key: "games", label: "Games" },
+                { key: "live_feed", label: "Live Feed" },
+                { key: "hr_radar", label: "HR Radar" },
+              ] as const).map(tab => (
+                <button
+                  key={tab.key}
+                  data-testid={`tab-mlb-${tab.key}`}
+                  onClick={() => setMlbSubTab(tab.key)}
+                  className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                    mlbSubTab === tab.key
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
           )}
 
@@ -3946,7 +3969,7 @@ export default function Dashboard() {
         )}
 
         {/* MLB Live Tab — all authenticated users (preview gated on backend) */}
-        {activeTab === "mlb" && <MlbLivePage />}
+        {activeTab === "mlb" && <MlbLivePage activeSubTab={mlbSubTab} />}
 
       </main>
 

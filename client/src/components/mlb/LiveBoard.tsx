@@ -21,7 +21,15 @@ const TIERS: TierConfig[] = [
   { key: "watch", label: "Watch", min: 0, max: 54, color: "#71717a", bg: "rgba(113,113,122,0.04)", border: "rgba(113,113,122,0.2)", icon: Eye },
 ];
 
-export function LiveBoard({ signals, onPlayerClick }: { signals: MlbSignalData[]; onPlayerClick?: (gameId: string, playerId: string) => void }) {
+export function LiveBoard({
+  signals,
+  onPlayerClick,
+  onAddToSlip,
+}: {
+  signals: MlbSignalData[];
+  onPlayerClick?: (gameId: string, playerId: string) => void;
+  onAddToSlip?: (sig: MlbSignalData) => void;
+}) {
   const [collapsedTiers, setCollapsedTiers] = useState<Record<string, boolean>>({});
 
   const grouped: Record<string, { over: MlbSignalData[]; under: MlbSignalData[] }> = {
@@ -105,9 +113,8 @@ export function LiveBoard({ signals, onPlayerClick }: { signals: MlbSignalData[]
                           <MlbSignalCard
                             key={`${sig.gameId}-${sig.playerId}-${sig.market}-${idx}`}
                             sig={sig}
-                            variant="compact"
-                            tierColor={tier.color}
                             onPlayerClick={onPlayerClick}
+                            onAddToSlip={onAddToSlip}
                           />
                         ))}
                       </div>
@@ -118,9 +125,8 @@ export function LiveBoard({ signals, onPlayerClick }: { signals: MlbSignalData[]
                           <MlbSignalCard
                             key={`${sig.gameId}-${sig.playerId}-${sig.market}-${idx}`}
                             sig={sig}
-                            variant="compact"
-                            tierColor={tier.color}
                             onPlayerClick={onPlayerClick}
+                            onAddToSlip={onAddToSlip}
                           />
                         ))}
                       </div>

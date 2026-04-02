@@ -1,10 +1,9 @@
 import { useState } from "react";
-import { ChevronRight, ChevronDown, Plus, Flame, TrendingUp, Target, Eye } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import {
   formatMlbMarketLabel,
   formatAmericanOdds,
   getMlbLiveStatValue,
-  getSignalStateMeta,
   formBadge,
   TIER_COLORS,
   SIDE_STYLES,
@@ -32,6 +31,7 @@ export type MlbSignalData = {
   feedTags?: string[];
   formIndicator?: string | null;
   reasons?: string[];
+  explanationBullets?: string[];
   awayAbbr?: string | null;
   homeAbbr?: string | null;
   playerGlowEligible?: boolean;
@@ -47,306 +47,275 @@ export type MlbSignalData = {
   stale?: boolean;
   watchlist?: boolean;
   badges?: string[];
+  riskFlags?: string[];
   sportsbook?: string | null;
+  pitchMix?: Array<{ pitchType: string; percentage: number; avgVelocity: number | null }>;
+  safetyCeilingApplied?: boolean;
+  dataQuality?: string | null;
+  drivers?: Record<string, number>;
   [key: string]: any;
 };
 
-function getTagIcon(tag: string) {
-  if (tag.includes("HOT")) return <Flame className="w-3 h-3" />;
-  if (tag.includes("TREND") || tag.includes("MOMENTUM")) return <TrendingUp className="w-3 h-3" />;
-  if (tag.includes("MATCHUP") || tag.includes("EDGE")) return <Target className="w-3 h-3" />;
-  return <Eye className="w-3 h-3" />;
-}
-
-type CardVariant = "featured" | "compact";
+const PITCH_LABELS: Record<string, string> = {
+  FF: "4-Seam", SI: "Sinker", FC: "Cutter", SL: "Slider",
+  CU: "Curve", CH: "Change", FS: "Splitter", KC: "Knuckle Curve",
+  KN: "Knuckle", EP: "Eephus", ST: "Sweeper", SV: "Slurve",
+};
 
 export function MlbSignalCard({
   sig,
-  variant = "featured",
-  tierColor,
   onPlayerClick,
   onAddToSlip,
+  onDismiss,
 }: {
   sig: MlbSignalData;
-  variant?: CardVariant;
-  tierColor?: string;
   onPlayerClick?: (gameId: string, playerId: string) => void;
   onAddToSlip?: (sig: MlbSignalData) => void;
+  onDismiss?: (sig: MlbSignalData) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const tier = TIER_COLORS[sig.confidenceTier ?? "WATCHLIST"] ?? TIER_COLORS.WATCHLIST;
   const side = SIDE_STYLES[sig.recommendedSide as keyof typeof SIDE_STYLES] ?? SIDE_STYLES.OVER;
   const marketLabel = formatMlbMarketLabel(sig.market);
-  const tags = (sig.signalTags ?? []).slice(0, 3);
   const matchup = sig.awayAbbr && sig.homeAbbr ? `${sig.awayAbbr} @ ${sig.homeAbbr}` : null;
   const form = formBadge(sig.formIndicator ?? null);
-  const reasons = sig.reasons ?? [];
-  const isClickable = !!(onPlayerClick && sig.gameId);
-  const liveStat = getMlbLiveStatValue(sig);
   const sideOdds = sig.recommendedSide === "OVER" ? sig.overOdds : sig.underOdds;
-  const cardOpacity = sig.stale ? 0.5 : sig.alreadyHit ? 0.7 : 1;
-  const stateLabel = getSignalStateMeta(sig);
-  const resolvedTierColor = tierColor ?? tier.text;
+  const liveStat = getMlbLiveStatValue(sig);
+  const tags = [
+    ...(sig.badges ?? []),
+    ...(sig.signalTags ?? []).slice(0, 4),
+  ].slice(0, 5);
+  const cardOpacity = sig.stale ? 0.5 : sig.alreadyHit ? 0.75 : 1;
+  const isClickable = !!(onPlayerClick && sig.gameId);
+  const allReasons = sig.explanationBullets?.length ? sig.explanationBullets : sig.reasons?.length ? sig.reasons : [];
 
-  if (variant === "compact") {
-    return (
-      <div
-        data-testid={`mlb-signal-${sig.playerId}-${sig.market}`}
-        className={`rounded-lg p-3 space-y-1.5 transition-all ${isClickable ? "cursor-pointer hover:brightness-110" : ""}`}
-        style={{ background: side.bg, border: `1px solid ${side.border}`, opacity: cardOpacity }}
-        onClick={isClickable ? () => onPlayerClick!(sig.gameId!, sig.playerId) : undefined}
-      >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <span className="text-xs font-bold text-white truncate">{sig.playerName}</span>
-            {form && <span className="text-[10px] flex-shrink-0">{form.label}</span>}
-            {sig.playerGlowEligible && (
-              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: resolvedTierColor, boxShadow: `0 0 6px ${resolvedTierColor}` }} />
-            )}
-            {sig.isDegraded && <span className="text-[8px] text-amber-500/60 flex-shrink-0">\u26A0</span>}
-            {isClickable && <ChevronRight className="w-3 h-3 text-muted-foreground flex-shrink-0" />}
-          </div>
-          <div className="flex items-center gap-1.5">
-            {stateLabel && (
-              <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full" style={{ color: stateLabel.color, background: stateLabel.bg }}>
-                {stateLabel.label}
-              </span>
-            )}
-            <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full flex-shrink-0" style={{ color: side.accent, background: "rgba(255,255,255,0.04)", border: `1px solid ${side.border}` }}>
-              {sig.recommendedSide}
-            </span>
-          </div>
-        </div>
+  const warningTags: string[] = [];
+  if (sig.isDegraded || sig.dataQuality === "degraded") warningTags.push("Limited Data");
+  if (sig.dataQuality === "partial") warningTags.push("Partial Data");
+  if (sig.safetyCeilingApplied) warningTags.push("Ceiling Applied");
+  const riskFlags = sig.riskFlags ?? [];
 
-        <div className="flex items-center justify-between">
-          <div className="text-[10px] text-muted-foreground">
-            {marketLabel} {sig.recommendedSide} {sig.bookLine}
-            {sideOdds != null && <span className="text-muted-foreground/60 ml-1">({formatAmericanOdds(sideOdds)})</span>}
-            {matchup && <span className="text-muted-foreground/50 ml-1">{"\u00B7"} {matchup}</span>}
-          </div>
-          <div className="flex items-baseline gap-1.5">
-            <span className="text-sm font-black tabular-nums" style={{ color: side.accent }}>
-              {sig.enginePct.toFixed(0)}%
-            </span>
-            {sig.edge != null && (
-              <span className="text-[9px] tabular-nums" style={{ color: sig.edge > 0 ? "#22c55e" : "#ef4444" }}>
-                {sig.edge > 0 ? "+" : ""}{sig.edge.toFixed(1)}%
-              </span>
-            )}
-          </div>
-        </div>
-
-        {liveStat && (
-          <div className="flex items-center gap-3 text-[9px]">
-            <span className="font-semibold" style={{ color: liveStat.value >= (sig.bookLine ?? 99) ? "#22c55e" : "#a1a1aa" }}>
-              {liveStat.label}: {liveStat.value}/{sig.bookLine}
-            </span>
-            {sig.projection != null && (
-              <span className="text-muted-foreground/70">Proj: <span className="text-white font-semibold">{sig.projection.toFixed(2)}</span></span>
-            )}
-            {sig.bookImplied != null && (
-              <span className="text-muted-foreground/70">Book: <span className="text-white font-semibold">{sig.bookImplied.toFixed(0)}%</span></span>
-            )}
-            <span className="text-muted-foreground/70">S: <span className="text-white font-semibold">{sig.signalScore ?? 0}</span></span>
-          </div>
-        )}
-
-        {!liveStat && sig.projection != null && (
-          <div className="flex items-center gap-3 text-[9px]">
-            <span className="text-muted-foreground/70">Proj: <span className="text-white font-semibold">{sig.projection.toFixed(2)}</span></span>
-            <span className="text-muted-foreground/70">Line: <span className="text-white font-semibold">{sig.bookLine}</span></span>
-            <span className="text-muted-foreground/70">S: <span className="text-white font-semibold">{sig.signalScore ?? 0}</span></span>
-          </div>
-        )}
-
-        {sig.bvp && sig.bvp.atBats > 0 && (
-          <div className="text-[8px] text-muted-foreground/70">
-            BvP: {sig.bvp.hits}/{sig.bvp.atBats} ({sig.bvp.avg != null ? sig.bvp.avg.toFixed(3) : "\u2014"})
-            {sig.bvp.homeRuns > 0 && <span className="text-orange-400 ml-1">{sig.bvp.homeRuns} HR</span>}
-          </div>
-        )}
-
-        {(tags.length > 0 || (sig.badges ?? []).length > 0) && (
-          <div className="flex flex-wrap gap-1">
-            {(sig.badges ?? []).slice(0, 2).map((badge) => (
-              <span key={badge} className="text-[8px] px-1 py-0.5 rounded font-semibold" style={{ background: "rgba(234,179,8,0.1)", color: "#eab308" }}>
-                {badge}
-              </span>
-            ))}
-            {tags.map((tag) => (
-              <span key={tag} className="text-[8px] px-1 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.05)", color: "#a1a1aa" }}>
-                {tag}
-              </span>
-            ))}
-          </div>
-        )}
-
-        {reasons.length > 0 && (
-          <div className="space-y-0.5">
-            {reasons.slice(0, 2).map((r, i) => (
-              <p key={i} className="text-[8px] text-muted-foreground/60 leading-tight truncate">{r}</p>
-            ))}
-          </div>
-        )}
-
-        <div className="flex items-center justify-end pt-0.5 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
-          <button
-            data-testid={`button-share-${sig.playerId}-${sig.market}`}
-            className="text-[8px] px-2 py-1 rounded font-semibold transition-colors"
-            style={{ background: "rgba(59,130,246,0.1)", color: "#60a5fa", border: "1px solid rgba(59,130,246,0.2)" }}
-            onClick={(e) => { e.stopPropagation(); openShareWindow(generateShareTweet(sig)); }}
-          >{"\uD835\uDD4F"} Share</button>
-        </div>
-      </div>
-    );
-  }
+  const inningText = sig.inning && sig.inning > 0 ? `Inn ${sig.inning}` : null;
 
   return (
     <div
       data-testid={`mlb-signal-${sig.playerId}-${sig.market}`}
-      className={`rounded-xl p-3.5 space-y-2 transition-all ${isClickable ? "cursor-pointer hover:brightness-110" : ""}`}
-      style={{ background: side.bg, border: `1px solid ${side.border}`, opacity: cardOpacity }}
-      onClick={isClickable && sig.gameId ? () => onPlayerClick!(sig.gameId!, sig.playerId) : undefined}
+      className={`rounded-xl border border-border/40 bg-card transition-all ${isClickable ? "cursor-pointer" : ""}`}
+      style={{ opacity: cardOpacity }}
+      role={isClickable ? "button" : undefined}
+      tabIndex={isClickable ? 0 : undefined}
+      onClick={isClickable ? () => onPlayerClick!(sig.gameId!, sig.playerId) : undefined}
+      onKeyDown={isClickable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPlayerClick!(sig.gameId!, sig.playerId); } } : undefined}
     >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          <span
-            className="text-[9px] font-black px-2 py-0.5 rounded-full"
-            style={{ background: tier.bg, color: tier.text, border: `1px solid ${tier.border}` }}
-          >
-            {tier.badge}
-          </span>
-          <span
-            className="text-[9px] font-black px-2 py-0.5 rounded-full"
-            style={{ background: side.bg, color: side.accent, border: `1px solid ${side.border}` }}
-          >
-            {side.label}
-          </span>
-          {form && (
-            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full" style={{ color: form.color, background: "rgba(255,255,255,0.04)" }}>
-              {form.label}
+      <div
+        className="p-3 space-y-2"
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); setExpanded(!expanded); } }}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+            <span
+              className="text-[9px] font-black px-2 py-0.5 rounded-full"
+              style={{ background: tier.bg, color: tier.text, border: `1px solid ${tier.border}` }}
+              data-testid={`badge-tier-${sig.playerId}-${sig.market}`}
+            >
+              {tier.badge}
             </span>
-          )}
-          {stateLabel && (
-            <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full" style={{ color: stateLabel.color, background: stateLabel.bg }}>
-              {stateLabel.label}
+            <span
+              className="text-[9px] font-black px-2 py-0.5 rounded-full"
+              style={{ background: side.bg, color: side.accent, border: `1px solid ${side.border}` }}
+            >
+              {side.label}
             </span>
-          )}
-          {sig.isDegraded && (
-            <span className="text-[8px] text-amber-500/70 px-1 py-0.5 rounded" style={{ background: "rgba(245,158,11,0.08)" }}>{"\u26A0"}</span>
-          )}
-        </div>
-        {matchup && <span className="text-[9px] text-muted-foreground">{matchup}</span>}
-      </div>
-
-      <div className="flex items-center justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            <p className="text-xs font-bold text-white truncate">{sig.playerName}</p>
-            {sig.playerGlowEligible && (
-              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: tier.text, boxShadow: `0 0 6px ${tier.text}` }} />
+            {form && (
+              <span className="text-[9px] font-semibold" style={{ color: form.color }}>
+                {form.label}
+              </span>
             )}
-            {isClickable && <ChevronRight className="w-3 h-3 text-muted-foreground flex-shrink-0" />}
+            {sig.alreadyHit && (
+              <span className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                HIT ✓
+              </span>
+            )}
           </div>
-          <p className="text-[10px] font-medium" style={{ color: side.accent }}>
-            {marketLabel} {side.label} {sig.bookLine}
-            {sideOdds != null && <span className="text-muted-foreground/60 ml-1">({formatAmericanOdds(sideOdds)})</span>}
-          </p>
+          <div className="flex items-center gap-1.5 shrink-0 text-[10px] text-muted-foreground">
+            {matchup && <span>{matchup}</span>}
+            {inningText && <span>{inningText}</span>}
+          </div>
         </div>
-        <div className="flex flex-col items-end flex-shrink-0">
-          <span className="text-xl font-black tabular-nums" style={{ color: side.accent }}>
-            {sig.enginePct.toFixed(0)}%
+
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1">
+              <span className="text-xs font-bold text-foreground truncate">{sig.playerName}</span>
+              {isClickable && <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              {marketLabel} {sig.bookLine != null ? sig.bookLine : ""}
+              {sideOdds != null && <span className="ml-1">({formatAmericanOdds(sideOdds)})</span>}
+            </p>
+          </div>
+          <div className="flex flex-col items-end shrink-0">
+            <span className="text-lg font-black tabular-nums" style={{ color: side.accent }}>
+              {sig.enginePct.toFixed(0)}%
+            </span>
+            <span className="text-[8px] text-muted-foreground/50">Probability</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 text-[10px] flex-wrap">
+          {sig.edge != null && (
+            <span className="text-muted-foreground/70">
+              Edge: <span className="font-bold" style={{ color: sig.edge > 0 ? "#22c55e" : "#ef4444" }}>
+                {sig.edge > 0 ? "+" : ""}{sig.edge.toFixed(1)}%
+              </span>
+            </span>
+          )}
+          {sig.projection != null && (
+            <span className="text-muted-foreground/70">
+              Proj: <span className="text-foreground font-semibold">{sig.projection.toFixed(2)}</span>
+            </span>
+          )}
+          {liveStat ? (
+            <span className="text-muted-foreground/70">
+              {liveStat.label}: <span className="font-semibold" style={{ color: liveStat.value >= (sig.bookLine ?? 99) ? "#22c55e" : "#ffffff" }}>
+                {liveStat.value}/{sig.bookLine}
+              </span>
+            </span>
+          ) : null}
+          <span className="text-muted-foreground/70">
+            S: <span className="text-foreground font-semibold">{sig.signalScore ?? 0}</span>
           </span>
-          <span className="text-[8px] text-muted-foreground/50">Probability</span>
         </div>
+
+        {tags.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {tags.map((tag) => (
+              <span key={tag} className="text-[8px] px-1.5 py-0.5 rounded-full font-medium" style={{ background: "rgba(255,255,255,0.06)", color: "#d4d4d8" }}>
+                {tag}
+              </span>
+            ))}
+            {warningTags.map((tag) => (
+              <span key={tag} className="text-[8px] px-1.5 py-0.5 rounded-full font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                {tag}
+              </span>
+            ))}
+            {riskFlags.map((f) => (
+              <span key={f} className="text-[8px] px-1.5 py-0.5 rounded-full font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                {f}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {expanded && (
+          <div className="space-y-2 pt-1 border-t border-border/20 animate-in slide-in-from-top-1 duration-200">
+            {sig.currentStats && (() => {
+              const cs = sig.currentStats;
+              return (
+                <div className="flex items-center gap-2 py-1.5 px-2.5 rounded-lg bg-secondary/30 border border-border/20 text-[10px]">
+                  <span className="text-muted-foreground font-semibold uppercase text-[9px] shrink-0">Today</span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {(cs.ab ?? 0) > 0 && <span className="text-foreground font-semibold">{cs.h ?? 0}-{cs.ab}</span>}
+                    {(cs.hr ?? 0) > 0 && <span className="text-orange-400 font-bold">{cs.hr} HR</span>}
+                    {(cs.rbi ?? 0) > 0 && <span className="text-muted-foreground">{cs.rbi} RBI</span>}
+                    {(cs.bb ?? 0) > 0 && <span className="text-muted-foreground">{cs.bb} BB</span>}
+                    {(cs.k ?? 0) > 0 && <span className="text-red-400">{cs.k} K</span>}
+                    {(cs.tb ?? 0) > 0 && <span className="text-muted-foreground">{cs.tb} TB</span>}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {sig.pitchMix && sig.pitchMix.length > 0 && (
+              <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20 space-y-1">
+                <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Pitcher Arsenal</div>
+                <div className="flex flex-wrap gap-1">
+                  {sig.pitchMix.slice(0, 5).map((p, i) => (
+                    <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-secondary/60 text-foreground border border-border/30">
+                      {PITCH_LABELS[p.pitchType] ?? p.pitchType} {Math.round(p.percentage)}%
+                      {p.avgVelocity != null && <span className="text-muted-foreground ml-1">{p.avgVelocity.toFixed(0)}mph</span>}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {sig.bvp && sig.bvp.atBats > 0 && (
+              <div className="text-[9px] px-2.5 py-1.5 rounded-lg bg-secondary/20 border border-border/20">
+                <span className="text-muted-foreground/70">BvP: </span>
+                <span className="text-foreground font-semibold">{sig.bvp.hits}/{sig.bvp.atBats}</span>
+                <span className="text-muted-foreground/50 ml-1">({sig.bvp.avg != null ? sig.bvp.avg.toFixed(3) : "—"})</span>
+                {sig.bvp.homeRuns > 0 && <span className="text-orange-400 ml-1.5 font-semibold">{sig.bvp.homeRuns} HR</span>}
+              </div>
+            )}
+
+            {allReasons.length > 0 && (
+              <div className="space-y-0.5 pl-1">
+                <div className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Why this signal?</div>
+                {allReasons.slice(0, 4).map((r, i) => (
+                  <p key={i} className="text-[9px] text-muted-foreground/80 leading-tight flex items-start gap-1">
+                    <span className="mt-px" style={{ color: side.accent }}>•</span>
+                    <span>{r}</span>
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      <div className="flex items-center gap-4 text-[10px]">
-        {sig.projection != null && (
-          <span className="text-muted-foreground/70">Proj: <span className="text-white font-semibold">{sig.projection.toFixed(2)}</span></span>
-        )}
-        {liveStat ? (
-          <span className="text-muted-foreground/70">{liveStat.label}: <span className="font-semibold" style={{ color: liveStat.value >= (sig.bookLine ?? 99) ? "#22c55e" : "#ffffff" }}>{liveStat.value}/{sig.bookLine}</span></span>
-        ) : (
-          <span className="text-muted-foreground/70">Line: <span className="text-white font-semibold">{sig.bookLine ?? "\u2014"}</span></span>
-        )}
-        {sig.edge != null && (
-          <span className="text-muted-foreground/70">EV: <span className="font-medium" style={{ color: sig.edge > 0 ? "#22c55e" : "#ef4444" }}>{sig.edge > 0 ? "+" : ""}{sig.edge.toFixed(1)}%</span></span>
-        )}
-        <span className="text-muted-foreground/70">S: <span className="text-white font-semibold">{sig.signalScore ?? 0}</span></span>
-      </div>
-
-      {sig.bvp && sig.bvp.atBats > 0 && (
-        <div className="text-[9px] px-2 py-1 rounded" style={{ background: "rgba(255,255,255,0.03)" }}>
-          <span className="text-muted-foreground/70">BvP: </span>
-          <span className="text-white font-semibold">{sig.bvp.hits}/{sig.bvp.atBats}</span>
-          <span className="text-muted-foreground/50 ml-1">({sig.bvp.avg != null ? sig.bvp.avg.toFixed(3) : "\u2014"})</span>
-          {sig.bvp.homeRuns > 0 && <span className="text-orange-400 ml-1.5 font-semibold">{sig.bvp.homeRuns} HR</span>}
-          {sig.bvp.strikeouts > 0 && <span className="text-muted-foreground/50 ml-1.5">{sig.bvp.strikeouts} K</span>}
-        </div>
-      )}
-
-      {(tags.length > 0 || (sig.badges ?? []).length > 0) && (
-        <div className="flex flex-wrap gap-1">
-          {(sig.badges ?? []).slice(0, 2).map((badge) => (
-            <span key={badge} className="text-[8px] px-1.5 py-0.5 rounded-full font-semibold" style={{ background: "rgba(234,179,8,0.1)", color: "#eab308" }}>
-              {badge}
-            </span>
-          ))}
-          {tags.map((tag) => (
-            <span key={tag} className="flex items-center gap-0.5 text-[8px] px-1.5 py-0.5 rounded-full" style={{ background: "rgba(255,255,255,0.06)", color: "#d4d4d8" }}>
-              {getTagIcon(tag)}
-              {tag}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {reasons.length > 0 && (
-        <div onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center justify-between px-3 py-2 border-t border-border/20" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-1 text-[9px] text-muted-foreground">
+          {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           <button
-            className="flex items-center gap-1 text-[9px] text-muted-foreground/70 hover:text-muted-foreground transition-colors w-full"
-            data-testid={`button-expand-reasons-${sig.playerId}-${sig.market}`}
+            data-testid={`button-expand-${sig.playerId}-${sig.market}`}
+            className="hover:text-foreground transition-colors"
             onClick={() => setExpanded(!expanded)}
           >
-            {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            <span>{reasons.length} reason{reasons.length !== 1 ? "s" : ""}</span>
+            {expanded ? "Less" : "More"}
           </button>
-          {expanded && (
-            <div className="space-y-0.5 pt-1 animate-in slide-in-from-top-1 duration-200">
-              {reasons.map((r, i) => (
-                <p key={i} className="text-[9px] text-muted-foreground/80 leading-tight flex items-start gap-1">
-                  <span className="mt-px" style={{ color: side.accent }}>{"\u2022"}</span>
-                  <span>{r}</span>
-                </p>
-              ))}
-            </div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {onDismiss && (
+            <button
+              data-testid={`button-dismiss-${sig.playerId}-${sig.market}`}
+              className="text-[9px] p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+              onClick={() => onDismiss(sig)}
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           )}
-        </div>
-      )}
-
-      <div className="flex items-center justify-between pt-0.5 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
-        <div className="flex items-center gap-2">
-          {sig.isDegraded && <span className="text-[8px] text-amber-500/70">Limited data</span>}
-          {sig.sportsbook && <span className="text-[8px] text-muted-foreground/40">{sig.sportsbook}</span>}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            data-testid={`button-share-${sig.playerId}-${sig.market}`}
-            className="text-[9px] px-2 py-1.5 rounded-full font-semibold transition-colors min-h-[44px]"
-            style={{ background: "rgba(59,130,246,0.1)", color: "#60a5fa", border: "1px solid rgba(59,130,246,0.2)" }}
-            onClick={(e) => { e.stopPropagation(); openShareWindow(generateShareTweet(sig)); }}
-          >{"\uD835\uDD4F"}</button>
           {onAddToSlip && (
             <button
               data-testid={`button-slip-${sig.playerId}-${sig.market}`}
-              className="text-[9px] px-2.5 py-1.5 rounded-full font-semibold transition-colors flex items-center gap-0.5 min-h-[44px]"
+              className="text-[9px] px-2.5 py-1.5 rounded-lg font-semibold transition-colors flex items-center gap-0.5 min-h-[36px]"
               style={{ background: "rgba(34,197,94,0.15)", color: "#22c55e", border: "1px solid rgba(34,197,94,0.3)" }}
-              onClick={(e) => { e.stopPropagation(); onAddToSlip(sig); }}
+              onClick={() => onAddToSlip(sig)}
             >
               <Plus className="w-3 h-3" /> Slip
             </button>
           )}
+          <button
+            data-testid={`button-share-${sig.playerId}-${sig.market}`}
+            className="text-[9px] px-2.5 py-1.5 rounded-lg font-semibold transition-colors min-h-[36px]"
+            style={{ background: "rgba(59,130,246,0.1)", color: "#60a5fa", border: "1px solid rgba(59,130,246,0.2)" }}
+            onClick={() => openShareWindow(generateShareTweet(sig))}
+          >𝕏</button>
+          <button
+            data-testid={`button-copy-${sig.playerId}-${sig.market}`}
+            className="text-[9px] px-2 py-1.5 rounded-lg font-semibold transition-colors min-h-[36px] border border-border text-muted-foreground hover:text-foreground hover:bg-muted/40"
+            onClick={() => {
+              const text = generateShareTweet(sig);
+              navigator.clipboard?.writeText(text).then(() => {
+                const btn = document.querySelector(`[data-testid="button-copy-${sig.playerId}-${sig.market}"]`);
+                if (btn) { btn.textContent = "✓"; setTimeout(() => { btn.textContent = "Copy"; }, 1500); }
+              }).catch(() => {});
+            }}
+          >Copy</button>
         </div>
       </div>
     </div>

@@ -1,31 +1,13 @@
 import { useState, useEffect, useRef, Component, type ReactNode } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { ProbabilityRing } from "@/components/probability-ring";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useQuery } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
-import { MLBScheduleList } from "@/components/mlb/MLBScheduleList";
 import { TopPlays } from "@/components/mlb/TopPlays";
 import { LiveBoard } from "@/components/mlb/LiveBoard";
+import { MlbSignalCard, type MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { SkeletonCard } from "@/components/sports/SkeletonCard";
 import { EmptyState } from "@/components/sports/EmptyState";
-
-function MiniProbRing({ pct, size = 36 }: { pct: number; size?: number }) {
-  const sw = 4;
-  const r = (size - sw) / 2;
-  const c = r * 2 * Math.PI;
-  const offset = c - (Math.min(pct, 100) / 100) * c;
-  const color = pct >= 70 ? "#22c55e" : pct >= 55 ? "#14b8a6" : pct >= 40 ? "#eab308" : "#ef4444";
-  return (
-    <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
-      <svg className="absolute inset-0 -rotate-90" width={size} height={size}>
-        <circle cx={size/2} cy={size/2} r={r} strokeWidth={sw} className="stroke-muted/30 fill-transparent" />
-        <circle cx={size/2} cy={size/2} r={r} strokeWidth={sw} strokeDasharray={c} strokeDashoffset={offset}
-          className="fill-transparent" style={{ stroke: color }} strokeLinecap="round" />
-      </svg>
-      <span className="text-[10px] font-black" style={{ color }}>{Math.round(pct)}</span>
-    </div>
-  );
-}
+import { Radio, Target, RefreshCw, ChevronDown, ChevronUp } from "lucide-react";
 
 class MLBErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
   constructor(props: { children: ReactNode }) {
@@ -54,16 +36,6 @@ class MLBErrorBoundary extends Component<{ children: ReactNode }, { hasError: bo
   }
 }
 
-type MLBGameMarket = {
-  line: number | null;
-  odds: { overOdds: number | null; underOdds: number | null } | null;
-  projection: number | null;
-  edge: number | null;
-  probability: number | null;
-  oddsUpdatedAt: string | null;
-  projectionUpdatedAt: string | null;
-};
-
 type MLBGame = {
   gameId: string;
   homeTeam: string | null;
@@ -83,51 +55,10 @@ type MLBGame = {
   pitcherHome?: string | null;
   awayPitcherHand?: string | null;
   homePitcherHand?: string | null;
-  pitcherName?: string | null;
-  pitcherThrows?: "L" | "R" | null;
-  pitcherTeam?: string | null;
-  pitcherContext?: { pitchCount: number; timesThroughOrder: number; avgVelocity: number | null; velocityDrop: number | null } | null;
-  gameState?: { outs: number; runnersOnBase: string[] } | null;
   hasOdds?: boolean;
-  signalLocked?: boolean;
   signalCount?: number;
-  market?: MLBGameMarket | null;
   gameCardTags?: string[];
 };
-
-type ABResultEntry = {
-  outcome: "hit" | "out" | "strikeout" | "walk" | "hbp" | "error" | "other";
-  exitVelocity: number | null;
-  launchAngle: number | null;
-  distance: number | null;
-  pitchType?: string | null;
-  pitchSpeed?: number | null;
-};
-
-type MLBBatter = {
-  playerId: string;
-  playerName: string;
-  teamAbbr: string;
-  teamSide?: "home" | "away";
-  battingOrderSlot: number;
-  ab: number;
-  h: number;
-  tb: number;
-  r: number;
-  rbi: number;
-  bb: number;
-  sb: number;
-  k: number;
-  lastABOutcome?: "hit" | "out" | "strikeout" | "walk" | "hbp" | "error" | "other" | null;
-  exitVelocity?: number | null;
-  barrelPct?: number | null;
-  xBA?: number | null;
-  xSLG?: number | null;
-  hardHitPct?: number | null;
-  priorABResults?: ABResultEntry[];
-};
-
-type PitchMixEntry = { pitchType: string; percentage: number; avgVelocity: number | null };
 
 type MLBSignal = {
   playerId: string;
@@ -140,185 +71,72 @@ type MLBSignal = {
   odds: { bookLine: number } | null;
   recommendedSide: "OVER" | "UNDER" | "NO_EDGE";
   inning: number;
-  tier: "green" | "yellow" | "teal" | "red";
+  tier: string;
   gameId?: string;
   sportsbook?: string | null;
-  derivedLine?: boolean;
   signalTimestamp?: number | null;
-  formIndicator?: "HOT" | "WARM" | "COLD" | "NEUTRAL" | "EXTREME_COLD" | null;
-  formScore?: number | null;
+  formIndicator?: string | null;
   evPct?: number | null;
   hrFactors?: { count: number; labels: string[] } | null;
-  contextScore?: number | null;
   matchupTag?: string | null;
   explanationBullets?: string[];
   reasons?: string[];
   awayAbbr?: string | null;
   homeAbbr?: string | null;
   bvp?: { atBats: number; hits: number; avg: number | null; homeRuns: number; strikeouts: number } | null;
-  modifiers?: { liveForm: number; pitcher: number; pitchType: number; weatherPark: number; lineup: number } | null;
   signalScore?: number | null;
   confidenceTier?: "ELITE" | "STRONG" | "SOLID" | "WATCHLIST" | null;
   signalTags?: string[];
   feedTags?: string[];
   playerGlowEligible?: boolean;
   currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
-  lastABContact?: {
-    exitVelo: number | null;
-    launchAngle: number | null;
-    batSpeed: number | null;
-    distance: number | null;
-    barrelPct: number | null;
-    hardHitPct: number | null;
-    outcome: string | null;
-  } | null;
+  lastABContact?: { exitVelo: number | null; launchAngle: number | null; batSpeed: number | null; distance: number | null; barrelPct: number | null; hardHitPct: number | null; outcome: string | null } | null;
   alreadyHit?: boolean;
   actionable?: boolean;
   stale?: boolean;
   watchlist?: boolean;
   bookImplied?: number | null;
-  pitchMix?: PitchMixEntry[] | null;
+  pitchMix?: Array<{ pitchType: string; percentage: number; avgVelocity: number | null }>;
   badges?: string[];
   riskFlags?: string[];
   drivers?: Record<string, number>;
   overOdds?: number | null;
   underOdds?: number | null;
-  priorABResults?: ABResultEntry[];
   batterArchetype?: string | null;
   pitcherArchetype?: string | null;
   thesis?: string | null;
   isFlagship?: boolean | null;
-  familyId?: string | null;
-  familyRank?: number | null;
   safetyCeilingApplied?: boolean | null;
-  varianceTier?: string | null;
   isDegraded?: boolean | null;
   dataQuality?: "full" | "partial" | "degraded" | null;
 };
 
-type SignalState = "actionable" | "already_hit" | "watchlist" | "stale";
-
-function deriveSignalState(sig: MLBSignal): SignalState {
-  if (sig.alreadyHit === true) return "already_hit";
-  if (sig.stale === true) return "stale";
-  if (sig.watchlist === true) return "watchlist";
-  if (sig.actionable === true) return "actionable";
-  if (sig.alreadyHit && sig.recommendedSide === "OVER") return "already_hit";
-  const age = sig.signalTimestamp ? Date.now() - sig.signalTimestamp : 0;
-  if (age > 180_000) return "stale";
-  if (sig.confidenceTier === "WATCHLIST" || (sig.signalScore ?? 0) < 40) return "watchlist";
-  return "actionable";
-}
-
-function confidenceTierColor(tier: string | null | undefined): string {
-  if (!tier) return "bg-muted/30 text-muted-foreground";
-  if (tier === "ELITE") return "bg-yellow-500/20 text-yellow-400";
-  if (tier === "STRONG") return "bg-green-500/20 text-green-400";
-  if (tier === "SOLID") return "bg-teal-500/20 text-teal-400";
-  return "bg-muted/30 text-muted-foreground";
-}
-
-function tierCardBorder(tier: string | null | undefined): string {
-  if (tier === "ELITE") return "border-l-4 border-l-yellow-500 shadow-[0_0_12px_rgba(234,179,8,0.15)]";
-  if (tier === "STRONG") return "border-l-4 border-l-emerald-500";
-  if (tier === "SOLID") return "border-l-4 border-l-teal-500/60";
-  return "border-l-2 border-l-muted/40";
-}
-
-const ARCHETYPE_LABELS: Record<string, string> = {
-  elite_contact: "Elite Contact",
-  power_first: "Power First",
-  stable_regular: "Stable Regular",
-  contact_specialist: "Contact Specialist",
-  platoon_hitter: "Platoon Bat",
-  hot_streak: "Hot Streak",
-  cold_streak: "Cold Streak",
-  limited_sample: "Limited Sample",
-  ace: "Ace",
-  quality_starter: "Quality Starter",
-  mid_rotation: "Mid Rotation",
-  back_end: "Back End",
-  opener_bulk: "Opener/Bulk",
-  reliever: "Reliever",
-};
-
-function archetypeColor(arch: string): string {
-  if (arch === "elite_contact" || arch === "ace") return "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
-  if (arch === "power_first" || arch === "quality_starter") return "bg-emerald-500/20 text-emerald-400 border-emerald-500/30";
-  if (arch === "hot_streak") return "bg-orange-500/20 text-orange-400 border-orange-500/30";
-  if (arch === "cold_streak") return "bg-blue-500/20 text-blue-400 border-blue-500/30";
-  if (arch === "limited_sample" || arch === "back_end") return "bg-muted/40 text-muted-foreground border-muted/30";
-  return "bg-muted/30 text-muted-foreground border-muted/20";
-}
-
-function ttoLabel(n: number): string {
-  if (n === 1) return "First look at lineup";
-  if (n === 2) return "Second time through order";
-  if (n === 3) return "Third time through — elevated risk";
-  return `${n}th time through — high fatigue`;
-}
-
-const PITCH_LABELS: Record<string, string> = {
-  FF: "4-Seam", SI: "Sinker", FC: "Cutter", SL: "Slider",
-  CU: "Curve", CH: "Change", FS: "Splitter", KC: "Knuckle Curve",
-  KN: "Knuckle", EP: "Eephus", ST: "Sweeper", SV: "Slurve",
-};
-
-type SignalsResponse = {
-  mode: "live" | "no_lines" | "preview" | "preview_locked" | "monitoring";
-  signals: MLBSignal[];
-  updatedAt: number;
-  isDegraded?: boolean;
-  gameCardTags?: string[];
+type MLBGamesResponse = {
+  mode: "live" | "preview" | "preview_locked";
+  games: MLBGame[];
 };
 
 type EdgeFeedResponse = {
   signals: MLBSignal[];
 };
 
-type MLBGamesResponse = {
-  mode: "live" | "preview" | "preview_locked";
-  games: MLBGame[];
-  previewPlayers?: any[];
+type HRRadarResponse = {
+  hrEdges: Array<{
+    playerId: string; playerName: string; team: string; market: string; side: string;
+    line: number; projection: number; engineProbability: number; edge: number | null;
+    signalScore: number; confidenceTier: string; badges: string[]; reasons: string[];
+    gameId: string; awayAbbr: string | null; homeAbbr: string | null;
+    alreadyHit?: boolean;
+  }>;
+  bettableHR: Array<any>;
+  activity?: Array<any>;
+  hrWatchlist: Array<{
+    playerId: string; playerName: string; team: string; hrProbability: number;
+    hardHitEvents: number; parkFactor: number | null; windFactor: string;
+    reasons: string[]; gameId: string; awayAbbr: string | null; homeAbbr: string | null;
+    badges: string[];
+  }>;
 };
-
-type OddsEntry = { line: number; overOdds: number; underOdds: number };
-
-type CalcResult = {
-  market: string;
-  projection: number;
-  bookLine: number;
-  calibratedProbabilityOver: number;
-  calibratedProbabilityUnder: number;
-  edge: number;
-  recommendedSide: string;
-  confidenceTier: string;
-  expectedHits: number | null;
-  remainingPA: number | null;
-  adjustedHitRate: number | null;
-  bookImplied: number | null;
-  explanationBullets: string[];
-  mode?: string;
-  isManual?: boolean;
-  label?: string;
-};
-
-const STALE_MS = 120_000;
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-function isFresh(ts?: string | null): boolean {
-  if (!ts) return false;
-  const ms = new Date(ts).getTime();
-  return Number.isFinite(ms) && Date.now() - ms <= STALE_MS;
-}
-function hasRealOdds(market: MLBGameMarket | null | undefined): boolean {
-  if (!market || !isFiniteNumber(market.line) || !market.odds) return false;
-  return (isFiniteNumber(market.odds.overOdds) || isFiniteNumber(market.odds.underOdds)) && isFresh(market.oddsUpdatedAt);
-}
-function canShowSignal(market: MLBGameMarket | null | undefined): boolean {
-  return hasRealOdds(market) && isFiniteNumber(market?.projection) && isFresh(market?.projectionUpdatedAt);
-}
 
 const MARKET_LABELS: Record<string, string> = {
   hits: "Hits", total_bases: "Total Bases", hrr: "H+R+RBI",
@@ -328,90 +146,8 @@ const MARKET_LABELS: Record<string, string> = {
   batter_strikeouts: "Strikeouts", hr_allowed: "HR Allowed",
 };
 
-const SPORTSBOOK_LABELS: Record<string, string> = {
-  fanduel: "FanDuel", draftkings: "DraftKings", hardrockbet: "Hard Rock", betmgm: "BetMGM",
-  caesars: "Caesars", pointsbet: "PointsBet", bet365: "Bet365", betrivers: "BetRivers",
-  prizepicks: "PrizePicks", underdog: "Underdog", underdogfantasy: "Underdog",
-  fanatics: "Fanatics",
-};
-
-const PITCHER_MARKET_SET = new Set(["pitcher_k", "pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"]);
-
-const BATTER_MARKETS = [
-  { value: "hits", label: "Hits" },
-  { value: "total_bases", label: "Total Bases" },
-  { value: "hrr", label: "H+R+RBI" },
-  { value: "hr", label: "Home Runs" },
-  { value: "batter_strikeouts", label: "Strikeouts" },
-];
-
-const PITCHER_MARKETS = [
-  { value: "pitcher_k", label: "K (Pitcher)" },
-  { value: "pitcher_outs", label: "Outs" },
-  { value: "walks_allowed", label: "Walks Allowed" },
-  { value: "hits_allowed", label: "Hits Allowed" },
-  { value: "hr_allowed", label: "HR Allowed" },
-];
-
-type MainTab = "games" | "edge_feed" | "inning_feed" | "hr_radar" | "live_feed";
-
-function heatEmoji(form: string | null | undefined): string {
-  if (!form) return "";
-  const f = form.toUpperCase();
-  if (f === "HOT") return "🔥";
-  if (f === "WARM") return "🟡";
-  if (f === "COLD") return "❄️";
-  if (f === "EXTREME_COLD" || f === "ICE_COLD") return "🥶";
-  return "";
-}
-
-function heatColor(form: string | null | undefined): string {
-  if (!form) return "text-muted-foreground";
-  const f = form.toUpperCase();
-  if (f === "HOT") return "text-green-400";
-  if (f === "WARM") return "text-yellow-400";
-  if (f === "COLD") return "text-blue-400";
-  if (f === "EXTREME_COLD" || f === "ICE_COLD") return "text-blue-600";
-  return "text-muted-foreground";
-}
-
-function heatGlow(form: string | null | undefined): string {
-  if (!form) return "";
-  const f = form.toUpperCase();
-  if (f === "HOT") return "shadow-[0_0_12px_rgba(34,197,94,0.3)]";
-  if (f === "WARM") return "shadow-[0_0_8px_rgba(234,179,8,0.2)]";
-  if (f === "COLD") return "shadow-[0_0_8px_rgba(59,130,246,0.2)]";
-  if (f === "EXTREME_COLD" || f === "ICE_COLD") return "shadow-[0_0_10px_rgba(37,99,235,0.3)]";
-  return "";
-}
-
-
-function edgeColor(edge: number | null): string {
-  if (edge == null) return "text-muted-foreground";
-  if (edge >= 8) return "text-green-400";
-  if (edge >= 5) return "text-yellow-400";
-  return "text-muted-foreground/70";
-}
-
-function edgeBg(edge: number | null): string {
-  if (edge == null) return "bg-muted/30";
-  if (edge >= 8) return "bg-green-500/10";
-  if (edge >= 5) return "bg-yellow-500/10";
-  if (edge >= 0) return "bg-muted/30";
-  return "bg-red-500/10";
-}
-
-function ordinal(n: number): string {
-  if (n === 1) return "1st";
-  if (n === 2) return "2nd";
-  if (n === 3) return "3rd";
-  return `${n}th`;
-}
-
-function passLabel(n: number): string {
-  if (n === 1) return "First look";
-  if (n === 2) return "Second look";
-  return `${ordinal(n)} time through`;
+function formatOdds(n: number): string {
+  return n > 0 ? `+${n}` : String(n);
 }
 
 function inningLabel(game: MLBGame): string {
@@ -421,909 +157,456 @@ function inningLabel(game: MLBGame): string {
   return `${game.isTopInning ? "▲" : "▼"}${game.inning}`;
 }
 
-function formatOdds(n: number): string {
-  return n > 0 ? `+${n}` : String(n);
+function gameLeanBadge(signals: MlbSignalData[], gameId: string): { label: string; color: string } | null {
+  const gameSignals = signals.filter(s => s.gameId === gameId && (s.confidenceTier === "ELITE" || s.confidenceTier === "STRONG"));
+  if (gameSignals.length === 0) return null;
+  const pitcherCount = gameSignals.filter(s => ["pitcher_k", "pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(s.market)).length;
+  const batterCount = gameSignals.length - pitcherCount;
+  if (pitcherCount > batterCount) return { label: "Pitch", color: "#3b82f6" };
+  if (batterCount > pitcherCount) return { label: "Hit", color: "#f97316" };
+  return { label: "Mixed", color: "#71717a" };
 }
 
-function generateTweet(sig: MLBSignal, isElite: boolean): string {
-  const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
-  const side = sig.recommendedSide;
-  const line = sig.bookLine != null ? sig.bookLine : "";
-  const pct = Math.round(sig.enginePct);
-  const edge = sig.edge != null ? `+${sig.edge.toFixed(1)}%` : "";
-  const formTag = sig.formIndicator && sig.formIndicator !== "NEUTRAL" ? ` [${sig.formIndicator}]` : "";
-  const bullets = (sig.explanationBullets ?? []).slice(0, 2).map(b => `- ${b}`).join("\n");
-
-  if (isElite) {
-    const evLine = sig.evPct != null ? `EV: ${sig.evPct > 0 ? "+" : ""}${sig.evPct.toFixed(1)}%` : "";
-    const hrLine = sig.hrFactors?.count ? `HR Factors: ${sig.hrFactors.labels.join(", ")}` : "";
-    const matchup = sig.matchupTag ? `Matchup: ${sig.matchupTag}` : "";
-    return [
-      `${sig.playerName}${formTag} | ${marketLabel} ${side} ${line}`,
-      `Engine: ${pct}% | Edge: ${edge}${evLine ? ` | ${evLine}` : ""}`,
-      matchup, hrLine, bullets, "", "Powered by LiveLocks",
-    ].filter(Boolean).join("\n");
-  }
-  return [
-    `${sig.playerName} | ${marketLabel} ${side} ${line}`,
-    `Engine: ${pct}%${edge ? ` | Edge: ${edge}` : ""}`,
-    bullets, "", "Powered by LiveLocks",
-  ].filter(Boolean).join("\n");
-}
-
-function isValidSignal(sig: MLBSignal, selectedGameId: string, rosterPlayerIds?: Set<string>): boolean {
-  if (!sig.playerId || !sig.market) return false;
-  if (sig.bookLine == null) return false;
-  if (typeof sig.enginePct !== "number" || !Number.isFinite(sig.enginePct)) return false;
-  if (sig.enginePct < 0 || sig.enginePct > 100) return false;
-  if (sig.gameId !== selectedGameId) return false;
-  if (rosterPlayerIds?.size && !PITCHER_MARKET_SET.has(sig.market) && !rosterPlayerIds.has(String(sig.playerId))) return false;
-  return true;
-}
-
-function ABOutcomePill({ outcome, pitchType, pitchSpeed, exitVelocity }: { outcome: string; pitchType?: string | null; pitchSpeed?: number | null; exitVelocity?: number | null }) {
-  const styles: Record<string, string> = {
-    hit: "bg-green-500/20 text-green-400 border-green-500/30",
-    strikeout: "bg-red-500/15 text-red-400 border-red-500/25",
-    walk: "bg-blue-500/15 text-blue-400 border-blue-500/25",
-    hbp: "bg-blue-500/15 text-blue-400 border-blue-500/25",
-    out: "bg-muted/50 text-muted-foreground border-border/30",
-    error: "bg-yellow-500/15 text-yellow-400 border-yellow-500/25",
-    other: "bg-muted/50 text-muted-foreground border-border/30",
-  };
-  const labels: Record<string, string> = {
-    hit: "H", strikeout: "K", walk: "BB", hbp: "HBP", out: "O", error: "E", other: "—",
-  };
-  const pitchLabel = pitchType ? (pitchType.length > 4 ? pitchType.slice(0, 2).toUpperCase() : pitchType.toUpperCase()) : null;
-  return (
-    <div className="flex flex-col items-center gap-0.5">
-      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-md border ${styles[outcome] ?? styles.other}`}>
-        {labels[outcome] ?? outcome}
-      </span>
-      {(pitchLabel || pitchSpeed != null || exitVelocity != null) && (
-        <span className="text-[7px] text-muted-foreground/60 leading-tight text-center">
-          {exitVelocity != null ? `${Math.round(exitVelocity)}mph` : pitchLabel && pitchSpeed ? `${pitchLabel} ${Math.round(pitchSpeed)}` : pitchSpeed ? `${Math.round(pitchSpeed)}mph` : pitchLabel ?? ""}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function SignalCard({ sig, isElite, compact, onClickThrough, onAddToSlip }: {
-  sig: MLBSignal; isElite: boolean; compact?: boolean;
-  onClickThrough?: (sig: MLBSignal) => void;
-  onAddToSlip?: (sig: MLBSignal) => void;
+function GameChipStrip({ games, selectedGameId, onSelectGame, edgeFeedSignals, onRefresh }: {
+  games: MLBGame[];
+  selectedGameId: string | null;
+  onSelectGame: (id: string | null) => void;
+  edgeFeedSignals: MlbSignalData[];
+  onRefresh: () => void;
 }) {
-  const [reasonsOpen, setReasonsOpen] = useState(false);
-  const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
-  const isHrMarket = sig.market === "home_runs" || sig.market === "hr";
-  const form = sig.formIndicator;
-  const probWhole = Math.round(sig.enginePct);
-  const state = deriveSignalState(sig);
-  const edgeVal = sig.edge ?? 0;
-  const hasPositiveEdge = edgeVal > 0;
-  const glowEligible = sig.playerGlowEligible &&
-    (sig.confidenceTier === "ELITE" || sig.confidenceTier === "STRONG") &&
-    edgeVal >= 5;
-  const glowClass = glowEligible
-    ? (sig.recommendedSide === "OVER"
-      ? "border-green-500/50 shadow-[0_0_16px_rgba(34,197,94,0.25)]"
-      : sig.recommendedSide === "UNDER"
-      ? "border-blue-500/50 shadow-[0_0_16px_rgba(59,130,246,0.25)]"
-      : "border-green-500/40 shadow-[0_0_12px_rgba(34,197,94,0.2)]")
-    : "";
-
-  const stateStyles = state === "already_hit"
-    ? "border-emerald-500/40 bg-emerald-500/5"
-    : state === "stale"
-    ? "opacity-50 border-border/20"
-    : state === "watchlist"
-    ? "border-border/30 bg-secondary/20"
-    : "";
-
-  const allReasons = sig.explanationBullets?.length ? sig.explanationBullets : sig.reasons?.length ? sig.reasons : [];
-  const badges = sig.badges ?? [];
-  const riskFlags = sig.riskFlags ?? [];
-  const drivers = sig.drivers as Record<string, number> | undefined;
-
-  const tierBorder = tierCardBorder(sig.confidenceTier);
-  const cardBg = state === "already_hit"
-    ? "bg-emerald-500/5"
-    : state === "stale"
-    ? "bg-card/40"
-    : state === "watchlist"
-    ? "bg-secondary/20"
-    : "bg-card";
-
   return (
-    <div
-      data-testid={`card-mlb-signal-${sig.playerId}-${sig.market}`}
-      className={`rounded-xl border ${tierBorder} p-4 sm:p-5 space-y-3 transition-all ${stateStyles} ${glowClass || heatGlow(form)} ${cardBg} border-border/40 ${onClickThrough ? "cursor-pointer hover:border-primary/40 active:scale-[0.99]" : ""} w-full`}
-      onClick={() => onClickThrough?.(sig)}
-    >
-      {state === "already_hit" && (
-        <div className="flex items-center gap-2 py-1.5 px-3 rounded-lg bg-emerald-500/15 border border-emerald-500/30 mb-1">
-          <span className="text-emerald-400 text-xs font-black tracking-wider">ALREADY HIT</span>
-          <span className="text-emerald-400/70 text-[10px]">Player cleared the line</span>
-        </div>
-      )}
-
-      <div className="flex justify-between items-start gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-bold text-foreground truncate">{sig.playerName}</span>
-            {form && form !== "NEUTRAL" && (
-              <span className={`text-xs font-bold ${heatColor(form)}`}>
-                {heatEmoji(form)} {form}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-            <span className="text-xs text-muted-foreground">{marketLabel}</span>
-            {compact && sig.awayAbbr && sig.homeAbbr && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30">
-                {sig.awayAbbr} vs {sig.homeAbbr}
-              </span>
-            )}
-            {sig.matchupTag && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30">
-                {sig.matchupTag}
-              </span>
-            )}
-            {sig.inning > 0 && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30">
-                Inn {sig.inning}
-              </span>
-            )}
-            {sig.batterArchetype && ARCHETYPE_LABELS[sig.batterArchetype] && (
-              <span data-testid={`badge-archetype-${sig.playerId}`} className={`text-[10px] px-1.5 py-0.5 rounded border ${archetypeColor(sig.batterArchetype)}`}>
-                {ARCHETYPE_LABELS[sig.batterArchetype]}
-              </span>
-            )}
-            {sig.pitcherArchetype && !sig.batterArchetype && ARCHETYPE_LABELS[sig.pitcherArchetype] && (
-              <span data-testid={`badge-archetype-${sig.playerId}`} className={`text-[10px] px-1.5 py-0.5 rounded border ${archetypeColor(sig.pitcherArchetype)}`}>
-                {ARCHETYPE_LABELS[sig.pitcherArchetype]}
-              </span>
-            )}
-            {sig.isFlagship && (
-              <span data-testid={`badge-flagship-${sig.playerId}`} className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/15 text-yellow-400 border border-yellow-500/25 font-semibold">
-                Flagship
-              </span>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {sig.confidenceTier && sig.confidenceTier !== "WATCHLIST" && (
-            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${confidenceTierColor(sig.confidenceTier)}`}>{sig.confidenceTier}</span>
-          )}
-          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${sig.recommendedSide === "OVER" ? "bg-green-500/20 text-green-400" : sig.recommendedSide === "UNDER" ? "bg-blue-500/20 text-blue-400" : "bg-muted/30 text-muted-foreground"}`}>
-            {sig.recommendedSide}
-          </span>
-        </div>
+    <div className="bg-card border border-border rounded-xl p-4" data-testid="mlb-games-strip">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+          <Radio className="w-3.5 h-3.5 text-green-500" /> Today's Games
+        </h2>
+        <button
+          onClick={onRefresh}
+          className="text-muted-foreground flex items-center gap-1 text-xs hover:text-foreground transition-colors"
+          data-testid="button-refresh-mlb-games"
+        >
+          <RefreshCw className="w-3 h-3" /> Refresh
+        </button>
       </div>
+      <div className="flex gap-2 flex-wrap">
+        {games.map((game) => {
+          const isLive = game.status === "live";
+          const isFinal = game.status === "final";
+          const isSelected = game.gameId === selectedGameId;
+          const lean = gameLeanBadge(edgeFeedSignals, game.gameId);
+          const tipoffTime = game.startTime
+            ? new Date(game.startTime).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })
+            : null;
 
-      <div className="flex items-center gap-3">
-        <MiniProbRing pct={probWhole} size={48} />
-        <div className="grid grid-cols-3 gap-3 text-center flex-1">
-          <div>
-            <div className="text-[10px] text-muted-foreground">Edge</div>
-            <div className={`text-base sm:text-lg font-bold ${hasPositiveEdge ? "text-green-400" : "text-muted-foreground"}`}>
-              {sig.edge != null ? `${edgeVal > 0 ? "+" : ""}${edgeVal.toFixed(1)}%` : "—"}
-            </div>
-          </div>
-          <div>
-            <div className="text-[10px] text-muted-foreground">Proj</div>
-            <div className="text-base sm:text-lg font-bold text-foreground">{sig.projection != null ? sig.projection.toFixed(2) : "—"}</div>
-          </div>
-          <div>
-            <div className="text-[10px] text-muted-foreground">Line</div>
-            <div className="text-base sm:text-lg font-bold text-foreground">{sig.bookLine ?? "—"}</div>
-          </div>
-        </div>
-      </div>
-
-      {(sig.overOdds != null || sig.underOdds != null || sig.bookImplied != null) && (
-        <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
-          {sig.overOdds != null && <span>O {formatOdds(sig.overOdds)}</span>}
-          {sig.underOdds != null && <span>U {formatOdds(sig.underOdds)}</span>}
-          {sig.bookImplied != null && <span>Book Implied: {sig.bookImplied.toFixed(1)}%</span>}
-        </div>
-      )}
-
-      {sig.thesis && state === "actionable" && (
-        <div data-testid={`thesis-${sig.playerId}-${sig.market}`} className="text-[11px] text-muted-foreground leading-relaxed px-3 py-2 rounded-lg bg-secondary/30 border border-border/20 italic">
-          {sig.thesis}
-        </div>
-      )}
-
-      {(badges.length > 0 || riskFlags.length > 0 || sig.safetyCeilingApplied || sig.dataQuality === "partial" || sig.dataQuality === "degraded" || sig.isDegraded) && (
-        <div className="flex flex-wrap gap-1">
-          {badges.map((b, i) => (
-            <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-400 border border-green-500/20 font-semibold">
-              {b}
-            </span>
-          ))}
-          {sig.safetyCeilingApplied && (
-            <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20 font-semibold">
-              Ceiling Applied
-            </span>
-          )}
-          {(sig.dataQuality === "partial" || sig.dataQuality === "degraded" || sig.isDegraded) && (
-            <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-semibold">
-              {sig.dataQuality === "degraded" || sig.isDegraded ? "Degraded Data" : "Partial Data"}
-            </span>
-          )}
-          {riskFlags.map((f, i) => (
-            <span key={`rf-${i}`} className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-semibold">
-              {f}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {sig.currentStats && (() => {
-        const cs = sig.currentStats;
-        const line = sig.bookLine ?? 0;
-        const currentVal = sig.market === "hits" ? cs.h
-          : sig.market === "home_runs" || sig.market === "hr" ? cs.hr
-          : sig.market === "total_bases" ? cs.tb
-          : sig.market === "hrr" ? (cs.h + cs.hr + cs.rbi)
-          : cs.h;
-        const alreadyOver = currentVal >= line && line > 0;
-        const edgeHit = sig.recommendedSide === "OVER" && alreadyOver;
-        return (
-          <div className={`flex items-center gap-3 py-2 px-3 rounded-lg border ${
-            edgeHit
-              ? "bg-green-500/10 border-green-500/30"
-              : alreadyOver
-                ? "bg-yellow-500/10 border-yellow-500/30"
-                : "bg-secondary/40 border-border/30"
-          }`}>
-            <span className={`text-[10px] font-semibold uppercase tracking-wider shrink-0 ${
-              edgeHit ? "text-green-400" : "text-muted-foreground"
-            }`}>{edgeHit ? "HIT" : "Today"}</span>
-            <div className="flex items-center gap-2 flex-wrap text-[11px]">
-              <span className={`font-semibold ${alreadyOver ? "text-green-400" : "text-foreground"}`}>
-                {cs.ab > 0 ? `${cs.h}-${cs.ab}` : "0 AB"}
-              </span>
-              {cs.hr > 0 && <span className="text-orange-400 font-bold">{cs.hr} HR</span>}
-              {cs.rbi > 0 && <span className="text-muted-foreground">{cs.rbi} RBI</span>}
-              {cs.bb > 0 && <span className="text-muted-foreground">{cs.bb} BB</span>}
-              {cs.k > 0 && <span className="text-red-400">{cs.k} K</span>}
-              {cs.tb > 0 && <span className="text-muted-foreground">{cs.tb} TB</span>}
-            </div>
-          </div>
-        );
-      })()}
-
-      {sig.lastABContact && (sig.lastABContact.exitVelo || sig.lastABContact.launchAngle || sig.lastABContact.barrelPct) && (
-        <div className="flex items-center gap-3 py-2 px-3 rounded-lg bg-secondary/30 border border-border/20">
-          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider shrink-0">Contact</span>
-          <div className="flex items-center gap-2 flex-wrap text-[11px]">
-            {sig.lastABContact.exitVelo != null && (
-              <span className={sig.lastABContact.exitVelo >= 95 ? "text-green-400 font-bold" : sig.lastABContact.exitVelo >= 88 ? "text-yellow-400" : "text-muted-foreground"}>
-                {sig.lastABContact.exitVelo.toFixed(0)} mph EV
-              </span>
-            )}
-            {sig.lastABContact.launchAngle != null && (
-              <span className={sig.lastABContact.launchAngle >= 10 && sig.lastABContact.launchAngle <= 30 ? "text-green-400" : "text-muted-foreground"}>
-                {sig.lastABContact.launchAngle.toFixed(0)}° LA
-              </span>
-            )}
-            {sig.lastABContact.distance != null && sig.lastABContact.distance > 0 && (
-              <span className={sig.lastABContact.distance >= 340 ? "text-green-400" : "text-muted-foreground"}>
-                {sig.lastABContact.distance.toFixed(0)} ft
-              </span>
-            )}
-            {sig.lastABContact.barrelPct != null && sig.lastABContact.barrelPct > 0 && (
-              <span className={sig.lastABContact.barrelPct >= 10 ? "text-green-400" : "text-muted-foreground"}>
-                {sig.lastABContact.barrelPct.toFixed(0)}% Barrel
-              </span>
-            )}
-            {sig.lastABContact.hardHitPct != null && sig.lastABContact.hardHitPct > 0 && (
-              <span className={sig.lastABContact.hardHitPct >= 40 ? "text-green-400" : "text-muted-foreground"}>
-                {sig.lastABContact.hardHitPct.toFixed(0)}% HH
-              </span>
-            )}
-            {sig.lastABContact.outcome && (
-              <span className={sig.lastABContact.outcome === "hit" ? "text-green-400 font-bold" : sig.lastABContact.outcome === "strikeout" ? "text-red-400" : "text-muted-foreground"}>
-                {sig.lastABContact.outcome === "hit" ? "HIT" : sig.lastABContact.outcome === "strikeout" ? "K" : sig.lastABContact.outcome.toUpperCase()}
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {sig.pitchMix && sig.pitchMix.length > 0 && (
-        <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20 space-y-1.5">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Pitcher Arsenal</div>
-          <div className="flex flex-wrap gap-1.5">
-            {sig.pitchMix.slice(0, 5).map((p, i) => (
-              <span key={i} className="text-[10px] px-2 py-0.5 rounded bg-secondary/60 text-foreground border border-border/30">
-                {PITCH_LABELS[p.pitchType] ?? p.pitchType} {Math.round(p.percentage)}%
-                {p.avgVelocity != null && <span className="text-muted-foreground ml-1">{p.avgVelocity.toFixed(0)}mph</span>}
-              </span>
-            ))}
-          </div>
-          {(() => {
-            const era = (sig as any).pitcherEra;
-            const attackable = (sig.signalTags ?? []).includes("ATTACKABLE PITCHER");
-            if (!attackable && !era) return null;
-            return (
-              <div className={`text-[10px] font-semibold mt-0.5 ${attackable ? "text-green-400" : "text-muted-foreground"}`}>
-                {attackable ? "Attackable" : "Neutral"} Matchup
-                {era != null && <span className="text-muted-foreground ml-1">ERA {era.toFixed(2)}</span>}
-              </div>
-            );
-          })()}
-        </div>
-      )}
-
-      {isHrMarket && sig.hrFactors && sig.hrFactors.count > 0 && (
-        <div className="rounded-lg p-2.5 space-y-1" style={{ background: "rgba(249,115,22,0.08)", border: "1px solid rgba(249,115,22,0.2)" }}>
-          <div className="text-[10px] font-bold uppercase tracking-wider text-orange-400">
-            {sig.hrFactors.count} HR Factor{sig.hrFactors.count !== 1 ? "s" : ""}
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {sig.hrFactors.labels.map((label, i) => (
-              <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-300 border border-orange-500/20">
-                {label}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {allReasons.length > 0 && (
-        <div onClick={e => e.stopPropagation()}>
-          <button
-            data-testid={`btn-reasons-${sig.playerId}-${sig.market}`}
-            className="flex items-center gap-1.5 text-[10px] text-primary hover:text-primary/80 font-semibold transition-colors w-full"
-            onClick={() => setReasonsOpen(!reasonsOpen)}
-          >
-            <span>{reasonsOpen ? "▾" : "▸"}</span>
-            <span>Why this signal? ({allReasons.length} reason{allReasons.length !== 1 ? "s" : ""})</span>
-          </button>
-          {reasonsOpen && (
-            <div className="space-y-1 pt-1.5 pl-3 animate-in slide-in-from-top-1 duration-200">
-              {allReasons.map((bullet, i) => (
-                <div key={i} className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
-                  <span className="text-primary/50 mt-px">•</span>
-                  <span>{bullet}</span>
-                </div>
-              ))}
-              {drivers && Object.keys(drivers).length > 0 && (
-                <div className="flex flex-wrap gap-1 pt-1">
-                  {Object.entries(drivers).filter(([_, v]) => typeof v === "number" && v > 0.3).slice(0, 5).map(([k, v]) => (
-                    <span key={k} className="text-[8px] px-1 py-0.5 rounded bg-secondary/50 text-muted-foreground">
-                      {k}: {(v as number).toFixed(2)}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {sig.signalTags && sig.signalTags.length > 0 && (
-        <div className="flex flex-wrap gap-1 pt-0.5">
-          {sig.signalTags.map(tag => (
-            <span key={tag} className="text-[9px] px-1.5 py-0.5 rounded bg-secondary/50 text-muted-foreground border border-border/20">
-              {tag}
-            </span>
-          ))}
-        </div>
-      )}
-
-      <div className="flex items-center justify-between pt-2 border-t border-border/30 gap-2" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground min-w-0">
-          {sig.sportsbook && <span className="font-semibold truncate">{SPORTSBOOK_LABELS[sig.sportsbook] ?? sig.sportsbook}</span>}
-          {sig.signalTimestamp && (
-            <span className="shrink-0">{new Date(sig.signalTimestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
-          )}
-          {sig.signalScore != null && (
-            <span className="shrink-0 font-semibold">Score: {sig.signalScore}</span>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {onAddToSlip && (state === "actionable" || state === "already_hit") && (
+          return (
             <button
-              data-testid={`button-mlb-slip-${sig.playerId}-${sig.market}`}
-              className="text-xs px-3 py-2 min-h-[44px] rounded-lg border border-green-500/30 bg-green-500/10 hover:bg-green-500/20 transition-colors text-green-400 hover:text-green-300 font-semibold"
-              onClick={(e) => { e.stopPropagation(); onAddToSlip(sig); }}
+              key={game.gameId}
+              data-testid={`button-game-${game.gameId}`}
+              onClick={() => onSelectGame(isSelected ? null : game.gameId)}
+              className={`flex flex-col items-center px-3 py-2 rounded-lg border text-xs min-w-[130px] transition-all ${
+                isSelected
+                  ? "border-primary bg-primary/10 ring-1 ring-primary shadow-[0_0_16px_-3px_hsl(var(--primary)/0.4)]"
+                  : "border-border/60 bg-secondary/40 hover:bg-secondary/70 hover:shadow-[0_0_14px_-3px_hsl(var(--primary)/0.25)]"
+              }`}
             >
-              + Slip
+              <div className="flex items-center justify-between w-full gap-2">
+                <span className="font-semibold text-foreground">{game.awayAbbr}</span>
+                <span className={`font-mono font-bold ${isLive ? "text-green-400" : "text-primary"}`}>
+                  {game.awayScore ?? 0} – {game.homeScore ?? 0}
+                </span>
+                <span className="font-semibold text-foreground">{game.homeAbbr}</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-muted-foreground mt-0.5">
+                {isLive && <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse inline-block" />}
+                {isFinal && <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 inline-block" />}
+                <span className={isLive ? "text-green-400" : isFinal ? "text-muted-foreground/60" : ""}>
+                  {isLive
+                    ? inningLabel(game)
+                    : game.status === "pregame" && tipoffTime
+                    ? tipoffTime
+                    : game.status === "final"
+                    ? "Final"
+                    : "—"}
+                </span>
+                {lean && (
+                  <span className="w-2 h-2 rounded-full" style={{ background: lean.color }} title={`${lean.label}-lean`} />
+                )}
+                {isSelected && <span className="text-primary font-medium ml-0.5">●</span>}
+              </div>
             </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function GameContextPanel({ game, signalCount }: { game: MLBGame; signalCount: number }) {
+  const isLive = game.status === "live";
+  return (
+    <div className="space-y-3" data-testid="mlb-game-context">
+      <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-bold text-foreground">
+            {game.awayAbbr} @ {game.homeAbbr}
+          </div>
+          {isLive && (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-500/15 text-green-400 border border-green-500/30 flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+              LIVE
+            </span>
           )}
-          <button
-            data-testid={`button-mlb-tweet-${sig.playerId}-${sig.market}`}
-            className="text-xs px-3 py-2 min-h-[44px] rounded-lg border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 transition-colors text-blue-400 hover:text-blue-300 font-semibold"
-            onClick={(e) => {
-              e.stopPropagation();
-              const tweet = generateTweet(sig, isElite);
-              const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`;
-              window.open(url, "_blank", "noopener,noreferrer,width=550,height=420");
-            }}
-          >
-            𝕏 Tweet
-          </button>
-          <button
-            data-testid={`button-mlb-copy-${sig.playerId}-${sig.market}`}
-            className="text-xs px-2.5 py-2 min-h-[44px] rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-            onClick={(e) => {
-              e.stopPropagation();
-              const tweet = generateTweet(sig, isElite);
-              if (navigator.clipboard?.writeText) {
-                navigator.clipboard.writeText(tweet).then(() => {
-                  const btn = document.querySelector(`[data-testid="button-mlb-copy-${sig.playerId}-${sig.market}"]`);
-                  if (btn) { btn.textContent = "✓"; setTimeout(() => { btn.textContent = "Copy"; }, 1500); }
-                }).catch(() => {});
-              }
-            }}
-          >
-            Copy
-          </button>
+        </div>
+
+        {isLive && (
+          <div className="text-center py-2">
+            <div className="text-2xl font-black text-foreground tabular-nums">
+              {game.awayScore ?? 0} – {game.homeScore ?? 0}
+            </div>
+            <div className="text-xs text-muted-foreground mt-0.5">
+              {inningLabel(game)}
+            </div>
+          </div>
+        )}
+
+        {game.venue && (
+          <div className="text-[11px] text-muted-foreground">
+            <span className="font-semibold">Venue:</span> {game.venue}
+          </div>
+        )}
+
+        {game.weather && (game.weather.temperature != null || game.weather.windSpeed != null) && (
+          <div className="text-[11px] text-muted-foreground flex items-center gap-2 flex-wrap">
+            {game.weather.temperature != null && <span>{Math.round(game.weather.temperature)}°F</span>}
+            {game.weather.windSpeed != null && (
+              <span>{game.weather.windSpeed} mph {game.weather.windDirection ?? ""}</span>
+            )}
+            {game.weather.humidity != null && <span>{game.weather.humidity}% humidity</span>}
+          </div>
+        )}
+
+        <div className="border-t border-border/30 pt-3 space-y-2">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Pitchers</div>
+          <div className="grid grid-cols-2 gap-2 text-[11px]">
+            <div className="bg-secondary/30 rounded-lg p-2">
+              <div className="text-[9px] text-muted-foreground uppercase">Away SP</div>
+              <div className="font-semibold text-foreground">{game.pitcherAway ?? "TBD"}</div>
+              {game.awayPitcherHand && <span className="text-[9px] text-muted-foreground">({game.awayPitcherHand}HP)</span>}
+            </div>
+            <div className="bg-secondary/30 rounded-lg p-2">
+              <div className="text-[9px] text-muted-foreground uppercase">Home SP</div>
+              <div className="font-semibold text-foreground">{game.pitcherHome ?? "TBD"}</div>
+              {game.homePitcherHand && <span className="text-[9px] text-muted-foreground">({game.homePitcherHand}HP)</span>}
+            </div>
+          </div>
+        </div>
+
+        <div className="text-[10px] text-muted-foreground">
+          {signalCount > 0 ? (
+            <span className="text-green-400 font-semibold">{signalCount} active signal{signalCount !== 1 ? "s" : ""}</span>
+          ) : (
+            <span>Monitoring — signals appear as the game progresses</span>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-
-function probColor(pct: number): string {
-  if (pct >= 75) return "text-green-400";
-  if (pct >= 65) return "text-yellow-400";
-  return "text-foreground";
-}
-
-function BatterCard({ player, signals, game, isElite, onSelect, onAddToSlip }: {
-  player: MLBBatter;
-  signals: MLBSignal[];
-  game: MLBGame;
+function GameSignalsPanel({ signals, isElite, onAddToSlip }: {
+  signals: MlbSignalData[];
   isElite: boolean;
-  onSelect: () => void;
-  onAddToSlip?: (sig: MLBSignal) => void;
+  onAddToSlip: (sig: MlbSignalData) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [showDetail, setShowDetail] = useState(false);
-  const playerSignals = signals.filter(s => s.playerId === player.playerId && !PITCHER_MARKET_SET.has(s.market));
-  const bestSignal = playerSignals.length > 0
-    ? playerSignals.reduce((best, s) => (s.enginePct ?? 0) > (best.enginePct ?? 0) ? s : best)
-    : null;
-  const form = bestSignal?.formIndicator ?? null;
-  const abResults = player.priorABResults ?? [];
-  const glowEligible = playerSignals.some(s =>
-    s.playerGlowEligible &&
-    (s.confidenceTier === "ELITE" || s.confidenceTier === "STRONG") &&
-    (s.edge ?? 0) >= 10
-  );
-  const bestTier = bestSignal?.confidenceTier ?? null;
-
-  const hasLiveContact = player.exitVelocity != null || player.barrelPct != null || player.hardHitPct != null;
-  const hasRecentForm = player.xBA != null || player.xSLG != null;
-  const hasContact = hasLiveContact || hasRecentForm;
-  const sideColor = bestSignal?.recommendedSide === "OVER"
-    ? "border-green-500/40 shadow-[0_0_14px_rgba(34,197,94,0.15)]"
-    : bestSignal?.recommendedSide === "UNDER"
-    ? "border-blue-500/40 shadow-[0_0_14px_rgba(59,130,246,0.15)]"
-    : "";
+  const sorted = [...signals].sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0));
+  const visible = isElite ? sorted : sorted.slice(0, 2);
+  const lockedCount = isElite ? 0 : Math.max(0, sorted.length - 2);
 
   return (
-    <div
-      data-testid={`card-mlb-batter-${player.playerId}`}
-      className={`rounded-lg border overflow-hidden transition-all ${
-        glowEligible ? sideColor || "border-green-500/60 shadow-[0_0_10px_rgba(34,197,94,0.2)]" : "border-border/30 hover:border-primary/40"
-      }`}
-    >
-      <div className="px-3 py-2.5 space-y-1.5">
-        <div className="flex items-center justify-between gap-2">
-          <div
-            className="flex items-center gap-1.5 min-w-0 cursor-pointer min-h-[44px] py-1"
-            onClick={(e) => { e.stopPropagation(); setShowDetail(!showDetail); }}
-          >
-            <span className="text-xs font-bold text-foreground truncate">{player.playerName}</span>
-            <span className="text-[9px] text-muted-foreground shrink-0">#{player.battingOrderSlot}</span>
-            {form && form !== "NEUTRAL" && (
-              <span className={`text-[9px] font-bold shrink-0 ${heatColor(form)}`}>{heatEmoji(form)}</span>
-            )}
-            {bestTier && bestTier !== "WATCHLIST" && (
-              <span className={`text-[8px] font-black px-1 py-0.5 rounded shrink-0 ${confidenceTierColor(bestTier)}`}>
-                {bestTier}
-              </span>
-            )}
-            <span className="text-[9px] text-muted-foreground/50">{showDetail ? "▾" : "▸"}</span>
+    <div className="space-y-3" data-testid="mlb-game-signals">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Target className="w-4 h-4 text-primary" />
+          <span className="text-sm font-bold text-foreground">Active Signals</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary font-semibold">{signals.length}</span>
+        </div>
+      </div>
+
+      {visible.length === 0 ? (
+        <div className="rounded-xl border border-border/40 bg-card p-6 text-center">
+          <div className="flex items-center justify-center gap-2 text-sm text-blue-400">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
+            </span>
+            Monitoring
           </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            {bestSignal && (
-              <>
-                <span className={`text-sm font-black ${probColor(bestSignal.enginePct)}`}>{Math.round(bestSignal.enginePct)}%</span>
-                {bestSignal.edge != null && bestSignal.edge > 0 && (
-                  <span className={`text-[9px] font-bold ${edgeColor(bestSignal.edge)}`}>+{bestSignal.edge.toFixed(1)}%</span>
-                )}
-              </>
-            )}
-            <button
-              data-testid={`btn-calc-${player.playerId}`}
-              className="text-[9px] px-2.5 py-1.5 min-h-[44px] rounded bg-primary/15 text-primary font-bold hover:bg-primary/25 transition-colors"
-              onClick={(e) => { e.stopPropagation(); onSelect(); }}
-            >
-              CALC
-            </button>
+          <div className="text-xs text-muted-foreground/60 mt-1">Signals appear as the game progresses and pitcher fatigue data accumulates.</div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {visible.map((sig, idx) => (
+            <MlbSignalCard
+              key={`${sig.playerId}-${sig.market}-${idx}`}
+              sig={sig}
+              onAddToSlip={onAddToSlip}
+            />
+          ))}
+        </div>
+      )}
+
+      {lockedCount > 0 && (
+        <div className="relative">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 filter blur-[6px] pointer-events-none select-none" aria-hidden="true">
+            {sorted.slice(2, 4).map((sig, idx) => (
+              <MlbSignalCard key={`blur-${sig.playerId}-${sig.market}-${idx}`} sig={sig} />
+            ))}
+          </div>
+          <div className="absolute inset-0 flex flex-col items-center justify-center z-10">
+            <div className="rounded-xl border border-primary/30 bg-card/95 backdrop-blur-sm p-5 text-center space-y-3 max-w-sm shadow-xl">
+              <div className="text-sm font-bold text-foreground">{lockedCount} more signal{lockedCount !== 1 ? "s" : ""} available</div>
+              <div className="text-xs text-muted-foreground">Unlock all MLB edges with All Sports.</div>
+              <a href="/upgrade" data-testid="link-mlb-signals-upgrade"
+                className="inline-block px-5 py-2.5 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors">
+                Upgrade to All Sports →
+              </a>
+            </div>
           </div>
         </div>
-
-        {showDetail && (
-          <div className="space-y-2 pt-1 border-t border-border/20 animate-in slide-in-from-top-1 duration-200">
-            {player.ab > 0 && (
-              <div className="grid grid-cols-4 gap-1.5">
-                {[
-                  { label: "AB", value: player.ab }, { label: "H", value: player.h },
-                  { label: "TB", value: player.tb }, { label: "K", value: player.k },
-                ].map(s => (
-                  <div key={s.label} className="bg-secondary/30 rounded p-1 text-center">
-                    <div className="text-[7px] text-muted-foreground">{s.label}</div>
-                    <div className="text-[10px] font-bold text-foreground">{s.value}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {hasContact && (
-              <div className="flex items-center gap-2 text-[9px]">
-                {player.exitVelocity != null && (
-                  <span className={player.exitVelocity >= 95 ? "text-green-400 font-semibold" : player.exitVelocity >= 88 ? "text-yellow-400" : "text-muted-foreground"}>
-                    EV {player.exitVelocity.toFixed(1)}
-                  </span>
-                )}
-                {player.xBA != null && (
-                  <span className={player.xBA >= 0.280 ? "text-green-400 font-semibold" : player.xBA >= 0.240 ? "text-yellow-400" : "text-muted-foreground"}>
-                    xBA .{(player.xBA * 1000).toFixed(0).padStart(3, "0")}
-                  </span>
-                )}
-                {player.hardHitPct != null && (
-                  <span className={player.hardHitPct >= 45 ? "text-green-400 font-semibold" : player.hardHitPct >= 35 ? "text-yellow-400" : "text-muted-foreground"}>
-                    Hard {Math.round(player.hardHitPct)}%
-                  </span>
-                )}
-                {player.xSLG != null && (
-                  <span className={player.xSLG >= 0.450 ? "text-green-400 font-semibold" : player.xSLG >= 0.370 ? "text-yellow-400" : "text-muted-foreground"}>
-                    xSLG .{(player.xSLG * 1000).toFixed(0).padStart(3, "0")}
-                  </span>
-                )}
-              </div>
-            )}
-
-            {abResults.length > 0 && (
-              <div>
-                <div className="text-[8px] text-muted-foreground uppercase tracking-wider mb-1">At-Bat Results</div>
-                <div className="flex items-center gap-1">
-                  {abResults.slice(-6).map((ab, i) => (
-                    <ABOutcomePill key={i} outcome={ab.outcome} pitchType={ab.pitchType} pitchSpeed={ab.pitchSpeed} exitVelocity={ab.exitVelocity} />
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {!showDetail && (
-          <>
-            {hasContact && (
-              <div className="flex items-center gap-2 text-[9px]">
-                {player.exitVelocity != null && (
-                  <span className={player.exitVelocity >= 95 ? "text-green-400 font-semibold" : player.exitVelocity >= 88 ? "text-yellow-400" : "text-muted-foreground"}>
-                    EV {player.exitVelocity.toFixed(1)}
-                  </span>
-                )}
-                {player.xBA != null && (
-                  <span className={player.xBA >= 0.280 ? "text-green-400 font-semibold" : player.xBA >= 0.240 ? "text-yellow-400" : "text-muted-foreground"}>
-                    xBA .{(player.xBA * 1000).toFixed(0).padStart(3, "0")}
-                  </span>
-                )}
-                {player.hardHitPct != null && (
-                  <span className={player.hardHitPct >= 45 ? "text-green-400 font-semibold" : player.hardHitPct >= 35 ? "text-yellow-400" : "text-muted-foreground"}>
-                    Hard {Math.round(player.hardHitPct)}%
-                  </span>
-                )}
-                {player.ab > 0 && (
-                  <span className="text-muted-foreground ml-auto">{player.h}/{player.ab}</span>
-                )}
-              </div>
-            )}
-
-            {bestSignal && (
-              <div className="flex items-center gap-2 text-[9px] flex-wrap">
-                {bestSignal.projection != null && bestSignal.bookLine != null && (
-                  <span className={`font-semibold ${bestSignal.projection > bestSignal.bookLine ? "text-green-400" : "text-muted-foreground"}`}>
-                    Proj {bestSignal.projection.toFixed(2)} / Line {bestSignal.bookLine}
-                  </span>
-                )}
-                {bestSignal.edge != null && bestSignal.edge > 0 && (
-                  <span className={`font-bold ${edgeColor(bestSignal.edge)}`}>+{bestSignal.edge.toFixed(1)}% edge</span>
-                )}
-                {bestSignal.matchupTag && (
-                  <span className="text-muted-foreground">{bestSignal.matchupTag}</span>
-                )}
-              </div>
-            )}
-
-            {abResults.length > 0 && (
-              <div className="flex items-center gap-1">
-                {abResults.slice(-5).map((ab, i) => (
-                  <ABOutcomePill key={i} outcome={ab.outcome} pitchType={ab.pitchType} pitchSpeed={ab.pitchSpeed} exitVelocity={ab.exitVelocity} />
-                ))}
-              </div>
-            )}
-          </>
-        )}
-
-        {playerSignals.length > 0 && (
-          <div className="space-y-0.5 pt-1 border-t border-border/20">
-            {playerSignals.slice(0, expanded ? 8 : 2).map(sig => (
-              <div key={`${sig.playerId}-${sig.market}`} className="flex items-center justify-between text-[10px] px-1.5 py-0.5 rounded hover:bg-secondary/20 transition-colors">
-                <div className="flex items-center gap-1">
-                  <span className={`font-bold px-1 py-0.5 rounded text-[9px] ${sig.recommendedSide === "OVER" ? "bg-green-500/20 text-green-400" : sig.recommendedSide === "UNDER" ? "bg-blue-500/20 text-blue-400" : "bg-muted/30 text-muted-foreground"}`}>
-                    {sig.recommendedSide === "OVER" ? "O" : sig.recommendedSide === "UNDER" ? "U" : "—"}
-                  </span>
-                  <span className="text-muted-foreground">{MARKET_LABELS[sig.market] ?? sig.market}</span>
-                  {sig.bookLine != null && <span className="text-foreground font-semibold">{sig.bookLine}</span>}
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className={`font-bold ${probColor(sig.enginePct)}`}>{Math.round(sig.enginePct)}%</span>
-                  {sig.edge != null && sig.edge > 0 && (
-                    <span className={`text-[9px] font-bold ${edgeColor(sig.edge)}`}>+{sig.edge.toFixed(1)}%</span>
-                  )}
-                  {onAddToSlip && (
-                    <button
-                      data-testid={`btn-slip-inline-${sig.playerId}-${sig.market}`}
-                      className="text-[8px] px-1 py-0.5 rounded border border-green-500/20 text-green-400/70 hover:text-green-400 hover:bg-green-500/10 transition-colors"
-                      onClick={(e) => { e.stopPropagation(); onAddToSlip(sig); }}
-                    >+</button>
-                  )}
-                  <button
-                    data-testid={`btn-tweet-inline-${sig.playerId}-${sig.market}`}
-                    className="text-[8px] px-1 py-0.5 rounded border border-blue-500/20 text-blue-400/70 hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const tweet = generateTweet(sig, isElite);
-                      window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`, "_blank", "noopener,noreferrer,width=550,height=420");
-                    }}
-                  >
-                    𝕏
-                  </button>
-                </div>
-              </div>
-            ))}
-            {playerSignals.length > 2 && (
-              <button
-                data-testid={`btn-expand-signals-${player.playerId}`}
-                className="text-[9px] text-primary hover:underline w-full text-center"
-                onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
-              >
-                {expanded ? "Show less" : `+${playerSignals.length - 2} more`}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 }
 
-function MlbLiveInner() {
+function HREdgeCard({ edge }: { edge: any }) {
+  const [expanded, setExpanded] = useState(false);
+  const reasons = edge.explanationBullets ?? edge.reasons ?? [];
+  const edgeVal = edge.edge ?? 0;
+  const hasPositiveEdge = edgeVal > 0;
+
+  return (
+    <div
+      data-testid={`card-hr-edge-${edge.playerId}`}
+      role="button"
+      tabIndex={0}
+      aria-expanded={expanded}
+      className={`rounded-xl border p-4 space-y-2.5 cursor-pointer transition-all hover:border-green-500/50 ${hasPositiveEdge ? "border-green-500/30 bg-green-500/5" : "border-orange-500/30 bg-orange-500/5"}`}
+      onClick={() => setExpanded(!expanded)}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(!expanded); } }}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-bold text-foreground">{edge.playerName}</span>
+          <span className="text-[10px] text-muted-foreground">{edge.team}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+            edge.confidenceTier === "ELITE" ? "bg-yellow-500/20 text-yellow-400" :
+            edge.confidenceTier === "STRONG" ? "bg-green-500/20 text-green-400" :
+            "bg-muted/30 text-muted-foreground"
+          }`}>{edge.confidenceTier}</span>
+          <span className="text-muted-foreground text-xs">{expanded ? "▾" : "▸"}</span>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 text-[10px]">
+        <span className="text-green-400 font-bold">{edge.side} {edge.line?.toFixed(1)}</span>
+        <span className="text-muted-foreground">·</span>
+        <span className={`font-bold ${hasPositiveEdge ? "text-green-400" : "text-muted-foreground"}`}>
+          {edgeVal > 0 ? "+" : ""}{edgeVal.toFixed(1)}% Edge
+        </span>
+        <span className="text-muted-foreground">·</span>
+        <span className="text-foreground">{edge.engineProbability?.toFixed(1)}% Prob</span>
+      </div>
+
+      {Array.isArray(edge.badges) && edge.badges.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {edge.badges.map((b: string) => (
+            <span key={b} className="text-[9px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-400 font-semibold">{b}</span>
+          ))}
+        </div>
+      )}
+
+      {expanded && (
+        <div className="space-y-2 pt-1 border-t border-border/20 animate-in slide-in-from-top-1 duration-200">
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="bg-secondary/30 rounded-lg p-1.5">
+              <div className="text-[8px] text-muted-foreground">Projection</div>
+              <div className="text-xs font-bold text-foreground">{edge.projection?.toFixed(2) ?? "—"}</div>
+            </div>
+            <div className="bg-secondary/30 rounded-lg p-1.5">
+              <div className="text-[8px] text-muted-foreground">Edge</div>
+              <div className={`text-xs font-bold ${hasPositiveEdge ? "text-green-400" : "text-muted-foreground"}`}>
+                {edgeVal > 0 ? "+" : ""}{edgeVal.toFixed(1)}%
+              </div>
+            </div>
+            <div className="bg-secondary/30 rounded-lg p-1.5">
+              <div className="text-[8px] text-muted-foreground">Signal</div>
+              <div className="text-xs font-bold text-foreground">{edge.signalScore}/100</div>
+            </div>
+          </div>
+          {reasons.length > 0 && (
+            <div className="space-y-0.5">
+              {reasons.map((r: string, i: number) => (
+                <p key={i} className="text-[10px] text-muted-foreground flex items-start gap-1">
+                  <span className="text-primary/50 mt-px">•</span><span>{r}</span>
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HRRadarSection({ isElite }: { isElite: boolean }) {
+  const { data: hrData, isLoading } = useQuery<HRRadarResponse>({
+    queryKey: ["/api/mlb/hr-radar"],
+    refetchInterval: 60_000,
+  });
+
+  if (isLoading) return <SkeletonCard count={3} />;
+
+  const hrEdges = hrData?.hrEdges ?? [];
+  const hrWatchlist = hrData?.hrWatchlist ?? [];
+  const activity = hrData?.activity ?? [];
+
+  return (
+    <div className="space-y-6" data-testid="mlb-hr-radar">
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">💣</span>
+          <span className="text-sm font-bold text-foreground">Bettable HR Edges</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-400 font-semibold">{hrEdges.length}</span>
+        </div>
+        {hrEdges.length === 0 ? (
+          <div className="rounded-xl border border-border/40 bg-card p-6 text-center">
+            <div className="text-xs text-muted-foreground">No HR edges detected yet — engine is scanning all live games.</div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {(isElite ? hrEdges : hrEdges.slice(0, 2)).map((edge) => (
+              <HREdgeCard key={`${edge.playerId}-${edge.market}`} edge={edge} />
+            ))}
+          </div>
+        )}
+        {!isElite && hrEdges.length > 2 && (
+          <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-center space-y-2">
+            <div className="text-sm font-bold text-foreground">{hrEdges.length - 2} more HR edge{hrEdges.length - 2 !== 1 ? "s" : ""}</div>
+            <a href="/upgrade" data-testid="link-hr-upgrade" className="inline-block px-4 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-xs">
+              Upgrade to All Sports →
+            </a>
+          </div>
+        )}
+      </div>
+
+      {activity.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">⚡</span>
+            <span className="text-sm font-bold text-foreground">HR Activity Today</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {activity.map((a: any, i: number) => (
+              <div key={i} className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs">
+                <span className="font-bold text-emerald-400">{a.playerName}</span>
+                <span className="text-muted-foreground ml-1">({a.team})</span>
+                <span className="text-emerald-400 ml-1">HR ✓</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {hrWatchlist.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">👀</span>
+            <span className="text-sm font-bold text-foreground">HR Watchlist</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted/30 text-muted-foreground font-semibold">{hrWatchlist.length}</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {hrWatchlist.map((w) => (
+              <div key={w.playerId} className="rounded-lg border border-border/40 bg-card p-3 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-foreground">{w.playerName}</span>
+                  <span className="text-[10px] text-muted-foreground">{w.team}</span>
+                </div>
+                <div className="flex items-center gap-2 text-[10px] text-muted-foreground flex-wrap">
+                  <span>HR Prob: <span className="text-foreground font-semibold">{(w.hrProbability * 100).toFixed(0)}%</span></span>
+                  {w.hardHitEvents > 0 && <span className="text-orange-400">{w.hardHitEvents} hard hits</span>}
+                  {w.parkFactor != null && w.parkFactor > 1 && <span className="text-green-400">Park+</span>}
+                  {w.windFactor && w.windFactor !== "neutral" && <span>Wind: {w.windFactor}</span>}
+                </div>
+                {w.badges.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {w.badges.map(b => (
+                      <span key={b} className="text-[8px] px-1 py-0.5 rounded bg-orange-500/10 text-orange-400">{b}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | "hr_radar" }) {
   const { user, isLoading: authLoading } = useAuth();
-  const [mainTab, setMainTab] = useState<MainTab>("games");
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
-  const [selectedPlayer, setSelectedPlayer] = useState<MLBBatter | null>(null);
-  const [selectedMarket, setSelectedMarket] = useState("hits");
-  const [selectedLine, setSelectedLine] = useState<{ book: string; line: number; overOdds: number; underOdds: number } | null>(null);
-  const [calcResult, setCalcResult] = useState<CalcResult | null>(null);
-  const [manualMode, setManualMode] = useState(false);
-  const [manualBookLine, setManualBookLine] = useState("");
-  const [mlbUpgradeNeeded, setMlbUpgradeNeeded] = useState(false);
-  const [inningFeedTab, setInningFeedTab] = useState<3 | 5 | 7>(3);
   const [liveFeedSub, setLiveFeedSub] = useState<"all" | "3rd" | "5th" | "7th">("all");
-  const gameDetailRef = useRef<HTMLDivElement>(null);
+  const mlbUpgradeNeeded = false;
   const [mlbSlipPicks, setMlbSlipPicks] = useState<Array<{ playerId: string; playerName: string; market: string; line: number; side: string; sportsbook: string; edge: number | null; enginePct: number; gameId: string; overOdds?: number | null; underOdds?: number | null }>>([]);
 
-  const handleAddToSlip = (sig: MLBSignal) => {
+  const isElite = user?.hasMLB === true;
+
+  const handleAddToSlip = (sig: MlbSignalData) => {
     if (mlbSlipPicks.length >= 10) return;
     const exists = mlbSlipPicks.find(p => p.playerId === sig.playerId && p.market === sig.market);
     if (exists) return;
     setMlbSlipPicks(prev => [...prev, {
       playerId: sig.playerId, playerName: sig.playerName, market: sig.market,
       line: sig.bookLine ?? 0, side: sig.recommendedSide,
-      sportsbook: sig.sportsbook ?? "draftkings", edge: sig.edge,
+      sportsbook: sig.sportsbook ?? "draftkings", edge: sig.edge ?? null,
       enginePct: sig.enginePct, gameId: sig.gameId ?? "",
       overOdds: sig.overOdds, underOdds: sig.underOdds,
     }]);
   };
 
-  const handleSignalClickThrough = (sig: MLBSignal) => {
-    if (sig.gameId) {
-      setSelectedGameId(sig.gameId);
-      setMainTab("games");
-      if (sig.market) setSelectedMarket(sig.market);
-      const matchedPlayer = players.find(p => String(p.playerId) === String(sig.playerId));
-      if (matchedPlayer) {
-        setSelectedPlayer(matchedPlayer);
-      }
-      if (sig.overOdds != null && sig.underOdds != null && sig.bookLine != null && sig.sportsbook) {
-        setSelectedLine({ book: sig.sportsbook, line: sig.bookLine, overOdds: sig.overOdds, underOdds: sig.underOdds });
-      }
-      setTimeout(() => {
-        gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 150);
-    }
-  };
-
-  const isElite = user?.hasMLB === true;
-
   const { data: gamesResp, isLoading: gamesLoading } = useQuery<MLBGamesResponse>({
     queryKey: ["/api/mlb/live-games"],
     refetchInterval: 30_000,
   });
-
   const games = Array.isArray(gamesResp?.games) ? gamesResp!.games : [];
-  const hasAnyOdds = games.some(g => g?.hasOdds === true);
-
-  const { data: playersRaw, isLoading: playersLoading, error: playersError } = useQuery<{ ready: boolean; reason: string | null; players: MLBBatter[] }>({
-    queryKey: ["/api/mlb/live-stats", selectedGameId],
-    enabled: !!selectedGameId && !mlbUpgradeNeeded,
-    refetchInterval: 30_000,
-    retry: (fc, err: any) => !(err?.message?.includes("MLB_UPGRADE_REQUIRED") || err?.status === 402) && fc < 2,
-  });
-  const lineupReady = playersRaw?.ready ?? false;
-  const lineupReason = playersRaw?.reason ?? null;
-  const players = Array.isArray(playersRaw?.players) ? playersRaw!.players : (Array.isArray(playersRaw) ? (playersRaw as any as MLBBatter[]) : []);
-
-  useEffect(() => {
-    if (playersError && ((playersError as any)?.message?.includes("MLB_UPGRADE_REQUIRED") || (playersError as any)?.status === 402))
-      setMlbUpgradeNeeded(true);
-  }, [playersError]);
-
-  const { data: signalsResp, isLoading: signalsLoading, error: signalsError } = useQuery<SignalsResponse>({
-    queryKey: ["/api/mlb/live-signals", selectedGameId],
-    enabled: !!selectedGameId && !mlbUpgradeNeeded,
-    refetchInterval: 45_000,
-    retry: (fc, err: any) => !(err?.message?.includes("MLB_UPGRADE_REQUIRED") || err?.status === 402) && fc < 2,
-  });
-
-  useEffect(() => {
-    if (signalsError && ((signalsError as any)?.message?.includes("MLB_UPGRADE_REQUIRED") || (signalsError as any)?.status === 402))
-      setMlbUpgradeNeeded(true);
-  }, [signalsError]);
-
-  const signals = Array.isArray(signalsResp?.signals) ? signalsResp!.signals : [];
-  const updatedAt = signalsResp?.updatedAt ?? 0;
 
   const { data: edgeFeedResp } = useQuery<EdgeFeedResponse>({
     queryKey: ["/api/mlb/edge-feed"],
-    enabled: mainTab === "live_feed" || mainTab === "edge_feed" || mainTab === "inning_feed" || mainTab === "hr_radar" || mainTab === "games",
     refetchInterval: 45_000,
   });
-  const edgeFeedSignals = Array.isArray(edgeFeedResp?.signals) ? edgeFeedResp!.signals : [];
+  const edgeFeedSignals: MlbSignalData[] = Array.isArray(edgeFeedResp?.signals) ? edgeFeedResp!.signals : [];
 
-  const selectedGameRaw = games.find(g => g?.gameId === selectedGameId) ?? null;
-  const selectedGameRef = useRef<MLBGame | null>(null);
-  useEffect(() => { if (selectedGameRaw) selectedGameRef.current = selectedGameRaw; }, [selectedGameRaw]);
-  const selectedGame = selectedGameRaw ?? selectedGameRef.current;
+  const selectedGame = games.find(g => g?.gameId === selectedGameId) ?? null;
+  const gameSignals = edgeFeedSignals.filter(s => s.gameId === selectedGameId);
 
-  const opponentTeam = selectedPlayer && selectedGame
-    ? (selectedPlayer.teamAbbr === selectedGame.homeAbbr ? selectedGame.awayAbbr : selectedGame.homeAbbr)
-    : null;
+  const handleRefresh = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/mlb/live-games"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/mlb/edge-feed"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar"] });
+  };
 
-  const { data: oddsData, isLoading: oddsLoading } = useQuery<Record<string, OddsEntry>>({
-    queryKey: ["/api/mlb/odds", selectedPlayer?.teamAbbr, opponentTeam, selectedPlayer?.playerName, selectedMarket],
-    enabled: !!selectedPlayer && !!opponentTeam,
-    refetchInterval: 90_000,
-    queryFn: async () => {
-      const params = new URLSearchParams({
-        playerTeam: selectedPlayer!.teamAbbr, opponentTeam: opponentTeam!, playerName: selectedPlayer!.playerName,
-        statType: selectedMarket, inPlay: selectedGame?.status === "live" ? "true" : "false",
-      });
-      const token = localStorage.getItem("ll_auth_token");
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch(`/api/mlb/odds?${params}`, { credentials: "include", headers });
-      if (!res.ok) throw new Error("Failed to fetch odds");
-      return res.json();
-    },
-  });
-
-  const calcMutation = useMutation({
-    mutationFn: async () => {
-      if (!selectedPlayer || !selectedGame) throw new Error("Missing data");
-      if (manualMode) {
-        const bookLine = parseFloat(manualBookLine);
-        if (isNaN(bookLine) || bookLine <= 0) throw new Error("Book line required");
-        const body = {
-          playerId: selectedPlayer.playerId, playerName: selectedPlayer.playerName, market: selectedMarket,
-          bookLine, team: selectedPlayer.teamAbbr, opponent: opponentTeam, gameId: selectedGame.gameId,
-          currentStats: { pa: selectedPlayer.ab + selectedPlayer.bb, hits: selectedPlayer.h, totalBases: selectedPlayer.tb,
-            walks: selectedPlayer.bb, k: selectedPlayer.k, battingOrder: selectedPlayer.battingOrderSlot },
-          gameContext: { inning: selectedGame.inning, isTopInning: selectedGame.isTopInning, runners: 0, outs: 0,
-            score: selectedGame.status === "live" && selectedGame.awayScore != null && selectedGame.homeScore != null
-              ? `${selectedGame.awayScore}-${selectedGame.homeScore}` : "0-0" },
-        };
-        const res = await apiRequest("POST", "/api/mlb/calculate-manual", body);
-        return res.json();
-      }
-      if (!selectedLine) throw new Error("Missing line");
-      const body = {
-        playerId: selectedPlayer.playerId, playerName: selectedPlayer.playerName, market: selectedMarket,
-        line: selectedLine.line, overOdds: selectedLine.overOdds, team: selectedPlayer.teamAbbr,
-        opponent: opponentTeam, gameId: selectedGame.gameId, currentInning: selectedGame.inning,
-        isTopInning: selectedGame.isTopInning, battingOrderSlot: selectedPlayer.battingOrderSlot,
-        currentStats: { ab: selectedPlayer.ab, h: selectedPlayer.h, tb: selectedPlayer.tb, bb: selectedPlayer.bb,
-          k: selectedPlayer.k, sb: selectedPlayer.sb, rbi: selectedPlayer.rbi },
-      };
-      const res = await apiRequest("POST", "/api/mlb/calculate", body);
-      return res.json();
-    },
-    onSuccess: (data) => setCalcResult(data),
-    onError: (err: any) => {
-      if (err?.message?.includes("MLB_UPGRADE_REQUIRED") || err?.status === 402) setMlbUpgradeNeeded(true);
-    },
-  });
-
-  const oddsEntries = oddsData ? Object.entries(oddsData).filter(([k]) => k !== "_quotaExhausted") : [];
-
-  useEffect(() => { setSelectedLine(null); setCalcResult(null); setManualMode(false); }, [selectedMarket]);
   useEffect(() => {
-    setSelectedLine(null); setCalcResult(null); setManualMode(false);
-    if (selectedPlayer) setManualBookLine("");
-  }, [selectedPlayer?.playerId]);
-  useEffect(() => {
-    setSelectedPlayer(null); setCalcResult(null); setSelectedLine(null); setSelectedMarket("hits"); setManualMode(false);
-    if (selectedGameId) {
-      setTimeout(() => {
-        gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 100);
+    if (selectedGameId && games.length > 0 && !games.find(g => g.gameId === selectedGameId)) {
+      setSelectedGameId(null);
     }
-  }, [selectedGameId]);
-  useEffect(() => {
-    if ((!oddsLoading && oddsEntries.length === 0 && selectedPlayer) || !hasAnyOdds) setManualMode(true);
-    else if (oddsEntries.length > 0) {
-      setManualMode(false);
-      if (!selectedLine && oddsEntries.length > 0) {
-        const sorted = [...oddsEntries].sort((a, b) => {
-          const oA = (a[1] as OddsEntry).overOdds ?? -999;
-          const oB = (b[1] as OddsEntry).overOdds ?? -999;
-          return oB - oA;
-        });
-        const [bestBook, bestOdds] = sorted[0];
-        const o = bestOdds as OddsEntry;
-        if (o.line != null && o.overOdds != null && o.underOdds != null) {
-          setSelectedLine({ book: bestBook, line: o.line, overOdds: o.overOdds, underOdds: o.underOdds });
-        }
-      }
-    }
-  }, [oddsLoading, oddsEntries.length, selectedPlayer?.playerId, hasAnyOdds]);
-
-  const rosterPlayerIds = new Set<string>(players.filter(p => p?.playerId).map(p => String(p.playerId)));
-  const validatedSignals = selectedGameId ? signals.filter(sig => sig && isValidSignal(sig, selectedGameId, rosterPlayerIds)) : [];
-  const pitchersResolved = !!(selectedGame?.pitcherAway || selectedGame?.pitcherHome);
-  const gameHydrated = !!(
-    pitchersResolved &&
-    selectedGame?.status != null &&
-    (selectedGame?.status !== "live" || (selectedGame?.inning != null && selectedGame.inning >= 1)) &&
-    players.length > 0
-  );
-  const playerHydrated = !!(
-    selectedPlayer &&
-    selectedPlayer.ab != null &&
-    selectedPlayer.battingOrderSlot > 0
-  );
-  const lineValid = manualMode
-    ? (manualBookLine.trim() !== "" && !isNaN(parseFloat(manualBookLine)) && parseFloat(manualBookLine) > 0)
-    : !!selectedLine;
-  const canCalculate = gameHydrated && playerHydrated && lineValid;
+  }, [games, selectedGameId]);
 
   if (authLoading || gamesLoading) {
     return (
-      <div className="max-w-5xl mx-auto px-4 py-12 space-y-3">
+      <div className="max-w-5xl mx-auto px-4 py-6 space-y-3">
         <SkeletonCard count={4} />
       </div>
     );
@@ -1345,76 +628,31 @@ function MlbLiveInner() {
     );
   }
 
-  const TABS: { key: MainTab; label: string; color?: string }[] = [
-    { key: "games", label: "Games" },
-    { key: "live_feed", label: "Live Feed" },
-    { key: "hr_radar", label: "HR Radar", color: "orange" },
-  ];
-
-  const handleRefresh = () => {
-    queryClient.invalidateQueries({ queryKey: ["/api/mlb/live-games"] });
-    if (selectedGameId) {
-      queryClient.invalidateQueries({ queryKey: ["/api/mlb/live-stats", selectedGameId] });
-      queryClient.invalidateQueries({ queryKey: ["/api/mlb/live-signals", selectedGameId] });
-      queryClient.invalidateQueries({ queryKey: ["/api/mlb/odds"] });
-    }
-    queryClient.invalidateQueries({ queryKey: ["/api/mlb/edge-feed"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar"] });
-  };
-
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-5">
-      <div className="flex items-center justify-between gap-3 flex-wrap" data-testid="nav-mlb-tabs">
-        <div className="flex gap-1.5 flex-wrap">
-          {TABS.map(tab => {
-            const active = mainTab === tab.key || (tab.key === "live_feed" && (mainTab === "edge_feed" || mainTab === "inning_feed"));
-            const isOrange = tab.color === "orange";
-            return (
-              <button
-                key={tab.key}
-                data-testid={`tab-mlb-${tab.key}`}
-                onClick={() => { setMainTab(tab.key); if (tab.key !== "games") setSelectedGameId(null); }}
-                className={`px-4 py-2.5 min-h-[44px] text-xs font-semibold rounded-full border transition-all ${
-                  active
-                    ? isOrange ? "bg-orange-500 text-white border-orange-500" : "bg-primary text-primary-foreground border-primary"
-                    : isOrange ? "border-orange-500/40 text-orange-400 hover:text-orange-300 hover:border-orange-500/60" : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
-                }`}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
-        <button
-          data-testid="button-mlb-refresh"
-          onClick={handleRefresh}
-          className="flex items-center gap-1.5 px-3 py-2.5 min-h-[44px] text-xs font-medium rounded-lg border border-border/60 text-muted-foreground hover:text-foreground hover:border-primary/40 transition-all"
-        >
-          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
-          Refresh
-        </button>
-      </div>
-
-      {mainTab === "games" && (
+      {activeSubTab === "games" && (
         <>
           {games.length === 0 ? (
             <div className="text-xs text-muted-foreground py-3" data-testid="text-no-mlb-games-today">
               No MLB games scheduled today. Check back soon.
             </div>
           ) : (
-            <MLBScheduleList games={games} selectedGameId={selectedGameId} onSelectGame={(id) => { setSelectedGameId(id); setMainTab("games"); }} />
+            <GameChipStrip
+              games={games}
+              selectedGameId={selectedGameId}
+              onSelectGame={setSelectedGameId}
+              edgeFeedSignals={edgeFeedSignals}
+              onRefresh={handleRefresh}
+            />
           )}
 
           {!selectedGameId && !isElite && games.length > 0 && (
             <div className="rounded-xl border border-primary/20 bg-primary/5 p-5 text-center space-y-3">
               <div className="text-sm font-bold text-foreground">Unlock MLB Edges</div>
               <div className="text-xs text-muted-foreground">
-                {(() => {
-                  const liveCount = games.filter(g => g.status === "live").length || games.length;
-                  return edgeFeedSignals.length > 0
-                    ? `${edgeFeedSignals.length} live signal${edgeFeedSignals.length !== 1 ? "s" : ""} across ${liveCount} game${liveCount !== 1 ? "s" : ""} — upgrade to see them all.`
-                    : `${games.length} game${games.length !== 1 ? "s" : ""} today — upgrade to see live probabilities, edge percentages, and bet recommendations.`;
-                })()}
+                {edgeFeedSignals.length > 0
+                  ? `${edgeFeedSignals.length} live signal${edgeFeedSignals.length !== 1 ? "s" : ""} across ${games.filter(g => g.status === "live").length || games.length} game${games.length !== 1 ? "s" : ""} — upgrade to see them all.`
+                  : `${games.length} game${games.length !== 1 ? "s" : ""} today — upgrade to see live probabilities, edge percentages, and bet recommendations.`}
               </div>
               <a href="/upgrade" data-testid="link-mlb-upgrade-cta"
                 className="inline-block px-5 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors">
@@ -1423,60 +661,37 @@ function MlbLiveInner() {
             </div>
           )}
 
-          {selectedGameId && selectedGame && selectedPlayer === null && (
-            <div ref={gameDetailRef}>
-            <GameDetailView
-              game={selectedGame}
-              players={players}
-              signals={validatedSignals}
-              isElite={isElite}
-              signalsLoading={signalsLoading}
-              playersLoading={playersLoading}
-              updatedAt={updatedAt}
-              lineupReady={lineupReady}
-              lineupReason={lineupReason}
-              onSelectPlayer={(p) => setSelectedPlayer(p)}
-              onBack={() => setSelectedGameId(null)}
-              onRefresh={handleRefresh}
-              onAddToSlip={handleAddToSlip}
-            />
+          {!selectedGameId && games.length > 0 && (
+            <div className="rounded-xl border border-border/40 bg-card p-8 text-center space-y-3" data-testid="mlb-games-empty-state">
+              <Target className="w-10 h-10 text-muted-foreground/30 mx-auto" />
+              <div className="text-sm font-bold text-foreground">Ready to Predict</div>
+              <div className="text-xs text-muted-foreground">Select a game above to view signals</div>
+              <div className="text-[11px] text-muted-foreground/60 space-y-1 max-w-xs mx-auto text-left">
+                <div className="flex items-center gap-2"><span className="text-primary">◎</span> Click a game tile above</div>
+                <div className="flex items-center gap-2"><span className="text-primary">◎</span> Signals load automatically</div>
+                <div className="flex items-center gap-2"><span className="text-primary">◎</span> Add strong plays to your Parlay Slip</div>
+              </div>
             </div>
           )}
 
-          {selectedGameId && selectedGame && selectedPlayer !== null && (
-            <PlayerDetailView
-              player={selectedPlayer}
-              game={selectedGame}
-              signals={validatedSignals}
-              isElite={isElite}
-              oddsEntries={oddsEntries}
-              oddsLoading={oddsLoading}
-              selectedMarket={selectedMarket}
-              setSelectedMarket={setSelectedMarket}
-              selectedLine={selectedLine}
-              setSelectedLine={setSelectedLine}
-              manualMode={manualMode}
-              setManualMode={setManualMode}
-              manualBookLine={manualBookLine}
-              setManualBookLine={setManualBookLine}
-              hasAnyOdds={hasAnyOdds}
-              canCalculate={canCalculate}
-              gameHydrated={gameHydrated}
-              playerHydrated={playerHydrated}
-              lineValid={lineValid}
-              lineupReady={lineupReady}
-              calcMutation={calcMutation}
-              calcResult={calcResult}
-              setCalcResult={setCalcResult}
-              opponentTeam={opponentTeam}
-              onBack={() => { setSelectedPlayer(null); setCalcResult(null); setSelectedLine(null); setManualMode(false); }}
-              onAddToSlip={handleAddToSlip}
-            />
+          {selectedGameId && selectedGame && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+              <div className="lg:col-span-4">
+                <GameContextPanel game={selectedGame} signalCount={gameSignals.length} />
+              </div>
+              <div className="lg:col-span-8">
+                <GameSignalsPanel
+                  signals={gameSignals}
+                  isElite={isElite}
+                  onAddToSlip={handleAddToSlip}
+                />
+              </div>
+            </div>
           )}
         </>
       )}
 
-      {(mainTab === "live_feed" || mainTab === "edge_feed" || mainTab === "inning_feed") && (
+      {activeSubTab === "live_feed" && (
         <div className="space-y-4">
           <div className="flex gap-1.5 flex-wrap">
             {(["all", "3rd", "5th", "7th"] as const).map(sub => (
@@ -1503,7 +718,7 @@ function MlbLiveInner() {
                 const visibleSlice = filtered.slice(0, 1);
                 return (
                   <div className="space-y-6">
-                    <TopPlays signals={visibleSlice as any} onPlayerClick={(gameId, _playerId) => { setSelectedGameId(gameId); setMainTab("games"); setTimeout(() => gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 150); }} onAddToSlip={(sig) => handleAddToSlip(sig as any)} />
+                    <TopPlays signals={visibleSlice} onAddToSlip={handleAddToSlip} />
                     {filtered.length > 1 && (
                       <div className="relative">
                         <div className="filter blur-[6px] pointer-events-none select-none" aria-hidden="true">
@@ -1530,8 +745,8 @@ function MlbLiveInner() {
               }
               return (
                 <div className="space-y-6">
-                  <TopPlays signals={filtered as any} onPlayerClick={(gameId, _playerId) => { setSelectedGameId(gameId); setMainTab("games"); setTimeout(() => gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 150); }} onAddToSlip={(sig) => handleAddToSlip(sig as any)} />
-                  <LiveBoard signals={filtered} onPlayerClick={(gameId, _playerId) => { setSelectedGameId(gameId); setMainTab("games"); setTimeout(() => gameDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 150); }} />
+                  <TopPlays signals={filtered} onAddToSlip={handleAddToSlip} />
+                  <LiveBoard signals={filtered} onAddToSlip={handleAddToSlip} />
                 </div>
               );
             }
@@ -1549,15 +764,15 @@ function MlbLiveInner() {
             ) : (
               <div className="space-y-3">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {(isElite ? filtered : filtered.slice(0, 1)).map(sig => (
-                    <SignalCard key={`${sig.playerId}-${sig.market}-${sig.gameId}`} sig={sig} isElite={isElite} compact onClickThrough={handleSignalClickThrough} onAddToSlip={handleAddToSlip} />
+                  {(isElite ? filtered : filtered.slice(0, 1)).map((sig, idx) => (
+                    <MlbSignalCard key={`${sig.playerId}-${sig.market}-${sig.gameId}-${idx}`} sig={sig} onAddToSlip={handleAddToSlip} />
                   ))}
                 </div>
                 {!isElite && filtered.length > 1 && (
                   <div className="relative">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 filter blur-[6px] pointer-events-none select-none" aria-hidden="true">
-                      {filtered.slice(1, 3).map(sig => (
-                        <SignalCard key={`blur-${sig.playerId}-${sig.market}-${sig.gameId}`} sig={sig} isElite={false} compact />
+                      {filtered.slice(1, 3).map((sig, idx) => (
+                        <MlbSignalCard key={`blur-${sig.playerId}-${sig.market}-${idx}`} sig={sig as MlbSignalData} />
                       ))}
                     </div>
                     <div className="absolute inset-0 flex flex-col items-center justify-center z-10">
@@ -1582,7 +797,7 @@ function MlbLiveInner() {
         </div>
       )}
 
-      {mainTab === "hr_radar" && (
+      {activeSubTab === "hr_radar" && (
         <HRRadarSection isElite={isElite} />
       )}
 
@@ -1655,1171 +870,10 @@ function MlbLiveInner() {
   );
 }
 
-type HRRadarResponse = {
-  hrEdges: Array<{
-    playerId: string; playerName: string; team: string; market: string; side: string;
-    line: number; projection: number; engineProbability: number; edge: number | null;
-    signalScore: number; confidenceTier: string; badges: string[]; reasons: string[];
-    gameId: string; awayAbbr: string | null; homeAbbr: string | null;
-    alreadyHit?: boolean;
-  }>;
-  bettableHR: Array<any>;
-  activity?: Array<any>;
-  hrWatchlist: Array<{
-    playerId: string; playerName: string; team: string; hrProbability: number;
-    hardHitEvents: number; parkFactor: number | null; windFactor: string;
-    reasons: string[]; gameId: string; awayAbbr: string | null; homeAbbr: string | null;
-    badges: string[];
-  }>;
-};
-
-function HREdgeCard({ edge }: { edge: any }) {
-  const [expanded, setExpanded] = useState(false);
-  const reasons = edge.explanationBullets ?? edge.reasons ?? [];
-  const hrFactors = edge.hrFactors;
-  const edgeVal = edge.edge ?? 0;
-  const hasPositiveEdge = edgeVal > 0;
-
-  return (
-    <div
-      data-testid={`card-hr-edge-${edge.playerId}`}
-      className={`rounded-xl border p-4 space-y-2.5 cursor-pointer transition-all hover:border-green-500/50 ${hasPositiveEdge ? "border-green-500/30 bg-green-500/5" : "border-orange-500/30 bg-orange-500/5"}`}
-      onClick={() => setExpanded(!expanded)}
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-bold text-foreground">{edge.playerName}</span>
-          <span className="text-[10px] text-muted-foreground">{edge.team}</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${confidenceTierColor(edge.confidenceTier)}`}>{edge.confidenceTier}</span>
-          <span className="text-muted-foreground text-xs">{expanded ? "▾" : "▸"}</span>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2 text-[10px]">
-        <span className="text-green-400 font-bold">{edge.side} {edge.line?.toFixed(1)}</span>
-        <span className="text-muted-foreground">•</span>
-        <span className={`font-bold ${hasPositiveEdge ? "text-green-400" : "text-muted-foreground"}`}>
-          {edgeVal > 0 ? "+" : ""}{edgeVal.toFixed(1)}% Edge
-        </span>
-        <span className="text-muted-foreground">•</span>
-        <span className="text-foreground">{edge.engineProbability?.toFixed(1)}% Prob</span>
-        <span className="text-muted-foreground">•</span>
-        <span className="text-muted-foreground">Score: {edge.signalScore}</span>
-      </div>
-
-      <div className="grid grid-cols-3 gap-2 text-center">
-        <div className="bg-secondary/30 rounded-lg p-1.5">
-          <div className="text-[8px] text-muted-foreground">Projection</div>
-          <div className="text-xs font-bold text-foreground">{edge.projection?.toFixed(2) ?? "—"}</div>
-        </div>
-        <div className="bg-secondary/30 rounded-lg p-1.5">
-          <div className="text-[8px] text-muted-foreground">Edge</div>
-          <div className={`text-xs font-bold ${hasPositiveEdge ? "text-green-400" : "text-muted-foreground"}`}>
-            {edgeVal > 0 ? "+" : ""}{edgeVal.toFixed(1)}%
-          </div>
-        </div>
-        <div className="bg-secondary/30 rounded-lg p-1.5">
-          <div className="text-[8px] text-muted-foreground">Signal</div>
-          <div className="text-xs font-bold text-foreground">{edge.signalScore}/100</div>
-        </div>
-      </div>
-
-      {hrFactors && hrFactors.count > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {hrFactors.labels.map((label: string, i: number) => (
-            <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-300 border border-orange-500/20 font-semibold">
-              {label}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {Array.isArray(edge.badges) && edge.badges.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {edge.badges.map((b: string) => (
-            <span key={b} className="text-[9px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-400 font-semibold">{b}</span>
-          ))}
-        </div>
-      )}
-
-      {edge.currentStats && (
-        <div className="flex items-center gap-2 py-1.5 px-2 rounded-lg bg-secondary/40 border border-border/30 text-[10px]">
-          <span className="text-muted-foreground font-semibold">Today:</span>
-          <span className="text-foreground font-semibold">{edge.currentStats.h}-{edge.currentStats.ab}</span>
-          {edge.currentStats.hr > 0 && <span className="text-orange-400 font-bold">{edge.currentStats.hr} HR</span>}
-          {edge.currentStats.tb > 0 && <span className="text-muted-foreground">{edge.currentStats.tb} TB</span>}
-          {edge.currentStats.k > 0 && <span className="text-red-400">{edge.currentStats.k} K</span>}
-        </div>
-      )}
-
-      {expanded && (
-        <div className="space-y-2 pt-1 border-t border-border/20 animate-in slide-in-from-top-1 duration-200">
-          {reasons.length > 0 && (
-            <div className="space-y-1">
-              <div className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">Why This Signal</div>
-              {reasons.map((r: string, i: number) => (
-                <div key={i} className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
-                  <span className="text-orange-400/50 mt-px">•</span>
-                  <span>{r}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {edge.lastABContact && (
-            <div className="flex items-center gap-2 text-[10px]">
-              <span className="text-muted-foreground font-semibold">Contact:</span>
-              {edge.lastABContact.exitVelo != null && (
-                <span className={edge.lastABContact.exitVelo >= 95 ? "text-green-400 font-bold" : "text-muted-foreground"}>
-                  {edge.lastABContact.exitVelo.toFixed(0)} mph
-                </span>
-              )}
-              {edge.lastABContact.launchAngle != null && (
-                <span className={edge.lastABContact.launchAngle >= 10 && edge.lastABContact.launchAngle <= 30 ? "text-green-400" : "text-muted-foreground"}>
-                  {edge.lastABContact.launchAngle.toFixed(0)}° LA
-                </span>
-              )}
-              {edge.lastABContact.distance != null && edge.lastABContact.distance > 0 && (
-                <span className={edge.lastABContact.distance >= 340 ? "text-green-400 font-bold" : "text-muted-foreground"}>
-                  {edge.lastABContact.distance.toFixed(0)} ft
-                </span>
-              )}
-            </div>
-          )}
-
-          {edge.drivers && Object.keys(edge.drivers).length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {Object.entries(edge.drivers).filter(([_, v]) => typeof v === "number" && (v as number) > 0.3).slice(0, 5).map(([k, v]) => (
-                <span key={k} className="text-[8px] px-1 py-0.5 rounded bg-secondary/50 text-muted-foreground">
-                  {k}: {(v as number).toFixed(2)}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {edge.signalTags && edge.signalTags.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {edge.signalTags.map((tag: string) => (
-                <span key={tag} className="text-[9px] px-1.5 py-0.5 rounded bg-secondary/50 text-muted-foreground border border-border/20">
-                  {tag}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function HRRadarSection({ isElite }: { isElite: boolean }) {
-  const { data: hrData, isLoading } = useQuery<HRRadarResponse>({
-    queryKey: ["/api/mlb/hr-radar"],
-    refetchInterval: 60_000,
-  });
-
-  const bettable = hrData?.bettableHR ?? [];
-  const activity = hrData?.activity ?? [];
-  const hrWatchlist = hrData?.hrWatchlist ?? [];
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-bold text-foreground" style={{ color: "#f97316" }} data-testid="text-hr-radar-title">HR Radar</h2>
-      </div>
-
-      {isLoading && (
-        <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-4 text-center">
-          <div className="text-xs text-orange-400 animate-pulse">Loading HR radar data...</div>
-        </div>
-      )}
-
-      {!isLoading && (
-        <div className="space-y-2">
-          <h3 className="text-sm font-bold text-orange-400 mb-2" data-testid="text-hr-edges-title">BETTABLE HR EDGES</h3>
-          {bettable.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No bettable HR signals right now</p>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {bettable.map(edge => (
-                <HREdgeCard key={`hr-edge-${edge.playerId}-${edge.market}-${edge.gameId}`} edge={edge} />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {!isLoading && activity.length > 0 && (
-        <div className="space-y-2">
-          <h3 className="text-sm font-bold text-muted-foreground mt-6 mb-2">HR ACTIVITY TODAY</h3>
-          <p className="text-[10px] text-muted-foreground/60 mb-2">Already homered — context only</p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {activity.map(edge => (
-              <div key={`hr-activity-${edge.playerId}-${edge.market}-${edge.gameId}`} className="opacity-60">
-                <HREdgeCard edge={edge} />
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {!isLoading && hrWatchlist.length > 0 && (
-        <div className="space-y-2 mt-4">
-          <h3 className="text-xs font-semibold text-orange-400 uppercase tracking-wider" data-testid="text-hr-watchlist-title">HR Watchlist</h3>
-          <div className="text-[10px] text-muted-foreground/70 mb-1">Players with HR-favorable context</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {hrWatchlist.map(w => (
-              <div key={`hr-watch-${w.playerId}-${w.gameId}`}
-                data-testid={`card-hr-watch-${w.playerId}`}
-                className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-bold text-foreground">{w.playerName}</span>
-                  <span className="text-[10px] text-orange-400">{w.team}</span>
-                </div>
-                <div className="flex items-center gap-2 text-[10px] text-muted-foreground flex-wrap">
-                  {w.hardHitEvents > 0 && <span>{w.hardHitEvents} hard hit event{w.hardHitEvents !== 1 ? "s" : ""}</span>}
-                  {w.parkFactor != null && w.parkFactor > 1 && <span>• HR-friendly park</span>}
-                  <span>• Wind: {w.windFactor}</span>
-                </div>
-                {Array.isArray(w.reasons) && w.reasons.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {w.reasons.slice(0, 3).map((r, i) => (
-                      <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-300 border border-orange-500/15">{r}</span>
-                    ))}
-                  </div>
-                )}
-                {Array.isArray(w.badges) && w.badges.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {w.badges.map(b => (
-                      <span key={b} className="text-[9px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400">{b}</span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {!isLoading && bettable.length === 0 && activity.length === 0 && hrWatchlist.length === 0 && (
-        <div className="text-xs text-muted-foreground/60 text-center py-2">
-          HR context data accumulates as games progress and contact data is recorded.
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PitcherCard({ game, side, signals, isElite }: {
-  game: MLBGame; side: "home" | "away"; signals: MLBSignal[]; isElite: boolean;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const pitcherName = side === "home" ? game.pitcherHome : game.pitcherAway;
-  const hand = side === "home" ? game.homePitcherHand : game.awayPitcherHand;
-  const teamAbbr = side === "home" ? (game.homeAbbr ?? "HOME") : (game.awayAbbr ?? "AWAY");
-  const ctx = game.pitcherContext;
-  const pitcherSignals = signals.filter(s => {
-    if (!PITCHER_MARKET_SET.has(s.market)) return false;
-    if (pitcherName && s.playerName && s.playerName.toLowerCase().includes(pitcherName.split(" ").pop()?.toLowerCase() ?? "")) return true;
-    return false;
-  });
-  const bestSig = pitcherSignals.length > 0
-    ? pitcherSignals.reduce((b, s) => (s.enginePct ?? 0) > (b.enginePct ?? 0) ? s : b)
-    : null;
-  const glowEligible = pitcherSignals.some(s =>
-    s.playerGlowEligible &&
-    (s.confidenceTier === "ELITE" || s.confidenceTier === "STRONG") &&
-    (s.edge ?? 0) >= 10
-  );
-
-  if (!pitcherName) return null;
-
-  return (
-    <div
-      data-testid={`card-pitcher-${side}`}
-      className={`rounded-lg border overflow-hidden transition-all cursor-pointer ${
-        glowEligible
-          ? "border-green-500/50 shadow-[0_0_12px_rgba(34,197,94,0.25)]"
-          : "border-border/30"
-      }`}
-      onClick={() => setExpanded(!expanded)}
-    >
-      <div className="px-3 py-2.5 flex items-center justify-between" style={{ background: "rgba(139,92,246,0.06)" }}>
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-[8px] font-black px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-400 shrink-0">P</span>
-          <span className="text-xs font-bold text-foreground truncate">{pitcherName}</span>
-          {hand && <span className="text-[9px] text-muted-foreground shrink-0">({hand}HP)</span>}
-          <span className="text-[9px] text-muted-foreground shrink-0">{teamAbbr}</span>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {bestSig && (
-            <span className={`text-sm font-black ${probColor(bestSig.enginePct)}`}>{Math.round(bestSig.enginePct)}%</span>
-          )}
-          {ctx && (
-            <span className={`text-[9px] font-semibold ${ctx.pitchCount >= 85 ? "text-red-400" : "text-muted-foreground"}`}>
-              {ctx.pitchCount}P
-            </span>
-          )}
-          <span className="text-muted-foreground text-xs">{expanded ? "▾" : "▸"}</span>
-        </div>
-      </div>
-
-      {expanded && (
-        <div className="px-3 pb-3 pt-2 space-y-3 border-t border-border/20">
-          {ctx && (
-            <div>
-              <div className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Pitching Form</div>
-              <div className="grid grid-cols-4 gap-2">
-                <div className="bg-secondary/30 rounded-lg p-1.5 text-center">
-                  <div className="text-[8px] text-muted-foreground">Pitches</div>
-                  <div className={`text-xs font-bold ${ctx.pitchCount >= 85 ? "text-red-400" : ctx.pitchCount >= 60 ? "text-yellow-400" : "text-foreground"}`}>
-                    {ctx.pitchCount}
-                  </div>
-                </div>
-                <div className="bg-secondary/30 rounded-lg p-1.5 text-center col-span-2">
-                  <div className="text-[8px] text-muted-foreground">Times Through</div>
-                  <div className={`text-[10px] font-bold ${ctx.timesThroughOrder >= 3 ? "text-amber-400" : "text-foreground"}`}>
-                    {ttoLabel(ctx.timesThroughOrder)}
-                  </div>
-                </div>
-                {ctx.avgVelocity != null && (
-                  <div className="bg-secondary/30 rounded-lg p-1.5 text-center">
-                    <div className="text-[8px] text-muted-foreground">Velo</div>
-                    <div className="text-xs font-bold text-foreground">{ctx.avgVelocity.toFixed(1)}</div>
-                  </div>
-                )}
-                {ctx.velocityDrop != null && ctx.velocityDrop > 0 && (
-                  <div className="bg-secondary/30 rounded-lg p-1.5 text-center">
-                    <div className="text-[8px] text-muted-foreground">Drop</div>
-                    <div className="text-xs font-bold text-red-400">-{ctx.velocityDrop.toFixed(1)}</div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {pitcherSignals.length > 0 && (
-            <div>
-              <div className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Engine Signals</div>
-              <div className="space-y-1">
-                {pitcherSignals.map(sig => (
-                  <div key={`${sig.playerId}-${sig.market}`} className="flex items-center justify-between text-[10px] px-2 py-1 rounded bg-secondary/20">
-                    <div className="flex items-center gap-1.5">
-                      <span className={`font-bold px-1 py-0.5 rounded text-[9px] ${sig.recommendedSide === "OVER" ? "bg-green-500/20 text-green-400" : sig.recommendedSide === "UNDER" ? "bg-blue-500/20 text-blue-400" : "bg-muted/30 text-muted-foreground"}`}>
-                        {sig.recommendedSide === "OVER" ? "O" : sig.recommendedSide === "UNDER" ? "U" : "—"}
-                      </span>
-                      <span className="text-muted-foreground">{MARKET_LABELS[sig.market] ?? sig.market}</span>
-                      {sig.bookLine != null && <span className="text-foreground font-semibold">{sig.bookLine}</span>}
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className={`font-bold ${probColor(sig.enginePct)}`}>{Math.round(sig.enginePct)}%</span>
-                      {sig.edge != null && sig.edge > 0 && (
-                        <span className={`text-[9px] ${edgeColor(sig.edge)}`}>+{sig.edge.toFixed(1)}%</span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {pitcherSignals.length > 0 && (
-            <div className="flex gap-1.5">
-              {pitcherSignals.map(sig => (
-                <button
-                  key={`tweet-${sig.playerId}-${sig.market}`}
-                  data-testid={`button-pitcher-tweet-${sig.playerId}-${sig.market}`}
-                  className="text-[9px] px-2 py-1 rounded border border-blue-500/30 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 transition-colors font-semibold"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const tweet = generateTweet(sig, isElite);
-                    window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`, "_blank", "noopener,noreferrer,width=550,height=420");
-                  }}
-                >
-                  𝕏 {MARKET_LABELS[sig.market] ?? sig.market}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TeamBatterSection({ teamAbbr, pitcher, players, signals, game, isElite, onSelectPlayer, onAddToSlip, side, score }: {
-  teamAbbr: string;
-  pitcher: string | null;
-  players: MLBBatter[];
-  signals: MLBSignal[];
-  game: MLBGame;
-  isElite: boolean;
-  onSelectPlayer: (p: MLBBatter) => void;
-  onAddToSlip?: (sig: MLBSignal) => void;
-  side: "home" | "away";
-  score: number | null;
-}) {
-  const [collapsed, setCollapsed] = useState(false);
-  const teamSignals = signals.filter(s => players.some(p => p.playerId === s.playerId));
-  const signalCount = teamSignals.length;
-  const highProbCount = teamSignals.filter(s => s.enginePct >= 70).length;
-
-  return (
-    <div className="rounded-xl border border-border/30 bg-card/50 overflow-hidden" data-testid={`section-team-${side}`}>
-      <button
-        data-testid={`btn-toggle-team-${side}`}
-        className="w-full flex items-center justify-between px-3 py-3 min-h-[44px] hover:bg-secondary/20 transition-colors"
-        onClick={() => setCollapsed(!collapsed)}
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-bold text-foreground">{teamAbbr}</span>
-          {score != null && <span className="text-xs font-bold text-foreground/80">{score}</span>}
-          {pitcher && <span className="text-[10px] text-muted-foreground">· {pitcher}</span>}
-        </div>
-        <div className="flex items-center gap-2">
-          {signalCount > 0 && (
-            <span className="text-[9px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-bold">
-              {signalCount} signal{signalCount !== 1 ? "s" : ""}
-            </span>
-          )}
-          {highProbCount > 0 && (
-            <span className="text-[9px] px-1.5 py-0.5 rounded bg-green-500/15 text-green-400 font-bold">
-              {highProbCount} 70%+
-            </span>
-          )}
-          <span className="text-muted-foreground text-xs">{collapsed ? "▸" : "▾"}</span>
-        </div>
-      </button>
-      {!collapsed && (
-        <div className="px-2 pb-2">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-            {players.map(p => (
-              <BatterCard key={p.playerId} player={p} signals={signals} game={game} isElite={isElite} onSelect={() => onSelectPlayer(p)} onAddToSlip={onAddToSlip} />
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function GameDetailView({ game, players, signals, isElite, signalsLoading, playersLoading, updatedAt, lineupReady, lineupReason, onSelectPlayer, onBack, onRefresh, onAddToSlip }: {
-  game: MLBGame;
-  players: MLBBatter[];
-  signals: MLBSignal[];
-  isElite: boolean;
-  signalsLoading: boolean;
-  playersLoading: boolean;
-  updatedAt: number;
-  lineupReady: boolean;
-  lineupReason: string | null;
-  onSelectPlayer: (p: MLBBatter) => void;
-  onBack: () => void;
-  onRefresh: () => void;
-  onAddToSlip?: (sig: MLBSignal) => void;
-}) {
-  const awayPlayers = players.filter(p => p.teamSide === "away" || (game.awayAbbr && p.teamAbbr === game.awayAbbr));
-  const homePlayers = players.filter(p => p.teamSide === "home" || (game.homeAbbr && p.teamAbbr === game.homeAbbr));
-
-  const signalGroups = (() => {
-    const groups: Record<string, { playerName: string; playerId: string; direction: string; signals: MLBSignal[]; bestPct: number; avgEdge: number }> = {};
-    for (const sig of signals) {
-      const key = `${sig.playerId}-${sig.recommendedSide}`;
-      if (!groups[key]) {
-        groups[key] = { playerName: sig.playerName, playerId: sig.playerId, direction: sig.recommendedSide, signals: [], bestPct: 0, avgEdge: 0 };
-      }
-      groups[key].signals.push(sig);
-      if (sig.enginePct > groups[key].bestPct) groups[key].bestPct = sig.enginePct;
-    }
-    for (const g of Object.values(groups)) {
-      g.avgEdge = g.signals.reduce((sum, s) => sum + (s.edge ?? 0), 0) / g.signals.length;
-      g.signals.sort((a, b) => (b.enginePct ?? 0) - (a.enginePct ?? 0));
-    }
-    return Object.values(groups).sort((a, b) => b.bestPct - a.bestPct);
-  })();
-
-  return (
-    <div className="space-y-3">
-      <button data-testid="button-back-to-games" onClick={onBack}
-        className="flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 transition-colors font-medium min-h-[44px] py-2">
-        ← Back to Games
-      </button>
-
-      <div className="rounded-lg border border-border/30 bg-card overflow-hidden" data-testid="card-mlb-game-detail">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-border/20">
-          <div className="flex items-center gap-3">
-            {(game.status === "live" || game.status === "final") && game.awayScore != null && game.homeScore != null ? (
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-bold text-foreground">{game.awayAbbr}</span>
-                <span className={`text-lg font-black ${game.status === "final" ? "text-muted-foreground" : "text-foreground"}`}>{game.awayScore}</span>
-                <span className="text-muted-foreground/40">–</span>
-                <span className={`text-lg font-black ${game.status === "final" ? "text-muted-foreground" : "text-foreground"}`}>{game.homeScore}</span>
-                <span className="text-sm font-bold text-foreground">{game.homeAbbr}</span>
-                {game.status === "live" && game.inning > 0 && (
-                  <span className="text-xs font-bold text-green-400 ml-1">{game.isTopInning ? "▲" : "▼"}{game.inning}</span>
-                )}
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-bold text-foreground">{game.awayAbbr} vs {game.homeAbbr}</span>
-                {game.startTime && (
-                  <span className="text-[10px] text-muted-foreground">
-                    {new Date(game.startTime).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-          {game.status === "live" ? (
-            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-500 animate-pulse">LIVE</span>
-          ) : game.status === "final" ? (
-            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground/60">FIN</span>
-          ) : (
-            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-muted text-muted-foreground">PRE</span>
-          )}
-        </div>
-
-        <div className="flex items-center gap-3 px-3 py-1.5 border-b border-border/20 text-[10px] text-muted-foreground overflow-x-auto">
-          <span className="shrink-0">{game.pitcherAway?.split(" ").pop() || "Loading..."} vs {game.pitcherHome?.split(" ").pop() || "Loading..."}</span>
-          {game.pitcherContext && (
-            <>
-              <span className={game.pitcherContext.pitchCount >= 85 ? "text-red-400 font-semibold" : ""}>{game.pitcherContext.pitchCount}P</span>
-              <span className={game.pitcherContext.timesThroughOrder >= 3 ? "text-amber-400 font-semibold" : ""}>{passLabel(game.pitcherContext.timesThroughOrder)}</span>
-              {game.pitcherContext.avgVelocity != null && <span>{game.pitcherContext.avgVelocity.toFixed(1)}mph</span>}
-              {game.pitcherContext.velocityDrop != null && game.pitcherContext.velocityDrop > 0 && (
-                <span className="text-red-400 font-semibold">-{game.pitcherContext.velocityDrop.toFixed(1)}</span>
-              )}
-            </>
-          )}
-          <span className="shrink-0 ml-auto">{game.venue ?? ""}</span>
-          {game.weather?.temperature != null && <span>{game.weather.temperature}°F</span>}
-          {game.weather?.windSpeed != null && game.weather.windDirection && (
-            <span>Wind {game.weather.windDirection} {game.weather.windSpeed}mph</span>
-          )}
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between px-3 py-1.5">
-        <div className="flex items-center gap-2 text-[10px]">
-          {lineupReady ? (
-            <span className="text-green-400 font-semibold flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-              Lineup ready
-            </span>
-          ) : playersLoading ? (
-            <span className="text-muted-foreground font-medium animate-pulse">Lineup syncing…</span>
-          ) : (
-            <span className="text-yellow-400 font-medium">{lineupReason || "Waiting for official box score"}</span>
-          )}
-        </div>
-        <button data-testid="button-game-refresh" onClick={onRefresh}
-          className="text-[10px] px-3 py-2 min-h-[44px] rounded border border-border/50 text-muted-foreground hover:text-foreground transition-colors">
-          Refresh
-        </button>
-      </div>
-
-      {signals.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">Active Signals</h3>
-              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-green-500/10 text-green-400 font-bold">{signals.length}</span>
-              {signalsLoading && <span className="text-[9px] text-muted-foreground animate-pulse">Refreshing…</span>}
-            </div>
-            {signals.length > 0 && (
-              <button
-                data-testid="button-tweet-all-signals"
-                className="text-[10px] px-3 py-2 min-h-[44px] rounded-lg border border-blue-500/30 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 transition-colors font-semibold"
-                onClick={() => {
-                  const tweetParts = signals
-                    .sort((a, b) => (b.enginePct ?? 0) - (a.enginePct ?? 0))
-                    .slice(0, 4)
-                    .map(s => `${s.playerName} ${s.recommendedSide} ${MARKET_LABELS[s.market] ?? s.market} ${s.bookLine ?? ""} (${Math.round(s.enginePct)}%)`)
-                    .join("\n");
-                  const tweet = `${game.awayAbbr} @ ${game.homeAbbr}\n\n${tweetParts}\n\nPowered by LiveLocks ⚾️`;
-                  window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`, "_blank", "noopener,noreferrer,width=550,height=420");
-                }}
-              >
-                𝕏 Tweet All
-              </button>
-            )}
-          </div>
-          <div className="flex gap-2 overflow-x-auto pb-1.5" style={{ scrollSnapType: "x mandatory" }}>
-            {signals
-              .sort((a, b) => (b.enginePct ?? 0) - (a.enginePct ?? 0))
-              .map((sig, idx) => {
-                const sideColor = sig.recommendedSide === "OVER" ? { accent: "#22c55e", bg: "rgba(34,197,94,0.08)", border: "rgba(34,197,94,0.3)" }
-                  : { accent: "#3b82f6", bg: "rgba(59,130,246,0.08)", border: "rgba(59,130,246,0.3)" };
-                const tier = sig.confidenceTier;
-                const glowClass = sig.playerGlowEligible && (tier === "ELITE" || tier === "STRONG") && (sig.edge ?? 0) >= 10
-                  ? "shadow-[0_0_10px_rgba(34,197,94,0.25)]" : "";
-                return (
-                  <div
-                    key={`sig-${sig.playerId}-${sig.market}-${idx}`}
-                    data-testid={`signal-strip-${sig.playerId}-${sig.market}`}
-                    className={`flex-shrink-0 rounded-lg p-2.5 space-y-1 ${glowClass}`}
-                    style={{ width: 180, background: sideColor.bg, border: `1px solid ${sideColor.border}`, scrollSnapAlign: "start" }}
-                  >
-                    <div className="flex items-center justify-between">
-                      {tier && tier !== "WATCHLIST" && (
-                        <span className={`text-[7px] font-black px-1 py-0.5 rounded ${confidenceTierColor(tier)}`}>
-                          {tier}
-                        </span>
-                      )}
-                      <span className="text-[8px] font-black px-1 py-0.5 rounded" style={{ color: sideColor.accent, background: "rgba(255,255,255,0.04)" }}>
-                        {sig.recommendedSide}
-                      </span>
-                    </div>
-                    <div className="text-[10px] font-bold text-foreground truncate">{sig.playerName}</div>
-                    <div className="text-[9px] text-muted-foreground">{MARKET_LABELS[sig.market] ?? sig.market} {sig.bookLine}</div>
-                    <div className="flex items-baseline justify-between">
-                      <span className="text-sm font-black" style={{ color: sideColor.accent }}>{Math.round(sig.enginePct)}%</span>
-                      {sig.edge != null && sig.edge > 0 && (
-                        <span className={`text-[9px] font-bold ${edgeColor(sig.edge)}`}>+{sig.edge.toFixed(1)}%</span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-          </div>
-        </div>
-      )}
-
-      {signals.length === 0 && (
-        <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-3 space-y-2" data-testid="mlb-game-signal-cta">
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
-            </span>
-            <span className="text-xs font-semibold text-blue-400">
-              {game.status === "live" ? "No qualified signals yet" : game.status === "final" ? "Game complete" : "Waiting for game start"}
-            </span>
-          </div>
-          <p className="text-[10px] text-muted-foreground">
-            {game.status === "live"
-              ? "Select any batter below to run a manual calculation on their prop markets."
-              : game.status === "final"
-              ? "This game has ended. Review final stats below."
-              : "Signals will generate once the game begins and live data flows in."}
-          </p>
-        </div>
-      )}
-
-      {(game.pitcherAway || game.pitcherHome) && (
-        <div className="space-y-2">
-          <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">Pitchers</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <PitcherCard game={game} side="away" signals={signals} isElite={isElite} />
-            <PitcherCard game={game} side="home" signals={signals} isElite={isElite} />
-          </div>
-        </div>
-      )}
-
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">Lineup</h3>
-          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-            {playersLoading && <span className="animate-pulse">Loading…</span>}
-            {players.length > 0 && <span>{players.length} batters</span>}
-          </div>
-        </div>
-
-        {!playersLoading && players.length === 0 && (
-          <div className="rounded-lg border border-border/30 bg-card/50 p-3 text-center">
-            <div className="flex items-center justify-center gap-2 text-xs text-blue-400">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-400" />
-              </span>
-              {game.status === "pregame" ? "Lineup loading" : game.status === "final" ? "No lineup data" : "Resolving batter data"}
-            </div>
-          </div>
-        )}
-
-        {(awayPlayers.length > 0 || homePlayers.length > 0) && (
-          <>
-            <TeamBatterSection
-              teamAbbr={game.awayAbbr ?? "AWAY"}
-              pitcher={game.pitcherAway ?? null}
-              players={awayPlayers}
-              signals={signals}
-              game={game}
-              isElite={isElite}
-              onSelectPlayer={onSelectPlayer}
-              onAddToSlip={onAddToSlip}
-              side="away"
-              score={game.awayScore}
-            />
-            <TeamBatterSection
-              teamAbbr={game.homeAbbr ?? "HOME"}
-              pitcher={game.pitcherHome ?? null}
-              players={homePlayers}
-              signals={signals}
-              game={game}
-              isElite={isElite}
-              onSelectPlayer={onSelectPlayer}
-              onAddToSlip={onAddToSlip}
-              side="home"
-              score={game.homeScore}
-            />
-          </>
-        )}
-
-        {awayPlayers.length === 0 && homePlayers.length === 0 && players.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-            {players.map(p => (
-              <BatterCard key={p.playerId} player={p} signals={signals} game={game} isElite={isElite} onSelect={() => onSelectPlayer(p)} onAddToSlip={onAddToSlip} />
-            ))}
-          </div>
-        )}
-      </div>
-
-      {!isElite && (
-        <div className="rounded-lg border border-primary/20 bg-primary/5 p-4 text-center space-y-2">
-          <div className="text-sm font-bold text-foreground">Unlock Full MLB Analysis</div>
-          <div className="text-xs text-muted-foreground">Upgrade to All Sports for unlimited signals and bet recommendations.</div>
-          <a href="/upgrade" data-testid="link-mlb-upgrade-cta-detail"
-            className="inline-block px-4 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors">
-            Upgrade to All Sports →
-          </a>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PlayerDetailView({ player, game, signals, isElite, oddsEntries, oddsLoading, selectedMarket, setSelectedMarket,
-  selectedLine, setSelectedLine, manualMode, setManualMode, manualBookLine, setManualBookLine, hasAnyOdds, canCalculate,
-  gameHydrated, playerHydrated, lineValid, lineupReady,
-  calcMutation, calcResult, setCalcResult, opponentTeam, onBack, onAddToSlip }: {
-  player: MLBBatter; game: MLBGame; signals: MLBSignal[]; isElite: boolean;
-  oddsEntries: [string, OddsEntry][]; oddsLoading: boolean; selectedMarket: string;
-  setSelectedMarket: (m: string) => void; selectedLine: any; setSelectedLine: (l: any) => void;
-  manualMode: boolean; setManualMode: (m: boolean) => void; manualBookLine: string;
-  setManualBookLine: (v: string) => void; hasAnyOdds: boolean; canCalculate: boolean;
-  gameHydrated: boolean; playerHydrated: boolean; lineValid: boolean; lineupReady: boolean;
-  calcMutation: any; calcResult: CalcResult | null; setCalcResult: (r: CalcResult | null) => void; opponentTeam: string | null; onBack: () => void;
-  onAddToSlip?: (sig: MLBSignal) => void;
-}) {
-  const playerSignals = signals.filter(s => s.playerId === player.playerId);
-  const bestSignal = playerSignals.length > 0 ? playerSignals.reduce((b, s) => Math.abs(s.edge ?? 0) > Math.abs(b.edge ?? 0) ? s : b) : null;
-  const form = bestSignal?.formIndicator ?? null;
-  const abResults = player.priorABResults ?? [];
-
-  return (
-    <div className="space-y-4">
-      <button data-testid="button-back-to-game" onClick={onBack}
-        className="flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 transition-colors font-medium min-h-[44px] py-2">
-        ← Back to Game
-      </button>
-
-      <div className={`rounded-xl border border-border/40 bg-card overflow-hidden ${heatGlow(form)}`}>
-        <div className="px-4 py-3 border-b border-border/30 flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-base font-bold text-foreground">{player.playerName}</span>
-              {form && form !== "NEUTRAL" && (
-                <span className={`text-sm font-bold ${heatColor(form)}`}>{heatEmoji(form)} {form}</span>
-              )}
-            </div>
-            <div className="text-xs text-muted-foreground mt-0.5">{player.teamAbbr} vs {opponentTeam} · #{player.battingOrderSlot}</div>
-          </div>
-          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-            game.status === "live" ? "bg-green-500/15 text-green-500"
-            : game.status === "final" ? "bg-muted/50 text-muted-foreground/60"
-            : "bg-muted text-muted-foreground"
-          }`}>
-            {game.status === "live" ? `LIVE ${inningLabel(game)}` : game.status === "final" ? "FIN" : "PRE"}
-          </span>
-        </div>
-
-        {(() => {
-          const bvpData = bestSignal?.bvp;
-          if (!bvpData || bvpData.atBats === 0) return null;
-          return (
-            <div className="px-4 py-3 border-b border-border/30">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Batter vs Pitcher</span>
-                <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400">MATCHUP</span>
-              </div>
-              <div className="grid grid-cols-5 gap-2 text-xs">
-                <div className="bg-secondary/30 rounded-lg p-2 text-center">
-                  <div className="text-[9px] text-muted-foreground">AB</div>
-                  <div className="font-bold text-foreground">{bvpData.atBats}</div>
-                </div>
-                <div className="bg-secondary/30 rounded-lg p-2 text-center">
-                  <div className="text-[9px] text-muted-foreground">H</div>
-                  <div className="font-bold text-foreground">{bvpData.hits}</div>
-                </div>
-                <div className="bg-secondary/30 rounded-lg p-2 text-center">
-                  <div className="text-[9px] text-muted-foreground">AVG</div>
-                  <div className="font-bold text-foreground">{bvpData.avg != null ? `.${(bvpData.avg * 1000).toFixed(0).padStart(3, "0")}` : "—"}</div>
-                </div>
-                <div className="bg-secondary/30 rounded-lg p-2 text-center">
-                  <div className="text-[9px] text-muted-foreground">HR</div>
-                  <div className="font-bold text-foreground">{bvpData.homeRuns}</div>
-                </div>
-                <div className="bg-secondary/30 rounded-lg p-2 text-center">
-                  <div className="text-[9px] text-muted-foreground">K</div>
-                  <div className="font-bold text-foreground">{bvpData.strikeouts}</div>
-                </div>
-              </div>
-              {bvpData.atBats < 10 && (
-                <div className="text-[9px] text-muted-foreground mt-1.5">Small sample ({bvpData.atBats} AB) — use with caution</div>
-              )}
-            </div>
-          );
-        })()}
-
-        {abResults.length > 0 && (
-          <div className="px-4 py-3 border-b border-border/30">
-            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">At-Bat Results</div>
-            <div className="flex gap-2 flex-wrap">
-              {abResults.map((ab, i) => (
-                <ABOutcomePill key={i} outcome={ab.outcome} pitchType={ab.pitchType} pitchSpeed={ab.pitchSpeed} exitVelocity={ab.exitVelocity} />
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="px-4 py-3 border-b border-border/30">
-          {(() => {
-            const hasLive = player.exitVelocity != null || player.hardHitPct != null || player.barrelPct != null;
-            const hasRecent = player.xBA != null || player.xSLG != null;
-            if (!hasLive && !hasRecent) {
-              return (
-                <div className="text-xs text-muted-foreground py-1">Contact quality not available yet</div>
-              );
-            }
-            return (
-              <>
-                {hasLive && (
-                  <div className="mb-2">
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Contact Quality</span>
-                      <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-400">LIVE</span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2 text-xs">
-                      {player.exitVelocity != null && (
-                        <div className="bg-secondary/30 rounded-lg p-2 text-center">
-                          <div className="text-[9px] text-muted-foreground">EV</div>
-                          <div className="font-bold text-foreground">{player.exitVelocity}</div>
-                        </div>
-                      )}
-                      {player.barrelPct != null && (
-                        <div className="bg-secondary/30 rounded-lg p-2 text-center">
-                          <div className="text-[9px] text-muted-foreground">Barrel%</div>
-                          <div className="font-bold text-foreground">{Math.round(player.barrelPct)}%</div>
-                        </div>
-                      )}
-                      {player.hardHitPct != null && (
-                        <div className="bg-secondary/30 rounded-lg p-2 text-center">
-                          <div className="text-[9px] text-muted-foreground">Hard Hit</div>
-                          <div className="font-bold text-foreground">{Math.round(player.hardHitPct)}%</div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-                {hasRecent && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-1.5">
-                      {!hasLive && <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Contact Quality</span>}
-                      <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">RECENT FORM</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      {player.xBA != null && (
-                        <div className="bg-secondary/30 rounded-lg p-2 text-center">
-                          <div className="text-[9px] text-muted-foreground">xBA</div>
-                          <div className="font-bold text-foreground">.{(player.xBA * 1000).toFixed(0).padStart(3, "0")}</div>
-                        </div>
-                      )}
-                      {player.xSLG != null && (
-                        <div className="bg-secondary/30 rounded-lg p-2 text-center">
-                          <div className="text-[9px] text-muted-foreground">xSLG</div>
-                          <div className="font-bold text-foreground">.{(player.xSLG * 1000).toFixed(0).padStart(3, "0")}</div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </>
-            );
-          })()}
-        </div>
-
-        <div className="px-4 py-3 border-b border-border/30">
-          <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Live Stats</div>
-          <div className="grid grid-cols-4 sm:grid-cols-8 gap-2 text-xs">
-            {[
-              { label: "AB", value: player.ab }, { label: "H", value: player.h }, { label: "TB", value: player.tb },
-              { label: "BB", value: player.bb }, { label: "K", value: player.k }, { label: "RBI", value: player.rbi },
-              { label: "SB", value: player.sb }, { label: "R", value: player.r },
-            ].map(stat => (
-              <div key={stat.label} className="bg-secondary/40 rounded-lg p-2 text-center">
-                <div className="text-muted-foreground text-[10px]">{stat.label}</div>
-                <div className="font-bold text-foreground">{stat.value}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="px-4 py-3">
-          <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Game Context</div>
-          <div className="space-y-2 text-xs">
-            <div className="flex items-center gap-3 bg-secondary/30 rounded-lg px-3 py-2">
-              {game.status === "live" ? (
-                <>
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-500/15 text-green-400 shrink-0">LIVE</span>
-                  <span className="font-bold text-foreground">{game.awayAbbr} {game.awayScore ?? 0}</span>
-                  <span className="text-muted-foreground">–</span>
-                  <span className="font-bold text-foreground">{game.homeScore ?? 0} {game.homeAbbr}</span>
-                  <span className="text-[9px] text-muted-foreground ml-auto">{inningLabel(game)}</span>
-                </>
-              ) : game.status === "final" ? (
-                <>
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground/60 shrink-0">FIN</span>
-                  <span className="font-bold text-muted-foreground">{game.awayAbbr} {game.awayScore ?? 0}</span>
-                  <span className="text-muted-foreground/50">–</span>
-                  <span className="font-bold text-muted-foreground">{game.homeScore ?? 0} {game.homeAbbr}</span>
-                  <span className="text-[9px] text-muted-foreground/50 ml-auto">Final</span>
-                </>
-              ) : (
-                <>
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-muted text-muted-foreground shrink-0">PRE</span>
-                  <span className="font-semibold text-muted-foreground">{game.awayAbbr} @ {game.homeAbbr}</span>
-                  {game.startTime && (
-                    <span className="text-[9px] text-muted-foreground ml-auto">
-                      {new Date(game.startTime).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-                    </span>
-                  )}
-                </>
-              )}
-            </div>
-
-            <div className="bg-secondary/20 rounded-lg px-3 py-2 flex items-center gap-3">
-              <div className="text-[9px] text-muted-foreground shrink-0">Pitcher</div>
-              <div className="font-semibold text-foreground truncate">{game.pitcherName || "TBD"}</div>
-              {game.pitcherThrows && (
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-border/30 shrink-0">
-                  {game.pitcherThrows}HP
-                </span>
-              )}
-              {game.pitcherContext?.pitchCount != null && game.pitcherContext.pitchCount > 0 && (
-                <span className="text-[9px] text-muted-foreground ml-auto shrink-0">
-                  {game.pitcherContext.pitchCount} pitches
-                  {game.pitcherContext.timesThroughOrder > 0 && ` · ${ordinal(game.pitcherContext.timesThroughOrder)} pass`}
-                </span>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <div className="bg-secondary/20 rounded-lg px-2.5 py-1.5">
-                <div className="text-[9px] text-muted-foreground">Venue</div>
-                <div className="font-semibold text-foreground truncate">{game.venue ?? "—"}</div>
-              </div>
-              <div className="bg-secondary/20 rounded-lg px-2.5 py-1.5">
-                <div className="text-[9px] text-muted-foreground">Weather</div>
-                <div className="font-semibold text-foreground truncate">
-                  {game.weather?.temperature != null
-                    ? `${game.weather.temperature}°F`
-                    : game.weatherSummary || "—"}
-                  {game.weather?.windSpeed != null && ` · ${game.weather.windSpeed}mph ${game.weather.windDirection ?? ""}`}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {playerSignals.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-sm font-bold text-foreground">Engine Signals</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {playerSignals.map(sig => (
-              <SignalCard key={`${sig.playerId}-${sig.market}`} sig={sig} isElite={isElite} onAddToSlip={onAddToSlip} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-        <h3 className="text-sm font-semibold text-foreground">Market</h3>
-        <div className="space-y-2">
-          <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Batters</div>
-          <div className="flex gap-1.5 flex-wrap">
-            {BATTER_MARKETS.map(m => (
-              <button key={m.value} data-testid={`button-market-${m.value}`} onClick={() => setSelectedMarket(m.value)}
-                className={`px-3 py-2.5 min-h-[44px] text-xs font-medium rounded-full border transition-colors ${
-                  selectedMarket === m.value ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
-                }`}>{m.label}</button>
-            ))}
-          </div>
-          <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider pt-1">Pitchers</div>
-          <div className="flex gap-1.5 flex-wrap">
-            {PITCHER_MARKETS.map(m => (
-              <button key={m.value} data-testid={`button-market-${m.value}`} onClick={() => setSelectedMarket(m.value)}
-                className={`px-3 py-2.5 min-h-[44px] text-xs font-medium rounded-full border transition-colors ${
-                  selectedMarket === m.value ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40"
-                }`}>{m.label}</button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-foreground">
-            {manualMode ? (hasAnyOdds ? "Manual Input" : "Manual Projection") : "Sportsbook Lines"}
-          </h3>
-          {manualMode && hasAnyOdds && (
-            <button data-testid="button-manual-toggle" onClick={() => setManualMode(false)}
-              className="text-xs text-primary hover:text-primary/80 transition-colors">Back to lines</button>
-          )}
-        </div>
-
-        {oddsLoading && !manualMode && (
-          <div className="flex items-center gap-2 py-3">
-            <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-            <span className="text-xs text-muted-foreground">Loading sportsbook lines…</span>
-          </div>
-        )}
-
-        {!oddsLoading && !manualMode && oddsEntries.length === 0 && (
-          <p className="text-xs text-muted-foreground/60 bg-secondary/50 rounded-lg p-3 border border-border/40">
-            No sportsbook line available — enter values manually below.
-          </p>
-        )}
-
-        {!oddsLoading && !manualMode && oddsEntries.length > 0 && (
-          <div className="space-y-1.5">
-            {oddsEntries.map(([sb, odds]) => {
-              const o = odds as OddsEntry;
-              const isActive = selectedLine?.book === sb;
-              return (
-                <button key={sb} type="button" data-testid={`button-mlb-odds-${sb}`}
-                  onClick={() => { setSelectedLine({ book: sb, line: o.line, overOdds: o.overOdds, underOdds: o.underOdds }); setCalcResult(null); }}
-                  className={`w-full flex items-center justify-between px-3 py-3 min-h-[44px] rounded-lg border text-xs transition-all ${
-                    isActive ? "border-primary bg-primary/10" : "border-border/50 bg-secondary/30 hover:bg-secondary/60"
-                  }`}>
-                  <span className="font-semibold text-foreground">{SPORTSBOOK_LABELS[sb] ?? sb}</span>
-                  <span className="font-mono font-bold text-primary">{o.line}</span>
-                  <span className="text-muted-foreground">O {formatOdds(o.overOdds)} / U {formatOdds(o.underOdds)}</span>
-                </button>
-              );
-            })}
-            <button data-testid="button-switch-to-manual" onClick={() => {
-                setManualMode(true); setSelectedLine(null);
-                if (oddsEntries.length > 0) {
-                  const lines = oddsEntries.map(([, o]) => (o as OddsEntry).line).filter(l => l != null).sort((a, b) => a - b);
-                  if (lines.length > 0) setManualBookLine(String(lines[Math.floor(lines.length / 2)]));
-                }
-              }}
-              className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors py-1">
-              Enter line manually instead
-            </button>
-          </div>
-        )}
-
-        {manualMode && (
-          <div className="space-y-3">
-            <div>
-              <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Book Line *</label>
-              <input data-testid="input-manual-line" type="number" step="0.5" value={manualBookLine}
-                onChange={(e) => setManualBookLine(e.target.value)} placeholder="e.g. 1.5"
-                className="w-full mt-1 px-3 py-2 rounded-lg border border-border bg-secondary/30 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary" />
-            </div>
-          </div>
-        )}
-
-        {!canCalculate && !calcMutation.isPending && (
-          <div className="text-[10px] text-muted-foreground/70 text-center py-1">
-            {!gameHydrated
-              ? (!lineupReady ? "Waiting for lineup" : !(game.pitcherAway || game.pitcherHome) ? "Waiting for pitcher matchup" : "Waiting for game data…")
-              : !playerHydrated ? "Waiting for player stats…"
-              : !lineValid ? "Select a line or enter manual line" : ""}
-          </div>
-        )}
-        <button data-testid="button-calculate-mlb" disabled={!canCalculate || calcMutation.isPending}
-          onClick={() => calcMutation.mutate()}
-          className="w-full min-h-[48px] rounded-lg bg-primary text-primary-foreground font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50 transition-opacity">
-          {calcMutation.isPending ? (
-            <><div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />Calculating…</>
-          ) : manualMode ? "Calculate Manual Projection" : "Calculate Probability"}
-        </button>
-        {!(game.pitcherAway || game.pitcherHome) && (
-          <div className="text-[10px] text-muted-foreground/60 text-center mt-1">Calculator requires pitcher data to be resolved</div>
-        )}
-      </div>
-
-      {calcResult && (
-        <div className="bg-card border border-border rounded-xl p-4 space-y-4">
-          <h3 className="text-sm font-semibold text-foreground">
-            {calcResult.isManual ? "Manual Projection" : "Engine Result"}
-          </h3>
-
-          <div className="flex flex-col items-center gap-4">
-            <ProbabilityRing probability={calcResult.calibratedProbabilityOver} size={140} strokeWidth={12} />
-            <div className="text-center">
-              <span className={`text-sm font-bold px-3 py-1 rounded-full ${calcResult.edge > 0 ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/10 text-red-400"}`}>
-                {calcResult.recommendedSide} {calcResult.bookLine}
-                {!calcResult.isManual && ` · ${calcResult.edge > 0 ? "+" : ""}${calcResult.edge.toFixed(1)}% Edge`}
-              </span>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-            <div className="bg-secondary/40 rounded-lg p-3 text-center">
-              <div className="text-muted-foreground mb-1">Probability</div>
-              <div className="font-bold text-foreground text-lg">{Math.round(calcResult.calibratedProbabilityOver)}%</div>
-            </div>
-            <div className="bg-secondary/40 rounded-lg p-3 text-center">
-              <div className="text-muted-foreground mb-1">Projection</div>
-              <div className="font-bold text-foreground text-lg">{calcResult.projection.toFixed(2)}</div>
-            </div>
-            {!calcResult.isManual && (
-              <div className="bg-secondary/40 rounded-lg p-3 text-center">
-                <div className="text-muted-foreground mb-1">Edge %</div>
-                <div className={`font-bold text-lg ${calcResult.edge > 0 ? "text-emerald-400" : "text-red-400"}`}>
-                  {calcResult.edge > 0 ? "+" : ""}{calcResult.edge.toFixed(1)}%
-                </div>
-              </div>
-            )}
-            <div className="bg-secondary/40 rounded-lg p-3 text-center">
-              <div className="text-muted-foreground mb-1">Tier</div>
-              <div className={`font-bold text-lg ${
-                calcResult.confidenceTier === "ELITE" ? "text-green-400" : calcResult.confidenceTier === "STRONG" ? "text-emerald-400"
-                : calcResult.confidenceTier === "LEAN" ? "text-yellow-400" : "text-muted-foreground"
-              }`}>{calcResult.confidenceTier}</div>
-            </div>
-          </div>
-
-          {Array.isArray(calcResult.explanationBullets) && calcResult.explanationBullets.length > 0 && (
-            <div className="space-y-1.5">
-              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Analysis</h4>
-              <ul className="space-y-1">
-                {calcResult.explanationBullets.map((bullet, i) => (
-                  <li key={i} className="text-xs text-muted-foreground flex gap-2">
-                    <span className="text-primary mt-0.5">·</span>
-                    <span>{bullet}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export default function MlbLivePage() {
+export default function MlbLivePage({ activeSubTab = "games" }: { activeSubTab?: "games" | "live_feed" | "hr_radar" }) {
   return (
     <MLBErrorBoundary>
-      <MlbLiveInner />
+      <MlbLiveInner activeSubTab={activeSubTab} />
     </MLBErrorBoundary>
   );
 }
