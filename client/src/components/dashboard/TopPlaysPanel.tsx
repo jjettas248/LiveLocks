@@ -227,17 +227,17 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPl
                 </div>
               )}
 
-              {totalSignals > 0 && (
-                <div className="flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-muted/30 border border-border/20">
-                  <span className="relative flex h-1.5 w-1.5">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-400" />
-                  </span>
-                  <span className="text-[10px] text-muted-foreground font-medium">
-                    {totalSignals} live signal{totalSignals !== 1 ? "s" : ""} across all sports right now
-                  </span>
-                </div>
-              )}
+              <div className="flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-muted/30 border border-border/20">
+                <span className="relative flex h-1.5 w-1.5">
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${totalSignals > 0 ? "bg-green-400" : "bg-blue-400"} opacity-75`} />
+                  <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${totalSignals > 0 ? "bg-green-400" : "bg-blue-400"}`} />
+                </span>
+                <span className="text-[10px] text-muted-foreground font-medium">
+                  {totalSignals > 0
+                    ? `${totalSignals} live signal${totalSignals !== 1 ? "s" : ""} across all sports right now`
+                    : "Scanning for live signals across all sports"}
+                </span>
+              </div>
             </div>
           )}
         </div>
@@ -254,7 +254,7 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPl
             </div>
             <div className="text-center space-y-2">
               <h3 className="text-lg font-bold text-foreground">
-                Unlock {totalSignals > 0 ? `All ${totalSignals}` : "All"} Live Signals
+                Unlock {totalSignals > 0 ? `all ${totalSignals} signals` : "all signals"} across sports
               </h3>
               <p className="text-sm text-muted-foreground">
                 You just saw one edge — there are more across NBA, NCAAB, and MLB right now. Get full access to every signal, probability, and recommendation.
