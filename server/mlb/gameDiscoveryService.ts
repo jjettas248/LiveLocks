@@ -14,8 +14,19 @@ export interface MLBGame {
   espnStatus?: string;
 }
 
+function getESTSlateDate(): Date {
+  const now = new Date();
+  const estOffset = -5 * 60;
+  const estMs = now.getTime() + (now.getTimezoneOffset() + estOffset) * 60 * 1000;
+  const est = new Date(estMs);
+  if (est.getHours() < 6) {
+    est.setDate(est.getDate() - 1);
+  }
+  return est;
+}
+
 function todayDateStrEspn(): string {
-  const d = new Date();
+  const d = getESTSlateDate();
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
@@ -23,7 +34,7 @@ function todayDateStrEspn(): string {
 }
 
 function todayDateStrMlb(): string {
-  const d = new Date();
+  const d = getESTSlateDate();
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");

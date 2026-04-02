@@ -695,12 +695,12 @@ export async function registerRoutes(
     try {
 
       // ── Fetch from ESPN scoreboard ──
-      // ESPN lists games by US date, so a late-night game (e.g. 10 PM ET start)
-      // may appear under yesterday's date even though it's still live right now.
-      // Solution: fetch BOTH today's dated feed AND the default (no-date) feed
-      // which always includes currently active games, then merge by gameId.
-      const today = new Date();
-      const espnDateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
+      // Use the same EST slate-date logic as NBA: before 6 AM EST show
+      // yesterday's date so late-night games stay visible, after 6 AM
+      // switch to today so stale "Final" games from yesterday drop off.
+      // Also fetch the active (no-date) feed to catch any currently live
+      // games that might fall outside the dated window.
+      const espnDateStr = getESTSlateDate();
       const espnTodayUrl = `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${espnDateStr}`;
       const espnActiveUrl = `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard`;
 
