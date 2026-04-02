@@ -383,7 +383,9 @@ export interface MLBPropOutput {
   formIndicator: FormIndicator;
   formScore: number;
   evPct: number;
-  hrFactors?: { count: number; labels: string[] };
+  hrFactors?: { count: number; labels: string[]; build?: Record<string, any> };
+  hrBuildScore?: number;
+  hrIntensity?: "weak" | "watch" | "strong" | "imminent";
   contextScore: number;
   matchupTag: string | null;
   featureScores?: Record<string, number>;

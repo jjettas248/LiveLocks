@@ -9,6 +9,7 @@ import type {
 import { MARKET_PROBABILITY_CAPS } from "./types";
 import { getPlayer, getPlayerByName } from "./rosterService";
 import { mlbGameCache } from "./dataPullService";
+import { buildHRSignal } from "./HRSignalBuilder";
 
 // ── Odds validation helpers ───────────────────────────────────────────────────
 
@@ -1172,6 +1173,7 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
   const features = computeFullFeatureLayer(hrInput);
   const currentHR = hrInput.currentStatValue ?? 0;
 
+  const hrBuild = buildHRSignal(hrInput);
   const hrRatePerPA = computeHRRatePerPA(hrInput);
 
   const paDist = estimateRichPADistribution(
@@ -1200,7 +1202,8 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
   const calibratedSided = isOverFavored ? calibratedOver : calibratedUnder;
 
   const bookImplied = computeBookImplied(hrInput, isOverFavored);
-  const edge = calibratedSided - bookImplied;
+  const rawEdge = calibratedSided - bookImplied;
+  const edge = isOverFavored ? rawEdge + hrBuild.boost : rawEdge;
   const badgeResult = computeBadges(hrInput, features);
   const oddsAge = hrInput.oddsUpdatedAt ? Date.now() - hrInput.oddsUpdatedAt : 0;
   let confidenceTier = determineConfidenceTier(edge, features, badgeResult, oddsAge);
@@ -1276,7 +1279,9 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
     formIndicator: classifyForm(hrInput),
     formScore: Math.round(computeFormScore(hrInput) * 100) / 100,
     evPct: Math.round((calibratedDominant / 100 - 0.5) * 100 * 10) / 10,
-    hrFactors: { count: hrFactors.count, labels: hrFactors.labels },
+    hrFactors: { count: hrFactors.count, labels: hrFactors.labels, build: hrBuild.factors },
+    hrBuildScore: hrBuild.score,
+    hrIntensity: hrBuild.intensity,
     contextScore: Math.round(computeStrongContextScore(hrInput) * 100) / 100,
     matchupTag: hrInput.pitcher.timesThrough >= 3 ? "vs 3rd Time Through" : hrInput.pitcher.pitchCount >= 80 ? "vs Fatigue" : hrInput.pitcher.throws ? `vs ${hrInput.pitcher.throws}HP` : null,
     featureScores: {

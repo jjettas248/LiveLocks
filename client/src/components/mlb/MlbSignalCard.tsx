@@ -139,13 +139,31 @@ export function MlbSignalCard({
 
   const priorABs = sig.priorABResults ?? [];
 
+  const isHRMarket = sig.market === "home_runs" || sig.market === "hrr";
+  const hrIntensity = sig.hrIntensity;
+  const hrBuildScore = sig.hrBuildScore;
+  const hrBuild = sig.hrFactors?.build as {
+    avgEV: number | null; maxEV: number | null; avgLA: number | null;
+    barrels: number; hardHits: number; deepFlyouts: number;
+  } | undefined;
+
+  const intensityStyle: Record<string, { border: string; glow: string; bg: string; badge: string; text: string }> = {
+    weak: { border: "#6b7280", glow: "none", bg: "transparent", badge: "BUILDING", text: "#9ca3af" },
+    watch: { border: "#eab308", glow: "0 0 8px rgba(234,179,8,0.3)", bg: "rgba(234,179,8,0.04)", badge: "WATCH", text: "#facc15" },
+    strong: { border: "#f97316", glow: "0 0 12px rgba(249,115,22,0.4)", bg: "rgba(249,115,22,0.06)", badge: "STRONG", text: "#fb923c" },
+    imminent: { border: "#ef4444", glow: "0 0 18px rgba(239,68,68,0.5)", bg: "rgba(239,68,68,0.08)", badge: "IMMINENT", text: "#f87171" },
+  };
+  const hrStyle = isHRMarket && hrIntensity ? intensityStyle[hrIntensity] : null;
+
   return (
     <div
       data-testid={`mlb-signal-${sig.playerId}-${sig.market}`}
-      className="rounded-xl border border-border/40 bg-card transition-all"
+      className={`rounded-xl border border-border/40 bg-card transition-all ${isHRMarket && hrIntensity === "imminent" ? "animate-pulse" : ""}`}
       style={{
         opacity: cardOpacity,
-        borderLeft: `3px solid ${tier.border}`,
+        borderLeft: `3px solid ${hrStyle?.border ?? tier.border}`,
+        boxShadow: hrStyle?.glow ?? "none",
+        background: hrStyle?.bg ?? undefined,
       }}
     >
       {/* ── COLLAPSED: 3-Second Decision Layer ── */}
@@ -194,9 +212,22 @@ export function MlbSignalCard({
           </div>
         </div>
 
-        {/* Row 2: Smart Tags (max 3) */}
-        {smartTags.length > 0 && (
+        {/* Row 2: Smart Tags + HR Intensity Badge */}
+        {(smartTags.length > 0 || hrStyle) && (
           <div className="flex items-center gap-1.5 flex-wrap">
+            {hrStyle && (
+              <span
+                data-testid={`hr-intensity-${sig.playerId}`}
+                className="text-[10px] px-2 py-0.5 rounded-full font-black border"
+                style={{
+                  color: hrStyle.text,
+                  borderColor: `${hrStyle.border}66`,
+                  background: `${hrStyle.border}20`,
+                }}
+              >
+                ⚡ {hrStyle.badge}{hrBuildScore != null ? ` ${hrBuildScore.toFixed(1)}` : ""}
+              </span>
+            )}
             {smartTags.map((tag) => (
               <span
                 key={tag}
@@ -323,6 +354,75 @@ export function MlbSignalCard({
                   );
                 })}
               </div>
+            </div>
+          )}
+
+          {/* HR Build Factors */}
+          {isHRMarket && hrBuild && hrStyle && (
+            <div className="rounded-lg p-2.5 border border-border/20 space-y-1.5" style={{ background: `${hrStyle.border}08`, borderColor: `${hrStyle.border}30` }}>
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-bold uppercase tracking-wider" style={{ color: hrStyle.text }}>
+                  HR Build Profile
+                </span>
+                {hrBuildScore != null && (
+                  <span className="text-[10px] font-black tabular-nums" style={{ color: hrStyle.text }}>
+                    {hrBuildScore.toFixed(1)}/10
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-1.5 text-[9px]">
+                {hrBuild.avgEV != null && (
+                  <div className="flex flex-col items-center py-1 px-1.5 rounded bg-secondary/30">
+                    <span className="text-muted-foreground text-[8px]">Avg EV</span>
+                    <span className="font-bold" style={{ color: hrBuild.avgEV >= 95 ? "#f97316" : hrBuild.avgEV >= 90 ? "#a3e635" : "#e4e4e7" }}>
+                      {hrBuild.avgEV.toFixed(1)}
+                    </span>
+                  </div>
+                )}
+                {hrBuild.maxEV != null && (
+                  <div className="flex flex-col items-center py-1 px-1.5 rounded bg-secondary/30">
+                    <span className="text-muted-foreground text-[8px]">Max EV</span>
+                    <span className="font-bold" style={{ color: hrBuild.maxEV >= 105 ? "#ef4444" : hrBuild.maxEV >= 100 ? "#f97316" : "#e4e4e7" }}>
+                      {hrBuild.maxEV.toFixed(1)}
+                    </span>
+                  </div>
+                )}
+                {hrBuild.avgLA != null && (
+                  <div className="flex flex-col items-center py-1 px-1.5 rounded bg-secondary/30">
+                    <span className="text-muted-foreground text-[8px]">Avg LA</span>
+                    <span className="font-bold" style={{ color: hrBuild.avgLA >= 20 && hrBuild.avgLA <= 35 ? "#22c55e" : "#e4e4e7" }}>
+                      {hrBuild.avgLA.toFixed(0)}°
+                    </span>
+                  </div>
+                )}
+                <div className="flex flex-col items-center py-1 px-1.5 rounded bg-secondary/30">
+                  <span className="text-muted-foreground text-[8px]">Barrels</span>
+                  <span className="font-bold" style={{ color: hrBuild.barrels > 0 ? "#f97316" : "#6b7280" }}>
+                    {hrBuild.barrels}
+                  </span>
+                </div>
+                <div className="flex flex-col items-center py-1 px-1.5 rounded bg-secondary/30">
+                  <span className="text-muted-foreground text-[8px]">Hard Hits</span>
+                  <span className="font-bold" style={{ color: hrBuild.hardHits > 0 ? "#22c55e" : "#6b7280" }}>
+                    {hrBuild.hardHits}
+                  </span>
+                </div>
+                {hrBuild.deepFlyouts > 0 && (
+                  <div className="flex flex-col items-center py-1 px-1.5 rounded bg-secondary/30">
+                    <span className="text-muted-foreground text-[8px]">Deep Flys</span>
+                    <span className="font-bold text-amber-400">{hrBuild.deepFlyouts}</span>
+                  </div>
+                )}
+              </div>
+              {sig.hrFactors?.labels && (sig.hrFactors.labels as string[]).length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {(sig.hrFactors.labels as string[]).map((label: string) => (
+                    <span key={label} className="text-[8px] px-1.5 py-0.5 rounded-full font-medium border" style={{ color: hrStyle.text, borderColor: `${hrStyle.border}40`, background: `${hrStyle.border}15` }}>
+                      {label}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

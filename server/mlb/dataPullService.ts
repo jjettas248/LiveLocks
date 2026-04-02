@@ -4,6 +4,7 @@
 
 import type { PitchMixEntry } from "./types";
 import { fetchBaseballSavantData, getStadiumCoords, windDirectionRelativeToField, isVenueIndoors } from "./dataSources";
+import { storage } from "../storage";
 
 // ── Cache type definitions ────────────────────────────────────────────────────
 
@@ -397,6 +398,8 @@ export async function syncGameBoxScore(statsPk: string, cacheKey?: string): Prom
 
 export async function syncContactData(statsPk: string, cacheKey?: string): Promise<void> {
   const gameId = cacheKey ?? statsPk;
+  const persistedContactKeys = new Set<string>();
+
   try {
     const data = await fetchJson(SAVANT_GF_URL(statsPk));
 
@@ -438,14 +441,35 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
           byPlayerId[playerId].hitDistance = dist;
         }
 
+        const outcome = inferOutcome(event);
         byPlayerId[playerId].priorABResults.push({
           exitVelocity: ev,
           launchAngle: la,
           distance: dist,
-          outcome: inferOutcome(event),
+          outcome,
           pitchType,
           pitchSpeed,
         });
+
+        const abIndex = byPlayerId[playerId].priorABResults.length;
+        const fingerprint = `${statsPk}:${playerId}:${abIndex}:${ev ?? 0}:${la ?? 0}`;
+        if (!persistedContactKeys.has(fingerprint) && ev != null) {
+          persistedContactKeys.add(fingerprint);
+          const isBarrel = (ev ?? 0) >= 98 && (la ?? 0) >= 20 && (la ?? 0) <= 35;
+          storage.insertContactEvent({
+            playerId,
+            playerName: bip.batter_name ?? bip.hitter_name ?? playerId,
+            gameId: String(statsPk),
+            exitVelocity: ev,
+            launchAngle: la,
+            distance: dist,
+            result: outcome,
+            pitchType,
+            pitchSpeed,
+            isBarrel,
+            eventFingerprint: fingerprint,
+          }).catch(() => {});
+        }
       }
 
       // Hard hit % and barrel % from aggregate if available

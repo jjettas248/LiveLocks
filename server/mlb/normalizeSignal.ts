@@ -345,6 +345,8 @@ export function normalizeMLBSignal(
     dataQuality: qs.dataQuality ?? null,
     signalTimestamp: qs.engineGeneratedAt ?? raw?.engineGeneratedAt ?? Date.now(),
     hrFactors: raw?.hrFactors ?? null,
+    hrBuildScore: raw?.hrBuildScore ?? null,
+    hrIntensity: raw?.hrIntensity ?? null,
     rollingForm: qs.rollingForm ?? null,
 
     smartTags,

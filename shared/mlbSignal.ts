@@ -99,6 +99,8 @@ export interface MLBSignal {
   dataQuality: string | null;
   signalTimestamp: number;
   hrFactors: Record<string, any> | null;
+  hrBuildScore: number | null;
+  hrIntensity: "weak" | "watch" | "strong" | "imminent" | null;
   rollingForm: Record<string, any> | null;
 
   smartTags: string[];

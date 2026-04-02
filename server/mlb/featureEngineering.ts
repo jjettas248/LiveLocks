@@ -644,7 +644,7 @@ export function compositeHitterScore(input: MLBPropInput): number {
 // Tier 1 (hits, total_bases, pitcher_strikeouts): standard composite gate
 // Tier 3 (home_runs, hrr): stricter composite gate
 export const COMPOSITE_TIER1_THRESHOLD = 1.0;
-export const COMPOSITE_TIER3_THRESHOLD = 1.5;
+export const COMPOSITE_TIER3_THRESHOLD = 1.0;
 
 export function computeFormScore(input: MLBPropInput): number {
   const contact = contactQualityScore(input);

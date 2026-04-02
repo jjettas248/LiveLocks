@@ -12,6 +12,7 @@ import {
   halftimePlayAlerts,
   playResults,
   persistedPlays,
+  contactEvents,
   stripeEvents,
   type Player,
   type InsertPlayer,
@@ -184,6 +185,8 @@ export interface IStorage {
     marketType?: string; playerVolatilityScore?: number;
     comboCovarianceEstimate?: number | null;
     mu?: number; sigma?: number; zScore?: number;
+    hrBuildScore?: number | null;
+    hrIntensity?: string | null;
   }): Promise<{ id: string; isDuplicate: boolean }>;
   getPlays(opts: { sport?: string; limit?: number; settled?: string; date?: string }): Promise<{ plays: PersistedPlay[]; total: number }>;
   getGradedPlaysForCalibration(opts: { sport?: string; market?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]>;
@@ -1524,6 +1527,8 @@ export class DatabaseStorage implements IStorage {
     marketType?: string; playerVolatilityScore?: number;
     comboCovarianceEstimate?: number | null;
     mu?: number; sigma?: number; zScore?: number;
+    hrBuildScore?: number | null;
+    hrIntensity?: string | null;
   }): Promise<{ id: string; isDuplicate: boolean }> {
     const existing = await db
       .select({ id: persistedPlays.id })
@@ -1578,6 +1583,8 @@ export class DatabaseStorage implements IStorage {
       mu: play.mu != null ? String(play.mu) : null,
       sigma: play.sigma != null ? String(play.sigma) : null,
       zScore: play.zScore != null ? String(play.zScore) : null,
+      hrBuildScore: play.hrBuildScore != null ? String(play.hrBuildScore) : null,
+      hrIntensity: play.hrIntensity ?? null,
     }).onConflictDoNothing({ target: persistedPlays.duplicateGuard });
     return { id: play.id, isDuplicate: false };
   }
@@ -1712,6 +1719,42 @@ export class DatabaseStorage implements IStorage {
       churnedAt: new Date(),
       churnedFromTier: previousTier,
     }).where(eq(users.id, userId));
+  }
+
+  async insertContactEvent(event: {
+    playerId: string;
+    playerName: string;
+    gameId: string;
+    inning?: number | null;
+    exitVelocity?: number | null;
+    launchAngle?: number | null;
+    distance?: number | null;
+    batSpeed?: number | null;
+    result?: string | null;
+    pitchType?: string | null;
+    pitchSpeed?: number | null;
+    isBarrel?: boolean;
+    eventFingerprint: string;
+  }): Promise<void> {
+    try {
+      await db.insert(contactEvents).values({
+        playerId: event.playerId,
+        playerName: event.playerName,
+        gameId: event.gameId,
+        inning: event.inning ?? null,
+        exitVelocity: event.exitVelocity != null ? String(event.exitVelocity) : null,
+        launchAngle: event.launchAngle != null ? String(event.launchAngle) : null,
+        distance: event.distance != null ? String(event.distance) : null,
+        batSpeed: event.batSpeed != null ? String(event.batSpeed) : null,
+        result: event.result ?? null,
+        pitchType: event.pitchType ?? null,
+        pitchSpeed: event.pitchSpeed != null ? String(event.pitchSpeed) : null,
+        isBarrel: event.isBarrel ?? false,
+        eventFingerprint: event.eventFingerprint,
+      }).onConflictDoNothing({ target: contactEvents.eventFingerprint });
+    } catch (err: any) {
+      console.warn(`[ContactEvent] insert failed: ${err.message}`);
+    }
   }
 
   async getChurnedUsers(): Promise<Array<{ id: number; email: string; churnedAt: Date; churnedFromTier: string | null; createdAt: Date | null }>> {

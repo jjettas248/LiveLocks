@@ -422,6 +422,8 @@ export const persistedPlays = pgTable("persisted_plays", {
   mu: numeric("mu"),
   sigma: numeric("sigma"),
   zScore: numeric("z_score"),
+  hrBuildScore: numeric("hr_build_score"),
+  hrIntensity: text("hr_intensity"),
 }, (table) => ({
   gameDateIdx: index("persisted_plays_game_date_idx").on(table.gameDate),
   resultIdx: index("persisted_plays_result_idx").on(table.result),
@@ -443,6 +445,31 @@ export const sentAlerts = pgTable(
   },
   (t) => ({ fingerprintIdx: index("idx_sent_alerts_fingerprint").on(t.fingerprint, t.userId) })
 );
+
+export const contactEvents = pgTable("contact_events", {
+  id: serial("id").primaryKey(),
+  playerId: text("player_id").notNull(),
+  playerName: text("player_name").notNull(),
+  gameId: text("game_id").notNull(),
+  inning: integer("inning"),
+  exitVelocity: numeric("exit_velocity"),
+  launchAngle: numeric("launch_angle"),
+  distance: numeric("distance"),
+  batSpeed: numeric("bat_speed"),
+  result: text("result"),
+  pitchType: text("pitch_type"),
+  pitchSpeed: numeric("pitch_speed"),
+  isBarrel: boolean("is_barrel").default(false),
+  eventFingerprint: text("event_fingerprint").unique(),
+  timestamp: timestamp("timestamp").defaultNow(),
+}, (table) => ({
+  playerGameIdx: index("contact_events_player_game_idx").on(table.playerId, table.gameId),
+  gameIdx: index("contact_events_game_idx").on(table.gameId),
+}));
+
+export const insertContactEventSchema = createInsertSchema(contactEvents).omit({ id: true, timestamp: true });
+export type ContactEvent = typeof contactEvents.$inferSelect;
+export type InsertContactEvent = z.infer<typeof insertContactEventSchema>;
 
 export interface PlayStats {
   buckets: {
