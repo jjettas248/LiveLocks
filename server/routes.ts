@@ -1691,6 +1691,8 @@ export async function registerRoutes(
 
       return res.json({
         ...output,
+        probability: output.calibratedProbability,
+        modelProbability: output.calibratedProbability,
         mode: "manual",
         isManual: true,
         label: "Manual Projection (No Live Odds)",
@@ -1935,7 +1937,7 @@ export async function registerRoutes(
         output.bookImplied = bookImplied;
       }
       recordMLBDiagnostic(output);
-      return res.json({ ...output, market: displayMarket });
+      return res.json({ ...output, probability: output.calibratedProbability, modelProbability: output.calibratedProbability, market: displayMarket });
     } catch (err: any) {
       console.error("[MLB props]", err.message);
       return res.status(400).json({ error: err.message || "MLB prop engine error" });
