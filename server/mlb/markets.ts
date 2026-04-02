@@ -703,6 +703,17 @@ function buildOutput(input: MLBPropInput, distParams?: DistributionParams): MLBP
     computedBadges: badgeResult.positive,
     computedRiskFlags: badgeResult.negative,
     fallbackUsed: projResult.fallbackUsed,
+    projectionIntegrity: {
+      projectionSource: projResult.integrity.projectionSource,
+      projectionQuality: projResult.integrity.projectionQuality,
+      projectionTrustScore: projResult.integrity.projectionTrustScore,
+      sourceDataCompleteness: projResult.integrity.sourceDataCompleteness,
+      fallbackUsed: projResult.integrity.fallbackUsed,
+      marketValidationPassed: projResult.integrity.marketValidationPassed,
+      overRegressionApplied: projResult.integrity.overRegressionApplied,
+      projectionWarnings: projResult.integrity.projectionWarnings,
+      confidenceReason: projResult.integrity.confidenceReason,
+    },
   };
 }
 
@@ -879,6 +890,17 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
     computedBadges: computeBadges(hitsInput, features).positive,
     computedRiskFlags: computeBadges(hitsInput, features).negative,
     fallbackUsed: projResult.fallbackUsed,
+    projectionIntegrity: {
+      projectionSource: projResult.integrity.projectionSource,
+      projectionQuality: projResult.integrity.projectionQuality,
+      projectionTrustScore: projResult.integrity.projectionTrustScore,
+      sourceDataCompleteness: projResult.integrity.sourceDataCompleteness,
+      fallbackUsed: projResult.integrity.fallbackUsed,
+      marketValidationPassed: projResult.integrity.marketValidationPassed,
+      overRegressionApplied: projResult.integrity.overRegressionApplied,
+      projectionWarnings: projResult.integrity.projectionWarnings,
+      confidenceReason: projResult.integrity.confidenceReason,
+    },
   };
 }
 

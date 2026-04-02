@@ -657,6 +657,14 @@ export class LiveGameOrchestrator {
 
     (signal as any).isDegraded = !!(input as any).isDegraded;
 
+    if (output.projectionIntegrity) {
+      signal.projectionSource = output.projectionIntegrity.projectionSource;
+      signal.projectionQuality = output.projectionIntegrity.projectionQuality;
+      signal.projectionTrustScore = output.projectionIntegrity.projectionTrustScore;
+      signal.sourceDataCompleteness = output.projectionIntegrity.sourceDataCompleteness;
+      signal.overRegressionApplied = output.projectionIntegrity.overRegressionApplied;
+    }
+
     this.sanitizeUserFacingFields(signal);
 
     if (signal.fallbackUsed) {

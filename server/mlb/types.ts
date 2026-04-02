@@ -369,6 +369,17 @@ export interface MLBPropOutput {
   computedBadges?: string[];
   computedRiskFlags?: string[];
   fallbackUsed?: boolean;
+  projectionIntegrity?: {
+    projectionSource: string;
+    projectionQuality: string;
+    projectionTrustScore: number;
+    sourceDataCompleteness: number;
+    fallbackUsed: boolean;
+    marketValidationPassed: boolean;
+    overRegressionApplied: boolean;
+    projectionWarnings: string[];
+    confidenceReason: string;
+  };
 }
 
 export const STANDARD_THRESHOLDS = {
@@ -560,4 +571,11 @@ export interface MLBQualifiedSignal {
   directionalBiasAdjusted?: boolean | null;
   isDegraded?: boolean | null;
   dataQuality?: "full" | "partial" | "degraded" | null;
+
+  projectionSource?: string | null;
+  projectionQuality?: string | null;
+  projectionTrustScore?: number | null;
+  sourceDataCompleteness?: number | null;
+  overRegressionApplied?: boolean | null;
+  expansionTier?: string | null;
 }

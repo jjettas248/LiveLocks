@@ -5304,6 +5304,11 @@ export function registerAnalyticsRoutes(app: Express): void {
             isFlagship: sig.isFlagship ?? false,
             safetyCeilingApplied: sig.safetyCeilingApplied ?? false,
             dataQuality: sig.dataQuality ?? null,
+            fallbackUsed: sig.fallbackUsed ?? false,
+            projectionSource: sig.projectionSource ?? null,
+            projectionQuality: sig.projectionQuality ?? null,
+            projectionTrustScore: sig.projectionTrustScore ?? null,
+            marketValidationPassed: true,
           });
         }
       }
@@ -5347,7 +5352,7 @@ export function registerAnalyticsRoutes(app: Express): void {
         ...ncaabStorageSignals.filter((s: any) => !ncaabSeenKeys.has(`${s.gameId}_${s.market}`)),
       ];
 
-      const plays = buildTopPlays(nbaSignals, ncaabSignals, mlbSignals, 10);
+      const plays = buildTopPlays(nbaSignals, ncaabSignals, mlbSignals);
       return res.json({ plays });
     } catch (e: any) {
       console.error("[top-plays]", e.message);
