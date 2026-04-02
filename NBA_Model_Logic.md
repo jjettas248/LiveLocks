@@ -1,326 +1,350 @@
-# LiveLocks — NBA Model Logic
-*PropPulse / LiveLocks platform — core probability engine + automated signal generators*
+# LiveLocks — NBA Engine Behavior (v5)
+
+*PropPulse / LiveLocks platform — archetype-based probability engine with fragility scoring*
+
+**Engine Location:** `server/nba/probabilityEngine.ts`, `server/nba/archetypes.ts`
 
 ---
 
 ## Table of Contents
-1. [Core Probability Engine](#1-core-probability-engine)
-2. [Halftime 2H Automated Engine](#2-halftime-2h-automated-engine)
-3. [Live In-Game Signals Engine](#3-live-in-game-signals-engine)
-4. [Edge Thresholds & Color Tiers](#4-edge-thresholds--color-tiers)
-5. [Constants Reference](#5-constants-reference)
+
+1. [Archetype Classification System](#1-archetype-classification-system)
+2. [Core Probability Engine (Z-Score / Normal CDF)](#2-core-probability-engine)
+3. [Blended Rate Model](#3-blended-rate-model)
+4. [Variance & Sigma Computation](#4-variance--sigma-computation)
+5. [Combo Stat Covariance Modeling](#5-combo-stat-covariance-modeling)
+6. [Fragility Scoring](#6-fragility-scoring)
+7. [Calibration Pipeline](#7-calibration-pipeline)
+8. [Safety Ceilings](#8-safety-ceilings)
+9. [Under-Bias Correction](#9-under-bias-correction)
+10. [Late-Season / Playoffs Volatility Adapter](#10-late-season--playoffs-volatility-adapter)
+11. [Halftime 2H Automated Engine](#11-halftime-2h-automated-engine)
+12. [Live In-Game Signals Engine](#12-live-in-game-signals-engine)
+13. [Edge Thresholds & Color Tiers](#13-edge-thresholds--color-tiers)
+14. [Constants Reference](#14-constants-reference)
 
 ---
 
-## 1. Core Probability Engine
+## 1. Archetype Classification System
 
-**Location:** `server/storage.ts → DatabaseStorage.calculateProbability()`  
-**Called by:** Both the halftime engine and the live signals engine.
+**Location:** `server/nba/archetypes.ts → classifyArchetype()`
 
-### Input Fields
+Every NBA player is classified into one of 7 archetypes based on minutes, starter consistency, usage rate, position, and lineup disruption. The archetype drives variance multipliers, fragility multipliers, correlation defaults, combo variance extra, and safety ceilings throughout the engine.
+
+### 7 Archetype Types
+
+| Archetype | Criteria |
+|---|---|
+| `stable_star` | ≥30 avg min, ≥0.80 starter consistency, low variance |
+| `stable_starter` | ≥24 avg min, is starter, low variance |
+| `volatile_starter` | ≥22 avg min, is starter, high variance (minutesVar > 30) |
+| `bench_microwave` | <22 avg min, usage ≥ 0.20 |
+| `low_minute_big` | <22 avg min, position C or PF |
+| `lineup_impacted` | lineup disrupted OR <15 games played |
+| `role_uncertain` | starter consistency < 0.50 AND <22 avg min |
+
+### Classification Inputs
 
 | Field | Type | Description |
 |---|---|---|
-| `playerId` | number | DB player ID |
-| `opponentTeam` | string | 3-letter abbreviation (e.g. "BOS") |
-| `halftimeMinutes` | number | Minutes played so far this game |
-| `halftimeFouls` | number | Personal fouls so far |
-| `halftimeStat` | number | Current game total for the stat type |
-| `liveLine` | number | Real book line (never fabricated) |
-| `statType` | string | e.g. "points", "rebounds", "pts_reb_ast" |
-| `halftimeScore` | string | e.g. "54-61" (away-home) |
-| `currentPeriod` | number | 0=pre, 1=Q1, 2=Q2, 3=Q3, 4=Q4 |
-| `gameClock` | string | "M:SS" remaining in current period |
-| `gameSpread` | number? | Game spread (used for garbage-time cuts) |
-| `gameTotalLine` | number? | Game O/U total (used for pace blending) |
-| `liveFgm/Fga` | number? | Live FGM/FGA (hot/cold modifier) |
-| `liveFtm/Fta` | number? | Live FTM/FTA (hot/cold modifier) |
-| `liveFg3m/Fg3a` | number? | Live 3PM/3PA (threes modifier) |
+| `avgMinutes` | number | Season average minutes |
+| `recentMinutesVariance` | number | Recent games minutes variance |
+| `seasonMinutesVariance` | number | Full season minutes variance |
+| `isStarter` | boolean | Starting lineup status |
+| `starterConsistency` | number | Fraction of games started (0–1) |
+| `usageRate` | number | Usage rate (0–1 scale) |
+| `position` | string | PG / SG / SF / PF / C |
+| `lineupDisrupted` | boolean | Injury/trade roster disruption |
+| `gamesPlayed` | number | Games played this season |
+
+### Archetype Multipliers
+
+| Archetype | Variance Mult | Minutes Fragility Mult | Combo Variance Extra |
+|---|---|---|---|
+| `stable_star` | 1.00 | 1.00 | 1.00 |
+| `stable_starter` | 1.05 | 1.05 | 1.00 |
+| `volatile_starter` | 1.20 | 1.20 | 1.00 |
+| `bench_microwave` | 1.30 | 1.30 | 1.00 |
+| `low_minute_big` | 1.25 | 1.35 | 1.00 |
+| `lineup_impacted` | 1.35 | 1.40 | 1.12 |
+| `role_uncertain` | 1.40 | 1.50 | 1.12 |
 
 ---
 
-### Step 1: Game Minutes Remaining
+## 2. Core Probability Engine
+
+**Location:** `server/nba/probabilityEngine.ts → computeProbability()`
+
+The engine uses a **Normal CDF (Z-score)** probability model. For each market, it computes a projected mean (μ) and standard deviation (σ), then calculates P(OVER) = Φ(z) where z = (μ - threshold) / σ.
+
+### Probability Flow
 
 ```
-periodsFullyRemaining = max(0, 4 - currentPeriod)
-gameMinutesRemaining  = periodsFullyRemaining × 12 + clockMins
-isHalftimeContext     = gameMinutesRemaining >= 22
+1. Compute μ (mean) and σ² (variance) for the market
+   - Single stat: rate × expected_minutes
+   - Combo stat: sum of component means + covariance terms
+2. Add currentStat to get total projection
+3. threshold = line + 0.5 (half-point adjustment)
+4. z = (totalMu - threshold) / σ
+5. P_over_raw = Φ(z) via Normal CDF
+6. Direction: OVER if totalMu > line with sufficient separation, UNDER if below
+7. Apply fragility penalty
+8. Apply family penalty factor
+9. Apply under-bias correction (if UNDER)
+10. Apply calibration shrinkage
+11. Apply safety ceiling
+12. Final signal: direction + displayConfidence
 ```
 
-`isHalftimeContext` controls pace cap, regression weight, and scale factors throughout.
+### Separation Thresholds
 
----
-
-### Step 2: H2 Baseline Selection
-
-When the player is in Q3 or Q4 and has H2 averages on file:
-
-```
-inSecondHalf = currentPeriod >= 3
-useH2        = inSecondHalf AND h2avgMinutes > 3
-baselineSource = useH2 ? "h2" : "fullGame"
-```
-
-If `useH2 = true`, all per-minute rates are computed from H2 averages instead of full-game averages. This makes the projection use the player's second-half-specific splits.
-
----
-
-### Step 3: Projected Remaining Minutes
-
-```
-minuteBase          = useH2 ? h2avgMinutes : avgMinutes
-minuteGameFraction  = useH2 ? gameMinLeft / 24 : gameMinLeft / 48
-remainingMinutes    = minuteBase × minuteGameFraction
-```
-
-**Foul trouble cuts:**
-- 4+ fouls → `remainingMinutes × 0.45`
-- 3 fouls  → `remainingMinutes × 0.70`
-
-**Rotation check (halftime context only):**  
-If the player played <75% of their expected H1 minutes (season avg prorated to one half), cap projected H2 minutes at 110% of actual H1 minutes. Catches injury management, coach's doghouse, matchup sits.
-
----
-
-### Step 4: Pace Multiplier
-
-```
-gamePaceAvg    = (playerTeamPace + opponentPace) / 2
-paceMultiplier = gamePaceAvg / LEAGUE_AVG_PACE (99.4)
-```
-
-**Game total line blend (if available):**
-```
-totalBasedPace  = gameTotalLine / 228   (228 = expected full-game total)
-paceMultiplier  = totalBasedPace × 0.5 + paceMultiplier × 0.5
-```
-
-**Live score blend (if game is in progress):**
-```
-impliedFullGame   = (currentScoreTotal / elapsedMins) × 48
-livePaceMultiplier = impliedFullGame / gameTotalLine (or 228 if no line)
-paceMultiplier    = livePaceMultiplier × 0.6 + paceMultiplier × 0.4
-```
-
-**Cap:**
-- Halftime context (≥22 min): max 1.12
-- Live Q3/Q4: max 1.22
-- Floor: 0.78
-
-Halftime cap is lower because H1 observed pace is already embedded in `halftimeStat` and double-counting would inflate the projection.
-
----
-
-### Step 5: Spread → Garbage Time
-
-```
-absSpread = |gameSpread|
-```
-
-| Condition | Reduction |
+| Market Type | Minimum Separation (ε) |
 |---|---|
-| Spread ≥ 20 AND usageRate ≥ 0.25 | 0.82 |
-| Spread ≥ 15 AND usageRate ≥ 0.25 | 0.90 |
-| Spread ≥ 15 AND usageRate ≥ 0.20 | 0.95 |
-| Q4, <4 min clock, spread > 12 | min(current, 0.70) |
+| Single stat | 0.35 |
+| Combo stat | 0.60 |
 
-`remainingMinutes × spreadMinuteReduction`
+If the separation between projection and line is below ε, the signal is marked `NO_SIGNAL`.
 
----
+### Minimum Edge Requirements
 
-### Step 6: Defense Multiplier
-
-Sourced from the `team_defense` table (synced from NBA.com opponent stats).  
-Stored as a multiplier relative to 1.0: >1.0 = softer defense, <1.0 = harder defense.  
-Default 1.0 if team/position not on file.  
-Cap: 0.86 – 1.14.
+- Raw model edge must be ≥ 0.04 (4%)
+- Display confidence must be ≥ 0.58 (58%)
+- Final edge must be ≥ 0.04 (4%)
+- Projection must align with direction (contradiction → NO_SIGNAL)
 
 ---
 
-### Step 7: Efficiency Index
+## 3. Blended Rate Model
 
-```
-efficiencyIndex = clamp(offRating / 110, 0.70, 1.30)
-```
+**Location:** `server/nba/probabilityEngine.ts → getBlendedRate()`
 
-110 = league-average offensive rating. Sourced from NBA.com Advanced sync.  
-Falls back to 1.0 (neutral) when `offRating` is unavailable.
+The per-minute stat rate is a weighted blend of three rate sources:
 
----
-
-### Step 8: Live Shooting Modifier
-
-Adjusts expected output for points/threes/combo props based on how the player is shooting in this game.
-
-**For points (and pts_* combos):**
-```
-fgWeight    = min(maxFgWeight, liveFGA / 16)        # maxFgWeight: 0.25 halftime, 0.50 live
-blendedFgPct = liveFgPct × fgWeight + seasonFgPct × (1 - fgWeight)
-fgMod        = blendedFgPct / seasonFgPct
-
-ftWeight     = min(0.40, liveFTA / 10)
-blendedFtPct = liveFtPct × ftWeight + seasonFtPct × (1 - ftWeight)
-ftMod        = blendedFtPct / seasonFtPct
-
-shootingModifier = fgMod × 0.65 + ftMod × 0.35
-shootingModifier = clamp(shootingModifier, 0.75, 1.25)
-```
-
-**For threes:**
-```
-fg3Weight    = min(maxFg3Weight, liveFG3A / 8)      # maxFg3Weight: 0.25 halftime, 0.55 live
-blendedPct   = live3pPct × fg3Weight + season3pPct × (1 - fg3Weight)
-threeMod     = blendedPct / season3pPct
-shootingModifier = clamp(threeMod, 0.70, 1.30)
-```
-
-Halftime weights are capped lower because a 10-attempt H1 sample is too small to fully trust.
-
----
-
-### Step 9: Observed vs Season Blend
-
-**Per-minute rates:**
-```
-seasonPerMin  = seasonStatAvg / baseMin        (uses H2 baselines if useH2=true)
-observedPerMin = halftimeStat / minutesPlayed
-```
-
-**Usage-weighted blend (less time played → lean harder on season):**
-
-| Condition | observedW | seasonW |
+| Source | Weight | Description |
 |---|---|---|
-| minutesPlayed < 5, usageRate ≥ 0.28 | 0.35 | 0.65 |
-| minutesPlayed < 5, usageRate ≥ 0.22 | 0.25 | 0.75 |
-| minutesPlayed < 5, else | 0.15 | 0.85 |
-| minutesPlayed ≥ 5, usageRate ≥ 0.28 | 0.65 | 0.35 |
-| minutesPlayed ≥ 5, usageRate ≥ 0.22 | 0.55 | 0.45 |
-| minutesPlayed ≥ 5, else | 0.45 | 0.55 |
+| Recent (last ~10 games) | 45% | Short-term form |
+| Season (full season) | 35% | Overall talent level |
+| Role (positional/role-based) | 20% | Positional baseline |
 
-High-usage stars get more weight on observed (their H1 rates are more stable).  
-Low-usage bench players regress harder to their season mean.
-
-**Halftime regression (applied when `isHalftimeContext = true`):**
-```
-regressionFactor = 0.92
-observedW = observedW × 0.92
-seasonW   = 1 - observedW
-```
-
-Pulls 8% more weight toward season baseline when a full 2H still remains.
+**Small sample adjustment:** When `recentGameCount < 5`, the recent weight is reduced proportionally and redistributed to season weight:
 
 ```
-blendedPerMin = observedPerMin × observedW + seasonPerMin × seasonW
+reduction = wRecent × (1 - recentGameCount / 5)
+wRecent -= reduction
+wSeason += reduction
 ```
+
+### Variance Rate Blending
+
+Variance rates are blended separately with fixed weights:
+
+| Source | Weight |
+|---|---|
+| Recent variance | 50% |
+| Season variance | 30% |
+| Role variance | 20% |
 
 ---
 
-### Step 10: Expected Projection
+## 4. Variance & Sigma Computation
+
+**Location:** `server/nba/probabilityEngine.ts → computeSingleStatMeanAndVariance()`
+
+For each single stat:
 
 ```
-expectedFromHere = blendedPerMin × remainingMinutes × defenseMultiplier × paceMultiplier × shootingModifier
-expectedTotal    = halftimeStat + expectedFromHere
-difference       = expectedTotal - liveLine
+E_min = max(8, expected_minutes)
+mu = blended_rate × E_min
+sigma_min = max(1.5, √(minutes_variance))
+sigma_min_adj = sigma_min × MINUTES_FRAGILITY_MULTIPLIERS[archetype]
+Var_min = sigma_min_adj²
+rawVariance = E_min × blended_variance_rate + (rate²) × Var_min
+adjVariance = rawVariance × VARIANCE_MULTIPLIERS[archetype]
+adjVariance = max(adjVariance, STAT_SIGMA_FLOOR²)
 ```
+
+### Stat Sigma Floors
+
+| Stat | Floor (σ) |
+|---|---|
+| Points | 3.0 |
+| Rebounds | 2.0 |
+| Assists | 1.8 |
+| Steals | 0.8 |
+| Blocks | 0.8 |
+| Threes | 1.2 |
 
 ---
 
-### Step 11: Sigmoid Probability
+## 5. Combo Stat Covariance Modeling
+
+**Location:** `server/nba/probabilityEngine.ts → computeComboMeanAndVariance()`
+
+For combo markets (pts_reb, pts_ast, reb_ast, pts_reb_ast, stl_blk):
 
 ```
-usageNorm = usageRate / 0.22
+mu_combo = Σ mu_i  (sum of component means)
+var_combo = Σ var_i + Σ 2 × ρ_ij × σ_i × σ_j  (variances + covariance terms)
+var_combo *= COMBO_VARIANCE_EXTRA[archetype]
+var_combo *= COMBO_INFLATION[market]
 ```
 
-**Scale factors (by stat type):**
+### Default Correlations by Archetype
 
-| Stat Type | Halftime | Live Q3/Q4 |
+| Archetype | ρ(pts,reb) | ρ(pts,ast) | ρ(reb,ast) |
+|---|---|---|---|
+| `stable_star` | 0.20 | 0.28 | 0.12 |
+| `stable_starter` | 0.18 | 0.22 | 0.10 |
+| `volatile_starter` | 0.14 | 0.18 | 0.08 |
+| `bench_microwave` | 0.08 | 0.12 | 0.05 |
+| `low_minute_big` | 0.22 | 0.05 | 0.10 |
+| `lineup_impacted` | 0.14 | 0.18 | 0.08 |
+| `role_uncertain` | 0.14 | 0.18 | 0.08 |
+
+Empirical correlations override defaults when available.
+
+### Combo Inflation Multipliers
+
+| Market | Inflation |
+|---|---|
+| pts_reb | 1.05 |
+| pts_ast | 1.08 |
+| reb_ast | 1.08 |
+| pts_reb_ast | 1.12 |
+
+---
+
+## 6. Fragility Scoring
+
+**Location:** `server/nba/probabilityEngine.ts → computeFragilityScore()`
+
+A composite score (0–1) quantifying how fragile a player's projection is, based on 6 weighted inputs:
+
+| Input | Weight | Flagged When |
 |---|---|---|
-| steals / blocks / stl_blk | 10 | 14 |
-| threes | 9 | 12 |
-| rebounds / assists | 7.5 | 10 |
-| combo stats (contains "_") | 4.0 | 5.5 |
-| points (default) | 6 | 8 |
+| Normalized minutes variance | 25% | > 0.5 |
+| Role uncertainty | 20% | > 0.5 |
+| Lineup instability | 20% | > 0.5 |
+| Blowout risk | 15% | > 0.5 |
+| Usage shock | 10% | > 0.3 |
+| Late-season chaos | 10% | > 0.3 |
+
+**Fragility penalty applied to probability:**
 
 ```
-scaleFactor = baseScaleFactor × usageNorm × efficiencyIndex
-scaleFactor = clamp(scaleFactor, 4, 20)
+fragilityPenalty = 0.45 × fragilityScore
+P_side_fragile = 0.5 + (P_side_raw - 0.5) × (1 - fragilityPenalty)
+```
 
-probability = 50 + difference × scaleFactor
-probability = clamp(probability, 2, 98)
+A high fragility score (e.g., 0.8) results in a ~36% reduction of the edge magnitude, pulling the probability closer to 50%.
+
+---
+
+## 7. Calibration Pipeline
+
+**Location:** `server/nba/probabilityEngine.ts → calibrate()`
+
+After raw probability computation, fragility adjustment, and family penalty, the calibration step applies shrinkage to prevent overconfident signals:
+
+### Calibration Shrinkage
+
+| Market Type | Shrinkage Factor |
+|---|---|
+| Single stat | 0.88 |
+| Combo stat | 0.78 |
+
+```
+P_calibrated = 0.5 + (P_side - 0.5) × shrinkage
+```
+
+### Volatile/Impacted Archetype Penalty
+
+If the archetype is volatile (`volatile_starter`, `bench_microwave`, `low_minute_big`) or impacted (`lineup_impacted`, `role_uncertain`), an additional 0.90× shrinkage is applied:
+
+```
+P_calibrated = 0.5 + (P_calibrated - 0.5) × 0.90
 ```
 
 ---
 
-## 2. Halftime 2H Automated Engine
+## 8. Safety Ceilings
 
-**Location:** `server/routes.ts → GET /api/halftime-plays`  
-**Trigger:** Polled by authenticated frontend when games are at halftime.
+**Location:** `server/nba/archetypes.ts → getSafetyCeiling()`
+
+Maximum confidence cap per archetype category:
+
+| Category | Single Market | Combo Market |
+|---|---|---|
+| Stable (star, starter) | 80% | 74% |
+| Volatile (volatile_starter, bench, low_minute_big) | 70% | 66% |
+| Impacted (lineup_impacted, role_uncertain) | 64% | 64% |
+
+If the calibrated probability exceeds the ceiling, it is capped at the ceiling value.
+
+---
+
+## 9. Under-Bias Correction
+
+When `underBiasCorrectionActive = true` and direction is UNDER:
+
+**Pre-calibration:** `P_side = 0.5 + (P_side - 0.5) × 0.92`
+
+**In calibration:** An additional `0.95×` shrinkage is applied.
+
+This reduces the systematic over-prediction of UNDER outcomes observed in historical data.
+
+---
+
+## 10. Late-Season / Playoffs Volatility Adapter
+
+The `lateSeasonChaos` fragility input (weight: 10%) captures increased volatility during:
+
+- Final 2 weeks of the regular season (rest days, seeding games)
+- Playoffs (rotations tighten, pace changes, unfamiliar matchups)
+- Back-to-back games in compressed schedules
+
+When `lateSeasonChaos > 0.3`, it contributes to the fragility score, pulling probabilities toward 50%.
+
+---
+
+## 11. Halftime 2H Automated Engine
+
+**Location:** `server/routes.ts → GET /api/halftime-plays`
 
 ### Flow
 
-1. **Detect halftime games** — ESPN NBA scoreboard, filter for `statusDesc === "Halftime"` or `period=2, clock=0:00`.
+1. Detect halftime games from ESPN NBA scoreboard (`statusDesc === "Halftime"` or `period=2, clock=0:00`)
+2. For each halftime game: fetch box score, resolve Odds API event ID, fetch game spread/total
+3. For each player (≥3 min played in H1): extract H1 stats and shooting splits
+4. For each of 11 stat types: look up real book lines (3-source waterfall: live → pre-game → SGO), use median consensus, skip if no real line or stat already cleared
+5. Run probability engine with `currentPeriod=3, gameClock="12:00"` (start of 2H)
+6. Edge filter: `|probability - 50| >= 10`
+7. Persist to DB with deduplication, sort by edge descending, return top 20
 
-2. **For each halftime game:**
-   - Fetch ESPN summary boxscore for H1 stats
-   - Resolve Odds API event ID for this game
-   - Fetch game-level spread & total from Odds API (for pace + garbage-time use)
+### Alert Trigger
 
-3. **For each player (≥3 min played in H1):**
-   - Match ESPN name → DB player (exact match, then first+last fuzzy fallback)
-   - Extract H1 stats: pts, reb, ast, stl, blk, 3PM, minutes, fouls
-   - Extract H1 shooting splits: FGM/FGA, FTM/FTA, 3PM/3PA
-
-4. **For each stat type** (points, rebounds, assists, threes, steals, blocks, pts_reb, pts_ast, pts_reb_ast, reb_ast, stl_blk):
-   - **Line lookup (3-source waterfall):**
-     1. Odds API live in-play lines (halftime-adjusted)
-     2. Odds API pre-game lines (if no live line)
-     3. SGO NBA (if still unresolved)
-     4. Skip if no real book line — never fabricate
-   - Use **median consensus** across books (never pick extremes)
-   - Skip if `halftimeStat >= liveLine` (line already cleared — not actionable)
-   - Call `calculateProbability()` with `currentPeriod=3, gameClock="12:00"`
-
-5. **Edge filter:** `|probability - 50| >= 10`
-
-6. **Persist to DB** (with dedup lock):
-   - In-process Set check → DB select check → insert
-   - Feeds Model Performance analytics
-
-7. **Sort** by edge descending, return to frontend.
+Plays with edge ≥ 35 (≥85% hit implied) fire push/SMS alerts, deduplicated per `playerName|statType|line` per session.
 
 ---
 
-## 3. Live In-Game Signals Engine
+## 12. Live In-Game Signals Engine
 
-**Location:** `server/routes.ts → GET /api/live-signals/:gameId`  
-**Trigger:** Polled per game card in the Live Games tab. Cache TTL: 90 seconds.
+**Location:** `server/routes.ts → GET /api/live-signals/:gameId`
 
 ### Flow
 
-1. **Fetch ESPN summary** for the specific game.
-2. **Check game status** — only runs for `"In Progress"` or `"Halftime"`.
-3. **Resolve Odds API event ID** for spread/total modifiers.
-4. **For each player (≥3 min played):**
-   - Match ESPN name → DB player
-   - Extract live stats and shooting splits (same parsing as halftime engine)
-
-5. **Stat configs:** points, rebounds, assists, threes, pts_reb_ast (5 types for live, vs 11 for halftime).
-
-6. **Line lookup (2-source):**
-   1. Odds API (live in-play, then pre-game)
-   2. SGO NBA
-
-7. Skip if `currentStat >= liveLine`.
-
-8. **Call `calculateProbability()`** with the actual `currentPeriod` and `displayClock`.
-
-9. **Edge filter:** `|probability - 50| >= 5` (lower threshold than halftime — less time to mean-revert).
-
-10. **Sort** by edge descending, cache result.
+1. Fetch ESPN summary for the game (In Progress or Halftime)
+2. For each player (≥3 min): match to DB, extract stats + shooting splits
+3. Check 5 primary markets: Points, Rebounds, Assists, Threes, PRA
+4. Line lookup: Odds API (live → pre-game) → SGO
+5. Skip if currentStat ≥ liveLine
+6. Run probability engine with actual period and clock
+7. Edge filter: `|probability - 50| >= 5`
+8. Sort by edge descending, cache for 90 seconds
 
 ---
 
-## 4. Edge Thresholds & Color Tiers
+## 13. Edge Thresholds & Color Tiers
 
 ### Display Tiers
 
@@ -340,32 +364,28 @@ probability = clamp(probability, 2, 98)
 
 ---
 
-## 5. Constants Reference
+## 14. Constants Reference
 
-| Constant | Value | Used for |
+| Constant | Value | Used For |
 |---|---|---|
-| `LEAGUE_AVG_PACE` | 99.4 | Pace normalization denominator |
-| `EXPECTED_GAME_TOTAL` | 228 | Pace from O/U total |
-| `isHalftimeContext` threshold | ≥22 min remaining | Switches halftime vs live path |
-| `regressionFactor` | 0.92 | Halftime observed weight pullback |
-| `usageNorm` denominator | 0.22 | League-avg usage rate |
-| Scale factor clamp | [4, 20] | Probability spread control |
-| `efficiencyIndex` clamp | [0.70, 1.30] | offRating normalization |
-| `shootingModifier` clamp (pts) | [0.75, 1.25] | Hot/cold shooting adjustment |
-| `shootingModifier` clamp (3s) | [0.70, 1.30] | 3PT hot/cold adjustment |
-| Spread garbage-time threshold | spread ≥ 15 | Star-minute reduction trigger |
-| H2 baseline minimum | h2avgMinutes > 3 | Minimum to use H2 splits |
-| Halftime pace cap | 1.12 | Max pace multiplier at halftime |
-| Live pace cap | 1.22 | Max pace multiplier in Q3/Q4 |
-| Pace floor | 0.78 | Min pace multiplier |
-| Max FG weight (halftime) | 0.25 | Shooting modifier cap |
-| Max FG weight (live) | 0.50 | Shooting modifier cap |
-| Max 3P weight (halftime) | 0.25 | 3PT shooting modifier cap |
-| Max 3P weight (live) | 0.55 | 3PT shooting modifier cap |
+| Single stat ε | 0.35 | Minimum separation for single markets |
+| Combo stat ε | 0.60 | Minimum separation for combo markets |
+| Recent rate weight | 0.45 | Blended rate: recent games |
+| Season rate weight | 0.35 | Blended rate: full season |
+| Role rate weight | 0.20 | Blended rate: positional baseline |
+| Single shrinkage | 0.88 | Calibration for single markets |
+| Combo shrinkage | 0.78 | Calibration for combo markets |
+| Volatile shrinkage | 0.90 | Additional shrinkage for volatile archetypes |
+| Under-bias pre-cal | 0.92 | UNDER direction pre-calibration correction |
+| Under-bias in-cal | 0.95 | UNDER direction in-calibration correction |
+| Fragility penalty max | 0.45 | Maximum fragility reduction factor |
+| Min display confidence | 0.58 | Below this → NO_SIGNAL |
+| Min model edge | 0.04 | Below this → NO_SIGNAL |
+| Halftime 2H edge | 10% | Minimum edge to surface halftime play |
+| Live signal edge | 5% | Minimum edge to surface live signal |
+| Alert threshold | 35% (≥85% hit) | Push/SMS alert trigger |
 
----
+### Approved Books (Line Sourcing)
 
-### Approved Books (line sourcing)
-
-DraftKings, FanDuel, Hard Rock Bet, Fanatics, PrizePicks, Underdog Fantasy.  
-Lines from any other book are excluded. If no approved-book line is available, the play is skipped — no synthetic lines are ever used.
+DraftKings, FanDuel, Hard Rock Bet, PrizePicks, Underdog Fantasy.
+Lines from other books are excluded. If no approved-book line is available, the play is skipped — no synthetic lines are ever used.

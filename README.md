@@ -1,6 +1,6 @@
 # LiveLocks by PropPulse
 
-Real-time sports betting analytics for NBA, NCAAB, and MLB. Live prop probabilities, halftime 2H plays, full-slate NCAAB coverage, MLB Phase A engine, and automatic edge detection in the live box score.
+Real-time sports betting analytics for NBA, NCAAB, and MLB. Live prop probabilities, halftime 2H plays, full-slate NCAAB coverage, MLB Phase A engine with distribution models, and automatic edge detection in the live box score.
 
 **Live at**: `https://livelocks.replit.app`
 
@@ -8,21 +8,27 @@ Real-time sports betting analytics for NBA, NCAAB, and MLB. Live prop probabilit
 
 ## What It Does
 
-LiveLocks pulls real-time game data, live box scores, and sportsbook odds to compute the probability of a player hitting a live prop line. It factors in current pace, defensive matchup, foul trouble, rotation-based projected minutes, and game context — giving you an edge the sportsbook doesn't show you.
+LiveLocks pulls real-time game data, live box scores, and sportsbook odds to compute the probability of a player hitting a live prop line. It uses archetype-based classification, distribution-specific probability models, fragility scoring, calibration pipelines, and game-state intelligence — giving you an edge the sportsbook doesn't show you.
 
 ### Key Features
 
-- **Live NBA box score** with real-time stats, color-coded row/cell highlights when the engine detects an edge on a player's prop line (any quarter, not just halftime)
+- **Live NBA box score** with real-time stats, inline market badges with rotation showing per-market edges (Points, Rebounds, Assists, Threes, PRA) for 10-second quick scanning
+- **NBA archetype engine** — 7 player archetypes (stable_star through role_uncertain) with Z-score / Normal CDF probability, 3-source blended rates, fragility scoring, calibration shrinkage, and safety ceilings
 - **Live prop calculator** — click any player row to auto-fill; probability gauge updates instantly
-- **NBA 2H Plays** — halftime engine scans all live halftime games, runs each player's remaining-game probability against real book lines, surfaces top plays sorted by edge confidence. Free users see the first 5 edges; remaining plays are blurred with teaser values and an upgrade banner
-- **NCAAB full slate** — all Division I games daily, live scores, canonical market objects (Full Game, H1, H2), Top Plays feed displayed above Today's Games, book filter pills (All / DK / FD / HR / ESPN Bet), ELV/CLV enrichment labels, H2H matchup toggle
-- **MLB Phase A engine** — 7 live prop markets (strikeouts, total bases, hits, RBI, runs, walks, stolen bases), contact-quality signal pipeline, admin-only testing panel, roster service, automation infrastructure. Gated to All Sports subscribers
-- **Landing page** — public marketing page at `/` with real product screenshots (dashboard preview and SMS alerts), feature highlights, pricing cards, and CTA. Authenticated users redirect to `/dashboard`
-- **Signal stability filters** — 3 post-calibration filters: low-minute bench volatility dampener, high-usage UNDER collapse guard, combo-stat variance dampener
+- **NBA 2H Plays** — halftime engine scans all live halftime games, runs each player's remaining-game probability against real book lines, surfaces top plays sorted by edge confidence
+- **NCAAB full slate** — all Division I games daily, live scores, canonical market objects (Full Game, H1, H2), Top Plays feed, book filter pills (All / DK / FD / HR / ESPN Bet), CLV edge + public bet fade layer, confidence tiers (ELITE/STRONG/VALUE/NONE)
+- **MLB Phase A engine** — 10 prop markets with distribution-first architecture (Negative Binomial, Binomial, Normal CDF), 8 batter archetypes + 6 pitcher archetypes, Statcast-driven classification, PA distribution model, live game cards
+- **Conversion engine** — daily play reset for free users (3 plays/day), teaser values on blurred plays, upgrade CTAs, Recent Wins strip, edge feed conversion gate
+- **Email lifecycle** — Resend transactional email with verification flow, auto-login after verification, lifecycle cron, ROI wall email
+- **Play grading + calibration dashboard** — persisted plays with automated grading, track record display, ROI metrics (admin-only)
+- **Admin simulation mode** — test probability calculations with synthetic inputs without affecting live data
+- **Landing page** — public marketing page at `/` with real product screenshots, feature highlights, pricing cards, and CTA
+- **Signal stability filters** — low-minute bench volatility dampener, high-usage UNDER collapse guard, combo-stat variance dampener
 - **Parlay builder** — correlation-adjusted parlays with deeplinks to DraftKings, FanDuel, Hard Rock
 - **Multi-channel alerts** — web push and SMS (Pro/All Sports) for high-confidence plays
 - **PWA** — installable on mobile, works offline for cached content
-- **SEO metadata** — OpenGraph and Twitter card tags planned for all public pages
+- **SEO metadata** — OpenGraph and Twitter card tags on all public pages
+- **Tweet template system** — rotating templates for sharing engine picks on social media
 
 ---
 
@@ -39,6 +45,7 @@ LiveLocks pulls real-time game data, live box scores, and sportsbook odds to com
 | Database | PostgreSQL via Drizzle ORM |
 | Auth | bcrypt + JWT (localStorage) + Express sessions |
 | Payments | Stripe (replit-stripe-sync integration) |
+| Email | Resend (transactional email + verification) |
 | SMS | Twilio |
 | Push | Web Push API (VAPID) |
 | Deployment | Replit Deployments |
@@ -57,18 +64,20 @@ LiveLocks pulls real-time game data, live box scores, and sportsbook odds to com
 │       ├── pages/
 │       │   ├── landing.tsx          # Public marketing landing page
 │       │   ├── dashboard.tsx        # Main app — NBA/NCAAB/MLB calculator, box score, parlay
-│       │   ├── admin.tsx            # Admin panel (user management, feedback, slate reset, MLB testing)
-│       │   ├── auth.tsx             # Login / Register
+│       │   ├── admin.tsx            # Admin panel (user management, feedback, simulation, calibration)
+│       │   ├── auth.tsx             # Login / Register with email verification
+│       │   ├── verify-pending.tsx    # Email verification pending / landing
 │       │   ├── privacy.tsx          # Privacy policy
 │       │   ├── terms.tsx            # Terms of service
 │       │   └── not-found.tsx
 │       ├── components/
 │       │   ├── DashboardPreview.tsx # Landing page dashboard preview
 │       │   ├── ncaab-admin-tab.tsx  # Full NCAAB live tab component
-│       │   ├── mlb-admin-tab.tsx    # MLB admin testing panel
+│       │   ├── mlb-admin-tab.tsx    # MLB live tab component
 │       │   ├── parlay-slip.tsx      # Parlay builder
 │       │   ├── upgrade-modal.tsx    # Paywall modal
 │       │   ├── feedback-modal.tsx   # User feedback form
+│       │   ├── RecentWinsStrip.tsx   # Recent Wins display
 │       │   ├── alerts-onboarding-modal.tsx  # Post-login alert opt-in
 │       │   ├── welcome-banner.tsx   # New-user welcome banner
 │       │   ├── probability-ring.tsx # Circular probability gauge
@@ -84,37 +93,67 @@ LiveLocks pulls real-time game data, live box scores, and sportsbook odds to com
 │   ├── index.ts                     # Express app setup, session, Stripe sync
 │   ├── routes.ts                    # All API endpoints + data scrapers
 │   ├── auth.ts                      # JWT, bcrypt, requireAuth/requireTier middleware
-│   ├── storage.ts                   # Database interface (Drizzle) + probability engine + stability filters
+│   ├── storage.ts                   # Database interface (Drizzle)
 │   ├── db.ts                        # Drizzle client
 │   ├── oddsService.ts               # The Odds API + SGO integration
-│   ├── ncaabService.ts              # NCAAB full-slate engine
+│   ├── ncaabService.ts              # NCAAB full-slate service
+│   ├── ncaabEngine.ts               # NCAAB probability engine (pace-based model)
 │   ├── alertManager.ts              # Push + SMS alert dispatch
 │   ├── parlayService.ts             # Parlay correlation engine
 │   ├── stripeService.ts             # Stripe checkout + subscription sync
 │   ├── stripeClient.ts              # Stripe SDK client
 │   ├── webhookHandlers.ts           # Stripe + Twilio webhook handlers
-│   └── mlb/                         # MLB Phase A engine
+│   ├── email.ts                     # Resend transactional email
+│   ├── nba/                         # NBA archetype probability engine
+│   │   ├── probabilityEngine.ts     # Z-score/Normal CDF probability + calibration
+│   │   ├── archetypes.ts            # 7 player archetypes + classification
+│   │   ├── directionalBias.ts       # Under-bias correction
+│   │   └── marketFamily.ts          # Market family categorization
+│   ├── services/                    # Shared engine services
+│   │   ├── engineInputBuilder.ts    # Unified engine input construction
+│   │   ├── engineSignal.ts          # Signal output + confidence tiers
+│   │   ├── engineValidation.ts      # Validation firewall
+│   │   ├── engineStats.ts           # Engine observability stats
+│   │   ├── gradePersistedPlays.ts   # Automated play grading
+│   │   ├── playTracker.ts           # Play persistence + tracking
+│   │   ├── consensusLineService.ts  # Consensus line computation
+│   │   ├── sportsbookService.ts     # Sportsbook data service
+│   │   ├── timingService.ts         # Freshness + timing gates
+│   │   ├── normalizationService.ts  # Abbreviation + data normalization
+│   │   ├── topPlaysService.ts       # Top plays ranking
+│   │   ├── minutesProjectionService.ts # Projected minutes ingestion
+│   │   └── bartTorvik.ts            # NCAAB advanced stats
+│   └── mlb/                         # MLB probability engine
+│       ├── probabilityEngine.ts     # Distribution-first probability (NegBin, Binomial, Normal)
+│       ├── archetypes.ts            # 8 batter + 6 pitcher archetypes
 │       ├── types.ts                 # MLB type definitions
-│       ├── markets.ts               # 7 prop market configs (K, TB, H, RBI, R, BB, SB)
+│       ├── markets.ts               # 10 prop market configs
+│       ├── featureEngineering.ts    # Contact-quality + Statcast features
+│       ├── hitProbabilityModel.ts   # xBA/xSLG hit probability model
+│       ├── paEstimator.ts           # PA distribution estimator
+│       ├── paDistribution.ts        # PA distribution model
+│       ├── outcomeDistribution.ts   # Neg Binomial + Binomial implementations
+│       ├── integrityFirewall.ts     # Output validation firewall
+│       ├── calibration.ts           # Archetype-aware calibration
+│       ├── signalScore.ts           # Signal scoring + tiers
 │       ├── rosterService.ts         # MLB roster sync from ESPN
-│       ├── probability.ts           # MLB prop probability model
-│       ├── projections.ts           # Player stat projections
-│       ├── calibration.ts           # Model calibration
-│       ├── featureEngineering.ts    # Contact-quality signal features
-│       ├── paEstimator.ts           # PA estimator
 │       ├── dataSources.ts           # External data source adapters
 │       ├── dataPullService.ts       # Periodic data pull orchestration
 │       ├── gameDiscoveryService.ts  # Live game detection
 │       ├── liveGameOrchestrator.ts  # Continuous live game polling
 │       ├── liveGameRegistry.ts      # Active game state registry
+│       ├── edgeCache.ts             # Edge signal caching + TTL
 │       ├── backtestHarness.ts       # Backtest framework
 │       └── diagnostics.ts          # Debug and diagnostic utilities
 ├── shared/
 │   ├── schema.ts                    # Drizzle schema + Zod types (shared)
 │   └── routes.ts                    # API route constants (shared)
-├── PRD.md                           # Full product requirements document (v4.0)
-├── CHANGELOG.md                     # Reverse-chronological project changelog
+├── PRD.md                           # Full product requirements document (v5.0)
+├── CHANGELOG.md                     # Reverse-chronological project changelog (Tasks #1–#114)
 ├── README.md                        # This file
+├── NBA_Model_Logic.md               # NBA archetype engine behavior doc
+├── MLB_Engine_Logic.md              # MLB distribution engine behavior doc
+├── NCAAB_Engine_Logic.md            # NCAAB pace-based engine behavior doc
 └── replit.md                        # Architecture notes for Replit agent
 ```
 
@@ -127,6 +166,7 @@ LiveLocks pulls real-time game data, live box scores, and sportsbook odds to com
 | `/` | Public | Landing page (redirects to `/dashboard` if authenticated) |
 | `/landing` | Public | Landing page (direct access) |
 | `/auth` | Public | Login / Register |
+| `/verify-pending` | Public | Email verification pending page |
 | `/dashboard` | Authenticated | Main application (NBA, NCAAB, MLB tabs) |
 | `/admin` | Admin | Admin panel |
 | `/privacy` | Public | Privacy policy |
@@ -160,6 +200,7 @@ Set these in Replit's Secrets panel:
 | `SGO_API_KEY` | Yes | Sports Game Odds API key (NCAAB lines fallback) |
 | `STRIPE_SECRET_KEY` | Yes | Stripe server-side secret key |
 | `VITE_STRIPE_PUBLISHABLE_KEY` | Yes | Stripe publishable key (frontend) |
+| `RESEND_API_KEY` | Yes | Resend API key (transactional email) |
 | `TWILIO_ACCOUNT_SID` | Alerts | Twilio account SID |
 | `TWILIO_AUTH_TOKEN` | Alerts | Twilio auth token |
 | `TWILIO_FROM_NUMBER` | Alerts | Twilio sender number (E.164 format) |
@@ -171,6 +212,8 @@ Set these in Replit's Secrets panel:
 ## Authentication
 
 - Email + password (bcrypt, 10 rounds)
+- Email verification required after registration (via Resend)
+- Auto-login after email verification with dashboard toast
 - On login: server returns a signed JWT (30-day expiry) alongside the session cookie
 - Frontend stores JWT in `localStorage` as `ll_auth_token`
 - Every API request sends `Authorization: Bearer <token>` header
@@ -189,10 +232,22 @@ Set these in Replit's Secrets panel:
 
 | Tier | Price | Internal Key | Access |
 |------|-------|-------------|--------|
-| Free | $0 | `null` | 15 probability calculations then paywall |
+| Free | $0 | `null` | 3 probability calculations per day (daily reset), then paywall |
 | Pro | $40/mo | `"all"` | Unlimited NBA + NCAAB live + 2H Plays + SMS + Push |
-| All Sports | $65/mo | `"elite"` | Everything in Pro + MLB Live (Phase A — admin testing; public in Phase B) + Priority SMS |
+| All Sports | $65/mo | `"elite"` | Everything in Pro + MLB Live + Priority SMS |
 | Admin | — | — | Full access, no limits |
+
+---
+
+## Engine Documentation
+
+Detailed engine behavior docs are maintained separately:
+
+| Document | Description |
+|----------|-------------|
+| [NBA_Model_Logic.md](NBA_Model_Logic.md) | Archetype classification, Z-score probability, fragility scoring, calibration, safety ceilings |
+| [MLB_Engine_Logic.md](MLB_Engine_Logic.md) | Distribution models (NegBin/Binomial/Normal), batter/pitcher archetypes, PA distribution, Statcast classification |
+| [NCAAB_Engine_Logic.md](NCAAB_Engine_Logic.md) | Pace-based projection, dynamic multiplier, CLV edge, public bet fade, confidence tiers |
 
 ---
 
@@ -205,6 +260,7 @@ Set these in Replit's Secrets panel:
 | `POST` | `/api/auth/login` | Login (email or phone) |
 | `POST` | `/api/auth/logout` | Clear session |
 | `GET` | `/api/auth/me` | Current user |
+| `GET` | `/api/auth/verify-email` | Verify email token |
 
 ### NBA
 | Method | Path | Description |
@@ -212,7 +268,7 @@ Set these in Replit's Secrets panel:
 | `POST` | `/api/calculate` | Run prop probability (play-gated for free users) |
 | `GET` | `/api/live-games` | ESPN NBA scoreboard (30s cache) |
 | `GET` | `/api/live-stats/:gameId` | Live box score for a specific game |
-| `GET` | `/api/live-signals/:gameId` | Live prop edge signals for box score coloring (90s cache) |
+| `GET` | `/api/live-signals/:gameId` | Live prop edge signals for box score (90s cache) |
 | `GET` | `/api/odds` | Player prop lines from The Odds API |
 | `GET` | `/api/game-lines` | Game spread and total |
 | `GET` | `/api/injuries` | NBA injury report |
@@ -224,6 +280,14 @@ Set these in Replit's Secrets panel:
 |--------|------|-------------|
 | `GET` | `/api/ncaab/games` | Full Division I slate (all live + scheduled) |
 | `GET` | `/api/ncaab/plays` | Computed NCAAB 2H plays with probabilities |
+
+### MLB
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/mlb/live-games` | MLB game schedule + live scores |
+| `GET` | `/api/mlb/live-signals/:gameId` | MLB player signals for a game |
+| `GET` | `/api/mlb/edge-feed` | MLB cross-game edge feed |
+| `POST` | `/api/mlb/calculate-manual` | MLB manual prop calculation |
 
 ### Admin
 | Method | Path | Description |
@@ -243,80 +307,15 @@ Set these in Replit's Secrets panel:
 
 ---
 
-## Probability Model
-
-### NBA Live Props
-
-The engine uses a rotation-based minutes model that replaced the original scaling formula. It factors in projected minutes from daily ingestion, foul reduction curves, rotation patterns, and blowout adjustments.
-
-1. **Blended rate**: `observedRate × 0.7 + seasonBaseline × 0.3`
-2. **Foul penalty**: 3 fouls = 30% minute reduction; 4+ fouls = 55% reduction
-3. **Remaining minutes**: rotation-based projection from current period + game clock, incorporating projected minutes (when fresh) or season average fallback
-4. **Expected total**: `currentStat + (projectedMinutes × blendedRate)`
-5. **Defense adjustment**: opponent `defRating` (0.88–1.12 scale)
-6. **Pace adjustment**: blends team historical pace with live game pace (score-based)
-7. **Probability**: `50 + difference × scaleFactor` (clamped 2–98%)
-8. **Calibration**: `calibrateProbability()` applies game-state intelligence (game script divergence, OT probability)
-
-Scale factors: points=8, rebounds/assists=10, steals/blocks=15, combos=6
-
-### Signal Stability Filters (Post-Calibration)
-
-Three filters run after calibration to reduce noise before signals reach users:
-
-1. **Low-minute bench volatility filter**: When `effectiveMinutesBase < 24 AND minutesPlayed < 12`, probability is multiplied by 0.92. Prevents noisy projections from low-minute bench players while preserving signal for expanded-role players.
-2. **High-usage UNDER collapse guard**: UNDER calls where `usageRate > 0.26` have probability reduced by 3 points. Guards against late-game collapses by high-usage stars.
-3. **Combo-stat variance dampener**: Combo markets (stat type contains `_`) have probability multiplied by 0.97. Accounts for inherently higher variance in multi-stat markets.
-
-### Live Box Score Edge Signals (`/api/live-signals/:gameId`)
-
-Runs on the currently viewed game during any quarter (Q1–Q4), not just halftime:
-- For each player with ≥3 minutes, checks 5 prop markets: Points, Rebounds, Assists, Threes, PRA
-- Fetches real book lines (Odds API → SGO fallback) — never fabricates a line
-- Runs the probability engine with the actual current period and game clock
-- Returns signals with an edge of ≥5% from 50%
-- Result is cached for 90 seconds
-
-**Color tiers in the box score:**
-
-| Color | Condition |
-|-------|-----------|
-| Green | ≥85% hit implied (OVER) |
-| Red | ≥85% hit implied (UNDER) |
-| Yellow | 70–84% hit implied |
-| Teal | 60–69% hit implied |
-
-### NBA 2H / Halftime Engine
-
-Scans all live halftime games simultaneously. For each player at halftime:
-- Checks all 11 stat type combinations
-- Uses median consensus line across available books
-- Runs `calculateProbability` with `currentPeriod: 3, gameClock: "12:00"` (start of 2H)
-- Returns top 20 plays sorted by edge descending
-- Triggers push/SMS alerts for plays with ≥85% confidence (first occurrence per player/stat/line per session)
-
----
-
 ## Data Sources
 
 | Source | Data | Refresh |
 |--------|------|---------|
 | ESPN API | Live scores, box scores, injuries, rosters (NBA + NCAAB + MLB) | 30–90s |
-| The Odds API | Prop lines (DK, FD, HR, FanDuel, ESPN Bet) | 90s live / 5min pre-game |
+| The Odds API | Prop lines (DK, FD, Hard Rock Bet, PrizePicks, Underdog Fantasy) | 90s live / 5min pre-game |
 | Sports Game Odds (SGO) | NCAAB 1H lines, team totals, fallback prop lines | 5 min |
 | NBA.com / ESPN Stats | Season per-game averages, H2 splits | Daily (sync on demand) |
-
----
-
-## Live Box Score Coloring
-
-When you open the box score for any live NBA game, the app:
-1. Fetches `/api/live-signals/:gameId` (90s cache)
-2. For each player with a detected edge, color-codes:
-   - **The row background** — the best signal across any of the player's props
-   - **The active stat column cell** — the signal for the currently selected stat type
-3. Switching the stat column (PTS → AST → PRA etc.) instantly remaps cell colors
-4. Zero extra API calls on the frontend — signals are pre-computed server-side
+| Baseball Savant | Statcast metrics (xBA, barrel rate, exit velocity) for MLB archetypes | Daily |
 
 ---
 
@@ -329,28 +328,13 @@ When you open the box score for any live NBA game, the app:
 
 ---
 
-## Checkpoints
-
-| Checkpoint | Description |
-|-----------|-------------|
-| Current | MLB Phase A engine, NCAAB canonical market rebuild, signal stability filters, landing page with real screenshots |
-| `e6d58886523a1fb879e0abe54e1b579fa233d686` | Production deployment — live signals + NCAAB 2H engine |
-| `b9f431cd22f951b4f7aef34657876ee01dcdc336` | Stable NBA baseline pre-NCAAB |
-
-To roll back: open Replit chat and ask to revert to a commit ID.
-
----
-
 ## Roadmap
 
 | Priority | Feature | Status |
 |----------|---------|--------|
-| High | MLB Phase B — expanded markets, public-facing tab, live game cards | Planned |
-| High | Projected minutes ingestion from RotoWire / free public sources | Planned |
-| High | Proof of Edges landing section — real-world edge outputs showcase | Planned |
-| Medium | SEO metadata and social sharing improvements | Planned |
-| Medium | Player prop trend charts / historical hit rate | Planned |
-| Medium | User notification history log | Planned |
+| High | MLB Phase B — expanded public markets, enhanced live game cards | Planned |
+| High | Player prop trend charts / historical hit rate | Planned |
 | Medium | Parlay builder deep-link improvements | Partial (DK/FD/HR/Bet365 live) |
+| Medium | User notification history log | Planned |
 | Low | NFL Live integration | Future |
 | Low | Mobile app (React Native) | Future |
