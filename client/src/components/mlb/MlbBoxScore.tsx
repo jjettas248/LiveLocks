@@ -13,6 +13,15 @@ const SHORT_MARKET_LABELS: Record<string, string> = {
   batter_strikeouts: "K", hr_allowed: "HRA",
 };
 
+type ABResultEntry = {
+  outcome: string;
+  exitVelocity: number | null;
+  launchAngle: number | null;
+  distance: number | null;
+  pitchType: string | null;
+  pitchSpeed: number | null;
+};
+
 type MlbPlayerStat = {
   playerId: string;
   playerName: string;
@@ -33,6 +42,7 @@ type MlbPlayerStat = {
   xBA: number | null;
   xSLG: number | null;
   hardHitPct: number | null;
+  priorABResults?: ABResultEntry[];
 };
 
 type LiveStatsResponse = {

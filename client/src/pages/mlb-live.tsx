@@ -731,20 +731,60 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                   </div>
 
                   {calcPlayer && (
-                    <div className="flex items-center gap-2 p-2 rounded-lg bg-secondary/30 border border-border/30">
-                      <div className="text-[10px] text-muted-foreground flex items-center gap-2 flex-wrap flex-1">
-                        <span className="font-semibold text-foreground">{calcPlayer.teamAbbr}</span>
-                        <span>#{calcPlayer.battingOrderSlot || "—"}</span>
-                        <span>{calcPlayer.ab} AB</span>
-                        <span>{calcPlayer.h} H</span>
-                        <span>{calcPlayer.tb} TB</span>
-                        <span>{calcPlayer.k} K</span>
+                    <div className="p-2 rounded-lg bg-secondary/30 border border-border/30 space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <div className="text-[10px] text-muted-foreground flex items-center gap-2 flex-wrap flex-1">
+                          <span className="font-semibold text-foreground">{calcPlayer.teamAbbr}</span>
+                          <span>#{calcPlayer.battingOrderSlot || "—"}</span>
+                          <span>{calcPlayer.ab} AB</span>
+                          <span>{calcPlayer.h} H</span>
+                          <span>{calcPlayer.tb} TB</span>
+                          <span>{calcPlayer.k} K</span>
+                        </div>
+                        <button
+                          data-testid="button-clear-calc-player"
+                          onClick={() => { setCalcPlayer(null); setCalcPlayerName(""); setCalcResult(null); }}
+                          className="text-muted-foreground hover:text-foreground text-[10px] px-1.5 py-0.5"
+                        >✕</button>
                       </div>
-                      <button
-                        data-testid="button-clear-calc-player"
-                        onClick={() => { setCalcPlayer(null); setCalcPlayerName(""); setCalcResult(null); }}
-                        className="text-muted-foreground hover:text-foreground text-[10px] px-1.5 py-0.5"
-                      >✕</button>
+                      {calcPlayer.priorABResults && calcPlayer.priorABResults.length > 0 && (
+                        <div className="flex items-center gap-1 flex-wrap" data-testid="calc-player-ab-results">
+                          <span className="text-[9px] text-muted-foreground/60 uppercase font-semibold mr-0.5">ABs:</span>
+                          {calcPlayer.priorABResults.map((ab, i) => {
+                            const isHit = ab.outcome === "hit" || ab.outcome === "home_run" || ab.outcome === "hr" || ab.outcome === "homerun";
+                            const isHR = ab.outcome === "home_run" || ab.outcome === "hr" || ab.outcome === "homerun";
+                            const isK = ab.outcome === "strikeout";
+                            const isWalk = ab.outcome === "walk" || ab.outcome === "hbp";
+                            const label = isHR ? "HR" : isHit ? "H" : isK ? "K" : isWalk ? "BB" : "O";
+                            const evLabel = ab.exitVelocity ? `${Math.round(ab.exitVelocity)}` : null;
+                            const color = isHR
+                              ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/40"
+                              : isHit
+                              ? "bg-green-500/20 text-green-400 border-green-500/40"
+                              : isK
+                              ? "bg-red-500/20 text-red-400 border-red-500/40"
+                              : isWalk
+                              ? "bg-blue-500/20 text-blue-400 border-blue-500/40"
+                              : "bg-secondary/40 text-muted-foreground border-border/40";
+                            return (
+                              <span
+                                key={i}
+                                data-testid={`ab-result-${i}`}
+                                className={`inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded border ${color}`}
+                                title={[
+                                  `AB ${i + 1}: ${ab.outcome}`,
+                                  ab.exitVelocity ? `EV: ${ab.exitVelocity} mph` : null,
+                                  ab.launchAngle != null ? `LA: ${ab.launchAngle}°` : null,
+                                  ab.distance ? `Dist: ${ab.distance} ft` : null,
+                                ].filter(Boolean).join(" · ")}
+                              >
+                                {label}
+                                {evLabel && <span className="text-[8px] font-normal opacity-70">{evLabel}</span>}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
 
