@@ -16,6 +16,7 @@ import {
   mapHrRadarCardToUi, mapAlertToUi, formatTriggerReason,
   radarScoreToTier, launchAngleLabel, formatMlbDisplayValue,
   sanitizeDisplayString, mapPitcherSignals, liveScoreToGrade,
+  mapMlbSignalToUi,
   type HrRadarCardUi,
 } from "@/lib/mlbUiMappers";
 
@@ -1196,7 +1197,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     refetchInterval: 20_000,
   });
   const rawSignals: MlbSignalData[] = Array.isArray(edgeFeedResp?.signals)
-    ? (edgeFeedResp!.signals as MlbSignalData[])
+    ? (edgeFeedResp!.signals as MlbSignalData[]).map(s => mapMlbSignalToUi(s) as unknown as MlbSignalData)
     : [];
   const prevSignalsRef = useRef<MlbSignalData[]>([]);
   const edgeFeedSignals = (() => {

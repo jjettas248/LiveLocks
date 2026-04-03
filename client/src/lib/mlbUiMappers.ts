@@ -156,6 +156,35 @@ export function mapPitcherSignals(signals: string[] | null | undefined): Array<{
     .filter((s): s is { label: string; color: string } => s != null);
 }
 
+const CONFIDENCE_DISPLAY: Record<string, string> = {
+  ELITE: "Elite",
+  STRONG: "Strong",
+  SOLID: "Solid",
+  WATCHLIST: "Watch",
+};
+
+const TIER_BADGE_MAP: Record<string, string> = {
+  ELITE: "ELITE EDGE",
+  STRONG: "STRONG EDGE",
+  SOLID: "SOLID",
+  WATCHLIST: "WATCHING",
+};
+
+export function mapMlbSignalToUi(sig: MLBSignal): MlbSignalUi {
+  const liveGrade = sig.liveScore != null ? liveScoreToGrade(sig.liveScore) : null;
+  const oppGrade = sig.opposingScore != null ? oppScoreToGrade(sig.opposingScore) : null;
+  const pitcherSigs = mapPitcherSignals((sig as any).pitcherSignals);
+  const tier = sig.confidenceTier ?? "WATCHLIST";
+  return {
+    ...sig,
+    displayConfidence: CONFIDENCE_DISPLAY[tier] ?? tier,
+    displayLiveGrade: liveGrade ? liveGrade.grade : null,
+    displayOppGrade: oppGrade,
+    displayPitcherSignals: pitcherSigs,
+    displayTierBadge: TIER_BADGE_MAP[tier] ?? "SIGNAL",
+  };
+}
+
 export function launchAngleLabel(angle: number): { tag: string; color: string } {
   const la = Math.round(angle);
   if (la <= -10) return { tag: "Chop", color: "text-muted-foreground/60" };
