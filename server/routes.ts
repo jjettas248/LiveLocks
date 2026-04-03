@@ -1614,6 +1614,8 @@ export async function registerRoutes(
           hitDistance: null,
           hardHitRateSeason: null,
           barrelRateProxySeason: null,
+          avgBatSpeed: null,
+          avgSwingLength: null,
           priorABResults: [],
           xBA: null,
           xSLG: null,

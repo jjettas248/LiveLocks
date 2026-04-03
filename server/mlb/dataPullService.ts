@@ -25,6 +25,9 @@ export interface GameStateCache {
   pitcherInGame: { playerId: string; playerName: string; team: string; throws: "L" | "R" | null } | null;
   pitchCount: number;
   timesThroughOrder: number;
+  homeScore: number;
+  awayScore: number;
+  totalPlays: number;
   fetchedAt: number;
 }
 
@@ -32,6 +35,8 @@ export interface PlayerContactData {
   exitVelocity: number | null;
   launchAngle: number | null;
   hitDistance: number | null;
+  latestExitVelocity: number | null;
+  latestLaunchAngle: number | null;
   hardHitPct: number | null;
   barrelPct: number | null;
   avgBatSpeed: number | null;
@@ -236,6 +241,14 @@ export async function syncGameState(statsPk: string, cacheKey?: string): Promise
     const isTopInning: boolean = linescore.isTopInning ?? true;
     const outs: number = safeNum(linescore.outs) ?? 0;
 
+    // Scores
+    const homeScore: number = safeNum(linescore.teams?.home?.runs) ?? 0;
+    const awayScore: number = safeNum(linescore.teams?.away?.runs) ?? 0;
+
+    // Total completed plays (for AB completion detection)
+    const allPlays: any[] = plays.allPlays ?? [];
+    const totalPlays: number = allPlays.filter((p: any) => p.result?.event).length;
+
     // Runners on base
     const offenseBase = linescore.offense ?? {};
     const runnersOnBase: Array<"first" | "second" | "third"> = [];
@@ -306,6 +319,9 @@ export async function syncGameState(statsPk: string, cacheKey?: string): Promise
       pitcherInGame,
       pitchCount: currentPitchCount,
       timesThroughOrder,
+      homeScore,
+      awayScore,
+      totalPlays,
       fetchedAt: Date.now(),
     };
 
@@ -419,6 +435,8 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
           exitVelocity: null,
           launchAngle: null,
           hitDistance: null,
+          latestExitVelocity: null,
+          latestLaunchAngle: null,
           hardHitPct: null,
           barrelPct: null,
           avgBatSpeed: null,
@@ -468,6 +486,11 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
       }
 
       if (bestEV !== null || outcome !== "other") {
+        if (bestEV !== null) {
+          byPlayerId[playerId].latestExitVelocity = bestEV;
+          byPlayerId[playerId].latestLaunchAngle = bestLA;
+        }
+
         byPlayerId[playerId].priorABResults.push({
           exitVelocity: bestEV,
           launchAngle: bestLA,
@@ -957,6 +980,8 @@ export async function syncSavantSeasonForLineup(gameId: string): Promise<void> {
         exitVelocity: savant.exitVelocity,
         launchAngle: savant.launchAngle,
         hitDistance: savant.hitDistance,
+        latestExitVelocity: null,
+        latestLaunchAngle: null,
         hardHitPct: savant.hardHitRateSeason,
         barrelPct: savant.barrelRateProxySeason,
         avgBatSpeed: savant.avgBatSpeed,

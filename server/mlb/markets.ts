@@ -1450,6 +1450,8 @@ export function calculateMLBPropEdge(input: MLBPropInput): MLBPropOutput {
           playerContact.barrelPct != null
             ? playerContact.barrelPct / 100
             : resolvedInput.contactQuality.barrelRateProxySeason,
+        avgBatSpeed: playerContact.avgBatSpeed ?? resolvedInput.contactQuality.avgBatSpeed,
+        avgSwingLength: playerContact.avgSwingLength ?? resolvedInput.contactQuality.avgSwingLength,
         priorABResults:
           playerContact.priorABResults.length > 0
             ? (playerContact.priorABResults as MLBPropInput["contactQuality"]["priorABResults"])

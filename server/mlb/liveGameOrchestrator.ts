@@ -184,6 +184,7 @@ export function normalizeMlbStatus(raw: string | undefined): "live" | "pregame" 
 
 export type StateChangeTrigger =
   | "new_ab"
+  | "ab_completed"
   | "ball_in_play"
   | "inning_change"
   | "pitcher_change"
@@ -192,14 +193,18 @@ export type StateChangeTrigger =
   | "tto_shift"
   | "lineup_substitution"
   | "hard_hit_event"
+  | "out_recorded"
+  | "score_change"
   | "odds_update";
 
 const HIGH_IMPACT_TRIGGERS = new Set<StateChangeTrigger>([
-  "inning_change", "pitcher_change", "tto_shift", "lineup_substitution",
+  "new_ab", "ab_completed", "inning_change", "pitcher_change",
+  "tto_shift", "lineup_substitution", "out_recorded", "score_change",
 ]);
 
 const TRIGGER_IMPACTED_MARKETS: Record<StateChangeTrigger, MLBMarket[] | "all"> = {
   new_ab: "all",
+  ab_completed: "all",
   ball_in_play: ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts", "hits_allowed", "hr_allowed"],
   inning_change: "all",
   pitcher_change: "all",
@@ -208,6 +213,8 @@ const TRIGGER_IMPACTED_MARKETS: Record<StateChangeTrigger, MLBMarket[] | "all"> 
   tto_shift: "all",
   lineup_substitution: "all",
   hard_hit_event: ["hits", "total_bases", "home_runs", "hrr", "hits_allowed", "hr_allowed"],
+  out_recorded: "all",
+  score_change: "all",
   odds_update: "all",
 };
 
@@ -548,6 +555,24 @@ export class LiveGameOrchestrator {
       triggers.push("ball_in_play");
     }
 
+    if (newState.outs !== oldState.outs) {
+      triggers.push("out_recorded");
+    }
+
+    const oldTotal = oldState.totalPlays ?? 0;
+    const newTotal = newState.totalPlays ?? 0;
+    if (newTotal > oldTotal) {
+      triggers.push("ab_completed");
+    }
+
+    const oldHomeScore = oldState.homeScore ?? 0;
+    const oldAwayScore = oldState.awayScore ?? 0;
+    const newHomeScore = newState.homeScore ?? 0;
+    const newAwayScore = newState.awayScore ?? 0;
+    if (newHomeScore !== oldHomeScore || newAwayScore !== oldAwayScore) {
+      triggers.push("score_change");
+    }
+
     const pitchCountThresholds = [50, 65, 75, 85, 95, 105];
     for (const threshold of pitchCountThresholds) {
       if (oldState.pitchCount < threshold && newState.pitchCount >= threshold) {
@@ -805,8 +830,8 @@ export class LiveGameOrchestrator {
       pitcherHand: pitcher?.throws ?? null,
       pitcherPitchCount: pitcherCtx?.pitchCount ?? gameState?.pitchCount ?? null,
       pitcherTimesThrough: pitcherCtx?.timesThroughOrder ?? null,
-      homeScore: (gameState as any)?.homeScore ?? 0,
-      awayScore: (gameState as any)?.awayScore ?? 0,
+      homeScore: gameState?.homeScore ?? 0,
+      awayScore: gameState?.awayScore ?? 0,
       inning: gameState?.inning ?? input.inning,
       isTopInning: gameState?.isTopInning ?? input.isTopInning,
       currentStat,
@@ -1102,7 +1127,7 @@ export class LiveGameOrchestrator {
           currentStatValue: currentStatForMarket,
           remainingPA,
           remainingAB,
-          completedAB: Math.max(0, 4 - remainingAB),
+          completedAB: boxScorePlayer ? boxScorePlayer.ab : Math.max(0, 4 - remainingAB),
           inning: state.inning,
           isTopInning: state.isTopInning,
           currentGameHR,
@@ -1482,6 +1507,8 @@ export class LiveGameOrchestrator {
             hitDistance: null,
             hardHitRateSeason: null,
             barrelRateProxySeason: null,
+            avgBatSpeed: null,
+            avgSwingLength: null,
             priorABResults: [],
             xBA: null,
             xSLG: null,
