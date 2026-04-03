@@ -1041,8 +1041,11 @@ export async function registerRoutes(
 
   app.get("/api/mlb/alerts", requireAuth, async (req, res) => {
     try {
-      const minutes = Math.max(1, Math.min(parseInt(req.query.minutes as string) || 30, 120));
-      const alerts = await storage.getRecentAlerts(minutes);
+      const minutes = Math.max(1, Math.min(parseInt(req.query.minutes as string) || 60, 120));
+      const [alerts, conversionStats] = await Promise.all([
+        storage.getRecentAlerts(minutes),
+        storage.getAlertConversionStats(),
+      ]);
       return res.json({
         alerts: alerts.map(a => {
           let factors = null;
@@ -1053,10 +1056,11 @@ export async function registerRoutes(
             factors,
           };
         }),
+        conversionStats,
       });
     } catch (e: any) {
       console.error("[mlb/alerts]", e.message);
-      return res.json({ alerts: [] });
+      return res.json({ alerts: [], conversionStats: null });
     }
   });
 

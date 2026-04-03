@@ -1900,6 +1900,69 @@ export class DatabaseStorage implements IStorage {
     return rows;
   }
 
+  async gradeAlertsForPlayer(playerId: string, gameId: string, outcome: string): Promise<number> {
+    try {
+      const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000);
+      const result = await db.update(persistedAlerts)
+        .set({ outcome })
+        .where(
+          and(
+            eq(persistedAlerts.playerId, playerId),
+            eq(persistedAlerts.gameId, gameId),
+            isNull(persistedAlerts.outcome),
+            gte(persistedAlerts.createdAt, cutoff),
+          )
+        );
+      const count = (result as any).rowCount ?? 0;
+      if (count > 0) {
+        console.log(`[HR_ALERT_GRADE] Graded ${count} alert(s) for player=${playerId} game=${gameId} outcome=${outcome}`);
+      }
+      return count;
+    } catch (err: any) {
+      console.warn(`[HR_ALERT_GRADE] Failed: ${err.message}`);
+      return 0;
+    }
+  }
+
+  async getAlertConversionStats(): Promise<{
+    totalAlerts: number;
+    totalHR: number;
+    totalNoHR: number;
+    totalPending: number;
+    conversionRate: number;
+    alertTypeBreakdown: Record<string, { total: number; hr: number; rate: number }>;
+  }> {
+    try {
+      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const rows = await db.select().from(persistedAlerts)
+        .where(gte(persistedAlerts.createdAt, cutoff));
+
+      const totalAlerts = rows.length;
+      const totalHR = rows.filter(r => r.outcome === "HR").length;
+      const totalNoHR = rows.filter(r => r.outcome === "NO_HR").length;
+      const totalPending = rows.filter(r => r.outcome === null).length;
+      const conversionRate = totalHR + totalNoHR > 0 ? (totalHR / (totalHR + totalNoHR)) * 100 : 0;
+
+      const alertTypeBreakdown: Record<string, { total: number; hr: number; rate: number }> = {};
+      for (const row of rows) {
+        const type = row.alertType;
+        if (!alertTypeBreakdown[type]) alertTypeBreakdown[type] = { total: 0, hr: 0, rate: 0 };
+        alertTypeBreakdown[type].total++;
+        if (row.outcome === "HR") alertTypeBreakdown[type].hr++;
+      }
+      for (const key of Object.keys(alertTypeBreakdown)) {
+        const b = alertTypeBreakdown[key];
+        const graded = rows.filter(r => r.alertType === key && r.outcome !== null).length;
+        b.rate = graded > 0 ? (b.hr / graded) * 100 : 0;
+      }
+
+      return { totalAlerts, totalHR, totalNoHR, totalPending, conversionRate, alertTypeBreakdown };
+    } catch (err: any) {
+      console.warn(`[HR_ALERT_STATS] Failed: ${err.message}`);
+      return { totalAlerts: 0, totalHR: 0, totalNoHR: 0, totalPending: 0, conversionRate: 0, alertTypeBreakdown: {} };
+    }
+  }
+
   async getChurnedUsers(): Promise<Array<{ id: number; email: string; churnedAt: Date; churnedFromTier: string | null; createdAt: Date | null }>> {
     const rows = await db
       .select({

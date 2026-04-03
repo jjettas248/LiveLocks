@@ -50,6 +50,18 @@ import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, type HRAlertInput } from "./evaluateHRAlert";
 import { storage } from "../storage";
 
+// ── HR alert grading tracker ──────────────────────────────────────────────────
+const KNOWN_HR_COUNTS = new Map<string, number>();
+
+function checkAndGradeHR(playerId: string, gameId: string, currentHR: number) {
+  const key = `${gameId}_${playerId}`;
+  const prevHR = KNOWN_HR_COUNTS.get(key) ?? 0;
+  KNOWN_HR_COUNTS.set(key, currentHR);
+  if (currentHR > prevHR && prevHR >= 0) {
+    storage.gradeAlertsForPlayer(playerId, gameId, "HR").catch(() => {});
+  }
+}
+
 // ── Engine dedup lock ─────────────────────────────────────────────────────────
 const LAST_RUN = new Map<string, number>();
 const DEDUP_WINDOW_MS = 15_000;
@@ -505,6 +517,17 @@ export class LiveGameOrchestrator {
       }
       if (statusSource !== "none") {
         console.log(`[MLB orchestrator] Status fallback for game ${gameId}: ${normalizedStatus} (source=${statusSource}, espnStatus=${espnRaw})`);
+      }
+    }
+
+    if (normalizedStatus === "final") {
+      const boxScore = mlbGameCache.gameBoxScore?.[gameId];
+      if (boxScore?.byPlayerId) {
+        for (const [pid, bsp] of Object.entries(boxScore.byPlayerId)) {
+          const hrCount = (bsp as any).hr ?? 0;
+          const outcome = hrCount > 0 ? "HR" : "NO_HR";
+          storage.gradeAlertsForPlayer(pid, gameId, outcome).catch(() => {});
+        }
       }
     }
 
@@ -1160,6 +1183,9 @@ export class LiveGameOrchestrator {
         }
 
         const currentGameHR = boxScorePlayer ? boxScorePlayer.hr : 0;
+        if (market === "home_runs" && currentGameHR > 0) {
+          checkAndGradeHR(batter.playerId, gameId, currentGameHR);
+        }
         const hardHitCount = playerContact
           ? (playerContact.priorABResults ?? []).filter((ab: any) => (ab.exitVelocity ?? 0) >= 95).length
           : 0;
