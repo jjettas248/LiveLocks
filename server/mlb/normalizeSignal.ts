@@ -349,8 +349,12 @@ export function normalizeMLBSignal(
     hrIntensity: raw?.hrIntensity ?? null,
     rollingForm: qs.rollingForm ?? null,
 
-    pitcherAnalysis: raw?.pitcherAnalysis ?? null,
-    pitcherSignals: raw?.pitcherSignals ?? null,
+    pitcherAnalysis: qs.pitcherAnalysis ?? raw?.pitcherAnalysis ?? null,
+    pitcherSignals: qs.pitcherSignals ?? raw?.pitcherSignals ?? null,
+
+    opportunityScore: qs.opportunityScore ?? 0,
+    liveScore: qs.liveScore ?? 0,
+    eventBoost: qs.eventBoost ?? 0,
 
     smartTags,
     primaryReason,

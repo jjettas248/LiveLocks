@@ -12,6 +12,7 @@ export interface SignalScoreBreakdown {
   opportunity: number;
   marketReliability: number;
   priceValidation: number;
+  eventBoost: number;
   total: number;
   confidenceTier: SignalConfidenceTier;
 }
@@ -154,6 +155,75 @@ function computeOpportunityComponent(input: MLBPropInput): number {
   return 15;
 }
 
+function computeEventBoostComponent(input: MLBPropInput, output: MLBPropOutput): number {
+  let boost = 0;
+
+  const priorABs = input.contactQuality.priorABResults ?? [];
+  const hasHR = priorABs.some(ab => ab.outcome === "home_run" || ab.outcome === "homerun");
+  if (hasHR) boost += 40;
+
+  const hasBarrel = priorABs.some(ab =>
+    (ab.exitVelocity ?? 0) >= 98 && (ab.launchAngle ?? 0) >= 25 && (ab.launchAngle ?? 0) <= 35
+  );
+  if (hasBarrel) boost += 30;
+
+  const ev = input.contactQuality.exitVelocity ?? 0;
+  if (ev >= 100) boost += 20;
+  else if (ev >= 95) boost += 10;
+
+  const hits = priorABs.filter(ab => ab.outcome === "hit" || ab.outcome === "home_run" || ab.outcome === "homerun").length;
+  if (hits >= 3) boost += 20;
+  else if (hits >= 2) boost += 10;
+
+  const tb = input.currentStatValue;
+  if (input.market === "total_bases" && tb >= 4) boost += 15;
+
+  const pa = output.pitcherAnalysis;
+  if (pa) {
+    if (pa.stuff >= 75 && pa.swingMiss >= 70) boost += 15;
+    if (pa.fatigue >= 65) boost += 10;
+  }
+
+  return clamp(boost, 0, 100);
+}
+
+function computeFullOpportunityScore(input: MLBPropInput, gameInning: number): number {
+  let opp = 0;
+
+  const slot = input.lineup.battingOrderSlot;
+  if (slot <= 2) opp += 30;
+  else if (slot <= 5) opp += 20;
+  else if (slot <= 7) opp += 15;
+  else opp += 10;
+
+  if (gameInning <= 3) opp += 30;
+  else if (gameInning <= 5) opp += 25;
+  else if (gameInning <= 7) opp += 15;
+  else opp += 5;
+
+  const remaining = input.remainingPA;
+  if (remaining >= 4) opp += 25;
+  else if (remaining >= 3) opp += 20;
+  else if (remaining >= 2) opp += 12;
+  else if (remaining >= 1) opp += 5;
+
+  const runs = input.currentRuns ?? 0;
+  if (runs >= 5) opp += 15;
+  else if (runs >= 3) opp += 10;
+  else if (runs >= 1) opp += 5;
+
+  return clamp(opp, 0, 100);
+}
+
+export function computeLiveOpportunityScore(
+  signalScore: number,
+  edge: number,
+  opportunityScore: number
+): number {
+  const normalizedEdge = clamp(edge / 100, 0, 1);
+  return (signalScore / 100) * normalizedEdge * (opportunityScore / 100);
+}
+
 function computeMarketReliabilityComponent(market: MLBMarket): number {
   if (market === "hits" || market === "total_bases") return 80;
   if (market === "pitcher_strikeouts" || market === "pitcher_outs") return 70;
@@ -191,17 +261,21 @@ export function computeSignalScore(
   const opportunity = computeOpportunityComponent(input);
   const reliability = computeMarketReliabilityComponent(output.market);
   const price = computePriceValidationComponent(output.edge, output.overOdds, output.underOdds);
+  const eventBoost = computeEventBoostComponent(input, output);
 
-  const total = Math.round(
-    0.30 * prob +
-    0.20 * proj +
-    0.15 * live +
-    0.15 * matchup +
-    0.10 * form +
+  const baseTotal = Math.round(
+    0.25 * prob +
+    0.18 * proj +
+    0.13 * live +
+    0.13 * matchup +
+    0.08 * form +
     0.05 * opportunity +
     0.03 * reliability +
-    0.02 * price
+    0.02 * price +
+    0.13 * eventBoost
   );
+
+  const total = clamp(baseTotal, 0, 100);
 
   let confidenceTier: SignalConfidenceTier;
   if (total >= 85) confidenceTier = "ELITE";
@@ -219,10 +293,13 @@ export function computeSignalScore(
     opportunity: Math.round(opportunity),
     marketReliability: Math.round(reliability),
     priceValidation: Math.round(price),
+    eventBoost: Math.round(eventBoost),
     total,
     confidenceTier,
   };
 }
+
+export { computeFullOpportunityScore };
 
 export function deriveSignalTags(
   input: MLBPropInput,

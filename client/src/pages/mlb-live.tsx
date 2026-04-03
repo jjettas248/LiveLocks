@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { TopPlays } from "@/components/mlb/TopPlays";
+import { TopLiveOpportunities } from "@/components/mlb/TopLiveOpportunities";
 import { LiveBoard } from "@/components/mlb/LiveBoard";
 import { MlbSignalCard, type MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { MlbBoxScore, type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
@@ -374,7 +375,8 @@ function SpikeAlertBanner({ signals }: { signals: MlbSignalData[] }) {
     const hasPitcherSignal = (s as MlbSignalData & { pitcherSignals?: string[] | null }).pitcherSignals?.length;
     const isHR = s.market === "home_runs" && s.enginePct >= 60;
     const isElite = s.confidenceTier === "ELITE";
-    return hasPitcherSignal || isHR || isElite;
+    const isLiveSpike = (s.liveScore ?? 0) >= 0.10;
+    return hasPitcherSignal || isHR || isElite || isLiveSpike;
   });
 
   useEffect(() => {
@@ -399,24 +401,36 @@ function SpikeAlertBanner({ signals }: { signals: MlbSignalData[] }) {
   const top = spikeSignals[0];
   const pitcherSigs = (top as MlbSignalData & { pitcherSignals?: string[] | null }).pitcherSignals ?? undefined;
   const isHR = top.market === "home_runs";
+  const isLiveSpike = (top.liveScore ?? 0) >= 0.10;
+  const borderColor = isLiveSpike ? "rgba(59,130,246,0.5)" : isHR ? "rgba(250,204,21,0.4)" : "rgba(34,197,94,0.4)";
+  const bgColor = isLiveSpike ? "rgba(59,130,246,0.08)" : isHR ? "rgba(250,204,21,0.08)" : "rgba(34,197,94,0.08)";
 
   return (
     <div
       data-testid="spike-alert-banner"
       className="mb-3 rounded-lg border px-4 py-2.5 flex items-center gap-3 animate-in slide-in-from-top-2 duration-300"
-      style={{
-        borderColor: isHR ? "rgba(250,204,21,0.4)" : "rgba(34,197,94,0.4)",
-        background: isHR ? "rgba(250,204,21,0.08)" : "rgba(34,197,94,0.08)",
-      }}
+      style={{ borderColor, background: bgColor }}
     >
-      <Flame className={`w-4 h-4 shrink-0 ${isHR ? "text-yellow-400" : "text-green-400"}`} />
+      {isLiveSpike ? (
+        <Zap className="w-4 h-4 shrink-0 text-blue-400" />
+      ) : (
+        <Flame className={`w-4 h-4 shrink-0 ${isHR ? "text-yellow-400" : "text-green-400"}`} />
+      )}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
+          {isLiveSpike && (
+            <span className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/30">
+              LIVE SPIKE
+            </span>
+          )}
           <span className="text-[11px] font-bold text-foreground">{top.playerName}</span>
           <span className={`text-[10px] font-black ${top.recommendedSide === "OVER" ? "text-green-400" : "text-blue-400"}`}>
             {SIGNAL_STRIP_MARKET_SHORT[top.market] ?? top.market} {top.recommendedSide}
           </span>
           <span className="text-[10px] font-bold tabular-nums text-foreground">{top.enginePct.toFixed(0)}%</span>
+          {top.liveScore != null && top.liveScore > 0 && (
+            <span className="text-[9px] font-bold tabular-nums text-blue-400/70">{(top.liveScore * 100).toFixed(1)} LS</span>
+          )}
           {pitcherSigs && pitcherSigs.length > 0 && pitcherSigs.slice(0, 2).map(sig => (
             <span key={sig} className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
               {sig.replace(/_/g, " ")}
@@ -1500,6 +1514,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
               }
               return (
                 <div className="space-y-6">
+                  <TopLiveOpportunities signals={filtered} onAddToSlip={handleAddToSlip} />
                   <TopPlays signals={filtered} onAddToSlip={handleAddToSlip} />
                   <LiveBoard signals={filtered} onAddToSlip={handleAddToSlip} />
                 </div>

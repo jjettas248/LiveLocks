@@ -212,8 +212,8 @@ export function MlbSignalCard({
           </div>
         </div>
 
-        {/* Row 2: Smart Tags + HR Intensity Badge */}
-        {(smartTags.length > 0 || hrStyle) && (
+        {/* Row 2: Smart Tags + HR Intensity Badge + Pitcher Signals */}
+        {(smartTags.length > 0 || hrStyle || (sig.pitcherSignals && sig.pitcherSignals.length > 0) || (sig.liveScore ?? 0) > 0) && (
           <div className="flex items-center gap-1.5 flex-wrap">
             {hrStyle && (
               <span
@@ -226,6 +226,41 @@ export function MlbSignalCard({
                 }}
               >
                 ⚡ {hrStyle.badge}{hrBuildScore != null ? ` ${hrBuildScore.toFixed(1)}` : ""}
+              </span>
+            )}
+            {sig.pitcherSignals && sig.pitcherSignals.length > 0 && sig.pitcherSignals.slice(0, 2).map(ps => {
+              const PSIG: Record<string, { label: string; color: string }> = {
+                DOMINANT: { label: "DOM", color: "#ef4444" },
+                K_STREAK: { label: "K RUN", color: "#f59e0b" },
+                COMMAND_LOCKED: { label: "CMD", color: "#22c55e" },
+                VELOCITY_DROP: { label: "VELO↓", color: "#f97316" },
+                FATIGUE_RISK: { label: "TIRED", color: "#f97316" },
+                HARD_CONTACT: { label: "HARD HIT", color: "#ef4444" },
+              };
+              const display = PSIG[ps];
+              if (!display) return null;
+              return (
+                <span
+                  key={ps}
+                  data-testid={`pitcher-sig-${ps}`}
+                  className="text-[9px] font-black px-1.5 py-0.5 rounded-full border"
+                  style={{ color: display.color, borderColor: `${display.color}40`, background: `${display.color}10` }}
+                >
+                  {display.label}
+                </span>
+              );
+            })}
+            {(sig.liveScore ?? 0) >= 0.04 && (
+              <span
+                data-testid={`live-score-${sig.playerId}-${sig.market}`}
+                className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border tabular-nums"
+                style={{
+                  color: (sig.liveScore ?? 0) >= 0.10 ? "#3b82f6" : "#94a3b8",
+                  borderColor: (sig.liveScore ?? 0) >= 0.10 ? "rgba(59,130,246,0.3)" : "rgba(148,163,184,0.2)",
+                  background: (sig.liveScore ?? 0) >= 0.10 ? "rgba(59,130,246,0.08)" : "rgba(148,163,184,0.05)",
+                }}
+              >
+                LS {((sig.liveScore ?? 0) * 100).toFixed(1)}
               </span>
             )}
             {smartTags.map((tag) => (

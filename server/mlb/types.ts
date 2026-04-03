@@ -611,4 +611,7 @@ export interface MLBQualifiedSignal {
     context: number;
   } | null;
   pitcherSignals?: string[] | null;
+  opportunityScore?: number;
+  liveScore?: number;
+  eventBoost?: number;
 }

@@ -114,6 +114,10 @@ export interface MLBSignal {
   } | null;
   pitcherSignals?: string[] | null;
 
+  opportunityScore: number;
+  liveScore: number;
+  eventBoost: number;
+
   smartTags: string[];
   primaryReason: string;
   pitchMatchupRatings: Record<string, "strong" | "neutral" | "weak"> | null;

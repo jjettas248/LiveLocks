@@ -1224,6 +1224,11 @@ export async function registerRoutes(
           overOdds: overO,
           underOdds: underO,
           priorABResults: (rawOutput as any)?.priorABResults ?? (qs as any).priorABResults ?? null,
+          pitcherAnalysis: qs.pitcherAnalysis ?? (rawOutput as any)?.pitcherAnalysis ?? null,
+          pitcherSignals: qs.pitcherSignals ?? (rawOutput as any)?.pitcherSignals ?? null,
+          opportunityScore: qs.opportunityScore ?? 0,
+          liveScore: qs.liveScore ?? 0,
+          eventBoost: qs.eventBoost ?? 0,
         };
       })
       .sort((a, b) => {
@@ -1343,14 +1348,15 @@ export async function registerRoutes(
       }
 
       allSignals.sort((a, b) => {
+        const aLive = a.liveScore ?? 0;
+        const bLive = b.liveScore ?? 0;
+        if (aLive !== bLive) return bLive - aLive;
         const aEdge = a.edge ?? 0;
         const bEdge = b.edge ?? 0;
         const aPos = aEdge > 0 ? 1 : 0;
         const bPos = bEdge > 0 ? 1 : 0;
         if (aPos !== bPos) return bPos - aPos;
-        const scoreDiff = (b.signalScore ?? 0) - (a.signalScore ?? 0);
-        if (Math.abs(scoreDiff) > 0) return scoreDiff;
-        return bEdge - aEdge;
+        return (b.signalScore ?? 0) - (a.signalScore ?? 0);
       });
 
       console.log(`[MLB EDGE-FEED] edgeCacheEntries=${totalEdgeCacheEntries} total=${allSignals.length} generated=${totalGenerated} droppedStale=${totalDropped} feedTags=${JSON.stringify(feedTagDist)}`);
