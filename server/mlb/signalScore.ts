@@ -310,6 +310,40 @@ export function deriveGameCardTags(
   return gameTags;
 }
 
+export type PitcherSignalType = "DOMINANT" | "K_STREAK" | "COMMAND_LOCKED" | "VELOCITY_DROP" | "FATIGUE_RISK" | "HARD_CONTACT";
+
+export function derivePitcherSignals(
+  input: MLBPropInput,
+  output: MLBPropOutput
+): PitcherSignalType[] {
+  const sigs: PitcherSignalType[] = [];
+  const pa = output.pitcherAnalysis;
+  if (!pa) return sigs;
+
+  if (pa.stuff >= 75 && pa.command >= 65 && pa.swingMiss >= 70) {
+    sigs.push("DOMINANT");
+  }
+  if (pa.swingMiss >= 75) {
+    sigs.push("K_STREAK");
+  }
+  if (pa.command >= 75 && pa.fatigue <= 30) {
+    sigs.push("COMMAND_LOCKED");
+  }
+  if (pa.fatigue >= 65) {
+    sigs.push("FATIGUE_RISK");
+  }
+  if (pa.contactSuppression <= 30) {
+    sigs.push("HARD_CONTACT");
+  }
+
+  const pitcher = input.pitcher;
+  if (pitcher.pitchCount >= 80 && pa.stuff < 50) {
+    if (!sigs.includes("VELOCITY_DROP")) sigs.push("VELOCITY_DROP");
+  }
+
+  return sigs;
+}
+
 export function isPlayerGlowEligible(
   scoreBreakdown: SignalScoreBreakdown,
   signalTags: SignalTag[]

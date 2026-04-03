@@ -103,6 +103,17 @@ export interface MLBSignal {
   hrIntensity: "weak" | "watch" | "strong" | "imminent" | null;
   rollingForm: Record<string, any> | null;
 
+  pitcherAnalysis?: {
+    stuff: number;
+    command: number;
+    swingMiss: number;
+    fatigue: number;
+    contactSuppression: number;
+    matchup: number;
+    context: number;
+  } | null;
+  pitcherSignals?: string[] | null;
+
   smartTags: string[];
   primaryReason: string;
   pitchMatchupRatings: Record<string, "strong" | "neutral" | "weak"> | null;

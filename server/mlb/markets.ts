@@ -115,6 +115,8 @@ import {
   computeSpecPitchBlendMatchup,
   computeSpecParkEnv,
   computeBadges,
+  computePitcherAnalysisScores,
+  generatePitcherSignals,
   type FeatureLayer,
 } from "./featureEngineering";
 import { projectBaseValue } from "./projections";
@@ -682,6 +684,10 @@ function buildOutput(input: MLBPropInput, distParams?: DistributionParams): MLBP
     pitcherDeterioration: Math.round(features.pitcherDeterioration * 1000) / 1000,
   };
 
+  const isPitcherMkt = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(input.market);
+  const pitcherAnalysisResult = isPitcherMkt ? computePitcherAnalysisScores(input) : undefined;
+  const pitcherSignalsResult = isPitcherMkt && pitcherAnalysisResult ? generatePitcherSignals(input, pitcherAnalysisResult) : undefined;
+
   const projSource = determineProjectionSource(input);
   const projQuality = determineProjectionQuality(projSource, input);
   const trustScore = computeTrustScore(projQuality, projSource, projResult.fallbackUsed);
@@ -732,6 +738,16 @@ function buildOutput(input: MLBPropInput, distParams?: DistributionParams): MLBP
     contextScore: Math.round(ctxScore * 100) / 100,
     matchupTag,
     featureScores,
+    pitcherAnalysis: pitcherAnalysisResult ? {
+      stuff: Math.round(pitcherAnalysisResult.stuff * 100),
+      command: Math.round(pitcherAnalysisResult.command * 100),
+      swingMiss: Math.round(pitcherAnalysisResult.swingMiss * 100),
+      fatigue: Math.round(pitcherAnalysisResult.fatigue * 100),
+      contactSuppression: Math.round(pitcherAnalysisResult.contactSuppression * 100),
+      matchup: Math.round(pitcherAnalysisResult.matchup * 100),
+      context: Math.round(pitcherAnalysisResult.context * 100),
+    } : undefined,
+    pitcherSignals: pitcherSignalsResult,
     computedBadges: badgeResult.positive,
     computedRiskFlags: badgeResult.negative,
     fallbackUsed: projResult.fallbackUsed,
@@ -1138,6 +1154,22 @@ export function calculatePitcherKEdge(input: MLBPropInput): MLBPropOutput {
       pitcherSuppression: Math.round(features.pitcherSuppression * 1000) / 1000,
       pitcherDeterioration: Math.round(features.pitcherDeterioration * 1000) / 1000,
     },
+    pitcherAnalysis: (() => {
+      const pa = computePitcherAnalysisScores(kInput);
+      return {
+        stuff: Math.round(pa.stuff * 100),
+        command: Math.round(pa.command * 100),
+        swingMiss: Math.round(pa.swingMiss * 100),
+        fatigue: Math.round(pa.fatigue * 100),
+        contactSuppression: Math.round(pa.contactSuppression * 100),
+        matchup: Math.round(pa.matchup * 100),
+        context: Math.round(pa.context * 100),
+      };
+    })(),
+    pitcherSignals: (() => {
+      const pa = computePitcherAnalysisScores(kInput);
+      return generatePitcherSignals(kInput, pa);
+    })(),
     computedBadges: badgeResult.positive,
     computedRiskFlags: badgeResult.negative,
     fallbackUsed: projResult.fallbackUsed,

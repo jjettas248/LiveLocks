@@ -391,6 +391,16 @@ export interface MLBPropOutput {
   contextScore: number;
   matchupTag: string | null;
   featureScores?: Record<string, number>;
+  pitcherAnalysis?: {
+    stuff: number;
+    command: number;
+    swingMiss: number;
+    fatigue: number;
+    contactSuppression: number;
+    matchup: number;
+    context: number;
+  };
+  pitcherSignals?: string[];
   computedBadges?: string[];
   computedRiskFlags?: string[];
   fallbackUsed?: boolean;
@@ -591,4 +601,14 @@ export interface MLBQualifiedSignal {
   directionalBiasAdjusted?: boolean | null;
   isDegraded?: boolean | null;
   dataQuality?: "full" | "partial" | "degraded" | null;
+  pitcherAnalysis?: {
+    stuff: number;
+    command: number;
+    swingMiss: number;
+    fatigue: number;
+    contactSuppression: number;
+    matchup: number;
+    context: number;
+  } | null;
+  pitcherSignals?: string[] | null;
 }

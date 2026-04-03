@@ -313,6 +313,128 @@ function LivePulse({ updatedAt }: { updatedAt: number }) {
   );
 }
 
+const SIGNAL_STRIP_MARKET_SHORT: Record<string, string> = {
+  hits: "H", total_bases: "TB", hrr: "HRR", pitcher_strikeouts: "K", pitcher_outs: "PO",
+  hits_allowed: "HA", walks_allowed: "BB", home_runs: "HR", batter_strikeouts: "K", hr_allowed: "HRA",
+};
+
+function SignalStrip({ signals, onPlayerClick }: { signals: MlbSignalData[]; onPlayerClick: (sig: MlbSignalData) => void }) {
+  const topSignals = [...signals]
+    .filter(s => s.enginePct >= 55 && s.recommendedSide !== "NO_EDGE" && !s.alreadyHit)
+    .sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0))
+    .slice(0, 8);
+
+  if (topSignals.length === 0) return null;
+
+  return (
+    <div className="mb-3" data-testid="signal-strip">
+      <div className="flex items-center gap-2 mb-1.5 px-1">
+        <Zap className="w-3 h-3 text-yellow-400" />
+        <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Top Signals</span>
+      </div>
+      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
+        {topSignals.map((sig, i) => {
+          const tierColor = sig.enginePct >= 80 ? "#22c55e" : sig.enginePct >= 70 ? "#eab308" : "#3b82f6";
+          const sideColor = sig.recommendedSide === "OVER" ? "text-green-400" : "text-blue-400";
+          return (
+            <button
+              key={`${sig.playerId}-${sig.market}-${i}`}
+              data-testid={`signal-strip-card-${i}`}
+              onClick={() => onPlayerClick(sig)}
+              className="flex-shrink-0 rounded-lg border px-3 py-2 bg-card hover:bg-primary/5 transition-colors text-left min-w-[140px]"
+              style={{ borderColor: tierColor + "40" }}
+            >
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: tierColor }} />
+                <span className="text-[10px] font-bold text-foreground truncate">{sig.playerName}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] text-muted-foreground">{SIGNAL_STRIP_MARKET_SHORT[sig.market] ?? sig.market}</span>
+                <span className={`text-[10px] font-black ${sideColor}`}>{sig.recommendedSide}</span>
+                <span className="text-[10px] font-bold tabular-nums" style={{ color: tierColor }}>{sig.enginePct.toFixed(0)}%</span>
+                {sig.edge != null && sig.edge > 0 && (
+                  <span className="text-[8px] text-green-400/70 tabular-nums">+{sig.edge.toFixed(1)}%</span>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SpikeAlertBanner({ signals }: { signals: MlbSignalData[] }) {
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [autoDismiss, setAutoDismiss] = useState<string[]>([]);
+
+  const spikeSignals = signals.filter(s => {
+    const key = `${s.playerId}-${s.market}`;
+    if (dismissed.has(key)) return false;
+    const hasPitcherSignal = (s as MlbSignalData & { pitcherSignals?: string[] | null }).pitcherSignals?.length;
+    const isHR = s.market === "home_runs" && s.enginePct >= 60;
+    const isElite = s.confidenceTier === "ELITE";
+    return hasPitcherSignal || isHR || isElite;
+  });
+
+  useEffect(() => {
+    if (spikeSignals.length === 0) return;
+    const keys = spikeSignals.map(s => `${s.playerId}-${s.market}`);
+    const newKeys = keys.filter(k => !autoDismiss.includes(k));
+    if (newKeys.length > 0) {
+      setAutoDismiss(prev => [...prev, ...newKeys]);
+      const timer = setTimeout(() => {
+        setDismissed(prev => {
+          const next = new Set(prev);
+          newKeys.forEach(k => next.add(k));
+          return next;
+        });
+      }, 15000);
+      return () => clearTimeout(timer);
+    }
+  }, [spikeSignals.map(s => `${s.playerId}-${s.market}`).join(",")]);
+
+  if (spikeSignals.length === 0) return null;
+
+  const top = spikeSignals[0];
+  const pitcherSigs = (top as MlbSignalData & { pitcherSignals?: string[] | null }).pitcherSignals ?? undefined;
+  const isHR = top.market === "home_runs";
+
+  return (
+    <div
+      data-testid="spike-alert-banner"
+      className="mb-3 rounded-lg border px-4 py-2.5 flex items-center gap-3 animate-in slide-in-from-top-2 duration-300"
+      style={{
+        borderColor: isHR ? "rgba(250,204,21,0.4)" : "rgba(34,197,94,0.4)",
+        background: isHR ? "rgba(250,204,21,0.08)" : "rgba(34,197,94,0.08)",
+      }}
+    >
+      <Flame className={`w-4 h-4 shrink-0 ${isHR ? "text-yellow-400" : "text-green-400"}`} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[11px] font-bold text-foreground">{top.playerName}</span>
+          <span className={`text-[10px] font-black ${top.recommendedSide === "OVER" ? "text-green-400" : "text-blue-400"}`}>
+            {SIGNAL_STRIP_MARKET_SHORT[top.market] ?? top.market} {top.recommendedSide}
+          </span>
+          <span className="text-[10px] font-bold tabular-nums text-foreground">{top.enginePct.toFixed(0)}%</span>
+          {pitcherSigs && pitcherSigs.length > 0 && pitcherSigs.slice(0, 2).map(sig => (
+            <span key={sig} className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+              {sig.replace(/_/g, " ")}
+            </span>
+          ))}
+        </div>
+      </div>
+      <button
+        data-testid="button-dismiss-spike"
+        onClick={() => setDismissed(prev => { const next = new Set(prev); next.add(`${top.playerId}-${top.market}`); return next; })}
+        className="text-[10px] text-muted-foreground hover:text-foreground shrink-0"
+      >
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
 function GameChipStrip({ games, selectedGameId, onSelectGame, edgeFeedSignals, onRefresh, dataUpdatedAt }: {
   games: MLBGame[];
   selectedGameId: string | null;
@@ -743,6 +865,8 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     bookImplied?: number;
     confidenceTier?: string;
     featureScores?: Record<string, number>;
+    pitcherAnalysis?: { stuff: number; command: number; swingMiss: number; fatigue: number; contactSuppression: number; matchup: number; context: number } | null;
+    pitcherSignals?: string[] | null;
   } | null>(null);
 
   const activeCalcName = calcPlayer?.playerName ?? calcPlayerName;
@@ -1093,6 +1217,16 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
             </div>
 
             <div className="lg:col-span-8 order-1 lg:order-2">
+              {selectedGameId && gameSignals.length > 0 && (
+                <SignalStrip signals={gameSignals} onPlayerClick={(sig) => {
+                  setCalcPlayerName(sig.playerName);
+                  setCalcMarket(sig.market);
+                  if (sig.bookLine != null) setCalcBookLine(String(sig.bookLine));
+                }} />
+              )}
+
+              <SpikeAlertBanner signals={gameSignals} />
+
               {selectedGameId && selectedGame ? (
                 <MlbBoxScore
                   gameId={selectedGameId}
@@ -1166,30 +1300,83 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                     </div>
                   )}
 
-                  {calcResult.featureScores && Object.keys(calcResult.featureScores).length > 0 && (() => {
+                  {(() => {
                     const isPitcherMarket = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(calcMarket);
+                    const pa = calcResult.pitcherAnalysis;
+
+                    if (isPitcherMarket && pa) {
+                      const pitcherMetrics: { key: string; label: string; value: number; inverted?: boolean }[] = [
+                        { key: "stuff", label: "Stuff", value: pa.stuff },
+                        { key: "command", label: "Command", value: pa.command },
+                        { key: "swingMiss", label: "Swing & Miss", value: pa.swingMiss },
+                        { key: "fatigue", label: "Fatigue", value: pa.fatigue, inverted: true },
+                        { key: "contactSuppression", label: "Contact Supp", value: pa.contactSuppression },
+                        { key: "matchup", label: "Matchup", value: pa.matchup },
+                        { key: "context", label: "Context", value: pa.context },
+                      ];
+
+                      const pitcherSigs = calcResult.pitcherSignals as string[] | undefined;
+                      const sigBadgeMap: Record<string, { label: string; emoji: string; color: string }> = {
+                        DOMINANT: { label: "DOMINANT", emoji: "🔥", color: "#22c55e" },
+                        K_STREAK: { label: "K STREAK", emoji: "⚡", color: "#f59e0b" },
+                        COMMAND_LOCKED: { label: "COMMAND LOCKED", emoji: "🎯", color: "#3b82f6" },
+                        VELOCITY_DROP: { label: "VELO DROP", emoji: "⚠️", color: "#ef4444" },
+                        FATIGUE_RISK: { label: "FATIGUE", emoji: "⚠️", color: "#f97316" },
+                        HARD_CONTACT: { label: "HARD CONTACT", emoji: "⚠️", color: "#ef4444" },
+                      };
+
+                      return (
+                        <div className="rounded-lg p-3 bg-secondary/20 border border-border/20">
+                          <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                            Pitcher Analysis
+                          </div>
+                          {pitcherSigs && pitcherSigs.length > 0 && (
+                            <div className="flex gap-1.5 flex-wrap mb-2">
+                              {pitcherSigs.map(sig => {
+                                const badge = sigBadgeMap[sig];
+                                return badge ? (
+                                  <span key={sig} className="text-[8px] font-black px-2 py-0.5 rounded-full border" style={{ color: badge.color, borderColor: badge.color + "40", backgroundColor: badge.color + "15" }}>
+                                    {badge.emoji} {badge.label}
+                                  </span>
+                                ) : null;
+                              })}
+                            </div>
+                          )}
+                          <div className="space-y-1.5">
+                            {pitcherMetrics.map(({ key, label, value, inverted }) => {
+                              const displayVal = inverted ? (100 - value) : value;
+                              const barColor = inverted
+                                ? (value <= 20 ? "#22c55e" : value <= 35 ? "#a3e635" : value <= 55 ? "#94a3b8" : value <= 70 ? "#f59e0b" : "#ef4444")
+                                : (value >= 70 ? "#22c55e" : value >= 55 ? "#a3e635" : value >= 45 ? "#94a3b8" : value >= 35 ? "#f59e0b" : "#ef4444");
+                              return (
+                                <div key={key} className="flex items-center gap-2">
+                                  <span className="text-[9px] text-muted-foreground w-[72px] shrink-0">{label}</span>
+                                  <div className="flex-1 h-2 rounded-full bg-secondary/60 overflow-hidden">
+                                    <div className="h-full rounded-full transition-all duration-500" style={{ width: `${displayVal}%`, backgroundColor: barColor }} />
+                                  </div>
+                                  <span className="text-[9px] font-bold tabular-nums w-6 text-right" style={{ color: barColor }}>{displayVal}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    if (!calcResult.featureScores || Object.keys(calcResult.featureScores).length === 0) return null;
+
                     const batterLabels: Record<string, string> = {
                       contactQuality: "Contact", batSpeedPower: "Power", handednessMatchup: "Platoon",
                       pitchBlendMatchup: "Pitch Mix", hotColdForm: "Form", parkEnv: "Park/Env",
                       bvp: "vs Pitcher", lineupOpportunity: "Lineup",
                       bullpenFactor: "Late Game", pitcherSuppression: "Pitcher Quality", pitcherDeterioration: "TTO Advantage",
                     };
-                    const pitcherLabels: Record<string, string> = {
-                      contactQuality: "Stuff+", batSpeedPower: "Velocity", handednessMatchup: "Platoon",
-                      pitchBlendMatchup: "Arsenal", hotColdForm: "Form", parkEnv: "Park/Env",
-                      bvp: "vs Lineup", lineupOpportunity: "Opp Lineup",
-                      bullpenFactor: "Bullpen", pitcherSuppression: "Control", pitcherDeterioration: "Workload",
-                    };
-                    const labels = isPitcherMarket ? pitcherLabels : batterLabels;
                     const batterPriority = ["contactQuality", "batSpeedPower", "hotColdForm", "bvp", "pitchBlendMatchup", "handednessMatchup", "lineupOpportunity", "parkEnv", "pitcherDeterioration", "pitcherSuppression", "bullpenFactor"];
-                    const pitcherPriority = ["pitcherSuppression", "pitcherDeterioration", "hotColdForm", "contactQuality", "batSpeedPower", "pitchBlendMatchup", "handednessMatchup", "parkEnv", "bullpenFactor", "lineupOpportunity", "bvp"];
-                    const priority = isPitcherMarket ? pitcherPriority : batterPriority;
-
                     const entries = Object.entries(calcResult.featureScores as Record<string, number>)
                       .filter(([, v]) => Math.abs(v - 0.5) >= 0.03)
                       .sort(([aKey], [bKey]) => {
-                        const ai = priority.indexOf(aKey);
-                        const bi = priority.indexOf(bKey);
+                        const ai = batterPriority.indexOf(aKey);
+                        const bi = batterPriority.indexOf(bKey);
                         return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
                       })
                       .slice(0, 8);
@@ -1197,20 +1384,19 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                     return (
                       <div className="rounded-lg p-3 bg-secondary/20 border border-border/20">
                         <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-2">
-                          {isPitcherMarket ? "Pitcher Analysis" : "Batter Analysis"}
+                          Batter Analysis
                         </div>
-                        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                        <div className="space-y-1.5">
                           {entries.map(([key, val]) => {
-                            const color = val >= 0.65 ? "#22c55e" : val >= 0.55 ? "#a3e635" : val >= 0.45 ? "#94a3b8" : val >= 0.35 ? "#f59e0b" : "#ef4444";
+                            const pct = Math.round(val * 100);
+                            const color = pct >= 65 ? "#22c55e" : pct >= 55 ? "#a3e635" : pct >= 45 ? "#94a3b8" : pct >= 35 ? "#f59e0b" : "#ef4444";
                             return (
-                              <div key={key} className="flex items-center justify-between gap-1">
-                                <span className="text-[9px] text-muted-foreground">{labels[key] ?? key}</span>
-                                <div className="flex items-center gap-1.5">
-                                  <div className="w-12 h-1.5 rounded-full bg-secondary/60 overflow-hidden">
-                                    <div className="h-full rounded-full" style={{ width: `${Math.round(val * 100)}%`, backgroundColor: color }} />
-                                  </div>
-                                  <span className="text-[8px] font-bold tabular-nums" style={{ color }}>{(val * 100).toFixed(0)}</span>
+                              <div key={key} className="flex items-center gap-2">
+                                <span className="text-[9px] text-muted-foreground w-[72px] shrink-0">{batterLabels[key] ?? key}</span>
+                                <div className="flex-1 h-2 rounded-full bg-secondary/60 overflow-hidden">
+                                  <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, backgroundColor: color }} />
                                 </div>
+                                <span className="text-[9px] font-bold tabular-nums w-6 text-right" style={{ color }}>{pct}</span>
                               </div>
                             );
                           })}

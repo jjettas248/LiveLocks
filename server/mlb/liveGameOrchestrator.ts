@@ -34,7 +34,7 @@ import { recordMLBDiagnostic } from "./diagnostics";
 import type { MLBPropInput, MLBPropOutput, MLBMarket, MLBQualifiedSignal } from "./types";
 import { MARKET_QUALIFY_FLOOR, ALL_MLB_MARKETS } from "./types";
 import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
-import { computeSignalScore, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible } from "./signalScore";
+import { computeSignalScore, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals } from "./signalScore";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
 import {
   classifyBatterArchetype,
@@ -711,6 +711,7 @@ export class LiveGameOrchestrator {
     const signalTags = deriveSignalTags(input, output, scoreBreakdown);
     const feedTags = deriveFeedTags(input, output, scoreBreakdown);
     const glowEligible = isPlayerGlowEligible(scoreBreakdown, signalTags);
+    const pitcherSigs = derivePitcherSignals(input, output);
 
     const stateFields = this.computeSignalState(gameId, input, output, scoreBreakdown);
 
@@ -755,6 +756,9 @@ export class LiveGameOrchestrator {
       },
       ...stateFields,
     };
+
+    signal.pitcherAnalysis = output.pitcherAnalysis ?? null;
+    signal.pitcherSignals = pitcherSigs.length > 0 ? pitcherSigs : (output.pitcherSignals ?? null);
 
     if (signal.fallbackUsed) {
       signal.confidenceTier = "WATCHLIST" as any;
@@ -913,6 +917,10 @@ export class LiveGameOrchestrator {
       watchlist: true,
       actionable: false,
     };
+
+    watchSignal.pitcherAnalysis = output.pitcherAnalysis ?? null;
+    const watchPitcherSigs = derivePitcherSignals(input, output);
+    watchSignal.pitcherSignals = watchPitcherSigs.length > 0 ? watchPitcherSigs : (output.pitcherSignals ?? null);
 
     this.sanitizeUserFacingFields(watchSignal);
     return watchSignal;

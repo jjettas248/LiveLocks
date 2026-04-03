@@ -1322,6 +1322,133 @@ export function computeFullFeatureLayer(input: MLBPropInput): FeatureLayer {
   };
 }
 
+export interface PitcherAnalysisScores {
+  stuff: number;
+  command: number;
+  swingMiss: number;
+  fatigue: number;
+  contactSuppression: number;
+  matchup: number;
+  context: number;
+}
+
+export function computePitcherAnalysisScores(input: MLBPropInput): PitcherAnalysisScores {
+  const pitcher = input.pitcher;
+  const era = pitcher.era ?? 4.0;
+  const whip = pitcher.whip ?? 1.30;
+  const kPer9 = pitcher.kPer9 ?? 8.0;
+  const bbPer9 = pitcher.bbPer9 ?? 3.0;
+  const pitchCount = pitcher.pitchCount;
+  const tto = pitcher.timesThrough;
+  const inning = input.inning;
+
+  const velocity = pitcher.isPitcherCollapsing ? 0.15 :
+    pitchCount < 50 ? 0.80 : pitchCount < 70 ? 0.65 : pitchCount < 85 ? 0.45 : 0.25;
+  const kAbility = normalize01(kPer9, 5.0, 12.0);
+  const eraInv = 1 - normalize01(era, 2.0, 5.5);
+  const whipInv = 1 - normalize01(whip, 0.90, 1.50);
+
+  const stuff = clamp(
+    0.30 * velocity +
+    0.30 * kAbility +
+    0.20 * eraInv +
+    0.20 * whipInv,
+    0, 1
+  );
+
+  const strikeAbility = 1 - normalize01(bbPer9, 1.5, 5.0);
+  const commandEra = 1 - normalize01(era, 2.5, 5.0);
+  const commandFatigue = pitchCount < 60 ? 0.80 : pitchCount < 80 ? 0.55 : 0.30;
+
+  const command = clamp(
+    0.40 * strikeAbility +
+    0.30 * commandEra +
+    0.30 * commandFatigue,
+    0, 1
+  );
+
+  const whiffBase = normalize01(kPer9, 6.0, 12.0);
+  const ttoWhiff = tto >= 3 ? 0.25 : tto >= 2 ? 0.50 : 0.75;
+  const fatiguedWhiff = pitchCount >= 85 ? 0.30 : pitchCount >= 70 ? 0.55 : 0.75;
+
+  const swingMiss = clamp(
+    0.40 * whiffBase +
+    0.30 * ttoWhiff +
+    0.30 * fatiguedWhiff,
+    0, 1
+  );
+
+  const pitchCountFatigue = normalize01(pitchCount, 40, 105);
+  const ttoCurve = tto >= 3 ? 0.85 : tto >= 2 ? 0.55 : 0.15;
+  const inningRisk = normalize01(inning, 1, 8);
+  const velocityDrop = pitcher.isPitcherCollapsing ? 0.90 : pitchCount >= 90 ? 0.65 : pitchCount >= 75 ? 0.40 : 0.10;
+
+  const fatigue = clamp(
+    0.30 * pitchCountFatigue +
+    0.25 * ttoCurve +
+    0.25 * velocityDrop +
+    0.20 * inningRisk,
+    0, 1
+  );
+
+  const contactSupp = clamp(
+    0.30 * eraInv +
+    0.25 * whipInv +
+    0.25 * (1 - normalize01(era, 2.0, 5.0)) +
+    0.20 * velocity,
+    0, 1
+  );
+
+  const batterHand = input.batterHand;
+  const pitcherThrows = input.pitcherThrows ?? pitcher.throws;
+  let platoonFactor = 0.5;
+  if (batterHand && pitcherThrows) {
+    if ((batterHand === "R" && pitcherThrows === "L") || (batterHand === "L" && pitcherThrows === "R")) {
+      platoonFactor = 0.35;
+    } else if (batterHand === "S") {
+      platoonFactor = 0.45;
+    } else {
+      platoonFactor = 0.65;
+    }
+  }
+  const slot = input.lineup.battingOrderSlot;
+  const lineupDanger = slot <= 3 ? 0.30 : slot <= 6 ? 0.50 : 0.70;
+
+  const matchup = clamp(
+    0.50 * platoonFactor +
+    0.50 * lineupDanger,
+    0, 1
+  );
+
+  const scoreDiff = Math.abs((input.currentRuns ?? 4.5) - (input.leagueAvgRuns ?? 4.5));
+  const blowout = scoreDiff >= 4 ? 0.30 : 0.70;
+  const managerLeash = pitcher.managerLeashShort ? 0.35 : 0.70;
+  const gamePhase = inning <= 3 ? 0.75 : inning <= 6 ? 0.55 : 0.35;
+
+  const context = clamp(
+    0.35 * gamePhase +
+    0.35 * managerLeash +
+    0.30 * blowout,
+    0, 1
+  );
+
+  return { stuff, command, swingMiss, fatigue, contactSuppression: contactSupp, matchup, context };
+}
+
+export function generatePitcherSignals(input: MLBPropInput, analysis: PitcherAnalysisScores): string[] {
+  const signals: string[] = [];
+  const pitcher = input.pitcher;
+
+  if (analysis.stuff >= 0.70 && analysis.swingMiss >= 0.65) signals.push("DOMINANT");
+  if (analysis.swingMiss >= 0.70 && analysis.fatigue <= 0.30) signals.push("K_STREAK");
+  if (analysis.command >= 0.70 && analysis.stuff >= 0.55) signals.push("COMMAND_LOCKED");
+  if (pitcher.isPitcherCollapsing || (pitcher.pitchCount >= 85 && analysis.fatigue >= 0.60)) signals.push("VELOCITY_DROP");
+  if (analysis.fatigue >= 0.65) signals.push("FATIGUE_RISK");
+  if (analysis.contactSuppression <= 0.35) signals.push("HARD_CONTACT");
+
+  return signals;
+}
+
 export interface BadgeResult {
   positive: string[];
   negative: string[];

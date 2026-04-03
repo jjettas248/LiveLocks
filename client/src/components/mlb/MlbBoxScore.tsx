@@ -103,7 +103,7 @@ export function MlbBoxScore({
   onAddToSlip?: (sig: MlbSignalData) => void;
 }) {
   const [search, setSearch] = useState("");
-  const [sortBy, setSortBy] = useState<"order" | "ab" | "h" | "hr" | "tb" | "k">("order");
+  const [sortBy, setSortBy] = useState<"order" | "ab" | "h" | "hr" | "tb" | "k" | "signal">("order");
   const [activeTab, setActiveTab] = useState<"all" | "away" | "home" | "signals">("all");
 
   const { data, isLoading, isRefetching, dataUpdatedAt } = useQuery<LiveStatsResponse>({
@@ -138,6 +138,11 @@ export function MlbBoxScore({
     if (sortBy === "hr") return b.hr - a.hr;
     if (sortBy === "tb") return b.tb - a.tb;
     if (sortBy === "k") return b.k - a.k;
+    if (sortBy === "signal") {
+      const sigA = getBestSignal(signals, a.playerId);
+      const sigB = getBestSignal(signals, b.playerId);
+      return (sigB?.prob ?? 0) - (sigA?.prob ?? 0);
+    }
     return 0;
   });
 
@@ -282,7 +287,14 @@ export function MlbBoxScore({
                     >K</button>
                   </th>
                   <th className="text-center px-1.5 py-1.5 font-semibold">EV</th>
-                  <th className="text-center px-1.5 py-1.5 font-semibold">Signal</th>
+                  <th className="text-center px-1.5 py-1.5 font-semibold">
+                    <button
+                      type="button"
+                      onClick={() => setSortBy("signal")}
+                      className={`hover:text-foreground ${sortBy === "signal" ? "text-primary" : ""}`}
+                      aria-label="Sort by Signal"
+                    >Signal</button>
+                  </th>
                 </tr>
               </thead>
               <tbody>

@@ -349,6 +349,9 @@ export function normalizeMLBSignal(
     hrIntensity: raw?.hrIntensity ?? null,
     rollingForm: qs.rollingForm ?? null,
 
+    pitcherAnalysis: raw?.pitcherAnalysis ?? null,
+    pitcherSignals: raw?.pitcherSignals ?? null,
+
     smartTags,
     primaryReason,
     pitchMatchupRatings,
