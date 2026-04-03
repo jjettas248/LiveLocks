@@ -169,9 +169,6 @@ const BVP_TTL = 60 * 60 * 1000;
 const LIVE_FEED_URL = (gamePk: string) =>
   `https://statsapi.mlb.com/api/v1.1/game/${gamePk}/feed/live`;
 
-const SAVANT_GF_URL = (gamePk: string) =>
-  `https://baseballsavant.mlb.com/gf?game_pk=${gamePk}`;
-
 async function fetchJson(url: string): Promise<any> {
   const res = await fetch(url, {
     headers: { "User-Agent": "LiveLocks/1.0" },
@@ -395,97 +392,124 @@ export async function syncGameBoxScore(statsPk: string, cacheKey?: string): Prom
 }
 
 // ── syncContactData ───────────────────────────────────────────────────────────
+// Uses MLB Stats API live feed (already fetched for game state) to extract
+// Statcast hitData from play-by-play events. Replaces the broken Savant /gf endpoint.
 
 export async function syncContactData(statsPk: string, cacheKey?: string): Promise<void> {
   const gameId = cacheKey ?? statsPk;
   const persistedContactKeys = new Set<string>();
 
   try {
-    const data = await fetchJson(SAVANT_GF_URL(statsPk));
+    const data = await fetchJson(LIVE_FEED_URL(statsPk));
+    const liveData = data.liveData ?? {};
+    const allPlays: any[] = liveData.plays?.allPlays ?? [];
 
     const byPlayerId: Record<string, PlayerContactData> = {};
 
-    // The Savant GF endpoint returns home_team_data and away_team_data
-    // Each contains a "bip" (balls in play) array with per-event contact data
-    for (const side of ["home_team_data", "away_team_data"]) {
-      const teamData = data[side] ?? {};
-      const bips: any[] = teamData.bip ?? [];
+    for (const play of allPlays) {
+      const batterId = play.matchup?.batter?.id;
+      if (!batterId) continue;
+      const playerId = String(batterId);
+      const batterName: string = play.matchup?.batter?.fullName ?? playerId;
 
-      for (const bip of bips) {
-        const playerId = String(bip.batter_id ?? bip.hitter_id ?? "");
-        if (!playerId || playerId === "undefined") continue;
+      if (!byPlayerId[playerId]) {
+        byPlayerId[playerId] = {
+          exitVelocity: null,
+          launchAngle: null,
+          hitDistance: null,
+          hardHitPct: null,
+          barrelPct: null,
+          xBA: null,
+          xSLG: null,
+          priorABResults: [],
+        };
+      }
 
-        if (!byPlayerId[playerId]) {
-          byPlayerId[playerId] = {
-            exitVelocity: null,
-            launchAngle: null,
-            hitDistance: null,
-            hardHitPct: null,
-            barrelPct: null,
-            xBA: null,
-            xSLG: null,
-            priorABResults: [],
-          };
+      const events: any[] = play.playEvents ?? [];
+      const resultEvent = play.result?.event ?? play.result?.description ?? "";
+      const outcome = inferOutcome(resultEvent);
+
+      let bestEV: number | null = null;
+      let bestLA: number | null = null;
+      let bestDist: number | null = null;
+      let lastPitchType: string | null = null;
+      let lastPitchSpeed: number | null = null;
+
+      for (const evt of events) {
+        if (evt.isPitch) {
+          lastPitchType = evt.details?.type?.description ?? evt.details?.type?.code ?? null;
+          lastPitchSpeed = safeNum(evt.pitchData?.startSpeed) ?? null;
         }
 
-        const ev = safeNum(bip.hit_speed ?? bip.exit_velocity);
-        const la = safeNum(bip.hit_angle ?? bip.launch_angle);
-        const dist = safeNum(bip.hit_distance ?? bip.distance);
-        const event: string = bip.result ?? bip.event ?? "";
-        const pitchType: string | null = bip.pitch_type ?? bip.pitch_name ?? null;
-        const pitchSpeed: number | null = safeNum(bip.pitch_speed ?? bip.release_speed);
+        const hitData = evt.hitData;
+        if (hitData) {
+          const ev = safeNum(hitData.launchSpeed);
+          const la = safeNum(hitData.launchAngle);
+          const dist = safeNum(hitData.totalDistance);
 
-        if (ev !== null && (byPlayerId[playerId].exitVelocity === null || ev > (byPlayerId[playerId].exitVelocity ?? 0))) {
-          byPlayerId[playerId].exitVelocity = ev;
-          byPlayerId[playerId].launchAngle = la;
-          byPlayerId[playerId].hitDistance = dist;
+          if (ev !== null) {
+            if (bestEV === null || ev > bestEV) {
+              bestEV = ev;
+              bestLA = la;
+              bestDist = dist;
+            }
+
+            if (byPlayerId[playerId].exitVelocity === null || ev > (byPlayerId[playerId].exitVelocity ?? 0)) {
+              byPlayerId[playerId].exitVelocity = ev;
+              byPlayerId[playerId].launchAngle = la;
+              byPlayerId[playerId].hitDistance = dist;
+            }
+          }
         }
+      }
 
-        const outcome = inferOutcome(event);
+      if (bestEV !== null || outcome !== "other") {
         byPlayerId[playerId].priorABResults.push({
-          exitVelocity: ev,
-          launchAngle: la,
-          distance: dist,
+          exitVelocity: bestEV,
+          launchAngle: bestLA,
+          distance: bestDist,
           outcome,
-          pitchType,
-          pitchSpeed,
+          pitchType: lastPitchType,
+          pitchSpeed: lastPitchSpeed,
         });
 
         const abIndex = byPlayerId[playerId].priorABResults.length;
-        const fingerprint = `${statsPk}:${playerId}:${abIndex}:${ev ?? 0}:${la ?? 0}`;
-        if (!persistedContactKeys.has(fingerprint) && ev != null) {
+        const fingerprint = `${statsPk}:${playerId}:${abIndex}:${bestEV ?? 0}:${bestLA ?? 0}`;
+        if (!persistedContactKeys.has(fingerprint) && bestEV != null) {
           persistedContactKeys.add(fingerprint);
-          const isBarrel = (ev ?? 0) >= 98 && (la ?? 0) >= 20 && (la ?? 0) <= 35;
+          const isBarrel = (bestEV ?? 0) >= 98 && (bestLA ?? 0) >= 20 && (bestLA ?? 0) <= 35;
           storage.insertContactEvent({
             playerId,
-            playerName: bip.batter_name ?? bip.hitter_name ?? playerId,
+            playerName: batterName,
             gameId: String(statsPk),
-            exitVelocity: ev,
-            launchAngle: la,
-            distance: dist,
+            exitVelocity: bestEV,
+            launchAngle: bestLA,
+            distance: bestDist,
             result: outcome,
-            pitchType,
-            pitchSpeed,
+            pitchType: lastPitchType,
+            pitchSpeed: lastPitchSpeed,
             isBarrel,
             eventFingerprint: fingerprint,
           }).catch(() => {});
         }
       }
+    }
 
-      // Hard hit % and barrel % from aggregate if available
-      const exitVeloList = (teamData.exit_velocity ?? []) as number[];
-      if (exitVeloList.length > 0) {
-        const hardHit = exitVeloList.filter((v) => v >= 95).length / exitVeloList.length;
-        const barrels = exitVeloList.filter((v) => v >= 98).length / exitVeloList.length;
-        // Apply to all players from this side that were touched (rough game-level fallback)
-        for (const entry of Object.values(byPlayerId)) {
-          if (entry.hardHitPct === null) entry.hardHitPct = parseFloat((hardHit * 100).toFixed(1));
-          if (entry.barrelPct === null) entry.barrelPct = parseFloat((barrels * 100).toFixed(1));
-        }
+    const allEVs: number[] = [];
+    for (const entry of Object.values(byPlayerId)) {
+      for (const ab of entry.priorABResults) {
+        if (ab.exitVelocity != null) allEVs.push(ab.exitVelocity);
+      }
+    }
+    if (allEVs.length > 0) {
+      const hardHitPct = parseFloat(((allEVs.filter((v) => v >= 95).length / allEVs.length) * 100).toFixed(1));
+      const barrelPct = parseFloat(((allEVs.filter((v) => v >= 98).length / allEVs.length) * 100).toFixed(1));
+      for (const entry of Object.values(byPlayerId)) {
+        if (entry.hardHitPct === null) entry.hardHitPct = hardHitPct;
+        if (entry.barrelPct === null) entry.barrelPct = barrelPct;
       }
     }
 
-    // Enrich xBA/xSLG for each player from Baseball Savant seasonal stats (non-blocking)
     const playerIds = Object.keys(byPlayerId);
     if (playerIds.length > 0) {
       const savantResults = await Promise.allSettled(
@@ -506,7 +530,7 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
     }
 
     mlbGameCache.contactData[gameId] = { byPlayerId, fetchedAt: Date.now() };
-    console.log(`[MLB pull] syncContactData: game ${gameId} — ${Object.keys(byPlayerId).length} players with contact data`);
+    console.log(`[MLB pull] syncContactData: game ${gameId} — ${Object.keys(byPlayerId).length} players, ${allEVs.length} BIP with hitData`);
   } catch (err: any) {
     console.error(`[MLB pull] syncContactData(${gameId}) error:`, err.message);
   }

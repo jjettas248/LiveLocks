@@ -1130,6 +1130,16 @@ export class LiveGameOrchestrator {
             pitchMix: pitcherCtx?.pitchMix ?? [],
             throws: pitcher?.throws ?? null,
           },
+          ...(market === "hrr" && boxScorePlayer ? {
+            hrrComponents: {
+              currentHits: boxScorePlayer.hits ?? 0,
+              currentRuns: (boxScorePlayer as any).r ?? 0,
+              currentRBIs: (boxScorePlayer as any).rbi ?? 0,
+              hitsRate: effectiveSeasonAvg,
+              runsRate: 0.10,
+              rbisRate: 0.12,
+            },
+          } : {}),
           ...(bvpData && bvpData.atBats > 0 ? {
             bvpHistory: {
               atBats: bvpData.atBats,

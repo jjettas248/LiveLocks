@@ -30,6 +30,7 @@ export interface BaseballSavantData {
 
 // Cache for Savant data (updated infrequently — season stats)
 const savantCache = new Map<string, { data: BaseballSavantData; fetchedAt: number }>();
+let savantColumnsLogged = false;
 const SAVANT_TTL = 30 * 60 * 1000; // 30 min
 
 function safeNum(v: unknown): number | null {
@@ -154,9 +155,43 @@ export async function fetchBallparkPalData(
 // ── Baseball Savant Statcast Data ─────────────────────────────────────────────
 // For batters: xBA, xSLG, exit velo, hard hit %, barrel %
 // For pitchers: pitch mix %, avg fastball velocity/spin
-// Uses Baseball Savant CSV endpoint (public, no auth required).
-// CSV columns include: player_id, exit_velocity_avg, launch_angle_avg,
-// hit_distance_sc, hard_hit_percent, barrel_batted_rate, xba, xslg, etc.
+// Primary: Statcast Search CSV endpoint (same as pybaseball uses).
+// Fallback: MLB Stats API season stats for batting average / slugging.
+
+function splitCSVRow(line: string): string[] {
+  const cols: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+    } else if (ch === "," && !inQuotes) {
+      cols.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  cols.push(current.trim());
+  return cols;
+}
+
+function parseSavantCSV(text: string): Array<Record<string, string>> {
+  const lines = text.split("\n");
+  if (lines.length < 2) return [];
+  const headers = splitCSVRow(lines[0]).map((h) => h.toLowerCase().replace(/"/g, ""));
+  const rows: Array<Record<string, string>> = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const cols = splitCSVRow(lines[i]);
+    if (cols.length < headers.length * 0.5) continue;
+    const row: Record<string, string> = {};
+    headers.forEach((h, idx) => { row[h] = cols[idx] ?? ""; });
+    rows.push(row);
+  }
+  return rows;
+}
 
 export async function fetchBaseballSavantData(
   mlbPlayerId: string,
@@ -181,103 +216,150 @@ export async function fetchBaseballSavantData(
   const cached = savantCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < SAVANT_TTL) return cached.data;
 
+  let xBA: number | null = null;
+  let xSLG: number | null = null;
+  let exitVelocity: number | null = null;
+  let launchAngle: number | null = null;
+  let hitDistance: number | null = null;
+  let hardHitRateSeason: number | null = null;
+  let barrelRateProxySeason: number | null = null;
+  let avgFastballVelocity: number | null = null;
+  let avgFastballSpin: number | null = null;
+  const pitchMixPct = { fastball: null as number | null, breaking: null as number | null, offspeed: null as number | null };
+
   try {
     const currentYear = new Date().getFullYear();
-    const batterUrl =
-      `https://baseballsavant.mlb.com/percentile-rankings?type=batter&year=${currentYear}&position=&team=&csv=true`;
-    const pitcherUrl =
-      `https://baseballsavant.mlb.com/percentile-rankings?type=pitcher&year=${currentYear}&position=&team=&csv=true`;
+    const seasonStart = `${currentYear}-01-01`;
+    const today = new Date().toISOString().split("T")[0];
 
-    // Fetch batter Statcast data
+    const batterUrl = `https://baseballsavant.mlb.com/statcast_search/csv?all=true&hfPT=&hfAB=&hfGT=R%7C&hfPR=&hfZ=&hfStadium=&hfBBL=&hfNewZones=&hfPull=&hfC=&hfSea=${currentYear}%7C&hfSit=&player_type=batter&hfOuts=&hfOpponent=&pitcher_throws=&batter_stands=&hfSA=&game_date_gt=${seasonStart}&game_date_lt=${today}&hfMo=&hfTeam=&home_road=&hfRO=&position=&hfInfield=&hfOutfield=&hfInn=&hfBBT=&hfFlag=&metric_1=&group_by=name&min_pitches=0&min_results=0&min_pa=1&sort_col=pitches&player_event_sort=api_p_release_speed&sort_order=desc&batters_lookup%5B%5D=${mlbPlayerId}&type=details`;
+    const pitcherUrl = `https://baseballsavant.mlb.com/statcast_search/csv?all=true&hfPT=&hfAB=&hfGT=R%7C&hfPR=&hfZ=&hfStadium=&hfBBL=&hfNewZones=&hfPull=&hfC=&hfSea=${currentYear}%7C&hfSit=&player_type=pitcher&hfOuts=&hfOpponent=&pitcher_throws=&batter_stands=&hfSA=&game_date_gt=${seasonStart}&game_date_lt=${today}&hfMo=&hfTeam=&home_road=&hfRO=&position=&hfInfield=&hfOutfield=&hfInn=&hfBBT=&hfFlag=&metric_1=&group_by=name&min_pitches=0&min_results=0&min_pa=1&sort_col=pitches&player_event_sort=api_p_release_speed&sort_order=desc&pitchers_lookup%5B%5D=${mlbPlayerId}&type=details`;
+
     const [batterRes, pitcherRes] = await Promise.allSettled([
       fetch(batterUrl, {
-        headers: { "User-Agent": "LiveLocks/1.0" },
-        signal: AbortSignal.timeout(10000),
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; LiveLocks/1.0)" },
+        signal: AbortSignal.timeout(12000),
       }),
       fetch(pitcherUrl, {
-        headers: { "User-Agent": "LiveLocks/1.0" },
-        signal: AbortSignal.timeout(10000),
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; LiveLocks/1.0)" },
+        signal: AbortSignal.timeout(12000),
       }),
     ]);
 
-    let xBA: number | null = null;
-    let xSLG: number | null = null;
-    let exitVelocity: number | null = null;
-    let launchAngle: number | null = null;
-    let hitDistance: number | null = null;
-    let hardHitRateSeason: number | null = null;
-    let barrelRateProxySeason: number | null = null;
-    let avgFastballVelocity: number | null = null;
-    let avgFastballSpin: number | null = null;
-    const pitchMixPct = { fastball: null as number | null, breaking: null as number | null, offspeed: null as number | null };
-
     if (batterRes.status === "fulfilled" && batterRes.value.ok) {
       const text = await batterRes.value.text();
-      const lines = text.split("\n");
-      if (lines.length >= 2) {
-        const headers = lines[0].split(",").map((h) => h.trim().toLowerCase().replace(/"/g, ""));
-        for (let i = 1; i < lines.length; i++) {
-          const cols = lines[i].split(",").map((c) => c.trim().replace(/"/g, ""));
-          if (!cols[0]) continue;
-          const playerIdCol = headers.indexOf("player_id") >= 0 ? headers.indexOf("player_id") : 0;
-          if (String(cols[playerIdCol]) !== String(mlbPlayerId)) continue;
-
-          const get = (key: string) => {
-            const idx = headers.indexOf(key);
-            return idx >= 0 ? safeNum(cols[idx]) : null;
-          };
-
-          // Only use raw decimal columns — percentile fallbacks (xba_percentile, xslg_percentile)
-          // are on a 0-100 scale and would cause scale mismatch in applyXBAModifier/applyXSLGModifier
-          // which compare against league averages in decimal form (0.243, 0.400).
-          const rawXBA = get("xba");
-          const rawXSLG = get("xslg");
-          xBA = rawXBA != null && rawXBA <= 2.0 ? rawXBA : null;
-          xSLG = rawXSLG != null && rawXSLG <= 4.0 ? rawXSLG : null;
-          exitVelocity = get("exit_velocity_avg") ?? get("avg_ev");
-          launchAngle = get("launch_angle_avg");
-          hitDistance = get("hit_distance_sc");
-          hardHitRateSeason = get("hard_hit_percent");
-          barrelRateProxySeason = get("barrel_batted_rate");
-          break;
+      const rows = parseSavantCSV(text);
+      if (rows.length > 0) {
+        if (!savantColumnsLogged) {
+          savantColumnsLogged = true;
+          const sampleRow = rows[0];
+          const colKeys = Object.keys(sampleRow);
+          console.log(`[Savant CSV] columns(${colKeys.length}): ${colKeys.slice(0, 15).join(", ")}...`);
+          console.log(`[Savant CSV] sample bb_type="${sampleRow["bb_type"]}" launch_speed="${sampleRow["launch_speed"]}" launch_angle="${sampleRow["launch_angle"]}" estimated_ba="${sampleRow["estimated_ba_using_speedangle"]}"`);
         }
+
+        const evs: number[] = [];
+        const las: number[] = [];
+        const dists: number[] = [];
+        let hardHits = 0;
+        let barrels = 0;
+        let totalBIP = 0;
+        let xbaSum = 0;
+        let xbaCount = 0;
+        let xslgSum = 0;
+        let xslgCount = 0;
+        let totalRows = 0;
+        let bipRows = 0;
+
+        for (const row of rows) {
+          totalRows++;
+          const bbType = (row["bb_type"] ?? "").trim();
+          if (!bbType) continue;
+          bipRows++;
+
+          const ev = safeNum(row["launch_speed"]);
+          const la = safeNum(row["launch_angle"]);
+          const dist = safeNum(row["hit_distance_sc"]);
+          const rawXBA = row["estimated_ba_using_speedangle"]?.trim();
+          const rawXSLG = row["estimated_slg_using_speedangle"]?.trim();
+          const rowXBA = rawXBA && rawXBA !== "" ? safeNum(rawXBA) : null;
+          const rowXSLG = rawXSLG && rawXSLG !== "" ? safeNum(rawXSLG) : null;
+
+          if (ev != null && ev > 0 && ev <= 130) {
+            evs.push(ev);
+            totalBIP++;
+            if (ev >= 95) hardHits++;
+            if (ev >= 98 && la != null && la >= 20 && la <= 35) barrels++;
+          }
+          if (la != null && ev != null && ev > 0 && ev <= 130) las.push(la);
+          if (dist != null && dist > 0 && dist <= 500) dists.push(dist);
+          if (rowXBA != null && rowXBA > 0 && rowXBA <= 1.0) { xbaSum += rowXBA; xbaCount++; }
+          if (rowXSLG != null && rowXSLG > 0 && rowXSLG <= 4.0) { xslgSum += rowXSLG; xslgCount++; }
+        }
+
+        if (evs.length > 0) exitVelocity = parseFloat((evs.reduce((a, b) => a + b, 0) / evs.length).toFixed(1));
+        if (las.length > 0) launchAngle = parseFloat((las.reduce((a, b) => a + b, 0) / las.length).toFixed(1));
+        if (dists.length > 0) hitDistance = parseFloat((dists.reduce((a, b) => a + b, 0) / dists.length).toFixed(0));
+        if (totalBIP > 0) {
+          hardHitRateSeason = parseFloat(((hardHits / totalBIP) * 100).toFixed(1));
+          barrelRateProxySeason = parseFloat(((barrels / totalBIP) * 100).toFixed(1));
+        }
+        if (xbaCount > 0) xBA = parseFloat((xbaSum / xbaCount).toFixed(3));
+        if (xslgCount > 0) xSLG = parseFloat((xslgSum / xslgCount).toFixed(3));
       }
     } else {
-      console.warn("[Savant] Batter data fetch failed", batterRes.status === "rejected" ? batterRes.reason : "HTTP error");
+      console.warn("[Savant] Batter CSV fetch failed — trying MLB Stats API fallback");
+      try {
+        const fallbackUrl = `https://statsapi.mlb.com/api/v1/people/${mlbPlayerId}/stats?stats=season&group=hitting&season=${new Date().getFullYear()}&gameType=R`;
+        const fbRes = await fetch(fallbackUrl, { signal: AbortSignal.timeout(8000) });
+        if (fbRes.ok) {
+          const fbData = await fbRes.json();
+          const splits = fbData.stats?.[0]?.splits ?? [];
+          if (splits.length > 0) {
+            const s = splits[0].stat ?? {};
+            xBA = safeNum(s.avg);
+            xSLG = safeNum(s.slg);
+          }
+        }
+      } catch {}
     }
 
     if (pitcherRes.status === "fulfilled" && pitcherRes.value.ok) {
       const text = await pitcherRes.value.text();
-      const lines = text.split("\n");
-      if (lines.length >= 2) {
-        const headers = lines[0].split(",").map((h) => h.trim().toLowerCase().replace(/"/g, ""));
-        for (let i = 1; i < lines.length; i++) {
-          const cols = lines[i].split(",").map((c) => c.trim().replace(/"/g, ""));
-          if (!cols[0]) continue;
-          const playerIdCol = headers.indexOf("player_id") >= 0 ? headers.indexOf("player_id") : 0;
-          if (String(cols[playerIdCol]) !== String(mlbPlayerId)) continue;
+      const rows = parseSavantCSV(text);
+      if (rows.length > 0) {
+        const velos: number[] = [];
+        const spins: number[] = [];
+        const pitchTypeCounts: Record<string, number> = {};
 
-          const get = (key: string) => {
-            const idx = headers.indexOf(key);
-            return idx >= 0 ? safeNum(cols[idx]) : null;
-          };
+        for (const row of rows) {
+          const vel = safeNum(row["release_speed"]);
+          const spin = safeNum(row["release_spin_rate"]);
+          const pType = (row["pitch_type"] ?? "").toUpperCase();
 
-          avgFastballVelocity = get("fastball_avg_speed") ?? get("ff_avg_speed");
-          avgFastballSpin = get("fastball_avg_spin") ?? get("ff_avg_spin");
-          const ffPct = get("ff_percent") ?? get("fastball_percent");
-          const slPct = get("sl_percent") ?? get("slider_percent");
-          const cuPct = get("cu_percent") ?? get("curveball_percent");
-          const chPct = get("ch_percent") ?? get("changeup_percent");
-          if (ffPct != null) {
-            pitchMixPct.fastball = ffPct;
-            pitchMixPct.breaking = (slPct ?? 0) + (cuPct ?? 0);
-            pitchMixPct.offspeed = chPct ?? null;
-          }
-          break;
+          if (vel != null) velos.push(vel);
+          if (spin != null) spins.push(spin);
+          if (pType) pitchTypeCounts[pType] = (pitchTypeCounts[pType] ?? 0) + 1;
+        }
+
+        if (velos.length > 0) avgFastballVelocity = parseFloat((velos.reduce((a, b) => a + b, 0) / velos.length).toFixed(1));
+        if (spins.length > 0) avgFastballSpin = parseFloat((spins.reduce((a, b) => a + b, 0) / spins.length).toFixed(0));
+
+        const totalP = Object.values(pitchTypeCounts).reduce((a, b) => a + b, 0);
+        if (totalP > 0) {
+          const fbTypes = ["FF", "SI", "FC", "FT"];
+          const breakingTypes = ["SL", "CU", "KC", "CS", "SV", "ST"];
+          const offspeedTypes = ["CH", "FS", "SC", "KN"];
+          const fbCount = fbTypes.reduce((s, t) => s + (pitchTypeCounts[t] ?? 0), 0);
+          const brCount = breakingTypes.reduce((s, t) => s + (pitchTypeCounts[t] ?? 0), 0);
+          const osCount = offspeedTypes.reduce((s, t) => s + (pitchTypeCounts[t] ?? 0), 0);
+          pitchMixPct.fastball = parseFloat(((fbCount / totalP) * 100).toFixed(1));
+          pitchMixPct.breaking = parseFloat(((brCount / totalP) * 100).toFixed(1));
+          pitchMixPct.offspeed = parseFloat(((osCount / totalP) * 100).toFixed(1));
         }
       }
     } else {
-      console.warn("[Savant] Pitcher data fetch failed", pitcherRes.status === "rejected" ? pitcherRes.reason : "HTTP error");
+      console.warn("[Savant] Pitcher CSV fetch failed");
     }
 
     const result: BaseballSavantData = {
@@ -303,7 +385,27 @@ export async function fetchBaseballSavantData(
     return result;
   } catch (err: any) {
     console.warn(`[Savant] fetchBaseballSavantData(${mlbPlayerId}) error:`, err.message);
-    return nullResult;
+
+    const fallbackResult = { ...nullResult };
+    try {
+      const currentYear = new Date().getFullYear();
+      const fallbackUrl = `https://statsapi.mlb.com/api/v1/people/${mlbPlayerId}/stats?stats=season&group=hitting&season=${currentYear}&gameType=R`;
+      const fbRes = await fetch(fallbackUrl, { signal: AbortSignal.timeout(8000) });
+      if (fbRes.ok) {
+        const fbData = await fbRes.json();
+        const splits = fbData.stats?.[0]?.splits ?? [];
+        if (splits.length > 0) {
+          const s = splits[0].stat ?? {};
+          fallbackResult.xBA = safeNum(s.avg);
+          fallbackResult.xSLG = safeNum(s.slg);
+          if (fallbackResult.xBA != null || fallbackResult.xSLG != null) {
+            savantCache.set(cacheKey, { data: fallbackResult, fetchedAt: Date.now() });
+            console.log(`[Savant] MLB API fallback for ${mlbPlayerId}: BA=${fallbackResult.xBA} SLG=${fallbackResult.xSLG}`);
+          }
+        }
+      }
+    } catch {}
+    return fallbackResult;
   }
 }
 

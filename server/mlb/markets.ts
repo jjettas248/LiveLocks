@@ -1309,14 +1309,36 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
 }
 
 export function calculateHRREdge(input: MLBPropInput): MLBPropOutput {
-  let hrrRate = input.atBats > 0 ? (input.currentStatValue ?? 0) / input.atBats : 0.50;
-  hrrRate = applyParkModifier(hrrRate, input.weatherPark.parkFactor);
-  const rpa = input.remainingPA ?? 2;
+  const hrrInput = { ...input, market: "hrr" as MLBMarket };
+  const features = computeFullFeatureLayer(hrrInput);
+  const currentHRR = hrrInput.currentStatValue ?? 0;
 
-  return buildOutput({ ...input, market: "hrr" }, {
+  const hitRate = computeHitRate(hrrInput);
+  const rbiRate = input.atBats > 0
+    ? Math.max(0.05, (input.hrrComponents?.currentRBIs ?? 0) / Math.max(1, input.atBats))
+    : input.hrrComponents?.rbisRate ?? 0.12;
+  const runRate = input.atBats > 0
+    ? Math.max(0.05, (input.hrrComponents?.currentRuns ?? 0) / Math.max(1, input.atBats))
+    : input.hrrComponents?.runsRate ?? 0.10;
+
+  let hrrRate = hitRate + rbiRate + runRate;
+  hrrRate = applyParkModifier(hrrRate, input.weatherPark.parkFactor);
+
+  const pitcherVuln = features.pitcherSuppression < 0.3 ? 1.08 : features.pitcherSuppression > 0.7 ? 0.92 : 1.0;
+  hrrRate *= pitcherVuln;
+
+  if (features.contactQuality > 0.6) hrrRate *= 1 + 0.06 * features.contactQuality;
+  if (features.hotColdForm > 0.3) hrrRate *= 1 + 0.04 * features.hotColdForm;
+  if (features.lineupOpportunity > 0.5) hrrRate *= 1 + 0.03 * features.lineupOpportunity;
+
+  hrrRate = Math.max(0.05, Math.min(1.5, hrrRate));
+
+  const rpa = hrrInput.remainingPA ?? 2;
+
+  return buildOutput(hrrInput, {
     adjustedRate: hrrRate,
     remainingPA: rpa,
-    currentStatValue: input.currentStatValue ?? 0,
+    currentStatValue: currentHRR,
   });
 }
 
