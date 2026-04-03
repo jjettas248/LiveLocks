@@ -1,4 +1,4 @@
-import { useState, useEffect, Component, type ReactNode } from "react";
+import { useState, useEffect, useRef, Component, type ReactNode } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -11,7 +11,13 @@ import type { MLBSignal } from "@shared/mlbSignal";
 import { ProbabilityRing } from "@/components/probability-ring";
 import { SkeletonCard } from "@/components/sports/SkeletonCard";
 import { EmptyState } from "@/components/sports/EmptyState";
-import { Radio, Target, RefreshCw, Calculator, Loader2, Flame, Zap, TrendingUp, Trophy, Eye, ChevronDown, ChevronUp, Bell, Activity, Check, X, Clock, BarChart3 } from "lucide-react";
+import { Radio, Target, RefreshCw, Calculator, Loader2, Flame, Zap, Trophy, Eye, ChevronDown, ChevronUp, Bell, Activity, X, BarChart3, Plus, ExternalLink } from "lucide-react";
+import {
+  mapHrRadarCardToUi, mapAlertToUi, formatTriggerReason,
+  radarScoreToTier, launchAngleLabel, formatMlbDisplayValue,
+  sanitizeDisplayString, mapPitcherSignals, liveScoreToGrade,
+  type HrRadarCardUi,
+} from "@/lib/mlbUiMappers";
 
 class MLBErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
   constructor(props: { children: ReactNode }) {
@@ -549,148 +555,6 @@ function GameSignalsPanel({ signals, isElite, onAddToSlip }: {
   );
 }
 
-function HRPlayerCard({ player, type, onQuickAdd }: { player: any; type: "watch" | "edge" | "cashed"; onQuickAdd?: (sig: MlbSignalData) => void }) {
-  const [expanded, setExpanded] = useState(false);
-  const reasons = player.explanationBullets ?? player.reasons ?? [];
-  const edgeVal = player.edge ?? 0;
-
-  const borderClass = type === "cashed"
-    ? "border-emerald-500/40 bg-emerald-500/5"
-    : type === "edge"
-    ? edgeVal > 0 ? "border-green-500/30 bg-green-500/5" : "border-orange-500/30 bg-orange-500/5"
-    : "border-border/40 bg-card";
-
-  const statusLabel = type === "cashed" ? "CASHED" : type === "edge" ? "EDGE" : "WATCH";
-  const statusColor = type === "cashed" ? "bg-emerald-500/20 text-emerald-400" : type === "edge" ? "bg-green-500/20 text-green-400" : "bg-yellow-500/20 text-yellow-400";
-
-  return (
-    <div
-      data-testid={`card-hr-${type}-${player.playerId}`}
-      role="button"
-      tabIndex={0}
-      aria-expanded={expanded}
-      className={`rounded-xl border p-3 space-y-2 cursor-pointer transition-all ${borderClass} hover:shadow-md`}
-      onClick={() => setExpanded(!expanded)}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(!expanded); } }}
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
-          {type === "cashed" && <Trophy className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
-          {type === "edge" && <Flame className="w-3.5 h-3.5 text-red-500 shrink-0" />}
-          {type === "watch" && <Eye className="w-3.5 h-3.5 text-yellow-500 shrink-0" />}
-          <span className="text-sm font-bold text-foreground truncate">{player.playerName}</span>
-          <span className="text-[10px] text-muted-foreground shrink-0">{player.team}</span>
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${statusColor}`}>{statusLabel}</span>
-          {player.confidenceTier && player.confidenceTier !== "WATCHLIST" && (
-            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-              player.confidenceTier === "ELITE" ? "bg-yellow-500/20 text-yellow-400" :
-              player.confidenceTier === "STRONG" ? "bg-green-500/20 text-green-400" :
-              "bg-muted/30 text-muted-foreground"
-            }`}>{player.confidenceTier}</span>
-          )}
-          {expanded ? <ChevronUp className="w-3 h-3 text-muted-foreground" /> : <ChevronDown className="w-3 h-3 text-muted-foreground" />}
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2 text-[10px] flex-wrap">
-        {type === "edge" && (
-          <>
-            <span className="text-green-400 font-bold">{player.side} {player.line?.toFixed(1)}</span>
-            <span className="text-muted-foreground/40">|</span>
-            <span className={`font-bold ${edgeVal > 0 ? "text-green-400" : "text-muted-foreground"}`}>
-              {edgeVal > 0 ? "+" : ""}{edgeVal.toFixed(1)}% Edge
-            </span>
-            <span className="text-muted-foreground/40">|</span>
-            <span className="text-foreground">{player.engineProbability?.toFixed(1)}% Prob</span>
-          </>
-        )}
-        {type === "watch" && (
-          <>
-            <span className="text-foreground">HR Prob: <span className="font-bold">{typeof player.hrProbability === "number" ? (player.hrProbability * 100).toFixed(0) : "0"}%</span></span>
-            {player.hardHitEvents > 0 && <span className="text-orange-400 font-semibold">{player.hardHitEvents} Hard Hits</span>}
-            {player.parkFactor != null && player.parkFactor > 1 && <span className="text-green-400">Favorable Park</span>}
-            {player.windFactor && player.windFactor !== "neutral" && <span>{player.windFactor === "favorable" ? "Wind Out" : "Wind In"}</span>}
-          </>
-        )}
-        {type === "cashed" && (
-          <span className="text-emerald-400 font-bold">HR \u2713</span>
-        )}
-        {player.inning && <span className="text-muted-foreground">Inn {player.inning}</span>}
-      </div>
-
-      {Array.isArray(player.badges) && player.badges.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {player.badges.map((b: string) => (
-            <span key={b} className="text-[8px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400 font-semibold">{b}</span>
-          ))}
-        </div>
-      )}
-
-      {expanded && (
-        <div className="space-y-2 pt-1 border-t border-border/20 animate-in slide-in-from-top-1 duration-200">
-          {type === "edge" && (
-            <div className="grid grid-cols-3 gap-2 text-center">
-              <div className="bg-secondary/30 rounded-lg p-1.5">
-                <div className="text-[8px] text-muted-foreground">Projection</div>
-                <div className="text-xs font-bold text-foreground">{player.projection?.toFixed(2) ?? ""}</div>
-              </div>
-              <div className="bg-secondary/30 rounded-lg p-1.5">
-                <div className="text-[8px] text-muted-foreground">Edge</div>
-                <div className={`text-xs font-bold ${edgeVal > 0 ? "text-green-400" : "text-muted-foreground"}`}>
-                  {edgeVal > 0 ? "+" : ""}{edgeVal.toFixed(1)}%
-                </div>
-              </div>
-              <div className="bg-secondary/30 rounded-lg p-1.5">
-                <div className="text-[8px] text-muted-foreground">Signal</div>
-                <div className="text-xs font-bold text-foreground">{player.signalScore}/100</div>
-              </div>
-            </div>
-          )}
-          {player.hrBuildScore != null && (
-            <div className="flex items-center gap-2 text-[10px]">
-              <span className="text-muted-foreground">Radar Score:</span>
-              <span className={`font-bold ${player.hrBuildScore >= 5 ? "text-red-400" : player.hrBuildScore >= 3.5 ? "text-yellow-400" : "text-muted-foreground"}`}>{player.hrBuildScore.toFixed(1)}/10</span>
-            </div>
-          )}
-          {reasons.length > 0 && (
-            <div className="space-y-0.5">
-              {reasons.slice(0, 5).map((r: string, i: number) => (
-                <p key={i} className="text-[10px] text-muted-foreground flex items-start gap-1">
-                  <span className="text-primary/50 mt-px">\u2022</span><span>{r}</span>
-                </p>
-              ))}
-            </div>
-          )}
-          {type === "edge" && onQuickAdd && (
-            <button
-              data-testid={`button-hr-quick-add-${player.playerId}`}
-              className="w-full py-2 rounded-lg text-[10px] font-semibold transition-colors flex items-center justify-center gap-1 min-h-[36px]"
-              style={{ background: "rgba(34,197,94,0.12)", color: "#22c55e", border: "1px solid rgba(34,197,94,0.3)" }}
-              onClick={(e) => {
-                e.stopPropagation();
-                onQuickAdd({
-                  playerId: player.playerId,
-                  playerName: player.playerName,
-                  market: "home_runs",
-                  bookLine: player.line ?? 0.5,
-                  enginePct: player.engineProbability ?? 0,
-                  edge: player.edge ?? null,
-                  recommendedSide: player.side ?? "OVER",
-                  gameId: player.gameId ?? "",
-                  sportsbook: player.sportsbook ?? "draftkings",
-                } as MlbSignalData);
-              }}
-            >
-              + Add HR to Slip
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function BuildScoreMeter({ score, size = "sm" }: { score: number; size?: "sm" | "lg" }) {
   const pct = Math.min((score / 10) * 100, 100);
@@ -706,114 +570,218 @@ function BuildScoreMeter({ score, size = "sm" }: { score: number; size?: "sm" | 
   );
 }
 
-function OutcomeBadge({ outcome }: { outcome: string | null }) {
-  if (outcome === "HR") return (
-    <span className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400" data-testid="badge-outcome-hr">
-      <Check className="w-2.5 h-2.5" /> HR
-    </span>
-  );
-  if (outcome === "NO_HR") return (
-    <span className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-zinc-500/20 text-zinc-400" data-testid="badge-outcome-no-hr">
-      <X className="w-2.5 h-2.5" /> No HR
-    </span>
-  );
+
+function RadarCardOddsChips({ playerName, team, gameTeams }: { playerName: string; team: string; gameTeams: { awayAbbr: string; homeAbbr: string } | null }) {
+  type OddsEntry = { line: number; overOdds: number; underOdds: number; sportsbook: string };
+  const playerTeam = team || (gameTeams?.homeAbbr ?? "");
+  const opponentTeam = playerTeam === gameTeams?.homeAbbr ? (gameTeams?.awayAbbr ?? "") : (gameTeams?.homeAbbr ?? "");
+  const { data: oddsData, isLoading } = useQuery<Record<string, OddsEntry>>({
+    queryKey: ["/api/mlb/odds", playerName, "home_runs", playerTeam, opponentTeam],
+    queryFn: async () => {
+      if (!playerName || !gameTeams) return {};
+      const params = new URLSearchParams({
+        playerName,
+        statType: "home_runs",
+        playerTeam,
+        opponentTeam,
+        inPlay: "true",
+      });
+      const res = await fetch(`/api/mlb/odds?${params}`, { credentials: "include" });
+      if (!res.ok) return {};
+      return res.json();
+    },
+    enabled: !!playerName && !!gameTeams,
+    staleTime: 60_000,
+  });
+  const entries = Object.entries(oddsData ?? {})
+    .filter(([k]) => !k.startsWith("_"))
+    .map(([book, v]) => { const entry = v as OddsEntry; return { ...entry, sportsbook: book }; });
+
+  if (isLoading) return <div className="text-[9px] text-muted-foreground/50 flex items-center gap-1"><Loader2 className="w-2.5 h-2.5 animate-spin" /> Loading books...</div>;
+  if (entries.length === 0) return null;
+
   return (
-    <span className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400 animate-pulse" data-testid="badge-outcome-live">
-      <Clock className="w-2.5 h-2.5" /> Live
-    </span>
+    <div className="space-y-1" data-testid="radar-odds-chips">
+      <div className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">HR Lines by Book</div>
+      <div className="flex gap-1.5 overflow-x-auto pb-0.5 scrollbar-thin">
+        {entries.map((o) => (
+          <div
+            key={o.sportsbook}
+            data-testid={`radar-book-${o.sportsbook}`}
+            className="flex-shrink-0 text-[9px] px-2.5 py-1.5 rounded-lg border border-border/40 bg-secondary/30 text-muted-foreground"
+          >
+            <div className="font-semibold text-foreground">{BOOK_DISPLAY[o.sportsbook] ?? o.sportsbook}</div>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span className="font-bold tabular-nums">{o.line}</span>
+              <span className="text-green-400 tabular-nums">O {formatOdds(o.overOdds)}</span>
+              <span className="text-blue-400 tabular-nums">U {formatOdds(o.underOdds)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
-function AlertTimeAgo({ createdAt }: { createdAt: string | null }) {
-  if (!createdAt) return null;
-  const diffMs = Date.now() - new Date(createdAt).getTime();
-  const mins = Math.floor(diffMs / 60000);
-  if (mins < 1) return <span className="text-[9px] text-muted-foreground">just now</span>;
-  if (mins < 60) return <span className="text-[9px] text-muted-foreground">{mins}m ago</span>;
-  const hrs = Math.floor(mins / 60);
-  return <span className="text-[9px] text-muted-foreground">{hrs}h ago</span>;
-}
+function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
+  card: HrRadarCardUi;
+  onQuickAdd?: (sig: MlbSignalData) => void;
+  onOpenDetails?: (card: HrRadarCardUi) => void;
+  gameTeams?: { awayAbbr: string; homeAbbr: string } | null;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const isCashed = card.status === "CASHED";
+  const isMissed = card.status === "MISSED";
+  const isAlert = card.status === "ALERT";
+  const isPending = card.status === "PENDING";
 
-function EarlyAlertCard({ alert }: { alert: HRAlert }) {
-  const isEarly = alert.alertType === "HR_EARLY";
-  const borderColor = alert.outcome === "HR" ? "border-emerald-500/40" : isEarly ? "border-red-500/40" : "border-yellow-500/30";
-  const bgColor = alert.outcome === "HR" ? "bg-emerald-500/5" : isEarly ? "bg-red-500/5" : "bg-yellow-500/5";
-  const pulseClass = alert.outcome === null && isEarly ? "animate-pulse" : "";
+  const borderClass = isCashed
+    ? "border-emerald-500/40 bg-emerald-500/5"
+    : isMissed
+    ? "border-zinc-500/30 bg-zinc-500/5"
+    : isAlert
+    ? "border-red-500/40 bg-red-500/5"
+    : "border-yellow-500/30 bg-yellow-500/5";
+  const pulseClass = isAlert && !isCashed && !isMissed ? "animate-pulse" : "";
 
-  const factorTags: { label: string; color: string }[] = [];
-  if (alert.factors) {
-    if (alert.factors.barrels > 0) factorTags.push({ label: `${alert.factors.barrels} Barrel${alert.factors.barrels > 1 ? "s" : ""}`, color: "text-red-400 bg-red-500/10" });
-    if (alert.factors.hardHits > 0) factorTags.push({ label: `${alert.factors.hardHits} Hard Hit${alert.factors.hardHits > 1 ? "s" : ""}`, color: "text-orange-400 bg-orange-500/10" });
-    if (alert.factors.deepFlyouts > 0) factorTags.push({ label: `${alert.factors.deepFlyouts} Deep Fly${alert.factors.deepFlyouts > 1 ? "s" : ""}`, color: "text-amber-400 bg-amber-500/10" });
-    if ((alert.factors.maxEV ?? 0) >= 100) factorTags.push({ label: `${alert.factors.maxEV?.toFixed(0)} EV`, color: "text-red-400 bg-red-500/10" });
-    else if ((alert.factors.maxEV ?? 0) >= 90) factorTags.push({ label: `${alert.factors.maxEV?.toFixed(0)} EV`, color: "text-orange-400 bg-orange-500/10" });
-    if ((alert.factors.platoonBoost ?? 0) > 0) factorTags.push({ label: "Platoon", color: "text-blue-400 bg-blue-500/10" });
-    if ((alert.factors.pitcherFatigueBoost ?? 0) > 0) factorTags.push({ label: "Fatigue", color: "text-purple-400 bg-purple-500/10" });
-    if ((alert.factors.parkWindBoost ?? 0) > 0) factorTags.push({ label: "Park/Wind", color: "text-cyan-400 bg-cyan-500/10" });
-  }
+  const statusBadge = isCashed
+    ? { label: "CASHED", cls: "bg-emerald-500/15 text-emerald-400" }
+    : isMissed
+    ? { label: "MISSED", cls: "bg-zinc-500/15 text-zinc-400" }
+    : isAlert
+    ? { label: "ACTIVE ALERT", cls: "bg-red-500/15 text-red-400" }
+    : isPending
+    ? { label: "PENDING", cls: "bg-blue-500/15 text-blue-400" }
+    : { label: "WATCHING", cls: "bg-yellow-500/15 text-yellow-400" };
 
   return (
     <div
-      data-testid={`card-hr-alert-${alert.playerId}`}
-      className={`rounded-xl border ${borderColor} ${bgColor} p-3 space-y-2 ${pulseClass}`}
+      data-testid={`card-hr-radar-${card.playerId}`}
+      className={`rounded-xl border ${borderClass} p-3 space-y-2 ${pulseClass} cursor-pointer transition-all hover:shadow-md`}
+      onClick={() => setExpanded(!expanded)}
+      role="button"
+      tabIndex={0}
+      aria-expanded={expanded}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(!expanded); } }}
     >
       <div className="flex items-center gap-2">
-        <div className={`w-7 h-7 rounded-full flex items-center justify-center ${isEarly ? "bg-red-500/20" : "bg-yellow-500/20"}`}>
-          {isEarly ? <Flame className="w-4 h-4 text-red-500" /> : <Zap className="w-4 h-4 text-yellow-500" />}
+        <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{ background: `${card.radarTierColor}20` }}>
+          {isCashed ? <Trophy className="w-4 h-4 text-emerald-400" /> :
+           isAlert ? <Flame className="w-4 h-4" style={{ color: card.radarTierColor }} /> :
+           isMissed ? <X className="w-4 h-4 text-zinc-400" /> :
+           <Eye className="w-4 h-4" style={{ color: card.radarTierColor }} />}
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
-            <span className="text-sm font-bold text-foreground truncate">{alert.playerName}</span>
-            {alert.teamAbbr && <span className="text-[10px] text-muted-foreground shrink-0">{alert.teamAbbr}</span>}
+            <span className="text-sm font-bold text-foreground truncate">{card.playerName}</span>
+            {card.team && <span className="text-[10px] text-muted-foreground shrink-0">{card.team}</span>}
           </div>
-          <div className="flex items-center gap-1.5">
-            {alert.inning && <span className="text-[10px] text-muted-foreground">Inn {alert.inning}</span>}
-            <AlertTimeAgo createdAt={alert.createdAt} />
+          <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            {card.detectedInning != null && <span>Detected: {card.detectedInning}{card.detectedInning === 1 ? "st" : card.detectedInning === 2 ? "nd" : card.detectedInning === 3 ? "rd" : "th"}</span>}
+            {card.latestInning != null && card.latestInning !== card.detectedInning && <span>| Updated: {card.latestInning}{card.latestInning === 1 ? "st" : card.latestInning === 2 ? "nd" : card.latestInning === 3 ? "rd" : "th"}</span>}
           </div>
         </div>
-        <div className="flex flex-col items-end gap-1">
-          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${isEarly ? "bg-red-500/15 text-red-400" : "bg-yellow-500/15 text-yellow-400"}`}>
-            {isEarly ? "EARLY ALERT" : "WATCH"}
-          </span>
-          <OutcomeBadge outcome={alert.outcome} />
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${statusBadge.cls}`}>{statusBadge.label}</span>
+          <span className="text-[10px] font-black" style={{ color: card.radarTierColor }}>{card.radarTierLabel}</span>
         </div>
       </div>
 
-      {alert.hrBuildScore != null && (
+      {card.radarScore > 0 && (
         <div className="space-y-0.5">
           <div className="flex items-center gap-1.5">
             <Activity className="w-3 h-3 text-muted-foreground" />
-            <span className="text-[10px] text-muted-foreground">Radar Score</span>
+            <span className="text-[10px] text-muted-foreground">HR Readiness</span>
           </div>
-          <BuildScoreMeter score={alert.hrBuildScore} size="lg" />
+          <BuildScoreMeter score={card.radarScore} size="lg" />
         </div>
       )}
 
-      {factorTags.length > 0 && (
+      {card.evidenceTags.length > 0 && (
         <div className="flex flex-wrap gap-1">
-          {factorTags.map((tag, i) => (
+          {card.evidenceTags.slice(0, 4).map((tag, i) => (
             <span key={i} className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${tag.color}`}>{tag.label}</span>
           ))}
         </div>
       )}
 
-      {alert.triggerReason && (
-        <div className="text-[10px] text-muted-foreground italic leading-tight">{alert.triggerReason}</div>
+      {card.triggerLabel && (
+        <div className="text-[10px] text-muted-foreground italic leading-tight">{card.triggerLabel}</div>
       )}
 
-      {alert.factors && (alert.factors.avgEV ?? 0) > 0 && (
-        <div className="grid grid-cols-3 gap-2 pt-1 border-t border-border/30">
-          <div className="text-center">
-            <div className="text-[9px] text-muted-foreground">Avg EV</div>
-            <div className={`text-[11px] font-bold ${(alert.factors.avgEV ?? 0) >= 92 ? "text-orange-400" : "text-foreground"}`}>{alert.factors.avgEV?.toFixed(1)}</div>
-          </div>
-          <div className="text-center">
-            <div className="text-[9px] text-muted-foreground">Max EV</div>
-            <div className={`text-[11px] font-bold ${(alert.factors.maxEV ?? 0) >= 100 ? "text-red-400" : "text-foreground"}`}>{alert.factors.maxEV?.toFixed(1)}</div>
-          </div>
-          <div className="text-center">
-            <div className="text-[9px] text-muted-foreground">Avg LA</div>
-            <div className={`text-[11px] font-bold ${(alert.factors.avgLA ?? 0) >= 15 && (alert.factors.avgLA ?? 0) <= 35 ? "text-emerald-400" : "text-foreground"}`}>{alert.factors.avgLA?.toFixed(1)}°</div>
+      {card.edge != null && card.enginePct != null && !isCashed && !isMissed && (
+        <div className="flex items-center gap-2 text-[10px] flex-wrap">
+          <span className="text-green-400 font-bold">{card.side} {card.line?.toFixed(1)}</span>
+          <span className="text-muted-foreground/40">|</span>
+          <span className={`font-bold ${(card.edge ?? 0) > 0 ? "text-green-400" : "text-muted-foreground"}`}>
+            {(card.edge ?? 0) > 0 ? "+" : ""}{(card.edge ?? 0).toFixed(1)}% Edge
+          </span>
+          <span className="text-muted-foreground/40">|</span>
+          <span className="text-foreground">{card.enginePct?.toFixed(1)}% Prob</span>
+          {card.bestBook && (
+            <>
+              <span className="text-muted-foreground/40">|</span>
+              <span className="text-muted-foreground">{BOOK_DISPLAY[card.bestBook] ?? card.bestBook}</span>
+              {card.bestOdds != null && <span className="text-green-400/70 tabular-nums">{formatOdds(card.bestOdds)}</span>}
+            </>
+          )}
+        </div>
+      )}
+
+      {expanded && (
+        <div className="space-y-2 pt-1 border-t border-border/20 animate-in slide-in-from-top-1 duration-200" onClick={(e) => e.stopPropagation()}>
+          {!isCashed && !isMissed && gameTeams && (
+            <RadarCardOddsChips playerName={card.playerName} team={card.team} gameTeams={gameTeams} />
+          )}
+          {card.reasons.length > 0 && (
+            <div className="space-y-0.5">
+              {card.reasons.slice(0, 5).map((r, i) => (
+                <p key={i} className="text-[10px] text-muted-foreground flex items-start gap-1">
+                  <span className="text-primary/50 mt-px">•</span><span>{r}</span>
+                </p>
+              ))}
+            </div>
+          )}
+          {card.badges.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {card.badges.map((b) => (
+                <span key={b} className="text-[8px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400 font-semibold">{b}</span>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2">
+            {onQuickAdd && !isCashed && !isMissed && (
+              <button
+                data-testid={`button-hr-quick-add-${card.playerId}`}
+                className="flex-1 py-2 rounded-lg text-[10px] font-semibold transition-colors flex items-center justify-center gap-1 min-h-[36px]"
+                style={{ background: "rgba(34,197,94,0.12)", color: "#22c55e", border: "1px solid rgba(34,197,94,0.3)" }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onQuickAdd({
+                    playerId: card.playerId,
+                    playerName: card.playerName,
+                    market: "home_runs",
+                    bookLine: card.line ?? 0.5,
+                    enginePct: card.enginePct ?? 0,
+                    edge: card.edge ?? null,
+                    recommendedSide: card.side ?? "OVER",
+                    gameId: card.gameId ?? "",
+                    sportsbook: card.bestBook ?? "draftkings",
+                  } as MlbSignalData);
+                }}
+              >
+                <Plus className="w-3 h-3" /> Add HR to Slip
+              </button>
+            )}
+            {onOpenDetails && (
+              <button
+                data-testid={`button-hr-details-${card.playerId}`}
+                className="py-2 px-3 rounded-lg text-[10px] font-semibold transition-colors flex items-center justify-center gap-1 min-h-[36px] border border-border/40 text-muted-foreground hover:text-foreground hover:bg-muted/30"
+                onClick={(e) => { e.stopPropagation(); onOpenDetails(card); }}
+              >
+                <Calculator className="w-3 h-3" /> Analyze
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -840,7 +808,7 @@ function ConversionStatsBar({ stats }: { stats: AlertConversionStats | null }) {
   );
 }
 
-function HRRadarSection({ isElite, onAddToSlip }: { isElite: boolean; onAddToSlip?: (sig: MlbSignalData) => void }) {
+function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isElite: boolean; onAddToSlip?: (sig: MlbSignalData) => void; onOpenHrDetails?: (card: HrRadarCardUi) => void; games?: MLBGame[] }) {
   const { data: hrData, isLoading } = useQuery<HRRadarResponse>({
     queryKey: ["/api/mlb/hr-radar"],
     refetchInterval: 20_000,
@@ -851,6 +819,8 @@ function HRRadarSection({ isElite, onAddToSlip }: { isElite: boolean; onAddToSli
     refetchInterval: 15_000,
   });
 
+  const gameTeamsMap = new Map((games ?? []).map(g => [g.gameId, { awayAbbr: g.awayAbbr ?? "", homeAbbr: g.homeAbbr ?? "" }]));
+
   if (isLoading) return <SkeletonCard count={3} />;
 
   const bettable = hrData?.bettableHR ?? [];
@@ -860,32 +830,40 @@ function HRRadarSection({ isElite, onAddToSlip }: { isElite: boolean; onAddToSli
   const alerts = alertData?.alerts ?? [];
   const conversionStats = alertData?.conversionStats ?? null;
 
-  const sortedAlerts = [...alerts].sort((a, b) => {
-    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-    return tb - ta;
-  });
+  const dedupByPlayer = (arr: HRAlert[]) => Array.from(new Map(arr.map(a => [`${a.gameId}_${a.playerId}`, a])).values());
 
-  const earlyAlerts = sortedAlerts.filter(a => a.alertType === "HR_EARLY" && a.outcome === null);
-  const watchAlerts = sortedAlerts.filter(a => (a.alertType === "HR_WATCH" || a.alertType === "HR_EARLY") && a.outcome === null);
-  const gradedAlerts = sortedAlerts.filter(a => a.outcome !== null);
+  const activeAlerts = dedupByPlayer(alerts.filter(a => a.outcome === null && a.alertType === "HR_EARLY"));
+  const watchAlerts = dedupByPlayer(alerts.filter(a => a.outcome === null && a.alertType !== "HR_EARLY"))
+    .filter(a => !activeAlerts.some(ea => ea.playerId === a.playerId) &&
+                 !bettable.some((b: any) => b.playerId === a.playerId));
+  const cashedAlerts = dedupByPlayer(alerts.filter(a => a.outcome === "HR"));
+  const missedAlerts = dedupByPlayer(alerts.filter(a => a.outcome === "NO_HR")).slice(0, 6);
 
-  const dedupKey = (a: HRAlert) => `${a.gameId}_${a.playerId}`;
-  const dedupEarly = Array.from(new Map(earlyAlerts.map(a => [dedupKey(a), a])).values());
-  const earlyPlayerIds = new Set(dedupEarly.map(a => a.playerId));
-  const watchAlertPlayers = watchAlerts
-    .filter(a =>
-      !earlyPlayerIds.has(a.playerId) &&
-      !bettable.some((b: any) => b.playerId === a.playerId) &&
-      !cashedToday.some((c: any) => c.playerId === a.playerId) &&
-      !watchlist.some((w: any) => w.playerId === a.playerId)
-    );
-  const dedupWatchAlerts = Array.from(new Map(watchAlertPlayers.map(a => [dedupKey(a), a])).values());
-  const dedupGraded = Array.from(new Map(gradedAlerts.map(a => [dedupKey(a), a])).values()).slice(0, 6);
+  const activeCards: HrRadarCardUi[] = [
+    ...activeAlerts.map(a => mapAlertToUi(a)),
+    ...bettable.map((b: any) => mapHrRadarCardToUi(b, "edge")),
+  ];
+  const dedupActive = Array.from(new Map(activeCards.map(c => [`${c.gameId}_${c.playerId}`, c])).values());
+
+  const watchCards: HrRadarCardUi[] = [
+    ...watchAlerts.map(a => mapAlertToUi(a)),
+    ...watchlist.filter((w: any) => !dedupActive.some(ac => ac.playerId === w.playerId)).map((w: any) => mapHrRadarCardToUi(w, "watch")),
+  ];
+  const dedupWatch = Array.from(new Map(watchCards.map(c => [`${c.gameId}_${c.playerId}`, c])).values());
+
+  const cashedCards: HrRadarCardUi[] = [
+    ...cashedAlerts.map(a => mapAlertToUi(a)),
+    ...cashedToday.map((c: any) => mapHrRadarCardToUi(c, "cashed")),
+  ];
+  const dedupCashed = Array.from(new Map(cashedCards.map(c => [`${c.gameId}_${c.playerId}`, c])).values());
+
+  const missedCards: HrRadarCardUi[] = missedAlerts.map(a => mapAlertToUi(a));
+
+  const isEmpty = dedupActive.length === 0 && dedupWatch.length === 0 && dedupCashed.length === 0 && missedCards.length === 0;
 
   return (
     <div className="space-y-6" data-testid="mlb-hr-radar">
-      {dedupEarly.length > 0 && (
+      {dedupActive.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             <div className="relative">
@@ -893,32 +871,17 @@ function HRRadarSection({ isElite, onAddToSlip }: { isElite: boolean; onAddToSli
               <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500 animate-ping" />
               <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500" />
             </div>
-            <span className="text-sm font-bold text-foreground">Early HR Alerts</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 font-bold animate-pulse">{dedupEarly.length} LIVE</span>
+            <span className="text-sm font-bold text-foreground">Active HR Alerts</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 font-bold animate-pulse">{dedupActive.length} LIVE</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {dedupEarly.map(a => <EarlyAlertCard key={a.playerId} alert={a} />)}
-          </div>
-        </div>
-      )}
-
-      <ConversionStatsBar stats={conversionStats} />
-
-      {bettable.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <Flame className="w-4 h-4 text-red-500" />
-            <span className="text-sm font-bold text-foreground">Bettable HR Edges</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-400 font-semibold">{bettable.length}</span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {(isElite ? bettable : bettable.slice(0, 2)).map((edge: any) => (
-              <HRPlayerCard key={edge.playerId} player={edge} type="edge" onQuickAdd={onAddToSlip} />
+            {(isElite ? dedupActive : dedupActive.slice(0, 2)).map(c => (
+              <RadarCard key={c.playerId} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
             ))}
           </div>
-          {!isElite && bettable.length > 2 && (
+          {!isElite && dedupActive.length > 2 && (
             <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-center space-y-2">
-              <div className="text-sm font-bold text-foreground">{bettable.length - 2} more HR edge{bettable.length - 2 !== 1 ? "s" : ""}</div>
+              <div className="text-sm font-bold text-foreground">{dedupActive.length - 2} more HR edge{dedupActive.length - 2 !== 1 ? "s" : ""}</div>
               <a href="/upgrade" data-testid="link-hr-upgrade" className="inline-block px-4 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-xs">
                 Upgrade to All Sports →
               </a>
@@ -927,54 +890,63 @@ function HRRadarSection({ isElite, onAddToSlip }: { isElite: boolean; onAddToSli
         </div>
       )}
 
-      {(watchlist.length > 0 || dedupWatchAlerts.length > 0) && (
+      <ConversionStatsBar stats={conversionStats} />
+
+      {dedupWatch.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             <Eye className="w-4 h-4 text-yellow-500" />
             <span className="text-sm font-bold text-foreground">HR Watch</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 font-semibold">{watchlist.length + dedupWatchAlerts.length}</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 font-semibold">{dedupWatch.length}</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {dedupWatchAlerts.map(a => <EarlyAlertCard key={a.playerId} alert={a} />)}
-            {watchlist.map((w: any) => (
-              <HRPlayerCard key={w.playerId} player={w} type="watch" />
+            {dedupWatch.map(c => (
+              <RadarCard key={c.playerId} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
             ))}
           </div>
         </div>
       )}
 
-      {bettable.length === 0 && watchlist.length === 0 && dedupWatchAlerts.length === 0 && dedupEarly.length === 0 && cashedToday.length === 0 && (
+      {isEmpty && (
         <div className="rounded-xl border border-border/40 bg-card p-8 text-center space-y-3">
           <Target className="w-8 h-8 text-muted-foreground/30 mx-auto" />
           <div className="text-sm font-bold text-foreground">HR Radar Active</div>
-          <div className="text-xs text-muted-foreground">No HR signals detected yet. The engine scans live games for HR probability every at-bat.</div>
+          <div className="text-xs text-muted-foreground">No HR signals detected yet. Radar scans live at-bats for HR readiness indicators.</div>
         </div>
       )}
 
-      {cashedToday.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <Trophy className="w-4 h-4 text-emerald-400" />
-            <span className="text-sm font-bold text-foreground">Cashed Today</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 font-semibold">{cashedToday.length}</span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {cashedToday.map((c: any) => (
-              <HRPlayerCard key={c.playerId} player={c} type="cashed" />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {dedupGraded.length > 0 && (
+      {(dedupCashed.length > 0 || missedCards.length > 0) && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             <BarChart3 className="w-4 h-4 text-muted-foreground" />
-            <span className="text-sm font-bold text-foreground">Alert Results</span>
+            <span className="text-sm font-bold text-foreground">Radar Outcomes</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {dedupGraded.map(a => <EarlyAlertCard key={`graded-${a.playerId}`} alert={a} />)}
-          </div>
+          {dedupCashed.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5">
+                <Trophy className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="text-xs font-semibold text-emerald-400">Cashed ({dedupCashed.length})</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {dedupCashed.map(c => (
+                  <RadarCard key={`cashed-${c.playerId}`} card={c} gameTeams={null} />
+                ))}
+              </div>
+            </div>
+          )}
+          {missedCards.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5">
+                <X className="w-3.5 h-3.5 text-zinc-400" />
+                <span className="text-xs font-semibold text-zinc-400">Missed ({missedCards.length})</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {missedCards.map(c => (
+                  <RadarCard key={`missed-${c.playerId}`} card={c} gameTeams={null} />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1223,9 +1195,19 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     queryKey: ["/api/mlb/edge-feed"],
     refetchInterval: 20_000,
   });
-  const edgeFeedSignals: MlbSignalData[] = Array.isArray(edgeFeedResp?.signals)
+  const rawSignals: MlbSignalData[] = Array.isArray(edgeFeedResp?.signals)
     ? (edgeFeedResp!.signals as MlbSignalData[])
     : [];
+  const prevSignalsRef = useRef<MlbSignalData[]>([]);
+  const edgeFeedSignals = (() => {
+    const currentKeys = new Set(rawSignals.map(s => `${s.playerId}|${s.market}|${s.gameId}`));
+    const stale = prevSignalsRef.current
+      .filter(s => !currentKeys.has(`${s.playerId}|${s.market}|${s.gameId}`))
+      .map(s => ({ ...s, stale: true } as MlbSignalData));
+    const merged = [...rawSignals, ...stale];
+    prevSignalsRef.current = rawSignals;
+    return merged;
+  })();
 
   const selectedGame = games.find(g => g?.gameId === selectedGameId) ?? null;
   const gameSignals = edgeFeedSignals.filter(s => s.gameId === selectedGameId);
@@ -1352,6 +1334,54 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     }]);
   };
 
+  const MARKET_NORMALIZE: Record<string, string> = {
+    pitcher_k: "pitcher_strikeouts",
+    hr: "home_runs",
+  };
+
+  const resolveTeamSide = (teamAbbr: string, gameId: string): "home" | "away" => {
+    const game = games.find(g => g.gameId === gameId);
+    if (!game) return "home";
+    return teamAbbr === game.homeAbbr ? "home" : "away";
+  };
+
+  const handleSignalClick = (sig: MlbSignalData) => {
+    const normalizedMarket = MARKET_NORMALIZE[sig.market] ?? sig.market;
+    setCalcPlayerName(sig.playerName);
+    setCalcMarket(normalizedMarket);
+    if (sig.bookLine != null) setCalcBookLine(String(sig.bookLine));
+    setCalcResult(null);
+    setSelectedBook(null);
+    if (sig.gameId && sig.gameId !== selectedGameId) {
+      setSelectedGameId(sig.gameId);
+    }
+    const teamAbbr = (sig as any).teamAbbr ?? "";
+    const teamSide = sig.gameId ? resolveTeamSide(teamAbbr, sig.gameId) : "home";
+    const matchedPlayer = sig.playerId
+      ? { playerId: sig.playerId, playerName: sig.playerName, teamAbbr, teamSide } as unknown as MlbPlayerStat
+      : null;
+    if (matchedPlayer) setCalcPlayer(matchedPlayer);
+  };
+
+  const handleHrRadarClick = (card: HrRadarCardUi) => {
+    setCalcPlayerName(card.playerName);
+    setCalcMarket("home_runs");
+    setCalcBookLine(String(card.line ?? 0.5));
+    setCalcResult(null);
+    setSelectedBook(null);
+    if (card.gameId && card.gameId !== selectedGameId) {
+      setSelectedGameId(card.gameId);
+    }
+    const teamSide = card.gameId ? resolveTeamSide(card.team, card.gameId) : "home";
+    const stub = {
+      playerId: card.playerId,
+      playerName: card.playerName,
+      teamAbbr: card.team,
+      teamSide,
+    } as unknown as MlbPlayerStat;
+    setCalcPlayer(stub);
+  };
+
   const handleRefresh = () => {
     queryClient.invalidateQueries({ queryKey: ["/api/mlb/live-games"] });
     queryClient.invalidateQueries({ queryKey: ["/api/mlb/edge-feed"] });
@@ -1416,11 +1446,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
           {selectedGameId && selectedGame && (
             <>
               {gameSignals.length > 0 && (
-                <SignalStrip signals={gameSignals} onPlayerClick={(sig) => {
-                  setCalcPlayerName(sig.playerName);
-                  setCalcMarket(sig.market);
-                  if (sig.bookLine != null) setCalcBookLine(String(sig.bookLine));
-                }} />
+                <SignalStrip signals={gameSignals} onPlayerClick={handleSignalClick} />
               )}
 
               <SpikeAlertBanner signals={gameSignals} />
@@ -1435,7 +1461,8 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
               />
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-                <div className="lg:col-span-5 order-1 lg:order-1 space-y-4">
+                <div className="lg:col-span-4 order-1 lg:order-1">
+                  <div className="lg:sticky lg:top-4 space-y-4">
                   <GameContextPanel game={selectedGame} signalCount={gameSignals.length} />
 
                   <div className="rounded-xl border border-primary/20 bg-card shadow-[0_0_20px_-5px_hsl(var(--primary)/0.15)]" data-testid="mlb-calculator">
@@ -1481,11 +1508,11 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                           </div>
                           {(calcPlayer.exitVelocity != null || calcPlayer.xBA != null) && (
                             <div className="flex items-center gap-2 flex-wrap text-[9px] text-muted-foreground/70 pt-0.5">
-                              {calcPlayer.exitVelocity != null && <span data-testid="calc-player-ev">EV {calcPlayer.exitVelocity.toFixed(1)}</span>}
-                              {calcPlayer.xBA != null && <span data-testid="calc-player-xba">xBA {calcPlayer.xBA.toFixed(3)}</span>}
-                              {calcPlayer.xSLG != null && <span data-testid="calc-player-xslg">xSLG {calcPlayer.xSLG.toFixed(3)}</span>}
-                              {calcPlayer.hardHitPct != null && <span data-testid="calc-player-hardhit">Hard% {calcPlayer.hardHitPct > 1 ? calcPlayer.hardHitPct.toFixed(0) : (calcPlayer.hardHitPct * 100).toFixed(0)}%</span>}
-                              {calcPlayer.barrelPct != null && <span data-testid="calc-player-barrel">Barrel% {calcPlayer.barrelPct > 1 ? calcPlayer.barrelPct.toFixed(0) : (calcPlayer.barrelPct * 100).toFixed(0)}%</span>}
+                              {calcPlayer.exitVelocity != null && <span data-testid="calc-player-ev">EV {formatMlbDisplayValue("exitVelocity", calcPlayer.exitVelocity)}</span>}
+                              {calcPlayer.xBA != null && <span data-testid="calc-player-xba">xBA {formatMlbDisplayValue("xBA", calcPlayer.xBA)}</span>}
+                              {calcPlayer.xSLG != null && <span data-testid="calc-player-xslg">xSLG {formatMlbDisplayValue("xSLG", calcPlayer.xSLG)}</span>}
+                              {calcPlayer.hardHitPct != null && <span data-testid="calc-player-hardhit">Hard% {formatMlbDisplayValue("hardHitPct", calcPlayer.hardHitPct)}</span>}
+                              {calcPlayer.barrelPct != null && <span data-testid="calc-player-barrel">Barrel% {formatMlbDisplayValue("barrelPct", calcPlayer.barrelPct)}</span>}
                             </div>
                           )}
                           {calcPlayer.priorABResults && calcPlayer.priorABResults.length > 0 && (
@@ -1500,22 +1527,24 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                                   const label = isHR ? "HR" : isHit ? "H" : isK ? "K" : isWalk ? "BB" : "Out";
                                   const dotColor = isHR ? "bg-yellow-400" : isHit ? "bg-green-400" : isK ? "bg-red-400" : isWalk ? "bg-blue-400" : "bg-muted-foreground/40";
                                   const textColor = isHR ? "text-yellow-400" : isHit ? "text-green-400" : isK ? "text-red-400" : isWalk ? "text-blue-400" : "text-muted-foreground";
+                                  const laInfo = ab.launchAngle != null ? launchAngleLabel(ab.launchAngle) : null;
                                   return (
                                     <div key={i} data-testid={`ab-result-${i}`} className="flex items-center gap-1.5 text-[9px]">
                                       <span className="text-muted-foreground/40 w-3 text-right tabular-nums">{i + 1}</span>
                                       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} />
                                       <span className={`font-bold w-6 ${textColor}`}>{label}</span>
                                       {ab.exitVelocity != null && <span className="text-muted-foreground">{Math.round(ab.exitVelocity)} mph</span>}
-                                      {ab.launchAngle != null && (() => {
-                                        const la = Math.round(ab.launchAngle);
-                                        const tag = la <= -10 ? "Chop" : la < 10 ? "GB" : la < 20 ? "Liner" : la <= 35 ? "Sweet Spot" : la <= 50 ? "Fly Ball" : "Pop Up";
-                                        const tagColor = tag === "Sweet Spot" ? "text-green-400" : tag === "Liner" ? "text-emerald-400/70" : tag === "Fly Ball" ? "text-blue-400/70" : tag === "Pop Up" ? "text-red-400/70" : "text-muted-foreground/60";
-                                        return (
-                                          <span className="text-muted-foreground/60">{la}° <span className={`text-[8px] ${tagColor}`}>{tag}</span></span>
-                                        );
-                                      })()}
+                                      {laInfo && (
+                                        <span className="text-muted-foreground/60">
+                                          {Math.round(ab.launchAngle!)}° <span className={`text-[8px] ${laInfo.color}`}>{laInfo.tag}</span>
+                                        </span>
+                                      )}
                                       {ab.distance != null && ab.distance > 0 && <span className="text-muted-foreground/60">{Math.round(ab.distance)} ft</span>}
-                                      {ab.pitchType && <span className="text-muted-foreground/40 ml-auto">{ab.pitchType}{ab.pitchSpeed ? ` ${Math.round(ab.pitchSpeed)}` : ""}</span>}
+                                      {ab.pitchType && (
+                                        <span className="text-muted-foreground/50 ml-auto px-1 py-0.5 rounded bg-secondary/40 text-[8px] font-medium">
+                                          {ab.pitchType}{ab.pitchSpeed ? ` ${Math.round(ab.pitchSpeed)}` : ""}
+                                        </span>
+                                      )}
                                     </div>
                                   );
                                 })}
@@ -1615,9 +1644,10 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                       )}
                     </div>
                   </div>
+                  </div>
                 </div>
 
-                <div className="lg:col-span-7 order-2 lg:order-2 space-y-4">
+                <div className="lg:col-span-8 order-2 lg:order-2 space-y-4">
                   {calcResult && (
                     <ResultPanel
                       calcResult={calcResult}
@@ -1776,7 +1806,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
       )}
 
       {activeSubTab === "hr_radar" && (
-        <HRRadarSection isElite={isElite} onAddToSlip={handleAddToSlip} />
+        <HRRadarSection isElite={isElite} onAddToSlip={handleAddToSlip} onOpenHrDetails={handleHrRadarClick} games={games} />
       )}
 
       {mlbSlipPicks.length > 0 && (

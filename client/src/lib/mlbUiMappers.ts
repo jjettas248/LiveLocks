@@ -1,0 +1,262 @@
+import type { MLBSignal } from "@shared/mlbSignal";
+
+export type MlbSignalUi = MLBSignal & {
+  displayConfidence: string;
+  displayLiveGrade: string | null;
+  displayOppGrade: string | null;
+  displayPitcherSignals: Array<{ label: string; color: string }>;
+  displayTierBadge: string;
+};
+
+export type HrRadarCardUi = {
+  playerId: string;
+  playerName: string;
+  team: string;
+  gameId: string;
+  detectedInning: number | null;
+  latestInning: number | null;
+  radarScore: number;
+  radarTier: string;
+  radarTierLabel: string;
+  radarTierColor: string;
+  status: "WATCH" | "ALERT" | "CASHED" | "MISSED" | "PENDING";
+  evidenceTags: Array<{ label: string; color: string }>;
+  triggerLabel: string;
+  bestBook: string | null;
+  bestOdds: number | null;
+  hrBookCount: number;
+  side: string | null;
+  line: number | null;
+  edge: number | null;
+  enginePct: number | null;
+  confidenceTier: string | null;
+  hrBuildScore: number | null;
+  badges: string[];
+  reasons: string[];
+  wasAddedToSlip: boolean;
+};
+
+const PITCHER_SIGNAL_MAP: Record<string, { label: string; color: string }> = {
+  DOMINANT: { label: "Dominant", color: "#ef4444" },
+  K_STREAK: { label: "K Streak", color: "#f59e0b" },
+  COMMAND_LOCKED: { label: "Locked In", color: "#22c55e" },
+  VELOCITY_DROP: { label: "Velo Drop", color: "#f97316" },
+  FATIGUE_RISK: { label: "Fatigued", color: "#f97316" },
+  HARD_CONTACT: { label: "Hard Hit", color: "#ef4444" },
+};
+
+const RADAR_TIER_CONFIG: Array<{ min: number; tier: string; label: string; color: string }> = [
+  { min: 7.5, tier: "imminent", label: "Imminent", color: "#ef4444" },
+  { min: 5.0, tier: "strong", label: "Strong Watch", color: "#f97316" },
+  { min: 3.5, tier: "building", label: "Building", color: "#eab308" },
+  { min: 2.0, tier: "low", label: "Low Watch", color: "#71717a" },
+  { min: 0, tier: "tracking", label: "Tracking", color: "#52525b" },
+];
+
+const TRIGGER_REASON_MAP: Record<string, string> = {
+  "hard_trigger:barrel+avgEV95+inn5+score": "High contact quality + barrel + deep in game",
+  "repeat_contact:last2ABs_EV95+_LA20-35": "Back-to-back hard, well-angled contact",
+  "soft_trigger:avgEV92+score3.5": "Consistent hard contact building",
+};
+
+export function liveScoreToGrade(score: number): { grade: string; color: string } {
+  const pct = Math.min(Math.round(score * 100 * 5), 100);
+  if (pct >= 80) return { grade: "A+", color: "#22c55e" };
+  if (pct >= 65) return { grade: "A", color: "#22c55e" };
+  if (pct >= 50) return { grade: "B+", color: "#a3e635" };
+  if (pct >= 35) return { grade: "B", color: "#f59e0b" };
+  if (pct >= 20) return { grade: "C+", color: "#f59e0b" };
+  return { grade: "C", color: "#94a3b8" };
+}
+
+export function oppScoreToGrade(score: number): string {
+  if (score >= 80) return "A+";
+  if (score >= 65) return "A";
+  if (score >= 50) return "B+";
+  if (score >= 35) return "B";
+  if (score >= 20) return "C+";
+  return "C";
+}
+
+export function radarScoreToTier(score: number): { tier: string; label: string; color: string } {
+  for (const t of RADAR_TIER_CONFIG) {
+    if (score >= t.min) return { tier: t.tier, label: t.label, color: t.color };
+  }
+  return { tier: "tracking", label: "Tracking", color: "#52525b" };
+}
+
+export function formatTriggerReason(raw: string | null | undefined): string {
+  if (!raw) return "";
+  for (const [prefix, label] of Object.entries(TRIGGER_REASON_MAP)) {
+    if (raw.startsWith(prefix)) return label;
+  }
+  if (raw.startsWith("leaderboard:")) {
+    const parts = raw.replace("leaderboard:", "");
+    if (parts.includes("topEV")) return "Elite exit velocity today";
+    if (parts.includes("topDistance")) return "Deep flyball — near warning track";
+    return "Leaderboard-level contact";
+  }
+  if (raw.startsWith("late_game_spike:")) {
+    return "Late-game HR window with strong contact";
+  }
+  return raw
+    .replace(/_/g, " ")
+    .replace(/score\d+(\.\d+)?/g, "")
+    .replace(/inn\d+/g, "")
+    .replace(/[+:]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim() || "Signal detected";
+}
+
+export function formatMlbDisplayValue(key: string, value: number | string | null | undefined): string {
+  if (value == null) return "—";
+  if (typeof value === "string") return sanitizeDisplayString(value);
+  switch (key) {
+    case "hardHitPct":
+    case "barrelPct":
+      return `${(value > 1 ? value : value * 100).toFixed(0)}%`;
+    case "xBA":
+    case "xSLG":
+      return value.toFixed(3);
+    case "exitVelocity":
+    case "avgEV":
+    case "maxEV":
+      return `${value.toFixed(1)} mph`;
+    case "launchAngle":
+    case "avgLA":
+      return `${value.toFixed(0)}°`;
+    case "probability":
+    case "enginePct":
+      return `${value.toFixed(0)}%`;
+    case "edge":
+      return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
+    case "projection":
+      return value.toFixed(2);
+    default:
+      return String(value);
+  }
+}
+
+export function sanitizeDisplayString(str: string): string {
+  return str
+    .replace(/[\u0080-\u009f]/g, "")
+    .replace(/\u00B7/g, "|")
+    .replace(/\\u00B7/g, "|")
+    .replace(/\u2713/g, "✓")
+    .replace(/leaderboard:\w+/g, "")
+    .replace(/score\d+(\.\d+)?/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function mapPitcherSignals(signals: string[] | null | undefined): Array<{ label: string; color: string }> {
+  if (!signals || signals.length === 0) return [];
+  return signals
+    .map(s => PITCHER_SIGNAL_MAP[s])
+    .filter((s): s is { label: string; color: string } => s != null);
+}
+
+export function launchAngleLabel(angle: number): { tag: string; color: string } {
+  const la = Math.round(angle);
+  if (la <= -10) return { tag: "Chop", color: "text-muted-foreground/60" };
+  if (la < 10) return { tag: "Grounder", color: "text-muted-foreground/60" };
+  if (la < 20) return { tag: "Liner", color: "text-emerald-400/70" };
+  if (la <= 35) return { tag: "Sweet Spot", color: "text-green-400" };
+  if (la <= 50) return { tag: "Fly Ball", color: "text-blue-400/70" };
+  return { tag: "Pop Up", color: "text-red-400/70" };
+}
+
+export function mapHrRadarCardToUi(player: any, type: "edge" | "watch" | "cashed"): HrRadarCardUi {
+  const score = player.hrBuildScore ?? player.radarScore ?? 0;
+  const tier = radarScoreToTier(score);
+  const status: HrRadarCardUi["status"] =
+    type === "cashed" ? "CASHED" :
+    type === "edge" ? "ALERT" :
+    "WATCH";
+
+  const evidenceTags: Array<{ label: string; color: string }> = [];
+  if (player.hardHitEvents > 0) evidenceTags.push({ label: `${player.hardHitEvents} Hard Hit${player.hardHitEvents > 1 ? "s" : ""}`, color: "text-orange-400 bg-orange-500/10" });
+  if (player.barrelCount > 0 || (player.factors?.barrels ?? 0) > 0) {
+    const bc = player.barrelCount ?? player.factors?.barrels ?? 0;
+    evidenceTags.push({ label: `${bc} Barrel${bc > 1 ? "s" : ""}`, color: "text-red-400 bg-red-500/10" });
+  }
+  if (player.parkFactor != null && player.parkFactor > 1) evidenceTags.push({ label: "Park Boost", color: "text-green-400 bg-green-500/10" });
+  if (player.windFactor === "favorable") evidenceTags.push({ label: "Wind Out", color: "text-cyan-400 bg-cyan-500/10" });
+
+  return {
+    playerId: player.playerId,
+    playerName: player.playerName,
+    team: player.team ?? player.teamAbbr ?? "",
+    gameId: player.gameId ?? "",
+    detectedInning: player.detectedInning ?? player.inning ?? null,
+    latestInning: player.latestInning ?? player.inning ?? null,
+    radarScore: score,
+    radarTier: tier.tier,
+    radarTierLabel: tier.label,
+    radarTierColor: tier.color,
+    status,
+    evidenceTags,
+    triggerLabel: formatTriggerReason(player.triggerReason),
+    bestBook: player.sportsbook ?? null,
+    bestOdds: player.overOdds ?? null,
+    hrBookCount: player.availableBooks ?? 0,
+    side: player.side ?? "OVER",
+    line: player.line ?? 0.5,
+    edge: player.edge ?? null,
+    enginePct: player.engineProbability ?? null,
+    confidenceTier: player.confidenceTier ?? null,
+    hrBuildScore: score,
+    badges: Array.isArray(player.badges) ? player.badges : [],
+    reasons: (player.explanationBullets ?? player.reasons ?? []).map((r: string) => sanitizeDisplayString(r)),
+    wasAddedToSlip: false,
+  };
+}
+
+export function mapAlertToUi(alert: any): HrRadarCardUi {
+  const score = alert.hrBuildScore ?? 0;
+  const tier = radarScoreToTier(score);
+  const status: HrRadarCardUi["status"] =
+    alert.outcome === "HR" ? "CASHED" :
+    alert.outcome === "NO_HR" ? "MISSED" :
+    alert.alertType === "HR_EARLY" ? "ALERT" :
+    "WATCH";
+
+  const evidenceTags: Array<{ label: string; color: string }> = [];
+  if (alert.factors) {
+    if (alert.factors.barrels > 0) evidenceTags.push({ label: `${alert.factors.barrels} Barrel${alert.factors.barrels > 1 ? "s" : ""}`, color: "text-red-400 bg-red-500/10" });
+    if (alert.factors.hardHits > 0) evidenceTags.push({ label: `${alert.factors.hardHits} Hard Hit${alert.factors.hardHits > 1 ? "s" : ""}`, color: "text-orange-400 bg-orange-500/10" });
+    if (alert.factors.deepFlyouts > 0) evidenceTags.push({ label: `${alert.factors.deepFlyouts} Deep Fly${alert.factors.deepFlyouts > 1 ? "s" : ""}`, color: "text-amber-400 bg-amber-500/10" });
+    if ((alert.factors.maxEV ?? 0) >= 100) evidenceTags.push({ label: `${alert.factors.maxEV?.toFixed(0)} EV`, color: "text-red-400 bg-red-500/10" });
+    if ((alert.factors.platoonBoost ?? 0) > 0) evidenceTags.push({ label: "Platoon Edge", color: "text-blue-400 bg-blue-500/10" });
+    if ((alert.factors.pitcherFatigueBoost ?? 0) > 0) evidenceTags.push({ label: "Pitcher Fatigue", color: "text-purple-400 bg-purple-500/10" });
+    if ((alert.factors.parkWindBoost ?? 0) > 0) evidenceTags.push({ label: "Park/Wind Boost", color: "text-cyan-400 bg-cyan-500/10" });
+  }
+
+  return {
+    playerId: alert.playerId,
+    playerName: alert.playerName,
+    team: alert.teamAbbr ?? "",
+    gameId: alert.gameId ?? "",
+    detectedInning: alert.inning ?? null,
+    latestInning: alert.inning ?? null,
+    radarScore: score,
+    radarTier: tier.tier,
+    radarTierLabel: tier.label,
+    radarTierColor: tier.color,
+    status,
+    evidenceTags,
+    triggerLabel: formatTriggerReason(alert.triggerReason),
+    bestBook: null,
+    bestOdds: null,
+    hrBookCount: 0,
+    side: "OVER",
+    line: 0.5,
+    edge: null,
+    enginePct: null,
+    confidenceTier: null,
+    hrBuildScore: score,
+    badges: [],
+    reasons: [],
+    wasAddedToSlip: false,
+  };
+}
