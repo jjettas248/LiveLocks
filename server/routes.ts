@@ -1021,7 +1021,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/mlb/player-history/:playerId", requireMLBAccess, async (req, res) => {
+  app.get("/api/mlb/player-history/:playerId", requireAuth, async (req, res) => {
     try {
       const playerId = req.params.playerId as string;
       const limit = Math.min(parseInt(req.query.limit as string) || 10, 50);
@@ -1038,7 +1038,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/mlb/alerts", requireMLBAccess, async (req, res) => {
+  app.get("/api/mlb/alerts", requireAuth, async (req, res) => {
     try {
       const minutes = Math.max(1, Math.min(parseInt(req.query.minutes as string) || 30, 120));
       const alerts = await storage.getRecentAlerts(minutes);
@@ -1291,7 +1291,7 @@ export async function registerRoutes(
     return res.json({ mode: "live", signals: apiSignals, updatedAt, isDegraded: cachedIsDegraded, gameCardTags: entry?.gameCardTags ?? [] });
   });
 
-  app.get("/api/mlb/edge-feed", requireMLBAccess, async (req, res) => {
+  app.get("/api/mlb/edge-feed", requireAuth, async (req, res) => {
     try {
       const allSignals: any[] = [];
       const cachedLiveGames = mlbLiveGamesCache.get("games");
@@ -1362,7 +1362,7 @@ export async function registerRoutes(
   });
 
   // ── MLB HR Radar Route ───────────────────────────────────────────────────────
-  app.get("/api/mlb/hr-radar", requireMLBAccess, async (req, res) => {
+  app.get("/api/mlb/hr-radar", requireAuth, async (req, res) => {
     try {
       const hrEdges: any[] = [];
       const hrWatchlist: any[] = [];

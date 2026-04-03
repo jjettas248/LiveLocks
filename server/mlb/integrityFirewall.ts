@@ -35,15 +35,18 @@ export function runIntegrityFirewall(output: MLBPropOutput): FirewallResult {
     rejections.push(`stale engine output: ${Math.round(ageMs / 1000)}s old`);
   }
 
+  const dirTolerance = output.bookLine < 1.0 ? 0.6 : 0.15;
   if (
     Number.isFinite(output.projection) && Number.isFinite(output.bookLine) &&
-    output.recommendedSide === "OVER" && output.projection < output.bookLine
+    output.recommendedSide === "OVER" && output.projection < output.bookLine &&
+    (output.bookLine - output.projection) > dirTolerance
   ) {
     rejections.push(`directional contradiction: OVER but projection=${output.projection.toFixed(3)} < line=${output.bookLine}`);
   }
   if (
     Number.isFinite(output.projection) && Number.isFinite(output.bookLine) &&
-    output.recommendedSide === "UNDER" && output.projection > output.bookLine
+    output.recommendedSide === "UNDER" && output.projection > output.bookLine &&
+    (output.projection - output.bookLine) > dirTolerance
   ) {
     rejections.push(`directional contradiction: UNDER but projection=${output.projection.toFixed(3)} > line=${output.bookLine}`);
   }
