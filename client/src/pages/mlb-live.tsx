@@ -101,15 +101,21 @@ const MARKET_LABELS: Record<string, string> = {
 const MLB_CALC_MARKETS = [
   { value: "hits", label: "Hits" },
   { value: "total_bases", label: "Total Bases" },
-  { value: "pitcher_strikeouts", label: "Pitcher Ks" },
+  { value: "hrr", label: "H+R+RBI" },
   { value: "home_runs", label: "Home Runs" },
+  { value: "batter_strikeouts", label: "Strikeouts" },
+  { value: "pitcher_strikeouts", label: "Pitcher Ks" },
+  { value: "pitcher_outs", label: "Pitcher Outs" },
+  { value: "hits_allowed", label: "Hits Allowed" },
+  { value: "walks_allowed", label: "Walks Allowed" },
+  { value: "hr_allowed", label: "HR Allowed" },
 ];
 
 const MLB_ODDS_STAT_MAP: Record<string, string> = {
   hits: "hits", total_bases: "total_bases", home_runs: "home_runs",
   hrr: "hrr", batter_strikeouts: "batter_strikeouts",
   pitcher_strikeouts: "pitcher_strikeouts", pitcher_outs: "pitcher_outs",
-  hits_allowed: "hits_allowed", walks_allowed: "walks_allowed",
+  hits_allowed: "hits_allowed", walks_allowed: "walks_allowed", hr_allowed: "hr_allowed",
 };
 
 const BOOK_DISPLAY: Record<string, string> = {
@@ -797,9 +803,12 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
       currentStats: calcPlayer ? {
         ab: calcPlayer.ab,
         h: calcPlayer.h,
+        r: calcPlayer.r,
+        rbi: calcPlayer.rbi,
         tb: calcPlayer.tb,
         k: calcPlayer.k,
         bb: calcPlayer.bb,
+        sb: calcPlayer.sb,
         battingOrder: calcPlayer.battingOrderSlot,
       } : undefined,
       gameContext: {
@@ -908,7 +917,10 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                           <span>#{calcPlayer.battingOrderSlot || "—"}</span>
                           <span>{calcPlayer.ab} AB</span>
                           <span>{calcPlayer.h} H</span>
+                          <span>{calcPlayer.r} R</span>
+                          <span>{calcPlayer.rbi} RBI</span>
                           <span>{calcPlayer.tb} TB</span>
+                          <span>{calcPlayer.bb} BB</span>
                           <span>{calcPlayer.k} K</span>
                         </div>
                         <button
@@ -917,6 +929,25 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                           className="text-muted-foreground hover:text-foreground text-[10px] px-1.5 py-0.5"
                         >✕</button>
                       </div>
+                      {(calcPlayer.xBA != null || calcPlayer.xSLG != null || calcPlayer.exitVelocity != null || calcPlayer.hardHitPct != null) && (
+                        <div className="flex items-center gap-2 flex-wrap text-[9px] text-muted-foreground/70 pt-0.5">
+                          {calcPlayer.exitVelocity != null && (
+                            <span data-testid="calc-player-ev">EV {calcPlayer.exitVelocity.toFixed(1)}</span>
+                          )}
+                          {calcPlayer.xBA != null && (
+                            <span data-testid="calc-player-xba">xBA {calcPlayer.xBA.toFixed(3)}</span>
+                          )}
+                          {calcPlayer.xSLG != null && (
+                            <span data-testid="calc-player-xslg">xSLG {calcPlayer.xSLG.toFixed(3)}</span>
+                          )}
+                          {calcPlayer.hardHitPct != null && (
+                            <span data-testid="calc-player-hardhit">Hard% {(calcPlayer.hardHitPct * 100).toFixed(0)}%</span>
+                          )}
+                          {calcPlayer.barrelPct != null && (
+                            <span data-testid="calc-player-barrel">Barrel% {(calcPlayer.barrelPct * 100).toFixed(0)}%</span>
+                          )}
+                        </div>
+                      )}
                       {calcPlayer.priorABResults && calcPlayer.priorABResults.length > 0 && (
                         <div className="space-y-1" data-testid="calc-player-ab-results">
                           <span className="text-[9px] text-muted-foreground/60 uppercase font-semibold tracking-wider">At-Bat Log</span>

@@ -1537,13 +1537,17 @@ export async function registerRoutes(
       const pitcherK = pitcherProps.k != null ? parseInt(String(pitcherProps.k), 10) : null;
       const pitcherHitsAllowed = pitcherProps.hitsAllowed != null ? parseInt(String(pitcherProps.hitsAllowed), 10) : null;
       const pitcherWalks = pitcherProps.walks != null ? parseInt(String(pitcherProps.walks), 10) : null;
+      const pitcherHRAllowed = pitcherProps.hrAllowed != null ? parseInt(String(pitcherProps.hrAllowed), 10) : null;
+      const pitcherOuts = pitcherIP != null ? Math.floor(pitcherIP) * 3 + Math.round((pitcherIP % 1) * 10) : null;
 
-      const isPitcherMarketManual = market === "pitcher_strikeouts" || market === "hits_allowed" || market === "walks_allowed";
+      const isPitcherMarketManual = market === "pitcher_strikeouts" || market === "hits_allowed" || market === "walks_allowed" || market === "hr_allowed" || market === "pitcher_outs";
       let currentStatValue: number;
       if (isPitcherMarketManual) {
         if (market === "pitcher_strikeouts") currentStatValue = pitcherK != null ? pitcherK : 0;
         else if (market === "hits_allowed") currentStatValue = pitcherHitsAllowed != null ? pitcherHitsAllowed : 0;
-        else currentStatValue = pitcherWalks != null ? pitcherWalks : 0;
+        else if (market === "walks_allowed") currentStatValue = pitcherWalks != null ? pitcherWalks : 0;
+        else if (market === "hr_allowed") currentStatValue = pitcherHRAllowed != null ? pitcherHRAllowed : 0;
+        else currentStatValue = pitcherOuts != null ? pitcherOuts : 0;
       } else {
         if (market === "hits") currentStatValue = statsH;
         else if (market === "total_bases") currentStatValue = statsTB;
