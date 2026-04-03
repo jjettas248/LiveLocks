@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, RefreshCw, Search, Target } from "lucide-react";
 import { queryClient } from "@/lib/queryClient";
@@ -80,11 +80,42 @@ type EventBadge = { label: string; color: string; bg: string };
 
 function getPlayerEventBadges(player: MlbPlayerStat): EventBadge[] {
   const badges: EventBadge[] = [];
-  if (player.hr > 0) badges.push({ label: `HR${player.hr > 1 ? ` x${player.hr}` : ""}`, color: "#facc15", bg: "rgba(250,204,21,0.15)" });
+  if (player.hr > 0) badges.push({ label: "HR", color: "#facc15", bg: "rgba(250,204,21,0.15)" });
   if (player.h >= 2) badges.push({ label: `${player.h}H`, color: "#22c55e", bg: "rgba(34,197,94,0.12)" });
   if (player.exitVelocity != null && player.exitVelocity >= 100) badges.push({ label: "HARD HIT", color: "#f97316", bg: "rgba(249,115,22,0.12)" });
   else if (player.exitVelocity != null && player.exitVelocity >= 95) badges.push({ label: "SOLID", color: "#3b82f6", bg: "rgba(59,130,246,0.12)" });
+  if (player.barrelPct != null && player.barrelPct >= 0.15) badges.push({ label: "BARREL", color: "#ef4444", bg: "rgba(239,68,68,0.12)" });
   return badges;
+}
+
+function getStickySignalBadges(
+  player: MlbPlayerStat,
+  stickyCache: React.MutableRefObject<Map<string, Set<string>>>
+): EventBadge[] {
+  const pid = player.playerId;
+  if (!stickyCache.current.has(pid)) {
+    stickyCache.current.set(pid, new Set());
+  }
+  const earned = stickyCache.current.get(pid)!;
+  const current = getPlayerEventBadges(player);
+  current.forEach(b => earned.add(b.label));
+  const BADGE_DEFS: Record<string, { color: string; bg: string }> = {
+    "HR": { color: "#facc15", bg: "rgba(250,204,21,0.15)" },
+    "HARD HIT": { color: "#f97316", bg: "rgba(249,115,22,0.12)" },
+    "SOLID": { color: "#3b82f6", bg: "rgba(59,130,246,0.12)" },
+    "BARREL": { color: "#ef4444", bg: "rgba(239,68,68,0.12)" },
+  };
+  const result: EventBadge[] = [];
+  Array.from(earned).forEach(label => {
+    if (label.endsWith("H") && label !== "HARD HIT") {
+      result.push({ label: `${player.h}H`, color: "#22c55e", bg: "rgba(34,197,94,0.12)" });
+    } else if (BADGE_DEFS[label]) {
+      result.push({ label, ...BADGE_DEFS[label] });
+    } else {
+      result.push({ label, color: "#71717a", bg: "rgba(113,113,122,0.12)" });
+    }
+  });
+  return result;
 }
 
 export function MlbBoxScore({
@@ -105,6 +136,11 @@ export function MlbBoxScore({
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"order" | "ab" | "h" | "hr" | "tb" | "k" | "signal">("order");
   const [activeTab, setActiveTab] = useState<"all" | "away" | "home" | "signals">("all");
+  const stickyBadgeCache = useRef<Map<string, Set<string>>>(new Map());
+
+  useEffect(() => {
+    stickyBadgeCache.current = new Map();
+  }, [gameId]);
 
   const { data, isLoading, isRefetching, dataUpdatedAt } = useQuery<LiveStatsResponse>({
     queryKey: ["/api/mlb/live-stats", gameId],
@@ -301,14 +337,14 @@ export function MlbBoxScore({
                 {sorted.map((player) => {
                   const sig = getBestSignal(signals, player.playerId);
                   const tierStyle = sig && sig.tier !== "none" ? SIGNAL_TIER_STYLES[sig.tier] : null;
-                  const eventBadges = getPlayerEventBadges(player);
+                  const stickyBadges = getStickySignalBadges(player, stickyBadgeCache);
 
                   return (
                     <tr
                       key={player.playerId}
                       data-testid={`row-player-${player.playerId}`}
                       className={`border-b border-border/10 transition-colors ${
-                        onPlayerClick ? "cursor-pointer hover:bg-primary/5" : ""
+                        onPlayerClick ? "cursor-pointer hover:bg-primary/5 active:bg-primary/10" : ""
                       }`}
                       style={tierStyle ? { borderLeft: `3px solid ${tierStyle.border}`, background: tierStyle.bg } : undefined}
                       role={onPlayerClick ? "button" : undefined}
@@ -316,16 +352,16 @@ export function MlbBoxScore({
                       onKeyDown={onPlayerClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPlayerClick(player); } } : undefined}
                       onClick={() => onPlayerClick?.(player)}
                     >
-                      <td className="px-3 py-2 text-muted-foreground font-mono">{player.battingOrderSlot || "—"}</td>
+                      <td className="px-3 py-2 text-muted-foreground font-mono">{player.battingOrderSlot || ""}</td>
                       <td className="px-2 py-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
                           <span className="font-semibold text-foreground truncate">{player.playerName}</span>
                           <span className="text-[8px] text-muted-foreground/60 shrink-0">{player.teamAbbr}</span>
-                          {eventBadges.map((badge, bi) => (
+                          {stickyBadges.map((badge, bi) => (
                             <span
                               key={bi}
-                              data-testid={`badge-event-${player.playerId}-${bi}`}
-                              className="text-[7px] font-black px-1 py-0.5 rounded shrink-0 uppercase tracking-wide"
+                              data-testid={`badge-sticky-${player.playerId}-${bi}`}
+                              className="text-[7px] font-black px-1 py-0.5 rounded shrink-0 uppercase tracking-wide whitespace-nowrap"
                               style={{ color: badge.color, background: badge.bg }}
                             >{badge.label}</span>
                           ))}

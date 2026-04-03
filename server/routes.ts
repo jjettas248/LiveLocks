@@ -1472,14 +1472,19 @@ export async function registerRoutes(
       hrWatchlist.sort((a, b) => (b.hrProbability ?? 0) - (a.hrProbability ?? 0));
 
       const bettable = hrEdges.filter((s: any) => !s.alreadyHit);
-      const activity = hrEdges.filter((s: any) => s.alreadyHit);
+      const cashedToday = hrEdges.filter((s: any) => s.alreadyHit);
+      const cleanWatchlist = hrWatchlist.filter((w: any) => !cashedToday.some((c: any) => c.playerId === w.playerId));
 
-      console.log(`[MLB_HR_RADAR] bettable=${bettable.length} activity=${activity.length} watchlist=${hrWatchlist.length} total=${hrEdges.length + hrWatchlist.length}`);
+      const dedupBettable = Array.from(new Map(bettable.map((b: any) => [b.playerId, b])).values());
+      const dedupWatchlist = Array.from(new Map(cleanWatchlist.map((w: any) => [w.playerId, w])).values());
+      const dedupCashed = Array.from(new Map(cashedToday.map((c: any) => [c.playerId, c])).values());
 
-      return res.json({ bettableHR: bettable, hrWatchlist, hrEdges, activity });
+      console.log(`[MLB_HR_RADAR] bettable=${dedupBettable.length} cashed=${dedupCashed.length} watchlist=${dedupWatchlist.length} total=${hrEdges.length + hrWatchlist.length}`);
+
+      return res.json({ bettableHR: dedupBettable, hrWatchlist: dedupWatchlist, hrEdges, cashedToday: dedupCashed, activity: dedupCashed });
     } catch (e: any) {
       console.error("[mlb/hr-radar]", e.message);
-      return res.json({ bettableHR: [], hrEdges: [], hrWatchlist: [] });
+      return res.json({ bettableHR: [], hrEdges: [], hrWatchlist: [], cashedToday: [] });
     }
   });
 
