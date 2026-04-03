@@ -771,7 +771,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
   });
   const oddsEntries = Object.entries(oddsData ?? {})
     .filter(([k]) => !k.startsWith("_"))
-    .map(([book, v]) => ({ sportsbook: book, ...(v as OddsEntry) }));
+    .map(([book, v]) => { const entry = v as OddsEntry; return { ...entry, sportsbook: book }; });
 
   const calcMutation = useMutation({
     mutationFn: async (input: Record<string, unknown>) => {
@@ -803,6 +803,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
       currentStats: calcPlayer ? {
         ab: calcPlayer.ab,
         h: calcPlayer.h,
+        hr: calcPlayer.hr,
         r: calcPlayer.r,
         rbi: calcPlayer.rbi,
         tb: calcPlayer.tb,
@@ -869,6 +870,12 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-5">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-bold text-foreground tracking-tight" data-testid="text-mlb-header">LiveLocks · MLB</span>
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/10 text-green-400 font-semibold border border-green-500/20">LIVE</span>
+        </div>
+      </div>
       {activeSubTab === "games" && (
         <>
           <EarlyHRAlerts isElite={isElite} />
@@ -917,6 +924,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                           <span>#{calcPlayer.battingOrderSlot || "—"}</span>
                           <span>{calcPlayer.ab} AB</span>
                           <span>{calcPlayer.h} H</span>
+                          {calcPlayer.hr > 0 && <span className="text-yellow-400 font-bold">{calcPlayer.hr} HR</span>}
                           <span>{calcPlayer.r} R</span>
                           <span>{calcPlayer.rbi} RBI</span>
                           <span>{calcPlayer.tb} TB</span>
@@ -991,9 +999,9 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                           </div>
                         </div>
                       )}
-                      {(!calcPlayer.priorABResults || calcPlayer.priorABResults.length === 0) && calcPlayer.ab > 0 && (
+                      {(!calcPlayer.priorABResults || calcPlayer.priorABResults.length === 0) && calcPlayer.ab >= 2 && (
                         <div className="text-[9px] text-muted-foreground/50 italic" data-testid="calc-player-no-contact">
-                          Contact data not yet available
+                          Pitch-level data syncing...
                         </div>
                       )}
                     </div>
@@ -1158,25 +1166,45 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                     </div>
                   )}
 
-                  {calcResult.featureScores && Object.keys(calcResult.featureScores).length > 0 && (
-                    <div className="rounded-lg p-3 bg-secondary/20 border border-border/20">
-                      <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Analysis Scores</div>
-                      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-                        {Object.entries(calcResult.featureScores as Record<string, number>)
-                          .filter(([, v]) => Math.abs(v - 0.5) >= 0.03)
-                          .sort(([, a], [, b]) => Math.abs(b - 0.5) - Math.abs(a - 0.5))
-                          .slice(0, 8)
-                          .map(([key, val]) => {
-                            const label: Record<string, string> = {
-                              contactQuality: "Contact", batSpeedPower: "Power", handednessMatchup: "Platoon",
-                              pitchBlendMatchup: "Pitch Mix", hotColdForm: "Form", parkEnv: "Park/Env",
-                              bvp: "vs Pitcher", lineupOpportunity: "Lineup", bullpenFactor: "Bullpen",
-                              pitcherSuppression: "Stuff", pitcherDeterioration: "Fatigue",
-                            };
+                  {calcResult.featureScores && Object.keys(calcResult.featureScores).length > 0 && (() => {
+                    const isPitcherMarket = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(calcMarket);
+                    const batterLabels: Record<string, string> = {
+                      contactQuality: "Contact", batSpeedPower: "Power", handednessMatchup: "Platoon",
+                      pitchBlendMatchup: "Pitch Mix", hotColdForm: "Form", parkEnv: "Park/Env",
+                      bvp: "vs Pitcher", lineupOpportunity: "Lineup",
+                      bullpenFactor: "Late Game", pitcherSuppression: "Pitcher Quality", pitcherDeterioration: "TTO Advantage",
+                    };
+                    const pitcherLabels: Record<string, string> = {
+                      contactQuality: "Stuff+", batSpeedPower: "Velocity", handednessMatchup: "Platoon",
+                      pitchBlendMatchup: "Arsenal", hotColdForm: "Form", parkEnv: "Park/Env",
+                      bvp: "vs Lineup", lineupOpportunity: "Opp Lineup",
+                      bullpenFactor: "Bullpen", pitcherSuppression: "Control", pitcherDeterioration: "Workload",
+                    };
+                    const labels = isPitcherMarket ? pitcherLabels : batterLabels;
+                    const batterPriority = ["contactQuality", "batSpeedPower", "hotColdForm", "bvp", "pitchBlendMatchup", "handednessMatchup", "lineupOpportunity", "parkEnv", "pitcherDeterioration", "pitcherSuppression", "bullpenFactor"];
+                    const pitcherPriority = ["pitcherSuppression", "pitcherDeterioration", "hotColdForm", "contactQuality", "batSpeedPower", "pitchBlendMatchup", "handednessMatchup", "parkEnv", "bullpenFactor", "lineupOpportunity", "bvp"];
+                    const priority = isPitcherMarket ? pitcherPriority : batterPriority;
+
+                    const entries = Object.entries(calcResult.featureScores as Record<string, number>)
+                      .filter(([, v]) => Math.abs(v - 0.5) >= 0.03)
+                      .sort(([aKey], [bKey]) => {
+                        const ai = priority.indexOf(aKey);
+                        const bi = priority.indexOf(bKey);
+                        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+                      })
+                      .slice(0, 8);
+
+                    return (
+                      <div className="rounded-lg p-3 bg-secondary/20 border border-border/20">
+                        <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                          {isPitcherMarket ? "Pitcher Analysis" : "Batter Analysis"}
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                          {entries.map(([key, val]) => {
                             const color = val >= 0.65 ? "#22c55e" : val >= 0.55 ? "#a3e635" : val >= 0.45 ? "#94a3b8" : val >= 0.35 ? "#f59e0b" : "#ef4444";
                             return (
                               <div key={key} className="flex items-center justify-between gap-1">
-                                <span className="text-[9px] text-muted-foreground">{label[key] ?? key}</span>
+                                <span className="text-[9px] text-muted-foreground">{labels[key] ?? key}</span>
                                 <div className="flex items-center gap-1.5">
                                   <div className="w-12 h-1.5 rounded-full bg-secondary/60 overflow-hidden">
                                     <div className="h-full rounded-full" style={{ width: `${Math.round(val * 100)}%`, backgroundColor: color }} />
@@ -1186,9 +1214,10 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                               </div>
                             );
                           })}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
 
                   {calcResult.recommendedSide && calcResult.recommendedSide !== "NO_EDGE" && (
                     <button

@@ -25,9 +25,9 @@ const BATTER_DRIVER_LABELS: Record<string, string> = {
 };
 
 const PITCHER_DRIVER_LABELS: Record<string, string> = {
-  pitcherSuppression: "Stuff Rating",
-  pitcherDeterioration: "Fatigue Level",
-  bullpenFactor: "Bullpen Factor",
+  pitcherSuppression: "Pitcher Quality",
+  pitcherDeterioration: "TTO Advantage",
+  bullpenFactor: "Late Game",
   hotColdForm: "Recent Form",
   parkEnv: "Park & Weather",
 };

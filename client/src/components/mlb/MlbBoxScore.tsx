@@ -30,6 +30,7 @@ type MlbPlayerStat = {
   battingOrderSlot: number;
   ab: number;
   h: number;
+  hr: number;
   tb: number;
   r: number;
   rbi: number;
@@ -75,6 +76,17 @@ function getBestSignal(signals: MlbSignalData[], playerId: string): { tier: Sign
   return { tier, prob: best.enginePct, side: best.recommendedSide, market: best.market };
 }
 
+type EventBadge = { label: string; color: string; bg: string };
+
+function getPlayerEventBadges(player: MlbPlayerStat): EventBadge[] {
+  const badges: EventBadge[] = [];
+  if (player.hr > 0) badges.push({ label: `HR${player.hr > 1 ? ` x${player.hr}` : ""}`, color: "#facc15", bg: "rgba(250,204,21,0.15)" });
+  if (player.h >= 2) badges.push({ label: `${player.h}H`, color: "#22c55e", bg: "rgba(34,197,94,0.12)" });
+  if (player.exitVelocity != null && player.exitVelocity >= 100) badges.push({ label: "HARD HIT", color: "#f97316", bg: "rgba(249,115,22,0.12)" });
+  else if (player.exitVelocity != null && player.exitVelocity >= 95) badges.push({ label: "SOLID", color: "#3b82f6", bg: "rgba(59,130,246,0.12)" });
+  return badges;
+}
+
 export function MlbBoxScore({
   gameId,
   signals,
@@ -91,7 +103,7 @@ export function MlbBoxScore({
   onAddToSlip?: (sig: MlbSignalData) => void;
 }) {
   const [search, setSearch] = useState("");
-  const [sortBy, setSortBy] = useState<"order" | "ab" | "h" | "tb" | "k">("order");
+  const [sortBy, setSortBy] = useState<"order" | "ab" | "h" | "hr" | "tb" | "k">("order");
   const [activeTab, setActiveTab] = useState<"all" | "away" | "home" | "signals">("all");
 
   const { data, isLoading, isRefetching, dataUpdatedAt } = useQuery<LiveStatsResponse>({
@@ -123,6 +135,7 @@ export function MlbBoxScore({
     if (sortBy === "order") return (a.battingOrderSlot || 99) - (b.battingOrderSlot || 99);
     if (sortBy === "ab") return b.ab - a.ab;
     if (sortBy === "h") return b.h - a.h;
+    if (sortBy === "hr") return b.hr - a.hr;
     if (sortBy === "tb") return b.tb - a.tb;
     if (sortBy === "k") return b.k - a.k;
     return 0;
@@ -247,7 +260,7 @@ export function MlbBoxScore({
                 <tr className="text-muted-foreground border-b border-border/20">
                   <th className="text-left px-3 py-1.5 font-semibold">#</th>
                   <th className="text-left px-2 py-1.5 font-semibold">Player</th>
-                  {(["ab", "h", "tb"] as const).map(col => (
+                  {(["ab", "h", "hr", "tb"] as const).map(col => (
                     <th key={col} className="text-center px-1.5 py-1.5 font-semibold">
                       <button
                         type="button"
@@ -276,6 +289,7 @@ export function MlbBoxScore({
                 {sorted.map((player) => {
                   const sig = getBestSignal(signals, player.playerId);
                   const tierStyle = sig && sig.tier !== "none" ? SIGNAL_TIER_STYLES[sig.tier] : null;
+                  const eventBadges = getPlayerEventBadges(player);
 
                   return (
                     <tr
@@ -295,10 +309,25 @@ export function MlbBoxScore({
                         <div className="flex items-center gap-1.5 min-w-0">
                           <span className="font-semibold text-foreground truncate">{player.playerName}</span>
                           <span className="text-[8px] text-muted-foreground/60 shrink-0">{player.teamAbbr}</span>
+                          {eventBadges.map((badge, bi) => (
+                            <span
+                              key={bi}
+                              data-testid={`badge-event-${player.playerId}-${bi}`}
+                              className="text-[7px] font-black px-1 py-0.5 rounded shrink-0 uppercase tracking-wide"
+                              style={{ color: badge.color, background: badge.bg }}
+                            >{badge.label}</span>
+                          ))}
                         </div>
                       </td>
                       <td className="text-center px-1.5 py-2 tabular-nums text-foreground">{player.ab}</td>
                       <td className="text-center px-1.5 py-2 tabular-nums font-semibold text-foreground">{player.h}</td>
+                      <td className="text-center px-1.5 py-2 tabular-nums text-foreground">
+                        {player.hr > 0 ? (
+                          <span className="text-yellow-400 font-bold">{player.hr}</span>
+                        ) : (
+                          <span className="text-muted-foreground/40">0</span>
+                        )}
+                      </td>
                       <td className="text-center px-1.5 py-2 tabular-nums text-foreground">{player.tb}</td>
                       <td className="text-center px-1.5 py-2 tabular-nums text-foreground">{player.r}</td>
                       <td className="text-center px-1.5 py-2 tabular-nums text-foreground">{player.rbi}</td>

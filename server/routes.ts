@@ -968,6 +968,7 @@ export async function registerRoutes(
             battingOrderSlot: slot,
             ab: batting.atBats ?? 0,
             h: batting.hits ?? 0,
+            hr: batting.homeRuns ?? 0,
             tb: batting.totalBases ?? 0,
             r: batting.runs ?? 0,
             rbi: batting.rbi ?? 0,
@@ -1551,7 +1552,7 @@ export async function registerRoutes(
       } else {
         if (market === "hits") currentStatValue = statsH;
         else if (market === "total_bases") currentStatValue = statsTB;
-        else if (market === "home_runs" || market === "hr") currentStatValue = currentStats ? parseInt(String((currentStats as any).hr ?? 0), 10) || 0 : 0;
+        else if (market === "home_runs") currentStatValue = currentStats ? parseInt(String((currentStats as any).hr ?? 0), 10) || 0 : 0;
         else if (market === "hrr") currentStatValue = statsH + (currentStats ? parseInt(String((currentStats as any).rbi ?? 0), 10) || 0 : 0) + (currentStats ? parseInt(String((currentStats as any).r ?? 0), 10) || 0 : 0);
         else if (market === "batter_strikeouts") currentStatValue = statsK;
         else currentStatValue = 0;
@@ -1803,7 +1804,7 @@ export async function registerRoutes(
       const statsTB = stats ? parseInt(String(stats.tb ?? 0), 10) || 0 : 0;
       const statsK = stats ? parseInt(String(stats.k ?? 0), 10) || 0 : 0;
       const currentStatValue = stats
-        ? (market === "hits" ? statsH : market === "total_bases" ? statsTB : (market === "home_runs" || market === "hr") ? parseInt(String((stats as any).hr ?? 0), 10) || 0 : market === "hrr" ? statsH + (parseInt(String((stats as any).rbi ?? 0), 10) || 0) + (parseInt(String((stats as any).r ?? 0), 10) || 0) : market === "batter_strikeouts" ? statsK : 0)
+        ? (market === "hits" ? statsH : market === "total_bases" ? statsTB : market === "home_runs" ? parseInt(String((stats as any).hr ?? 0), 10) || 0 : market === "hrr" ? statsH + (parseInt(String((stats as any).rbi ?? 0), 10) || 0) + (parseInt(String((stats as any).r ?? 0), 10) || 0) : market === "batter_strikeouts" ? statsK : 0)
         : safeFloat("currentStatValue", 0);
 
       const overOdds = safeFloat("overOdds", NaN);
