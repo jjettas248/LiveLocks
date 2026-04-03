@@ -171,6 +171,8 @@ export interface ContactQualityMetrics {
   hitDistance: number | null;
   hardHitRateSeason: number | null;
   barrelRateProxySeason: number | null;
+  avgBatSpeed: number | null;
+  avgSwingLength: number | null;
   priorABResults: ABResult[];
   xBA: number | null;
   xSLG: number | null;

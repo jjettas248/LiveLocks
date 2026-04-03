@@ -19,6 +19,8 @@ export interface BaseballSavantData {
   barrelRateProxySeason: number | null;
   xBA: number | null;
   xSLG: number | null;
+  avgBatSpeed: number | null;
+  avgSwingLength: number | null;
   avgFastballVelocity: number | null;
   avgFastballSpin: number | null;
   pitchMixPct: {
@@ -205,6 +207,8 @@ export async function fetchBaseballSavantData(
     barrelRateProxySeason: null,
     xBA: null,
     xSLG: null,
+    avgBatSpeed: null,
+    avgSwingLength: null,
     avgFastballVelocity: null,
     avgFastballSpin: null,
     pitchMixPct: { fastball: null, breaking: null, offspeed: null },
@@ -223,6 +227,8 @@ export async function fetchBaseballSavantData(
   let hitDistance: number | null = null;
   let hardHitRateSeason: number | null = null;
   let barrelRateProxySeason: number | null = null;
+  let avgBatSpeed: number | null = null;
+  let avgSwingLength: number | null = null;
   let avgFastballVelocity: number | null = null;
   let avgFastballSpin: number | null = null;
   const pitchMixPct = { fastball: null as number | null, breaking: null as number | null, offspeed: null as number | null };
@@ -270,9 +276,17 @@ export async function fetchBaseballSavantData(
         let xslgCount = 0;
         let totalRows = 0;
         let bipRows = 0;
+        const batSpeeds: number[] = [];
+        const swingLengths: number[] = [];
 
         for (const row of rows) {
           totalRows++;
+
+          const bs = safeNum(row["bat_speed"]);
+          const sl = safeNum(row["swing_length"]);
+          if (bs != null && bs > 40 && bs <= 100) batSpeeds.push(bs);
+          if (sl != null && sl > 0 && sl <= 15) swingLengths.push(sl);
+
           const bbType = (row["bb_type"] ?? "").trim();
           if (!bbType) continue;
           bipRows++;
@@ -296,6 +310,9 @@ export async function fetchBaseballSavantData(
           if (rowXBA != null && rowXBA > 0 && rowXBA <= 1.0) { xbaSum += rowXBA; xbaCount++; }
           if (rowXSLG != null && rowXSLG > 0 && rowXSLG <= 4.0) { xslgSum += rowXSLG; xslgCount++; }
         }
+
+        if (batSpeeds.length > 0) avgBatSpeed = parseFloat((batSpeeds.reduce((a, b) => a + b, 0) / batSpeeds.length).toFixed(1));
+        if (swingLengths.length > 0) avgSwingLength = parseFloat((swingLengths.reduce((a, b) => a + b, 0) / swingLengths.length).toFixed(1));
 
         if (evs.length > 0) exitVelocity = parseFloat((evs.reduce((a, b) => a + b, 0) / evs.length).toFixed(1));
         if (las.length > 0) launchAngle = parseFloat((las.reduce((a, b) => a + b, 0) / las.length).toFixed(1));
@@ -370,6 +387,8 @@ export async function fetchBaseballSavantData(
       barrelRateProxySeason,
       xBA,
       xSLG,
+      avgBatSpeed,
+      avgSwingLength,
       avgFastballVelocity,
       avgFastballSpin,
       pitchMixPct,
@@ -377,9 +396,9 @@ export async function fetchBaseballSavantData(
 
     savantCache.set(cacheKey, { data: result, fetchedAt: Date.now() });
 
-    const hasAny = [xBA, xSLG, exitVelocity, avgFastballVelocity].some((v) => v != null);
+    const hasAny = [xBA, xSLG, exitVelocity, avgFastballVelocity, avgBatSpeed].some((v) => v != null);
     if (hasAny) {
-      console.log(`[Savant] Player ${mlbPlayerId}: xBA=${xBA} xSLG=${xSLG} EV=${exitVelocity} FBv=${avgFastballVelocity}`);
+      console.log(`[Savant] Player ${mlbPlayerId}: xBA=${xBA} xSLG=${xSLG} EV=${exitVelocity} batSpd=${avgBatSpeed} swgLen=${avgSwingLength} FBv=${avgFastballVelocity}`);
     }
 
     return result;

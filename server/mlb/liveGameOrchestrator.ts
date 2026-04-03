@@ -1114,6 +1114,8 @@ export class LiveGameOrchestrator {
             hitDistance: playerContact?.hitDistance ?? null,
             hardHitRateSeason: playerContact?.hardHitPct != null ? playerContact.hardHitPct / 100 : null,
             barrelRateProxySeason: playerContact?.barrelPct != null ? playerContact.barrelPct / 100 : null,
+            avgBatSpeed: playerContact?.avgBatSpeed ?? null,
+            avgSwingLength: playerContact?.avgSwingLength ?? null,
             priorABResults: (playerContact?.priorABResults ?? []) as MLBPropInput["contactQuality"]["priorABResults"],
             xBA: playerContact?.xBA ?? null,
             xSLG: playerContact?.xSLG ?? null,

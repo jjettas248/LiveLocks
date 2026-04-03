@@ -34,6 +34,8 @@ export interface PlayerContactData {
   hitDistance: number | null;
   hardHitPct: number | null;
   barrelPct: number | null;
+  avgBatSpeed: number | null;
+  avgSwingLength: number | null;
   xBA: number | null;
   xSLG: number | null;
   priorABResults: Array<{
@@ -419,6 +421,8 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
           hitDistance: null,
           hardHitPct: null,
           barrelPct: null,
+          avgBatSpeed: null,
+          avgSwingLength: null,
           xBA: null,
           xSLG: null,
           priorABResults: [],
@@ -955,6 +959,8 @@ export async function syncSavantSeasonForLineup(gameId: string): Promise<void> {
         hitDistance: savant.hitDistance,
         hardHitPct: savant.hardHitRateSeason,
         barrelPct: savant.barrelRateProxySeason,
+        avgBatSpeed: savant.avgBatSpeed,
+        avgSwingLength: savant.avgSwingLength,
         xBA: savant.xBA,
         xSLG: savant.xSLG,
         priorABResults: [],
@@ -966,6 +972,8 @@ export async function syncSavantSeasonForLineup(gameId: string): Promise<void> {
       if (entry.exitVelocity === null && savant.exitVelocity != null) entry.exitVelocity = savant.exitVelocity;
       if (entry.hardHitPct === null && savant.hardHitRateSeason != null) entry.hardHitPct = savant.hardHitRateSeason;
       if (entry.barrelPct === null && savant.barrelRateProxySeason != null) entry.barrelPct = savant.barrelRateProxySeason;
+      if (entry.avgBatSpeed === null && savant.avgBatSpeed != null) entry.avgBatSpeed = savant.avgBatSpeed;
+      if (entry.avgSwingLength === null && savant.avgSwingLength != null) entry.avgSwingLength = savant.avgSwingLength;
     }
     enriched++;
   }

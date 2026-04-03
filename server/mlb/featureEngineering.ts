@@ -892,10 +892,11 @@ export function computeBatSpeedEngine(input: MLBPropInput): {
   const ev = input.contactQuality.exitVelocity ?? 90;
   const hhr = input.contactQuality.hardHitRateSeason ?? 0.35;
   const barrel = input.contactQuality.barrelRateProxySeason ?? 0.07;
+  const measuredBatSpeed = input.contactQuality.avgBatSpeed;
   const hasMeasuredData = input.contactQuality.exitVelocity != null || input.contactQuality.hardHitRateSeason != null || input.contactQuality.barrelRateProxySeason != null;
 
   const estimatedBatSpeed = 55 + (ev - 80) * 0.57;
-  const batSpeed = clamp(estimatedBatSpeed, 60, 85);
+  const batSpeed = measuredBatSpeed != null ? clamp(measuredBatSpeed, 60, 85) : clamp(estimatedBatSpeed, 60, 85);
   const fastSwingRate = clamp(hhr * 0.8 + barrel * 0.5, 0.2, 0.8);
 
   const batSpeedZ = clamp((batSpeed - LEAGUE_AVG_BAT_SPEED) / BAT_SPEED_STD_DEV, -2, 2);
