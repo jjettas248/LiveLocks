@@ -43,7 +43,8 @@ export function markAlertSent(playerId: string, gameId: string): void {
 }
 
 export function clearGameCooldowns(gameId: string): void {
-  for (const [key] of recentAlerts) {
+  const keys = Array.from(recentAlerts.keys());
+  for (const key of keys) {
     if (key.endsWith(`:${gameId}`)) recentAlerts.delete(key);
   }
 }

@@ -2187,12 +2187,16 @@ export default function Dashboard() {
                   key={tab.key}
                   data-testid={`tab-mlb-${tab.key}`}
                   onClick={() => setMlbSubTab(tab.key)}
-                  className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                  className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                     mlbSubTab === tab.key
                       ? "bg-background text-foreground shadow-sm"
                       : "text-muted-foreground hover:text-foreground"
-                  }`}
+                  } ${tab.key === "hr_radar" && mlbSubTab !== "hr_radar" ? "relative" : ""}`}
+                  style={tab.key === "hr_radar" && mlbSubTab === "hr_radar" ? { boxShadow: "0 0 12px rgba(239,68,68,0.3)", borderColor: "rgba(239,68,68,0.3)" } : undefined}
                 >
+                  {tab.key === "hr_radar" && (
+                    <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                  )}
                   {tab.label}
                 </button>
               ))}

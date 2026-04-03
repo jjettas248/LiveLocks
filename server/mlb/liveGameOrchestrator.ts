@@ -1061,7 +1061,7 @@ export class LiveGameOrchestrator {
       if (activePitcherForArch?.playerId) {
         const pStats = mlbPlayerCache.pitcherSeasonStats[activePitcherForArch.playerId];
         if (pStats) {
-          const gs = pStats.gamesStarted ?? null;
+          const gs = (pStats as any).gamesStarted ?? null;
           const ip = pStats.inningsPitched ?? null;
           pitcherArch = classifyPitcherArchetype({
             era: pStats.era ?? null,

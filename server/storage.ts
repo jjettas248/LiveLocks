@@ -189,6 +189,10 @@ export interface IStorage {
     mu?: number; sigma?: number; zScore?: number;
     hrBuildScore?: number | null;
     hrIntensity?: string | null;
+    signalScore?: string;
+    opportunityScore?: string;
+    liveScore?: string;
+    eventBoost?: string;
   }): Promise<{ id: string; isDuplicate: boolean }>;
   getPlays(opts: { sport?: string; limit?: number; settled?: string; date?: string }): Promise<{ plays: PersistedPlay[]; total: number }>;
   getGradedPlaysForCalibration(opts: { sport?: string; market?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]>;
@@ -1531,6 +1535,10 @@ export class DatabaseStorage implements IStorage {
     mu?: number; sigma?: number; zScore?: number;
     hrBuildScore?: number | null;
     hrIntensity?: string | null;
+    signalScore?: string;
+    opportunityScore?: string;
+    liveScore?: string;
+    eventBoost?: string;
   }): Promise<{ id: string; isDuplicate: boolean }> {
     const existing = await db
       .select({ id: persistedPlays.id })
@@ -1587,6 +1595,10 @@ export class DatabaseStorage implements IStorage {
       zScore: play.zScore != null ? String(play.zScore) : null,
       hrBuildScore: play.hrBuildScore != null ? String(play.hrBuildScore) : null,
       hrIntensity: play.hrIntensity ?? null,
+      signalScore: play.signalScore ?? null,
+      opportunityScore: play.opportunityScore ?? null,
+      liveScore: play.liveScore ?? null,
+      eventBoost: play.eventBoost ?? null,
     }).onConflictDoNothing({ target: persistedPlays.duplicateGuard });
     return { id: play.id, isDuplicate: false };
   }

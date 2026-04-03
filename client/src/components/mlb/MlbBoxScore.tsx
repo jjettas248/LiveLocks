@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, RefreshCw, Search, Target } from "lucide-react";
+import { Activity, RefreshCw, Search, Target, ChevronDown, ChevronUp } from "lucide-react";
 import { queryClient } from "@/lib/queryClient";
 import type { MlbSignalData } from "./MlbSignalCard";
 import { MlbSignalCard } from "./MlbSignalCard";
@@ -84,7 +84,7 @@ function getPlayerEventBadges(player: MlbPlayerStat): EventBadge[] {
   if (player.h >= 2) badges.push({ label: `${player.h}H`, color: "#22c55e", bg: "rgba(34,197,94,0.12)" });
   if (player.exitVelocity != null && player.exitVelocity >= 100) badges.push({ label: "HARD HIT", color: "#f97316", bg: "rgba(249,115,22,0.12)" });
   else if (player.exitVelocity != null && player.exitVelocity >= 95) badges.push({ label: "SOLID", color: "#3b82f6", bg: "rgba(59,130,246,0.12)" });
-  if (player.barrelPct != null && player.barrelPct >= 0.15) badges.push({ label: "BARREL", color: "#ef4444", bg: "rgba(239,68,68,0.12)" });
+  if (player.barrelPct != null && (player.barrelPct > 1 ? player.barrelPct : player.barrelPct * 100) >= 15) badges.push({ label: "BARREL", color: "#ef4444", bg: "rgba(239,68,68,0.12)" });
   return badges;
 }
 
@@ -136,6 +136,7 @@ export function MlbBoxScore({
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"order" | "ab" | "h" | "hr" | "tb" | "k" | "signal">("order");
   const [activeTab, setActiveTab] = useState<"all" | "away" | "home" | "signals">("all");
+  const [collapsed, setCollapsed] = useState(false);
   const stickyBadgeCache = useRef<Map<string, Set<string>>>(new Map());
 
   useEffect(() => {
@@ -209,7 +210,14 @@ export function MlbBoxScore({
 
   return (
     <div className="rounded-xl border border-border bg-card" data-testid="mlb-box-score">
-      <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/40">
+      <div
+        className="flex items-center justify-between px-3 py-2.5 border-b border-border/40 cursor-pointer hover:bg-muted/10 transition-colors"
+        onClick={() => setCollapsed(!collapsed)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setCollapsed(!collapsed); } }}
+        data-testid="button-toggle-boxscore"
+      >
         <div className="flex items-center gap-2">
           <Activity className={`w-3.5 h-3.5 text-primary ${isRefetching ? "animate-spin" : ""}`} />
           <span className="text-xs font-bold text-foreground">Live Box Score</span>
@@ -220,8 +228,8 @@ export function MlbBoxScore({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          {activeTab !== "signals" && (
+        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          {!collapsed && activeTab !== "signals" && (
             <div className="relative">
               <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />
               <input
@@ -235,15 +243,17 @@ export function MlbBoxScore({
             </div>
           )}
           <button
-            onClick={handleRefresh}
+            onClick={(e) => { e.stopPropagation(); handleRefresh(); }}
             data-testid="button-refresh-boxscore"
             className="p-1.5 rounded-lg hover:bg-muted/30 text-muted-foreground hover:text-foreground transition-colors"
           >
             <RefreshCw className={`w-3 h-3 ${isRefetching ? "animate-spin" : ""}`} />
           </button>
+          {collapsed ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" />}
         </div>
       </div>
 
+      {!collapsed && (
       <div className="flex gap-1 px-3 py-1.5 border-b border-border/20">
         {(["all", "away", "home"] as const).map(tab => (
           <button
@@ -278,8 +288,9 @@ export function MlbBoxScore({
           </button>
         )}
       </div>
+      )}
 
-      {activeTab === "signals" ? (
+      {!collapsed && activeTab === "signals" ? (
         <div className="p-3 space-y-2">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {gameSignals
@@ -293,7 +304,7 @@ export function MlbBoxScore({
               ))}
           </div>
         </div>
-      ) : (
+      ) : !collapsed ? (
         <>
           <div className="overflow-x-auto">
             <table className="w-full text-[10px]">
@@ -414,8 +425,15 @@ export function MlbBoxScore({
               <p className="text-[9px] text-muted-foreground/50 text-center">Tap a player row to auto-fill the calculator</p>
             </div>
           )}
+
+          <div className="px-3 py-1.5 border-t border-border/20 flex items-center gap-3 text-[8px] text-muted-foreground/50">
+            <span className="flex items-center gap-1"><span className="w-2 h-0.5 rounded bg-[#22c55e] inline-block" /> Elite signal</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-0.5 rounded bg-[#eab308] inline-block" /> Strong signal</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-0.5 rounded bg-[#3b82f6] inline-block" /> Value signal</span>
+            <span className="flex items-center gap-1"><span className="text-orange-400 font-bold">95+</span> Hard hit EV</span>
+          </div>
         </>
-      )}
+      ) : null}
     </div>
   );
 }

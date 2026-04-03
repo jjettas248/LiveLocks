@@ -2,19 +2,20 @@ import { Zap, TrendingUp, Flame, Activity } from "lucide-react";
 import type { MLBSignal } from "@shared/mlbSignal";
 
 const MARKET_SHORT: Record<string, string> = {
-  hits: "H", total_bases: "TB", home_runs: "HR", rbi: "RBI",
-  runs: "R", stolen_bases: "SB", batter_strikeouts: "Ks",
-  pitcher_strikeouts: "K", pitcher_outs: "Outs",
-  hits_allowed: "HA", walks_allowed: "BB", hr_allowed: "HRA", hrr: "H+R+RBI",
+  hits: "Hits", total_bases: "TB", home_runs: "HR", rbi: "RBI",
+  runs: "Runs", stolen_bases: "SB", batter_strikeouts: "Ks",
+  pitcher_strikeouts: "Pitcher K", pitcher_outs: "Outs",
+  hits_allowed: "Hits Alwd", walks_allowed: "BB Alwd", hr_allowed: "HR Alwd", hrr: "H+R+RBI",
+  hr: "HR", pitcher_k: "Pitcher K", earned_runs: "ER",
 };
 
 const PITCHER_SIGNAL_DISPLAY: Record<string, { label: string; color: string }> = {
-  DOMINANT: { label: "DOM", color: "#ef4444" },
-  K_STREAK: { label: "K RUN", color: "#f59e0b" },
-  COMMAND_LOCKED: { label: "CMD", color: "#22c55e" },
-  VELOCITY_DROP: { label: "VELO↓", color: "#f97316" },
-  FATIGUE_RISK: { label: "TIRED", color: "#f97316" },
-  HARD_CONTACT: { label: "HARD HIT", color: "#ef4444" },
+  DOMINANT: { label: "Dominant", color: "#ef4444" },
+  K_STREAK: { label: "K Streak", color: "#f59e0b" },
+  COMMAND_LOCKED: { label: "Locked In", color: "#22c55e" },
+  VELOCITY_DROP: { label: "Velo Drop", color: "#f97316" },
+  FATIGUE_RISK: { label: "Fatigued", color: "#f97316" },
+  HARD_CONTACT: { label: "Hard Hit", color: "#ef4444" },
 };
 
 function liveScoreColor(score: number): string {

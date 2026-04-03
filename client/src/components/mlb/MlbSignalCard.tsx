@@ -148,9 +148,9 @@ export function MlbSignalCard({
   } | undefined;
 
   const intensityStyle: Record<string, { border: string; glow: string; bg: string; badge: string; text: string }> = {
-    weak: { border: "#6b7280", glow: "none", bg: "transparent", badge: "BUILDING", text: "#9ca3af" },
+    weak: { border: "#6b7280", glow: "none", bg: "transparent", badge: "TRACKING", text: "#9ca3af" },
     watch: { border: "#eab308", glow: "0 0 8px rgba(234,179,8,0.3)", bg: "rgba(234,179,8,0.04)", badge: "WATCH", text: "#facc15" },
-    strong: { border: "#f97316", glow: "0 0 12px rgba(249,115,22,0.4)", bg: "rgba(249,115,22,0.06)", badge: "STRONG", text: "#fb923c" },
+    strong: { border: "#f97316", glow: "0 0 12px rgba(249,115,22,0.4)", bg: "rgba(249,115,22,0.06)", badge: "RISING", text: "#fb923c" },
     imminent: { border: "#ef4444", glow: "0 0 18px rgba(239,68,68,0.5)", bg: "rgba(239,68,68,0.08)", badge: "IMMINENT", text: "#f87171" },
   };
   const hrStyle = isHRMarket && hrIntensity ? intensityStyle[hrIntensity] : null;
@@ -380,11 +380,16 @@ export function MlbSignalCard({
                           {ab.exitVelocity.toFixed(0)}mph
                         </span>
                       )}
-                      {ab.launchAngle != null && (
-                        <span className="text-[7px] text-muted-foreground">
-                          {ab.launchAngle.toFixed(0)}°
-                        </span>
-                      )}
+                      {ab.launchAngle != null && (() => {
+                        const la = Math.round(ab.launchAngle);
+                        const tag = la <= -10 ? "Chop" : la < 10 ? "GB" : la < 20 ? "Liner" : la <= 35 ? "SS" : la <= 50 ? "FB" : "PU";
+                        const tagColor = tag === "SS" ? "text-green-400" : tag === "Liner" ? "text-emerald-400" : "text-muted-foreground";
+                        return (
+                          <span className="text-[7px] text-muted-foreground">
+                            {la}° <span className={tagColor}>{tag}</span>
+                          </span>
+                        );
+                      })()}
                     </div>
                   );
                 })}
@@ -397,7 +402,7 @@ export function MlbSignalCard({
             <div className="rounded-lg p-2.5 border border-border/20 space-y-1.5" style={{ background: `${hrStyle.border}08`, borderColor: `${hrStyle.border}30` }}>
               <div className="flex items-center justify-between">
                 <span className="text-[9px] font-bold uppercase tracking-wider" style={{ color: hrStyle.text }}>
-                  HR Build Profile
+                  HR Radar Profile
                 </span>
                 {hrBuildScore != null && (
                   <span className="text-[10px] font-black tabular-nums" style={{ color: hrStyle.text }}>

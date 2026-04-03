@@ -46,11 +46,11 @@ export function applyFamilySuppression<T extends SignalForFamily>(
 
   const results: (T & { familyResult: FamilyResult })[] = [];
 
-  for (const [_playerId, playerSignals] of playerGroups) {
+  for (const [_playerId, playerSignals] of Array.from(playerGroups.entries())) {
     const familyAssignments = new Map<string, FamilyResult>();
 
     for (const familyId of Object.keys(MLB_MARKET_FAMILIES)) {
-      const familyMembers = playerSignals.filter(s =>
+      const familyMembers = playerSignals.filter((s: any) =>
         MLB_MARKET_FAMILIES[familyId].includes(s.market)
       );
 

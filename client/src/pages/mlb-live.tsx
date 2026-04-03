@@ -540,7 +540,7 @@ function GameSignalsPanel({ signals, isElite, onAddToSlip }: {
   );
 }
 
-function HRPlayerCard({ player, type }: { player: any; type: "watch" | "edge" | "cashed" }) {
+function HRPlayerCard({ player, type, onQuickAdd }: { player: any; type: "watch" | "edge" | "cashed"; onQuickAdd?: (sig: MlbSignalData) => void }) {
   const [expanded, setExpanded] = useState(false);
   const reasons = player.explanationBullets ?? player.reasons ?? [];
   const edgeVal = player.edge ?? 0;
@@ -641,7 +641,7 @@ function HRPlayerCard({ player, type }: { player: any; type: "watch" | "edge" | 
           )}
           {player.hrBuildScore != null && (
             <div className="flex items-center gap-2 text-[10px]">
-              <span className="text-muted-foreground">HR Build:</span>
+              <span className="text-muted-foreground">Radar Score:</span>
               <span className={`font-bold ${player.hrBuildScore >= 5 ? "text-red-400" : player.hrBuildScore >= 3.5 ? "text-yellow-400" : "text-muted-foreground"}`}>{player.hrBuildScore.toFixed(1)}/10</span>
             </div>
           )}
@@ -653,6 +653,29 @@ function HRPlayerCard({ player, type }: { player: any; type: "watch" | "edge" | 
                 </p>
               ))}
             </div>
+          )}
+          {type === "edge" && onQuickAdd && (
+            <button
+              data-testid={`button-hr-quick-add-${player.playerId}`}
+              className="w-full py-2 rounded-lg text-[10px] font-semibold transition-colors flex items-center justify-center gap-1 min-h-[36px]"
+              style={{ background: "rgba(34,197,94,0.12)", color: "#22c55e", border: "1px solid rgba(34,197,94,0.3)" }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onQuickAdd({
+                  playerId: player.playerId,
+                  playerName: player.playerName,
+                  market: "home_runs",
+                  bookLine: player.line ?? 0.5,
+                  enginePct: player.engineProbability ?? 0,
+                  edge: player.edge ?? null,
+                  recommendedSide: player.side ?? "OVER",
+                  gameId: player.gameId ?? "",
+                  sportsbook: player.sportsbook ?? "draftkings",
+                } as MlbSignalData);
+              }}
+            >
+              + Add HR to Slip
+            </button>
           )}
         </div>
       )}
@@ -751,7 +774,7 @@ function EarlyAlertCard({ alert }: { alert: HRAlert }) {
         <div className="space-y-0.5">
           <div className="flex items-center gap-1.5">
             <Activity className="w-3 h-3 text-muted-foreground" />
-            <span className="text-[10px] text-muted-foreground">Build Score</span>
+            <span className="text-[10px] text-muted-foreground">Radar Score</span>
           </div>
           <BuildScoreMeter score={alert.hrBuildScore} size="lg" />
         </div>
@@ -808,7 +831,7 @@ function ConversionStatsBar({ stats }: { stats: AlertConversionStats | null }) {
   );
 }
 
-function HRRadarSection({ isElite }: { isElite: boolean }) {
+function HRRadarSection({ isElite, onAddToSlip }: { isElite: boolean; onAddToSlip?: (sig: MlbSignalData) => void }) {
   const { data: hrData, isLoading } = useQuery<HRRadarResponse>({
     queryKey: ["/api/mlb/hr-radar"],
     refetchInterval: 20_000,
@@ -881,7 +904,7 @@ function HRRadarSection({ isElite }: { isElite: boolean }) {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {(isElite ? bettable : bettable.slice(0, 2)).map((edge: any) => (
-              <HRPlayerCard key={edge.playerId} player={edge} type="edge" />
+              <HRPlayerCard key={edge.playerId} player={edge} type="edge" onQuickAdd={onAddToSlip} />
             ))}
           </div>
           {!isElite && bettable.length > 2 && (
@@ -1111,6 +1134,7 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
           bullpenFactor: "Late Game", pitcherSuppression: "Pitcher Quality", pitcherDeterioration: "TTO Advantage",
         };
         const batterPriority = ["contactQuality", "batSpeedPower", "hotColdForm", "bvp", "pitchBlendMatchup", "handednessMatchup", "lineupOpportunity", "parkEnv", "pitcherDeterioration", "pitcherSuppression", "bullpenFactor"];
+        const pitcherSideKeys = new Set(["pitcherSuppression", "bullpenFactor"]);
         const entries = Object.entries(calcResult.featureScores as Record<string, number>)
           .filter(([, v]) => Math.abs(v - 0.5) >= 0.03)
           .sort(([aKey], [bKey]) => {
@@ -1128,7 +1152,10 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
             <div className="space-y-1.5">
               {entries.map(([key, val]) => {
                 const pct = Math.round(val * 100);
-                const color = pct >= 65 ? "#22c55e" : pct >= 55 ? "#a3e635" : pct >= 45 ? "#94a3b8" : pct >= 35 ? "#f59e0b" : "#ef4444";
+                const isPitcherSide = pitcherSideKeys.has(key);
+                const favorsBatter = isPitcherSide ? pct < 50 : pct >= 50;
+                const color = pct >= 65 ? (isPitcherSide ? "#ef4444" : "#22c55e") : pct >= 55 ? (isPitcherSide ? "#f59e0b" : "#a3e635") : pct >= 45 ? "#94a3b8" : pct >= 35 ? (isPitcherSide ? "#a3e635" : "#f59e0b") : (isPitcherSide ? "#22c55e" : "#ef4444");
+                const sideTag = Math.abs(pct - 50) >= 15 ? (favorsBatter ? "Batter +" : "Pitcher +") : null;
                 return (
                   <div key={key} className="flex items-center gap-2">
                     <span className="text-[9px] text-muted-foreground w-[72px] shrink-0">{batterLabels[key] ?? key}</span>
@@ -1136,6 +1163,7 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
                       <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, backgroundColor: color }} />
                     </div>
                     <span className="text-[9px] font-bold tabular-nums w-6 text-right" style={{ color }}>{pct}</span>
+                    {sideTag && <span className={`text-[7px] font-bold ${favorsBatter ? "text-green-400/60" : "text-red-400/60"}`}>{sideTag}</span>}
                   </div>
                 );
               })}
@@ -1254,6 +1282,11 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     setCalcResult(null);
     setCalcBookLine("");
     setSelectedBook(null);
+    const bestSig = edgeFeedSignals.find(s => s.playerId === player.playerId && s.enginePct > 0);
+    if (bestSig) {
+      setCalcMarket(bestSig.market);
+      if (bestSig.bookLine != null) setCalcBookLine(String(bestSig.bookLine));
+    }
   };
 
   const handleSelectBook = (book: string, line: number) => {
@@ -1373,15 +1406,6 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
 
           {selectedGameId && selectedGame && (
             <>
-              <MlbBoxScore
-                gameId={selectedGameId}
-                signals={edgeFeedSignals}
-                onPlayerClick={handleBoxScoreClick}
-                awayAbbr={selectedGame.awayAbbr}
-                homeAbbr={selectedGame.homeAbbr}
-                onAddToSlip={handleAddToSlip}
-              />
-
               {gameSignals.length > 0 && (
                 <SignalStrip signals={gameSignals} onPlayerClick={(sig) => {
                   setCalcPlayerName(sig.playerName);
@@ -1392,14 +1416,23 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
 
               <SpikeAlertBanner signals={gameSignals} />
 
+              <MlbBoxScore
+                gameId={selectedGameId}
+                signals={edgeFeedSignals}
+                onPlayerClick={handleBoxScoreClick}
+                awayAbbr={selectedGame.awayAbbr}
+                homeAbbr={selectedGame.homeAbbr}
+                onAddToSlip={handleAddToSlip}
+              />
+
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
                 <div className="lg:col-span-5 order-1 lg:order-1 space-y-4">
                   <GameContextPanel game={selectedGame} signalCount={gameSignals.length} />
 
-                  <div className="rounded-xl border border-border bg-card" data-testid="mlb-calculator">
-                    <div className="flex items-center gap-2 px-4 py-3 border-b border-border/40">
+                  <div className="rounded-xl border border-primary/20 bg-card shadow-[0_0_20px_-5px_hsl(var(--primary)/0.15)]" data-testid="mlb-calculator">
+                    <div className="flex items-center gap-2 px-4 py-3 border-b border-primary/20" style={{ background: "linear-gradient(135deg, rgba(var(--primary-rgb, 59,130,246),0.08), transparent)" }}>
                       <Calculator className="w-4 h-4 text-primary" />
-                      <span className="text-xs font-bold text-foreground">Matchup Details</span>
+                      <span className="text-xs font-bold text-foreground">MLB Calculator</span>
                     </div>
 
                     <div className="p-4 space-y-4">
@@ -1442,8 +1475,8 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                               {calcPlayer.exitVelocity != null && <span data-testid="calc-player-ev">EV {calcPlayer.exitVelocity.toFixed(1)}</span>}
                               {calcPlayer.xBA != null && <span data-testid="calc-player-xba">xBA {calcPlayer.xBA.toFixed(3)}</span>}
                               {calcPlayer.xSLG != null && <span data-testid="calc-player-xslg">xSLG {calcPlayer.xSLG.toFixed(3)}</span>}
-                              {calcPlayer.hardHitPct != null && <span data-testid="calc-player-hardhit">Hard% {(calcPlayer.hardHitPct * 100).toFixed(0)}%</span>}
-                              {calcPlayer.barrelPct != null && <span data-testid="calc-player-barrel">Barrel% {(calcPlayer.barrelPct * 100).toFixed(0)}%</span>}
+                              {calcPlayer.hardHitPct != null && <span data-testid="calc-player-hardhit">Hard% {calcPlayer.hardHitPct > 1 ? calcPlayer.hardHitPct.toFixed(0) : (calcPlayer.hardHitPct * 100).toFixed(0)}%</span>}
+                              {calcPlayer.barrelPct != null && <span data-testid="calc-player-barrel">Barrel% {calcPlayer.barrelPct > 1 ? calcPlayer.barrelPct.toFixed(0) : (calcPlayer.barrelPct * 100).toFixed(0)}%</span>}
                             </div>
                           )}
                           {calcPlayer.priorABResults && calcPlayer.priorABResults.length > 0 && (
@@ -1464,7 +1497,14 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                                       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} />
                                       <span className={`font-bold w-6 ${textColor}`}>{label}</span>
                                       {ab.exitVelocity != null && <span className="text-muted-foreground">{Math.round(ab.exitVelocity)} mph</span>}
-                                      {ab.launchAngle != null && <span className="text-muted-foreground/60">{Math.round(ab.launchAngle)}\u00B0</span>}
+                                      {ab.launchAngle != null && (() => {
+                                        const la = Math.round(ab.launchAngle);
+                                        const tag = la <= -10 ? "Chop" : la < 10 ? "GB" : la < 20 ? "Liner" : la <= 35 ? "Sweet Spot" : la <= 50 ? "Fly Ball" : "Pop Up";
+                                        const tagColor = tag === "Sweet Spot" ? "text-green-400" : tag === "Liner" ? "text-emerald-400/70" : tag === "Fly Ball" ? "text-blue-400/70" : tag === "Pop Up" ? "text-red-400/70" : "text-muted-foreground/60";
+                                        return (
+                                          <span className="text-muted-foreground/60">{la}° <span className={`text-[8px] ${tagColor}`}>{tag}</span></span>
+                                        );
+                                      })()}
                                       {ab.distance != null && ab.distance > 0 && <span className="text-muted-foreground/60">{Math.round(ab.distance)} ft</span>}
                                       {ab.pitchType && <span className="text-muted-foreground/40 ml-auto">{ab.pitchType}{ab.pitchSpeed ? ` ${Math.round(ab.pitchSpeed)}` : ""}</span>}
                                     </div>
@@ -1727,7 +1767,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
       )}
 
       {activeSubTab === "hr_radar" && (
-        <HRRadarSection isElite={isElite} />
+        <HRRadarSection isElite={isElite} onAddToSlip={handleAddToSlip} />
       )}
 
       {mlbSlipPicks.length > 0 && (

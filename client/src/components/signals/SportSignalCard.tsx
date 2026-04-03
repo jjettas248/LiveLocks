@@ -145,7 +145,7 @@ export function SportSignalCard({
           const currentVal = mk === "hits" || mk.includes("hit") ? cs.h
             : mk === "home_runs" || mk === "hr" ? cs.hr
             : mk === "total_bases" || mk.includes("total base") ? cs.tb
-            : mk === "hrr" ? (cs.h + cs.r + cs.rbi)
+            : mk === "hrr" ? (cs.h + (cs as any).r + cs.rbi)
             : cs.h;
           const alreadyOver = currentVal >= lineNum && lineNum > 0;
           const edgeHit = (side === "OVER" || side === "YES") && alreadyOver;
