@@ -274,6 +274,19 @@ app.use((req, res, next) => {
 
   try {
     await pool.query(`
+      ALTER TABLE persisted_plays
+        ADD COLUMN IF NOT EXISTS signal_score numeric,
+        ADD COLUMN IF NOT EXISTS opportunity_score numeric,
+        ADD COLUMN IF NOT EXISTS live_score numeric,
+        ADD COLUMN IF NOT EXISTS event_boost numeric;
+    `);
+    console.log("[startup] Schema migration: persisted_plays live opportunity columns ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (live-opportunity):", err.message);
+  }
+
+  try {
+    await pool.query(`
       ALTER TABLE users
         ADD COLUMN IF NOT EXISTS churned_at timestamp,
         ADD COLUMN IF NOT EXISTS churned_from_tier text;

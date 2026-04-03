@@ -424,6 +424,10 @@ export const persistedPlays = pgTable("persisted_plays", {
   zScore: numeric("z_score"),
   hrBuildScore: numeric("hr_build_score"),
   hrIntensity: text("hr_intensity"),
+  signalScore: numeric("signal_score"),
+  opportunityScore: numeric("opportunity_score"),
+  liveScore: numeric("live_score"),
+  eventBoost: numeric("event_boost"),
 }, (table) => ({
   gameDateIdx: index("persisted_plays_game_date_idx").on(table.gameDate),
   resultIdx: index("persisted_plays_result_idx").on(table.result),

@@ -715,6 +715,26 @@ export class LiveGameOrchestrator {
     const opportunityScore = computeFullOpportunityScore(input, input.inning);
     const liveScore = computeLiveOpportunityScore(scoreBreakdown.total, output.edge, opportunityScore);
 
+    let adjustedProjection = output.projection;
+    const isPitcherMarket = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(output.market);
+    if (isPitcherMarket && pitcherSigs.length > 0) {
+      let sigBoost = 0;
+      for (const ps of pitcherSigs) {
+        if (ps === "DOMINANT") sigBoost += 0.08;
+        else if (ps === "K_STREAK") sigBoost += 0.06;
+        else if (ps === "COMMAND_LOCKED") sigBoost += 0.04;
+        else if (ps === "FATIGUE_RISK") sigBoost -= 0.05;
+        else if (ps === "VELOCITY_DROP") sigBoost -= 0.04;
+        else if (ps === "HARD_CONTACT") sigBoost -= 0.06;
+      }
+      adjustedProjection = output.projection + output.projection * sigBoost;
+      if (sigBoost !== 0) {
+        console.log(`[SIGNAL_PROJ_LINK] ${output.playerName}/${output.market} projection ${output.projection.toFixed(2)}→${adjustedProjection.toFixed(2)} sigBoost=${(sigBoost * 100).toFixed(1)}% signals=[${pitcherSigs.join(",")}]`);
+      }
+    }
+
+    console.log(`[LIVE_OPPORTUNITY] player=${output.playerName} market=${output.market} signalScore=${scoreBreakdown.total} edge=${output.edge.toFixed(1)} opportunityScore=${opportunityScore} liveScore=${(liveScore * 100).toFixed(2)} eventBoost=${scoreBreakdown.eventBoost}`);
+
     const stateFields = this.computeSignalState(gameId, input, output, scoreBreakdown);
 
     const signal: MLBQualifiedSignal = {
@@ -729,7 +749,7 @@ export class LiveGameOrchestrator {
       line: output.bookLine,
       impliedProbability: null,
       engineProbability: output.calibratedProbability,
-      projection: output.projection,
+      projection: adjustedProjection,
       evPct: output.evPct,
       confidenceTier: scoreBreakdown.confidenceTier,
       signalScore: scoreBreakdown.total,
@@ -746,7 +766,7 @@ export class LiveGameOrchestrator {
       drivers: {
         edge: output.edge,
         probability: output.calibratedProbability,
-        projection: output.projection,
+        projection: adjustedProjection,
         formScore: output.formScore,
         contextScore: output.contextScore,
         ...(output.featureScores ?? {}),
@@ -877,7 +897,23 @@ export class LiveGameOrchestrator {
     const scoreBreakdown = computeSignalScore(input, output);
     const signalTags = deriveSignalTags(input, output, scoreBreakdown);
     const feedTags = deriveFeedTags(input, output, scoreBreakdown);
+    const watchPitcherSigsForProj = derivePitcherSignals(input, output);
     const stateFields = this.computeSignalState(gameId, input, output, scoreBreakdown);
+
+    let watchAdjProjection = output.projection;
+    const isWatchPitcherMarket = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(output.market);
+    if (isWatchPitcherMarket && watchPitcherSigsForProj.length > 0) {
+      let sigBoost = 0;
+      for (const ps of watchPitcherSigsForProj) {
+        if (ps === "DOMINANT") sigBoost += 0.08;
+        else if (ps === "K_STREAK") sigBoost += 0.06;
+        else if (ps === "COMMAND_LOCKED") sigBoost += 0.04;
+        else if (ps === "FATIGUE_RISK") sigBoost -= 0.05;
+        else if (ps === "VELOCITY_DROP") sigBoost -= 0.04;
+        else if (ps === "HARD_CONTACT") sigBoost -= 0.06;
+      }
+      watchAdjProjection = output.projection + output.projection * sigBoost;
+    }
 
     const watchSignal: MLBQualifiedSignal = {
       id: `${gameId}_${output.playerId}_${output.market}`,
@@ -891,7 +927,7 @@ export class LiveGameOrchestrator {
       line: bookLine,
       impliedProbability: null,
       engineProbability: output.calibratedProbability,
-      projection: output.projection,
+      projection: watchAdjProjection,
       evPct: output.evPct,
       confidenceTier: scoreBreakdown.total >= 55 ? scoreBreakdown.confidenceTier : "WATCHLIST" as any,
       signalScore: scoreBreakdown.total,
@@ -908,7 +944,7 @@ export class LiveGameOrchestrator {
       drivers: {
         edge: output.edge,
         probability: output.calibratedProbability,
-        projection: output.projection,
+        projection: watchAdjProjection,
         formScore: output.formScore,
         contextScore: output.contextScore,
         ...(output.featureScores ?? {}),
@@ -924,8 +960,7 @@ export class LiveGameOrchestrator {
     };
 
     watchSignal.pitcherAnalysis = output.pitcherAnalysis ?? null;
-    const watchPitcherSigs = derivePitcherSignals(input, output);
-    watchSignal.pitcherSignals = watchPitcherSigs.length > 0 ? watchPitcherSigs : (output.pitcherSignals ?? null);
+    watchSignal.pitcherSignals = watchPitcherSigsForProj.length > 0 ? watchPitcherSigsForProj : (output.pitcherSignals ?? null);
     const watchOppScore = computeFullOpportunityScore(input, input.inning);
     const watchLiveScore = computeLiveOpportunityScore(scoreBreakdown.total, output.edge, watchOppScore);
     watchSignal.opportunityScore = watchOppScore;

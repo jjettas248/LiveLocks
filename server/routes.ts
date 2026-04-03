@@ -1287,6 +1287,10 @@ export async function registerRoutes(
           gameDate: today,
           timestamp: new Date(),
           duplicateGuard: key,
+          signalScore: sig.signalScore != null ? String(sig.signalScore) : undefined,
+          opportunityScore: sig.opportunityScore != null ? String(sig.opportunityScore) : undefined,
+          liveScore: sig.liveScore != null ? String(sig.liveScore) : undefined,
+          eventBoost: sig.eventBoost != null ? String(sig.eventBoost) : undefined,
         }).catch(console.warn);
       }
       if (persistCount > 0 || skipCount > 0) {

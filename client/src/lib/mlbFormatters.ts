@@ -32,6 +32,7 @@ export function getMlbLiveStatValue(sig: {
 }): { label: string; value: number } | null {
   const cs = sig.currentStats;
   if (!cs) return null;
+  const ext = sig as any;
   switch (sig.market) {
     case "hits": return { label: "H", value: cs.h ?? 0 };
     case "home_runs":
@@ -42,6 +43,11 @@ export function getMlbLiveStatValue(sig: {
     case "stolen_bases": return { label: "SB", value: cs.sb ?? 0 };
     case "batter_strikeouts": return { label: "K", value: cs.k ?? 0 };
     case "hrr": return { label: "H+R+RBI", value: (cs.h ?? 0) + (cs.r ?? 0) + (cs.rbi ?? 0) };
+    case "pitcher_strikeouts": return { label: "K", value: cs.k ?? 0 };
+    case "pitcher_outs": return { label: "Outs", value: ext.pitcherPitchCount != null ? Math.round((ext.pitcherPitchCount ?? 0) / 5) : 0 };
+    case "hits_allowed": return { label: "HA", value: cs.h ?? 0 };
+    case "walks_allowed": return { label: "BB", value: cs.bb ?? 0 };
+    case "hr_allowed": return { label: "HRA", value: cs.hr ?? 0 };
     default: return { label: "H", value: cs.h ?? 0 };
   }
 }
