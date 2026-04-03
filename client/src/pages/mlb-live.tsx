@@ -193,8 +193,9 @@ function LivePulse({ updatedAt }: { updatedAt: number }) {
 }
 
 const SIGNAL_STRIP_MARKET_SHORT: Record<string, string> = {
-  hits: "H", total_bases: "TB", hrr: "HRR", pitcher_strikeouts: "K", pitcher_outs: "PO",
-  hits_allowed: "HA", walks_allowed: "BB", home_runs: "HR", batter_strikeouts: "K", hr_allowed: "HRA",
+  hits: "Hits", total_bases: "TB", hrr: "H+R+RBI", pitcher_strikeouts: "Pitcher K", pitcher_outs: "Outs",
+  hits_allowed: "Hits Alwd", walks_allowed: "BB Alwd", home_runs: "HR", batter_strikeouts: "Ks", hr_allowed: "HR Alwd",
+  hr: "HR", runs: "Runs", rbi: "RBI", stolen_bases: "SB", earned_runs: "ER", pitcher_k: "Pitcher K",
 };
 
 function SignalStrip({ signals, onPlayerClick }: { signals: MlbSignalData[]; onPlayerClick: (sig: MlbSignalData) => void }) {
@@ -306,14 +307,22 @@ function SpikeAlertBanner({ signals }: { signals: MlbSignalData[] }) {
             {SIGNAL_STRIP_MARKET_SHORT[top.market] ?? top.market} {top.recommendedSide}
           </span>
           <span className="text-[10px] font-bold tabular-nums text-foreground">{top.enginePct.toFixed(0)}%</span>
-          {top.liveScore != null && top.liveScore > 0 && (
-            <span className="text-[9px] font-bold tabular-nums text-blue-400/70">{(top.liveScore * 100).toFixed(1)} LS</span>
-          )}
-          {pitcherSigs && pitcherSigs.length > 0 && pitcherSigs.slice(0, 2).map(sig => (
-            <span key={sig} className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
-              {sig.replace(/_/g, " ")}
-            </span>
-          ))}
+          {top.liveScore != null && top.liveScore > 0 && (() => {
+            const pct = Math.min(Math.round(top.liveScore * 100 * 5), 100);
+            const g = pct >= 80 ? "A+" : pct >= 65 ? "A" : pct >= 50 ? "B+" : pct >= 35 ? "B" : pct >= 20 ? "C+" : "C";
+            return <span className="text-[9px] font-bold text-blue-400/70">Live {g}</span>;
+          })()}
+          {pitcherSigs && pitcherSigs.length > 0 && pitcherSigs.slice(0, 2).map(sig => {
+            const STRIP_PSIG: Record<string, string> = {
+              DOMINANT: "Dominant", K_STREAK: "K Streak", COMMAND_LOCKED: "Locked In",
+              VELOCITY_DROP: "Velo Drop", FATIGUE_RISK: "Fatigued", HARD_CONTACT: "Hard Hit",
+            };
+            return (
+              <span key={sig} className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                {STRIP_PSIG[sig] ?? sig.replace(/_/g, " ")}
+              </span>
+            );
+          })}
         </div>
       </div>
       <button
@@ -589,11 +598,11 @@ function HRPlayerCard({ player, type, onQuickAdd }: { player: any; type: "watch"
         {type === "edge" && (
           <>
             <span className="text-green-400 font-bold">{player.side} {player.line?.toFixed(1)}</span>
-            <span className="text-muted-foreground">\u00B7</span>
+            <span className="text-muted-foreground/40">|</span>
             <span className={`font-bold ${edgeVal > 0 ? "text-green-400" : "text-muted-foreground"}`}>
               {edgeVal > 0 ? "+" : ""}{edgeVal.toFixed(1)}% Edge
             </span>
-            <span className="text-muted-foreground">\u00B7</span>
+            <span className="text-muted-foreground/40">|</span>
             <span className="text-foreground">{player.engineProbability?.toFixed(1)}% Prob</span>
           </>
         )}
@@ -1383,7 +1392,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-5">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-bold text-foreground tracking-tight" data-testid="text-mlb-header">LiveLocks \u00B7 MLB</span>
+          <span className="text-sm font-bold text-foreground tracking-tight" data-testid="text-mlb-header">LiveLocks | MLB</span>
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/10 text-green-400 font-semibold border border-green-500/20">LIVE</span>
         </div>
       </div>

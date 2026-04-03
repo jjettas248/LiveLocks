@@ -18,18 +18,27 @@ const PITCHER_SIGNAL_DISPLAY: Record<string, { label: string; color: string }> =
   HARD_CONTACT: { label: "Hard Hit", color: "#ef4444" },
 };
 
-function liveScoreColor(score: number): string {
-  if (score >= 0.15) return "#22c55e";
-  if (score >= 0.08) return "#a3e635";
-  if (score >= 0.04) return "#f59e0b";
-  return "#94a3b8";
+function liveScoreGrade(score: number): { grade: string; color: string } {
+  const pct = Math.min(Math.round(score * 100 * 5), 100);
+  if (pct >= 80) return { grade: "A+", color: "#22c55e" };
+  if (pct >= 65) return { grade: "A", color: "#22c55e" };
+  if (pct >= 50) return { grade: "B+", color: "#a3e635" };
+  if (pct >= 35) return { grade: "B", color: "#f59e0b" };
+  if (pct >= 20) return { grade: "C+", color: "#f59e0b" };
+  return { grade: "C", color: "#94a3b8" };
 }
 
-function liveScoreLabel(score: number): string {
-  if (score >= 0.15) return "ELITE";
-  if (score >= 0.08) return "STRONG";
-  if (score >= 0.04) return "SOLID";
-  return "WATCH";
+function liveScoreColor(score: number): string {
+  return liveScoreGrade(score).color;
+}
+
+function oppGrade(score: number): string {
+  if (score >= 80) return "A+";
+  if (score >= 65) return "A";
+  if (score >= 50) return "B+";
+  if (score >= 35) return "B";
+  if (score >= 20) return "C+";
+  return "C";
 }
 
 export function TopLiveOpportunities({
@@ -57,8 +66,8 @@ export function TopLiveOpportunities({
       <div className="divide-y divide-border/20">
         {ranked.map((sig, idx) => {
           const ls = sig.liveScore ?? 0;
-          const color = liveScoreColor(ls);
-          const tierLabel = liveScoreLabel(ls);
+          const grade = liveScoreGrade(ls);
+          const color = grade.color;
           const pitcherSigs = sig.pitcherSignals ?? [];
           const mktShort = MARKET_SHORT[sig.market] ?? sig.market;
           const hasEventBoost = (sig.eventBoost ?? 0) > 30;
@@ -109,16 +118,14 @@ export function TopLiveOpportunities({
               <div className="flex flex-col items-end shrink-0">
                 <div className="flex items-center gap-1">
                   <Activity className="w-3 h-3" style={{ color }} />
-                  <span className="text-[11px] font-black tabular-nums" style={{ color }}>
-                    {(ls * 100).toFixed(1)}
+                  <span className="text-[13px] font-black" style={{ color }}>
+                    {grade.grade}
                   </span>
                 </div>
-                <span className="text-[8px] font-bold uppercase tracking-wider" style={{ color }}>{tierLabel}</span>
                 {sig.opportunityScore != null && sig.opportunityScore > 0 && (
-                  <div className="flex items-center gap-1 mt-0.5">
-                    <TrendingUp className="w-2.5 h-2.5 text-muted-foreground/50" />
-                    <span className="text-[8px] text-muted-foreground/50">OPP {sig.opportunityScore}</span>
-                  </div>
+                  <span className="text-[8px] font-semibold mt-0.5" style={{ color: `${color}99` }}>
+                    Opp {oppGrade(sig.opportunityScore)}
+                  </span>
                 )}
               </div>
             </div>

@@ -230,12 +230,12 @@ export function MlbSignalCard({
             )}
             {sig.pitcherSignals && sig.pitcherSignals.length > 0 && sig.pitcherSignals.slice(0, 2).map(ps => {
               const PSIG: Record<string, { label: string; color: string }> = {
-                DOMINANT: { label: "DOM", color: "#ef4444" },
-                K_STREAK: { label: "K RUN", color: "#f59e0b" },
-                COMMAND_LOCKED: { label: "CMD", color: "#22c55e" },
-                VELOCITY_DROP: { label: "VELO↓", color: "#f97316" },
-                FATIGUE_RISK: { label: "TIRED", color: "#f97316" },
-                HARD_CONTACT: { label: "HARD HIT", color: "#ef4444" },
+                DOMINANT: { label: "Dominant", color: "#ef4444" },
+                K_STREAK: { label: "K Streak", color: "#f59e0b" },
+                COMMAND_LOCKED: { label: "Locked In", color: "#22c55e" },
+                VELOCITY_DROP: { label: "Velo Drop", color: "#f97316" },
+                FATIGUE_RISK: { label: "Fatigued", color: "#f97316" },
+                HARD_CONTACT: { label: "Hard Hit", color: "#ef4444" },
               };
               const display = PSIG[ps];
               if (!display) return null;
@@ -250,19 +250,25 @@ export function MlbSignalCard({
                 </span>
               );
             })}
-            {(sig.liveScore ?? 0) >= 0.04 && (
-              <span
-                data-testid={`live-score-${sig.playerId}-${sig.market}`}
-                className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border tabular-nums"
-                style={{
-                  color: (sig.liveScore ?? 0) >= 0.10 ? "#3b82f6" : "#94a3b8",
-                  borderColor: (sig.liveScore ?? 0) >= 0.10 ? "rgba(59,130,246,0.3)" : "rgba(148,163,184,0.2)",
-                  background: (sig.liveScore ?? 0) >= 0.10 ? "rgba(59,130,246,0.08)" : "rgba(148,163,184,0.05)",
-                }}
-              >
-                LS {((sig.liveScore ?? 0) * 100).toFixed(1)}
-              </span>
-            )}
+            {(sig.liveScore ?? 0) >= 0.04 && (() => {
+              const ls = sig.liveScore ?? 0;
+              const lsPct = Math.min(Math.round(ls * 100 * 5), 100);
+              const lsGrade = lsPct >= 80 ? "A+" : lsPct >= 65 ? "A" : lsPct >= 50 ? "B+" : lsPct >= 35 ? "B" : lsPct >= 20 ? "C+" : "C";
+              const lsColor = lsPct >= 65 ? "#22c55e" : lsPct >= 35 ? "#a3e635" : "#94a3b8";
+              return (
+                <span
+                  data-testid={`live-score-${sig.playerId}-${sig.market}`}
+                  className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border"
+                  style={{
+                    color: lsColor,
+                    borderColor: `${lsColor}40`,
+                    background: `${lsColor}10`,
+                  }}
+                >
+                  Live {lsGrade}
+                </span>
+              );
+            })()}
             {smartTags.map((tag) => (
               <span
                 key={tag}
@@ -334,8 +340,8 @@ export function MlbSignalCard({
             )}
             {sig.signalScore > 0 && (
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Signal Score</span>
-                <span className="font-semibold text-foreground">{sig.signalScore}</span>
+                <span className="text-muted-foreground">Confidence</span>
+                <span className="font-semibold text-foreground">{sig.signalScore}/100</span>
               </div>
             )}
           </div>
