@@ -761,9 +761,8 @@ export async function getSGOPlayerLine(
     const firstName = nameParts[0] ?? "";
     const lastName  = nameParts[nameParts.length - 1] ?? "";
 
-    // SGO player prop keys are like: player-{firstName}-{lastName}-{statKey}-ou-over
-    // Try several slug formats
     const slugFull  = `${firstName}-${lastName}`.replace(/\s+/g, "-");
+    const slugFullUs = `${firstName}_${lastName}`.replace(/\s+/g, "_");
     const slugLast  = lastName;
 
     let line: number | null = null;
@@ -774,8 +773,7 @@ export async function getSGOPlayerLine(
       if (!k.includes(statKey)) continue;
       if (!k.includes("ou")) continue;
       if (!k.includes("over")) continue;
-      // Check if this key mentions the player by name parts
-      if (!k.includes(slugFull) && !k.includes(slugLast)) continue;
+      if (!k.includes(slugFull) && !k.includes(slugFullUs) && !k.includes(slugLast)) continue;
 
       const overVal = (val as any)?.over ?? (val as any)?.point ?? (val as any)?.line;
       if (typeof overVal === "number") {
