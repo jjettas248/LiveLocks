@@ -160,7 +160,6 @@ export function MlbSignalCard({
 
   const isHRMarket = sig.market === "home_runs" || sig.market === "hrr";
   const hrIntensity = sig.hrIntensity;
-  const hrBuildScore = sig.hrBuildScore;
   const hrBuild = sig.hrFactors?.build as {
     avgEV: number | null; maxEV: number | null; avgLA: number | null;
     barrels: number; hardHits: number; deepFlyouts: number;
