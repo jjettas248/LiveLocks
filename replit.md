@@ -85,3 +85,26 @@ NBA and MLB engines are fully isolated into separate systems under `server/engin
 - MLB live-signals path uses MLB engine wrapper for diagnostics and engine tagging
 - NCAAB still uses shared services (not yet isolated)
 - Debug endpoint: `GET /api/debug/engine-isolation` shows isolation status and cross-contamination check
+
+## NBA Engine Validation Harness
+
+### Overview
+A permanent validation framework that encodes `NBA_Model_Logic.md` into executable assertions, automatically detecting any drift in implementation, calibration, filtering, or output shape.
+
+### Files
+- `server/validation/nba/harness.ts` — Core harness with constant validation, archetype classification tests, fixture scenarios, calibration stability checks, drift reporting
+- `server/validation/nba/fixtures.ts` — 10 deterministic test scenarios covering all 7 archetypes, combo props, under-side, halftime H1→H2 transitions
+- `server/validation/nba/run.ts` — CLI runner (exit code 0 = pass, 1 = fail)
+
+### What It Validates
+- All 55 engine constants (variance multipliers, fragility multipliers, correlations, combo extras, safety ceilings) match documented values
+- 8 archetype classification test cases
+- 10 fixture scenarios testing directional integrity, probability bounds, output contracts, fragility reasons, ceiling enforcement
+- Calibration stability (average confidence range, over/under balance)
+
+### Running
+- **CLI**: `npx tsx server/validation/nba/run.ts`
+- **Admin endpoint**: `GET /api/debug/nba/validate` (requires admin auth)
+
+### Drift Types Detected
+ARCHETYPE_DRIFT, BLENDED_RATE_DRIFT, CALIBRATION_DRIFT, FRAGILITY_DRIFT, SAFETY_CEILING_DRIFT, DIRECTIONAL_INTEGRITY_FAILURE, PROBABILITY_BOUNDS_FAILURE, OUTPUT_CONTRACT_FAILURE, COVARIANCE_DRIFT, CONSTANT_DRIFT

@@ -512,6 +512,31 @@ export function computeProbability(
   };
 }
 
+export function getEngineConstants() {
+  return {
+    SINGLE_EPSILON,
+    COMBO_EPSILON,
+    STAT_SIGMA_FLOORS: { ...STAT_SIGMA_FLOORS },
+    COMBO_INFLATION: { ...COMBO_INFLATION },
+    CALIBRATION_SINGLE: 0.88,
+    CALIBRATION_COMBO: 0.78,
+    VOLATILE_SHRINKAGE: 0.90,
+    UNDER_BIAS_PRE_CAL: 0.92,
+    UNDER_BIAS_IN_CAL: 0.95,
+    FRAGILITY_MAX_PENALTY: 0.45,
+    MIN_DISPLAY_CONFIDENCE: 0.58,
+    MIN_MODEL_EDGE: 0.04,
+    FRAGILITY_WEIGHTS: {
+      normalizedMinutesVariance: 0.25,
+      roleUncertainty: 0.20,
+      lineupInstability: 0.20,
+      blowoutRisk: 0.15,
+      usageShock: 0.10,
+      lateSeasonChaos: 0.10,
+    },
+  };
+}
+
 function round1(n: number): number { return Math.round(n * 10) / 10; }
 function round2(n: number): number { return Math.round(n * 100) / 100; }
 function round3(n: number): number { return Math.round(n * 1000) / 1000; }

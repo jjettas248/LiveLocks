@@ -6093,6 +6093,21 @@ export function registerAnalyticsRoutes(app: Express): void {
     res.json({ reset: true, sport, resetAt: new Date().toISOString() });
   });
 
+  app.get("/api/debug/nba/validate", requireAdmin, async (_req, res) => {
+    try {
+      const { runNBAValidation, formatValidationReport } = await import("./validation/nba/harness");
+      const result = runNBAValidation();
+      const report = formatValidationReport(result);
+      console.log("[NBA_VALIDATION_HARNESS]\n" + report);
+      res.json({
+        ...result,
+        report,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/debug/engine-isolation", requireAdmin, (_req, res) => {
     try {
       const nbaStats = getEngineDebugSummary("nba");
