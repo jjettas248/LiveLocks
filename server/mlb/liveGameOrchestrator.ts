@@ -543,7 +543,7 @@ export class LiveGameOrchestrator {
         await this.triggerEngine(gameId, normalizedStatus, triggers);
       } else if (normalizedStatus === "live") {
         const cached = mlbEdgeCache.get(gameId);
-        if (cached && cached.qualifiedSignals.length > 0) {
+        if (cached && (cached.allSignals.length > 0 || cached.qualifiedSignals.length > 0)) {
           mlbEdgeCache.set(gameId, { ...cached, updatedAt: Date.now() });
         }
       }
@@ -1163,6 +1163,7 @@ export class LiveGameOrchestrator {
         const boxScorePlayer = mlbGameCache.gameBoxScore[gameId]?.byPlayerId?.[batter.playerId];
         const playerAB = boxScorePlayer?.ab ?? 0;
         if (playerAB < 1) {
+          console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "no_ab_yet", ab: ${playerAB} }`);
           continue;
         }
 
@@ -1777,20 +1778,27 @@ export class LiveGameOrchestrator {
       return (b.signalScore ?? 0) - (a.signalScore ?? 0);
     });
 
-    mlbEdgeCache.set(gameId, {
-      gameId,
-      outputs,
-      qualifiedSignals,
-      allSignals,
-      gameCardTags: gameCardTags as string[],
-      updatedAt: now,
-      createdAt: now,
-      isDegraded: anyDegraded,
-      signalLocked,
-    });
-
-    const avgScore = signalsQualified > 0 ? Math.round(scoreSum / signalsQualified) : 0;
-    console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=${signalsQualified} rejected=${signalsRejected} allSignals=${allSignals.length} avgScore=${avgScore} gameCardTags=[${gameCardTags.join(",")}]`);
+    const existingCache = mlbEdgeCache.get(gameId);
+    const isDataUnavailable = marketsEvaluated === 0 && allSignals.length === 0;
+    const PRESERVE_MAX_AGE_MS = 10 * 60 * 1000;
+    if (isDataUnavailable && existingCache && existingCache.allSignals.length > 0 && (now - existingCache.createdAt) < PRESERVE_MAX_AGE_MS) {
+      mlbEdgeCache.set(gameId, { ...existingCache, updatedAt: now });
+      console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=0 qualified=0 rejected=0 PRESERVED ${existingCache.allSignals.length} existing signals (no markets evaluated, data unavailable)`);
+    } else {
+      mlbEdgeCache.set(gameId, {
+        gameId,
+        outputs,
+        qualifiedSignals,
+        allSignals,
+        gameCardTags: gameCardTags as string[],
+        updatedAt: now,
+        createdAt: existingCache?.createdAt ?? now,
+        isDegraded: anyDegraded,
+        signalLocked,
+      });
+      const avgScore = signalsQualified > 0 ? Math.round(scoreSum / signalsQualified) : 0;
+      console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=${signalsQualified} rejected=${signalsRejected} allSignals=${allSignals.length} avgScore=${avgScore} gameCardTags=[${gameCardTags.join(",")}]`);
+    }
     return outputs;
   }
 }

@@ -85,6 +85,15 @@ export const mlbEdgeCache = {
     return _cache.size;
   },
   entries(): IterableIterator<[string, EdgeCacheEntry]> {
-    return _cache.entries();
+    const now = Date.now();
+    const valid = new Map<string, EdgeCacheEntry>();
+    for (const [key, entry] of _cache.entries()) {
+      if (now - entry.createdAt <= CACHE_TTL_MS) {
+        valid.set(key, entry);
+      } else {
+        _cache.delete(key);
+      }
+    }
+    return valid.entries();
   },
 };
