@@ -10,9 +10,9 @@ interface RecentResult {
   market: string;
   direction: string;
   line: string;
-  prob?: string;
+  prob: string;
   result: string | null;
-  finalStat?: string | null;
+  finalStat: string | null;
   gameDate: string;
   settledAt: string | null;
   confidenceTier: string | null;
@@ -36,7 +36,12 @@ const SPORT_COLORS: Record<string, string> = {
 
 export function RecentResults() {
   const { user } = useAuth();
-  const { data, isLoading } = useQuery<{ results: RecentResult[]; canViewFullResults: boolean }>({
+
+  if (!user?.isAdmin) {
+    return null;
+  }
+
+  const { data, isLoading } = useQuery<{ results: RecentResult[] }>({
     queryKey: ["/api/recent-results"],
     refetchInterval: 60000,
   });
@@ -50,17 +55,6 @@ export function RecentResults() {
   }
 
   const results = data?.results ?? [];
-  const canViewFullResults = data?.canViewFullResults ?? false;
-  const isFreeUser = user && !user.isAdmin && !user.subscriptionTier;
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-8" data-testid="recent-results-loading">
-        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
-
   if (results.length === 0) {
     return (
       <div className="text-center py-6 text-muted-foreground text-sm" data-testid="recent-results-empty">
@@ -69,7 +63,7 @@ export function RecentResults() {
     );
   }
 
-  const renderResults = () => (
+  return (
     <div data-testid="recent-results-feed" className="space-y-2">
       <div className="flex items-center gap-2 px-1 mb-2">
         <TrendingUp className="w-4 h-4 text-primary" />
@@ -82,7 +76,7 @@ export function RecentResults() {
         const isPush = r.result === "push";
         const marketLabel = MARKET_LABELS[r.market] ?? r.market;
         const sportColor = SPORT_COLORS[r.sport] ?? "text-muted-foreground";
-        const prob = r.prob ? parseFloat(r.prob) : undefined;
+        const prob = parseFloat(r.prob);
 
         return (
           <div
@@ -112,10 +106,8 @@ export function RecentResults() {
               </div>
             </div>
             <div className="text-right shrink-0">
-              {prob !== undefined && (
-                <div className="text-[10px] font-bold tabular-nums text-foreground">{prob.toFixed(0)}%</div>
-              )}
-              {r.finalStat != null && canViewFullResults && (
+              <div className="text-[10px] font-bold tabular-nums text-foreground">{prob.toFixed(0)}%</div>
+              {r.finalStat != null && (
                 <div className="text-[9px] text-muted-foreground tabular-nums">
                   Actual: {parseFloat(r.finalStat).toFixed(0)}
                 </div>
@@ -126,29 +118,4 @@ export function RecentResults() {
       })}
     </div>
   );
-
-  if (isFreeUser && !canViewFullResults) {
-    return (
-      <div className="relative">
-        <div className="opacity-60 pointer-events-none">
-          {renderResults()}
-        </div>
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-background/20 to-background/60 rounded-lg backdrop-blur-sm">
-          <div className="text-center">
-            <p className="text-sm font-semibold text-foreground mb-2">Unlock Full Results</p>
-            <p className="text-[11px] text-muted-foreground mb-3">Subscribe to see probabilities &amp; outcomes</p>
-            <button
-              data-testid="button-upgrade-recent-results"
-              onClick={() => window.location.hash = "#upgrade"}
-              className="px-4 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-bold hover:opacity-90 transition-opacity"
-            >
-              Upgrade Now
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return renderResults();
 }

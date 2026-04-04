@@ -373,12 +373,13 @@ export async function registerRoutes(
   app.get("/api/recent-results", requireAuth, async (req, res) => {
     try {
       const user = (req as any).user;
+      
+      if (!user?.isAdmin) {
+        return res.status(403).json({ error: "Admin only" });
+      }
+      
       const results = await storage.getRecentGradedSignals(20);
-      
-      const canViewFullResults = user?.isAdmin || user?.subscriptionTier;
-      const resultsToShow = canViewFullResults ? results : results.slice(0, 3);
-      
-      const safe = resultsToShow.map(p => ({
+      const safe = results.map(p => ({
         id: p.id,
         playerName: p.playerName,
         team: p.team,
@@ -386,17 +387,17 @@ export async function registerRoutes(
         market: p.market,
         direction: p.direction,
         line: p.line,
-        prob: canViewFullResults ? p.prob : undefined,
+        prob: p.prob,
         result: p.result,
-        finalStat: canViewFullResults ? p.finalStat : undefined,
+        finalStat: p.finalStat,
         gameDate: p.gameDate,
         settledAt: p.settledAt,
         confidenceTier: p.confidenceTier,
       }));
-      return res.json({ results: safe, canViewFullResults });
+      return res.json({ results: safe });
     } catch (e: any) {
       console.error("[recent-results]", e.message);
-      return res.json({ results: [], canViewFullResults: false });
+      return res.json({ results: [] });
     }
   });
 
