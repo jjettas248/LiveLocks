@@ -719,36 +719,28 @@ export async function registerRoutes(
         return (now - p.engineGeneratedAt) <= MAX_ENGINE_AGE_MS;
       });
 
-      const cards = freshPlays.map(play => {
-        const mkts = play.engineOutput?.markets as any;
-        const ftMarket = mkts?.full_total;
-        const fsMarket = mkts?.full_spread;
+      const periodFromKey = (key: string): "full_game" | "first_half" | "second_half" => {
+        if (key.startsWith("h1_")) return "first_half";
+        if (key.startsWith("h2_")) return "second_half";
+        return "full_game";
+      };
+      const marketTypeFromKey = (key: string): "total" | "spread" | "team_total" => {
+        if (key.includes("spread")) return "spread";
+        if (key.includes("team")) return "team_total";
+        return "total";
+      };
+      const sideFromMarket = (m: any, key: string): "OVER" | "UNDER" | "HOME" | "AWAY" | null => {
+        if (!m) return null;
+        if (key.includes("spread")) return m.side === "HOME" ? "HOME" : m.side === "AWAY" ? "AWAY" : null;
+        return m.side === "UNDER" ? "UNDER" : m.side === "OVER" ? "OVER" : null;
+      };
 
-        const bestMarket = findBestNcaabMarket(mkts);
-        const bm = bestMarket ? mkts[bestMarket.key] : null;
-        const bmKey = bestMarket?.key ?? "full_total";
-
-        const periodFromKey = (key: string): "full_game" | "first_half" | "second_half" => {
-          if (key.startsWith("h1_")) return "first_half";
-          if (key.startsWith("h2_")) return "second_half";
-          return "full_game";
-        };
-        const marketTypeFromKey = (key: string): "total" | "spread" | "team_total" => {
-          if (key.includes("spread")) return "spread";
-          if (key.includes("team")) return "team_total";
-          return "total";
-        };
-        const sideFromMarket = (m: any, key: string): "OVER" | "UNDER" | "HOME" | "AWAY" | null => {
-          if (!m) return null;
-          if (key.includes("spread")) return m.side === "HOME" ? "HOME" : m.side === "AWAY" ? "AWAY" : null;
-          return m.side === "UNDER" ? "UNDER" : m.side === "OVER" ? "OVER" : null;
-        };
-
-        const coverProb = bm?.modelProb ?? null;
-        const engineProb = bm?.modelProb ?? null;
-        const bookProb = bm?.bookImpliedProb ?? null;
-        const edge = bm?.edge ?? null;
-        const side = sideFromMarket(bm, bmKey);
+      const buildSelectedMarket = (m: any, key: string) => {
+        const coverProb = m?.modelProb ?? null;
+        const engineProb = m?.modelProb ?? null;
+        const bookProb = m?.bookImpliedProb ?? null;
+        const edge = m?.edge ?? null;
+        const side = sideFromMarket(m, key);
 
         let confidenceLabel: string | null = null;
         if (coverProb !== null && side) {
@@ -761,13 +753,37 @@ export async function registerRoutes(
         let signalTag: string | null = null;
         let signalDirection: "OVER" | "UNDER" | "HOME" | "AWAY" | null = null;
         if (edge !== null && Math.abs(edge) >= 5 && side) {
-          const isSpread = bmKey.includes("spread");
+          const isSpread = key.includes("spread");
           const tagLabel = isSpread
             ? (side === "HOME" ? "Home" : "Away")
             : (side === "OVER" ? "Over" : "Under");
           signalTag = `${tagLabel} CLV`;
           signalDirection = side;
         }
+
+        return {
+          marketType: marketTypeFromKey(key),
+          period: periodFromKey(key),
+          side,
+          line: m?.bookLine ?? null,
+          coverProbability: coverProb,
+          edge,
+          confidenceLabel,
+          engineProbability: engineProb,
+          bookProbability: bookProb,
+          signalTag,
+          signalDirection,
+          sportsbook: m?.sportsbook ?? null,
+        };
+      };
+
+      const cards = freshPlays.map(play => {
+        const mkts = play.engineOutput?.markets as any;
+        const ftMarket = mkts?.full_total;
+
+        const bestMarket = findBestNcaabMarket(mkts);
+        const bm = bestMarket ? mkts[bestMarket.key] : null;
+        const bmKey = bestMarket?.key ?? "full_total";
 
         const tierBadge = bm?.confidenceTier === "ELITE" ? "Elite"
           : bm?.confidenceTier === "STRONG" ? "Strong"
@@ -780,6 +796,25 @@ export async function registerRoutes(
 
         const sportsbookCount = play.bookLines?.length ?? 0;
 
+        const ftOverProb = ftMarket?.available && ftMarket.modelProb != null ? ftMarket.modelProb : null;
+        const ftUnderProb = ftOverProb !== null ? Math.round((100 - ftOverProb) * 10) / 10 : null;
+
+        const periodMarkets: Record<string, any> = {};
+        for (const period of ["full", "h1", "h2"] as const) {
+          const prefix = period === "h1" ? "h1_" : period === "h2" ? "h2_" : "full_";
+          const totalMkt = mkts?.[`${prefix}total`];
+          const spreadMkt = mkts?.[`${prefix}spread`];
+          const activeMkt = (totalMkt?.available && totalMkt.modelProb != null) ? totalMkt
+            : (spreadMkt?.available && spreadMkt.modelProb != null) ? spreadMkt
+            : totalMkt;
+          const activeKey = (totalMkt?.available && totalMkt.modelProb != null) ? `${prefix}total`
+            : (spreadMkt?.available && spreadMkt.modelProb != null) ? `${prefix}spread`
+            : `${prefix}total`;
+          if (activeMkt?.available && activeMkt.modelProb != null) {
+            periodMarkets[period] = buildSelectedMarket(activeMkt, activeKey);
+          }
+        }
+
         return {
           gameId: play.gameId,
           awayTeam: play.awayTeam,
@@ -790,24 +825,11 @@ export async function registerRoutes(
           homeScore: play.homeScore,
           periodLabel,
           gameClock: play.clock,
-          selectedMarket: {
-            marketType: marketTypeFromKey(bmKey),
-            period: periodFromKey(bmKey),
-            side,
-            line: bm?.bookLine ?? null,
-            coverProbability: coverProb,
-            edge,
-            confidenceLabel,
-            engineProbability: engineProb,
-            bookProbability: bookProb,
-            signalTag,
-            signalDirection,
-            sportsbook: bm?.sportsbook ?? null,
-          },
+          selectedMarket: buildSelectedMarket(bm, bmKey),
           fullGameTotal: {
             line: ftMarket?.bookLine ?? play.total ?? null,
-            overProbability: ftMarket?.available ? ftMarket.modelProb : null,
-            underProbability: ftMarket?.available && ftMarket.modelProb !== null ? Math.round((100 - ftMarket.modelProb) * 10) / 10 : null,
+            overProbability: ftOverProb,
+            underProbability: ftUnderProb,
             sportsbookCount,
           },
           badges: {
@@ -835,6 +857,7 @@ export async function registerRoutes(
               confidenceTier: m?.confidenceTier ?? "NONE",
             }])
           ) : {},
+          periodMarkets,
           bettingWindow: play.bettingWindow,
           bettingWindowLabel: play.bettingWindowLabel,
         };
