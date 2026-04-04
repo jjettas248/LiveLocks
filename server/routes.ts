@@ -370,10 +370,15 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/recent-results", requireAuth, async (_req, res) => {
+  app.get("/api/recent-results", requireAuth, async (req, res) => {
     try {
+      const user = (req as any).user;
       const results = await storage.getRecentGradedSignals(20);
-      const safe = results.map(p => ({
+      
+      const canViewFullResults = user?.isAdmin || user?.subscriptionTier;
+      const resultsToShow = canViewFullResults ? results : results.slice(0, 3);
+      
+      const safe = resultsToShow.map(p => ({
         id: p.id,
         playerName: p.playerName,
         team: p.team,
@@ -381,17 +386,17 @@ export async function registerRoutes(
         market: p.market,
         direction: p.direction,
         line: p.line,
-        prob: p.prob,
+        prob: canViewFullResults ? p.prob : undefined,
         result: p.result,
-        finalStat: p.finalStat,
+        finalStat: canViewFullResults ? p.finalStat : undefined,
         gameDate: p.gameDate,
         settledAt: p.settledAt,
         confidenceTier: p.confidenceTier,
       }));
-      return res.json({ results: safe });
+      return res.json({ results: safe, canViewFullResults });
     } catch (e: any) {
       console.error("[recent-results]", e.message);
-      return res.json({ results: [] });
+      return res.json({ results: [], canViewFullResults: false });
     }
   });
 
