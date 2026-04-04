@@ -1972,7 +1972,7 @@ export class DatabaseStorage implements IStorage {
     try {
       const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000);
       const result = await db.update(persistedAlerts)
-        .set({ outcome })
+        .set({ outcome, resolvedAt: new Date() })
         .where(
           and(
             eq(persistedAlerts.playerId, playerId),
@@ -1990,6 +1990,112 @@ export class DatabaseStorage implements IStorage {
       console.warn(`[HR_ALERT_GRADE] Failed: ${err.message}`);
       return 0;
     }
+  }
+
+  async resolveAlertAsHit(playerId: string, gameId: string, hitInningNum: number, hitHalfVal: string, hitPaNum: number): Promise<number> {
+    try {
+      const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000);
+      const result = await db.update(persistedAlerts)
+        .set({
+          outcome: "HR",
+          resolvedAt: new Date(),
+          hitInning: hitInningNum,
+          hitHalf: hitHalfVal,
+          hitPaNumber: hitPaNum,
+        })
+        .where(
+          and(
+            eq(persistedAlerts.playerId, playerId),
+            eq(persistedAlerts.gameId, gameId),
+            isNull(persistedAlerts.outcome),
+            gte(persistedAlerts.createdAt, cutoff),
+          )
+        );
+      const count = (result as any).rowCount ?? 0;
+      if (count > 0) {
+        console.log(`[HR_RADAR_ALERT_HIT] Resolved ${count} alert(s) as HIT for player=${playerId} game=${gameId} inning=${hitInningNum} half=${hitHalfVal}`);
+      }
+      return count;
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_ALERT_HIT] Failed: ${err.message}`);
+      return 0;
+    }
+  }
+
+  async resolveAlertAsMiss(playerId: string, gameId: string): Promise<number> {
+    try {
+      const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000);
+      const result = await db.update(persistedAlerts)
+        .set({ outcome: "NO_HR", resolvedAt: new Date() })
+        .where(
+          and(
+            eq(persistedAlerts.playerId, playerId),
+            eq(persistedAlerts.gameId, gameId),
+            isNull(persistedAlerts.outcome),
+            gte(persistedAlerts.createdAt, cutoff),
+          )
+        );
+      const count = (result as any).rowCount ?? 0;
+      return count;
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_ALERT_MISS] Failed: ${err.message}`);
+      return 0;
+    }
+  }
+
+  async reconcileAlertsForGame(gameId: string): Promise<number> {
+    try {
+      const cutoff = new Date(Date.now() - 12 * 60 * 60 * 1000);
+      const result = await db.update(persistedAlerts)
+        .set({ outcome: "NO_HR", resolvedAt: new Date() })
+        .where(
+          and(
+            eq(persistedAlerts.gameId, gameId),
+            isNull(persistedAlerts.outcome),
+            gte(persistedAlerts.createdAt, cutoff),
+          )
+        );
+      const count = (result as any).rowCount ?? 0;
+      if (count > 0) {
+        console.log(`[HR_RADAR_RECONCILE] Bulk-resolved ${count} remaining alert(s) as MISS for game=${gameId}`);
+      }
+      return count;
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_RECONCILE] Failed: ${err.message}`);
+      return 0;
+    }
+  }
+
+  async getGradedAlerts(hoursBack = 12): Promise<Array<{
+    id: number;
+    playerId: string;
+    playerName: string;
+    teamAbbr: string | null;
+    gameId: string;
+    alertType: string;
+    triggerReason: string | null;
+    hrBuildScore: string | null;
+    hrIntensity: string | null;
+    inning: number | null;
+    factors: string | null;
+    outcome: string | null;
+    resolvedAt: Date | null;
+    hitInning: number | null;
+    hitHalf: string | null;
+    hitPaNumber: number | null;
+    createdAt: Date | null;
+  }>> {
+    const cutoff = new Date(Date.now() - hoursBack * 60 * 60 * 1000);
+    const rows = await db.select().from(persistedAlerts)
+      .where(
+        and(
+          isNotNull(persistedAlerts.outcome),
+          gte(persistedAlerts.createdAt, cutoff),
+        )
+      )
+      .orderBy(desc(persistedAlerts.resolvedAt))
+      .limit(100);
+    return rows;
   }
 
   async getAlertConversionStats(): Promise<{

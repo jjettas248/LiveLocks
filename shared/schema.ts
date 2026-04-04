@@ -527,6 +527,10 @@ export const persistedAlerts = pgTable("persisted_alerts", {
   inning: integer("inning"),
   factors: text("factors"),
   outcome: text("outcome"),
+  resolvedAt: timestamp("resolved_at"),
+  hitInning: integer("hit_inning"),
+  hitHalf: text("hit_half"),
+  hitPaNumber: integer("hit_pa_number"),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => ({
   gameIdx: index("persisted_alerts_game_idx").on(table.gameId),

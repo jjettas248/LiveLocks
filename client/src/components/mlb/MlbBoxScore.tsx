@@ -24,6 +24,7 @@ type ABResultEntry = {
   distance: number | null;
   pitchType: string | null;
   pitchSpeed: number | null;
+  isBarrel?: boolean;
 };
 
 type MlbPlayerStat = {

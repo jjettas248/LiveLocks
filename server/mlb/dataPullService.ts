@@ -50,6 +50,7 @@ export interface PlayerContactData {
     outcome: "hit" | "out" | "strikeout" | "walk" | "hbp" | "error" | "other";
     pitchType: string | null;
     pitchSpeed: number | null;
+    isBarrel?: boolean;
   }>;
 }
 
@@ -491,6 +492,7 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
           byPlayerId[playerId].latestLaunchAngle = bestLA;
         }
 
+        const abIsBarrel = (bestEV ?? 0) >= 98 && (bestLA ?? 0) >= 20 && (bestLA ?? 0) <= 35;
         byPlayerId[playerId].priorABResults.push({
           exitVelocity: bestEV,
           launchAngle: bestLA,
@@ -498,6 +500,7 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
           outcome,
           pitchType: lastPitchType,
           pitchSpeed: lastPitchSpeed,
+          isBarrel: abIsBarrel,
         });
 
         const abIndex = byPlayerId[playerId].priorABResults.length;

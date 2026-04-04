@@ -91,12 +91,33 @@ type EdgeFeedResponse = {
   signals: MLBSignal[];
 };
 
+type GradedAlert = {
+  id: number;
+  playerId: string;
+  playerName: string;
+  teamAbbr: string | null;
+  gameId: string;
+  alertType: string;
+  triggerReason: string | null;
+  hrBuildScore: string | null;
+  hrIntensity?: string | null;
+  inning: number | null;
+  outcome: string | null;
+  resolvedAt: string | null;
+  hitInning?: number | null;
+  hitHalf?: string | null;
+  hitPaNumber?: number | null;
+  createdAt: string | null;
+};
+
 type HRRadarResponse = {
   hrEdges: Array<any>;
   bettableHR: Array<any>;
   cashedToday: Array<any>;
   activity?: Array<any>;
   hrWatchlist: Array<any>;
+  gradedHits?: GradedAlert[];
+  gradedMisses?: GradedAlert[];
 };
 
 const MARKET_LABELS: Record<string, string> = {
@@ -843,6 +864,8 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
   const bettable = hrData?.bettableHR ?? [];
   const watchlist = hrData?.hrWatchlist ?? [];
   const cashedToday = hrData?.cashedToday ?? hrData?.activity ?? [];
+  const gradedHits = hrData?.gradedHits ?? [];
+  const gradedMisses = hrData?.gradedMisses ?? [];
 
   const alerts = alertData?.alerts ?? [];
   const conversionStats = alertData?.conversionStats ?? null;
@@ -1024,40 +1047,91 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         </div>
       )}
 
-      {(dedupCashed.length > 0 || missedCards.length > 0) && (
-        <div className="space-y-3">
+      {(() => {
+        const dedupGradedHits = gradedHits.filter(h => !dedupCashed.some(c => c.playerId === h.playerId && c.gameId === h.gameId));
+        const dedupGradedMisses = gradedMisses.filter(m => !missedCards.some(c => c.playerId === m.playerId && c.gameId === m.gameId));
+        const totalHits = dedupCashed.length + dedupGradedHits.length;
+        const totalMisses = missedCards.length + dedupGradedMisses.length;
+        if (totalHits === 0 && totalMisses === 0) return null;
+        return (
+        <div className="space-y-3" data-testid="hr-radar-grading">
           <div className="flex items-center gap-2">
             <BarChart3 className="w-4 h-4 text-muted-foreground" />
-            <span className="text-sm font-bold text-foreground">Radar Outcomes</span>
+            <span className="text-sm font-bold text-foreground">Radar Grading</span>
+            {(totalHits + totalMisses) > 0 && (
+              <span className="text-[9px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                {totalHits}W / {totalMisses}L
+              </span>
+            )}
           </div>
-          {dedupCashed.length > 0 && (
+          {(dedupCashed.length > 0 || dedupGradedHits.length > 0) && (
             <div className="space-y-2">
               <div className="flex items-center gap-1.5">
                 <Trophy className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-xs font-semibold text-emerald-400">Cashed ({dedupCashed.length})</span>
+                <span className="text-xs font-semibold text-emerald-400">
+                  Hits ({totalHits})
+                </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {dedupCashed.map(c => (
                   <RadarCard key={`cashed-${c.playerId}-${c.gameId}`} card={c} gameTeams={null} />
                 ))}
+                {dedupGradedHits.map(h => (
+                    <div key={`graded-hit-${h.id}`} className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-1" data-testid={`graded-hit-${h.id}`}>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-foreground">{h.playerName}</span>
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400">HR</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                        {h.teamAbbr && <span>{h.teamAbbr}</span>}
+                        {h.hitInning != null && h.hitInning > 0 && (
+                          <span>
+                            {h.hitHalf === "top" ? "T" : h.hitHalf === "bottom" ? "B" : ""}{h.hitInning}
+                          </span>
+                        )}
+                        {h.resolvedAt && (
+                          <span>{new Date(h.resolvedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
               </div>
             </div>
           )}
-          {missedCards.length > 0 && (
+          {(missedCards.length > 0 || dedupGradedMisses.length > 0) && (
             <div className="space-y-2">
               <div className="flex items-center gap-1.5">
                 <X className="w-3.5 h-3.5 text-zinc-400" />
-                <span className="text-xs font-semibold text-zinc-400">Missed ({missedCards.length})</span>
+                <span className="text-xs font-semibold text-zinc-400">
+                  Misses ({totalMisses})
+                </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {missedCards.map(c => (
                   <RadarCard key={`missed-${c.playerId}-${c.gameId}`} card={c} gameTeams={null} />
                 ))}
+                {dedupGradedMisses
+                  .slice(0, 8)
+                  .map(m => (
+                    <div key={`graded-miss-${m.id}`} className="rounded-lg border border-border/30 bg-muted/20 p-3 space-y-1" data-testid={`graded-miss-${m.id}`}>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-muted-foreground">{m.playerName}</span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-500/15 text-zinc-400">No HR</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60">
+                        {m.teamAbbr && <span>{m.teamAbbr}</span>}
+                        {m.resolvedAt && (
+                          <span>{new Date(m.resolvedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
               </div>
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -1686,13 +1760,23 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                                       <span className="text-muted-foreground/40 w-3 text-right tabular-nums">{i + 1}</span>
                                       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} />
                                       <span className={`font-bold w-6 ${textColor}`}>{label}</span>
-                                      {ab.exitVelocity != null && <span className="text-muted-foreground">{Math.round(ab.exitVelocity)} mph</span>}
+                                      {ab.exitVelocity != null && (
+                                        <span className={`tabular-nums ${(ab.exitVelocity >= 95) ? "text-orange-400 font-semibold" : "text-muted-foreground"}`}>
+                                          {Math.round(ab.exitVelocity)} mph
+                                        </span>
+                                      )}
                                       {laInfo && (
                                         <span className="text-muted-foreground/60">
                                           {Math.round(ab.launchAngle!)}° <span className={`text-[8px] ${laInfo.color}`}>{laInfo.tag}</span>
                                         </span>
                                       )}
-                                      {ab.distance != null && ab.distance > 0 && <span className="text-muted-foreground/60">{Math.round(ab.distance)} ft</span>}
+                                      {ab.distance != null && ab.distance > 0 && <span className="text-muted-foreground/60 tabular-nums">{Math.round(ab.distance)} ft</span>}
+                                      {ab.isBarrel && (
+                                        <span className="text-[7px] font-bold px-1 py-0 rounded bg-red-500/20 text-red-400">BRL</span>
+                                      )}
+                                      {!ab.isBarrel && ab.exitVelocity != null && ab.exitVelocity >= 95 && (
+                                        <span className="text-[7px] font-bold px-1 py-0 rounded bg-orange-500/15 text-orange-400">HH</span>
+                                      )}
                                       {ab.pitchType && (
                                         <span className="text-muted-foreground/50 ml-auto px-1 py-0.5 rounded bg-secondary/40 text-[8px] font-medium">
                                           {ab.pitchType}{ab.pitchSpeed ? ` ${Math.round(ab.pitchSpeed)}` : ""}

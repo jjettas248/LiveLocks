@@ -53,12 +53,18 @@ import { storage } from "../storage";
 // ── HR alert grading tracker ──────────────────────────────────────────────────
 const KNOWN_HR_COUNTS = new Map<string, number>();
 
-function checkAndGradeHR(playerId: string, gameId: string, currentHR: number) {
+function checkAndGradeHR(playerId: string, gameId: string, currentHR: number, inning?: number, halfInning?: string, abNum?: number) {
   const key = `${gameId}_${playerId}`;
   const prevHR = KNOWN_HR_COUNTS.get(key) ?? 0;
   KNOWN_HR_COUNTS.set(key, currentHR);
   if (currentHR > prevHR && prevHR >= 0) {
-    storage.gradeAlertsForPlayer(playerId, gameId, "HR").catch(() => {});
+    storage.resolveAlertAsHit(
+      playerId,
+      gameId,
+      inning ?? 0,
+      halfInning ?? "unknown",
+      abNum ?? 0,
+    ).catch(() => {});
   }
 }
 
@@ -525,10 +531,12 @@ export class LiveGameOrchestrator {
       if (boxScore?.byPlayerId) {
         for (const [pid, bsp] of Object.entries(boxScore.byPlayerId)) {
           const hrCount = (bsp as any).hr ?? 0;
-          const outcome = hrCount > 0 ? "HR" : "NO_HR";
-          storage.gradeAlertsForPlayer(pid, gameId, outcome).catch(() => {});
+          if (hrCount > 0) {
+            storage.resolveAlertAsHit(pid, gameId, 0, "final", 0).catch(() => {});
+          }
         }
       }
+      storage.reconcileAlertsForGame(gameId).catch(() => {});
     }
 
     if (prevState) {
@@ -1187,7 +1195,14 @@ export class LiveGameOrchestrator {
 
         const currentGameHR = boxScorePlayer ? boxScorePlayer.hr : 0;
         if (market === "home_runs" && currentGameHR > 0) {
-          checkAndGradeHR(batter.playerId, gameId, currentGameHR);
+          checkAndGradeHR(
+            batter.playerId,
+            gameId,
+            currentGameHR,
+            state.inning,
+            state.isTopInning ? "top" : "bottom",
+            boxScorePlayer?.ab ?? 0,
+          );
         }
         const hardHitCount = playerContact
           ? (playerContact.priorABResults ?? []).filter((ab: any) => (ab.exitVelocity ?? 0) >= 95).length

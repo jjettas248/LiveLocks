@@ -41,6 +41,9 @@ export type HrRadarCardUi = {
   badges: string[];
   reasons: string[];
   wasAddedToSlip: boolean;
+  resolvedAt: string | null;
+  hitInning: number | null;
+  hitHalf: string | null;
 };
 
 const PITCHER_SIGNAL_MAP: Record<string, { label: string; color: string }> = {
@@ -281,6 +284,9 @@ export function mapHrRadarCardToUi(player: any, type: "edge" | "watch" | "cashed
     badges: Array.isArray(player.badges) ? player.badges : [],
     reasons: (player.explanationBullets ?? player.reasons ?? []).map((r: string) => sanitizeDisplayString(r)),
     wasAddedToSlip: false,
+    resolvedAt: player.resolvedAt ?? null,
+    hitInning: player.hitInning ?? null,
+    hitHalf: player.hitHalf ?? null,
   };
 }
 
@@ -345,5 +351,8 @@ export function mapAlertToUi(alert: any): HrRadarCardUi {
     badges: [],
     reasons: [],
     wasAddedToSlip: false,
+    resolvedAt: alert.resolvedAt ?? null,
+    hitInning: alert.hitInning ?? null,
+    hitHalf: alert.hitHalf ?? null,
   };
 }
