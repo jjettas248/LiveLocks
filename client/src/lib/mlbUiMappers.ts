@@ -108,13 +108,18 @@ export function formatTriggerReason(raw: string | null | undefined): string {
     .trim() || "Signal detected";
 }
 
+function clampPct(val: number): number {
+  const normalized = val > 1 ? val : val * 100;
+  return Math.min(Math.max(normalized, 0), 100);
+}
+
 export function formatMlbDisplayValue(key: string, value: number | string | null | undefined): string {
   if (value == null) return "—";
   if (typeof value === "string") return sanitizeDisplayString(value);
   switch (key) {
     case "hardHitPct":
     case "barrelPct":
-      return `${(value > 1 ? value : value * 100).toFixed(0)}%`;
+      return `${clampPct(value).toFixed(0)}%`;
     case "xBA":
     case "xSLG":
       return value.toFixed(3);
@@ -127,7 +132,7 @@ export function formatMlbDisplayValue(key: string, value: number | string | null
       return `${value.toFixed(0)}°`;
     case "probability":
     case "enginePct":
-      return `${value.toFixed(0)}%`;
+      return `${Math.min(value > 1 ? value : value * 100, 100).toFixed(0)}%`;
     case "edge":
       return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
     case "projection":
@@ -172,7 +177,7 @@ const TIER_BADGE_MAP: Record<string, string> = {
 
 export function mapMlbSignalToUi(sig: MLBSignal): MlbSignalUi {
   const liveGrade = sig.liveScore != null ? liveScoreToGrade(sig.liveScore) : null;
-  const oppGrade = sig.opposingScore != null ? oppScoreToGrade(sig.opposingScore) : null;
+  const oppGrade = (sig as any).opposingScore != null ? oppScoreToGrade((sig as any).opposingScore) : null;
   const pitcherSigs = mapPitcherSignals((sig as any).pitcherSignals);
   const tier = sig.confidenceTier ?? "WATCHLIST";
   return {
@@ -187,12 +192,11 @@ export function mapMlbSignalToUi(sig: MLBSignal): MlbSignalUi {
 
 export function launchAngleLabel(angle: number): { tag: string; color: string } {
   const la = Math.round(angle);
-  if (la <= -10) return { tag: "Chop", color: "text-muted-foreground/60" };
-  if (la < 10) return { tag: "Grounder", color: "text-muted-foreground/60" };
-  if (la < 20) return { tag: "Liner", color: "text-emerald-400/70" };
-  if (la <= 35) return { tag: "Sweet Spot", color: "text-green-400" };
-  if (la <= 50) return { tag: "Fly Ball", color: "text-blue-400/70" };
-  return { tag: "Pop Up", color: "text-red-400/70" };
+  if (la < 0) return { tag: "Ground", color: "text-muted-foreground/60" };
+  if (la <= 10) return { tag: "Ground", color: "text-muted-foreground/60" };
+  if (la <= 25) return { tag: "Line", color: "text-emerald-400" };
+  if (la <= 40) return { tag: "Fly", color: "text-green-400" };
+  return { tag: "Pop", color: "text-red-400/70" };
 }
 
 export function mapHrRadarCardToUi(player: any, type: "edge" | "watch" | "cashed"): HrRadarCardUi {

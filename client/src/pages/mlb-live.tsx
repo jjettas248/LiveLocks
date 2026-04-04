@@ -19,6 +19,13 @@ import {
   mapMlbSignalToUi,
   type HrRadarCardUi,
 } from "@/lib/mlbUiMappers";
+import {
+  buildSignalViewModel, buildHrRadarViewModel, buildGameViewModel,
+  buildAtBatLogViewModel, buildPitchMatchupViewModel,
+  buildCalcHydration, buildTopOpportunitiesViewModel,
+  normalizeMarket, normalizePct,
+  type SignalViewModel, type CalcHydrationPayload,
+} from "@/lib/mlb/mlbViewModel";
 
 class MLBErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
   constructor(props: { children: ReactNode }) {
@@ -207,7 +214,7 @@ const SIGNAL_STRIP_MARKET_SHORT: Record<string, string> = {
 
 function SignalStrip({ signals, onPlayerClick }: { signals: MlbSignalData[]; onPlayerClick: (sig: MlbSignalData) => void }) {
   const topSignals = [...signals]
-    .filter(s => s.enginePct >= 55 && s.recommendedSide !== "NO_EDGE" && !s.alreadyHit)
+    .filter(s => normalizePct(s.enginePct) >= 55 && s.recommendedSide !== "NO_EDGE" && !s.alreadyHit)
     .sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0))
     .slice(0, 8);
 
@@ -221,7 +228,8 @@ function SignalStrip({ signals, onPlayerClick }: { signals: MlbSignalData[]; onP
       </div>
       <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
         {topSignals.map((sig, i) => {
-          const tierColor = sig.enginePct >= 80 ? "#22c55e" : sig.enginePct >= 70 ? "#eab308" : "#3b82f6";
+          const pct = normalizePct(sig.enginePct);
+          const tierColor = pct >= 80 ? "#22c55e" : pct >= 70 ? "#eab308" : "#3b82f6";
           const sideColor = sig.recommendedSide === "OVER" ? "text-green-400" : "text-blue-400";
           return (
             <button
@@ -238,7 +246,7 @@ function SignalStrip({ signals, onPlayerClick }: { signals: MlbSignalData[]; onP
               <div className="flex items-center gap-2">
                 <span className="text-[9px] text-muted-foreground">{SIGNAL_STRIP_MARKET_SHORT[sig.market] ?? sig.market}</span>
                 <span className={`text-[10px] font-black ${sideColor}`}>{sig.recommendedSide}</span>
-                <span className="text-[10px] font-bold tabular-nums" style={{ color: tierColor }}>{sig.enginePct.toFixed(0)}%</span>
+                <span className="text-[10px] font-bold tabular-nums" style={{ color: tierColor }}>{pct.toFixed(0)}%</span>
                 {sig.edge != null && sig.edge > 0 && (
                   <span className="text-[8px] text-green-400/70 tabular-nums">+{sig.edge.toFixed(1)}%</span>
                 )}
@@ -259,7 +267,7 @@ function SpikeAlertBanner({ signals }: { signals: MlbSignalData[] }) {
     const key = `${s.playerId}-${s.market}`;
     if (dismissed.has(key)) return false;
     const hasPitcherSignal = (s as MlbSignalData & { pitcherSignals?: string[] | null }).pitcherSignals?.length;
-    const isHR = s.market === "home_runs" && s.enginePct >= 60;
+    const isHR = s.market === "home_runs" && normalizePct(s.enginePct) >= 60;
     const isElite = s.confidenceTier === "ELITE";
     const isLiveSpike = (s.liveScore ?? 0) >= 0.10;
     return hasPitcherSignal || isHR || isElite || isLiveSpike;
@@ -313,11 +321,10 @@ function SpikeAlertBanner({ signals }: { signals: MlbSignalData[] }) {
           <span className={`text-[10px] font-black ${top.recommendedSide === "OVER" ? "text-green-400" : "text-blue-400"}`}>
             {SIGNAL_STRIP_MARKET_SHORT[top.market] ?? top.market} {top.recommendedSide}
           </span>
-          <span className="text-[10px] font-bold tabular-nums text-foreground">{top.enginePct.toFixed(0)}%</span>
+          <span className="text-[10px] font-bold tabular-nums text-foreground">{normalizePct(top.enginePct).toFixed(0)}%</span>
           {top.liveScore != null && top.liveScore > 0 && (() => {
-            const pct = Math.min(Math.round(top.liveScore * 100 * 5), 100);
-            const g = pct >= 80 ? "A+" : pct >= 65 ? "A" : pct >= 50 ? "B+" : pct >= 35 ? "B" : pct >= 20 ? "C+" : "C";
-            return <span className="text-[9px] font-bold text-blue-400/70">Live {g}</span>;
+            const lsGrade = liveScoreToGrade(top.liveScore);
+            return <span className="text-[9px] font-bold" style={{ color: `${lsGrade.color}B3` }}>Live {lsGrade.grade}</span>;
           })()}
           {pitcherSigs && pitcherSigs.length > 0 && pitcherSigs.slice(0, 2).map(sig => {
             const STRIP_PSIG: Record<string, string> = {
@@ -831,34 +838,59 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
   const alerts = alertData?.alerts ?? [];
   const conversionStats = alertData?.conversionStats ?? null;
 
-  const dedupByPlayer = (arr: HRAlert[]) => Array.from(new Map(arr.map(a => [`${a.gameId}_${a.playerId}`, a])).values());
+  const radarState = new Map<string, HrRadarCardUi>();
 
-  const activeAlerts = dedupByPlayer(alerts.filter(a => a.outcome === null && a.alertType === "HR_EARLY"));
-  const watchAlerts = dedupByPlayer(alerts.filter(a => a.outcome === null && a.alertType !== "HR_EARLY"))
-    .filter(a => !activeAlerts.some(ea => ea.playerId === a.playerId) &&
-                 !bettable.some((b: any) => b.playerId === a.playerId));
-  const cashedAlerts = dedupByPlayer(alerts.filter(a => a.outcome === "HR"));
-  const missedAlerts = dedupByPlayer(alerts.filter(a => a.outcome === "NO_HR")).slice(0, 6);
+  for (const w of watchlist) {
+    const card = mapHrRadarCardToUi(w, "watch");
+    radarState.set(card.playerId, card);
+  }
+  for (const a of alerts) {
+    if (a.outcome !== null) continue;
+    if (a.alertType === "HR_EARLY") continue;
+    const card = mapAlertToUi(a);
+    if (!radarState.has(card.playerId)) {
+      radarState.set(card.playerId, { ...card, status: "WATCH" });
+    }
+  }
+  for (const b of bettable) {
+    const card = mapHrRadarCardToUi(b, "edge");
+    radarState.set(card.playerId, card);
+  }
+  for (const a of alerts) {
+    if (a.outcome !== null) continue;
+    if (a.alertType !== "HR_EARLY") continue;
+    const existing = radarState.get(a.playerId);
+    const card = mapAlertToUi(a);
+    if (existing) {
+      radarState.set(card.playerId, { ...existing, status: "ALERT", detectedInning: card.detectedInning ?? existing.detectedInning, latestInning: card.latestInning ?? existing.latestInning });
+    } else {
+      radarState.set(card.playerId, card);
+    }
+  }
+  for (const c of cashedToday) {
+    const card = mapHrRadarCardToUi(c, "cashed");
+    radarState.set(card.playerId, card);
+  }
+  for (const a of alerts.filter(al => al.outcome === "HR")) {
+    const card = mapAlertToUi(a);
+    radarState.set(card.playerId, { ...card, status: "CASHED" });
+  }
+  const missedAlertsList = alerts.filter(a => a.outcome === "NO_HR");
+  const seenMissed = new Set<string>();
+  for (const a of missedAlertsList) {
+    if (seenMissed.has(a.playerId)) continue;
+    seenMissed.add(a.playerId);
+    if (radarState.has(a.playerId)) continue;
+    const card = mapAlertToUi(a);
+    radarState.set(card.playerId, { ...card, status: "MISSED" });
+    if (seenMissed.size >= 6) break;
+  }
 
-  const activeCards: HrRadarCardUi[] = [
-    ...activeAlerts.map(a => mapAlertToUi(a)),
-    ...bettable.map((b: any) => mapHrRadarCardToUi(b, "edge")),
-  ];
-  const dedupActive = Array.from(new Map(activeCards.map(c => [`${c.gameId}_${c.playerId}`, c])).values());
-
-  const watchCards: HrRadarCardUi[] = [
-    ...watchAlerts.map(a => mapAlertToUi(a)),
-    ...watchlist.filter((w: any) => !dedupActive.some(ac => ac.playerId === w.playerId)).map((w: any) => mapHrRadarCardToUi(w, "watch")),
-  ];
-  const dedupWatch = Array.from(new Map(watchCards.map(c => [`${c.gameId}_${c.playerId}`, c])).values());
-
-  const cashedCards: HrRadarCardUi[] = [
-    ...cashedAlerts.map(a => mapAlertToUi(a)),
-    ...cashedToday.map((c: any) => mapHrRadarCardToUi(c, "cashed")),
-  ];
-  const dedupCashed = Array.from(new Map(cashedCards.map(c => [`${c.gameId}_${c.playerId}`, c])).values());
-
-  const missedCards: HrRadarCardUi[] = missedAlerts.map(a => mapAlertToUi(a));
+  const allCards = Array.from(radarState.values());
+  const dedupActive = allCards.filter(c => c.status === "ALERT");
+  const dedupWatch = allCards.filter(c => c.status === "WATCH");
+  const dedupCashed = allCards.filter(c => c.status === "CASHED");
+  const missedCards = allCards.filter(c => c.status === "MISSED");
 
   const isEmpty = dedupActive.length === 0 && dedupWatch.length === 0 && dedupCashed.length === 0 && missedCards.length === 0;
 
@@ -974,9 +1006,10 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
     }
   }, [calcResult.recommendedSide]);
 
-  const probability = calcResult.probability ?? calcResult.modelProbability ?? 50;
-  const overPct = probability;
-  const underPct = 100 - probability;
+  const rawProb = calcResult.probability ?? calcResult.modelProbability ?? 50;
+  const probability = normalizePct(rawProb);
+  const overPct = Math.min(probability, 100);
+  const underPct = 100 - overPct;
   const displayPct = selectedSide === "OVER" ? overPct : underPct;
   const edge = calcResult.edge ?? 0;
   const projection = calcResult.projection ?? calcResult.expectedTotal;
@@ -1269,16 +1302,19 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
   });
 
   const handleBoxScoreClick = (player: MlbPlayerStat) => {
-    setCalcPlayer(player);
-    setCalcPlayerName(player.playerName);
-    setCalcResult(null);
-    setCalcBookLine("");
-    setSelectedBook(null);
     const bestSig = edgeFeedSignals.find(s => s.playerId === player.playerId && s.enginePct > 0);
-    if (bestSig) {
-      setCalcMarket(bestSig.market);
-      if (bestSig.bookLine != null) setCalcBookLine(String(bestSig.bookLine));
-    }
+    const market = bestSig?.market ?? "hits";
+    const line = bestSig?.bookLine ?? null;
+    const teamAbbr = (player as any).teamAbbr ?? "";
+    hydrateMlbCalculator(buildCalcHydration({
+      playerId: player.playerId,
+      playerName: player.playerName,
+      teamAbbr,
+      gameId: selectedGameId ?? "",
+      market,
+      sportsbook: bestSig?.sportsbook ?? null,
+      line,
+    }, games));
   };
 
   const handleSelectBook = (book: string, line: number) => {
@@ -1335,52 +1371,47 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     }]);
   };
 
-  const MARKET_NORMALIZE: Record<string, string> = {
-    pitcher_k: "pitcher_strikeouts",
-    hr: "home_runs",
-  };
-
-  const resolveTeamSide = (teamAbbr: string, gameId: string): "home" | "away" => {
-    const game = games.find(g => g.gameId === gameId);
-    if (!game) return "home";
-    return teamAbbr === game.homeAbbr ? "home" : "away";
+  const hydrateMlbCalculator = (payload: CalcHydrationPayload) => {
+    setCalcPlayerName(payload.playerName);
+    setCalcMarket(payload.market);
+    if (payload.line != null) setCalcBookLine(String(payload.line));
+    setCalcResult(null);
+    setSelectedBook(payload.sportsbook);
+    if (payload.gameId && payload.gameId !== selectedGameId) {
+      setSelectedGameId(payload.gameId);
+    }
+    const stub = {
+      playerId: payload.playerId,
+      playerName: payload.playerName,
+      teamAbbr: payload.teamAbbr,
+      teamSide: payload.teamSide,
+    } as unknown as MlbPlayerStat;
+    setCalcPlayer(stub);
   };
 
   const handleSignalClick = (sig: MlbSignalData) => {
-    const normalizedMarket = MARKET_NORMALIZE[sig.market] ?? sig.market;
-    setCalcPlayerName(sig.playerName);
-    setCalcMarket(normalizedMarket);
-    if (sig.bookLine != null) setCalcBookLine(String(sig.bookLine));
-    setCalcResult(null);
-    setSelectedBook(null);
-    if (sig.gameId && sig.gameId !== selectedGameId) {
-      setSelectedGameId(sig.gameId);
-    }
     const teamAbbr = (sig as any).teamAbbr ?? "";
-    const teamSide = sig.gameId ? resolveTeamSide(teamAbbr, sig.gameId) : "home";
-    const matchedPlayer = sig.playerId
-      ? { playerId: sig.playerId, playerName: sig.playerName, teamAbbr, teamSide } as unknown as MlbPlayerStat
-      : null;
-    if (matchedPlayer) setCalcPlayer(matchedPlayer);
+    hydrateMlbCalculator(buildCalcHydration({
+      playerId: sig.playerId,
+      playerName: sig.playerName,
+      teamAbbr,
+      gameId: sig.gameId,
+      market: sig.market,
+      sportsbook: sig.sportsbook,
+      line: sig.bookLine,
+    }, games));
   };
 
   const handleHrRadarClick = (card: HrRadarCardUi) => {
-    setCalcPlayerName(card.playerName);
-    setCalcMarket("home_runs");
-    setCalcBookLine(String(card.line ?? 0.5));
-    setCalcResult(null);
-    setSelectedBook(null);
-    if (card.gameId && card.gameId !== selectedGameId) {
-      setSelectedGameId(card.gameId);
-    }
-    const teamSide = card.gameId ? resolveTeamSide(card.team, card.gameId) : "home";
-    const stub = {
+    hydrateMlbCalculator(buildCalcHydration({
       playerId: card.playerId,
       playerName: card.playerName,
       teamAbbr: card.team,
-      teamSide,
-    } as unknown as MlbPlayerStat;
-    setCalcPlayer(stub);
+      gameId: card.gameId,
+      market: "home_runs",
+      sportsbook: null,
+      line: card.line,
+    }, games));
   };
 
   const handleRefresh = () => {

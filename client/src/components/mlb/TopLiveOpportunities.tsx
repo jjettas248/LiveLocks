@@ -1,13 +1,7 @@
-import { Zap, TrendingUp, Flame, Activity } from "lucide-react";
+import { Zap, Flame, Activity } from "lucide-react";
+import type { SignalViewModel } from "@/lib/mlb/mlbViewModel";
 import type { MLBSignal } from "@shared/mlbSignal";
-
-const MARKET_SHORT: Record<string, string> = {
-  hits: "Hits", total_bases: "TB", home_runs: "HR", rbi: "RBI",
-  runs: "Runs", stolen_bases: "SB", batter_strikeouts: "Ks",
-  pitcher_strikeouts: "Pitcher K", pitcher_outs: "Outs",
-  hits_allowed: "Hits Alwd", walks_allowed: "BB Alwd", hr_allowed: "HR Alwd", hrr: "H+R+RBI",
-  hr: "HR", pitcher_k: "Pitcher K", earned_runs: "ER",
-};
+import { buildSignalViewModel, buildTopOpportunitiesViewModel } from "@/lib/mlb/mlbViewModel";
 
 const PITCHER_SIGNAL_DISPLAY: Record<string, { label: string; color: string }> = {
   DOMINANT: { label: "Dominant", color: "#ef4444" },
@@ -18,29 +12,6 @@ const PITCHER_SIGNAL_DISPLAY: Record<string, { label: string; color: string }> =
   HARD_CONTACT: { label: "Hard Hit", color: "#ef4444" },
 };
 
-function liveScoreGrade(score: number): { grade: string; color: string } {
-  const pct = Math.min(Math.round(score * 100 * 5), 100);
-  if (pct >= 80) return { grade: "A+", color: "#22c55e" };
-  if (pct >= 65) return { grade: "A", color: "#22c55e" };
-  if (pct >= 50) return { grade: "B+", color: "#a3e635" };
-  if (pct >= 35) return { grade: "B", color: "#f59e0b" };
-  if (pct >= 20) return { grade: "C+", color: "#f59e0b" };
-  return { grade: "C", color: "#94a3b8" };
-}
-
-function liveScoreColor(score: number): string {
-  return liveScoreGrade(score).color;
-}
-
-function oppGrade(score: number): string {
-  if (score >= 80) return "A+";
-  if (score >= 65) return "A";
-  if (score >= 50) return "B+";
-  if (score >= 35) return "B";
-  if (score >= 20) return "C+";
-  return "C";
-}
-
 export function TopLiveOpportunities({
   signals,
   onAddToSlip,
@@ -48,10 +19,8 @@ export function TopLiveOpportunities({
   signals: MLBSignal[];
   onAddToSlip?: (sig: MLBSignal) => void;
 }) {
-  const ranked = [...signals]
-    .filter(s => s.actionable && !s.alreadyHit && (s.liveScore ?? 0) > 0)
-    .sort((a, b) => (b.liveScore ?? 0) - (a.liveScore ?? 0))
-    .slice(0, 5);
+  const viewModels = signals.map(buildSignalViewModel);
+  const ranked = buildTopOpportunitiesViewModel(viewModels);
 
   if (ranked.length === 0) return null;
 
@@ -64,20 +33,18 @@ export function TopLiveOpportunities({
       </div>
 
       <div className="divide-y divide-border/20">
-        {ranked.map((sig, idx) => {
-          const ls = sig.liveScore ?? 0;
-          const grade = liveScoreGrade(ls);
-          const color = grade.color;
-          const pitcherSigs = sig.pitcherSignals ?? [];
-          const mktShort = MARKET_SHORT[sig.market] ?? sig.market;
-          const hasEventBoost = (sig.eventBoost ?? 0) > 30;
+        {ranked.map((vm, idx) => {
+          const color = vm.liveGrade?.color ?? "#94a3b8";
+          const grade = vm.liveGrade?.grade ?? "C";
+          const pitcherSigs = (vm.raw.pitcherSignals ?? []) as string[];
+          const hasEventBoost = vm.eventBoost > 30;
 
           return (
             <div
-              key={`${sig.playerId}-${sig.market}-${sig.gameId}`}
+              key={vm.id}
               data-testid={`top-opp-${idx}`}
               className="px-4 py-2.5 flex items-center gap-3 hover:bg-white/[0.02] transition-colors cursor-pointer"
-              onClick={() => onAddToSlip?.(sig)}
+              onClick={() => onAddToSlip?.(vm.raw)}
             >
               <div className="flex items-center justify-center w-6 h-6 rounded-full text-[10px] font-black shrink-0" style={{ background: `${color}20`, color }}>
                 {idx + 1}
@@ -85,18 +52,18 @@ export function TopLiveOpportunities({
 
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[12px] font-bold text-foreground truncate">{sig.playerName}</span>
-                  {sig.awayAbbr && sig.homeAbbr && (
-                    <span className="text-[9px] text-muted-foreground/60">{sig.awayAbbr}@{sig.homeAbbr}</span>
+                  <span className="text-[12px] font-bold text-foreground truncate">{vm.playerName}</span>
+                  {vm.matchup && (
+                    <span className="text-[9px] text-muted-foreground/60">{vm.matchup.replace(" @ ", "@")}</span>
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                  <span className={`text-[10px] font-black ${sig.recommendedSide === "OVER" ? "text-green-400" : "text-blue-400"}`}>
-                    {mktShort} {sig.recommendedSide} {sig.bookLine}
+                  <span className={`text-[10px] font-black`} style={{ color: vm.sideStyle.color }}>
+                    {vm.marketShort} {vm.side} {vm.bookLine}
                   </span>
-                  <span className="text-[10px] font-bold tabular-nums text-foreground/80">{sig.enginePct.toFixed(0)}%</span>
-                  {sig.edge != null && sig.edge > 0 && (
-                    <span className="text-[9px] text-green-400/70">+{sig.edge.toFixed(1)}%</span>
+                  <span className="text-[10px] font-bold tabular-nums text-foreground/80">{vm.probabilityDisplay}</span>
+                  {vm.edgeDisplay && vm.edge != null && vm.edge > 0 && (
+                    <span className="text-[9px] text-green-400/70">{vm.edgeDisplay}</span>
                   )}
                   {hasEventBoost && (
                     <span className="text-[8px] px-1 py-0.5 rounded bg-yellow-500/10 text-yellow-400 font-bold flex items-center gap-0.5">
@@ -119,12 +86,12 @@ export function TopLiveOpportunities({
                 <div className="flex items-center gap-1">
                   <Activity className="w-3 h-3" style={{ color }} />
                   <span className="text-[13px] font-black" style={{ color }}>
-                    {grade.grade}
+                    {grade}
                   </span>
                 </div>
-                {sig.opportunityScore != null && sig.opportunityScore > 0 && (
+                {vm.oppGrade && (
                   <span className="text-[8px] font-semibold mt-0.5" style={{ color: `${color}99` }}>
-                    Opp {oppGrade(sig.opportunityScore)}
+                    Opp {vm.oppGrade}
                   </span>
                 )}
               </div>

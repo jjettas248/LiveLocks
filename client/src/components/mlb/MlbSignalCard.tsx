@@ -9,6 +9,8 @@ import {
   generateShareTweet,
   openShareWindow,
 } from "@/lib/mlbFormatters";
+import { liveScoreToGrade, launchAngleLabel } from "@/lib/mlbUiMappers";
+import { normalizePct } from "@/lib/mlb/mlbViewModel";
 import type { MLBSignal } from "@shared/mlbSignal";
 
 export type MlbSignalData = MLBSignal;
@@ -206,7 +208,7 @@ export function MlbSignalCard({
           </div>
           <div className="flex flex-col items-end shrink-0">
             <span className="text-xl font-black tabular-nums leading-none" style={{ color: side.accent }}>
-              {sig.enginePct.toFixed(0)}%
+              {normalizePct(sig.enginePct).toFixed(0)}%
             </span>
             {matchup && <span className="text-[9px] text-muted-foreground mt-0.5">{matchup}</span>}
           </div>
@@ -251,21 +253,18 @@ export function MlbSignalCard({
               );
             })}
             {(sig.liveScore ?? 0) >= 0.04 && (() => {
-              const ls = sig.liveScore ?? 0;
-              const lsPct = Math.min(Math.round(ls * 100 * 5), 100);
-              const lsGrade = lsPct >= 80 ? "A+" : lsPct >= 65 ? "A" : lsPct >= 50 ? "B+" : lsPct >= 35 ? "B" : lsPct >= 20 ? "C+" : "C";
-              const lsColor = lsPct >= 65 ? "#22c55e" : lsPct >= 35 ? "#a3e635" : "#94a3b8";
+              const lsGrade = liveScoreToGrade(sig.liveScore ?? 0);
               return (
                 <span
                   data-testid={`live-score-${sig.playerId}-${sig.market}`}
                   className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border"
                   style={{
-                    color: lsColor,
-                    borderColor: `${lsColor}40`,
-                    background: `${lsColor}10`,
+                    color: lsGrade.color,
+                    borderColor: `${lsGrade.color}40`,
+                    background: `${lsGrade.color}10`,
                   }}
                 >
-                  Live {lsGrade}
+                  Live {lsGrade.grade}
                 </span>
               );
             })()}
@@ -388,11 +387,10 @@ export function MlbSignalCard({
                       )}
                       {ab.launchAngle != null && (() => {
                         const la = Math.round(ab.launchAngle);
-                        const tag = la <= -10 ? "Chop" : la < 10 ? "GB" : la < 20 ? "Liner" : la <= 35 ? "SS" : la <= 50 ? "FB" : "PU";
-                        const tagColor = tag === "SS" ? "text-green-400" : tag === "Liner" ? "text-emerald-400" : "text-muted-foreground";
+                        const laLabel = launchAngleLabel(ab.launchAngle);
                         return (
                           <span className="text-[7px] text-muted-foreground">
-                            {la}° <span className={tagColor}>{tag}</span>
+                            {la}° <span className={laLabel.color}>{laLabel.tag}</span>
                           </span>
                         );
                       })()}
@@ -569,10 +567,10 @@ export function MlbSignalCard({
                   );
                 })}
               </div>
-              {!isPitcherMarket && sig.pitchMatchupRatings && (
+              {sig.pitchMatchupRatings && (
                 <div className="flex items-center gap-3 text-[8px] text-muted-foreground/60 mt-0.5">
-                  <span className="flex items-center gap-0.5"><span className="text-green-400">▲</span> batter advantage</span>
-                  <span className="flex items-center gap-0.5"><span className="text-red-400">▼</span> pitcher advantage</span>
+                  <span className="flex items-center gap-0.5"><span className="text-green-400">▲</span> {isPitcherMarket ? "pitcher advantage" : "batter advantage"}</span>
+                  <span className="flex items-center gap-0.5"><span className="text-red-400">▼</span> {isPitcherMarket ? "batter advantage" : "pitcher advantage"}</span>
                 </div>
               )}
             </div>
