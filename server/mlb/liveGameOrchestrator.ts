@@ -1162,10 +1162,7 @@ export class LiveGameOrchestrator {
 
         const boxScorePlayer = mlbGameCache.gameBoxScore[gameId]?.byPlayerId?.[batter.playerId];
         const playerAB = boxScorePlayer?.ab ?? 0;
-        if (playerAB < 1) {
-          console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "no_ab_yet", ab: ${playerAB} }`);
-          continue;
-        }
+        const isEarlySignalMode = playerAB < 1;
 
         const rollingStats = mlbPlayerCache.batterRollingStats[batter.playerId];
         const pitcherSeasonStats = pitcher ? mlbPlayerCache.pitcherSeasonStats[pitcher.playerId] : undefined;
@@ -1425,7 +1422,7 @@ export class LiveGameOrchestrator {
           } : null;
 
           const qResult = this.qualifySignal(gameId, input, output);
-          if (qResult) {
+          if (qResult && !isEarlySignalMode) {
             qResult.currentStats = batterStats;
             qResult.lastABContact = lastABContact;
             qResult.batterArchetype = bArch;
@@ -1446,8 +1443,10 @@ export class LiveGameOrchestrator {
             signalsQualified++;
             scoreSum += qResult.signalScore;
           } else {
-            signalsRejected++;
-            const watchSig = this.buildWatchSignal(gameId, input, output);
+            if (!isEarlySignalMode) signalsRejected++;
+            const watchSig = isEarlySignalMode
+              ? (qResult ?? this.buildWatchSignal(gameId, input, output))
+              : this.buildWatchSignal(gameId, input, output);
             if (watchSig) {
               watchSig.currentStats = batterStats;
               watchSig.lastABContact = lastABContact;
@@ -1455,6 +1454,13 @@ export class LiveGameOrchestrator {
               watchSig.pitcherArchetype = pitcherArch;
               watchSig.thesis = thesis;
               watchSig.isDegraded = !!(input as any).isDegraded;
+              if (isEarlySignalMode) {
+                watchSig.confidenceTier = "WATCHLIST" as any;
+                watchSig.isEarlySignal = true;
+                watchSig.watchlist = true;
+                watchSig.actionable = false;
+                console.log(`[MLB EARLY_SIGNAL] ${batter.playerName}/${market} game=${gameId} — pre-AB watchlist signal (edge=${output.edge.toFixed(1)}, side=${output.recommendedSide})`);
+              }
               allSignals.push(watchSig);
             }
           }
@@ -1521,10 +1527,7 @@ export class LiveGameOrchestrator {
       for (const market of PITCHER_MARKETS) {
         if (!impactedMarkets.has(market)) continue;
         const currentPitchCount = pitcherCtx?.pitchCount ?? state.pitchCount ?? 0;
-        if (currentPitchCount < 10) {
-          console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", reason: "pitcher_too_early" }`);
-          continue;
-        }
+        const isPitcherEarlySignal = currentPitchCount < 10;
         const { remainingBF, remainingIP } = estimatePitcherRemainingBF(
           state.inning,
           currentPitchCount
@@ -1706,7 +1709,7 @@ export class LiveGameOrchestrator {
           marketsEvaluated++;
 
           const qResult = this.qualifySignal(gameId, input, output);
-          if (qResult) {
+          if (qResult && !isPitcherEarlySignal) {
             qResult.pitcherArchetype = pArchForMarket;
             qResult.safetyCeilingApplied = pitcherCeilResult.ceilingApplied;
             qResult.varianceTier = MARKET_VOLATILITY[market] ?? "mid";
@@ -1717,11 +1720,20 @@ export class LiveGameOrchestrator {
             signalsQualified++;
             scoreSum += qResult.signalScore;
           } else {
-            signalsRejected++;
-            const watchSig = this.buildWatchSignal(gameId, input, output);
+            if (!isPitcherEarlySignal) signalsRejected++;
+            const watchSig = isPitcherEarlySignal
+              ? (qResult ?? this.buildWatchSignal(gameId, input, output))
+              : this.buildWatchSignal(gameId, input, output);
             if (watchSig) {
               watchSig.pitcherArchetype = pArchForMarket;
               watchSig.isDegraded = !!(input as any).isDegraded;
+              if (isPitcherEarlySignal) {
+                watchSig.confidenceTier = "WATCHLIST" as any;
+                watchSig.isEarlySignal = true;
+                watchSig.watchlist = true;
+                watchSig.actionable = false;
+                console.log(`[MLB EARLY_SIGNAL] pitcher ${pitcherToEval.playerName}/${market} game=${gameId} — early pitcher watchlist signal (pitchCount=${currentPitchCount}, edge=${output.edge.toFixed(1)})`);
+              }
               allSignals.push(watchSig);
             }
           }
@@ -1781,7 +1793,8 @@ export class LiveGameOrchestrator {
     const existingCache = mlbEdgeCache.get(gameId);
     const isDataUnavailable = marketsEvaluated === 0 && allSignals.length === 0;
     const PRESERVE_MAX_AGE_MS = 10 * 60 * 1000;
-    if (isDataUnavailable && existingCache && existingCache.allSignals.length > 0 && (now - existingCache.createdAt) < PRESERVE_MAX_AGE_MS) {
+    const cacheAge = now - Math.max(existingCache?.updatedAt ?? 0, existingCache?.createdAt ?? 0);
+    if (isDataUnavailable && existingCache && existingCache.allSignals.length > 0 && cacheAge < PRESERVE_MAX_AGE_MS) {
       mlbEdgeCache.set(gameId, { ...existingCache, updatedAt: now });
       console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=0 qualified=0 rejected=0 PRESERVED ${existingCache.allSignals.length} existing signals (no markets evaluated, data unavailable)`);
     } else {

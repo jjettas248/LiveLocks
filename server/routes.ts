@@ -1282,6 +1282,7 @@ export async function registerRoutes(
           actionable: qs.actionable ?? true,
           stale: qs.stale ?? false,
           watchlist: qs.watchlist ?? false,
+          isEarlySignal: (qs as any).isEarlySignal ?? false,
           isDegraded: (qs as any).isDegraded ?? false,
           batterArchetype: qs.batterArchetype ?? null,
           pitcherArchetype: qs.pitcherArchetype ?? null,

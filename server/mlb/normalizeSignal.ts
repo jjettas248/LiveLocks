@@ -131,7 +131,9 @@ function generateSmartTags(
     tags.push("📍 1 Away");
   }
 
-  if (qs.inning <= 2 && !qs.alreadyHit) {
+  if (qs.isEarlySignal) {
+    tags.push("🔎 Pre-Game Edge");
+  } else if (qs.inning <= 2 && !qs.alreadyHit) {
     tags.push("⏰ Early Signal");
   }
 
@@ -302,6 +304,7 @@ export function normalizeMLBSignal(
     actionable: qs.actionable ?? !alreadyHit,
     stale: qs.stale ?? false,
     watchlist: qs.watchlist ?? false,
+    isEarlySignal: qs.isEarlySignal ?? false,
     isDegraded: qs.isDegraded ?? false,
     fallbackUsed: qs.fallbackUsed ?? false,
 

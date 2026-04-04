@@ -26,6 +26,7 @@ export interface MLBSignal {
   actionable: boolean;
   stale: boolean;
   watchlist: boolean;
+  isEarlySignal: boolean;
   isDegraded: boolean;
   fallbackUsed: boolean;
 

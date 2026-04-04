@@ -540,6 +540,7 @@ export interface MLBQualifiedSignal {
   alreadyHit: boolean;
   stale: boolean;
   watchlist: boolean;
+  isEarlySignal?: boolean;
 
   overOdds: number | null;
   underOdds: number | null;
