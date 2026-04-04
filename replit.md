@@ -85,7 +85,7 @@ NBA and MLB engines are fully isolated into separate systems under `server/engin
 - `routes.ts` imports `processNBAEngine` and `processMLBEngine` directly
 - NBA live-signals path uses NBA engine wrapper (no shared `filterValidSignals`/`filterValidEngineOutputs`)
 - MLB live-signals path uses MLB engine wrapper for diagnostics and engine tagging
-- NCAAB still uses shared services (not yet isolated)
+- NCAAB uses shared services (not yet isolated); standalone `/ncaab` page at `client/src/pages/ncaab-live.tsx` with `/api/ncaab/live` endpoint
 - Debug endpoint: `GET /api/debug/engine-isolation` shows isolation status and cross-contamination check
 
 ## NBA Engine Validation Harness

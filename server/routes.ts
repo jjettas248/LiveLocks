@@ -694,6 +694,164 @@ export async function registerRoutes(
     return res.json({ ok: true, stats });
   });
 
+  app.get("/api/ncaab/live", requireTier("all", "elite"), async (_req, res) => {
+    const findBestNcaabMarket = (mkts: any): { key: string } | null => {
+      if (!mkts) return null;
+      const keys = ["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"];
+      let bestKey: string | null = null;
+      let bestScore = -1;
+      for (const key of keys) {
+        const m = mkts[key];
+        if (!m?.available || m.modelProb == null) continue;
+        const absEdge = Math.abs(m.edge ?? 0);
+        const probSignal = Math.abs((m.modelProb ?? 50) - 50);
+        const score = absEdge > 0 ? absEdge : probSignal;
+        if (score > bestScore) { bestScore = score; bestKey = key; }
+      }
+      return bestKey ? { key: bestKey } : null;
+    };
+    try {
+      const plays = await computeNCAABPlays();
+      const now = Date.now();
+      const MAX_ENGINE_AGE_MS = 30_000;
+      const freshPlays = plays.filter(p => {
+        if (!p.engineGeneratedAt) return true;
+        return (now - p.engineGeneratedAt) <= MAX_ENGINE_AGE_MS;
+      });
+
+      const cards = freshPlays.map(play => {
+        const mkts = play.engineOutput?.markets as any;
+        const ftMarket = mkts?.full_total;
+        const fsMarket = mkts?.full_spread;
+
+        const bestMarket = findBestNcaabMarket(mkts);
+        const bm = bestMarket ? mkts[bestMarket.key] : null;
+        const bmKey = bestMarket?.key ?? "full_total";
+
+        const periodFromKey = (key: string): "full_game" | "first_half" | "second_half" => {
+          if (key.startsWith("h1_")) return "first_half";
+          if (key.startsWith("h2_")) return "second_half";
+          return "full_game";
+        };
+        const marketTypeFromKey = (key: string): "total" | "spread" | "team_total" => {
+          if (key.includes("spread")) return "spread";
+          if (key.includes("team")) return "team_total";
+          return "total";
+        };
+        const sideFromMarket = (m: any, key: string): "OVER" | "UNDER" | "HOME" | "AWAY" | null => {
+          if (!m) return null;
+          if (key.includes("spread")) return m.side === "HOME" ? "HOME" : m.side === "AWAY" ? "AWAY" : null;
+          return m.side === "UNDER" ? "UNDER" : m.side === "OVER" ? "OVER" : null;
+        };
+
+        const coverProb = bm?.modelProb ?? null;
+        const engineProb = bm?.modelProb ?? null;
+        const bookProb = bm?.bookImpliedProb ?? null;
+        const edge = bm?.edge ?? null;
+        const side = sideFromMarket(bm, bmKey);
+
+        let confidenceLabel: string | null = null;
+        if (coverProb !== null && side) {
+          const absCover = Math.abs(coverProb - 50);
+          const tier = absCover >= 25 ? "Strong" : absCover >= 15 ? "Moderate" : "Lean";
+          const sideLabel = side === "OVER" || side === "UNDER" ? side.charAt(0) + side.slice(1).toLowerCase() : side;
+          confidenceLabel = `${tier} ${sideLabel} EV`;
+        }
+
+        let signalTag: string | null = null;
+        let signalDirection: "OVER" | "UNDER" | "HOME" | "AWAY" | null = null;
+        if (edge !== null && Math.abs(edge) >= 5 && side) {
+          const isSpread = bmKey.includes("spread");
+          const tagLabel = isSpread
+            ? (side === "HOME" ? "Home" : "Away")
+            : (side === "OVER" ? "Over" : "Under");
+          signalTag = `${tagLabel} CLV`;
+          signalDirection = side;
+        }
+
+        const tierBadge = bm?.confidenceTier === "ELITE" ? "Elite"
+          : bm?.confidenceTier === "STRONG" ? "Strong"
+          : bm?.confidenceTier === "VALUE" ? "Value"
+          : null;
+
+        const periodLabel = play.bettingWindow === "HALFTIME" ? "HT"
+          : `H${play.half}`;
+        const liveTag = `LIVE • ${periodLabel} ${play.clock}`;
+
+        const sportsbookCount = play.bookLines?.length ?? 0;
+
+        return {
+          gameId: play.gameId,
+          awayTeam: play.awayTeam,
+          homeTeam: play.homeTeam,
+          awayTeamAbbr: play.awayTeamAbbr,
+          homeTeamAbbr: play.homeTeamAbbr,
+          awayScore: play.awayScore,
+          homeScore: play.homeScore,
+          periodLabel,
+          gameClock: play.clock,
+          selectedMarket: {
+            marketType: marketTypeFromKey(bmKey),
+            period: periodFromKey(bmKey),
+            side,
+            line: bm?.bookLine ?? null,
+            coverProbability: coverProb,
+            edge,
+            confidenceLabel,
+            engineProbability: engineProb,
+            bookProbability: bookProb,
+            signalTag,
+            signalDirection,
+            sportsbook: bm?.sportsbook ?? null,
+          },
+          fullGameTotal: {
+            line: ftMarket?.bookLine ?? play.total ?? null,
+            overProbability: ftMarket?.available ? ftMarket.modelProb : null,
+            underProbability: ftMarket?.available && ftMarket.modelProb !== null ? Math.round((100 - ftMarket.modelProb) * 10) / 10 : null,
+            sportsbookCount,
+          },
+          badges: {
+            tierBadge,
+            liveTag,
+          },
+          diagnostics: {
+            oddsUpdatedAt: null,
+            engineGeneratedAt: play.engineGeneratedAt ? new Date(play.engineGeneratedAt).toISOString() : null,
+            dataFreshnessMs: play.engineGeneratedAt ? now - play.engineGeneratedAt : null,
+            fallbackTriggered: false,
+          },
+          markets: mkts ? Object.fromEntries(
+            Object.entries(mkts).map(([key, m]: [string, any]) => [key, {
+              available: m?.available ?? false,
+              marketKey: key,
+              label: m?.label ?? key,
+              sportsbook: m?.sportsbook ?? null,
+              bookLine: m?.bookLine ?? null,
+              projection: m?.projection ?? null,
+              modelProb: m?.modelProb ?? null,
+              bookImpliedProb: m?.bookImpliedProb ?? null,
+              edge: m?.edge ?? null,
+              side: m?.side ?? null,
+              confidenceTier: m?.confidenceTier ?? "NONE",
+            }])
+          ) : {},
+          bettingWindow: play.bettingWindow,
+          bettingWindowLabel: play.bettingWindowLabel,
+        };
+      });
+
+      const topPlays = [...cards]
+        .filter(c => c.selectedMarket.coverProbability !== null && Math.abs((c.selectedMarket.coverProbability ?? 50) - 50) >= 10)
+        .sort((a, b) => Math.abs((b.selectedMarket.coverProbability ?? 50) - 50) - Math.abs((a.selectedMarket.coverProbability ?? 50) - 50))
+        .slice(0, 3);
+
+      return res.json({ cards, topPlays, updatedAt: new Date().toISOString() });
+    } catch (err: any) {
+      console.error("[NCAAB live]", err.message);
+      return res.status(500).json({ error: err.message || "NCAAB live error" });
+    }
+  });
+
   // ── MLB Live Routes (Auth-required, Phase B UI) ──────────────────────────────
 
   const mlbLiveGamesCache = new Map<string, { ts: number; games: any[] }>();

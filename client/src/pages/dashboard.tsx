@@ -2145,7 +2145,7 @@ export default function Dashboard() {
                   setShowUpgradeModal(true);
                   return;
                 }
-                setActiveTab("ncaab");
+                navigate("/ncaab");
               }}
               className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
                 activeTab === "ncaab"
