@@ -6,12 +6,11 @@ import { ArrowLeft, Zap, Activity, Radio, ChevronDown, ChevronUp } from "lucide-
 
 const LIVE_REFRESH_MS = 20000;
 
-type MarketPeriod = "full_game" | "first_half" | "second_half";
 type MarketSide = "OVER" | "UNDER" | "HOME" | "AWAY" | null;
 
 type SelectedMarket = {
   marketType: "spread" | "total" | "team_total";
-  period: MarketPeriod;
+  period: "full_game" | "first_half" | "second_half";
   side: MarketSide;
   line: number | null;
   coverProbability: number | null;
@@ -60,6 +59,7 @@ type NcaabCard = {
   badges: { tierBadge: string | null; liveTag: string | null };
   diagnostics?: { engineGeneratedAt?: string | null; dataFreshnessMs?: number | null };
   markets: Record<string, CardMarket>;
+  periodMarkets?: Record<string, SelectedMarket>;
   bettingWindow: string;
   bettingWindowLabel: string;
 };
@@ -235,45 +235,26 @@ function TopPlayCard({ card }: { card: NcaabCard }) {
   );
 }
 
-function NcaabGameCard({ card, defaultTab }: { card: NcaabCard; defaultTab?: string }) {
+function NcaabGameCard({ card }: { card: NcaabCard }) {
   const [expanded, setExpanded] = useState(true);
   const [selectedPeriod, setSelectedPeriod] = useState<"full" | "h1" | "h2">(() => {
-    if (defaultTab === "h1") return "h1";
-    if (defaultTab === "h2") return "h2";
-    const mkts = card.markets;
-    if (mkts.full_total?.available || mkts.full_spread?.available) return "full";
-    if (mkts.h1_total?.available || mkts.h1_spread?.available) return "h1";
-    if (mkts.h2_total?.available || mkts.h2_spread?.available) return "h2";
+    const pm = card.periodMarkets;
+    if (pm?.full) return "full";
+    if (pm?.h1) return "h1";
+    if (pm?.h2) return "h2";
     return "full";
   });
 
-  const periodPrefix = selectedPeriod === "h1" ? "h1_" : selectedPeriod === "h2" ? "h2_" : "full_";
-  const totalMkt = card.markets[`${periodPrefix}total`];
-  const spreadMkt = card.markets[`${periodPrefix}spread`];
-  const activeMkt = (totalMkt?.available && totalMkt.modelProb !== null) ? totalMkt
-    : (spreadMkt?.available && spreadMkt.modelProb !== null) ? spreadMkt
-    : totalMkt;
-
-  const coverProb = activeMkt?.modelProb ?? card.selectedMarket.coverProbability;
-  const activeSide = activeMkt?.side ?? card.selectedMarket.side;
-  const activeEdge = activeMkt?.edge ?? card.selectedMarket.edge;
-  const activeBookProb = activeMkt?.bookImpliedProb ?? card.selectedMarket.bookProbability;
-  const activeLine = activeMkt?.bookLine ?? card.selectedMarket.line;
-  const activeMarketType = activeMkt?.marketKey?.includes("spread") ? "spread" : "total";
+  const activeMarket: SelectedMarket | null = (() => {
+    const pm = card.periodMarkets;
+    if (pm?.[selectedPeriod]) return pm[selectedPeriod];
+    return card.selectedMarket;
+  })();
 
   const periodLabel = selectedPeriod === "full" ? "Full Game" : selectedPeriod === "h1" ? "1st Half" : "2nd Half";
 
-  let confidenceLabel: string | null = null;
-  if (coverProb !== null && activeSide) {
-    const absCover = Math.abs(coverProb - 50);
-    const tier = absCover >= 25 ? "Strong" : absCover >= 15 ? "Moderate" : "Lean";
-    const sideLabel = activeSide === "OVER" || activeSide === "UNDER" ? activeSide.charAt(0) + activeSide.slice(1).toLowerCase() : activeSide;
-    confidenceLabel = `${tier} ${sideLabel} EV`;
-  }
-
   const tabAvail = (tab: "full" | "h1" | "h2"): boolean => {
-    const prefix = tab === "h1" ? "h1_" : tab === "h2" ? "h2_" : "full_";
-    return !!(card.markets[`${prefix}total`]?.available || card.markets[`${prefix}spread`]?.available);
+    return !!card.periodMarkets?.[tab];
   };
 
   return (
@@ -326,35 +307,31 @@ function NcaabGameCard({ card, defaultTab }: { card: NcaabCard; defaultTab?: str
       {expanded && (
         <div className="px-4 pb-4 space-y-4">
           <div className="flex justify-center">
-            <div className="relative">
-              <ProbabilityRing value={coverProb} label="COVER" size="lg" />
-            </div>
+            <ProbabilityRing value={activeMarket?.coverProbability ?? null} label="COVER" size="lg" />
           </div>
           <div className="text-center">
             <span className="text-xs text-muted-foreground font-medium">
-              {periodLabel} • {activeMarketType === "spread" ? "Spread" : "Total"}
-              {activeLine !== null && <span className="ml-1 text-foreground font-semibold">{activeLine}</span>}
-              {activeSide && (
-                <span className={`ml-1 font-bold ${activeSide === "OVER" || activeSide === "HOME" ? "text-emerald-400" : "text-red-400"}`}>
-                  {activeSide}
+              {periodLabel} • {activeMarket?.marketType === "spread" ? "Spread" : "Total"}
+              {activeMarket?.line !== null && activeMarket?.line !== undefined && (
+                <span className="ml-1 text-foreground font-semibold">{activeMarket.line}</span>
+              )}
+              {activeMarket?.side && (
+                <span className={`ml-1 font-bold ${activeMarket.side === "OVER" || activeMarket.side === "HOME" ? "text-emerald-400" : "text-red-400"}`}>
+                  {activeMarket.side}
                 </span>
               )}
             </span>
           </div>
 
           <div className="flex items-center justify-center gap-8">
-            <div className="relative">
-              <ProbabilityRing value={card.fullGameTotal.overProbability} label="OVER" size="sm" color="#00d4aa" />
-            </div>
+            <ProbabilityRing value={card.fullGameTotal.overProbability} label="OVER" size="sm" color="#00d4aa" />
             <div className="flex flex-col items-center gap-0.5">
               {card.fullGameTotal.line !== null && (
                 <span className="text-sm font-bold">{card.fullGameTotal.line}</span>
               )}
               <span className="text-[10px] text-muted-foreground">FG Total</span>
             </div>
-            <div className="relative">
-              <ProbabilityRing value={card.fullGameTotal.underProbability} label="UNDER" size="sm" color="#ef4444" />
-            </div>
+            <ProbabilityRing value={card.fullGameTotal.underProbability} label="UNDER" size="sm" color="#ef4444" />
           </div>
 
           <div className="text-center">
@@ -365,16 +342,16 @@ function NcaabGameCard({ card, defaultTab }: { card: NcaabCard; defaultTab?: str
 
           <div className="space-y-2">
             <ValueSignalCard
-              title={confidenceLabel}
-              subtitle={`Engine ${formatPct(coverProb)} vs Book ${formatPct(activeBookProb)}`}
-              edge={activeEdge}
+              title={activeMarket?.confidenceLabel ?? null}
+              subtitle={`Engine ${formatPct(activeMarket?.engineProbability ?? null)} vs Book ${formatPct(activeMarket?.bookProbability ?? null)}`}
+              edge={activeMarket?.edge ?? null}
             />
 
-            {card.selectedMarket.signalTag && (
+            {activeMarket?.signalTag && (
               <InfoSignalCard
-                title={card.selectedMarket.signalTag}
+                title={activeMarket.signalTag}
                 subtitle="Closing line value signal"
-                direction={card.selectedMarket.signalDirection}
+                direction={activeMarket.signalDirection}
               />
             )}
           </div>
@@ -402,20 +379,20 @@ function NcaabGameCard({ card, defaultTab }: { card: NcaabCard; defaultTab?: str
             })}
           </div>
 
-          {selectedPeriod !== "full" && (
+          {selectedPeriod !== "full" && activeMarket && (
             <div className="rounded-lg border border-border/30 bg-background/50 p-3">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">{periodLabel} {activeMarketType}</span>
+                <span className="text-muted-foreground">{periodLabel} {activeMarket.marketType}</span>
                 <div className="flex items-center gap-2">
-                  {activeSide && (
-                    <span className={`font-bold ${activeSide === "OVER" || activeSide === "HOME" ? "text-emerald-400" : "text-red-400"}`}>
-                      {activeSide}
+                  {activeMarket.side && (
+                    <span className={`font-bold ${activeMarket.side === "OVER" || activeMarket.side === "HOME" ? "text-emerald-400" : "text-red-400"}`}>
+                      {activeMarket.side}
                     </span>
                   )}
-                  {activeLine !== null && <span className="font-mono font-semibold">{activeLine}</span>}
-                  {coverProb !== null && <span className="font-bold text-emerald-400">{coverProb.toFixed(1)}%</span>}
-                  {activeEdge !== null && (
-                    <span className="text-emerald-400 text-[10px]">+{activeEdge.toFixed(1)}pp</span>
+                  {activeMarket.line !== null && <span className="font-mono font-semibold">{activeMarket.line}</span>}
+                  {activeMarket.coverProbability !== null && <span className="font-bold text-emerald-400">{activeMarket.coverProbability.toFixed(1)}%</span>}
+                  {activeMarket.edge !== null && (
+                    <span className="text-emerald-400 text-[10px]">+{activeMarket.edge.toFixed(1)}pp</span>
                   )}
                 </div>
               </div>
