@@ -1,3 +1,5 @@
+import { updateOddsHealth } from "./dataHealth";
+
 const ODDS_API_KEYS = [
   process.env.ODDS_API_KEY,
   process.env.ODDS_API_KEY_2,
@@ -280,16 +282,24 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
         const parsed = JSON.parse(body);
         if (parsed.error_code === "OUT_OF_USAGE_CREDITS" || res.status === 401) {
           console.warn(`[Odds API Error] Key ${usedKeyIndex + 1} quota exhausted`);
+          updateOddsHealth({ success: false, error: "quota_exhausted" });
           cache.set(quotaCacheKey, { data: QUOTA_EXHAUSTED, timestamp: Date.now() });
           markKeyExhausted(usedKeyIndex);
           continue;
         }
       } catch (_) {}
+      updateOddsHealth({ success: false, error: `fetch_failed_${res.status}` });
       throw new Error(`Odds fetch failed: ${res.status} — ${body}`);
     }
     const data = await res.json();
     lastKnownRawOdds.set(cacheKey, { data, timestamp: Date.now() });
     cache.set(cacheKey, { data, timestamp: Date.now() });
+
+    const requestsRemaining = res.headers.get("x-requests-remaining");
+    updateOddsHealth({
+      success: true,
+      requestsRemaining: requestsRemaining ? parseInt(requestsRemaining) : undefined,
+    });
 
     const books = (data.bookmakers ?? []).map((b: any) => b.key).join(", ");
     console.log(`[Odds] Fetched ${inPlay ? "LIVE" : "pre-game"} ${marketKey} odds for event ${oddsEventId}: bookmakers = ${books || "none"}`);
@@ -994,16 +1004,25 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
         const parsed = JSON.parse(body);
         if (parsed.error_code === "OUT_OF_USAGE_CREDITS" || res.status === 401) {
           console.warn(`[MLB Odds] Key ${usedKeyIndex + 1} quota exhausted`);
+          updateOddsHealth({ success: false, error: "quota_exhausted" });
           cache.set(quotaCacheKey, { data: QUOTA_EXHAUSTED, timestamp: Date.now() });
           markKeyExhausted(usedKeyIndex);
           continue;
         }
       } catch (_) {}
+      updateOddsHealth({ success: false, error: `fetch_failed_${res.status}` });
       throw new Error(`MLB odds fetch failed: ${res.status} — ${body}`);
     }
     const data = await res.json();
     cache.set(cacheKey, { data, timestamp: Date.now() });
     lastKnownRawOdds.set(cacheKey, { data, timestamp: Date.now() });
+    
+    const requestsRemaining = res.headers.get("x-requests-remaining");
+    updateOddsHealth({
+      success: true,
+      requestsRemaining: requestsRemaining ? parseInt(requestsRemaining) : undefined,
+    });
+    
     return data;
   }
 
