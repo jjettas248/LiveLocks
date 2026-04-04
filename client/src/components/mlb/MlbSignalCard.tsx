@@ -1,6 +1,4 @@
-import { useState, useEffect } from "react";
-
-const MLB_CLIENT_DEBUG = import.meta.env.VITE_MLB_DEBUG === "true";
+import { useState } from "react";
 import { ChevronDown, ChevronUp, Plus, X } from "lucide-react";
 import {
   formatMlbMarketLabel,
@@ -131,11 +129,6 @@ export function MlbSignalCard({
   onDismiss?: (sig: MlbSignalData) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  useEffect(() => {
-    if (MLB_CLIENT_DEBUG) {
-      console.log("[MLB_TRACE] RENDER_SIGNAL", { id: `${sig.playerId}|${sig.market}`, player: sig.playerName, inning: sig.inning, stale: sig.stale });
-    }
-  }, [sig.playerId, sig.market, sig.inning, sig.stale]);
   const tier = TIER_COLORS[sig.confidenceTier ?? "WATCHLIST"] ?? TIER_COLORS.WATCHLIST;
   const side = SIDE_STYLES[sig.recommendedSide as keyof typeof SIDE_STYLES] ?? SIDE_STYLES.OVER;
   const marketLabel = formatMlbMarketLabel(sig.market);
