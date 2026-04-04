@@ -3262,8 +3262,6 @@ export default function Dashboard() {
                 </div>
               )}
 
-              <p className="text-xs text-muted-foreground mb-3">Lines recently updated. Tracking movement…</p>
-
               {/* Per-game groups — always rendered when data available; empty state handled inside */}
               {!isHalftimePlaysLoading && halftimePlaysData && (() => {
                 const GAMES_PER_PAGE = 4;
