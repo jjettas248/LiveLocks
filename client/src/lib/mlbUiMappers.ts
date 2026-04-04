@@ -55,16 +55,22 @@ const RADAR_TIER_CONFIG: Array<{ min: number; tier: string; label: string; color
 
 const TRIGGER_REASON_MAP: Record<string, string> = {
   "hard_trigger:barrel+avgEV95+inn5+score": "High contact quality + barrel + deep in game",
+  "hard_trigger:barrel+avgEV95+inn5": "Barrel contact with elite EV, deep in game",
+  "hard_trigger:barrel+avgEV95": "Barrel contact with elite exit velocity",
   "repeat_contact:last2ABs_EV95+_LA20-35": "Back-to-back hard, well-angled contact",
   "soft_trigger:avgEV92+score3.5": "Consistent hard contact building",
+  "soft_trigger:avgEV92+score": "Hard contact pattern building",
   "hard_trigger:barrel": "Barrel contact — HR potential rising",
   "hard_trigger:avgEV95": "Elite exit velocity today",
+  "hard_trigger": "Strong contact trigger detected",
   "repeat_contact": "Repeated hard contact pattern",
   "soft_trigger": "Consistent hard contact building",
   "late_game_spike": "Late-game HR window with strong contact",
   "bullpen_downgrade": "Weaker reliever now pitching",
   "fatigue_spike": "Pitcher fatigue creating opportunity",
   "park_wind_boost": "Park and wind conditions favorable",
+  "park_wind": "Park and wind conditions favorable",
+  "platoon_advantage": "Platoon advantage active",
 };
 
 export function liveScoreToGrade(score: number): { grade: string; color: string } {
@@ -106,28 +112,14 @@ export function formatTriggerReason(raw: string | null | undefined): string {
     if (parts.includes("topHardHit")) return "Strong contact build";
     return "Leaderboard-level contact today";
   }
-  if (raw.startsWith("late_game_spike:")) {
-    return "Late-game HR window with strong contact";
-  }
-  if (raw.startsWith("bullpen_downgrade:")) {
-    return "Weaker reliever now pitching";
-  }
-  if (raw.startsWith("fatigue_spike:")) {
-    return "Pitcher fatigue creating opportunity";
-  }
-  if (raw.startsWith("park_wind:")) {
-    return "Park and wind conditions favorable";
-  }
-  if (raw.startsWith("platoon_advantage:")) {
-    return "Platoon advantage active";
-  }
   if (raw.includes("barrel") && raw.includes("EV")) {
     return "Barrel contact with elite exit velocity";
   }
   if (raw.includes("hard_hit") || raw.includes("hardHit")) {
     return "Hard contact pattern detected";
   }
-  return "Signal detected";
+  const cleaned = sanitizeDisplayString(raw);
+  return cleaned;
 }
 
 function clampPct(val: number): number {

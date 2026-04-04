@@ -34,13 +34,12 @@ export interface MLBTiming {
   outs?: number;        // outs in current half-inning (0-2)
 }
 
-export type MLBTimingTrigger = "after_inning_1" | "high_pitch_count" | "third_time_through" | null;
+export type MLBTimingTrigger = "game_live" | "high_pitch_count" | "third_time_through" | null;
 
 export function getMLBTimingTrigger(timing: MLBTiming): MLBTimingTrigger {
-  // After inning 1 completes (bottom of 1st finishes → inning 2 starts)
-  if (timing.inning >= 2) return "after_inning_1";
   if (timing.pitchCount > 75) return "high_pitch_count";
   if (timing.timesThrough >= 3) return "third_time_through";
+  if (timing.inning >= 1) return "game_live";
   return null;
 }
 
@@ -78,7 +77,7 @@ export function formatTimingTrigger(trigger: AnyTimingTrigger): string {
     halftime: "Halftime",
     q4_late: "Q4 < 6 min",
     blowout: "Blowout (spread > 18)",
-    after_inning_1: "After inning 1",
+    game_live: "Game live",
     high_pitch_count: "Pitcher >75 pitches",
     third_time_through: "3rd time through order",
     under_5_min: "Under 5 min",

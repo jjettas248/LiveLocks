@@ -268,6 +268,26 @@ export function MlbSignalCard({
                 </span>
               );
             })}
+            {(sig.feedTags ?? []).some(t => t === "inning_3" || t === "inning_5" || t === "inning_7") && (() => {
+              const INNING_BADGE: Record<string, { label: string; color: string; priority: number }> = {
+                inning_7: { label: "7th Inn Edge", color: "#ef4444", priority: 3 },
+                inning_5: { label: "5th Inn Edge", color: "#f59e0b", priority: 2 },
+                inning_3: { label: "3rd Inn Edge", color: "#a78bfa", priority: 1 },
+              };
+              const tags = (sig.feedTags ?? []).filter(t => INNING_BADGE[t]);
+              if (tags.length === 0) return null;
+              const tag = tags.sort((a, b) => INNING_BADGE[b].priority - INNING_BADGE[a].priority)[0];
+              const badge = INNING_BADGE[tag];
+              return (
+                <span
+                  data-testid={`inning-badge-${tag}`}
+                  className="text-[9px] font-black px-1.5 py-0.5 rounded-full border"
+                  style={{ color: badge.color, borderColor: `${badge.color}40`, background: `${badge.color}10` }}
+                >
+                  {badge.label}
+                </span>
+              );
+            })()}
             {(sig.liveScore ?? 0) >= 0.04 && (() => {
               const lsGrade = liveScoreToGrade(sig.liveScore ?? 0);
               return (

@@ -890,6 +890,16 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
     if (seenMissed.size >= 6) break;
   }
 
+  const gameStatusMap = new Map((games ?? []).map(g => [g.gameId, g.status]));
+  Array.from(radarState.entries()).forEach(([key, card]) => {
+    if (card.status === "WATCH" || card.status === "ALERT") {
+      const gStatus = gameStatusMap.get(card.gameId);
+      if (gStatus === "final") {
+        radarState.set(key, { ...card, status: "MISSED" });
+      }
+    }
+  });
+
   const allCards = Array.from(radarState.values());
   const dedupActive = allCards.filter(c => c.status === "ALERT");
   const dedupWatch = allCards.filter(c => c.status === "WATCH");
@@ -1080,7 +1090,7 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
       </div>
 
       {calcResult.confidenceTier && (
-        <div className="text-center">
+        <div className="text-center space-y-1.5">
           <span className={`text-[10px] font-black px-3 py-1 rounded-full ${
             calcResult.confidenceTier === "ELITE" ? "bg-yellow-500/20 text-yellow-400 border border-yellow-500/30" :
             calcResult.confidenceTier === "STRONG" ? "bg-green-500/20 text-green-400 border border-green-500/30" :
@@ -1089,6 +1099,12 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
           }`}>
             {calcResult.confidenceTier}
           </span>
+          <div className="text-[9px] text-muted-foreground" data-testid="text-confidence-explanation">
+            {calcResult.confidenceTier === "ELITE" ? `${edge > 0 ? "+" : ""}${edge.toFixed(1)}% edge with strong model alignment — high-conviction opportunity` :
+             calcResult.confidenceTier === "STRONG" ? `Model shows meaningful ${edge > 0 ? "+" : ""}${edge.toFixed(1)}% edge vs market line` :
+             calcResult.confidenceTier === "SOLID" ? `Moderate edge detected — consider as part of a diversified card` :
+             `Marginal edge — proceed with caution`}
+          </div>
         </div>
       )}
 
@@ -1272,10 +1288,28 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
   const gameSignals = edgeFeedSignals.filter(s => s.gameId === selectedGameId);
 
   const [calcPlayer, setCalcPlayer] = useState<MlbPlayerStat | null>(null);
-  const [calcPlayerName, setCalcPlayerName] = useState("");
-  const [calcMarket, setCalcMarket] = useState("hits");
-  const [calcBookLine, setCalcBookLine] = useState("");
+  const [calcPlayerName, setCalcPlayerName] = useState(() => {
+    try { return localStorage.getItem("mlb_calc_playerName") ?? ""; } catch { return ""; }
+  });
+  const [calcMarket, setCalcMarket] = useState(() => {
+    try {
+      const saved = localStorage.getItem("mlb_calc_market");
+      if (saved && MLB_CALC_MARKETS.some(m => m.value === saved)) return saved;
+    } catch {}
+    return "hits";
+  });
+  const [calcBookLine, setCalcBookLine] = useState(() => {
+    try { return localStorage.getItem("mlb_calc_bookLine") ?? ""; } catch { return ""; }
+  });
   const [selectedBook, setSelectedBook] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("mlb_calc_market", calcMarket);
+      localStorage.setItem("mlb_calc_bookLine", calcBookLine);
+      localStorage.setItem("mlb_calc_playerName", calcPlayerName);
+    } catch {}
+  }, [calcMarket, calcBookLine, calcPlayerName]);
   const [calcResult, setCalcResult] = useState<{
     probability?: number;
     modelProbability?: number;
