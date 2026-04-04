@@ -26,6 +26,10 @@ import {
   normalizeMarket, normalizePct,
   type SignalViewModel, type CalcHydrationPayload,
 } from "@/lib/mlb/mlbViewModel";
+import {
+  formatMlbDisplayInning, formatMlbDisplayStatus,
+  normalizeMlbGameChip,
+} from "@/lib/mlb/mlbNormalizers";
 
 class MLBErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
   constructor(props: { children: ReactNode }) {
@@ -136,10 +140,7 @@ function formatOdds(n: number): string {
 }
 
 function inningLabel(game: MLBGame): string {
-  if (game.status === "pregame") return "Pre-Game";
-  if (game.status === "final") return "Final";
-  if (!game.inning) return "";
-  return `${game.isTopInning ? "\u25B2" : "\u25BC"}${game.inning}`;
+  return formatMlbDisplayInning(game);
 }
 
 function gameLeanBadge(signals: MlbSignalData[], gameId: string): { label: string; color: string } | null {
@@ -379,19 +380,16 @@ function GameChipStrip({ games, selectedGameId, onSelectGame, edgeFeedSignals, o
       </div>
       <div className="flex gap-2 flex-wrap">
         {games.map((game) => {
-          const isLive = game.status === "live";
-          const isFinal = game.status === "final";
+          const chip = normalizeMlbGameChip(game);
           const isSelected = game.gameId === selectedGameId;
           const lean = gameLeanBadge(edgeFeedSignals, game.gameId);
-          const tipoffTime = game.startTime
-            ? new Date(game.startTime).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })
-            : null;
+          const statusText = chip.isLive ? chip.displayInning : chip.displayStatus;
 
           return (
             <button
-              key={game.gameId}
-              data-testid={`button-game-${game.gameId}`}
-              onClick={() => onSelectGame(isSelected ? null : game.gameId)}
+              key={chip.gameId}
+              data-testid={`button-game-${chip.gameId}`}
+              onClick={() => onSelectGame(isSelected ? null : chip.gameId)}
               className={`flex flex-col items-center px-3 py-2 rounded-lg border text-xs min-w-[130px] transition-all ${
                 isSelected
                   ? "border-primary bg-primary/10 ring-1 ring-primary shadow-[0_0_16px_-3px_hsl(var(--primary)/0.4)]"
@@ -399,23 +397,17 @@ function GameChipStrip({ games, selectedGameId, onSelectGame, edgeFeedSignals, o
               }`}
             >
               <div className="flex items-center justify-between w-full gap-2">
-                <span className="font-semibold text-foreground">{game.awayAbbr}</span>
-                <span className={`font-mono font-bold ${isLive ? "text-green-400" : "text-primary"}`}>
-                  {game.awayScore ?? 0} – {game.homeScore ?? 0}
+                <span className="font-semibold text-foreground">{chip.awayTeam}</span>
+                <span className={`font-mono font-bold ${chip.isLive ? "text-green-400" : "text-primary"}`}>
+                  {chip.awayScore ?? 0} – {chip.homeScore ?? 0}
                 </span>
-                <span className="font-semibold text-foreground">{game.homeAbbr}</span>
+                <span className="font-semibold text-foreground">{chip.homeTeam}</span>
               </div>
               <div className="flex items-center gap-1.5 text-muted-foreground mt-0.5">
-                {isLive && <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse inline-block" />}
-                {isFinal && <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 inline-block" />}
-                <span className={isLive ? "text-green-400" : isFinal ? "text-muted-foreground/60" : ""}>
-                  {isLive
-                    ? inningLabel(game)
-                    : game.status === "pregame" && tipoffTime
-                    ? tipoffTime
-                    : game.status === "final"
-                    ? "Final"
-                    : ""}
+                {chip.isLive && <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse inline-block" />}
+                {chip.isFinal && <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 inline-block" />}
+                <span className={chip.isLive ? "text-green-400" : chip.isFinal ? "text-muted-foreground/60" : ""}>
+                  {statusText}
                 </span>
                 {lean && (
                   <span className="w-2 h-2 rounded-full" style={{ background: lean.color }} title={`${lean.label}-lean`} />

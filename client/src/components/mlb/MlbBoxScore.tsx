@@ -4,6 +4,10 @@ import { Activity, RefreshCw, Search, Target, ChevronDown, ChevronUp } from "luc
 import { queryClient } from "@/lib/queryClient";
 import type { MlbSignalData } from "./MlbSignalCard";
 import { MlbSignalCard } from "./MlbSignalCard";
+import {
+  deriveMlbQuickViewColorTier, deriveBestPlay, COLOR_TIER_STYLES,
+  type MlbQuickViewColorTier,
+} from "@/lib/mlb/mlbNormalizers";
 
 const SHORT_MARKET_LABELS: Record<string, string> = {
   hits: "H", total_bases: "TB", hrr: "HRR",
@@ -52,29 +56,6 @@ type LiveStatsResponse = {
   players: MlbPlayerStat[];
 };
 
-type SignalTier = "elite" | "strong" | "value" | "none";
-
-const SIGNAL_TIER_STYLES: Record<Exclude<SignalTier, "none">, { border: string; bg: string; dot: string }> = {
-  elite: { border: "#22c55e", bg: "rgba(34,197,94,0.12)", dot: "#22c55e" },
-  strong: { border: "#eab308", bg: "rgba(234,179,8,0.12)", dot: "#eab308" },
-  value: { border: "#3b82f6", bg: "rgba(59,130,246,0.12)", dot: "#3b82f6" },
-};
-
-function getSignalTier(prob: number): SignalTier {
-  if (prob >= 80) return "elite";
-  if (prob >= 70) return "strong";
-  if (prob >= 60) return "value";
-  return "none";
-}
-
-function getBestSignal(signals: MlbSignalData[], playerId: string): { tier: SignalTier; prob: number; side: string; market: string } | null {
-  const playerSignals = signals.filter(s => s.playerId === playerId && s.enginePct > 0);
-  if (playerSignals.length === 0) return null;
-  const best = playerSignals.reduce((a, b) => (b.enginePct > a.enginePct ? b : a));
-  const tier = getSignalTier(best.enginePct);
-  if (tier === "none") return null;
-  return { tier, prob: best.enginePct, side: best.recommendedSide, market: best.market };
-}
 
 type EventBadge = { label: string; color: string; bg: string };
 
@@ -176,9 +157,9 @@ export function MlbBoxScore({
     if (sortBy === "tb") return b.tb - a.tb;
     if (sortBy === "k") return b.k - a.k;
     if (sortBy === "signal") {
-      const sigA = getBestSignal(signals, a.playerId);
-      const sigB = getBestSignal(signals, b.playerId);
-      return (sigB?.prob ?? 0) - (sigA?.prob ?? 0);
+      const sigA = deriveBestPlay(signals, a.playerId);
+      const sigB = deriveBestPlay(signals, b.playerId);
+      return (sigB?.probability ?? 0) - (sigA?.probability ?? 0);
     }
     return 0;
   });
@@ -346,8 +327,9 @@ export function MlbBoxScore({
               </thead>
               <tbody>
                 {sorted.map((player) => {
-                  const sig = getBestSignal(signals, player.playerId);
-                  const tierStyle = sig && sig.tier !== "none" ? SIGNAL_TIER_STYLES[sig.tier] : null;
+                  const colorTier = deriveMlbQuickViewColorTier(signals, player.playerId);
+                  const bestPlay = deriveBestPlay(signals, player.playerId);
+                  const tierStyle = colorTier !== "neutral" ? COLOR_TIER_STYLES[colorTier] : null;
                   const stickyBadges = getStickySignalBadges(player, stickyBadgeCache);
 
                   return (
@@ -402,11 +384,17 @@ export function MlbBoxScore({
                         )}
                       </td>
                       <td className="text-center px-1.5 py-2">
-                        {sig && tierStyle ? (
+                        {bestPlay && tierStyle ? (
                           <div className="flex items-center justify-center gap-1">
                             <span className="w-2 h-2 rounded-full" style={{ background: tierStyle.dot }} />
                             <span className="text-[9px] font-bold" style={{ color: tierStyle.dot }}>
-                              {SHORT_MARKET_LABELS[sig.market] ?? sig.market} {sig.prob.toFixed(0)}%
+                              {SHORT_MARKET_LABELS[bestPlay.market] ?? bestPlay.market} {bestPlay.probability.toFixed(0)}%
+                            </span>
+                          </div>
+                        ) : bestPlay ? (
+                          <div className="flex items-center justify-center gap-1">
+                            <span className="text-[9px] text-muted-foreground">
+                              {SHORT_MARKET_LABELS[bestPlay.market] ?? bestPlay.market} {bestPlay.probability.toFixed(0)}%
                             </span>
                           </div>
                         ) : (
@@ -427,9 +415,9 @@ export function MlbBoxScore({
           )}
 
           <div className="px-3 py-1.5 border-t border-border/20 flex items-center gap-3 text-[8px] text-muted-foreground/50">
-            <span className="flex items-center gap-1"><span className="w-2 h-0.5 rounded bg-[#22c55e] inline-block" /> Elite signal</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-0.5 rounded bg-[#eab308] inline-block" /> Strong signal</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-0.5 rounded bg-[#3b82f6] inline-block" /> Value signal</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-0.5 rounded bg-[#22c55e] inline-block" /> Strong (75%+)</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-0.5 rounded bg-[#eab308] inline-block" /> Building (65%+)</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-0.5 rounded bg-[#3b82f6] inline-block" /> Monitor (55%+)</span>
             <span className="flex items-center gap-1"><span className="text-orange-400 font-bold">95+</span> Hard hit EV</span>
           </div>
         </>
