@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { TrendingUp, TrendingDown, Minus, RefreshCw } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, RefreshCw, Target, Trophy, X as XIcon } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
 interface BucketStat {
@@ -414,6 +414,161 @@ export function AnalyticsTab() {
           </div>
         )}
       </div>
+
+      <HrRadarAnalyticsSection />
+    </div>
+  );
+}
+
+interface HrRadarAnalyticsRecord {
+  id: number;
+  sessionDate: string;
+  gameId: string;
+  playerId: string;
+  playerName: string;
+  team: string;
+  detectedLabel: string | null;
+  hitLabel: string | null;
+  detectedScore: string | null;
+  peakScore: string | null;
+  scoreIncreaseAmount: string | null;
+  result: string;
+  confidenceTier: string;
+  triggerTags: string[];
+  createdAt: string | null;
+}
+
+function HrRadarAnalyticsSection() {
+  const [filterResult, setFilterResult] = useState<string>("all");
+  const [filterTier, setFilterTier] = useState<string>("all");
+
+  const { data, isLoading } = useQuery<{
+    records: HrRadarAnalyticsRecord[];
+    summary: { total: number; hits: number; misses: number; hitRate: number };
+  }>({
+    queryKey: ["/api/admin/hr-radar-analytics"],
+    refetchInterval: 5 * 60 * 1000,
+  });
+
+  const records = data?.records ?? [];
+  const summary = data?.summary ?? { total: 0, hits: 0, misses: 0, hitRate: 0 };
+
+  const filtered = records.filter(r => {
+    if (filterResult !== "all" && r.result !== filterResult) return false;
+    if (filterTier !== "all" && r.confidenceTier !== filterTier) return false;
+    return true;
+  });
+
+  const filteredHits = filtered.filter(r => r.result === "hit").length;
+  const filteredMisses = filtered.filter(r => r.result === "miss").length;
+  const filteredRate = filtered.length > 0 ? Math.round((filteredHits / filtered.length) * 1000) / 10 : 0;
+
+  return (
+    <div className="space-y-4 mt-6" data-testid="section-hr-radar-analytics">
+      <div className="flex items-center gap-2">
+        <Target className="w-4 h-4 text-orange-400" />
+        <h3 className="text-sm font-bold text-foreground">HR Radar Analytics</h3>
+        <span className="text-[10px] text-muted-foreground ml-auto">{summary.total} total calls</span>
+      </div>
+
+      <div className="grid grid-cols-4 gap-2">
+        <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
+          <div className="text-[9px] text-muted-foreground">Total</div>
+          <div className="text-sm font-bold text-foreground">{summary.total}</div>
+        </div>
+        <div className="text-center p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+          <div className="text-[9px] text-emerald-400">Hits</div>
+          <div className="text-sm font-bold text-emerald-400">{summary.hits}</div>
+        </div>
+        <div className="text-center p-2 rounded-lg bg-zinc-500/10 border border-zinc-500/20">
+          <div className="text-[9px] text-zinc-400">Misses</div>
+          <div className="text-sm font-bold text-zinc-400">{summary.misses}</div>
+        </div>
+        <div className="text-center p-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
+          <div className="text-[9px] text-blue-400">Hit Rate</div>
+          <div className="text-sm font-bold text-blue-400">{summary.hitRate}%</div>
+        </div>
+      </div>
+
+      <div className="flex gap-2">
+        <select
+          className="text-[10px] bg-muted/20 border border-border/30 rounded-lg px-2 py-1 text-foreground"
+          value={filterResult}
+          onChange={e => setFilterResult(e.target.value)}
+          data-testid="select-hr-analytics-result"
+        >
+          <option value="all">All Results</option>
+          <option value="hit">Hits Only</option>
+          <option value="miss">Misses Only</option>
+        </select>
+        <select
+          className="text-[10px] bg-muted/20 border border-border/30 rounded-lg px-2 py-1 text-foreground"
+          value={filterTier}
+          onChange={e => setFilterTier(e.target.value)}
+          data-testid="select-hr-analytics-tier"
+        >
+          <option value="all">All Tiers</option>
+          <option value="monitor">Monitor</option>
+          <option value="building">Building</option>
+          <option value="strong">Strong</option>
+        </select>
+        <span className="text-[10px] text-muted-foreground ml-auto self-center">
+          Showing {filtered.length} | {filteredHits}W / {filteredMisses}L ({filteredRate}%)
+        </span>
+      </div>
+
+      {isLoading ? (
+        <div className="text-center text-sm text-muted-foreground py-6">Loading analytics...</div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center text-sm text-muted-foreground py-6">No HR radar analytics data yet</div>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-border/30">
+          <table className="w-full text-[10px]">
+            <thead>
+              <tr className="border-b border-border/30 bg-muted/10">
+                <th className="px-2 py-1.5 text-left text-muted-foreground font-semibold">Date</th>
+                <th className="px-2 py-1.5 text-left text-muted-foreground font-semibold">Player</th>
+                <th className="px-2 py-1.5 text-center text-muted-foreground font-semibold">Team</th>
+                <th className="px-2 py-1.5 text-center text-muted-foreground font-semibold">Detected</th>
+                <th className="px-2 py-1.5 text-center text-muted-foreground font-semibold">Score</th>
+                <th className="px-2 py-1.5 text-center text-muted-foreground font-semibold">Peak</th>
+                <th className="px-2 py-1.5 text-center text-muted-foreground font-semibold">Tier</th>
+                <th className="px-2 py-1.5 text-center text-muted-foreground font-semibold">Result</th>
+                <th className="px-2 py-1.5 text-center text-muted-foreground font-semibold">Hit At</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.slice(0, 100).map((r) => {
+                const detScore = r.detectedScore ? parseFloat(r.detectedScore) : null;
+                const pkScore = r.peakScore ? parseFloat(r.peakScore) : null;
+                return (
+                  <tr key={r.id} className="border-b border-border/10 hover:bg-muted/10" data-testid={`row-hr-analytics-${r.id}`}>
+                    <td className="px-2 py-1.5 text-muted-foreground">{r.sessionDate}</td>
+                    <td className="px-2 py-1.5 text-foreground font-semibold">{r.playerName}</td>
+                    <td className="px-2 py-1.5 text-center text-muted-foreground">{r.team}</td>
+                    <td className="px-2 py-1.5 text-center text-muted-foreground">{r.detectedLabel ?? "—"}</td>
+                    <td className="px-2 py-1.5 text-center text-foreground font-bold tabular-nums">{detScore != null ? detScore.toFixed(1) : "—"}</td>
+                    <td className="px-2 py-1.5 text-center text-foreground tabular-nums">{pkScore != null ? pkScore.toFixed(1) : "—"}</td>
+                    <td className="px-2 py-1.5 text-center">
+                      <span className={`px-1.5 py-0.5 rounded-full text-[8px] font-bold ${
+                        r.confidenceTier === "strong" ? "bg-red-500/15 text-red-400" :
+                        r.confidenceTier === "building" ? "bg-orange-500/15 text-orange-400" :
+                        "bg-zinc-500/15 text-zinc-400"
+                      }`}>{r.confidenceTier.toUpperCase()}</span>
+                    </td>
+                    <td className="px-2 py-1.5 text-center">
+                      <span className={`font-bold ${r.result === "hit" ? "text-emerald-400" : "text-zinc-400"}`}>
+                        {r.result === "hit" ? "HIT" : "MISS"}
+                      </span>
+                    </td>
+                    <td className="px-2 py-1.5 text-center text-muted-foreground">{r.hitLabel ?? "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

@@ -44,6 +44,46 @@ export type HrRadarCardUi = {
   resolvedAt: string | null;
   hitInning: number | null;
   hitHalf: string | null;
+  detectedLabel: string | null;
+  scoreIncreased: boolean;
+  scoreIncreaseLabel: string | null;
+  peakScore: number | null;
+};
+
+export type HrRadarAnalyzeViewModel = {
+  alert: {
+    id: string;
+    playerName: string;
+    team: string;
+    gameId: string;
+    detectedLabel: string | null;
+    initialScore: number | null;
+    currentScore: number | null;
+    peakScore: number | null;
+    scoreIncreased: boolean;
+    scoreIncreaseLabel: string | null;
+    confidenceTier: string;
+    signalState: string;
+    triggerTags: string[];
+    summaryText: string | null;
+    status: string;
+    hitLabel: string | null;
+    contactSnapshot: any;
+  };
+  priorABs: Array<{
+    abNumber: number;
+    exitVelocity: number | null;
+    launchAngle: number | null;
+    distance: number | null;
+    outcome: string;
+    isBarrel: boolean;
+    isHardHit: boolean;
+  }>;
+  hrFactors: any;
+  hrBuildScore: number | null;
+  hrIntensity: string | null;
+  explanationBullets: string[];
+  currentInning: number | null;
 };
 
 const PITCHER_SIGNAL_MAP: Record<string, { label: string; color: string }> = {
@@ -287,6 +327,10 @@ export function mapHrRadarCardToUi(player: any, type: "edge" | "watch" | "cashed
     resolvedAt: player.resolvedAt ?? null,
     hitInning: player.hitInning ?? null,
     hitHalf: player.hitHalf ?? null,
+    detectedLabel: player.detectedLabel ?? null,
+    scoreIncreased: player.scoreIncreased ?? false,
+    scoreIncreaseLabel: player.scoreIncreaseLabel ?? null,
+    peakScore: player.peakReadinessScore ? parseFloat(player.peakReadinessScore) : player.peakScore ?? null,
   };
 }
 
@@ -354,5 +398,9 @@ export function mapAlertToUi(alert: any): HrRadarCardUi {
     resolvedAt: alert.resolvedAt ?? null,
     hitInning: alert.hitInning ?? null,
     hitHalf: alert.hitHalf ?? null,
+    detectedLabel: alert.detectedLabel ?? null,
+    scoreIncreased: alert.scoreIncreased ?? false,
+    scoreIncreaseLabel: alert.scoreIncreaseLabel ?? null,
+    peakScore: alert.peakScore ?? alert.peakReadinessScore ? parseFloat(alert.peakReadinessScore ?? alert.peakScore ?? "0") : null,
   };
 }

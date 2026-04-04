@@ -18,6 +18,7 @@ import {
   sanitizeDisplayString, mapPitcherSignals, liveScoreToGrade,
   mapMlbSignalToUi,
   type HrRadarCardUi,
+  type HrRadarAnalyzeViewModel,
 } from "@/lib/mlbUiMappers";
 import {
   buildSignalViewModel, buildHrRadarViewModel, buildGameViewModel,
@@ -710,8 +711,14 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
             {card.team && <span className="text-[10px] text-muted-foreground shrink-0">{card.team}</span>}
           </div>
           <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-            {card.detectedInning != null && <span>Detected: {card.detectedInning}{card.detectedInning === 1 ? "st" : card.detectedInning === 2 ? "nd" : card.detectedInning === 3 ? "rd" : "th"}</span>}
-            {card.latestInning != null && card.latestInning !== card.detectedInning && <span>| Updated: {card.latestInning}{card.latestInning === 1 ? "st" : card.latestInning === 2 ? "nd" : card.latestInning === 3 ? "rd" : "th"}</span>}
+            {card.detectedLabel && <span>Detected {card.detectedLabel}</span>}
+            {!card.detectedLabel && card.detectedInning != null && <span>Detected: Inn {card.detectedInning}</span>}
+            {card.scoreIncreased && card.scoreIncreaseLabel && (
+              <span className="text-green-400 font-semibold">{card.scoreIncreaseLabel}</span>
+            )}
+            {card.hitInning != null && card.hitHalf && (
+              <span className="text-emerald-400 font-semibold">HR in {card.hitHalf}{card.hitInning}</span>
+            )}
           </div>
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
@@ -823,6 +830,161 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; gameId: string; onClose: () => void }) {
+  const { data, isLoading, error } = useQuery<{ alert: any; analyze: any }>({
+    queryKey: ["/api/mlb/hr-radar-analyze", playerId, gameId],
+    enabled: !!playerId && !!gameId,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose} data-testid="modal-hr-analyze">
+        <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center justify-center gap-2 py-8">
+            <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+            <span className="text-sm text-muted-foreground">Loading analysis...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !data?.alert) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose} data-testid="modal-hr-analyze">
+        <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
+          <p className="text-sm text-muted-foreground text-center py-4">No analysis data available</p>
+          <button className="w-full py-2 rounded-lg text-sm border border-border/40 text-muted-foreground" onClick={onClose} data-testid="button-close-analyze">Close</button>
+        </div>
+      </div>
+    );
+  }
+
+  const alert = data.alert;
+  const analyze = data.analyze;
+  const priorABs: Array<{ abNumber: number; exitVelocity: number | null; launchAngle: number | null; distance: number | null; outcome: string; isBarrel: boolean; isHardHit: boolean }> = analyze?.priorABs ?? [];
+  const initialScore = parseFloat(alert.initialReadinessScore ?? "0");
+  const currentScore = parseFloat(alert.currentReadinessScore ?? "0");
+  const peakScore = parseFloat(alert.peakReadinessScore ?? "0");
+  const tier = radarScoreToTier(currentScore);
+
+  const statusColor = alert.status === "hit" ? "text-emerald-400" : alert.status === "miss" ? "text-zinc-400" : "text-blue-400";
+  const statusLabel = alert.status === "hit" ? "HIT" : alert.status === "miss" ? "MISS" : "LIVE";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose} data-testid="modal-hr-analyze">
+      <div className="bg-card border border-border rounded-2xl w-full max-w-md mx-4 max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="p-4 border-b border-border/40 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-foreground">{alert.playerName}</h3>
+            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+              <span>{alert.team}</span>
+              {alert.detectedLabel && <span>Detected {alert.detectedLabel}</span>}
+              <span className={`font-bold ${statusColor}`}>{statusLabel}</span>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:bg-muted/30" data-testid="button-close-analyze-x"><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+
+        <div className="p-4 space-y-4">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
+              <div className="text-[9px] text-muted-foreground">Initial</div>
+              <div className="text-sm font-bold text-foreground">{initialScore.toFixed(1)}</div>
+            </div>
+            <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
+              <div className="text-[9px] text-muted-foreground">Current</div>
+              <div className="text-sm font-bold" style={{ color: tier.color }}>{currentScore.toFixed(1)}</div>
+            </div>
+            <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
+              <div className="text-[9px] text-muted-foreground">Peak</div>
+              <div className="text-sm font-bold text-foreground">{peakScore.toFixed(1)}</div>
+            </div>
+          </div>
+
+          {alert.scoreIncreased && alert.scoreIncreaseLabel && (
+            <div className="flex items-center gap-2 text-[10px] px-2 py-1.5 rounded-lg bg-green-500/10 border border-green-500/20">
+              <Zap className="w-3 h-3 text-green-400" />
+              <span className="text-green-400 font-semibold">Score increased: {alert.scoreIncreaseLabel}</span>
+            </div>
+          )}
+
+          {alert.hitLabel && (
+            <div className="flex items-center gap-2 text-[10px] px-2 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+              <Trophy className="w-3 h-3 text-emerald-400" />
+              <span className="text-emerald-400 font-semibold">Home Run in {alert.hitLabel}</span>
+            </div>
+          )}
+
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-[10px] text-muted-foreground font-semibold">
+              <Activity className="w-3 h-3" />
+              <span>Tier: {alert.confidenceTier?.toUpperCase()}</span>
+              <span className="text-muted-foreground/40">|</span>
+              <span>State: {alert.signalState?.toUpperCase()}</span>
+            </div>
+            {(alert.triggerTags ?? []).length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {(alert.triggerTags as string[]).map((tag: string, i: number) => (
+                  <span key={i} className="text-[8px] px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-400 font-semibold">{tag}</span>
+                ))}
+              </div>
+            )}
+            {alert.summaryText && (
+              <p className="text-[10px] text-muted-foreground italic">{alert.summaryText}</p>
+            )}
+          </div>
+
+          {priorABs.length > 0 && (
+            <div className="space-y-1.5">
+              <div className="text-[10px] font-semibold text-muted-foreground flex items-center gap-1.5">
+                <Target className="w-3 h-3" />
+                <span>At-Bat Log ({priorABs.length} ABs)</span>
+              </div>
+              <div className="space-y-1">
+                {priorABs.map((ab) => (
+                  <div key={ab.abNumber} className="flex items-center gap-2 text-[10px] p-1.5 rounded-lg bg-muted/10 border border-border/10">
+                    <span className="w-5 text-center text-muted-foreground font-bold">#{ab.abNumber}</span>
+                    <span className={`font-bold tabular-nums ${ab.isBarrel ? "text-orange-400" : ab.isHardHit ? "text-yellow-400" : "text-muted-foreground"}`}>
+                      {ab.exitVelocity != null ? `${ab.exitVelocity.toFixed(1)} mph` : "—"}
+                    </span>
+                    {ab.launchAngle != null && <span className="text-muted-foreground tabular-nums">{ab.launchAngle.toFixed(0)}°</span>}
+                    {ab.distance != null && <span className="text-muted-foreground tabular-nums">{ab.distance.toFixed(0)}ft</span>}
+                    <span className="text-muted-foreground capitalize">{ab.outcome}</span>
+                    {ab.isBarrel && <span className="text-[8px] px-1 py-0.5 rounded bg-orange-500/15 text-orange-400 font-bold">BRL</span>}
+                    {ab.isHardHit && !ab.isBarrel && <span className="text-[8px] px-1 py-0.5 rounded bg-yellow-500/15 text-yellow-400 font-bold">HH</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {(analyze?.explanationBullets ?? []).length > 0 && (
+            <div className="space-y-1">
+              <div className="text-[10px] font-semibold text-muted-foreground">Engine Factors</div>
+              {(analyze.explanationBullets as string[]).map((b: string, i: number) => (
+                <p key={i} className="text-[10px] text-muted-foreground flex items-start gap-1">
+                  <span className="text-primary/50 mt-px">•</span><span>{b}</span>
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="p-4 border-t border-border/40">
+          <button
+            className="w-full py-2.5 rounded-lg text-sm font-semibold bg-muted/20 border border-border/40 text-muted-foreground hover:bg-muted/30 transition-colors"
+            onClick={onClose}
+            data-testid="button-close-analyze-bottom"
+          >
+            Close
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1372,6 +1534,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
   const [liveFeedSub, setLiveFeedSub] = useState<"all" | "3rd" | "5th" | "7th">("all");
   const mlbUpgradeNeeded = false;
   const [mlbSlipPicks, setMlbSlipPicks] = useState<Array<{ playerId: string; playerName: string; market: string; line: number; side: string; sportsbook: string; edge: number | null; enginePct: number; gameId: string; overOdds?: number | null; underOdds?: number | null }>>([]);
+  const [analyzeTarget, setAnalyzeTarget] = useState<{ playerId: string; gameId: string } | null>(null);
 
   const isElite = user?.hasMLB === true;
 
@@ -1598,15 +1761,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
   };
 
   const handleHrRadarClick = (card: HrRadarCardUi) => {
-    hydrateMlbCalculator(buildCalcHydration({
-      playerId: card.playerId,
-      playerName: card.playerName,
-      teamAbbr: card.team,
-      gameId: card.gameId,
-      market: "home_runs",
-      sportsbook: null,
-      line: card.line,
-    }, games));
+    setAnalyzeTarget({ playerId: card.playerId, gameId: card.gameId });
   };
 
   const handleRefresh = () => {
@@ -2044,6 +2199,14 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
 
       {activeSubTab === "hr_radar" && (
         <HRRadarSection isElite={isElite} onAddToSlip={handleAddToSlip} onOpenHrDetails={handleHrRadarClick} games={games} />
+      )}
+
+      {analyzeTarget && (
+        <HRRadarAnalyzeModal
+          playerId={analyzeTarget.playerId}
+          gameId={analyzeTarget.gameId}
+          onClose={() => setAnalyzeTarget(null)}
+        />
       )}
 
       {mlbSlipPicks.length > 0 && (

@@ -15,6 +15,8 @@ import {
   contactEvents,
   gamePlayerStats,
   persistedAlerts,
+  hrRadarAlerts,
+  hrRadarAnalytics,
   signalInteractions,
   stripeEvents,
   type Player,
@@ -33,6 +35,8 @@ import {
   type PlayAlertWithResult,
   type PersistedPlay,
   type PlayStats,
+  type HrRadarAlert,
+  type HrRadarAnalyticsRecord,
 } from "@shared/schema";
 import { eq, and, desc, isNull, isNotNull, sql, lt, lte, gte, inArray, ne } from "drizzle-orm";
 
@@ -2150,6 +2154,324 @@ export class DatabaseStorage implements IStorage {
       .where(isNotNull(users.churnedAt))
       .orderBy(desc(users.churnedAt));
     return rows as Array<{ id: number; email: string; churnedAt: Date; churnedFromTier: string | null; createdAt: Date | null }>;
+  }
+
+  async createOrUpdateHrRadarAlert(data: {
+    gameId: string;
+    playerId: string;
+    playerName: string;
+    team: string;
+    opponent?: string | null;
+    inning: number;
+    half: "top" | "bottom";
+    readinessScore: number;
+    confidenceTier: "monitor" | "building" | "strong";
+    signalState: "live" | "watching" | "actionable";
+    triggerTags: string[];
+    summaryText?: string | null;
+    contactSnapshot?: { ev: number | null; la: number | null; distance: number | null; hardHit: boolean; barrel: boolean } | null;
+  }): Promise<HrRadarAlert | null> {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const halfLabel = data.half === "top" ? "T" : "B";
+      const detectedLabel = `${halfLabel}${data.inning}`;
+      const existing = await db.select().from(hrRadarAlerts)
+        .where(and(
+          eq(hrRadarAlerts.sessionDate, today),
+          eq(hrRadarAlerts.gameId, data.gameId),
+          eq(hrRadarAlerts.playerId, data.playerId),
+        ))
+        .limit(1);
+
+      if (existing.length > 0) {
+        const alert = existing[0];
+        if (alert.status !== "live") return alert;
+
+        const prevScore = parseFloat(alert.currentReadinessScore ?? "0");
+        const newScore = data.readinessScore;
+        const prevPeak = parseFloat(alert.peakReadinessScore ?? "0");
+        const peak = Math.max(prevPeak, newScore);
+        const increased = newScore > prevScore;
+        const increaseAmt = increased ? Math.round((newScore - prevScore) * 10) / 10 : null;
+        const increaseLabel = increased ? `+${increaseAmt} in ${detectedLabel}` : alert.scoreIncreaseLabel;
+
+        const tierOrder: Record<string, number> = { monitor: 0, building: 1, strong: 2 };
+        const bestTier = tierOrder[data.confidenceTier] > tierOrder[alert.confidenceTier] ? data.confidenceTier : alert.confidenceTier;
+
+        await db.update(hrRadarAlerts)
+          .set({
+            currentReadinessScore: String(newScore),
+            peakReadinessScore: String(peak),
+            scoreIncreased: increased || alert.scoreIncreased,
+            scoreIncreaseAmount: increaseAmt != null ? String(increaseAmt) : alert.scoreIncreaseAmount,
+            scoreIncreaseInning: increased ? data.inning : alert.scoreIncreaseInning,
+            scoreIncreaseHalf: increased ? data.half : alert.scoreIncreaseHalf,
+            scoreIncreaseLabel: increaseLabel,
+            confidenceTier: bestTier,
+            signalState: data.signalState,
+            triggerTags: data.triggerTags,
+            summaryText: data.summaryText ?? alert.summaryText,
+            contactSnapshot: data.contactSnapshot ?? alert.contactSnapshot,
+          })
+          .where(eq(hrRadarAlerts.id, alert.id));
+
+        if (increased) {
+          console.log(`[HR_RADAR_SCORE_INCREASE] playerId=${data.playerId} previousScore=${prevScore} newScore=${newScore} increaseAmount=${increaseAmt} increaseLabel=${increaseLabel}`);
+        }
+        console.log(`[HR_RADAR_ALERT_UPSERT] UPDATE sessionDate=${today} gameId=${data.gameId} playerId=${data.playerId} detectedLabel=${alert.detectedLabel} currentReadinessScore=${newScore}`);
+
+        const updated = await db.select().from(hrRadarAlerts)
+          .where(eq(hrRadarAlerts.id, alert.id)).limit(1);
+        return updated[0] ?? null;
+      }
+
+      const alertId = `${today}_${data.gameId}_${data.playerId}`;
+      await db.insert(hrRadarAlerts).values({
+        id: alertId,
+        sessionDate: today,
+        gameId: data.gameId,
+        playerId: data.playerId,
+        playerName: data.playerName,
+        team: data.team,
+        opponent: data.opponent ?? null,
+        detectedAt: new Date(),
+        detectedInning: data.inning,
+        detectedHalf: data.half,
+        detectedLabel,
+        initialReadinessScore: String(data.readinessScore),
+        currentReadinessScore: String(data.readinessScore),
+        peakReadinessScore: String(data.readinessScore),
+        scoreIncreased: false,
+        confidenceTier: data.confidenceTier,
+        signalState: data.signalState,
+        triggerTags: data.triggerTags,
+        summaryText: data.summaryText ?? null,
+        contactSnapshot: data.contactSnapshot ?? null,
+        status: "live",
+        analyticsPersisted: false,
+      });
+
+      console.log(`[HR_RADAR_ALERT_UPSERT] CREATE sessionDate=${today} gameId=${data.gameId} playerId=${data.playerId} detectedLabel=${detectedLabel} initialReadinessScore=${data.readinessScore}`);
+      const inserted = await db.select().from(hrRadarAlerts)
+        .where(eq(hrRadarAlerts.id, alertId)).limit(1);
+      return inserted[0] ?? null;
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_ALERT_UPSERT] Failed: ${err.message}`);
+      return null;
+    }
+  }
+
+  async resolveHrRadarAlertAsHit(playerId: string, gameId: string, hitInningNum: number, hitHalfVal: string, hitLabelVal: string): Promise<number> {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const result = await db.update(hrRadarAlerts)
+        .set({
+          status: "hit",
+          hitInning: hitInningNum,
+          hitHalf: hitHalfVal,
+          hitLabel: hitLabelVal,
+          resolvedAt: new Date(),
+        })
+        .where(and(
+          eq(hrRadarAlerts.sessionDate, today),
+          eq(hrRadarAlerts.gameId, gameId),
+          eq(hrRadarAlerts.playerId, playerId),
+          eq(hrRadarAlerts.status, "live"),
+        ));
+      const count = (result as any).rowCount ?? 0;
+      if (count > 0) {
+        console.log(`[HR_RADAR_ALERT_HIT] playerId=${playerId} gameId=${gameId} detectedLabel=? hitLabel=${hitLabelVal}`);
+      }
+      return count;
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_ALERT_HIT] Failed: ${err.message}`);
+      return 0;
+    }
+  }
+
+  async resolveHrRadarAlertAsMiss(playerId: string, gameId: string): Promise<number> {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const result = await db.update(hrRadarAlerts)
+        .set({
+          status: "miss",
+          resolvedAt: new Date(),
+        })
+        .where(and(
+          eq(hrRadarAlerts.sessionDate, today),
+          eq(hrRadarAlerts.gameId, gameId),
+          eq(hrRadarAlerts.playerId, playerId),
+          eq(hrRadarAlerts.status, "live"),
+        ));
+      const count = (result as any).rowCount ?? 0;
+      if (count > 0) {
+        console.log(`[HR_RADAR_ALERT_MISS] playerId=${playerId} gameId=${gameId}`);
+      }
+      return count;
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_ALERT_MISS] Failed: ${err.message}`);
+      return 0;
+    }
+  }
+
+  async reconcileHrRadarAlertsForGame(gameId: string, playerHrMap: Map<string, { inning: number; half: string }>): Promise<void> {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const liveAlerts = await db.select().from(hrRadarAlerts)
+        .where(and(
+          eq(hrRadarAlerts.sessionDate, today),
+          eq(hrRadarAlerts.gameId, gameId),
+          eq(hrRadarAlerts.status, "live"),
+        ));
+
+      for (const alert of liveAlerts) {
+        const hrData = playerHrMap.get(alert.playerId);
+        if (hrData) {
+          const hitHalf = hrData.half === "top" ? "T" : hrData.half === "bottom" ? "B" : "F";
+          const hitLabel = hitHalf === "F" ? "Final" : `${hitHalf}${hrData.inning}`;
+          await db.update(hrRadarAlerts)
+            .set({
+              status: "hit",
+              hitInning: hrData.inning,
+              hitHalf: hrData.half,
+              hitLabel,
+              resolvedAt: new Date(),
+            })
+            .where(eq(hrRadarAlerts.id, alert.id));
+          console.log(`[HR_RADAR_ALERT_HIT] playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel} hitLabel=${hitLabel}`);
+        } else {
+          await db.update(hrRadarAlerts)
+            .set({ status: "miss", resolvedAt: new Date() })
+            .where(eq(hrRadarAlerts.id, alert.id));
+          console.log(`[HR_RADAR_ALERT_MISS] playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel}`);
+        }
+      }
+
+      await this.collapseDuplicateHrRadarOutcomes(gameId, today);
+      await this.archiveDailyHrRadarOutcomesToAnalytics(gameId, today);
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_RECONCILE] Failed for game=${gameId}: ${err.message}`);
+    }
+  }
+
+  async collapseDuplicateHrRadarOutcomes(gameId: string, sessionDate: string): Promise<void> {
+    try {
+      const alerts = await db.select().from(hrRadarAlerts)
+        .where(and(
+          eq(hrRadarAlerts.sessionDate, sessionDate),
+          eq(hrRadarAlerts.gameId, gameId),
+        ));
+
+      const byPlayer = new Map<string, HrRadarAlert[]>();
+      for (const a of alerts) {
+        const list = byPlayer.get(a.playerId) || [];
+        list.push(a);
+        byPlayer.set(a.playerId, list);
+      }
+
+      for (const [pid, dupes] of Array.from(byPlayer.entries())) {
+        if (dupes.length <= 1) continue;
+
+        const hasHit = dupes.find((d: HrRadarAlert) => d.status === "hit");
+        const canonical = hasHit ?? dupes[0];
+
+        if (hasHit) {
+          for (const d of dupes) {
+            if (d.id !== canonical.id && d.status === "miss") {
+              await db.update(hrRadarAlerts)
+                .set({ status: "hit", hitInning: hasHit.hitInning, hitHalf: hasHit.hitHalf, hitLabel: hasHit.hitLabel, resolvedAt: hasHit.resolvedAt })
+                .where(eq(hrRadarAlerts.id, d.id));
+            }
+          }
+        }
+        console.log(`[HR_RADAR_DEDUPE_COLLAPSE] sessionDate=${sessionDate} gameId=${gameId} playerId=${pid} duplicateCount=${dupes.length} finalStatus=${canonical.status}`);
+      }
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_DEDUPE_COLLAPSE] Failed: ${err.message}`);
+    }
+  }
+
+  async archiveDailyHrRadarOutcomesToAnalytics(gameId: string, sessionDate: string): Promise<void> {
+    try {
+      const alerts = await db.select().from(hrRadarAlerts)
+        .where(and(
+          eq(hrRadarAlerts.sessionDate, sessionDate),
+          eq(hrRadarAlerts.gameId, gameId),
+          ne(hrRadarAlerts.status, "live"),
+          eq(hrRadarAlerts.analyticsPersisted, false),
+        ));
+
+      for (const alert of alerts) {
+        await db.insert(hrRadarAnalytics).values({
+          sessionDate: alert.sessionDate,
+          gameId: alert.gameId,
+          playerId: alert.playerId,
+          playerName: alert.playerName,
+          team: alert.team,
+          detectedLabel: alert.detectedLabel,
+          hitLabel: alert.hitLabel,
+          detectedScore: alert.initialReadinessScore,
+          peakScore: alert.peakReadinessScore,
+          scoreIncreaseAmount: alert.scoreIncreaseAmount,
+          result: alert.status,
+          confidenceTier: alert.confidenceTier,
+          triggerTags: alert.triggerTags,
+        });
+
+        await db.update(hrRadarAlerts)
+          .set({ analyticsPersisted: true })
+          .where(eq(hrRadarAlerts.id, alert.id));
+      }
+
+      if (alerts.length > 0) {
+        const hits = alerts.filter(a => a.status === "hit").length;
+        const misses = alerts.filter(a => a.status === "miss").length;
+        console.log(`[HR_RADAR_ANALYTICS_ARCHIVE] sessionDate=${sessionDate} totalCalls=${alerts.length} hits=${hits} misses=${misses}`);
+      }
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_ANALYTICS_ARCHIVE] Failed: ${err.message}`);
+    }
+  }
+
+  async getTodayHrRadarBoard(): Promise<HrRadarAlert[]> {
+    const today = new Date().toISOString().slice(0, 10);
+    return db.select().from(hrRadarAlerts)
+      .where(eq(hrRadarAlerts.sessionDate, today))
+      .orderBy(desc(hrRadarAlerts.detectedAt));
+  }
+
+  async getHrRadarAlertForAnalyze(playerId: string, gameId: string): Promise<HrRadarAlert | null> {
+    const today = new Date().toISOString().slice(0, 10);
+    const rows = await db.select().from(hrRadarAlerts)
+      .where(and(
+        eq(hrRadarAlerts.sessionDate, today),
+        eq(hrRadarAlerts.gameId, gameId),
+        eq(hrRadarAlerts.playerId, playerId),
+      ))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async getHrRadarAnalytics(filters?: {
+    sessionDate?: string;
+    playerId?: string;
+    team?: string;
+    result?: string;
+    confidenceTier?: string;
+    limit?: number;
+  }): Promise<HrRadarAnalyticsRecord[]> {
+    const conditions = [];
+    if (filters?.sessionDate) conditions.push(eq(hrRadarAnalytics.sessionDate, filters.sessionDate));
+    if (filters?.playerId) conditions.push(eq(hrRadarAnalytics.playerId, filters.playerId));
+    if (filters?.team) conditions.push(eq(hrRadarAnalytics.team, filters.team));
+    if (filters?.result) conditions.push(eq(hrRadarAnalytics.result, filters.result));
+    if (filters?.confidenceTier) conditions.push(eq(hrRadarAnalytics.confidenceTier, filters.confidenceTier));
+
+    const query = db.select().from(hrRadarAnalytics);
+    const rows = conditions.length > 0
+      ? await query.where(and(...conditions)).orderBy(desc(hrRadarAnalytics.createdAt)).limit(filters?.limit ?? 200)
+      : await query.orderBy(desc(hrRadarAnalytics.createdAt)).limit(filters?.limit ?? 200);
+    return rows;
   }
 }
 

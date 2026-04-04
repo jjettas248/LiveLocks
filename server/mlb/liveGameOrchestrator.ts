@@ -58,12 +58,21 @@ function checkAndGradeHR(playerId: string, gameId: string, currentHR: number, in
   const prevHR = KNOWN_HR_COUNTS.get(key) ?? 0;
   KNOWN_HR_COUNTS.set(key, currentHR);
   if (currentHR > prevHR && prevHR >= 0) {
+    const hitHalf = halfInning === "top" ? "T" : halfInning === "bottom" ? "B" : "?";
+    const hitLabel = `${hitHalf}${inning ?? 0}`;
     storage.resolveAlertAsHit(
       playerId,
       gameId,
       inning ?? 0,
       halfInning ?? "unknown",
       abNum ?? 0,
+    ).catch(() => {});
+    storage.resolveHrRadarAlertAsHit(
+      playerId,
+      gameId,
+      inning ?? 0,
+      hitHalf,
+      hitLabel,
     ).catch(() => {});
   }
 }
@@ -528,15 +537,18 @@ export class LiveGameOrchestrator {
 
     if (normalizedStatus === "final") {
       const boxScore = mlbGameCache.gameBoxScore?.[gameId];
+      const playerHrMap = new Map<string, { inning: number; half: string }>();
       if (boxScore?.byPlayerId) {
         for (const [pid, bsp] of Object.entries(boxScore.byPlayerId)) {
           const hrCount = (bsp as any).hr ?? 0;
           if (hrCount > 0) {
             storage.resolveAlertAsHit(pid, gameId, 0, "final", 0).catch(() => {});
+            playerHrMap.set(pid, { inning: 9, half: "unknown" });
           }
         }
       }
       storage.reconcileAlertsForGame(gameId).catch(() => {});
+      storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap).catch(() => {});
     }
 
     if (prevState) {
@@ -1516,6 +1528,44 @@ export class LiveGameOrchestrator {
                 inning: state.inning,
                 factors: JSON.stringify(hrFactorsBuild),
               }).catch(err => console.warn(`[HR_ALERT] persist failed: ${err.message}`));
+
+              const tierMap: Record<string, "monitor" | "building" | "strong"> = {
+                FORMATION: "monitor",
+                BUILDING: "building",
+                PEAK: "strong",
+                COOLDOWN: "monitor",
+              };
+              const stateMap: Record<string, "live" | "watching" | "actionable"> = {
+                FORMATION: "watching",
+                BUILDING: "live",
+                PEAK: "actionable",
+                COOLDOWN: "watching",
+              };
+
+              const lastAB = (playerContact?.priorABResults ?? []).slice(-1)[0] as any;
+              const contactSnap = lastAB ? {
+                ev: lastAB.exitVelocity ?? null,
+                la: lastAB.launchAngle ?? null,
+                distance: lastAB.distance ?? null,
+                hardHit: (lastAB.exitVelocity ?? 0) >= 95,
+                barrel: (lastAB.exitVelocity ?? 0) >= 98 && (lastAB.launchAngle ?? 0) >= 20 && (lastAB.launchAngle ?? 0) <= 35,
+              } : null;
+
+              storage.createOrUpdateHrRadarAlert({
+                gameId,
+                playerId: batter.playerId,
+                playerName: batter.playerName,
+                team: batter.team,
+                opponent: "",
+                inning: state.inning,
+                half: state.isTopInning ? "top" : "bottom",
+                readinessScore: output.hrBuildScore,
+                confidenceTier: tierMap[alertResult.signalState ?? "FORMATION"] ?? "monitor",
+                signalState: stateMap[alertResult.signalState ?? "FORMATION"] ?? "live",
+                triggerTags: alertResult.triggerReason ? alertResult.triggerReason.split(", ") : [],
+                summaryText: `${alertResult.decision} — ${alertResult.triggerReason}`,
+                contactSnapshot: contactSnap,
+              }).catch(err => console.warn(`[HR_RADAR_ALERT] persist failed: ${err.message}`));
             }
           }
         } catch (err: any) {

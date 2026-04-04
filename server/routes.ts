@@ -1878,6 +1878,87 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/mlb/hr-radar-board", requireAuth, async (req, res) => {
+    try {
+      const board = await storage.getTodayHrRadarBoard();
+      const live = board.filter(a => a.status === "live");
+      const hits = board.filter(a => a.status === "hit");
+      const misses = board.filter(a => a.status === "miss");
+      return res.json({ board, live, hits, misses, total: board.length });
+    } catch (e: any) {
+      console.error("[mlb/hr-radar-board]", e.message);
+      return res.json({ board: [], live: [], hits: [], misses: [], total: 0 });
+    }
+  });
+
+  app.get("/api/mlb/hr-radar-analyze/:playerId/:gameId", requireAuth, async (req, res) => {
+    try {
+      const playerId = String(req.params.playerId);
+      const gameId = String(req.params.gameId);
+      const alert = await storage.getHrRadarAlertForAnalyze(playerId, gameId);
+      if (!alert) return res.status(404).json({ error: "Alert not found" });
+
+      const contactCache = mlbGameCache.contactData[gameId];
+      const playerContact = contactCache?.byPlayerId?.[playerId];
+      const gameState = mlbGameCache.gameState[gameId];
+
+      const priorABs = (playerContact?.priorABResults ?? []).map((ab: any, idx: number) => ({
+        abNumber: idx + 1,
+        exitVelocity: ab.exitVelocity ?? null,
+        launchAngle: ab.launchAngle ?? null,
+        distance: ab.distance ?? null,
+        outcome: ab.outcome ?? "unknown",
+        isBarrel: (ab.exitVelocity ?? 0) >= 98 && (ab.launchAngle ?? 0) >= 20 && (ab.launchAngle ?? 0) <= 35,
+        isHardHit: (ab.exitVelocity ?? 0) >= 95,
+      }));
+
+      const edgeEntry = mlbEdgeCache.get(gameId);
+      const rawOutput = edgeEntry?.outputs?.find((o: any) => o.playerId === playerId && o.market === "home_runs");
+
+      return res.json({
+        alert,
+        analyze: {
+          priorABs,
+          currentInning: gameState?.inning ?? null,
+          isTopInning: gameState?.isTopInning ?? null,
+          hrFactors: rawOutput?.hrFactors ?? null,
+          hrBuildScore: rawOutput?.hrBuildScore ?? null,
+          hrIntensity: rawOutput?.hrIntensity ?? null,
+          explanationBullets: rawOutput?.explanationBullets ?? [],
+        },
+      });
+    } catch (e: any) {
+      console.error("[mlb/hr-radar-analyze]", e.message);
+      return res.status(500).json({ error: "Failed to load analyze data" });
+    }
+  });
+
+  app.get("/api/admin/hr-radar-analytics", requireAdmin, async (req, res) => {
+    try {
+      const { sessionDate, playerId, team, result, confidenceTier, limit } = req.query;
+      const records = await storage.getHrRadarAnalytics({
+        sessionDate: sessionDate ? String(sessionDate) : undefined,
+        playerId: playerId ? String(playerId) : undefined,
+        team: team ? String(team) : undefined,
+        result: result ? String(result) : undefined,
+        confidenceTier: confidenceTier ? String(confidenceTier) : undefined,
+        limit: limit ? parseInt(String(limit)) : 200,
+      });
+
+      const totalHits = records.filter(r => r.result === "hit").length;
+      const totalMisses = records.filter(r => r.result === "miss").length;
+      const hitRate = records.length > 0 ? Math.round((totalHits / records.length) * 1000) / 10 : 0;
+
+      return res.json({
+        records,
+        summary: { total: records.length, hits: totalHits, misses: totalMisses, hitRate },
+      });
+    } catch (e: any) {
+      console.error("[admin/hr-radar-analytics]", e.message);
+      return res.json({ records: [], summary: { total: 0, hits: 0, misses: 0, hitRate: 0 } });
+    }
+  });
+
   // ── MLB Manual Calculation Route ─────────────────────────────────────────────
   app.post("/api/mlb/calculate-manual", requireMLBAccess, async (req, res) => {
     try {

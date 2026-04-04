@@ -1,4 +1,4 @@
-import { pgTable, text, serial, numeric, integer, timestamp, boolean, index, primaryKey, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, numeric, integer, timestamp, boolean, index, primaryKey, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -541,6 +541,82 @@ export const persistedAlerts = pgTable("persisted_alerts", {
 export const insertPersistedAlertSchema = createInsertSchema(persistedAlerts).omit({ id: true, createdAt: true });
 export type PersistedAlert = typeof persistedAlerts.$inferSelect;
 export type InsertPersistedAlert = z.infer<typeof insertPersistedAlertSchema>;
+
+export const hrRadarAlerts = pgTable("hr_radar_alerts", {
+  id: text("id").primaryKey(),
+  sessionDate: text("session_date").notNull(),
+  gameId: text("game_id").notNull(),
+  playerId: text("player_id").notNull(),
+  playerName: text("player_name").notNull(),
+  team: text("team").notNull(),
+  opponent: text("opponent"),
+
+  detectedAt: timestamp("detected_at").notNull(),
+  detectedInning: integer("detected_inning"),
+  detectedHalf: text("detected_half"),
+  detectedLabel: text("detected_label"),
+
+  initialReadinessScore: numeric("initial_readiness_score"),
+  currentReadinessScore: numeric("current_readiness_score"),
+  peakReadinessScore: numeric("peak_readiness_score"),
+
+  scoreIncreased: boolean("score_increased").notNull().default(false),
+  scoreIncreaseAmount: numeric("score_increase_amount"),
+  scoreIncreaseInning: integer("score_increase_inning"),
+  scoreIncreaseHalf: text("score_increase_half"),
+  scoreIncreaseLabel: text("score_increase_label"),
+
+  confidenceTier: text("confidence_tier").notNull().default("monitor"),
+  signalState: text("signal_state").notNull().default("live"),
+  triggerTags: text("trigger_tags").array().notNull().default([]),
+  summaryText: text("summary_text"),
+
+  contactSnapshot: jsonb("contact_snapshot"),
+
+  status: text("status").notNull().default("live"),
+  hitInning: integer("hit_inning"),
+  hitHalf: text("hit_half"),
+  hitLabel: text("hit_label"),
+  resolvedAt: timestamp("resolved_at"),
+
+  analyticsPersisted: boolean("analytics_persisted").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  sessionIdx: index("hr_radar_alerts_session_idx").on(table.sessionDate),
+  gameIdx: index("hr_radar_alerts_game_idx").on(table.gameId),
+  playerGameSessionIdx: uniqueIndex("hr_radar_alerts_player_game_session_idx").on(table.sessionDate, table.gameId, table.playerId),
+  statusIdx: index("hr_radar_alerts_status_idx").on(table.status),
+}));
+
+export const insertHrRadarAlertSchema = createInsertSchema(hrRadarAlerts).omit({ createdAt: true });
+export type HrRadarAlert = typeof hrRadarAlerts.$inferSelect;
+export type InsertHrRadarAlert = z.infer<typeof insertHrRadarAlertSchema>;
+
+export const hrRadarAnalytics = pgTable("hr_radar_analytics", {
+  id: serial("id").primaryKey(),
+  sessionDate: text("session_date").notNull(),
+  gameId: text("game_id").notNull(),
+  playerId: text("player_id").notNull(),
+  playerName: text("player_name").notNull(),
+  team: text("team").notNull(),
+  detectedLabel: text("detected_label"),
+  hitLabel: text("hit_label"),
+  detectedScore: numeric("detected_score"),
+  peakScore: numeric("peak_score"),
+  scoreIncreaseAmount: numeric("score_increase_amount"),
+  result: text("result").notNull(),
+  confidenceTier: text("confidence_tier").notNull(),
+  triggerTags: text("trigger_tags").array().notNull().default([]),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  sessionIdx: index("hr_radar_analytics_session_idx").on(table.sessionDate),
+  resultIdx: index("hr_radar_analytics_result_idx").on(table.result),
+  playerIdx: index("hr_radar_analytics_player_idx").on(table.playerId),
+}));
+
+export const insertHrRadarAnalyticsSchema = createInsertSchema(hrRadarAnalytics).omit({ id: true, createdAt: true });
+export type HrRadarAnalyticsRecord = typeof hrRadarAnalytics.$inferSelect;
+export type InsertHrRadarAnalyticsRecord = z.infer<typeof insertHrRadarAnalyticsSchema>;
 
 export const signalInteractions = pgTable("signal_interactions", {
   id: serial("id").primaryKey(),
