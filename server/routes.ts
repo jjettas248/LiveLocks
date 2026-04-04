@@ -1823,45 +1823,9 @@ export async function registerRoutes(
       const dedupWatchlist = Array.from(new Map(cleanWatchlist.map((w: any) => [w.playerId, w])).values());
       const dedupCashed = Array.from(new Map(cashedToday.map((c: any) => [c.playerId, c])).values());
 
-      const gradedAlerts = await storage.getGradedAlerts(12);
-      const gradedHits = gradedAlerts
-        .filter(a => a.outcome === "HR")
-        .map(a => ({
-          id: a.id,
-          playerId: a.playerId,
-          playerName: a.playerName,
-          teamAbbr: a.teamAbbr,
-          gameId: a.gameId,
-          alertType: a.alertType,
-          triggerReason: a.triggerReason,
-          hrBuildScore: a.hrBuildScore,
-          hrIntensity: a.hrIntensity,
-          inning: a.inning,
-          outcome: a.outcome,
-          resolvedAt: a.resolvedAt,
-          hitInning: a.hitInning,
-          hitHalf: a.hitHalf,
-          hitPaNumber: a.hitPaNumber,
-          createdAt: a.createdAt,
-        }));
-      const gradedMisses = gradedAlerts
-        .filter(a => a.outcome === "NO_HR")
-        .map(a => ({
-          id: a.id,
-          playerId: a.playerId,
-          playerName: a.playerName,
-          teamAbbr: a.teamAbbr,
-          gameId: a.gameId,
-          alertType: a.alertType,
-          triggerReason: a.triggerReason,
-          hrBuildScore: a.hrBuildScore,
-          inning: a.inning,
-          outcome: a.outcome,
-          resolvedAt: a.resolvedAt,
-          createdAt: a.createdAt,
-        }));
+      const canonical = await storage.getCanonicalHrRadarOutcomes();
 
-      console.log(`[MLB_HR_RADAR] bettable=${dedupBettable.length} cashed=${dedupCashed.length} watchlist=${dedupWatchlist.length} hits=${gradedHits.length} misses=${gradedMisses.length}`);
+      console.log(`[MLB_HR_RADAR] bettable=${dedupBettable.length} cashed=${dedupCashed.length} watchlist=${dedupWatchlist.length} canonicalHits=${canonical.hits.length} canonicalMisses=${canonical.misses.length}`);
 
       return res.json({
         bettableHR: dedupBettable,
@@ -1869,8 +1833,9 @@ export async function registerRoutes(
         hrEdges,
         cashedToday: dedupCashed,
         activity: dedupCashed,
-        gradedHits,
-        gradedMisses,
+        gradedHits: canonical.hits,
+        gradedMisses: canonical.misses,
+        gradingSummary: canonical.summary,
       });
     } catch (e: any) {
       console.error("[mlb/hr-radar]", e.message);

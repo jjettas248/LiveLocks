@@ -2433,6 +2433,121 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  async getCanonicalHrRadarOutcomes(sessionDate?: string): Promise<{
+    hits: Array<{
+      sessionDate: string;
+      gameId: string;
+      playerId: string;
+      playerName: string;
+      team: string;
+      finalStatus: "hit";
+      detectedLabel: string | null;
+      hitLabel: string | null;
+      hitInning: number | null;
+      hitHalf: string | null;
+      detectedScore: number | null;
+      peakScore: number | null;
+      triggerTags: string[];
+      resolvedAt: Date | null;
+    }>;
+    misses: Array<{
+      sessionDate: string;
+      gameId: string;
+      playerId: string;
+      playerName: string;
+      team: string;
+      finalStatus: "miss";
+      detectedLabel: string | null;
+      hitLabel: string | null;
+      detectedScore: number | null;
+      peakScore: number | null;
+      triggerTags: string[];
+      resolvedAt: Date | null;
+    }>;
+    summary: { wins: number; losses: number; totalGraded: number; hitRate: number };
+  }> {
+    const targetDate = sessionDate ?? new Date().toISOString().slice(0, 10);
+    try {
+      const allRows = await db.select().from(hrRadarAlerts)
+        .where(eq(hrRadarAlerts.sessionDate, targetDate))
+        .orderBy(desc(hrRadarAlerts.resolvedAt));
+
+      const rawRowCount = allRows.length;
+      const gradedRows = allRows.filter(r => r.status === "hit" || r.status === "miss");
+
+      const canonicalMap = new Map<string, typeof gradedRows[0]>();
+      for (const row of gradedRows) {
+        const key = `${row.sessionDate}|${row.gameId}|${row.playerId}`;
+        const existing = canonicalMap.get(key);
+        if (!existing) {
+          canonicalMap.set(key, row);
+        } else {
+          console.log(`[HR_RADAR_DUPLICATE_COLLAPSE] sessionDate=${row.sessionDate} gameId=${row.gameId} playerId=${row.playerId} duplicateRowCount=2 finalStatus=${row.status === "hit" || existing.status === "hit" ? "hit" : "miss"}`);
+          if (row.status === "hit" && existing.status !== "hit") {
+            canonicalMap.set(key, row);
+          }
+        }
+      }
+
+      const canonicalRows = Array.from(canonicalMap.values());
+      const hits = canonicalRows
+        .filter(r => r.status === "hit")
+        .map(r => ({
+          sessionDate: r.sessionDate,
+          gameId: r.gameId,
+          playerId: r.playerId,
+          playerName: r.playerName,
+          team: r.team,
+          finalStatus: "hit" as const,
+          detectedLabel: r.detectedLabel,
+          hitLabel: r.hitLabel,
+          hitInning: r.hitInning,
+          hitHalf: r.hitHalf,
+          detectedScore: r.initialReadinessScore ? parseFloat(r.initialReadinessScore) : null,
+          peakScore: r.peakReadinessScore ? parseFloat(r.peakReadinessScore) : null,
+          triggerTags: r.triggerTags ?? [],
+          resolvedAt: r.resolvedAt,
+        }));
+
+      const misses = canonicalRows
+        .filter(r => r.status === "miss")
+        .map(r => ({
+          sessionDate: r.sessionDate,
+          gameId: r.gameId,
+          playerId: r.playerId,
+          playerName: r.playerName,
+          team: r.team,
+          finalStatus: "miss" as const,
+          detectedLabel: r.detectedLabel,
+          hitLabel: r.hitLabel,
+          detectedScore: r.initialReadinessScore ? parseFloat(r.initialReadinessScore) : null,
+          peakScore: r.peakReadinessScore ? parseFloat(r.peakReadinessScore) : null,
+          triggerTags: r.triggerTags ?? [],
+          resolvedAt: r.resolvedAt,
+        }));
+
+      const totalGraded = hits.length + misses.length;
+      const hitRate = totalGraded > 0 ? Math.round((hits.length / totalGraded) * 1000) / 10 : 0;
+
+      const rawHitCount = gradedRows.filter(r => r.status === "hit").length;
+      const rawMissCount = gradedRows.filter(r => r.status === "miss").length;
+      if (rawHitCount !== hits.length || rawMissCount !== misses.length) {
+        console.log(`[HR_RADAR_SUMMARY_MISMATCH] sessionDate=${targetDate} rawHitCount=${rawHitCount} rawMissCount=${rawMissCount} canonicalHitCount=${hits.length} canonicalMissCount=${misses.length}`);
+      }
+
+      console.log(`[HR_RADAR_CANONICAL_OUTCOME_BUILD] sessionDate=${targetDate} rawRowCount=${rawRowCount} canonicalRowCount=${canonicalRows.length} hitCount=${hits.length} missCount=${misses.length}`);
+
+      return {
+        hits,
+        misses,
+        summary: { wins: hits.length, losses: misses.length, totalGraded, hitRate },
+      };
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_CANONICAL_OUTCOME_BUILD] Failed: ${err.message}`);
+      return { hits: [], misses: [], summary: { wins: 0, losses: 0, totalGraded: 0, hitRate: 0 } };
+    }
+  }
+
   async getTodayHrRadarBoard(): Promise<HrRadarAlert[]> {
     const today = new Date().toISOString().slice(0, 10);
     return db.select().from(hrRadarAlerts)

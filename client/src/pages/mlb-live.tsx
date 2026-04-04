@@ -92,23 +92,28 @@ type EdgeFeedResponse = {
   signals: MLBSignal[];
 };
 
-type GradedAlert = {
-  id: number;
+type CanonicalGradedOutcome = {
+  sessionDate: string;
+  gameId: string;
   playerId: string;
   playerName: string;
-  teamAbbr: string | null;
-  gameId: string;
-  alertType: string;
-  triggerReason: string | null;
-  hrBuildScore: string | null;
-  hrIntensity?: string | null;
-  inning: number | null;
-  outcome: string | null;
-  resolvedAt: string | null;
+  team: string;
+  finalStatus: "hit" | "miss";
+  detectedLabel: string | null;
+  hitLabel: string | null;
   hitInning?: number | null;
   hitHalf?: string | null;
-  hitPaNumber?: number | null;
-  createdAt: string | null;
+  detectedScore: number | null;
+  peakScore: number | null;
+  triggerTags: string[];
+  resolvedAt: string | null;
+};
+
+type HrRadarGradingSummary = {
+  wins: number;
+  losses: number;
+  totalGraded: number;
+  hitRate: number;
 };
 
 type HRRadarResponse = {
@@ -117,8 +122,9 @@ type HRRadarResponse = {
   cashedToday: Array<any>;
   activity?: Array<any>;
   hrWatchlist: Array<any>;
-  gradedHits?: GradedAlert[];
-  gradedMisses?: GradedAlert[];
+  gradedHits?: CanonicalGradedOutcome[];
+  gradedMisses?: CanonicalGradedOutcome[];
+  gradingSummary?: HrRadarGradingSummary;
 };
 
 const MARKET_LABELS: Record<string, string> = {
@@ -1026,8 +1032,9 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
   const bettable = hrData?.bettableHR ?? [];
   const watchlist = hrData?.hrWatchlist ?? [];
   const cashedToday = hrData?.cashedToday ?? hrData?.activity ?? [];
-  const gradedHits = hrData?.gradedHits ?? [];
-  const gradedMisses = hrData?.gradedMisses ?? [];
+  const canonicalHits = hrData?.gradedHits ?? [];
+  const canonicalMisses = hrData?.gradedMisses ?? [];
+  const gradingSummary = hrData?.gradingSummary ?? null;
 
   const alerts = alertData?.alerts ?? [];
   const conversionStats = alertData?.conversionStats ?? null;
@@ -1209,91 +1216,83 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         </div>
       )}
 
-      {(() => {
-        const dedupGradedHits = gradedHits.filter(h => !dedupCashed.some(c => c.playerId === h.playerId && c.gameId === h.gameId));
-        const dedupGradedMisses = gradedMisses.filter(m => !missedCards.some(c => c.playerId === m.playerId && c.gameId === m.gameId));
-        const totalHits = dedupCashed.length + dedupGradedHits.length;
-        const totalMisses = missedCards.length + dedupGradedMisses.length;
-        if (totalHits === 0 && totalMisses === 0) return null;
-        return (
+      {gradingSummary && gradingSummary.totalGraded > 0 && (
         <div className="space-y-3" data-testid="hr-radar-grading">
           <div className="flex items-center gap-2">
             <BarChart3 className="w-4 h-4 text-muted-foreground" />
             <span className="text-sm font-bold text-foreground">Radar Grading</span>
-            {(totalHits + totalMisses) > 0 && (
-              <span className="text-[9px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
-                {totalHits}W / {totalMisses}L
+            <span className="text-[9px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground" data-testid="grading-summary-chip">
+              {gradingSummary.wins}W / {gradingSummary.losses}L
+            </span>
+            {gradingSummary.totalGraded >= 3 && (
+              <span className="text-[9px] px-2 py-0.5 rounded-full bg-muted/50 text-muted-foreground/70">
+                {gradingSummary.hitRate}%
               </span>
             )}
           </div>
-          {(dedupCashed.length > 0 || dedupGradedHits.length > 0) && (
+          {canonicalHits.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center gap-1.5">
                 <Trophy className="w-3.5 h-3.5 text-emerald-400" />
                 <span className="text-xs font-semibold text-emerald-400">
-                  Hits ({totalHits})
+                  Hits ({canonicalHits.length})
                 </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {dedupCashed.map(c => (
-                  <RadarCard key={`cashed-${c.playerId}-${c.gameId}`} card={c} gameTeams={null} />
-                ))}
-                {dedupGradedHits.map(h => (
-                    <div key={`graded-hit-${h.id}`} className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-1" data-testid={`graded-hit-${h.id}`}>
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-foreground">{h.playerName}</span>
-                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400">HR</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                        {h.teamAbbr && <span>{h.teamAbbr}</span>}
-                        {h.hitInning != null && h.hitInning > 0 && (
-                          <span>
-                            {h.hitHalf === "top" ? "T" : h.hitHalf === "bottom" ? "B" : ""}{h.hitInning}
-                          </span>
-                        )}
-                        {h.resolvedAt && (
-                          <span>{new Date(h.resolvedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
-                        )}
-                      </div>
+                {canonicalHits.map(h => (
+                  <div key={`canonical-hit-${h.playerId}-${h.gameId}`} className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-1" data-testid={`graded-hit-${h.playerId}-${h.gameId}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-foreground">{h.playerName}</span>
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400">
+                        {h.hitLabel || "HR"}
+                      </span>
                     </div>
-                  ))}
+                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                      {h.team && <span>{h.team}</span>}
+                      {h.hitInning != null && h.hitInning > 0 && (
+                        <span>
+                          {h.hitHalf === "top" ? "T" : h.hitHalf === "bottom" ? "B" : ""}{h.hitInning}
+                        </span>
+                      )}
+                      {h.detectedLabel && <span className="text-emerald-400/60">det. {h.detectedLabel}</span>}
+                      {h.resolvedAt && (
+                        <span>{new Date(h.resolvedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
-          {(missedCards.length > 0 || dedupGradedMisses.length > 0) && (
+          {canonicalMisses.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center gap-1.5">
                 <X className="w-3.5 h-3.5 text-zinc-400" />
                 <span className="text-xs font-semibold text-zinc-400">
-                  Misses ({totalMisses})
+                  Misses ({canonicalMisses.length})
                 </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {missedCards.map(c => (
-                  <RadarCard key={`missed-${c.playerId}-${c.gameId}`} card={c} gameTeams={null} />
-                ))}
-                {dedupGradedMisses
-                  .slice(0, 8)
-                  .map(m => (
-                    <div key={`graded-miss-${m.id}`} className="rounded-lg border border-border/30 bg-muted/20 p-3 space-y-1" data-testid={`graded-miss-${m.id}`}>
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-muted-foreground">{m.playerName}</span>
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-500/15 text-zinc-400">No HR</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60">
-                        {m.teamAbbr && <span>{m.teamAbbr}</span>}
-                        {m.resolvedAt && (
-                          <span>{new Date(m.resolvedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
-                        )}
-                      </div>
+                {canonicalMisses.slice(0, 12).map(m => (
+                  <div key={`canonical-miss-${m.playerId}-${m.gameId}`} className="rounded-lg border border-border/30 bg-muted/20 p-3 space-y-1" data-testid={`graded-miss-${m.playerId}-${m.gameId}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-muted-foreground">{m.playerName}</span>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-500/15 text-zinc-400">No HR</span>
                     </div>
-                  ))}
+                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60">
+                      {m.team && <span>{m.team}</span>}
+                      {m.detectedLabel && <span>det. {m.detectedLabel}</span>}
+                      {m.resolvedAt && (
+                        <span>{new Date(m.resolvedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
         </div>
-        );
-      })()}
+      )}
     </div>
   );
 }
