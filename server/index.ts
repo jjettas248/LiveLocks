@@ -2,7 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import pg from "pg";
-import { registerRoutes, registerAnalyticsRoutes, registerPlaysRoutes, registerTestAlertRoute, registerCalibrationRoutes } from "./routes";
+import { registerRoutes, registerAnalyticsRoutes, registerPlaysRoutes, registerTestAlertRoute, registerCalibrationRoutes, registerPerformanceRoutes } from "./routes";
 import { liveOrchestrator } from "./mlb/liveGameOrchestrator";
 import { autoResolveAlerts } from "./analyticsResolver";
 import { gradePersistedPlays } from "./services/gradePersistedPlays";
@@ -325,6 +325,7 @@ app.use((req, res, next) => {
   registerPlaysRoutes(app);
   registerTestAlertRoute(app);
   registerCalibrationRoutes(app);
+  registerPerformanceRoutes(app);
 
   // Start MLB live game orchestrator (Phase A — admin-only, fire-and-forget)
   liveOrchestrator.start();

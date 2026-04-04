@@ -8,6 +8,7 @@ import Dashboard from "@/pages/dashboard";
 import AuthPage from "@/pages/auth";
 import AdminPage from "@/pages/admin";
 import AnalyticsPage from "@/pages/analytics";
+import PerformancePage from "@/pages/performance";
 import PrivacyPage from "@/pages/privacy";
 import TermsPage from "@/pages/terms";
 import LandingPage from "@/pages/landing";
@@ -48,6 +49,7 @@ function ProtectedRouter() {
       <Route path="/auth" component={AuthPage} />
       <Route path="/admin" component={AdminPage} />
       <Route path="/analytics" component={AnalyticsPage} />
+      <Route path="/performance" component={PerformancePage} />
       <Route path="/dashboard" component={Dashboard} />
       <Route component={NotFound} />
     </Switch>

@@ -1,9 +1,11 @@
 import type { Express } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
+import { db } from "./db";
 import { api } from "@shared/routes";
 import { z } from "zod";
-import { type Player, type ParlayPickInput } from "@shared/schema";
+import { type Player, type ParlayPickInput, persistedPlays } from "@shared/schema";
+import { sql, and, desc } from "drizzle-orm";
 import { computeFamilyPenaltyFactor } from "./nba/marketFamily";
 import { recordSurfacedSignal, seedFromSettledPlays, getDirectionalSplit } from "./nba/directionalBias";
 import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines, getSGOPlayerLine, resolveMLBOddsEventId, getMLBPlayerOdds, normalizeOdds } from "./oddsService";
@@ -5249,6 +5251,134 @@ export function registerPlaysRoutes(app: Express): void {
       });
     } catch (e) {
       return res.status(500).json({ error: "Dedupe failed", details: (e as any).message });
+    }
+  });
+}
+
+// ── Performance Analytics (Truth Layer) ──────────────────────────────────────
+export function registerPerformanceRoutes(app: Express): void {
+  const PROB_BUCKETS = [
+    { label: "60-64%", min: 60, max: 64 },
+    { label: "65-69%", min: 65, max: 69 },
+    { label: "70-74%", min: 70, max: 74 },
+    { label: "75%+", min: 75, max: 100 },
+  ];
+
+  app.get("/api/performance", requireAuth, async (req, res) => {
+    try {
+      const sport = (req.query.sport as string || "all").toLowerCase();
+      const direction = (req.query.direction as string || "all").toLowerCase();
+      const range = (req.query.range as string || "all").toLowerCase();
+
+      const conds = [sql`${persistedPlays.result} IS NOT NULL`];
+
+      if (sport !== "all") {
+        conds.push(sql`${persistedPlays.sport} = ${sport}`);
+      }
+      if (direction !== "all") {
+        conds.push(sql`${persistedPlays.direction} = ${direction}`);
+      }
+
+      if (range !== "all") {
+        const now = new Date();
+        let startDate: string;
+        if (range === "1d" || range === "today") {
+          startDate = now.toISOString().slice(0, 10);
+        } else if (range === "7d") {
+          const d = new Date(now); d.setDate(d.getDate() - 7);
+          startDate = d.toISOString().slice(0, 10);
+        } else if (range === "30d") {
+          const d = new Date(now); d.setDate(d.getDate() - 30);
+          startDate = d.toISOString().slice(0, 10);
+        } else {
+          startDate = "";
+        }
+        if (startDate) {
+          conds.push(sql`${persistedPlays.gameDate} >= ${startDate}`);
+        }
+      }
+
+      const plays = await db
+        .select()
+        .from(persistedPlays)
+        .where(and(...conds))
+        .orderBy(desc(persistedPlays.settledAt), desc(persistedPlays.timestamp))
+        .limit(2000);
+
+      const hits = plays.filter(p => p.result === "hit").length;
+      const misses = plays.filter(p => p.result === "miss").length;
+      const pushes = plays.filter(p => p.result === "push").length;
+      const decided = hits + misses;
+
+      const avgEdge = plays.length > 0
+        ? Math.round(plays.reduce((s, p) => s + (Number(p.edgeGap) || Number(p.modelEdge) || 0), 0) / plays.length * 10) / 10
+        : 0;
+      const avgProb = plays.length > 0
+        ? Math.round(plays.reduce((s, p) => s + (Number(p.prob) || 0), 0) / plays.length * 10) / 10
+        : 0;
+
+      const buckets = PROB_BUCKETS.map(bucket => {
+        const bucketPlays = plays.filter(p => {
+          const prob = Number(p.prob) || 0;
+          return prob >= bucket.min && prob <= bucket.max;
+        });
+        const bucketHits = bucketPlays.filter(p => p.result === "hit").length;
+        const bucketTotal = bucketPlays.filter(p => p.result === "hit" || p.result === "miss").length;
+        return {
+          label: bucket.label,
+          total: bucketPlays.length,
+          hits: bucketHits,
+          winRate: bucketTotal > 0 ? Math.round((bucketHits / bucketTotal) * 1000) / 10 : 0,
+        };
+      });
+
+      const oversCount = plays.filter(p => p.direction === "over").length;
+      const undersCount = plays.filter(p => p.direction === "under").length;
+      const nbaCount = plays.filter(p => p.sport === "nba").length;
+      const mlbCount = plays.filter(p => p.sport === "mlb").length;
+      console.log(`[performance] total=${plays.length} overs=${oversCount} unders=${undersCount} nba=${nbaCount} mlb=${mlbCount} buckets=${buckets.map(b => b.total).join(",")}`);
+
+      return res.json({
+        plays: plays.map(p => ({
+          id: p.id,
+          sport: p.sport,
+          player: p.playerName,
+          stat: p.market,
+          direction: p.direction === "over" ? "O" : p.direction === "under" ? "U" : p.direction,
+          line: Number(p.line),
+          probability: Number(p.prob) || 0,
+          edge: Number(p.edgeGap) || Number(p.modelEdge) || 0,
+          finalStat: p.finalStat != null ? Number(p.finalStat) : null,
+          result: p.result ? p.result.toUpperCase() as "HIT" | "MISS" | "PUSH" : null,
+          gameId: p.gameId,
+          createdAt: p.createdAt?.toISOString() ?? p.timestamp?.toISOString() ?? "",
+          settledAt: p.settledAt?.toISOString() ?? null,
+          confidenceTier: p.confidenceTier ?? null,
+          team: p.team ?? null,
+        })),
+        buckets,
+        summary: {
+          total: plays.length,
+          hits,
+          misses,
+          pushes,
+          winRate: decided > 0 ? Math.round((hits / decided) * 1000) / 10 : 0,
+          avgEdge,
+          avgProb,
+        },
+      });
+    } catch (e: any) {
+      console.error("[performance] Error:", e.message);
+      return res.status(500).json({ error: "Failed to fetch performance data" });
+    }
+  });
+
+  app.post("/api/performance/settle", requireAdmin, async (_req, res) => {
+    try {
+      const result = await gradePersistedPlays(storage);
+      return res.json({ ...result, triggeredAt: new Date().toISOString() });
+    } catch (e: any) {
+      return res.status(500).json({ error: "Settlement failed", details: e.message });
     }
   });
 }
