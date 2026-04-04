@@ -57,6 +57,7 @@ import {
 } from "./mlb/dataPullService";
 import { getActiveGames } from "./mlb/liveGameRegistry";
 import { mlbEdgeCache } from "./mlb/edgeCache";
+import { MLB_DEBUG } from "./mlb/debug";
 import { liveOrchestrator, normalizeMlbStatus } from "./mlb/liveGameOrchestrator";
 import { normalizeMLBSignal } from "./mlb/normalizeSignal";
 
@@ -1416,7 +1417,18 @@ export async function registerRoutes(
         totalEdgeCacheEntries++;
 
         const FEED_FRESHNESS_MS = 10 * 60 * 1000;
-        if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) {
+        const cacheAge = Date.now() - (edgeEntry.updatedAt || 0);
+        const isDropped = edgeEntry.updatedAt > 0 && cacheAge > FEED_FRESHNESS_MS;
+        if (MLB_DEBUG) {
+          console.log("[MLB_TRACE] FRESHNESS_CHECK", {
+            gameId: gid,
+            age: cacheAge,
+            threshold: FEED_FRESHNESS_MS,
+            dropped: isDropped,
+            signals: (edgeEntry.allSignals ?? edgeEntry.qualifiedSignals ?? []).length,
+          });
+        }
+        if (isDropped) {
           totalDropped++;
           continue;
         }
@@ -1465,6 +1477,16 @@ export async function registerRoutes(
       });
 
       console.log(`[MLB EDGE-FEED] edgeCacheEntries=${totalEdgeCacheEntries} total=${allSignals.length} generated=${totalGenerated} droppedStale=${totalDropped} feedTags=${JSON.stringify(feedTagDist)}`);
+
+      if (MLB_DEBUG) {
+        console.log("[MLB_TRACE] FINAL_PIPELINE_OUTPUT", {
+          time: Date.now(),
+          signals: allSignals.length,
+          games: [...new Set(allSignals.map((s: any) => s.gameId))],
+          droppedStale: totalDropped,
+          sample: allSignals[0] ? { player: allSignals[0].playerName, market: allSignals[0].market, edge: allSignals[0].edge, gameId: allSignals[0].gameId } : null,
+        });
+      }
 
       return res.json({ signals: allSignals });
     } catch (e: any) {

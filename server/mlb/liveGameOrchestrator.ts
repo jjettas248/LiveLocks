@@ -11,6 +11,7 @@ import {
   getGame,
 } from "./liveGameRegistry";
 import { mlbEdgeCache } from "./edgeCache";
+import { MLB_DEBUG } from "./debug";
 import {
   syncGameState,
   syncGameBoxScore,
@@ -479,6 +480,18 @@ export class LiveGameOrchestrator {
     const newState = mlbGameCache.gameState[gameId];
     if (!newState) return;
 
+    if (MLB_DEBUG) {
+      console.log("[MLB_TRACE] FEED_TICK", {
+        time: Date.now(),
+        gameId,
+        inning: newState.inning,
+        isTopInning: newState.isTopInning,
+        outs: newState.outs,
+        pitchCount: newState.pitchCount,
+        totalPlays: newState.totalPlays,
+      });
+    }
+
     // Fetch and normalize live game status before triggering engine
     // Engine must only run for genuinely live games
     let normalizedStatus: "live" | "pregame" | "final" | "unknown" = "unknown";
@@ -533,6 +546,15 @@ export class LiveGameOrchestrator {
 
     if (prevState) {
       const triggers = this.detectStateChange(prevState, newState);
+      if (MLB_DEBUG) {
+        console.log("[MLB_TRACE] STATE_CHANGE_CHECK", {
+          gameId,
+          triggered: triggers.length > 0,
+          triggers,
+          inning: newState.inning,
+          normalizedStatus,
+        });
+      }
       if (triggers.length > 0) {
         console.log(`[MLB orchestrator] State change for game ${gameId} (status=${normalizedStatus}, source=${statusSource}): ${triggers.join(", ")}`);
 
@@ -544,6 +566,7 @@ export class LiveGameOrchestrator {
       } else if (normalizedStatus === "live") {
         const cached = mlbEdgeCache.get(gameId);
         if (cached && cached.qualifiedSignals.length > 0) {
+          if (MLB_DEBUG) console.log("[MLB_TRACE] HEARTBEAT_REFRESH", { gameId, signals: cached.qualifiedSignals.length });
           mlbEdgeCache.set(gameId, { ...cached, updatedAt: Date.now() });
         }
       }
@@ -1010,6 +1033,10 @@ export class LiveGameOrchestrator {
     let anyDegraded = false;
     const state = mlbGameCache.gameState[gameId];
     const game = getGame(gameId);
+
+    if (MLB_DEBUG) {
+      console.log("[MLB_TRACE] ENGINE_START", { gameId, normalizedStatus, timestamp: Date.now(), inning: state?.inning });
+    }
 
     if (normalizedStatus !== "live") {
       console.log(`[MLB orchestrator] triggerEngine skipped for game ${gameId}: normalizedStatus=${normalizedStatus ?? "undefined"} (must be "live")`);
@@ -1777,6 +1804,17 @@ export class LiveGameOrchestrator {
       return (b.signalScore ?? 0) - (a.signalScore ?? 0);
     });
 
+    if (MLB_DEBUG) {
+      console.log("[MLB_TRACE] ENGINE_OUTPUT", {
+        gameId,
+        signalsGenerated: allSignals.length,
+        qualified: signalsQualified,
+        rejected: signalsRejected,
+        marketsEvaluated,
+        players: allSignals.map(s => s.playerId).slice(0, 10),
+      });
+    }
+
     mlbEdgeCache.set(gameId, {
       gameId,
       outputs,
@@ -1788,6 +1826,15 @@ export class LiveGameOrchestrator {
       isDegraded: anyDegraded,
       signalLocked,
     });
+
+    if (MLB_DEBUG) {
+      console.log("[MLB_TRACE] CACHE_WRITE", {
+        gameId,
+        signals: allSignals.length,
+        qualified: qualifiedSignals.length,
+        updatedAt: now,
+      });
+    }
 
     const avgScore = signalsQualified > 0 ? Math.round(scoreSum / signalsQualified) : 0;
     console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=${signalsQualified} rejected=${signalsRejected} allSignals=${allSignals.length} avgScore=${avgScore} gameCardTags=[${gameCardTags.join(",")}]`);

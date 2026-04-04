@@ -1,4 +1,6 @@
-import { useState, useEffect, useRef, Component, type ReactNode } from "react";
+import { useState, useEffect, useRef, Component, type ReactNode, useMemo } from "react";
+
+const MLB_CLIENT_DEBUG = import.meta.env.VITE_MLB_DEBUG === "true";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -906,6 +908,16 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
   const dedupCashed = allCards.filter(c => c.status === "CASHED");
   const missedCards = allCards.filter(c => c.status === "MISSED");
 
+  if (MLB_CLIENT_DEBUG) {
+    console.log("[MLB_TRACE] RADAR_BUILD", {
+      totalCards: allCards.length,
+      active: dedupActive.length,
+      watch: dedupWatch.length,
+      cashed: dedupCashed.length,
+      missed: missedCards.length,
+    });
+  }
+
   const isEmpty = dedupActive.length === 0 && dedupWatch.length === 0 && dedupCashed.length === 0 && missedCards.length === 0;
 
   return (
@@ -1280,6 +1292,16 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
         merged.delete(key);
       }
     });
+    if (MLB_CLIENT_DEBUG) {
+      const staleCount = Array.from(merged.values()).filter(s => (s as any).stale).length;
+      console.log("[MLB_TRACE] STICKY_MERGE", {
+        newSignals: currentMap.size,
+        oldMapSize: stickySignalMapRef.current.size,
+        finalSize: merged.size,
+        staleCount,
+        activeGames: activeGameIds.size,
+      });
+    }
     stickySignalMapRef.current = merged;
     return Array.from(merged.values());
   })();
