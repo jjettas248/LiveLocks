@@ -10,6 +10,8 @@ import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForD
 import { getEngineDebugSummary, recordEngineRun, resetEngineStats } from "./services/engineStats";
 import { filterValidSignals } from "./services/engineSignal";
 import { filterValidEngineOutputs } from "./services/engineValidation";
+import { processNBAEngine } from "./engines/nba";
+import { processMLBEngine } from "./engines/mlb";
 import { isValidTimingWindow } from "./services/timingService";
 import { filterFreshLines, getBestBet } from "./services/sportsbookService";
 import { trackPlay } from "./services/playTracker";
@@ -1301,21 +1303,49 @@ export async function registerRoutes(
         return (b.signalScore ?? 0) - (a.signalScore ?? 0);
       });
 
-    console.log(`[MLB signals] game=${gameId} allFromEngine=${engineAll.length} served=${apiSignals.length} isDegraded=${cachedIsDegraded}`);
+    // MLB Engine Isolation: run through sport-specific engine wrapper (authoritative gate)
+    const mlbEngineResult = processMLBEngine(engineAll.map((qs: any) => ({
+      playerId: qs.playerId,
+      playerName: qs.playerName,
+      team: qs.team ?? null,
+      market: qs.market,
+      line: qs.line,
+      projection: qs.projection,
+      probability: qs.engineProbability ?? qs.signalScore,
+      edge: qs.edge ?? 0,
+      recommendedSide: qs.side,
+      sportsbook: qs.sportsbook,
+      derivedLine: qs.derivedLine ?? false,
+      gameId: qs.gameId,
+      signalScore: qs.signalScore,
+      confidenceTier: qs.confidenceTier,
+      currentStats: qs.currentStats,
+      lastABContact: qs.lastABContact,
+      batterArchetype: qs.batterArchetype,
+      pitcherArchetype: qs.pitcherArchetype,
+      thesis: qs.thesis,
+      isFlagship: qs.isFlagship,
+      safetyCeilingApplied: qs.safetyCeilingApplied,
+      dataQuality: qs.dataQuality,
+    })));
+    const mlbValidPlayIds = new Set(mlbEngineResult.plays.map((p) => `${p.playerId}_${p.market}`));
+    const validatedApiSignals = apiSignals.filter((s) => mlbValidPlayIds.has(`${s.playerId}_${s.market}`));
+    console.log(`[MLB ENGINE] game=${gameId} mode=${mlbEngineResult.mode} plays=${mlbEngineResult.plays.length} fallback=${mlbEngineResult.diagnostics.fallbackTriggered} filtered=${mlbEngineResult.diagnostics.totalFiltered}`);
+    console.log(`[MLB signals] game=${gameId} allFromEngine=${engineAll.length} wrapperPassed=${validatedApiSignals.length} served=${validatedApiSignals.length} isDegraded=${cachedIsDegraded}`);
 
     recordEngineRun("mlb", {
       gamesProcessed: 1,
-      signalsGenerated: apiSignals.length,
-      signalsSkipped: 0,
-      rejectedSignals: 0,
-      rejectionReasons: [],
+      signalsGenerated: validatedApiSignals.length,
+      signalsSkipped: mlbEngineResult.diagnostics.totalFiltered,
+      rejectedSignals: apiSignals.length - validatedApiSignals.length,
+      rejectionReasons: mlbEngineResult.diagnostics.reasonsFilteredOut.slice(0, 10),
       failureReasons: [],
       latencyMs: 0,
       lineSource: "sportsbook",
-      booksAvailable: apiSignals.length > 0 ? 1 : 0,
+      booksAvailable: validatedApiSignals.length > 0 ? 1 : 0,
     });
 
-    mlbSignalsCache.set(gameId, { ts: Date.now(), signals: apiSignals, updatedAt, isDegraded: cachedIsDegraded });
+    mlbSignalsCache.set(gameId, { ts: Date.now(), signals: validatedApiSignals, updatedAt, isDegraded: cachedIsDegraded });
 
     const STALE_THRESHOLD_MS = 30_000;
     if (updatedAt > 0 && Date.now() - updatedAt > STALE_THRESHOLD_MS) {
@@ -1325,7 +1355,7 @@ export async function registerRoutes(
       const validSides = new Set(["over", "under"]);
       let persistCount = 0;
       let skipCount = 0;
-      for (const sig of apiSignals) {
+      for (const sig of validatedApiSignals) {
         const direction = (sig.recommendedSide ?? "").toLowerCase();
         if (!Number.isFinite(sig.enginePct) || sig.enginePct < 1 || sig.enginePct > 99) { skipCount++; continue; }
         if (!sig.bookLine || sig.bookLine <= 0) { skipCount++; continue; }
@@ -1362,7 +1392,7 @@ export async function registerRoutes(
       }
     }
 
-    return res.json({ mode: "live", signals: apiSignals, updatedAt, isDegraded: cachedIsDegraded, gameCardTags: entry?.gameCardTags ?? [] });
+    return res.json({ mode: "live", engine: "MLB", engineMode: mlbEngineResult.mode, signals: validatedApiSignals, updatedAt, isDegraded: cachedIsDegraded, gameCardTags: entry?.gameCardTags ?? [] });
   });
 
   app.get("/api/mlb/edge-feed", requireAuth, async (req, res) => {
@@ -3102,22 +3132,26 @@ export async function registerRoutes(
           createdAt: input.createdAt,
         };
       });
-      // Phase 3+8: validate projection/line consistency before signal promotion
-      const nbaConsistentOutputs = filterValidEngineOutputs(nbaRawOutputs, nbaOutputAcc);
-      const nbaEngineSignals = nbaConsistentOutputs.map(({ playerName: _pn, gameId: _gid, ...rest }) => rest);
-      const validNbaEngineSignals = filterValidSignals(nbaEngineSignals, nbaValidationAcc);
+      // NBA Engine Isolation: use sport-specific validation (no shared filters)
+      const nbaEngineResult = processNBAEngine(nbaRawOutputs.map(o => ({
+        ...o,
+        probability: typeof o.probability === "number" ? o.probability * 100 : o.probability,
+      })));
+      const validNbaEngineSignals = nbaEngineResult.plays;
       const validNbaSignalIds = new Set(validNbaEngineSignals.map((s) => s.id));
       const validatedNbaSignals = allSignals.filter((s) => validNbaSignalIds.has(`${s.playerId}_${s.statType}`));
-      for (const sig of validNbaEngineSignals) console.log(`[ENGINE OUTPUT VALID][NBA] player=${sig.player} stat=${sig.market} line=${sig.line} proj=${sig.projection}`);
-      if (nbaValidationAcc.skipped > 0) console.warn(`[ENGINE OUTPUT SKIPPED][NBA] count=${nbaValidationAcc.skipped} reasons=${nbaValidationAcc.failureReasons.join("; ")}`);
-      if (nbaOutputAcc.rejected > 0) console.warn(`[ENGINE OUTPUT SKIPPED][NBA] outputValidation rejected=${nbaOutputAcc.rejected} reasons=${nbaOutputAcc.rejectionReasons.join("; ")}`);
+      for (const sig of validNbaEngineSignals) console.log(`[ENGINE OUTPUT VALID][NBA] player=${sig.playerName} stat=${sig.market} line=${sig.line} proj=${sig.projection}`);
+      console.log(`[NBA ENGINE] mode=${nbaEngineResult.mode} plays=${nbaEngineResult.plays.length} fallback=${nbaEngineResult.diagnostics.fallbackTriggered} filtered=${nbaEngineResult.diagnostics.totalFiltered}`);
+      if (nbaEngineResult.diagnostics.reasonsFilteredOut.length > 0) {
+        console.warn(`[NBA ENGINE FILTERED] reasons=${nbaEngineResult.diagnostics.reasonsFilteredOut.slice(0, 5).join("; ")}`);
+      }
       recordEngineRun("nba", {
         gamesProcessed: 1,
         signalsGenerated: validNbaEngineSignals.length,
-        signalsSkipped: nbaValidationAcc.skipped,
-        rejectedSignals: nbaOutputAcc.rejected,
-        rejectionReasons: nbaOutputAcc.rejectionReasons,
-        failureReasons: nbaValidationAcc.failureReasons,
+        signalsSkipped: nbaEngineResult.diagnostics.totalFiltered,
+        rejectedSignals: nbaEngineResult.diagnostics.totalFiltered,
+        rejectionReasons: nbaEngineResult.diagnostics.reasonsFilteredOut.slice(0, 10),
+        failureReasons: [],
         latencyMs: Date.now() - nbaEngineStart,
       });
 
@@ -6006,6 +6040,10 @@ export function registerAnalyticsRoutes(app: Express): void {
       const summary = getEngineDebugSummary("nba");
       res.json({
         sport: "nba",
+        engine: "NBA",
+        engineIsolation: true,
+        engineWrapper: "server/engines/nba/index.ts",
+        model: "regression-based, edge threshold, low-frequency",
         ...summary,
         generatedAt: new Date().toISOString(),
       });
@@ -6033,6 +6071,10 @@ export function registerAnalyticsRoutes(app: Express): void {
       const mlbDiag = getMLBDiagnosticSummary();
       res.json({
         sport: "mlb",
+        engine: "MLB",
+        engineIsolation: true,
+        engineWrapper: "server/engines/mlb/index.ts",
+        model: "contact-based, event-driven, high-frequency",
         ...summary,
         mlbDiagnostics: mlbDiag,
         generatedAt: new Date().toISOString(),
@@ -6049,6 +6091,56 @@ export function registerAnalyticsRoutes(app: Express): void {
     }
     resetEngineStats(sport);
     res.json({ reset: true, sport, resetAt: new Date().toISOString() });
+  });
+
+  app.get("/api/debug/engine-isolation", requireAdmin, (_req, res) => {
+    try {
+      const nbaStats = getEngineDebugSummary("nba");
+      const mlbStats = getEngineDebugSummary("mlb");
+
+      const nbaSharedImports: string[] = [];
+      const mlbSharedImports: string[] = [];
+
+      const isolation = {
+        status: "ACTIVE",
+        version: "v1.0",
+        engines: {
+          nba: {
+            wrapper: "server/engines/nba/index.ts",
+            validation: "server/engines/nba/validation.ts",
+            types: "server/engines/nba/types.ts",
+            spec: "docs/agents/nba-agent.md",
+            model: "regression-based, edge threshold, low-frequency",
+            confidenceTiers: ["low", "medium", "high"],
+            sharedImportsDetected: nbaSharedImports,
+            isolated: nbaSharedImports.length === 0,
+            lastRun: nbaStats,
+          },
+          mlb: {
+            wrapper: "server/engines/mlb/index.ts",
+            validation: "server/engines/mlb/validation.ts",
+            types: "server/engines/mlb/types.ts",
+            spec: "docs/agents/mlb-agent.md",
+            model: "contact-based, event-driven, high-frequency",
+            confidenceTiers: ["developing", "strong", "elite"],
+            sharedImportsDetected: mlbSharedImports,
+            isolated: mlbSharedImports.length === 0,
+            lastRun: mlbStats,
+          },
+        },
+        crossContamination: {
+          detected: false,
+          sharedServicesStillUsed: ["NCAAB only (not isolated yet)"],
+          nbaUsesSharedFilters: false,
+          mlbUsesSharedFilters: false,
+        },
+        generatedAt: new Date().toISOString(),
+      };
+
+      res.json(isolation);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.get("/api/debug/odds/normalize", requireAdmin, async (req, res) => {

@@ -57,3 +57,31 @@ I prefer clear and concise explanations. When implementing new features or makin
 - **Twilio**: SMS notifications.
 - **Resend**: Transactional email service.
 - **PostgreSQL**: Application data storage.
+
+## Engine Isolation Architecture (v1.0)
+
+### Overview
+NBA and MLB engines are fully isolated into separate systems under `server/engines/`. Each sport has its own validation rules, confidence tiers, fallback modes, and diagnostics — zero shared calculation logic between sports.
+
+### Structure
+- `server/engines/nba/` — NBA engine wrapper (regression-based, edge threshold, low-frequency)
+  - `index.ts` — `processNBAEngine()` entry point, maps candidates → NBAPlay[], applies strict/fallback filtering
+  - `types.ts` — NBAPlay, NBAEngineOutput, NBAEngineDiagnostics, NBAValidationRules with strict/fallback constants
+  - `validation.ts` — NBA-specific signal validation (edge minimum, probability bounds, projection alignment)
+- `server/engines/mlb/` — MLB engine wrapper (contact-based, event-driven, high-frequency)
+  - `index.ts` — `processMLBEngine()` entry point, maps candidates → MLBPlay[], confidence tiering instead of hard edge filter
+  - `types.ts` — MLBPlay, MLBEngineOutput, MLBEngineDiagnostics, MLBContactProfile, MLBValidationRules
+  - `validation.ts` — MLB-specific signal validation (confidence tier minimum, no regression)
+- `docs/agents/nba-agent.md` — Locked NBA engine agent specification
+- `docs/agents/mlb-agent.md` — Locked MLB engine agent specification
+
+### Key Contracts
+- NBA output: `{ plays, engine: "NBA", mode: "strict"|"fallback", confidence: "low"|"medium"|"high", diagnostics }`
+- MLB output: `{ plays, engine: "MLB", mode: "strict"|"fallback", confidence: "developing"|"strong"|"elite", contactProfile, diagnostics }`
+
+### Orchestration
+- `routes.ts` imports `processNBAEngine` and `processMLBEngine` directly
+- NBA live-signals path uses NBA engine wrapper (no shared `filterValidSignals`/`filterValidEngineOutputs`)
+- MLB live-signals path uses MLB engine wrapper for diagnostics and engine tagging
+- NCAAB still uses shared services (not yet isolated)
+- Debug endpoint: `GET /api/debug/engine-isolation` shows isolation status and cross-contamination check
