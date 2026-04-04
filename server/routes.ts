@@ -2050,7 +2050,7 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Missing required parameters: playerName, statType" });
       }
 
-      if (!process.env.ODDS_API_KEY) {
+      if (!process.env.ODDS_API_KEY && !process.env.ODDS_API_KEY_2) {
         return res.status(503).json({ message: "ODDS_API_KEY not configured" });
       }
 
@@ -2382,7 +2382,7 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Missing required parameters: playerName, statType" });
       }
 
-      if (!process.env.ODDS_API_KEY) {
+      if (!process.env.ODDS_API_KEY && !process.env.ODDS_API_KEY_2) {
         return res.status(503).json({ message: "ODDS_API_KEY not configured" });
       }
 
@@ -2456,7 +2456,7 @@ export async function registerRoutes(
       if (!team || !opponent) {
         return res.json({ spread: null, total: null, favorite: null });
       }
-      if (!process.env.ODDS_API_KEY) {
+      if (!process.env.ODDS_API_KEY && !process.env.ODDS_API_KEY_2) {
         return res.json({ spread: null, total: null, favorite: null });
       }
       const eventId = await resolveOddsEventId(team, opponent);
@@ -2726,7 +2726,7 @@ export async function registerRoutes(
 
       // Fetch game-level spread/total once per game for pace & garbage-time modifiers
       let gameLines: { spread: number | null; total: number | null; favorite: string | null } | null = null;
-      if (oddsEventId && process.env.ODDS_API_KEY) {
+      if (oddsEventId && (process.env.ODDS_API_KEY || process.env.ODDS_API_KEY_2)) {
         try { gameLines = await getGameLines(oddsEventId); } catch { /* optional */ }
       }
 
@@ -2746,7 +2746,7 @@ export async function registerRoutes(
         { statType: "stl_blk",     components: ["steals", "blocks"] },
       ];
 
-      if (oddsEventId && process.env.ODDS_API_KEY) {
+      if (oddsEventId && (process.env.ODDS_API_KEY || process.env.ODDS_API_KEY_2)) {
         const allStatTypes = LIVE_STAT_CONFIGS.map(c => c.statType);
         await preWarmOddsCache(oddsEventId, allStatTypes, true);
       }
@@ -2836,7 +2836,7 @@ export async function registerRoutes(
 
               if (!oddsPlayerCache.has(lineCacheKey)) {
                 let resolved = false;
-                if (oddsEventId && process.env.ODDS_API_KEY) {
+                if (oddsEventId && (process.env.ODDS_API_KEY || process.env.ODDS_API_KEY_2)) {
                   let oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, true);
                   let bookKeys = Object.keys(oddsResult.books);
                   if (bookKeys.length === 0 && !oddsResult.isDegraded) {
@@ -3460,7 +3460,7 @@ export async function registerRoutes(
 
         // Fetch game-level spread/total for pace & garbage-time modifiers
         let htGameLines: { spread: number | null; total: number | null; favorite: string | null } | null = null;
-        if (oddsEventId && process.env.ODDS_API_KEY) {
+        if (oddsEventId && (process.env.ODDS_API_KEY || process.env.ODDS_API_KEY_2)) {
           try {
             const { getGameLines: fetchGameLines } = await import("./oddsService");
             htGameLines = await fetchGameLines(oddsEventId);
@@ -3615,7 +3615,7 @@ export async function registerRoutes(
                     let resolved = false;
 
                     // Source 1 & 2: The Odds API (live in-play, then pre-game)
-                    if (oddsEventId && process.env.ODDS_API_KEY) {
+                    if (oddsEventId && (process.env.ODDS_API_KEY || process.env.ODDS_API_KEY_2)) {
                       totalOddsAttempts++;
                       let oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, true);
                       let bookKeys = Object.keys(oddsResult.books);

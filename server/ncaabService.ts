@@ -2,9 +2,7 @@ import { runNCAABEngine, ALL_MARKET_KEYS, type NCAABEngineOutput, type Recommend
 import { logSettledPlay } from "./ncaabDiagnostics";
 import { fetchBartTorvik } from "./ncaabEnrichment";
 import { computeEfficiencyAdjustment, computeH2EfficiencyBonus } from "./services/bartTorvik";
-import { normalizeOdds } from "./oddsService";
-
-const ODDS_API_KEY = process.env.ODDS_API_KEY;
+import { normalizeOdds, getOddsApiKey } from "./oddsService";
 const SGO_API_KEY  = process.env.SGO_API_KEY;
 const ESPN_NCAAB = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball";
 
@@ -333,13 +331,14 @@ export async function getNCAABOddsLines(): Promise<any[]> {
   const cached = cache.get(key);
   if (isFresh(cached, LINES_TTL)) return cached!.data;
 
-  if (!ODDS_API_KEY) {
+  const ncaabApiKey = getOddsApiKey();
+  if (!ncaabApiKey) {
     console.warn("[NCAAB] ODDS_API_KEY not set — skipping Odds API");
     return [];
   }
 
   const tryFetch = async (markets: string): Promise<any[] | null> => {
-    const url = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${markets}&oddsFormat=american`;
+    const url = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds?apiKey=${ncaabApiKey}&regions=us&markets=${markets}&oddsFormat=american`;
     const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
     if (res.status === 422) {
       const body = await res.text().catch(() => "");
@@ -1892,9 +1891,10 @@ export async function fetch2HLines(
   const result: Live2HLines = { h2Total: null, h2OverPrice: null, h2UnderPrice: null, h2Spread: null, h2OverPct: null, h2UnderPct: null, source: null };
 
   // Source 1: Odds API per-event 2H markets (only available at halftime)
-  if (ODDS_API_KEY) {
+  const h2ApiKey = getOddsApiKey();
+  if (h2ApiKey) {
     try {
-      const url = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/events/${gameId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${NCAAB_2H_MARKETS}&oddsFormat=american`;
+      const url = `https://api.the-odds-api.com/v4/sports/basketball_ncaab/events/${gameId}/odds?apiKey=${h2ApiKey}&regions=us&markets=${NCAAB_2H_MARKETS}&oddsFormat=american`;
       const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
       if (res.ok) {
         const data = await res.json() as any;

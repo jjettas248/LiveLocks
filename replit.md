@@ -51,7 +51,7 @@ I prefer clear and concise explanations. When implementing new features or makin
 ## External Dependencies
 
 - **ESPN**: Live game data, scores, player statistics.
-- **The Odds API**: Spread/total book lines, American odds.
+- **The Odds API**: Spread/total book lines, American odds. Supports multi-key rotation (`ODDS_API_KEY`, `ODDS_API_KEY_2`) — when one key's quota is exhausted, the system automatically rotates to the next available key and retries.
 - **Sports Game Odds (SGO)**: 1H lines, team total lines.
 - **Stripe**: Payment gateway for subscriptions.
 - **Twilio**: SMS notifications.

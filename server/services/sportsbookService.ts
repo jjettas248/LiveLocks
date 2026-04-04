@@ -66,7 +66,8 @@ async function fetchRawLines(params: {
   marketType: "spread" | "total" | "prop";
   inPlay?: boolean;
 }): Promise<NormalizedOddsLine[]> {
-  const apiKey = process.env.ODDS_API_KEY;
+  const { getOddsApiKey } = await import("../oddsService");
+  const apiKey = getOddsApiKey();
   if (!apiKey) return [];
 
   const books = SUPPORTED_BOOKS.join(",");
@@ -147,7 +148,7 @@ export async function fetchNormalizedOdds(params: {
 
 // Whether the sportsbook service is active (API key configured)
 export function isSportsbookServiceActive(): boolean {
-  return !!process.env.ODDS_API_KEY;
+  return !!(process.env.ODDS_API_KEY || process.env.ODDS_API_KEY_2);
 }
 
 // ── Phase 12: Odds Freshness Guard ────────────────────────────────────────────

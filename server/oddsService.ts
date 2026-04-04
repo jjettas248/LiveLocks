@@ -1,4 +1,33 @@
-const ODDS_API_KEY = process.env.ODDS_API_KEY;
+const ODDS_API_KEYS = [
+  process.env.ODDS_API_KEY,
+  process.env.ODDS_API_KEY_2,
+].filter(Boolean) as string[];
+
+let activeKeyIndex = 0;
+const exhaustedKeys = new Set<number>();
+
+export function getOddsApiKey(): string | undefined {
+  if (ODDS_API_KEYS.length === 0) return undefined;
+  if (!exhaustedKeys.has(activeKeyIndex)) return ODDS_API_KEYS[activeKeyIndex];
+  for (let i = 0; i < ODDS_API_KEYS.length; i++) {
+    if (!exhaustedKeys.has(i)) {
+      activeKeyIndex = i;
+      console.log(`[Odds API] Rotated to key ${i + 1}/${ODDS_API_KEYS.length}`);
+      return ODDS_API_KEYS[i];
+    }
+  }
+  return ODDS_API_KEYS[activeKeyIndex];
+}
+
+function markKeyExhausted(keyIndex: number) {
+  exhaustedKeys.add(keyIndex);
+  console.warn(`[Odds API] Key ${keyIndex + 1}/${ODDS_API_KEYS.length} marked exhausted`);
+  setTimeout(() => {
+    exhaustedKeys.delete(keyIndex);
+    console.log(`[Odds API] Key ${keyIndex + 1} quota reset (60-min TTL expired)`);
+  }, 60 * 60 * 1000);
+}
+
 const SGO_API_KEY  = process.env.SGO_API_KEY;
 const BASE_URL = "https://api.the-odds-api.com/v4/sports/basketball_nba";
 
@@ -96,10 +125,11 @@ async function getEvents(): Promise<any[]> {
   const cached = cache.get(cacheKey);
   if (isFresh(cached, EVENTS_TTL)) return cached!.data;
 
-  if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
+  const apiKey = getOddsApiKey();
+  if (!apiKey) throw new Error("ODDS_API_KEY is not set");
 
   const res = await fetch(
-    `${BASE_URL}/events?apiKey=${ODDS_API_KEY}&dateFormat=iso`,
+    `${BASE_URL}/events?apiKey=${apiKey}&dateFormat=iso`,
     { signal: AbortSignal.timeout(8000) }
   );
   if (!res.ok) {
@@ -221,52 +251,48 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
   const ttl = inPlay ? NBA_ODDS_LIVE_TTL : NBA_ODDS_TTL;
   if (isFresh(cached, ttl)) return cached!.data;
 
-  // Quota errors are cached separately so we don't keep hitting the API
-  const quotaCacheKey = `quota_exhausted`;
-  const quotaCached = cache.get(quotaCacheKey);
-  if (isFresh(quotaCached, QUOTA_TTL)) {
-    console.warn("[Odds API Error] Quota still exhausted — checking last-known cache");
-    const lastKnown = lastKnownRawOdds.get(cacheKey);
-    if (lastKnown && Date.now() - lastKnown.timestamp < LAST_KNOWN_TTL) {
-      const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
-      console.log(`[Odds Fallback] Serving stale data for ${cacheKey} (age: ${ageSec}s)`);
-      return { ...lastKnown.data, _isDegraded: true };
+  const triedKeys = new Set<number>();
+  const maxAttempts = ODDS_API_KEYS.length;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const apiKey = getOddsApiKey();
+    if (!apiKey) throw new Error("ODDS_API_KEY is not set");
+    const usedKeyIndex = activeKeyIndex;
+
+    if (triedKeys.has(usedKeyIndex)) break;
+    triedKeys.add(usedKeyIndex);
+
+    const quotaCacheKey = `quota_exhausted_${usedKeyIndex}`;
+    const quotaCached = cache.get(quotaCacheKey);
+    if (isFresh(quotaCached, QUOTA_TTL)) {
+      markKeyExhausted(usedKeyIndex);
+      continue;
     }
-    return QUOTA_EXHAUSTED;
-  }
 
-  if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
+    const inPlayParam = inPlay ? "&in_play=true" : "";
+    const bookmakers = PROP_BOOKMAKERS;
+    const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${apiKey}&regions=${PROP_REGIONS}&markets=${marketKey}&bookmakers=${bookmakers}&oddsFormat=american${inPlayParam}`;
 
-  const inPlayParam = inPlay ? "&in_play=true" : "";
-  const bookmakers = PROP_BOOKMAKERS;
-  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=${PROP_REGIONS}&markets=${marketKey}&bookmakers=${bookmakers}&oddsFormat=american${inPlayParam}`;
-
-  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-  if (!res.ok) {
-    const body = await res.text();
-    // Detect quota exhaustion specifically and cache it to avoid hammering the API
-    try {
-      const parsed = JSON.parse(body);
-      if (parsed.error_code === "OUT_OF_USAGE_CREDITS" || res.status === 401) {
-        console.warn(`[Odds API Error] Quota exhausted — caching for 60 min`);
-        cache.set(quotaCacheKey, { data: QUOTA_EXHAUSTED, timestamp: Date.now() });
-        const lastKnown = lastKnownRawOdds.get(cacheKey);
-        if (lastKnown && Date.now() - lastKnown.timestamp < LAST_KNOWN_TTL) {
-          const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
-          console.log(`[Odds Fallback] Quota hit — serving stale data for ${cacheKey} (age: ${ageSec}s)`);
-          return { ...lastKnown.data, _isDegraded: true };
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) {
+      const body = await res.text();
+      try {
+        const parsed = JSON.parse(body);
+        if (parsed.error_code === "OUT_OF_USAGE_CREDITS" || res.status === 401) {
+          console.warn(`[Odds API Error] Key ${usedKeyIndex + 1} quota exhausted`);
+          cache.set(quotaCacheKey, { data: QUOTA_EXHAUSTED, timestamp: Date.now() });
+          markKeyExhausted(usedKeyIndex);
+          continue;
         }
-        return QUOTA_EXHAUSTED;
-      }
-    } catch (_) {}
-    throw new Error(`Odds fetch failed: ${res.status} — ${body}`);
-  }
-  const data = await res.json();
-  lastKnownRawOdds.set(cacheKey, { data, timestamp: Date.now() });
-  cache.set(cacheKey, { data, timestamp: Date.now() });
+      } catch (_) {}
+      throw new Error(`Odds fetch failed: ${res.status} — ${body}`);
+    }
+    const data = await res.json();
+    lastKnownRawOdds.set(cacheKey, { data, timestamp: Date.now() });
+    cache.set(cacheKey, { data, timestamp: Date.now() });
 
-  const books = (data.bookmakers ?? []).map((b: any) => b.key).join(", ");
-  console.log(`[Odds] Fetched ${inPlay ? "LIVE" : "pre-game"} ${marketKey} odds for event ${oddsEventId}: bookmakers = ${books || "none"}`);
+    const books = (data.bookmakers ?? []).map((b: any) => b.key).join(", ");
+    console.log(`[Odds] Fetched ${inPlay ? "LIVE" : "pre-game"} ${marketKey} odds for event ${oddsEventId}: bookmakers = ${books || "none"}`);
 
   // Audit second-half market ingestion when fetching in-play lines
   if (inPlay) {
@@ -349,7 +375,17 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
     });
   }
 
-  return data;
+    return data;
+  }
+
+  console.warn("[Odds API Error] All keys exhausted — checking last-known cache");
+  const lastKnown = lastKnownRawOdds.get(cacheKey);
+  if (lastKnown && Date.now() - lastKnown.timestamp < LAST_KNOWN_TTL) {
+    const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
+    console.log(`[Odds Fallback] Serving stale data for ${cacheKey} (age: ${ageSec}s)`);
+    return { ...lastKnown.data, _isDegraded: true };
+  }
+  return QUOTA_EXHAUSTED;
 }
 
 export async function preWarmOddsCache(
@@ -375,8 +411,9 @@ export async function getRawOddsForDebug(oddsEventId: string): Promise<any> {
   const cacheKey = `odds_debug_${oddsEventId}`;
   const cached = cache.get(cacheKey);
   if (isFresh(cached, NBA_ODDS_TTL)) return cached!.data;
-  if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
-  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=${markets}&bookmakers=${PROP_BOOKMAKERS}&oddsFormat=american`;
+  const dApiKey = getOddsApiKey();
+  if (!dApiKey) throw new Error("ODDS_API_KEY is not set");
+  const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${dApiKey}&regions=us&markets=${markets}&bookmakers=${PROP_BOOKMAKERS}&oddsFormat=american`;
   const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!res.ok) { const body = await res.text(); throw new Error(`Odds fetch failed: ${res.status} — ${body}`); }
   const data = await res.json();
@@ -606,10 +643,11 @@ export async function getGameLines(
   const cached = cache.get(cacheKey);
   if (isFresh(cached, GAME_LINES_TTL)) return cached!.data;
 
-  if (!ODDS_API_KEY) return null;
+  const glApiKey = getOddsApiKey();
+  if (!glApiKey) return null;
 
   try {
-    const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=${PROP_REGIONS}&markets=spreads,totals&bookmakers=${PROP_BOOKMAKERS}&oddsFormat=american`;
+    const url = `${BASE_URL}/events/${oddsEventId}/odds?apiKey=${glApiKey}&regions=${PROP_REGIONS}&markets=spreads,totals&bookmakers=${PROP_BOOKMAKERS}&oddsFormat=american`;
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
       console.warn(`[Odds] getGameLines ${res.status} for event ${oddsEventId}`);
@@ -857,10 +895,11 @@ async function getMLBEvents(): Promise<any[]> {
   const cacheKey = "mlb_events_list";
   const cached = cache.get(cacheKey);
   if (isFresh(cached, EVENTS_TTL)) return cached!.data;
-  if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
+  const mlbEvKey = getOddsApiKey();
+  if (!mlbEvKey) throw new Error("ODDS_API_KEY is not set");
 
   const res = await fetch(
-    `${MLB_BASE_URL}/events?apiKey=${ODDS_API_KEY}&dateFormat=iso`,
+    `${MLB_BASE_URL}/events?apiKey=${mlbEvKey}&dateFormat=iso`,
     { signal: AbortSignal.timeout(8000) }
   );
   if (!res.ok) {
@@ -914,60 +953,68 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
   const ttl = inPlay ? MLB_ODDS_LIVE_TTL : MLB_ODDS_TTL;
   if (isFresh(cached, ttl)) return cached!.data;
 
-  const quotaCacheKey = `quota_exhausted`;
-  const quotaCached = cache.get(quotaCacheKey);
-  if (isFresh(quotaCached, QUOTA_TTL)) {
-    console.warn("[MLB Odds] Quota still exhausted — checking last-known raw cache");
-    const lastKnown = lastKnownRawOdds.get(cacheKey);
-    if (lastKnown && Date.now() - lastKnown.timestamp < MLB_LAST_KNOWN_TTL) {
-      const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
-      console.log(`[MLB Odds Fallback] Serving stale raw data for ${cacheKey} (age: ${ageSec}s)`);
-      return { ...lastKnown.data, _isDegraded: true };
+  const triedKeys = new Set<number>();
+  const maxAttempts = ODDS_API_KEYS.length;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const mlbApiKey = getOddsApiKey();
+    if (!mlbApiKey) throw new Error("ODDS_API_KEY is not set");
+    const usedKeyIndex = activeKeyIndex;
+
+    if (triedKeys.has(usedKeyIndex)) break;
+    triedKeys.add(usedKeyIndex);
+
+    const quotaCacheKey = `quota_exhausted_${usedKeyIndex}`;
+    const quotaCached = cache.get(quotaCacheKey);
+    if (isFresh(quotaCached, QUOTA_TTL)) {
+      markKeyExhausted(usedKeyIndex);
+      continue;
     }
-    return QUOTA_EXHAUSTED;
-  }
 
-  if (!ODDS_API_KEY) throw new Error("ODDS_API_KEY is not set");
+    const inPlayParam = inPlay ? "&in_play=true" : "";
+    const url = `${MLB_BASE_URL}/events/${oddsEventId}/odds?apiKey=${mlbApiKey}&regions=${PROP_REGIONS}&markets=${marketKey}&bookmakers=${PROP_BOOKMAKERS}&oddsFormat=american${inPlayParam}`;
 
-  const inPlayParam = inPlay ? "&in_play=true" : "";
-  const url = `${MLB_BASE_URL}/events/${oddsEventId}/odds?apiKey=${ODDS_API_KEY}&regions=${PROP_REGIONS}&markets=${marketKey}&bookmakers=${PROP_BOOKMAKERS}&oddsFormat=american${inPlayParam}`;
-
-  let res: Response;
-  try {
-    res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-  } catch (fetchErr) {
-    console.warn(`[MLB Odds] Network error — checking last-known raw cache for ${cacheKey}`);
-    const lastKnown = lastKnownRawOdds.get(cacheKey);
-    if (lastKnown && Date.now() - lastKnown.timestamp < MLB_LAST_KNOWN_TTL) {
-      const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
-      console.log(`[MLB Odds Fallback] Network error — stale data for ${cacheKey} (age: ${ageSec}s)`);
-      return { ...lastKnown.data, _isDegraded: true };
-    }
-    throw fetchErr;
-  }
-
-  if (!res.ok) {
-    const body = await res.text();
+    let res: Response;
     try {
-      const parsed = JSON.parse(body);
-      if (parsed.error_code === "OUT_OF_USAGE_CREDITS" || res.status === 401) {
-        console.warn(`[MLB Odds] Quota exhausted — caching for 60 min`);
-        cache.set(quotaCacheKey, { data: QUOTA_EXHAUSTED, timestamp: Date.now() });
-        const lastKnown = lastKnownRawOdds.get(cacheKey);
-        if (lastKnown && Date.now() - lastKnown.timestamp < MLB_LAST_KNOWN_TTL) {
-          const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
-          console.log(`[MLB Odds Fallback] Quota hit — stale data for ${cacheKey} (age: ${ageSec}s)`);
-          return { ...lastKnown.data, _isDegraded: true };
-        }
-        return QUOTA_EXHAUSTED;
+      res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    } catch (fetchErr) {
+      console.warn(`[MLB Odds] Network error — checking last-known raw cache for ${cacheKey}`);
+      const lastKnown = lastKnownRawOdds.get(cacheKey);
+      if (lastKnown && Date.now() - lastKnown.timestamp < MLB_LAST_KNOWN_TTL) {
+        const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
+        console.log(`[MLB Odds Fallback] Network error — stale data for ${cacheKey} (age: ${ageSec}s)`);
+        return { ...lastKnown.data, _isDegraded: true };
       }
-    } catch (_) {}
-    throw new Error(`MLB odds fetch failed: ${res.status} — ${body}`);
+      throw fetchErr;
+    }
+
+    if (!res.ok) {
+      const body = await res.text();
+      try {
+        const parsed = JSON.parse(body);
+        if (parsed.error_code === "OUT_OF_USAGE_CREDITS" || res.status === 401) {
+          console.warn(`[MLB Odds] Key ${usedKeyIndex + 1} quota exhausted`);
+          cache.set(quotaCacheKey, { data: QUOTA_EXHAUSTED, timestamp: Date.now() });
+          markKeyExhausted(usedKeyIndex);
+          continue;
+        }
+      } catch (_) {}
+      throw new Error(`MLB odds fetch failed: ${res.status} — ${body}`);
+    }
+    const data = await res.json();
+    cache.set(cacheKey, { data, timestamp: Date.now() });
+    lastKnownRawOdds.set(cacheKey, { data, timestamp: Date.now() });
+    return data;
   }
-  const data = await res.json();
-  cache.set(cacheKey, { data, timestamp: Date.now() });
-  lastKnownRawOdds.set(cacheKey, { data, timestamp: Date.now() });
-  return data;
+
+  console.warn("[MLB Odds] All keys exhausted — checking last-known raw cache");
+  const lastKnown = lastKnownRawOdds.get(cacheKey);
+  if (lastKnown && Date.now() - lastKnown.timestamp < MLB_LAST_KNOWN_TTL) {
+    const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
+    console.log(`[MLB Odds Fallback] Serving stale raw data for ${cacheKey} (age: ${ageSec}s)`);
+    return { ...lastKnown.data, _isDegraded: true };
+  }
+  return QUOTA_EXHAUSTED;
 }
 
 type MLBOddsResult = Record<string, { line: number; overOdds: number; underOdds: number }> & { _quotaExhausted?: boolean; _isDegraded?: boolean };
