@@ -20,6 +20,12 @@ export type UnifiedTopPlay = {
   team?: string;
   sportsbook?: string;
   betDirection?: string;
+  signalScore?: number | null;
+  timingContext?: string | null;
+  batterArchetype?: string | null;
+  pitcherArchetype?: string | null;
+  thesis?: string | null;
+  isFlagship?: boolean;
   currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
   lastABContact?: {
     exitVelo: number | null;

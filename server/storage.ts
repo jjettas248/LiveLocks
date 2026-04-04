@@ -15,6 +15,7 @@ import {
   contactEvents,
   gamePlayerStats,
   persistedAlerts,
+  signalInteractions,
   stripeEvents,
   type Player,
   type InsertPlayer,
@@ -189,15 +190,25 @@ export interface IStorage {
     mu?: number; sigma?: number; zScore?: number;
     hrBuildScore?: number | null;
     hrIntensity?: string | null;
-    signalScore?: string;
+    signalScore?: string | number;
     opportunityScore?: string;
     liveScore?: string;
     eventBoost?: string;
+    odds?: number;
+    stake?: number;
+    confidenceTier?: string;
+    inning?: number;
+    abNumber?: number;
+    pitchCount?: number;
+    contactQualityScore?: number;
   }): Promise<{ id: string; isDuplicate: boolean }>;
   getPlays(opts: { sport?: string; limit?: number; settled?: string; date?: string }): Promise<{ plays: PersistedPlay[]; total: number }>;
+  getAllSettledPlays(opts?: { sport?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]>;
   getGradedPlaysForCalibration(opts: { sport?: string; market?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]>;
   settlePlay(id: string, result: string, finalStat: number | null, settledAt: Date): Promise<PersistedPlay | null>;
   getPlayStats(): Promise<PlayStats>;
+  getRecentGradedSignals(limit: number): Promise<PersistedPlay[]>;
+  recordSignalInteraction(data: { userId: number; signalId?: string; action: string; sport?: string; market?: string }): Promise<void>;
   cleanupOldPlays(): Promise<number>;
   cleanDuplicatePlays(): Promise<{ removed: number; remaining: number }>;
   cleanDuplicateAlerts(): Promise<{ removed: number; remaining: number }>;
@@ -1535,10 +1546,17 @@ export class DatabaseStorage implements IStorage {
     mu?: number; sigma?: number; zScore?: number;
     hrBuildScore?: number | null;
     hrIntensity?: string | null;
-    signalScore?: string;
+    signalScore?: string | number;
     opportunityScore?: string;
     liveScore?: string;
     eventBoost?: string;
+    odds?: number;
+    stake?: number;
+    confidenceTier?: string;
+    inning?: number;
+    abNumber?: number;
+    pitchCount?: number;
+    contactQualityScore?: number;
   }): Promise<{ id: string; isDuplicate: boolean }> {
     const existing = await db
       .select({ id: persistedPlays.id })
@@ -1595,10 +1613,17 @@ export class DatabaseStorage implements IStorage {
       zScore: play.zScore != null ? String(play.zScore) : null,
       hrBuildScore: play.hrBuildScore != null ? String(play.hrBuildScore) : null,
       hrIntensity: play.hrIntensity ?? null,
-      signalScore: play.signalScore ?? null,
+      signalScore: play.signalScore != null ? String(play.signalScore) : null,
       opportunityScore: play.opportunityScore ?? null,
       liveScore: play.liveScore ?? null,
       eventBoost: play.eventBoost ?? null,
+      odds: play.odds != null ? String(play.odds) : null,
+      stake: play.stake != null ? String(play.stake) : "1",
+      confidenceTier: play.confidenceTier ?? null,
+      inning: play.inning ?? null,
+      abNumber: play.abNumber ?? null,
+      pitchCount: play.pitchCount ?? null,
+      contactQualityScore: play.contactQualityScore != null ? String(play.contactQualityScore) : null,
     }).onConflictDoNothing({ target: persistedPlays.duplicateGuard });
     return { id: play.id, isDuplicate: false };
   }
@@ -1669,6 +1694,37 @@ export class DatabaseStorage implements IStorage {
       totalPending: pending.length,
       allTimeRecord: { hits: allHits, misses: allMisses, pushes: allPushes },
     };
+  }
+
+  async getAllSettledPlays(opts?: { sport?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]> {
+    const conds = [sql`${persistedPlays.result} IS NOT NULL`];
+    if (opts?.sport) conds.push(sql`${persistedPlays.sport} = ${opts.sport}`);
+    if (opts?.startDate) conds.push(sql`${persistedPlays.gameDate} >= ${opts.startDate}`);
+    if (opts?.endDate) conds.push(sql`${persistedPlays.gameDate} <= ${opts.endDate}`);
+    return await db
+      .select()
+      .from(persistedPlays)
+      .where(and(...conds))
+      .orderBy(desc(persistedPlays.timestamp));
+  }
+
+  async getRecentGradedSignals(limit: number): Promise<PersistedPlay[]> {
+    return await db
+      .select()
+      .from(persistedPlays)
+      .where(sql`${persistedPlays.result} IS NOT NULL AND ${persistedPlays.result} != 'pending'`)
+      .orderBy(desc(persistedPlays.settledAt))
+      .limit(limit);
+  }
+
+  async recordSignalInteraction(data: { userId: number; signalId?: string; action: string; sport?: string; market?: string }): Promise<void> {
+    await db.insert(signalInteractions).values({
+      userId: data.userId,
+      signalId: data.signalId ?? null,
+      action: data.action,
+      sport: data.sport ?? null,
+      market: data.market ?? null,
+    });
   }
 
   async cleanupOldPlays(): Promise<number> {

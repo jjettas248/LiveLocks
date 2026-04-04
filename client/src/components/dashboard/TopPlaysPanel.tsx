@@ -3,7 +3,7 @@ import { useTopPlays, type UnifiedTopPlay } from "@/hooks/useTopPlays";
 import { useLiveSignalCounts } from "@/hooks/useLiveSignalCounts";
 import { SportSignalCard } from "@/components/signals/SportSignalCard";
 import { SignalSkeletonCard } from "@/components/signals/SignalSkeletonCard";
-import { Zap, X, ChevronUp, Lock, Sparkles } from "lucide-react";
+import { Zap, X, ChevronUp, Lock, Sparkles, Trophy } from "lucide-react";
 
 type TopPlaysPanelProps = {
   isElite?: boolean;
@@ -109,35 +109,85 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPl
             </div>
           )}
 
-          {!isLoading && plays.length > 0 && isElite && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {plays.map((play, i) => (
-                <SportSignalCard
-                  key={play.id}
-                  sport={play.sport}
-                  playerOrTeam={play.playerOrTeam}
-                  marketLabel={play.marketLabel}
-                  side={play.side}
-                  line={play.line}
-                  projection={play.projection}
-                  probability={play.probability}
-                  edge={play.edge}
-                  badgeTier={play.confidenceTier}
-                  summary={play.summary ?? undefined}
-                  isBestBet={i === 0}
-                  locked={false}
-                  onPrimaryAction={onNavigateToSport ? () => onNavigateToSport(play.routeTarget) : undefined}
-                  onAddToSlip={onAddToSlip ? () => onAddToSlip(play) : undefined}
-                  market={play.market}
-                  gameId={play.gameId}
-                  playerId={play.playerId}
-                  currentStats={play.currentStats}
-                  lastABContact={play.lastABContact}
-                  matchup={play.matchup}
-                />
-              ))}
-            </div>
-          )}
+          {!isLoading && plays.length > 0 && isElite && (() => {
+            const topPicks = plays.slice(0, 3);
+            const otherPicks = plays.slice(3);
+            return (
+              <div className="space-y-4">
+                {topPicks.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 px-1">
+                      <Trophy className="w-3.5 h-3.5 text-yellow-400" />
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-yellow-400" data-testid="text-top-picks-header">Top Picks</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      {topPicks.map((play, i) => (
+                        <SportSignalCard
+                          key={play.id}
+                          sport={play.sport}
+                          playerOrTeam={play.playerOrTeam}
+                          marketLabel={play.marketLabel}
+                          side={play.side}
+                          line={play.line}
+                          projection={play.projection}
+                          probability={play.probability}
+                          edge={play.edge}
+                          badgeTier={play.confidenceTier}
+                          summary={play.summary ?? undefined}
+                          isBestBet={false}
+                          rank={i + 1}
+                          signalScore={play.signalScore}
+                          timingContext={play.timingContext ?? undefined}
+                          isFlagship={play.isFlagship}
+                          locked={false}
+                          onPrimaryAction={onNavigateToSport ? () => onNavigateToSport(play.routeTarget) : undefined}
+                          onAddToSlip={onAddToSlip ? () => onAddToSlip(play) : undefined}
+                          market={play.market}
+                          gameId={play.gameId}
+                          playerId={play.playerId}
+                          currentStats={play.currentStats}
+                          lastABContact={play.lastABContact}
+                          matchup={play.matchup}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {otherPicks.length > 0 && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {otherPicks.map((play) => (
+                      <SportSignalCard
+                        key={play.id}
+                        sport={play.sport}
+                        playerOrTeam={play.playerOrTeam}
+                        marketLabel={play.marketLabel}
+                        side={play.side}
+                        line={play.line}
+                        projection={play.projection}
+                        probability={play.probability}
+                        edge={play.edge}
+                        badgeTier={play.confidenceTier}
+                        summary={play.summary ?? undefined}
+                        isBestBet={false}
+                        signalScore={play.signalScore}
+                        timingContext={play.timingContext ?? undefined}
+                        isFlagship={play.isFlagship}
+                        locked={false}
+                        onPrimaryAction={onNavigateToSport ? () => onNavigateToSport(play.routeTarget) : undefined}
+                        onAddToSlip={onAddToSlip ? () => onAddToSlip(play) : undefined}
+                        market={play.market}
+                        gameId={play.gameId}
+                        playerId={play.playerId}
+                        currentStats={play.currentStats}
+                        lastABContact={play.lastABContact}
+                        matchup={play.matchup}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {!isLoading && plays.length > 0 && !isElite && (
             <div className="space-y-3">
@@ -156,6 +206,10 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPl
                     badgeTier={teaserPlay.confidenceTier}
                     summary={teaserPlay.summary ?? undefined}
                     isBestBet={true}
+                    rank={1}
+                    signalScore={teaserPlay.signalScore}
+                    timingContext={teaserPlay.timingContext ?? undefined}
+                    isFlagship={teaserPlay.isFlagship}
                     locked={false}
                     onPrimaryAction={onNavigateToSport ? () => onNavigateToSport(teaserPlay.routeTarget) : undefined}
                     onAddToSlip={onAddToSlip ? () => onAddToSlip(teaserPlay) : undefined}

@@ -48,6 +48,13 @@ export interface TrackableSignal {
   derivedLine: boolean;
   createdAt: number;
   diagnostics?: EngineDiagnostics;
+  odds?: number | null;
+  signalScore?: number | null;
+  confidenceTier?: string | null;
+  inning?: number | null;
+  abNumber?: number | null;
+  pitchCount?: number | null;
+  contactQualityScore?: number | null;
 }
 
 export async function trackPlay(
@@ -124,6 +131,14 @@ export async function trackPlay(
     mu: d?.mu,
     sigma: d?.sigma,
     zScore: d?.zScore,
+    odds: signal.odds ?? undefined,
+    stake: 1,
+    signalScore: signal.signalScore ?? undefined,
+    confidenceTier: signal.confidenceTier ?? undefined,
+    inning: signal.inning ?? undefined,
+    abNumber: signal.abNumber ?? undefined,
+    pitchCount: signal.pitchCount ?? undefined,
+    contactQualityScore: signal.contactQualityScore ?? undefined,
   });
 
   if (!result.isDuplicate) {

@@ -352,6 +352,66 @@ export async function registerRoutes(
     return res.json(getDirectionalSplit());
   });
 
+  app.get("/api/admin/roi", requireAdmin, async (req, res) => {
+    try {
+      const { buildFullROIReport } = await import("./services/roiEngine");
+      const sport = req.query.sport as string | undefined;
+      const startDate = req.query.startDate as string | undefined;
+      const endDate = req.query.endDate as string | undefined;
+      const plays = await storage.getAllSettledPlays({ sport, startDate, endDate });
+      const report = buildFullROIReport(plays);
+      return res.json(report);
+    } catch (e: any) {
+      console.error("[admin/roi]", e.message);
+      return res.status(500).json({ error: "Failed to generate ROI report" });
+    }
+  });
+
+  app.get("/api/recent-results", requireAuth, async (_req, res) => {
+    try {
+      const results = await storage.getRecentGradedSignals(20);
+      const safe = results.map(p => ({
+        id: p.id,
+        playerName: p.playerName,
+        team: p.team,
+        sport: p.sport,
+        market: p.market,
+        direction: p.direction,
+        line: p.line,
+        prob: p.prob,
+        result: p.result,
+        finalStat: p.finalStat,
+        gameDate: p.gameDate,
+        settledAt: p.settledAt,
+        confidenceTier: p.confidenceTier,
+      }));
+      return res.json({ results: safe });
+    } catch (e: any) {
+      console.error("[recent-results]", e.message);
+      return res.json({ results: [] });
+    }
+  });
+
+  app.post("/api/signal-interaction", requireAuth, async (req, res) => {
+    try {
+      const user = (req as any).user;
+      if (!user?.id) return res.status(401).json({ error: "Not authenticated" });
+      const { signalId, action, sport, market } = req.body;
+      if (!action) return res.status(400).json({ error: "action is required" });
+      await storage.recordSignalInteraction({
+        userId: user.id,
+        signalId: signalId ?? undefined,
+        action,
+        sport: sport ?? undefined,
+        market: market ?? undefined,
+      });
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("[signal-interaction]", e.message);
+      return res.status(500).json({ error: "Failed to record interaction" });
+    }
+  });
+
   // ── NCAAB Routes (Pro "all" + Elite "elite" + Admin) ────────────────────────
   app.get("/api/ncaab/plays", requireTier("all", "elite"), async (_req, res) => {
     try {
@@ -5304,6 +5364,11 @@ export function registerAnalyticsRoutes(app: Express): void {
         const qs = entry.qualifiedSignals ?? [];
         for (const sig of qs) {
           const rawOutput = entry.outputs?.find((o: any) => o.playerId === sig.playerId && o.market === sig.market);
+          const gameEntry = entry as any;
+          const sigAny = sig as any;
+          const inning = gameEntry.inning ?? sigAny.inning ?? null;
+          const gameStatus = gameEntry.status ?? sigAny.status ?? null;
+          const timingLabel = inning != null ? `Inning ${inning}` : gameStatus === "pre" ? "Pre-game" : gameStatus === "in" ? "Live" : null;
           mlbSignals.push({
             playerId: sig.playerId,
             playerName: sig.playerName,
@@ -5316,6 +5381,7 @@ export function registerAnalyticsRoutes(app: Express): void {
             gameId: sig.gameId,
             signalScore: sig.signalScore,
             confidenceTier: sig.confidenceTier,
+            timingContext: sigAny.timingContext ?? timingLabel,
             currentStats: sig.currentStats ?? null,
             lastABContact: sig.lastABContact ?? null,
             batterArchetype: sig.batterArchetype ?? null,

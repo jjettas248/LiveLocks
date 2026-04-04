@@ -113,7 +113,7 @@ function getNextResetDisplay(timeStr: string): string {
 export default function AdminPage() {
   const { user, isLoading: authLoading, logout } = useAuth();
   const [, navigate] = useLocation();
-  const [activeTab, setActiveTab] = useState<"users" | "feedback" | "mlb" | "calibration" | "churn">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "feedback" | "mlb" | "calibration" | "churn" | "roi">("users");
   const [tierLoadingId, setTierLoadingId] = useState<number | null>(null);
   const { toast } = useToast();
   const [resetTime, setResetTime] = useState("06:00");
@@ -429,6 +429,14 @@ export default function AdminPage() {
           >
             <Target className="w-3.5 h-3.5" />
             Calibration
+          </button>
+          <button
+            data-testid="tab-roi"
+            onClick={() => setActiveTab("roi")}
+            className={`flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${activeTab === "roi" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+          >
+            <Shield className="w-3.5 h-3.5" />
+            ROI
           </button>
         </div>
 
@@ -793,7 +801,196 @@ export default function AdminPage() {
           </div>
         )}
 
+        {/* ROI Tab */}
+        {activeTab === "roi" && <AdminROIPanel />}
+
       </div>
+    </div>
+  );
+}
+
+interface ROIMetrics {
+  totalBets: number;
+  totalProfit: number;
+  totalStake: number;
+  roi: number;
+  hitRate: number;
+  hits: number;
+  misses: number;
+  pushes: number;
+  pending: number;
+}
+
+interface SegmentedROI {
+  segment: string;
+  metrics: ROIMetrics;
+}
+
+interface FullROIReport {
+  global: ROIMetrics;
+  bySport: SegmentedROI[];
+  byMarket: SegmentedROI[];
+  byProbBucket: SegmentedROI[];
+  bySignalScore: SegmentedROI[];
+  byDirection: SegmentedROI[];
+  byTiming: SegmentedROI[];
+}
+
+function MetricCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+  return (
+    <div className="bg-card border border-border rounded-xl p-4" data-testid={`metric-${label.toLowerCase().replace(/\s/g, "-")}`}>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1">{label}</div>
+      <div className={`text-2xl font-bold tabular-nums ${color ?? "text-foreground"}`}>{value}</div>
+      {sub && <div className="text-[10px] text-muted-foreground mt-0.5">{sub}</div>}
+    </div>
+  );
+}
+
+function SegmentTable({ title, segments, showTiming }: { title: string; segments: SegmentedROI[]; showTiming?: boolean }) {
+  if (segments.length === 0) return null;
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden" data-testid={`segment-table-${title.toLowerCase().replace(/\s/g, "-")}`}>
+      <div className="px-4 py-3 border-b border-border/60">
+        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border/40 text-muted-foreground">
+              <th className="px-4 py-2 text-left font-medium">Segment</th>
+              <th className="px-4 py-2 text-right font-medium">Bets</th>
+              <th className="px-4 py-2 text-right font-medium">Hit Rate</th>
+              <th className="px-4 py-2 text-right font-medium">ROI</th>
+              <th className="px-4 py-2 text-right font-medium">Profit</th>
+              <th className="px-4 py-2 text-right font-medium">W-L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {segments.map(s => (
+              <tr key={s.segment} className="border-b border-border/20 hover:bg-muted/20 transition-colors">
+                <td className="px-4 py-2.5 font-medium text-foreground">{s.segment}</td>
+                <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{s.metrics.totalBets}</td>
+                <td className="px-4 py-2.5 text-right tabular-nums">
+                  <span className={s.metrics.hitRate >= 55 ? "text-green-400" : s.metrics.hitRate >= 45 ? "text-yellow-400" : "text-red-400"}>
+                    {s.metrics.hitRate}%
+                  </span>
+                </td>
+                <td className="px-4 py-2.5 text-right tabular-nums">
+                  <span className={s.metrics.roi >= 0 ? "text-green-400" : "text-red-400"}>
+                    {s.metrics.roi >= 0 ? "+" : ""}{s.metrics.roi}%
+                  </span>
+                </td>
+                <td className="px-4 py-2.5 text-right tabular-nums">
+                  <span className={s.metrics.totalProfit >= 0 ? "text-green-400" : "text-red-400"}>
+                    {s.metrics.totalProfit >= 0 ? "+" : ""}{s.metrics.totalProfit.toFixed(2)}u
+                  </span>
+                </td>
+                <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
+                  {s.metrics.hits}-{s.metrics.misses}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function AdminROIPanel() {
+  const [sportFilter, setSportFilter] = useState<string>("");
+  const [dateRange, setDateRange] = useState<string>("all");
+
+  const queryParams = new URLSearchParams();
+  if (sportFilter) queryParams.set("sport", sportFilter);
+  if (dateRange !== "all") {
+    const d = new Date();
+    if (dateRange === "7d") d.setDate(d.getDate() - 7);
+    else if (dateRange === "30d") d.setDate(d.getDate() - 30);
+    else if (dateRange === "today") { /* current date */ }
+    queryParams.set("startDate", d.toISOString().slice(0, 10));
+  }
+
+  const { data: report, isLoading } = useQuery<FullROIReport>({
+    queryKey: ["/api/admin/roi", sportFilter, dateRange],
+    queryFn: async () => {
+      const url = `/api/admin/roi${queryParams.toString() ? "?" + queryParams.toString() : ""}`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load ROI");
+      return res.json();
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-20" data-testid="roi-loading">
+        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!report) return <div className="text-center text-muted-foreground py-10" data-testid="roi-empty">No ROI data available</div>;
+
+  const g = report.global;
+
+  return (
+    <div className="space-y-6" data-testid="panel-roi">
+      <div className="flex items-center gap-3 flex-wrap">
+        <select
+          data-testid="select-sport-filter"
+          value={sportFilter}
+          onChange={e => setSportFilter(e.target.value)}
+          className="text-xs bg-muted border border-border rounded-lg px-3 py-1.5 text-foreground"
+        >
+          <option value="">All Sports</option>
+          <option value="mlb">MLB</option>
+          <option value="nba">NBA</option>
+          <option value="ncaab">NCAAB</option>
+        </select>
+        <select
+          data-testid="select-date-range"
+          value={dateRange}
+          onChange={e => setDateRange(e.target.value)}
+          className="text-xs bg-muted border border-border rounded-lg px-3 py-1.5 text-foreground"
+        >
+          <option value="all">All Time</option>
+          <option value="today">Today</option>
+          <option value="7d">Last 7 Days</option>
+          <option value="30d">Last 30 Days</option>
+        </select>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <MetricCard
+          label="ROI"
+          value={`${g.roi >= 0 ? "+" : ""}${g.roi}%`}
+          color={g.roi >= 0 ? "text-green-400" : "text-red-400"}
+          sub={`${g.totalStake.toFixed(1)}u staked`}
+        />
+        <MetricCard
+          label="Hit Rate"
+          value={`${g.hitRate}%`}
+          color={g.hitRate >= 55 ? "text-green-400" : g.hitRate >= 45 ? "text-yellow-400" : "text-red-400"}
+          sub={`${g.hits}-${g.misses} (${g.pushes} push)`}
+        />
+        <MetricCard
+          label="Total Bets"
+          value={String(g.totalBets)}
+          sub={`${g.pending} pending`}
+        />
+        <MetricCard
+          label="Profit"
+          value={`${g.totalProfit >= 0 ? "+" : ""}${g.totalProfit.toFixed(2)}u`}
+          color={g.totalProfit >= 0 ? "text-green-400" : "text-red-400"}
+        />
+      </div>
+
+      <SegmentTable title="By Sport" segments={report.bySport} />
+      <SegmentTable title="By Market" segments={report.byMarket} />
+      <SegmentTable title="By Probability Bucket" segments={report.byProbBucket} />
+      <SegmentTable title="By Signal Score" segments={report.bySignalScore} />
+      <SegmentTable title="By Direction" segments={report.byDirection} />
+      {report.byTiming.length > 0 && <SegmentTable title="By Timing (MLB Innings)" segments={report.byTiming} />}
     </div>
   );
 }

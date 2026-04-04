@@ -30,6 +30,10 @@ export type SportSignalCardProps = {
   timestampLabel?: string;
   locked?: boolean;
   isBestBet?: boolean;
+  rank?: number;
+  signalScore?: number | null;
+  timingContext?: string | null;
+  isFlagship?: boolean;
   onPrimaryAction?: () => void;
   onAddToSlip?: () => void;
   onShare?: () => void;
@@ -52,6 +56,19 @@ export type SportSignalCardProps = {
   matchup?: string;
 };
 
+const RANK_STYLES: Record<number, { bg: string; border: string; text: string; label: string }> = {
+  1: { bg: "bg-yellow-500/10", border: "border-yellow-500/40 ring-1 ring-yellow-500/20", text: "text-yellow-400", label: "#1 Pick" },
+  2: { bg: "bg-slate-300/10", border: "border-slate-400/40 ring-1 ring-slate-400/15", text: "text-slate-300", label: "#2 Pick" },
+  3: { bg: "bg-amber-600/10", border: "border-amber-600/40 ring-1 ring-amber-600/15", text: "text-amber-500", label: "#3 Pick" },
+};
+
+const SIGNAL_SCORE_COLOR = (score: number): string => {
+  if (score >= 80) return "text-green-400";
+  if (score >= 60) return "text-yellow-400";
+  if (score >= 40) return "text-orange-400";
+  return "text-muted-foreground";
+};
+
 export function SportSignalCard({
   sport,
   playerOrTeam,
@@ -66,6 +83,10 @@ export function SportSignalCard({
   timestampLabel,
   locked,
   isBestBet,
+  rank,
+  signalScore,
+  timingContext,
+  isFlagship,
   onPrimaryAction,
   onAddToSlip,
   footerSlot,
@@ -78,40 +99,70 @@ export function SportSignalCard({
   const sportBadge = SPORT_BADGE[sport] ?? SPORT_BADGE.NBA;
   const probWhole = Math.round(probability);
   const edgeStr = edge > 0 ? `+${edge.toFixed(1)}%` : `${edge.toFixed(1)}%`;
+  const rankStyle = rank != null ? RANK_STYLES[rank] : undefined;
 
   return (
     <div
       data-testid={`card-signal-${sport.toLowerCase()}-${playerOrTeam.replace(/\s+/g, "-").toLowerCase()}`}
       className={`rounded-xl border bg-card overflow-hidden transition-all ${
-        isBestBet
-          ? "border-primary/40 ring-1 ring-primary/20 shadow-[0_0_16px_rgba(34,197,94,0.1)]"
-          : "border-border/40 hover:border-border/60"
+        rankStyle
+          ? `${rankStyle.border} shadow-[0_0_20px_rgba(234,179,8,0.08)]`
+          : isBestBet
+            ? "border-primary/40 ring-1 ring-primary/20 shadow-[0_0_16px_rgba(34,197,94,0.1)]"
+            : "border-border/40 hover:border-border/60"
       } ${locked ? "opacity-60" : ""}`}
     >
       <div className="p-4 space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-2 min-w-0 flex-wrap">
+            {rankStyle && (
+              <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${rankStyle.bg} ${rankStyle.text} border ${rankStyle.border.split(" ")[0]} shrink-0`} data-testid={`badge-rank-${rank}`}>
+                {rankStyle.label}
+              </span>
+            )}
             <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border shrink-0 ${sportBadge.color}`}>
               {sportBadge.label}
             </span>
             <ConfidenceBadge tier={badgeTier} />
-            {isBestBet && (
+            {isFlagship && (
+              <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30 shrink-0" data-testid="badge-flagship">
+                Flagship
+              </span>
+            )}
+            {isBestBet && !rankStyle && (
               <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-primary/15 text-primary border border-primary/30 shrink-0">
                 Best Bet
               </span>
             )}
           </div>
-          {timestampLabel && (
-            <span className="text-[10px] text-muted-foreground/60 shrink-0">{timestampLabel}</span>
-          )}
+          <div className="flex items-center gap-2 shrink-0">
+            {signalScore != null && (
+              <span className={`text-[10px] font-bold tabular-nums ${SIGNAL_SCORE_COLOR(signalScore)}`} data-testid="text-signal-score">
+                SS {Math.round(signalScore)}
+              </span>
+            )}
+            {timestampLabel && (
+              <span className="text-[10px] text-muted-foreground/60">{timestampLabel}</span>
+            )}
+          </div>
         </div>
 
         <div>
-          <div className="text-sm font-bold text-foreground leading-tight">{playerOrTeam}</div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-bold text-foreground leading-tight">{playerOrTeam}</span>
+            {matchup && (
+              <span className="text-[10px] text-muted-foreground/60">{matchup}</span>
+            )}
+          </div>
           <div className="flex items-center gap-1.5 mt-0.5">
             <span className={`text-xs font-bold ${edge >= 5 ? EDGE_COLOR(edge) : "text-foreground"}`}>{side}</span>
             <span className="text-xs text-muted-foreground">{marketLabel}</span>
             {line != null && <span className="text-xs font-semibold text-foreground">{line}</span>}
+            {timingContext && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 font-semibold" data-testid="badge-timing">
+                {timingContext}
+              </span>
+            )}
           </div>
         </div>
 

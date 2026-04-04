@@ -17,6 +17,12 @@ export type TopPlayItem = {
   routeTarget: string;
   confidenceTier: "ELITE" | "STRONG" | "VALUE" | "NO_EDGE";
   updatedAt: string;
+  signalScore?: number | null;
+  timingContext?: string | null;
+  batterArchetype?: string | null;
+  pitcherArchetype?: string | null;
+  thesis?: string | null;
+  isFlagship?: boolean;
   currentStats?: { ab: number; h: number; hr: number; tb: number; bb: number; rbi: number; k: number; sb: number } | null;
   lastABContact?: {
     exitVelo: number | null;
@@ -58,7 +64,9 @@ function computeRankScore(play: TopPlayItem): number {
   const edgePart = Math.abs(play.edge);
   const tierPart = TIER_WEIGHT[play.confidenceTier] ?? 0.50;
   const stability = MARKET_STABILITY[play.market ?? ""] ?? 0.70;
-  return edgePart * tierPart * stability;
+  const signalBoost = play.signalScore != null ? (play.signalScore / 100) * 0.3 : 0;
+  const flagshipBoost = play.isFlagship ? 0.15 : 0;
+  return edgePart * tierPart * stability + signalBoost + flagshipBoost;
 }
 
 const MARKET_LABELS: Record<string, string> = {
@@ -148,11 +156,17 @@ export function buildTopPlays(
       probability: sig.enginePct,
       edge,
       projection: sig.projection ?? null,
-      summary: sig.explanationBullets?.[0] ?? null,
+      summary: sig.thesis ?? sig.explanationBullets?.[0] ?? null,
       gameId: sig.gameId,
       routeTarget: "mlb",
-      confidenceTier: classifyTier(sig.enginePct),
+      confidenceTier: sig.confidenceTier ?? classifyTier(sig.enginePct),
       updatedAt: sig.updatedAt ?? new Date().toISOString(),
+      signalScore: sig.signalScore ?? null,
+      timingContext: sig.timingContext ?? null,
+      batterArchetype: sig.batterArchetype ?? null,
+      pitcherArchetype: sig.pitcherArchetype ?? null,
+      thesis: sig.thesis ?? null,
+      isFlagship: sig.isFlagship ?? false,
       currentStats: sig.currentStats ?? null,
       lastABContact: sig.lastABContact ?? null,
     });

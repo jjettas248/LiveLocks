@@ -17,6 +17,7 @@ import { AnalyticsTab } from "@/components/analytics-tab";
 import MlbLivePage from "@/pages/mlb-live";
 import { WelcomeBanner } from "@/components/welcome-banner";
 import { RecentWinsStrip } from "@/components/RecentWinsStrip";
+import { RecentResults } from "@/components/RecentResults";
 import { LiveBoxscore } from "@/components/live-boxscore";
 import { AlertsOnboardingModal } from "@/components/alerts-onboarding-modal";
 import { useAuth } from "@/hooks/use-auth";
@@ -1933,16 +1934,21 @@ export default function Dashboard() {
               }}
             />
           </div>
-          <UserStatusRail
-            tier={effectiveTier ?? "free"}
-            playsUsed={playsUsed}
-            playsLimit={3}
-            isAdmin={!!user?.isAdmin}
-            onUpgradeClick={() => {
-              setUpgradeModalState({ playsUsed: user?.playsUsedToday ?? 0, limit: 3 });
-              setShowUpgradeModal(true);
-            }}
-          />
+          <div className="space-y-4">
+            <UserStatusRail
+              tier={effectiveTier ?? "free"}
+              playsUsed={playsUsed}
+              playsLimit={3}
+              isAdmin={!!user?.isAdmin}
+              onUpgradeClick={() => {
+                setUpgradeModalState({ playsUsed: user?.playsUsedToday ?? 0, limit: 3 });
+                setShowUpgradeModal(true);
+              }}
+            />
+            <div className="bg-card border border-border rounded-xl p-4">
+              <RecentResults />
+            </div>
+          </div>
         </div>
 
         {scanningEdges && (

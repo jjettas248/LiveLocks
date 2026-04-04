@@ -428,6 +428,14 @@ export const persistedPlays = pgTable("persisted_plays", {
   opportunityScore: numeric("opportunity_score"),
   liveScore: numeric("live_score"),
   eventBoost: numeric("event_boost"),
+  odds: numeric("odds"),
+  stake: numeric("stake").default("1"),
+  payout: numeric("payout"),
+  inning: integer("inning"),
+  abNumber: integer("ab_number"),
+  pitchCount: integer("pitch_count"),
+  contactQualityScore: numeric("contact_quality_score"),
+  confidenceTier: text("confidence_tier"),
 }, (table) => ({
   gameDateIdx: index("persisted_plays_game_date_idx").on(table.gameDate),
   resultIdx: index("persisted_plays_result_idx").on(table.result),
@@ -529,6 +537,23 @@ export const persistedAlerts = pgTable("persisted_alerts", {
 export const insertPersistedAlertSchema = createInsertSchema(persistedAlerts).omit({ id: true, createdAt: true });
 export type PersistedAlert = typeof persistedAlerts.$inferSelect;
 export type InsertPersistedAlert = z.infer<typeof insertPersistedAlertSchema>;
+
+export const signalInteractions = pgTable("signal_interactions", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id),
+  signalId: text("signal_id"),
+  action: text("action").notNull(),
+  sport: text("sport"),
+  market: text("market"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  userIdx: index("signal_interactions_user_idx").on(table.userId),
+  signalIdx: index("signal_interactions_signal_idx").on(table.signalId),
+}));
+
+export const insertSignalInteractionSchema = createInsertSchema(signalInteractions).omit({ id: true, createdAt: true });
+export type SignalInteraction = typeof signalInteractions.$inferSelect;
+export type InsertSignalInteraction = z.infer<typeof insertSignalInteractionSchema>;
 
 export interface PlayStats {
   buckets: {
