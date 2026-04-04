@@ -296,6 +296,17 @@ export default function Dashboard() {
   const { data: players, isLoading: isPlayersLoading } = usePlayers();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
   const { data: liveGames, isLoading: isGamesLoading, refetch: refetchGames } = useLiveGames();
+  
+  const { data: dataHealth } = useQuery({
+    queryKey: ["/api/debug/data-health"],
+    queryFn: async () => {
+      const res = await fetch("/api/debug/data-health");
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: user?.isAdmin === true,
+    refetchInterval: 30000,
+  });
 
   const [autoRunResult, setAutoRunResult] = useState<{ probability: number; projection: number; line: number; direction: string; playerName: string; statType: string; edge: number } | null>(null);
   const [autoRunFallback, setAutoRunFallback] = useState<string | null>(null);
@@ -1724,20 +1735,44 @@ export default function Dashboard() {
               </div>
             )}
             {user?.isAdmin && (
-              <button
-                onClick={() => syncRostersMutation.mutate()}
-                disabled={syncRostersMutation.isPending}
-                data-testid="button-sync-rosters"
-                title="Pull latest rosters from ESPN to update player team assignments"
-                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
-              >
-                {syncRostersMutation.isPending ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="w-3.5 h-3.5" />
+              <>
+                <button
+                  onClick={() => syncRostersMutation.mutate()}
+                  disabled={syncRostersMutation.isPending}
+                  data-testid="button-sync-rosters"
+                  title="Pull latest rosters from ESPN to update player team assignments"
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
+                >
+                  {syncRostersMutation.isPending ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  )}
+                  Sync Rosters
+                </button>
+                {dataHealth && (
+                  <div
+                    data-testid="text-data-health"
+                    className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border ${
+                      dataHealth.oddsApi.status === "healthy"
+                        ? "bg-green-500/10 border-green-500/30 text-green-500"
+                        : dataHealth.oddsApi.status === "degraded"
+                        ? "bg-amber-500/10 border-amber-500/30 text-amber-500"
+                        : "bg-red-500/10 border-red-500/30 text-red-500"
+                    }`}
+                    title={`Odds API: ${dataHealth.oddsApi.status} (${Math.round(dataHealth.oddsApi.staleSeconds)}s stale)`}
+                  >
+                    <div className={`w-2 h-2 rounded-full ${
+                      dataHealth.oddsApi.status === "healthy"
+                        ? "bg-green-500"
+                        : dataHealth.oddsApi.status === "degraded"
+                        ? "bg-amber-500"
+                        : "bg-red-500"
+                    }`} />
+                    {dataHealth.oddsApi.status}
+                  </div>
                 )}
-                Sync Rosters
-              </button>
+              </>
             )}
             {/* Unified notification bell — opens alert history + push/SMS settings */}
             <button

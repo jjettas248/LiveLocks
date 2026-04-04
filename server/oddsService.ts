@@ -1,4 +1,4 @@
-import { updateOddsHealth } from "./dataHealth";
+import { updateOddsHealth } from "./services/dataHealth";
 
 const ODDS_API_KEYS = [
   process.env.ODDS_API_KEY,
