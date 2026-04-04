@@ -17,7 +17,6 @@ import { AnalyticsTab } from "@/components/analytics-tab";
 import MlbLivePage from "@/pages/mlb-live";
 import { WelcomeBanner } from "@/components/welcome-banner";
 import { RecentWinsStrip } from "@/components/RecentWinsStrip";
-import { RecentResults } from "@/components/RecentResults";
 import { LiveBoxscore } from "@/components/live-boxscore";
 import { AlertsOnboardingModal } from "@/components/alerts-onboarding-modal";
 import { useAuth } from "@/hooks/use-auth";
@@ -1980,9 +1979,6 @@ export default function Dashboard() {
                 setShowUpgradeModal(true);
               }}
             />
-            <div className="bg-card border border-border rounded-xl p-4">
-              <RecentResults />
-            </div>
           </div>
         </div>
 
