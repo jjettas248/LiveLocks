@@ -1415,7 +1415,7 @@ export async function registerRoutes(
       for (const [gid, edgeEntry] of Array.from(mlbEdgeCache.entries())) {
         totalEdgeCacheEntries++;
 
-        const FEED_FRESHNESS_MS = 120_000;
+        const FEED_FRESHNESS_MS = 10 * 60 * 1000;
         if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) {
           totalDropped++;
           continue;

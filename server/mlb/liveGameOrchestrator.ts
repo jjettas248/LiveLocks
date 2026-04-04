@@ -541,6 +541,11 @@ export class LiveGameOrchestrator {
         }
 
         await this.triggerEngine(gameId, normalizedStatus, triggers);
+      } else if (normalizedStatus === "live") {
+        const cached = mlbEdgeCache.get(gameId);
+        if (cached && cached.qualifiedSignals.length > 0) {
+          mlbEdgeCache.set(gameId, { ...cached, updatedAt: Date.now() });
+        }
       }
     } else if (normalizedStatus === "live") {
       console.log(`[MLB orchestrator] First poll for live game ${gameId} (status=${normalizedStatus}, source=${statusSource}) — triggering engine`);
