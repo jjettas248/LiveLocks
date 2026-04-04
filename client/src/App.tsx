@@ -35,6 +35,9 @@ function ProtectedRouter() {
     if (!isLoading && user && !user.isAdmin && location === "/analytics") {
       navigate("/dashboard");
     }
+    if (!isLoading && user && !user.isAdmin && location === "/performance") {
+      navigate("/dashboard");
+    }
   }, [user, isLoading, location, navigate]);
 
   if (isLoading) {

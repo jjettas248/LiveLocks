@@ -1811,15 +1811,17 @@ export default function Dashboard() {
                 </span>
               )}
             </button>
-            <button
-              data-testid="link-performance"
-              onClick={() => navigate("/performance")}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-semibold hover:bg-blue-500/20 transition-colors"
-              title="Model Performance"
-            >
-              <BarChart3 className="w-3.5 h-3.5" />
-              Performance
-            </button>
+            {user?.isAdmin && (
+              <button
+                data-testid="link-performance"
+                onClick={() => navigate("/analytics")}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-semibold hover:bg-blue-500/20 transition-colors"
+                title="Model Performance"
+              >
+                <BarChart3 className="w-3.5 h-3.5" />
+                Analytics
+              </button>
+            )}
             {user?.isAdmin && (
               <button
                 data-testid="link-admin"

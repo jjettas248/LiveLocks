@@ -5422,7 +5422,7 @@ export function registerPerformanceRoutes(app: Express): void {
     { label: "75%+", min: 75, max: 100 },
   ];
 
-  app.get("/api/performance", requireAuth, async (req, res) => {
+  app.get("/api/performance", requireAdmin, async (req, res) => {
     try {
       const sport = (req.query.sport as string || "all").toLowerCase();
       const direction = (req.query.direction as string || "all").toLowerCase();
