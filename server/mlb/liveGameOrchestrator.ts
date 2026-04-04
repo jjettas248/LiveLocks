@@ -1487,7 +1487,7 @@ export class LiveGameOrchestrator {
             };
             const alertResult = evaluateHRAlert(alertInput);
             if (alertResult.level === "ALERT" || alertResult.level === "WATCH") {
-              console.log(`[HR_ALERT_TRIGGER] ${alertResult.level} ${batter.playerName} score=${output.hrBuildScore} reason=${alertResult.triggerReason} game=${gameId} inn=${state.inning}`);
+              console.log(`[HR_ALERT_TRIGGER] ${alertResult.level} ${batter.playerName} score=${output.hrBuildScore} reason=${alertResult.triggerReason} state=${alertResult.signalState} decision=${alertResult.decision} confidence=${alertResult.confidenceScore} game=${gameId} inn=${state.inning}`);
               markAlertSent(batter.playerId, gameId);
               storage.insertAlert({
                 playerId: batter.playerId,

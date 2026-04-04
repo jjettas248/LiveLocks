@@ -164,6 +164,10 @@ interface HRAlert {
   hrIntensity: string | null;
   inning: number | null;
   outcome: string | null;
+  signalState: string | null;
+  decision: string | null;
+  confidenceScore: number | null;
+  formattedReason: string | null;
   factors: {
     avgEV: number | null;
     maxEV: number | null;
@@ -662,6 +666,14 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
     ? { label: "PENDING", cls: "bg-blue-500/15 text-blue-400" }
     : { label: "WATCHING", cls: "bg-yellow-500/15 text-yellow-400" };
 
+  const decisionBadge = card.decision === "BET_NOW"
+    ? { label: "BET NOW", cls: "bg-red-500/20 text-red-300 border border-red-500/30" }
+    : card.decision === "PREPARE"
+    ? { label: "PREPARE", cls: "bg-orange-500/20 text-orange-300 border border-orange-500/30" }
+    : card.decision === "MONITOR"
+    ? { label: "MONITOR", cls: "bg-yellow-500/20 text-yellow-300 border border-yellow-500/30" }
+    : null;
+
   return (
     <div
       data-testid={`card-hr-radar-${card.playerId}`}
@@ -690,8 +702,13 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
           </div>
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
-          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${statusBadge.cls}`}>{statusBadge.label}</span>
-          <span className="text-[10px] font-black" style={{ color: card.radarTierColor }}>{card.radarTierLabel}</span>
+          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${statusBadge.cls}`} data-testid={`badge-status-${card.playerId}`}>{statusBadge.label}</span>
+          {decisionBadge && !isCashed && !isMissed && (
+            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${decisionBadge.cls}`} data-testid={`badge-decision-${card.playerId}`}>{decisionBadge.label}</span>
+          )}
+          {card.confidenceScore > 0 && !isCashed && !isMissed && (
+            <span className={`text-[10px] font-bold tabular-nums ${card.confidenceScore >= 8 ? "text-red-400" : card.confidenceScore >= 6 ? "text-orange-400" : card.confidenceScore >= 4 ? "text-yellow-400" : "text-zinc-400"}`} data-testid={`confidence-${card.playerId}`}>{card.confidenceScore}/10</span>
+          )}
         </div>
       </div>
 
@@ -713,8 +730,8 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
         </div>
       )}
 
-      {card.triggerLabel && (
-        <div className="text-[10px] text-muted-foreground italic leading-tight">{card.triggerLabel}</div>
+      {(card.formattedReason || card.triggerLabel) && (
+        <div className="text-[10px] text-muted-foreground italic leading-tight" data-testid={`reason-${card.playerId}`}>{card.formattedReason || card.triggerLabel}</div>
       )}
 
       {card.edge != null && card.enginePct != null && !isCashed && !isMissed && (
@@ -865,7 +882,16 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
     const existing = radarState.get(key);
     const card = mapAlertToUi(a);
     if (existing) {
-      radarState.set(key, { ...existing, status: "ALERT", detectedInning: card.detectedInning ?? existing.detectedInning, latestInning: card.latestInning ?? existing.latestInning });
+      radarState.set(key, {
+        ...existing,
+        status: "ALERT",
+        signalState: card.signalState ?? existing.signalState,
+        decision: card.decision ?? existing.decision,
+        confidenceScore: card.confidenceScore > 0 ? card.confidenceScore : existing.confidenceScore,
+        formattedReason: card.formattedReason || existing.formattedReason,
+        detectedInning: card.detectedInning ?? existing.detectedInning,
+        latestInning: card.latestInning ?? existing.latestInning,
+      });
     } else {
       radarState.set(key, card);
     }
@@ -901,34 +927,47 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
   });
 
   const allCards = Array.from(radarState.values());
-  const dedupActive = allCards.filter(c => c.status === "ALERT");
-  const dedupWatch = allCards.filter(c => c.status === "WATCH");
   const dedupCashed = allCards.filter(c => c.status === "CASHED");
   const missedCards = allCards.filter(c => c.status === "MISSED");
 
-  const isEmpty = dedupActive.length === 0 && dedupWatch.length === 0 && dedupCashed.length === 0 && missedCards.length === 0;
+  const sortByPriority = (a: HrRadarCardUi, b: HrRadarCardUi) => {
+    const decOrder: Record<string, number> = { BET_NOW: 0, PREPARE: 1, MONITOR: 2 };
+    const aD = decOrder[a.decision ?? "MONITOR"] ?? 2;
+    const bD = decOrder[b.decision ?? "MONITOR"] ?? 2;
+    if (aD !== bD) return aD - bD;
+    if ((b.confidenceScore ?? 0) !== (a.confidenceScore ?? 0)) return (b.confidenceScore ?? 0) - (a.confidenceScore ?? 0);
+    return (b.radarScore ?? 0) - (a.radarScore ?? 0);
+  };
+
+  const liveCards = allCards.filter(c => c.status !== "CASHED" && c.status !== "MISSED");
+  const peakCards = liveCards.filter(c => c.signalState === "PEAK").sort(sortByPriority);
+  const buildingCards = liveCards.filter(c => c.signalState === "BUILDING").sort(sortByPriority);
+  const formationCards = liveCards.filter(c => c.signalState === "FORMATION" || (!c.signalState && c.status !== "CASHED" && c.status !== "MISSED")).sort(sortByPriority);
+  const cooldownCards = liveCards.filter(c => c.signalState === "COOLDOWN").sort(sortByPriority);
+
+  const isEmpty = peakCards.length === 0 && buildingCards.length === 0 && formationCards.length === 0 && cooldownCards.length === 0 && dedupCashed.length === 0 && missedCards.length === 0;
 
   return (
     <div className="space-y-6" data-testid="mlb-hr-radar">
-      {dedupActive.length > 0 && (
-        <div className="space-y-3">
+      {peakCards.length > 0 && (
+        <div className="space-y-3" data-testid="hr-section-peak">
           <div className="flex items-center gap-2">
             <div className="relative">
-              <Bell className="w-4 h-4 text-red-500" />
+              <Flame className="w-4.5 h-4.5 text-red-500" />
               <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500 animate-ping" />
               <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500" />
             </div>
-            <span className="text-sm font-bold text-foreground">Active HR Alerts</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 font-bold animate-pulse">{dedupActive.length} LIVE</span>
+            <span className="text-sm font-bold text-foreground">Peak HR Threats</span>
+            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 animate-pulse" data-testid="badge-peak-count">{peakCards.length} BET NOW</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {(isElite ? dedupActive : dedupActive.slice(0, 2)).map(c => (
-              <RadarCard key={`${c.playerId}-${c.gameId}`} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+            {(isElite ? peakCards : peakCards.slice(0, 2)).map(c => (
+              <RadarCard key={`peak-${c.playerId}-${c.gameId}`} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
             ))}
           </div>
-          {!isElite && dedupActive.length > 2 && (
+          {!isElite && peakCards.length > 2 && (
             <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-center space-y-2">
-              <div className="text-sm font-bold text-foreground">{dedupActive.length - 2} more HR edge{dedupActive.length - 2 !== 1 ? "s" : ""}</div>
+              <div className="text-sm font-bold text-foreground">{peakCards.length - 2} more peak signal{peakCards.length - 2 !== 1 ? "s" : ""}</div>
               <a href="/upgrade" data-testid="link-hr-upgrade" className="inline-block px-4 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-xs">
                 Upgrade to All Sports →
               </a>
@@ -939,16 +978,47 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
 
       <ConversionStatsBar stats={conversionStats} />
 
-      {dedupWatch.length > 0 && (
-        <div className="space-y-3">
+      {buildingCards.length > 0 && (
+        <div className="space-y-3" data-testid="hr-section-building">
           <div className="flex items-center gap-2">
-            <Eye className="w-4 h-4 text-yellow-500" />
-            <span className="text-sm font-bold text-foreground">HR Watch</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 font-semibold">{dedupWatch.length}</span>
+            <Zap className="w-4 h-4 text-orange-500" />
+            <span className="text-sm font-bold text-foreground">Building Pressure</span>
+            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-400" data-testid="badge-building-count">{buildingCards.length} PREPARE</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {dedupWatch.map(c => (
-              <RadarCard key={`${c.playerId}-${c.gameId}`} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+            {buildingCards.map(c => (
+              <RadarCard key={`building-${c.playerId}-${c.gameId}`} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {formationCards.length > 0 && (
+        <div className="space-y-3" data-testid="hr-section-formation">
+          <div className="flex items-center gap-2">
+            <Eye className="w-4 h-4 text-yellow-500" />
+            <span className="text-sm font-bold text-foreground">Early Signals</span>
+            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400" data-testid="badge-formation-count">{formationCards.length} MONITOR</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {formationCards.map(c => (
+              <RadarCard key={`formation-${c.playerId}-${c.gameId}`} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {cooldownCards.length > 0 && (
+        <div className="space-y-3" data-testid="hr-section-cooldown">
+          <div className="flex items-center gap-2">
+            <RefreshCw className="w-4 h-4 text-blue-400" />
+            <span className="text-sm font-bold text-foreground">Cooldown</span>
+            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400" data-testid="badge-cooldown-count">{cooldownCards.length}</span>
+          </div>
+          <p className="text-[10px] text-muted-foreground -mt-1">Recently alerted — monitoring for re-escalation</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {cooldownCards.map(c => (
+              <RadarCard key={`cooldown-${c.playerId}-${c.gameId}`} card={c} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
             ))}
           </div>
         </div>

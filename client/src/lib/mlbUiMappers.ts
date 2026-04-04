@@ -8,6 +8,9 @@ export type MlbSignalUi = MLBSignal & {
   displayTierBadge: string;
 };
 
+export type SignalState = "PEAK" | "BUILDING" | "FORMATION" | "COOLDOWN" | null;
+export type Decision = "BET_NOW" | "PREPARE" | "MONITOR" | null;
+
 export type HrRadarCardUi = {
   playerId: string;
   playerName: string;
@@ -20,6 +23,10 @@ export type HrRadarCardUi = {
   radarTierLabel: string;
   radarTierColor: string;
   status: "WATCH" | "ALERT" | "CASHED" | "MISSED" | "PENDING";
+  signalState: SignalState;
+  decision: Decision;
+  confidenceScore: number;
+  formattedReason: string;
   evidenceTags: Array<{ label: string; color: string }>;
   triggerLabel: string;
   bestBook: string | null;
@@ -238,6 +245,12 @@ export function mapHrRadarCardToUi(player: any, type: "edge" | "watch" | "cashed
   if (player.parkFactor != null && player.parkFactor > 1) evidenceTags.push({ label: "Park Boost", color: "text-green-400 bg-green-500/10" });
   if (player.windFactor === "favorable") evidenceTags.push({ label: "Wind Out", color: "text-cyan-400 bg-cyan-500/10" });
 
+  const derivedState: SignalState = type === "cashed" ? null :
+    score >= 4.5 ? "PEAK" : score >= 3.5 ? "BUILDING" : "FORMATION";
+  const derivedDecision: Decision = type === "cashed" ? null :
+    derivedState === "PEAK" ? "BET_NOW" : derivedState === "BUILDING" ? "PREPARE" : "MONITOR";
+  const derivedConfidence = Math.max(1, Math.min(10, Math.round(score * 2)));
+
   return {
     playerId: player.playerId,
     playerName: player.playerName,
@@ -250,6 +263,10 @@ export function mapHrRadarCardToUi(player: any, type: "edge" | "watch" | "cashed
     radarTierLabel: tier.label,
     radarTierColor: tier.color,
     status,
+    signalState: player.signalState ?? derivedState,
+    decision: player.decision ?? derivedDecision,
+    confidenceScore: player.confidenceScore ?? derivedConfidence,
+    formattedReason: player.formattedReason ?? formatTriggerReason(player.triggerReason),
     evidenceTags,
     triggerLabel: formatTriggerReason(player.triggerReason),
     bestBook: player.sportsbook ?? null,
@@ -287,6 +304,17 @@ export function mapAlertToUi(alert: any): HrRadarCardUi {
     if ((alert.factors.parkWindBoost ?? 0) > 0) evidenceTags.push({ label: "Park/Wind Boost", color: "text-cyan-400 bg-cyan-500/10" });
   }
 
+  const alertSignalState: SignalState = alert.signalState ?? (
+    status === "CASHED" || status === "MISSED" ? null :
+    alert.alertType === "HR_EARLY" ? "PEAK" : "FORMATION"
+  );
+  const alertDecision: Decision = alert.decision ?? (
+    alertSignalState === "PEAK" ? "BET_NOW" :
+    alertSignalState === "BUILDING" ? "PREPARE" :
+    alertSignalState === "FORMATION" ? "MONITOR" : null
+  );
+  const alertConfidence = alert.confidenceScore ?? Math.max(1, Math.min(10, Math.round(score * 2)));
+
   return {
     playerId: alert.playerId,
     playerName: alert.playerName,
@@ -299,6 +327,10 @@ export function mapAlertToUi(alert: any): HrRadarCardUi {
     radarTierLabel: tier.label,
     radarTierColor: tier.color,
     status,
+    signalState: alertSignalState,
+    decision: alertDecision,
+    confidenceScore: alertConfidence,
+    formattedReason: alert.formattedReason ?? formatTriggerReason(alert.triggerReason),
     evidenceTags,
     triggerLabel: formatTriggerReason(alert.triggerReason),
     bestBook: null,

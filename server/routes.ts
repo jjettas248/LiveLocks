@@ -1275,14 +1275,72 @@ export async function registerRoutes(
         storage.getRecentAlerts(minutes),
         storage.getAlertConversionStats(),
       ]);
+
+      function deriveSignalState(trigger: string | null, alertType: string, score: number): { signalState: string | null; decision: string | null } {
+        if (!trigger) return { signalState: null, decision: null };
+        if (trigger === "cooldown") return { signalState: "COOLDOWN", decision: null };
+        if (trigger.startsWith("hard_trigger") || trigger.startsWith("repeat_contact")) {
+          return { signalState: "PEAK", decision: "BET_NOW" };
+        }
+        if (trigger.startsWith("leaderboard") || trigger.startsWith("late_game_spike")) {
+          return { signalState: "BUILDING", decision: "PREPARE" };
+        }
+        if (trigger.startsWith("soft_trigger")) {
+          return { signalState: "FORMATION", decision: "MONITOR" };
+        }
+        return { signalState: alertType === "HR_EARLY" ? "BUILDING" : "FORMATION", decision: alertType === "HR_EARLY" ? "PREPARE" : "MONITOR" };
+      }
+
+      function deriveFormattedReason(trigger: string | null, factors: any, inning: number | null): string {
+        if (!trigger) return "";
+        if (trigger === "cooldown") return "Recently alerted — signal on cooldown.";
+        if (trigger.includes("barrel") && trigger.includes("avgEV95")) {
+          return `Barrel contact + 95+ EV trend. Power building into ${inning ? ordinalSuffix(inning) : "mid-game"} window.`;
+        }
+        if (trigger.startsWith("repeat_contact")) {
+          return "Back-to-back hard contact (95+ EV, optimal launch angle). HR probability spiking.";
+        }
+        if (trigger.startsWith("leaderboard:")) {
+          if (trigger.includes("topEV")) return `Game-leading exit velocity (${factors?.maxEV?.toFixed(0) ?? "105+"}mph). Elite barrel potential.`;
+          if (trigger.includes("topDistance")) return "Deep flyball contact today — distance leaderboard-level. HR conditions active.";
+          return "Leaderboard-level contact metrics this game.";
+        }
+        if (trigger.startsWith("late_game_spike")) {
+          return `Late-game power spike (${inning ? ordinalSuffix(inning) : "late"} inning). Contact quality rising against tired bullpen.`;
+        }
+        if (trigger.startsWith("soft_trigger")) {
+          return "Consistent hard contact building. EV averaging 92+ with rising build score.";
+        }
+        return "Power indicators increasing.";
+      }
+
+      function ordinalSuffix(n: number): string {
+        const s = ["th", "st", "nd", "rd"];
+        const v = n % 100;
+        return n + (s[(v - 20) % 10] || s[v] || s[0]);
+      }
+
+      function deriveConfidence(score: number, factors: any): number {
+        let base = Math.min(10, Math.round(score * 2));
+        if ((factors?.barrels ?? 0) >= 2) base = Math.min(10, base + 1);
+        if ((factors?.maxEV ?? 0) >= 108) base = Math.min(10, base + 1);
+        return Math.max(0, base);
+      }
+
       return res.json({
         alerts: alerts.map(a => {
           let factors = null;
           try { factors = a.factors ? JSON.parse(a.factors) : null; } catch {}
+          const score = a.hrBuildScore != null ? parseFloat(a.hrBuildScore) : 0;
+          const lifecycle = deriveSignalState(a.triggerReason, a.alertType, score);
           return {
             ...a,
-            hrBuildScore: a.hrBuildScore != null ? parseFloat(a.hrBuildScore) : null,
+            hrBuildScore: score || null,
             factors,
+            signalState: lifecycle.signalState,
+            decision: lifecycle.decision,
+            confidenceScore: deriveConfidence(score, factors),
+            formattedReason: deriveFormattedReason(a.triggerReason, factors, a.inning),
           };
         }),
         conversionStats,
