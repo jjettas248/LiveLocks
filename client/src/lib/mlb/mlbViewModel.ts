@@ -340,8 +340,8 @@ export function buildSignalViewModel(sig: MLBSignal): SignalViewModel {
     detectionLabel: `${sig.recommendedSide} ${sig.bookLine ?? ""} ${marketLabel}`.trim(),
     badges: visibleBadges,
     pitcherSignals: pitcherSigs,
-    smartTags: sig.smartTags ?? [],
-    primaryReason: sig.primaryReason ?? "",
+    smartTags: (sig.smartTags ?? []).map(t => sanitizeDisplayString(t)).filter(t => t.length >= 3),
+    primaryReason: sig.primaryReason ? sanitizeDisplayString(sig.primaryReason) : "",
     stale: sig.stale ?? false,
     alreadyHit: sig.alreadyHit ?? false,
     actionable: sig.actionable ?? false,
@@ -358,7 +358,7 @@ export function buildSignalViewModel(sig: MLBSignal): SignalViewModel {
     overOdds: sig.overOdds,
     underOdds: sig.underOdds,
     currentStats: sig.currentStats,
-    priorABResults: buildAtBatLogViewModel(sig.priorABResults ?? []),
+    priorABResults: buildAtBatLogViewModel(sig.priorABResults ?? [], sig.pitchMatchupRatings),
     pitchMix: sig.pitchMix,
     pitchMatchupRatings: sig.pitchMatchupRatings,
     drivers: sig.drivers ?? {},
@@ -374,12 +374,14 @@ export function buildAtBatLogViewModel(
     pitchType: string | null;
     pitchSpeed: number | null;
     distance?: number | null;
-  }>
+  }>,
+  pitchMatchupRatings?: Record<string, "strong" | "neutral" | "weak"> | null
 ): AtBatViewModel[] {
   return atBats.map(ab => {
     const style = AB_OUTCOME_STYLE[ab.outcome] ?? { label: ab.outcome ?? "?", color: "#6b7280" };
     const la = ab.launchAngle != null ? launchAngleLabel(ab.launchAngle) : null;
-    const pitchRating = getPitchChipColor(ab.pitchType);
+    const matchupRating = ab.pitchType ? pitchMatchupRatings?.[ab.pitchType] ?? null : null;
+    const pitchRating = getPitchChipColor(ab.pitchType, matchupRating);
     return {
       outcome: ab.outcome,
       outcomeLabel: style.label,
@@ -397,8 +399,10 @@ export function buildAtBatLogViewModel(
   });
 }
 
-function getPitchChipColor(pitchType: string | null): string {
+function getPitchChipColor(pitchType: string | null, matchupRating?: "strong" | "neutral" | "weak" | null): string {
   if (!pitchType) return "#6b7280";
+  if (matchupRating === "strong") return "#22c55e";
+  if (matchupRating === "weak") return "#ef4444";
   const upper = pitchType.toUpperCase();
   if (["FF", "SI", "FC"].includes(upper)) return "#60a5fa";
   if (["SL", "CU", "ST", "SV", "KC"].includes(upper)) return "#f59e0b";

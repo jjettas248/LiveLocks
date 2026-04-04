@@ -3,15 +3,6 @@ import type { SignalViewModel } from "@/lib/mlb/mlbViewModel";
 import type { MLBSignal } from "@shared/mlbSignal";
 import { buildSignalViewModel, buildTopOpportunitiesViewModel } from "@/lib/mlb/mlbViewModel";
 
-const PITCHER_SIGNAL_DISPLAY: Record<string, { label: string; color: string }> = {
-  DOMINANT: { label: "Dominant", color: "#ef4444" },
-  K_STREAK: { label: "K Streak", color: "#f59e0b" },
-  COMMAND_LOCKED: { label: "Locked In", color: "#22c55e" },
-  VELOCITY_DROP: { label: "Velo Drop", color: "#f97316" },
-  FATIGUE_RISK: { label: "Fatigued", color: "#f97316" },
-  HARD_CONTACT: { label: "Hard Hit", color: "#ef4444" },
-};
-
 export function TopLiveOpportunities({
   signals,
   onAddToSlip,
@@ -36,7 +27,7 @@ export function TopLiveOpportunities({
         {ranked.map((vm, idx) => {
           const color = vm.liveGrade?.color ?? "#94a3b8";
           const grade = vm.liveGrade?.grade ?? "C";
-          const pitcherSigs = (vm.raw.pitcherSignals ?? []) as string[];
+          const pitcherSigs = vm.pitcherSignals ?? [];
           const hasEventBoost = vm.eventBoost > 30;
 
           return (
@@ -70,15 +61,11 @@ export function TopLiveOpportunities({
                       <Flame className="w-2.5 h-2.5" /> BOOST
                     </span>
                   )}
-                  {pitcherSigs.slice(0, 2).map(ps => {
-                    const display = PITCHER_SIGNAL_DISPLAY[ps];
-                    if (!display) return null;
-                    return (
-                      <span key={ps} className="text-[8px] font-black px-1 py-0.5 rounded-full border" style={{ borderColor: `${display.color}40`, color: display.color, background: `${display.color}10` }}>
-                        {display.label}
-                      </span>
-                    );
-                  })}
+                  {pitcherSigs.slice(0, 2).map((ps, psIdx) => (
+                    <span key={psIdx} className="text-[8px] font-black px-1 py-0.5 rounded-full border" style={{ borderColor: `${ps.color}40`, color: ps.color, background: `${ps.color}10` }}>
+                      {ps.label}
+                    </span>
+                  ))}
                 </div>
               </div>
 
@@ -91,7 +78,7 @@ export function TopLiveOpportunities({
                 </div>
                 {vm.oppGrade && (
                   <span className="text-[8px] font-semibold mt-0.5" style={{ color: `${color}99` }}>
-                    Opp {vm.oppGrade}
+                    Matchup {vm.oppGrade}
                   </span>
                 )}
               </div>

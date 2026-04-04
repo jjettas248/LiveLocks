@@ -244,7 +244,7 @@ function SignalStrip({ signals, onPlayerClick }: { signals: MlbSignalData[]; onP
                 <span className="text-[10px] font-bold text-foreground truncate">{sig.playerName}</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[9px] text-muted-foreground">{SIGNAL_STRIP_MARKET_SHORT[sig.market] ?? sig.market}</span>
+                <span className="text-[9px] text-muted-foreground">{SIGNAL_STRIP_MARKET_SHORT[sig.market] ?? sig.market.replace(/_/g, " ")}</span>
                 <span className={`text-[10px] font-black ${sideColor}`}>{sig.recommendedSide}</span>
                 <span className="text-[10px] font-bold tabular-nums" style={{ color: tierColor }}>{pct.toFixed(0)}%</span>
                 {sig.edge != null && sig.edge > 0 && (
@@ -319,7 +319,7 @@ function SpikeAlertBanner({ signals }: { signals: MlbSignalData[] }) {
           )}
           <span className="text-[11px] font-bold text-foreground">{top.playerName}</span>
           <span className={`text-[10px] font-black ${top.recommendedSide === "OVER" ? "text-green-400" : "text-blue-400"}`}>
-            {SIGNAL_STRIP_MARKET_SHORT[top.market] ?? top.market} {top.recommendedSide}
+            {SIGNAL_STRIP_MARKET_SHORT[top.market] ?? top.market.replace(/_/g, " ")} {top.recommendedSide}
           </span>
           <span className="text-[10px] font-bold tabular-nums text-foreground">{normalizePct(top.enginePct).toFixed(0)}%</span>
           {top.liveScore != null && top.liveScore > 0 && (() => {
@@ -839,50 +839,54 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
   const conversionStats = alertData?.conversionStats ?? null;
 
   const radarState = new Map<string, HrRadarCardUi>();
+  const radarKey = (playerId: string, gameId: string) => `${playerId}-${gameId || "unknown"}`;
 
   for (const w of watchlist) {
     const card = mapHrRadarCardToUi(w, "watch");
-    radarState.set(card.playerId, card);
+    radarState.set(radarKey(card.playerId, card.gameId), card);
   }
   for (const a of alerts) {
     if (a.outcome !== null) continue;
     if (a.alertType === "HR_EARLY") continue;
     const card = mapAlertToUi(a);
-    if (!radarState.has(card.playerId)) {
-      radarState.set(card.playerId, { ...card, status: "WATCH" });
+    const key = radarKey(card.playerId, card.gameId);
+    if (!radarState.has(key)) {
+      radarState.set(key, { ...card, status: "WATCH" });
     }
   }
   for (const b of bettable) {
     const card = mapHrRadarCardToUi(b, "edge");
-    radarState.set(card.playerId, card);
+    radarState.set(radarKey(card.playerId, card.gameId), card);
   }
   for (const a of alerts) {
     if (a.outcome !== null) continue;
     if (a.alertType !== "HR_EARLY") continue;
-    const existing = radarState.get(a.playerId);
+    const key = radarKey(a.playerId, a.gameId);
+    const existing = radarState.get(key);
     const card = mapAlertToUi(a);
     if (existing) {
-      radarState.set(card.playerId, { ...existing, status: "ALERT", detectedInning: card.detectedInning ?? existing.detectedInning, latestInning: card.latestInning ?? existing.latestInning });
+      radarState.set(key, { ...existing, status: "ALERT", detectedInning: card.detectedInning ?? existing.detectedInning, latestInning: card.latestInning ?? existing.latestInning });
     } else {
-      radarState.set(card.playerId, card);
+      radarState.set(key, card);
     }
   }
   for (const c of cashedToday) {
     const card = mapHrRadarCardToUi(c, "cashed");
-    radarState.set(card.playerId, card);
+    radarState.set(radarKey(card.playerId, card.gameId), card);
   }
   for (const a of alerts.filter(al => al.outcome === "HR")) {
     const card = mapAlertToUi(a);
-    radarState.set(card.playerId, { ...card, status: "CASHED" });
+    radarState.set(radarKey(card.playerId, card.gameId), { ...card, status: "CASHED" });
   }
   const missedAlertsList = alerts.filter(a => a.outcome === "NO_HR");
   const seenMissed = new Set<string>();
   for (const a of missedAlertsList) {
-    if (seenMissed.has(a.playerId)) continue;
-    seenMissed.add(a.playerId);
-    if (radarState.has(a.playerId)) continue;
+    const key = radarKey(a.playerId, a.gameId);
+    if (seenMissed.has(key)) continue;
+    seenMissed.add(key);
+    if (radarState.has(key)) continue;
     const card = mapAlertToUi(a);
-    radarState.set(card.playerId, { ...card, status: "MISSED" });
+    radarState.set(key, { ...card, status: "MISSED" });
     if (seenMissed.size >= 6) break;
   }
 
@@ -909,7 +913,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {(isElite ? dedupActive : dedupActive.slice(0, 2)).map(c => (
-              <RadarCard key={c.playerId} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+              <RadarCard key={`${c.playerId}-${c.gameId}`} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
             ))}
           </div>
           {!isElite && dedupActive.length > 2 && (
@@ -934,7 +938,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {dedupWatch.map(c => (
-              <RadarCard key={c.playerId} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+              <RadarCard key={`${c.playerId}-${c.gameId}`} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
             ))}
           </div>
         </div>
@@ -962,7 +966,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {dedupCashed.map(c => (
-                  <RadarCard key={`cashed-${c.playerId}`} card={c} gameTeams={null} />
+                  <RadarCard key={`cashed-${c.playerId}-${c.gameId}`} card={c} gameTeams={null} />
                 ))}
               </div>
             </div>
@@ -975,7 +979,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {missedCards.map(c => (
-                  <RadarCard key={`missed-${c.playerId}`} card={c} gameTeams={null} />
+                  <RadarCard key={`missed-${c.playerId}-${c.gameId}`} card={c} gameTeams={null} />
                 ))}
               </div>
             </div>
@@ -1022,7 +1026,7 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
     <div className="rounded-xl border border-border bg-card p-5 space-y-5 animate-in slide-in-from-top-2 duration-300" data-testid="mlb-calc-results">
       <div className="bg-secondary/20 rounded-lg p-3 text-center space-y-1">
         <div className="text-xs text-muted-foreground">{activeCalcName}</div>
-        <div className="text-[10px] text-muted-foreground">{MARKET_LABELS[calcMarket] ?? calcMarket} {calcBookLine}</div>
+        <div className="text-[10px] text-muted-foreground">{MARKET_LABELS[calcMarket] ?? calcMarket.replace(/_/g, " ")} {calcBookLine}</div>
       </div>
 
       <div className="flex items-center justify-center">
@@ -1232,15 +1236,36 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
   const rawSignals: MlbSignalData[] = Array.isArray(edgeFeedResp?.signals)
     ? (edgeFeedResp!.signals as MlbSignalData[]).map(s => mapMlbSignalToUi(s) as unknown as MlbSignalData)
     : [];
-  const prevSignalsRef = useRef<MlbSignalData[]>([]);
+  const stickySignalMapRef = useRef<Map<string, MlbSignalData & { _stickyTs?: number }>>(new Map());
+  const STICKY_TTL_MS = 30 * 60 * 1000;
   const edgeFeedSignals = (() => {
-    const currentKeys = new Set(rawSignals.map(s => `${s.playerId}|${s.market}|${s.gameId}`));
-    const stale = prevSignalsRef.current
-      .filter(s => !currentKeys.has(`${s.playerId}|${s.market}|${s.gameId}`))
-      .map(s => ({ ...s, stale: true } as MlbSignalData));
-    const merged = [...rawSignals, ...stale];
-    prevSignalsRef.current = rawSignals;
-    return merged;
+    const currentMap = new Map<string, MlbSignalData>();
+    for (const s of rawSignals) {
+      currentMap.set(`${s.playerId}|${s.market}|${s.gameId}`, s);
+    }
+    const now = Date.now();
+    const merged = new Map<string, MlbSignalData & { _stickyTs?: number }>(stickySignalMapRef.current);
+    Array.from(merged.entries()).forEach(([key, sig]) => {
+      if (!currentMap.has(key)) {
+        const ts = sig._stickyTs ?? now;
+        if (now - ts > STICKY_TTL_MS) {
+          merged.delete(key);
+        } else {
+          merged.set(key, { ...sig, stale: true, _stickyTs: ts } as MlbSignalData & { _stickyTs?: number });
+        }
+      }
+    });
+    Array.from(currentMap.entries()).forEach(([key, sig]) => {
+      merged.set(key, { ...sig, _stickyTs: undefined } as MlbSignalData & { _stickyTs?: number });
+    });
+    const activeGameIds = new Set(games.map(g => g?.gameId).filter(Boolean));
+    Array.from(merged.entries()).forEach(([key, sig]) => {
+      if (sig.gameId && !activeGameIds.has(sig.gameId)) {
+        merged.delete(key);
+      }
+    });
+    stickySignalMapRef.current = merged;
+    return Array.from(merged.values());
   })();
 
   const selectedGame = games.find(g => g?.gameId === selectedGameId) ?? null;
@@ -1468,7 +1493,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
             <GameChipStrip
               games={games}
               selectedGameId={selectedGameId}
-              onSelectGame={(id) => { setSelectedGameId(id); setCalcPlayer(null); setCalcPlayerName(""); setCalcResult(null); setCalcBookLine(""); setSelectedBook(null); }}
+              onSelectGame={(id) => { setSelectedGameId(id); setCalcResult(null); }}
               edgeFeedSignals={edgeFeedSignals}
               onRefresh={handleRefresh}
               dataUpdatedAt={gamesUpdatedAt}
@@ -1859,7 +1884,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                     <span className="font-semibold text-foreground truncate block">{pick.playerName}</span>
                     <div className="flex items-center gap-1.5 text-muted-foreground flex-wrap">
                       <span className={`font-bold ${pick.side === "OVER" ? "text-green-400" : "text-blue-400"}`}>{pick.side}</span>
-                      <span>{MARKET_LABELS[pick.market] ?? pick.market} {pick.line}</span>
+                      <span>{MARKET_LABELS[pick.market] ?? pick.market.replace(/_/g, " ")} {pick.line}</span>
                       {pick.edge != null && pick.edge > 0 && <span className="text-green-400 font-semibold">+{pick.edge.toFixed(1)}%</span>}
                       {pick.overOdds != null && pick.side === "OVER" && <span>({formatOdds(pick.overOdds)})</span>}
                       {pick.underOdds != null && pick.side === "UNDER" && <span>({formatOdds(pick.underOdds)})</span>}
@@ -1878,7 +1903,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                 data-testid="button-copy-mlb-slip"
                 className="text-xs py-3 min-h-[44px] rounded-lg border border-border hover:bg-muted transition-colors text-foreground font-semibold px-3"
                 onClick={() => {
-                  const text = mlbSlipPicks.map(p => `${p.playerName} \u2014 ${MARKET_LABELS[p.market] ?? p.market} ${p.side} ${p.line}`).join("\n");
+                  const text = mlbSlipPicks.map(p => `${p.playerName} \u2014 ${MARKET_LABELS[p.market] ?? p.market.replace(/_/g, " ")} ${p.side} ${p.line}`).join("\n");
                   navigator.clipboard?.writeText(text);
                 }}
               >Copy</button>
@@ -1888,7 +1913,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                 target="_blank" rel="noopener noreferrer"
                 className="flex-1 text-xs py-3 min-h-[44px] rounded-lg bg-[#1a6f3c] hover:bg-[#1a8f4c] text-white text-center font-semibold transition-colors"
                 onClick={() => {
-                  const text = mlbSlipPicks.map(p => `${p.playerName} \u2014 ${MARKET_LABELS[p.market] ?? p.market} ${p.side} ${p.line}`).join("\n");
+                  const text = mlbSlipPicks.map(p => `${p.playerName} \u2014 ${MARKET_LABELS[p.market] ?? p.market.replace(/_/g, " ")} ${p.side} ${p.line}`).join("\n");
                   navigator.clipboard?.writeText(text);
                 }}
               >DraftKings</a>
@@ -1898,7 +1923,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                 target="_blank" rel="noopener noreferrer"
                 className="flex-1 text-xs py-3 min-h-[44px] rounded-lg bg-[#1493ff] hover:bg-[#0d7ee6] text-white text-center font-semibold transition-colors"
                 onClick={() => {
-                  const text = mlbSlipPicks.map(p => `${p.playerName} \u2014 ${MARKET_LABELS[p.market] ?? p.market} ${p.side} ${p.line}`).join("\n");
+                  const text = mlbSlipPicks.map(p => `${p.playerName} \u2014 ${MARKET_LABELS[p.market] ?? p.market.replace(/_/g, " ")} ${p.side} ${p.line}`).join("\n");
                   navigator.clipboard?.writeText(text);
                 }}
               >FanDuel</a>

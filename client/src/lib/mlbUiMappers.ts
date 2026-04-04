@@ -57,6 +57,14 @@ const TRIGGER_REASON_MAP: Record<string, string> = {
   "hard_trigger:barrel+avgEV95+inn5+score": "High contact quality + barrel + deep in game",
   "repeat_contact:last2ABs_EV95+_LA20-35": "Back-to-back hard, well-angled contact",
   "soft_trigger:avgEV92+score3.5": "Consistent hard contact building",
+  "hard_trigger:barrel": "Barrel contact — HR potential rising",
+  "hard_trigger:avgEV95": "Elite exit velocity today",
+  "repeat_contact": "Repeated hard contact pattern",
+  "soft_trigger": "Consistent hard contact building",
+  "late_game_spike": "Late-game HR window with strong contact",
+  "bullpen_downgrade": "Weaker reliever now pitching",
+  "fatigue_spike": "Pitcher fatigue creating opportunity",
+  "park_wind_boost": "Park and wind conditions favorable",
 };
 
 export function liveScoreToGrade(score: number): { grade: string; color: string } {
@@ -93,19 +101,33 @@ export function formatTriggerReason(raw: string | null | undefined): string {
   if (raw.startsWith("leaderboard:")) {
     const parts = raw.replace("leaderboard:", "");
     if (parts.includes("topEV")) return "Elite exit velocity today";
-    if (parts.includes("topDistance")) return "Deep flyball — near warning track";
-    return "Leaderboard-level contact";
+    if (parts.includes("topDistance")) return "Deep flyball risk";
+    if (parts.includes("topBarrel")) return "Barrel pressure building";
+    if (parts.includes("topHardHit")) return "Strong contact build";
+    return "Leaderboard-level contact today";
   }
   if (raw.startsWith("late_game_spike:")) {
     return "Late-game HR window with strong contact";
   }
-  return raw
-    .replace(/_/g, " ")
-    .replace(/score\d+(\.\d+)?/g, "")
-    .replace(/inn\d+/g, "")
-    .replace(/[+:]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim() || "Signal detected";
+  if (raw.startsWith("bullpen_downgrade:")) {
+    return "Weaker reliever now pitching";
+  }
+  if (raw.startsWith("fatigue_spike:")) {
+    return "Pitcher fatigue creating opportunity";
+  }
+  if (raw.startsWith("park_wind:")) {
+    return "Park and wind conditions favorable";
+  }
+  if (raw.startsWith("platoon_advantage:")) {
+    return "Platoon advantage active";
+  }
+  if (raw.includes("barrel") && raw.includes("EV")) {
+    return "Barrel contact with elite exit velocity";
+  }
+  if (raw.includes("hard_hit") || raw.includes("hardHit")) {
+    return "Hard contact pattern detected";
+  }
+  return "Signal detected";
 }
 
 function clampPct(val: number): number {
@@ -143,15 +165,23 @@ export function formatMlbDisplayValue(key: string, value: number | string | null
 }
 
 export function sanitizeDisplayString(str: string): string {
-  return str
+  let cleaned = str
     .replace(/[\u0080-\u009f]/g, "")
     .replace(/\u00B7/g, "|")
     .replace(/\\u00B7/g, "|")
     .replace(/\u2713/g, "✓")
     .replace(/leaderboard:\w+/g, "")
     .replace(/score\d+(\.\d+)?/g, "")
+    .replace(/inn\d+/g, "")
+    .replace(/hard_trigger:\S*/g, "")
+    .replace(/soft_trigger:\S*/g, "")
+    .replace(/repeat_contact:\S*/g, "")
+    .replace(/late_game_spike:\S*/g, "")
+    .replace(/[+:]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  if (!cleaned || cleaned.length < 3) cleaned = "Signal detected";
+  return cleaned;
 }
 
 export function mapPitcherSignals(signals: string[] | null | undefined): Array<{ label: string; color: string }> {

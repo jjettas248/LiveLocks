@@ -9,7 +9,7 @@ import {
   generateShareTweet,
   openShareWindow,
 } from "@/lib/mlbFormatters";
-import { liveScoreToGrade, launchAngleLabel } from "@/lib/mlbUiMappers";
+import { liveScoreToGrade, launchAngleLabel, sanitizeDisplayString } from "@/lib/mlbUiMappers";
 import { normalizePct } from "@/lib/mlb/mlbViewModel";
 import type { MLBSignal } from "@shared/mlbSignal";
 
@@ -65,6 +65,23 @@ const BADGE_DISPLAY: Record<string, { label: string; color: string } | null> = {
   "Weak Contact": { label: "Soft Contact", color: "#ef4444" },
   "Pitcher Suppression Risk": { label: "Dominant Pitcher", color: "#ef4444" },
   "Late-Lineup Risk": { label: "Low in Order", color: "#f59e0b" },
+};
+
+const HR_FACTOR_LABELS: Record<string, string> = {
+  barrel_contact: "Barrel Contact",
+  high_ev: "High Exit Velo",
+  deep_flyout: "Deep Flyball",
+  hard_hit: "Hard Hit",
+  sweet_spot: "Sweet Spot Angle",
+  park_boost: "Park Factor",
+  wind_boost: "Wind Favorable",
+  fatigue_boost: "Pitcher Fatigue",
+  platoon_boost: "Platoon Edge",
+  bat_speed: "Bat Speed",
+  topEV: "Elite Exit Velo",
+  topDistance: "Deep Flyball",
+  topBarrel: "Barrel Machine",
+  topHardHit: "Hard Contact Leader",
 };
 
 function driverBar(val: number): { color: string; label: string } {
@@ -124,8 +141,8 @@ export function MlbSignalCard({
 
   const detectionLabel = `${sig.recommendedSide} ${sig.bookLine ?? ""} ${marketLabel}`.trim();
 
-  const smartTags = sig.smartTags ?? [];
-  const primaryReason = sig.primaryReason ?? "";
+  const smartTags = (sig.smartTags ?? []).map(t => sanitizeDisplayString(t)).filter(t => t.length >= 3);
+  const primaryReason = sig.primaryReason ? sanitizeDisplayString(sig.primaryReason) : "";
 
   const isPitcherMarket = sig.market.startsWith("pitcher_") || sig.market === "hits_allowed" || sig.market === "walks_allowed" || sig.market === "hr_allowed";
   const driverLabels = isPitcherMarket ? PITCHER_DRIVER_LABELS : BATTER_DRIVER_LABELS;
@@ -227,7 +244,7 @@ export function MlbSignalCard({
                   background: `${hrStyle.border}20`,
                 }}
               >
-                ⚡ {hrStyle.badge}{hrBuildScore != null ? ` ${hrBuildScore.toFixed(1)}` : ""}
+                ⚡ {hrStyle.badge}
               </span>
             )}
             {sig.pitcherSignals && sig.pitcherSignals.length > 0 && sig.pitcherSignals.slice(0, 2).map(ps => {
@@ -337,10 +354,10 @@ export function MlbSignalCard({
                 </span>
               </div>
             )}
-            {sig.signalScore > 0 && (
+            {stability && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Confidence</span>
-                <span className="font-semibold text-foreground">{sig.signalScore}/100</span>
+                <span className="font-bold" style={{ color: stability.color }}>{stability.grade}</span>
               </div>
             )}
           </div>
@@ -408,11 +425,9 @@ export function MlbSignalCard({
                 <span className="text-[9px] font-bold uppercase tracking-wider" style={{ color: hrStyle.text }}>
                   HR Radar Profile
                 </span>
-                {hrBuildScore != null && (
-                  <span className="text-[10px] font-black tabular-nums" style={{ color: hrStyle.text }}>
-                    {hrBuildScore.toFixed(1)}/10
-                  </span>
-                )}
+                <span className="text-[10px] font-black" style={{ color: hrStyle.text }}>
+                  {hrStyle.badge}
+                </span>
               </div>
               <div className="grid grid-cols-3 gap-1.5 text-[9px]">
                 {hrBuild.avgEV != null && (
@@ -460,11 +475,15 @@ export function MlbSignalCard({
               </div>
               {sig.hrFactors?.labels && (sig.hrFactors.labels as string[]).length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-1">
-                  {(sig.hrFactors.labels as string[]).map((label: string) => (
-                    <span key={label} className="text-[8px] px-1.5 py-0.5 rounded-full font-medium border" style={{ color: hrStyle.text, borderColor: `${hrStyle.border}40`, background: `${hrStyle.border}15` }}>
-                      {label}
-                    </span>
-                  ))}
+                  {(sig.hrFactors.labels as string[]).map((label: string) => {
+                    const cleaned = HR_FACTOR_LABELS[label] ?? label.replace(/_/g, " ").replace(/[+:]/g, " ").replace(/\s+/g, " ").trim();
+                    if (!cleaned || cleaned.length < 2) return null;
+                    return (
+                      <span key={label} className="text-[8px] px-1.5 py-0.5 rounded-full font-medium border" style={{ color: hrStyle.text, borderColor: `${hrStyle.border}40`, background: `${hrStyle.border}15` }}>
+                        {cleaned}
+                      </span>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -614,11 +633,15 @@ export function MlbSignalCard({
                   Ceiling Applied
                 </span>
               )}
-              {sig.riskFlags.map((f) => (
-                <span key={f} className="text-[8px] px-1.5 py-0.5 rounded-full font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                  {f}
-                </span>
-              ))}
+              {sig.riskFlags.map((f) => {
+                const label = sanitizeDisplayString(f);
+                if (label.length < 3) return null;
+                return (
+                  <span key={f} className="text-[8px] px-1.5 py-0.5 rounded-full font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    {label}
+                  </span>
+                );
+              })}
             </div>
           )}
         </div>
