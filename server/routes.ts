@@ -1306,6 +1306,13 @@ export async function registerRoutes(
         if (trigger.startsWith("hard_trigger") || trigger.startsWith("repeat_contact")) {
           return { signalState: "PEAK", decision: "BET_NOW" };
         }
+        if (trigger.startsWith("PATH_A") && score >= 6) return { signalState: "PEAK", decision: "BET_NOW" };
+        if (trigger.startsWith("PATH_A")) return { signalState: "BUILDING", decision: "PREPARE" };
+        if (trigger.startsWith("PATH_B") && score >= 7) return { signalState: "PEAK", decision: "BET_NOW" };
+        if (trigger.startsWith("PATH_B")) return { signalState: "BUILDING", decision: "PREPARE" };
+        if (trigger.startsWith("PATH_C") && score >= 7) return { signalState: "PEAK", decision: "BET_NOW" };
+        if (trigger.startsWith("PATH_C")) return { signalState: "BUILDING", decision: "PREPARE" };
+        if (trigger.startsWith("watch:")) return { signalState: "FORMATION", decision: "MONITOR" };
         if (trigger.startsWith("leaderboard") || trigger.startsWith("late_game_spike")) {
           return { signalState: "BUILDING", decision: "PREPARE" };
         }
@@ -1318,6 +1325,24 @@ export async function registerRoutes(
       function deriveFormattedReason(trigger: string | null, factors: any, inning: number | null): string {
         if (!trigger) return "";
         if (trigger === "cooldown") return "Recently alerted — signal on cooldown.";
+        if (trigger.startsWith("PATH_A")) {
+          return `Multiple HR-shaped contact events detected. Quality exit velocity and launch angle pattern building${inning ? ` through ${ordinalSuffix(inning)} inning` : ""}.`;
+        }
+        if (trigger.startsWith("PATH_B:elite")) {
+          return `Elite HR contact with favorable game conditions. Ball flight and exit velocity at HR levels${inning ? ` in ${ordinalSuffix(inning)} inning` : ""}.`;
+        }
+        if (trigger.startsWith("PATH_B:missed") || trigger.startsWith("PATH_B")) {
+          return `Near-miss HR with supporting context. Strong contact quality and pitcher/environment alignment${inning ? ` in ${ordinalSuffix(inning)} inning` : ""}.`;
+        }
+        if (trigger.startsWith("PATH_C")) {
+          return `Late-game HR window with quality contact${inning ? ` (${ordinalSuffix(inning)} inning)` : ""}. Pitcher vulnerability creating opportunity.`;
+        }
+        if (trigger.startsWith("watch:hrShaped")) {
+          return "HR-shaped contact detected. Monitoring for escalation — need repeat confirmation or stronger context.";
+        }
+        if (trigger.startsWith("watch:")) {
+          return "Contact pattern building. Monitoring for HR-shaped escalation.";
+        }
         if (trigger.includes("barrel") && trigger.includes("avgEV95")) {
           return `Barrel contact + 95+ EV trend. Power building into ${inning ? ordinalSuffix(inning) : "mid-game"} window.`;
         }

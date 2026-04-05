@@ -1496,6 +1496,44 @@ export class LiveGameOrchestrator {
             const hrFactorsBuild = typeof output.hrFactors === "object" && output.hrFactors?.build
               ? output.hrFactors.build
               : { avgEV: null, maxEV: null, avgLA: null, barrels: 0, hardHits: 0, deepFlyouts: 0, batSpeedScore: 0, pitcherFatigueBoost: 0, parkWindBoost: 0, platoonBoost: 0, hrShapedCount: 0, missedHrCount: 0, eliteHrCount: 0, qualifiedEVMean: null, maxDistance: null, contactClasses: [] };
+
+            const isReliever = bullpenCache?.relieversUsed?.some(
+              r => r.playerId === pitcher?.playerId
+            ) ?? false;
+            let relieverEra: number | null = null;
+            if (isReliever && pitcher?.playerId) {
+              relieverEra = pitcherSeasonStats?.era ?? null;
+            }
+
+            let starterEra: number | null = null;
+            if (isReliever && pitcherCtxCache?.byPitcherId && pitcher?.team) {
+              const allPitcherIds = Object.keys(pitcherCtxCache.byPitcherId);
+              const relieverIds = new Set(
+                (bullpenCache?.relieversUsed ?? []).map(r => r.playerId)
+              );
+              for (const pid of allPitcherIds) {
+                if (pid === pitcher.playerId) continue;
+                if (relieverIds.has(pid)) continue;
+                const sStats = mlbPlayerCache.pitcherSeasonStats[pid];
+                if (sStats?.era != null) {
+                  starterEra = sStats.era;
+                  break;
+                }
+              }
+            }
+
+            const pitcherDeteriorationCtx = {
+              velocityDrop: pitcherCtx?.velocityDrop ?? null,
+              avgVelocity: pitcherCtx?.avgVelocity ?? null,
+              seasonAvgVelocity: pitcherCtx?.seasonAvgVelocity ?? null,
+              isReliever,
+              relieverEra,
+              starterEra: isReliever ? starterEra : (pitcherSeasonStats?.era ?? null),
+              bullpenEra: bullpenCache?.bullpenEra ?? null,
+              bullpenUsageLast3Days: bullpenCache?.bullpenUsageLastThreeDays ?? null,
+              relieversUsedCount: bullpenCache?.relieversUsed?.length ?? 0,
+            };
+
             const alertInput: HRAlertInput = {
               playerId: batter.playerId,
               playerName: batter.playerName,
@@ -1519,6 +1557,13 @@ export class LiveGameOrchestrator {
               batterHand: null,
               pitcherThrows: pitcher?.throws ?? null,
               era: pitcherSeasonStats?.era ?? null,
+              currentRuns: (state.homeScore ?? 0) + (state.awayScore ?? 0) || 4.5,
+              leagueAvgRuns: 4.5,
+              seasonHRRate: null,
+              barrelRate: playerContact?.barrelPct != null ? playerContact.barrelPct / 100 : null,
+              hardHitRate: playerContact?.hardHitPct != null ? playerContact.hardHitPct / 100 : null,
+              xSLG: playerContact?.xSLG ?? null,
+              pitcherDeterioration: pitcherDeteriorationCtx,
               priorABResults: (playerContact?.priorABResults ?? []).map((ab: any) => ({
                 exitVelocity: ab.exitVelocity ?? null,
                 launchAngle: ab.launchAngle ?? null,
@@ -1527,9 +1572,13 @@ export class LiveGameOrchestrator {
               })),
             };
             const alertResult = evaluateHRAlert(alertInput);
+            const convResult = alertResult.diagnostics.hrConversion;
+            const rawPct = convResult ? `${(convResult.hrConversionProbability * 100).toFixed(1)}%` : "n/a";
+            const calPct = convResult ? `${(convResult.calibratedProbability * 100).toFixed(1)}%` : "n/a";
+            const detState = convResult?.pitcherDeteriorationState ?? "n/a";
             if (alertResult.level === "ALERT" || alertResult.level === "WATCH") {
               const diag = alertResult.diagnostics;
-              console.log(`[HR_ALERT_TRIGGER] ${alertResult.level} ${batter.playerName} score=${output.hrBuildScore} reason=${alertResult.triggerReason} state=${alertResult.signalState} decision=${alertResult.decision} confidence=${alertResult.confidenceScore} tier=${alertResult.alertTier} path=${diag.alertPath} hrShaped=${diag.hrShapedCount} missed=${diag.missedHrCount} elite=${diag.eliteHrCount} evMean=${diag.qualifiedEVMean} maxDist=${diag.maxDistance} remPA=${diag.remainingPA} pitcher=${diag.pitcherFatigueState} env=${diag.environmentContext} suppressions=${diag.suppressionFlags.length} positives=[${diag.positiveFactors.join("|")}] game=${gameId} inn=${state.inning}`);
+              console.log(`[HR_ALERT_TRIGGER] ${alertResult.level} ${batter.playerName} score=${output.hrBuildScore} rawConv=${rawPct} calConv=${calPct} pitDet=${detState} reason=${alertResult.triggerReason} state=${alertResult.signalState} decision=${alertResult.decision} confidence=${alertResult.confidenceScore} tier=${alertResult.alertTier} path=${diag.alertPath} hrShaped=${diag.hrShapedCount} missed=${diag.missedHrCount} elite=${diag.eliteHrCount} evMean=${diag.qualifiedEVMean} maxDist=${diag.maxDistance} remPA=${diag.remainingPA} pitcher=${diag.pitcherFatigueState} env=${diag.environmentContext} suppressions=${diag.suppressionFlags.length} positives=[${diag.positiveFactors.join("|")}] game=${gameId} inn=${state.inning}`);
               markAlertSent(batter.playerId, gameId);
               storage.insertAlert({
                 playerId: batter.playerId,
@@ -1566,6 +1615,17 @@ export class LiveGameOrchestrator {
                 barrel: (lastAB.exitVelocity ?? 0) >= 98 && (lastAB.launchAngle ?? 0) >= 20 && (lastAB.launchAngle ?? 0) <= 35,
               } : null;
 
+              const convSnap = alertResult.diagnostics?.hrConversion ? {
+                hrConversionProbability: alertResult.diagnostics.hrConversion.hrConversionProbability,
+                calibratedProbability: alertResult.diagnostics.hrConversion.calibratedProbability,
+                perPAHRRate: alertResult.diagnostics.hrConversion.perPAHRRate,
+                expectedRemainingPA: alertResult.diagnostics.hrConversion.expectedRemainingPA,
+                liveContactMultiplier: alertResult.diagnostics.hrConversion.liveContactMultiplier,
+                pitcherMultiplier: alertResult.diagnostics.hrConversion.pitcherMultiplier,
+                environmentMultiplier: alertResult.diagnostics.hrConversion.environmentMultiplier,
+                pitcherDeteriorationState: alertResult.diagnostics.hrConversion.pitcherDeteriorationState,
+              } : null;
+
               const diagSnap = alertResult.diagnostics ? {
                 alertPath: alertResult.diagnostics.alertPath,
                 positiveFactors: alertResult.diagnostics.positiveFactors,
@@ -1578,6 +1638,7 @@ export class LiveGameOrchestrator {
                 remainingPA: alertResult.diagnostics.remainingPA,
                 pitcherFatigueState: alertResult.diagnostics.pitcherFatigueState,
                 environmentContext: alertResult.diagnostics.environmentContext,
+                hrConversion: convSnap,
                 contactClasses: alertResult.diagnostics.contactClasses.map(c => ({
                   contactClass: c.contactClass, exitVelocity: c.exitVelocity,
                   launchAngle: c.launchAngle, distance: c.distance,
@@ -1597,7 +1658,7 @@ export class LiveGameOrchestrator {
                 confidenceTier: tierMap[alertResult.signalState ?? "FORMATION"] ?? "monitor",
                 signalState: stateMap[alertResult.signalState ?? "FORMATION"] ?? "live",
                 triggerTags: alertResult.triggerReason ? alertResult.triggerReason.split(", ") : [],
-                summaryText: `${alertResult.decision} — ${alertResult.triggerReason}`,
+                summaryText: alertResult.formattedReason || `${alertResult.decision} — ${alertResult.triggerReason}`,
                 contactSnapshot: contactSnap,
                 alertPath: alertResult.diagnostics?.alertPath ?? null,
                 alertTier: alertResult.alertTier ?? null,

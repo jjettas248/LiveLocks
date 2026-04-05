@@ -155,6 +155,24 @@ const MLB_ODDS_STAT_MAP: Record<string, string> = {
   hits_allowed: "hits_allowed", walks_allowed: "walks_allowed", hr_allowed: "hr_allowed",
 };
 
+const TRIGGER_TAG_MAP: Record<string, string> = {
+  "PATH_A": "Multi HR-Shaped", "PATH_B": "Elite Contact", "PATH_C": "Late Game",
+  "watch": "Monitoring", "cooldown": "Cooldown",
+};
+function formatTriggerTag(raw: string): string {
+  if (!raw) return "";
+  for (const [prefix, label] of Object.entries(TRIGGER_TAG_MAP)) {
+    if (raw.startsWith(prefix)) return label;
+  }
+  if (raw.includes("hrShaped")) return "HR-Shaped Contact";
+  if (raw.includes("elite")) return "Elite Contact";
+  if (raw.includes("missed")) return "Near-Miss HR";
+  if (raw.includes("barrel")) return "Barrel";
+  if (raw.includes("hard_hit") || raw.includes("hardHit")) return "Hard Hit";
+  if (raw.includes("deepFly")) return "Deep Fly";
+  return raw.replace(/[:_]/g, " ").replace(/\b\w/g, c => c.toUpperCase()).slice(0, 30);
+}
+
 const BOOK_DISPLAY: Record<string, string> = {
   draftkings: "DraftKings",
   fanduel: "FanDuel",
@@ -936,7 +954,7 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
             {(alert.triggerTags ?? []).length > 0 && (
               <div className="flex flex-wrap gap-1">
                 {(alert.triggerTags as string[]).map((tag: string, i: number) => (
-                  <span key={i} className="text-[8px] px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-400 font-semibold">{tag}</span>
+                  <span key={i} className="text-[8px] px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-400 font-semibold">{formatTriggerTag(tag)}</span>
                 ))}
               </div>
             )}

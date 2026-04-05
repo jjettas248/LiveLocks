@@ -121,6 +121,11 @@ const TRIGGER_REASON_MAP: Record<string, string> = {
   "park_wind_boost": "Park and wind conditions favorable",
   "park_wind": "Park and wind conditions favorable",
   "platoon_advantage": "Platoon advantage active",
+  "PATH_A:multiHrShaped": "Multiple HR-shaped contact events detected",
+  "PATH_B:elite+context": "Elite HR contact with favorable conditions",
+  "PATH_B:missed+context": "Near-miss HR with supporting context",
+  "PATH_C:lateGame+hrShaped": "Late-game HR window with quality contact",
+  "watch:hrShaped": "HR-shaped contact detected — monitoring",
 };
 
 export function liveScoreToGrade(score: number): { grade: string; color: string } {
@@ -162,6 +167,13 @@ export function formatTriggerReason(raw: string | null | undefined): string {
     if (parts.includes("topHardHit")) return "Strong contact build";
     return "Leaderboard-level contact today";
   }
+  if (raw.startsWith("PATH_A")) return "Multiple HR-shaped contact events detected";
+  if (raw.startsWith("PATH_B:elite")) return "Elite HR contact with favorable conditions";
+  if (raw.startsWith("PATH_B:missed")) return "Near-miss HR with supporting context";
+  if (raw.startsWith("PATH_B")) return "Strong HR contact with favorable conditions";
+  if (raw.startsWith("PATH_C")) return "Late-game HR window with quality contact";
+  if (raw.startsWith("watch:hrShaped")) return "HR-shaped contact detected — monitoring";
+  if (raw.startsWith("watch:")) return "Contact pattern building — monitoring";
   if (raw.includes("barrel") && raw.includes("EV")) {
     return "Barrel contact with elite exit velocity";
   }
