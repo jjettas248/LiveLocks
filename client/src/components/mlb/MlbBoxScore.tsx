@@ -5,8 +5,8 @@ import { queryClient } from "@/lib/queryClient";
 import type { MlbSignalData } from "./MlbSignalCard";
 import { MlbSignalCard } from "./MlbSignalCard";
 import {
-  deriveMlbQuickViewColorTier, deriveBestPlay, COLOR_TIER_STYLES,
-  type MlbQuickViewColorTier,
+  deriveMlbQuickViewColorTier, deriveBestPlay, deriveAllPlayerPlays, COLOR_TIER_STYLES,
+  type MlbQuickViewColorTier, type BestPlayInfo,
 } from "@/lib/mlb/mlbNormalizers";
 
 const SHORT_MARKET_LABELS: Record<string, string> = {
@@ -120,7 +120,6 @@ export function MlbBoxScore({
   const [activeTab, setActiveTab] = useState<"all" | "away" | "home" | "signals">("all");
   const [collapsed, setCollapsed] = useState(false);
   const stickyBadgeCache = useRef<Map<string, Set<string>>>(new Map());
-
   useEffect(() => {
     stickyBadgeCache.current = new Map();
   }, [gameId]);
@@ -151,17 +150,24 @@ export function MlbBoxScore({
   }
 
   const sorted = [...filtered].sort((a, b) => {
+    if (sortBy === "signal") {
+      const sigA = deriveBestPlay(gameSignals, a.playerId);
+      const sigB = deriveBestPlay(gameSignals, b.playerId);
+      return (sigB?.probability ?? 0) - (sigA?.probability ?? 0);
+    }
+    const sigA = deriveBestPlay(gameSignals, a.playerId);
+    const sigB = deriveBestPlay(gameSignals, b.playerId);
+    if (sigA && !sigB) return -1;
+    if (!sigA && sigB) return 1;
+    if (sigA && sigB && sortBy === "order") {
+      return (sigB.probability ?? 0) - (sigA.probability ?? 0);
+    }
     if (sortBy === "order") return (a.battingOrderSlot || 99) - (b.battingOrderSlot || 99);
     if (sortBy === "ab") return b.ab - a.ab;
     if (sortBy === "h") return b.h - a.h;
     if (sortBy === "hr") return b.hr - a.hr;
     if (sortBy === "tb") return b.tb - a.tb;
     if (sortBy === "k") return b.k - a.k;
-    if (sortBy === "signal") {
-      const sigA = deriveBestPlay(signals, a.playerId);
-      const sigB = deriveBestPlay(signals, b.playerId);
-      return (sigB?.probability ?? 0) - (sigA?.probability ?? 0);
-    }
     return 0;
   });
 
@@ -288,6 +294,14 @@ export function MlbBoxScore({
         </div>
       ) : !collapsed ? (
         <>
+          <div className="px-3 pt-2 pb-1 flex items-center gap-3 text-[9px] text-muted-foreground/70 border-b border-border/20 flex-wrap">
+            <span className="font-semibold uppercase tracking-wider">Signal Key:</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: "#22c55e" }} /> Strong (75%+)</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: "#eab308" }} /> Building (65%+)</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: "#3b82f6" }} /> Monitor (55%+)</span>
+            <span className="flex items-center gap-1"><span className="text-orange-400 font-bold">95+</span> Hard EV</span>
+          </div>
+
           <div className="overflow-x-auto">
             <table className="w-full text-[10px]">
               <thead>
@@ -328,10 +342,52 @@ export function MlbBoxScore({
               </thead>
               <tbody>
                 {sorted.map((player) => {
-                  const colorTier = deriveMlbQuickViewColorTier(signals, player.playerId);
-                  const bestPlay = deriveBestPlay(signals, player.playerId);
+                  const colorTier = deriveMlbQuickViewColorTier(gameSignals, player.playerId);
+                  const allPlays = deriveAllPlayerPlays(gameSignals, player.playerId);
                   const tierStyle = colorTier !== "neutral" ? COLOR_TIER_STYLES[colorTier] : null;
                   const stickyBadges = getStickySignalBadges(player, stickyBadgeCache);
+
+                  let signalBadge: JSX.Element | null = null;
+                  if (allPlays.length > 0) {
+                    const rotationIndex = Math.floor(Date.now() / 45000);
+                    const cycleIdx = rotationIndex % allPlays.length;
+                    const current = allPlays[cycleIdx];
+                    const pct = current.probability;
+                    const playTier = pct >= 75 ? "green" as const : pct >= 65 ? "yellow" as const : "blue" as const;
+                    const playStyle = COLOR_TIER_STYLES[playTier];
+                    const sideLabel = current.side === "UNDER" || current.side === "under" ? "U" : "O";
+
+                    signalBadge = (
+                      <span className="flex items-center gap-1">
+                        <span
+                          data-testid={`signal-badge-${player.playerId}-${current.market}`}
+                          title={allPlays.map(p => `${p.side === "UNDER" || p.side === "under" ? "U" : "O"} ${SHORT_MARKET_LABELS[p.market] ?? p.market} ${p.probability.toFixed(0)}%`).join(", ")}
+                          className="cursor-help select-none whitespace-nowrap leading-none"
+                          style={{
+                            background: playStyle.bg,
+                            color: playStyle.dot,
+                            border: `1px solid ${playStyle.border}`,
+                            fontSize: "10px",
+                            fontWeight: 700,
+                            padding: "2px 5px",
+                            borderRadius: "4px",
+                          }}
+                        >
+                          {sideLabel} {SHORT_MARKET_LABELS[current.market] ?? current.market} {pct.toFixed(0)}%
+                        </span>
+                        {allPlays.length > 1 && (
+                          <span
+                            className="text-muted-foreground select-none"
+                            style={{ fontSize: "8px", opacity: 0.7 }}
+                            title={allPlays.map(p => `${SHORT_MARKET_LABELS[p.market] ?? p.market}`).join(", ")}
+                            data-testid={`signal-count-${player.playerId}`}
+                          >
+                            +{allPlays.length - 1}
+                          </span>
+                        )}
+                      </span>
+                    );
+                  }
 
                   return (
                     <tr
@@ -385,22 +441,7 @@ export function MlbBoxScore({
                         )}
                       </td>
                       <td className="text-center px-1.5 py-2">
-                        {bestPlay && tierStyle ? (
-                          <div className="flex items-center justify-center gap-1">
-                            <span className="w-2 h-2 rounded-full" style={{ background: tierStyle.dot }} />
-                            <span className="text-[9px] font-bold" style={{ color: tierStyle.dot }}>
-                              {SHORT_MARKET_LABELS[bestPlay.market] ?? bestPlay.market} {bestPlay.probability.toFixed(0)}%
-                            </span>
-                          </div>
-                        ) : bestPlay ? (
-                          <div className="flex items-center justify-center gap-1">
-                            <span className="text-[9px] text-muted-foreground">
-                              {SHORT_MARKET_LABELS[bestPlay.market] ?? bestPlay.market} {bestPlay.probability.toFixed(0)}%
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-muted-foreground/30">—</span>
-                        )}
+                        {signalBadge ?? <span className="text-muted-foreground/30">—</span>}
                       </td>
                     </tr>
                   );
@@ -415,12 +456,6 @@ export function MlbBoxScore({
             </div>
           )}
 
-          <div className="px-3 py-1.5 border-t border-border/20 flex items-center gap-3 text-[8px] text-muted-foreground/50">
-            <span className="flex items-center gap-1"><span className="w-2 h-0.5 rounded bg-[#22c55e] inline-block" /> Strong (75%+)</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-0.5 rounded bg-[#eab308] inline-block" /> Building (65%+)</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-0.5 rounded bg-[#3b82f6] inline-block" /> Monitor (55%+)</span>
-            <span className="flex items-center gap-1"><span className="text-orange-400 font-bold">95+</span> Hard hit EV</span>
-          </div>
         </>
       ) : null}
     </div>

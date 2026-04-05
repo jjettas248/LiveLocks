@@ -148,3 +148,21 @@ export const COLOR_TIER_STYLES: Record<MlbQuickViewColorTier, { border: string; 
   blue: { border: "#3b82f6", bg: "rgba(59,130,246,0.08)", dot: "#3b82f6" },
   neutral: { border: "transparent", bg: "transparent", dot: "transparent" },
 };
+
+export function deriveAllPlayerPlays(signals: SignalLike[], playerId: string): BestPlayInfo[] {
+  return signals
+    .filter(s => s.playerId === playerId && !s.alreadyHit && (s.enginePct ?? 0) > 0)
+    .sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0))
+    .map(s => {
+      const pct = s.enginePct ?? 0;
+      const tier: "monitor" | "building" | "strong" | null =
+        pct >= 75 ? "strong" : pct >= 65 ? "building" : pct >= 55 ? "monitor" : null;
+      return {
+        market: s.market ?? "",
+        side: s.recommendedSide ?? "",
+        probability: pct,
+        confidenceTier: tier,
+        signalScore: s.signalScore ?? 0,
+      };
+    });
+}
