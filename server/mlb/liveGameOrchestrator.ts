@@ -1495,7 +1495,7 @@ export class LiveGameOrchestrator {
           if (market === "home_runs" && output.hrBuildScore != null && output.hrBuildScore > 0) {
             const hrFactorsBuild = typeof output.hrFactors === "object" && output.hrFactors?.build
               ? output.hrFactors.build
-              : { avgEV: null, maxEV: null, avgLA: null, barrels: 0, hardHits: 0, deepFlyouts: 0, batSpeedScore: 0, pitcherFatigueBoost: 0, parkWindBoost: 0, platoonBoost: 0 };
+              : { avgEV: null, maxEV: null, avgLA: null, barrels: 0, hardHits: 0, deepFlyouts: 0, batSpeedScore: 0, pitcherFatigueBoost: 0, parkWindBoost: 0, platoonBoost: 0, hrShapedCount: 0, missedHrCount: 0, eliteHrCount: 0, qualifiedEVMean: null, maxDistance: null, contactClasses: [] };
             const alertInput: HRAlertInput = {
               playerId: batter.playerId,
               playerName: batter.playerName,
@@ -1505,6 +1505,20 @@ export class LiveGameOrchestrator {
               hrIntensity: output.hrIntensity ?? "weak",
               factors: hrFactorsBuild as any,
               inning: state.inning,
+              isTopInning: state.isTopInning,
+              battingOrderSlot: batter.slot,
+              remainingPA,
+              pitchCount: pitcher ? state.pitchCount : 0,
+              timesThrough: pitcherCtx?.timesThroughOrder ?? 1,
+              isPitcherCollapsing,
+              parkFactor: getMarketParkFactor(weatherCache?.venueName, "home_runs"),
+              windDirection: weatherCache?.windDirection ?? null,
+              windSpeed: weatherCache?.windSpeed ?? null,
+              temperature: weatherCache?.temperature ?? null,
+              isIndoors: weatherCache?.isIndoors ?? isVenueIndoors(weatherCache?.venueName),
+              batterHand: null,
+              pitcherThrows: pitcher?.throws ?? null,
+              era: pitcherSeasonStats?.era ?? null,
               priorABResults: (playerContact?.priorABResults ?? []).map((ab: any) => ({
                 exitVelocity: ab.exitVelocity ?? null,
                 launchAngle: ab.launchAngle ?? null,
@@ -1514,7 +1528,8 @@ export class LiveGameOrchestrator {
             };
             const alertResult = evaluateHRAlert(alertInput);
             if (alertResult.level === "ALERT" || alertResult.level === "WATCH") {
-              console.log(`[HR_ALERT_TRIGGER] ${alertResult.level} ${batter.playerName} score=${output.hrBuildScore} reason=${alertResult.triggerReason} state=${alertResult.signalState} decision=${alertResult.decision} confidence=${alertResult.confidenceScore} game=${gameId} inn=${state.inning}`);
+              const diag = alertResult.diagnostics;
+              console.log(`[HR_ALERT_TRIGGER] ${alertResult.level} ${batter.playerName} score=${output.hrBuildScore} reason=${alertResult.triggerReason} state=${alertResult.signalState} decision=${alertResult.decision} confidence=${alertResult.confidenceScore} tier=${alertResult.alertTier} path=${diag.alertPath} hrShaped=${diag.hrShapedCount} missed=${diag.missedHrCount} elite=${diag.eliteHrCount} evMean=${diag.qualifiedEVMean} maxDist=${diag.maxDistance} remPA=${diag.remainingPA} pitcher=${diag.pitcherFatigueState} env=${diag.environmentContext} suppressions=${diag.suppressionFlags.length} positives=[${diag.positiveFactors.join("|")}] game=${gameId} inn=${state.inning}`);
               markAlertSent(batter.playerId, gameId);
               storage.insertAlert({
                 playerId: batter.playerId,
@@ -1551,6 +1566,25 @@ export class LiveGameOrchestrator {
                 barrel: (lastAB.exitVelocity ?? 0) >= 98 && (lastAB.launchAngle ?? 0) >= 20 && (lastAB.launchAngle ?? 0) <= 35,
               } : null;
 
+              const diagSnap = alertResult.diagnostics ? {
+                alertPath: alertResult.diagnostics.alertPath,
+                positiveFactors: alertResult.diagnostics.positiveFactors,
+                suppressionFlags: alertResult.diagnostics.suppressionFlags,
+                hrShapedCount: alertResult.diagnostics.hrShapedCount,
+                missedHrCount: alertResult.diagnostics.missedHrCount,
+                eliteHrCount: alertResult.diagnostics.eliteHrCount,
+                qualifiedEVMean: alertResult.diagnostics.qualifiedEVMean,
+                maxDistance: alertResult.diagnostics.maxDistance,
+                remainingPA: alertResult.diagnostics.remainingPA,
+                pitcherFatigueState: alertResult.diagnostics.pitcherFatigueState,
+                environmentContext: alertResult.diagnostics.environmentContext,
+                contactClasses: alertResult.diagnostics.contactClasses.map(c => ({
+                  contactClass: c.contactClass, exitVelocity: c.exitVelocity,
+                  launchAngle: c.launchAngle, distance: c.distance,
+                  outcome: c.outcome, isBarrel: c.isBarrel,
+                })),
+              } : null;
+
               storage.createOrUpdateHrRadarAlert({
                 gameId,
                 playerId: batter.playerId,
@@ -1565,6 +1599,9 @@ export class LiveGameOrchestrator {
                 triggerTags: alertResult.triggerReason ? alertResult.triggerReason.split(", ") : [],
                 summaryText: `${alertResult.decision} — ${alertResult.triggerReason}`,
                 contactSnapshot: contactSnap,
+                alertPath: alertResult.diagnostics?.alertPath ?? null,
+                alertTier: alertResult.alertTier ?? null,
+                diagnosticsSnapshot: diagSnap,
               }).catch(err => console.warn(`[HR_RADAR_ALERT] persist failed: ${err.message}`));
             }
           }

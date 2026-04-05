@@ -2170,6 +2170,9 @@ export class DatabaseStorage implements IStorage {
     triggerTags: string[];
     summaryText?: string | null;
     contactSnapshot?: { ev: number | null; la: number | null; distance: number | null; hardHit: boolean; barrel: boolean } | null;
+    alertPath?: string | null;
+    alertTier?: string | null;
+    diagnosticsSnapshot?: Record<string, unknown> | null;
   }): Promise<HrRadarAlert | null> {
     try {
       const today = new Date().toISOString().slice(0, 10);
@@ -2212,6 +2215,9 @@ export class DatabaseStorage implements IStorage {
             triggerTags: data.triggerTags,
             summaryText: data.summaryText ?? alert.summaryText,
             contactSnapshot: data.contactSnapshot ?? alert.contactSnapshot,
+            alertPath: data.alertPath ?? alert.alertPath,
+            alertTier: data.alertTier ?? alert.alertTier,
+            diagnosticsSnapshot: data.diagnosticsSnapshot ?? alert.diagnosticsSnapshot,
           })
           .where(eq(hrRadarAlerts.id, alert.id));
 
@@ -2247,6 +2253,9 @@ export class DatabaseStorage implements IStorage {
         triggerTags: data.triggerTags,
         summaryText: data.summaryText ?? null,
         contactSnapshot: data.contactSnapshot ?? null,
+        alertPath: data.alertPath ?? null,
+        alertTier: data.alertTier ?? null,
+        diagnosticsSnapshot: data.diagnosticsSnapshot ?? null,
         status: "live",
         analyticsPersisted: false,
       });

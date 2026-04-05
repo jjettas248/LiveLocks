@@ -573,6 +573,10 @@ export const hrRadarAlerts = pgTable("hr_radar_alerts", {
 
   contactSnapshot: jsonb("contact_snapshot"),
 
+  alertPath: text("alert_path"),
+  alertTier: text("alert_tier"),
+  diagnosticsSnapshot: jsonb("diagnostics_snapshot"),
+
   status: text("status").notNull().default("live"),
   hitInning: integer("hit_inning"),
   hitHalf: text("hit_half"),

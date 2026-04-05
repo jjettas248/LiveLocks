@@ -1,8 +1,10 @@
-import type { HRBuildResult } from "./HRSignalBuilder";
+import type { HRBuildResult, ClassifiedContact } from "./HRSignalBuilder";
+import { classifyContactEvent } from "./HRSignalBuilder";
 
 export type HRAlertLevel = "ALERT" | "WATCH" | null;
 export type HRSignalState = "PEAK" | "BUILDING" | "FORMATION" | "COOLDOWN" | null;
 export type HRDecision = "BET_NOW" | "PREPARE" | "MONITOR" | null;
+export type HRAlertTier = "officialAlert" | "prepare" | "watch" | null;
 
 export interface HRAlertInput {
   playerId: string;
@@ -13,12 +15,46 @@ export interface HRAlertInput {
   hrIntensity: string;
   factors: HRBuildResult["factors"];
   inning: number;
+  isTopInning?: boolean;
+  battingOrderSlot?: number;
+  remainingPA?: number;
+  pitchCount?: number;
+  timesThrough?: number;
+  isPitcherCollapsing?: boolean;
+  parkFactor?: number;
+  windDirection?: string | null;
+  windSpeed?: number | null;
+  temperature?: number | null;
+  isIndoors?: boolean;
+  batterHand?: string | null;
+  pitcherThrows?: string | null;
+  era?: number | null;
   priorABResults: Array<{
     exitVelocity: number | null;
     launchAngle: number | null;
     distance: number | null;
     outcome: string;
   }>;
+}
+
+export interface HRSuppressionFlag {
+  reason: string;
+  severity: "hard" | "soft";
+}
+
+export interface HRAlertDiagnostics {
+  alertPath: string | null;
+  positiveFactors: string[];
+  suppressionFlags: HRSuppressionFlag[];
+  hrShapedCount: number;
+  missedHrCount: number;
+  eliteHrCount: number;
+  qualifiedEVMean: number | null;
+  maxDistance: number | null;
+  remainingPA: number | null;
+  pitcherFatigueState: string;
+  environmentContext: string;
+  contactClasses: ClassifiedContact[];
 }
 
 export interface HRAlertResult {
@@ -29,6 +65,8 @@ export interface HRAlertResult {
   confidenceScore: number;
   formattedReason: string;
   detectedInning: number;
+  alertTier: HRAlertTier;
+  diagnostics: HRAlertDiagnostics;
 }
 
 const COOLDOWN_MS = 10 * 60 * 1000;
@@ -56,143 +94,147 @@ export function clearGameCooldowns(gameId: string): void {
   }
 }
 
-function formatReason(trigger: string, factors: HRBuildResult["factors"], inning: number): string {
-  if (trigger.includes("barrel") && trigger.includes("avgEV95")) {
-    return `Barrel contact + 95+ EV trend. Power building into ${ordinal(inning)} inning window.`;
-  }
-  if (trigger.startsWith("repeat_contact")) {
-    return "Back-to-back hard contact (95+ EV, optimal launch angle). HR probability spiking.";
-  }
-  if (trigger.startsWith("leaderboard:")) {
-    const sub = trigger.replace("leaderboard:", "");
-    if (sub.includes("topEV")) {
-      return `Game-leading exit velocity (${factors.maxEV?.toFixed(0) ?? "105+"}mph). Elite barrel potential.`;
-    }
-    if (sub.includes("topDistance")) {
-      return "Deep flyball contact today — distance leaderboard-level. HR conditions active.";
-    }
-    return "Leaderboard-level contact metrics this game. Power indicators elevated.";
-  }
-  if (trigger.startsWith("late_game_spike")) {
-    return `Late-game power spike (${ordinal(inning)} inning). Contact quality rising against tired bullpen.`;
-  }
-  if (trigger.startsWith("soft_trigger")) {
-    return "Consistent hard contact building. EV averaging 92+ with rising build score.";
-  }
-  return "Power indicators increasing — monitoring contact quality.";
-}
-
 function ordinal(n: number): string {
   const s = ["th", "st", "nd", "rd"];
   const v = n % 100;
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
-function computeConfidence(hrBuildScore: number, factors: HRBuildResult["factors"]): number {
-  let base = Math.min(10, Math.round(hrBuildScore * 2));
-  if ((factors.barrels ?? 0) >= 2) base = Math.min(10, base + 1);
-  if ((factors.maxEV ?? 0) >= 108) base = Math.min(10, base + 1);
+function describePitcherState(input: HRAlertInput): string {
+  const parts: string[] = [];
+  if (input.pitchCount != null && input.pitchCount >= 75) parts.push(`PC=${input.pitchCount}`);
+  if (input.timesThrough != null && input.timesThrough >= 3) parts.push(`TTO=${input.timesThrough}`);
+  if (input.isPitcherCollapsing) parts.push("COLLAPSING");
+  if (input.era != null && input.era >= 5.0) parts.push(`ERA=${input.era}`);
+  return parts.length > 0 ? parts.join(", ") : "stable";
+}
+
+function describeEnvironment(input: HRAlertInput): string {
+  const parts: string[] = [];
+  if (input.parkFactor != null && input.parkFactor >= 1.05) parts.push(`PF=${input.parkFactor}`);
+  if (input.windDirection === "out" && (input.windSpeed ?? 0) >= 8) parts.push(`wind-out ${input.windSpeed}mph`);
+  if (input.windDirection === "in" && (input.windSpeed ?? 0) >= 10) parts.push(`wind-in ${input.windSpeed}mph`);
+  if (input.temperature != null && input.temperature >= 85) parts.push(`${input.temperature}°F`);
+  return parts.length > 0 ? parts.join(", ") : "neutral";
+}
+
+function buildSuppression(input: HRAlertInput, classified: ClassifiedContact[]): HRSuppressionFlag[] {
+  const flags: HRSuppressionFlag[] = [];
+  const remainingPA = input.remainingPA ?? null;
+  const hrShaped = classified.filter(c =>
+    c.contactClass === "hrShapedContact" ||
+    c.contactClass === "missedHrContact" ||
+    c.contactClass === "eliteHrContact"
+  );
+  const hasEliteOrMissed = classified.some(c =>
+    c.contactClass === "missedHrContact" || c.contactClass === "eliteHrContact"
+  );
+
+  if (remainingPA !== null && remainingPA < 1.0 && !hasEliteOrMissed) {
+    flags.push({ reason: `remainingPA too low (${remainingPA.toFixed(1)}) without elite evidence`, severity: "hard" });
+  }
+
+  if (hrShaped.length === 1) {
+    const singleEvent = hrShaped[0];
+    const abIndex = classified.indexOf(singleEvent);
+    const totalABs = classified.length;
+    if (abIndex === 0 && totalABs >= 3 && singleEvent.contactClass === "hrShapedContact") {
+      flags.push({ reason: "single HR-shaped event from early AB with no repeat confirmation", severity: "soft" });
+    }
+  }
+
+  const laValues = classified.filter(c => c.exitVelocity >= 95).map(c => c.launchAngle);
+  if (laValues.length >= 2) {
+    const avgLA = laValues.reduce((s, v) => s + v, 0) / laValues.length;
+    if (avgLA > 42 || avgLA < 15) {
+      flags.push({ reason: `LA profile inconsistent for HR (avg ${avgLA.toFixed(0)}° across hard-hit events)`, severity: "soft" });
+    }
+  }
+
+  if (!input.isIndoors && input.windDirection === "in" && (input.windSpeed ?? 0) >= 10) {
+    flags.push({ reason: `headwind suppression (in ${input.windSpeed}mph)`, severity: "soft" });
+  }
+
+  if (input.batterHand && input.pitcherThrows && input.batterHand === input.pitcherThrows) {
+    flags.push({ reason: `same-side matchup (${input.batterHand}v${input.pitcherThrows})`, severity: "soft" });
+  }
+
+  if (input.temperature != null && input.temperature <= 45) {
+    flags.push({ reason: `cold temperature suppression (${input.temperature}°F)`, severity: "soft" });
+  }
+
+  return flags;
+}
+
+function formatReason(alertPath: string, factors: HRBuildResult["factors"], inning: number): string {
+  if (alertPath === "PATH_A") {
+    return `Repeated HR-shaped contact (${factors.hrShapedCount} events, mean EV ${factors.qualifiedEVMean ?? "?"}mph). HR conversion probability elevated into ${ordinal(inning)} inning.`;
+  }
+  if (alertPath === "PATH_B") {
+    const desc = factors.eliteHrCount > 0 ? "elite HR-shaped" : "near-miss HR";
+    return `${desc} event detected with favorable pitcher/environment context. Live HR conversion window active.`;
+  }
+  if (alertPath === "PATH_C") {
+    return `Late-game power build (${ordinal(inning)} inning). HR-shaped contact maintained with improved matchup context.`;
+  }
+  return "HR conversion indicators active — monitoring.";
+}
+
+function computeConfidence(
+  hrBuildScore: number,
+  factors: HRBuildResult["factors"],
+  alertPath: string | null,
+  suppressionCount: number
+): number {
+  let base = Math.min(10, Math.round(hrBuildScore * 1.5));
+
+  if (factors.eliteHrCount >= 1) base = Math.min(10, base + 2);
+  else if (factors.missedHrCount >= 1) base = Math.min(10, base + 1);
+
+  if (factors.hrShapedCount >= 2) base = Math.min(10, base + 1);
+
+  if ((factors.qualifiedEVMean ?? 0) >= 102) base = Math.min(10, base + 1);
+
+  base = Math.max(1, base - suppressionCount);
+
   return Math.max(1, base);
 }
 
 export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
   const { hrBuildScore, factors, inning, priorABResults } = input;
 
-  const baseResult = {
-    detectedInning: inning,
+  const classified = priorABResults.map(ab => classifyContactEvent(ab));
+
+  const hrShapedCount = factors.hrShapedCount ?? 0;
+  const missedHrCount = factors.missedHrCount ?? 0;
+  const eliteHrCount = factors.eliteHrCount ?? 0;
+  const qualifiedEVMean = factors.qualifiedEVMean ?? null;
+  const maxDistance = factors.maxDistance ?? null;
+  const remainingPA = input.remainingPA ?? null;
+
+  const suppressionFlags = buildSuppression(input, classified);
+  const hardVetoes = suppressionFlags.filter(f => f.severity === "hard");
+  const softVetoes = suppressionFlags.filter(f => f.severity === "soft");
+
+  const pitcherFatigueState = describePitcherState(input);
+  const environmentContext = describeEnvironment(input);
+
+  const baseDiagnostics: HRAlertDiagnostics = {
+    alertPath: null,
+    positiveFactors: [],
+    suppressionFlags,
+    hrShapedCount,
+    missedHrCount,
+    eliteHrCount,
+    qualifiedEVMean,
+    maxDistance,
+    remainingPA,
+    pitcherFatigueState,
+    environmentContext,
+    contactClasses: classified,
   };
 
-  if (isOnCooldown(input.playerId, input.gameId)) {
-    return {
-      level: null,
-      triggerReason: "cooldown",
-      signalState: "COOLDOWN",
-      decision: null,
-      confidenceScore: computeConfidence(hrBuildScore, factors),
-      formattedReason: "Recently alerted — signal on cooldown. Monitoring for re-escalation.",
-      ...baseResult,
-    };
-  }
-
-  const recentABs = priorABResults.slice(-3);
-  const last2 = priorABResults.slice(-2);
-
-  if (
-    hrBuildScore >= 4.5 &&
-    factors.barrels >= 1 &&
-    (factors.avgEV ?? 0) >= 95 &&
-    inning >= 5
-  ) {
-    const trigger = "hard_trigger:barrel+avgEV95+inn5+score4.5";
-    return {
-      level: "ALERT",
-      triggerReason: trigger,
-      signalState: "PEAK",
-      decision: "BET_NOW",
-      confidenceScore: computeConfidence(hrBuildScore, factors),
-      formattedReason: formatReason(trigger, factors, inning),
-      ...baseResult,
-    };
-  }
-
-  if (
-    last2.length >= 2 &&
-    last2.every(ab => (ab.exitVelocity ?? 0) >= 95 && (ab.launchAngle ?? 0) >= 20 && (ab.launchAngle ?? 0) <= 35)
-  ) {
-    const trigger = "repeat_contact:last2ABs_EV95+_LA20-35";
-    return {
-      level: "ALERT",
-      triggerReason: trigger,
-      signalState: "PEAK",
-      decision: "BET_NOW",
-      confidenceScore: computeConfidence(hrBuildScore, factors),
-      formattedReason: formatReason(trigger, factors, inning),
-      ...baseResult,
-    };
-  }
-
-  const topEV = (factors.maxEV ?? 0) >= 108;
-  const topDistance = recentABs.some(ab => (ab.distance ?? 0) >= 380);
-  if ((topEV || topDistance) && hrBuildScore > 3.5) {
-    const trigger = `leaderboard:${topEV ? "topEV" : "topDistance"}+score${hrBuildScore.toFixed(1)}`;
-    return {
-      level: "ALERT",
-      triggerReason: trigger,
-      signalState: "BUILDING",
-      decision: "PREPARE",
-      confidenceScore: computeConfidence(hrBuildScore, factors),
-      formattedReason: formatReason(trigger, factors, inning),
-      ...baseResult,
-    };
-  }
-
-  if (inning >= 8 && hrBuildScore > 3) {
-    const trigger = `late_game_spike:inn${inning}+score${hrBuildScore.toFixed(1)}`;
-    return {
-      level: "ALERT",
-      triggerReason: trigger,
-      signalState: "BUILDING",
-      decision: "PREPARE",
-      confidenceScore: computeConfidence(hrBuildScore, factors),
-      formattedReason: formatReason(trigger, factors, inning),
-      ...baseResult,
-    };
-  }
-
-  if (hrBuildScore >= 3.5 && (factors.avgEV ?? 0) >= 92) {
-    const trigger = "soft_trigger:avgEV92+score3.5";
-    return {
-      level: "WATCH",
-      triggerReason: trigger,
-      signalState: "FORMATION",
-      decision: "MONITOR",
-      confidenceScore: computeConfidence(hrBuildScore, factors),
-      formattedReason: formatReason(trigger, factors, inning),
-      ...baseResult,
-    };
-  }
-
-  return {
+  const nullResult: HRAlertResult = {
     level: null,
     triggerReason: "",
     signalState: null,
@@ -200,5 +242,183 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     confidenceScore: 0,
     formattedReason: "",
     detectedInning: inning,
+    alertTier: null,
+    diagnostics: baseDiagnostics,
   };
+
+  if (isOnCooldown(input.playerId, input.gameId)) {
+    return {
+      ...nullResult,
+      triggerReason: "cooldown",
+      signalState: "COOLDOWN",
+      confidenceScore: computeConfidence(hrBuildScore, factors, null, softVetoes.length),
+      formattedReason: "Recently alerted — signal on cooldown. Monitoring for re-escalation.",
+      diagnostics: { ...baseDiagnostics, alertPath: "COOLDOWN" },
+    };
+  }
+
+  if (hardVetoes.length > 0) {
+    const reasons = hardVetoes.map(v => v.reason).join("; ");
+    console.log(`[HR_ALERT_VETO] ${input.playerName} game=${input.gameId} — hard veto: ${reasons}`);
+    return {
+      ...nullResult,
+      diagnostics: {
+        ...baseDiagnostics,
+        alertPath: "VETOED",
+        positiveFactors: [],
+      },
+    };
+  }
+
+  const totalHrShaped = hrShapedCount;
+  const hasMissedOrElite = missedHrCount > 0 || eliteHrCount > 0;
+
+  const pitcherFavorable = (input.pitchCount ?? 0) >= 75 ||
+    (input.timesThrough ?? 0) >= 3 ||
+    input.isPitcherCollapsing === true ||
+    (input.era != null && input.era >= 4.5);
+
+  const envFavorable = (input.parkFactor ?? 1.0) >= 1.05 ||
+    (input.windDirection === "out" && (input.windSpeed ?? 0) >= 8);
+
+  const hasStrongContext = pitcherFavorable && envFavorable;
+  const hasModerateContext = pitcherFavorable || envFavorable;
+
+  const positiveFactors: string[] = [];
+
+  if (
+    totalHrShaped >= 2 &&
+    (qualifiedEVMean ?? 0) >= 99 &&
+    (maxDistance ?? 0) >= 375 &&
+    (remainingPA === null || remainingPA >= 1.3) &&
+    softVetoes.length === 0
+  ) {
+    positiveFactors.push(`${totalHrShaped} HR-shaped events`);
+    positiveFactors.push(`qualified EV mean ${qualifiedEVMean}mph`);
+    positiveFactors.push(`max distance ${maxDistance}ft`);
+    if (pitcherFavorable) positiveFactors.push(`pitcher: ${pitcherFatigueState}`);
+    if (envFavorable) positiveFactors.push(`env: ${environmentContext}`);
+
+    const conf = computeConfidence(hrBuildScore, factors, "PATH_A", softVetoes.length);
+    console.log(`[HR_ALERT_PATH_A] ${input.playerName} game=${input.gameId} hrShaped=${totalHrShaped} evMean=${qualifiedEVMean} maxDist=${maxDistance} score=${hrBuildScore} conf=${conf}`);
+
+    return {
+      level: "ALERT",
+      triggerReason: `PATH_A:${totalHrShaped}xHrShaped_evMean${qualifiedEVMean}_dist${maxDistance}`,
+      signalState: "PEAK",
+      decision: "BET_NOW",
+      confidenceScore: conf,
+      formattedReason: formatReason("PATH_A", factors, inning),
+      detectedInning: inning,
+      alertTier: "officialAlert",
+      diagnostics: { ...baseDiagnostics, alertPath: "PATH_A", positiveFactors },
+    };
+  }
+
+  if (
+    totalHrShaped >= 2 &&
+    (remainingPA === null || remainingPA >= 1.0) &&
+    softVetoes.length <= 1
+  ) {
+    positiveFactors.push(`${totalHrShaped} HR-shaped events`);
+    if (qualifiedEVMean != null) positiveFactors.push(`qualified EV mean ${qualifiedEVMean}mph`);
+    if (pitcherFavorable) positiveFactors.push(`pitcher: ${pitcherFatigueState}`);
+
+    const conf = computeConfidence(hrBuildScore, factors, "PATH_A", softVetoes.length);
+    const isOfficial = softVetoes.length === 0 && hrBuildScore >= 4.0;
+
+    return {
+      level: "ALERT",
+      triggerReason: `PATH_A:${totalHrShaped}xHrShaped_score${hrBuildScore}`,
+      signalState: isOfficial ? "PEAK" : "BUILDING",
+      decision: isOfficial ? "BET_NOW" : "PREPARE",
+      confidenceScore: conf,
+      formattedReason: formatReason("PATH_A", factors, inning),
+      detectedInning: inning,
+      alertTier: isOfficial ? "officialAlert" : "prepare",
+      diagnostics: { ...baseDiagnostics, alertPath: "PATH_A", positiveFactors },
+    };
+  }
+
+  if (
+    hasMissedOrElite &&
+    hasModerateContext &&
+    (remainingPA === null || remainingPA >= 1.0)
+  ) {
+    positiveFactors.push(eliteHrCount > 0 ? `${eliteHrCount} elite HR contact` : `${missedHrCount} missed HR contact`);
+    if (pitcherFavorable) positiveFactors.push(`pitcher: ${pitcherFatigueState}`);
+    if (envFavorable) positiveFactors.push(`env: ${environmentContext}`);
+
+    const isOfficial = hasStrongContext && softVetoes.length === 0 && hrBuildScore >= 4.0;
+    const conf = computeConfidence(hrBuildScore, factors, "PATH_B", softVetoes.length);
+
+    return {
+      level: "ALERT",
+      triggerReason: `PATH_B:${eliteHrCount > 0 ? "elite" : "missedHr"}+context`,
+      signalState: isOfficial ? "PEAK" : "BUILDING",
+      decision: isOfficial ? "BET_NOW" : "PREPARE",
+      confidenceScore: conf,
+      formattedReason: formatReason("PATH_B", factors, inning),
+      detectedInning: inning,
+      alertTier: isOfficial ? "officialAlert" : "prepare",
+      diagnostics: { ...baseDiagnostics, alertPath: "PATH_B", positiveFactors },
+    };
+  }
+
+  if (
+    inning >= 5 &&
+    totalHrShaped >= 1 &&
+    pitcherFavorable &&
+    (remainingPA === null || remainingPA >= 1.0) &&
+    hrBuildScore >= 4.0
+  ) {
+    positiveFactors.push(`late-game (${ordinal(inning)} inning)`);
+    positiveFactors.push(`${totalHrShaped} HR-shaped events`);
+    positiveFactors.push(`pitcher: ${pitcherFatigueState}`);
+
+    const isOfficial = totalHrShaped >= 2 && softVetoes.length === 0;
+    const conf = computeConfidence(hrBuildScore, factors, "PATH_C", softVetoes.length);
+
+    return {
+      level: "ALERT",
+      triggerReason: `PATH_C:inn${inning}_hrShaped${totalHrShaped}_pitcher_favorable`,
+      signalState: isOfficial ? "PEAK" : "BUILDING",
+      decision: isOfficial ? "BET_NOW" : "PREPARE",
+      confidenceScore: conf,
+      formattedReason: formatReason("PATH_C", factors, inning),
+      detectedInning: inning,
+      alertTier: isOfficial ? "officialAlert" : "prepare",
+      diagnostics: { ...baseDiagnostics, alertPath: "PATH_C", positiveFactors },
+    };
+  }
+
+  if (
+    totalHrShaped >= 1 &&
+    hrBuildScore >= 3.5 &&
+    (remainingPA === null || remainingPA >= 1.0)
+  ) {
+    positiveFactors.push(`${totalHrShaped} HR-shaped events, score=${hrBuildScore}`);
+
+    return {
+      level: "WATCH",
+      triggerReason: `watch:hrShaped${totalHrShaped}_score${hrBuildScore}`,
+      signalState: "FORMATION",
+      decision: "MONITOR",
+      confidenceScore: computeConfidence(hrBuildScore, factors, null, softVetoes.length),
+      formattedReason: "HR-shaped contact detected. Monitoring for escalation — need repeat confirmation or stronger context.",
+      detectedInning: inning,
+      alertTier: "watch",
+      diagnostics: { ...baseDiagnostics, alertPath: "WATCH", positiveFactors },
+    };
+  }
+
+  if (
+    totalHrShaped === 0 &&
+    (factors.barrels >= 1 || factors.hardHits >= 1 || factors.deepFlyouts >= 1) &&
+    hrBuildScore >= 2.5
+  ) {
+    console.log(`[HR_ALERT_BLOCKED] ${input.playerName} game=${input.gameId} — power indicators (barrels=${factors.barrels} hardHits=${factors.hardHits} deepFly=${factors.deepFlyouts}) but no HR-shaped contact. Score=${hrBuildScore}. NOT alerting.`);
+  }
+
+  return nullResult;
 }
