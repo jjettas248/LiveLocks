@@ -67,11 +67,20 @@
 
   body {
     @apply font-sans antialiased bg-background text-foreground;
+    min-height: 100vh;
+    min-height: 100dvh;
+    position: relative;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
     background-image: 
       radial-gradient(circle at 50% 0%, hsl(217 91% 60% / 0.15) 0%, transparent 50%),
       linear-gradient(to bottom, transparent, hsl(var(--background)));
-    background-attachment: fixed;
-    min-height: 100dvh;
+    pointer-events: none;
   }
 
   h1, h2, h3, h4, h5, h6 {

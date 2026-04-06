@@ -1,5 +1,5 @@
-const CACHE_NAME = "livelocks-v7";
-const APP_SHELL = ["/", "/index.html", "/favicon.jpg", "/manifest.json"];
+const CACHE_NAME = "livelocks-v8";
+const APP_SHELL = ["/", "/index.html", "/favicon.png", "/manifest.json"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -71,8 +71,8 @@ self.addEventListener("push", (event) => {
 
   const options = {
     body: payload.body,
-    icon: "/favicon.jpg",
-    badge: "/favicon.jpg",
+    icon: "/favicon.png",
+    badge: "/favicon.png",
     data: {
       url: payload.url ?? "/",
       ...deepData,

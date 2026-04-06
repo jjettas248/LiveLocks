@@ -2486,7 +2486,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
       )}
 
       {mlbSlipPicks.length > 0 && (
-        <div className="fixed bottom-4 right-4 left-4 sm:left-auto sm:w-96 z-50" data-testid="mlb-bet-slip">
+        <div className="fixed right-4 left-4 sm:left-auto sm:w-96 z-50" style={{ bottom: "max(16px, env(safe-area-inset-bottom, 16px))" }} data-testid="mlb-bet-slip">
           <div className="rounded-xl border border-green-500/30 bg-card shadow-2xl p-4 space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-sm font-bold text-foreground">MLB Bet Slip ({mlbSlipPicks.length})</span>

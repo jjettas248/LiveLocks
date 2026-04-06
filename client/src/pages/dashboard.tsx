@@ -186,6 +186,7 @@ function NewSlateOverlay({
         zIndex: 100,
         background: "rgba(0,0,0,0.92)",
         backdropFilter: "blur(12px)",
+        WebkitBackdropFilter: "blur(12px)",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
@@ -3154,7 +3155,7 @@ export default function Dashboard() {
           {/* RIGHT: Parlay Slip — desktop side column */}
           {showParlay && !isMobile && (
             <div className="lg:col-span-3">
-              <div className="bg-card border border-border rounded-xl p-4 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto relative">
+              <div className="bg-card border border-border rounded-xl p-4 sticky top-20 overflow-y-auto relative" style={{ maxHeight: "calc(100dvh - 6rem)" }}>
                 <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-primary to-transparent rounded-t-xl" />
                 <ParlaySlip
                   picks={parlayPicks}
@@ -4003,7 +4004,7 @@ export default function Dashboard() {
             {/* Parlay slip side column — halftime tab, desktop only */}
             {showParlay && !isMobile && (
               <div className="w-80 flex-shrink-0">
-                <div className="bg-card border border-border rounded-xl p-4 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto relative">
+                <div className="bg-card border border-border rounded-xl p-4 sticky top-20 overflow-y-auto relative" style={{ maxHeight: "calc(100dvh - 6rem)" }}>
                   <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-primary to-transparent rounded-t-xl" />
                   <ParlaySlip
                     picks={parlayPicks}
@@ -4047,7 +4048,8 @@ export default function Dashboard() {
       {isFreeUser && (
         <div
           data-testid="fixed-upgrade-bar"
-          className="fixed bottom-0 inset-x-0 z-40 h-14 backdrop-blur bg-black/70 border-t border-white/10 flex items-center justify-center"
+          className="fixed bottom-0 inset-x-0 z-40 backdrop-blur bg-black/70 border-t border-white/10 flex items-center justify-center"
+          style={{ paddingBottom: "max(12px, env(safe-area-inset-bottom, 12px))", paddingTop: "12px" }}
         >
           <button
             data-testid="button-unlock-full-access-bar"

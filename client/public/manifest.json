@@ -1,18 +1,32 @@
 {
   "name": "LiveLocks by PropPulse",
   "short_name": "LiveLocks",
-  "description": "Real-time NBA prop predictions & live line tracking",
+  "description": "Real-time MLB & NBA prop predictions & live betting analytics",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#0a0a0f",
-  "theme_color": "#4090f0",
-  "orientation": "portrait",
+  "theme_color": "#080808",
+  "orientation": "portrait-primary",
+  "categories": ["sports", "entertainment"],
   "icons": [
     {
-      "src": "/favicon.jpg",
-      "sizes": "400x400",
-      "type": "image/jpeg",
-      "purpose": "any maskable"
+      "src": "/favicon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/favicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
     }
   ]
 }
