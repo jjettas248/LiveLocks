@@ -9,9 +9,10 @@ import { MlbSignalCard, type MlbSignalData } from "@/components/mlb/MlbSignalCar
 import { MlbBoxScore, type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
 import type { MLBSignal } from "@shared/mlbSignal";
 import { ProbabilityRing } from "@/components/probability-ring";
+import { StatCard } from "@/components/stat-card";
 import { SkeletonCard } from "@/components/sports/SkeletonCard";
 import { EmptyState } from "@/components/sports/EmptyState";
-import { Radio, Target, RefreshCw, Calculator, Loader2, Flame, Zap, Trophy, Eye, ChevronDown, ChevronUp, Bell, Activity, X, BarChart3, Plus, ExternalLink } from "lucide-react";
+import { Radio, Target, RefreshCw, Calculator, Loader2, Flame, Zap, Trophy, Eye, ChevronDown, ChevronUp, Bell, Activity, X, BarChart3, Plus, ExternalLink, TrendingUp, TrendingDown, Clock } from "lucide-react";
 import {
   mapHrRadarCardToUi, mapAlertToUi, formatTriggerReason,
   radarScoreToTier, launchAngleLabel, formatMlbDisplayValue,
@@ -1342,94 +1343,188 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
   const displayPct = selectedSide === "OVER" ? overPct : underPct;
   const edge = calcResult.edge ?? 0;
   const projection = calcResult.projection ?? calcResult.expectedTotal;
+  const bookImplied = calcResult.bookImplied ?? null;
+  const evPct = bookImplied != null ? (overPct - bookImplied) : null;
 
   const isPitcherMarket = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(calcMarket);
   const isHRMarket = calcMarket === "home_runs";
   const pa = calcResult.pitcherAnalysis;
+  const marketLabel = MARKET_LABELS[calcMarket] ?? calcMarket.replace(/_/g, " ");
+
+  const currentStat = calcPlayer
+    ? (calcMarket === "hits" ? calcPlayer.h : calcMarket === "total_bases" ? calcPlayer.tb : calcMarket === "home_runs" ? calcPlayer.hr : calcMarket === "batter_strikeouts" ? calcPlayer.k : 0)
+    : 0;
+  const remaining = Math.max(0, parseFloat(calcBookLine) - currentStat);
 
   return (
-    <div className="rounded-xl border border-border bg-card p-5 space-y-5 animate-in slide-in-from-top-2 duration-300" data-testid="mlb-calc-results">
-      <div className="bg-secondary/20 rounded-lg p-3 text-center space-y-1">
-        <div className="text-xs text-muted-foreground">{activeCalcName}</div>
-        <div className="text-[10px] text-muted-foreground">{MARKET_LABELS[calcMarket] ?? calcMarket.replace(/_/g, " ")} {calcBookLine}</div>
-      </div>
+    <div className="space-y-4 animate-in slide-in-from-top-2 duration-300" data-testid="mlb-calc-results">
+      <div className="bg-card border border-border rounded-xl p-5 relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-48 h-48 bg-primary/5 rounded-full blur-[60px] -translate-y-1/2 translate-x-1/2 pointer-events-none" />
+        <div className="flex flex-col md:flex-row items-center justify-between gap-5">
+          <div className="flex-1 space-y-3 z-10">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span data-testid="badge-live-edge" className="text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-red-500/20 text-red-400">LIVE EDGE</span>
+              </div>
+              <div className="text-2xl font-bold tracking-tight">
+                {activeCalcName} — {marketLabel}{" "}
+                <span className="text-primary">{calcBookLine}</span>
+              </div>
+            </div>
 
-      <div className="flex items-center justify-center">
-        <ProbabilityRing probability={displayPct} size={130} strokeWidth={12} />
-      </div>
+            {calcPlayer && (
+              <div className="flex items-center gap-2 text-sm">
+                <TrendingUp className="w-4 h-4 text-muted-foreground" />
+                <span className="text-muted-foreground">
+                  Current: <span className="text-foreground font-bold">{currentStat}</span>
+                  {" · "}Needs{" "}
+                  <span className="text-foreground font-bold">{remaining.toFixed(1)}</span> more
+                </span>
+              </div>
+            )}
 
-      <div className="flex gap-2">
-        <button
-          data-testid="button-side-over"
-          onClick={() => setSelectedSide("OVER")}
-          className={`flex-1 py-3 rounded-lg font-bold text-sm transition-all min-h-[48px] ${
-            selectedSide === "OVER"
-              ? "bg-green-500/20 text-green-400 border-2 border-green-500/50 shadow-[0_0_12px_rgba(34,197,94,0.2)]"
-              : "bg-secondary/30 text-muted-foreground border border-border/40 hover:bg-secondary/50"
-          }`}
-        >
-          OVER
-        </button>
-        <button
-          data-testid="button-side-under"
-          onClick={() => setSelectedSide("UNDER")}
-          className={`flex-1 py-3 rounded-lg font-bold text-sm transition-all min-h-[48px] ${
-            selectedSide === "UNDER"
-              ? "bg-blue-500/20 text-blue-400 border-2 border-blue-500/50 shadow-[0_0_12px_rgba(59,130,246,0.2)]"
-              : "bg-secondary/30 text-muted-foreground border border-border/40 hover:bg-secondary/50"
-          }`}
-        >
-          UNDER
-        </button>
-      </div>
+            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              <span>Projection <strong className="text-foreground">{projection?.toFixed(2) ?? "—"}</strong> vs. Line <strong className="text-foreground">{calcBookLine}</strong></span>
+              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold ${
+                calcResult.recommendedSide === "OVER" ? "bg-emerald-500/20 text-emerald-400" :
+                calcResult.recommendedSide === "UNDER" ? "bg-red-500/20 text-red-400" :
+                "bg-secondary/40 text-muted-foreground"
+              }`}>
+                {calcResult.recommendedSide === "OVER" ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                {calcResult.recommendedSide === "NO_EDGE" ? "NEUTRAL" : calcResult.recommendedSide}
+              </span>
+            </div>
 
-      <div className="grid grid-cols-4 gap-2 text-center">
-        <div className="bg-secondary/30 rounded-lg p-2.5">
-          <div className="text-[8px] text-muted-foreground uppercase font-semibold">Over %</div>
-          <div className="text-base font-black text-green-400 tabular-nums">{overPct.toFixed(1)}%</div>
-        </div>
-        <div className="bg-secondary/30 rounded-lg p-2.5">
-          <div className="text-[8px] text-muted-foreground uppercase font-semibold">Under %</div>
-          <div className="text-base font-black text-blue-400 tabular-nums">{underPct.toFixed(1)}%</div>
-        </div>
-        <div className="bg-secondary/30 rounded-lg p-2.5">
-          <div className="text-[8px] text-muted-foreground uppercase font-semibold">Edge</div>
-          <div className={`text-base font-black tabular-nums ${edge > 0 ? "text-green-400" : edge < 0 ? "text-red-400" : "text-muted-foreground"}`}>
-            {edge > 0 ? "+" : ""}{edge.toFixed(1)}%
+            {calcPlayer && (
+              <div className="flex gap-3 text-xs text-muted-foreground">
+                <span>{calcPlayer.ab} AB</span>
+                <span><strong className="text-foreground">{calcPlayer.h}</strong> H</span>
+                <span><strong className="text-foreground">{calcPlayer.tb}</strong> TB</span>
+                {calcPlayer.hr > 0 && <span className="text-yellow-400 font-bold">{calcPlayer.hr} HR</span>}
+                <span>{calcPlayer.bb} BB</span>
+                <span>{calcPlayer.k} K</span>
+              </div>
+            )}
+
+            <div className="flex gap-2 flex-wrap">
+              <button
+                type="button"
+                data-testid="button-side-over"
+                onClick={() => setSelectedSide("OVER")}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold transition-colors min-h-[44px] ${
+                  selectedSide === "OVER"
+                    ? "bg-emerald-500/10 border-2 border-emerald-500/50 text-emerald-400 shadow-[0_0_12px_rgba(34,197,94,0.2)]"
+                    : "bg-secondary/30 border border-border/40 text-muted-foreground hover:bg-secondary/50"
+                }`}
+              >
+                <TrendingUp className="w-4 h-4" />
+                Over {calcBookLine} <span className="opacity-70">({overPct.toFixed(0)}%)</span>
+              </button>
+              <button
+                type="button"
+                data-testid="button-side-under"
+                onClick={() => setSelectedSide("UNDER")}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold transition-colors min-h-[44px] ${
+                  selectedSide === "UNDER"
+                    ? "bg-blue-500/10 border-2 border-blue-500/50 text-blue-400 shadow-[0_0_12px_rgba(59,130,246,0.2)]"
+                    : "bg-secondary/30 border border-border/40 text-muted-foreground hover:bg-secondary/50"
+                }`}
+              >
+                <TrendingDown className="w-4 h-4" />
+                Under {calcBookLine} <span className="opacity-70">({underPct.toFixed(0)}%)</span>
+              </button>
+            </div>
           </div>
-        </div>
-        <div className="bg-secondary/30 rounded-lg p-2.5">
-          <div className="text-[8px] text-muted-foreground uppercase font-semibold">Projection</div>
-          <div className="text-base font-black text-foreground tabular-nums">{projection?.toFixed(2) ?? ""}</div>
+          <div className="flex-shrink-0 z-10 flex flex-col items-center gap-2">
+            <ProbabilityRing probability={displayPct} size={160} strokeWidth={14} />
+          </div>
         </div>
       </div>
 
       {calcResult.confidenceTier && (
-        <div className="text-center space-y-1.5">
-          <span className={`text-[10px] font-black px-3 py-1 rounded-full ${
-            calcResult.confidenceTier === "ELITE" ? "bg-yellow-500/20 text-yellow-400 border border-yellow-500/30" :
-            calcResult.confidenceTier === "STRONG" ? "bg-green-500/20 text-green-400 border border-green-500/30" :
-            calcResult.confidenceTier === "SOLID" ? "bg-blue-500/20 text-blue-400 border border-blue-500/30" :
-            "bg-secondary/40 text-muted-foreground border border-border/30"
-          }`}>
-            {calcResult.confidenceTier}
-          </span>
-          <div className="text-[9px] text-muted-foreground" data-testid="text-confidence-explanation">
-            {calcResult.confidenceTier === "ELITE" ? `${edge > 0 ? "+" : ""}${edge.toFixed(1)}% edge with strong model alignment — high-conviction opportunity` :
-             calcResult.confidenceTier === "STRONG" ? `Model shows meaningful ${edge > 0 ? "+" : ""}${edge.toFixed(1)}% edge vs market line` :
-             calcResult.confidenceTier === "SOLID" ? `Moderate edge detected — consider as part of a diversified card` :
-             `Marginal edge — proceed with caution`}
+        <div
+          data-testid="badge-model-confidence-calc"
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium ${
+            calcResult.confidenceTier === "ELITE" ? "bg-yellow-500/10 border border-yellow-500/20 text-yellow-400" :
+            calcResult.confidenceTier === "STRONG" ? "bg-[#00d4aa]/10 border border-[#00d4aa]/20 text-[#00d4aa]" :
+            calcResult.confidenceTier === "SOLID" ? "bg-blue-500/10 border border-blue-500/20 text-blue-400" :
+            "bg-secondary/40 border border-border/30 text-muted-foreground"
+          }`}
+        >
+          <Target className="w-3 h-3" />
+          {calcResult.confidenceTier === "ELITE" ? "Elite confidence — high-conviction opportunity" :
+           calcResult.confidenceTier === "STRONG" ? "Model confidence is strong on this play" :
+           calcResult.confidenceTier === "SOLID" ? "Moderate edge detected — solid opportunity" :
+           "Marginal edge — proceed with caution"}
+        </div>
+      )}
+
+      {evPct != null && Math.abs(evPct) >= 1 && (
+        <div data-testid="ev-box" className={`rounded-xl border p-4 flex gap-3 items-start ${
+          evPct > 0 ? "bg-emerald-500/10 border-emerald-500/30" : "bg-red-500/10 border-red-500/30"
+        }`}>
+          <div className={`mt-0.5 flex-shrink-0 font-bold text-lg ${evPct > 0 ? "text-emerald-400" : "text-red-400"}`}>
+            {evPct > 0 ? "▲" : "▼"}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <h4 className={`text-sm font-semibold ${evPct > 0 ? "text-emerald-400" : "text-red-400"}`}>
+                {Math.abs(evPct) >= 6 ? "Strong" : Math.abs(evPct) >= 3 ? "Moderate" : "Slight"} {selectedSide === "OVER" ? "Over" : "Under"} EV
+              </h4>
+              <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                evPct > 0 ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"
+              }`}>
+                {evPct > 0 ? "+" : ""}{Math.round(evPct)}% EV
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Model <strong className="text-foreground">{overPct.toFixed(1)}%</strong> vs Book Implied <strong className="text-foreground">{bookImplied.toFixed(1)}%</strong>
+            </p>
+            <p className="text-[11px] text-muted-foreground/60 mt-0.5">
+              {Math.abs(evPct) >= 6 ? "High conviction edge vs market." : Math.abs(evPct) >= 3 ? "Solid discrepancy — model sees value." : evPct > 0 ? "Slight edge — use as tiebreaker." : "Model trails implied — line may be priced in."}
+            </p>
           </div>
         </div>
       )}
 
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <StatCard
+          title="Projection"
+          value={projection?.toFixed(2) ?? "—"}
+          subtitle={`Line: ${calcBookLine}`}
+          icon={<Target className="w-4 h-4" />}
+          highlight={projection != null && projection > parseFloat(calcBookLine) ? "positive" : "negative"}
+        />
+        <StatCard
+          title="Remaining PA"
+          value={calcResult.remainingPA?.toFixed(1) ?? "—"}
+          subtitle={`${calcResult.completedAB ?? 0} AB completed`}
+          icon={<Clock className="w-4 h-4" />}
+          highlight="neutral"
+        />
+        <StatCard
+          title="Edge"
+          value={`${edge > 0 ? "+" : ""}${edge.toFixed(1)}%`}
+          subtitle="Model vs book line"
+          icon={<TrendingUp className="w-4 h-4" />}
+          highlight={edge > 3 ? "positive" : edge < -3 ? "negative" : "neutral"}
+        />
+        <StatCard
+          title="Confidence"
+          value={calcResult.confidenceTier ?? "—"}
+          subtitle={calcResult.mode === "early_explosive" ? "Early Explosive" : "Standard"}
+          icon={<Zap className="w-4 h-4" />}
+          highlight={calcResult.confidenceTier === "ELITE" || calcResult.confidenceTier === "STRONG" ? "positive" : calcResult.confidenceTier === "SOLID" ? "neutral" : "negative"}
+        />
+      </div>
+
       {isPitcherMarket && pa && (
-        <div className="rounded-lg p-3 bg-secondary/20 border border-border/20">
-          <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-2">
+        <div className="rounded-xl border border-border/40 bg-card/50 p-4">
+          <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">
             Pitcher Analysis
           </div>
           {calcResult.pitcherSignals && calcResult.pitcherSignals.length > 0 && (
-            <div className="flex gap-1.5 flex-wrap mb-2">
+            <div className="flex gap-1.5 flex-wrap mb-3">
               {(calcResult.pitcherSignals as string[]).map(sig => {
                 const sigBadgeMap: Record<string, { label: string; emoji: string; color: string }> = {
                   DOMINANT: { label: "DOMINANT", emoji: "\uD83D\uDD25", color: "#22c55e" },
@@ -1448,7 +1543,7 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
               })}
             </div>
           )}
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             {[
               { key: "stuff", label: "Stuff", value: pa.stuff },
               { key: "command", label: "Command", value: pa.command },
@@ -1464,11 +1559,11 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
                 : (value >= 70 ? "#22c55e" : value >= 55 ? "#a3e635" : value >= 45 ? "#94a3b8" : value >= 35 ? "#f59e0b" : "#ef4444");
               return (
                 <div key={key} className="flex items-center gap-2">
-                  <span className="text-[9px] text-muted-foreground w-[72px] shrink-0">{label}</span>
-                  <div className="flex-1 h-2 rounded-full bg-secondary/60 overflow-hidden">
+                  <span className="text-xs text-muted-foreground w-[80px] shrink-0">{label}</span>
+                  <div className="flex-1 h-2.5 rounded-full bg-secondary/60 overflow-hidden">
                     <div className="h-full rounded-full transition-all duration-500" style={{ width: `${displayVal}%`, backgroundColor: barColor }} />
                   </div>
-                  <span className="text-[9px] font-bold tabular-nums w-6 text-right" style={{ color: barColor }}>{displayVal}</span>
+                  <span className="text-xs font-bold tabular-nums w-7 text-right" style={{ color: barColor }}>{displayVal}</span>
                 </div>
               );
             })}
@@ -1495,11 +1590,11 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
           .slice(0, 8);
 
         return (
-          <div className="rounded-lg p-3 bg-secondary/20 border border-border/20">
-            <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-2">
+          <div className="rounded-xl border border-border/40 bg-card/50 p-4">
+            <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">
               {isHRMarket ? "HR Analysis" : "Batter Analysis"}
             </div>
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               {entries.map(([key, val]) => {
                 const pct = Math.round(val * 100);
                 const isPitcherSide = pitcherSideKeys.has(key);
@@ -1508,12 +1603,12 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
                 const sideTag = Math.abs(pct - 50) >= 15 ? (favorsBatter ? "Batter +" : "Pitcher +") : null;
                 return (
                   <div key={key} className="flex items-center gap-2">
-                    <span className="text-[9px] text-muted-foreground w-[72px] shrink-0">{batterLabels[key] ?? key}</span>
-                    <div className="flex-1 h-2 rounded-full bg-secondary/60 overflow-hidden">
+                    <span className="text-xs text-muted-foreground w-[80px] shrink-0">{batterLabels[key] ?? key}</span>
+                    <div className="flex-1 h-2.5 rounded-full bg-secondary/60 overflow-hidden">
                       <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, backgroundColor: color }} />
                     </div>
-                    <span className="text-[9px] font-bold tabular-nums w-6 text-right" style={{ color }}>{pct}</span>
-                    {sideTag && <span className={`text-[7px] font-bold ${favorsBatter ? "text-green-400/60" : "text-red-400/60"}`}>{sideTag}</span>}
+                    <span className="text-xs font-bold tabular-nums w-7 text-right" style={{ color }}>{pct}</span>
+                    {sideTag && <span className={`text-[8px] font-bold ${favorsBatter ? "text-green-400/60" : "text-red-400/60"}`}>{sideTag}</span>}
                   </div>
                 );
               })}
@@ -1536,7 +1631,7 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
             gameId: selectedGameId ?? "",
             sportsbook: "manual",
           } as MlbSignalData)}
-          className="w-full py-3 rounded-lg border border-green-500/30 bg-green-500/10 text-green-400 font-semibold text-xs hover:bg-green-500/20 transition-colors min-h-[48px]"
+          className="w-full py-3 rounded-xl border border-green-500/30 bg-green-500/10 text-green-400 font-semibold text-sm hover:bg-green-500/20 transition-colors min-h-[48px]"
         >
           + Add {selectedSide} to Bet Slip
         </button>
@@ -1903,7 +1998,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                               data-testid="button-clear-calc-player"
                               onClick={() => { setCalcPlayer(null); setCalcPlayerName(""); setCalcResult(null); setSelectedBook(null); }}
                               className="text-muted-foreground hover:text-foreground p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-[10px]"
-                            >\u2715</button>
+                            >{"✕"}</button>
                           </div>
                           {(calcPlayer.exitVelocity != null || calcPlayer.xBA != null) && (
                             <div className="flex items-center gap-2 flex-wrap text-[9px] text-muted-foreground/70 pt-0.5">
@@ -2082,10 +2177,10 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
               <div className="text-sm font-bold text-foreground">Ready to Predict</div>
               <div className="text-xs text-muted-foreground">Select a game above to get started</div>
               <div className="text-[11px] text-muted-foreground/60 space-y-1 max-w-xs mx-auto text-left">
-                <div className="flex items-center gap-2"><span className="text-primary">\u25CE</span> Click a game tile above</div>
-                <div className="flex items-center gap-2"><span className="text-primary">\u25CE</span> Click a player in the box score</div>
-                <div className="flex items-center gap-2"><span className="text-primary">\u25CE</span> Pick a stat type & live line</div>
-                <div className="flex items-center gap-2"><span className="text-primary">\u25CE</span> Hit Calculate</div>
+                <div className="flex items-center gap-2"><span className="text-primary">◎</span> Click a game tile above</div>
+                <div className="flex items-center gap-2"><span className="text-primary">◎</span> Click a player in the box score</div>
+                <div className="flex items-center gap-2"><span className="text-primary">◎</span> Pick a stat type &amp; live line</div>
+                <div className="flex items-center gap-2"><span className="text-primary">◎</span> Hit Calculate</div>
               </div>
             </div>
           )}
@@ -2254,7 +2349,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                     data-testid={`button-remove-slip-${idx}`}
                     className="text-muted-foreground hover:text-red-400 shrink-0 ml-2 p-2 min-w-[44px] min-h-[44px] flex items-center justify-center"
                     onClick={() => setMlbSlipPicks(prev => prev.filter((_, i) => i !== idx))}
-                  >\u2715</button>
+                  >{"✕"}</button>
                 </div>
               ))}
             </div>
