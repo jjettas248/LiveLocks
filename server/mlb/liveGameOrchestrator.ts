@@ -127,7 +127,7 @@ const priorResolvedLines = new Map<string, number>();
 // First match wins; unlisted bookmakers are used only as a last resort.
 const PREFERRED_BOOKMAKERS = ["draftkings", "fanduel", "hardrockbet"];
 
-type ResolvedLine = { line: number; overOdds: number | null; underOdds: number | null; isDegraded: boolean; source: "live" | "prior" | "default" };
+type ResolvedLine = { line: number; overOdds: number | null; underOdds: number | null; isDegraded: boolean; source: "live" | "prior" };
 
 // ── Resolve a real book line for a player/market ──────────────────────────────
 // Precedence:
@@ -181,25 +181,6 @@ async function resolveBookLine(
     console.warn(`[MLB orchestrator] Using prior known line for ${playerName}/${market}: ${prior}`);
     pLog(oddsEventId ?? "unknown", "odds:bookLine:priorResolved", { player: playerName, market, line: prior });
     return { line: prior, overOdds: null, underOdds: null, isDegraded: true, source: "prior" };
-  }
-
-  const DEFAULT_LINES: Partial<Record<MLBMarket, number>> = {
-    hits: 0.5,
-    total_bases: 1.5,
-    home_runs: 0.5,
-    hrr: 2.5,
-    batter_strikeouts: 0.5,
-    pitcher_strikeouts: 4.5,
-    pitcher_outs: 14.5,
-    hits_allowed: 5.5,
-    walks_allowed: 1.5,
-    hr_allowed: 0.5,
-  };
-  const defaultLine = DEFAULT_LINES[market];
-  if (defaultLine !== undefined) {
-    console.log(`[MLB orchestrator] Using default line ${defaultLine} for ${playerName}/${market} (no odds available)`);
-    pLog(oddsEventId ?? "unknown", "odds:bookLine:default", { player: playerName, market, line: defaultLine });
-    return { line: defaultLine, overOdds: null, underOdds: null, isDegraded: true, source: "default" };
   }
 
   console.log(`[MLB orchestrator] No real line for ${playerName}/${market} — SKIPPED`);
@@ -1183,8 +1164,7 @@ export class LiveGameOrchestrator {
         if (resolvedLine.isDegraded) anyDegraded = true;
 
         const resolvedMarketObj = { line: resolvedLine.line, odds: (resolvedLine.overOdds !== null || resolvedLine.underOdds !== null) ? { overOdds: resolvedLine.overOdds, underOdds: resolvedLine.underOdds } : null };
-        const isDefaultFallbackLine = resolvedLine.source === "default";
-        if (!isDefaultFallbackLine && !hasRealOdds(resolvedMarketObj)) {
+        if (!hasRealOdds(resolvedMarketObj)) {
           console.warn(`[MLB orchestrator] hasRealOdds failed for ${batter.playerName}/${market} — signalLocked=false, skipping computation`);
           console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "no_real_odds", line: ${resolvedLine.line} }`);
           continue;
@@ -1730,8 +1710,7 @@ export class LiveGameOrchestrator {
         if (resolvedPitcherLine.isDegraded) anyDegraded = true;
 
         const resolvedPitcherMarketObj = { line: resolvedPitcherLine.line, odds: (resolvedPitcherLine.overOdds !== null || resolvedPitcherLine.underOdds !== null) ? { overOdds: resolvedPitcherLine.overOdds, underOdds: resolvedPitcherLine.underOdds } : null };
-        const isPitcherDefaultLine = resolvedPitcherLine.source === "default";
-        if (!isPitcherDefaultLine && !hasRealOdds(resolvedPitcherMarketObj)) {
+        if (!hasRealOdds(resolvedPitcherMarketObj)) {
           console.warn(`[MLB orchestrator] hasRealOdds failed for pitcher ${pitcherToEval.playerName}/${market} — signalLocked=false, skipping computation`);
           console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", reason: "no_real_odds", line: ${resolvedPitcherLine.line} }`);
           continue;
