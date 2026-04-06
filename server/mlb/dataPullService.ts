@@ -28,6 +28,8 @@ export interface GameStateCache {
   homeScore: number;
   awayScore: number;
   totalPlays: number;
+  homeTeamAbbr: string;
+  awayTeamAbbr: string;
   fetchedAt: number;
 }
 
@@ -108,6 +110,7 @@ export interface BatterRollingStats {
   last30: { avg: number | null; ops: number | null; games: number };
   seasonAvg: number | null;
   seasonOps: number | null;
+  seasonHRRate: number | null;
   fetchedAt: number;
 }
 
@@ -310,6 +313,9 @@ export async function syncGameState(statsPk: string, cacheKey?: string): Promise
         : undefined) ?? 0;
     const timesThroughOrder: number = Math.min(3, Math.ceil(currentPitchCount / 27) || 1);
 
+    const homeTeamAbbr: string = gameDataTeams.home?.abbreviation ?? "";
+    const awayTeamAbbr: string = gameDataTeams.away?.abbreviation ?? "";
+
     mlbGameCache.gameState[gameId] = {
       inning,
       isTopInning,
@@ -323,6 +329,8 @@ export async function syncGameState(statsPk: string, cacheKey?: string): Promise
       homeScore,
       awayScore,
       totalPlays,
+      homeTeamAbbr,
+      awayTeamAbbr,
       fetchedAt: Date.now(),
     };
 
@@ -879,7 +887,7 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
         last7: { avg: null, ops: null, games: 0 },
         last15: { avg: null, ops: null, games: 0 },
         last30: { avg: null, ops: null, games: 0 },
-        seasonAvg: null, seasonOps: null, fetchedAt: Date.now(),
+        seasonAvg: null, seasonOps: null, seasonHRRate: null, fetchedAt: Date.now(),
       };
       return;
     }
@@ -930,11 +938,24 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
     const seasonAvg = allGames.avg;
     const seasonOps = allGames.ops;
 
+    let seasonTotalPA = 0, seasonTotalHR = 0;
+    for (const g of splits) {
+      const s = g.stat;
+      const ab = safeNum(s.atBats) ?? 0;
+      const bb = safeNum(s.baseOnBalls) ?? 0;
+      const hbp = safeNum(s.hitByPitch) ?? 0;
+      const sf = safeNum(s.sacFlies) ?? 0;
+      const hr = safeNum(s.homeRuns) ?? 0;
+      seasonTotalPA += ab + bb + hbp + sf;
+      seasonTotalHR += hr;
+    }
+    const seasonHRRate = seasonTotalPA >= 50 ? parseFloat((seasonTotalHR / seasonTotalPA).toFixed(4)) : null;
+
     mlbPlayerCache.batterRollingStats[playerId] = {
-      last7, last15, last30, seasonAvg, seasonOps, fetchedAt: Date.now(),
+      last7, last15, last30, seasonAvg, seasonOps, seasonHRRate, fetchedAt: Date.now(),
     };
 
-    console.log(`[MLB pull] syncBatterRollingStats: player ${playerId} — L7=${last7.avg} L15=${last15.avg} L30=${last30.avg} Season=${seasonAvg} (${splits.length} games)`);
+    console.log(`[MLB pull] syncBatterRollingStats: player ${playerId} — L7=${last7.avg} L15=${last15.avg} L30=${last30.avg} Season=${seasonAvg} HR/PA=${seasonHRRate ?? "n/a"} (${splits.length} games)`);
   } catch (err: any) {
     console.error(`[MLB pull] syncBatterRollingStats(${playerId}) error:`, err.message);
   }

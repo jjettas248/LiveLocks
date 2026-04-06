@@ -48,6 +48,7 @@ import { applySafetyCeiling, applyDirectionalBias } from "./calibration";
 import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, type HRAlertInput } from "./evaluateHRAlert";
+import { getPlayer } from "./rosterService";
 import { storage } from "../storage";
 
 // ── HR alert grading tracker ──────────────────────────────────────────────────
@@ -1220,11 +1221,16 @@ export class LiveGameOrchestrator {
           ? (playerContact.priorABResults ?? []).filter((ab: any) => (ab.exitVelocity ?? 0) >= 95).length
           : 0;
 
+        const rosterLookup = getPlayer(batter.playerId);
+        const batterOpponent = state.homeTeamAbbr && state.awayTeamAbbr
+          ? (batter.team === state.homeTeamAbbr ? state.awayTeamAbbr : state.homeTeamAbbr)
+          : "";
+
         const input: MLBPropInput = {
           playerId: batter.playerId,
           playerName: batter.playerName,
           team: batter.team,
-          opponent: "",
+          opponent: batterOpponent,
           gameId,
           market,
           bookLine: resolvedLine.line,
@@ -1241,7 +1247,7 @@ export class LiveGameOrchestrator {
           isTopInning: state.isTopInning,
           currentGameHR,
           hardHitCount,
-          batterHand: null,
+          batterHand: rosterLookup?.bats ?? null,
           contactQuality: {
             exitVelocity: playerContact?.exitVelocity ?? null,
             launchAngle: playerContact?.launchAngle ?? null,
@@ -1534,6 +1540,13 @@ export class LiveGameOrchestrator {
               relieversUsedCount: bullpenCache?.relieversUsed?.length ?? 0,
             };
 
+            const rosterEntry = getPlayer(batter.playerId);
+            const resolvedBatterHand = rosterEntry?.bats ?? null;
+            const resolvedSeasonHRRate = rollingStats?.seasonHRRate ?? null;
+            const resolvedOpponent = state.homeTeamAbbr && state.awayTeamAbbr
+              ? (batter.team === state.homeTeamAbbr ? state.awayTeamAbbr : state.homeTeamAbbr)
+              : "";
+
             const alertInput: HRAlertInput = {
               playerId: batter.playerId,
               playerName: batter.playerName,
@@ -1554,12 +1567,12 @@ export class LiveGameOrchestrator {
               windSpeed: weatherCache?.windSpeed ?? null,
               temperature: weatherCache?.temperature ?? null,
               isIndoors: weatherCache?.isIndoors ?? isVenueIndoors(weatherCache?.venueName),
-              batterHand: null,
+              batterHand: resolvedBatterHand,
               pitcherThrows: pitcher?.throws ?? null,
               era: pitcherSeasonStats?.era ?? null,
               currentRuns: (state.homeScore ?? 0) + (state.awayScore ?? 0) || 4.5,
               leagueAvgRuns: 4.5,
-              seasonHRRate: null,
+              seasonHRRate: resolvedSeasonHRRate,
               barrelRate: playerContact?.barrelPct != null ? playerContact.barrelPct / 100 : null,
               hardHitRate: playerContact?.hardHitPct != null ? playerContact.hardHitPct / 100 : null,
               xSLG: playerContact?.xSLG ?? null,
@@ -1651,7 +1664,7 @@ export class LiveGameOrchestrator {
                 playerId: batter.playerId,
                 playerName: batter.playerName,
                 team: batter.team,
-                opponent: "",
+                opponent: resolvedOpponent,
                 inning: state.inning,
                 half: state.isTopInning ? "top" : "bottom",
                 readinessScore: output.hrBuildScore,
@@ -1728,11 +1741,15 @@ export class LiveGameOrchestrator {
             ? (pitcherSeasonForPitcherMarket?.era != null ? Math.max(0.3, pitcherSeasonForPitcherMarket.era / 9 * 1.1) : 0.8)
             : 5.0;
 
+        const pitcherOpponent = state.homeTeamAbbr && state.awayTeamAbbr
+          ? (pitcherToEval.team === state.homeTeamAbbr ? state.awayTeamAbbr : state.homeTeamAbbr)
+          : "";
+
         const input: MLBPropInput = {
           playerId: pitcherToEval.playerId,
           playerName: pitcherToEval.playerName,
           team: pitcherToEval.team,
-          opponent: "",
+          opponent: pitcherOpponent,
           gameId,
           market,
           bookLine: resolvedPitcherLine.line,
