@@ -490,6 +490,70 @@ function HrRadarAnalyticsSection() {
         </div>
       </div>
 
+      {records.length > 0 && (() => {
+        const tiers = ["monitor", "building", "strong"] as const;
+        const tierData = tiers.map(tier => {
+          const tierRecords = records.filter(r => r.confidenceTier === tier);
+          const tierHits = tierRecords.filter(r => r.result === "hit").length;
+          const tierRate = tierRecords.length > 0 ? Math.round((tierHits / tierRecords.length) * 1000) / 10 : 0;
+          const tierWithPeak = tierRecords.filter(r => r.peakScore != null && parseFloat(r.peakScore) > 0);
+          const avgPeak = tierWithPeak.length > 0
+            ? Math.round(tierWithPeak.reduce((sum, r) => sum + parseFloat(r.peakScore!), 0) / tierWithPeak.length * 10) / 10
+            : 0;
+          return { tier, total: tierRecords.length, hits: tierHits, rate: tierRate, avgPeak };
+        }).filter(t => t.total > 0);
+
+        const scoreBuckets = [
+          { label: "0-3", min: 0, max: 3 },
+          { label: "3-5", min: 3, max: 5 },
+          { label: "5-7", min: 5, max: 7 },
+          { label: "7+", min: 7, max: 999 },
+        ].map(b => {
+          const bRecords = records.filter(r => {
+            if (!r.peakScore || parseFloat(r.peakScore) <= 0) return false;
+            const pk = parseFloat(r.peakScore);
+            return pk >= b.min && pk < b.max;
+          });
+          const bHits = bRecords.filter(r => r.result === "hit").length;
+          return { ...b, total: bRecords.length, hits: bHits, rate: bRecords.length > 0 ? Math.round((bHits / bRecords.length) * 1000) / 10 : 0 };
+        }).filter(b => b.total > 0);
+
+        return (
+          <div className="space-y-3">
+            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Hit Rate by Tier</div>
+            <div className="grid grid-cols-3 gap-2">
+              {tierData.map(t => (
+                <div key={t.tier} className={`p-2 rounded-lg border ${
+                  t.tier === "strong" ? "border-red-500/20 bg-red-500/5" :
+                  t.tier === "building" ? "border-orange-500/20 bg-orange-500/5" :
+                  "border-zinc-500/20 bg-zinc-500/5"
+                }`} data-testid={`tier-stat-${t.tier}`}>
+                  <div className={`text-[9px] font-bold uppercase ${
+                    t.tier === "strong" ? "text-red-400" : t.tier === "building" ? "text-orange-400" : "text-zinc-400"
+                  }`}>{t.tier}</div>
+                  <div className="text-sm font-bold text-foreground">{t.rate}%</div>
+                  <div className="text-[9px] text-muted-foreground">{t.hits}/{t.total} | avg peak {t.avgPeak}</div>
+                </div>
+              ))}
+            </div>
+            {scoreBuckets.length > 0 && (
+              <>
+                <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Hit Rate by Peak Score</div>
+                <div className="flex gap-2">
+                  {scoreBuckets.map(b => (
+                    <div key={b.label} className="flex-1 text-center p-2 rounded-lg border border-border/20 bg-muted/10" data-testid={`score-bucket-${b.label}`}>
+                      <div className="text-[9px] text-muted-foreground">{b.label}</div>
+                      <div className={`text-xs font-bold ${b.rate >= 30 ? "text-emerald-400" : b.rate >= 15 ? "text-yellow-400" : "text-zinc-400"}`}>{b.rate}%</div>
+                      <div className="text-[9px] text-muted-foreground">{b.hits}/{b.total}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })()}
+
       <div className="flex gap-2">
         <select
           className="text-[10px] bg-muted/20 border border-border/30 rounded-lg px-2 py-1 text-foreground"

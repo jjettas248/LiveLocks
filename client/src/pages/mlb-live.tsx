@@ -1033,7 +1033,87 @@ function ConversionStatsBar({ stats }: { stats: AlertConversionStats | null }) {
   );
 }
 
+function GradedHitCard({ outcome }: { outcome: CanonicalGradedOutcome }) {
+  const h = outcome;
+  const timeline = h.detectedLabel && h.hitLabel
+    ? `${h.detectedLabel} → ${h.hitLabel}`
+    : h.hitLabel || (h.hitInning != null && h.hitInning > 0
+      ? `${h.hitHalf === "top" ? "T" : h.hitHalf === "bottom" ? "B" : ""}${h.hitInning}`
+      : "HR");
+  return (
+    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-1.5" data-testid={`graded-hit-${h.playerId}-${h.gameId}`}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <Trophy className="w-3.5 h-3.5 text-emerald-400" />
+          <span className="text-xs font-bold text-foreground">{h.playerName}</span>
+        </div>
+        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400" data-testid={`hit-timeline-${h.playerId}`}>
+          {timeline}
+        </span>
+      </div>
+      <div className="flex items-center gap-2 text-[10px] text-muted-foreground flex-wrap">
+        {h.team && <span>{h.team}</span>}
+        {h.detectedLabel && h.hitLabel && (
+          <span className="text-emerald-400/80 font-medium">Called {h.detectedLabel}, hit {h.hitLabel}</span>
+        )}
+        {h.resolvedAt && (
+          <span>{new Date(h.resolvedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+        )}
+      </div>
+      <div className="flex items-center gap-2 text-[10px] flex-wrap">
+        {h.peakScore != null && h.peakScore > 0 && (
+          <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold">Peak {h.peakScore.toFixed(1)}/10</span>
+        )}
+        {h.detectedScore != null && h.detectedScore > 0 && (
+          <span className="px-1.5 py-0.5 rounded bg-muted/30 text-muted-foreground">Entry {h.detectedScore.toFixed(1)}</span>
+        )}
+        {h.triggerTags.length > 0 && h.triggerTags.slice(0, 2).map((tag, i) => (
+          <span key={i} className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400/70 text-[9px]">{formatTriggerTag(tag)}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function GradedMissCard({ outcome }: { outcome: CanonicalGradedOutcome }) {
+  const m = outcome;
+  return (
+    <div className="rounded-lg border border-border/30 bg-muted/20 p-3 space-y-1.5" data-testid={`graded-miss-${m.playerId}-${m.gameId}`}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <X className="w-3.5 h-3.5 text-zinc-400" />
+          <span className="text-xs font-medium text-muted-foreground">{m.playerName}</span>
+        </div>
+        <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-500/15 text-zinc-400">No HR</span>
+      </div>
+      <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60 flex-wrap">
+        {m.team && <span>{m.team}</span>}
+        {m.detectedLabel && <span>Detected {m.detectedLabel}</span>}
+        {m.resolvedAt && (
+          <span>{new Date(m.resolvedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+        )}
+      </div>
+      <div className="flex items-center gap-2 text-[10px] flex-wrap">
+        {m.peakScore != null && m.peakScore > 0 && (
+          <span className={`px-1.5 py-0.5 rounded font-semibold ${
+            m.peakScore >= 7 ? "bg-orange-500/10 text-orange-400" : "bg-muted/30 text-muted-foreground"
+          }`}>Peak {m.peakScore.toFixed(1)}/10</span>
+        )}
+        {m.detectedScore != null && m.detectedScore > 0 && (
+          <span className="px-1.5 py-0.5 rounded bg-muted/30 text-muted-foreground">Entry {m.detectedScore.toFixed(1)}</span>
+        )}
+        {m.triggerTags.length > 0 && m.triggerTags.slice(0, 2).map((tag, i) => (
+          <span key={i} className="px-1.5 py-0.5 rounded bg-muted/20 text-muted-foreground/60 text-[9px]">{formatTriggerTag(tag)}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type RadarFilterMode = "all" | "active" | "cashed" | "missed";
+
 function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isElite: boolean; onAddToSlip?: (sig: MlbSignalData) => void; onOpenHrDetails?: (card: HrRadarCardUi) => void; games?: MLBGame[] }) {
+  const [radarFilter, setRadarFilter] = useState<RadarFilterMode>("all");
   const { data: hrData, isLoading } = useQuery<HRRadarResponse>({
     queryKey: ["/api/mlb/hr-radar"],
     refetchInterval: 20_000,
@@ -1150,9 +1230,48 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
 
   const isEmpty = peakCards.length === 0 && buildingCards.length === 0 && formationCards.length === 0 && cooldownCards.length === 0 && dedupCashed.length === 0 && missedCards.length === 0;
 
+  const activeCount = peakCards.length + buildingCards.length + formationCards.length + cooldownCards.length;
+  const cashedCount = Math.max(dedupCashed.length, canonicalHits.length);
+  const missedCount = Math.max(missedCards.length, canonicalMisses.length);
+
+  const showActive = radarFilter === "all" || radarFilter === "active";
+  const showCashed = radarFilter === "all" || radarFilter === "cashed";
+  const showMissed = radarFilter === "all" || radarFilter === "missed";
+
   return (
     <div className="space-y-6" data-testid="mlb-hr-radar">
-      {peakCards.length > 0 && (
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-1" data-testid="hr-radar-filter-bar">
+        {([
+          { key: "all" as RadarFilterMode, label: "All", count: allCards.length },
+          { key: "active" as RadarFilterMode, label: "Active", count: activeCount },
+          { key: "cashed" as RadarFilterMode, label: "Cashed", count: cashedCount },
+          { key: "missed" as RadarFilterMode, label: "Missed", count: missedCount },
+        ]).map(tab => (
+          <button
+            key={tab.key}
+            data-testid={`hr-filter-${tab.key}`}
+            onClick={() => setRadarFilter(tab.key)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap ${
+              radarFilter === tab.key
+                ? "bg-primary/15 text-primary border border-primary/30"
+                : "bg-muted/30 text-muted-foreground border border-transparent hover:bg-muted/50 hover:text-foreground"
+            }`}
+          >
+            {tab.label}
+            {tab.count > 0 && (
+              <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
+                radarFilter === tab.key
+                  ? tab.key === "cashed" ? "bg-emerald-500/20 text-emerald-400"
+                    : tab.key === "missed" ? "bg-zinc-500/20 text-zinc-400"
+                    : "bg-primary/20 text-primary"
+                  : "bg-muted/50 text-muted-foreground"
+              }`}>{tab.count}</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {showActive && peakCards.length > 0 && (
         <div className="space-y-3" data-testid="hr-section-peak">
           <div className="flex items-center gap-2">
             <div className="relative">
@@ -1179,9 +1298,9 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         </div>
       )}
 
-      <ConversionStatsBar stats={conversionStats} />
+      {showActive && <ConversionStatsBar stats={conversionStats} />}
 
-      {buildingCards.length > 0 && (
+      {showActive && buildingCards.length > 0 && (
         <div className="space-y-3" data-testid="hr-section-building">
           <div className="flex items-center gap-2">
             <Zap className="w-4 h-4 text-orange-500" />
@@ -1196,7 +1315,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         </div>
       )}
 
-      {formationCards.length > 0 && (
+      {showActive && formationCards.length > 0 && (
         <div className="space-y-3" data-testid="hr-section-formation">
           <div className="flex items-center gap-2">
             <Eye className="w-4 h-4 text-yellow-500" />
@@ -1211,7 +1330,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         </div>
       )}
 
-      {cooldownCards.length > 0 && (
+      {showActive && cooldownCards.length > 0 && (
         <div className="space-y-3" data-testid="hr-section-cooldown">
           <div className="flex items-center gap-2">
             <RefreshCw className="w-4 h-4 text-blue-400" />
@@ -1227,7 +1346,31 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         </div>
       )}
 
-      {isEmpty && (
+      {radarFilter === "active" && activeCount === 0 && (
+        <div className="rounded-xl border border-border/40 bg-card p-8 text-center space-y-3">
+          <Target className="w-8 h-8 text-muted-foreground/30 mx-auto" />
+          <div className="text-sm font-bold text-foreground">No Active Signals</div>
+          <div className="text-xs text-muted-foreground">No live HR radar signals right now. Radar scans every at-bat in progress.</div>
+        </div>
+      )}
+
+      {radarFilter === "cashed" && cashedCount === 0 && (
+        <div className="rounded-xl border border-border/40 bg-card p-8 text-center space-y-3">
+          <Trophy className="w-8 h-8 text-muted-foreground/30 mx-auto" />
+          <div className="text-sm font-bold text-foreground">No Cashed Alerts Yet</div>
+          <div className="text-xs text-muted-foreground">When a player on the radar hits a home run, it will appear here.</div>
+        </div>
+      )}
+
+      {radarFilter === "missed" && missedCount === 0 && (
+        <div className="rounded-xl border border-border/40 bg-card p-8 text-center space-y-3">
+          <X className="w-8 h-8 text-muted-foreground/30 mx-auto" />
+          <div className="text-sm font-bold text-foreground">No Misses Recorded</div>
+          <div className="text-xs text-muted-foreground">Radar alerts that finish without a HR show up here after the game ends.</div>
+        </div>
+      )}
+
+      {isEmpty && radarFilter === "all" && (
         <div className="rounded-xl border border-border/40 bg-card p-8 text-center space-y-3">
           <Target className="w-8 h-8 text-muted-foreground/30 mx-auto" />
           <div className="text-sm font-bold text-foreground">HR Radar Active</div>
@@ -1235,7 +1378,37 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         </div>
       )}
 
-      {gradingSummary && gradingSummary.totalGraded > 0 && (
+      {showCashed && dedupCashed.length > 0 && !(gradingSummary && gradingSummary.totalGraded > 0 && canonicalHits.length > 0) && (
+        <div className="space-y-3" data-testid="hr-live-cashed">
+          <div className="flex items-center gap-2">
+            <Trophy className="w-4 h-4 text-emerald-400" />
+            <span className="text-sm font-bold text-foreground">Cashed Today</span>
+            <span className="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-bold">{dedupCashed.length}</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {dedupCashed.map(c => (
+              <RadarCard key={`cashed-${c.playerId}-${c.gameId}`} card={c} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {showMissed && missedCards.length > 0 && !(gradingSummary && gradingSummary.totalGraded > 0 && canonicalMisses.length > 0) && (
+        <div className="space-y-3" data-testid="hr-live-missed">
+          <div className="flex items-center gap-2">
+            <X className="w-4 h-4 text-zinc-400" />
+            <span className="text-sm font-bold text-foreground">Missed</span>
+            <span className="text-[9px] px-2 py-0.5 rounded-full bg-zinc-500/20 text-zinc-400 font-bold">{missedCards.length}</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {missedCards.slice(0, 6).map(c => (
+              <RadarCard key={`missed-${c.playerId}-${c.gameId}`} card={c} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {gradingSummary && gradingSummary.totalGraded > 0 && (showCashed || showMissed) && (
         <div className="space-y-3" data-testid="hr-radar-grading">
           <div className="flex items-center gap-2">
             <BarChart3 className="w-4 h-4 text-muted-foreground" />
@@ -1249,7 +1422,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
               </span>
             )}
           </div>
-          {canonicalHits.length > 0 && (
+          {showCashed && canonicalHits.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center gap-1.5">
                 <Trophy className="w-3.5 h-3.5 text-emerald-400" />
@@ -1259,31 +1432,12 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {canonicalHits.map(h => (
-                  <div key={`canonical-hit-${h.playerId}-${h.gameId}`} className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-1" data-testid={`graded-hit-${h.playerId}-${h.gameId}`}>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-foreground">{h.playerName}</span>
-                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400">
-                        {h.hitLabel || "HR"}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                      {h.team && <span>{h.team}</span>}
-                      {h.hitInning != null && h.hitInning > 0 && (
-                        <span>
-                          {h.hitHalf === "top" ? "T" : h.hitHalf === "bottom" ? "B" : ""}{h.hitInning}
-                        </span>
-                      )}
-                      {h.detectedLabel && <span className="text-emerald-400/60">det. {h.detectedLabel}</span>}
-                      {h.resolvedAt && (
-                        <span>{new Date(h.resolvedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
-                      )}
-                    </div>
-                  </div>
+                  <GradedHitCard key={`canonical-hit-${h.playerId}-${h.gameId}`} outcome={h} />
                 ))}
               </div>
             </div>
           )}
-          {canonicalMisses.length > 0 && (
+          {showMissed && canonicalMisses.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center gap-1.5">
                 <X className="w-3.5 h-3.5 text-zinc-400" />
@@ -1293,19 +1447,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {canonicalMisses.slice(0, 12).map(m => (
-                  <div key={`canonical-miss-${m.playerId}-${m.gameId}`} className="rounded-lg border border-border/30 bg-muted/20 p-3 space-y-1" data-testid={`graded-miss-${m.playerId}-${m.gameId}`}>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-medium text-muted-foreground">{m.playerName}</span>
-                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-500/15 text-zinc-400">No HR</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60">
-                      {m.team && <span>{m.team}</span>}
-                      {m.detectedLabel && <span>det. {m.detectedLabel}</span>}
-                      {m.resolvedAt && (
-                        <span>{new Date(m.resolvedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
-                      )}
-                    </div>
-                  </div>
+                  <GradedMissCard key={`canonical-miss-${m.playerId}-${m.gameId}`} outcome={m} />
                 ))}
               </div>
             </div>
