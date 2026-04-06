@@ -459,7 +459,7 @@ function GameChipStrip({ games, selectedGameId, onSelectGame, edgeFeedSignals, o
                 {lean && (
                   <span className="w-2 h-2 rounded-full" style={{ background: lean.color }} title={`${lean.label}-lean`} />
                 )}
-                {isSelected && <span className="text-primary font-medium ml-0.5">\u25CF</span>}
+                {isSelected && <span className="text-primary font-medium ml-0.5">●</span>}
               </div>
             </button>
           );
@@ -505,7 +505,7 @@ function GameContextPanel({ game, signalCount }: { game: MLBGame; signalCount: n
 
         {game.weather && (game.weather.temperature != null || game.weather.windSpeed != null) && (
           <div className="text-[11px] text-muted-foreground flex items-center gap-2 flex-wrap">
-            {game.weather.temperature != null && <span>{Math.round(game.weather.temperature)}\u00B0F</span>}
+            {game.weather.temperature != null && <span>{Math.round(game.weather.temperature)}°F</span>}
             {game.weather.windSpeed != null && (
               <span>{game.weather.windSpeed} mph {game.weather.windDirection ?? ""}</span>
             )}
@@ -596,7 +596,7 @@ function GameSignalsPanel({ signals, isElite, onAddToSlip }: {
               <div className="text-xs text-muted-foreground">Unlock all MLB edges with All Sports.</div>
               <a href="/upgrade" data-testid="link-mlb-signals-upgrade"
                 className="inline-block px-5 py-2.5 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors">
-                Upgrade to All Sports \u2192
+                Upgrade to All Sports →
               </a>
             </div>
           </div>
@@ -1336,10 +1336,24 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
     }
   }, [calcResult.recommendedSide]);
 
-  const rawProb = calcResult.probability ?? calcResult.modelProbability ?? 50;
-  const probability = normalizePct(rawProb);
-  const overPct = Math.min(probability, 100);
-  const underPct = 100 - overPct;
+  const hasExplicitSides = typeof calcResult.calibratedProbabilityOver === "number" && typeof calcResult.calibratedProbabilityUnder === "number";
+  let overPct: number;
+  let underPct: number;
+  if (hasExplicitSides) {
+    overPct = Math.min(normalizePct(calcResult.calibratedProbabilityOver), 100);
+    underPct = Math.min(normalizePct(calcResult.calibratedProbabilityUnder), 100);
+  } else {
+    const rawProb = calcResult.probability ?? calcResult.modelProbability ?? 50;
+    const sided = normalizePct(rawProb);
+    const recSide = calcResult.recommendedSide;
+    if (recSide === "UNDER") {
+      underPct = Math.min(sided, 100);
+      overPct = 100 - underPct;
+    } else {
+      overPct = Math.min(sided, 100);
+      underPct = 100 - overPct;
+    }
+  }
   const displayPct = selectedSide === "OVER" ? overPct : underPct;
   const edge = calcResult.edge ?? 0;
   const projection = calcResult.projection ?? calcResult.expectedTotal;
@@ -1352,9 +1366,10 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
   const marketLabel = MARKET_LABELS[calcMarket] ?? calcMarket.replace(/_/g, " ");
 
   const currentStat = calcPlayer
-    ? (calcMarket === "hits" ? calcPlayer.h : calcMarket === "total_bases" ? calcPlayer.tb : calcMarket === "home_runs" ? calcPlayer.hr : calcMarket === "batter_strikeouts" ? calcPlayer.k : 0)
+    ? (calcMarket === "hits" ? (calcPlayer.h ?? 0) : calcMarket === "total_bases" ? (calcPlayer.tb ?? 0) : calcMarket === "home_runs" ? (calcPlayer.hr ?? 0) : calcMarket === "batter_strikeouts" ? (calcPlayer.k ?? 0) : 0)
     : 0;
-  const remaining = Math.max(0, parseFloat(calcBookLine) - currentStat);
+  const lineNum = parseFloat(calcBookLine);
+  const remaining = Number.isFinite(lineNum) ? Math.max(0, lineNum - currentStat) : 0;
 
   return (
     <div className="space-y-4 animate-in slide-in-from-top-2 duration-300" data-testid="mlb-calc-results">
@@ -1784,7 +1799,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
       market,
       sportsbook: bestSig?.sportsbook ?? null,
       line,
-    }, games));
+    }, games), player);
   };
 
   const handleSelectBook = (book: string, line: number) => {
@@ -1841,7 +1856,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     }]);
   };
 
-  const hydrateMlbCalculator = (payload: CalcHydrationPayload) => {
+  const hydrateMlbCalculator = (payload: CalcHydrationPayload, fullPlayer?: MlbPlayerStat | null) => {
     setCalcPlayerName(payload.playerName);
     setCalcMarket(payload.market);
     if (payload.line != null) setCalcBookLine(String(payload.line));
@@ -1850,13 +1865,20 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     if (payload.gameId && payload.gameId !== selectedGameId) {
       setSelectedGameId(payload.gameId);
     }
-    const stub = {
-      playerId: payload.playerId,
-      playerName: payload.playerName,
-      teamAbbr: payload.teamAbbr,
-      teamSide: payload.teamSide,
-    } as unknown as MlbPlayerStat;
-    setCalcPlayer(stub);
+    if (fullPlayer) {
+      setCalcPlayer(fullPlayer);
+    } else {
+      const stub = {
+        playerId: payload.playerId,
+        playerName: payload.playerName,
+        teamAbbr: payload.teamAbbr,
+        teamSide: payload.teamSide,
+        ab: 0, h: 0, hr: 0, tb: 0, r: 0, rbi: 0, bb: 0, sb: 0, k: 0,
+        battingOrderSlot: 0, lastABOutcome: null, exitVelocity: null,
+        barrelPct: null, xBA: null, xSLG: null, hardHitPct: null,
+      } as MlbPlayerStat;
+      setCalcPlayer(stub);
+    }
   };
 
   const handleSignalClick = (sig: MlbSignalData) => {
@@ -2195,7 +2217,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
               </div>
               <a href="/upgrade" data-testid="link-mlb-upgrade-cta"
                 className="inline-block px-5 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors">
-                Upgrade to All Sports \u2192
+                Upgrade to All Sports →
               </a>
             </div>
           )}
@@ -2245,7 +2267,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                             </div>
                             <a href="/upgrade" data-testid="link-mlb-all-feed-upgrade"
                               className="inline-block px-5 py-2.5 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors">
-                              Upgrade to All Sports \u2192
+                              Upgrade to All Sports →
                             </a>
                           </div>
                         </div>
@@ -2297,7 +2319,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                         </div>
                         <a href="/upgrade" data-testid="link-mlb-feed-upgrade"
                           className="inline-block px-5 py-2.5 rounded-lg bg-primary text-primary-foreground font-semibold text-xs hover:bg-primary/90 transition-colors">
-                          Upgrade to All Sports \u2192
+                          Upgrade to All Sports →
                         </a>
                       </div>
                     </div>

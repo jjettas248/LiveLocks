@@ -389,6 +389,10 @@ export function MlbBoxScore({
                     );
                   }
 
+                  const playerSignals = gameSignals.filter(s => s.playerId === player.playerId);
+                  const isHot = playerSignals.some(s => (s.signalTags ?? []).includes("HOT OVER"));
+                  const isCold = playerSignals.some(s => (s.signalTags ?? []).includes("COLD UNDER"));
+
                   return (
                     <tr
                       key={player.playerId}
@@ -407,6 +411,20 @@ export function MlbBoxScore({
                         <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
                           <span className="font-semibold text-foreground truncate">{player.playerName}</span>
                           <span className="text-[8px] text-muted-foreground/60 shrink-0">{player.teamAbbr}</span>
+                          {isHot && (
+                            <span
+                              data-testid={`badge-hot-${player.playerId}`}
+                              className="text-[7px] font-black px-1.5 py-0.5 rounded shrink-0 uppercase tracking-wide"
+                              style={{ color: "#f97316", background: "rgba(249,115,22,0.15)", border: "1px solid rgba(249,115,22,0.3)" }}
+                            >HOT</span>
+                          )}
+                          {isCold && (
+                            <span
+                              data-testid={`badge-cold-${player.playerId}`}
+                              className="text-[7px] font-black px-1.5 py-0.5 rounded shrink-0 uppercase tracking-wide"
+                              style={{ color: "#3b82f6", background: "rgba(59,130,246,0.15)", border: "1px solid rgba(59,130,246,0.3)" }}
+                            >COLD</span>
+                          )}
                           {stickyBadges.map((badge, bi) => (
                             <span
                               key={bi}

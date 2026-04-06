@@ -184,7 +184,16 @@ async function resolveBookLine(
   }
 
   const DEFAULT_LINES: Partial<Record<MLBMarket, number>> = {
+    hits: 0.5,
+    total_bases: 1.5,
     home_runs: 0.5,
+    hrr: 2.5,
+    batter_strikeouts: 0.5,
+    pitcher_strikeouts: 4.5,
+    pitcher_outs: 14.5,
+    hits_allowed: 5.5,
+    walks_allowed: 1.5,
+    hr_allowed: 0.5,
   };
   const defaultLine = DEFAULT_LINES[market];
   if (defaultLine !== undefined) {

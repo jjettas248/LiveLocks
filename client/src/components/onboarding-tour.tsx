@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { Joyride, CallBackProps, STATUS } from "react-joyride";
 import { apiRequest } from "@/lib/queryClient";
 
+const TOUR_COMPLETED_KEY = "livelocks_onboarding_completed";
+
 interface OnboardingTourProps {
   hasCompletedOnboarding: boolean;
   onComplete: () => void;
@@ -33,12 +35,14 @@ const STEPS = [
 export function OnboardingTour({ hasCompletedOnboarding, onComplete }: OnboardingTourProps) {
   const [run, setRun] = useState(false);
 
+  const alreadyCompleted = hasCompletedOnboarding || (typeof localStorage !== "undefined" && localStorage.getItem(TOUR_COMPLETED_KEY) === "true");
+
   useEffect(() => {
-    if (!hasCompletedOnboarding) {
+    if (!alreadyCompleted) {
       const timer = setTimeout(() => setRun(true), 1000);
       return () => clearTimeout(timer);
     }
-  }, [hasCompletedOnboarding]);
+  }, [alreadyCompleted]);
 
   const handleCallback = async (data: CallBackProps) => {
     const { status } = data;
@@ -47,13 +51,16 @@ export function OnboardingTour({ hasCompletedOnboarding, onComplete }: Onboardin
     if (finishedStatuses.includes(status)) {
       setRun(false);
       try {
+        localStorage.setItem(TOUR_COMPLETED_KEY, "true");
+      } catch {}
+      try {
         await apiRequest("POST", "/api/user/complete-onboarding");
       } catch {}
       onComplete();
     }
   };
 
-  if (hasCompletedOnboarding) return null;
+  if (alreadyCompleted) return null;
 
   return (
     <Joyride
