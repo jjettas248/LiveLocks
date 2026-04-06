@@ -1014,19 +1014,21 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
   );
 }
 
-function ConversionStatsBar({ stats }: { stats: AlertConversionStats | null }) {
-  if (!stats || stats.totalAlerts === 0) return null;
+function RadarStatsBar({ active, cashed, missed }: { active: number; cashed: number; missed: number }) {
+  const total = active + cashed + missed;
+  if (total === 0) return null;
+  const resolved = cashed + missed;
+  const hitRate = resolved > 0 ? Math.round((cashed / resolved) * 100) : 0;
   return (
-    <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-card border border-border/40 text-[10px]" data-testid="alert-conversion-stats">
+    <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-card border border-border/40 text-[10px]" data-testid="radar-stats-bar">
       <BarChart3 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-      <span className="text-muted-foreground">24h:</span>
-      <span className="font-bold text-foreground">{stats.totalAlerts} alert{stats.totalAlerts !== 1 ? "s" : ""}</span>
-      {stats.totalHR > 0 && <span className="font-bold text-emerald-400">{stats.totalHR} HR</span>}
-      {stats.totalNoHR > 0 && <span className="text-zinc-400">{stats.totalNoHR} miss</span>}
-      {stats.totalPending > 0 && <span className="text-blue-400">{stats.totalPending} live</span>}
-      {stats.conversionRate > 0 && (
-        <span className={`font-bold ml-auto ${stats.conversionRate >= 20 ? "text-emerald-400" : stats.conversionRate >= 10 ? "text-yellow-400" : "text-zinc-400"}`}>
-          {stats.conversionRate.toFixed(0)}% hit rate
+      <span className="font-bold text-foreground">{total} tracked</span>
+      {active > 0 && <span className="text-blue-400">{active} live</span>}
+      {cashed > 0 && <span className="font-bold text-emerald-400">{cashed} HR</span>}
+      {missed > 0 && <span className="text-zinc-400">{missed} miss</span>}
+      {resolved > 0 && (
+        <span className={`font-bold ml-auto ${hitRate >= 30 ? "text-emerald-400" : hitRate >= 15 ? "text-yellow-400" : "text-zinc-400"}`}>
+          {hitRate}% hit rate
         </span>
       )}
     </div>
@@ -1136,7 +1138,6 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
   const gradingSummary = hrData?.gradingSummary ?? null;
 
   const alerts = alertData?.alerts ?? [];
-  const conversionStats = alertData?.conversionStats ?? null;
 
   const radarState = new Map<string, HrRadarCardUi>();
   const radarKey = (playerId: string, gameId: string) => `${playerId}-${gameId || "unknown"}`;
@@ -1298,7 +1299,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         </div>
       )}
 
-      {showActive && <ConversionStatsBar stats={conversionStats} />}
+      {showActive && <RadarStatsBar active={activeCount} cashed={cashedCount} missed={missedCount} />}
 
       {showActive && buildingCards.length > 0 && (
         <div className="space-y-3" data-testid="hr-section-building">
