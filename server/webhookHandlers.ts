@@ -69,19 +69,27 @@ export class WebhookHandlers {
     const sync = await getStripeSync();
     await sync.processWebhook(payload, signature);
 
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-    if (!webhookSecret) {
-      console.error("[webhook] STRIPE_WEBHOOK_SECRET not configured — cannot verify event");
-      return;
-    }
-
     let event: any;
-    try {
-      const stripe = await getUncachableStripeClient();
-      event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
-    } catch (parseErr: any) {
-      console.error("[webhook] Failed to construct event:", parseErr.message);
-      return;
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (webhookSecret) {
+      try {
+        const stripe = await getUncachableStripeClient();
+        event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
+      } catch (parseErr: any) {
+        console.error("[webhook] Failed to construct event:", parseErr.message);
+        return;
+      }
+    } else {
+      try {
+        event = JSON.parse(payload.toString());
+      } catch (parseErr: any) {
+        console.error("[webhook] Failed to parse event payload:", parseErr.message);
+        return;
+      }
+      if (!event?.id || !event?.type) {
+        console.error("[webhook] Parsed payload missing id or type — skipping");
+        return;
+      }
     }
 
     if (!HANDLED_EVENTS.has(event.type)) return;
