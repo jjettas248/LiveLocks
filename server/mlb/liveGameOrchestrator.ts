@@ -1157,17 +1157,25 @@ export class LiveGameOrchestrator {
         console.log(`[MLB MARKET INPUT][${gameId}][${market}] { playerName: "${batter.playerName}", playerId: "${batter.playerId}", inning: ${state.inning} }`);
 
         const resolvedLine = await resolveBookLine(oddsEventId, batter.playerName, market);
+        let hrRadarOnly = false;
         if (resolvedLine === null) {
-          console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "no_book_line" }`);
-          continue;
+          if (market === "home_runs") {
+            hrRadarOnly = true;
+            console.log(`[MLB HR_RADAR_ONLY][${gameId}] ${batter.playerName} — no book line for home_runs, running HR radar scan only`);
+          } else {
+            console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "no_book_line" }`);
+            continue;
+          }
         }
-        if (resolvedLine.isDegraded) anyDegraded = true;
+        if (resolvedLine && resolvedLine.isDegraded) anyDegraded = true;
 
-        const resolvedMarketObj = { line: resolvedLine.line, odds: (resolvedLine.overOdds !== null || resolvedLine.underOdds !== null) ? { overOdds: resolvedLine.overOdds, underOdds: resolvedLine.underOdds } : null };
-        if (!hasRealOdds(resolvedMarketObj)) {
-          console.warn(`[MLB orchestrator] hasRealOdds failed for ${batter.playerName}/${market} — signalLocked=false, skipping computation`);
-          console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "no_real_odds", line: ${resolvedLine.line} }`);
-          continue;
+        if (!hrRadarOnly) {
+          const resolvedMarketObj = { line: resolvedLine!.line, odds: (resolvedLine!.overOdds !== null || resolvedLine!.underOdds !== null) ? { overOdds: resolvedLine!.overOdds, underOdds: resolvedLine!.underOdds } : null };
+          if (!hasRealOdds(resolvedMarketObj)) {
+            console.warn(`[MLB orchestrator] hasRealOdds failed for ${batter.playerName}/${market} — signalLocked=false, skipping computation`);
+            console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "no_real_odds", line: ${resolvedLine!.line} }`);
+            continue;
+          }
         }
 
         const boxScorePlayer = mlbGameCache.gameBoxScore[gameId]?.byPlayerId?.[batter.playerId];
@@ -1222,9 +1230,9 @@ export class LiveGameOrchestrator {
           opponent: batterOpponent,
           gameId,
           market,
-          bookLine: resolvedLine.line,
-          overOdds: resolvedLine.overOdds,
-          underOdds: resolvedLine.underOdds,
+          bookLine: hrRadarOnly ? 0.5 : resolvedLine!.line,
+          overOdds: hrRadarOnly ? null : resolvedLine!.overOdds,
+          underOdds: hrRadarOnly ? null : resolvedLine!.underOdds,
           seasonAvg: effectiveSeasonAvg,
           plateAppearances: state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0,
           atBats: boxScorePlayer ? boxScorePlayer.ab : Math.max(0, state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0),
@@ -1366,18 +1374,18 @@ export class LiveGameOrchestrator {
 
         try {
           const rawOutput = calculateMLBPropEdge(input);
-          marketsEvaluated++;
+          if (!hrRadarOnly) marketsEvaluated++;
 
           const fwResult = runIntegrityFirewall(rawOutput);
           logFirewallResult(gameId, rawOutput.playerName, market, fwResult);
 
-          if (fwResult.hardReject) {
+          if (fwResult.hardReject && !hrRadarOnly) {
             signalsRejected++;
             console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "firewall_hard_reject" }`);
             continue;
           }
 
-          const output = fwResult.cappedOutput;
+          const output = fwResult.hardReject ? rawOutput : fwResult.cappedOutput;
 
           const bArch = batterArchetypeCache.get(batter.playerId) ?? "stable_regular";
 
@@ -1443,47 +1451,49 @@ export class LiveGameOrchestrator {
             outcome: lastAB?.outcome ?? null,
           } : null;
 
-          const qResult = this.qualifySignal(gameId, input, output);
-          if (qResult && !isEarlySignalMode) {
-            qResult.currentStats = batterStats;
-            qResult.lastABContact = lastABContact;
-            qResult.batterArchetype = bArch;
-            qResult.pitcherArchetype = pitcherArch;
-            qResult.thesis = thesis;
-            qResult.safetyCeilingApplied = ceilResult.ceilingApplied;
-            qResult.varianceTier = MARKET_VOLATILITY[market] ?? "mid";
-            qResult.isDegraded = !!(input as any).isDegraded;
-            qResult.dataQuality = !!(input as any).isDegraded ? "degraded" : (Object.values({
-              parkFactor: weatherCache?.venueName != null,
-              weather: weatherCache?.temperature != null,
-              pitcherERA: input.pitcher.era != null,
-              xBA: input.contactQuality.xBA != null,
-              bvp: !!bvpData,
-            }).filter(Boolean).length >= 4 ? "full" : "partial");
-            qualifiedSignals.push(qResult);
-            allSignals.push(qResult);
-            signalsQualified++;
-            scoreSum += qResult.signalScore;
-          } else {
-            if (!isEarlySignalMode) signalsRejected++;
-            const watchSig = isEarlySignalMode
-              ? (qResult ?? this.buildWatchSignal(gameId, input, output))
-              : this.buildWatchSignal(gameId, input, output);
-            if (watchSig) {
-              watchSig.currentStats = batterStats;
-              watchSig.lastABContact = lastABContact;
-              watchSig.batterArchetype = bArch;
-              watchSig.pitcherArchetype = pitcherArch;
-              watchSig.thesis = thesis;
-              watchSig.isDegraded = !!(input as any).isDegraded;
-              if (isEarlySignalMode) {
-                watchSig.confidenceTier = "WATCHLIST" as any;
-                watchSig.isEarlySignal = true;
-                watchSig.watchlist = true;
-                watchSig.actionable = false;
-                console.log(`[MLB EARLY_SIGNAL] ${batter.playerName}/${market} game=${gameId} — pre-AB watchlist signal (edge=${output.edge.toFixed(1)}, side=${output.recommendedSide})`);
+          if (!hrRadarOnly) {
+            const qResult = this.qualifySignal(gameId, input, output);
+            if (qResult && !isEarlySignalMode) {
+              qResult.currentStats = batterStats;
+              qResult.lastABContact = lastABContact;
+              qResult.batterArchetype = bArch;
+              qResult.pitcherArchetype = pitcherArch;
+              qResult.thesis = thesis;
+              qResult.safetyCeilingApplied = ceilResult.ceilingApplied;
+              qResult.varianceTier = MARKET_VOLATILITY[market] ?? "mid";
+              qResult.isDegraded = !!(input as any).isDegraded;
+              qResult.dataQuality = !!(input as any).isDegraded ? "degraded" : (Object.values({
+                parkFactor: weatherCache?.venueName != null,
+                weather: weatherCache?.temperature != null,
+                pitcherERA: input.pitcher.era != null,
+                xBA: input.contactQuality.xBA != null,
+                bvp: !!bvpData,
+              }).filter(Boolean).length >= 4 ? "full" : "partial");
+              qualifiedSignals.push(qResult);
+              allSignals.push(qResult);
+              signalsQualified++;
+              scoreSum += qResult.signalScore;
+            } else {
+              if (!isEarlySignalMode) signalsRejected++;
+              const watchSig = isEarlySignalMode
+                ? (qResult ?? this.buildWatchSignal(gameId, input, output))
+                : this.buildWatchSignal(gameId, input, output);
+              if (watchSig) {
+                watchSig.currentStats = batterStats;
+                watchSig.lastABContact = lastABContact;
+                watchSig.batterArchetype = bArch;
+                watchSig.pitcherArchetype = pitcherArch;
+                watchSig.thesis = thesis;
+                watchSig.isDegraded = !!(input as any).isDegraded;
+                if (isEarlySignalMode) {
+                  watchSig.confidenceTier = "WATCHLIST" as any;
+                  watchSig.isEarlySignal = true;
+                  watchSig.watchlist = true;
+                  watchSig.actionable = false;
+                  console.log(`[MLB EARLY_SIGNAL] ${batter.playerName}/${market} game=${gameId} — pre-AB watchlist signal (edge=${output.edge.toFixed(1)}, side=${output.recommendedSide})`);
+                }
+                allSignals.push(watchSig);
               }
-              allSignals.push(watchSig);
             }
           }
 
