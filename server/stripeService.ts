@@ -6,8 +6,8 @@ import { getUncachableStripeClient } from "./stripeClient";
 import { resolveAccess } from "./utils/access";
 
 const PLAN_META = {
-  all:   { name: "Pro – LiveLocks",        description: "Unlimited NBA + NCAAB Live analytics, 2H Plays, Parlay Builder, SMS Alerts, Push Notifications", amount: 4000, priceId: process.env.STRIPE_PRO_PRICE_ID        || "price_1T6hh82ceUNmv10tdIMnFF5N" },
-  elite: { name: "All Sports – LiveLocks", description: "Everything in Pro + MLB Live prop predictions + Priority SMS",                                     amount: 6500, priceId: process.env.STRIPE_ALL_SPORTS_PRICE_ID || "price_1T6hh92ceUNmv10tShQlLUYt" },
+  all:   { name: "Pro – LiveLocks",        description: "Unlimited NBA + NCAAB Live analytics, 2H Plays, Parlay Builder, SMS Alerts, Push Notifications", amount: 4000, priceId: process.env.STRIPE_PRO_PRICE_ID        || "price_1TJJ4M2ceUNmv10tYSsYXA6T" },
+  elite: { name: "All Sports – LiveLocks", description: "Everything in Pro + MLB Live prop predictions + Priority SMS",                                     amount: 6500, priceId: process.env.STRIPE_ALL_SPORTS_PRICE_ID || "price_1TJJ4M2ceUNmv10tB8JCzPYe" },
 };
 
 async function getPriceIdForTier(tier: "all" | "elite"): Promise<string> {

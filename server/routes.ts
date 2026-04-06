@@ -241,8 +241,8 @@ export async function registerRoutes(
 
   const ADMIN_TIER_PRICES: Record<string, { label: string; pricePerMonth: number; stripePriceId: string | null }> = {
     "":      { label: "Free",                pricePerMonth: 0,  stripePriceId: null },
-    "all":   { label: "Pro ($40/mo)",        pricePerMonth: 40, stripePriceId: process.env.STRIPE_PRO_PRICE_ID        || "price_1T6hh82ceUNmv10tdIMnFF5N" },
-    "elite": { label: "All Sports ($65/mo)", pricePerMonth: 65, stripePriceId: process.env.STRIPE_ALL_SPORTS_PRICE_ID || "price_1T6hh92ceUNmv10tShQlLUYt" },
+    "all":   { label: "Pro ($40/mo)",        pricePerMonth: 40, stripePriceId: process.env.STRIPE_PRO_PRICE_ID        || "price_1TJJ4M2ceUNmv10tYSsYXA6T" },
+    "elite": { label: "All Sports ($65/mo)", pricePerMonth: 65, stripePriceId: process.env.STRIPE_ALL_SPORTS_PRICE_ID || "price_1TJJ4M2ceUNmv10tB8JCzPYe" },
   };
 
   app.post("/api/admin/change-tier", requireAdmin, async (req, res) => {
@@ -2645,13 +2645,13 @@ export async function registerRoutes(
           const { getUncachableStripeClient } = await import("./stripeClient");
           const { resolveTierFromSubscription } = await import("./utils/resolveTier");
           const stripe = await getUncachableStripeClient();
-          const subs = await stripe.subscriptions.list({
-            customer: user.stripeCustomerId,
-            status: "active",
-            limit: 1,
-          });
-          if (subs.data.length > 0) {
-            const activeSub = subs.data[0];
+          const [activeSubs, trialingSubs] = await Promise.all([
+            stripe.subscriptions.list({ customer: user.stripeCustomerId, status: "active", limit: 1 }),
+            stripe.subscriptions.list({ customer: user.stripeCustomerId, status: "trialing", limit: 1 }),
+          ]);
+          const validSub = activeSubs.data[0] || trialingSubs.data[0];
+          if (validSub) {
+            const activeSub = validSub;
             const stripeTier = resolveTierFromSubscription(activeSub);
             if (stripeTier && stripeTier !== user.subscriptionTier) {
               await storage.updateUserSubscription(userId, stripeTier, user.stripeCustomerId, activeSub.id);

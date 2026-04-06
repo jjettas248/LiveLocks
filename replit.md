@@ -1,7 +1,15 @@
-# LiveLocks by PropPulse — NBA/NCAAB Live Lines
+# LiveLocks by PropPulse — NBA/MLB/NCAAB Live Lines
 
 ## Overview
-LiveLocks is a full-stack Progressive Web Application (PWA) designed for betting analytics in NBA and NCAAB. It provides real-time probabilities for player prop bets, analyzes NCAAB live spread/total/team-total probabilities, and enables users to construct correlation-adjusted parlays. The platform aims to enhance sports bettors' decision-making with data-driven insights and sophisticated analytical tools by integrating live game data and offering subscription-based access, notifications, and an administrative panel.
+LiveLocks is a full-stack Progressive Web Application (PWA) designed for betting analytics in NBA, MLB, and NCAAB. It provides real-time probabilities for player prop bets, analyzes NCAAB live spread/total/team-total probabilities, and enables users to construct correlation-adjusted parlays. The platform aims to enhance sports bettors' decision-making with data-driven insights and sophisticated analytical tools by integrating live game data and offering subscription-based access, notifications, and an administrative panel.
+
+## Landing Page & Growth Features
+- **Dual-sport positioning**: Landing page highlights both NBA + MLB engines with proof images, feature bullets, and updated pricing table
+- **3-day free trial**: All new subscriptions include a 3-day free trial, configured both at Stripe checkout code level (`trial_period_days: 3`) and baked into Stripe price objects. Trialing users get full tier access.
+- **Guided onboarding**: `react-joyride` tour runs on first login, targeting live board, MLB tab, and edge values. Completion tracked via `hasCompletedOnboarding` user column.
+- **Sport personalization**: Post-signup sport picker modal (`SportPicker` component) lets users choose NBA, MLB, or both. Stored in `sportFocus` user column, defaults dashboard active tab accordingly.
+- **Stripe price IDs**: Pro = `price_1TJJ4M2ceUNmv10tYSsYXA6T` ($40/mo), All Sports = `price_1TJJ4M2ceUNmv10tB8JCzPYe` ($65/mo). Legacy archived IDs mapped in `server/billing/planMap.ts` for backward compatibility.
+- **Stripe product IDs**: Pro = `prod_U4rP9VYoK6FC5I`, All Sports = `prod_U4rPSI6tQ4CGz7`
 
 ## User Preferences
 I prefer clear and concise explanations. When implementing new features or making significant changes, please propose the high-level plan first and wait for my approval before proceeding with detailed implementation. For UI/UX, I prefer modern, clean designs with intuitive navigation. I am open to iterative development and feedback loops.
