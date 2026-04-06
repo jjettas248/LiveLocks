@@ -16,8 +16,7 @@ async function syncSubscriptionToDb(stripe: any, subscriptionId: string): Promis
   const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer?.id ?? "";
   if (!customerId) return;
 
-  // Clean model: active = access granted; anything else = access revoked
-  if (sub.status !== "active") {
+  if (sub.status !== "active" && sub.status !== "trialing") {
     if (sub.status === "past_due" || sub.status === "unpaid") {
       const issueUser = await storage.getUserByStripeCustomerId(customerId);
       if (issueUser) {

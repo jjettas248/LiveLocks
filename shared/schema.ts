@@ -40,6 +40,8 @@ export const users = pgTable("users", {
   churnedFromTier: text("churned_from_tier"),
   resetPasswordToken: text("reset_password_token"),
   resetPasswordExpiry: timestamp("reset_password_expiry"),
+  hasCompletedOnboarding: boolean("has_completed_onboarding").notNull().default(false),
+  sportFocus: text("sport_focus"),
 });
 
 export const stripeEvents = pgTable("stripe_events", {

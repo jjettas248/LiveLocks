@@ -48,6 +48,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
       };
 
       sessionParams.line_items = [{ price: priceId, quantity: 1 }];
+      sessionParams.subscription_data = { trial_period_days: 3 };
 
       if (user.stripeCustomerId) {
         sessionParams.customer = user.stripeCustomerId;
@@ -167,6 +168,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
         cancel_url: `${origin}/dashboard?payment=cancelled`,
         metadata: { userId: String(userId), tier },
         line_items: [{ price: newPriceId, quantity: 1 }],
+        subscription_data: { trial_period_days: 3 },
         ...(user.stripeCustomerId
           ? { customer: user.stripeCustomerId }
           : { customer_email: user.email }),

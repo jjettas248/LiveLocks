@@ -20,6 +20,8 @@ import { RecentWinsStrip } from "@/components/RecentWinsStrip";
 import { LiveBoxscore } from "@/components/live-boxscore";
 import { AlertsOnboardingModal } from "@/components/alerts-onboarding-modal";
 import { useAuth } from "@/hooks/use-auth";
+import { OnboardingTour } from "@/components/onboarding-tour";
+import { SportPicker } from "@/components/sport-picker";
 import { usePullRefresh } from "@/hooks/use-pull-refresh";
 import { hasProAccess } from "@/lib/tierUtils";
 import { useLocation } from "wouter";
@@ -551,6 +553,22 @@ export default function Dashboard() {
   const [mlbSubTab, setMlbSubTab] = useState<"games" | "live_feed" | "hr_radar">("games");
   const [expandToGameId, setExpandToGameId] = useState<string | null>(null);
   const [showWelcomeBanner, setShowWelcomeBanner] = useState(false);
+  const [showSportPicker, setShowSportPicker] = useState(false);
+  const [onboardingCompleted, setOnboardingCompleted] = useState(true);
+  const [userHydrated, setUserHydrated] = useState(false);
+
+  useEffect(() => {
+    if (user && !userHydrated) {
+      setUserHydrated(true);
+      if (!user.sportFocus) {
+        setShowSportPicker(true);
+      }
+      if (user.sportFocus === "mlb") {
+        setActiveTab("mlb");
+      }
+      setOnboardingCompleted(user.hasCompletedOnboarding ?? false);
+    }
+  }, [user, userHydrated]);
   const [verifyBannerDismissed, setVerifyBannerDismissed] = useState(false);
   const [resendingVerify, setResendingVerify] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -2081,7 +2099,7 @@ export default function Dashboard() {
               onClick={handleUpgradeClick}
               className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-black active:scale-95 transition-transform"
             >
-              Unlock Full Access
+              Start Free 3-Day Trial
             </button>
           </div>
         )}
@@ -4036,7 +4054,7 @@ export default function Dashboard() {
             onClick={handleUpgradeClick}
             className="px-5 py-2 rounded-lg text-sm font-bold bg-amber-500 text-black active:scale-95 transition-transform"
           >
-            Unlock Full Access
+            Start Free 3-Day Trial
           </button>
         </div>
       )}
@@ -4407,6 +4425,23 @@ export default function Dashboard() {
       >
         <ChevronUp className="w-5 h-5" />
       </button>
+
+      {showSportPicker && (
+        <SportPicker
+          onComplete={(focus) => {
+            setShowSportPicker(false);
+            if (focus === "mlb") setActiveTab("mlb");
+            else if (focus === "nba") setActiveTab("calculator");
+          }}
+        />
+      )}
+
+      {!showSportPicker && (
+        <OnboardingTour
+          hasCompletedOnboarding={onboardingCompleted}
+          onComplete={() => setOnboardingCompleted(true)}
+        />
+      )}
     </div>
   );
 }

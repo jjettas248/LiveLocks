@@ -4478,6 +4478,30 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/user/complete-onboarding", requireAuth, async (req, res) => {
+    try {
+      const userId = (req as any).resolvedUserId!;
+      await storage.updateUser(userId, { hasCompletedOnboarding: true } as any);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to update onboarding status" });
+    }
+  });
+
+  app.post("/api/user/sport-focus", requireAuth, async (req, res) => {
+    try {
+      const userId = (req as any).resolvedUserId!;
+      const { sportFocus } = req.body;
+      if (!sportFocus || !["nba", "mlb", "both"].includes(sportFocus)) {
+        return res.status(400).json({ error: "Invalid sport focus. Must be 'nba', 'mlb', or 'both'." });
+      }
+      await storage.updateUser(userId, { sportFocus } as any);
+      res.json({ success: true, sportFocus });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to update sport preference" });
+    }
+  });
+
   // ── Twilio STOP webhook ────────────────────────────────────────────────────
   app.post("/api/webhooks/twilio", async (req, res) => {
     try {

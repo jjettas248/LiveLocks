@@ -1,6 +1,8 @@
-import { Zap, BarChart3, Target, ArrowRight, CheckCircle2, TrendingUp, Shield, Activity, MessageSquare, Bell, Check } from "lucide-react";
+import { Zap, BarChart3, Target, ArrowRight, TrendingUp, Shield, Activity, MessageSquare, Bell, Check } from "lucide-react";
 import { DashboardPreview } from "@/components/DashboardPreview";
 import { Link } from "wouter";
+import mlbWinsImg from "@assets/image_1775499429532.png";
+import mlbSignalsImg from "@assets/image_1775499450591.png";
 
 const PRICING_TIERS = [
   {
@@ -16,13 +18,14 @@ const PRICING_TIERS = [
       "Community access",
     ],
     highlight: false,
+    badge: null,
   },
   {
     name: "Pro",
     price: "$40",
     period: "/mo",
     description: "Full access to NBA + NCAAB predictions and SMS alerts.",
-    cta: "Get Pro Access",
+    cta: "Start Free 3-Day Trial",
     features: [
       "Unlimited calculations",
       "NBA + NCAAB live predictions",
@@ -32,21 +35,24 @@ const PRICING_TIERS = [
       "Priority support",
     ],
     highlight: true,
+    badge: null,
   },
   {
     name: "All Sports",
     price: "$65",
     period: "/mo",
-    description: "Everything in Pro plus MLB live predictions.",
-    cta: "Go All Sports",
+    description: "Everything in Pro plus the full MLB Live Engine.",
+    cta: "Start Free 3-Day Trial",
     features: [
       "Everything in Pro",
-      "MLB live prop predictions",
+      "MLB Live Edge Engine",
+      "Inning-based live signals",
+      "HR probability engine",
+      "Pitcher fatigue modeling",
       "Cross-sport parlay builder",
-      "Early access to new sports",
-      "Dedicated support",
     ],
     highlight: false,
+    badge: "Includes MLB Live Signals (NEW)",
   },
 ];
 
@@ -72,6 +78,7 @@ export default function LandingPage() {
             </div>
             <div className="hidden md:flex items-center gap-8 text-sm text-gray-500">
               <a href="#features" className="hover:text-gray-900 transition-colors" data-testid="link-features">Features</a>
+              <a href="#mlb-engine" className="hover:text-gray-900 transition-colors" data-testid="link-mlb">MLB Engine</a>
               <a href="#preview" className="hover:text-gray-900 transition-colors" data-testid="link-preview">Dashboard</a>
               <a href="#alerts" className="hover:text-gray-900 transition-colors" data-testid="link-alerts">Alerts</a>
               <a href="#pricing" className="hover:text-gray-900 transition-colors" data-testid="link-pricing">Pricing</a>
@@ -81,7 +88,7 @@ export default function LandingPage() {
               className="flex items-center gap-1.5 bg-gray-950 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-gray-800 transition-colors"
               data-testid="link-get-access-nav"
             >
-              Get Access <ArrowRight size={14} />
+              Start Free Trial <ArrowRight size={14} />
             </Link>
           </div>
         </nav>
@@ -92,15 +99,19 @@ export default function LandingPage() {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75" />
               <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
             </span>
-            Detection engine is live — NBA season active
+            Detection engine is live — NBA + MLB season active
           </div>
 
-          <h1 className="text-6xl md:text-8xl font-extrabold tracking-tighter mb-6 leading-none text-balance text-gray-950" data-testid="text-hero-heading">
-            Stop guessing<br />on live props.
+          <h1 className="text-5xl md:text-7xl font-extrabold tracking-tighter mb-6 leading-none text-balance text-gray-950" data-testid="text-hero-heading">
+            NBA + MLB<br />Live Betting Signals
           </h1>
 
-          <p className="text-lg text-gray-500 mb-12 max-w-xl mx-auto leading-relaxed text-pretty">
-            LiveLocks scans every halftime game simultaneously, ranks the highest-edge 2H props using real-time box score data, and texts you the top plays the moment they are detected.
+          <p className="text-lg text-gray-500 mb-4 max-w-xl mx-auto leading-relaxed text-pretty">
+            Real-time edges driven by live math, not predictions. LiveLocks scans every game simultaneously and surfaces the highest-edge plays the moment they appear.
+          </p>
+
+          <p className="text-sm text-gray-400 mb-10 max-w-md mx-auto">
+            Most users are winning using MLB 3rd-7th inning signals
           </p>
 
           <div className="w-full max-w-md mx-auto mb-5">
@@ -109,12 +120,12 @@ export default function LandingPage() {
               className="inline-flex items-center gap-2 bg-gray-950 text-white text-sm font-semibold px-8 py-3.5 rounded-xl hover:bg-gray-800 transition-colors shadow-md shadow-black/5"
               data-testid="button-signup-hero"
             >
-              Sign Up Free <ArrowRight size={15} />
+              Start Free 3-Day Trial <ArrowRight size={15} />
             </Link>
           </div>
 
           <p className="text-xs text-gray-400">
-            No credit card required &middot; 3 free probability calculations included
+            No charge today &middot; Cancel anytime during trial
           </p>
         </header>
 
@@ -155,7 +166,7 @@ export default function LandingPage() {
             Built for in-game edge.
           </h2>
           <p className="text-muted-foreground text-base max-w-md mx-auto leading-relaxed">
-            Every feature is designed around one goal: giving you a sharper read on live props faster than anyone else at halftime.
+            Every feature is designed around one goal: giving you a sharper read on live props faster than anyone else.
           </p>
         </div>
 
@@ -164,7 +175,7 @@ export default function LandingPage() {
             icon={<Zap size={20} className="text-blue-400" />}
             iconBg="bg-blue-500/10"
             title="Proprietary Live Prediction Engine"
-            body="Our detection software combines live box score data, pace, opponent defense, and foul trouble into a single hit probability — updated every play, not just at halftime."
+            body="Our detection software combines live box score data, pace, opponent defense, and foul trouble into a single hit probability — updated every play."
           />
           <FeatureCard
             icon={<BarChart3 size={20} className="text-emerald-400" />}
@@ -176,7 +187,97 @@ export default function LandingPage() {
             icon={<Target size={20} className="text-blue-400" />}
             iconBg="bg-blue-500/10"
             title="Smart Parlay Builder"
-            body="Add any detected play directly to your parlay slip. Built-in correlation awareness and live sportsbook line integration keep your slip grounded in reality."
+            body="Add any detected play directly to your parlay slip without leaving the view. Built-in correlation awareness and live sportsbook line integration."
+          />
+        </div>
+      </section>
+
+      <section id="mlb-engine" className="container mx-auto px-6 py-24 max-w-6xl border-t border-border">
+        <div className="grid md:grid-cols-2 gap-16 items-center">
+          <div>
+            <div className="inline-flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-widest mb-6">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400" />
+              </span>
+              NEW
+            </div>
+            <h2 className="text-3xl md:text-4xl font-extrabold tracking-tight text-foreground mb-5 text-balance" data-testid="text-mlb-engine-heading">
+              MLB Live Edge Engine
+            </h2>
+            <p className="text-muted-foreground leading-relaxed mb-8 text-pretty">
+              Purpose-built for baseball. The MLB engine tracks every pitch, every at-bat, and every bullpen change — surfacing high-edge signals as the game unfolds inning by inning.
+            </p>
+            <ul className="space-y-4">
+              {[
+                {
+                  icon: <Activity size={15} className="text-emerald-400" />,
+                  bg: "bg-emerald-500/10",
+                  title: "Inning-based signals (3rd, 5th, 7th inning)",
+                  body: "Signals strengthen as the game progresses. Mid-game innings are where the strongest edges appear as pitcher fatigue sets in.",
+                },
+                {
+                  icon: <TrendingUp size={15} className="text-blue-400" />,
+                  bg: "bg-blue-500/10",
+                  title: "Pitcher fatigue + bullpen exposure modeling",
+                  body: "Real-time velocity tracking, pitch count monitoring, and bullpen ERA analysis detect when pitchers are breaking down before the market adjusts.",
+                },
+                {
+                  icon: <Target size={15} className="text-amber-400" />,
+                  bg: "bg-amber-500/10",
+                  title: "Contact quality (EV, launch angle, hard-hit)",
+                  body: "Exit velocity, launch angle, and barrel rate data from every at-bat feed directly into live probability calculations.",
+                },
+                {
+                  icon: <Zap size={15} className="text-red-400" />,
+                  bg: "bg-red-500/10",
+                  title: "Home Run probability engine",
+                  body: "Calibrated HR conversion model combining Statcast contact data, park factors, weather, and pitcher deterioration context.",
+                },
+              ].map(({ icon, bg, title, body }) => (
+                <li key={title} className="flex items-start gap-3">
+                  <div className={`${bg} w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5`}>
+                    {icon}
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">{title}</p>
+                    <p className="text-xs text-muted-foreground leading-relaxed">{body}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="space-y-6">
+            <div className="relative rounded-xl overflow-hidden border border-border shadow-2xl shadow-black/60">
+              <img
+                src={mlbSignalsImg}
+                alt="MLB Live Signals Interface showing inning-based edge detection with confidence scores"
+                className="w-full h-auto"
+                loading="lazy"
+                data-testid="img-mlb-signals"
+              />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="mlb-proof" className="container mx-auto px-6 py-24 max-w-6xl border-t border-border">
+        <div className="text-center mb-12">
+          <h2 className="text-3xl md:text-4xl font-extrabold tracking-tight text-foreground mb-4 text-balance" data-testid="text-mlb-proof-heading">
+            Recent MLB Wins
+          </h2>
+          <p className="text-muted-foreground text-base max-w-lg mx-auto leading-relaxed">
+            Real results from our MLB live engine — every signal tracked, every outcome verified.
+          </p>
+        </div>
+        <div className="relative max-w-4xl mx-auto rounded-xl overflow-hidden border border-border shadow-2xl shadow-black/60">
+          <img
+            src={mlbWinsImg}
+            alt="MLB wins proof showing verified winning signals with dates, players, markets and results"
+            className="w-full h-auto"
+            loading="lazy"
+            data-testid="img-mlb-wins"
           />
         </div>
       </section>
@@ -312,7 +413,7 @@ export default function LandingPage() {
             Simple, transparent pricing.
           </h2>
           <p className="text-muted-foreground text-base max-w-md mx-auto leading-relaxed">
-            Start free with 3 calculations. Upgrade when you are ready for unlimited access, SMS alerts, and multi-sport coverage.
+            Start with a free 3-day trial on any paid plan. No charge until day 4. Cancel anytime.
           </p>
         </div>
 
@@ -348,6 +449,11 @@ export default function LandingPage() {
                   </li>
                 ))}
               </ul>
+              {tier.badge && (
+                <div className="bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-semibold px-3 py-1.5 rounded-lg text-center" data-testid="badge-mlb-new">
+                  {tier.badge}
+                </div>
+              )}
               <Link
                 href="/auth"
                 className={`w-full text-center text-sm font-semibold py-2.5 rounded-lg transition-colors ${
@@ -370,22 +476,22 @@ export default function LandingPage() {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400" />
             </span>
-            Live Now — NBA 2025–26 Season
+            Live Now — NBA + MLB Season Active
           </div>
           <h3 className="text-2xl md:text-3xl font-extrabold tracking-tight text-foreground mb-3 text-balance">
             Ready to find your edge?
           </h3>
           <p className="text-muted-foreground mb-8 max-w-sm mx-auto leading-relaxed">
-            Get full access to the live detection engine, SMS halftime alerts, and the prop calculator. Includes 3 free probability calculations to get started.
+            Get full access to NBA + MLB live detection engines, SMS alerts, and the prop calculator. Start with a free 3-day trial.
           </p>
           <Link
             href="/auth"
             className="inline-flex items-center gap-2 bg-foreground text-background font-semibold px-6 py-3 rounded-lg hover:bg-foreground/90 transition-colors"
             data-testid="button-signup-cta"
           >
-            Sign Up Free — Get Started <ArrowRight size={15} />
+            Start Free 3-Day Trial <ArrowRight size={15} />
           </Link>
-          <p className="text-xs text-muted-foreground/50 mt-4">No credit card required &middot; 3 free calculations included</p>
+          <p className="text-xs text-muted-foreground/50 mt-4">No charge today &middot; Cancel anytime during trial</p>
         </div>
       </section>
 

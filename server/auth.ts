@@ -100,6 +100,8 @@ function safeUser(user: User) {
     hasNCAAB: access.hasNCAAB,
     hasMLB: access.hasMLB,
     hasUnlimited: access.hasUnlimited,
+    hasCompletedOnboarding: user.hasCompletedOnboarding ?? false,
+    sportFocus: user.sportFocus ?? null,
   };
 }
 
@@ -325,18 +327,21 @@ export async function registerAuthRoutes(app: import("express").Express) {
         const { getUncachableStripeClient } = await import("./stripeClient");
         const { resolveTierFromSubscription } = await import("./utils/resolveTier");
         const stripe = await getUncachableStripeClient();
-        const subs = await stripe.subscriptions.list({ customer: rawUser.stripeCustomerId, status: "active", limit: 1 });
-        if (subs.data.length > 0) {
-          const activeSub = subs.data[0];
-          const stripeTier = resolveTierFromSubscription(activeSub);
+        const activeSubs = await stripe.subscriptions.list({ customer: rawUser.stripeCustomerId, status: "active", limit: 1 });
+        const trialingSubs = activeSubs.data.length === 0
+          ? await stripe.subscriptions.list({ customer: rawUser.stripeCustomerId, status: "trialing", limit: 1 })
+          : { data: [] };
+        const allSubs = [...activeSubs.data, ...trialingSubs.data];
+        if (allSubs.length > 0) {
+          const matchedSub = allSubs[0];
+          const stripeTier = resolveTierFromSubscription(matchedSub);
           if (stripeTier && stripeTier !== rawUser.subscriptionTier) {
-            await storage.updateUserSubscription(userId, stripeTier, rawUser.stripeCustomerId, activeSub.id);
+            await storage.updateUserSubscription(userId, stripeTier, rawUser.stripeCustomerId, matchedSub.id);
             console.log(`[STRIPE REPAIR]`, { userId, dbTier: rawUser.subscriptionTier, stripeTier });
             rawUser = await storage.getUserById(userId) ?? rawUser;
           }
-        } else if (!subs.data.length && rawUser.subscriptionTier) {
-          // No active Stripe sub but DB shows a paid tier — revoke
-          console.warn(`[STRIPE REPAIR] No active sub for user ${userId} but DB tier=${rawUser.subscriptionTier} — revoking`);
+        } else if (allSubs.length === 0 && rawUser.subscriptionTier) {
+          console.warn(`[STRIPE REPAIR] No active/trialing sub for user ${userId} but DB tier=${rawUser.subscriptionTier} — revoking`);
           await storage.setUserSubscriptionTier(userId, null);
           rawUser = await storage.getUserById(userId) ?? rawUser;
         }

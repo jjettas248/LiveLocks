@@ -16,6 +16,8 @@ export interface AuthUser {
   hasNCAAB: boolean;
   hasMLB: boolean;
   hasUnlimited: boolean;
+  hasCompletedOnboarding: boolean;
+  sportFocus: string | null;
 }
 
 async function apiFetch(path: string, options?: RequestInit) {
