@@ -111,7 +111,7 @@ const BATTER_MARKETS: MLBMarket[] = [
   "hits",
   "total_bases",
   "home_runs",
-  "batter_strikeouts",
+  "hrr",
 ];
 
 const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed"];
@@ -236,7 +236,7 @@ const HIGH_IMPACT_TRIGGERS = new Set<StateChangeTrigger>([
 const TRIGGER_IMPACTED_MARKETS: Record<StateChangeTrigger, MLBMarket[] | "all"> = {
   new_ab: "all",
   ab_completed: "all",
-  ball_in_play: ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts", "hits_allowed"],
+  ball_in_play: ["hits", "total_bases", "home_runs", "hrr", "hits_allowed"],
   inning_change: "all",
   pitcher_change: "all",
   runner_change: ["hits", "total_bases", "hrr"],
