@@ -97,12 +97,13 @@ type SignalLike = {
 };
 
 export function deriveMlbQuickViewColorTier(signals: SignalLike[], playerId: string): MlbQuickViewColorTier {
-  const playerSignals = signals.filter(s => s.playerId === playerId && !s.alreadyHit);
-  if (playerSignals.length === 0) return "neutral";
+  let pool = signals.filter(s => s.playerId === playerId && !s.alreadyHit);
+  if (pool.length === 0) pool = signals.filter(s => s.playerId === playerId);
+  if (pool.length === 0) return "neutral";
 
   let bestPct = 0;
   let bestTier: string | undefined;
-  for (const s of playerSignals) {
+  for (const s of pool) {
     const pct = s.enginePct ?? 0;
     if (pct > bestPct) {
       bestPct = pct;
@@ -152,8 +153,11 @@ export const COLOR_TIER_STYLES: Record<MlbQuickViewColorTier, { border: string; 
 };
 
 export function deriveAllPlayerPlays(signals: SignalLike[], playerId: string): BestPlayInfo[] {
-  return signals
-    .filter(s => s.playerId === playerId && !s.alreadyHit && (s.enginePct ?? 0) > 0)
+  let pool = signals.filter(s => s.playerId === playerId && !s.alreadyHit && (s.enginePct ?? 0) > 0);
+  if (pool.length === 0) {
+    pool = signals.filter(s => s.playerId === playerId && (s.enginePct ?? 0) > 0);
+  }
+  return pool
     .sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0))
     .map(s => {
       const pct = s.enginePct ?? 0;

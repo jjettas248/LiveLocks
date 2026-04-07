@@ -11,6 +11,36 @@ import { getPlayer, getPlayerByName } from "./rosterService";
 import { mlbGameCache } from "./dataPullService";
 import { buildHRSignal } from "./HRSignalBuilder";
 
+const selfLearningCalibration: Record<string, { shrinkFactor: number; sampleSize: number; lastUpdated: number }> = {};
+const CALIBRATION_REFRESH_MS = 30 * 60 * 1000;
+const DEFAULT_SHRINK = 0.96;
+
+export function updateSelfLearningCalibration(market: string, hitRate: number, expectedRate: number, sampleSize: number): void {
+  if (sampleSize < 10) return;
+  const error = hitRate - expectedRate;
+  let adjustment = 1.0;
+  if (Math.abs(error) > 0.05) {
+    adjustment = error > 0 ? Math.min(1.04, 1 + error * 0.3) : Math.max(0.88, 1 + error * 0.3);
+  }
+  const newShrink = Math.max(0.85, Math.min(1.02, DEFAULT_SHRINK * adjustment));
+  selfLearningCalibration[market] = { shrinkFactor: newShrink, sampleSize, lastUpdated: Date.now() };
+  console.log(`[MLB SELF_LEARN] market=${market} hitRate=${(hitRate * 100).toFixed(1)}% expected=${(expectedRate * 100).toFixed(1)}% error=${(error * 100).toFixed(1)}% shrink=${newShrink.toFixed(4)} samples=${sampleSize}`);
+}
+
+export function getSelfLearningShrink(market: MLBMarket): number {
+  const entry = selfLearningCalibration[market];
+  if (!entry || Date.now() - entry.lastUpdated > CALIBRATION_REFRESH_MS * 3) return DEFAULT_SHRINK;
+  return entry.shrinkFactor;
+}
+
+export function getSelfLearningStats(): Record<string, { shrinkFactor: number; sampleSize: number }> {
+  const result: Record<string, { shrinkFactor: number; sampleSize: number }> = {};
+  for (const [k, v] of Object.entries(selfLearningCalibration)) {
+    result[k] = { shrinkFactor: v.shrinkFactor, sampleSize: v.sampleSize };
+  }
+  return result;
+}
+
 // ── Odds validation helpers ───────────────────────────────────────────────────
 
 export function isFiniteNumber(value: unknown): value is number {
@@ -214,7 +244,8 @@ function applyProbabilityCeiling(
 
 function calibrateDistributionProb(rawProb: number, market?: MLBMarket): number {
   const shifted = rawProb - 50;
-  let calibrated = 50 + shifted * 0.96;
+  const shrink = market ? getSelfLearningShrink(market) : DEFAULT_SHRINK;
+  let calibrated = 50 + shifted * shrink;
   calibrated = Math.min(96, Math.max(5, calibrated));
   if (market) {
     calibrated = applyProbabilityCeiling(calibrated, market);

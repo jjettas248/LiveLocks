@@ -1933,16 +1933,40 @@ export async function registerRoutes(
       const contactCache = mlbGameCache.contactData[gameId];
       const playerContact = contactCache?.byPlayerId?.[playerId];
       const gameState = mlbGameCache.gameState[gameId];
+      const boxPlayer = mlbGameCache.gameBoxScore[gameId]?.byPlayerId?.[playerId];
 
-      const priorABs = (playerContact?.priorABResults ?? []).map((ab: any, idx: number) => ({
+      const contactEntries = (playerContact?.priorABResults ?? []).map((ab: any, idx: number) => ({
         abNumber: idx + 1,
         exitVelocity: ab.exitVelocity ?? null,
         launchAngle: ab.launchAngle ?? null,
         distance: ab.distance ?? null,
         outcome: ab.outcome ?? "unknown",
+        pitchType: ab.pitchType ?? null,
+        pitchSpeed: ab.pitchSpeed ?? null,
         isBarrel: (ab.exitVelocity ?? 0) >= 98 && (ab.launchAngle ?? 0) >= 20 && (ab.launchAngle ?? 0) <= 35,
         isHardHit: (ab.exitVelocity ?? 0) >= 95,
       }));
+
+      const boxAB = boxPlayer?.ab ?? 0;
+      const boxBB = boxPlayer?.bb ?? 0;
+      const totalPA = boxAB + boxBB;
+      const priorABs = [...contactEntries];
+      if (totalPA > priorABs.length) {
+        const missing = totalPA - priorABs.length;
+        for (let i = 0; i < missing; i++) {
+          priorABs.push({
+            abNumber: priorABs.length + 1,
+            exitVelocity: null,
+            launchAngle: null,
+            distance: null,
+            outcome: "unknown",
+            pitchType: null,
+            pitchSpeed: null,
+            isBarrel: false,
+            isHardHit: false,
+          });
+        }
+      }
 
       const edgeEntry = mlbEdgeCache.get(gameId);
       const rawOutput = edgeEntry?.outputs?.find((o: any) => o.playerId === playerId && o.market === "home_runs");

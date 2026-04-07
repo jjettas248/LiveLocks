@@ -687,7 +687,7 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
   const isPending = card.status === "PENDING";
 
   const borderClass = isCashed
-    ? "border-emerald-500/40 bg-emerald-500/5"
+    ? "border-emerald-500/60 bg-emerald-500/10 shadow-[0_0_12px_rgba(16,185,129,0.15)]"
     : isMissed
     ? "border-zinc-500/30 bg-zinc-500/5"
     : isAlert
@@ -696,7 +696,7 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
   const pulseClass = isAlert && !isCashed && !isMissed ? "animate-pulse" : "";
 
   const statusBadge = isCashed
-    ? { label: "CASHED", cls: "bg-emerald-500/15 text-emerald-400" }
+    ? { label: "CASHED \u2714", cls: "bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/30" }
     : isMissed
     ? { label: "MISSED", cls: "bg-zinc-500/15 text-zinc-400" }
     : isAlert
@@ -988,22 +988,28 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
             <div className="space-y-1.5">
               <div className="text-[10px] font-semibold text-muted-foreground flex items-center gap-1.5">
                 <Target className="w-3 h-3" />
-                <span>At-Bat Log ({priorABs.length} ABs)</span>
+                <span>At-Bat Log ({priorABs.length} PAs)</span>
               </div>
               <div className="space-y-1">
-                {priorABs.map((ab) => (
-                  <div key={ab.abNumber} className="flex items-center gap-2 text-[10px] p-1.5 rounded-lg bg-muted/10 border border-border/10">
-                    <span className="w-5 text-center text-muted-foreground font-bold">#{ab.abNumber}</span>
-                    <span className={`font-bold tabular-nums ${ab.isBarrel ? "text-orange-400" : ab.isHardHit ? "text-yellow-400" : "text-muted-foreground"}`}>
-                      {ab.exitVelocity != null ? `${ab.exitVelocity.toFixed(1)} mph` : "—"}
-                    </span>
-                    {ab.launchAngle != null && <span className="text-muted-foreground tabular-nums">{ab.launchAngle.toFixed(0)}°</span>}
-                    {ab.distance != null && <span className="text-muted-foreground tabular-nums">{ab.distance.toFixed(0)}ft</span>}
-                    <span className="text-muted-foreground capitalize">{ab.outcome}</span>
-                    {ab.isBarrel && <span className="text-[8px] px-1 py-0.5 rounded bg-orange-500/15 text-orange-400 font-bold">BRL</span>}
-                    {ab.isHardHit && !ab.isBarrel && <span className="text-[8px] px-1 py-0.5 rounded bg-yellow-500/15 text-yellow-400 font-bold">HH</span>}
-                  </div>
-                ))}
+                {priorABs.map((ab) => {
+                  const outcomeLabel = ab.outcome === "hit" ? "Hit" : ab.outcome === "strikeout" ? "K" : ab.outcome === "walk" ? "BB" : ab.outcome === "hbp" ? "HBP" : ab.outcome === "out" ? "Out" : ab.outcome === "error" ? "Error" : "PA";
+                  const outcomeColor = ab.outcome === "hit" ? "text-green-400" : ab.outcome === "strikeout" ? "text-red-400" : ab.outcome === "walk" || ab.outcome === "hbp" ? "text-blue-400" : "text-muted-foreground";
+                  return (
+                    <div key={ab.abNumber} className="flex items-center gap-2 text-[10px] p-1.5 rounded-lg bg-muted/10 border border-border/10">
+                      <span className="w-5 text-center text-muted-foreground font-bold">#{ab.abNumber}</span>
+                      <span className={`font-semibold ${outcomeColor}`}>{outcomeLabel}</span>
+                      {ab.exitVelocity != null && (
+                        <span className={`font-bold tabular-nums ${ab.isBarrel ? "text-orange-400" : ab.isHardHit ? "text-yellow-400" : "text-muted-foreground"}`}>
+                          {ab.exitVelocity.toFixed(1)} mph
+                        </span>
+                      )}
+                      {ab.launchAngle != null && <span className="text-muted-foreground tabular-nums">{ab.launchAngle.toFixed(0)}°</span>}
+                      {ab.distance != null && <span className="text-muted-foreground tabular-nums">{ab.distance.toFixed(0)}ft</span>}
+                      {ab.isBarrel && <span className="text-[8px] px-1 py-0.5 rounded bg-orange-500/15 text-orange-400 font-bold">BRL</span>}
+                      {ab.isHardHit && !ab.isBarrel && <span className="text-[8px] px-1 py-0.5 rounded bg-yellow-500/15 text-yellow-400 font-bold">HH</span>}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
