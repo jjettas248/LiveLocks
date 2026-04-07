@@ -1667,7 +1667,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         </div>
       )}
 
-      {showCashed && dedupCashed.length > 0 && !(gradingSummary && gradingSummary.totalGraded > 0 && canonicalHits.length > 0) && (
+      {showCashed && dedupCashed.length > 0 && !(gradingSummary && (gradingSummary.totalGraded > 0 || canonicalHits.length > 0)) && (
         <div className="space-y-3" data-testid="hr-live-cashed">
           <div className="flex items-center gap-2">
             <Trophy className="w-4 h-4 text-emerald-400" />
@@ -1682,7 +1682,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         </div>
       )}
 
-      {showMissed && missedCards.length > 0 && !(gradingSummary && gradingSummary.totalGraded > 0 && canonicalMisses.length > 0) && (
+      {showMissed && missedCards.length > 0 && !(gradingSummary && (gradingSummary.totalGraded > 0 || canonicalMisses.length > 0)) && (
         <div className="space-y-3" data-testid="hr-live-missed">
           <div className="flex items-center gap-2">
             <X className="w-4 h-4 text-zinc-400" />
