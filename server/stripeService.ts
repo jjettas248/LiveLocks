@@ -168,7 +168,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
         try {
           const subscription = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
           const item = subscription.items.data[0];
-          if (item && subscription.status === "active") {
+          if (item && (subscription.status === "active" || subscription.status === "trialing")) {
             await stripe.subscriptions.update(user.stripeSubscriptionId, {
               proration_behavior: "create_prorations",
               billing_cycle_anchor: "unchanged",
@@ -192,6 +192,9 @@ export async function registerStripeRoutes(app: import("express").Express) {
         cancel_url: `${origin}/dashboard?payment=cancelled`,
         metadata: { userId: String(userId), tier },
         line_items: [{ price: newPriceId, quantity: 1 }],
+        subscription_data: {
+          metadata: { tier: plan, userId: String(userId) },
+        },
         ...(user.stripeCustomerId
           ? { customer: user.stripeCustomerId }
           : { customer_email: user.email }),
