@@ -1,348 +1,377 @@
 # LiveLocks — Product Requirements Document
-**Version**: 1.4 (March 5, 2026)
+
+**Version**: 2.1 (April 7, 2026)
 **Product**: LiveLocks by PropPulse
-**Status**: Active Development
+**Status**: Production
 
 ---
 
 ## 1. Product Vision
 
-LiveLocks is a live sports betting analytics PWA that gives bettors a real-time probabilistic edge on NBA player props, NCAAB game totals/spreads, and parlay construction. The platform surfaces engine-derived probabilities against current book lines, identifies closing-line value, and packages signals into a parlay builder — all updating live as games progress.
+LiveLocks is a real-time sports betting analytics PWA that gives bettors a data-driven probabilistic edge on MLB player props, NBA player props, and NCAAB game markets. The platform surfaces engine-derived probabilities against real sportsbook lines, delivers live signals updating every 10 seconds during games, and packages insights into actionable cards with confidence tiers, matchup intelligence, and HR radar alerts.
+
+**Core Principle:** No synthetic defaults — every signal must be backed by a real sportsbook line with verified odds. If no book is offering a market, the engine skips it.
 
 ---
 
 ## 2. Target Users
 
 | Segment | Description |
-|---------|-------------|
-| Free Users | Casual bettors exploring NBA props; limited to 15 plays before paywall |
-| Pro Users ($40/mo) | Active bettors who want NBA + NCAAB live analytics + alerts |
-| All Sports Users ($65/mo) | Power users who want all markets including MLB (coming soon) |
-| Admin | Internal product team; jaylin.becker22@icloud.com; full platform access |
+|:---|:---|
+| Recreational bettors | Want quick, trustworthy picks with clear confidence levels |
+| Sharp bettors | Need edge calculations, probability distributions, and live matchup intelligence |
+| DFS players | Benefit from hot hitter detection, pitcher arsenal analysis, and live contact data |
+| Admin | Internal product team; full platform access for engine monitoring and user management |
 
 ---
 
 ## 3. Tier Structure
 
-| Feature | Free | Pro (`"all"`) | All Sports (`"elite"`) |
-|---------|------|--------------|----------------------|
-| NBA Live Props | 15 plays/session | Unlimited | Unlimited |
+| Feature | Free | Pro ($40/mo) | All Sports ($65/mo) |
+|:---|:---|:---|:---|
+| NBA Live Props | 3 plays/day | Unlimited | Unlimited |
 | NBA 2H Plays | Locked | Yes | Yes |
 | NCAAB Live + 2H | No | Yes | Yes |
-| MLB Live | No | No | Coming soon |
+| MLB Live Signals | 2 games/day preview | Partial | Full |
+| HR Radar | No | View Only | Full |
 | Push Notifications | No | Yes | Yes |
 | SMS Alerts | No | Yes | Yes (priority) |
 | Parlay Builder | Partial | Full | Full |
 
-Stripe price IDs:
-- Pro (`all`): `price_1T6fl12cW8Vmrgt3B6ffBIuw` — $40/month
-- All Sports (`elite`): `price_1T6fly2cW8Vmrgt3WU9uHL7L` — $65/month
+All paid subscriptions include a 3-day free trial.
+
+Stripe Price IDs:
+- Pro: `price_1TJJ4M2ceUNmv10tYSsYXA6T` ($40/month)
+- All Sports: `price_1TJJ4M2ceUNmv10tB8JCzPYe` ($65/month)
 
 ---
 
-## 4. Platform Features (Shipped)
+## 4. MLB Live Signal Engine (Primary Focus)
 
-### 4.1 NBA Live Props
-- Fetches live ESPN NBA scoreboard; detects halftime automatically
-- Retrieves player box scores for all active players in halftime games
-- Probability model:
-  1. Per-minute rate = 70% halftime observed + 30% season baseline
-  2. Adjusted for remaining minutes (foul penalty applied)
-  3. Defense multiplier: opponent rating vs player's position
-  4. Pace blend: `probability = 50 + diff × scaleFactor` (clamped 2–98%)
-- Parlay builder: correlation-adjusted multi-leg parlays with sportsbook deeplinks
+### 4.1 Supported Markets (real book lines only)
 
-### 4.2 NBA 2H Plays
-- Filters halftime games for the strongest edges
-- Shows projected 2H stats for each player
-- Same parlay integration as Live Props
+**Batter Markets:**
+- Hits (hits)
+- Total Bases (total_bases)
+- Home Runs (home_runs)
+- H+R+RBI (hrr)
 
-### 4.3 NCAAB Live Analytics
-**Data sources:**
-1. ESPN Scoreboard (`?limit=300&groups=50`) — all Div I live games
-2. ESPN Box Score — scoring by period, team stats, pace data
-3. The Odds API — spread/total book lines + American odds
-4. Sports Game Odds (SGO) — 1H lines + team total lines per team
+**Pitcher Markets:**
+- Strikeouts (pitcher_strikeouts)
+- Outs Recorded (pitcher_outs)
+- Hits Allowed (hits_allowed)
+- Walks Allowed (walks_allowed)
 
-**Engine formula (per-market):**
+**Excluded Markets (no bookmaker data available):**
+- Batter Strikeouts (batter_strikeouts) — engine exists but no book data
+- HR Allowed (pitcher_home_runs) — API key returns 422
+
+### 4.2 Signal Pipeline
+
 ```
-overProb = clamp(50 + (projectedTotal − line) × multiplier × 0.3, 1, 99)
+GAME DISCOVERY → DATA SYNC → FEATURE ENGINEERING → MARKET ENGINE → QUALIFICATION → NORMALIZATION → API → UI CARD
 ```
 
-**Dynamic multiplier table (`getDynamicMultiplier`):**
+1. **Game Discovery** (every 5 min): ESPN API finds today's MLB games
+2. **Pre-Hydration**: Pitcher season stats, weather, lineup fetched for new games
+3. **Live Polling** (every 10s): Inning, score, lineup, pitch count, box score, contact data
+4. **Feature Engineering**: 11 normalized scores per batter/pitcher matchup:
+   - contactQuality, batSpeedPower, handednessMatchup, pitchBlendMatchup, hotColdForm, parkEnv, bvp, lineupOpportunity, bullpenFactor, pitcherSuppression, pitcherDeterioration
+5. **Market Engine**: Distribution-based probability (Normal CDF, negative binomial, binomial) per market
+6. **Qualification Gate**: Probability floor, edge validation, projection consistency, real odds check
+7. **Normalization**: Flat signal with smart tags, primary reason, pitch matchup ratings, BvP history
+8. **Confidence Tiers**: ELITE > STRONG > SOLID > LEAN > WATCHLIST
 
-| Game progress | Multiplier |
-|--------------|-----------|
-| 0–10% | 3.0 |
-| 10–25% | 4.0 |
-| 25–50% | 5.0 |
-| 50–65% | 6.0 |
-| 65–75% | 7.0 |
-| 75–85% | 8.0 |
-| 85–92% | 10.0 |
-| 92–100% / OT | 12.0 |
+### 4.3 Event-Driven Triggers
+High-impact game events trigger immediate re-evaluation (5s dedup):
+- new_ab, ab_completed, out_recorded, score_change, inning_change
+- pitcher_change, tto_shift (times through order), lineup_substitution
 
-**Progressive probability limits (`limitedEngineProb`):**
+### 4.4 Intelligence Layers
 
-| Progress | Min | Max |
-|----------|-----|-----|
-| < 10% | 30 | 70 |
-| < 25% | 20 | 80 |
-| < 50% | 10 | 90 |
-| < 75% | 5 | 95 |
-| < 90% | 3 | 97 |
-| ≥ 90% | 1 | 99 |
+**Batter vs Pitcher (BvP):**
+- Career matchup history fetched from MLB Stats API
+- Score boost: .350+ avg → +15 signal score, <.200 → -10 penalty
+- Displayed on signal cards: "8/22, .364, 3 HR"
 
-**Early-game neutral state (`isNeutralState`):**
-When `gameProgress < 10%` AND raw engine prob ∈ [45, 55]:
-- Gauge shows "--" and "EARLY GAME"
-- Market buttons show "--" (clickable but no probability shown)
-- Verdict rows replaced with "Insufficient Data — Engine Warming Up"
+**Batter vs Arsenal (Pitch Type Matchups):**
+- Each pitch type rated independently using absolute thresholds
+- Score ≥ 0.55 → batter favor (green ▲), ≤ 0.45 → pitcher favor (red ▼)
+- Fastballs weighted by bat speed/power, breaking balls by pitch blend matchup, offspeed by contact quality
+- Colors flip correctly for pitcher markets
 
-**Post-halftime H1 settlement:**
-After halftime, `over1HProb` is set to 99 or 1 based on actual H1 total vs H1 line (result is settled).
+**OnlyHomers.com Integration (self-learning data source):**
+- Daily HR outcomes with full Statcast (EV, LA, distance, pitch type, pitcher, ballpark)
+- Hot hitter detection: 7/14/30-day HR frequency → score boost (+0.8/+0.5/+0.3)
+- Ballpark HR factors: 30 venues tracked with real season data
+- Hourly scrape, 30-min in-memory cache
 
-**sanitizeProb:**
-Returns 50 if < 60 seconds of game data has elapsed (prevents wild early swings).
+### 4.5 HR Radar System
 
-### 4.4 NCAAB Live Game Card
-Each live game renders a card with:
-- **RadialGauge** — SVG arc showing selected market probability; zinc/teal/red coloring
-- **Market buttons** — Over / Under / Spread (3-column grid); teal/red/slate; parlay "+" toggle badge
-- **Book pills** — MGM + secondary book showing live line; click → opens sportsbook
-- **Stat grid** (6 rows) — Full Game Total line, Engine Over%, Engine Under%, Spread, Away Proj, Home Proj
-- **Full Game / 1H tab toggle** — switches all displayed metrics to 1st-half market
-- **EV verdict row** — "Strong/Lean [Side] EV" or "Neutral — No Edge"; +Xpp amber pill when edge ≥ 5pp
-- **CLV row** — closing line value signal with directional badge
-- **H2H Matchup History** — collapsible; dual badges per game (O/U result + spread coverage)
-- **Parlay drawer** — bottom sheet showing selected legs from this game
+**Contact Classification per at-bat:**
+| Class | Thresholds |
+|:---|:---|
+| eliteHrContact | EV ≥ 102, LA 23-34°, dist ≥ 390 |
+| hrShapedContact | EV ≥ 98, LA 20-38°, dist ≥ 360 |
+| missedHrContact | HR trajectory that fell short |
+| powerContact | Hard hit, suboptimal trajectory |
+| noiseContact | Routine batted ball |
 
-### 4.5 NCAAB Games Strip
-- 160px horizontal scrollable chip bar always above the game list
-- One chip per game: team abbreviations, live score / halftime indicator / scheduled tipoff time
-- Active chip highlighted with teal border
-- Chip click: scrolls to and expands the target game card
-- Rendered in separate container from `GroupedGamesList` so expanding cards do not push the strip
+**Three Alert Paths:**
+- PATH_A: 2+ HR-shaped events + qualified EV mean ≥ 99 + max dist ≥ 375 + remaining PA ≥ 1.3
+- PATH_B: 1 missed/elite HR + pitcher fatigue or favorable environment
+- PATH_C: Late-game (inning 5+) with HR-shaped contact + favorable pitcher
 
-### 4.6 NCAAB H2H Matchup History
-- **Dual-season fetch**: current season first; if < 2 games found → fetch prior season; combine + deduplicate by ESPN event ID; sort descending; max 3 rows
-- **Season labels**: prior-season rows show date + "· Prior Season" in zinc italic
-- **Insufficient data**: 0 games → "No matchup history found for this season"; 1 game → note below the row
-- **Dual badges per row**: O/U result (OVER/UNDER/PUSH/N/A) + spread coverage (covered/failed/PUSH/N/A)
-- **Cache**: per-gameId, persists for session
+**Negative Suppression:** Veto system for remaining PA, headwind, same-side matchup, cold temperature, repeat confirmation, LA consistency.
 
-### 4.7 NCAAB 2H Plays
-- Filters plays where `bettingWindow === "HALFTIME"`
-- Same card structure as live plays; halftime badge shown
-- Animated halftime exit transition: orange countdown → bounce → fade in
+**Alert Tiers:** officialAlert, prepare, watch — with full diagnostics (alertPath, positiveFactors, suppressionFlags, pitcherFatigueState, environmentContext).
 
-### 4.8 Team Total Market (In Progress)
-- Over/Under buttons per team embedded in the stat grid proj rows
-- `selectedTeamMarket` state: `{ team, direction, line, isEstimated, teamAbbr } | null`
-- **Line priority chain:**
-  1. SGO book line (`homeGameTotalLine` / `awayGameTotalLine`) — `isEstimated: false`
-  2. ESPN summary scan (3 locations: `teamTotals`, `pickcenter[0].teamTotals`, `comp.odds[0].teamTotals`) — `isEstimated: false`
-  3. `deriveTeamTotalLine(proj) = round(proj × 2) / 2` — `isEstimated: true`
-- **Button display**: `O42.5` (book line) or `O~42.5` (estimated)
-- **Disabled**: when proj null or out of range (< 10 or > 100 for college)
-- **Team Total Verdict Section** (shown when market selected):
-  - Divider header: "Team Total · [ABBR] [O/U][line]" + "Est." badge
-  - `calculateTeamTotalProb(proj, line) = clamp(50 + (proj - line) × 2, 1, 99)`
-  - Estimated confidence compression: `adjustedProb = 50 + (rawProb - 50) × 0.6`
-  - EV row + CLV row (same structure as game total verdict rows)
-  - Confidence note below when `isEstimated`
-
-### 4.9 Admin Panel (`/admin`)
-- View all users with subscription status, play counts, Stripe IDs
-- Change subscription tier: `null` → `"all"` → `"elite"` via Stripe API or direct DB
-- Reset play count per user
-- Read feedback submissions
-- Setting `upgradedAt` on tier upgrades (triggers welcome experience)
-
-### 4.10 Welcome Experience (New Pro Users)
-Triggered on first visit after upgrading via Stripe or admin:
-- **WelcomeBanner**: spring-in animated card at top of dashboard
-  - Contextual subtitle: "X games live right now", "X games at halftime", or scheduled count
-  - "Explore →" button: switches to NCAAB tab + scrolls to first live/halftime/scheduled game
-  - "Dismiss" button: calls `POST /api/user/clear-new-pro-flag`; removes banner
-- **NEW badge**: teal animated badge on NCAAB tab; visible for 24h from `upgradedAt`; 30-min re-check timer
-- **`expandToGameId`** prop on NCAABAdminTab: `useEffect` expands the target game and scrolls to it
-
-### 4.11 Push Notifications
-- Web Push via VAPID keys; `server/webpush.ts`
-- User subscribes via bell icon in nav → `POST /api/user/push-subscribe`
-- Bell icon flashes on bell-flash keyframe animation when new alert arrives
-- Available to Pro/All Sports tiers
-
-### 4.12 SMS Alerts (Twilio)
-- Phone capture flow with SMS consent checkbox
-- `POST /api/user/alerts/sms` — save phone, trigger test SMS
-- `POST /api/webhooks/twilio` — handles STOP keyword → disables SMS
-- `server/alertManager.ts` + `server/analyticsResolver.ts` — resolve and dispatch alerts
-- Available to Pro/All Sports tiers
-
-### 4.13 Parlay Builder
-- **Global parlay slip**: side column on desktop, bottom sheet on mobile (< 1024px)
-- Each leg: player/team name, stat label, O/U line, sportsbook, probability
-- `ParlayPickInput.isEstimated?: boolean` → shows amber "Est." pill + tooltip for derived team total lines
-- Correlation-adjusted probability via `/api/parlay/calculate`
-- Sportsbook deeplinks: DraftKings, FanDuel, Hard Rock Bet, Bet365
+### 4.6 MLB Grading
+- End-to-end grading using MLB Stats API boxscores
+- ESPN event IDs resolved to MLB gamePk
+- 14 markets mapped to boxscore fields
+- Grading cron every 3 minutes
+- Admin endpoints for manual trigger and grading summaries
 
 ---
 
-## 5. Technical Architecture
+## 5. NBA Engine
 
-### 5.1 File Map
-```
-/
-├── client/src/
-│   ├── pages/
-│   │   └── dashboard.tsx         Main app (tabs, parlay slip, modals)
-│   ├── components/
-│   │   ├── ncaab-admin-tab.tsx   NCAAB Live tab (game cards, strip, H2H)
-│   │   ├── parlay-slip.tsx       Parlay slip component
-│   │   ├── welcome-banner.tsx    New pro user welcome banner
-│   │   └── probability-ring.tsx  SVG ring for NBA player props
-│   ├── hooks/
-│   │   ├── use-auth.ts           Auth state + JWT management
-│   │   └── use-nba.ts            NBA data queries + parlay mutations
-│   └── lib/
-│       └── queryClient.ts        TanStack Query client + apiRequest
-├── server/
-│   ├── routes.ts                 All API routes
-│   ├── storage.ts                DB interface (IStorage + DrizzleStorage)
-│   ├── ncaabService.ts           NCAAB engine + ESPN + SGO integration
-│   ├── oddsService.ts            The Odds API client
-│   ├── auth.ts                   JWT middleware + safeUser
-│   ├── stripeService.ts          Stripe subscription management
-│   ├── webhookHandlers.ts        Stripe webhook event handling
-│   ├── twilioService.ts          SMS dispatch
-│   ├── alertManager.ts           Alert batching + dispatch
-│   ├── analyticsResolver.ts      ESPN game score resolution for alerts
-│   ├── parlayService.ts          Correlation adjustment engine
-│   └── webpush.ts                Web push notification service
-├── shared/
-│   ├── schema.ts                 DB schema (Drizzle) + TypeScript interfaces
-│   └── routes.ts                 Shared route constants
-└── docs/
-    ├── PRD.md                    This document
-    └── DEBUG_LOG.md              Debug session log
-```
+### 5.1 Probability Model
+Distribution-based probability using Normal CDF with:
+- Archetype-based variance multipliers and fragility scoring
+- Calibration shrinkage (0.88 single stats, 0.78 combos)
+- Safety ceilings per archetype
 
-### 5.2 Key Shared Types
-```typescript
-ParlayPickInput {
-  playerId, playerName, playerTeam, statType, line,
-  probability, betDirection, sportsbook, oddsAmerican,
-  gameId?, isEstimated?
-}
+### 5.2 Player Archetypes (7)
+stable_star, volatile_starter, bench_microwave, minutes_dependent, high_usage_volatile, low_usage_consistent, injury_risk
 
-NCAABPlay {
-  gameId, homeTeam, awayTeam, homeTeamAbbr, awayTeamAbbr,
-  status, clock, half, period, homeScore, awayScore,
-  spread, total, favorite, bookLines, overProb, spreadProb,
-  over1HProb, h1TotalLine, h1SpreadLine, h1Favorite,
-  homeGameTotalLine, awayGameTotalLine, homeGameTotalIsEstimated, awayGameTotalIsEstimated,
-  home1HTotalLine, away1HTotalLine,
-  projectedTotal, projectedMargin, proj1HTotal,
-  homeProjected, awayProjected, volatility, bettingWindow, ...
-}
+### 5.3 Features
+- Market family grouping with derivative suppression
+- Directional bias tracking with drift detection
+- Combo market support (PTS+REB, PTS+AST, PRA) with covariance estimation
+- Halftime 2H signals with live game context
 
-AuthUser {
-  id, email, isAdmin, subscriptionTier, playsUsed,
-  isNewProUser, upgradedAt
-}
-```
-
-### 5.3 Database Schema (users table additions)
-```sql
-isNewProUser   BOOLEAN NOT NULL DEFAULT FALSE
-requiresRefresh BOOLEAN NOT NULL DEFAULT FALSE
-upgradedAt     TIMESTAMP
-```
+### 5.4 Validation Harness
+- Tests 55 engine constants, 8 archetype cases, 10 fixture scenarios
+- CLI: `npx tsx server/validation/nba/run.ts`
+- Admin endpoint: `GET /api/debug/nba/validate`
+- Detects: ARCHETYPE_DRIFT, CALIBRATION_DRIFT, SAFETY_CEILING_DRIFT, etc.
 
 ---
 
-## 6. API Routes
+## 6. NCAAB Engine
 
-| Method | Route | Auth | Description |
-|--------|-------|------|-------------|
-| POST | `/api/register` | None | Create account |
-| POST | `/api/login` | None | JWT login |
-| GET | `/api/auth/me` | JWT | Current user |
-| POST | `/api/calculate` | JWT + plays | NBA prop probability |
-| GET | `/api/halftime-plays` | Pro+ | NBA 2H plays |
-| GET | `/api/ncaab/plays` | Pro+ | NCAAB live plays |
-| GET | `/api/ncaab/games` | Pro+ | NCAAB scoreboard |
-| GET | `/api/ncaab/h2h?gameId=X` | Admin | H2H matchup history |
-| POST | `/api/parlay/calculate` | JWT | Parlay probability |
-| POST | `/api/stripe/checkout` | JWT | Start subscription |
-| POST | `/api/stripe/webhook` | Stripe sig | Webhook events |
-| POST | `/api/user/clear-new-pro-flag` | JWT | Clear welcome state |
-| POST | `/api/user/push-subscribe` | JWT | Register push sub |
-| GET | `/api/user/alerts` | JWT | Get alert settings |
-| POST | `/api/user/alerts/sms` | Pro+ | Enable SMS alerts |
-| GET | `/api/admin/users` | Admin | All users |
-| POST | `/api/admin/change-tier` | Admin | Change user tier |
-| POST | `/api/admin/reset-plays` | Admin | Reset play count |
-| POST | `/api/live-games` | None | NBA live scoreboard |
+- Normal CDF model with deterministic edge rules
+- Markets: Spreads, totals, team totals (full game, 1H, 2H)
+- Qualified edge/fallback architecture
+- Dynamic multiplier scaling with game progress
+- Color-coded confidence tiers (ELITE, STRONG, LEAN)
+- Live 2H context on halftime cards
 
 ---
 
-## 7. Environment Variables
+## 7. User Interface
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `SESSION_SECRET` | Yes | JWT signing secret |
-| `ADMIN_EMAIL` | Yes | Admin account email |
-| `ODDS_API_KEY` | Yes | The Odds API key |
-| `SGO_API_KEY` | Yes | Sports Game Odds key (team totals, 1H) |
-| `STRIPE_SECRET_KEY` | Yes | Stripe secret key |
-| `VITE_STRIPE_PUBLISHABLE_KEY` | Yes | Stripe publishable key (frontend) |
-| `TWILIO_ACCOUNT_SID` | SMS only | Twilio account SID |
-| `TWILIO_AUTH_TOKEN` | SMS only | Twilio auth token |
-| `TWILIO_FROM_NUMBER` | SMS only | Twilio sender number |
-| `VAPID_PUBLIC_KEY` | Push only | Web push VAPID public key |
-| `VAPID_PRIVATE_KEY` | Push only | Web push VAPID private key |
+### 7.1 Pages
+
+| Route | Page | Purpose |
+|:---|:---|:---|
+| `/` | Root Redirect | Redirects to `/dashboard` or `/landing` based on auth |
+| `/landing` | Landing | Marketing with feature highlights, pricing, social proof |
+| `/auth` | Auth | Login/registration with email verification |
+| `/dashboard` | Dashboard | Primary view with sport tabs (NBA, MLB, NCAAB), live signals, top plays |
+| `/ncaab` | NCAAB Live | Dedicated college basketball live tracking |
+| `/analytics` | Analytics | Performance analytics and model accuracy |
+| `/admin` | Admin | User management, engine diagnostics |
+| `/performance` | Performance | Detailed model performance metrics |
+| `/privacy` | Privacy | Privacy policy |
+| `/terms` | Terms | Terms of service |
+| `/verify-pending` | Verify Pending | Email verification status |
+| `/reset-password` | Reset Password | Password recovery |
+
+MLB Live is a sub-tab within the Dashboard, not a separate route.
+
+### 7.2 MLB UI Architecture
+
+**Three Sub-Tabs:**
+1. **Games**: Horizontal game chip strip → two-panel game detail with signals
+2. **Live Feed**: Top plays + tier-grouped live board
+3. **HR Radar**: HR edges, hot hitter alerts, cashed/missed tracking
+
+**Signal Card (MlbSignalCard):**
+- Collapsed: Player name, market, side, probability ring, confidence tier, smart tag
+- Expanded: Driver breakdown, pitcher arsenal matchup (bidirectional), BvP history, contact quality, at-bat log with pitch type colors, thesis, risk flags
+
+### 7.3 Key Components
+
+| Component | File | Purpose |
+|:---|:---|:---|
+| MlbSignalCard | `client/src/components/mlb/MlbSignalCard.tsx` | Unified MLB signal display |
+| LiveBoard | `client/src/components/mlb/LiveBoard.tsx` | Tier-grouped signal board |
+| MlbBoxScore | `client/src/components/mlb/MlbBoxScore.tsx` | Live box score with color-coded scanning |
+| TopPlays | `client/src/components/mlb/TopPlays.tsx` | High-value signal carousel |
+| SportSignalCard | `client/src/components/signals/SportSignalCard.tsx` | Cross-sport signal card |
+| ParlaySlip | `client/src/components/parlay-slip.tsx` | Bottom sheet parlay builder |
+| ProbabilityRing | `client/src/components/probability-ring.tsx` | Circular probability gauge |
+| SportPicker | `client/src/components/sport-picker.tsx` | Sport selection toggle |
 
 ---
 
-## 8. Upcoming Features (Next Build Session)
+## 8. Data Architecture
 
-### 8.1 Team Total Verdict Section (T001–T007)
-Full implementation plan captured in `.local/session_plan.md`. Summary:
-- **T001**: Server H2H dual-season fetch + `isCurrent` flag
-- **T002**: ESPN 3-location team total scan + `isEstimated` flags
-- **T003**: `isEstimated` field on `ParlayPickInput` schema
-- **T004**: `selectedTeamMarket` state + team total buttons in stat grid
-- **T005**: `getTeamTotalVerdict` + team total verdict section + parlay pick function
-- **T006**: H2HSection season labels + insufficient data states
-- **T007**: Parlay slip amber "Est." pill + tooltip
+### 8.1 Database (20 tables)
 
-### 8.2 MLB Live (Placeholder)
-- Tab exists, shows "coming soon" lock screen
-- No backend implementation yet
+**User & System:** users, stripe_events, app_settings, feedback, signal_interactions
 
-### 8.3 Possible Future Features
-- Player injury feed integration (currently manual via alerts)
-- Live odds movement indicators on book pills
-- Historical edge tracking per user
-- Line shopping across multiple books simultaneously
+**NBA/NCAAB:** players, team_defense, parlay_picks, halftime_play_alerts, play_results, sent_alerts
+
+**MLB:** contact_events, game_player_stats, hr_radar_alerts, hr_radar_analytics, hr_outcomes, hr_hot_hitters, hr_ballpark_factors
+
+**Universal:** persisted_plays (60+ columns — central signal repository), persisted_alerts
+
+### 8.2 External APIs
+
+| Service | Purpose | Frequency |
+|:---|:---|:---|
+| MLB Stats API | Game state, box scores, play-by-play, BvP, pitcher stats | 10 seconds |
+| ESPN API | Game discovery, roster sync, NBA/NCAAB data | 5 minutes |
+| The Odds API | Live player prop odds (11 sportsbooks) | Per request |
+| Baseball Savant | xBA, xSLG, bat speed, barrel rate | Per game |
+| OnlyHomers.com | HR outcomes, hot hitters, ballpark factors | 60 minutes |
+| Open-Meteo | Weather forecasts | 10 minutes |
+| NBA Stats API | Usage rates, defensive matchups | Per game |
+| RotoWire/Sleeper | Minutes projections | Daily |
+| SGO | 1H lines, team total lines | Per request |
+
+### 8.3 Supported Sportsbooks (11)
+DraftKings, FanDuel, Hard Rock Bet, PrizePicks, Underdog Fantasy, BetMGM, BetRivers, ESPN BET, BetOnline, Bovada, William Hill US
 
 ---
 
-## 9. Debug Log — March 5, 2026
+## 9. API Routes
 
-**TypeScript errors found and fixed:**
+### Admin Routes (requireAdmin)
 
-| File | Line | Issue | Fix |
-|------|------|-------|-----|
-| `ncaab-admin-tab.tsx` | 1583 | `handleExpandGame: (id: string)` didn't match `onExpandGame: (id: string\|null) => void` | Changed to `(id: string\|null) => { if (id) handleChipClick(id); }` |
-| `dashboard.tsx` | 132 | `[...rawData]` on string requires `downlevelIteration` | Changed to `Array.from(rawData)` |
-| `dashboard.tsx` | 228 | `.offsetWidth` on `SVGSVGElement` doesn't type-check | Cast to `as unknown as HTMLElement` |
-| `dashboard.tsx` | 999 | `new Set([...prev, gameId])` requires `downlevelIteration` | Changed to `new Set(Array.from(prev).concat(gameId))` |
-| `analyticsResolver.ts` | 65 | `for...of` on Map requires `downlevelIteration` | Changed to `Array.from(byGameId)` |
-| `stripeService.ts` | 66 | Stale `"nba"` tier string in cast | Changed to `"all" \| "elite"` |
+| Method | Path | Purpose |
+|:---|:---|:---|
+| GET | `/api/admin/users` | List all users |
+| PATCH | `/api/admin/users/:id/tier` | Update user subscription tier |
+| PATCH | `/api/admin/users/:id/reset-plays` | Reset play count |
+| POST | `/api/admin/change-tier` | Change tier with Stripe integration |
+| DELETE | `/api/admin/users/:id` | Delete user account |
+| GET | `/api/admin/debug-user/:id` | Stripe/subscription debug info |
+| GET | `/api/admin/nba-bias` | Current directional bias stats |
+| GET | `/api/admin/roi` | Full ROI report |
+| GET | `/api/admin/hr-radar-analytics` | HR alert conversion rates |
+| POST | `/api/admin/onlyhomers/scrape` | Manual OnlyHomers scrape |
+| GET/POST | `/api/admin/settings` | App settings management |
+| GET | `/api/admin/feedback` | User feedback list |
+| POST | `/api/admin/mlb/grade` | Manual MLB grading trigger |
+| GET | `/api/admin/mlb/grading-summary` | MLB win/loss and ROI stats |
 
-**Server status**: Running clean. NCAAB scoreboard returning 40 games (all Final tonight). One NBA game in progress (LAC vs IND, 3rd quarter). No 500 errors, no uncaught exceptions. `/api/auth/me` responding 200ms, `/api/live-games` 186ms.
+### MLB Routes
+
+| Method | Path | Auth | Purpose |
+|:---|:---|:---|:---|
+| GET | `/api/mlb/live-games` | Auth | Live/scheduled MLB games with context |
+| GET | `/api/mlb/live-stats/:gameId` | MLB Access | Live box score |
+| GET | `/api/mlb/live-signals/:gameId` | MLB Access | Real-time signals for a game |
+| GET | `/api/mlb/alerts` | Auth | Recent HR-build alerts |
+| GET | `/api/mlb/hr-radar` | Auth | HR Radar board |
+| GET | `/api/mlb/edge-feed` | Auth | Top edge signals across all games |
+| POST | `/api/mlb/calculate` | MLB Access | Manual engine calculation |
+| GET | `/api/mlb/onlyhomers/stats` | Auth | OnlyHomers hitter stats |
+| GET | `/api/mlb/onlyhomers/hot-hitters` | Auth | Current hot hitters |
+| GET | `/api/mlb/onlyhomers/batter/:name` | Auth | Batter HR history |
+| GET | `/api/mlb/onlyhomers/bvp/:batter/:pitcher` | Auth | BvP HR matchup |
+
+### NBA Routes
+
+| Method | Path | Auth | Purpose |
+|:---|:---|:---|:---|
+| GET | `/api/top-plays` | Auth | Cross-sport top signals |
+| GET | `/api/live-games` | Public | NBA scoreboard proxy |
+| GET | `/api/live-stats/:gameId` | Public | NBA box score proxy |
+| GET | `/api/halftime-plays` | Auth | NBA 2H plays |
+| GET | `/api/odds` | Public | Live player prop odds |
+| GET | `/api/game-lines` | Public | Spreads/totals |
+
+### NCAAB Routes
+
+| Method | Path | Auth | Purpose |
+|:---|:---|:---|:---|
+| GET | `/api/ncaab/plays` | Pro+ | NCAAB signals |
+| GET | `/api/ncaab/live` | Pro+ | Live games with engine data |
+| GET | `/api/ncaab/2h-lines` | Pro+ | 2H specific lines |
+
+### User Routes
+
+| Method | Path | Auth | Purpose |
+|:---|:---|:---|:---|
+| GET | `/api/me` | Auth | Current user profile with Stripe sync |
+| POST | `/api/auth/register` | Public | Create account |
+| POST | `/api/auth/login` | Public | JWT login |
+| GET | `/api/user/alerts` | Auth | Alert settings |
+| POST | `/api/user/alerts/sms` | Auth | Update SMS settings |
+| POST | `/api/feedback` | Auth | Submit feedback |
+
+---
+
+## 10. Notifications
+
+| Channel | Trigger | Tier |
+|:---|:---|:---|
+| Web Push (VAPID) | ELITE-tier signals, HR alerts | Free+ |
+| SMS (Twilio) | ELITE-tier signals | Pro+ |
+| Email (Resend) | Welcome, walkthrough, day-3, win-back, wall-hit, pro welcome | All |
+
+---
+
+## 11. Performance Requirements
+
+| Metric | Target |
+|:---|:---|
+| Signal latency (game event → UI) | < 15 seconds |
+| Live game polling | 10 seconds |
+| Weather refresh | 10 minutes |
+| OnlyHomers scrape | 60 minutes |
+| Game discovery | 5 minutes |
+| Edge cache TTL | 6 hours |
+| Signal freshness gate | 10 minutes |
+| Max concurrent games | 50 |
+
+---
+
+## 12. Quality Gates
+
+### Signal Qualification:
+- Valid recommended side (OVER or UNDER)
+- Valid book line (finite, positive)
+- Valid probabilities (both > 0)
+- Not suppressed by engine
+- Side probability ≥ market floor (typically 60%)
+- Real odds hydration check
+- HR UNDER always suppressed
+- Projection consistent with side
+- Signal score ≥ 55
+
+### Engine Integrity:
+- Probability ceiling per archetype
+- Directional bias tracking with drift detection
+- Market family suppression (no derivative spam)
+- Two-AB rule for live form boosts
+- Firewall for side/projection tension
+- No synthetic/default book lines
+
+---
+
+## 13. Deployment
+
+- **Platform**: Replit (cloud deployment)
+- **Runtime**: Node.js + TypeScript (tsx)
+- **Database**: PostgreSQL with Drizzle ORM
+- **Frontend**: React + Vite + Tailwind + shadcn/ui
+- **PWA**: Service worker with skipWaiting, network-first
+- **Routing**: wouter (frontend), Express (backend)
+- **Scheduled Jobs**: Orchestrator interval timers (not external cron)
