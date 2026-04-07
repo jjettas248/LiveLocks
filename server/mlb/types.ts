@@ -315,6 +315,9 @@ export interface MLBPropInput {
     seasonTotalHR: number;
     seasonTotalAB: number;
   };
+
+  hotHitterBoost?: number;
+  bvpHrBoost?: number;
 }
 
 export interface ModifierBreakdown {

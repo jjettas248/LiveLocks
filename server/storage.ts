@@ -2530,6 +2530,8 @@ export class DatabaseStorage implements IStorage {
       peakScore: number | null;
       triggerTags: string[];
       resolvedAt: Date | null;
+      alertPath: string | null;
+      conversionPct: number | null;
     }>;
     misses: Array<{
       sessionDate: string;
@@ -2544,6 +2546,8 @@ export class DatabaseStorage implements IStorage {
       peakScore: number | null;
       triggerTags: string[];
       resolvedAt: Date | null;
+      alertPath: string | null;
+      conversionPct: number | null;
     }>;
     summary: { wins: number; losses: number; totalGraded: number; hitRate: number };
   }> {
@@ -2571,6 +2575,12 @@ export class DatabaseStorage implements IStorage {
       }
 
       const canonicalRows = Array.from(canonicalMap.values());
+      const extractConvPct = (row: typeof canonicalRows[0]): number | null => {
+        const diag = row.diagnosticsSnapshot as any;
+        if (!diag?.hrConversion) return null;
+        return diag.hrConversion.calibratedProbability ?? diag.hrConversion.hrConversionProbability ?? null;
+      };
+
       const hits = canonicalRows
         .filter(r => r.status === "hit")
         .map(r => ({
@@ -2588,6 +2598,8 @@ export class DatabaseStorage implements IStorage {
           peakScore: r.peakReadinessScore ? parseFloat(r.peakReadinessScore) : null,
           triggerTags: r.triggerTags ?? [],
           resolvedAt: r.resolvedAt,
+          alertPath: r.alertPath ?? null,
+          conversionPct: extractConvPct(r),
         }));
 
       const misses = canonicalRows
@@ -2605,6 +2617,8 @@ export class DatabaseStorage implements IStorage {
           peakScore: r.peakReadinessScore ? parseFloat(r.peakReadinessScore) : null,
           triggerTags: r.triggerTags ?? [],
           resolvedAt: r.resolvedAt,
+          alertPath: r.alertPath ?? null,
+          conversionPct: extractConvPct(r),
         }));
 
       const calledHits = hits.filter(h => !(h.triggerTags ?? []).includes("auto_graded"));

@@ -220,10 +220,10 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
     score += 0.4;
   }
 
-  const hotHitterBoost = (input as any).hotHitterBoost ?? 0;
+  const hotHitterBoost = input.hotHitterBoost ?? 0;
   score += hotHitterBoost;
 
-  const bvpHrBoost = (input as any).bvpHrBoost ?? 0;
+  const bvpHrBoost = input.bvpHrBoost ?? 0;
   score += bvpHrBoost;
 
   const hrTrend = input.hrTrend;

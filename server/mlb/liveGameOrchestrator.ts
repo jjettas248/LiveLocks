@@ -49,7 +49,7 @@ import {
 import { applySafetyCeiling, applyDirectionalBias } from "./calibration";
 import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
-import { evaluateHRAlert, markAlertSent, type HRAlertInput } from "./evaluateHRAlert";
+import { evaluateHRAlert, markAlertSent, clearGameCooldowns, type HRAlertInput } from "./evaluateHRAlert";
 import { getPlayer } from "./rosterService";
 import { storage } from "../storage";
 import { runFullOnlyHomersScrape, getHotHitters, getLiveBallparkFactors, getBatterVsPitcherHrHistory } from "./onlyHomersService";
@@ -644,13 +644,22 @@ export class LiveGameOrchestrator {
         for (const [pid, bsp] of Object.entries(boxScore.byPlayerId)) {
           const hrCount = (bsp as any).hr ?? 0;
           if (hrCount > 0) {
-            storage.resolveAlertAsHit(pid, gameId, 0, "final", 0).catch(() => {});
-            playerHrMap.set(pid, { inning: 9, half: "unknown" });
+            const liveKey = `${gameId}_${pid}`;
+            const alreadyGraded = KNOWN_HR_COUNTS.has(liveKey);
+            if (!alreadyGraded) {
+              storage.resolveAlertAsHit(pid, gameId, 0, "final", 0).catch(() => {});
+            }
+            const lastInning = newState.inning ?? 9;
+            playerHrMap.set(pid, { inning: lastInning, half: "final" });
           }
         }
       }
       storage.reconcileAlertsForGame(gameId).catch(() => {});
       storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap).catch(() => {});
+      clearGameCooldowns(gameId);
+      for (const key of Array.from(KNOWN_HR_COUNTS.keys())) {
+        if (key.startsWith(`${gameId}_`)) KNOWN_HR_COUNTS.delete(key);
+      }
     }
 
     if (prevState) {
@@ -1494,7 +1503,7 @@ export class LiveGameOrchestrator {
           const ohData = getOnlyHomersEnrichment(batter.playerName);
           if (ohData.isHotHitter) {
             const boost = ohData.hotHitterPeriod === "7d" ? 0.8 : ohData.hotHitterPeriod === "14d" ? 0.5 : 0.3;
-            (input as any).hotHitterBoost = boost;
+            input.hotHitterBoost = boost;
           }
         }
 
@@ -1751,7 +1760,9 @@ export class LiveGameOrchestrator {
               batterHand: resolvedBatterHand,
               pitcherThrows: pitcher?.throws ?? null,
               era: pitcherSeasonStats?.era ?? null,
-              currentRuns: (state.homeScore ?? 0) + (state.awayScore ?? 0) || 4.5,
+              currentRuns: (state.homeScore != null || state.awayScore != null)
+                ? (state.homeScore ?? 0) + (state.awayScore ?? 0)
+                : 4.5,
               leagueAvgRuns: 4.5,
               seasonHRRate: resolvedSeasonHRRate,
               barrelRate: playerContact?.barrelPct != null ? playerContact.barrelPct / 100 : null,

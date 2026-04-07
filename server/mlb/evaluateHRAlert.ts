@@ -265,7 +265,9 @@ function buildConversionInput(input: HRAlertInput): HRConversionInput {
 export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
   const { hrBuildScore, factors, inning, priorABResults } = input;
 
-  const classified = priorABResults.map(ab => classifyContactEvent(ab));
+  const classified = factors.contactClasses && factors.contactClasses.length > 0
+    ? factors.contactClasses
+    : priorABResults.map(ab => classifyContactEvent(ab));
 
   const hrShapedCount = factors.hrShapedCount ?? 0;
   const missedHrCount = factors.missedHrCount ?? 0;
@@ -428,6 +430,8 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
 
   if (
     totalHrShaped >= 2 &&
+    (qualifiedEVMean ?? 0) >= 96 &&
+    hrBuildScore >= 3.5 &&
     (remainingPA === null || remainingPA >= 1.0) &&
     softVetoes.length <= 1 &&
     (convProb === null || convProb >= HR_CONVERSION_ALERT_MIN)

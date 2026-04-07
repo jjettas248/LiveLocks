@@ -818,8 +818,38 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
         </div>
       )}
 
+      {card.edge == null && card.enginePct == null && card.conversionPct != null && !isCashed && !isMissed && (
+        <div className="flex items-center gap-2 text-[10px] flex-wrap" data-testid={`conv-pct-${card.playerId}`}>
+          <span className={`font-bold ${card.conversionPct >= 0.12 ? "text-green-400" : card.conversionPct >= 0.08 ? "text-yellow-400" : "text-muted-foreground"}`}>
+            Conv {(card.conversionPct * 100).toFixed(1)}%
+          </span>
+          {card.alertPath && (
+            <>
+              <span className="text-muted-foreground/40">|</span>
+              <span className="text-muted-foreground/60">{card.alertPath.replace("_", " ")}</span>
+            </>
+          )}
+        </div>
+      )}
+
       {expanded && (
         <div className="space-y-2 pt-1 border-t border-border/20 animate-in slide-in-from-top-1 duration-200" onClick={(e) => e.stopPropagation()}>
+          {(isCashed || isMissed) && (card.alertPath || card.conversionPct != null || card.peakScore != null || card.detectedLabel) && (
+            <div className="flex flex-wrap gap-1.5 text-[10px]" data-testid={`diagnostics-${card.playerId}`}>
+              {card.alertPath && (
+                <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 font-semibold">{card.alertPath.replace("_", " ")}</span>
+              )}
+              {card.conversionPct != null && (
+                <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold">Conv {(card.conversionPct * 100).toFixed(1)}%</span>
+              )}
+              {card.peakScore != null && card.peakScore > 0 && (
+                <span className="px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400 font-semibold">Peak {card.peakScore.toFixed(1)}</span>
+              )}
+              {card.detectedLabel && (
+                <span className="px-1.5 py-0.5 rounded bg-muted/30 text-muted-foreground">Detected {card.detectedLabel}</span>
+              )}
+            </div>
+          )}
           {!isCashed && !isMissed && gameTeams && (
             <RadarCardOddsChips playerName={card.playerName} team={card.team} gameTeams={gameTeams} />
           )}
@@ -1268,6 +1298,7 @@ function GradedHitCard({ outcome }: { outcome: CanonicalGradedOutcome }) {
 
 function GradedMissCard({ outcome }: { outcome: CanonicalGradedOutcome }) {
   const m = outcome;
+  const mAny = m as any;
   return (
     <div className="rounded-lg border border-border/30 bg-muted/20 p-3 space-y-1.5" data-testid={`graded-miss-${m.playerId}-${m.gameId}`}>
       <div className="flex items-center justify-between">
@@ -1296,6 +1327,12 @@ function GradedMissCard({ outcome }: { outcome: CanonicalGradedOutcome }) {
         {m.triggerTags.length > 0 && m.triggerTags.slice(0, 2).map((tag, i) => (
           <span key={i} className="px-1.5 py-0.5 rounded bg-muted/20 text-muted-foreground/60 text-[9px]">{formatTriggerTag(tag)}</span>
         ))}
+        {mAny.alertPath && (
+          <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400/60 text-[9px]">{mAny.alertPath.replace("_", " ")}</span>
+        )}
+        {mAny.conversionPct != null && (
+          <span className="px-1.5 py-0.5 rounded bg-muted/20 text-muted-foreground/60 text-[9px]">Conv {(mAny.conversionPct * 100).toFixed(1)}%</span>
+        )}
       </div>
     </div>
   );
@@ -1429,6 +1466,8 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         peakScore: ch.peakScore ?? null,
         side: "OVER",
         line: 0.5,
+        alertPath: (ch as any).alertPath ?? null,
+        conversionPct: (ch as any).conversionPct ?? null,
       } as HrRadarCardUi);
     } else {
       radarState.set(key, { ...radarState.get(key)!, status: "CASHED" });
@@ -1484,6 +1523,8 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         peakScore: cm.peakScore ?? null,
         side: "OVER",
         line: 0.5,
+        alertPath: (cm as any).alertPath ?? null,
+        conversionPct: (cm as any).conversionPct ?? null,
       } as HrRadarCardUi);
     }
   }
