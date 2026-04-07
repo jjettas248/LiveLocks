@@ -191,23 +191,37 @@ export async function registerStripeRoutes(app: import("express").Express) {
       let stripeCustomerId = "";
       let stripeSubscriptionId = "";
 
-      if (sessionId) {
-        try {
-          const stripe = await getUncachableStripeClient();
-          const session = await stripe.checkout.sessions.retrieve(sessionId, {
-            expand: ["subscription"],
-          });
-          if (session.payment_status === "paid" || session.status === "complete") {
-            stripeCustomerId = typeof session.customer === "string" ? session.customer : (session.customer as any)?.id ?? "";
-            const sub = session.subscription as any;
-            stripeSubscriptionId = typeof sub === "string" ? sub : sub?.id ?? "";
-          } else {
-            console.warn(`[checkout-complete] Session ${sessionId} not paid — status: ${session.payment_status}`);
-            return res.status(400).json({ error: "Payment not confirmed" });
-          }
-        } catch (stripeErr: any) {
-          console.error("[checkout-complete] Stripe session lookup failed:", stripeErr.message);
+      if (!sessionId) {
+        return res.status(400).json({ error: "Session ID required" });
+      }
+
+      try {
+        const stripe = await getUncachableStripeClient();
+        const session = await stripe.checkout.sessions.retrieve(sessionId, {
+          expand: ["subscription"],
+        });
+
+        const metadataUserId = session.metadata?.userId;
+        if (metadataUserId && String(metadataUserId) !== String(userId)) {
+          console.warn(`[checkout-complete] Session userId mismatch: metadata=${metadataUserId} auth=${userId}`);
+          return res.status(403).json({ error: "Session does not belong to this user" });
         }
+
+        const validPayment = session.payment_status === "paid"
+          || session.payment_status === "no_payment_required"
+          || session.status === "complete";
+        if (!validPayment) {
+          console.warn(`[checkout-complete] Session ${sessionId} not paid — payment_status=${session.payment_status} status=${session.status}`);
+          return res.status(400).json({ error: "Payment not confirmed" });
+        }
+
+        stripeCustomerId = typeof session.customer === "string" ? session.customer : (session.customer as any)?.id ?? "";
+        const sub = session.subscription as any;
+        stripeSubscriptionId = typeof sub === "string" ? sub : sub?.id ?? "";
+        console.log(`[checkout-complete] Session verified — payment_status=${session.payment_status} status=${session.status} customerId=${stripeCustomerId} subId=${stripeSubscriptionId}`);
+      } catch (stripeErr: any) {
+        console.error("[checkout-complete] Stripe session lookup failed:", stripeErr.message);
+        return res.status(502).json({ error: "Unable to verify checkout session with Stripe" });
       }
 
       let resolvedTier: string | null = null;
@@ -226,11 +240,11 @@ export async function registerStripeRoutes(app: import("express").Express) {
       }
 
       if (!resolvedTier) {
-        resolvedTier = tier;
-        console.warn(`[checkout-complete] Could not resolve tier from Stripe subscription — falling back to request tier="${tier}"`);
+        console.warn(`[checkout-complete] Could not resolve tier from Stripe — deferring to webhook`);
+        return res.status(202).json({ error: "Tier verification pending — webhook will complete setup" });
       }
 
-      await storage.updateUserSubscription(userId, resolvedTier!, stripeCustomerId, stripeSubscriptionId);
+      await storage.updateUserSubscription(userId, resolvedTier, stripeCustomerId, stripeSubscriptionId);
       const user = await storage.getUserById(userId);
       const access = resolveAccess(user?.subscriptionTier, user?.isAdmin ?? false);
       console.log("[checkout-complete]", {

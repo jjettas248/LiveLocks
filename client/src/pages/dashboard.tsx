@@ -1110,27 +1110,71 @@ export default function Dashboard() {
     const sessionId = params.get("session_id");
     if (payment === "success" && tier) {
       window.history.replaceState({}, "", "/dashboard");
-      apiRequest("POST", "/api/stripe/checkout-complete", { tier, sessionId })
-        .then(async (res) => {
+
+      const applyTierUpdate = (data: any) => {
+        const confirmedTier = data.subscriptionTier ?? null;
+        if (confirmedTier) {
+          setLocalTier(confirmedTier);
+        }
+        const currentUser = queryClient.getQueryData<any>(["/api/auth/me"]);
+        if (currentUser && data.hasNBA !== undefined) {
+          queryClient.setQueryData(["/api/auth/me"], {
+            ...currentUser,
+            ...(confirmedTier ? { subscriptionTier: confirmedTier } : {}),
+            hasNBA: data.hasNBA,
+            hasNCAAB: data.hasNCAAB,
+            hasMLB: data.hasMLB,
+            hasUnlimited: data.hasUnlimited,
+          });
+        }
+        queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
+        return !!confirmedTier;
+      };
+
+      const tryCheckoutComplete = async (attempt: number): Promise<boolean> => {
+        try {
+          const res = await apiRequest("POST", "/api/stripe/checkout-complete", { tier, sessionId });
           const data = await res.json().catch(() => ({}));
-          const confirmedTier = data.subscriptionTier ?? null;
-          if (confirmedTier) {
-            setLocalTier(confirmedTier);
+          return applyTierUpdate(data);
+        } catch {
+          if (attempt < 3) {
+            await new Promise(r => setTimeout(r, 2000 * attempt));
+            return tryCheckoutComplete(attempt + 1);
           }
-          const currentUser = queryClient.getQueryData<any>(["/api/auth/me"]);
-          if (currentUser && data.hasNBA !== undefined) {
-            queryClient.setQueryData(["/api/auth/me"], {
-              ...currentUser,
-              ...(confirmedTier ? { subscriptionTier: confirmedTier } : {}),
-              hasNBA: data.hasNBA,
-              hasNCAAB: data.hasNCAAB,
-              hasMLB: data.hasMLB,
-              hasUnlimited: data.hasUnlimited,
+          return false;
+        }
+      };
+
+      tryCheckoutComplete(1).then(async (success) => {
+        if (!success) {
+          let recovered = false;
+          for (let poll = 0; poll < 5; poll++) {
+            await new Promise(r => setTimeout(r, 3000));
+            try {
+              const token = getAuthToken();
+              const headers: Record<string, string> = {};
+              if (token) headers["Authorization"] = `Bearer ${token}`;
+              const meRes = await fetch("/api/me", { credentials: "include", headers });
+              if (meRes.ok) {
+                const fresh = await meRes.json();
+                if (fresh.subscriptionTier) {
+                  setLocalTier(fresh.subscriptionTier);
+                  queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
+                  recovered = true;
+                  break;
+                }
+              }
+            } catch { /* continue polling */ }
+          }
+          if (!recovered) {
+            toast({
+              title: "Subscription activation delayed",
+              description: "Your payment was received. Please refresh the page in a minute to see your upgraded access.",
+              variant: "default",
             });
           }
-          queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
-        })
-        .catch(() => queryClient.refetchQueries({ queryKey: ["/api/auth/me"] }));
+        }
+      });
     } else if (payment === "cancelled") {
       window.history.replaceState({}, "", "/dashboard");
     }

@@ -2770,21 +2770,33 @@ export async function registerRoutes(
       let user = await storage.getUserById(userId);
       if (!user) return res.status(404).json({ error: "User not found" });
 
-      if (user.stripeCustomerId) {
-        try {
-          const { getUncachableStripeClient } = await import("./stripeClient");
-          const { resolveTierFromSubscription } = await import("./utils/resolveTier");
-          const stripe = await getUncachableStripeClient();
+      try {
+        const { getUncachableStripeClient } = await import("./stripeClient");
+        const { resolveTierFromSubscription } = await import("./utils/resolveTier");
+        const stripe = await getUncachableStripeClient();
+
+        let customerId = user.stripeCustomerId;
+
+        if (!customerId && user.email) {
+          const customers = await stripe.customers.list({ email: user.email, limit: 1 });
+          if (customers.data[0]) {
+            customerId = customers.data[0].id;
+            await storage.updateUserStripeCustomer(userId, customerId);
+            console.log(`[stripe-fallback] Linked customer ${customerId} to user ${userId} via email lookup`);
+          }
+        }
+
+        if (customerId) {
           const [activeSubs, trialingSubs] = await Promise.all([
-            stripe.subscriptions.list({ customer: user.stripeCustomerId, status: "active", limit: 1 }),
-            stripe.subscriptions.list({ customer: user.stripeCustomerId, status: "trialing", limit: 1 }),
+            stripe.subscriptions.list({ customer: customerId, status: "active", limit: 1 }),
+            stripe.subscriptions.list({ customer: customerId, status: "trialing", limit: 1 }),
           ]);
           const validSub = activeSubs.data[0] || trialingSubs.data[0];
           if (validSub) {
             const activeSub = validSub;
             const stripeTier = resolveTierFromSubscription(activeSub);
             if (stripeTier && stripeTier !== user.subscriptionTier) {
-              await storage.updateUserSubscription(userId, stripeTier, user.stripeCustomerId, activeSub.id);
+              await storage.updateUserSubscription(userId, stripeTier, customerId, activeSub.id);
               user = await storage.getUserById(userId) ?? user;
               console.log("[stripe-fallback] repaired tier", {
                 userId: user.id,
@@ -2800,9 +2812,9 @@ export async function registerRoutes(
               previousTier: user.subscriptionTier,
             });
           }
-        } catch (stripeErr: any) {
-          console.warn(`[stripe-fallback] Stripe lookup failed for user ${userId}:`, stripeErr.message);
         }
+      } catch (stripeErr: any) {
+        console.warn(`[stripe-fallback] Stripe lookup failed for user ${userId}:`, stripeErr.message);
       }
 
       const tier = user.subscriptionTier;

@@ -36,7 +36,10 @@ async function syncSubscriptionToDb(stripe: any, subscriptionId: string): Promis
   }
 
   const user = await storage.getUserByStripeCustomerId(customerId);
-  if (!user) return;
+  if (!user) {
+    console.warn("[STRIPE SYNC] No user found for customerId:", customerId);
+    return;
+  }
 
   await storage.updateUserSubscription(user.id, tier, customerId, subscriptionId);
   console.log("[STRIPE SYNC]", { userId: user.id, priceId, resolvedTier: tier, status: sub.status });
@@ -109,14 +112,23 @@ export class WebhookHandlers {
         const session = event.data?.object;
         const subscriptionId = typeof session?.subscription === "string" ? session.subscription : "";
         const customerId = typeof session?.customer === "string" ? session.customer : "";
+        const metadataUserId = session?.metadata?.userId ? Number(session.metadata.userId) : null;
 
         console.log("[STRIPE SYNC]", {
           source: "webhook:checkout.session.completed",
           customerId,
           subscriptionId,
           metadataTier: session?.metadata?.tier,
-          metadataUserId: session?.metadata?.userId,
+          metadataUserId,
         });
+
+        if (metadataUserId && customerId) {
+          const existingUser = await storage.getUserById(metadataUserId);
+          if (existingUser && !existingUser.stripeCustomerId) {
+            await storage.updateUserStripeCustomer(metadataUserId, customerId);
+            console.log(`[STRIPE SYNC] Pre-linked customerId=${customerId} to userId=${metadataUserId} via checkout metadata`);
+          }
+        }
 
         if (subscriptionId) {
           await syncSubscriptionToDb(stripe, subscriptionId).catch(console.error);
