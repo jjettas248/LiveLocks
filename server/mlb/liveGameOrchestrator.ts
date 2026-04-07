@@ -50,6 +50,59 @@ import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, type HRAlertInput } from "./evaluateHRAlert";
 import { getPlayer } from "./rosterService";
 import { storage } from "../storage";
+import { runFullOnlyHomersScrape, getHotHitters, getLiveBallparkFactors, getBatterVsPitcherHrHistory } from "./onlyHomersService";
+
+// ── OnlyHomers data caches (refreshed periodically) ─────────────────────────
+let ohHotHitters7d: Map<string, number> = new Map();
+let ohHotHitters14d: Map<string, number> = new Map();
+let ohHotHitters30d: Map<string, number> = new Map();
+let ohBallparkFactors: Map<string, number> = new Map();
+let ohLastRefresh = 0;
+const OH_REFRESH_MS = 30 * 60_000;
+
+async function refreshOnlyHomersCache(): Promise<void> {
+  if (Date.now() - ohLastRefresh < OH_REFRESH_MS) return;
+  try {
+    const [h7, h14, h30, parks] = await Promise.all([
+      getHotHitters("7d"),
+      getHotHitters("14d"),
+      getHotHitters("30d"),
+      getLiveBallparkFactors(),
+    ]);
+    ohHotHitters7d = new Map(h7.map(h => [h.playerName, h.hrCount]));
+    ohHotHitters14d = new Map(h14.map(h => [h.playerName, h.hrCount]));
+    ohHotHitters30d = new Map(h30.map(h => [h.playerName, h.hrCount]));
+    ohBallparkFactors = parks;
+    ohLastRefresh = Date.now();
+    console.log(`[OnlyHomers] Cache refreshed — 7d=${ohHotHitters7d.size} 14d=${ohHotHitters14d.size} 30d=${ohHotHitters30d.size} parks=${ohBallparkFactors.size}`);
+  } catch (e: any) {
+    console.warn(`[OnlyHomers] Cache refresh failed: ${e.message}`);
+  }
+}
+
+export function getOnlyHomersEnrichment(playerName: string): {
+  isHotHitter: boolean;
+  hotHitterPeriod: string | null;
+  hotHitterHrCount: number | null;
+} {
+  const hr7 = ohHotHitters7d.get(playerName);
+  if (hr7 != null && hr7 >= 2) {
+    return { isHotHitter: true, hotHitterPeriod: "7d", hotHitterHrCount: hr7 };
+  }
+  const hr14 = ohHotHitters14d.get(playerName);
+  if (hr14 != null && hr14 >= 3) {
+    return { isHotHitter: true, hotHitterPeriod: "14d", hotHitterHrCount: hr14 };
+  }
+  const hr30 = ohHotHitters30d.get(playerName);
+  if (hr30 != null && hr30 >= 5) {
+    return { isHotHitter: true, hotHitterPeriod: "30d", hotHitterHrCount: hr30 };
+  }
+  return { isHotHitter: false, hotHitterPeriod: null, hotHitterHrCount: null };
+}
+
+export function getOnlyHomersBallparkHrCount(ballpark: string): number | null {
+  return ohBallparkFactors.get(ballpark) ?? null;
+}
 
 // ── HR alert grading tracker ──────────────────────────────────────────────────
 const KNOWN_HR_COUNTS = new Map<string, number>();
@@ -307,7 +360,15 @@ export class LiveGameOrchestrator {
       }, WEATHER_MS)
     );
 
-    console.log(`[MLB orchestrator] Started — discovery ${GAME_DISCOVERY_MS / 1000}s, state/contact/pitcher ${GAME_STATE_MS / 1000}s, weather ${WEATHER_MS / 1000}s`);
+    runFullOnlyHomersScrape().then(() => refreshOnlyHomersCache()).catch(console.error);
+
+    this.timers.push(
+      setInterval(() => {
+        runFullOnlyHomersScrape().then(() => refreshOnlyHomersCache()).catch(console.error);
+      }, 60 * 60_000)
+    );
+
+    console.log(`[MLB orchestrator] Started — discovery ${GAME_DISCOVERY_MS / 1000}s, state/contact/pitcher ${GAME_STATE_MS / 1000}s, weather ${WEATHER_MS / 1000}s, OnlyHomers=hourly`);
   }
 
   stop(): void {
@@ -850,6 +911,18 @@ export class LiveGameOrchestrator {
     signal.liveScore = Math.round(liveScore * 10000) / 10000;
     signal.eventBoost = scoreBreakdown.eventBoost;
 
+    if (output.market === "home_runs" || output.market === "hrr") {
+      const ohEnrichment = getOnlyHomersEnrichment(output.playerName);
+      (signal as any).isHotHitter = ohEnrichment.isHotHitter;
+      (signal as any).hotHitterPeriod = ohEnrichment.hotHitterPeriod;
+      (signal as any).hotHitterHrCount = ohEnrichment.hotHitterHrCount;
+      if (ohEnrichment.isHotHitter) {
+        signal.badges = [...(signal.badges ?? []), "HOT_HITTER"];
+        if (!signal.reasons) signal.reasons = [];
+        signal.reasons.push(`Hot hitter: ${ohEnrichment.hotHitterHrCount} HRs in last ${ohEnrichment.hotHitterPeriod}`);
+      }
+    }
+
     if (signal.fallbackUsed) {
       signal.confidenceTier = "WATCHLIST" as any;
       signal.watchlist = true;
@@ -1347,6 +1420,14 @@ export class LiveGameOrchestrator {
             isTopRelieverAvailable: bullpenCache?.isTopRelieverAvailable ?? true,
           },
         };
+
+        if (market === "home_runs" || market === "hrr") {
+          const ohData = getOnlyHomersEnrichment(batter.playerName);
+          if (ohData.isHotHitter) {
+            const boost = ohData.hotHitterPeriod === "7d" ? 0.8 : ohData.hotHitterPeriod === "14d" ? 0.5 : 0.3;
+            (input as any).hotHitterBoost = boost;
+          }
+        }
 
         pLog(gameId, "engineInput", { player: input.playerName, market: input.market, bookLine: input.bookLine, inning: input.inning, parkFactor: input.weatherPark.parkFactor, venue: weatherCache?.venueName });
 

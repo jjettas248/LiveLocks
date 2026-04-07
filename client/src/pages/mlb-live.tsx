@@ -12,7 +12,7 @@ import { ProbabilityRing } from "@/components/probability-ring";
 import { StatCard } from "@/components/stat-card";
 import { SkeletonCard } from "@/components/sports/SkeletonCard";
 import { EmptyState } from "@/components/sports/EmptyState";
-import { Radio, Target, RefreshCw, Calculator, Loader2, Flame, Zap, Trophy, Eye, ChevronDown, ChevronUp, Bell, Activity, X, BarChart3, Plus, ExternalLink, TrendingUp, TrendingDown, Clock } from "lucide-react";
+import { Radio, Target, RefreshCw, Calculator, Loader2, Flame, Zap, Trophy, Eye, ChevronDown, ChevronUp, Bell, Activity, X, BarChart3, Plus, ExternalLink, TrendingUp, TrendingDown, Clock, CheckCircle2 } from "lucide-react";
 import {
   mapHrRadarCardToUi, mapAlertToUi, formatTriggerReason,
   radarScoreToTier, launchAngleLabel, formatMlbDisplayValue,
@@ -772,6 +772,26 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
           {card.evidenceTags.slice(0, 4).map((tag, i) => (
             <span key={i} className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${tag.color}`}>{tag.label}</span>
           ))}
+        </div>
+      )}
+
+      {card.isHotHitter && (
+        <div className="flex items-center gap-1" data-testid={`badge-hot-hitter-${card.playerId}`}>
+          <Flame className="w-3 h-3 text-orange-400" />
+          <span className="text-[9px] font-bold text-orange-400 bg-orange-500/10 px-1.5 py-0.5 rounded-full">
+            HOT — {card.hotHitterHrCount} HR{(card.hotHitterHrCount ?? 0) > 1 ? "s" : ""} last {card.hotHitterPeriod}
+          </span>
+        </div>
+      )}
+
+      {card.onlyHomersVerified && (
+        <div className="flex items-center gap-1" data-testid={`badge-oh-verified-${card.playerId}`}>
+          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+          <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-full">
+            OnlyHomers Verified
+            {card.ohExitVelocity != null && ` — ${card.ohExitVelocity} EV`}
+            {card.ohDistance != null && ` · ${card.ohDistance}ft`}
+          </span>
         </div>
       )}
 

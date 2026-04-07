@@ -307,6 +307,54 @@ app.use((req, res, next) => {
     console.warn("[startup] Schema migration warning (password-reset):", err.message);
   }
 
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hr_outcomes (
+        id SERIAL PRIMARY KEY,
+        season INTEGER NOT NULL DEFAULT 2026,
+        game_date TEXT NOT NULL,
+        batter_name TEXT NOT NULL,
+        batter_team TEXT NOT NULL,
+        batter_mlb_id TEXT,
+        hr_number INTEGER NOT NULL DEFAULT 1,
+        runners_on_base INTEGER NOT NULL DEFAULT 0,
+        inning INTEGER,
+        outs INTEGER,
+        launch_angle NUMERIC,
+        exit_velocity NUMERIC,
+        distance NUMERIC,
+        pitch_type TEXT,
+        pitcher_name TEXT,
+        ballpark TEXT,
+        source TEXT NOT NULL DEFAULT 'onlyhomers',
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS hr_hot_hitters (
+        id SERIAL PRIMARY KEY,
+        player_name TEXT NOT NULL,
+        team TEXT NOT NULL,
+        hr_count INTEGER NOT NULL,
+        period TEXT NOT NULL,
+        snapshot_date TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS hr_ballpark_factors (
+        id SERIAL PRIMARY KEY,
+        season INTEGER NOT NULL DEFAULT 2026,
+        ballpark TEXT NOT NULL,
+        hr_count INTEGER NOT NULL DEFAULT 0,
+        snapshot_date TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS hr_outcomes_dedup_idx ON hr_outcomes(season, game_date, batter_name, hr_number);
+      CREATE UNIQUE INDEX IF NOT EXISTS hr_hot_hitters_dedup_idx ON hr_hot_hitters(player_name, period, snapshot_date);
+      CREATE UNIQUE INDEX IF NOT EXISTS hr_ballpark_factors_dedup_idx ON hr_ballpark_factors(season, ballpark, snapshot_date);
+    `);
+    console.log("[startup] Schema migration: OnlyHomers tables ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (onlyhomers):", err.message);
+  }
+
   // Backfill: mark pre-existing users (no verification token) as email-verified
   // so they are not locked out by the new emailVerified gate.
   try {

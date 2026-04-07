@@ -48,6 +48,14 @@ export type HrRadarCardUi = {
   scoreIncreased: boolean;
   scoreIncreaseLabel: string | null;
   peakScore: number | null;
+  isHotHitter: boolean;
+  hotHitterPeriod: string | null;
+  hotHitterHrCount: number | null;
+  onlyHomersVerified: boolean;
+  ohExitVelocity: number | null;
+  ohLaunchAngle: number | null;
+  ohDistance: number | null;
+  ohPitchType: string | null;
 };
 
 export type HrRadarAnalyzeViewModel = {
@@ -343,6 +351,14 @@ export function mapHrRadarCardToUi(player: any, type: "edge" | "watch" | "cashed
     scoreIncreased: player.scoreIncreased ?? false,
     scoreIncreaseLabel: player.scoreIncreaseLabel ?? null,
     peakScore: player.peakReadinessScore ? parseFloat(player.peakReadinessScore) : player.peakScore ?? null,
+    isHotHitter: player.isHotHitter ?? false,
+    hotHitterPeriod: player.hotHitterPeriod ?? null,
+    hotHitterHrCount: player.hotHitterHrCount ?? null,
+    onlyHomersVerified: player.onlyHomersVerified ?? false,
+    ohExitVelocity: player.ohExitVelocity ?? null,
+    ohLaunchAngle: player.ohLaunchAngle ?? null,
+    ohDistance: player.ohDistance ?? null,
+    ohPitchType: player.ohPitchType ?? null,
   };
 }
 
@@ -414,5 +430,13 @@ export function mapAlertToUi(alert: any): HrRadarCardUi {
     scoreIncreased: alert.scoreIncreased ?? false,
     scoreIncreaseLabel: alert.scoreIncreaseLabel ?? null,
     peakScore: alert.peakScore ?? alert.peakReadinessScore ? parseFloat(alert.peakReadinessScore ?? alert.peakScore ?? "0") : null,
+    isHotHitter: alert.isHotHitter ?? false,
+    hotHitterPeriod: alert.hotHitterPeriod ?? null,
+    hotHitterHrCount: alert.hotHitterHrCount ?? null,
+    onlyHomersVerified: alert.onlyHomersVerified ?? false,
+    ohExitVelocity: alert.ohExitVelocity ?? null,
+    ohLaunchAngle: alert.ohLaunchAngle ?? null,
+    ohDistance: alert.ohDistance ?? null,
+    ohPitchType: alert.ohPitchType ?? null,
   };
 }

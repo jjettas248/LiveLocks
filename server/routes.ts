@@ -1805,6 +1805,9 @@ export async function registerRoutes(
               pitcherHand: hrQsAny.pitcherHand ?? null,
               inning: hrQsAny.inning ?? gameState?.inning ?? 0,
               formIndicator: qs.formIndicator ? String(qs.formIndicator).toUpperCase() : null,
+              isHotHitter: hrQsAny.isHotHitter ?? false,
+              hotHitterPeriod: hrQsAny.hotHitterPeriod ?? null,
+              hotHitterHrCount: hrQsAny.hotHitterHrCount ?? null,
             });
           }
 
@@ -1845,6 +1848,23 @@ export async function registerRoutes(
       const cleanWatchlist = hrWatchlist.filter((w: any) => !cashedFromEdge.some((c: any) => c.playerId === w.playerId));
 
       const canonical = await storage.getCanonicalHrRadarOutcomes();
+
+      const { getBatterHrHistory } = await import("./mlb/onlyHomersService");
+      const todayStr = new Date().toISOString().slice(0, 10);
+
+      for (const c of cashedFromEdge) {
+        try {
+          const hrs = await getBatterHrHistory(c.playerName);
+          const todayHr = hrs.find((h: any) => h.gameDate === todayStr);
+          if (todayHr) {
+            c.onlyHomersVerified = true;
+            c.ohExitVelocity = todayHr.exitVelocity != null ? parseFloat(String(todayHr.exitVelocity)) : null;
+            c.ohLaunchAngle = todayHr.launchAngle != null ? parseFloat(String(todayHr.launchAngle)) : null;
+            c.ohDistance = todayHr.distance != null ? parseFloat(String(todayHr.distance)) : null;
+            c.ohPitchType = todayHr.pitchType ?? null;
+          }
+        } catch {}
+      }
 
       const cashedPlayerIds = new Set(cashedFromEdge.map((c: any) => c.playerId));
       const cashedFromDb = canonical.hits
@@ -1968,6 +1988,70 @@ export async function registerRoutes(
     } catch (e: any) {
       console.error("[admin/hr-radar-analytics]", e.message);
       return res.json({ records: [], summary: { total: 0, hits: 0, misses: 0, hitRate: 0 } });
+    }
+  });
+
+  // ── OnlyHomers Data API ────────────────────────────────────────────────────────
+  app.get("/api/mlb/onlyhomers/stats", requireAuth, async (_req, res) => {
+    try {
+      const { getHrOutcomeStats } = await import("./mlb/onlyHomersService");
+      const stats = await getHrOutcomeStats();
+      return res.json(stats);
+    } catch (e: any) {
+      console.error("[onlyhomers/stats]", e.message);
+      return res.json({ totalHrs2026: 0, totalHrs2025: 0, uniqueBatters: 0, topBallpark: null, lastScrapeDate: null });
+    }
+  });
+
+  app.get("/api/mlb/onlyhomers/hot-hitters", requireAuth, async (req, res) => {
+    try {
+      const period = String(req.query.period || "7d");
+      const { getHotHitters } = await import("./mlb/onlyHomersService");
+      const hitters = await getHotHitters(period);
+      return res.json({ hitters, period });
+    } catch (e: any) {
+      console.error("[onlyhomers/hot-hitters]", e.message);
+      return res.json({ hitters: [], period: "7d" });
+    }
+  });
+
+  app.get("/api/mlb/onlyhomers/batter/:name", requireAuth, async (req, res) => {
+    try {
+      const { getBatterHrHistory } = await import("./mlb/onlyHomersService");
+      const history = await getBatterHrHistory(decodeURIComponent(req.params.name));
+      return res.json({ batterName: req.params.name, history });
+    } catch (e: any) {
+      console.error("[onlyhomers/batter]", e.message);
+      return res.json({ batterName: req.params.name, history: [] });
+    }
+  });
+
+  app.get("/api/mlb/onlyhomers/bvp/:batter/:pitcher", requireAuth, async (req, res) => {
+    try {
+      const { getBatterVsPitcherHrHistory } = await import("./mlb/onlyHomersService");
+      const history = await getBatterVsPitcherHrHistory(
+        decodeURIComponent(req.params.batter),
+        decodeURIComponent(req.params.pitcher)
+      );
+      return res.json({ batter: req.params.batter, pitcher: req.params.pitcher, history });
+    } catch (e: any) {
+      console.error("[onlyhomers/bvp]", e.message);
+      return res.json({ batter: req.params.batter, pitcher: req.params.pitcher, history: [] });
+    }
+  });
+
+  app.post("/api/admin/onlyhomers/scrape", requireAdmin, async (req, res) => {
+    try {
+      const { runFullOnlyHomersScrape, scrapeOnlyHomersDatabase } = await import("./mlb/onlyHomersService");
+      const includeHistorical = req.body?.includeHistorical === true;
+      await runFullOnlyHomersScrape();
+      if (includeHistorical) {
+        await scrapeOnlyHomersDatabase(2025);
+      }
+      return res.json({ success: true, message: includeHistorical ? "Full scrape + 2025 historical done" : "Daily scrape done" });
+    } catch (e: any) {
+      console.error("[admin/onlyhomers/scrape]", e.message);
+      return res.status(500).json({ success: false, message: e.message });
     }
   });
 

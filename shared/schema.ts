@@ -641,6 +641,63 @@ export const insertSignalInteractionSchema = createInsertSchema(signalInteractio
 export type SignalInteraction = typeof signalInteractions.$inferSelect;
 export type InsertSignalInteraction = z.infer<typeof insertSignalInteractionSchema>;
 
+export const hrOutcomes = pgTable("hr_outcomes", {
+  id: serial("id").primaryKey(),
+  season: integer("season").notNull().default(2026),
+  gameDate: text("game_date").notNull(),
+  batterName: text("batter_name").notNull(),
+  batterTeam: text("batter_team").notNull(),
+  batterMlbId: text("batter_mlb_id"),
+  hrNumber: integer("hr_number").notNull().default(1),
+  runnersOnBase: integer("runners_on_base").notNull().default(0),
+  inning: integer("inning"),
+  outs: integer("outs"),
+  launchAngle: numeric("launch_angle"),
+  exitVelocity: numeric("exit_velocity"),
+  distance: numeric("distance"),
+  pitchType: text("pitch_type"),
+  pitcherName: text("pitcher_name"),
+  ballpark: text("ballpark"),
+  source: text("source").notNull().default("onlyhomers"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  seasonIdx: index("hr_outcomes_season_idx").on(table.season),
+  dateIdx: index("hr_outcomes_date_idx").on(table.gameDate),
+  batterIdx: index("hr_outcomes_batter_idx").on(table.batterName),
+  pitcherIdx: index("hr_outcomes_pitcher_idx").on(table.pitcherName),
+  ballparkIdx: index("hr_outcomes_ballpark_idx").on(table.ballpark),
+  dedupIdx: uniqueIndex("hr_outcomes_dedup_idx").on(table.season, table.gameDate, table.batterName, table.hrNumber),
+}));
+
+export type HrOutcome = typeof hrOutcomes.$inferSelect;
+
+export const hrHotHitters = pgTable("hr_hot_hitters", {
+  id: serial("id").primaryKey(),
+  playerName: text("player_name").notNull(),
+  team: text("team").notNull(),
+  hrCount: integer("hr_count").notNull(),
+  period: text("period").notNull(),
+  snapshotDate: text("snapshot_date").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  dedupIdx: uniqueIndex("hr_hot_hitters_dedup_idx").on(table.playerName, table.period, table.snapshotDate),
+}));
+
+export type HrHotHitter = typeof hrHotHitters.$inferSelect;
+
+export const hrBallparkFactors = pgTable("hr_ballpark_factors", {
+  id: serial("id").primaryKey(),
+  season: integer("season").notNull().default(2026),
+  ballpark: text("ballpark").notNull(),
+  hrCount: integer("hr_count").notNull().default(0),
+  snapshotDate: text("snapshot_date").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  dedupIdx: uniqueIndex("hr_ballpark_factors_dedup_idx").on(table.season, table.ballpark, table.snapshotDate),
+}));
+
+export type HrBallparkFactor = typeof hrBallparkFactors.$inferSelect;
+
 export interface PlayStats {
   buckets: {
     "60-69": { total: number; hits: number; misses: number; winRate: number };
