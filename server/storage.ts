@@ -2335,7 +2335,6 @@ export class DatabaseStorage implements IStorage {
       }
 
       const halfLabel = data.half === "top" ? "T" : "B";
-      const detectedLabel = `${halfLabel}${data.inning}`;
       const alertId = `${today}_${data.gameId}_${data.playerId}`;
       await db.insert(hrRadarAlerts).values({
         id: alertId,
@@ -2346,9 +2345,9 @@ export class DatabaseStorage implements IStorage {
         team: data.team,
         opponent: null,
         detectedAt: new Date(),
-        detectedInning: data.inning,
-        detectedHalf: data.half,
-        detectedLabel,
+        detectedInning: null,
+        detectedHalf: null,
+        detectedLabel: null,
         initialReadinessScore: "0",
         currentReadinessScore: "0",
         peakReadinessScore: "0",
@@ -2356,7 +2355,7 @@ export class DatabaseStorage implements IStorage {
         confidenceTier: "monitor",
         signalState: "live",
         triggerTags: ["auto_graded"],
-        summaryText: `HR confirmed ${data.hitLabel}`,
+        summaryText: `HR confirmed ${data.hitLabel} (uncalled)`,
         status: "hit",
         hitInning: data.inning,
         hitHalf: halfLabel,
@@ -2608,8 +2607,10 @@ export class DatabaseStorage implements IStorage {
           resolvedAt: r.resolvedAt,
         }));
 
-      const totalGraded = hits.length + misses.length;
-      const hitRate = totalGraded > 0 ? Math.round((hits.length / totalGraded) * 1000) / 10 : 0;
+      const calledHits = hits.filter(h => !(h.triggerTags ?? []).includes("auto_graded"));
+      const calledMisses = misses;
+      const totalGraded = calledHits.length + calledMisses.length;
+      const hitRate = totalGraded > 0 ? Math.round((calledHits.length / totalGraded) * 1000) / 10 : 0;
 
       const rawHitCount = gradedRows.filter(r => r.status === "hit").length;
       const rawMissCount = gradedRows.filter(r => r.status === "miss").length;
@@ -2622,11 +2623,75 @@ export class DatabaseStorage implements IStorage {
       return {
         hits,
         misses,
-        summary: { wins: hits.length, losses: misses.length, totalGraded, hitRate },
+        summary: { wins: calledHits.length, losses: calledMisses.length, totalGraded, hitRate },
       };
     } catch (err: any) {
       console.warn(`[HR_RADAR_CANONICAL_OUTCOME_BUILD] Failed: ${err.message}`);
       return { hits: [], misses: [], summary: { wins: 0, losses: 0, totalGraded: 0, hitRate: 0 } };
+    }
+  }
+
+  async getHrRadarGradingHistory(days: number = 14): Promise<Array<{
+    sessionDate: string;
+    calledHits: number;
+    uncalledHits: number;
+    misses: number;
+    totalGraded: number;
+    hitRate: number;
+  }>> {
+    try {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - days);
+      const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+      const allRows = await db.select().from(hrRadarAlerts)
+        .where(sql`${hrRadarAlerts.sessionDate} >= ${cutoffStr}`)
+        .orderBy(desc(hrRadarAlerts.sessionDate));
+
+      const byDate = new Map<string, typeof allRows>();
+      for (const row of allRows) {
+        if (row.status !== "hit" && row.status !== "miss") continue;
+        const existing = byDate.get(row.sessionDate) ?? [];
+        existing.push(row);
+        byDate.set(row.sessionDate, existing);
+      }
+
+      const result: Array<{
+        sessionDate: string;
+        calledHits: number;
+        uncalledHits: number;
+        misses: number;
+        totalGraded: number;
+        hitRate: number;
+      }> = [];
+
+      for (const [date, rows] of Array.from(byDate.entries()).sort((a, b) => b[0].localeCompare(a[0]))) {
+        const canonicalMap = new Map<string, typeof rows[0]>();
+        for (const row of rows) {
+          const key = `${row.sessionDate}|${row.gameId}|${row.playerId}`;
+          const existing = canonicalMap.get(key);
+          if (!existing) {
+            canonicalMap.set(key, row);
+          } else if (row.status === "hit" && existing.status !== "hit") {
+            canonicalMap.set(key, row);
+          }
+        }
+
+        const canonical = Array.from(canonicalMap.values());
+        const hits = canonical.filter(r => r.status === "hit");
+        const calledHits = hits.filter(r => !(r.triggerTags ?? []).includes("auto_graded")).length;
+        const uncalledHits = hits.length - calledHits;
+        const misses = canonical.filter(r => r.status === "miss").length;
+        const totalGraded = calledHits + misses;
+        const hitRate = totalGraded > 0 ? Math.round((calledHits / totalGraded) * 1000) / 10 : 0;
+
+        result.push({ sessionDate: date, calledHits, uncalledHits, misses, totalGraded, hitRate });
+      }
+
+      return result;
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_GRADING_HISTORY] Failed: ${err.message}`);
+      return [];
     }
   }
 

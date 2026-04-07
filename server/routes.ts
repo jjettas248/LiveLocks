@@ -1910,6 +1910,36 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/mlb/hr-radar-grading-history", requireAuth, async (req, res) => {
+    try {
+      const days = Math.min(parseInt(String(req.query.days ?? "14"), 10) || 14, 30);
+      const history = await storage.getHrRadarGradingHistory(days);
+      return res.json({ history });
+    } catch (e: any) {
+      console.error("[mlb/hr-radar-grading-history]", e.message);
+      return res.json({ history: [] });
+    }
+  });
+
+  app.get("/api/mlb/hr-radar-grading/:sessionDate", requireAuth, async (req, res) => {
+    try {
+      const sessionDate = String(req.params.sessionDate);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(sessionDate)) {
+        return res.status(400).json({ error: "Invalid date format" });
+      }
+      const canonical = await storage.getCanonicalHrRadarOutcomes(sessionDate);
+      return res.json({
+        sessionDate,
+        gradedHits: canonical.hits,
+        gradedMisses: canonical.misses,
+        gradingSummary: canonical.summary,
+      });
+    } catch (e: any) {
+      console.error("[mlb/hr-radar-grading]", e.message);
+      return res.json({ gradedHits: [], gradedMisses: [], gradingSummary: { wins: 0, losses: 0, totalGraded: 0, hitRate: 0 } });
+    }
+  });
+
   app.get("/api/mlb/hr-radar-board", requireAuth, async (req, res) => {
     try {
       const board = await storage.getTodayHrRadarBoard();

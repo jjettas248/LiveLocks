@@ -12,7 +12,7 @@ import { ProbabilityRing } from "@/components/probability-ring";
 import { StatCard } from "@/components/stat-card";
 import { SkeletonCard } from "@/components/sports/SkeletonCard";
 import { EmptyState } from "@/components/sports/EmptyState";
-import { Radio, Target, RefreshCw, Calculator, Loader2, Flame, Zap, Trophy, Eye, ChevronDown, ChevronUp, Bell, Activity, X, BarChart3, Plus, ExternalLink, TrendingUp, TrendingDown, Clock, CheckCircle2 } from "lucide-react";
+import { Radio, Target, RefreshCw, Calculator, Loader2, Flame, Zap, Trophy, Eye, ChevronDown, ChevronUp, Bell, Activity, X, BarChart3, Plus, ExternalLink, TrendingUp, TrendingDown, Clock, CheckCircle2, Calendar } from "lucide-react";
 import {
   mapHrRadarCardToUi, mapAlertToUi, formatTriggerReason,
   radarScoreToTier, launchAngleLabel, formatMlbDisplayValue,
@@ -1061,28 +1061,191 @@ function RadarStatsBar({ active, cashed, missed }: { active: number; cashed: num
   );
 }
 
+function GradingHistoryPanel({
+  todaySummary,
+  todayHits,
+  todayMisses,
+  showCashed,
+  showMissed,
+  historyDate,
+  setHistoryDate,
+}: {
+  todaySummary: { wins: number; losses: number; totalGraded: number; hitRate: number } | null;
+  todayHits: CanonicalGradedOutcome[];
+  todayMisses: CanonicalGradedOutcome[];
+  showCashed: boolean;
+  showMissed: boolean;
+  historyDate: string | null;
+  setHistoryDate: (d: string | null) => void;
+}) {
+  const { data: historyData } = useQuery<{ history: GradingHistoryDay[] }>({
+    queryKey: ["/api/mlb/hr-radar-grading-history"],
+    refetchInterval: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const { data: selectedDayData, isLoading: dayLoading } = useQuery<{
+    gradedHits: CanonicalGradedOutcome[];
+    gradedMisses: CanonicalGradedOutcome[];
+    gradingSummary: { wins: number; losses: number; totalGraded: number; hitRate: number };
+  }>({
+    queryKey: ["/api/mlb/hr-radar-grading", historyDate],
+    enabled: !!historyDate,
+    placeholderData: (prev) => prev,
+  });
+
+  const history = historyData?.history ?? [];
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const pastDays = history.filter(h => h.sessionDate !== todayStr);
+
+  const isViewingHistory = !!historyDate;
+  const activeSummary = isViewingHistory ? selectedDayData?.gradingSummary : todaySummary;
+  const activeHits = isViewingHistory ? (selectedDayData?.gradedHits ?? []) : todayHits;
+  const activeMisses = isViewingHistory ? (selectedDayData?.gradedMisses ?? []) : todayMisses;
+
+  const hasContent = (activeSummary && activeSummary.totalGraded > 0) || activeHits.length > 0 || activeMisses.length > 0;
+  const hasHistoryChips = pastDays.length > 0;
+
+  if (!hasContent && !hasHistoryChips) return null;
+
+  const formatChipDate = (dateStr: string) => {
+    const d = new Date(dateStr + "T12:00:00");
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+
+  return (
+    <div className="space-y-3" data-testid="hr-radar-grading">
+      <div className="flex items-center gap-2 flex-wrap">
+        <BarChart3 className="w-4 h-4 text-muted-foreground" />
+        <span className="text-sm font-bold text-foreground">Radar Grading</span>
+        {activeSummary && activeSummary.totalGraded > 0 && (
+          <span className="text-[9px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground" data-testid="grading-summary-chip">
+            {activeSummary.wins}W / {activeSummary.losses}L
+          </span>
+        )}
+        {activeSummary && activeSummary.totalGraded >= 3 && (
+          <span className="text-[9px] px-2 py-0.5 rounded-full bg-muted/50 text-muted-foreground/70">
+            {activeSummary.hitRate}%
+          </span>
+        )}
+        {isViewingHistory && (
+          <span className="text-[9px] px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400 font-medium">
+            {formatChipDate(historyDate!)}
+          </span>
+        )}
+      </div>
+
+      {(hasHistoryChips || isViewingHistory) && (
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1" data-testid="grading-history-chips">
+          <button
+            data-testid="grading-chip-today"
+            onClick={() => setHistoryDate(null)}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-semibold whitespace-nowrap transition-all ${
+              !isViewingHistory
+                ? "bg-primary/15 text-primary border border-primary/30"
+                : "bg-muted/30 text-muted-foreground border border-transparent hover:bg-muted/50"
+            }`}
+          >
+            <Calendar className="w-3 h-3" />
+            Today
+            {todaySummary && todaySummary.totalGraded > 0 && (
+              <span className="text-[8px] px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">
+                {todaySummary.wins}W
+              </span>
+            )}
+          </button>
+          {pastDays.slice(0, 7).map(day => (
+            <button
+              key={day.sessionDate}
+              data-testid={`grading-chip-${day.sessionDate}`}
+              onClick={() => setHistoryDate(day.sessionDate)}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-semibold whitespace-nowrap transition-all ${
+                historyDate === day.sessionDate
+                  ? "bg-primary/15 text-primary border border-primary/30"
+                  : "bg-muted/30 text-muted-foreground border border-transparent hover:bg-muted/50"
+              }`}
+            >
+              {formatChipDate(day.sessionDate)}
+              <span className={`text-[8px] px-1 py-0.5 rounded font-bold ${
+                day.calledHits > 0 ? "bg-emerald-500/20 text-emerald-400" : "bg-zinc-500/15 text-zinc-400"
+              }`}>
+                {day.calledHits}W/{day.misses}L
+              </span>
+              {day.totalGraded >= 3 && (
+                <span className="text-[8px] text-muted-foreground/60">{day.hitRate}%</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {dayLoading && isViewingHistory && (
+        <div className="flex items-center justify-center py-4">
+          <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+        </div>
+      )}
+
+      {!dayLoading && showCashed && activeHits.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-1.5">
+            <Trophy className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="text-xs font-semibold text-emerald-400">
+              Hits ({activeHits.length})
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {activeHits.map(h => (
+              <GradedHitCard key={`canonical-hit-${h.playerId}-${h.gameId}`} outcome={h} />
+            ))}
+          </div>
+        </div>
+      )}
+      {!dayLoading && showMissed && activeMisses.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-1.5">
+            <X className="w-3.5 h-3.5 text-zinc-400" />
+            <span className="text-xs font-semibold text-zinc-400">
+              Misses ({activeMisses.length})
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {activeMisses.slice(0, 12).map(m => (
+              <GradedMissCard key={`canonical-miss-${m.playerId}-${m.gameId}`} outcome={m} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GradedHitCard({ outcome }: { outcome: CanonicalGradedOutcome }) {
   const h = outcome;
-  const timeline = h.detectedLabel && h.hitLabel
+  const isAutoGraded = (h.triggerTags ?? []).includes("auto_graded");
+  const isCalled = !isAutoGraded && h.detectedLabel && h.hitLabel;
+  const timeline = isCalled
     ? `${h.detectedLabel} → ${h.hitLabel}`
     : h.hitLabel || (h.hitInning != null && h.hitInning > 0
       ? `${h.hitHalf === "top" ? "T" : h.hitHalf === "bottom" ? "B" : ""}${h.hitInning}`
       : "HR");
   return (
-    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-1.5" data-testid={`graded-hit-${h.playerId}-${h.gameId}`}>
+    <div className={`rounded-lg border p-3 space-y-1.5 ${isAutoGraded ? "border-amber-500/20 bg-amber-500/5" : "border-emerald-500/30 bg-emerald-500/5"}`} data-testid={`graded-hit-${h.playerId}-${h.gameId}`}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
-          <Trophy className="w-3.5 h-3.5 text-emerald-400" />
+          <Trophy className={`w-3.5 h-3.5 ${isAutoGraded ? "text-amber-400" : "text-emerald-400"}`} />
           <span className="text-xs font-bold text-foreground">{h.playerName}</span>
         </div>
-        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400" data-testid={`hit-timeline-${h.playerId}`}>
+        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${isAutoGraded ? "bg-amber-500/20 text-amber-400" : "bg-emerald-500/20 text-emerald-400"}`} data-testid={`hit-timeline-${h.playerId}`}>
           {timeline}
         </span>
       </div>
       <div className="flex items-center gap-2 text-[10px] text-muted-foreground flex-wrap">
         {h.team && <span>{h.team}</span>}
-        {h.detectedLabel && h.hitLabel && (
+        {isCalled && (
           <span className="text-emerald-400/80 font-medium">Called {h.detectedLabel}, hit {h.hitLabel}</span>
+        )}
+        {isAutoGraded && (
+          <span className="text-amber-400/80 font-medium">Uncalled HR</span>
         )}
         {h.resolvedAt && (
           <span>{new Date(h.resolvedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
@@ -1095,7 +1258,7 @@ function GradedHitCard({ outcome }: { outcome: CanonicalGradedOutcome }) {
         {h.detectedScore != null && h.detectedScore > 0 && (
           <span className="px-1.5 py-0.5 rounded bg-muted/30 text-muted-foreground">Entry {h.detectedScore.toFixed(1)}</span>
         )}
-        {h.triggerTags.length > 0 && h.triggerTags.slice(0, 2).map((tag, i) => (
+        {h.triggerTags.length > 0 && h.triggerTags.filter(t => t !== "auto_graded").slice(0, 2).map((tag, i) => (
           <span key={i} className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400/70 text-[9px]">{formatTriggerTag(tag)}</span>
         ))}
       </div>
@@ -1140,8 +1303,18 @@ function GradedMissCard({ outcome }: { outcome: CanonicalGradedOutcome }) {
 
 type RadarFilterMode = "all" | "active" | "cashed" | "missed";
 
+type GradingHistoryDay = {
+  sessionDate: string;
+  calledHits: number;
+  uncalledHits: number;
+  misses: number;
+  totalGraded: number;
+  hitRate: number;
+};
+
 function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isElite: boolean; onAddToSlip?: (sig: MlbSignalData) => void; onOpenHrDetails?: (card: HrRadarCardUi) => void; games?: MLBGame[] }) {
   const [radarFilter, setRadarFilter] = useState<RadarFilterMode>("all");
+  const [historyDate, setHistoryDate] = useState<string | null>(null);
   const { data: hrData, isLoading } = useQuery<HRRadarResponse>({
     queryKey: ["/api/mlb/hr-radar"],
     refetchInterval: 20_000,
@@ -1524,52 +1697,15 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         </div>
       )}
 
-      {gradingSummary && gradingSummary.totalGraded > 0 && (showCashed || showMissed) && (
-        <div className="space-y-3" data-testid="hr-radar-grading">
-          <div className="flex items-center gap-2">
-            <BarChart3 className="w-4 h-4 text-muted-foreground" />
-            <span className="text-sm font-bold text-foreground">Radar Grading</span>
-            <span className="text-[9px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground" data-testid="grading-summary-chip">
-              {gradingSummary.wins}W / {gradingSummary.losses}L
-            </span>
-            {gradingSummary.totalGraded >= 3 && (
-              <span className="text-[9px] px-2 py-0.5 rounded-full bg-muted/50 text-muted-foreground/70">
-                {gradingSummary.hitRate}%
-              </span>
-            )}
-          </div>
-          {showCashed && canonicalHits.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-1.5">
-                <Trophy className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-xs font-semibold text-emerald-400">
-                  Hits ({canonicalHits.length})
-                </span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {canonicalHits.map(h => (
-                  <GradedHitCard key={`canonical-hit-${h.playerId}-${h.gameId}`} outcome={h} />
-                ))}
-              </div>
-            </div>
-          )}
-          {showMissed && canonicalMisses.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-1.5">
-                <X className="w-3.5 h-3.5 text-zinc-400" />
-                <span className="text-xs font-semibold text-zinc-400">
-                  Misses ({canonicalMisses.length})
-                </span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {canonicalMisses.slice(0, 12).map(m => (
-                  <GradedMissCard key={`canonical-miss-${m.playerId}-${m.gameId}`} outcome={m} />
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      <GradingHistoryPanel
+        todaySummary={gradingSummary}
+        todayHits={canonicalHits}
+        todayMisses={canonicalMisses}
+        showCashed={showCashed}
+        showMissed={showMissed}
+        historyDate={historyDate}
+        setHistoryDate={setHistoryDate}
+      />
     </div>
   );
 }
