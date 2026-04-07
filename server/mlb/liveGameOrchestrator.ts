@@ -114,7 +114,7 @@ const BATTER_MARKETS: MLBMarket[] = [
   "batter_strikeouts",
 ];
 
-const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"];
+const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed"];
 
 // ── Previously-resolved line cache ───────────────────────────────────────────
 // Persists the last successfully fetched sportsbook line per event+player+market
@@ -125,7 +125,7 @@ const priorResolvedLines = new Map<string, number>();
 
 // Preferred bookmaker order for deterministic line selection (matches manual flow).
 // First match wins; unlisted bookmakers are used only as a last resort.
-const PREFERRED_BOOKMAKERS = ["draftkings", "fanduel", "hardrockbet"];
+const PREFERRED_BOOKMAKERS = ["draftkings", "fanduel", "hardrockbet", "betmgm", "betrivers", "espnbet"];
 
 type ResolvedLine = { line: number; overOdds: number | null; underOdds: number | null; isDegraded: boolean; source: "live" | "prior" };
 
@@ -147,31 +147,44 @@ async function resolveBookLine(
   const normName = playerName.toLowerCase().trim();
   const cacheKey = oddsEventId ? `${oddsEventId}|${normName}|${market}` : `unknown|${normName}|${market}`;
 
-  // (1) Try odds service
+  // (1) Try odds service — first pre-game, then in-play
+  //     Only short-circuit on non-degraded pre-game lines; if pre-game returns
+  //     degraded/stale data, continue to try in-play for a fresher quote.
   if (oddsEventId) {
-    try {
-      const oddsResult = await getMLBPlayerOdds(oddsEventId, playerName, market);
-      const bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
-      const isOddsDegraded = !!(oddsResult._isDegraded);
-      if (bookKeys.length > 0) {
-        // Apply deterministic bookmaker preference order
-        const preferred = PREFERRED_BOOKMAKERS.find(b => bookKeys.includes(b)) ?? bookKeys[0];
-        const entry = oddsResult[preferred];
-        const line = entry.line;
-        if (typeof line === "number" && isFinite(line) && line > 0) {
-          priorResolvedLines.set(cacheKey, line);
-          pLog(oddsEventId, `odds:bookLine:${isOddsDegraded ? "degraded" : "live"}`, { player: playerName, market, line, book: preferred });
-          return {
-            line,
-            overOdds: typeof entry.overOdds === "number" && isFinite(entry.overOdds) ? entry.overOdds : null,
-            underOdds: typeof entry.underOdds === "number" && isFinite(entry.underOdds) ? entry.underOdds : null,
-            isDegraded: isOddsDegraded,
-            source: isOddsDegraded ? "prior" : "live",
-          };
+    let bestDegraded: ResolvedLine | null = null;
+    for (const inPlay of [false, true]) {
+      try {
+        const oddsResult = await getMLBPlayerOdds(oddsEventId, playerName, market, inPlay);
+        const bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
+        const isOddsDegraded = !!(oddsResult._isDegraded);
+        if (bookKeys.length > 0) {
+          const preferred = PREFERRED_BOOKMAKERS.find(b => bookKeys.includes(b)) ?? bookKeys[0];
+          const entry = oddsResult[preferred];
+          const line = entry.line;
+          if (typeof line === "number" && isFinite(line) && line > 0) {
+            const resolved: ResolvedLine = {
+              line,
+              overOdds: typeof entry.overOdds === "number" && isFinite(entry.overOdds) ? entry.overOdds : null,
+              underOdds: typeof entry.underOdds === "number" && isFinite(entry.underOdds) ? entry.underOdds : null,
+              isDegraded: isOddsDegraded,
+              source: isOddsDegraded ? "prior" : "live",
+            };
+            if (!isOddsDegraded) {
+              priorResolvedLines.set(cacheKey, line);
+              pLog(oddsEventId, `odds:bookLine:${inPlay ? "inPlay" : "live"}`, { player: playerName, market, line, book: preferred });
+              return resolved;
+            }
+            if (!bestDegraded) bestDegraded = resolved;
+          }
         }
+      } catch (err: any) {
+        console.warn(`[MLB orchestrator] resolveBookLine odds error for ${playerName}/${market} (inPlay=${inPlay}):`, err.message);
       }
-    } catch (err: any) {
-      console.warn(`[MLB orchestrator] resolveBookLine odds error for ${playerName}/${market}:`, err.message);
+    }
+    if (bestDegraded) {
+      priorResolvedLines.set(cacheKey, bestDegraded.line);
+      pLog(oddsEventId, "odds:bookLine:degraded", { player: playerName, market, line: bestDegraded.line });
+      return bestDegraded;
     }
   }
 
@@ -223,14 +236,14 @@ const HIGH_IMPACT_TRIGGERS = new Set<StateChangeTrigger>([
 const TRIGGER_IMPACTED_MARKETS: Record<StateChangeTrigger, MLBMarket[] | "all"> = {
   new_ab: "all",
   ab_completed: "all",
-  ball_in_play: ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts", "hits_allowed", "hr_allowed"],
+  ball_in_play: ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts", "hits_allowed"],
   inning_change: "all",
   pitcher_change: "all",
   runner_change: ["hits", "total_bases", "hrr"],
-  pitch_count_threshold: ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"],
+  pitch_count_threshold: ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed"],
   tto_shift: "all",
   lineup_substitution: "all",
-  hard_hit_event: ["hits", "total_bases", "home_runs", "hrr", "hits_allowed", "hr_allowed"],
+  hard_hit_event: ["hits", "total_bases", "home_runs", "hrr", "hits_allowed"],
   out_recorded: "all",
   score_change: "all",
   odds_update: "all",
@@ -755,7 +768,7 @@ export class LiveGameOrchestrator {
     const liveScore = computeLiveOpportunityScore(scoreBreakdown.total, output.edge, opportunityScore);
 
     let adjustedProjection = output.projection;
-    const isPitcherMarket = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(output.market);
+    const isPitcherMarket = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed"].includes(output.market);
     if (isPitcherMarket && pitcherSigs.length > 0) {
       let sigBoost = 0;
       for (const ps of pitcherSigs) {
@@ -940,7 +953,7 @@ export class LiveGameOrchestrator {
     const stateFields = this.computeSignalState(gameId, input, output, scoreBreakdown);
 
     let watchAdjProjection = output.projection;
-    const isWatchPitcherMarket = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(output.market);
+    const isWatchPitcherMarket = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed"].includes(output.market);
     if (isWatchPitcherMarket && watchPitcherSigsForProj.length > 0) {
       let sigBoost = 0;
       for (const ps of watchPitcherSigsForProj) {
@@ -1198,7 +1211,7 @@ export class LiveGameOrchestrator {
             case "hrr": currentStatForMarket = (boxScorePlayer.hr ?? 0) + ((boxScorePlayer as any).r ?? 0) + ((boxScorePlayer as any).rbi ?? 0); break;
             case "total_bases": currentStatForMarket = boxScorePlayer.tb; break;
             case "batter_strikeouts": currentStatForMarket = (boxScorePlayer as any).strikeouts ?? 0; break;
-            case "pitcher_strikeouts": case "hits_allowed": case "walks_allowed": case "hr_allowed": currentStatForMarket = 0; break;
+            case "pitcher_strikeouts": case "hits_allowed": case "walks_allowed": currentStatForMarket = 0; break;
             default: currentStatForMarket = boxScorePlayer.hits; break;
           }
         }
@@ -1735,8 +1748,6 @@ export class LiveGameOrchestrator {
             ? 0.65
           : market === "hits_allowed"
             ? (pitcherSeasonForPitcherMarket?.whip != null ? pitcherSeasonForPitcherMarket.whip * 0.72 * 6 : 5.0)
-          : market === "hr_allowed"
-            ? (pitcherSeasonForPitcherMarket?.era != null ? Math.max(0.3, pitcherSeasonForPitcherMarket.era / 9 * 1.1) : 0.8)
             : 5.0;
 
         const pitcherOpponent = state.homeTeamAbbr && state.awayTeamAbbr

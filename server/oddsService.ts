@@ -33,8 +33,7 @@ function markKeyExhausted(keyIndex: number) {
 const SGO_API_KEY  = process.env.SGO_API_KEY;
 const BASE_URL = "https://api.the-odds-api.com/v4/sports/basketball_nba";
 
-// Bookmakers to query for player props — only the five whitelisted books
-const PROP_BOOKMAKERS = "draftkings,fanduel,hardrockbet,prizepicks,underdogfantasy";
+const PROP_BOOKMAKERS = "draftkings,fanduel,hardrockbet,prizepicks,underdogfantasy,betmgm,betrivers,espnbet,betonlineag,bovada,williamhill_us";
 const PROP_BOOKMAKERS_SET = new Set(PROP_BOOKMAKERS.split(","));
 const PROP_REGIONS = "us";
 const BOOKMAKER_STALE_MS = 10 * 60 * 1000;
@@ -893,6 +892,7 @@ const MLB_MARKET_MAP: Record<string, string> = {
   total_bases: "batter_total_bases",
   home_runs: "batter_home_runs",
   hr: "batter_home_runs",
+  batter_strikeouts: "batter_strikeouts",
   hrr: "batter_hits_runs_rbis",
   pitcher_strikeouts: "pitcher_strikeouts",
   pitcher_k: "pitcher_strikeouts",
@@ -1174,7 +1174,9 @@ export interface NormalizedOdds {
 }
 
 const APPROVED_BOOKS = new Set([
-  "draftkings", "fanduel", "hard_rock", "betmgm", "caesars",
+  "draftkings", "fanduel", "hard_rock", "hardrockbet", "betmgm", "caesars",
+  "betrivers", "espnbet", "betonlineag", "bovada", "williamhill_us",
+  "prizepicks", "underdogfantasy",
   "DraftKings", "FanDuel", "Hard Rock", "BetMGM", "Caesars",
   "dk", "fd", "hr", "mgm",
 ]);
