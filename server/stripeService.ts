@@ -39,24 +39,49 @@ export async function registerStripeRoutes(app: import("express").Express) {
       const origin = req.headers.origin || `${req.protocol}://${req.headers.host}`;
       const meta = PLAN_META[plan];
 
+      let customerId = user.stripeCustomerId;
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          email: user.email,
+          metadata: { userId: String(userId) },
+        });
+        customerId = customer.id;
+        await storage.updateUserStripeCustomer(userId, customerId);
+        console.log(`[STRIPE] Created customer ${customerId} for userId=${userId}`);
+      }
+
+      const pendingItems = await stripe.invoiceItems.list({ customer: customerId, pending: true, limit: 100 });
+      for (const item of pendingItems.data) {
+        if (item.description === "3-Day Trial – LiveLocks") {
+          await stripe.invoiceItems.del(item.id);
+          console.log(`[STRIPE] Cleaned up orphaned trial invoice item ${item.id}`);
+        }
+      }
+
+      await stripe.invoiceItems.create({
+        customer: customerId,
+        amount: 100,
+        currency: "usd",
+        description: "3-Day Trial – LiveLocks",
+      });
+      console.log(`[STRIPE] Attached $1 trial invoice item to customer ${customerId}`);
+
       const sessionParams: any = {
+        customer: customerId,
         mode: "subscription",
         payment_method_types: ["card"],
         success_url: `${origin}/dashboard?payment=success&tier=${tier}&session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${origin}/dashboard?payment=cancelled`,
         metadata: { userId: String(userId), tier },
+        line_items: [{ price: priceId, quantity: 1 }],
+        subscription_data: {
+          trial_period_days: 3,
+          metadata: { tier: plan, userId: String(userId) },
+        },
       };
 
-      sessionParams.line_items = [{ price: priceId, quantity: 1 }];
-      sessionParams.subscription_data = { trial_period_days: 3 };
-
-      if (user.stripeCustomerId) {
-        sessionParams.customer = user.stripeCustomerId;
-      } else {
-        sessionParams.customer_email = user.email;
-      }
-
       const checkoutSession = await stripe.checkout.sessions.create(sessionParams);
+      console.log(`[STRIPE] Checkout session created for userId=${userId} tier=${plan}`);
       return res.json({ url: checkoutSession.url });
     } catch (err: any) {
       console.error("[Stripe checkout error]", err.message);
@@ -159,7 +184,6 @@ export async function registerStripeRoutes(app: import("express").Express) {
         }
       }
 
-      // No valid subscription to upgrade — fall back to checkout session
       const origin = req.headers.origin || `${req.protocol}://${req.headers.host}`;
       const sessionParams: Stripe.Checkout.SessionCreateParams = {
         mode: "subscription",
@@ -168,7 +192,6 @@ export async function registerStripeRoutes(app: import("express").Express) {
         cancel_url: `${origin}/dashboard?payment=cancelled`,
         metadata: { userId: String(userId), tier },
         line_items: [{ price: newPriceId, quantity: 1 }],
-        subscription_data: { trial_period_days: 3 },
         ...(user.stripeCustomerId
           ? { customer: user.stripeCustomerId }
           : { customer_email: user.email }),

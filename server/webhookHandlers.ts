@@ -133,6 +133,22 @@ export class WebhookHandlers {
         if (subscriptionId) {
           await syncSubscriptionToDb(stripe, subscriptionId).catch(console.error);
         }
+
+        try {
+          const tier = session?.metadata?.tier;
+          const metaUserId = session?.metadata?.userId ? parseInt(session.metadata.userId) : null;
+          if (tier && metaUserId) {
+            const backstopUser = await storage.getUserById(metaUserId);
+            if (backstopUser && !backstopUser.subscriptionTier) {
+              const bsCustomerId = typeof session.customer === "string" ? session.customer : session.customer?.id;
+              const bsSubId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
+              await storage.updateUserSubscription(metaUserId, tier, bsCustomerId ?? null, bsSubId ?? null);
+              console.log(`[STRIPE BACKSTOP] Granted tier=${tier} to userId=${metaUserId} from checkout metadata`);
+            }
+          }
+        } catch (backstopErr: any) {
+          console.warn("[STRIPE BACKSTOP] Failed:", backstopErr.message);
+        }
       } else if (event.type === "invoice.payment_succeeded") {
         const invoice = event.data?.object;
         const subscriptionId = typeof invoice?.subscription === "string" ? invoice.subscription : "";

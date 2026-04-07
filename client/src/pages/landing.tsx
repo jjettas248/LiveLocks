@@ -25,7 +25,7 @@ const PRICING_TIERS = [
     price: "$40",
     period: "/mo",
     description: "Full access to NBA + NCAAB predictions and SMS alerts.",
-    cta: "Start Free 3-Day Trial",
+    cta: "Start 3-Day Trial \u2013 $1",
     features: [
       "Unlimited calculations",
       "NBA + NCAAB live predictions",
@@ -42,7 +42,7 @@ const PRICING_TIERS = [
     price: "$65",
     period: "/mo",
     description: "Everything in Pro plus the full MLB Live Engine.",
-    cta: "Start Free 3-Day Trial",
+    cta: "Start 3-Day Trial \u2013 $1",
     features: [
       "Everything in Pro",
       "MLB Live Edge Engine",
@@ -88,7 +88,7 @@ export default function LandingPage() {
               className="flex items-center gap-1.5 bg-gray-950 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-gray-800 transition-colors"
               data-testid="link-get-access-nav"
             >
-              Start Free Trial <ArrowRight size={14} />
+              Start 3-Day Trial &ndash; $1 <ArrowRight size={14} />
             </Link>
           </div>
         </nav>
@@ -120,12 +120,12 @@ export default function LandingPage() {
               className="inline-flex items-center gap-2 bg-gray-950 text-white text-sm font-semibold px-8 py-3.5 rounded-xl hover:bg-gray-800 transition-colors shadow-md shadow-black/5"
               data-testid="button-signup-hero"
             >
-              Start Free 3-Day Trial <ArrowRight size={15} />
+              Start 3-Day Trial &ndash; $1 <ArrowRight size={15} />
             </Link>
           </div>
 
           <p className="text-xs text-gray-400">
-            No charge today &middot; Cancel anytime during trial
+            $1 today &middot; Then $40/mo after 3 days &middot; Cancel anytime
           </p>
         </header>
 
@@ -413,7 +413,7 @@ export default function LandingPage() {
             Simple, transparent pricing.
           </h2>
           <p className="text-muted-foreground text-base max-w-md mx-auto leading-relaxed">
-            Start with a free 3-day trial on any paid plan. No charge until day 4. Cancel anytime.
+            Try any plan for $1 for 3 days. Auto-converts after trial. Cancel anytime.
           </p>
         </div>
 
@@ -482,16 +482,16 @@ export default function LandingPage() {
             Ready to find your edge?
           </h3>
           <p className="text-muted-foreground mb-8 max-w-sm mx-auto leading-relaxed">
-            Get full access to NBA + MLB live detection engines, SMS alerts, and the prop calculator. Start with a free 3-day trial.
+            Get full access to NBA + MLB live detection engines, SMS alerts, and the prop calculator. Try for $1 &mdash; 3 days.
           </p>
           <Link
             href="/auth"
             className="inline-flex items-center gap-2 bg-foreground text-background font-semibold px-6 py-3 rounded-lg hover:bg-foreground/90 transition-colors"
             data-testid="button-signup-cta"
           >
-            Start Free 3-Day Trial <ArrowRight size={15} />
+            Start 3-Day Trial &ndash; $1 <ArrowRight size={15} />
           </Link>
-          <p className="text-xs text-muted-foreground/50 mt-4">No charge today &middot; Cancel anytime during trial</p>
+          <p className="text-xs text-muted-foreground/50 mt-4">$1 now &middot; Then $40/mo or $65/mo &middot; Cancel anytime</p>
         </div>
       </section>
 

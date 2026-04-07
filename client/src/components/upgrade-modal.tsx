@@ -167,7 +167,7 @@ export function UpgradeModal({ playsUsed, limit, onClose, lockedEdgesCount, topL
             <div className="text-2xl font-black text-white">
               $40<span className="text-xs font-normal text-[#71717a]">/mo</span>
             </div>
-            <p className="text-[10px] text-[#00d4aa] font-semibold mt-0.5">3-day free trial</p>
+            <p className="text-[10px] text-[#00d4aa] font-semibold mt-0.5">$1 today &middot; Then $40/mo &middot; Cancel anytime</p>
             <ul className="mt-1.5 space-y-0.5">
               <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#00d4aa] shrink-0" />Live halftime edges</li>
               <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#00d4aa] shrink-0" />NBA & NCAAB 2H plays</li>
@@ -197,7 +197,7 @@ export function UpgradeModal({ playsUsed, limit, onClose, lockedEdgesCount, topL
             <div className="text-2xl font-black text-white">
               $65<span className="text-xs font-normal text-[#71717a]">/mo</span>
             </div>
-            <p className="text-[10px] text-[#f59e0b] font-semibold mt-0.5">3-day free trial</p>
+            <p className="text-[10px] text-[#f59e0b] font-semibold mt-0.5">$1 today &middot; Then $65/mo &middot; Cancel anytime</p>
             <ul className="mt-1.5 space-y-0.5">
               <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#f59e0b] shrink-0" />NBA, NCAAB, MLB</li>
               <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#f59e0b] shrink-0" />SMS alerts for every play</li>
@@ -220,7 +220,7 @@ export function UpgradeModal({ playsUsed, limit, onClose, lockedEdgesCount, topL
             className="w-full py-3 rounded-xl text-sm font-bold transition-all disabled:opacity-60"
             style={{ background: "#00d4aa", color: "#000" }}
           >
-            {loadingTier ? "Redirecting to checkout..." : "Start Free 3-Day Trial"}
+            {loadingTier ? "Redirecting to checkout..." : "Start 3-Day Trial \u2013 $1"}
           </button>
         </div>
 

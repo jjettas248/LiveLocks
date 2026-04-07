@@ -2145,7 +2145,7 @@ export default function Dashboard() {
               onClick={handleUpgradeClick}
               className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-black active:scale-95 transition-transform"
             >
-              Start Free 3-Day Trial
+              Start 3-Day Trial – $1
             </button>
           </div>
         )}
@@ -4101,7 +4101,7 @@ export default function Dashboard() {
             onClick={handleUpgradeClick}
             className="px-5 py-2 rounded-lg text-sm font-bold bg-amber-500 text-black active:scale-95 transition-transform"
           >
-            Start Free 3-Day Trial
+            Start 3-Day Trial – $1
           </button>
         </div>
       )}
