@@ -52,6 +52,7 @@ import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, clearGameCooldowns, type HRAlertInput } from "./evaluateHRAlert";
 import { getPlayer } from "./rosterService";
 import { storage } from "../storage";
+import { trackPlay } from "../services/playTracker";
 import { runFullOnlyHomersScrape, getHotHitters, getLiveBallparkFactors, getBatterVsPitcherHrHistory } from "./onlyHomersService";
 
 // ── OnlyHomers data caches (refreshed periodically) ─────────────────────────
@@ -2186,8 +2187,66 @@ export class LiveGameOrchestrator {
       });
       const avgScore = signalsQualified > 0 ? Math.round(scoreSum / signalsQualified) : 0;
       console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=${signalsQualified} rejected=${signalsRejected} allSignals=${allSignals.length} avgScore=${avgScore} gameCardTags=[${gameCardTags.join(",")}]`);
+
+      autoPersistMLBSignals(gameId, qualifiedSignals);
     }
     return outputs;
+  }
+}
+
+// ── Auto-persist qualified MLB signals to persisted_plays ────────────────────
+
+const mlbPersistGuard = new Set<string>();
+
+function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSignal[]): void {
+  const today = new Date().toISOString().slice(0, 10);
+  let persisted = 0;
+  let skipped = 0;
+
+  for (const sig of qualifiedSignals) {
+    if (sig.watchlist || sig.isEarlySignal) { skipped++; continue; }
+    if (!sig.sportsbook || sig.sportsbook.trim() === "") { skipped++; continue; }
+    if (!Number.isFinite(sig.line) || sig.line <= 0) { skipped++; continue; }
+
+    const dir = sig.side === "OVER" ? "over" : sig.side === "UNDER" ? "under" : null;
+    if (!dir) { skipped++; continue; }
+
+    const guardKey = `${sig.playerId}|${sig.market}|${sig.line}|${dir}|${gameId}|${today}`;
+    if (mlbPersistGuard.has(guardKey)) { skipped++; continue; }
+    mlbPersistGuard.add(guardKey);
+
+    trackPlay({
+      gameId,
+      playerId: sig.playerId,
+      playerName: sig.playerName,
+      team: sig.team ?? null,
+      sport: "mlb",
+      market: sig.market,
+      direction: dir,
+      line: sig.line,
+      projection: sig.projection,
+      probability: sig.engineProbability,
+      edge: sig.evPct ?? 0,
+      sportsbook: sig.sportsbook,
+      derivedLine: false,
+      createdAt: sig.engineGeneratedAt ?? Date.now(),
+      signalScore: sig.signalScore ?? null,
+      confidenceTier: sig.confidenceTier ?? null,
+      inning: sig.inning ?? null,
+      abNumber: sig.completedAB ?? null,
+    }, storage).catch(err => console.warn(`[MLB_AUTO_PERSIST] failed: ${err.message}`));
+    persisted++;
+  }
+
+  if (persisted > 0) {
+    console.log(`[MLB_AUTO_PERSIST] game=${gameId} persisted=${persisted} skipped=${skipped}`);
+  }
+}
+
+function resetDailyPersistGuard(): void {
+  const today = new Date().toISOString().slice(0, 10);
+  for (const key of mlbPersistGuard) {
+    if (!key.endsWith(today)) mlbPersistGuard.delete(key);
   }
 }
 
