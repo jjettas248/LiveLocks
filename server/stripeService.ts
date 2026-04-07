@@ -66,6 +66,7 @@ export async function registerStripeRoutes(app: import("express").Express) {
       });
       console.log(`[STRIPE] Attached $1 trial invoice item to customer ${customerId}`);
 
+      const planAmount = plan === "elite" ? "$65" : "$40";
       const sessionParams: any = {
         customer: customerId,
         mode: "subscription",
@@ -77,6 +78,11 @@ export async function registerStripeRoutes(app: import("express").Express) {
         subscription_data: {
           trial_period_days: 3,
           metadata: { tier: plan, userId: String(userId) },
+        },
+        custom_text: {
+          submit: {
+            message: `$1 will be charged today for your 3-day trial. After 3 days your plan auto-renews at ${planAmount}/mo. Cancel anytime.`,
+          },
         },
       };
 
