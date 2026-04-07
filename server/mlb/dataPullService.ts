@@ -869,11 +869,15 @@ export async function syncPitcherSeasonStats(pitcherId: string): Promise<void> {
     const stat = splits[0]?.stat;
 
     if (!stat) {
-      mlbPlayerCache.pitcherSeasonStats[pitcherId] = {
-        era: null, whip: null, kPer9: null, bbPer9: null,
-        inningsPitched: null, wins: null, losses: null,
-        fetchedAt: Date.now(),
-      };
+      if (!cached) {
+        mlbPlayerCache.pitcherSeasonStats[pitcherId] = {
+          era: null, whip: null, kPer9: null, bbPer9: null,
+          inningsPitched: null, wins: null, losses: null,
+          fetchedAt: Date.now(),
+        };
+      } else {
+        cached.fetchedAt = Date.now();
+      }
       return;
     }
 
@@ -898,6 +902,7 @@ export async function syncPitcherSeasonStats(pitcherId: string): Promise<void> {
     console.log(`[MLB pull] syncPitcherSeasonStats: pitcher ${pitcherId} — ERA=${stat.era} WHIP=${stat.whip} K/9=${kPer9} BB/9=${bbPer9}`);
   } catch (err: any) {
     console.error(`[MLB pull] syncPitcherSeasonStats(${pitcherId}) error:`, err.message);
+    if (cached) cached.fetchedAt = Date.now();
   }
 }
 
@@ -915,12 +920,16 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
     const splits = data.stats?.[0]?.splits ?? [];
 
     if (splits.length === 0) {
-      mlbPlayerCache.batterRollingStats[playerId] = {
-        last7: { avg: null, ops: null, games: 0 },
-        last15: { avg: null, ops: null, games: 0 },
-        last30: { avg: null, ops: null, games: 0 },
-        seasonAvg: null, seasonOps: null, seasonHRRate: null, fetchedAt: Date.now(),
-      };
+      if (!cached) {
+        mlbPlayerCache.batterRollingStats[playerId] = {
+          last7: { avg: null, ops: null, games: 0 },
+          last15: { avg: null, ops: null, games: 0 },
+          last30: { avg: null, ops: null, games: 0 },
+          seasonAvg: null, seasonOps: null, seasonHRRate: null, fetchedAt: Date.now(),
+        };
+      } else {
+        cached.fetchedAt = Date.now();
+      }
       return;
     }
 
@@ -990,6 +999,7 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
     console.log(`[MLB pull] syncBatterRollingStats: player ${playerId} — L7=${last7.avg} L15=${last15.avg} L30=${last30.avg} Season=${seasonAvg} HR/PA=${seasonHRRate ?? "n/a"} (${splits.length} games)`);
   } catch (err: any) {
     console.error(`[MLB pull] syncBatterRollingStats(${playerId}) error:`, err.message);
+    if (cached) cached.fetchedAt = Date.now();
   }
 }
 
@@ -1192,5 +1202,6 @@ export async function syncBvPMatchup(batterId: string, pitcherId: string): Promi
     }
   } catch (err: any) {
     console.error(`[MLB pull] syncBvPMatchup(${batterId} vs ${pitcherId}) error:`, err.message);
+    if (cached) cached.fetchedAt = Date.now();
   }
 }
