@@ -23,6 +23,7 @@ import {
   syncBvPMatchup,
   syncSavantSeasonForLineup,
   syncOpenMeteoWeather,
+  resolveCurrentHourWeather,
   mlbGameCache,
   mlbPlayerCache,
   type GameStateCache,
@@ -370,6 +371,8 @@ export class LiveGameOrchestrator {
         for (const game of getActiveGames()) {
           if (!game.gamePk) continue;
           syncWeather(game.gamePk, game.gameId).catch(console.error);
+          const venueName = mlbGameCache.weather[game.gameId]?.venueName ?? null;
+          syncOpenMeteoWeather(game.gameId, venueName).catch(console.error);
         }
       }, WEATHER_MS)
     );
@@ -1170,11 +1173,18 @@ export class LiveGameOrchestrator {
     const weatherCache = mlbGameCache.weather[gameId];
     const bullpenCache = mlbGameCache.bullpen[gameId];
 
+    const hourlyWeather = resolveCurrentHourWeather(gameId);
+    const resolvedTemp = hourlyWeather?.temperature ?? weatherCache?.temperature ?? null;
+    const resolvedWindSpeed = hourlyWeather?.windSpeed ?? weatherCache?.windSpeed ?? null;
+    const resolvedWindDir = hourlyWeather?.windDirection ?? weatherCache?.windDirection ?? null;
+    const resolvedHumidity = hourlyWeather?.humidity ?? weatherCache?.humidity ?? null;
+    const resolvedWindShift = weatherCache?.windShiftDetected ?? false;
+
     if (weatherCache?.venueName) {
       const _pf = getMarketParkFactor(weatherCache.venueName);
       const _hrF = getMarketParkFactor(weatherCache.venueName, "home_runs");
       const _hitsF = getMarketParkFactor(weatherCache.venueName, "hits");
-      console.log(`[MLB_PARK] game=${gameId} venue="${weatherCache.venueName}" overall=${_pf} hr=${_hrF} hits=${_hitsF}`);
+      console.log(`[MLB_PARK] game=${gameId} venue="${weatherCache.venueName}" overall=${_pf} hr=${_hrF} hits=${_hitsF}${resolvedWindShift ? " WIND_SHIFT" : ""}`);
     }
 
     // ── Resolve MLB odds event ID once per game ────────────────────────────────
@@ -1358,6 +1368,7 @@ export class LiveGameOrchestrator {
           : 0;
 
         const rosterLookup = getPlayer(batter.playerId);
+        const resolvedBatterHand: "L" | "R" | "S" | null = rosterLookup?.bats ?? null;
         const batterOpponent = state.homeTeamAbbr && state.awayTeamAbbr
           ? (batter.team === state.homeTeamAbbr ? state.awayTeamAbbr : state.homeTeamAbbr)
           : "";
@@ -1446,6 +1457,14 @@ export class LiveGameOrchestrator {
               last7Ops: rollingStats.last7.ops,
               last15Ops: rollingStats.last15.ops,
             },
+            hrTrend: {
+              abSinceLastHR: rollingStats.abSinceLastHR,
+              hrRateLast7: rollingStats.hrRateLast7,
+              hrRateLast15: rollingStats.hrRateLast15,
+              hrRateLast30: rollingStats.hrRateLast30,
+              seasonTotalHR: rollingStats.seasonTotalHR,
+              seasonTotalAB: rollingStats.seasonTotalAB,
+            },
           } : {}),
           lineup: {
             battingOrderSlot: batter.slot,
@@ -1455,13 +1474,14 @@ export class LiveGameOrchestrator {
             pocketWeakness: null,
           },
           weatherPark: {
-            parkFactor: getMarketParkFactor(weatherCache?.venueName, market),
-            temperature: weatherCache?.temperature ?? null,
-            windSpeed: weatherCache?.windSpeed ?? null,
-            windDirection: weatherCache?.windDirection ?? null,
-            humidity: weatherCache?.humidity ?? null,
+            parkFactor: getMarketParkFactor(weatherCache?.venueName, market, resolvedBatterHand),
+            temperature: resolvedTemp,
+            windSpeed: resolvedWindSpeed,
+            windDirection: resolvedWindDir,
+            humidity: resolvedHumidity,
             isIndoors: weatherCache?.isIndoors ?? isVenueIndoors(weatherCache?.venueName),
             parkHistoryFactor: null,
+            windShiftDetected: resolvedWindShift,
           },
           bullpen: {
             bullpenEra: bullpenCache?.bullpenEra ?? null,
@@ -1703,8 +1723,6 @@ export class LiveGameOrchestrator {
               relieversUsedCount: bullpenCache?.relieversUsed?.length ?? 0,
             };
 
-            const rosterEntry = getPlayer(batter.playerId);
-            const resolvedBatterHand = rosterEntry?.bats ?? null;
             const resolvedSeasonHRRate = rollingStats?.seasonHRRate ?? null;
             const resolvedOpponent = state.homeTeamAbbr && state.awayTeamAbbr
               ? (batter.team === state.homeTeamAbbr ? state.awayTeamAbbr : state.homeTeamAbbr)
@@ -1725,10 +1743,10 @@ export class LiveGameOrchestrator {
               pitchCount: pitcher ? state.pitchCount : 0,
               timesThrough: pitcherCtx?.timesThroughOrder ?? 1,
               isPitcherCollapsing,
-              parkFactor: getMarketParkFactor(weatherCache?.venueName, "home_runs"),
-              windDirection: weatherCache?.windDirection ?? null,
-              windSpeed: weatherCache?.windSpeed ?? null,
-              temperature: weatherCache?.temperature ?? null,
+              parkFactor: getMarketParkFactor(weatherCache?.venueName, "home_runs", resolvedBatterHand),
+              windDirection: resolvedWindDir,
+              windSpeed: resolvedWindSpeed,
+              temperature: resolvedTemp,
               isIndoors: weatherCache?.isIndoors ?? isVenueIndoors(weatherCache?.venueName),
               batterHand: resolvedBatterHand,
               pitcherThrows: pitcher?.throws ?? null,
@@ -1739,6 +1757,11 @@ export class LiveGameOrchestrator {
               barrelRate: playerContact?.barrelPct != null ? playerContact.barrelPct / 100 : null,
               hardHitRate: playerContact?.hardHitPct != null ? playerContact.hardHitPct / 100 : null,
               xSLG: playerContact?.xSLG ?? null,
+              abSinceLastHR: rollingStats?.abSinceLastHR ?? null,
+              hrRateLast7: rollingStats?.hrRateLast7 ?? null,
+              hrRateLast15: rollingStats?.hrRateLast15 ?? null,
+              hrRateLast30: rollingStats?.hrRateLast30 ?? null,
+              handednessParkFactor: getMarketParkFactor(weatherCache?.venueName, "home_runs", resolvedBatterHand),
               pitcherDeterioration: pitcherDeteriorationCtx,
               priorABResults: (playerContact?.priorABResults ?? []).map((ab: any) => ({
                 exitVelocity: ab.exitVelocity ?? null,
@@ -1966,12 +1989,13 @@ export class LiveGameOrchestrator {
           },
           weatherPark: {
             parkFactor: getMarketParkFactor(weatherCache?.venueName, market),
-            temperature: weatherCache?.temperature ?? null,
-            windSpeed: weatherCache?.windSpeed ?? null,
-            windDirection: weatherCache?.windDirection ?? null,
-            humidity: weatherCache?.humidity ?? null,
+            temperature: resolvedTemp,
+            windSpeed: resolvedWindSpeed,
+            windDirection: resolvedWindDir,
+            humidity: resolvedHumidity,
             isIndoors: weatherCache?.isIndoors ?? isVenueIndoors(weatherCache?.venueName),
             parkHistoryFactor: null,
+            windShiftDetected: resolvedWindShift,
           },
           bullpen: {
             bullpenEra: bullpenCache?.bullpenEra ?? null,

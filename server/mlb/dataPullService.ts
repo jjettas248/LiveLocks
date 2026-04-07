@@ -75,6 +75,16 @@ export interface PitcherContextCache {
   fetchedAt: number;
 }
 
+export interface HourlyWeatherEntry {
+  hour: number;
+  temperature: number | null;
+  windSpeed: number | null;
+  windDirection: "in" | "out" | "cross" | "calm" | null;
+  windDegrees: number | null;
+  humidity: number | null;
+  precipProb: number | null;
+}
+
 export interface WeatherCache {
   temperature: number | null;
   windSpeed: number | null;
@@ -83,6 +93,10 @@ export interface WeatherCache {
   fetchedAt: number;
   venueName: string | null;
   isIndoors: boolean;
+  hourlyForecast?: HourlyWeatherEntry[];
+  utcOffsetSeconds?: number;
+  gameStartWindDirection?: "in" | "out" | "cross" | "calm" | null;
+  windShiftDetected?: boolean;
 }
 
 export interface BullpenCache {
@@ -111,6 +125,12 @@ export interface BatterRollingStats {
   seasonAvg: number | null;
   seasonOps: number | null;
   seasonHRRate: number | null;
+  abSinceLastHR: number | null;
+  hrRateLast7: number | null;
+  hrRateLast15: number | null;
+  hrRateLast30: number | null;
+  seasonTotalHR: number;
+  seasonTotalAB: number;
   fetchedAt: number;
 }
 
@@ -713,17 +733,28 @@ export async function syncWeather(statsPk: string, cacheKey?: string): Promise<v
     const isIndoors = (venue.fieldInfo?.roofType ?? "").toLowerCase().includes("retractable")
       || (data.gameData?.weather?.condition ?? "").toLowerCase().includes("roof closed");
 
+    const existing = mlbGameCache.weather[gameId];
+    const resolvedWindDir = windDirection ?? "cross";
+    const gameStartWindDir = existing?.gameStartWindDirection ?? resolvedWindDir;
+    const windShiftDetected = gameStartWindDir !== resolvedWindDir && gameStartWindDir !== "calm" && resolvedWindDir !== "calm";
+
     mlbGameCache.weather[gameId] = {
       temperature: temperature ?? null,
       windSpeed: windSpeed ?? null,
-      windDirection: windDirection ?? "cross",
+      windDirection: resolvedWindDir,
       humidity: humidity,
       fetchedAt: Date.now(),
       venueName,
       isIndoors,
+      hourlyForecast: existing?.hourlyForecast,
+      gameStartWindDirection: gameStartWindDir,
+      windShiftDetected,
     };
 
-    console.log(`[MLB pull] syncWeather: game ${gameId} — ${temperature}°F, wind ${windSpeed}mph ${windDirection ?? "unknown"} venue="${venueName}"${isIndoors ? " (indoors)" : ""}`);
+    if (windShiftDetected && !existing?.windShiftDetected) {
+      console.log(`[MLB_WEATHER_WIND_SHIFT] game=${gameId} — wind shifted from ${gameStartWindDir} to ${resolvedWindDir} (live feed)`);
+    }
+    console.log(`[MLB pull] syncWeather: game ${gameId} — ${temperature}°F, wind ${windSpeed}mph ${windDirection ?? "unknown"} venue="${venueName}"${isIndoors ? " (indoors)" : ""}${windShiftDetected ? " WIND_SHIFT" : ""}`);
   } catch (err: any) {
     console.error(`[MLB pull] syncWeather(${gameId}) error:`, err.message);
   }
@@ -925,7 +956,10 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
           last7: { avg: null, ops: null, games: 0 },
           last15: { avg: null, ops: null, games: 0 },
           last30: { avg: null, ops: null, games: 0 },
-          seasonAvg: null, seasonOps: null, seasonHRRate: null, fetchedAt: Date.now(),
+          seasonAvg: null, seasonOps: null, seasonHRRate: null,
+          abSinceLastHR: null, hrRateLast7: null, hrRateLast15: null, hrRateLast30: null,
+          seasonTotalHR: 0, seasonTotalAB: 0,
+          fetchedAt: Date.now(),
         };
       } else {
         cached.fetchedAt = Date.now();
@@ -979,7 +1013,7 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
     const seasonAvg = allGames.avg;
     const seasonOps = allGames.ops;
 
-    let seasonTotalPA = 0, seasonTotalHR = 0;
+    let seasonTotalPA = 0, seasonTotalHR = 0, seasonTotalAB = 0;
     for (const g of splits) {
       const s = g.stat;
       const ab = safeNum(s.atBats) ?? 0;
@@ -989,14 +1023,48 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
       const hr = safeNum(s.homeRuns) ?? 0;
       seasonTotalPA += ab + bb + hbp + sf;
       seasonTotalHR += hr;
+      seasonTotalAB += ab;
     }
     const seasonHRRate = seasonTotalPA >= 50 ? parseFloat((seasonTotalHR / seasonTotalPA).toFixed(4)) : null;
 
-    mlbPlayerCache.batterRollingStats[playerId] = {
-      last7, last15, last30, seasonAvg, seasonOps, seasonHRRate, fetchedAt: Date.now(),
+    let abSinceLastHR: number | null = null;
+    let abAccum = 0;
+    for (let i = splits.length - 1; i >= 0; i--) {
+      const s = splits[i].stat;
+      const ab = safeNum(s.atBats) ?? 0;
+      const hr = safeNum(s.homeRuns) ?? 0;
+      if (hr > 0) {
+        abSinceLastHR = abAccum;
+        break;
+      }
+      abAccum += ab;
+    }
+    if (abSinceLastHR === null && seasonTotalAB > 0) {
+      abSinceLastHR = seasonTotalAB;
+    }
+
+    const computeHRRate = (games: any[]): number | null => {
+      let pa = 0, hr = 0;
+      for (const g of games) {
+        const s = g.stat;
+        pa += (safeNum(s.atBats) ?? 0) + (safeNum(s.baseOnBalls) ?? 0) + (safeNum(s.hitByPitch) ?? 0) + (safeNum(s.sacFlies) ?? 0);
+        hr += safeNum(s.homeRuns) ?? 0;
+      }
+      return pa >= 10 ? parseFloat((hr / pa).toFixed(4)) : null;
     };
 
-    console.log(`[MLB pull] syncBatterRollingStats: player ${playerId} — L7=${last7.avg} L15=${last15.avg} L30=${last30.avg} Season=${seasonAvg} HR/PA=${seasonHRRate ?? "n/a"} (${splits.length} games)`);
+    const hrRateLast7 = computeHRRate(filterByDays(7));
+    const hrRateLast15 = computeHRRate(filterByDays(15));
+    const hrRateLast30 = computeHRRate(filterByDays(30));
+
+    mlbPlayerCache.batterRollingStats[playerId] = {
+      last7, last15, last30, seasonAvg, seasonOps, seasonHRRate,
+      abSinceLastHR, hrRateLast7, hrRateLast15, hrRateLast30,
+      seasonTotalHR, seasonTotalAB,
+      fetchedAt: Date.now(),
+    };
+
+    console.log(`[MLB pull] syncBatterRollingStats: player ${playerId} — L7=${last7.avg} L15=${last15.avg} L30=${last30.avg} Season=${seasonAvg} HR/PA=${seasonHRRate ?? "n/a"} abSinceHR=${abSinceLastHR ?? "n/a"} hrL7=${hrRateLast7 ?? "n/a"} hrL15=${hrRateLast15 ?? "n/a"} (${splits.length} games)`);
   } catch (err: any) {
     console.error(`[MLB pull] syncBatterRollingStats(${playerId}) error:`, err.message);
     if (cached) cached.fetchedAt = Date.now();
@@ -1073,10 +1141,12 @@ export async function syncSavantSeasonForLineup(gameId: string): Promise<void> {
 }
 
 // ── syncOpenMeteoWeather ─────────────────────────────────────────────────────
-// Fetches pre-game weather from Open-Meteo API using stadium coordinates.
-// Used as a fallback when MLB Stats API live feed weather is not yet available.
+// Fetches hourly weather forecast from Open-Meteo API using stadium coordinates.
+// Provides per-hour temperature, wind, humidity, and precipitation probability.
+// Used as fallback when MLB Stats API live feed weather is not yet available,
+// and always used to enrich the weather cache with hourly forecasts.
 const openMeteoCache = new Map<string, { data: WeatherCache; fetchedAt: number }>();
-const OPEN_METEO_TTL = 30 * 60 * 1000;
+const OPEN_METEO_TTL = 60 * 60 * 1000;
 
 export async function syncOpenMeteoWeather(gameId: string, venueName: string | null): Promise<void> {
   if (!venueName) return;
@@ -1111,10 +1181,10 @@ export async function syncOpenMeteoWeather(gameId: string, venueName: string | n
   }
 
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m&temperature_unit=fahrenheit&wind_speed_unit=mph`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,precipitation_probability&temperature_unit=fahrenheit&wind_speed_unit=mph&forecast_days=1&timezone=auto`;
     const res = await fetch(url, {
       headers: { "User-Agent": "LiveLocks/1.0" },
-      signal: AbortSignal.timeout(6000),
+      signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json() as any;
@@ -1129,25 +1199,79 @@ export async function syncOpenMeteoWeather(gameId: string, venueName: string | n
       ? windDirectionRelativeToField(windDeg, coords.orientation)
       : "cross";
 
+    const hourlyForecast: HourlyWeatherEntry[] = [];
+    const hourlyData = data.hourly;
+    if (hourlyData?.time && Array.isArray(hourlyData.time)) {
+      for (let i = 0; i < hourlyData.time.length; i++) {
+        const timeStr = hourlyData.time[i] as string;
+        const hourMatch = timeStr.match(/T(\d{2}):/);
+        const hour = hourMatch ? parseInt(hourMatch[1], 10) : i;
+        const hWindDeg = safeNum(hourlyData.wind_direction_10m?.[i]);
+        const hWindSpeed = safeNum(hourlyData.wind_speed_10m?.[i]);
+        const hWindDir = hWindDeg != null
+          ? windDirectionRelativeToField(hWindDeg, coords.orientation)
+          : "cross";
+
+        hourlyForecast.push({
+          hour,
+          temperature: safeNum(hourlyData.temperature_2m?.[i]),
+          windSpeed: hWindSpeed,
+          windDirection: hWindSpeed != null && hWindSpeed < 3 ? "calm" : hWindDir,
+          windDegrees: hWindDeg,
+          humidity: safeNum(hourlyData.relative_humidity_2m?.[i]),
+          precipProb: safeNum(hourlyData.precipitation_probability?.[i]),
+        });
+      }
+    }
+
+    const existingWeather = mlbGameCache.weather[gameId];
+    const gameStartWindDir = existingWeather?.gameStartWindDirection ?? (windSpeed != null && windSpeed < 3 ? "calm" : windDirection);
+    const currentWindDir = windSpeed != null && windSpeed < 3 ? "calm" : windDirection;
+    const windShiftDetected = gameStartWindDir !== currentWindDir && gameStartWindDir !== "calm" && currentWindDir !== "calm";
+
+    const utcOffsetSeconds = safeNum(data.utc_offset_seconds) ?? 0;
+
     const weatherData: WeatherCache = {
       temperature,
       windSpeed,
-      windDirection: windSpeed != null && windSpeed < 3 ? "calm" : windDirection,
+      windDirection: currentWindDir,
       humidity,
       fetchedAt: Date.now(),
       venueName,
       isIndoors: false,
+      hourlyForecast,
+      utcOffsetSeconds,
+      gameStartWindDirection: gameStartWindDir,
+      windShiftDetected,
     };
 
     openMeteoCache.set(gameId, { data: weatherData, fetchedAt: Date.now() });
 
     if (!mlbGameCache.weather[gameId] || mlbGameCache.weather[gameId].temperature === null) {
       mlbGameCache.weather[gameId] = weatherData;
-      console.log(`[MLB_WEATHER_OPENMETEO] game=${gameId} venue="${venueName}" — ${temperature}°F, wind ${windSpeed}mph ${windDirection}, humidity ${humidity}%`);
+      console.log(`[MLB_WEATHER_OPENMETEO] game=${gameId} venue="${venueName}" — ${temperature}°F, wind ${windSpeed}mph ${windDirection}, humidity ${humidity}%, hourly=${hourlyForecast.length}h, utcOff=${utcOffsetSeconds}s`);
+    } else {
+      mlbGameCache.weather[gameId].hourlyForecast = hourlyForecast;
+      mlbGameCache.weather[gameId].utcOffsetSeconds = utcOffsetSeconds;
+      mlbGameCache.weather[gameId].gameStartWindDirection = gameStartWindDir;
+      mlbGameCache.weather[gameId].windShiftDetected = windShiftDetected;
+      if (windShiftDetected) {
+        console.log(`[MLB_WEATHER_WIND_SHIFT] game=${gameId} — wind shifted from ${gameStartWindDir} to ${currentWindDir} since game start`);
+      }
     }
   } catch (err: any) {
     console.warn(`[MLB_WEATHER_OPENMETEO] game=${gameId} error: ${err.message}`);
   }
+}
+
+export function resolveCurrentHourWeather(gameId: string): HourlyWeatherEntry | null {
+  const weather = mlbGameCache.weather[gameId];
+  if (!weather?.hourlyForecast?.length) return null;
+  const utcOff = weather.utcOffsetSeconds ?? 0;
+  const nowUtcMs = Date.now();
+  const venueLocalMs = nowUtcMs + utcOff * 1000;
+  const venueLocalHour = new Date(venueLocalMs).getUTCHours();
+  return weather.hourlyForecast.find(h => h.hour === venueLocalHour) ?? null;
 }
 
 // ── syncBvPMatchup ──────────────────────────────────────────────────────────

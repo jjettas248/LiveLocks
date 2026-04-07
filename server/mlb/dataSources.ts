@@ -47,39 +47,41 @@ interface ParkFactors {
   hits: number;
   runs: number;
   isIndoors: boolean;
+  hrLHB?: number;
+  hrRHB?: number;
 }
 
 const PARK_FACTORS: Record<string, ParkFactors> = {
-  "Coors Field":              { overall: 1.28, hr: 1.35, hits: 1.18, runs: 1.30, isIndoors: false },
-  "Fenway Park":              { overall: 1.08, hr: 0.98, hits: 1.12, runs: 1.10, isIndoors: false },
-  "Yankee Stadium":           { overall: 1.10, hr: 1.20, hits: 1.02, runs: 1.12, isIndoors: false },
-  "Citizens Bank Park":       { overall: 1.07, hr: 1.15, hits: 1.04, runs: 1.08, isIndoors: false },
-  "Great American Ball Park": { overall: 1.10, hr: 1.22, hits: 1.03, runs: 1.12, isIndoors: false },
-  "Globe Life Field":         { overall: 1.02, hr: 1.08, hits: 0.98, runs: 1.03, isIndoors: true },
-  "Wrigley Field":            { overall: 1.05, hr: 1.10, hits: 1.03, runs: 1.06, isIndoors: false },
-  "Guaranteed Rate Field":    { overall: 1.04, hr: 1.12, hits: 0.99, runs: 1.05, isIndoors: false },
-  "Kauffman Stadium":         { overall: 1.06, hr: 1.10, hits: 1.02, runs: 1.05, isIndoors: false },
-  "Minute Maid Park":         { overall: 1.03, hr: 1.08, hits: 1.00, runs: 1.04, isIndoors: true },
-  "American Family Field":    { overall: 1.02, hr: 1.06, hits: 1.00, runs: 1.03, isIndoors: true },
-  "Target Field":             { overall: 1.00, hr: 1.02, hits: 0.99, runs: 1.00, isIndoors: false },
-  "Truist Park":              { overall: 0.99, hr: 1.04, hits: 0.97, runs: 0.99, isIndoors: false },
-  "Nationals Park":           { overall: 0.99, hr: 1.05, hits: 0.96, runs: 1.00, isIndoors: false },
-  "Busch Stadium":            { overall: 0.97, hr: 0.95, hits: 0.98, runs: 0.96, isIndoors: false },
-  "Angel Stadium":            { overall: 0.96, hr: 0.92, hits: 0.97, runs: 0.95, isIndoors: false },
-  "Comerica Park":            { overall: 0.96, hr: 0.90, hits: 0.98, runs: 0.95, isIndoors: false },
-  "PNC Park":                 { overall: 0.95, hr: 0.92, hits: 0.97, runs: 0.94, isIndoors: false },
-  "T-Mobile Park":            { overall: 0.94, hr: 0.88, hits: 0.97, runs: 0.93, isIndoors: true },
-  "Dodger Stadium":           { overall: 0.97, hr: 1.00, hits: 0.96, runs: 0.97, isIndoors: false },
-  "loanDepot park":           { overall: 0.93, hr: 0.88, hits: 0.96, runs: 0.92, isIndoors: true },
-  "Oracle Park":              { overall: 0.88, hr: 0.82, hits: 0.92, runs: 0.87, isIndoors: false },
-  "Petco Park":               { overall: 0.92, hr: 0.88, hits: 0.95, runs: 0.91, isIndoors: false },
-  "Chase Field":              { overall: 1.05, hr: 1.10, hits: 1.02, runs: 1.06, isIndoors: true },
-  "Rogers Centre":            { overall: 1.03, hr: 1.08, hits: 1.00, runs: 1.04, isIndoors: true },
-  "Citi Field":               { overall: 0.95, hr: 0.95, hits: 0.96, runs: 0.94, isIndoors: false },
-  "Progressive Field":        { overall: 0.98, hr: 0.96, hits: 0.99, runs: 0.97, isIndoors: false },
-  "Tropicana Field":          { overall: 0.96, hr: 0.92, hits: 0.97, runs: 0.95, isIndoors: true },
-  "Sutter Health Park":       { overall: 1.12, hr: 1.15, hits: 1.08, runs: 1.14, isIndoors: false },
-  "Oriole Park at Camden Yards": { overall: 1.04, hr: 1.12, hits: 1.00, runs: 1.05, isIndoors: false },
+  "Coors Field":              { overall: 1.28, hr: 1.35, hits: 1.18, runs: 1.30, isIndoors: false, hrLHB: 1.42, hrRHB: 1.30 },
+  "Fenway Park":              { overall: 1.08, hr: 0.98, hits: 1.12, runs: 1.10, isIndoors: false, hrLHB: 0.88, hrRHB: 1.10 },
+  "Yankee Stadium":           { overall: 1.10, hr: 1.20, hits: 1.02, runs: 1.12, isIndoors: false, hrLHB: 1.30, hrRHB: 1.12 },
+  "Citizens Bank Park":       { overall: 1.07, hr: 1.15, hits: 1.04, runs: 1.08, isIndoors: false, hrLHB: 1.20, hrRHB: 1.10 },
+  "Great American Ball Park": { overall: 1.10, hr: 1.22, hits: 1.03, runs: 1.12, isIndoors: false, hrLHB: 1.28, hrRHB: 1.18 },
+  "Globe Life Field":         { overall: 1.02, hr: 1.08, hits: 0.98, runs: 1.03, isIndoors: true, hrLHB: 1.12, hrRHB: 1.05 },
+  "Wrigley Field":            { overall: 1.05, hr: 1.10, hits: 1.03, runs: 1.06, isIndoors: false, hrLHB: 1.05, hrRHB: 1.15 },
+  "Guaranteed Rate Field":    { overall: 1.04, hr: 1.12, hits: 0.99, runs: 1.05, isIndoors: false, hrLHB: 1.16, hrRHB: 1.08 },
+  "Kauffman Stadium":         { overall: 1.06, hr: 1.10, hits: 1.02, runs: 1.05, isIndoors: false, hrLHB: 1.08, hrRHB: 1.12 },
+  "Minute Maid Park":         { overall: 1.03, hr: 1.08, hits: 1.00, runs: 1.04, isIndoors: true, hrLHB: 1.14, hrRHB: 1.03 },
+  "American Family Field":    { overall: 1.02, hr: 1.06, hits: 1.00, runs: 1.03, isIndoors: true, hrLHB: 1.08, hrRHB: 1.04 },
+  "Target Field":             { overall: 1.00, hr: 1.02, hits: 0.99, runs: 1.00, isIndoors: false, hrLHB: 0.98, hrRHB: 1.06 },
+  "Truist Park":              { overall: 0.99, hr: 1.04, hits: 0.97, runs: 0.99, isIndoors: false, hrLHB: 1.00, hrRHB: 1.08 },
+  "Nationals Park":           { overall: 0.99, hr: 1.05, hits: 0.96, runs: 1.00, isIndoors: false, hrLHB: 1.10, hrRHB: 1.00 },
+  "Busch Stadium":            { overall: 0.97, hr: 0.95, hits: 0.98, runs: 0.96, isIndoors: false, hrLHB: 0.92, hrRHB: 0.98 },
+  "Angel Stadium":            { overall: 0.96, hr: 0.92, hits: 0.97, runs: 0.95, isIndoors: false, hrLHB: 0.88, hrRHB: 0.96 },
+  "Comerica Park":            { overall: 0.96, hr: 0.90, hits: 0.98, runs: 0.95, isIndoors: false, hrLHB: 0.82, hrRHB: 0.96 },
+  "PNC Park":                 { overall: 0.95, hr: 0.92, hits: 0.97, runs: 0.94, isIndoors: false, hrLHB: 0.86, hrRHB: 0.98 },
+  "T-Mobile Park":            { overall: 0.94, hr: 0.88, hits: 0.97, runs: 0.93, isIndoors: true, hrLHB: 0.84, hrRHB: 0.92 },
+  "Dodger Stadium":           { overall: 0.97, hr: 1.00, hits: 0.96, runs: 0.97, isIndoors: false, hrLHB: 0.95, hrRHB: 1.05 },
+  "loanDepot park":           { overall: 0.93, hr: 0.88, hits: 0.96, runs: 0.92, isIndoors: true, hrLHB: 0.84, hrRHB: 0.92 },
+  "Oracle Park":              { overall: 0.88, hr: 0.82, hits: 0.92, runs: 0.87, isIndoors: false, hrLHB: 0.72, hrRHB: 0.90 },
+  "Petco Park":               { overall: 0.92, hr: 0.88, hits: 0.95, runs: 0.91, isIndoors: false, hrLHB: 0.84, hrRHB: 0.92 },
+  "Chase Field":              { overall: 1.05, hr: 1.10, hits: 1.02, runs: 1.06, isIndoors: true, hrLHB: 1.14, hrRHB: 1.06 },
+  "Rogers Centre":            { overall: 1.03, hr: 1.08, hits: 1.00, runs: 1.04, isIndoors: true, hrLHB: 1.12, hrRHB: 1.04 },
+  "Citi Field":               { overall: 0.95, hr: 0.95, hits: 0.96, runs: 0.94, isIndoors: false, hrLHB: 0.90, hrRHB: 1.00 },
+  "Progressive Field":        { overall: 0.98, hr: 0.96, hits: 0.99, runs: 0.97, isIndoors: false, hrLHB: 0.92, hrRHB: 1.00 },
+  "Tropicana Field":          { overall: 0.96, hr: 0.92, hits: 0.97, runs: 0.95, isIndoors: true, hrLHB: 0.90, hrRHB: 0.94 },
+  "Sutter Health Park":       { overall: 1.12, hr: 1.15, hits: 1.08, runs: 1.14, isIndoors: false, hrLHB: 1.18, hrRHB: 1.12 },
+  "Oriole Park at Camden Yards": { overall: 1.04, hr: 1.12, hits: 1.00, runs: 1.05, isIndoors: false, hrLHB: 1.18, hrRHB: 1.08 },
 };
 
 const VENUE_ALIASES: Record<string, string> = {
@@ -112,7 +114,7 @@ function resolveVenue(venueName: string): ParkFactors | null {
   return null;
 }
 
-export function getMarketParkFactor(venueName: string | null | undefined, market?: string): number {
+export function getMarketParkFactor(venueName: string | null | undefined, market?: string, batterHand?: string | null): number {
   if (!venueName) return 1.0;
   const factors = resolveVenue(venueName);
   if (!factors) return 1.0;
@@ -120,7 +122,14 @@ export function getMarketParkFactor(venueName: string | null | undefined, market
   if (!market) return factors.overall;
 
   const m = market.toLowerCase();
-  if (m === "home_runs" || m === "hr" || m === "hr_allowed") return factors.hr;
+  if (m === "home_runs" || m === "hr" || m === "hr_allowed") {
+    if (batterHand && (m === "home_runs" || m === "hr")) {
+      const hand = batterHand.toUpperCase();
+      if (hand === "L" && factors.hrLHB != null) return factors.hrLHB;
+      if (hand === "R" && factors.hrRHB != null) return factors.hrRHB;
+    }
+    return factors.hr;
+  }
   if (m === "hits" || m === "hits_allowed") return factors.hits;
   if (m === "hrr") return (factors.hits + factors.runs + factors.hr) / 3;
   if (m === "total_bases") return (factors.hits + factors.hr) / 2;

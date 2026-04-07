@@ -36,6 +36,11 @@ export interface HRAlertInput {
   barrelRate?: number | null;
   hardHitRate?: number | null;
   xSLG?: number | null;
+  abSinceLastHR?: number | null;
+  hrRateLast7?: number | null;
+  hrRateLast15?: number | null;
+  hrRateLast30?: number | null;
+  handednessParkFactor?: number | null;
   pitcherDeterioration?: PitcherDeteriorationContext | null;
   priorABResults: Array<{
     exitVelocity: number | null;
@@ -366,6 +371,28 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
 
   const positiveFactors: string[] = [];
   const convPct = convProb !== null ? `${(convProb * 100).toFixed(1)}%` : "n/a";
+
+  let hrTrendBoost = 0;
+  const abSinceHR = input.abSinceLastHR;
+  const seasonHRRate = input.seasonHRRate;
+  if (abSinceHR != null && seasonHRRate != null && seasonHRRate > 0) {
+    const expectedABperHR = 1 / seasonHRRate;
+    if (abSinceHR >= expectedABperHR * 1.5) {
+      hrTrendBoost += 1;
+      positiveFactors.push(`HR overdue (${abSinceHR} AB since last, expected ~${Math.round(expectedABperHR)})`);
+    }
+  }
+
+  const hrL7 = input.hrRateLast7;
+  const hrL30 = input.hrRateLast30;
+  if (hrL7 != null && hrL30 != null && hrL30 > 0 && hrL7 > hrL30 * 1.5) {
+    hrTrendBoost += 0.5;
+    positiveFactors.push(`HR rate trending up (L7=${(hrL7 * 100).toFixed(1)}% vs L30=${(hrL30 * 100).toFixed(1)}%)`);
+  }
+
+  if (input.handednessParkFactor != null && input.handednessParkFactor >= 1.10) {
+    positiveFactors.push(`${input.batterHand ?? "?"}HB park HR factor ${input.handednessParkFactor.toFixed(2)}`);
+  }
 
   if (
     totalHrShaped >= 2 &&

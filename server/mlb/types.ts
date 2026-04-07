@@ -225,6 +225,7 @@ export interface WeatherParkContext {
   humidity: number | null;
   isIndoors: boolean;
   parkHistoryFactor: number | null;
+  windShiftDetected?: boolean;
 }
 
 export interface BullpenContext {
@@ -304,6 +305,15 @@ export interface MLBPropInput {
     last30Avg: number | null;
     last7Ops: number | null;
     last15Ops: number | null;
+  };
+
+  hrTrend?: {
+    abSinceLastHR: number | null;
+    hrRateLast7: number | null;
+    hrRateLast15: number | null;
+    hrRateLast30: number | null;
+    seasonTotalHR: number;
+    seasonTotalAB: number;
   };
 }
 

@@ -226,6 +226,25 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
   const bvpHrBoost = (input as any).bvpHrBoost ?? 0;
   score += bvpHrBoost;
 
+  const hrTrend = input.hrTrend;
+  if (hrTrend) {
+    const abSince = hrTrend.abSinceLastHR;
+    const seasonRate = hrTrend.seasonTotalAB > 0 ? hrTrend.seasonTotalHR / hrTrend.seasonTotalAB : 0;
+    if (abSince != null && seasonRate > 0) {
+      const expectedABperHR = 1 / seasonRate;
+      if (abSince >= expectedABperHR * 2.0) {
+        score += 0.6;
+      } else if (abSince >= expectedABperHR * 1.5) {
+        score += 0.3;
+      }
+    }
+    const hrL7 = hrTrend.hrRateLast7;
+    const hrL30 = hrTrend.hrRateLast30;
+    if (hrL7 != null && hrL30 != null && hrL30 > 0 && hrL7 > hrL30 * 1.5) {
+      score += 0.3;
+    }
+  }
+
   const finalScore = Math.min(10, Math.max(0, score));
 
   return {
