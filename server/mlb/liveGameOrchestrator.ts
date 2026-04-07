@@ -350,10 +350,10 @@ export class LiveGameOrchestrator {
     // Initial discovery
     this.pollGames().catch(console.error);
 
-    // Game discovery every 5 minutes
     this.timers.push(
       setInterval(() => {
         this.pollGames().catch(console.error);
+        resetDailyPersistGuard();
       }, GAME_DISCOVERY_MS)
     );
 
@@ -2202,17 +2202,18 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
   const today = new Date().toISOString().slice(0, 10);
   let persisted = 0;
   let skipped = 0;
+  let skipReasons: Record<string, number> = {};
 
   for (const sig of qualifiedSignals) {
-    if (sig.watchlist || sig.isEarlySignal) { skipped++; continue; }
-    if (!sig.sportsbook || sig.sportsbook.trim() === "") { skipped++; continue; }
-    if (!Number.isFinite(sig.line) || sig.line <= 0) { skipped++; continue; }
+    if (sig.watchlist || sig.isEarlySignal) { skipped++; skipReasons["watchlist"] = (skipReasons["watchlist"] ?? 0) + 1; continue; }
+    const sbk = sig.sportsbook && sig.sportsbook.trim() !== "" ? sig.sportsbook : "odds_api";
+    if (!Number.isFinite(sig.line) || sig.line <= 0) { skipped++; skipReasons["bad_line"] = (skipReasons["bad_line"] ?? 0) + 1; continue; }
 
     const dir = sig.side === "OVER" ? "over" : sig.side === "UNDER" ? "under" : null;
-    if (!dir) { skipped++; continue; }
+    if (!dir) { skipped++; skipReasons["no_dir"] = (skipReasons["no_dir"] ?? 0) + 1; continue; }
 
     const guardKey = `${sig.playerId}|${sig.market}|${sig.line}|${dir}|${gameId}|${today}`;
-    if (mlbPersistGuard.has(guardKey)) { skipped++; continue; }
+    if (mlbPersistGuard.has(guardKey)) { skipped++; skipReasons["dedup"] = (skipReasons["dedup"] ?? 0) + 1; continue; }
     mlbPersistGuard.add(guardKey);
 
     trackPlay({
@@ -2227,7 +2228,7 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
       projection: sig.projection,
       probability: sig.engineProbability,
       edge: sig.evPct ?? 0,
-      sportsbook: sig.sportsbook,
+      sportsbook: sbk,
       derivedLine: false,
       createdAt: sig.engineGeneratedAt ?? Date.now(),
       signalScore: sig.signalScore ?? null,
@@ -2238,9 +2239,8 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
     persisted++;
   }
 
-  if (persisted > 0) {
-    console.log(`[MLB_AUTO_PERSIST] game=${gameId} persisted=${persisted} skipped=${skipped}`);
-  }
+  const reasonStr = Object.entries(skipReasons).map(([k, v]) => `${k}=${v}`).join(" ");
+  console.log(`[MLB_AUTO_PERSIST] game=${gameId} qualified=${qualifiedSignals.length} persisted=${persisted} skipped=${skipped} ${reasonStr}`);
 }
 
 function resetDailyPersistGuard(): void {

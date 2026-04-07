@@ -62,9 +62,6 @@ import { mlbEdgeCache } from "./mlb/edgeCache";
 import { liveOrchestrator, normalizeMlbStatus } from "./mlb/liveGameOrchestrator";
 import { normalizeMLBSignal } from "./mlb/normalizeSignal";
 
-// ── Module-level play dedup guard (persists for process lifetime) ─────────────
-const recordedPlayKeys = new Set<string>();
-
 // ── NCAAB live signal cache (populated by /api/ncaab/plays, read by /api/top-plays) ──
 const ncaabLiveSignals: { signals: any[]; updatedAt: number } = { signals: [], updatedAt: 0 };
 
@@ -90,17 +87,6 @@ function getPlayKey(p: {
     String(p.gameId ?? "").trim(),
     today,
   ].join("|");
-}
-
-async function recordPlayOnce(play: Parameters<typeof import("./storage").storage.recordPlay>[0]): Promise<void> {
-  const key = play.duplicateGuard;
-  if (recordedPlayKeys.has(key)) return;
-  recordedPlayKeys.add(key);
-  try {
-    await import("./storage").then(m => m.storage.recordPlay(play));
-  } catch (err) {
-    console.warn("[recordPlayOnce] DB write failed:", (err as any).message);
-  }
 }
 
 interface BatchSignal {
@@ -1627,51 +1613,6 @@ export async function registerRoutes(
     });
 
     mlbSignalsCache.set(gameId, { ts: Date.now(), signals: validatedApiSignals, updatedAt, isDegraded: cachedIsDegraded });
-
-    const STALE_THRESHOLD_MS = 30_000;
-    if (updatedAt > 0 && Date.now() - updatedAt > STALE_THRESHOLD_MS) {
-      console.warn(`[MLB PERSIST BLOCKED — STALE SIGNAL] game=${gameId} updatedAt=${updatedAt} age=${Date.now() - updatedAt}ms > ${STALE_THRESHOLD_MS}ms`);
-    } else if (liveSignalsStatsPk) {
-      const today = new Date().toISOString().slice(0, 10);
-      const validSides = new Set(["over", "under"]);
-      let persistCount = 0;
-      let skipCount = 0;
-      for (const sig of validatedApiSignals) {
-        const direction = (sig.recommendedSide ?? "").toLowerCase();
-        if (!Number.isFinite(sig.enginePct) || sig.enginePct < 1 || sig.enginePct > 99) { skipCount++; continue; }
-        if (!sig.bookLine || sig.bookLine <= 0) { skipCount++; continue; }
-        if (!validSides.has(direction)) { skipCount++; continue; }
-        persistCount++;
-        const key = `${sig.playerId}|${sig.market}|${sig.bookLine}|${direction}|${liveSignalsStatsPk}|${today}`;
-        storage.recordPlay({
-          id: `play-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          gameId: liveSignalsStatsPk,
-          playerId: String(sig.playerId),
-          playerName: sig.playerName,
-          team: undefined,
-          sport: "mlb",
-          market: sig.market,
-          direction,
-          line: sig.bookLine,
-          prob: sig.enginePct,
-          edgeGap: sig.edge != null ? sig.edge : undefined,
-          projection: sig.projection ?? undefined,
-          sportsbook: sig.sportsbook ?? null,
-          derivedLine: sig.derivedLine ?? false,
-          engineVersion: "mlb_v2.1",
-          gameDate: today,
-          timestamp: new Date(),
-          duplicateGuard: key,
-          signalScore: sig.signalScore != null ? String(sig.signalScore) : undefined,
-          opportunityScore: sig.opportunityScore != null ? String(sig.opportunityScore) : undefined,
-          liveScore: sig.liveScore != null ? String(sig.liveScore) : undefined,
-          eventBoost: sig.eventBoost != null ? String(sig.eventBoost) : undefined,
-        }).catch(console.warn);
-      }
-      if (persistCount > 0 || skipCount > 0) {
-        console.log(`[MLB_PERSIST_CHECK] game=${gameId} persisted=${persistCount} skipped=${skipCount} total=${apiSignals.length}`);
-      }
-    }
 
     return res.json({ mode: "live", engine: "MLB", engineMode: mlbEngineResult.mode, signals: validatedApiSignals, updatedAt, isDegraded: cachedIsDegraded, gameCardTags: entry?.gameCardTags ?? [] });
   });
@@ -4500,9 +4441,7 @@ export async function registerRoutes(
       });
 
       res.json({ plays: topPlays });
-      // Fire-and-forget: alerts + persist plays for analytics
       checkAndSendAlerts(topPlays, storage).catch(console.warn);
-      storage.savePlayAlerts(topPlays).catch(console.warn);
       for (const p of topPlays) {
         const pDir = (p.betDirection ?? "").toUpperCase();
         if (pDir === "OVER" || pDir === "UNDER") {
@@ -5700,30 +5639,7 @@ export function registerPlaysRoutes(app: Express): void {
       if (!body.playerName || !body.market || !body.direction || body.line == null || body.prob == null) {
         return res.status(400).json({ error: "Missing required play fields" });
       }
-      const today = new Date().toISOString().slice(0, 10);
-      const duplicateGuard = body.duplicateGuard ??
-        `${body.playerId ?? body.playerName}|${body.market}|${body.line}|${body.direction}|${body.gameId ?? ""}|${today}`;
-      const id = body.id ?? `play-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      const result = await storage.recordPlay({
-        id,
-        gameId: body.gameId ?? "",
-        playerId: body.playerId,
-        playerName: body.playerName,
-        team: body.team,
-        sport: body.sport ?? "nba",
-        market: body.market,
-        direction: body.direction,
-        line: Number(body.line),
-        prob: Number(body.prob),
-        engineProb: body.engineProb != null ? Number(body.engineProb) : undefined,
-        bookImplied: body.bookImplied != null ? Number(body.bookImplied) : undefined,
-        edgeGap: body.edgeGap != null ? Number(body.edgeGap) : undefined,
-        gameDate: body.gameDate ?? today,
-        timestamp: body.timestamp ? new Date(body.timestamp) : new Date(),
-        duplicateGuard,
-      });
-      // Persist full signal snapshot to play tracker on explicit user save action
-      trackPlay({
+      const result = await trackPlay({
         gameId: body.gameId ?? "",
         playerId: body.playerId ? String(body.playerId) : null,
         playerName: body.playerName,
@@ -5735,10 +5651,10 @@ export function registerPlaysRoutes(app: Express): void {
         projection: body.projection != null ? Number(body.projection) : Number(body.line),
         probability: Number(body.prob),
         edge: body.edgeGap != null ? Number(body.edgeGap) : 0,
-        sportsbook: body.sportsbook ?? null,
+        sportsbook: body.sportsbook ?? "consensus",
         derivedLine: Boolean(body.derivedLine ?? false),
         createdAt: body.timestamp ? new Date(body.timestamp).getTime() : Date.now(),
-      }, storage).catch(console.warn);
+      }, storage);
       return res.json({ success: true, ...result });
     } catch (e) {
       return res.status(500).json({ error: "Failed to record play", details: (e as any).message });
