@@ -245,7 +245,6 @@ export function normalizeMLBSignal(
     const pbm = drivers.pitchBlendMatchup ?? 0.5;
     const hand = drivers.handednessMatchup ?? 0.5;
     pitchMatchupRatings = {};
-    const pitchScores: { pt: string; score: number }[] = [];
     for (const p of pitchMix) {
       const pt = p.pitchType;
       const isFastball = pt === "FF" || pt === "SI" || pt === "FC";
@@ -258,20 +257,9 @@ export function normalizeMLBSignal(
       } else {
         score = cq * 0.45 + pbm * 0.30 + bp * 0.25;
       }
-      pitchScores.push({ pt, score });
-    }
-    const maxScore = Math.max(...pitchScores.map(s => s.score));
-    const minScore = Math.min(...pitchScores.map(s => s.score));
-    const spread = maxScore - minScore;
-    for (const { pt, score } of pitchScores) {
       let rating: "strong" | "neutral" | "weak" = "neutral";
-      if (spread >= 0.03) {
-        if (score >= maxScore - 0.01 && score > 0.52) rating = "strong";
-        else if (score <= minScore + 0.01 && score < 0.48) rating = "weak";
-      } else {
-        if (score > 0.56) rating = "strong";
-        else if (score < 0.42) rating = "weak";
-      }
+      if (score >= 0.55) rating = "strong";
+      else if (score <= 0.45) rating = "weak";
       pitchMatchupRatings[pt] = rating;
     }
   }

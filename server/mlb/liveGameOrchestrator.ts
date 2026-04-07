@@ -1571,6 +1571,9 @@ export class LiveGameOrchestrator {
               qResult.safetyCeilingApplied = ceilResult.ceilingApplied;
               qResult.varianceTier = MARKET_VOLATILITY[market] ?? "mid";
               qResult.isDegraded = !!(input as any).isDegraded;
+              if ((input as any).bvpHistory) {
+                qResult.bvpHistory = (input as any).bvpHistory;
+              }
               qResult.dataQuality = !!(input as any).isDegraded ? "degraded" : (Object.values({
                 parkFactor: weatherCache?.venueName != null,
                 weather: weatherCache?.temperature != null,
@@ -1594,6 +1597,9 @@ export class LiveGameOrchestrator {
                 watchSig.pitcherArchetype = pitcherArch;
                 watchSig.thesis = thesis;
                 watchSig.isDegraded = !!(input as any).isDegraded;
+                if ((input as any).bvpHistory) {
+                  watchSig.bvpHistory = (input as any).bvpHistory;
+                }
                 if (isEarlySignalMode) {
                   watchSig.confidenceTier = "WATCHLIST" as any;
                   watchSig.isEarlySignal = true;

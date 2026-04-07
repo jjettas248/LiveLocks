@@ -564,7 +564,7 @@ export function MlbSignalCard({
             </div>
           )}
 
-          {/* Pitcher Arsenal with Color Coding */}
+          {/* Pitcher Arsenal with Bidirectional Color Coding */}
           {sig.pitchMix && sig.pitchMix.length > 0 && (
             <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20 space-y-1.5">
               <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
@@ -573,31 +573,38 @@ export function MlbSignalCard({
               </div>
               <div className="flex flex-wrap gap-1">
                 {sig.pitchMix.slice(0, 5).map((p, i) => {
-                  const rating = sig.pitchMatchupRatings?.[p.pitchType] ?? "neutral";
-                  const borderColor = rating === "strong"
+                  const rawRating = sig.pitchMatchupRatings?.[p.pitchType] ?? "neutral";
+                  const isBatterFavor = isPitcherMarket
+                    ? rawRating === "weak"
+                    : rawRating === "strong";
+                  const isPitcherFavor = isPitcherMarket
+                    ? rawRating === "strong"
+                    : rawRating === "weak";
+                  const borderColor = isBatterFavor
                     ? "rgba(34,197,94,0.6)"
-                    : rating === "weak"
+                    : isPitcherFavor
                     ? "rgba(239,68,68,0.5)"
                     : "rgba(148,163,184,0.3)";
-                  const bgColor = rating === "strong"
+                  const bgColor = isBatterFavor
                     ? "rgba(34,197,94,0.08)"
-                    : rating === "weak"
+                    : isPitcherFavor
                     ? "rgba(239,68,68,0.06)"
                     : "transparent";
-                  const textColor = rating === "strong"
+                  const textColor = isBatterFavor
                     ? "#bbf7d0"
-                    : rating === "weak"
+                    : isPitcherFavor
                     ? "#fecaca"
                     : "#e4e4e7";
+                  const favorLabel = isBatterFavor ? "Batter" : isPitcherFavor ? "Pitcher" : null;
                   return (
                     <span
                       key={i}
                       className="text-[9px] px-2 py-1 rounded-md border flex items-center gap-1"
                       style={{ borderColor, color: textColor, background: bgColor }}
-                      data-testid={`pitch-${p.pitchType}-${rating}`}
+                      data-testid={`pitch-${p.pitchType}-${isBatterFavor ? "batter-favor" : isPitcherFavor ? "pitcher-favor" : "neutral"}`}
                     >
-                      {rating === "strong" && <span className="text-[8px] text-green-400">▲</span>}
-                      {rating === "weak" && <span className="text-[8px] text-red-400">▼</span>}
+                      {isBatterFavor && <span className="text-[8px] text-green-400">▲</span>}
+                      {isPitcherFavor && <span className="text-[8px] text-red-400">▼</span>}
                       <span className="font-semibold">{PITCH_LABELS[p.pitchType] ?? p.pitchType}</span>
                       <span className="opacity-70">{Math.round(p.percentage)}%</span>
                       {p.avgVelocity != null && <span className="opacity-50">{p.avgVelocity.toFixed(0)}mph</span>}
@@ -607,8 +614,8 @@ export function MlbSignalCard({
               </div>
               {sig.pitchMatchupRatings && (
                 <div className="flex items-center gap-3 text-[8px] text-muted-foreground/60 mt-0.5">
-                  <span className="flex items-center gap-0.5"><span className="text-green-400">▲</span> {isPitcherMarket ? "pitcher advantage" : "batter advantage"}</span>
-                  <span className="flex items-center gap-0.5"><span className="text-red-400">▼</span> {isPitcherMarket ? "batter advantage" : "pitcher advantage"}</span>
+                  <span className="flex items-center gap-0.5"><span className="text-green-400">▲</span> batter favor</span>
+                  <span className="flex items-center gap-0.5"><span className="text-red-400">▼</span> pitcher favor</span>
                 </div>
               )}
             </div>
