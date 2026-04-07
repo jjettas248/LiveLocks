@@ -90,6 +90,7 @@ export function useLiveGames() {
     },
     refetchInterval: 30000,
     staleTime: 15000,
+    placeholderData: (prev) => prev,
   });
 }
 
@@ -105,6 +106,7 @@ export function useLiveStats(gameId: string | undefined) {
     enabled: !!gameId,
     refetchInterval: false,
     staleTime: 30000,
+    placeholderData: (prev) => prev,
   });
 }
 

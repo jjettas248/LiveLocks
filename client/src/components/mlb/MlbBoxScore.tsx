@@ -128,6 +128,7 @@ export function MlbBoxScore({
     queryKey: ["/api/mlb/live-stats", gameId],
     refetchInterval: 15_000,
     enabled: !!gameId,
+    placeholderData: (prev) => prev,
   });
 
   const players = data?.players ?? [];

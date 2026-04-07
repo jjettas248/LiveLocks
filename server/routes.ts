@@ -1185,7 +1185,7 @@ export async function registerRoutes(
       const registeredLiveGame = getActiveGames().find((g) => g.gameId === gameId);
       const liveStatsPk: string | undefined = registeredLiveGame?.gamePk;
       if (!liveStatsPk) {
-        console.log(`[mlb/live-stats] gameId=${gameId}: gamePk not yet resolved — returning readiness metadata`);
+        console.log(`[mlb/live-stats] gameId=${gameId}: gamePk not yet resolved (registered=${!!registeredLiveGame}) — returning readiness metadata`);
         return res.json({ ready: false, reason: "Waiting for official box score", players: [] });
       }
       const url = `https://statsapi.mlb.com/api/v1/game/${liveStatsPk}/boxscore`;
@@ -1456,7 +1456,7 @@ export async function registerRoutes(
     const updatedAt = entry?.updatedAt ?? 0;
     const cachedIsDegraded = entry?.isDegraded ?? false;
 
-    const SIGNAL_FRESHNESS_MS = 120_000;
+    const SIGNAL_FRESHNESS_MS = 5 * 60 * 1000;
     if (updatedAt > 0 && Date.now() - updatedAt > SIGNAL_FRESHNESS_MS) {
       const staleAge = Math.round((Date.now() - updatedAt) / 1000);
       console.warn(`[MLB signals] game=${gameId} — engine data ${staleAge}s old (>${SIGNAL_FRESHNESS_MS / 1000}s limit); returning no_lines`);

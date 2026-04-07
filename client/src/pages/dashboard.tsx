@@ -914,6 +914,7 @@ export default function Dashboard() {
     enabled: !!selectedGameId,
     refetchInterval: 20_000,
     staleTime: 15_000,
+    placeholderData: (prev) => prev,
   });
 
   const halftimeGameGroups = useMemo(() => {

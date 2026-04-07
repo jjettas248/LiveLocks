@@ -580,7 +580,7 @@ export class LiveGameOrchestrator {
         await this.triggerEngine(gameId, normalizedStatus, triggers);
       } else if (normalizedStatus === "live") {
         const cached = mlbEdgeCache.get(gameId);
-        if (cached && (cached.allSignals.length > 0 || cached.qualifiedSignals.length > 0)) {
+        if (cached) {
           mlbEdgeCache.set(gameId, { ...cached, updatedAt: Date.now() });
         }
       }

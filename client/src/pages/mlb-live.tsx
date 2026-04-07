@@ -1119,11 +1119,13 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
   const { data: hrData, isLoading } = useQuery<HRRadarResponse>({
     queryKey: ["/api/mlb/hr-radar"],
     refetchInterval: 20_000,
+    placeholderData: (prev) => prev,
   });
 
   const { data: alertData } = useQuery<{ alerts: HRAlert[]; conversionStats: AlertConversionStats | null }>({
     queryKey: ["/api/mlb/alerts"],
     refetchInterval: 15_000,
+    placeholderData: (prev) => prev,
   });
 
   const gameTeamsMap = new Map((games ?? []).map(g => [g.gameId, { awayAbbr: g.awayAbbr ?? "", homeAbbr: g.homeAbbr ?? "" }]));
@@ -1898,12 +1900,14 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
   const { data: gamesResp, isLoading: gamesLoading, dataUpdatedAt: gamesUpdatedAt } = useQuery<MLBGamesResponse>({
     queryKey: ["/api/mlb/live-games"],
     refetchInterval: 15_000,
+    placeholderData: (prev) => prev,
   });
   const games = Array.isArray(gamesResp?.games) ? gamesResp!.games : [];
 
   const { data: edgeFeedResp } = useQuery<EdgeFeedResponse>({
     queryKey: ["/api/mlb/edge-feed"],
     refetchInterval: 20_000,
+    placeholderData: (prev) => prev,
   });
   const rawSignals: MlbSignalData[] = Array.isArray(edgeFeedResp?.signals)
     ? (edgeFeedResp!.signals as MlbSignalData[]).map(s => mapMlbSignalToUi(s) as unknown as MlbSignalData)
