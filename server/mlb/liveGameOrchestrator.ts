@@ -54,13 +54,14 @@ import { storage } from "../storage";
 // ── HR alert grading tracker ──────────────────────────────────────────────────
 const KNOWN_HR_COUNTS = new Map<string, number>();
 
-function checkAndGradeHR(playerId: string, gameId: string, currentHR: number, inning?: number, halfInning?: string, abNum?: number) {
+function checkAndGradeHR(playerId: string, gameId: string, currentHR: number, playerName?: string, team?: string, inning?: number, halfInning?: string, abNum?: number) {
   const key = `${gameId}_${playerId}`;
   const prevHR = KNOWN_HR_COUNTS.get(key) ?? 0;
   KNOWN_HR_COUNTS.set(key, currentHR);
   if (currentHR > prevHR && prevHR >= 0) {
     const hitHalf = halfInning === "top" ? "T" : halfInning === "bottom" ? "B" : "?";
     const hitLabel = `${hitHalf}${inning ?? 0}`;
+    console.log(`[HR_GRADE_DETECTED] playerId=${playerId} player=${playerName ?? "?"} gameId=${gameId} prevHR=${prevHR} newHR=${currentHR} hitLabel=${hitLabel}`);
     storage.resolveAlertAsHit(
       playerId,
       gameId,
@@ -74,7 +75,19 @@ function checkAndGradeHR(playerId: string, gameId: string, currentHR: number, in
       inning ?? 0,
       hitHalf,
       hitLabel,
-    ).catch(() => {});
+    ).then((count) => {
+      if (count === 0 && playerName) {
+        storage.ensureHrRadarAlertHit({
+          gameId,
+          playerId,
+          playerName,
+          team: team ?? "",
+          inning: inning ?? 0,
+          half: halfInning === "top" ? "top" : halfInning === "bottom" ? "bottom" : "top",
+          hitLabel,
+        }).catch(err => console.warn(`[HR_RADAR_ENSURE_HIT] Failed: ${err.message}`));
+      }
+    }).catch(() => {});
   }
 }
 
@@ -1222,6 +1235,8 @@ export class LiveGameOrchestrator {
             batter.playerId,
             gameId,
             currentGameHR,
+            batter.playerName,
+            batter.team,
             state.inning,
             state.isTopInning ? "top" : "bottom",
             boxScorePlayer?.ab ?? 0,

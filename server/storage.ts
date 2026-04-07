@@ -2298,6 +2298,79 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  async ensureHrRadarAlertHit(data: {
+    gameId: string;
+    playerId: string;
+    playerName: string;
+    team: string;
+    inning: number;
+    half: "top" | "bottom";
+    hitLabel: string;
+  }): Promise<void> {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const existing = await db.select().from(hrRadarAlerts)
+        .where(and(
+          eq(hrRadarAlerts.sessionDate, today),
+          eq(hrRadarAlerts.gameId, data.gameId),
+          eq(hrRadarAlerts.playerId, data.playerId),
+        ))
+        .limit(1);
+
+      if (existing.length > 0) {
+        if (existing[0].status === "live") {
+          const hitHalf = data.half === "top" ? "T" : "B";
+          await db.update(hrRadarAlerts)
+            .set({
+              status: "hit",
+              hitInning: data.inning,
+              hitHalf: hitHalf,
+              hitLabel: data.hitLabel,
+              resolvedAt: new Date(),
+            })
+            .where(eq(hrRadarAlerts.id, existing[0].id));
+          console.log(`[HR_RADAR_ENSURE_HIT] Updated existing live→hit playerId=${data.playerId} gameId=${data.gameId}`);
+        }
+        return;
+      }
+
+      const halfLabel = data.half === "top" ? "T" : "B";
+      const detectedLabel = `${halfLabel}${data.inning}`;
+      const alertId = `${today}_${data.gameId}_${data.playerId}`;
+      await db.insert(hrRadarAlerts).values({
+        id: alertId,
+        sessionDate: today,
+        gameId: data.gameId,
+        playerId: data.playerId,
+        playerName: data.playerName,
+        team: data.team,
+        opponent: null,
+        detectedAt: new Date(),
+        detectedInning: data.inning,
+        detectedHalf: data.half,
+        detectedLabel,
+        initialReadinessScore: "0",
+        currentReadinessScore: "0",
+        peakReadinessScore: "0",
+        scoreIncreased: false,
+        confidenceTier: "monitor",
+        signalState: "live",
+        triggerTags: ["auto_graded"],
+        summaryText: `HR confirmed ${data.hitLabel}`,
+        status: "hit",
+        hitInning: data.inning,
+        hitHalf: halfLabel,
+        hitLabel: data.hitLabel,
+        resolvedAt: new Date(),
+        analyticsPersisted: false,
+      });
+      console.log(`[HR_RADAR_ENSURE_HIT] Created new hit row playerId=${data.playerId} player=${data.playerName} gameId=${data.gameId} hitLabel=${data.hitLabel}`);
+    } catch (err: any) {
+      if (err.message?.includes("duplicate key")) return;
+      console.warn(`[HR_RADAR_ENSURE_HIT] Failed: ${err.message}`);
+    }
+  }
+
   async resolveHrRadarAlertAsMiss(playerId: string, gameId: string): Promise<number> {
     try {
       const today = new Date().toISOString().slice(0, 10);

@@ -1188,6 +1188,51 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
     const card = mapAlertToUi(a);
     radarState.set(radarKey(card.playerId, card.gameId), { ...card, status: "CASHED" });
   }
+  for (const ch of canonicalHits) {
+    const key = radarKey(ch.playerId, ch.gameId);
+    if (!radarState.has(key)) {
+      radarState.set(key, {
+        playerId: ch.playerId,
+        playerName: ch.playerName,
+        team: ch.team,
+        gameId: ch.gameId,
+        status: "CASHED",
+        signalState: null,
+        decision: null,
+        confidenceScore: ch.peakScore ?? 0,
+        radarScore: ch.peakScore ?? 0,
+        radarTier: "strong",
+        radarTierLabel: "Cashed",
+        radarTierColor: "#10b981",
+        formattedReason: ch.hitLabel ? `HR confirmed ${ch.hitLabel}` : "HR confirmed",
+        detectedInning: null,
+        latestInning: ch.hitInning ?? null,
+        edge: null,
+        enginePct: null,
+        confidenceTier: null,
+        hrBuildScore: null,
+        badges: [],
+        reasons: [],
+        evidenceTags: [],
+        triggerLabel: "",
+        bestBook: null,
+        bestOdds: null,
+        hrBookCount: 0,
+        wasAddedToSlip: false,
+        resolvedAt: ch.resolvedAt ?? null,
+        hitInning: ch.hitInning ?? null,
+        hitHalf: ch.hitHalf ?? null,
+        detectedLabel: ch.detectedLabel ?? null,
+        scoreIncreased: false,
+        scoreIncreaseLabel: null,
+        peakScore: ch.peakScore ?? null,
+        side: "OVER",
+        line: 0.5,
+      } as HrRadarCardUi);
+    } else {
+      radarState.set(key, { ...radarState.get(key)!, status: "CASHED" });
+    }
+  }
   const missedAlertsList = alerts.filter(a => a.outcome === "NO_HR");
   const seenMissed = new Set<string>();
   for (const a of missedAlertsList) {
@@ -1197,7 +1242,49 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
     if (radarState.has(key)) continue;
     const card = mapAlertToUi(a);
     radarState.set(key, { ...card, status: "MISSED" });
-    if (seenMissed.size >= 6) break;
+  }
+  for (const cm of canonicalMisses) {
+    const key = radarKey(cm.playerId, cm.gameId);
+    if (!radarState.has(key)) {
+      radarState.set(key, {
+        playerId: cm.playerId,
+        playerName: cm.playerName,
+        team: cm.team,
+        gameId: cm.gameId,
+        status: "MISSED",
+        signalState: null,
+        decision: null,
+        confidenceScore: cm.peakScore ?? 0,
+        radarScore: cm.peakScore ?? 0,
+        radarTier: "monitor",
+        radarTierLabel: "Missed",
+        radarTierColor: "#ef4444",
+        formattedReason: cm.detectedLabel ? `Tracked from ${cm.detectedLabel}` : "No HR",
+        detectedInning: null,
+        latestInning: null,
+        edge: null,
+        enginePct: null,
+        confidenceTier: null,
+        hrBuildScore: null,
+        badges: [],
+        reasons: [],
+        evidenceTags: [],
+        triggerLabel: "",
+        bestBook: null,
+        bestOdds: null,
+        hrBookCount: 0,
+        wasAddedToSlip: false,
+        resolvedAt: cm.resolvedAt ?? null,
+        hitInning: null,
+        hitHalf: null,
+        detectedLabel: cm.detectedLabel ?? null,
+        scoreIncreased: false,
+        scoreIncreaseLabel: null,
+        peakScore: cm.peakScore ?? null,
+        side: "OVER",
+        line: 0.5,
+      } as HrRadarCardUi);
+    }
   }
 
   const gameStatusMap = new Map((games ?? []).map(g => [g.gameId, g.status]));

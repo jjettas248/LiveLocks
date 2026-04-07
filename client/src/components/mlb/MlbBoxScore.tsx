@@ -302,7 +302,7 @@ export function MlbBoxScore({
             <span className="flex items-center gap-1"><span className="text-orange-400 font-bold">95+</span> Hard EV</span>
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" style={{ WebkitOverflowScrolling: "touch" }}>
             <table className="w-full text-[10px]">
               <thead>
                 <tr className="text-muted-foreground border-b border-border/20">

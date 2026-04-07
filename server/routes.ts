@@ -1841,16 +1841,38 @@ export async function registerRoutes(
       hrWatchlist.sort((a, b) => (b.hrProbability ?? 0) - (a.hrProbability ?? 0));
 
       const bettable = hrEdges.filter((s: any) => !s.alreadyHit);
-      const cashedToday = hrEdges.filter((s: any) => s.alreadyHit);
-      const cleanWatchlist = hrWatchlist.filter((w: any) => !cashedToday.some((c: any) => c.playerId === w.playerId));
-
-      const dedupBettable = Array.from(new Map(bettable.map((b: any) => [b.playerId, b])).values());
-      const dedupWatchlist = Array.from(new Map(cleanWatchlist.map((w: any) => [w.playerId, w])).values());
-      const dedupCashed = Array.from(new Map(cashedToday.map((c: any) => [c.playerId, c])).values());
+      const cashedFromEdge = hrEdges.filter((s: any) => s.alreadyHit);
+      const cleanWatchlist = hrWatchlist.filter((w: any) => !cashedFromEdge.some((c: any) => c.playerId === w.playerId));
 
       const canonical = await storage.getCanonicalHrRadarOutcomes();
 
-      console.log(`[MLB_HR_RADAR] bettable=${dedupBettable.length} cashed=${dedupCashed.length} watchlist=${dedupWatchlist.length} canonicalHits=${canonical.hits.length} canonicalMisses=${canonical.misses.length}`);
+      const cashedPlayerIds = new Set(cashedFromEdge.map((c: any) => c.playerId));
+      const cashedFromDb = canonical.hits
+        .filter(h => !cashedPlayerIds.has(h.playerId))
+        .map(h => ({
+          playerId: h.playerId,
+          playerName: h.playerName,
+          team: h.team,
+          market: "home_runs",
+          side: "OVER",
+          gameId: h.gameId,
+          signalScore: 0,
+          alreadyHit: true,
+          watchlist: false,
+          actionable: false,
+          hitLabel: h.hitLabel,
+          hitInning: h.hitInning,
+          detectedLabel: h.detectedLabel,
+          detectedScore: h.detectedScore,
+          peakScore: h.peakScore,
+        }));
+      const allCashed = [...cashedFromEdge, ...cashedFromDb];
+
+      const dedupBettable = Array.from(new Map(bettable.map((b: any) => [b.playerId, b])).values());
+      const dedupWatchlist = Array.from(new Map(cleanWatchlist.map((w: any) => [w.playerId, w])).values());
+      const dedupCashed = Array.from(new Map(allCashed.map((c: any) => [c.playerId, c])).values());
+
+      console.log(`[MLB_HR_RADAR] bettable=${dedupBettable.length} cashed=${dedupCashed.length} (edge=${cashedFromEdge.length},db=${cashedFromDb.length}) watchlist=${dedupWatchlist.length} canonicalHits=${canonical.hits.length} canonicalMisses=${canonical.misses.length}`);
 
       return res.json({
         bettableHR: dedupBettable,
