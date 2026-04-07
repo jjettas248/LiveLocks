@@ -1,4 +1,4 @@
-export type MlbQuickViewColorTier = "neutral" | "blue" | "yellow" | "green";
+export type MlbQuickViewColorTier = "neutral" | "blue" | "yellow" | "green" | "red";
 
 export type MlbGameChipViewModel = {
   gameId: string;
@@ -103,14 +103,18 @@ export function deriveMlbQuickViewColorTier(signals: SignalLike[], playerId: str
 
   let bestPct = 0;
   let bestTier: string | undefined;
+  let bestSide: string | undefined;
   for (const s of pool) {
     const pct = s.enginePct ?? 0;
     if (pct > bestPct) {
       bestPct = pct;
       bestTier = s.confidenceTier;
+      bestSide = s.recommendedSide;
     }
   }
 
+  const isUnder = bestSide === "UNDER" || bestSide === "under";
+  if (bestPct >= 85 && isUnder) return "red";
   if (bestTier === "ELITE" || bestPct >= 75) return "green";
   if (bestTier === "STRONG" || bestPct >= 65) return "yellow";
   if (bestTier === "SOLID" || bestTier === "VALUE" || bestPct >= 55) return "blue";
@@ -147,9 +151,10 @@ export function deriveBestPlay(signals: SignalLike[], playerId: string): BestPla
 }
 
 export const COLOR_TIER_STYLES: Record<MlbQuickViewColorTier, { border: string; bg: string; dot: string }> = {
-  green: { border: "#22c55e", bg: "rgba(34,197,94,0.08)", dot: "#22c55e" },
-  yellow: { border: "#eab308", bg: "rgba(234,179,8,0.08)", dot: "#eab308" },
-  blue: { border: "#3b82f6", bg: "rgba(59,130,246,0.08)", dot: "#3b82f6" },
+  green: { border: "#22c55e", bg: "rgba(34,197,94,0.12)", dot: "#22c55e" },
+  red: { border: "#ef4444", bg: "rgba(239,68,68,0.12)", dot: "#ef4444" },
+  yellow: { border: "#eab308", bg: "rgba(234,179,8,0.12)", dot: "#eab308" },
+  blue: { border: "#3b82f6", bg: "rgba(59,130,246,0.12)", dot: "#3b82f6" },
   neutral: { border: "transparent", bg: "transparent", dot: "transparent" },
 };
 

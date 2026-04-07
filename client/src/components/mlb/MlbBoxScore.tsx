@@ -297,9 +297,10 @@ export function MlbBoxScore({
         <>
           <div className="px-3 pt-2 pb-1 flex items-center gap-3 text-[9px] text-muted-foreground/70 border-b border-border/20 flex-wrap">
             <span className="font-semibold uppercase tracking-wider">Signal Key:</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: "#22c55e" }} /> Strong (75%+)</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: "#eab308" }} /> Building (65%+)</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: "#3b82f6" }} /> Monitor (55%+)</span>
+            <span className="flex items-center gap-1"><span style={{ color: "#22c55e" }}>●</span> Over ≥75%</span>
+            <span className="flex items-center gap-1"><span style={{ color: "#ef4444" }}>●</span> Under ≥85%</span>
+            <span className="flex items-center gap-1"><span style={{ color: "#eab308" }}>●</span> 65–74%</span>
+            <span className="flex items-center gap-1"><span style={{ color: "#3b82f6" }}>●</span> Monitor</span>
             <span className="flex items-center gap-1"><span className="text-orange-400 font-bold">95+</span> Hard EV</span>
           </div>
 
@@ -354,9 +355,10 @@ export function MlbBoxScore({
                     const cycleIdx = rotationIndex % allPlays.length;
                     const current = allPlays[cycleIdx];
                     const pct = current.probability;
-                    const playTier = pct >= 75 ? "green" as const : pct >= 65 ? "yellow" as const : "blue" as const;
+                    const isUnder = current.side === "UNDER" || current.side === "under";
+                    const playTier = (pct >= 85 && isUnder) ? "red" as const : pct >= 75 ? "green" as const : pct >= 65 ? "yellow" as const : "blue" as const;
                     const playStyle = COLOR_TIER_STYLES[playTier];
-                    const sideLabel = current.side === "UNDER" || current.side === "under" ? "U" : "O";
+                    const sideLabel = isUnder ? "U" : "O";
 
                     signalBadge = (
                       <span className="flex items-center gap-1">
@@ -368,10 +370,10 @@ export function MlbBoxScore({
                             background: playStyle.bg,
                             color: playStyle.dot,
                             border: `1px solid ${playStyle.border}`,
-                            fontSize: "10px",
+                            fontSize: "12px",
                             fontWeight: 700,
-                            padding: "2px 5px",
-                            borderRadius: "4px",
+                            padding: "3px 7px",
+                            borderRadius: "5px",
                           }}
                         >
                           {sideLabel} {SHORT_MARKET_LABELS[current.market] ?? current.market} {pct.toFixed(0)}%
@@ -379,7 +381,7 @@ export function MlbBoxScore({
                         {allPlays.length > 1 && (
                           <span
                             className="text-muted-foreground select-none"
-                            style={{ fontSize: "8px", opacity: 0.7 }}
+                            style={{ fontSize: "9px", opacity: 0.6 }}
                             title={allPlays.map(p => `${SHORT_MARKET_LABELS[p.market] ?? p.market}`).join(", ")}
                             data-testid={`signal-count-${player.playerId}`}
                           >
@@ -401,7 +403,7 @@ export function MlbBoxScore({
                       className={`border-b border-border/10 transition-colors ${
                         onPlayerClick ? "cursor-pointer hover:bg-primary/5 active:bg-primary/10" : ""
                       }`}
-                      style={tierStyle ? { borderLeft: `3px solid ${tierStyle.border}`, background: tierStyle.bg } : undefined}
+                      style={tierStyle ? { background: tierStyle.bg, boxShadow: `inset 4px 0 0 ${tierStyle.border}` } : undefined}
                       role={onPlayerClick ? "button" : undefined}
                       tabIndex={onPlayerClick ? 0 : undefined}
                       onKeyDown={onPlayerClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPlayerClick(player); } } : undefined}
