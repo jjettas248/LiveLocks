@@ -504,12 +504,40 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     };
   }
 
+  const powerIndicators = factors.barrels + factors.hardHits + factors.deepFlyouts;
   if (
     totalHrShaped === 0 &&
-    (factors.barrels >= 1 || factors.hardHits >= 1 || factors.deepFlyouts >= 1) &&
+    powerIndicators >= 2 &&
+    hrBuildScore >= 3.0 &&
+    (remainingPA === null || remainingPA >= 1.0)
+  ) {
+    positiveFactors.push(`${powerIndicators} power indicators (${factors.barrels}B/${factors.hardHits}HH/${factors.deepFlyouts}DF)`);
+    positiveFactors.push(`score=${hrBuildScore}`);
+    if (convProb !== null) positiveFactors.push(`conversion: ${convPct}`);
+    if (pitcherFavorable) positiveFactors.push(`pitcher: ${pitcherFatigueState}`);
+    if (envFavorable) positiveFactors.push(`env: ${environmentContext}`);
+
+    console.log(`[HR_ALERT_POWER_WATCH] ${input.playerName} game=${input.gameId} — power indicators (barrels=${factors.barrels} hardHits=${factors.hardHits} deepFly=${factors.deepFlyouts}) score=${hrBuildScore} conv=${convPct}. Promoting to WATCH.`);
+
+    return {
+      level: "WATCH",
+      triggerReason: `watch:power${powerIndicators}_score${hrBuildScore}`,
+      signalState: "FORMATION",
+      decision: "MONITOR",
+      confidenceScore: computeConfidence(hrBuildScore, factors, null, softVetoes.length, convProb),
+      formattedReason: `HR-shaped contact detected. Monitoring for escalation — need repeat confirmation or stronger context.`,
+      detectedInning: inning,
+      alertTier: "watch",
+      diagnostics: { ...baseDiagnostics, alertPath: "WATCH_POWER", positiveFactors },
+    };
+  }
+
+  if (
+    totalHrShaped === 0 &&
+    powerIndicators >= 1 &&
     hrBuildScore >= 2.5
   ) {
-    console.log(`[HR_ALERT_BLOCKED] ${input.playerName} game=${input.gameId} — power indicators (barrels=${factors.barrels} hardHits=${factors.hardHits} deepFly=${factors.deepFlyouts}) but no HR-shaped contact. Score=${hrBuildScore} conv=${convPct}. NOT alerting.`);
+    console.log(`[HR_ALERT_BLOCKED] ${input.playerName} game=${input.gameId} — power indicators (barrels=${factors.barrels} hardHits=${factors.hardHits} deepFly=${factors.deepFlyouts}) but insufficient for watch. Score=${hrBuildScore} conv=${convPct}.`);
   }
 
   return nullResult;
