@@ -1037,11 +1037,14 @@ export async function registerRoutes(
         // Inning from cached game state (orchestrator-maintained) — fallback to ESPN status detail
         const cachedState = mlbGameCache.gameState[gameId];
         const statusDetail: string = competition.status?.type?.shortDetail ?? "";
-        const inningFromEspn = (() => {
-          const m = statusDetail.match(/(\d+)/);
-          return m ? parseInt(m[1]) : 0;
-        })();
-        const isTopInningFromEspn = /^T/i.test(statusDetail) || competition.status?.type?.shortDetail?.includes("Top");
+        const espnPeriod: number = typeof competition.status?.period === "number"
+          ? competition.status.period
+          : parseInt(competition.status?.period ?? "0", 10) || 0;
+        const inningFromEspn = espnPeriod > 0
+          ? espnPeriod
+          : (() => { const m = statusDetail.match(/(\d+)/); return m ? parseInt(m[1]) : 0; })();
+        const isTopInningFromEspn = /Bot|Bottom/i.test(statusDetail) ? false
+          : /^T|Top|Mid/i.test(statusDetail);
 
         // Weather from cached weather data (orchestrator-maintained)
         const cachedWeather = mlbGameCache.weather[gameId];
@@ -1093,6 +1096,9 @@ export async function registerRoutes(
         const activePitcherCtx = activePitcherId && pitcherCtx?.byPitcherId?.[activePitcherId]
           ? pitcherCtx.byPitcherId[activePitcherId] : null;
 
+        if (canonicalState === "live" && (!cachedState?.inning || cachedState.inning < 1)) {
+          console.log(`[MLB INNING_WARN] game=${gameId} ${awayAbbrVal}@${homeAbbrVal} cachedInning=${cachedState?.inning ?? "none"} espnPeriod=${espnPeriod} espnInning=${inningFromEspn} detail="${statusDetail}"`);
+        }
         games.push({
           gameId,
           awayTeam: awayTeamName,

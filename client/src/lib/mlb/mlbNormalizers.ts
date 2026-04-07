@@ -114,6 +114,7 @@ export function deriveMlbQuickViewColorTier(signals: SignalLike[], playerId: str
   if (bestTier === "ELITE" || bestPct >= 75) return "green";
   if (bestTier === "STRONG" || bestPct >= 65) return "yellow";
   if (bestTier === "SOLID" || bestTier === "VALUE" || bestPct >= 55) return "blue";
+  if (bestTier === "WATCHLIST" && bestPct > 0) return "blue";
   return "neutral";
 }
 

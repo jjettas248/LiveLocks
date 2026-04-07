@@ -261,8 +261,9 @@ export async function syncGameState(statsPk: string, cacheKey?: string): Promise
     const boxTeams = liveData.boxscore?.teams ?? {};
 
     // Inning / top-bottom
-    const inning: number = safeNum(linescore.currentInning) ?? 1;
-    const isTopInning: boolean = linescore.isTopInning ?? true;
+    const prevState = mlbGameCache.gameState[gameId];
+    const inning: number = safeNum(linescore.currentInning) ?? prevState?.inning ?? 1;
+    const isTopInning: boolean = linescore.isTopInning ?? prevState?.isTopInning ?? true;
     const outs: number = safeNum(linescore.outs) ?? 0;
 
     // Scores
