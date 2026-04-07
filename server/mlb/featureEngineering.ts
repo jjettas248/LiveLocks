@@ -77,6 +77,16 @@ export function computeLiveContactQualityScore(
     score += hardHitFraction * 0.10;
   }
 
+  if (metrics.learnedHitLikelihood != null && metrics.learnedHitLikelihood > 0.2) {
+    score += (metrics.learnedHitLikelihood - 0.2) * 0.10;
+  }
+  if (metrics.learnedHrLikelihood != null && metrics.learnedHrLikelihood > 0.5) {
+    score += (metrics.learnedHrLikelihood - 0.5) * 0.15;
+  }
+  if (metrics.pitchTypeHrRisk != null && metrics.pitchTypeHrRisk > 0.2) {
+    score += (metrics.pitchTypeHrRisk - 0.2) * 0.08;
+  }
+
   return score;
 }
 

@@ -5957,6 +5957,25 @@ export function registerTestAlertRoute(app: Express): void {
 
 // Calibration routes (admin only)
 export function registerCalibrationRoutes(app: Express): void {
+  app.get("/api/mlb/self-learning-status", requireAdmin, async (req, res) => {
+    try {
+      const { getAllCalibrationData, getLearnedContactProfile, getLearnedPitchVulnerability } = await import("./mlb/selfLearning");
+      const calData = getAllCalibrationData();
+      const contactProfile = getLearnedContactProfile();
+      const pitchVuln = getLearnedPitchVulnerability();
+      return res.json({
+        lastRefresh: calData.lastRefresh,
+        sampleCounts: calData.sampleCounts,
+        marketCalibrations: calData.marketCalibrations,
+        contactProfile,
+        pitchVulnerability: pitchVuln,
+      });
+    } catch (e) {
+      console.error("[self-learning-status]", (e as Error).message);
+      return res.status(500).json({ error: "Failed to get self-learning status" });
+    }
+  });
+
   app.get("/api/persisted-plays/calibration", requireAdmin, async (req, res) => {
     try {
       const { sport, market, startDate, endDate } = req.query as Record<string, string>;

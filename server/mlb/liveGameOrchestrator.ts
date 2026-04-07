@@ -30,6 +30,7 @@ import {
 import { estimateRemainingPA, estimatePitcherRemainingBF } from "./paEstimator";
 import { getMarketParkFactor, isVenueIndoors } from "./dataSources";
 import { calculateMLBPropEdge, hasRealOdds, canShowSignal, updateSelfLearningCalibration } from "./markets";
+import { refreshFullSelfLearning, getLearnedRateAdjustment, getLearnedContactProfile, getContactQualityScore, getPitchTypeHrRisk, getAllCalibrationData } from "./selfLearning";
 import { recordMLBDiagnostic } from "./diagnostics";
 import type { MLBPropInput, MLBPropOutput, MLBMarket, MLBQualifiedSignal } from "./types";
 import { MARKET_QUALIFY_FLOOR, ALL_MLB_MARKETS } from "./types";
@@ -60,40 +61,16 @@ let ohBallparkFactors: Map<string, number> = new Map();
 let ohLastRefresh = 0;
 const OH_REFRESH_MS = 30 * 60_000;
 
-let calibrationLastRefresh = 0;
-const CALIBRATION_REFRESH_MS = 30 * 60_000;
-
 async function refreshSelfLearningCalibration(): Promise<void> {
-  if (Date.now() - calibrationLastRefresh < CALIBRATION_REFRESH_MS) return;
   try {
-    const analytics = await storage.getHrRadarAnalytics({ limit: 500 });
-    if (analytics.length < 10) {
-      console.log(`[MLB SELF_LEARN] Skipping calibration — only ${analytics.length} records`);
-      calibrationLastRefresh = Date.now();
-      return;
-    }
+    await refreshFullSelfLearning();
 
-    const tierWeights: Record<string, number> = { "PATH_A": 0.35, "PATH_B": 0.25, "PATH_C": 0.15, "HIGH": 0.30, "MEDIUM": 0.20, "LOW": 0.10 };
-    const marketBuckets: Record<string, { total: number; hit: number; weightedExpected: number }> = {};
-    for (const rec of analytics) {
-      const market = "home_runs";
-      if (!marketBuckets[market]) marketBuckets[market] = { total: 0, hit: 0, weightedExpected: 0 };
-      marketBuckets[market].total++;
-      if (rec.result === "hit") marketBuckets[market].hit++;
-      const tier = String(rec.confidenceTier ?? "LOW").toUpperCase();
-      const weight = tierWeights[tier] ?? 0.15;
-      marketBuckets[market].weightedExpected += weight;
+    const calData = getAllCalibrationData();
+    for (const [market, cal] of Object.entries(calData.marketCalibrations)) {
+      updateSelfLearningCalibration(market, cal.actualRate, cal.engineExpectedRate, cal.sampleSize);
     }
-
-    for (const [market, bucket] of Object.entries(marketBuckets)) {
-      if (bucket.total < 20) continue;
-      const hitRate = bucket.hit / bucket.total;
-      const expectedRate = bucket.weightedExpected / bucket.total;
-      updateSelfLearningCalibration(market, hitRate, expectedRate, bucket.total);
-    }
-    calibrationLastRefresh = Date.now();
   } catch (e: any) {
-    console.warn(`[MLB SELF_LEARN] Calibration refresh failed: ${e.message}`);
+    console.warn(`[MLB SELF_LEARN] Calibration chain failed: ${e.message}`);
   }
 }
 
@@ -409,10 +386,10 @@ export class LiveGameOrchestrator {
     this.timers.push(
       setInterval(() => {
         refreshSelfLearningCalibration().catch(console.error);
-      }, CALIBRATION_REFRESH_MS)
+      }, 30 * 60_000)
     );
 
-    console.log(`[MLB orchestrator] Started — discovery ${GAME_DISCOVERY_MS / 1000}s, state/contact/pitcher ${GAME_STATE_MS / 1000}s, weather ${WEATHER_MS / 1000}s, OnlyHomers=hourly, calibration=${CALIBRATION_REFRESH_MS / 60_000}min`);
+    console.log(`[MLB orchestrator] Started — discovery ${GAME_DISCOVERY_MS / 1000}s, state/contact/pitcher ${GAME_STATE_MS / 1000}s, weather ${WEATHER_MS / 1000}s, OnlyHomers=hourly, calibration=30min`);
   }
 
   stop(): void {
@@ -1332,7 +1309,11 @@ export class LiveGameOrchestrator {
 
         const batterSeasonAvg = rollingStats?.seasonAvg ?? 0.250;
         const rollingAvg = rollingStats?.last15?.avg;
-        const effectiveSeasonAvg = rollingAvg != null ? rollingAvg : batterSeasonAvg;
+        const rawSeasonAvg = rollingAvg != null ? rollingAvg : batterSeasonAvg;
+        const rateAdj = getLearnedRateAdjustment(market);
+        const effectiveSeasonAvg = rateAdj !== 1.0
+          ? Math.max(0.01, rawSeasonAvg * rateAdj)
+          : rawSeasonAvg;
         let currentStatForMarket = 0;
         if (boxScorePlayer) {
           switch (market) {
@@ -1403,18 +1384,29 @@ export class LiveGameOrchestrator {
           currentGameHR,
           hardHitCount,
           batterHand: rosterLookup?.bats ?? null,
-          contactQuality: {
-            exitVelocity: playerContact?.exitVelocity ?? null,
-            launchAngle: playerContact?.launchAngle ?? null,
-            hitDistance: playerContact?.hitDistance ?? null,
-            hardHitRateSeason: playerContact?.hardHitPct != null ? playerContact.hardHitPct / 100 : null,
-            barrelRateProxySeason: playerContact?.barrelPct != null ? playerContact.barrelPct / 100 : null,
-            avgBatSpeed: playerContact?.avgBatSpeed ?? null,
-            avgSwingLength: playerContact?.avgSwingLength ?? null,
-            priorABResults: (playerContact?.priorABResults ?? []) as MLBPropInput["contactQuality"]["priorABResults"],
-            xBA: playerContact?.xBA ?? null,
-            xSLG: playerContact?.xSLG ?? null,
-          },
+          contactQuality: (() => {
+            const ev = playerContact?.exitVelocity ?? null;
+            const la = playerContact?.launchAngle ?? null;
+            const dist = playerContact?.hitDistance ?? null;
+            const learnedScores = ev != null ? getContactQualityScore(ev, la, dist) : null;
+            const latestPitchType = (playerContact?.priorABResults ?? []).slice(-1)[0]?.pitchType ?? null;
+            const pitchHrRisk = latestPitchType ? getPitchTypeHrRisk(latestPitchType) : null;
+            return {
+              exitVelocity: ev,
+              launchAngle: la,
+              hitDistance: dist,
+              hardHitRateSeason: playerContact?.hardHitPct != null ? playerContact.hardHitPct / 100 : null,
+              barrelRateProxySeason: playerContact?.barrelPct != null ? playerContact.barrelPct / 100 : null,
+              avgBatSpeed: playerContact?.avgBatSpeed ?? null,
+              avgSwingLength: playerContact?.avgSwingLength ?? null,
+              priorABResults: (playerContact?.priorABResults ?? []) as MLBPropInput["contactQuality"]["priorABResults"],
+              xBA: playerContact?.xBA ?? null,
+              xSLG: playerContact?.xSLG ?? null,
+              learnedHitLikelihood: learnedScores?.hitLikelihood ?? null,
+              learnedHrLikelihood: learnedScores?.hrLikelihood ?? null,
+              pitchTypeHrRisk: pitchHrRisk,
+            };
+          })(),
           pitcher: {
             pitchCount: pitcher ? state.pitchCount : 0,
             timesThrough: pitcherCtx?.timesThroughOrder ?? 1,

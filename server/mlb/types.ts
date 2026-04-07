@@ -176,6 +176,9 @@ export interface ContactQualityMetrics {
   priorABResults: ABResult[];
   xBA: number | null;
   xSLG: number | null;
+  learnedHitLikelihood?: number | null;
+  learnedHrLikelihood?: number | null;
+  pitchTypeHrRisk?: number | null;
 }
 
 export interface ABResult {
