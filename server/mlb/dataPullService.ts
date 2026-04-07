@@ -548,18 +548,50 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
       }
     }
 
+    const existing = mlbGameCache.contactData[gameId]?.byPlayerId ?? {};
+
+    for (const [pid, freshEntry] of Object.entries(byPlayerId)) {
+      const prev = existing[pid];
+      if (prev) {
+        if (freshEntry.xBA === null && prev.xBA != null) freshEntry.xBA = prev.xBA;
+        if (freshEntry.xSLG === null && prev.xSLG != null) freshEntry.xSLG = prev.xSLG;
+        if (freshEntry.exitVelocity === null && prev.exitVelocity != null) freshEntry.exitVelocity = prev.exitVelocity;
+        if (freshEntry.hardHitPct === null && prev.hardHitPct != null) freshEntry.hardHitPct = prev.hardHitPct;
+        if (freshEntry.barrelPct === null && prev.barrelPct != null) freshEntry.barrelPct = prev.barrelPct;
+        if (freshEntry.avgBatSpeed === null && prev.avgBatSpeed != null) freshEntry.avgBatSpeed = prev.avgBatSpeed;
+        if (freshEntry.avgSwingLength === null && prev.avgSwingLength != null) freshEntry.avgSwingLength = prev.avgSwingLength;
+      }
+    }
+
+    for (const [pid, prev] of Object.entries(existing)) {
+      if (!byPlayerId[pid]) {
+        byPlayerId[pid] = prev;
+      }
+    }
+
     const playerIds = Object.keys(byPlayerId);
-    if (playerIds.length > 0) {
+    const needsSavant = playerIds.filter((pid) => {
+      const e = byPlayerId[pid];
+      if (!e) return false;
+      return (e.xBA === null && e.xSLG === null) ||
+             (e.avgBatSpeed === null && e.barrelPct === null && e.hardHitPct === null);
+    });
+    if (needsSavant.length > 0) {
       const savantResults = await Promise.allSettled(
-        playerIds.map((pid) => fetchBaseballSavantData(pid, gameId))
+        needsSavant.map((pid) => fetchBaseballSavantData(pid, gameId))
       );
-      for (let i = 0; i < playerIds.length; i++) {
+      for (let i = 0; i < needsSavant.length; i++) {
         const result = savantResults[i];
         if (result.status === "fulfilled" && result.value) {
-          const entry = byPlayerId[playerIds[i]];
+          const entry = byPlayerId[needsSavant[i]];
           if (entry) {
             if (entry.xBA === null && result.value.xBA != null) entry.xBA = result.value.xBA;
             if (entry.xSLG === null && result.value.xSLG != null) entry.xSLG = result.value.xSLG;
+            if (entry.exitVelocity === null && result.value.exitVelocity != null) entry.exitVelocity = result.value.exitVelocity;
+            if (entry.hardHitPct === null && result.value.hardHitRateSeason != null) entry.hardHitPct = result.value.hardHitRateSeason;
+            if (entry.barrelPct === null && result.value.barrelRateProxySeason != null) entry.barrelPct = result.value.barrelRateProxySeason;
+            if (entry.avgBatSpeed === null && result.value.avgBatSpeed != null) entry.avgBatSpeed = result.value.avgBatSpeed;
+            if (entry.avgSwingLength === null && result.value.avgSwingLength != null) entry.avgSwingLength = result.value.avgSwingLength;
           }
         }
       }

@@ -33,7 +33,7 @@ export interface BaseballSavantData {
 // Cache for Savant data (updated infrequently — season stats)
 const savantCache = new Map<string, { data: BaseballSavantData; fetchedAt: number }>();
 let savantColumnsLogged = false;
-const SAVANT_TTL = 30 * 60 * 1000; // 30 min
+const SAVANT_TTL = 4 * 60 * 60 * 1000; // 4 hours — season-level stats change slowly
 
 function safeNum(v: unknown): number | null {
   if (v == null) return null;
@@ -404,6 +404,12 @@ export async function fetchBaseballSavantData(
     return result;
   } catch (err: any) {
     console.warn(`[Savant] fetchBaseballSavantData(${mlbPlayerId}) error:`, err.message);
+
+    const stale = savantCache.get(cacheKey);
+    if (stale && stale.data && (stale.data.xBA != null || stale.data.xSLG != null)) {
+      console.log(`[Savant] Using stale cache for ${mlbPlayerId} (age=${Math.round((Date.now() - stale.fetchedAt) / 60000)}min)`);
+      return stale.data;
+    }
 
     const fallbackResult = { ...nullResult };
     try {

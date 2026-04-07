@@ -1602,7 +1602,7 @@ export class LiveGameOrchestrator {
           const lastABContact = lastAB || playerContact ? {
             exitVelo: lastAB?.exitVelocity ?? playerContact?.exitVelocity ?? null,
             launchAngle: lastAB?.launchAngle ?? playerContact?.launchAngle ?? null,
-            batSpeed: null,
+            batSpeed: playerContact?.avgBatSpeed ?? null,
             distance: lastAB?.distance ?? playerContact?.hitDistance ?? null,
             barrelPct: playerContact?.barrelPct ?? null,
             hardHitPct: playerContact?.hardHitPct ?? null,
