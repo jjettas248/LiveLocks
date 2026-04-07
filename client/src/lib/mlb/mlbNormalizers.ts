@@ -125,21 +125,23 @@ export type BestPlayInfo = {
 };
 
 export function deriveBestPlay(signals: SignalLike[], playerId: string): BestPlayInfo | null {
-  const playerSignals = signals.filter(s => s.playerId === playerId && !s.alreadyHit && (s.enginePct ?? 0) > 0);
-  if (playerSignals.length === 0) return null;
-
-  const best = playerSignals.reduce((a, b) => ((b.signalScore ?? 0) > (a.signalScore ?? 0) ? b : a));
-  const pct = best.enginePct ?? 0;
-  const tier: "monitor" | "building" | "strong" | null =
-    pct >= 75 ? "strong" : pct >= 65 ? "building" : pct >= 55 ? "monitor" : null;
-
-  return {
-    market: best.market ?? "",
-    side: best.recommendedSide ?? "",
-    probability: pct,
-    confidenceTier: tier,
-    signalScore: best.signalScore ?? 0,
-  };
+  const activeSignals = signals.filter(s => s.playerId === playerId && !s.alreadyHit && (s.enginePct ?? 0) > 0);
+  if (activeSignals.length > 0) {
+    const best = activeSignals.reduce((a, b) => ((b.signalScore ?? 0) > (a.signalScore ?? 0) ? b : a));
+    const pct = best.enginePct ?? 0;
+    const tier: "monitor" | "building" | "strong" | null =
+      pct >= 75 ? "strong" : pct >= 65 ? "building" : pct >= 55 ? "monitor" : null;
+    return { market: best.market ?? "", side: best.recommendedSide ?? "", probability: pct, confidenceTier: tier, signalScore: best.signalScore ?? 0 };
+  }
+  const anySignals = signals.filter(s => s.playerId === playerId && (s.enginePct ?? 0) > 0);
+  if (anySignals.length > 0) {
+    const best = anySignals.reduce((a, b) => ((b.signalScore ?? 0) > (a.signalScore ?? 0) ? b : a));
+    const pct = best.enginePct ?? 0;
+    const tier: "monitor" | "building" | "strong" | null =
+      pct >= 75 ? "strong" : pct >= 65 ? "building" : pct >= 55 ? "monitor" : null;
+    return { market: best.market ?? "", side: best.recommendedSide ?? "", probability: pct, confidenceTier: tier, signalScore: best.signalScore ?? 0 };
+  }
+  return null;
 }
 
 export const COLOR_TIER_STYLES: Record<MlbQuickViewColorTier, { border: string; bg: string; dot: string }> = {
