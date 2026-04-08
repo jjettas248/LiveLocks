@@ -19,6 +19,7 @@ export interface FamilyResult {
 interface SignalForFamily {
   playerId: string;
   market: MLBMarket;
+  side?: string;
   edge?: number;
   evPct?: number;
   signalScore: number;
@@ -70,7 +71,14 @@ export function applyFamilySuppression<T extends SignalForFamily>(
         continue;
       }
 
-      const sorted = [...familyMembers].sort((a, b) => Math.abs(b.edge ?? b.evPct ?? 0) - Math.abs(a.edge ?? a.evPct ?? 0));
+      const sorted = [...familyMembers].sort((a, b) => {
+        const aIsBatterOver = a.side === "OVER" && !["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(a.market);
+        const bIsBatterOver = b.side === "OVER" && !["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(b.market);
+        if (aIsBatterOver || bIsBatterOver) {
+          return (b.signalScore ?? 0) - (a.signalScore ?? 0);
+        }
+        return Math.abs(b.edge ?? b.evPct ?? 0) - Math.abs(a.edge ?? a.evPct ?? 0);
+      });
 
       for (let i = 0; i < sorted.length; i++) {
         const rank = i + 1;

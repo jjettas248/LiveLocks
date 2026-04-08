@@ -1,6 +1,18 @@
 import type { MLBPropInput, MLBPropOutput, MLBMarket } from "./types";
 import { EXPERIMENTAL_MARKETS } from "./types";
 
+export type MarketFamily = "batter_over" | "under" | "hr_radar";
+
+const BATTER_OVER_MARKETS: MLBMarket[] = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
+
+export function getMarketFamily(market: MLBMarket, side: string): MarketFamily | null {
+  if (BATTER_OVER_MARKETS.includes(market) && side === "OVER") return "batter_over";
+  if (side === "UNDER") return "under";
+  const pitcherMarkets: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"];
+  if (pitcherMarkets.includes(market)) return "under";
+  return null;
+}
+
 export type SignalConfidenceTier = "ELITE" | "STRONG" | "SOLID" | "WATCHLIST" | "NO_SIGNAL";
 
 export interface SignalScoreBreakdown {
@@ -220,8 +232,12 @@ function computeFullOpportunityScore(input: MLBPropInput, gameInning: number): n
 export function computeLiveOpportunityScore(
   signalScore: number,
   edge: number,
-  opportunityScore: number
+  opportunityScore: number,
+  family?: MarketFamily
 ): number {
+  if (family === "batter_over") {
+    return (signalScore / 100) * (opportunityScore / 100);
+  }
   const normalizedEdge = clamp(edge / 100, 0, 1);
   return (signalScore / 100) * normalizedEdge * (opportunityScore / 100);
 }
@@ -429,6 +445,223 @@ export function derivePitcherSignals(
   }
 
   return sigs;
+}
+
+function computeLEIComponent(input: MLBPropInput): number {
+  const lei = input.liveInterpretation;
+  if (!lei) return 50;
+  const contactPart = Math.min(100, (lei.contactScore / 0.20) * 100);
+  const nearHrPart = Math.min(100, (lei.nearHrScore / 0.15) * 100);
+  const momentumPart = Math.min(100, (lei.momentumScore / 0.10) * 100);
+  const fatiguePart = Math.min(100, (lei.pitcherFatigueScore / 0.15) * 100);
+  const veloDropPart = Math.min(100, (lei.veloDropScore / 0.10) * 100);
+  return clamp(
+    0.30 * contactPart + 0.20 * nearHrPart + 0.20 * momentumPart + 0.20 * fatiguePart + 0.10 * veloDropPart,
+    0, 100
+  );
+}
+
+function computeParkWeatherComponent(input: MLBPropInput): number {
+  let score = 50;
+  if (input.weatherPark?.parkFactor != null) {
+    const pf = input.weatherPark.parkFactor;
+    if (pf >= 1.15) score += 20;
+    else if (pf >= 1.10) score += 15;
+    else if (pf >= 1.05) score += 8;
+    else if (pf <= 0.90) score -= 15;
+    else if (pf <= 0.95) score -= 8;
+  }
+  if (!input.weatherPark?.isIndoors) {
+    if (input.weatherPark?.windDirection === "out" && (input.weatherPark?.windSpeed ?? 0) >= 8) score += 10;
+    else if (input.weatherPark?.windDirection === "in" && (input.weatherPark?.windSpeed ?? 0) >= 8) score -= 10;
+    const temp = input.weatherPark?.temperature ?? 70;
+    if (temp >= 85) score += 5;
+    else if (temp <= 50) score -= 8;
+  }
+  return clamp(score, 0, 100);
+}
+
+export function scoreBatterOverSignal(
+  input: MLBPropInput,
+  output: MLBPropOutput
+): SignalScoreBreakdown {
+  const form = computeFormComponent(input);
+  const matchup = computeMatchupComponent(input);
+  const parkWeather = computeParkWeatherComponent(input);
+  const lei = computeLEIComponent(input);
+  const opportunity = computeOpportunityComponent(input);
+  const eventBoost = computeEventBoostComponent(input, output);
+  const prob = computeProbabilityComponent(output.calibratedProbability);
+  const proj = computeProjectionComponent(output.projection, output.bookLine, output.market, output.recommendedSide);
+
+  const baseTotal = Math.round(
+    0.15 * form +
+    0.20 * matchup +
+    0.10 * parkWeather +
+    0.25 * lei +
+    0.10 * opportunity +
+    0.10 * eventBoost +
+    0.05 * prob +
+    0.05 * proj
+  );
+
+  const total = clamp(baseTotal, 0, 100);
+
+  let confidenceTier: SignalConfidenceTier;
+  if (total >= 80) confidenceTier = "ELITE";
+  else if (total >= 68) confidenceTier = "STRONG";
+  else if (total >= 55) confidenceTier = "SOLID";
+  else if (total >= 42) confidenceTier = "WATCHLIST";
+  else confidenceTier = "NO_SIGNAL";
+
+  return {
+    probability: Math.round(prob),
+    projection: Math.round(proj),
+    liveContext: Math.round(lei),
+    matchup: Math.round(matchup),
+    form: Math.round(form),
+    opportunity: Math.round(opportunity),
+    marketReliability: Math.round(parkWeather),
+    priceValidation: 50,
+    eventBoost: Math.round(eventBoost),
+    total,
+    confidenceTier,
+  };
+}
+
+export function scoreUnderSignal(
+  input: MLBPropInput,
+  output: MLBPropOutput
+): SignalScoreBreakdown {
+  const prob = computeProbabilityComponent(output.calibratedProbability);
+  const proj = computeProjectionComponent(output.projection, output.bookLine, output.market, output.recommendedSide);
+  const matchup = computeMatchupComponent(input);
+  const live = computeLiveContextComponent(input);
+  const form = computeFormComponent(input);
+  const opportunity = computeOpportunityComponent(input);
+  const price = computePriceValidationComponent(output.edge, output.overOdds, output.underOdds);
+  const eventBoost = computeEventBoostComponent(input, output);
+
+  const pitcherSupp = computeLiveContextComponent(input);
+
+  const baseTotal = Math.round(
+    0.22 * prob +
+    0.18 * proj +
+    0.15 * matchup +
+    0.15 * pitcherSupp +
+    0.12 * live +
+    0.08 * form +
+    0.05 * opportunity +
+    0.05 * price
+  );
+
+  const total = clamp(baseTotal, 0, 100);
+
+  let confidenceTier: SignalConfidenceTier;
+  if (total >= 85) confidenceTier = "ELITE";
+  else if (total >= 70) confidenceTier = "STRONG";
+  else if (total >= 55) confidenceTier = "SOLID";
+  else if (total >= 40) confidenceTier = "WATCHLIST";
+  else confidenceTier = "NO_SIGNAL";
+
+  return {
+    probability: Math.round(prob),
+    projection: Math.round(proj),
+    liveContext: Math.round(live),
+    matchup: Math.round(matchup),
+    form: Math.round(form),
+    opportunity: Math.round(opportunity),
+    marketReliability: 50,
+    priceValidation: Math.round(price),
+    eventBoost: Math.round(eventBoost),
+    total,
+    confidenceTier,
+  };
+}
+
+export function scoreHRRadar(
+  input: MLBPropInput,
+  output: MLBPropOutput
+): SignalScoreBreakdown {
+  const lei = input.liveInterpretation;
+
+  let nearHrScore = 50;
+  if (lei) {
+    nearHrScore = clamp(50 + (lei.nearHrScore / 0.15) * 50, 0, 100);
+  }
+  const priorABs = input.contactQuality.priorABResults ?? [];
+  const hasBarrel = priorABs.some(ab =>
+    (ab.exitVelocity ?? 0) >= 98 && (ab.launchAngle ?? 0) >= 25 && (ab.launchAngle ?? 0) <= 35
+  );
+  const hasHR = priorABs.some(ab => ab.outcome === "home_run" || ab.outcome === "homerun" || ab.outcome === "hr");
+  if (hasBarrel) nearHrScore = clamp(nearHrScore + 25, 0, 100);
+  if (hasHR) nearHrScore = clamp(nearHrScore + 30, 0, 100);
+
+  let contactScore = 50;
+  const ev = input.contactQuality.exitVelocity;
+  if (ev != null) {
+    if (ev >= 105) contactScore = 95;
+    else if (ev >= 100) contactScore = 85;
+    else if (ev >= 95) contactScore = 70;
+    else if (ev >= 90) contactScore = 55;
+    else contactScore = 35;
+  }
+  if (input.contactQuality.barrelRateProxySeason != null && input.contactQuality.barrelRateProxySeason >= 0.10) contactScore = clamp(contactScore + 10, 0, 100);
+  if (input.contactQuality.xSLG != null && input.contactQuality.xSLG >= 0.500) contactScore = clamp(contactScore + 10, 0, 100);
+
+  let pitcherVuln = 50;
+  if (lei) {
+    pitcherVuln = clamp(50 + (lei.pitcherFatigueScore / 0.15) * 30 + (lei.veloDropScore / 0.10) * 20, 0, 100);
+  }
+  if (input.pitcher.era != null && input.pitcher.era >= 5.0) pitcherVuln = clamp(pitcherVuln + 12, 0, 100);
+  else if (input.pitcher.era != null && input.pitcher.era >= 4.0) pitcherVuln = clamp(pitcherVuln + 6, 0, 100);
+  if (input.pitcher.isPitcherCollapsing) pitcherVuln = clamp(pitcherVuln + 15, 0, 100);
+  if (input.pitcher.timesThrough >= 3) pitcherVuln = clamp(pitcherVuln + 10, 0, 100);
+
+  const parkWeather = computeParkWeatherComponent(input);
+  const opportunity = computeOpportunityComponent(input);
+
+  const baseTotal = Math.round(
+    0.30 * nearHrScore +
+    0.25 * contactScore +
+    0.20 * pitcherVuln +
+    0.15 * parkWeather +
+    0.10 * opportunity
+  );
+
+  const total = clamp(baseTotal, 0, 100);
+
+  let confidenceTier: SignalConfidenceTier;
+  if (total >= 80) confidenceTier = "ELITE";
+  else if (total >= 65) confidenceTier = "STRONG";
+  else if (total >= 50) confidenceTier = "SOLID";
+  else if (total >= 35) confidenceTier = "WATCHLIST";
+  else confidenceTier = "NO_SIGNAL";
+
+  return {
+    probability: Math.round(nearHrScore),
+    projection: Math.round(contactScore),
+    liveContext: Math.round(pitcherVuln),
+    matchup: Math.round(pitcherVuln),
+    form: 50,
+    opportunity: Math.round(opportunity),
+    marketReliability: Math.round(parkWeather),
+    priceValidation: 50,
+    eventBoost: Math.round(nearHrScore),
+    total,
+    confidenceTier,
+  };
+}
+
+export function computeSignalScoreByFamily(
+  input: MLBPropInput,
+  output: MLBPropOutput
+): SignalScoreBreakdown {
+  const family = getMarketFamily(output.market, output.recommendedSide);
+
+  if (family === "batter_over") return scoreBatterOverSignal(input, output);
+  if (family === "under") return scoreUnderSignal(input, output);
+  return computeSignalScore(input, output);
 }
 
 export function isPlayerGlowEligible(

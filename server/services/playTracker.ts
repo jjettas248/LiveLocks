@@ -56,6 +56,11 @@ export interface TrackableSignal {
   abNumber?: number | null;
   pitchCount?: number | null;
   contactQualityScore?: number | null;
+  opportunityScore?: number | null;
+  liveScore?: number | null;
+  eventBoost?: number | null;
+  signalMode?: string | null;
+  marketFamily?: string | null;
 }
 
 export async function trackPlay(
@@ -140,6 +145,9 @@ export async function trackPlay(
     abNumber: signal.abNumber ?? undefined,
     pitchCount: signal.pitchCount ?? undefined,
     contactQualityScore: signal.contactQualityScore ?? undefined,
+    opportunityScore: signal.opportunityScore != null ? String(signal.opportunityScore) : undefined,
+    liveScore: signal.liveScore != null ? String(signal.liveScore) : undefined,
+    eventBoost: signal.eventBoost != null ? String(signal.eventBoost) : undefined,
   });
 
   if (!result.isDuplicate) {

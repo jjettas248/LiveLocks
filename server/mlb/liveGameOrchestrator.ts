@@ -37,7 +37,8 @@ import { recordMLBDiagnostic } from "./diagnostics";
 import type { MLBPropInput, MLBPropOutput, MLBMarket, MLBQualifiedSignal } from "./types";
 import { MARKET_QUALIFY_FLOOR, ALL_MLB_MARKETS } from "./types";
 import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
-import { computeSignalScore, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore } from "./signalScore";
+import { computeSignalScore, computeSignalScoreByFamily, scoreHRRadar, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily } from "./signalScore";
+import type { MarketFamily } from "./signalScore";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
 import {
   classifyBatterArchetype,
@@ -841,13 +842,24 @@ export class LiveGameOrchestrator {
       return null;
     }
 
+    const marketFamily = getMarketFamily(output.market, output.recommendedSide);
+    const isBatterOver = marketFamily === "batter_over";
+
     const sideProbability = output.recommendedSide === "OVER"
       ? output.calibratedProbabilityOver
       : output.calibratedProbabilityUnder;
-    const qualifyFloor = MARKET_QUALIFY_FLOOR[output.market] ?? 60;
-    if (sideProbability < qualifyFloor) {
-      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — prob=${sideProbability.toFixed(1)} < ${qualifyFloor} gate`);
-      return null;
+
+    if (isBatterOver) {
+      if (sideProbability < 40) {
+        console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — prob=${sideProbability.toFixed(1)} < 40 absolute floor (batter_over)`);
+        return null;
+      }
+    } else {
+      const qualifyFloor = MARKET_QUALIFY_FLOOR[output.market] ?? 60;
+      if (sideProbability < qualifyFloor) {
+        console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — prob=${sideProbability.toFixed(1)} < ${qualifyFloor} gate`);
+        return null;
+      }
     }
 
     const hydrationOk = canShowSignal({
@@ -871,20 +883,38 @@ export class LiveGameOrchestrator {
       return null;
     }
 
-    if (output.recommendedSide === "OVER" && output.projection < output.bookLine) {
-      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — side inconsistency: OVER but proj=${output.projection} < line=${output.bookLine}`);
-      return null;
+    if (isBatterOver) {
+      const tolerance = ({ hits: 0.08, total_bases: 0.15, home_runs: 0.05, hrr: 0.15, batter_strikeouts: 0.10 } as Record<string, number>)[output.market] ?? 0.10;
+      if (output.recommendedSide === "OVER" && output.projection < output.bookLine - tolerance) {
+        console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — side inconsistency: OVER but proj=${output.projection} < line=${output.bookLine} - ${tolerance} tolerance (batter_over)`);
+        return null;
+      }
+    } else {
+      if (output.recommendedSide === "OVER" && output.projection < output.bookLine) {
+        console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — side inconsistency: OVER but proj=${output.projection} < line=${output.bookLine}`);
+        return null;
+      }
     }
     if (output.recommendedSide === "UNDER" && output.projection > output.bookLine) {
       console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — side inconsistency: UNDER but proj=${output.projection} > line=${output.bookLine}`);
       return null;
     }
 
-    const scoreBreakdown = computeSignalScore(input, output);
+    const scoreBreakdown = computeSignalScoreByFamily(input, output);
 
-    if (scoreBreakdown.total < 55) {
-      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — signalScore=${scoreBreakdown.total} < 55 gate (tier=${scoreBreakdown.confidenceTier})`);
-      return null;
+    let hrRadarResult: ReturnType<typeof scoreHRRadar> | null = null;
+    if (output.market === "home_runs") {
+      hrRadarResult = scoreHRRadar(input, output);
+    }
+
+    const minScore = isBatterOver ? 42 : 50;
+    if (scoreBreakdown.total < minScore) {
+      if (hrRadarResult && hrRadarResult.total >= 35) {
+        console.log(`[MLB QUALIFY HR_WATCH][${gameId}] ${output.playerName}/${output.market} — batterOverScore=${scoreBreakdown.total} < ${minScore} but hrRadarScore=${hrRadarResult.total} ≥ 35, surfacing as HR_WATCH`);
+      } else {
+        console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — signalScore=${scoreBreakdown.total} < ${minScore} gate (tier=${scoreBreakdown.confidenceTier})`);
+        return null;
+      }
     }
 
     const signalTags = deriveSignalTags(input, output, scoreBreakdown);
@@ -892,7 +922,7 @@ export class LiveGameOrchestrator {
     const glowEligible = isPlayerGlowEligible(scoreBreakdown, signalTags);
     const pitcherSigs = derivePitcherSignals(input, output);
     const opportunityScore = computeFullOpportunityScore(input, input.inning);
-    const liveScore = computeLiveOpportunityScore(scoreBreakdown.total, output.edge, opportunityScore);
+    const liveScore = computeLiveOpportunityScore(scoreBreakdown.total, output.edge, opportunityScore, marketFamily ?? undefined);
 
     let adjustedProjection = output.projection;
     const isPitcherMarket = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed"].includes(output.market);
@@ -912,9 +942,31 @@ export class LiveGameOrchestrator {
       }
     }
 
-    console.log(`[LIVE_OPPORTUNITY] player=${output.playerName} market=${output.market} signalScore=${scoreBreakdown.total} edge=${output.edge.toFixed(1)} opportunityScore=${opportunityScore} liveScore=${(liveScore * 100).toFixed(2)} eventBoost=${scoreBreakdown.eventBoost}`);
+    console.log(`[LIVE_OPPORTUNITY] player=${output.playerName} market=${output.market} family=${marketFamily} signalScore=${scoreBreakdown.total} edge=${output.edge.toFixed(1)} opportunityScore=${opportunityScore} liveScore=${(liveScore * 100).toFixed(2)} eventBoost=${scoreBreakdown.eventBoost}`);
 
-    const stateFields = this.computeSignalState(gameId, input, output, scoreBreakdown);
+    const stateFields = this.computeSignalState(gameId, input, output, scoreBreakdown, isBatterOver);
+
+    let signalMode: MLBQualifiedSignal["mode"] = null;
+    if (isBatterOver) {
+      if (scoreBreakdown.total >= 80) signalMode = "elite";
+      else if (scoreBreakdown.total >= 68) signalMode = "strong";
+      else if (scoreBreakdown.total >= 55) signalMode = "lean";
+      else if (scoreBreakdown.total >= 48) signalMode = "heating_up";
+      else if (scoreBreakdown.total >= 42) signalMode = "watch";
+    } else {
+      if (scoreBreakdown.total >= 85) signalMode = "elite";
+      else if (scoreBreakdown.total >= 70) signalMode = "strong";
+      else if (scoreBreakdown.total >= 60) signalMode = "lean";
+      else if (scoreBreakdown.total >= 50) signalMode = "heating_up";
+      else if (scoreBreakdown.total >= 40) signalMode = "watch";
+    }
+
+    if (output.market === "home_runs" && hrRadarResult) {
+      if (hrRadarResult.total >= 80) signalMode = "hr_elite";
+      else if (hrRadarResult.total >= 65) signalMode = "hr_strong";
+      else if (hrRadarResult.total >= 50) signalMode = "hr_heating_up";
+      else if (hrRadarResult.total >= 35) signalMode = "hr_watch";
+    }
 
     const signal: MLBQualifiedSignal = {
       id: `${gameId}_${output.playerId}_${output.market}`,
@@ -958,6 +1010,10 @@ export class LiveGameOrchestrator {
       ...stateFields,
     };
 
+    signal.mode = signalMode;
+    signal.signalStrengthScore = scoreBreakdown.total;
+    signal.marketFamily = marketFamily;
+    signal.hrRadarScore = hrRadarResult?.total ?? undefined;
     signal.pitcherAnalysis = output.pitcherAnalysis ?? null;
     signal.pitcherSignals = pitcherSigs.length > 0 ? pitcherSigs : (output.pitcherSignals ?? null);
     signal.opportunityScore = opportunityScore;
@@ -990,6 +1046,10 @@ export class LiveGameOrchestrator {
       console.log(`[MLB_FALLBACK_USED] player=${output.playerName} market=${output.market} defaultRate=fallback`);
     }
 
+    if (isBatterOver || output.market === "home_runs") {
+      console.log(`[SIGNAL_ENGINE] player=${output.playerName} market=${output.market} family=${marketFamily} mode=${signalMode} sss=${scoreBreakdown.total} edge=${output.edge?.toFixed(1)} prob=${output.calibratedProbability?.toFixed(1)} actionable=${signal.actionable}${hrRadarResult ? ` hrRadar=${hrRadarResult.total}` : ""}`);
+    }
+
     if (process.env.DEBUG_PIPELINE === "true") {
       console.log(`[MLB_SIGNAL_BUILT] gameId=${gameId} player=${output.playerName} market=${output.market} prob=${output.calibratedProbability?.toFixed(1)} edge=${output.edge?.toFixed(1)} actionable=${signal.actionable} fallback=${signal.fallbackUsed}`);
     }
@@ -1001,7 +1061,8 @@ export class LiveGameOrchestrator {
     gameId: string,
     input: MLBPropInput,
     output: MLBPropOutput,
-    scoreBreakdown: { total: number; confidenceTier: string }
+    scoreBreakdown: { total: number; confidenceTier: string },
+    isBatterOver: boolean = false
   ) {
     const gameState = mlbGameCache.gameState[gameId];
     const boxScore = mlbGameCache.gameBoxScore?.[gameId];
@@ -1013,9 +1074,11 @@ export class LiveGameOrchestrator {
 
     const isFallback = output.fallbackUsed === true;
     const isStale = output.engineGeneratedAt > 0 && (Date.now() - output.engineGeneratedAt) > 120_000;
-    const isWatchlist = scoreBreakdown.confidenceTier === "WATCHLIST" || scoreBreakdown.total < 55 || isFallback;
+    const watchlistThreshold = isBatterOver ? 42 : 55;
+    const isWatchlist = scoreBreakdown.confidenceTier === "WATCHLIST" || scoreBreakdown.total < watchlistThreshold || isFallback;
+    const edgeOk = isBatterOver ? true : output.edge > 0;
     const isActionable = !alreadyHit && !isStale && !isWatchlist && !isFallback
-      && output.edge > 0 && (output.overOdds !== null || output.underOdds !== null);
+      && edgeOk && (output.overOdds !== null || output.underOdds !== null);
 
     const pitcher = gameState?.pitcherInGame;
     const pitcherCtxCache = mlbGameCache.pitcherContext?.[gameId];
@@ -2525,7 +2588,9 @@ export class LiveGameOrchestrator {
         if (enriched.familyResult.isFlagship) flagshipCount++;
         if (!enriched.familyResult.isFlagship && enriched.familyResult.familyPenaltyFactor < 1) {
           sig.signalScore = Math.round(sig.signalScore * enriched.familyResult.familyPenaltyFactor);
-          if (sig.signalScore < 55) {
+          const isSigBatterOver = sig.side === "OVER" && !["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(sig.market);
+          const familyWatchThreshold = isSigBatterOver ? 42 : 55;
+          if (sig.signalScore < familyWatchThreshold) {
             sig.confidenceTier = "WATCHLIST";
             sig.watchlist = true;
           }
@@ -2583,7 +2648,8 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
   let skipReasons: Record<string, number> = {};
 
   for (const sig of qualifiedSignals) {
-    if (sig.watchlist || sig.isEarlySignal) { skipped++; skipReasons["watchlist"] = (skipReasons["watchlist"] ?? 0) + 1; continue; }
+    const isBatterOverWatch = sig.marketFamily === "batter_over" && sig.mode === "watch";
+    if ((sig.watchlist && !isBatterOverWatch) || sig.isEarlySignal) { skipped++; skipReasons["watchlist"] = (skipReasons["watchlist"] ?? 0) + 1; continue; }
     const sbk = sig.sportsbook && sig.sportsbook.trim() !== "" ? sig.sportsbook : "odds_api";
     if (!Number.isFinite(sig.line) || sig.line <= 0) { skipped++; skipReasons["bad_line"] = (skipReasons["bad_line"] ?? 0) + 1; continue; }
 
@@ -2613,6 +2679,11 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
       confidenceTier: sig.confidenceTier ?? null,
       inning: sig.inning ?? null,
       abNumber: sig.completedAB ?? null,
+      opportunityScore: sig.opportunityScore ?? null,
+      liveScore: sig.liveScore ?? null,
+      eventBoost: sig.eventBoost ?? null,
+      signalMode: sig.mode ?? null,
+      marketFamily: sig.marketFamily ?? null,
     }, storage).catch(err => console.warn(`[MLB_AUTO_PERSIST] failed: ${err.message}`));
     persisted++;
   }
