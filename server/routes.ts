@@ -2010,6 +2010,8 @@ export async function registerRoutes(
         alert,
         analyze: {
           priorABs,
+          completedAB: boxAB,
+          totalPA,
           currentInning: gameState?.inning ?? null,
           isTopInning: gameState?.isTopInning ?? null,
           hrFactors: rawOutput?.hrFactors ?? null,

@@ -138,31 +138,36 @@ export function processMLBEngine(candidates: MLBEngineCandidate[]): MLBEngineOut
     else reasonsFilteredOut.push(`Candidate ${i}: invalid data (missing line/prob)`);
   }
 
+  const fallbackAcc = { filtered: 0, reasons: [] as string[] };
+  const fallbackPlays = filterMLBSignals(allPlays, MLB_FALLBACK_RULES, fallbackAcc);
+
   const strictAcc = { filtered: 0, reasons: [] as string[] };
   const strictPlays = filterMLBSignals(allPlays, MLB_STRICT_RULES, strictAcc);
+  const strictIds = new Set(strictPlays.map(p => p.id));
 
   let finalPlays: MLBPlay[];
   let mode: "strict" | "fallback";
   let fallbackTriggered = false;
 
-  if (strictPlays.length > 0) {
-    finalPlays = strictPlays;
-    mode = "strict";
-  } else {
-    fallbackTriggered = true;
-    const fallbackAcc = { filtered: 0, reasons: [] as string[] };
-    const fallbackPlays = filterMLBSignals(allPlays, MLB_FALLBACK_RULES, fallbackAcc);
-
-    if (fallbackPlays.length > 0) {
-      finalPlays = fallbackPlays;
-    } else if (allPlays.length > 0) {
-      finalPlays = allPlays.sort((a, b) => b.probability - a.probability).slice(0, 5);
-    } else {
-      finalPlays = [];
-    }
+  if (fallbackPlays.length > 0) {
+    finalPlays = fallbackPlays.sort((a, b) => {
+      const aStrict = strictIds.has(a.id) ? 1 : 0;
+      const bStrict = strictIds.has(b.id) ? 1 : 0;
+      if (bStrict !== aStrict) return bStrict - aStrict;
+      return b.probability - a.probability;
+    });
+    mode = strictPlays.length > 0 ? "strict" : "fallback";
+    fallbackTriggered = strictPlays.length === 0;
+  } else if (allPlays.length > 0) {
+    finalPlays = allPlays.sort((a, b) => b.probability - a.probability).slice(0, 5);
     mode = "fallback";
-    reasonsFilteredOut.push(...strictAcc.reasons);
+    fallbackTriggered = true;
+  } else {
+    finalPlays = [];
+    mode = "fallback";
+    fallbackTriggered = true;
   }
+  reasonsFilteredOut.push(...fallbackAcc.reasons);
 
   const confBreakdown = { elite: 0, strong: 0, developing: 0 };
   for (const p of finalPlays) {

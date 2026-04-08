@@ -50,6 +50,11 @@ export function validateMLBSignal(
     return { valid: false, reason: `${tag}: probability is ${candidate.probability}` };
   }
 
+  const tierRank = TIER_RANK[candidate.confidenceTier ?? ""] ?? 0;
+  if (tierRank === 0) {
+    return { valid: false, reason: `${tag}: tier ${candidate.confidenceTier} is NO_SIGNAL/unknown — always rejected` };
+  }
+
   if (!tierMeetsMinimum(candidate.confidenceTier, rules.minConfidenceTier)) {
     if (!rules.allowDevelopingSignals) {
       return { valid: false, reason: `${tag}: tier ${candidate.confidenceTier} below MLB minimum ${rules.minConfidenceTier}` };

@@ -958,6 +958,9 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
             <h3 className="text-sm font-bold text-foreground">{alert.playerName}</h3>
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
               <span>{alert.team}</span>
+              {(analyze?.totalPA != null || analyze?.completedAB != null) && (
+                <span className="font-semibold">{analyze.completedAB ?? 0} AB{analyze.totalPA != null && analyze.totalPA > (analyze.completedAB ?? 0) ? ` · ${analyze.totalPA} PA` : ""}</span>
+              )}
               {alert.detectedLabel && <span>Detected {alert.detectedLabel}</span>}
               <span className={`font-bold ${statusColor}`}>{statusLabel}</span>
             </div>
