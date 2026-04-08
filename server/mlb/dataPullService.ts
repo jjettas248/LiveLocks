@@ -443,9 +443,18 @@ export async function syncGameBoxScore(statsPk: string, cacheKey?: string): Prom
 // Uses MLB Stats API live feed (already fetched for game state) to extract
 // Statcast hitData from play-by-play events. Replaces the broken Savant /gf endpoint.
 
-export async function syncContactData(statsPk: string, cacheKey?: string): Promise<void> {
+export type ContactChangeEvent = {
+  playerId: string;
+  playerName: string;
+  newABCount: number;
+  prevABCount: number;
+  latestAB: { exitVelocity: number | null; launchAngle: number | null; distance: number | null; outcome: string } | null;
+};
+
+export async function syncContactData(statsPk: string, cacheKey?: string): Promise<ContactChangeEvent[]> {
   const gameId = cacheKey ?? statsPk;
   const persistedContactKeys = new Set<string>();
+  const contactChanges: ContactChangeEvent[] = [];
 
   try {
     const data = await fetchJson(LIVE_FEED_URL(statsPk));
@@ -620,11 +629,38 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
       console.log(`[MLB pull] syncContactData Savant enrichment: game ${gameId} — ${enrichedCount}/${playerIds.length} players with xBA/xSLG`);
     }
 
+    for (const [pid, freshEntry] of Object.entries(byPlayerId)) {
+      const prev = existing[pid];
+      const prevABCount = prev?.priorABResults?.length ?? 0;
+      const newABCount = freshEntry.priorABResults?.length ?? 0;
+      if (newABCount > prevABCount) {
+        const latestAB = freshEntry.priorABResults[newABCount - 1] ?? null;
+        const playerName = allPlays.find((p: any) => String(p.matchup?.batter?.id) === pid)?.matchup?.batter?.fullName ?? pid;
+        contactChanges.push({
+          playerId: pid,
+          playerName,
+          newABCount,
+          prevABCount,
+          latestAB: latestAB ? {
+            exitVelocity: latestAB.exitVelocity ?? null,
+            launchAngle: latestAB.launchAngle ?? null,
+            distance: latestAB.distance ?? null,
+            outcome: latestAB.outcome ?? "out",
+          } : null,
+        });
+      }
+    }
+
     mlbGameCache.contactData[gameId] = { byPlayerId, fetchedAt: Date.now() };
-    console.log(`[MLB pull] syncContactData: game ${gameId} — ${Object.keys(byPlayerId).length} players, ${allEVs.length} BIP with hitData`);
+    if (contactChanges.length > 0) {
+      console.log(`[MLB pull] syncContactData: game ${gameId} — ${Object.keys(byPlayerId).length} players, ${allEVs.length} BIP — ${contactChanges.length} new contact events: ${contactChanges.map(c => `${c.playerName}(EV=${c.latestAB?.exitVelocity ?? "?"})`).join(", ")}`);
+    } else {
+      console.log(`[MLB pull] syncContactData: game ${gameId} — ${Object.keys(byPlayerId).length} players, ${allEVs.length} BIP with hitData`);
+    }
   } catch (err: any) {
     console.error(`[MLB pull] syncContactData(${gameId}) error:`, err.message);
   }
+  return contactChanges;
 }
 
 // ── syncPitcherContext ────────────────────────────────────────────────────────

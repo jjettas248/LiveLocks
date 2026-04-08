@@ -18,6 +18,7 @@ import {
   syncPitcherContext,
   syncWeather,
   syncBullpenUsage,
+  type ContactChangeEvent,
   syncPitcherSeasonStats,
   syncBatterRollingStats,
   syncBvPMatchup,
@@ -50,6 +51,7 @@ import { applySafetyCeiling, applyDirectionalBias } from "./calibration";
 import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, clearGameCooldowns, type HRAlertInput } from "./evaluateHRAlert";
+import { buildHRSignal } from "./HRSignalBuilder";
 import { getPlayer } from "./rosterService";
 import { storage } from "../storage";
 import { trackPlay } from "../services/playTracker";
@@ -546,8 +548,15 @@ export class LiveGameOrchestrator {
 
     await syncGameState(statsPk, gameId);
     await syncGameBoxScore(statsPk, gameId);
-    await syncContactData(statsPk, gameId);
+    const contactChanges = await syncContactData(statsPk, gameId);
     await syncPitcherContext(statsPk, gameId);
+
+    const contactSyncState = mlbGameCache.gameState[gameId];
+    const contactSyncStatus = contactSyncState?.status ?? "";
+    const isLiveForContact = contactSyncStatus === "live" || contactSyncStatus === "In Progress";
+    if (contactChanges.length > 0 && isLiveForContact) {
+      await this.reevaluateHRRadarOnContact(gameId, contactChanges);
+    }
 
     const stateAfterSync = mlbGameCache.gameState[gameId];
     if (stateAfterSync) {
@@ -1141,6 +1150,305 @@ export class LiveGameOrchestrator {
 
     this.sanitizeUserFacingFields(watchSignal);
     return watchSignal;
+  }
+
+  async reevaluateHRRadarOnContact(gameId: string, contactChanges: ContactChangeEvent[]): Promise<void> {
+    const state = mlbGameCache.gameState[gameId];
+    if (!state || !state.battingOrder?.length) return;
+
+    const contactCache = mlbGameCache.contactData[gameId];
+    const pitcherCtxCache = mlbGameCache.pitcherContext?.[gameId];
+    const weatherCache = mlbGameCache.weather[gameId];
+    const bullpenCache = mlbGameCache.bullpen[gameId];
+
+    const pitcher = state.pitcherInGame;
+    const pitcherCtx = pitcher ? pitcherCtxCache?.byPitcherId?.[pitcher.playerId] : undefined;
+    const pitcherSeasonStats = pitcher ? mlbPlayerCache.pitcherSeasonStats[pitcher.playerId] : undefined;
+
+    const isPitcherCollapsing = pitcherCtx
+      ? (pitcherCtx.velocityDrop !== null && pitcherCtx.velocityDrop > 2)
+      : false;
+
+    const hourlyWeather = resolveCurrentHourWeather(gameId);
+    const resolvedTemp = hourlyWeather?.temperature ?? weatherCache?.temperature ?? null;
+    const resolvedWindSpeed = hourlyWeather?.windSpeed ?? weatherCache?.windSpeed ?? null;
+    const resolvedWindDir = hourlyWeather?.windDirection ?? weatherCache?.windDirection ?? null;
+
+    for (const change of contactChanges) {
+      const batter = state.battingOrder.find(b => b.playerId === change.playerId);
+      if (!batter) continue;
+
+      const playerContact = contactCache?.byPlayerId?.[change.playerId];
+      if (!playerContact?.priorABResults?.length) continue;
+
+      const rosterLookup = getPlayer(batter.playerId);
+      const resolvedBatterHand: "L" | "R" | "S" | null = rosterLookup?.bats ?? null;
+      const rollingStats = mlbPlayerCache.batterRollingStats[batter.playerId];
+
+      const { remainingPA } = estimateRemainingPA(
+        state.inning,
+        state.isTopInning,
+        batter.slot,
+      );
+
+      const hrInput: MLBPropInput = {
+        playerId: batter.playerId,
+        playerName: batter.playerName,
+        team: batter.team,
+        opponent: state.homeTeamAbbr && state.awayTeamAbbr
+          ? (batter.team === state.homeTeamAbbr ? state.awayTeamAbbr : state.homeTeamAbbr)
+          : "",
+        gameId,
+        market: "home_runs" as MLBMarket,
+        bookLine: 0.5,
+        overOdds: null,
+        underOdds: null,
+        seasonAvg: 0.04,
+        plateAppearances: state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0,
+        atBats: mlbGameCache.gameBoxScore[gameId]?.byPlayerId?.[batter.playerId]?.ab ?? 0,
+        currentStatValue: mlbGameCache.gameBoxScore[gameId]?.byPlayerId?.[batter.playerId]?.hr ?? 0,
+        remainingPA,
+        remainingAB: remainingPA,
+        completedAB: mlbGameCache.gameBoxScore[gameId]?.byPlayerId?.[batter.playerId]?.ab ?? 0,
+        inning: state.inning,
+        isTopInning: state.isTopInning,
+        currentGameHR: mlbGameCache.gameBoxScore[gameId]?.byPlayerId?.[batter.playerId]?.hr ?? 0,
+        hardHitCount: (playerContact.priorABResults ?? []).filter((ab: any) => (ab.exitVelocity ?? 0) >= 95).length,
+        batterHand: resolvedBatterHand,
+        contactQuality: {
+          exitVelocity: playerContact.exitVelocity ?? null,
+          launchAngle: playerContact.launchAngle ?? null,
+          hitDistance: playerContact.hitDistance ?? null,
+          hardHitRateSeason: playerContact.hardHitPct != null ? playerContact.hardHitPct / 100 : null,
+          barrelRateProxySeason: playerContact.barrelPct != null ? playerContact.barrelPct / 100 : null,
+          avgBatSpeed: playerContact.avgBatSpeed ?? null,
+          avgSwingLength: playerContact.avgSwingLength ?? null,
+          priorABResults: (playerContact.priorABResults ?? []) as MLBPropInput["contactQuality"]["priorABResults"],
+          xBA: playerContact.xBA ?? null,
+          xSLG: playerContact.xSLG ?? null,
+          learnedHitLikelihood: null,
+          learnedHrLikelihood: null,
+          pitchTypeHrRisk: null,
+        },
+        pitcher: {
+          pitchCount: pitcher ? state.pitchCount : 0,
+          timesThrough: pitcherCtx?.timesThroughOrder ?? 1,
+          era: pitcherSeasonStats?.era ?? null,
+          whip: pitcherSeasonStats?.whip ?? null,
+          kPer9: pitcherSeasonStats?.kPer9 ?? null,
+          bbPer9: pitcherSeasonStats?.bbPer9 ?? null,
+          managerLeashShort: pitcherCtx ? pitcherCtx.timesThroughOrder >= 3 && pitcherCtx.pitchCount > 80 : false,
+          isPitcherCollapsing,
+          pitchMix: pitcherCtx?.pitchMix ?? [],
+          throws: pitcher?.throws ?? null,
+        },
+        ...(rollingStats ? {
+          hrTrend: {
+            abSinceLastHR: rollingStats.abSinceLastHR,
+            hrRateLast7: rollingStats.hrRateLast7,
+            hrRateLast15: rollingStats.hrRateLast15,
+            hrRateLast30: rollingStats.hrRateLast30,
+            seasonTotalHR: rollingStats.seasonTotalHR,
+            seasonTotalAB: rollingStats.seasonTotalAB,
+          },
+        } : {}),
+        lineup: {
+          battingOrderSlot: batter.slot,
+          orderTurnoverProximity: 0.5,
+          lineupSectionStrength: batter.slot <= 3 ? "strong" : batter.slot <= 6 ? "neutral" : "weak",
+          hittersAheadOnBase: state.runnersOnBase.length,
+          pocketWeakness: null,
+        },
+        weatherPark: {
+          parkFactor: getMarketParkFactor(weatherCache?.venueName, "home_runs", resolvedBatterHand),
+          temperature: resolvedTemp,
+          windSpeed: resolvedWindSpeed,
+          windDirection: resolvedWindDir,
+          humidity: hourlyWeather?.humidity ?? weatherCache?.humidity ?? null,
+          isIndoors: weatherCache?.isIndoors ?? isVenueIndoors(weatherCache?.venueName),
+          parkHistoryFactor: null,
+          windShiftDetected: false,
+        },
+        bullpen: {
+          bullpenEra: bullpenCache?.bullpenEra ?? null,
+          bullpenUsageLastThreeDays: bullpenCache?.bullpenUsageLastThreeDays ?? null,
+          isTopRelieverAvailable: bullpenCache?.isTopRelieverAvailable ?? true,
+        },
+      };
+
+      const ohData = getOnlyHomersEnrichment(batter.playerName);
+      if (ohData.isHotHitter) {
+        const boost = ohData.hotHitterPeriod === "7d" ? 0.8 : ohData.hotHitterPeriod === "14d" ? 0.5 : 0.3;
+        hrInput.hotHitterBoost = boost;
+      }
+
+      const hrBuild = buildHRSignal(hrInput);
+      if (hrBuild.score <= 0) continue;
+
+      const isReliever = bullpenCache?.relieversUsed?.some(
+        r => r.playerId === pitcher?.playerId
+      ) ?? false;
+      let relieverEra: number | null = null;
+      if (isReliever && pitcher?.playerId) {
+        relieverEra = pitcherSeasonStats?.era ?? null;
+      }
+
+      let starterEra: number | null = null;
+      if (isReliever && pitcherCtxCache?.byPitcherId && pitcher?.team) {
+        const allPitcherIds = Object.keys(pitcherCtxCache.byPitcherId);
+        const relieverIds = new Set(
+          (bullpenCache?.relieversUsed ?? []).map(r => r.playerId)
+        );
+        for (const pid of allPitcherIds) {
+          if (pid === pitcher.playerId) continue;
+          if (relieverIds.has(pid)) continue;
+          const sStats = mlbPlayerCache.pitcherSeasonStats[pid];
+          if (sStats?.era != null) {
+            starterEra = sStats.era;
+            break;
+          }
+        }
+      }
+
+      const pitcherDeteriorationCtx = {
+        velocityDrop: pitcherCtx?.velocityDrop ?? null,
+        avgVelocity: pitcherCtx?.avgVelocity ?? null,
+        seasonAvgVelocity: pitcherCtx?.seasonAvgVelocity ?? null,
+        isReliever,
+        relieverEra,
+        starterEra: isReliever ? starterEra : (pitcherSeasonStats?.era ?? null),
+        bullpenEra: bullpenCache?.bullpenEra ?? null,
+        bullpenUsageLast3Days: bullpenCache?.bullpenUsageLastThreeDays ?? null,
+        relieversUsedCount: bullpenCache?.relieversUsed?.length ?? 0,
+      };
+
+      const alertInput: HRAlertInput = {
+        playerId: batter.playerId,
+        playerName: batter.playerName,
+        teamAbbr: batter.team,
+        gameId,
+        hrBuildScore: hrBuild.score,
+        hrIntensity: hrBuild.intensity,
+        factors: hrBuild.factors,
+        inning: state.inning,
+        isTopInning: state.isTopInning,
+        battingOrderSlot: batter.slot,
+        remainingPA,
+        pitchCount: pitcher ? state.pitchCount : 0,
+        timesThrough: pitcherCtx?.timesThroughOrder ?? 1,
+        isPitcherCollapsing,
+        parkFactor: getMarketParkFactor(weatherCache?.venueName, "home_runs", resolvedBatterHand),
+        windDirection: resolvedWindDir,
+        windSpeed: resolvedWindSpeed,
+        temperature: resolvedTemp,
+        isIndoors: weatherCache?.isIndoors ?? isVenueIndoors(weatherCache?.venueName),
+        batterHand: resolvedBatterHand,
+        pitcherThrows: pitcher?.throws ?? null,
+        era: pitcherSeasonStats?.era ?? null,
+        currentRuns: (state.homeScore != null || state.awayScore != null)
+          ? (state.homeScore ?? 0) + (state.awayScore ?? 0)
+          : 4.5,
+        leagueAvgRuns: 4.5,
+        seasonHRRate: rollingStats?.seasonHRRate ?? null,
+        barrelRate: playerContact.barrelPct != null ? playerContact.barrelPct / 100 : null,
+        hardHitRate: playerContact.hardHitPct != null ? playerContact.hardHitPct / 100 : null,
+        xSLG: playerContact.xSLG ?? null,
+        abSinceLastHR: rollingStats?.abSinceLastHR ?? null,
+        hrRateLast7: rollingStats?.hrRateLast7 ?? null,
+        hrRateLast15: rollingStats?.hrRateLast15 ?? null,
+        hrRateLast30: rollingStats?.hrRateLast30 ?? null,
+        handednessParkFactor: getMarketParkFactor(weatherCache?.venueName, "home_runs", resolvedBatterHand),
+        pitcherDeterioration: pitcherDeteriorationCtx,
+        priorABResults: (playerContact.priorABResults ?? []).map((ab: any) => ({
+          exitVelocity: ab.exitVelocity ?? null,
+          launchAngle: ab.launchAngle ?? null,
+          distance: ab.distance ?? null,
+          outcome: ab.outcome ?? "out",
+        })),
+      };
+
+      const alertResult = evaluateHRAlert(alertInput);
+      if (alertResult.level !== "ALERT" && alertResult.level !== "WATCH") continue;
+
+      const latestEV = change.latestAB?.exitVelocity ?? null;
+      console.log(`[HR_RADAR_CONTACT_UPDATE] ${alertResult.level} ${batter.playerName} score=${hrBuild.score} intensity=${hrBuild.intensity} latestEV=${latestEV} triggerReason=${alertResult.triggerReason} state=${alertResult.signalState} game=${gameId} inn=${state.inning}`);
+
+      const resolvedOpponent = state.homeTeamAbbr && state.awayTeamAbbr
+        ? (batter.team === state.homeTeamAbbr ? state.awayTeamAbbr : state.homeTeamAbbr)
+        : "";
+
+      const tierMap: Record<string, "monitor" | "building" | "strong"> = {
+        FORMATION: "monitor",
+        BUILDING: "building",
+        PEAK: "strong",
+        COOLDOWN: "monitor",
+      };
+      const stateMap: Record<string, "live" | "watching" | "actionable"> = {
+        FORMATION: "watching",
+        BUILDING: "live",
+        PEAK: "actionable",
+        COOLDOWN: "watching",
+      };
+
+      const lastAB = (playerContact.priorABResults ?? []).slice(-1)[0] as any;
+      const contactSnap = lastAB ? {
+        ev: lastAB.exitVelocity ?? null,
+        la: lastAB.launchAngle ?? null,
+        distance: lastAB.distance ?? null,
+        hardHit: (lastAB.exitVelocity ?? 0) >= 95,
+        barrel: (lastAB.exitVelocity ?? 0) >= 98 && (lastAB.launchAngle ?? 0) >= 20 && (lastAB.launchAngle ?? 0) <= 35,
+      } : null;
+
+      const convSnap = alertResult.diagnostics?.hrConversion ? {
+        hrConversionProbability: alertResult.diagnostics.hrConversion.hrConversionProbability,
+        calibratedProbability: alertResult.diagnostics.hrConversion.calibratedProbability,
+        perPAHRRate: alertResult.diagnostics.hrConversion.perPAHRRate,
+        expectedRemainingPA: alertResult.diagnostics.hrConversion.expectedRemainingPA,
+        liveContactMultiplier: alertResult.diagnostics.hrConversion.liveContactMultiplier,
+        pitcherMultiplier: alertResult.diagnostics.hrConversion.pitcherMultiplier,
+        environmentMultiplier: alertResult.diagnostics.hrConversion.environmentMultiplier,
+        pitcherDeteriorationState: alertResult.diagnostics.hrConversion.pitcherDeteriorationState,
+      } : null;
+
+      const diagSnap = alertResult.diagnostics ? {
+        alertPath: alertResult.diagnostics.alertPath,
+        positiveFactors: alertResult.diagnostics.positiveFactors,
+        suppressionFlags: alertResult.diagnostics.suppressionFlags,
+        hrShapedCount: alertResult.diagnostics.hrShapedCount,
+        missedHrCount: alertResult.diagnostics.missedHrCount,
+        eliteHrCount: alertResult.diagnostics.eliteHrCount,
+        qualifiedEVMean: alertResult.diagnostics.qualifiedEVMean,
+        maxDistance: alertResult.diagnostics.maxDistance,
+        remainingPA: alertResult.diagnostics.remainingPA,
+        pitcherFatigueState: alertResult.diagnostics.pitcherFatigueState,
+        environmentContext: alertResult.diagnostics.environmentContext,
+        hrConversion: convSnap,
+        contactClasses: alertResult.diagnostics.contactClasses.map(c => ({
+          contactClass: c.contactClass, exitVelocity: c.exitVelocity,
+          launchAngle: c.launchAngle, distance: c.distance,
+          outcome: c.outcome, isBarrel: c.isBarrel,
+        })),
+      } : null;
+
+      storage.createOrUpdateHrRadarAlert({
+        gameId,
+        playerId: batter.playerId,
+        playerName: batter.playerName,
+        team: batter.team,
+        opponent: resolvedOpponent,
+        inning: state.inning,
+        half: state.isTopInning ? "top" : "bottom",
+        readinessScore: hrBuild.score,
+        confidenceTier: tierMap[alertResult.signalState ?? "FORMATION"] ?? "monitor",
+        signalState: stateMap[alertResult.signalState ?? "FORMATION"] ?? "live",
+        triggerTags: alertResult.triggerReason ? alertResult.triggerReason.split(", ") : [],
+        summaryText: alertResult.formattedReason || `${alertResult.decision} — ${alertResult.triggerReason}`,
+        contactSnapshot: contactSnap,
+        alertPath: alertResult.diagnostics?.alertPath ?? null,
+        alertTier: alertResult.alertTier ?? null,
+        diagnosticsSnapshot: diagSnap,
+      }).catch(err => console.warn(`[HR_RADAR_CONTACT_UPDATE] persist failed: ${err.message}`));
+    }
   }
 
   async triggerEngine(gameId: string, normalizedStatus: "live" | "pregame" | "final" | "unknown", triggers?: StateChangeTrigger[]): Promise<MLBPropOutput[]> {
