@@ -4,8 +4,9 @@ import { apiRequest, queryClient, getAuthToken } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
-import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle, Trash2, Loader2, Settings, Bell, ChevronUp, Send, Target } from "lucide-react";
+import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle, Trash2, Loader2, Settings, Bell, ChevronUp, Send, Target, BarChart3 } from "lucide-react";
 import { CalibrationDashboard } from "@/components/calibration-dashboard";
+import { UnifiedAnalyticsPanel } from "@/components/unified-analytics";
 
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
@@ -72,13 +73,6 @@ function AdminLink() {
             Dashboard
           </button>
           <button
-            data-testid="link-analytics"
-            onClick={() => navigate("/analytics")}
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-lg border border-border hover:bg-muted"
-          >
-            Analytics
-          </button>
-          <button
             data-testid="button-admin-logout"
             onClick={() => logout()}
             className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-lg border border-border hover:bg-muted"
@@ -112,7 +106,7 @@ function getNextResetDisplay(timeStr: string): string {
 export default function AdminPage() {
   const { user, isLoading: authLoading, logout } = useAuth();
   const [, navigate] = useLocation();
-  const [activeTab, setActiveTab] = useState<"users" | "feedback" | "calibration" | "churn" | "roi">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "feedback" | "calibration" | "churn" | "roi" | "analytics">("users");
   const [tierLoadingId, setTierLoadingId] = useState<number | null>(null);
   const { toast } = useToast();
   const [resetTime, setResetTime] = useState("06:00");
@@ -413,6 +407,14 @@ export default function AdminPage() {
           >
             <AlertCircle className="w-3.5 h-3.5" />
             Churn
+          </button>
+          <button
+            data-testid="tab-analytics"
+            onClick={() => setActiveTab("analytics")}
+            className={`flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${activeTab === "analytics" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+          >
+            <BarChart3 className="w-3.5 h-3.5" />
+            Analytics
           </button>
           <button
             data-testid="tab-calibration"
@@ -776,6 +778,13 @@ export default function AdminPage() {
                 </div>
               </>
             )}
+          </div>
+        )}
+
+        {/* Analytics Tab */}
+        {activeTab === "analytics" && (
+          <div data-testid="panel-analytics">
+            <UnifiedAnalyticsPanel />
           </div>
         )}
 

@@ -7,8 +7,6 @@ import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
 import AuthPage from "@/pages/auth";
 import AdminPage from "@/pages/admin";
-import AnalyticsPage from "@/pages/analytics";
-import PerformancePage from "@/pages/performance";
 import NcaabLivePage from "@/pages/ncaab-live";
 import PrivacyPage from "@/pages/privacy";
 import TermsPage from "@/pages/terms";
@@ -17,6 +15,12 @@ import VerifyPendingPage from "@/pages/verify-pending";
 import ResetPasswordPage from "@/pages/reset-password";
 import { useAuth } from "@/hooks/use-auth";
 import { useEffect } from "react";
+
+function AdminRedirect() {
+  const [, navigate] = useLocation();
+  useEffect(() => { navigate("/admin"); }, [navigate]);
+  return null;
+}
 
 function ProtectedRouter() {
   const { user, isLoading } = useAuth();
@@ -29,13 +33,7 @@ function ProtectedRouter() {
     if (!isLoading && user && location === "/auth") {
       navigate("/dashboard");
     }
-    if (!isLoading && user && !user.isAdmin && location === "/admin") {
-      navigate("/dashboard");
-    }
-    if (!isLoading && user && !user.isAdmin && location === "/analytics") {
-      navigate("/dashboard");
-    }
-    if (!isLoading && user && !user.isAdmin && location === "/performance") {
+    if (!isLoading && user && !user.isAdmin && (location === "/admin" || location === "/analytics" || location === "/performance")) {
       navigate("/dashboard");
     }
   }, [user, isLoading, location, navigate]);
@@ -52,8 +50,8 @@ function ProtectedRouter() {
     <Switch>
       <Route path="/auth" component={AuthPage} />
       <Route path="/admin" component={AdminPage} />
-      <Route path="/analytics" component={AnalyticsPage} />
-      <Route path="/performance" component={PerformancePage} />
+      <Route path="/analytics" component={AdminRedirect} />
+      <Route path="/performance" component={AdminRedirect} />
       <Route path="/ncaab" component={NcaabLivePage} />
       <Route path="/dashboard" component={Dashboard} />
       <Route component={NotFound} />

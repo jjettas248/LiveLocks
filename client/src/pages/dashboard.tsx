@@ -13,7 +13,6 @@ import { ParlaySlip } from "@/components/parlay-slip";
 import { UpgradeModal } from "@/components/upgrade-modal";
 import { FeedbackModal } from "@/components/feedback-modal";
 import { NCAABAdminTab } from "@/components/ncaab-admin-tab";
-import { AnalyticsTab } from "@/components/analytics-tab";
 import MlbLivePage from "@/pages/mlb-live";
 import { WelcomeBanner } from "@/components/welcome-banner";
 import { RecentWinsStrip } from "@/components/RecentWinsStrip";
@@ -1878,7 +1877,7 @@ export default function Dashboard() {
             {user?.isAdmin && (
               <button
                 data-testid="link-performance"
-                onClick={() => navigate("/analytics")}
+                onClick={() => navigate("/admin")}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-semibold hover:bg-blue-500/20 transition-colors"
                 title="Model Performance"
               >
@@ -4078,12 +4077,11 @@ export default function Dashboard() {
           />
         )}
 
-        {/* Analytics Tab — admin only */}
-        {activeTab === "analytics" && user?.isAdmin && (
-          <div className="max-w-5xl mx-auto px-4 py-6">
-            <AnalyticsTab />
-          </div>
-        )}
+        {/* Analytics Tab — redirect to admin */}
+        {activeTab === "analytics" && user?.isAdmin && (() => {
+          navigate("/admin");
+          return null;
+        })()}
 
         {/* MLB Live Tab — all authenticated users (preview gated on backend) */}
         {activeTab === "mlb" && <MlbLivePage activeSubTab={mlbSubTab} />}
