@@ -58,14 +58,6 @@ export async function registerStripeRoutes(app: import("express").Express) {
         }
       }
 
-      await stripe.invoiceItems.create({
-        customer: customerId,
-        amount: 100,
-        currency: "usd",
-        description: "3-Day Trial – LiveLocks",
-      });
-      console.log(`[STRIPE] Attached $1 trial invoice item to customer ${customerId}`);
-
       const planAmount = plan === "elite" ? "$65" : "$40";
       const sessionParams: any = {
         customer: customerId,
@@ -74,7 +66,17 @@ export async function registerStripeRoutes(app: import("express").Express) {
         success_url: `${origin}/dashboard?payment=success&tier=${tier}&session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${origin}/dashboard?payment=cancelled`,
         metadata: { userId: String(userId), tier },
-        line_items: [{ price: priceId, quantity: 1 }],
+        line_items: [
+          { price: priceId, quantity: 1 },
+          {
+            price_data: {
+              currency: "usd",
+              product_data: { name: "3-Day Trial – LiveLocks" },
+              unit_amount: 100,
+            },
+            quantity: 1,
+          },
+        ],
         subscription_data: {
           trial_period_days: 3,
           metadata: { tier: plan, userId: String(userId) },
