@@ -539,7 +539,7 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
 
   if (
     totalHrShaped >= 1 &&
-    hrBuildScore >= 3.5 &&
+    hrBuildScore >= 3.0 &&
     (remainingPA === null || remainingPA >= 1.0) &&
     (convProb === null || convProb >= HR_CONVERSION_WATCH_MIN)
   ) {
@@ -547,7 +547,7 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     positiveFactors.push(`conversion: ${convPct}`);
 
     const leiResult = computeLeiBoost(input);
-    if (leiResult.escalate && hrBuildScore >= 3.0 && (convProb === null || convProb >= HR_CONVERSION_ALERT_MIN)) {
+    if (leiResult.escalate && hrBuildScore >= 2.8 && (convProb === null || convProb >= HR_CONVERSION_ALERT_MIN)) {
       positiveFactors.push(`LEI escalation: nearHR=${input.leiNearHrScore?.toFixed(2)}, momentum=${input.leiMomentumScore?.toFixed(2)}`);
       if (input.leiTags?.length) positiveFactors.push(`LEI tags: ${input.leiTags.join(", ")}`);
       const conf = computeConfidence(hrBuildScore + leiResult.scoreBoost, factors, "PATH_B", softVetoes.length, convProb);
@@ -575,6 +575,71 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
       detectedInning: inning,
       alertTier: "watch",
       diagnostics: { ...baseDiagnostics, alertPath: "WATCH", positiveFactors },
+    };
+  }
+
+  const powerContactCount = classified.filter(c => c.contactClass === "powerContact").length;
+  const hasStrongProfile = (input.barrelRate != null && input.barrelRate >= 0.08) ||
+    (input.xSLG != null && input.xSLG >= 0.450) ||
+    (input.hardHitRate != null && input.hardHitRate >= 0.42);
+  const isHotTrend = (input.hrRateLast7 != null && input.hrRateLast30 != null && input.hrRateLast30 > 0 && input.hrRateLast7 > input.hrRateLast30 * 1.3) ||
+    (input.seasonHRRate != null && input.seasonHRRate >= 0.045);
+
+  const hasQualityPowerContact = classified.some(c =>
+    c.contactClass === "powerContact" && c.exitVelocity >= 97 && c.distance >= 350
+  );
+
+  if (
+    totalHrShaped === 0 &&
+    (powerContactCount >= 2 || (powerContactCount >= 1 && hasQualityPowerContact)) &&
+    (hasStrongProfile || isHotTrend) &&
+    (pitcherFavorable || envFavorable) &&
+    hrBuildScore >= 2.8 &&
+    (remainingPA === null || remainingPA >= 1.0) &&
+    (convProb === null || convProb >= HR_CONVERSION_WATCH_MIN)
+  ) {
+    positiveFactors.push(`${powerContactCount} power contact events`);
+    if (hasStrongProfile) {
+      const profileParts: string[] = [];
+      if (input.barrelRate != null) profileParts.push(`barrel=${(input.barrelRate * 100).toFixed(1)}%`);
+      if (input.xSLG != null) profileParts.push(`xSLG=${input.xSLG.toFixed(3)}`);
+      if (input.hardHitRate != null) profileParts.push(`hardHit=${(input.hardHitRate * 100).toFixed(1)}%`);
+      positiveFactors.push(`strong profile: ${profileParts.join(", ")}`);
+    }
+    if (isHotTrend) positiveFactors.push("hot HR trend");
+    positiveFactors.push(`conversion: ${convPct}`);
+    if (pitcherFavorable) positiveFactors.push(`pitcher: ${pitcherFatigueState}`);
+    if (envFavorable) positiveFactors.push(`env: ${environmentContext}`);
+
+    const isAlert = hasStrongProfile && isHotTrend && hasModerateContext && softVetoes.length === 0 && hrBuildScore >= 3.5 && (convProb === null || convProb >= HR_CONVERSION_ALERT_MIN);
+    const conf = computeConfidence(hrBuildScore, factors, "PATH_D", softVetoes.length, convProb);
+
+    console.log(`[HR_ALERT_PATH_D] ${input.playerName} game=${input.gameId} — profile-based detection: power=${powerContactCount} strongProfile=${hasStrongProfile} hotTrend=${isHotTrend} score=${hrBuildScore} conv=${convPct} alert=${isAlert}`);
+
+    if (isAlert) {
+      return {
+        level: "ALERT",
+        triggerReason: `PATH_D:profile_power${powerContactCount}_score${hrBuildScore}`,
+        signalState: "BUILDING",
+        decision: "PREPARE",
+        confidenceScore: conf,
+        formattedReason: `Power profile + live contact (conv ${convPct}). Strong hitter profile with favorable game conditions.`,
+        detectedInning: inning,
+        alertTier: "prepare",
+        diagnostics: { ...baseDiagnostics, alertPath: "PATH_D", positiveFactors },
+      };
+    }
+
+    return {
+      level: "WATCH",
+      triggerReason: `watch:profile_power${powerContactCount}_score${hrBuildScore}`,
+      signalState: "FORMATION",
+      decision: "MONITOR",
+      confidenceScore: conf,
+      formattedReason: `Power hitter profile with live contact detected (conv ${convPct}). Monitoring for HR-shaped escalation.`,
+      detectedInning: inning,
+      alertTier: "watch",
+      diagnostics: { ...baseDiagnostics, alertPath: "PATH_D", positiveFactors },
     };
   }
 

@@ -343,6 +343,10 @@ const WEATHER_MS = 10 * 60 * 1000;          // 10 minutes
 
 // ── Orchestrator class ────────────────────────────────────────────────────────
 
+const HR_ROSTER_SCAN_INTERVAL_MS = 3 * 60 * 1000;
+const hrRosterScanLastRun = new Map<string, number>();
+const hrRosterScanLastABCount = new Map<string, number>();
+
 export class LiveGameOrchestrator {
   private timers: ReturnType<typeof setInterval>[] = [];
   private previousStates: Map<string, GameStateCache> = new Map();
@@ -558,6 +562,10 @@ export class LiveGameOrchestrator {
     const isLiveForContact = contactSyncStatus === "live" || contactSyncStatus === "In Progress";
     if (contactChanges.length > 0 && isLiveForContact) {
       await this.reevaluateHRRadarOnContact(gameId, contactChanges);
+    }
+
+    if (isLiveForContact) {
+      await this.periodicHRRadarRosterScan(gameId);
     }
 
     const stateAfterSync = mlbGameCache.gameState[gameId];
@@ -1152,6 +1160,42 @@ export class LiveGameOrchestrator {
 
     this.sanitizeUserFacingFields(watchSignal);
     return watchSignal;
+  }
+
+  async periodicHRRadarRosterScan(gameId: string): Promise<void> {
+    const lastScan = hrRosterScanLastRun.get(gameId) ?? 0;
+    if (Date.now() - lastScan < HR_ROSTER_SCAN_INTERVAL_MS) return;
+    hrRosterScanLastRun.set(gameId, Date.now());
+
+    const state = mlbGameCache.gameState[gameId];
+    if (!state || !state.battingOrder?.length) return;
+
+    const contactCache = mlbGameCache.contactData[gameId];
+    const allChanges: ContactChangeEvent[] = [];
+
+    for (const batter of state.battingOrder) {
+      const playerContact = contactCache?.byPlayerId?.[batter.playerId];
+      const priorABs = (playerContact?.priorABResults ?? []) as any[];
+      if (!priorABs.length) continue;
+
+      const scanKey = `${gameId}:${batter.playerId}`;
+      const lastABCount = hrRosterScanLastABCount.get(scanKey) ?? 0;
+      if (priorABs.length <= lastABCount) continue;
+      hrRosterScanLastABCount.set(scanKey, priorABs.length);
+
+      allChanges.push({
+        playerId: batter.playerId,
+        playerName: batter.playerName,
+        newABCount: priorABs.length,
+        prevABCount: lastABCount,
+        latestAB: priorABs.slice(-1)[0] ?? null,
+      });
+    }
+
+    if (allChanges.length > 0) {
+      console.log(`[HR_RADAR_ROSTER_SCAN] game=${gameId} evaluating ${allChanges.length} batters with contact data`);
+      await this.reevaluateHRRadarOnContact(gameId, allChanges);
+    }
   }
 
   async reevaluateHRRadarOnContact(gameId: string, contactChanges: ContactChangeEvent[]): Promise<void> {

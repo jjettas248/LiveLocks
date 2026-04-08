@@ -63,9 +63,9 @@ export function classifyContactEvent(ab: {
 
   if (ev >= 102 && la >= 23 && la <= 34 && dist >= 390) {
     contactClass = "eliteHrContact";
-  } else if (ev >= 100 && la >= 24 && la <= 36 && dist >= 380) {
+  } else if (ev >= 100 && la >= 24 && la <= 36 && dist >= 370) {
     contactClass = "missedHrContact";
-  } else if (ev >= 98 && la >= 20 && la <= 38 && dist >= 360) {
+  } else if (ev >= 96 && la >= 18 && la <= 40 && dist >= 340) {
     contactClass = "hrShapedContact";
   } else if (ev >= 95) {
     contactClass = "powerContact";
@@ -146,7 +146,7 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
   score += missedHrCount * 2.5;
   score += (hrShapedCount - missedHrCount - eliteHrCount) * 1.8;
 
-  score += powerEvents.length * 0.3;
+  score += powerEvents.length * 0.5;
 
   if (qualifiedEVMean !== null && qualifiedEVMean >= 99) {
     score += 1.0;
