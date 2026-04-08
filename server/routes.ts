@@ -1980,6 +1980,9 @@ export async function registerRoutes(
         pitchSpeed: ab.pitchSpeed ?? null,
         isBarrel: (ab.exitVelocity ?? 0) >= 98 && (ab.launchAngle ?? 0) >= 20 && (ab.launchAngle ?? 0) <= 35,
         isHardHit: (ab.exitVelocity ?? 0) >= 95,
+        perABxBA: ab.perABxBA ?? null,
+        contactGrade: ab.contactGrade ?? null,
+        hrProbability: ab.hrProbability ?? 0,
       }));
 
       const boxAB = boxPlayer?.ab ?? 0;
@@ -1999,6 +2002,9 @@ export async function registerRoutes(
             pitchSpeed: null,
             isBarrel: false,
             isHardHit: false,
+            perABxBA: null,
+            contactGrade: null,
+            hrProbability: 0,
           });
         }
       }

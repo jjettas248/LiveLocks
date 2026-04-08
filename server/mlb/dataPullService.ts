@@ -3,7 +3,8 @@
 // All functions: 8-second timeout, try/catch, log-and-return on error.
 
 import type { PitchMixEntry } from "./types";
-import { fetchBaseballSavantData, getStadiumCoords, windDirectionRelativeToField, isVenueIndoors } from "./dataSources";
+import { fetchBaseballSavantData, fetchSavantGameFeed, getStadiumCoords, windDirectionRelativeToField, isVenueIndoors } from "./dataSources";
+import { classifyContact, computeGameContactProfile } from "./statcastXBA";
 import { storage } from "../storage";
 import { todayET } from "../utils/dateUtils";
 
@@ -46,6 +47,10 @@ export interface PlayerContactData {
   avgSwingLength: number | null;
   xBA: number | null;
   xSLG: number | null;
+  gameAvgXBA: number | null;
+  gameMaxXBA: number | null;
+  gameBarrelCount: number;
+  gameContactQuality: number;
   priorABResults: Array<{
     exitVelocity: number | null;
     launchAngle: number | null;
@@ -54,6 +59,9 @@ export interface PlayerContactData {
     pitchType: string | null;
     pitchSpeed: number | null;
     isBarrel?: boolean;
+    perABxBA?: number | null;
+    contactGrade?: string;
+    hrProbability?: number;
   }>;
 }
 
@@ -483,6 +491,10 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
           avgSwingLength: null,
           xBA: null,
           xSLG: null,
+          gameAvgXBA: null,
+          gameMaxXBA: null,
+          gameBarrelCount: 0,
+          gameContactQuality: 0,
           priorABResults: [],
         };
       }
@@ -531,7 +543,7 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
           byPlayerId[playerId].latestLaunchAngle = bestLA;
         }
 
-        const abIsBarrel = (bestEV ?? 0) >= 98 && (bestLA ?? 0) >= 20 && (bestLA ?? 0) <= 35;
+        const contactClass = classifyContact(bestEV, bestLA);
         byPlayerId[playerId].priorABResults.push({
           exitVelocity: bestEV,
           launchAngle: bestLA,
@@ -539,7 +551,10 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
           outcome,
           pitchType: lastPitchType,
           pitchSpeed: lastPitchSpeed,
-          isBarrel: abIsBarrel,
+          isBarrel: contactClass.isBarrel,
+          perABxBA: bestEV != null ? contactClass.xBA : null,
+          contactGrade: contactClass.contactGrade,
+          hrProbability: contactClass.hrProbability,
         });
 
         const abIndex = byPlayerId[playerId].priorABResults.length;
@@ -576,6 +591,19 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
       for (const entry of Object.values(byPlayerId)) {
         if (entry.hardHitPct === null) entry.hardHitPct = hardHitPct;
         if (entry.barrelPct === null) entry.barrelPct = barrelPct;
+      }
+    }
+
+    for (const entry of Object.values(byPlayerId)) {
+      const contacts = entry.priorABResults
+        .filter(ab => ab.exitVelocity != null)
+        .map(ab => ({ exitVelocity: ab.exitVelocity, launchAngle: ab.launchAngle }));
+      if (contacts.length > 0) {
+        const profile = computeGameContactProfile(contacts);
+        entry.gameAvgXBA = profile.avgXBA;
+        entry.gameMaxXBA = profile.maxXBA;
+        entry.gameBarrelCount = profile.barrelCount;
+        entry.gameContactQuality = profile.contactQualityScore;
       }
     }
 
@@ -628,6 +656,59 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
       }
       const enrichedCount = playerIds.filter((pid) => byPlayerId[pid]?.xBA != null || byPlayerId[pid]?.xSLG != null).length;
       console.log(`[MLB pull] syncContactData Savant enrichment: game ${gameId} — ${enrichedCount}/${playerIds.length} players with xBA/xSLG`);
+    }
+
+    try {
+      const savantPitches = await fetchSavantGameFeed(statsPk);
+      if (savantPitches.length > 0) {
+        const byBatter = new Map<string, Array<{ xBA: number | null; xWOBA: number | null; ev: number | null; la: number | null }>>();
+        for (const p of savantPitches) {
+          if (!p.batterId) continue;
+          if (!byBatter.has(p.batterId)) byBatter.set(p.batterId, []);
+          if (p.exitVelocity != null) {
+            byBatter.get(p.batterId)!.push({ xBA: p.xBA, xWOBA: p.xWOBA, ev: p.exitVelocity, la: p.launchAngle });
+          }
+        }
+        let enrichCount = 0;
+        byBatter.forEach((hits, batterId) => {
+          const entry = byPlayerId[batterId];
+          if (!entry || hits.length === 0) return;
+          const officialXBAs = hits.filter((h: any) => h.xBA != null).map((h: any) => h.xBA as number);
+          if (officialXBAs.length > 0) {
+            const avgOfficialXBA = Math.round((officialXBAs.reduce((a: number, b: number) => a + b, 0) / officialXBAs.length) * 1000) / 1000;
+            const maxOfficialXBA = Math.max(...officialXBAs);
+            entry.gameAvgXBA = avgOfficialXBA;
+            entry.gameMaxXBA = maxOfficialXBA;
+            enrichCount++;
+          }
+          const usedSavantIdx = new Set<number>();
+          for (const ab of entry.priorABResults) {
+            if (ab.exitVelocity == null) continue;
+            let bestIdx = -1;
+            let bestDist = Infinity;
+            for (let j = 0; j < hits.length; j++) {
+              if (usedSavantIdx.has(j)) continue;
+              if (hits[j].ev == null || hits[j].xBA == null) continue;
+              const evDiff = Math.abs((hits[j].ev as number) - ab.exitVelocity);
+              const laDiff = Math.abs((hits[j].la ?? 0) - (ab.launchAngle ?? 0));
+              const dist = evDiff + laDiff * 0.5;
+              if (dist < bestDist && evDiff < 3) {
+                bestDist = dist;
+                bestIdx = j;
+              }
+            }
+            if (bestIdx >= 0) {
+              ab.perABxBA = hits[bestIdx].xBA;
+              usedSavantIdx.add(bestIdx);
+            }
+          }
+        });
+        if (enrichCount > 0) {
+          console.log(`[MLB pull] Savant GameFeed enrichment: game ${gameId} — ${enrichCount} batters with official per-pitch xBA`);
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[MLB pull] Savant GameFeed enrichment error: ${err.message}`);
     }
 
     for (const [pid, freshEntry] of Object.entries(byPlayerId)) {
@@ -1160,6 +1241,10 @@ export async function syncSavantSeasonForLineup(gameId: string): Promise<void> {
         avgSwingLength: savant.avgSwingLength,
         xBA: savant.xBA,
         xSLG: savant.xSLG,
+        gameAvgXBA: null,
+        gameMaxXBA: null,
+        gameBarrelCount: 0,
+        gameContactQuality: 0,
         priorABResults: [],
       };
     } else {

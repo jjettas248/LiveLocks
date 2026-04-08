@@ -25,6 +25,9 @@ export interface MLBPlay {
     barrelPct: number | null;
     hardHitPct: number | null;
     outcome: string | null;
+    perABxBA?: number | null;
+    contactGrade?: string;
+    hrProbability?: number;
   } | null;
   contactProfile?: MLBContactProfile;
   diagnostics?: MLBPlayDiagnostics;
@@ -37,6 +40,10 @@ export interface MLBContactProfile {
   barrelRate: number | null;
   hardHitRate: number | null;
   contactQuality: "elite" | "strong" | "developing" | "weak";
+  gameAvgXBA?: number | null;
+  gameMaxXBA?: number | null;
+  gameBarrelCount?: number;
+  gameContactQuality?: number;
 }
 
 export interface MLBPlayDiagnostics {

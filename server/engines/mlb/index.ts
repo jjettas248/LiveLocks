@@ -66,10 +66,18 @@ function buildContactProfile(candidates: MLBEngineCandidate[]): MLBContactProfil
   const avgBarrel = barrels.length > 0 ? barrels.reduce((a: number, b: number) => a + b, 0) / barrels.length : null;
   const avgHH = hardHits.length > 0 ? hardHits.reduce((a: number, b: number) => a + b, 0) / hardHits.length : null;
 
+  const xBAs = contacts.map(c => c.perABxBA).filter((v: any) => v != null && Number.isFinite(v));
+  const gameAvgXBA = xBAs.length > 0 ? Math.round((xBAs.reduce((a: number, b: number) => a + b, 0) / xBAs.length) * 1000) / 1000 : null;
+  const gameMaxXBA = xBAs.length > 0 ? Math.max(...xBAs) : null;
+
   let quality: "elite" | "strong" | "developing" | "weak" = "developing";
-  if (avgEV != null && avgEV >= 95) quality = "elite";
+  if (gameAvgXBA != null && gameAvgXBA >= 0.500) quality = "elite";
+  else if (avgEV != null && avgEV >= 95) quality = "elite";
+  else if (gameAvgXBA != null && gameAvgXBA >= 0.350) quality = "strong";
   else if (avgEV != null && avgEV >= 88) quality = "strong";
-  else if (avgEV != null && avgEV < 80) quality = "weak";
+  else if (avgEV != null && avgEV < 80 && (gameAvgXBA == null || gameAvgXBA < 0.200)) quality = "weak";
+
+  const barrelCount = contacts.filter(c => c.contactGrade === "barrel").length;
 
   return {
     avgExitVelo: avgEV != null ? Math.round(avgEV * 10) / 10 : null,
@@ -78,6 +86,9 @@ function buildContactProfile(candidates: MLBEngineCandidate[]): MLBContactProfil
     barrelRate: avgBarrel != null ? Math.round(avgBarrel * 10) / 10 : null,
     hardHitRate: avgHH != null ? Math.round(avgHH * 10) / 10 : null,
     contactQuality: quality,
+    gameAvgXBA,
+    gameMaxXBA,
+    gameBarrelCount: barrelCount,
   };
 }
 

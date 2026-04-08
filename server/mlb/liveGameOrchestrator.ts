@@ -2003,6 +2003,9 @@ export class LiveGameOrchestrator {
             barrelPct: playerContact?.barrelPct ?? null,
             hardHitPct: playerContact?.hardHitPct ?? null,
             outcome: lastAB?.outcome ?? null,
+            perABxBA: lastAB?.perABxBA ?? null,
+            contactGrade: lastAB?.contactGrade ?? undefined,
+            hrProbability: lastAB?.hrProbability ?? 0,
           } : null;
 
           if (!hrRadarOnly) {

@@ -491,6 +491,94 @@ export function getStadiumCoords(venueName: string | null | undefined): { lat: n
   return null;
 }
 
+const SAVANT_GAME_CACHE = new Map<string, { fetchedAt: number; data: SavantGamePitchData[] }>();
+const SAVANT_GAME_TTL = 90_000;
+
+export interface SavantGamePitchData {
+  batterId: string;
+  pitcherId: string;
+  batterName: string;
+  pitcherName: string;
+  exitVelocity: number | null;
+  launchAngle: number | null;
+  hitDistance: number | null;
+  xBA: number | null;
+  xWOBA: number | null;
+  bbType: string | null;
+  pitchType: string | null;
+  releaseSpeed: number | null;
+  releaseSpin: number | null;
+  events: string | null;
+  description: string | null;
+  inning: number | null;
+}
+
+export async function fetchSavantGameFeed(gamePk: string): Promise<SavantGamePitchData[]> {
+  const cacheKey = `savant_game_${gamePk}`;
+  const cached = SAVANT_GAME_CACHE.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < SAVANT_GAME_TTL) return cached.data;
+
+  const url = `https://baseballsavant.mlb.com/statcast_search/csv?all=true&hfGT=R%7C&game_pk=${gamePk}&player_type=batter&group_by=name&sort_col=pitches&sort_order=desc&min_pitches=0&min_results=0&min_abs=0&type=details`;
+
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; LiveLocks/1.0)" },
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!res.ok) {
+      console.warn(`[Savant GameFeed] game_pk=${gamePk} HTTP ${res.status}`);
+      return cached?.data ?? [];
+    }
+
+    const text = await res.text();
+    if (!text || text.length < 50) {
+      console.log(`[Savant GameFeed] game_pk=${gamePk} — empty/too short response`);
+      return cached?.data ?? [];
+    }
+
+    const rows = parseSavantCSV(text);
+    const results: SavantGamePitchData[] = [];
+
+    for (const row of rows) {
+      const ev = parseFloat(row["launch_speed"]);
+      const la = parseFloat(row["launch_angle"]);
+      const dist = parseFloat(row["hit_distance_sc"]);
+      const xba = parseFloat(row["estimated_ba_using_speedangle"]);
+      const xwoba = parseFloat(row["estimated_woba_using_speedangle"]);
+      const speed = parseFloat(row["release_speed"]);
+      const spin = parseFloat(row["release_spin_rate"]);
+      const inn = parseInt(row["inning"]);
+
+      results.push({
+        batterId: row["batter"] ?? "",
+        pitcherId: row["pitcher"] ?? "",
+        batterName: row["player_name"] ?? "",
+        pitcherName: "",
+        exitVelocity: Number.isFinite(ev) ? ev : null,
+        launchAngle: Number.isFinite(la) ? la : null,
+        hitDistance: Number.isFinite(dist) ? dist : null,
+        xBA: Number.isFinite(xba) ? xba : null,
+        xWOBA: Number.isFinite(xwoba) ? xwoba : null,
+        bbType: row["bb_type"] || null,
+        pitchType: row["pitch_type"] || null,
+        releaseSpeed: Number.isFinite(speed) ? speed : null,
+        releaseSpin: Number.isFinite(spin) ? spin : null,
+        events: row["events"] || null,
+        description: row["description"] || null,
+        inning: Number.isFinite(inn) ? inn : null,
+      });
+    }
+
+    console.log(`[Savant GameFeed] game_pk=${gamePk} — ${results.length} pitch rows, ${results.filter(r => r.xBA != null).length} with xBA`);
+    SAVANT_GAME_CACHE.set(cacheKey, { fetchedAt: Date.now(), data: results });
+    return results;
+  } catch (err: any) {
+    console.warn(`[Savant GameFeed] game_pk=${gamePk} fetch error: ${err.message}`);
+    return cached?.data ?? [];
+  }
+}
+
 export function windDirectionRelativeToField(
   windDegrees: number,
   fieldOrientation: number

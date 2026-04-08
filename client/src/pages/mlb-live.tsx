@@ -941,7 +941,7 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
 
   const alert = data.alert;
   const analyze = data.analyze;
-  const priorABs: Array<{ abNumber: number; exitVelocity: number | null; launchAngle: number | null; distance: number | null; outcome: string; isBarrel: boolean; isHardHit: boolean }> = analyze?.priorABs ?? [];
+  const priorABs: Array<{ abNumber: number; exitVelocity: number | null; launchAngle: number | null; distance: number | null; outcome: string; isBarrel: boolean; isHardHit: boolean; perABxBA?: number | null; contactGrade?: string; hrProbability?: number }> = analyze?.priorABs ?? [];
   const initialScore = parseFloat(alert.initialReadinessScore ?? "0");
   const currentScore = parseFloat(alert.currentReadinessScore ?? "0");
   const peakScore = parseFloat(alert.peakReadinessScore ?? "0");
@@ -1040,6 +1040,16 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
                       {ab.distance != null && <span className="text-muted-foreground tabular-nums">{ab.distance.toFixed(0)}ft</span>}
                       {ab.isBarrel && <span className="text-[8px] px-1 py-0.5 rounded bg-orange-500/15 text-orange-400 font-bold">BRL</span>}
                       {ab.isHardHit && !ab.isBarrel && <span className="text-[8px] px-1 py-0.5 rounded bg-yellow-500/15 text-yellow-400 font-bold">HH</span>}
+                      {ab.perABxBA != null && ab.perABxBA > 0 && (
+                        <span className={`text-[8px] px-1 py-0.5 rounded font-bold tabular-nums ${ab.perABxBA >= 0.700 ? "bg-emerald-500/15 text-emerald-400" : ab.perABxBA >= 0.400 ? "bg-sky-500/15 text-sky-400" : "text-muted-foreground bg-muted/20"}`} data-testid={`text-xba-ab-${ab.abNumber}`}>
+                          xBA .{(ab.perABxBA * 1000).toFixed(0).padStart(3, "0")}
+                        </span>
+                      )}
+                      {ab.contactGrade && ab.contactGrade !== "weak" && (
+                        <span className={`text-[8px] px-1 py-0.5 rounded font-medium ${ab.contactGrade === "barrel" ? "text-orange-400 bg-orange-500/10" : ab.contactGrade === "solid" ? "text-emerald-400 bg-emerald-500/10" : ab.contactGrade === "flare" ? "text-sky-400 bg-sky-500/10" : "text-muted-foreground bg-muted/10"}`}>
+                          {ab.contactGrade}
+                        </span>
+                      )}
                     </div>
                   );
                 })}
@@ -2505,6 +2515,11 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                                       )}
                                       {!ab.isBarrel && ab.exitVelocity != null && ab.exitVelocity >= 95 && (
                                         <span className="text-[7px] font-bold px-1 py-0 rounded bg-orange-500/15 text-orange-400">HH</span>
+                                      )}
+                                      {(ab as any).perABxBA != null && (ab as any).perABxBA > 0 && (
+                                        <span className={`text-[7px] font-bold px-1 py-0 rounded tabular-nums ${(ab as any).perABxBA >= 0.700 ? "bg-emerald-500/15 text-emerald-400" : (ab as any).perABxBA >= 0.400 ? "bg-sky-500/15 text-sky-400" : "text-muted-foreground/60 bg-muted/20"}`} data-testid={`text-xba-boxscore-${i}`}>
+                                          .{((ab as any).perABxBA * 1000).toFixed(0).padStart(3, "0")}
+                                        </span>
                                       )}
                                       {ab.pitchType && (
                                         <span className="text-muted-foreground/50 ml-auto px-1 py-0.5 rounded bg-secondary/40 text-[8px] font-medium">

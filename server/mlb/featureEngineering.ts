@@ -1056,6 +1056,15 @@ export function computeSpecHotColdForm(input: MLBPropInput): number {
     const avgEV = priorABs.reduce((s, ab) => s + (ab.exitVelocity ?? 85), 0) / priorABs.length;
     recentEVTrend = normalize01(avgEV, 82, 100);
 
+    const xBAs = priorABs
+      .map((ab: any) => ab.perABxBA as number | null | undefined)
+      .filter((v): v is number => v != null && Number.isFinite(v));
+    if (xBAs.length > 0) {
+      const avgXBA = xBAs.reduce((a, b) => a + b, 0) / xBAs.length;
+      const xbaBoost = normalize01(avgXBA, 0.150, 0.600);
+      recentEVTrend = recentEVTrend * 0.5 + xbaBoost * 0.5;
+    }
+
     const barrels = priorABs.filter((ab) => {
       const ev = ab.exitVelocity ?? 0;
       const la = ab.launchAngle ?? 0;

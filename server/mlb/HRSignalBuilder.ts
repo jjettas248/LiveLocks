@@ -148,6 +148,18 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
 
   score += powerEvents.length * 0.5;
 
+  const perABxBAs = priorABs
+    .map((ab: any) => ab.perABxBA as number | null | undefined)
+    .filter((v): v is number => v != null && Number.isFinite(v) && v > 0);
+  if (perABxBAs.length > 0) {
+    const maxXBA = Math.max(...perABxBAs);
+    const avgXBA = perABxBAs.reduce((a, b) => a + b, 0) / perABxBAs.length;
+    if (maxXBA >= 0.800) score += 1.5;
+    else if (maxXBA >= 0.600) score += 0.8;
+    if (avgXBA >= 0.500) score += 1.0;
+    else if (avgXBA >= 0.350) score += 0.4;
+  }
+
   if (qualifiedEVMean !== null && qualifiedEVMean >= 99) {
     score += 1.0;
   } else if (avgEV !== null && avgEV >= 100) {
