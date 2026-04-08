@@ -452,7 +452,7 @@ const openingLineCache = new Map<string, number>();
 // Scoped to event ID so cross-game key collisions (same player in back-to-back games) cannot occur.
 // TTL: 2 minutes (same as NBA_ODDS_TTL). Used as fallback when quota is exhausted or a transient error occurs.
 const lastKnownOdds = new Map<string, { data: Record<string, OddsLine>; timestamp: number }>();
-const LAST_KNOWN_TTL = 30 * 60 * 1000; // 30 min — extended fallback for quota exhaustion
+const LAST_KNOWN_TTL = NBA_ODDS_TTL; // 2 min — NBA needs fresh lines for 2H plays
 
 // Per-game+market throttle — tracks the last time an Odds API fetch was issued per event+market.
 // Prevents rapid re-fetches for the same game+market combination within a short window.
