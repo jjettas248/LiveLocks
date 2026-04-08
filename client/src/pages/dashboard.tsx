@@ -27,6 +27,7 @@ import { useLocation } from "wouter";
 import { TopPlaysPanel } from "@/components/dashboard/TopPlaysPanel";
 import { UserStatusRail } from "@/components/dashboard/UserStatusRail";
 import { LiveUpdateToast } from "@/components/common/LiveUpdateToast";
+import { LockedSignalModule } from "@/components/LockedSignalModule";
 import {
   Activity,
   Clock,
@@ -2133,20 +2134,8 @@ export default function Dashboard() {
           </div>
         )}
 
-        {isFreeUser && autoRunResult && (
-          <div
-            data-testid="sms-teaser-free"
-            className="rounded-lg border border-[#27272a] bg-[#111] px-4 py-2.5 flex items-center justify-between gap-2"
-          >
-            <p className="text-xs text-[#a1a1aa] font-medium">You're seeing limited access. 🔒 More live edges are happening right now.</p>
-            <button
-              data-testid="button-unlock-full-access-strip"
-              onClick={handleUpgradeClick}
-              className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-black active:scale-95 transition-transform"
-            >
-              Start 3-Day Trial – $1
-            </button>
-          </div>
+        {isFreeUser && (
+          <LockedSignalModule onUpgradeClick={handleUpgradeClick} />
         )}
 
         {isFreeUser && playsUsed === 1 && (
