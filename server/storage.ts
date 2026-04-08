@@ -1,4 +1,5 @@
 import { db } from "./db";
+import { todayET } from "./utils/dateUtils";
 import { calculateRemainingMinutes } from "./minutesModel";
 import { getPlayerUsage, getTeamDefenseMatchup, computeUsageAdjustment, computeDefenseMultiplier } from "./services/nbaStatsService";
 import { classifyArchetype as classifyNBAArchetype, type NBAArchetype, VARIANCE_MULTIPLIERS, MINUTES_FRAGILITY_MULTIPLIERS, CORRELATION_DEFAULTS, COMBO_VARIANCE_EXTRA, isVolatileArchetype, isImpactedArchetype, getSafetyCeiling } from "./nba/archetypes";
@@ -1115,7 +1116,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async tryConsumePlayToday(userId: number): Promise<{ allowed: boolean; playsUsedToday: number }> {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayET();
     const result = await db.execute(sql`
       UPDATE users
       SET plays_used_today = plays_used_today + 1
@@ -1132,7 +1133,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async tryConsumeGamePlayToday(userId: number, gameId: string, limit: number = 3): Promise<{ allowed: boolean; alreadyUnlocked: boolean; playsUsedToday: number }> {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayET();
     const result = await db.execute(sql`
       UPDATE users
       SET
@@ -1164,7 +1165,7 @@ export class DatabaseStorage implements IStorage {
   async resetDailyPlaysIfNeeded(userId: number): Promise<User | undefined> {
     const user = await this.getUserById(userId);
     if (!user) return undefined;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayET();
     if (user.playsResetDate !== today) {
       await db.update(users).set({ playsUsedToday: 0, playsResetDate: today, unlockedGameIdsToday: "[]" }).where(eq(users.id, userId));
       return { ...user, playsUsedToday: 0, playsResetDate: today, unlockedGameIdsToday: "[]" };
@@ -1234,7 +1235,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async resetUserPlays(userId: number): Promise<void> {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayET();
     await db.update(users).set({ playsUsed: 0, playsUsedToday: 0, playsResetDate: today }).where(eq(users.id, userId));
   }
 
@@ -1332,7 +1333,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async savePlayAlerts(plays: any[]): Promise<void> {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayET();
     for (const play of plays) {
       const prob = Number(play.probability);
       const directionalConf = play.betDirection === "over" ? prob : 100 - prob;
@@ -2175,7 +2176,7 @@ export class DatabaseStorage implements IStorage {
     diagnosticsSnapshot?: Record<string, unknown> | null;
   }): Promise<HrRadarAlert | null> {
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayET();
       const halfLabel = data.half === "top" ? "T" : "B";
       const detectedLabel = `${halfLabel}${data.inning}`;
       const existing = await db.select().from(hrRadarAlerts)
@@ -2272,7 +2273,7 @@ export class DatabaseStorage implements IStorage {
 
   async resolveHrRadarAlertAsHit(playerId: string, gameId: string, hitInningNum: number, hitHalfVal: string, hitLabelVal: string): Promise<number> {
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayET();
       const result = await db.update(hrRadarAlerts)
         .set({
           status: "hit",
@@ -2308,7 +2309,7 @@ export class DatabaseStorage implements IStorage {
     hitLabel: string;
   }): Promise<void> {
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayET();
       const existing = await db.select().from(hrRadarAlerts)
         .where(and(
           eq(hrRadarAlerts.sessionDate, today),
@@ -2372,7 +2373,7 @@ export class DatabaseStorage implements IStorage {
 
   async resolveHrRadarAlertAsMiss(playerId: string, gameId: string): Promise<number> {
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayET();
       const result = await db.update(hrRadarAlerts)
         .set({
           status: "miss",
@@ -2397,7 +2398,7 @@ export class DatabaseStorage implements IStorage {
 
   async reconcileHrRadarAlertsForGame(gameId: string, playerHrMap: Map<string, { inning: number; half: string }>): Promise<void> {
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayET();
       const liveAlerts = await db.select().from(hrRadarAlerts)
         .where(and(
           eq(hrRadarAlerts.sessionDate, today),
@@ -2551,7 +2552,7 @@ export class DatabaseStorage implements IStorage {
     }>;
     summary: { wins: number; losses: number; totalGraded: number; hitRate: number };
   }> {
-    const targetDate = sessionDate ?? new Date().toISOString().slice(0, 10);
+    const targetDate = sessionDate ?? todayET();
     try {
       const allRows = await db.select().from(hrRadarAlerts)
         .where(eq(hrRadarAlerts.sessionDate, targetDate))
@@ -2710,14 +2711,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getTodayHrRadarBoard(): Promise<HrRadarAlert[]> {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayET();
     return db.select().from(hrRadarAlerts)
       .where(eq(hrRadarAlerts.sessionDate, today))
       .orderBy(desc(hrRadarAlerts.detectedAt));
   }
 
   async getHrRadarAlertForAnalyze(playerId: string, gameId: string): Promise<HrRadarAlert | null> {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayET();
     const rows = await db.select().from(hrRadarAlerts)
       .where(and(
         eq(hrRadarAlerts.sessionDate, today),

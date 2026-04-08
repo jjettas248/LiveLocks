@@ -5,6 +5,7 @@
 import type { PitchMixEntry } from "./types";
 import { fetchBaseballSavantData, getStadiumCoords, windDirectionRelativeToField, isVenueIndoors } from "./dataSources";
 import { storage } from "../storage";
+import { todayET } from "../utils/dateUtils";
 
 // ── Cache type definitions ────────────────────────────────────────────────────
 
@@ -860,7 +861,7 @@ export async function syncBullpenUsage(statsPk: string, cacheKey?: string): Prom
     const liveData = data.liveData ?? {};
     const boxTeams = liveData.boxscore?.teams ?? {};
     const gameDate: string = data.gameData?.datetime?.officialDate
-      ?? new Date().toISOString().slice(0, 10);
+      ?? todayET();
 
     const relieversUsed: BullpenCache["relieversUsed"] = [];
     let bullpenEra: number | null = null;

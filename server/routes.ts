@@ -25,6 +25,7 @@ import { enrichNCAABGameFull, clearEnrichmentCache, getEnrichmentCacheStats } fr
 import { calculateParlay } from "./parlayService";
 import { registerAuthRoutes, requirePlayAccess, requireMLBAccess, requireAuth, requireAdmin, requireTier } from "./auth";
 import { resolveAccess } from "./utils/access";
+import { todayET } from "./utils/dateUtils";
 import { registerStripeRoutes } from "./stripeService";
 import { getVapidPublicKey, sendPush } from "./webpush";
 import { checkAndSendAlerts } from "./alertManager";
@@ -77,8 +78,8 @@ function getPlayKey(p: {
   timestamp?: Date | string;
 }): string {
   const today = p.timestamp
-    ? new Date(p.timestamp).toISOString().slice(0, 10)
-    : new Date().toISOString().slice(0, 10);
+    ? new Date(p.timestamp).toLocaleDateString("en-CA", { timeZone: "America/New_York" })
+    : todayET();
   return [
     String(p.playerId ?? p.playerName ?? "").trim(),
     String(p.statType ?? p.market ?? "").toUpperCase().trim(),
@@ -1801,7 +1802,7 @@ export async function registerRoutes(
       const canonical = await storage.getCanonicalHrRadarOutcomes();
 
       const { getBatterHrHistory } = await import("./mlb/onlyHomersService");
-      const todayStr = new Date().toISOString().slice(0, 10);
+      const todayStr = todayET();
 
       for (const c of cashedFromEdge) {
         try {
@@ -6117,7 +6118,7 @@ export function registerAnalyticsRoutes(app: Express): void {
         }
       }
 
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayET();
       const { plays: recentPlays } = await storage.getPlays({ date: today, settled: "pending", limit: 50 });
       const nbaSignals = recentPlays
         .filter((p: any) => p.sport === "nba" && p.prob)
@@ -6193,7 +6194,7 @@ export function registerAnalyticsRoutes(app: Express): void {
         }
       }
 
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayET();
       const { plays: recentPlays } = await storage.getPlays({ date: today, settled: "pending", limit: 200 });
       for (const p of recentPlays) {
         const prob = p.prob ? parseFloat(String(p.prob)) : 0;

@@ -4,15 +4,14 @@ import type { IStorage } from "./storage";
 import { db } from "./db";
 import { sentAlerts } from "@shared/schema";
 import { eq, and, gt } from "drizzle-orm";
+import { todayET } from "./utils/dateUtils";
 
-// ── In-memory guards (process-lifetime, fast path) ────────────────────────────
 const alertedPlays = new Set<string>();
 const alerted2HGames = new Set<string>();
 const alertedHalftimeGames = new Set<string>();
 
-// ── Build today's date string (UTC date, matches daily dedup window) ──────────
 function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayET();
 }
 
 // ── DB-backed SMS dedup ───────────────────────────────────────────────────────

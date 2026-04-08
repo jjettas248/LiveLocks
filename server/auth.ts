@@ -8,6 +8,7 @@ import { insertUserEmailPasswordSchema } from "@shared/schema";
 import type { User } from "@shared/schema";
 import { sendWallEmail, sendVerificationEmail, sendPasswordResetEmail } from "./email";
 import { resolveAccess } from "./utils/access";
+import { todayET } from "./utils/dateUtils";
 
 // ── Stripe tier-check TTL cache ────────────────────────────────────────────────
 // Limits Stripe API calls to once per 5 minutes per user.
@@ -570,7 +571,7 @@ export async function requirePlayAccess(req: Request, res: Response, next: NextF
 
   const consumeResult = await storage.tryConsumeGamePlayToday(userId, consumeKey);
   if (!consumeResult.allowed && !consumeResult.alreadyUnlocked) {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayET();
     return res.status(402).json({
       error: "PAYWALL_TRIGGER",
       playsUsedToday: consumeResult.playsUsedToday,

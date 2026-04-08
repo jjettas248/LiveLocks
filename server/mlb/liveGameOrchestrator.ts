@@ -52,6 +52,7 @@ import { buildLiveEventInterpretation } from "./liveEventInterpretation";
 import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, clearGameCooldowns, type HRAlertInput } from "./evaluateHRAlert";
+import { todayET } from "../utils/dateUtils";
 import { buildHRSignal } from "./HRSignalBuilder";
 import { getPlayer } from "./rosterService";
 import { storage } from "../storage";
@@ -448,7 +449,7 @@ export class LiveGameOrchestrator {
       });
       if (!response.ok) throw new Error(`MLB boxscore API ${response.status}`);
       const data = (await response.json()) as any;
-      const gameDate = new Date().toISOString().slice(0, 10);
+      const gameDate = todayET();
       const stats: Array<any> = [];
 
       for (const side of ["away", "home"] as const) {
@@ -2529,7 +2530,7 @@ export class LiveGameOrchestrator {
 const mlbPersistGuard = new Set<string>();
 
 function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSignal[]): void {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayET();
   let persisted = 0;
   let skipped = 0;
   let skipReasons: Record<string, number> = {};
@@ -2574,7 +2575,7 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
 }
 
 function resetDailyPersistGuard(): void {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayET();
   for (const key of Array.from(mlbPersistGuard)) {
     if (!key.endsWith(today)) mlbPersistGuard.delete(key);
   }

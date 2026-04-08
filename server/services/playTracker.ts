@@ -1,6 +1,7 @@
 import type { IStorage } from "../storage";
 import { gradePersistedPlays } from "./gradePersistedPlays";
 import { nanoid } from "nanoid";
+import { todayET } from "../utils/dateUtils";
 
 export interface EngineDiagnostics {
   archetype?: string;
@@ -70,7 +71,7 @@ export async function trackPlay(
     return { id: "", isDuplicate: true };
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayET();
   const id = nanoid(16);
 
   const duplicateGuard = [
