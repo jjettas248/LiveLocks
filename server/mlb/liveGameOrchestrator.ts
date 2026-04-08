@@ -2245,7 +2245,7 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
 
 function resetDailyPersistGuard(): void {
   const today = new Date().toISOString().slice(0, 10);
-  for (const key of mlbPersistGuard) {
+  for (const key of Array.from(mlbPersistGuard)) {
     if (!key.endsWith(today)) mlbPersistGuard.delete(key);
   }
 }

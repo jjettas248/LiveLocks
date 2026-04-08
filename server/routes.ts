@@ -1448,13 +1448,16 @@ export async function registerRoutes(
     const updatedAt = entry?.updatedAt ?? 0;
     const cachedIsDegraded = entry?.isDegraded ?? false;
 
-    const SIGNAL_FRESHNESS_MS = 5 * 60 * 1000;
-    if (updatedAt > 0 && Date.now() - updatedAt > SIGNAL_FRESHNESS_MS) {
-      const staleAge = Math.round((Date.now() - updatedAt) / 1000);
+    const SIGNAL_FRESHNESS_MS = 10 * 60 * 1000;
+    const SIGNAL_DEGRADED_MS = 3 * 60 * 1000;
+    const dataAge = updatedAt > 0 ? Date.now() - updatedAt : 0;
+    if (updatedAt > 0 && dataAge > SIGNAL_FRESHNESS_MS) {
+      const staleAge = Math.round(dataAge / 1000);
       console.warn(`[MLB signals] game=${gameId} — engine data ${staleAge}s old (>${SIGNAL_FRESHNESS_MS / 1000}s limit); returning no_lines`);
       mlbSignalsCache.set(gameId, { ts: Date.now(), signals: [], updatedAt, isDegraded: true });
       return res.json({ mode: "no_lines", signals: [], updatedAt, isDegraded: true });
     }
+    const isDataStale = updatedAt > 0 && dataAge > SIGNAL_DEGRADED_MS;
 
     const engineAll = entry?.allSignals ?? entry?.qualifiedSignals ?? [];
 
@@ -1612,9 +1615,10 @@ export async function registerRoutes(
       booksAvailable: validatedApiSignals.length > 0 ? 1 : 0,
     });
 
-    mlbSignalsCache.set(gameId, { ts: Date.now(), signals: validatedApiSignals, updatedAt, isDegraded: cachedIsDegraded });
+    const finalDegraded = cachedIsDegraded || isDataStale;
+    mlbSignalsCache.set(gameId, { ts: Date.now(), signals: validatedApiSignals, updatedAt, isDegraded: finalDegraded });
 
-    return res.json({ mode: "live", engine: "MLB", engineMode: mlbEngineResult.mode, signals: validatedApiSignals, updatedAt, isDegraded: cachedIsDegraded, gameCardTags: entry?.gameCardTags ?? [] });
+    return res.json({ mode: "live", engine: "MLB", engineMode: mlbEngineResult.mode, signals: validatedApiSignals, updatedAt, isDegraded: finalDegraded, gameCardTags: entry?.gameCardTags ?? [] });
   });
 
   app.get("/api/mlb/edge-feed", requireAuth, async (req, res) => {
@@ -1697,7 +1701,7 @@ export async function registerRoutes(
       const cachedLiveGames = mlbLiveGamesCache.get("games");
 
       for (const [gid, edgeEntry] of Array.from(mlbEdgeCache.entries())) {
-        const FEED_FRESHNESS_MS = 120_000;
+        const FEED_FRESHNESS_MS = 10 * 60 * 1000;
         if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) continue;
 
         const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);
@@ -1835,11 +1839,64 @@ export async function registerRoutes(
         }));
       const allCashed = [...cashedFromEdge, ...cashedFromDb];
 
+      const dbAlerts = await storage.getTodayHrRadarBoard();
+      const cashedPlayerIdSet = new Set([...cashedFromEdge, ...cashedFromDb].map((c: any) => c.playerId));
+      const bettablePlayerIdSet = new Set(bettable.map((b: any) => b.playerId));
+      const watchlistPlayerIdSet = new Set(cleanWatchlist.map((w: any) => w.playerId));
+
+      const activeGameIds = new Set(cachedLiveGames?.games.filter((g: any) => g.status === "live" || g.status === "pregame").map((g: any) => g.gameId) ?? []);
+
+      for (const alert of dbAlerts) {
+        if (alert.status === "hit" || alert.status === "miss") continue;
+        if (cashedPlayerIdSet.has(alert.playerId)) continue;
+        if (!activeGameIds.has(alert.gameId)) continue;
+        const score = parseFloat(String(alert.currentReadinessScore ?? alert.initialReadinessScore ?? 0));
+        const peakScore = parseFloat(String(alert.peakReadinessScore ?? score));
+        const game = cachedLiveGames?.games.find((g: any) => g.gameId === alert.gameId);
+        const entry = {
+          playerId: alert.playerId,
+          playerName: alert.playerName,
+          team: alert.team,
+          market: "home_runs",
+          side: "OVER",
+          gameId: alert.gameId,
+          signalScore: score,
+          hrBuildScore: score,
+          hrIntensity: alert.confidenceTier === "strong" ? "strong" : alert.confidenceTier === "building" ? "watch" : "weak",
+          confidenceTier: alert.confidenceTier === "strong" ? "STRONG" : alert.confidenceTier === "building" ? "SOLID" : "WATCHLIST",
+          awayAbbr: game?.awayAbbr ?? null,
+          homeAbbr: game?.homeAbbr ?? null,
+          inning: alert.detectedInning ?? 0,
+          alreadyHit: false,
+          watchlist: alert.signalState === "watching",
+          actionable: alert.signalState === "actionable" || alert.confidenceTier === "strong",
+          alertPath: alert.alertPath,
+          alertTier: alert.alertTier,
+          triggerTags: alert.triggerTags ?? [],
+          summaryText: alert.summaryText,
+          peakScore,
+          detectedLabel: alert.detectedLabel,
+          diagnosticsSnapshot: alert.diagnosticsSnapshot,
+          contactSnapshot: alert.contactSnapshot,
+          badges: [],
+          reasons: alert.summaryText ? [alert.summaryText] : [],
+          explanationBullets: alert.summaryText ? [alert.summaryText] : [],
+        };
+
+        if (entry.actionable && !bettablePlayerIdSet.has(alert.playerId)) {
+          bettable.push(entry);
+          bettablePlayerIdSet.add(alert.playerId);
+        } else if (!entry.actionable && !watchlistPlayerIdSet.has(alert.playerId)) {
+          cleanWatchlist.push(entry);
+          watchlistPlayerIdSet.add(alert.playerId);
+        }
+      }
+
       const dedupBettable = Array.from(new Map(bettable.map((b: any) => [b.playerId, b])).values());
       const dedupWatchlist = Array.from(new Map(cleanWatchlist.map((w: any) => [w.playerId, w])).values());
       const dedupCashed = Array.from(new Map(allCashed.map((c: any) => [c.playerId, c])).values());
 
-      console.log(`[MLB_HR_RADAR] bettable=${dedupBettable.length} cashed=${dedupCashed.length} (edge=${cashedFromEdge.length},db=${cashedFromDb.length}) watchlist=${dedupWatchlist.length} canonicalHits=${canonical.hits.length} canonicalMisses=${canonical.misses.length}`);
+      console.log(`[MLB_HR_RADAR] bettable=${dedupBettable.length} cashed=${dedupCashed.length} (edge=${cashedFromEdge.length},db=${cashedFromDb.length}) watchlist=${dedupWatchlist.length} dbAlerts=${dbAlerts.length} canonicalHits=${canonical.hits.length} canonicalMisses=${canonical.misses.length}`);
 
       return res.json({
         bettableHR: dedupBettable,
