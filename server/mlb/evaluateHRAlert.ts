@@ -42,6 +42,12 @@ export interface HRAlertInput {
   hrRateLast30?: number | null;
   handednessParkFactor?: number | null;
   pitcherDeterioration?: PitcherDeteriorationContext | null;
+  leiNearHrScore?: number;
+  leiMomentumScore?: number;
+  leiPitcherFatigueScore?: number;
+  leiVeloDropScore?: number;
+  leiConfidenceBoost?: number;
+  leiTags?: string[];
   priorABResults: Array<{
     exitVelocity: number | null;
     launchAngle: number | null;
@@ -228,6 +234,24 @@ function computeConfidence(
   base = Math.max(1, base - suppressionCount);
 
   return Math.max(1, base);
+}
+
+function computeLeiBoost(input: HRAlertInput): { scoreBoost: number; escalate: boolean } {
+  let scoreBoost = 0;
+  let escalate = false;
+  const near = input.leiNearHrScore ?? 0;
+  const momentum = input.leiMomentumScore ?? 0;
+  const fatigue = input.leiPitcherFatigueScore ?? 0;
+  const velo = input.leiVeloDropScore ?? 0;
+  const conf = input.leiConfidenceBoost ?? 0;
+
+  if (near >= 0.08) { scoreBoost += 0.5; escalate = true; }
+  if (momentum >= 0.05) scoreBoost += 0.3;
+  if (fatigue >= 0.07) scoreBoost += 0.3;
+  if (velo >= 0.06) scoreBoost += 0.2;
+  if (conf >= 0.05) escalate = true;
+
+  return { scoreBoost, escalate };
 }
 
 const HR_CONVERSION_ALERT_MIN = 0.08;
@@ -521,6 +545,25 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
   ) {
     positiveFactors.push(`${totalHrShaped} HR-shaped events, score=${hrBuildScore}`);
     positiveFactors.push(`conversion: ${convPct}`);
+
+    const leiResult = computeLeiBoost(input);
+    if (leiResult.escalate && hrBuildScore >= 3.0 && (convProb === null || convProb >= HR_CONVERSION_ALERT_MIN)) {
+      positiveFactors.push(`LEI escalation: nearHR=${input.leiNearHrScore?.toFixed(2)}, momentum=${input.leiMomentumScore?.toFixed(2)}`);
+      if (input.leiTags?.length) positiveFactors.push(`LEI tags: ${input.leiTags.join(", ")}`);
+      const conf = computeConfidence(hrBuildScore + leiResult.scoreBoost, factors, "PATH_B", softVetoes.length, convProb);
+
+      return {
+        level: "ALERT",
+        triggerReason: `LEI_ESCALATION:hrShaped${totalHrShaped}_score${hrBuildScore}_lei`,
+        signalState: "BUILDING",
+        decision: "PREPARE",
+        confidenceScore: conf,
+        formattedReason: `HR-shaped contact with live event reinforcement (conv ${convPct}). Contact trend + pitcher deterioration elevating signal.`,
+        detectedInning: inning,
+        alertTier: "prepare",
+        diagnostics: { ...baseDiagnostics, alertPath: "LEI_ESCALATION", positiveFactors },
+      };
+    }
 
     return {
       level: "WATCH",

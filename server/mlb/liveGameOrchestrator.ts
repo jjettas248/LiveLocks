@@ -48,6 +48,7 @@ import {
   type MLBPitcherArchetype,
 } from "./archetypes";
 import { applySafetyCeiling, applyDirectionalBias } from "./calibration";
+import { buildLiveEventInterpretation } from "./liveEventInterpretation";
 import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, clearGameCooldowns, type HRAlertInput } from "./evaluateHRAlert";
@@ -1241,6 +1242,7 @@ export class LiveGameOrchestrator {
           isPitcherCollapsing,
           pitchMix: pitcherCtx?.pitchMix ?? [],
           throws: pitcher?.throws ?? null,
+          seasonAvgVelocity: pitcherCtx?.seasonAvgVelocity ?? null,
         },
         ...(rollingStats ? {
           hrTrend: {
@@ -1281,6 +1283,8 @@ export class LiveGameOrchestrator {
         const boost = ohData.hotHitterPeriod === "7d" ? 0.8 : ohData.hotHitterPeriod === "14d" ? 0.5 : 0.3;
         hrInput.hotHitterBoost = boost;
       }
+
+      hrInput.liveInterpretation = buildLiveEventInterpretation(hrInput);
 
       const hrBuild = buildHRSignal(hrInput);
       if (hrBuild.score <= 0) continue;
@@ -1359,6 +1363,12 @@ export class LiveGameOrchestrator {
         hrRateLast30: rollingStats?.hrRateLast30 ?? null,
         handednessParkFactor: getMarketParkFactor(weatherCache?.venueName, "home_runs", resolvedBatterHand),
         pitcherDeterioration: pitcherDeteriorationCtx,
+        leiNearHrScore: hrInput.liveInterpretation?.nearHrScore,
+        leiMomentumScore: hrInput.liveInterpretation?.momentumScore,
+        leiPitcherFatigueScore: hrInput.liveInterpretation?.pitcherFatigueScore,
+        leiVeloDropScore: hrInput.liveInterpretation?.veloDropScore,
+        leiConfidenceBoost: hrInput.liveInterpretation?.confidenceBoost,
+        leiTags: hrInput.liveInterpretation?.tags,
         priorABResults: (playerContact.priorABResults ?? []).map((ab: any) => ({
           exitVelocity: ab.exitVelocity ?? null,
           launchAngle: ab.launchAngle ?? null,
@@ -1747,6 +1757,7 @@ export class LiveGameOrchestrator {
             isPitcherCollapsing,
             pitchMix: pitcherCtx?.pitchMix ?? [],
             throws: pitcher?.throws ?? null,
+            seasonAvgVelocity: pitcherCtx?.seasonAvgVelocity ?? null,
           },
           ...(market === "hrr" && boxScorePlayer ? {
             hrrComponents: {
@@ -1815,6 +1826,8 @@ export class LiveGameOrchestrator {
             input.hotHitterBoost = boost;
           }
         }
+
+        input.liveInterpretation = buildLiveEventInterpretation(input);
 
         pLog(gameId, "engineInput", { player: input.playerName, market: input.market, bookLine: input.bookLine, inning: input.inning, parkFactor: input.weatherPark.parkFactor, venue: weatherCache?.venueName });
 
@@ -2083,6 +2096,12 @@ export class LiveGameOrchestrator {
               hrRateLast30: rollingStats?.hrRateLast30 ?? null,
               handednessParkFactor: getMarketParkFactor(weatherCache?.venueName, "home_runs", resolvedBatterHand),
               pitcherDeterioration: pitcherDeteriorationCtx,
+              leiNearHrScore: input.liveInterpretation?.nearHrScore,
+              leiMomentumScore: input.liveInterpretation?.momentumScore,
+              leiPitcherFatigueScore: input.liveInterpretation?.pitcherFatigueScore,
+              leiVeloDropScore: input.liveInterpretation?.veloDropScore,
+              leiConfidenceBoost: input.liveInterpretation?.confidenceBoost,
+              leiTags: input.liveInterpretation?.tags,
               priorABResults: (playerContact?.priorABResults ?? []).map((ab: any) => ({
                 exitVelocity: ab.exitVelocity ?? null,
                 launchAngle: ab.launchAngle ?? null,
@@ -2299,6 +2318,7 @@ export class LiveGameOrchestrator {
               : false,
             pitchMix: pitcherCtx?.pitchMix ?? [],
             throws: pitcherToEval.throws ?? null,
+            seasonAvgVelocity: pitcherCtx?.seasonAvgVelocity ?? null,
           },
           lineup: {
             battingOrderSlot: 5,
@@ -2323,6 +2343,8 @@ export class LiveGameOrchestrator {
             isTopRelieverAvailable: bullpenCache?.isTopRelieverAvailable ?? true,
           },
         };
+
+        input.liveInterpretation = buildLiveEventInterpretation(input);
 
         pLog(gameId, "engineInput:pitcher", { player: input.playerName, market: input.market, bookLine: input.bookLine, parkFactor: input.weatherPark.parkFactor });
 

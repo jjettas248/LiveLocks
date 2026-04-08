@@ -201,6 +201,7 @@ export interface PitcherContext {
   isPitcherCollapsing: boolean;
   pitchMix: PitchMixEntry[];
   throws: "L" | "R" | null;
+  seasonAvgVelocity?: number | null;
 }
 
 export interface PitchMixEntry {
@@ -318,6 +319,16 @@ export interface MLBPropInput {
 
   hotHitterBoost?: number;
   bvpHrBoost?: number;
+
+  liveInterpretation?: {
+    contactScore: number;
+    nearHrScore: number;
+    momentumScore: number;
+    pitcherFatigueScore: number;
+    veloDropScore: number;
+    confidenceBoost: number;
+    tags: string[];
+  };
 }
 
 export interface ModifierBreakdown {
@@ -331,6 +342,7 @@ export interface ModifierBreakdown {
   handednessMatchup: number;
   bvpHistory: number;
   pocketWeakness: number;
+  liveEvent: number;
   total: number;
 }
 
@@ -346,6 +358,7 @@ export interface ProjectionLog {
   handednessMatchupAdjustment: number;
   bvpHistoryAdjustment: number;
   pocketWeaknessAdjustment: number;
+  liveEventAdjustment: number;
   finalCappedAdjustment: number;
   rawProbability: number;
   calibratedProbability: number;
@@ -456,6 +469,7 @@ export const MODIFIER_CAPS = {
   handednessMatchup: 0.08,
   bvpHistory: 0.10,
   pocketWeakness: 0.08,
+  liveEvent: 0.15,
   totalMax: 0.50,
 } as const;
 

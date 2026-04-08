@@ -220,6 +220,13 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
     score += 0.4;
   }
 
+  const lei = input.liveInterpretation;
+  if (lei) {
+    if (lei.nearHrScore > 0.04) score += lei.nearHrScore * 8;
+    if (lei.momentumScore > 0.03) score += lei.momentumScore * 4;
+    if (lei.veloDropScore > 0.03) score += lei.veloDropScore * 3;
+  }
+
   const hotHitterBoost = input.hotHitterBoost ?? 0;
   score += hotHitterBoost;
 

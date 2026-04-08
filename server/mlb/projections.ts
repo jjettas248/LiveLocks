@@ -136,6 +136,23 @@ export function projectBaseValue(input: MLBPropInput): ProjectionResult {
   const rawBvp = computeBvpAdjustment(input);
   const rawPocketWeakness = computeLineupPocketWeaknessScore(input);
 
+  let rawLiveEvent = 0;
+  const lei = input.liveInterpretation;
+  if (lei) {
+    const isPitcherMarket = market === "pitcher_strikeouts" || market === "pitcher_outs" ||
+      market === "hits_allowed" || market === "walks_allowed" || market === "hr_allowed";
+    if (isPitcherMarket) {
+      rawLiveEvent = lei.pitcherFatigueScore * -0.15 +
+        lei.veloDropScore * -0.10;
+    } else {
+      rawLiveEvent = lei.contactScore * 0.30 +
+        lei.nearHrScore * 0.25 +
+        lei.momentumScore * 0.15 +
+        lei.pitcherFatigueScore * 0.20 +
+        lei.veloDropScore * 0.10;
+    }
+  }
+
   const liveForm = capModifier(rawLiveForm, MODIFIER_CAPS.liveForm);
   const pitcher = capModifier(rawPitcher, MODIFIER_CAPS.pitcher);
   const pitchType = capModifier(rawPitchType, MODIFIER_CAPS.pitchType);
@@ -146,9 +163,10 @@ export function projectBaseValue(input: MLBPropInput): ProjectionResult {
   const handednessMatchup = capModifier(rawHandedness, MODIFIER_CAPS.handednessMatchup);
   const bvpHistory = capModifier(rawBvp, MODIFIER_CAPS.bvpHistory);
   const pocketWeakness = capModifier(rawPocketWeakness, MODIFIER_CAPS.pocketWeakness);
+  const liveEvent = capModifier(rawLiveEvent, MODIFIER_CAPS.liveEvent);
 
   const rawTotal = liveForm + pitcher + pitchType + weatherPark + lineup + bullpen +
-    parkHistory + handednessMatchup + bvpHistory + pocketWeakness;
+    parkHistory + handednessMatchup + bvpHistory + pocketWeakness + liveEvent;
   const total = clamp(rawTotal, -MODIFIER_CAPS.totalMax, MODIFIER_CAPS.totalMax);
 
   if (Math.abs(rawTotal) > MODIFIER_CAPS.totalMax) {
@@ -170,6 +188,7 @@ export function projectBaseValue(input: MLBPropInput): ProjectionResult {
     handednessMatchup,
     bvpHistory,
     pocketWeakness,
+    liveEvent,
     total,
   };
 
@@ -185,6 +204,7 @@ export function projectBaseValue(input: MLBPropInput): ProjectionResult {
     handednessMatchupAdjustment: Math.round(baseValue * handednessMatchup * 1000) / 1000,
     bvpHistoryAdjustment: Math.round(baseValue * bvpHistory * 1000) / 1000,
     pocketWeaknessAdjustment: Math.round(baseValue * pocketWeakness * 1000) / 1000,
+    liveEventAdjustment: Math.round(baseValue * liveEvent * 1000) / 1000,
     finalCappedAdjustment: Math.round(baseValue * total * 1000) / 1000,
     rawProbability: 0,
     calibratedProbability: 0,

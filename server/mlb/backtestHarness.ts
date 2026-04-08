@@ -67,6 +67,7 @@ function makeEmptyProjectionLog(): MLBPropOutput["projectionLog"] {
     handednessMatchupAdjustment: 0,
     bvpHistoryAdjustment: 0,
     pocketWeaknessAdjustment: 0,
+    liveEventAdjustment: 0,
     finalCappedAdjustment: 0,
     rawProbability: 0,
     calibratedProbability: 0,

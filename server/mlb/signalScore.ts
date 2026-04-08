@@ -21,7 +21,9 @@ export type SignalTag =
   | "HOT OVER" | "COLD UNDER" | "HR WATCH" | "LIVE EDGE"
   | "STRONG MATCHUP" | "ATTACKABLE PITCHER" | "LIVE SIGNALS"
   | "HOT BATS" | "PITCHER ATTACKABLE" | "3RD INNING EDGE"
-  | "5TH INNING EDGE" | "7TH INNING EDGE";
+  | "5TH INNING EDGE" | "7TH INNING EDGE"
+  | "STRONG CONTACT TREND" | "PITCHER FATIGUE RISING"
+  | "VELOCITY DROP DETECTED" | "NEAR HR CONTACT DETECTED";
 
 export type FeedTag = "edge_feed" | "inning_3" | "inning_5" | "inning_7" | "hr_radar" | "hr_watchlist";
 
@@ -330,6 +332,14 @@ export function deriveSignalTags(
 
   if (input.pitcher.era !== null && input.pitcher.era !== undefined && input.pitcher.era >= 5.0) {
     tags.push("ATTACKABLE PITCHER");
+  }
+
+  const lei = input.liveInterpretation;
+  if (lei && lei.tags.length > 0) {
+    for (const t of lei.tags) {
+      const mapped = t.toUpperCase() as SignalTag;
+      if (!tags.includes(mapped)) tags.push(mapped);
+    }
   }
 
   return tags;
