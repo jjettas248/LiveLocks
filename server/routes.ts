@@ -25,7 +25,7 @@ import { enrichNCAABGameFull, clearEnrichmentCache, getEnrichmentCacheStats } fr
 import { calculateParlay } from "./parlayService";
 import { registerAuthRoutes, requirePlayAccess, requireMLBAccess, requireAuth, requireAdmin, requireTier } from "./auth";
 import { resolveAccess } from "./utils/access";
-import { todayET } from "./utils/dateUtils";
+import { todayET, daysAgoET } from "./utils/dateUtils";
 import { registerStripeRoutes } from "./stripeService";
 import { getVapidPublicKey, sendPush } from "./webpush";
 import { checkAndSendAlerts } from "./alertManager";
@@ -157,7 +157,7 @@ export async function registerRoutes(
   storage.getPlays({ sport: "nba", limit: 200, settled: "settled" }).then(({ plays }) => {
     const recent7d = plays.filter(p => {
       const d = p.gameDate;
-      const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const cutoff = daysAgoET(7);
       return d >= cutoff;
     });
     seedFromSettledPlays(recent7d.map(p => ({
@@ -5821,16 +5821,13 @@ export function registerPerformanceRoutes(app: Express): void {
       }
 
       if (range !== "all") {
-        const now = new Date();
         let startDate: string;
         if (range === "1d" || range === "today") {
-          startDate = now.toISOString().slice(0, 10);
+          startDate = todayET();
         } else if (range === "7d") {
-          const d = new Date(now); d.setDate(d.getDate() - 7);
-          startDate = d.toISOString().slice(0, 10);
+          startDate = daysAgoET(7);
         } else if (range === "30d") {
-          const d = new Date(now); d.setDate(d.getDate() - 30);
-          startDate = d.toISOString().slice(0, 10);
+          startDate = daysAgoET(30);
         } else {
           startDate = "";
         }
@@ -6531,16 +6528,13 @@ export function registerAnalyticsRoutes(app: Express): void {
       const league = ["NBA", "MLB", "NCAAB"].includes(leagueRaw) ? leagueRaw : "NBA";
       const sport = league.toLowerCase();
 
-      const now = new Date();
       let startDate: string | undefined;
       if (range === "7d") {
-        const d = new Date(now); d.setDate(d.getDate() - 7);
-        startDate = d.toISOString().slice(0, 10);
+        startDate = daysAgoET(7);
       } else if (range === "30d") {
-        const d = new Date(now); d.setDate(d.getDate() - 30);
-        startDate = d.toISOString().slice(0, 10);
+        startDate = daysAgoET(30);
       } else if (range === "today") {
-        startDate = now.toISOString().slice(0, 10);
+        startDate = todayET();
       }
 
       const [settled, recentResult] = await Promise.all([
@@ -6658,11 +6652,10 @@ export function registerAnalyticsRoutes(app: Express): void {
   app.get("/api/admin/mlb/grading-summary", requireAdmin, async (req, res) => {
     try {
       const range = (req.query.range as string) || "7d";
-      const now = new Date();
       let startDate: string | undefined;
-      if (range === "7d") { const d = new Date(now); d.setDate(d.getDate() - 7); startDate = d.toISOString().slice(0, 10); }
-      else if (range === "30d") { const d = new Date(now); d.setDate(d.getDate() - 30); startDate = d.toISOString().slice(0, 10); }
-      else if (range === "today") { startDate = now.toISOString().slice(0, 10); }
+      if (range === "7d") { startDate = daysAgoET(7); }
+      else if (range === "30d") { startDate = daysAgoET(30); }
+      else if (range === "today") { startDate = todayET(); }
 
       const [graded, pendingResult] = await Promise.all([
         storage.getGradedPlaysForCalibration({ sport: "mlb", startDate }),

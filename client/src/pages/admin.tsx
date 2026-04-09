@@ -898,11 +898,16 @@ function AdminROIPanel() {
   const queryParams = new URLSearchParams();
   if (sportFilter) queryParams.set("sport", sportFilter);
   if (dateRange !== "all") {
-    const d = new Date();
-    if (dateRange === "7d") d.setDate(d.getDate() - 7);
-    else if (dateRange === "30d") d.setDate(d.getDate() - 30);
-    else if (dateRange === "today") { /* current date */ }
-    queryParams.set("startDate", d.toISOString().slice(0, 10));
+    const todayET = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    if (dateRange === "today") {
+      queryParams.set("startDate", todayET);
+      queryParams.set("endDate", todayET);
+    } else {
+      const d = new Date();
+      if (dateRange === "7d") d.setDate(d.getDate() - 7);
+      else if (dateRange === "30d") d.setDate(d.getDate() - 30);
+      queryParams.set("startDate", d.toLocaleDateString("en-CA", { timeZone: "America/New_York" }));
+    }
   }
 
   const { data: report, isLoading } = useQuery<FullROIReport>({

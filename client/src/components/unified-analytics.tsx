@@ -179,11 +179,12 @@ function DashboardSection() {
       const token = getAuthToken();
       let dateParams = "";
       if (range !== "all") {
+        const toET = (dt: Date) => dt.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
         const now = new Date();
         const d = new Date(now);
-        if (range === "1d") dateParams = `&startDate=${now.toISOString().slice(0, 10)}`;
-        else if (range === "7d") { d.setDate(d.getDate() - 7); dateParams = `&startDate=${d.toISOString().slice(0, 10)}`; }
-        else if (range === "30d") { d.setDate(d.getDate() - 30); dateParams = `&startDate=${d.toISOString().slice(0, 10)}`; }
+        if (range === "1d") dateParams = `&startDate=${toET(now)}&endDate=${toET(now)}`;
+        else if (range === "7d") { d.setDate(d.getDate() - 7); dateParams = `&startDate=${toET(d)}`; }
+        else if (range === "30d") { d.setDate(d.getDate() - 30); dateParams = `&startDate=${toET(d)}`; }
       }
       const res = await fetch(`/api/analytics/confidence-buckets?sport=${sportForBuckets}${dateParams}${bucketQueryStr ? "&" + bucketQueryStr : ""}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},

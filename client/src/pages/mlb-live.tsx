@@ -1138,7 +1138,7 @@ function GradingHistoryPanel({
   });
 
   const history = historyData?.history ?? [];
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
   const pastDays = history.filter(h => h.sessionDate !== todayStr);
 
   const isViewingHistory = !!historyDate;

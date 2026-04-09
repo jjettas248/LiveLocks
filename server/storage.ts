@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { todayET } from "./utils/dateUtils";
+import { todayET, daysAgoET } from "./utils/dateUtils";
 import { calculateRemainingMinutes } from "./minutesModel";
 import { getPlayerUsage, getTeamDefenseMatchup, computeUsageAdjustment, computeDefenseMultiplier } from "./services/nbaStatsService";
 import { classifyArchetype as classifyNBAArchetype, type NBAArchetype, VARIANCE_MULTIPLIERS, MINUTES_FRAGILITY_MULTIPLIERS, CORRELATION_DEFAULTS, COMBO_VARIANCE_EXTRA, isVolatileArchetype, isImpactedArchetype, getSafetyCeiling } from "./nba/archetypes";
@@ -2655,9 +2655,7 @@ export class DatabaseStorage implements IStorage {
     hitRate: number;
   }>> {
     try {
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - days);
-      const cutoffStr = cutoff.toISOString().slice(0, 10);
+      const cutoffStr = daysAgoET(days);
 
       const allRows = await db.select().from(hrRadarAlerts)
         .where(sql`${hrRadarAlerts.sessionDate} >= ${cutoffStr}`)

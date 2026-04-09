@@ -1,6 +1,7 @@
 import { db } from "../db";
 import { persistedPlays } from "@shared/schema";
 import { sql, desc } from "drizzle-orm";
+import { daysAgoET } from "../utils/dateUtils";
 
 export type PublicAnalyticsSummary = {
   last7Days: { winRate: number; roi: number; plays: number };
@@ -20,9 +21,7 @@ export type PublicAnalyticsSummary = {
 };
 
 export async function getPublicAnalyticsSummary(): Promise<PublicAnalyticsSummary> {
-  const sevenDaysAgo = new Date();
-  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-  const sevenDaysStr = sevenDaysAgo.toISOString().slice(0, 10);
+  const sevenDaysStr = daysAgoET(7);
 
   const settled = await db
     .select()
