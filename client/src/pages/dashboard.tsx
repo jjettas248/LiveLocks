@@ -1824,7 +1824,7 @@ export default function Dashboard() {
                         ? "bg-amber-500/10 border-amber-500/30 text-amber-500"
                         : "bg-red-500/10 border-red-500/30 text-red-500"
                     }`}
-                    title={`Odds API: ${dataHealth.oddsApi.status} (${Math.round(dataHealth.oddsApi.staleSeconds)}s stale)`}
+                    title={`Odds API: ${dataHealth.oddsApi.status}${dataHealth.oddsApi.requestsRemaining !== null ? ` — ${dataHealth.oddsApi.requestsRemaining.toLocaleString()} credits left` : ''}${dataHealth.oddsKeyStatus ? ` — ${dataHealth.oddsKeyStatus.totalKeys} keys, ${dataHealth.oddsKeyStatus.exhaustedKeys.length} exhausted` : ''}`}
                   >
                     <div className={`w-2 h-2 rounded-full ${
                       dataHealth.oddsApi.status === "healthy"
@@ -1833,7 +1833,9 @@ export default function Dashboard() {
                         ? "bg-amber-500"
                         : "bg-red-500"
                     }`} />
-                    {dataHealth.oddsApi.status}
+                    {dataHealth.oddsKeyStatus && !dataHealth.oddsKeyStatus.allKeysHealthy
+                      ? "quota reached"
+                      : dataHealth.oddsApi.status}
                   </div>
                 )}
               </>
@@ -2684,10 +2686,9 @@ export default function Dashboard() {
                         </p>
                       )}
 
-                      {/* Odds API quota exhausted */}
                       {watchedOpponent && !isOddsLoading && oddsData && (oddsData as any)._quotaExhausted && (
                         <p className="text-xs text-amber-400/80 bg-amber-500/10 rounded-lg p-2 border border-amber-500/20">
-                          Sportsbook lines temporarily unavailable — API quota reached. The engine will retry automatically within the hour. Existing cached lines are still being used.
+                          Sportsbook lines paused — monthly API credit limit reached. Lines will resume when your billing cycle resets. Cached lines are still powering the signal engine.
                         </p>
                       )}
 

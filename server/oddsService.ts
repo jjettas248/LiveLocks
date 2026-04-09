@@ -262,6 +262,7 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
 
   const triedKeys = new Set<number>();
   const maxAttempts = ODDS_API_KEYS.length;
+  let sawQuotaExhaustion = false;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const apiKey = getOddsApiKey();
@@ -274,6 +275,7 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
     const quotaCacheKey = `quota_exhausted_${usedKeyIndex}`;
     const quotaCached = cache.get(quotaCacheKey);
     if (isFresh(quotaCached, QUOTA_TTL)) {
+      sawQuotaExhaustion = true;
       markKeyExhausted(usedKeyIndex);
       continue;
     }
@@ -290,14 +292,16 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
         if (parsed.error_code === "OUT_OF_USAGE_CREDITS") {
           const remaining = res.headers.get("x-requests-remaining");
           console.warn(`[Odds API Error] Key ${usedKeyIndex + 1} quota CONFIRMED exhausted (error_code=OUT_OF_USAGE_CREDITS, remaining=${remaining})`);
-          updateOddsHealth({ success: false, error: "quota_exhausted", keyIndex: usedKeyIndex });
+          updateOddsHealth({ success: false, error: "quota_exhausted", keyIndex: usedKeyIndex, requestsRemaining: 0 });
           cache.set(quotaCacheKey, { data: QUOTA_EXHAUSTED, timestamp: Date.now() });
           markKeyExhausted(usedKeyIndex);
+          sawQuotaExhaustion = true;
           continue;
         }
         if (res.status === 401) {
           console.warn(`[Odds API Error] Key ${usedKeyIndex + 1} got 401 (auth error, NOT marking as exhausted): ${parsed.message ?? body.slice(0, 200)}`);
           updateOddsHealth({ success: false, error: `auth_error_401`, keyIndex: usedKeyIndex });
+          markKeyExhausted(usedKeyIndex);
           continue;
         }
       } catch (_) {}
@@ -406,14 +410,21 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
     return data;
   }
 
-  console.warn("[Odds API Error] All keys exhausted — checking last-known cache");
   const lastKnown = lastKnownRawOdds.get(cacheKey);
+  if (sawQuotaExhaustion) {
+    console.warn("[Odds API] All keys quota-exhausted — checking last-known cache");
+    if (lastKnown && Date.now() - lastKnown.timestamp < LAST_KNOWN_TTL) {
+      const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
+      console.log(`[Odds Fallback] Serving stale data for ${cacheKey} (age: ${ageSec}s)`);
+      return { ...lastKnown.data, _isDegraded: true };
+    }
+    return QUOTA_EXHAUSTED;
+  }
+  console.warn("[Odds API] All keys failed (auth/network) — serving stale if available");
   if (lastKnown && Date.now() - lastKnown.timestamp < LAST_KNOWN_TTL) {
-    const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
-    console.log(`[Odds Fallback] Serving stale data for ${cacheKey} (age: ${ageSec}s)`);
     return { ...lastKnown.data, _isDegraded: true };
   }
-  return QUOTA_EXHAUSTED;
+  throw new Error(`Odds fetch failed: all ${ODDS_API_KEYS.length} keys returned errors`);
 }
 
 export async function preWarmOddsCache(
@@ -984,6 +995,7 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
 
   const triedKeys = new Set<number>();
   const maxAttempts = ODDS_API_KEYS.length;
+  let sawQuotaExhaustion = false;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const mlbApiKey = getOddsApiKey();
@@ -996,6 +1008,7 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
     const quotaCacheKey = `quota_exhausted_${usedKeyIndex}`;
     const quotaCached = cache.get(quotaCacheKey);
     if (isFresh(quotaCached, QUOTA_TTL)) {
+      sawQuotaExhaustion = true;
       markKeyExhausted(usedKeyIndex);
       continue;
     }
@@ -1024,14 +1037,16 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
         if (parsed.error_code === "OUT_OF_USAGE_CREDITS") {
           const remaining = res.headers.get("x-requests-remaining");
           console.warn(`[MLB Odds] Key ${usedKeyIndex + 1} quota CONFIRMED exhausted (error_code=OUT_OF_USAGE_CREDITS, remaining=${remaining})`);
-          updateOddsHealth({ success: false, error: "quota_exhausted", keyIndex: usedKeyIndex });
+          updateOddsHealth({ success: false, error: "quota_exhausted", keyIndex: usedKeyIndex, requestsRemaining: 0 });
           cache.set(quotaCacheKey, { data: QUOTA_EXHAUSTED, timestamp: Date.now() });
           markKeyExhausted(usedKeyIndex);
+          sawQuotaExhaustion = true;
           continue;
         }
         if (res.status === 401) {
           console.warn(`[MLB Odds] Key ${usedKeyIndex + 1} got 401 (auth error, NOT marking as exhausted): ${parsed.message ?? body.slice(0, 200)}`);
           updateOddsHealth({ success: false, error: `auth_error_401`, keyIndex: usedKeyIndex });
+          markKeyExhausted(usedKeyIndex);
           continue;
         }
       } catch (_) {}
@@ -1056,14 +1071,21 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
     return data;
   }
 
-  console.warn("[MLB Odds] All keys exhausted — checking last-known raw cache");
   const lastKnown = lastKnownRawOdds.get(cacheKey);
+  if (sawQuotaExhaustion) {
+    console.warn("[MLB Odds] All keys quota-exhausted — checking last-known raw cache");
+    if (lastKnown && Date.now() - lastKnown.timestamp < MLB_LAST_KNOWN_TTL) {
+      const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
+      console.log(`[MLB Odds Fallback] Serving stale raw data for ${cacheKey} (age: ${ageSec}s)`);
+      return { ...lastKnown.data, _isDegraded: true };
+    }
+    return QUOTA_EXHAUSTED;
+  }
+  console.warn("[MLB Odds] All keys failed (auth/network) — serving stale if available");
   if (lastKnown && Date.now() - lastKnown.timestamp < MLB_LAST_KNOWN_TTL) {
-    const ageSec = Math.round((Date.now() - lastKnown.timestamp) / 1000);
-    console.log(`[MLB Odds Fallback] Serving stale raw data for ${cacheKey} (age: ${ageSec}s)`);
     return { ...lastKnown.data, _isDegraded: true };
   }
-  return QUOTA_EXHAUSTED;
+  throw new Error(`MLB odds fetch failed: all ${ODDS_API_KEYS.length} keys returned errors`);
 }
 
 type MLBOddsResult = Record<string, { line: number; overOdds: number; underOdds: number }> & { _quotaExhausted?: boolean; _isDegraded?: boolean };
