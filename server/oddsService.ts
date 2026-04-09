@@ -279,11 +279,17 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
       const body = await res.text();
       try {
         const parsed = JSON.parse(body);
-        if (parsed.error_code === "OUT_OF_USAGE_CREDITS" || res.status === 401) {
-          console.warn(`[Odds API Error] Key ${usedKeyIndex + 1} quota exhausted`);
+        if (parsed.error_code === "OUT_OF_USAGE_CREDITS") {
+          const remaining = res.headers.get("x-requests-remaining");
+          console.warn(`[Odds API Error] Key ${usedKeyIndex + 1} quota CONFIRMED exhausted (error_code=OUT_OF_USAGE_CREDITS, remaining=${remaining})`);
           updateOddsHealth({ success: false, error: "quota_exhausted" });
           cache.set(quotaCacheKey, { data: QUOTA_EXHAUSTED, timestamp: Date.now() });
           markKeyExhausted(usedKeyIndex);
+          continue;
+        }
+        if (res.status === 401) {
+          console.warn(`[Odds API Error] Key ${usedKeyIndex + 1} got 401 (auth error, NOT marking as exhausted): ${parsed.message ?? body.slice(0, 200)}`);
+          updateOddsHealth({ success: false, error: `auth_error_401` });
           continue;
         }
       } catch (_) {}
@@ -295,6 +301,10 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
     cache.set(cacheKey, { data, timestamp: Date.now() });
 
     const requestsRemaining = res.headers.get("x-requests-remaining");
+    if (requestsRemaining != null) {
+      const rem = parseInt(requestsRemaining);
+      if (rem < 1000) console.warn(`[Odds API] Key ${usedKeyIndex + 1} low credits: ${rem} remaining`);
+    }
     updateOddsHealth({
       success: true,
       requestsRemaining: requestsRemaining ? parseInt(requestsRemaining) : undefined,
@@ -1002,11 +1012,17 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
       const body = await res.text();
       try {
         const parsed = JSON.parse(body);
-        if (parsed.error_code === "OUT_OF_USAGE_CREDITS" || res.status === 401) {
-          console.warn(`[MLB Odds] Key ${usedKeyIndex + 1} quota exhausted`);
+        if (parsed.error_code === "OUT_OF_USAGE_CREDITS") {
+          const remaining = res.headers.get("x-requests-remaining");
+          console.warn(`[MLB Odds] Key ${usedKeyIndex + 1} quota CONFIRMED exhausted (error_code=OUT_OF_USAGE_CREDITS, remaining=${remaining})`);
           updateOddsHealth({ success: false, error: "quota_exhausted" });
           cache.set(quotaCacheKey, { data: QUOTA_EXHAUSTED, timestamp: Date.now() });
           markKeyExhausted(usedKeyIndex);
+          continue;
+        }
+        if (res.status === 401) {
+          console.warn(`[MLB Odds] Key ${usedKeyIndex + 1} got 401 (auth error, NOT marking as exhausted): ${parsed.message ?? body.slice(0, 200)}`);
+          updateOddsHealth({ success: false, error: `auth_error_401` });
           continue;
         }
       } catch (_) {}
@@ -1018,6 +1034,10 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
     lastKnownRawOdds.set(cacheKey, { data, timestamp: Date.now() });
     
     const requestsRemaining = res.headers.get("x-requests-remaining");
+    if (requestsRemaining != null) {
+      const rem = parseInt(requestsRemaining);
+      if (rem < 1000) console.warn(`[MLB Odds] Key ${usedKeyIndex + 1} low credits: ${rem} remaining`);
+    }
     updateOddsHealth({
       success: true,
       requestsRemaining: requestsRemaining ? parseInt(requestsRemaining) : undefined,
