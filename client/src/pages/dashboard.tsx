@@ -1833,7 +1833,7 @@ export default function Dashboard() {
                         ? "bg-amber-500"
                         : "bg-red-500"
                     }`} />
-                    {dataHealth.oddsKeyStatus && !dataHealth.oddsKeyStatus.allKeysHealthy
+                    {dataHealth.oddsKeyStatus && dataHealth.oddsKeyStatus.exhaustedKeys.length === dataHealth.oddsKeyStatus.totalKeys
                       ? "quota reached"
                       : dataHealth.oddsApi.status}
                   </div>

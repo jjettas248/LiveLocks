@@ -24,6 +24,16 @@ interface DataHealth {
   oddsApi: OddsAPIHealth;
 }
 
+const ROLLING_WINDOW_MS = 5 * 60 * 1000;
+const recentResults: Array<{ timestamp: number; success: boolean }> = [];
+
+function pruneRecent(now: number) {
+  const cutoff = now - ROLLING_WINDOW_MS;
+  while (recentResults.length > 0 && recentResults[0].timestamp < cutoff) {
+    recentResults.shift();
+  }
+}
+
 let health: DataHealth = {
   oddsApi: {
     status: "healthy",
@@ -39,11 +49,11 @@ let health: DataHealth = {
   },
 };
 
-function computeStatus(lastSuccessAt: number, now: number, errorRate: number): HealthStatus {
+function computeStatus(lastSuccessAt: number, now: number, recentErrorRate: number): HealthStatus {
   const staleSeconds = (now - lastSuccessAt) / 1000;
 
   if (staleSeconds > 300) return "down";
-  if (errorRate > 0.4) return "degraded";
+  if (recentErrorRate > 0.7) return "degraded";
   return "healthy";
 }
 
@@ -57,6 +67,9 @@ export function updateOddsHealth(params: {
   const h = health.oddsApi;
 
   h.lastAttemptAt = now;
+
+  recentResults.push({ timestamp: now, success: params.success });
+  pruneRecent(now);
 
   if (params.success) {
     h.lastSuccessAt = now;
@@ -88,8 +101,9 @@ export function updateOddsHealth(params: {
     }
   }
 
-  const totalAttempts = h.successCount + h.errorCount;
-  h.errorRate = totalAttempts > 0 ? h.errorCount / totalAttempts : 0;
+  const recentTotal = recentResults.length;
+  const recentErrors = recentResults.filter(r => !r.success).length;
+  h.errorRate = recentTotal > 0 ? recentErrors / recentTotal : 0;
   h.staleSeconds = (now - h.lastSuccessAt) / 1000;
   h.status = computeStatus(h.lastSuccessAt, now, h.errorRate);
 
@@ -106,12 +120,17 @@ export function updateOddsHealth(params: {
 export function getDataHealth(): DataHealth {
   const now = Date.now();
   const h = health.oddsApi;
+  pruneRecent(now);
+  const recentTotal = recentResults.length;
+  const recentErrors = recentResults.filter(r => !r.success).length;
+  h.errorRate = recentTotal > 0 ? recentErrors / recentTotal : 0;
   h.staleSeconds = (now - h.lastSuccessAt) / 1000;
   h.status = computeStatus(h.lastSuccessAt, now, h.errorRate);
   return health;
 }
 
 export function resetDataHealth(): void {
+  recentResults.length = 0;
   health = {
     oddsApi: {
       status: "healthy",
