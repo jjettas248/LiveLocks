@@ -1075,7 +1075,9 @@ export class LiveGameOrchestrator {
     const isFallback = output.fallbackUsed === true;
     const isStale = output.engineGeneratedAt > 0 && (Date.now() - output.engineGeneratedAt) > 120_000;
     const watchlistThreshold = isBatterOver ? 42 : 55;
-    const isWatchlist = scoreBreakdown.confidenceTier === "WATCHLIST" || scoreBreakdown.total < watchlistThreshold || isFallback;
+    const isWatchlist = isBatterOver
+      ? (scoreBreakdown.total < watchlistThreshold || isFallback)
+      : (scoreBreakdown.confidenceTier === "WATCHLIST" || scoreBreakdown.total < watchlistThreshold || isFallback);
     const edgeOk = isBatterOver ? true : output.edge > 0;
     const isActionable = !alreadyHit && !isStale && !isWatchlist && !isFallback
       && edgeOk && (output.overOdds !== null || output.underOdds !== null);
