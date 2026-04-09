@@ -8,7 +8,7 @@ import { type Player, type ParlayPickInput, persistedPlays } from "@shared/schem
 import { sql, and, desc } from "drizzle-orm";
 import { computeFamilyPenaltyFactor } from "./nba/marketFamily";
 import { recordSurfacedSignal, seedFromSettledPlays, getDirectionalSplit } from "./nba/directionalBias";
-import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines, getSGOPlayerLine, resolveMLBOddsEventId, getMLBPlayerOdds, normalizeOdds } from "./oddsService";
+import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines, getSGOPlayerLine, resolveMLBOddsEventId, getMLBPlayerOdds, normalizeOdds, getOddsKeyStatus } from "./oddsService";
 import { getDataHealth } from "./services/dataHealth";
 import { getEngineDebugSummary, recordEngineRun, resetEngineStats } from "./services/engineStats";
 import { filterValidSignals } from "./services/engineSignal";
@@ -6802,7 +6802,16 @@ export function registerAnalyticsRoutes(app: Express): void {
 
   app.get("/api/debug/data-health", requireAdmin, (_req, res) => {
     const health = getDataHealth();
-    res.json(health);
+    const keyStatus = getOddsKeyStatus();
+    res.json({
+      ...health,
+      oddsKeyStatus: {
+        totalKeys: keyStatus.totalKeys,
+        activeKeyIndex: keyStatus.activeKeyIndex,
+        exhaustedKeys: keyStatus.exhaustedKeys,
+        allKeysHealthy: keyStatus.exhaustedKeys.length === 0,
+      },
+    });
   });
 
   app.get("/api/debug/engine-isolation", requireAdmin, (_req, res) => {

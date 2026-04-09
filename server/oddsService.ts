@@ -30,6 +30,14 @@ function markKeyExhausted(keyIndex: number) {
   }, 60 * 60 * 1000);
 }
 
+export function getOddsKeyStatus(): { totalKeys: number; activeKeyIndex: number; exhaustedKeys: number[] } {
+  return {
+    totalKeys: ODDS_API_KEYS.length,
+    activeKeyIndex,
+    exhaustedKeys: Array.from(exhaustedKeys),
+  };
+}
+
 const SGO_API_KEY  = process.env.SGO_API_KEY;
 const BASE_URL = "https://api.the-odds-api.com/v4/sports/basketball_nba";
 
