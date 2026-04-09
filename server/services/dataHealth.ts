@@ -1,5 +1,12 @@
 type HealthStatus = "healthy" | "degraded" | "down";
 
+interface KeyCredit {
+  keyIndex: number;
+  lastRemaining: number | null;
+  lastCheckedAt: number | null;
+  totalRequestsMade: number;
+}
+
 interface OddsAPIHealth {
   status: HealthStatus;
   lastSuccessAt: number;
@@ -10,13 +17,13 @@ interface OddsAPIHealth {
   staleSeconds: number;
   errorRate: number;
   lastErrors: Array<{ timestamp: number; message: string }>;
+  perKeyCredits: KeyCredit[];
 }
 
 interface DataHealth {
   oddsApi: OddsAPIHealth;
 }
 
-// Singleton health state
 let health: DataHealth = {
   oddsApi: {
     status: "healthy",
@@ -28,6 +35,7 @@ let health: DataHealth = {
     staleSeconds: 0,
     errorRate: 0,
     lastErrors: [],
+    perKeyCredits: [],
   },
 };
 
@@ -43,6 +51,7 @@ export function updateOddsHealth(params: {
   success: boolean;
   requestsRemaining?: number;
   error?: string;
+  keyIndex?: number;
 }): void {
   const now = Date.now();
   const h = health.oddsApi;
@@ -62,6 +71,20 @@ export function updateOddsHealth(params: {
       if (h.lastErrors.length > 10) {
         h.lastErrors.shift();
       }
+    }
+  }
+
+  if (params.keyIndex !== undefined) {
+    let entry = h.perKeyCredits.find(k => k.keyIndex === params.keyIndex);
+    if (!entry) {
+      entry = { keyIndex: params.keyIndex!, lastRemaining: null, lastCheckedAt: null, totalRequestsMade: 0 };
+      h.perKeyCredits.push(entry);
+      h.perKeyCredits.sort((a, b) => a.keyIndex - b.keyIndex);
+    }
+    entry.totalRequestsMade++;
+    if (params.requestsRemaining !== undefined) {
+      entry.lastRemaining = params.requestsRemaining;
+      entry.lastCheckedAt = now;
     }
   }
 
@@ -100,6 +123,7 @@ export function resetDataHealth(): void {
       staleSeconds: 0,
       errorRate: 0,
       lastErrors: [],
+      perKeyCredits: [],
     },
   };
 }
