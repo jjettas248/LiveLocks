@@ -923,8 +923,9 @@ export async function registerRoutes(
   }
 
   app.get("/api/mlb/live-games", requireAuth, async (req, res) => {
+    const forceRefresh = req.query.force === "1";
     const cached = mlbLiveGamesCache.get("games");
-    if (cached && Date.now() - cached.ts < MLB_LIVE_GAMES_TTL) {
+    if (!forceRefresh && cached && Date.now() - cached.ts < MLB_LIVE_GAMES_TTL) {
       const games = cached.games;
       const hasAnyOdds = games.some((g: any) => g.hasOdds === true);
       if (!hasAnyOdds) {
@@ -1761,6 +1762,7 @@ export async function registerRoutes(
               isHotHitter: hrQsAny.isHotHitter ?? false,
               hotHitterPeriod: hrQsAny.hotHitterPeriod ?? null,
               hotHitterHrCount: hrQsAny.hotHitterHrCount ?? null,
+              mode: (qs as any).mode ?? null,
             });
           }
 
@@ -1788,6 +1790,7 @@ export async function registerRoutes(
               fallbackUsed: wlQsAny.fallbackUsed ?? false,
               formIndicator: qs.formIndicator ? String(qs.formIndicator).toUpperCase() : null,
               inning: wlQsAny.inning ?? gameState?.inning ?? 0,
+              mode: (qs as any).mode ?? null,
             });
           }
         }

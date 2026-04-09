@@ -21,6 +21,7 @@ import {
   type HrRadarCardUi,
   type HrRadarAnalyzeViewModel,
 } from "@/lib/mlbUiMappers";
+import { MODE_STYLES } from "@/lib/mlbFormatters";
 import {
   buildSignalViewModel, buildHrRadarViewModel, buildGameViewModel,
   buildAtBatLogViewModel, buildPitchMatchupViewModel,
@@ -402,13 +403,14 @@ function SpikeAlertBanner({ signals }: { signals: MlbSignalData[] }) {
   );
 }
 
-function GameChipStrip({ games, selectedGameId, onSelectGame, edgeFeedSignals, onRefresh, dataUpdatedAt }: {
+function GameChipStrip({ games, selectedGameId, onSelectGame, edgeFeedSignals, onRefresh, dataUpdatedAt, isRefreshing }: {
   games: MLBGame[];
   selectedGameId: string | null;
   onSelectGame: (id: string | null) => void;
   edgeFeedSignals: MlbSignalData[];
   onRefresh: () => void;
   dataUpdatedAt: number;
+  isRefreshing?: boolean;
 }) {
   return (
     <div className="bg-card border border-border rounded-xl p-4" data-testid="mlb-games-strip">
@@ -419,10 +421,11 @@ function GameChipStrip({ games, selectedGameId, onSelectGame, edgeFeedSignals, o
         </h2>
         <button
           onClick={onRefresh}
-          className="text-muted-foreground flex items-center gap-1 text-xs hover:text-foreground transition-colors p-2 min-w-[44px] min-h-[44px]"
+          disabled={isRefreshing}
+          className={`flex items-center gap-1 text-xs transition-colors p-2 min-w-[44px] min-h-[44px] ${isRefreshing ? "text-primary cursor-not-allowed" : "text-muted-foreground hover:text-foreground"}`}
           data-testid="button-refresh-mlb-games"
         >
-          <RefreshCw className="w-3 h-3" /> Refresh
+          <RefreshCw className={`w-3 h-3 ${isRefreshing ? "animate-spin" : ""}`} /> {isRefreshing ? "Updating…" : "Refresh"}
         </button>
       </div>
       <div className="flex gap-2 flex-wrap">
@@ -686,13 +689,17 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
   const isAlert = card.status === "ALERT";
   const isPending = card.status === "PENDING";
 
+  const modeStyle = card.mode && MODE_STYLES[card.mode] && !isCashed && !isMissed ? MODE_STYLES[card.mode] : null;
   const borderClass = isCashed
     ? "border-emerald-500/60 bg-emerald-500/10 shadow-[0_0_12px_rgba(16,185,129,0.15)]"
     : isMissed
     ? "border-zinc-500/30 bg-zinc-500/5"
+    : modeStyle
+    ? ""
     : isAlert
     ? "border-red-500/40 bg-red-500/5"
     : "border-yellow-500/30 bg-yellow-500/5";
+  const modeCardStyle = modeStyle ? { borderColor: modeStyle.border, background: modeStyle.bg } : undefined;
   const pulseClass = isAlert && !isCashed && !isMissed ? "animate-pulse" : "";
 
   const statusBadge = isCashed
@@ -717,6 +724,7 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
     <div
       data-testid={`card-hr-radar-${card.playerId}`}
       className={`rounded-xl border ${borderClass} p-3 space-y-2 ${pulseClass} cursor-pointer transition-all hover:shadow-md`}
+      style={modeCardStyle}
       onClick={() => setExpanded(!expanded)}
       role="button"
       tabIndex={0}
@@ -748,6 +756,15 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
           <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${statusBadge.cls}`} data-testid={`badge-status-${card.playerId}`}>{statusBadge.label}</span>
+          {card.mode && MODE_STYLES[card.mode] && !isCashed && !isMissed && (
+            <span
+              className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+              style={{ color: MODE_STYLES[card.mode].color, background: MODE_STYLES[card.mode].bg, border: `1px solid ${MODE_STYLES[card.mode].border}` }}
+              data-testid={`badge-mode-${card.playerId}`}
+            >
+              {MODE_STYLES[card.mode].icon} {MODE_STYLES[card.mode].label}
+            </span>
+          )}
           {decisionBadge && !isCashed && !isMissed && (
             <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${decisionBadge.cls}`} data-testid={`badge-decision-${card.playerId}`}>{decisionBadge.label}</span>
           )}
@@ -1481,6 +1498,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         line: 0.5,
         alertPath: (ch as any).alertPath ?? null,
         conversionPct: (ch as any).conversionPct ?? null,
+        mode: null,
       } as HrRadarCardUi);
     } else {
       radarState.set(key, { ...radarState.get(key)!, status: "CASHED" });
@@ -1538,6 +1556,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         line: 0.5,
         alertPath: (cm as any).alertPath ?? null,
         conversionPct: (cm as any).conversionPct ?? null,
+        mode: null,
       } as HrRadarCardUi);
     }
   }
@@ -2348,10 +2367,18 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     setAnalyzeTarget({ playerId: card.playerId, gameId: card.gameId });
   };
 
-  const handleRefresh = () => {
-    queryClient.invalidateQueries({ queryKey: ["/api/mlb/live-games"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/mlb/edge-feed"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar"] });
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+  const handleRefresh = async () => {
+    if (isManualRefreshing) return;
+    setIsManualRefreshing(true);
+    try {
+      const res = await apiRequest("GET", "/api/mlb/live-games?force=1");
+      const freshData = await res.json();
+      queryClient.setQueryData(["/api/mlb/live-games"], freshData);
+      queryClient.invalidateQueries({ queryKey: ["/api/mlb/edge-feed"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar"] });
+    } catch {}
+    setTimeout(() => setIsManualRefreshing(false), 1000);
   };
 
   useEffect(() => {
@@ -2406,6 +2433,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
               edgeFeedSignals={edgeFeedSignals}
               onRefresh={handleRefresh}
               dataUpdatedAt={gamesUpdatedAt}
+              isRefreshing={isManualRefreshing}
             />
           )}
 

@@ -58,6 +58,7 @@ export type HrRadarCardUi = {
   ohPitchType: string | null;
   alertPath: string | null;
   conversionPct: number | null;
+  mode: string | null;
 };
 
 export type HrRadarAnalyzeViewModel = {
@@ -363,6 +364,7 @@ export function mapHrRadarCardToUi(player: any, type: "edge" | "watch" | "cashed
     ohPitchType: player.ohPitchType ?? null,
     alertPath: player.alertPath ?? null,
     conversionPct: player.conversionPct ?? (player.hrProbability != null ? player.hrProbability / 100 : null),
+    mode: player.mode ?? null,
   };
 }
 
@@ -444,5 +446,6 @@ export function mapAlertToUi(alert: any): HrRadarCardUi {
     ohPitchType: alert.ohPitchType ?? null,
     alertPath: alert.alertPath ?? null,
     conversionPct: alert.conversionPct ?? null,
+    mode: alert.mode ?? null,
   };
 }
