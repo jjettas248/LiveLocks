@@ -6,6 +6,7 @@ import {
   getMlbLiveStatValue,
   TIER_COLORS,
   SIDE_STYLES,
+  MODE_STYLES,
   generateShareTweet,
   openShareWindow,
 } from "@/lib/mlbFormatters";
@@ -173,15 +174,21 @@ export function MlbSignalCard({
   };
   const hrStyle = isHRMarket && hrIntensity ? intensityStyle[hrIntensity] : null;
 
+  const modeStyle = sig.mode ? MODE_STYLES[sig.mode] ?? null : null;
+  const isHRMode = sig.mode?.startsWith("hr_") ?? false;
+  const cardBorder = modeStyle ? modeStyle.border : (hrStyle?.border ?? tier.border);
+  const cardGlow = isHRMode && modeStyle ? `0 0 12px ${modeStyle.border}` : (hrStyle?.glow ?? "none");
+  const cardBg = modeStyle ? modeStyle.bg : (hrStyle?.bg ?? undefined);
+
   return (
     <div
       data-testid={`mlb-signal-${sig.playerId}-${sig.market}`}
-      className={`rounded-xl border border-border/40 bg-card transition-all ${isHRMarket && hrIntensity === "imminent" ? "animate-pulse" : ""}`}
+      className={`rounded-xl border border-border/40 bg-card transition-all ${(isHRMarket && hrIntensity === "imminent") || sig.mode === "hr_elite" ? "animate-pulse" : ""}`}
       style={{
         opacity: cardOpacity,
-        borderLeft: `3px solid ${hrStyle?.border ?? tier.border}`,
-        boxShadow: hrStyle?.glow ?? "none",
-        background: hrStyle?.bg ?? undefined,
+        borderLeft: `3px solid ${cardBorder}`,
+        boxShadow: cardGlow,
+        background: cardBg,
       }}
     >
       {/* ── COLLAPSED: 3-Second Decision Layer ── */}
@@ -196,13 +203,23 @@ export function MlbSignalCard({
         {/* Row 1: Tier badge + Detection + Probability */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
-            <span
-              className="text-[10px] font-black px-2.5 py-0.5 rounded-full shrink-0"
-              style={{ background: tier.bg, color: tier.text, border: `1px solid ${tier.border}` }}
-              data-testid={`badge-tier-${sig.playerId}-${sig.market}`}
-            >
-              {tier.badge}
-            </span>
+            {modeStyle ? (
+              <span
+                className="text-[10px] font-black px-2.5 py-0.5 rounded-full shrink-0"
+                style={{ background: modeStyle.bg, color: modeStyle.color, border: `1px solid ${modeStyle.border}` }}
+                data-testid={`badge-mode-${sig.playerId}-${sig.market}`}
+              >
+                {modeStyle.icon} {modeStyle.label}
+              </span>
+            ) : (
+              <span
+                className="text-[10px] font-black px-2.5 py-0.5 rounded-full shrink-0"
+                style={{ background: tier.bg, color: tier.text, border: `1px solid ${tier.border}` }}
+                data-testid={`badge-tier-${sig.playerId}-${sig.market}`}
+              >
+                {tier.badge}
+              </span>
+            )}
             <div className="min-w-0">
               {isClickable ? (
                 <span

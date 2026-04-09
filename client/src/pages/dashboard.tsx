@@ -2687,7 +2687,7 @@ export default function Dashboard() {
                       {/* Odds API quota exhausted */}
                       {watchedOpponent && !isOddsLoading && oddsData && (oddsData as any)._quotaExhausted && (
                         <p className="text-xs text-amber-400/80 bg-amber-500/10 rounded-lg p-2 border border-amber-500/20">
-                          Sportsbook lines temporarily unavailable — API quota reached. Lines will resume next month.
+                          Sportsbook lines temporarily unavailable — API quota reached. The engine will retry automatically within the hour. Existing cached lines are still being used.
                         </p>
                       )}
 

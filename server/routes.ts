@@ -1566,6 +1566,7 @@ export async function registerRoutes(
           opportunityScore: qs.opportunityScore ?? 0,
           liveScore: qs.liveScore ?? 0,
           eventBoost: qs.eventBoost ?? 0,
+          mode: qs.mode ?? null,
         };
       })
       .sort((a, b) => {

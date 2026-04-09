@@ -85,6 +85,18 @@ export const SIDE_STYLES = {
   UNDER: { accent: "#3b82f6", bg: "rgba(59,130,246,0.08)", border: "rgba(59,130,246,0.35)", label: "UNDER" },
 };
 
+export const MODE_STYLES: Record<string, { label: string; color: string; bg: string; border: string; icon: string }> = {
+  elite:         { label: "ELITE",       color: "#eab308", bg: "rgba(234,179,8,0.12)",  border: "rgba(234,179,8,0.5)",  icon: "🔒" },
+  strong:        { label: "STRONG",      color: "#22c55e", bg: "rgba(34,197,94,0.10)",  border: "rgba(34,197,94,0.45)", icon: "🟢" },
+  lean:          { label: "LEAN",        color: "#14b8a6", bg: "rgba(20,184,166,0.10)", border: "rgba(20,184,166,0.4)", icon: "📊" },
+  heating_up:    { label: "HEATING UP",  color: "#f59e0b", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.4)", icon: "🔥" },
+  watch:         { label: "WATCH",       color: "#71717a", bg: "rgba(113,113,122,0.08)", border: "rgba(113,113,122,0.3)", icon: "👁" },
+  hr_elite:      { label: "HR ELITE",    color: "#ef4444", bg: "rgba(239,68,68,0.12)",  border: "rgba(239,68,68,0.5)",  icon: "💣" },
+  hr_strong:     { label: "HR STRONG",   color: "#f97316", bg: "rgba(249,115,22,0.10)", border: "rgba(249,115,22,0.45)", icon: "🚀" },
+  hr_heating_up: { label: "HR HEATING",  color: "#f59e0b", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.4)", icon: "🔥" },
+  hr_watch:      { label: "HR WATCH",    color: "#a78bfa", bg: "rgba(167,139,250,0.10)", border: "rgba(167,139,250,0.35)", icon: "👁" },
+};
+
 export function classifyTier(score: number | null | undefined): string {
   const s = score ?? 0;
   if (s >= 75) return "elite";

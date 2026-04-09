@@ -335,6 +335,7 @@ export function normalizeMLBSignal(
     safetyCeilingApplied: qs.safetyCeilingApplied ?? false,
     dataQuality: qs.dataQuality ?? null,
     signalTimestamp: qs.engineGeneratedAt ?? raw?.engineGeneratedAt ?? Date.now(),
+    mode: qs.mode ?? null,
     hrFactors: raw?.hrFactors ?? null,
     hrBuildScore: raw?.hrBuildScore ?? null,
     hrIntensity: raw?.hrIntensity ?? null,

@@ -99,6 +99,7 @@ export interface MLBSignal {
   safetyCeilingApplied: boolean;
   dataQuality: string | null;
   signalTimestamp: number;
+  mode: "watch" | "heating_up" | "lean" | "strong" | "elite" | "hr_watch" | "hr_heating_up" | "hr_strong" | "hr_elite" | null;
   hrFactors: Record<string, any> | null;
   hrBuildScore: number | null;
   hrIntensity: "weak" | "watch" | "strong" | "imminent" | null;
