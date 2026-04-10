@@ -112,9 +112,15 @@ export function generateShareTweet(sig: {
   bookLine?: number | null;
   enginePct: number;
   edge?: number | null;
+  signalScore?: number | null;
 }): string {
   const marketLabel = formatMlbMarketLabel(sig.market);
-  return `${sig.playerName} ${sig.recommendedSide} ${marketLabel} ${sig.bookLine ?? ""} \u2014 ${sig.enginePct.toFixed(0)}% prob${(sig.edge ?? 0) > 0 ? `, +${(sig.edge ?? 0).toFixed(1)}% edge` : ""}\n\nPowered by LiveLocks`;
+  const BATTER_OVER = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
+  const isBatterOver = BATTER_OVER.includes(sig.market);
+  const scorePart = isBatterOver && sig.signalScore != null
+    ? `, Signal ${sig.signalScore.toFixed(1)}`
+    : (sig.edge ?? 0) > 0 ? `, +${(sig.edge ?? 0).toFixed(1)}% edge` : "";
+  return `${sig.playerName} ${sig.recommendedSide} ${marketLabel} ${sig.bookLine ?? ""} \u2014 ${sig.enginePct.toFixed(0)}% prob${scorePart}\n\nPowered by LiveLocks`;
 }
 
 export function openShareWindow(tweet: string) {

@@ -549,7 +549,7 @@ function GameSignalsPanel({ signals, isElite, onAddToSlip }: {
   isElite: boolean;
   onAddToSlip: (sig: MlbSignalData) => void;
 }) {
-  const sorted = [...signals].sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0));
+  const sorted = [...signals].sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
   const visible = isElite ? sorted : sorted.slice(0, 2);
   const lockedCount = isElite ? 0 : Math.max(0, sorted.length - 2);
 
@@ -1882,7 +1882,9 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
   );
 }
 
-function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, calcPlayer, selectedGameId, onAddToSlip, handleAddToSlip }: {
+const BATTER_OVER_MARKETS_UI = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
+
+function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, calcPlayer, selectedGameId, onAddToSlip, handleAddToSlip, matchingSignal }: {
   calcResult: any;
   calcMarket: string;
   calcBookLine: string;
@@ -1891,7 +1893,14 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
   selectedGameId: string | null;
   onAddToSlip: (sig: MlbSignalData) => void;
   handleAddToSlip: (sig: MlbSignalData) => void;
+  matchingSignal?: MlbSignalData | null;
 }) {
+  const isBatterOverMarket = BATTER_OVER_MARKETS_UI.includes(calcMarket);
+  const sigMode = matchingSignal?.mode ?? (isBatterOverMarket ? (calcResult.mode !== "manual" ? calcResult.mode : null) : null);
+  const sigScore = matchingSignal?.signalScore ?? calcResult.signalScore ?? null;
+  const sigPrimaryReason = (matchingSignal as any)?.primaryReason ?? calcResult.primaryReason ?? null;
+  const sigSmartTags: string[] = (matchingSignal as any)?.smartTags ?? calcResult.smartTags ?? [];
+  const modeStyle = sigMode && MODE_STYLES[sigMode] ? MODE_STYLES[sigMode] : null;
   const [selectedSide, setSelectedSide] = useState<"OVER" | "UNDER">(
     (calcResult.recommendedSide === "UNDER" ? "UNDER" : "OVER") as "OVER" | "UNDER"
   );
@@ -1945,7 +1954,19 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
           <div className="flex-1 space-y-3 z-10">
             <div>
               <div className="flex items-center gap-2 mb-1">
-                <span data-testid="badge-live-edge" className="text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-red-500/20 text-red-400">LIVE EDGE</span>
+                {modeStyle ? (
+                  <span
+                    data-testid="badge-live-edge"
+                    className="text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-full"
+                    style={{ color: modeStyle.color, background: modeStyle.bg, border: `1px solid ${modeStyle.border}` }}
+                  >
+                    {modeStyle.icon} {modeStyle.label}
+                  </span>
+                ) : (
+                  <span data-testid="badge-live-edge" className="text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-zinc-500/20 text-zinc-400">
+                    {isBatterOverMarket ? "SIGNAL" : "LIVE EDGE"}
+                  </span>
+                )}
               </div>
               <div className="text-2xl font-bold tracking-tight">
                 {activeCalcName} — {marketLabel}{" "}
@@ -2022,7 +2043,21 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
         </div>
       </div>
 
-      {calcResult.confidenceTier && (
+      {isBatterOverMarket && modeStyle ? (
+        <div
+          data-testid="badge-model-confidence-calc"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+          style={{ color: modeStyle.color, background: modeStyle.bg, border: `1px solid ${modeStyle.border}` }}
+        >
+          {modeStyle.icon}
+          {sigMode === "elite" || sigMode === "hr_elite" ? "High-conviction signal" :
+           sigMode === "strong" || sigMode === "hr_strong" ? "Strong signal detected" :
+           sigMode === "lean" ? "Lean signal — developing" :
+           sigMode === "heating_up" || sigMode === "hr_heating_up" ? "Heating up — watch closely" :
+           sigMode === "watch" || sigMode === "hr_watch" ? "On watch — emerging setup" :
+           "Signal evaluating"}
+        </div>
+      ) : calcResult.confidenceTier ? (
         <div
           data-testid="badge-model-confidence-calc"
           className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium ${
@@ -2038,9 +2073,22 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
            calcResult.confidenceTier === "SOLID" ? "Moderate edge detected — solid opportunity" :
            "Marginal edge — proceed with caution"}
         </div>
-      )}
+      ) : null}
 
-      {evPct != null && Math.abs(evPct) >= 1 && (
+      {isBatterOverMarket ? (
+        sigPrimaryReason ? (
+          <div data-testid="ev-box" className="rounded-xl border border-border/30 p-4">
+            <div className="text-sm font-medium text-foreground">{sigPrimaryReason}</div>
+            {sigSmartTags.length > 0 && (
+              <div className="flex gap-1.5 flex-wrap mt-2">
+                {sigSmartTags.map((tag: string, i: number) => (
+                  <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-secondary/40 text-muted-foreground">{tag}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null
+      ) : evPct != null && Math.abs(evPct) >= 1 ? (
         <div data-testid="ev-box" className={`rounded-xl border p-4 flex gap-3 items-start ${
           evPct > 0 ? "bg-emerald-500/10 border-emerald-500/30" : "bg-red-500/10 border-red-500/30"
         }`}>
@@ -2059,16 +2107,25 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
               </span>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              Model <strong className="text-foreground">{overPct.toFixed(1)}%</strong> vs Book Implied <strong className="text-foreground">{bookImplied.toFixed(1)}%</strong>
+              Model <strong className="text-foreground">{overPct.toFixed(1)}%</strong> vs Book Implied <strong className="text-foreground">{bookImplied!.toFixed(1)}%</strong>
             </p>
             <p className="text-[11px] text-muted-foreground/60 mt-0.5">
               {Math.abs(evPct) >= 6 ? "High conviction edge vs market." : Math.abs(evPct) >= 3 ? "Solid discrepancy — model sees value." : evPct > 0 ? "Slight edge — use as tiebreaker." : "Model trails implied — line may be priced in."}
             </p>
           </div>
         </div>
-      )}
+      ) : null}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {isBatterOverMarket && sigScore != null && (
+          <StatCard
+            title="Signal Score"
+            value={sigScore.toFixed(1)}
+            subtitle={sigMode ? MODE_STYLES[sigMode]?.label ?? sigMode : "Signal"}
+            icon={<Zap className="w-4 h-4" />}
+            highlight={sigScore >= 7 ? "positive" : sigScore >= 4 ? "neutral" : "negative"}
+          />
+        )}
         <StatCard
           title="Projection"
           value={projection?.toFixed(2) ?? "—"}
@@ -2083,20 +2140,24 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
           icon={<Clock className="w-4 h-4" />}
           highlight="neutral"
         />
-        <StatCard
-          title="Edge"
-          value={`${edge > 0 ? "+" : ""}${edge.toFixed(1)}%`}
-          subtitle="Model vs book line"
-          icon={<TrendingUp className="w-4 h-4" />}
-          highlight={edge > 3 ? "positive" : edge < -3 ? "negative" : "neutral"}
-        />
-        <StatCard
-          title="Confidence"
-          value={calcResult.confidenceTier ?? "—"}
-          subtitle={calcResult.mode === "early_explosive" ? "Early Explosive" : "Standard"}
-          icon={<Zap className="w-4 h-4" />}
-          highlight={calcResult.confidenceTier === "ELITE" || calcResult.confidenceTier === "STRONG" ? "positive" : calcResult.confidenceTier === "SOLID" ? "neutral" : "negative"}
-        />
+        {!(isBatterOverMarket && sigScore != null) && (
+          <StatCard
+            title="Edge"
+            value={`${edge > 0 ? "+" : ""}${edge.toFixed(1)}%`}
+            subtitle="Model vs book line"
+            icon={<TrendingUp className="w-4 h-4" />}
+            highlight={edge > 3 ? "positive" : edge < -3 ? "negative" : "neutral"}
+          />
+        )}
+        {!(isBatterOverMarket && sigScore != null) && (
+          <StatCard
+            title="Confidence"
+            value={calcResult.confidenceTier ?? "—"}
+            subtitle={calcResult.mode === "early_explosive" ? "Early Explosive" : "Standard"}
+            icon={<Zap className="w-4 h-4" />}
+            highlight={calcResult.confidenceTier === "ELITE" || calcResult.confidenceTier === "STRONG" ? "positive" : calcResult.confidenceTier === "SOLID" ? "neutral" : "negative"}
+          />
+        )}
       </div>
 
       {isPitcherMarket && pa && (
@@ -2766,6 +2827,11 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                       selectedGameId={selectedGameId}
                       onAddToSlip={handleAddToSlip}
                       handleAddToSlip={handleAddToSlip}
+                      matchingSignal={edgeFeedSignals.find(s =>
+                        s.playerId === calcPlayer?.playerId &&
+                        s.market === calcMarket &&
+                        s.gameId === selectedGameId
+                      ) ?? null}
                     />
                   )}
 

@@ -90,7 +90,7 @@ export function runIntegrityFirewall(output: MLBPropOutput): FirewallResult {
 
   const tolerance = MARKET_PROJECTION_TOLERANCE[output.market] ?? 0.10;
   const BATTER_OVER_MARKETS: MLBMarket[] = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
-  const isBatterOverMarket = cappedOutput.recommendedSide === "OVER" && BATTER_OVER_MARKETS.includes(output.market);
+  const isBatterOverMarket = BATTER_OVER_MARKETS.includes(output.market);
 
   if (cappedOutput.recommendedSide === "OVER" && cappedOutput.projection < cappedOutput.bookLine - tolerance) {
     if (isBatterOverMarket) {
