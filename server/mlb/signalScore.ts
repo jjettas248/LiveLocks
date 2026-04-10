@@ -6,7 +6,7 @@ export type MarketFamily = "batter_over" | "under" | "hr_radar";
 const BATTER_OVER_MARKETS: MLBMarket[] = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
 
 export function getMarketFamily(market: MLBMarket, side: string): MarketFamily | null {
-  if (BATTER_OVER_MARKETS.includes(market) && side === "OVER") return "batter_over";
+  if (BATTER_OVER_MARKETS.includes(market) && (side === "OVER" || side === "NO_EDGE")) return "batter_over";
   if (side === "UNDER") return "under";
   const pitcherMarkets: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"];
   if (pitcherMarkets.includes(market)) return "under";

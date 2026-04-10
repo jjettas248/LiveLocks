@@ -36,12 +36,18 @@ export function runIntegrityFirewall(output: MLBPropOutput): FirewallResult {
   }
 
   const dirTolerance = output.bookLine < 1.0 ? 0.6 : 0.15;
+  const BATTER_OVER_FW_MARKETS: MLBMarket[] = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
+  const isBatterOverFW = output.recommendedSide === "OVER" && BATTER_OVER_FW_MARKETS.includes(output.market);
   if (
     Number.isFinite(output.projection) && Number.isFinite(output.bookLine) &&
     output.recommendedSide === "OVER" && output.projection < output.bookLine &&
     (output.bookLine - output.projection) > dirTolerance
   ) {
-    rejections.push(`directional contradiction: OVER but projection=${output.projection.toFixed(3)} < line=${output.bookLine}`);
+    if (isBatterOverFW) {
+      warnings.push(`directional tension: OVER but projection=${output.projection.toFixed(3)} < line=${output.bookLine} — batter_over passthrough`);
+    } else {
+      rejections.push(`directional contradiction: OVER but projection=${output.projection.toFixed(3)} < line=${output.bookLine}`);
+    }
   }
   if (
     Number.isFinite(output.projection) && Number.isFinite(output.bookLine) &&
@@ -83,17 +89,23 @@ export function runIntegrityFirewall(output: MLBPropOutput): FirewallResult {
   }
 
   const tolerance = MARKET_PROJECTION_TOLERANCE[output.market] ?? 0.10;
+  const BATTER_OVER_MARKETS: MLBMarket[] = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
+  const isBatterOverMarket = cappedOutput.recommendedSide === "OVER" && BATTER_OVER_MARKETS.includes(output.market);
 
   if (cappedOutput.recommendedSide === "OVER" && cappedOutput.projection < cappedOutput.bookLine - tolerance) {
-    warnings.push(`side/projection tension: OVER but proj=${cappedOutput.projection.toFixed(2)} < line=${cappedOutput.bookLine} - tol=${tolerance}`);
-    cappedOutput.recommendedSide = cappedOutput.projection > cappedOutput.bookLine + tolerance ? "OVER"
-      : cappedOutput.projection < cappedOutput.bookLine - tolerance ? "UNDER"
-      : "NO_EDGE" as any;
-    if (cappedOutput.recommendedSide === "UNDER") {
-      warnings.push(`firewall corrected side from OVER → UNDER based on projection`);
-    } else if (cappedOutput.recommendedSide === "NO_EDGE") {
-      cappedOutput.confidenceTier = "NO_EDGE";
-      warnings.push(`firewall corrected side to NO_EDGE — projection within tolerance`);
+    if (isBatterOverMarket) {
+      warnings.push(`side/projection tension: OVER but proj=${cappedOutput.projection.toFixed(2)} < line=${cappedOutput.bookLine} — batter_over passthrough`);
+    } else {
+      warnings.push(`side/projection tension: OVER but proj=${cappedOutput.projection.toFixed(2)} < line=${cappedOutput.bookLine} - tol=${tolerance}`);
+      cappedOutput.recommendedSide = cappedOutput.projection > cappedOutput.bookLine + tolerance ? "OVER"
+        : cappedOutput.projection < cappedOutput.bookLine - tolerance ? "UNDER"
+        : "NO_EDGE" as any;
+      if (cappedOutput.recommendedSide === "UNDER") {
+        warnings.push(`firewall corrected side from OVER → UNDER based on projection`);
+      } else if (cappedOutput.recommendedSide === "NO_EDGE") {
+        cappedOutput.confidenceTier = "NO_EDGE";
+        warnings.push(`firewall corrected side to NO_EDGE — projection within tolerance`);
+      }
     }
   }
   if (cappedOutput.recommendedSide === "UNDER" && cappedOutput.projection > cappedOutput.bookLine + tolerance) {
@@ -103,9 +115,13 @@ export function runIntegrityFirewall(output: MLBPropOutput): FirewallResult {
   }
 
   if (cappedOutput.recommendedSide === "OVER" && cappedOutput.calibratedProbabilityOver < cappedOutput.calibratedProbabilityUnder) {
-    warnings.push(`side/probability tension after cap: OVER but P(over)=${cappedOutput.calibratedProbabilityOver.toFixed(1)} < P(under)=${cappedOutput.calibratedProbabilityUnder.toFixed(1)}`);
-    cappedOutput.recommendedSide = "UNDER" as any;
-    warnings.push(`firewall corrected side to match probability direction`);
+    if (isBatterOverMarket) {
+      warnings.push(`side/probability tension after cap: OVER but P(over)=${cappedOutput.calibratedProbabilityOver.toFixed(1)} < P(under)=${cappedOutput.calibratedProbabilityUnder.toFixed(1)} — batter_over passthrough`);
+    } else {
+      warnings.push(`side/probability tension after cap: OVER but P(over)=${cappedOutput.calibratedProbabilityOver.toFixed(1)} < P(under)=${cappedOutput.calibratedProbabilityUnder.toFixed(1)}`);
+      cappedOutput.recommendedSide = "UNDER" as any;
+      warnings.push(`firewall corrected side to match probability direction`);
+    }
   }
   if (cappedOutput.recommendedSide === "UNDER" && cappedOutput.calibratedProbabilityUnder < cappedOutput.calibratedProbabilityOver) {
     warnings.push(`side/probability tension after cap: UNDER but P(under)=${cappedOutput.calibratedProbabilityUnder.toFixed(1)} < P(over)=${cappedOutput.calibratedProbabilityOver.toFixed(1)}`);

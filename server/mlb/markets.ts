@@ -260,11 +260,17 @@ function determineConfidenceTier(
   return "NO_EDGE";
 }
 
+const BATTER_OVER_SIDE_MARKETS: MLBMarket[] = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
+
 function determineSide(
   calibratedProb: number,
   tier: MLBConfidenceTier,
-  isOverFavored: boolean = true
+  isOverFavored: boolean = true,
+  market?: MLBMarket,
 ): MLBRecommendedSide {
+  if (market && isOverFavored && BATTER_OVER_SIDE_MARKETS.includes(market)) {
+    return "OVER";
+  }
   if (tier === "NO_EDGE") return "NO_EDGE";
   return isOverFavored ? "OVER" : "UNDER";
 }
@@ -715,24 +721,25 @@ function buildOutput(input: MLBPropInput, distParams?: DistributionParams): MLBP
   const oddsAge = input.oddsUpdatedAt ? Date.now() - input.oddsUpdatedAt : 0;
   const isOverForTier = isOverFavored ? "OVER" : "UNDER";
   let confidenceTier = determineConfidenceTier(edge, features, badgeResult, oddsAge, input.market, isOverForTier, input.liveInterpretation);
-  let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
+  let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored, input.market);
 
   const warnings = [...projResult.warnings];
 
   if (isExperimental) {
     confidenceTier = capConfidenceTier(confidenceTier, EXPERIMENTAL_CONFIDENCE_CEILING);
-    recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
+    recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored, input.market);
     warnings.push(`${input.market} is experimental — confidence capped at ${EXPERIMENTAL_CONFIDENCE_CEILING}`);
   }
 
   const suppression = checkSuppression(input, edge, input.market, safeProjection, isOverForTier);
 
-  if (suppression.suppressed) {
+  const isBatterOverPassthrough = isOverFavored && BATTER_OVER_SIDE_MARKETS.includes(input.market);
+  if (suppression.suppressed && !isBatterOverPassthrough) {
     confidenceTier = "NO_EDGE";
     recommendedSide = "NO_EDGE";
   }
 
-  const finalEdge = suppression.suppressed ? 0 : Math.round(edge * 100) / 100;
+  const finalEdge = (suppression.suppressed && !isBatterOverPassthrough) ? 0 : Math.round(edge * 100) / 100;
 
   const completeProjectionLog: ProjectionLog = {
     ...projResult.projectionLog,
@@ -891,14 +898,15 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   const badgeResult = computeBadges(hitsInput, features);
   const oddsAge = hitsInput.oddsUpdatedAt ? Date.now() - hitsInput.oddsUpdatedAt : 0;
   let confidenceTier = determineConfidenceTier(edge, features, badgeResult, oddsAge, "hits", isOverFavored ? "OVER" : "UNDER", hitsInput.liveInterpretation);
-  let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
+  let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored, "hits");
 
   const warnings = [...projResult.warnings];
   const adjustedProjection = clampProjection(distResult.expectedHits);
 
   const suppression = checkSuppression(hitsInput, edge, "hits", adjustedProjection, isOverFavored ? "OVER" : "UNDER");
-  const finalEdge = suppression.suppressed ? 0 : Math.round(edge * 100) / 100;
-  if (suppression.suppressed) {
+  const hitsIsBatterOver = isOverFavored;
+  const finalEdge = (suppression.suppressed && !hitsIsBatterOver) ? 0 : Math.round(edge * 100) / 100;
+  if (suppression.suppressed && !hitsIsBatterOver) {
     confidenceTier = "NO_EDGE";
     recommendedSide = "NO_EDGE";
   }
@@ -1031,14 +1039,15 @@ export function calculateTBEdge(input: MLBPropInput): MLBPropOutput {
   const badgeResult = computeBadges(tbInput, features);
   const oddsAge = tbInput.oddsUpdatedAt ? Date.now() - tbInput.oddsUpdatedAt : 0;
   let confidenceTier = determineConfidenceTier(edge, features, badgeResult, oddsAge, "total_bases", isOverFavored ? "OVER" : "UNDER", tbInput.liveInterpretation);
-  let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
+  let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored, "total_bases");
 
   const warnings = [...projResult.warnings];
   const adjustedProjection = clampProjection(distResult.expectedTB);
 
   const suppression = checkSuppression(tbInput, edge, "total_bases", adjustedProjection, isOverFavored ? "OVER" : "UNDER");
-  const finalEdge = suppression.suppressed ? 0 : Math.round(edge * 100) / 100;
-  if (suppression.suppressed) {
+  const tbIsBatterOver = isOverFavored;
+  const finalEdge = (suppression.suppressed && !tbIsBatterOver) ? 0 : Math.round(edge * 100) / 100;
+  if (suppression.suppressed && !tbIsBatterOver) {
     confidenceTier = "NO_EDGE";
     recommendedSide = "NO_EDGE";
   }
@@ -1164,7 +1173,7 @@ export function calculatePitcherKEdge(input: MLBPropInput): MLBPropOutput {
   const badgeResult = computeBadges(kInput, features);
   const oddsAge = kInput.oddsUpdatedAt ? Date.now() - kInput.oddsUpdatedAt : 0;
   let confidenceTier = determineConfidenceTier(edge, features, badgeResult, oddsAge, "pitcher_strikeouts", isOverFavored ? "OVER" : "UNDER", kInput.liveInterpretation);
-  let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
+  let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored, "pitcher_strikeouts");
 
   const warnings = [...projResult.warnings];
   const adjustedProjection = clampProjection(distResult.expectedK);
@@ -1173,7 +1182,7 @@ export function calculatePitcherKEdge(input: MLBPropInput): MLBPropOutput {
   const finalEdge = suppression.suppressed ? 0 : Math.round(edge * 100) / 100;
   if (suppression.suppressed) {
     confidenceTier = "NO_EDGE";
-    recommendedSide = "NO_EDGE";
+    recommendedSide = "NO_EDGE" as MLBRecommendedSide;
   }
 
   if (projQuality === "LOW" && confidenceTier === "ELITE") {
@@ -1334,14 +1343,15 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
   const badgeResult = computeBadges(hrInput, features);
   const oddsAge = hrInput.oddsUpdatedAt ? Date.now() - hrInput.oddsUpdatedAt : 0;
   let confidenceTier = determineConfidenceTier(edge, features, badgeResult, oddsAge, "home_runs", isOverFavored ? "OVER" : "UNDER", hrInput.liveInterpretation);
-  let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored);
+  let recommendedSide = determineSide(calibratedSided, confidenceTier, isOverFavored, "home_runs");
 
   const warnings = [...projResult.warnings];
   const adjustedProjection = clampProjection(distResult.expectedHR);
 
   const suppression = checkSuppression(hrInput, edge, "home_runs", adjustedProjection, isOverFavored ? "OVER" : "UNDER");
-  const finalEdge = suppression.suppressed ? 0 : Math.round(edge * 100) / 100;
-  if (suppression.suppressed) {
+  const hrIsBatterOver = isOverFavored;
+  const finalEdge = (suppression.suppressed && !hrIsBatterOver) ? 0 : Math.round(edge * 100) / 100;
+  if (suppression.suppressed && !hrIsBatterOver) {
     confidenceTier = "NO_EDGE";
     recommendedSide = "NO_EDGE";
   }
