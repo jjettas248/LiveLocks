@@ -3286,7 +3286,8 @@ export async function registerRoutes(
         try { gameLines = await getGameLines(oddsEventId); } catch { /* optional */ }
       }
 
-      const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[]; isDegraded: boolean } | null>();
+      const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[]; isDegraded: boolean; oddsFetchedAt: number } | null>();
+      const NBA_2H_STALE_LINE_MS = 120_000;
 
       const LIVE_STAT_CONFIGS: Array<{ statType: string; components: string[] }> = [
         { statType: "points",      components: ["points"] },
@@ -3419,7 +3420,7 @@ export async function registerRoutes(
                     if (process.env.DEBUG_PIPELINE === "true") {
                       console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] processed: player=${playerName} stat=${statType} medianLine=${medianLine} books=${normalized.booksAvailable} isDegraded=${oddsResult.isDegraded}`);
                     }
-                    oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys, isDegraded: oddsResult.isDegraded });
+                    oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys, isDegraded: oddsResult.isDegraded, oddsFetchedAt: Date.now() });
                     resolved = true;
                   }
                 }
@@ -3429,7 +3430,7 @@ export async function registerRoutes(
                     if (process.env.DEBUG_PIPELINE === "true") {
                       console.log(`[PIPELINE][NBA][sgo] processed: player=${playerName} stat=${statType} sgoLine=${sgoResult}`);
                     }
-                    oddsPlayerCache.set(lineCacheKey, { line: sgoResult, bookKeys: ["sgo"], isDegraded: false });
+                    oddsPlayerCache.set(lineCacheKey, { line: sgoResult, bookKeys: ["sgo"], isDegraded: false, oddsFetchedAt: Date.now() });
                     resolved = true;
                   }
                 }
@@ -3444,6 +3445,12 @@ export async function registerRoutes(
               const oddsEntry = oddsPlayerCache.get(lineCacheKey);
               if (!oddsEntry) continue;
               const liveLine = oddsEntry.line;
+
+              const oddsAge = Date.now() - (oddsEntry.oddsFetchedAt ?? 0);
+              if (period >= 3 && oddsAge > NBA_2H_STALE_LINE_MS) {
+                console.warn(`[NBA 2H STALE LINE] ${dbPlayer.name} (${statType}) — odds ${Math.round(oddsAge / 1000)}s old, rejecting`);
+                continue;
+              }
 
               // buildEngineInput is the canonical gate for engine computation: called BEFORE
               // calculateProbability so that engineInput.line (not raw oddsEntry.line) drives the calc.
@@ -4008,7 +4015,8 @@ export async function registerRoutes(
       for (const game of halftimeGames) {
         // Resolve Odds API event ID for this game (for live prop lines)
         let oddsEventId: string | null = null;
-        const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[]; isDegraded: boolean } | null>(); // "playerName|statType" → { line, bookKeys, isDegraded }
+        const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[]; isDegraded: boolean; oddsFetchedAt: number } | null>();
+        const HT_STALE_LINE_MS = 120_000;
         try {
           const { resolveOddsEventId: resolveId } = await import("./oddsService");
           oddsEventId = await resolveId(game.homeTeamAbbr, game.awayTeamAbbr);
@@ -4192,7 +4200,7 @@ export async function registerRoutes(
                         // Use median consensus — never pick extremes which amplify outlier/stale book data
                         const sortedLines = [...lines].sort((a, b) => a - b);
                         const medianLine = sortedLines[Math.floor(sortedLines.length / 2)];
-                        oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys, isDegraded: isDeg });
+                        oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys, isDegraded: isDeg, oddsFetchedAt: Date.now() });
                         resolved = true;
                       }
                     }
@@ -4202,7 +4210,7 @@ export async function registerRoutes(
                       const sgoResult = await getSGOPlayerLine(game.homeTeamAbbr, game.awayTeamAbbr, playerName, statType);
                       if (sgoResult !== null) {
                         console.log(`[Halftime] SGO line for ${playerName} (${statType}): ${sgoResult}`);
-                        oddsPlayerCache.set(lineCacheKey, { line: sgoResult, bookKeys: ["sgo"], isDegraded: false });
+                        oddsPlayerCache.set(lineCacheKey, { line: sgoResult, bookKeys: ["sgo"], isDegraded: false, oddsFetchedAt: Date.now() });
                         resolved = true;
                       }
                     }
@@ -4219,6 +4227,12 @@ export async function registerRoutes(
                   lineIsDegraded = oddsEntry.isDegraded;
                 } else {
                   continue; // No real line available — never fabricate one
+                }
+
+                const htOddsAge = Date.now() - (oddsEntry.oddsFetchedAt ?? 0);
+                if (htOddsAge > HT_STALE_LINE_MS) {
+                  console.warn(`[NBA 2H STALE LINE] ${playerName} (${statType}) — odds ${Math.round(htOddsAge / 1000)}s old, rejecting (halftime pipeline)`);
+                  continue;
                 }
 
                 // Zero-line guard — a line of 0 is invalid and must not be passed to the engine.
