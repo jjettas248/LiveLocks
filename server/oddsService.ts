@@ -4,6 +4,7 @@ const ODDS_API_KEYS = [
   process.env.ODDS_API_KEY,
   process.env.ODDS_API_KEY_2,
   process.env.ODDS_API_KEY_3,
+  process.env.ODDS_API_KEY_4,
 ].filter(Boolean) as string[];
 
 let activeKeyIndex = 0;
