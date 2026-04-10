@@ -16,6 +16,8 @@ import type { MLBSignal } from "@shared/mlbSignal";
 
 export type MlbSignalData = MLBSignal;
 
+const BATTER_OVER_MARKETS_CARD = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
+
 const BATTER_DRIVER_LABELS: Record<string, string> = {
   contactQuality: "Contact Quality",
   batSpeedPower: "Power Profile",
@@ -382,13 +384,24 @@ export function MlbSignalCard({
                 <span className="font-semibold text-foreground">{sig.recommendedSide === "OVER" ? `≥ ${sig.bookLine + 0.5}` : `≤ ${sig.bookLine - 0.5}`}</span>
               </div>
             )}
-            {sig.edge != null && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Edge</span>
-                <span className="font-bold" style={{ color: sig.edge > 0 ? "#22c55e" : "#ef4444" }}>
-                  {sig.edge > 0 ? "+" : ""}{sig.edge.toFixed(1)}%
-                </span>
-              </div>
+            {BATTER_OVER_MARKETS_CARD.includes(sig.market) ? (
+              sig.signalScore != null && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Signal</span>
+                  <span className="font-bold" style={{ color: sig.signalScore >= 68 ? "#22c55e" : sig.signalScore >= 42 ? "#eab308" : "#71717a" }}>
+                    {sig.signalScore}
+                  </span>
+                </div>
+              )
+            ) : (
+              sig.edge != null && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Edge</span>
+                  <span className="font-bold" style={{ color: sig.edge > 0 ? "#22c55e" : "#ef4444" }}>
+                    {sig.edge > 0 ? "+" : ""}{sig.edge.toFixed(1)}%
+                  </span>
+                </div>
+              )
             )}
             {stability && (
               <div className="flex justify-between">

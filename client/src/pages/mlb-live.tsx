@@ -265,9 +265,16 @@ const SIGNAL_STRIP_MARKET_SHORT: Record<string, string> = {
   hr: "HR", runs: "Runs", rbi: "RBI", stolen_bases: "SB", earned_runs: "ER", pitcher_k: "Pitcher K",
 };
 
+const BATTER_OVER_MARKETS_UI = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
+
 function SignalStrip({ signals, onPlayerClick }: { signals: MlbSignalData[]; onPlayerClick: (sig: MlbSignalData) => void }) {
   const topSignals = [...signals]
-    .filter(s => normalizePct(s.enginePct) >= 55 && s.recommendedSide !== "NO_EDGE" && !s.alreadyHit)
+    .filter(s => {
+      if (s.alreadyHit) return false;
+      const isBatterOver = BATTER_OVER_MARKETS_UI.includes(s.market);
+      if (isBatterOver) return (s.signalScore ?? 0) >= 42;
+      return normalizePct(s.enginePct) >= 55 && s.recommendedSide !== "NO_EDGE";
+    })
     .sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0))
     .slice(0, 8);
 
@@ -300,8 +307,8 @@ function SignalStrip({ signals, onPlayerClick }: { signals: MlbSignalData[]; onP
                 <span className="text-[9px] text-muted-foreground">{SIGNAL_STRIP_MARKET_SHORT[sig.market] ?? sig.market.replace(/_/g, " ")}</span>
                 <span className={`text-[10px] font-black ${sideColor}`}>{sig.recommendedSide}</span>
                 <span className="text-[10px] font-bold tabular-nums" style={{ color: tierColor }}>{pct.toFixed(0)}%</span>
-                {sig.edge != null && sig.edge > 0 && (
-                  <span className="text-[8px] text-green-400/70 tabular-nums">+{sig.edge.toFixed(1)}%</span>
+                {sig.signalScore != null && (
+                  <span className="text-[8px] text-green-400/70 tabular-nums">{sig.signalScore}</span>
                 )}
               </div>
             </button>
@@ -872,12 +879,12 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
         <div className="text-[10px] text-muted-foreground italic leading-tight" data-testid={`reason-${card.playerId}`}>{card.formattedReason || card.triggerLabel}</div>
       )}
 
-      {card.edge != null && card.enginePct != null && !isCashed && !isMissed && (
+      {card.enginePct != null && !isCashed && !isMissed && (
         <div className="flex items-center gap-2 text-[10px] flex-wrap">
           <span className="text-green-400 font-bold">{card.side} {card.line?.toFixed(1)}</span>
           <span className="text-muted-foreground/40">|</span>
-          <span className={`font-bold ${(card.edge ?? 0) > 0 ? "text-green-400" : "text-muted-foreground"}`}>
-            {(card.edge ?? 0) > 0 ? "+" : ""}{(card.edge ?? 0).toFixed(1)}% Edge
+          <span className="font-bold text-green-400">
+            Signal {card.radarScore?.toFixed(1) ?? "—"}
           </span>
           <span className="text-muted-foreground/40">|</span>
           <span className="text-foreground">{card.enginePct?.toFixed(1)}% Prob</span>
@@ -1882,8 +1889,6 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
   );
 }
 
-const BATTER_OVER_MARKETS_UI = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
-
 function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, calcPlayer, selectedGameId, onAddToSlip, handleAddToSlip, matchingSignal }: {
   calcResult: any;
   calcMarket: string;
@@ -1993,7 +1998,7 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
                 "bg-secondary/40 text-muted-foreground"
               }`}>
                 {calcResult.recommendedSide === "OVER" ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                {calcResult.recommendedSide === "NO_EDGE" ? "NEUTRAL" : calcResult.recommendedSide}
+                {calcResult.recommendedSide === "NO_EDGE" ? "EVALUATING" : calcResult.recommendedSide}
               </span>
             </div>
 
@@ -2117,15 +2122,6 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
       ) : null}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {isBatterOverMarket && sigScore != null && (
-          <StatCard
-            title="Signal Score"
-            value={sigScore.toFixed(1)}
-            subtitle={sigMode ? MODE_STYLES[sigMode]?.label ?? sigMode : "Signal"}
-            icon={<Zap className="w-4 h-4" />}
-            highlight={sigScore >= 7 ? "positive" : sigScore >= 4 ? "neutral" : "negative"}
-          />
-        )}
         <StatCard
           title="Projection"
           value={projection?.toFixed(2) ?? "—"}
@@ -2140,7 +2136,15 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
           icon={<Clock className="w-4 h-4" />}
           highlight="neutral"
         />
-        {!(isBatterOverMarket && sigScore != null) && (
+        {isBatterOverMarket ? (
+          <StatCard
+            title="Signal"
+            value={`${calcResult.signalStrengthScore ?? sigScore ?? "—"}`}
+            subtitle={sigMode && MODE_STYLES[sigMode] ? MODE_STYLES[sigMode].label : "Evaluating"}
+            icon={<TrendingUp className="w-4 h-4" />}
+            highlight={(calcResult.signalStrengthScore ?? sigScore ?? 0) >= 68 ? "positive" : (calcResult.signalStrengthScore ?? sigScore ?? 0) >= 42 ? "neutral" : "negative"}
+          />
+        ) : (
           <StatCard
             title="Edge"
             value={`${edge > 0 ? "+" : ""}${edge.toFixed(1)}%`}
@@ -2149,15 +2153,13 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
             highlight={edge > 3 ? "positive" : edge < -3 ? "negative" : "neutral"}
           />
         )}
-        {!(isBatterOverMarket && sigScore != null) && (
-          <StatCard
-            title="Confidence"
-            value={calcResult.confidenceTier ?? "—"}
-            subtitle={calcResult.mode === "early_explosive" ? "Early Explosive" : "Standard"}
-            icon={<Zap className="w-4 h-4" />}
-            highlight={calcResult.confidenceTier === "ELITE" || calcResult.confidenceTier === "STRONG" ? "positive" : calcResult.confidenceTier === "SOLID" ? "neutral" : "negative"}
-          />
-        )}
+        <StatCard
+          title="Confidence"
+          value={sigMode && MODE_STYLES[sigMode] ? MODE_STYLES[sigMode].label : (calcResult.confidenceTier ?? "—")}
+          subtitle={calcResult.marketFamily === "batter_over" ? "Signal First" : calcResult.marketFamily === "hr_radar" ? "HR Radar" : "Standard"}
+          icon={<Zap className="w-4 h-4" />}
+          highlight={calcResult.confidenceTier === "ELITE" || calcResult.confidenceTier === "STRONG" ? "positive" : calcResult.confidenceTier === "SOLID" ? "neutral" : "negative"}
+        />
       </div>
 
       {isPitcherMarket && pa && (

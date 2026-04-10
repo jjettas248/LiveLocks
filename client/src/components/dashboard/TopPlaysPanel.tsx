@@ -64,7 +64,7 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPl
           </div>
           <div className="text-left">
             <span className={`text-sm font-bold ${hasPlays ? "text-green-400" : "text-muted-foreground"}`}>
-              {hasPlays ? "Live Edge Feed" : "Edge Feed"}
+              {hasPlays ? "Live Signals" : "Signal Feed"}
             </span>
             <span className="block text-[10px] text-muted-foreground/70">
               {isLoading ? "Scanning..." : hasPlays ? `${plays.length} signal${plays.length !== 1 ? "s" : ""} across all sports` : "Monitoring opportunities"}
@@ -77,7 +77,7 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPl
       {isOpen && (
         <div className="space-y-3 animate-in slide-in-from-top-2 duration-200" data-testid="panel-top-plays">
           <div className="flex items-center justify-between px-1">
-            <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Live Edges</h2>
+            <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Live Signals</h2>
             <button
               data-testid="button-close-edge-feed"
               onClick={handleToggle}
@@ -254,7 +254,7 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPl
                     <div className="rounded-xl border border-primary/30 bg-card/95 backdrop-blur-sm p-5 text-center space-y-3 max-w-sm shadow-xl">
                       <Lock className="w-5 h-5 text-primary mx-auto" />
                       <div className="text-sm font-bold text-foreground">
-                        {blurredPlays.length} more edge{blurredPlays.length !== 1 ? "s" : ""} detected
+                        {blurredPlays.length} more signal{blurredPlays.length !== 1 ? "s" : ""} detected
                       </div>
                       <div className="text-xs text-muted-foreground">
                         Upgrade to unlock all live signals, probabilities, and bet recommendations across every sport.
@@ -301,7 +301,7 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPl
                 Unlock {totalSignals > 0 ? `all ${totalSignals} signals` : "all signals"} across sports
               </h3>
               <p className="text-sm text-muted-foreground">
-                You just saw one edge — there are more across NBA, NCAAB, and MLB right now. Get full access to every signal, probability, and recommendation.
+                You just saw one signal — there are more across NBA, NCAAB, and MLB right now. Get full access to every signal, probability, and recommendation.
               </p>
             </div>
             <div className="flex flex-col gap-2">

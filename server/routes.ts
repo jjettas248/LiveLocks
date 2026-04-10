@@ -1648,6 +1648,7 @@ export async function registerRoutes(
     return res.json({ mode: "live", engine: "MLB", engineMode: mlbEngineResult.mode, signals: validatedApiSignals, updatedAt, isDegraded: finalDegraded, gameCardTags: entry?.gameCardTags ?? [] });
   });
 
+  // TODO: rename to /api/mlb/signal-feed
   app.get("/api/mlb/edge-feed", requireAuth, async (req, res) => {
     try {
       const allSignals: any[] = [];

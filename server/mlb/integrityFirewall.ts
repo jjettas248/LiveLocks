@@ -37,7 +37,7 @@ export function runIntegrityFirewall(output: MLBPropOutput): FirewallResult {
 
   const dirTolerance = output.bookLine < 1.0 ? 0.6 : 0.15;
   const BATTER_OVER_FW_MARKETS: MLBMarket[] = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
-  const isBatterOverFW = output.recommendedSide === "OVER" && BATTER_OVER_FW_MARKETS.includes(output.market);
+  const isBatterOverFW = BATTER_OVER_FW_MARKETS.includes(output.market);
   if (
     Number.isFinite(output.projection) && Number.isFinite(output.bookLine) &&
     output.recommendedSide === "OVER" && output.projection < output.bookLine &&

@@ -330,7 +330,11 @@ export function buildSignalViewModel(sig: MLBSignal): SignalViewModel {
     probability: prob,
     probabilityDisplay: `${prob.toFixed(0)}%`,
     edge: sig.edge,
-    edgeDisplay: sig.edge != null ? `${sig.edge > 0 ? "+" : ""}${sig.edge.toFixed(1)}%` : null,
+    edgeDisplay: (() => {
+      const BATTER_OVER = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
+      if (BATTER_OVER.includes(sig.market) && sig.signalScore != null) return `Signal ${sig.signalScore}`;
+      return sig.edge != null ? `${sig.edge > 0 ? "+" : ""}${sig.edge.toFixed(1)}%` : null;
+    })(),
     projection: sig.projection,
     tierKey,
     tierStyle,

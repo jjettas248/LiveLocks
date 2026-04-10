@@ -713,9 +713,12 @@ function buildOutput(input: MLBPropInput, distParams?: DistributionParams): MLBP
     calibratedProbabilityOver = Math.min(95, calibratedProbabilityOver + capped);
   }
 
-  const calibratedSided = isOverFavored ? calibratedProbabilityOver : calibratedProbabilityUnder;
+  const isBatterOverCalc = BATTER_MARKETS.includes(input.market);
+  const calibratedSided = isBatterOverCalc
+    ? calibratedProbabilityOver
+    : (isOverFavored ? calibratedProbabilityOver : calibratedProbabilityUnder);
 
-  const bookImplied = computeBookImplied(input, isOverFavored);
+  const bookImplied = computeBookImplied(input, isBatterOverCalc ? true : isOverFavored);
   const edge = calibratedSided - bookImplied;
   const badgeResult = computeBadges(input, features);
   const oddsAge = input.oddsUpdatedAt ? Date.now() - input.oddsUpdatedAt : 0;
@@ -891,9 +894,9 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   const calibratedOver = calibrateDistributionProb(rawOverProb, "hits");
   const calibratedUnder = calibrateDistributionProb(rawUnderProb, "hits");
   const calibratedDominant = Math.max(calibratedOver, calibratedUnder);
-  const calibratedSided = isOverFavored ? calibratedOver : calibratedUnder;
+  const calibratedSided = calibratedOver;
 
-  const bookImplied = computeBookImplied(hitsInput, isOverFavored);
+  const bookImplied = computeBookImplied(hitsInput, true);
   const edge = calibratedSided - bookImplied;
   const badgeResult = computeBadges(hitsInput, features);
   const oddsAge = hitsInput.oddsUpdatedAt ? Date.now() - hitsInput.oddsUpdatedAt : 0;
@@ -903,7 +906,7 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
   const warnings = [...projResult.warnings];
   const adjustedProjection = clampProjection(distResult.expectedHits);
 
-  const suppression = checkSuppression(hitsInput, edge, "hits", adjustedProjection, isOverFavored ? "OVER" : "UNDER");
+  const suppression = checkSuppression(hitsInput, edge, "hits", adjustedProjection, "OVER");
   const hitsIsBatterOver = true;
   const finalEdge = (suppression.suppressed && !hitsIsBatterOver) ? 0 : Math.round(edge * 100) / 100;
   if (suppression.suppressed && !hitsIsBatterOver) {
@@ -1032,9 +1035,9 @@ export function calculateTBEdge(input: MLBPropInput): MLBPropOutput {
   const calibratedOver = calibrateDistributionProb(rawOverProb, "total_bases");
   const calibratedUnder = calibrateDistributionProb(rawUnderProb, "total_bases");
   const calibratedDominant = Math.max(calibratedOver, calibratedUnder);
-  const calibratedSided = isOverFavored ? calibratedOver : calibratedUnder;
+  const calibratedSided = calibratedOver;
 
-  const bookImplied = computeBookImplied(tbInput, isOverFavored);
+  const bookImplied = computeBookImplied(tbInput, true);
   const edge = calibratedSided - bookImplied;
   const badgeResult = computeBadges(tbInput, features);
   const oddsAge = tbInput.oddsUpdatedAt ? Date.now() - tbInput.oddsUpdatedAt : 0;
@@ -1044,7 +1047,7 @@ export function calculateTBEdge(input: MLBPropInput): MLBPropOutput {
   const warnings = [...projResult.warnings];
   const adjustedProjection = clampProjection(distResult.expectedTB);
 
-  const suppression = checkSuppression(tbInput, edge, "total_bases", adjustedProjection, isOverFavored ? "OVER" : "UNDER");
+  const suppression = checkSuppression(tbInput, edge, "total_bases", adjustedProjection, "OVER");
   const tbIsBatterOver = true;
   const finalEdge = (suppression.suppressed && !tbIsBatterOver) ? 0 : Math.round(edge * 100) / 100;
   if (suppression.suppressed && !tbIsBatterOver) {
@@ -1335,11 +1338,11 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
   const calibratedOver = calibrateDistributionProb(rawOverProb, "home_runs");
   const calibratedUnder = calibrateDistributionProb(rawUnderProb, "home_runs");
   const calibratedDominant = Math.max(calibratedOver, calibratedUnder);
-  const calibratedSided = isOverFavored ? calibratedOver : calibratedUnder;
+  const calibratedSided = calibratedOver;
 
-  const bookImplied = computeBookImplied(hrInput, isOverFavored);
+  const bookImplied = computeBookImplied(hrInput, true);
   const rawEdge = calibratedSided - bookImplied;
-  const edge = isOverFavored ? rawEdge + hrBuild.boost : rawEdge;
+  const edge = rawEdge + hrBuild.boost;
   const badgeResult = computeBadges(hrInput, features);
   const oddsAge = hrInput.oddsUpdatedAt ? Date.now() - hrInput.oddsUpdatedAt : 0;
   let confidenceTier = determineConfidenceTier(edge, features, badgeResult, oddsAge, "home_runs", "OVER", hrInput.liveInterpretation);
@@ -1348,7 +1351,7 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
   const warnings = [...projResult.warnings];
   const adjustedProjection = clampProjection(distResult.expectedHR);
 
-  const suppression = checkSuppression(hrInput, edge, "home_runs", adjustedProjection, isOverFavored ? "OVER" : "UNDER");
+  const suppression = checkSuppression(hrInput, edge, "home_runs", adjustedProjection, "OVER");
   const hrIsBatterOver = true;
   const finalEdge = (suppression.suppressed && !hrIsBatterOver) ? 0 : Math.round(edge * 100) / 100;
   if (suppression.suppressed && !hrIsBatterOver) {
