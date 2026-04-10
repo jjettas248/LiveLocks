@@ -53,6 +53,7 @@ import { buildLiveEventInterpretation } from "./liveEventInterpretation";
 import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, clearGameCooldowns, type HRAlertInput } from "./evaluateHRAlert";
+import { recomputeHrAlertState, clearGameHrStates, type HRAlertSnapshot } from "./hrAlertEngine";
 import { todayET } from "../utils/dateUtils";
 import { buildHRSignal } from "./HRSignalBuilder";
 import { getPlayer } from "./rosterService";
@@ -678,6 +679,7 @@ export class LiveGameOrchestrator {
       storage.reconcileAlertsForGame(gameId).catch(() => {});
       storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap).catch(() => {});
       clearGameCooldowns(gameId);
+      clearGameHrStates(gameId);
       for (const key of Array.from(KNOWN_HR_COUNTS.keys())) {
         if (key.startsWith(`${gameId}_`)) KNOWN_HR_COUNTS.delete(key);
       }
@@ -2223,6 +2225,16 @@ export class LiveGameOrchestrator {
               })),
             };
             const alertResult = evaluateHRAlert(alertInput);
+
+            const hrDynSnap = recomputeHrAlertState(alertInput, {
+              gameFinal: normalizedStatus === "final",
+              currentPitcherId: pitcher?.playerId ?? null,
+              isHome: batter.team === state.homeTeamAbbr,
+              precomputedAlert: alertResult,
+            });
+            (output as any).hrAlertSnapshot = hrDynSnap;
+            console.log(`[HR_DYNAMIC] ${batter.playerName} state=${hrDynSnap.currentState} readiness=${hrDynSnap.hrReadinessScore} convRaw=${(hrDynSnap.hrConversionProbabilityRaw * 100).toFixed(1)}% convCal=${(hrDynSnap.hrConversionProbabilityCalibrated * 100).toFixed(1)}% decay=${hrDynSnap.decayFactor.toFixed(2)} pitVuln=${hrDynSnap.pitcherHrVulnerability} remPA=${hrDynSnap.remainingPAExpectation.toFixed(1)} tick=${hrDynSnap.tickCount} game=${gameId}`);
+
             const convResult = alertResult.diagnostics.hrConversion;
             const rawPct = convResult ? `${(convResult.hrConversionProbability * 100).toFixed(1)}%` : "n/a";
             const calPct = convResult ? `${(convResult.calibratedProbability * 100).toFixed(1)}%` : "n/a";

@@ -1521,6 +1521,30 @@ export async function registerRoutes(
           hrFactors: rawOutput?.hrFactors ?? null,
           hrBuildScore: rawOutput?.hrBuildScore ?? null,
           hrIntensity: rawOutput?.hrIntensity ?? null,
+          hrAlert: (rawOutput as any)?.hrAlertSnapshot ? (() => {
+            const s = (rawOutput as any).hrAlertSnapshot;
+            return {
+              currentState: s.currentState,
+              hrReadinessScore: s.hrReadinessScore,
+              hrConversionProbabilityRaw: s.hrConversionProbabilityRaw,
+              hrConversionProbabilityCalibrated: s.hrConversionProbabilityCalibrated,
+              remainingPAExpectation: s.remainingPAExpectation,
+              positiveDrivers: s.positiveDrivers,
+              negativeSuppressors: s.negativeSuppressors,
+              cooldownReason: s.cooldownReason,
+              lastStateChangeAt: s.lastStateChangeAt,
+              dataFreshnessMs: s.dataFreshnessMs,
+              peakScore: s.peakScore,
+              peakState: s.peakState,
+              peakAt: s.peakAt,
+              detectedInning: s.detectedInning,
+              currentInning: s.currentInning,
+              pitcherHrVulnerability: s.pitcherHrVulnerability,
+              decayFactor: s.decayFactor,
+              tickCount: s.tickCount,
+              lastRecomputeAt: s.lastRecomputeAt,
+            };
+          })() : null,
           contextScore: rawOutput?.contextScore ?? null,
           matchupTag: rawOutput?.matchupTag ?? null,
           explanationBullets: qs.reasons ?? [],
@@ -1763,6 +1787,30 @@ export async function registerRoutes(
               hotHitterPeriod: hrQsAny.hotHitterPeriod ?? null,
               hotHitterHrCount: hrQsAny.hotHitterHrCount ?? null,
               mode: (qs as any).mode ?? null,
+              hrAlert: (raw as any)?.hrAlertSnapshot ? (() => {
+                const s = (raw as any).hrAlertSnapshot;
+                return {
+                  currentState: s.currentState,
+                  hrReadinessScore: s.hrReadinessScore,
+                  hrConversionProbabilityRaw: s.hrConversionProbabilityRaw,
+                  hrConversionProbabilityCalibrated: s.hrConversionProbabilityCalibrated,
+                  remainingPAExpectation: s.remainingPAExpectation,
+                  positiveDrivers: s.positiveDrivers,
+                  negativeSuppressors: s.negativeSuppressors,
+                  cooldownReason: s.cooldownReason,
+                  lastStateChangeAt: s.lastStateChangeAt,
+                  dataFreshnessMs: s.dataFreshnessMs,
+                  peakScore: s.peakScore,
+                  peakState: s.peakState,
+                  peakAt: s.peakAt,
+                  detectedInning: s.detectedInning,
+                  currentInning: s.currentInning,
+                  pitcherHrVulnerability: s.pitcherHrVulnerability,
+                  decayFactor: s.decayFactor,
+                  tickCount: s.tickCount,
+                  lastRecomputeAt: s.lastRecomputeAt,
+                };
+              })() : null,
             });
           }
 
@@ -1791,6 +1839,22 @@ export async function registerRoutes(
               formIndicator: qs.formIndicator ? String(qs.formIndicator).toUpperCase() : null,
               inning: wlQsAny.inning ?? gameState?.inning ?? 0,
               mode: (qs as any).mode ?? null,
+              hrAlert: (raw as any)?.hrAlertSnapshot ? (() => {
+                const s = (raw as any).hrAlertSnapshot;
+                return {
+                  currentState: s.currentState,
+                  hrReadinessScore: s.hrReadinessScore,
+                  hrConversionProbabilityRaw: s.hrConversionProbabilityRaw,
+                  hrConversionProbabilityCalibrated: s.hrConversionProbabilityCalibrated,
+                  remainingPAExpectation: s.remainingPAExpectation,
+                  positiveDrivers: s.positiveDrivers,
+                  negativeSuppressors: s.negativeSuppressors,
+                  cooldownReason: s.cooldownReason,
+                  pitcherHrVulnerability: s.pitcherHrVulnerability,
+                  decayFactor: s.decayFactor,
+                  tickCount: s.tickCount,
+                };
+              })() : null,
             });
           }
         }

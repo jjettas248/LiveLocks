@@ -689,30 +689,51 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
   const isAlert = card.status === "ALERT";
   const isPending = card.status === "PENDING";
 
+  const dynState = card.dynamicState;
   const modeStyle = card.mode && MODE_STYLES[card.mode] && !isCashed && !isMissed ? MODE_STYLES[card.mode] : null;
   const borderClass = isCashed
     ? "border-emerald-500/60 bg-emerald-500/10 shadow-[0_0_12px_rgba(16,185,129,0.15)]"
     : isMissed
     ? "border-zinc-500/30 bg-zinc-500/5"
+    : dynState === "BET_NOW"
+    ? "border-red-500/50 bg-red-500/8 shadow-[0_0_16px_rgba(239,68,68,0.2)]"
+    : dynState === "PREPARE"
+    ? "border-orange-500/40 bg-orange-500/6"
+    : dynState === "COOLED_OFF"
+    ? "border-zinc-500/30 bg-zinc-500/5"
+    : dynState === "CLOSED"
+    ? "border-zinc-600/20 bg-zinc-600/5"
     : modeStyle
     ? ""
     : isAlert
     ? "border-red-500/40 bg-red-500/5"
     : "border-yellow-500/30 bg-yellow-500/5";
   const modeCardStyle = modeStyle ? { borderColor: modeStyle.border, background: modeStyle.bg } : undefined;
-  const pulseClass = isAlert && !isCashed && !isMissed ? "animate-pulse" : "";
+  const pulseClass = (isAlert || dynState === "BET_NOW") && !isCashed && !isMissed ? "animate-pulse" : "";
+  const DYNAMIC_STATE_BADGES: Record<string, { label: string; cls: string }> = {
+    BET_NOW: { label: "BET NOW", cls: "bg-red-500/20 text-red-300 ring-1 ring-red-500/40 animate-pulse" },
+    PREPARE: { label: "PREPARE", cls: "bg-orange-500/20 text-orange-300 ring-1 ring-orange-500/30" },
+    WATCH: { label: "WATCHING", cls: "bg-yellow-500/15 text-yellow-400" },
+    COOLED_OFF: { label: "COOLED OFF", cls: "bg-zinc-500/15 text-zinc-400 ring-1 ring-zinc-500/20" },
+    CLOSED: { label: "CLOSED", cls: "bg-zinc-600/15 text-zinc-500" },
+  };
+  const dynBadge = dynState ? DYNAMIC_STATE_BADGES[dynState] : null;
 
   const statusBadge = isCashed
     ? { label: "CASHED \u2714", cls: "bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/30" }
     : isMissed
     ? { label: "MISSED", cls: "bg-zinc-500/15 text-zinc-400" }
+    : dynBadge
+    ? dynBadge
     : isAlert
     ? { label: "ACTIVE ALERT", cls: "bg-red-500/15 text-red-400" }
     : isPending
     ? { label: "PENDING", cls: "bg-blue-500/15 text-blue-400" }
     : { label: "WATCHING", cls: "bg-yellow-500/15 text-yellow-400" };
 
-  const decisionBadge = card.decision === "BET_NOW"
+  const decisionBadge = dynState
+    ? null
+    : card.decision === "BET_NOW"
     ? { label: "BET NOW", cls: "bg-red-500/20 text-red-300 border border-red-500/30" }
     : card.decision === "PREPARE"
     ? { label: "PREPARE", cls: "bg-orange-500/20 text-orange-300 border border-orange-500/30" }
@@ -792,6 +813,41 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
         </div>
       )}
 
+      {dynState && !isCashed && !isMissed && (
+        <div className="space-y-1" data-testid={`dynamic-hr-state-${card.playerId}`}>
+          <div className="flex items-center gap-2 text-[10px] flex-wrap">
+            {card.hrConversionCalibrated != null && (
+              <span className={`font-bold tabular-nums ${card.hrConversionCalibrated >= 0.14 ? "text-red-400" : card.hrConversionCalibrated >= 0.08 ? "text-orange-400" : "text-yellow-400"}`}>
+                Conv {(card.hrConversionCalibrated * 100).toFixed(1)}%
+              </span>
+            )}
+            {card.remainingPA != null && (
+              <>
+                <span className="text-muted-foreground/40">|</span>
+                <span className="text-muted-foreground tabular-nums">{card.remainingPA.toFixed(1)} PA left</span>
+              </>
+            )}
+            {card.pitcherVulnerability != null && (
+              <>
+                <span className="text-muted-foreground/40">|</span>
+                <span className={`tabular-nums ${card.pitcherVulnerability >= 70 ? "text-red-400" : card.pitcherVulnerability >= 50 ? "text-orange-400" : "text-muted-foreground"}`}>
+                  P.Vuln {card.pitcherVulnerability}
+                </span>
+              </>
+            )}
+            {card.decayFactor != null && card.decayFactor < 0.95 && (
+              <>
+                <span className="text-muted-foreground/40">|</span>
+                <span className="text-zinc-400 tabular-nums">Decay {(card.decayFactor * 100).toFixed(0)}%</span>
+              </>
+            )}
+          </div>
+          {card.cooldownReason && (
+            <div className="text-[9px] text-zinc-400 italic" data-testid={`cooldown-reason-${card.playerId}`}>{card.cooldownReason}</div>
+          )}
+        </div>
+      )}
+
       {card.isHotHitter && (
         <div className="flex items-center gap-1" data-testid={`badge-hot-hitter-${card.playerId}`}>
           <Flame className="w-3 h-3 text-orange-400" />
@@ -851,6 +907,30 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
 
       {expanded && (
         <div className="space-y-2 pt-1 border-t border-border/20 animate-in slide-in-from-top-1 duration-200" onClick={(e) => e.stopPropagation()}>
+          {dynState && !isCashed && !isMissed && (card.dynamicDrivers.length > 0 || card.dynamicSuppressors.length > 0) && (
+            <div className="space-y-1" data-testid={`dynamic-drivers-${card.playerId}`}>
+              {card.dynamicDrivers.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {card.dynamicDrivers.slice(0, 5).map((d, i) => (
+                    <span key={i} className="text-[8px] px-1.5 py-0.5 rounded-full bg-green-500/10 text-green-400 font-semibold">{d}</span>
+                  ))}
+                </div>
+              )}
+              {card.dynamicSuppressors.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {card.dynamicSuppressors.slice(0, 3).map((s, i) => (
+                    <span key={i} className="text-[8px] px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-400 font-semibold">{s}</span>
+                  ))}
+                </div>
+              )}
+              {card.dynamicPeakScore != null && card.dynamicPeakScore > 0 && (
+                <div className="text-[9px] text-muted-foreground">
+                  Peak: {(card.dynamicPeakScore * 100).toFixed(1)}% ({card.dynamicPeakState})
+                  {card.dynamicTickCount != null && ` · ${card.dynamicTickCount} ticks`}
+                </div>
+              )}
+            </div>
+          )}
           {(isCashed || isMissed) && (card.alertPath || card.conversionPct != null || card.peakScore != null || card.detectedLabel) && (
             <div className="flex flex-wrap gap-1.5 text-[10px]" data-testid={`diagnostics-${card.playerId}`}>
               {card.alertPath && (
@@ -1499,6 +1579,11 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         alertPath: (ch as any).alertPath ?? null,
         conversionPct: (ch as any).conversionPct ?? null,
         mode: null,
+        dynamicState: null, hrReadinessScore: null, hrConversionCalibrated: null, hrConversionRaw: null,
+        remainingPA: null, pitcherVulnerability: null, decayFactor: null,
+        dynamicDrivers: [], dynamicSuppressors: [], cooldownReason: null,
+        dynamicPeakScore: null, dynamicPeakState: null, dynamicTickCount: null,
+        dynamicLastRecompute: null, dynamicDataFreshness: null,
       } as HrRadarCardUi);
     } else {
       radarState.set(key, { ...radarState.get(key)!, status: "CASHED" });
@@ -1557,6 +1642,11 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         alertPath: (cm as any).alertPath ?? null,
         conversionPct: (cm as any).conversionPct ?? null,
         mode: null,
+        dynamicState: null, hrReadinessScore: null, hrConversionCalibrated: null, hrConversionRaw: null,
+        remainingPA: null, pitcherVulnerability: null, decayFactor: null,
+        dynamicDrivers: [], dynamicSuppressors: [], cooldownReason: null,
+        dynamicPeakScore: null, dynamicPeakState: null, dynamicTickCount: null,
+        dynamicLastRecompute: null, dynamicDataFreshness: null,
       } as HrRadarCardUi);
     }
   }
@@ -1576,6 +1666,15 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
   const missedCards = allCards.filter(c => c.status === "MISSED");
 
   const sortByPriority = (a: HrRadarCardUi, b: HrRadarCardUi) => {
+    const dynOrder: Record<string, number> = { BET_NOW: 0, PREPARE: 1, WATCH: 2, COOLED_OFF: 3, CLOSED: 4 };
+    const aDyn = a.dynamicState ? dynOrder[a.dynamicState] ?? 2 : null;
+    const bDyn = b.dynamicState ? dynOrder[b.dynamicState] ?? 2 : null;
+    if (aDyn != null && bDyn != null && aDyn !== bDyn) return aDyn - bDyn;
+    if (aDyn != null && bDyn == null) return -1;
+    if (aDyn == null && bDyn != null) return 1;
+    const aConv = a.hrConversionCalibrated ?? 0;
+    const bConv = b.hrConversionCalibrated ?? 0;
+    if (aConv !== bConv) return bConv - aConv;
     const decOrder: Record<string, number> = { BET_NOW: 0, PREPARE: 1, MONITOR: 2 };
     const aD = decOrder[a.decision ?? "MONITOR"] ?? 2;
     const bD = decOrder[b.decision ?? "MONITOR"] ?? 2;

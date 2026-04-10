@@ -105,6 +105,28 @@ export interface MLBSignal {
   hrIntensity: "weak" | "watch" | "strong" | "imminent" | null;
   rollingForm: Record<string, any> | null;
 
+  hrAlert?: {
+    currentState: "WATCH" | "PREPARE" | "BET_NOW" | "COOLED_OFF" | "CLOSED";
+    hrReadinessScore: number;
+    hrConversionProbabilityRaw: number;
+    hrConversionProbabilityCalibrated: number;
+    remainingPAExpectation: number;
+    positiveDrivers: string[];
+    negativeSuppressors: string[];
+    cooldownReason: string | null;
+    lastStateChangeAt: number;
+    dataFreshnessMs: number;
+    peakScore: number;
+    peakState: "WATCH" | "PREPARE" | "BET_NOW" | "COOLED_OFF" | "CLOSED";
+    peakAt: number;
+    detectedInning: number | null;
+    currentInning: number;
+    pitcherHrVulnerability: number;
+    decayFactor: number;
+    tickCount: number;
+    lastRecomputeAt: number;
+  } | null;
+
   pitcherAnalysis?: {
     stuff: number;
     command: number;

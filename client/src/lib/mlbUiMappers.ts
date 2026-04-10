@@ -59,6 +59,21 @@ export type HrRadarCardUi = {
   alertPath: string | null;
   conversionPct: number | null;
   mode: string | null;
+  dynamicState: "WATCH" | "PREPARE" | "BET_NOW" | "COOLED_OFF" | "CLOSED" | null;
+  hrReadinessScore: number | null;
+  hrConversionCalibrated: number | null;
+  hrConversionRaw: number | null;
+  remainingPA: number | null;
+  pitcherVulnerability: number | null;
+  decayFactor: number | null;
+  dynamicDrivers: string[];
+  dynamicSuppressors: string[];
+  cooldownReason: string | null;
+  dynamicPeakScore: number | null;
+  dynamicPeakState: string | null;
+  dynamicTickCount: number | null;
+  dynamicLastRecompute: number | null;
+  dynamicDataFreshness: number | null;
 };
 
 export type HrRadarAnalyzeViewModel = {
@@ -365,6 +380,21 @@ export function mapHrRadarCardToUi(player: any, type: "edge" | "watch" | "cashed
     alertPath: player.alertPath ?? null,
     conversionPct: player.conversionPct ?? (player.hrProbability != null ? player.hrProbability / 100 : null),
     mode: player.mode ?? null,
+    dynamicState: player.hrAlert?.currentState ?? null,
+    hrReadinessScore: player.hrAlert?.hrReadinessScore ?? null,
+    hrConversionCalibrated: player.hrAlert?.hrConversionProbabilityCalibrated ?? null,
+    hrConversionRaw: player.hrAlert?.hrConversionProbabilityRaw ?? null,
+    remainingPA: player.hrAlert?.remainingPAExpectation ?? null,
+    pitcherVulnerability: player.hrAlert?.pitcherHrVulnerability ?? null,
+    decayFactor: player.hrAlert?.decayFactor ?? null,
+    dynamicDrivers: player.hrAlert?.positiveDrivers ?? [],
+    dynamicSuppressors: player.hrAlert?.negativeSuppressors ?? [],
+    cooldownReason: player.hrAlert?.cooldownReason ?? null,
+    dynamicPeakScore: player.hrAlert?.peakScore ?? null,
+    dynamicPeakState: player.hrAlert?.peakState ?? null,
+    dynamicTickCount: player.hrAlert?.tickCount ?? null,
+    dynamicLastRecompute: player.hrAlert?.lastRecomputeAt ?? null,
+    dynamicDataFreshness: player.hrAlert?.dataFreshnessMs ?? null,
   };
 }
 
@@ -447,5 +477,20 @@ export function mapAlertToUi(alert: any): HrRadarCardUi {
     alertPath: alert.alertPath ?? null,
     conversionPct: alert.conversionPct ?? null,
     mode: alert.mode ?? null,
+    dynamicState: null,
+    hrReadinessScore: null,
+    hrConversionCalibrated: null,
+    hrConversionRaw: null,
+    remainingPA: null,
+    pitcherVulnerability: null,
+    decayFactor: null,
+    dynamicDrivers: [],
+    dynamicSuppressors: [],
+    cooldownReason: null,
+    dynamicPeakScore: null,
+    dynamicPeakState: null,
+    dynamicTickCount: null,
+    dynamicLastRecompute: null,
+    dynamicDataFreshness: null,
   };
 }
