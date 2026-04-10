@@ -202,7 +202,7 @@ const BATTER_MARKETS: MLBMarket[] = [
   "hrr",
 ];
 
-const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed"];
+const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed"];
 
 // ── Previously-resolved line cache ───────────────────────────────────────────
 // Persists the last successfully fetched sportsbook line per event+player+market
@@ -328,7 +328,7 @@ const TRIGGER_IMPACTED_MARKETS: Record<StateChangeTrigger, MLBMarket[] | "all"> 
   inning_change: "all",
   pitcher_change: "all",
   runner_change: ["hits", "total_bases", "hrr"],
-  pitch_count_threshold: ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed"],
+  pitch_count_threshold: ["pitcher_strikeouts", "pitcher_outs", "hits_allowed"],
   tto_shift: "all",
   lineup_substitution: "all",
   hard_hit_event: ["hits", "total_bases", "home_runs", "hrr", "hits_allowed"],
@@ -927,7 +927,7 @@ export class LiveGameOrchestrator {
     const liveScore = computeLiveOpportunityScore(scoreBreakdown.total, output.edge, opportunityScore, marketFamily ?? undefined);
 
     let adjustedProjection = output.projection;
-    const isPitcherMarket = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed"].includes(output.market);
+    const isPitcherMarket = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed"].includes(output.market);
     if (isPitcherMarket && pitcherSigs.length > 0) {
       let sigBoost = 0;
       for (const ps of pitcherSigs) {
@@ -1159,7 +1159,7 @@ export class LiveGameOrchestrator {
     const stateFields = this.computeSignalState(gameId, input, output, scoreBreakdown);
 
     let watchAdjProjection = output.projection;
-    const isWatchPitcherMarket = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed"].includes(output.market);
+    const isWatchPitcherMarket = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed"].includes(output.market);
     if (isWatchPitcherMarket && watchPitcherSigsForProj.length > 0) {
       let sigBoost = 0;
       for (const ps of watchPitcherSigsForProj) {
@@ -1771,8 +1771,7 @@ export class LiveGameOrchestrator {
             case "home_runs": currentStatForMarket = boxScorePlayer.hr; break;
             case "hrr": currentStatForMarket = (boxScorePlayer.hr ?? 0) + ((boxScorePlayer as any).r ?? 0) + ((boxScorePlayer as any).rbi ?? 0); break;
             case "total_bases": currentStatForMarket = boxScorePlayer.tb; break;
-            case "batter_strikeouts": currentStatForMarket = (boxScorePlayer as any).strikeouts ?? 0; break;
-            case "pitcher_strikeouts": case "hits_allowed": case "walks_allowed": currentStatForMarket = 0; break;
+            case "pitcher_strikeouts": case "hits_allowed": currentStatForMarket = 0; break;
             default: currentStatForMarket = boxScorePlayer.hits; break;
           }
         }
@@ -2602,7 +2601,7 @@ export class LiveGameOrchestrator {
         if (enriched.familyResult.isFlagship) flagshipCount++;
         if (!enriched.familyResult.isFlagship && enriched.familyResult.familyPenaltyFactor < 1) {
           sig.signalScore = Math.round(sig.signalScore * enriched.familyResult.familyPenaltyFactor);
-          const isSigBatterOver = sig.side === "OVER" && !["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(sig.market);
+          const isSigBatterOver = sig.side === "OVER" && !["pitcher_strikeouts", "pitcher_outs", "hits_allowed"].includes(sig.market);
           const familyWatchThreshold = isSigBatterOver ? 42 : 55;
           if (sig.signalScore < familyWatchThreshold) {
             sig.confidenceTier = "WATCHLIST";
@@ -2653,7 +2652,7 @@ export class LiveGameOrchestrator {
 
 // ── Auto-persist qualified MLB signals to persisted_plays ────────────────────
 
-const mlbPersistGuard = new Set<string>();
+const mlbPersistGuard = new Map<string, number>();
 
 function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSignal[]): void {
   const today = todayET();
@@ -2670,9 +2669,11 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
     const dir = sig.side === "OVER" ? "over" : sig.side === "UNDER" ? "under" : null;
     if (!dir) { skipped++; skipReasons["no_dir"] = (skipReasons["no_dir"] ?? 0) + 1; continue; }
 
-    const guardKey = `${sig.playerId}|${sig.market}|${sig.line}|${dir}|${gameId}|${today}`;
-    if (mlbPersistGuard.has(guardKey)) { skipped++; skipReasons["dedup"] = (skipReasons["dedup"] ?? 0) + 1; continue; }
-    mlbPersistGuard.add(guardKey);
+    const canonicalKey = `${sig.playerId}|${sig.market}|${dir}|${gameId}|${today}`;
+    const prevScore = mlbPersistGuard.get(canonicalKey);
+    const curScore = sig.signalScore ?? 0;
+    if (prevScore !== undefined && curScore <= prevScore) { skipped++; skipReasons["dedup"] = (skipReasons["dedup"] ?? 0) + 1; continue; }
+    mlbPersistGuard.set(canonicalKey, curScore);
 
     trackPlay({
       gameId,
@@ -2708,7 +2709,7 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
 
 function resetDailyPersistGuard(): void {
   const today = todayET();
-  for (const key of Array.from(mlbPersistGuard)) {
+  for (const key of Array.from(mlbPersistGuard.keys())) {
     if (!key.endsWith(today)) mlbPersistGuard.delete(key);
   }
 }

@@ -6731,6 +6731,15 @@ export function registerAnalyticsRoutes(app: Express): void {
     }
   });
 
+  app.post("/api/admin/mlb/clean-duplicates", requireAdmin, async (_req, res) => {
+    try {
+      const result = await storage.cleanDuplicatePlays();
+      res.json({ ...result, triggeredAt: new Date().toISOString() });
+    } catch (e: any) {
+      res.status(500).json({ error: "Duplicate cleanup failed", details: e.message });
+    }
+  });
+
   app.get("/api/admin/mlb/grading-summary", requireAdmin, async (req, res) => {
     try {
       const range = (req.query.range as string) || "7d";

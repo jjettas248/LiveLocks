@@ -1564,11 +1564,32 @@ export class DatabaseStorage implements IStorage {
     contactQualityScore?: number;
   }): Promise<{ id: string; isDuplicate: boolean }> {
     const existing = await db
-      .select({ id: persistedPlays.id })
+      .select({ id: persistedPlays.id, signalScore: persistedPlays.signalScore })
       .from(persistedPlays)
       .where(eq(persistedPlays.duplicateGuard, play.duplicateGuard))
       .limit(1);
-    if (existing.length > 0) return { id: existing[0].id, isDuplicate: true };
+    if (existing.length > 0) {
+      const oldScore = Number(existing[0].signalScore ?? 0);
+      const newScore = Number(play.signalScore ?? 0);
+      if (newScore > oldScore) {
+        await db.update(persistedPlays).set({
+          line: String(play.line),
+          prob: String(play.prob),
+          engineProb: play.engineProb != null ? String(play.engineProb) : undefined,
+          edgeGap: play.edgeGap != null ? String(play.edgeGap) : undefined,
+          projection: play.projection != null ? String(play.projection) : undefined,
+          signalScore: play.signalScore != null ? String(play.signalScore) : undefined,
+          confidenceTier: play.confidenceTier ?? undefined,
+          liveScore: play.liveScore ?? undefined,
+          opportunityScore: play.opportunityScore ?? undefined,
+          eventBoost: play.eventBoost ?? undefined,
+          inning: play.inning ?? undefined,
+          abNumber: play.abNumber ?? undefined,
+        }).where(eq(persistedPlays.id, existing[0].id));
+        console.log(`[PlayTracker] UPSERT — updated ${existing[0].id} with higher signalScore ${newScore} > ${oldScore}`);
+      }
+      return { id: existing[0].id, isDuplicate: true };
+    }
     await db.insert(persistedPlays).values({
       id: play.id,
       gameId: play.gameId,
@@ -1652,11 +1673,27 @@ export class DatabaseStorage implements IStorage {
     if (opts.market) conds.push(sql`${persistedPlays.market} = ${opts.market}`);
     if (opts.startDate) conds.push(sql`${persistedPlays.gameDate} >= ${opts.startDate}`);
     if (opts.endDate) conds.push(sql`${persistedPlays.gameDate} <= ${opts.endDate}`);
-    return await db
+    const rows = await db
       .select()
       .from(persistedPlays)
       .where(and(...conds))
       .orderBy(desc(persistedPlays.timestamp));
+
+    const seen = new Map<string, PersistedPlay>();
+    for (const row of rows) {
+      const canonKey = `${row.playerId ?? row.playerName}|${row.market}|${row.direction}|${row.gameId}|${row.gameDate}`;
+      const existing = seen.get(canonKey);
+      if (!existing) {
+        seen.set(canonKey, row);
+      } else {
+        const existingScore = Number(existing.signalScore ?? 0);
+        const rowScore = Number(row.signalScore ?? 0);
+        if (rowScore > existingScore) {
+          seen.set(canonKey, row);
+        }
+      }
+    }
+    return Array.from(seen.values());
   }
 
   async settlePlay(id: string, result: string, finalStat: number | null, settledAt: Date): Promise<PersistedPlay | null> {
@@ -1706,11 +1743,25 @@ export class DatabaseStorage implements IStorage {
     if (opts?.sport) conds.push(sql`${persistedPlays.sport} = ${opts.sport}`);
     if (opts?.startDate) conds.push(sql`${persistedPlays.gameDate} >= ${opts.startDate}`);
     if (opts?.endDate) conds.push(sql`${persistedPlays.gameDate} <= ${opts.endDate}`);
-    return await db
+    const rows = await db
       .select()
       .from(persistedPlays)
       .where(and(...conds))
       .orderBy(desc(persistedPlays.timestamp));
+
+    const seen = new Map<string, PersistedPlay>();
+    for (const row of rows) {
+      const canonKey = `${row.playerId ?? row.playerName}|${row.market}|${row.direction}|${row.gameId}|${row.gameDate}`;
+      if (!seen.has(canonKey)) {
+        seen.set(canonKey, row);
+      } else {
+        const existing = seen.get(canonKey)!;
+        if (Number(row.signalScore ?? 0) > Number(existing.signalScore ?? 0)) {
+          seen.set(canonKey, row);
+        }
+      }
+    }
+    return Array.from(seen.values());
   }
 
   async getRecentGradedSignals(limit: number): Promise<PersistedPlay[]> {
@@ -1751,29 +1802,28 @@ export class DatabaseStorage implements IStorage {
       .from(persistedPlays)
       .orderBy(desc(persistedPlays.timestamp));
 
-    const seen = new Map<string, { id: string; prob: number }>();
+    const seen = new Map<string, { id: string; score: number }>();
     const toDelete: string[] = [];
 
     for (const play of rows) {
-      const key = play.duplicateGuard ??
-        `${play.playerId ?? play.playerName}|${play.market}|${play.line}|${play.direction}|${play.gameId ?? ""}|${play.gameDate}`;
+      const key = `${play.playerId ?? play.playerName}|${play.market}|${play.direction}|${play.gameId ?? ""}|${play.gameDate}`;
 
       if (seen.has(key)) {
         const existing = seen.get(key)!;
-        const currentProb = Number(play.prob);
-        if (currentProb > existing.prob) {
+        const currentScore = Number(play.signalScore ?? play.prob ?? 0);
+        if (currentScore > existing.score) {
           toDelete.push(existing.id);
-          seen.set(key, { id: play.id, prob: currentProb });
+          seen.set(key, { id: play.id, score: currentScore });
         } else {
           toDelete.push(play.id);
         }
       } else {
-        seen.set(key, { id: play.id, prob: Number(play.prob) });
+        seen.set(key, { id: play.id, score: Number(play.signalScore ?? play.prob ?? 0) });
       }
     }
 
     if (toDelete.length > 0) {
-      console.log("[CLEAN] Deleting", toDelete.length, "duplicate plays");
+      console.log("[CLEAN] Deleting", toDelete.length, "duplicate plays (canonical key dedup, keeping highest signalScore)");
       await db.delete(persistedPlays).where(inArray(persistedPlays.id, toDelete));
     }
 
@@ -2233,7 +2283,7 @@ export class DatabaseStorage implements IStorage {
       }
 
       const alertId = `${today}_${data.gameId}_${data.playerId}`;
-      await db.insert(hrRadarAlerts).values({
+      const insertResult = await db.insert(hrRadarAlerts).values({
         id: alertId,
         sessionDate: today,
         gameId: data.gameId,
@@ -2259,7 +2309,13 @@ export class DatabaseStorage implements IStorage {
         diagnosticsSnapshot: data.diagnosticsSnapshot ?? null,
         status: "live",
         analyticsPersisted: false,
-      });
+      }).onConflictDoNothing();
+      if ((insertResult as any).rowCount === 0) {
+        console.log(`[HR_RADAR_ALERT_UPSERT] RACE_DEDUP — alert already exists for sessionDate=${today} gameId=${data.gameId} playerId=${data.playerId}`);
+        const raceExisting = await db.select().from(hrRadarAlerts)
+          .where(eq(hrRadarAlerts.id, alertId)).limit(1);
+        return raceExisting[0] ?? null;
+      }
 
       console.log(`[HR_RADAR_ALERT_UPSERT] CREATE sessionDate=${today} gameId=${data.gameId} playerId=${data.playerId} detectedLabel=${detectedLabel} initialReadinessScore=${data.readinessScore}`);
       const inserted = await db.select().from(hrRadarAlerts)

@@ -10,17 +10,20 @@ export type MLBMarket =
   | "batter_strikeouts"
   | "hr_allowed";
 
+export const DISABLED_MLB_MARKETS: MLBMarket[] = [
+  "batter_strikeouts",
+  "hr_allowed",
+  "walks_allowed",
+];
+
 export const ALL_MLB_MARKETS: MLBMarket[] = [
   "hits",
   "total_bases",
   "pitcher_strikeouts",
   "hits_allowed",
-  "walks_allowed",
   "home_runs",
   "hrr",
   "pitcher_outs",
-  "batter_strikeouts",
-  "hr_allowed",
 ];
 
 // ── Phase 5: Game-level markets (team/game totals, F5) ────────────────────────

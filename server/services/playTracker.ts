@@ -82,7 +82,6 @@ export async function trackPlay(
   const duplicateGuard = [
     signal.playerId ?? signal.playerName,
     signal.market,
-    String(signal.line),
     signal.direction,
     signal.gameId,
     today,

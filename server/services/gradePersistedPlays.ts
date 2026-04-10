@@ -1,5 +1,6 @@
 import type { IStorage } from "../storage";
 import { recordResult as recordDirectionalResult } from "../nba/directionalBias";
+import { DISABLED_MLB_MARKETS } from "../mlb/types";
 
 // ── MLB Stats API typed interfaces ────────────────────────────────────────────
 
@@ -458,9 +459,15 @@ export async function gradePersistedPlays(
 
         for (const play of plays) {
           try {
-            // Req 2 — idempotent grading lock: belt-and-suspenders in case query let a settled play through
             if (play.settledAt !== null && play.settledAt !== undefined) {
               console.warn("[GRADE MLB] Play already settled, skipping:", play.id, play.playerName);
+              skipped++;
+              continue;
+            }
+
+            const market = (play.market ?? "").trim();
+            if ((DISABLED_MLB_MARKETS as string[]).includes(market)) {
+              console.log("[GRADE MLB] Skipping disabled market:", market, "player:", play.playerName);
               skipped++;
               continue;
             }
@@ -473,7 +480,6 @@ export async function gradePersistedPlays(
               continue;
             }
 
-            const market = (play.market ?? "").trim();
             const finalStat = getMlbStatValue(playerEntry, market);
             if (finalStat === null) {
               const availableBatting = Object.keys(playerEntry.batting).join(", ");
