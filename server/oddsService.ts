@@ -99,9 +99,9 @@ export interface OddsLine {
 
 // Discriminated union for getPlayerOdds return values
 export type PlayerOddsResult =
-  | { isDegraded: false; quotaExhausted: false; books: Record<string, OddsLine> }
-  | { isDegraded: true;  quotaExhausted: false; books: Record<string, OddsLine> }
-  | { isDegraded: false; quotaExhausted: true;  books: Record<string, never> };
+  | { isDegraded: false; quotaExhausted: false; books: Record<string, OddsLine>; fetchedAt: number }
+  | { isDegraded: true;  quotaExhausted: false; books: Record<string, OddsLine>; fetchedAt: number }
+  | { isDegraded: false; quotaExhausted: true;  books: Record<string, never>;    fetchedAt: number };
 
 const cache = new Map<string, CacheEntry>();
 const EVENTS_TTL = 3 * 60 * 1000;       // 3 min (shorter so fresh games appear quickly)
@@ -514,14 +514,14 @@ export async function getPlayerOdds(
 ): Promise<PlayerOddsResult> {
   const marketKey = MARKET_MAP[statType];
   if (!marketKey) {
-    return { isDegraded: false, quotaExhausted: false, books: {} };
+    return { isDegraded: false, quotaExhausted: false, books: {}, fetchedAt: 0 };
   }
 
   const normName = normPlayerName(playerName);
   const lastKnownKey = `${oddsEventId}|${normName}|${statType}`;
 
-  const makeDegraded = (books: Record<string, OddsLine>): PlayerOddsResult =>
-    ({ isDegraded: true, quotaExhausted: false, books });
+  const makeDegraded = (books: Record<string, OddsLine>, fetchedAt: number): PlayerOddsResult =>
+    ({ isDegraded: true, quotaExhausted: false, books, fetchedAt });
 
   // Cache-first pre-check: if a fresh last-known entry exists within the active TTL window,
   // return it immediately as non-degraded and skip the API call.
@@ -532,7 +532,7 @@ export async function getPlayerOdds(
   if (lkFresh && Date.now() - lkFresh.timestamp < cacheFirstTTL) {
     console.log(`[ODDS CACHE-FIRST] Fresh cache hit for ${playerName} (${statType}) — skipping API call`);
     pipelineLog("NBA", oddsEventId, "odds:cacheHit", { player: playerName, statType, books: Object.keys(lkFresh.data) });
-    return { isDegraded: false, quotaExhausted: false, books: lkFresh.data };
+    return { isDegraded: false, quotaExhausted: false, books: lkFresh.data, fetchedAt: lkFresh.timestamp };
   }
 
   // Per-game+market throttle: if a fetch was already issued for this event+market
@@ -544,7 +544,7 @@ export async function getPlayerOdds(
   if (lastCallTs !== undefined && Date.now() - lastCallTs < GAME_API_THROTTLE_MS) {
     const lk = lastKnownOdds.get(lastKnownKey);
     if (lk) {
-      return makeDegraded(lk.data);
+      return makeDegraded(lk.data, lk.timestamp);
     }
     // No per-player last-known, but the raw odds cache may have data for this player
     // from a previous fetch. Fall through to getRawOdds which will serve from cache.
@@ -562,7 +562,7 @@ export async function getPlayerOdds(
     const lk = lastKnownOdds.get(lastKnownKey);
     if (lk && Date.now() - lk.timestamp < LAST_KNOWN_TTL) {
       console.warn(`[ODDS FALLBACK] Network error for ${playerName} (${statType}) — using last-known line (degraded)`);
-      return makeDegraded(lk.data);
+      return makeDegraded(lk.data, lk.timestamp);
     }
     throw fetchErr;
   }
@@ -572,9 +572,9 @@ export async function getPlayerOdds(
     const lk = lastKnownOdds.get(lastKnownKey);
     if (lk && Date.now() - lk.timestamp < LAST_KNOWN_TTL) {
       console.warn(`[ODDS FALLBACK] Quota exhausted for ${playerName} (${statType}) — using last-known line (degraded)`);
-      return makeDegraded(lk.data);
+      return makeDegraded(lk.data, lk.timestamp);
     }
-    return { isDegraded: false, quotaExhausted: true, books: {} };
+    return { isDegraded: false, quotaExhausted: true, books: {}, fetchedAt: 0 };
   }
 
   const bookmakers: any[] = Array.isArray(oddsData?.bookmakers) ? oddsData.bookmakers : [];
@@ -583,9 +583,9 @@ export async function getPlayerOdds(
     const lk = lastKnownOdds.get(lastKnownKey);
     if (lk && Date.now() - lk.timestamp < LAST_KNOWN_TTL) {
       console.warn(`[ODDS FALLBACK] Empty/malformed bookmakers for ${playerName} (${statType}) — using last-known line (degraded)`);
-      return makeDegraded(lk.data);
+      return makeDegraded(lk.data, lk.timestamp);
     }
-    return { isDegraded: false, quotaExhausted: false, books: {} };
+    return { isDegraded: false, quotaExhausted: false, books: {}, fetchedAt: Date.now() };
   }
 
   const nameParts = normName.split(" ");
@@ -667,8 +667,9 @@ export async function getPlayerOdds(
     lastKnownOdds.set(lastKnownKey, { data: books, timestamp: Date.now() });
   }
 
+  const freshFetchedAt = Date.now();
   pipelineLog("NBA", oddsEventId, "odds:result", { player: playerName, statType, books: Object.keys(books), isDegraded: false, foundForAnyBook });
-  return { isDegraded: false, quotaExhausted: false, books };
+  return { isDegraded: false, quotaExhausted: false, books, fetchedAt: freshFetchedAt };
 }
 
 // Fetch game-level spread and total for a given Odds API event.

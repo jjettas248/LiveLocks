@@ -3420,7 +3420,7 @@ export async function registerRoutes(
                     if (process.env.DEBUG_PIPELINE === "true") {
                       console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] processed: player=${playerName} stat=${statType} medianLine=${medianLine} books=${normalized.booksAvailable} isDegraded=${oddsResult.isDegraded}`);
                     }
-                    oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys, isDegraded: oddsResult.isDegraded, oddsFetchedAt: Date.now() });
+                    oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys, isDegraded: oddsResult.isDegraded, oddsFetchedAt: oddsResult.fetchedAt || Date.now() });
                     resolved = true;
                   }
                 }
@@ -4200,7 +4200,7 @@ export async function registerRoutes(
                         // Use median consensus — never pick extremes which amplify outlier/stale book data
                         const sortedLines = [...lines].sort((a, b) => a - b);
                         const medianLine = sortedLines[Math.floor(sortedLines.length / 2)];
-                        oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys, isDegraded: isDeg, oddsFetchedAt: Date.now() });
+                        oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys, isDegraded: isDeg, oddsFetchedAt: oddsResult.fetchedAt || Date.now() });
                         resolved = true;
                       }
                     }
