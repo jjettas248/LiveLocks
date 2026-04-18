@@ -1181,21 +1181,63 @@ export async function registerRoutes(
     }
   });
 
-  const mlbLiveStatsCache = new Map<string, { ts: number; players: any[]; allRosterIds: Set<string> }>();
+  const mlbLiveStatsCache = new Map<string, { ts: number; players: any[]; allRosterIds: Set<string>; gameContext: any }>();
   const MLB_LIVE_STATS_TTL = 15_000;
+
+  const buildGameContext = (gameId: string, boxscore?: any) => {
+    const cachedState = mlbGameCache.gameState[gameId];
+    const homeAbbr: string = boxscore?.teams?.home?.team?.abbreviation ?? "";
+    const awayAbbr: string = boxscore?.teams?.away?.team?.abbreviation ?? "";
+    if (!cachedState) {
+      return {
+        gameState: "pregame" as const,
+        inning: 0,
+        isTopInning: true,
+        halfState: "Top",
+        outs: 0,
+        homeScore: 0,
+        awayScore: 0,
+        homeAbbr,
+        awayAbbr,
+        runners: [] as string[],
+        currentBatterId: null,
+        currentBatterName: null,
+        pitcherId: null,
+        pitcherName: null,
+        ageMs: null,
+      };
+    }
+    return {
+      gameState: "live" as const,
+      inning: cachedState.inning ?? 0,
+      isTopInning: cachedState.isTopInning ?? true,
+      halfState: (cachedState.isTopInning ?? true) ? "Top" : "Bottom",
+      outs: cachedState.outs ?? 0,
+      homeScore: cachedState.homeScore ?? 0,
+      awayScore: cachedState.awayScore ?? 0,
+      homeAbbr: homeAbbr || cachedState.homeTeamAbbr || "",
+      awayAbbr: awayAbbr || cachedState.awayTeamAbbr || "",
+      runners: cachedState.runnersOnBase ?? [],
+      currentBatterId: cachedState.currentBatter?.playerId ?? null,
+      currentBatterName: cachedState.currentBatter?.playerName ?? null,
+      pitcherId: cachedState.pitcherInGame?.playerId ?? null,
+      pitcherName: cachedState.pitcherInGame?.playerName ?? null,
+      ageMs: cachedState.fetchedAt ? Date.now() - cachedState.fetchedAt : null,
+    };
+  };
 
   app.get("/api/mlb/live-stats/:gameId", requireMLBAccess, async (req, res) => {
     const gameId = req.params.gameId as string;
     const cached = mlbLiveStatsCache.get(gameId);
     if (cached && Date.now() - cached.ts < MLB_LIVE_STATS_TTL) {
-      return res.json({ ready: true, reason: null, players: cached.players });
+      return res.json({ ready: true, reason: null, players: cached.players, gameContext: cached.gameContext });
     }
     try {
       const registeredLiveGame = getActiveGames().find((g) => g.gameId === gameId);
       const liveStatsPk: string | undefined = registeredLiveGame?.gamePk;
       if (!liveStatsPk) {
         console.log(`[mlb/live-stats] gameId=${gameId}: gamePk not yet resolved (registered=${!!registeredLiveGame}) — returning readiness metadata`);
-        return res.json({ ready: false, reason: "Waiting for official box score", players: [] });
+        return res.json({ ready: false, reason: "Waiting for official box score", players: [], gameContext: buildGameContext(gameId) });
       }
       const url = `https://statsapi.mlb.com/api/v1/game/${liveStatsPk}/boxscore`;
       const response = await fetch(url, {
@@ -1260,12 +1302,13 @@ export async function registerRoutes(
         const pitchers: number[] = data.teams?.[side]?.pitchers ?? [];
         for (const pid of pitchers) allRosterIds.add(String(pid));
       }
-      mlbLiveStatsCache.set(gameId, { ts: Date.now(), players, allRosterIds });
-      console.log(`[mlb/live-stats] gameId=${gameId}: hydrated ${players.length} players from gamePk=${liveStatsPk}`);
-      return res.json({ ready: true, reason: null, players });
+      const gameContext = buildGameContext(gameId, data);
+      mlbLiveStatsCache.set(gameId, { ts: Date.now(), players, allRosterIds, gameContext });
+      console.log(`[mlb/live-stats] gameId=${gameId}: hydrated ${players.length} players from gamePk=${liveStatsPk} inning=${gameContext.inning}${gameContext.isTopInning ? "T" : "B"} score=${gameContext.awayScore}-${gameContext.homeScore} batter=${gameContext.currentBatterName ?? "?"}`);
+      return res.json({ ready: true, reason: null, players, gameContext });
     } catch (e: any) {
       console.error("[mlb/live-stats]", e.message);
-      return res.status(502).json({ ready: false, reason: "Live stats unavailable", players: [] });
+      return res.status(502).json({ ready: false, reason: "Live stats unavailable", players: [], gameContext: buildGameContext(gameId) });
     }
   });
 

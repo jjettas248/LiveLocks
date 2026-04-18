@@ -51,10 +51,29 @@ type MlbPlayerStat = {
   priorABResults?: ABResultEntry[];
 };
 
+type LiveGameContext = {
+  gameState: "live" | "pregame" | "final";
+  inning: number;
+  isTopInning: boolean;
+  halfState: string;
+  outs: number;
+  homeScore: number;
+  awayScore: number;
+  homeAbbr: string;
+  awayAbbr: string;
+  runners: string[];
+  currentBatterId: string | null;
+  currentBatterName: string | null;
+  pitcherId: string | null;
+  pitcherName: string | null;
+  ageMs: number | null;
+};
+
 type LiveStatsResponse = {
   ready: boolean;
   reason: string | null;
   players: MlbPlayerStat[];
+  gameContext?: LiveGameContext;
 };
 
 
@@ -132,6 +151,8 @@ export function MlbBoxScore({
   });
 
   const players = data?.players ?? [];
+  const gameContext = data?.gameContext;
+  const currentBatterId = gameContext?.currentBatterId ?? null;
   const gameSignals = signals.filter(s => s.gameId === gameId);
   const signalCount = gameSignals.length;
 
@@ -210,6 +231,15 @@ export function MlbBoxScore({
         <div className="flex items-center gap-2">
           <Activity className={`w-3.5 h-3.5 text-primary ${isRefetching ? "animate-spin" : ""}`} />
           <span className="text-xs font-bold text-foreground">Live Box Score</span>
+          {gameContext && gameContext.gameState === "live" && gameContext.inning > 0 && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 font-bold tabular-nums border border-emerald-500/30"
+              data-testid="text-boxscore-inning"
+              title={`${gameContext.outs} out${gameContext.outs === 1 ? "" : "s"}`}
+            >
+              {gameContext.isTopInning ? "T" : "B"}{gameContext.inning} · {gameContext.awayAbbr || "AWY"} {gameContext.awayScore}-{gameContext.homeScore} {gameContext.homeAbbr || "HOM"}
+            </span>
+          )}
           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary font-semibold">{players.length}</span>
           {dataUpdatedAt > 0 && (
             <span className="text-[9px] text-muted-foreground/70 tabular-nums" data-testid="text-boxscore-updated">
@@ -402,7 +432,7 @@ export function MlbBoxScore({
                       data-testid={`row-player-${player.playerId}`}
                       className={`border-b border-border/10 transition-colors ${
                         onPlayerClick ? "cursor-pointer hover:bg-primary/5 active:bg-primary/10" : ""
-                      }`}
+                      } ${currentBatterId === player.playerId ? "ring-1 ring-emerald-400/60 bg-emerald-500/5" : ""}`}
                       style={tierStyle ? { background: tierStyle.bg, boxShadow: `inset 4px 0 0 ${tierStyle.border}` } : undefined}
                       role={onPlayerClick ? "button" : undefined}
                       tabIndex={onPlayerClick ? 0 : undefined}
