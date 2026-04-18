@@ -42,6 +42,8 @@ import type { MarketFamily } from "./signalScore";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
 import { assignMlbTier, assignAndCheckPoll, markPolled, clearGame as clearScheduler, logTierAssignment, type MlbGameContext } from "../odds/oddsScheduler";
 import { clearTier } from "../odds/oddsDiagnostics";
+import { readOddsSnapshot, readLastKnownGood } from "../odds/oddsCache";
+import { rankBook } from "../odds/oddsConfig";
 import {
   classifyBatterArchetype,
   classifyPitcherArchetype,
@@ -217,7 +219,7 @@ const priorResolvedLines = new Map<string, number>();
 // First match wins; unlisted bookmakers are used only as a last resort.
 const PREFERRED_BOOKMAKERS = ["draftkings", "fanduel", "hardrockbet", "betmgm", "betrivers", "espnbet"];
 
-type ResolvedLine = { line: number; overOdds: number | null; underOdds: number | null; isDegraded: boolean; source: "live" | "prior" };
+type ResolvedLine = { line: number; overOdds: number | null; underOdds: number | null; isDegraded: boolean; source: "live" | "prior" | "cache" | "lkg" };
 
 // ── Resolve a real book line for a player/market ──────────────────────────────
 // Precedence:
@@ -236,6 +238,30 @@ async function resolveBookLine(
 ): Promise<ResolvedLine | null> {
   const normName = playerName.toLowerCase().trim();
   const cacheKey = oddsEventId ? `${oddsEventId}|${normName}|${market}` : `unknown|${normName}|${market}`;
+
+  // (0) Cache-first: serve from shared odds cache when fresh — avoids API hit.
+  //     Try in-play first (more relevant during live games), then pre-game.
+  if (oddsEventId) {
+    for (const inPlay of [true, false]) {
+      const snap = readOddsSnapshot({ sport: "mlb", eventId: oddsEventId, market, player: playerName, isLive: inPlay });
+      if (snap && snap.freshness === "fresh") {
+        const bookKeys = Object.keys(snap.books);
+        const preferred = bookKeys.slice().sort((a, b) => rankBook("mlb", a) - rankBook("mlb", b))[0];
+        const entry = snap.books[preferred];
+        if (entry && typeof entry.line === "number" && isFinite(entry.line) && entry.line > 0) {
+          priorResolvedLines.set(cacheKey, entry.line);
+          pLog(oddsEventId, `odds:bookLine:cache:${inPlay ? "inPlay" : "pre"}`, { player: playerName, market, line: entry.line, book: preferred, ageMs: snap.ageMs, freshness: snap.freshness });
+          return {
+            line: entry.line,
+            overOdds: typeof entry.overOdds === "number" && isFinite(entry.overOdds) ? entry.overOdds : null,
+            underOdds: typeof entry.underOdds === "number" && isFinite(entry.underOdds) ? entry.underOdds : null,
+            isDegraded: false,
+            source: "cache",
+          };
+        }
+      }
+    }
+  }
 
   // (1) Try odds service — first pre-game, then in-play
   //     Only short-circuit on non-degraded pre-game lines; if pre-game returns
@@ -275,6 +301,27 @@ async function resolveBookLine(
       priorResolvedLines.set(cacheKey, bestDegraded.line);
       pLog(oddsEventId, "odds:bookLine:degraded", { player: playerName, market, line: bestDegraded.line });
       return bestDegraded;
+    }
+
+    // (1.5) Last-known-good fallback from shared cache — even if stale/expired.
+    for (const inPlay of [true, false]) {
+      const lkg = readLastKnownGood({ sport: "mlb", eventId: oddsEventId, market, player: playerName, isLive: inPlay });
+      if (lkg) {
+        const bookKeys = Object.keys(lkg.books);
+        const preferred = bookKeys.slice().sort((a, b) => rankBook("mlb", a) - rankBook("mlb", b))[0];
+        const entry = lkg.books[preferred];
+        if (entry && typeof entry.line === "number" && isFinite(entry.line) && entry.line > 0) {
+          priorResolvedLines.set(cacheKey, entry.line);
+          pLog(oddsEventId, "odds:bookLine:lkg", { player: playerName, market, line: entry.line, book: preferred, ageMs: lkg.ageMs, freshness: lkg.freshness });
+          return {
+            line: entry.line,
+            overOdds: typeof entry.overOdds === "number" && isFinite(entry.overOdds) ? entry.overOdds : null,
+            underOdds: typeof entry.underOdds === "number" && isFinite(entry.underOdds) ? entry.underOdds : null,
+            isDegraded: true,
+            source: "lkg",
+          };
+        }
+      }
     }
   }
 
