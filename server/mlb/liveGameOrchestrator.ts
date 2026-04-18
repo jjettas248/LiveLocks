@@ -131,42 +131,94 @@ export function getOnlyHomersBallparkHrCount(ballpark: string): number | null {
 }
 
 // ── HR alert grading tracker ──────────────────────────────────────────────────
-const KNOWN_HR_COUNTS = new Map<string, number>();
+// Tracks the highest atBatIndex of an HR play we've already graded per
+// (gameId, playerId). Using the play's atBatIndex (canonical from MLB Stats API)
+// instead of a count avoids race conditions where the box-score HR count
+// updates before/after the play feed and produces wrong inning attribution.
+const KNOWN_HR_COUNTS = new Map<string, number>();          // legacy: used elsewhere as "we've seen this player's HR"
+const KNOWN_HR_AB_INDEX = new Map<string, number>();        // gameId_playerId -> highest graded atBatIndex
 
-function checkAndGradeHR(playerId: string, gameId: string, currentHR: number, playerName?: string, team?: string, inning?: number, halfInning?: string, abNum?: number) {
-  const key = `${gameId}_${playerId}`;
-  const prevHR = KNOWN_HR_COUNTS.get(key) ?? 0;
-  KNOWN_HR_COUNTS.set(key, currentHR);
-  if (currentHR > prevHR && prevHR >= 0) {
-    const hitHalf = halfInning === "top" ? "T" : halfInning === "bottom" ? "B" : "?";
-    const hitLabel = `${hitHalf}${inning ?? 0}`;
-    console.log(`[HR_GRADE_DETECTED] playerId=${playerId} player=${playerName ?? "?"} gameId=${gameId} prevHR=${prevHR} newHR=${currentHR} hitLabel=${hitLabel}`);
-    storage.resolveAlertAsHit(
-      playerId,
-      gameId,
-      inning ?? 0,
-      halfInning ?? "unknown",
-      abNum ?? 0,
-    ).catch(() => {});
-    storage.resolveHrRadarAlertAsHit(
-      playerId,
-      gameId,
-      inning ?? 0,
-      hitHalf,
-      hitLabel,
-    ).then((count) => {
-      if (count === 0 && playerName) {
+function gradeSingleHRPlay(
+  playerId: string,
+  gameId: string,
+  playerName: string,
+  team: string,
+  inning: number,
+  halfInning: "top" | "bottom",
+  atBatIndex: number,
+  endTimeMs: number | null,
+  source: "play_feed" | "box_score_fallback",
+): void {
+  const hitHalf = halfInning === "top" ? "T" : "B";
+  const hitLabel = `${hitHalf}${inning}`;
+  const ageSec = endTimeMs ? Math.round((Date.now() - endTimeMs) / 1000) : null;
+  console.log(
+    `[HR_GRADE_DETECTED] playerId=${playerId} player=${playerName} gameId=${gameId} ` +
+    `hitLabel=${hitLabel} abIndex=${atBatIndex} source=${source}` +
+    (ageSec !== null ? ` ageSec=${ageSec}` : "")
+  );
+  storage.resolveAlertAsHit(playerId, gameId, inning, halfInning, atBatIndex, endTimeMs).catch(() => {});
+  storage.resolveHrRadarAlertAsHit(playerId, gameId, inning, hitHalf, hitLabel, endTimeMs)
+    .then((count) => {
+      if (count === 0) {
         storage.ensureHrRadarAlertHit({
           gameId,
           playerId,
           playerName,
-          team: team ?? "",
-          inning: inning ?? 0,
-          half: halfInning === "top" ? "top" : halfInning === "bottom" ? "bottom" : "top",
+          team,
+          inning,
+          half: halfInning,
           hitLabel,
         }).catch(err => console.warn(`[HR_RADAR_ENSURE_HIT] Failed: ${err.message}`));
       }
     }).catch(() => {});
+}
+
+/**
+ * Centralized HR grading using the MLB Stats API live-feed play data.
+ * Razor-sharp inning attribution: pulls inning/halfInning directly from each
+ * HR play's `about.inning`/`about.halfInning` rather than the orchestrator's
+ * current `state.inning` (which may have rolled over by the time we poll).
+ *
+ * Runs once per pollGame after syncContactData has populated mlbGameCache.hrPlays.
+ */
+function gradeHomeRunsFromPlays(gameId: string): void {
+  const hrCache = mlbGameCache.hrPlays[gameId];
+  if (!hrCache || hrCache.plays.length === 0) return;
+
+  // Group plays by playerId, keep highest atBatIndex per player
+  const byPlayer = new Map<string, typeof hrCache.plays>();
+  for (const p of hrCache.plays) {
+    const arr = byPlayer.get(p.playerId) ?? [];
+    arr.push(p);
+    byPlayer.set(p.playerId, arr);
+  }
+
+  for (const [playerId, plays] of byPlayer) {
+    plays.sort((a, b) => a.atBatIndex - b.atBatIndex);
+    const trackerKey = `${gameId}_${playerId}`;
+    const lastGradedIdx = KNOWN_HR_AB_INDEX.get(trackerKey) ?? -1;
+
+    let cumulativeHR = KNOWN_HR_COUNTS.get(trackerKey) ?? 0;
+    for (const play of plays) {
+      if (play.atBatIndex <= lastGradedIdx) continue;
+      // Prefer completed plays for grading; in-progress plays are noted but not graded yet
+      if (!play.isComplete) continue;
+      cumulativeHR += 1;
+      gradeSingleHRPlay(
+        playerId,
+        gameId,
+        play.playerName,
+        play.team,
+        play.inning,
+        play.halfInning,
+        play.atBatIndex,
+        play.endTimeMs,
+        "play_feed",
+      );
+      KNOWN_HR_AB_INDEX.set(trackerKey, play.atBatIndex);
+    }
+    if (cumulativeHR > 0) KNOWN_HR_COUNTS.set(trackerKey, cumulativeHR);
   }
 }
 
@@ -645,6 +697,12 @@ export class LiveGameOrchestrator {
     const contactSyncState = mlbGameCache.gameState[gameId];
     const contactSyncStatus = contactSyncState?.status ?? "";
     const isLiveForContact = contactSyncStatus === "live" || contactSyncStatus === "In Progress";
+
+    // Razor-sharp HR grading: pulls inning attribution from each HR play directly,
+    // not from the orchestrator's current state.inning (which can roll over).
+    // Runs every poll cycle (live + final) so post-game catch-ups still resolve correctly.
+    gradeHomeRunsFromPlays(gameId);
+
     if (contactChanges.length > 0 && isLiveForContact) {
       await this.reevaluateHRRadarOnContact(gameId, contactChanges);
     }
@@ -765,6 +823,9 @@ export class LiveGameOrchestrator {
       clearGameHrStates(gameId);
       for (const key of Array.from(KNOWN_HR_COUNTS.keys())) {
         if (key.startsWith(`${gameId}_`)) KNOWN_HR_COUNTS.delete(key);
+      }
+      for (const key of Array.from(KNOWN_HR_AB_INDEX.keys())) {
+        if (key.startsWith(`${gameId}_`)) KNOWN_HR_AB_INDEX.delete(key);
       }
     }
 
@@ -1873,18 +1934,11 @@ export class LiveGameOrchestrator {
 
         const boxHR = boxScorePlayer?.hr ?? 0;
         const currentGameHR = boxHR;
-        if (market === "home_runs" && currentGameHR > 0) {
-          checkAndGradeHR(
-            batter.playerId,
-            gameId,
-            currentGameHR,
-            batter.playerName,
-            batter.team,
-            state.inning,
-            state.isTopInning ? "top" : "bottom",
-            boxScorePlayer?.ab ?? 0,
-          );
-        }
+        // Note: HR grading is now centralized in gradeHomeRunsFromPlays()
+        // (called once per poll cycle from _pollGameInner) using the canonical
+        // inning/halfInning from each HR play's about.* fields. The legacy
+        // box-score-driven path used state.inning here, which produced wrong
+        // inning attribution when polling lagged behind an inning rollover.
         const hardHitCount = playerContact
           ? (playerContact.priorABResults ?? []).filter((ab: any) => (ab.exitVelocity ?? 0) >= 95).length
           : 0;

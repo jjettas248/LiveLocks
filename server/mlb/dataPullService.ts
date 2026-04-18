@@ -174,6 +174,23 @@ export interface GameBoxScoreCache {
   fetchedAt: number;
 }
 
+export interface HRPlayMeta {
+  playerId: string;
+  playerName: string;
+  team: string;
+  inning: number;
+  halfInning: "top" | "bottom";
+  atBatIndex: number;
+  endTimeMs: number | null;
+  eventType: string;
+  isComplete: boolean;
+}
+
+export interface HRPlaysCache {
+  plays: HRPlayMeta[];
+  fetchedAt: number;
+}
+
 export const mlbGameCache: {
   gameState: Record<string, GameStateCache>;
   contactData: Record<string, ContactDataCache>;
@@ -181,6 +198,7 @@ export const mlbGameCache: {
   weather: Record<string, WeatherCache>;
   bullpen: Record<string, BullpenCache>;
   gameBoxScore: Record<string, GameBoxScoreCache>;
+  hrPlays: Record<string, HRPlaysCache>;
 } = {
   gameState: {},
   contactData: {},
@@ -188,6 +206,7 @@ export const mlbGameCache: {
   weather: {},
   bullpen: {},
   gameBoxScore: {},
+  hrPlays: {},
 };
 
 export const mlbPlayerCache: {
@@ -471,12 +490,42 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
     const allPlays: any[] = liveData.plays?.allPlays ?? [];
 
     const byPlayerId: Record<string, PlayerContactData> = {};
+    const hrPlaysOut: HRPlayMeta[] = [];
 
     for (const play of allPlays) {
       const batterId = play.matchup?.batter?.id;
       if (!batterId) continue;
       const playerId = String(batterId);
       const batterName: string = play.matchup?.batter?.fullName ?? playerId;
+
+      // Extract HR plays (canonical inning attribution from the play feed itself)
+      const eventTypeRaw: string = (play.result?.eventType ?? "").toString().toLowerCase();
+      const eventNameRaw: string = (play.result?.event ?? "").toString().toLowerCase();
+      const isHomeRunPlay = eventTypeRaw === "home_run" || eventNameRaw === "home run";
+      if (isHomeRunPlay) {
+        const aboutInning = Number(play.about?.inning);
+        const aboutHalf = (play.about?.halfInning ?? "").toString().toLowerCase();
+        const halfNorm: "top" | "bottom" | null =
+          aboutHalf === "top" ? "top" : aboutHalf === "bottom" ? "bottom" : null;
+        if (Number.isFinite(aboutInning) && aboutInning > 0 && halfNorm) {
+          const endTimeStr: string | null = play.about?.endTime ?? null;
+          const endTimeMs = endTimeStr ? Date.parse(endTimeStr) || null : null;
+          const teamSide: string = halfNorm === "top"
+            ? (data.gameData?.teams?.away?.abbreviation ?? "")
+            : (data.gameData?.teams?.home?.abbreviation ?? "");
+          hrPlaysOut.push({
+            playerId,
+            playerName: batterName,
+            team: teamSide,
+            inning: aboutInning,
+            halfInning: halfNorm,
+            atBatIndex: Number(play.about?.atBatIndex ?? 0) || 0,
+            endTimeMs,
+            eventType: eventTypeRaw || eventNameRaw,
+            isComplete: play.about?.isComplete === true,
+          });
+        }
+      }
 
       if (!byPlayerId[playerId]) {
         byPlayerId[playerId] = {
@@ -734,6 +783,7 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
     }
 
     mlbGameCache.contactData[gameId] = { byPlayerId, fetchedAt: Date.now() };
+    mlbGameCache.hrPlays[gameId] = { plays: hrPlaysOut, fetchedAt: Date.now() };
     if (contactChanges.length > 0) {
       console.log(`[MLB pull] syncContactData: game ${gameId} — ${Object.keys(byPlayerId).length} players, ${allEVs.length} BIP — ${contactChanges.length} new contact events: ${contactChanges.map(c => `${c.playerName}(EV=${c.latestAB?.exitVelocity ?? "?"})`).join(", ")}`);
     } else {

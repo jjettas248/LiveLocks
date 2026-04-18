@@ -2047,9 +2047,22 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async resolveAlertAsHit(playerId: string, gameId: string, hitInningNum: number, hitHalfVal: string, hitPaNum: number): Promise<number> {
+  async resolveAlertAsHit(playerId: string, gameId: string, hitInningNum: number, hitHalfVal: string, hitPaNum: number, hrEndTimeMs?: number | null): Promise<number> {
     try {
       const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000);
+      // Razor-sharp grading: an alert is only credited if it was created BEFORE
+      // the HR play actually completed. Alerts created after the HR's endTime
+      // were responding to box-score lag — not predicting — so they should not
+      // be marked as HIT (they will reconcile as NO_HR at game end).
+      const conditions = [
+        eq(persistedAlerts.playerId, playerId),
+        eq(persistedAlerts.gameId, gameId),
+        isNull(persistedAlerts.outcome),
+        gte(persistedAlerts.createdAt, cutoff),
+      ];
+      if (hrEndTimeMs && Number.isFinite(hrEndTimeMs)) {
+        conditions.push(lt(persistedAlerts.createdAt, new Date(hrEndTimeMs)));
+      }
       const result = await db.update(persistedAlerts)
         .set({
           outcome: "HR",
@@ -2058,17 +2071,12 @@ export class DatabaseStorage implements IStorage {
           hitHalf: hitHalfVal,
           hitPaNumber: hitPaNum,
         })
-        .where(
-          and(
-            eq(persistedAlerts.playerId, playerId),
-            eq(persistedAlerts.gameId, gameId),
-            isNull(persistedAlerts.outcome),
-            gte(persistedAlerts.createdAt, cutoff),
-          )
-        );
+        .where(and(...conditions));
       const count = (result as any).rowCount ?? 0;
       if (count > 0) {
-        console.log(`[HR_RADAR_ALERT_HIT] Resolved ${count} alert(s) as HIT for player=${playerId} game=${gameId} inning=${hitInningNum} half=${hitHalfVal}`);
+        console.log(`[HR_RADAR_ALERT_HIT] Resolved ${count} alert(s) as HIT for player=${playerId} game=${gameId} inning=${hitInningNum} half=${hitHalfVal}${hrEndTimeMs ? ` cutoffEndTime=${new Date(hrEndTimeMs).toISOString()}` : ""}`);
+      } else if (hrEndTimeMs) {
+        console.log(`[HR_RADAR_ALERT_LATE] No pre-HR alert to credit for player=${playerId} game=${gameId} hitLabel=${hitHalfVal}${hitInningNum} (any open alerts were created after HR endTime ${new Date(hrEndTimeMs).toISOString()})`);
       }
       return count;
     } catch (err: any) {
@@ -2327,9 +2335,18 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async resolveHrRadarAlertAsHit(playerId: string, gameId: string, hitInningNum: number, hitHalfVal: string, hitLabelVal: string): Promise<number> {
+  async resolveHrRadarAlertAsHit(playerId: string, gameId: string, hitInningNum: number, hitHalfVal: string, hitLabelVal: string, hrEndTimeMs?: number | null): Promise<number> {
     try {
       const today = todayET();
+      const conditions = [
+        eq(hrRadarAlerts.sessionDate, today),
+        eq(hrRadarAlerts.gameId, gameId),
+        eq(hrRadarAlerts.playerId, playerId),
+        eq(hrRadarAlerts.status, "live"),
+      ];
+      if (hrEndTimeMs && Number.isFinite(hrEndTimeMs)) {
+        conditions.push(lt(hrRadarAlerts.detectedAt, new Date(hrEndTimeMs)));
+      }
       const result = await db.update(hrRadarAlerts)
         .set({
           status: "hit",
@@ -2338,12 +2355,7 @@ export class DatabaseStorage implements IStorage {
           hitLabel: hitLabelVal,
           resolvedAt: new Date(),
         })
-        .where(and(
-          eq(hrRadarAlerts.sessionDate, today),
-          eq(hrRadarAlerts.gameId, gameId),
-          eq(hrRadarAlerts.playerId, playerId),
-          eq(hrRadarAlerts.status, "live"),
-        ));
+        .where(and(...conditions));
       const count = (result as any).rowCount ?? 0;
       if (count > 0) {
         console.log(`[HR_RADAR_ALERT_HIT] playerId=${playerId} gameId=${gameId} detectedLabel=? hitLabel=${hitLabelVal}`);
