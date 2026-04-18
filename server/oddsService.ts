@@ -1,4 +1,6 @@
 import { updateOddsHealth } from "./services/dataHealth";
+import { writeOddsSnapshot } from "./odds/oddsCache";
+import { recordApiFetch, recordApiFailure, logFetch } from "./odds/oddsDiagnostics";
 
 const ODDS_API_KEYS = [
   process.env.ODDS_API_KEY,
@@ -666,6 +668,21 @@ export async function getPlayerOdds(
   // can fall back to this data.
   if (foundForAnyBook) {
     lastKnownOdds.set(lastKnownKey, { data: books, timestamp: Date.now() });
+    const cacheBooks: Record<string, { line: number; overOdds: number | null; underOdds: number | null }> = {};
+    for (const k of Object.keys(books)) {
+      cacheBooks[k] = { line: books[k].line, overOdds: books[k].overOdds ?? null, underOdds: books[k].underOdds ?? null };
+    }
+    writeOddsSnapshot({
+      sport: "nba",
+      eventId: oddsEventId,
+      market: statType,
+      player: playerName,
+      books: cacheBooks,
+      isLive: inPlay,
+      source: "api",
+    });
+    recordApiFetch("nba");
+    logFetch("nba", { eventId: oddsEventId, market: statType, player: playerName, books: Object.keys(books).length, isLive: inPlay });
   }
 
   const freshFetchedAt = Date.now();
@@ -1197,6 +1214,23 @@ export async function getMLBPlayerOdds(
 
   if (Object.keys(result).filter(k => !k.startsWith("_")).length > 0) {
     lastKnownMLBOdds.set(lastKnownKey, { data: result, timestamp: Date.now() });
+    const cacheBooks: Record<string, { line: number; overOdds: number | null; underOdds: number | null }> = {};
+    for (const k of Object.keys(result)) {
+      if (k.startsWith("_")) continue;
+      const v = result[k];
+      cacheBooks[k] = { line: v.line, overOdds: v.overOdds ?? null, underOdds: v.underOdds ?? null };
+    }
+    writeOddsSnapshot({
+      sport: "mlb",
+      eventId: oddsEventId,
+      market: statType,
+      player: playerName,
+      books: cacheBooks,
+      isLive: inPlay,
+      source: "api",
+    });
+    recordApiFetch("mlb");
+    logFetch("mlb", { eventId: oddsEventId, market: statType, player: playerName, books: Object.keys(cacheBooks).length, isLive: inPlay });
   }
 
   if (isDegradedRaw) result._isDegraded = true;

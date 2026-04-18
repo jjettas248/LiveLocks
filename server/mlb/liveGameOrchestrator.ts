@@ -40,6 +40,8 @@ import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
 import { computeSignalScore, computeSignalScoreByFamily, scoreHRRadar, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily } from "./signalScore";
 import type { MarketFamily } from "./signalScore";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
+import { assignMlbTier, assignAndCheckPoll, markPolled, clearGame as clearScheduler, logTierAssignment, type MlbGameContext } from "../odds/oddsScheduler";
+import { clearTier } from "../odds/oddsDiagnostics";
 import {
   classifyBatterArchetype,
   classifyPitcherArchetype,
@@ -292,10 +294,10 @@ async function resolveBookLine(
 // ── MLB status normalization ──────────────────────────────────────────────────
 export function normalizeMlbStatus(raw: string | undefined): "live" | "pregame" | "final" | "unknown" {
   if (!raw) return "unknown";
-  const s = raw.toLowerCase().replace(/[\s_-]/g, "");
-  if (s === "live" || s === "inprogress") return "live";
+  const s = raw.toLowerCase().replace(/[\s_-]/g, "").replace(/^status/, "");
+  if (s === "live" || s === "inprogress" || s === "halftime" || s === "delayed") return "live";
   if (s === "preview" || s === "pregame" || s === "scheduled") return "pregame";
-  if (s === "final" || s === "gameover" || s === "completed") return "final";
+  if (s === "final" || s === "gameover" || s === "completed" || s === "fulltime" || s === "postponed" || s === "canceled" || s === "cancelled") return "final";
   return "unknown";
 }
 
@@ -367,10 +369,15 @@ export class LiveGameOrchestrator {
       }, GAME_DISCOVERY_MS)
     );
 
-    // Game state + contact + pitcher context every 15 seconds
+    // Game state + contact + pitcher context — gated by sport-aware scheduler tier
     this.timers.push(
       setInterval(() => {
         for (const game of getActiveGames()) {
+          const ctx = this.buildMlbContext(game.gameId);
+          const tier = assignMlbTier(ctx);
+          const decision = assignAndCheckPoll("mlb", game.gameId, tier);
+          if (!decision.shouldPoll) continue;
+          markPolled("mlb", game.gameId, tier);
           this.pollGame(game.gameId).catch(console.error);
         }
       }, GAME_STATE_MS)
@@ -434,6 +441,8 @@ export class LiveGameOrchestrator {
           );
           removeGame(existing.gameId);
           this.previousStates.delete(existing.gameId);
+          clearScheduler("mlb", existing.gameId);
+          clearTier("mlb", existing.gameId);
         }
       }
     } catch (err: any) {
@@ -531,6 +540,33 @@ export class LiveGameOrchestrator {
 
     await Promise.allSettled(phase1);
     console.log(`[MLB_PREHYDRATE] Completed pre-hydration for game ${gameId}`);
+  }
+
+  private buildMlbContext(gameId: string): MlbGameContext {
+    const game = getGame(gameId);
+    const state = mlbGameCache.gameState[gameId];
+    const status = normalizeMlbStatus(game?.espnStatus);
+    let inning: number | undefined;
+    let isTopInning: boolean | undefined;
+    if (state) {
+      inning = state.inning;
+      isTopInning = state.isTopInning;
+    }
+    let startsInMinutes: number | undefined;
+    if (game?.startTime) {
+      const startMs = new Date(game.startTime).getTime();
+      if (!isNaN(startMs)) startsInMinutes = Math.max(0, (startMs - Date.now()) / 60000);
+    }
+    const cachedEdge = mlbEdgeCache.get(gameId);
+    const hasActiveSignals = (cachedEdge?.qualifiedSignals?.length ?? 0) > 0;
+    return {
+      gameId,
+      status: status === "live" || status === "pregame" || status === "final" ? status : "unknown",
+      inning,
+      isTopInning,
+      hasActiveSignals,
+      startsInMinutes,
+    };
   }
 
   async pollGame(gameId: string): Promise<void> {

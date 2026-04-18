@@ -344,6 +344,21 @@ export async function registerRoutes(
     return res.json(getDirectionalSplit());
   });
 
+  app.get("/api/admin/odds-health", requireAdmin, async (_req, res) => {
+    try {
+      const { getOddsHealthSnapshot } = await import("./odds/oddsDiagnostics");
+      const { getCacheSize, getCacheKeys, pruneExpired } = await import("./odds/oddsCache");
+      const pruned = pruneExpired();
+      return res.json({
+        ...getOddsHealthSnapshot(),
+        cache: { size: getCacheSize(), prunedNow: pruned, keys: getCacheKeys().slice(0, 50) },
+      });
+    } catch (e: any) {
+      console.error("[admin/odds-health]", e.message);
+      return res.status(500).json({ error: "Failed to fetch odds health" });
+    }
+  });
+
   app.get("/api/admin/roi", requireAdmin, async (req, res) => {
     try {
       const { buildFullROIReport } = await import("./services/roiEngine");

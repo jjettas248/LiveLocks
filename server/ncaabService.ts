@@ -3,6 +3,8 @@ import { logSettledPlay } from "./ncaabDiagnostics";
 import { fetchBartTorvik } from "./ncaabEnrichment";
 import { computeEfficiencyAdjustment, computeH2EfficiencyBonus } from "./services/bartTorvik";
 import { normalizeOdds, getOddsApiKey } from "./oddsService";
+import { writeOddsSnapshot } from "./odds/oddsCache";
+import { recordApiFetch, recordApiFailure, logFetch } from "./odds/oddsDiagnostics";
 const SGO_API_KEY  = process.env.SGO_API_KEY;
 const ESPN_NCAAB = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball";
 
@@ -360,15 +362,55 @@ export async function getNCAABOddsLines(): Promise<any[]> {
       console.warn("[NCAAB Odds] Falling back to spreads,totals only");
       data = await tryFetch("spreads,totals");
     }
-    if (!data) return cached?.data ?? [];
+    if (!data) {
+      recordApiFailure("ncaab", "no_data_after_retry");
+      return cached?.data ?? [];
+    }
     // Log which markets came back
     const returned = new Set<string>();
     data.forEach((ev: any) => ev.bookmakers?.forEach((b: any) => b.markets?.forEach((m: any) => returned.add(m.key))));
     console.log(`[NCAAB] Odds API: ${data.length} events, markets: ${Array.from(returned).join(",")}`);
     cache.set(key, { data, timestamp: Date.now() });
+    recordApiFetch("ncaab");
+    logFetch("ncaab", { events: data.length, markets: Array.from(returned).join(",") });
+    // Write per-event team-level snapshots to the shared cache (spreads/totals).
+    for (const ev of data) {
+      const eventId = ev.id || `${ev.home_team}|${ev.away_team}`;
+      for (const market of ["spreads", "totals"]) {
+        const books: Record<string, { line: number; overOdds: number | null; underOdds: number | null }> = {};
+        for (const bk of ev.bookmakers ?? []) {
+          const m = (bk.markets ?? []).find((mk: any) => mk.key === market);
+          if (!m?.outcomes?.length) continue;
+          if (market === "totals") {
+            const over = m.outcomes.find((o: any) => o.name === "Over");
+            const under = m.outcomes.find((o: any) => o.name === "Under");
+            if (over && typeof over.point === "number") {
+              books[bk.key] = { line: over.point, overOdds: over.price ?? null, underOdds: under?.price ?? null };
+            }
+          } else {
+            const fav = m.outcomes.find((o: any) => o.point < 0) ?? m.outcomes[0];
+            if (fav && typeof fav.point === "number") {
+              books[bk.key] = { line: Math.abs(fav.point), overOdds: fav.price ?? null, underOdds: null };
+            }
+          }
+        }
+        if (Object.keys(books).length > 0) {
+          writeOddsSnapshot({
+            sport: "ncaab",
+            eventId,
+            market,
+            player: null,
+            books,
+            isLive: false,
+            source: "api",
+          });
+        }
+      }
+    }
     return data;
-  } catch (err) {
+  } catch (err: any) {
     console.warn("[NCAAB Odds] error:", err);
+    recordApiFailure("ncaab", err?.message ?? "unknown");
     return cached?.data ?? [];
   }
 }
