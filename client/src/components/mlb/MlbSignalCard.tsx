@@ -372,12 +372,6 @@ export function MlbSignalCard({
         <div className="px-3 pb-3 space-y-2 border-t border-border/20 pt-2 animate-in slide-in-from-top-1 duration-200" onClick={(e) => e.stopPropagation()}>
           {/* Core Metrics Grid */}
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
-            {sig.projection != null && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Projection</span>
-                <span className="font-semibold text-foreground">{sig.projection.toFixed(2)}</span>
-              </div>
-            )}
             {sig.bookLine != null && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Need</span>

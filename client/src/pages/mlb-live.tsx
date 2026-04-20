@@ -1991,7 +1991,7 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
             )}
 
             <div className="flex items-center gap-3 text-sm text-muted-foreground">
-              <span>Projection <strong className="text-foreground">{projection?.toFixed(2) ?? "—"}</strong> vs. Line <strong className="text-foreground">{calcBookLine}</strong></span>
+              <span>Line <strong className="text-foreground">{calcBookLine}</strong></span>
               <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold ${
                 calcResult.recommendedSide === "OVER" ? "bg-emerald-500/20 text-emerald-400" :
                 calcResult.recommendedSide === "UNDER" ? "bg-red-500/20 text-red-400" :
@@ -2121,14 +2121,7 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
         </div>
       ) : null}
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatCard
-          title="Projection"
-          value={projection?.toFixed(2) ?? "—"}
-          subtitle={`Line: ${calcBookLine}`}
-          icon={<Target className="w-4 h-4" />}
-          highlight={projection != null && projection > parseFloat(calcBookLine) ? "positive" : "negative"}
-        />
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <StatCard
           title="Remaining PA"
           value={calcResult.remainingPA?.toFixed(1) ?? "—"}

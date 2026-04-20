@@ -171,7 +171,7 @@ export function SportSignalCard({
             <div className={`text-2xl font-bold ${EDGE_COLOR(edge)}`}>{probWhole}%</div>
             <div className="text-[10px] text-muted-foreground">Probability</div>
           </div>
-          {projection != null && (
+          {projection != null && sport !== "MLB" && (
             <div>
               <div className="text-sm font-semibold text-foreground">{typeof projection === "number" ? projection.toFixed(1) : projection}</div>
               <div className="text-[10px] text-muted-foreground">Proj</div>
@@ -298,7 +298,7 @@ export function SportSignalCard({
                     `🔒 ${playerOrTeam}`,
                     `${side} ${marketLabel}${typeof line === "number" ? ` ${line}` : ""}`,
                     `${Math.round(probability)}% prob · ${edge > 0 ? "+" : ""}${edge.toFixed(1)}% edge`,
-                    ...(projection != null ? [`Proj: ${typeof projection === "number" ? projection.toFixed(1) : projection}`] : []),
+                    ...(projection != null && sport !== "MLB" ? [`Proj: ${typeof projection === "number" ? projection.toFixed(1) : projection}`] : []),
                     ...(matchup ? [matchup] : []),
                     "",
                     "Powered by @LiveLocks_",
