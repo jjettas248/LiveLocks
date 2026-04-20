@@ -273,7 +273,10 @@ function SignalStrip({ signals, onPlayerClick }: { signals: MlbSignalData[]; onP
       if (s.alreadyHit) return false;
       const isBatterOver = BATTER_OVER_MARKETS_UI.includes(s.market);
       if (isBatterOver) return (s.signalScore ?? 0) >= 42;
-      return normalizePct(s.enginePct) >= 55 && s.recommendedSide !== "NO_EDGE";
+      // Pitcher / non-batter-over markets: gate on engine signal score, not raw
+      // book probability. Probability is one input feature; signal score is the
+      // engine's authoritative composite.
+      return (s.signalScore ?? 0) >= 50 && s.recommendedSide !== "NO_EDGE";
     })
     .sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0))
     .slice(0, 8);

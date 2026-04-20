@@ -338,7 +338,10 @@ export function deriveSignalTags(
     tags.push("COLD UNDER");
   }
 
-  if (output.market === "home_runs" && output.calibratedProbability >= 55) {
+  // HR WATCH tag is gated by engine signal score, not raw probability —
+  // book-implied HR probability never reaches 55% so the previous gate was
+  // a no-op. Threshold mirrors the SOLID-tier qualifier.
+  if (output.market === "home_runs" && scoreBreakdown.total >= 55) {
     tags.push("HR WATCH");
   }
 
