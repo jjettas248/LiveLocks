@@ -367,6 +367,22 @@ app.use((req, res, next) => {
     console.warn("[startup] Legacy user backfill skipped:", err.message);
   }
 
+  // Backfill: any user that already exists at server start has, by definition,
+  // already used the app at least once — mark them as having completed the
+  // onboarding tour so it does not fire on their next login. Brand-new
+  // signups created AFTER startup will keep the default `false` and see
+  // the tour exactly once.
+  try {
+    const result = await db
+      .update(users)
+      .set({ hasCompletedOnboarding: true })
+      .where(eq(users.hasCompletedOnboarding, false));
+    const count = (result as any).rowCount ?? 0;
+    console.log(`[startup] Onboarding backfill complete (marked ${count} existing users)`);
+  } catch (err: any) {
+    console.warn("[startup] Onboarding backfill skipped:", err.message);
+  }
+
   await initStripe();
   await registerRoutes(httpServer, app);
   registerAnalyticsRoutes(app);
