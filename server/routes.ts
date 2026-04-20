@@ -1927,11 +1927,24 @@ export async function registerRoutes(
       const cleanWatchlist = hrWatchlist.filter((w: any) => !cashedFromEdge.some((c: any) => c.playerId === w.playerId));
 
       const canonical = await storage.getCanonicalHrRadarOutcomes();
+      const canonicalHitsByGamePlayer = new Map(canonical.hits.map(h => [`${h.gameId}|${h.playerId}`, h]));
 
       const { getBatterHrHistory } = await import("./mlb/onlyHomersService");
       const todayStr = todayET();
 
       for (const c of cashedFromEdge) {
+        const canonHit = canonicalHitsByGamePlayer.get(`${c.gameId}|${c.playerId}`);
+        if (canonHit) {
+          c.hitLabel = canonHit.hitLabel;
+          c.hitInning = canonHit.hitInning;
+          c.hitHalf = canonHit.hitHalf;
+          if (!c.detectedLabel) c.detectedLabel = canonHit.detectedLabel;
+          if (c.detectedScore == null) c.detectedScore = canonHit.detectedScore;
+          if (c.peakScore == null) c.peakScore = canonHit.peakScore;
+          if (!c.alertPath) c.alertPath = canonHit.alertPath;
+          if (c.conversionPct == null) c.conversionPct = canonHit.conversionPct;
+          if (!c.resolvedAt) c.resolvedAt = canonHit.resolvedAt;
+        }
         try {
           const hrs = await getBatterHrHistory(c.playerName);
           const todayHr = hrs.find((h: any) => h.gameDate === todayStr);
@@ -1961,9 +1974,14 @@ export async function registerRoutes(
           actionable: false,
           hitLabel: h.hitLabel,
           hitInning: h.hitInning,
+          hitHalf: h.hitHalf,
           detectedLabel: h.detectedLabel,
           detectedScore: h.detectedScore,
           peakScore: h.peakScore,
+          alertPath: h.alertPath,
+          conversionPct: h.conversionPct,
+          resolvedAt: h.resolvedAt,
+          triggerTags: h.triggerTags ?? [],
         }));
       const allCashed = [...cashedFromEdge, ...cashedFromDb];
 

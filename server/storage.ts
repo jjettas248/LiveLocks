@@ -2345,8 +2345,12 @@ export class DatabaseStorage implements IStorage {
         eq(hrRadarAlerts.status, "live"),
       ];
       if (hrEndTimeMs && Number.isFinite(hrEndTimeMs)) {
-        conditions.push(lt(hrRadarAlerts.detectedAt, new Date(hrEndTimeMs)));
+        conditions.push(lt(hrRadarAlerts.detectedAt, new Date(hrEndTimeMs + 5000)));
       }
+      const before = await db.select({ id: hrRadarAlerts.id, detectedLabel: hrRadarAlerts.detectedLabel })
+        .from(hrRadarAlerts)
+        .where(and(...conditions))
+        .limit(1);
       const result = await db.update(hrRadarAlerts)
         .set({
           status: "hit",
@@ -2358,7 +2362,9 @@ export class DatabaseStorage implements IStorage {
         .where(and(...conditions));
       const count = (result as any).rowCount ?? 0;
       if (count > 0) {
-        console.log(`[HR_RADAR_ALERT_HIT] playerId=${playerId} gameId=${gameId} detectedLabel=? hitLabel=${hitLabelVal}`);
+        console.log(`[HR_RADAR_ALERT_HIT] playerId=${playerId} gameId=${gameId} detectedLabel=${before[0]?.detectedLabel ?? "(none)"} hitLabel=${hitLabelVal}`);
+      } else {
+        console.log(`[HR_RADAR_ALERT_HIT_NOMATCH] playerId=${playerId} gameId=${gameId} hitLabel=${hitLabelVal} hrEndTimeMs=${hrEndTimeMs ?? "n/a"} — no live alert matched (will fallback to ensureHrRadarAlertHit)`);
       }
       return count;
     } catch (err: any) {
