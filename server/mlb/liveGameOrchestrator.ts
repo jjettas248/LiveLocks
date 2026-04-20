@@ -529,6 +529,13 @@ export class LiveGameOrchestrator {
         registerGame(game);
         if (isNew && game.gamePk) {
           this.preHydrateNewGame(game).catch(console.error);
+          // For freshly-discovered games that may already be live, kick off
+          // an immediate state poll so the cached inning/score is accurate
+          // within ~1s instead of waiting for the next 10s tick (which would
+          // leave the UI showing the default "top of 1st" placeholder).
+          this.pollGame(game.gameId).catch((err) =>
+            console.warn(`[MLB orchestrator] immediate poll failed for ${game.gameId}:`, err.message)
+          );
         }
       }
 

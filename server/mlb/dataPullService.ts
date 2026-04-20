@@ -289,9 +289,24 @@ export async function syncGameState(statsPk: string, cacheKey?: string): Promise
     const boxTeams = liveData.boxscore?.teams ?? {};
 
     // Inning / top-bottom
+    // Innings only advance — never let a stale-or-null Stats API response
+    // regress the cached value. If the API returns nothing and we have no
+    // prior state, fall back to inning 1 (the gameState is fresh-registered).
     const prevState = mlbGameCache.gameState[gameId];
-    const inning: number = safeNum(linescore.currentInning) ?? prevState?.inning ?? 1;
-    const isTopInning: boolean = linescore.isTopInning ?? prevState?.isTopInning ?? true;
+    const apiInning = safeNum(linescore.currentInning);
+    const apiInningValid = apiInning != null && apiInning >= 1;
+    const inning: number = apiInningValid
+      ? Math.max(apiInning, prevState?.inning ?? 0)
+      : (prevState?.inning ?? 1);
+    // Trust API top/bottom only when API also reported a valid inning;
+    // otherwise keep the prior half so we never flip back to "top" on a
+    // stale read once the bottom half has begun.
+    const isTopInning: boolean = apiInningValid && typeof linescore.isTopInning === "boolean"
+      ? linescore.isTopInning
+      : (prevState?.isTopInning ?? true);
+    if (apiInning != null && prevState?.inning != null && apiInning < prevState.inning) {
+      console.warn(`[MLB SYNC GUARD] ${gameId}: API inning ${apiInning} < cached ${prevState.inning} — keeping cached (stale read)`);
+    }
     const outs: number = safeNum(linescore.outs) ?? 0;
 
     // Scores

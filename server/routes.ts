@@ -1102,6 +1102,21 @@ export async function registerRoutes(
         if (canonicalState === "live" && (!cachedState?.inning || cachedState.inning < 1)) {
           console.log(`[MLB INNING_WARN] game=${gameId} ${awayAbbrVal}@${homeAbbrVal} cachedInning=${cachedState?.inning ?? "none"} espnPeriod=${espnPeriod} espnInning=${inningFromEspn} detail="${statusDetail}"`);
         }
+        // Inning is monotonically increasing — pick the highest of cache and
+        // ESPN to avoid a stuck "top of 1st" when one source lags. If both
+        // report the same inning but disagree on top/bottom, prefer "bottom"
+        // (the later half) since innings progress top → bottom.
+        const cachedInn = typeof cachedState?.inning === "number" ? cachedState.inning : 0;
+        const espnInn = typeof inningFromEspn === "number" ? inningFromEspn : 0;
+        const resolvedInning = Math.max(cachedInn, espnInn) || (cachedInn || espnInn || null);
+        let resolvedIsTop: boolean | undefined;
+        if (cachedInn === espnInn && cachedInn > 0) {
+          resolvedIsTop = (cachedState?.isTopInning === false || isTopInningFromEspn === false) ? false : (cachedState?.isTopInning ?? isTopInningFromEspn);
+        } else if (cachedInn >= espnInn) {
+          resolvedIsTop = cachedState?.isTopInning ?? isTopInningFromEspn;
+        } else {
+          resolvedIsTop = isTopInningFromEspn;
+        }
         games.push({
           gameId,
           awayTeam: awayTeamName,
@@ -1110,8 +1125,8 @@ export async function registerRoutes(
           homeAbbr: homeAbbrVal,
           homeScore: (canonicalState === "live" || canonicalState === "final") ? homeScore : null,
           awayScore: (canonicalState === "live" || canonicalState === "final") ? awayScore : null,
-          inning: cachedState?.inning ?? inningFromEspn,
-          isTopInning: cachedState?.isTopInning ?? isTopInningFromEspn,
+          inning: resolvedInning,
+          isTopInning: resolvedIsTop,
           status: canonicalState as "live" | "pregame" | "final",
           startTime: event.date ?? null,
           venue: parkName || null,
