@@ -327,7 +327,9 @@ function SpikeAlertBanner({ signals }: { signals: MlbSignalData[] }) {
     const key = `${s.playerId}-${s.market}`;
     if (dismissed.has(key)) return false;
     const hasPitcherSignal = (s as MlbSignalData & { pitcherSignals?: string[] | null }).pitcherSignals?.length;
-    const isHR = s.market === "home_runs" && normalizePct(s.enginePct) >= 60;
+    // HR spike alerts use our engine signal score (book-implied HR probability
+    // is structurally low and would never trigger a probability-based gate).
+    const isHR = s.market === "home_runs" && (s.signalScore ?? 0) >= 60;
     const isElite = s.confidenceTier === "ELITE";
     const isLiveSpike = (s.liveScore ?? 0) >= 0.10;
     return hasPitcherSignal || isHR || isElite || isLiveSpike;

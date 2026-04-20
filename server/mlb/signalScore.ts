@@ -377,7 +377,10 @@ export function deriveFeedTags(
   if (input.inning >= 6 && input.inning <= 8) tags.push("inning_7");
 
   if (output.market === "home_runs") {
-    if (output.calibratedProbability >= 55 || scoreBreakdown.total >= 55) {
+    // HR Radar gating uses our engine signal score (not raw HR probability —
+    // book-implied HR probability is almost never high, so probability would
+    // suppress the radar entirely). Threshold mirrors the SOLID-tier qualifier.
+    if (scoreBreakdown.total >= 55) {
       tags.push("hr_radar");
     } else if (scoreBreakdown.liveContext >= 60 || scoreBreakdown.matchup >= 60) {
       tags.push("hr_watchlist");
