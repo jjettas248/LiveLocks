@@ -1782,8 +1782,11 @@ export default function Dashboard() {
 
   return (
     <div
-      className="min-h-screen pb-20 bg-background transition-transform duration-200"
-      style={{ transform: (pullDistance > 0 || isPullRefreshing) ? `translateY(${isPullRefreshing ? 56 : pullDistance}px)` : undefined }}
+      className={`min-h-screen overflow-x-hidden bg-background transition-transform duration-200 ${isFreeUser ? "pb-20" : ""}`}
+      style={{
+        transform: (pullDistance > 0 || isPullRefreshing) ? `translateY(${isPullRefreshing ? 56 : pullDistance}px)` : undefined,
+        paddingBottom: isFreeUser ? undefined : "env(safe-area-inset-bottom, 0px)",
+      }}
     >
       {(pullDistance > 0 || isPullRefreshing) && (
         <div
@@ -1812,7 +1815,10 @@ export default function Dashboard() {
         />
       )}
       {/* Header */}
-      <header className="border-b border-border/40 bg-background/80 backdrop-blur-xl sticky top-0 z-50">
+      <header
+        className="border-b border-border/40 bg-background/80 backdrop-blur-xl sticky top-0 z-50"
+        style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
+      >
         <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <button
             onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
@@ -2013,7 +2019,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-5 pb-20">
+      <main className={`max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-5 ${isFreeUser ? "pb-24" : "pb-8"}`}>
 
         {/* Email verification banner */}
         {user && !user.emailVerified && !verifyBannerDismissed && (
