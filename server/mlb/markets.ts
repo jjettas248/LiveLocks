@@ -710,7 +710,11 @@ function buildOutput(input: MLBPropInput, distParams?: DistributionParams): MLBP
     const boost = input.liveInterpretation.confidenceBoost;
     const boostPts = boost * 100;
     const capped = Math.min(boostPts, 8);
-    calibratedProbabilityOver = Math.min(95, calibratedProbabilityOver + capped);
+    // Respect engine ceiling: probabilityEngine.applyModelSafetyCeiling owns the
+    // absolute cap. The live confidence boost may not push us above the same
+    // market ceiling the engine already used.
+    const engineCeiling = MARKET_PROBABILITY_CAPS[input.market] ?? 95;
+    calibratedProbabilityOver = Math.min(engineCeiling, calibratedProbabilityOver + capped);
   }
 
   const isBatterOverCalc = BATTER_MARKETS.includes(input.market);

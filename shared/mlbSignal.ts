@@ -78,6 +78,7 @@ export interface MLBSignal {
   pitcherTimesThrough: number | null;
   pitchMix: Array<{
     pitchType: string;
+    pitchName?: string;
     percentage: number;
     avgVelocity: number | null;
   }> | null;

@@ -43,7 +43,7 @@ export function normalizePitchTypeCode(input: string | null | undefined): Canoni
   return "OT";
 }
 
-const FAMILY_MAP: Record<CanonicalPitchType, PitchFamily> = {
+export const PITCH_FAMILY: Record<CanonicalPitchType, PitchFamily> = {
   FF: "fastball", SI: "fastball", FC: "fastball",
   SL: "breaking", SW: "breaking", CU: "breaking", KC: "breaking",
   CH: "offspeed", FS: "offspeed",
@@ -51,7 +51,16 @@ const FAMILY_MAP: Record<CanonicalPitchType, PitchFamily> = {
 };
 
 export function getPitchFamily(pitchType: string | null | undefined): PitchFamily {
-  return FAMILY_MAP[normalizePitchTypeCode(pitchType)];
+  return PITCH_FAMILY[normalizePitchTypeCode(pitchType)];
+}
+
+export function getPitchDisplayLabel(
+  pitchType: string | null | undefined,
+  fallbackName?: string
+): string {
+  const code = normalizePitchTypeCode(pitchType);
+  if (code === "OT" && fallbackName && fallbackName.trim()) return fallbackName.trim();
+  return PITCH_DISPLAY_LABEL[code];
 }
 
 export const PITCH_DISPLAY_LABEL: Record<CanonicalPitchType, string> = {

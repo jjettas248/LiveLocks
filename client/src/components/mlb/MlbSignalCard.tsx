@@ -630,7 +630,7 @@ export function MlbSignalCard({
                     >
                       {isBatterFavor && <span className="text-[8px] text-green-400">▲</span>}
                       {isPitcherFavor && <span className="text-[8px] text-red-400">▼</span>}
-                      <span className="font-semibold">{PITCH_LABELS[p.pitchType] ?? p.pitchType}</span>
+                      <span className="font-semibold">{(p as any).pitchName ?? PITCH_LABELS[p.pitchType] ?? p.pitchType}</span>
                       <span className="opacity-70">{Math.round(p.percentage)}%</span>
                       {p.avgVelocity != null && <span className="opacity-50">{p.avgVelocity.toFixed(0)}mph</span>}
                     </span>
