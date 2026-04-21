@@ -3276,6 +3276,189 @@ export class DatabaseStorage implements IStorage {
       : await query.orderBy(desc(hrRadarAnalytics.createdAt)).limit(filters?.limit ?? 200);
     return rows;
   }
+
+  // ── HR Radar Decision Ladder (Step 11–18 of HR ledger spec) ──
+  // Bins today's HR-radar alerts into a 5-section ladder for the user-facing
+  // decision UI: attackNow / building / watch / cashed / dead.
+  async getHrRadarLadder(sessionDate?: string): Promise<{
+    sessionDate: string;
+    sections: {
+      attackNow: HrRadarLadderEntry[];
+      building: HrRadarLadderEntry[];
+      watch: HrRadarLadderEntry[];
+      cashed: HrRadarLadderEntry[];
+      dead: HrRadarLadderEntry[];
+    };
+    counts: { attackNow: number; building: number; watch: number; cashed: number; dead: number; total: number };
+  }> {
+    const targetDate = sessionDate ?? todayET();
+    const rows = await db.select().from(hrRadarAlerts)
+      .where(eq(hrRadarAlerts.sessionDate, targetDate))
+      .orderBy(desc(hrRadarAlerts.peakReadinessScore));
+
+    const sections = {
+      attackNow: [] as HrRadarLadderEntry[],
+      building: [] as HrRadarLadderEntry[],
+      watch: [] as HrRadarLadderEntry[],
+      cashed: [] as HrRadarLadderEntry[],
+      dead: [] as HrRadarLadderEntry[],
+    };
+
+    // Collapse duplicates by playerId|gameId so a single player only appears
+    // in one section. Prefer the highest-priority section (cashed > attackNow > building > watch > dead).
+    const seen = new Map<string, { section: keyof typeof sections; entry: HrRadarLadderEntry }>();
+    const sectionPriority: Record<keyof typeof sections, number> = {
+      cashed: 0, attackNow: 1, building: 2, watch: 3, dead: 4,
+    };
+
+    for (const r of rows) {
+      const key = `${r.gameId}|${r.playerId}`;
+      const grading = r.gradingStatus ?? "active";
+      const userVisible = r.userVisible !== false;
+
+      // Determine target section
+      let section: keyof typeof sections;
+      if (grading === "called_hit" && userVisible) {
+        section = "cashed";
+      } else if (grading === "called_miss" || grading === "uncalled_hr" || grading === "late_signal") {
+        section = "dead";
+      } else {
+        // active: classify by current signal strength
+        const tier = (r.confidenceTier ?? "monitor").toLowerCase();
+        const state = (r.signalState ?? "live").toLowerCase();
+        const score = r.currentReadinessScore ? parseFloat(r.currentReadinessScore) : 0;
+        const peak = r.peakReadinessScore ? parseFloat(r.peakReadinessScore) : 0;
+        if (tier === "elite" || tier === "strong" || state === "elite" || state === "strong" || state === "actionable" || score >= 80) {
+          section = "attackNow";
+        } else if (tier === "lean" || tier === "heating_up" || tier === "strong_lean" || state === "lean" || state === "heating_up" || (peak >= 65 && score >= 55)) {
+          section = "building";
+        } else {
+          section = "watch";
+        }
+      }
+
+      const whyNowReasons = this.buildHrRadarWhyNow(r);
+      const entry: HrRadarLadderEntry = {
+        playerId: r.playerId,
+        playerName: r.playerName,
+        team: r.team,
+        gameId: r.gameId,
+        state: r.signalState ?? null,
+        confidenceTier: r.confidenceTier ?? null,
+        peakScore: r.peakReadinessScore ? parseFloat(r.peakReadinessScore) : null,
+        signalStrengthScore: r.currentReadinessScore ? parseFloat(r.currentReadinessScore) : null,
+        whyNowReasons,
+        nextAbEstimate: this.buildNextAbEstimate(r),
+        detectedInning: r.signalInning ?? r.detectedInning ?? null,
+        detectedHalf: r.signalHalf ?? r.detectedHalf ?? null,
+        hitInning: r.hitInning ?? null,
+        hitHalf: r.hitHalf ?? null,
+        outcomeStatus: grading,
+        userVisible,
+        signalDetectedAt: r.signalDetectedAt ?? r.detectedAt ?? null,
+        hitDetectedAt: r.hitDetectedAt ?? null,
+        resolvedAt: r.resolvedAt ?? null,
+        alertPath: r.alertPath ?? null,
+      };
+
+      const existing = seen.get(key);
+      if (!existing || sectionPriority[section] < sectionPriority[existing.section]) {
+        seen.set(key, { section, entry });
+      }
+    }
+
+    for (const { section, entry } of Array.from(seen.values())) {
+      sections[section].push(entry);
+    }
+
+    // Within sections, order by priority signal: cashed by hit time desc; everyone else by peak score desc
+    sections.cashed.sort((a, b) => (b.hitDetectedAt?.getTime() ?? 0) - (a.hitDetectedAt?.getTime() ?? 0));
+    sections.attackNow.sort((a, b) => (b.signalStrengthScore ?? 0) - (a.signalStrengthScore ?? 0));
+    sections.building.sort((a, b) => (b.peakScore ?? 0) - (a.peakScore ?? 0));
+    sections.watch.sort((a, b) => (b.peakScore ?? 0) - (a.peakScore ?? 0));
+    sections.dead.sort((a, b) => (b.resolvedAt?.getTime() ?? 0) - (a.resolvedAt?.getTime() ?? 0));
+
+    const counts = {
+      attackNow: sections.attackNow.length,
+      building: sections.building.length,
+      watch: sections.watch.length,
+      cashed: sections.cashed.length,
+      dead: sections.dead.length,
+      total: seen.size,
+    };
+
+    console.log(`[HR_DECISION_LADDER_COUNTS] sessionDate=${targetDate} attackNow=${counts.attackNow} building=${counts.building} watch=${counts.watch} cashed=${counts.cashed} dead=${counts.dead} total=${counts.total}`);
+
+    return { sessionDate: targetDate, sections, counts };
+  }
+
+  private buildHrRadarWhyNow(r: HrRadarAlert): string[] {
+    const reasons: string[] = [];
+    const tags = (r.triggerTags ?? []).filter(t => typeof t === "string" && t.length > 0);
+    for (const t of tags.slice(0, 4)) {
+      reasons.push(this.humanizeHrRadarTag(t));
+    }
+    if (r.scoreIncreased && r.scoreIncreaseLabel && reasons.length < 5) {
+      reasons.push(`Score climbed in ${r.scoreIncreaseLabel}`);
+    }
+    if (r.summaryText && reasons.length < 5) {
+      reasons.push(r.summaryText);
+    }
+    return reasons;
+  }
+
+  private humanizeHrRadarTag(tag: string): string {
+    const map: Record<string, string> = {
+      hot_hitter: "Hot hitter (recent HR streak)",
+      barrel_streak: "Barrel-rate streak",
+      hard_contact: "Hard-contact uptick",
+      pitcher_fade: "Pitcher fading (fastball velo down)",
+      pitcher_fatigue: "Pitcher fatigue building",
+      bvp_advantage: "Strong BvP history",
+      park_boost: "Park HR boost",
+      wind_out: "Wind blowing out",
+      lineup_protection: "Lineup protection upgraded",
+      due_up_soon: "Due up next inning",
+      high_xba_zone: "Pitcher in high-xBA zone",
+      ev_uptick: "Exit velocity climbing",
+    };
+    return map[tag] ?? tag.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  private buildNextAbEstimate(r: HrRadarAlert): string | null {
+    // Active alerts only — graded ones don't need an ETA.
+    const grading = r.gradingStatus ?? "active";
+    if (grading !== "active") return null;
+    const inning = r.detectedInning;
+    const half = (r.detectedHalf ?? "").toLowerCase();
+    if (inning == null) return null;
+    const halfText = half.startsWith("t") || half === "top" ? "Top" : half.startsWith("b") || half === "bottom" ? "Bot" : null;
+    if (halfText) return `Watching ${halfText} ${inning}`;
+    return `Watching inning ${inning}`;
+  }
+}
+
+export interface HrRadarLadderEntry {
+  playerId: string;
+  playerName: string;
+  team: string;
+  gameId: string;
+  state: string | null;
+  confidenceTier: string | null;
+  peakScore: number | null;
+  signalStrengthScore: number | null;
+  whyNowReasons: string[];
+  nextAbEstimate: string | null;
+  detectedInning: number | null;
+  detectedHalf: string | null;
+  hitInning: number | null;
+  hitHalf: string | null;
+  outcomeStatus: string; // active | called_hit | called_miss | uncalled_hr | late_signal
+  userVisible: boolean;
+  signalDetectedAt: Date | null;
+  hitDetectedAt: Date | null;
+  resolvedAt: Date | null;
+  alertPath: string | null;
 }
 
 export const storage = new DatabaseStorage();

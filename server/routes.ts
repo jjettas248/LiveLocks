@@ -2294,6 +2294,26 @@ export async function registerRoutes(
     }
   });
 
+  // ── HR Radar Decision Ladder (Phase 2 of HR ledger spec) ──
+  // Returns today's HR radar bucketed into 5 user-facing sections:
+  // attackNow | building | watch | cashed | dead.
+  app.get("/api/mlb/hr-radar/ladder", requireAuth, async (req, res) => {
+    try {
+      const sessionDate = typeof req.query.sessionDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.sessionDate)
+        ? req.query.sessionDate
+        : undefined;
+      const ladder = await storage.getHrRadarLadder(sessionDate);
+      return res.json(ladder);
+    } catch (e: any) {
+      console.error("[mlb/hr-radar/ladder]", e.message);
+      return res.json({
+        sessionDate: "",
+        sections: { attackNow: [], building: [], watch: [], cashed: [], dead: [] },
+        counts: { attackNow: 0, building: 0, watch: 0, cashed: 0, dead: 0, total: 0 },
+      });
+    }
+  });
+
   app.get("/api/mlb/hr-radar-board", requireAuth, async (req, res) => {
     try {
       const board = await storage.getTodayHrRadarBoard();
