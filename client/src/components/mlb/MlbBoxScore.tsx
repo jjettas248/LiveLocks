@@ -517,7 +517,7 @@ export function MlbBoxScore({
                           }}
                         >
                           {marketShort
-                            ? `${sideLabel} ${marketShort}${prob != null ? ` ${prob.toFixed(0)}%` : ""}`
+                            ? `${sideLabel} ${marketShort} ${conf.toFixed(0)}%`
                             : (isStrong ? "STRONG" : "BUILDING")}
                         </span>
                       );
