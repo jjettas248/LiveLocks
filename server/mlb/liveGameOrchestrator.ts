@@ -1061,13 +1061,37 @@ export class LiveGameOrchestrator {
       hrRadarResult = scoreHRRadar(input, output);
     }
 
-    const minScore = isBatterOver ? 42 : 50;
+    // ROI HARDENING: batter_over markets (hits/total_bases/hrr/home_runs) are
+    // the lowest-ROI family. Tighten the floor from 42→46 and add a borderline
+    // conviction-cluster gate so single-positive setups stay watch-only and
+    // do not promote into surfaced lean/strong plays without a real driver.
+    const minScore = isBatterOver ? 46 : 50;
     if (scoreBreakdown.total < minScore) {
       if (hrRadarResult && hrRadarResult.total >= 35) {
         console.log(`[MLB QUALIFY HR_WATCH][${gameId}] ${output.playerName}/${output.market} — batterOverScore=${scoreBreakdown.total} < ${minScore} but hrRadarScore=${hrRadarResult.total} ≥ 35, surfacing as HR_WATCH`);
       } else {
         console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — signalScore=${scoreBreakdown.total} < ${minScore} gate (tier=${scoreBreakdown.confidenceTier})`);
         return null;
+      }
+    } else if (
+      isBatterOver &&
+      scoreBreakdown.total < 55 &&
+      ["hits", "total_bases", "hrr", "home_runs"].includes(output.market)
+    ) {
+      // Borderline batter_over band (46-54): require at least one strong
+      // conviction driver (matchup, live confirmation, or recent form).
+      // Without a driver, downgrade to HR_WATCH if HR-eligible, else reject.
+      const hasConviction =
+        scoreBreakdown.matchup >= 55 ||
+        scoreBreakdown.liveContext >= 55 ||
+        scoreBreakdown.form >= 60;
+      if (!hasConviction) {
+        if (hrRadarResult && hrRadarResult.total >= 35) {
+          console.log(`[MLB QUALIFY HR_WATCH][${gameId}] ${output.playerName}/${output.market} — borderline batter_over score=${scoreBreakdown.total} no conviction cluster (matchup=${scoreBreakdown.matchup} live=${scoreBreakdown.liveContext} form=${scoreBreakdown.form}), routing to HR_WATCH`);
+        } else {
+          console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — borderline batter_over score=${scoreBreakdown.total} lacks conviction cluster (matchup=${scoreBreakdown.matchup} live=${scoreBreakdown.liveContext} form=${scoreBreakdown.form})`);
+          return null;
+        }
       }
     }
 
