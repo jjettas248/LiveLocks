@@ -2942,6 +2942,16 @@ export class DatabaseStorage implements IStorage {
       resolvedAt: Date | null;
       alertPath: string | null;
       conversionPct: number | null;
+      // Explicit grading truth model exposed to UI (Step 8/10 of HR ledger spec)
+      gradingStatus: string;
+      gradingReason: string | null;
+      matchedBeforeHr: boolean;
+      fallbackCreated: boolean;
+      userVisible: boolean;
+      signalDetectedAt: Date | null;
+      signalInning: number | null;
+      signalHalf: string | null;
+      hitDetectedAt: Date | null;
     }>;
     misses: Array<{
       sessionDate: string;
