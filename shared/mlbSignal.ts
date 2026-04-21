@@ -144,5 +144,11 @@ export interface MLBSignal {
 
   smartTags: string[];
   primaryReason: string;
-  pitchMatchupRatings: Record<string, "strong" | "neutral" | "weak"> | null;
+  pitchMatchupRatings: Record<string, PitchMatchupRating> | null;
+}
+
+export interface PitchMatchupRating {
+  rating: "strong" | "neutral" | "weak";
+  favor: "batter" | "pitcher" | "neutral";
+  score: number;
 }

@@ -597,13 +597,14 @@ export function MlbSignalCard({
               </div>
               <div className="flex flex-wrap gap-1">
                 {sig.pitchMix.slice(0, 5).map((p, i) => {
-                  const rawRating = sig.pitchMatchupRatings?.[p.pitchType] ?? "neutral";
-                  const isBatterFavor = isPitcherMarket
-                    ? rawRating === "weak"
-                    : rawRating === "strong";
-                  const isPitcherFavor = isPitcherMarket
-                    ? rawRating === "strong"
-                    : rawRating === "weak";
+                  // Server now emits explicit `favor` (always batter-relative). Drop the
+                  // client-side isPitcherMarket flip — it caused inverted directionality.
+                  const ratingEntry = sig.pitchMatchupRatings?.[p.pitchType];
+                  const favor = (ratingEntry && typeof ratingEntry === "object" && "favor" in ratingEntry)
+                    ? (ratingEntry as any).favor as "batter" | "pitcher" | "neutral"
+                    : "neutral";
+                  const isBatterFavor = favor === "batter";
+                  const isPitcherFavor = favor === "pitcher";
                   const borderColor = isBatterFavor
                     ? "rgba(34,197,94,0.6)"
                     : isPitcherFavor

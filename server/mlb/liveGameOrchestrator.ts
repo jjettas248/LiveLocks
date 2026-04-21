@@ -52,7 +52,8 @@ import {
   type MLBBatterArchetype,
   type MLBPitcherArchetype,
 } from "./archetypes";
-import { applySafetyCeiling, applyDirectionalBias } from "./calibration";
+// NOTE: probabilityEngine.applyModelSafetyCeiling is the single authoritative cap layer.
+// Orchestrator no longer applies its own ceiling — engine output is trusted.
 import { buildLiveEventInterpretation } from "./liveEventInterpretation";
 import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
@@ -2153,22 +2154,8 @@ export class LiveGameOrchestrator {
 
           const bArch = batterArchetypeCache.get(batter.playerId) ?? "stable_regular";
 
-          const ceilResult = applySafetyCeiling(
-            output.calibratedProbability,
-            bArch,
-            market
-          );
-          if (ceilResult.ceilingApplied) {
-            output.calibratedProbability = ceilResult.probability;
-            if (output.recommendedSide === "OVER") {
-              output.calibratedProbabilityOver = Math.min(output.calibratedProbabilityOver, ceilResult.ceiling);
-              output.calibratedProbabilityUnder = Math.round((100 - output.calibratedProbabilityOver) * 100) / 100;
-            } else {
-              output.calibratedProbabilityUnder = Math.min(output.calibratedProbabilityUnder, ceilResult.ceiling);
-              output.calibratedProbabilityOver = Math.round((100 - output.calibratedProbabilityUnder) * 100) / 100;
-            }
-            console.log(`[MLB_CEILING] player=${batter.playerName} market=${market} archetype=${bArch} capped=${ceilResult.ceiling}`);
-          }
+          // Trace: engine → firewall → final (no double-cap; engine is authoritative)
+          console.log(`[MLB_PROB_TRACE] player=${batter.playerName} market=${market} arch=${bArch} engine=${rawOutput.calibratedProbability.toFixed(1)} postFw=${output.calibratedProbability.toFixed(1)} side=${output.recommendedSide} edge=${output.edge.toFixed(2)}`);
 
           if (output.recommendedSide === "OVER" || output.recommendedSide === "UNDER") {
             trackSignalDirection(market, output.recommendedSide);
@@ -2226,7 +2213,7 @@ export class LiveGameOrchestrator {
               qResult.batterArchetype = bArch;
               qResult.pitcherArchetype = pitcherArch;
               qResult.thesis = thesis;
-              qResult.safetyCeilingApplied = ceilResult.ceilingApplied;
+              qResult.safetyCeilingApplied = output.safetyCeilingApplied ?? false;
               qResult.varianceTier = MARKET_VOLATILITY[market] ?? "mid";
               qResult.isDegraded = !!(input as any).isDegraded;
               if ((input as any).bvpHistory) {
@@ -2653,22 +2640,8 @@ export class LiveGameOrchestrator {
           const output = fwResult.cappedOutput;
 
           const pArchForMarket = pitcherArch ?? "mid_rotation";
-          const pitcherCeilResult = applySafetyCeiling(
-            output.calibratedProbability,
-            pArchForMarket,
-            market
-          );
-          if (pitcherCeilResult.ceilingApplied) {
-            output.calibratedProbability = pitcherCeilResult.probability;
-            if (output.recommendedSide === "OVER") {
-              output.calibratedProbabilityOver = Math.min(output.calibratedProbabilityOver, pitcherCeilResult.ceiling);
-              output.calibratedProbabilityUnder = Math.round((100 - output.calibratedProbabilityOver) * 100) / 100;
-            } else {
-              output.calibratedProbabilityUnder = Math.min(output.calibratedProbabilityUnder, pitcherCeilResult.ceiling);
-              output.calibratedProbabilityOver = Math.round((100 - output.calibratedProbabilityUnder) * 100) / 100;
-            }
-            console.log(`[MLB_CEILING] pitcher=${pitcherToEval.playerName} market=${market} archetype=${pArchForMarket} capped=${pitcherCeilResult.ceiling}`);
-          }
+          // Trace: engine → firewall → final (no double-cap; engine is authoritative)
+          console.log(`[MLB_PROB_TRACE] pitcher=${pitcherToEval.playerName} market=${market} arch=${pArchForMarket} engine=${rawOutput.calibratedProbability.toFixed(1)} postFw=${output.calibratedProbability.toFixed(1)} side=${output.recommendedSide} edge=${output.edge.toFixed(2)}`);
 
           if (output.recommendedSide === "OVER" || output.recommendedSide === "UNDER") {
             trackSignalDirection(market, output.recommendedSide);
@@ -2685,7 +2658,7 @@ export class LiveGameOrchestrator {
           const qResult = this.qualifySignal(gameId, input, output);
           if (qResult && !isPitcherEarlySignal) {
             qResult.pitcherArchetype = pArchForMarket;
-            qResult.safetyCeilingApplied = pitcherCeilResult.ceilingApplied;
+            qResult.safetyCeilingApplied = output.safetyCeilingApplied ?? false;
             qResult.varianceTier = MARKET_VOLATILITY[market] ?? "mid";
             qResult.isDegraded = !!(input as any).isDegraded;
             qResult.dataQuality = !!(input as any).isDegraded ? "degraded" : "partial";

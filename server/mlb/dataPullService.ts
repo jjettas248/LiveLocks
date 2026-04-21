@@ -3,6 +3,7 @@
 // All functions: 8-second timeout, try/catch, log-and-return on error.
 
 import type { PitchMixEntry } from "./types";
+import { normalizePitchTypeCode } from "./pitchTypeNormalizer";
 import { fetchBaseballSavantData, fetchSavantGameFeed, getStadiumCoords, windDirectionRelativeToField, isVenueIndoors } from "./dataSources";
 import { classifyContact, computeGameContactProfile } from "./statcastXBA";
 import { storage } from "../storage";
@@ -837,31 +838,37 @@ export async function syncPitcherContext(statsPk: string, cacheKey?: string): Pr
           ? Math.min(3, Math.ceil((pitchStats.battersFaced ?? 0) / 9) || 1)
           : 1;
 
-        // Build pitch mix from play events for this pitcher
-        const pitchMixMap: Record<string, { count: number; totalVelocity: number }> = {};
+        // Build pitch mix from play events for this pitcher (canonical-coded)
+        const pitchMixMap: Record<string, { count: number; totalVelocity: number; descriptions: Record<string, number> }> = {};
         let pitchVelocities: number[] = [];
 
         for (const play of allPlays) {
           if (String(play.matchup?.pitcher?.id) !== String(pid)) continue;
           for (const event of play.playEvents ?? []) {
             if (event.type !== "pitch") continue;
-            const pType: string = event.details?.type?.description ?? "Unknown";
+            const rawDesc: string = event.details?.type?.description ?? event.details?.type?.code ?? "Unknown";
+            const code = normalizePitchTypeCode(rawDesc);
             const vel: number | null = safeNum(event.pitchData?.startSpeed);
-            if (!pitchMixMap[pType]) pitchMixMap[pType] = { count: 0, totalVelocity: 0 };
-            pitchMixMap[pType].count += 1;
+            if (!pitchMixMap[code]) pitchMixMap[code] = { count: 0, totalVelocity: 0, descriptions: {} };
+            pitchMixMap[code].count += 1;
+            pitchMixMap[code].descriptions[rawDesc] = (pitchMixMap[code].descriptions[rawDesc] ?? 0) + 1;
             if (vel !== null) {
-              pitchMixMap[pType].totalVelocity += vel;
+              pitchMixMap[code].totalVelocity += vel;
               pitchVelocities.push(vel);
             }
           }
         }
 
         const totalPitches = Object.values(pitchMixMap).reduce((s, v) => s + v.count, 0);
-        const pitchMix: PitchMixEntry[] = Object.entries(pitchMixMap).map(([pitchType, v]) => ({
-          pitchType,
-          percentage: totalPitches > 0 ? parseFloat(((v.count / totalPitches) * 100).toFixed(1)) : 0,
-          avgVelocity: v.count > 0 ? parseFloat((v.totalVelocity / v.count).toFixed(1)) : null,
-        }));
+        const pitchMix: PitchMixEntry[] = Object.entries(pitchMixMap).map(([pitchType, v]) => {
+          const topDesc = Object.entries(v.descriptions).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+          return {
+            pitchType,
+            pitchName: topDesc,
+            percentage: totalPitches > 0 ? parseFloat(((v.count / totalPitches) * 100).toFixed(1)) : 0,
+            avgVelocity: v.count > 0 ? parseFloat((v.totalVelocity / v.count).toFixed(1)) : null,
+          };
+        });
 
         const avgVelocity: number | null =
           pitchVelocities.length > 0

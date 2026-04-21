@@ -10,6 +10,7 @@ import type {
 } from "./types";
 import { STANDARD_THRESHOLDS, EARLY_EXPLOSIVE_THRESHOLDS, FORM_THRESHOLDS, HR_MIN_QUALIFYING_FACTORS } from "./types";
 import { normalizePercentage } from "../services/normalizationService";
+import { getPitchFamily, normalizePitchTypeCode } from "./pitchTypeNormalizer";
 
 function clampRange(val: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, val));
@@ -254,7 +255,7 @@ export function computePitchTypeScore(pitcher: PitcherContext): number {
   let score = 0;
   // pitchMix.percentage may be on 0-100 or 0-1 scale; normalizePercentage auto-detects
   const fastballPct = pitcher.pitchMix
-    .filter((p) => p.pitchType === "FF" || p.pitchType === "SI")
+    .filter((p) => getPitchFamily(p.pitchType) === "fastball")
     .reduce((sum, p) => sum + normalizePercentage(p.percentage), 0);
 
   if (fastballPct >= 0.65) {
@@ -285,11 +286,14 @@ export function computeBatterVsPitchTypeSplit(input: MLBPropInput): number {
 
   // normalizePercentage auto-detects 0-100 vs 0-1 scale
   const fastballPct = pitchMix
-    .filter((p) => p.pitchType === "FF" || p.pitchType === "SI")
+    .filter((p) => {
+      const fam = getPitchFamily(p.pitchType);
+      return fam === "fastball" && normalizePitchTypeCode(p.pitchType) !== "FC";
+    })
     .reduce((sum, p) => sum + normalizePercentage(p.percentage), 0);
 
   const breakingPct = pitchMix
-    .filter((p) => p.pitchType === "SL" || p.pitchType === "CU" || p.pitchType === "KC" || p.pitchType === "CS")
+    .filter((p) => getPitchFamily(p.pitchType) === "breaking")
     .reduce((sum, p) => sum + normalizePercentage(p.percentage), 0);
 
   const isPowerHitter = hardHitRate >= 0.45;
@@ -1010,9 +1014,10 @@ export function computeSpecPitchBlendMatchup(input: MLBPropInput, mode: "damage"
     const pct = normalizePercentage(pitch.percentage);
     if (pct < 0.05) continue;
 
-    const isFastball = pitch.pitchType === "FF" || pitch.pitchType === "SI" || pitch.pitchType === "FC";
-    const isBreaking = pitch.pitchType === "SL" || pitch.pitchType === "CU" || pitch.pitchType === "KC" || pitch.pitchType === "CS" || pitch.pitchType === "SV";
-    const isOffspeed = pitch.pitchType === "CH" || pitch.pitchType === "FS";
+    const fam = getPitchFamily(pitch.pitchType);
+    const isFastball = fam === "fastball";
+    const isBreaking = fam === "breaking";
+    const isOffspeed = fam === "offspeed";
 
     let batterPerf = 0.5;
     if (mode === "damage") {

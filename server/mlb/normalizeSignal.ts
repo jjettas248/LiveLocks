@@ -1,4 +1,6 @@
-import type { MLBSignal } from "../../shared/mlbSignal";
+import type { MLBSignal, PitchMatchupRating } from "../../shared/mlbSignal";
+import { normalizePitchTypeCode, getPitchFamily, PITCH_DISPLAY_LABEL } from "./pitchTypeNormalizer";
+import type { CanonicalPitchType } from "./pitchTypeNormalizer";
 
 export interface NormalizeContext {
   gameId: string;
@@ -211,6 +213,132 @@ function generatePrimaryReason(
   return result.charAt(0).toUpperCase() + result.slice(1);
 }
 
+/**
+ * Per-pitch bidirectional arsenal scorer.
+ * Returns a record keyed by canonical pitch type with explicit `favor` for the client.
+ *
+ * Score interpretation (always batter-relative):
+ *   - score > 0.5  → favors the batter (▲)
+ *   - score < 0.5  → favors the pitcher (▼)
+ *   - 0.45..0.55  → neutral
+ *
+ * Family-distinct weights prevent the arsenal from clustering uniformly:
+ *   - Fastball (FF):  bat speed + contact + handedness
+ *   - Sinker (SI):    contact + handedness, slight HR penalty
+ *   - Cutter (FC):    bat speed + pitch blend, slight pitcher edge baseline
+ *   - Slider (SL):    pitch blend + handedness
+ *   - Sweeper (SW):   harsher than slider for batters
+ *   - Curve (CU):     pitch blend + form
+ *   - Knuckle Curve:  harsher than curve
+ *   - Changeup (CH):  pitch blend + handedness + contact stability
+ *   - Splitter (FS):  harshest offspeed
+ *   - Other (OT):     neutral fallback
+ */
+export function computePitchArsenalMatchupRatings(
+  pitchMix: Array<{ pitchType: string; percentage: number; pitchName?: string | null; avgVelocity?: number | null }>,
+  drivers: Record<string, any>,
+  market: string,
+): Record<string, PitchMatchupRating> {
+  const cq = clamp01(drivers.contactQuality ?? 0.5);
+  const bp = clamp01(drivers.batSpeedPower ?? 0.5);
+  const pbm = clamp01(drivers.pitchBlendMatchup ?? 0.5);
+  const hand = clamp01(drivers.handednessMatchup ?? 0.5);
+  const form = clamp01(drivers.hotColdForm ?? 0.5);
+  const pitcherSupp = clamp01(drivers.pitcherSuppression ?? 0.5);
+
+  const isPitcherMarket = market.startsWith("pitcher_") ||
+    market === "hits_allowed" || market === "walks_allowed" || market === "hr_allowed";
+
+  // Convert each driver into a centered modifier: > 0 = batter favor, < 0 = pitcher favor
+  const cqM = (cq - 0.5);
+  const bpM = (bp - 0.5);
+  const pbmM = (pbm - 0.5);
+  const handM = (hand - 0.5);
+  const formM = (form - 0.5);
+  // pitcherSuppression is pitcher-relative — inverted for batter score
+  const suppM = (0.5 - pitcherSupp);
+
+  const out: Record<string, PitchMatchupRating> = {};
+
+  for (const p of pitchMix) {
+    // Always canonicalize — uppercase non-canonical codes (ST/SV/CS/KN) must
+    // route through the normalizer so they map to FF/SI/SL/SW/etc.
+    const code = normalizePitchTypeCode(p.pitchType);
+
+    let score = 0.5;
+
+    switch (code) {
+      case "FF":
+        // Four-seam: bat speed dominates, contact second, platoon/form modifier
+        score = 0.50 + bpM * 0.50 + cqM * 0.30 + handM * 0.18 + formM * 0.10 + suppM * 0.10;
+        break;
+      case "SI":
+        // Sinker: groundball pitch — power gets less, contact + platoon matter most
+        // Slight pitcher baseline for HR/TB markets
+        score = 0.50 + cqM * 0.40 + handM * 0.25 + bpM * 0.12 + formM * 0.08 + suppM * 0.10;
+        if (market === "home_runs" || market === "hr_allowed") score -= 0.04;
+        break;
+      case "FC":
+        // Cutter: tougher than 4-seam, blend matters
+        score = 0.50 + bpM * 0.30 + pbmM * 0.30 + cqM * 0.20 + handM * 0.15 + suppM * 0.10 - 0.03;
+        break;
+      case "SL":
+        // Slider: pitch blend + handedness drive it
+        score = 0.50 + pbmM * 0.45 + handM * 0.25 + cqM * 0.18 + formM * 0.10 + suppM * 0.10;
+        break;
+      case "SW":
+        // Sweeper: harsher than slider — biggest platoon swing
+        score = 0.50 + pbmM * 0.40 + handM * 0.35 + cqM * 0.15 + suppM * 0.12 - 0.04;
+        break;
+      case "CU":
+        // Curveball: blend + form (timing-dependent)
+        score = 0.50 + pbmM * 0.42 + formM * 0.20 + cqM * 0.20 + handM * 0.15 + suppM * 0.10;
+        break;
+      case "KC":
+        // Knuckle curve: harsher curve variant
+        score = 0.50 + pbmM * 0.40 + cqM * 0.18 + handM * 0.15 + suppM * 0.12 - 0.05;
+        break;
+      case "CH":
+        // Changeup: blend + handedness, contact stability matters most
+        score = 0.50 + pbmM * 0.38 + handM * 0.30 + cqM * 0.25 + formM * 0.10 + suppM * 0.10;
+        break;
+      case "FS":
+        // Splitter: harshest offspeed — punishes power, rewards platoon
+        score = 0.50 + pbmM * 0.40 + handM * 0.28 + cqM * 0.18 - bpM * 0.12 + suppM * 0.10 - 0.05;
+        break;
+      case "OT":
+      default:
+        // Unknown — neutral fallback weighted by aggregate quality
+        score = 0.50 + cqM * 0.30 + pbmM * 0.25 + bpM * 0.20 + handM * 0.15 + suppM * 0.10;
+        break;
+    }
+
+    // Pitcher-side markets reverse-interpret the legacy "rating" string but the
+    // explicit `favor` field always remains batter-relative.
+    score = clamp01(score);
+
+    let favor: PitchMatchupRating["favor"] = "neutral";
+    if (score >= 0.55) favor = "batter";
+    else if (score <= 0.45) favor = "pitcher";
+
+    let rating: PitchMatchupRating["rating"];
+    if (isPitcherMarket) {
+      rating = score >= 0.55 ? "weak" : score <= 0.45 ? "strong" : "neutral";
+    } else {
+      rating = score >= 0.55 ? "strong" : score <= 0.45 ? "weak" : "neutral";
+    }
+
+    out[code] = { rating, favor, score: Math.round(score * 1000) / 1000 };
+  }
+
+  return out;
+}
+
+function clamp01(n: number): number {
+  if (!Number.isFinite(n)) return 0.5;
+  return Math.min(1, Math.max(0, n));
+}
+
 export function normalizeMLBSignal(
   qs: Record<string, any>,
   ctx: NormalizeContext,
@@ -238,30 +366,13 @@ export function normalizeMLBSignal(
   const primaryReason = generatePrimaryReason(qs, raw, normalizedMkt);
 
   const drivers = qs.drivers ?? {};
-  let pitchMatchupRatings: Record<string, "strong" | "neutral" | "weak"> | null = null;
+  let pitchMatchupRatings: Record<string, PitchMatchupRating> | null = null;
   if (pitchMix && Array.isArray(pitchMix) && pitchMix.length > 0) {
-    const cq = drivers.contactQuality ?? 0.5;
-    const bp = drivers.batSpeedPower ?? 0.5;
-    const pbm = drivers.pitchBlendMatchup ?? 0.5;
-    const hand = drivers.handednessMatchup ?? 0.5;
-    pitchMatchupRatings = {};
-    for (const p of pitchMix) {
-      const pt = p.pitchType;
-      const isFastball = pt === "FF" || pt === "SI" || pt === "FC";
-      const isBreaking = pt === "SL" || pt === "CU" || pt === "KC" || pt === "CS" || pt === "SV" || pt === "ST";
-      let score: number;
-      if (isFastball) {
-        score = bp * 0.55 + cq * 0.30 + hand * 0.15;
-      } else if (isBreaking) {
-        score = pbm * 0.45 + cq * 0.25 + hand * 0.30;
-      } else {
-        score = cq * 0.45 + pbm * 0.30 + bp * 0.25;
-      }
-      let rating: "strong" | "neutral" | "weak" = "neutral";
-      if (score >= 0.55) rating = "strong";
-      else if (score <= 0.45) rating = "weak";
-      pitchMatchupRatings[pt] = rating;
-    }
+    pitchMatchupRatings = computePitchArsenalMatchupRatings(pitchMix, drivers, normalizedMkt);
+    try {
+      const families = Object.entries(pitchMatchupRatings).map(([k, v]) => `${k}:${v.favor[0]}${v.score.toFixed(2)}`).join(",");
+      console.log(`[MLB_PITCH_ARSENAL] player=${qs.playerName} market=${normalizedMkt} pitches=${families}`);
+    } catch {}
   }
 
   return {

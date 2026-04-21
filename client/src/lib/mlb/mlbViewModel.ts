@@ -379,12 +379,17 @@ export function buildAtBatLogViewModel(
     pitchSpeed: number | null;
     distance?: number | null;
   }>,
-  pitchMatchupRatings?: Record<string, "strong" | "neutral" | "weak"> | null
+  pitchMatchupRatings?: MLBSignal["pitchMatchupRatings"]
 ): AtBatViewModel[] {
   return atBats.map(ab => {
     const style = AB_OUTCOME_STYLE[ab.outcome] ?? { label: ab.outcome ?? "?", color: "#6b7280" };
     const la = ab.launchAngle != null ? launchAngleLabel(ab.launchAngle) : null;
-    const matchupRating = ab.pitchType ? pitchMatchupRatings?.[ab.pitchType] ?? null : null;
+    // Server now emits PitchMatchupRating objects { rating, favor, score }.
+    // Extract `rating` for chip coloring (color semantic unchanged).
+    const ratingEntry = ab.pitchType ? pitchMatchupRatings?.[ab.pitchType] : null;
+    const matchupRating = (ratingEntry && typeof ratingEntry === "object" && "rating" in ratingEntry)
+      ? (ratingEntry as any).rating as "strong" | "neutral" | "weak"
+      : null;
     const pitchRating = getPitchChipColor(ab.pitchType, matchupRating);
     return {
       outcome: ab.outcome,

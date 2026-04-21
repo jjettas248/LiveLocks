@@ -109,13 +109,13 @@ export const MARKET_PROBABILITY_CEILINGS: Record<"core" | "experimental", number
 export const MARKET_PROBABILITY_CAPS: Record<MLBMarket, number> = {
   hits: 96,
   total_bases: 96,
-  home_runs: 85,
-  hrr: 90,
+  home_runs: 90,
+  hrr: 94,
   pitcher_strikeouts: 96,
   pitcher_outs: 90,
   walks_allowed: 85,
   hits_allowed: 90,
-  batter_strikeouts: 85,
+  batter_strikeouts: 90,
   hr_allowed: 80,
 };
 
@@ -211,6 +211,7 @@ export interface PitchMixEntry {
   pitchType: string;
   percentage: number;
   avgVelocity: number | null;
+  pitchName?: string | null;
 }
 
 export interface LineupContext {
@@ -392,6 +393,8 @@ export interface MLBPropOutput {
 
   recommendedSide: MLBRecommendedSide;
   confidenceTier: MLBConfidenceTier;
+
+  safetyCeilingApplied?: boolean;
 
   mode: "standard" | "early_explosive";
   completedAB: number;

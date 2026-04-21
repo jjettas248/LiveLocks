@@ -2,6 +2,7 @@ import { db } from "../db";
 import { contactEvents, gamePlayerStats, hrOutcomes, hrRadarAnalytics } from "@shared/schema";
 import { sql, desc, gte, and } from "drizzle-orm";
 import type { MLBMarket } from "./types";
+import { normalizePitchTypeCode } from "./pitchTypeNormalizer";
 
 export interface ContactProfile {
   hitEvThreshold: number;
@@ -379,10 +380,9 @@ export function getContactQualityScore(exitVelocity: number | null, launchAngle:
 export function getPitchTypeHrRisk(pitchType: string | null): number {
   if (!pitchType || learnedPitchVulnerability.length === 0) return 0.5;
 
-  const normalized = pitchType.toLowerCase().trim();
+  const queryCode = normalizePitchTypeCode(pitchType);
   const match = learnedPitchVulnerability.find(p =>
-    p.pitchType.toLowerCase().includes(normalized) ||
-    normalized.includes(p.pitchType.toLowerCase())
+    normalizePitchTypeCode(p.pitchType) === queryCode
   );
 
   if (!match) return 0.5;

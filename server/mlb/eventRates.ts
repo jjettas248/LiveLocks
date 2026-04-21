@@ -1,4 +1,5 @@
 import type { MLBPropInput, ProjectionSource, ProjectionQuality } from "./types";
+import { getPitchFamily } from "./pitchTypeNormalizer";
 
 const LEAGUE_AVG_BA = 0.248;
 const LEAGUE_AVG_SLG = 0.400;
@@ -154,9 +155,10 @@ export function computeKRatePerBF(input: MLBPropInput): number {
   adjustedK *= 0.7 + 0.3 * (oppKTendency / 0.65);
 
   if (input.pitcher.pitchMix && input.pitcher.pitchMix.length > 0) {
-    const whiffPitches = input.pitcher.pitchMix.filter(p =>
-      ["slider", "sweeper", "curveball", "changeup"].some(t => p.pitchType.toLowerCase().includes(t))
-    );
+    const whiffPitches = input.pitcher.pitchMix.filter(p => {
+      const fam = getPitchFamily(p.pitchType);
+      return fam === "breaking" || fam === "offspeed";
+    });
     const whiffPct = whiffPitches.reduce((s, p) => s + p.percentage, 0);
     if (whiffPct > 40) adjustedK *= 1.04;
     else if (whiffPct < 20) adjustedK *= 0.96;
@@ -216,7 +218,21 @@ export function computeHRRatePerPA(input: MLBPropInput): number {
     baseHR *= 1.05;
   }
 
-  return Math.max(0.01, Math.min(0.12, baseHR));
+  // Conditional upside: when multiple elite signals stack (high EV + ideal LA + HR-friendly
+  // park + platoon edge + weak/fading pitcher), allow projection to climb to 0.18/PA.
+  // Otherwise retain conservative 0.12 cap.
+  const evSafe = input.contactQuality.exitVelocity ?? 0;
+  const laSafe = input.contactQuality.launchAngle ?? 0;
+  const isElitePower =
+    (evSafe >= 95) &&
+    (laSafe >= 18 && laSafe <= 36) &&
+    (input.weatherPark.parkFactor >= 1.02) &&
+    (input.batterHand && input.pitcher.throws && input.batterHand !== input.pitcher.throws) &&
+    ((input.pitcher.era ?? 0) > 4.5 ||
+      (input.weatherPark.windDirection === "out" && (input.weatherPark.windSpeed ?? 0) >= 8));
+
+  const cap = isElitePower ? 0.18 : 0.12;
+  return Math.max(0.01, Math.min(cap, baseHR));
 }
 
 export function determineProjectionSource(input: MLBPropInput): ProjectionSource {
