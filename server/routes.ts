@@ -974,24 +974,45 @@ export async function registerRoutes(
       for (const event of todayData.events ?? []) {
         eventMap.set(String(event.id), event);
       }
+      // Active-feed merge: only include events that are GENUINELY in-progress.
+      // ESPN's no-date active feed also returns recently-completed games for
+      // hours after they end, which would otherwise leak yesterday's finals
+      // into today's slate (the duplicate matchup display bug).
+      let activeMergedIn = 0;
+      let activeStatusOverrides = 0;
+      let activeRejectedFinal = 0;
       for (const event of activeData.events ?? []) {
         const eid = String(event.id);
+        const activeStatusName: string =
+          event.competitions?.[0]?.status?.type?.name ??
+          event.status?.type?.name ??
+          "";
+        const isActiveLive = activeStatusName === "STATUS_IN_PROGRESS" || activeStatusName === "STATUS_DELAYED";
         if (!eventMap.has(eid)) {
-          eventMap.set(eid, event);
-          console.log(`[MLB DISCOVERY] Active-feed game ${eid} not in today's date feed — merged in`);
+          if (isActiveLive) {
+            eventMap.set(eid, event);
+            activeMergedIn++;
+            console.log(`[MLB DISCOVERY] Active-feed live game ${eid} not in today's date feed — merged in (status=${activeStatusName})`);
+          } else {
+            activeRejectedFinal++;
+            // Don't pollute today's slate with completed games from other dates.
+          }
         } else {
+          // Same gameId is in today's slate — refresh the status block in case
+          // active feed has fresher info (e.g., live → final transition).
           const existing = eventMap.get(eid)!;
           const activeStatus = event.competitions?.[0]?.status ?? event.status;
           if (activeStatus) {
             if (existing.competitions?.[0]) existing.competitions[0].status = activeStatus;
             if (existing.status) existing.status = activeStatus;
+            activeStatusOverrides++;
           }
         }
       }
       const mergedEvents = Array.from(eventMap.values());
 
       const rawEvents: number = mergedEvents.length;
-      console.log(`[MLB DISCOVERY] live-games rawEvents=${rawEvents} (today=${todayData.events?.length ?? 0} active=${activeData.events?.length ?? 0})`);
+      console.log(`[MLB DISCOVERY] live-games rawEvents=${rawEvents} (today=${todayData.events?.length ?? 0} active=${activeData.events?.length ?? 0} mergedInLive=${activeMergedIn} statusOverrides=${activeStatusOverrides} rejectedNonLive=${activeRejectedFinal})`);
 
       // ── Team name fallback chain: displayName → shortDisplayName → name ──
       const resolveTeamName = (team: any): string => {
