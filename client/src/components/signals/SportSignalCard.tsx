@@ -1,4 +1,5 @@
 import { type ReactNode } from "react";
+import { Check, Plus } from "lucide-react";
 import { ConfidenceBadge, type ConfidenceTier } from "./ConfidenceBadge";
 import { ShareSignalButton } from "@/components/common/ShareSignalButton";
 import { CopyBetButton } from "@/components/common/CopyBetButton";
@@ -36,6 +37,7 @@ export type SportSignalCardProps = {
   isFlagship?: boolean;
   onPrimaryAction?: () => void;
   onAddToSlip?: () => void;
+  addedToSlip?: boolean;
   onShare?: () => void;
   onCopy?: () => void;
   footerSlot?: ReactNode;
@@ -89,6 +91,7 @@ export function SportSignalCard({
   isFlagship,
   onPrimaryAction,
   onAddToSlip,
+  addedToSlip,
   footerSlot,
   detailSlot,
   market: marketKey,
@@ -276,10 +279,29 @@ export function SportSignalCard({
           {!locked && onAddToSlip && (
             <button
               data-testid={`button-add-slip-${sport.toLowerCase()}-${playerOrTeam.replace(/\s+/g, "-").toLowerCase()}`}
-              onClick={(e) => { e.stopPropagation(); onAddToSlip(); console.log(`[NBA_CLICK_FLOW] addToSlip player=${playerOrTeam} market=${marketKey ?? marketLabel} side=${side}`); }}
-              className="text-[11px] font-semibold px-3 py-1.5 min-h-[44px] rounded-lg border border-primary/30 bg-primary/10 hover:bg-primary/20 transition-colors text-primary"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (addedToSlip) return;
+                onAddToSlip();
+                console.log(`[NBA_CLICK_FLOW] addToSlip player=${playerOrTeam} market=${marketKey ?? marketLabel} side=${side}`);
+              }}
+              disabled={addedToSlip}
+              aria-pressed={addedToSlip ? true : undefined}
+              className={`text-[11px] font-semibold px-3 py-1.5 min-h-[44px] rounded-lg border transition-colors inline-flex items-center gap-1 ${
+                addedToSlip
+                  ? "border-green-500/40 bg-green-500/15 text-green-400 cursor-default"
+                  : "border-primary/30 bg-primary/10 hover:bg-primary/20 text-primary"
+              }`}
             >
-              + Slip
+              {addedToSlip ? (
+                <>
+                  <Check className="w-3 h-3" /> On Slip
+                </>
+              ) : (
+                <>
+                  <Plus className="w-3 h-3" /> Slip
+                </>
+              )}
             </button>
           )}
           {!locked && (

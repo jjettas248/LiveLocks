@@ -1,5 +1,5 @@
 import type { MLBPropOutput, MLBMarket } from "./types";
-import { MARKET_PROJECTION_TOLERANCE, MARKET_PROBABILITY_CAPS } from "./types";
+import { MARKET_PROJECTION_TOLERANCE } from "./types";
 
 export interface FirewallResult {
   passed: boolean;
@@ -68,34 +68,11 @@ export function runIntegrityFirewall(output: MLBPropOutput): FirewallResult {
     return { passed: false, hardReject: true, rejections, warnings, cappedOutput };
   }
 
-  // Defense-in-depth only: probabilityEngine.applyModelSafetyCeiling already capped per
-  // (archetype, market). This block only fires if the engine missed (engine produced a
-  // value above the market cap). It does NOT re-shrink already-capped values, since
-  // engine ceilings (often per-archetype) are typically tighter than market caps.
-  const cap = MARKET_PROBABILITY_CAPS[output.market];
-  if (cap) {
-    let capFired = false;
-    if (cappedOutput.calibratedProbabilityOver > cap) {
-      cappedOutput.calibratedProbabilityOver = cap;
-      cappedOutput.calibratedProbabilityUnder = Math.max(2, 100 - cap);
-      capFired = true;
-    }
-    if (cappedOutput.calibratedProbabilityUnder > cap) {
-      cappedOutput.calibratedProbabilityUnder = cap;
-      cappedOutput.calibratedProbabilityOver = Math.max(2, 100 - cap);
-      capFired = true;
-    }
-    if (capFired) {
-      cappedOutput.calibratedProbability = Math.max(cappedOutput.calibratedProbabilityOver, cappedOutput.calibratedProbabilityUnder);
-      const sidedPct = cappedOutput.recommendedSide === "OVER"
-        ? cappedOutput.calibratedProbabilityOver
-        : cappedOutput.calibratedProbabilityUnder;
-      const bookImpliedPct = output.bookImplied ?? 50;
-      cappedOutput.edge = Math.round(((sidedPct - bookImpliedPct) / Math.max(bookImpliedPct, 1)) * 100 * 100) / 100;
-      if (!Number.isFinite(cappedOutput.edge)) cappedOutput.edge = 0;
-      warnings.push(`firewall sanity cap fired (engine missed): market=${output.market} cap=${cap}`);
-    }
-  }
+  // T004: Probability caps are owned exclusively by probabilityEngine.applyModelSafetyCeiling.
+  // The firewall no longer re-caps probabilities and no longer recomputes edge — the
+  // engine emits edge in its own canonical units (additive points = sided − bookImplied,
+  // see markets.ts buildOutput) and a second derivation here would silently overwrite
+  // that value with a different formula. Trust the engine output as authoritative.
 
   const tolerance = MARKET_PROJECTION_TOLERANCE[output.market] ?? 0.10;
   const BATTER_OVER_MARKETS: MLBMarket[] = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];

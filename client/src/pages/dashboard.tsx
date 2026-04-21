@@ -25,6 +25,8 @@ import { usePullRefresh } from "@/hooks/use-pull-refresh";
 import { hasProAccess } from "@/lib/tierUtils";
 import { useLocation } from "wouter";
 import { TopPlaysPanel } from "@/components/dashboard/TopPlaysPanel";
+import { SignalDetailDialog } from "@/components/signals/SignalDetailDialog";
+import type { UnifiedTopPlay } from "@/hooks/useTopPlays";
 import { UserStatusRail } from "@/components/dashboard/UserStatusRail";
 import { LiveUpdateToast } from "@/components/common/LiveUpdateToast";
 import { LockedSignalModule } from "@/components/LockedSignalModule";
@@ -528,6 +530,8 @@ export default function Dashboard() {
   } | undefined>();
   const [parlayPicks, setParlayPicks] = useState<ParlayPickInput[]>([]);
   const [showParlay, setShowParlay] = useState(false);
+  const [selectedDetailPlay, setSelectedDetailPlay] = useState<UnifiedTopPlay | null>(null);
+  const [selectedDetailRelated, setSelectedDetailRelated] = useState<UnifiedTopPlay[]>([]);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 1024);
   const [selectedSportsbook, setSelectedSportsbook] = useState<string>("manual");
   const [autoFilledFields, setAutoFilledFields] = useState<Set<string>>(new Set());
@@ -1555,6 +1559,72 @@ export default function Dashboard() {
     }
   };
 
+  // Shared sport-tab navigation used by TopPlaysPanel and the View Details
+  // dialog. Pure UI navigation; no engine/persistence side effects.
+  const handleNavigateToSport = (sport: string) => {
+    if (sport === "nba") setActiveTab("calculator");
+    else if (sport === "ncaab") {
+      if (!hasNcaabAccess) {
+        setUpgradeModalState({ playsUsed: user?.playsUsedToday ?? 0, limit: 3 });
+        setShowUpgradeModal(true);
+        return;
+      }
+      setActiveTab("ncaab");
+    } else if (sport === "mlb") {
+      setActiveTab("calculator");
+    }
+  };
+
+  // Shared add-to-slip used by TopPlaysPanel cards and the View Details
+  // dialog. Reuses the existing parlay slip state — no new slip backend.
+  const handleTopPlayAddToSlip = (play: UnifiedTopPlay) => {
+    if (parlayPicks.length >= 10) return;
+    const parsedPlayerId = typeof play.playerId === "number" ? play.playerId : Number(play.playerId);
+    if (!play.market || !play.side) {
+      console.warn("[NBA_CLICK_FLOW] Skipping add-to-slip — missing market or side", { player: play.playerOrTeam });
+      return;
+    }
+    const parsedLine = typeof play.line === "number" ? play.line : parseFloat(String(play.line ?? ""));
+    if (!Number.isFinite(parsedLine)) {
+      console.warn("[NBA_CLICK_FLOW] Skipping add-to-slip — invalid line", { player: play.playerOrTeam, line: play.line });
+      return;
+    }
+    const normalizedSide = play.betDirection?.toLowerCase() ?? play.side?.toLowerCase() ?? "";
+    const betDirection: "over" | "under" = normalizedSide.includes("under") ? "under" : "over";
+    console.log("[NBA_CLICK_FLOW] TopPlays add-to-slip", { sport: play.sport, player: play.playerOrTeam, market: play.market, side: betDirection });
+    const pick: ParlayPickInput = {
+      playerId: Number.isFinite(parsedPlayerId) ? parsedPlayerId : 0,
+      playerName: play.playerOrTeam,
+      playerTeam: play.team ?? "",
+      statType: play.market,
+      line: parsedLine,
+      probability: play.probability,
+      betDirection,
+      sportsbook: play.sportsbook ?? "",
+      oddsAmerican: -110,
+      gameId: play.gameId,
+      confidenceTier: play.confidenceTier,
+    };
+    setParlayPicks((prev) => [...prev, pick]);
+    setShowParlay(true);
+  };
+
+  // Detect whether a top-play is already on the slip (presentation-only).
+  const isPlayOnSlip = (play: UnifiedTopPlay | null): boolean => {
+    if (!play || !play.market) return false;
+    const parsedLine = typeof play.line === "number" ? play.line : parseFloat(String(play.line ?? ""));
+    if (!Number.isFinite(parsedLine)) return false;
+    const normalizedSide = play.betDirection?.toLowerCase() ?? play.side?.toLowerCase() ?? "";
+    const betDirection: "over" | "under" = normalizedSide.includes("under") ? "under" : "over";
+    return parlayPicks.some(
+      (p) =>
+        p.playerName === play.playerOrTeam &&
+        p.statType === play.market &&
+        p.line === parsedLine &&
+        p.betDirection === betDirection,
+    );
+  };
+
   // When a game is selected, filter players to only those two teams
   const filteredPlayers = selectedGameId && selectedGameTeams
     ? (players ?? []).filter(p => {
@@ -2000,50 +2070,30 @@ export default function Dashboard() {
           <div className="space-y-4">
             <TopPlaysPanel
               isElite={effectiveTier === "elite" || !!user?.isAdmin}
-              onNavigateToSport={(sport) => {
-                if (sport === "nba") setActiveTab("calculator");
-                else if (sport === "ncaab") {
-                  if (!hasNcaabAccess) {
-                    setUpgradeModalState({ playsUsed: user?.playsUsedToday ?? 0, limit: 3 });
-                    setShowUpgradeModal(true);
-                    return;
-                  }
-                  setActiveTab("ncaab");
-                } else if (sport === "mlb") {
-                  setActiveTab("calculator");
+              onNavigateToSport={handleNavigateToSport}
+              onAddToSlip={handleTopPlayAddToSlip}
+              onViewDetails={(play, related) => {
+                setSelectedDetailPlay(play);
+                setSelectedDetailRelated(related ?? []);
+              }}
+            />
+            <SignalDetailDialog
+              open={selectedDetailPlay !== null}
+              onOpenChange={(open) => {
+                if (!open) {
+                  setSelectedDetailPlay(null);
+                  setSelectedDetailRelated([]);
                 }
               }}
-              onAddToSlip={(play) => {
-                if (parlayPicks.length >= 10) return;
-                const parsedPlayerId = typeof play.playerId === "number" ? play.playerId : Number(play.playerId);
-                if (!play.market || !play.side) {
-                  console.warn("[NBA_CLICK_FLOW] Skipping add-to-slip — missing market or side", { player: play.playerOrTeam });
-                  return;
-                }
-                const parsedLine = typeof play.line === "number" ? play.line : parseFloat(String(play.line ?? ""));
-                if (!Number.isFinite(parsedLine)) {
-                  console.warn("[NBA_CLICK_FLOW] Skipping add-to-slip — invalid line", { player: play.playerOrTeam, line: play.line });
-                  return;
-                }
-                const normalizedSide = play.betDirection?.toLowerCase() ?? play.side?.toLowerCase() ?? "";
-                const betDirection: "over" | "under" = normalizedSide.includes("under") ? "under" : "over";
-                console.log("[NBA_CLICK_FLOW] TopPlays add-to-slip", { sport: play.sport, player: play.playerOrTeam, market: play.market, side: betDirection });
-                const pick: ParlayPickInput = {
-                  playerId: Number.isFinite(parsedPlayerId) ? parsedPlayerId : 0,
-                  playerName: play.playerOrTeam,
-                  playerTeam: play.team ?? "",
-                  statType: play.market,
-                  line: parsedLine,
-                  probability: play.probability,
-                  betDirection,
-                  sportsbook: play.sportsbook ?? "",
-                  oddsAmerican: -110,
-                  gameId: play.gameId,
-                  confidenceTier: play.confidenceTier,
-                };
-                setParlayPicks((prev) => [...prev, pick]);
-                setShowParlay(true);
+              play={selectedDetailPlay}
+              related={selectedDetailRelated}
+              alreadyOnSlip={isPlayOnSlip(selectedDetailPlay)}
+              onAddToSlip={handleTopPlayAddToSlip}
+              onAddRelatedToSlip={(rel) => {
+                const full = selectedDetailRelated.find((r) => r.id === rel.id);
+                if (full) handleTopPlayAddToSlip(full);
               }}
+              onOpenSport={handleNavigateToSport}
             />
           </div>
           <div className="space-y-4">

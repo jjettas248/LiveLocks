@@ -9,12 +9,62 @@ type TopPlaysPanelProps = {
   isElite?: boolean;
   onNavigateToSport?: (sport: string) => void;
   onAddToSlip?: (play: UnifiedTopPlay) => void;
+  onViewDetails?: (play: UnifiedTopPlay, related?: UnifiedTopPlay[]) => void;
+  isOnSlip?: (play: UnifiedTopPlay) => boolean;
 };
 
-export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPlaysPanelProps) {
+// Presentation-only grouping. Same player + same game → one primary card
+// with related opportunities surfaced through View Details.
+// Server ordering is preserved for primary selection (no client-side ranking).
+type GroupedPlay = { primary: UnifiedTopPlay; related: UnifiedTopPlay[] };
+
+function groupPlaysByPlayer(plays: UnifiedTopPlay[]): GroupedPlay[] {
+  const groups = new Map<string, GroupedPlay>();
+  const order: string[] = [];
+  for (const play of plays) {
+    const key = play.gameId
+      ? `${play.sport}|${play.gameId}|${play.playerOrTeam}`
+      : `${play.sport}|standalone|${play.id}`;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.related.push(play);
+    } else {
+      groups.set(key, { primary: play, related: [] });
+      order.push(key);
+    }
+  }
+  return order.map((k) => groups.get(k)!);
+}
+
+export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip, onViewDetails, isOnSlip }: TopPlaysPanelProps) {
+  // Prefer the explicit detail handler. Fall back to legacy sport navigation
+  // so callers that haven't adopted the detail dialog keep their behavior.
+  const buildPrimaryAction = (play: UnifiedTopPlay, related?: UnifiedTopPlay[]) => {
+    if (onViewDetails) return () => onViewDetails(play, related && related.length > 0 ? related : undefined);
+    if (onNavigateToSport) return () => onNavigateToSport(play.routeTarget);
+    return undefined;
+  };
+  const buildFooterSlot = (related: UnifiedTopPlay[], primary: UnifiedTopPlay) => {
+    if (!related || related.length === 0 || !onViewDetails) return undefined;
+    const onClick = () => onViewDetails!(primary, related);
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        data-testid={`button-related-count-${primary.id}`}
+        className="text-[10px] font-semibold px-2 py-1 rounded-md border border-border/40 bg-secondary/40 hover:bg-secondary/70 transition-colors text-muted-foreground hover:text-foreground"
+      >
+        +{related.length} related
+      </button>
+    );
+  };
   const { data, isLoading } = useTopPlays();
   const allPlays = data?.plays ?? [];
-  const plays = allPlays.slice(0, 6);
+  // Group same-player same-game plays (presentation only). Cap at 6 groups
+  // so we still show ~6 distinct opportunities while collapsing duplicates.
+  const grouped = groupPlaysByPlayer(allPlays).slice(0, 6);
+  const plays = grouped.map((g) => g.primary);
+  const relatedFor = (id: string) => grouped.find((g) => g.primary.id === id)?.related ?? [];
   const [isOpen, setIsOpen] = useState(false);
   const [hasSeenModal, setHasSeenModal] = useState(false);
   const [showModal, setShowModal] = useState(false);
@@ -140,7 +190,7 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPl
                           timingContext={play.timingContext ?? undefined}
                           isFlagship={play.isFlagship}
                           locked={false}
-                          onPrimaryAction={onNavigateToSport ? () => onNavigateToSport(play.routeTarget) : undefined}
+                          onPrimaryAction={buildPrimaryAction(play, relatedFor(play.id))}
                           onAddToSlip={onAddToSlip ? () => onAddToSlip(play) : undefined}
                           market={play.market}
                           gameId={play.gameId}
@@ -148,6 +198,7 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPl
                           currentStats={play.currentStats}
                           lastABContact={play.lastABContact}
                           matchup={play.matchup}
+                          footerSlot={buildFooterSlot(relatedFor(play.id), play)}
                         />
                       ))}
                     </div>
@@ -173,7 +224,7 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPl
                         timingContext={play.timingContext ?? undefined}
                         isFlagship={play.isFlagship}
                         locked={false}
-                        onPrimaryAction={onNavigateToSport ? () => onNavigateToSport(play.routeTarget) : undefined}
+                        onPrimaryAction={buildPrimaryAction(play, relatedFor(play.id))}
                         onAddToSlip={onAddToSlip ? () => onAddToSlip(play) : undefined}
                         market={play.market}
                         gameId={play.gameId}
@@ -181,6 +232,7 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPl
                         currentStats={play.currentStats}
                         lastABContact={play.lastABContact}
                         matchup={play.matchup}
+                        footerSlot={buildFooterSlot(relatedFor(play.id), play)}
                       />
                     ))}
                   </div>
@@ -211,8 +263,9 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip }: TopPl
                     timingContext={teaserPlay.timingContext ?? undefined}
                     isFlagship={teaserPlay.isFlagship}
                     locked={false}
-                    onPrimaryAction={onNavigateToSport ? () => onNavigateToSport(teaserPlay.routeTarget) : undefined}
+                    onPrimaryAction={buildPrimaryAction(teaserPlay, relatedFor(teaserPlay.id))}
                     onAddToSlip={onAddToSlip ? () => onAddToSlip(teaserPlay) : undefined}
+                    footerSlot={buildFooterSlot(relatedFor(teaserPlay.id), teaserPlay)}
                     market={teaserPlay.market}
                     gameId={teaserPlay.gameId}
                     playerId={teaserPlay.playerId}
