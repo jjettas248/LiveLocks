@@ -3110,14 +3110,106 @@ export class DatabaseStorage implements IStorage {
 
   async getHrRadarAlertForAnalyze(playerId: string, gameId: string): Promise<HrRadarAlert | null> {
     const today = todayET();
-    const rows = await db.select().from(hrRadarAlerts)
+    const todayRows = await db.select().from(hrRadarAlerts)
       .where(and(
         eq(hrRadarAlerts.sessionDate, today),
         eq(hrRadarAlerts.gameId, gameId),
         eq(hrRadarAlerts.playerId, playerId),
       ))
       .limit(1);
-    return rows[0] ?? null;
+    if (todayRows[0]) return todayRows[0];
+    // Fallback: latest matching row regardless of session date — supports historical analyze.
+    const anyRows = await db.select().from(hrRadarAlerts)
+      .where(and(
+        eq(hrRadarAlerts.gameId, gameId),
+        eq(hrRadarAlerts.playerId, playerId),
+      ))
+      .orderBy(desc(hrRadarAlerts.detectedAt))
+      .limit(1);
+    return anyRows[0] ?? null;
+  }
+
+  async getHrRadarAnalyzeSource(playerId: string, gameId: string): Promise<{
+    source: "live_alert" | "historical_alert" | "graded_hit" | "graded_miss" | "analytics_fallback";
+    alert: any;
+  } | null> {
+    const today = todayET();
+    // 1. today's live alert
+    const todayRows = await db.select().from(hrRadarAlerts)
+      .where(and(
+        eq(hrRadarAlerts.sessionDate, today),
+        eq(hrRadarAlerts.gameId, gameId),
+        eq(hrRadarAlerts.playerId, playerId),
+      ))
+      .limit(1);
+    if (todayRows[0]) return { source: "live_alert", alert: todayRows[0] };
+
+    // 2. latest alert any session
+    const anyRows = await db.select().from(hrRadarAlerts)
+      .where(and(
+        eq(hrRadarAlerts.gameId, gameId),
+        eq(hrRadarAlerts.playerId, playerId),
+      ))
+      .orderBy(desc(hrRadarAlerts.detectedAt))
+      .limit(1);
+    if (anyRows[0]) {
+      const r = anyRows[0];
+      const source = r.status === "hit" ? "graded_hit" : r.status === "miss" ? "graded_miss" : "historical_alert";
+      return { source, alert: r };
+    }
+
+    // 3. analytics fallback (synthesize an alert-shaped object)
+    try {
+      const analyticsRows = await db.select().from(hrRadarAnalytics)
+        .where(and(
+          eq(hrRadarAnalytics.gameId, gameId),
+          eq(hrRadarAnalytics.playerId, playerId),
+        ))
+        .orderBy(desc(hrRadarAnalytics.createdAt))
+        .limit(1);
+      const a = analyticsRows[0];
+      if (a) {
+        const synthAlert = {
+          id: `analytics-${a.id}`,
+          sessionDate: a.sessionDate,
+          gameId: a.gameId,
+          playerId: a.playerId,
+          playerName: a.playerName,
+          team: a.team,
+          status: a.result === "hit" ? "hit" : a.result === "miss" ? "miss" : "live",
+          detectedLabel: a.detectedLabel ?? null,
+          detectedInning: null,
+          detectedHalf: null,
+          hitLabel: a.hitLabel ?? null,
+          hitInning: null,
+          hitHalf: null,
+          initialReadinessScore: a.detectedScore ?? "0",
+          currentReadinessScore: a.peakScore ?? a.detectedScore ?? "0",
+          peakReadinessScore: a.peakScore ?? a.detectedScore ?? "0",
+          confidenceTier: a.confidenceTier,
+          signalState: null,
+          triggerTags: a.triggerTags ?? [],
+          summaryText: null,
+          alertPath: null,
+          conversionPct: null,
+          gradingStatus: a.result === "hit" ? "called_hit" : a.result === "miss" ? "called_miss" : "active",
+          gradingReason: "analytics_fallback",
+          matchedBeforeHr: null,
+          fallbackCreated: false,
+          userVisible: true,
+          signalDetectedAt: a.createdAt,
+          signalInning: null,
+          signalHalf: null,
+          hitDetectedAt: null,
+          detectedAt: a.createdAt ?? new Date(),
+          resolvedAt: null,
+          scoreIncreased: false,
+          scoreIncreaseLabel: null,
+        };
+        return { source: "analytics_fallback", alert: synthAlert };
+      }
+    } catch {}
+    return null;
   }
 
   async getHrRadarAnalytics(filters?: {

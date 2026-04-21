@@ -1019,7 +1019,7 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
 }
 
 function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; gameId: string; onClose: () => void }) {
-  const { data, isLoading, error } = useQuery<{ alert: any; analyze: any }>({
+  const { data, isLoading, error } = useQuery<{ alert: any; analyze: any; source?: string; partial?: boolean }>({
     queryKey: ["/api/mlb/hr-radar-analyze", playerId, gameId],
     enabled: !!playerId && !!gameId,
   });
@@ -1037,7 +1037,17 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
     );
   }
 
-  if (error || !data?.alert) {
+  // Hard fail only when route truly returned nothing (404/500 with no alert AND no analyze).
+  const hasAlert = !!data?.alert;
+  const hasAnalyze = !!data?.analyze && (
+    (data.analyze.priorABs?.length ?? 0) > 0 ||
+    data.analyze.hrFactors != null ||
+    data.analyze.hrBuildScore != null ||
+    (data.analyze.explanationBullets?.length ?? 0) > 0
+  );
+  // Hard-fail only when both data channels are truly empty. A refetch error with
+  // prior cached data should still render — `data` carries the previous payload.
+  if (!hasAlert && !hasAnalyze) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose} data-testid="modal-hr-analyze">
         <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
@@ -1048,8 +1058,9 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
     );
   }
 
-  const alert = data.alert;
-  const analyze = data.analyze;
+  const alert = data!.alert ?? {};
+  const analyze = data!.analyze ?? { priorABs: [], explanationBullets: [] };
+  const isLimited = !!data!.partial || data!.source === "analytics_fallback" || data!.source === "historical_alert";
   const priorABs: Array<{ abNumber: number; exitVelocity: number | null; launchAngle: number | null; distance: number | null; outcome: string; isBarrel: boolean; isHardHit: boolean; perABxBA?: number | null; contactGrade?: string; hrProbability?: number }> = analyze?.priorABs ?? [];
   const initialScore = parseFloat(alert.initialReadinessScore ?? "0");
   const currentScore = parseFloat(alert.currentReadinessScore ?? "0");
@@ -1078,6 +1089,11 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
         </div>
 
         <div className="p-4 space-y-4">
+          {isLimited && (
+            <div className="text-[10px] px-2 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 font-semibold" data-testid="text-limited-analysis">
+              Limited analysis available — live game data is no longer cached for this play.
+            </div>
+          )}
           <div className="grid grid-cols-3 gap-3">
             <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
               <div className="text-[9px] text-muted-foreground">Initial</div>
@@ -1476,9 +1492,225 @@ type GradingHistoryDay = {
   hitRate: number;
 };
 
+type RadarSortMode = "priority" | "score" | "conversion" | "detected" | "inning" | "team";
+type RadarViewMode = "cards" | "compact";
+
+function HRRadarControls({
+  search, setSearch, sort, setSort, viewMode, setViewMode,
+  collapseFormation, setCollapseFormation, collapseCooldown, setCollapseCooldown,
+  formationCount, cooldownCount,
+}: {
+  search: string; setSearch: (s: string) => void;
+  sort: RadarSortMode; setSort: (m: RadarSortMode) => void;
+  viewMode: RadarViewMode; setViewMode: (m: RadarViewMode) => void;
+  collapseFormation: boolean; setCollapseFormation: (b: boolean) => void;
+  collapseCooldown: boolean; setCollapseCooldown: (b: boolean) => void;
+  formationCount: number; cooldownCount: number;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 p-2 rounded-lg bg-card border border-border/40" data-testid="hr-radar-controls">
+      <input
+        type="text"
+        placeholder="Search player or team…"
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        className="flex-1 min-w-[140px] text-xs px-2 py-1.5 rounded-md bg-muted/20 border border-border/30 text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:border-primary/50"
+        data-testid="input-radar-search"
+      />
+      <select
+        value={sort}
+        onChange={e => setSort(e.target.value as RadarSortMode)}
+        className="text-xs px-2 py-1.5 rounded-md bg-muted/20 border border-border/30 text-foreground focus:outline-none"
+        data-testid="select-radar-sort"
+      >
+        <option value="priority">Sort: Priority</option>
+        <option value="score">Sort: Highest Score</option>
+        <option value="conversion">Sort: Highest Conv.</option>
+        <option value="detected">Sort: Newest Detected</option>
+        <option value="inning">Sort: Inning</option>
+        <option value="team">Sort: Team</option>
+      </select>
+      <div className="flex items-center rounded-md overflow-hidden border border-border/30 bg-muted/20">
+        <button
+          onClick={() => setViewMode("cards")}
+          className={`text-[10px] font-bold px-2 py-1.5 ${viewMode === "cards" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-muted/40"}`}
+          data-testid="button-view-cards"
+        >Cards</button>
+        <button
+          onClick={() => setViewMode("compact")}
+          className={`text-[10px] font-bold px-2 py-1.5 ${viewMode === "compact" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-muted/40"}`}
+          data-testid="button-view-compact"
+        >Compact</button>
+      </div>
+      {formationCount > 0 && (
+        <button
+          onClick={() => setCollapseFormation(!collapseFormation)}
+          className={`text-[10px] font-semibold px-2 py-1.5 rounded-md border border-border/30 ${collapseFormation ? "bg-muted/20 text-muted-foreground" : "bg-yellow-500/10 text-yellow-400"}`}
+          data-testid="button-toggle-formation"
+        >
+          Early {collapseFormation ? "▸" : "▾"} {formationCount}
+        </button>
+      )}
+      {cooldownCount > 0 && (
+        <button
+          onClick={() => setCollapseCooldown(!collapseCooldown)}
+          className={`text-[10px] font-semibold px-2 py-1.5 rounded-md border border-border/30 ${collapseCooldown ? "bg-muted/20 text-muted-foreground" : "bg-blue-500/10 text-blue-400"}`}
+          data-testid="button-toggle-cooldown"
+        >
+          Cooldown {collapseCooldown ? "▸" : "▾"} {cooldownCount}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function HRRadarTopThreatStrip({
+  threats, onAnalyze, onAddToSlip,
+}: {
+  threats: HrRadarCardUi[];
+  onAnalyze: (c: HrRadarCardUi) => void;
+  onAddToSlip?: (sig: MlbSignalData) => void;
+}) {
+  if (threats.length === 0) return null;
+  return (
+    <div className="rounded-xl border border-red-500/20 bg-gradient-to-r from-red-500/5 to-orange-500/5 p-2.5 space-y-2" data-testid="hr-top-threat-strip">
+      <div className="flex items-center gap-1.5">
+        <Flame className="w-3.5 h-3.5 text-red-400" />
+        <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider">Top Threats</span>
+        <span className="text-[9px] text-muted-foreground">{threats.length} pinned</span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+        {threats.map(c => {
+          const score = c.radarScore ?? c.confidenceScore ?? 0;
+          const conv = c.hrConversionCalibrated ?? null;
+          const inningLabel = c.detectedInning != null ? `I${c.detectedInning}` : c.latestInning != null ? `I${c.latestInning}` : "";
+          const stateColor = c.signalState === "PEAK" ? "text-red-400 bg-red-500/15"
+            : c.signalState === "BUILDING" ? "text-orange-400 bg-orange-500/15"
+            : "text-yellow-400 bg-yellow-500/10";
+          return (
+            <div
+              key={`tt-${c.playerId}-${c.gameId}`}
+              className="flex items-center gap-2 p-2 rounded-lg bg-card border border-border/40 hover:border-primary/40 transition-colors"
+              data-testid={`top-threat-${c.playerId}-${c.gameId}`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-foreground truncate">{c.playerName}</span>
+                  <span className="text-[9px] text-muted-foreground">{c.team}</span>
+                </div>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  {c.signalState && <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${stateColor}`}>{c.signalState}</span>}
+                  <span className="text-[9px] font-bold tabular-nums text-foreground">{score.toFixed(1)}/10</span>
+                  {conv != null && conv > 0 && <span className="text-[9px] tabular-nums text-emerald-400">{Math.round(conv * 100)}%</span>}
+                  {inningLabel && <span className="text-[9px] text-muted-foreground">{inningLabel}</span>}
+                </div>
+              </div>
+              <button
+                onClick={() => onAnalyze(c)}
+                className="text-[10px] font-bold px-2 py-1 rounded bg-primary/15 text-primary hover:bg-primary/25"
+                data-testid={`button-analyze-top-${c.playerId}-${c.gameId}`}
+              >Analyze</button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CompactRadarRow({ card, onAnalyze, gameTeams }: {
+  card: HrRadarCardUi;
+  onAnalyze?: (c: HrRadarCardUi) => void;
+  gameTeams: { awayAbbr: string; homeAbbr: string } | null;
+}) {
+  const score = card.radarScore ?? card.confidenceScore ?? 0;
+  const conv = card.hrConversionCalibrated ?? null;
+  const inningLabel = card.detectedInning != null ? `I${card.detectedInning}` : card.latestInning != null ? `I${card.latestInning}` : "";
+  const stateColor = card.signalState === "PEAK" ? "text-red-400 bg-red-500/15"
+    : card.signalState === "BUILDING" ? "text-orange-400 bg-orange-500/15"
+    : card.signalState === "FORMATION" ? "text-yellow-400 bg-yellow-500/10"
+    : card.signalState === "COOLDOWN" ? "text-blue-400 bg-blue-500/10"
+    : "text-muted-foreground bg-muted/20";
+  const matchup = gameTeams ? `${gameTeams.awayAbbr}@${gameTeams.homeAbbr}` : "";
+  return (
+    <div className="flex items-center gap-2 p-2 rounded-lg border border-border/30 bg-card hover:border-primary/40 transition-colors" data-testid={`compact-row-${card.playerId}-${card.gameId}`}>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-bold text-foreground truncate">{card.playerName}</span>
+          <span className="text-[9px] text-muted-foreground">{card.team}</span>
+          {matchup && <span className="text-[9px] text-muted-foreground/60">· {matchup}</span>}
+        </div>
+        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+          {card.signalState && <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${stateColor}`}>{card.signalState}</span>}
+          <span className="text-[9px] font-bold tabular-nums text-foreground">{score.toFixed(1)}/10</span>
+          {conv != null && conv > 0 && <span className="text-[9px] tabular-nums text-emerald-400">{Math.round(conv * 100)}%</span>}
+          {inningLabel && <span className="text-[9px] text-muted-foreground">{inningLabel}</span>}
+          {card.formattedReason && <span className="text-[9px] text-muted-foreground truncate max-w-[160px]">{card.formattedReason}</span>}
+        </div>
+      </div>
+      {onAnalyze && (
+        <button
+          onClick={() => onAnalyze(card)}
+          className="text-[10px] font-bold px-2 py-1 rounded bg-muted/30 text-muted-foreground hover:bg-primary/20 hover:text-primary"
+          data-testid={`button-analyze-compact-${card.playerId}`}
+        >Analyze</button>
+      )}
+    </div>
+  );
+}
+
+function CompactResolvedRadarRow({ card, onAnalyze, gameTeams, kind }: {
+  card: HrRadarCardUi;
+  onAnalyze?: (c: HrRadarCardUi) => void;
+  gameTeams: { awayAbbr: string; homeAbbr: string } | null;
+  kind: "cashed" | "missed";
+}) {
+  const peak = card.peakScore ?? card.radarScore ?? card.confidenceScore ?? 0;
+  const matchup = gameTeams ? `${gameTeams.awayAbbr}@${gameTeams.homeAbbr}` : "";
+  const accentBorder = kind === "cashed" ? "border-emerald-500/30" : "border-zinc-500/20";
+  const accentBg = kind === "cashed" ? "bg-emerald-500/5" : "bg-zinc-500/5";
+  const Icon = kind === "cashed" ? Trophy : X;
+  const iconColor = kind === "cashed" ? "text-emerald-400" : "text-zinc-400";
+  const detectedLabel = card.detectedLabel || (card.detectedInning != null ? `I${card.detectedInning}` : "");
+  const hitLabel = kind === "cashed" ? (card.hitInning != null ? `HR I${card.hitInning}` : "HR") : "No HR";
+  const tags = (card.evidenceTags ?? []).slice(0, 2);
+  return (
+    <div className={`flex items-center gap-2 p-2 rounded-lg border ${accentBorder} ${accentBg}`} data-testid={`compact-resolved-${kind}-${card.playerId}-${card.gameId}`}>
+      <Icon className={`w-3.5 h-3.5 shrink-0 ${iconColor}`} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-bold text-foreground truncate">{card.playerName}</span>
+          <span className="text-[9px] text-muted-foreground">{card.team}</span>
+          {matchup && <span className="text-[9px] text-muted-foreground/60">· {matchup}</span>}
+        </div>
+        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+          {detectedLabel && <span className="text-[9px] text-muted-foreground">Det {detectedLabel}</span>}
+          <span className={`text-[9px] font-semibold ${iconColor}`}>{hitLabel}</span>
+          {peak > 0 && <span className="text-[9px] tabular-nums text-foreground">peak {peak.toFixed(1)}</span>}
+          {tags.map((t, i) => (
+            <span key={i} className="text-[8px] px-1 py-0.5 rounded bg-muted/30 text-muted-foreground">{t}</span>
+          ))}
+        </div>
+      </div>
+      {onAnalyze && (
+        <button
+          onClick={() => onAnalyze(card)}
+          className="text-[10px] font-bold px-2 py-1 rounded bg-muted/30 text-muted-foreground hover:bg-primary/20 hover:text-primary"
+          data-testid={`button-analyze-resolved-${card.playerId}`}
+        >Analyze</button>
+      )}
+    </div>
+  );
+}
+
 function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isElite: boolean; onAddToSlip?: (sig: MlbSignalData) => void; onOpenHrDetails?: (card: HrRadarCardUi) => void; games?: MLBGame[] }) {
   const [radarFilter, setRadarFilter] = useState<RadarFilterMode>("all");
   const [historyDate, setHistoryDate] = useState<string | null>(null);
+  const [radarSearch, setRadarSearch] = useState("");
+  const [radarSort, setRadarSort] = useState<RadarSortMode>("priority");
+  const [radarViewMode, setRadarViewMode] = useState<RadarViewMode>("cards");
+  const [collapseFormation, setCollapseFormation] = useState(true);
+  const [collapseCooldown, setCollapseCooldown] = useState(true);
   const { data: hrData, isLoading } = useQuery<HRRadarResponse>({
     queryKey: ["/api/mlb/hr-radar"],
     refetchInterval: 20_000,
@@ -1701,10 +1933,32 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
   };
 
   const liveCards = allCards.filter(c => c.status !== "CASHED" && c.status !== "MISSED");
-  const peakCards = liveCards.filter(c => c.signalState === "PEAK").sort(sortByPriority);
-  const buildingCards = liveCards.filter(c => c.signalState === "BUILDING").sort(sortByPriority);
-  const formationCards = liveCards.filter(c => c.signalState === "FORMATION" || (!c.signalState && c.status !== "CASHED" && c.status !== "MISSED")).sort(sortByPriority);
-  const cooldownCards = liveCards.filter(c => c.signalState === "COOLDOWN").sort(sortByPriority);
+
+  const searchTerm = radarSearch.trim().toLowerCase();
+  const matchesSearch = (c: HrRadarCardUi) =>
+    !searchTerm || (c.playerName ?? "").toLowerCase().includes(searchTerm) || (c.team ?? "").toLowerCase().includes(searchTerm);
+
+  const sorter = (a: HrRadarCardUi, b: HrRadarCardUi) => {
+    switch (radarSort) {
+      case "score": return (b.radarScore ?? b.confidenceScore ?? 0) - (a.radarScore ?? a.confidenceScore ?? 0);
+      case "conversion": return (b.hrConversionCalibrated ?? 0) - (a.hrConversionCalibrated ?? 0);
+      case "detected": return (b.detectedInning ?? -1) - (a.detectedInning ?? -1);
+      case "inning": return (a.latestInning ?? 99) - (b.latestInning ?? 99);
+      case "team": return (a.team ?? "").localeCompare(b.team ?? "");
+      default: return sortByPriority(a, b);
+    }
+  };
+
+  const peakCards = liveCards.filter(c => c.signalState === "PEAK").filter(matchesSearch).sort(sorter);
+  const buildingCards = liveCards.filter(c => c.signalState === "BUILDING").filter(matchesSearch).sort(sorter);
+  const formationCards = liveCards.filter(c => c.signalState === "FORMATION" || (!c.signalState && c.status !== "CASHED" && c.status !== "MISSED")).filter(matchesSearch).sort(sorter);
+  const cooldownCards = liveCards.filter(c => c.signalState === "COOLDOWN").filter(matchesSearch).sort(sorter);
+
+  const topThreats = [...peakCards, ...buildingCards].sort(sortByPriority).slice(0, 6);
+
+  const handleAnalyzeOpen = (c: HrRadarCardUi) => {
+    if (onOpenHrDetails) onOpenHrDetails(c);
+  };
 
   const isEmpty = peakCards.length === 0 && buildingCards.length === 0 && formationCards.length === 0 && cooldownCards.length === 0 && dedupCashed.length === 0 && missedCards.length === 0;
 
@@ -1749,8 +2003,36 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         ))}
       </div>
 
+      {showActive && liveCards.length > 0 && (
+        <HRRadarControls
+          search={radarSearch} setSearch={setRadarSearch}
+          sort={radarSort} setSort={setRadarSort}
+          viewMode={radarViewMode} setViewMode={setRadarViewMode}
+          collapseFormation={collapseFormation} setCollapseFormation={setCollapseFormation}
+          collapseCooldown={collapseCooldown} setCollapseCooldown={setCollapseCooldown}
+          formationCount={formationCards.length} cooldownCount={cooldownCards.length}
+        />
+      )}
+
+      {showActive && liveCards.length > 0 && activeCount === 0 && searchTerm && (
+        <div className="rounded-xl border border-border/40 bg-card p-6 text-center space-y-2" data-testid="hr-search-no-matches">
+          <Target className="w-6 h-6 text-muted-foreground/30 mx-auto" />
+          <div className="text-sm font-bold text-foreground">No matches for "{radarSearch}"</div>
+          <div className="text-xs text-muted-foreground">{liveCards.length} active signal{liveCards.length === 1 ? "" : "s"} hidden by your search.</div>
+          <button
+            onClick={() => setRadarSearch("")}
+            className="inline-block px-3 py-1.5 rounded-lg bg-primary/15 text-primary text-xs font-bold"
+            data-testid="button-clear-radar-search"
+          >Clear search</button>
+        </div>
+      )}
+
+      {showActive && topThreats.length > 0 && (
+        <HRRadarTopThreatStrip threats={topThreats} onAnalyze={handleAnalyzeOpen} onAddToSlip={onAddToSlip} />
+      )}
+
       {showActive && peakCards.length > 0 && (
-        <div className="space-y-3" data-testid="hr-section-peak">
+        <div className="space-y-2" data-testid="hr-section-peak">
           <div className="flex items-center gap-2">
             <div className="relative">
               <Flame className="w-4.5 h-4.5 text-red-500" />
@@ -1760,13 +2042,21 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
             <span className="text-sm font-bold text-foreground">Peak HR Threats</span>
             <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 animate-pulse" data-testid="badge-peak-count">{peakCards.length} BET NOW</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {(isElite ? peakCards : peakCards.slice(0, 2)).map(c => (
-              <RadarCard key={`peak-${c.playerId}-${c.gameId}`} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
-            ))}
-          </div>
+          {radarViewMode === "compact" ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+              {(isElite ? peakCards : peakCards.slice(0, 2)).map(c => (
+                <CompactRadarRow key={`peak-${c.playerId}-${c.gameId}`} card={c} onAnalyze={handleAnalyzeOpen} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {(isElite ? peakCards : peakCards.slice(0, 2)).map(c => (
+                <RadarCard key={`peak-${c.playerId}-${c.gameId}`} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+              ))}
+            </div>
+          )}
           {!isElite && peakCards.length > 2 && (
-            <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-center space-y-2">
+            <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 text-center space-y-2">
               <div className="text-sm font-bold text-foreground">{peakCards.length - 2} more peak signal{peakCards.length - 2 !== 1 ? "s" : ""}</div>
               <a href="/upgrade" data-testid="link-hr-upgrade" className="inline-block px-4 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-xs">
                 Upgrade to All Sports →
@@ -1779,48 +2069,69 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
       {showActive && <RadarStatsBar active={activeCount} cashed={cashedCount} missed={missedCount} />}
 
       {showActive && buildingCards.length > 0 && (
-        <div className="space-y-3" data-testid="hr-section-building">
+        <div className="space-y-2" data-testid="hr-section-building">
           <div className="flex items-center gap-2">
             <Zap className="w-4 h-4 text-orange-500" />
             <span className="text-sm font-bold text-foreground">Building Pressure</span>
             <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-400" data-testid="badge-building-count">{buildingCards.length} PREPARE</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {buildingCards.map(c => (
-              <RadarCard key={`building-${c.playerId}-${c.gameId}`} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
-            ))}
-          </div>
+          {radarViewMode === "compact" ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+              {buildingCards.map(c => (
+                <CompactRadarRow key={`building-${c.playerId}-${c.gameId}`} card={c} onAnalyze={handleAnalyzeOpen} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {buildingCards.map(c => (
+                <RadarCard key={`building-${c.playerId}-${c.gameId}`} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {showActive && formationCards.length > 0 && (
-        <div className="space-y-3" data-testid="hr-section-formation">
-          <div className="flex items-center gap-2">
+        <div className="space-y-2" data-testid="hr-section-formation">
+          <button
+            onClick={() => setCollapseFormation(!collapseFormation)}
+            className="w-full flex items-center gap-2 p-2 rounded-lg bg-card border border-border/40 hover:bg-muted/20 transition-colors"
+            data-testid="header-toggle-formation"
+          >
             <Eye className="w-4 h-4 text-yellow-500" />
             <span className="text-sm font-bold text-foreground">Early Signals</span>
             <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400" data-testid="badge-formation-count">{formationCards.length} MONITOR</span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {formationCards.map(c => (
-              <RadarCard key={`formation-${c.playerId}-${c.gameId}`} card={c} onQuickAdd={onAddToSlip} onOpenDetails={onOpenHrDetails} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
-            ))}
-          </div>
+            <span className="ml-auto text-xs text-muted-foreground">{collapseFormation ? "▸ show" : "▾ hide"}</span>
+          </button>
+          {!collapseFormation && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+              {formationCards.map(c => (
+                <CompactRadarRow key={`formation-${c.playerId}-${c.gameId}`} card={c} onAnalyze={handleAnalyzeOpen} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {showActive && cooldownCards.length > 0 && (
-        <div className="space-y-3" data-testid="hr-section-cooldown">
-          <div className="flex items-center gap-2">
+        <div className="space-y-2" data-testid="hr-section-cooldown">
+          <button
+            onClick={() => setCollapseCooldown(!collapseCooldown)}
+            className="w-full flex items-center gap-2 p-2 rounded-lg bg-card border border-border/40 hover:bg-muted/20 transition-colors"
+            data-testid="header-toggle-cooldown"
+          >
             <RefreshCw className="w-4 h-4 text-blue-400" />
             <span className="text-sm font-bold text-foreground">Cooldown</span>
             <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400" data-testid="badge-cooldown-count">{cooldownCards.length}</span>
-          </div>
-          <p className="text-[10px] text-muted-foreground -mt-1">Recently alerted — monitoring for re-escalation</p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {cooldownCards.map(c => (
-              <RadarCard key={`cooldown-${c.playerId}-${c.gameId}`} card={c} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
-            ))}
-          </div>
+            <span className="ml-auto text-xs text-muted-foreground">{collapseCooldown ? "▸ show" : "▾ hide"}</span>
+          </button>
+          {!collapseCooldown && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+              {cooldownCards.map(c => (
+                <CompactRadarRow key={`cooldown-${c.playerId}-${c.gameId}`} card={c} onAnalyze={handleAnalyzeOpen} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -1857,30 +2168,30 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
       )}
 
       {showCashed && dedupCashed.length > 0 && !(gradingSummary && (gradingSummary.totalGraded > 0 || canonicalHits.length > 0)) && (
-        <div className="space-y-3" data-testid="hr-live-cashed">
+        <div className="space-y-2" data-testid="hr-live-cashed">
           <div className="flex items-center gap-2">
             <Trophy className="w-4 h-4 text-emerald-400" />
             <span className="text-sm font-bold text-foreground">Cashed Today</span>
             <span className="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-bold">{dedupCashed.length}</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
             {dedupCashed.map(c => (
-              <RadarCard key={`cashed-${c.playerId}-${c.gameId}`} card={c} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+              <CompactResolvedRadarRow key={`cashed-${c.playerId}-${c.gameId}`} card={c} kind="cashed" onAnalyze={handleAnalyzeOpen} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
             ))}
           </div>
         </div>
       )}
 
       {showMissed && missedCards.length > 0 && !(gradingSummary && (gradingSummary.totalGraded > 0 || canonicalMisses.length > 0)) && (
-        <div className="space-y-3" data-testid="hr-live-missed">
+        <div className="space-y-2" data-testid="hr-live-missed">
           <div className="flex items-center gap-2">
             <X className="w-4 h-4 text-zinc-400" />
             <span className="text-sm font-bold text-foreground">Missed</span>
             <span className="text-[9px] px-2 py-0.5 rounded-full bg-zinc-500/20 text-zinc-400 font-bold">{missedCards.length}</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {missedCards.slice(0, 6).map(c => (
-              <RadarCard key={`missed-${c.playerId}-${c.gameId}`} card={c} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+            {missedCards.slice(0, 12).map(c => (
+              <CompactResolvedRadarRow key={`missed-${c.playerId}-${c.gameId}`} card={c} kind="missed" onAnalyze={handleAnalyzeOpen} gameTeams={gameTeamsMap.get(c.gameId) ?? null} />
             ))}
           </div>
         </div>

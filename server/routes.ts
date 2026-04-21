@@ -2146,13 +2146,14 @@ export async function registerRoutes(
     try {
       const playerId = String(req.params.playerId);
       const gameId = String(req.params.gameId);
-      const alert = await storage.getHrRadarAlertForAnalyze(playerId, gameId);
-      if (!alert) return res.status(404).json({ error: "Alert not found" });
+      const sourceResult = await storage.getHrRadarAnalyzeSource(playerId, gameId);
+      if (!sourceResult) return res.status(404).json({ error: "Alert not found" });
+      const { source, alert } = sourceResult;
 
-      const contactCache = mlbGameCache.contactData[gameId];
+      const contactCache = mlbGameCache.contactData?.[gameId];
       const playerContact = contactCache?.byPlayerId?.[playerId];
-      const gameState = mlbGameCache.gameState[gameId];
-      const boxPlayer = mlbGameCache.gameBoxScore[gameId]?.byPlayerId?.[playerId];
+      const gameState = mlbGameCache.gameState?.[gameId];
+      const boxPlayer = mlbGameCache.gameBoxScore?.[gameId]?.byPlayerId?.[playerId];
 
       const contactEntries = (playerContact?.priorABResults ?? []).map((ab: any, idx: number) => ({
         abNumber: idx + 1,
@@ -2196,8 +2197,11 @@ export async function registerRoutes(
       const edgeEntry = mlbEdgeCache.get(gameId);
       const rawOutput = edgeEntry?.outputs?.find((o: any) => o.playerId === playerId && o.market === "home_runs");
 
+      const partial = priorABs.length === 0 && !rawOutput && !gameState;
       return res.json({
         alert,
+        source,
+        partial,
         analyze: {
           priorABs,
           completedAB: boxAB,
