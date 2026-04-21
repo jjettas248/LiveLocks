@@ -289,6 +289,15 @@ export async function syncGameState(statsPk: string, cacheKey?: string): Promise
     const plays = liveData.plays ?? {};
     const boxTeams = liveData.boxscore?.teams ?? {};
 
+    // Canonical session date for HR Radar ledger — derived from MLB Stats API
+    // officialDate so late-night/midnight-rollover games persist & match under
+    // a stable, game-tied date instead of drifting wall-clock todayET().
+    const officialDate: string | undefined = data?.gameData?.datetime?.officialDate;
+    if (officialDate) {
+      const { setMlbGameSessionDate } = await import("../utils/mlbSessionDate");
+      setMlbGameSessionDate(gameId, officialDate);
+    }
+
     // Inning / top-bottom
     // Innings only advance — never let a stale-or-null Stats API response
     // regress the cached value. If the API returns nothing and we have no

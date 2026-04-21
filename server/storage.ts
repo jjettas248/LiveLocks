@@ -1,5 +1,6 @@
 import { db } from "./db";
 import { todayET, daysAgoET } from "./utils/dateUtils";
+import { resolveMlbGameSessionDate } from "./utils/mlbSessionDate";
 import { calculateRemainingMinutes } from "./minutesModel";
 import { getPlayerUsage, getTeamDefenseMatchup, computeUsageAdjustment, computeDefenseMultiplier } from "./services/nbaStatsService";
 import { classifyArchetype as classifyNBAArchetype, type NBAArchetype, VARIANCE_MULTIPLIERS, MINUTES_FRAGILITY_MULTIPLIERS, CORRELATION_DEFAULTS, COMBO_VARIANCE_EXTRA, isVolatileArchetype, isImpactedArchetype, getSafetyCeiling } from "./nba/archetypes";
@@ -2224,10 +2225,12 @@ export class DatabaseStorage implements IStorage {
       const row = inserted[0] ?? null;
       if (row) {
         console.log(`[HR_RADAR_SIGNAL_EVENT] type=${row.eventType} game=${row.gameId} player=${row.playerId} inning=${row.inning ?? "n/a"}${row.half ?? ""} score=${row.score ?? "n/a"} alertId=${row.alertId ?? "n/a"}`);
+        console.log(`[HR_LEDGER_WRITE] sessionDate=${row.sessionDate} gameId=${row.gameId} playerId=${row.playerId} eventType=${row.eventType} score=${row.score ?? "n/a"} tier=${row.confidenceTier ?? "n/a"} inning=${row.inning ?? "n/a"}${row.half ?? ""} source=${row.source ?? "n/a"} alertId=${row.alertId ?? "n/a"}`);
       }
       return row;
     } catch (err: any) {
       console.warn(`[HR_RADAR_SIGNAL_EVENT] Failed: ${err.message}`);
+      console.warn(`[HR_LEDGER_WRITE] FAILED gameId=${(event as any)?.gameId ?? "n/a"} playerId=${(event as any)?.playerId ?? "n/a"} eventType=${(event as any)?.eventType ?? "n/a"} err=${err.message}`);
       return null;
     }
   }
@@ -2256,7 +2259,8 @@ export class DatabaseStorage implements IStorage {
     gradingReason: string;
     matchMethod: "direct_pre_hr_signal" | "post_hr_fallback" | "player_game_only" | "none";
   }> {
-    const today = todayET();
+    const today = resolveMlbGameSessionDate(params.gameId);
+    console.log(`[HR_LEDGER_MATCH] gameId=${params.gameId} playerId=${params.playerId} sessionDate=${today} hrInning=${params.hrInning}${params.hrHalf} hrEndTimeMs=${params.hrEndTimeMs ?? "n/a"}`);
     const hrEnd = (params.hrEndTimeMs && Number.isFinite(params.hrEndTimeMs)) ? params.hrEndTimeMs : null;
     try {
       const alertRows = await db.select().from(hrRadarAlerts)
@@ -2356,7 +2360,7 @@ export class DatabaseStorage implements IStorage {
     diagnosticsSnapshot?: Record<string, unknown> | null;
   }): Promise<HrRadarAlert | null> {
     try {
-      const today = todayET();
+      const today = resolveMlbGameSessionDate(data.gameId);
       const halfLabel = data.half === "top" ? "T" : "B";
       const detectedLabel = `${halfLabel}${data.inning}`;
       const existing = await db.select().from(hrRadarAlerts)
@@ -2419,6 +2423,29 @@ export class DatabaseStorage implements IStorage {
             half: data.half,
             source: "engine",
           } as InsertHrRadarSignalEvent);
+        } else {
+          // Downgrade tracking: append a chronological 'downgraded' event when the
+          // current evaluation drops the score by ≥5 vs prior tick (sticky stored
+          // tier means we don't visibly downgrade, but the ledger still records
+          // the dip for decision-ladder ranking + audit trail).
+          const decreased = prevScore - newScore >= 5;
+          if (decreased) {
+            console.log(`[HR_RADAR_SCORE_DOWNGRADE] playerId=${data.playerId} previousScore=${prevScore} newScore=${newScore} drop=${(prevScore - newScore).toFixed(1)} inning=${data.inning}${halfLabel}`);
+            await this.appendHrRadarSignalEvent({
+              sessionDate: today, gameId: data.gameId, playerId: data.playerId, team: data.team,
+              alertId: alert.id,
+              eventType: "downgraded",
+              signalState: data.signalState,
+              score: String(newScore),
+              confidenceTier: data.confidenceTier,
+              triggerTags: data.triggerTags as any,
+              drivers: data.diagnosticsSnapshot as any,
+              detectedAt: new Date(),
+              inning: data.inning,
+              half: data.half,
+              source: "engine",
+            } as InsertHrRadarSignalEvent);
+          }
         }
         console.log(`[HR_RADAR_ALERT_UPSERT] UPDATE sessionDate=${today} gameId=${data.gameId} playerId=${data.playerId} detectedLabel=${alert.detectedLabel} currentReadinessScore=${newScore}`);
 
@@ -2497,7 +2524,7 @@ export class DatabaseStorage implements IStorage {
 
   async resolveHrRadarAlertAsHit(playerId: string, gameId: string, hitInningNum: number, hitHalfVal: string, hitLabelVal: string, hrEndTimeMs?: number | null): Promise<number> {
     try {
-      const today = todayET();
+      const today = resolveMlbGameSessionDate(gameId);
       const matchResult = await this.matchHrRadarAlertToHrEvent({
         playerId, gameId,
         hrEndTimeMs: hrEndTimeMs ?? null,
@@ -2534,6 +2561,7 @@ export class DatabaseStorage implements IStorage {
         const count = (result as any).rowCount ?? 0;
         if (count > 0) {
           console.log(`[HR_RADAR_CALLED_HIT] playerId=${playerId} gameId=${gameId} signalLabel=${matchResult.signalHalf}${matchResult.signalInning ?? ""} hitLabel=${hitLabelVal} reason="${matchResult.gradingReason}"`);
+          console.log(`[HR_LEDGER_GRADE] outcome=called_hit sessionDate=${today} gameId=${gameId} playerId=${playerId} signalInning=${matchResult.signalInning ?? "n/a"}${matchResult.signalHalf ?? ""} hitInning=${hitInningNum}${hitHalfVal} alertId=${matchResult.alertId} matchMethod=${matchResult.matchMethod}`);
           await this.appendHrRadarSignalEvent({
             sessionDate: today, gameId, playerId,
             team: "",
@@ -2574,6 +2602,7 @@ export class DatabaseStorage implements IStorage {
         const count = (result as any).rowCount ?? 0;
         if (count > 0) {
           console.log(`[HR_RADAR_LATE_SIGNAL] playerId=${playerId} gameId=${gameId} hitLabel=${hitLabelVal} reason="${matchResult.gradingReason}"`);
+          console.log(`[HR_LEDGER_LATE] sessionDate=${today} gameId=${gameId} playerId=${playerId} signalInning=${matchResult.signalInning ?? "n/a"}${matchResult.signalHalf ?? ""} hitInning=${hitInningNum}${hitHalfVal} alertId=${matchResult.alertId}`);
           await this.appendHrRadarSignalEvent({
             sessionDate: today, gameId, playerId, team: "",
             alertId: matchResult.alertId,
@@ -2588,6 +2617,7 @@ export class DatabaseStorage implements IStorage {
 
       // No qualifying alert at all
       console.log(`[HR_RADAR_UNCALLED] playerId=${playerId} gameId=${gameId} hitLabel=${hitLabelVal} hrEndTimeMs=${hrEndTimeMs ?? "n/a"} reason="${matchResult.gradingReason}" — no called signal, will write admin-only uncalled_hr row`);
+      console.log(`[HR_LEDGER_UNCALLED] sessionDate=${today} gameId=${gameId} playerId=${playerId} hitInning=${hitInningNum}${hitHalfVal} reason="${matchResult.gradingReason}"`);
       return 0;
     } catch (err: any) {
       console.warn(`[HR_RADAR_ALERT_HIT] Failed: ${err.message}`);
@@ -2605,7 +2635,7 @@ export class DatabaseStorage implements IStorage {
     hitLabel: string;
   }): Promise<void> {
     try {
-      const today = todayET();
+      const today = resolveMlbGameSessionDate(data.gameId);
       const existing = await db.select().from(hrRadarAlerts)
         .where(and(
           eq(hrRadarAlerts.sessionDate, today),
@@ -2686,7 +2716,7 @@ export class DatabaseStorage implements IStorage {
 
   async resolveHrRadarAlertAsMiss(playerId: string, gameId: string): Promise<number> {
     try {
-      const today = todayET();
+      const today = resolveMlbGameSessionDate(gameId);
       const result = await db.update(hrRadarAlerts)
         .set({
           status: "miss",
@@ -2716,7 +2746,7 @@ export class DatabaseStorage implements IStorage {
 
   async reconcileHrRadarAlertsForGame(gameId: string, playerHrMap: Map<string, { inning: number; half: string }>): Promise<void> {
     try {
-      const today = todayET();
+      const today = resolveMlbGameSessionDate(gameId);
       const liveAlerts = await db.select().from(hrRadarAlerts)
         .where(and(
           eq(hrRadarAlerts.sessionDate, today),
@@ -2767,6 +2797,7 @@ export class DatabaseStorage implements IStorage {
               })
               .where(eq(hrRadarAlerts.id, alert.id));
             console.log(`[HR_RADAR_CALLED_HIT] (reconcile) playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel} hitLabel=${hitLabel}`);
+            console.log(`[HR_LEDGER_GRADE] outcome=called_hit (reconcile) sessionDate=${today} gameId=${gameId} playerId=${alert.playerId} signalInning=${sigInn ?? "n/a"}${sigHalf ?? ""} hitInning=${hrData.inning}${hrData.half} alertId=${alert.id}`);
           } else {
             // Signal occurred at or after HR — late_signal, admin-only.
             await db.update(hrRadarAlerts)
@@ -2788,6 +2819,7 @@ export class DatabaseStorage implements IStorage {
               })
               .where(eq(hrRadarAlerts.id, alert.id));
             console.log(`[HR_RADAR_LATE_SIGNAL] (reconcile) playerId=${alert.playerId} gameId=${gameId} sig=${sigInn}/${sigHalf} hr=${hrData.inning}/${hrData.half}`);
+            console.log(`[HR_LEDGER_LATE] (reconcile) sessionDate=${today} gameId=${gameId} playerId=${alert.playerId} signalInning=${sigInn ?? "n/a"}${sigHalf ?? ""} hitInning=${hrData.inning}${hrData.half} alertId=${alert.id}`);
           }
         } else {
           await db.update(hrRadarAlerts)
@@ -2802,6 +2834,7 @@ export class DatabaseStorage implements IStorage {
             })
             .where(eq(hrRadarAlerts.id, alert.id));
           console.log(`[HR_RADAR_ALERT_MISS] playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel}`);
+          console.log(`[HR_LEDGER_GRADE] outcome=called_miss (reconcile) sessionDate=${today} gameId=${gameId} playerId=${alert.playerId} detectedLabel=${alert.detectedLabel} alertId=${alert.id}`);
         }
       }
 
