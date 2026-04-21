@@ -2695,21 +2695,13 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     pitcherSignals?: string[] | null;
   } | null>(null);
 
-  // Sticky Result Panel + Smart Auto-Focus: keep the decision zone in view.
+  // Sticky Result Panel + Smart Auto-Focus: pulses+scrolls only on a fresh successful calc,
+  // never on input edits (which can leave a stale calcResult in place).
   const resultRef = useRef<HTMLDivElement | null>(null);
   const [resultPulse, setResultPulse] = useState(0);
-  const calcSignatureRef = useRef<string>("");
 
   useEffect(() => {
-    if (!calcResult) return;
-    const sig = `${calcPlayer?.playerId ?? calcPlayerName}|${calcMarket}|${calcBookLine}`;
-    if (sig === calcSignatureRef.current) return;
-    calcSignatureRef.current = sig;
-
-    // Visual confirmation: brief ring pulse on the result card.
-    setResultPulse((n) => n + 1);
-
-    // Smart auto-scroll: only when the result is offscreen (or on mobile).
+    if (resultPulse === 0) return;
     const node = resultRef.current;
     if (!node) return;
     const rect = node.getBoundingClientRect();
@@ -2717,13 +2709,12 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     const isMobile = (window.innerWidth || document.documentElement.clientWidth) < 1024;
     const fullyVisible = rect.top >= 0 && rect.bottom <= viewportH;
     const mostlyVisible = rect.top >= -40 && rect.top < viewportH * 0.6;
-
     if (isMobile || !fullyVisible) {
       if (!mostlyVisible) {
         node.scrollIntoView({ behavior: "smooth", block: "start" });
       }
     }
-  }, [calcResult, calcPlayer?.playerId, calcMarket, calcBookLine, calcPlayerName]);
+  }, [resultPulse]);
 
   const activeCalcName = calcPlayer?.playerName ?? calcPlayerName;
   const activeCalcTeam = calcPlayer?.teamAbbr ?? "";
@@ -2758,7 +2749,10 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
       const res = await apiRequest("POST", "/api/mlb/calculate-manual", input);
       return res.json();
     },
-    onSuccess: (data) => setCalcResult(data),
+    onSuccess: (data) => {
+      setCalcResult(data);
+      setResultPulse((n) => n + 1);
+    },
   });
 
   const handleBoxScoreClick = (player: MlbPlayerStat) => {
@@ -3168,8 +3162,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                       ref={resultRef}
                       key={`result-${resultPulse}`}
                       data-testid="mlb-result-anchor"
-                      className="lg:sticky lg:top-4 lg:z-10 scroll-mt-4 rounded-xl ring-2 ring-primary/40 ring-offset-2 ring-offset-background animate-in fade-in duration-300"
-                      style={{ animation: "result-pulse 900ms ease-out" }}
+                      className="lg:sticky lg:top-4 lg:z-10 scroll-mt-4 rounded-xl ring-2 ring-primary/40 ring-offset-2 ring-offset-background animate-in fade-in zoom-in-95 duration-300"
                     >
                       <ResultPanel
                         calcResult={calcResult}
