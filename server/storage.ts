@@ -3305,32 +3305,36 @@ export class DatabaseStorage implements IStorage {
     };
 
     // Collapse duplicates by playerId|gameId so a single player only appears
-    // in one section. Prefer the highest-priority section (cashed > attackNow > building > watch > dead).
+    // in one section. Resolved final outcomes (cashed/dead) always supersede
+    // pending active states for the same player|game; among active states,
+    // attackNow > building > watch.
     const seen = new Map<string, { section: keyof typeof sections; entry: HrRadarLadderEntry }>();
     const sectionPriority: Record<keyof typeof sections, number> = {
-      cashed: 0, attackNow: 1, building: 2, watch: 3, dead: 4,
+      cashed: 0, dead: 1, attackNow: 2, building: 3, watch: 4,
     };
 
     for (const r of rows) {
+      // Hidden/admin-only rows must never reach the user-facing ladder.
+      if (r.userVisible === false) continue;
+
       const key = `${r.gameId}|${r.playerId}`;
       const grading = r.gradingStatus ?? "active";
-      const userVisible = r.userVisible !== false;
 
       // Determine target section
       let section: keyof typeof sections;
-      if (grading === "called_hit" && userVisible) {
+      if (grading === "called_hit") {
         section = "cashed";
       } else if (grading === "called_miss" || grading === "uncalled_hr" || grading === "late_signal") {
         section = "dead";
       } else {
-        // active: classify by current signal strength
+        // Active rows — classify using the actual values written by
+        // liveGameOrchestrator: confidenceTier ∈ {monitor,building,strong},
+        // signalState ∈ {watching,live,actionable}.
         const tier = (r.confidenceTier ?? "monitor").toLowerCase();
-        const state = (r.signalState ?? "live").toLowerCase();
-        const score = r.currentReadinessScore ? parseFloat(r.currentReadinessScore) : 0;
-        const peak = r.peakReadinessScore ? parseFloat(r.peakReadinessScore) : 0;
-        if (tier === "elite" || tier === "strong" || state === "elite" || state === "strong" || state === "actionable" || score >= 80) {
+        const state = (r.signalState ?? "watching").toLowerCase();
+        if (tier === "strong" || state === "actionable") {
           section = "attackNow";
-        } else if (tier === "lean" || tier === "heating_up" || tier === "strong_lean" || state === "lean" || state === "heating_up" || (peak >= 65 && score >= 55)) {
+        } else if (tier === "building" || state === "live") {
           section = "building";
         } else {
           section = "watch";

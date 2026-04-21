@@ -6,6 +6,7 @@ import { TopPlays } from "@/components/mlb/TopPlays";
 import { TopLiveOpportunities } from "@/components/mlb/TopLiveOpportunities";
 import { LiveBoard } from "@/components/mlb/LiveBoard";
 import { MlbSignalCard, type MlbSignalData } from "@/components/mlb/MlbSignalCard";
+import { HrRadarLadder, type HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
 import { MlbBoxScore, type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
 import type { MLBSignal } from "@shared/mlbSignal";
 import { ProbabilityRing } from "@/components/probability-ring";
@@ -2877,6 +2878,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
       queryClient.setQueryData(["/api/mlb/live-games"], freshData);
       queryClient.invalidateQueries({ queryKey: ["/api/mlb/edge-feed"] });
       queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar/ladder"] });
     } catch {}
     setTimeout(() => setIsManualRefreshing(false), 1000);
   };
@@ -3327,7 +3329,17 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
       )}
 
       {activeSubTab === "hr_radar" && (
-        <HRRadarSection isElite={isElite} onAddToSlip={handleAddToSlip} onOpenHrDetails={handleHrRadarClick} games={games} />
+        <HrRadarLadder
+          onAddToSlip={handleAddToSlip}
+          onOpenDetails={(entry: HrRadarLadderEntry) => {
+            handleHrRadarClick({
+              playerId: entry.playerId,
+              playerName: entry.playerName,
+              team: entry.team,
+              gameId: entry.gameId,
+            } as unknown as HrRadarCardUi);
+          }}
+        />
       )}
 
       {analyzeTarget && (
