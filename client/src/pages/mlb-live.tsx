@@ -2695,6 +2695,36 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     pitcherSignals?: string[] | null;
   } | null>(null);
 
+  // Sticky Result Panel + Smart Auto-Focus: keep the decision zone in view.
+  const resultRef = useRef<HTMLDivElement | null>(null);
+  const [resultPulse, setResultPulse] = useState(0);
+  const calcSignatureRef = useRef<string>("");
+
+  useEffect(() => {
+    if (!calcResult) return;
+    const sig = `${calcPlayer?.playerId ?? calcPlayerName}|${calcMarket}|${calcBookLine}`;
+    if (sig === calcSignatureRef.current) return;
+    calcSignatureRef.current = sig;
+
+    // Visual confirmation: brief ring pulse on the result card.
+    setResultPulse((n) => n + 1);
+
+    // Smart auto-scroll: only when the result is offscreen (or on mobile).
+    const node = resultRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const viewportH = window.innerHeight || document.documentElement.clientHeight;
+    const isMobile = (window.innerWidth || document.documentElement.clientWidth) < 1024;
+    const fullyVisible = rect.top >= 0 && rect.bottom <= viewportH;
+    const mostlyVisible = rect.top >= -40 && rect.top < viewportH * 0.6;
+
+    if (isMobile || !fullyVisible) {
+      if (!mostlyVisible) {
+        node.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }
+  }, [calcResult, calcPlayer?.playerId, calcMarket, calcBookLine, calcPlayerName]);
+
   const activeCalcName = calcPlayer?.playerName ?? calcPlayerName;
   const activeCalcTeam = calcPlayer?.teamAbbr ?? "";
 
@@ -3134,21 +3164,29 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
 
                 <div className="lg:col-span-8 order-2 lg:order-2 space-y-4">
                   {calcResult && (
-                    <ResultPanel
-                      calcResult={calcResult}
-                      calcMarket={calcMarket}
-                      calcBookLine={calcBookLine}
-                      activeCalcName={activeCalcName}
-                      calcPlayer={calcPlayer}
-                      selectedGameId={selectedGameId}
-                      onAddToSlip={handleAddToSlip}
-                      handleAddToSlip={handleAddToSlip}
-                      matchingSignal={edgeFeedSignals.find(s =>
-                        s.playerId === calcPlayer?.playerId &&
-                        s.market === calcMarket &&
-                        s.gameId === selectedGameId
-                      ) ?? null}
-                    />
+                    <div
+                      ref={resultRef}
+                      key={`result-${resultPulse}`}
+                      data-testid="mlb-result-anchor"
+                      className="lg:sticky lg:top-4 lg:z-10 scroll-mt-4 rounded-xl ring-2 ring-primary/40 ring-offset-2 ring-offset-background animate-in fade-in duration-300"
+                      style={{ animation: "result-pulse 900ms ease-out" }}
+                    >
+                      <ResultPanel
+                        calcResult={calcResult}
+                        calcMarket={calcMarket}
+                        calcBookLine={calcBookLine}
+                        activeCalcName={activeCalcName}
+                        calcPlayer={calcPlayer}
+                        selectedGameId={selectedGameId}
+                        onAddToSlip={handleAddToSlip}
+                        handleAddToSlip={handleAddToSlip}
+                        matchingSignal={edgeFeedSignals.find(s =>
+                          s.playerId === calcPlayer?.playerId &&
+                          s.market === calcMarket &&
+                          s.gameId === selectedGameId
+                        ) ?? null}
+                      />
+                    </div>
                   )}
 
                   <GameSignalsPanel signals={gameSignals} isElite={isElite} onAddToSlip={handleAddToSlip} />
