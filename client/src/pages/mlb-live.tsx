@@ -2914,7 +2914,10 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 space-y-5">
+    <div
+      className="max-w-6xl mx-auto px-4 py-6 space-y-5"
+      style={{ paddingBottom: mlbSlipPicks.length > 0 ? "calc(env(safe-area-inset-bottom, 16px) + 280px)" : "calc(env(safe-area-inset-bottom, 16px) + 24px)" }}
+    >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-sm font-bold text-foreground tracking-tight" data-testid="text-mlb-header">LiveLocks | MLB</span>

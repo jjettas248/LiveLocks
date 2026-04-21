@@ -145,21 +145,21 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
       className="rounded-lg border border-border/60 bg-background/50 p-3 hover:bg-background/80 transition-colors"
       data-testid={`ladder-card-${section}-${entry.playerId}`}
     >
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex items-start justify-between gap-2 min-w-0">
         <button
-          className="text-left min-w-0 flex-1"
+          className="text-left min-w-0 flex-1 overflow-hidden"
           onClick={() => onOpenDetails?.(entry)}
           data-testid={`button-open-ladder-details-${entry.playerId}`}
         >
-          <div className="flex items-center gap-2 mb-0.5">
-            <span className="font-bold text-sm truncate" data-testid={`text-ladder-player-${entry.playerId}`}>
+          <div className="flex items-center gap-2 mb-0.5 min-w-0">
+            <span className="font-bold text-sm truncate min-w-0" data-testid={`text-ladder-player-${entry.playerId}`}>
               {entry.playerName}
             </span>
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wide shrink-0">
               {entry.team}
             </span>
           </div>
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground flex-wrap">
             {detected && (
               <span data-testid={`text-ladder-detected-${entry.playerId}`}>Called {detected}</span>
             )}
@@ -171,7 +171,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
             )}
           </div>
         </button>
-        <div className="flex flex-col items-end gap-1 shrink-0">
+        <div className="flex flex-col items-end gap-1 shrink-0 max-w-[40%]">
           {score != null && (
             <span
               className={`text-xs font-mono font-bold ${isAttack ? "text-red-400" : "text-foreground/80"}`}
@@ -181,12 +181,12 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
             </span>
           )}
           {section === "dead" && (
-            <Badge className={`text-[9px] px-1.5 py-0 ${deadOutcomeLabel(entry.outcomeStatus).color}`}>
+            <Badge className={`text-[9px] px-1.5 py-0 whitespace-nowrap ${deadOutcomeLabel(entry.outcomeStatus).color}`}>
               {deadOutcomeLabel(entry.outcomeStatus).label}
             </Badge>
           )}
           {section === "cashed" && entry.alertPath === "early" && (
-            <Badge className="text-[9px] px-1.5 py-0 bg-emerald-600 text-white">Early call</Badge>
+            <Badge className="text-[9px] px-1.5 py-0 whitespace-nowrap bg-emerald-600 text-white">Early call</Badge>
           )}
         </div>
       </div>
@@ -234,19 +234,19 @@ function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails }: Ladd
   return (
     <Card className={`${meta.accent} border-2`} data-testid={`section-ladder-${sectionKey}`}>
       <button
-        className="w-full flex items-center justify-between p-3 text-left"
+        className="w-full flex items-center justify-between gap-2 p-3 text-left min-w-0"
         onClick={() => setCollapsed(c => !c)}
         data-testid={`button-toggle-section-${sectionKey}`}
       >
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-2 min-w-0 shrink-0">
           {collapsed ? <ChevronRight className="w-4 h-4 shrink-0" /> : <ChevronDown className="w-4 h-4 shrink-0" />}
           <Icon className="w-4 h-4 shrink-0" />
-          <span className="font-bold text-sm tracking-wide">{meta.label}</span>
-          <Badge className={`${meta.badge} text-[10px] px-1.5 py-0`} data-testid={`badge-count-${sectionKey}`}>
+          <span className="font-bold text-sm tracking-wide whitespace-nowrap">{meta.label}</span>
+          <Badge className={`${meta.badge} text-[10px] px-1.5 py-0 shrink-0`} data-testid={`badge-count-${sectionKey}`}>
             {entries.length}
           </Badge>
         </div>
-        <span className="text-[10px] text-muted-foreground hidden sm:block truncate ml-2">
+        <span className="text-[10px] text-muted-foreground hidden lg:block truncate min-w-0">
           {meta.description}
         </span>
       </button>
