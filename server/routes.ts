@@ -1721,6 +1721,109 @@ export async function registerRoutes(
     return res.json({ mode: "live", engine: "MLB", engineMode: mlbEngineResult.mode, signals: validatedApiSignals, updatedAt, isDegraded: finalDegraded, gameCardTags: entry?.gameCardTags ?? [] });
   });
 
+  // Engine-canonical box score state: per-player live engine truth for a single game.
+  // The Live Box Score Signal column reads from THIS endpoint, not from the filtered
+  // top-feed. A player can have a watch/building/monitor state here without appearing
+  // in the main live-signals feed. Engine is the sole source of truth — no edge,
+  // implied-probability, or sportsbook gating is applied here.
+  app.get("/api/mlb/boxscore-engine-state/:gameId", requireMLBAccess, async (req, res) => {
+    const gameId = req.params.gameId as string;
+
+    const entry = mlbEdgeCache.get(gameId);
+    if (!entry) {
+      console.log(`[MLB_BOXSCORE_ENGINE_STATE] gameId=${gameId} no_cache_entry`);
+      return res.json({ mode: "no_lines", players: [], updatedAt: 0 });
+    }
+
+    const all = entry.allSignals ?? [];
+    if (all.length === 0) {
+      console.log(`[MLB_BOXSCORE_ENGINE_STATE] gameId=${gameId} total=0 (engine_monitoring)`);
+      return res.json({ mode: "monitoring", players: [], updatedAt: entry.updatedAt ?? 0 });
+    }
+
+    const qualifiedKeys = new Set(
+      (entry.qualifiedSignals ?? []).map((q) => `${q.playerId}:${q.market}:${q.side}`)
+    );
+
+    const MODE_RANK: Record<string, number> = {
+      elite: 5, hr_elite: 5,
+      strong: 4, hr_strong: 4,
+      lean: 3,
+      heating_up: 2, hr_heating_up: 2,
+      watch: 1, hr_watch: 1,
+    };
+
+    const mapModeToState = (
+      mode: string | null | undefined,
+      score: number
+    ): "strong" | "building" | "watch" | "monitor" => {
+      const m = (mode ?? "").toLowerCase();
+      if (m === "elite" || m === "strong" || m === "hr_elite" || m === "hr_strong") return "strong";
+      if (m === "lean" || m === "heating_up" || m === "hr_heating_up") return "building";
+      if (m === "watch" || m === "hr_watch") return "watch";
+      // Engine produced a signal but no canonical mode → treat as monitor when score is meaningful.
+      if (score > 0) return "monitor";
+      return "monitor";
+    };
+
+    // For each player, pick their best engine signal.
+    const bestByPlayer = new Map<string, typeof all[number]>();
+    for (const sig of all) {
+      const existing = bestByPlayer.get(sig.playerId);
+      if (!existing) {
+        bestByPlayer.set(sig.playerId, sig);
+        continue;
+      }
+      const a = MODE_RANK[(sig.mode ?? "").toLowerCase()] ?? 0;
+      const b = MODE_RANK[(existing.mode ?? "").toLowerCase()] ?? 0;
+      if (a > b) {
+        bestByPlayer.set(sig.playerId, sig);
+      } else if (a === b && (sig.signalScore ?? 0) > (existing.signalScore ?? 0)) {
+        bestByPlayer.set(sig.playerId, sig);
+      }
+    }
+
+    const players = Array.from(bestByPlayer.values()).map((sig) => {
+      const signalState = mapModeToState(sig.mode, sig.signalScore ?? 0);
+      const surfaced = qualifiedKeys.has(`${sig.playerId}:${sig.market}:${sig.side}`);
+      const probability = sig.engineProbability ?? null;
+      const normalizedMarket = (sig.market as string) === "hr" ? "home_runs" : sig.market;
+
+      return {
+        gameId: sig.gameId,
+        playerId: sig.playerId,
+        playerName: sig.playerName,
+        team: sig.team,
+        signalState,
+        surfaced,
+        market: normalizedMarket,
+        side: sig.side,
+        probability: probability != null ? Math.round(probability * 10) / 10 : null,
+        signalStrengthScore: sig.signalStrengthScore ?? sig.signalScore ?? null,
+        drivers: sig.reasons ?? [],
+        tags: sig.signalTags ?? [],
+        alreadyHit: !!sig.alreadyHit,
+      };
+    });
+
+    let strong = 0, building = 0, watch = 0, monitor = 0;
+    for (const p of players) {
+      if (p.signalState === "strong") strong++;
+      else if (p.signalState === "building") building++;
+      else if (p.signalState === "watch") watch++;
+      else monitor++;
+    }
+    console.log(
+      `[MLB_BOXSCORE_ENGINE_STATE] gameId=${gameId} total=${players.length} strong=${strong} building=${building} watch=${watch} monitor=${monitor} surfaced=${players.filter(p => p.surfaced).length}`
+    );
+
+    return res.json({
+      mode: "live",
+      players,
+      updatedAt: entry.updatedAt ?? 0,
+    });
+  });
+
   // TODO: rename to /api/mlb/signal-feed
   app.get("/api/mlb/edge-feed", requireAuth, async (req, res) => {
     try {

@@ -76,6 +76,30 @@ type LiveStatsResponse = {
   gameContext?: LiveGameContext;
 };
 
+type EngineSignalState = "strong" | "building" | "watch" | "monitor";
+
+type BoxScoreEngineStatePlayer = {
+  gameId: string;
+  playerId: string;
+  playerName: string;
+  team: string;
+  signalState: EngineSignalState;
+  surfaced: boolean;
+  market: string | null;
+  side: string | null;
+  probability: number | null;
+  signalStrengthScore: number | null;
+  drivers: string[];
+  tags: string[];
+  alreadyHit?: boolean;
+};
+
+type BoxScoreEngineStateResponse = {
+  mode: "live" | "no_lines" | "monitoring";
+  players: BoxScoreEngineStatePlayer[];
+  updatedAt: number;
+};
+
 
 type EventBadge = { label: string; color: string; bg: string };
 
@@ -149,6 +173,20 @@ export function MlbBoxScore({
     enabled: !!gameId,
     placeholderData: (prev) => prev,
   });
+
+  // Engine-canonical per-player state for the Signal column. Includes watch/building
+  // states for players who never make it into the top-feed signals array.
+  const { data: engineState } = useQuery<BoxScoreEngineStateResponse>({
+    queryKey: ["/api/mlb/boxscore-engine-state", gameId],
+    refetchInterval: 15_000,
+    enabled: !!gameId,
+    placeholderData: (prev) => prev,
+  });
+
+  const engineByPlayer = new Map<string, BoxScoreEngineStatePlayer>();
+  for (const p of engineState?.players ?? []) {
+    engineByPlayer.set(p.playerId, p);
+  }
 
   const players = data?.players ?? [];
   const gameContext = data?.gameContext;
@@ -379,7 +417,13 @@ export function MlbBoxScore({
                   const tierStyle = colorTier !== "neutral" ? COLOR_TIER_STYLES[colorTier] : null;
                   const stickyBadges = getStickySignalBadges(player, stickyBadgeCache);
 
+                  // Engine-canonical signal column: state comes from per-player engine
+                  // truth, NOT from feed-qualification. Top-feed plays render the
+                  // existing rotating colored badge; non-feed engine states (watch,
+                  // building, monitor) render lighter pills.
+                  const engineForPlayer = engineByPlayer.get(player.playerId);
                   let signalBadge: JSX.Element | null = null;
+
                   if (allPlays.length > 0) {
                     const rotationIndex = Math.floor(Date.now() / 45000);
                     const cycleIdx = rotationIndex % allPlays.length;
@@ -420,6 +464,70 @@ export function MlbBoxScore({
                         )}
                       </span>
                     );
+                  } else if (engineForPlayer) {
+                    const state = engineForPlayer.signalState;
+                    const market = engineForPlayer.market;
+                    const side = engineForPlayer.side;
+                    const prob = engineForPlayer.probability;
+                    const isUnder = side === "UNDER" || side === "under";
+                    const sideLabel = isUnder ? "U" : "O";
+                    const marketShort = market ? (SHORT_MARKET_LABELS[market] ?? market) : null;
+                    const tooltip = engineForPlayer.drivers && engineForPlayer.drivers.length > 0
+                      ? engineForPlayer.drivers.slice(0, 3).join(" · ")
+                      : `${state.toUpperCase()} (engine state)`;
+
+                    if (state === "strong" || state === "building") {
+                      // Engine-strong/building but not yet feed-qualified: lighter colored pill.
+                      const isStrong = state === "strong";
+                      const bg = isStrong ? "rgba(34,197,94,0.15)" : "rgba(234,179,8,0.12)";
+                      const border = isStrong ? "rgba(34,197,94,0.45)" : "rgba(234,179,8,0.4)";
+                      const fg = isStrong ? "#22c55e" : "#eab308";
+                      signalBadge = (
+                        <span
+                          data-testid={`engine-state-${player.playerId}-${state}`}
+                          title={tooltip}
+                          className="cursor-help select-none whitespace-nowrap leading-none"
+                          style={{
+                            background: bg,
+                            color: fg,
+                            border: `1px solid ${border}`,
+                            fontSize: "11px",
+                            fontWeight: 700,
+                            padding: "3px 6px",
+                            borderRadius: "5px",
+                          }}
+                        >
+                          {marketShort
+                            ? `${sideLabel} ${marketShort}${prob != null ? ` ${prob.toFixed(0)}%` : ""}`
+                            : (isStrong ? "STRONG" : "BUILDING")}
+                        </span>
+                      );
+                    } else {
+                      // watch / monitor — neutral state pill, no probability.
+                      const isWatch = state === "watch";
+                      const fg = isWatch ? "#a78bfa" : "#94a3b8";
+                      const bg = isWatch ? "rgba(167,139,250,0.10)" : "rgba(148,163,184,0.10)";
+                      const border = isWatch ? "rgba(167,139,250,0.35)" : "rgba(148,163,184,0.30)";
+                      signalBadge = (
+                        <span
+                          data-testid={`engine-state-${player.playerId}-${state}`}
+                          title={tooltip}
+                          className="cursor-help select-none whitespace-nowrap leading-none uppercase tracking-wide"
+                          style={{
+                            background: bg,
+                            color: fg,
+                            border: `1px solid ${border}`,
+                            fontSize: "9px",
+                            fontWeight: 700,
+                            padding: "2px 5px",
+                            borderRadius: "4px",
+                          }}
+                        >
+                          {isWatch ? "Watch" : "Mon"}
+                          {marketShort ? ` · ${marketShort}` : ""}
+                        </span>
+                      );
+                    }
                   }
 
                   const playerSignals = gameSignals.filter(s => s.playerId === player.playerId);
