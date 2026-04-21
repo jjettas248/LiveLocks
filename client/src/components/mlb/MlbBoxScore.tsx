@@ -87,6 +87,9 @@ type BoxScoreEngineStatePlayer = {
   surfaced: boolean;
   market: string | null;
   side: string | null;
+  // Decision-grade engine confidence (primary surfaced %).
+  engineConfidence: number;
+  // Raw event probability (truth, shown only in tooltip / detail).
   probability: number | null;
   signalStrengthScore: number | null;
   drivers: string[];
@@ -428,9 +431,13 @@ export function MlbBoxScore({
                     const rotationIndex = Math.floor(Date.now() / 45000);
                     const cycleIdx = rotationIndex % allPlays.length;
                     const current = allPlays[cycleIdx];
-                    const pct = current.probability;
+                    const rawPct = current.probability;
+                    // Decision-grade engine confidence — what users see. Falls back
+                    // to raw probability only if the engine-state route hasn't
+                    // produced a confidence value yet.
+                    const displayPct = engineForPlayer?.engineConfidence ?? rawPct;
                     const isUnder = current.side === "UNDER" || current.side === "under";
-                    const playTier = (pct >= 85 && isUnder) ? "red" as const : pct >= 75 ? "green" as const : pct >= 65 ? "yellow" as const : "blue" as const;
+                    const playTier = (displayPct >= 85 && isUnder) ? "red" as const : displayPct >= 75 ? "green" as const : displayPct >= 65 ? "yellow" as const : "blue" as const;
                     const playStyle = COLOR_TIER_STYLES[playTier];
                     const sideLabel = isUnder ? "U" : "O";
 
@@ -438,7 +445,14 @@ export function MlbBoxScore({
                       <span className="flex items-center gap-1">
                         <span
                           data-testid={`signal-badge-${player.playerId}-${current.market}`}
-                          title={allPlays.map(p => `${p.side === "UNDER" || p.side === "under" ? "U" : "O"} ${SHORT_MARKET_LABELS[p.market] ?? p.market} ${p.probability.toFixed(0)}%`).join(", ")}
+                          title={
+                            `Engine confidence: ${displayPct.toFixed(0)}%` +
+                            (engineForPlayer?.probability != null
+                              ? ` · Raw probability: ${engineForPlayer.probability.toFixed(0)}%`
+                              : ` · Raw probability: ${rawPct.toFixed(0)}%`) +
+                            "\n" +
+                            allPlays.map(p => `${p.side === "UNDER" || p.side === "under" ? "U" : "O"} ${SHORT_MARKET_LABELS[p.market] ?? p.market} ${p.probability.toFixed(0)}%`).join(", ")
+                          }
                           className="cursor-help select-none whitespace-nowrap leading-none"
                           style={{
                             background: playStyle.bg,
@@ -450,7 +464,7 @@ export function MlbBoxScore({
                             borderRadius: "5px",
                           }}
                         >
-                          {sideLabel} {SHORT_MARKET_LABELS[current.market] ?? current.market} {pct.toFixed(0)}%
+                          {sideLabel} {SHORT_MARKET_LABELS[current.market] ?? current.market} {displayPct.toFixed(0)}%
                         </span>
                         {allPlays.length > 1 && (
                           <span
@@ -468,13 +482,18 @@ export function MlbBoxScore({
                     const state = engineForPlayer.signalState;
                     const market = engineForPlayer.market;
                     const side = engineForPlayer.side;
-                    const prob = engineForPlayer.probability;
+                    const conf = engineForPlayer.engineConfidence;
+                    const rawProb = engineForPlayer.probability;
                     const isUnder = side === "UNDER" || side === "under";
                     const sideLabel = isUnder ? "U" : "O";
                     const marketShort = market ? (SHORT_MARKET_LABELS[market] ?? market) : null;
-                    const tooltip = engineForPlayer.drivers && engineForPlayer.drivers.length > 0
+                    const driversText = engineForPlayer.drivers && engineForPlayer.drivers.length > 0
                       ? engineForPlayer.drivers.slice(0, 3).join(" · ")
                       : `${state.toUpperCase()} (engine state)`;
+                    const tooltip =
+                      `Engine confidence: ${conf.toFixed(0)}%` +
+                      (rawProb != null ? ` · Raw probability: ${rawProb.toFixed(0)}%` : "") +
+                      `\n${driversText}`;
 
                     if (state === "strong" || state === "building") {
                       // Engine-strong/building but not yet feed-qualified: lighter colored pill.

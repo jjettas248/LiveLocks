@@ -1753,10 +1753,12 @@ export async function registerRoutes(
       watch: 1, hr_watch: 1,
     };
 
+    type EngineSignalState = "strong" | "building" | "watch" | "monitor";
+
     const mapModeToState = (
       mode: string | null | undefined,
       score: number
-    ): "strong" | "building" | "watch" | "monitor" => {
+    ): EngineSignalState => {
       const m = (mode ?? "").toLowerCase();
       if (m === "elite" || m === "strong" || m === "hr_elite" || m === "hr_strong") return "strong";
       if (m === "lean" || m === "heating_up" || m === "hr_heating_up") return "building";
@@ -1783,11 +1785,47 @@ export async function registerRoutes(
       }
     }
 
+    // Decision-grade engine confidence: derived from engine conviction (signal
+    // strength + mode + opportunity context), NOT from raw event probability.
+    // This is what the UI surfaces as the primary "confidence %". The raw
+    // event probability is preserved separately for grading and the detail modal.
+    const STATE_FLOOR: Record<EngineSignalState, number> = {
+      strong: 72,
+      building: 58,
+      watch: 42,
+      monitor: 30,
+    };
+    const STATE_CEIL: Record<EngineSignalState, number> = {
+      strong: 95,
+      building: 78,
+      watch: 60,
+      monitor: 50,
+    };
+
+    const computeEngineConfidence = (
+      sig: typeof all[number],
+      state: EngineSignalState
+    ): number => {
+      const base = Number.isFinite(sig.signalStrengthScore as number)
+        ? (sig.signalStrengthScore as number)
+        : (sig.signalScore ?? 0);
+      const opp = Number.isFinite(sig.opportunityScore as number)
+        ? Math.max(0, Math.min(100, sig.opportunityScore as number))
+        : 0;
+      // Blend: 80% intrinsic strength, 20% live-opportunity context.
+      const blended = base * 0.8 + opp * 0.2;
+      const floor = STATE_FLOOR[state];
+      const ceil = STATE_CEIL[state];
+      const clamped = Math.max(floor, Math.min(ceil, blended));
+      return Math.round(clamped * 10) / 10;
+    };
+
     const players = Array.from(bestByPlayer.values()).map((sig) => {
       const signalState = mapModeToState(sig.mode, sig.signalScore ?? 0);
       const surfaced = qualifiedKeys.has(`${sig.playerId}:${sig.market}:${sig.side}`);
       const probability = sig.engineProbability ?? null;
       const normalizedMarket = (sig.market as string) === "hr" ? "home_runs" : sig.market;
+      const engineConfidence = computeEngineConfidence(sig, signalState);
 
       return {
         gameId: sig.gameId,
@@ -1798,6 +1836,9 @@ export async function registerRoutes(
         surfaced,
         market: normalizedMarket,
         side: sig.side,
+        // engineConfidence is the primary surfaced value (decision-grade).
+        engineConfidence,
+        // probability is the raw event probability (truth, for detail/grading).
         probability: probability != null ? Math.round(probability * 10) / 10 : null,
         signalStrengthScore: sig.signalStrengthScore ?? sig.signalScore ?? null,
         drivers: sig.reasons ?? [],
