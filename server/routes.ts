@@ -1959,6 +1959,16 @@ export async function registerRoutes(
           if (!c.alertPath) c.alertPath = canonHit.alertPath;
           if (c.conversionPct == null) c.conversionPct = canonHit.conversionPct;
           if (!c.resolvedAt) c.resolvedAt = canonHit.resolvedAt;
+          // Surface authoritative grading fields on edge rows so downstream filter and UI agree.
+          c.gradingStatus = (canonHit as any).gradingStatus;
+          c.gradingReason = (canonHit as any).gradingReason;
+          c.matchedBeforeHr = (canonHit as any).matchedBeforeHr;
+          c.fallbackCreated = (canonHit as any).fallbackCreated;
+          c.userVisible = (canonHit as any).userVisible;
+          c.signalDetectedAt = (canonHit as any).signalDetectedAt;
+          c.signalInning = (canonHit as any).signalInning;
+          c.signalHalf = (canonHit as any).signalHalf;
+          c.hitDetectedAt = (canonHit as any).hitDetectedAt;
         }
         try {
           const hrs = await getBatterHrHistory(c.playerName);
@@ -1997,8 +2007,22 @@ export async function registerRoutes(
           conversionPct: h.conversionPct,
           resolvedAt: h.resolvedAt,
           triggerTags: h.triggerTags ?? [],
+          gradingStatus: h.gradingStatus,
+          gradingReason: h.gradingReason,
+          matchedBeforeHr: h.matchedBeforeHr,
+          fallbackCreated: h.fallbackCreated,
+          userVisible: h.userVisible,
+          signalDetectedAt: h.signalDetectedAt,
+          signalInning: h.signalInning,
+          signalHalf: h.signalHalf,
+          hitDetectedAt: h.hitDetectedAt,
         }));
-      const allCashed = [...cashedFromEdge, ...cashedFromDb];
+      // Spec: cashedToday MUST contain only canonical called_hit rows. Uncalled/late never leak to users.
+      const allCashed = [...cashedFromEdge, ...cashedFromDb].filter((c: any) => {
+        // If gradingStatus is unknown (no canonical match), exclude — we never surface ungraded "cashed" cards.
+        if (!c.gradingStatus) return false;
+        return c.gradingStatus === "called_hit" && c.userVisible !== false;
+      });
 
       const dbAlerts = await storage.getTodayHrRadarBoard();
       const cashedPlayerIdSet = new Set([...cashedFromEdge, ...cashedFromDb].map((c: any) => c.playerId));
@@ -2189,6 +2213,51 @@ export async function registerRoutes(
     } catch (e: any) {
       console.error("[mlb/hr-radar-analyze]", e.message);
       return res.status(500).json({ error: "Failed to load analyze data" });
+    }
+  });
+
+  app.get("/api/admin/hr-radar-grading-breakdown", requireAdmin, async (req, res) => {
+    try {
+      const sessionDate = req.query.sessionDate ? String(req.query.sessionDate) : todayET();
+      const allRows = await storage.getTodayHrRadarBoardForSession(sessionDate);
+      const byStatus: Record<string, number> = {};
+      const byInning: Record<string, { calledHit: number; calledMiss: number; uncalled: number; late: number }> = {};
+      let avgInningsToHr = 0;
+      let calledHitWithTiming = 0;
+      for (const r of allRows) {
+        byStatus[r.gradingStatus] = (byStatus[r.gradingStatus] ?? 0) + 1;
+        const inn = (r.signalInning ?? r.detectedInning ?? r.hitInning ?? 0).toString();
+        if (!byInning[inn]) byInning[inn] = { calledHit: 0, calledMiss: 0, uncalled: 0, late: 0 };
+        if (r.gradingStatus === "called_hit") byInning[inn].calledHit++;
+        else if (r.gradingStatus === "called_miss") byInning[inn].calledMiss++;
+        else if (r.gradingStatus === "uncalled_hr") byInning[inn].uncalled++;
+        else if (r.gradingStatus === "late_signal") byInning[inn].late++;
+        if (r.gradingStatus === "called_hit" && r.signalInning != null && r.hitInning != null) {
+          avgInningsToHr += (r.hitInning - r.signalInning);
+          calledHitWithTiming++;
+        }
+      }
+      const calledHits = byStatus["called_hit"] ?? 0;
+      const calledMisses = byStatus["called_miss"] ?? 0;
+      const uncalled = byStatus["uncalled_hr"] ?? 0;
+      const late = byStatus["late_signal"] ?? 0;
+      const totalCalls = calledHits + calledMisses;
+      const totalHrs = calledHits + uncalled + late;
+      return res.json({
+        sessionDate,
+        byStatus,
+        byInning,
+        summary: {
+          calledHits, calledMisses, uncalledHrs: uncalled, lateSignals: late,
+          calledHitRate: totalCalls > 0 ? Math.round((calledHits / totalCalls) * 1000) / 10 : 0,
+          callCoverageOfHrs: totalHrs > 0 ? Math.round((calledHits / totalHrs) * 1000) / 10 : 0,
+          missedDetectionRate: totalHrs > 0 ? Math.round(((uncalled + late) / totalHrs) * 1000) / 10 : 0,
+          avgInningsFromSignalToHr: calledHitWithTiming > 0 ? Math.round((avgInningsToHr / calledHitWithTiming) * 10) / 10 : null,
+        },
+      });
+    } catch (e: any) {
+      console.error("[admin/hr-radar-grading-breakdown]", e.message);
+      return res.status(500).json({ error: "Failed to load grading breakdown" });
     }
   });
 

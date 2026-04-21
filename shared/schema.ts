@@ -585,6 +585,20 @@ export const hrRadarAlerts = pgTable("hr_radar_alerts", {
   hitLabel: text("hit_label"),
   resolvedAt: timestamp("resolved_at"),
 
+  // Explicit grading truth model — separates called hits from uncalled/late HRs
+  gradingStatus: text("grading_status").notNull().default("active"), // active | called_hit | called_miss | uncalled_hr | late_signal
+  gradingReason: text("grading_reason"),
+  matchedBeforeHr: boolean("matched_before_hr").notNull().default(false),
+  fallbackCreated: boolean("fallback_created").notNull().default(false),
+  userVisible: boolean("user_visible").notNull().default(true),
+  matchMethod: text("match_method"), // direct_pre_hr_signal | post_hr_fallback | player_game_only | none
+
+  // Preserved separately from hit timing — never overwrite signal inning with hit inning
+  signalDetectedAt: timestamp("signal_detected_at"),
+  signalInning: integer("signal_inning"),
+  signalHalf: text("signal_half"),
+  hitDetectedAt: timestamp("hit_detected_at"),
+
   analyticsPersisted: boolean("analytics_persisted").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => ({
@@ -592,7 +606,44 @@ export const hrRadarAlerts = pgTable("hr_radar_alerts", {
   gameIdx: index("hr_radar_alerts_game_idx").on(table.gameId),
   playerGameSessionIdx: uniqueIndex("hr_radar_alerts_player_game_session_idx").on(table.sessionDate, table.gameId, table.playerId),
   statusIdx: index("hr_radar_alerts_status_idx").on(table.status),
+  gradingStatusIdx: index("hr_radar_alerts_grading_status_idx").on(table.gradingStatus),
+  userVisibleIdx: index("hr_radar_alerts_user_visible_idx").on(table.userVisible),
 }));
+
+export const hrRadarSignalEvents = pgTable("hr_radar_signal_events", {
+  id: serial("id").primaryKey(),
+  sessionDate: text("session_date").notNull(),
+  gameId: text("game_id").notNull(),
+  playerId: text("player_id").notNull(),
+  team: text("team").notNull(),
+  alertId: text("alert_id"),
+  eventType: text("event_type").notNull(), // created | escalated | downgraded | suppressed | resolved_hit | resolved_miss | uncalled_hr | late_signal
+  signalState: text("signal_state"),       // watch | lean | strong | elite | live | watching | actionable
+  score: numeric("score"),
+  confidenceTier: text("confidence_tier"),
+  triggerTags: jsonb("trigger_tags"),
+  drivers: jsonb("drivers"),
+  detectedAt: timestamp("detected_at").notNull(),
+  inning: integer("inning"),
+  half: text("half"),
+  outs: integer("outs"),
+  pitchNumber: integer("pitch_number"),
+  plateAppearanceId: text("plate_appearance_id"),
+  batterSnapshot: jsonb("batter_snapshot"),
+  pitcherSnapshot: jsonb("pitcher_snapshot"),
+  source: text("source").notNull().default("engine"), // engine | grader | admin
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  sessionIdx: index("hr_radar_signal_events_session_idx").on(table.sessionDate),
+  gameIdx: index("hr_radar_signal_events_game_idx").on(table.gameId),
+  playerGameIdx: index("hr_radar_signal_events_player_game_idx").on(table.gameId, table.playerId),
+  alertIdx: index("hr_radar_signal_events_alert_idx").on(table.alertId),
+  detectedAtIdx: index("hr_radar_signal_events_detected_at_idx").on(table.detectedAt),
+}));
+
+export const insertHrRadarSignalEventSchema = createInsertSchema(hrRadarSignalEvents).omit({ id: true, createdAt: true });
+export type HrRadarSignalEvent = typeof hrRadarSignalEvents.$inferSelect;
+export type InsertHrRadarSignalEvent = z.infer<typeof insertHrRadarSignalEventSchema>;
 
 export const insertHrRadarAlertSchema = createInsertSchema(hrRadarAlerts).omit({ createdAt: true });
 export type HrRadarAlert = typeof hrRadarAlerts.$inferSelect;

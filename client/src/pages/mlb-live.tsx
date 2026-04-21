@@ -1373,7 +1373,12 @@ function GradingHistoryPanel({
 
 function GradedHitCard({ outcome }: { outcome: CanonicalGradedOutcome }) {
   const h = outcome;
-  const isAutoGraded = (h.triggerTags ?? []).includes("auto_graded");
+  const hAny = h as any;
+  // Authoritative grading flag from server. Fallback to legacy triggerTags only if server hasn't supplied it.
+  const gradingStatus: string | undefined = hAny.gradingStatus;
+  const isAutoGraded = gradingStatus
+    ? (gradingStatus === "uncalled_hr" || gradingStatus === "late_signal")
+    : (h.triggerTags ?? []).includes("auto_graded");
   const isCalled = !isAutoGraded && h.detectedLabel && h.hitLabel;
   const timeline = isCalled
     ? `${h.detectedLabel} → ${h.hitLabel}`

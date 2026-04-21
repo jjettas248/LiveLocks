@@ -18,6 +18,7 @@ import {
   persistedAlerts,
   hrRadarAlerts,
   hrRadarAnalytics,
+  hrRadarSignalEvents,
   signalInteractions,
   stripeEvents,
   type Player,
@@ -38,6 +39,8 @@ import {
   type PlayStats,
   type HrRadarAlert,
   type HrRadarAnalyticsRecord,
+  type HrRadarSignalEvent,
+  type InsertHrRadarSignalEvent,
 } from "@shared/schema";
 import { eq, and, desc, isNull, isNotNull, sql, lt, lte, gte, inArray, ne } from "drizzle-orm";
 
@@ -2215,6 +2218,125 @@ export class DatabaseStorage implements IStorage {
     return rows as Array<{ id: number; email: string; churnedAt: Date; churnedFromTier: string | null; createdAt: Date | null }>;
   }
 
+  async appendHrRadarSignalEvent(event: InsertHrRadarSignalEvent): Promise<HrRadarSignalEvent | null> {
+    try {
+      const inserted = await db.insert(hrRadarSignalEvents).values(event).returning();
+      const row = inserted[0] ?? null;
+      if (row) {
+        console.log(`[HR_RADAR_SIGNAL_EVENT] type=${row.eventType} game=${row.gameId} player=${row.playerId} inning=${row.inning ?? "n/a"}${row.half ?? ""} score=${row.score ?? "n/a"} alertId=${row.alertId ?? "n/a"}`);
+      }
+      return row;
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_SIGNAL_EVENT] Failed: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Strict matcher: returns whether a qualifying HR radar signal event exists for
+   * this player/game BEFORE the HR completed. Used by the orchestrator to decide
+   * called_hit vs uncalled_hr vs late_signal.
+   */
+  async matchHrRadarAlertToHrEvent(params: {
+    playerId: string;
+    gameId: string;
+    hrEndTimeMs: number | null;
+    hrInning: number;
+    hrHalf: string;
+  }): Promise<{
+    matched: boolean;
+    matchedBeforeHr: boolean;
+    isLateSignal: boolean;
+    alertId: string | null;
+    signalEventId: number | null;
+    signalDetectedAt: Date | null;
+    signalInning: number | null;
+    signalHalf: string | null;
+    gradingStatus: "called_hit" | "uncalled_hr" | "late_signal";
+    gradingReason: string;
+    matchMethod: "direct_pre_hr_signal" | "post_hr_fallback" | "player_game_only" | "none";
+  }> {
+    const today = todayET();
+    const hrEnd = (params.hrEndTimeMs && Number.isFinite(params.hrEndTimeMs)) ? params.hrEndTimeMs : null;
+    try {
+      const alertRows = await db.select().from(hrRadarAlerts)
+        .where(and(
+          eq(hrRadarAlerts.sessionDate, today),
+          eq(hrRadarAlerts.gameId, params.gameId),
+          eq(hrRadarAlerts.playerId, params.playerId),
+        ))
+        .limit(1);
+      const alert = alertRows[0] ?? null;
+
+      if (!alert) {
+        return {
+          matched: false, matchedBeforeHr: false, isLateSignal: false,
+          alertId: null, signalEventId: null,
+          signalDetectedAt: null, signalInning: null, signalHalf: null,
+          gradingStatus: "uncalled_hr",
+          gradingReason: "no canonical hr_radar_alert row exists for player/game",
+          matchMethod: "none",
+        };
+      }
+
+      const signalDetectedMs = alert.signalDetectedAt?.getTime() ?? alert.detectedAt.getTime();
+      const eventConditions = [
+        eq(hrRadarSignalEvents.gameId, params.gameId),
+        eq(hrRadarSignalEvents.playerId, params.playerId),
+      ];
+      // STRICT pre-HR: signal must occur strictly BEFORE the HR endTime. No grace window.
+      if (hrEnd) eventConditions.push(lt(hrRadarSignalEvents.detectedAt, new Date(hrEnd)));
+      const qualifyingEvents = await db.select().from(hrRadarSignalEvents)
+        .where(and(...eventConditions))
+        .orderBy(desc(hrRadarSignalEvents.detectedAt))
+        .limit(1);
+      const lastQualifyingEvent = qualifyingEvents[0] ?? null;
+
+      const alertBeforeHr = hrEnd ? signalDetectedMs < hrEnd : true;
+
+      if (lastQualifyingEvent || alertBeforeHr) {
+        console.log(`[HR_RADAR_MATCH_RESULT] called_hit player=${params.playerId} game=${params.gameId} alertId=${alert.id} signalAt=${new Date(lastQualifyingEvent?.detectedAt ?? signalDetectedMs).toISOString()} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"}`);
+        return {
+          matched: true, matchedBeforeHr: true, isLateSignal: false,
+          alertId: alert.id,
+          signalEventId: lastQualifyingEvent?.id ?? null,
+          signalDetectedAt: lastQualifyingEvent?.detectedAt ?? alert.signalDetectedAt ?? alert.detectedAt,
+          signalInning: lastQualifyingEvent?.inning ?? alert.signalInning ?? alert.detectedInning,
+          signalHalf: lastQualifyingEvent?.half ?? alert.signalHalf ?? alert.detectedHalf,
+          gradingStatus: "called_hit",
+          gradingReason: lastQualifyingEvent
+            ? `qualifying signal event ${lastQualifyingEvent.eventType} at ${new Date(lastQualifyingEvent.detectedAt).toISOString()} strictly preceded HR endTime`
+            : `canonical alert detectedAt ${new Date(signalDetectedMs).toISOString()} strictly preceded HR endTime`,
+          matchMethod: "direct_pre_hr_signal",
+        };
+      }
+      console.log(`[HR_RADAR_MATCH_RESULT] late_signal player=${params.playerId} game=${params.gameId} alertId=${alert.id} signalAt=${new Date(signalDetectedMs).toISOString()} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"}`);
+
+      // Alert exists but its signalDetectedAt is at or after HR end → late signal
+      return {
+        matched: true, matchedBeforeHr: false, isLateSignal: true,
+        alertId: alert.id,
+        signalEventId: null,
+        signalDetectedAt: alert.signalDetectedAt ?? alert.detectedAt,
+        signalInning: alert.signalInning ?? alert.detectedInning,
+        signalHalf: alert.signalHalf ?? alert.detectedHalf,
+        gradingStatus: "late_signal",
+        gradingReason: `signal detectedAt ${new Date(signalDetectedMs).toISOString()} occurred at or after HR endTime ${hrEnd ? new Date(hrEnd).toISOString() : "(unknown)"}`,
+        matchMethod: "post_hr_fallback",
+      };
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_MATCH_RESULT] Failed: ${err.message}`);
+      return {
+        matched: false, matchedBeforeHr: false, isLateSignal: false,
+        alertId: null, signalEventId: null,
+        signalDetectedAt: null, signalInning: null, signalHalf: null,
+        gradingStatus: "uncalled_hr",
+        gradingReason: `matcher error: ${err.message}`,
+        matchMethod: "none",
+      };
+    }
+  }
+
   async createOrUpdateHrRadarAlert(data: {
     gameId: string;
     playerId: string;
@@ -2282,6 +2404,21 @@ export class DatabaseStorage implements IStorage {
 
         if (increased) {
           console.log(`[HR_RADAR_SCORE_INCREASE] playerId=${data.playerId} previousScore=${prevScore} newScore=${newScore} increaseAmount=${increaseAmt} increaseLabel=${increaseLabel}`);
+          // Append escalation event so the strict matcher has chronological proof of pre-HR signal evolution
+          await this.appendHrRadarSignalEvent({
+            sessionDate: today, gameId: data.gameId, playerId: data.playerId, team: data.team,
+            alertId: alert.id,
+            eventType: bestTier !== alert.confidenceTier ? "escalated" : "escalated",
+            signalState: data.signalState,
+            score: String(newScore),
+            confidenceTier: bestTier,
+            triggerTags: data.triggerTags as any,
+            drivers: data.diagnosticsSnapshot as any,
+            detectedAt: new Date(),
+            inning: data.inning,
+            half: data.half,
+            source: "engine",
+          } as InsertHrRadarSignalEvent);
         }
         console.log(`[HR_RADAR_ALERT_UPSERT] UPDATE sessionDate=${today} gameId=${data.gameId} playerId=${data.playerId} detectedLabel=${alert.detectedLabel} currentReadinessScore=${newScore}`);
 
@@ -2291,6 +2428,7 @@ export class DatabaseStorage implements IStorage {
       }
 
       const alertId = `${today}_${data.gameId}_${data.playerId}`;
+      const nowDate = new Date();
       const insertResult = await db.insert(hrRadarAlerts).values({
         id: alertId,
         sessionDate: today,
@@ -2299,7 +2437,7 @@ export class DatabaseStorage implements IStorage {
         playerName: data.playerName,
         team: data.team,
         opponent: data.opponent ?? null,
-        detectedAt: new Date(),
+        detectedAt: nowDate,
         detectedInning: data.inning,
         detectedHalf: data.half,
         detectedLabel,
@@ -2316,6 +2454,13 @@ export class DatabaseStorage implements IStorage {
         alertTier: data.alertTier ?? null,
         diagnosticsSnapshot: data.diagnosticsSnapshot ?? null,
         status: "live",
+        gradingStatus: "active",
+        userVisible: true,
+        matchedBeforeHr: false,
+        fallbackCreated: false,
+        signalDetectedAt: nowDate,
+        signalInning: data.inning,
+        signalHalf: data.half,
         analyticsPersisted: false,
       }).onConflictDoNothing();
       if ((insertResult as any).rowCount === 0) {
@@ -2326,6 +2471,21 @@ export class DatabaseStorage implements IStorage {
       }
 
       console.log(`[HR_RADAR_ALERT_UPSERT] CREATE sessionDate=${today} gameId=${data.gameId} playerId=${data.playerId} detectedLabel=${detectedLabel} initialReadinessScore=${data.readinessScore}`);
+      // Append creation event to chronological history so strict matcher has proof
+      await this.appendHrRadarSignalEvent({
+        sessionDate: today, gameId: data.gameId, playerId: data.playerId, team: data.team,
+        alertId,
+        eventType: "created",
+        signalState: data.signalState,
+        score: String(data.readinessScore),
+        confidenceTier: data.confidenceTier,
+        triggerTags: data.triggerTags as any,
+        drivers: data.diagnosticsSnapshot as any,
+        detectedAt: nowDate,
+        inning: data.inning,
+        half: data.half,
+        source: "engine",
+      } as InsertHrRadarSignalEvent);
       const inserted = await db.select().from(hrRadarAlerts)
         .where(eq(hrRadarAlerts.id, alertId)).limit(1);
       return inserted[0] ?? null;
@@ -2338,35 +2498,97 @@ export class DatabaseStorage implements IStorage {
   async resolveHrRadarAlertAsHit(playerId: string, gameId: string, hitInningNum: number, hitHalfVal: string, hitLabelVal: string, hrEndTimeMs?: number | null): Promise<number> {
     try {
       const today = todayET();
-      const conditions = [
-        eq(hrRadarAlerts.sessionDate, today),
-        eq(hrRadarAlerts.gameId, gameId),
-        eq(hrRadarAlerts.playerId, playerId),
-        eq(hrRadarAlerts.status, "live"),
-      ];
-      if (hrEndTimeMs && Number.isFinite(hrEndTimeMs)) {
-        conditions.push(lt(hrRadarAlerts.detectedAt, new Date(hrEndTimeMs + 5000)));
+      const matchResult = await this.matchHrRadarAlertToHrEvent({
+        playerId, gameId,
+        hrEndTimeMs: hrEndTimeMs ?? null,
+        hrInning: hitInningNum,
+        hrHalf: hitHalfVal,
+      });
+      const nowDate = new Date();
+
+      if (matchResult.matched && matchResult.matchedBeforeHr) {
+        const result = await db.update(hrRadarAlerts)
+          .set({
+            status: "hit",
+            hitInning: hitInningNum,
+            hitHalf: hitHalfVal,
+            hitLabel: hitLabelVal,
+            hitDetectedAt: hrEndTimeMs ? new Date(hrEndTimeMs) : nowDate,
+            resolvedAt: nowDate,
+            gradingStatus: "called_hit",
+            gradingReason: matchResult.gradingReason,
+            matchedBeforeHr: true,
+            fallbackCreated: false,
+            userVisible: true,
+            matchMethod: matchResult.matchMethod,
+            signalDetectedAt: matchResult.signalDetectedAt ?? nowDate,
+            signalInning: matchResult.signalInning,
+            signalHalf: matchResult.signalHalf,
+          })
+          .where(and(
+            eq(hrRadarAlerts.sessionDate, today),
+            eq(hrRadarAlerts.gameId, gameId),
+            eq(hrRadarAlerts.playerId, playerId),
+            eq(hrRadarAlerts.status, "live"),
+          ));
+        const count = (result as any).rowCount ?? 0;
+        if (count > 0) {
+          console.log(`[HR_RADAR_CALLED_HIT] playerId=${playerId} gameId=${gameId} signalLabel=${matchResult.signalHalf}${matchResult.signalInning ?? ""} hitLabel=${hitLabelVal} reason="${matchResult.gradingReason}"`);
+          await this.appendHrRadarSignalEvent({
+            sessionDate: today, gameId, playerId,
+            team: "",
+            alertId: matchResult.alertId,
+            eventType: "resolved_hit",
+            detectedAt: nowDate,
+            inning: hitInningNum,
+            half: hitHalfVal,
+            source: "grader",
+          } as InsertHrRadarSignalEvent);
+        }
+        return count;
       }
-      const before = await db.select({ id: hrRadarAlerts.id, detectedLabel: hrRadarAlerts.detectedLabel })
-        .from(hrRadarAlerts)
-        .where(and(...conditions))
-        .limit(1);
-      const result = await db.update(hrRadarAlerts)
-        .set({
-          status: "hit",
-          hitInning: hitInningNum,
-          hitHalf: hitHalfVal,
-          hitLabel: hitLabelVal,
-          resolvedAt: new Date(),
-        })
-        .where(and(...conditions));
-      const count = (result as any).rowCount ?? 0;
-      if (count > 0) {
-        console.log(`[HR_RADAR_ALERT_HIT] playerId=${playerId} gameId=${gameId} detectedLabel=${before[0]?.detectedLabel ?? "(none)"} hitLabel=${hitLabelVal}`);
-      } else {
-        console.log(`[HR_RADAR_ALERT_HIT_NOMATCH] playerId=${playerId} gameId=${gameId} hitLabel=${hitLabelVal} hrEndTimeMs=${hrEndTimeMs ?? "n/a"} — no live alert matched (will fallback to ensureHrRadarAlertHit)`);
+
+      // Late signal: alert exists but signal arrived at/after HR completed
+      if (matchResult.matched && matchResult.isLateSignal) {
+        const result = await db.update(hrRadarAlerts)
+          .set({
+            status: "hit",
+            hitInning: hitInningNum,
+            hitHalf: hitHalfVal,
+            hitLabel: hitLabelVal,
+            hitDetectedAt: hrEndTimeMs ? new Date(hrEndTimeMs) : nowDate,
+            resolvedAt: nowDate,
+            gradingStatus: "late_signal",
+            gradingReason: matchResult.gradingReason,
+            matchedBeforeHr: false,
+            fallbackCreated: false,
+            userVisible: false,
+            matchMethod: matchResult.matchMethod,
+          })
+          .where(and(
+            eq(hrRadarAlerts.sessionDate, today),
+            eq(hrRadarAlerts.gameId, gameId),
+            eq(hrRadarAlerts.playerId, playerId),
+            eq(hrRadarAlerts.status, "live"),
+          ));
+        const count = (result as any).rowCount ?? 0;
+        if (count > 0) {
+          console.log(`[HR_RADAR_LATE_SIGNAL] playerId=${playerId} gameId=${gameId} hitLabel=${hitLabelVal} reason="${matchResult.gradingReason}"`);
+          await this.appendHrRadarSignalEvent({
+            sessionDate: today, gameId, playerId, team: "",
+            alertId: matchResult.alertId,
+            eventType: "late_signal",
+            detectedAt: nowDate,
+            inning: hitInningNum, half: hitHalfVal,
+            source: "grader",
+          } as InsertHrRadarSignalEvent);
+        }
+        return count;
       }
-      return count;
+
+      // No qualifying alert at all
+      console.log(`[HR_RADAR_UNCALLED] playerId=${playerId} gameId=${gameId} hitLabel=${hitLabelVal} hrEndTimeMs=${hrEndTimeMs ?? "n/a"} reason="${matchResult.gradingReason}" — no called signal, will write admin-only uncalled_hr row`);
+      return 0;
     } catch (err: any) {
       console.warn(`[HR_RADAR_ALERT_HIT] Failed: ${err.message}`);
       return 0;
@@ -2392,24 +2614,34 @@ export class DatabaseStorage implements IStorage {
         ))
         .limit(1);
 
+      const nowDate = new Date();
+      const halfLabel = data.half === "top" ? "T" : "B";
+
       if (existing.length > 0) {
         if (existing[0].status === "live") {
-          const hitHalf = data.half === "top" ? "T" : "B";
+          // Race: a live alert exists but resolveHrRadarAlertAsHit didn't match before HR endTime.
+          // Treat as late_signal (admin-only, never user-visible Cashed).
           await db.update(hrRadarAlerts)
             .set({
               status: "hit",
               hitInning: data.inning,
-              hitHalf: hitHalf,
+              hitHalf: halfLabel,
               hitLabel: data.hitLabel,
-              resolvedAt: new Date(),
+              hitDetectedAt: nowDate,
+              resolvedAt: nowDate,
+              gradingStatus: "late_signal",
+              gradingReason: "ensureHrRadarAlertHit fallback fired with live alert still present — race or post-HR signal",
+              matchedBeforeHr: false,
+              fallbackCreated: false,
+              userVisible: false,
+              matchMethod: "post_hr_fallback",
             })
             .where(eq(hrRadarAlerts.id, existing[0].id));
-          console.log(`[HR_RADAR_ENSURE_HIT] Updated existing live→hit playerId=${data.playerId} gameId=${data.gameId}`);
+          console.log(`[HR_RADAR_LATE_SIGNAL] (ensure-fallback) playerId=${data.playerId} gameId=${data.gameId}`);
         }
         return;
       }
 
-      const halfLabel = data.half === "top" ? "T" : "B";
       const alertId = `${today}_${data.gameId}_${data.playerId}`;
       await db.insert(hrRadarAlerts).values({
         id: alertId,
@@ -2419,7 +2651,7 @@ export class DatabaseStorage implements IStorage {
         playerName: data.playerName,
         team: data.team,
         opponent: null,
-        detectedAt: new Date(),
+        detectedAt: nowDate,
         detectedInning: null,
         detectedHalf: null,
         detectedLabel: null,
@@ -2430,15 +2662,22 @@ export class DatabaseStorage implements IStorage {
         confidenceTier: "monitor",
         signalState: "live",
         triggerTags: ["auto_graded"],
-        summaryText: `HR confirmed ${data.hitLabel} (uncalled)`,
+        summaryText: `HR confirmed ${data.hitLabel} (uncalled — no pre-HR engine signal)`,
         status: "hit",
         hitInning: data.inning,
         hitHalf: halfLabel,
         hitLabel: data.hitLabel,
-        resolvedAt: new Date(),
+        hitDetectedAt: nowDate,
+        resolvedAt: nowDate,
+        gradingStatus: "uncalled_hr",
+        gradingReason: "no canonical hr_radar_alert existed at time of HR resolution — admin-only analytics row",
+        matchedBeforeHr: false,
+        fallbackCreated: true,
+        userVisible: false,
+        matchMethod: "post_hr_fallback",
         analyticsPersisted: false,
       });
-      console.log(`[HR_RADAR_ENSURE_HIT] Created new hit row playerId=${data.playerId} player=${data.playerName} gameId=${data.gameId} hitLabel=${data.hitLabel}`);
+      console.log(`[HR_RADAR_UNCALLED] (admin-only row created) playerId=${data.playerId} player=${data.playerName} gameId=${data.gameId} hitLabel=${data.hitLabel}`);
     } catch (err: any) {
       if (err.message?.includes("duplicate key")) return;
       console.warn(`[HR_RADAR_ENSURE_HIT] Failed: ${err.message}`);
@@ -2452,6 +2691,11 @@ export class DatabaseStorage implements IStorage {
         .set({
           status: "miss",
           resolvedAt: new Date(),
+          gradingStatus: "called_miss",
+          gradingReason: "game ended without HR for this called signal",
+          userVisible: true,
+          matchedBeforeHr: false,
+          matchMethod: "direct_pre_hr_signal",
         })
         .where(and(
           eq(hrRadarAlerts.sessionDate, today),
@@ -2480,24 +2724,82 @@ export class DatabaseStorage implements IStorage {
           eq(hrRadarAlerts.status, "live"),
         ));
 
+      // Strict pre-HR test using inning/half ordering when reconcile has no precise hrEndTimeMs.
+      // Half order within an inning: top (0) < bottom (1). "F"/unknown treated as last.
+      const halfOrd = (h: string | null | undefined): number => {
+        if (h === "top" || h === "T") return 0;
+        if (h === "bottom" || h === "B") return 1;
+        return 2;
+      };
+      const signalIsStrictlyBeforeHr = (sigInning: number | null | undefined, sigHalf: string | null | undefined, hrInn: number, hrHalf: string): boolean => {
+        if (sigInning == null) return false;
+        if (sigInning < hrInn) return true;
+        if (sigInning > hrInn) return false;
+        return halfOrd(sigHalf) < halfOrd(hrHalf);
+      };
+
       for (const alert of liveAlerts) {
         const hrData = playerHrMap.get(alert.playerId);
+        const nowDate = new Date();
         if (hrData) {
           const hitHalf = hrData.half === "top" ? "T" : hrData.half === "bottom" ? "B" : "F";
           const hitLabel = hitHalf === "F" ? "Final" : `${hitHalf}${hrData.inning}`;
-          await db.update(hrRadarAlerts)
-            .set({
-              status: "hit",
-              hitInning: hrData.inning,
-              hitHalf: hrData.half,
-              hitLabel,
-              resolvedAt: new Date(),
-            })
-            .where(eq(hrRadarAlerts.id, alert.id));
-          console.log(`[HR_RADAR_ALERT_HIT] playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel} hitLabel=${hitLabel}`);
+          const sigInn = alert.signalInning ?? alert.detectedInning;
+          const sigHalf = alert.signalHalf ?? alert.detectedHalf;
+          const isPreHr = signalIsStrictlyBeforeHr(sigInn, sigHalf, hrData.inning, hrData.half);
+          if (isPreHr) {
+            await db.update(hrRadarAlerts)
+              .set({
+                status: "hit",
+                hitInning: hrData.inning,
+                hitHalf: hrData.half,
+                hitLabel,
+                hitDetectedAt: nowDate,
+                resolvedAt: nowDate,
+                gradingStatus: "called_hit",
+                gradingReason: `reconcile: signal ${sigInn}/${sigHalf} strictly precedes HR ${hrData.inning}/${hrData.half}`,
+                matchedBeforeHr: true,
+                userVisible: true,
+                matchMethod: "direct_pre_hr_signal",
+                signalDetectedAt: alert.signalDetectedAt ?? alert.detectedAt,
+                signalInning: sigInn,
+                signalHalf: sigHalf,
+              })
+              .where(eq(hrRadarAlerts.id, alert.id));
+            console.log(`[HR_RADAR_CALLED_HIT] (reconcile) playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel} hitLabel=${hitLabel}`);
+          } else {
+            // Signal occurred at or after HR — late_signal, admin-only.
+            await db.update(hrRadarAlerts)
+              .set({
+                status: "hit",
+                hitInning: hrData.inning,
+                hitHalf: hrData.half,
+                hitLabel,
+                hitDetectedAt: nowDate,
+                resolvedAt: nowDate,
+                gradingStatus: "late_signal",
+                gradingReason: `reconcile: signal ${sigInn}/${sigHalf} not strictly before HR ${hrData.inning}/${hrData.half}`,
+                matchedBeforeHr: false,
+                userVisible: false,
+                matchMethod: "post_hr_fallback",
+                signalDetectedAt: alert.signalDetectedAt ?? alert.detectedAt,
+                signalInning: sigInn,
+                signalHalf: sigHalf,
+              })
+              .where(eq(hrRadarAlerts.id, alert.id));
+            console.log(`[HR_RADAR_LATE_SIGNAL] (reconcile) playerId=${alert.playerId} gameId=${gameId} sig=${sigInn}/${sigHalf} hr=${hrData.inning}/${hrData.half}`);
+          }
         } else {
           await db.update(hrRadarAlerts)
-            .set({ status: "miss", resolvedAt: new Date() })
+            .set({
+              status: "miss",
+              resolvedAt: nowDate,
+              gradingStatus: "called_miss",
+              gradingReason: "reconcile: game ended without HR for this called signal",
+              userVisible: true,
+              matchedBeforeHr: false,
+              matchMethod: "direct_pre_hr_signal",
+            })
             .where(eq(hrRadarAlerts.id, alert.id));
           console.log(`[HR_RADAR_ALERT_MISS] playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel}`);
         }
@@ -2656,8 +2958,9 @@ export class DatabaseStorage implements IStorage {
         return diag.hrConversion.calibratedProbability ?? diag.hrConversion.hrConversionProbability ?? null;
       };
 
+      // User-facing Cashed: only true called hits. Uncalled HR / late signal stay admin-only.
       const hits = canonicalRows
-        .filter(r => r.status === "hit")
+        .filter(r => r.status === "hit" && r.gradingStatus === "called_hit" && r.userVisible === true)
         .map(r => ({
           sessionDate: r.sessionDate,
           gameId: r.gameId,
@@ -2675,6 +2978,16 @@ export class DatabaseStorage implements IStorage {
           resolvedAt: r.resolvedAt,
           alertPath: r.alertPath ?? null,
           conversionPct: extractConvPct(r),
+          // Explicit grading truth model exposed to UI
+          gradingStatus: r.gradingStatus,
+          gradingReason: r.gradingReason,
+          matchedBeforeHr: r.matchedBeforeHr,
+          fallbackCreated: r.fallbackCreated,
+          userVisible: r.userVisible,
+          signalDetectedAt: r.signalDetectedAt,
+          signalInning: r.signalInning,
+          signalHalf: r.signalHalf,
+          hitDetectedAt: r.hitDetectedAt,
         }));
 
       const misses = canonicalRows
@@ -2696,7 +3009,8 @@ export class DatabaseStorage implements IStorage {
           conversionPct: extractConvPct(r),
         }));
 
-      const calledHits = hits.filter(h => !(h.triggerTags ?? []).includes("auto_graded"));
+      // Use authoritative gradingStatus column instead of legacy triggerTags heuristic.
+      const calledHits = hits.filter(h => (h as any).gradingStatus === "called_hit");
       const calledMisses = misses;
       const totalGraded = calledHits.length + calledMisses.length;
       const hitRate = totalGraded > 0 ? Math.round((calledHits.length / totalGraded) * 1000) / 10 : 0;
@@ -2765,10 +3079,9 @@ export class DatabaseStorage implements IStorage {
         }
 
         const canonical = Array.from(canonicalMap.values());
-        const hits = canonical.filter(r => r.status === "hit");
-        const calledHits = hits.filter(r => !(r.triggerTags ?? []).includes("auto_graded")).length;
-        const uncalledHits = hits.length - calledHits;
-        const misses = canonical.filter(r => r.status === "miss").length;
+        const calledHits = canonical.filter(r => r.gradingStatus === "called_hit").length;
+        const uncalledHits = canonical.filter(r => r.gradingStatus === "uncalled_hr" || r.gradingStatus === "late_signal").length;
+        const misses = canonical.filter(r => r.gradingStatus === "called_miss").length;
         const totalGraded = calledHits + misses;
         const hitRate = totalGraded > 0 ? Math.round((calledHits / totalGraded) * 1000) / 10 : 0;
 
@@ -2786,6 +3099,12 @@ export class DatabaseStorage implements IStorage {
     const today = todayET();
     return db.select().from(hrRadarAlerts)
       .where(eq(hrRadarAlerts.sessionDate, today))
+      .orderBy(desc(hrRadarAlerts.detectedAt));
+  }
+
+  async getTodayHrRadarBoardForSession(sessionDate: string): Promise<HrRadarAlert[]> {
+    return db.select().from(hrRadarAlerts)
+      .where(eq(hrRadarAlerts.sessionDate, sessionDate))
       .orderBy(desc(hrRadarAlerts.detectedAt));
   }
 
