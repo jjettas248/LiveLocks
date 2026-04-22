@@ -21,12 +21,17 @@ const PLAYER_USAGE_TTL = 4 * 60 * 60 * 1000;
 const TEAM_DEF_TTL = 4 * 60 * 60 * 1000;
 const ON_OFF_TTL = 6 * 60 * 60 * 1000;
 
+// ── Season type plumbing ──────────────────────────────────────────────────
+// Caches are keyed by `${season}:${seasonType}` so playoff data and regular
+// season data never contaminate each other.
+export type NBASeasonType = "Regular Season" | "Playoffs";
+
 const playerUsageCache = new Map<string, CacheEntry<PlayerUsageData>>();
 const teamDefenseCache = new Map<string, CacheEntry<TeamDefenseMatchup>>();
 
-let leaguePlayerStatsCache: CacheEntry<any[]> | null = null;
-let leagueTeamStatsCache: CacheEntry<any[]> | null = null;
-let playerOnOffCache: CacheEntry<Map<string, number>> | null = null;
+const leaguePlayerStatsCacheByKey = new Map<string, CacheEntry<any[]>>();
+const leagueTeamStatsCacheByKey = new Map<string, CacheEntry<any[]>>();
+const playerOnOffCacheByKey = new Map<string, CacheEntry<Map<string, number>>>();
 
 export interface PlayerUsageData {
   playerId: string;
@@ -83,39 +88,43 @@ function rowsToObjects(resultSet: any): Record<string, any>[] {
   });
 }
 
-async function ensureLeaguePlayerStats(): Promise<any[]> {
-  if (leaguePlayerStatsCache && Date.now() - leaguePlayerStatsCache.fetchedAt < PLAYER_USAGE_TTL) {
-    return leaguePlayerStatsCache.data;
-  }
+async function ensureLeaguePlayerStats(seasonType: NBASeasonType = "Regular Season"): Promise<any[]> {
   const season = getCurrentSeason();
+  const cacheKey = `${season}:${seasonType}`;
+  const cached = leaguePlayerStatsCacheByKey.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < PLAYER_USAGE_TTL) {
+    return cached.data;
+  }
   const data = await fetchNBAStats("leaguedashplayerstats", {
     Season: season,
-    SeasonType: "Regular Season",
+    SeasonType: seasonType,
     PerMode: "PerGame",
     MeasureType: "Usage",
   });
-  if (!data) return leaguePlayerStatsCache?.data ?? [];
+  if (!data) return cached?.data ?? [];
   const rows = rowsToObjects(data.resultSets?.[0]);
-  leaguePlayerStatsCache = { data: rows, fetchedAt: Date.now() };
-  console.log(`[NBAStats] Loaded ${rows.length} player usage stats`);
+  leaguePlayerStatsCacheByKey.set(cacheKey, { data: rows, fetchedAt: Date.now() });
+  console.log(`[NBAStats] Loaded ${rows.length} player usage stats (seasonType=${seasonType})`);
   return rows;
 }
 
-async function ensureLeagueTeamStats(): Promise<any[]> {
-  if (leagueTeamStatsCache && Date.now() - leagueTeamStatsCache.fetchedAt < TEAM_DEF_TTL) {
-    return leagueTeamStatsCache.data;
-  }
+async function ensureLeagueTeamStats(seasonType: NBASeasonType = "Regular Season"): Promise<any[]> {
   const season = getCurrentSeason();
+  const cacheKey = `${season}:${seasonType}`;
+  const cached = leagueTeamStatsCacheByKey.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < TEAM_DEF_TTL) {
+    return cached.data;
+  }
   const data = await fetchNBAStats("leaguedashteamstats", {
     Season: season,
-    SeasonType: "Regular Season",
+    SeasonType: seasonType,
     PerMode: "PerGame",
     MeasureType: "Defense",
   });
-  if (!data) return leagueTeamStatsCache?.data ?? [];
+  if (!data) return cached?.data ?? [];
   const rows = rowsToObjects(data.resultSets?.[0]);
-  leagueTeamStatsCache = { data: rows, fetchedAt: Date.now() };
-  console.log(`[NBAStats] Loaded ${rows.length} team defense stats`);
+  leagueTeamStatsCacheByKey.set(cacheKey, { data: rows, fetchedAt: Date.now() });
+  console.log(`[NBAStats] Loaded ${rows.length} team defense stats (seasonType=${seasonType})`);
   return rows;
 }
 
@@ -130,15 +139,17 @@ function getCurrentSeason(): string {
  * Returns a map of PLAYER_ID → onOffDiff (on-court NET_RATING - off-court NET_RATING).
  * Higher positive values = player is significantly more effective on court.
  */
-async function ensurePlayerOnOffStats(): Promise<Map<string, number>> {
-  if (playerOnOffCache && Date.now() - playerOnOffCache.fetchedAt < ON_OFF_TTL) {
-    return playerOnOffCache.data;
-  }
+async function ensurePlayerOnOffStats(seasonType: NBASeasonType = "Regular Season"): Promise<Map<string, number>> {
   const season = getCurrentSeason();
+  const cacheKey = `${season}:${seasonType}`;
+  const cached = playerOnOffCacheByKey.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < ON_OFF_TTL) {
+    return cached.data;
+  }
   const [onData, offData] = await Promise.all([
     fetchNBAStats("leaguedashplayeronoffdetails", {
       Season: season,
-      SeasonType: "Regular Season",
+      SeasonType: seasonType,
       MeasureType: "Advanced",
       PerMode: "PerGame",
       PlusMinus: "N",
@@ -148,7 +159,7 @@ async function ensurePlayerOnOffStats(): Promise<Map<string, number>> {
     }),
     fetchNBAStats("leaguedashplayeronoffdetails", {
       Season: season,
-      SeasonType: "Regular Season",
+      SeasonType: seasonType,
       MeasureType: "Advanced",
       PerMode: "PerGame",
       PlusMinus: "N",
@@ -180,13 +191,36 @@ async function ensurePlayerOnOffStats(): Promise<Map<string, number>> {
     onOffMap.set(pid, onNR - offNR);
   }
 
-  playerOnOffCache = { data: onOffMap, fetchedAt: Date.now() };
-  console.log(`[NBAStats] Loaded on/off rotation context for ${onOffMap.size} players`);
+  playerOnOffCacheByKey.set(cacheKey, { data: onOffMap, fetchedAt: Date.now() });
+  console.log(`[NBAStats] Loaded on/off rotation context for ${onOffMap.size} players (seasonType=${seasonType})`);
   return onOffMap;
 }
 
-export async function getPlayerUsage(playerName: string, playerId?: string): Promise<PlayerUsageData> {
-  const cacheKey = playerId ?? playerName.toLowerCase();
+// ── Result wrappers that surface playoff fallback diagnostics ─────────────
+// When a playoff request returns no rows we transparently fall back to
+// regular-season data — but the caller needs to know that happened so it can
+// downgrade calibration/confidence and tag analytics. These wrappers carry
+// the fallback flag.
+export interface PlayerUsageResult {
+  data: PlayerUsageData;
+  seasonTypeRequested: NBASeasonType;
+  seasonTypeResolved: NBASeasonType;
+  playoffFallbackUsed: boolean;
+}
+
+export interface TeamDefenseResult {
+  data: TeamDefenseMatchup;
+  seasonTypeRequested: NBASeasonType;
+  seasonTypeResolved: NBASeasonType;
+  playoffFallbackUsed: boolean;
+}
+
+export async function getPlayerUsage(
+  playerName: string,
+  playerId?: string,
+  seasonType: NBASeasonType = "Regular Season",
+): Promise<PlayerUsageData> {
+  const cacheKey = `${seasonType}:${playerId ?? playerName.toLowerCase()}`;
   const cached = playerUsageCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < PLAYER_USAGE_TTL) return cached.data;
 
@@ -203,10 +237,10 @@ export async function getPlayerUsage(playerName: string, playerId?: string): Pro
   };
 
   try {
-    // Fetch usage stats and on/off rotation context in parallel
+    // Fetch usage stats and on/off rotation context in parallel for the requested seasonType
     const [rows, onOffMap] = await Promise.all([
-      ensureLeaguePlayerStats(),
-      ensurePlayerOnOffStats().catch(() => new Map<string, number>()),
+      ensureLeaguePlayerStats(seasonType),
+      ensurePlayerOnOffStats(seasonType).catch(() => new Map<string, number>()),
     ]);
     const normName = playerName.toLowerCase().replace(/[^a-z\s]/g, "");
     const match = rows.find((r) => {
@@ -243,8 +277,11 @@ export async function getPlayerUsage(playerName: string, playerId?: string): Pro
   }
 }
 
-export async function getTeamDefenseMatchup(teamAbbr: string): Promise<TeamDefenseMatchup> {
-  const cacheKey = teamAbbr.toUpperCase();
+export async function getTeamDefenseMatchup(
+  teamAbbr: string,
+  seasonType: NBASeasonType = "Regular Season",
+): Promise<TeamDefenseMatchup> {
+  const cacheKey = `${seasonType}:${teamAbbr.toUpperCase()}`;
   const cached = teamDefenseCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < TEAM_DEF_TTL) return cached.data;
 
@@ -263,7 +300,7 @@ export async function getTeamDefenseMatchup(teamAbbr: string): Promise<TeamDefen
   };
 
   try {
-    const rows = await ensureLeagueTeamStats();
+    const rows = await ensureLeagueTeamStats(seasonType);
     const norm = teamAbbr.toUpperCase();
     const match = rows.find((r) => {
       const abbr = String(r.TEAM_ABBREVIATION ?? "").toUpperCase();
@@ -332,8 +369,18 @@ export function computeDefenseMultiplier(defense: TeamDefenseMatchup, position?:
 export function clearNBAStatsCache(): void {
   playerUsageCache.clear();
   teamDefenseCache.clear();
-  leaguePlayerStatsCache = null;
-  leagueTeamStatsCache = null;
-  playerOnOffCache = null;
+  leaguePlayerStatsCacheByKey.clear();
+  leagueTeamStatsCacheByKey.clear();
+  playerOnOffCacheByKey.clear();
   console.log("[NBAStats] Cache cleared");
+}
+
+// Convenience helper: derive the right NBA Stats SeasonType from a game date.
+// Mirrors storage.getNbaSeasonContext() so the engine asks for playoff data on
+// playoff dates without re-implementing the calendar logic.
+export function getSeasonTypeForGame(gameDate?: string | Date): NBASeasonType {
+  const d = gameDate ? new Date(gameDate) : new Date();
+  const seasonStartYear = d.getUTCMonth() + 1 >= 10 ? d.getUTCFullYear() : d.getUTCFullYear() - 1;
+  const playoffsStart = new Date(Date.UTC(seasonStartYear + 1, 3, 10)); // Apr 10
+  return d >= playoffsStart ? "Playoffs" : "Regular Season";
 }

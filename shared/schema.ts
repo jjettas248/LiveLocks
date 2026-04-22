@@ -187,6 +187,19 @@ export interface CalcDebug {
   displayConfidence?: number | null;
   recommendedSide?: "OVER" | "UNDER" | "NO_SIGNAL";
   warnings?: string[];
+  // ── Playoff diagnostics (PHASE 6) ──────────────────────────────────────
+  playoffMode?: boolean;
+  playoffDataRequested?: boolean;
+  playoffDataResolved?: boolean;
+  playoffDataFallbackUsed?: boolean;
+  playoffCalibrationApplied?: boolean;
+  playoffMinutesAdjustmentApplied?: boolean;
+  playoffCeilingApplied?: boolean;
+  playoffCeilingValue?: number | null;
+  regularCeilingValue?: number;
+  playoffHighBucketGuardApplied?: boolean;
+  playoffFallbackCapApplied?: boolean;
+  seasonPhaseResolvedFrom?: "gameDate" | "systemDate";
 }
 
 export interface CalculateProbabilityResponse {

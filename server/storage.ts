@@ -3,7 +3,7 @@ import { todayET, daysAgoET } from "./utils/dateUtils";
 import { resolveMlbGameSessionDate } from "./utils/mlbSessionDate";
 import { calculateRemainingMinutes } from "./minutesModel";
 import { getPlayerUsage, getTeamDefenseMatchup, computeUsageAdjustment, computeDefenseMultiplier } from "./services/nbaStatsService";
-import { classifyArchetype as classifyNBAArchetype, type NBAArchetype, VARIANCE_MULTIPLIERS, MINUTES_FRAGILITY_MULTIPLIERS, CORRELATION_DEFAULTS, COMBO_VARIANCE_EXTRA, isVolatileArchetype, isImpactedArchetype, getSafetyCeiling } from "./nba/archetypes";
+import { classifyArchetype as classifyNBAArchetype, type NBAArchetype, VARIANCE_MULTIPLIERS, MINUTES_FRAGILITY_MULTIPLIERS, CORRELATION_DEFAULTS, COMBO_VARIANCE_EXTRA, isVolatileArchetype, isImpactedArchetype, getSafetyCeiling, getPlayoffSafetyCeiling, getPlayoffFragilityMultiplier } from "./nba/archetypes";
 import { isUnderBiasCorrectionActive } from "./nba/directionalBias";
 import {
   players,
@@ -388,17 +388,53 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  getSeasonPhase(gameDate?: string | Date): "early" | "mid" | "late" | "playoffs" {
+  // ── NBA Season Context (season-aware, replaces month-only logic) ──────────
+  // The old month-based helper bucketed every Mar–Apr game into "late", which
+  // caused April playoff games to never reach the playoff calibration branch.
+  // This helper uses explicit NBA calendar windows (regular season ends ~Apr 10,
+  // playoffs begin shortly after) so the engine routes correctly.
+  getNbaSeasonContext(gameDate?: string | Date): {
+    seasonPhase: "early" | "mid" | "late" | "playoffs";
+    isPlayoffs: boolean;
+    isLateSeason: boolean;
+    seasonKey: string;
+  } {
     const d = gameDate ? new Date(gameDate) : new Date();
-    const month = d.getMonth() + 1;
-    if (month >= 10 && month <= 12) return "early";
-    if (month >= 1 && month <= 2) return "mid";
-    if (month >= 3 && month <= 4) return "late";
-    return "playoffs";
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth() + 1;
+
+    // NBA season starts in October. seasonStartYear is the calendar year of the Oct tip-off.
+    const seasonStartYear = m >= 10 ? y : y - 1;
+
+    // Conservative fixed windows. Playoffs cutover at Apr 10 of the season-end year.
+    const lateSeasonStart = new Date(Date.UTC(seasonStartYear + 1, 2, 1)); // Mar 1
+    const playoffsStart = new Date(Date.UTC(seasonStartYear + 1, 3, 10)); // Apr 10
+
+    let seasonPhase: "early" | "mid" | "late" | "playoffs";
+    if (d >= playoffsStart) seasonPhase = "playoffs";
+    else if (d >= lateSeasonStart) seasonPhase = "late";
+    else if (m >= 10 && m <= 12) seasonPhase = "early";
+    else seasonPhase = "mid"; // Jan–Feb
+
+    return {
+      seasonPhase,
+      isPlayoffs: seasonPhase === "playoffs",
+      isLateSeason: seasonPhase === "late",
+      seasonKey: `${seasonStartYear}-${String(seasonStartYear + 1).slice(2)}`,
+    };
+  }
+
+  // Backward-compatible accessor. Delegates to getNbaSeasonContext so any other
+  // call sites stay correct without reverting to the old month-only buckets.
+  getSeasonPhase(gameDate?: string | Date): "early" | "mid" | "late" | "playoffs" {
+    return this.getNbaSeasonContext(gameDate).seasonPhase;
   }
 
   async calculateProbability(req: CalculateProbabilityRequest): Promise<CalculateProbabilityResponse & { impliedProbability: number }> {
-    const seasonPhase = this.getSeasonPhase(req.gameDate);
+    const seasonContext = this.getNbaSeasonContext(req.gameDate);
+    const seasonPhase = seasonContext.seasonPhase;
+    const isPlayoffs = seasonContext.isPlayoffs;
+    const seasonType: "Regular Season" | "Playoffs" = isPlayoffs ? "Playoffs" : "Regular Season";
 
     const player = await this.getPlayer(req.playerId);
     if (!player) throw new Error("Player not found");
@@ -407,10 +443,43 @@ export class DatabaseStorage implements IStorage {
     const dbDefenseMultiplier = defense ? Number(defense.defRating) : 1.0;
 
     // ─── NBA Stats API: enriched defense matchup + usage (non-blocking) ─────
-    const [nbaDefenseMatchup, nbaPlayerUsage] = await Promise.all([
-      getTeamDefenseMatchup(req.opponentTeam).catch(() => null),
-      getPlayerUsage(player.name, String(player.id)).catch(() => null),
-    ]);
+    // For playoff games, request playoff-specific data first. If empty, fall
+    // back to regular-season data and tag a diagnostic so calibration knows
+    // it's working from regular-season context (and downgrades accordingly).
+    let playoffDataFallbackUsed = false;
+    let nbaDefenseMatchup: Awaited<ReturnType<typeof getTeamDefenseMatchup>> | null = null;
+    let nbaPlayerUsage: Awaited<ReturnType<typeof getPlayerUsage>> | null = null;
+
+    if (isPlayoffs) {
+      const [defPlayoffs, usagePlayoffs] = await Promise.all([
+        getTeamDefenseMatchup(req.opponentTeam, "Playoffs").catch(() => null),
+        getPlayerUsage(player.name, String(player.id), "Playoffs").catch(() => null),
+      ]);
+
+      const defResolved = defPlayoffs && defPlayoffs.source === "nba_stats" && defPlayoffs.defRating != null;
+      const usageResolved = usagePlayoffs && usagePlayoffs.source === "nba_stats" && usagePlayoffs.usageRate != null;
+
+      if (defResolved && usageResolved) {
+        nbaDefenseMatchup = defPlayoffs;
+        nbaPlayerUsage = usagePlayoffs;
+      } else {
+        // Fall back to regular-season for any unresolved leg
+        const [defRS, usageRS] = await Promise.all([
+          defResolved ? Promise.resolve(defPlayoffs) : getTeamDefenseMatchup(req.opponentTeam, "Regular Season").catch(() => null),
+          usageResolved ? Promise.resolve(usagePlayoffs) : getPlayerUsage(player.name, String(player.id), "Regular Season").catch(() => null),
+        ]);
+        nbaDefenseMatchup = defRS;
+        nbaPlayerUsage = usageRS;
+        playoffDataFallbackUsed = !defResolved || !usageResolved;
+      }
+    } else {
+      const [defRS, usageRS] = await Promise.all([
+        getTeamDefenseMatchup(req.opponentTeam, "Regular Season").catch(() => null),
+        getPlayerUsage(player.name, String(player.id), "Regular Season").catch(() => null),
+      ]);
+      nbaDefenseMatchup = defRS;
+      nbaPlayerUsage = usageRS;
+    }
     const nbaDefMultiplier = nbaDefenseMatchup ? computeDefenseMultiplier(nbaDefenseMatchup, player.position ?? undefined) : dbDefenseMultiplier;
     const defenseMultiplier = nbaDefenseMatchup
       ? nbaDefMultiplier * 0.6 + dbDefenseMultiplier * 0.4
@@ -832,7 +901,7 @@ export class DatabaseStorage implements IStorage {
 
     // Fragility penalty
     const isBlowout = Math.abs(parsedScoreDiff) > 15;
-    const fragilityScore = Math.max(0, Math.min(1,
+    let fragilityScore = Math.max(0, Math.min(1,
       0.25 * (effectiveMinutesBase < 20 ? 0.8 : effectiveMinutesBase < 26 ? 0.4 : 0.1) +
       0.20 * (avgMinutes < 22 ? 0.6 : 0.1) +
       0.20 * 0.1 +
@@ -840,6 +909,12 @@ export class DatabaseStorage implements IStorage {
       0.10 * 0.0 +
       0.10 * (seasonPhase === "late" ? 0.4 : 0.0)
     ));
+    // Playoff-aware fragility: stars stay steady (mult ~0.98), bench/role/
+    // impacted players become more fragile in playoff contexts. Multiplier
+    // table lives in nba/archetypes.ts.
+    if (isPlayoffs) {
+      fragilityScore = Math.min(1, fragilityScore * getPlayoffFragilityMultiplier(nbaArchetype));
+    }
     const fragilityPenalty = 0.45 * fragilityScore;
     const P_side_fragile = 0.5 + (P_side_raw - 0.5) * (1 - fragilityPenalty);
 
@@ -860,13 +935,42 @@ export class DatabaseStorage implements IStorage {
       calibrationTrack += "+under_bias_0.92";
     }
 
-    // Safety ceiling
-    const ceiling = getSafetyCeiling(nbaArchetype, isComboStat);
-    let P_side_final = Math.min(P_side_calibrated, ceiling);
-    let confidenceCeilingApplied = P_side_calibrated > ceiling;
+    // ── Playoff calibration branch (PHASE 2) ───────────────────────────────
+    // Apply an additional shrink toward 0.5 for playoff games. Combo markets
+    // shrink harder than single markets; volatile/impacted archetypes get an
+    // extra penalty layered on top. This is the primary mechanism for stopping
+    // the 80–100 confidence bucket from being overclaimed in playoffs.
+    if (isPlayoffs) {
+      const baseShrink = isComboStat ? 0.72 : 0.82;
+      let archetypePenalty = 1.0;
+      switch (nbaArchetype) {
+        case "volatile_starter": archetypePenalty = 0.95; break;
+        case "bench_microwave":  archetypePenalty = 0.90; break;
+        case "low_minute_big":   archetypePenalty = 0.92; break;
+        case "lineup_impacted":  archetypePenalty = 0.88; break;
+        case "role_uncertain":   archetypePenalty = 0.85; break;
+      }
+      const shrunk = 0.5 + (P_side_calibrated - 0.5) * baseShrink * archetypePenalty;
+      P_side_calibrated = Math.max(0.02, Math.min(0.98, shrunk));
+      calibrationTrack += `+playoff_shrink_${baseShrink.toFixed(2)}x${archetypePenalty.toFixed(2)}`;
+    }
+
+    // Safety ceiling — playoff ceiling overlaid on top of regular-season ceiling.
+    // We always take the more conservative (lower) of the two so playoff mode
+    // can never raise the cap above what regular-season would allow.
+    const regularCeiling = getSafetyCeiling(nbaArchetype, isComboStat);
+    const playoffCeiling = isPlayoffs ? getPlayoffSafetyCeiling(nbaArchetype, isComboStat) : regularCeiling;
+    const appliedCeiling = Math.min(regularCeiling, playoffCeiling);
+    let P_side_final = Math.min(P_side_calibrated, appliedCeiling);
+    let confidenceCeilingApplied = P_side_calibrated > appliedCeiling;
     let ceilingReason = confidenceCeilingApplied
-      ? `${nbaArchetype}_${isComboStat ? "combo" : "single"}_cap_${ceiling}`
+      ? `${nbaArchetype}_${isComboStat ? "combo" : "single"}_cap_${appliedCeiling}${isPlayoffs && appliedCeiling < regularCeiling ? "_playoff" : ""}`
       : null;
+    if (isPlayoffs && appliedCeiling < regularCeiling) {
+      calibrationTrack += `+playoff_cap_${appliedCeiling}`;
+    }
+    // Backwards-compat for existing diagnostics field name.
+    const ceiling = appliedCeiling;
 
     // Convert to percentage scale for compatibility
     let probability = rawSide === "OVER"
@@ -886,10 +990,37 @@ export class DatabaseStorage implements IStorage {
       overLeanProbability < 50 ? "UNDER" :
       "NO_SIGNAL";
 
-    const displayConfidence: number | null =
+    let displayConfidence: number | null =
       recommendedSide === "NO_SIGNAL" ? null :
       recommendedSide === "OVER" ? overConfidence :
       underConfidence;
+
+    // ── Playoff anti-overconfidence guards (PHASE 8) ───────────────────────
+    // Guard 1: in playoffs, only stable_star is allowed to display ≥80
+    //   confidence. Everyone else gets clamped to a tier-appropriate cap so
+    //   bench/volatile/role-uncertain plays can't claim elite status.
+    // Guard 2: if we had to fall back to regular-season data inside a playoff
+    //   game, refuse to surface elite-tier confidence regardless of archetype.
+    let playoffHighBucketGuardApplied = false;
+    let playoffFallbackCapApplied = false;
+    if (isPlayoffs && displayConfidence !== null) {
+      if (displayConfidence >= 80 && nbaArchetype !== "stable_star") {
+        const cap = isComboStat ? 68 : 74;
+        if (displayConfidence > cap) {
+          displayConfidence = cap;
+          calibrationTrack += "+playoff_high_bucket_guard";
+          playoffHighBucketGuardApplied = true;
+        }
+      }
+      if (playoffDataFallbackUsed) {
+        const cap = 72;
+        if (displayConfidence > cap) {
+          displayConfidence = cap;
+          calibrationTrack += "+playoff_fallback_cap";
+          playoffFallbackCapApplied = true;
+        }
+      }
+    }
 
     // Integrity guard
     const warnings: string[] = [];
@@ -917,7 +1048,32 @@ export class DatabaseStorage implements IStorage {
     let volatilityFiltered = isVolatileArchetype(nbaArchetype);
     let lateSeasonPenaltyApplied = seasonPhase === "late" && fragilityScore > 0.2;
     let teamVolatilityPenaltyApplied = seasonPhase === "late" && HIGH_VOLATILITY_TEAMS.has(player.team);
-    let playoffBoostApplied = false;
+    // Legacy flag retained for downstream analytics. Now true whenever the
+    // playoff calibration branch executed (regardless of guard activation).
+    let playoffBoostApplied = isPlayoffs;
+
+    // ── Playoff diagnostics log (PHASE 6) ──────────────────────────────────
+    if (isPlayoffs) {
+      console.log("[NBA_PLAYOFF_ENGINE]", JSON.stringify({
+        player: player.name,
+        gameId: req.gameId,
+        market: req.statType,
+        seasonPhase,
+        archetype: nbaArchetype,
+        projection: Math.round(expectedTotal * 10) / 10,
+        line: req.liveLine,
+        finalProbOver: Math.round((rawSide === "OVER" ? P_side_final : 1 - P_side_final) * 10000) / 10000,
+        finalProbUnder: Math.round((rawSide === "UNDER" ? P_side_final : 1 - P_side_final) * 10000) / 10000,
+        displayConfidence: displayConfidence !== null ? Math.round(displayConfidence * 10) / 10 : null,
+        regularCeiling,
+        playoffCeiling,
+        appliedCeiling,
+        calibrationTrack,
+        playoffDataFallbackUsed,
+        playoffHighBucketGuardApplied,
+        playoffFallbackCapApplied,
+      }));
+    }
 
     if (process.env.DEBUG_PIPELINE === "true" || noSignal) {
       console.log(
@@ -1010,6 +1166,19 @@ export class DatabaseStorage implements IStorage {
       displayConfidence: displayConfidence !== null ? Math.round(displayConfidence * 10) / 10 : null,
       recommendedSide,
       warnings,
+      // ── Playoff diagnostics (PHASE 6) ──────────────────────────────────
+      playoffMode: isPlayoffs,
+      playoffDataRequested: isPlayoffs,
+      playoffDataResolved: isPlayoffs && !playoffDataFallbackUsed && (!!nbaDefenseMatchup || !!nbaPlayerUsage),
+      playoffDataFallbackUsed: isPlayoffs && playoffDataFallbackUsed,
+      playoffCalibrationApplied: isPlayoffs,
+      playoffMinutesAdjustmentApplied: isPlayoffs,
+      playoffCeilingApplied: isPlayoffs && appliedCeiling < regularCeiling,
+      playoffCeilingValue: isPlayoffs ? appliedCeiling : null,
+      regularCeilingValue: regularCeiling,
+      playoffHighBucketGuardApplied,
+      playoffFallbackCapApplied,
+      seasonPhaseResolvedFrom: req.gameDate ? "gameDate" : "systemDate",
     };
 
     const engineDiagnostics = {

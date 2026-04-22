@@ -139,3 +139,32 @@ export function getSafetyCeiling(archetype: NBAArchetype, isCombo: boolean): num
   if (isVolatileArchetype(archetype)) return isCombo ? SAFETY_CEILINGS.volatile_combo : SAFETY_CEILINGS.volatile_single;
   return isCombo ? SAFETY_CEILINGS.stable_combo : SAFETY_CEILINGS.stable_single;
 }
+
+// ── Playoff-aware ceilings ────────────────────────────────────────────────
+// Lower than regular-season ceilings across the board. Top-end probability is
+// historically inflated in playoff conditions (tighter rotations, higher
+// variance, tougher matchups) so we cap how confident the engine is allowed
+// to be even before display rounding.
+export function getPlayoffSafetyCeiling(archetype: NBAArchetype, isCombo: boolean): number {
+  if (isImpactedArchetype(archetype)) return 0.60;
+  if (isVolatileArchetype(archetype)) return isCombo ? 0.62 : 0.66;
+  return isCombo ? 0.70 : 0.76;
+}
+
+// ── Playoff fragility multiplier ──────────────────────────────────────────
+// Stars are slightly steadier in playoffs (coaches lean on them); fringe and
+// bench archetypes get *more* fragile (shorter leashes, role compression,
+// blowout substitutions, foul trouble matters more). Used to scale the
+// fragilityScore in storage.calculateProbability when isPlayoffs.
+export function getPlayoffFragilityMultiplier(archetype: NBAArchetype): number {
+  switch (archetype) {
+    case "stable_star":      return 0.98;
+    case "stable_starter":   return 1.00;
+    case "volatile_starter": return 1.08;
+    case "bench_microwave":  return 1.15;
+    case "low_minute_big":   return 1.12;
+    case "lineup_impacted":  return 1.20;
+    case "role_uncertain":   return 1.25;
+    default:                 return 1.0;
+  }
+}

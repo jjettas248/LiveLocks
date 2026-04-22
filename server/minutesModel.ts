@@ -70,13 +70,28 @@ export function calculateRemainingMinutes(ctx: MinutesContext): MinutesResult {
   closingProbability = Math.min(0.98, closingProbability);
 
   // ── 3b. Season-phase adjustments to closing probability ─────────────
-  if (ctx.seasonPhase === "playoffs" && baseRotationMinutes >= 30) {
-    closingProbability = Math.min(0.99, closingProbability + 0.03);
+  // Playoff rotations compress sharply — stars play more, fringe roles lose
+  // trust. Tier-by-baseline so we don't flat-bump everyone.
+  if (ctx.seasonPhase === "playoffs") {
+    if (baseRotationMinutes >= 34) {
+      closingProbability = Math.min(0.995, closingProbability + 0.04);
+    } else if (baseRotationMinutes >= 30) {
+      closingProbability = Math.min(0.99, closingProbability + 0.03);
+    } else if (baseRotationMinutes < 24) {
+      closingProbability = Math.max(0.20, closingProbability - 0.06);
+    }
   }
 
   // ── 4. Close-game extension ──────────────────────────────────────────
+  // Playoff stars get noticeably more close-game extension (coaches lean
+  // hard on them in clutch); bench/fringe players get less. In the late
+  // regular season we keep the historical small dampener for fringe roles.
   let closeGameExtensionMultiplier = 0.05;
-  if (ctx.seasonPhase === "late" && baseRotationMinutes < 28) {
+  if (ctx.seasonPhase === "playoffs") {
+    if (baseRotationMinutes >= 34) closeGameExtensionMultiplier = 0.10;
+    else if (baseRotationMinutes >= 30) closeGameExtensionMultiplier = 0.085;
+    else if (baseRotationMinutes < 24) closeGameExtensionMultiplier = 0.03;
+  } else if (ctx.seasonPhase === "late" && baseRotationMinutes < 28) {
     closeGameExtensionMultiplier *= 0.9;
   }
 
@@ -114,7 +129,13 @@ export function calculateRemainingMinutes(ctx: MinutesContext): MinutesResult {
   }
 
   // ── 8. Max minutes guard ─────────────────────────────────────────────
-  const maxProjectedMinutes = rotationBase * 1.25;
+  // Playoff stars (rotationBase >= 32) routinely exceed the regular-season
+  // 1.25x cap in close games. Loosen the cap modestly in playoffs so the
+  // engine doesn't artificially clip realistic playoff star minutes.
+  const maxProjectedMinutes =
+    ctx.seasonPhase === "playoffs" && rotationBase >= 32
+      ? rotationBase * 1.32
+      : rotationBase * 1.25;
   const maxRemainingAllowed = Math.max(0, maxProjectedMinutes - minutesPlayed);
   remainingMinutes = Math.min(remainingMinutes, maxRemainingAllowed);
 
