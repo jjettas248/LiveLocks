@@ -1755,6 +1755,9 @@ export class LiveGameOrchestrator {
       // Phase 1–2: also pass canonical stage on the contact-update path so
       // a heavy contact event doesn't lag the canonical stage by one tick.
       const contactCanonicalStage = earlyDetect ? mapDynamicStateToStage(earlyDetect.currentState) : null;
+      // Goldmaster Phase 1, 3, 7 — AB context for the user-facing card.
+      const contactPaCount = (playerContact.priorABResults ?? []).length;
+      const contactHasLiveAB = contactSnap !== null;
       storage.createOrUpdateHrRadarAlert({
         gameId,
         playerId: batter.playerId,
@@ -1766,6 +1769,8 @@ export class LiveGameOrchestrator {
         readinessScore: hrBuild.score,
         dynamicReadinessScore: earlyDetect?.hrReadinessScore ?? null,
         canonicalStage: contactCanonicalStage,
+        plateAppearancesTracked: contactPaCount,
+        hasLiveABContext: contactHasLiveAB,
         confidenceTier: tierMap[alertResult.signalState ?? "FORMATION"] ?? "monitor",
         signalState: stateMap[alertResult.signalState ?? "FORMATION"] ?? "live",
         triggerTags: alertResult.triggerReason ? alertResult.triggerReason.split(", ") : [],
@@ -2515,6 +2520,9 @@ export class LiveGameOrchestrator {
               // user-facing ladder. We pass it explicitly; storage maps it to
               // the legacy confidenceTier for backwards compat.
               const canonicalStage = hrDynSnap ? mapDynamicStateToStage(hrDynSnap.currentState) : null;
+              // Goldmaster Phase 1, 3, 7 — AB context for the user-facing card.
+              const enginePaCount = (playerContact?.priorABResults ?? []).length;
+              const engineHasLiveAB = contactSnap !== null;
 
               storage.createOrUpdateHrRadarAlert({
                 gameId,
@@ -2529,6 +2537,8 @@ export class LiveGameOrchestrator {
                 dynamicReadinessScore: hrDynSnap?.hrReadinessScore ?? null,
                 // Phase 1 — canonical stage (overrides legacy sticky tier)
                 canonicalStage,
+                plateAppearancesTracked: enginePaCount,
+                hasLiveABContext: engineHasLiveAB,
                 confidenceTier: tierMap[alertResult.signalState ?? "FORMATION"] ?? "monitor",
                 signalState: stateMap[alertResult.signalState ?? "FORMATION"] ?? "live",
                 triggerTags: alertResult.triggerReason ? alertResult.triggerReason.split(", ") : [],

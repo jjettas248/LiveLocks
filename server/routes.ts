@@ -2407,6 +2407,29 @@ export async function registerRoutes(
     }
   });
 
+  // Goldmaster Phase 10 — validation harness. Runs the canonical-entity
+  // invariant checks against the current ladder payload and returns a
+  // machine-readable report. Returns 200 with violations:[] when clean so it
+  // can be polled cheaply by an external monitor.
+  app.get("/api/mlb/hr-radar/ladder/validate", requireAuth, async (req, res) => {
+    try {
+      const { validateHrRadarLadder } = await import("./validation/hrRadar/ladderInvariants");
+      const sessionDate = typeof req.query.sessionDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.sessionDate)
+        ? req.query.sessionDate
+        : undefined;
+      const ladder = await storage.getHrRadarLadder(sessionDate);
+      const report = validateHrRadarLadder(ladder);
+      return res.json({
+        sessionDate: ladder.sessionDate,
+        ok: report.violations.length === 0,
+        ...report,
+      });
+    } catch (e: any) {
+      console.error("[mlb/hr-radar/ladder/validate]", e.message);
+      return res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   app.get("/api/mlb/hr-radar-board", requireAuth, async (req, res) => {
     try {
       const board = await storage.getTodayHrRadarBoard();

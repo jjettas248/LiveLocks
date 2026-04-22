@@ -2758,6 +2758,18 @@ export class DatabaseStorage implements IStorage {
     firstDetectedInning?: number | null;
     firstDetectedHalf?: "top" | "bottom" | null;
     firstDetectedAtMs?: number | null;
+    /**
+     * AB context (Goldmaster Phase 1, 3, 7). Number of plate appearances the
+     * orchestrator has actually observed for this player in this game; used to
+     * separate "pregame-only signal (0 AB)" from "live AB-confirmed signal"
+     * in the user-facing card.
+     */
+    plateAppearancesTracked?: number | null;
+    /**
+     * True when at least one live AB contact event has been logged for the
+     * player in this game. Pregame-context-only rows must set this to false.
+     */
+    hasLiveABContext?: boolean | null;
   }): Promise<HrRadarAlert | null> {
     // Embed canonical score contract into diagnosticsSnapshot so consumers
     // can read explicit per-domain values without DB schema changes.
@@ -2767,6 +2779,11 @@ export class DatabaseStorage implements IStorage {
       conversionProbabilityRaw: data.conversionProbabilityRaw ?? null,
       conversionProbability: data.conversionProbability ?? null,
       peakConversionProbability: data.peakConversionProbability ?? null,
+    };
+    // ── AB context (Goldmaster Phase 1, 3, 7) ──────────────────────────────
+    const abContext = {
+      plateAppearancesTracked: data.plateAppearancesTracked ?? null,
+      hasLiveABContext: data.hasLiveABContext ?? null,
     };
     // ── Canonical stage contract (Goldmaster Phase 1–4) ────────────────────
     // currentCanonicalStage is the live engine truth (drives the user-facing
@@ -2792,7 +2809,7 @@ export class DatabaseStorage implements IStorage {
       // eslint-disable-next-line no-param-reassign
       data.confidenceTier = tierFromStage as any;
     }
-    data.diagnosticsSnapshot = { ...baseDiagInit, scoreContract, stageContract };
+    data.diagnosticsSnapshot = { ...baseDiagInit, scoreContract, stageContract, abContext };
     // Prefer dynamic engine readiness over raw build score for the persisted
     // readinessScore (Phase 2). Caller may pass either; if dynamicReadinessScore
     // is provided we use it as the live progression score.
@@ -2972,6 +2989,23 @@ export class DatabaseStorage implements IStorage {
               half: data.half,
               source: "engine",
             } as InsertHrRadarSignalEvent);
+            // Goldmaster Phase 9 — canonical "cooled_off" alias for the
+            // downgrade event so downstream ledger consumers can key off the
+            // canonical name without parsing legacy types.
+            await this.appendHrRadarSignalEvent({
+              sessionDate: today, gameId: data.gameId, playerId: data.playerId, team: data.team,
+              alertId: alert.id,
+              eventType: "cooled_off",
+              signalState: data.signalState,
+              score: String(newScore),
+              confidenceTier: data.confidenceTier,
+              triggerTags: data.triggerTags as any,
+              drivers: data.diagnosticsSnapshot as any,
+              detectedAt: new Date(),
+              inning: data.inning,
+              half: data.half,
+              source: "engine",
+            } as InsertHrRadarSignalEvent);
           }
         }
         console.log(`[HR_RADAR_ALERT_UPSERT] UPDATE sessionDate=${today} gameId=${data.gameId} playerId=${data.playerId} detectedLabel=${alert.detectedLabel} currentReadinessScore=${newScore}`);
@@ -3059,6 +3093,23 @@ export class DatabaseStorage implements IStorage {
       // Phase 3 — also emit the initial canonical stage as a transition event
       // so dispatch keys cleanly off stage_* events regardless of whether the
       // alert is brand new or being upgraded.
+      // Goldmaster Phase 9 — emit canonical detection event when this is the
+      // first time we've seen the player. `detected_watch` fires for every
+      // new alert so the ledger has a single canonical "first sighting" type.
+      await this.appendHrRadarSignalEvent({
+        sessionDate: today, gameId: data.gameId, playerId: data.playerId, team: data.team,
+        alertId,
+        eventType: "detected_watch",
+        signalState: data.signalState,
+        score: String(data.readinessScore),
+        confidenceTier: data.confidenceTier,
+        triggerTags: data.triggerTags as any,
+        drivers: data.diagnosticsSnapshot as any,
+        detectedAt: nowDate,
+        inning: data.inning,
+        half: data.half,
+        source: "engine",
+      } as InsertHrRadarSignalEvent);
       if (data.canonicalStage && data.canonicalStage !== "watch") {
         await this.appendHrRadarSignalEvent({
           sessionDate: today, gameId: data.gameId, playerId: data.playerId, team: data.team,
@@ -3150,6 +3201,14 @@ export class DatabaseStorage implements IStorage {
             half: hitHalfVal,
             source: "grader",
           } as InsertHrRadarSignalEvent);
+          // Goldmaster Phase 9 — canonical alias.
+          await this.appendHrRadarSignalEvent({
+            sessionDate: today, gameId, playerId, team: "",
+            alertId: matchResult.alertId,
+            eventType: "resolved_called_hit",
+            detectedAt: nowDate, inning: hitInningNum, half: hitHalfVal,
+            source: "grader",
+          } as InsertHrRadarSignalEvent);
         }
         return count;
       }
@@ -3187,6 +3246,14 @@ export class DatabaseStorage implements IStorage {
             eventType: "late_signal",
             detectedAt: nowDate,
             inning: hitInningNum, half: hitHalfVal,
+            source: "grader",
+          } as InsertHrRadarSignalEvent);
+          // Goldmaster Phase 9 — canonical alias.
+          await this.appendHrRadarSignalEvent({
+            sessionDate: today, gameId, playerId, team: "",
+            alertId: matchResult.alertId,
+            eventType: "resolved_late_signal",
+            detectedAt: nowDate, inning: hitInningNum, half: hitHalfVal,
             source: "grader",
           } as InsertHrRadarSignalEvent);
         }
@@ -3309,6 +3376,18 @@ export class DatabaseStorage implements IStorage {
       } else {
         console.log(`[HR_RADAR_UNCALLED] (admin-only row created) playerId=${data.playerId} player=${data.playerName} gameId=${data.gameId} hitLabel=${data.hitLabel}`);
       }
+      // Goldmaster Phase 9 — canonical resolved_* event for the ledger.
+      try {
+        await this.appendHrRadarSignalEvent({
+          sessionDate: today, gameId: data.gameId, playerId: data.playerId, team: data.team,
+          alertId,
+          eventType: earlyExempt ? "resolved_early_window_hr" : "resolved_uncalled_hr",
+          detectedAt: nowDate,
+          inning: data.inning,
+          half: halfLabel,
+          source: "grader",
+        } as InsertHrRadarSignalEvent);
+      } catch { /* non-fatal */ }
     } catch (err: any) {
       if (err.message?.includes("duplicate key")) return;
       console.warn(`[HR_RADAR_ENSURE_HIT] Failed: ${err.message}`);
@@ -3337,6 +3416,27 @@ export class DatabaseStorage implements IStorage {
       const count = (result as any).rowCount ?? 0;
       if (count > 0) {
         console.log(`[HR_RADAR_ALERT_MISS] playerId=${playerId} gameId=${gameId}`);
+        // Goldmaster Phase 9 — canonical resolved_miss alias.
+        try {
+          const resolvedRows = await db.select({ id: hrRadarAlerts.id })
+            .from(hrRadarAlerts)
+            .where(and(
+              eq(hrRadarAlerts.sessionDate, today),
+              eq(hrRadarAlerts.gameId, gameId),
+              eq(hrRadarAlerts.playerId, playerId),
+            ))
+            .limit(1);
+          if (resolvedRows.length > 0) {
+            await this.appendHrRadarSignalEvent({
+              sessionDate: today, gameId, playerId, team: "",
+              alertId: resolvedRows[0].id,
+              eventType: "resolved_miss",
+              detectedAt: new Date(),
+              inning: 0, half: "F",
+              source: "grader",
+            } as InsertHrRadarSignalEvent);
+          }
+        } catch { /* non-fatal */ }
       }
       return count;
     } catch (err: any) {
@@ -3436,6 +3536,15 @@ export class DatabaseStorage implements IStorage {
             .where(eq(hrRadarAlerts.id, alert.id));
           console.log(`[HR_RADAR_ALERT_MISS] playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel}`);
           console.log(`[HR_LEDGER_GRADE] outcome=called_miss (reconcile) sessionDate=${today} gameId=${gameId} playerId=${alert.playerId} detectedLabel=${alert.detectedLabel} alertId=${alert.id}`);
+          // Goldmaster Phase 9 — canonical resolved_miss alias.
+          await this.appendHrRadarSignalEvent({
+            sessionDate: today, gameId, playerId: alert.playerId, team: alert.team ?? "",
+            alertId: alert.id,
+            eventType: "resolved_miss",
+            detectedAt: nowDate,
+            inning: 0, half: "F",
+            source: "grader",
+          } as InsertHrRadarSignalEvent);
         }
       }
 
@@ -3925,20 +4034,55 @@ export class DatabaseStorage implements IStorage {
 
       const key = `${r.gameId}|${r.playerId}`;
 
-      // Determine target section
+      // ── Goldmaster Phase 1, 2 — canonical stage + status + outcome ────────
+      const diag = (r.diagnosticsSnapshot ?? {}) as Record<string, any>;
+      const stageContractRow = (diag.stageContract ?? {}) as Record<string, any>;
+      const abContextRow = (diag.abContext ?? {}) as Record<string, any>;
+
+      const canonicalStage: HrRadarStageLabel | null = (() => {
+        const s = stageContractRow.currentCanonicalStage;
+        if (s === "watch" || s === "building" || s === "attack" || s === "cooling" || s === "closed") return s;
+        return null;
+      })();
+
+      // currentStatus: resolved iff the row is no longer live (status==="hit"
+      // or grading produced a final outcome). Otherwise live.
+      const isResolved = r.status === "hit" || (grading !== "active" && grading != null);
+      const currentStatus: "live" | "resolved" = isResolved ? "resolved" : "live";
+
+      // outcome: map DB grading → canonical user-facing outcome label.
+      const outcome: HrRadarOutcomeLabel = (() => {
+        if (currentStatus === "live") return "pending";
+        switch (grading) {
+          case "called_hit": return "called_hit";
+          case "called_miss": return "miss";
+          case "uncalled_hr": return "uncalled_hr";
+          case "late_signal": return "late_signal";
+          // Phase 4: split early-window HR from standard misses.
+          case "early_hr_no_window":
+          case "early_window_hr":
+            return "early_window_hr";
+          default: return "pending";
+        }
+      })();
+
+      // Determine target section. For LIVE rows we now bucket off the
+      // canonical engine stage (Phase 2). Resolved rows go to cashed/dead by
+      // outcome.
       let section: keyof typeof sections;
-      if (grading === "called_hit") {
-        section = "cashed";
-      } else if (grading === "called_miss" || grading === "uncalled_hr" || grading === "late_signal") {
-        section = "dead";
+      if (currentStatus === "resolved") {
+        section = outcome === "called_hit" ? "cashed" : "dead";
+      } else if (canonicalStage) {
+        // Canonical stage drives live bucketing. Cooling demotes to watch
+        // (we don't want to keep advertising "Attack" after the engine cooled).
+        section =
+          canonicalStage === "attack" ? "attackNow"
+          : canonicalStage === "building" ? "building"
+          : "watch";
       } else {
-        // Active rows — classify using the actual values written by
-        // liveGameOrchestrator: confidenceTier ∈ {monitor,building,strong},
-        // signalState ∈ {watching,live,actionable}.
-        // Phase 7: enforce readinessScore floors as a safety net — a row tagged
-        // "strong" but with readiness < 72 is demoted to building; "building"
-        // with readiness < 55 is demoted to watch. Formation patterns (low
-        // readiness, monitor tier) are always retained in `watch`.
+        // Legacy fallback: row was created before canonical stage was wired.
+        // Use the previous tier+readiness floors so old rows still bucket
+        // sensibly.
         const tier = (r.confidenceTier ?? "monitor").toLowerCase();
         const state = (r.signalState ?? "watching").toLowerCase();
         const readiness = parseFloat(String(r.currentReadinessScore ?? r.peakReadinessScore ?? 0)) || 0;
@@ -3953,17 +4097,64 @@ export class DatabaseStorage implements IStorage {
         }
       }
 
-      const whyNowReasons = this.buildHrRadarWhyNow(r);
+      // currentStage label always reflects what the user should see — for
+      // resolved rows we lock it to the canonical stage at resolution time
+      // (or "closed" if missing).
+      const currentStage: HrRadarStageLabel = (() => {
+        if (currentStatus === "resolved") {
+          return outcome === "called_hit" ? "closed"
+            : outcome === "miss" || outcome === "uncalled_hr" || outcome === "early_window_hr" || outcome === "late_signal" ? "closed"
+            : "closed";
+        }
+        if (canonicalStage) return canonicalStage;
+        // Fallback for legacy live rows
+        return section === "attackNow" ? "attack" : section === "building" ? "building" : "watch";
+      })();
+
+      const plateAppearancesTracked: number | null =
+        typeof abContextRow.plateAppearancesTracked === "number" ? abContextRow.plateAppearancesTracked : null;
+      const hasLiveABContext: boolean =
+        abContextRow.hasLiveABContext === true ? true
+          : (plateAppearancesTracked != null && plateAppearancesTracked > 0);
+
+      // Build user-facing reasons (humanized, jargon stripped) and admin
+      // reasons (raw engine strings preserved for debug view).
+      const { userReasons, adminReasons } = this.buildHrRadarReasonSets(r, {
+        plateAppearancesTracked,
+        hasLiveABContext,
+      });
+      // Plain-English summary appropriate for the current stage/outcome
+      // (Goldmaster Phase 5 + 6).
+      const summary = this.buildHrRadarSummary({
+        currentStage,
+        currentStatus,
+        outcome,
+        plateAppearancesTracked,
+        hasLiveABContext,
+        detectedInning: r.signalInning ?? r.detectedInning ?? null,
+        detectedHalf: r.signalHalf ?? r.detectedHalf ?? null,
+        hitInning: r.hitInning ?? null,
+        hitHalf: r.hitHalf ?? null,
+      });
+
       const entry: HrRadarLadderEntry = {
         playerId: r.playerId,
         playerName: r.playerName,
         team: r.team,
         gameId: r.gameId,
+        currentStage,
+        currentStatus,
+        outcome,
+        plateAppearancesTracked,
+        hasLiveABContext,
+        userReasons,
+        adminReasons,
+        summary,
         state: r.signalState ?? null,
         confidenceTier: r.confidenceTier ?? null,
         peakScore: r.peakReadinessScore ? parseFloat(r.peakReadinessScore) : null,
         signalStrengthScore: r.currentReadinessScore ? parseFloat(r.currentReadinessScore) : null,
-        whyNowReasons,
+        whyNowReasons: userReasons,
         nextAbEstimate: this.buildNextAbEstimate(r),
         detectedInning: r.signalInning ?? r.detectedInning ?? null,
         detectedHalf: r.signalHalf ?? r.detectedHalf ?? null,
@@ -4023,6 +4214,134 @@ export class DatabaseStorage implements IStorage {
     return reasons;
   }
 
+  /**
+   * Goldmaster Phase 6 — translate engine internals into product language.
+   * Returns:
+   *  - userReasons: strings safe for default user view (PATH_*, raw debug
+   *    abbreviations, internal state machine labels stripped).
+   *  - adminReasons: full raw strings preserved for admin/debug rendering.
+   */
+  private buildHrRadarReasonSets(
+    r: HrRadarAlert,
+    ctx: { plateAppearancesTracked: number | null; hasLiveABContext: boolean },
+  ): { userReasons: string[]; adminReasons: string[] } {
+    const tags = (r.triggerTags ?? []).filter(t => typeof t === "string" && t.length > 0);
+
+    // Pattern that flags a string as raw engine jargon — anything starting
+    // with PATH, WATCH:, BUILD:, FORM:, or containing inline metric tokens
+    // like Conv 11%, Score7.63, BsZ-0.09, Danger3.57, Profile0.69.
+    const ENGINE_JARGON_RE = /^(PATH[_ ]?[A-Z0-9_]+|WATCH:|BUILD:|FORM:|FORMATION|PRE[_ ]HR[_ ]DANGER|HrShaped|BsZ|Danger\d|Profile\d|Score\d)/i;
+    const looksLikeJargon = (s: string): boolean => ENGINE_JARGON_RE.test(s.trim());
+
+    const userReasons: string[] = [];
+    const adminReasons: string[] = [];
+
+    for (const t of tags.slice(0, 6)) {
+      const human = this.humanizeHrRadarTag(t);
+      adminReasons.push(t);
+      if (!looksLikeJargon(t) && !looksLikeJargon(human)) {
+        userReasons.push(human);
+      }
+    }
+
+    // summaryText: keep on admin side always; only promote to user side if
+    // it doesn't read like debug output.
+    if (r.summaryText) {
+      adminReasons.push(r.summaryText);
+      if (!looksLikeJargon(r.summaryText) && userReasons.length < 5) {
+        // Strip any inline engine tokens that slipped into a summary string.
+        const cleaned = r.summaryText
+          .replace(/PATH[_ ]?[A-Z0-9_]+:?\s*[A-Za-z+]+/g, "")
+          .replace(/Score\d+(\.\d+)?/g, "")
+          .replace(/Conv\s+\d+%/g, "")
+          .replace(/\s{2,}/g, " ")
+          .trim();
+        if (cleaned.length > 0 && !looksLikeJargon(cleaned)) userReasons.push(cleaned);
+      }
+    }
+
+    if (r.scoreIncreased && r.scoreIncreaseLabel) {
+      const label = `Signal climbed in ${r.scoreIncreaseLabel}`;
+      adminReasons.push(`scoreClimb=${r.scoreIncreaseLabel}`);
+      if (userReasons.length < 5) userReasons.push(label);
+    }
+
+    // 0-AB rows: explicit pregame indicator so the user never thinks live
+    // contact has been confirmed when it hasn't.
+    if (!ctx.hasLiveABContext && (ctx.plateAppearancesTracked ?? 0) === 0) {
+      userReasons.unshift("No at-bats yet — pregame form, matchup, and park context only");
+    }
+
+    return {
+      userReasons: Array.from(new Set(userReasons)).slice(0, 5),
+      adminReasons: Array.from(new Set(adminReasons)).slice(0, 8),
+    };
+  }
+
+  /**
+   * Goldmaster Phase 5 + 6 — single plain-English summary appropriate for the
+   * row's current stage/outcome. Live rows describe what the engine sees;
+   * resolved rows describe what actually happened. They MUST never blend.
+   */
+  private buildHrRadarSummary(p: {
+    currentStage: HrRadarStageLabel;
+    currentStatus: "live" | "resolved";
+    outcome: HrRadarOutcomeLabel;
+    plateAppearancesTracked: number | null;
+    hasLiveABContext: boolean;
+    detectedInning: number | null;
+    detectedHalf: string | null;
+    hitInning: number | null;
+    hitHalf: string | null;
+  }): string {
+    const fmtInning = (inn: number | null, half: string | null): string | null => {
+      if (inn == null) return null;
+      const h = (half ?? "").toLowerCase();
+      const prefix = h.startsWith("t") || h === "top" ? "T" : h.startsWith("b") || h === "bottom" ? "B" : "";
+      return prefix ? `${prefix}${inn}` : `inning ${inn}`;
+    };
+    const detected = fmtInning(p.detectedInning, p.detectedHalf);
+    const hit = fmtInning(p.hitInning, p.hitHalf);
+
+    if (p.currentStatus === "resolved") {
+      switch (p.outcome) {
+        case "called_hit":
+          return `HR confirmed${hit ? ` ${hit}` : ""}${detected ? ` after a called signal at ${detected}` : ""}.`;
+        case "miss":
+          return `Signal was tracked${detected ? ` from ${detected}` : ""} and did not convert before the window closed.`;
+        case "early_window_hr":
+          return `HR occurred${hit ? ` ${hit}` : " in the 1st inning"} before a realistic pre-signal window existed.`;
+        case "uncalled_hr":
+          return `HR occurred${hit ? ` ${hit}` : ""} without a qualifying pre-HR engine signal.`;
+        case "late_signal":
+          return `Engine signal arrived after the HR had already happened${hit ? ` (${hit})` : ""}.`;
+        case "expired":
+          return `Signal expired without converting${detected ? ` (tracked from ${detected})` : ""}.`;
+        default:
+          return `Signal resolved${detected ? ` (tracked from ${detected})` : ""}.`;
+      }
+    }
+
+    // Live mode — describe the current stage in product language only.
+    if (!p.hasLiveABContext && (p.plateAppearancesTracked ?? 0) === 0) {
+      return "No at-bats yet. Tracking pregame power profile, matchup, and park context. Live contact data will appear after the first plate appearance.";
+    }
+    switch (p.currentStage) {
+      case "watch":
+        return "Tracking. Pattern is forming but not yet at the building threshold.";
+      case "building":
+        return "The HR pattern is building. One more quality contact or worsening pitcher context could move this into Attack.";
+      case "attack":
+        return "Attack window is open. Repeated dangerous contact plus favorable context are now aligned.";
+      case "cooling":
+        return "Engine is cooling off. Watching for fresh contact to re-engage the signal.";
+      case "closed":
+        return "Signal has closed for this game.";
+      default:
+        return "Tracking.";
+    }
+  }
+
   private humanizeHrRadarTag(tag: string): string {
     const map: Record<string, string> = {
       hot_hitter: "Hot hitter (recent HR streak)",
@@ -4054,22 +4373,59 @@ export class DatabaseStorage implements IStorage {
   }
 }
 
+/**
+ * Goldmaster canonical HR Radar entity — Phase 1 of the entity-model fix.
+ * `currentStage` is the live engine stage; `outcome` is the final grading
+ * result. They MUST never be merged into a single ambiguous "state" field.
+ */
+export type HrRadarStageLabel = "watch" | "building" | "attack" | "cooling" | "closed";
+export type HrRadarOutcomeLabel =
+  | "pending"
+  | "called_hit"
+  | "miss"
+  | "early_window_hr"
+  | "uncalled_hr"
+  | "late_signal"
+  | "expired";
+
 export interface HrRadarLadderEntry {
   playerId: string;
   playerName: string;
   team: string;
   gameId: string;
+  /** Live engine stage (Goldmaster Phase 1, 2). Source of truth for live rows. */
+  currentStage: HrRadarStageLabel;
+  /** "live" while game/alert is still active, "resolved" once outcome is final. */
+  currentStatus: "live" | "resolved";
+  /** Final grading outcome. "pending" while currentStatus === "live". */
+  outcome: HrRadarOutcomeLabel;
+  /** Number of plate appearances actually observed by the engine. 0 = pregame-only. */
+  plateAppearancesTracked: number | null;
+  /** True iff at least one live AB contact has been logged for this player/game. */
+  hasLiveABContext: boolean;
+  /** Plain-English reasons for users (engine jargon stripped). */
+  userReasons: string[];
+  /** Raw engine diagnostic strings — admin/debug view only, never default user view. */
+  adminReasons: string[];
+  /** One-sentence plain-English summary appropriate for the current stage/outcome. */
+  summary: string;
+
+  // ── Legacy fields preserved for backwards compat. ──────────────────────────
+  /** @deprecated use currentStage. Internal signal state string. */
   state: string | null;
+  /** @deprecated use currentStage. Internal confidence tier string. */
   confidenceTier: string | null;
   peakScore: number | null;
   signalStrengthScore: number | null;
+  /** @deprecated use userReasons (default) or adminReasons (debug). */
   whyNowReasons: string[];
   nextAbEstimate: string | null;
   detectedInning: number | null;
   detectedHalf: string | null;
   hitInning: number | null;
   hitHalf: string | null;
-  outcomeStatus: string; // active | called_hit | called_miss | uncalled_hr | late_signal
+  /** Raw grading status string from DB. Use `outcome` for user-facing labels. */
+  outcomeStatus: string; // active | called_hit | called_miss | uncalled_hr | late_signal | early_hr_no_window
   userVisible: boolean;
   signalDetectedAt: Date | null;
   hitDetectedAt: Date | null;

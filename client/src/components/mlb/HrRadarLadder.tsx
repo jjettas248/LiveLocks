@@ -6,11 +6,31 @@ import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, Flame, Zap, Eye, CheckCircle2, XCircle, Plus, AlertTriangle, RefreshCw, Eraser } from "lucide-react";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 
+export type HrRadarStageLabel = "watch" | "building" | "attack" | "cooling" | "closed";
+export type HrRadarOutcomeLabel =
+  | "pending"
+  | "called_hit"
+  | "miss"
+  | "early_window_hr"
+  | "uncalled_hr"
+  | "late_signal"
+  | "expired";
+
 export interface HrRadarLadderEntry {
   playerId: string;
   playerName: string;
   team: string;
   gameId: string;
+  // Goldmaster canonical entity fields (Phase 1).
+  currentStage?: HrRadarStageLabel;
+  currentStatus?: "live" | "resolved";
+  outcome?: HrRadarOutcomeLabel;
+  plateAppearancesTracked?: number | null;
+  hasLiveABContext?: boolean;
+  userReasons?: string[];
+  adminReasons?: string[];
+  summary?: string;
+  // Legacy fields (still populated for backwards compat).
   state: string | null;
   confidenceTier: string | null;
   peakScore: number | null;
@@ -104,9 +124,27 @@ function deadOutcomeLabel(status: string): { label: string; color: string } {
   switch (status) {
     case "uncalled_hr": return { label: "Uncalled HR", color: "bg-zinc-700 text-zinc-100" };
     case "late_signal": return { label: "Late signal", color: "bg-orange-700 text-orange-100" };
-    case "called_miss": return { label: "Called miss", color: "bg-zinc-600 text-zinc-100" };
+    case "called_miss":
+    case "miss":
+      return { label: "Called miss", color: "bg-zinc-600 text-zinc-100" };
+    // Goldmaster Phase 4 + 8 — early-window HR is its OWN outcome bucket; it
+    // must never share copy with a regular miss or with an uncalled HR.
+    case "early_hr_no_window":
+    case "early_window_hr":
+      return { label: "Early HR (no window)", color: "bg-purple-700 text-purple-100" };
+    case "expired": return { label: "Expired", color: "bg-zinc-600 text-zinc-100" };
     default: return { label: "Resolved", color: "bg-zinc-600 text-zinc-100" };
   }
+}
+
+/**
+ * Goldmaster Phase 6 — final UI fallback for jargon stripping. The server's
+ * buildHrRadarReasonSets already filters out PATH, BsZ, Score tokens, but a
+ * stale legacy row may still have raw tags. We never render anything that
+ * starts with engine debug prefixes.
+ */
+function isUserSafeReason(s: string): boolean {
+  return !/^(PATH[_ ]?[A-Z0-9_]+|WATCH:|BUILD:|FORM:|PRE[_ ]HR[_ ]DANGER|HrShaped|BsZ|Score\d|Conv\s+\d+%|Profile\d|Danger\d)/i.test(s.trim());
 }
 
 interface CardProps {
@@ -121,7 +159,24 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
   const hit = formatHalfInning(entry.hitInning, entry.hitHalf);
   const score = entry.signalStrengthScore ?? entry.peakScore;
   const isAttack = section === "attackNow";
-  const canAdd = (section === "attackNow" || section === "building") && !!onAddToSlip;
+  // Goldmaster Phase 5 — derive live vs resolved mode. Resolved cards must
+  // never carry "next AB" copy or any live-only verbiage.
+  const isResolved =
+    entry.currentStatus === "resolved" || section === "cashed" || section === "dead";
+  const canAdd = !isResolved && (section === "attackNow" || section === "building") && !!onAddToSlip;
+  // Goldmaster Phase 7 — pregame indicator for 0-AB rows.
+  const isPregameOnly =
+    entry.hasLiveABContext === false ||
+    (entry.plateAppearancesTracked != null && entry.plateAppearancesTracked === 0);
+  // Prefer canonical userReasons; fall back to legacy whyNowReasons. Apply a
+  // final UI-side jargon strip in case a stale legacy row leaks through.
+  const reasonsRaw =
+    (entry.userReasons && entry.userReasons.length > 0)
+      ? entry.userReasons
+      : entry.whyNowReasons;
+  const reasons = (reasonsRaw ?? []).filter(isUserSafeReason);
+  // Outcome label for resolved rows uses the canonical outcome when present.
+  const resolvedOutcomeKey = entry.outcome ?? entry.outcomeStatus;
 
   const handleAdd = () => {
     if (!onAddToSlip) return;
@@ -163,18 +218,33 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
               never substitute `signalInning` or `scoreIncreaseInning` here. */}
           <div className="flex items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground flex-wrap">
             {detected && (
-              <span data-testid={`text-ladder-detected-${entry.playerId}`}>Called {detected}</span>
+              <span data-testid={`text-ladder-detected-${entry.playerId}`}>
+                {isResolved ? `Called ${detected}` : `Detected ${detected}`}
+              </span>
             )}
-            {hit && section === "cashed" && (
+            {/* Live-mode only: pregame indicator + next-AB estimate. */}
+            {!isResolved && isPregameOnly && (
+              <span
+                className="text-amber-400 font-medium"
+                data-testid={`badge-pregame-only-${entry.playerId}`}
+              >
+                Pregame only · 0 AB
+              </span>
+            )}
+            {!isResolved && entry.nextAbEstimate && !isPregameOnly && (
+              <span className="text-blue-400" data-testid={`text-ladder-nextab-${entry.playerId}`}>{entry.nextAbEstimate}</span>
+            )}
+            {/* Resolved-mode only: HR location for cashed rows. */}
+            {isResolved && hit && section === "cashed" && (
               <span className="text-emerald-500 font-semibold" data-testid={`text-ladder-hit-${entry.playerId}`}>HR {hit}</span>
             )}
-            {entry.nextAbEstimate && section !== "cashed" && section !== "dead" && (
-              <span className="text-blue-400" data-testid={`text-ladder-nextab-${entry.playerId}`}>{entry.nextAbEstimate}</span>
+            {isResolved && hit && resolvedOutcomeKey === "early_window_hr" && (
+              <span className="text-purple-400 font-semibold" data-testid={`text-ladder-early-hr-${entry.playerId}`}>HR {hit}</span>
             )}
           </div>
         </button>
         <div className="flex flex-col items-end gap-1 shrink-0 max-w-[40%]">
-          {score != null && (
+          {score != null && !isResolved && (
             <span
               className={`text-xs font-mono font-bold ${isAttack ? "text-red-400" : "text-foreground/80"}`}
               data-testid={`text-ladder-score-${entry.playerId}`}
@@ -182,9 +252,9 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
               {Math.round(score)}
             </span>
           )}
-          {section === "dead" && (
-            <Badge className={`text-[9px] px-1.5 py-0 whitespace-nowrap ${deadOutcomeLabel(entry.outcomeStatus).color}`}>
-              {deadOutcomeLabel(entry.outcomeStatus).label}
+          {isResolved && section === "dead" && (
+            <Badge className={`text-[9px] px-1.5 py-0 whitespace-nowrap ${deadOutcomeLabel(resolvedOutcomeKey).color}`}>
+              {deadOutcomeLabel(resolvedOutcomeKey).label}
             </Badge>
           )}
           {section === "cashed" && entry.alertPath === "early" && (
@@ -193,9 +263,19 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
         </div>
       </div>
 
-      {entry.whyNowReasons.length > 0 && (
+      {/* Goldmaster Phase 5 + 6 — prefer canonical summary on resolved rows;
+          show plain-English reasons (jargon stripped) on live rows. */}
+      {isResolved && entry.summary && (
+        <p
+          className="mt-2 text-[11px] text-foreground/70 leading-snug"
+          data-testid={`text-resolved-summary-${entry.playerId}`}
+        >
+          {entry.summary}
+        </p>
+      )}
+      {!isResolved && reasons.length > 0 && (
         <ul className="mt-2 space-y-0.5" data-testid={`list-why-now-${entry.playerId}`}>
-          {entry.whyNowReasons.slice(0, 3).map((r, i) => (
+          {reasons.slice(0, 3).map((r, i) => (
             <li key={i} className="text-[11px] text-foreground/70 flex gap-1">
               <span className="text-muted-foreground">•</span>
               <span className="truncate">{r}</span>
