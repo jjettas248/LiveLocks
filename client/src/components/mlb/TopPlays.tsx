@@ -5,12 +5,19 @@ export function TopPlays({
   signals,
   onPlayerClick,
   onAddToSlip,
+  onOpenCalculator,
+  sortBy = "signalScore",
 }: {
   signals: MlbSignalData[];
   onPlayerClick?: (gameId: string, playerId: string) => void;
   onAddToSlip?: (sig: MlbSignalData) => void;
+  onOpenCalculator?: (sig: MlbSignalData) => void;
+  sortBy?: "signalScore" | "enginePct";
 }) {
-  const sorted = [...signals].sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
+  const sortFn = sortBy === "enginePct"
+    ? (a: MlbSignalData, b: MlbSignalData) => (b.enginePct ?? 0) - (a.enginePct ?? 0)
+    : (a: MlbSignalData, b: MlbSignalData) => (b.signalScore ?? 0) - (a.signalScore ?? 0);
+  const sorted = [...signals].sort(sortFn);
   const topPlays = sorted.slice(0, 6);
 
   if (topPlays.length === 0) {
@@ -56,6 +63,7 @@ export function TopPlays({
                 sig={sig}
                 onPlayerClick={onPlayerClick}
                 onAddToSlip={onAddToSlip}
+                onOpenCalculator={onOpenCalculator}
               />
             ))}
           </div>
@@ -75,6 +83,7 @@ export function TopPlays({
                 sig={sig}
                 onPlayerClick={onPlayerClick}
                 onAddToSlip={onAddToSlip}
+                onOpenCalculator={onOpenCalculator}
               />
             ))}
           </div>

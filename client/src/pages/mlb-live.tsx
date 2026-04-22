@@ -557,10 +557,11 @@ function GameContextPanel({ game, signalCount }: { game: MLBGame; signalCount: n
   );
 }
 
-function GameSignalsPanel({ signals, isElite, onAddToSlip }: {
+function GameSignalsPanel({ signals, isElite, onAddToSlip, onOpenCalculator }: {
   signals: MlbSignalData[];
   isElite: boolean;
   onAddToSlip: (sig: MlbSignalData) => void;
+  onOpenCalculator?: (sig: MlbSignalData) => void;
 }) {
   const sorted = [...signals].sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
   const visible = isElite ? sorted : sorted.slice(0, 2);
@@ -594,6 +595,7 @@ function GameSignalsPanel({ signals, isElite, onAddToSlip }: {
               key={`${sig.playerId}-${sig.market}-${idx}`}
               sig={sig}
               onAddToSlip={onAddToSlip}
+              onOpenCalculator={onOpenCalculator}
             />
           ))}
         </div>
@@ -2603,6 +2605,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
   const { user, isLoading: authLoading } = useAuth();
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
   const [liveFeedSub, setLiveFeedSub] = useState<"all" | "3rd" | "5th" | "7th">("all");
+  const [signalSortBy, setSignalSortBy] = useState<"signalScore" | "enginePct">("signalScore");
   const mlbUpgradeNeeded = false;
   const [mlbSlipPicks, setMlbSlipPicks] = useState<Array<{ playerId: string; playerName: string; market: string; line: number; side: string; sportsbook: string; edge: number | null; enginePct: number; gameId: string; overOdds?: number | null; underOdds?: number | null }>>([]);
   const [analyzeTarget, setAnalyzeTarget] = useState<{ playerId: string; gameId: string } | null>(null);
@@ -3187,7 +3190,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                     </div>
                   )}
 
-                  <GameSignalsPanel signals={gameSignals} isElite={isElite} onAddToSlip={handleAddToSlip} />
+                  <GameSignalsPanel signals={gameSignals} isElite={isElite} onAddToSlip={handleAddToSlip} onOpenCalculator={handleSignalClick} />
                 </div>
               </div>
             </>
@@ -3226,19 +3229,44 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
 
       {activeSubTab === "live_feed" && (
         <div className="space-y-4">
-          <div className="flex gap-1.5 flex-wrap">
-            {(["all", "3rd", "5th", "7th"] as const).map(sub => (
-              <button
-                key={sub}
-                data-testid={`tab-feed-${sub}`}
-                onClick={() => setLiveFeedSub(sub)}
-                className={`px-3.5 py-2.5 min-h-[44px] text-xs font-semibold rounded-full border transition-all ${
-                  liveFeedSub === sub ? "bg-background text-foreground border-primary/50 shadow-sm" : "border-border/50 text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {sub === "all" ? "All Signals" : sub === "3rd" ? "3rd Inning" : sub === "5th" ? "5th Inning" : "7th Inning"}
-              </button>
-            ))}
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex gap-1.5 flex-wrap">
+              {(["all", "3rd", "5th", "7th"] as const).map(sub => (
+                <button
+                  key={sub}
+                  data-testid={`tab-feed-${sub}`}
+                  onClick={() => setLiveFeedSub(sub)}
+                  className={`px-3.5 py-2.5 min-h-[44px] text-xs font-semibold rounded-full border transition-all ${
+                    liveFeedSub === sub ? "bg-background text-foreground border-primary/50 shadow-sm" : "border-border/50 text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {sub === "all" ? "All Signals" : sub === "3rd" ? "3rd Inning" : sub === "5th" ? "5th Inning" : "7th Inning"}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Sort</span>
+              <div className="inline-flex rounded-full border border-border/50 overflow-hidden">
+                <button
+                  data-testid="button-sort-signal-score"
+                  onClick={() => setSignalSortBy("signalScore")}
+                  className={`px-3 py-1.5 text-[11px] font-semibold transition-colors ${
+                    signalSortBy === "signalScore" ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Signal
+                </button>
+                <button
+                  data-testid="button-sort-engine-pct"
+                  onClick={() => setSignalSortBy("enginePct")}
+                  className={`px-3 py-1.5 text-[11px] font-semibold transition-colors ${
+                    signalSortBy === "enginePct" ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Win %
+                </button>
+              </div>
+            </div>
           </div>
           {(() => {
             let filtered = edgeFeedSignals;
@@ -3251,11 +3279,11 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                 const visibleSlice = filtered.slice(0, 1);
                 return (
                   <div className="space-y-6">
-                    <TopPlays signals={visibleSlice} onAddToSlip={handleAddToSlip} />
+                    <TopPlays signals={visibleSlice} onAddToSlip={handleAddToSlip} onOpenCalculator={handleSignalClick} sortBy={signalSortBy} />
                     {filtered.length > 1 && (
                       <div className="relative">
                         <div className="filter blur-[6px] pointer-events-none select-none" aria-hidden="true">
-                          <LiveBoard signals={filtered.slice(1, 6)} />
+                          <LiveBoard signals={filtered.slice(1, 6)} sortBy={signalSortBy} />
                         </div>
                         <div className="absolute inset-0 flex flex-col items-center justify-center z-10">
                           <div className="rounded-xl border border-primary/30 bg-card/95 backdrop-blur-sm p-5 text-center space-y-3 max-w-sm shadow-xl">
@@ -3279,8 +3307,8 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
               return (
                 <div className="space-y-6">
                   <TopLiveOpportunities signals={filtered} onAddToSlip={handleAddToSlip} />
-                  <TopPlays signals={filtered} onAddToSlip={handleAddToSlip} />
-                  <LiveBoard signals={filtered} onAddToSlip={handleAddToSlip} />
+                  <TopPlays signals={filtered} onAddToSlip={handleAddToSlip} onOpenCalculator={handleSignalClick} sortBy={signalSortBy} />
+                  <LiveBoard signals={filtered} onAddToSlip={handleAddToSlip} onOpenCalculator={handleSignalClick} sortBy={signalSortBy} />
                 </div>
               );
             }

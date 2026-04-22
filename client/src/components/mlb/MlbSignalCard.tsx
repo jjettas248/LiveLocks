@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronUp, Plus, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Plus, X, Calculator } from "lucide-react";
 import {
   formatMlbMarketLabel,
   formatAmericanOdds,
@@ -125,11 +125,13 @@ export function MlbSignalCard({
   onPlayerClick,
   onAddToSlip,
   onDismiss,
+  onOpenCalculator,
 }: {
   sig: MlbSignalData;
   onPlayerClick?: (gameId: string, playerId: string) => void;
   onAddToSlip?: (sig: MlbSignalData) => void;
   onDismiss?: (sig: MlbSignalData) => void;
+  onOpenCalculator?: (sig: MlbSignalData) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const tier = TIER_COLORS[sig.confidenceTier ?? "WATCHLIST"] ?? TIER_COLORS.WATCHLIST;
@@ -241,11 +243,18 @@ export function MlbSignalCard({
               </p>
             </div>
           </div>
-          <div className="flex flex-col items-end shrink-0">
+          <div
+            className="flex flex-col items-end shrink-0"
+            title={`Engine win probability — model's estimated chance ${sig.recommendedSide} ${sig.bookLine ?? ""} ${marketLabel} hits. Higher = stronger conviction.`}
+            data-testid={`engine-prob-${sig.playerId}-${sig.market}`}
+          >
             <span className="text-xl font-black tabular-nums leading-none" style={{ color: side.accent }}>
               {normalizePct(sig.enginePct).toFixed(0)}%
             </span>
-            {matchup && <span className="text-[9px] text-muted-foreground mt-0.5">{matchup}</span>}
+            <span className="text-[9px] text-muted-foreground mt-0.5 uppercase tracking-wide font-semibold">
+              win prob
+            </span>
+            {matchup && <span className="text-[9px] text-muted-foreground/80">{matchup}</span>}
           </div>
         </div>
 
@@ -718,12 +727,23 @@ export function MlbSignalCard({
               <X className="w-3.5 h-3.5" />
             </button>
           )}
+          {onOpenCalculator && (
+            <button
+              data-testid={`button-calc-${sig.playerId}-${sig.market}`}
+              className="text-[9px] px-2.5 py-1.5 rounded-lg font-semibold transition-colors flex items-center gap-0.5 min-h-[36px]"
+              style={{ background: "rgba(168,85,247,0.12)", color: "#c084fc", border: "1px solid rgba(168,85,247,0.3)" }}
+              onClick={(e) => { e.stopPropagation(); onOpenCalculator(sig); }}
+              title="Open in Calculator"
+            >
+              <Calculator className="w-3 h-3" /> Calc
+            </button>
+          )}
           {onAddToSlip && (
             <button
               data-testid={`button-slip-${sig.playerId}-${sig.market}`}
               className="text-[9px] px-2.5 py-1.5 rounded-lg font-semibold transition-colors flex items-center gap-0.5 min-h-[36px]"
               style={{ background: "rgba(34,197,94,0.15)", color: "#22c55e", border: "1px solid rgba(34,197,94,0.3)" }}
-              onClick={() => onAddToSlip(sig)}
+              onClick={(e) => { e.stopPropagation(); onAddToSlip(sig); }}
             >
               <Plus className="w-3 h-3" /> Slip
             </button>

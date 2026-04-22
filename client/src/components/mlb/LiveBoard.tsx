@@ -25,12 +25,19 @@ export function LiveBoard({
   signals,
   onPlayerClick,
   onAddToSlip,
+  onOpenCalculator,
+  sortBy = "signalScore",
 }: {
   signals: MlbSignalData[];
   onPlayerClick?: (gameId: string, playerId: string) => void;
   onAddToSlip?: (sig: MlbSignalData) => void;
+  onOpenCalculator?: (sig: MlbSignalData) => void;
+  sortBy?: "signalScore" | "enginePct";
 }) {
   const [collapsedTiers, setCollapsedTiers] = useState<Record<string, boolean>>({});
+  const sortFn = sortBy === "enginePct"
+    ? (a: MlbSignalData, b: MlbSignalData) => (b.enginePct ?? 0) - (a.enginePct ?? 0)
+    : (a: MlbSignalData, b: MlbSignalData) => (b.signalScore ?? 0) - (a.signalScore ?? 0);
 
   const grouped: Record<string, { over: MlbSignalData[]; under: MlbSignalData[] }> = {
     elite: { over: [], under: [] },
@@ -49,8 +56,8 @@ export function LiveBoard({
   }
 
   for (const tier of Object.keys(grouped)) {
-    grouped[tier].over.sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
-    grouped[tier].under.sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
+    grouped[tier].over.sort(sortFn);
+    grouped[tier].under.sort(sortFn);
   }
 
   const toggleTier = (key: string) => {
@@ -115,6 +122,7 @@ export function LiveBoard({
                             sig={sig}
                             onPlayerClick={onPlayerClick}
                             onAddToSlip={onAddToSlip}
+                            onOpenCalculator={onOpenCalculator}
                           />
                         ))}
                       </div>
@@ -127,6 +135,7 @@ export function LiveBoard({
                             sig={sig}
                             onPlayerClick={onPlayerClick}
                             onAddToSlip={onAddToSlip}
+                            onOpenCalculator={onOpenCalculator}
                           />
                         ))}
                       </div>
