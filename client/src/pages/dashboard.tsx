@@ -1684,18 +1684,21 @@ export default function Dashboard() {
     setTweetSnippet(buildTweetSnippet({ playerName, direction, line, statLabel, directionProb, projection, gap, atHalftime, teamCashtag, oppCashtag, templateIndex: tweetTemplateIndexRef.current }));
   }, [result]);
 
-  const activeGames = (liveGames ?? []).filter(
+  const nbaActiveGames = (liveGames ?? []).filter(
     (g) => g.status !== "Scheduled" && g.status !== "Final"
   );
   const allGames = liveGames ?? [];
 
-  const hasLiveNba = activeGames.some((g) => g.status === "In Progress" || g.status === "Halftime" || g.status === "End of Period");
+  const hasLiveNba = nbaActiveGames.some((g) => g.status === "In Progress" || g.status === "Halftime" || g.status === "End of Period");
 
   const { data: mlbGamesData } = useQuery<{ games: { status: string }[] }>({
     queryKey: ["/api/mlb/live-games"],
     refetchInterval: 60_000,
   });
-  const hasLiveMlb = (mlbGamesData?.games ?? []).some((g: any) => g.status === "live");
+  const mlbLiveGames = (mlbGamesData?.games ?? []).filter((g: any) => g.status === "live");
+  const hasLiveMlb = mlbLiveGames.length > 0;
+  // Sport-aware header counter: show MLB live games on MLB tab, NBA active games elsewhere.
+  const activeGames = activeTab === "mlb" ? mlbLiveGames : nbaActiveGames;
 
   if (isLoading) {
     return (

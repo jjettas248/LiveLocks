@@ -2811,12 +2811,18 @@ export class LiveGameOrchestrator {
     });
 
     const existingCache = mlbEdgeCache.get(gameId);
-    const isDataUnavailable = marketsEvaluated === 0 && allSignals.length === 0;
+    // Preserve when this cycle produced no signals at all (transient blank
+    // between innings, all watch signals returned null, etc.) so the user's
+    // feed doesn't briefly empty itself mid-game. The previous version only
+    // preserved when marketsEvaluated === 0, but a cycle can evaluate dozens
+    // of markets and still emit zero signals (every watch fails the side/odds
+    // gate); that empty cycle would wipe a populated cache.
+    const isThisCycleEmpty = allSignals.length === 0;
     const PRESERVE_MAX_AGE_MS = 10 * 60 * 1000;
     const cacheAge = now - Math.max(existingCache?.updatedAt ?? 0, existingCache?.createdAt ?? 0);
-    if (isDataUnavailable && existingCache && existingCache.allSignals.length > 0 && cacheAge < PRESERVE_MAX_AGE_MS) {
+    if (isThisCycleEmpty && existingCache && existingCache.allSignals.length > 0 && cacheAge < PRESERVE_MAX_AGE_MS) {
       mlbEdgeCache.set(gameId, { ...existingCache, updatedAt: now });
-      console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=0 qualified=0 rejected=0 PRESERVED ${existingCache.allSignals.length} existing signals (no markets evaluated, data unavailable)`);
+      console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=0 rejected=${signalsRejected} PRESERVED ${existingCache.allSignals.length} existing signals (this cycle blank, last good cycle within ${Math.round(cacheAge/1000)}s)`);
     } else {
       mlbEdgeCache.set(gameId, {
         gameId,
