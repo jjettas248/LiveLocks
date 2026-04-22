@@ -2433,7 +2433,29 @@ export async function registerRoutes(
       const gameState = mlbGameCache.gameState?.[gameId];
       const boxPlayer = mlbGameCache.gameBoxScore?.[gameId]?.byPlayerId?.[playerId];
 
-      const contactEntries = (playerContact?.priorABResults ?? []).map((ab: any, idx: number) => ({
+      // Live RAM cache is volatile — for finished games or after a restart it
+      // can be empty even though the at-bats actually happened. Fall back to
+      // the persisted gamePlayerStats.abResults JSON so the at-bat log keeps
+      // populating EV/LA/distance/outcome instead of showing blank "PA" rows.
+      let resolvedPriorABs: any[] = playerContact?.priorABResults ?? [];
+      let priorABSource: "live_cache" | "persisted" | "none" = resolvedPriorABs.length > 0 ? "live_cache" : "none";
+      if (resolvedPriorABs.length === 0) {
+        try {
+          const persistedStats = await storage.getGamePlayerStats(gameId);
+          const playerRow = persistedStats.find((r: any) => String(r.playerId) === String(playerId));
+          if (playerRow?.abResults) {
+            const parsed = JSON.parse(playerRow.abResults);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              resolvedPriorABs = parsed;
+              priorABSource = "persisted";
+            }
+          }
+        } catch (err: any) {
+          console.warn(`[mlb/hr-radar-analyze] persisted abResults parse failed for ${playerId}/${gameId}: ${err.message}`);
+        }
+      }
+
+      const contactEntries = (resolvedPriorABs ?? []).map((ab: any, idx: number) => ({
         abNumber: idx + 1,
         exitVelocity: ab.exitVelocity ?? null,
         launchAngle: ab.launchAngle ?? null,
@@ -2492,6 +2514,7 @@ export async function registerRoutes(
         partialReason,
         analyze: {
           priorABs,
+          priorABSource,
           completedAB: boxAB,
           totalPA,
           currentInning: gameState?.inning ?? null,
