@@ -3358,7 +3358,7 @@ export class DatabaseStorage implements IStorage {
         hitInning: r.hitInning ?? null,
         hitHalf: r.hitHalf ?? null,
         outcomeStatus: grading,
-        userVisible,
+        userVisible: r.userVisible ?? true,
         signalDetectedAt: r.signalDetectedAt ?? r.detectedAt ?? null,
         hitDetectedAt: r.hitDetectedAt ?? null,
         resolvedAt: r.resolvedAt ?? null,
