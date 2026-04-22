@@ -1831,10 +1831,10 @@ export default function Dashboard() {
               alt="PropPulse"
               className="w-9 h-9 rounded-xl object-cover shadow-lg shadow-primary/20 flex-shrink-0 ring-1 ring-primary/20"
             />
-            <div className="flex flex-col leading-none">
-              <h1 className="text-xl font-bold tracking-tight text-foreground">LiveLocks</h1>
-              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest mt-0.5">
-                by PropPulse · {activeTab === "ncaab" ? "NCAAB" : "NBA"}
+            <div className="flex flex-col leading-none min-w-0">
+              <h1 className="text-lg sm:text-xl font-bold tracking-tight text-foreground">LiveLocks</h1>
+              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest mt-0.5 whitespace-nowrap">
+                by PropPulse · {activeTab === "ncaab" ? "NCAAB" : activeTab === "mlb" ? "MLB" : "NBA"}
               </span>
             </div>
           </button>
@@ -1943,7 +1943,8 @@ export default function Dashboard() {
             <button
               onClick={() => setShowParlay(!showParlay)}
               data-testid="button-toggle-parlay"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-sm font-semibold hover:bg-primary/20 transition-colors"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-sm font-semibold hover:bg-primary/20 transition-colors"
+              title="Parlay Slip"
             >
               <Trophy className="w-4 h-4" />
               <span className="hidden sm:inline">Parlay Slip</span>
@@ -1957,7 +1958,7 @@ export default function Dashboard() {
               <button
                 data-testid="link-performance"
                 onClick={() => navigate("/admin")}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-semibold hover:bg-blue-500/20 transition-colors"
+                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-semibold hover:bg-blue-500/20 transition-colors"
                 title="Model Performance"
               >
                 <BarChart3 className="w-3.5 h-3.5" />
@@ -1968,7 +1969,7 @@ export default function Dashboard() {
               <button
                 data-testid="link-admin"
                 onClick={() => navigate("/admin")}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-500 text-xs font-semibold hover:bg-amber-500/20 transition-colors"
+                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-500 text-xs font-semibold hover:bg-amber-500/20 transition-colors"
                 title="Admin panel"
               >
                 <Settings className="w-3.5 h-3.5" />
@@ -1979,11 +1980,12 @@ export default function Dashboard() {
               <button
                 data-testid="button-logout"
                 onClick={() => { logout(); navigate("/auth"); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors"
+                className="flex items-center justify-center gap-1.5 w-9 h-9 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors"
                 title={user.email}
+                aria-label="Sign out"
               >
                 <Users className="w-3.5 h-3.5" />
-                Sign Out
+                <span className="hidden sm:inline">Sign Out</span>
               </button>
             )}
           </div>
@@ -2214,12 +2216,12 @@ export default function Dashboard() {
         )}
 
         {/* Tab Navigation */}
-        <div className="relative flex flex-col gap-0 w-full overflow-x-auto">
+        <div className="relative flex flex-col gap-0 w-full overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-thin">
           <div className="flex gap-1 bg-secondary/40 border border-border/60 rounded-xl p-1 w-fit">
             <button
               onClick={() => { setActiveTab("calculator"); }}
               data-testid="tab-calculator"
-              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors relative ${
+              className={`px-3 sm:px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors relative whitespace-nowrap ${
                 activeTab === "calculator"
                   ? "bg-primary text-primary-foreground border-glow"
                   : "text-muted-foreground hover:text-foreground"
@@ -2236,7 +2238,7 @@ export default function Dashboard() {
                   setShowMlbUpgradeModal(true);
                 }
               }}
-              className={`px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 transition-colors relative ${
+              className={`px-3 sm:px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 transition-colors relative whitespace-nowrap ${
                 activeTab === "mlb"
                   ? "bg-primary text-primary-foreground border-glow"
                   : "text-muted-foreground hover:text-foreground"
