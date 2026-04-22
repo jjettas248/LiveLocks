@@ -966,16 +966,26 @@ export default function Dashboard() {
     });
   }, [halftimePlaysData, halftimeGameGroups]);
 
-  // ── 2-minute auto-refresh for live box score ───────────────────────────────
+  // ── 20-second auto-refresh for live box score ──────────────────────────────
+  // NBA possessions land every ~20-25s, so a 2-min cadence made the quick view
+  // feel frozen between updates. Tightened to 20s for stats/signals to match
+  // the live-signals tier elsewhere in this file. Halftime plays still only
+  // re-pull when the halftime sub-tab is open (every ~60s) so we don't hammer
+  // a heavier endpoint.
   useEffect(() => {
     if (autoRefreshRef.current) clearInterval(autoRefreshRef.current);
     if (selectedGameId) {
+      let halftimeTick = 0;
       autoRefreshRef.current = setInterval(() => {
         queryClient.invalidateQueries({ queryKey: ["/api/live-stats", selectedGameId] });
         queryClient.invalidateQueries({ queryKey: ["/api/live-signals", selectedGameId] });
         setLastRefreshed(new Date());
-        if (activeTab === "calculator" && nbaSubTab === "halftime") refetchHalftimePlays();
-      }, 2 * 60 * 1000);
+        halftimeTick++;
+        if (halftimeTick >= 3 && activeTab === "calculator" && nbaSubTab === "halftime") {
+          refetchHalftimePlays();
+          halftimeTick = 0;
+        }
+      }, 20 * 1000);
     }
     return () => { if (autoRefreshRef.current) clearInterval(autoRefreshRef.current); };
   }, [selectedGameId, activeTab]);

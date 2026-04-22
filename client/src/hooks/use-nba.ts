@@ -105,7 +105,10 @@ export function useLiveStats(gameId: string | undefined) {
     },
     enabled: !!gameId,
     refetchInterval: false,
-    staleTime: 30000,
+    // Dashboard owns the polling cadence (20s via invalidateQueries). Keep
+    // staleTime tighter than that so the invalidation actually triggers a
+    // network refetch instead of being served from cache.
+    staleTime: 10_000,
     placeholderData: (prev) => prev,
   });
 }

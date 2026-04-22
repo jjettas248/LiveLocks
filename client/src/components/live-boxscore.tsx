@@ -199,7 +199,7 @@ export function LiveBoxscore({
         </button>
         <div className="flex items-center gap-3">
           <span className="text-xs text-muted-foreground/50">
-            Auto-refreshes every 2 min · Last: {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            Auto-refreshes every 20 sec · Last: {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
           </span>
           <button
             onClick={onRefresh}
