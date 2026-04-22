@@ -1122,16 +1122,21 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
           <div className="grid grid-cols-3 gap-3">
             <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
               <div className="text-[9px] text-muted-foreground">Initial</div>
-              <div className="text-sm font-bold text-foreground">{initialScore.toFixed(1)}</div>
+              <div className="text-sm font-bold text-foreground">{(initialScore / 10).toFixed(1)}</div>
             </div>
             <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
               <div className="text-[9px] text-muted-foreground">Current</div>
-              <div className="text-sm font-bold" style={{ color: tier.color }}>{currentScore.toFixed(1)}</div>
+              <div className="text-sm font-bold" style={{ color: tier.color }}>{(currentScore / 10).toFixed(1)}</div>
             </div>
             <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
               <div className="text-[9px] text-muted-foreground">Peak</div>
-              <div className="text-sm font-bold text-foreground">{peakScore.toFixed(1)}</div>
+              <div className="text-sm font-bold text-foreground">{(peakScore / 10).toFixed(1)}</div>
             </div>
+          </div>
+
+          {/* Heat progress bar — visualizes Current readiness on the 0-10 scale */}
+          <div className="px-1">
+            <BuildScoreMeter score={currentScore / 10} size="lg" />
           </div>
 
           {alert.scoreIncreased && alert.scoreIncreaseLabel && (
@@ -1167,14 +1172,26 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
             )}
           </div>
 
-          {priorABs.length > 0 && (
+          {priorABs.length > 0 && (() => {
+            // Filter out placeholder/padded rows the server appends when boxscore
+            // PA count exceeds tracked contact data. Those rows have outcome
+            // "unknown" and no EV/LA/distance, and would render as bare "PA"
+            // lines with no detail (confusing the user).
+            const renderableABs = priorABs.filter(ab =>
+              (ab.outcome && ab.outcome !== "unknown")
+              || ab.exitVelocity != null
+              || ab.launchAngle != null
+              || ab.distance != null
+            );
+            if (renderableABs.length === 0) return null;
+            return (
             <div className="space-y-1.5">
               <div className="text-[10px] font-semibold text-muted-foreground flex items-center gap-1.5">
                 <Target className="w-3 h-3" />
-                <span>At-Bat Log ({priorABs.length} PAs)</span>
+                <span>At-Bat Log ({renderableABs.length} of {priorABs.length} PAs)</span>
               </div>
               <div className="space-y-1">
-                {priorABs.map((ab) => {
+                {renderableABs.map((ab) => {
                   const outcomeLabel = ab.outcome === "hit" ? "Hit" : ab.outcome === "strikeout" ? "K" : ab.outcome === "walk" ? "BB" : ab.outcome === "hbp" ? "HBP" : ab.outcome === "out" ? "Out" : ab.outcome === "error" ? "Error" : "PA";
                   const outcomeColor = ab.outcome === "hit" ? "text-green-400" : ab.outcome === "strikeout" ? "text-red-400" : ab.outcome === "walk" || ab.outcome === "hbp" ? "text-blue-400" : "text-muted-foreground";
                   return (
@@ -1205,7 +1222,8 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
                 })}
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {(analyze?.explanationBullets ?? []).length > 0 && (
             <div className="space-y-1">

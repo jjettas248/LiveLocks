@@ -249,7 +249,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
               className={`text-xs font-mono font-bold ${isAttack ? "text-red-400" : "text-foreground/80"}`}
               data-testid={`text-ladder-score-${entry.playerId}`}
             >
-              {Math.round(score)}
+              {(score / 10).toFixed(1)}
             </span>
           )}
           {isResolved && section === "dead" && (
