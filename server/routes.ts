@@ -2475,11 +2475,21 @@ export async function registerRoutes(
       const edgeEntry = mlbEdgeCache.get(gameId);
       const rawOutput = edgeEntry?.outputs?.find((o: any) => o.playerId === playerId && o.market === "home_runs");
 
-      const partial = priorABs.length === 0 && !rawOutput && !gameState;
+      // Distinguish "no AB yet" (early in game, expected empty contact data)
+      // from genuinely missing/expired caches. Only mark partial when caches
+      // are truly empty AND the player has actually had completed at-bats.
+      const noAbsYet = boxAB === 0 && priorABs.length === 0;
+      const partial = !noAbsYet && priorABs.length === 0 && !rawOutput && !gameState;
+      const partialReason = partial
+        ? "cache_expired"
+        : noAbsYet
+          ? "no_abs_yet"
+          : null;
       return res.json({
         alert,
         source,
         partial,
+        partialReason,
         analyze: {
           priorABs,
           completedAB: boxAB,

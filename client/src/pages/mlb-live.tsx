@@ -1064,6 +1064,7 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
   const alert = data!.alert ?? {};
   const analyze = data!.analyze ?? { priorABs: [], explanationBullets: [] };
   const isLimited = !!data!.partial || data!.source === "analytics_fallback" || data!.source === "historical_alert";
+  const isNoAbsYet = (data as any)!.partialReason === "no_abs_yet";
   const priorABs: Array<{ abNumber: number; exitVelocity: number | null; launchAngle: number | null; distance: number | null; outcome: string; isBarrel: boolean; isHardHit: boolean; perABxBA?: number | null; contactGrade?: string; hrProbability?: number }> = analyze?.priorABs ?? [];
   const initialScore = parseFloat(alert.initialReadinessScore ?? "0");
   const currentScore = parseFloat(alert.currentReadinessScore ?? "0");
@@ -1092,6 +1093,11 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
         </div>
 
         <div className="p-4 space-y-4">
+          {isNoAbsYet && !isLimited && (
+            <div className="text-[10px] px-2 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 font-semibold" data-testid="text-no-abs-yet">
+              No at-bats yet — score reflects pre-game form, matchup, and park factors. Per-AB contact data will appear after the first plate appearance.
+            </div>
+          )}
           {isLimited && (
             <div className="text-[10px] px-2 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 font-semibold" data-testid="text-limited-analysis">
               Limited analysis available — live game data is no longer cached for this play.
