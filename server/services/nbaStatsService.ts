@@ -372,7 +372,134 @@ export function clearNBAStatsCache(): void {
   leaguePlayerStatsCacheByKey.clear();
   leagueTeamStatsCacheByKey.clear();
   playerOnOffCacheByKey.clear();
+  playerGameLogsCache.clear();
+  teamGameLogsCache.clear();
   console.log("[NBAStats] Cache cleared");
+}
+
+// ── Game log helpers (Phase 5: rotation truth feed) ───────────────────────
+// playergamelog and teamgamelog return per-game rows including MIN, GAME_DATE,
+// MATCHUP, WL, PLUS_MINUS. Cached per (season, seasonType, id) so playoff and
+// regular-season payloads NEVER share storage.
+const GAME_LOGS_TTL = 30 * 60 * 1000; // 30 min — playoff games happen daily
+const playerGameLogsCache = new Map<string, CacheEntry<any[]>>();
+const teamGameLogsCache = new Map<string, CacheEntry<any[]>>();
+
+export interface PlayerGameLogRow {
+  GAME_ID: string;
+  GAME_DATE: string;
+  MATCHUP: string; // e.g. "DEN vs. LAL" or "DEN @ LAL"
+  WL: "W" | "L";
+  MIN: number;
+  PTS: number;
+  PLUS_MINUS: number;
+  FGM?: number;
+  FGA?: number;
+  REB?: number;
+  AST?: number;
+  STL?: number;
+  BLK?: number;
+  TOV?: number;
+}
+
+export async function getPlayerGameLogs(args: {
+  playerId?: string | number | null;
+  seasonType?: NBASeasonType;
+  limit?: number;
+}): Promise<PlayerGameLogRow[]> {
+  const seasonType = args.seasonType ?? "Regular Season";
+  const limit = args.limit ?? 25;
+  if (args.playerId == null) return [];
+  const pid = String(args.playerId);
+  const season = getCurrentSeason();
+  const cacheKey = `${season}:${seasonType}:${pid}`;
+  const cached = playerGameLogsCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < GAME_LOGS_TTL) {
+    return cached.data.slice(0, limit) as PlayerGameLogRow[];
+  }
+  const data = await fetchNBAStats("playergamelog", {
+    PlayerID: pid,
+    Season: season,
+    SeasonType: seasonType,
+  });
+  if (!data) {
+    if (cached) return cached.data.slice(0, limit) as PlayerGameLogRow[];
+    return [];
+  }
+  const rows = rowsToObjects(data.resultSets?.[0]).map((r) => ({
+    GAME_ID: String(r.Game_ID ?? r.GAME_ID ?? ""),
+    GAME_DATE: String(r.GAME_DATE ?? ""),
+    MATCHUP: String(r.MATCHUP ?? ""),
+    WL: (r.WL === "L" ? "L" : "W") as "W" | "L",
+    MIN: Number(r.MIN ?? 0),
+    PTS: Number(r.PTS ?? 0),
+    PLUS_MINUS: Number(r.PLUS_MINUS ?? 0),
+    FGM: r.FGM != null ? Number(r.FGM) : undefined,
+    FGA: r.FGA != null ? Number(r.FGA) : undefined,
+    REB: r.REB != null ? Number(r.REB) : undefined,
+    AST: r.AST != null ? Number(r.AST) : undefined,
+    STL: r.STL != null ? Number(r.STL) : undefined,
+    BLK: r.BLK != null ? Number(r.BLK) : undefined,
+    TOV: r.TOV != null ? Number(r.TOV) : undefined,
+  }));
+  // playergamelog is most-recent-first
+  playerGameLogsCache.set(cacheKey, { data: rows, fetchedAt: Date.now() });
+  console.log(`[NBAStats] player ${pid} game logs (${seasonType}): ${rows.length} rows`);
+  return rows.slice(0, limit);
+}
+
+export interface TeamGameLogRow {
+  GAME_ID: string;
+  GAME_DATE: string;
+  MATCHUP: string;
+  WL: "W" | "L";
+  PTS: number;
+  PLUS_MINUS: number;
+}
+
+async function fetchTeamIdByAbbr(teamAbbr: string): Promise<string | null> {
+  const teams = await ensureLeagueTeamStats("Regular Season");
+  const norm = teamAbbr.toUpperCase();
+  const match = teams.find((r) => String(r.TEAM_ABBREVIATION ?? "").toUpperCase() === norm);
+  return match ? String(match.TEAM_ID) : null;
+}
+
+export async function getTeamGameLogs(args: {
+  teamAbbr: string;
+  seasonType?: NBASeasonType;
+  limit?: number;
+}): Promise<TeamGameLogRow[]> {
+  const seasonType = args.seasonType ?? "Regular Season";
+  const limit = args.limit ?? 25;
+  const season = getCurrentSeason();
+  const norm = args.teamAbbr.toUpperCase();
+  const cacheKey = `${season}:${seasonType}:${norm}`;
+  const cached = teamGameLogsCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < GAME_LOGS_TTL) {
+    return cached.data.slice(0, limit) as TeamGameLogRow[];
+  }
+  const teamId = await fetchTeamIdByAbbr(norm);
+  if (!teamId) return cached?.data.slice(0, limit) as TeamGameLogRow[] ?? [];
+  const data = await fetchNBAStats("teamgamelog", {
+    TeamID: teamId,
+    Season: season,
+    SeasonType: seasonType,
+  });
+  if (!data) {
+    if (cached) return cached.data.slice(0, limit) as TeamGameLogRow[];
+    return [];
+  }
+  const rows = rowsToObjects(data.resultSets?.[0]).map((r) => ({
+    GAME_ID: String(r.Game_ID ?? r.GAME_ID ?? ""),
+    GAME_DATE: String(r.GAME_DATE ?? ""),
+    MATCHUP: String(r.MATCHUP ?? ""),
+    WL: (r.WL === "L" ? "L" : "W") as "W" | "L",
+    PTS: Number(r.PTS ?? 0),
+    PLUS_MINUS: Number(r.PLUS_MINUS ?? 0),
+  }));
+  teamGameLogsCache.set(cacheKey, { data: rows, fetchedAt: Date.now() });
+  console.log(`[NBAStats] team ${norm} game logs (${seasonType}): ${rows.length} rows`);
+  return rows.slice(0, limit);
 }
 
 // Convenience helper: derive the right NBA Stats SeasonType from a game date.

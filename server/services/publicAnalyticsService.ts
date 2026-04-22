@@ -39,6 +39,12 @@ export type NbaSegment = {
   avgEdge: number;
   topBucketWinRate: number; // 80-100 prob bucket win rate
   buckets: Array<{ bucket: string; plays: number; winRate: number }>;
+  // ── Phase 8: Playoff role-truth breakdowns (only populated when isPlayoffs) ─
+  // Derived from calibrationTrack markers stamped by the role gate / fragility
+  // pipeline. Lets admin verify the new layer is actually moving the high-bucket
+  // accuracy in the right direction.
+  roleGateBuckets?: Array<{ bucket: string; plays: number; winRate: number }>;
+  comboVsSingle?: Array<{ bucket: string; plays: number; winRate: number }>;
 };
 
 // NBA playoff cutover (mirrors storage.getNbaSeasonContext): regular season
@@ -99,6 +105,51 @@ function buildNbaSegment(plays: any[], isPlayoffs: boolean): NbaSegment {
   const topDecided = top ? top.wins + top.losses : 0;
   const topBucketWinRate = top && topDecided > 0 ? Math.round((top.wins / topDecided) * 1000) / 10 : 0;
 
+  // ── Phase 8: Playoff role-truth breakdowns ──────────────────────────────
+  // Bucket plays by whether the role gate clamped them (no_rotation_data,
+  // rotation_rs_fallback, role_gate_70/80) vs. plays that passed the gate.
+  // Win rate gap between these tiers tells us the role layer is real signal.
+  let roleGateBuckets: Array<{ bucket: string; plays: number; winRate: number }> | undefined;
+  let comboVsSingle: Array<{ bucket: string; plays: number; winRate: number }> | undefined;
+  if (isPlayoffs) {
+    const tally = (label: string) => ({ label, wins: 0, losses: 0, total: 0 });
+    const gateClean = tally("role_passed");
+    const gate70 = tally("gated_to_68");
+    const gate80 = tally("gated_to_70_74");
+    const noRot = tally("no_rotation_data");
+    const rsFallback = tally("rotation_rs_fallback");
+    const playoffFallback = tally("playoff_data_rs_fallback");
+
+    const combo = tally("combo");
+    const single = tally("single");
+
+    for (const p of plays) {
+      const ct: string = p.calibrationTrack ?? "";
+      let bucketRef = gateClean;
+      if (ct.includes("playoff_role_gate_80") || ct.includes(":cap80")) bucketRef = gate80;
+      else if (ct.includes("playoff_role_gate_70")) bucketRef = gate70;
+      else if (ct.includes("rotation_rs_fallback")) bucketRef = rsFallback;
+      else if (ct.includes("no_rotation_data")) bucketRef = noRot;
+      else if (ct.includes("playoff_data_rs_fallback") || ct.includes("playoff_fallback_cap")) bucketRef = playoffFallback;
+      bucketRef.total++;
+      if (p.result === "hit") bucketRef.wins++;
+      if (p.result === "miss") bucketRef.losses++;
+
+      const isCombo = (p.market ?? "").toLowerCase().includes("+") || (p.market ?? "").toLowerCase().includes("pra");
+      const cs = isCombo ? combo : single;
+      cs.total++;
+      if (p.result === "hit") cs.wins++;
+      if (p.result === "miss") cs.losses++;
+    }
+
+    const toBucket = (t: { label: string; wins: number; losses: number; total: number }) => {
+      const d = t.wins + t.losses;
+      return { bucket: t.label, plays: t.total, winRate: d > 0 ? Math.round((t.wins / d) * 1000) / 10 : 0 };
+    };
+    roleGateBuckets = [gateClean, gate70, gate80, noRot, rsFallback, playoffFallback].map(toBucket);
+    comboVsSingle = [combo, single].map(toBucket);
+  }
+
   return {
     sport: "NBA",
     isPlayoffs,
@@ -109,6 +160,8 @@ function buildNbaSegment(plays: any[], isPlayoffs: boolean): NbaSegment {
     avgEdge: edgeCount > 0 ? Math.round((edgeSum / edgeCount) * 100) / 100 : 0,
     topBucketWinRate,
     buckets,
+    roleGateBuckets,
+    comboVsSingle,
   };
 }
 

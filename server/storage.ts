@@ -3,6 +3,7 @@ import { todayET, daysAgoET } from "./utils/dateUtils";
 import { resolveMlbGameSessionDate } from "./utils/mlbSessionDate";
 import { calculateRemainingMinutes } from "./minutesModel";
 import { getPlayerUsage, getTeamDefenseMatchup, computeUsageAdjustment, computeDefenseMultiplier } from "./services/nbaStatsService";
+import { getPlayoffRotationProfile, type PlayoffRotationProfile } from "./services/nbaRotationHistoryService";
 import { classifyArchetype as classifyNBAArchetype, type NBAArchetype, VARIANCE_MULTIPLIERS, MINUTES_FRAGILITY_MULTIPLIERS, CORRELATION_DEFAULTS, COMBO_VARIANCE_EXTRA, isVolatileArchetype, isImpactedArchetype, getSafetyCeiling, getPlayoffSafetyCeiling, getPlayoffFragilityMultiplier } from "./nba/archetypes";
 import { isUnderBiasCorrectionActive } from "./nba/directionalBias";
 import {
@@ -331,6 +332,104 @@ export const calcLogEntries: CalcLogEntry[] = [];
 // creating a duplicate. This Set blocks the second attempt before it hits the DB.
 const _alertsInFlight = new Set<string>();
 
+// ── Phase 4: Competitive playoff context detector ─────────────────────────
+// Returns true when in-game / pregame signals suggest a non-blowout path.
+// Used to gate close-game minute extension boosts so we don't reward
+// star/starter logic in already-decided games.
+export function isCompetitivePlayoffMinuteContext(args: {
+  seasonPhase: "early" | "mid" | "late" | "playoffs";
+  liveScoreDiff?: number | null;
+  pregameSpread?: number | null;
+  quarter?: number | null;
+  minutesRemaining?: number | null;
+}): boolean {
+  if (args.seasonPhase !== "playoffs") return false;
+  if (args.liveScoreDiff != null) {
+    return Math.abs(args.liveScoreDiff) <= 12;
+  }
+  if (args.pregameSpread != null) {
+    return Math.abs(args.pregameSpread) <= 8;
+  }
+  // Default to true when we have no context (don't punish unknowns).
+  return true;
+}
+
+// ── Phase 7: Playoff high-confidence eligibility gate ─────────────────────
+// Decides whether a play is allowed to display 70+/80+ confidence based on
+// real playoff role evidence. The reason string is appended to calibration
+// track so analytics can show exactly why a play was capped.
+export function canReachPlayoffHighConfidence(args: {
+  playoffRotationProfile: PlayoffRotationProfile | null;
+  archetype: NBAArchetype;
+  playoffDataFallbackUsed: boolean;
+  playoffRotationFallbackUsed: boolean;
+  isComboMarket: boolean;
+}): { can70: boolean; can80: boolean; reason: string } {
+  const p = args.playoffRotationProfile;
+
+  // Hard fail: no rotation data at all → cannot reach 70+
+  if (!p || p.dataSource === "none") {
+    return { can70: false, can80: false, reason: "no_rotation_data" };
+  }
+
+  // Rotation fallback to regular season → cap below elite tier.
+  // Game-1 grace: stable_star with very high RS role certainty + low rank can
+  // still reach 70 (but not 80) so legit superstars (Jokic, LeBron, SGA) are
+  // not hard-capped at 68 in Round 1 Game 1 just because no playoff log exists
+  // yet. 80+ still requires real playoff data — no exception.
+  if (args.playoffRotationFallbackUsed || p.dataSource === "regular_season_fallback") {
+    const rsRoleCert = p.playoffRoleCertainty ?? 0;
+    const rsRank = p.rotationRankEstimate ?? 99;
+    const rsClose = p.closeGameTrustScore ?? 0;
+    const game1Grace =
+      args.archetype === "stable_star" &&
+      !args.isComboMarket &&
+      rsRoleCert >= 0.82 &&
+      rsRank <= 2 &&
+      rsClose >= 0.65;
+    if (game1Grace) {
+      return { can70: true, can80: false, reason: "rotation_rs_fallback_game1_grace" };
+    }
+    return { can70: false, can80: false, reason: "rotation_rs_fallback" };
+  }
+
+  // Usage/defense fell back to regular season → no 80+
+  if (args.playoffDataFallbackUsed) {
+    const can70Soft = (p.playoffRoleCertainty ?? 0) >= 0.70 && (p.rotationRankEstimate ?? 99) <= 4;
+    return { can70: can70Soft, can80: false, reason: "playoff_data_rs_fallback" };
+  }
+
+  const roleCert = p.playoffRoleCertainty ?? 0;
+  const rank = p.rotationRankEstimate ?? 99;
+  const closeTrust = p.closeGameTrustScore ?? 0;
+  const variance = p.playoffMinutesVariance ?? 999;
+
+  // 70+ requirements
+  const comboBumpRole = args.isComboMarket ? 0.06 : 0;
+  const can70 =
+    roleCert >= (0.62 + comboBumpRole) &&
+    rank <= (args.isComboMarket ? 6 : 7) &&
+    closeTrust >= 0.50 &&
+    variance < 35;
+
+  // 80+ requirements (much stricter)
+  const stableArchetype = args.archetype === "stable_star" || args.archetype === "stable_starter";
+  const comboBump80 = args.isComboMarket ? 0.05 : 0;
+  const can80 =
+    can70 &&
+    stableArchetype &&
+    roleCert >= (0.78 + comboBump80) &&
+    rank <= 3 &&
+    closeTrust >= 0.65 &&
+    variance < 25;
+
+  let reason = "ok";
+  if (!can80 && !can70) reason = "weak_role";
+  else if (!can80) reason = `cap80(role=${roleCert.toFixed(2)},rank=${rank},trust=${closeTrust.toFixed(2)},arch=${args.archetype})`;
+
+  return { can70, can80, reason };
+}
+
 export class DatabaseStorage implements IStorage {
   async getPlayers(): Promise<Player[]> {
     return await db.select().from(players).orderBy(players.name);
@@ -431,6 +530,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async calculateProbability(req: CalculateProbabilityRequest): Promise<CalculateProbabilityResponse & { impliedProbability: number }> {
+    // Local helper accessor (declared via function decl below the class is not
+    // valid here, so reference module-level helper). See bottom of file.
     const seasonContext = this.getNbaSeasonContext(req.gameDate);
     const seasonPhase = seasonContext.seasonPhase;
     const isPlayoffs = seasonContext.isPlayoffs;
@@ -480,6 +581,26 @@ export class DatabaseStorage implements IStorage {
       nbaDefenseMatchup = defRS;
       nbaPlayerUsage = usageRS;
     }
+    // ─── Phase 3: Playoff rotation truth profile (non-blocking) ─────────────
+    // Real playoff role evidence used by the minutes model and the
+    // high-confidence eligibility gate. Fallback to null on any error so the
+    // pipeline degrades gracefully to the existing behavior.
+    let playoffRotationProfile: PlayoffRotationProfile | null = null;
+    let playoffRotationFallbackUsed = false;
+    if (isPlayoffs) {
+      playoffRotationProfile = await getPlayoffRotationProfile({
+        playerId: player.id,
+        playerName: player.name,
+        teamAbbr: player.team,
+        opponentAbbr: req.opponentTeam,
+        gameDate: req.gameDate,
+        gameId: req.gameId,
+      }).catch(() => null);
+      playoffRotationFallbackUsed =
+        playoffRotationProfile == null ||
+        playoffRotationProfile.dataSource !== "playoffs";
+    }
+
     const nbaDefMultiplier = nbaDefenseMatchup ? computeDefenseMultiplier(nbaDefenseMatchup, player.position ?? undefined) : dbDefenseMultiplier;
     const defenseMultiplier = nbaDefenseMatchup
       ? nbaDefMultiplier * 0.6 + dbDefenseMultiplier * 0.4
@@ -562,6 +683,7 @@ export class DatabaseStorage implements IStorage {
       missingStarterCount: 0,
       projectedMinutes: freshProjectedMinutes,
       seasonPhase,
+      playoffRotationProfile,
     });
     const remainingMinutes = minutesResult.expectedRemainingMinutes;
 
@@ -1003,6 +1125,8 @@ export class DatabaseStorage implements IStorage {
     //   game, refuse to surface elite-tier confidence regardless of archetype.
     let playoffHighBucketGuardApplied = false;
     let playoffFallbackCapApplied = false;
+    let playoffRoleGate70Applied = false;
+    let playoffRoleGate80Applied = false;
     if (isPlayoffs && displayConfidence !== null) {
       if (displayConfidence >= 80 && nbaArchetype !== "stable_star") {
         const cap = isComboStat ? 68 : 74;
@@ -1018,6 +1142,34 @@ export class DatabaseStorage implements IStorage {
           displayConfidence = cap;
           calibrationTrack += "+playoff_fallback_cap";
           playoffFallbackCapApplied = true;
+        }
+      }
+      // ── Phase 7: Playoff role-truth eligibility gate ────────────────────
+      // Refuse 70+/80+ unless real playoff role evidence supports it.
+      // Stops generic minute heuristics from graduating uncertain plays.
+      const eligibility = canReachPlayoffHighConfidence({
+        playoffRotationProfile,
+        archetype: nbaArchetype,
+        playoffDataFallbackUsed,
+        playoffRotationFallbackUsed,
+        isComboMarket: isComboStat,
+      });
+      if (!eligibility.can80 && displayConfidence >= 80) {
+        const cap = isComboStat ? 70 : 74;
+        if (displayConfidence > cap) {
+          displayConfidence = cap;
+          calibrationTrack += `+playoff_role_gate_80:${eligibility.reason}`;
+          playoffRoleGate80Applied = true;
+          console.log(`[NBA_PLAYOFF_ROLE_GATE] player=${player.name} cap80→${cap} reason=${eligibility.reason}`);
+        }
+      }
+      if (!eligibility.can70 && displayConfidence >= 70) {
+        const cap = 68;
+        if (displayConfidence > cap) {
+          displayConfidence = cap;
+          calibrationTrack += `+playoff_role_gate_70:${eligibility.reason}`;
+          playoffRoleGate70Applied = true;
+          console.log(`[NBA_PLAYOFF_ROLE_GATE] player=${player.name} cap70→${cap} reason=${eligibility.reason}`);
         }
       }
     }
