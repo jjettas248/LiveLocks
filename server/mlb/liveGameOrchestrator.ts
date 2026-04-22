@@ -2414,7 +2414,15 @@ export class LiveGameOrchestrator {
             if (alertResult.level === "ALERT" || alertResult.level === "WATCH") {
               const diag = alertResult.diagnostics;
               console.log(`[HR_ALERT_TRIGGER] ${alertResult.level} ${batter.playerName} score=${output.hrBuildScore} rawConv=${rawPct} calConv=${calPct} pitDet=${detState} reason=${alertResult.triggerReason} state=${alertResult.signalState} decision=${alertResult.decision} confidence=${alertResult.confidenceScore} tier=${alertResult.alertTier} path=${diag.alertPath} hrShaped=${diag.hrShapedCount} missed=${diag.missedHrCount} elite=${diag.eliteHrCount} evMean=${diag.qualifiedEVMean} maxDist=${diag.maxDistance} remPA=${diag.remainingPA} pitcher=${diag.pitcherFatigueState} env=${diag.environmentContext} suppressions=${diag.suppressionFlags.length} positives=[${diag.positiveFactors.join("|")}] game=${gameId} inn=${state.inning}`);
-              markAlertSent(batter.playerId, gameId);
+              // Only burn the 10-minute cooldown on actual ALERTs. WATCH-tier
+              // signals (FORMATION/MONITOR) are non-actionable tracking signals
+              // and must not suppress a later genuine ALERT for the same
+              // player — particularly important for the PATH_E_CONVICTION
+              // safety net which intentionally fires WATCH signals before
+              // contact-event evidence accumulates.
+              if (alertResult.level === "ALERT") {
+                markAlertSent(batter.playerId, gameId);
+              }
               storage.insertAlert({
                 playerId: batter.playerId,
                 playerName: batter.playerName,

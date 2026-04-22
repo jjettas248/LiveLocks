@@ -671,6 +671,57 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     };
   }
 
+  // PATH_E (CONVICTION FALLBACK) — high-conviction WATCH safety net.
+  // Catches cases where the model has strong evidence (high score + high
+  // conversion probability) but insufficient *classified contact-event count*
+  // to satisfy any of paths A–D / WATCH_POWER. These were previously
+  // dropped silently and showed up as uncalled_hr in the ladder when the
+  // HR landed (e.g. Adames score=5.4 conv=19.2% with only 1 hardHit).
+  //
+  // Strict guardrails: WATCH-tier ONLY (never PREPARE/BET_NOW), requires
+  // top-quartile model conviction AND at least one power signal of any
+  // kind, zero soft vetoes, and remaining PA. All upstream gates
+  // (cooldown, hard veto, conv-low) still apply. Behind a kill-switch env
+  // var so it can be disabled instantly if it produces noise.
+  const convictionPathEnabled = (process.env.HR_CONVICTION_PATH_ENABLED ?? "true").toLowerCase() !== "false";
+  const HR_CONVICTION_CONV_MIN = 0.15;
+  const HR_CONVICTION_SCORE_MIN = 4.5;
+  const hasAnyPowerSignal = powerIndicators >= 1 || powerContactCount >= 1;
+
+  if (
+    convictionPathEnabled &&
+    totalHrShaped === 0 &&
+    convProb !== null &&
+    convProb >= HR_CONVICTION_CONV_MIN &&
+    hrBuildScore >= HR_CONVICTION_SCORE_MIN &&
+    hasAnyPowerSignal &&
+    softVetoes.length === 0 &&
+    (remainingPA === null || remainingPA >= 1.0)
+  ) {
+    positiveFactors.push(`high model conviction (score=${hrBuildScore}, conv=${convPct})`);
+    positiveFactors.push(`power signal: ${powerIndicators} indicator${powerIndicators === 1 ? "" : "s"} / ${powerContactCount} power contact${powerContactCount === 1 ? "" : "s"}`);
+    if (pitcherFavorable) positiveFactors.push(`pitcher: ${pitcherFatigueState}`);
+    if (envFavorable) positiveFactors.push(`env: ${environmentContext}`);
+
+    // Cap confidence — contact evidence is thinner than other paths.
+    const rawConf = computeConfidence(hrBuildScore, factors, null, softVetoes.length, convProb);
+    const cappedConf = Math.min(7, rawConf);
+
+    console.log(`[HR_ALERT_PATH_E_CONVICTION] ${input.playerName} game=${input.gameId} — high-conviction WATCH (score=${hrBuildScore} conv=${convPct} powerInd=${powerIndicators} powerContact=${powerContactCount}). Promoting to WATCH-only.`);
+
+    return {
+      level: "WATCH",
+      triggerReason: `watch:conviction_score${hrBuildScore}_conv${(convProb * 100).toFixed(0)}`,
+      signalState: "FORMATION",
+      decision: "MONITOR",
+      confidenceScore: cappedConf,
+      formattedReason: `High HR conversion likelihood (${convPct}) with build score ${hrBuildScore}. Watching for contact-event confirmation.`,
+      detectedInning: inning,
+      alertTier: "watch",
+      diagnostics: { ...baseDiagnostics, alertPath: "PATH_E_CONVICTION", positiveFactors },
+    };
+  }
+
   if (
     totalHrShaped === 0 &&
     powerIndicators >= 1 &&
