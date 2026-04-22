@@ -1763,6 +1763,11 @@ export class LiveGameOrchestrator {
         alertPath: alertResult.diagnostics?.alertPath ?? null,
         alertTier: alertResult.alertTier ?? null,
         diagnosticsSnapshot: diagSnap,
+        // Canonical HR score contract (Phase 3)
+        buildScore: hrBuild.score,
+        conversionProbabilityRaw: alertResult.diagnostics?.hrConversion?.hrConversionProbability ?? null,
+        conversionProbability: alertResult.diagnostics?.hrConversion?.calibratedProbability ?? null,
+        peakConversionProbability: null,
       }).catch(err => console.warn(`[HR_RADAR_CONTACT_UPDATE] persist failed: ${err.message}`));
     }
   }
@@ -2506,6 +2511,11 @@ export class LiveGameOrchestrator {
                 alertPath: alertResult.diagnostics?.alertPath ?? null,
                 alertTier: alertResult.alertTier ?? null,
                 diagnosticsSnapshot: diagSnap,
+                // Canonical HR score contract (Phase 3)
+                buildScore: output.hrBuildScore ?? null,
+                conversionProbabilityRaw: alertResult.diagnostics?.hrConversion?.hrConversionProbability ?? null,
+                conversionProbability: alertResult.diagnostics?.hrConversion?.calibratedProbability ?? null,
+                peakConversionProbability: hrDynSnap?.peakConversionProbability ?? null,
               }).catch(err => console.warn(`[HR_RADAR_ALERT] persist failed: ${err.message}`));
             }
           }

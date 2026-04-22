@@ -2207,6 +2207,20 @@ export async function registerRoutes(
         const score = parseFloat(String(alert.currentReadinessScore ?? alert.initialReadinessScore ?? 0));
         const peakScore = parseFloat(String(alert.peakReadinessScore ?? score));
         const game = cachedLiveGames?.games.find((g: any) => g.gameId === alert.gameId);
+        // Phase 9: explicit canonical score contract on user-facing rows.
+        // readinessScore (0-100), peakReadinessScore (0-100), conversionProbability (0-1).
+        // `signalScore`/`peakScore` retained for backward compat but should be considered deprecated.
+        const diagAny: any = alert.diagnosticsSnapshot as any;
+        const sc = diagAny?.scoreContract ?? {};
+        const conversionProbability = sc.conversionProbability
+          ?? diagAny?.hrConversion?.calibratedProbability
+          ?? null;
+        const conversionProbabilityRaw = sc.conversionProbabilityRaw
+          ?? diagAny?.hrConversion?.hrConversionProbability
+          ?? null;
+        const buildScore = sc.buildScore ?? null;
+        const peakConversionProbability = sc.peakConversionProbability ?? null;
+
         const entry = {
           playerId: alert.playerId,
           playerName: alert.playerName,
@@ -2216,6 +2230,13 @@ export async function registerRoutes(
           gameId: alert.gameId,
           signalScore: score,
           hrBuildScore: score,
+          // Phase 9: canonical score contract
+          readinessScore: score,
+          peakReadinessScore: peakScore,
+          buildScore,
+          conversionProbability,
+          conversionProbabilityRaw,
+          peakConversionProbability,
           hrIntensity: alert.confidenceTier === "strong" ? "strong" : alert.confidenceTier === "building" ? "watch" : "weak",
           confidenceTier: alert.confidenceTier === "strong" ? "STRONG" : alert.confidenceTier === "building" ? "SOLID" : "WATCHLIST",
           awayAbbr: game?.awayAbbr ?? null,
@@ -2232,6 +2253,7 @@ export async function registerRoutes(
           detectedLabel: alert.detectedLabel,
           diagnosticsSnapshot: alert.diagnosticsSnapshot,
           contactSnapshot: alert.contactSnapshot,
+          updatedAt: (alert as any).updatedAt ?? null,
           badges: [],
           reasons: alert.summaryText ? [alert.summaryText] : [],
           explanationBullets: alert.summaryText ? [alert.summaryText] : [],
@@ -2246,9 +2268,64 @@ export async function registerRoutes(
         }
       }
 
-      const dedupBettable = Array.from(new Map(bettable.map((b: any) => [b.playerId, b])).values());
-      const dedupWatchlist = Array.from(new Map(cleanWatchlist.map((w: any) => [w.playerId, w])).values());
-      const dedupCashed = Array.from(new Map(allCashed.map((c: any) => [c.playerId, c])).values());
+      // Phase 6: composite dedupe key (sessionDate|gameId|playerId) with tie-breaker.
+      // Tie-breaker priority: actionable > higher readiness > higher peak readiness > newer.
+      const dedupKey = (r: any) => `${todayStr}|${r.gameId ?? "?"}|${r.playerId}`;
+      const cmpRow = (a: any, b: any): number => {
+        const aAct = a.actionable ? 1 : 0;
+        const bAct = b.actionable ? 1 : 0;
+        if (aAct !== bAct) return bAct - aAct;
+        const aR = Number(a.signalScore ?? a.hrBuildScore ?? a.detectedScore ?? 0);
+        const bR = Number(b.signalScore ?? b.hrBuildScore ?? b.detectedScore ?? 0);
+        if (aR !== bR) return bR - aR;
+        const aP = Number(a.peakScore ?? a.peakReadinessScore ?? 0);
+        const bP = Number(b.peakScore ?? b.peakReadinessScore ?? 0);
+        if (aP !== bP) return bP - aP;
+        const aT = a.resolvedAt ? new Date(a.resolvedAt).getTime() : 0;
+        const bT = b.resolvedAt ? new Date(b.resolvedAt).getTime() : 0;
+        return bT - aT;
+      };
+      const dedupeWith = (rows: any[]): any[] => {
+        const map = new Map<string, any>();
+        for (const r of rows) {
+          const k = dedupKey(r);
+          const existing = map.get(k);
+          if (!existing || cmpRow(r, existing) < 0) map.set(k, r);
+        }
+        return Array.from(map.values());
+      };
+      const dedupBettable = dedupeWith(bettable);
+      const dedupWatchlist = dedupeWith(cleanWatchlist);
+      const dedupCashed = dedupeWith(allCashed);
+
+      // Phase 9: canonical sort — readiness DESC, peakReadiness DESC, freshest first.
+      const sortByContract = (a: any, b: any): number => {
+        const ar = Number(a.readinessScore ?? a.signalScore ?? 0);
+        const br = Number(b.readinessScore ?? b.signalScore ?? 0);
+        if (ar !== br) return br - ar;
+        const ap = Number(a.peakReadinessScore ?? a.peakScore ?? 0);
+        const bp = Number(b.peakReadinessScore ?? b.peakScore ?? 0);
+        if (ap !== bp) return bp - ap;
+        const at = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+        const bt = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+        return bt - at;
+      };
+      dedupBettable.sort(sortByContract);
+      dedupWatchlist.sort(sortByContract);
+
+      // Phase 5: explicit outcomeType taxonomy on user-facing rows.
+      // called_hit | called_miss | uncalled_hr | late_signal | post_hr_fallback
+      const deriveOutcomeType = (row: any, fallbackStatus: "hit" | "miss"): string => {
+        if (row?.fallbackCreated) return "post_hr_fallback";
+        if (row?.gradingStatus === "called_hit") return "called_hit";
+        if (row?.gradingStatus === "called_miss") return "called_miss";
+        if (row?.gradingStatus === "uncalled_hr") return "uncalled_hr";
+        if (row?.gradingStatus === "late_signal") return "late_signal";
+        return fallbackStatus === "hit" ? "called_hit" : "called_miss";
+      };
+      const cashedWithType = dedupCashed.map((c: any) => ({ ...c, outcomeType: deriveOutcomeType(c, "hit") }));
+      const gradedHitsWithType = canonical.hits.map(h => ({ ...h, outcomeType: deriveOutcomeType(h, "hit") }));
+      const gradedMissesWithType = canonical.misses.map(m => ({ ...m, outcomeType: deriveOutcomeType(m, "miss") }));
 
       console.log(`[MLB_HR_RADAR] bettable=${dedupBettable.length} cashed=${dedupCashed.length} (edge=${cashedFromEdge.length},db=${cashedFromDb.length}) watchlist=${dedupWatchlist.length} dbAlerts=${dbAlerts.length} canonicalHits=${canonical.hits.length} canonicalMisses=${canonical.misses.length}`);
 
@@ -2256,10 +2333,10 @@ export async function registerRoutes(
         bettableHR: dedupBettable,
         hrWatchlist: dedupWatchlist,
         hrEdges,
-        cashedToday: dedupCashed,
-        activity: dedupCashed,
-        gradedHits: canonical.hits,
-        gradedMisses: canonical.misses,
+        cashedToday: cashedWithType,
+        activity: cashedWithType,
+        gradedHits: gradedHitsWithType,
+        gradedMisses: gradedMissesWithType,
         gradingSummary: canonical.summary,
       });
     } catch (e: any) {
@@ -2301,6 +2378,18 @@ export async function registerRoutes(
   // ── HR Radar Decision Ladder (Phase 2 of HR ledger spec) ──
   // Returns today's HR radar bucketed into 5 user-facing sections:
   // attackNow | building | watch | cashed | dead.
+  // Phase 8: Detection coverage analytics (admin-only).
+  app.get("/api/mlb/admin/hr-radar/coverage", requireAdmin, async (req, res) => {
+    try {
+      const daysBack = req.query.daysBack ? Math.max(1, Math.min(60, parseInt(String(req.query.daysBack), 10) || 7)) : 7;
+      const metrics = await (storage as any).getHrRadarCoverageMetrics(daysBack);
+      return res.json(metrics);
+    } catch (e: any) {
+      console.error("[mlb/admin/hr-radar/coverage]", e.message);
+      return res.status(500).json({ error: "coverage_metrics_unavailable", message: e.message });
+    }
+  });
+
   app.get("/api/mlb/hr-radar/ladder", requireAuth, async (req, res) => {
     try {
       const sessionDate = typeof req.query.sessionDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.sessionDate)

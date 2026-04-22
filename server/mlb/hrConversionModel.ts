@@ -48,6 +48,12 @@ export interface HRConversionResult {
   pitcherMultiplier: number;
   environmentMultiplier: number;
   pitcherDeteriorationState: string;
+  // Phase 4 calibration diagnostics
+  rawConversionProbability: number;
+  calibratedConversionProbability: number;
+  calibrationSource: "static_table" | "empirical_buckets";
+  calibrationBucketLabel: string | null;
+  calibrationSampleCount: number;
   components: {
     baseRate: number;
     liveAdjustedRate: number;
@@ -58,6 +64,41 @@ export interface HRConversionResult {
     pZeroHR: number;
     rawProbability: number;
   };
+}
+
+/** Empirical bucket loaded from resolved outcomes (Phase 4). */
+export interface HrCalibrationBucket {
+  min: number;
+  max: number;
+  calibrated: number;
+  samples: number;
+  label?: string;
+}
+
+/**
+ * Generic empirical remap helper. If `buckets` is empty or no bucket matches,
+ * returns the raw value (caller is expected to fall back to the static table).
+ */
+export function calibrateHrProbability(rawProb: number, buckets: HrCalibrationBucket[]): number {
+  if (!buckets || buckets.length === 0) return rawProb;
+  const bucket = buckets.find(b => rawProb >= b.min && rawProb < b.max);
+  if (!bucket) return rawProb;
+  return bucket.calibrated;
+}
+
+/**
+ * Empirical buckets are loaded asynchronously (e.g. from analytics). When
+ * present, calibration uses them in preference to the static table.
+ * Defaults to empty so existing behavior is unchanged.
+ */
+let EMPIRICAL_BUCKETS: HrCalibrationBucket[] = [];
+
+export function setEmpiricalCalibrationBuckets(buckets: HrCalibrationBucket[]): void {
+  EMPIRICAL_BUCKETS = Array.isArray(buckets) ? buckets : [];
+}
+
+export function getEmpiricalCalibrationBuckets(): HrCalibrationBucket[] {
+  return EMPIRICAL_BUCKETS;
 }
 
 const LEAGUE_AVG_HR_PER_PA = 0.033;
@@ -77,16 +118,38 @@ const CALIBRATION_TABLE: Array<{ rawMin: number; rawMax: number; calibrated: num
   { rawMin: 0.40, rawMax: 1.00, calibrated: 0.38 },
 ];
 
-function calibrate(rawProb: number): number {
+function calibrate(rawProb: number): { value: number; source: "static_table" | "empirical_buckets"; bucketLabel: string | null; samples: number } {
+  // Phase 4: prefer empirical buckets when available; fall back to static table.
+  if (EMPIRICAL_BUCKETS.length > 0) {
+    const eb = EMPIRICAL_BUCKETS.find(b => rawProb >= b.min && rawProb < b.max);
+    if (eb) {
+      return {
+        value: eb.calibrated,
+        source: "empirical_buckets",
+        bucketLabel: eb.label ?? `${eb.min.toFixed(2)}-${eb.max.toFixed(2)}`,
+        samples: eb.samples,
+      };
+    }
+  }
   for (const bucket of CALIBRATION_TABLE) {
     if (rawProb >= bucket.rawMin && rawProb < bucket.rawMax) {
       const t = (rawProb - bucket.rawMin) / (bucket.rawMax - bucket.rawMin);
       const nextIdx = CALIBRATION_TABLE.indexOf(bucket) + 1;
       const nextCal = nextIdx < CALIBRATION_TABLE.length ? CALIBRATION_TABLE[nextIdx].calibrated : bucket.calibrated;
-      return bucket.calibrated + t * (nextCal - bucket.calibrated);
+      return {
+        value: bucket.calibrated + t * (nextCal - bucket.calibrated),
+        source: "static_table",
+        bucketLabel: `${bucket.rawMin.toFixed(2)}-${bucket.rawMax.toFixed(2)}`,
+        samples: 0,
+      };
     }
   }
-  return rawProb >= 0.40 ? 0.38 : 0.01;
+  return {
+    value: rawProb >= 0.40 ? 0.38 : 0.01,
+    source: "static_table",
+    bucketLabel: null,
+    samples: 0,
+  };
 }
 
 function computeLiveContactMultiplier(factors: HRBuildResult["factors"]): number {
@@ -124,7 +187,8 @@ function computeLiveContactMultiplier(factors: HRBuildResult["factors"]): number
     multiplier *= 1.0 + (hrShapedCount - 1) * 0.10;
   }
 
-  return Math.min(4.5, multiplier);
+  // Phase 4: tightened cap to reduce upstream probability inflation.
+  return Math.min(2.5, multiplier);
 }
 
 function describePitcherDeteriorationState(input: HRConversionInput): string {
@@ -224,7 +288,8 @@ function computePitcherMultiplier(input: HRConversionInput): number {
     else if (det.relieversUsedCount >= 3) multiplier *= 1.04;
   }
 
-  return Math.min(3.0, multiplier);
+  // Phase 4: tightened cap to reduce upstream probability inflation.
+  return Math.min(2.0, multiplier);
 }
 
 function computeEnvironmentMultiplier(input: HRConversionInput): number {
@@ -256,7 +321,8 @@ function computeEnvironmentMultiplier(input: HRConversionInput): number {
     multiplier *= 0.94;
   }
 
-  return Math.min(1.8, multiplier);
+  // Phase 4: tightened cap to reduce upstream probability inflation.
+  return Math.min(1.35, multiplier);
 }
 
 export function computeHRConversionProbability(input: HRConversionInput): HRConversionResult {
@@ -281,7 +347,8 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
   const environmentMultiplier = computeEnvironmentMultiplier(input);
   const envAdjustedRate = pitcherAdjustedRate * environmentMultiplier;
 
-  const finalPerPARate = Math.max(0.005, Math.min(0.25, envAdjustedRate));
+  // Phase 4: tightened final per-PA cap (0.25 → 0.12) to prevent runaway probabilities.
+  const finalPerPARate = Math.max(0.005, Math.min(0.12, envAdjustedRate));
 
   const paDist = estimateRichPADistribution(
     input.inning,
@@ -303,7 +370,8 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
   }
 
   const rawProbability = Math.max(0, Math.min(1, 1 - pZeroHR));
-  const calibratedProbability = calibrate(rawProbability);
+  const cal = calibrate(rawProbability);
+  const calibratedProbability = cal.value;
 
   const pitcherDeteriorationState = describePitcherDeteriorationState(input);
 
@@ -316,6 +384,12 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
     pitcherMultiplier: Math.round(pitcherMultiplier * 100) / 100,
     environmentMultiplier: Math.round(environmentMultiplier * 100) / 100,
     pitcherDeteriorationState,
+    // Phase 4: explicit calibration diagnostics
+    rawConversionProbability: Math.round(rawProbability * 10000) / 10000,
+    calibratedConversionProbability: Math.round(calibratedProbability * 10000) / 10000,
+    calibrationSource: cal.source,
+    calibrationBucketLabel: cal.bucketLabel,
+    calibrationSampleCount: cal.samples,
     components: {
       baseRate: Math.round(baseRate * 10000) / 10000,
       liveAdjustedRate: Math.round(liveAdjustedRate * 10000) / 10000,

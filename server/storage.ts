@@ -2531,7 +2531,24 @@ export class DatabaseStorage implements IStorage {
     alertPath?: string | null;
     alertTier?: string | null;
     diagnosticsSnapshot?: Record<string, unknown> | null;
+    // Canonical HR score contract (Phase 3) — explicit per-domain fields.
+    // Persisted into diagnosticsSnapshot.scoreContract for traceability.
+    buildScore?: number | null;
+    conversionProbabilityRaw?: number | null;
+    conversionProbability?: number | null;
+    peakConversionProbability?: number | null;
   }): Promise<HrRadarAlert | null> {
+    // Embed canonical score contract into diagnosticsSnapshot so consumers
+    // can read explicit per-domain values without DB schema changes.
+    const scoreContract = {
+      buildScore: data.buildScore ?? null,
+      readinessScore: data.readinessScore,
+      conversionProbabilityRaw: data.conversionProbabilityRaw ?? null,
+      conversionProbability: data.conversionProbability ?? null,
+      peakConversionProbability: data.peakConversionProbability ?? null,
+    };
+    const baseDiag = (data.diagnosticsSnapshot ?? {}) as Record<string, unknown>;
+    data.diagnosticsSnapshot = { ...baseDiag, scoreContract };
     try {
       const today = resolveMlbGameSessionDate(data.gameId);
       const halfLabel = data.half === "top" ? "T" : "B";
@@ -3507,11 +3524,18 @@ export class DatabaseStorage implements IStorage {
         // Active rows — classify using the actual values written by
         // liveGameOrchestrator: confidenceTier ∈ {monitor,building,strong},
         // signalState ∈ {watching,live,actionable}.
+        // Phase 7: enforce readinessScore floors as a safety net — a row tagged
+        // "strong" but with readiness < 72 is demoted to building; "building"
+        // with readiness < 55 is demoted to watch. Formation patterns (low
+        // readiness, monitor tier) are always retained in `watch`.
         const tier = (r.confidenceTier ?? "monitor").toLowerCase();
         const state = (r.signalState ?? "watching").toLowerCase();
-        if (tier === "strong" || state === "actionable") {
+        const readiness = parseFloat(String(r.currentReadinessScore ?? r.peakReadinessScore ?? 0)) || 0;
+        const ATTACK_FLOOR = 72;
+        const BUILDING_FLOOR = 55;
+        if ((tier === "strong" || state === "actionable") && readiness >= ATTACK_FLOOR) {
           section = "attackNow";
-        } else if (tier === "building" || state === "live") {
+        } else if ((tier === "building" || state === "live" || tier === "strong" || state === "actionable") && readiness >= BUILDING_FLOOR) {
           section = "building";
         } else {
           section = "watch";
@@ -3643,3 +3667,60 @@ export interface HrRadarLadderEntry {
 }
 
 export const storage = new DatabaseStorage();
+
+// Phase 8: Detection coverage analytics — added as a prototype patch on the
+// DatabaseStorage instance so we don't reshuffle the giant class body. Returns
+// counts of canonical outcomes bucketed by tier and inning over the last
+// `daysBack` session dates.
+export interface HrRadarCoverageMetrics {
+  daysBack: number;
+  totals: {
+    activeOrUnresolved: number;
+    calledHit: number;
+    calledMiss: number;
+    uncalledHr: number;
+    lateSignal: number;
+    postHrFallback: number;
+  };
+  byTier: Record<string, { calledHit: number; calledMiss: number; uncalledHr: number; lateSignal: number }>;
+  byInning: Record<number, { calledHit: number; calledMiss: number; uncalledHr: number; lateSignal: number }>;
+  detectionRate: number; // calledHit / (calledHit + uncalledHr + lateSignal)
+  hitRate: number;       // calledHit / (calledHit + calledMiss)
+}
+
+(DatabaseStorage.prototype as any).getHrRadarCoverageMetrics = async function (daysBack: number = 7): Promise<HrRadarCoverageMetrics> {
+  const cutoff = daysAgoET(Math.max(0, Math.min(60, Math.floor(daysBack))));
+  const rows = await db.select().from(hrRadarAlerts)
+    .where(gte(hrRadarAlerts.sessionDate, cutoff));
+
+  const totals = { activeOrUnresolved: 0, calledHit: 0, calledMiss: 0, uncalledHr: 0, lateSignal: 0, postHrFallback: 0 };
+  const byTier: Record<string, { calledHit: number; calledMiss: number; uncalledHr: number; lateSignal: number }> = {};
+  const byInning: Record<number, { calledHit: number; calledMiss: number; uncalledHr: number; lateSignal: number }> = {};
+  const ensureTier = (t: string) => byTier[t] ??= { calledHit: 0, calledMiss: 0, uncalledHr: 0, lateSignal: 0 };
+  const ensureInning = (n: number) => byInning[n] ??= { calledHit: 0, calledMiss: 0, uncalledHr: 0, lateSignal: 0 };
+
+  for (const r of rows) {
+    const grading = r.gradingStatus ?? "active";
+    const tier = (r.confidenceTier ?? "monitor").toLowerCase();
+    const inning = r.signalInning ?? r.detectedInning ?? r.hitInning ?? 0;
+    if ((r as any).fallbackCreated) totals.postHrFallback++;
+    switch (grading) {
+      case "called_hit":  totals.calledHit++; ensureTier(tier).calledHit++; ensureInning(inning).calledHit++; break;
+      case "called_miss": totals.calledMiss++; ensureTier(tier).calledMiss++; ensureInning(inning).calledMiss++; break;
+      case "uncalled_hr": totals.uncalledHr++; ensureTier(tier).uncalledHr++; ensureInning(inning).uncalledHr++; break;
+      case "late_signal": totals.lateSignal++; ensureTier(tier).lateSignal++; ensureInning(inning).lateSignal++; break;
+      default:            totals.activeOrUnresolved++;
+    }
+  }
+
+  const detectionDenom = totals.calledHit + totals.uncalledHr + totals.lateSignal;
+  const hitDenom = totals.calledHit + totals.calledMiss;
+  return {
+    daysBack,
+    totals,
+    byTier,
+    byInning,
+    detectionRate: detectionDenom > 0 ? Math.round((totals.calledHit / detectionDenom) * 10000) / 10000 : 0,
+    hitRate: hitDenom > 0 ? Math.round((totals.calledHit / hitDenom) * 10000) / 10000 : 0,
+  };
+};
