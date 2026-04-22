@@ -45,7 +45,43 @@ export type NbaSegment = {
   // accuracy in the right direction.
   roleGateBuckets?: Array<{ bucket: string; plays: number; winRate: number }>;
   comboVsSingle?: Array<{ bucket: string; plays: number; winRate: number }>;
+  // ── Phase 8: rotation-profile-derived buckets (playoffs only) ─────────
+  // Read from the `+rotsnap:` tag stamped into calibrationTrack at calc
+  // time. Lets admin verify the role layer is actually predicting outcomes.
+  playoffRoleCertaintyBuckets?: Array<{ bucket: string; plays: number; winRate: number }>;
+  rotationRankBuckets?: Array<{ bucket: string; plays: number; winRate: number }>;
+  closeGameTrustBuckets?: Array<{ bucket: string; plays: number; winRate: number }>;
+  coachShortBenchBuckets?: Array<{ bucket: string; plays: number; winRate: number }>;
 };
+
+// Parse the +rotsnap: snapshot tag stamped by storage.calculateProbability.
+// Returns null if the tag is absent or malformed.
+function parseRotSnap(track: string | null | undefined): {
+  rank: number | null;
+  cert: number | null;       // 0-100
+  ctrust: number | null;     // 0-100
+  sbench: number | null;     // 0-100
+  starride: number | null;   // 0-100
+  src: string | null;
+} | null {
+  if (!track) return null;
+  const m = track.match(/\+rotsnap:([^+]+)/);
+  if (!m) return null;
+  const out: Record<string, string> = {};
+  for (const part of m[1].split(",")) {
+    const [k, v] = part.split("=");
+    if (k && v != null) out[k] = v;
+  }
+  const num = (s: string | undefined) => (s == null || s === "na" || s === "") ? null : (Number.isFinite(Number(s)) ? Number(s) : null);
+  return {
+    rank: num(out.rank),
+    cert: num(out.cert),
+    ctrust: num(out.ctrust),
+    sbench: num(out.sbench),
+    starride: num(out.starride),
+    src: out.src ?? null,
+  };
+}
 
 // NBA playoff cutover (mirrors storage.getNbaSeasonContext): regular season
 // ends ~Apr 10 of the season-end calendar year. Same logic as the engine,
@@ -111,6 +147,10 @@ function buildNbaSegment(plays: any[], isPlayoffs: boolean): NbaSegment {
   // Win rate gap between these tiers tells us the role layer is real signal.
   let roleGateBuckets: Array<{ bucket: string; plays: number; winRate: number }> | undefined;
   let comboVsSingle: Array<{ bucket: string; plays: number; winRate: number }> | undefined;
+  let playoffRoleCertaintyBuckets: Array<{ bucket: string; plays: number; winRate: number }> | undefined;
+  let rotationRankBuckets: Array<{ bucket: string; plays: number; winRate: number }> | undefined;
+  let closeGameTrustBuckets: Array<{ bucket: string; plays: number; winRate: number }> | undefined;
+  let coachShortBenchBuckets: Array<{ bucket: string; plays: number; winRate: number }> | undefined;
   if (isPlayoffs) {
     const tally = (label: string) => ({ label, wins: 0, losses: 0, total: 0 });
     const gateClean = tally("role_passed");
@@ -148,6 +188,48 @@ function buildNbaSegment(plays: any[], isPlayoffs: boolean): NbaSegment {
     };
     roleGateBuckets = [gateClean, gate70, gate80, noRot, rsFallback, playoffFallback].map(toBucket);
     comboVsSingle = [combo, single].map(toBucket);
+
+    // ── Phase 8: rotation profile snapshot buckets ─────────────────────────
+    type Tally = { label: string; wins: number; losses: number; total: number };
+    const mk = (label: string): Tally => ({ label, wins: 0, losses: 0, total: 0 });
+    const cert: Tally[] = [mk("cert_high_75-100"), mk("cert_mid_50-74"), mk("cert_low_<50"), mk("cert_unknown")];
+    const rank: Tally[] = [mk("rank_top3"), mk("rank_4-5"), mk("rank_6-7"), mk("rank_8+"), mk("rank_unknown")];
+    const ctrust: Tally[] = [mk("ctrust_high_70+"), mk("ctrust_mid_40-69"), mk("ctrust_low_<40"), mk("ctrust_unknown")];
+    const sbench: Tally[] = [mk("shortbench_high_65+"), mk("shortbench_mid_40-64"), mk("shortbench_low_<40"), mk("shortbench_unknown")];
+
+    const record = (t: Tally, p: any) => {
+      t.total++;
+      if (p.result === "hit") t.wins++;
+      if (p.result === "miss") t.losses++;
+    };
+    for (const p of plays) {
+      const snap = parseRotSnap(p.calibrationTrack);
+      // certainty
+      if (snap?.cert == null) record(cert[3], p);
+      else if (snap.cert >= 75) record(cert[0], p);
+      else if (snap.cert >= 50) record(cert[1], p);
+      else record(cert[2], p);
+      // rotation rank
+      if (snap?.rank == null) record(rank[4], p);
+      else if (snap.rank <= 3) record(rank[0], p);
+      else if (snap.rank <= 5) record(rank[1], p);
+      else if (snap.rank <= 7) record(rank[2], p);
+      else record(rank[3], p);
+      // close-game trust
+      if (snap?.ctrust == null) record(ctrust[3], p);
+      else if (snap.ctrust >= 70) record(ctrust[0], p);
+      else if (snap.ctrust >= 40) record(ctrust[1], p);
+      else record(ctrust[2], p);
+      // coach short-bench
+      if (snap?.sbench == null) record(sbench[3], p);
+      else if (snap.sbench >= 65) record(sbench[0], p);
+      else if (snap.sbench >= 40) record(sbench[1], p);
+      else record(sbench[2], p);
+    }
+    playoffRoleCertaintyBuckets = cert.map(toBucket);
+    rotationRankBuckets = rank.map(toBucket);
+    closeGameTrustBuckets = ctrust.map(toBucket);
+    coachShortBenchBuckets = sbench.map(toBucket);
   }
 
   return {
@@ -162,6 +244,10 @@ function buildNbaSegment(plays: any[], isPlayoffs: boolean): NbaSegment {
     buckets,
     roleGateBuckets,
     comboVsSingle,
+    playoffRoleCertaintyBuckets,
+    rotationRankBuckets,
+    closeGameTrustBuckets,
+    coachShortBenchBuckets,
   };
 }
 

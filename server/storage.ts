@@ -1172,6 +1172,18 @@ export class DatabaseStorage implements IStorage {
           console.log(`[NBA_PLAYOFF_ROLE_GATE] player=${player.name} cap70→${cap} reason=${eligibility.reason}`);
         }
       }
+
+      // ── Phase 8: Persist rotation profile snapshot into calibrationTrack ─
+      // Encoded as compact tags so analytics can bucket plays without a schema
+      // change. Format: +rotsnap:rank=N,cert=NN,ctrust=NN,sbench=NN,starride=NN
+      if (playoffRotationProfile) {
+        const p = playoffRotationProfile;
+        const enc = (v: number | null | undefined) =>
+          v == null || !Number.isFinite(v) ? "na" : String(Math.round(v));
+        const enc01 = (v: number | null | undefined) =>
+          v == null || !Number.isFinite(v) ? "na" : String(Math.round(v * 100));
+        calibrationTrack += `+rotsnap:rank=${enc(p.rotationRankEstimate)},cert=${enc01(p.playoffRoleCertainty)},ctrust=${enc01(p.closeGameTrustScore)},sbench=${enc01(p.coachShortBenchIndex)},starride=${enc01(p.coachStarRideIndex)},src=${p.dataSource ?? "none"}`;
+      }
     }
 
     // Integrity guard
