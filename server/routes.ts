@@ -3640,7 +3640,13 @@ export async function registerRoutes(
   // Game-specific endpoint that runs prop edge calculations for any live period,
   // not just halftime. Used to color box score rows/cells during the full game.
   const liveSignalsCache = new Map<string, { ts: number; signals: any[]; engineOutput: Record<number, Record<string, any>> }>();
-  const LIVE_SIGNALS_TTL = 45_000;
+  // Aligned with the dashboard's 20s client poll so the box score and the
+  // signal badges refresh in lock-step (no "dead cells" where stats update
+  // but badges sit stale). Paid Odds API calls are still gated downstream
+  // by NBA_ODDS_LIVE_TTL=30s and the per-game 10s throttle in oddsService,
+  // so dropping the outer TTL to 20s does not increase upstream spend — it
+  // just lets us recompute the engine output against the freshest box.
+  const LIVE_SIGNALS_TTL = 20_000;
 
   app.get("/api/live-signals/:gameId", requireAuth, async (req, res) => {
     const gameId = req.params.gameId as string;
