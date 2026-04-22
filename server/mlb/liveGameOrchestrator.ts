@@ -702,9 +702,50 @@ export class LiveGameOrchestrator {
     const contactChanges = await syncContactData(statsPk, gameId);
     await syncPitcherContext(statsPk, gameId);
 
-    const contactSyncState = mlbGameCache.gameState[gameId];
-    const contactSyncStatus = contactSyncState?.status ?? "";
-    const isLiveForContact = contactSyncStatus === "live" || contactSyncStatus === "In Progress";
+    // Resolve normalized status EARLY so HR-radar gates can use it. Previously
+    // these gates read mlbGameCache.gameState[gameId].status (raw MLB Stats API
+    // field), which is frequently empty until ESPN fallback runs further down,
+    // causing the HR radar to never evaluate any batter and the ledger to stay
+    // empty. Computing the normalized status here unlocks the radar pipeline.
+    let normalizedStatus: "live" | "pregame" | "final" | "unknown" = "unknown";
+    let statusSource = "none";
+    try {
+      const statusUrl = `https://statsapi.mlb.com/api/v1/game/${statsPk}/feed/live`;
+      const statusRes = await fetch(statusUrl, {
+        headers: { "User-Agent": "LiveLocks/1.0" },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (statusRes.ok) {
+        const statusData = (await statusRes.json()) as any;
+        const rawAbstractState: string = statusData.gameData?.status?.abstractGameState ?? "";
+        normalizedStatus = normalizeMlbStatus(rawAbstractState);
+        if (normalizedStatus !== "unknown") statusSource = "mlbStatsApi";
+      }
+    } catch {
+      console.warn(`[MLB orchestrator] pollGame: MLB Stats API status fetch failed for game ${gameId}`);
+    }
+
+    if (normalizedStatus === "unknown" && registeredGame) {
+      const espnRaw = registeredGame.espnStatus ?? "";
+      if (espnRaw === "STATUS_IN_PROGRESS" || espnRaw === "STATUS_DELAYED") {
+        normalizedStatus = "live";
+        statusSource = "espnFallback";
+      } else if (espnRaw === "STATUS_FINAL" || espnRaw === "STATUS_FORFEIT") {
+        normalizedStatus = "final";
+        statusSource = "espnFallback";
+      } else if (registeredGame.startTime) {
+        const startMs = new Date(registeredGame.startTime).getTime();
+        if (startMs > 0 && Date.now() >= startMs) {
+          normalizedStatus = "live";
+          statusSource = "timeFallback";
+        }
+      }
+      if (statusSource !== "none") {
+        console.log(`[MLB orchestrator] Status fallback for game ${gameId}: ${normalizedStatus} (source=${statusSource}, espnStatus=${espnRaw})`);
+      }
+    }
+
+    const isLiveForContact = normalizedStatus === "live";
 
     // Razor-sharp HR grading: pulls inning attribution from each HR play directly,
     // not from the orchestrator's current state.inning (which can roll over).
@@ -767,47 +808,8 @@ export class LiveGameOrchestrator {
     const newState = mlbGameCache.gameState[gameId];
     if (!newState) return;
 
-    // Fetch and normalize live game status before triggering engine
-    // Engine must only run for genuinely live games
-    let normalizedStatus: "live" | "pregame" | "final" | "unknown" = "unknown";
-    let statusSource = "none";
-    try {
-      const statusUrl = `https://statsapi.mlb.com/api/v1/game/${statsPk}/feed/live`;
-      const statusRes = await fetch(statusUrl, {
-        headers: { "User-Agent": "LiveLocks/1.0" },
-        signal: AbortSignal.timeout(4000),
-      });
-      if (statusRes.ok) {
-        const statusData = (await statusRes.json()) as any;
-        const rawAbstractState: string = statusData.gameData?.status?.abstractGameState ?? "";
-        normalizedStatus = normalizeMlbStatus(rawAbstractState);
-        if (normalizedStatus !== "unknown") statusSource = "mlbStatsApi";
-      }
-    } catch {
-      console.warn(`[MLB orchestrator] pollGame: MLB Stats API status fetch failed for game ${gameId}`);
-    }
-
-    // Fallback: if MLB Stats API returned unknown, use ESPN status from discovery
-    if (normalizedStatus === "unknown" && registeredGame) {
-      const espnRaw = registeredGame.espnStatus ?? "";
-      if (espnRaw === "STATUS_IN_PROGRESS" || espnRaw === "STATUS_DELAYED") {
-        normalizedStatus = "live";
-        statusSource = "espnFallback";
-      } else if (espnRaw === "STATUS_FINAL" || espnRaw === "STATUS_FORFEIT") {
-        normalizedStatus = "final";
-        statusSource = "espnFallback";
-      } else if (registeredGame.startTime) {
-        const startMs = new Date(registeredGame.startTime).getTime();
-        if (startMs > 0 && Date.now() >= startMs) {
-          normalizedStatus = "live";
-          statusSource = "timeFallback";
-        }
-      }
-      if (statusSource !== "none") {
-        console.log(`[MLB orchestrator] Status fallback for game ${gameId}: ${normalizedStatus} (source=${statusSource}, espnStatus=${espnRaw})`);
-      }
-    }
-
+    // normalizedStatus + statusSource were already resolved earlier (above the
+    // HR-radar gates) so this section just consumes them.
     if (normalizedStatus === "final") {
       const boxScore = mlbGameCache.gameBoxScore?.[gameId];
       const playerHrMap = new Map<string, { inning: number; half: string }>();
@@ -1407,23 +1409,37 @@ export class LiveGameOrchestrator {
 
   async periodicHRRadarRosterScan(gameId: string): Promise<void> {
     const lastScan = hrRosterScanLastRun.get(gameId) ?? 0;
-    if (Date.now() - lastScan < HR_ROSTER_SCAN_INTERVAL_MS) return;
+    const sinceLast = Date.now() - lastScan;
+    if (sinceLast < HR_ROSTER_SCAN_INTERVAL_MS) {
+      return;
+    }
     hrRosterScanLastRun.set(gameId, Date.now());
 
     const state = mlbGameCache.gameState[gameId];
-    if (!state || !state.battingOrder?.length) return;
+    if (!state || !state.battingOrder?.length) {
+      console.log(`[HR_RADAR_PERIODIC_SCAN_TICK] game=${gameId} skipped — no battingOrder cached`);
+      return;
+    }
 
     const contactCache = mlbGameCache.contactData[gameId];
     const allChanges: ContactChangeEvent[] = [];
+    let battersWithContact = 0;
 
     for (const batter of state.battingOrder) {
       const playerContact = contactCache?.byPlayerId?.[batter.playerId];
       const priorABs = (playerContact?.priorABResults ?? []) as any[];
       if (!priorABs.length) continue;
+      battersWithContact++;
 
       const scanKey = `${gameId}:${batter.playerId}`;
       const lastABCount = hrRosterScanLastABCount.get(scanKey) ?? 0;
-      if (priorABs.length <= lastABCount) continue;
+      // First scan or new AB recorded → include batter. The previous strict
+      // ">" check meant on first attempt with priorABs already full, the
+      // counter would be set and equality would block the next scan even
+      // though no rebuild ever happened. Include on first scan (lastABCount=0)
+      // OR when new ABs since last scan.
+      const isFirstScan = lastABCount === 0;
+      if (!isFirstScan && priorABs.length <= lastABCount) continue;
       hrRosterScanLastABCount.set(scanKey, priorABs.length);
 
       allChanges.push({
@@ -1434,6 +1450,8 @@ export class LiveGameOrchestrator {
         latestAB: priorABs.slice(-1)[0] ?? null,
       });
     }
+
+    console.log(`[HR_RADAR_PERIODIC_SCAN_TICK] game=${gameId} battersInOrder=${state.battingOrder.length} battersWithContact=${battersWithContact} changesQueued=${allChanges.length}`);
 
     if (allChanges.length > 0) {
       console.log(`[HR_RADAR_ROSTER_SCAN] game=${gameId} evaluating ${allChanges.length} batters with contact data`);
