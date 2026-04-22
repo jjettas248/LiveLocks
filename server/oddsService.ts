@@ -1076,12 +1076,30 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
     const data = await res.json();
     cache.set(cacheKey, { data, timestamp: Date.now() });
     lastKnownRawOdds.set(cacheKey, { data, timestamp: Date.now() });
-    
+
     const requestsRemaining = res.headers.get("x-requests-remaining");
     if (requestsRemaining != null) {
       const rem = parseInt(requestsRemaining);
       if (rem < 1000) console.warn(`[MLB Odds] Key ${usedKeyIndex + 1} low credits: ${rem} remaining`);
     }
+
+    // ── DIAGNOSTIC (throttled): log raw response shape so we can see exactly
+    //    what the Odds API is returning in production for this market.
+    try {
+      const diagKey = `diag_raw_${cacheKey}`;
+      const lastDiag = mlbDiagLastLog.get(diagKey) ?? 0;
+      if (Date.now() - lastDiag > MLB_DIAG_THROTTLE_MS) {
+        mlbDiagLastLog.set(diagKey, Date.now());
+        const bms: any[] = Array.isArray(data?.bookmakers) ? data.bookmakers : [];
+        const nowMs = Date.now();
+        const ages = bms
+          .map((b: any) => (b?.last_update ? Math.round((nowMs - new Date(b.last_update).getTime()) / 1000) : -1))
+          .slice(0, 5);
+        const keys = bms.map((b: any) => b?.key).slice(0, 8);
+        console.log(`[MLB ODDS DIAG] event=${oddsEventId} market=${marketKey} inPlay=${inPlay} key=${usedKeyIndex + 1}/${ODDS_API_KEYS.length} remaining=${requestsRemaining ?? "?"} bookmakers=${bms.length} sampleKeys=[${keys.join(",")}] sampleAgesSec=[${ages.join(",")}] staleThresholdSec=${Math.round(BOOKMAKER_STALE_MS / 1000)}`);
+      }
+    } catch {}
+
     updateOddsHealth({
       success: true,
       requestsRemaining: requestsRemaining ? parseInt(requestsRemaining) : undefined,
@@ -1122,6 +1140,11 @@ function makeDegradedMLBResult(data: MLBOddsResult): MLBOddsResult {
 // Key: "oddsEventId|playerNorm|statType" — mirrors the NBA lastKnownOdds pattern
 const lastKnownMLBOdds = new Map<string, { data: MLBOddsResult; timestamp: number }>();
 const MLB_LAST_KNOWN_TTL = 30 * 60 * 1000; // 30 min — extended fallback for quota exhaustion
+
+// Throttle map for MLB diagnostic logs (raw response shape + filter outcome).
+// Key: arbitrary string identifying the log site. Value: last-emitted ms.
+const mlbDiagLastLog = new Map<string, number>();
+const MLB_DIAG_THROTTLE_MS = 60 * 1000; // emit each diag line at most once per minute per key
 
 export async function getMLBPlayerOdds(
   oddsEventId: string,
@@ -1178,12 +1201,22 @@ export async function getMLBPlayerOdds(
   const result: MLBOddsResult = {};
   const now = Date.now();
 
+  // Diagnostic counters — explain WHY filtered result is empty.
+  let cntFilteredOutByBookmaker = 0;
+  let cntStaleRejected = 0;
+  let cntNoMatchingMarket = 0;
+  let cntNoMatchingPlayer = 0;
+  let cntNoOverUnder = 0;
+  let cntAccepted = 0;
+  let sampleOutcomeNames: string[] = [];
+
   for (const bookmaker of mlbBookmakers) {
     const bKey: string = bookmaker.key ?? "";
-    if (!PROP_BOOKMAKERS_SET.has(bKey)) continue;
+    if (!PROP_BOOKMAKERS_SET.has(bKey)) { cntFilteredOutByBookmaker++; continue; }
 
     const lastUpdate = bookmaker.last_update ? new Date(bookmaker.last_update).getTime() : 0;
     if (lastUpdate > 0 && now - lastUpdate > BOOKMAKER_STALE_MS) {
+      cntStaleRejected++;
       console.warn(`[MLB Odds] Rejecting stale row from ${bKey} (age: ${Math.round((now - lastUpdate) / 1000)}s)`);
       continue;
     }
@@ -1191,7 +1224,7 @@ export async function getMLBPlayerOdds(
     const market = (bookmaker.markets ?? []).find(
       (m: any) => m.key === marketKey || isMLBPropKey(m.key ?? "", statType)
     );
-    if (!market?.outcomes) continue;
+    if (!market?.outcomes) { cntNoMatchingMarket++; continue; }
 
     const playerOutcomes = market.outcomes.filter((o: any) => {
       const desc = normPlayerName(o.description ?? o.name ?? "");
@@ -1200,15 +1233,41 @@ export async function getMLBPlayerOdds(
         || (desc.includes(firstName) && desc.includes(lastName));
     });
 
+    if (playerOutcomes.length === 0) {
+      cntNoMatchingPlayer++;
+      if (sampleOutcomeNames.length < 3 && Array.isArray(market.outcomes)) {
+        for (const o of market.outcomes.slice(0, 3)) {
+          const sample = o?.description ?? o?.name ?? "";
+          if (sample) sampleOutcomeNames.push(String(sample));
+          if (sampleOutcomeNames.length >= 3) break;
+        }
+      }
+      continue;
+    }
+
     const over = playerOutcomes.find((o: any) => o.name === "Over");
     const under = playerOutcomes.find((o: any) => o.name === "Under");
 
     if (over && under) {
+      cntAccepted++;
       result[bKey] = {
         line: over.point,
         overOdds: over.price,
         underOdds: under.price,
       };
+    } else {
+      cntNoOverUnder++;
+    }
+  }
+
+  // Emit a one-line filter-outcome diag whenever the result for this player ends
+  // up empty. Throttle per (event,market,inPlay) to avoid log spam.
+  if (cntAccepted === 0) {
+    const diagKey = `diag_filter_${oddsEventId}_${marketKey}_${inPlay ? 1 : 0}`;
+    const lastDiag = mlbDiagLastLog.get(diagKey) ?? 0;
+    if (Date.now() - lastDiag > MLB_DIAG_THROTTLE_MS) {
+      mlbDiagLastLog.set(diagKey, Date.now());
+      console.log(`[MLB ODDS DIAG-FILTER] event=${oddsEventId} market=${marketKey} inPlay=${inPlay} player="${playerName}" normName="${normName}" totalBooks=${mlbBookmakers.length} bookmakerNotAllowed=${cntFilteredOutByBookmaker} staleRejected=${cntStaleRejected} noMatchingMarket=${cntNoMatchingMarket} noMatchingPlayer=${cntNoMatchingPlayer} noOverUnder=${cntNoOverUnder} sampleOutcomeNames=[${sampleOutcomeNames.map(s => `"${s}"`).join(",")}]`);
     }
   }
 
