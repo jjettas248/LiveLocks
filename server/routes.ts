@@ -1900,7 +1900,11 @@ export async function registerRoutes(
       for (const [gid, edgeEntry] of Array.from(mlbEdgeCache.entries())) {
         totalEdgeCacheEntries++;
 
-        const FEED_FRESHNESS_MS = 10 * 60 * 1000;
+        // Extended freshness: between-innings pauses, transient odds-API hiccups,
+        // and engine cycle skips can leave a game's edge cache stale for ~5-10
+        // minutes during normal operation. Use 20 minutes so brief polling gaps
+        // don't visibly empty the user's edge feed mid-game.
+        const FEED_FRESHNESS_MS = 20 * 60 * 1000;
         if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) {
           totalDropped++;
           continue;

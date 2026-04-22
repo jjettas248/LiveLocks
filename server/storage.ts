@@ -2304,9 +2304,13 @@ export class DatabaseStorage implements IStorage {
           matched: true, matchedBeforeHr: true, isLateSignal: false,
           alertId: alert.id,
           signalEventId: lastQualifyingEvent?.id ?? null,
-          signalDetectedAt: lastQualifyingEvent?.detectedAt ?? alert.signalDetectedAt ?? alert.detectedAt,
-          signalInning: lastQualifyingEvent?.inning ?? alert.signalInning ?? alert.detectedInning,
-          signalHalf: lastQualifyingEvent?.half ?? alert.signalHalf ?? alert.detectedHalf,
+          signalDetectedAt: alert.signalDetectedAt ?? alert.detectedAt ?? lastQualifyingEvent?.detectedAt,
+          // Preserve the ORIGINAL inning the alert was first called in. The
+          // alert may have escalated through several innings before the HR
+          // landed; users should see when we first called it, not the most
+          // recent escalation event.
+          signalInning: alert.signalInning ?? alert.detectedInning ?? lastQualifyingEvent?.inning,
+          signalHalf: alert.signalHalf ?? alert.detectedHalf ?? lastQualifyingEvent?.half,
           gradingStatus: "called_hit",
           gradingReason: lastQualifyingEvent
             ? `qualifying signal event ${lastQualifyingEvent.eventType} at ${new Date(lastQualifyingEvent.detectedAt).toISOString()} strictly preceded HR endTime`
@@ -3314,11 +3318,15 @@ export class DatabaseStorage implements IStorage {
     };
 
     for (const r of rows) {
-      // Hidden/admin-only rows must never reach the user-facing ladder.
-      if (r.userVisible === false) continue;
+      const grading = r.gradingStatus ?? "active";
+      // Hidden/admin-only rows must never reach the user-facing ladder for ACTIVE
+      // states. Resolved outcomes (uncalled_hr, late_signal, called_miss,
+      // called_hit) are always shown so users get a complete picture of what
+      // happened in the session — they're labeled with their outcome badge in
+      // the Dead/Missed section.
+      if (r.userVisible === false && grading === "active") continue;
 
       const key = `${r.gameId}|${r.playerId}`;
-      const grading = r.gradingStatus ?? "active";
 
       // Determine target section
       let section: keyof typeof sections;
