@@ -4147,6 +4147,39 @@ export class DatabaseStorage implements IStorage {
         hitHalf: r.hitHalf ?? null,
       });
 
+      // ── Goldmaster Phase 1 — canonical 0-100 wire scale numbers ────────────
+      // The CREATE/UPDATE write path normalizes all readiness columns to the
+      // canonical 0-100 scale (see createOrUpdateHrRadarAlert L2820-2829).
+      // Therefore parsing them here yields true 0-100 numbers — never divide
+      // by 10 in the response. Engine raw build score and conversion
+      // probability are surfaced separately for admin/debug ONLY.
+      const initialReadinessScore = r.initialReadinessScore != null ? parseFloat(r.initialReadinessScore) : null;
+      const currentReadinessScore = r.currentReadinessScore != null ? parseFloat(r.currentReadinessScore) : null;
+      const peakReadinessScore = r.peakReadinessScore != null ? parseFloat(r.peakReadinessScore) : null;
+      const scoreContractRow = (diag.scoreContract ?? {}) as Record<string, any>;
+      const buildScore = typeof scoreContractRow.buildScore === "number" ? scoreContractRow.buildScore : null;
+      const conversionProbability = typeof scoreContractRow.conversionProbability === "number"
+        ? scoreContractRow.conversionProbability
+        : (typeof scoreContractRow.conversionProbabilityRaw === "number" ? scoreContractRow.conversionProbabilityRaw : null);
+
+      // ── Goldmaster Phase 4-7 — canonical stage drives explanation copy ─────
+      // stageExplanation = the same copy buildHrRadarSummary returns for live
+      // rows. headlineReason = first user-safe reason (or null if none).
+      // supportingReasons = up to 3 additional user-safe reasons. Pregame-only
+      // (zero-AB / no live context) rows produce a pregame headline and no
+      // contact-derived reasons (those reasons would imply live AB evidence
+      // that doesn't exist yet).
+      const isPregameOnlyEntry = !hasLiveABContext && (plateAppearancesTracked ?? 0) === 0;
+      const liveContactReasons = isPregameOnlyEntry ? [] : userReasons;
+      const headlineReason: string | null =
+        currentStatus === "live" && isPregameOnlyEntry
+          ? "Pregame context only — no live at-bats yet"
+          : (liveContactReasons[0] ?? null);
+      const supportingReasons: string[] = liveContactReasons
+        .slice(headlineReason && headlineReason === liveContactReasons[0] ? 1 : 0, 4)
+        .slice(0, 3);
+      const stageExplanation: string = summary;
+
       const entry: HrRadarLadderEntry = {
         playerId: r.playerId,
         playerName: r.playerName,
@@ -4157,15 +4190,28 @@ export class DatabaseStorage implements IStorage {
         outcome,
         plateAppearancesTracked,
         hasLiveABContext,
-        userReasons,
+        userReasons: liveContactReasons,
         adminReasons,
         summary,
+        // Canonical 0-100 readiness fields (never blended with 0-10 scale).
+        initialReadinessScore,
+        currentReadinessScore,
+        peakReadinessScore,
+        buildScore,
+        conversionProbability,
+        // Frozen detection vs HR-event truth (distinct fields, never overloaded).
+        detectedLabel: r.detectedLabel ?? null,
+        hitLabel: r.hitLabel ?? null,
+        // Canonical stage-driven copy.
+        stageExplanation,
+        headlineReason,
+        supportingReasons,
         state: r.signalState ?? null,
         confidenceTier: r.confidenceTier ?? null,
-        peakScore: r.peakReadinessScore ? parseFloat(r.peakReadinessScore) : null,
-        signalStrengthScore: r.currentReadinessScore ? parseFloat(r.currentReadinessScore) : null,
-        whyNowReasons: userReasons,
-        nextAbEstimate: this.buildNextAbEstimate(r),
+        peakScore: peakReadinessScore,
+        signalStrengthScore: currentReadinessScore,
+        whyNowReasons: liveContactReasons,
+        nextAbEstimate: isPregameOnlyEntry ? null : this.buildNextAbEstimate(r),
         detectedInning: r.signalInning ?? r.detectedInning ?? null,
         detectedHalf: r.signalHalf ?? r.detectedHalf ?? null,
         hitInning: r.hitInning ?? null,
@@ -4237,11 +4283,16 @@ export class DatabaseStorage implements IStorage {
   ): { userReasons: string[]; adminReasons: string[] } {
     const tags = (r.triggerTags ?? []).filter(t => typeof t === "string" && t.length > 0);
 
-    // Pattern that flags a string as raw engine jargon — anything starting
-    // with PATH, WATCH:, BUILD:, FORM:, or containing inline metric tokens
-    // like Conv 11%, Score7.63, BsZ-0.09, Danger3.57, Profile0.69.
-    const ENGINE_JARGON_RE = /^(PATH[_ ]?[A-Z0-9_]+|WATCH:|BUILD:|FORM:|FORMATION|PRE[_ ]HR[_ ]DANGER|HrShaped|BsZ|Danger\d|Profile\d|Score\d)/i;
-    const looksLikeJargon = (s: string): boolean => ENGINE_JARGON_RE.test(s.trim());
+    // Pattern that flags a string as raw engine jargon. Anchored cases catch
+    // tag-style strings starting with engine prefixes; unanchored token cases
+    // catch inline debug tokens that leak inside otherwise human-looking
+    // sentences (e.g. "LEI ESCALATION:HrShaped1 Score9.99 Lei").
+    const ENGINE_JARGON_PREFIX_RE = /^(PATH[_ ]?[A-Z0-9_]+|WATCH:|BUILD:|FORM:|FORMATION|PRE[_ ]HR[_ ]DANGER|LEI[_ ]?[A-Z]+|LEI\b)/i;
+    const ENGINE_JARGON_TOKEN_RE = /(HrShaped\d*|BsZ[-+]?\d|Danger\d|Profile\d|Score\d+(\.\d+)?|Conv\s+\d+%|PATH[_ ]?[A-Z0-9_]+|LEI ESCALATION)/i;
+    const looksLikeJargon = (s: string): boolean => {
+      const t = s.trim();
+      return ENGINE_JARGON_PREFIX_RE.test(t) || ENGINE_JARGON_TOKEN_RE.test(t);
+    };
 
     const userReasons: string[] = [];
     const adminReasons: string[] = [];
@@ -4420,12 +4471,40 @@ export interface HrRadarLadderEntry {
   /** One-sentence plain-English summary appropriate for the current stage/outcome. */
   summary: string;
 
+  // ── Goldmaster Phase 1 — canonical 0-100 wire scale. ───────────────────────
+  /** Initial readiness on the canonical 0-100 scale (write-once at create). */
+  initialReadinessScore: number | null;
+  /** Current readiness on the canonical 0-100 scale (updated each tick). */
+  currentReadinessScore: number | null;
+  /** Peak readiness on the canonical 0-100 scale (monotonic). */
+  peakReadinessScore: number | null;
+  /** Engine raw build score (0-10). Admin/debug only — never blend with readiness. */
+  buildScore: number | null;
+  /** Calibrated conversion probability (0-1). Admin/debug only. */
+  conversionProbability: number | null;
+
+  // ── Goldmaster Phase 2+3 — frozen detection vs HR-event truth. ─────────────
+  /** Frozen first-detection inning label (e.g. "T3"). Never overwritten. */
+  detectedLabel: string | null;
+  /** Inning the actual HR landed in (null until HR confirmed). */
+  hitLabel: string | null;
+
+  // ── Goldmaster Phase 4-7 — canonical stage drives copy. ────────────────────
+  /** Plain-English explanation derived from canonical stage + AB context. */
+  stageExplanation: string;
+  /** Single most important user-facing reason ("why now") for live rows. */
+  headlineReason: string | null;
+  /** Up to 3 short supporting reasons rendered as bullets under the headline. */
+  supportingReasons: string[];
+
   // ── Legacy fields preserved for backwards compat. ──────────────────────────
   /** @deprecated use currentStage. Internal signal state string. */
   state: string | null;
   /** @deprecated use currentStage. Internal confidence tier string. */
   confidenceTier: string | null;
+  /** @deprecated use peakReadinessScore (canonical 0-100). Mirrors peakReadinessScore. */
   peakScore: number | null;
+  /** @deprecated use currentReadinessScore (canonical 0-100). Mirrors currentReadinessScore. */
   signalStrengthScore: number | null;
   /** @deprecated use userReasons (default) or adminReasons (debug). */
   whyNowReasons: string[];

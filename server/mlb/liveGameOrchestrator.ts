@@ -2875,10 +2875,24 @@ export class LiveGameOrchestrator {
 
 // ── Auto-persist qualified MLB signals to persisted_plays ────────────────────
 
-const mlbPersistGuard = new Map<string, number>();
+// Per-canonical-key persistence guard. Tracks the last persisted signalScore
+// and the last persistence timestamp. Re-persist is allowed when EITHER:
+//   (a) the new signalScore is strictly greater than the cached score
+//       (positive momentum: e.g. tier escalated, EV bumped), OR
+//   (b) the new signalScore differs by ≥ MOMENTUM_DELTA in either direction
+//       (state transition: cooling, decay, soft veto change), OR
+//   (c) more than REPERSIST_WINDOW_MS has elapsed since the last persistence
+//       (time-windowed refresh so the served feed never freezes mid-game).
+// This keeps /api/top-plays and downstream consumers (mobile/PWA dashboard,
+// unified top plays panel) live and responsive instead of going stale after
+// the first qualifying tick.
+const mlbPersistGuard = new Map<string, { score: number; ts: number }>();
+const REPERSIST_WINDOW_MS = 5 * 60 * 1000; // 5 min refresh window
+const MOMENTUM_DELTA = 5; // signalScore points either direction
 
 function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSignal[]): void {
   const today = todayET();
+  const now = Date.now();
   let persisted = 0;
   let skipped = 0;
   let skipReasons: Record<string, number> = {};
@@ -2893,10 +2907,20 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
     if (!dir) { skipped++; skipReasons["no_dir"] = (skipReasons["no_dir"] ?? 0) + 1; continue; }
 
     const canonicalKey = `${sig.playerId}|${sig.market}|${dir}|${gameId}|${today}`;
-    const prevScore = mlbPersistGuard.get(canonicalKey);
+    const prev = mlbPersistGuard.get(canonicalKey);
     const curScore = sig.signalScore ?? 0;
-    if (prevScore !== undefined && curScore <= prevScore) { skipped++; skipReasons["dedup"] = (skipReasons["dedup"] ?? 0) + 1; continue; }
-    mlbPersistGuard.set(canonicalKey, curScore);
+    if (prev !== undefined) {
+      const ageMs = now - prev.ts;
+      const scoreUp = curScore > prev.score;
+      const movedSignificantly = Math.abs(curScore - prev.score) >= MOMENTUM_DELTA;
+      const stale = ageMs >= REPERSIST_WINDOW_MS;
+      if (!scoreUp && !movedSignificantly && !stale) {
+        skipped++;
+        skipReasons["dedup"] = (skipReasons["dedup"] ?? 0) + 1;
+        continue;
+      }
+    }
+    mlbPersistGuard.set(canonicalKey, { score: curScore, ts: now });
 
     trackPlay({
       gameId,

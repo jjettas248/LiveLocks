@@ -1074,17 +1074,17 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
   const isLimited = !!data!.partial || data!.source === "analytics_fallback" || data!.source === "historical_alert";
   const isNoAbsYet = (data as any)!.partialReason === "no_abs_yet";
   const priorABs: Array<{ abNumber: number; exitVelocity: number | null; launchAngle: number | null; distance: number | null; outcome: string; isBarrel: boolean; isHardHit: boolean; perABxBA?: number | null; contactGrade?: string; hrProbability?: number }> = analyze?.priorABs ?? [];
-  // Goldmaster Phase 1 — single 0-100 wire scale. The server now normalizes
-  // initial/current/peak to the canonical 0-100 scale at CREATE time using
-  // the dynamicReadinessScore presence as the discriminator (NOT a value
-  // threshold). The client trusts those numbers as-is.
+  // Goldmaster Phase 1 — single 0-100 wire scale. The server normalizes
+  // initial/current/peak to the canonical 0-100 readiness scale at CREATE
+  // time. The client renders these values DIRECTLY as 0-100 with no /10 mix.
+  // The legacy radarScoreToTier / BuildScoreMeter consumers are calibrated on
+  // a 0-10 build-score scale, so we derive a separate `tierBasis` value (=
+  // currentScore/10) ONLY for those legacy controls.
   const initialScore = parseFloat(alert.initialReadinessScore ?? "0");
   const currentScore = parseFloat(alert.currentReadinessScore ?? "0");
   const peakScore = parseFloat(alert.peakReadinessScore ?? "0");
-  // radarScoreToTier thresholds are calibrated on the legacy 0-10 buildScore
-  // scale; currentScore here is on the canonical 0-100 readiness scale, so
-  // divide by 10 before tiering.
-  const tier = radarScoreToTier(currentScore / 10);
+  const tierBasis = currentScore / 10;
+  const tier = radarScoreToTier(tierBasis);
 
   const statusColor = alert.status === "hit" ? "text-emerald-400" : alert.status === "miss" ? "text-zinc-400" : "text-blue-400";
   const statusLabel = alert.status === "hit" ? "HIT" : alert.status === "miss" ? "MISS" : "LIVE";
@@ -1119,24 +1119,30 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
               Limited analysis available — live game data is no longer cached for this play.
             </div>
           )}
+          {/* Goldmaster Phase 1 — Initial / Current / Peak rendered DIRECTLY
+              on the canonical 0-100 readiness scale. No /10 mixing.
+              currentReadinessScore <= peakReadinessScore by construction
+              (UPDATE branch keeps peak monotonic). */}
           <div className="grid grid-cols-3 gap-3">
             <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
               <div className="text-[9px] text-muted-foreground">Initial</div>
-              <div className="text-sm font-bold text-foreground">{(initialScore / 10).toFixed(1)}</div>
+              <div className="text-sm font-bold text-foreground" data-testid="text-readiness-initial">{Math.round(initialScore)}</div>
             </div>
             <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
               <div className="text-[9px] text-muted-foreground">Current</div>
-              <div className="text-sm font-bold" style={{ color: tier.color }}>{(currentScore / 10).toFixed(1)}</div>
+              <div className="text-sm font-bold" style={{ color: tier.color }} data-testid="text-readiness-current">{Math.round(currentScore)}</div>
             </div>
             <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
               <div className="text-[9px] text-muted-foreground">Peak</div>
-              <div className="text-sm font-bold text-foreground">{(peakScore / 10).toFixed(1)}</div>
+              <div className="text-sm font-bold text-foreground" data-testid="text-readiness-peak">{Math.round(peakScore)}</div>
             </div>
           </div>
 
-          {/* Heat progress bar — visualizes Current readiness on the 0-10 scale */}
+          {/* Heat progress bar — BuildScoreMeter is calibrated on a 0-10
+              build-score scale, so feed it tierBasis (= currentScore/10).
+              The visible numbers above remain on the canonical 0-100 scale. */}
           <div className="px-1">
-            <BuildScoreMeter score={currentScore / 10} size="lg" />
+            <BuildScoreMeter score={tierBasis} size="lg" />
           </div>
 
           {alert.scoreIncreased && alert.scoreIncreaseLabel && (

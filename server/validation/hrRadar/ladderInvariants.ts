@@ -184,6 +184,77 @@ export function validateHrRadarLadder(payload: {
           `peakScore=${e.peakScore} outside canonical 0-100 scale`,
           e, section);
       }
+
+      // ── Goldmaster Phase 10 (extended) ─────────────────────────────────────
+      // I13 — explicit canonical readiness fields. Same monotonic + scale
+      // invariants enforced on the NEW explicit fields the wire now exposes.
+      if (
+        e.currentReadinessScore != null &&
+        e.peakReadinessScore != null &&
+        e.currentReadinessScore - e.peakReadinessScore > 0.5
+      ) {
+        push("I13_CURRENT_READINESS_EXCEEDS_PEAK_READINESS",
+          `currentReadinessScore=${e.currentReadinessScore} exceeds peakReadinessScore=${e.peakReadinessScore}`,
+          e, section);
+      }
+      if (e.peakReadinessScore != null && (e.peakReadinessScore < 0 || e.peakReadinessScore > 100)) {
+        push("I13b_PEAK_READINESS_OUT_OF_SCALE",
+          `peakReadinessScore=${e.peakReadinessScore} outside canonical 0-100 scale`,
+          e, section);
+      }
+      if (e.currentReadinessScore != null && (e.currentReadinessScore < 0 || e.currentReadinessScore > 100)) {
+        push("I13c_CURRENT_READINESS_OUT_OF_SCALE",
+          `currentReadinessScore=${e.currentReadinessScore} outside canonical 0-100 scale`,
+          e, section);
+      }
+      if (e.initialReadinessScore != null && (e.initialReadinessScore < 0 || e.initialReadinessScore > 100)) {
+        push("I13d_INITIAL_READINESS_OUT_OF_SCALE",
+          `initialReadinessScore=${e.initialReadinessScore} outside canonical 0-100 scale`,
+          e, section);
+      }
+
+      // I14 — attack-stage rows must NEVER carry watch/building copy in the
+      // canonical stageExplanation. Catches stale or mis-bucketed copy.
+      if (e.currentStatus === "live" && e.currentStage === "attack" && e.stageExplanation) {
+        const txt = e.stageExplanation.toLowerCase();
+        if (txt.includes("monitoring for escalation") || txt.includes("not yet at the building threshold") || txt.includes("the hr pattern is building")) {
+          push("I14_ATTACK_ROW_HAS_NON_ATTACK_COPY",
+            `attack-stage row has non-attack stageExplanation: "${e.stageExplanation}"`,
+            e, section);
+        }
+      }
+
+      // I15 — zero-AB pregame rows must NOT render any contact-derived
+      // reasons. The server's headlineReason for these rows is a fixed
+      // pregame string, and supportingReasons should be empty.
+      if (e.currentStatus === "live") {
+        const isPregameOnly =
+          e.hasLiveABContext === false ||
+          (e.plateAppearancesTracked != null && e.plateAppearancesTracked === 0);
+        if (isPregameOnly && (e.supportingReasons ?? []).length > 0) {
+          push("I15_PREGAME_HAS_LIVE_CONTACT_REASONS",
+            `pregame zero-AB row has supportingReasons=[${(e.supportingReasons ?? []).join(", ")}]`,
+            e, section);
+        }
+        // The headline must explicitly call out pregame-context-only when the
+        // row truly has no live AB evidence.
+        if (isPregameOnly && e.headlineReason && !/pregame/i.test(e.headlineReason)) {
+          push("I15b_PREGAME_HEADLINE_NOT_PREGAME",
+            `pregame zero-AB row has non-pregame headlineReason="${e.headlineReason}"`,
+            e, section);
+        }
+      }
+
+      // I16 — detection vs HR-event truth must remain distinct fields.
+      // If a row is resolved as called_hit and has a hitLabel, detectedLabel
+      // must still be populated (the FROZEN first-detection inning), and the
+      // two should not be the same string unless the engine genuinely first
+      // saw the player in the same inning the HR landed.
+      if (e.outcome === "called_hit" && e.hitLabel && !e.detectedLabel) {
+        push("I16_CALLED_HIT_MISSING_DETECTED_LABEL",
+          `called_hit row has hitLabel=${e.hitLabel} but no detectedLabel (frozen detection inning lost)`,
+          e, section);
+      }
     }
   }
 

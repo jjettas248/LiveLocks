@@ -30,6 +30,19 @@ export interface HrRadarLadderEntry {
   userReasons?: string[];
   adminReasons?: string[];
   summary?: string;
+  // Goldmaster Phase 1 — canonical 0-100 wire scale numbers.
+  initialReadinessScore?: number | null;
+  currentReadinessScore?: number | null;
+  peakReadinessScore?: number | null;
+  buildScore?: number | null;
+  conversionProbability?: number | null;
+  // Goldmaster Phase 2+3 — frozen detection vs HR-event truth.
+  detectedLabel?: string | null;
+  hitLabel?: string | null;
+  // Goldmaster Phase 4-7 — canonical stage drives copy.
+  stageExplanation?: string;
+  headlineReason?: string | null;
+  supportingReasons?: string[];
   // Legacy fields (still populated for backwards compat).
   state: string | null;
   confidenceTier: string | null;
@@ -155,9 +168,16 @@ interface CardProps {
 }
 
 function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
-  const detected = formatHalfInning(entry.detectedInning, entry.detectedHalf);
-  const hit = formatHalfInning(entry.hitInning, entry.hitHalf);
-  const score = entry.signalStrengthScore ?? entry.peakScore;
+  // Goldmaster Phase 2+3 — prefer the FROZEN server-stamped detectedLabel /
+  // hitLabel (these never advance on score climbs). Fall back to formatting
+  // the (inning, half) pair for legacy rows that pre-date the label fields.
+  const detected = entry.detectedLabel ?? formatHalfInning(entry.detectedInning, entry.detectedHalf);
+  const hit = entry.hitLabel ?? formatHalfInning(entry.hitInning, entry.hitHalf);
+  // Goldmaster Phase 1 — canonical 0-100 wire scale. Read the explicit
+  // currentReadinessScore / peakReadinessScore fields. Legacy
+  // signalStrengthScore / peakScore are now mirrors of the same canonical
+  // values (so no extra fallback math is needed).
+  const score = entry.currentReadinessScore ?? entry.signalStrengthScore ?? entry.peakReadinessScore ?? entry.peakScore;
   const isAttack = section === "attackNow";
   // Goldmaster Phase 5 — derive live vs resolved mode. Resolved cards must
   // never carry "next AB" copy or any live-only verbiage.
@@ -168,13 +188,21 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
   const isPregameOnly =
     entry.hasLiveABContext === false ||
     (entry.plateAppearancesTracked != null && entry.plateAppearancesTracked === 0);
-  // Prefer canonical userReasons; fall back to legacy whyNowReasons. Apply a
-  // final UI-side jargon strip in case a stale legacy row leaks through.
-  const reasonsRaw =
-    (entry.userReasons && entry.userReasons.length > 0)
-      ? entry.userReasons
-      : entry.whyNowReasons;
-  const reasons = (reasonsRaw ?? []).filter(isUserSafeReason);
+  // Goldmaster Phase 4-7 — prefer the server's canonical headlineReason +
+  // supportingReasons split. They are already pregame-aware (empty for
+  // zero-AB) and engine-jargon-stripped on the server. Fall back to
+  // userReasons / legacy whyNowReasons only when those new fields are absent
+  // (older cached row). Final UI-side jargon strip is kept as belt-and-braces
+  // for any stale row that pre-dates the server filter.
+  const headline = entry.headlineReason ?? null;
+  const supporting = (entry.supportingReasons && entry.supportingReasons.length > 0)
+    ? entry.supportingReasons
+    : ((entry.userReasons && entry.userReasons.length > 0) ? entry.userReasons : entry.whyNowReasons);
+  const reasonsRaw = headline ? [headline, ...(supporting ?? [])] : (supporting ?? []);
+  const reasons = Array.from(new Set((reasonsRaw ?? []).filter(isUserSafeReason)));
+  // Pregame zero-AB rows must not render any contact-implying bullets — the
+  // server already empties supportingReasons, but defend against legacy data.
+  const reasonsForRender = isPregameOnly ? reasons.slice(0, 1) : reasons;
   // Outcome label for resolved rows uses the canonical outcome when present.
   const resolvedOutcomeKey = entry.outcome ?? entry.outcomeStatus;
 
@@ -249,7 +277,9 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
               className={`text-xs font-mono font-bold ${isAttack ? "text-red-400" : "text-foreground/80"}`}
               data-testid={`text-ladder-score-${entry.playerId}`}
             >
-              {(score / 10).toFixed(1)}
+              {/* Goldmaster Phase 1 — render canonical 0-100 readiness as an
+                  integer. Never divide by 10; the wire scale is already 0-100. */}
+              {Math.round(score)}
             </span>
           )}
           {isResolved && section === "dead" && (
@@ -273,9 +303,22 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
           {entry.summary}
         </p>
       )}
-      {!isResolved && reasons.length > 0 && (
+      {/* Goldmaster Phase 4-7 — for live rows, render the canonical
+          stageExplanation as a single-line summary (server is the source of
+          truth). Then list the deduplicated headline + supporting reasons.
+          Pregame zero-AB rows show the pregame headline only — no contact
+          bullets. */}
+      {!isResolved && entry.stageExplanation && (
+        <p
+          className="mt-2 text-[11px] text-foreground/70 leading-snug"
+          data-testid={`text-stage-explanation-${entry.playerId}`}
+        >
+          {entry.stageExplanation}
+        </p>
+      )}
+      {!isResolved && reasonsForRender.length > 0 && (
         <ul className="mt-2 space-y-0.5" data-testid={`list-why-now-${entry.playerId}`}>
-          {reasons.slice(0, 3).map((r, i) => (
+          {reasonsForRender.slice(0, 3).map((r, i) => (
             <li key={i} className="text-[11px] text-foreground/70 flex gap-1">
               <span className="text-muted-foreground">•</span>
               <span className="truncate">{r}</span>
