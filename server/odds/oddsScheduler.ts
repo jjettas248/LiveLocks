@@ -88,7 +88,7 @@ export function assignNcaabTier(ctx: NcaabGameContext): PollingTier {
 }
 
 export function shouldPoll(sport: Sport, gameId: string, tier: PollingTier, now = Date.now()): boolean {
-  const cadence = getPollingCadenceMs(tier);
+  const cadence = getPollingCadenceMs(tier, sport);
   const last = lastPollAt[sport].get(gameId) ?? 0;
   return now - last >= cadence;
 }

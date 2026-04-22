@@ -4,6 +4,43 @@ import { evaluateHRAlert } from "./evaluateHRAlert";
 export type DynamicHRState = "WATCH" | "PREPARE" | "BET_NOW" | "COOLED_OFF" | "CLOSED";
 
 /**
+ * Canonical user-facing HR Radar stage ladder (Phase 1 of HR Goldmaster fix).
+ *
+ * One — and only one — ladder is shown to users:
+ *   watch → building → attack (with cooling and closed as terminal/lateral)
+ *
+ * The dynamic state machine (DynamicHRState) is the source of truth.
+ * Legacy taxonomies (confidenceTier monitor/building/strong, signalState
+ * watching/live/actionable) remain in storage for backwards compatibility
+ * but the live UX MUST always use HrRadarStage derived via mapDynamicStateToStage.
+ */
+export type HrRadarStage = "watch" | "building" | "attack" | "cooling" | "closed";
+
+export function mapDynamicStateToStage(s: DynamicHRState): HrRadarStage {
+  switch (s) {
+    case "BET_NOW":    return "attack";
+    case "PREPARE":    return "building";
+    case "WATCH":      return "watch";
+    case "COOLED_OFF": return "cooling";
+    case "CLOSED":     return "closed";
+  }
+}
+
+/** Numeric rank for ladder progression — used to detect auto-advance transitions. */
+export const STAGE_RANK: Record<HrRadarStage, number> = {
+  closed:   -1,
+  watch:     0,
+  cooling:   1, // peer of building (sideways from attack), but not below watch
+  building:  1,
+  attack:    2,
+};
+
+export function isStageAdvance(prev: HrRadarStage | null | undefined, next: HrRadarStage): boolean {
+  if (!prev) return next !== "watch" && next !== "closed";
+  return STAGE_RANK[next] > STAGE_RANK[prev];
+}
+
+/**
  * Canonical HR Radar score contract.
  *
  * These three score domains are NEVER interchangeable:

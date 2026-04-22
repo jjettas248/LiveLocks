@@ -2606,6 +2606,36 @@ export class DatabaseStorage implements IStorage {
       const alert = alertRows[0] ?? null;
 
       if (!alert) {
+        // ── Phase 5 — early-HR exemption ─────────────────────────────────
+        // If the HR happened in the 1st inning AND no qualifying signal
+        // event exists for this player/game prior to hrEnd, the engine had
+        // no realistic pre-call window. Classify separately as
+        // `early_hr_no_window` so this does NOT pollute the uncalled-miss
+        // bucket. Admin reporting still sees it; coverage rate excludes it.
+        const isFirstInning = (params.hrInning ?? 0) <= 1;
+        if (isFirstInning) {
+          // Confirm there are also no signal events for this player/game
+          // within the entire match window — i.e. no engine activity at all.
+          const earlyEventConditions = [
+            eq(hrRadarSignalEvents.gameId, params.gameId),
+            eq(hrRadarSignalEvents.playerId, params.playerId),
+          ];
+          if (hrEnd) earlyEventConditions.push(lt(hrRadarSignalEvents.detectedAt, new Date(hrEnd)));
+          const earlyEvents = await db.select().from(hrRadarSignalEvents)
+            .where(and(...earlyEventConditions))
+            .limit(1);
+          if (earlyEvents.length === 0) {
+            console.log(`[HR_RADAR_EARLY_HR_NO_WINDOW] playerId=${params.playerId} gameId=${params.gameId} hrInning=${params.hrInning}${params.hrHalf} — exempt from uncalled-miss bucket`);
+            return {
+              matched: false, matchedBeforeHr: false, isLateSignal: false,
+              alertId: null, signalEventId: null,
+              signalDetectedAt: null, signalInning: null, signalHalf: null,
+              gradingStatus: "early_hr_no_window" as any,
+              gradingReason: "first-inning HR with no realistic pre-signal window — exempt from uncalled-miss bucket",
+              matchMethod: "none",
+            };
+          }
+        }
         return {
           matched: false, matchedBeforeHr: false, isLateSignal: false,
           alertId: null, signalEventId: null,
@@ -2702,6 +2732,21 @@ export class DatabaseStorage implements IStorage {
     conversionProbability?: number | null;
     peakConversionProbability?: number | null;
     /**
+     * Canonical user-facing HR Radar stage (Goldmaster Phase 1–4).
+     * Comes from mapDynamicStateToStage(hrDynSnap.currentState). When provided,
+     * overrides the legacy sticky bestTier behavior for live stage truth.
+     * Persisted into diagnosticsSnapshot.stageContract.currentCanonicalStage
+     * AND mapped onto the legacy `confidenceTier` column so the existing
+     * board/ladder code keeps working without any schema migration.
+     */
+    canonicalStage?: "watch" | "building" | "attack" | "cooling" | "closed" | null;
+    /**
+     * Dynamic readiness score (0–100) from hrAlertEngine snapshot.
+     * When provided, this is used as the live `readinessScore` instead of raw
+     * hrBuildScore so progression is engine-driven, not formation-driven.
+     */
+    dynamicReadinessScore?: number | null;
+    /**
      * Earliest in-memory detection inning from the engine snapshot
      * (`HRAlertSnapshot.detectedInning`). When provided AND earlier than
      * `data.inning`, the CREATE branch uses these to stamp the row's
@@ -2723,8 +2768,38 @@ export class DatabaseStorage implements IStorage {
       conversionProbability: data.conversionProbability ?? null,
       peakConversionProbability: data.peakConversionProbability ?? null,
     };
-    const baseDiag = (data.diagnosticsSnapshot ?? {}) as Record<string, unknown>;
-    data.diagnosticsSnapshot = { ...baseDiag, scoreContract };
+    // ── Canonical stage contract (Goldmaster Phase 1–4) ────────────────────
+    // currentCanonicalStage is the live engine truth (drives the user-facing
+    // ladder). historicalBestStage is the audit-only sticky max (kept for
+    // diagnostics; NEVER used to decide which section a player appears in).
+    const stageRank: Record<string, number> = { closed: -1, watch: 0, cooling: 1, building: 1, attack: 2 };
+    const baseDiagInit = (data.diagnosticsSnapshot ?? {}) as Record<string, unknown>;
+    const incomingStage = data.canonicalStage ?? null;
+    const stageContract: Record<string, unknown> = {
+      currentCanonicalStage: incomingStage,
+      historicalBestStage: incomingStage,
+    };
+    // Map canonical stage -> legacy confidenceTier so the rest of the system
+    // (ladder, board) keeps working without schema changes. attack→strong,
+    // building→building, watch/cooling→monitor.
+    if (incomingStage) {
+      const tierFromStage =
+        incomingStage === "attack"
+          ? "strong"
+          : incomingStage === "building"
+          ? "building"
+          : "monitor";
+      // eslint-disable-next-line no-param-reassign
+      data.confidenceTier = tierFromStage as any;
+    }
+    data.diagnosticsSnapshot = { ...baseDiagInit, scoreContract, stageContract };
+    // Prefer dynamic engine readiness over raw build score for the persisted
+    // readinessScore (Phase 2). Caller may pass either; if dynamicReadinessScore
+    // is provided we use it as the live progression score.
+    if (data.dynamicReadinessScore != null && Number.isFinite(data.dynamicReadinessScore)) {
+      // eslint-disable-next-line no-param-reassign
+      data.readinessScore = data.dynamicReadinessScore;
+    }
     try {
       const today = resolveMlbGameSessionDate(data.gameId);
       // ── Earliest-truth detection backfill (T002) ──────────────────────────
@@ -2774,8 +2849,39 @@ export class DatabaseStorage implements IStorage {
         const increaseAmt = increased ? Math.round((newScore - prevScore) * 10) / 10 : null;
         const increaseLabel = increased ? `+${increaseAmt} in ${detectedLabel}` : alert.scoreIncreaseLabel;
 
+        // ── Phase 4 — sticky-tier confusion fix ──────────────────────────
+        // Live tier MUST follow the canonical engine stage (Phase 1–2). The
+        // legacy sticky `bestTier` rule (max historical tier) is preserved
+        // ONLY as audit data on stageContract.historicalBestStage; it must
+        // never decide what the user sees on the live board. If the engine
+        // has cooled the player off, the board cools off with it.
         const tierOrder: Record<string, number> = { monitor: 0, building: 1, strong: 2 };
-        const bestTier = tierOrder[data.confidenceTier] > tierOrder[alert.confidenceTier] ? data.confidenceTier : alert.confidenceTier;
+        const liveTier = data.canonicalStage
+          ? data.confidenceTier // already remapped from canonicalStage above
+          : (tierOrder[data.confidenceTier] > tierOrder[alert.confidenceTier]
+              ? data.confidenceTier
+              : alert.confidenceTier);
+
+        // Update stageContract: keep currentCanonicalStage live, but bump
+        // historicalBestStage upward only when the new stage outranks it.
+        const stageRankLocal: Record<string, number> = { closed: -1, watch: 0, cooling: 1, building: 1, attack: 2 };
+        const prevDiag = (alert.diagnosticsSnapshot ?? {}) as Record<string, any>;
+        const prevStageContract = (prevDiag.stageContract ?? {}) as Record<string, any>;
+        const prevHistorical = prevStageContract.historicalBestStage ?? null;
+        const prevCanonical = prevStageContract.currentCanonicalStage ?? null;
+        const incomingCanonical = data.canonicalStage ?? null;
+        const newHistorical =
+          incomingCanonical && (!prevHistorical || stageRankLocal[incomingCanonical] > stageRankLocal[prevHistorical])
+            ? incomingCanonical
+            : prevHistorical ?? incomingCanonical;
+        const mergedDiag = {
+          ...(data.diagnosticsSnapshot as Record<string, unknown>),
+          stageContract: {
+            currentCanonicalStage: incomingCanonical,
+            historicalBestStage: newHistorical,
+            previousCanonicalStage: prevCanonical,
+          },
+        };
 
         await db.update(hrRadarAlerts)
           .set({
@@ -2786,16 +2892,46 @@ export class DatabaseStorage implements IStorage {
             scoreIncreaseInning: increased ? data.inning : alert.scoreIncreaseInning,
             scoreIncreaseHalf: increased ? data.half : alert.scoreIncreaseHalf,
             scoreIncreaseLabel: increaseLabel,
-            confidenceTier: bestTier,
+            confidenceTier: liveTier,
             signalState: data.signalState,
             triggerTags: data.triggerTags,
             summaryText: data.summaryText ?? alert.summaryText,
             contactSnapshot: data.contactSnapshot ?? alert.contactSnapshot,
             alertPath: data.alertPath ?? alert.alertPath,
             alertTier: data.alertTier ?? alert.alertTier,
-            diagnosticsSnapshot: data.diagnosticsSnapshot ?? alert.diagnosticsSnapshot,
+            diagnosticsSnapshot: mergedDiag,
           })
           .where(eq(hrRadarAlerts.id, alert.id));
+
+        // ── Phase 3 — auto-advance / auto-escalation ledger ──────────────
+        // If the canonical stage changed at all (advance OR retreat), append
+        // a stage_* event so the alert dispatch system has clean transition
+        // points to fire on. Stage events are independent of score deltas.
+        if (incomingCanonical && incomingCanonical !== prevCanonical) {
+          const advanced = !prevCanonical
+            ? incomingCanonical !== "watch" && incomingCanonical !== "closed"
+            : stageRankLocal[incomingCanonical] > stageRankLocal[prevCanonical];
+          const eventType = `stage_${incomingCanonical}`;
+          console.log(
+            `[HR_RADAR_STAGE_TRANSITION] playerId=${data.playerId} gameId=${data.gameId} ` +
+            `${prevCanonical ?? "(new)"} -> ${incomingCanonical} ` +
+            `${advanced ? "(advance)" : "(lateral/retreat)"} readiness=${newScore}`
+          );
+          await this.appendHrRadarSignalEvent({
+            sessionDate: today, gameId: data.gameId, playerId: data.playerId, team: data.team,
+            alertId: alert.id,
+            eventType,
+            signalState: data.signalState,
+            score: String(newScore),
+            confidenceTier: liveTier,
+            triggerTags: (data.triggerTags ?? []) as any,
+            drivers: mergedDiag as any,
+            detectedAt: new Date(),
+            inning: data.inning,
+            half: data.half,
+            source: "engine",
+          } as InsertHrRadarSignalEvent);
+        }
 
         if (increased) {
           console.log(`[HR_RADAR_SCORE_INCREASE] playerId=${data.playerId} previousScore=${prevScore} newScore=${newScore} increaseAmount=${increaseAmt} increaseLabel=${increaseLabel}`);
@@ -2803,10 +2939,10 @@ export class DatabaseStorage implements IStorage {
           await this.appendHrRadarSignalEvent({
             sessionDate: today, gameId: data.gameId, playerId: data.playerId, team: data.team,
             alertId: alert.id,
-            eventType: bestTier !== alert.confidenceTier ? "escalated" : "escalated",
+            eventType: liveTier !== alert.confidenceTier ? "escalated" : "escalated",
             signalState: data.signalState,
             score: String(newScore),
-            confidenceTier: bestTier,
+            confidenceTier: liveTier,
             triggerTags: data.triggerTags as any,
             drivers: data.diagnosticsSnapshot as any,
             detectedAt: new Date(),
@@ -2904,7 +3040,7 @@ export class DatabaseStorage implements IStorage {
         return raceExisting[0] ?? null;
       }
 
-      console.log(`[HR_RADAR_ALERT_UPSERT] CREATE sessionDate=${today} gameId=${data.gameId} playerId=${data.playerId} detectedLabel=${detectedLabel} initialReadinessScore=${data.readinessScore}`);
+      console.log(`[HR_RADAR_ALERT_UPSERT] CREATE sessionDate=${today} gameId=${data.gameId} playerId=${data.playerId} detectedLabel=${detectedLabel} initialReadinessScore=${data.readinessScore} canonicalStage=${data.canonicalStage ?? "(none)"}`);
       // Append creation event to chronological history so strict matcher has proof
       await this.appendHrRadarSignalEvent({
         sessionDate: today, gameId: data.gameId, playerId: data.playerId, team: data.team,
@@ -2920,6 +3056,25 @@ export class DatabaseStorage implements IStorage {
         half: data.half,
         source: "engine",
       } as InsertHrRadarSignalEvent);
+      // Phase 3 — also emit the initial canonical stage as a transition event
+      // so dispatch keys cleanly off stage_* events regardless of whether the
+      // alert is brand new or being upgraded.
+      if (data.canonicalStage && data.canonicalStage !== "watch") {
+        await this.appendHrRadarSignalEvent({
+          sessionDate: today, gameId: data.gameId, playerId: data.playerId, team: data.team,
+          alertId,
+          eventType: `stage_${data.canonicalStage}`,
+          signalState: data.signalState,
+          score: String(data.readinessScore),
+          confidenceTier: data.confidenceTier,
+          triggerTags: data.triggerTags as any,
+          drivers: data.diagnosticsSnapshot as any,
+          detectedAt: nowDate,
+          inning: data.inning,
+          half: data.half,
+          source: "engine",
+        } as InsertHrRadarSignalEvent);
+      }
       const inserted = await db.select().from(hrRadarAlerts)
         .where(eq(hrRadarAlerts.id, alertId)).limit(1);
       return inserted[0] ?? null;
@@ -3095,6 +3250,21 @@ export class DatabaseStorage implements IStorage {
         return;
       }
 
+      // ── Phase 5 — early-HR exemption ───────────────────────────────────
+      // 1st-inning HRs with no engine activity in the game get classified as
+      // `early_hr_no_window` (separate bucket) instead of polluting uncalled.
+      const isFirstInning = (data.inning ?? 0) <= 1;
+      let earlyExempt = false;
+      if (isFirstInning) {
+        const earlySignals = await db.select().from(hrRadarSignalEvents)
+          .where(and(
+            eq(hrRadarSignalEvents.gameId, data.gameId),
+            eq(hrRadarSignalEvents.playerId, data.playerId),
+          ))
+          .limit(1);
+        if (earlySignals.length === 0) earlyExempt = true;
+      }
+
       const alertId = `${today}_${data.gameId}_${data.playerId}`;
       await db.insert(hrRadarAlerts).values({
         id: alertId,
@@ -3114,23 +3284,31 @@ export class DatabaseStorage implements IStorage {
         scoreIncreased: false,
         confidenceTier: "monitor",
         signalState: "live",
-        triggerTags: ["auto_graded"],
-        summaryText: `HR confirmed ${data.hitLabel} (uncalled — no pre-HR engine signal)`,
+        triggerTags: earlyExempt ? ["auto_graded", "early_hr_no_window"] : ["auto_graded"],
+        summaryText: earlyExempt
+          ? `HR confirmed ${data.hitLabel} (early-inning HR — no realistic pre-call window)`
+          : `HR confirmed ${data.hitLabel} (uncalled — no pre-HR engine signal)`,
         status: "hit",
         hitInning: data.inning,
         hitHalf: halfLabel,
         hitLabel: data.hitLabel,
         hitDetectedAt: nowDate,
         resolvedAt: nowDate,
-        gradingStatus: "uncalled_hr",
-        gradingReason: "no canonical hr_radar_alert existed at time of HR resolution — admin-only analytics row",
+        gradingStatus: earlyExempt ? "early_hr_no_window" : "uncalled_hr",
+        gradingReason: earlyExempt
+          ? "first-inning HR with no realistic pre-signal window — exempt from uncalled-miss bucket"
+          : "no canonical hr_radar_alert existed at time of HR resolution — admin-only analytics row",
         matchedBeforeHr: false,
         fallbackCreated: true,
         userVisible: false,
         matchMethod: "post_hr_fallback",
         analyticsPersisted: false,
       });
-      console.log(`[HR_RADAR_UNCALLED] (admin-only row created) playerId=${data.playerId} player=${data.playerName} gameId=${data.gameId} hitLabel=${data.hitLabel}`);
+      if (earlyExempt) {
+        console.log(`[HR_RADAR_EARLY_HR_NO_WINDOW] (admin-only row created) playerId=${data.playerId} player=${data.playerName} gameId=${data.gameId} hitLabel=${data.hitLabel}`);
+      } else {
+        console.log(`[HR_RADAR_UNCALLED] (admin-only row created) playerId=${data.playerId} player=${data.playerName} gameId=${data.gameId} hitLabel=${data.hitLabel}`);
+      }
     } catch (err: any) {
       if (err.message?.includes("duplicate key")) return;
       console.warn(`[HR_RADAR_ENSURE_HIT] Failed: ${err.message}`);

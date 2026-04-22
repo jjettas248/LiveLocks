@@ -58,7 +58,7 @@ import { buildLiveEventInterpretation } from "./liveEventInterpretation";
 import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, clearGameCooldowns, type HRAlertInput } from "./evaluateHRAlert";
-import { recomputeHrAlertState, clearGameHrStates, getHrAlertState, type HRAlertSnapshot } from "./hrAlertEngine";
+import { recomputeHrAlertState, clearGameHrStates, getHrAlertState, mapDynamicStateToStage, type HRAlertSnapshot } from "./hrAlertEngine";
 import { todayET } from "../utils/dateUtils";
 import { buildHRSignal } from "./HRSignalBuilder";
 import { getPlayer } from "./rosterService";
@@ -1752,6 +1752,9 @@ export class LiveGameOrchestrator {
       // label reflects when we FIRST noticed the player, not when persistence
       // finally fired (HR Radar detection-drift fix, T002).
       const earlyDetect = getHrAlertState(gameId, batter.playerId);
+      // Phase 1–2: also pass canonical stage on the contact-update path so
+      // a heavy contact event doesn't lag the canonical stage by one tick.
+      const contactCanonicalStage = earlyDetect ? mapDynamicStateToStage(earlyDetect.currentState) : null;
       storage.createOrUpdateHrRadarAlert({
         gameId,
         playerId: batter.playerId,
@@ -1761,6 +1764,8 @@ export class LiveGameOrchestrator {
         inning: state.inning,
         half: state.isTopInning ? "top" : "bottom",
         readinessScore: hrBuild.score,
+        dynamicReadinessScore: earlyDetect?.hrReadinessScore ?? null,
+        canonicalStage: contactCanonicalStage,
         confidenceTier: tierMap[alertResult.signalState ?? "FORMATION"] ?? "monitor",
         signalState: stateMap[alertResult.signalState ?? "FORMATION"] ?? "live",
         triggerTags: alertResult.triggerReason ? alertResult.triggerReason.split(", ") : [],
@@ -2505,6 +2510,12 @@ export class LiveGameOrchestrator {
                 })),
               } : null;
 
+              // ── Goldmaster Phase 1–2: canonical stage as live truth ──────
+              // The dynamic engine state is the source of truth for the live
+              // user-facing ladder. We pass it explicitly; storage maps it to
+              // the legacy confidenceTier for backwards compat.
+              const canonicalStage = hrDynSnap ? mapDynamicStateToStage(hrDynSnap.currentState) : null;
+
               storage.createOrUpdateHrRadarAlert({
                 gameId,
                 playerId: batter.playerId,
@@ -2514,6 +2525,10 @@ export class LiveGameOrchestrator {
                 inning: state.inning,
                 half: state.isTopInning ? "top" : "bottom",
                 readinessScore: output.hrBuildScore,
+                // Phase 2 — dynamic engine readiness becomes the live progression score
+                dynamicReadinessScore: hrDynSnap?.hrReadinessScore ?? null,
+                // Phase 1 — canonical stage (overrides legacy sticky tier)
+                canonicalStage,
                 confidenceTier: tierMap[alertResult.signalState ?? "FORMATION"] ?? "monitor",
                 signalState: stateMap[alertResult.signalState ?? "FORMATION"] ?? "live",
                 triggerTags: alertResult.triggerReason ? alertResult.triggerReason.split(", ") : [],

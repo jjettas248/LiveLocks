@@ -45,7 +45,23 @@ const POLLING_CADENCE_MS: Record<PollingTier, number> = {
   idle:     600_000,
 };
 
-export function getPollingCadenceMs(tier: PollingTier): number {
+// ── Goldmaster Phase 6 — MLB-aware faster cadence ────────────────────────────
+// HR Radar can flip Building→Attack in a single pitch. The default 10s/15s
+// cadence is too slow for the dynamic stage machine — by the time we redraw
+// the ladder card, the at-bat is often already over. Override critical/high
+// for MLB only so NBA/NCAAB don't pay an unnecessary quota cost.
+const POLLING_CADENCE_MS_BY_SPORT: Partial<Record<Sport, Partial<Record<PollingTier, number>>>> = {
+  mlb: {
+    critical: 6_000,
+    high:     12_000,
+  },
+};
+
+export function getPollingCadenceMs(tier: PollingTier, sport?: Sport): number {
+  if (sport) {
+    const sportOverride = POLLING_CADENCE_MS_BY_SPORT[sport]?.[tier];
+    if (sportOverride !== undefined) return sportOverride;
+  }
   return POLLING_CADENCE_MS[tier];
 }
 
