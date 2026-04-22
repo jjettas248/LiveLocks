@@ -2664,12 +2664,16 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     Array.from(currentMap.entries()).forEach(([key, sig]) => {
       merged.set(key, { ...sig, _stickyTs: undefined } as MlbSignalData & { _stickyTs?: number });
     });
-    const activeGameIds = new Set(games.map(g => g?.gameId).filter(Boolean));
-    Array.from(merged.entries()).forEach(([key, sig]) => {
-      if (sig.gameId && !activeGameIds.has(sig.gameId)) {
-        merged.delete(key);
+    if (games.length > 0) {
+      const activeGameIds = new Set(games.map(g => g?.gameId).filter(Boolean));
+      if (activeGameIds.size > 0) {
+        Array.from(merged.entries()).forEach(([key, sig]) => {
+          if (sig.gameId && !activeGameIds.has(sig.gameId)) {
+            merged.delete(key);
+          }
+        });
       }
-    });
+    }
     stickySignalMapRef.current = merged;
     return Array.from(merged.values());
   })();
