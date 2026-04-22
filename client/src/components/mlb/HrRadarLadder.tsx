@@ -1,9 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronRight, Flame, Zap, Eye, CheckCircle2, XCircle, Plus, AlertTriangle } from "lucide-react";
+import { ChevronDown, ChevronRight, Flame, Zap, Eye, CheckCircle2, XCircle, Plus, AlertTriangle, RefreshCw, Eraser } from "lucide-react";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 
 export interface HrRadarLadderEntry {
@@ -279,11 +279,31 @@ interface HrRadarLadderProps {
 }
 
 export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps) {
-  const { data, isLoading, error } = useQuery<HrRadarLadderResponse>({
+  const queryClient = useQueryClient();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [hideFinished, setHideFinished] = useState(false);
+  const { data, isLoading, isFetching, error, dataUpdatedAt } = useQuery<HrRadarLadderResponse>({
     queryKey: ["/api/mlb/hr-radar/ladder"],
     refetchInterval: 20_000,
     placeholderData: (prev) => prev,
   });
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar/ladder"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/mlb/alerts"] }),
+      ]);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  const lastUpdatedLabel = dataUpdatedAt
+    ? new Date(dataUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    : null;
 
   if (isLoading && !data) {
     return (
@@ -308,17 +328,57 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
 
   const sections = data?.sections ?? { attackNow: [], building: [], watch: [], cashed: [], dead: [] };
   const counts = data?.counts ?? { attackNow: 0, building: 0, watch: 0, cashed: 0, dead: 0, total: 0 };
-  const order: SectionKey[] = ["attackNow", "building", "watch", "cashed", "dead"];
+  const allOrder: SectionKey[] = ["attackNow", "building", "watch", "cashed", "dead"];
+  const order: SectionKey[] = hideFinished
+    ? allOrder.filter(k => k !== "cashed" && k !== "dead")
+    : allOrder;
+  const finishedCount = counts.cashed + counts.dead;
+  const refreshSpinning = isRefreshing || isFetching;
 
   return (
     <div className="space-y-3" data-testid="hr-radar-ladder">
-      <div className="flex items-center justify-between text-[11px] text-muted-foreground px-1">
-        <span data-testid="text-ladder-session-date">
-          Session: {data?.sessionDate || "—"}
-        </span>
-        <span data-testid="text-ladder-total">
-          {counts.total} tracked
-        </span>
+      <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground px-1">
+        <div className="flex items-center gap-2 min-w-0">
+          <span data-testid="text-ladder-session-date" className="truncate">
+            Session: {data?.sessionDate || "—"}
+          </span>
+          {lastUpdatedLabel && (
+            <span className="text-muted-foreground/60 hidden sm:inline" data-testid="text-ladder-last-updated">
+              · updated {lastUpdatedLabel}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span data-testid="text-ladder-total">
+            {counts.total} tracked
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 gap-1 text-[11px]"
+            onClick={() => setHideFinished(v => !v)}
+            disabled={finishedCount === 0 && !hideFinished}
+            data-testid="button-ladder-clear-finished"
+            title={hideFinished ? "Show finished games" : "Hide cashed and missed games"}
+          >
+            <Eraser className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">
+              {hideFinished ? `Show finished (${finishedCount})` : `Clear finished${finishedCount > 0 ? ` (${finishedCount})` : ""}`}
+            </span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 gap-1 text-[11px]"
+            onClick={handleRefresh}
+            disabled={refreshSpinning}
+            data-testid="button-ladder-refresh"
+            title="Refresh HR radar"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshSpinning ? "animate-spin" : ""}`} />
+            <span className="hidden sm:inline">Refresh</span>
+          </Button>
+        </div>
       </div>
       {order.map(key => (
         <LadderSection
