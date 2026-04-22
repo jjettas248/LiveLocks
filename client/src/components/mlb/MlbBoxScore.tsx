@@ -432,10 +432,12 @@ export function MlbBoxScore({
                     const cycleIdx = rotationIndex % allPlays.length;
                     const current = allPlays[cycleIdx];
                     const rawPct = current.probability;
-                    // Decision-grade engine confidence — what users see. Falls back
-                    // to raw probability only if the engine-state route hasn't
-                    // produced a confidence value yet.
-                    const displayPct = engineForPlayer?.engineConfidence ?? rawPct;
+                    // Show the actual per-play probability on the badge so it
+                    // matches what the tooltip surfaces. The clamped
+                    // engineConfidence value is preserved in the tooltip for
+                    // context but is no longer the primary number — its tight
+                    // floor/ceiling bands made many players appear identical.
+                    const displayPct = rawPct;
                     const isUnder = current.side === "UNDER" || current.side === "under";
                     const playTier = (displayPct >= 85 && isUnder) ? "red" as const : displayPct >= 75 ? "green" as const : displayPct >= 65 ? "yellow" as const : "blue" as const;
                     const playStyle = COLOR_TIER_STYLES[playTier];
