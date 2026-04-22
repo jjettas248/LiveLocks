@@ -321,9 +321,9 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background overflow-x-hidden">
       <AdminLink />
-      <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6 space-y-4">
+      <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6 space-y-4 min-w-0">
         {/* Summary pills */}
         <div className="flex gap-3 flex-wrap">
           <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-card border border-border text-sm">
@@ -385,7 +385,7 @@ export default function AdminPage() {
         </div>
 
         {/* Tab nav */}
-        <div className="flex rounded-lg bg-muted p-1 w-fit">
+        <div className="flex rounded-lg bg-muted p-1 w-fit max-w-full overflow-x-auto">
           <button
             data-testid="tab-users"
             onClick={() => setActiveTab("users")}
