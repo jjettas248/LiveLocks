@@ -159,6 +159,8 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
               {entry.team}
             </span>
           </div>
+          {/* HR Radar contract: `detected` is frozen first-detection inning;
+              never substitute `signalInning` or `scoreIncreaseInning` here. */}
           <div className="flex items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground flex-wrap">
             {detected && (
               <span data-testid={`text-ladder-detected-${entry.playerId}`}>Called {detected}</span>

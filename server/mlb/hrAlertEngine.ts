@@ -20,6 +20,18 @@ export interface HRAlertSnapshot {
   isInitialized: boolean;
   currentState: DynamicHRState;
   detectedInning: number | null;
+  /**
+   * Half-inning of first detection ("top" | "bottom"). Frozen at first
+   * non-WATCH transition; never advances even if score climbs later.
+   */
+  detectedHalf: "top" | "bottom" | null;
+  /**
+   * Wall-clock millis when this player first crossed the WATCH threshold.
+   * Used by storage CREATE to backfill the persisted detectedAt so the DB
+   * row reflects the engine's earliest observation, not the inning when
+   * persistence finally fired.
+   */
+  detectedAtMs: number | null;
   currentInning: number;
   lastStateChangeAt: number;
   dataFreshnessMs: number;
@@ -59,6 +71,7 @@ interface BatterHRState {
   peakState: DynamicHRState;
   peakAt: number;
   detectedInning: number | null;
+  detectedHalf: "top" | "bottom" | null;
   detectedAtMs: number | null;
   tickCount: number;
   lastRecomputeAt: number;
@@ -192,6 +205,7 @@ export function recomputeHrAlertState(
       peakState: "WATCH",
       peakAt: now,
       detectedInning: null,
+      detectedHalf: null,
       detectedAtMs: null,
       tickCount: 0,
       lastRecomputeAt: 0,
@@ -285,6 +299,7 @@ export function recomputeHrAlertState(
     prev.currentState = newState;
     if (newState !== "WATCH" && newState !== "CLOSED" && newState !== "COOLED_OFF" && prev.detectedInning == null) {
       prev.detectedInning = input.inning;
+      prev.detectedHalf = input.isTopInning === false ? "bottom" : "top";
       prev.detectedAtMs = now;
       prev.contactEventsAtLastRecompute = currentContactEvents;
     }
@@ -306,6 +321,8 @@ export function recomputeHrAlertState(
     isInitialized: true,
     currentState: newState,
     detectedInning: prev.detectedInning,
+    detectedHalf: prev.detectedHalf,
+    detectedAtMs: prev.detectedAtMs,
     currentInning: input.inning,
     lastStateChangeAt: prev.lastStateChangeAt,
     dataFreshnessMs,
@@ -351,6 +368,8 @@ export function getHrAlertState(gameId: string, playerId: string): HRAlertSnapsh
       isInitialized: false,
       currentState: prev.currentState,
       detectedInning: prev.detectedInning,
+      detectedHalf: prev.detectedHalf,
+      detectedAtMs: prev.detectedAtMs,
       currentInning: 0,
       lastStateChangeAt: prev.lastStateChangeAt,
       dataFreshnessMs: prev.lastRecomputeAt > 0 ? Date.now() - prev.lastRecomputeAt : 0,

@@ -112,6 +112,30 @@ export type HrRadarAnalyzeViewModel = {
   currentInning: number | null;
 };
 
+/**
+ * UI contract for HR Radar detection labels (HR Radar inning-drift fix).
+ *
+ *   - `detectedLabel`           : write-once on first persist; the inning we
+ *                                 first noticed the player. NEVER advances
+ *                                 when the score later climbs.
+ *   - `scoreIncreaseLabel`      : separate, mutable; reflects when the score
+ *                                 most recently climbed. Render this on its
+ *                                 own row — never as part of the "Detected"
+ *                                 / "Called" label.
+ *
+ * Use `formatDetectedLabel(detectedLabel)` for the frozen first-detection
+ * inning and `formatScoreIncreaseLabel(scoreIncreaseLabel)` for the score
+ * climb. The two MUST NOT be conflated in display.
+ */
+export function formatDetectedLabel(detectedLabel: string | null | undefined): string | null {
+  return detectedLabel ?? null;
+}
+
+export function formatScoreIncreaseLabel(scoreIncreaseLabel: string | null | undefined): string | null {
+  if (!scoreIncreaseLabel) return null;
+  return `Score climbed ${scoreIncreaseLabel}`;
+}
+
 const PITCHER_SIGNAL_MAP: Record<string, { label: string; color: string }> = {
   DOMINANT: { label: "Dominant", color: "#ef4444" },
   K_STREAK: { label: "K Streak", color: "#f59e0b" },

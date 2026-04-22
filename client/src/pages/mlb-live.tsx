@@ -779,6 +779,14 @@ function RadarCard({ card, onQuickAdd, onOpenDetails, gameTeams }: {
             <span className="text-sm font-bold text-foreground truncate">{card.playerName}</span>
             {card.team && <span className="text-[10px] text-muted-foreground shrink-0">{card.team}</span>}
           </div>
+          {/*
+            HR Radar UI contract: `detectedLabel` is the FROZEN inning we
+            first noticed the player. `scoreIncreaseLabel` is a SEPARATE,
+            mutable indicator of when the score most recently climbed. They
+            are rendered side-by-side but never conflated. See
+            `formatDetectedLabel` / `formatScoreIncreaseLabel` in
+            client/src/lib/mlbUiMappers.ts.
+          */}
           <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
             {card.detectedLabel && <span>Detected {card.detectedLabel}</span>}
             {!card.detectedLabel && card.detectedInning != null && <span>Detected: Inn {card.detectedInning}</span>}
@@ -1085,6 +1093,7 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
               {(analyze?.totalPA != null || analyze?.completedAB != null) && (
                 <span className="font-semibold">{analyze.completedAB ?? 0} AB{analyze.totalPA != null && analyze.totalPA > (analyze.completedAB ?? 0) ? ` · ${analyze.totalPA} PA` : ""}</span>
               )}
+              {/* HR Radar contract: detectedLabel is frozen first detection, never advances on score climb. */}
               {alert.detectedLabel && <span>Detected {alert.detectedLabel}</span>}
               <span className={`font-bold ${statusColor}`}>{statusLabel}</span>
             </div>

@@ -58,7 +58,7 @@ import { buildLiveEventInterpretation } from "./liveEventInterpretation";
 import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, clearGameCooldowns, type HRAlertInput } from "./evaluateHRAlert";
-import { recomputeHrAlertState, clearGameHrStates, type HRAlertSnapshot } from "./hrAlertEngine";
+import { recomputeHrAlertState, clearGameHrStates, getHrAlertState, type HRAlertSnapshot } from "./hrAlertEngine";
 import { todayET } from "../utils/dateUtils";
 import { buildHRSignal } from "./HRSignalBuilder";
 import { getPlayer } from "./rosterService";
@@ -1746,6 +1746,10 @@ export class LiveGameOrchestrator {
         })),
       } : null;
 
+      // Pull engine's earliest in-memory detection so the row's detected
+      // label reflects when we FIRST noticed the player, not when persistence
+      // finally fired (HR Radar detection-drift fix, T002).
+      const earlyDetect = getHrAlertState(gameId, batter.playerId);
       storage.createOrUpdateHrRadarAlert({
         gameId,
         playerId: batter.playerId,
@@ -1768,6 +1772,9 @@ export class LiveGameOrchestrator {
         conversionProbabilityRaw: alertResult.diagnostics?.hrConversion?.hrConversionProbability ?? null,
         conversionProbability: alertResult.diagnostics?.hrConversion?.calibratedProbability ?? null,
         peakConversionProbability: null,
+        firstDetectedInning: earlyDetect?.detectedInning ?? null,
+        firstDetectedHalf: earlyDetect?.detectedHalf ?? null,
+        firstDetectedAtMs: earlyDetect?.detectedAtMs ?? null,
       }).catch(err => console.warn(`[HR_RADAR_CONTACT_UPDATE] persist failed: ${err.message}`));
     }
   }
@@ -2516,6 +2523,10 @@ export class LiveGameOrchestrator {
                 conversionProbabilityRaw: alertResult.diagnostics?.hrConversion?.hrConversionProbability ?? null,
                 conversionProbability: alertResult.diagnostics?.hrConversion?.calibratedProbability ?? null,
                 peakConversionProbability: hrDynSnap?.peakConversionProbability ?? null,
+                // Engine's earliest in-memory detection (T002 backfill).
+                firstDetectedInning: hrDynSnap?.detectedInning ?? null,
+                firstDetectedHalf: hrDynSnap?.detectedHalf ?? null,
+                firstDetectedAtMs: hrDynSnap?.detectedAtMs ?? null,
               }).catch(err => console.warn(`[HR_RADAR_ALERT] persist failed: ${err.message}`));
             }
           }

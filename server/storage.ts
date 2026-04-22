@@ -2537,6 +2537,18 @@ export class DatabaseStorage implements IStorage {
     conversionProbabilityRaw?: number | null;
     conversionProbability?: number | null;
     peakConversionProbability?: number | null;
+    /**
+     * Earliest in-memory detection inning from the engine snapshot
+     * (`HRAlertSnapshot.detectedInning`). When provided AND earlier than
+     * `data.inning`, the CREATE branch uses these to stamp the row's
+     * `detectedInning/detectedHalf/detectedLabel/detectedAt` so the persisted
+     * row reflects when the engine first noticed the player, not the inning
+     * persistence finally fired. Once the row exists these are NEVER used
+     * — UPDATE branch leaves detection fields immutable.
+     */
+    firstDetectedInning?: number | null;
+    firstDetectedHalf?: "top" | "bottom" | null;
+    firstDetectedAtMs?: number | null;
   }): Promise<HrRadarAlert | null> {
     // Embed canonical score contract into diagnosticsSnapshot so consumers
     // can read explicit per-domain values without DB schema changes.
@@ -2551,8 +2563,19 @@ export class DatabaseStorage implements IStorage {
     data.diagnosticsSnapshot = { ...baseDiag, scoreContract };
     try {
       const today = resolveMlbGameSessionDate(data.gameId);
-      const halfLabel = data.half === "top" ? "T" : "B";
-      const detectedLabel = `${halfLabel}${data.inning}`;
+      // ── Earliest-truth detection backfill (T002) ──────────────────────────
+      // Prefer engine's earliest in-memory detection over current tick when
+      // available AND strictly earlier. This stamps the row with when we
+      // FIRST noticed the player, not when persistence finally fired.
+      const useFirstDetected =
+        data.firstDetectedInning != null &&
+        data.firstDetectedInning < data.inning;
+      const persistInning = useFirstDetected ? data.firstDetectedInning! : data.inning;
+      const persistHalf = useFirstDetected
+        ? (data.firstDetectedHalf ?? data.half)
+        : data.half;
+      const halfLabel = persistHalf === "top" ? "T" : "B";
+      const detectedLabel = `${halfLabel}${persistInning}`;
       const existing = await db.select().from(hrRadarAlerts)
         .where(and(
           eq(hrRadarAlerts.sessionDate, today),
@@ -2564,6 +2587,20 @@ export class DatabaseStorage implements IStorage {
       if (existing.length > 0) {
         const alert = existing[0];
         if (alert.status !== "live") return alert;
+
+        // ── T003 immutability guardrail ──────────────────────────────────
+        // detectedInning / detectedHalf / detectedLabel / detectedAt are
+        // write-once at CREATE. The UPDATE set() below intentionally never
+        // includes these fields. If the current tick disagrees with the
+        // persisted detection inning, log loudly so any future code that
+        // tries to mutate them is caught immediately. We never overwrite.
+        if (alert.detectedInning != null && data.inning !== alert.detectedInning) {
+          console.log(
+            `[HR_RADAR_DETECTION_LOCKED] gameId=${data.gameId} playerId=${data.playerId} ` +
+            `persistedDetected=${alert.detectedLabel} (${alert.detectedHalf}${alert.detectedInning}) ` +
+            `currentTick=${data.half === "top" ? "T" : "B"}${data.inning} — preserving original`
+          );
+        }
 
         const prevScore = parseFloat(alert.currentReadinessScore ?? "0");
         const newScore = data.readinessScore;
@@ -2646,6 +2683,22 @@ export class DatabaseStorage implements IStorage {
 
       const alertId = `${today}_${data.gameId}_${data.playerId}`;
       const nowDate = new Date();
+      // ── T001 diagnostic: persist gap visibility ───────────────────────────
+      // Surface when persistence finally fired in a later inning than the
+      // engine's first in-memory detection. Used to quantify the drift the
+      // T002 backfill is now correcting.
+      if (useFirstDetected) {
+        console.log(
+          `[HR_RADAR_PERSIST_GAP] gameId=${data.gameId} playerId=${data.playerId} ` +
+          `engineFirstDetected=${data.firstDetectedHalf === "bottom" ? "B" : "T"}${data.firstDetectedInning} ` +
+          `currentTick=${data.half === "top" ? "T" : "B"}${data.inning} ` +
+          `→ stamping detectedLabel=${detectedLabel} (backfilled from engine)`
+        );
+      }
+      const detectedAtForRow =
+        useFirstDetected && data.firstDetectedAtMs != null
+          ? new Date(data.firstDetectedAtMs)
+          : nowDate;
       const insertResult = await db.insert(hrRadarAlerts).values({
         id: alertId,
         sessionDate: today,
@@ -2654,9 +2707,9 @@ export class DatabaseStorage implements IStorage {
         playerName: data.playerName,
         team: data.team,
         opponent: data.opponent ?? null,
-        detectedAt: nowDate,
-        detectedInning: data.inning,
-        detectedHalf: data.half,
+        detectedAt: detectedAtForRow,
+        detectedInning: persistInning,
+        detectedHalf: persistHalf,
         detectedLabel,
         initialReadinessScore: String(data.readinessScore),
         currentReadinessScore: String(data.readinessScore),
@@ -2675,9 +2728,9 @@ export class DatabaseStorage implements IStorage {
         userVisible: true,
         matchedBeforeHr: false,
         fallbackCreated: false,
-        signalDetectedAt: nowDate,
-        signalInning: data.inning,
-        signalHalf: data.half,
+        signalDetectedAt: detectedAtForRow,
+        signalInning: persistInning,
+        signalHalf: persistHalf,
         analyticsPersisted: false,
       }).onConflictDoNothing();
       if ((insertResult as any).rowCount === 0) {
@@ -2724,6 +2777,22 @@ export class DatabaseStorage implements IStorage {
       const nowDate = new Date();
 
       if (matchResult.matched && matchResult.matchedBeforeHr) {
+        // ── T005 leak-detection guardrail ────────────────────────────────
+        // The matcher claims this alert preceded the HR. If the persisted
+        // signalDetectedAt is somehow AT OR AFTER hrEndTimeMs, that's a
+        // contradiction — the alert is being credited as called_hit despite
+        // being late. Log loudly so we can trace it; do not block the write
+        // (the matcher is authoritative) but make the leak visible.
+        const sigMs = matchResult.signalDetectedAt
+          ? new Date(matchResult.signalDetectedAt).getTime()
+          : null;
+        if (hrEndTimeMs && sigMs != null && sigMs >= hrEndTimeMs) {
+          console.warn(
+            `[HR_RADAR_LATE_SIGNAL_LEAK] playerId=${playerId} gameId=${gameId} ` +
+            `signalAt=${new Date(sigMs).toISOString()} >= hrEndAt=${new Date(hrEndTimeMs).toISOString()} ` +
+            `but matcher returned matchedBeforeHr=true. matchMethod=${matchResult.matchMethod}`
+          );
+        }
         const result = await db.update(hrRadarAlerts)
           .set({
             status: "hit",
