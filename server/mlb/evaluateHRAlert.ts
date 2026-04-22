@@ -54,6 +54,9 @@ export interface HRAlertInput {
     distance: number | null;
     outcome: string;
   }>;
+  // ── Pre-HR danger layer (optional; fed in by buildHRSignal callers) ──
+  preHrDangerScore?: number;
+  dangerFlags?: string[];
 }
 
 export interface HRSuppressionFlag {
@@ -668,6 +671,78 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
       detectedInning: inning,
       alertTier: "watch",
       diagnostics: { ...baseDiagnostics, alertPath: "WATCH_POWER", positiveFactors },
+    };
+  }
+
+  // ── PATH_PRE_HR_DANGER ────────────────────────────────────────────────────
+  // Pre-HR damage signal: surfaces hitters who haven't produced classic
+  // HR-shaped contact yet but show the precursor pattern — elite bat speed,
+  // strong hitter power profile, and warning-class contact (lifted air balls,
+  // bat-speed warning swings). Targets cases like Caminero where a HR is
+  // imminent but the radar would otherwise stay silent until a 96+ EV /
+  // 340+ ft contact lands.
+  //
+  // Strict guardrails: WATCH (or PREPARE for very strong cases) only — NEVER
+  // PEAK / officialAlert. Requires totalHrShaped=0 (so it never collides
+  // with classic paths), no soft vetoes, viable PA, and a power-hitter
+  // profile to keep noise low. All upstream gates still apply.
+  const preHrDangerEnabled = (process.env.HR_PRE_HR_DANGER_PATH_ENABLED ?? "true").toLowerCase() !== "false";
+  const f: any = factors;
+  const preHrDangerScore = input.preHrDangerScore ?? 0;
+  const dangerFlags = input.dangerFlags ?? [];
+  const hpProfile = (f.hitterPowerProfileScore ?? 0) as number;
+  const bsZ = (f.batSpeedZ ?? 0) as number;
+  const bsPower = (f.batSpeedPowerScore ?? 0) as number;
+  const airDanger = (f.airDangerScore ?? 0) as number;
+  const warningCount = (f.warningContactCount ?? 0) as number;
+  const popupCount = (f.deadPopupCount ?? 0) as number;
+
+  const hasWarningSignal = warningCount >= 1 || bsZ >= 1.28 || airDanger >= 0.5;
+  const hasStrongPreHrProfile = hpProfile >= 0.55;
+
+  if (
+    preHrDangerEnabled &&
+    hrShapedCount === 0 &&
+    preHrDangerScore >= 3.5 &&
+    hasStrongPreHrProfile &&
+    hasWarningSignal &&
+    popupCount <= warningCount &&
+    softVetoes.length === 0 &&
+    (remainingPA === null || remainingPA >= 1.0) &&
+    (convProb === null || convProb >= HR_CONVERSION_WATCH_MIN)
+  ) {
+    positiveFactors.push(`pre-HR danger ${preHrDangerScore.toFixed(2)} (profile=${hpProfile.toFixed(2)}, bsZ=${bsZ.toFixed(2)}, airDanger=${airDanger.toFixed(2)})`);
+    if (warningCount > 0) positiveFactors.push(`${warningCount} warning contact${warningCount === 1 ? "" : "s"} (air=${f.airBallWarningCount ?? 0}, bs=${f.batSpeedWarningCount ?? 0})`);
+    if (dangerFlags.length > 0) positiveFactors.push(`flags: ${dangerFlags.slice(0, 4).join(", ")}`);
+    positiveFactors.push(`conversion: ${convPct}`);
+    if (pitcherFavorable) positiveFactors.push(`pitcher: ${pitcherFatigueState}`);
+    if (envFavorable) positiveFactors.push(`env: ${environmentContext}`);
+
+    // Promote to PREPARE only when the danger signal is very strong AND
+    // both context and conversion confirm. Otherwise WATCH-only. Never PEAK.
+    const isPrepare =
+      preHrDangerScore >= 5.0 &&
+      hpProfile >= 0.7 &&
+      bsZ >= 1.5 &&
+      hasModerateContext &&
+      (convProb === null || convProb >= HR_CONVERSION_ALERT_MIN);
+
+    const rawConf = computeConfidence(hrBuildScore, factors, "PATH_PRE_HR_DANGER", softVetoes.length, convProb);
+    // Cap confidence — pre-HR danger is precursor-only, no realized damage shape yet.
+    const cappedConf = Math.min(isPrepare ? 7.5 : 6.5, rawConf);
+
+    console.log(`[HR_ALERT_PATH_PRE_HR_DANGER] ${input.playerName} game=${input.gameId} preHrDanger=${preHrDangerScore.toFixed(2)} profile=${hpProfile.toFixed(2)} bsZ=${bsZ.toFixed(2)} airDanger=${airDanger.toFixed(2)} warnings=${warningCount} popups=${popupCount} score=${hrBuildScore} conv=${convPct} -> ${isPrepare ? "PREPARE" : "WATCH"}`);
+
+    return {
+      level: isPrepare ? "ALERT" : "WATCH",
+      triggerReason: `PATH_PRE_HR_DANGER:danger${preHrDangerScore.toFixed(2)}_profile${hpProfile.toFixed(2)}_bsZ${bsZ.toFixed(2)}`,
+      signalState: isPrepare ? "BUILDING" : "FORMATION",
+      decision: isPrepare ? "PREPARE" : "MONITOR",
+      confidenceScore: cappedConf,
+      formattedReason: `Pre-HR danger pattern detected (conv ${convPct}). Elite bat speed + power profile + warning contact precede classic HR shape — ${isPrepare ? "preparing" : "watching"} for escalation.`,
+      detectedInning: inning,
+      alertTier: isPrepare ? "prepare" : "watch",
+      diagnostics: { ...baseDiagnostics, alertPath: "PATH_PRE_HR_DANGER", positiveFactors },
     };
   }
 

@@ -1,9 +1,13 @@
 import type { MLBPropInput } from "./types";
+import { computeBatSpeedEngine } from "./featureEngineering";
 
 export type HRIntensity = "weak" | "watch" | "strong" | "imminent";
 
 export type HRContactClass =
   | "noiseContact"
+  | "deadPopup"
+  | "airBallWarning"
+  | "batSpeedWarning"
   | "powerContact"
   | "hrShapedContact"
   | "missedHrContact"
@@ -18,10 +22,17 @@ export interface ClassifiedContact {
   isBarrel: boolean;
 }
 
+export interface HitterPowerProfile {
+  score: number; // 0-1
+  flags: string[];
+}
+
 export interface HRBuildResult {
   score: number;
   intensity: HRIntensity;
   boost: number;
+  preHrDangerScore: number;
+  dangerFlags: string[];
   factors: {
     avgEV: number | null;
     maxEV: number | null;
@@ -39,6 +50,16 @@ export interface HRBuildResult {
     qualifiedEVMean: number | null;
     maxDistance: number | null;
     contactClasses: ClassifiedContact[];
+    // ── Pre-HR diagnostics ──
+    batSpeedPowerScore: number;
+    batSpeedZ: number;
+    airDangerScore: number;
+    hitterPowerProfileScore: number;
+    hitterPowerProfileFlags: string[];
+    warningContactCount: number;
+    deadPopupCount: number;
+    airBallWarningCount: number;
+    batSpeedWarningCount: number;
   };
 }
 
@@ -48,12 +69,90 @@ const LA_SWEET_SPOT_LOW = 20;
 const LA_SWEET_SPOT_HIGH = 35;
 const DEEP_FLY_DISTANCE = 350;
 
-export function classifyContactEvent(ab: {
-  exitVelocity: number | null;
-  launchAngle: number | null;
-  distance: number | null;
-  outcome: string;
-}): ClassifiedContact {
+// ── Hitter power profile ─────────────────────────────────────────────────────
+// Combines seasonal damage traits + measured/derived bat-speed truth into a
+// single 0..1 score with explanatory flags. Used as a synergy signal: strong
+// power profiles need less perfect live EV to surface as pre-HR danger.
+export function computeHitterPowerProfile(input: MLBPropInput): HitterPowerProfile {
+  const flags: string[] = [];
+  const xSLG = (input.contactQuality as any).xSLG as number | null | undefined;
+  const hhr = input.contactQuality.hardHitRateSeason ?? null;
+  const barrel = input.contactQuality.barrelRateProxySeason ?? null;
+  const bs = computeBatSpeedEngine(input);
+
+  let score = 0;
+  let weight = 0;
+
+  if (xSLG != null && Number.isFinite(xSLG)) {
+    if (xSLG >= 0.560) { score += 1.0; flags.push("Elite xSLG"); }
+    else if (xSLG >= 0.480) { score += 0.75; flags.push("High xSLG"); }
+    else if (xSLG >= 0.420) { score += 0.45; }
+    weight += 1;
+  }
+  if (hhr != null && Number.isFinite(hhr)) {
+    if (hhr >= 0.48) { score += 1.0; flags.push("Elite Hard-Hit%"); }
+    else if (hhr >= 0.42) { score += 0.75; flags.push("High Hard-Hit%"); }
+    else if (hhr >= 0.36) { score += 0.45; }
+    weight += 1;
+  }
+  if (barrel != null && Number.isFinite(barrel)) {
+    if (barrel >= 0.14) { score += 1.0; flags.push("Elite Barrel%"); }
+    else if (barrel >= 0.10) { score += 0.75; flags.push("High Barrel%"); }
+    else if (barrel >= 0.075) { score += 0.45; }
+    weight += 1;
+  }
+  // Bat-speed arm of the profile
+  if (bs.batSpeedZ >= 1.88) { score += 1.0; flags.push("Elite Bat Speed"); }
+  else if (bs.batSpeedZ >= 1.28) { score += 0.75; flags.push("High Bat Speed"); }
+  else if (bs.batSpeedZ >= 0.7) { score += 0.45; }
+  weight += 1;
+
+  const normalized = weight > 0 ? score / weight : 0;
+  if (normalized >= 0.65) flags.push("Power Hitter Profile");
+  return { score: Math.max(0, Math.min(1, normalized)), flags };
+}
+
+// ── Air-ball intent score for a single contact ───────────────────────────────
+// Rewards lifted contacts in the HR-viable LA range when EV is "almost there".
+// Penalizes dead popups (high LA + low EV + low distance + no power profile).
+function scoreAirBallIntent(
+  c: { exitVelocity: number; launchAngle: number; distance: number },
+  hitterProfileScore: number,
+): number {
+  const ev = c.exitVelocity;
+  const la = c.launchAngle;
+  const dist = c.distance;
+  if (la < 18 || la > 50) return 0;
+
+  // Dead popup signature
+  if (la >= 45 && ev < 90 && (dist === 0 || dist < 280)) return 0;
+
+  // Useful air-ball warning band
+  let s = 0;
+  if (la >= 20 && la <= 40) s += 0.4;
+  else if (la >= 18 && la <= 45) s += 0.25;
+
+  if (ev >= 84 && ev < 92) s += 0.25;
+  else if (ev >= 92 && ev < 96) s += 0.45;
+
+  if (dist >= 320 && dist < 360) s += 0.25;
+  else if (dist >= 360) s += 0.4;
+
+  // Profile synergy: power hitters get more credit for the same air-ball
+  s += hitterProfileScore * 0.25;
+
+  return Math.max(0, Math.min(1, s));
+}
+
+export function classifyContactEvent(
+  ab: {
+    exitVelocity: number | null;
+    launchAngle: number | null;
+    distance: number | null;
+    outcome: string;
+  },
+  context?: { batSpeedZ?: number; hitterPowerProfileScore?: number },
+): ClassifiedContact {
   const ev = ab.exitVelocity ?? 0;
   const la = ab.launchAngle ?? 0;
   const dist = ab.distance ?? 0;
@@ -61,6 +160,7 @@ export function classifyContactEvent(ab: {
 
   let contactClass: HRContactClass = "noiseContact";
 
+  // Strong-damage classes (UNCHANGED thresholds — preserve called-vs-uncalled integrity)
   if (ev >= 102 && la >= 23 && la <= 34 && dist >= 390) {
     contactClass = "eliteHrContact";
   } else if (ev >= 100 && la >= 24 && la <= 36 && dist >= 370) {
@@ -69,6 +169,25 @@ export function classifyContactEvent(ab: {
     contactClass = "hrShapedContact";
   } else if (ev >= 95) {
     contactClass = "powerContact";
+  } else {
+    // ── New sub-95 EV pre-HR classes ──
+    const bsZ = context?.batSpeedZ ?? 0;
+    const profile = context?.hitterPowerProfileScore ?? 0;
+
+    // Dead popup: high LA, low EV, no distance, no power profile
+    const isDeadPopup =
+      la >= 45 && ev < 90 && (dist === 0 || dist < 250) && profile < 0.4;
+
+    if (isDeadPopup) {
+      contactClass = "deadPopup";
+    } else if (bsZ >= 1.28 && la >= 12 && la <= 45 && ev >= 80) {
+      // Bat-speed warning: elite swing speed + lifted-or-near-lifted contact
+      // even if EV not yet hard-hit. Caminero precursor.
+      contactClass = "batSpeedWarning";
+    } else if (la >= 18 && la <= 45 && ev >= 84 && (profile >= 0.45 || dist >= 320)) {
+      // Air-ball warning: useful loft + modest EV when supported by profile/distance
+      contactClass = "airBallWarning";
+    }
   }
 
   return {
@@ -99,7 +218,16 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
   let score = 0;
   const priorABs = input.contactQuality.priorABResults ?? [];
 
-  const classified = priorABs.map(ab => classifyContactEvent(ab));
+  // ── Real bat-speed engine + hitter profile (replaces fake batSpeed proxy) ──
+  const batSpeedData = computeBatSpeedEngine(input);
+  const hitterProfile = computeHitterPowerProfile(input);
+
+  const classified = priorABs.map(ab =>
+    classifyContactEvent(ab, {
+      batSpeedZ: batSpeedData.batSpeedZ,
+      hitterPowerProfileScore: hitterProfile.score,
+    }),
+  );
 
   const hrShapedEvents = classified.filter(c =>
     c.contactClass === "hrShapedContact" ||
@@ -110,9 +238,18 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
   const eliteHrEvents = classified.filter(c => c.contactClass === "eliteHrContact");
   const powerEvents = classified.filter(c => c.contactClass === "powerContact");
 
+  // ── New pre-HR contact buckets ──
+  const airBallWarningEvents = classified.filter(c => c.contactClass === "airBallWarning");
+  const batSpeedWarningEvents = classified.filter(c => c.contactClass === "batSpeedWarning");
+  const deadPopupEvents = classified.filter(c => c.contactClass === "deadPopup");
+
   const hrShapedCount = hrShapedEvents.length;
   const missedHrCount = missedHrEvents.length;
   const eliteHrCount = eliteHrEvents.length;
+  const airBallWarningCount = airBallWarningEvents.length;
+  const batSpeedWarningCount = batSpeedWarningEvents.length;
+  const deadPopupCount = deadPopupEvents.length;
+  const warningContactCount = airBallWarningCount + batSpeedWarningCount;
 
   const evValues = classified
     .filter(c => c.exitVelocity > 0)
@@ -142,6 +279,7 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
      (c.distance === 0 && c.launchAngle >= 20 && c.exitVelocity >= 95))
   ).length;
 
+  // ── Existing damage-shape scoring (unchanged) ──
   score += eliteHrCount * 3.0;
   score += missedHrCount * 2.5;
   score += (hrShapedCount - missedHrCount - eliteHrCount) * 1.8;
@@ -183,8 +321,9 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
     score += 0.5;
   }
 
-  const seasonBarrel = input.contactQuality.barrelRateProxySeason ?? 0.06;
-  const batSpeedScore = Math.min(1.0, (seasonBarrel / 0.06 - 1) * 1.0);
+  // ── Bat-speed score: REAL engine instead of fake season-barrel proxy ──
+  // Maps batSpeedPowerScore (0..1) into the existing 0..~1.0 score slot.
+  const batSpeedScore = Math.max(0, batSpeedData.batSpeedPowerScore - 0.45) * (1 / 0.55);
   if (batSpeedScore > 0) score += batSpeedScore;
 
   let pitcherFatigueBoost = 0;
@@ -264,12 +403,73 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
     }
   }
 
+  // ── Pre-HR danger layer (NEW, additive) ─────────────────────────────────────
+  // This is the missing bridge for "high bat speed + lifted contact + strong
+  // power profile" patterns that precede a HR before classic damage shape lands.
+  const dangerFlags: string[] = [...hitterProfile.flags];
+
+  // Air-ball danger: average air-ball intent over warning + power air contacts
+  const airIntentSamples = classified
+    .filter(c => c.launchAngle >= 18 && c.launchAngle <= 50 && c.exitVelocity >= 80)
+    .map(c => scoreAirBallIntent(c, hitterProfile.score));
+  const airDangerScore = airIntentSamples.length > 0
+    ? airIntentSamples.reduce((s, v) => s + v, 0) / airIntentSamples.length
+    : 0;
+
+  // Repeat warning pattern: 2+ warnings, or 1 warning + 1 power contact
+  const repeatWarningBoost =
+    (warningContactCount >= 2 ? 0.6 : 0) +
+    (warningContactCount >= 1 && powerEvents.length >= 1 ? 0.4 : 0);
+  if (warningContactCount >= 2) dangerFlags.push("Repeat Warning Contacts");
+  else if (warningContactCount >= 1 && powerEvents.length >= 1) dangerFlags.push("Warning + Power Contact");
+
+  // Bat-speed contributions
+  let batSpeedDangerBoost = 0;
+  if (batSpeedData.batSpeedZ >= 1.88) batSpeedDangerBoost += 1.0;
+  else if (batSpeedData.batSpeedZ >= 1.28) batSpeedDangerBoost += 0.6;
+  else if (batSpeedData.batSpeedPowerScore >= 0.76) batSpeedDangerBoost += 0.4;
+  if (batSpeedDangerBoost > 0) dangerFlags.push("Bat-Speed Danger");
+
+  // Air + bat-speed synergy: dangerous swing AND lifted contact even if EV soft
+  const hasAirBallNow = airBallWarningCount > 0 || batSpeedWarningCount > 0;
+  const synergyBoost = hasAirBallNow && batSpeedData.batSpeedZ >= 1.0 ? 0.6 : 0;
+  if (synergyBoost > 0) dangerFlags.push("Air-Ball × Bat-Speed Synergy");
+
+  // Hitter power profile synergy
+  const profileBoost = hitterProfile.score * 1.2;
+
+  // Context (gentler than damage scoring — pre-HR signal only)
+  const contextBoost =
+    (pitcherFatigueBoost > 0 ? Math.min(0.6, pitcherFatigueBoost * 0.5) : 0) +
+    (parkWindBoost > 0 ? Math.min(0.4, parkWindBoost * 0.6) : 0);
+
+  // Penalty: dead popups suppress pre-HR danger noise
+  const popupPenalty = deadPopupCount * 0.4;
+
+  let preHrDangerScore =
+    airDangerScore * 2.5 +
+    profileBoost +
+    batSpeedDangerBoost +
+    synergyBoost +
+    repeatWarningBoost +
+    contextBoost -
+    popupPenalty;
+  preHrDangerScore = Math.max(0, Math.min(8, preHrDangerScore));
+
+  // Feed the pre-HR danger into main score modestly so it nudges intensity
+  // for power hitters with warnings WITHOUT flooding the radar with noise.
+  // Half-weight, capped to avoid over-counting against existing damage paths.
+  const preHrFeed = Math.min(1.5, preHrDangerScore * 0.35);
+  score += preHrFeed;
+
   const finalScore = Math.min(10, Math.max(0, score));
 
   return {
     score: Math.round(finalScore * 100) / 100,
     intensity: classifyIntensity(finalScore),
     boost: computeEdgeBoost(finalScore),
+    preHrDangerScore: Math.round(preHrDangerScore * 100) / 100,
+    dangerFlags,
     factors: {
       avgEV: avgEV !== null ? Math.round(avgEV * 10) / 10 : null,
       maxEV: maxEV !== null ? Math.round(maxEV * 10) / 10 : null,
@@ -287,6 +487,15 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
       qualifiedEVMean: qualifiedEVMean !== null ? Math.round(qualifiedEVMean * 10) / 10 : null,
       maxDistance: maxDistance !== null ? Math.round(maxDistance) : null,
       contactClasses: classified,
+      batSpeedPowerScore: Math.round(batSpeedData.batSpeedPowerScore * 1000) / 1000,
+      batSpeedZ: Math.round(batSpeedData.batSpeedZ * 100) / 100,
+      airDangerScore: Math.round(airDangerScore * 1000) / 1000,
+      hitterPowerProfileScore: Math.round(hitterProfile.score * 1000) / 1000,
+      hitterPowerProfileFlags: hitterProfile.flags,
+      warningContactCount,
+      deadPopupCount,
+      airBallWarningCount,
+      batSpeedWarningCount,
     },
   };
 }

@@ -420,7 +420,7 @@ export interface MLBPropOutput {
   formIndicator: FormIndicator;
   formScore: number;
   evPct: number;
-  hrFactors?: { count: number; labels: string[]; build?: Record<string, any> };
+  hrFactors?: { count: number; labels: string[]; build?: Record<string, any>; preHrDangerScore?: number; dangerFlags?: string[] };
   hrBuildScore?: number;
   hrIntensity?: "weak" | "watch" | "strong" | "imminent";
   contextScore: number;

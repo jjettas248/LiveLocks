@@ -1428,7 +1428,7 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
     formIndicator: classifyForm(hrInput),
     formScore: Math.round(computeFormScore(hrInput) * 100) / 100,
     evPct: Math.round((calibratedDominant / 100 - 0.5) * 100 * 10) / 10,
-    hrFactors: { count: hrFactors.count, labels: hrFactors.labels, build: hrBuild.factors },
+    hrFactors: { count: hrFactors.count, labels: hrFactors.labels, build: hrBuild.factors, preHrDangerScore: hrBuild.preHrDangerScore, dangerFlags: hrBuild.dangerFlags },
     hrBuildScore: hrBuild.score,
     hrIntensity: hrBuild.intensity,
     contextScore: Math.round(computeStrongContextScore(hrInput) * 100) / 100,

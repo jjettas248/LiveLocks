@@ -1681,6 +1681,8 @@ export class LiveGameOrchestrator {
           distance: ab.distance ?? null,
           outcome: ab.outcome ?? "out",
         })),
+        preHrDangerScore: hrBuild.preHrDangerScore,
+        dangerFlags: hrBuild.dangerFlags,
       };
 
       const alertResult = evaluateHRAlert(alertInput);
@@ -2407,6 +2409,8 @@ export class LiveGameOrchestrator {
                 distance: ab.distance ?? null,
                 outcome: ab.outcome ?? "out",
               })),
+              preHrDangerScore: (output.hrFactors as any)?.preHrDangerScore,
+              dangerFlags: (output.hrFactors as any)?.dangerFlags,
             };
             const alertResult = evaluateHRAlert(alertInput);
 
