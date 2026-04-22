@@ -1074,10 +1074,17 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
   const isLimited = !!data!.partial || data!.source === "analytics_fallback" || data!.source === "historical_alert";
   const isNoAbsYet = (data as any)!.partialReason === "no_abs_yet";
   const priorABs: Array<{ abNumber: number; exitVelocity: number | null; launchAngle: number | null; distance: number | null; outcome: string; isBarrel: boolean; isHardHit: boolean; perABxBA?: number | null; contactGrade?: string; hrProbability?: number }> = analyze?.priorABs ?? [];
+  // Goldmaster Phase 1 — single 0-100 wire scale. The server now normalizes
+  // initial/current/peak to the canonical 0-100 scale at CREATE time using
+  // the dynamicReadinessScore presence as the discriminator (NOT a value
+  // threshold). The client trusts those numbers as-is.
   const initialScore = parseFloat(alert.initialReadinessScore ?? "0");
   const currentScore = parseFloat(alert.currentReadinessScore ?? "0");
   const peakScore = parseFloat(alert.peakReadinessScore ?? "0");
-  const tier = radarScoreToTier(currentScore);
+  // radarScoreToTier thresholds are calibrated on the legacy 0-10 buildScore
+  // scale; currentScore here is on the canonical 0-100 readiness scale, so
+  // divide by 10 before tiering.
+  const tier = radarScoreToTier(currentScore / 10);
 
   const statusColor = alert.status === "hit" ? "text-emerald-400" : alert.status === "miss" ? "text-zinc-400" : "text-blue-400";
   const statusLabel = alert.status === "hit" ? "HIT" : alert.status === "miss" ? "MISS" : "LIVE";
@@ -1444,7 +1451,7 @@ function GradedHitCard({ outcome }: { outcome: CanonicalGradedOutcome }) {
       </div>
       <div className="flex items-center gap-2 text-[10px] flex-wrap">
         {h.peakScore != null && h.peakScore > 0 && (
-          <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold">Peak {h.peakScore.toFixed(1)}/10</span>
+          <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold">Peak {h.peakScore.toFixed(1)}</span>
         )}
         {h.detectedScore != null && h.detectedScore > 0 && (
           <span className="px-1.5 py-0.5 rounded bg-muted/30 text-muted-foreground">Entry {h.detectedScore.toFixed(1)}</span>
@@ -1479,8 +1486,8 @@ function GradedMissCard({ outcome }: { outcome: CanonicalGradedOutcome }) {
       <div className="flex items-center gap-2 text-[10px] flex-wrap">
         {m.peakScore != null && m.peakScore > 0 && (
           <span className={`px-1.5 py-0.5 rounded font-semibold ${
-            m.peakScore >= 7 ? "bg-orange-500/10 text-orange-400" : "bg-muted/30 text-muted-foreground"
-          }`}>Peak {m.peakScore.toFixed(1)}/10</span>
+            m.peakScore >= 70 ? "bg-orange-500/10 text-orange-400" : "bg-muted/30 text-muted-foreground"
+          }`}>Peak {m.peakScore.toFixed(1)}</span>
         )}
         {m.detectedScore != null && m.detectedScore > 0 && (
           <span className="px-1.5 py-0.5 rounded bg-muted/30 text-muted-foreground">Entry {m.detectedScore.toFixed(1)}</span>

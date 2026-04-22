@@ -164,6 +164,26 @@ export function validateHrRadarLadder(payload: {
             `watch row has currentStage=${e.currentStage}`, e, section);
         }
       }
+
+      // I11 — single-scale invariant: current readiness must never exceed
+      // peak readiness. Catches the legacy "Initial 10 / Peak 100" mixed-
+      // scale class of bug at the wire layer.
+      if (
+        e.signalStrengthScore != null &&
+        e.peakScore != null &&
+        e.signalStrengthScore - e.peakScore > 0.5
+      ) {
+        push("I11_CURRENT_EXCEEDS_PEAK",
+          `signalStrengthScore=${e.signalStrengthScore} exceeds peakScore=${e.peakScore}`,
+          e, section);
+      }
+
+      // I12 — peak readiness must live on the canonical 0-100 scale.
+      if (e.peakScore != null && (e.peakScore < 0 || e.peakScore > 100)) {
+        push("I12_PEAK_OUT_OF_SCALE",
+          `peakScore=${e.peakScore} outside canonical 0-100 scale`,
+          e, section);
+      }
     }
   }
 

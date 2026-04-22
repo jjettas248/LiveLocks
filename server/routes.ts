@@ -2221,6 +2221,47 @@ export async function registerRoutes(
         const buildScore = sc.buildScore ?? null;
         const peakConversionProbability = sc.peakConversionProbability ?? null;
 
+        // ── Goldmaster Phase 4–8 — derive canonical user-facing copy from
+        // the live engine stage instead of the persisted summaryText (which
+        // is whatever was generated at last write and goes stale once stage
+        // advances). Mirrors the logic in storage.getHrRadarLadder so the
+        // legacy /api/mlb/hr-radar consumers (TopLiveOpportunities, etc.)
+        // see the same stage-aligned copy as the canonical ladder.
+        const stageContractRow: any = diagAny?.stageContract ?? {};
+        const abContextRow: any = diagAny?.abContext ?? {};
+        const canonicalStage: "watch" | "building" | "attack" | "cooling" | "closed" | null = (() => {
+          const s = stageContractRow.currentCanonicalStage;
+          return s === "watch" || s === "building" || s === "attack" || s === "cooling" || s === "closed" ? s : null;
+        })();
+        const plateAppearancesTracked: number | null =
+          typeof abContextRow.plateAppearancesTracked === "number" ? abContextRow.plateAppearancesTracked : null;
+        const hasLiveABContext: boolean =
+          abContextRow.hasLiveABContext === true ? true
+            : (plateAppearancesTracked != null && plateAppearancesTracked > 0);
+        // Live row (we already filtered out hit/miss above), so currentStatus is "live".
+        const currentStage: "watch" | "building" | "attack" | "cooling" | "closed" =
+          canonicalStage ?? (alert.confidenceTier === "strong" ? "attack" : alert.confidenceTier === "building" ? "building" : "watch");
+        const stageExplanation = (storage as any).buildHrRadarSummary?.({
+          currentStage,
+          currentStatus: "live",
+          outcome: "pending",
+          plateAppearancesTracked,
+          hasLiveABContext,
+          detectedInning: alert.signalInning ?? alert.detectedInning ?? null,
+          detectedHalf: alert.signalHalf ?? alert.detectedHalf ?? null,
+          hitInning: null,
+          hitHalf: null,
+        }) ?? alert.summaryText ?? "";
+        const reasonSets = (storage as any).buildHrRadarReasonSets?.(alert, {
+          plateAppearancesTracked,
+          hasLiveABContext,
+        }) ?? { userReasons: [], adminReasons: [] };
+        const userReasonsArr: string[] = reasonSets.userReasons ?? [];
+        const adminReasonsArr: string[] = reasonSets.adminReasons ?? [];
+        // Headline reason (single line) + supporting bullets, both jargon-stripped.
+        const headlineReason = userReasonsArr[0] ?? stageExplanation ?? "";
+        const supportingReasons = userReasonsArr.slice(1, 5);
+
         const entry = {
           playerId: alert.playerId,
           playerName: alert.playerName,
@@ -2229,14 +2270,34 @@ export async function registerRoutes(
           side: "OVER",
           gameId: alert.gameId,
           signalScore: score,
-          hrBuildScore: score,
-          // Phase 9: canonical score contract
+          // Preserve hrBuildScore's historical 0-10 buildScore contract for
+          // downstream mappers (mlbUiMappers.radarScoreToTier, BuildScoreMeter,
+          // etc.) which are calibrated on the 0-10 scale. The canonical 0-100
+          // readiness lives on `readinessScore` / `currentReadinessScore`.
+          hrBuildScore: buildScore,
+          // Phase 9: canonical score contract (0-100)
           readinessScore: score,
           peakReadinessScore: peakScore,
+          // Phase 1: explicit initial readiness so the modal can render the
+          // canonical Initial/Current/Peak triple from one source.
+          initialReadinessScore: alert.initialReadinessScore ? parseFloat(alert.initialReadinessScore) : score,
+          currentReadinessScore: score,
           buildScore,
           conversionProbability,
           conversionProbabilityRaw,
           peakConversionProbability,
+          // Phase 4 — canonical stage label (drives client grouping/copy).
+          currentStage,
+          // Phase 5/6 — stage-aligned, jargon-stripped copy. Replaces the
+          // stale persisted summaryText for user-facing rendering.
+          stageExplanation,
+          headlineReason,
+          supportingReasons,
+          // Phase 6 — keep raw engine-path detail accessible for admin only.
+          enginePath: { reasons: adminReasonsArr, alertPath: alert.alertPath, alertTier: alert.alertTier },
+          // Phase 8 — surface AB context so consumers can gate live-contact UI.
+          plateAppearancesTracked,
+          hasLiveABContext,
           hrIntensity: alert.confidenceTier === "strong" ? "strong" : alert.confidenceTier === "building" ? "watch" : "weak",
           confidenceTier: alert.confidenceTier === "strong" ? "STRONG" : alert.confidenceTier === "building" ? "SOLID" : "WATCHLIST",
           awayAbbr: game?.awayAbbr ?? null,
@@ -2248,15 +2309,24 @@ export async function registerRoutes(
           alertPath: alert.alertPath,
           alertTier: alert.alertTier,
           triggerTags: alert.triggerTags ?? [],
-          summaryText: alert.summaryText,
+          // summaryText now mirrors the canonical stageExplanation so any
+          // consumer still reading the legacy field sees the right copy.
+          summaryText: stageExplanation || alert.summaryText,
           peakScore,
           detectedLabel: alert.detectedLabel,
+          // Phase 3 — frozen HR event fields kept distinct from detection.
+          hitInning: alert.hitInning,
+          hitHalf: alert.hitHalf,
+          hitLabel: alert.hitLabel,
           diagnosticsSnapshot: alert.diagnosticsSnapshot,
           contactSnapshot: alert.contactSnapshot,
           updatedAt: (alert as any).updatedAt ?? null,
           badges: [],
-          reasons: alert.summaryText ? [alert.summaryText] : [],
-          explanationBullets: alert.summaryText ? [alert.summaryText] : [],
+          // Phase 8 — when no live AB context exists, the reasons feed must
+          // not include any live-contact bullets; rely on the stage explanation
+          // (which already says "no at-bats yet" in that case).
+          reasons: hasLiveABContext ? (userReasonsArr.length > 0 ? userReasonsArr.slice(0, 5) : (stageExplanation ? [stageExplanation] : [])) : (stageExplanation ? [stageExplanation] : []),
+          explanationBullets: hasLiveABContext ? (userReasonsArr.length > 0 ? userReasonsArr.slice(0, 5) : (stageExplanation ? [stageExplanation] : [])) : (stageExplanation ? [stageExplanation] : []),
         };
 
         if (entry.actionable && !bettablePlayerIdSet.has(alert.playerId)) {

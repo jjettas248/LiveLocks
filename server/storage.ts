@@ -2810,12 +2810,22 @@ export class DatabaseStorage implements IStorage {
       data.confidenceTier = tierFromStage as any;
     }
     data.diagnosticsSnapshot = { ...baseDiagInit, scoreContract, stageContract, abContext };
-    // Prefer dynamic engine readiness over raw build score for the persisted
-    // readinessScore (Phase 2). Caller may pass either; if dynamicReadinessScore
-    // is provided we use it as the live progression score.
+    // ── Goldmaster Phase 1 — single canonical 0-100 wire scale ─────────────
+    // The caller's contract is: `dynamicReadinessScore` (when provided) is on
+    // the canonical 0-100 readiness scale; `readinessScore` alone (the legacy
+    // path) is on the 0-10 build-score scale. Use the PRESENCE of
+    // dynamicReadinessScore as the scale discriminator. Do NOT use a value
+    // threshold (e.g. "<=10") because legitimate canonical scores can land
+    // anywhere in [0,100] including the low band.
     if (data.dynamicReadinessScore != null && Number.isFinite(data.dynamicReadinessScore)) {
       // eslint-disable-next-line no-param-reassign
       data.readinessScore = data.dynamicReadinessScore;
+    } else if (Number.isFinite(data.readinessScore)) {
+      // Legacy buildScore-only path: caller passed a 0-10 build score with no
+      // dynamic readiness available yet. Scale ×10 so the row is persisted on
+      // the canonical 0-100 wire from CREATE onward.
+      // eslint-disable-next-line no-param-reassign
+      data.readinessScore = data.readinessScore * 10;
     }
     try {
       const today = resolveMlbGameSessionDate(data.gameId);
@@ -4221,7 +4231,7 @@ export class DatabaseStorage implements IStorage {
    *    abbreviations, internal state machine labels stripped).
    *  - adminReasons: full raw strings preserved for admin/debug rendering.
    */
-  private buildHrRadarReasonSets(
+  public buildHrRadarReasonSets(
     r: HrRadarAlert,
     ctx: { plateAppearancesTracked: number | null; hasLiveABContext: boolean },
   ): { userReasons: string[]; adminReasons: string[] } {
@@ -4283,7 +4293,7 @@ export class DatabaseStorage implements IStorage {
    * row's current stage/outcome. Live rows describe what the engine sees;
    * resolved rows describe what actually happened. They MUST never blend.
    */
-  private buildHrRadarSummary(p: {
+  public buildHrRadarSummary(p: {
     currentStage: HrRadarStageLabel;
     currentStatus: "live" | "resolved";
     outcome: HrRadarOutcomeLabel;
@@ -4360,7 +4370,7 @@ export class DatabaseStorage implements IStorage {
     return map[tag] ?? tag.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
   }
 
-  private buildNextAbEstimate(r: HrRadarAlert): string | null {
+  public buildNextAbEstimate(r: HrRadarAlert): string | null {
     // Active alerts only — graded ones don't need an ETA.
     const grading = r.gradingStatus ?? "active";
     if (grading !== "active") return null;
