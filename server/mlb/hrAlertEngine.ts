@@ -3,26 +3,48 @@ import { evaluateHRAlert } from "./evaluateHRAlert";
 
 export type DynamicHRState = "WATCH" | "PREPARE" | "BET_NOW" | "COOLED_OFF" | "CLOSED";
 
+/**
+ * Canonical HR Radar score contract.
+ *
+ * These three score domains are NEVER interchangeable:
+ *   - buildScore                : 0–10 formation score (HRSignalBuilder)
+ *   - readinessScore            : 0–100 execution-readiness score (board ranking)
+ *   - conversionProbability     : 0–1 calibrated HR conversion probability (analytics)
+ *
+ * The previous ambiguous "peakScore" field is kept only as a deprecated alias
+ * for backwards compatibility with persisted/external readers; new code MUST
+ * use the explicit names below.
+ */
 export interface HRAlertSnapshot {
+  // Lifecycle
+  isInitialized: boolean;
   currentState: DynamicHRState;
+  detectedInning: number | null;
+  currentInning: number;
+  lastStateChangeAt: number;
+  dataFreshnessMs: number;
+  tickCount: number;
+  lastRecomputeAt: number;
+  decayFactor: number;
+
+  // Canonical score contract
+  buildScore: number | null;
   hrReadinessScore: number;
+  peakReadinessScore: number;
   hrConversionProbabilityRaw: number;
   hrConversionProbabilityCalibrated: number;
+  peakConversionProbability: number;
+  /** @deprecated Use peakConversionProbability for probabilities or peakReadinessScore for readiness. */
+  peakScore: number;
+
+  // Drivers / context
   remainingPAExpectation: number;
   positiveDrivers: string[];
   negativeSuppressors: string[];
   cooldownReason: string | null;
-  lastStateChangeAt: number;
-  dataFreshnessMs: number;
-  peakScore: number;
+  pitcherHrVulnerability: number;
   peakState: DynamicHRState;
   peakAt: number;
-  detectedInning: number | null;
-  currentInning: number;
-  pitcherHrVulnerability: number;
-  decayFactor: number;
-  tickCount: number;
-  lastRecomputeAt: number;
   alertResult: HRAlertResult;
 }
 
@@ -32,7 +54,8 @@ interface BatterHRState {
   gameId: string;
   currentState: DynamicHRState;
   lastStateChangeAt: number;
-  peakScore: number;
+  peakConversionProbability: number;
+  peakReadinessScore: number;
   peakState: DynamicHRState;
   peakAt: number;
   detectedInning: number | null;
@@ -43,6 +66,7 @@ interface BatterHRState {
   lastAlertResult: HRAlertResult | null;
   previousPitcherId: string | null;
   consecutiveDeclineTicks: number;
+  lastSnapshot: HRAlertSnapshot | null;
 }
 
 const stateMap = new Map<string, BatterHRState>();
@@ -163,7 +187,8 @@ export function recomputeHrAlertState(
       gameId: input.gameId,
       currentState: "WATCH",
       lastStateChangeAt: now,
-      peakScore: 0,
+      peakConversionProbability: 0,
+      peakReadinessScore: 0,
       peakState: "WATCH",
       peakAt: now,
       detectedInning: null,
@@ -174,6 +199,7 @@ export function recomputeHrAlertState(
       lastAlertResult: null,
       previousPitcherId: options.currentPitcherId ?? null,
       consecutiveDeclineTicks: 0,
+      lastSnapshot: null,
     };
     stateMap.set(key, prev);
   }
@@ -221,6 +247,7 @@ export function recomputeHrAlertState(
     (alertResult.confidenceScore / 10) * 40 +
     Math.min(100, (effectiveCalibrated * 100) / BET_NOW_THRESHOLD * 60)
   );
+  const clampedReadiness = Math.min(100, Math.max(0, readinessScore));
 
   const pitcherVuln = computePitcherHrVulnerability(input);
   const remainingPA = computeRemainingPA(
@@ -241,12 +268,16 @@ export function recomputeHrAlertState(
     else cooldownReason = "Context deteriorated";
   }
 
-  if (effectiveCalibrated > prev.peakScore || newState === "BET_NOW") {
-    prev.peakScore = Math.max(prev.peakScore, effectiveCalibrated);
+  // Track explicit per-domain peaks separately
+  if (effectiveCalibrated > prev.peakConversionProbability || newState === "BET_NOW") {
+    prev.peakConversionProbability = Math.max(prev.peakConversionProbability, effectiveCalibrated);
     if (newState === "BET_NOW" || newState === "PREPARE") {
       prev.peakState = newState;
       prev.peakAt = now;
     }
+  }
+  if (clampedReadiness > prev.peakReadinessScore) {
+    prev.peakReadinessScore = clampedReadiness;
   }
 
   if (stateChanged) {
@@ -269,56 +300,82 @@ export function recomputeHrAlertState(
     prev.previousPitcherId = options.currentPitcherId;
   }
 
-  return {
+  const buildScore = (alertResult.diagnostics as any)?.hrBuildScore ?? null;
+
+  const snapshot: HRAlertSnapshot = {
+    isInitialized: true,
     currentState: newState,
-    hrReadinessScore: Math.min(100, Math.max(0, readinessScore)),
+    detectedInning: prev.detectedInning,
+    currentInning: input.inning,
+    lastStateChangeAt: prev.lastStateChangeAt,
+    dataFreshnessMs,
+    tickCount: prev.tickCount,
+    lastRecomputeAt: now,
+    decayFactor,
+    buildScore,
+    hrReadinessScore: clampedReadiness,
+    peakReadinessScore: prev.peakReadinessScore,
     hrConversionProbabilityRaw: rawProb,
     hrConversionProbabilityCalibrated: effectiveCalibrated,
+    peakConversionProbability: prev.peakConversionProbability,
+    peakScore: prev.peakConversionProbability, // deprecated alias
     remainingPAExpectation: remainingPA,
     positiveDrivers,
     negativeSuppressors,
     cooldownReason,
-    lastStateChangeAt: prev.lastStateChangeAt,
-    dataFreshnessMs,
-    peakScore: prev.peakScore,
+    pitcherHrVulnerability: pitcherVuln,
     peakState: prev.peakState,
     peakAt: prev.peakAt,
-    detectedInning: prev.detectedInning,
-    currentInning: input.inning,
-    pitcherHrVulnerability: pitcherVuln,
-    decayFactor,
-    tickCount: prev.tickCount,
-    lastRecomputeAt: now,
     alertResult,
   };
+
+  prev.lastSnapshot = snapshot;
+  return snapshot;
 }
 
+/**
+ * Returns the latest real persisted snapshot for a batter+game pair.
+ *
+ * If no snapshot has ever been computed for this key, returns a null-safe
+ * placeholder with `isInitialized: false`. Consumers MUST check this flag
+ * before treating numeric fields as live measurements — previously this
+ * accessor returned a fake "all zeros" snapshot which downstream code
+ * misread as a real live state.
+ */
 export function getHrAlertState(gameId: string, playerId: string): HRAlertSnapshot | null {
   const prev = stateMap.get(stateKey(gameId, playerId));
-  if (!prev || !prev.lastAlertResult) return null;
-
-  return {
-    currentState: prev.currentState,
-    hrReadinessScore: 0,
-    hrConversionProbabilityRaw: 0,
-    hrConversionProbabilityCalibrated: prev.peakScore,
-    remainingPAExpectation: 0,
-    positiveDrivers: prev.lastAlertResult.diagnostics?.positiveFactors ?? [],
-    negativeSuppressors: (prev.lastAlertResult.diagnostics?.suppressionFlags ?? []).map(f => f.reason),
-    cooldownReason: null,
-    lastStateChangeAt: prev.lastStateChangeAt,
-    dataFreshnessMs: Date.now() - prev.lastRecomputeAt,
-    peakScore: prev.peakScore,
-    peakState: prev.peakState,
-    peakAt: prev.peakAt,
-    detectedInning: prev.detectedInning,
-    currentInning: 0,
-    pitcherHrVulnerability: 0,
-    decayFactor: 1,
-    tickCount: prev.tickCount,
-    lastRecomputeAt: prev.lastRecomputeAt,
-    alertResult: prev.lastAlertResult,
-  };
+  if (!prev) return null;
+  if (prev.lastSnapshot) return prev.lastSnapshot;
+  if (!prev.lastAlertResult) {
+    return {
+      isInitialized: false,
+      currentState: prev.currentState,
+      detectedInning: prev.detectedInning,
+      currentInning: 0,
+      lastStateChangeAt: prev.lastStateChangeAt,
+      dataFreshnessMs: prev.lastRecomputeAt > 0 ? Date.now() - prev.lastRecomputeAt : 0,
+      tickCount: prev.tickCount,
+      lastRecomputeAt: prev.lastRecomputeAt,
+      decayFactor: 1,
+      buildScore: null,
+      hrReadinessScore: 0,
+      peakReadinessScore: prev.peakReadinessScore,
+      hrConversionProbabilityRaw: 0,
+      hrConversionProbabilityCalibrated: 0,
+      peakConversionProbability: prev.peakConversionProbability,
+      peakScore: prev.peakConversionProbability,
+      remainingPAExpectation: 0,
+      positiveDrivers: [],
+      negativeSuppressors: [],
+      cooldownReason: null,
+      pitcherHrVulnerability: 0,
+      peakState: prev.peakState,
+      peakAt: prev.peakAt,
+      alertResult: null as any,
+    };
+  }
+  // Reconstruct from last alert result if snapshot lost (defensive)
+  return prev.lastSnapshot;
 }
 
 export function clearGameHrStates(gameId: string): void {
@@ -329,11 +386,11 @@ export function clearGameHrStates(gameId: string): void {
 
 export function getAllGameHrSnapshots(gameId: string): Map<string, HRAlertSnapshot> {
   const results = new Map<string, HRAlertSnapshot>();
-  for (const [key, state] of stateMap) {
+  for (const [key, state] of Array.from(stateMap.entries())) {
     if (!key.startsWith(`${gameId}_`)) continue;
     if (!state.lastAlertResult) continue;
     const snap = getHrAlertState(gameId, state.playerId);
-    if (snap) results.set(state.playerId, snap);
+    if (snap && snap.isInitialized) results.set(state.playerId, snap);
   }
   return results;
 }
