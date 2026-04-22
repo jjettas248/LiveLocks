@@ -294,10 +294,16 @@ export function recomputeHrAlertState(
   );
 
   const stateChanged = newState !== prev.currentState;
-  const readinessScore = Math.round(
-    (alertResult.confidenceScore / 10) * 40 +
-    Math.min(100, (effectiveCalibrated * 100) / BET_NOW_THRESHOLD * 60)
-  );
+  // Readiness is a 0–100 composite:
+  //   * up to 40 points from confidenceScore (engine 0–10 scale → /10 * 40)
+  //   * up to 60 points from calibrated HR-conversion probability scaled
+  //     against BET_NOW_THRESHOLD. Both `effectiveCalibrated` and
+  //     `BET_NOW_THRESHOLD` are 0–1 probabilities, so we divide directly
+  //     (NO extra *100 — that previously inflated the term ~100x and
+  //     pinned every batter at readiness=100, killing the dynamic display).
+  const confidencePts = Math.max(0, Math.min(40, (alertResult.confidenceScore / 10) * 40));
+  const conversionPts = Math.max(0, Math.min(60, (effectiveCalibrated / BET_NOW_THRESHOLD) * 60));
+  const readinessScore = Math.round(confidencePts + conversionPts);
   const clampedReadiness = Math.min(100, Math.max(0, readinessScore));
 
   const pitcherVuln = computePitcherHrVulnerability(input);
