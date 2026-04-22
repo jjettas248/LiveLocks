@@ -471,7 +471,15 @@ export async function resolveEventForDebug(teamA: string, teamB: string): Promis
 
 // Normalize a player name: lowercase, strip suffixes (Jr., Sr., II, III, IV)
 function normPlayerName(name: string): string {
-  return name.toLowerCase()
+  // NFD-decompose then strip combining diacritics so accented characters fold
+  // to their ASCII equivalents (e.g. "Rodríguez" → "rodriguez") BEFORE the
+  // ASCII-only filter runs. Without this, the í/é/ñ/etc. were being deleted
+  // entirely, producing un-matchable names like "rodrguez" that never lined
+  // up against the Odds API's typically-unaccented outcome descriptions.
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
     .replace(/\s+(jr\.?|sr\.?|ii|iii|iv|v)$/i, "")
     .replace(/[^a-z\s]/g, "")
     .trim();
