@@ -6,15 +6,20 @@ import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, AlertTriangle, RefreshCw, Eraser, X, ArrowRight, Clock, DollarSign } from "lucide-react";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 
-// Task #121 Step 3 — per-session dismiss list (Pass action). Keyed by
-// sessionDate so tomorrow's session starts clean.
+// Task #121 Step 3 — per-session dismiss + accept lists. Both keyed by
+// sessionDate so tomorrow's session starts clean. Pass = dismissed (hidden).
+// Take-it = accepted (kept visible with an "Accepted" badge so the user can
+// see they already acted on it across page refreshes within the same day).
 function dismissStorageKey(sessionDate: string): string {
   return `hr-radar-pass:${sessionDate}`;
 }
-function readDismissed(sessionDate: string): Set<string> {
+function acceptStorageKey(sessionDate: string): string {
+  return `hr-radar-accept:${sessionDate}`;
+}
+function readSessionSet(key: string): Set<string> {
   if (typeof window === "undefined") return new Set();
   try {
-    const raw = window.localStorage.getItem(dismissStorageKey(sessionDate));
+    const raw = window.localStorage.getItem(key);
     if (!raw) return new Set();
     const parsed = JSON.parse(raw);
     return new Set(Array.isArray(parsed) ? parsed : []);
@@ -22,13 +27,25 @@ function readDismissed(sessionDate: string): Set<string> {
     return new Set();
   }
 }
-function writeDismissed(sessionDate: string, set: Set<string>): void {
+function writeSessionSet(key: string, set: Set<string>): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(dismissStorageKey(sessionDate), JSON.stringify(Array.from(set)));
+    window.localStorage.setItem(key, JSON.stringify(Array.from(set)));
   } catch {
     // Storage quota / private mode — best effort, ignore.
   }
+}
+function readDismissed(sessionDate: string): Set<string> {
+  return readSessionSet(dismissStorageKey(sessionDate));
+}
+function writeDismissed(sessionDate: string, set: Set<string>): void {
+  writeSessionSet(dismissStorageKey(sessionDate), set);
+}
+function readAccepted(sessionDate: string): Set<string> {
+  return readSessionSet(acceptStorageKey(sessionDate));
+}
+function writeAccepted(sessionDate: string, set: Set<string>): void {
+  writeSessionSet(acceptStorageKey(sessionDate), set);
 }
 function entryDismissKey(playerId: string, gameId: string): string {
   return `${playerId}|${gameId}`;
@@ -212,6 +229,8 @@ interface CardProps {
   onAddToSlip?: (sig: MlbSignalData) => void;
   onOpenDetails?: (entry: HrRadarLadderEntry) => void;
   onPass?: (entry: HrRadarLadderEntry) => void;
+  onAccept?: (entry: HrRadarLadderEntry) => void;
+  isAccepted?: boolean;
 }
 
 /**
@@ -271,7 +290,7 @@ function HeatingUpMeter({
   );
 }
 
-function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass }: CardProps) {
+function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAccept, isAccepted }: CardProps) {
   // Goldmaster Phase 2+3 — prefer the FROZEN server-stamped detectedLabel /
   // hitLabel (these never advance on score climbs). Fall back to formatting
   // the (inning, half) pair for legacy rows that pre-date the label fields.
@@ -305,7 +324,11 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass }: Card
   // never carry "next AB" copy or any live-only verbiage.
   const isResolved =
     entry.currentStatus === "resolved" || section === "cashed" || section === "dead";
-  const canAdd = !isResolved && (section === "attackNow" || section === "building") && !!onAddToSlip;
+  // Task #121 Step 3 — Take it / Pass are available on every LIVE card
+  // (Attack Now / Building / Watch). Resolved sections (cashed/dead) get
+  // no actions.
+  const isLiveSection = section === "attackNow" || section === "building" || section === "watch";
+  const canAdd = !isResolved && isLiveSection && !!onAddToSlip;
   // Goldmaster Phase 7 — pregame indicator for 0-AB rows.
   const isPregameOnly =
     entry.hasLiveABContext === false ||
@@ -330,6 +353,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass }: Card
 
   const handleAdd = () => {
     if (!onAddToSlip) return;
+    onAccept?.(entry);
     onAddToSlip({
       playerId: entry.playerId,
       playerName: entry.playerName,
@@ -545,8 +569,21 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass }: Card
         );
       })()}
 
-      {/* Task #121 Step 3 — Take it / Pass dual control on live cards. */}
-      {canAdd && (
+      {/* Task #121 Step 3 — Take it / Pass dual control on live cards
+          (Attack Now / Building / Watch). Once the user has taken it, the
+          buttons collapse into a persistent "Accepted" badge so the choice
+          survives refresh within the same session. */}
+      {canAdd && isAccepted && (
+        <div className="mt-2 flex items-center justify-end gap-2">
+          <Badge
+            className="text-[10px] px-2 py-0.5 bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 gap-1 flex items-center"
+            data-testid={`badge-accepted-${entry.playerId}`}
+          >
+            <Plus className="w-2.5 h-2.5" /> Accepted this session
+          </Badge>
+        </div>
+      )}
+      {canAdd && !isAccepted && (
         <div className="mt-2 flex items-center justify-end gap-2">
           <Button
             size="sm"
@@ -579,10 +616,12 @@ interface LadderSectionProps {
   onAddToSlip?: (sig: MlbSignalData) => void;
   onOpenDetails?: (entry: HrRadarLadderEntry) => void;
   onPass?: (entry: HrRadarLadderEntry) => void;
+  onAccept?: (entry: HrRadarLadderEntry) => void;
+  acceptedKeys?: Set<string>;
   freshlyCashedKeys?: Set<string>;
 }
 
-function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails, onPass, freshlyCashedKeys }: LadderSectionProps) {
+function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails, onPass, onAccept, acceptedKeys, freshlyCashedKeys }: LadderSectionProps) {
   const meta = SECTION_META[sectionKey];
   const [collapsed, setCollapsed] = useState(meta.defaultCollapsed);
   const Icon = meta.icon;
@@ -628,6 +667,8 @@ function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails, onPass
                     onAddToSlip={onAddToSlip}
                     onOpenDetails={onOpenDetails}
                     onPass={onPass}
+                    onAccept={onAccept}
+                    isAccepted={acceptedKeys?.has(dismissKey) ?? false}
                   />
                 </div>
               );
@@ -700,8 +741,10 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
   // clean. Live (Watch / Building / AttackNow) entries dismissed by the
   // user are filtered out; cashed / dead are never auto-hidden by Pass.
   const [dismissed, setDismissed] = useState<Set<string>>(() => readDismissed(sessionDate));
+  const [accepted, setAccepted] = useState<Set<string>>(() => readAccepted(sessionDate));
   useEffect(() => {
     setDismissed(readDismissed(sessionDate));
+    setAccepted(readAccepted(sessionDate));
   }, [sessionDate]);
   const handlePass = (entry: HrRadarLadderEntry) => {
     const key = entryDismissKey(entry.playerId, entry.gameId);
@@ -710,6 +753,16 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
       const next = new Set(prev);
       next.add(key);
       writeDismissed(sessionDate, next);
+      return next;
+    });
+  };
+  const handleAccept = (entry: HrRadarLadderEntry) => {
+    const key = entryDismissKey(entry.playerId, entry.gameId);
+    setAccepted(prev => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      writeAccepted(sessionDate, next);
       return next;
     });
   };
@@ -821,6 +874,8 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
           onAddToSlip={onAddToSlip}
           onOpenDetails={onOpenDetails}
           onPass={handlePass}
+          onAccept={handleAccept}
+          acceptedKeys={accepted}
           freshlyCashedKeys={freshlyCashedKeys}
         />
       ))}
