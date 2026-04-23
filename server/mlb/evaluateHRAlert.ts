@@ -423,6 +423,115 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     positiveFactors.push(`${input.batterHand ?? "?"}HB park HR factor ${input.handednessParkFactor.toFixed(2)}`);
   }
 
+  // ── Goldmaster RESTORE Phase 4 — FAST PROMOTE on real danger ────────────
+  // Additive shortcuts that can promote a row to Building (prepare) or
+  // Attack (officialAlert) when in-game contact quality is unambiguously
+  // dangerous, even if the existing score-based paths below would only
+  // produce WATCH. These checks run BEFORE the legacy paths so a clearly
+  // elite contact event isn't held back by the (stricter) thresholds in
+  // PATH_A. They preserve all existing veto / cooldown / conv gates.
+  // Detection-immutability is preserved: detectedInning is set to the same
+  // `inning` the rest of this evaluator uses; downstream storage freezes
+  // the first detected inning at CREATE time.
+  const eliteBarrelHit = classified.some(
+    c => c.exitVelocity >= 105 && c.distance >= 400
+  );
+  const dangerousSecondaryCount = factors.hardHits + factors.deepFlyouts;
+
+  // Tier 4a — Elite barrel (EV≥105, dist≥400) + collapsing pitcher → ATTACK.
+  // Spec is unambiguous: this is the strongest in-game contact signal we
+  // recognize and it must always emit officialAlert (Attack stage). The
+  // conversion gate is the OFFICIAL min — we do not downgrade this tier
+  // to Building on borderline conv probabilities.
+  if (
+    factors.barrels >= 1 &&
+    eliteBarrelHit &&
+    input.isPitcherCollapsing === true &&
+    softVetoes.length === 0 &&
+    (convProb === null || convProb >= HR_CONVERSION_OFFICIAL_MIN)
+  ) {
+    const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_ELITE", softVetoes.length, convProb);
+    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} ELITE_BARREL_COLLAPSE barrels=${factors.barrels} eliteHit=true collapsing=true → officialAlert`);
+    return {
+      level: "ALERT",
+      triggerReason: `FAST_PROMOTE:eliteBarrel_collapsing`,
+      signalState: "PEAK",
+      decision: "BET_NOW",
+      confidenceScore: conf,
+      formattedReason: `Elite barrel contact against a fading pitcher (conv ${convPct}). Punching through to Attack Now.`,
+      detectedInning: inning,
+      alertTier: "officialAlert",
+      diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_ELITE", positiveFactors: [...positiveFactors, "elite barrel + collapsing pitcher"] },
+    };
+  }
+
+  // Tier 4b — Barrel + ANY second dangerous contact → ATTACK.
+  // Per spec this is officialAlert: a real barrel plus any other hard-hit /
+  // deep-fly event is a two-event danger pattern that warrants Attack.
+  if (
+    factors.barrels >= 1 &&
+    dangerousSecondaryCount >= 1 &&
+    softVetoes.length === 0 &&
+    (convProb === null || convProb >= HR_CONVERSION_OFFICIAL_MIN)
+  ) {
+    const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_BARREL_PLUS", softVetoes.length, convProb);
+    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} BARREL_PLUS barrels=${factors.barrels} secondary=${dangerousSecondaryCount} → officialAlert`);
+    return {
+      level: "ALERT",
+      triggerReason: `FAST_PROMOTE:barrel_plus_${dangerousSecondaryCount}danger`,
+      signalState: "PEAK",
+      decision: "BET_NOW",
+      confidenceScore: conf,
+      formattedReason: `Barrel plus a second dangerous contact (conv ${convPct}). Promoting to Attack on contact pattern.`,
+      detectedInning: inning,
+      alertTier: "officialAlert",
+      diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_BARREL_PLUS", positiveFactors: [...positiveFactors, `barrel + ${dangerousSecondaryCount} dangerous contact`] },
+    };
+  }
+
+  // Tier 4c — Single barrel + favorable in-game context → Building.
+  if (
+    factors.barrels >= 1 &&
+    (pitcherFavorable || envFavorable) &&
+    softVetoes.length === 0 &&
+    (convProb === null || convProb >= HR_CONVERSION_WATCH_MIN)
+  ) {
+    const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_BARREL_CTX", softVetoes.length, convProb);
+    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} BARREL_CTX barrels=${factors.barrels} pitcherFav=${pitcherFavorable} envFav=${envFavorable} → prepare`);
+    return {
+      level: "ALERT",
+      triggerReason: `FAST_PROMOTE:barrel_ctx`,
+      signalState: "BUILDING",
+      decision: "PREPARE",
+      confidenceScore: conf,
+      formattedReason: `Barrel contact with favorable matchup conditions (conv ${convPct}). Promoting to Building.`,
+      detectedInning: inning,
+      alertTier: "prepare",
+      diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_BARREL_CTX", positiveFactors: [...positiveFactors, "barrel + favorable context"] },
+    };
+  }
+
+  // Tier 4d — Two hard-hit balls (≥95 mph counted server-side) → Building.
+  if (
+    factors.hardHits >= 2 &&
+    softVetoes.length === 0 &&
+    (convProb === null || convProb >= HR_CONVERSION_WATCH_MIN)
+  ) {
+    const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_2HH", softVetoes.length, convProb);
+    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} TWO_HARD_HIT hardHits=${factors.hardHits} → prepare`);
+    return {
+      level: "ALERT",
+      triggerReason: `FAST_PROMOTE:2hardhit`,
+      signalState: "BUILDING",
+      decision: "PREPARE",
+      confidenceScore: conf,
+      formattedReason: `Two hard-hit balls in this game (conv ${convPct}). Promoting to Building on repeat contact.`,
+      detectedInning: inning,
+      alertTier: "prepare",
+      diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_2HH", positiveFactors: [...positiveFactors, `${factors.hardHits} hard-hit balls`] },
+    };
+  }
+
   if (
     totalHrShaped >= 2 &&
     (qualifiedEVMean ?? 0) >= 99 &&

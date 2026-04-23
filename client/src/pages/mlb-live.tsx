@@ -1085,6 +1085,13 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
   const peakScore = parseFloat(alert.peakReadinessScore ?? "0");
   const tierBasis = currentScore / 10;
   const tier = radarScoreToTier(tierBasis);
+  // Goldmaster RESTORE — USER-FACING 10-point score derived from canonical
+  // 0-100 readiness (one decimal). The 0-100 numbers remain available as a
+  // small admin/debug sub-row for power users.
+  const round1 = (n: number) => Math.round(Math.max(0, Math.min(100, n)) * 10) / 100;
+  const initial10 = round1(initialScore);
+  const current10 = round1(currentScore);
+  const peak10 = round1(peakScore);
 
   const statusColor = alert.status === "hit" ? "text-emerald-400" : alert.status === "miss" ? "text-zinc-400" : "text-blue-400";
   const statusLabel = alert.status === "hit" ? "HIT" : alert.status === "miss" ? "MISS" : "LIVE";
@@ -1119,22 +1126,38 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
               Limited analysis available — live game data is no longer cached for this play.
             </div>
           )}
-          {/* Goldmaster Phase 1 — Initial / Current / Peak rendered DIRECTLY
-              on the canonical 0-100 readiness scale. No /10 mixing.
-              currentReadinessScore <= peakReadinessScore by construction
-              (UPDATE branch keeps peak monotonic). */}
+          {/* Goldmaster RESTORE — Initial / Current / Peak rendered on the
+              USER-FACING 0.0-10.0 scale (one decimal). Internal 0-100
+              readiness is shown as a small admin sub-row underneath for
+              power users; the harness still validates against the 0-100
+              canonical scale on the wire. */}
           <div className="grid grid-cols-3 gap-3">
             <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
               <div className="text-[9px] text-muted-foreground">Initial</div>
-              <div className="text-sm font-bold text-foreground" data-testid="text-readiness-initial">{Math.round(initialScore)}</div>
+              <div className="text-sm font-bold text-foreground" data-testid="text-signal-score-10-initial">
+                {initial10.toFixed(1)}<span className="text-[9px] text-muted-foreground"> / 10</span>
+              </div>
+              <div className="text-[8px] text-muted-foreground/60 font-mono mt-0.5" data-testid="text-readiness-initial">
+                {Math.round(initialScore)}/100
+              </div>
             </div>
             <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
               <div className="text-[9px] text-muted-foreground">Current</div>
-              <div className="text-sm font-bold" style={{ color: tier.color }} data-testid="text-readiness-current">{Math.round(currentScore)}</div>
+              <div className="text-sm font-bold" style={{ color: tier.color }} data-testid="text-signal-score-10-current">
+                {current10.toFixed(1)}<span className="text-[9px] text-muted-foreground"> / 10</span>
+              </div>
+              <div className="text-[8px] text-muted-foreground/60 font-mono mt-0.5" data-testid="text-readiness-current">
+                {Math.round(currentScore)}/100
+              </div>
             </div>
             <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
               <div className="text-[9px] text-muted-foreground">Peak</div>
-              <div className="text-sm font-bold text-foreground" data-testid="text-readiness-peak">{Math.round(peakScore)}</div>
+              <div className="text-sm font-bold text-foreground" data-testid="text-signal-score-10-peak">
+                {peak10.toFixed(1)}<span className="text-[9px] text-muted-foreground"> / 10</span>
+              </div>
+              <div className="text-[8px] text-muted-foreground/60 font-mono mt-0.5" data-testid="text-readiness-peak">
+                {Math.round(peakScore)}/100
+              </div>
             </div>
           </div>
 

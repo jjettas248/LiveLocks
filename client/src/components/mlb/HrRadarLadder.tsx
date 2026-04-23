@@ -30,12 +30,21 @@ export interface HrRadarLadderEntry {
   userReasons?: string[];
   adminReasons?: string[];
   summary?: string;
-  // Goldmaster Phase 1 — canonical 0-100 wire scale numbers.
+  // Goldmaster Phase 1 — canonical 0-100 wire scale numbers (INTERNAL).
   initialReadinessScore?: number | null;
   currentReadinessScore?: number | null;
   peakReadinessScore?: number | null;
   buildScore?: number | null;
   conversionProbability?: number | null;
+  // Goldmaster RESTORE — 10-point USER-FACING signal score (0.0-10.0).
+  initialSignalScore10?: number | null;
+  currentSignalScore10?: number | null;
+  peakSignalScore10?: number | null;
+  deltaFromInitial10?: number | null;
+  deltaFromPeak10?: number | null;
+  isHeatingUp?: boolean;
+  isCoolingOff?: boolean;
+  momentumLabel?: "heating_up" | "holding_strong" | "cooling_off" | "flat";
   // Goldmaster Phase 2+3 — frozen detection vs HR-event truth.
   detectedLabel?: string | null;
   hitLabel?: string | null;
@@ -167,17 +176,92 @@ interface CardProps {
   onOpenDetails?: (entry: HrRadarLadderEntry) => void;
 }
 
+/**
+ * HeatingUpMeter — compact 3-stop indicator on the 0-10 scale.
+ * Shows initial → current → peak as positioned dots on a thin track.
+ * Pure presentational; takes already-clamped 0-10 values.
+ */
+function HeatingUpMeter({
+  initial,
+  current,
+  peak,
+  playerId,
+}: {
+  initial: number;
+  current: number;
+  peak: number;
+  playerId: string;
+}) {
+  const clamp = (n: number) => Math.max(0, Math.min(10, n));
+  const ci = clamp(initial);
+  const cc = clamp(current);
+  const cp = clamp(peak);
+  const pct = (n: number) => `${(n / 10) * 100}%`;
+  const climb = cc - ci;
+  const trackColor =
+    climb >= 0.5 ? "bg-emerald-500/30" : climb <= -0.5 ? "bg-orange-500/30" : "bg-muted";
+  return (
+    <div
+      className="relative w-24 h-1.5 rounded-full bg-muted/40 overflow-visible"
+      data-testid={`meter-heating-${playerId}`}
+      title={`Initial ${ci.toFixed(1)} → Current ${cc.toFixed(1)} → Peak ${cp.toFixed(1)}`}
+    >
+      {/* Filled track from initial to peak shows the journey envelope. */}
+      <div
+        className={`absolute top-0 h-1.5 rounded-full ${trackColor}`}
+        style={{
+          left: pct(Math.min(ci, cp)),
+          width: pct(Math.abs(cp - ci)),
+        }}
+      />
+      {/* Initial marker (gray). */}
+      <div
+        className="absolute -top-0.5 w-1 h-2.5 rounded-sm bg-muted-foreground/60"
+        style={{ left: `calc(${pct(ci)} - 2px)` }}
+      />
+      {/* Peak marker (amber). */}
+      <div
+        className="absolute -top-0.5 w-1 h-2.5 rounded-sm bg-amber-400"
+        style={{ left: `calc(${pct(cp)} - 2px)` }}
+      />
+      {/* Current marker (emerald, larger) — the user's "you are here". */}
+      <div
+        className="absolute -top-1 w-2 h-3.5 rounded-sm bg-emerald-400 ring-1 ring-emerald-300/50"
+        style={{ left: `calc(${pct(cc)} - 4px)` }}
+      />
+    </div>
+  );
+}
+
 function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
   // Goldmaster Phase 2+3 — prefer the FROZEN server-stamped detectedLabel /
   // hitLabel (these never advance on score climbs). Fall back to formatting
   // the (inning, half) pair for legacy rows that pre-date the label fields.
   const detected = entry.detectedLabel ?? formatHalfInning(entry.detectedInning, entry.detectedHalf);
   const hit = entry.hitLabel ?? formatHalfInning(entry.hitInning, entry.hitHalf);
-  // Goldmaster Phase 1 — canonical 0-100 wire scale. Read the explicit
-  // currentReadinessScore / peakReadinessScore fields. Legacy
-  // signalStrengthScore / peakScore are now mirrors of the same canonical
-  // values (so no extra fallback math is needed).
-  const score = entry.currentReadinessScore ?? entry.signalStrengthScore ?? entry.peakReadinessScore ?? entry.peakScore;
+  // Goldmaster RESTORE — USER-FACING signal score is the 10-point scale
+  // (one decimal). The 0-100 internal readiness is kept for admin/debug
+  // and harness invariants but never displayed as the primary number.
+  // Fall back: derive from canonical 0-100 if the new field is missing
+  // (older cached row), then from legacy mirrors as a last resort.
+  const score10 =
+    entry.currentSignalScore10 ??
+    (entry.currentReadinessScore != null ? Math.round(entry.currentReadinessScore) / 10 : null) ??
+    (entry.signalStrengthScore != null ? Math.round(entry.signalStrengthScore) / 10 : null) ??
+    (entry.peakSignalScore10 ?? null);
+  const initial10 =
+    entry.initialSignalScore10 ??
+    (entry.initialReadinessScore != null ? Math.round(entry.initialReadinessScore) / 10 : null);
+  const peak10 =
+    entry.peakSignalScore10 ??
+    (entry.peakReadinessScore != null ? Math.round(entry.peakReadinessScore) / 10 : null) ??
+    (entry.peakScore != null ? Math.round(entry.peakScore) / 10 : null);
+  const momentum = entry.momentumLabel ?? "flat";
+  const momentumDisplay =
+    momentum === "heating_up" ? { label: "Heating up", color: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30" }
+    : momentum === "holding_strong" ? { label: "Holding strong", color: "text-amber-400 bg-amber-500/10 border-amber-500/30" }
+    : momentum === "cooling_off" ? { label: "Cooling off", color: "text-orange-400 bg-orange-500/10 border-orange-500/30" }
+    : null;
   const isAttack = section === "attackNow";
   // Goldmaster Phase 5 — derive live vs resolved mode. Resolved cards must
   // never carry "next AB" copy or any live-only verbiage.
@@ -271,15 +355,37 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
             )}
           </div>
         </button>
-        <div className="flex flex-col items-end gap-1 shrink-0 max-w-[40%]">
-          {score != null && !isResolved && (
+        <div className="flex flex-col items-end gap-1 shrink-0 max-w-[45%]">
+          {score10 != null && !isResolved && (
+            <div className="flex items-baseline gap-1">
+              <span
+                className={`text-base font-mono font-bold leading-none ${isAttack ? "text-red-400" : "text-foreground/90"}`}
+                data-testid={`text-signal-score-10-${entry.playerId}`}
+              >
+                {/* Goldmaster RESTORE — USER-FACING 10-point score with one
+                    decimal. Internal 0-100 is never shown as the primary
+                    number on the user surface. */}
+                {score10.toFixed(1)}
+              </span>
+              <span className="text-[9px] text-muted-foreground leading-none">/ 10</span>
+            </div>
+          )}
+          {/* Heating-up meter (live rows only). Three-stop indicator showing
+              initial → current → peak on the 10-point scale. */}
+          {!isResolved && score10 != null && initial10 != null && peak10 != null && (
+            <HeatingUpMeter
+              initial={initial10}
+              current={score10}
+              peak={peak10}
+              playerId={entry.playerId}
+            />
+          )}
+          {!isResolved && momentumDisplay && (
             <span
-              className={`text-xs font-mono font-bold ${isAttack ? "text-red-400" : "text-foreground/80"}`}
-              data-testid={`text-ladder-score-${entry.playerId}`}
+              className={`text-[9px] font-medium px-1.5 py-0 rounded border ${momentumDisplay.color}`}
+              data-testid={`text-momentum-${entry.playerId}`}
             >
-              {/* Goldmaster Phase 1 — render canonical 0-100 readiness as an
-                  integer. Never divide by 10; the wire scale is already 0-100. */}
-              {Math.round(score)}
+              {momentumDisplay.label}
             </span>
           )}
           {isResolved && section === "dead" && (

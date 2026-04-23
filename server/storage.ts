@@ -4180,6 +4180,58 @@ export class DatabaseStorage implements IStorage {
         .slice(0, 3);
       const stageExplanation: string = summary;
 
+      // ── Goldmaster RESTORE Phase 1+2 — 10-point user-facing score + heating-up meter
+      // Internal storage stays on canonical 0-100 (audit-friendly). The wire
+      // additionally exposes a 0.0-10.0 score with one decimal as the
+      // user-facing primary number, plus heating-up momentum metadata
+      // derived from initial → current → peak deltas. The 0-100 fields
+      // remain available for admin/debug + harness invariants.
+      // Map canonical 0-100 readiness → user-facing 0.0-10.0 with one decimal.
+      // Math.round(n)/10 yields exactly one decimal (e.g. 67.4 → 6.7), avoiding
+      // floating-point artifacts of n/10 then *10/10 patterns.
+      const round1 = (n: number | null): number | null =>
+        n == null ? null : Math.round(Math.max(0, Math.min(100, n))) / 10;
+      const initialSignalScore10 = round1(initialReadinessScore);
+      const currentSignalScore10 = round1(currentReadinessScore);
+      const peakSignalScore10 = round1(peakReadinessScore);
+      const deltaFromInitial10 =
+        currentSignalScore10 != null && initialSignalScore10 != null
+          ? Math.round((currentSignalScore10 - initialSignalScore10) * 10) / 10
+          : null;
+      const deltaFromPeak10 =
+        currentSignalScore10 != null && peakSignalScore10 != null
+          ? Math.round((currentSignalScore10 - peakSignalScore10) * 10) / 10
+          : null;
+      // Momentum heuristics on the 10-point scale.
+      // - heating_up: current is at/near peak AND meaningfully above initial.
+      // - cooling_off: current is meaningfully below peak after a real climb.
+      // - holding_strong: current is at/near peak but climb from initial is small.
+      // - flat: insufficient movement either way.
+      let momentumLabel: "heating_up" | "holding_strong" | "cooling_off" | "flat" = "flat";
+      let isHeatingUp = false;
+      let isCoolingOff = false;
+      if (
+        currentSignalScore10 != null &&
+        peakSignalScore10 != null &&
+        initialSignalScore10 != null &&
+        currentStatus === "live"
+      ) {
+        const climb = currentSignalScore10 - initialSignalScore10;
+        const dropFromPeak = peakSignalScore10 - currentSignalScore10;
+        const peakClimb = peakSignalScore10 - initialSignalScore10;
+        if (dropFromPeak <= 0.4 && climb >= 0.5) {
+          momentumLabel = "heating_up";
+          isHeatingUp = true;
+        } else if (dropFromPeak >= 1.0 && peakClimb >= 0.5) {
+          momentumLabel = "cooling_off";
+          isCoolingOff = true;
+        } else if (dropFromPeak <= 0.4 && currentSignalScore10 >= 6.0) {
+          momentumLabel = "holding_strong";
+        } else {
+          momentumLabel = "flat";
+        }
+      }
+
       const entry: HrRadarLadderEntry = {
         playerId: r.playerId,
         playerName: r.playerName,
@@ -4193,12 +4245,21 @@ export class DatabaseStorage implements IStorage {
         userReasons: liveContactReasons,
         adminReasons,
         summary,
-        // Canonical 0-100 readiness fields (never blended with 0-10 scale).
+        // Canonical 0-100 readiness fields (INTERNAL — admin/debug + harness).
         initialReadinessScore,
         currentReadinessScore,
         peakReadinessScore,
         buildScore,
         conversionProbability,
+        // ── Goldmaster RESTORE — 10-point USER-FACING signal score (0.0-10.0)
+        initialSignalScore10,
+        currentSignalScore10,
+        peakSignalScore10,
+        deltaFromInitial10,
+        deltaFromPeak10,
+        isHeatingUp,
+        isCoolingOff,
+        momentumLabel,
         // Frozen detection vs HR-event truth (distinct fields, never overloaded).
         detectedLabel: r.detectedLabel ?? null,
         hitLabel: r.hitLabel ?? null,
@@ -4482,6 +4543,24 @@ export interface HrRadarLadderEntry {
   buildScore: number | null;
   /** Calibrated conversion probability (0-1). Admin/debug only. */
   conversionProbability: number | null;
+
+  // ── Goldmaster RESTORE — 10-point USER-FACING signal score (0.0-10.0). ─────
+  /** Initial signal score on the user-facing 0.0-10.0 scale (one decimal). */
+  initialSignalScore10: number | null;
+  /** Current signal score on the user-facing 0.0-10.0 scale (one decimal). */
+  currentSignalScore10: number | null;
+  /** Peak signal score on the user-facing 0.0-10.0 scale (one decimal). */
+  peakSignalScore10: number | null;
+  /** Current minus initial on the 10-point scale (positive = climbing). */
+  deltaFromInitial10: number | null;
+  /** Current minus peak on the 10-point scale (negative or zero). */
+  deltaFromPeak10: number | null;
+  /** True iff the signal is at/near peak with a meaningful climb from initial. */
+  isHeatingUp: boolean;
+  /** True iff the signal has dropped meaningfully from a real peak. */
+  isCoolingOff: boolean;
+  /** User-facing momentum bucket. */
+  momentumLabel: "heating_up" | "holding_strong" | "cooling_off" | "flat";
 
   // ── Goldmaster Phase 2+3 — frozen detection vs HR-event truth. ─────────────
   /** Frozen first-detection inning label (e.g. "T3"). Never overwritten. */

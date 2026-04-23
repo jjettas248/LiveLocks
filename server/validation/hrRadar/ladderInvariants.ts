@@ -255,6 +255,63 @@ export function validateHrRadarLadder(payload: {
           `called_hit row has hitLabel=${e.hitLabel} but no detectedLabel (frozen detection inning lost)`,
           e, section);
       }
+
+      // ── Goldmaster RESTORE — 10-point USER-FACING wire invariants. ────────
+      // The user surface renders the 0.0-10.0 score (one decimal) as the
+      // primary number. The internal 0-100 scale stays in storage. These
+      // invariants assert the wire shape and momentum metadata are sound.
+
+      // I17 — currentSignalScore10 is in the 0.0-10.0 range with at most one
+      // decimal of precision (server rounds via Math.round(x*10)/10 etc).
+      const has10pt =
+        e.currentSignalScore10 !== undefined ||
+        e.peakSignalScore10 !== undefined ||
+        e.initialSignalScore10 !== undefined;
+      if (has10pt) {
+        const check10 = (val: number | null | undefined, code: string, name: string) => {
+          if (val == null) return;
+          if (val < 0 || val > 10) {
+            push(code, `${name}=${val} outside user-facing 0.0-10.0 scale`, e, section);
+            return;
+          }
+          // Allow tiny FP slop on the rounding check.
+          const scaled = val * 10;
+          if (Math.abs(scaled - Math.round(scaled)) > 1e-6) {
+            push(code, `${name}=${val} has more than 1 decimal of precision`, e, section);
+          }
+        };
+        check10(e.currentSignalScore10, "I17a_CURRENT10_BAD", "currentSignalScore10");
+        check10(e.peakSignalScore10, "I17b_PEAK10_BAD", "peakSignalScore10");
+        check10(e.initialSignalScore10, "I17c_INITIAL10_BAD", "initialSignalScore10");
+
+        // I18 — peak10 >= current10 (within 0.05 tolerance for FP rounding).
+        if (
+          e.currentSignalScore10 != null &&
+          e.peakSignalScore10 != null &&
+          e.peakSignalScore10 < e.currentSignalScore10 - 0.05
+        ) {
+          push("I18_PEAK10_BELOW_CURRENT10",
+            `peakSignalScore10=${e.peakSignalScore10} < currentSignalScore10=${e.currentSignalScore10}`,
+            e, section);
+        }
+
+        // I19 — momentumLabel must be in the allowed enum set.
+        if (e.momentumLabel != null) {
+          const allowed = new Set(["heating_up", "holding_strong", "cooling_off", "flat"]);
+          if (!allowed.has(e.momentumLabel)) {
+            push("I19_MOMENTUM_LABEL_INVALID",
+              `momentumLabel="${e.momentumLabel}" not in allowed set`,
+              e, section);
+          }
+        }
+
+        // I20 — heating_up and cooling_off are mutually exclusive.
+        if (e.isHeatingUp === true && e.isCoolingOff === true) {
+          push("I20_HEATING_AND_COOLING",
+            `row has both isHeatingUp=true AND isCoolingOff=true`,
+            e, section);
+        }
+      }
     }
   }
 
