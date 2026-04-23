@@ -135,7 +135,12 @@ function applyBatchFamilySuppression<T extends BatchSignal>(signals: T[]): T[] {
       if (rank > 1) {
         const adjustedConf = 50 + (m.probability - 50) * penalty;
         const adjustedEdge = adjustedConf - 50;
-        if (adjustedConf < 64 || adjustedEdge < 4) {
+        // Floor aligned with the frontend Value tier (≥60%). Previously this
+        // was 64% / edge 4, which silently stripped any derivative signal in
+        // the 60-63% band even though the SIGNAL KEY tells the user that
+        // band is a real signal. We have plenty of API headroom — let the
+        // user see the signal and decide.
+        if (adjustedConf < 60 || adjustedEdge < 3) {
           console.log(`[FAMILY_SUPPRESS] ${m.playerName} ${m.statType} rank=${rank} adjConf=${adjustedConf.toFixed(1)} adjEdge=${adjustedEdge.toFixed(1)} — suppressed`);
           continue;
         }
@@ -3994,7 +3999,10 @@ export async function registerRoutes(
       }
 
       for (const { athlete, statMap, teamAbbr, opponentAbbr, minutes } of allAthletes) {
-          if (minutes < 3) continue;
+          // Loosened from 3 → 1 minute. Early-game scenarios (e.g. a starter
+          // who just checked in or returned from a sub) were being skipped
+          // entirely. With ample API headroom we'd rather evaluate them.
+          if (minutes < 1) continue;
 
           const playerName: string = athlete.athlete.displayName ?? "";
           const espnAthId = parseInt(athlete.athlete.id, 10);
