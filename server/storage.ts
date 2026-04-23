@@ -2647,9 +2647,26 @@ export class DatabaseStorage implements IStorage {
       }
 
       const signalDetectedMs = alert.signalDetectedAt?.getTime() ?? alert.detectedAt.getTime();
+      // ── Goldmaster Detection Ledger Phase 5 (RC5) ─────────────────────
+      // A called_hit is ONLY valid when an actual qualifying signal event
+      // (qualified_detected / promoted_building / promoted_attack /
+      // stage_building / stage_attack / escalated) exists strictly before
+      // the HR endTime. The previous fallback that accepted "alert row
+      // exists with detectedAt < hrEnd" was too permissive — watch-only
+      // rows or row drift could be miscredited as called hits. The
+      // canonical contract is now: NO qualifying event ⇒ NOT a called hit.
+      const QUALIFYING_EVENT_TYPES = [
+        "qualified_detected",
+        "promoted_building",
+        "promoted_attack",
+        "stage_building",
+        "stage_attack",
+        "escalated",
+      ];
       const eventConditions = [
         eq(hrRadarSignalEvents.gameId, params.gameId),
         eq(hrRadarSignalEvents.playerId, params.playerId),
+        inArray(hrRadarSignalEvents.eventType, QUALIFYING_EVENT_TYPES),
       ];
       // STRICT pre-HR: signal must occur strictly BEFORE the HR endTime. No grace window.
       if (hrEnd) eventConditions.push(lt(hrRadarSignalEvents.detectedAt, new Date(hrEnd)));
@@ -2659,25 +2676,26 @@ export class DatabaseStorage implements IStorage {
         .limit(1);
       const lastQualifyingEvent = qualifyingEvents[0] ?? null;
 
-      const alertBeforeHr = hrEnd ? signalDetectedMs < hrEnd : true;
+      // Row-level qualifying check: detectedInning is only stamped once
+      // the engine has crossed out of WATCH (Phase 2 contract). If it's
+      // null, the alert never qualified — cannot be a called hit.
+      const rowEverQualified = alert.detectedInning != null;
 
-      if (lastQualifyingEvent || alertBeforeHr) {
-        console.log(`[HR_RADAR_MATCH_RESULT] called_hit player=${params.playerId} game=${params.gameId} alertId=${alert.id} signalAt=${new Date(lastQualifyingEvent?.detectedAt ?? signalDetectedMs).toISOString()} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"}`);
+      if (lastQualifyingEvent && rowEverQualified) {
+        console.log(`[HR_RADAR_MATCH_RESULT] called_hit player=${params.playerId} game=${params.gameId} alertId=${alert.id} qualifyingEvent=${lastQualifyingEvent.eventType} signalAt=${new Date(lastQualifyingEvent.detectedAt).toISOString()} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"}`);
         return {
           matched: true, matchedBeforeHr: true, isLateSignal: false,
           alertId: alert.id,
-          signalEventId: lastQualifyingEvent?.id ?? null,
-          signalDetectedAt: alert.signalDetectedAt ?? alert.detectedAt ?? lastQualifyingEvent?.detectedAt,
+          signalEventId: lastQualifyingEvent.id ?? null,
+          signalDetectedAt: alert.signalDetectedAt ?? alert.detectedAt ?? lastQualifyingEvent.detectedAt,
           // Preserve the ORIGINAL inning the alert was first called in. The
           // alert may have escalated through several innings before the HR
           // landed; users should see when we first called it, not the most
           // recent escalation event.
-          signalInning: alert.signalInning ?? alert.detectedInning ?? lastQualifyingEvent?.inning,
-          signalHalf: alert.signalHalf ?? alert.detectedHalf ?? lastQualifyingEvent?.half,
+          signalInning: alert.signalInning ?? alert.detectedInning ?? lastQualifyingEvent.inning,
+          signalHalf: alert.signalHalf ?? alert.detectedHalf ?? lastQualifyingEvent.half,
           gradingStatus: "called_hit",
-          gradingReason: lastQualifyingEvent
-            ? `qualifying signal event ${lastQualifyingEvent.eventType} at ${new Date(lastQualifyingEvent.detectedAt).toISOString()} strictly preceded HR endTime`
-            : `canonical alert detectedAt ${new Date(signalDetectedMs).toISOString()} strictly preceded HR endTime`,
+          gradingReason: `qualifying signal event ${lastQualifyingEvent.eventType} at ${new Date(lastQualifyingEvent.detectedAt).toISOString()} strictly preceded HR endTime; row qualified at ${alert.detectedHalf}${alert.detectedInning}`,
           matchMethod: "direct_pre_hr_signal",
         };
       }
@@ -2820,12 +2838,17 @@ export class DatabaseStorage implements IStorage {
     if (data.dynamicReadinessScore != null && Number.isFinite(data.dynamicReadinessScore)) {
       // eslint-disable-next-line no-param-reassign
       data.readinessScore = data.dynamicReadinessScore;
-    } else if (Number.isFinite(data.readinessScore)) {
-      // Legacy buildScore-only path: caller passed a 0-10 build score with no
-      // dynamic readiness available yet. Scale ×10 so the row is persisted on
-      // the canonical 0-100 wire from CREATE onward.
-      // eslint-disable-next-line no-param-reassign
-      data.readinessScore = data.readinessScore * 10;
+    } else {
+      // ── Goldmaster Detection Ledger Phase 2 (RC1) ─────────────────────
+      // The persisted live row MUST be driven by the dynamic HR alert
+      // engine snapshot — not by the raw build/formation score. When no
+      // dynamic readiness is available we refuse to write the row so the
+      // ladder can never display (or grade) a fake readiness.
+      console.warn(
+        `[HR_RADAR_NO_DYNAMIC_READINESS] gameId=${data.gameId} playerId=${data.playerId} ` +
+        `buildScoreOnly=${data.readinessScore} — refusing to persist as readiness truth`
+      );
+      return null;
     }
     try {
       const today = resolveMlbGameSessionDate(data.gameId);
@@ -2833,9 +2856,23 @@ export class DatabaseStorage implements IStorage {
       // Prefer engine's earliest in-memory detection over current tick when
       // available AND strictly earlier. This stamps the row with when we
       // FIRST noticed the player, not when persistence finally fired.
+      // ── Goldmaster Detection Ledger Phase 3 (RC3) ─────────────────────
+      // Use the engine's first-detection truth when EITHER the inning is
+      // earlier OR the inning is equal AND the timestamp is earlier than
+      // the current persistence tick. The same-inning earlier-timestamp
+      // case (e.g. detected B3 12:01:05, persisted B3 12:01:42) was being
+      // missed by the inning-only comparison.
+      const currentPersistMs = Date.now();
       const useFirstDetected =
         data.firstDetectedInning != null &&
-        data.firstDetectedInning < data.inning;
+        (
+          data.firstDetectedInning < data.inning ||
+          (
+            data.firstDetectedInning === data.inning &&
+            data.firstDetectedAtMs != null &&
+            data.firstDetectedAtMs < currentPersistMs
+          )
+        );
       const persistInning = useFirstDetected ? data.firstDetectedInning! : data.inning;
       const persistHalf = useFirstDetected
         ? (data.firstDetectedHalf ?? data.half)
@@ -3085,6 +3122,12 @@ export class DatabaseStorage implements IStorage {
       }
 
       console.log(`[HR_RADAR_ALERT_UPSERT] CREATE sessionDate=${today} gameId=${data.gameId} playerId=${data.playerId} detectedLabel=${detectedLabel} initialReadinessScore=${data.readinessScore} canonicalStage=${data.canonicalStage ?? "(none)"}`);
+      // ── Goldmaster Detection Ledger Phase 4 (RC2) ─────────────────────
+      // The CREATE-time ledger events MUST mirror the persisted row's
+      // earliest-truth detection (detectedAtForRow / persistInning /
+      // persistHalf). Writing nowDate / data.inning / data.half here was
+      // letting the event ledger drift from the row, breaking the matcher
+      // and making history appear to contradict the row.
       // Append creation event to chronological history so strict matcher has proof
       await this.appendHrRadarSignalEvent({
         sessionDate: today, gameId: data.gameId, playerId: data.playerId, team: data.team,
@@ -3095,9 +3138,9 @@ export class DatabaseStorage implements IStorage {
         confidenceTier: data.confidenceTier,
         triggerTags: data.triggerTags as any,
         drivers: data.diagnosticsSnapshot as any,
-        detectedAt: nowDate,
-        inning: data.inning,
-        half: data.half,
+        detectedAt: detectedAtForRow,
+        inning: persistInning,
+        half: persistHalf,
         source: "engine",
       } as InsertHrRadarSignalEvent);
       // Phase 3 — also emit the initial canonical stage as a transition event
@@ -3115,9 +3158,9 @@ export class DatabaseStorage implements IStorage {
         confidenceTier: data.confidenceTier,
         triggerTags: data.triggerTags as any,
         drivers: data.diagnosticsSnapshot as any,
-        detectedAt: nowDate,
-        inning: data.inning,
-        half: data.half,
+        detectedAt: detectedAtForRow,
+        inning: persistInning,
+        half: persistHalf,
         source: "engine",
       } as InsertHrRadarSignalEvent);
       if (data.canonicalStage && data.canonicalStage !== "watch") {
@@ -3130,9 +3173,28 @@ export class DatabaseStorage implements IStorage {
           confidenceTier: data.confidenceTier,
           triggerTags: data.triggerTags as any,
           drivers: data.diagnosticsSnapshot as any,
-          detectedAt: nowDate,
-          inning: data.inning,
-          half: data.half,
+          detectedAt: detectedAtForRow,
+          inning: persistInning,
+          half: persistHalf,
+          source: "engine",
+        } as InsertHrRadarSignalEvent);
+        // ── Goldmaster Detection Ledger Phase 9 ─────────────────────────
+        // When the alert is created already at a qualifying stage (building
+        // or attack), also emit the canonical `qualified_detected` event so
+        // the strict matcher has a clean qualifying-event marker without
+        // having to interpret stage_* aliases.
+        await this.appendHrRadarSignalEvent({
+          sessionDate: today, gameId: data.gameId, playerId: data.playerId, team: data.team,
+          alertId,
+          eventType: "qualified_detected",
+          signalState: data.signalState,
+          score: String(data.readinessScore),
+          confidenceTier: data.confidenceTier,
+          triggerTags: data.triggerTags as any,
+          drivers: data.diagnosticsSnapshot as any,
+          detectedAt: detectedAtForRow,
+          inning: persistInning,
+          half: persistHalf,
           source: "engine",
         } as InsertHrRadarSignalEvent);
       }
@@ -3173,30 +3235,35 @@ export class DatabaseStorage implements IStorage {
             `but matcher returned matchedBeforeHr=true. matchMethod=${matchResult.matchMethod}`
           );
         }
-        const result = await db.update(hrRadarAlerts)
-          .set({
-            status: "hit",
-            hitInning: hitInningNum,
-            hitHalf: hitHalfVal,
-            hitLabel: hitLabelVal,
-            hitDetectedAt: hrEndTimeMs ? new Date(hrEndTimeMs) : nowDate,
-            resolvedAt: nowDate,
-            gradingStatus: "called_hit",
-            gradingReason: matchResult.gradingReason,
-            matchedBeforeHr: true,
-            fallbackCreated: false,
-            userVisible: true,
-            matchMethod: matchResult.matchMethod,
-            signalDetectedAt: matchResult.signalDetectedAt ?? nowDate,
-            signalInning: matchResult.signalInning,
-            signalHalf: matchResult.signalHalf,
-          })
-          .where(and(
-            eq(hrRadarAlerts.sessionDate, today),
-            eq(hrRadarAlerts.gameId, gameId),
-            eq(hrRadarAlerts.playerId, playerId),
-            eq(hrRadarAlerts.status, "live"),
-          ));
+        // ── Goldmaster Detection Ledger Phase 6 (RC4) ────────────────────
+        // Resolve ONLY the exact matched alert row by primary key. The old
+        // sessionDate/gameId/playerId/status='live' update could mutate
+        // unrelated live rows (e.g. a fresh row created after the matched
+        // one). matchResult.alertId is the canonical row to grade.
+        const result = matchResult.alertId
+          ? await db.update(hrRadarAlerts)
+              .set({
+                status: "hit",
+                hitInning: hitInningNum,
+                hitHalf: hitHalfVal,
+                hitLabel: hitLabelVal,
+                hitDetectedAt: hrEndTimeMs ? new Date(hrEndTimeMs) : nowDate,
+                resolvedAt: nowDate,
+                gradingStatus: "called_hit",
+                gradingReason: matchResult.gradingReason,
+                matchedBeforeHr: true,
+                fallbackCreated: false,
+                userVisible: true,
+                matchMethod: matchResult.matchMethod,
+                signalDetectedAt: matchResult.signalDetectedAt ?? nowDate,
+                signalInning: matchResult.signalInning,
+                signalHalf: matchResult.signalHalf,
+              })
+              .where(and(
+                eq(hrRadarAlerts.id, matchResult.alertId),
+                eq(hrRadarAlerts.status, "live"),
+              ))
+          : { rowCount: 0 } as any;
         const count = (result as any).rowCount ?? 0;
         if (count > 0) {
           console.log(`[HR_RADAR_CALLED_HIT] playerId=${playerId} gameId=${gameId} signalLabel=${matchResult.signalHalf}${matchResult.signalInning ?? ""} hitLabel=${hitLabelVal} reason="${matchResult.gradingReason}"`);
@@ -3225,27 +3292,29 @@ export class DatabaseStorage implements IStorage {
 
       // Late signal: alert exists but signal arrived at/after HR completed
       if (matchResult.matched && matchResult.isLateSignal) {
-        const result = await db.update(hrRadarAlerts)
-          .set({
-            status: "hit",
-            hitInning: hitInningNum,
-            hitHalf: hitHalfVal,
-            hitLabel: hitLabelVal,
-            hitDetectedAt: hrEndTimeMs ? new Date(hrEndTimeMs) : nowDate,
-            resolvedAt: nowDate,
-            gradingStatus: "late_signal",
-            gradingReason: matchResult.gradingReason,
-            matchedBeforeHr: false,
-            fallbackCreated: false,
-            userVisible: false,
-            matchMethod: matchResult.matchMethod,
-          })
-          .where(and(
-            eq(hrRadarAlerts.sessionDate, today),
-            eq(hrRadarAlerts.gameId, gameId),
-            eq(hrRadarAlerts.playerId, playerId),
-            eq(hrRadarAlerts.status, "live"),
-          ));
+        // ── Goldmaster Detection Ledger Phase 6 (RC4) ──────────────────
+        // Same exact-alertId constraint as called_hit above.
+        const result = matchResult.alertId
+          ? await db.update(hrRadarAlerts)
+              .set({
+                status: "hit",
+                hitInning: hitInningNum,
+                hitHalf: hitHalfVal,
+                hitLabel: hitLabelVal,
+                hitDetectedAt: hrEndTimeMs ? new Date(hrEndTimeMs) : nowDate,
+                resolvedAt: nowDate,
+                gradingStatus: "late_signal",
+                gradingReason: matchResult.gradingReason,
+                matchedBeforeHr: false,
+                fallbackCreated: false,
+                userVisible: false,
+                matchMethod: matchResult.matchMethod,
+              })
+              .where(and(
+                eq(hrRadarAlerts.id, matchResult.alertId),
+                eq(hrRadarAlerts.status, "live"),
+              ))
+          : { rowCount: 0 } as any;
         const count = (result as any).rowCount ?? 0;
         if (count > 0) {
           console.log(`[HR_RADAR_LATE_SIGNAL] playerId=${playerId} gameId=${gameId} hitLabel=${hitLabelVal} reason="${matchResult.gradingReason}"`);

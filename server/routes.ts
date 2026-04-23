@@ -2388,9 +2388,14 @@ export async function registerRoutes(
       dedupBettable.sort(sortByContract);
       dedupWatchlist.sort(sortByContract);
 
-      // Phase 5: explicit outcomeType taxonomy on user-facing rows.
-      // called_hit | called_miss | uncalled_hr | late_signal | post_hr_fallback
+      // Phase 5 + Goldmaster Detection Ledger Phase 10: explicit
+      // outcomeType taxonomy on user-facing rows.
+      // called_hit | called_miss | uncalled_hr | late_signal |
+      // early_window_hr | post_hr_fallback
+      // early_window_hr is its own bucket so 1st-inning HRs with no
+      // realistic pre-call window do not pollute uncalled or missed.
       const deriveOutcomeType = (row: any, fallbackStatus: "hit" | "miss"): string => {
+        if (row?.gradingStatus === "early_hr_no_window" || row?.gradingStatus === "early_window_hr") return "early_window_hr";
         if (row?.fallbackCreated) return "post_hr_fallback";
         if (row?.gradingStatus === "called_hit") return "called_hit";
         if (row?.gradingStatus === "called_miss") return "called_miss";
@@ -2654,14 +2659,17 @@ export async function registerRoutes(
       const calledMisses = byStatus["called_miss"] ?? 0;
       const uncalled = byStatus["uncalled_hr"] ?? 0;
       const late = byStatus["late_signal"] ?? 0;
+      // Goldmaster Detection Ledger Phase 10 — early-window HRs are
+      // exempt from cashed/missed/uncalled trust metrics.
+      const earlyWindow = (byStatus["early_hr_no_window"] ?? 0) + (byStatus["early_window_hr"] ?? 0);
       const totalCalls = calledHits + calledMisses;
-      const totalHrs = calledHits + uncalled + late;
+      const totalHrs = calledHits + uncalled + late; // earlyWindow excluded by design
       return res.json({
         sessionDate,
         byStatus,
         byInning,
         summary: {
-          calledHits, calledMisses, uncalledHrs: uncalled, lateSignals: late,
+          calledHits, calledMisses, uncalledHrs: uncalled, lateSignals: late, earlyWindowHrs: earlyWindow,
           calledHitRate: totalCalls > 0 ? Math.round((calledHits / totalCalls) * 1000) / 10 : 0,
           callCoverageOfHrs: totalHrs > 0 ? Math.round((calledHits / totalHrs) * 1000) / 10 : 0,
           missedDetectionRate: totalHrs > 0 ? Math.round(((uncalled + late) / totalHrs) * 1000) / 10 : 0,

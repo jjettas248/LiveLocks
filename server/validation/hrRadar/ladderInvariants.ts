@@ -312,6 +312,81 @@ export function validateHrRadarLadder(payload: {
             e, section);
         }
       }
+
+      // ── Goldmaster Detection Ledger (Phase 11) — ledger truth invariants ──
+      // I21 — A called_hit row MUST carry a frozen first-detection inning.
+      // Without detectedInning the row never qualified, so it cannot be a
+      // legitimate called hit.
+      if (e.outcome === "called_hit") {
+        if (e.detectedInning == null || e.detectedHalf == null || !e.detectedLabel) {
+          push("I21_CALLED_HIT_MISSING_DETECTION",
+            `called_hit row missing frozen detection (inning=${e.detectedInning} half=${e.detectedHalf} label=${e.detectedLabel})`,
+            e, section);
+        }
+      }
+
+      // I22 — For called_hit rows with both timestamps populated, the
+      // signal MUST predate the HR. Late signals must NOT be in cashed.
+      if (
+        e.outcome === "called_hit" &&
+        e.signalDetectedAt &&
+        e.hitDetectedAt
+      ) {
+        const sigMs = new Date(e.signalDetectedAt).getTime();
+        const hitMs = new Date(e.hitDetectedAt).getTime();
+        if (Number.isFinite(sigMs) && Number.isFinite(hitMs) && sigMs >= hitMs) {
+          push("I22_SIGNAL_NOT_BEFORE_HR",
+            `called_hit row has signalDetectedAt(${e.signalDetectedAt}) >= hitDetectedAt(${e.hitDetectedAt})`,
+            e, section);
+        }
+      }
+
+      // I23 — detectedInning must NEVER be after hitInning (no detection-
+      // after-HR). Catches Vargas/Montgomery-style "detected B5, HR was B3"
+      // contradictions.
+      if (
+        e.detectedInning != null &&
+        e.hitInning != null &&
+        e.detectedInning > e.hitInning
+      ) {
+        push("I23_DETECTION_AFTER_HR",
+          `detectedInning=${e.detectedHalf}${e.detectedInning} is AFTER hitInning=${e.hitHalf}${e.hitInning}`,
+          e, section);
+      }
+
+      // I24 — outcomeStatus is one of the canonical values. Any unexpected
+      // value indicates a leak from a legacy code path.
+      if (e.outcomeStatus) {
+        const allowedStatuses = new Set([
+          "active",
+          "called_hit",
+          "called_miss",
+          "uncalled_hr",
+          "late_signal",
+          "early_hr_no_window",
+          "early_window_hr",
+        ]);
+        if (!allowedStatuses.has(e.outcomeStatus)) {
+          push("I24_UNKNOWN_OUTCOME_STATUS",
+            `outcomeStatus="${e.outcomeStatus}" not in canonical set`,
+            e, section);
+        }
+      }
+
+      // I25 — A late_signal row must have BOTH detection and hit timestamps
+      // and the detection must be at or after the HR (definition of late).
+      // Tolerance: within ±2s the timestamps can be the same engine tick;
+      // only flag when the signal is meaningfully earlier than the HR.
+      if (e.outcome === "late_signal" && e.signalDetectedAt && e.hitDetectedAt) {
+        const sigMs = new Date(e.signalDetectedAt).getTime();
+        const hitMs = new Date(e.hitDetectedAt).getTime();
+        const TICK_TOLERANCE_MS = 2000;
+        if (Number.isFinite(sigMs) && Number.isFinite(hitMs) && hitMs - sigMs > TICK_TOLERANCE_MS) {
+          push("I25_LATE_SIGNAL_ACTUALLY_PRE_HR",
+            `late_signal row has signalDetectedAt(${e.signalDetectedAt}) < hitDetectedAt(${e.hitDetectedAt}) by ${hitMs - sigMs}ms — should be called_hit`,
+            e, section);
+        }
+      }
     }
   }
 
