@@ -272,6 +272,10 @@ function SignalStrip({ signals, onPlayerClick }: { signals: MlbSignalData[]; onP
   const topSignals = [...signals]
     .filter(s => {
       if (s.alreadyHit) return false;
+      // Plan B: Pre-AB Watch entries (HR_VS_ELITE_PITCHER, PITCHER_NEAR_MISS,
+      // and any future early bypasses) render in PreABWatchBand only — keep
+      // them out of the main "Top Signals" strip.
+      if ((s as any).isEarlySignal || (s as any).watchlist) return false;
       const isBatterOver = BATTER_OVER_MARKETS_UI.includes(s.market);
       if (isBatterOver) return (s.signalScore ?? 0) >= 42;
       // Pitcher / non-batter-over markets: gate on engine signal score, not raw
@@ -319,6 +323,91 @@ function SignalStrip({ signals, onPlayerClick }: { signals: MlbSignalData[]; onP
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// Plan B: Pre-AB Watch band — surfaces early/watchlist signals that the main
+// SignalStrip filters out. Driven by the API's isEarlySignal flag, set by the
+// orchestrator's HR_VS_ELITE_PITCHER and PITCHER_NEAR_MISS bypass paths.
+// Auto-collapses once ≥3 confirmed live signals exist for the game.
+// (HIGH_PROB_BYPASS entries surface via the box score row enrichment, not here.)
+function PreABWatchBand({ signals, onPlayerClick }: { signals: MlbSignalData[]; onPlayerClick: (sig: MlbSignalData) => void }) {
+  const confirmedCount = signals.filter(s => {
+    if ((s as any).isEarlySignal) return false;
+    if ((s as any).alreadyHit) return false;
+    const isBatterOver = BATTER_OVER_MARKETS_UI.includes(s.market);
+    if (isBatterOver) return (s.signalScore ?? 0) >= 42;
+    return (s.signalScore ?? 0) >= 50 && s.recommendedSide !== "NO_EDGE";
+  }).length;
+
+  const watchSignals = signals
+    .filter(s => {
+      if (!(s as any).isEarlySignal) return false;
+      if ((s as any).alreadyHit) return false;
+      const pct = normalizePct(s.enginePct);
+      const edge = s.edge ?? 0;
+      return pct >= 60 && edge >= 3;
+    })
+    .sort((a, b) => normalizePct(b.enginePct) - normalizePct(a.enginePct))
+    .slice(0, 8);
+
+  const autoCollapse = confirmedCount >= 3;
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => { setCollapsed(autoCollapse); }, [autoCollapse]);
+
+  if (watchSignals.length === 0) return null;
+
+  return (
+    <div className="mb-3" data-testid="pre-ab-watch-band">
+      <button
+        type="button"
+        onClick={() => setCollapsed(c => !c)}
+        className="flex items-center gap-2 mb-1.5 px-1 w-full text-left"
+        data-testid="button-toggle-pre-ab-watch"
+      >
+        <Eye className="w-3 h-3 text-cyan-400" />
+        <span className="text-[9px] font-bold uppercase tracking-wider text-cyan-400/90">
+          Pre-AB Watch · {watchSignals.length}
+        </span>
+        <span className="text-[8px] text-muted-foreground">prob ≥ 60% · edge ≥ +3%</span>
+        {collapsed ? <ChevronDown className="w-3 h-3 text-muted-foreground ml-auto" /> : <ChevronUp className="w-3 h-3 text-muted-foreground ml-auto" />}
+      </button>
+      {!collapsed && (
+        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
+          {watchSignals.map((sig, i) => {
+            const pct = normalizePct(sig.enginePct);
+            const sideColor = sig.recommendedSide === "OVER" ? "text-green-400" : "text-blue-400";
+            const tags: string[] = ((sig as any).feedTags ?? []) as string[];
+            const tagLabel = tags.includes("HR_VS_ELITE_PITCHER")
+              ? "HR vs ELITE P"
+              : tags.includes("PITCHER_NEAR_MISS")
+              ? "P NEAR-MISS"
+              : tags.includes("HIGH_PROB")
+              ? "HIGH PROB"
+              : "PRE-AB";
+            return (
+              <button
+                key={`${sig.playerId}-${sig.market}-${i}`}
+                data-testid={`pre-ab-watch-card-${i}`}
+                onClick={() => onPlayerClick(sig)}
+                className="flex-shrink-0 rounded-lg border border-cyan-400/30 px-3 py-2 bg-cyan-400/5 hover:bg-cyan-400/10 transition-colors text-left min-w-[150px]"
+              >
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                  <span className="text-[10px] font-bold text-foreground truncate">{sig.playerName}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] text-muted-foreground">{SIGNAL_STRIP_MARKET_SHORT[sig.market] ?? sig.market.replace(/_/g, " ")}</span>
+                  <span className={`text-[10px] font-black ${sideColor}`}>{sig.recommendedSide}</span>
+                  <span className="text-[10px] font-bold tabular-nums text-cyan-300">{pct.toFixed(0)}%</span>
+                </div>
+                <div className="mt-0.5 text-[8px] font-semibold uppercase tracking-wider text-cyan-400/70">{tagLabel}</div>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -563,7 +652,11 @@ function GameSignalsPanel({ signals, isElite, onAddToSlip, onOpenCalculator }: {
   onAddToSlip: (sig: MlbSignalData) => void;
   onOpenCalculator?: (sig: MlbSignalData) => void;
 }) {
-  const sorted = [...signals].sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
+  // Plan B: Active Signals panel renders confirmed live signals only — early /
+  // watchlist (HR_VS_ELITE_PITCHER, PITCHER_NEAR_MISS, fallback watch) entries
+  // belong in the dedicated PreABWatchBand surface above this panel.
+  const confirmed = signals.filter(s => !(s as any).isEarlySignal && !(s as any).watchlist);
+  const sorted = [...confirmed].sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
   const visible = isElite ? sorted : sorted.slice(0, 2);
   const lockedCount = isElite ? 0 : Math.max(0, sorted.length - 2);
 
@@ -3023,6 +3116,8 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
               {gameSignals.length > 0 && (
                 <SignalStrip signals={gameSignals} onPlayerClick={handleSignalClick} />
               )}
+
+              <PreABWatchBand signals={gameSignals} onPlayerClick={handleSignalClick} />
 
               <SpikeAlertBanner signals={gameSignals} />
 

@@ -36,9 +36,9 @@ export type SignalTag =
   | "5TH INNING EDGE" | "7TH INNING EDGE"
   | "STRONG CONTACT TREND" | "PITCHER FATIGUE RISING"
   | "VELOCITY DROP DETECTED" | "NEAR HR CONTACT DETECTED"
-  | "HIGH_PROB";
+  | "HIGH_PROB" | "HR_VS_ELITE_PITCHER" | "PITCHER_NEAR_MISS";
 
-export type FeedTag = "edge_feed" | "inning_3" | "inning_5" | "inning_7" | "hr_radar" | "hr_watchlist" | "HIGH_PROB";
+export type FeedTag = "edge_feed" | "inning_3" | "inning_5" | "inning_7" | "hr_radar" | "hr_watchlist" | "HIGH_PROB" | "HR_VS_ELITE_PITCHER" | "PITCHER_NEAR_MISS";
 
 function clamp(val: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, val));

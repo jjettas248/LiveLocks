@@ -1039,16 +1039,49 @@ export class LiveGameOrchestrator {
       ? output.calibratedProbabilityOver
       : output.calibratedProbabilityUnder;
 
+    // Plan D + E: pitcher-quality-aware floor for batter HR/hrr, and pitcher
+    // near-miss band (58 ≤ prob < market floor). Both lower the qualification
+    // floor under specific conditions and tag the surviving signal as an early
+    // / watchlist entry so the UI can route it into the Pre-AB Watch band
+    // rather than the main feed. NO scoring/calibration math is touched.
+    let bypassedAsEarly = false;
+    let earlyBypassTag: "HR_VS_ELITE_PITCHER" | "PITCHER_NEAR_MISS" | null = null;
+
     if (isBatterOver) {
-      if (sideProbability < 40) {
-        console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — prob=${sideProbability.toFixed(1)} < 40 absolute floor (batter_over)`);
+      let absFloor = 40;
+      const isHrFamily = output.market === "hrr" || output.market === "home_runs";
+      if (isHrFamily) {
+        const pitcherEra = (input as any)?.pitcher?.era ?? null;
+        const pitcherK9 = (input as any)?.pitcher?.kPer9 ?? null;
+        if (
+          pitcherEra != null && Number.isFinite(pitcherEra) && pitcherEra < 2.5 &&
+          pitcherK9 != null && Number.isFinite(pitcherK9) && pitcherK9 > 10
+        ) {
+          absFloor = 32;
+          if (sideProbability < 40 && sideProbability >= 32) {
+            bypassedAsEarly = true;
+            earlyBypassTag = "HR_VS_ELITE_PITCHER";
+            console.log(`[MLB QUALIFY HR_VS_ELITE_PITCHER][${gameId}] ${output.playerName}/${output.market} — prob=${sideProbability.toFixed(1)} relaxed to 32 floor (pitcher ERA=${pitcherEra.toFixed(2)} K9=${pitcherK9.toFixed(1)})`);
+          }
+        }
+      }
+      if (sideProbability < absFloor) {
+        console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — prob=${sideProbability.toFixed(1)} < ${absFloor} absolute floor (batter_over)`);
         return null;
       }
     } else {
       const qualifyFloor = MARKET_QUALIFY_FLOOR[output.market] ?? 60;
       if (sideProbability < qualifyFloor) {
-        console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — prob=${sideProbability.toFixed(1)} < ${qualifyFloor} gate`);
-        return null;
+        const PITCHER_NEAR_MISS_FLOOR = 58;
+        const isPitcherProp = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed", "batter_strikeouts"].includes(output.market);
+        if (isPitcherProp && sideProbability >= PITCHER_NEAR_MISS_FLOOR) {
+          bypassedAsEarly = true;
+          earlyBypassTag = "PITCHER_NEAR_MISS";
+          console.log(`[MLB QUALIFY PITCHER_NEAR_MISS][${gameId}] ${output.playerName}/${output.market} — prob=${sideProbability.toFixed(1)} in [${PITCHER_NEAR_MISS_FLOOR}, ${qualifyFloor}) — routing to Pre-AB Watch`);
+        } else {
+          console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — prob=${sideProbability.toFixed(1)} < ${qualifyFloor} gate`);
+          return null;
+        }
       }
     }
 
@@ -1119,6 +1152,11 @@ export class LiveGameOrchestrator {
       } else if (passesHighProb) {
         bypassedByHighProb = true;
         console.log(`[MLB QUALIFY HIGH_PROB_BYPASS][${gameId}] ${output.playerName}/${output.market} — signalScore=${scoreBreakdown.total} < ${minScore} but prob=${sideProbability.toFixed(1)} ≥ ${HIGH_PROB_BYPASS_THRESHOLD} — surfacing as HIGH_PROB watch`);
+      } else if (bypassedAsEarly) {
+        // Plan D/E: HR_VS_ELITE_PITCHER and PITCHER_NEAR_MISS candidates also
+        // bypass the score gate — they're explicitly intended to surface as
+        // Pre-AB Watch entries, not be silently dropped by score floors.
+        console.log(`[MLB QUALIFY EARLY_BYPASS_SCORE][${gameId}] ${output.playerName}/${output.market} — signalScore=${scoreBreakdown.total} < ${minScore} but tag=${earlyBypassTag} — surfacing as Pre-AB Watch`);
       } else {
         console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — signalScore=${scoreBreakdown.total} < ${minScore} gate (tier=${scoreBreakdown.confidenceTier})`);
         return null;
@@ -1281,6 +1319,22 @@ export class LiveGameOrchestrator {
       signal.confidenceTier = "WATCHLIST" as any;
       signal.watchlist = true;
       signal.actionable = false;
+    }
+
+    // Plan D + E: stamp early-bypass signals as Pre-AB Watch entries so the
+    // UI band (which keys off isEarlySignal) picks them up, while the main
+    // feed (which gates on confidenceTier ELITE/STRONG and signalScore) does
+    // not. We only touch surfacing flags here — scoring/calibration untouched.
+    if (bypassedAsEarly && earlyBypassTag) {
+      signal.confidenceTier = "WATCHLIST" as any;
+      (signal as any).watchlist = true;
+      (signal as any).actionable = false;
+      (signal as any).isEarlySignal = true;
+      if (!signal.mode) signal.mode = "watch";
+      const tag = earlyBypassTag;
+      if (!signal.feedTags.includes(tag)) (signal.feedTags as string[]).push(tag);
+      if (!signal.signalTags.includes(tag)) (signal.signalTags as string[]).push(tag);
+      console.log(`[MLB QUALIFY EARLY_BYPASS_STAMP][${gameId}] ${output.playerName}/${output.market} — tag=${tag} prob=${sideProbability.toFixed(1)}`);
     }
 
     (signal as any).isDegraded = !!(input as any).isDegraded;
