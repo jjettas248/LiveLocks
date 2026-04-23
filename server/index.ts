@@ -648,6 +648,54 @@ app.use((req, res, next) => {
     console.log("[email-cron] Lifecycle cron scheduled (*/15)");
   })();
 
+  // ── Task #124 — daily HR Radar ledger invariant guard ──────────────────
+  // Runs the canonical ladder validator (mirrors `scripts/validateHrRadarLadder.ts`)
+  // against today and yesterday's session date and emits LOUD logs when any
+  // violation appears, with extra emphasis on the late-vs-cashed grading bug
+  // class (I22, I23, I25). Cron-based so a regression in the matcher cannot
+  // sit in the ledger silently until someone runs the script by hand.
+  cron.schedule(
+    "15 4 * * *",
+    async () => {
+      try {
+        const { validateHrRadarLadder } = await import("./validation/hrRadar/ladderInvariants");
+        const { todayET, daysAgoET } = await import("./utils/dateUtils");
+        const dates = [todayET(), daysAgoET(1)];
+        const LATE_VS_CASHED_CODES = new Set([
+          "I22_SIGNAL_NOT_BEFORE_HR",
+          "I23_DETECTION_AFTER_HR",
+          "I25_LATE_SIGNAL_ACTUALLY_PRE_HR",
+        ]);
+        for (const sessionDate of dates) {
+          const ladder = await storage.getHrRadarLadder(sessionDate);
+          const report = validateHrRadarLadder(ladder);
+          const violationCounts = report.violations.reduce<Record<string, number>>((acc, v) => {
+            acc[v.code] = (acc[v.code] ?? 0) + 1;
+            return acc;
+          }, {});
+          if (report.violations.length === 0) {
+            console.log(`[hr-radar-ladder-cron] ok sessionDate=${sessionDate} totalRows=${report.totalRows}`);
+            continue;
+          }
+          console.warn(`[hr-radar-ladder-cron] VIOLATIONS sessionDate=${sessionDate} totalRows=${report.totalRows} count=${report.violations.length} codes=${JSON.stringify(violationCounts)}`);
+          // Surface the late-vs-cashed grading-bug class with an explicit
+          // ALERT line so it is easy to grep for in production logs.
+          const lateVsCashed = report.violations.filter(v => LATE_VS_CASHED_CODES.has(v.code));
+          if (lateVsCashed.length > 0) {
+            console.error(`[hr-radar-ladder-cron] ALERT late-vs-cashed grading-bug regression detected sessionDate=${sessionDate} count=${lateVsCashed.length}`);
+            for (const v of lateVsCashed.slice(0, 10)) {
+              console.error(`[hr-radar-ladder-cron] ALERT ${v.code} player=${v.playerId} game=${v.gameId} section=${v.section} :: ${v.message}`);
+            }
+          }
+        }
+      } catch (err: any) {
+        console.error("[hr-radar-ladder-cron] failed:", err.message, err.stack);
+      }
+    },
+    { timezone: "America/New_York" }
+  );
+  console.log("[hr-radar-ladder-cron] Daily HR Radar ladder invariant check scheduled (04:15 ET)");
+
   // Daily cleanup: remove unverified accounts older than 24 hours.
   // Strategy: hard-delete. Unverified users are blocked from plays (requirePlayAccess)
   // so they cannot accumulate meaningful dependent rows. The only FK (sent_alerts.user_id)

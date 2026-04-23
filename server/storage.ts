@@ -1,6 +1,7 @@
 import { db } from "./db";
 import { todayET, daysAgoET } from "./utils/dateUtils";
 import { resolveMlbGameSessionDate } from "./utils/mlbSessionDate";
+import { decideHrRadarMatch, QUALIFYING_EVENT_TYPES } from "./validation/hrRadar/matchDecision";
 import { calculateRemainingMinutes } from "./minutesModel";
 import { getPlayerUsage, getTeamDefenseMatchup, computeUsageAdjustment, computeDefenseMultiplier } from "./services/nbaStatsService";
 import { getPlayoffRotationProfile, type PlayoffRotationProfile } from "./services/nbaRotationHistoryService";
@@ -2696,7 +2697,6 @@ export class DatabaseStorage implements IStorage {
         };
       }
 
-      const signalDetectedMs = alert.signalDetectedAt?.getTime() ?? alert.detectedAt.getTime();
       // ── Goldmaster Detection Ledger Phase 5 (RC5) ─────────────────────
       // A called_hit is ONLY valid when an actual qualifying signal event
       // (qualified_detected / promoted_building / promoted_attack /
@@ -2705,14 +2705,6 @@ export class DatabaseStorage implements IStorage {
       // exists with detectedAt < hrEnd" was too permissive — watch-only
       // rows or row drift could be miscredited as called hits. The
       // canonical contract is now: NO qualifying event ⇒ NOT a called hit.
-      const QUALIFYING_EVENT_TYPES = [
-        "qualified_detected",
-        "promoted_building",
-        "promoted_attack",
-        "stage_building",
-        "stage_attack",
-        "escalated",
-      ];
       const eventConditions = [
         eq(hrRadarSignalEvents.gameId, params.gameId),
         eq(hrRadarSignalEvents.playerId, params.playerId),
@@ -2726,67 +2718,38 @@ export class DatabaseStorage implements IStorage {
         .limit(1);
       const lastQualifyingEvent = qualifyingEvents[0] ?? null;
 
-      // Row-level qualifying check: detectedInning is only stamped once
-      // the engine has crossed out of WATCH (Phase 2 contract). If it's
-      // null, the alert never qualified — cannot be a called hit.
-      const rowEverQualified = alert.detectedInning != null;
+      const decision = decideHrRadarMatch({
+        alert: {
+          id: alert.id,
+          signalDetectedAt: alert.signalDetectedAt ?? null,
+          detectedAt: alert.detectedAt,
+          signalInning: alert.signalInning ?? null,
+          signalHalf: alert.signalHalf ?? null,
+          detectedInning: alert.detectedInning ?? null,
+          detectedHalf: alert.detectedHalf ?? null,
+        },
+        lastQualifyingEvent: lastQualifyingEvent
+          ? {
+              id: lastQualifyingEvent.id ?? null,
+              eventType: lastQualifyingEvent.eventType,
+              detectedAt: lastQualifyingEvent.detectedAt,
+              inning: lastQualifyingEvent.inning ?? null,
+              half: lastQualifyingEvent.half ?? null,
+            }
+          : null,
+        hrEnd,
+      });
 
-      if (lastQualifyingEvent && rowEverQualified) {
+      const sigMsLog = (alert.signalDetectedAt ?? alert.detectedAt).getTime();
+      if (decision.gradingStatus === "called_hit" && lastQualifyingEvent && alert.detectedInning != null) {
         console.log(`[HR_RADAR_MATCH_RESULT] called_hit player=${params.playerId} game=${params.gameId} alertId=${alert.id} qualifyingEvent=${lastQualifyingEvent.eventType} signalAt=${new Date(lastQualifyingEvent.detectedAt).toISOString()} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"}`);
-        return {
-          matched: true, matchedBeforeHr: true, isLateSignal: false,
-          alertId: alert.id,
-          signalEventId: lastQualifyingEvent.id ?? null,
-          signalDetectedAt: alert.signalDetectedAt ?? alert.detectedAt ?? lastQualifyingEvent.detectedAt,
-          // Preserve the ORIGINAL inning the alert was first called in. The
-          // alert may have escalated through several innings before the HR
-          // landed; users should see when we first called it, not the most
-          // recent escalation event.
-          signalInning: alert.signalInning ?? alert.detectedInning ?? lastQualifyingEvent.inning,
-          signalHalf: alert.signalHalf ?? alert.detectedHalf ?? lastQualifyingEvent.half,
-          gradingStatus: "called_hit",
-          gradingReason: `qualifying signal event ${lastQualifyingEvent.eventType} at ${new Date(lastQualifyingEvent.detectedAt).toISOString()} strictly preceded HR endTime; row qualified at ${alert.detectedHalf}${alert.detectedInning}`,
-          matchMethod: "direct_pre_hr_signal",
-        };
-      }
-      // ── Task #122 — timestamp-based late_signal guard ─────────────────
-      // Even when no QUALIFYING_EVENT_TYPES row exists OR detectedInning is
-      // null on the alert (rowEverQualified=false), the persisted
-      // signalDetectedAt timestamp is authoritative evidence of when the
-      // engine first surfaced the signal. If that moment is strictly BEFORE
-      // hrEnd by more than a single engine tick, classifying the row as
-      // late_signal is a grading bug — the signal really did precede the HR.
-      // Promote to called_hit so the user gets correct credit on the ledger.
-      const TICK_TOLERANCE_MS = 2000;
-      if (hrEnd && Number.isFinite(signalDetectedMs) && hrEnd - signalDetectedMs > TICK_TOLERANCE_MS) {
-        console.log(`[HR_RADAR_MATCH_RESULT] called_hit (timestamp-rescue) player=${params.playerId} game=${params.gameId} alertId=${alert.id} signalAt=${new Date(signalDetectedMs).toISOString()} hrEndAt=${new Date(hrEnd).toISOString()} deltaMs=${hrEnd - signalDetectedMs}`);
-        return {
-          matched: true, matchedBeforeHr: true, isLateSignal: false,
-          alertId: alert.id,
-          signalEventId: lastQualifyingEvent?.id ?? null,
-          signalDetectedAt: alert.signalDetectedAt ?? alert.detectedAt,
-          signalInning: alert.signalInning ?? alert.detectedInning,
-          signalHalf: alert.signalHalf ?? alert.detectedHalf,
-          gradingStatus: "called_hit",
-          gradingReason: `signalDetectedAt ${new Date(signalDetectedMs).toISOString()} strictly precedes HR endTime ${new Date(hrEnd).toISOString()} by ${hrEnd - signalDetectedMs}ms (timestamp-rescue: no qualifying event row, but persisted signal timestamp is authoritative)`,
-          matchMethod: "direct_pre_hr_signal",
-        };
+      } else if (decision.gradingStatus === "called_hit") {
+        console.log(`[HR_RADAR_MATCH_RESULT] called_hit (timestamp-rescue) player=${params.playerId} game=${params.gameId} alertId=${alert.id} signalAt=${new Date(sigMsLog).toISOString()} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"} deltaMs=${hrEnd != null ? hrEnd - sigMsLog : "n/a"}`);
+      } else {
+        console.log(`[HR_RADAR_MATCH_RESULT] late_signal player=${params.playerId} game=${params.gameId} alertId=${alert.id} signalAt=${new Date(sigMsLog).toISOString()} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"}`);
       }
 
-      console.log(`[HR_RADAR_MATCH_RESULT] late_signal player=${params.playerId} game=${params.gameId} alertId=${alert.id} signalAt=${new Date(signalDetectedMs).toISOString()} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"}`);
-
-      // Alert exists but its signalDetectedAt is at or after HR end → late signal
-      return {
-        matched: true, matchedBeforeHr: false, isLateSignal: true,
-        alertId: alert.id,
-        signalEventId: null,
-        signalDetectedAt: alert.signalDetectedAt ?? alert.detectedAt,
-        signalInning: alert.signalInning ?? alert.detectedInning,
-        signalHalf: alert.signalHalf ?? alert.detectedHalf,
-        gradingStatus: "late_signal",
-        gradingReason: `signal detectedAt ${new Date(signalDetectedMs).toISOString()} occurred at or after HR endTime ${hrEnd ? new Date(hrEnd).toISOString() : "(unknown)"}`,
-        matchMethod: "post_hr_fallback",
-      };
+      return decision;
     } catch (err: any) {
       console.warn(`[HR_RADAR_MATCH_RESULT] Failed: ${err.message}`);
       return {
