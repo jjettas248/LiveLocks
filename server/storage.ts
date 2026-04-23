@@ -2749,6 +2749,30 @@ export class DatabaseStorage implements IStorage {
           matchMethod: "direct_pre_hr_signal",
         };
       }
+      // ── Task #122 — timestamp-based late_signal guard ─────────────────
+      // Even when no QUALIFYING_EVENT_TYPES row exists OR detectedInning is
+      // null on the alert (rowEverQualified=false), the persisted
+      // signalDetectedAt timestamp is authoritative evidence of when the
+      // engine first surfaced the signal. If that moment is strictly BEFORE
+      // hrEnd by more than a single engine tick, classifying the row as
+      // late_signal is a grading bug — the signal really did precede the HR.
+      // Promote to called_hit so the user gets correct credit on the ledger.
+      const TICK_TOLERANCE_MS = 2000;
+      if (hrEnd && Number.isFinite(signalDetectedMs) && hrEnd - signalDetectedMs > TICK_TOLERANCE_MS) {
+        console.log(`[HR_RADAR_MATCH_RESULT] called_hit (timestamp-rescue) player=${params.playerId} game=${params.gameId} alertId=${alert.id} signalAt=${new Date(signalDetectedMs).toISOString()} hrEndAt=${new Date(hrEnd).toISOString()} deltaMs=${hrEnd - signalDetectedMs}`);
+        return {
+          matched: true, matchedBeforeHr: true, isLateSignal: false,
+          alertId: alert.id,
+          signalEventId: lastQualifyingEvent?.id ?? null,
+          signalDetectedAt: alert.signalDetectedAt ?? alert.detectedAt,
+          signalInning: alert.signalInning ?? alert.detectedInning,
+          signalHalf: alert.signalHalf ?? alert.detectedHalf,
+          gradingStatus: "called_hit",
+          gradingReason: `signalDetectedAt ${new Date(signalDetectedMs).toISOString()} strictly precedes HR endTime ${new Date(hrEnd).toISOString()} by ${hrEnd - signalDetectedMs}ms (timestamp-rescue: no qualifying event row, but persisted signal timestamp is authoritative)`,
+          matchMethod: "direct_pre_hr_signal",
+        };
+      }
+
       console.log(`[HR_RADAR_MATCH_RESULT] late_signal player=${params.playerId} game=${params.gameId} alertId=${alert.id} signalAt=${new Date(signalDetectedMs).toISOString()} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"}`);
 
       // Alert exists but its signalDetectedAt is at or after HR end → late signal
@@ -3617,6 +3641,11 @@ export class DatabaseStorage implements IStorage {
           const hitLabel = hitHalf === "F" ? "Final" : `${hitHalf}${hrData.inning}`;
           const sigInn = alert.signalInning ?? alert.detectedInning;
           const sigHalf = alert.signalHalf ?? alert.detectedHalf;
+          // Task #122: the primary called-vs-late grading happens in
+          // matchHrRadarAlertToHrEvent (which has the HR endTime) and now
+          // includes a timestamp-rescue branch. The reconcile fallback only
+          // runs at game-final and lacks the HR endTime, so it stays on the
+          // existing inning/half comparison.
           const isPreHr = signalIsStrictlyBeforeHr(sigInn, sigHalf, hrData.inning, hrData.half);
           if (isPreHr) {
             await db.update(hrRadarAlerts)
