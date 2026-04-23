@@ -187,6 +187,52 @@ function runTests() {
     assert(r.signalHalf === "T", `signalHalf=${r.signalHalf}`);
   }
 
+  // T9 — Task #126 presence-only floor. detectedInning IS NULL AND
+  //      signalDetectedAt IS NULL AND no qualifying event ⇒ called_miss
+  //      (presence-only). Must NEVER promote to called_hit via
+  //      timestamp-rescue, even though hrEnd is well after detectedAt.
+  console.log("\nT9: presence-only ⇒ called_miss (never promotes to called_hit)");
+  {
+    const alert = makeAlert({
+      signalDetectedAt: null,
+      detectedAt: new Date("2026-04-23T22:00:00.000Z"),
+      detectedInning: null,
+      detectedHalf: null,
+      signalInning: null,
+      signalHalf: null,
+    });
+    const hrEnd = new Date("2026-04-23T22:30:00.000Z").getTime();
+    const r = decideHrRadarMatch({ alert, lastQualifyingEvent: null, hrEnd });
+    assert(r.gradingStatus === "called_miss", `gradingStatus=${r.gradingStatus} (expected called_miss)`);
+    assert(r.matchMethod === "player_game_only", `matchMethod=${r.matchMethod}`);
+    assert(r.matched === true, "matched=true");
+    assert(r.matchedBeforeHr === false, "matchedBeforeHr=false");
+    assert(r.isLateSignal === false, "isLateSignal=false");
+    assert(r.signalEventId === null, "signalEventId=null");
+    assert(/presence-only/i.test(r.gradingReason), `reason mentions presence-only: ${r.gradingReason}`);
+  }
+
+  // T10 — Presence-only row but a qualifying event arrived later ⇒ Branch 0
+  //       no longer applies (lastQualifyingEvent != null), falls to normal
+  //       branches. With detectedInning still null + no rescue tolerance,
+  //       this would land in late_signal — which is correct because the
+  //       row has been promoted out of presence-only at that point.
+  console.log("\nT10: presence-only row with later qualifying event no longer triggers Branch 0");
+  {
+    const alert = makeAlert({
+      signalDetectedAt: null,
+      detectedAt: new Date("2026-04-23T22:00:00.000Z"),
+      detectedInning: null,
+      detectedHalf: null,
+      signalInning: null,
+      signalHalf: null,
+    });
+    const ev = makeQualifyingEvent({ id: 7 });
+    const hrEnd = new Date("2026-04-23T22:05:00.000Z").getTime();
+    const r = decideHrRadarMatch({ alert, lastQualifyingEvent: ev, hrEnd });
+    assert(r.gradingStatus !== "called_miss", `gradingStatus=${r.gradingStatus} (must NOT be presence-only when a qualifying event exists)`);
+  }
+
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
   if (failed > 0) process.exit(1);
 }

@@ -2018,6 +2018,15 @@ export class LiveGameOrchestrator {
       batterArchetypeCache.set(batter.playerId, bArch);
     }
 
+    // Task #126 — HR Presence Floor tracker. Records playerIds for whom a
+    // PATH A–E HR-radar row was created/updated this tick (i.e. the engine
+    // returned ALERT or WATCH for the home_runs market). Any batter NOT in
+    // this set who still meets the cheap power-threat eligibility floor
+    // gets a presence-only row written after the markets loop, so a future
+    // HR by that batter grades as called_miss (presence-only) instead of
+    // uncalled_hr.
+    const playersWithRealHrRow = new Set<string>();
+
     // ── Batter markets: evaluate each hitter in the starting lineup ────────────
     for (const market of BATTER_MARKETS) {
       if (!impactedMarkets.has(market)) continue;
@@ -2676,6 +2685,10 @@ export class LiveGameOrchestrator {
                 firstDetectedHalf: hrDynSnap?.detectedHalf ?? null,
                 firstDetectedAtMs: hrDynSnap?.detectedAtMs ?? null,
               }).catch(err => console.warn(`[HR_RADAR_ALERT] persist failed: ${err.message}`));
+              // Task #126 — record that PATH A–E (or PATH_E_CONVICTION) wrote
+              // a real HR-radar row for this player; the presence-floor pass
+              // below must skip them so a real row is never downgraded.
+              playersWithRealHrRow.add(batter.playerId);
             }
           }
         } catch (err: any) {
@@ -2684,6 +2697,90 @@ export class LiveGameOrchestrator {
         }
       }
     }
+
+    // ── Task #126: HR Presence Floor pass ───────────────────────────────────
+    // Walk the batting order one more time (cheap — pure cache reads) and
+    // surface any plausible power-threat batter who DID NOT receive a real
+    // PATH A–E HR-radar row this tick. The presence-only row is created in
+    // the WATCH section with zero readiness; it cannot promote to attack/
+    // building because canonicalStage is forced to "watch" and the matcher
+    // short-circuits these rows to called_miss (presence-only) on any
+    // future HR. Eligibility floors are intentionally cheap so we cover the
+    // long tail of "real" power threats without admitting all replacement
+    // batters.
+    let presenceSurfaced = 0;
+    if (impactedMarkets.has("home_runs")) {
+      for (const batter of state.battingOrder) {
+        if (!batter.playerId || batter.playerId === "unknown") continue;
+        if (!batter.slot || batter.slot < 1 || batter.slot > 9) continue;
+        if (playersWithRealHrRow.has(batter.playerId)) continue;
+
+        const rollingStats = mlbPlayerCache.batterRollingStats[batter.playerId];
+        const playerContact = contactCache?.byPlayerId?.[batter.playerId];
+        const oh = getOnlyHomersEnrichment(batter.playerName);
+
+        const seasonHRRate = rollingStats?.seasonHRRate ?? null;
+        const hrRateLast30 = rollingStats?.hrRateLast30 ?? null;
+        const barrelRate = playerContact?.barrelPct != null
+          ? playerContact.barrelPct / 100
+          : null;
+
+        const eligibilityReasons: string[] = [];
+        if (seasonHRRate != null && seasonHRRate >= 0.025) eligibilityReasons.push(`seasonHRRate=${seasonHRRate.toFixed(3)}`);
+        if (hrRateLast30 != null && hrRateLast30 >= 0.03) eligibilityReasons.push(`hrRateLast30=${hrRateLast30.toFixed(3)}`);
+        if (barrelRate != null && barrelRate >= 0.08) eligibilityReasons.push(`barrelRate=${barrelRate.toFixed(3)}`);
+        if (oh.isHotHitter) eligibilityReasons.push(`hotHitter=${oh.hotHitterPeriod}/${oh.hotHitterHrCount}`);
+
+        if (eligibilityReasons.length === 0) continue;
+
+        const resolvedOpponent = state.homeTeamAbbr && state.awayTeamAbbr
+          ? (batter.team === state.homeTeamAbbr ? state.awayTeamAbbr : state.homeTeamAbbr)
+          : "";
+
+        storage.createOrUpdateHrRadarAlert({
+          gameId,
+          playerId: batter.playerId,
+          playerName: batter.playerName,
+          team: batter.team,
+          opponent: resolvedOpponent,
+          inning: state.inning,
+          half: state.isTopInning ? "top" : "bottom",
+          readinessScore: 0,
+          dynamicReadinessScore: null,
+          canonicalStage: "watch",
+          confidenceTier: "monitor",
+          signalState: "watching",
+          triggerTags: ["presence_floor", ...eligibilityReasons],
+          summaryText: "On HR radar — power profile present",
+          contactSnapshot: null,
+          alertPath: null,
+          alertTier: null,
+          diagnosticsSnapshot: {
+            presenceFloor: {
+              reasons: eligibilityReasons,
+              seasonHRRate,
+              hrRateLast30,
+              barrelRate,
+              isHotHitter: oh.isHotHitter,
+              hotHitterPeriod: oh.hotHitterPeriod,
+              hotHitterHrCount: oh.hotHitterHrCount,
+            },
+          },
+          buildScore: null,
+          conversionProbabilityRaw: null,
+          conversionProbability: null,
+          peakConversionProbability: null,
+          firstDetectedInning: null,
+          firstDetectedHalf: null,
+          firstDetectedAtMs: null,
+          plateAppearancesTracked: 0,
+          hasLiveABContext: false,
+          isPresenceOnly: true,
+        }).catch(err => console.warn(`[HR_PRESENCE_FLOOR] persist failed for ${batter.playerName}: ${err.message}`));
+        presenceSurfaced++;
+      }
+    }
+    console.log(`[HR_PRESENCE_FLOOR][${gameId}] surfaced=${presenceSurfaced} pathAE=${playersWithRealHrRow.size}`);
 
     // ── Pitcher markets: evaluate active pitcher only (skip unknown) ────────────
     const activePitcher = state.pitcherInGame;

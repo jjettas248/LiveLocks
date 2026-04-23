@@ -54,7 +54,7 @@ export interface MatchDecisionResult {
   signalDetectedAt: Date | null;
   signalInning: number | null;
   signalHalf: string | null;
-  gradingStatus: "called_hit" | "uncalled_hr" | "late_signal";
+  gradingStatus: "called_hit" | "called_miss" | "uncalled_hr" | "late_signal";
   gradingReason: string;
   matchMethod: "direct_pre_hr_signal" | "post_hr_fallback" | "player_game_only" | "none";
 }
@@ -77,6 +77,33 @@ export function decideHrRadarMatch(input: {
   const signalDetectedMs =
     alert.signalDetectedAt?.getTime() ?? alert.detectedAt.getTime();
   const rowEverQualified = alert.detectedInning != null;
+
+  // Branch 0 — Task #126 presence-only floor. Row exists ONLY because the
+  // HR Presence Floor surfaced a power-threat batter; it never crossed a
+  // PATH A–E threshold (no qualifying signal_event row, never stamped a
+  // detectedInning, never recorded a signalDetectedAt). Such a row must
+  // grade as called_miss with a presence-only reason — NEVER called_hit
+  // via timestamp-rescue, because the timestamp is just the row creation
+  // moment, not a real signal moment.
+  if (
+    alert.detectedInning == null &&
+    alert.signalDetectedAt == null &&
+    lastQualifyingEvent == null
+  ) {
+    return {
+      matched: true,
+      matchedBeforeHr: false,
+      isLateSignal: false,
+      alertId: alert.id,
+      signalEventId: null,
+      signalDetectedAt: null,
+      signalInning: null,
+      signalHalf: null,
+      gradingStatus: "called_miss",
+      gradingReason: "presence-only — never crossed PATH A-E threshold",
+      matchMethod: "player_game_only",
+    };
+  }
 
   // Branch 1 — strict qualifying event + row crossed out of WATCH.
   if (lastQualifyingEvent && rowEverQualified) {

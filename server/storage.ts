@@ -2639,7 +2639,7 @@ export class DatabaseStorage implements IStorage {
     signalDetectedAt: Date | null;
     signalInning: number | null;
     signalHalf: string | null;
-    gradingStatus: "called_hit" | "uncalled_hr" | "late_signal";
+    gradingStatus: "called_hit" | "called_miss" | "uncalled_hr" | "late_signal";
     gradingReason: string;
     matchMethod: "direct_pre_hr_signal" | "post_hr_fallback" | "player_game_only" | "none";
   }> {
@@ -2745,6 +2745,8 @@ export class DatabaseStorage implements IStorage {
         console.log(`[HR_RADAR_MATCH_RESULT] called_hit player=${params.playerId} game=${params.gameId} alertId=${alert.id} qualifyingEvent=${lastQualifyingEvent.eventType} signalAt=${new Date(lastQualifyingEvent.detectedAt).toISOString()} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"}`);
       } else if (decision.gradingStatus === "called_hit") {
         console.log(`[HR_RADAR_MATCH_RESULT] called_hit (timestamp-rescue) player=${params.playerId} game=${params.gameId} alertId=${alert.id} signalAt=${new Date(sigMsLog).toISOString()} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"} deltaMs=${hrEnd != null ? hrEnd - sigMsLog : "n/a"}`);
+      } else if (decision.gradingStatus === "called_miss") {
+        console.log(`[HR_RADAR_MATCH_RESULT] called_miss (presence-only) player=${params.playerId} game=${params.gameId} alertId=${alert.id} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"} reason="${decision.gradingReason}"`);
       } else {
         console.log(`[HR_RADAR_MATCH_RESULT] late_signal player=${params.playerId} game=${params.gameId} alertId=${alert.id} signalAt=${new Date(sigMsLog).toISOString()} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"}`);
       }
@@ -2825,6 +2827,21 @@ export class DatabaseStorage implements IStorage {
      * player in this game. Pregame-context-only rows must set this to false.
      */
     hasLiveABContext?: boolean | null;
+    /**
+     * Task #126 — HR Presence Floor. When true the row is created strictly
+     * to surface a power-threat batter on the HR radar. Such rows:
+     *   - never stamp detectedInning / detectedHalf / detectedLabel
+     *   - never stamp signalDetectedAt / signalInning / signalHalf
+     *   - bypass the "no dynamic readiness ⇒ refuse to persist" guard
+     *   - never emit qualifying signal_event rows (canonicalStage forced
+     *     to "watch" so stage / qualified_detected branches never fire)
+     *   - never UPDATE an existing live row (so a real PATH A–E row is
+     *     never downgraded by a later presence-floor pass)
+     * Their sole purpose is to convert future HRs by such batters from
+     * `uncalled_hr` (no row existed) into `called_miss` (presence-only —
+     * never crossed PATH A-E threshold) — never into `called_hit`.
+     */
+    isPresenceOnly?: boolean;
   }): Promise<HrRadarAlert | null> {
     // Embed canonical score contract into diagnosticsSnapshot so consumers
     // can read explicit per-domain values without DB schema changes.
@@ -2875,6 +2892,12 @@ export class DatabaseStorage implements IStorage {
     if (data.dynamicReadinessScore != null && Number.isFinite(data.dynamicReadinessScore)) {
       // eslint-disable-next-line no-param-reassign
       data.readinessScore = data.dynamicReadinessScore;
+    } else if (data.isPresenceOnly) {
+      // Task #126 — presence-only rows intentionally have no engine
+      // readiness. Coerce to the floor (0) so storage invariants stay
+      // happy without falsely advertising any heat.
+      // eslint-disable-next-line no-param-reassign
+      data.readinessScore = 0;
     } else {
       // ── Goldmaster Detection Ledger Phase 2 (RC1) ─────────────────────
       // The persisted live row MUST be driven by the dynamic HR alert
@@ -2927,6 +2950,13 @@ export class DatabaseStorage implements IStorage {
       if (existing.length > 0) {
         const alert = existing[0];
         if (alert.status !== "live") return alert;
+
+        // Task #126 — presence-only passes must NEVER mutate an existing
+        // live row. A real PATH A–E row already exists; downgrading it to
+        // monitor/0-readiness via a presence pass would be a regression.
+        if (data.isPresenceOnly) {
+          return alert;
+        }
 
         // ── T003 immutability guardrail ──────────────────────────────────
         // detectedInning / detectedHalf / detectedLabel / detectedAt are
@@ -3117,6 +3147,10 @@ export class DatabaseStorage implements IStorage {
         useFirstDetected && data.firstDetectedAtMs != null
           ? new Date(data.firstDetectedAtMs)
           : nowDate;
+      // Task #126 — presence-only rows leave the detection truth fields
+      // NULL so the matcher's Branch 0 short-circuits to called_miss
+      // instead of timestamp-rescuing them to called_hit.
+      const isPresence = !!data.isPresenceOnly;
       const insertResult = await db.insert(hrRadarAlerts).values({
         id: alertId,
         sessionDate: today,
@@ -3126,9 +3160,9 @@ export class DatabaseStorage implements IStorage {
         team: data.team,
         opponent: data.opponent ?? null,
         detectedAt: detectedAtForRow,
-        detectedInning: persistInning,
-        detectedHalf: persistHalf,
-        detectedLabel,
+        detectedInning: isPresence ? null : persistInning,
+        detectedHalf: isPresence ? null : persistHalf,
+        detectedLabel: isPresence ? null : detectedLabel,
         initialReadinessScore: String(data.readinessScore),
         currentReadinessScore: String(data.readinessScore),
         peakReadinessScore: String(data.readinessScore),
@@ -3146,9 +3180,9 @@ export class DatabaseStorage implements IStorage {
         userVisible: true,
         matchedBeforeHr: false,
         fallbackCreated: false,
-        signalDetectedAt: detectedAtForRow,
-        signalInning: persistInning,
-        signalHalf: persistHalf,
+        signalDetectedAt: isPresence ? null : detectedAtForRow,
+        signalInning: isPresence ? null : persistInning,
+        signalHalf: isPresence ? null : persistHalf,
         analyticsPersisted: false,
       }).onConflictDoNothing();
       if ((insertResult as any).rowCount === 0) {
@@ -3158,7 +3192,7 @@ export class DatabaseStorage implements IStorage {
         return raceExisting[0] ?? null;
       }
 
-      console.log(`[HR_RADAR_ALERT_UPSERT] CREATE sessionDate=${today} gameId=${data.gameId} playerId=${data.playerId} detectedLabel=${detectedLabel} initialReadinessScore=${data.readinessScore} canonicalStage=${data.canonicalStage ?? "(none)"}`);
+      console.log(`[HR_RADAR_ALERT_UPSERT] CREATE sessionDate=${today} gameId=${data.gameId} playerId=${data.playerId} detectedLabel=${isPresence ? "(presence-only)" : detectedLabel} initialReadinessScore=${data.readinessScore} canonicalStage=${data.canonicalStage ?? "(none)"}${isPresence ? " presenceOnly=true" : ""}`);
       // ── Goldmaster Detection Ledger Phase 4 (RC2) ─────────────────────
       // The CREATE-time ledger events MUST mirror the persisted row's
       // earliest-truth detection (detectedAtForRow / persistInning /
@@ -3381,6 +3415,48 @@ export class DatabaseStorage implements IStorage {
             alertId: matchResult.alertId,
             eventType: "resolved_late_signal",
             detectedAt: nowDate, inning: hitInningNum, half: hitHalfVal,
+            source: "grader",
+          } as InsertHrRadarSignalEvent);
+        }
+        return count;
+      }
+
+      // Task #126 — presence-only resolution. The matcher returned
+      // called_miss because the row never crossed PATH A-E. Mark the row
+      // as resolved (status=hit so HR is recorded) with gradingStatus
+      // called_miss + presence-only reason. userVisible=true so the user
+      // sees a "Called miss" outcome in the dead bucket instead of a
+      // hidden admin-only "Uncalled HR" row.
+      if (matchResult.matched && matchResult.gradingStatus === "called_miss" && matchResult.alertId) {
+        const result = await db.update(hrRadarAlerts)
+          .set({
+            status: "hit",
+            hitInning: hitInningNum,
+            hitHalf: hitHalfVal,
+            hitLabel: hitLabelVal,
+            hitDetectedAt: hrEndTimeMs ? new Date(hrEndTimeMs) : nowDate,
+            resolvedAt: nowDate,
+            gradingStatus: "called_miss",
+            gradingReason: matchResult.gradingReason,
+            matchedBeforeHr: false,
+            fallbackCreated: false,
+            userVisible: true,
+            matchMethod: matchResult.matchMethod,
+          })
+          .where(and(
+            eq(hrRadarAlerts.id, matchResult.alertId),
+            eq(hrRadarAlerts.status, "live"),
+          ));
+        const count = (result as any).rowCount ?? 0;
+        if (count > 0) {
+          console.log(`[HR_RADAR_PRESENCE_MISS] playerId=${playerId} gameId=${gameId} hitLabel=${hitLabelVal} reason="${matchResult.gradingReason}"`);
+          console.log(`[HR_LEDGER_GRADE] outcome=called_miss sessionDate=${today} gameId=${gameId} playerId=${playerId} hitInning=${hitInningNum}${hitHalfVal} alertId=${matchResult.alertId} matchMethod=${matchResult.matchMethod} reason=presence_only`);
+          await this.appendHrRadarSignalEvent({
+            sessionDate: today, gameId, playerId, team: "",
+            alertId: matchResult.alertId,
+            eventType: "resolved_called_miss",
+            detectedAt: nowDate,
+            inning: hitInningNum, half: hitHalfVal,
             source: "grader",
           } as InsertHrRadarSignalEvent);
         }
