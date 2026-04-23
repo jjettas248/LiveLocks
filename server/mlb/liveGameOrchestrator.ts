@@ -1101,10 +1101,24 @@ export class LiveGameOrchestrator {
     // the lowest-ROI family. Tighten the floor from 42→46 and add a borderline
     // conviction-cluster gate so single-positive setups stay watch-only and
     // do not promote into surfaced lean/strong plays without a real driver.
+    //
+    // HIGH_PROB_BYPASS (Apr 2026): when the calibrated side probability is
+    // already strong on its own (≥ 65%), do not silently drop the signal just
+    // because the in-game signalScore is low (early-inning / pre-AB scores
+    // are structurally low because contact / streak inputs are zero). Surface
+    // it as a watch-tier "HIGH_PROB" entry instead — all hard floors above
+    // (absolute prob floor, hydration, side-consistency, HR-UNDER block) still
+    // apply, so this can only rescue setups where the math itself is solid.
+    const HIGH_PROB_BYPASS_THRESHOLD = 65;
+    const passesHighProb = sideProbability >= HIGH_PROB_BYPASS_THRESHOLD;
+    let bypassedByHighProb = false;
     const minScore = isBatterOver ? 46 : 50;
     if (scoreBreakdown.total < minScore) {
       if (hrRadarResult && hrRadarResult.total >= 35) {
         console.log(`[MLB QUALIFY HR_WATCH][${gameId}] ${output.playerName}/${output.market} — batterOverScore=${scoreBreakdown.total} < ${minScore} but hrRadarScore=${hrRadarResult.total} ≥ 35, surfacing as HR_WATCH`);
+      } else if (passesHighProb) {
+        bypassedByHighProb = true;
+        console.log(`[MLB QUALIFY HIGH_PROB_BYPASS][${gameId}] ${output.playerName}/${output.market} — signalScore=${scoreBreakdown.total} < ${minScore} but prob=${sideProbability.toFixed(1)} ≥ ${HIGH_PROB_BYPASS_THRESHOLD} — surfacing as HIGH_PROB watch`);
       } else {
         console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — signalScore=${scoreBreakdown.total} < ${minScore} gate (tier=${scoreBreakdown.confidenceTier})`);
         return null;
@@ -1117,6 +1131,8 @@ export class LiveGameOrchestrator {
       // Borderline batter_over band (46-54): require at least one strong
       // conviction driver (matchup, live confirmation, or recent form).
       // Without a driver, downgrade to HR_WATCH if HR-eligible, else reject.
+      // HIGH_PROB_BYPASS also rescues here — a 65%+ probability counts as a
+      // conviction driver in its own right.
       const hasConviction =
         scoreBreakdown.matchup >= 55 ||
         scoreBreakdown.liveContext >= 55 ||
@@ -1124,6 +1140,9 @@ export class LiveGameOrchestrator {
       if (!hasConviction) {
         if (hrRadarResult && hrRadarResult.total >= 35) {
           console.log(`[MLB QUALIFY HR_WATCH][${gameId}] ${output.playerName}/${output.market} — borderline batter_over score=${scoreBreakdown.total} no conviction cluster (matchup=${scoreBreakdown.matchup} live=${scoreBreakdown.liveContext} form=${scoreBreakdown.form}), routing to HR_WATCH`);
+        } else if (passesHighProb) {
+          bypassedByHighProb = true;
+          console.log(`[MLB QUALIFY HIGH_PROB_BYPASS][${gameId}] ${output.playerName}/${output.market} — borderline batter_over score=${scoreBreakdown.total} no conviction cluster but prob=${sideProbability.toFixed(1)} ≥ ${HIGH_PROB_BYPASS_THRESHOLD} — surfacing as HIGH_PROB watch`);
         } else {
           console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — borderline batter_over score=${scoreBreakdown.total} lacks conviction cluster (matchup=${scoreBreakdown.matchup} live=${scoreBreakdown.liveContext} form=${scoreBreakdown.form})`);
           return null;
@@ -1180,6 +1199,18 @@ export class LiveGameOrchestrator {
       else if (hrRadarResult.total >= 65) signalMode = "hr_strong";
       else if (hrRadarResult.total >= 50) signalMode = "hr_heating_up";
       else if (hrRadarResult.total >= 35) signalMode = "hr_watch";
+    }
+
+    // HIGH_PROB_BYPASS rescue: if we surfaced this signal solely because the
+    // calibrated probability is strong on its own, the existing tier ladders
+    // (which key off scoreBreakdown.total) may still leave signalMode null
+    // because the in-game score is below the lowest "watch" cutoff. Force it
+    // into the "watch" tier so it actually renders, and tag it so the UI can
+    // distinguish probability-driven entries from in-game-momentum entries.
+    if (bypassedByHighProb) {
+      if (!signalMode) signalMode = "watch";
+      if (!feedTags.includes("HIGH_PROB" as any)) (feedTags as string[]).push("HIGH_PROB");
+      if (!signalTags.includes("HIGH_PROB" as any)) (signalTags as string[]).push("HIGH_PROB");
     }
 
     const signal: MLBQualifiedSignal = {

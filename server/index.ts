@@ -475,16 +475,109 @@ app.use((req, res, next) => {
   }
 
   const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`serving on port ${port}`);
-    },
-  );
+
+  // EADDRINUSE resilience: a stale dev process holding port 5000 has caused
+  // silent outages where the engine never finishes starting (no polling, no
+  // signals, no UI feedback). Catch the error explicitly, attempt a one-shot
+  // cleanup of the holder via lsof, then retry once. If still unavailable,
+  // crash loudly with a clearly-tagged STARTUP_FAIL line so it cannot hide
+  // among normal logs.
+  let listenAttempted = false;
+  const startListening = () => {
+    httpServer.listen(
+      {
+        port,
+        host: "0.0.0.0",
+        reusePort: true,
+      },
+      () => {
+        log(`serving on port ${port}`);
+      },
+    );
+  };
+
+  httpServer.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code !== "EADDRINUSE") {
+      console.error(`[STARTUP_FAIL] httpServer error: ${err.message}`);
+      throw err;
+    }
+    if (listenAttempted) {
+      console.error(`[STARTUP_FAIL] port ${port} still in use after cleanup attempt — aborting`);
+      process.exit(1);
+    }
+    listenAttempted = true;
+    console.error(`[STARTUP_FAIL] port ${port} already in use — attempting one-shot cleanup of stale holder…`);
+
+    // Cross-platform port-holder discovery: lsof / fuser / ss are not always
+    // available (e.g. minimal Nix containers ship none of them). Fall back to
+    // scanning /proc/*/net/tcp for sockets in LISTEN state on the target port,
+    // then resolving owning pids via /proc/*/fd/* socket inodes. This is pure
+    // Linux /proc and needs no external binaries.
+    const findHoldingPids = (targetPort: number): number[] => {
+      try {
+        const fs = require("fs");
+        const path = require("path");
+        const portHex = targetPort.toString(16).toUpperCase().padStart(4, "0");
+        const tcpFiles = ["/proc/net/tcp", "/proc/net/tcp6"];
+        const listeningInodes = new Set<string>();
+        for (const f of tcpFiles) {
+          if (!fs.existsSync(f)) continue;
+          const lines = fs.readFileSync(f, "utf8").split("\n").slice(1);
+          for (const line of lines) {
+            const cols = line.trim().split(/\s+/);
+            if (cols.length < 10) continue;
+            const localAddr = cols[1] ?? "";
+            const state = cols[3] ?? "";
+            const inode = cols[9] ?? "";
+            if (state !== "0A") continue; // 0A = LISTEN
+            if (!localAddr.endsWith(":" + portHex)) continue;
+            if (inode && inode !== "0") listeningInodes.add(inode);
+          }
+        }
+        if (listeningInodes.size === 0) return [];
+        const pids: number[] = [];
+        const procEntries = fs.readdirSync("/proc");
+        for (const entry of procEntries) {
+          if (!/^\d+$/.test(entry)) continue;
+          const pid = Number(entry);
+          if (pid === process.pid) continue;
+          const fdDir = path.join("/proc", entry, "fd");
+          let fdNames: string[];
+          try { fdNames = fs.readdirSync(fdDir); } catch { continue; }
+          for (const fd of fdNames) {
+            let link: string;
+            try { link = fs.readlinkSync(path.join(fdDir, fd)); } catch { continue; }
+            const m = link.match(/^socket:\[(\d+)\]$/);
+            if (m && listeningInodes.has(m[1])) {
+              pids.push(pid);
+              break;
+            }
+          }
+        }
+        return pids;
+      } catch (err) {
+        console.error(`[STARTUP_FAIL] /proc scan failed: ${(err as Error).message}`);
+        return [];
+      }
+    };
+
+    const stalePids = findHoldingPids(port);
+    if (stalePids.length) {
+      for (const pid of stalePids) {
+        try {
+          process.kill(pid, "SIGKILL");
+          console.error(`[STARTUP_FAIL] killed stale pid ${pid} holding port ${port}`);
+        } catch (err) {
+          console.error(`[STARTUP_FAIL] failed to kill pid ${pid}: ${(err as Error).message}`);
+        }
+      }
+    } else {
+      console.error(`[STARTUP_FAIL] no other process found holding port ${port} via /proc — port may be in TIME_WAIT; retrying anyway in 750ms`);
+    }
+    setTimeout(startListening, 750);
+  });
+
+  startListening();
 
   // ─── Email lifecycle: backfill → blast → 15-min cron ───────────────────────
 
