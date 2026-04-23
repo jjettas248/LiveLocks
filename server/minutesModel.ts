@@ -120,6 +120,12 @@ export function calculateRemainingMinutes(ctx: MinutesContext): MinutesResult {
     } else if (baseRotationMinutes < 24) {
       closingProbability = Math.max(0.20, closingProbability - 0.06);
     }
+    // Playoff anchor floor — when no profile is available, fall back to a
+    // small additional bump for stable rotation pieces (avgMinutes >= 30 with
+    // meaningful usage). Avoids inflating volatile or fringe roles.
+    if (!profile && avgMinutes >= 30 && usageRate >= 0.20) {
+      closingProbability = Math.min(0.99, closingProbability + 0.02);
+    }
     // PHASE 2C: close-game trust multiplier
     if (profile?.closeGameTrustScore != null) {
       const trust = profile.closeGameTrustScore; // 0-1

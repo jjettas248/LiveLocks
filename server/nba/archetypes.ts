@@ -141,14 +141,23 @@ export function getSafetyCeiling(archetype: NBAArchetype, isCombo: boolean): num
 }
 
 // ── Playoff-aware ceilings ────────────────────────────────────────────────
-// Lower than regular-season ceilings across the board. Top-end probability is
-// historically inflated in playoff conditions (tighter rotations, higher
-// variance, tougher matchups) so we cap how confident the engine is allowed
-// to be even before display rounding.
+// Stable rotation pieces (stable_star / stable_starter) are *less* uncertain
+// in playoffs because rotations tighten and roles concentrate — they earn a
+// HIGHER ceiling than regular season. Volatile / impacted archetypes stay
+// conservative or get tighter caps because short leashes, role compression
+// and foul trouble matter more in playoff games.
 export function getPlayoffSafetyCeiling(archetype: NBAArchetype, isCombo: boolean): number {
   if (isImpactedArchetype(archetype)) return 0.60;
   if (isVolatileArchetype(archetype)) return isCombo ? 0.62 : 0.66;
-  return isCombo ? 0.70 : 0.76;
+  // Stable archetypes — relax above regular-season caps (0.74 / 0.80).
+  return isCombo ? 0.78 : 0.85;
+}
+
+// True iff the archetype is a stable rotation piece eligible for the
+// playoff-aware ceiling relaxation. Volatile / impacted archetypes never
+// qualify and always stay under the more conservative cap.
+export function isStableArchetype(a: NBAArchetype): boolean {
+  return a === "stable_star" || a === "stable_starter";
 }
 
 // ── Playoff fragility multiplier ──────────────────────────────────────────
@@ -157,9 +166,13 @@ export function getPlayoffSafetyCeiling(archetype: NBAArchetype, isCombo: boolea
 // blowout substitutions, foul trouble matters more). Used to scale the
 // fragilityScore in storage.calculateProbability when isPlayoffs.
 export function getPlayoffFragilityMultiplier(archetype: NBAArchetype): number {
+  // Playoff calibration recovery: stable rotation pieces (stars + starters)
+  // earn a meaningful fragility *reduction* in playoffs because coaches lean
+  // on them harder and rotations tighten around them. Volatile / impacted
+  // archetypes stay penalized — short leashes, role compression, foul risk.
   switch (archetype) {
-    case "stable_star":      return 0.98;
-    case "stable_starter":   return 1.00;
+    case "stable_star":      return 0.92;
+    case "stable_starter":   return 0.95;
     case "volatile_starter": return 1.08;
     case "bench_microwave":  return 1.15;
     case "low_minute_big":   return 1.12;

@@ -76,14 +76,21 @@ export interface NBAValidationRules {
   requireProjectionAlignment: boolean;
 }
 
+// Playoff calibration recovery: route-level edge gates already cut weak
+// signals (edge<3 live / edge<4 halftime). Strict rules previously stacked an
+// 8-edge / 55%-probability second filter on top of route gates *and* the
+// fragility + calibration + ceiling compression. That double-suppression was
+// starving the high-confidence bucket in playoffs. We keep strict mode as the
+// canonical actionable gate but soften it so it doesn't double-cut what the
+// route layer already accepted.
 export const NBA_STRICT_RULES: NBAValidationRules = {
-  minEdge: 8,
-  minProbability: 55,
+  minEdge: 5,
+  minProbability: 52,
   requireProjectionAlignment: true,
 };
 
 export const NBA_FALLBACK_RULES: NBAValidationRules = {
-  minEdge: 4,
-  minProbability: 52,
+  minEdge: 3,
+  minProbability: 51,
   requireProjectionAlignment: true,
 };

@@ -4,7 +4,7 @@ import { resolveMlbGameSessionDate } from "./utils/mlbSessionDate";
 import { calculateRemainingMinutes } from "./minutesModel";
 import { getPlayerUsage, getTeamDefenseMatchup, computeUsageAdjustment, computeDefenseMultiplier } from "./services/nbaStatsService";
 import { getPlayoffRotationProfile, type PlayoffRotationProfile } from "./services/nbaRotationHistoryService";
-import { classifyArchetype as classifyNBAArchetype, type NBAArchetype, VARIANCE_MULTIPLIERS, MINUTES_FRAGILITY_MULTIPLIERS, CORRELATION_DEFAULTS, COMBO_VARIANCE_EXTRA, isVolatileArchetype, isImpactedArchetype, getSafetyCeiling, getPlayoffSafetyCeiling, getPlayoffFragilityMultiplier } from "./nba/archetypes";
+import { classifyArchetype as classifyNBAArchetype, type NBAArchetype, VARIANCE_MULTIPLIERS, MINUTES_FRAGILITY_MULTIPLIERS, CORRELATION_DEFAULTS, COMBO_VARIANCE_EXTRA, isVolatileArchetype, isImpactedArchetype, isStableArchetype, getSafetyCeiling, getPlayoffSafetyCeiling, getPlayoffFragilityMultiplier } from "./nba/archetypes";
 import { isUnderBiasCorrectionActive } from "./nba/directionalBias";
 import {
   players,
@@ -514,6 +514,15 @@ export class DatabaseStorage implements IStorage {
     else if (d >= lateSeasonStart) seasonPhase = "late";
     else if (m >= 10 && m <= 12) seasonPhase = "early";
     else seasonPhase = "mid"; // Jan–Feb
+
+    if (process.env.DEBUG_NBA === "true") {
+      console.log("[NBA_PLAYOFF_PHASE]", {
+        gameDate: d.toISOString().slice(0, 10),
+        seasonPhase,
+        isPlayoffs: seasonPhase === "playoffs",
+        playoffsStart: playoffsStart.toISOString().slice(0, 10),
+      });
+    }
 
     return {
       seasonPhase,
@@ -1063,9 +1072,18 @@ export class DatabaseStorage implements IStorage {
     // extra penalty layered on top. This is the primary mechanism for stopping
     // the 80–100 confidence bucket from being overclaimed in playoffs.
     if (isPlayoffs) {
-      const baseShrink = isComboStat ? 0.72 : 0.82;
+      // Playoff calibration recovery: stable rotation pieces get a much
+      // gentler shrink (or none for stable_star single markets) — they were
+      // being over-compressed and squeezed out of the high-confidence
+      // bucket. Volatile / impacted archetypes still shrink hard.
+      const isStable = isStableArchetype(nbaArchetype);
+      const baseShrink = isStable
+        ? (isComboStat ? 0.92 : 0.98)
+        : (isComboStat ? 0.72 : 0.82);
       let archetypePenalty = 1.0;
       switch (nbaArchetype) {
+        case "stable_star":      archetypePenalty = 1.00; break;
+        case "stable_starter":   archetypePenalty = 0.98; break;
         case "volatile_starter": archetypePenalty = 0.95; break;
         case "bench_microwave":  archetypePenalty = 0.90; break;
         case "low_minute_big":   archetypePenalty = 0.92; break;
@@ -1077,22 +1095,53 @@ export class DatabaseStorage implements IStorage {
       calibrationTrack += `+playoff_shrink_${baseShrink.toFixed(2)}x${archetypePenalty.toFixed(2)}`;
     }
 
-    // Safety ceiling — playoff ceiling overlaid on top of regular-season ceiling.
-    // We always take the more conservative (lower) of the two so playoff mode
-    // can never raise the cap above what regular-season would allow.
+    // Safety ceiling — playoff-aware resolution.
+    //   • Stable archetypes in playoffs: use the playoff ceiling directly so
+    //     stable stars / starters can exceed the regular-season cap.
+    //   • Volatile / impacted: take the MORE conservative (lower) of the
+    //     two — playoff mode never relaxes their caps.
+    //   • Non-playoff: regular-season ceiling.
     const regularCeiling = getSafetyCeiling(nbaArchetype, isComboStat);
     const playoffCeiling = isPlayoffs ? getPlayoffSafetyCeiling(nbaArchetype, isComboStat) : regularCeiling;
-    const appliedCeiling = Math.min(regularCeiling, playoffCeiling);
+    const appliedCeiling = isPlayoffs && isStableArchetype(nbaArchetype)
+      ? playoffCeiling
+      : Math.min(regularCeiling, playoffCeiling);
     let P_side_final = Math.min(P_side_calibrated, appliedCeiling);
     let confidenceCeilingApplied = P_side_calibrated > appliedCeiling;
+    const isPlayoffCap = isPlayoffs && appliedCeiling !== regularCeiling;
     let ceilingReason = confidenceCeilingApplied
-      ? `${nbaArchetype}_${isComboStat ? "combo" : "single"}_cap_${appliedCeiling}${isPlayoffs && appliedCeiling < regularCeiling ? "_playoff" : ""}`
+      ? `${nbaArchetype}_${isComboStat ? "combo" : "single"}_cap_${appliedCeiling}${isPlayoffCap ? "_playoff" : ""}`
       : null;
-    if (isPlayoffs && appliedCeiling < regularCeiling) {
+    if (isPlayoffCap) {
       calibrationTrack += `+playoff_cap_${appliedCeiling}`;
     }
     // Backwards-compat for existing diagnostics field name.
     const ceiling = appliedCeiling;
+
+    if (process.env.DEBUG_NBA === "true") {
+      console.log("[NBA_PROB_TRACE]", {
+        player: player.name,
+        market: req.statType,
+        seasonPhase,
+        archetype: nbaArchetype,
+        rawProb: Math.round(P_side_raw * 10000) / 10000,
+        fragilityScore: Math.round(fragilityScore * 1000) / 1000,
+        fragilityPenalty: Math.round(fragilityPenalty * 1000) / 1000,
+        postFragilityProb: Math.round(P_side_fragile * 10000) / 10000,
+        calibrationTrack,
+        postCalibrationProb: Math.round(P_side_calibrated * 10000) / 10000,
+      });
+      console.log("[NBA_CEILING_TRACE]", {
+        player: player.name,
+        market: req.statType,
+        archetype: nbaArchetype,
+        regularCeiling,
+        playoffCeiling,
+        appliedCeiling,
+        confidenceCeilingApplied,
+        finalProb: Math.round(P_side_final * 10000) / 10000,
+      });
+    }
 
     // Convert to percentage scale for compatibility
     let probability = rawSide === "OVER"

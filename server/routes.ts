@@ -4161,10 +4161,14 @@ export async function registerRoutes(
               // Step 2: compute edge (only after finite check)
               const edge = Math.abs(result.probability - 50);
 
-              // Step 3: threshold gate — plays below minimum edge are not actionable
-              if (edge < 5) {
-                if (process.env.DEBUG_PIPELINE === "true") {
-                  console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] player=${dbPlayer.name} stat=${statType} prob=${result.probability.toFixed(1)} edge=${edge.toFixed(1)} skipReason=lowEdge`);
+              // Step 3: threshold gate — plays below minimum edge are not actionable.
+              // Playoff calibration recovery: route-level cutoff is the loose
+              // first pass (3-edge); the engine strict rules layer is the
+              // canonical actionable gate. Stacking both at 5+8 starved the
+              // high-confidence bucket in playoffs.
+              if (edge < 3) {
+                if (process.env.DEBUG_PIPELINE === "true" || process.env.DEBUG_NBA === "true") {
+                  console.log(`[NBA_ROUTE_FILTER]`, { player: dbPlayer.name, market: statType, prob: Math.round(result.probability * 10) / 10, edge: Math.round(edge * 10) / 10, reason: "lowEdge_route_live" });
                 }
                 continue;
               }
@@ -4936,8 +4940,16 @@ export async function registerRoutes(
                 // Step 2: compute edge — only after finite check
                 let edge = Math.abs(result.probability - 50);
 
-                // Step 3: threshold gate — plays below minimum edge are not actionable
-                if (edge < 6) continue;
+                // Step 3: threshold gate — plays below minimum edge are not actionable.
+                // Playoff calibration recovery: lowered from 6 → 4 so the
+                // engine strict-rules layer is the canonical actionable gate
+                // and we don't double-cut what calibration already compressed.
+                if (edge < 4) {
+                  if (process.env.DEBUG_NBA === "true") {
+                    console.log(`[NBA_ROUTE_FILTER]`, { player: dbPlayer.name, market: statType, prob: Math.round(result.probability * 10) / 10, edge: Math.round(edge * 10) / 10, reason: "lowEdge_route_halftime" });
+                  }
+                  continue;
+                }
 
                 // Step 4: explicit zero-edge exclusion (belt-and-suspenders; redundant with step 3
                 // since prob===50 → edge===0 < 6, but required by evaluation contract).
