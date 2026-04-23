@@ -187,4 +187,16 @@
   .halftime-count-pulse {
     animation: countPulse 300ms ease;
   }
+
+  /* Task #121 Step 5 — one-time emerald glow when a HR-radar entry just
+     transitioned into the cashed section. Plays exactly once. */
+  @keyframes hrCashedPulse {
+    0%   { box-shadow: 0 0 0 0 hsl(160 84% 50% / 0.0); transform: scale(1); }
+    35%  { box-shadow: 0 0 14px 3px hsl(160 84% 50% / 0.55); transform: scale(1.015); }
+    100% { box-shadow: 0 0 0 0 hsl(160 84% 50% / 0.0); transform: scale(1); }
+  }
+  .animate-pulse-once {
+    animation: hrCashedPulse 2.2s ease-in-out 1;
+    border-radius: 0.5rem;
+  }
 }

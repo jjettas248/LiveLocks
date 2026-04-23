@@ -1,10 +1,38 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronRight, Flame, Zap, Eye, CheckCircle2, XCircle, Plus, AlertTriangle, RefreshCw, Eraser } from "lucide-react";
+import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, AlertTriangle, RefreshCw, Eraser, X, ArrowRight, Clock, DollarSign } from "lucide-react";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
+
+// Task #121 Step 3 — per-session dismiss list (Pass action). Keyed by
+// sessionDate so tomorrow's session starts clean.
+function dismissStorageKey(sessionDate: string): string {
+  return `hr-radar-pass:${sessionDate}`;
+}
+function readDismissed(sessionDate: string): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(dismissStorageKey(sessionDate));
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+}
+function writeDismissed(sessionDate: string, set: Set<string>): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(dismissStorageKey(sessionDate), JSON.stringify(Array.from(set)));
+  } catch {
+    // Storage quota / private mode — best effort, ignore.
+  }
+}
+function entryDismissKey(playerId: string, gameId: string): string {
+  return `${playerId}|${gameId}`;
+}
 
 export type HrRadarStageLabel = "watch" | "building" | "attack" | "cooling" | "closed";
 export type HrRadarOutcomeLabel =
@@ -69,6 +97,15 @@ export interface HrRadarLadderEntry {
   hitDetectedAt: string | null;
   resolvedAt: string | null;
   alertPath: string | null;
+  // Task #121 Step 4 — remaining-window urgency line.
+  remainingPAExpectation?: number | null;
+  currentInning?: number | null;
+  // Task #121 Step 5 — Statcast (OnlyHomers) stats for cashed cards.
+  onlyHomersVerified?: boolean;
+  ohExitVelocity?: number | null;
+  ohLaunchAngle?: number | null;
+  ohDistance?: number | null;
+  ohPitchType?: string | null;
 }
 
 export interface HrRadarLadderResponse {
@@ -119,7 +156,7 @@ const SECTION_META: Record<SectionKey, {
   },
   cashed: {
     label: "CASHED",
-    icon: CheckCircle2,
+    icon: Trophy,
     accent: "border-emerald-500/40 bg-emerald-500/5",
     badge: "bg-emerald-500 text-white",
     description: "HR confirmed after a called signal.",
@@ -174,6 +211,7 @@ interface CardProps {
   section: SectionKey;
   onAddToSlip?: (sig: MlbSignalData) => void;
   onOpenDetails?: (entry: HrRadarLadderEntry) => void;
+  onPass?: (entry: HrRadarLadderEntry) => void;
 }
 
 /**
@@ -233,7 +271,7 @@ function HeatingUpMeter({
   );
 }
 
-function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
+function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass }: CardProps) {
   // Goldmaster Phase 2+3 — prefer the FROZEN server-stamped detectedLabel /
   // hitLabel (these never advance on score climbs). Fall back to formatting
   // the (inning, half) pair for legacy rows that pre-date the label fields.
@@ -394,10 +432,55 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
             </Badge>
           )}
           {section === "cashed" && entry.alertPath === "early" && (
-            <Badge className="text-[9px] px-1.5 py-0 whitespace-nowrap bg-emerald-600 text-white">Early call</Badge>
+            <Badge className="text-[9px] px-1.5 py-0 whitespace-nowrap bg-amber-500 text-zinc-950 gap-0.5 flex items-center" data-testid={`badge-early-call-${entry.playerId}`}>
+              <DollarSign className="w-2.5 h-2.5" /> Early Call
+            </Badge>
           )}
         </div>
       </div>
+
+      {/* Task #121 Step 5 — cashed cards: "Called T{d} → Hit T{h}" arc with
+          inning delta + Statcast (EV / dist / LA / pitch) row when verified. */}
+      {section === "cashed" && (detected || hit) && (
+        <div className="mt-2 flex items-center gap-1.5 text-[11px]" data-testid={`text-cashed-arc-${entry.playerId}`}>
+          <span className="px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-300 font-mono font-semibold">
+            Called {detected ?? "—"}
+          </span>
+          <ArrowRight className="w-3 h-3 text-emerald-400" />
+          <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono font-semibold">
+            Hit {hit ?? "—"}
+          </span>
+          {entry.detectedInning != null && entry.hitInning != null && (
+            <span className="text-muted-foreground text-[10px]">
+              ({Math.max(0, entry.hitInning - entry.detectedInning)} inn{Math.abs(entry.hitInning - entry.detectedInning) === 1 ? "" : "s"} later)
+            </span>
+          )}
+        </div>
+      )}
+      {section === "cashed" && entry.onlyHomersVerified && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-foreground/80" data-testid={`row-cashed-stats-${entry.playerId}`}>
+          {entry.ohExitVelocity != null && (
+            <span data-testid={`text-stat-ev-${entry.playerId}`}>
+              <span className="text-muted-foreground">EV</span> <span className="font-mono font-semibold">{entry.ohExitVelocity.toFixed(1)}</span>
+            </span>
+          )}
+          {entry.ohDistance != null && (
+            <span data-testid={`text-stat-distance-${entry.playerId}`}>
+              <span className="text-muted-foreground">Dist</span> <span className="font-mono font-semibold">{Math.round(entry.ohDistance)}ft</span>
+            </span>
+          )}
+          {entry.ohLaunchAngle != null && (
+            <span data-testid={`text-stat-la-${entry.playerId}`}>
+              <span className="text-muted-foreground">LA</span> <span className="font-mono font-semibold">{entry.ohLaunchAngle.toFixed(0)}°</span>
+            </span>
+          )}
+          {entry.ohPitchType && (
+            <span data-testid={`text-stat-pitch-${entry.playerId}`}>
+              <span className="text-muted-foreground">Pitch</span> <span className="font-mono font-semibold">{entry.ohPitchType}</span>
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Goldmaster Phase 5 + 6 — prefer canonical summary on resolved rows;
           show plain-English reasons (jargon stripped) on live rows. */}
@@ -433,16 +516,56 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails }: CardProps) {
         </ul>
       )}
 
+      {/* Task #121 Step 4 — remaining-window urgency line. Lives directly
+          above the actions so the user sees it just before deciding. */}
+      {!isResolved && entry.remainingPAExpectation != null && entry.remainingPAExpectation > 0 && (() => {
+        const pa = entry.remainingPAExpectation!;
+        // Use live game-state inning (currentInning) for late-inning copy —
+        // detectedInning is frozen and would misstate urgency for signals
+        // detected early but now in the bottom of the order.
+        const inn = entry.currentInning ?? entry.detectedInning ?? null;
+        const lateInning = inn != null && inn >= 7;
+        const lowPA = pa <= 2;
+        const critical = pa <= 1;
+        const urgent = critical || lowPA || lateInning;
+        const tone = critical
+          ? "text-amber-300"
+          : urgent
+          ? "text-amber-400"
+          : "text-muted-foreground";
+        const expiresLabel = lateInning ? `expires after T${Math.max(8, inn ?? 8)}` : null;
+        return (
+          <div
+            className={`mt-2 flex items-center gap-1 text-[11px] ${tone}`}
+            data-testid={`text-remaining-window-${entry.playerId}`}
+          >
+            <Clock className="w-3 h-3" />
+            <span>~{pa < 1 ? pa.toFixed(1) : Math.round(pa)} PA left{expiresLabel ? ` · ${expiresLabel}` : ""}</span>
+          </div>
+        );
+      })()}
+
+      {/* Task #121 Step 3 — Take it / Pass dual control on live cards. */}
       {canAdd && (
-        <div className="mt-2 flex justify-end">
+        <div className="mt-2 flex items-center justify-end gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 text-[11px] gap-1 text-muted-foreground hover:text-foreground"
+            onClick={() => onPass?.(entry)}
+            data-testid={`button-pass-ladder-${entry.playerId}`}
+            title="Dismiss this card for the rest of today's session"
+          >
+            <X className="w-3 h-3" /> Pass
+          </Button>
           <Button
             size="sm"
             variant="outline"
-            className="h-7 text-[11px] gap-1"
+            className="h-7 text-[11px] gap-1 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10"
             onClick={handleAdd}
-            data-testid={`button-add-slip-ladder-${entry.playerId}`}
+            data-testid={`button-take-it-ladder-${entry.playerId}`}
           >
-            <Plus className="w-3 h-3" /> Add HR Over 0.5
+            <Plus className="w-3 h-3" /> Take it
           </Button>
         </div>
       )}
@@ -455,9 +578,11 @@ interface LadderSectionProps {
   entries: HrRadarLadderEntry[];
   onAddToSlip?: (sig: MlbSignalData) => void;
   onOpenDetails?: (entry: HrRadarLadderEntry) => void;
+  onPass?: (entry: HrRadarLadderEntry) => void;
+  freshlyCashedKeys?: Set<string>;
 }
 
-function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails }: LadderSectionProps) {
+function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails, onPass, freshlyCashedKeys }: LadderSectionProps) {
   const meta = SECTION_META[sectionKey];
   const [collapsed, setCollapsed] = useState(meta.defaultCollapsed);
   const Icon = meta.icon;
@@ -488,15 +613,25 @@ function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails }: Ladd
               No entries.
             </div>
           ) : (
-            entries.map(e => (
-              <LadderCard
-                key={`${sectionKey}-${e.playerId}-${e.gameId}`}
-                entry={e}
-                section={sectionKey}
-                onAddToSlip={onAddToSlip}
-                onOpenDetails={onOpenDetails}
-              />
-            ))
+            entries.map(e => {
+              const dismissKey = entryDismissKey(e.playerId, e.gameId);
+              const justCashed = sectionKey === "cashed" && (freshlyCashedKeys?.has(dismissKey) ?? false);
+              return (
+                <div
+                  key={`${sectionKey}-${e.playerId}-${e.gameId}`}
+                  className={justCashed ? "animate-pulse-once" : undefined}
+                  data-testid={justCashed ? `wrap-cashed-pulse-${e.playerId}` : undefined}
+                >
+                  <LadderCard
+                    entry={e}
+                    section={sectionKey}
+                    onAddToSlip={onAddToSlip}
+                    onOpenDetails={onOpenDetails}
+                    onPass={onPass}
+                  />
+                </div>
+              );
+            })
           )}
         </div>
       )}
@@ -557,8 +692,75 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
     );
   }
 
-  const sections = data?.sections ?? { attackNow: [], building: [], watch: [], cashed: [], dead: [] };
-  const counts = data?.counts ?? { attackNow: 0, building: 0, watch: 0, cashed: 0, dead: 0, total: 0 };
+  const rawSections = data?.sections ?? { attackNow: [], building: [], watch: [], cashed: [], dead: [] };
+  const sessionDate = data?.sessionDate ?? "";
+
+  // Task #121 Step 3 — per-session "Pass" dismiss list, persisted in
+  // localStorage. Re-read on session-date change so tomorrow's session is
+  // clean. Live (Watch / Building / AttackNow) entries dismissed by the
+  // user are filtered out; cashed / dead are never auto-hidden by Pass.
+  const [dismissed, setDismissed] = useState<Set<string>>(() => readDismissed(sessionDate));
+  useEffect(() => {
+    setDismissed(readDismissed(sessionDate));
+  }, [sessionDate]);
+  const handlePass = (entry: HrRadarLadderEntry) => {
+    const key = entryDismissKey(entry.playerId, entry.gameId);
+    setDismissed(prev => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      writeDismissed(sessionDate, next);
+      return next;
+    });
+  };
+  const filterDismissed = (list: HrRadarLadderEntry[]): HrRadarLadderEntry[] =>
+    list.filter(e => !dismissed.has(entryDismissKey(e.playerId, e.gameId)));
+
+  const sections = useMemo(() => ({
+    attackNow: filterDismissed(rawSections.attackNow ?? []),
+    building: filterDismissed(rawSections.building ?? []),
+    watch: filterDismissed(rawSections.watch ?? []),
+    cashed: rawSections.cashed ?? [],
+    dead: rawSections.dead ?? [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [rawSections, dismissed]);
+
+  const counts = {
+    attackNow: sections.attackNow.length,
+    building: sections.building.length,
+    watch: sections.watch.length,
+    cashed: sections.cashed.length,
+    dead: sections.dead.length,
+    total: sections.attackNow.length + sections.building.length + sections.watch.length + sections.cashed.length + sections.dead.length,
+  };
+
+  // Task #121 Step 5 — one-time pulse when an entry transitions into cashed.
+  // The `cashedInitializedRef` baseline guard prevents the pulse from firing
+  // on the FIRST payload (otherwise every cashed card on initial load would
+  // animate). Pulse fires only on subsequent additions during the session.
+  const previousCashedKeysRef = useRef<Set<string>>(new Set());
+  const cashedInitializedRef = useRef<boolean>(false);
+  const [freshlyCashedKeys, setFreshlyCashedKeys] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    const currentKeys = new Set(sections.cashed.map(e => entryDismissKey(e.playerId, e.gameId)));
+    if (!cashedInitializedRef.current) {
+      // Seed baseline silently on the first payload — no animation.
+      previousCashedKeysRef.current = currentKeys;
+      cashedInitializedRef.current = true;
+      return;
+    }
+    const newlyAdded = new Set<string>();
+    for (const k of Array.from(currentKeys)) {
+      if (!previousCashedKeysRef.current.has(k)) newlyAdded.add(k);
+    }
+    previousCashedKeysRef.current = currentKeys;
+    if (newlyAdded.size > 0) {
+      setFreshlyCashedKeys(newlyAdded);
+      const t = window.setTimeout(() => setFreshlyCashedKeys(new Set()), 2400);
+      return () => window.clearTimeout(t);
+    }
+  }, [sections.cashed]);
+
   const allOrder: SectionKey[] = ["attackNow", "building", "watch", "cashed", "dead"];
   const order: SectionKey[] = hideFinished
     ? allOrder.filter(k => k !== "cashed" && k !== "dead")
@@ -618,6 +820,8 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
           entries={sections[key]}
           onAddToSlip={onAddToSlip}
           onOpenDetails={onOpenDetails}
+          onPass={handlePass}
+          freshlyCashedKeys={freshlyCashedKeys}
         />
       ))}
       {counts.total === 0 && (

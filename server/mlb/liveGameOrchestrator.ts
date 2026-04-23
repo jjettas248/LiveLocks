@@ -58,7 +58,7 @@ import { buildLiveEventInterpretation } from "./liveEventInterpretation";
 import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, clearGameCooldowns, type HRAlertInput } from "./evaluateHRAlert";
-import { recomputeHrAlertState, clearGameHrStates, getHrAlertState, mapDynamicStateToStage, type HRAlertSnapshot } from "./hrAlertEngine";
+import { recomputeHrAlertState, clearGameHrStates, getHrAlertState, mapDynamicStateToStage, seedHrAlertDetection, type HRAlertSnapshot } from "./hrAlertEngine";
 import { todayET } from "../utils/dateUtils";
 import { buildHRSignal } from "./HRSignalBuilder";
 import { getPlayer } from "./rosterService";
@@ -222,6 +222,10 @@ function gradeHomeRunsFromPlays(gameId: string): void {
     if (cumulativeHR > 0) KNOWN_HR_COUNTS.set(trackerKey, cumulativeHR);
   }
 }
+
+// Task #121 Step 1 — per-process set of games whose HR-radar detection state
+// has been hydrated from DB after boot. Prevents re-hydration on every poll.
+const HR_RADAR_HYDRATED_GAMES = new Set<string>();
 
 // ── Engine dedup lock ─────────────────────────────────────────────────────────
 const LAST_RUN = new Map<string, number>();
@@ -695,6 +699,36 @@ export class LiveGameOrchestrator {
     if (!statsPk) {
       console.log(`[MLB orchestrator] pollGame(${gameId}): gamePk not yet resolved — skipping Stats API calls`);
       return;
+    }
+
+    // Task #121 Step 1 — hydrate HR alert detection state from DB on first
+    // poll after a process boot. Without this, the in-memory stateMap is
+    // empty after restart and the first non-WATCH transition re-stamps
+    // detection at the current inning, making every card on screen show
+    // "Detected" at the boot inning.
+    if (!HR_RADAR_HYDRATED_GAMES.has(gameId)) {
+      try {
+        const rows = await storage.getHrRadarDetectionsForGame(gameId);
+        for (const r of rows) {
+          if (r.detectedInning == null || r.detectedAt == null) continue;
+          const halfNorm = (r.detectedHalf ?? "").toLowerCase();
+          const half: "top" | "bottom" | null =
+            halfNorm.startsWith("t") ? "top" : halfNorm.startsWith("b") ? "bottom" : null;
+          seedHrAlertDetection(gameId, r.playerId, r.playerName, {
+            detectedInning: r.detectedInning,
+            detectedHalf: half,
+            detectedAtMs: new Date(r.detectedAt).getTime(),
+          });
+        }
+        // Only mark hydrated AFTER successful seed so a transient DB failure
+        // can be retried on the next poll instead of being skipped forever.
+        HR_RADAR_HYDRATED_GAMES.add(gameId);
+        if (rows.length > 0) {
+          console.log(`[HR_RADAR_HYDRATE] gameId=${gameId} seeded=${rows.length} (restart-safe detection persistence)`);
+        }
+      } catch (err: any) {
+        console.warn(`[HR_RADAR_HYDRATE] failed for game ${gameId}: ${err.message} — will retry next poll`);
+      }
     }
 
     await syncGameState(statsPk, gameId);

@@ -21,6 +21,7 @@ import {
   hrRadarAlerts,
   hrRadarAnalytics,
   hrRadarSignalEvents,
+  hrOutcomes,
   signalInteractions,
   stripeEvents,
   type Player,
@@ -3267,6 +3268,17 @@ export class DatabaseStorage implements IStorage {
       });
       const nowDate = new Date();
 
+      // Task #121 Step 2 — auditable signal-vs-hit timing trace.
+      if (process.env.DEBUG_HR_RADAR === "true") {
+        const sigIso = matchResult.signalDetectedAt ? new Date(matchResult.signalDetectedAt).toISOString() : "null";
+        const hitIso = hrEndTimeMs ? new Date(hrEndTimeMs).toISOString() : "null";
+        const grade = matchResult.matched && matchResult.matchedBeforeHr ? "called_hit"
+          : matchResult.matched && matchResult.isLateSignal ? "late_signal"
+          : matchResult.matched ? "matched_other"
+          : "uncalled_hr";
+        console.log(`[HR_GRADE_TRACE] playerId=${playerId} gameId=${gameId} signalAt=${sigIso} hitAt=${hitIso} signalLabel=${matchResult.signalHalf ?? ""}${matchResult.signalInning ?? ""} hitLabel=${hitLabelVal} matchMethod=${matchResult.matchMethod ?? "none"} grade=${grade}`);
+      }
+
       if (matchResult.matched && matchResult.matchedBeforeHr) {
         // ── T005 leak-detection guardrail ────────────────────────────────
         // The matcher claims this alert preceded the HR. If the persisted
@@ -4118,6 +4130,36 @@ export class DatabaseStorage implements IStorage {
   // ── HR Radar Decision Ladder (Step 11–18 of HR ledger spec) ──
   // Bins today's HR-radar alerts into a 5-section ladder for the user-facing
   // decision UI: attackNow / building / watch / cashed / dead.
+  /**
+   * Task #121 Step 1 — restart hydration source.
+   * Returns the frozen detection-timing fields for every persisted alert in
+   * a game so the orchestrator can re-seed the in-memory engine state after
+   * a process boot. Read-only; never modifies any row.
+   */
+  async getHrRadarDetectionsForGame(gameId: string): Promise<Array<{
+    playerId: string;
+    playerName: string;
+    detectedInning: number | null;
+    detectedHalf: string | null;
+    detectedAt: Date | null;
+  }>> {
+    const rows = await db.select({
+      playerId: hrRadarAlerts.playerId,
+      playerName: hrRadarAlerts.playerName,
+      detectedInning: hrRadarAlerts.detectedInning,
+      detectedHalf: hrRadarAlerts.detectedHalf,
+      detectedAt: hrRadarAlerts.signalDetectedAt,
+      fallbackDetectedAt: hrRadarAlerts.detectedAt,
+    }).from(hrRadarAlerts).where(eq(hrRadarAlerts.gameId, gameId));
+    return rows.map(r => ({
+      playerId: r.playerId,
+      playerName: r.playerName,
+      detectedInning: r.detectedInning ?? null,
+      detectedHalf: r.detectedHalf ?? null,
+      detectedAt: r.detectedAt ?? r.fallbackDetectedAt ?? null,
+    }));
+  }
+
   async getHrRadarLadder(sessionDate?: string): Promise<{
     sessionDate: string;
     sections: {
@@ -4133,6 +4175,52 @@ export class DatabaseStorage implements IStorage {
     const rows = await db.select().from(hrRadarAlerts)
       .where(eq(hrRadarAlerts.sessionDate, targetDate))
       .orderBy(desc(hrRadarAlerts.peakReadinessScore));
+
+    // Task #121 Step 5 — pre-fetch Statcast (OnlyHomers) for batters with a
+    // resolved called_hit on this session date, so the cashed cards can render
+    // EV / distance / launch angle / pitch type without a per-card lookup.
+    const cashedNames = Array.from(new Set(
+      rows
+        .filter(r => r.gradingStatus === "called_hit" || r.status === "hit")
+        .map(r => r.playerName)
+    ));
+    // Task #121 Step 4 — pull current inning per game (lazy dynamic import
+    // to avoid circular: dataPullService imports storage indirectly). Used
+    // by the urgency line so "expires after T8" / late-inning copy fires
+    // based on game-state, not the (frozen) detection inning.
+    const currentInningByGameId = new Map<string, number>();
+    try {
+      const { mlbGameCache } = await import("./mlb/dataPullService");
+      const gameStates = (mlbGameCache?.gameState ?? {}) as Record<string, any>;
+      for (const gid of Object.keys(gameStates)) {
+        const inn = gameStates[gid]?.inning;
+        if (typeof inn === "number" && inn > 0) currentInningByGameId.set(gid, inn);
+      }
+    } catch {
+      // best-effort — urgency falls back to detected inning if missing.
+    }
+
+    const ohStatsByName = new Map<string, { ev: number | null; la: number | null; dist: number | null; pitch: string | null }>();
+    if (cashedNames.length > 0) {
+      try {
+        const ohRows = await db.select().from(hrOutcomes)
+          .where(and(
+            inArray(hrOutcomes.batterName, cashedNames),
+            eq(hrOutcomes.gameDate, targetDate),
+          ));
+        for (const oh of ohRows) {
+          if (ohStatsByName.has(oh.batterName)) continue;
+          ohStatsByName.set(oh.batterName, {
+            ev: oh.exitVelocity != null ? parseFloat(String(oh.exitVelocity)) : null,
+            la: oh.launchAngle != null ? parseFloat(String(oh.launchAngle)) : null,
+            dist: oh.distance != null ? parseFloat(String(oh.distance)) : null,
+            pitch: oh.pitchType ?? null,
+          });
+        }
+      } catch (err: any) {
+        console.warn(`[HR_RADAR_LADDER] OnlyHomers stat hydration failed: ${err.message}`);
+      }
+    }
 
     const sections = {
       attackNow: [] as HrRadarLadderEntry[],
@@ -4350,6 +4438,15 @@ export class DatabaseStorage implements IStorage {
         }
       }
 
+      // Task #121 Step 4 — surface remaining-PA + current inning so the live
+      // card can render an urgency line ("~N PA left", "expires after T8").
+      const hrConvDiag = (diag.hrConversion ?? {}) as Record<string, any>;
+      const remainingPAExpectation: number | null =
+        typeof hrConvDiag.expectedRemainingPA === "number" ? hrConvDiag.expectedRemainingPA : null;
+      const currentInning: number | null = currentInningByGameId.get(r.gameId) ?? null;
+      const ohStats = ohStatsByName.get(r.playerName) ?? null;
+      const onlyHomersVerified = ohStats != null;
+
       const entry: HrRadarLadderEntry = {
         playerId: r.playerId,
         playerName: r.playerName,
@@ -4401,6 +4498,14 @@ export class DatabaseStorage implements IStorage {
         hitDetectedAt: r.hitDetectedAt ?? null,
         resolvedAt: r.resolvedAt ?? null,
         alertPath: r.alertPath ?? null,
+        // Task #121 Step 4+5 — urgency + Statcast surfacing.
+        remainingPAExpectation,
+        currentInning,
+        onlyHomersVerified,
+        ohExitVelocity: ohStats?.ev ?? null,
+        ohLaunchAngle: ohStats?.la ?? null,
+        ohDistance: ohStats?.dist ?? null,
+        ohPitchType: ohStats?.pitch ?? null,
       };
 
       const existing = seen.get(key);
@@ -4717,6 +4822,17 @@ export interface HrRadarLadderEntry {
   hitDetectedAt: Date | null;
   resolvedAt: Date | null;
   alertPath: string | null;
+  // Task #121 Step 4 — remaining plate-appearance expectation (engine).
+  remainingPAExpectation: number | null;
+  // Task #121 Step 4 — live game-state inning (NOT detection inning) for
+  // late-inning urgency copy on the card.
+  currentInning: number | null;
+  // Task #121 Step 5 — Statcast verification + stats from OnlyHomers.
+  onlyHomersVerified: boolean;
+  ohExitVelocity: number | null;
+  ohLaunchAngle: number | null;
+  ohDistance: number | null;
+  ohPitchType: string | null;
 }
 
 export const storage = new DatabaseStorage();

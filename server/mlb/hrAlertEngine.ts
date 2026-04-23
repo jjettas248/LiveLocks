@@ -440,6 +440,57 @@ export function getHrAlertState(gameId: string, playerId: string): HRAlertSnapsh
   return prev.lastSnapshot;
 }
 
+/**
+ * Task #121 Step 1 — restart-safe detection persistence.
+ *
+ * Seeds the in-memory state for (gameId, playerId) with the row's previously
+ * persisted `detectedInning/detectedHalf/detectedAtMs` so a server restart
+ * does not let `recomputeHrAlertState` re-stamp detection at the current
+ * inning. Idempotent: existing detection is NEVER overwritten — once frozen,
+ * it is the source of truth for the lifetime of the alert row.
+ *
+ * Pure state seeding — no scoring, no math, no thresholds. Safe under the
+ * "do not touch HR engines/scoring math/calibration" constraint.
+ */
+export function seedHrAlertDetection(
+  gameId: string,
+  playerId: string,
+  playerName: string,
+  detection: { detectedInning: number | null; detectedHalf: "top" | "bottom" | null; detectedAtMs: number | null },
+): void {
+  if (detection.detectedInning == null || detection.detectedAtMs == null) return;
+  const key = stateKey(gameId, playerId);
+  const existing = stateMap.get(key);
+  if (existing) {
+    if (existing.detectedInning != null) return; // never overwrite
+    existing.detectedInning = detection.detectedInning;
+    existing.detectedHalf = detection.detectedHalf;
+    existing.detectedAtMs = detection.detectedAtMs;
+    return;
+  }
+  stateMap.set(key, {
+    playerId,
+    playerName,
+    gameId,
+    currentState: "WATCH",
+    lastStateChangeAt: detection.detectedAtMs,
+    peakConversionProbability: 0,
+    peakReadinessScore: 0,
+    peakState: "WATCH",
+    peakAt: detection.detectedAtMs,
+    detectedInning: detection.detectedInning,
+    detectedHalf: detection.detectedHalf,
+    detectedAtMs: detection.detectedAtMs,
+    tickCount: 0,
+    lastRecomputeAt: 0,
+    contactEventsAtLastRecompute: 0,
+    lastAlertResult: null,
+    previousPitcherId: null,
+    consecutiveDeclineTicks: 0,
+    lastSnapshot: null,
+  });
+}
+
 export function clearGameHrStates(gameId: string): void {
   for (const key of Array.from(stateMap.keys())) {
     if (key.startsWith(`${gameId}_`)) stateMap.delete(key);
