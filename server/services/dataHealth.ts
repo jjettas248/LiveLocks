@@ -49,11 +49,43 @@ let health: DataHealth = {
   },
 };
 
-function computeStatus(lastSuccessAt: number, now: number, recentErrorRate: number): HealthStatus {
-  const staleSeconds = (now - lastSuccessAt) / 1000;
+function computeStatus(
+  lastSuccessAt: number,
+  lastAttemptAt: number,
+  now: number,
+  recentErrorRate: number,
+  recentTotal: number
+): HealthStatus {
+  // "down" / "degraded" must reflect ACTUAL failures, not silence.
+  //
+  // Previously the badge flipped to "down" purely because lastSuccessAt was
+  // more than 5 minutes old, even if the odds layer was perfectly healthy
+  // and just running cache-only (no live games requiring a fetch, all books
+  // still fresh in the LKG cache, etc). That gave operators and users a
+  // false alarm whenever there was a quiet stretch.
+  //
+  // New rule:
+  //   • down     — we've made attempts recently AND every one of them is
+  //                failing AND no success has landed in the last 5 minutes.
+  //   • degraded — recent error rate is high but we are still landing some
+  //                successes (mixed signal — partial outage, key rotation,
+  //                throttling, etc).
+  //   • healthy  — anything else, including "no recent attempts" (cache-only
+  //                / between games / pre-pull window). Silence is normal,
+  //                not a problem.
 
-  if (staleSeconds > 300) return "down";
-  if (recentErrorRate > 0.7) return "degraded";
+  const staleSeconds = (now - lastSuccessAt) / 1000;
+  const attemptStaleSeconds = (now - lastAttemptAt) / 1000;
+  const hasRecentAttempts = recentTotal > 0;
+
+  // Hard down: recent attempts, all failing, last success > 5m ago.
+  if (hasRecentAttempts && recentErrorRate >= 0.95 && staleSeconds > 300) return "down";
+  // Degraded: most recent attempts failing but still some throughput.
+  if (hasRecentAttempts && recentErrorRate > 0.7) return "degraded";
+  // Anything else (including "no attempts at all") is healthy.
+  // attemptStaleSeconds is unused for status today but is exported so
+  // operators can see "no attempts in N seconds" via the debug endpoint.
+  void attemptStaleSeconds;
   return "healthy";
 }
 
@@ -105,7 +137,7 @@ export function updateOddsHealth(params: {
   const recentErrors = recentResults.filter(r => !r.success).length;
   h.errorRate = recentTotal > 0 ? recentErrors / recentTotal : 0;
   h.staleSeconds = (now - h.lastSuccessAt) / 1000;
-  h.status = computeStatus(h.lastSuccessAt, now, h.errorRate);
+  h.status = computeStatus(h.lastSuccessAt, h.lastAttemptAt, now, h.errorRate, recentTotal);
 
   if (h.status !== "healthy") {
     console.warn("[DATA_HEALTH]", {
@@ -125,7 +157,7 @@ export function getDataHealth(): DataHealth {
   const recentErrors = recentResults.filter(r => !r.success).length;
   h.errorRate = recentTotal > 0 ? recentErrors / recentTotal : 0;
   h.staleSeconds = (now - h.lastSuccessAt) / 1000;
-  h.status = computeStatus(h.lastSuccessAt, now, h.errorRate);
+  h.status = computeStatus(h.lastSuccessAt, h.lastAttemptAt, now, h.errorRate, recentTotal);
   return health;
 }
 
