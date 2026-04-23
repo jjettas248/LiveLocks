@@ -4175,11 +4175,21 @@ export async function registerRoutes(
 
               // Step 4a: explicit zero-edge exclusion — belt-and-suspenders, implied by step 3
               // (prob===50 → edge===0 < 5) but required by evaluation contract.
-              if (result.probability === 50) continue;
+              if (result.probability === 50) {
+                if (process.env.DEBUG_NBA === "true") {
+                  console.log(`[NBA_FINAL_REJECT_REASON]`, { player: dbPlayer.name, market: statType, prob: result.probability, edge, reason: "zeroEdge_live" });
+                }
+                continue;
+              }
 
               // Step 4b: no-conviction guard — noSignal or NO_SIGNAL plays must never enter
               // allSignals or engineOutput; they produce zero side effects.
-              if (result.noSignal || result.recommendedSide === "NO_SIGNAL") continue;
+              if (result.noSignal || result.recommendedSide === "NO_SIGNAL") {
+                if (process.env.DEBUG_NBA === "true") {
+                  console.log(`[NBA_FINAL_REJECT_REASON]`, { player: dbPlayer.name, market: statType, prob: result.probability, edge, reason: "noSignal_live", recommendedSide: result.recommendedSide });
+                }
+                continue;
+              }
 
               // Step 5: direction — derive from recommendedSide (strict > 50 / < 50 already
               // applied in storage.calculateProbability). All continue guards have passed.
@@ -4953,7 +4963,12 @@ export async function registerRoutes(
 
                 // Step 4: explicit zero-edge exclusion (belt-and-suspenders; redundant with step 3
                 // since prob===50 → edge===0 < 6, but required by evaluation contract).
-                if (result.probability === 50) continue;
+                if (result.probability === 50) {
+                  if (process.env.DEBUG_NBA === "true") {
+                    console.log(`[NBA_FINAL_REJECT_REASON]`, { player: dbPlayer.name, market: statType, prob: result.probability, edge, reason: "zeroEdge_halftime" });
+                  }
+                  continue;
+                }
 
                 // Confidence tier reduction for degraded lines:
                 // ELITE (edge>=20) → STRONG (edge 15-19), STRONG → VALUE (edge 10-14), VALUE → volatile pool
