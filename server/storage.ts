@@ -1078,12 +1078,12 @@ export class DatabaseStorage implements IStorage {
       // bucket. Volatile / impacted archetypes still shrink hard.
       const isStable = isStableArchetype(nbaArchetype);
       const baseShrink = isStable
-        ? (isComboStat ? 0.92 : 0.98)
+        ? (isComboStat ? 0.80 : 0.90)
         : (isComboStat ? 0.72 : 0.82);
       let archetypePenalty = 1.0;
       switch (nbaArchetype) {
-        case "stable_star":      archetypePenalty = 1.00; break;
-        case "stable_starter":   archetypePenalty = 0.98; break;
+        case "stable_star":      archetypePenalty = 1.10; break;
+        case "stable_starter":   archetypePenalty = 1.05; break;
         case "volatile_starter": archetypePenalty = 0.95; break;
         case "bench_microwave":  archetypePenalty = 0.90; break;
         case "low_minute_big":   archetypePenalty = 0.92; break;
