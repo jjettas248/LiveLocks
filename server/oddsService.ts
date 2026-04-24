@@ -106,6 +106,21 @@ export type PlayerOddsResult =
   | { isDegraded: true;  quotaExhausted: false; books: Record<string, OddsLine>; fetchedAt: number }
   | { isDegraded: false; quotaExhausted: true;  books: Record<string, never>;    fetchedAt: number };
 
+// Options for getPlayerOdds. The legacy boolean form (true/false) is preserved
+// for backward compatibility — pre-game and live signals callers still pass a
+// boolean. The new options form is required for halftime, which must guarantee
+// fresh live 2H lines and refuse every degraded-fallback path.
+export type GetPlayerOddsOptions = {
+  inPlay?: boolean;
+  /** Strict mode: refuse cache-first, throttle, quota, network, and empty-bookmaker fallbacks. */
+  strictLive?: boolean;
+  /** Maximum bookmaker last_update age (ms). Default = NBA_ODDS_LIVE_TTL when inPlay, else NBA_ODDS_TTL. */
+  maxAgeMs?: number;
+  allowDegraded?: boolean;
+  allowCacheFirst?: boolean;
+  allowThrottleFallback?: boolean;
+};
+
 const cache = new Map<string, CacheEntry>();
 const EVENTS_TTL = 3 * 60 * 1000;       // 3 min (shorter so fresh games appear quickly)
 // NBA-specific TTLs (reduced for near-real-time line updates)
@@ -521,8 +536,32 @@ export async function getPlayerOdds(
   oddsEventId: string,
   playerName: string,
   statType: string,
-  inPlay = false
+  optionsOrInPlay: boolean | GetPlayerOddsOptions = false
 ): Promise<PlayerOddsResult> {
+  // Normalize legacy boolean → options object. Defaults preserve previous
+  // behavior for every existing caller (cache-first allowed, degraded allowed,
+  // throttle fallback allowed). Halftime callers pass an options object with
+  // strictLive=true to refuse every fallback path.
+  const options = typeof optionsOrInPlay === "boolean"
+    ? {
+        inPlay: optionsOrInPlay,
+        strictLive: false,
+        maxAgeMs: optionsOrInPlay ? NBA_ODDS_LIVE_TTL : NBA_ODDS_TTL,
+        allowDegraded: true,
+        allowCacheFirst: true,
+        allowThrottleFallback: true,
+      }
+    : {
+        inPlay: optionsOrInPlay.inPlay ?? false,
+        strictLive: optionsOrInPlay.strictLive ?? false,
+        maxAgeMs: optionsOrInPlay.maxAgeMs ?? ((optionsOrInPlay.inPlay ?? false) ? NBA_ODDS_LIVE_TTL : NBA_ODDS_TTL),
+        allowDegraded: optionsOrInPlay.allowDegraded ?? !(optionsOrInPlay.strictLive ?? false),
+        allowCacheFirst: optionsOrInPlay.allowCacheFirst ?? !(optionsOrInPlay.strictLive ?? false),
+        allowThrottleFallback: optionsOrInPlay.allowThrottleFallback ?? !(optionsOrInPlay.strictLive ?? false),
+      };
+  const inPlay = options.inPlay;
+  const strict = options.strictLive;
+
   const marketKey = MARKET_MAP[statType];
   if (!marketKey) {
     return { isDegraded: false, quotaExhausted: false, books: {}, fetchedAt: 0 };
@@ -531,34 +570,51 @@ export async function getPlayerOdds(
   const normName = normPlayerName(playerName);
   const lastKnownKey = `${oddsEventId}|${normName}|${statType}`;
 
-  const makeDegraded = (books: Record<string, OddsLine>, fetchedAt: number): PlayerOddsResult =>
-    ({ isDegraded: true, quotaExhausted: false, books, fetchedAt });
+  // emptyResult is the canonical response when strict mode rejects a fallback
+  // path. Returning isDegraded=false with an empty books map signals "no fresh
+  // live line available — caller must skip" without poisoning the response with
+  // a stale degraded payload.
+  const emptyResult = (): PlayerOddsResult =>
+    ({ isDegraded: false, quotaExhausted: false, books: {}, fetchedAt: Date.now() });
+
+  const makeDegraded = (books: Record<string, OddsLine>, fetchedAt: number): PlayerOddsResult => {
+    if (strict || options.allowDegraded === false) {
+      return emptyResult();
+    }
+    return { isDegraded: true, quotaExhausted: false, books, fetchedAt };
+  };
 
   // Cache-first pre-check: if a fresh last-known entry exists within the active TTL window,
   // return it immediately as non-degraded and skip the API call.
   // Use the raw cache TTL as the window (live: 30s, pre-game: 2min) so manual refresh
   // always gets fresh data once the underlying raw cache has expired.
-  const cacheFirstTTL = inPlay ? NBA_ODDS_LIVE_TTL : NBA_ODDS_TTL;
-  const lkFresh = lastKnownOdds.get(lastKnownKey);
-  if (lkFresh && Date.now() - lkFresh.timestamp < cacheFirstTTL) {
-    console.log(`[ODDS CACHE-FIRST] Fresh cache hit for ${playerName} (${statType}) — skipping API call`);
-    pipelineLog("NBA", oddsEventId, "odds:cacheHit", { player: playerName, statType, books: Object.keys(lkFresh.data) });
-    return { isDegraded: false, quotaExhausted: false, books: lkFresh.data, fetchedAt: lkFresh.timestamp };
+  // Strict mode: skip cache-first entirely — halftime requires a verified live fetch.
+  if (options.allowCacheFirst && !strict) {
+    const cacheFirstTTL = inPlay ? NBA_ODDS_LIVE_TTL : NBA_ODDS_TTL;
+    const lkFresh = lastKnownOdds.get(lastKnownKey);
+    if (lkFresh && Date.now() - lkFresh.timestamp < cacheFirstTTL) {
+      console.log(`[ODDS CACHE-FIRST] Fresh cache hit for ${playerName} (${statType}) — skipping API call`);
+      pipelineLog("NBA", oddsEventId, "odds:cacheHit", { player: playerName, statType, books: Object.keys(lkFresh.data) });
+      return { isDegraded: false, quotaExhausted: false, books: lkFresh.data, fetchedAt: lkFresh.timestamp };
+    }
   }
 
   // Per-game+market throttle: if a fetch was already issued for this event+market
   // within the throttle window, check last-known first; if absent, fall through to
   // getRawOdds (which has its own cache) and extract data for this player from the
   // cached response. Never return empty when cached data exists.
+  // Strict mode: refuse to return last-known degraded data on throttle hit.
   const throttleKey = `${oddsEventId}:${marketKey}`;
   const lastCallTs = lastGameApiCall.get(throttleKey);
   if (lastCallTs !== undefined && Date.now() - lastCallTs < GAME_API_THROTTLE_MS) {
-    const lk = lastKnownOdds.get(lastKnownKey);
-    if (lk) {
-      return makeDegraded(lk.data, lk.timestamp);
+    if (options.allowThrottleFallback && !strict) {
+      const lk = lastKnownOdds.get(lastKnownKey);
+      if (lk) {
+        return makeDegraded(lk.data, lk.timestamp);
+      }
     }
-    // No per-player last-known, but the raw odds cache may have data for this player
-    // from a previous fetch. Fall through to getRawOdds which will serve from cache.
+    // strict mode falls through to getRawOdds (which itself respects its raw
+    // cache); strict bookmaker filter below will still drop any stale entry.
   } else {
     // Stamp the throttle timestamp at issuance time so concurrent requests for the
     // same event+market are blocked even before the first request resolves.
@@ -569,21 +625,32 @@ export async function getPlayerOdds(
   try {
     oddsData = await getRawOdds(oddsEventId, marketKey, inPlay);
   } catch (fetchErr) {
-    // Transient network error — attempt last-known fallback
-    const lk = lastKnownOdds.get(lastKnownKey);
-    if (lk && Date.now() - lk.timestamp < LAST_KNOWN_TTL) {
-      console.warn(`[ODDS FALLBACK] Network error for ${playerName} (${statType}) — using last-known line (degraded)`);
-      return makeDegraded(lk.data, lk.timestamp);
+    // Transient network error — attempt last-known fallback (skipped in strict)
+    if (!strict && options.allowDegraded !== false) {
+      const lk = lastKnownOdds.get(lastKnownKey);
+      if (lk && Date.now() - lk.timestamp < LAST_KNOWN_TTL) {
+        console.warn(`[ODDS FALLBACK] Network error for ${playerName} (${statType}) — using last-known line (degraded)`);
+        return makeDegraded(lk.data, lk.timestamp);
+      }
+      throw fetchErr;
+    }
+    if (strict) {
+      console.warn(`[ODDS STRICT] Network error for ${playerName} (${statType}) — refusing degraded fallback`);
+      return emptyResult();
     }
     throw fetchErr;
   }
 
-  // Quota exhaustion — try last-known cache before giving up
+  // Quota exhaustion — try last-known cache before giving up (skipped in strict)
   if (oddsData?._quotaExhausted) {
-    const lk = lastKnownOdds.get(lastKnownKey);
-    if (lk && Date.now() - lk.timestamp < LAST_KNOWN_TTL) {
-      console.warn(`[ODDS FALLBACK] Quota exhausted for ${playerName} (${statType}) — using last-known line (degraded)`);
-      return makeDegraded(lk.data, lk.timestamp);
+    if (!strict && options.allowDegraded !== false) {
+      const lk = lastKnownOdds.get(lastKnownKey);
+      if (lk && Date.now() - lk.timestamp < LAST_KNOWN_TTL) {
+        console.warn(`[ODDS FALLBACK] Quota exhausted for ${playerName} (${statType}) — using last-known line (degraded)`);
+        return makeDegraded(lk.data, lk.timestamp);
+      }
+    } else if (strict) {
+      console.warn(`[ODDS STRICT] Quota exhausted for ${playerName} (${statType}) — refusing degraded fallback`);
     }
     return { isDegraded: false, quotaExhausted: true, books: {}, fetchedAt: 0 };
   }
@@ -591,10 +658,12 @@ export async function getPlayerOdds(
   const bookmakers: any[] = Array.isArray(oddsData?.bookmakers) ? oddsData.bookmakers : [];
   if (bookmakers.length === 0) {
     pipelineLog("NBA", oddsEventId, "odds:emptyBookmakers", { player: playerName, statType, hasData: !!oddsData });
-    const lk = lastKnownOdds.get(lastKnownKey);
-    if (lk && Date.now() - lk.timestamp < LAST_KNOWN_TTL) {
-      console.warn(`[ODDS FALLBACK] Empty/malformed bookmakers for ${playerName} (${statType}) — using last-known line (degraded)`);
-      return makeDegraded(lk.data, lk.timestamp);
+    if (!strict && options.allowDegraded !== false) {
+      const lk = lastKnownOdds.get(lastKnownKey);
+      if (lk && Date.now() - lk.timestamp < LAST_KNOWN_TTL) {
+        console.warn(`[ODDS FALLBACK] Empty/malformed bookmakers for ${playerName} (${statType}) — using last-known line (degraded)`);
+        return makeDegraded(lk.data, lk.timestamp);
+      }
     }
     return { isDegraded: false, quotaExhausted: false, books: {}, fetchedAt: Date.now() };
   }
@@ -612,7 +681,14 @@ export async function getPlayerOdds(
     const bKey: string = bookmaker.key ?? "";
     if (!PROP_BOOKMAKERS_SET.has(bKey)) continue;
     const lastUpdate = bookmaker.last_update ? new Date(bookmaker.last_update).getTime() : 0;
-    if (lastUpdate > 0 && now - lastUpdate > BOOKMAKER_STALE_MS) continue;
+    if (strict) {
+      // Strict halftime mode: refuse any bookmaker without a last_update stamp,
+      // and refuse any line older than the configured maxAgeMs window.
+      if (!lastUpdate) continue;
+      if (now - lastUpdate > options.maxAgeMs) continue;
+    } else {
+      if (lastUpdate > 0 && now - lastUpdate > BOOKMAKER_STALE_MS) continue;
+    }
 
     const market = bookmaker.markets?.find((m: any) => m.key === marketKey);
     if (!market?.outcomes) continue;

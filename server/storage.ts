@@ -1215,13 +1215,65 @@ export class DatabaseStorage implements IStorage {
         }
       }
       if (!eligibility.can70 && displayConfidence >= 70) {
-        const cap = 68;
+        // Halftime override — don't pin every uncertain-rotation playoff
+        // play at exactly 68 when the live evidence is overwhelming. We
+        // need ALL of these to relax the cap from 68 → 74:
+        //   • halftime context (game has 22+ minutes left)
+        //   • model is already calling >= 70 with edge >= 12
+        //   • projection diverges from the live line by >= 1.0 unit
+        //   • engine has a real direction (not NO_SIGNAL)
+        //   • projection direction matches recommended side
+        //   • player has >= 12 minutes played (real, not garbage)
+        //   • >= 18 minutes remain (room for the projection to play out)
+        //   • archetype is not in the impacted/volatile bucket
+        // 80+ remains unreachable here; the can80 cap above still applies.
+        const projDelta = Math.abs(finalMean - req.liveLine);
+        const projMatchesSide =
+          (recommendedSide === "OVER" && expectedTotal > req.liveLine) ||
+          (recommendedSide === "UNDER" && expectedTotal < req.liveLine);
+        const isStrongHalftimeSignal =
+          isHalftimeContext &&
+          displayConfidence >= 70 &&
+          ((displayConfidence - 50) >= 12) &&
+          projDelta >= 1.0 &&
+          recommendedSide !== "NO_SIGNAL" &&
+          projMatchesSide &&
+          minutesPlayed >= 12 &&
+          remainingMinutes >= 18 &&
+          !isImpactedArchetype(nbaArchetype);
+        const cap = isStrongHalftimeSignal ? 74 : 68;
         if (displayConfidence > cap) {
           displayConfidence = cap;
-          calibrationTrack += `+playoff_role_gate_70:${eligibility.reason}`;
+          calibrationTrack += `+playoff_role_gate_70:${eligibility.reason}${isStrongHalftimeSignal ? "_ht_override" : ""}`;
           playoffRoleGate70Applied = true;
-          console.log(`[NBA_PLAYOFF_ROLE_GATE] player=${player.name} cap70→${cap} reason=${eligibility.reason}`);
+          console.log(`[NBA_PLAYOFF_ROLE_GATE] player=${player.name} cap70→${cap} reason=${eligibility.reason} strongHT=${isStrongHalftimeSignal}`);
         }
+      }
+
+      // ── NBA halftime confidence trace (DEBUG_NBA=true) ──────────────────
+      // Captures every value that influences the halftime cap decision so we
+      // can reconstruct exactly why a play landed at its final confidence.
+      if (isHalftimeContext && process.env.DEBUG_NBA === "true") {
+        console.log("[NBA_HT_CONFIDENCE_TRACE]", JSON.stringify({
+          player: player.name,
+          statType: req.statType,
+          seasonPhase,
+          archetype: nbaArchetype,
+          liveLine: req.liveLine,
+          halftimeStat: req.halftimeStat,
+          expectedTotal: Math.round(expectedTotal * 100) / 100,
+          finalMean: Math.round(finalMean * 100) / 100,
+          rawSide: rawSide,
+          recommendedSide,
+          displayConfidenceAfterRoleGate:
+            displayConfidence !== null ? Math.round(displayConfidence * 10) / 10 : null,
+          eligibility,
+          calibrationTrack,
+          minutesPlayed,
+          remainingMinutes: Math.round(remainingMinutes * 10) / 10,
+          playoffRotationFallbackUsed,
+          playoffDataFallbackUsed,
+        }));
       }
 
       // ── Phase 8: Persist rotation profile snapshot into calibrationTrack ─
@@ -1417,6 +1469,18 @@ export class DatabaseStorage implements IStorage {
       mu: Math.round(finalMean * 100) / 100,
       sigma: Math.round(sigma * 100) / 100,
       zScore: Math.round(z * 1000) / 1000,
+      // Source provenance — surfaced unconditionally so callers (e.g. the
+      // halftime route) can attach per-play `sourceProvenance` without
+      // depending on the `debug` field which is gated by req.isDebug.
+      rotationSource,
+      projectionSource,
+      playoffMode: isPlayoffs,
+      playoffDataResolved: isPlayoffs && !playoffDataFallbackUsed && (!!nbaDefenseMatchup || !!nbaPlayerUsage),
+      playoffDataFallbackUsed,
+      playoffRotationFallbackUsed,
+      playoffRotationDataSource: playoffRotationProfile?.dataSource ?? null,
+      defenseMatchupResolved: !!nbaDefenseMatchup,
+      playerUsageResolved: !!nbaPlayerUsage,
     };
 
     if (!noSignal && (req as any).sport === "nba") {

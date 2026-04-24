@@ -3701,6 +3701,16 @@ export default function Dashboard() {
                                     if (import.meta.env.DEV && play.probability == null) {
                                       console.error("Missing engine probability for play", play);
                                     }
+                                    // Client safety net — server should never surface a
+                                    // degraded-line halftime card under the strict-live
+                                    // odds contract, but suppress just in case rather
+                                    // than rendering a "Stale Line" badge at halftime.
+                                    if (play.timingContext === "halftime" && play.isDegraded) {
+                                      if (import.meta.env.DEV) {
+                                        console.warn("[NBA_HT_CLIENT_GUARD] Suppressed degraded halftime card", play);
+                                      }
+                                      return null;
+                                    }
                                     const isLocked = isFreeUser && idx >= visibleEdgeLimit;
                                     const isOver = play.betDirection === "over";
                                     const isInjured = !isLocked && injuredPlayerNames.has(play.playerName.toLowerCase());

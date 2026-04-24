@@ -4742,7 +4742,7 @@ export async function registerRoutes(
       for (const game of halftimeGames) {
         // Resolve Odds API event ID for this game (for live prop lines)
         let oddsEventId: string | null = null;
-        const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[]; isDegraded: boolean; oddsFetchedAt: number } | null>();
+        const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[]; isDegraded: boolean; oddsFetchedAt: number; source?: string } | null>();
         const HT_STALE_LINE_MS = 120_000;
         try {
           const { resolveOddsEventId: resolveId } = await import("./oddsService");
@@ -4896,76 +4896,117 @@ export async function registerRoutes(
                 // H1 live stat: sum of each component from the live box score
                 const halftimeStat = components.reduce((sum, c) => sum + (liveStats[c] ?? 0), 0);
 
-                // Multi-source line lookup: Odds API (live → pre-game) → SGO.
-                // If no real book line is found, skip this stat — we never invent a line.
+                // Halftime odds lookup — STRICT LIVE 2H ONLY.
+                // No pre-game fallback. No SGO scalar fallback. No degraded
+                // last-known cache. If no fresh live 2H line exists, skip the
+                // play. Source provenance is captured in oddsSource so the
+                // surfaced play can prove which path delivered the line.
                 let liveLine: number | null = null;
                 let lineIsDegraded = false;
+                let oddsSourceTag: string = "none";
                 const lineCacheKey = `${playerName}|${statType}`;
                 if (!oddsPlayerCache.has(lineCacheKey)) {
                   try {
-                    let resolved = false;
-
-                    // Source 1 & 2: The Odds API (live in-play, then pre-game)
                     if (oddsEventId && (process.env.ODDS_API_KEY || process.env.ODDS_API_KEY_2)) {
                       totalOddsAttempts++;
-                      let oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, true);
-                      let bookKeys = Object.keys(oddsResult.books);
-                      if (bookKeys.length > 0) secondHalfMarketsFound++;
-                      if (bookKeys.length === 0 && !oddsResult.isDegraded) {
-                        // In-play market checked but 0 books returned — contributes to absence evidence
+                      const oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, {
+                        inPlay: true,
+                        strictLive: true,
+                        maxAgeMs: HT_STALE_LINE_MS,
+                        allowDegraded: false,
+                        allowCacheFirst: false,
+                        allowThrottleFallback: false,
+                      });
+                      const bookKeys = Object.keys(oddsResult.books);
+                      if (bookKeys.length === 0) {
                         zeroBookInPlayCount++;
-                        oddsResult = await getPlayerOdds(oddsEventId, playerName, statType, false);
-                        bookKeys = Object.keys(oddsResult.books);
-                        if (bookKeys.length > 0) console.log(`[Halftime] Pre-game line for ${playerName} (${statType})`);
-                      }
-                      if (bookKeys.length > 0) {
-                        const isDeg = oddsResult.isDegraded;
+                        if (process.env.DEBUG_NBA === "true") {
+                          console.log("[NBA_HT_LINE_TRACE]", JSON.stringify({
+                            player: playerName, statType, bookKeys: [], rejectReason: "no_live_2h_line", source: "live_2h_odds_api",
+                          }));
+                        }
+                        console.log(`[NBA_HT_LIVE_LINE_MISSING] ${playerName} (${statType}) — skipped (no fresh live 2H line)`);
+                        oddsPlayerCache.set(lineCacheKey, null);
+                      } else if (oddsResult.isDegraded) {
+                        // Defensive — strictLive should never hand back a degraded
+                        // result, but enforce the contract here regardless.
+                        console.warn(`[NBA_HT_DEGRADED_REJECTED] ${playerName} (${statType}) — strict mode received degraded payload`);
+                        oddsPlayerCache.set(lineCacheKey, null);
+                      } else {
+                        secondHalfMarketsFound++;
                         const lines = bookKeys.map(k => oddsResult.books[k].line);
-                        // Log every book → line so data integrity issues are visible
                         const lineDetail = bookKeys.map((k, i) => `${k}=${lines[i]}`).join(" | ");
-                        console.log(`[Halftime] Lines for ${playerName} (${statType})${isDeg ? " [DEGRADED]" : ""}: ${lineDetail}`);
-                        // Use median consensus — never pick extremes which amplify outlier/stale book data
+                        console.log(`[Halftime] Live 2H lines for ${playerName} (${statType}): ${lineDetail}`);
+                        // Median consensus — outlier-resistant
                         const sortedLines = [...lines].sort((a, b) => a - b);
                         const medianLine = sortedLines[Math.floor(sortedLines.length / 2)];
-                        oddsPlayerCache.set(lineCacheKey, { line: medianLine, bookKeys, isDegraded: isDeg, oddsFetchedAt: oddsResult.fetchedAt || Date.now() });
-                        resolved = true;
+                        oddsPlayerCache.set(lineCacheKey, {
+                          line: medianLine,
+                          bookKeys,
+                          isDegraded: false,
+                          oddsFetchedAt: oddsResult.fetchedAt || Date.now(),
+                          source: "live_2h_odds_api",
+                        });
+                        if (process.env.DEBUG_NBA === "true") {
+                          console.log("[NBA_HT_LINE_TRACE]", JSON.stringify({
+                            player: playerName, statType, bookKeys, oddsFetchedAt: oddsResult.fetchedAt,
+                            oddsAgeMs: Date.now() - (oddsResult.fetchedAt || Date.now()), isDegraded: false,
+                            line: medianLine, source: "live_2h_odds_api",
+                          }));
+                        }
                       }
-                    }
-
-                    // Source 3: SGO NBA (works independently of Odds API event ID)
-                    if (!resolved && process.env.SGO_API_KEY) {
-                      const sgoResult = await getSGOPlayerLine(game.homeTeamAbbr, game.awayTeamAbbr, playerName, statType);
-                      if (sgoResult !== null) {
-                        console.log(`[Halftime] SGO line for ${playerName} (${statType}): ${sgoResult}`);
-                        oddsPlayerCache.set(lineCacheKey, { line: sgoResult, bookKeys: ["sgo"], isDegraded: false, oddsFetchedAt: Date.now() });
-                        resolved = true;
-                      }
-                    }
-
-                    if (!resolved) {
-                      console.log(`[Halftime] No book line for ${playerName} (${statType}) — skipping`);
+                    } else {
+                      console.log(`[NBA_HT_LIVE_LINE_MISSING] ${playerName} (${statType}) — no Odds API event id or key`);
                       oddsPlayerCache.set(lineCacheKey, null);
                     }
-                  } catch { oddsPlayerCache.set(lineCacheKey, null); }
+                    // SGO halftime fallback intentionally disabled. SGO does not
+                    // currently expose a verified live-2H freshness flag; using
+                    // its scalar as a halftime line risks reintroducing pre-game
+                    // values. Re-enable only via a new SGO function that returns
+                    // { line, isLive2H: true, updatedAt } with updatedAt age
+                    // <= HT_STALE_LINE_MS.
+                  } catch (oddsErr: any) {
+                    console.warn(`[NBA_HT_ODDS_ERROR] ${playerName} (${statType}) — ${oddsErr?.message ?? String(oddsErr)}`);
+                    oddsPlayerCache.set(lineCacheKey, null);
+                  }
                 }
                 const oddsEntry = oddsPlayerCache.get(lineCacheKey);
                 if (oddsEntry != null) {
                   liveLine = oddsEntry.line;
                   lineIsDegraded = oddsEntry.isDegraded;
+                  oddsSourceTag = (oddsEntry as any).source ?? "live_2h_odds_api";
                 } else {
-                  continue; // No real line available — never fabricate one
+                  continue; // No fresh live 2H line — never fabricate one
                 }
 
+                // Hard rejections (defense in depth — strict mode should already
+                // have prevented these from reaching here):
+                if (lineIsDegraded) {
+                  if (process.env.DEBUG_NBA === "true") {
+                    console.warn(`[NBA_HT_LINE_REJECTED]`, JSON.stringify({
+                      playerName, statType, liveLine, rejectReason: "degraded_line",
+                    }));
+                  }
+                  continue;
+                }
                 const htOddsAge = Date.now() - (oddsEntry.oddsFetchedAt ?? 0);
-                if (htOddsAge > HT_STALE_LINE_MS) {
-                  console.warn(`[NBA 2H STALE LINE] ${playerName} (${statType}) — odds ${Math.round(htOddsAge / 1000)}s old, rejecting (halftime pipeline)`);
+                if (!Number.isFinite(htOddsAge) || htOddsAge < 0 || htOddsAge > HT_STALE_LINE_MS) {
+                  if (process.env.DEBUG_NBA === "true") {
+                    console.warn(`[NBA_HT_LINE_REJECTED]`, JSON.stringify({
+                      playerName, statType, ageMs: htOddsAge, maxAgeMs: HT_STALE_LINE_MS, rejectReason: "stale_line",
+                    }));
+                  }
                   continue;
                 }
 
                 // Zero-line guard — a line of 0 is invalid and must not be passed to the engine.
                 // This can occur if a book returns a zero point value due to a data error.
                 if (!liveLine || liveLine === 0) {
-                  console.warn(`[ODDS FALLBACK] No valid line — play suppressed`, { gameId: game.gameId, playerName });
+                  if (process.env.DEBUG_NBA === "true") {
+                    console.warn(`[NBA_HT_LINE_REJECTED]`, JSON.stringify({
+                      playerName, statType, liveLine, rejectReason: "zero_line",
+                    }));
+                  }
                   continue;
                 }
 
@@ -5059,6 +5100,51 @@ export async function registerRoutes(
                 const displayConfidence = (result as any).displayConfidence ?? result.probability;
                 const betDirection = (result as any).recommendedSide?.toLowerCase() ?? (result.probability > 50 ? "over" : "under");
 
+                // Per-source provenance — every surfaced halftime play must
+                // be able to prove which API delivered each input. Pulled
+                // from the engine diagnostics block (storage.ts) plus odds
+                // metadata captured above. If any source is missing the
+                // engine has already logged why; the tag here lets the
+                // client surface "missing" cleanly without a second lookup.
+                // Read provenance straight from engineDiagnostics (which is
+                // returned unconditionally by calculateProbability — unlike
+                // result.debug which is only emitted when req.isDebug=true).
+                const eng: any = (result as any).engineDiagnostics ?? {};
+                const rotationSource: string = eng.rotationSource ?? "season_avg";
+                const playoffRotationDataSource: string | null =
+                  eng.playoffRotationDataSource ?? null;
+                const estimatedMinutesSource: string =
+                  eng.projectionSource ?? "model_default";
+                // Playoff history + coaching style live inside the playoff
+                // rotation profile (closeGameTrustScore, coachShortBenchIndex,
+                // coachStarRideIndex). When the profile dataSource is
+                // "playoffs" both signals are real; when it falls back to
+                // "regular_season_fallback"/"none" both are derived/missing.
+                const playoffHistorySource: string = playoffRotationDataSource
+                  ? (playoffRotationDataSource === "playoffs" ? "playoff_logs" : `fallback:${playoffRotationDataSource}`)
+                  : "unavailable";
+                const coachingStyleSource: string = playoffRotationDataSource
+                  ? (playoffRotationDataSource === "playoffs" ? "coach_playoff_tendencies" : `fallback:${playoffRotationDataSource}`)
+                  : "unavailable";
+                const dvpSource: string =
+                  eng.playoffDataResolved
+                    ? "nba_defense_matchup_playoffs"
+                    : (eng.playoffMode ? "nba_defense_matchup_rs_fallback" : "nba_defense_matchup_regular");
+                const matchupSource: string = dvpSource; // share storage path
+                const liveBoxScoreSource: string = "espn_summary_v2";
+                const oddsFreshnessMs: number = htOddsAge;
+                const sourceProvenance = {
+                  rotationSource,
+                  estimatedMinutesSource,
+                  playoffHistorySource,
+                  coachingStyleSource,
+                  dvpSource,
+                  matchupSource,
+                  liveBoxScoreSource,
+                  oddsSource: oddsSourceTag,
+                  oddsFreshnessMs,
+                };
+
                 const playEntry = {
                   gameId: game.gameId,
                   homeTeamAbbr: game.homeTeamAbbr,
@@ -5076,6 +5162,9 @@ export async function registerRoutes(
                   halftimeMinutes: Math.round(minutes * 10) / 10,
                   halftimeFouls: parseStat(statMap["pf"]),
                   line: liveLine,
+                  // lineSource kept as "odds_api" for legacy client checks
+                  // (e.g. dashboard.tsx hasLiveLine flag). The fine-grained
+                  // provenance ("live_2h_odds_api") is on sourceProvenance.oddsSource.
                   lineSource: "odds_api",
                   bookKeys: oddsEntry2?.bookKeys ?? [],
                   probability: displayConfidence,
@@ -5084,12 +5173,24 @@ export async function registerRoutes(
                   expectedTotal: result.expectedTotal,
                   impliedProbability: (result as any).impliedProbability ?? null,
                   betDirection,
-                  isDegraded: lineIsDegraded,
+                  isDegraded: false, // strict mode contract: halftime never surfaces degraded
                   engineGeneratedAt: Date.now(),
                   timingContext: "halftime" as const,
                   engineDiagnostics: (result as any).engineDiagnostics ?? undefined,
+                  sourceProvenance,
                 };
                 console.log(`[ENGINE_OUTPUT] sport=nba player=${dbPlayer.name} market=${statType} side=${betDirection.toUpperCase()} prob=${displayConfidence.toFixed(1)} edge=${edge.toFixed(1)} proj=${result.expectedTotal ?? "null"} line=${liveLine} timing=halftime`);
+                if (process.env.DEBUG_NBA === "true") {
+                  console.log("[NBA_HT_FINAL_SURFACED]", JSON.stringify({
+                    player: dbPlayer.name,
+                    statType,
+                    line: liveLine,
+                    probability: Math.round(displayConfidence * 10) / 10,
+                    edge: Math.round(edge * 10) / 10,
+                    side: betDirection,
+                    sourceProvenance,
+                  }));
+                }
                 if (isVolatile) {
                   volatilePlays.push(playEntry);
                 } else {
