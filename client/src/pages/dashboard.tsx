@@ -25,6 +25,8 @@ import { usePullRefresh } from "@/hooks/use-pull-refresh";
 import { hasProAccess } from "@/lib/tierUtils";
 import { useLocation } from "wouter";
 import { TopPlaysPanel } from "@/components/dashboard/TopPlaysPanel";
+import { FreeActivationRail } from "@/components/dashboard/free-activation-rail";
+import { PublicProofStrip } from "@/components/dashboard/public-proof-strip";
 import { SignalDetailDialog } from "@/components/signals/SignalDetailDialog";
 import type { UnifiedTopPlay } from "@/hooks/useTopPlays";
 import { UserStatusRail } from "@/components/dashboard/UserStatusRail";
@@ -2089,15 +2091,47 @@ export default function Dashboard() {
 
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-4">
           <div className="space-y-4">
-            <TopPlaysPanel
-              isElite={effectiveTier === "elite" || !!user?.isAdmin}
-              onNavigateToSport={handleNavigateToSport}
-              onAddToSlip={handleTopPlayAddToSlip}
-              onViewDetails={(play, related) => {
-                setSelectedDetailPlay(play);
-                setSelectedDetailRelated(related ?? []);
-              }}
-            />
+            {(() => {
+              const isFreeUser = !user?.isAdmin && !hasProAccess(effectiveTier);
+              if (isFreeUser) {
+                return (
+                  <>
+                    <FreeActivationRail
+                      playsUsedToday={user?.playsUsedToday ?? 0}
+                      playsLimit={3}
+                      isPrimaryLoading={scanningEdges}
+                      onPrimaryCta={() => {
+                        const remaining = 3 - (user?.playsUsedToday ?? 0);
+                        if (remaining <= 0) {
+                          setUpgradeModalState({ playsUsed: user?.playsUsedToday ?? 3, limit: 3 });
+                          setShowUpgradeModal(true);
+                          return;
+                        }
+                        autoRunBestSignal();
+                      }}
+                      onAlertsCta={() => {
+                        toast({
+                          title: "Daily alerts coming soon",
+                          description: "We'll notify you the moment alerts go live.",
+                        });
+                      }}
+                    />
+                    <PublicProofStrip />
+                  </>
+                );
+              }
+              return (
+                <TopPlaysPanel
+                  isElite={effectiveTier === "elite" || !!user?.isAdmin}
+                  onNavigateToSport={handleNavigateToSport}
+                  onAddToSlip={handleTopPlayAddToSlip}
+                  onViewDetails={(play, related) => {
+                    setSelectedDetailPlay(play);
+                    setSelectedDetailRelated(related ?? []);
+                  }}
+                />
+              );
+            })()}
             <SignalDetailDialog
               open={selectedDetailPlay !== null}
               onOpenChange={(open) => {
