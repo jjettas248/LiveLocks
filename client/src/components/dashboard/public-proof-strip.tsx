@@ -69,30 +69,6 @@ function isPlayerPropMarket(market: string | null | undefined): boolean {
   return PLAYER_PROP_KEYWORDS.some((k) => m.includes(k));
 }
 
-function buildDriverSummary(market: string, side: string): string {
-  const m = market.toLowerCase();
-  const isOver = side?.toLowerCase().includes("over");
-  if (m.includes("hr") || m.includes("homer") || m.includes("home run")) {
-    return isOver ? "Hot bat vs vulnerable righty" : "Cold zone vs ground-ball arm";
-  }
-  if (m.includes("strikeout") || m.includes("k")) {
-    return isOver ? "High whiff matchup, fresh arm" : "Contact lineup, low whiff vs starter";
-  }
-  if (m.includes("point") || m.includes("pts")) {
-    return isOver ? "Pace edge + usage spike" : "Defensive matchup, foul trouble risk";
-  }
-  if (m.includes("assist") || m.includes("ast")) {
-    return isOver ? "Heavy ball-handler usage tonight" : "Off-ball role projected";
-  }
-  if (m.includes("rebound") || m.includes("reb")) {
-    return isOver ? "Glass mismatch, expected minutes lift" : "Switch-heavy scheme limits boards";
-  }
-  if (m.includes("3pm") || m.includes("three")) {
-    return isOver ? "Volume shooter vs perimeter coverage" : "Tight closeouts, low attempt rate";
-  }
-  return isOver ? "Live model edge identified" : "Engine flagged unders bias";
-}
-
 const FALLBACK_ROWS: ProofRow[] = [
   {
     id: "fallback-1",
@@ -160,7 +136,7 @@ export function PublicProofStrip() {
       .slice(0, 5)
       .map((r) => ({
         id: r.id,
-        sport: r.sport,
+        sport: (r.sport ?? "").toUpperCase(),
         player: r.player,
         market: r.market,
         side: r.side,
