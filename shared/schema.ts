@@ -750,6 +750,35 @@ export const insertSignalInteractionSchema = createInsertSchema(signalInteractio
 export type SignalInteraction = typeof signalInteractions.$inferSelect;
 export type InsertSignalInteraction = z.infer<typeof insertSignalInteractionSchema>;
 
+// Task #134 — Free user activation rail analytics.
+// Tracks impressions, CTA clicks, and upgrade-modal opens that originate
+// from the FreeActivationRail / PublicProofStrip surface so we can compute
+// rail → upgrade conversion rate.
+export const railEvents = pgTable("rail_events", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id),
+  eventType: text("event_type").notNull(), // 'impression' | 'primary_cta_click' | 'alerts_cta_click' | 'upgrade_modal_opened'
+  source: text("source").notNull().default("free_activation_rail"),
+  exhausted: boolean("exhausted"),
+  playsUsedToday: integer("plays_used_today"),
+  playsLimit: integer("plays_limit"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  eventTypeIdx: index("rail_events_event_type_idx").on(table.eventType),
+  createdAtIdx: index("rail_events_created_at_idx").on(table.createdAt),
+}));
+
+export const insertRailEventSchema = createInsertSchema(railEvents).omit({ id: true, createdAt: true });
+export const railEventClientSchema = z.object({
+  eventType: z.enum(["impression", "primary_cta_click", "alerts_cta_click", "upgrade_modal_opened"]),
+  exhausted: z.boolean().optional(),
+  playsUsedToday: z.number().int().min(0).optional(),
+  playsLimit: z.number().int().min(0).optional(),
+});
+export type RailEvent = typeof railEvents.$inferSelect;
+export type InsertRailEvent = z.infer<typeof insertRailEventSchema>;
+export type RailEventClientPayload = z.infer<typeof railEventClientSchema>;
+
 export const hrOutcomes = pgTable("hr_outcomes", {
   id: serial("id").primaryKey(),
   season: integer("season").notNull().default(2026),

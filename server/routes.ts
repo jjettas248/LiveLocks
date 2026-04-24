@@ -7241,6 +7241,45 @@ export function registerAnalyticsRoutes(app: Express): void {
     }
   });
 
+  // Task #134 — Free user activation rail event sink.
+  // requireAuth is used because the FreeActivationRail / PublicProofStrip
+  // surface is only rendered to logged-in free users today. Validation
+  // failures return 400 with the issue list; the client helper
+  // (`trackRailEvent`) is fire-and-forget and swallows errors so a stray
+  // payload never breaks the page render.
+  app.post("/api/analytics/rail-event", requireAuth, async (req, res) => {
+    try {
+      const { railEventClientSchema } = await import("@shared/schema");
+      const parsed = railEventClientSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid rail event payload", issues: parsed.error.issues });
+      }
+      const userId = (req as any).resolvedUserId ?? null;
+      await storage.recordRailEvent({
+        userId,
+        eventType: parsed.data.eventType,
+        exhausted: parsed.data.exhausted ?? null,
+        playsUsedToday: parsed.data.playsUsedToday ?? null,
+        playsLimit: parsed.data.playsLimit ?? null,
+      });
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("[rail-event]", e?.message);
+      return res.status(500).json({ message: "Failed to record rail event" });
+    }
+  });
+
+  app.get("/api/admin/rail-analytics", requireAdmin, async (req, res) => {
+    try {
+      const range = parseInt(String(req.query.range ?? "7"), 10);
+      const stats = await storage.getRailEventStats(Number.isFinite(range) ? range : 7);
+      return res.json(stats);
+    } catch (e: any) {
+      console.error("[admin/rail-analytics]", e?.message);
+      return res.status(500).json({ message: "Failed to load rail analytics" });
+    }
+  });
+
   app.get("/api/public-analytics/summary", async (_req, res) => {
     try {
       const { getPublicAnalyticsSummary } = await import("./services/publicAnalyticsService");

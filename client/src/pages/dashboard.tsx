@@ -28,6 +28,7 @@ import { TopPlaysPanel } from "@/components/dashboard/TopPlaysPanel";
 import { FreeActivationRail } from "@/components/dashboard/free-activation-rail";
 import { PublicProofStrip } from "@/components/dashboard/public-proof-strip";
 import { TrialMissionRail } from "@/components/dashboard/trial-mission-rail";
+import { trackRailEvent } from "@/lib/railAnalytics";
 import { SignalDetailDialog } from "@/components/signals/SignalDetailDialog";
 import type { UnifiedTopPlay } from "@/hooks/useTopPlays";
 import { UserStatusRail } from "@/components/dashboard/UserStatusRail";
@@ -1703,6 +1704,30 @@ export default function Dashboard() {
   // Sport-aware header counter: show MLB live games on MLB tab, NBA active games elsewhere.
   const activeGames = activeTab === "mlb" ? mlbLiveGames : nbaActiveGames;
 
+  // Task #134 — Record a single FreeActivationRail impression per mount
+  // when a free user first sees the rail. Ref-guarded so re-renders don't
+  // spam the analytics endpoint. MUST be declared before any early return
+  // to keep React's hook order stable across the loading→loaded transition.
+  // Eligibility mirrors the actual rail render condition below
+  // (`!user.isAdmin && !hasProAccess(effectiveTier)`) so impressions are
+  // only attributed when the rail truly shows.
+  const railImpressionIsFreeUser = !!user && !user.isAdmin && !hasProAccess(effectiveTier);
+  const railImpressionPlaysUsed = user?.playsUsedToday ?? 0;
+  const railImpressionFiredRef = useRef(false);
+  useEffect(() => {
+    if (!railImpressionIsFreeUser) return;
+    if (railImpressionFiredRef.current) return;
+    railImpressionFiredRef.current = true;
+    const playsLimit = 3;
+    const exhausted = railImpressionPlaysUsed >= playsLimit;
+    void trackRailEvent({
+      eventType: "impression",
+      exhausted,
+      playsUsedToday: railImpressionPlaysUsed,
+      playsLimit,
+    });
+  }, [railImpressionIsFreeUser, railImpressionPlaysUsed]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -2136,15 +2161,37 @@ export default function Dashboard() {
                       playsLimit={3}
                       isPrimaryLoading={scanningEdges}
                       onPrimaryCta={() => {
-                        const remaining = 3 - (user?.playsUsedToday ?? 0);
-                        if (remaining <= 0) {
-                          setUpgradeModalState({ playsUsed: user?.playsUsedToday ?? 3, limit: 3 });
+                        const playsUsedToday = user?.playsUsedToday ?? 0;
+                        const remaining = 3 - playsUsedToday;
+                        const exhausted = remaining <= 0;
+                        // Task #134 — record click + (if exhausted) the
+                        // resulting upgrade modal open so we can compute
+                        // rail → upgrade conversion.
+                        void trackRailEvent({
+                          eventType: "primary_cta_click",
+                          exhausted,
+                          playsUsedToday,
+                          playsLimit: 3,
+                        });
+                        if (exhausted) {
+                          void trackRailEvent({
+                            eventType: "upgrade_modal_opened",
+                            exhausted: true,
+                            playsUsedToday,
+                            playsLimit: 3,
+                          });
+                          setUpgradeModalState({ playsUsed: playsUsedToday || 3, limit: 3 });
                           setShowUpgradeModal(true);
                           return;
                         }
                         autoRunBestSignal();
                       }}
                       onAlertsCta={() => {
+                        void trackRailEvent({
+                          eventType: "alerts_cta_click",
+                          playsUsedToday: user?.playsUsedToday ?? 0,
+                          playsLimit: 3,
+                        });
                         toast({
                           title: "Daily alerts coming soon",
                           description: "We'll notify you the moment alerts go live.",

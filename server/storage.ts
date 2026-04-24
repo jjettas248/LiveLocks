@@ -31,6 +31,7 @@ import {
   hrRadarSignalEvents,
   hrOutcomes,
   signalInteractions,
+  railEvents,
   stripeEvents,
   batterRollingSnapshots,
   type BatterRollingSnapshot,
@@ -143,6 +144,25 @@ function getPaceLabel(pace: number): string {
 }
 
 
+export interface RailEventStats {
+  rangeDays: number;
+  impressions: number;
+  primaryCtaClicks: number;
+  alertsCtaClicks: number;
+  upgradeModalOpens: number;
+  primaryCtrPct: number;
+  alertsCtrPct: number;
+  upgradeConversionPct: number;
+  exhaustedPrimaryClicks: number;
+  perDay: Array<{
+    date: string;
+    impressions: number;
+    primaryCtaClicks: number;
+    alertsCtaClicks: number;
+    upgradeModalOpens: number;
+  }>;
+}
+
 export interface IStorage {
   getPlayers(): Promise<Player[]>;
   getPlayer(id: number): Promise<Player | undefined>;
@@ -253,6 +273,8 @@ export interface IStorage {
   getPlayStats(): Promise<PlayStats>;
   getRecentGradedSignals(limit: number): Promise<PersistedPlay[]>;
   recordSignalInteraction(data: { userId: number; signalId?: string; action: string; sport?: string; market?: string }): Promise<void>;
+  recordRailEvent(data: { userId?: number | null; eventType: string; source?: string; exhausted?: boolean | null; playsUsedToday?: number | null; playsLimit?: number | null }): Promise<void>;
+  getRailEventStats(rangeDays: number): Promise<RailEventStats>;
   cleanupOldPlays(): Promise<number>;
   cleanDuplicatePlays(): Promise<{ removed: number; remaining: number }>;
   cleanDuplicateAlerts(): Promise<{ removed: number; remaining: number }>;
@@ -2345,6 +2367,88 @@ export class DatabaseStorage implements IStorage {
       sport: data.sport ?? null,
       market: data.market ?? null,
     });
+  }
+
+  // Task #134 — Free user activation rail analytics.
+  async recordRailEvent(data: { userId?: number | null; eventType: string; source?: string; exhausted?: boolean | null; playsUsedToday?: number | null; playsLimit?: number | null }): Promise<void> {
+    await db.insert(railEvents).values({
+      userId: data.userId ?? null,
+      eventType: data.eventType,
+      source: data.source ?? "free_activation_rail",
+      exhausted: data.exhausted ?? null,
+      playsUsedToday: data.playsUsedToday ?? null,
+      playsLimit: data.playsLimit ?? null,
+    });
+  }
+
+  async getRailEventStats(rangeDays: number): Promise<RailEventStats> {
+    const days = Math.max(1, Math.min(90, Math.floor(rangeDays || 7)));
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+
+    const rows = await db
+      .select({
+        eventType: railEvents.eventType,
+        exhausted: railEvents.exhausted,
+        createdAt: railEvents.createdAt,
+      })
+      .from(railEvents)
+      .where(gte(railEvents.createdAt, cutoff));
+
+    let impressions = 0;
+    let primaryCtaClicks = 0;
+    let alertsCtaClicks = 0;
+    let upgradeModalOpens = 0;
+    let exhaustedPrimaryClicks = 0;
+    const perDayMap = new Map<string, { impressions: number; primaryCtaClicks: number; alertsCtaClicks: number; upgradeModalOpens: number }>();
+
+    for (const r of rows) {
+      const day = r.createdAt
+        ? new Date(r.createdAt).toLocaleDateString("en-CA", { timeZone: "America/New_York" })
+        : "unknown";
+      if (!perDayMap.has(day)) {
+        perDayMap.set(day, { impressions: 0, primaryCtaClicks: 0, alertsCtaClicks: 0, upgradeModalOpens: 0 });
+      }
+      const bucket = perDayMap.get(day)!;
+      switch (r.eventType) {
+        case "impression":
+          impressions++;
+          bucket.impressions++;
+          break;
+        case "primary_cta_click":
+          primaryCtaClicks++;
+          bucket.primaryCtaClicks++;
+          if (r.exhausted) exhaustedPrimaryClicks++;
+          break;
+        case "alerts_cta_click":
+          alertsCtaClicks++;
+          bucket.alertsCtaClicks++;
+          break;
+        case "upgrade_modal_opened":
+          upgradeModalOpens++;
+          bucket.upgradeModalOpens++;
+          break;
+      }
+    }
+
+    const pct = (num: number, denom: number) => (denom > 0 ? Math.round((num / denom) * 1000) / 10 : 0);
+
+    const perDay = Array.from(perDayMap.entries())
+      .map(([date, b]) => ({ date, ...b }))
+      .sort((a, b) => (a.date < b.date ? 1 : -1));
+
+    return {
+      rangeDays: days,
+      impressions,
+      primaryCtaClicks,
+      alertsCtaClicks,
+      upgradeModalOpens,
+      primaryCtrPct: pct(primaryCtaClicks, impressions),
+      alertsCtrPct: pct(alertsCtaClicks, impressions),
+      upgradeConversionPct: pct(upgradeModalOpens, impressions),
+      exhaustedPrimaryClicks,
+      perDay,
+    };
   }
 
   async cleanupOldPlays(): Promise<number> {

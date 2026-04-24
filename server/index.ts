@@ -405,6 +405,27 @@ app.use((req, res, next) => {
     console.warn("[startup] Schema migration warning (batter-rolling-snapshots):", err.message);
   }
 
+  // Schema migration: free-user activation rail analytics (Task #134)
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS rail_events (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id),
+        event_type TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'free_activation_rail',
+        exhausted BOOLEAN,
+        plays_used_today INTEGER,
+        plays_limit INTEGER,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS rail_events_event_type_idx ON rail_events(event_type);
+      CREATE INDEX IF NOT EXISTS rail_events_created_at_idx ON rail_events(created_at);
+    `);
+    console.log("[startup] Schema migration: rail_events table ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (rail-events):", err.message);
+  }
+
   // Backfill: mark pre-existing users (no verification token) as email-verified
   // so they are not locked out by the new emailVerified gate.
   try {

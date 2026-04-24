@@ -783,7 +783,8 @@ export default function AdminPage() {
 
         {/* Analytics Tab */}
         {activeTab === "analytics" && (
-          <div data-testid="panel-analytics">
+          <div data-testid="panel-analytics" className="space-y-6">
+            <RailAnalyticsTile />
             <UnifiedAnalyticsPanel />
           </div>
         )}
@@ -828,6 +829,167 @@ interface FullROIReport {
   bySignalScore: SegmentedROI[];
   byDirection: SegmentedROI[];
   byTiming: SegmentedROI[];
+}
+
+type RailAnalyticsResponse = {
+  rangeDays: number;
+  impressions: number;
+  primaryCtaClicks: number;
+  alertsCtaClicks: number;
+  upgradeModalOpens: number;
+  primaryCtrPct: number;
+  alertsCtrPct: number;
+  upgradeConversionPct: number;
+  exhaustedPrimaryClicks: number;
+  perDay: Array<{
+    date: string;
+    impressions: number;
+    primaryCtaClicks: number;
+    alertsCtaClicks: number;
+    upgradeModalOpens: number;
+  }>;
+};
+
+function RailAnalyticsTile() {
+  const [range, setRange] = useState<number>(7);
+  const { data, isLoading, error } = useQuery<RailAnalyticsResponse>({
+    queryKey: ["/api/admin/rail-analytics", range],
+    queryFn: async () => {
+      const token = getAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch(`/api/admin/rail-analytics?range=${range}`, {
+        credentials: "include",
+        headers,
+      });
+      if (!res.ok) throw new Error("Failed to load rail analytics");
+      return res.json();
+    },
+  });
+
+  return (
+    <div
+      data-testid="panel-rail-analytics"
+      className="bg-card border border-border rounded-xl overflow-hidden"
+    >
+      <div className="px-4 py-3 border-b border-border/60 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <BarChart3 className="w-4 h-4 text-primary" />
+          <h2 className="text-sm font-semibold text-foreground">Free Activation Rail</h2>
+          <span className="text-[10px] text-muted-foreground">
+            FreeActivationRail + PublicProofStrip · plays-to-upgrade conversion
+          </span>
+        </div>
+        <select
+          data-testid="select-rail-range"
+          value={range}
+          onChange={(e) => setRange(parseInt(e.target.value, 10))}
+          className="text-xs bg-muted border border-border rounded-lg px-3 py-1.5 text-foreground"
+        >
+          <option value={1}>Last 24h</option>
+          <option value={7}>Last 7 days</option>
+          <option value={30}>Last 30 days</option>
+        </select>
+      </div>
+
+      {isLoading ? (
+        <div className="p-8 flex justify-center" data-testid="rail-loading">
+          <Loader2 className="w-5 h-5 animate-spin text-primary" />
+        </div>
+      ) : error ? (
+        <div className="p-6 text-center text-sm text-destructive" data-testid="text-rail-error">
+          Failed to load rail analytics
+        </div>
+      ) : !data ? null : (
+        <div className="p-4 space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <MetricCard
+              label="Impressions"
+              value={String(data.impressions)}
+            />
+            <MetricCard
+              label="Primary CTA"
+              value={String(data.primaryCtaClicks)}
+              sub={`${data.primaryCtrPct}% CTR`}
+            />
+            <MetricCard
+              label="Alerts CTA"
+              value={String(data.alertsCtaClicks)}
+              sub={`${data.alertsCtrPct}% CTR`}
+            />
+            <MetricCard
+              label="Upgrade Opens"
+              value={String(data.upgradeModalOpens)}
+              sub={`${data.exhaustedPrimaryClicks} from exhausted`}
+            />
+            <MetricCard
+              label="Conversion"
+              value={`${data.upgradeConversionPct}%`}
+              color={
+                data.upgradeConversionPct >= 5
+                  ? "text-green-400"
+                  : data.upgradeConversionPct >= 1
+                  ? "text-yellow-400"
+                  : "text-muted-foreground"
+              }
+              sub="opens / impression"
+            />
+          </div>
+
+          {data.perDay.length > 0 && (
+            <div className="overflow-x-auto" data-testid="table-rail-per-day">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border/40 text-muted-foreground">
+                    <th className="px-3 py-2 text-left font-medium">Date (ET)</th>
+                    <th className="px-3 py-2 text-right font-medium">Impressions</th>
+                    <th className="px-3 py-2 text-right font-medium">Primary</th>
+                    <th className="px-3 py-2 text-right font-medium">Alerts</th>
+                    <th className="px-3 py-2 text-right font-medium">Upgrade Opens</th>
+                    <th className="px-3 py-2 text-right font-medium">Conv %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.perDay.map((d) => {
+                    const conv = d.impressions > 0
+                      ? Math.round((d.upgradeModalOpens / d.impressions) * 1000) / 10
+                      : 0;
+                    return (
+                      <tr
+                        key={d.date}
+                        data-testid={`row-rail-day-${d.date}`}
+                        className="border-b border-border/20 hover:bg-muted/20 transition-colors"
+                      >
+                        <td className="px-3 py-2 font-medium text-foreground">{d.date}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{d.impressions}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{d.primaryCtaClicks}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{d.alertsCtaClicks}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{d.upgradeModalOpens}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          <span className={conv >= 5 ? "text-green-400" : conv >= 1 ? "text-yellow-400" : "text-muted-foreground"}>
+                            {conv}%
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {data.impressions === 0 && (
+            <div
+              data-testid="text-rail-empty"
+              className="text-center text-xs text-muted-foreground py-4"
+            >
+              No rail events recorded in this window yet.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function MetricCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
