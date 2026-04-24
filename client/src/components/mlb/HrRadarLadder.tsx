@@ -723,6 +723,9 @@ interface HrRadarLadderProps {
 }
 
 export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps) {
+  // ── HOOKS — all hook calls live above ANY early return so the call
+  // count is identical between renders (React invariant; violating it
+  // throws "Rendered more hooks than during the previous render").
   const queryClient = useQueryClient();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [hideFinished, setHideFinished] = useState(false);
@@ -732,23 +735,89 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
     placeholderData: (prev) => prev,
   });
 
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    try {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar/ladder"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/mlb/alerts"] }),
-      ]);
-    } finally {
-      setIsRefreshing(false);
+  // Derived shapes — safe defaults so dependent hooks below run cleanly
+  // even before data has arrived.
+  const rawSections = data?.sections ?? { attackNow: [], building: [], watch: [], cashed: [], dead: [] };
+  const sessionDate = data?.sessionDate ?? "";
+
+  // Task #121 Step 3 — per-session "Pass" dismiss list, persisted in
+  // localStorage. Re-read on session-date change so tomorrow's session is
+  // clean. Live (Watch / Building / AttackNow) entries dismissed by the
+  // user are filtered out; cashed / dead are never auto-hidden by Pass.
+  //
+  // Synchronous re-derivation pattern: when `sessionDate` changes (first
+  // load, or day rollover), we update the sets *during* render via the
+  // tracked-prop guard. This avoids the one-frame unfiltered flicker that
+  // would happen if we waited for a useEffect to re-sync after commit.
+  // See: react.dev/reference/react/useState#storing-information-from-previous-renders
+  const [trackedSessionDate, setTrackedSessionDate] = useState<string>(sessionDate);
+  const [dismissed, setDismissed] = useState<Set<string>>(() => readDismissed(sessionDate));
+  const [accepted, setAccepted] = useState<Set<string>>(() => readAccepted(sessionDate));
+
+  // Task #121 Step 5 — one-time pulse when an entry transitions into cashed.
+  // The `cashedInitializedRef` baseline guard prevents the pulse from firing
+  // on the FIRST payload (otherwise every cashed card on initial load would
+  // animate). Pulse fires only on subsequent additions during the session.
+  //
+  // IMPORTANT: do NOT seed the baseline against the empty default
+  // `rawSections` we expose during the loading state — that would treat
+  // every real cashed row as "newly added" once data arrives. We gate on
+  // `sessionDate` (truthy only after real data is hydrated) so the
+  // baseline is captured from the first REAL payload, not the placeholder.
+  const previousCashedKeysRef = useRef<Set<string>>(new Set());
+  const cashedInitializedRef = useRef<boolean>(false);
+  const [freshlyCashedKeys, setFreshlyCashedKeys] = useState<Set<string>>(new Set());
+
+  // Session rollover handler — runs synchronously during render whenever
+  // sessionDate changes (first hydration OR day rollover). Re-derives
+  // persisted Pass/Accept sets and resets the cashed-pulse baseline so a
+  // new day's first payload doesn't animate prior-day cashed entries.
+  if (sessionDate !== trackedSessionDate) {
+    setTrackedSessionDate(sessionDate);
+    setDismissed(readDismissed(sessionDate));
+    setAccepted(readAccepted(sessionDate));
+    cashedInitializedRef.current = false;
+    previousCashedKeysRef.current = new Set();
+    setFreshlyCashedKeys(new Set());
+  }
+
+  const sections = useMemo(() => {
+    const filterDismissed = (list: HrRadarLadderEntry[]): HrRadarLadderEntry[] =>
+      list.filter(e => !dismissed.has(entryDismissKey(e.playerId, e.gameId)));
+    return {
+      attackNow: filterDismissed(rawSections.attackNow ?? []),
+      // Goldmaster v1 — additive Ready bucket (filtered like other live sections).
+      ready: filterDismissed((rawSections as any).ready ?? []),
+      building: filterDismissed(rawSections.building ?? []),
+      watch: filterDismissed(rawSections.watch ?? []),
+      cashed: rawSections.cashed ?? [],
+      dead: rawSections.dead ?? [],
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawSections, dismissed]);
+
+  useEffect(() => {
+    if (!sessionDate) return;
+    const currentKeys = new Set(sections.cashed.map(e => entryDismissKey(e.playerId, e.gameId)));
+    if (!cashedInitializedRef.current) {
+      // Seed baseline silently on the first REAL payload — no animation.
+      previousCashedKeysRef.current = currentKeys;
+      cashedInitializedRef.current = true;
+      return;
     }
-  };
+    const newlyAdded = new Set<string>();
+    for (const k of Array.from(currentKeys)) {
+      if (!previousCashedKeysRef.current.has(k)) newlyAdded.add(k);
+    }
+    previousCashedKeysRef.current = currentKeys;
+    if (newlyAdded.size > 0) {
+      setFreshlyCashedKeys(newlyAdded);
+      const t = window.setTimeout(() => setFreshlyCashedKeys(new Set()), 2400);
+      return () => window.clearTimeout(t);
+    }
+  }, [sessionDate, sections.cashed]);
 
-  const lastUpdatedLabel = dataUpdatedAt
-    ? new Date(dataUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-    : null;
-
+  // ── EARLY RETURNS — only after every hook above has been called.
   if (isLoading && !data) {
     return (
       <div className="space-y-3">
@@ -770,19 +839,24 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
     );
   }
 
-  const rawSections = data?.sections ?? { attackNow: [], building: [], watch: [], cashed: [], dead: [] };
-  const sessionDate = data?.sessionDate ?? "";
+  // ── Plain helpers / derived values (no hooks).
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar/ladder"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/mlb/alerts"] }),
+      ]);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
-  // Task #121 Step 3 — per-session "Pass" dismiss list, persisted in
-  // localStorage. Re-read on session-date change so tomorrow's session is
-  // clean. Live (Watch / Building / AttackNow) entries dismissed by the
-  // user are filtered out; cashed / dead are never auto-hidden by Pass.
-  const [dismissed, setDismissed] = useState<Set<string>>(() => readDismissed(sessionDate));
-  const [accepted, setAccepted] = useState<Set<string>>(() => readAccepted(sessionDate));
-  useEffect(() => {
-    setDismissed(readDismissed(sessionDate));
-    setAccepted(readAccepted(sessionDate));
-  }, [sessionDate]);
+  const lastUpdatedLabel = dataUpdatedAt
+    ? new Date(dataUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    : null;
+
   const handlePass = (entry: HrRadarLadderEntry) => {
     const key = entryDismissKey(entry.playerId, entry.gameId);
     setDismissed(prev => {
@@ -803,19 +877,6 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
       return next;
     });
   };
-  const filterDismissed = (list: HrRadarLadderEntry[]): HrRadarLadderEntry[] =>
-    list.filter(e => !dismissed.has(entryDismissKey(e.playerId, e.gameId)));
-
-  const sections = useMemo(() => ({
-    attackNow: filterDismissed(rawSections.attackNow ?? []),
-    // Goldmaster v1 — additive Ready bucket (filtered like other live sections).
-    ready: filterDismissed((rawSections as any).ready ?? []),
-    building: filterDismissed(rawSections.building ?? []),
-    watch: filterDismissed(rawSections.watch ?? []),
-    cashed: rawSections.cashed ?? [],
-    dead: rawSections.dead ?? [],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [rawSections, dismissed]);
 
   const counts = {
     attackNow: sections.attackNow.length,
@@ -826,33 +887,6 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
     dead: sections.dead.length,
     total: sections.attackNow.length + sections.ready.length + sections.building.length + sections.watch.length + sections.cashed.length + sections.dead.length,
   };
-
-  // Task #121 Step 5 — one-time pulse when an entry transitions into cashed.
-  // The `cashedInitializedRef` baseline guard prevents the pulse from firing
-  // on the FIRST payload (otherwise every cashed card on initial load would
-  // animate). Pulse fires only on subsequent additions during the session.
-  const previousCashedKeysRef = useRef<Set<string>>(new Set());
-  const cashedInitializedRef = useRef<boolean>(false);
-  const [freshlyCashedKeys, setFreshlyCashedKeys] = useState<Set<string>>(new Set());
-  useEffect(() => {
-    const currentKeys = new Set(sections.cashed.map(e => entryDismissKey(e.playerId, e.gameId)));
-    if (!cashedInitializedRef.current) {
-      // Seed baseline silently on the first payload — no animation.
-      previousCashedKeysRef.current = currentKeys;
-      cashedInitializedRef.current = true;
-      return;
-    }
-    const newlyAdded = new Set<string>();
-    for (const k of Array.from(currentKeys)) {
-      if (!previousCashedKeysRef.current.has(k)) newlyAdded.add(k);
-    }
-    previousCashedKeysRef.current = currentKeys;
-    if (newlyAdded.size > 0) {
-      setFreshlyCashedKeys(newlyAdded);
-      const t = window.setTimeout(() => setFreshlyCashedKeys(new Set()), 2400);
-      return () => window.clearTimeout(t);
-    }
-  }, [sections.cashed]);
 
   const allOrder: SectionKey[] = ["attackNow", "ready", "building", "watch", "cashed", "dead"];
   const order: SectionKey[] = hideFinished
