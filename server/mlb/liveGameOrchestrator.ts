@@ -66,6 +66,32 @@ import { storage } from "../storage";
 import { trackPlay } from "../services/playTracker";
 import { runFullOnlyHomersScrape, getHotHitters, getLiveBallparkFactors, getBatterVsPitcherHrHistory } from "./onlyHomersService";
 
+// ── HR Presence Floor eligibility thresholds (Task #126 / tuned in #128) ────
+// A batter passes the presence floor if ANY of these conditions hold:
+//   - seasonHRRate    >= PRESENCE_FLOOR_SEASON_HR_RATE
+//   - hrRateLast30    >= PRESENCE_FLOOR_HR_RATE_L30
+//   - barrelRate      >= PRESENCE_FLOOR_BARREL_RATE
+//   - OnlyHomers hot-hitter list (binary toggle)
+//
+// Tuned by Task #128 against the 2026 season, window 2026-04-04..2026-04-23
+// (882 events, 724 candidates after excluding batter-days that already had
+// a real PATH A–E row, 21 uncalled HRs). The full sweep + recommendation
+// is captured in `.local/state/presence-floor-tuning.md`. Sweep harness:
+// `scripts/backtestPresenceFloor.ts`. Re-run after each fortnight of live
+// data to confirm the noise/coverage trade-off has not drifted.
+//
+// Trade-off vs. the previous (0.025 / 0.030 / 0.080) defaults:
+//   - presence rows surfaced: 152 → 93   (~39% less noise)
+//   - uncalled HRs covered:    9  →  8   (–1 covered HR)
+//   - miss:hr ratio:          15.9 → 10.6 (~33% better)
+//   - coverage:               42.9% → 38.1%
+// We accept the 1-HR coverage drop because the noise reduction is
+// substantial. seasonHRRate and hrRateLast30 are unchanged because the
+// barrel axis dominates discrimination on the available data.
+export const PRESENCE_FLOOR_SEASON_HR_RATE = 0.025;
+export const PRESENCE_FLOOR_HR_RATE_L30 = 0.030;
+export const PRESENCE_FLOOR_BARREL_RATE = 0.120;
+
 // ── OnlyHomers data caches (refreshed periodically) ─────────────────────────
 let ohHotHitters7d: Map<string, number> = new Map();
 let ohHotHitters14d: Map<string, number> = new Map();
@@ -87,7 +113,7 @@ async function refreshSelfLearningCalibration(): Promise<void> {
   }
 }
 
-async function refreshOnlyHomersCache(): Promise<void> {
+export async function refreshOnlyHomersCache(): Promise<void> {
   if (Date.now() - ohLastRefresh < OH_REFRESH_MS) return;
   try {
     const [h7, h14, h30, parks] = await Promise.all([
@@ -2699,6 +2725,10 @@ export class LiveGameOrchestrator {
     }
 
     // ── Task #126: HR Presence Floor pass ───────────────────────────────────
+    // Eligibility thresholds. Defaults validated by Task #128 against the
+    // 2026-04-04..2026-04-23 window — see `scripts/backtestPresenceFloor.ts`
+    // for the sweep harness. Re-run after each fortnight of live data to
+    // confirm the noise/coverage trade-off has not drifted.
     // Walk the batting order one more time (cheap — pure cache reads) and
     // surface any plausible power-threat batter who DID NOT receive a real
     // PATH A–E HR-radar row this tick. The presence-only row is created in
@@ -2726,9 +2756,9 @@ export class LiveGameOrchestrator {
           : null;
 
         const eligibilityReasons: string[] = [];
-        if (seasonHRRate != null && seasonHRRate >= 0.025) eligibilityReasons.push(`seasonHRRate=${seasonHRRate.toFixed(3)}`);
-        if (hrRateLast30 != null && hrRateLast30 >= 0.03) eligibilityReasons.push(`hrRateLast30=${hrRateLast30.toFixed(3)}`);
-        if (barrelRate != null && barrelRate >= 0.08) eligibilityReasons.push(`barrelRate=${barrelRate.toFixed(3)}`);
+        if (seasonHRRate != null && seasonHRRate >= PRESENCE_FLOOR_SEASON_HR_RATE) eligibilityReasons.push(`seasonHRRate=${seasonHRRate.toFixed(3)}`);
+        if (hrRateLast30 != null && hrRateLast30 >= PRESENCE_FLOOR_HR_RATE_L30) eligibilityReasons.push(`hrRateLast30=${hrRateLast30.toFixed(3)}`);
+        if (barrelRate != null && barrelRate >= PRESENCE_FLOOR_BARREL_RATE) eligibilityReasons.push(`barrelRate=${barrelRate.toFixed(3)}`);
         if (oh.isHotHitter) eligibilityReasons.push(`hotHitter=${oh.hotHitterPeriod}/${oh.hotHitterHrCount}`);
 
         if (eligibilityReasons.length === 0) continue;
