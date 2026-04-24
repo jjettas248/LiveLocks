@@ -97,7 +97,7 @@ export function FreeActivationRail({
           data-testid="text-alerts-coming-soon"
           className="text-[11px] text-muted-foreground/80"
         >
-          Daily alerts coming soon — tap above to be notified when they go live.
+          Daily alerts coming soon.
         </p>
       )}
     </div>
