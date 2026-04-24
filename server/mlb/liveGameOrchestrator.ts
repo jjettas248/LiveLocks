@@ -28,6 +28,7 @@ import {
   mlbGameCache,
   mlbPlayerCache,
   type GameStateCache,
+  type HRPlayMeta,
 } from "./dataPullService";
 import { estimateRemainingPA, estimatePitcherRemainingBF } from "./paEstimator";
 import { getMarketParkFactor, isVenueIndoors } from "./dataSources";
@@ -221,8 +222,8 @@ function gradeHomeRunsFromPlays(gameId: string): void {
     byPlayer.set(p.playerId, arr);
   }
 
-  for (const [playerId, plays] of byPlayer) {
-    plays.sort((a, b) => a.atBatIndex - b.atBatIndex);
+  for (const [playerId, plays] of Array.from(byPlayer.entries())) {
+    plays.sort((a: HRPlayMeta, b: HRPlayMeta) => a.atBatIndex - b.atBatIndex);
     const trackerKey = `${gameId}_${playerId}`;
     const lastGradedIdx = KNOWN_HR_AB_INDEX.get(trackerKey) ?? -1;
 
@@ -2579,7 +2580,7 @@ export class LiveGameOrchestrator {
             const alertResult = evaluateHRAlert(alertInput);
 
             const hrDynSnap = recomputeHrAlertState(alertInput, {
-              gameFinal: normalizedStatus === "final",
+              gameFinal: (normalizedStatus as string) === "final",
               currentPitcherId: pitcher?.playerId ?? null,
               isHome: batter.team === state.homeTeamAbbr,
               precomputedAlert: alertResult,

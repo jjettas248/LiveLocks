@@ -655,4 +655,5 @@ export interface MLBQualifiedSignal {
   opportunityScore?: number;
   liveScore?: number;
   eventBoost?: number;
+  bvpHistory?: BatterVsPitcherHistory;
 }

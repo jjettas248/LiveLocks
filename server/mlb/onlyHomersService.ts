@@ -2,6 +2,8 @@ import { db } from "../db";
 import { hrOutcomes, hrHotHitters, hrBallparkFactors } from "@shared/schema";
 import { eq, and, sql } from "drizzle-orm";
 
+type HrOutcome = typeof hrOutcomes.$inferSelect;
+
 interface ParsedHR {
   team: string;
   batterName: string;
@@ -484,7 +486,6 @@ export async function runHistoricalScrape(season: number = 2025): Promise<void> 
 }
 
 export async function getBatterHrHistory(batterName: string, season?: number): Promise<HrOutcome[]> {
-  type HrOutcome = typeof hrOutcomes.$inferSelect;
   if (season) {
     return db.select().from(hrOutcomes)
       .where(and(eq(hrOutcomes.batterName, batterName), eq(hrOutcomes.season, season)))
@@ -496,14 +497,12 @@ export async function getBatterHrHistory(batterName: string, season?: number): P
 }
 
 export async function getBatterVsPitcherHrHistory(batterName: string, pitcherName: string): Promise<HrOutcome[]> {
-  type HrOutcome = typeof hrOutcomes.$inferSelect;
   return db.select().from(hrOutcomes)
     .where(and(eq(hrOutcomes.batterName, batterName), eq(hrOutcomes.pitcherName, pitcherName)))
     .orderBy(hrOutcomes.gameDate);
 }
 
 export async function getBatterAtBallparkHrHistory(batterName: string, ballpark: string): Promise<HrOutcome[]> {
-  type HrOutcome = typeof hrOutcomes.$inferSelect;
   return db.select().from(hrOutcomes)
     .where(and(eq(hrOutcomes.batterName, batterName), eq(hrOutcomes.ballpark, ballpark)))
     .orderBy(hrOutcomes.gameDate);

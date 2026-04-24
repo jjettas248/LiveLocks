@@ -56,13 +56,12 @@ export function runPlayoffSmoke(): { passed: boolean; checks: Check[] } {
 
   // ── PHASE 4: playoff ceilings ≤ regular-season ceilings ──
   const archetypes: NBAArchetype[] = [
-    "superstar", "primary", "role", "rotation", "volatile",
     "stable_star", "stable_starter", "volatile_starter",
     "bench_microwave", "low_minute_big", "lineup_impacted", "role_uncertain",
   ];
   for (const a of archetypes) {
-    const reg = getSafetyCeiling(a);
-    const po = getPlayoffSafetyCeiling(a);
+    const reg = getSafetyCeiling(a, false);
+    const po = getPlayoffSafetyCeiling(a, false);
     checks.push(check(
       `Playoff ceiling ≤ regular for ${a}`,
       `playoff(${po}) ≤ regular(${reg})`,

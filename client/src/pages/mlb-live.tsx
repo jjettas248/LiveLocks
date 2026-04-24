@@ -1853,7 +1853,7 @@ function CompactResolvedRadarRow({ card, onAnalyze, gameTeams, kind }: {
           <span className={`text-[9px] font-semibold ${iconColor}`}>{hitLabel}</span>
           {peak > 0 && <span className="text-[9px] tabular-nums text-foreground">peak {peak.toFixed(1)}</span>}
           {tags.map((t, i) => (
-            <span key={i} className="text-[8px] px-1 py-0.5 rounded bg-muted/30 text-muted-foreground">{t}</span>
+            <span key={i} className={`text-[8px] px-1 py-0.5 rounded bg-muted/30 ${t.color}`}>{t.label}</span>
           ))}
         </div>
       </div>
@@ -1988,6 +1988,14 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         scoreIncreased: false,
         scoreIncreaseLabel: null,
         peakScore: ch.peakScore ?? null,
+        isHotHitter: false,
+        hotHitterPeriod: null,
+        hotHitterHrCount: null,
+        onlyHomersVerified: false,
+        ohExitVelocity: null,
+        ohLaunchAngle: null,
+        ohDistance: null,
+        ohPitchType: null,
         side: "OVER",
         line: 0.5,
         alertPath: (ch as any).alertPath ?? null,
@@ -1998,7 +2006,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         dynamicDrivers: [], dynamicSuppressors: [], cooldownReason: null,
         dynamicPeakScore: null, dynamicPeakState: null, dynamicTickCount: null,
         dynamicLastRecompute: null, dynamicDataFreshness: null,
-      } as HrRadarCardUi);
+      });
     } else {
       radarState.set(key, { ...radarState.get(key)!, status: "CASHED" });
     }
@@ -2051,6 +2059,14 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         scoreIncreased: false,
         scoreIncreaseLabel: null,
         peakScore: cm.peakScore ?? null,
+        isHotHitter: false,
+        hotHitterPeriod: null,
+        hotHitterHrCount: null,
+        onlyHomersVerified: false,
+        ohExitVelocity: null,
+        ohLaunchAngle: null,
+        ohDistance: null,
+        ohPitchType: null,
         side: "OVER",
         line: 0.5,
         alertPath: (cm as any).alertPath ?? null,
@@ -2061,7 +2077,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         dynamicDrivers: [], dynamicSuppressors: [], cooldownReason: null,
         dynamicPeakScore: null, dynamicPeakState: null, dynamicTickCount: null,
         dynamicLastRecompute: null, dynamicDataFreshness: null,
-      } as HrRadarCardUi);
+      });
     }
   }
 

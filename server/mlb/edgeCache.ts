@@ -87,7 +87,7 @@ export const mlbEdgeCache = {
   entries(): IterableIterator<[string, EdgeCacheEntry]> {
     const now = Date.now();
     const valid = new Map<string, EdgeCacheEntry>();
-    for (const [key, entry] of _cache.entries()) {
+    for (const [key, entry] of Array.from(_cache.entries())) {
       if (now - entry.createdAt <= CACHE_TTL_MS) {
         valid.set(key, entry);
       } else {

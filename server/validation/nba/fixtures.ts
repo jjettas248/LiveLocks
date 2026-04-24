@@ -286,6 +286,7 @@ export const NBA_FIXTURES: NBAFixture[] = [
     },
     options: { underBiasCorrectionActive: true },
     expectations: {
+      expectedDirection: "NO_SIGNAL",
       expectedArchetype: "stable_starter",
       noSignal: true,
     },

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Joyride, CallBackProps, STATUS, EVENTS } from "react-joyride";
+import { Joyride, EVENTS, STATUS, type EventData } from "react-joyride";
 import { apiRequest } from "@/lib/queryClient";
 
 const TOUR_COMPLETED_KEY = "livelocks_onboarding_completed";
@@ -79,7 +79,7 @@ export function OnboardingTour({ hasCompletedOnboarding, onComplete }: Onboardin
     }
   }, [alreadyCompleted]);
 
-  const handleCallback = async (data: CallBackProps) => {
+  const handleEvent = async (data: EventData) => {
     const { status, type } = data;
 
     // Mark complete the moment the tour first renders — guarantees it never
@@ -102,11 +102,7 @@ export function OnboardingTour({ hasCompletedOnboarding, onComplete }: Onboardin
       steps={STEPS}
       run={run}
       continuous
-      showSkipButton
-      showProgress
-      disableCloseOnEsc={false}
-      disableOverlayClose={false}
-      callback={handleCallback}
+      onEvent={handleEvent}
       locale={{
         back: "Back",
         close: "Close",
@@ -114,15 +110,19 @@ export function OnboardingTour({ hasCompletedOnboarding, onComplete }: Onboardin
         next: "Next",
         skip: "Skip tour",
       }}
+      options={{
+        primaryColor: "#3b82f6",
+        backgroundColor: "#18181b",
+        textColor: "#e4e4e7",
+        arrowColor: "#18181b",
+        overlayColor: "rgba(0, 0, 0, 0.65)",
+        zIndex: 10000,
+        showProgress: true,
+        buttons: ["back", "skip", "primary"],
+        dismissKeyAction: "close",
+        overlayClickAction: "close",
+      }}
       styles={{
-        options: {
-          primaryColor: "#3b82f6",
-          backgroundColor: "#18181b",
-          textColor: "#e4e4e7",
-          arrowColor: "#18181b",
-          overlayColor: "rgba(0, 0, 0, 0.65)",
-          zIndex: 10000,
-        },
         tooltip: {
           borderRadius: "12px",
           padding: "18px",
@@ -140,7 +140,7 @@ export function OnboardingTour({ hasCompletedOnboarding, onComplete }: Onboardin
           color: "#d4d4d8",
           padding: "0",
         },
-        buttonNext: {
+        buttonPrimary: {
           borderRadius: "8px",
           padding: "8px 16px",
           fontSize: "13px",

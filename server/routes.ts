@@ -1398,7 +1398,7 @@ export async function registerRoutes(
         storage.getAlertConversionStats(),
       ]);
 
-      function deriveSignalState(trigger: string | null, alertType: string, score: number): { signalState: string | null; decision: string | null } {
+      const deriveSignalState = (trigger: string | null, alertType: string, score: number): { signalState: string | null; decision: string | null } => {
         if (!trigger) return { signalState: null, decision: null };
         if (trigger === "cooldown") return { signalState: "COOLDOWN", decision: null };
         if (trigger.startsWith("hard_trigger") || trigger.startsWith("repeat_contact")) {
@@ -1418,9 +1418,15 @@ export async function registerRoutes(
           return { signalState: "FORMATION", decision: "MONITOR" };
         }
         return { signalState: alertType === "HR_EARLY" ? "BUILDING" : "FORMATION", decision: alertType === "HR_EARLY" ? "PREPARE" : "MONITOR" };
-      }
+      };
 
-      function deriveFormattedReason(trigger: string | null, factors: any, inning: number | null): string {
+      const ordinalSuffix = (n: number): string => {
+        const s = ["th", "st", "nd", "rd"];
+        const v = n % 100;
+        return n + (s[(v - 20) % 10] || s[v] || s[0]);
+      };
+
+      const deriveFormattedReason = (trigger: string | null, factors: any, inning: number | null): string => {
         if (!trigger) return "";
         if (trigger === "cooldown") return "Recently alerted — signal on cooldown.";
         if (trigger.startsWith("PATH_A")) {
@@ -1459,20 +1465,14 @@ export async function registerRoutes(
           return "Consistent hard contact building. EV averaging 92+ with rising build score.";
         }
         return "Power indicators increasing.";
-      }
+      };
 
-      function ordinalSuffix(n: number): string {
-        const s = ["th", "st", "nd", "rd"];
-        const v = n % 100;
-        return n + (s[(v - 20) % 10] || s[v] || s[0]);
-      }
-
-      function deriveConfidence(score: number, factors: any): number {
+      const deriveConfidence = (score: number, factors: any): number => {
         let base = Math.min(10, Math.round(score * 2));
         if ((factors?.barrels ?? 0) >= 2) base = Math.min(10, base + 1);
         if ((factors?.maxEV ?? 0) >= 108) base = Math.min(10, base + 1);
         return Math.max(0, base);
-      }
+      };
 
       return res.json({
         alerts: alerts.map(a => {
@@ -2848,7 +2848,7 @@ export async function registerRoutes(
   app.get("/api/mlb/onlyhomers/batter/:name", requireAuth, async (req, res) => {
     try {
       const { getBatterHrHistory } = await import("./mlb/onlyHomersService");
-      const history = await getBatterHrHistory(decodeURIComponent(req.params.name));
+      const history = await getBatterHrHistory(decodeURIComponent(req.params.name as string));
       return res.json({ batterName: req.params.name, history });
     } catch (e: any) {
       console.error("[onlyhomers/batter]", e.message);
@@ -2860,8 +2860,8 @@ export async function registerRoutes(
     try {
       const { getBatterVsPitcherHrHistory } = await import("./mlb/onlyHomersService");
       const history = await getBatterVsPitcherHrHistory(
-        decodeURIComponent(req.params.batter),
-        decodeURIComponent(req.params.pitcher)
+        decodeURIComponent(req.params.batter as string),
+        decodeURIComponent(req.params.pitcher as string)
       );
       return res.json({ batter: req.params.batter, pitcher: req.params.pitcher, history });
     } catch (e: any) {
