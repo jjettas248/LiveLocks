@@ -25,6 +25,9 @@ import {
   hrOutcomes,
   signalInteractions,
   stripeEvents,
+  batterRollingSnapshots,
+  type BatterRollingSnapshot,
+  type InsertBatterRollingSnapshot,
   type Player,
   type InsertPlayer,
   type TeamDefense,
@@ -228,6 +231,11 @@ export interface IStorage {
   recordStripeEvent(eventId: string): Promise<void>;
   recordChurn(userId: number, previousTier: string | null): Promise<void>;
   getChurnedUsers(): Promise<Array<{ id: number; email: string; churnedAt: Date; churnedFromTier: string | null; createdAt: Date | null }>>;
+
+  // Task #129 — point-in-time batter rolling stat snapshots.
+  upsertBatterRollingSnapshot(snap: InsertBatterRollingSnapshot): Promise<void>;
+  getBatterRollingSnapshot(playerId: string, sessionDate: string): Promise<BatterRollingSnapshot | null>;
+  getBatterRollingSnapshotsForDateRange(from: string, to: string): Promise<BatterRollingSnapshot[]>;
 }
 
 // ─── Usage compression for blowout games ──────────────────────────────────
@@ -2665,6 +2673,48 @@ export class DatabaseStorage implements IStorage {
       .where(isNotNull(users.churnedAt))
       .orderBy(desc(users.churnedAt));
     return rows as Array<{ id: number; email: string; churnedAt: Date; churnedFromTier: string | null; createdAt: Date | null }>;
+  }
+
+  // ── Task #129 — batter rolling stat snapshots ──────────────────────────
+  async upsertBatterRollingSnapshot(snap: InsertBatterRollingSnapshot): Promise<void> {
+    await db
+      .insert(batterRollingSnapshots)
+      .values(snap)
+      .onConflictDoUpdate({
+        target: [batterRollingSnapshots.playerId, batterRollingSnapshots.sessionDate],
+        set: {
+          playerName: snap.playerName ?? null,
+          seasonHRRate: snap.seasonHRRate ?? null,
+          hrRateLast30: snap.hrRateLast30 ?? null,
+          barrelRate: snap.barrelRate ?? null,
+          season: snap.season ?? null,
+          isHotHitter: snap.isHotHitter ?? false,
+          source: snap.source ?? "nightly_cron",
+          updatedAt: new Date(),
+        },
+      });
+  }
+
+  async getBatterRollingSnapshot(playerId: string, sessionDate: string): Promise<BatterRollingSnapshot | null> {
+    const rows = await db
+      .select()
+      .from(batterRollingSnapshots)
+      .where(and(
+        eq(batterRollingSnapshots.playerId, playerId),
+        eq(batterRollingSnapshots.sessionDate, sessionDate),
+      ))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async getBatterRollingSnapshotsForDateRange(from: string, to: string): Promise<BatterRollingSnapshot[]> {
+    return await db
+      .select()
+      .from(batterRollingSnapshots)
+      .where(and(
+        gte(batterRollingSnapshots.sessionDate, from),
+        lte(batterRollingSnapshots.sessionDate, to),
+      ));
   }
 
   async appendHrRadarSignalEvent(event: InsertHrRadarSignalEvent): Promise<HrRadarSignalEvent | null> {

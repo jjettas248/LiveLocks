@@ -91,6 +91,7 @@ import {
   refreshOnlyHomersCache,
   getOnlyHomersEnrichment,
 } from "../server/mlb/liveGameOrchestrator";
+import { storage } from "../server/storage";
 
 interface CliArgs {
   from: string;
@@ -159,6 +160,7 @@ interface EventLabeled {
   hrRateLast30: number | null;
   barrelRate: number | null;
   isHotHitter: boolean;
+  fromSnapshot: boolean;
 }
 
 interface AppearanceRow {
@@ -226,9 +228,41 @@ function asBool(v: unknown): boolean {
   return v === true || v === "t" || v === "true" || v === 1 || v === "1";
 }
 
-async function loadEvents(args: CliArgs): Promise<EventLabeled[]> {
+interface SnapshotLookup {
+  seasonHRRate: number | null;
+  hrRateLast30: number | null;
+  barrelRate: number | null;
+  isHotHitter: boolean;
+}
+
+async function loadSnapshotIndex(from: string, to: string): Promise<Map<string, SnapshotLookup>> {
+  const idx = new Map<string, SnapshotLookup>();
+  try {
+    const snaps = await storage.getBatterRollingSnapshotsForDateRange(from, to);
+    for (const s of snaps) {
+      const key = `${s.playerId}|${s.sessionDate}`;
+      const toNum = (v: unknown): number | null => {
+        if (v == null) return null;
+        const n = typeof v === "number" ? v : Number(v);
+        return Number.isFinite(n) ? n : null;
+      };
+      idx.set(key, {
+        seasonHRRate: toNum(s.seasonHRRate),
+        hrRateLast30: toNum(s.hrRateLast30),
+        barrelRate:   toNum(s.barrelRate),
+        isHotHitter:  Boolean(s.isHotHitter),
+      });
+    }
+  } catch (err: any) {
+    console.error(`[backtest] snapshot lookup failed (falling back to live compute): ${err.message}`);
+  }
+  return idx;
+}
+
+async function loadEvents(args: CliArgs): Promise<{ events: EventLabeled[]; snapshotHits: number; snapshotMisses: number; }> {
   const seasonStart = `${args.season}-01-01`;
   const seasonEnd   = `${args.season}-12-31`;
+  const snapshotIndex = await loadSnapshotIndex(args.from, args.to);
 
   // 1. All in-season game appearances (we need history before the window
   //    too, to compute season-to-date stats — but only within the same
@@ -316,10 +350,35 @@ async function loadEvents(args: CliArgs): Promise<EventLabeled[]> {
     appearancesByPlayer.get(ap.playerId)!.push(ap);
   }
 
-  // 6. Build labeled events restricted to the requested window.
+  // 6. Build labeled events restricted to the requested window. When a
+  //    snapshot row exists for (playerId, sessionDate) we prefer those
+  //    point-in-time values (Task #129) over the live recompute below — they
+  //    reflect what the floor pass would actually have seen at end of slate.
   const labeled: EventLabeled[] = [];
+  let snapshotHits = 0;
+  let snapshotMisses = 0;
   for (const ap of allAppearances) {
     if (ap.gameDate < args.from || ap.gameDate > args.to) continue;
+
+    const snap = snapshotIndex.get(`${ap.playerId}|${ap.gameDate}`);
+    if (snap) {
+      snapshotHits++;
+      labeled.push({
+        playerId: ap.playerId,
+        playerName: ap.playerName,
+        gameId: ap.gameId,
+        gameDate: ap.gameDate,
+        homered: hrSet.has(`${ap.playerId}|${ap.gameDate}`),
+        hadRealAlertRow: realAlertSet.has(`${ap.playerId}|${ap.gameDate}`),
+        seasonHRRate: snap.seasonHRRate,
+        hrRateLast30: snap.hrRateLast30,
+        barrelRate: snap.barrelRate,
+        isHotHitter: snap.isHotHitter,
+        fromSnapshot: true,
+      });
+      continue;
+    }
+    snapshotMisses++;
 
     const playerAppearances = appearancesByPlayer.get(ap.playerId) ?? [];
 
@@ -384,9 +443,10 @@ async function loadEvents(args: CliArgs): Promise<EventLabeled[]> {
       hrRateLast30,
       barrelRate,
       isHotHitter: false,
+      fromSnapshot: false,
     });
   }
-  return labeled;
+  return { events: labeled, snapshotHits, snapshotMisses };
 }
 
 function sweep(events: EventLabeled[]): ComboResult[] {
@@ -461,17 +521,23 @@ async function main() {
   const args = parseArgs(process.argv);
   console.error(`[backtest] window=${args.from}..${args.to} season=${args.season} hotHitter=${args.hotHitterEnrich}`);
 
-  const events = await loadEvents(args);
+  const { events, snapshotHits, snapshotMisses } = await loadEvents(args);
   const candidateCount = events.filter(e => !e.hadRealAlertRow).length;
   const uncalledHrCount = events.filter(e => e.homered && !e.hadRealAlertRow).length;
   console.error(`[backtest] events in window: ${events.length}`);
   console.error(`[backtest] candidate events (no real alert row): ${candidateCount}`);
   console.error(`[backtest] uncalled HRs in window: ${uncalledHrCount}`);
+  console.error(`[backtest] snapshot lookups: hits=${snapshotHits} misses=${snapshotMisses} (point-in-time when hit, fallback recompute when miss)`);
 
   if (args.hotHitterEnrich) {
     try {
       await refreshOnlyHomersCache();
+      // Snapshot rows already carry the point-in-time isHotHitter value
+      // captured at end of slate (Task #129); never overwrite them with the
+      // current-time enrichment, since that would destroy historical fidelity.
+      // Only enrich events that came from the live recompute fallback path.
       for (const e of events) {
+        if (e.fromSnapshot) continue;
         e.isHotHitter = getOnlyHomersEnrichment(e.playerName).isHotHitter;
       }
     } catch (err) {

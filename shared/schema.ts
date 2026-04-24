@@ -527,6 +527,33 @@ export const gamePlayerStats = pgTable("game_player_stats", {
 
 export const insertGamePlayerStatsSchema = createInsertSchema(gamePlayerStats).omit({ id: true, createdAt: true });
 export type GamePlayerStat = typeof gamePlayerStats.$inferSelect;
+
+// Task #129 — point-in-time snapshot of the batter rolling stats that were
+// effectively live at end-of-slate on `sessionDate`. Used by the presence-
+// floor backtest harness so historical replay reflects the values the floor
+// pass would actually have seen, not whatever the season-to-date number
+// happens to be at script run time.
+export const batterRollingSnapshots = pgTable("batter_rolling_snapshots", {
+  id: serial("id").primaryKey(),
+  playerId: text("player_id").notNull(),
+  playerName: text("player_name"),
+  sessionDate: text("session_date").notNull(),
+  season: integer("season"),
+  seasonHRRate: numeric("season_hr_rate"),
+  hrRateLast30: numeric("hr_rate_last_30"),
+  barrelRate: numeric("barrel_rate"),
+  isHotHitter: boolean("is_hot_hitter").notNull().default(false),
+  source: text("source").notNull().default("nightly_cron"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  dedupIdx: uniqueIndex("batter_rolling_snapshots_dedup_idx").on(table.playerId, table.sessionDate),
+  dateIdx: index("batter_rolling_snapshots_session_date_idx").on(table.sessionDate),
+}));
+
+export const insertBatterRollingSnapshotSchema = createInsertSchema(batterRollingSnapshots).omit({ id: true, createdAt: true, updatedAt: true });
+export type BatterRollingSnapshot = typeof batterRollingSnapshots.$inferSelect;
+export type InsertBatterRollingSnapshot = z.infer<typeof insertBatterRollingSnapshotSchema>;
 export type InsertGamePlayerStat = z.infer<typeof insertGamePlayerStatsSchema>;
 
 export const persistedAlerts = pgTable("persisted_alerts", {

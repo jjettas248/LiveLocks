@@ -355,6 +355,33 @@ app.use((req, res, next) => {
     console.warn("[startup] Schema migration warning (onlyhomers):", err.message);
   }
 
+  // Schema migration: nightly batter rolling stat snapshots (Task #129)
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS batter_rolling_snapshots (
+        id SERIAL PRIMARY KEY,
+        player_id TEXT NOT NULL,
+        player_name TEXT,
+        session_date TEXT NOT NULL,
+        season INTEGER,
+        season_hr_rate NUMERIC,
+        hr_rate_last_30 NUMERIC,
+        barrel_rate NUMERIC,
+        is_hot_hitter BOOLEAN NOT NULL DEFAULT false,
+        source TEXT NOT NULL DEFAULT 'nightly_cron',
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+        updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS batter_rolling_snapshots_dedup_idx
+        ON batter_rolling_snapshots(player_id, session_date);
+      CREATE INDEX IF NOT EXISTS batter_rolling_snapshots_session_date_idx
+        ON batter_rolling_snapshots(session_date);
+    `);
+    console.log("[startup] Schema migration: batter_rolling_snapshots table ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (batter-rolling-snapshots):", err.message);
+  }
+
   // Backfill: mark pre-existing users (no verification token) as email-verified
   // so they are not locked out by the new emailVerified gate.
   try {
@@ -788,6 +815,38 @@ app.use((req, res, next) => {
     { timezone: "America/New_York" }
   );
   console.log("[hr-radar-ladder-cron] Daily HR Radar ladder invariant check scheduled (04:15 ET)");
+
+  // ── Task #129 — nightly batter rolling stat snapshot ───────────────────
+  // Persists (player_id, session_date, seasonHRRate, hrRateLast30,
+  // barrelRate, isHotHitter) for every batter who appeared today, so the
+  // presence-floor backtest harness can replay history with point-in-time
+  // values instead of whatever the season-to-date number happens to be at
+  // script run time. Runs at 03:30 ET, after the slate is closed but before
+  // the ladder invariant check at 04:15 ET.
+  cron.schedule(
+    "30 3 * * *",
+    async () => {
+      try {
+        const { snapshotBatterRollingStatsForDate } = await import("../scripts/snapshotBatterRollingStats");
+        const { todayET, daysAgoET } = await import("./utils/dateUtils");
+        // Snapshot yesterday (slate just ended in ET) — sessionDate matches
+        // game_player_stats.game_date for that day's appearances.
+        const sessionDate = daysAgoET(1);
+        const result = await snapshotBatterRollingStatsForDate(sessionDate);
+        console.log(`[snapshot-rolling-cron] ok sessionDate=${result.sessionDate} written=${result.written}`);
+        // Best-effort backstop in case yesterday's run was skipped: also
+        // snapshot today if there are early-slate appearances already.
+        const todayResult = await snapshotBatterRollingStatsForDate(todayET());
+        if (todayResult.written > 0) {
+          console.log(`[snapshot-rolling-cron] also-snapshotted sessionDate=${todayResult.sessionDate} written=${todayResult.written}`);
+        }
+      } catch (err: any) {
+        console.error("[snapshot-rolling-cron] failed:", err.message, err.stack);
+      }
+    },
+    { timezone: "America/New_York" }
+  );
+  console.log("[snapshot-rolling-cron] Nightly batter rolling stat snapshot scheduled (03:30 ET)");
 
   // Daily cleanup: remove unverified accounts older than 24 hours.
   // Strategy: hard-delete. Unverified users are blocked from plays (requirePlayAccess)
