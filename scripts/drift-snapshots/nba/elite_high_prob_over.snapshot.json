@@ -1,0 +1,68 @@
+{
+  "confidence": "high",
+  "diagnostics": {
+    "confidenceBreakdown": {
+      "high": 1,
+      "low": 0,
+      "medium": 1
+    },
+    "dataFreshness": "<dynamic>",
+    "edgeThresholdUsed": 5,
+    "fallbackTriggered": false,
+    "reasonsFilteredOut": [],
+    "regressionApplied": true,
+    "totalEvaluated": 3,
+    "totalFiltered": 1,
+    "totalPassed": 2
+  },
+  "engine": "NBA",
+  "mode": "strict",
+  "plays": [
+    {
+      "availableBooks": [
+        "fanduel",
+        "draftkings",
+        "betmgm"
+      ],
+      "confidence": "high",
+      "createdAt": 1700000000000,
+      "derivedLine": false,
+      "edge": 14,
+      "gameId": "401584921",
+      "id": "nba-203999-PTS-<ts>",
+      "line": 28.5,
+      "lineSource": "live_inplay",
+      "market": "PTS",
+      "playerId": "203999",
+      "playerName": "Nikola Jokic",
+      "probability": 78,
+      "projection": 32.4,
+      "recommendedSide": "OVER",
+      "sportsbook": "fanduel",
+      "team": "DEN"
+    },
+    {
+      "availableBooks": [
+        "fanduel",
+        "draftkings"
+      ],
+      "confidence": "medium",
+      "createdAt": 1700000000000,
+      "derivedLine": false,
+      "edge": 9,
+      "gameId": "401584921",
+      "id": "nba-1629029-AST-<ts>",
+      "line": 9.5,
+      "lineSource": "live_inplay",
+      "market": "AST",
+      "playerId": "1629029",
+      "playerName": "Luka Doncic",
+      "probability": 68,
+      "projection": 10.8,
+      "recommendedSide": "OVER",
+      "sportsbook": "draftkings",
+      "team": "DAL"
+    }
+  ],
+  "timestamp": "<dynamic>"
+}

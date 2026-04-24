@@ -15,6 +15,7 @@ import { filterValidSignals } from "./services/engineSignal";
 import { filterValidEngineOutputs } from "./services/engineValidation";
 import { processNBAEngine } from "./engines/nba";
 import { processMLBEngine } from "./engines/mlb";
+import { emitDriftTrace } from "./utils/driftTrace";
 import { isValidTimingWindow } from "./services/timingService";
 import { filterFreshLines, getBestBet } from "./services/sportsbookService";
 import { trackPlay } from "./services/playTracker";
@@ -515,6 +516,20 @@ export async function registerRoutes(
           : probPct >= 55 ? "LEAN" as const
           : "NO_EDGE" as const;
         console.log(`[ENGINE INPUT][NCAAB] game=${p.gameId} line=${line} proj=${projection} prob=${rawProb} penalizedProb=${penalizedProb} edge=${edge} derivedLine=${isDerived} lineSource=${lineSource} confidence=${confidenceTier}`);
+        // Sport-isolation drift trace (additive observability, no behavior change).
+        emitDriftTrace("ncaab", {
+          engineOwner: "route_inline:routes.ts:NCAAB-tier",
+          routeOwner: "GET /api/ncaab-signals",
+          oddsSource: lineSource ?? "unknown",
+          confidenceSource: "route_inline",
+          fallbackPath: isDerived ? "consensus_only" : "none",
+          thresholdSource: "route_inline:routes.ts:513",
+          staleHandling: isDerived ? "derived" : "n/a",
+          gameId: p.gameId ?? undefined,
+          edge: edge ?? undefined,
+          probability: typeof penalizedProb === "number" ? penalizedProb : undefined,
+          confidenceTier,
+        });
         return {
           id: p.gameId ?? "",
           sport: "ncaab" as const,
@@ -1747,6 +1762,26 @@ export async function registerRoutes(
     const validatedApiSignals = apiSignals.filter((s) => mlbValidPlayIds.has(`${s.playerId}_${s.market}`));
     console.log(`[MLB ENGINE] game=${gameId} mode=${mlbEngineResult.mode} plays=${mlbEngineResult.plays.length} fallback=${mlbEngineResult.diagnostics.fallbackTriggered} filtered=${mlbEngineResult.diagnostics.totalFiltered}`);
     console.log(`[MLB signals] game=${gameId} allFromEngine=${engineAll.length} wrapperPassed=${validatedApiSignals.length} served=${validatedApiSignals.length} isDegraded=${cachedIsDegraded}`);
+    // Sport-isolation drift trace — observe engine output, do not modify it.
+    // One trace per engine call summarizing the decision boundary; per-play tracing
+    // for MLB stays inside the HR-engine-protected path and is intentionally NOT wired here.
+    for (const play of mlbEngineResult.plays) {
+      emitDriftTrace("mlb", {
+        engineOwner: "engines/mlb/index.ts:processMLBEngine",
+        routeOwner: "GET /api/mlb-live-signals",
+        oddsSource: cachedIsDegraded ? "stale" : "live_inplay",
+        confidenceSource: mlbEngineResult.diagnostics.fallbackTriggered ? "engine_fallback" : "engine_strict",
+        fallbackPath: mlbEngineResult.diagnostics.fallbackTriggered ? "strict_fallback" : "none",
+        thresholdSource: "engines/mlb/types.ts:MLB_STRICT_RULES",
+        staleHandling: cachedIsDegraded ? "accepted" : "n/a",
+        gameId,
+        playerName: play.playerName,
+        market: play.market,
+        edge: typeof play.edge === "number" ? play.edge : undefined,
+        probability: typeof play.probability === "number" ? play.probability : undefined,
+        confidenceTier: (play as any).confidenceTier ?? (play as any).confidence,
+      });
+    }
 
     recordEngineRun("mlb", {
       gamesProcessed: 1,
@@ -4557,6 +4592,23 @@ export async function registerRoutes(
       console.log(`[NBA ENGINE] mode=${nbaEngineResult.mode} plays=${nbaEngineResult.plays.length} fallback=${nbaEngineResult.diagnostics.fallbackTriggered} filtered=${nbaEngineResult.diagnostics.totalFiltered}`);
       if (nbaEngineResult.diagnostics.reasonsFilteredOut.length > 0) {
         console.warn(`[NBA ENGINE FILTERED] reasons=${nbaEngineResult.diagnostics.reasonsFilteredOut.slice(0, 5).join("; ")}`);
+      }
+      // Sport-isolation drift trace — observe engine output, do not modify it.
+      for (const play of nbaEngineResult.plays) {
+        emitDriftTrace("nba", {
+          engineOwner: "engines/nba/index.ts:processNBAEngine",
+          routeOwner: "GET /api/live-signals",
+          oddsSource: (play as any).lineSource ?? "live_inplay",
+          confidenceSource: nbaEngineResult.diagnostics.fallbackTriggered ? "engine_fallback" : "engine_strict",
+          fallbackPath: nbaEngineResult.diagnostics.fallbackTriggered ? "strict_fallback" : "none",
+          thresholdSource: "engines/nba/types.ts:NBA_STRICT_RULES",
+          staleHandling: (play as any).derivedLine ? "derived" : "n/a",
+          playerName: play.playerName,
+          market: play.market,
+          edge: typeof play.edge === "number" ? play.edge : undefined,
+          probability: typeof play.probability === "number" ? play.probability : undefined,
+          confidenceTier: (play as any).confidence ?? (play as any).confidenceTier,
+        });
       }
       recordEngineRun("nba", {
         gamesProcessed: 1,

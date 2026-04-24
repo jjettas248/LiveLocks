@@ -1,0 +1,133 @@
+{
+  "confidence": "elite",
+  "contactProfile": {
+    "avgExitVelo": 105.3,
+    "avgLaunchAngle": 22.5,
+    "barrelRate": 0.5,
+    "contactQuality": "elite",
+    "gameAvgXBA": null,
+    "gameBarrelCount": 0,
+    "gameMaxXBA": null,
+    "hardHitRate": null,
+    "maxExitVelo": 108.4
+  },
+  "diagnostics": {
+    "confidenceBreakdown": {
+      "developing": 0,
+      "elite": 1,
+      "strong": 1
+    },
+    "contactThresholdUsed": "strong",
+    "dataFreshness": "<dynamic>",
+    "fallbackTriggered": false,
+    "reasonsFilteredOut": [],
+    "totalEvaluated": 2,
+    "totalFiltered": 0,
+    "totalPassed": 2
+  },
+  "engine": "MLB",
+  "mode": "strict",
+  "plays": [
+    {
+      "confidence": "elite",
+      "confidenceTier": "ELITE",
+      "contactProfile": {
+        "avgExitVelo": 108.4,
+        "avgLaunchAngle": 27,
+        "barrelRate": 1,
+        "contactQuality": "elite",
+        "gameAvgXBA": null,
+        "gameBarrelCount": 0,
+        "gameMaxXBA": null,
+        "hardHitRate": null,
+        "maxExitVelo": 108.4
+      },
+      "createdAt": 1700000000000,
+      "currentStats": {
+        "ab": 2,
+        "h": 1,
+        "hr": 0,
+        "k": 0
+      },
+      "derivedLine": false,
+      "diagnostics": {
+        "archetype": "elite_power",
+        "dataQuality": "fresh",
+        "engineVersion": "mlb-isolated-v1",
+        "isFlagship": true,
+        "pitcherArchetype": "fly_ball_prone",
+        "safetyCeilingApplied": false,
+        "thesis": "Elite barrel rate vs. fly-ball pitcher; +0.62 projected HR."
+      },
+      "edge": 11,
+      "gameId": "401569123",
+      "id": "mlb-592450-Home Runs-<ts>",
+      "lastABContact": {
+        "barrelPct": 1,
+        "exitVelo": 108.4,
+        "launchAngle": 27
+      },
+      "line": 0.5,
+      "market": "Home Runs",
+      "playerId": "592450",
+      "playerName": "Aaron Judge",
+      "probability": 72,
+      "projection": 0.62,
+      "recommendedSide": "OVER",
+      "signalScore": 78,
+      "sportsbook": "fanduel",
+      "team": "NYY"
+    },
+    {
+      "confidence": "strong",
+      "confidenceTier": "STRONG",
+      "contactProfile": {
+        "avgExitVelo": 102.1,
+        "avgLaunchAngle": 18,
+        "barrelRate": 0,
+        "contactQuality": "elite",
+        "gameAvgXBA": null,
+        "gameBarrelCount": 0,
+        "gameMaxXBA": null,
+        "hardHitRate": null,
+        "maxExitVelo": 102.1
+      },
+      "createdAt": 1700000000000,
+      "currentStats": {
+        "ab": 3,
+        "h": 1,
+        "hr": 0,
+        "k": 1
+      },
+      "derivedLine": false,
+      "diagnostics": {
+        "archetype": "balanced_power",
+        "dataQuality": "fresh",
+        "engineVersion": "mlb-isolated-v1",
+        "isFlagship": false,
+        "pitcherArchetype": "neutral",
+        "safetyCeilingApplied": false,
+        "thesis": "Above-average contact; line shaded under projection."
+      },
+      "edge": 8,
+      "gameId": "401569124",
+      "id": "mlb-660271-Total Bases-<ts>",
+      "lastABContact": {
+        "barrelPct": 0,
+        "exitVelo": 102.1,
+        "launchAngle": 18
+      },
+      "line": 1.5,
+      "market": "Total Bases",
+      "playerId": "660271",
+      "playerName": "Shohei Ohtani",
+      "probability": 64,
+      "projection": 1.85,
+      "recommendedSide": "OVER",
+      "signalScore": 65,
+      "sportsbook": "draftkings",
+      "team": "LAD"
+    }
+  ],
+  "timestamp": "<dynamic>"
+}
