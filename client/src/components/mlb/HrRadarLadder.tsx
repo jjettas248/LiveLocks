@@ -123,6 +123,28 @@ export interface HrRadarLadderEntry {
   ohLaunchAngle?: number | null;
   ohDistance?: number | null;
   ohPitchType?: string | null;
+
+  // ── Goldmaster v1 — additive user-facing stage layer (optional). ──────────
+  userStage?: "track" | "build" | "ready" | "fire" | "resolved";
+  stageLabel?: string;
+  stageDescription?: string;
+  qualifyingSignals?: string[];
+  cleanReasons?: string[];
+  officialSignalStage?: "ready" | "fire" | null;
+  officialSignalAt?: string | null;
+  officialSignalInning?: number | null;
+  firstTrackedAt?: string | null;
+  firstTrackedInning?: number | null;
+  firstBuiltAt?: string | null;
+  firstBuiltInning?: number | null;
+  firstReadyAt?: string | null;
+  firstReadyInning?: number | null;
+  firstFireAt?: string | null;
+  firstFireInning?: number | null;
+  hrOccurredAt?: string | null;
+  hrOccurredInning?: number | null;
+  debugReasons?: string[];
+  enginePath?: string | null;
 }
 
 export interface HrRadarLadderResponse {
@@ -133,11 +155,14 @@ export interface HrRadarLadderResponse {
     watch: HrRadarLadderEntry[];
     cashed: HrRadarLadderEntry[];
     dead: HrRadarLadderEntry[];
+    // Goldmaster v1 — additive Ready bucket. Optional so older API responses
+    // still type-check.
+    ready?: HrRadarLadderEntry[];
   };
-  counts: { attackNow: number; building: number; watch: number; cashed: number; dead: number; total: number };
+  counts: { attackNow: number; building: number; watch: number; cashed: number; dead: number; total: number; ready?: number };
 }
 
-type SectionKey = keyof HrRadarLadderResponse["sections"];
+type SectionKey = "attackNow" | "building" | "ready" | "watch" | "cashed" | "dead";
 
 const SECTION_META: Record<SectionKey, {
   label: string;
@@ -148,27 +173,39 @@ const SECTION_META: Record<SectionKey, {
   defaultCollapsed: boolean;
 }> = {
   attackNow: {
-    label: "ATTACK NOW",
+    // Goldmaster v1 — relabeled from "ATTACK NOW" to "FIRE" for the new
+    // Track / Build / Ready / Fire ladder. Color/icon untouched.
+    label: "FIRE",
     icon: Flame,
     accent: "border-red-500/40 bg-red-500/5",
     badge: "bg-red-500 text-white",
     description: "Highest-conviction HR signals firing right now.",
     defaultCollapsed: false,
   },
+  ready: {
+    label: "READY",
+    icon: Zap,
+    accent: "border-orange-500/40 bg-orange-500/5",
+    badge: "bg-orange-500 text-white",
+    description: "Playable HR setup — contact quality and matchup are aligned.",
+    defaultCollapsed: false,
+  },
   building: {
-    label: "BUILDING",
+    // Goldmaster v1 — relabeled from "BUILDING" to "BUILD".
+    label: "BUILD",
     icon: Zap,
     accent: "border-amber-500/40 bg-amber-500/5",
     badge: "bg-amber-500 text-white",
-    description: "Momentum gathering — could escalate to an attack soon.",
+    description: "Pattern is building — one more quality contact could move this up.",
     defaultCollapsed: false,
   },
   watch: {
-    label: "WATCH",
+    // Goldmaster v1 — relabeled from "WATCH" to "TRACK".
+    label: "TRACK",
     icon: Eye,
     accent: "border-blue-500/30 bg-blue-500/5",
     badge: "bg-blue-500 text-white",
-    description: "Tracking but not actionable yet.",
+    description: "Tracking. HR conditions are forming, not actionable yet.",
     defaultCollapsed: true,
   },
   cashed: {
@@ -771,6 +808,8 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
 
   const sections = useMemo(() => ({
     attackNow: filterDismissed(rawSections.attackNow ?? []),
+    // Goldmaster v1 — additive Ready bucket (filtered like other live sections).
+    ready: filterDismissed((rawSections as any).ready ?? []),
     building: filterDismissed(rawSections.building ?? []),
     watch: filterDismissed(rawSections.watch ?? []),
     cashed: rawSections.cashed ?? [],
@@ -780,11 +819,12 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
 
   const counts = {
     attackNow: sections.attackNow.length,
+    ready: sections.ready.length,
     building: sections.building.length,
     watch: sections.watch.length,
     cashed: sections.cashed.length,
     dead: sections.dead.length,
-    total: sections.attackNow.length + sections.building.length + sections.watch.length + sections.cashed.length + sections.dead.length,
+    total: sections.attackNow.length + sections.ready.length + sections.building.length + sections.watch.length + sections.cashed.length + sections.dead.length,
   };
 
   // Task #121 Step 5 — one-time pulse when an entry transitions into cashed.
@@ -814,7 +854,7 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
     }
   }, [sections.cashed]);
 
-  const allOrder: SectionKey[] = ["attackNow", "building", "watch", "cashed", "dead"];
+  const allOrder: SectionKey[] = ["attackNow", "ready", "building", "watch", "cashed", "dead"];
   const order: SectionKey[] = hideFinished
     ? allOrder.filter(k => k !== "cashed" && k !== "dead")
     : allOrder;

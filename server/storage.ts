@@ -4123,6 +4123,16 @@ export class DatabaseStorage implements IStorage {
     misses: number;
     totalGraded: number;
     hitRate: number;
+    // ── Goldmaster v1 Phase 11 — additive sub-buckets. Existing fields above
+    // are unchanged; these break the misses/uncalled categories down further
+    // so the UI can answer "what kind of miss was it?" without re-querying.
+    subBuckets: {
+      missedOfficialSignals: number;
+      lateSignals: number;
+      uncalledHrs: number;
+      earlyWindowHrs: number;
+      expiredTracking: number;
+    };
   }>> {
     try {
       const cutoffStr = daysAgoET(days);
@@ -4146,6 +4156,13 @@ export class DatabaseStorage implements IStorage {
         misses: number;
         totalGraded: number;
         hitRate: number;
+        subBuckets: {
+          missedOfficialSignals: number;
+          lateSignals: number;
+          uncalledHrs: number;
+          earlyWindowHrs: number;
+          expiredTracking: number;
+        };
       }> = [];
 
       for (const [date, rows] of Array.from(byDate.entries()).sort((a, b) => b[0].localeCompare(a[0]))) {
@@ -4167,7 +4184,17 @@ export class DatabaseStorage implements IStorage {
         const totalGraded = calledHits + misses;
         const hitRate = totalGraded > 0 ? Math.round((calledHits / totalGraded) * 1000) / 10 : 0;
 
-        result.push({ sessionDate: date, calledHits, uncalledHits, misses, totalGraded, hitRate });
+        // Goldmaster v1 Phase 11 — sub-bucket breakdown. Pure refinement
+        // over the same canonical rows; never replaces the headline counts.
+        const subBuckets = {
+          missedOfficialSignals: canonical.filter(r => r.gradingStatus === "called_miss").length,
+          lateSignals: canonical.filter(r => r.gradingStatus === "late_signal").length,
+          uncalledHrs: canonical.filter(r => r.gradingStatus === "uncalled_hr").length,
+          earlyWindowHrs: canonical.filter(r => r.gradingStatus === "early_window_hr" || r.gradingStatus === "early_hr_no_window").length,
+          expiredTracking: canonical.filter(r => r.gradingStatus === "expired").length,
+        };
+
+        result.push({ sessionDate: date, calledHits, uncalledHits, misses, totalGraded, hitRate, subBuckets });
       }
 
       return result;
@@ -4431,7 +4458,7 @@ export class DatabaseStorage implements IStorage {
     // attackNow > building > watch.
     const seen = new Map<string, { section: keyof typeof sections; entry: HrRadarLadderEntry }>();
     const sectionPriority: Record<keyof typeof sections, number> = {
-      cashed: 0, dead: 1, attackNow: 2, building: 3, watch: 4,
+      cashed: 0, dead: 1, attackNow: 2, ready: 3, building: 4, watch: 5,
     };
 
     for (const r of rows) {
@@ -4777,12 +4804,23 @@ export class DatabaseStorage implements IStorage {
     }
 
     for (const { section, entry } of Array.from(seen.values())) {
-      sections[section].push(entry);
+      // ── Goldmaster v1 — promote live entries whose user-stage resolves to
+      // "ready" into the additive Ready bucket. The legacy `building` /
+      // `watch` / `attackNow` buckets are still populated for everyone whose
+      // user-stage maps elsewhere, so existing consumers continue to work.
+      // Resolved (cashed/dead) and fire-tier entries always stay in their
+      // legacy bucket — fire is rendered out of attackNow with the new label.
+      if (HR_RADAR_GOLDMASTER_V1 && entry.currentStatus === "live" && entry.userStage === "ready") {
+        sections.ready.push(entry);
+      } else {
+        sections[section].push(entry);
+      }
     }
 
     // Within sections, order by priority signal: cashed by hit time desc; everyone else by peak score desc
     sections.cashed.sort((a, b) => (b.hitDetectedAt?.getTime() ?? 0) - (a.hitDetectedAt?.getTime() ?? 0));
     sections.attackNow.sort((a, b) => (b.signalStrengthScore ?? 0) - (a.signalStrengthScore ?? 0));
+    sections.ready.sort((a, b) => (b.currentSignalScore10 ?? b.signalStrengthScore ?? 0) - (a.currentSignalScore10 ?? a.signalStrengthScore ?? 0));
     sections.building.sort((a, b) => (b.peakScore ?? 0) - (a.peakScore ?? 0));
     sections.watch.sort((a, b) => (b.peakScore ?? 0) - (a.peakScore ?? 0));
     sections.dead.sort((a, b) => (b.resolvedAt?.getTime() ?? 0) - (a.resolvedAt?.getTime() ?? 0));
@@ -4793,10 +4831,11 @@ export class DatabaseStorage implements IStorage {
       watch: sections.watch.length,
       cashed: sections.cashed.length,
       dead: sections.dead.length,
+      ready: sections.ready.length,
       total: seen.size,
     };
 
-    console.log(`[HR_DECISION_LADDER_COUNTS] sessionDate=${targetDate} attackNow=${counts.attackNow} building=${counts.building} watch=${counts.watch} cashed=${counts.cashed} dead=${counts.dead} total=${counts.total}`);
+    console.log(`[HR_DECISION_LADDER_COUNTS] sessionDate=${targetDate} attackNow=${counts.attackNow} building=${counts.building} watch=${counts.watch} ready=${counts.ready} cashed=${counts.cashed} dead=${counts.dead} total=${counts.total} v1=${HR_RADAR_GOLDMASTER_V1}`);
 
     return { sessionDate: targetDate, sections, counts };
   }

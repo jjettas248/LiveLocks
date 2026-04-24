@@ -26,6 +26,11 @@ import { calculateParlay } from "./parlayService";
 import { registerAuthRoutes, requirePlayAccess, requireMLBAccess, requireAuth, requireAdmin, requireTier } from "./auth";
 import { resolveAccess } from "./utils/access";
 import { todayET, daysAgoET } from "./utils/dateUtils";
+import {
+  HR_RADAR_GOLDMASTER_V1,
+  enrichWithUserStage,
+  buildValidationPayload,
+} from "./mlb/hrRadarUserStage";
 import { registerStripeRoutes } from "./stripeService";
 import { getVapidPublicKey, sendPush } from "./webpush";
 import { checkAndSendAlerts } from "./alertManager";
@@ -2318,6 +2323,68 @@ export async function registerRoutes(
           // consumer still reading the legacy field sees the right copy.
           summaryText: stageExplanation || alert.summaryText,
           peakScore,
+          // ── Goldmaster v1 — additive user-stage enrichment ──────────────
+          // Pure surfacing — every legacy field above is preserved as-is.
+          // Gated by HR_RADAR_GOLDMASTER_V1: when the flag is OFF the IIFE
+          // returns an empty object so no v1-only keys appear on the wire.
+          ...(HR_RADAR_GOLDMASTER_V1 ? (() => {
+            const v1 = enrichWithUserStage({
+              legacyTier: alert.confidenceTier,
+              legacyState: alert.signalState,
+              dynamicState: stageContractRow?.dynamicState ?? null,
+              canonicalStage,
+              outcome: "pending",
+              currentReadinessScore: score,
+              peakReadinessScore: peakScore,
+              initialReadinessScore: alert.initialReadinessScore ? parseFloat(alert.initialReadinessScore) : score,
+              factors: (diagAny?.factors ?? alert.contactSnapshot ?? {}) as any,
+              triggerTags: alert.triggerTags ?? [],
+              positiveDrivers: (diagAny?.positiveDrivers ?? []) as string[],
+              conversionProbability: conversionProbability ?? null,
+              inning: alert.signalInning ?? alert.detectedInning ?? null,
+              detectedAt: alert.detectedAt ?? null,
+              detectedInning: alert.detectedInning ?? null,
+              signalDetectedAt: alert.signalDetectedAt ?? null,
+              signalInning: alert.signalInning ?? null,
+              hitDetectedAt: null,
+              resolvedAt: null,
+              hitInning: null,
+              userReasons: userReasonsArr,
+              adminReasons: adminReasonsArr,
+              alertPath: alert.alertPath ?? null,
+              useFallbackScore: true,
+            });
+            if (HR_RADAR_GOLDMASTER_V1 && process.env.DEBUG_HR_RADAR_V1 === "true") {
+              console.log("[HR_RADAR_V1_TRACE]", JSON.stringify(buildValidationPayload({
+                player: alert.playerName, oldStage: currentStage, enrichment: v1,
+              })));
+            }
+            return {
+              userStage: v1.userStage,
+              stageLabel: v1.stageLabel,
+              stageDescription: v1.stageDescription,
+              qualifyingSignals: v1.qualifyingSignals,
+              cleanReasons: v1.cleanReasons,
+              currentSignalScore10: v1.currentSignalScore10,
+              initialSignalScore10: v1.initialSignalScore10,
+              peakSignalScore10: v1.peakSignalScore10,
+              officialSignalStage: v1.officialSignalStage,
+              officialSignalAt: v1.officialSignalAt,
+              officialSignalInning: v1.officialSignalInning,
+              firstTrackedAt: v1.firstTrackedAt,
+              firstTrackedInning: v1.firstTrackedInning,
+              firstBuiltAt: v1.firstBuiltAt,
+              firstBuiltInning: v1.firstBuiltInning,
+              firstReadyAt: v1.firstReadyAt,
+              firstReadyInning: v1.firstReadyInning,
+              firstFireAt: v1.firstFireAt,
+              firstFireInning: v1.firstFireInning,
+              hrOccurredAt: v1.hrOccurredAt,
+              hrOccurredInning: v1.hrOccurredInning,
+              debugReasons: v1.debugReasons,
+              v1EnginePath: v1.enginePath,
+            };
+          })() : {}),
           detectedLabel: alert.detectedLabel,
           // Phase 3 — frozen HR event fields kept distinct from detection.
           hitInning: alert.hitInning,
@@ -2513,10 +2580,56 @@ export async function registerRoutes(
   app.get("/api/mlb/hr-radar-board", requireAuth, async (req, res) => {
     try {
       const board = await storage.getTodayHrRadarBoard();
-      const live = board.filter(a => a.status === "live");
-      const hits = board.filter(a => a.status === "hit");
-      const misses = board.filter(a => a.status === "miss");
-      return res.json({ board, live, hits, misses, total: board.length });
+      // ── Goldmaster v1 — additive per-row enrichment. The board API was
+      // previously a thin pass-through of hrRadarAlerts rows; we keep every
+      // legacy field and append userStage/scoreToScore10/qualifyingSignals
+      // /first*At/officialSignal* so clients can opt-in without breaking.
+      const enrichRow = (r: any) => {
+        const diag = (r.diagnosticsSnapshot ?? {}) as any;
+        const stage = diag?.stageContract ?? {};
+        const canonicalStage = stage?.currentCanonicalStage ?? null;
+        const grading = r.gradingStatus ?? "active";
+        const outcome =
+          r.status === "hit" ? "called_hit" :
+          grading === "called_miss" ? "miss" :
+          grading === "uncalled_hr" ? "uncalled_hr" :
+          grading === "late_signal" ? "late_signal" :
+          grading === "early_window_hr" || grading === "early_hr_no_window" ? "early_window_hr" :
+          grading === "called_hit" ? "called_hit" :
+          "pending";
+        const v1 = enrichWithUserStage({
+          legacyTier: r.confidenceTier,
+          legacyState: r.signalState,
+          dynamicState: stage?.dynamicState ?? null,
+          canonicalStage,
+          outcome,
+          currentReadinessScore: r.currentReadinessScore != null ? parseFloat(r.currentReadinessScore) : null,
+          peakReadinessScore: r.peakReadinessScore != null ? parseFloat(r.peakReadinessScore) : null,
+          initialReadinessScore: r.initialReadinessScore != null ? parseFloat(r.initialReadinessScore) : null,
+          factors: (diag?.factors ?? r.contactSnapshot ?? {}) as any,
+          triggerTags: r.triggerTags ?? [],
+          positiveDrivers: (diag?.positiveDrivers ?? []) as string[],
+          conversionProbability: typeof diag?.scoreContract?.conversionProbability === "number" ? diag.scoreContract.conversionProbability : null,
+          inning: r.signalInning ?? r.detectedInning ?? null,
+          detectedAt: r.detectedAt ?? null,
+          detectedInning: r.detectedInning ?? null,
+          signalDetectedAt: r.signalDetectedAt ?? null,
+          signalInning: r.signalInning ?? null,
+          hitDetectedAt: r.hitDetectedAt ?? null,
+          resolvedAt: r.resolvedAt ?? null,
+          hitInning: r.hitInning ?? null,
+          userReasons: [],
+          adminReasons: [],
+          alertPath: r.alertPath ?? null,
+          useFallbackScore: true,
+        });
+        return { ...r, ...v1 };
+      };
+      const enriched = HR_RADAR_GOLDMASTER_V1 ? board.map(enrichRow) : board;
+      const live = enriched.filter((a: any) => a.status === "live");
+      const hits = enriched.filter((a: any) => a.status === "hit");
+      const misses = enriched.filter((a: any) => a.status === "miss");
+      return res.json({ board: enriched, live, hits, misses, total: enriched.length });
     } catch (e: any) {
       console.error("[mlb/hr-radar-board]", e.message);
       return res.json({ board: [], live: [], hits: [], misses: [], total: 0 });
