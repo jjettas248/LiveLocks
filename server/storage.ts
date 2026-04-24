@@ -2,6 +2,13 @@ import { db } from "./db";
 import { todayET, daysAgoET } from "./utils/dateUtils";
 import { resolveMlbGameSessionDate } from "./utils/mlbSessionDate";
 import { decideHrRadarMatch, QUALIFYING_EVENT_TYPES } from "./validation/hrRadar/matchDecision";
+import {
+  HR_RADAR_GOLDMASTER_V1,
+  enrichWithUserStage,
+  buildValidationPayload,
+  type HrRadarUserStage,
+  type HrQualifyingSignalType,
+} from "./mlb/hrRadarUserStage";
 import { calculateRemainingMinutes } from "./minutesModel";
 import { getPlayerUsage, getTeamDefenseMatchup, computeUsageAdjustment, computeDefenseMultiplier } from "./services/nbaStatsService";
 import { getPlayoffRotationProfile, type PlayoffRotationProfile } from "./services/nbaRotationHistoryService";
@@ -4350,8 +4357,12 @@ export class DatabaseStorage implements IStorage {
       watch: HrRadarLadderEntry[];
       cashed: HrRadarLadderEntry[];
       dead: HrRadarLadderEntry[];
+      // Goldmaster v1 — additive Ready bucket. Populated when the FF is on
+      // and an entry's userStage resolves to "ready". Always present (may be
+      // empty) so client code can safely iterate.
+      ready: HrRadarLadderEntry[];
     };
-    counts: { attackNow: number; building: number; watch: number; cashed: number; dead: number; total: number };
+    counts: { attackNow: number; building: number; watch: number; cashed: number; dead: number; ready: number; total: number };
   }> {
     const targetDate = sessionDate ?? todayET();
     const rows = await db.select().from(hrRadarAlerts)
@@ -4410,6 +4421,8 @@ export class DatabaseStorage implements IStorage {
       watch: [] as HrRadarLadderEntry[],
       cashed: [] as HrRadarLadderEntry[],
       dead: [] as HrRadarLadderEntry[],
+      // Goldmaster v1 — populated below from entries whose userStage === "ready".
+      ready: [] as HrRadarLadderEntry[],
     };
 
     // Collapse duplicates by playerId|gameId so a single player only appears
@@ -4629,6 +4642,52 @@ export class DatabaseStorage implements IStorage {
       const ohStats = ohStatsByName.get(r.playerName) ?? null;
       const onlyHomersVerified = ohStats != null;
 
+      // ── Goldmaster v1 — additive user-facing stage enrichment ─────────────
+      // Pure layer over existing canonical state. Never overwrites the
+      // legacy currentStage / readiness scores. When the FF is off the
+      // enrichment is still attached but the routes/UI may choose to ignore
+      // the new fields.
+      const factorsForEnrichment = (diag.factors ?? r.contactSnapshot ?? {}) as Record<string, any>;
+      const enrichment = enrichWithUserStage({
+        legacyTier: r.confidenceTier,
+        legacyState: r.signalState,
+        dynamicState: stageContractRow.dynamicState ?? null,
+        canonicalStage,
+        outcome,
+        initialReadinessScore,
+        currentReadinessScore,
+        peakReadinessScore,
+        initialSignalScore10,
+        currentSignalScore10,
+        peakSignalScore10,
+        factors: factorsForEnrichment,
+        triggerTags: r.triggerTags ?? [],
+        positiveDrivers: (diag.positiveDrivers ?? []) as string[],
+        conversionProbability: conversionProbability ?? null,
+        inning: r.signalInning ?? r.detectedInning ?? null,
+        detectedAt: r.detectedAt ?? null,
+        detectedInning: r.detectedInning ?? null,
+        signalDetectedAt: r.signalDetectedAt ?? null,
+        signalInning: r.signalInning ?? null,
+        hitDetectedAt: r.hitDetectedAt ?? null,
+        resolvedAt: r.resolvedAt ?? null,
+        hitInning: r.hitInning ?? null,
+        userReasons: liveContactReasons,
+        adminReasons,
+        alertPath: r.alertPath ?? null,
+        useFallbackScore: true,
+      });
+      // Phase 12 — emit a single-line validation log per row when the FF is
+      // on AND a debug env opts in. Never noisy in production by default.
+      if (HR_RADAR_GOLDMASTER_V1 && process.env.DEBUG_HR_RADAR_V1 === "true") {
+        const v1 = buildValidationPayload({
+          player: r.playerName,
+          oldStage: currentStage,
+          enrichment,
+        });
+        console.log("[HR_RADAR_V1_TRACE]", JSON.stringify(v1));
+      }
+
       const entry: HrRadarLadderEntry = {
         playerId: r.playerId,
         playerName: r.playerName,
@@ -4641,6 +4700,27 @@ export class DatabaseStorage implements IStorage {
         hasLiveABContext,
         userReasons: liveContactReasons,
         adminReasons,
+        // Goldmaster v1 enrichment (additive — never replaces a legacy field).
+        userStage: enrichment.userStage,
+        stageLabel: enrichment.stageLabel,
+        stageDescription: enrichment.stageDescription,
+        qualifyingSignals: enrichment.qualifyingSignals,
+        cleanReasons: enrichment.cleanReasons,
+        officialSignalStage: enrichment.officialSignalStage,
+        officialSignalAt: enrichment.officialSignalAt,
+        officialSignalInning: enrichment.officialSignalInning,
+        firstTrackedAt: enrichment.firstTrackedAt,
+        firstTrackedInning: enrichment.firstTrackedInning,
+        firstBuiltAt: enrichment.firstBuiltAt,
+        firstBuiltInning: enrichment.firstBuiltInning,
+        firstReadyAt: enrichment.firstReadyAt,
+        firstReadyInning: enrichment.firstReadyInning,
+        firstFireAt: enrichment.firstFireAt,
+        firstFireInning: enrichment.firstFireInning,
+        hrOccurredAt: enrichment.hrOccurredAt,
+        hrOccurredInning: enrichment.hrOccurredInning,
+        debugReasons: enrichment.debugReasons,
+        enginePath: enrichment.enginePath,
         summary,
         // Canonical 0-100 readiness fields (INTERNAL — admin/debug + harness).
         initialReadinessScore,
@@ -5015,6 +5095,40 @@ export interface HrRadarLadderEntry {
   ohLaunchAngle: number | null;
   ohDistance: number | null;
   ohPitchType: string | null;
+
+  // ── Goldmaster v1 — additive user-facing stage layer. ──────────────────────
+  // All fields below are pure surfacing — they are derived from the same row
+  // data above and never replace any legacy field. Frontends gate on the
+  // presence of `userStage` to opt into the new copy/labels.
+  /** "track" | "build" | "ready" | "fire" | "resolved" — user-facing ladder. */
+  userStage: HrRadarUserStage;
+  /** Capitalized label e.g. "Track" / "Build" / "Ready" / "Fire" / "Resolved". */
+  stageLabel: string;
+  /** Plain-English description for the user-facing stage. */
+  stageDescription: string;
+  /** Qualifying signals derived from existing diagnostic snapshot. */
+  qualifyingSignals: HrQualifyingSignalType[];
+  /** Alias of userReasons — explicit "clean" channel for the new UI. */
+  cleanReasons: string[];
+  /** Additive grading shadow: which official stage was reached, if any. */
+  officialSignalStage: "ready" | "fire" | null;
+  officialSignalAt: string | null;
+  officialSignalInning: number | null;
+  /** Write-once user-stage timestamps (in-memory; not persisted yet). */
+  firstTrackedAt: string | null;
+  firstTrackedInning: number | null;
+  firstBuiltAt: string | null;
+  firstBuiltInning: number | null;
+  firstReadyAt: string | null;
+  firstReadyInning: number | null;
+  firstFireAt: string | null;
+  firstFireInning: number | null;
+  /** When the HR landed (ISO + inning), null while live/pending. */
+  hrOccurredAt: string | null;
+  hrOccurredInning: number | null;
+  /** Hidden debug surface — admin-only. */
+  debugReasons: string[];
+  enginePath: string | null;
 }
 
 export const storage = new DatabaseStorage();
