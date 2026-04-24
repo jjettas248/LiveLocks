@@ -174,6 +174,28 @@ export interface IStorage {
   createFeedback(userId: number, message: string): Promise<Feedback>;
   getAllFeedback(): Promise<(Feedback & { userEmail: string | null })[]>;
   updateUserAlerts(userId: number, data: { pushSubscription?: string | null; pushAlerts?: boolean; phoneNumber?: string | null; smsAlerts?: boolean; smsConsent?: boolean }): Promise<void>;
+  // Pass 2 — additive lifecycle helpers. Tier resolution and entitlement gates remain
+  // owned by updateUserSubscription / setUserSubscriptionTier; these methods only persist
+  // lifecycle metadata (status, source, trial timestamps, alerts channel state) and never
+  // mutate subscriptionTier.
+  updateSubscriptionLifecycle(userId: number, data: {
+    subscriptionStatus?: string | null;
+    subscriptionSource?: string | null;
+    trialStartedAt?: Date | null;
+    trialEndsAt?: Date | null;
+    cancelAtPeriodEnd?: boolean | null;
+    convertedToPaidAt?: Date | null;
+    trialAbandonedAt?: Date | null;
+  }): Promise<void>;
+  markTrialConverted(userId: number, at: Date): Promise<void>;
+  markTrialAbandoned(userId: number, at: Date): Promise<void>;
+  updateUserAlertsChannelState(userId: number, data: {
+    alertsChannelStatus?: string | null;
+    telegramChatId?: string | null;
+    telegramUsername?: string | null;
+    telegramConnectedAt?: Date | null;
+    telegramConnectionStatus?: string | null;
+  }): Promise<void>;
   clearNewProFlag(userId: number): Promise<void>;
   clearRequiresRefresh(userId: number): Promise<void>;
   setUpgradedAt(userId: number, upgradedAt: string): Promise<void>;
@@ -238,6 +260,26 @@ export interface IStorage {
   recordStripeEvent(eventId: string): Promise<void>;
   recordChurn(userId: number, previousTier: string | null): Promise<void>;
   getChurnedUsers(): Promise<Array<{ id: number; email: string; churnedAt: Date; churnedFromTier: string | null; createdAt: Date | null }>>;
+
+  // Pass 6 — Read-only lifecycle reporting for the admin surface.
+  // Aggregates over the nullable lifecycle columns added in Pass 2 plus the
+  // pre-existing churn_tracking table. Pure read; never modifies state.
+  getLifecycleMetrics(): Promise<{
+    counts: {
+      trialStartsLifetime: number;
+      trialActive: number;
+      trialDropoffLifetime: number;
+      trialConvertedToPaidLifetime: number;
+      paidChurnLifetime: number;
+      cancelAtPeriodEnd: number;
+    };
+    rates: {
+      trialConversionPct: number | null; // converted / starts, null if no starts
+    };
+    alertsChannelStatus: Record<string, number>;
+    telegramConnectionStatus: Record<string, number>;
+    subscriptionSource: Record<string, number>;
+  }>;
 
   // Task #129 — point-in-time batter rolling stat snapshots.
   upsertBatterRollingSnapshot(snap: InsertBatterRollingSnapshot): Promise<void>;
@@ -1742,6 +1784,61 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  // ----- Pass 2 — additive lifecycle helpers (no entitlement / tier mutation) -----
+
+  async updateSubscriptionLifecycle(userId: number, data: {
+    subscriptionStatus?: string | null;
+    subscriptionSource?: string | null;
+    trialStartedAt?: Date | null;
+    trialEndsAt?: Date | null;
+    cancelAtPeriodEnd?: boolean | null;
+    convertedToPaidAt?: Date | null;
+    trialAbandonedAt?: Date | null;
+  }): Promise<void> {
+    const update: Record<string, any> = {};
+    if (data.subscriptionStatus !== undefined) update.subscriptionStatus = data.subscriptionStatus;
+    if (data.subscriptionSource !== undefined) update.subscriptionSource = data.subscriptionSource;
+    if (data.trialStartedAt !== undefined) update.trialStartedAt = data.trialStartedAt;
+    if (data.trialEndsAt !== undefined) update.trialEndsAt = data.trialEndsAt;
+    if (data.cancelAtPeriodEnd !== undefined) update.cancelAtPeriodEnd = data.cancelAtPeriodEnd;
+    if (data.convertedToPaidAt !== undefined) update.convertedToPaidAt = data.convertedToPaidAt;
+    if (data.trialAbandonedAt !== undefined) update.trialAbandonedAt = data.trialAbandonedAt;
+    if (Object.keys(update).length === 0) return;
+    await db.update(users).set(update).where(eq(users.id, userId));
+  }
+
+  async markTrialConverted(userId: number, at: Date): Promise<void> {
+    await db.update(users).set({
+      convertedToPaidAt: at,
+      subscriptionStatus: "active",
+      trialAbandonedAt: null,
+    }).where(eq(users.id, userId));
+  }
+
+  async markTrialAbandoned(userId: number, at: Date): Promise<void> {
+    await db.update(users).set({
+      trialAbandonedAt: at,
+      subscriptionStatus: "canceled",
+    }).where(eq(users.id, userId));
+  }
+
+  async updateUserAlertsChannelState(userId: number, data: {
+    alertsChannelStatus?: string | null;
+    telegramChatId?: string | null;
+    telegramUsername?: string | null;
+    telegramConnectedAt?: Date | null;
+    telegramConnectionStatus?: string | null;
+  }): Promise<void> {
+    const update: Record<string, any> = {};
+    if (data.alertsChannelStatus !== undefined) update.alertsChannelStatus = data.alertsChannelStatus;
+    if (data.telegramChatId !== undefined) update.telegramChatId = data.telegramChatId;
+    if (data.telegramUsername !== undefined) update.telegramUsername = data.telegramUsername;
+    if (data.telegramConnectedAt !== undefined) update.telegramConnectedAt = data.telegramConnectedAt;
+    if (data.telegramConnectionStatus !== undefined) update.telegramConnectionStatus = data.telegramConnectionStatus;
+    if (Object.keys(update).length === 0) return;
+    await db.update(users).set(update).where(eq(users.id, userId));
+  }
+
   async getUserByPhoneNumber(phone: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.phoneNumber, phone));
     return user;
@@ -2680,6 +2777,72 @@ export class DatabaseStorage implements IStorage {
       .where(isNotNull(users.churnedAt))
       .orderBy(desc(users.churnedAt));
     return rows as Array<{ id: number; email: string; churnedAt: Date; churnedFromTier: string | null; createdAt: Date | null }>;
+  }
+
+  // ── Pass 6 — Lifecycle reporting (admin-only consumer) ────────────────
+  async getLifecycleMetrics() {
+    // Single round-trip aggregate over the lifecycle columns from Pass 2.
+    // Defensive: counts use FILTER so missing/NULL values just contribute 0.
+    const result = await db.execute(sql`
+      SELECT
+        COUNT(*) FILTER (WHERE trial_started_at IS NOT NULL)::int AS trial_starts_lifetime,
+        COUNT(*) FILTER (WHERE subscription_status = 'trialing')::int AS trial_active,
+        COUNT(*) FILTER (WHERE trial_abandoned_at IS NOT NULL)::int AS trial_dropoff_lifetime,
+        COUNT(*) FILTER (WHERE converted_to_paid_at IS NOT NULL)::int AS trial_converted_lifetime,
+        COUNT(*) FILTER (WHERE churned_at IS NOT NULL)::int AS paid_churn_lifetime,
+        COUNT(*) FILTER (WHERE cancel_at_period_end = TRUE)::int AS cancel_at_period_end
+      FROM users
+    `);
+    const counts = result.rows[0] as {
+      trial_starts_lifetime: number;
+      trial_active: number;
+      trial_dropoff_lifetime: number;
+      trial_converted_lifetime: number;
+      paid_churn_lifetime: number;
+      cancel_at_period_end: number;
+    };
+
+    const distRows = async (column: string): Promise<Record<string, number>> => {
+      const r = await db.execute(sql`
+        SELECT COALESCE(${sql.raw(column)}, 'unknown') AS key, COUNT(*)::int AS n
+        FROM users
+        GROUP BY 1
+      `);
+      const out: Record<string, number> = {};
+      for (const row of r.rows as Array<{ key: string; n: number }>) {
+        out[row.key] = row.n;
+      }
+      return out;
+    };
+
+    const [alertsChannelStatus, telegramConnectionStatus, subscriptionSource] = await Promise.all([
+      distRows("alerts_channel_status"),
+      distRows("telegram_connection_status"),
+      distRows("subscription_source"),
+    ]);
+
+    const trialStarts = counts.trial_starts_lifetime;
+    const trialConverted = counts.trial_converted_lifetime;
+    const trialConversionPct = trialStarts > 0
+      ? Math.round((trialConverted / trialStarts) * 1000) / 10 // one decimal
+      : null;
+
+    return {
+      counts: {
+        trialStartsLifetime: counts.trial_starts_lifetime,
+        trialActive: counts.trial_active,
+        trialDropoffLifetime: counts.trial_dropoff_lifetime,
+        trialConvertedToPaidLifetime: counts.trial_converted_lifetime,
+        paidChurnLifetime: counts.paid_churn_lifetime,
+        cancelAtPeriodEnd: counts.cancel_at_period_end,
+      },
+      rates: {
+        trialConversionPct,
+      },
+      alertsChannelStatus,
+      telegramConnectionStatus,
+      subscriptionSource,
+    };
   }
 
   // ── Task #129 — batter rolling stat snapshots ──────────────────────────

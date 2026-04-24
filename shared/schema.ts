@@ -42,6 +42,24 @@ export const users = pgTable("users", {
   resetPasswordExpiry: timestamp("reset_password_expiry"),
   hasCompletedOnboarding: boolean("has_completed_onboarding").notNull().default(false),
   sportFocus: text("sport_focus"),
+  // Lifecycle (Pass 2 — additive only; nullable; does NOT reinterpret subscriptionTier).
+  // Allowed values are documented for callers but not enforced at the DB layer to keep
+  // existing code paths safe if a value is unset.
+  //   subscriptionStatus: "free" | "trialing" | "active" | "canceled" | "past_due" | null
+  //   subscriptionSource: "trial" | "direct_paid" | "admin" | null
+  //   alertsChannelStatus: "unavailable" | "available_not_connected" | "connected" | null
+  subscriptionStatus: text("subscription_status"),
+  subscriptionSource: text("subscription_source"),
+  trialStartedAt: timestamp("trial_started_at"),
+  trialEndsAt: timestamp("trial_ends_at"),
+  convertedToPaidAt: timestamp("converted_to_paid_at"),
+  cancelAtPeriodEnd: boolean("cancel_at_period_end"),
+  trialAbandonedAt: timestamp("trial_abandoned_at"),
+  alertsChannelStatus: text("alerts_channel_status"),
+  telegramChatId: text("telegram_chat_id"),
+  telegramUsername: text("telegram_username"),
+  telegramConnectedAt: timestamp("telegram_connected_at"),
+  telegramConnectionStatus: text("telegram_connection_status"),
 });
 
 export const stripeEvents = pgTable("stripe_events", {

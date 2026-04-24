@@ -86,6 +86,11 @@ function getUserIdFromRequest(req: Request): number | null {
 
 function safeUser(user: User) {
   const access = resolveAccess(user.subscriptionTier, user.isAdmin ?? false);
+  // Pass 4 — lifecycle metadata is exposed additively. Existing keys above are unchanged.
+  // Frontend consumers can opt into the new fields without breaking older builds.
+  const subscriptionStatus = user.subscriptionStatus ?? null;
+  const isOnTrial = subscriptionStatus === "trialing";
+  const isFreeAccount = !user.subscriptionTier && !(user.isAdmin ?? false);
   return {
     id: user.id,
     email: user.email,
@@ -103,6 +108,19 @@ function safeUser(user: User) {
     hasUnlimited: access.hasUnlimited,
     hasCompletedOnboarding: user.hasCompletedOnboarding ?? false,
     sportFocus: user.sportFocus ?? null,
+    // Pass 4 — lifecycle (additive, all nullable)
+    subscriptionStatus,
+    subscriptionSource: user.subscriptionSource ?? null,
+    trialStartedAt: user.trialStartedAt ? user.trialStartedAt.toISOString() : null,
+    trialEndsAt: user.trialEndsAt ? user.trialEndsAt.toISOString() : null,
+    cancelAtPeriodEnd: user.cancelAtPeriodEnd ?? null,
+    convertedToPaidAt: user.convertedToPaidAt ? user.convertedToPaidAt.toISOString() : null,
+    alertsChannelStatus: user.alertsChannelStatus ?? null,
+    telegramConnectionStatus: user.telegramConnectionStatus ?? null,
+    telegramUsername: user.telegramUsername ?? null,
+    // Derived booleans for the dashboard (Pass 5).
+    isOnTrial,
+    isFreeAccount,
   };
 }
 

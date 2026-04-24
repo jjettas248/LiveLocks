@@ -18,6 +18,19 @@ export interface AuthUser {
   hasUnlimited: boolean;
   hasCompletedOnboarding: boolean;
   sportFocus: string | null;
+  // Pass 4 — lifecycle additions. All optional so older payloads (without these keys)
+  // continue to type-check. Consumers MUST treat each as possibly undefined/null.
+  subscriptionStatus?: "free" | "trialing" | "active" | "canceled" | "past_due" | null;
+  subscriptionSource?: "trial" | "direct_paid" | "admin" | null;
+  trialStartedAt?: string | null;
+  trialEndsAt?: string | null;
+  cancelAtPeriodEnd?: boolean | null;
+  convertedToPaidAt?: string | null;
+  alertsChannelStatus?: "unavailable" | "available_not_connected" | "connected" | null;
+  telegramConnectionStatus?: string | null;
+  telegramUsername?: string | null;
+  isOnTrial?: boolean;
+  isFreeAccount?: boolean;
 }
 
 async function apiFetch(path: string, options?: RequestInit) {

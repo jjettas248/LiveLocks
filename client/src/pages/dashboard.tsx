@@ -27,6 +27,7 @@ import { useLocation } from "wouter";
 import { TopPlaysPanel } from "@/components/dashboard/TopPlaysPanel";
 import { FreeActivationRail } from "@/components/dashboard/free-activation-rail";
 import { PublicProofStrip } from "@/components/dashboard/public-proof-strip";
+import { TrialMissionRail } from "@/components/dashboard/trial-mission-rail";
 import { SignalDetailDialog } from "@/components/signals/SignalDetailDialog";
 import type { UnifiedTopPlay } from "@/hooks/useTopPlays";
 import { UserStatusRail } from "@/components/dashboard/UserStatusRail";
@@ -2092,7 +2093,41 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-4">
           <div className="space-y-4">
             {(() => {
-              const isFreeUser = !user?.isAdmin && !hasProAccess(effectiveTier);
+              // Pass 5 — branch precedence: admin/paid → TopPlaysPanel; trialing → TrialMissionRail; free → FreeActivationRail.
+              // The trial branch only triggers when `subscriptionStatus === "trialing"` is explicitly populated by
+              // the lifecycle sync (Pass 3). Legacy trial users without a synced status fall through to the paid
+              // TopPlaysPanel they currently see, so this introduces no silent regression.
+              const isAdminOrPaid = !!user?.isAdmin || hasProAccess(effectiveTier);
+              const isTrialing = !user?.isAdmin && user?.subscriptionStatus === "trialing";
+
+              if (isTrialing) {
+                const alertsStatus = user?.alertsChannelStatus ?? null;
+                const alertsConnected = alertsStatus === "connected";
+                const alertsAvailable = alertsStatus === "connected" || alertsStatus === "available_not_connected";
+                return (
+                  <TrialMissionRail
+                    trialStartedAt={user?.trialStartedAt ?? null}
+                    trialEndsAt={user?.trialEndsAt ?? null}
+                    plan={user?.subscriptionTier ?? null}
+                    emailVerified={user?.emailVerified ?? false}
+                    sportFocus={user?.sportFocus ?? null}
+                    alertsConnected={alertsConnected}
+                    alertsAvailable={alertsAvailable}
+                    isPrimaryLoading={scanningEdges}
+                    onOpenBestSignal={() => autoRunBestSignal()}
+                    onAlertsCta={() => {
+                      toast({
+                        title: alertsAvailable ? "Daily alerts" : "Daily alerts coming soon",
+                        description: alertsAvailable
+                          ? "Open Settings to manage your daily alert preferences."
+                          : "We'll notify you the moment alerts go live.",
+                      });
+                    }}
+                  />
+                );
+              }
+
+              const isFreeUser = !isAdminOrPaid;
               if (isFreeUser) {
                 return (
                   <>

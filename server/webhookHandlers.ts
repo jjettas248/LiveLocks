@@ -11,6 +11,65 @@ const HANDLED_EVENTS = new Set([
   "customer.subscription.deleted",
 ]);
 
+// ---- Pass 3 — additive lifecycle sync (does NOT mutate subscriptionTier) ----
+// Persists subscriptionStatus, trial timestamps, cancelAtPeriodEnd, subscriptionSource,
+// and detects real post-trial conversion. Safe to call after the existing tier flow.
+async function syncLifecycleFromSubscription(user: any, sub: any): Promise<void> {
+  const stripeStatus: string = sub?.status ?? "";
+  let lifecycleStatus: string | null;
+  switch (stripeStatus) {
+    case "trialing": lifecycleStatus = "trialing"; break;
+    case "active": lifecycleStatus = "active"; break;
+    case "past_due":
+    case "unpaid": lifecycleStatus = "past_due"; break;
+    case "canceled":
+    case "incomplete_expired": lifecycleStatus = "canceled"; break;
+    default: lifecycleStatus = null; // unknown/incomplete — leave unchanged
+  }
+  if (lifecycleStatus === null) return;
+
+  const trialStartedAt = typeof sub?.trial_start === "number" ? new Date(sub.trial_start * 1000) : null;
+  const trialEndsAt = typeof sub?.trial_end === "number" ? new Date(sub.trial_end * 1000) : null;
+  const cancelAtPeriodEnd = !!sub?.cancel_at_period_end;
+
+  const lifecycleUpdate: Parameters<typeof storage.updateSubscriptionLifecycle>[1] = {
+    subscriptionStatus: lifecycleStatus,
+    cancelAtPeriodEnd,
+  };
+  if (trialStartedAt && !user.trialStartedAt) {
+    lifecycleUpdate.trialStartedAt = trialStartedAt;
+  }
+  if (trialEndsAt) {
+    const existing = user.trialEndsAt instanceof Date
+      ? user.trialEndsAt.getTime()
+      : user.trialEndsAt
+        ? new Date(user.trialEndsAt as any).getTime()
+        : null;
+    if (existing === null || existing !== trialEndsAt.getTime()) {
+      lifecycleUpdate.trialEndsAt = trialEndsAt;
+    }
+  }
+  // First-time source attribution. Never overwrite once set.
+  if (!user.subscriptionSource) {
+    if (lifecycleStatus === "trialing" || trialStartedAt) {
+      lifecycleUpdate.subscriptionSource = "trial";
+    } else if (lifecycleStatus === "active") {
+      lifecycleUpdate.subscriptionSource = "direct_paid";
+    }
+  }
+
+  await storage.updateSubscriptionLifecycle(user.id, lifecycleUpdate);
+
+  // Real post-trial conversion: previously trialing (or had a trial start) → now active for the
+  // first time. markTrialConverted re-asserts subscriptionStatus="active" and stamps convertedToPaidAt.
+  const wasTrialing = user.subscriptionStatus === "trialing"
+    || (!!user.trialStartedAt && !user.convertedToPaidAt);
+  if (lifecycleStatus === "active" && wasTrialing && !user.convertedToPaidAt) {
+    await storage.markTrialConverted(user.id, new Date());
+    console.log("[LIFECYCLE]", { userId: user.id, event: "trial_converted_to_paid" });
+  }
+}
+
 async function syncSubscriptionToDb(stripe: any, subscriptionId: string): Promise<void> {
   const sub = await stripe.subscriptions.retrieve(subscriptionId, { expand: ["items.data.price"] });
   const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer?.id ?? "";
@@ -21,6 +80,10 @@ async function syncSubscriptionToDb(stripe: any, subscriptionId: string): Promis
       const issueUser = await storage.getUserByStripeCustomerId(customerId);
       if (issueUser) {
         await storage.setUserSubscriptionTier(issueUser.id, null);
+        // Pass 3 — record lifecycle status alongside the existing revoke (additive).
+        await syncLifecycleFromSubscription(issueUser, sub).catch((err) =>
+          console.warn("[LIFECYCLE] past_due sync failed:", err?.message ?? err)
+        );
         sendPaymentIssueEmail(issueUser.email).catch(console.error);
         console.log("[PLAN UPDATE]", { userId: issueUser.id, status: sub.status, action: "access_revoked" });
       }
@@ -43,6 +106,14 @@ async function syncSubscriptionToDb(stripe: any, subscriptionId: string): Promis
 
   await storage.updateUserSubscription(user.id, tier, customerId, subscriptionId);
   console.log("[STRIPE SYNC]", { userId: user.id, priceId, resolvedTier: tier, status: sub.status });
+
+  // Pass 3 — write lifecycle state separately AFTER the entitlement update so any failure
+  // here cannot block tier provisioning. Re-fetch the user so conversion detection sees
+  // the prior subscriptionStatus (not the one we just wrote via tier path, which doesn't
+  // touch lifecycle columns).
+  await syncLifecycleFromSubscription(user, sub).catch((err) =>
+    console.warn("[LIFECYCLE] sync failed:", err?.message ?? err)
+  );
 
   if (tier === "all" && !user.sentProWelcome) {
     storage.updateUserEmailFlags(user.id, { sentProWelcome: true })
@@ -172,9 +243,61 @@ export class WebhookHandlers {
           if (user) {
             const previousTier = user.subscriptionTier ?? resolveTierFromSubscription(subscription);
             await storage.setUserSubscriptionTier(user.id, null);
-            await storage.recordChurn(user.id, previousTier);
-            console.log("[CHURN]", { userId: user.id, email: user.email, previousTier, event: "subscription.deleted" });
-            sendChurnEmail(user.email, previousTier ?? "subscription").catch(console.error);
+
+            // Pass 3 — split trial abandonment from paid churn.
+            //
+            // CORRECTNESS NOTE (post-architect review):
+            // We must NOT rely on DB lifecycle fields alone to make this call. The
+            // lifecycle writes elsewhere are non-blocking (`.catch(...)`), so a paid
+            // user whose `convertedToPaidAt` write previously failed could be silently
+            // misclassified as trial-abandoned and skip the churn flow.
+            //
+            // Use Stripe's authoritative trial fields on the deleted subscription
+            // first; treat the DB `convertedToPaidAt` only as a *positive* override
+            // (if the DB knows the user converted, definitely paid churn).
+            const trialStartUnix = typeof subscription?.trial_start === "number" ? subscription.trial_start : 0;
+            const trialEndUnix = typeof subscription?.trial_end === "number" ? subscription.trial_end : 0;
+            const stripeStatus = typeof subscription?.status === "string" ? subscription.status : "";
+            const hadTrial = trialStartUnix > 0 || trialEndUnix > 0;
+            const nowSec = Math.floor(Date.now() / 1000);
+            // Stripe-authoritative: the trial never completed before this deletion if
+            // either the sub is still in `trialing` status, or trial_end is in the future.
+            const stripeSaysTrialAbandoned =
+              hadTrial && (stripeStatus === "trialing" || (trialEndUnix > 0 && trialEndUnix > nowSec));
+            // Positive DB override — if we ever recorded a paid conversion, this is paid churn.
+            const dbConfirmsPaid = !!user.convertedToPaidAt;
+            const isTrialAbandonment = stripeSaysTrialAbandoned && !dbConfirmsPaid;
+
+            if (isTrialAbandonment) {
+              await storage.markTrialAbandoned(user.id, new Date());
+              console.log("[LIFECYCLE]", {
+                userId: user.id,
+                email: user.email,
+                event: "trial_abandoned",
+                previousTier,
+                stripeStatus,
+                trialEndUnix,
+                source: "stripe_authoritative",
+              });
+            } else {
+              await storage.recordChurn(user.id, previousTier);
+              await storage.updateSubscriptionLifecycle(user.id, {
+                subscriptionStatus: "canceled",
+                cancelAtPeriodEnd: false,
+              }).catch((err) =>
+                console.warn("[LIFECYCLE] churn lifecycle write failed:", err?.message ?? err)
+              );
+              console.log("[CHURN]", {
+                userId: user.id,
+                email: user.email,
+                previousTier,
+                event: "subscription.deleted",
+                hadTrial,
+                stripeStatus,
+                dbConfirmsPaid,
+              });
+              sendChurnEmail(user.email, previousTier ?? "subscription").catch(console.error);
+            }
           }
         }
       }

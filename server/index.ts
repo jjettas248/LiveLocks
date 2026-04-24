@@ -307,6 +307,29 @@ app.use((req, res, next) => {
     console.warn("[startup] Schema migration warning (password-reset):", err.message);
   }
 
+  // Schema migration: lifecycle / alerts-channel / telegram columns (Pass 2 — additive only,
+  // all nullable, does NOT reinterpret existing subscriptionTier / entitlement gates).
+  try {
+    await pool.query(`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS subscription_status text,
+        ADD COLUMN IF NOT EXISTS subscription_source text,
+        ADD COLUMN IF NOT EXISTS trial_started_at timestamp,
+        ADD COLUMN IF NOT EXISTS trial_ends_at timestamp,
+        ADD COLUMN IF NOT EXISTS converted_to_paid_at timestamp,
+        ADD COLUMN IF NOT EXISTS cancel_at_period_end boolean,
+        ADD COLUMN IF NOT EXISTS trial_abandoned_at timestamp,
+        ADD COLUMN IF NOT EXISTS alerts_channel_status text,
+        ADD COLUMN IF NOT EXISTS telegram_chat_id text,
+        ADD COLUMN IF NOT EXISTS telegram_username text,
+        ADD COLUMN IF NOT EXISTS telegram_connected_at timestamp,
+        ADD COLUMN IF NOT EXISTS telegram_connection_status text;
+    `);
+    console.log("[startup] Schema migration: lifecycle columns ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (lifecycle):", err.message);
+  }
+
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS hr_outcomes (

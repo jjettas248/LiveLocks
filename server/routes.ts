@@ -190,6 +190,20 @@ export async function registerRoutes(
     }
   });
 
+  // Pass 6 — Lifecycle reporting endpoint (admin-only).
+  // Surfaces trial starts, active trials, trial dropoff, trial→paid conversion, paid churn,
+  // and the alerts/telegram channel status distributions. All values come from the
+  // additive lifecycle columns introduced in Pass 2 + the existing churn_tracking flow.
+  app.get("/api/admin/lifecycle-metrics", requireAdmin, async (_req, res) => {
+    try {
+      const metrics = await storage.getLifecycleMetrics();
+      return res.json(metrics);
+    } catch (err) {
+      console.error("[admin/lifecycle-metrics]", err);
+      return res.status(500).json({ error: "Failed to fetch lifecycle metrics" });
+    }
+  });
+
   app.get("/api/admin/users", requireAdmin, async (_req, res) => {
     try {
       const allUsers = await storage.getAllUsers();
@@ -3625,6 +3639,8 @@ export async function registerRoutes(
 
       const tier = user.subscriptionTier;
       const access = resolveAccess(tier, user.isAdmin ?? false);
+      // Pass 4 — lifecycle fields are additive; pre-existing keys are preserved exactly.
+      const subscriptionStatus = user.subscriptionStatus ?? null;
       return res.json({
         id: user.id,
         email: user.email,
@@ -3636,6 +3652,18 @@ export async function registerRoutes(
         hasNCAAB: access.hasNCAAB,
         hasMLB: access.hasMLB,
         hasUnlimited: access.hasUnlimited,
+        // Pass 4 — lifecycle additions (nullable; safe defaults).
+        subscriptionStatus,
+        subscriptionSource: user.subscriptionSource ?? null,
+        trialStartedAt: user.trialStartedAt ? user.trialStartedAt.toISOString() : null,
+        trialEndsAt: user.trialEndsAt ? user.trialEndsAt.toISOString() : null,
+        cancelAtPeriodEnd: user.cancelAtPeriodEnd ?? null,
+        convertedToPaidAt: user.convertedToPaidAt ? user.convertedToPaidAt.toISOString() : null,
+        alertsChannelStatus: user.alertsChannelStatus ?? null,
+        telegramConnectionStatus: user.telegramConnectionStatus ?? null,
+        telegramUsername: user.telegramUsername ?? null,
+        isOnTrial: subscriptionStatus === "trialing",
+        isFreeAccount: !tier && !(user.isAdmin ?? false),
       });
     } catch (err: any) {
       console.error("[/api/me]", err);
@@ -5619,6 +5647,77 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: "Failed to update SMS settings" });
+    }
+  });
+
+  // ── Pass 7 — Future alerts abstraction (channel-agnostic) ─────────────────
+  // Generic state machine over the `alertsChannelStatus` column added in Pass 2.
+  // No Telegram backend, no bot tokens, no webhook logic — Pass 8 will wire a
+  // real channel implementation behind these endpoints. The UI in Pass 5 can
+  // already drive its alerts CTA against this surface today.
+  //
+  //   status values:
+  //     - "unavailable"             → default; user has not opted in
+  //     - "available_not_connected" → user opted in; awaiting channel connect
+  //     - "connected"               → user has a live alerts channel
+  app.get("/api/user/alerts/status", requireAuth, async (req, res) => {
+    try {
+      const userId = (req as any).resolvedUserId!;
+      const user = await storage.getUserById(userId);
+      if (!user) return res.status(401).json({ error: "Not found" });
+      const status = user.alertsChannelStatus ?? "unavailable";
+      return res.json({
+        status,
+        telegramConnectionStatus: user.telegramConnectionStatus ?? null,
+        telegramUsername: user.telegramUsername ?? null,
+        telegramConnectedAt: user.telegramConnectedAt
+          ? user.telegramConnectedAt.toISOString()
+          : null,
+      });
+    } catch (err) {
+      console.error("[alerts/status]", err);
+      res.status(500).json({ error: "Failed to fetch alerts status" });
+    }
+  });
+
+  app.post("/api/user/alerts/request-access", requireAuth, async (req, res) => {
+    try {
+      const userId = (req as any).resolvedUserId!;
+      const user = await storage.getUserById(userId);
+      if (!user) return res.status(401).json({ error: "Not found" });
+      const current = user.alertsChannelStatus ?? "unavailable";
+      // Idempotent: never downgrade an already-connected channel.
+      const next = current === "connected" ? "connected" : "available_not_connected";
+      if (next !== current) {
+        await storage.updateUserAlertsChannelState(userId, {
+          alertsChannelStatus: next,
+        });
+      }
+      return res.json({ status: next, changed: next !== current });
+    } catch (err) {
+      console.error("[alerts/request-access]", err);
+      res.status(500).json({ error: "Failed to request alerts access" });
+    }
+  });
+
+  app.post("/api/user/alerts/disconnect", requireAuth, async (req, res) => {
+    try {
+      const userId = (req as any).resolvedUserId!;
+      const user = await storage.getUserById(userId);
+      if (!user) return res.status(401).json({ error: "Not found" });
+      // Drop back to "available_not_connected" and wipe channel-specific fields.
+      // Stays opt-in so re-connecting later does not require another request.
+      await storage.updateUserAlertsChannelState(userId, {
+        alertsChannelStatus: "available_not_connected",
+        telegramChatId: null,
+        telegramUsername: null,
+        telegramConnectedAt: null,
+        telegramConnectionStatus: null,
+      });
+      return res.json({ status: "available_not_connected" });
+    } catch (err) {
+      console.error("[alerts/disconnect]", err);
+      res.status(500).json({ error: "Failed to disconnect alerts" });
     }
   });
 
