@@ -1,8 +1,14 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import { checkAppVersion } from "./lib/versionCheck";
 
-createRoot(document.getElementById("root")!).render(<App />);
+async function boot() {
+  await checkAppVersion();
+  createRoot(document.getElementById("root")!).render(<App />);
+}
+
+boot();
 
 if ("serviceWorker" in navigator) {
   let refreshing = false;

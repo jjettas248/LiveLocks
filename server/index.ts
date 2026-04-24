@@ -8,6 +8,8 @@ import { autoResolveAlerts } from "./analyticsResolver";
 import { gradePersistedPlays } from "./services/gradePersistedPlays";
 import { storage } from "./storage";
 import { serveStatic } from "./static";
+import { registerSwHandler } from "./swHandler";
+import { getAppVersion } from "./version";
 import { createServer } from "http";
 import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync } from "./stripeClient";
@@ -455,6 +457,19 @@ app.use((req, res, next) => {
   }
 
   await initStripe();
+
+  // Cache-busting infrastructure: serve /sw.js with version-token substitution
+  // and /api/version for client-side mismatch detection. Both must be
+  // registered BEFORE vite/static so they take precedence over file-based
+  // serving of client/public/sw.js.
+  registerSwHandler(app);
+  app.get("/api/version", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.json({ version: getAppVersion() });
+  });
+
   await registerRoutes(httpServer, app);
   registerAnalyticsRoutes(app);
   registerPlaysRoutes(app);

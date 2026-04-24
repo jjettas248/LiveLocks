@@ -1,6 +1,24 @@
-import express, { type Express } from "express";
+import express, { type Express, type Response } from "express";
 import fs from "fs";
 import path from "path";
+import { getAppVersion } from "./version";
+
+function injectVersionMeta(html: string): string {
+  const versionMeta = `<meta name="app-version" content="${getAppVersion()}" />`;
+  if (html.includes('name="app-version"')) return html;
+  return html.replace(`</head>`, `    ${versionMeta}\n  </head>`);
+}
+
+function sendIndexHtml(res: Response, distPath: string) {
+  const filePath = path.resolve(distPath, "index.html");
+  let html = fs.readFileSync(filePath, "utf-8");
+  html = injectVersionMeta(html);
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  res.status(200).send(html);
+}
 
 export function serveStatic(app: Express) {
   const distPath = path.resolve(__dirname, "public");
@@ -9,6 +27,12 @@ export function serveStatic(app: Express) {
       `Could not find the build directory: ${distPath}, make sure to build the client first`,
     );
   }
+
+  // Intercept index.html before express.static so we can inject the
+  // <meta name="app-version"> tag and apply no-cache headers.
+  app.get(["/", "/index.html"], (_req, res) => {
+    sendIndexHtml(res, distPath);
+  });
 
   // Vite-hashed assets (/assets/*) can be cached indefinitely — their
   // filenames change whenever the content changes.
@@ -23,11 +47,21 @@ export function serveStatic(app: Express) {
   // All other static files served with no-cache so browsers always
   // re-validate. This is the critical fix: index.html must never be
   // served from cache, otherwise a stale index.html will request JS
-  // bundles that no longer exist after a new deployment.
+  // bundles that no longer exist after a new deployment. Also force
+  // no-cache for manifest.json and favicon* so PWA metadata/icon updates
+  // propagate deterministically after a deploy.
   app.use(
     express.static(distPath, {
+      index: false,
       setHeaders(res, filePath) {
-        if (filePath.endsWith("index.html")) {
+        const base = filePath.split(/[\\/]/).pop() || "";
+        const isShellFile =
+          base === "index.html" ||
+          base === "manifest.json" ||
+          base === "sw.js" ||
+          /^favicon\.[a-z0-9]+$/i.test(base) ||
+          /^apple-touch-icon(-\d+x\d+)?\.png$/i.test(base);
+        if (isShellFile) {
           res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
           res.setHeader("Pragma", "no-cache");
           res.setHeader("Expires", "0");
@@ -45,9 +79,6 @@ export function serveStatic(app: Express) {
       res.status(404).send("Not found");
       return;
     }
-    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    res.setHeader("Pragma", "no-cache");
-    res.setHeader("Expires", "0");
-    res.sendFile(path.resolve(distPath, "index.html"));
+    sendIndexHtml(res, distPath);
   });
 }

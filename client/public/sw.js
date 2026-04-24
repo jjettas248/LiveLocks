@@ -1,4 +1,5 @@
-const CACHE_NAME = "livelocks-v8";
+const APP_VERSION = "__APP_VERSION__";
+const CACHE_NAME = `livelocks-${APP_VERSION}`;
 const APP_SHELL = ["/", "/index.html", "/favicon.png", "/manifest.json"];
 
 self.addEventListener("install", (event) => {
