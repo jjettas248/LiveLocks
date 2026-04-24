@@ -1998,9 +1998,6 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         dynamicDrivers: [], dynamicSuppressors: [], cooldownReason: null,
         dynamicPeakScore: null, dynamicPeakState: null, dynamicTickCount: null,
         dynamicLastRecompute: null, dynamicDataFreshness: null,
-        isHotHitter: false, hotHitterPeriod: null, hotHitterHrCount: null,
-        onlyHomersVerified: false, ohExitVelocity: null, ohLaunchAngle: null,
-        ohDistance: null, ohPitchType: null,
       } as HrRadarCardUi);
     } else {
       radarState.set(key, { ...radarState.get(key)!, status: "CASHED" });
@@ -2064,9 +2061,6 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         dynamicDrivers: [], dynamicSuppressors: [], cooldownReason: null,
         dynamicPeakScore: null, dynamicPeakState: null, dynamicTickCount: null,
         dynamicLastRecompute: null, dynamicDataFreshness: null,
-        isHotHitter: false, hotHitterPeriod: null, hotHitterHrCount: null,
-        onlyHomersVerified: false, ohExitVelocity: null, ohLaunchAngle: null,
-        ohDistance: null, ohPitchType: null,
       } as HrRadarCardUi);
     }
   }

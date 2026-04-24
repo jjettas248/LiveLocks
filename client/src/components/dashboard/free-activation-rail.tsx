@@ -75,7 +75,7 @@ export function FreeActivationRail({
           ) : (
             <Zap className="w-4 h-4" />
           )}
-          {playsExhausted ? "Unlock Unlimited Plays" : "See Today's Best Free Play"}
+          See Today's Best Free Play
           {!isPrimaryLoading && (
             <ArrowRight className="w-4 h-4" />
           )}

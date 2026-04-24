@@ -166,7 +166,7 @@ export function PublicProofStrip() {
         side: r.side,
         line: r.line,
         result: r.result,
-        driver: buildDriverSummary(r.market, r.side),
+        driver: "",
       }));
   }
 
@@ -236,9 +236,11 @@ export function PublicProofStrip() {
                   <div className="text-[11px] text-muted-foreground truncate mt-0.5">
                     {row.side} {row.market} {row.line}
                   </div>
-                  <div className="text-[10px] text-muted-foreground/80 truncate mt-0.5">
-                    {row.driver}
-                  </div>
+                  {row.driver && (
+                    <div className="text-[10px] text-muted-foreground/80 truncate mt-0.5">
+                      {row.driver}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
