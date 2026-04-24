@@ -533,3 +533,102 @@ Hits, Total Bases, Pitcher Strikeouts, Home Runs
 
 - **Core:** Hits, Total Bases, Pitcher Strikeouts
 - **Experimental:** Home Runs, Batter Strikeouts, HR Allowed (receive 0.90× dampening)
+
+---
+
+## 14. HR Radar Goldmaster v1 — User-Facing Surfacing Layer
+
+**Engine Location:** `server/mlb/hrRadarUserStage.ts` (helpers), `server/storage.ts` (`getHrRadarLadder`, `getHrRadarGradingHistory`), `server/routes.ts` (`/api/mlb/hr-radar`, `/api/mlb/hr-radar-board`).
+
+**Status:** Active (default ON). Pure surfacing/qualification layer. **Engine math, scoring, and calibration are NOT modified.**
+
+### 14.1 What it does
+
+Goldmaster v1 layers a user-facing 4-stage ladder on top of the existing HR Radar canonical model so end users see a clear Track → Build → Ready → Fire progression rather than internal engine state names. It also restores a 0–10 user score, surfaces qualifying signal types, and adds additive grading sub-buckets for finer offline analysis.
+
+### 14.2 The ladder
+
+| User stage | Internal trigger | Color |
+|---|---|---|
+| **Track** | dynamicState ∈ {WATCH, ∅} AND tier ∉ {strong, building} | Gray |
+| **Build** | dynamicState=PREPARE OR legacyTier=building OR canonicalStage=building | Blue |
+| **Ready** | legacyTier=strong | Orange |
+| **Fire** | dynamicState=BET_NOW OR legacyState=attack OR canonicalStage=attack | Red (pulse) |
+| **Resolved** | outcome ∉ {pending, active, ∅} | Gray |
+
+The chosen user stage is the **STRONGER** of (a) the legacy mapped stage from the existing engine state and (b) the suggested stage derived from qualifying signals — see `strongerStage()` in `hrRadarUserStage.ts`. Resolved is sticky: if either side says resolved, the result is resolved.
+
+### 14.3 The 0–10 score
+
+`toSignalScore10(value)` accepts any readiness/build score (legacy 0–100 or already 0–10) and returns a 0.0–10.0 number rounded to one decimal. Values > 10 are treated as 0–100 wire scale.
+
+`fallbackScoreForStage(stage)` returns a **display-only** score for rows whose engine has not yet emitted a readiness number: Track 2.5, Build 5.5, Ready 7.5, Fire 9.0. **Never used for grading** — only for the score badge so Track rows do not show a meaningless 0.0.
+
+### 14.4 Qualifying signals
+
+Nine qualifying signal types are derived from the engine's existing diagnostic snapshot — no new measurements:
+
+- `elite_barrel` — barrels ≥ 1
+- `near_barrel` — nearBarrels ≥ 1 OR triggerTags include "near_barrel"
+- `two_hard_hit_balls` — hardHits ≥ 2
+- `deep_fly_warning` — deepFlyouts ≥ 1 OR (maxLA ≥ 28 AND maxEV ≥ 95)
+- `high_bat_speed_lift` — avgEV ≥ 95 AND maxEV ≥ 100
+- `pitcher_collapse_power` — pitcherFatigueBoost > 0 OR fatigue/bullpen tags or drivers
+- `late_game_power_build` — inning ≥ 6 AND any meaningful contact event
+- `massive_single_contact` — maxEV ≥ 108 OR (barrel AND maxEV ≥ 105)
+- `pre_hr_danger` — conversionProbability ≥ 0.10 OR pre_hr_danger / hrShaped tags
+
+### 14.5 Suggested-stage derivation
+
+```
+massive_single_contact OR (elite_barrel AND pitcher_collapse_power) → fire
+elite_barrel | two_hard_hit_balls | near_barrel | late_game_power_build → ready
+deep_fly_warning | high_bat_speed_lift | pre_hr_danger | pitcher_collapse_power → build
+otherwise → track
+```
+
+### 14.6 Additive timestamps
+
+Each enriched row carries write-once timestamps:
+
+| Field | Set when |
+|---|---|
+| `firstTrackedAt`/`Inning` | row first detected |
+| `firstBuiltAt`/`Inning` | userStage reached `build` |
+| `firstReadyAt`/`Inning` | userStage reached `ready` |
+| `firstFireAt`/`Inning` | userStage reached `fire` |
+| `hrOccurredAt`/`Inning` | row resolved as a hit |
+
+Currently derived in-memory from `detectedAt` / `signalDetectedAt` / `hitDetectedAt` so nothing in the DB has to change. The follow-up to persist these as write-once columns lives in the agent inbox.
+
+### 14.7 Official signal stage (additive grading shadow)
+
+`officialSignalStage` is set ONLY when the row reaches `ready` or `fire`. Track and Build rows are NEVER counted as official misses against the radar grade. Pairs with `officialSignalAt` and `officialSignalInning`.
+
+### 14.8 Grading sub-buckets
+
+`getHrRadarGradingHistory` adds a per-day `subBuckets` object alongside the existing headline counts:
+
+- `missedOfficialSignals` — official signals that did not produce a HR
+- `lateSignals` — signals detected after the HR
+- `uncalledHrs` — HRs hit with no official signal at all
+- `earlyWindowHrs` — HRs that came before the suggested window opened
+- `expiredTracking` — Track/Build rows that aged out without escalating
+
+Original `dead`/`missed`/`hit` counts are unchanged.
+
+### 14.9 Feature flag
+
+`HR_RADAR_GOLDMASTER_V1` is read once at module load (`hrRadarUserStage.ts:30`):
+
+- Default: **ON** (`true`)
+- OFF when env var equals `false`, `0`, `off`, or `no` (case-insensitive)
+- Never throws on bad env values
+
+When OFF: `/api/mlb/hr-radar`, `/api/mlb/hr-radar-board`, and the ladder builder emit zero v1-only fields. The frontend ladder falls back to the original five sections (no Ready bucket; original ATTACK NOW / BUILDING / WATCH labels remain). Engine math is identical in both states.
+
+`DEBUG_HR_RADAR_V1=true` (only takes effect when the main flag is on) emits one `[HR_RADAR_V1_TRACE]` JSON log per ladder row carrying the validation payload (player, oldStage, newUserStage, score10, qualifyingSignals, officialSignalStage, officialSignalAt, hrOccurredAt, wouldCountAsCalledHitV1).
+
+### 14.10 Standing rule
+
+Goldmaster v1 is purely a **surfacing/qualification** layer. Never modify HR engines (`hrAlertEngine.ts`, `evaluateHRAlert.ts`, `HRSignalBuilder.ts`), scoring math (`signalScore.ts`), or calibration. See `.local/skills/signal-engine/SKILL.md` for the agent guardrails.

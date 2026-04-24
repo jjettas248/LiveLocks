@@ -1,8 +1,8 @@
 # LiveLocks by PropPulse — Product Requirements Document
 
-**Version**: 5.0
+**Version**: 5.1
 **Last Updated**: April 2026
-**Status**: Active — NBA (archetype engine) + NCAAB Live + MLB Phase A (distribution engine)
+**Status**: Active — NBA (archetype engine) + NCAAB Live + MLB Phase A (distribution engine) + MLB HR Radar Goldmaster v1 (signal-surfacing layer)
 
 ---
 
@@ -271,6 +271,38 @@ Available to Pro, All Sports, and Admin users.
 **Experimental market dampening**: Home Runs, Batter Strikeouts, and HR Allowed receive a 0.90× edge reduction to prevent overconfident signals on less-validated markets.
 
 **Tier gating**: MLB Live is gated to All Sports (`"elite"`) subscribers. The gate is enforced server-side.
+
+### 4.6.1 MLB HR Radar (Goldmaster v1 — Track / Build / Ready / Fire ladder)
+
+The HR Radar is a dedicated tab inside MLB Live that surfaces home-run probability builds in real time across every live game. It runs on top of the existing distribution engine and does not modify any engine math, scoring, or calibration.
+
+**User-facing ladder** (Goldmaster v1):
+
+| Stage | Color | What it means |
+|---|---|---|
+| **TRACK** | gray | Conditions are forming. Not actionable yet. Use to scout. |
+| **BUILD** | blue | Pattern is building. One more quality contact or worsening pitcher context could make this playable. |
+| **READY** | orange | Playable HR setup. Contact quality and matchup context are aligned. |
+| **FIRE** | red (pulse) | Highest-conviction HR window is open right now. |
+| **RESOLVED** | gray | Resolved as a HIT, MISS, or COOLED OFF. |
+
+**0–10 score**: Every row shows a `currentSignalScore10` (0.0–10.0, one decimal). Track rows that have not yet emitted a readiness number get a display-only fallback (Track 2.5 / Build 5.5 / Ready 7.5 / Fire 9.0) so users never see a meaningless 0.0. Fallback scores are NEVER used for grading.
+
+**Qualifying signals**: Each row carries a `qualifyingSignals` array drawn from the engine's diagnostic snapshot:
+
+`elite_barrel`, `near_barrel`, `two_hard_hit_balls`, `deep_fly_warning`, `high_bat_speed_lift`, `pitcher_collapse_power`, `late_game_power_build`, `massive_single_contact`, `pre_hr_danger`.
+
+The user-stage is the STRONGER of (a) the legacy mapped stage from the existing engine state and (b) the suggested stage derived from these qualifying signals — strictly additive, never destructive.
+
+**Stage timestamps** (additive, surfaced on the wire, write-once when persisted): `firstTrackedAt/Inning`, `firstBuiltAt/Inning`, `firstReadyAt/Inning`, `firstFireAt/Inning`, `hrOccurredAt/Inning`.
+
+**Official signal stage**: `officialSignalStage` is set only when a row reaches `ready` or `fire`. Track and Build rows are never counted as "official misses" against the radar grade.
+
+**Grading sub-buckets** (additive — original `dead`/`missed`/`hit` buckets unchanged): per-day `subBuckets` on `/api/mlb/hr-radar-grading-history` adds five new keys for finer analysis: `missedOfficialSignals`, `lateSignals`, `uncalledHrs`, `earlyWindowHrs`, `expiredTracking`.
+
+**Feature flag**: `HR_RADAR_GOLDMASTER_V1` (default ON; set to `false`/`0`/`off`/`no` to disable). When OFF, the legacy and board endpoints emit zero v1-only fields and the ladder falls back to the original five sections (no Ready bucket, original ATTACK NOW / BUILDING / WATCH labels). Engine math is identical in both states.
+
+**Standing rule**: never modify HR engines, scoring math, or calibration. Goldmaster v1 is purely a surfacing/qualification layer. Detailed reference: [docs/SIGNAL_ENGINE_REFERENCE.md](docs/SIGNAL_ENGINE_REFERENCE.md).
 
 ### 4.7 Conversion Engine
 
@@ -614,6 +646,12 @@ Three lightweight filters run after calibration and before the result is returne
 | GET | `/api/mlb/live-signals/:gameId` | MLB player signals for a game |
 | GET | `/api/mlb/edge-feed` | MLB cross-game edge feed |
 | POST | `/api/mlb/calculate-manual` | MLB manual prop calculation |
+| GET | `/api/mlb/hr-radar` | Legacy HR Radar (now v1-enriched when flag is on) |
+| GET | `/api/mlb/hr-radar-board` | HR Radar live board rows |
+| GET | `/api/mlb/hr-radar/ladder` | HR Radar ladder grouped by stage (Fire / Ready / Build / Track / Resolved) |
+| GET | `/api/mlb/hr-radar-analyze/:playerId/:gameId` | AB-by-AB analyze modal |
+| GET | `/api/mlb/hr-radar-grading-history` | Per-day W/L summaries + v1 sub-buckets (last 14 days) |
+| GET | `/api/mlb/hr-radar-grading/:sessionDate` | Historical day's graded outcomes |
 
 ### Admin Only
 
@@ -646,6 +684,8 @@ Three lightweight filters run after calibration and before the result is returne
 | `TWILIO_FROM_NUMBER` | Alerts | Twilio sender number (E.164) |
 | `VAPID_PUBLIC_KEY` | Push | Web Push VAPID public key |
 | `VAPID_PRIVATE_KEY` | Push | Web Push VAPID private key |
+| `HR_RADAR_GOLDMASTER_V1` | No | Default ON. Set to `false`/`0`/`off`/`no` to disable the v1 surfacing layer (Track/Build/Ready/Fire ladder, 0–10 score, qualifying signals, additive grading sub-buckets). |
+| `DEBUG_HR_RADAR_V1` | No | When `true` AND `HR_RADAR_GOLDMASTER_V1` is on, emits one `[HR_RADAR_V1_TRACE]` JSON log per ladder row for shadow-grading validation. Off by default. |
 
 ---
 
