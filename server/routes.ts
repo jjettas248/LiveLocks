@@ -3867,21 +3867,26 @@ export async function registerRoutes(
   // ── Live Prop Signals (any game state: Q1–Q4) ───────────────────────────────
   // Game-specific endpoint that runs prop edge calculations for any live period,
   // not just halftime. Used to color box score rows/cells during the full game.
-  const liveSignalsCache = new Map<string, { ts: number; signals: any[]; engineOutput: Record<number, Record<string, any>> }>();
-  // Aligned with the dashboard's 20s client poll so the box score and the
-  // signal badges refresh in lock-step (no "dead cells" where stats update
-  // but badges sit stale). Paid Odds API calls are still gated downstream
-  // by NBA_ODDS_LIVE_TTL=30s and the per-game 10s throttle in oddsService,
-  // so dropping the outer TTL to 20s does not increase upstream spend — it
-  // just lets us recompute the engine output against the freshest box.
-  const LIVE_SIGNALS_TTL = 20_000;
+  // Per-entry TTL so a transient odds miss does not poison the cache for the
+  // full 20s window. Healthy results cache for the full poll interval; empty
+  // results (no actionable signals OR pre-flight failure) cache briefly so
+  // the next client poll re-runs and recovers automatically.
+  type LiveSignalsCacheEntry = {
+    ts: number;
+    ttl: number;
+    payload: { signals: any[]; engineOutput: Record<number, Record<string, any>>; diagnostics: any };
+  };
+  const liveSignalsCache = new Map<string, LiveSignalsCacheEntry>();
+  const LIVE_SIGNALS_TTL_HEALTHY = 20_000;     // matches client poll
+  const LIVE_SIGNALS_TTL_EMPTY   = 5_000;      // recover quickly from transient miss
+  const LIVE_SIGNALS_TTL_PREFLIGHT = 3_000;    // ESPN/odds bootstrap failure — retry fast
 
   app.get("/api/live-signals/:gameId", requireAuth, async (req, res) => {
     const gameId = req.params.gameId as string;
 
     const cached = liveSignalsCache.get(gameId);
-    if (cached && Date.now() - cached.ts < LIVE_SIGNALS_TTL) {
-      return res.json({ signals: cached.signals, engineOutput: cached.engineOutput ?? {} });
+    if (cached && Date.now() - cached.ts < cached.ttl) {
+      return res.json(cached.payload);
     }
 
     try {
@@ -3901,8 +3906,9 @@ export async function registerRoutes(
       const boxscore = summaryData.boxscore;
       const header = summaryData.header;
       if (!boxscore || !header) {
-        liveSignalsCache.set(gameId, { ts: Date.now(), signals: [], engineOutput: {} });
-        return res.json({ signals: [], engineOutput: {} });
+        const payload = { signals: [], engineOutput: {}, diagnostics: { reason: "espn_no_boxscore", inProgress: false } };
+        liveSignalsCache.set(gameId, { ts: Date.now(), ttl: LIVE_SIGNALS_TTL_PREFLIGHT, payload });
+        return res.json(payload);
       }
 
       const comp = header.competitions?.[0];
@@ -3920,8 +3926,9 @@ export async function registerRoutes(
       // Only run for genuinely in-progress games (not final, not scheduled)
       const inProgress = statusDesc === "In Progress" || statusDesc === "Halftime";
       if (!inProgress) {
-        liveSignalsCache.set(gameId, { ts: Date.now(), signals: [], engineOutput: {} });
-        return res.json({ signals: [], engineOutput: {} });
+        const payload = { signals: [], engineOutput: {}, diagnostics: { reason: "not_in_progress", statusDesc, inProgress: false, period } };
+        liveSignalsCache.set(gameId, { ts: Date.now(), ttl: LIVE_SIGNALS_TTL_PREFLIGHT, payload });
+        return res.json(payload);
       }
 
       const allDbPlayers = await storage.getPlayers();
@@ -3979,6 +3986,31 @@ export async function registerRoutes(
       const allSignals: any[] = [];
       const engineOutput: Record<number, Record<string, any>> = {};
 
+      // Per-stage diagnostics surfaced to the client so it can display *why*
+      // signals are empty (odds outage vs all-rejected vs game state) instead
+      // of rendering an indistinguishable blank.
+      const diag = {
+        inProgress: true,
+        period,
+        oddsEventResolved: !!oddsEventId,
+        oddsApiKeyAvailable: !!(process.env.ODDS_API_KEY || process.env.ODDS_API_KEY_2),
+        sgoApiKeyAvailable: !!process.env.SGO_API_KEY,
+        playersAttempted: 0,
+        oddsLineResolved: 0,
+        oddsLineMissing: 0,
+        staleLineRejected: 0,
+        zeroLineRejected: 0,
+        nonFiniteRejected: 0,
+        lowEdgeRejected: 0,
+        zeroEdgeRejected: 0,
+        noSignalRejected: 0,
+        engineErrors: 0,
+        signalsBeforeSuppression: 0,
+        signalsAfterSuppression: 0,
+        engineDurationMs: 0,
+        startedAt: Date.now(),
+      };
+
       // Build ESPN athlete ID → DB player map for O(1) lookup
       const espnIdToDbPlayer = new Map<number, typeof allDbPlayers[0]>();
       for (const p of allDbPlayers) {
@@ -4019,6 +4051,7 @@ export async function registerRoutes(
             console.warn(`[live-signals] No DB match for ESPN athlete ${espnAthId} (${playerName}) — skipping`);
             continue;
           }
+          diag.playersAttempted += 1;
 
           // Initialize engineOutput entry for this player
           if (!engineOutput[dbPlayer.id]) engineOutput[dbPlayer.id] = {};
@@ -4098,12 +4131,14 @@ export async function registerRoutes(
               }
 
               const oddsEntry = oddsPlayerCache.get(lineCacheKey);
-              if (!oddsEntry) continue;
+              if (!oddsEntry) { diag.oddsLineMissing += 1; continue; }
+              diag.oddsLineResolved += 1;
               const liveLine = oddsEntry.line;
 
               const oddsAge = Date.now() - (oddsEntry.oddsFetchedAt ?? 0);
               if (period >= 3 && oddsAge > NBA_2H_STALE_LINE_MS) {
                 console.warn(`[NBA 2H STALE LINE] ${dbPlayer.name} (${statType}) — odds ${Math.round(oddsAge / 1000)}s old, rejecting`);
+                diag.staleLineRejected += 1;
                 continue;
               }
 
@@ -4123,6 +4158,7 @@ export async function registerRoutes(
                   console.log(`[PIPELINE][NBA] engineInput: player=${dbPlayer.name} stat=${statType} skipReason=zeroLine`);
                 }
                 console.warn(`[NBA] No valid line — play suppressed`, { playerName: dbPlayer.name, statType });
+                diag.zeroLineRejected += 1;
                 continue;
               }
 
@@ -4156,7 +4192,7 @@ export async function registerRoutes(
               //
               // Step 1: finite guard — must run before any arithmetic on result.probability.
               // NaN arithmetic silently produces NaN, which would corrupt all downstream values.
-              if (!Number.isFinite(result.probability)) continue;
+              if (!Number.isFinite(result.probability)) { diag.nonFiniteRejected += 1; continue; }
 
               // Step 2: compute edge (only after finite check)
               const edge = Math.abs(result.probability - 50);
@@ -4170,6 +4206,7 @@ export async function registerRoutes(
                 if (process.env.DEBUG_PIPELINE === "true" || process.env.DEBUG_NBA === "true") {
                   console.log(`[NBA_ROUTE_FILTER]`, { player: dbPlayer.name, market: statType, prob: Math.round(result.probability * 10) / 10, edge: Math.round(edge * 10) / 10, reason: "lowEdge_route_live" });
                 }
+                diag.lowEdgeRejected += 1;
                 continue;
               }
 
@@ -4179,6 +4216,7 @@ export async function registerRoutes(
                 if (process.env.DEBUG_NBA === "true") {
                   console.log(`[NBA_FINAL_REJECT_REASON]`, { player: dbPlayer.name, market: statType, prob: result.probability, edge, reason: "zeroEdge_live" });
                 }
+                diag.zeroEdgeRejected += 1;
                 continue;
               }
 
@@ -4188,6 +4226,7 @@ export async function registerRoutes(
                 if (process.env.DEBUG_NBA === "true") {
                   console.log(`[NBA_FINAL_REJECT_REASON]`, { player: dbPlayer.name, market: statType, prob: result.probability, edge, reason: "noSignal_live", recommendedSide: result.recommendedSide });
                 }
+                diag.noSignalRejected += 1;
                 continue;
               }
 
@@ -4236,6 +4275,7 @@ export async function registerRoutes(
               });
               console.log(`[ENGINE_OUTPUT] sport=nba player=${dbPlayer.name} market=${statType} side=${engineBetDirection} prob=${(result.displayConfidence ?? result.probability).toFixed(1)} edge=${edge.toFixed(1)} proj=${result.expectedTotal ?? "null"} line=${canonicalLine} timing=live`);
             } catch (calcErr: any) {
+              diag.engineErrors += 1;
               console.warn(`[NBA][engineError] player=${dbPlayer?.name ?? playerName} stat=${statType} error=${calcErr?.message ?? String(calcErr)}`);
               if (process.env.DEBUG_PIPELINE === "true") {
                 console.log(`[PIPELINE][NBA][${oddsEventId ?? "unknown"}] engineOutput: player=${dbPlayer?.name ?? playerName} stat=${statType} skipReason=engineError error=${calcErr?.message ?? String(calcErr)}`);
@@ -4439,12 +4479,30 @@ export async function registerRoutes(
         }, storage).catch(console.warn);
       }
 
-      liveSignalsCache.set(gameId, { ts: Date.now(), signals: validatedNbaSignals, engineOutput });
-      res.json({ signals: validatedNbaSignals, engineOutput });
+      diag.signalsBeforeSuppression = preSuppressionCount;
+      diag.signalsAfterSuppression = validatedNbaSignals.length;
+      diag.engineDurationMs = Date.now() - diag.startedAt;
+
+      // Smarter cache TTL: a healthy result with actionable signals can be
+      // cached for the full client poll interval, but an empty result
+      // (transient odds miss, all gates rejected) is cached briefly so the
+      // very next client poll re-runs and recovers — preventing the "AGAIN"
+      // failure mode where a momentary miss hides badges for 20s.
+      const enginePlayersWithStats = Object.values(engineOutput).filter(
+        (p) => p && Object.keys(p).length > 0
+      ).length;
+      const ttl = (validatedNbaSignals.length > 0 || enginePlayersWithStats > 0)
+        ? LIVE_SIGNALS_TTL_HEALTHY
+        : LIVE_SIGNALS_TTL_EMPTY;
+
+      const payload = { signals: validatedNbaSignals, engineOutput, diagnostics: diag };
+      liveSignalsCache.set(gameId, { ts: Date.now(), ttl, payload });
+      res.json(payload);
     } catch (e) {
       console.warn(`[LiveSignals] Error for game ${gameId}:`, (e as any).message);
-      liveSignalsCache.set(gameId, { ts: Date.now(), signals: [], engineOutput: {} });
-      res.json({ signals: [], engineOutput: {} });
+      const payload = { signals: [], engineOutput: {}, diagnostics: { reason: "exception", error: (e as any)?.message ?? String(e), inProgress: false } };
+      liveSignalsCache.set(gameId, { ts: Date.now(), ttl: LIVE_SIGNALS_TTL_PREFLIGHT, payload });
+      res.json(payload);
     }
   });
 

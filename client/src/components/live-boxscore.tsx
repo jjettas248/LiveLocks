@@ -72,11 +72,35 @@ interface EngineEntry {
   statType: string;
 }
 
+interface LiveSignalsDiagnostics {
+  inProgress?: boolean;
+  reason?: string;
+  period?: number;
+  oddsEventResolved?: boolean;
+  oddsApiKeyAvailable?: boolean;
+  sgoApiKeyAvailable?: boolean;
+  playersAttempted?: number;
+  oddsLineResolved?: number;
+  oddsLineMissing?: number;
+  staleLineRejected?: number;
+  zeroLineRejected?: number;
+  nonFiniteRejected?: number;
+  lowEdgeRejected?: number;
+  zeroEdgeRejected?: number;
+  noSignalRejected?: number;
+  engineErrors?: number;
+  signalsBeforeSuppression?: number;
+  signalsAfterSuppression?: number;
+  engineDurationMs?: number;
+  statusDesc?: string;
+  error?: string;
+}
+
 interface LiveBoxscoreProps {
   liveStats: LivePlayerStat[] | undefined;
   engineOutput: Record<number, Record<string, EngineEntry>> | undefined;
   halftimePlaysData: { plays: any[] } | undefined;
-  liveSignalsData: { signals: any[]; engineOutput?: Record<number, Record<string, EngineEntry>> } | undefined;
+  liveSignalsData: { signals: any[]; engineOutput?: Record<number, Record<string, EngineEntry>>; diagnostics?: LiveSignalsDiagnostics } | undefined;
   selectedPlayer: { id: number; name: string } | undefined;
   watchedStatType: string;
   isLiveStatsLoading: boolean;
@@ -150,10 +174,13 @@ export function LiveBoxscore({
     .filter(s => !filterLower || s.playerName.toLowerCase().includes(filterLower));
 
   const totalLiveStatsCount = (liveStats ?? []).length;
+  // Aligned with the server's minutes>=1 threshold in /api/live-signals so a
+  // freshly-checked-in player whose signals were already computed server-side
+  // is not silently hidden by a stricter client gate.
   const badgeCount = (liveStats ?? []).filter(s => {
     const pid = s.playerId;
     if (!pid) return false;
-    if (parseMinDec(s.minutes) < 3) return false;
+    if (parseMinDec(s.minutes) < 1) return false;
     const pData = resolvedEngineOutput[pid as number];
     return pData && Object.keys(pData).length > 0;
   }).length;
@@ -162,6 +189,44 @@ export function LiveBoxscore({
   console.log(`[boxscore] engineOutput playerIds: ${Object.keys(resolvedEngineOutput).length}`);
   console.log(`[boxscore] badges rendered (all stats): ${badgeCount}`);
   console.log(`[boxscore] highlighted players: ${highlightedCount}`);
+
+  // Surface the live-signals diagnostics as a small status pill so the user
+  // can tell *why* badges may be empty (odds outage vs no actionable edge vs
+  // game state) instead of seeing an indistinguishable blank row.
+  const diagnostics = liveSignalsData?.diagnostics;
+  let statusPill: { label: string; color: string; tone: "ok" | "warn" | "info" } | null = null;
+  if (diagnostics) {
+    if (diagnostics.reason === "not_in_progress") {
+      statusPill = { label: `Game ${diagnostics.statusDesc ?? "not live"} — signals paused`, color: "#94a3b8", tone: "info" };
+    } else if (diagnostics.reason === "espn_no_boxscore" || diagnostics.reason === "exception") {
+      statusPill = { label: "Box score feed unavailable — retrying…", color: "#eab308", tone: "warn" };
+    } else if (diagnostics.inProgress) {
+      const attempted = diagnostics.playersAttempted ?? 0;
+      const surfaced = diagnostics.signalsAfterSuppression ?? 0;
+      const oddsMissing = diagnostics.oddsLineMissing ?? 0;
+      const stale = diagnostics.staleLineRejected ?? 0;
+      const totalAttempts = (diagnostics.oddsLineResolved ?? 0) + oddsMissing;
+      if (!diagnostics.oddsApiKeyAvailable && !diagnostics.sgoApiKeyAvailable) {
+        statusPill = { label: "No odds source configured", color: "#ef4444", tone: "warn" };
+      } else if (!diagnostics.oddsEventResolved) {
+        statusPill = { label: "Odds event not matched — retrying…", color: "#eab308", tone: "warn" };
+      } else if (totalAttempts > 0 && oddsMissing / Math.max(totalAttempts, 1) > 0.7) {
+        statusPill = { label: `Odds sparse (${oddsMissing}/${totalAttempts} markets missing)`, color: "#eab308", tone: "warn" };
+      } else if (surfaced === 0 && attempted > 0) {
+        const parts: string[] = [];
+        if ((diagnostics.lowEdgeRejected ?? 0) > 0) parts.push(`${diagnostics.lowEdgeRejected} low-edge`);
+        if (stale > 0) parts.push(`${stale} stale-line`);
+        if ((diagnostics.noSignalRejected ?? 0) > 0) parts.push(`${diagnostics.noSignalRejected} no-signal`);
+        statusPill = {
+          label: `No actionable edges yet${parts.length ? ` (${parts.join(", ")})` : ""}`,
+          color: "#94a3b8",
+          tone: "info",
+        };
+      } else if (surfaced > 0) {
+        statusPill = { label: `${surfaced} live signal${surfaced === 1 ? "" : "s"}`, color: "#22c55e", tone: "ok" };
+      }
+    }
+  }
 
   const getStatVal = (s: LivePlayerStat, statType: string): number => {
     if (statType === "points") return s.points;
@@ -198,6 +263,24 @@ export function LiveBoxscore({
           <ChevronDown className={`w-3.5 h-3.5 ml-1 transition-transform ${showBoxScore ? "rotate-180" : ""}`} />
         </button>
         <div className="flex items-center gap-3">
+          {statusPill && (
+            <span
+              data-testid="status-live-signals"
+              title={
+                diagnostics
+                  ? `players=${diagnostics.playersAttempted ?? 0} odds=${diagnostics.oddsLineResolved ?? 0}/${(diagnostics.oddsLineResolved ?? 0) + (diagnostics.oddsLineMissing ?? 0)} surfaced=${diagnostics.signalsAfterSuppression ?? 0} stale=${diagnostics.staleLineRejected ?? 0} lowEdge=${diagnostics.lowEdgeRejected ?? 0} noSignal=${diagnostics.noSignalRejected ?? 0} engineErrors=${diagnostics.engineErrors ?? 0} compute=${diagnostics.engineDurationMs ?? 0}ms`
+                  : undefined
+              }
+              style={{
+                color: statusPill.color,
+                border: `1px solid ${statusPill.color}55`,
+                background: `${statusPill.color}14`,
+              }}
+              className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-md cursor-help select-none whitespace-nowrap"
+            >
+              {statusPill.label}
+            </span>
+          )}
           <span className="text-xs text-muted-foreground/50">
             Auto-refreshes every 20 sec · Last: {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
           </span>
@@ -320,7 +403,10 @@ export function LiveBoxscore({
                         const signal = pid != null ? playerSignalMap.get(pid) ?? null : null;
 
                         const minutesDecimal = parseMinDec(stat.minutes);
-                        const playerEngineData = (pid != null && minutesDecimal >= 3)
+                        // Threshold aligned with server's minutes>=1 gate so a
+                        // freshly-checked-in player whose signals were already
+                        // computed server-side is not silently hidden client-side.
+                        const playerEngineData = (pid != null && minutesDecimal >= 1)
                           ? resolvedEngineOutput[pid] ?? null
                           : null;
 
@@ -334,6 +420,12 @@ export function LiveBoxscore({
                           ? { background: signalStyle.bg, boxShadow: `inset 4px 0 0 ${signalStyle.border}` }
                           : undefined;
 
+                        // Multi-signal chip strip: render every actionable
+                        // signal for this player as its own pill instead of
+                        // rotating a single badge every 45s. Watched stat is
+                        // pinned first; remaining sorted by edge desc. Up to
+                        // MAX_VISIBLE chips shown inline, the rest collapsed
+                        // into a "+N" pill whose tooltip lists them all.
                         let badgeElement: JSX.Element | null = null;
                         if (!isSelected && playerEngineData) {
                           const allEntries = Object.entries(playerEngineData)
@@ -346,49 +438,55 @@ export function LiveBoxscore({
                             });
 
                           if (allEntries.length > 0) {
-                            const rotationIndex = Math.floor(Date.now() / 45000);
-                            const watchedIdx = allEntries.findIndex(e => e.statType === watchedStatType);
-                            let pickedEntry: typeof allEntries[0];
-                            if (watchedIdx >= 0 && allEntries.length > 1) {
-                              const cycle = rotationIndex % allEntries.length;
-                              pickedEntry = cycle === 0 ? allEntries[watchedIdx] : allEntries.filter((_, i) => i !== watchedIdx)[(cycle - 1) % (allEntries.length - 1)];
-                            } else {
-                              pickedEntry = allEntries[rotationIndex % allEntries.length];
-                            }
-                            const entry = pickedEntry;
-                            const dp = Math.round(entry.probability * 10) / 10;
-                            const sigTierKey = getSignalTier(dp);
-                            const tierStyle = sigTierKey !== "none"
-                              ? SIGNAL_TIER_STYLES[sigTierKey]
-                              : SIGNAL_STYLES["teal"];
-                            const directionLabel = entry.betDirection === "UNDER" ? "U" : "O";
-                            badgeElement = (
-                              <span className="flex items-center gap-1">
+                            const MAX_VISIBLE = 3;
+                            const visible = allEntries.slice(0, MAX_VISIBLE);
+                            const overflow = allEntries.slice(MAX_VISIBLE);
+                            const renderChip = (entry: typeof allEntries[0], isPrimary: boolean) => {
+                              const dp = Math.round(entry.probability * 10) / 10;
+                              const sigTierKey = getSignalTier(dp);
+                              const tierStyle = sigTierKey !== "none"
+                                ? SIGNAL_TIER_STYLES[sigTierKey]
+                                : SIGNAL_STYLES["teal"];
+                              const directionLabel = entry.betDirection === "UNDER" ? "U" : "O";
+                              return (
                                 <span
                                   key={`${pid}-${entry.statType}`}
-                                  title={`${entry.betDirection === "UNDER" ? "UNDER" : "OVER"} ${STAT_LABEL_MAP[entry.statType] ?? entry.statType} — ${dp}% model confidence (${allEntries.length} signals)`}
+                                  title={`${entry.betDirection === "UNDER" ? "UNDER" : "OVER"} ${STAT_LABEL_MAP[entry.statType] ?? entry.statType} — ${dp}% model confidence`}
                                   data-testid={`signal-dot-${pid}-${entry.statType}`}
                                   style={{
                                     background: tierStyle.bg,
                                     color: tierStyle.dot,
                                     border: `1px solid ${tierStyle.border}`,
-                                    fontSize: "12px",
+                                    fontSize: isPrimary ? "12px" : "10.5px",
                                     fontWeight: 700,
-                                    padding: "3px 7px",
+                                    padding: isPrimary ? "3px 7px" : "2px 5px",
                                     borderRadius: "5px",
                                   }}
                                   className="cursor-help select-none whitespace-nowrap leading-none"
                                 >
                                   {directionLabel} {STAT_LABEL_MAP[entry.statType] ?? entry.statType} {dp}%
                                 </span>
-                                {allEntries.length > 1 && (
+                              );
+                            };
+                            badgeElement = (
+                              <span className="flex items-center gap-1 flex-wrap">
+                                {visible.map((entry, i) => renderChip(entry, i === 0))}
+                                {overflow.length > 0 && (
                                   <span
-                                    className="text-muted-foreground select-none"
-                                    style={{ fontSize: "9px", opacity: 0.6 }}
-                                    title={allEntries.map(e => `${e.betDirection === "UNDER" ? "U" : "O"} ${STAT_LABEL_MAP[e.statType] ?? e.statType}`).join(", ")}
-                                    data-testid={`signal-count-${pid}`}
+                                    title={overflow.map(e => `${e.betDirection === "UNDER" ? "U" : "O"} ${STAT_LABEL_MAP[e.statType] ?? e.statType} ${Math.round(e.probability * 10) / 10}%`).join("  •  ")}
+                                    data-testid={`signal-overflow-${pid}`}
+                                    style={{
+                                      fontSize: "10px",
+                                      fontWeight: 700,
+                                      padding: "2px 5px",
+                                      borderRadius: "5px",
+                                      border: "1px solid rgba(148,163,184,0.5)",
+                                      color: "rgb(148,163,184)",
+                                      background: "rgba(148,163,184,0.1)",
+                                    }}
+                                    className="cursor-help select-none whitespace-nowrap leading-none"
                                   >
-                                    +{allEntries.length - 1}
+                                    +{overflow.length}
                                   </span>
                                 )}
                               </span>
