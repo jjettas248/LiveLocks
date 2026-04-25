@@ -8,12 +8,18 @@ function getBuildVersion(): string | null {
   return v || null;
 }
 
-async function fetchServerVersion(): Promise<string | null> {
+async function fetchServerVersion(timeoutMs = 2500): Promise<string | null> {
+  // Hard timeout via AbortController so a stalled connection cannot block boot.
+  // On timeout / network failure / non-2xx, return null and let the caller
+  // fall back to the meta-tag path documented in cache-invalidation.md §6.1.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch("/api/version", {
       cache: "no-store",
       credentials: "omit",
       headers: { "Cache-Control": "no-cache" },
+      signal: controller.signal,
     });
     if (!res.ok) return null;
     const data = (await res.json()) as { version?: string };
@@ -21,6 +27,8 @@ async function fetchServerVersion(): Promise<string | null> {
     return v || null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

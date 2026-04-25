@@ -57,8 +57,24 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("message", (event) => {
-  if (event.data && event.data.type === "SKIP_WAITING") {
+  if (!event.data) return;
+  if (event.data.type === "SKIP_WAITING") {
     self.skipWaiting();
+    return;
+  }
+  if (event.data.type === "GET_VERSION") {
+    // Respond on the dedicated MessagePort if the caller used one,
+    // otherwise broadcast to all controlled clients.
+    const payload = { type: "SW_VERSION", version: APP_VERSION, cacheName: CACHE_NAME };
+    if (event.ports && event.ports[0]) {
+      try { event.ports[0].postMessage(payload); } catch {}
+      return;
+    }
+    self.clients.matchAll({ includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        try { client.postMessage(payload); } catch {}
+      }
+    });
   }
 });
 

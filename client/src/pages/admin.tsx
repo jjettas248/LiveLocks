@@ -7,6 +7,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCard, CheckCircle, AlertCircle, Trash2, Loader2, Settings, Bell, ChevronUp, Send, Target, BarChart3 } from "lucide-react";
 import { CalibrationDashboard } from "@/components/calibration-dashboard";
 import { UnifiedAnalyticsPanel } from "@/components/unified-analytics";
+import { DiagnosticsFooter } from "@/components/admin/DiagnosticsFooter";
 
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
@@ -798,6 +799,9 @@ export default function AdminPage() {
 
         {/* ROI Tab */}
         {activeTab === "roi" && <AdminROIPanel />}
+
+        {/* Build / cache diagnostics — always visible at bottom of admin */}
+        <DiagnosticsFooter />
 
       </div>
     </div>
