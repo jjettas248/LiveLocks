@@ -4422,11 +4422,48 @@ export async function registerRoutes(
                 continue;
               }
 
-              // Step 4b: no-conviction guard — noSignal or NO_SIGNAL plays must never enter
-              // allSignals or engineOutput; they produce zero side effects.
-              if (result.noSignal || result.recommendedSide === "NO_SIGNAL") {
+              // Step 4b: no-conviction guard.
+              //
+              // The engine's `noSignal` flag fires whenever ANY of the
+              // following are true:
+              //   • rawSide === "NO_SIGNAL"            (no direction at all)
+              //   • preCalibrationNoSignal             (pre-cal modelEdgeRaw < 0.04)
+              //   • displayConfidence < 58             (confidence floor)
+              //   • modelEdgeFinal < 4                 (post-cal edge floor)
+              //   • hasProjectionMismatch              (direction-projection conflict)
+              //
+              // Previously the live route skipped EVERY noSignal play, which
+              // meant the live box score effectively required edge ≥ 8 to
+              // surface anything — far stricter than the halftime route
+              // (which only requires edge ≥ 4 + recommendedSide ≠ NO_SIGNAL).
+              // Result: live games in Q1/Q2/Q3/Q4 commonly showed "no plays"
+              // even when the engine had clear directional leans at edge 5–7.
+              //
+              // New rule: still skip true NO_SIGNAL (no direction) and
+              // projection-mismatch plays (internally inconsistent), but
+              // surface noSignal plays whose edge is at or above the route's
+              // own actionable floor (edge ≥ 6). This aligns the live route
+              // with halftime Tier C semantics without touching the engine.
+              if (result.recommendedSide === "NO_SIGNAL") {
                 if (process.env.DEBUG_NBA === "true") {
-                  console.log(`[NBA_FINAL_REJECT_REASON]`, { player: dbPlayer.name, market: statType, prob: result.probability, edge, reason: "noSignal_live", recommendedSide: result.recommendedSide });
+                  console.log(`[NBA_FINAL_REJECT_REASON]`, { player: dbPlayer.name, market: statType, prob: result.probability, edge, reason: "noDirection_live", recommendedSide: result.recommendedSide });
+                }
+                diag.noSignalRejected += 1;
+                continue;
+              }
+              const projectionMismatch =
+                Array.isArray((result as any).engineDiagnostics?.warnings) &&
+                (result as any).engineDiagnostics.warnings.includes("direction_projection_mismatch");
+              if (projectionMismatch) {
+                if (process.env.DEBUG_NBA === "true") {
+                  console.log(`[NBA_FINAL_REJECT_REASON]`, { player: dbPlayer.name, market: statType, prob: result.probability, edge, reason: "projectionMismatch_live" });
+                }
+                diag.noSignalRejected += 1;
+                continue;
+              }
+              if (result.noSignal && edge < 6) {
+                if (process.env.DEBUG_NBA === "true") {
+                  console.log(`[NBA_FINAL_REJECT_REASON]`, { player: dbPlayer.name, market: statType, prob: result.probability, edge, reason: "noSignal_lowEdge_live" });
                 }
                 diag.noSignalRejected += 1;
                 continue;
