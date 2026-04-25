@@ -5623,39 +5623,24 @@ export async function registerRoutes(
                     true2hLinesFound++;
                   }
                 } else {
-                  // Phase 3 — no real live 2H line. Try to derive one from
-                  // season-average minus halftime stat. SGO and pregame paths
-                  // are intentionally skipped (SGO has no live-2H freshness
-                  // flag; pregame would re-introduce stale closing lines).
-                  // Derived lines are clearly labelled and confidence-capped.
-                  const derived = deriveSecondHalfLine({
-                    fullGameLine: null,
-                    halftimeStat,
-                    seasonAvg,
-                    currentMinutes: minutes,
-                    projectedSecondHalfValue: null,
-                  });
-                  if (derived != null && derived > 0) {
-                    derivedEntry = {
-                      line: derived,
-                      bookKeys: [],
-                      isDegraded: true,
-                      oddsFetchedAt: Date.now(),
-                      source: "derived_2h_fallback",
-                    };
-                    liveLine = derived;
-                    lineIsDegraded = true;
-                    oddsSourceTag = "derived_2h_fallback";
-                    derivedFallbackLines++;
-                    if (process.env.DEBUG_NBA === "true") {
-                      console.log(`[NBA_HT_DERIVED_FALLBACK]`, JSON.stringify({
-                        playerName, statType, derivedLine: derived, halftimeStat, seasonAvg,
-                      }));
-                    }
-                  } else {
-                    skippedNoLine++;
-                    continue; // Even derived path could not produce a usable line.
+                  // ENGINE PROTOCOL — STRICT LIVE 2H ONLY (matches the contract
+                  // declared at line ~5541). When no real live 2H book line is
+                  // available we MUST skip the play. Synthetic derived lines
+                  // (season-average minus halftime stat, full-game minus H1,
+                  // etc.) are NOT allowed to surface as bettable plays — they
+                  // produce phantom signals graded against a line that doesn't
+                  // exist at any sportsbook. The previous "Phase 3 derived
+                  // fallback" violated this protocol and is intentionally
+                  // removed. The deriveSecondHalfLine helper above is kept
+                  // only for potential internal calculator/audit use.
+                  skippedNoLine++;
+                  if (process.env.DEBUG_NBA === "true") {
+                    console.log(`[NBA_HT_NO_LIVE_LINE_SKIP]`, JSON.stringify({
+                      playerName, statType, halftimeStat, seasonAvg,
+                      reason: "no_live_2h_book_line_protocol",
+                    }));
                   }
+                  continue;
                 }
                 // Note: lineIsDegraded is no longer auto-rejected here. Soft-stale
                 // book lines (Phase 5) and derived fallbacks (Phase 3) both ride
