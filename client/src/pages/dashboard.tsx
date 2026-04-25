@@ -892,10 +892,28 @@ export default function Dashboard() {
   const [unlockedGameIds, setUnlockedGameIds] = useState<Set<string>>(new Set());
   const [unlocking2hGame, setUnlocking2hGame] = useState<string | null>(null);
 
-  const { data: halftimePlaysData, isLoading: isHalftimePlaysLoading, refetch: refetchHalftimePlays } = useQuery<{ plays: any[]; message?: string }>({
+  const { data: halftimePlaysData, isLoading: isHalftimePlaysLoading, refetch: refetchHalftimePlays } = useQuery<{
+    plays: any[];
+    message?: string;
+    eligibleGames?: number;
+    eligibleGameDetails?: Array<{
+      gameId: string;
+      homeTeamAbbr: string;
+      awayTeamAbbr: string;
+      homeFull: string;
+      awayFull: string;
+      homeScore: number;
+      awayScore: number;
+      halftimePhase?: "halftime" | "end_2q" | "early_3q" | "none";
+      isEarly3QGrace?: boolean;
+    }>;
+    diagnostics?: Record<string, number>;
+  }>({
     queryKey: ["/api/halftime-plays"],
-    refetchInterval: 60_000,
-    staleTime: 45_000,
+    // Phase 9: halftime is a short window. Poll fast so eligibility flips
+    // (end of Q2 → halftime → early Q3) propagate within seconds.
+    refetchInterval: 15_000,
+    staleTime: 5_000,
   });
 
   useEffect(() => {
@@ -3423,27 +3441,48 @@ export default function Dashboard() {
             <div className={showParlay && !isMobile ? "bg-card border border-border rounded-xl p-5 flex-1 min-w-0" : "bg-card border border-border rounded-xl p-5"}>
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h2 className="text-lg font-semibold flex items-center gap-2 flex-wrap">
-                    <Star className="w-5 h-5 text-primary" />
-                    2H Plays —{" "}
-                    <span
-                      data-testid="text-halftime-count"
-                      className={halftimeCountPulse ? "halftime-count-pulse" : ""}
-                      style={{ display: "inline-block", color: "#00d4aa" }}
-                      key={visibleHalftimeGroups.length}
-                    >
-                      {visibleHalftimeGroups.length}
-                    </span>
-                    {" "}Game{visibleHalftimeGroups.length !== 1 ? "s" : ""} at Halftime
-                    {Math.max(1, Math.ceil(visibleHalftimeGroups.length / 4)) > 1 && (
-                      <span className="text-sm font-normal text-muted-foreground">
-                        · Page {currentHalftimePage} of {Math.max(1, Math.ceil(visibleHalftimeGroups.length / 4))}
-                      </span>
-                    )}
-                  </h2>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Top plays by probability edge across all halftime games. Includes overs and unders.
-                  </p>
+                  {(() => {
+                    // Phase 8 — UI count must reflect detected eligible games
+                    // even when 0 plays are returned. Fall back to the rendered
+                    // group count when the server hasn't sent eligibleGames yet.
+                    const playCount = (halftimePlaysData?.plays ?? []).length;
+                    const serverEligible = halftimePlaysData?.eligibleGames;
+                    const eligibleCount = typeof serverEligible === "number"
+                      ? serverEligible
+                      : visibleHalftimeGroups.length;
+                    return (
+                      <>
+                        <h2 className="text-lg font-semibold flex items-center gap-2 flex-wrap">
+                          <Star className="w-5 h-5 text-primary" />
+                          2H Plays —{" "}
+                          <span
+                            data-testid="text-halftime-play-count"
+                            className={halftimeCountPulse ? "halftime-count-pulse" : ""}
+                            style={{ display: "inline-block", color: "#00d4aa" }}
+                            key={`p-${playCount}`}
+                          >
+                            {playCount}
+                          </span>
+                          {" "}play{playCount !== 1 ? "s" : ""}
+                          <span
+                            data-testid="text-halftime-count"
+                            className="text-sm font-normal text-muted-foreground"
+                            key={`g-${eligibleCount}`}
+                          >
+                            · {eligibleCount} game{eligibleCount !== 1 ? "s" : ""} eligible
+                          </span>
+                          {Math.max(1, Math.ceil(visibleHalftimeGroups.length / 4)) > 1 && (
+                            <span className="text-sm font-normal text-muted-foreground">
+                              · Page {currentHalftimePage} of {Math.max(1, Math.ceil(visibleHalftimeGroups.length / 4))}
+                            </span>
+                          )}
+                        </h2>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Top plays by probability edge across all halftime games. Includes overs and unders.
+                        </p>
+                      </>
+                    );
+                  })()}
                 </div>
                 <button
                   onClick={() => refetchHalftimePlays()}
@@ -3556,7 +3595,11 @@ export default function Dashboard() {
                 <div className="text-center py-12 text-muted-foreground">
                   <Star className="w-8 h-8 mx-auto mb-3 opacity-30" />
                   <p className="text-sm">{halftimePlaysData.message}</p>
-                  <p className="text-xs text-muted-foreground/60 mt-1">Check back when games are at halftime.</p>
+                  <p className="text-xs text-muted-foreground/60 mt-1">
+                    {(halftimePlaysData?.eligibleGames ?? 0) > 0
+                      ? "2H lines / engine output will appear automatically."
+                      : "Check back when games are at halftime."}
+                  </p>
                 </div>
               )}
 
@@ -3841,16 +3884,11 @@ export default function Dashboard() {
                                     if (import.meta.env.DEV && play.probability == null) {
                                       console.error("Missing engine probability for play", play);
                                     }
-                                    // Client safety net — server should never surface a
-                                    // degraded-line halftime card under the strict-live
-                                    // odds contract, but suppress just in case rather
-                                    // than rendering a "Stale Line" badge at halftime.
-                                    if (play.timingContext === "halftime" && play.isDegraded) {
-                                      if (import.meta.env.DEV) {
-                                        console.warn("[NBA_HT_CLIENT_GUARD] Suppressed degraded halftime card", play);
-                                      }
-                                      return null;
-                                    }
+                                    // NBA 2H Goldmaster Repair — degraded halftime cards
+                                    // (stale line OR derived 2H fallback) ARE allowed to render.
+                                    // Server caps confidence at 72 for these and the card UI
+                                    // shows the "Stale Line" / derived badge so the user can
+                                    // judge accordingly. Removed prior client-side suppression.
                                     const isLocked = isFreeUser && idx >= visibleEdgeLimit;
                                     const isOver = play.betDirection === "over";
                                     const isInjured = !isLocked && injuredPlayerNames.has(play.playerName.toLowerCase());
@@ -3963,9 +4001,17 @@ export default function Dashboard() {
                                               : { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#71717a" }
                                             }
                                           >
-                                            {hasLiveLine ? "Live Line" : "Season Avg"}
+                                            {hasLiveLine
+                                              ? "Live Line"
+                                              : play.isDerivedLine
+                                                ? "Derived Line"
+                                                : "Season Avg"}
                                           </span>
-                                          {play.isDegraded && (
+                                          {/* Stale Line badge ONLY for genuinely stale book lines.
+                                              Derived fallback cards already get the dedicated
+                                              "Derived" badge below — surfacing both creates
+                                              contradictory provenance text. */}
+                                          {play.isDegraded && !play.isDerivedLine && (
                                             <TooltipProvider>
                                               <Tooltip>
                                                 <TooltipTrigger asChild>

@@ -4825,6 +4825,73 @@ export async function registerRoutes(
         return Number(c) || 0;
       };
 
+      // ── Phase 1: tolerant halftime/early-3Q detection ──────────────────────
+      // Returns isEligible + phase so the route can keep generating 2H plays
+      // through the brittle end-of-Q2 → halftime → start-of-Q3 transition that
+      // ESPN reports inconsistently across status fields.
+      const isNbaHalftimeWindow = (args: {
+        period: number;
+        clockSeconds: number;
+        statusDesc?: string;
+        statusType?: string;
+        statusState?: string;
+      }): { isEligible: boolean; phase: "halftime" | "end_2q" | "early_3q" | "none" } => {
+        const desc = String(args.statusDesc ?? "").toLowerCase();
+        const type = String(args.statusType ?? "").toLowerCase();
+        const state = String(args.statusState ?? "").toLowerCase();
+
+        const explicitHalftime =
+          desc.includes("half") ||
+          type.includes("half") ||
+          state.includes("half");
+
+        const endSecondQuarter =
+          args.period === 2 &&
+          args.clockSeconds <= 15 &&
+          (
+            desc.includes("end") ||
+            type.includes("end") ||
+            desc.includes("halftime") ||
+            args.clockSeconds <= 5
+          );
+
+        // Early-Q3 grace: keep 2H plays alive for the first 2 minutes of Q3
+        // (clock counts down from 720s, so >=600s means <=2 min elapsed).
+        const earlyThirdQuarter =
+          args.period === 3 &&
+          args.clockSeconds >= 600;
+
+        if (explicitHalftime) return { isEligible: true, phase: "halftime" };
+        if (endSecondQuarter) return { isEligible: true, phase: "end_2q" };
+        if (earlyThirdQuarter) return { isEligible: true, phase: "early_3q" };
+
+        return { isEligible: false, phase: "none" };
+      }
+
+      // ── Phase 4: derived 2H line helper ────────────────────────────────────
+      // Used only as a fallback when no real live 2H book line is available.
+      // Output is honestly labelled `lineSource: "derived_2h_fallback"` and
+      // `isDegraded: true` upstream — it is NEVER passed off as a book line.
+      const deriveSecondHalfLine = (args: {
+        fullGameLine?: number | null;
+        halftimeStat: number;
+        seasonAvg: number;
+        currentMinutes: number;
+        projectedSecondHalfValue?: number | null;
+      }): number | null => {
+        if (args.fullGameLine && args.fullGameLine > args.halftimeStat) {
+          return Math.round((args.fullGameLine - args.halftimeStat) * 2) / 2;
+        }
+
+        const remainingEstimate =
+          args.projectedSecondHalfValue ??
+          Math.max(0, args.seasonAvg - args.halftimeStat);
+
+        if (!Number.isFinite(remainingEstimate) || remainingEstimate <= 0) return null;
+
+        return Math.max(0.5, Math.round(remainingEstimate * 2) / 2);
+      }
+
       const halftimeGames: any[] = [];
       for (const event of (gamesData.events ?? [])) {
         const comp = event.competitions?.[0];
@@ -4850,18 +4917,18 @@ export async function registerRoutes(
           statusState,
         });
 
-        const isHalftime =
-          (period === 2 && clockSeconds <= 10) ||
-          statusDesc === "Halftime" ||
-          statusDesc === "HALF" ||
-          statusDesc === "HALFTIME" ||
-          statusType === "STATUS_HALFTIME" ||
-          statusState === "halftime" ||
-          (period === 3 && clockSeconds === 720);
+        const htCheck = isNbaHalftimeWindow({
+          period,
+          clockSeconds,
+          statusDesc,
+          statusType,
+          statusState,
+        });
 
         console.log("[HALFTIME_DETECTION_RESULT]", {
           game: `${awayTeamDisplay}@${homeTeamDisplay}`,
-          isHalftime,
+          isHalftime: htCheck.isEligible,
+          phase: htCheck.phase,
           period,
           clock,
           statusDesc,
@@ -4869,7 +4936,7 @@ export async function registerRoutes(
           statusState,
         });
 
-        if (!isHalftime) continue;
+        if (!htCheck.isEligible) continue;
 
         const home = comp?.competitors?.find((c: any) => c.homeAway === "home");
         const away = comp?.competitors?.find((c: any) => c.homeAway === "away");
@@ -4881,6 +4948,10 @@ export async function registerRoutes(
           awayScore: parseInt(away?.score ?? "0", 10),
           homeFull: home?.team?.displayName ?? "",
           awayFull: away?.team?.displayName ?? "",
+          // Phase 2: phase metadata flows into per-play context so downstream
+          // can downgrade early-Q3 grace plays if needed.
+          halftimePhase: htCheck.phase,
+          isEarly3QGrace: htCheck.phase === "early_3q",
         });
       }
 
@@ -4892,15 +4963,34 @@ export async function registerRoutes(
       });
 
       if (halftimeGames.length === 0) {
+        const emptyDiagnostics = {
+          halftimeGamesDetected: 0,
+          eligibleGames: 0,
+          playersParsed: 0,
+          oddsAttempts: 0,
+          true2hLinesFound: 0,
+          sgoLinesFound: 0,
+          derivedFallbackLines: 0,
+          skippedNoLine: 0,
+          skippedStaleLine: 0,
+          skippedAlreadyCleared: 0,
+          playsGenerated: 0,
+        };
         console.log("[HT_RESPONSE_ASSERT]", {
           totalGames: (gamesData.events ?? []).length,
           halftimeGames: 0,
           parsedMarkets: 0,
           secondHalfMarkets: 0,
-          playsGenerated: 0,
+          ...emptyDiagnostics,
         });
         console.log("STATUS: HALFTIME PIPELINE STILL BLOCKED — REASON: halftimeDetected");
-        return res.json({ plays: [], message: "No games at halftime right now." });
+        return res.json({
+          plays: [],
+          message: "No games at halftime right now.",
+          eligibleGames: 0,
+          eligibleGameDetails: [],
+          diagnostics: emptyDiagnostics,
+        });
       }
 
       // Load all DB players once — avoid repeated DB calls per athlete
@@ -4913,6 +5003,14 @@ export async function registerRoutes(
       let totalOddsAttempts = 0;       // Total player+statType pairs for which in-play odds lookup was attempted
       let secondHalfMarketsFound = 0;  // Pairs where in-play (2H) books were returned
       let zeroBookInPlayCount = 0;     // Pairs where in-play returned 0 books and !isDegraded (absence signal)
+      // Phase 7 — pipeline-reason counters surfaced under [HT_RESPONSE_ASSERT] and on the response.
+      let playersParsed = 0;
+      let true2hLinesFound = 0;
+      let sgoLinesFound = 0;            // SGO path is currently disabled — counter reserved for the future
+      let derivedFallbackLines = 0;
+      let skippedNoLine = 0;
+      let skippedStaleLine = 0;
+      let skippedAlreadyCleared = 0;
       // secondHalfSourceAbsenceConfirmed computed AFTER loop: true only when ALL in-play lookups confirmed absent
       const allPlays: any[] = [];
       const volatilePlays: any[] = []; // Plays suppressed by degraded-line VALUE-tier filter — used in low-supply mode
@@ -4936,7 +5034,11 @@ export async function registerRoutes(
         // Resolve Odds API event ID for this game (for live prop lines)
         let oddsEventId: string | null = null;
         const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[]; isDegraded: boolean; oddsFetchedAt: number; source?: string } | null>();
-        const HT_STALE_LINE_MS = 120_000;
+        // Phase 5: book lines can be temporarily pulled/reposted around halftime.
+        // Soft-stale window (5 min) accepts the line but flags it as degraded so
+        // the engine downgrades confidence. Hard-stale (10 min) hard-rejects.
+        const HT_STALE_LINE_MS = 5 * 60 * 1000;
+        const HT_HARD_STALE_LINE_MS = 10 * 60 * 1000;
         try {
           const { resolveOddsEventId: resolveId } = await import("./oddsService");
           oddsEventId = await resolveId(game.homeTeamAbbr, game.awayTeamAbbr);
@@ -5163,33 +5265,79 @@ export async function registerRoutes(
                     oddsPlayerCache.set(lineCacheKey, null);
                   }
                 }
+                playersParsed++;
                 const oddsEntry = oddsPlayerCache.get(lineCacheKey);
+                let derivedEntry: { line: number; bookKeys: string[]; isDegraded: boolean; oddsFetchedAt: number; source?: string } | null = null;
                 if (oddsEntry != null) {
                   liveLine = oddsEntry.line;
                   lineIsDegraded = oddsEntry.isDegraded;
                   oddsSourceTag = (oddsEntry as any).source ?? "live_2h_odds_api";
+                  if (oddsSourceTag === "live_2h_odds_api" && !lineIsDegraded) {
+                    true2hLinesFound++;
+                  }
                 } else {
-                  continue; // No fresh live 2H line — never fabricate one
+                  // Phase 3 — no real live 2H line. Try to derive one from
+                  // season-average minus halftime stat. SGO and pregame paths
+                  // are intentionally skipped (SGO has no live-2H freshness
+                  // flag; pregame would re-introduce stale closing lines).
+                  // Derived lines are clearly labelled and confidence-capped.
+                  const derived = deriveSecondHalfLine({
+                    fullGameLine: null,
+                    halftimeStat,
+                    seasonAvg,
+                    currentMinutes: minutes,
+                    projectedSecondHalfValue: null,
+                  });
+                  if (derived != null && derived > 0) {
+                    derivedEntry = {
+                      line: derived,
+                      bookKeys: [],
+                      isDegraded: true,
+                      oddsFetchedAt: Date.now(),
+                      source: "derived_2h_fallback",
+                    };
+                    liveLine = derived;
+                    lineIsDegraded = true;
+                    oddsSourceTag = "derived_2h_fallback";
+                    derivedFallbackLines++;
+                    if (process.env.DEBUG_NBA === "true") {
+                      console.log(`[NBA_HT_DERIVED_FALLBACK]`, JSON.stringify({
+                        playerName, statType, derivedLine: derived, halftimeStat, seasonAvg,
+                      }));
+                    }
+                  } else {
+                    skippedNoLine++;
+                    continue; // Even derived path could not produce a usable line.
+                  }
                 }
-
-                // Hard rejections (defense in depth — strict mode should already
-                // have prevented these from reaching here):
-                if (lineIsDegraded) {
+                // Note: lineIsDegraded is no longer auto-rejected here. Soft-stale
+                // book lines (Phase 5) and derived fallbacks (Phase 3) both ride
+                // the degraded flag; downstream tier reduction handles confidence.
+                // Use the effective entry (real book entry OR the derived fallback).
+                const effectiveEntry = oddsEntry ?? derivedEntry!;
+                const htOddsAge = Date.now() - (effectiveEntry.oddsFetchedAt ?? 0);
+                // Phase 5: hard-reject only if line is older than the absolute
+                // 10-min ceiling. The 5-min soft window is enforced upstream by
+                // getPlayerOdds(maxAgeMs); anything that slipped past that gate
+                // and survives this hard cap will be flagged as degraded below.
+                if (!Number.isFinite(htOddsAge) || htOddsAge < 0 || htOddsAge > HT_HARD_STALE_LINE_MS) {
+                  skippedStaleLine++;
                   if (process.env.DEBUG_NBA === "true") {
                     console.warn(`[NBA_HT_LINE_REJECTED]`, JSON.stringify({
-                      playerName, statType, liveLine, rejectReason: "degraded_line",
+                      playerName, statType, ageMs: htOddsAge, maxAgeMs: HT_HARD_STALE_LINE_MS, rejectReason: "stale_line_hard_cap",
                     }));
                   }
                   continue;
                 }
-                const htOddsAge = Date.now() - (oddsEntry.oddsFetchedAt ?? 0);
-                if (!Number.isFinite(htOddsAge) || htOddsAge < 0 || htOddsAge > HT_STALE_LINE_MS) {
+                // Soft-stale (5-10 min): keep the line but flag as degraded so
+                // downstream confidence-tier reduction kicks in.
+                if (htOddsAge > HT_STALE_LINE_MS) {
+                  lineIsDegraded = true;
                   if (process.env.DEBUG_NBA === "true") {
-                    console.warn(`[NBA_HT_LINE_REJECTED]`, JSON.stringify({
-                      playerName, statType, ageMs: htOddsAge, maxAgeMs: HT_STALE_LINE_MS, rejectReason: "stale_line",
+                    console.log(`[NBA_HT_LINE_SOFT_STALE]`, JSON.stringify({
+                      playerName, statType, ageMs: htOddsAge, softCapMs: HT_STALE_LINE_MS,
                     }));
                   }
-                  continue;
                 }
 
                 // Zero-line guard — a line of 0 is invalid and must not be passed to the engine.
@@ -5206,7 +5354,10 @@ export async function registerRoutes(
                 // Skip plays where the line has already been cleared at halftime —
                 // these are not actionable (over already won, under already lost).
                 // Check BEFORE running calculateProbability to save compute cost.
-                if (halftimeStat >= liveLine) continue;
+                if (halftimeStat >= liveLine) {
+                  skippedAlreadyCleared++;
+                  continue;
+                }
 
                 if (process.env.DEBUG_PIPELINE === "true") {
                   console.log(`[PIPELINE][NBA][HT] engineInput: player=${dbPlayer.name} stat=${statType} line=${liveLine} halftimeStat=${halftimeStat}`);
@@ -5278,9 +5429,6 @@ export async function registerRoutes(
                   }
                 }
 
-                const cacheKey2 = `${playerName}|${statType}`;
-                const oddsEntry2 = oddsPlayerCache.get(cacheKey2);
-
                 // NO_SIGNAL guard: skip plays where engine has no directional conviction
                 if (result.recommendedSide === "NO_SIGNAL") {
                   console.log(`[HT_NO_SIGNAL] Skipping ${dbPlayer.name} (${statType}) — engine returned NO_SIGNAL`);
@@ -5290,7 +5438,13 @@ export async function registerRoutes(
                 // Use displayConfidence (always direction-correct, >= 50 for any valid signal)
                 // so filters, sorts, and client display all work symmetrically for OVER and UNDER.
                 // Raw result.probability (<50 for UNDER plays) is NOT sent to client.
-                const displayConfidence = (result as any).displayConfidence ?? result.probability;
+                const rawDisplayConfidence = (result as any).displayConfidence ?? result.probability;
+                // Phase 6 — degraded/derived plays cannot be presented as elite.
+                // Cap displayConfidence at 72 so the UI never shows an inflated
+                // confidence number on top of an unverified line.
+                const displayConfidence = lineIsDegraded
+                  ? Math.min(rawDisplayConfidence, 72)
+                  : rawDisplayConfidence;
                 const betDirection = (result as any).recommendedSide?.toLowerCase() ?? (result.probability > 50 ? "over" : "under");
 
                 // Per-source provenance — every surfaced halftime play must
@@ -5355,18 +5509,31 @@ export async function registerRoutes(
                   halftimeMinutes: Math.round(minutes * 10) / 10,
                   halftimeFouls: parseStat(statMap["pf"]),
                   line: liveLine,
-                  // lineSource kept as "odds_api" for legacy client checks
-                  // (e.g. dashboard.tsx hasLiveLine flag). The fine-grained
-                  // provenance ("live_2h_odds_api") is on sourceProvenance.oddsSource.
-                  lineSource: "odds_api",
-                  bookKeys: oddsEntry2?.bookKeys ?? [],
+                  // lineSource: "odds_api" preserved for legacy client checks
+                  // (e.g. dashboard.tsx hasLiveLine flag) when the line is a real
+                  // book line. Derived fallbacks are honestly tagged so the UI
+                  // can show "no book line — model-derived" rather than implying
+                  // a sportsbook posted this number.
+                  lineSource: oddsSourceTag === "derived_2h_fallback"
+                    ? "derived_2h_fallback"
+                    : "odds_api",
+                  bookKeys: effectiveEntry?.bookKeys ?? [],
                   probability: displayConfidence,
                   rawProbability: result.probability,
                   edge,
                   expectedTotal: result.expectedTotal,
                   impliedProbability: (result as any).impliedProbability ?? null,
                   betDirection,
-                  isDegraded: false, // strict mode contract: halftime never surfaces degraded
+                  isDegraded: lineIsDegraded,
+                  // Surface a dedicated derived flag so the dashboard's existing
+                  // "Derived" badge (keyed off play.isDerivedLine) lights up for
+                  // 2H fallback cards. isDegraded stays true so the stale/cap
+                  // policies still apply downstream.
+                  isDerivedLine: oddsSourceTag === "derived_2h_fallback",
+                  // Phase 2 — pass game-level halftime phase down so the client
+                  // can surface "Early Q3 grace" badges without re-detecting.
+                  halftimePhase: (game as any).halftimePhase ?? "halftime",
+                  isEarly3QGrace: (game as any).isEarly3QGrace === true,
                   engineGeneratedAt: Date.now(),
                   timingContext: "halftime" as const,
                   engineDiagnostics: (result as any).engineDiagnostics ?? undefined,
@@ -5496,6 +5663,21 @@ export async function registerRoutes(
       const secondHalfSourceAbsenceConfirmed =
         totalOddsAttempts > 0 && zeroBookInPlayCount === totalOddsAttempts;
 
+      // Phase 7 — pipeline reason counters (truthful per-stage view, not derived from topPlays)
+      const diagnostics = {
+        halftimeGamesDetected: halftimeGames.length,
+        eligibleGames: halftimeGames.length,
+        playersParsed,
+        oddsAttempts: totalOddsAttempts,
+        true2hLinesFound,
+        sgoLinesFound,
+        derivedFallbackLines,
+        skippedNoLine,
+        skippedStaleLine,
+        skippedAlreadyCleared,
+        playsGenerated,
+      };
+
       // [HT_RESPONSE_ASSERT] — uses actual parsed market counters (totalOddsAttempts, secondHalfMarketsFound)
       // not counts derived from topPlays, to give truthful pipeline checkpoint
       console.log("[HT_RESPONSE_ASSERT]", {
@@ -5503,7 +5685,7 @@ export async function registerRoutes(
         halftimeGames: halftimeGames.length,
         parsedMarkets: totalOddsAttempts,
         secondHalfMarkets: secondHalfMarketsFound,
-        playsGenerated,
+        ...diagnostics,
       });
 
       // secondHalfValid: 2H lines present OR source confirmed absent (valid absence is not a code failure)
@@ -5558,7 +5740,32 @@ export async function registerRoutes(
         })),
       });
 
-      res.json({ plays: topPlays });
+      // Phase 8 — surface eligibility + diagnostics so the UI can show
+      // "1 game eligible · waiting for 2H lines" even when topPlays is empty.
+      const eligibleGameDetails = halftimeGames.map(g => ({
+        gameId: g.gameId,
+        homeTeamAbbr: g.homeTeamAbbr,
+        awayTeamAbbr: g.awayTeamAbbr,
+        homeFull: g.homeFull,
+        awayFull: g.awayFull,
+        homeScore: g.homeScore,
+        awayScore: g.awayScore,
+        halftimePhase: g.halftimePhase,
+        isEarly3QGrace: g.isEarly3QGrace === true,
+      }));
+      const responsePayload: any = {
+        plays: topPlays,
+        eligibleGames: halftimeGames.length,
+        eligibleGameDetails,
+        diagnostics,
+      };
+      if (topPlays.length === 0 && halftimeGames.length > 0) {
+        responsePayload.message =
+          halftimeGames.length === 1
+            ? "Game detected at halftime. Waiting for 2H lines / engine output."
+            : `${halftimeGames.length} games detected at halftime. Waiting for 2H lines / engine output.`;
+      }
+      res.json(responsePayload);
       checkAndSendAlerts(topPlays, storage).catch(console.warn);
       for (const p of topPlays) {
         const pDir = (p.betDirection ?? "").toUpperCase();

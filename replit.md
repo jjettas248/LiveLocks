@@ -135,3 +135,17 @@ A permanent validation framework that encodes `NBA_Model_Logic.md` into executab
 
 ### Drift Types Detected
 ARCHETYPE_DRIFT, BLENDED_RATE_DRIFT, CALIBRATION_DRIFT, FRAGILITY_DRIFT, SAFETY_CEILING_DRIFT, DIRECTIONAL_INTEGRITY_FAILURE, PROBABILITY_BOUNDS_FAILURE, OUTPUT_CONTRACT_FAILURE, COVARIANCE_DRIFT, CONSTANT_DRIFT
+
+## NBA 2H Plays Goldmaster Repair (Apr 2026)
+- **Goal**: Restore the `/api/halftime-plays` endpoint after it silently produced empty payloads in real games due to overly strict eligibility + odds gating. Engine math (storage.calculateProbability) and MLB/NCAAB pipelines were intentionally untouched.
+- **Phase 1 — Halftime window helper**: Replaced narrow `isHalftime` boolean with `isNbaHalftimeWindow(game)` returning `{isEligible, phase: "halftime" | "end_2q" | "early_3q" | "none"}`. Eligibility now spans late Q2 → halftime → first ~3:30 of Q3 to absorb scoreboard lag.
+- **Phase 2 — Per-game phase propagation**: `halftimePhase` and `isEarly3QGrace` are stamped on every halftimeGame entry and every play surfaced to the dashboard.
+- **Phase 3/4 — Derived 2H fallback**: When the live in-play 2H book line is missing, the route synthesizes one via `deriveSecondHalfLine(seasonAvg, halftimeStat)`. The synthetic entry is honestly tagged `lineSource: "derived_2h_fallback"`, `bookKeys: []`, `isDegraded: true`, `isDerivedLine: true` — never passed off as a posted book line. Pre-game / SGO guardrails are preserved.
+- **Phase 5 — Stale-line policy**: `HT_STALE_LINE_MS = 5min` (soft, marks degraded), `HT_HARD_STALE_LINE_MS = 10min` (hard reject). Replaces blanket "skip if degraded" rejection.
+- **Phase 6 — Confidence cap**: `displayConfidence = isDegraded ? min(raw, 72) : raw`. Stale and derived plays surface but are visibly capped.
+- **Phase 7 — Pipeline diagnostics**: Counters `playersParsed`, `true2hLinesFound`, `sgoLinesFound`, `derivedFallbackLines`, `skippedNoLine`, `skippedStaleLine`, `skippedAlreadyCleared`, `playsGenerated` are returned as `diagnostics` in the response and logged via `[HT_RESPONSE_ASSERT]`.
+- **Phase 8 — Response contract (additive)**: Payload now includes `eligibleGames: number`, `eligibleGameDetails[]` (with `halftimePhase`/`isEarly3QGrace`), `diagnostics`, and a `message` string when `eligibleGames > 0` but `plays.length === 0`. Existing `plays` field unchanged for backward compatibility.
+- **Phase 8 — Dashboard UI**: Header reads `"N play(s) · M game(s) eligible"` driven by `eligibleGames` from the response (falls back to rendered group count when absent). Empty-state subtitle adapts based on whether eligible games exist. Removed the prior client-side hard suppression of degraded halftime cards. Source label now resolves as `Live Line | Derived Line | Season Avg`; `Stale Line` badge shows only for non-derived degraded plays so derived cards aren't double-tagged.
+- **Phase 9 — Polling cadence**: `/api/halftime-plays` query now polls every 15s with 5s stale time (was 60s/45s) so eligibility flips during halftime propagate within seconds.
+- **Files touched**: `server/routes.ts` (halftime route only, lines ~4794–5770), `client/src/pages/dashboard.tsx` (query, header, empty-state, badges, suppression removal). No changes to engine, MLB, NCAAB, or non-halftime NBA paths.
+ARCHETYPE_DRIFT, BLENDED_RATE_DRIFT, CALIBRATION_DRIFT, FRAGILITY_DRIFT, SAFETY_CEILING_DRIFT, DIRECTIONAL_INTEGRITY_FAILURE, PROBABILITY_BOUNDS_FAILURE, OUTPUT_CONTRACT_FAILURE, COVARIANCE_DRIFT, CONSTANT_DRIFT
