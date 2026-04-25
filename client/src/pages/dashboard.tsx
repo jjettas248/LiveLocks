@@ -2697,19 +2697,30 @@ export default function Dashboard() {
 
         {/* Live Box Score — NBA Live tab only */}
         {activeTab === "calculator" && selectedGameId && (liveStats || isLiveStatsLoading) && (
-          <LiveBoxscore
-            liveStats={liveStats}
-            engineOutput={safeEngineOutput}
-            halftimePlaysData={halftimePlaysData}
-            liveSignalsData={safeLiveSignalsData}
-            selectedPlayer={selectedPlayer}
-            watchedStatType={watchedStatType}
-            isLiveStatsLoading={isLiveStatsLoading}
-            lastRefreshed={lastRefreshed}
-            onRefresh={() => { refetchLiveStats(); setLastRefreshed(new Date()); }}
-            onRowClick={handleBoxScoreClick}
-            currentGameId={selectedGameId ?? ""}
-          />
+          <>
+            {nbaLiveSignalsStale && (
+              <div
+                className="mb-3 px-4 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-sm flex items-center gap-2"
+                data-testid="status-nba-live-stale"
+              >
+                <span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                Updating live data...
+              </div>
+            )}
+            <LiveBoxscore
+              liveStats={liveStats}
+              engineOutput={safeEngineOutput}
+              halftimePlaysData={halftimePlaysData}
+              liveSignalsData={safeLiveSignalsData}
+              selectedPlayer={selectedPlayer}
+              watchedStatType={watchedStatType}
+              isLiveStatsLoading={isLiveStatsLoading}
+              lastRefreshed={lastRefreshed}
+              onRefresh={() => { refetchLiveStats(); setLastRefreshed(new Date()); }}
+              onRowClick={handleBoxScoreClick}
+              currentGameId={selectedGameId ?? ""}
+            />
+          </>
         )}
 
         {/* Main 3-column layout */}

@@ -465,7 +465,14 @@ export async function gradePersistedPlays(
               continue;
             }
 
-            const market = (play.market ?? "").trim();
+            // Phase 8.1 — normalize MLB market keys before grading so legacy
+            // persisted plays with `hr` resolve via the same path as live
+            // signals using `home_runs`.
+            const rawMarket = (play.market ?? "").trim();
+            const market = (rawMarket === "hr" ? "home_runs"
+              : rawMarket === "pitcher_k" ? "pitcher_strikeouts"
+              : rawMarket === "outs_recorded" ? "pitcher_outs"
+              : rawMarket);
             if ((DISABLED_MLB_MARKETS as string[]).includes(market)) {
               console.log("[GRADE MLB] Skipping disabled market:", market, "player:", play.playerName);
               skipped++;
@@ -476,6 +483,7 @@ export async function gradePersistedPlays(
             if (!playerEntry) {
               console.warn("[GRADE MLB] playerId", play.playerId, "not found in box score for game", gameId,
                 "— available IDs:", Array.from(mlbPlayerMap.keys()).slice(0, 5).join(", "));
+              console.warn("[GRADING_RESULT]", JSON.stringify({ status: "failed", sport: "MLB", playId: play.id, playerName: play.playerName, gameId, market, reason: "player_not_in_boxscore" }));
               failed++;
               continue;
             }
@@ -487,6 +495,7 @@ export async function gradePersistedPlays(
               console.warn("[GRADE MLB] Could not resolve market:", market,
                 "player:", play.playerName,
                 "— batting:", availableBatting, "pitching:", availablePitching);
+              console.warn("[GRADING_RESULT]", JSON.stringify({ status: "failed", sport: "MLB", playId: play.id, playerName: play.playerName, gameId, market, reason: "market_unresolvable" }));
               skipped++;
               continue;
             }

@@ -1,5 +1,6 @@
 import type { IStorage } from "../storage";
 import { gradePersistedPlays } from "./gradePersistedPlays";
+import { validateLiveSignalForDisplay } from "./validateLiveSignal";
 import { nanoid } from "nanoid";
 import { todayET } from "../utils/dateUtils";
 
@@ -67,12 +68,22 @@ export async function trackPlay(
   signal: TrackableSignal,
   storage: IStorage
 ): Promise<{ id: string; isDuplicate: boolean }> {
-  if (!signal.sportsbook || signal.sportsbook.trim() === "") {
-    console.warn(`[PlayTracker] REJECTED — missing sportsbook for ${signal.playerName} ${signal.market}. Play not persisted.`);
-    return { id: "", isDuplicate: true };
-  }
-  if (!Number.isFinite(signal.line)) {
-    console.warn(`[PlayTracker] REJECTED — non-finite line (${signal.line}) for ${signal.playerName} ${signal.market}. Play not persisted.`);
+  // Phase 6/7 — single source of truth for "is this signal persistable?"
+  const validation = validateLiveSignalForDisplay(signal);
+  console.log("[PERSIST_CHECK]", JSON.stringify({
+    sport: signal.sport,
+    gameId: signal.gameId,
+    playerName: signal.playerName,
+    market: signal.market,
+    line: signal.line,
+    projection: signal.projection,
+    probability: signal.probability,
+    sportsbook: signal.sportsbook,
+    valid: validation.valid,
+    reason: validation.reason ?? null,
+  }));
+  if (!validation.valid) {
+    console.warn(`[PlayTracker] REJECTED — ${validation.reason} for ${signal.playerName} ${signal.market}. Play not persisted.`);
     return { id: "", isDuplicate: true };
   }
 
@@ -147,6 +158,9 @@ export async function trackPlay(
     opportunityScore: signal.opportunityScore != null ? String(signal.opportunityScore) : undefined,
     liveScore: signal.liveScore != null ? String(signal.liveScore) : undefined,
     eventBoost: signal.eventBoost != null ? String(signal.eventBoost) : undefined,
+    // Phase 7.2 — signalMode/marketFamily/engineGeneratedAt are surfaced in
+    // PERSIST_CHECK logs above so the engine lineage is auditable. Persisting
+    // them as columns is deferred until a clean DB-push window.
   });
 
   if (!result.isDuplicate) {

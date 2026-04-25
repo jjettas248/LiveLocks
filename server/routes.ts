@@ -5,7 +5,7 @@ import { db } from "./db";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { type Player, type ParlayPickInput, persistedPlays } from "@shared/schema";
-import { sql, and, desc } from "drizzle-orm";
+import { sql, and, desc, gte } from "drizzle-orm";
 import { computeFamilyPenaltyFactor } from "./nba/marketFamily";
 import { recordSurfacedSignal, seedFromSettledPlays, getDirectionalSplit } from "./nba/directionalBias";
 import { getPlayerOdds, resolveOddsEventId, getRawOddsForDebug, resolveEventForDebug, getGameLines, getSGOPlayerLine, resolveMLBOddsEventId, getMLBPlayerOdds, normalizeOdds, getOddsKeyStatus } from "./oddsService";
@@ -403,6 +403,23 @@ export async function registerRoutes(
     } catch (e: any) {
       console.error("[admin/mlb-live-debug]", e.message);
       return res.status(500).json({ error: "Failed to fetch MLB live debug snapshot" });
+    }
+  });
+
+  // Phase 8.4 — admin force-grade endpoint to re-run grader on demand for
+  // ungraded plays. Body is optional; sport/gameId are accepted for future
+  // scoping but the current grader processes all unsettled plays.
+  app.post("/api/admin/force-grade", requireAdmin, async (req, res) => {
+    try {
+      const { sport, gameId } = (req.body ?? {}) as { sport?: string; gameId?: string };
+      console.log(`[ADMIN_FORCE_GRADE] requested sport=${sport ?? "any"} gameId=${gameId ?? "any"}`);
+      const { gradePersistedPlays } = await import("./services/gradePersistedPlays");
+      const result = await gradePersistedPlays(storage);
+      console.log(`[ADMIN_FORCE_GRADE] complete settled=${result.settled} failed=${result.failed} skipped=${result.skipped}`);
+      return res.json({ ok: true, requested: { sport: sport ?? null, gameId: gameId ?? null }, ...result });
+    } catch (e: any) {
+      console.error("[admin/force-grade]", e?.message ?? e);
+      return res.status(500).json({ ok: false, error: e?.message ?? String(e) });
     }
   });
 
@@ -4207,7 +4224,9 @@ export async function registerRoutes(
     payload: { signals: any[]; engineOutput: Record<number, Record<string, any>>; diagnostics: any };
   };
   const liveSignalsCache = new Map<string, LiveSignalsCacheEntry>();
-  const LIVE_SIGNALS_TTL_HEALTHY = 20_000;     // matches client poll
+  // Phase 5.2 — TTL aligned to the 15s client poll so each tick triggers a real
+  // engine recompute. Empty/preflight TTLs stay shorter to recover even faster.
+  const LIVE_SIGNALS_TTL_HEALTHY = 15_000;     // matches 15s client poll (Phase 5.1)
   const LIVE_SIGNALS_TTL_EMPTY   = 5_000;      // recover quickly from transient miss
   const LIVE_SIGNALS_TTL_PREFLIGHT = 3_000;    // ESPN/odds bootstrap failure — retry fast
 
@@ -4902,6 +4921,23 @@ export async function registerRoutes(
     } catch (e) {
       console.warn(`[LiveSignals] Error for game ${gameId}:`, (e as any).message);
       const nowTs = Date.now();
+      // Phase 5.4 — do not blow away a recent good cache on a transient failure.
+      // If a previous payload exists and is < 60s old, serve it back marked as
+      // degraded so the UI keeps showing the last-known-good signals (with a
+      // stale badge) instead of clearing during a brief upstream blip.
+      const previous = liveSignalsCache.get(gameId);
+      if (previous && nowTs - previous.ts <= 60_000) {
+        const ageSec = Math.round((nowTs - previous.ts) / 1000);
+        console.log(`[LiveSignals] Serving preserved payload for ${gameId} during transient failure (age=${ageSec}s)`);
+        return res.json({
+          ...previous.payload,
+          updatedAt: previous.ts,
+          generatedAt: nowTs,
+          stale: true,
+          degraded: true,
+          mode: "preserved",
+        });
+      }
       const payload = { signals: [], engineOutput: {}, diagnostics: { reason: "exception", error: (e as any)?.message ?? String(e), inProgress: false } };
       liveSignalsCache.set(gameId, { ts: nowTs, ttl: LIVE_SIGNALS_TTL_PREFLIGHT, payload });
       // Freshness Integrity Fix #3.3 — exception path is genuinely stale:
@@ -4948,6 +4984,45 @@ export async function registerRoutes(
         diagnosticsReason: (entry.payload as any)?.diagnostics?.reason ?? null,
       }));
 
+      // Phase 11 — persistence section: pending plays, settled today, and a
+      // best-effort failed counter. We compute these from a single recent slice
+      // of persisted_plays to keep the call cheap. settledToday uses settledAt
+      // (when grading actually finalized) rather than gameDate so late-grades
+      // are counted correctly. failedLastRun is a placeholder until the grader
+      // emits a structured failure counter.
+      let persistenceSummary: {
+        pendingPlays: number;
+        settledToday: number;
+        failedLastRun: number | null;
+        failedLastRunNote?: string;
+      } = { pendingPlays: 0, settledToday: 0, failedLastRun: null, failedLastRunNote: "not_yet_implemented" };
+      try {
+        const recent = await db
+          .select({ id: persistedPlays.id, result: persistedPlays.result, gameDate: persistedPlays.gameDate, settledAt: persistedPlays.settledAt })
+          .from(persistedPlays)
+          .where(gte(persistedPlays.gameDate, daysAgoET(2)));
+        const today = todayET();
+        const isSettledToday = (p: any) => {
+          if (!p.result || p.result === "pending") return false;
+          if (p.settledAt) {
+            const d = new Date(p.settledAt);
+            if (!Number.isNaN(d.getTime())) {
+              const etDate = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(d);
+              return etDate === today;
+            }
+          }
+          return p.gameDate === today;
+        };
+        persistenceSummary = {
+          pendingPlays: recent.filter((p: any) => !p.result || p.result === "pending").length,
+          settledToday: recent.filter(isSettledToday).length,
+          failedLastRun: null,
+          failedLastRunNote: "not_yet_implemented",
+        };
+      } catch (err) {
+        console.warn("[admin/live-debug] persistence summary unavailable:", (err as any)?.message);
+      }
+
       return res.json({
         now,
         mlb: {
@@ -4963,6 +5038,7 @@ export async function registerRoutes(
             preflightMs: LIVE_SIGNALS_TTL_PREFLIGHT,
           },
         },
+        persistence: persistenceSummary,
       });
     } catch (e: any) {
       console.error("[admin/live-debug]", e.message);
