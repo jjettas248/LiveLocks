@@ -2,6 +2,7 @@ import { db } from "./db";
 import { todayET, daysAgoET } from "./utils/dateUtils";
 import { resolveMlbGameSessionDate } from "./utils/mlbSessionDate";
 import { decideHrRadarMatch, QUALIFYING_EVENT_TYPES } from "./validation/hrRadar/matchDecision";
+import { applyHrRadarResolvedStateFixup } from "./mlb/hrRadarSection";
 import {
   HR_RADAR_GOLDMASTER_V1,
   enrichWithUserStage,
@@ -4676,9 +4677,14 @@ export class DatabaseStorage implements IStorage {
     // by the urgency line so "expires after T8" / late-inning copy fires
     // based on game-state, not the (frozen) detection inning.
     const currentInningByGameId = new Map<string, number>();
+    // Lifted to function scope so the live-context derivation below (Spec
+    // Step 8) can also read box-score / contact-data caches without a
+    // second import.
+    let mlbGameCacheLocal: any = null;
     try {
-      const { mlbGameCache } = await import("./mlb/dataPullService");
-      const gameStates = (mlbGameCache?.gameState ?? {}) as Record<string, any>;
+      const mod = await import("./mlb/dataPullService");
+      mlbGameCacheLocal = mod.mlbGameCache;
+      const gameStates = (mlbGameCacheLocal?.gameState ?? {}) as Record<string, any>;
       for (const gid of Object.keys(gameStates)) {
         const inn = gameStates[gid]?.inning;
         if (typeof inn === "number" && inn > 0) currentInningByGameId.set(gid, inn);
@@ -4818,9 +4824,39 @@ export class DatabaseStorage implements IStorage {
 
       const plateAppearancesTracked: number | null =
         typeof abContextRow.plateAppearancesTracked === "number" ? abContextRow.plateAppearancesTracked : null;
+      // Spec Step 8 — live context truth. Any of box-score AB/H/HR/TB > 0
+      // OR cached contact events flips a row into "live" so we never paint
+      // "Pregame only · 0 AB" for a player who already has live evidence.
+      // mlbGameCacheLocal is captured from the lazy import above (best-effort
+      // — falls back to the legacy plateAppearancesTracked > 0 rule when the
+      // cache is empty).
+      let boxScoreHasContact = false;
+      try {
+        const bs = (mlbGameCacheLocal?.gameBoxScore?.[r.gameId]?.byPlayerId?.[r.playerId]) as
+          { ab?: number; hits?: number; hr?: number; tb?: number } | undefined;
+        if (bs) {
+          boxScoreHasContact =
+            (Number(bs.ab ?? 0) > 0) ||
+            (Number(bs.hits ?? 0) > 0) ||
+            (Number(bs.hr ?? 0) > 0) ||
+            (Number(bs.tb ?? 0) > 0);
+        }
+      } catch { /* best-effort */ }
+      let contactEventsCount = 0;
+      try {
+        const cd = (mlbGameCacheLocal?.contactData?.[r.gameId]?.byPlayerId?.[r.playerId]) as
+          { priorABResults?: unknown[] } | undefined;
+        if (cd && Array.isArray(cd.priorABResults)) contactEventsCount = cd.priorABResults.length;
+      } catch { /* best-effort */ }
       const hasLiveABContext: boolean =
         abContextRow.hasLiveABContext === true ? true
+          : boxScoreHasContact ? true
+          : (contactEventsCount > 0) ? true
           : (plateAppearancesTracked != null && plateAppearancesTracked > 0);
+      if (process.env.DEBUG_HR_RADAR_LIVE_CONTEXT === "true") {
+        const gameStatus = (mlbGameCacheLocal?.gameState?.[r.gameId]?.status) ?? null;
+        console.log(`[HR_RADAR_LIVE_CONTEXT] gameId=${r.gameId} playerId=${r.playerId} gameStatus=${gameStatus ?? "?"} pat=${plateAppearancesTracked ?? 0} boxAB=${boxScoreHasContact} contactEvents=${contactEventsCount} contextMode=${hasLiveABContext ? "live" : "pregame"}`);
+      }
 
       // Build user-facing reasons (humanized, jargon stripped) and admin
       // reasons (raw engine strings preserved for debug view).
@@ -5063,6 +5099,22 @@ export class DatabaseStorage implements IStorage {
         ohDistance: ohStats?.dist ?? null,
         ohPitchType: ohStats?.pitch ?? null,
       };
+
+      // ── HR Radar Master Fix Step 1+2 — canonical lifecycle/section/outcome.
+      // Pure additive enrichment + resolved-state fixup. The legacy `section`
+      // bucket already routes resolved rows to cashed/dead correctly; this is
+      // defense-in-depth that ALSO surfaces the canonical fields on the wire
+      // so clients can group by them per Spec Step 16.
+      const fixed = applyHrRadarResolvedStateFixup(
+        { ...entry, hr: r.status === "hit" ? 1 : 0, hrCount: r.status === "hit" ? 1 : 0 },
+        { gameId: r.gameId, playerId: r.playerId },
+      );
+      // Canonical-only enrichment — never overwrites legacy `entry.section`
+      // (the ladder bucket key) or legacy `entry.outcomeStatus` (DB grading).
+      entry.lifecycleState = fixed.lifecycleState;
+      entry.canonicalOutcomeStatus = fixed.canonicalOutcomeStatus;
+      // `active` is an additive boolean — false for resolved/diagnostic.
+      entry.active = (fixed as any).canonicalActive ?? fixed.active;
 
       const existing = seen.get(key);
       if (!existing || sectionPriority[section] < sectionPriority[existing.section]) {
@@ -5386,6 +5438,20 @@ export interface HrRadarLadderEntry {
   /** Raw grading status string from DB. Use `outcome` for user-facing labels. */
   outcomeStatus: string; // active | called_hit | called_miss | uncalled_hr | late_signal | early_hr_no_window
   userVisible: boolean;
+  // ── HR Radar Master Fix — canonical lifecycle / section / outcome
+  // (additive; never replaces the legacy currentStage / outcome / outcomeStatus
+  // fields above). Spec: lifecycleState ∈
+  //   pregame|watch|build|ready|attack|cashed|missed|late_signal|uncalled_hr|inactive
+  // Spec: section ∈
+  //   attack|ready|build|watch|cashed|missed|diagnostic|inactive
+  // Spec: canonicalOutcomeStatus ∈
+  //   active|called_hit|called_miss|uncalled_hr|late_signal|unresolved
+  // active=false marks resolved/diagnostic rows so clients never paint them
+  // inside an active section bucket.
+  lifecycleState?: string;
+  section?: string;
+  canonicalOutcomeStatus?: string;
+  active?: boolean;
   signalDetectedAt: Date | null;
   hitDetectedAt: Date | null;
   resolvedAt: Date | null;

@@ -149,3 +149,21 @@ ARCHETYPE_DRIFT, BLENDED_RATE_DRIFT, CALIBRATION_DRIFT, FRAGILITY_DRIFT, SAFETY_
 - **Phase 9 — Polling cadence**: `/api/halftime-plays` query now polls every 15s with 5s stale time (was 60s/45s) so eligibility flips during halftime propagate within seconds.
 - **Files touched**: `server/routes.ts` (halftime route only, lines ~4794–5770), `client/src/pages/dashboard.tsx` (query, header, empty-state, badges, suppression removal). No changes to engine, MLB, NCAAB, or non-halftime NBA paths.
 ARCHETYPE_DRIFT, BLENDED_RATE_DRIFT, CALIBRATION_DRIFT, FRAGILITY_DRIFT, SAFETY_CEILING_DRIFT, DIRECTIONAL_INTEGRITY_FAILURE, PROBABILITY_BOUNDS_FAILURE, OUTPUT_CONTRACT_FAILURE, COVARIANCE_DRIFT, CONSTANT_DRIFT
+## MLB HR Radar Master Fix — Batch A (Apr 2026)
+- **Goal**: Make the HR Radar a real-time decision engine. Add canonical `lifecycleState` / `canonicalSection` / `canonicalOutcomeStatus` / `active` fields to every wire row so clients can group by spec-canonical buckets without reverse-engineering legacy `currentStage` + `gradingStatus`. Strictly additive — no schema changes, no rename of legacy fields.
+- **Hard rule from user**: "Do not break MLB live board, HR scoring, Add to Slip, or grading history. Skip risky phases until approved with a solution."
+- **Phase 1 — Canonical helper (NEW `server/mlb/hrRadarSection.ts`)**: Pure helpers `deriveHrRadarOutcomeStatus`, `deriveHrRadarLifecycleState`, `deriveHrRadarSection`, `applyHrRadarResolvedStateFixup`, `dedupeHrRadarRecords`. Maps legacy `gradingStatus` (active|called_hit|called_miss|uncalled_hr|late_signal|early_window_hr|early_hr_no_window|expired) → canonical `outcomeStatus` (active|called_hit|called_miss|uncalled_hr|late_signal|unresolved). Diagnostic flavours (`early_window_hr`, `early_hr_no_window`) map to `uncalled_hr`; `expired` maps to `unresolved` (NOT called_miss).
+- **Phase 2 — Resolved-state fixup**: Applied at three serializer surfaces:
+    1. `getHrRadarLadder` builder (`server/storage.ts:5111`) — appends `lifecycleState`, `canonicalOutcomeStatus`, `active` to every entry.
+    2. `/api/mlb/hr-radar-board` — applies fixup + `dedupeHrRadarRecords` (defense in depth; resolved record always wins).
+    3. Legacy `/api/mlb/hr-radar` — `stamp(rows)` enriches `bettableHR`, `hrWatchlist`, `cashedToday`, `gradedHits`, `gradedMisses`.
+  Strict additive contract: helper writes canonical-only keys (`canonicalOutcomeStatus`, `canonicalSection`, `canonicalActive`) and never overwrites legacy `outcomeStatus` / ladder `section` (`attackNow|building|dead|...`).
+  Emits `[HR_RADAR_INTEGRITY_FIXUP]` log only when a transition actually fires.
+- **Phase 5 — Live-context fix (server side)**: `hasLiveABContext` at `server/storage.ts:4848` now flips TRUE when `boxScore.ab|h|hr|tb > 0` OR `contactEvents.length > 0`. Lifted `mlbGameCacheLocal` to function scope. Gated debug log behind `DEBUG_HR_RADAR_LIVE_CONTEXT` env.
+- **Phase 8 — Client refresh cadence**: `HrRadarLadder` query bumped to `refetchInterval: 15s` plus `refetchOnWindowFocus` + `refetchOnReconnect` for backgrounded-tab snap-back.
+- **Risk-gated phases DEFERRED pending user approval** (existing system already accomplishes most of intent):
+    - T003 Event-based resolver wrapper — `gradeHomeRunsFromPlays` already runs every poll cycle (`server/mlb/liveGameOrchestrator.ts:814`).
+    - T004 20s setInterval reconciliation — orchestrator already polls live games per cycle; final pass via `reconcileHrRadarAlertsForGame` (`server/storage.ts:4039`).
+    - T006 Ledger gap audit — `[HR_LEDGER_WRITE]` confirmed firing on every state change in live logs.
+- **Validation**: `npx tsc --noEmit --skipLibCheck` clean; workflow restarted clean; all three HR Radar endpoints respond `401` (auth-gated, expected); existing `[HR_RADAR_ALERT_UPSERT]`, `[HR_LEDGER_WRITE]`, `[HR_RADAR_DETECTION_LOCKED]` logs continue firing normally; no new error logs; cashed-card UX (`Called T{d} → Hit T{h} (X inns later)` arc + Statcast row + summary reason) was already in place from Task #121 and remains unchanged.
+- **Files touched**: `server/mlb/hrRadarSection.ts` (NEW, ~340 lines), `server/storage.ts` (interface extension + canonical enrichment in ladder builder + import), `server/routes.ts` (board route fixup+dedupe, legacy route stamp), `client/src/components/mlb/HrRadarLadder.tsx` (query refetch options).

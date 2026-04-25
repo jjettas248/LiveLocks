@@ -2525,14 +2525,22 @@ export async function registerRoutes(
 
       console.log(`[MLB_HR_RADAR] bettable=${dedupBettable.length} cashed=${dedupCashed.length} (edge=${cashedFromEdge.length},db=${cashedFromDb.length}) watchlist=${dedupWatchlist.length} dbAlerts=${dbAlerts.length} canonicalHits=${canonical.hits.length} canonicalMisses=${canonical.misses.length}`);
 
+      // Master Fix Step 2 — append canonical lifecycleState/section/
+      // outcomeStatus to every wire row so /api/mlb/hr-radar consumers can
+      // group by them per Spec Step 16. Pure additive — never replaces the
+      // existing `outcomeType`, `gradingStatus`, or `currentStage` fields.
+      const { applyHrRadarResolvedStateFixup: fixup } = await import("./mlb/hrRadarSection");
+      const stamp = (rows: any[]): any[] =>
+        rows.map((r) => fixup(r, { gameId: r?.gameId ?? r?.game_id, playerId: r?.playerId ?? r?.player_id }));
+
       return res.json({
-        bettableHR: dedupBettable,
-        hrWatchlist: dedupWatchlist,
+        bettableHR: stamp(dedupBettable),
+        hrWatchlist: stamp(dedupWatchlist),
         hrEdges,
-        cashedToday: cashedWithType,
-        activity: cashedWithType,
-        gradedHits: gradedHitsWithType,
-        gradedMisses: gradedMissesWithType,
+        cashedToday: stamp(cashedWithType),
+        activity: stamp(cashedWithType),
+        gradedHits: stamp(gradedHitsWithType),
+        gradedMisses: stamp(gradedMissesWithType),
         gradingSummary: canonical.summary,
       });
     } catch (e: any) {
@@ -2629,6 +2637,11 @@ export async function registerRoutes(
   app.get("/api/mlb/hr-radar-board", requireAuth, async (req, res) => {
     try {
       const board = await storage.getTodayHrRadarBoard();
+      // HR Radar Master Fix Step 2 + 14 — apply canonical lifecycle/section/
+      // outcomeStatus + resolved-state fixup + dedupe (resolved record wins)
+      // before any further enrichment. Pure additive fields; never replaces
+      // legacy `status` / `gradingStatus` / `currentStage`.
+      const { applyHrRadarResolvedStateFixup, dedupeHrRadarRecords } = await import("./mlb/hrRadarSection");
       // ── Goldmaster v1 — additive per-row enrichment. The board API was
       // previously a thin pass-through of hrRadarAlerts rows; we keep every
       // legacy field and append userStage/scoreToScore10/qualifyingSignals
@@ -2674,7 +2687,20 @@ export async function registerRoutes(
         });
         return { ...r, ...v1 };
       };
-      const enriched = HR_RADAR_GOLDMASTER_V1 ? board.map(enrichRow) : board;
+      const enrichedRaw = HR_RADAR_GOLDMASTER_V1 ? board.map(enrichRow) : board;
+      // Master Fix Step 2 — surface canonical lifecycleState/section/
+      // outcomeStatus/active on every board row so clients can group by them
+      // (Spec Step 16) without reverse-engineering currentStage + gradingStatus.
+      const enrichedWithCanonical = enrichedRaw.map((r: any) =>
+        applyHrRadarResolvedStateFixup(
+          { ...r, hrCount: r.status === "hit" ? 1 : 0 },
+          { gameId: r.gameId, playerId: r.playerId },
+        ),
+      );
+      // Master Fix Step 14 — dedupe by sessionDate/gameId/playerId. Resolved
+      // record always wins. Defense-in-depth — getTodayHrRadarBoard already
+      // collapses rows but a stale duplicate must never sneak through.
+      const enriched = dedupeHrRadarRecords(enrichedWithCanonical as any[]);
       const live = enriched.filter((a: any) => a.status === "live");
       const hits = enriched.filter((a: any) => a.status === "hit");
       const misses = enriched.filter((a: any) => a.status === "miss");

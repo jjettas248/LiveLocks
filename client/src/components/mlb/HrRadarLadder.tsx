@@ -731,7 +731,12 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
   const [hideFinished, setHideFinished] = useState(false);
   const { data, isLoading, isFetching, error, dataUpdatedAt } = useQuery<HrRadarLadderResponse>({
     queryKey: ["/api/mlb/hr-radar/ladder"],
-    refetchInterval: 20_000,
+    // Master Fix Step 15 — short poll for live decision-engine cadence,
+    // refetch on focus/reconnect so a backgrounded tab snaps back to truth
+    // without manual reload.
+    refetchInterval: 15_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
     placeholderData: (prev) => prev,
   });
 
