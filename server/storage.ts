@@ -1561,6 +1561,17 @@ export class DatabaseStorage implements IStorage {
       playoffRotationDataSource: playoffRotationProfile?.dataSource ?? null,
       defenseMatchupResolved: !!nbaDefenseMatchup,
       playerUsageResolved: !!nbaPlayerUsage,
+      // Surface playoff role-truth gate flags so downstream callers (e.g. the
+      // NBA halftime route) can detect when displayConfidence has been pinned
+      // by the gate. Without this signal, derived-line plays whose conviction
+      // was clamped to the 68/74 cap appear identical to one another and the
+      // user sees "every play is 68% / +19%" — adding the flag lets the route
+      // suppress those double-degraded (derived line + pinned confidence)
+      // entries instead of surfacing indistinguishable noise.
+      playoffRoleGate70Applied,
+      playoffRoleGate80Applied,
+      playoffHighBucketGuardApplied,
+      playoffFallbackCapApplied,
     };
 
     if (!noSignal && (req as any).sport === "nba") {

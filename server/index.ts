@@ -11,6 +11,8 @@ import { serveStatic } from "./static";
 import { registerSwHandler } from "./swHandler";
 import { getAppVersion } from "./version";
 import { createServer } from "http";
+import * as nodeFs from "node:fs";
+import * as nodePath from "node:path";
 import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync } from "./stripeClient";
 import cron from "node-cron";
@@ -601,8 +603,11 @@ app.use((req, res, next) => {
     // Linux /proc and needs no external binaries.
     const findHoldingPids = (targetPort: number): number[] => {
       try {
-        const fs = require("fs");
-        const path = require("path");
+        // ESM-safe — this file is "type": "module" and `require` is not
+        // defined here, so use the static `node:fs` / `node:path` imports
+        // brought in at the top of the module.
+        const fs = nodeFs;
+        const path = nodePath;
         const portHex = targetPort.toString(16).toUpperCase().padStart(4, "0");
         const tcpFiles = ["/proc/net/tcp", "/proc/net/tcp6"];
         const listeningInodes = new Set<string>();
