@@ -369,6 +369,43 @@ export async function registerRoutes(
     return res.json(getDirectionalSplit());
   });
 
+  // Freshness Integrity Fix #7 — admin diagnostic for the MLB live pipeline.
+  // Lets admins confirm cache freshness, signal counts, and active games at a
+  // glance. No engine recompute is triggered; pure read of in-memory state.
+  app.get("/api/admin/mlb-live-debug", requireAdmin, async (_req, res) => {
+    try {
+      const games = getActiveGames();
+      const now = Date.now();
+      const edgeEntries = Array.from(mlbEdgeCache.entries()).map(([gameId, entry]) => ({
+        gameId,
+        updatedAt: entry.updatedAt,
+        ageSec: entry.updatedAt ? Math.round((now - entry.updatedAt) / 1000) : null,
+        createdAt: entry.createdAt,
+        outputs: entry.outputs?.length ?? 0,
+        qualifiedSignals: entry.qualifiedSignals?.length ?? 0,
+        allSignals: entry.allSignals?.length ?? 0,
+        isDegraded: entry.isDegraded ?? false,
+        signalLocked: entry.signalLocked ?? false,
+        tags: entry.gameCardTags ?? [],
+      }));
+
+      return res.json({
+        now,
+        activeGames: games.length,
+        games: games.map((g) => ({
+          gameId: g.gameId,
+          gamePk: g.gamePk,
+          status: (g as any).espnStatus ?? null,
+          startTime: (g as any).startTime ?? null,
+        })),
+        edgeEntries,
+      });
+    } catch (e: any) {
+      console.error("[admin/mlb-live-debug]", e.message);
+      return res.status(500).json({ error: "Failed to fetch MLB live debug snapshot" });
+    }
+  });
+
   app.get("/api/admin/odds-health", requireAdmin, async (_req, res) => {
     try {
       const { getOddsHealthSnapshot } = await import("./odds/oddsDiagnostics");
@@ -1133,8 +1170,14 @@ export async function registerRoutes(
 
         const cacheEntry = mlbEdgeCache.get(gameId);
         const qualifiedSigs = cacheEntry?.qualifiedSignals ?? [];
-        const hasOdds = qualifiedSigs.length > 0;
-        const signalLocked = qualifiedSigs.length > 0;
+        // Freshness Integrity Fix #3 — game cards must use the same signal
+        // pool as /api/mlb/edge-feed (allSignals) so a card never says
+        // "no signals" while the feed has watchlist/fallback signals visible.
+        // We still surface qualifiedSignalCount separately for any consumer
+        // that needs the strict-quality count.
+        const allVisibleSigs = cacheEntry?.allSignals ?? cacheEntry?.qualifiedSignals ?? [];
+        const hasOdds = allVisibleSigs.length > 0;
+        const signalLocked = allVisibleSigs.length > 0;
 
         const bestQualified = qualifiedSigs.length > 0
           ? qualifiedSigs.reduce((best, qs) => (qs.signalScore > best.signalScore ? qs : best), qualifiedSigs[0])
@@ -1224,7 +1267,8 @@ export async function registerRoutes(
             outs: cachedState.outs,
             runnersOnBase: cachedState.runnersOnBase,
           } : null,
-          signalCount: qualifiedSigs.length,
+          signalCount: allVisibleSigs.length,
+          qualifiedSignalCount: qualifiedSigs.length,
           hasOdds,
           signalLocked,
           market: bestMarket,
@@ -1530,6 +1574,17 @@ export async function registerRoutes(
   const mlbSignalsCache = new Map<string, { ts: number; signals: any[]; updatedAt: number; isDegraded: boolean }>();
   const MLB_SIGNALS_TTL = 30_000;
 
+  // Freshness Integrity Fix #4 — single source of truth for MLB market keys.
+  // The legacy "hr"/"pitcher_k" aliases must never collide with the canonical
+  // "home_runs"/"pitcher_strikeouts" used by the engine output set, otherwise
+  // valid signals silently drop from the validated-set filter.
+  function normalizeMlbMarketKey(market: string | null | undefined): string {
+    if (!market) return "";
+    if (market === "hr") return "home_runs";
+    if (market === "pitcher_k") return "pitcher_strikeouts";
+    return market;
+  }
+
   app.get("/api/mlb/live-signals/:gameId", requireMLBAccess, async (req, res) => {
     const gameId = req.params.gameId as string;
 
@@ -1758,8 +1813,15 @@ export async function registerRoutes(
       safetyCeilingApplied: qs.safetyCeilingApplied,
       dataQuality: qs.dataQuality,
     })));
-    const mlbValidPlayIds = new Set(mlbEngineResult.plays.map((p) => `${p.playerId}_${p.market}`));
-    const validatedApiSignals = apiSignals.filter((s) => mlbValidPlayIds.has(`${s.playerId}_${s.market}`));
+    // Freshness Integrity Fix #4 — normalize both sides of the validation
+    // key so the engine's "home_runs" plays don't get filtered out by an
+    // upstream "hr" alias on apiSignals (and vice-versa).
+    const mlbValidPlayIds = new Set(
+      mlbEngineResult.plays.map((p) => `${p.playerId}_${normalizeMlbMarketKey(p.market as string)}`)
+    );
+    const validatedApiSignals = apiSignals.filter((s) =>
+      mlbValidPlayIds.has(`${s.playerId}_${normalizeMlbMarketKey(s.market as string)}`)
+    );
     console.log(`[MLB ENGINE] game=${gameId} mode=${mlbEngineResult.mode} plays=${mlbEngineResult.plays.length} fallback=${mlbEngineResult.diagnostics.fallbackTriggered} filtered=${mlbEngineResult.diagnostics.totalFiltered}`);
     console.log(`[MLB signals] game=${gameId} allFromEngine=${engineAll.length} wrapperPassed=${validatedApiSignals.length} served=${validatedApiSignals.length} isDegraded=${cachedIsDegraded}`);
     // Sport-isolation drift trace — observe engine output, do not modify it.
@@ -1954,10 +2016,17 @@ export async function registerRoutes(
       let totalGenerated = 0;
       let totalDropped = 0;
       let totalEdgeCacheEntries = 0;
+      let newestUpdatedAt = 0;
       const feedTagDist: Record<string, number> = {};
 
       for (const [gid, edgeEntry] of Array.from(mlbEdgeCache.entries())) {
         totalEdgeCacheEntries++;
+
+        // Track newest engine recompute timestamp across all games so the
+        // client can detect a real feed advance (Freshness Integrity Fix #2).
+        if (edgeEntry.updatedAt > newestUpdatedAt) {
+          newestUpdatedAt = edgeEntry.updatedAt;
+        }
 
         // Extended freshness: between-innings pauses, transient odds-API hiccups,
         // and engine cycle skips can leave a game's edge cache stale for ~5-10
@@ -2012,12 +2081,19 @@ export async function registerRoutes(
         return (b.signalScore ?? 0) - (a.signalScore ?? 0);
       });
 
-      console.log(`[MLB EDGE-FEED] edgeCacheEntries=${totalEdgeCacheEntries} total=${allSignals.length} generated=${totalGenerated} droppedStale=${totalDropped} feedTags=${JSON.stringify(feedTagDist)}`);
+      console.log(`[MLB EDGE-FEED] edgeCacheEntries=${totalEdgeCacheEntries} total=${allSignals.length} generated=${totalGenerated} droppedStale=${totalDropped} feedTags=${JSON.stringify(feedTagDist)} newestUpdatedAt=${newestUpdatedAt}`);
 
-      return res.json({ signals: allSignals });
+      return res.json({
+        mode: allSignals.length > 0 ? "live" : "monitoring",
+        signals: allSignals,
+        updatedAt: newestUpdatedAt,
+        generatedAt: Date.now(),
+        staleCount: totalDropped,
+        edgeCacheEntries: totalEdgeCacheEntries,
+      });
     } catch (e: any) {
       console.error("[mlb/edge-feed]", e.message);
-      return res.json({ signals: [] });
+      return res.json({ mode: "monitoring", signals: [], updatedAt: 0, generatedAt: Date.now(), staleCount: 0, edgeCacheEntries: 0 });
     }
   });
 

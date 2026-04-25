@@ -458,7 +458,8 @@ export type StateChangeTrigger =
   | "hard_hit_event"
   | "out_recorded"
   | "score_change"
-  | "odds_update";
+  | "odds_update"
+  | "heartbeat_refresh";
 
 const HIGH_IMPACT_TRIGGERS = new Set<StateChangeTrigger>([
   "new_ab", "ab_completed", "inning_change", "pitcher_change",
@@ -479,6 +480,10 @@ const TRIGGER_IMPACTED_MARKETS: Record<StateChangeTrigger, MLBMarket[] | "all"> 
   out_recorded: "all",
   score_change: "all",
   odds_update: "all",
+  // Heartbeat backstop — see HEARTBEAT_RECOMPUTE in pollGame. Recomputes all
+  // markets when the engine has gone >45s without a real state-change trigger
+  // so the cache `updatedAt` reflects a real run, not a fake refresh.
+  heartbeat_refresh: "all",
 };
 
 // ── Polling intervals ─────────────────────────────────────────────────────────
@@ -995,9 +1000,16 @@ export class LiveGameOrchestrator {
 
         await this.triggerEngine(gameId, normalizedStatus, triggers);
       } else if (normalizedStatus === "live") {
+        // Freshness Integrity Fix #1 — never fake-refresh the cache timestamp.
+        // If no real state-change trigger fired, decide whether to fire a real
+        // heartbeat recompute based on engine output age. The 15s dedup window
+        // inside triggerEngine still protects us from runaway runs.
         const cached = mlbEdgeCache.get(gameId);
-        if (cached) {
-          mlbEdgeCache.set(gameId, { ...cached, updatedAt: Date.now() });
+        const lastEngineRunAt = Math.max(cached?.updatedAt ?? 0, cached?.createdAt ?? 0);
+        const ageMs = lastEngineRunAt > 0 ? Date.now() - lastEngineRunAt : Infinity;
+        if (ageMs > 45_000) {
+          console.log(`[MLB HEARTBEAT_RECOMPUTE] game=${gameId} ageMs=${ageMs === Infinity ? "inf" : ageMs}`);
+          await this.triggerEngine(gameId, normalizedStatus, ["heartbeat_refresh"]);
         }
       }
     } else if (normalizedStatus === "live") {

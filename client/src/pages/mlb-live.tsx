@@ -92,7 +92,14 @@ type MLBGamesResponse = {
 };
 
 type EdgeFeedResponse = {
+  // Freshness Integrity Fix #2 — server now returns full feed metadata so the
+  // client can detect a real engine recompute and clear sticky state on advance.
+  mode?: "live" | "monitoring";
   signals: MLBSignal[];
+  updatedAt?: number;
+  generatedAt?: number;
+  staleCount?: number;
+  edgeCacheEntries?: number;
 };
 
 type CanonicalGradedOutcome = {
@@ -2806,7 +2813,23 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     ? (edgeFeedResp!.signals as MlbSignalData[]).map(s => mapMlbSignalToUi(s) as unknown as MlbSignalData)
     : [];
   const stickySignalMapRef = useRef<Map<string, MlbSignalData & { _stickyTs?: number }>>(new Map());
-  const STICKY_TTL_MS = 30 * 60 * 1000;
+
+  // Freshness Integrity Fix #5 — clear sticky map on real engine recompute.
+  // When the server's `updatedAt` advances, every sticky cell becomes
+  // potentially-misleading immediately, so we drop the whole map. The next
+  // render rebuilds from `rawSignals` (the just-arrived authoritative feed).
+  const lastEdgeFeedUpdatedAtRef = useRef<number>(0);
+  useEffect(() => {
+    const nextUpdatedAt = edgeFeedResp?.updatedAt ?? 0;
+    if (nextUpdatedAt > 0 && nextUpdatedAt !== lastEdgeFeedUpdatedAtRef.current) {
+      stickySignalMapRef.current.clear();
+      lastEdgeFeedUpdatedAtRef.current = nextUpdatedAt;
+    }
+  }, [edgeFeedResp?.updatedAt]);
+  // Freshness Integrity Fix #5 — TTL fallback in case `updatedAt` never
+  // advances (engine quiet, server crash, network drop). 120s replaces the
+  // old 30-minute TTL that let removed signals linger for half an hour.
+  const STICKY_TTL_MS = 120 * 1000;
   const edgeFeedSignals = (() => {
     const currentMap = new Map<string, MlbSignalData>();
     for (const s of rawSignals) {
@@ -3053,6 +3076,20 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     setAnalyzeTarget({ playerId: card.playerId, gameId: card.gameId });
   };
 
+  // Freshness Integrity Fix #6 — single helper that invalidates every MLB
+  // live query in lockstep so cards, feed, stats, signals, and HR radar all
+  // refresh as one unit. Use this instead of one-off invalidateQueries calls.
+  const refreshMlbLiveData = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/mlb/live-games"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/mlb/edge-feed"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar/ladder"] });
+    if (selectedGameId) {
+      queryClient.invalidateQueries({ queryKey: ["/api/mlb/live-stats", selectedGameId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/mlb/live-signals", selectedGameId] });
+    }
+  };
+
   const [isManualRefreshing, setIsManualRefreshing] = useState(false);
   const handleRefresh = async () => {
     if (isManualRefreshing) return;
@@ -3060,10 +3097,10 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     try {
       const res = await apiRequest("GET", "/api/mlb/live-games?force=1");
       const freshData = await res.json();
+      // Seed the just-fetched force=1 result so the UI updates immediately,
+      // then fan out invalidation across the rest of the live pipeline.
       queryClient.setQueryData(["/api/mlb/live-games"], freshData);
-      queryClient.invalidateQueries({ queryKey: ["/api/mlb/edge-feed"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/mlb/hr-radar/ladder"] });
+      refreshMlbLiveData();
     } catch {}
     setTimeout(() => setIsManualRefreshing(false), 1000);
   };
