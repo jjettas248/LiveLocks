@@ -402,5 +402,19 @@ export function dedupeHrRadarRecords<T extends CanonicalCardInput & {
       map.set(k, r);
     }
   }
-  return Array.from(map.values());
+  const out = Array.from(map.values());
+  // Spec Step 14 — emit cache-update diagnostic only when duplicates were
+  // actually dropped (no-op silent path keeps logs quiet under normal load).
+  // Format chosen so admins can grep `[HR_RADAR_CACHE_UPDATE]` for any
+  // resolved-record-wins-over-active collapses across both serializers
+  // (/api/mlb/hr-radar and /api/mlb/hr-radar-board).
+  const dropped = records.length - out.length;
+  if (dropped > 0) {
+    const log =
+      typeof console !== "undefined" && typeof console.log === "function"
+        ? console.log.bind(console)
+        : () => {};
+    log(`[HR_RADAR_CACHE_UPDATE] inputRecords=${records.length} keptRecords=${out.length} duplicatesDropped=${dropped} reason=resolved_wins_over_active`);
+  }
+  return out;
 }
