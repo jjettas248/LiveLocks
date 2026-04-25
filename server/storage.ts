@@ -4791,31 +4791,51 @@ export class DatabaseStorage implements IStorage {
       // Determine target section. For LIVE rows we now bucket off the
       // canonical engine stage (Phase 2). Resolved rows go to cashed/dead by
       // outcome.
+      //
+      // Master Fix — "no plays" surfacing: legacy floors (tier+state+readiness)
+      // are computed unconditionally and used to PROMOTE a card when the
+      // canonical engine stage is "watch" or "cooling" but the engine signals
+      // (state=actionable + score>=72, or state=live + score>=55) clearly
+      // merit a higher bucket. This is strictly additive — promotion only,
+      // never demotion — so high-conviction signals never get buried in the
+      // (collapsed-by-default) Track section.
       let section: keyof typeof sections;
       if (currentStatus === "resolved") {
         section = outcome === "called_hit" ? "cashed" : "dead";
-      } else if (canonicalStage) {
-        // Canonical stage drives live bucketing. Cooling demotes to watch
-        // (we don't want to keep advertising "Attack" after the engine cooled).
-        section =
-          canonicalStage === "attack" ? "attackNow"
-          : canonicalStage === "building" ? "building"
-          : "watch";
       } else {
-        // Legacy fallback: row was created before canonical stage was wired.
-        // Use the previous tier+readiness floors so old rows still bucket
-        // sensibly.
+        // Canonical-stage section (engine's authoritative view).
+        const canonicalSection: keyof typeof sections | null = canonicalStage
+          ? (canonicalStage === "attack" ? "attackNow"
+            : canonicalStage === "building" ? "building"
+            : "watch")
+          : null;
+
+        // Legacy-floor section computed from current signal state + readiness.
         const tier = (r.confidenceTier ?? "monitor").toLowerCase();
         const state = (r.signalState ?? "watching").toLowerCase();
         const readiness = parseFloat(String(r.currentReadinessScore ?? r.peakReadinessScore ?? 0)) || 0;
         const ATTACK_FLOOR = 72;
         const BUILDING_FLOOR = 55;
+        let legacySection: keyof typeof sections;
         if ((tier === "strong" || state === "actionable") && readiness >= ATTACK_FLOOR) {
-          section = "attackNow";
+          legacySection = "attackNow";
         } else if ((tier === "building" || state === "live" || tier === "strong" || state === "actionable") && readiness >= BUILDING_FLOOR) {
-          section = "building";
+          legacySection = "building";
         } else {
-          section = "watch";
+          legacySection = "watch";
+        }
+
+        if (canonicalSection) {
+          // Take the higher-priority of (canonical, legacy). attackNow > building > watch.
+          const liveRank: Record<string, number> = { attackNow: 0, building: 1, watch: 2 };
+          if (liveRank[legacySection] < liveRank[canonicalSection]) {
+            section = legacySection;
+            console.log(`[HR_LADDER_PROMOTE] gameId=${r.gameId} playerId=${r.playerId} canonical=${canonicalSection} legacy=${legacySection} score=${readiness} state=${state} tier=${tier}`);
+          } else {
+            section = canonicalSection;
+          }
+        } else {
+          section = legacySection;
         }
       }
 
