@@ -5816,6 +5816,14 @@ export async function registerRoutes(
       }
       res.json(responsePayload);
       checkAndSendAlerts(topPlays, storage).catch(console.warn);
+      // NBA halftime ledger persistence — record every surfaced play into
+      // halftime_play_alerts so daily grading + history reflects what users
+      // were actually shown. Fire-and-forget; never blocks the live response.
+      if (topPlays.length > 0) {
+        storage.savePlayAlerts(topPlays)
+          .then(() => console.log(`[NBA_HT_PERSIST] persisted ${topPlays.length} halftime plays`))
+          .catch(err => console.warn(`[NBA_HT_PERSIST] failed: ${err?.message ?? err}`));
+      }
       for (const p of topPlays) {
         const pDir = (p.betDirection ?? "").toUpperCase();
         if (pDir === "OVER" || pDir === "UNDER") {

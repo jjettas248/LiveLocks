@@ -1935,7 +1935,11 @@ export class DatabaseStorage implements IStorage {
     for (const play of plays) {
       const prob = Number(play.probability);
       const directionalConf = play.betDirection === "over" ? prob : 100 - prob;
-      if (directionalConf < 60) continue;
+      // Lowered from 60 → 50 so Tier C halftime plays (edge ≥ 6, prob 44–56)
+      // are recorded into the ledger. The route already curated topPlays via
+      // its tiering logic; this filter only blocks rows with no directional
+      // lean at all, never the curated set.
+      if (directionalConf < 50) continue;
 
       // Composite key for dedup — matches the DB-level check below
       const dedupeKey = `${play.gameId ?? ""}|${play.playerId ?? 0}|${play.statType}|${play.betDirection}|${today}`;
