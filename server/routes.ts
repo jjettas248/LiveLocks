@@ -2039,13 +2039,16 @@ export async function registerRoutes(
         }
 
         const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);
-        const rawOutputLookup = new Map((edgeEntry.outputs ?? []).map((o: any) => [`${o.playerId}_${o.market}`, o]));
+        // Freshness Integrity Fix #2.5 — normalize market keys on BOTH sides
+        // of the lookup so an `hr` engine output never silently misses a
+        // `home_runs` signal (or vice versa) and disappear from the feed.
+        const rawOutputLookup = new Map((edgeEntry.outputs ?? []).map((o: any) => [`${o.playerId}_${normalizeMlbMarketKey(o.market)}`, o]));
 
         const signalSource = edgeEntry.allSignals ?? edgeEntry.qualifiedSignals ?? [];
         totalGenerated += signalSource.length;
 
         for (const qs of signalSource) {
-          const raw = rawOutputLookup.get(`${qs.playerId}_${qs.market}`);
+          const raw = rawOutputLookup.get(`${qs.playerId}_${normalizeMlbMarketKey(qs.market)}`);
           const gameState = mlbGameCache.gameState[gid];
 
           for (const ft of (qs.feedTags ?? [])) {
@@ -2110,13 +2113,15 @@ export async function registerRoutes(
         if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) continue;
 
         const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);
-        const rawOutputLookup = new Map((edgeEntry.outputs ?? []).map((o: any) => [`${o.playerId}_${o.market}`, o]));
+        // Freshness Integrity Fix #2.5 — symmetric market-key normalization
+        // for the same reason as the live-signals endpoint.
+        const rawOutputLookup = new Map((edgeEntry.outputs ?? []).map((o: any) => [`${o.playerId}_${normalizeMlbMarketKey(o.market)}`, o]));
         const gameState = mlbGameCache.gameState[gid];
         const contactCache = mlbGameCache.contactData[gid];
         const weather = mlbGameCache.weather[gid];
 
         for (const qs of (edgeEntry.allSignals ?? [])) {
-          const raw = rawOutputLookup.get(`${qs.playerId}_${qs.market}`);
+          const raw = rawOutputLookup.get(`${qs.playerId}_${normalizeMlbMarketKey(qs.market)}`);
           const isHRMarket = qs.market === "home_runs";
           const playerContact = contactCache?.byPlayerId?.[qs.playerId];
 
@@ -4211,7 +4216,15 @@ export async function registerRoutes(
 
     const cached = liveSignalsCache.get(gameId);
     if (cached && Date.now() - cached.ts < cached.ttl) {
-      return res.json(cached.payload);
+      // Freshness Integrity Fix #3.3 — every NBA live-signals response carries
+      // engine timestamp + freshness flag so the UI can prove freshness or
+      // hide last-cycle dots when the server is in error mode.
+      return res.json({
+        ...cached.payload,
+        updatedAt: cached.ts,
+        generatedAt: Date.now(),
+        stale: false,
+      });
     }
 
     try {
@@ -4231,9 +4244,12 @@ export async function registerRoutes(
       const boxscore = summaryData.boxscore;
       const header = summaryData.header;
       if (!boxscore || !header) {
+        const nowTs = Date.now();
         const payload = { signals: [], engineOutput: {}, diagnostics: { reason: "espn_no_boxscore", inProgress: false } };
-        liveSignalsCache.set(gameId, { ts: Date.now(), ttl: LIVE_SIGNALS_TTL_PREFLIGHT, payload });
-        return res.json(payload);
+        liveSignalsCache.set(gameId, { ts: nowTs, ttl: LIVE_SIGNALS_TTL_PREFLIGHT, payload });
+        // Freshness Integrity Fix #3.3 — empty preflight is honestly empty,
+        // not stale: the engine just has nothing to score yet.
+        return res.json({ ...payload, updatedAt: nowTs, generatedAt: nowTs, stale: false, mode: "monitoring" });
       }
 
       const comp = header.competitions?.[0];
@@ -4251,9 +4267,12 @@ export async function registerRoutes(
       // Only run for genuinely in-progress games (not final, not scheduled)
       const inProgress = statusDesc === "In Progress" || statusDesc === "Halftime";
       if (!inProgress) {
+        const nowTs = Date.now();
         const payload = { signals: [], engineOutput: {}, diagnostics: { reason: "not_in_progress", statusDesc, inProgress: false, period } };
-        liveSignalsCache.set(gameId, { ts: Date.now(), ttl: LIVE_SIGNALS_TTL_PREFLIGHT, payload });
-        return res.json(payload);
+        liveSignalsCache.set(gameId, { ts: nowTs, ttl: LIVE_SIGNALS_TTL_PREFLIGHT, payload });
+        // Freshness Integrity Fix #3.3 — game not currently in play; honest
+        // empty + mode tag, not a stale flag.
+        return res.json({ ...payload, updatedAt: nowTs, generatedAt: nowTs, stale: false, mode: "monitoring" });
       }
 
       const allDbPlayers = await storage.getPlayers();
@@ -4874,14 +4893,80 @@ export async function registerRoutes(
         ? LIVE_SIGNALS_TTL_HEALTHY
         : LIVE_SIGNALS_TTL_EMPTY;
 
+      const nowTs = Date.now();
       const payload = { signals: validatedNbaSignals, engineOutput, diagnostics: diag };
-      liveSignalsCache.set(gameId, { ts: Date.now(), ttl, payload });
-      res.json(payload);
+      liveSignalsCache.set(gameId, { ts: nowTs, ttl, payload });
+      // Freshness Integrity Fix #3.3 — successful engine recompute carries a
+      // real timestamp; UI uses this to detect feed advance and prove freshness.
+      res.json({ ...payload, updatedAt: nowTs, generatedAt: nowTs, stale: false });
     } catch (e) {
       console.warn(`[LiveSignals] Error for game ${gameId}:`, (e as any).message);
+      const nowTs = Date.now();
       const payload = { signals: [], engineOutput: {}, diagnostics: { reason: "exception", error: (e as any)?.message ?? String(e), inProgress: false } };
-      liveSignalsCache.set(gameId, { ts: Date.now(), ttl: LIVE_SIGNALS_TTL_PREFLIGHT, payload });
-      res.json(payload);
+      liveSignalsCache.set(gameId, { ts: nowTs, ttl: LIVE_SIGNALS_TTL_PREFLIGHT, payload });
+      // Freshness Integrity Fix #3.3 — exception path is genuinely stale:
+      // updatedAt=0 + stale=true so the UI clears prior dots (Fix #3.6).
+      res.json({ ...payload, updatedAt: 0, generatedAt: nowTs, stale: true, mode: "error" });
+    }
+  });
+
+  // ── Unified Live Debug (admin) ─────────────────────────────────────────────
+  // Phase 5 — single endpoint to verify MLB + NBA live freshness end-to-end.
+  // Defined here (not with the other /api/admin/* routes) because the NBA
+  // liveSignalsCache is route-scoped to registerRoutes and only in scope after
+  // its declaration above. This is a pure read of in-memory state — no engine
+  // recomputes are triggered.
+  app.get("/api/admin/live-debug", requireAdmin, async (_req, res) => {
+    try {
+      const now = Date.now();
+      const mlbEntries = Array.from(mlbEdgeCache.entries()).map(([gameId, entry]) => ({
+        sport: "mlb" as const,
+        gameId,
+        updatedAt: entry.updatedAt,
+        ageSec: entry.updatedAt ? Math.round((now - entry.updatedAt) / 1000) : null,
+        createdAt: entry.createdAt,
+        outputs: entry.outputs?.length ?? 0,
+        qualifiedSignals: entry.qualifiedSignals?.length ?? 0,
+        allSignals: entry.allSignals?.length ?? 0,
+        isDegraded: entry.isDegraded ?? false,
+        signalLocked: entry.signalLocked ?? false,
+        preservedAt: (entry as any).preservedAt ?? null,
+        tags: entry.gameCardTags ?? [],
+      }));
+
+      const nbaEntries = Array.from(liveSignalsCache.entries()).map(([gameId, entry]) => ({
+        sport: "nba" as const,
+        gameId,
+        updatedAt: entry.ts,
+        ageSec: entry.ts ? Math.round((now - entry.ts) / 1000) : null,
+        ttlMs: entry.ttl,
+        ttlExpiresInMs: entry.ts + entry.ttl - now,
+        signals: entry.payload?.signals?.length ?? 0,
+        engineOutputPlayers: entry.payload?.engineOutput
+          ? Object.keys(entry.payload.engineOutput).length
+          : 0,
+        diagnosticsReason: (entry.payload as any)?.diagnostics?.reason ?? null,
+      }));
+
+      return res.json({
+        now,
+        mlb: {
+          activeGames: getActiveGames().length,
+          edgeEntries: mlbEntries,
+        },
+        nba: {
+          cachedGames: nbaEntries.length,
+          cacheEntries: nbaEntries,
+          ttls: {
+            healthyMs: LIVE_SIGNALS_TTL_HEALTHY,
+            emptyMs: LIVE_SIGNALS_TTL_EMPTY,
+            preflightMs: LIVE_SIGNALS_TTL_PREFLIGHT,
+          },
+        },
+      });
+    } catch (e: any) {
+      console.error("[admin/live-debug]", e.message);
+      return res.status(500).json({ error: "Failed to fetch unified live debug snapshot" });
     }
   });
 

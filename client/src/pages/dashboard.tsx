@@ -935,13 +935,23 @@ export default function Dashboard() {
     }
   }, [halftimePlaysData]);
 
-  const { data: liveSignalsData } = useQuery<{ signals: any[]; engineOutput: Record<number, Record<string, any>> }>({
+  const { data: liveSignalsData } = useQuery<{ signals: any[]; engineOutput: Record<number, Record<string, any>>; updatedAt?: number; generatedAt?: number; stale?: boolean; mode?: string }>({
     queryKey: ["/api/live-signals", selectedGameId],
     enabled: !!selectedGameId,
     refetchInterval: 20_000,
     staleTime: 15_000,
     placeholderData: (prev) => prev,
   });
+
+  // Freshness Integrity Fix #3.6 — when the server reports a stale or error
+  // payload (transient ESPN/odds failure), do not render last-cycle signal
+  // dots or engineOutput as if they were current. Empty arrays mean the UI
+  // honestly shows "no live data" instead of a frozen prior frame.
+  const nbaLiveSignalsStale = liveSignalsData?.stale === true;
+  const safeLiveSignalsData = nbaLiveSignalsStale
+    ? { ...(liveSignalsData ?? {}), signals: [], engineOutput: {} }
+    : liveSignalsData;
+  const safeEngineOutput = nbaLiveSignalsStale ? {} : (liveSignalsData?.engineOutput ?? {});
 
   const halftimeGameGroups = useMemo(() => {
     const plays = halftimePlaysData?.plays ?? [];
@@ -1007,7 +1017,10 @@ export default function Dashboard() {
           refetchHalftimePlays();
           halftimeTick = 0;
         }
-      }, 20 * 1000);
+        // Freshness Integrity Fix #3.2 — tightened from 20s → 15s so the
+        // dashboard tick aligns with useLiveStats' own 15s refetch (Fix #3.1)
+        // and the server's 15s freshness contract for live signals.
+      }, 15 * 1000);
     }
     return () => { if (autoRefreshRef.current) clearInterval(autoRefreshRef.current); };
   }, [selectedGameId, activeTab]);
@@ -2686,9 +2699,9 @@ export default function Dashboard() {
         {activeTab === "calculator" && selectedGameId && (liveStats || isLiveStatsLoading) && (
           <LiveBoxscore
             liveStats={liveStats}
-            engineOutput={liveSignalsData?.engineOutput}
+            engineOutput={safeEngineOutput}
             halftimePlaysData={halftimePlaysData}
-            liveSignalsData={liveSignalsData}
+            liveSignalsData={safeLiveSignalsData}
             selectedPlayer={selectedPlayer}
             watchedStatType={watchedStatType}
             isLiveStatsLoading={isLiveStatsLoading}

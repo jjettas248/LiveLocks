@@ -3193,8 +3193,17 @@ export class LiveGameOrchestrator {
     const PRESERVE_MAX_AGE_MS = 10 * 60 * 1000;
     const cacheAge = now - Math.max(existingCache?.updatedAt ?? 0, existingCache?.createdAt ?? 0);
     if (isThisCycleEmpty && existingCache && existingCache.allSignals.length > 0 && cacheAge < PRESERVE_MAX_AGE_MS) {
-      mlbEdgeCache.set(gameId, { ...existingCache, updatedAt: now });
-      console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=0 rejected=${signalsRejected} PRESERVED ${existingCache.allSignals.length} existing signals (this cycle blank, last good cycle within ${Math.round(cacheAge/1000)}s)`);
+      // Freshness Integrity Fix #2.2 — preserve the prior signals on a blank
+      // cycle, but DO NOT touch updatedAt: faking the timestamp here is what
+      // made the heartbeat-recompute (45s threshold) appear unnecessary and
+      // hid genuine staleness from the UI. Mark the entry as degraded and
+      // record when the preservation happened, so downstream code can see it.
+      mlbEdgeCache.set(gameId, {
+        ...existingCache,
+        isDegraded: true,
+        preservedAt: now,
+      } as any);
+      console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=0 rejected=${signalsRejected} PRESERVED ${existingCache.allSignals.length} existing signals (this cycle blank, last good cycle within ${Math.round(cacheAge/1000)}s) — updatedAt unchanged, isDegraded=true`);
     } else {
       mlbEdgeCache.set(gameId, {
         gameId,

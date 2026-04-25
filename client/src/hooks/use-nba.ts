@@ -104,10 +104,13 @@ export function useLiveStats(gameId: string | undefined) {
       return res.json();
     },
     enabled: !!gameId,
-    refetchInterval: false,
-    // Dashboard owns the polling cadence (20s via invalidateQueries). Keep
-    // staleTime tighter than that so the invalidation actually triggers a
-    // network refetch instead of being served from cache.
+    // Freshness Integrity Fix #3.1 — box score must refresh on its own so the
+    // stat dots, made-FG counts, and tier transitions stay in sync with live
+    // signal recomputes. Dashboard still invalidates on its 15s tick (Fix
+    // #3.2) which dedupes against this and just brings the next refetch
+    // forward; staleTime stays under both intervals so invalidates always
+    // trigger a real network refetch.
+    refetchInterval: 15_000,
     staleTime: 10_000,
     placeholderData: (prev) => prev,
   });
