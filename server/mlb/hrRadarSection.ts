@@ -336,6 +336,43 @@ export function applyHrRadarResolvedStateFixup<T extends CanonicalCardInput & Re
 }
 
 /**
+ * Spec Step 3 — canonical event-resolver return shape.
+ *
+ * Pure. Never reads from DB, never mutates anything. Given any input row
+ * shape (DB row, ladder card, board card, wire payload), returns the
+ * spec's canonical {lifecycleState, section, outcomeStatus, active}
+ * tuple. Used by reconcile / event-detection callsites that need a
+ * single typed value instead of three separate derive calls.
+ *
+ * NOTE: This is a SHAPE-only canonicalization. The actual resolution
+ * (writing `gradingStatus=called_hit` to the DB row) happens inside
+ * `gradeSingleHRPlay` → `storage.resolveHrRadarAlertAsHit`. This helper
+ * is what those callsites can return / log so consumers see one shape.
+ */
+export interface ResolveHrRadarPlayerOutcomeResult {
+  lifecycleState: HrRadarLifecycleState;
+  section: HrRadarSection;
+  outcomeStatus: HrRadarOutcomeStatus;
+  active: boolean;
+}
+
+export function resolveHrRadarPlayerOutcome(
+  card: CanonicalCardInput,
+): ResolveHrRadarPlayerOutcomeResult {
+  const outcomeStatus = deriveHrRadarOutcomeStatus(card);
+  const lifecycleState = deriveHrRadarLifecycleState(card);
+  const section = deriveHrRadarSection(card);
+  const active = !(
+    outcomeStatus === "called_hit" || outcomeStatus === "called_miss" ||
+    outcomeStatus === "uncalled_hr" || outcomeStatus === "late_signal" ||
+    lifecycleState === "cashed" || lifecycleState === "missed" ||
+    lifecycleState === "uncalled_hr" || lifecycleState === "late_signal" ||
+    lifecycleState === "inactive"
+  );
+  return { lifecycleState, section, outcomeStatus, active };
+}
+
+/**
  * Spec Step 14 — dedupe HR Radar records by (sessionDate, gameId, playerId).
  * Resolved record always wins over active duplicates. Pure.
  *

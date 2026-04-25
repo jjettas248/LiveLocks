@@ -185,6 +185,17 @@ function gradeSingleHRPlay(
     `hitLabel=${hitLabel} abIndex=${atBatIndex} source=${source}` +
     (ageSec !== null ? ` ageSec=${ageSec}` : "")
   );
+  // Goldmaster Spec Step 3 — canonical event-detected log alias.
+  // Co-exists with [HR_GRADE_DETECTED] so existing log consumers are unchanged
+  // while new ones can grep on the canonical name. The two source enums map
+  // 1:1: "play_feed" → HR_RADAR_HR_EVENT_DETECTED, "box_score_fallback" →
+  // HR_RADAR_BOXSCORE_HR_FALLBACK.
+  const canonicalEvent = source === "play_feed" ? "HR_RADAR_HR_EVENT_DETECTED" : "HR_RADAR_BOXSCORE_HR_FALLBACK";
+  console.log(
+    `[${canonicalEvent}] gameId=${gameId} playerId=${playerId} player=${playerName} ` +
+    `inning=${inning} half=${halfInning} hitLabel=${hitLabel} abIndex=${atBatIndex}` +
+    (ageSec !== null ? ` ageSec=${ageSec}` : "")
+  );
   storage.resolveAlertAsHit(playerId, gameId, inning, halfInning, atBatIndex, endTimeMs).catch(() => {});
   storage.resolveHrRadarAlertAsHit(playerId, gameId, inning, hitHalf, hitLabel, endTimeMs)
     .then((count) => {
@@ -482,6 +493,15 @@ const HR_ROSTER_SCAN_INTERVAL_MS = 3 * 60 * 1000;
 const hrRosterScanLastRun = new Map<string, number>();
 const hrRosterScanLastABCount = new Map<string, number>();
 
+// Goldmaster Spec Step 6 — periodic HR Radar reconcile cadence.
+// Belt-and-suspenders for the existing 10s state poll: if the play feed
+// lags or the orchestrator's `gradeHomeRunsFromPlays` was skipped (scheduler
+// tier downgrade, in-flight dedupe), this 20s tick re-runs the idempotent
+// per-play grader using the existing `KNOWN_HR_AB_INDEX` dedup map so the
+// same HR is never graded twice. Game-final reconcile is unchanged — it
+// still fires inside `_pollGameInner` when status flips to "final".
+const HR_RADAR_RECONCILE_MS = 20 * 1000;
+
 export class LiveGameOrchestrator {
   private timers: ReturnType<typeof setInterval>[] = [];
   private previousStates: Map<string, GameStateCache> = new Map();
@@ -541,7 +561,71 @@ export class LiveGameOrchestrator {
       }, 30 * 60_000)
     );
 
-    console.log(`[MLB orchestrator] Started — discovery ${GAME_DISCOVERY_MS / 1000}s, state/contact/pitcher ${GAME_STATE_MS / 1000}s, weather ${WEATHER_MS / 1000}s, OnlyHomers=hourly, calibration=30min`);
+    // Goldmaster Spec Steps 6-7 — periodic HR Radar reconcile loop.
+    // Runs every 20s for each active live game and re-triggers the
+    // idempotent per-play HR grader. The grader uses the per-process
+    // `KNOWN_HR_AB_INDEX` map so each HR is only stamped once even when
+    // this loop and the 10s state poll race.
+    this.timers.push(
+      setInterval(() => {
+        const tickStart = Date.now();
+        const games = getActiveGames();
+        let liveGames = 0;
+        for (const game of games) {
+          const status = normalizeMlbStatus(game.espnStatus);
+          if (status !== "live") continue;
+          liveGames += 1;
+          this.reconcileHrRadarLiveGame(game.gameId).catch((err) =>
+            console.warn(`[HR_RADAR_RECONCILE_GAME] gameId=${game.gameId} error=${err.message}`)
+          );
+        }
+        if (liveGames > 0) {
+          console.log(`[HR_RADAR_RECONCILE_TICK] liveGames=${liveGames} totalGames=${games.length} tookMs=${Date.now() - tickStart}`);
+        }
+      }, HR_RADAR_RECONCILE_MS)
+    );
+
+    // Catch-up pass at server start: one-shot reconcile per active live game
+    // ~5s after boot. Covers the case where the process restarts mid-game and
+    // the 10s state poll hasn't ticked yet but HR plays are already in cache.
+    setTimeout(() => {
+      const games = getActiveGames();
+      let count = 0;
+      for (const game of games) {
+        const status = normalizeMlbStatus(game.espnStatus);
+        if (status !== "live") continue;
+        count += 1;
+        this.reconcileHrRadarLiveGame(game.gameId).catch((err) =>
+          console.warn(`[HR_RADAR_RECONCILE_GAME] (startup) gameId=${game.gameId} error=${err.message}`)
+        );
+      }
+      if (count > 0) {
+        console.log(`[HR_RADAR_RECONCILE_TICK] (startup catch-up) liveGames=${count}`);
+      }
+    }, 5_000);
+
+    console.log(`[MLB orchestrator] Started — discovery ${GAME_DISCOVERY_MS / 1000}s, state/contact/pitcher ${GAME_STATE_MS / 1000}s, weather ${WEATHER_MS / 1000}s, hr-radar-reconcile ${HR_RADAR_RECONCILE_MS / 1000}s, OnlyHomers=hourly, calibration=30min`);
+  }
+
+  /**
+   * Goldmaster Spec Step 6 — per-game HR Radar reconcile.
+   *
+   * Idempotent: re-runs the play-feed-driven `gradeHomeRunsFromPlays` against
+   * the in-memory `mlbGameCache.hrPlays[gameId]` cache. The grader's atBatIndex
+   * dedup map (`KNOWN_HR_AB_INDEX`) guarantees each HR is stamped exactly
+   * once across this reconcile loop AND the 10s state poll. If the cache is
+   * empty (no HR yet, or game pre-snapshot) this is a no-op.
+   *
+   * NEVER touches grading/persistence directly — that is owned by
+   * `gradeSingleHRPlay` → `storage.resolveHrRadarAlertAsHit`. This wrapper
+   * only re-triggers detection so a missed 10s poll doesn't leave a stale row.
+   */
+  async reconcileHrRadarLiveGame(gameId: string): Promise<void> {
+    try {
+      gradeHomeRunsFromPlays(gameId);
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_RECONCILE_GAME] gameId=${gameId} grader threw: ${err.message}`);
+    }
   }
 
   stop(): void {
