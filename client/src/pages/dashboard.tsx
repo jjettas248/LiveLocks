@@ -2115,7 +2115,17 @@ export default function Dashboard() {
 
         <LiveUpdateToast />
 
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-4">
+        {/*
+          Free users get a single-column layout so FreeActivationRail (the
+          conversion surface) is the only thing above the sport tabs. They
+          must NOT see the right-side UserStatusRail because it surfaces
+          "Live Signals 87" / "X signals across all sports" — which is a
+          confusing locked-out stat for non-paid users instead of a CTA.
+
+          Paid / admin / trial users keep the existing 1fr+280px layout
+          with UserStatusRail rendered exactly as before.
+        */}
+        <div className={`grid grid-cols-1 gap-4 ${isFreeUser ? "" : "lg:grid-cols-[1fr_280px]"}`}>
           <div className="space-y-4">
             {(() => {
               // Pass 5 — branch precedence: admin/paid → TopPlaysPanel; trialing → TrialMissionRail; free → FreeActivationRail.
@@ -2233,18 +2243,20 @@ export default function Dashboard() {
               onOpenSport={handleNavigateToSport}
             />
           </div>
-          <div className="space-y-4">
-            <UserStatusRail
-              tier={effectiveTier ?? "free"}
-              playsUsed={playsUsed}
-              playsLimit={3}
-              isAdmin={!!user?.isAdmin}
-              onUpgradeClick={() => {
-                setUpgradeModalState({ playsUsed: user?.playsUsedToday ?? 0, limit: 3 });
-                setShowUpgradeModal(true);
-              }}
-            />
-          </div>
+          {!isFreeUser && (
+            <div className="space-y-4">
+              <UserStatusRail
+                tier={effectiveTier ?? "free"}
+                playsUsed={playsUsed}
+                playsLimit={3}
+                isAdmin={!!user?.isAdmin}
+                onUpgradeClick={() => {
+                  setUpgradeModalState({ playsUsed: user?.playsUsedToday ?? 0, limit: 3 });
+                  setShowUpgradeModal(true);
+                }}
+              />
+            </div>
+          )}
         </div>
 
         {scanningEdges && (
@@ -2310,7 +2322,19 @@ export default function Dashboard() {
             data-testid="auto-run-fallback"
             className="rounded-xl border border-[#27272a] bg-[#0a0a0a] p-4 text-center"
           >
-            <p className="text-sm text-[#71717a]">Monitoring opportunities — signals appear as games go live.</p>
+            {/*
+              Free users get a conversion-oriented fallback message instead of
+              the neutral "Monitoring opportunities — signals appear as games
+              go live" copy, which the activation spec explicitly forbids
+              showing to free users (it positions them as locked-out spectators
+              rather than a future paying customer with a clear next step).
+              Paid / trial / admin users keep the informational copy.
+            */}
+            <p className="text-sm text-[#71717a]">
+              {isFreeUser
+                ? "No free play available right now — upgrade to unlock unlimited signals as soon as they hit."
+                : "Monitoring opportunities — signals appear as games go live."}
+            </p>
             {isFreeUser && (
               <button
                 data-testid="button-get-full-access-fallback"
