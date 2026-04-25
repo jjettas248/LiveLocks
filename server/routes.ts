@@ -2595,11 +2595,49 @@ export async function registerRoutes(
   });
 
   app.get("/api/mlb/hr-radar/ladder", requireAuth, async (req, res) => {
+    // Helper — count live MLB games right now from the orchestrator cache.
+    // Used purely for diagnostics on the response so an empty radar can be
+    // explained ("0 live games" vs "live games but 0 candidates"). Never
+    // affects bucket contents.
+    const countLiveMlbGames = (): number => {
+      try {
+        const states = (mlbGameCache as any)?.gameState ?? {};
+        let n = 0;
+        for (const gid of Object.keys(states)) {
+          const raw = (states[gid] as any)?.status ?? (states[gid] as any)?.detailedState ?? "";
+          if (normalizeMlbStatus(String(raw)) === "live") n++;
+        }
+        return n;
+      } catch {
+        return 0;
+      }
+    };
     try {
       const sessionDate = typeof req.query.sessionDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.sessionDate)
         ? req.query.sessionDate
         : undefined;
       const ladder = await storage.getHrRadarLadder(sessionDate);
+      // Master Fix Phase 6/8 — additive diagnostics block. Lets the empty
+      // state on the client (and any operator/admin probe) honestly report
+      // why the radar is empty: was it 0 live games, 0 rows in DB, or both?
+      // Only adds a key — never replaces or removes existing payload fields.
+      const sections = (ladder as any)?.sections ?? {};
+      const rowsFound =
+        (sections.attackNow?.length ?? 0) +
+        (sections.ready?.length ?? 0) +
+        (sections.building?.length ?? 0) +
+        (sections.watch?.length ?? 0) +
+        (sections.cashed?.length ?? 0) +
+        (sections.dead?.length ?? 0);
+      const liveGamesFound = countLiveMlbGames();
+      (ladder as any).diagnostics = {
+        sessionDate: (ladder as any).sessionDate,
+        rowsFound,
+        liveGamesFound,
+        fallbackRowsGenerated: 0,
+        source: rowsFound > 0 ? "engine" : (liveGamesFound > 0 ? "engine_no_candidates" : "no_live_games"),
+        generatedAt: new Date().toISOString(),
+      };
       return res.json(ladder);
     } catch (e: any) {
       console.error("[mlb/hr-radar/ladder]", e.message);
@@ -2607,6 +2645,15 @@ export async function registerRoutes(
         sessionDate: "",
         sections: { attackNow: [], building: [], watch: [], cashed: [], dead: [] },
         counts: { attackNow: 0, building: 0, watch: 0, cashed: 0, dead: 0, total: 0 },
+        diagnostics: {
+          sessionDate: "",
+          rowsFound: 0,
+          liveGamesFound: countLiveMlbGames(),
+          fallbackRowsGenerated: 0,
+          source: "error",
+          error: e?.message ?? String(e),
+          generatedAt: new Date().toISOString(),
+        },
       });
     }
   });

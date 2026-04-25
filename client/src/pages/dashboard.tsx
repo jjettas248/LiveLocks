@@ -2230,6 +2230,11 @@ export default function Dashboard() {
                   </>
                 );
               }
+              const SHOW_LEGACY_GLOBAL_SIGNALS =
+                import.meta.env.VITE_SHOW_LEGACY_GLOBAL_SIGNALS === "true";
+              if (!SHOW_LEGACY_GLOBAL_SIGNALS) {
+                return <PublicProofStrip />;
+              }
               return (
                 <TopPlaysPanel
                   isElite={effectiveTier === "elite" || !!user?.isAdmin}
