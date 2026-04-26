@@ -1,6 +1,7 @@
 import type { IStorage } from "../storage";
 import { recordResult as recordDirectionalResult } from "../nba/directionalBias";
 import { DISABLED_MLB_MARKETS } from "../mlb/types";
+import { normalizeMlbMarketKey } from "../mlb/normalizeMarketKey";
 
 // ── MLB Stats API typed interfaces ────────────────────────────────────────────
 
@@ -492,12 +493,9 @@ export async function gradePersistedPlays(
 
             // Phase 8.1 — normalize MLB market keys before grading so legacy
             // persisted plays with `hr` resolve via the same path as live
-            // signals using `home_runs`.
-            const rawMarket = (play.market ?? "").trim();
-            const market = (rawMarket === "hr" ? "home_runs"
-              : rawMarket === "pitcher_k" ? "pitcher_strikeouts"
-              : rawMarket === "outs_recorded" ? "pitcher_outs"
-              : rawMarket);
+            // signals using `home_runs`. Single source of truth shared with
+            // server/routes.ts via server/mlb/normalizeMarketKey.
+            const market = normalizeMlbMarketKey(play.market);
             if ((DISABLED_MLB_MARKETS as string[]).includes(market)) {
               console.log("[GRADE MLB] Skipping disabled market:", market, "player:", play.playerName);
               skipped++;

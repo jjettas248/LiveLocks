@@ -38,6 +38,7 @@ import { checkAndSendAlerts } from "./alertManager";
 import { autoResolveAlerts, autoSettlePersistedPlays } from "./analyticsResolver";
 import { syncMinutesProjections } from "./services/minutesProjectionService";
 import { calculateMLBPropEdge, canShowSignal, hasRealOdds } from "./mlb/markets";
+import { normalizeMlbMarketKey } from "./mlb/normalizeMarketKey";
 import { getMarketParkFactor } from "./mlb/dataSources";
 import {
   recordMLBDiagnostic,
@@ -1595,12 +1596,7 @@ export async function registerRoutes(
   // The legacy "hr"/"pitcher_k" aliases must never collide with the canonical
   // "home_runs"/"pitcher_strikeouts" used by the engine output set, otherwise
   // valid signals silently drop from the validated-set filter.
-  function normalizeMlbMarketKey(market: string | null | undefined): string {
-    if (!market) return "";
-    if (market === "hr") return "home_runs";
-    if (market === "pitcher_k") return "pitcher_strikeouts";
-    return market;
-  }
+  // Phase 3.5 ext — single source of truth, shared with the grader.
 
   app.get("/api/mlb/live-signals/:gameId", requireMLBAccess, async (req, res) => {
     const gameId = req.params.gameId as string;
