@@ -102,7 +102,9 @@ async function resolveGamePk(gameIdOrEspnId: string): Promise<string | null> {
         return gameIdOrEspnId;
       }
     }
-  } catch { /* fall through */ }
+  } catch (err) {
+    console.warn("[GRADE MLB] Direct gamePk fetch failed for", gameIdOrEspnId, "— falling back to ESPN lookup:", (err as Error).message);
+  }
 
   try {
     const espnUrl = `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/summary?event=${gameIdOrEspnId}`;
@@ -418,6 +420,21 @@ export async function gradePersistedPlays(
 
     console.log("[GRADE] Pending persisted plays to grade:", pending.length);
 
+    // Phase 8.3 — ungraded diagnostic: show stuck-play backlog by age so the
+    // grader's silent skip rate is observable each cycle. If "stuck_3d_plus"
+    // grows over time, the boxscore resolver or market resolver is failing
+    // silently for those plays (e.g. DNP players, wrong-gamePk match,
+    // unsupported market) and they need manual review.
+    const now = Date.now();
+    let bucketFresh24h = 0, bucket1to3d = 0, bucket3dPlus = 0;
+    for (const p of pending) {
+      const ageHrs = (now - new Date(p.timestamp ?? now).getTime()) / (60 * 60 * 1000);
+      if (ageHrs < 24) bucketFresh24h++;
+      else if (ageHrs < 72) bucket1to3d++;
+      else bucket3dPlus++;
+    }
+    console.log(`[GRADE_BACKLOG] pending_total=${pending.length} fresh_24h=${bucketFresh24h} overdue_1_3d=${bucket1to3d} stuck_3d_plus=${bucket3dPlus}`);
+
     const byGameAndSport = new Map<string, typeof pending>();
     for (const play of pending) {
       if (!play.gameId) {
@@ -451,6 +468,14 @@ export async function gradePersistedPlays(
         }
 
         if (!mlbData) {
+          // Phase 8.3 — make silent skip visible. Box score returned null
+          // (game not final, postponed, cancelled, or stats API unreachable).
+          // Plays remain pending for next cycle but we now log the skip and
+          // count it so admins can see ungraded backlog.
+          const ages = plays.map(p => Math.floor((Date.now() - new Date(p.timestamp ?? Date.now()).getTime()) / (60 * 60 * 1000)));
+          const oldestHrs = ages.length > 0 ? Math.max(...ages) : 0;
+          console.warn(`[GRADE_NULL_BOXSCORE] sport=mlb gameId=${gameId} plays=${plays.length} oldest_age_hrs=${oldestHrs} — boxscore unavailable (game not final / postponed / API failure)`);
+          skipped += plays.length;
           continue;
         }
 
@@ -552,6 +577,13 @@ export async function gradePersistedPlays(
       }
 
       if (!data) {
+        // Phase 8.3 — make silent skip visible. NBA/NCAAB box score returned
+        // null (game not final, postponed, ESPN API unreachable). Plays
+        // remain pending for next cycle but we now log the skip and count it.
+        const ages = plays.map(p => Math.floor((Date.now() - new Date(p.timestamp ?? Date.now()).getTime()) / (60 * 60 * 1000)));
+        const oldestHrs = ages.length > 0 ? Math.max(...ages) : 0;
+        console.warn(`[GRADE_NULL_BOXSCORE] sport=${sport} gameId=${gameId} plays=${plays.length} oldest_age_hrs=${oldestHrs} — boxscore unavailable (game not final / postponed / API failure)`);
+        skipped += plays.length;
         continue;
       }
 
