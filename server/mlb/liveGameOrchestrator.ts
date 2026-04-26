@@ -2011,6 +2011,7 @@ export class LiveGameOrchestrator {
         readinessScore: hrBuild.score,
         dynamicReadinessScore: earlyDetect?.hrReadinessScore ?? null,
         canonicalStage: contactCanonicalStage,
+        dynamicState: earlyDetect?.currentState ?? null,
         plateAppearancesTracked: contactPaCount,
         hasLiveABContext: contactHasLiveAB,
         confidenceTier: tierMap[alertResult.signalState ?? "FORMATION"] ?? "monitor",
@@ -2788,6 +2789,10 @@ export class LiveGameOrchestrator {
                 dynamicReadinessScore: hrDynSnap?.hrReadinessScore ?? null,
                 // Phase 1 — canonical stage (overrides legacy sticky tier)
                 canonicalStage,
+                // Task #140 — raw dynamic state (BET_NOW/PREPARE/etc.) so the
+                // user-stage layer can authoritatively read engine state from
+                // stageContract.dynamicState rather than re-deriving it.
+                dynamicState: hrDynSnap?.currentState ?? null,
                 plateAppearancesTracked: enginePaCount,
                 hasLiveABContext: engineHasLiveAB,
                 confidenceTier: tierMap[alertResult.signalState ?? "FORMATION"] ?? "monitor",

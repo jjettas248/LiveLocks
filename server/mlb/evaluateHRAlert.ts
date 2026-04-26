@@ -855,21 +855,28 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     };
   }
 
-  // PATH_E (CONVICTION FALLBACK) — high-conviction WATCH safety net.
-  // Catches cases where the model has strong evidence (high score + high
-  // conversion probability) but insufficient *classified contact-event count*
-  // to satisfy any of paths A–D / WATCH_POWER. These were previously
-  // dropped silently and showed up as uncalled_hr in the ladder when the
-  // HR landed (e.g. Adames score=5.4 conv=19.2% with only 1 hardHit).
+  // PATH_E (CONVICTION FALLBACK) — high-conviction safety net.
   //
-  // Strict guardrails: WATCH-tier ONLY (never PREPARE/BET_NOW), requires
-  // top-quartile model conviction AND at least one power signal of any
-  // kind, zero soft vetoes, and remaining PA. All upstream gates
-  // (cooldown, hard veto, conv-low) still apply. Behind a kill-switch env
-  // var so it can be disabled instantly if it produces noise.
+  // Task #140 update — was previously WATCH-tier ONLY, which capped
+  // 25%+ conviction batters (Moisés Ballesteros, Shea Langeliers,
+  // Carter Jensen, etc.) at the Track section even though the dynamic
+  // engine had already promoted them to BET_NOW. Now uses a graduated
+  // tier escalator that reflects the engine's true conviction:
+  //
+  //   conv ≥ 0.25 + score ≥ 7.0 + strong context → PEAK   (alertTier=peak)
+  //   conv ≥ 0.20 + score ≥ 6.0 + moderate ctx   → PREPARE (alertTier=prepare)
+  //   conv ≥ 0.15 + score ≥ 4.5 (default)        → WATCH   (alertTier=watch)
+  //
+  // All upstream gates (cooldown, hard veto, conv-low) still apply.
+  // Behind a kill-switch env var so it can be disabled instantly if it
+  // produces noise.
   const convictionPathEnabled = (process.env.HR_CONVICTION_PATH_ENABLED ?? "true").toLowerCase() !== "false";
   const HR_CONVICTION_CONV_MIN = 0.15;
   const HR_CONVICTION_SCORE_MIN = 4.5;
+  const HR_CONVICTION_PREPARE_CONV = 0.20;
+  const HR_CONVICTION_PREPARE_SCORE = 6.0;
+  const HR_CONVICTION_PEAK_CONV = 0.25;
+  const HR_CONVICTION_PEAK_SCORE = 7.0;
   const hasAnyPowerSignal = powerIndicators >= 1 || powerContactCount >= 1;
 
   if (
@@ -887,12 +894,57 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     if (pitcherFavorable) positiveFactors.push(`pitcher: ${pitcherFatigueState}`);
     if (envFavorable) positiveFactors.push(`env: ${environmentContext}`);
 
-    // Cap confidence — contact evidence is thinner than other paths.
+    // Tier escalator (Task #140) — only escalates above WATCH when both
+    // conviction AND score clear the higher bar AND favorable context
+    // confirms. Otherwise the original WATCH-tier behavior is preserved.
+    const isPeak =
+      convProb >= HR_CONVICTION_PEAK_CONV &&
+      hrBuildScore >= HR_CONVICTION_PEAK_SCORE &&
+      hasModerateContext;
+    const isPrepare =
+      !isPeak &&
+      convProb >= HR_CONVICTION_PREPARE_CONV &&
+      hrBuildScore >= HR_CONVICTION_PREPARE_SCORE &&
+      (pitcherFavorable || envFavorable || hasModerateContext);
+
     const rawConf = computeConfidence(hrBuildScore, factors, null, softVetoes.length, convProb);
-    const cappedConf = Math.min(7, rawConf);
+    // Cap confidence per tier — contact evidence is thinner than other paths.
+    const cappedConf = isPeak
+      ? Math.min(8.5, rawConf)
+      : isPrepare
+      ? Math.min(7.5, rawConf)
+      : Math.min(7, rawConf);
 
-    console.log(`[HR_ALERT_PATH_E_CONVICTION] ${input.playerName} game=${input.gameId} — high-conviction WATCH (score=${hrBuildScore} conv=${convPct} powerInd=${powerIndicators} powerContact=${powerContactCount}). Promoting to WATCH-only.`);
+    const tier: "peak" | "prepare" | "watch" = isPeak ? "peak" : isPrepare ? "prepare" : "watch";
+    const tierUpper = tier.toUpperCase();
+    console.log(`[HR_ALERT_PATH_E_CONVICTION] ${input.playerName} game=${input.gameId} — ${tierUpper} (score=${hrBuildScore} conv=${convPct} powerInd=${powerIndicators} powerContact=${powerContactCount}).`);
 
+    if (isPeak) {
+      return {
+        level: "ALERT",
+        triggerReason: `peak:conviction_score${hrBuildScore}_conv${(convProb * 100).toFixed(0)}`,
+        signalState: "PEAK",
+        decision: "BET_NOW",
+        confidenceScore: cappedConf,
+        formattedReason: `Highest HR conversion likelihood (${convPct}) with build score ${hrBuildScore}. Engine has high conviction — fire signal.`,
+        detectedInning: inning,
+        alertTier: "officialAlert",
+        diagnostics: { ...baseDiagnostics, alertPath: "PATH_E_CONVICTION", positiveFactors },
+      };
+    }
+    if (isPrepare) {
+      return {
+        level: "ALERT",
+        triggerReason: `prepare:conviction_score${hrBuildScore}_conv${(convProb * 100).toFixed(0)}`,
+        signalState: "BUILDING",
+        decision: "PREPARE",
+        confidenceScore: cappedConf,
+        formattedReason: `High HR conversion likelihood (${convPct}) with build score ${hrBuildScore}. Conditions building — prepare for escalation.`,
+        detectedInning: inning,
+        alertTier: "prepare",
+        diagnostics: { ...baseDiagnostics, alertPath: "PATH_E_CONVICTION", positiveFactors },
+      };
+    }
     return {
       level: "WATCH",
       triggerReason: `watch:conviction_score${hrBuildScore}_conv${(convProb * 100).toFixed(0)}`,
@@ -903,6 +955,55 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
       detectedInning: inning,
       alertTier: "watch",
       diagnostics: { ...baseDiagnostics, alertPath: "PATH_E_CONVICTION", positiveFactors },
+    };
+  }
+
+  // ── PATH_F_BLOCKED_BRIDGE (Task #140) ───────────────────────────────────
+  // Was previously a silent BLOCKED log returning nullResult, which left
+  // moderate-conviction batters (e.g. Mike Trout conv=27.1% score=4.4,
+  // Bobby Witt Jr conv=17.5% score=3.24, Teoscar Hernández conv=26.3%
+  // score=3.43) entirely invisible on the radar. Surfaces them as a
+  // WATCH-tier signal so the user can see the pattern even when
+  // build-score hasn't crossed PATH_E's score floor.
+  //
+  // Strict guardrails: WATCH-tier ONLY (never PREPARE/BET_NOW), requires
+  // a meaningful conviction floor (≥ 0.10 calibrated) AND at least one
+  // power indicator AND minimal build score. Soft vetoes still suppress.
+  // Behind a kill-switch env var.
+  const blockedBridgeEnabled = (process.env.HR_BLOCKED_BRIDGE_ENABLED ?? "true").toLowerCase() !== "false";
+  const HR_BLOCKED_BRIDGE_CONV_MIN = 0.10;
+  const HR_BLOCKED_BRIDGE_SCORE_MIN = 2.5;
+
+  if (
+    blockedBridgeEnabled &&
+    totalHrShaped === 0 &&
+    powerIndicators >= 1 &&
+    hrBuildScore >= HR_BLOCKED_BRIDGE_SCORE_MIN &&
+    convProb !== null &&
+    convProb >= HR_BLOCKED_BRIDGE_CONV_MIN &&
+    softVetoes.length === 0 &&
+    (remainingPA === null || remainingPA >= 1.0)
+  ) {
+    positiveFactors.push(`bridged from blocked: conv=${convPct} score=${hrBuildScore}`);
+    positiveFactors.push(`power indicator: ${powerIndicators} (barrels=${factors.barrels}/hardHits=${factors.hardHits}/deepFly=${factors.deepFlyouts})`);
+    if (pitcherFavorable) positiveFactors.push(`pitcher: ${pitcherFatigueState}`);
+    if (envFavorable) positiveFactors.push(`env: ${environmentContext}`);
+
+    const rawConf = computeConfidence(hrBuildScore, factors, null, softVetoes.length, convProb);
+    const cappedConf = Math.min(6, rawConf);
+
+    console.log(`[HR_ALERT_PATH_F_BLOCKED_BRIDGE] ${input.playerName} game=${input.gameId} — surfacing as WATCH (score=${hrBuildScore} conv=${convPct} powerInd=${powerIndicators}).`);
+
+    return {
+      level: "WATCH",
+      triggerReason: `watch:bridged_score${hrBuildScore}_conv${(convProb * 100).toFixed(0)}`,
+      signalState: "FORMATION",
+      decision: "MONITOR",
+      confidenceScore: cappedConf,
+      formattedReason: `Power profile detected (${convPct} HR likelihood, build score ${hrBuildScore}). Below alert threshold — tracking for confirmation.`,
+      detectedInning: inning,
+      alertTier: "watch",
+      diagnostics: { ...baseDiagnostics, alertPath: "PATH_F_BLOCKED_BRIDGE", positiveFactors },
     };
   }
 

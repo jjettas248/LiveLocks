@@ -3202,6 +3202,16 @@ export class DatabaseStorage implements IStorage {
      */
     canonicalStage?: "watch" | "building" | "attack" | "cooling" | "closed" | null;
     /**
+     * Task #140 — raw dynamic engine state from hrAlertEngine snapshot
+     * (`HRAlertSnapshot.currentState`). Persisted into
+     * `diagnosticsSnapshot.stageContract.dynamicState` so the user-facing
+     * stage layer (`mapToUserStage`) and grading harness can read the
+     * engine's authoritative state directly without re-deriving from
+     * canonicalStage. NEVER overwrites canonicalStage; both fields live
+     * in stageContract and represent independent signal paths.
+     */
+    dynamicState?: "WATCH" | "PREPARE" | "BET_NOW" | "COOLED_OFF" | "CLOSED" | null;
+    /**
      * Dynamic readiness score (0–100) from hrAlertEngine snapshot.
      * When provided, this is used as the live `readinessScore` instead of raw
      * hrBuildScore so progression is engine-driven, not formation-driven.
@@ -3271,6 +3281,10 @@ export class DatabaseStorage implements IStorage {
     const stageContract: Record<string, unknown> = {
       currentCanonicalStage: incomingStage,
       historicalBestStage: incomingStage,
+      // Task #140 — persist raw dynamic engine state (BET_NOW/PREPARE/etc.)
+      // so the user-stage layer reads it directly. Null when caller did
+      // not provide one (e.g. presence-only rows).
+      dynamicState: data.dynamicState ?? null,
     };
     // Map canonical stage -> legacy confidenceTier so the rest of the system
     // (ladder, board) keeps working without schema changes. attack→strong,
@@ -3415,6 +3429,10 @@ export class DatabaseStorage implements IStorage {
             currentCanonicalStage: incomingCanonical,
             historicalBestStage: newHistorical,
             previousCanonicalStage: prevCanonical,
+            // Task #140 — refresh raw dynamic engine state on every UPDATE.
+            // Preserves prior value when caller does not pass a new one
+            // (defensive — every live tick should pass it).
+            dynamicState: data.dynamicState ?? prevStageContract.dynamicState ?? null,
           },
         };
 
