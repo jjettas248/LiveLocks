@@ -59,7 +59,7 @@ import { buildLiveEventInterpretation } from "./liveEventInterpretation";
 import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, clearGameCooldowns, type HRAlertInput } from "./evaluateHRAlert";
-import { recomputeHrAlertState, clearGameHrStates, getHrAlertState, mapDynamicStateToStage, seedHrAlertDetection, type HRAlertSnapshot } from "./hrAlertEngine";
+import { recomputeHrAlertState, clearGameHrStates, getHrAlertState, mapDynamicStateToStage, seedHrAlertDetection, closeHrAlertOnHit, type HRAlertSnapshot } from "./hrAlertEngine";
 import { todayET } from "../utils/dateUtils";
 import { buildHRSignal } from "./HRSignalBuilder";
 import { getPlayer } from "./rosterService";
@@ -166,6 +166,18 @@ export function getOnlyHomersBallparkHrCount(ballpark: string): number | null {
 const KNOWN_HR_COUNTS = new Map<string, number>();          // legacy: used elsewhere as "we've seen this player's HR"
 const KNOWN_HR_AB_INDEX = new Map<string, number>();        // gameId_playerId -> highest graded atBatIndex
 
+// HR Radar audit fix #1 — race-proof "alreadyHit" lookup.
+// Stamped synchronously inside gradeSingleHRPlay the moment the play feed
+// reports a HR, independent of the box-score sync. Consumers (signal state,
+// feed-tag derivation, engine state map) check this set first so a player who
+// just hit a HR can never appear as "BET_NOW / fire" while the box-score
+// catches up. Cleared at game-final cleanup.
+export const RESOLVED_HR_PLAYERS = new Set<string>();       // `${gameId}_${playerId}`
+
+export function isPlayerHrResolved(gameId: string, playerId: string | number): boolean {
+  return RESOLVED_HR_PLAYERS.has(`${gameId}_${playerId}`);
+}
+
 function gradeSingleHRPlay(
   playerId: string,
   gameId: string,
@@ -196,6 +208,14 @@ function gradeSingleHRPlay(
     `inning=${inning} half=${halfInning} hitLabel=${hitLabel} abIndex=${atBatIndex}` +
     (ageSec !== null ? ` ageSec=${ageSec}` : "")
   );
+  // HR Radar audit fix #1 — stamp resolved set immediately, before any DB I/O,
+  // so any in-flight signal generation in this same tick sees the player as
+  // hit even if the box-score has not refreshed yet.
+  RESOLVED_HR_PLAYERS.add(`${gameId}_${playerId}`);
+  // HR Radar audit fix #3 — terminal close on the in-memory engine state map
+  // so subsequent recompute ticks short-circuit and the player can never
+  // re-enter BET_NOW after the HR. Idempotent.
+  closeHrAlertOnHit(gameId, playerId);
   storage.resolveAlertAsHit(playerId, gameId, inning, halfInning, atBatIndex, endTimeMs).catch(() => {});
   storage.resolveHrRadarAlertAsHit(playerId, gameId, inning, hitHalf, hitLabel, endTimeMs)
     .then((count) => {
@@ -987,6 +1007,10 @@ export class LiveGameOrchestrator {
       for (const key of Array.from(KNOWN_HR_AB_INDEX.keys())) {
         if (key.startsWith(`${gameId}_`)) KNOWN_HR_AB_INDEX.delete(key);
       }
+      // HR Radar audit fix #1 — release per-game resolved-HR set at game-final.
+      for (const key of Array.from(RESOLVED_HR_PLAYERS)) {
+        if (key.startsWith(`${gameId}_`)) RESOLVED_HR_PLAYERS.delete(key);
+      }
     }
 
     if (prevState) {
@@ -1312,7 +1336,12 @@ export class LiveGameOrchestrator {
     }
 
     const signalTags = deriveSignalTags(input, output, scoreBreakdown);
-    const feedTags = deriveFeedTags(input, output, scoreBreakdown);
+    // HR Radar audit fix #4 — pass HR-resolved status so feed-tag derivation
+    // can drop the hr_radar / hr_watchlist tags for any player who has
+    // already homered this game.
+    const isHrResolvedPlayer = output.market === "home_runs" &&
+      RESOLVED_HR_PLAYERS.has(`${gameId}_${input.playerId}`);
+    const feedTags = deriveFeedTags(input, output, scoreBreakdown, { isHrResolved: isHrResolvedPlayer });
     const glowEligible = isPlayerGlowEligible(scoreBreakdown, signalTags);
     const pitcherSigs = derivePitcherSignals(input, output);
     const opportunityScore = computeFullOpportunityScore(input, input.inning);
@@ -1492,7 +1521,13 @@ export class LiveGameOrchestrator {
 
     const currentStat = input.currentStatValue ?? 0;
     const line = output.bookLine;
-    const alreadyHit = currentStat >= line && line > 0;
+    // HR Radar audit fix #1 — race-proof alreadyHit. The play-feed grader stamps
+    // RESOLVED_HR_PLAYERS the moment it sees a HR, before the box-score syncs
+    // currentStatValue. Trust that signal first. Otherwise fall back to the
+    // box-score-based comparison.
+    const isHrMarket = output.market === "home_runs";
+    const isHrResolvedNow = isHrMarket && RESOLVED_HR_PLAYERS.has(`${gameId}_${input.playerId}`);
+    const alreadyHit = isHrResolvedNow || (currentStat >= line && line > 0);
 
     const isFallback = output.fallbackUsed === true;
     const isStale = output.engineGeneratedAt > 0 && (Date.now() - output.engineGeneratedAt) > 120_000;
@@ -1574,7 +1609,10 @@ export class LiveGameOrchestrator {
 
     const scoreBreakdown = computeSignalScore(input, output);
     const signalTags = deriveSignalTags(input, output, scoreBreakdown);
-    const feedTags = deriveFeedTags(input, output, scoreBreakdown);
+    // HR Radar audit fix #4 — same HR-resolved guard as the qualified path.
+    const isHrResolvedPlayerWatch = output.market === "home_runs" &&
+      RESOLVED_HR_PLAYERS.has(`${gameId}_${input.playerId}`);
+    const feedTags = deriveFeedTags(input, output, scoreBreakdown, { isHrResolved: isHrResolvedPlayerWatch });
     const watchPitcherSigsForProj = derivePitcherSignals(input, output);
     const stateFields = this.computeSignalState(gameId, input, output, scoreBreakdown);
 

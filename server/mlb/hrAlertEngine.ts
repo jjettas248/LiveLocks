@@ -113,6 +113,9 @@ interface BatterHRState {
   tickCount: number;
   lastRecomputeAt: number;
   contactEventsAtLastRecompute: number;
+  // HR Radar audit fix #6 — wall-clock ms of the last observed contact event
+  // (PA), used by the staleness decay rail. Null until first observation.
+  lastContactEventAtMs: number | null;
   lastAlertResult: HRAlertResult | null;
   previousPitcherId: string | null;
   consecutiveDeclineTicks: number;
@@ -133,10 +136,26 @@ const DECAY_HALF_LIFE_MINUTES = 12;
 const DECAY_PA_HALF_LIFE = 3;
 const CONSECUTIVE_DECLINE_COOLDOWN = 3;
 
-function computeDecayFactor(minutesSinceDetection: number, pasSinceDetection: number): number {
+// HR Radar audit fix #6 — stale-since-last-contact-event decay rail.
+// Once a card has been live for STALE_PA_GRACE_MINUTES without observing a
+// new PA, every additional STALE_PA_HALF_LIFE_MINUTES halves the multiplier.
+// This makes the radar feel dynamic again — a player who was hot 20 minutes
+// ago but hasn't batted will visibly slide out of BET_NOW.
+const STALE_PA_GRACE_MINUTES = 8;
+const STALE_PA_HALF_LIFE_MINUTES = 8;
+
+function computeDecayFactor(
+  minutesSinceDetection: number,
+  pasSinceDetection: number,
+  minutesSinceLastContactEvent: number,
+): number {
   const timeDecay = Math.pow(0.5, minutesSinceDetection / DECAY_HALF_LIFE_MINUTES);
   const paDecay = Math.pow(0.5, pasSinceDetection / DECAY_PA_HALF_LIFE);
-  return Math.min(timeDecay, paDecay);
+  const staleness = Math.max(0, minutesSinceLastContactEvent - STALE_PA_GRACE_MINUTES);
+  const staleDecay = staleness > 0
+    ? Math.pow(0.5, staleness / STALE_PA_HALF_LIFE_MINUTES)
+    : 1.0;
+  return Math.min(timeDecay, paDecay, staleDecay);
 }
 
 function computeRemainingPA(
@@ -195,6 +214,12 @@ function deriveState(
 ): DynamicHRState {
   if (gameFinal) return "CLOSED";
 
+  // HR Radar audit fix #3 — CLOSED is terminal. Once `closeHrAlertOnHit`
+  // (or game-final) sets CLOSED, subsequent recomputes must NOT revive the
+  // alert. Without this guard, the threshold checks below could push a
+  // hit-resolved batter back into BET_NOW on the next tick.
+  if (prevState === "CLOSED") return "CLOSED";
+
   if (prevState === "COOLED_OFF") {
     if (calibratedProb * decayFactor >= BET_NOW_THRESHOLD) return "BET_NOW";
     if (calibratedProb * decayFactor >= PREPARE_THRESHOLD) return "PREPARE";
@@ -247,6 +272,7 @@ export function recomputeHrAlertState(
       tickCount: 0,
       lastRecomputeAt: 0,
       contactEventsAtLastRecompute: 0,
+      lastContactEventAtMs: null,
       lastAlertResult: null,
       previousPitcherId: options.currentPitcherId ?? null,
       consecutiveDeclineTicks: 0,
@@ -265,7 +291,21 @@ export function recomputeHrAlertState(
     : 0;
   const currentContactEvents = input.priorABResults?.length ?? 0;
   const pasSinceDetection = Math.max(0, currentContactEvents - prev.contactEventsAtLastRecompute);
-  const decayFactor = prev.detectedAtMs != null ? computeDecayFactor(minutesSinceDetection, pasSinceDetection) : 1.0;
+  // HR Radar audit fix #6 — wall-clock minutes since last contact event was
+  // observed. If the player gains a new PA this tick, reset to 0; otherwise
+  // grow by the time delta since the last recompute. This becomes the
+  // staleness signal that drops cards out of BET_NOW when nothing's happening.
+  if (currentContactEvents > prev.contactEventsAtLastRecompute) {
+    prev.lastContactEventAtMs = now;
+  } else if (prev.lastContactEventAtMs == null) {
+    // First-ever recompute: seed off detection or now to avoid staleness=0
+    // accumulating from the unix epoch.
+    prev.lastContactEventAtMs = prev.detectedAtMs ?? now;
+  }
+  const minutesSinceLastContact = (now - prev.lastContactEventAtMs) / 60000;
+  const decayFactor = prev.detectedAtMs != null
+    ? computeDecayFactor(minutesSinceDetection, pasSinceDetection, minutesSinceLastContact)
+    : 1.0;
 
   const hardVetoed = alertResult.diagnostics?.alertPath === "VETOED" ||
     alertResult.diagnostics?.alertPath === "CONV_LOW";
@@ -484,6 +524,7 @@ export function seedHrAlertDetection(
     tickCount: 0,
     lastRecomputeAt: 0,
     contactEventsAtLastRecompute: 0,
+    lastContactEventAtMs: detection.detectedAtMs ?? null,
     lastAlertResult: null,
     previousPitcherId: null,
     consecutiveDeclineTicks: 0,
@@ -495,6 +536,43 @@ export function clearGameHrStates(gameId: string): void {
   for (const key of Array.from(stateMap.keys())) {
     if (key.startsWith(`${gameId}_`)) stateMap.delete(key);
   }
+}
+
+/**
+ * HR Radar audit fix #3 — terminal close on observed HR.
+ *
+ * Called from `gradeSingleHRPlay` the moment the play feed reports a HR for
+ * (gameId, playerId). Forces the in-memory engine state to CLOSED so that
+ * subsequent recompute ticks short-circuit past `deriveState` and the player
+ * cannot re-enter BET_NOW. Peak fields are preserved so post-mortem displays
+ * still show the readiness/state at the time of detection.
+ *
+ * Idempotent — repeated calls are no-ops.
+ */
+export function closeHrAlertOnHit(gameId: string, playerId: string): boolean {
+  const key = stateKey(gameId, playerId);
+  const prev = stateMap.get(key);
+  if (!prev) return false;
+  if (prev.currentState === "CLOSED") return false;
+  const oldState = prev.currentState;
+  prev.currentState = "CLOSED";
+  prev.lastStateChangeAt = Date.now();
+  if (prev.lastSnapshot) {
+    prev.lastSnapshot = {
+      ...prev.lastSnapshot,
+      currentState: "CLOSED",
+      lastStateChangeAt: prev.lastStateChangeAt,
+      cooldownReason: "HR observed — alert closed",
+    };
+  }
+  console.log(`[HR_ALERT_CLOSED_ON_HIT] gameId=${gameId} playerId=${playerId} oldState=${oldState} newState=CLOSED`);
+  return true;
+}
+
+/** Read-only check used by feed-tag derivation and routes for hard guards. */
+export function isHrAlertClosed(gameId: string, playerId: string): boolean {
+  const prev = stateMap.get(stateKey(gameId, playerId));
+  return !!prev && prev.currentState === "CLOSED";
 }
 
 export function getAllGameHrSnapshots(gameId: string): Map<string, HRAlertSnapshot> {

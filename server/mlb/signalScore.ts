@@ -368,7 +368,8 @@ export function deriveSignalTags(
 export function deriveFeedTags(
   input: MLBPropInput,
   output: MLBPropOutput,
-  scoreBreakdown: SignalScoreBreakdown
+  scoreBreakdown: SignalScoreBreakdown,
+  opts?: { isHrResolved?: boolean }
 ): FeedTag[] {
   const tags: FeedTag[] = [];
 
@@ -381,10 +382,17 @@ export function deriveFeedTags(
   if (input.inning >= 6 && input.inning <= 8) tags.push("inning_7");
 
   if (output.market === "home_runs") {
-    // HR Radar gating uses our engine signal score (not raw HR probability —
-    // book-implied HR probability is almost never high, so probability would
-    // suppress the radar entirely). Threshold mirrors the SOLID-tier qualifier.
-    if (scoreBreakdown.total >= 55) {
+    // HR Radar audit fix #4 — never emit hr_radar / hr_watchlist tags for a
+    // player whose HR has already been observed (engine state CLOSED or the
+    // play-feed-stamped RESOLVED_HR_PLAYERS set). This is the upstream guard
+    // that prevents cashed players from re-entering the radar feed at all,
+    // independent of the bettable/cashed split downstream.
+    if (opts?.isHrResolved) {
+      // intentionally drop hr_radar/hr_watchlist tags
+    } else if (scoreBreakdown.total >= 55) {
+      // HR Radar gating uses our engine signal score (not raw HR probability —
+      // book-implied HR probability is almost never high, so probability would
+      // suppress the radar entirely). Threshold mirrors the SOLID-tier qualifier.
       tags.push("hr_radar");
     } else if (scoreBreakdown.liveContext >= 60 || scoreBreakdown.matchup >= 60) {
       tags.push("hr_watchlist");

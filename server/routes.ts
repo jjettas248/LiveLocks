@@ -2259,9 +2259,46 @@ export async function registerRoutes(
       hrEdges.sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
       hrWatchlist.sort((a, b) => (b.hrProbability ?? 0) - (a.hrProbability ?? 0));
 
-      const bettable = hrEdges.filter((s: any) => !s.alreadyHit);
-      const cashedFromEdge = hrEdges.filter((s: any) => s.alreadyHit);
-      const cleanWatchlist = hrWatchlist.filter((w: any) => !cashedFromEdge.some((c: any) => c.playerId === w.playerId));
+      // HR Radar audit fix #1+#2 — race-proof "alreadyHit" using the
+      // play-feed-stamped RESOLVED_HR_PLAYERS set, then defense-in-depth
+      // resolved-state fixup on every active card. Together these guarantee
+      // a player who has already homered cannot appear in the bettable list
+      // even if their qualified-signal cache hasn't refreshed yet.
+      const { RESOLVED_HR_PLAYERS: RESOLVED_HR_PLAYERS_SET } = await import("./mlb/liveGameOrchestrator");
+      const { applyHrRadarResolvedStateFixup: hrRadarFixup } = await import("./mlb/hrRadarSection");
+
+      for (const e of hrEdges) {
+        if (!e.alreadyHit && RESOLVED_HR_PLAYERS_SET.has(`${e.gameId}_${e.playerId}`)) {
+          e.alreadyHit = true;
+          if (e.hrCount == null || e.hrCount === 0) e.hrCount = 1;
+          console.log(`[HR_RADAR_RACE_FIX] gameId=${e.gameId} playerId=${e.playerId} player=${e.playerName} reason=resolved_hr_players_stamp`);
+        }
+      }
+
+      const fixedHrEdges = hrEdges.map((e: any) => {
+        const fx = hrRadarFixup(e, { gameId: e.gameId, playerId: e.playerId });
+        if (fx.canonicalActive === false && !e.alreadyHit) {
+          e.alreadyHit = true;
+        }
+        // HR Radar audit fix #5 — engine-state belt-and-suspenders. The
+        // engine produces `hrAlert.currentState`. Per the engine-as-truth
+        // rule: if the engine says CLOSED or COOLED_OFF, the card is not
+        // bettable. UI rendering should follow `currentState`; this guard
+        // ensures the routing layer agrees with the engine output.
+        const engineState = e.hrAlert?.currentState ?? null;
+        if (engineState === "CLOSED" && !e.alreadyHit) {
+          e.alreadyHit = true;
+          console.log(`[HR_RADAR_ENGINE_CLOSED_FILTER] gameId=${e.gameId} playerId=${e.playerId} player=${e.playerName} reason=engine_state_closed`);
+        }
+        return e;
+      });
+
+      const bettable = fixedHrEdges.filter((s: any) => !s.alreadyHit);
+      const cashedFromEdge = fixedHrEdges.filter((s: any) => s.alreadyHit);
+      const cleanWatchlist = hrWatchlist.filter((w: any) =>
+        !cashedFromEdge.some((c: any) => c.playerId === w.playerId) &&
+        !RESOLVED_HR_PLAYERS_SET.has(`${w.gameId}_${w.playerId}`)
+      );
 
       const canonical = await storage.getCanonicalHrRadarOutcomes();
       const canonicalHitsByGamePlayer = new Map(canonical.hits.map(h => [`${h.gameId}|${h.playerId}`, h]));
