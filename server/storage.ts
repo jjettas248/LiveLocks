@@ -5047,7 +5047,7 @@ export class DatabaseStorage implements IStorage {
         triggerTags: r.triggerTags ?? [],
         positiveDrivers: (diag.positiveDrivers ?? []) as string[],
         conversionProbability: conversionProbability ?? null,
-        confidenceScore: typeof (diag as any)?.confidenceScore === "number" ? (diag as any).confidenceScore : null,
+        confidenceScore: typeof diag?.confidenceScore === "number" ? diag.confidenceScore : null,
         inning: r.signalInning ?? r.detectedInning ?? null,
         detectedAt: r.detectedAt ?? null,
         detectedInning: r.detectedInning ?? null,

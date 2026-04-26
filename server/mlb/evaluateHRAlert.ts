@@ -971,9 +971,9 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
   //
   // Strict guardrails: WATCH-tier ONLY (never PREPARE/BET_NOW). Per task
   // spec (step 3) the only required floors are: powerIndicators >= 1 AND
-  // calibrated conv >= HR_CONVERSION_WATCH_MIN. Soft vetoes still suppress
-  // because they imply a real reason to silence (e.g. cooldown, dead bat).
-  // No additional build-score gate — that would re-introduce silent blocks.
+  // calibrated conv >= HR_CONVERSION_WATCH_MIN. No softVetoes / remainingPA
+  // gate here — those would re-introduce silent blocks contrary to spec.
+  // The only condition for silence on this branch is conv below watch min.
   // Behind a kill-switch env var.
   const blockedBridgeEnabled = (process.env.HR_BLOCKED_BRIDGE_ENABLED ?? "true").toLowerCase() !== "false";
 
@@ -982,9 +982,7 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     totalHrShaped === 0 &&
     powerIndicators >= 1 &&
     convProb !== null &&
-    convProb >= HR_CONVERSION_WATCH_MIN &&
-    softVetoes.length === 0 &&
-    (remainingPA === null || remainingPA >= 1.0)
+    convProb >= HR_CONVERSION_WATCH_MIN
   ) {
     positiveFactors.push(`bridged from blocked: conv=${convPct} score=${hrBuildScore}`);
     positiveFactors.push(`power indicator: ${powerIndicators} (barrels=${factors.barrels}/hardHits=${factors.hardHits}/deepFly=${factors.deepFlyouts})`);
