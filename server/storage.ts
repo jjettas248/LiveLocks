@@ -1177,26 +1177,18 @@ export class DatabaseStorage implements IStorage {
       calibrationTrack += `+playoff_shrink_${baseShrink.toFixed(2)}x${archetypePenalty.toFixed(2)}`;
     }
 
-    // Safety ceiling — playoff-aware resolution.
-    //   • Stable archetypes in playoffs: use the playoff ceiling directly so
-    //     stable stars / starters can exceed the regular-season cap.
-    //   • Volatile / impacted: take the MORE conservative (lower) of the
-    //     two — playoff mode never relaxes their caps.
-    //   • Non-playoff: regular-season ceiling.
+    // ENGINE-AS-TRUTH: archetype safety ceilings removed for ALL game
+    // states. Caps were masking calibration errors — the calibrated
+    // probability is the source of truth. Hard rails [2, 98] applied
+    // below at percentage scale are the only numeric bounds.
     const regularCeiling = getSafetyCeiling(nbaArchetype, isComboStat);
     const playoffCeiling = isPlayoffs ? getPlayoffSafetyCeiling(nbaArchetype, isComboStat) : regularCeiling;
     const appliedCeiling = isPlayoffs && isStableArchetype(nbaArchetype)
       ? playoffCeiling
       : Math.min(regularCeiling, playoffCeiling);
-    let P_side_final = Math.min(P_side_calibrated, appliedCeiling);
-    let confidenceCeilingApplied = P_side_calibrated > appliedCeiling;
-    const isPlayoffCap = isPlayoffs && appliedCeiling !== regularCeiling;
-    let ceilingReason = confidenceCeilingApplied
-      ? `${nbaArchetype}_${isComboStat ? "combo" : "single"}_cap_${appliedCeiling}${isPlayoffCap ? "_playoff" : ""}`
-      : null;
-    if (isPlayoffCap) {
-      calibrationTrack += `+playoff_cap_${appliedCeiling}`;
-    }
+    const P_side_final = P_side_calibrated;
+    const confidenceCeilingApplied = false;
+    const ceilingReason: string | null = null;
     // Backwards-compat for existing diagnostics field name.
     const ceiling = appliedCeiling;
 
@@ -1248,49 +1240,18 @@ export class DatabaseStorage implements IStorage {
       recommendedSide === "OVER" ? overConfidence :
       underConfidence;
 
-    // ── Playoff anti-overconfidence guards (PHASE 8) ───────────────────────
-    // Guard 1: in playoffs, only stable_star is allowed to display ≥80
-    //   confidence. Everyone else gets clamped to a tier-appropriate cap so
-    //   bench/volatile/role-uncertain plays can't claim elite status.
-    // Guard 2: if we had to fall back to regular-season data inside a playoff
-    //   game, refuse to surface elite-tier confidence regardless of archetype.
-    let playoffHighBucketGuardApplied = false;
-    let playoffFallbackCapApplied = false;
-    let playoffRoleGate70Applied = false;
-    let playoffRoleGate80Applied = false;
+    // ENGINE-AS-TRUTH: all post-engine playoff confidence guards removed
+    // (high-bucket guard, fallback cap, role-truth eligibility gates).
+    // These were "safety" clamps that masked calibration errors instead of
+    // surfacing true engine logic. The engine's calibrated probability is
+    // the source of truth for ALL game states (regular season, playoffs,
+    // halftime, Q4). Calibration issues should be fixed in the engine
+    // (archetypes, fragility, calibrate()), not papered over downstream.
+    const playoffHighBucketGuardApplied = false;
+    const playoffFallbackCapApplied = false;
+    const playoffRoleGate70Applied = false;
+    const playoffRoleGate80Applied = false;
     if (isPlayoffs && displayConfidence !== null) {
-      // HALFTIME EXCEPTION (engine-as-truth): at halftime the playoff
-      // high-bucket guard and fallback cap are also bypassed — they were
-      // post-engine clamps that pinned halftime confidence below the
-      // archetype SAFETY_CEILINGS, contradicting "engine decides / UI
-      // renders". Non-halftime playoff games still apply both guards.
-      if (!isHalftimeContext && displayConfidence >= 80 && nbaArchetype !== "stable_star") {
-        const cap = isComboStat ? 68 : 74;
-        if (displayConfidence > cap) {
-          displayConfidence = cap;
-          calibrationTrack += "+playoff_high_bucket_guard";
-          playoffHighBucketGuardApplied = true;
-        }
-      }
-      if (!isHalftimeContext && playoffDataFallbackUsed) {
-        const cap = 72;
-        if (displayConfidence > cap) {
-          displayConfidence = cap;
-          calibrationTrack += "+playoff_fallback_cap";
-          playoffFallbackCapApplied = true;
-        }
-      }
-      // ── Phase 7: Playoff role-truth eligibility gate ────────────────────
-      // Refuse 70+/80+ unless real playoff role evidence supports it.
-      // Stops generic minute heuristics from graduating uncertain plays.
-      //
-      // HALFTIME EXCEPTION: at halftime the engine has REAL first-half live
-      // evidence (minutes played, shooting rates, pace, foul trouble) that
-      // dominates regular-season role heuristics. Per "engine decides / UI
-      // renders" the engine is source of truth at halftime — the archetype
-      // SAFETY_CEILINGS already provide calibration. Skipping the role gate
-      // here also prevents the downstream double-degraded suppression from
-      // hiding halftime plays that happen to use a derived 2H line.
       const eligibility = canReachPlayoffHighConfidence({
         playoffRotationProfile,
         archetype: nbaArchetype,
@@ -1298,28 +1259,8 @@ export class DatabaseStorage implements IStorage {
         playoffRotationFallbackUsed,
         isComboMarket: isComboStat,
       });
-      if (isHalftimeContext) {
-        if (process.env.DEBUG_NBA === "true") {
-          console.log(`[NBA_PLAYOFF_ROLE_GATE_SKIP] player=${player.name} reason=halftime_engine_truth displayConfidence=${displayConfidence} can70=${eligibility.can70} can80=${eligibility.can80}`);
-        }
-      } else {
-        if (!eligibility.can80 && displayConfidence >= 80) {
-          const cap = isComboStat ? 70 : 74;
-          if (displayConfidence > cap) {
-            displayConfidence = cap;
-            calibrationTrack += `+playoff_role_gate_80:${eligibility.reason}`;
-            playoffRoleGate80Applied = true;
-            console.log(`[NBA_PLAYOFF_ROLE_GATE] player=${player.name} cap80→${cap} reason=${eligibility.reason}`);
-          }
-        }
-        if (!eligibility.can70 && displayConfidence >= 70) {
-          if (displayConfidence > 68) {
-            displayConfidence = 68;
-            calibrationTrack += `+playoff_role_gate_70:${eligibility.reason}`;
-            playoffRoleGate70Applied = true;
-            console.log(`[NBA_PLAYOFF_ROLE_GATE] player=${player.name} cap70→68 reason=${eligibility.reason}`);
-          }
-        }
+      if (process.env.DEBUG_NBA === "true") {
+        console.log(`[NBA_PLAYOFF_ROLE_GATE_DIAG] player=${player.name} displayConfidence=${displayConfidence} can70=${eligibility.can70} can80=${eligibility.can80} reason=${eligibility.reason} (engine-as-truth: not enforced)`);
       }
 
       // ── NBA halftime confidence trace (DEBUG_NBA=true) ──────────────────

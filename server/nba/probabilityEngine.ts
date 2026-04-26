@@ -6,7 +6,6 @@ import {
   COMBO_VARIANCE_EXTRA,
   isVolatileArchetype,
   isImpactedArchetype,
-  getSafetyCeiling,
 } from "./archetypes";
 
 const STAT_SIGMA_FLOORS: Record<string, number> = {
@@ -420,16 +419,13 @@ export function computeProbability(
   };
   const { calibrated: P_side_calibrated, track: calibrationTrack } = calibrate(P_side_directional, calCtx);
 
-  const ceiling = getSafetyCeiling(input.archetype, combo);
-  let P_side_final = P_side_calibrated;
-  let confidenceCeilingApplied = false;
-  let ceilingReason: string | null = null;
-
-  if (P_side_final > ceiling) {
-    P_side_final = ceiling;
-    confidenceCeilingApplied = true;
-    ceilingReason = `${input.archetype}_${combo ? "combo" : "single"}_cap_${ceiling}`;
-  }
+  // ENGINE-AS-TRUTH: archetype safety ceilings removed. The engine's
+  // calibrated probability is the source of truth — caps were masking
+  // calibration errors instead of fixing them. Hard rails [0.02, 0.98]
+  // applied later in storage are the only numeric bounds.
+  const P_side_final = P_side_calibrated;
+  const confidenceCeilingApplied = false;
+  const ceilingReason: string | null = null;
 
   let finalProbabilityOver: number, finalProbabilityUnder: number;
   if (rawSide === "OVER") {

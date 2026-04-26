@@ -5765,28 +5765,11 @@ export async function registerRoutes(
                   continue;
                 }
 
-                // ── Double-degraded suppression ─────────────────────────────
-                // When a play has BOTH a derived (non-book) line AND its
-                // displayConfidence was clamped by the playoff role-truth
-                // gate, the engine's true conviction has been hidden behind
-                // a hard cap (68 or 74) and the line itself is synthetic.
-                // The result is that every player in this state collapses to
-                // the same surfaced numbers (e.g. 68% / +19% across every
-                // card) and the cards lose all decision value. Suppress these
-                // entries — a clean empty state is more honest than a wall of
-                // identical "Derived Line" plays. Real book lines and / or
-                // unpinned confidence are unaffected.
-                const engForGate: any = (result as any).engineDiagnostics ?? {};
-                const playoffGatePinned =
-                  engForGate.playoffRoleGate70Applied === true ||
-                  engForGate.playoffRoleGate80Applied === true;
-                if (
-                  oddsSourceTag === "derived_2h_fallback" &&
-                  playoffGatePinned
-                ) {
-                  console.log(`[NBA_HT_DOUBLE_DEGRADED_SUPPRESS] player=${dbPlayer.name} stat=${statType} line=${liveLine} reason=derived_line+playoff_role_gate displayConfidence=${(result as any).displayConfidence ?? result.probability}`);
-                  continue;
-                }
+                // ENGINE-AS-TRUTH: derived-line + role-gate "double-degraded"
+                // suppression removed. Derived-line provenance is still
+                // surfaced via oddsSourceTag and the isDerivedLine response
+                // field so the UI can render an unverified-line warning
+                // without hiding the engine's true conviction.
 
                 // Use displayConfidence (always direction-correct, >= 50 for any valid signal)
                 // so filters, sorts, and client display all work symmetrically for OVER and UNDER.
