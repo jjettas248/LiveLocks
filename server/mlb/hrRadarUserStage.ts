@@ -42,6 +42,8 @@ export function mapToUserStage(input: {
   dynamicState?: string | null;
   canonicalStage?: string | null;
   outcome?: string | null;
+  confidenceScore?: number | null;
+  convProb?: number | null;
 }): HrRadarUserStage {
   const outcome = (input.outcome ?? "").toLowerCase();
   if (outcome && outcome !== "pending" && outcome !== "active") return "resolved";
@@ -50,8 +52,18 @@ export function mapToUserStage(input: {
   const tier = (input.legacyTier ?? "").toLowerCase();
   const state = (input.legacyState ?? "").toLowerCase();
   const canonical = (input.canonicalStage ?? "").toLowerCase();
+  const conf = typeof input.confidenceScore === "number" ? input.confidenceScore : null;
+  const conv = typeof input.convProb === "number" ? input.convProb : null;
 
+  // Task #140 step 5 — BET_NOW always reaches Fire regardless of legacy tier.
   if (dyn === "BET_NOW" || state === "attack" || canonical === "attack") return "fire";
+
+  // Task #140 step 5 — PREPARE escalates to Ready when engine confidence
+  // crosses 7.0 OR calibrated conversion crosses 18%.
+  if (dyn === "PREPARE" && ((conf !== null && conf >= 7) || (conv !== null && conv >= 0.18))) {
+    return "ready";
+  }
+
   if (tier === "strong") return "ready";
   if (dyn === "PREPARE" || tier === "building" || canonical === "building") return "build";
   return "track";
@@ -289,6 +301,7 @@ export function enrichWithUserStage(input: {
   triggerTags?: string[] | null;
   positiveDrivers?: string[] | null;
   conversionProbability?: number | null;
+  confidenceScore?: number | null;
   inning?: number | null;
   detectedAt?: string | Date | null;
   detectedInning?: number | null;
@@ -308,6 +321,8 @@ export function enrichWithUserStage(input: {
     dynamicState: input.dynamicState,
     canonicalStage: input.canonicalStage,
     outcome: input.outcome,
+    confidenceScore: input.confidenceScore,
+    convProb: input.conversionProbability,
   });
 
   const qualifyingSignals = deriveQualifyingSignals({

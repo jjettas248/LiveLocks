@@ -1983,6 +1983,7 @@ export class LiveGameOrchestrator {
         pitcherFatigueState: alertResult.diagnostics.pitcherFatigueState,
         environmentContext: alertResult.diagnostics.environmentContext,
         hrConversion: convSnap,
+        confidenceScore: alertResult.confidenceScore,
         contactClasses: alertResult.diagnostics.contactClasses.map(c => ({
           contactClass: c.contactClass, exitVelocity: c.exitVelocity,
           launchAngle: c.launchAngle, distance: c.distance,
@@ -2760,6 +2761,7 @@ export class LiveGameOrchestrator {
                 pitcherFatigueState: alertResult.diagnostics.pitcherFatigueState,
                 environmentContext: alertResult.diagnostics.environmentContext,
                 hrConversion: convSnap,
+                confidenceScore: alertResult.confidenceScore,
                 contactClasses: alertResult.diagnostics.contactClasses.map(c => ({
                   contactClass: c.contactClass, exitVelocity: c.exitVelocity,
                   launchAngle: c.launchAngle, distance: c.distance,

@@ -897,10 +897,13 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     // Tier escalator (Task #140) — only escalates above WATCH when both
     // conviction AND score clear the higher bar AND favorable context
     // confirms. Otherwise the original WATCH-tier behavior is preserved.
+    // PEAK additionally requires at least one *power contact* (not just an
+    // indicator) and favorable pitcher OR env per task spec (step 2).
     const isPeak =
       convProb >= HR_CONVICTION_PEAK_CONV &&
       hrBuildScore >= HR_CONVICTION_PEAK_SCORE &&
-      hasModerateContext;
+      powerContactCount >= 1 &&
+      (pitcherFavorable || envFavorable);
     const isPrepare =
       !isPeak &&
       convProb >= HR_CONVICTION_PREPARE_CONV &&
@@ -966,21 +969,20 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
   // WATCH-tier signal so the user can see the pattern even when
   // build-score hasn't crossed PATH_E's score floor.
   //
-  // Strict guardrails: WATCH-tier ONLY (never PREPARE/BET_NOW), requires
-  // a meaningful conviction floor (≥ 0.10 calibrated) AND at least one
-  // power indicator AND minimal build score. Soft vetoes still suppress.
+  // Strict guardrails: WATCH-tier ONLY (never PREPARE/BET_NOW). Per task
+  // spec (step 3) the only required floors are: powerIndicators >= 1 AND
+  // calibrated conv >= HR_CONVERSION_WATCH_MIN. Soft vetoes still suppress
+  // because they imply a real reason to silence (e.g. cooldown, dead bat).
+  // No additional build-score gate — that would re-introduce silent blocks.
   // Behind a kill-switch env var.
   const blockedBridgeEnabled = (process.env.HR_BLOCKED_BRIDGE_ENABLED ?? "true").toLowerCase() !== "false";
-  const HR_BLOCKED_BRIDGE_CONV_MIN = 0.10;
-  const HR_BLOCKED_BRIDGE_SCORE_MIN = 2.5;
 
   if (
     blockedBridgeEnabled &&
     totalHrShaped === 0 &&
     powerIndicators >= 1 &&
-    hrBuildScore >= HR_BLOCKED_BRIDGE_SCORE_MIN &&
     convProb !== null &&
-    convProb >= HR_BLOCKED_BRIDGE_CONV_MIN &&
+    convProb >= HR_CONVERSION_WATCH_MIN &&
     softVetoes.length === 0 &&
     (remainingPA === null || remainingPA >= 1.0)
   ) {
