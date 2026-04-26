@@ -907,8 +907,7 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     const isPrepare =
       !isPeak &&
       convProb >= HR_CONVICTION_PREPARE_CONV &&
-      hrBuildScore >= HR_CONVICTION_PREPARE_SCORE &&
-      (pitcherFavorable || envFavorable || hasModerateContext);
+      hrBuildScore >= HR_CONVICTION_PREPARE_SCORE;
 
     const rawConf = computeConfidence(hrBuildScore, factors, null, softVetoes.length, convProb);
     // Cap confidence per tier — contact evidence is thinner than other paths.
