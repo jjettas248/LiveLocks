@@ -1259,7 +1259,12 @@ export class DatabaseStorage implements IStorage {
     let playoffRoleGate70Applied = false;
     let playoffRoleGate80Applied = false;
     if (isPlayoffs && displayConfidence !== null) {
-      if (displayConfidence >= 80 && nbaArchetype !== "stable_star") {
+      // HALFTIME EXCEPTION (engine-as-truth): at halftime the playoff
+      // high-bucket guard and fallback cap are also bypassed — they were
+      // post-engine clamps that pinned halftime confidence below the
+      // archetype SAFETY_CEILINGS, contradicting "engine decides / UI
+      // renders". Non-halftime playoff games still apply both guards.
+      if (!isHalftimeContext && displayConfidence >= 80 && nbaArchetype !== "stable_star") {
         const cap = isComboStat ? 68 : 74;
         if (displayConfidence > cap) {
           displayConfidence = cap;
@@ -1267,7 +1272,7 @@ export class DatabaseStorage implements IStorage {
           playoffHighBucketGuardApplied = true;
         }
       }
-      if (playoffDataFallbackUsed) {
+      if (!isHalftimeContext && playoffDataFallbackUsed) {
         const cap = 72;
         if (displayConfidence > cap) {
           displayConfidence = cap;
@@ -1278,6 +1283,14 @@ export class DatabaseStorage implements IStorage {
       // ── Phase 7: Playoff role-truth eligibility gate ────────────────────
       // Refuse 70+/80+ unless real playoff role evidence supports it.
       // Stops generic minute heuristics from graduating uncertain plays.
+      //
+      // HALFTIME EXCEPTION: at halftime the engine has REAL first-half live
+      // evidence (minutes played, shooting rates, pace, foul trouble) that
+      // dominates regular-season role heuristics. Per "engine decides / UI
+      // renders" the engine is source of truth at halftime — the archetype
+      // SAFETY_CEILINGS already provide calibration. Skipping the role gate
+      // here also prevents the downstream double-degraded suppression from
+      // hiding halftime plays that happen to use a derived 2H line.
       const eligibility = canReachPlayoffHighConfidence({
         playoffRotationProfile,
         archetype: nbaArchetype,
@@ -1285,48 +1298,27 @@ export class DatabaseStorage implements IStorage {
         playoffRotationFallbackUsed,
         isComboMarket: isComboStat,
       });
-      if (!eligibility.can80 && displayConfidence >= 80) {
-        const cap = isComboStat ? 70 : 74;
-        if (displayConfidence > cap) {
-          displayConfidence = cap;
-          calibrationTrack += `+playoff_role_gate_80:${eligibility.reason}`;
-          playoffRoleGate80Applied = true;
-          console.log(`[NBA_PLAYOFF_ROLE_GATE] player=${player.name} cap80→${cap} reason=${eligibility.reason}`);
+      if (isHalftimeContext) {
+        if (process.env.DEBUG_NBA === "true") {
+          console.log(`[NBA_PLAYOFF_ROLE_GATE_SKIP] player=${player.name} reason=halftime_engine_truth displayConfidence=${displayConfidence} can70=${eligibility.can70} can80=${eligibility.can80}`);
         }
-      }
-      if (!eligibility.can70 && displayConfidence >= 70) {
-        // Halftime override — don't pin every uncertain-rotation playoff
-        // play at exactly 68 when the live evidence is overwhelming. We
-        // need ALL of these to relax the cap from 68 → 74:
-        //   • halftime context (game has 22+ minutes left)
-        //   • model is already calling >= 70 with edge >= 12
-        //   • projection diverges from the live line by >= 1.0 unit
-        //   • engine has a real direction (not NO_SIGNAL)
-        //   • projection direction matches recommended side
-        //   • player has >= 12 minutes played (real, not garbage)
-        //   • >= 18 minutes remain (room for the projection to play out)
-        //   • archetype is not in the impacted/volatile bucket
-        // 80+ remains unreachable here; the can80 cap above still applies.
-        const projDelta = Math.abs(finalMean - req.liveLine);
-        const projMatchesSide =
-          (recommendedSide === "OVER" && expectedTotal > req.liveLine) ||
-          (recommendedSide === "UNDER" && expectedTotal < req.liveLine);
-        const isStrongHalftimeSignal =
-          isHalftimeContext &&
-          displayConfidence >= 70 &&
-          ((displayConfidence - 50) >= 12) &&
-          projDelta >= 1.0 &&
-          recommendedSide !== "NO_SIGNAL" &&
-          projMatchesSide &&
-          minutesPlayed >= 12 &&
-          remainingMinutes >= 18 &&
-          !isImpactedArchetype(nbaArchetype);
-        const cap = isStrongHalftimeSignal ? 74 : 68;
-        if (displayConfidence > cap) {
-          displayConfidence = cap;
-          calibrationTrack += `+playoff_role_gate_70:${eligibility.reason}${isStrongHalftimeSignal ? "_ht_override" : ""}`;
-          playoffRoleGate70Applied = true;
-          console.log(`[NBA_PLAYOFF_ROLE_GATE] player=${player.name} cap70→${cap} reason=${eligibility.reason} strongHT=${isStrongHalftimeSignal}`);
+      } else {
+        if (!eligibility.can80 && displayConfidence >= 80) {
+          const cap = isComboStat ? 70 : 74;
+          if (displayConfidence > cap) {
+            displayConfidence = cap;
+            calibrationTrack += `+playoff_role_gate_80:${eligibility.reason}`;
+            playoffRoleGate80Applied = true;
+            console.log(`[NBA_PLAYOFF_ROLE_GATE] player=${player.name} cap80→${cap} reason=${eligibility.reason}`);
+          }
+        }
+        if (!eligibility.can70 && displayConfidence >= 70) {
+          if (displayConfidence > 68) {
+            displayConfidence = 68;
+            calibrationTrack += `+playoff_role_gate_70:${eligibility.reason}`;
+            playoffRoleGate70Applied = true;
+            console.log(`[NBA_PLAYOFF_ROLE_GATE] player=${player.name} cap70→68 reason=${eligibility.reason}`);
+          }
         }
       }
 

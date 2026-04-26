@@ -5791,13 +5791,11 @@ export async function registerRoutes(
                 // Use displayConfidence (always direction-correct, >= 50 for any valid signal)
                 // so filters, sorts, and client display all work symmetrically for OVER and UNDER.
                 // Raw result.probability (<50 for UNDER plays) is NOT sent to client.
-                const rawDisplayConfidence = (result as any).displayConfidence ?? result.probability;
-                // Phase 6 — degraded/derived plays cannot be presented as elite.
-                // Cap displayConfidence at 72 so the UI never shows an inflated
-                // confidence number on top of an unverified line.
-                const displayConfidence = lineIsDegraded
-                  ? Math.min(rawDisplayConfidence, 72)
-                  : rawDisplayConfidence;
+                // Engine-as-truth (halftime): no post-engine display cap. Degraded
+                // line provenance is surfaced separately via oddsSourceTag and the
+                // derived-line tag in the response so the UI can render the
+                // unverified-line warning without rewriting the engine's number.
+                const displayConfidence = (result as any).displayConfidence ?? result.probability;
                 const betDirection = (result as any).recommendedSide?.toLowerCase() ?? (result.probability > 50 ? "over" : "under");
 
                 // Per-source provenance — every surfaced halftime play must
