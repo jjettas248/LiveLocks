@@ -30,6 +30,14 @@ export interface MLBSignal {
   isDegraded: boolean;
   fallbackUsed: boolean;
 
+  // MLB Signals audit P2/P3 — non-HR engine state machine + decay rail.
+  // Engine-as-truth: UI strictly renders these fields. HR markets continue
+  // to use the dedicated `hrAlert` snapshot below.
+  engineState?: "BUILDING" | "ACTIVE" | "COOLING" | "CLOSED";
+  engineStateChangedAt?: number; // ms epoch of last state transition
+  engineStatePeakScore?: number;
+  decayFactor?: number;          // 0..1 multiplier of the displayed signalScore
+
   overOdds: number | null;
   underOdds: number | null;
   bookImplied: number | null;

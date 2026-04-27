@@ -60,6 +60,12 @@ import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, clearGameCooldowns, type HRAlertInput } from "./evaluateHRAlert";
 import { recomputeHrAlertState, clearGameHrStates, getHrAlertState, mapDynamicStateToStage, seedHrAlertDetection, closeHrAlertOnHit, type HRAlertSnapshot } from "./hrAlertEngine";
+import {
+  recomputeNonHrSignalState,
+  closeNonHrSignalOnHit,
+  clearNonHrStatesForGame,
+  type NonHrSignalState,
+} from "./nonHrSignalState";
 import { todayET } from "../utils/dateUtils";
 import { buildHRSignal } from "./HRSignalBuilder";
 import { getPlayer } from "./rosterService";
@@ -176,6 +182,113 @@ export const RESOLVED_HR_PLAYERS = new Set<string>();       // `${gameId}_${play
 
 export function isPlayerHrResolved(gameId: string, playerId: string | number): boolean {
   return RESOLVED_HR_PLAYERS.has(`${gameId}_${playerId}`);
+}
+
+// MLB Signals audit P1 — race-proof "alreadyHit" for non-HR markets.
+// Stamped at engine-tick time the moment the play-feed-derived stat count
+// crosses the prop line. Keyed `${gameId}_${playerId}_${market}`.
+// Engine and feed paths consult this set before the box-score-driven
+// `currentStatValue >= line` check so a card never lingers in the bettable
+// feed while the box-score catches up. Cleared at game-final.
+export const RESOLVED_NON_HR_MARKETS = new Set<string>();    // `${gameId}_${playerId}_${market}`
+
+export function isPlayerMarketResolved(
+  gameId: string,
+  playerId: string | number,
+  market: string
+): boolean {
+  return RESOLVED_NON_HR_MARKETS.has(`${gameId}_${playerId}_${market}`);
+}
+
+// Compute a play-feed-derived stat count for a single batter market by
+// walking `priorABResults` (populated synchronously by syncContactData on
+// every poll, before the box-score sync completes). This is the canonical
+// "freshest possible" count for the at-bat that just ended.
+//
+// Returns 0 when no contact data exists yet for this player.
+//
+// Pitcher markets (pitcher_strikeouts, pitcher_outs, hits_allowed, etc.) are
+// keyed by the pitcher's playerId and need a separate per-pitcher tally;
+// this helper covers batter markets only (P1 scope).
+export function getPlayFeedBatterStatCount(
+  gameId: string,
+  playerId: string,
+  market: string
+): number {
+  const contact = mlbGameCache.contactData?.[gameId]?.byPlayerId?.[playerId];
+  if (!contact) return 0;
+  const abs = contact.priorABResults ?? [];
+  if (abs.length === 0) return 0;
+
+  switch (market) {
+    case "hits": {
+      let n = 0;
+      for (const ab of abs) if (ab.outcome === "hit") n++;
+      return n;
+    }
+    case "home_runs": {
+      let n = 0;
+      for (const ab of abs) if (ab.hitType === "home_run") n++;
+      return n;
+    }
+    case "total_bases": {
+      let n = 0;
+      for (const ab of abs) {
+        if (ab.hitType === "single") n += 1;
+        else if (ab.hitType === "double") n += 2;
+        else if (ab.hitType === "triple") n += 3;
+        else if (ab.hitType === "home_run") n += 4;
+      }
+      return n;
+    }
+    case "hrr": {
+      // Hits + Runs + RBI per the standard book market. Run-scored on this
+      // play (batter himself crossing home) + the play's RBI total.
+      let hits = 0;
+      let rbi = 0;
+      let runs = 0;
+      for (const ab of abs) {
+        if (ab.outcome === "hit") hits++;
+        rbi += ab.rbi ?? 0;
+        if (ab.runScored) runs++;
+      }
+      return hits + rbi + runs;
+    }
+    case "batter_strikeouts": {
+      let n = 0;
+      for (const ab of abs) if (ab.outcome === "strikeout") n++;
+      return n;
+    }
+    default:
+      return 0;
+  }
+}
+
+// Stamp the resolved-set when a (player, market) crosses its prop line.
+// Idempotent — only logs the first crossing per key. Called from the engine
+// market-input builder so we have the line in scope.
+export function maybeMarkNonHrResolved(
+  gameId: string,
+  playerId: string,
+  playerName: string,
+  market: string,
+  line: number,
+  playFeedStat: number
+): void {
+  if (line <= 0) return;
+  if (playFeedStat < line) return;
+  const key = `${gameId}_${playerId}_${market}`;
+  if (RESOLVED_NON_HR_MARKETS.has(key)) return;
+  RESOLVED_NON_HR_MARKETS.add(key);
+  console.log(
+    `[NON_HR_RESOLVED] gameId=${gameId} playerId=${playerId} player=${playerName} ` +
+    `market=${market} line=${line} playFeedStat=${playFeedStat}`
+  );
+  // MLB Signals audit P2 — flip the engine state machine to CLOSED in the
+  // same tick. Belt-and-suspenders: computeSignalState also passes
+  // resolvedNow=true on the next recompute, but stamping here closes any
+  // race where the resolved-set is set before the next computeSignalState.
+  closeNonHrSignalOnHit(gameId, playerId, market, "play_feed_crossed_line");
 }
 
 function gradeSingleHRPlay(
@@ -1011,6 +1124,12 @@ export class LiveGameOrchestrator {
       for (const key of Array.from(RESOLVED_HR_PLAYERS)) {
         if (key.startsWith(`${gameId}_`)) RESOLVED_HR_PLAYERS.delete(key);
       }
+      // MLB Signals audit P1 — release per-game resolved non-HR markets.
+      for (const key of Array.from(RESOLVED_NON_HR_MARKETS)) {
+        if (key.startsWith(`${gameId}_`)) RESOLVED_NON_HR_MARKETS.delete(key);
+      }
+      // MLB Signals audit P2 — release per-game non-HR engine state entries.
+      clearNonHrStatesForGame(gameId);
     }
 
     if (prevState) {
@@ -1031,7 +1150,10 @@ export class LiveGameOrchestrator {
         const cached = mlbEdgeCache.get(gameId);
         const lastEngineRunAt = Math.max(cached?.updatedAt ?? 0, cached?.createdAt ?? 0);
         const ageMs = lastEngineRunAt > 0 ? Date.now() - lastEngineRunAt : Infinity;
-        if (ageMs > 45_000) {
+        // MLB Signals audit P5 — 45s -> 25s. The user-facing edge feed now
+        // expects sub-30s freshness; heartbeat must keep pace so cards
+        // don't flat-line during natural between-PA gaps.
+        if (ageMs > 25_000) {
           console.log(`[MLB HEARTBEAT_RECOMPUTE] game=${gameId} ageMs=${ageMs === Infinity ? "inf" : ageMs}`);
           await this.triggerEngine(gameId, normalizedStatus, ["heartbeat_refresh"]);
         }
@@ -1126,6 +1248,11 @@ export class LiveGameOrchestrator {
   }
 
   private getDedupWindow(triggers: StateChangeTrigger[]): number {
+    // MLB Signals audit P5 — inning_change forces a fresh recompute even if
+    // another trigger (new_ab, ab_completed, etc.) just fired. Inning
+    // boundaries change PA-remaining for every batter in the lineup; the
+    // engine must run the full feature set against the new inning context.
+    if (triggers.includes("inning_change")) return 0;
     const hasHighImpact = triggers.some(t => HIGH_IMPACT_TRIGGERS.has(t));
     return hasHighImpact ? 5_000 : DEDUP_WINDOW_MS;
   }
@@ -1519,7 +1646,7 @@ export class LiveGameOrchestrator {
     const boxScore = mlbGameCache.gameBoxScore?.[gameId];
     const boxPlayer = boxScore?.byPlayerId?.[input.playerId];
 
-    const currentStat = input.currentStatValue ?? 0;
+    const boxStat = input.currentStatValue ?? 0;
     const line = output.bookLine;
     // HR Radar audit fix #1 — race-proof alreadyHit. The play-feed grader stamps
     // RESOLVED_HR_PLAYERS the moment it sees a HR, before the box-score syncs
@@ -1527,7 +1654,19 @@ export class LiveGameOrchestrator {
     // box-score-based comparison.
     const isHrMarket = output.market === "home_runs";
     const isHrResolvedNow = isHrMarket && RESOLVED_HR_PLAYERS.has(`${gameId}_${input.playerId}`);
-    const alreadyHit = isHrResolvedNow || (currentStat >= line && line > 0);
+    // MLB Signals audit P1 — same race-proof pattern for ALL non-HR batter
+    // markets. Take the freshest of (box-score, play-feed) as currentStat,
+    // and treat the prop as resolved if either the play-feed-stamped set
+    // says so or the merged stat already crosses the line. This ensures
+    // hits / TB / hrr / batter_strikeouts cards leave the bettable feed
+    // within the same tick the resolving play lands, regardless of
+    // box-score sync lag.
+    const playFeedStat = getPlayFeedBatterStatCount(gameId, input.playerId, output.market);
+    const currentStat = Math.max(boxStat, playFeedStat);
+    const isNonHrResolvedNow = !isHrMarket &&
+      RESOLVED_NON_HR_MARKETS.has(`${gameId}_${input.playerId}_${output.market}`);
+    const alreadyHit = isHrResolvedNow || isNonHrResolvedNow ||
+      (currentStat >= line && line > 0);
 
     const isFallback = output.fallbackUsed === true;
     const isStale = output.engineGeneratedAt > 0 && (Date.now() - output.engineGeneratedAt) > 120_000;
@@ -1559,12 +1698,55 @@ export class LiveGameOrchestrator {
       console.log(`[MLB_ODDS_STALE] player=${input.playerName} market=${input.market} ageMs=${oddsAge}`);
     }
 
+    // MLB Signals audit P2/P3 — recompute the non-HR engine state machine on
+    // every tick (state machine + decay rail). HR markets are excluded;
+    // they have their own dedicated state machine in hrAlertEngine.ts
+    // (recomputeHrAlertState above).
+    let nonHrEngineState: NonHrSignalState | undefined;
+    let nonHrEngineChangedAt: number | undefined;
+    let nonHrEnginePeak: number | undefined;
+    let nonHrDecayFactor: number | undefined;
+    if (!isHrMarket) {
+      const isPitcherMarket =
+        output.market === "pitcher_strikeouts" ||
+        output.market === "pitcher_outs" ||
+        output.market === "hits_allowed" ||
+        output.market === "walks_allowed" ||
+        output.market === "hr_allowed";
+      const paCount = isPitcherMarket ? 0 : (priorABResults.length ?? 0);
+      // For pitcher markets the player is the pitcher — read pitchCount from
+      // the pitcherContext cache keyed by this same playerId, falling back
+      // to the game-level pitcher pitchCount tracked on gameState.
+      const pitcherCtxForPlayer = mlbGameCache.pitcherContext?.[gameId]?.byPitcherId?.[input.playerId];
+      const pitchCount = isPitcherMarket
+        ? (pitcherCtxForPlayer?.pitchCount ?? gameState?.pitchCount ?? 0)
+        : 0;
+      const nonHrSnap = recomputeNonHrSignalState({
+        gameId,
+        playerId: input.playerId,
+        playerName: input.playerName,
+        market: output.market,
+        signalScore: scoreBreakdown.total,
+        paCount,
+        pitchCount,
+        resolvedNow: isNonHrResolvedNow || alreadyHit,
+      });
+      nonHrEngineState = nonHrSnap.state;
+      nonHrEngineChangedAt = nonHrSnap.lastTransitionAt;
+      nonHrEnginePeak = nonHrSnap.peakScore;
+      nonHrDecayFactor = nonHrSnap.decayFactor;
+    }
+
     return {
       fallbackUsed: isFallback,
       actionable: isActionable && !oddsStale,
       alreadyHit,
       stale: isStale || oddsStale,
       watchlist: isWatchlist,
+      engineState: nonHrEngineState,
+      engineStateChangedAt: nonHrEngineChangedAt,
+      engineStatePeakScore: nonHrEnginePeak,
+      decayFactor: nonHrDecayFactor,
       overOdds: output.overOdds ?? null,
       underOdds: output.underOdds ?? null,
       oddsTimestamp: output.oddsUpdatedAt ?? null,
@@ -2285,16 +2467,34 @@ export class LiveGameOrchestrator {
           }
         }
 
-        const contactABs = playerContact?.priorABResults ?? [];
-        if (contactABs.length > 0 && market === "hits") {
-          let contactHits = 0;
-          for (const ab of contactABs) {
-            if (ab.outcome === "hit") contactHits++;
+        // MLB Signals audit P1 — race-proof currentStat for ALL batter markets.
+        // The play feed updates priorABResults synchronously inside
+        // syncContactData, before the box-score has refreshed counts. Take the
+        // max of (box-score, play-feed) so the engine sees the freshest value
+        // possible and `alreadyHit` flips the moment the resolving play lands.
+        // Pre-existing `[MLB CONTACT_CROSSCHECK]` log preserved for hits so
+        // existing log consumers are unchanged; new `[MLB PLAYFEED_OVERRIDE]`
+        // covers the additional markets.
+        const playFeedStat = getPlayFeedBatterStatCount(gameId, batter.playerId, market);
+        if (playFeedStat > currentStatForMarket) {
+          if (market === "hits") {
+            console.log(`[MLB CONTACT_CROSSCHECK][${gameId}] ${batter.playerName} hits: box=${currentStatForMarket} contact=${playFeedStat} — using contact`);
+          } else {
+            console.log(`[MLB PLAYFEED_OVERRIDE][${gameId}] ${batter.playerName} ${market}: box=${currentStatForMarket} playFeed=${playFeedStat} — using play feed`);
           }
-          if (contactHits > currentStatForMarket) {
-            console.log(`[MLB CONTACT_CROSSCHECK][${gameId}] ${batter.playerName} hits: box=${currentStatForMarket} contact=${contactHits} — using contact`);
-            currentStatForMarket = contactHits;
-          }
+          currentStatForMarket = playFeedStat;
+        }
+        // Stamp the resolved-set the moment the play-feed-derived count
+        // crosses the prop line. Idempotent — only logs the first crossing.
+        if (!hrRadarOnly && resolvedLine && resolvedLine.line > 0) {
+          maybeMarkNonHrResolved(
+            gameId,
+            batter.playerId,
+            batter.playerName,
+            market,
+            resolvedLine.line,
+            playFeedStat
+          );
         }
 
         const boxHR = boxScorePlayer?.hr ?? 0;

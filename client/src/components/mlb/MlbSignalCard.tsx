@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Plus, X, Calculator } from "lucide-react";
 import {
   formatMlbMarketLabel,
@@ -134,13 +134,35 @@ export function MlbSignalCard({
   onOpenCalculator?: (sig: MlbSignalData) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  // MLB Signals audit P6 — freshness pulse. The "as of N seconds ago" stamp
+  // and the decay bar both depend on `Date.now()`, so we tick a 1Hz local
+  // clock to drive re-renders. This is purely a renderer — no client-side
+  // state ever flows back into the engine.
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => forceTick(t => (t + 1) % 1_000_000), 1_000);
+    return () => clearInterval(id);
+  }, []);
+
   const tier = TIER_COLORS[sig.confidenceTier ?? "WATCHLIST"] ?? TIER_COLORS.WATCHLIST;
   const side = SIDE_STYLES[sig.recommendedSide as keyof typeof SIDE_STYLES] ?? SIDE_STYLES.OVER;
   const marketLabel = formatMlbMarketLabel(sig.market);
   const matchup = sig.awayAbbr && sig.homeAbbr ? `${sig.awayAbbr} @ ${sig.homeAbbr}` : null;
   const sideOdds = sig.recommendedSide === "OVER" ? sig.overOdds : sig.underOdds;
   const liveStat = getMlbLiveStatValue(sig);
-  const cardOpacity = sig.stale ? 0.5 : sig.alreadyHit ? 0.75 : 1;
+  // MLB Signals audit P6 — engine-state-driven dimming. Once the engine
+  // marks a non-HR signal CLOSED (resolved or game-final) the card is fully
+  // hidden visually; the route's bettable-feed filter strips it from the
+  // list, but the dim is belt-and-suspenders for any caller that still
+  // renders the raw signal.
+  const isEngineClosed = sig.engineState === "CLOSED";
+  const cardOpacity = isEngineClosed
+    ? 0.35
+    : sig.stale
+      ? 0.5
+      : sig.alreadyHit
+        ? 0.75
+        : 1;
   const isClickable = !!(onPlayerClick && sig.gameId);
   const stability = stabilityGrade(sig.signalScore);
 
@@ -374,6 +396,57 @@ export function MlbSignalCard({
             </span>
           )}
         </div>
+
+        {/* ── MLB Signals audit P6 — Engine freshness pulse + decay rail ──
+             Renders strictly from engine-supplied fields:
+               - sig.engineState        (BUILDING|ACTIVE|COOLING|CLOSED)
+               - sig.engineStateChangedAt
+               - sig.decayFactor        (0..1)
+               - sig.signalTimestamp    (engine tick time)
+             Engine-as-truth: no derived behavior — purely a renderer. */}
+        {sig.engineState != null && (() => {
+          const stateColor =
+            sig.engineState === "ACTIVE"   ? "#22c55e" :
+            sig.engineState === "COOLING"  ? "#f59e0b" :
+            sig.engineState === "CLOSED"   ? "#6b7280" :
+                                              "#3b82f6"; // BUILDING
+          const decay = typeof sig.decayFactor === "number" ? sig.decayFactor : 1;
+          const decayPct = Math.max(0, Math.min(1, decay)) * 100;
+          const decayColor = decay >= 0.75 ? "#22c55e" : decay >= 0.5 ? "#a3e635" : decay >= 0.25 ? "#f59e0b" : "#ef4444";
+          const tickAge = sig.signalTimestamp ? Math.max(0, Math.floor((Date.now() - sig.signalTimestamp) / 1000)) : null;
+          const tickAgeLabel = tickAge == null
+            ? "—"
+            : tickAge < 60
+              ? `${tickAge}s ago`
+              : `${Math.floor(tickAge / 60)}m ${tickAge % 60}s ago`;
+          const ageColor = tickAge != null && tickAge > 60 ? "#ef4444" : tickAge != null && tickAge > 30 ? "#f59e0b" : "#9ca3af";
+          const pulseClass = sig.engineState === "ACTIVE" ? "animate-pulse" : "";
+          return (
+            <div
+              className="flex items-center gap-2 text-[9px] pt-1"
+              data-testid={`engine-freshness-${sig.playerId}-${sig.market}`}
+            >
+              <span
+                className={`inline-block w-1.5 h-1.5 rounded-full ${pulseClass}`}
+                style={{ background: stateColor }}
+                aria-hidden="true"
+              />
+              <span className="font-semibold uppercase tracking-wide" style={{ color: stateColor }} data-testid={`engine-state-${sig.playerId}-${sig.market}`}>
+                {sig.engineState}
+              </span>
+              <span className="flex-1 h-1 rounded-full bg-muted/40 overflow-hidden" title={`Engine decay rail: ${decayPct.toFixed(0)}% of peak`}>
+                <span
+                  className="block h-full transition-all duration-500"
+                  style={{ width: `${decayPct}%`, background: decayColor }}
+                  data-testid={`engine-decay-${sig.playerId}-${sig.market}`}
+                />
+              </span>
+              <span className="tabular-nums" style={{ color: ageColor }} data-testid={`engine-tick-age-${sig.playerId}-${sig.market}`}>
+                {tickAgeLabel}
+              </span>
+            </div>
+          );
+        })()}
       </div>
 
       {/* ── EXPANDED: Explainability Grid ── */}

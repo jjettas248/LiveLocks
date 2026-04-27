@@ -577,6 +577,14 @@ export interface MLBQualifiedSignal {
   stale: boolean;
   watchlist: boolean;
   isEarlySignal?: boolean;
+  // MLB Signals audit P2/P3 — engine state machine + decay rail for non-HR
+  // markets. Owned by the orchestrator's recomputeNonHrSignalState; UI is
+  // strictly a renderer of these fields. Optional because HR markets continue
+  // to use the dedicated HR Radar engine state (see signalState below).
+  engineState?: "BUILDING" | "ACTIVE" | "COOLING" | "CLOSED";
+  engineStateChangedAt?: number;
+  engineStatePeakScore?: number;
+  decayFactor?: number; // 0..1 multiplier applied to the displayed signalScore
 
   overOdds: number | null;
   underOdds: number | null;

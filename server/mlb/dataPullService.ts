@@ -63,6 +63,12 @@ export interface PlayerContactData {
     perABxBA?: number | null;
     contactGrade?: string;
     hrProbability?: number;
+    // MLB Signals audit P1 — capture hit-type granularity + RBI from the
+    // play feed so play-feed-derived stat counts (total_bases, hrr) match
+    // the engine's market keys without waiting for the box-score sync.
+    hitType?: "single" | "double" | "triple" | "home_run" | null;
+    rbi?: number;
+    runScored?: boolean;
   }>;
 }
 
@@ -276,6 +282,20 @@ function inferOutcome(event: string | undefined): PlayerContactData["priorABResu
   if (e.includes("error")) return "error";
   if (e.includes("out") || e.includes("fly") || e.includes("ground") || e.includes("line")) return "out";
   return "other";
+}
+
+// MLB Signals audit P1 — extract specific hit type so total_bases / hrr
+// can be computed from the play feed without waiting for box-score sync.
+function inferHitType(
+  event: string | undefined
+): "single" | "double" | "triple" | "home_run" | null {
+  if (!event) return null;
+  const e = event.toLowerCase();
+  if (e.includes("home run")) return "home_run";
+  if (e.includes("triple")) return "triple";
+  if (e.includes("double")) return "double";
+  if (e.includes("single")) return "single";
+  return null;
 }
 
 // ── syncGameState ─────────────────────────────────────────────────────────────
@@ -576,6 +596,26 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
       const events: any[] = play.playEvents ?? [];
       const resultEvent = play.result?.event ?? play.result?.description ?? "";
       const outcome = inferOutcome(resultEvent);
+      const hitType = inferHitType(resultEvent);
+      const rbi = safeNum(play.result?.rbi) ?? 0;
+      // Did the batter himself score on this play (i.e. crossed home plate)?
+      // For a HR they always score; for everything else we read the play's
+      // runners array. Used to compute play-feed runs for the hrr market.
+      let runScored = false;
+      if (hitType === "home_run") {
+        runScored = true;
+      } else {
+        const runners: any[] = play.runners ?? [];
+        for (const r of runners) {
+          if (
+            r?.details?.runner?.id === batterId &&
+            r?.movement?.end === "score"
+          ) {
+            runScored = true;
+            break;
+          }
+        }
+      }
 
       let bestEV: number | null = null;
       let bestLA: number | null = null;
@@ -629,6 +669,9 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
           perABxBA: bestEV != null ? contactClass.xBA : null,
           contactGrade: contactClass.contactGrade,
           hrProbability: contactClass.hrProbability,
+          hitType,
+          rbi,
+          runScored,
         });
 
         const abIndex = byPlayerId[playerId].priorABResults.length;

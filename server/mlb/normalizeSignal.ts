@@ -407,6 +407,14 @@ export function normalizeMLBSignal(
     isDegraded: qs.isDegraded ?? false,
     fallbackUsed: qs.fallbackUsed ?? false,
 
+    // MLB Signals audit P2/P3 — surface engine-owned state machine + decay
+    // rail to the client. Engine-as-truth: present only when the engine
+    // computed them (non-HR markets); HR markets continue to use `hrAlert`.
+    engineState: qs.engineState,
+    engineStateChangedAt: qs.engineStateChangedAt,
+    engineStatePeakScore: qs.engineStatePeakScore,
+    decayFactor: qs.decayFactor,
+
     overOdds: qs.overOdds ?? raw?.overOdds ?? null,
     underOdds: qs.underOdds ?? raw?.underOdds ?? null,
     bookImplied: qs.bookImplied ?? null,
