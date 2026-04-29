@@ -84,10 +84,13 @@ function RootRedirect() {
 
 function AppShell() {
   // Global attribution capture — fires once per page mount on every public
-  // route (idempotent: localStorage first-touch + server-side dedupe). Lives
-  // inside the QueryClient/Tooltip providers so any future hook upgrades that
-  // depend on react-query continue to work.
-  useAttributionCapture();
+  // route (idempotent: localStorage first-touch + server-side dedupe). Routes
+  // that need a forced utm_source (e.g. organic Twitter visits with no UTM
+  // params) are detected here so individual page components don't have to
+  // also mount the hook and double-fire the POST.
+  const [location] = useLocation();
+  const forceSource = location === "/twitter" ? "twitter" : undefined;
+  useAttributionCapture(forceSource ? { forceSource } : undefined);
   return (
     <Switch>
       <Route path="/" component={RootRedirect} />

@@ -1,15 +1,15 @@
 import { useEffect } from "react";
 import { Link } from "wouter";
 import { ArrowRight, Lock, TrendingUp, Zap } from "lucide-react";
-import { useAttributionCapture } from "@/hooks/useAttributionCapture";
 import { usePublicAnalytics } from "@/hooks/usePublicAnalytics";
 import { PublicProofStrip } from "@/components/dashboard/public-proof-strip";
 
 const PROFIT_PER_UNIT = 25;
 
 export default function TwitterLandingPage() {
-  // Force utm_source=twitter when no source is in the URL (organic Twitter visits).
-  useAttributionCapture({ forceSource: "twitter" });
+  // Note: attribution capture is mounted globally in `AppShell` (App.tsx)
+  // and forces `utm_source=twitter` when the route is `/twitter`, so this
+  // page intentionally does not mount the hook itself.
 
   useEffect(() => {
     document.title = "LiveLocks for Twitter — Live Player Prop Signals (MLB + NBA)";

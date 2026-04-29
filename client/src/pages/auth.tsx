@@ -4,7 +4,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
-import { useAttributionCapture } from "@/hooks/useAttributionCapture";
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
 const loginSchema = z.object({
@@ -48,7 +47,6 @@ export default function AuthPage() {
   const [, navigate] = useLocation();
 
   // Capture any UTM/ref params on /auth so people who share /auth links still attribute.
-  useAttributionCapture();
 
   const loginForm = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
