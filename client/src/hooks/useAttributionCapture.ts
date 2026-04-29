@@ -137,6 +137,5 @@ export function useAttributionCapture(opts: Options = {}) {
     }, 150);
 
     return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [location, forceSource]);
 }
