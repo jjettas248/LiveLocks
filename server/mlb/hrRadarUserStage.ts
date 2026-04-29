@@ -38,6 +38,45 @@ export const HR_RADAR_GOLDMASTER_V1: boolean = (() => {
 // ── Phase 1 ────────────────────────────────────────────────────────────────
 export type HrRadarUserStage = "track" | "build" | "ready" | "fire" | "resolved";
 
+// ── Path-based promotion table ─────────────────────────────────────────────
+// The HR Radar runs two parallel scoring tracks. The dynamic state machine
+// (WATCH/PREPARE/BET_NOW) keys off calibrated HR conversion probability
+// thresholds (PREPARE >= 8%, BET_NOW >= 14%) which are very rarely crossed
+// in-game. The alert-path engine emits a parallel signal — the alertPath
+// identity (FAST_PROMOTE_*, LEI_ESCALATION, PATH_A..PATH_E_CONVICTION) plus
+// a tier the engine surfaces as signal_state ("watching" / "live" /
+// "actionable"). When the engine itself emits a signal at "live" or
+// "actionable" on a real promotion path, that IS the engine declaring the
+// row is above watch-grade. Surfacing that declaration as Ready (and
+// FAST_PROMOTE_ELITE@actionable as Fire) is the engine deciding — the UI
+// just renders it. No fabrication.
+//
+// BLOCKED paths (PATH_F_BLOCKED_BRIDGE, WATCH, WATCH_POWER) are explicitly
+// excluded because the engine itself surfaces them as a "watching" signal
+// only — they should stay in Track regardless of how the dynamic state
+// machine's separate readiness accumulator behaves.
+const PATH_PROMOTES_TO_READY: Record<string, true> = {
+  FAST_PROMOTE_ELITE: true,
+  FAST_PROMOTE_BARREL_PLUS: true,
+  FAST_PROMOTE_BARREL_CTX: true,
+  FAST_PROMOTE_2HH: true,
+  LEI_ESCALATION: true,
+  PATH_A: true,
+  PATH_B: true,
+  PATH_C: true,
+  PATH_D: true,
+  PATH_E_CONVICTION: true,
+  PATH_PRE_HR_DANGER: true,
+};
+
+const PATH_PROMOTES_TO_FIRE: Record<string, true> = {
+  FAST_PROMOTE_ELITE: true,
+};
+
+// Module-scope set so the drift-guard log only fires once per unknown path
+// per process (avoids log spam every poll cycle).
+const loggedUnknownPaths = new Set<string>();
+
 export function mapToUserStage(input: {
   legacyTier?: string | null;
   legacyState?: string | null;
@@ -46,6 +85,7 @@ export function mapToUserStage(input: {
   outcome?: string | null;
   confidenceScore?: number | null;
   convProb?: number | null;
+  alertPath?: string | null;
 }): HrRadarUserStage {
   const outcome = (input.outcome ?? "").toLowerCase();
   if (outcome && outcome !== "pending" && outcome !== "active") return "resolved";
@@ -56,9 +96,46 @@ export function mapToUserStage(input: {
   const canonical = (input.canonicalStage ?? "").toLowerCase();
   const conf = typeof input.confidenceScore === "number" ? input.confidenceScore : null;
   const conv = typeof input.convProb === "number" ? input.convProb : null;
+  const alertPath = (input.alertPath ?? "").toUpperCase();
 
   // Task #140 step 5 — BET_NOW always reaches Fire regardless of legacy tier.
   if (dyn === "BET_NOW" || state === "attack" || canonical === "attack") return "fire";
+
+  // Path-based promotion to Fire — engine fast-promoted on its highest
+  // conviction lane (elite barrel + collapsing pitcher) and surfaced it as
+  // an actionable officialAlert. This is the engine declaring Fire even if
+  // the dynamic state machine's parallel calibrated-prob track lags.
+  if (state === "actionable" && PATH_PROMOTES_TO_FIRE[alertPath]) return "fire";
+
+  // Path-based promotion to Ready — engine surfaced a real promotion path
+  // (FAST_PROMOTE_*, LEI_ESCALATION, PATH_A..E_CONVICTION) at signal_state
+  // "live" (prepare-tier) or "actionable" (officialAlert-tier). PATH_F /
+  // WATCH / WATCH_POWER paths are intentionally excluded — they are the
+  // engine's "watching only, not promoted" signals.
+  if ((state === "actionable" || state === "live") && PATH_PROMOTES_TO_READY[alertPath]) {
+    return "ready";
+  }
+
+  // Drift guard: if the engine surfaced a non-empty alertPath at a
+  // promotable signal_state but it isn't in either promotion table, log
+  // once so future engine paths don't silently miss READY promotion. The
+  // mapper still falls through to the legacy/dynamic-state branches below.
+  if (
+    alertPath &&
+    (state === "actionable" || state === "live") &&
+    !PATH_PROMOTES_TO_READY[alertPath] &&
+    !PATH_PROMOTES_TO_FIRE[alertPath] &&
+    alertPath !== "WATCH" &&
+    alertPath !== "WATCH_POWER" &&
+    alertPath !== "PATH_F_BLOCKED_BRIDGE"
+  ) {
+    if (!loggedUnknownPaths.has(alertPath)) {
+      loggedUnknownPaths.add(alertPath);
+      console.warn(
+        `[HR_RADAR_USER_STAGE_UNKNOWN_PATH] alertPath=${alertPath} state=${state} — not in PATH_PROMOTES_TO_READY/FIRE; row will fall through to dynamic-state branches`,
+      );
+    }
+  }
 
   // Task #140 step 5 — PREPARE escalates to Ready when engine confidence
   // crosses 7.0 OR calibrated conversion crosses 18%.
@@ -341,6 +418,7 @@ export function enrichWithUserStage(input: {
     outcome: input.outcome,
     confidenceScore: input.confidenceScore,
     convProb: input.conversionProbability,
+    alertPath: input.alertPath,
   });
 
   const qualifyingSignals = deriveQualifyingSignals({
