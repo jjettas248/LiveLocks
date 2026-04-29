@@ -1,5 +1,6 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, getAuthToken, setAuthToken, clearAuthToken } from "@/lib/queryClient";
+import { readStoredAttribution } from "@/hooks/useAttributionCapture";
 
 export interface AuthUser {
   id: number;
@@ -86,9 +87,12 @@ export function useAuth() {
 
   const registerMutation = useMutation({
     mutationFn: async (payload: { email: string; password: string; smsConsent: boolean; phoneNumber?: string }) => {
+      // Attach first-touch attribution from localStorage (best-effort).
+      const attribution = readStoredAttribution();
+      const body = attribution ? { ...payload, attribution } : payload;
       const res = await apiFetch("/api/auth/register", {
         method: "POST",
-        body: JSON.stringify(payload),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));

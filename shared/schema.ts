@@ -836,6 +836,57 @@ export const hrBallparkFactors = pgTable("hr_ballpark_factors", {
 
 export type HrBallparkFactor = typeof hrBallparkFactors.$inferSelect;
 
+// ── Attribution / conversion tracking (Twitter + general UTM) ────────────
+// Strictly additive. Two new tables; existing `users` table is not modified.
+// First-touch wins (visit dedupe at write time; user-attribution write is
+// best-effort and only inserted if a row for that user does not yet exist).
+
+export const attributionVisits = pgTable("attribution_visits", {
+  id: serial("id").primaryKey(),
+  visitorId: text("visitor_id").notNull(),
+  utmSource: text("utm_source"),
+  utmMedium: text("utm_medium"),
+  utmCampaign: text("utm_campaign"),
+  ref: text("ref"),
+  landingPath: text("landing_path"),
+  refererHost: text("referer_host"),
+  userAgentHash: text("user_agent_hash"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  visitorIdx: index("attribution_visits_visitor_idx").on(table.visitorId),
+  sourceIdx: index("attribution_visits_source_idx").on(table.utmSource),
+  createdAtIdx: index("attribution_visits_created_at_idx").on(table.createdAt),
+}));
+
+export const insertAttributionVisitSchema = createInsertSchema(attributionVisits).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertAttributionVisit = z.infer<typeof insertAttributionVisitSchema>;
+export type AttributionVisit = typeof attributionVisits.$inferSelect;
+
+export const userAttribution = pgTable("user_attribution", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().unique(),
+  visitorId: text("visitor_id"),
+  utmSource: text("utm_source"),
+  utmMedium: text("utm_medium"),
+  utmCampaign: text("utm_campaign"),
+  ref: text("ref"),
+  landingPath: text("landing_path"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  userIdx: uniqueIndex("user_attribution_user_idx").on(table.userId),
+  sourceIdx: index("user_attribution_source_idx").on(table.utmSource),
+}));
+
+export const insertUserAttributionSchema = createInsertSchema(userAttribution).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertUserAttribution = z.infer<typeof insertUserAttributionSchema>;
+export type UserAttribution = typeof userAttribution.$inferSelect;
+
 export interface PlayStats {
   buckets: {
     "60-69": { total: number; hits: number; misses: number; winRate: number };

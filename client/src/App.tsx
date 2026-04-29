@@ -11,6 +11,7 @@ import NcaabLivePage from "@/pages/ncaab-live";
 import PrivacyPage from "@/pages/privacy";
 import TermsPage from "@/pages/terms";
 import LandingPage from "@/pages/landing";
+import TwitterLandingPage from "@/pages/twitter-landing";
 import VerifyPendingPage from "@/pages/verify-pending";
 import ResetPasswordPage from "@/pages/reset-password";
 import { useAuth } from "@/hooks/use-auth";
@@ -88,6 +89,7 @@ function App() {
         <Switch>
           <Route path="/" component={RootRedirect} />
           <Route path="/landing" component={LandingPage} />
+          <Route path="/twitter" component={TwitterLandingPage} />
           <Route path="/privacy" component={PrivacyPage} />
           <Route path="/terms" component={TermsPage} />
           <Route path="/verify-pending" component={VerifyPendingPage} />

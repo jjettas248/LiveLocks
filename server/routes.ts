@@ -167,6 +167,36 @@ export async function registerRoutes(
   await registerAuthRoutes(app);
   await registerStripeRoutes(app);
 
+  // ── Attribution: visit tracking + admin metrics ────────────────────────
+  // Public POST: records a visit row (visitor cookie set by global middleware).
+  app.post("/api/attribution/visit", async (req, res) => {
+    try {
+      const { recordVisit } = await import("./services/attributionService");
+      const result = await recordVisit(req, req.body ?? {});
+      return res.json(result);
+    } catch (e: any) {
+      // Never surface errors to the client — attribution is fire-and-forget.
+      console.error("[attribution/visit]", e.message);
+      return res.json({ ok: true, deduped: false });
+    }
+  });
+
+  // Admin-only: per-source attribution summary (Twitter etc).
+  app.get("/api/admin/attribution/:source", requireAdmin, async (req, res) => {
+    try {
+      const source = String(req.params.source || "").toLowerCase();
+      if (!source) return res.status(400).json({ error: "missing source" });
+      const rawDays = Number(req.query.days);
+      const windowDays: 7 | 30 | 90 = (rawDays === 7 || rawDays === 30 || rawDays === 90) ? rawDays as 7 | 30 | 90 : 30;
+      const { getAttributionSummary } = await import("./services/attributionService");
+      const summary = await getAttributionSummary(source, windowDays);
+      return res.json(summary);
+    } catch (e: any) {
+      console.error("[admin/attribution]", e.message);
+      return res.status(500).json({ error: "summary failed" });
+    }
+  });
+
   storage.getPlays({ sport: "nba", limit: 200, settled: "settled" }).then(({ plays }) => {
     const recent7d = plays.filter(p => {
       const d = p.gameDate;

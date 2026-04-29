@@ -229,6 +229,22 @@ export async function registerAuthRoutes(app: import("express").Express) {
     // Welcome email is now handled by the lifecycle cron after email verification.
     // Sending it here caused duplicates when cron also fired for the same user.
 
+    // ── Best-effort signup attribution write (never blocks signup) ────────
+    try {
+      const { recordSignupAttribution } = await import("./services/attributionService");
+      const visitorId = (req as any).visitorId as string | null | undefined;
+      const attr = (req.body && typeof req.body === "object" ? req.body.attribution : null) ?? {};
+      await recordSignupAttribution(user.id, visitorId ?? null, {
+        utmSource: attr.utmSource,
+        utmMedium: attr.utmMedium,
+        utmCampaign: attr.utmCampaign,
+        ref: attr.ref,
+        landingPath: attr.landingPath,
+      });
+    } catch (attrErr: any) {
+      console.warn("[attribution] signup write failed (non-blocking):", attrErr?.message);
+    }
+
     req.session.userId = user.id;
     const token = signToken(user.id);
     return res.status(201).json({ ...safeUser(user), token });

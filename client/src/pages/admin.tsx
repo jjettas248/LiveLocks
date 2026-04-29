@@ -8,6 +8,7 @@ import { Users, MessageSquare, RotateCcw, Shield, LogOut, ChevronDown, CreditCar
 import { CalibrationDashboard } from "@/components/calibration-dashboard";
 import { UnifiedAnalyticsPanel } from "@/components/unified-analytics";
 import { DiagnosticsFooter } from "@/components/admin/DiagnosticsFooter";
+import { TwitterAttributionPanel } from "@/components/admin/TwitterAttributionPanel";
 
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
@@ -786,6 +787,7 @@ export default function AdminPage() {
         {activeTab === "analytics" && (
           <div data-testid="panel-analytics" className="space-y-6">
             <RailAnalyticsTile />
+            <TwitterAttributionPanel />
             <UnifiedAnalyticsPanel />
           </div>
         )}

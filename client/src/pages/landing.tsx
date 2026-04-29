@@ -1,6 +1,7 @@
 import { Zap, BarChart3, Target, ArrowRight, TrendingUp, Shield, Activity, MessageSquare, Bell, Check } from "lucide-react";
 import { DashboardPreview } from "@/components/DashboardPreview";
 import { Link } from "wouter";
+import { useAttributionCapture } from "@/hooks/useAttributionCapture";
 import mlbWinsImg from "@assets/image_1775499429532.png";
 import mlbSignalsImg from "@assets/image_1775499450591.png";
 
@@ -57,6 +58,7 @@ const PRICING_TIERS = [
 ];
 
 export default function LandingPage() {
+  useAttributionCapture();
   return (
     <div className="min-h-screen bg-background text-foreground font-sans antialiased selection:bg-blue-500/20">
 

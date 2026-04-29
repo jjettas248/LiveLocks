@@ -121,6 +121,11 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
+// Lightweight visitor cookie for attribution tracking. Sets an httpOnly
+// `lv_visitor` UUID cookie when missing. Never blocks the request.
+import { ensureVisitorCookie } from "./services/attributionService";
+app.use(ensureVisitorCookie);
+
 // Health endpoint — must respond before slow startup tasks complete
 app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
 
@@ -309,6 +314,46 @@ app.use((req, res, next) => {
     console.log("[startup] Schema migration: password reset columns ensured");
   } catch (err: any) {
     console.warn("[startup] Schema migration warning (password-reset):", err.message);
+  }
+
+  // Schema migration: attribution / conversion tracking (Task #143).
+  // Two strictly additive tables — does NOT modify the users table.
+  // Idempotent CREATE IF NOT EXISTS; safe to re-run on every boot.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS attribution_visits (
+        id SERIAL PRIMARY KEY,
+        visitor_id TEXT NOT NULL,
+        utm_source TEXT,
+        utm_medium TEXT,
+        utm_campaign TEXT,
+        ref TEXT,
+        landing_path TEXT,
+        referer_host TEXT,
+        user_agent_hash TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS attribution_visits_visitor_idx ON attribution_visits(visitor_id);
+      CREATE INDEX IF NOT EXISTS attribution_visits_source_idx ON attribution_visits(utm_source);
+      CREATE INDEX IF NOT EXISTS attribution_visits_created_at_idx ON attribution_visits(created_at);
+
+      CREATE TABLE IF NOT EXISTS user_attribution (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL UNIQUE,
+        visitor_id TEXT,
+        utm_source TEXT,
+        utm_medium TEXT,
+        utm_campaign TEXT,
+        ref TEXT,
+        landing_path TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS user_attribution_user_idx ON user_attribution(user_id);
+      CREATE INDEX IF NOT EXISTS user_attribution_source_idx ON user_attribution(utm_source);
+    `);
+    console.log("[startup] Schema migration: attribution tables ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (attribution):", err.message);
   }
 
   // Schema migration: lifecycle / alerts-channel / telegram columns (Pass 2 — additive only,
