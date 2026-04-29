@@ -138,5 +138,5 @@ export function useAttributionCapture(opts: Options = {}) {
     }, 150);
 
     return () => window.clearTimeout(t);
-  }, [location, forceSource]);
+  }, [location, search, forceSource]);
 }
