@@ -2050,6 +2050,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         dynamicDrivers: [], dynamicSuppressors: [], cooldownReason: null,
         dynamicPeakScore: null, dynamicPeakState: null, dynamicTickCount: null,
         dynamicLastRecompute: null, dynamicDataFreshness: null,
+        outcomeStatus: null, cashedFromTier: null,
       });
     } else {
       radarState.set(key, { ...radarState.get(key)!, status: "CASHED" });
@@ -2121,6 +2122,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
         dynamicDrivers: [], dynamicSuppressors: [], cooldownReason: null,
         dynamicPeakScore: null, dynamicPeakState: null, dynamicTickCount: null,
         dynamicLastRecompute: null, dynamicDataFreshness: null,
+        outcomeStatus: null, cashedFromTier: null,
       });
     }
   }
@@ -3620,6 +3622,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
       {activeSubTab === "hr_radar" && (
         <HrRadarLadder
           onAddToSlip={handleAddToSlip}
+          isAdmin={!!user?.isAdmin}
           onOpenDetails={(entry: HrRadarLadderEntry) => {
             handleHrRadarClick({
               playerId: entry.playerId,

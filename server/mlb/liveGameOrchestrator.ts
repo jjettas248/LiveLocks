@@ -341,6 +341,10 @@ function gradeSingleHRPlay(
           inning,
           half: halfInning,
           hitLabel,
+          // Phase 2 — game-level AB index. atBatIndex===0 (first AB of the
+          // game) qualifies for the early-HR-insufficient-sample exemption
+          // even outside inning 1.
+          atBatIndex,
         }).catch(err => console.warn(`[HR_RADAR_ENSURE_HIT] Failed: ${err.message}`));
       }
     }).catch(() => {});
@@ -2912,6 +2916,10 @@ export class LiveGameOrchestrator {
               })),
               preHrDangerScore: (output.hrFactors as any)?.preHrDangerScore,
               dangerFlags: (output.hrFactors as any)?.dangerFlags,
+              // Phase 3 — pass batter archetype so evaluateHRAlert can ease
+              // tier 4c promotion for elite_power profiles. Cache lookup is
+              // already done above in this try block.
+              batterArchetype: bArch,
             };
             const alertResult = evaluateHRAlert(alertInput);
 

@@ -48,10 +48,89 @@ export type HrRadarSection =
 export type HrRadarOutcomeStatus =
   | "active"
   | "called_hit"
+  // Tiered cashed statuses (Phase 1) — additive. All semantically equivalent
+  // to `called_hit` for routing/grading purposes; the suffix preserves the
+  // highest pre-HR engine state so the UI can show "Cashed from <Tier>".
+  // Existing `called_hit` rows remain valid and are treated as legacy/untiered.
+  | "called_hit_attack"
+  | "called_hit_ready"
+  | "called_hit_build"
+  | "called_hit_watch"
   | "called_miss"
   | "uncalled_hr"
   | "late_signal"
+  // Phase 2 — first-AB / no-live-sample HRs are NOT normal misses. Tracked
+  // separately so they don't pollute the user-facing dead/missed buckets.
+  | "early_hr_insufficient_sample"
   | "unresolved";
+
+/**
+ * Phase 1 helper — set of all "called hit" outcome statuses (legacy + tiered).
+ * Use anywhere a check for "this row is cashed" is needed.
+ */
+export const CALLED_HIT_OUTCOME_STATUSES: ReadonlySet<HrRadarOutcomeStatus> = new Set<HrRadarOutcomeStatus>([
+  "called_hit",
+  "called_hit_attack",
+  "called_hit_ready",
+  "called_hit_build",
+  "called_hit_watch",
+]);
+
+/**
+ * Phase 1 helper — UI label for a cashed row's pre-HR tier. Returns null for
+ * the legacy untiered `called_hit` so callers can render plain "Cashed".
+ */
+export function getCashedFromTierLabel(
+  status: HrRadarOutcomeStatus | string | null | undefined,
+): "Attack" | "Ready" | "Build" | "Watch" | null {
+  switch (status) {
+    case "called_hit_attack": return "Attack";
+    case "called_hit_ready": return "Ready";
+    case "called_hit_build": return "Build";
+    case "called_hit_watch": return "Watch";
+    default: return null;
+  }
+}
+
+/**
+ * Phase 1 helper — given a matched pre-HR alert's persisted tier fields,
+ * return the tiered called_hit status to write to `gradingStatus`. The
+ * mapping is monotonic (never "downgrades" the alert's recorded tier):
+ *
+ *   alertTier === "officialAlert"            → called_hit_attack
+ *   alertTier === "prepare" + strong signal  → called_hit_ready
+ *   alertTier === "prepare"                  → called_hit_build
+ *   alertTier === "watch"                    → called_hit_watch
+ *   else (legacy/missing alertTier):
+ *     confidenceTier === "strong" / sig "actionable" → called_hit_ready
+ *     confidenceTier === "building" / sig "live"     → called_hit_build
+ *     default                                        → called_hit_watch
+ *
+ * Returns plain `called_hit` only if all tier fields are missing — pure
+ * safety fallback so legacy data paths don't lose grading.
+ */
+export function inferCashedFromTierStatus(args: {
+  alertTier?: string | null;
+  confidenceTier?: string | null;
+  signalState?: string | null;
+}): "called_hit_attack" | "called_hit_ready" | "called_hit_build" | "called_hit_watch" | "called_hit" {
+  const tier = norm(args.alertTier);
+  const conf = norm(args.confidenceTier);
+  const sig = norm(args.signalState);
+  const strongSignal = conf === "strong" || sig === "actionable";
+
+  if (tier === "officialalert") return "called_hit_attack";
+  if (tier === "prepare") return strongSignal ? "called_hit_ready" : "called_hit_build";
+  if (tier === "watch") return "called_hit_watch";
+
+  // Legacy / missing alertTier — fall back to confidenceTier + signalState.
+  if (strongSignal) return "called_hit_ready";
+  if (conf === "building" || sig === "live") return "called_hit_build";
+  if (conf === "monitor") return "called_hit_watch";
+
+  // Truly nothing usable — keep legacy untiered status so old behavior holds.
+  return "called_hit";
+}
 
 /**
  * Best-effort coercion of any HR Radar row/entry shape into the canonical
@@ -104,22 +183,34 @@ export function deriveHrRadarOutcomeStatus(card: CanonicalCardInput): HrRadarOut
   const explicit = norm(card.outcomeStatus);
   if (
     explicit === "called_hit" ||
+    explicit === "called_hit_attack" ||
+    explicit === "called_hit_ready" ||
+    explicit === "called_hit_build" ||
+    explicit === "called_hit_watch" ||
     explicit === "called_miss" ||
     explicit === "uncalled_hr" ||
     explicit === "late_signal" ||
+    explicit === "early_hr_insufficient_sample" ||
     explicit === "active" ||
     explicit === "unresolved"
   ) return explicit as HrRadarOutcomeStatus;
 
   const grading = norm(card.gradingStatus);
   if (grading === "called_hit") return "called_hit";
+  if (grading === "called_hit_attack") return "called_hit_attack";
+  if (grading === "called_hit_ready") return "called_hit_ready";
+  if (grading === "called_hit_build") return "called_hit_build";
+  if (grading === "called_hit_watch") return "called_hit_watch";
   if (grading === "called_miss") return "called_miss";
   if (grading === "uncalled_hr") return "uncalled_hr";
   if (grading === "late_signal") return "late_signal";
-  // Diagnostic flavours of "HR happened but signal didn't qualify" — must
-  // map to uncalled_hr (not called_hit) so dedupe + fixup correctly mark
-  // them diagnostic / inactive instead of cashed.
-  if (grading === "early_window_hr" || grading === "early_hr_no_window") return "uncalled_hr";
+  if (grading === "early_hr_insufficient_sample") return "early_hr_insufficient_sample";
+  // Phase 2 — both `early_hr_no_window` (matcher-side first-inning HR with no
+  // events) and the legacy `early_window_hr` token now normalize to the
+  // user-facing `early_hr_insufficient_sample` bucket so analytics rollups,
+  // canonical sections, and outcome labels stay in parity across endpoints.
+  if (grading === "early_hr_no_window") return "early_hr_insufficient_sample";
+  if (grading === "early_window_hr") return "early_hr_insufficient_sample";
   // `expired` is "signal was active but the AB window ran out without an HR
   // and the play feed never produced a definitive miss" — it is genuinely
   // unresolved, not a called_miss.
@@ -131,7 +222,7 @@ export function deriveHrRadarOutcomeStatus(card: CanonicalCardInput): HrRadarOut
   if (outcomeWire === "miss") return "called_miss";
   if (outcomeWire === "uncalled_hr") return "uncalled_hr";
   if (outcomeWire === "late_signal") return "late_signal";
-  if (outcomeWire === "early_window_hr") return "uncalled_hr"; // first-inning HR with no window
+  if (outcomeWire === "early_window_hr") return "early_hr_insufficient_sample"; // first-inning HR with no window
 
   const statusWire = norm(card.status);
   if (statusWire === "hit") return "called_hit";
@@ -157,10 +248,14 @@ export function deriveHrRadarOutcomeStatus(card: CanonicalCardInput): HrRadarOut
  */
 export function deriveHrRadarLifecycleState(card: CanonicalCardInput): HrRadarLifecycleState {
   const outcome = deriveHrRadarOutcomeStatus(card);
-  if (outcome === "called_hit") return "cashed";
+  if (CALLED_HIT_OUTCOME_STATUSES.has(outcome)) return "cashed";
   if (outcome === "called_miss") return "missed";
   if (outcome === "uncalled_hr") return "uncalled_hr";
   if (outcome === "late_signal") return "late_signal";
+  // Phase 2 — early-HR-insufficient-sample cards are terminal-but-not-missed.
+  // Map to `inactive` so they're hidden from active sections but don't poison
+  // the missed/diagnostic buckets either. UI mappers can re-route as needed.
+  if (outcome === "early_hr_insufficient_sample") return "inactive";
 
   // Box-score fallback safety: any row carrying a positive HR count is
   // resolved even if outcomeStatus was not yet persisted (catches the
@@ -225,9 +320,13 @@ export function deriveHrRadarLifecycleState(card: CanonicalCardInput): HrRadarLi
  */
 export function deriveHrRadarSection(card: CanonicalCardInput): HrRadarSection {
   const outcome = deriveHrRadarOutcomeStatus(card);
-  if (outcome === "called_hit") return "cashed";
+  if (CALLED_HIT_OUTCOME_STATUSES.has(outcome)) return "cashed";
   if (outcome === "called_miss") return "missed";
   if (outcome === "late_signal" || outcome === "uncalled_hr") return "diagnostic";
+  // Phase 2 — early-HR-insufficient-sample is admin-only diagnostic. Route
+  // to `diagnostic` so it stays out of active sections; the user-facing UI
+  // mapper filters it out for non-admin users (Phase 4).
+  if (outcome === "early_hr_insufficient_sample") return "diagnostic";
 
   const lifecycle = deriveHrRadarLifecycleState(card);
   if (lifecycle === "cashed") return "cashed";
@@ -247,8 +346,11 @@ export function deriveHrRadarSection(card: CanonicalCardInput): HrRadarSection {
  */
 export function isResolvedHrRadarOutcome(card: CanonicalCardInput): boolean {
   const outcome = deriveHrRadarOutcomeStatus(card);
-  return outcome === "called_hit" || outcome === "called_miss" ||
-         outcome === "uncalled_hr" || outcome === "late_signal";
+  return CALLED_HIT_OUTCOME_STATUSES.has(outcome) ||
+         outcome === "called_miss" ||
+         outcome === "uncalled_hr" ||
+         outcome === "late_signal" ||
+         outcome === "early_hr_insufficient_sample";
 }
 
 /**
@@ -388,7 +490,7 @@ export function dedupeHrRadarRecords<T extends CanonicalCardInput & {
 }>(records: readonly T[]): T[] {
   const rank = (r: T): number => {
     const o = deriveHrRadarOutcomeStatus(r);
-    if (o === "called_hit") return 0;
+    if (CALLED_HIT_OUTCOME_STATUSES.has(o)) return 0;
     if (o === "called_miss") return 1;
     if (o === "uncalled_hr") return 2;
     if (o === "late_signal") return 3;

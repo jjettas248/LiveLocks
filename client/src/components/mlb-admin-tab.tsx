@@ -286,6 +286,10 @@ export function MLBAdminTab() {
 
   const [testerOpen, setTesterOpen] = useState(true);
   const [diagOpen, setDiagOpen] = useState(true);
+  // Phase 5 — admin-only Uncalled HR Review collapsible. Defaults closed
+  // since the underlying query only fires when expanded (saves a network
+  // round-trip on every admin tab visit).
+  const [uncalledOpen, setUncalledOpen] = useState(false);
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
@@ -681,6 +685,156 @@ export function MLBAdminTab() {
           </>
         )}
       </div>
+
+      {/* Phase 5 — Uncalled HR Review (admin only). Surfaces the most recent
+          uncalled_hr / early_hr_insufficient_sample rows so admins can see
+          what the engine missed and why. Calibration data, not product. */}
+      <UncalledHrReviewPanel
+        open={uncalledOpen}
+        onToggle={() => setUncalledOpen((v) => !v)}
+      />
+    </div>
+  );
+}
+
+// ─── Phase 5 — Uncalled HR Review panel ──────────────────────────────────────
+// Standalone admin section. Query is gated on `open` so the network call
+// never fires until expanded. Endpoint is requireAdmin server-side; if the
+// viewer is not admin the request will 403 and we render an empty state.
+
+interface UncalledHrRow {
+  id: string;
+  sessionDate: string;
+  gameId: string;
+  playerId: string;
+  playerName: string;
+  team: string;
+  gradingStatus: string;
+  hitInning: number | null;
+  hitHalf: string | null;
+  detectedInning: number | null;
+  pregameScore: number | null;
+  maxPreHrScore: number | null;
+  hadPreHrRadarRow: boolean;
+  hadPreHrContact: boolean;
+  matchMethod: string | null;
+  gradingReason: string | null;
+  suppressionReasons: string[] | null;
+  hitterArchetype: string | null;
+  pitcherFade: number | null;
+  parkWeatherScore: number | null;
+  atBatIndex: number | null;
+  resolvedAt: string | null;
+}
+
+function UncalledHrReviewPanel({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  const { data, isLoading, isError } = useQuery<{ rows: UncalledHrRow[] }>({
+    queryKey: ["/api/admin/hr-radar/uncalled"],
+    enabled: open,
+    refetchInterval: open ? 60000 : false,
+  });
+  const rows = data?.rows ?? [];
+
+  return (
+    <div className="rounded-xl border border-border/60 bg-card p-5" data-testid="panel-uncalled-hr-review">
+      <button
+        className="w-full flex items-center justify-between text-sm font-semibold text-foreground mb-1"
+        onClick={onToggle}
+        data-testid="button-toggle-uncalled-hr"
+      >
+        <span>Uncalled HR Review</span>
+        {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+      </button>
+      <p className="text-xs text-muted-foreground mb-3">
+        Last 50 HRs the engine did not call (uncalled_hr + early_hr_insufficient_sample). Calibration only — not user-visible.
+      </p>
+
+      {open && (
+        <>
+          {isLoading && <div className="text-xs text-muted-foreground">Loading…</div>}
+          {isError && (
+            <div className="text-xs text-red-400" data-testid="text-uncalled-error">
+              Failed to load. Admin only — confirm you're signed in as admin.
+            </div>
+          )}
+          {!isLoading && !isError && rows.length === 0 && (
+            <div className="text-xs text-muted-foreground" data-testid="text-uncalled-empty">
+              No uncalled HRs in the last 7 days.
+            </div>
+          )}
+          {!isLoading && !isError && rows.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs" data-testid="table-uncalled-hr">
+                <thead className="text-muted-foreground">
+                  <tr className="border-b border-border/40">
+                    <th className="text-left py-1.5 pr-2">Date</th>
+                    <th className="text-left py-1.5 pr-2">Player</th>
+                    <th className="text-left py-1.5 pr-2">Status</th>
+                    <th className="text-right py-1.5 pr-2">Inn</th>
+                    <th className="text-right py-1.5 pr-2">AB#</th>
+                    <th className="text-center py-1.5 pr-2">Pre-HR Row</th>
+                    <th className="text-center py-1.5 pr-2">Contact</th>
+                    <th className="text-right py-1.5 pr-2">PreScore</th>
+                    <th className="text-right py-1.5 pr-2">MaxScore</th>
+                    <th className="text-left py-1.5 pr-2">Archetype</th>
+                    <th className="text-right py-1.5 pr-2">PFade</th>
+                    <th className="text-right py-1.5 pr-2">Park/Wx</th>
+                    <th className="text-left py-1.5 pr-2">Suppress / Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr
+                      key={r.id}
+                      className="border-b border-border/20 align-top"
+                      data-testid={`row-uncalled-${r.id}`}
+                    >
+                      <td className="py-1.5 pr-2 font-mono">{r.sessionDate}</td>
+                      <td className="py-1.5 pr-2">
+                        <div className="font-medium text-foreground">{r.playerName}</div>
+                        <div className="text-muted-foreground">{r.team}</div>
+                      </td>
+                      <td className="py-1.5 pr-2">
+                        <span className={
+                          r.gradingStatus === "uncalled_hr"
+                            ? "text-zinc-300"
+                            : "text-purple-300"
+                        }>
+                          {r.gradingStatus}
+                        </span>
+                      </td>
+                      <td className="py-1.5 pr-2 text-right font-mono">
+                        {r.hitInning != null ? `${(r.hitHalf ?? "").charAt(0).toUpperCase()}${r.hitInning}` : "—"}
+                      </td>
+                      <td className="py-1.5 pr-2 text-right font-mono">{r.atBatIndex ?? "—"}</td>
+                      <td className="py-1.5 pr-2 text-center">{r.hadPreHrRadarRow ? "✓" : "—"}</td>
+                      <td className="py-1.5 pr-2 text-center">{r.hadPreHrContact ? "✓" : "—"}</td>
+                      <td className="py-1.5 pr-2 text-right font-mono">
+                        {r.pregameScore != null ? r.pregameScore.toFixed(1) : "—"}
+                      </td>
+                      <td className="py-1.5 pr-2 text-right font-mono">
+                        {r.maxPreHrScore != null ? r.maxPreHrScore.toFixed(1) : "—"}
+                      </td>
+                      <td className="py-1.5 pr-2 text-foreground/80">{r.hitterArchetype ?? "—"}</td>
+                      <td className="py-1.5 pr-2 text-right font-mono">
+                        {r.pitcherFade != null ? r.pitcherFade.toFixed(2) : "—"}
+                      </td>
+                      <td className="py-1.5 pr-2 text-right font-mono">
+                        {r.parkWeatherScore != null ? r.parkWeatherScore.toFixed(2) : "—"}
+                      </td>
+                      <td className="py-1.5 pr-2 text-muted-foreground max-w-[18rem]">
+                        {r.suppressionReasons && r.suppressionReasons.length > 0
+                          ? r.suppressionReasons.join(", ")
+                          : (r.gradingReason ?? "—")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

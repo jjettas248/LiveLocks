@@ -2,6 +2,7 @@ import type { MLBMarket } from "./types";
 
 export type MLBBatterArchetype =
   | "elite_contact"
+  | "elite_power"
   | "power_first"
   | "stable_regular"
   | "contact_specialist"
@@ -29,6 +30,10 @@ export interface MLBBatterArchetypeInput {
   last15OPS: number | null;
   platoonGap: number | null;
   isStarting: boolean;
+  // Phase 3 — optional HR rate (HR per PA). Used to detect `elite_power`
+  // batters when present. Falls back to barrel/EV proxy when absent so
+  // existing callers that don't supply it still classify identically.
+  seasonHRRate?: number | null;
 }
 
 export interface MLBPitcherArchetypeInput {
@@ -54,6 +59,16 @@ export function classifyBatterArchetype(input: MLBBatterArchetypeInput): MLBBatt
   const xBA = input.xBA ?? 0.250;
   const barrel = input.barrelRate ?? 0.05;
   const ev = input.exitVelocity ?? 88;
+  const hrRate = input.seasonHRRate ?? null;
+
+  // Phase 3 — elite_power tier. Detected primarily by HR/PA when available
+  // (~5.5%+ HR/PA ≈ 35-HR pace over 650 PA). Falls back to a tight
+  // barrel+EV proxy so callers without HR rate still pick out the top tier.
+  // Always requires a real sample (≥100 PA) to avoid early-season noise.
+  if (input.seasonPA >= 100) {
+    if (hrRate != null && hrRate >= 0.055) return "elite_power";
+    if (barrel >= 0.18 && ev >= 92) return "elite_power";
+  }
 
   if (xBA >= 0.300 && ev >= 90 && input.battingOrderSlot <= 3) return "elite_contact";
   if (xBA < 0.260 && barrel >= 0.15) return "power_first";
@@ -90,6 +105,8 @@ export function classifyPitcherArchetype(input: MLBPitcherArchetypeInput): MLBPi
 
 export const MLB_VARIANCE_MULTIPLIERS: Record<MLBBatterArchetype, number> = {
   elite_contact: 0.95,
+  // Phase 3 — elite_power profiles run higher HR variance than power_first.
+  elite_power: 1.15,
   power_first: 1.10,
   stable_regular: 1.00,
   contact_specialist: 0.90,
@@ -101,6 +118,7 @@ export const MLB_VARIANCE_MULTIPLIERS: Record<MLBBatterArchetype, number> = {
 
 export const MLB_PA_FRAGILITY: Record<MLBBatterArchetype, number> = {
   elite_contact: 1.00,
+  elite_power: 1.05,
   power_first: 1.05,
   stable_regular: 1.00,
   contact_specialist: 1.00,
@@ -145,6 +163,11 @@ const CALIBRATION_SHRINKAGE: Record<string, number> = {
   "elite_contact+low": 0.94,
   "elite_contact+mid": 0.90,
   "elite_contact+high": 0.82,
+  // Phase 3 — elite_power: trust the model a touch more on HR-shaped markets
+  // than power_first because the prior is stronger.
+  "elite_power+low": 0.88,
+  "elite_power+mid": 0.92,
+  "elite_power+high": 0.88,
   "power_first+low": 0.88,
   "power_first+mid": 0.90,
   "power_first+high": 0.85,
@@ -208,6 +231,12 @@ const MLB_SAFETY_CEILINGS: Record<string, number> = {
   "elite_contact+home_runs": 80,
   "elite_contact+hrr": 92,
   "elite_contact+batter_strikeouts": 88,
+  // Phase 3 — elite_power: a touch higher HR/total-bases ceiling than power_first.
+  "elite_power+hits": 88,
+  "elite_power+total_bases": 95,
+  "elite_power+home_runs": 88,
+  "elite_power+hrr": 94,
+  "elite_power+batter_strikeouts": 80,
   "power_first+hits": 90,
   "power_first+total_bases": 94,
   "power_first+home_runs": 82,
@@ -323,6 +352,7 @@ export function generateThesis(
     } else {
       const archetypeLabel: Record<string, string> = {
         elite_contact: "Elite contact profile",
+        elite_power: "Elite power profile",
         power_first: "Power-first bat",
         stable_regular: "Consistent regular starter",
         contact_specialist: "Contact specialist",
@@ -381,6 +411,7 @@ export function generateThesis(
 
 export const BATTER_ARCHETYPE_LABELS: Record<MLBBatterArchetype, string> = {
   elite_contact: "ELITE CONTACT",
+  elite_power: "ELITE POWER",
   power_first: "POWER",
   stable_regular: "REGULAR",
   contact_specialist: "CONTACT",

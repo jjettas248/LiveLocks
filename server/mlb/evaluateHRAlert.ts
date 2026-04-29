@@ -1,6 +1,7 @@
 import type { HRBuildResult, ClassifiedContact } from "./HRSignalBuilder";
 import { classifyContactEvent } from "./HRSignalBuilder";
 import { computeHRConversionProbability, type HRConversionInput, type HRConversionResult, type PitcherDeteriorationContext } from "./hrConversionModel";
+import type { MLBBatterArchetype } from "./archetypes";
 
 export type HRAlertLevel = "ALERT" | "WATCH" | null;
 export type HRSignalState = "PEAK" | "BUILDING" | "FORMATION" | "COOLDOWN" | null;
@@ -57,6 +58,11 @@ export interface HRAlertInput {
   // ── Pre-HR danger layer (optional; fed in by buildHRSignal callers) ──
   preHrDangerScore?: number;
   dangerFlags?: string[];
+  // Phase 3 — optional batter archetype, used to ease/tighten fast-promotion
+  // tiers. When `elite_power`, a single barrel alone is enough to promote on
+  // tier 4c without requiring pitcher/env favorability. Callers that don't
+  // supply this field get the unchanged legacy behavior.
+  batterArchetype?: MLBBatterArchetype | null;
 }
 
 export interface HRSuppressionFlag {
@@ -486,6 +492,31 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
       detectedInning: inning,
       alertTier: "officialAlert",
       diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_BARREL_PLUS", positiveFactors: [...positiveFactors, `barrel + ${dangerousSecondaryCount} dangerous contact`] },
+    };
+  }
+
+  // Phase 3 — Tier 4c-elite. Pure additive ease for `elite_power` archetypes:
+  // a single barrel alone is enough to reach `prepare`, even without
+  // pitcher/env favorability. Never downgrades; if this branch doesn't fire,
+  // the legacy tier 4c below runs identically.
+  if (
+    input.batterArchetype === "elite_power" &&
+    factors.barrels >= 1 &&
+    softVetoes.length === 0 &&
+    (convProb === null || convProb >= HR_CONVERSION_WATCH_MIN)
+  ) {
+    const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_BARREL_ELITE_POWER", softVetoes.length, convProb);
+    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} BARREL_ELITE_POWER barrels=${factors.barrels} archetype=elite_power → prepare`);
+    return {
+      level: "ALERT",
+      triggerReason: `FAST_PROMOTE:barrel_elite_power`,
+      signalState: "BUILDING",
+      decision: "PREPARE",
+      confidenceScore: conf,
+      formattedReason: `Elite-power bat with barrel contact (conv ${convPct}). Promoting to Building on power profile.`,
+      detectedInning: inning,
+      alertTier: "prepare",
+      diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_BARREL_ELITE_POWER", positiveFactors: [...positiveFactors, "barrel + elite_power archetype"] },
     };
   }
 

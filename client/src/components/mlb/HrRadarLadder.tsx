@@ -172,7 +172,11 @@ export interface HrRadarLadderResponse {
   counts: { attackNow: number; building: number; watch: number; cashed: number; dead: number; total: number; ready?: number };
 }
 
-type SectionKey = "attackNow" | "building" | "ready" | "watch" | "cashed" | "dead";
+// Phase 6 — `noAbYet` is an additive parking lot for live games where the
+// player still has zero tracked PAs. Keeps the engine's bucket assignment
+// intact server-side; only the UI re-shelves these rows so the live decision
+// sections (FIRE/READY/BUILD/TRACK) stop showing 0.0/10 pregame noise.
+type SectionKey = "attackNow" | "building" | "ready" | "watch" | "noAbYet" | "cashed" | "dead";
 
 const SECTION_META: Record<SectionKey, {
   label: string;
@@ -218,6 +222,17 @@ const SECTION_META: Record<SectionKey, {
     description: "Tracking. HR conditions are forming, not actionable yet.",
     defaultCollapsed: true,
   },
+  // Phase 6 — additive bucket. Holds rows whose game is live but the player
+  // has zero tracked PAs yet (engine score is necessarily 0.0/10). Hidden by
+  // default and CTA-disabled so the live decision sections stay clean.
+  noAbYet: {
+    label: "NO AB YET",
+    icon: Eye,
+    accent: "border-zinc-500/30 bg-zinc-500/5",
+    badge: "bg-zinc-600 text-white",
+    description: "Game is live, no plate appearance tracked yet — parked here until the first AB.",
+    defaultCollapsed: true,
+  },
   cashed: {
     label: "CASHED",
     icon: Trophy,
@@ -254,11 +269,44 @@ function deadOutcomeLabel(status: string): { label: string; color: string } {
     // must never share copy with a regular miss or with an uncalled HR.
     case "early_hr_no_window":
     case "early_window_hr":
+    // Phase 2 — first-AB HRs (insufficient sample) join this bucket so they
+    // share the purple "early window" treatment when shown to admins.
+    case "early_hr_insufficient_sample":
       return { label: "Early HR (no window)", color: "bg-purple-700 text-purple-100" };
     case "expired": return { label: "Expired", color: "bg-zinc-600 text-zinc-100" };
     default: return { label: "Resolved", color: "bg-zinc-600 text-zinc-100" };
   }
 }
+
+/**
+ * Phase 4 — pre-HR detection tier label for cashed rows. Returns null for
+ * legacy untiered `called_hit` (renders as plain "Cashed") and for
+ * non-called statuses. Mirrors `getCashedFromTierLabel` on the server.
+ */
+function cashedFromTierLabel(
+  status: string | null | undefined,
+): "Attack" | "Ready" | "Build" | "Watch" | null {
+  switch (status) {
+    case "called_hit_attack": return "Attack";
+    case "called_hit_ready": return "Ready";
+    case "called_hit_build": return "Build";
+    case "called_hit_watch": return "Watch";
+    default: return null;
+  }
+}
+
+/**
+ * Phase 4 — outcome statuses that should be HIDDEN from non-admin users in
+ * the user-facing dead/missed section. Admins still see them for calibration.
+ *   - `uncalled_hr`: HR happened with no pre-HR signal at all (admin debug)
+ *   - `early_hr_insufficient_sample`: first-AB / no-live-sample HR (Phase 2)
+ */
+const ADMIN_ONLY_DEAD_STATUSES: ReadonlySet<string> = new Set([
+  "uncalled_hr",
+  "early_hr_insufficient_sample",
+  // Legacy alias — older rows may still carry the pre-rename token.
+  "early_hr_no_window",
+]);
 
 /**
  * Goldmaster Phase 6 — final UI fallback for jargon stripping. The server's
@@ -544,6 +592,19 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
           )}
         </div>
       )}
+      {/* Phase 4 — credit lower-tier pre-HR detections. When the cashed
+          row carries a tiered called_hit_* status, surface which tier the
+          engine was at when the HR landed so users see Watch/Build/Ready
+          calls counted as wins instead of buried as misses. Falls back to
+          rendering nothing for legacy plain `called_hit` rows. */}
+      {section === "cashed" && cashedFromTierLabel(entry.outcomeStatus) && (
+        <div
+          className="mt-1 text-[10px] text-emerald-300/80"
+          data-testid={`text-cashed-from-tier-${entry.playerId}`}
+        >
+          Cashed from {cashedFromTierLabel(entry.outcomeStatus)}
+        </div>
+      )}
       {section === "cashed" && entry.onlyHomersVerified && (
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-foreground/80" data-testid={`row-cashed-stats-${entry.playerId}`}>
           {entry.ohExitVelocity != null && (
@@ -746,9 +807,13 @@ function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails, onPass
 interface HrRadarLadderProps {
   onAddToSlip?: (sig: MlbSignalData) => void;
   onOpenDetails?: (entry: HrRadarLadderEntry) => void;
+  // Phase 4 — viewer is an admin. Used to gate calibration-only rows
+  // (uncalled_hr, early_hr_insufficient_sample) in the dead section so
+  // regular users don't see admin diagnostics. Defaults to false.
+  isAdmin?: boolean;
 }
 
-export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps) {
+export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: HrRadarLadderProps) {
   // ── HOOKS — all hook calls live above ANY early return so the call
   // count is identical between renders (React invariant; violating it
   // throws "Rendered more hooks than during the previous render").
@@ -815,17 +880,53 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
   const sections = useMemo(() => {
     const filterDismissed = (list: HrRadarLadderEntry[]): HrRadarLadderEntry[] =>
       list.filter(e => !dismissed.has(entryDismissKey(e.playerId, e.gameId)));
+    // Phase 6 — predicate for "live game, no AB tracked yet". Engine score
+    // is necessarily 0.0/10 for these rows, so they pollute the live decision
+    // sections. We only re-shelve when the game is KNOWN to be live
+    // (`hasLiveABContext === true`); pure pregame entries (game not started,
+    // hasLiveABContext === false / undefined) keep their normal placement.
+    const isLiveButNoAb = (e: HrRadarLadderEntry): boolean =>
+      e.hasLiveABContext === true && (e.plateAppearancesTracked ?? 0) === 0;
+    const partitionLive = (list: HrRadarLadderEntry[]): {
+      keep: HrRadarLadderEntry[];
+      parked: HrRadarLadderEntry[];
+    } => {
+      const keep: HrRadarLadderEntry[] = [];
+      const parked: HrRadarLadderEntry[] = [];
+      for (const e of list) (isLiveButNoAb(e) ? parked : keep).push(e);
+      return { keep, parked };
+    };
+    const attackP = partitionLive(filterDismissed(rawSections.attackNow ?? []));
+    const readyP = partitionLive(filterDismissed((rawSections as any).ready ?? []));
+    const buildingP = partitionLive(filterDismissed(rawSections.building ?? []));
+    const watchP = partitionLive(filterDismissed(rawSections.watch ?? []));
     return {
-      attackNow: filterDismissed(rawSections.attackNow ?? []),
+      attackNow: attackP.keep,
       // Goldmaster v1 — additive Ready bucket (filtered like other live sections).
-      ready: filterDismissed((rawSections as any).ready ?? []),
-      building: filterDismissed(rawSections.building ?? []),
-      watch: filterDismissed(rawSections.watch ?? []),
+      ready: readyP.keep,
+      building: buildingP.keep,
+      watch: watchP.keep,
+      // Phase 6 — collapsed parking lot for live-but-no-AB rows. Single
+      // bucket so users see all parked entries together instead of each
+      // tier carrying a 0.0 zombie row. CTAs are disabled (see canAdd
+      // gating in LadderCard via `isLiveSection` check).
+      noAbYet: [
+        ...attackP.parked,
+        ...readyP.parked,
+        ...buildingP.parked,
+        ...watchP.parked,
+      ],
       cashed: rawSections.cashed ?? [],
-      dead: rawSections.dead ?? [],
+      // Phase 4 — non-admin users never see calibration-only outcomes
+      // (uncalled_hr, early_hr_insufficient_sample). They're useful only
+      // for admins reviewing why the engine missed; surfacing them to
+      // regular users creates noise that looks like product failure.
+      dead: (rawSections.dead ?? []).filter(
+        e => isAdmin || !ADMIN_ONLY_DEAD_STATUSES.has((e.outcomeStatus ?? "") as string),
+      ),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawSections, dismissed]);
+  }, [rawSections, dismissed, isAdmin]);
 
   useEffect(() => {
     if (!sessionDate) return;
@@ -916,10 +1017,16 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
     watch: sections.watch.length,
     cashed: sections.cashed.length,
     dead: sections.dead.length,
+    // Phase 6 — `noAbYet` not surfaced in the public counts shape (the
+    // header summary displayed to users only counts actionable sections).
     total: sections.attackNow.length + sections.ready.length + sections.building.length + sections.watch.length + sections.cashed.length + sections.dead.length,
   };
 
-  const allOrder: SectionKey[] = ["attackNow", "ready", "building", "watch", "cashed", "dead"];
+  // Phase 6 — `noAbYet` slots between the active live tiers and resolved
+  // sections so users see the parking lot only after scrolling past
+  // actionable rows. Hidden when empty (handled by LadderSection's
+  // empty-state branch already).
+  const allOrder: SectionKey[] = ["attackNow", "ready", "building", "watch", "noAbYet", "cashed", "dead"];
   const order: SectionKey[] = hideFinished
     ? allOrder.filter(k => k !== "cashed" && k !== "dead")
     : allOrder;
@@ -971,19 +1078,25 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails }: HrRadarLadderProps
           </Button>
         </div>
       </div>
-      {order.map(key => (
-        <LadderSection
-          key={key}
-          sectionKey={key}
-          entries={sections[key]}
-          onAddToSlip={onAddToSlip}
-          onOpenDetails={onOpenDetails}
-          onPass={handlePass}
-          onAccept={handleAccept}
-          acceptedKeys={accepted}
-          freshlyCashedKeys={freshlyCashedKeys}
-        />
-      ))}
+      {order.map(key => {
+        // Phase 6 — never render the parking lot section when empty;
+        // its only value is grouping, so an empty "NO AB YET" header
+        // would just be noise in its own right.
+        if (key === "noAbYet" && sections.noAbYet.length === 0) return null;
+        return (
+          <LadderSection
+            key={key}
+            sectionKey={key}
+            entries={sections[key]}
+            onAddToSlip={onAddToSlip}
+            onOpenDetails={onOpenDetails}
+            onPass={handlePass}
+            onAccept={handleAccept}
+            acceptedKeys={accepted}
+            freshlyCashedKeys={freshlyCashedKeys}
+          />
+        );
+      })}
       {counts.total === 0 && (
         <Card className="p-6 text-center" data-testid="ladder-empty-state">
           <div className="text-sm text-muted-foreground">

@@ -32,6 +32,7 @@ import {
   enrichWithUserStage,
   buildValidationPayload,
 } from "./mlb/hrRadarUserStage";
+import { CALLED_HIT_OUTCOME_STATUSES } from "./mlb/hrRadarSection";
 import { registerStripeRoutes } from "./stripeService";
 import { getVapidPublicKey, sendPush } from "./webpush";
 import { checkAndSendAlerts } from "./alertManager";
@@ -2383,7 +2384,7 @@ export async function registerRoutes(
       const allCashed = [...cashedFromEdge, ...cashedFromDb].filter((c: any) => {
         // If gradingStatus is unknown (no canonical match), exclude — we never surface ungraded "cashed" cards.
         if (!c.gradingStatus) return false;
-        return c.gradingStatus === "called_hit" && c.userVisible !== false;
+        return CALLED_HIT_OUTCOME_STATUSES.has(c.gradingStatus) && c.userVisible !== false;
       });
 
       const dbAlerts = await storage.getTodayHrRadarBoard();
@@ -2646,9 +2647,9 @@ export async function registerRoutes(
       // early_window_hr is its own bucket so 1st-inning HRs with no
       // realistic pre-call window do not pollute uncalled or missed.
       const deriveOutcomeType = (row: any, fallbackStatus: "hit" | "miss"): string => {
-        if (row?.gradingStatus === "early_hr_no_window" || row?.gradingStatus === "early_window_hr") return "early_window_hr";
+        if (row?.gradingStatus === "early_hr_no_window" || row?.gradingStatus === "early_window_hr" || row?.gradingStatus === "early_hr_insufficient_sample") return "early_window_hr";
         if (row?.fallbackCreated) return "post_hr_fallback";
-        if (row?.gradingStatus === "called_hit") return "called_hit";
+        if (row?.gradingStatus && CALLED_HIT_OUTCOME_STATUSES.has(row.gradingStatus)) return "called_hit";
         if (row?.gradingStatus === "called_miss") return "called_miss";
         if (row?.gradingStatus === "uncalled_hr") return "uncalled_hr";
         if (row?.gradingStatus === "late_signal") return "late_signal";
@@ -2692,6 +2693,22 @@ export async function registerRoutes(
     } catch (e: any) {
       console.error("[mlb/hr-radar-grading-history]", e.message);
       return res.json({ history: [] });
+    }
+  });
+
+  // Phase 5 — admin-only calibration endpoint. Returns last N uncalled-HR
+  // rows (uncalled_hr + early_hr_insufficient_sample + legacy alias) so the
+  // admin panel can review what the engine missed and why. Read-only; no
+  // grading-history mutations. Limited to 7 days back, 50 rows by default.
+  app.get("/api/admin/hr-radar/uncalled", requireAdmin, async (req, res) => {
+    try {
+      const limit = Math.max(1, Math.min(200, parseInt(String(req.query.limit ?? "50"), 10) || 50));
+      const days = Math.max(1, Math.min(30, parseInt(String(req.query.days ?? "7"), 10) || 7));
+      const rows = await (storage as any).getUncalledHrReview(limit, days);
+      return res.json({ rows });
+    } catch (e: any) {
+      console.error("[admin/hr-radar/uncalled]", e.message);
+      return res.status(500).json({ rows: [], error: "fetch_failed" });
     }
   });
 
@@ -2834,12 +2851,12 @@ export async function registerRoutes(
         const canonicalStage = stage?.currentCanonicalStage ?? null;
         const grading = r.gradingStatus ?? "active";
         const outcome =
-          r.status === "hit" ? "called_hit" :
+          CALLED_HIT_OUTCOME_STATUSES.has(grading) ? "called_hit" :
           grading === "called_miss" ? "miss" :
           grading === "uncalled_hr" ? "uncalled_hr" :
           grading === "late_signal" ? "late_signal" :
-          grading === "early_window_hr" || grading === "early_hr_no_window" ? "early_window_hr" :
-          grading === "called_hit" ? "called_hit" :
+          grading === "early_window_hr" || grading === "early_hr_no_window" || grading === "early_hr_insufficient_sample" ? "early_window_hr" :
+          r.status === "hit" ? "called_hit" :
           "pending";
         const v1 = enrichWithUserStage({
           legacyTier: r.confidenceTier,
@@ -3017,22 +3034,26 @@ export async function registerRoutes(
         byStatus[r.gradingStatus] = (byStatus[r.gradingStatus] ?? 0) + 1;
         const inn = (r.signalInning ?? r.detectedInning ?? r.hitInning ?? 0).toString();
         if (!byInning[inn]) byInning[inn] = { calledHit: 0, calledMiss: 0, uncalled: 0, late: 0 };
-        if (r.gradingStatus === "called_hit") byInning[inn].calledHit++;
+        if (CALLED_HIT_OUTCOME_STATUSES.has(r.gradingStatus as any)) byInning[inn].calledHit++;
         else if (r.gradingStatus === "called_miss") byInning[inn].calledMiss++;
         else if (r.gradingStatus === "uncalled_hr") byInning[inn].uncalled++;
         else if (r.gradingStatus === "late_signal") byInning[inn].late++;
-        if (r.gradingStatus === "called_hit" && r.signalInning != null && r.hitInning != null) {
+        if (CALLED_HIT_OUTCOME_STATUSES.has(r.gradingStatus as any) && r.signalInning != null && r.hitInning != null) {
           avgInningsToHr += (r.hitInning - r.signalInning);
           calledHitWithTiming++;
         }
       }
-      const calledHits = byStatus["called_hit"] ?? 0;
+      const calledHits = (byStatus["called_hit"] ?? 0)
+        + (byStatus["called_hit_attack"] ?? 0)
+        + (byStatus["called_hit_ready"] ?? 0)
+        + (byStatus["called_hit_build"] ?? 0)
+        + (byStatus["called_hit_watch"] ?? 0);
       const calledMisses = byStatus["called_miss"] ?? 0;
       const uncalled = byStatus["uncalled_hr"] ?? 0;
       const late = byStatus["late_signal"] ?? 0;
       // Goldmaster Detection Ledger Phase 10 — early-window HRs are
       // exempt from cashed/missed/uncalled trust metrics.
-      const earlyWindow = (byStatus["early_hr_no_window"] ?? 0) + (byStatus["early_window_hr"] ?? 0);
+      const earlyWindow = (byStatus["early_hr_no_window"] ?? 0) + (byStatus["early_window_hr"] ?? 0) + (byStatus["early_hr_insufficient_sample"] ?? 0);
       const totalCalls = calledHits + calledMisses;
       const totalHrs = calledHits + uncalled + late; // earlyWindow excluded by design
       return res.json({

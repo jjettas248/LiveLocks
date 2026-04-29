@@ -2,7 +2,7 @@ import { db } from "./db";
 import { todayET, daysAgoET } from "./utils/dateUtils";
 import { resolveMlbGameSessionDate } from "./utils/mlbSessionDate";
 import { decideHrRadarMatch, QUALIFYING_EVENT_TYPES } from "./validation/hrRadar/matchDecision";
-import { applyHrRadarResolvedStateFixup } from "./mlb/hrRadarSection";
+import { applyHrRadarResolvedStateFixup, inferCashedFromTierStatus, CALLED_HIT_OUTCOME_STATUSES } from "./mlb/hrRadarSection";
 import {
   HR_RADAR_GOLDMASTER_V1,
   enrichWithUserStage,
@@ -2979,6 +2979,14 @@ export class DatabaseStorage implements IStorage {
     gradingStatus: "called_hit" | "called_miss" | "uncalled_hr" | "late_signal";
     gradingReason: string;
     matchMethod: "direct_pre_hr_signal" | "post_hr_fallback" | "player_game_only" | "none";
+    // Phase 1 — alert tier fields exposed for tiered called_hit derivation.
+    // Populated from the matched alert row's persisted fields. Null on paths
+    // that have no alert (early_hr_no_window, no-alert uncalled_hr, error).
+    alertTier: string | null;
+    alertConfidenceTier: string | null;
+    alertSignalState: string | null;
+    alertPath: string | null;
+    alertPeakReadinessScore: number | null;
   }> {
     const today = resolveMlbGameSessionDate(params.gameId);
     console.log(`[HR_LEDGER_MATCH] gameId=${params.gameId} playerId=${params.playerId} sessionDate=${today} hrInning=${params.hrInning}${params.hrHalf} hrEndTimeMs=${params.hrEndTimeMs ?? "n/a"}`);
@@ -3021,6 +3029,8 @@ export class DatabaseStorage implements IStorage {
               gradingStatus: "early_hr_no_window" as any,
               gradingReason: "first-inning HR with no realistic pre-signal window — exempt from uncalled-miss bucket",
               matchMethod: "none",
+              alertTier: null, alertConfidenceTier: null, alertSignalState: null,
+              alertPath: null, alertPeakReadinessScore: null,
             };
           }
         }
@@ -3031,6 +3041,8 @@ export class DatabaseStorage implements IStorage {
           gradingStatus: "uncalled_hr",
           gradingReason: "no canonical hr_radar_alert row exists for player/game",
           matchMethod: "none",
+          alertTier: null, alertConfidenceTier: null, alertSignalState: null,
+          alertPath: null, alertPeakReadinessScore: null,
         };
       }
 
@@ -3088,7 +3100,18 @@ export class DatabaseStorage implements IStorage {
         console.log(`[HR_RADAR_MATCH_RESULT] late_signal player=${params.playerId} game=${params.gameId} alertId=${alert.id} signalAt=${new Date(sigMsLog).toISOString()} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"}`);
       }
 
-      return decision;
+      // Phase 1 — enrich decision with the matched alert's persisted tier
+      // fields so the grader can derive a tiered called_hit_* status.
+      const peakRaw = (alert as any).peakReadinessScore;
+      const peakNum = peakRaw == null ? null : Number(peakRaw);
+      return {
+        ...decision,
+        alertTier: alert.alertTier ?? null,
+        alertConfidenceTier: alert.confidenceTier ?? null,
+        alertSignalState: alert.signalState ?? null,
+        alertPath: alert.alertPath ?? null,
+        alertPeakReadinessScore: Number.isFinite(peakNum as number) ? (peakNum as number) : null,
+      };
     } catch (err: any) {
       console.warn(`[HR_RADAR_MATCH_RESULT] Failed: ${err.message}`);
       return {
@@ -3098,6 +3121,8 @@ export class DatabaseStorage implements IStorage {
         gradingStatus: "uncalled_hr",
         gradingReason: `matcher error: ${err.message}`,
         matchMethod: "none",
+        alertTier: null, alertConfidenceTier: null, alertSignalState: null,
+        alertPath: null, alertPeakReadinessScore: null,
       };
     }
   }
@@ -3723,6 +3748,14 @@ export class DatabaseStorage implements IStorage {
         // sessionDate/gameId/playerId/status='live' update could mutate
         // unrelated live rows (e.g. a fresh row created after the matched
         // one). matchResult.alertId is the canonical row to grade.
+        // Phase 1 — derive tiered called_hit status from the matched
+        // alert's persisted tier fields. Falls back to plain "called_hit"
+        // only when no tier info is available, preserving legacy behavior.
+        const tieredStatus = inferCashedFromTierStatus({
+          alertTier: matchResult.alertTier,
+          confidenceTier: matchResult.alertConfidenceTier,
+          signalState: matchResult.alertSignalState,
+        });
         const result = matchResult.alertId
           ? await db.update(hrRadarAlerts)
               .set({
@@ -3732,7 +3765,7 @@ export class DatabaseStorage implements IStorage {
                 hitLabel: hitLabelVal,
                 hitDetectedAt: hrEndTimeMs ? new Date(hrEndTimeMs) : nowDate,
                 resolvedAt: nowDate,
-                gradingStatus: "called_hit",
+                gradingStatus: tieredStatus,
                 gradingReason: matchResult.gradingReason,
                 matchedBeforeHr: true,
                 fallbackCreated: false,
@@ -3749,8 +3782,8 @@ export class DatabaseStorage implements IStorage {
           : { rowCount: 0 } as any;
         const count = (result as any).rowCount ?? 0;
         if (count > 0) {
-          console.log(`[HR_RADAR_CALLED_HIT] playerId=${playerId} gameId=${gameId} signalLabel=${matchResult.signalHalf}${matchResult.signalInning ?? ""} hitLabel=${hitLabelVal} reason="${matchResult.gradingReason}"`);
-          console.log(`[HR_LEDGER_GRADE] outcome=called_hit sessionDate=${today} gameId=${gameId} playerId=${playerId} signalInning=${matchResult.signalInning ?? "n/a"}${matchResult.signalHalf ?? ""} hitInning=${hitInningNum}${hitHalfVal} alertId=${matchResult.alertId} matchMethod=${matchResult.matchMethod}`);
+          console.log(`[HR_RADAR_CALLED_HIT] playerId=${playerId} gameId=${gameId} signalLabel=${matchResult.signalHalf}${matchResult.signalInning ?? ""} hitLabel=${hitLabelVal} tieredStatus=${tieredStatus} alertTier=${matchResult.alertTier ?? "n/a"} reason="${matchResult.gradingReason}"`);
+          console.log(`[HR_LEDGER_GRADE] outcome=${tieredStatus} sessionDate=${today} gameId=${gameId} playerId=${playerId} signalInning=${matchResult.signalInning ?? "n/a"}${matchResult.signalHalf ?? ""} hitInning=${hitInningNum}${hitHalfVal} alertId=${matchResult.alertId} matchMethod=${matchResult.matchMethod}`);
           await this.appendHrRadarSignalEvent({
             sessionDate: today, gameId, playerId,
             team: "",
@@ -3882,6 +3915,10 @@ export class DatabaseStorage implements IStorage {
     inning: number;
     half: "top" | "bottom";
     hitLabel: string;
+    // Phase 2 — orchestrator-known game-level AB index. When 0, the HR was
+    // the first AB of the game ⇒ no realistic pre-call window for ANY player
+    // in the game. Used to broaden the early-HR exemption beyond inning 1.
+    atBatIndex?: number | null;
   }): Promise<void> {
     try {
       const today = resolveMlbGameSessionDate(data.gameId);
@@ -3921,12 +3958,17 @@ export class DatabaseStorage implements IStorage {
         return;
       }
 
-      // ── Phase 5 — early-HR exemption ───────────────────────────────────
-      // 1st-inning HRs with no engine activity in the game get classified as
-      // `early_hr_no_window` (separate bucket) instead of polluting uncalled.
+      // ── Phase 2 — early-HR-insufficient-sample exemption ────────────────
+      // The original exemption only fired for inning-1 HRs with no engine
+      // activity. Phase 2 broadens it to ALSO cover the first AB of the game
+      // (`atBatIndex === 0`) regardless of inning — same root cause: no
+      // realistic pre-HR observation window. New rows write
+      // `early_hr_insufficient_sample`; legacy `early_hr_no_window` rows are
+      // still recognized by the deriver in `hrRadarSection.ts`.
       const isFirstInning = (data.inning ?? 0) <= 1;
+      const isFirstGameAB = (data.atBatIndex ?? -1) === 0;
       let earlyExempt = false;
-      if (isFirstInning) {
+      if (isFirstInning || isFirstGameAB) {
         const earlySignals = await db.select().from(hrRadarSignalEvents)
           .where(and(
             eq(hrRadarSignalEvents.gameId, data.gameId),
@@ -3955,9 +3997,9 @@ export class DatabaseStorage implements IStorage {
         scoreIncreased: false,
         confidenceTier: "monitor",
         signalState: "live",
-        triggerTags: earlyExempt ? ["auto_graded", "early_hr_no_window"] : ["auto_graded"],
+        triggerTags: earlyExempt ? ["auto_graded", "early_hr_insufficient_sample"] : ["auto_graded"],
         summaryText: earlyExempt
-          ? `HR confirmed ${data.hitLabel} (early-inning HR — no realistic pre-call window)`
+          ? `HR confirmed ${data.hitLabel} (insufficient sample — no realistic pre-call window)`
           : `HR confirmed ${data.hitLabel} (uncalled — no pre-HR engine signal)`,
         status: "hit",
         hitInning: data.inning,
@@ -3965,9 +4007,11 @@ export class DatabaseStorage implements IStorage {
         hitLabel: data.hitLabel,
         hitDetectedAt: nowDate,
         resolvedAt: nowDate,
-        gradingStatus: earlyExempt ? "early_hr_no_window" : "uncalled_hr",
+        // Phase 2 — write the new canonical token. Deriver continues to map
+        // legacy `early_hr_no_window` rows to the same user-facing bucket.
+        gradingStatus: earlyExempt ? "early_hr_insufficient_sample" : "uncalled_hr",
         gradingReason: earlyExempt
-          ? "first-inning HR with no realistic pre-signal window — exempt from uncalled-miss bucket"
+          ? "HR occurred before any realistic pre-signal window (first inning or first AB of game) — exempt from uncalled-miss bucket"
           : "no canonical hr_radar_alert existed at time of HR resolution — admin-only analytics row",
         matchedBeforeHr: false,
         fallbackCreated: true,
@@ -3976,15 +4020,114 @@ export class DatabaseStorage implements IStorage {
         analyticsPersisted: false,
       });
       if (earlyExempt) {
-        console.log(`[HR_RADAR_EARLY_HR_NO_WINDOW] (admin-only row created) playerId=${data.playerId} player=${data.playerName} gameId=${data.gameId} hitLabel=${data.hitLabel}`);
+        console.log(`[HR_RADAR_EARLY_HR_INSUFFICIENT_SAMPLE] (admin-only row created) playerId=${data.playerId} player=${data.playerName} gameId=${data.gameId} hitLabel=${data.hitLabel} firstInning=${isFirstInning} firstGameAB=${isFirstGameAB}`);
       } else {
         console.log(`[HR_RADAR_UNCALLED] (admin-only row created) playerId=${data.playerId} player=${data.playerName} gameId=${data.gameId} hitLabel=${data.hitLabel}`);
+        // Phase 7 — structured miss-reason logging. ONE line per true uncalled
+        // HR (skips early-exempt and late-signal branches; those have their
+        // own paths). Best-effort field extraction from prior signal events
+        // and contact snapshots — fields default to null/false rather than
+        // throwing so the log never blocks finalization. Pure logging; no
+        // behavior change.
+        try {
+          const priorEvents = await db.select().from(hrRadarSignalEvents)
+            .where(and(
+              eq(hrRadarSignalEvents.gameId, data.gameId),
+              eq(hrRadarSignalEvents.playerId, data.playerId),
+            ));
+          // Bucket prior events by signalState. Engine emits `watch`, `lean`,
+          // `strong`, `elite` plus alert-flow tokens; we collapse to the four
+          // tiers the UI cares about for calibration.
+          let priorWatchStateExists = false;
+          let priorBuildStateExists = false;
+          let priorReadyStateExists = false;
+          let priorAttackStateExists = false;
+          let priorContactEvents = 0;
+          let maxPreHrScore: number | null = null;
+          let lastBatterSnapshot: any = null;
+          let lastPitcherSnapshot: any = null;
+          let lastDrivers: any = null;
+          for (const ev of priorEvents) {
+            const s = String(ev.signalState ?? "").toLowerCase();
+            if (s === "watch" || s === "watching") priorWatchStateExists = true;
+            if (s === "lean" || s === "build" || s === "building") priorBuildStateExists = true;
+            if (s === "strong" || s === "ready") priorReadyStateExists = true;
+            if (s === "elite" || s === "actionable" || s === "fire" || s === "attack") priorAttackStateExists = true;
+            if (ev.eventType === "contact" || ev.eventType === "barrel" || ev.eventType === "hard_hit") priorContactEvents += 1;
+            const sc = ev.score != null ? Number(ev.score) : NaN;
+            if (Number.isFinite(sc)) {
+              if (maxPreHrScore == null || sc > maxPreHrScore) maxPreHrScore = sc;
+            }
+            if (ev.batterSnapshot) lastBatterSnapshot = ev.batterSnapshot;
+            if (ev.pitcherSnapshot) lastPitcherSnapshot = ev.pitcherSnapshot;
+            if (ev.drivers) lastDrivers = ev.drivers;
+          }
+          // Closest threshold the row missed — derived from maxPreHrScore vs
+          // the canonical 30/55/75 ladder. "fire@75" means we got within
+          // striking distance of the FIRE bucket; useful for calibration.
+          let closestThresholdMissed: string | null = null;
+          if (maxPreHrScore != null) {
+            if (maxPreHrScore >= 75) closestThresholdMissed = "above_fire_threshold_but_no_alert";
+            else if (maxPreHrScore >= 55) closestThresholdMissed = "ready@55";
+            else if (maxPreHrScore >= 30) closestThresholdMissed = "build@30";
+            else closestThresholdMissed = "below_build@30";
+          }
+          // Diagnostics shape varies by event source; probe a handful of
+          // known keys and return null when absent.
+          const driverObj = (lastDrivers ?? {}) as Record<string, any>;
+          const batterObj = (lastBatterSnapshot ?? {}) as Record<string, any>;
+          const pitcherObj = (lastPitcherSnapshot ?? {}) as Record<string, any>;
+          const suppressionReasons =
+            (Array.isArray(driverObj.suppressors) && driverObj.suppressors) ||
+            (Array.isArray(driverObj.softVetoes) && driverObj.softVetoes) ||
+            null;
+          const hitterArchetype =
+            (typeof batterObj.archetype === "string" && batterObj.archetype) ||
+            (typeof batterObj.batterArchetype === "string" && batterObj.batterArchetype) ||
+            null;
+          const pitcherFade: number | null =
+            typeof pitcherObj.pitcherFade === "number" ? pitcherObj.pitcherFade
+            : typeof pitcherObj.pitcherVulnerability === "number" ? pitcherObj.pitcherVulnerability
+            : null;
+          const parkWeatherScore: number | null =
+            typeof driverObj.parkWeatherScore === "number" ? driverObj.parkWeatherScore
+            : typeof driverObj.parkWindBoost === "number" ? driverObj.parkWindBoost
+            : null;
+          console.log(`[HR_RADAR_MISS_REASON] ${JSON.stringify({
+            playerId: data.playerId,
+            player: data.playerName,
+            team: data.team,
+            gameId: data.gameId,
+            inning: data.inning,
+            half: halfLabel,
+            atBatIndex: data.atBatIndex ?? null,
+            pregameScore: 0,
+            priorWatchStateExists,
+            priorBuildStateExists,
+            priorReadyStateExists,
+            priorAttackStateExists,
+            priorContactEvents,
+            priorEventCount: priorEvents.length,
+            maxPreHrScore,
+            closestThresholdMissed,
+            suppressionReasons: suppressionReasons || null,
+            hitterArchetype,
+            pitcherFade,
+            parkWeatherScore,
+          })}`);
+        } catch (logErr: any) {
+          // Never let calibration logging break grading.
+          console.warn(`[HR_RADAR_MISS_REASON] log failed: ${logErr?.message ?? logErr}`);
+        }
       }
       // Goldmaster Phase 9 — canonical resolved_* event for the ledger.
       try {
         await this.appendHrRadarSignalEvent({
           sessionDate: today, gameId: data.gameId, playerId: data.playerId, team: data.team,
           alertId,
+          // Phase 2 — keep `resolved_early_window_hr` event type for ledger
+          // continuity (event-type column is enum-like and consumed by
+          // analytics jobs). The new gradingStatus token is independent.
           eventType: earlyExempt ? "resolved_early_window_hr" : "resolved_uncalled_hr",
           detectedAt: nowDate,
           inning: data.inning,
@@ -4322,7 +4465,7 @@ export class DatabaseStorage implements IStorage {
 
       // User-facing Cashed: only true called hits. Uncalled HR / late signal stay admin-only.
       const hits = canonicalRows
-        .filter(r => r.status === "hit" && r.gradingStatus === "called_hit" && r.userVisible === true)
+        .filter(r => r.status === "hit" && CALLED_HIT_OUTCOME_STATUSES.has(r.gradingStatus as any) && r.userVisible === true)
         .map(r => ({
           sessionDate: r.sessionDate,
           gameId: r.gameId,
@@ -4372,7 +4515,7 @@ export class DatabaseStorage implements IStorage {
         }));
 
       // Use authoritative gradingStatus column instead of legacy triggerTags heuristic.
-      const calledHits = hits.filter(h => (h as any).gradingStatus === "called_hit");
+      const calledHits = hits.filter(h => CALLED_HIT_OUTCOME_STATUSES.has((h as any).gradingStatus));
       const calledMisses = misses;
       const totalGraded = calledHits.length + calledMisses.length;
       const hitRate = totalGraded > 0 ? Math.round((calledHits.length / totalGraded) * 1000) / 10 : 0;
@@ -4458,7 +4601,7 @@ export class DatabaseStorage implements IStorage {
         }
 
         const canonical = Array.from(canonicalMap.values());
-        const calledHits = canonical.filter(r => r.gradingStatus === "called_hit").length;
+        const calledHits = canonical.filter(r => CALLED_HIT_OUTCOME_STATUSES.has(r.gradingStatus as any)).length;
         const uncalledHits = canonical.filter(r => r.gradingStatus === "uncalled_hr" || r.gradingStatus === "late_signal").length;
         const misses = canonical.filter(r => r.gradingStatus === "called_miss").length;
         const totalGraded = calledHits + misses;
@@ -4470,7 +4613,7 @@ export class DatabaseStorage implements IStorage {
           missedOfficialSignals: canonical.filter(r => r.gradingStatus === "called_miss").length,
           lateSignals: canonical.filter(r => r.gradingStatus === "late_signal").length,
           uncalledHrs: canonical.filter(r => r.gradingStatus === "uncalled_hr").length,
-          earlyWindowHrs: canonical.filter(r => r.gradingStatus === "early_window_hr" || r.gradingStatus === "early_hr_no_window").length,
+          earlyWindowHrs: canonical.filter(r => r.gradingStatus === "early_window_hr" || r.gradingStatus === "early_hr_no_window" || r.gradingStatus === "early_hr_insufficient_sample").length,
           expiredTracking: canonical.filter(r => r.gradingStatus === "expired").length,
         };
 
@@ -4480,6 +4623,116 @@ export class DatabaseStorage implements IStorage {
       return result;
     } catch (err: any) {
       console.warn(`[HR_RADAR_GRADING_HISTORY] Failed: ${err.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Phase 5 — admin calibration view. Returns the most recent uncalled-HR
+   * rows across the last `daysBack` sessions for engine review. Pulls
+   * `uncalled_hr` and `early_hr_insufficient_sample` (Phase 2 token) plus the
+   * legacy `early_hr_no_window` alias so older rows stay visible.
+   *
+   * Read-only and best-effort: derived fields (suppression reasons, archetype,
+   * pitcherFade, parkWeather) are extracted from `diagnosticsSnapshot` when
+   * present and returned as null when absent. Never throws.
+   */
+  async getUncalledHrReview(limit: number = 50, daysBack: number = 7): Promise<Array<{
+    id: string;
+    sessionDate: string;
+    gameId: string;
+    playerId: string;
+    playerName: string;
+    team: string;
+    gradingStatus: string;
+    hitInning: number | null;
+    hitHalf: string | null;
+    detectedInning: number | null;
+    pregameScore: number | null;
+    maxPreHrScore: number | null;
+    hadPreHrRadarRow: boolean;
+    hadPreHrContact: boolean;
+    matchMethod: string | null;
+    gradingReason: string | null;
+    suppressionReasons: string[] | null;
+    hitterArchetype: string | null;
+    pitcherFade: number | null;
+    parkWeatherScore: number | null;
+    atBatIndex: number | null;
+    resolvedAt: Date | null;
+  }>> {
+    try {
+      const cutoffStr = daysAgoET(daysBack);
+      const rows = await db.select().from(hrRadarAlerts)
+        .where(and(
+          sql`${hrRadarAlerts.sessionDate} >= ${cutoffStr}`,
+          sql`${hrRadarAlerts.gradingStatus} IN ('uncalled_hr','early_hr_insufficient_sample','early_hr_no_window')`,
+        ))
+        .orderBy(desc(hrRadarAlerts.resolvedAt), desc(hrRadarAlerts.detectedAt))
+        .limit(Math.max(1, Math.min(500, limit)));
+
+      return rows.map(r => {
+        const diag = (r.diagnosticsSnapshot ?? {}) as Record<string, any>;
+        const contact = (r.contactSnapshot ?? null) as Record<string, any> | null;
+        // Best-effort extraction — diagnostics shape varies by code path so we
+        // probe a handful of known keys before returning null. UI shows "—".
+        const suppressors =
+          (Array.isArray(diag.suppressors) && diag.suppressors) ||
+          (Array.isArray(diag.suppressionReasons) && diag.suppressionReasons) ||
+          (Array.isArray(diag.softVetoes) && diag.softVetoes) ||
+          null;
+        const archetype =
+          (typeof diag.batterArchetype === "string" && diag.batterArchetype) ||
+          (typeof diag.archetype === "string" && diag.archetype) ||
+          null;
+        const pitcherFade =
+          (typeof diag.pitcherFade === "number" && diag.pitcherFade) ||
+          (typeof diag.pitcherVulnerability === "number" && diag.pitcherVulnerability) ||
+          null;
+        const parkWeather =
+          (typeof diag.parkWeatherScore === "number" && diag.parkWeatherScore) ||
+          (typeof diag.parkWeather === "number" && diag.parkWeather) ||
+          (typeof diag.parkWindBoost === "number" && diag.parkWindBoost) ||
+          null;
+        const atBatIndex: number | null =
+          typeof diag.atBatIndex === "number" ? diag.atBatIndex
+          : typeof diag.abIndex === "number" ? diag.abIndex
+          : null;
+        // hadPreHrContact: contactSnapshot has any tracked PA or hard-hit count.
+        const hadPreHrContact =
+          contact != null && (
+            (typeof contact.plateAppearancesTracked === "number" && contact.plateAppearancesTracked > 0) ||
+            (typeof contact.barrels === "number" && contact.barrels > 0) ||
+            (typeof contact.hardHits === "number" && contact.hardHits > 0)
+          );
+
+        return {
+          id: r.id,
+          sessionDate: r.sessionDate,
+          gameId: r.gameId,
+          playerId: r.playerId,
+          playerName: r.playerName,
+          team: r.team,
+          gradingStatus: r.gradingStatus,
+          hitInning: r.hitInning ?? null,
+          hitHalf: r.hitHalf ?? null,
+          detectedInning: r.detectedInning ?? null,
+          pregameScore: r.initialReadinessScore != null ? Number(r.initialReadinessScore) : null,
+          maxPreHrScore: r.peakReadinessScore != null ? Number(r.peakReadinessScore) : null,
+          hadPreHrRadarRow: !!r.matchedBeforeHr,
+          hadPreHrContact,
+          matchMethod: r.matchMethod ?? null,
+          gradingReason: r.gradingReason ?? null,
+          suppressionReasons: suppressors as string[] | null,
+          hitterArchetype: archetype,
+          pitcherFade: pitcherFade as number | null,
+          parkWeatherScore: parkWeather as number | null,
+          atBatIndex,
+          resolvedAt: r.resolvedAt,
+        };
+      });
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_UNCALLED_REVIEW] Failed: ${err.message}`);
       return [];
     }
   }
@@ -4681,7 +4934,7 @@ export class DatabaseStorage implements IStorage {
     // EV / distance / launch angle / pitch type without a per-card lookup.
     const cashedNames = Array.from(new Set(
       rows
-        .filter(r => r.gradingStatus === "called_hit" || r.status === "hit")
+        .filter(r => CALLED_HIT_OUTCOME_STATUSES.has(r.gradingStatus as any) || r.status === "hit")
         .map(r => r.playerName)
     ));
     // Task #121 Step 4 — pull current inning per game (lazy dynamic import
@@ -4776,14 +5029,15 @@ export class DatabaseStorage implements IStorage {
       // outcome: map DB grading → canonical user-facing outcome label.
       const outcome: HrRadarOutcomeLabel = (() => {
         if (currentStatus === "live") return "pending";
+        if (CALLED_HIT_OUTCOME_STATUSES.has(grading as any)) return "called_hit";
         switch (grading) {
-          case "called_hit": return "called_hit";
           case "called_miss": return "miss";
           case "uncalled_hr": return "uncalled_hr";
           case "late_signal": return "late_signal";
           // Phase 4: split early-window HR from standard misses.
           case "early_hr_no_window":
           case "early_window_hr":
+          case "early_hr_insufficient_sample":
             return "early_window_hr";
           default: return "pending";
         }
@@ -5600,12 +5854,15 @@ export interface HrRadarCoverageMetrics {
     const tier = (r.confidenceTier ?? "monitor").toLowerCase();
     const inning = r.signalInning ?? r.detectedInning ?? r.hitInning ?? 0;
     if ((r as any).fallbackCreated) totals.postHrFallback++;
-    switch (grading) {
-      case "called_hit":  totals.calledHit++; ensureTier(tier).calledHit++; ensureInning(inning).calledHit++; break;
-      case "called_miss": totals.calledMiss++; ensureTier(tier).calledMiss++; ensureInning(inning).calledMiss++; break;
-      case "uncalled_hr": totals.uncalledHr++; ensureTier(tier).uncalledHr++; ensureInning(inning).uncalledHr++; break;
-      case "late_signal": totals.lateSignal++; ensureTier(tier).lateSignal++; ensureInning(inning).lateSignal++; break;
-      default:            totals.activeOrUnresolved++;
+    if (CALLED_HIT_OUTCOME_STATUSES.has(grading as any)) {
+      totals.calledHit++; ensureTier(tier).calledHit++; ensureInning(inning).calledHit++;
+    } else {
+      switch (grading) {
+        case "called_miss": totals.calledMiss++; ensureTier(tier).calledMiss++; ensureInning(inning).calledMiss++; break;
+        case "uncalled_hr": totals.uncalledHr++; ensureTier(tier).uncalledHr++; ensureInning(inning).uncalledHr++; break;
+        case "late_signal": totals.lateSignal++; ensureTier(tier).lateSignal++; ensureInning(inning).lateSignal++; break;
+        default:            totals.activeOrUnresolved++;
+      }
     }
   }
 

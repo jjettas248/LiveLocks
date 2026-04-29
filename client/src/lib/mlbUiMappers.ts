@@ -74,7 +74,31 @@ export type HrRadarCardUi = {
   dynamicTickCount: number | null;
   dynamicLastRecompute: number | null;
   dynamicDataFreshness: number | null;
+  // Phase 4 — pre-HR detection tier for cashed rows. Null for legacy
+  // (untiered) `called_hit` and for non-cashed rows. Renders as
+  // "Cashed from Attack/Ready/Build/Watch" in LadderCard.
+  cashedFromTier: "Attack" | "Ready" | "Build" | "Watch" | null;
+  outcomeStatus: string | null;
 };
+
+/**
+ * Phase 4 — client-side mapper for the new tiered `called_hit_*` outcome
+ * statuses introduced in P1. Returns `null` for plain `called_hit` (legacy
+ * untiered) so the cashed UI keeps its current label, and for non-called
+ * statuses. Kept in sync with `getCashedFromTierLabel` in
+ * server/mlb/hrRadarSection.ts.
+ */
+export function getCashedFromTierLabel(
+  status: string | null | undefined,
+): "Attack" | "Ready" | "Build" | "Watch" | null {
+  switch (status) {
+    case "called_hit_attack": return "Attack";
+    case "called_hit_ready": return "Ready";
+    case "called_hit_build": return "Build";
+    case "called_hit_watch": return "Watch";
+    default: return null;
+  }
+}
 
 export type HrRadarAnalyzeViewModel = {
   alert: {
@@ -419,6 +443,11 @@ export function mapHrRadarCardToUi(player: any, type: "edge" | "watch" | "cashed
     dynamicTickCount: player.hrAlert?.tickCount ?? null,
     dynamicLastRecompute: player.hrAlert?.lastRecomputeAt ?? null,
     dynamicDataFreshness: player.hrAlert?.dataFreshnessMs ?? null,
+    // Phase 4 — surface tiered-cashed status. Outcome status may live on
+    // `outcomeStatus` (canonical wire) or `gradingStatus` (DB row); accept
+    // either so this works across both /api/mlb/hr-radar and ladder shapes.
+    outcomeStatus: player.outcomeStatus ?? player.gradingStatus ?? null,
+    cashedFromTier: getCashedFromTierLabel(player.outcomeStatus ?? player.gradingStatus),
   };
 }
 
@@ -516,5 +545,10 @@ export function mapAlertToUi(alert: any): HrRadarCardUi {
     dynamicTickCount: null,
     dynamicLastRecompute: null,
     dynamicDataFreshness: null,
+    // Phase 4 — alert rows don't carry a ledger outcomeStatus, so leave both
+    // null. Cashed alerts surface through the ladder's `cashed` section
+    // instead, where the tier label is rendered.
+    outcomeStatus: alert.outcomeStatus ?? alert.gradingStatus ?? null,
+    cashedFromTier: getCashedFromTierLabel(alert.outcomeStatus ?? alert.gradingStatus),
   };
 }
