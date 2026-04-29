@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useLocation } from "wouter";
 
 const STORAGE_KEY = "lv_attribution_v1";
 const FIELD_MAX = 120;
@@ -53,18 +54,35 @@ type Options = {
 };
 
 /**
- * On mount, reads UTM params from the URL, applies first-touch-wins to
- * localStorage, and POSTs the visit to the backend. Safe to call on any page.
- * Runs at most once per mount per page (debounced).
+ * Reads UTM params from the URL, applies first-touch-wins to localStorage,
+ * and POSTs the visit to the backend. Safe to call on any page.
+ *
+ * Re-fires on SPA route/search-string changes (wouter `useLocation`) so
+ * client-side navigations into a tagged URL (e.g. user lands on `/`, then
+ * navigates to `/twitter?utm_campaign=launch` without a full reload) are
+ * captured. Idempotency is enforced by:
+ *   1. lastSigRef — skips if the (path + search + forceSource) tuple has
+ *      not changed since the last fire,
+ *   2. localStorage first-touch rule — only writes once per visitor,
+ *   3. server-side dedupe inside `recordVisit` — same visitor + UTM combo
+ *      inside the dedupe window collapses to a single row.
  */
 export function useAttributionCapture(opts: Options = {}) {
-  const ranRef = useRef(false);
+  const [location] = useLocation();
+  const lastSigRef = useRef<string | null>(null);
+  const { forceSource } = opts;
 
   useEffect(() => {
-    if (ranRef.current) return;
-    ranRef.current = true;
-
     if (typeof window === "undefined") return;
+
+    // Build a stable signature for THIS attribution attempt. wouter's
+    // `location` is the path only, so we include `window.location.search`
+    // to detect query-string changes (the part attribution actually cares
+    // about) and `forceSource` so a route that forces a source still fires
+    // the first time we land on it.
+    const sig = `${location}?${window.location.search}|${forceSource ?? ""}`;
+    if (lastSigRef.current === sig) return;
+    lastSigRef.current = sig;
 
     const url = new URL(window.location.href);
     const params = url.searchParams;
