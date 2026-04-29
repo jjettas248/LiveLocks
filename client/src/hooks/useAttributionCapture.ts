@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 
 const STORAGE_KEY = "lv_attribution_v1";
 const FIELD_MAX = 120;
@@ -69,6 +69,7 @@ type Options = {
  */
 export function useAttributionCapture(opts: Options = {}) {
   const [location] = useLocation();
+  const search = useSearch();
   const lastSigRef = useRef<string | null>(null);
   const { forceSource } = opts;
 
@@ -76,11 +77,11 @@ export function useAttributionCapture(opts: Options = {}) {
     if (typeof window === "undefined") return;
 
     // Build a stable signature for THIS attribution attempt. wouter's
-    // `location` is the path only, so we include `window.location.search`
-    // to detect query-string changes (the part attribution actually cares
-    // about) and `forceSource` so a route that forces a source still fires
-    // the first time we land on it.
-    const sig = `${location}?${window.location.search}|${forceSource ?? ""}`;
+    // `location` is path-only, so we also pull the reactive query string
+    // via `useSearch()` to detect same-path query-only navigations (the
+    // part attribution actually cares about) and include `forceSource`
+    // so a route that forces a source still fires the first time we land.
+    const sig = `${location}?${search}|${forceSource ?? ""}`;
     if (lastSigRef.current === sig) return;
     lastSigRef.current = sig;
 

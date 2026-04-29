@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import rateLimit from "express-rate-limit";
 import { storage } from "./storage";
+import { z } from "zod";
 import { insertUserEmailPasswordSchema } from "@shared/schema";
 import type { User } from "@shared/schema";
 import { sendWallEmail, sendVerificationEmail, sendPasswordResetEmail } from "./email";
@@ -133,6 +134,24 @@ const signupLimiter = rateLimit({
   validate: { xForwardedForHeader: false },
 });
 
+// Optional attribution payload sent by the browser on signup. Each field is
+// independently optional, capped at 120 chars (matches the storage clamp),
+// and accepts null/undefined/missing — nothing here can fail signup.
+const attributionFieldSchema = z
+  .union([z.string().max(120), z.null()])
+  .optional();
+const attributionBodySchema = z
+  .object({
+    utmSource: attributionFieldSchema,
+    utmMedium: attributionFieldSchema,
+    utmCampaign: attributionFieldSchema,
+    ref: attributionFieldSchema,
+    landingPath: attributionFieldSchema,
+  })
+  .partial()
+  .nullish()
+  .transform((v) => v ?? {});
+
 export async function registerAuthRoutes(app: import("express").Express) {
   app.post("/api/auth/register", signupLimiter, async (req: Request, res: Response) => {
     if (req.body.website) {
@@ -230,16 +249,22 @@ export async function registerAuthRoutes(app: import("express").Express) {
     // Sending it here caused duplicates when cron also fired for the same user.
 
     // ── Best-effort signup attribution write (never blocks signup) ────────
+    // The attribution body is optional and untrusted (sent by the browser).
+    // Strict-validate it with Zod before persisting; if validation or the
+    // write fails we log and move on — never block signup.
     try {
       const { recordSignupAttribution } = await import("./services/attributionService");
       const visitorId = (req as any).visitorId as string | null | undefined;
-      const attr = (req.body && typeof req.body === "object" ? req.body.attribution : null) ?? {};
+      const parsed = attributionBodySchema.safeParse(
+        req.body && typeof req.body === "object" ? (req.body as any).attribution : null,
+      );
+      const attr = parsed.success ? parsed.data : {};
       await recordSignupAttribution(user.id, visitorId ?? null, {
-        utmSource: attr.utmSource,
-        utmMedium: attr.utmMedium,
-        utmCampaign: attr.utmCampaign,
-        ref: attr.ref,
-        landingPath: attr.landingPath,
+        utmSource: attr.utmSource ?? null,
+        utmMedium: attr.utmMedium ?? null,
+        utmCampaign: attr.utmCampaign ?? null,
+        ref: attr.ref ?? null,
+        landingPath: attr.landingPath ?? null,
       });
     } catch (attrErr: any) {
       console.warn("[attribution] signup write failed (non-blocking):", attrErr?.message);
