@@ -12,6 +12,7 @@ import { StatCard } from "@/components/stat-card";
 import { ParlaySlip } from "@/components/parlay-slip";
 import { UpgradeModal } from "@/components/upgrade-modal";
 import { FeedbackModal } from "@/components/feedback-modal";
+import { ManageSubscriptionModal } from "@/components/manage-subscription-modal";
 import { NCAABAdminTab } from "@/components/ncaab-admin-tab";
 import MlbLivePage from "@/pages/mlb-live";
 import { WelcomeBanner } from "@/components/welcome-banner";
@@ -542,20 +543,7 @@ export default function Dashboard() {
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
   const [copiedPick, setCopiedPick] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
-  const [portalLoading, setPortalLoading] = useState(false);
-
-  const handleManageSubscription = async () => {
-    setPortalLoading(true);
-    try {
-      const res = await apiRequest("POST", "/api/stripe/portal");
-      const data = await res.json();
-      if (data.url) window.location.href = data.url;
-    } catch (err: any) {
-      toast({ title: "Could not open billing portal", description: err.message, variant: "destructive" });
-    } finally {
-      setPortalLoading(false);
-    }
-  };
+  const [showManageModal, setShowManageModal] = useState(false);
 
   const [activeTab, setActiveTab] = useState<"calculator" | "ncaab" | "analytics" | "mlb">("calculator");
   const [nbaSubTab, setNbaSubTab] = useState<"live" | "halftime">("live");
@@ -1949,12 +1937,13 @@ export default function Dashboard() {
                 </span>
                 <button
                   data-testid="button-manage-subscription"
-                  onClick={handleManageSubscription}
-                  disabled={portalLoading}
-                  className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
-                  title="Manage or cancel your subscription"
+                  onClick={() => setShowManageModal(true)}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary transition-colors"
+                  title="Manage, cancel, or downgrade your subscription"
+                  aria-label="Manage subscription — cancel, downgrade, or update payment"
                 >
-                  {portalLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : "Manage"}
+                  <Settings className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Manage Plan</span>
                 </button>
               </div>
             )}
@@ -4438,6 +4427,15 @@ export default function Dashboard() {
       )}
 
       {user && <FeedbackModal />}
+
+      {showManageModal && user?.subscriptionTier && (
+        <ManageSubscriptionModal
+          tier={user.subscriptionTier ?? null}
+          status={user.subscriptionStatus ?? null}
+          cancelAtPeriodEnd={user.cancelAtPeriodEnd ?? null}
+          onClose={() => setShowManageModal(false)}
+        />
+      )}
 
       {/* Parlay Slip — mobile bottom sheet */}
       {showParlay && isMobile && (
