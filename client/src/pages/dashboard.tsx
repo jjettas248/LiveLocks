@@ -914,6 +914,18 @@ export default function Dashboard() {
     // (end of Q2 → halftime → early Q3) propagate within seconds.
     refetchInterval: 15_000,
     staleTime: 5_000,
+    // 2H NBA fix: always pull fresh from the server when the dashboard
+    // (re)mounts. The global QueryClient default is `staleTime: Infinity`
+    // and the per-query `staleTime: 5_000` only marks the cache stale —
+    // it does not by itself force a fetch on remount when the cache is
+    // still considered fresh. "always" guarantees the user sees a fresh
+    // server-side computation on every dashboard load, not the last
+    // cached snapshot from a previous session.
+    refetchOnMount: "always",
+    // Pull again when the browser/network reconnects (laptop wake, mobile
+    // tab regaining focus from background) so a stale cache from before
+    // the disconnect is replaced immediately.
+    refetchOnReconnect: "always",
   });
 
   useEffect(() => {

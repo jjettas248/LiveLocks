@@ -3311,15 +3311,44 @@ export class DatabaseStorage implements IStorage {
 
         // ── T003 immutability guardrail ──────────────────────────────────
         // detectedInning / detectedHalf / detectedLabel / detectedAt are
-        // write-once at CREATE. The UPDATE set() below intentionally never
-        // includes these fields. If the current tick disagrees with the
-        // persisted detection inning, log loudly so any future code that
-        // tries to mutate them is caught immediately. We never overwrite.
+        // write-once. Once a row has a non-null detection inning, the
+        // UPDATE set() below intentionally never includes these fields.
+        // If the current tick disagrees with the persisted detection
+        // inning, log loudly so any future code that tries to mutate them
+        // is caught immediately. We never overwrite an existing stamp.
         if (alert.detectedInning != null && data.inning !== alert.detectedInning) {
           console.log(
             `[HR_RADAR_DETECTION_LOCKED] gameId=${data.gameId} playerId=${data.playerId} ` +
             `persistedDetected=${alert.detectedLabel} (${alert.detectedHalf}${alert.detectedInning}) ` +
             `currentTick=${data.half === "top" ? "T" : "B"}${data.inning} — preserving original`
+          );
+        }
+
+        // ── HR Radar Presence→Qualified Backfill ────────────────────────
+        // When a row was originally created via the Presence Floor (Task
+        // #126) it carries detectedInning=NULL / signalDetectedAt=NULL by
+        // design — it's a "watching" row, not yet engine-qualified. If the
+        // engine LATER escalates the same player into a real qualified
+        // signal (this UPDATE is non-presence and we got past the early
+        // short-circuit at L3308), we must stamp the detection truth on
+        // its first qualifying tick. Without this, a player who genuinely
+        // reaches BET_NOW with peak readiness 100 will still grade as
+        // called_miss(presence-only) at HR resolution because Branch 0 of
+        // decideHrRadarMatch sees both detectedInning and signalDetectedAt
+        // as NULL. T003 immutability is preserved because this branch
+        // only fires when alert.detectedInning IS null (first stamp), and
+        // the guardrail above forbids overwriting a non-null value.
+        const promoteFromPresence = alert.detectedInning == null;
+        const promotionStampInning = persistInning;
+        const promotionStampHalf = persistHalf;
+        const promotionStampLabel = detectedLabel;
+        const promotionStampAt = new Date();
+        if (promoteFromPresence) {
+          console.log(
+            `[HR_RADAR_PROMOTION_FROM_PRESENCE] gameId=${data.gameId} playerId=${data.playerId} ` +
+            `stampingDetected=${promotionStampLabel} signalAt=${promotionStampAt.toISOString()} ` +
+            `(was presence-only, engine now qualified — canonicalStage=${data.canonicalStage ?? "?"} ` +
+            `tier=${data.confidenceTier} readiness=${data.readinessScore})`
           );
         }
 
@@ -3386,6 +3415,23 @@ export class DatabaseStorage implements IStorage {
             alertPath: data.alertPath ?? alert.alertPath,
             alertTier: data.alertTier ?? alert.alertTier,
             diagnosticsSnapshot: mergedDiag,
+            // ── Presence→Qualified one-time backfill (see comment above) ──
+            // These fields are only included when the row is being promoted
+            // from presence-only to engine-qualified. T003 immutability is
+            // preserved: this is a NULL→value first-stamp, never an
+            // overwrite. After this update, alert.detectedInning is
+            // non-null and the guardrail at L3322 prevents further changes.
+            ...(promoteFromPresence
+              ? {
+                  detectedInning: promotionStampInning,
+                  detectedHalf: promotionStampHalf,
+                  detectedLabel: promotionStampLabel,
+                  detectedAt: promotionStampAt,
+                  signalDetectedAt: promotionStampAt,
+                  signalInning: promotionStampInning,
+                  signalHalf: promotionStampHalf,
+                }
+              : {}),
           })
           .where(eq(hrRadarAlerts.id, alert.id));
 
