@@ -24,49 +24,86 @@ const SPORT_BADGE: Record<string, string> = {
   NCAAB: "bg-blue-500/15 text-blue-400",
 };
 
-const PLAYER_PROP_KEYWORDS = [
-  "hr",
-  "home run",
-  "homer",
-  "strikeout",
-  "k ",
-  "ks",
-  "point",
-  "pts",
-  "assist",
-  "ast",
-  "rebound",
-  "reb",
-  "3pm",
-  "three",
-  "block",
-  "blk",
-  "steal",
-  "stl",
+// Player-prop market allow-list. Conversion proof must only render
+// player-driven markets, never team totals / spreads / moneylines / 2H
+// totals / game totals.
+//
+// Long substrings use simple `includes()` matching; short tokens (PRA,
+// PR, RA, PA, TB, KS, HR, HRR, REB, AST, PTS, BLK, STL) use exact
+// word-boundary matching so they don't false-positive on non-player
+// markets like "Park Factor" or "Passing Yards" if those ever leak in.
+const PLAYER_PROP_SUBSTRINGS = [
   "hit",
   "total bases",
-  "tb",
+  "total_bases",
+  "home run",
+  "home_run",
+  "homer",
   "rbi",
   "bases",
-  "outs",
-  "made",
+  "runs scored",
+  "pitcher strikeouts",
+  "pitcher_strikeouts",
+  "strikeout",
+  "outs recorded",
+  "pitcher_outs",
+  "pitcher outs",
+  "hits allowed",
+  "hits_allowed",
+  "point",
+  "assist",
+  "rebound",
+  "3pm",
+  "threes",
+  "three pointer",
+  "three-point",
+  "block",
+  "steal",
+  "made threes",
 ];
+
+const PLAYER_PROP_TOKENS = new Set([
+  "tb",
+  "hr",
+  "hrr",
+  "ks",
+  "pts",
+  "ast",
+  "reb",
+  "blk",
+  "stl",
+  "pra",
+  "pr",
+  "ra",
+  "pa",
+]);
 
 const TEAM_LEVEL_KEYWORDS = [
   "team total",
+  "team_total",
   "game total",
+  "game_total",
   "spread",
   "moneyline",
+  "money line",
   "ml ",
   "puckline",
   "runline",
+  "1h ",
+  "2h ",
+  "first half",
+  "second half",
+  "halftime total",
 ];
 
 function isPlayerPropMarket(market: string | null | undefined): boolean {
-  const m = (market ?? "").toLowerCase();
+  const m = (market ?? "").toLowerCase().trim();
   if (!m) return false;
   if (TEAM_LEVEL_KEYWORDS.some((k) => m.includes(k))) return false;
-  return PLAYER_PROP_KEYWORDS.some((k) => m.includes(k));
+  if (PLAYER_PROP_SUBSTRINGS.some((k) => m.includes(k))) return true;
+  // Token match: split into word-like chunks and check the small-token set.
+  const tokens = m.split(/[^a-z0-9]+/).filter(Boolean);
+  return tokens.some((t) => PLAYER_PROP_TOKENS.has(t));
 }
 
 const FALLBACK_ROWS: ProofRow[] = [
@@ -127,23 +164,45 @@ export function PublicProofStrip() {
 
   let rows: ProofRow[] = [];
   if (data?.recentResults && data.recentResults.length > 0) {
-    rows = data.recentResults
+    // Filter to player-prop markets in MLB / NBA only.
+    const candidates = data.recentResults
       .filter((r) => {
         const sport = (r.sport ?? "").toUpperCase();
         if (sport !== "MLB" && sport !== "NBA") return false;
         return isPlayerPropMarket(r.market);
-      })
-      .slice(0, 5)
-      .map((r) => ({
-        id: r.id,
-        sport: (r.sport ?? "").toUpperCase(),
-        player: r.player,
-        market: r.market,
-        side: r.side,
-        line: r.line,
-        result: r.result,
-        driver: "",
-      }));
+      });
+
+    // Wins-first ordering: HIT rows ranked by most recent settledAt,
+    // followed by non-HIT rows by most recent settledAt. This ensures a
+    // miss can never appear above a hit in the conversion proof strip
+    // for free users.
+    const tsOf = (r: { settledAt?: string }) => {
+      const t = r.settledAt ? Date.parse(r.settledAt) : NaN;
+      return Number.isFinite(t) ? t : 0;
+    };
+    const isHit = (r: { result: string }) => (r.result ?? "").toLowerCase() === "hit";
+
+    const hits = candidates.filter(isHit).sort((a, b) => tsOf(b) - tsOf(a));
+    const nonHits = candidates.filter((r) => !isHit(r)).sort((a, b) => tsOf(b) - tsOf(a));
+
+    const MAX_VISIBLE = 5;
+    // Prefer all-hit display when we have enough HITs (>=3) so the title
+    // can honestly claim "Wins". Otherwise mix wins-first then most-recent.
+    const ordered =
+      hits.length >= 3
+        ? hits.slice(0, MAX_VISIBLE)
+        : [...hits, ...nonHits].slice(0, MAX_VISIBLE);
+
+    rows = ordered.map((r) => ({
+      id: r.id,
+      sport: (r.sport ?? "").toUpperCase(),
+      player: r.player,
+      market: r.market,
+      side: r.side,
+      line: r.line,
+      result: r.result,
+      driver: "",
+    }));
   }
 
   let usingFallback = false;
@@ -151,6 +210,10 @@ export function PublicProofStrip() {
     rows = FALLBACK_ROWS;
     usingFallback = true;
   }
+
+  // Honest title: only call them "Wins" when every visible row is a hit.
+  const allHits = rows.every((r) => (r.result ?? "").toLowerCase() === "hit");
+  const headlineTitle = allHits ? "Recent Player Prop Wins" : "Recent Player Prop Results";
 
   return (
     <div
@@ -160,8 +223,11 @@ export function PublicProofStrip() {
       <div className="px-5 py-3 border-b border-border/60 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <TrendingUp className="w-3.5 h-3.5 text-primary" />
-          <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
-            Recent Player Prop Wins
+          <h3
+            data-testid="text-proof-headline"
+            className="text-xs font-bold text-foreground uppercase tracking-wider"
+          >
+            {headlineTitle}
           </h3>
         </div>
         {usingFallback && (

@@ -2213,6 +2213,7 @@ export default function Dashboard() {
                       playsUsedToday={user?.playsUsedToday ?? 0}
                       playsLimit={3}
                       isPrimaryLoading={scanningEdges}
+                      scrollTargetId="locked-signal-preview"
                       onPrimaryCta={() => {
                         const playsUsedToday = user?.playsUsedToday ?? 0;
                         const remaining = 3 - playsUsedToday;
@@ -2251,6 +2252,17 @@ export default function Dashboard() {
                         });
                       }}
                     />
+                    {/*
+                      Conversion-priority order for free users:
+                      1) FreeActivationRail (above)
+                      2) Prominent missed-value / locked-profit band
+                         (LockedSignalModule) — moved up so the value
+                         proposition is visible without scrolling.
+                      3) Recent Player Prop Wins proof strip (below).
+                      The legacy LockedSignalModule render lower in this
+                      file is gated off so it never duplicates here.
+                    */}
+                    <LockedSignalModule onUpgradeClick={handleUpgradeClick} />
                     <PublicProofStrip />
                   </>
                 );
@@ -2402,9 +2414,13 @@ export default function Dashboard() {
           </div>
         )}
 
-        {isFreeUser && (
-          <LockedSignalModule onUpgradeClick={handleUpgradeClick} />
-        )}
+        {/*
+          LockedSignalModule was previously rendered here (after the
+          scanner / autoRunResult block). Conversion-priority order moved
+          it directly under FreeActivationRail above so the missed-value
+          band is visible without scrolling. Intentionally not rendered
+          here to avoid duplicate display.
+        */}
 
         {isFreeUser && playsUsed === 1 && (
           <div

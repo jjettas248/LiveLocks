@@ -26,8 +26,9 @@ export function LockedSignalModule({ onUpgradeClick }: LockedSignalModuleProps) 
 
   return (
     <div
+      id="locked-signal-preview"
       data-testid="locked-signal-module"
-      className="flex flex-col gap-3 p-4 rounded-2xl border border-[#27272a] bg-[#0a0a0a]"
+      className="flex flex-col gap-3 p-4 rounded-2xl border border-[#27272a] bg-[#0a0a0a] scroll-mt-24"
     >
       <div className="rounded-2xl border border-red-500/20 bg-[#0f0f0f] p-4 space-y-3">
         <div className="flex items-center gap-2">
@@ -59,12 +60,86 @@ export function LockedSignalModule({ onUpgradeClick }: LockedSignalModuleProps) 
         </p>
       </div>
 
-      {totalLive > 0 && (
-        <p className="text-sm text-[#a1a1aa] text-center">
-          You are locked out of{" "}
-          <span className="text-white font-bold">{totalLive}</span>{" "}
-          live signal{totalLive !== 1 ? "s" : ""} right now
-        </p>
+      {/*
+        Prominent missed-value band — large, hard to miss, mobile-friendly.
+        Shown above the proof rows / CTA so the user sees the value
+        proposition without scrolling. Falls back gracefully when only
+        live signal count is available (no fabricated profit values).
+      */}
+      {(totalLive > 0 || (analytics?.last7Days && analytics.last7Days.plays >= 5)) && (
+        <div
+          data-testid="band-missed-value"
+          className="rounded-2xl border border-[#00d4aa]/35 bg-gradient-to-br from-[#00d4aa]/12 to-[#0a0a0a] p-4 sm:p-5 space-y-3"
+        >
+          {totalLive > 0 && (
+            <p
+              data-testid="text-locked-out-headline"
+              className="text-sm sm:text-base font-semibold text-white text-center leading-snug"
+            >
+              You are locked out of{" "}
+              <span className="text-[#00d4aa] font-black text-lg sm:text-xl">
+                {totalLive}
+              </span>{" "}
+              live player prop signal{totalLive !== 1 ? "s" : ""} right now
+            </p>
+          )}
+
+          {analytics?.last7Days && analytics.last7Days.plays >= 5 && (
+            <div className="grid grid-cols-3 gap-2 sm:gap-3 pt-1">
+              <div
+                data-testid="metric-win-rate"
+                className="text-center rounded-lg bg-[#0f0f0f] border border-[#27272a] py-2"
+              >
+                <div className="text-xl sm:text-2xl font-black text-white leading-none">
+                  {analytics.last7Days.winRate.toFixed(0)}%
+                </div>
+                <div className="text-[9px] sm:text-[10px] uppercase tracking-wider text-[#71717a] mt-1">
+                  7d Win Rate
+                </div>
+              </div>
+              <div
+                data-testid="metric-signal-count"
+                className="text-center rounded-lg bg-[#0f0f0f] border border-[#27272a] py-2"
+              >
+                <div className="text-xl sm:text-2xl font-black text-white leading-none">
+                  {analytics.last7Days.plays}
+                </div>
+                <div className="text-[9px] sm:text-[10px] uppercase tracking-wider text-[#71717a] mt-1">
+                  Signals
+                </div>
+              </div>
+              <div
+                data-testid="metric-profit"
+                className="text-center rounded-lg bg-[#0f0f0f] border border-emerald-500/25 py-2"
+              >
+                <div
+                  className={`text-xl sm:text-2xl font-black leading-none ${
+                    analytics.last7Days.roi > 0 ? "text-emerald-400" : "text-[#71717a]"
+                  }`}
+                >
+                  {analytics.last7Days.roi > 0
+                    ? `+$${Math.round(analytics.last7Days.roi * 25)}`
+                    : "—"}
+                </div>
+                <div className="text-[9px] sm:text-[10px] uppercase tracking-wider text-[#71717a] mt-1">
+                  At $25/unit
+                </div>
+              </div>
+            </div>
+          )}
+
+          <button
+            data-testid="button-unlock-signals-cta"
+            onClick={onUpgradeClick}
+            className="w-full py-3 sm:py-3.5 rounded-xl text-sm sm:text-base font-black tracking-wide transition-all active:scale-95 shadow-lg shadow-[#00d4aa]/20"
+            style={{ background: "#00d4aa", color: "#000" }}
+          >
+            Unlock Live Signals → $1 for 3 Days
+          </button>
+          <p className="text-[10px] sm:text-[11px] text-[#52525b] text-center">
+            Then $40/mo (Pro) or $65/mo (All Sports) · Cancel anytime
+          </p>
+        </div>
       )}
 
       {hits.length > 0 && (
@@ -93,37 +168,24 @@ export function LockedSignalModule({ onUpgradeClick }: LockedSignalModuleProps) 
         </div>
       )}
 
-      {analytics?.last7Days && analytics.last7Days.plays >= 5 && (
-        <div className="rounded-lg border border-[#27272a] bg-[#0a0a0a] px-3 py-2 flex items-center gap-2 flex-wrap">
-          <TrendingUp className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-          <span className="text-[11px] text-[#71717a]">Last 7 Days</span>
-          <span className="text-[11px] font-bold text-white">{analytics.last7Days.winRate.toFixed(0)}% Win Rate</span>
-          <span className="text-[#52525b] text-[10px]">·</span>
-          <span className="text-[11px] font-bold text-white">{analytics.last7Days.plays} Signals</span>
-          {analytics.last7Days.roi > 0 && (
-            <>
-              <span className="text-[#52525b] text-[10px]">·</span>
-              <span className="text-[11px] font-bold text-emerald-400">
-                +${Math.round(analytics.last7Days.roi * 25)} at $25/unit
-              </span>
-            </>
-          )}
+      {/* Fallback CTA — only renders if we never showed the prominent band
+          (e.g. no live signal count yet AND no 7-day analytics). Keeps the
+          module from ever rendering without a way to upgrade. */}
+      {totalLive === 0 && (!analytics?.last7Days || analytics.last7Days.plays < 5) && (
+        <div className="space-y-2">
+          <button
+            data-testid="button-unlock-signals-cta-fallback"
+            onClick={onUpgradeClick}
+            className="w-full py-3 rounded-xl text-sm font-black tracking-wide transition-all active:scale-95"
+            style={{ background: "#00d4aa", color: "#000" }}
+          >
+            Unlock Live Signals → $1 for 3 Days
+          </button>
+          <p className="text-[11px] text-[#52525b] text-center">
+            Then $40/mo (Pro) or $65/mo (All Sports) · Cancel anytime
+          </p>
         </div>
       )}
-
-      <div className="space-y-2">
-        <button
-          data-testid="button-unlock-signals-cta"
-          onClick={onUpgradeClick}
-          className="w-full py-3 rounded-xl text-sm font-black tracking-wide transition-all active:scale-95"
-          style={{ background: "#00d4aa", color: "#000" }}
-        >
-          Unlock Live Signals → $1 for 3 Days
-        </button>
-        <p className="text-[11px] text-[#52525b] text-center">
-          Then $40/mo (Pro) or $65/mo (All Sports) · Cancel anytime
-        </p>
-      </div>
     </div>
   );
 }

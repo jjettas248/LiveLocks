@@ -91,7 +91,7 @@ export function FreeActivationRail({
         <button
           type="button"
           data-testid="button-best-free-play"
-          onClick={onPrimaryCta}
+          onClick={handlePrimaryClick}
           disabled={isPrimaryLoading}
           aria-label={
             playsExhausted
