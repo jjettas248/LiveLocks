@@ -5,6 +5,7 @@ import { db } from "./db";
 import { sentAlerts } from "@shared/schema";
 import { eq, and, gt } from "drizzle-orm";
 import { todayET } from "./utils/dateUtils";
+import { resolveAccess } from "./utils/access";
 
 const alertedPlays = new Set<string>();
 const alerted2HGames = new Set<string>();
@@ -123,9 +124,12 @@ export async function checkAndSendAlerts(
   }
 
   const usersWithPush = allUsers.filter((u: any) => u.pushSubscription);
-  const usersWithSms  = allUsers.filter(
-    (u: any) => (["all", "elite"].includes(u.subscriptionTier) || u.isAdmin) && u.smsAlerts && u.phoneNumber
-  );
+  const usersWithSms  = allUsers.filter((u: any) => {
+    // Canonical access resolution so legacy/alias tier labels (e.g. "all_sports")
+    // are not silently excluded from SMS delivery.
+    const access = resolveAccess(u.subscriptionTier, u.isAdmin ?? false);
+    return access.hasUnlimited && u.smsAlerts && u.phoneNumber;
+  });
 
   // ── NBA high-confidence prop play alerts ──────────────────────────────────
   const allPropPlays = Array.from(new Set([...pushAlertPlays, ...smsAlertPlays]));

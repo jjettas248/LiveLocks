@@ -2257,7 +2257,7 @@ export default function Dashboard() {
               }
               return (
                 <TopPlaysPanel
-                  isElite={effectiveTier === "elite" || !!user?.isAdmin}
+                  isElite={!!user?.hasMLB || !!user?.isAdmin}
                   onNavigateToSport={handleNavigateToSport}
                   onAddToSlip={handleTopPlayAddToSlip}
                   onViewDetails={(play, related) => {
@@ -2430,7 +2430,7 @@ export default function Dashboard() {
               data-testid="tab-mlb"
               onClick={() => {
                 setActiveTab("mlb");
-                if (!user?.isAdmin && effectiveTier !== "elite") {
+                if (!user?.isAdmin && !user?.hasMLB) {
                   setShowMlbUpgradeModal(true);
                 }
               }}
@@ -2443,7 +2443,7 @@ export default function Dashboard() {
               {hasLiveMlb && <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-green-500 animate-pulse" />}
               <span role="img" aria-label="baseball">⚾</span>
               MLB Live
-              {!user?.isAdmin && effectiveTier !== "elite" && (
+              {!user?.isAdmin && !user?.hasMLB && (
                 <Lock className="w-3 h-3 opacity-50" />
               )}
             </button>
@@ -4463,7 +4463,7 @@ export default function Dashboard() {
             try { localStorage.setItem("ll_alerts_onboarded", "1"); } catch {}
             setShowAlertsModal(true);
           }}
-          hasSmsAccess={["all", "elite"].includes(user.subscriptionTier ?? "") || (user.isAdmin ?? false)}
+          hasSmsAccess={!!user.hasUnlimited || (user.isAdmin ?? false)}
           hasPhone={!!phoneInput}
         />
       )}

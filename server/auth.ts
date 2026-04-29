@@ -489,7 +489,13 @@ export function requireTier(...tiers: string[]) {
     (req as any).resolvedUserId = userId;
     (req as any).resolvedUser = user;
     if (user.isAdmin) return next();
-    if (user.subscriptionTier && tiers.includes(user.subscriptionTier)) return next();
+    // Use canonical access resolution so legacy/alias tier labels (e.g. "all_sports")
+    // are recognized. resolveAccess maps known aliases to "all" / "elite" before gating.
+    const access = resolveAccess(user.subscriptionTier, false);
+    const wantsAll = tiers.includes("all");
+    const wantsElite = tiers.includes("elite");
+    if (wantsElite && access.hasMLB) return next();
+    if (wantsAll && access.hasUnlimited) return next();
     return res.status(403).json({
       error: "tier_required",
       requiredTiers: tiers,
@@ -509,7 +515,10 @@ export async function requireMLBAccess(req: Request, res: Response, next: NextFu
   (req as any).resolvedUserId = userId;
   (req as any).resolvedUser = user;
 
-  if (user.isAdmin || user.subscriptionTier === "elite") return next();
+  // Use canonical access resolution so legacy/alias tier labels (e.g. "all_sports")
+  // are recognized as elite-equivalent for full MLB access.
+  const access = resolveAccess(user.subscriptionTier, user.isAdmin ?? false);
+  if (access.hasMLB) return next();
 
   await storage.resetDailyPlaysIfNeeded(userId);
 

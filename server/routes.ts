@@ -6277,7 +6277,10 @@ export async function registerRoutes(
       const userId = (req as any).resolvedUserId!;
       const user = await storage.getUserById(userId);
       if (!user) return res.status(401).json({ error: "Not found" });
-      if (!["all", "elite"].includes(user.subscriptionTier ?? "") && !user.isAdmin) {
+      // Use canonical access resolution so legacy/alias tier labels (e.g. "all_sports")
+      // are accepted, not just literal "all"/"elite". hasUnlimited covers both paid tiers.
+      const smsAccess = resolveAccess(user.subscriptionTier, user.isAdmin ?? false);
+      if (!smsAccess.hasUnlimited) {
         return res.status(403).json({ error: "SMS alerts require a Pro or All Sports subscription" });
       }
       const { phoneNumber, smsAlerts } = req.body;
