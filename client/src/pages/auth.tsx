@@ -3,7 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useAuth } from "@/hooks/use-auth";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
 const loginSchema = z.object({
@@ -37,7 +37,12 @@ type LoginForm = z.infer<typeof loginSchema>;
 type RegisterForm = z.infer<typeof registerSchema>;
 
 export default function AuthPage() {
-  const [tab, setTab] = useState<"login" | "register">("login");
+  // Honor `?tab=register|login` so deep-links from landing CTAs (e.g. the
+  // /twitter "Get Started" button) open the right pane on first paint.
+  const search = useSearch();
+  const initialTab: "login" | "register" =
+    new URLSearchParams(search).get("tab") === "register" ? "register" : "login";
+  const [tab, setTab] = useState<"login" | "register">(initialTab);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [forgotOpen, setForgotOpen] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
