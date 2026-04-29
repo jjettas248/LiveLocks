@@ -7,6 +7,13 @@ type FreeActivationRailProps = {
   onAlertsCta: () => void;
   alertsAvailable?: boolean;
   isPrimaryLoading?: boolean;
+  /**
+   * Optional DOM id for the section the primary CTA should scroll to
+   * (e.g. "locked-signal-preview" or "todays-best-free-play"). When
+   * present, the CTA scrolls + pulses that target before invoking
+   * onPrimaryCta so the user sees a visible result immediately.
+   */
+  scrollTargetId?: string;
 };
 
 export function FreeActivationRail({
@@ -16,9 +23,24 @@ export function FreeActivationRail({
   onAlertsCta,
   alertsAvailable = false,
   isPrimaryLoading = false,
+  scrollTargetId,
 }: FreeActivationRailProps) {
   const playsRemaining = Math.max(0, playsLimit - (playsUsedToday ?? 0));
   const playsExhausted = playsRemaining === 0;
+
+  const handlePrimaryClick = () => {
+    if (scrollTargetId && typeof document !== "undefined") {
+      const el = document.getElementById(scrollTargetId);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("animate-pulse-once");
+        window.setTimeout(() => {
+          el.classList.remove("animate-pulse-once");
+        }, 2400);
+      }
+    }
+    onPrimaryCta();
+  };
 
   return (
     <div
@@ -52,8 +74,16 @@ export function FreeActivationRail({
           data-testid="text-activation-supporting"
           className="text-sm text-muted-foreground leading-relaxed"
         >
-          LiveLocks highlights MLB and NBA player prop setups driven by live
-          game context and signal timing.
+          Live game movement creates player prop opportunities. LiveLocks
+          surfaces the strongest MLB and NBA setups before the market fully
+          adjusts.
+        </p>
+
+        <p
+          data-testid="text-activation-urgency"
+          className="text-[11px] font-semibold uppercase tracking-wider text-primary/90"
+        >
+          Only {playsLimit} free plays reset daily.
         </p>
       </div>
 
