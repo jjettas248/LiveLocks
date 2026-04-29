@@ -1,3 +1,5 @@
+import { convictionDisplayCeiling10, convictionDisplayBadge } from "@shared/hrRadarConviction";
+
 /**
  * MLB HR Radar — Goldmaster v1 user-facing stage layer.
  *
@@ -250,6 +252,22 @@ export interface UserStageEnrichment {
   initialSignalScore10: number | null;
   currentSignalScore10: number | null;
   peakSignalScore10: number | null;
+  // ── Conviction-aware DISPLAY scores ────────────────────────────────────
+  // Capped to the engine's actual conviction ceiling for the row's
+  // alertPath. These are what the user-facing card SHOULD render as the
+  // headline /10 number — they remain in lock-step with the section the
+  // engine assigned the row to. The signal*10 fields above are kept
+  // unchanged so admin/debug surfaces can still read raw readiness.
+  // See `shared/hrRadarConviction.ts` for the cap rules.
+  displayInitialScore10: number | null;
+  displayCurrentScore10: number | null;
+  displayPeakScore10: number | null;
+  /** /10 ceiling applied (null when no cap was applied). */
+  displayCap10: number | null;
+  /** Pill label for capped rows (null when uncapped). */
+  displayCapBadgeLabel: string | null;
+  /** One-sentence why-capped explanation for the modal/tooltip. */
+  displayCapReason: string | null;
   // Phase 8 — additive, in-memory grading shadow. Only set when userStage is
   // ready or fire. Never replaces gradingStatus on the row.
   officialSignalStage: "ready" | "fire" | null;
@@ -351,6 +369,24 @@ export function enrichWithUserStage(input: {
   const peakSignalScore10 =
     useFallback && (peakFromInput == null || peakFromInput === 0) ? fallback : peakFromInput;
 
+  // ── Conviction-aware DISPLAY scores ────────────────────────────────────
+  // For rows whose alertPath the engine intentionally locks at WATCH (e.g.
+  // PATH_F_BLOCKED_BRIDGE, capped at confidenceScore 6), cap the displayed
+  // /10 number so it never exceeds the engine's actual conviction. Never
+  // applied to "resolved" rows — once a row is resolved the historical
+  // score should render as it was at peak.
+  const displayCap10 = userStage === "resolved" ? null : convictionDisplayCeiling10(input.alertPath);
+  const displayBadge = userStage === "resolved" ? null : convictionDisplayBadge(input.alertPath);
+  const capScore = (s: number | null): number | null => {
+    if (s == null || displayCap10 == null) return s;
+    return Math.min(s, displayCap10);
+  };
+  const displayInitialScore10 = capScore(initialSignalScore10);
+  const displayCurrentScore10 = capScore(currentSignalScore10);
+  const displayPeakScore10 = capScore(peakSignalScore10);
+  const displayCapBadgeLabel = displayBadge?.label ?? null;
+  const displayCapReason = displayBadge?.description ?? null;
+
   const isoOrNull = (d: string | Date | null | undefined): string | null => {
     if (d == null) return null;
     try {
@@ -396,6 +432,12 @@ export function enrichWithUserStage(input: {
     initialSignalScore10,
     currentSignalScore10,
     peakSignalScore10,
+    displayInitialScore10,
+    displayCurrentScore10,
+    displayPeakScore10,
+    displayCap10,
+    displayCapBadgeLabel,
+    displayCapReason,
     officialSignalStage,
     officialSignalAt,
     officialSignalInning,

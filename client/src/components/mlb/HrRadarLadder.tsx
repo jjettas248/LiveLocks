@@ -85,6 +85,16 @@ export interface HrRadarLadderEntry {
   initialSignalScore10?: number | null;
   currentSignalScore10?: number | null;
   peakSignalScore10?: number | null;
+  // Conviction-aware DISPLAY scores — capped to engine's actual conviction
+  // ceiling for the row's alertPath (e.g. PATH_F_BLOCKED_BRIDGE → 6.0/10).
+  // The card's headline /10 number SHOULD prefer these so the displayed
+  // score matches the engine's section verdict for the row.
+  displayInitialScore10?: number | null;
+  displayCurrentScore10?: number | null;
+  displayPeakScore10?: number | null;
+  displayCap10?: number | null;
+  displayCapBadgeLabel?: string | null;
+  displayCapReason?: string | null;
   deltaFromInitial10?: number | null;
   deltaFromPeak10?: number | null;
   isHeatingUp?: boolean;
@@ -333,23 +343,30 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   // the (inning, half) pair for legacy rows that pre-date the label fields.
   const detected = entry.detectedLabel ?? formatHalfInning(entry.detectedInning, entry.detectedHalf);
   const hit = entry.hitLabel ?? formatHalfInning(entry.hitInning, entry.hitHalf);
-  // Goldmaster RESTORE — USER-FACING signal score is the 10-point scale
-  // (one decimal). The 0-100 internal readiness is kept for admin/debug
-  // and harness invariants but never displayed as the primary number.
-  // Fall back: derive from canonical 0-100 if the new field is missing
-  // (older cached row), then from legacy mirrors as a last resort.
+  // Headline /10 score — prefer the conviction-aware DISPLAY score so the
+  // number renders coherent with the section the engine assigned the row to
+  // (e.g. PATH_F_BLOCKED_BRIDGE caps at 6.0/10 while sitting in Track).
+  // Fall back to raw signalScore10 → 0-100 readiness → legacy mirrors so an
+  // older cached row never blanks the headline.
   const score10 =
+    entry.displayCurrentScore10 ??
     entry.currentSignalScore10 ??
     (entry.currentReadinessScore != null ? Math.round(entry.currentReadinessScore) / 10 : null) ??
     (entry.signalStrengthScore != null ? Math.round(entry.signalStrengthScore) / 10 : null) ??
     (entry.peakSignalScore10 ?? null);
   const initial10 =
+    entry.displayInitialScore10 ??
     entry.initialSignalScore10 ??
     (entry.initialReadinessScore != null ? Math.round(entry.initialReadinessScore) / 10 : null);
   const peak10 =
+    entry.displayPeakScore10 ??
     entry.peakSignalScore10 ??
     (entry.peakReadinessScore != null ? Math.round(entry.peakReadinessScore) / 10 : null) ??
     (entry.peakScore != null ? Math.round(entry.peakScore) / 10 : null);
+  // Watch-only pill — true iff the engine intentionally locked this row at
+  // a sub-fire conviction ceiling (server-derived; null on uncapped rows).
+  const convictionBadgeLabel = entry.displayCapBadgeLabel ?? null;
+  const convictionBadgeReason = entry.displayCapReason ?? null;
   const momentum = entry.momentumLabel ?? "flat";
   const momentumDisplay =
     momentum === "heating_up" ? { label: "Heating up", color: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30" }
@@ -485,6 +502,15 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
               data-testid={`text-momentum-${entry.playerId}`}
             >
               {momentumDisplay.label}
+            </span>
+          )}
+          {!isResolved && convictionBadgeLabel && (
+            <span
+              className="text-[9px] font-medium px-1.5 py-0 rounded border whitespace-nowrap text-amber-300 bg-amber-500/10 border-amber-500/30"
+              data-testid={`badge-conviction-cap-${entry.playerId}`}
+              title={convictionBadgeReason ?? undefined}
+            >
+              {convictionBadgeLabel}
             </span>
           )}
           {isResolved && section === "dead" && (

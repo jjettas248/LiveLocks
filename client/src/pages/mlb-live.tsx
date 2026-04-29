@@ -9,6 +9,7 @@ import { MlbSignalCard, type MlbSignalData } from "@/components/mlb/MlbSignalCar
 import { HrRadarLadder, type HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
 import { MlbBoxScore, type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
 import type { MLBSignal } from "@shared/mlbSignal";
+import { applyConvictionCap10, convictionDisplayBadge } from "@shared/hrRadarConviction";
 import { ProbabilityRing } from "@/components/probability-ring";
 import { StatCard } from "@/components/stat-card";
 import { SkeletonCard } from "@/components/sports/SkeletonCard";
@@ -1189,9 +1190,35 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
   // 0-100 readiness (one decimal). The 0-100 numbers remain available as a
   // small admin/debug sub-row for power users.
   const round1 = (n: number) => Math.round(Math.max(0, Math.min(100, n)) * 10) / 100;
-  const initial10 = round1(initialScore);
-  const current10 = round1(currentScore);
-  const peak10 = round1(peakScore);
+  const rawInitial10 = round1(initialScore);
+  const rawCurrent10 = round1(currentScore);
+  const rawPeak10 = round1(peakScore);
+  // Conviction-aware DISPLAY scores — capped to engine's actual conviction
+  // ceiling for the row's alertPath (e.g. PATH_F_BLOCKED_BRIDGE → 6.0/10).
+  // The headline /10 number renders capped so it stays coherent with the
+  // section the engine assigned the row to. The raw 0-100 admin sub-row
+  // beneath each tile is INTENTIONALLY left uncapped — that surface exists
+  // for power users who need to see the dynamic engine's raw readiness.
+  //
+  // RESOLVED guard — once a row resolves (HR landed, miss called, late
+  // signal, uncalled HR, expired, etc.), the historical headline number
+  // must render uncapped so the user sees the same value they saw on the
+  // live ladder right before the outcome. Mirrors enrichWithUserStage's
+  // resolved-row bypass on the server side. Uses a broad discriminator
+  // (status / currentStatus / gradingStatus / outcome) so any future
+  // resolution path that doesn't flip `status` to hit|miss still bypasses.
+  const aAny = alert as any;
+  const isResolvedAlert =
+    aAny.status === "hit" ||
+    aAny.status === "miss" ||
+    aAny.currentStatus === "resolved" ||
+    (aAny.gradingStatus != null && aAny.gradingStatus !== "active") ||
+    (aAny.outcome != null && aAny.outcome !== "pending" && aAny.outcome !== "active");
+  const capPath = isResolvedAlert ? null : (alert.alertPath ?? null);
+  const initial10 = applyConvictionCap10(rawInitial10, capPath) ?? rawInitial10;
+  const current10 = applyConvictionCap10(rawCurrent10, capPath) ?? rawCurrent10;
+  const peak10 = applyConvictionCap10(rawPeak10, capPath) ?? rawPeak10;
+  const convictionBadge = convictionDisplayBadge(capPath);
 
   const statusColor = alert.status === "hit" ? "text-emerald-400" : alert.status === "miss" ? "text-zinc-400" : "text-blue-400";
   const statusLabel = alert.status === "hit" ? "HIT" : alert.status === "miss" ? "MISS" : "LIVE";
@@ -1267,6 +1294,16 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
           <div className="px-1">
             <BuildScoreMeter score={tierBasis} size="lg" />
           </div>
+
+          {convictionBadge && (
+            <div
+              className="text-[10px] px-2 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300"
+              data-testid="text-conviction-cap-explanation"
+            >
+              <span className="font-semibold">{convictionBadge.label}.</span>{" "}
+              <span className="text-amber-200/80">{convictionBadge.description}</span>
+            </div>
+          )}
 
           {alert.scoreIncreased && alert.scoreIncreaseLabel && (
             <div className="flex items-center gap-2 text-[10px] px-2 py-1.5 rounded-lg bg-green-500/10 border border-green-500/20">

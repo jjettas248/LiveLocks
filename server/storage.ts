@@ -5095,6 +5095,15 @@ export class DatabaseStorage implements IStorage {
         initialSignalScore10,
         currentSignalScore10,
         peakSignalScore10,
+        // Conviction-aware DISPLAY scores — capped to engine's actual
+        // conviction ceiling for the alertPath (see hrRadarConviction.ts).
+        // These are what the user-facing card should render as headline.
+        displayInitialScore10: enrichment.displayInitialScore10,
+        displayCurrentScore10: enrichment.displayCurrentScore10,
+        displayPeakScore10: enrichment.displayPeakScore10,
+        displayCap10: enrichment.displayCap10,
+        displayCapBadgeLabel: enrichment.displayCapBadgeLabel,
+        displayCapReason: enrichment.displayCapReason,
         deltaFromInitial10,
         deltaFromPeak10,
         isHeatingUp,
@@ -5431,6 +5440,23 @@ export interface HrRadarLadderEntry {
   deltaFromInitial10: number | null;
   /** Current minus peak on the 10-point scale (negative or zero). */
   deltaFromPeak10: number | null;
+  // ── Conviction-aware DISPLAY scores (additive, never replace signal*10). ───
+  // For rows whose alertPath the engine intentionally locks at WATCH (e.g.
+  // PATH_F_BLOCKED_BRIDGE, capped at confidenceScore=6), these mirror the
+  // signal*10 fields capped to the engine's actual conviction ceiling.
+  // Frontends should render `displayCurrentScore10` as the headline /10 so
+  // the displayed number matches the section the engine assigned the row.
+  // The raw signal*10 fields remain unchanged for admin/debug surfaces.
+  // See `shared/hrRadarConviction.ts`.
+  displayInitialScore10: number | null;
+  displayCurrentScore10: number | null;
+  displayPeakScore10: number | null;
+  /** /10 ceiling applied (null when no cap was applied). */
+  displayCap10: number | null;
+  /** Pill label for capped rows (null when uncapped). */
+  displayCapBadgeLabel: string | null;
+  /** One-sentence why-capped explanation for the modal/tooltip. */
+  displayCapReason: string | null;
   /** True iff the signal is at/near peak with a meaningful climb from initial. */
   isHeatingUp: boolean;
   /** True iff the signal has dropped meaningfully from a real peak. */
