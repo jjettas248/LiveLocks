@@ -15,6 +15,7 @@ import TwitterLandingPage from "@/pages/twitter-landing";
 import VerifyPendingPage from "@/pages/verify-pending";
 import ResetPasswordPage from "@/pages/reset-password";
 import { useAuth } from "@/hooks/use-auth";
+import { useAttributionCapture } from "@/hooks/useAttributionCapture";
 import { useEffect } from "react";
 
 function AdminRedirect() {
@@ -81,21 +82,32 @@ function RootRedirect() {
   return <LandingPage />;
 }
 
+function AppShell() {
+  // Global attribution capture — fires once per page mount on every public
+  // route (idempotent: localStorage first-touch + server-side dedupe). Lives
+  // inside the QueryClient/Tooltip providers so any future hook upgrades that
+  // depend on react-query continue to work.
+  useAttributionCapture();
+  return (
+    <Switch>
+      <Route path="/" component={RootRedirect} />
+      <Route path="/landing" component={LandingPage} />
+      <Route path="/twitter" component={TwitterLandingPage} />
+      <Route path="/privacy" component={PrivacyPage} />
+      <Route path="/terms" component={TermsPage} />
+      <Route path="/verify-pending" component={VerifyPendingPage} />
+      <Route path="/reset-password" component={ResetPasswordPage} />
+      <Route component={ProtectedRouter} />
+    </Switch>
+  );
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Toaster />
-        <Switch>
-          <Route path="/" component={RootRedirect} />
-          <Route path="/landing" component={LandingPage} />
-          <Route path="/twitter" component={TwitterLandingPage} />
-          <Route path="/privacy" component={PrivacyPage} />
-          <Route path="/terms" component={TermsPage} />
-          <Route path="/verify-pending" component={VerifyPendingPage} />
-          <Route path="/reset-password" component={ResetPasswordPage} />
-          <Route component={ProtectedRouter} />
-        </Switch>
+        <AppShell />
       </TooltipProvider>
     </QueryClientProvider>
   );

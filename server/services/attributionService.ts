@@ -220,6 +220,10 @@ export type AttributionSummary = {
     paidRate: number;
   };
   byCampaign: CampaignBreakdown[];
+  // Spec contract alias — same data exposed under both keys so older
+  // consumers (`byCampaign`) and the spec-named field (`perCampaign`)
+  // both work without a breaking rename.
+  perCampaign: CampaignBreakdown[];
 };
 
 export async function getAttributionSummary(
@@ -305,6 +309,10 @@ export async function getAttributionSummary(
       paidRate: signups > 0 ? Math.round((paidConversions / signups) * 1000) / 10 : 0,
     },
     byCampaign,
+    // Spec contract alias — same data exposed under both keys so older
+    // consumers (`byCampaign`) and the spec-named field (`perCampaign`)
+    // both work without a breaking rename.
+    perCampaign: byCampaign,
   };
 }
 

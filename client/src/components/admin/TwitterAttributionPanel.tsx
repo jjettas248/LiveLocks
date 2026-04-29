@@ -177,14 +177,22 @@ export function TwitterAttributionPanel() {
                         <td className="px-3 py-2 font-medium" data-testid={`cell-campaign-${row.campaign}`}>
                           {row.campaign}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">{row.visits}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{row.signups}</td>
-                        <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`cell-visits-${row.campaign}`}>
+                          {row.visits}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`cell-signups-${row.campaign}`}>
+                          {row.signups}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-muted-foreground" data-testid={`cell-signupRate-${row.campaign}`}>
                           {row.visits > 0 ? `${row.signupRate}%` : "—"}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">{row.trialStarts}</td>
-                        <td className="px-3 py-2 text-right tabular-nums text-green-400">{row.paidConversions}</td>
-                        <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`cell-trialStarts-${row.campaign}`}>
+                          {row.trialStarts}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-green-400" data-testid={`cell-paidConversions-${row.campaign}`}>
+                          {row.paidConversions}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-muted-foreground" data-testid={`cell-paidRate-${row.campaign}`}>
                           {row.signups > 0 ? `${row.paidRate}%` : "—"}
                         </td>
                       </tr>
