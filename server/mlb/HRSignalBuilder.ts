@@ -9,6 +9,7 @@ export type HRContactClass =
   | "airBallWarning"
   | "batSpeedWarning"
   | "powerContact"
+  | "solidContact"
   | "hrShapedContact"
   | "missedHrContact"
   | "eliteHrContact";
@@ -40,6 +41,11 @@ export interface HRBuildResult {
     barrels: number;
     hardHits: number;
     deepFlyouts: number;
+    // ── EV-only "minimum threshold" bucket per user spec (2026-04-30):
+    // Any BIP with EV ≥ 95 that didn't qualify for a higher damage class
+    // (eliteHr / missedHr / hrShaped). Surfaced so the alert evaluator
+    // can recognize a scorched ball that missed the LA/distance gate.
+    solidContactCount: number;
     batSpeedScore: number;
     pitcherFatigueBoost: number;
     parkWindBoost: number;
@@ -183,6 +189,12 @@ export function classifyContactEvent(
     contactClass = "missedHrContact";
   } else if (ev >= 93 && la >= 16 && la <= 42 && dist >= 300) {
     contactClass = "hrShapedContact";
+  } else if (ev >= 95) {
+    // ── EV-only "minimum threshold" bucket per user spec (2026-04-30):
+    // a 95+ mph ball that missed barrel by launch angle alone (e.g. a
+    // 96 mph line drive at 12°, or a 100 mph air ball at 42°) is still
+    // a meaningful pre-HR signal even without barrel-class LA/distance.
+    contactClass = "solidContact";
   } else if (ev >= 90) {
     contactClass = "powerContact";
   } else {
@@ -258,6 +270,8 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
   const airBallWarningEvents = classified.filter(c => c.contactClass === "airBallWarning");
   const batSpeedWarningEvents = classified.filter(c => c.contactClass === "batSpeedWarning");
   const deadPopupEvents = classified.filter(c => c.contactClass === "deadPopup");
+  const solidContactEvents = classified.filter(c => c.contactClass === "solidContact");
+  const solidContactCount = solidContactEvents.length;
 
   const hrShapedCount = hrShapedEvents.length;
   const missedHrCount = missedHrEvents.length;
@@ -301,6 +315,11 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
   score += (hrShapedCount - missedHrCount - eliteHrCount) * 1.8;
 
   score += powerEvents.length * 0.5;
+  // ── Solid (95+ EV, off-shape) gets its own weight per user spec ──
+  // 95 EV is the user's stated minimum threshold for "good HR attempt",
+  // so a 95+ ball that missed barrel by LA alone deserves slightly more
+  // credit than a 90-94 powerContact event but less than a hr-shaped event.
+  score += solidContactCount * 0.6;
 
   const perABxBAs = priorABs
     .map((ab: any) => ab.perABxBA as number | null | undefined)
@@ -313,12 +332,20 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
     // Per user spec (2026-04-30): xBA in the .400+ range qualifies as a
     // "good HR attempt". Lower-tier scoring + new factor exposure so the
     // alert evaluator can fast-promote on barrel + meaningful xBA.
+    // ── xBA scoring ladder (2026-04-30) ──
+    // User spec: "xBA in the .400 or so +" is good. Treat .400 as the
+    // upper-mid threshold and add a low-tier .300 bump so above-average
+    // contact quality registers even before the .400 line. Drop the
+    // avgXBA floor to .200 so a player with consistently solid contact
+    // quality across PAs still scores some credit.
     if (maxXBA >= 0.800) score += 1.5;
     else if (maxXBA >= 0.600) score += 0.8;
     else if (maxXBA >= 0.400) score += 0.5;
+    else if (maxXBA >= 0.300) score += 0.3;
     if (avgXBA >= 0.500) score += 1.0;
     else if (avgXBA >= 0.350) score += 0.4;
     else if (avgXBA >= 0.250) score += 0.2;
+    else if (avgXBA >= 0.200) score += 0.1;
   }
 
   if (qualifiedEVMean !== null && qualifiedEVMean >= 99) {
@@ -500,6 +527,7 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
       barrels,
       hardHits,
       deepFlyouts,
+      solidContactCount,
       batSpeedScore: Math.round(Math.max(0, batSpeedScore) * 100) / 100,
       pitcherFatigueBoost: Math.round(pitcherFatigueBoost * 100) / 100,
       parkWindBoost: Math.round(parkWindBoost * 100) / 100,

@@ -540,6 +540,37 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     };
   }
 
+  // Tier 4-pre-D — EV ≥ 95 + xBA ≥ .400 (no barrel required) → ATTACK.
+  // Direct encoding of the user spec ("EV ≥ 95 is good, xBA in .400+ is
+  // good — these form minimum thresholds for a good HR attempt").
+  // Catches scorched line drives and high-xBA contact that miss the
+  // barrel definition by launch angle alone — e.g. a 100 mph ball at
+  // 12° (.700 xBA, line drive) or 96 mph at 40° (.450 xBA, deep fly).
+  // The barrel-gated tiers above (BARREL_XBA, BARREL_BATSPEED) won't
+  // fire on these because there's no formal barrel; this tier closes
+  // that gap.
+  const factorsMaxEV = factors.maxEV;
+  if (
+    factorsMaxEV != null && factorsMaxEV >= 95 &&
+    factorsMaxXBA != null && factorsMaxXBA >= 0.400 &&
+    fastPromoteVetoOk &&
+    (convProb === null || convProb >= HR_CONVERSION_OFFICIAL_MIN)
+  ) {
+    const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_EV_XBA", softVetoes.length, convProb);
+    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} EV_XBA maxEV=${factorsMaxEV} maxXBA=${factorsMaxXBA.toFixed(3)} softVetoes=${softVetoes.length} → officialAlert`);
+    return {
+      level: "ALERT",
+      triggerReason: `FAST_PROMOTE:ev_xba_${factorsMaxEV}_${factorsMaxXBA.toFixed(2)}`,
+      signalState: "PEAK",
+      decision: "BET_NOW",
+      confidenceScore: conf,
+      formattedReason: `Hard contact (${factorsMaxEV}mph) plus high-xBA at-bat (max xBA ${factorsMaxXBA.toFixed(3)}, conv ${convPct}). Promoting to Attack on minimum-threshold spec.`,
+      detectedInning: inning,
+      alertTier: "officialAlert",
+      diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_EV_XBA", positiveFactors: [...positiveFactors, `EV ${factorsMaxEV}mph + xBA ${factorsMaxXBA.toFixed(3)}`] },
+    };
+  }
+
   // Tier 4a — Elite barrel (EV≥105, dist≥400) + collapsing pitcher → ATTACK.
   // Spec is unambiguous: this is the strongest in-game contact signal we
   // recognize and it must always emit officialAlert (Attack stage). The
