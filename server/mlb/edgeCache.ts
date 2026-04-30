@@ -9,6 +9,14 @@ import { getActiveGames } from "./liveGameRegistry";
 export const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 export const MAX_CACHE_GAMES = 50;
 
+// Engine-liveness window. The orchestrator's 25s heartbeat (P5) writes
+// either a fresh qualifying cycle (updatedAt = now) or a blank-cycle
+// preservation tick (preservedAt = now). If neither has happened in the
+// last ACTIVE_FRESHNESS_MS, the engine is effectively dead — every
+// consumer route must drop the entry, regardless of how recent the last
+// preservation was. Shared so all MLB-surface routes agree on liveness.
+export const MLB_ACTIVE_FRESHNESS_MS = 4 * 60 * 1000;
+
 export interface EdgeCacheEntry {
   gameId: string;
   outputs: MLBPropOutput[];
@@ -70,6 +78,39 @@ export function edgeCacheSet(key: string, entry: EdgeCacheEntry): void {
       _cache.delete(sorted[i][0]);
     }
   }
+}
+
+// ── Two-axis freshness check (shared by every MLB-surface route) ─────────────
+// Both axes must pass for the entry to be considered fresh:
+//
+//  Axis A — Engine liveness:
+//    Drop if neither updatedAt nor preservedAt has fired within
+//    MLB_ACTIVE_FRESHNESS_MS. The orchestrator emits a tick (qualifying or
+//    blank-cycle preserve) every ~25s, so silence beyond this window means
+//    the engine is dead — a recent preserve cannot keep it visible.
+//
+//  Axis B — Last real qualifying cycle (per-route):
+//    Even with active blank-cycle preserves, cap total signal visibility
+//    at maxSignalAgeMs from the last cycle that actually qualified
+//    signals. Routes choose this based on intent (bettable feed gets the
+//    longest window; per-game live signals get the orchestrator-aligned
+//    window; widgets and badge counts can be tighter or match).
+export function isMLBEdgeEntryFresh(
+  entry: { updatedAt: number; preservedAt?: number },
+  maxSignalAgeMs: number,
+  nowMs: number = Date.now(),
+): boolean {
+  const preservedAt = entry.preservedAt ?? 0;
+  const lastEngineTick = Math.max(entry.updatedAt, preservedAt);
+  // Axis A — engine alive.
+  if (lastEngineTick > 0 && nowMs - lastEngineTick > MLB_ACTIVE_FRESHNESS_MS) {
+    return false;
+  }
+  // Axis B — last qualifying cycle within route's intent window.
+  if (entry.updatedAt > 0 && nowMs - entry.updatedAt > maxSignalAgeMs) {
+    return false;
+  }
+  return true;
 }
 
 // ── mlbEdgeCache public interface ─────────────────────────────────────────────

@@ -67,7 +67,7 @@ import {
   mlbPlayerCache,
 } from "./mlb/dataPullService";
 import { getActiveGames } from "./mlb/liveGameRegistry";
-import { mlbEdgeCache } from "./mlb/edgeCache";
+import { mlbEdgeCache, isMLBEdgeEntryFresh } from "./mlb/edgeCache";
 import { liveOrchestrator, normalizeMlbStatus } from "./mlb/liveGameOrchestrator";
 import { normalizeMLBSignal } from "./mlb/normalizeSignal";
 import { resolveMlbPlayerMarketSignal } from "./mlb/resolveCanonicalSignal";
@@ -1688,7 +1688,9 @@ export async function registerRoutes(
     const SIGNAL_FRESHNESS_MS = 10 * 60 * 1000;
     const SIGNAL_DEGRADED_MS = 3 * 60 * 1000;
     const dataAge = updatedAt > 0 ? Date.now() - updatedAt : 0;
-    if (updatedAt > 0 && dataAge > SIGNAL_FRESHNESS_MS) {
+    // Two-axis freshness: drops if engine is dead OR last qualifying cycle
+    // older than SIGNAL_FRESHNESS_MS, while honoring blank-cycle preserves.
+    if (entry && !isMLBEdgeEntryFresh(entry, SIGNAL_FRESHNESS_MS)) {
       const staleAge = Math.round(dataAge / 1000);
       console.warn(`[MLB signals] game=${gameId} — engine data ${staleAge}s old (>${SIGNAL_FRESHNESS_MS / 1000}s limit); returning no_lines`);
       mlbSignalsCache.set(gameId, { ts: Date.now(), signals: [], updatedAt, isDegraded: true });
@@ -2146,13 +2148,8 @@ export async function registerRoutes(
         //      just disappear".
         //    • Dead engine (no tick at all in 4 min) → dropped immediately,
         //      even if the last preserve was recent.
-        const ACTIVE_FRESHNESS_MS = 4 * 60 * 1000;
         const PRESERVED_FRESHNESS_MS = 20 * 60 * 1000;
-        const preservedAt = (edgeEntry as any).preservedAt ?? 0;
-        const lastEngineTick = Math.max(edgeEntry.updatedAt, preservedAt);
-        const engineDead = lastEngineTick > 0 && Date.now() - lastEngineTick > ACTIVE_FRESHNESS_MS;
-        const tooOldEvenIfPreserved = edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > PRESERVED_FRESHNESS_MS;
-        if (engineDead || tooOldEvenIfPreserved) {
+        if (!isMLBEdgeEntryFresh(edgeEntry, PRESERVED_FRESHNESS_MS)) {
           totalDropped++;
           continue;
         }
@@ -2229,7 +2226,9 @@ export async function registerRoutes(
 
       for (const [gid, edgeEntry] of Array.from(mlbEdgeCache.entries())) {
         const FEED_FRESHNESS_MS = 10 * 60 * 1000;
-        if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) continue;
+        // Two-axis freshness — same engine-liveness gate as the main edge-feed,
+        // but with a tighter 10m signal-age cap appropriate for HR Radar.
+        if (!isMLBEdgeEntryFresh(edgeEntry, FEED_FRESHNESS_MS)) continue;
 
         const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);
         // Freshness Integrity Fix #2.5 — symmetric market-key normalization
@@ -8053,8 +8052,11 @@ export function registerAnalyticsRoutes(app: Express): void {
 
       const mlbSignals: any[] = [];
       for (const [, entry] of Array.from(mlbEdgeCache.entries())) {
-        const FRESHNESS_MS = 300_000;
-        if (entry.updatedAt > 0 && Date.now() - entry.updatedAt > FRESHNESS_MS) continue;
+        // Two-axis freshness — match the bettable edge-feed window (20m)
+        // so the top-plays widget stays consistent with the main feed and
+        // never drops a preserved blank-cycle signal that the feed still shows.
+        const FRESHNESS_MS = 20 * 60 * 1000;
+        if (!isMLBEdgeEntryFresh(entry, FRESHNESS_MS)) continue;
         const qs = entry.qualifiedSignals ?? [];
         for (const sig of qs) {
           const rawOutput = entry.outputs?.find((o: any) => o.playerId === sig.playerId && o.market === sig.market);
@@ -8194,8 +8196,10 @@ export function registerAnalyticsRoutes(app: Express): void {
       let nbaElite = 0, ncaabElite = 0, mlbElite = 0, totalLive = 0;
 
       for (const [, entry] of Array.from(mlbEdgeCache.entries())) {
-        const FRESHNESS_MS = 300_000;
-        if (entry.updatedAt > 0 && Date.now() - entry.updatedAt > FRESHNESS_MS) continue;
+        // Two-axis freshness — match the bettable edge-feed window (20m)
+        // so badge counts stay consistent with what the feed actually shows.
+        const FRESHNESS_MS = 20 * 60 * 1000;
+        if (!isMLBEdgeEntryFresh(entry, FRESHNESS_MS)) continue;
         const qs = entry.qualifiedSignals ?? [];
         for (const sig of qs) {
           totalLive++;
