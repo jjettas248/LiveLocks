@@ -58,3 +58,29 @@ export function normalizeMlbMarket(input: string | null | undefined): string {
 export function marketsMatch(a: string | null | undefined, b: string | null | undefined): boolean {
   return normalizeMlbMarket(a) === normalizeMlbMarket(b);
 }
+
+/**
+ * Canonical line-key helper used by both server (resolver, canonicalSignals
+ * payload) and client (tuple lookup map). Quantizes the line to a single
+ * decimal place so floating-point representations like 1.4999999 and 1.5
+ * map to the same bucket, then string-formats with a stable `.toFixed(1)`.
+ * Returns the literal `"_"` sentinel when the line is null/undefined.
+ */
+export function mlbLineKey(line: number | null | undefined): string {
+  if (line == null || !Number.isFinite(line)) return "_";
+  // Quantize to 1 decimal — sportsbook MLB lines are always at .0 or .5.
+  return (Math.round((line as number) * 10) / 10).toFixed(1);
+}
+
+/**
+ * Build the canonical (player, market, line) tuple key shared by server
+ * and client — both must construct lookup keys with this helper so the
+ * box score badge and the calculator panel agree on the same tuple.
+ */
+export function mlbCanonicalTupleKey(
+  playerId: string,
+  market: string | null | undefined,
+  line: number | null | undefined,
+): string {
+  return `${playerId}|${normalizeMlbMarket(market)}|${mlbLineKey(line)}`;
+}
