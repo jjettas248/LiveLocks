@@ -1,5 +1,5 @@
 import { mlbEdgeCache } from "./edgeCache";
-import { normalizeMlbMarket } from "../../shared/normalizeMlbMarket";
+import { normalizeMlbMarket, mlbLineKey } from "../../shared/normalizeMlbMarket";
 import {
   CanonicalMlbSignal,
   CanonicalSignalState,
@@ -93,7 +93,7 @@ export function resolveMlbPlayerMarketSignal(
     );
     if (exact.length === 0) {
       console.log(
-        `[MLB_CANONICAL_RESOLVE] line-miss player=${args.playerId} market=${wantMarket} requestedLine=${wantLine} availableLines=${candidates.map(c => c.line).join(",")}`,
+        `[MLB_CANONICAL_RESOLVE] line-miss gameId=${args.gameId} playerId=${args.playerId} market=${wantMarket} requestedLine=${wantLine} requestedLineKey=${mlbLineKey(wantLine)} availableLines=${candidates.map(c => c.line).join(",")}`,
       );
       return null;
     }
@@ -136,7 +136,7 @@ export function resolveMlbPlayerMarketSignal(
     );
     if (fallback) {
       console.log(
-        `[MLB_SIGNAL_PROB_MISMATCH] output line-miss player=${sig.playerName} market=${wantMarket} sigLine=${sig.line} outputLines=${outputs.filter(o => o.playerId === sig.playerId && normalizeMlbMarket(o.market) === wantMarket).map(o => o.bookLine).join(",")} — using engineProbability fallback`,
+        `[MLB_SIGNAL_PROB_MISMATCH] output-line-miss gameId=${args.gameId} playerId=${sig.playerId} player=${sig.playerName} market=${wantMarket} sigLine=${sig.line} sigLineKey=${mlbLineKey(sig.line)} outputLines=${outputs.filter(o => o.playerId === sig.playerId && normalizeMlbMarket(o.market) === wantMarket).map(o => o.bookLine).join(",")} — using engineProbability fallback`,
       );
     }
   }
@@ -162,7 +162,7 @@ export function resolveMlbPlayerMarketSignal(
   const sum = (overP ?? 0) + (underP ?? 0);
   if (Math.abs(sum - 100) > 1) {
     console.log(
-      `[MLB_SIGNAL_PROB_MISMATCH] player=${sig.playerName} market=${wantMarket} line=${sig.line} over=${overP} under=${underP} sum=${sum.toFixed(2)} — snapping`,
+      `[MLB_SIGNAL_PROB_MISMATCH] sum-drift gameId=${args.gameId} playerId=${sig.playerId} player=${sig.playerName} market=${wantMarket} line=${sig.line} requestedLine=${args.line ?? "_"} over=${overP} under=${underP} sum=${sum.toFixed(2)} — snapping`,
     );
     if (overP != null && underP == null) underP = 100 - overP;
     else if (underP != null && overP == null) overP = 100 - underP;
@@ -184,7 +184,7 @@ export function resolveMlbPlayerMarketSignal(
     const otherProb = recSide === "OVER" ? underP : overP;
     if (otherProb - recProb > 5) {
       console.log(
-        `[MLB_SIGNAL_SIDE_INVERTED] player=${sig.playerName} market=${wantMarket} line=${sig.line} recSide=${recSide} recProb=${recProb.toFixed(1)} otherProb=${otherProb.toFixed(1)}`,
+        `[MLB_SIGNAL_SIDE_INVERTED] gameId=${args.gameId} playerId=${sig.playerId} player=${sig.playerName} market=${wantMarket} line=${sig.line} requestedLine=${args.line ?? "_"} recSide=${recSide} recProb=${recProb.toFixed(1)} otherProb=${otherProb.toFixed(1)}`,
       );
     }
   }

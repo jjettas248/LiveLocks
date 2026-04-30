@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, RefreshCw, Search, Target, ChevronDown, ChevronUp } from "lucide-react";
 import { queryClient } from "@/lib/queryClient";
+import { normalizeMlbMarket, mlbLineKey, mlbCanonicalTupleKey } from "@shared/normalizeMlbMarket";
 import type { MlbSignalData } from "./MlbSignalCard";
 import { MlbSignalCard } from "./MlbSignalCard";
 import {
@@ -215,13 +216,19 @@ export function MlbBoxScore({
   // Keyed by `${playerId}|${normalizedMarket}|${line ?? "_"}` and falls back to
   // the player+market key when the displayed play has no line.
   const canonicalByTuple = new Map<string, CanonicalSignalEntry>();
-  const canonicalByPlayerMarket = new Map<string, CanonicalSignalEntry>();
+  // Player+market fallback is ONLY consulted when the displayed play has no
+  // line (line == null). When a line IS present, the strict tuple lookup is
+  // the only allowed path — otherwise we'd attribute a different line's
+  // engine probabilities to this row, breaking the calculator-equivalence
+  // contract (calculate-manual is line-strict and returns null on miss).
+  const canonicalByPlayerMarketNoLine = new Map<string, CanonicalSignalEntry>();
   for (const c of engineState?.canonicalSignals ?? []) {
-    const lineKey = c.line != null ? c.line.toString() : "_";
-    canonicalByTuple.set(`${c.playerId}|${c.market}|${lineKey}`, c);
-    const pmKey = `${c.playerId}|${c.market}`;
-    if (!canonicalByPlayerMarket.has(pmKey)) {
-      canonicalByPlayerMarket.set(pmKey, c);
+    canonicalByTuple.set(mlbCanonicalTupleKey(c.playerId, c.market, c.line), c);
+    if (c.line == null) {
+      const pmKey = `${c.playerId}|${normalizeMlbMarket(c.market)}`;
+      if (!canonicalByPlayerMarketNoLine.has(pmKey)) {
+        canonicalByPlayerMarketNoLine.set(pmKey, c);
+      }
     }
   }
 
@@ -468,14 +475,22 @@ export function MlbBoxScore({
                     const isUnder = current.side === "UNDER" || current.side === "under";
                     // CANONICAL-BY-TUPLE: look up the resolver's paired probs
                     // for THIS displayed (player, market, line) tuple — same
-                    // numbers the calculator panel returns for the tuple. We
-                    // try the line-strict lookup first, then fall back to the
-                    // first canonical entry for player+market, and finally to
-                    // the legacy per-play probability if nothing matches.
-                    const currentLineKey = (current as any).line != null ? (current as any).line.toString() : "_";
+                    // numbers the calculator panel returns for the tuple.
+                    //
+                    // Strict-tuple contract: when `current.line` is present we
+                    // ONLY accept a tuple-exact match. The player+market
+                    // fallback is reserved for line-less plays — otherwise
+                    // we'd attribute another line's engine probabilities to
+                    // this row, which is the exact drift the calculator-
+                    // equivalence work is meant to eliminate.
+                    const currentLine = (current as any).line as number | null | undefined;
+                    const tupleKey = mlbCanonicalTupleKey(player.playerId, current.market, currentLine);
+                    const tupleHit = canonicalByTuple.get(tupleKey);
                     const canonicalEntry =
-                      canonicalByTuple.get(`${player.playerId}|${current.market}|${currentLineKey}`)
-                      ?? canonicalByPlayerMarket.get(`${player.playerId}|${current.market}`);
+                      tupleHit
+                      ?? (currentLine == null
+                        ? canonicalByPlayerMarketNoLine.get(`${player.playerId}|${normalizeMlbMarket(current.market)}`)
+                        : undefined);
                     const canonicalPct = canonicalEntry
                       ? (isUnder ? canonicalEntry.underProbability : canonicalEntry.overProbability)
                       : null;
