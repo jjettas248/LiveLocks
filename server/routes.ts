@@ -2119,15 +2119,40 @@ export async function registerRoutes(
           newestUpdatedAt = edgeEntry.updatedAt;
         }
 
-        // Extended freshness: between-innings pauses, transient odds-API hiccups,
-        // and engine cycle skips can leave a game's edge cache stale for ~5-10
-        // minutes during normal operation. Use 20 minutes so brief polling gaps
-        // don't visibly empty the user's edge feed mid-game.
-        // MLB Signals audit P4 — tightened from 20 min to 4 min so stale
-        // engine outputs leave the bettable feed quickly. Combined with the
-        // 25s heartbeat (P5) the worst-case staleness in the feed is ≤4 min.
-        const FEED_FRESHNESS_MS = 4 * 60 * 1000;
-        if (edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > FEED_FRESHNESS_MS) {
+        // Two-axis freshness check (both must pass):
+        //
+        //  Axis A — Engine liveness (heartbeat alive):
+        //    The orchestrator's 25s heartbeat (P5) writes either a fresh
+        //    qualifying cycle (updatedAt = now) or a blank-cycle preservation
+        //    tick (preservedAt = now). If neither has happened in the last
+        //    ACTIVE_FRESHNESS_MS, the engine is effectively dead — drop the
+        //    entry regardless of how recent the last preserve was. Without
+        //    this gate, an engine that died right after a preserve would
+        //    keep stale signals visible for the full preservation window.
+        //
+        //  Axis B — Last real qualifying cycle:
+        //    Even with the engine actively producing blank-cycle preserves,
+        //    cap total signal visibility at PRESERVED_FRESHNESS_MS from the
+        //    last cycle that actually qualified signals. This matches the
+        //    orchestrator's PRESERVE_MAX_AGE_MS (which prevents the
+        //    preserve-loop itself from running past this window).
+        //
+        //  Net effect:
+        //    • Active engine, fresh qualifying cycle → kept (axis A passes
+        //      via updatedAt, axis B passes trivially).
+        //    • Active engine, in a natural game gap (blank-cycle preserves
+        //      every 25s) → kept up to 20 min from last qualifying cycle —
+        //      eliminates the flicker the user reported as "signals
+        //      just disappear".
+        //    • Dead engine (no tick at all in 4 min) → dropped immediately,
+        //      even if the last preserve was recent.
+        const ACTIVE_FRESHNESS_MS = 4 * 60 * 1000;
+        const PRESERVED_FRESHNESS_MS = 20 * 60 * 1000;
+        const preservedAt = (edgeEntry as any).preservedAt ?? 0;
+        const lastEngineTick = Math.max(edgeEntry.updatedAt, preservedAt);
+        const engineDead = lastEngineTick > 0 && Date.now() - lastEngineTick > ACTIVE_FRESHNESS_MS;
+        const tooOldEvenIfPreserved = edgeEntry.updatedAt > 0 && Date.now() - edgeEntry.updatedAt > PRESERVED_FRESHNESS_MS;
+        if (engineDead || tooOldEvenIfPreserved) {
           totalDropped++;
           continue;
         }

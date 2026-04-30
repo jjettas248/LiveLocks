@@ -3443,7 +3443,12 @@ export class LiveGameOrchestrator {
     // of markets and still emit zero signals (every watch fails the side/odds
     // gate); that empty cycle would wipe a populated cache.
     const isThisCycleEmpty = allSignals.length === 0;
-    const PRESERVE_MAX_AGE_MS = 10 * 60 * 1000;
+    // Bumped 10m -> 20m so signals persist through longer natural game gaps
+    // (mid-inning pitching changes, replay reviews, weather delays, between
+    // PA dugout time). The /api/mlb/edge-feed freshness filter honors
+    // preservedAt, so this window is the upper bound on how long a signal
+    // stays visible on a fully-blank engine cycle.
+    const PRESERVE_MAX_AGE_MS = 20 * 60 * 1000;
     const cacheAge = now - Math.max(existingCache?.updatedAt ?? 0, existingCache?.createdAt ?? 0);
     if (isThisCycleEmpty && existingCache && existingCache.allSignals.length > 0 && cacheAge < PRESERVE_MAX_AGE_MS) {
       // Freshness Integrity Fix #2.2 — preserve the prior signals on a blank

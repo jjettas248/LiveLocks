@@ -19,6 +19,12 @@ export interface EdgeCacheEntry {
   createdAt: number;
   isDegraded?: boolean;
   signalLocked?: boolean;
+  // Set by the orchestrator when a blank-cycle preservation kicks in
+  // (this tick produced 0 signals but prior signals are being held). The
+  // /api/mlb/edge-feed freshness filter honors max(updatedAt, preservedAt)
+  // so deliberately-preserved signals are not silently dropped from the
+  // bettable feed during natural game gaps.
+  preservedAt?: number;
 }
 
 const _cache = new Map<string, EdgeCacheEntry>();
