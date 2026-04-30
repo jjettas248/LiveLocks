@@ -5323,11 +5323,21 @@ export async function registerRoutes(
   });
 
   app.get("/api/halftime-plays", requireAuth, async (req, res) => {
+    // Observability flag for the NBA halftime pipeline. Defaults ON so the
+    // existing DEBUG_NBA-gated diagnostic logs ([NBA_HT_LINE_TRACE],
+    // [NBA_HT_NO_LIVE_LINE_SKIP], [NBA_HT_LINE_REJECTED],
+    // [NBA_HT_LINE_SOFT_STALE], [NBA_ROUTE_FILTER], [NBA_FINAL_REJECT_REASON],
+    // [NBA_HT_FINAL_SURFACED]) emit unconditionally during a 2H surfacing
+    // investigation. Set OBSERVE_NBA_HT=false in env to silence once the
+    // investigation closes. Scoped to this endpoint only — DEBUG_NBA is
+    // unaffected elsewhere.
+    const OBSERVE_NBA_HT = process.env.OBSERVE_NBA_HT !== "false";
     console.log("[HT_ENDPOINT_HIT]", {
       path: req.path,
       query: req.query,
       method: req.method,
       timestamp: Date.now(),
+      observe: OBSERVE_NBA_HT,
     });
     try {
       const slateDate = getESTSlateDate();
@@ -5562,6 +5572,26 @@ export async function registerRoutes(
       ];
 
       for (const game of halftimeGames) {
+        // ── NBA_HT_GAME_SUMMARY observability: per-game counter snapshots ──
+        // Record cumulative-counter values at the start of this game's loop
+        // so the per-game delta can be reported in [NBA_HT_GAME_SUMMARY]
+        // below. perGameRejectSamples collects up to 10 dropped
+        // player+market+reason tuples to spot patterns (all-no-line vs
+        // all-stale vs all-low-edge etc.) without flooding logs.
+        const _gameStartAttempts = totalOddsAttempts;
+        const _gameStartMarketsFound = secondHalfMarketsFound;
+        const _gameStartZeroBook = zeroBookInPlayCount;
+        const _gameStartSkippedNoLine = skippedNoLine;
+        const _gameStartSkippedStale = skippedStaleLine;
+        const _gameStartSkippedCleared = skippedAlreadyCleared;
+        const perGameRejectSamples: Array<{ player: string; stat: string; reason: string }> = [];
+        let perGameSurfaced = 0;
+        // gameError is captured in [NBA_HT_GAME_SUMMARY] when an inner fetch
+        // (boxscore, odds) or parsing step fails for this game. The outer
+        // try/catch around the whole per-game body keeps an exception in one
+        // game from killing the rest of the halftime cycle and guarantees the
+        // summary still emits via the finally block.
+        let gameError: string | null = null;
         // Resolve Odds API event ID for this game (for live prop lines)
         let oddsEventId: string | null = null;
         const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[]; isDegraded: boolean; oddsFetchedAt: number; source?: string } | null>();
@@ -5570,6 +5600,7 @@ export async function registerRoutes(
         // the engine downgrades confidence. Hard-stale (10 min) hard-rejects.
         const HT_STALE_LINE_MS = 5 * 60 * 1000;
         const HT_HARD_STALE_LINE_MS = 10 * 60 * 1000;
+        try {
         try {
           const { resolveOddsEventId: resolveId } = await import("./oddsService");
           oddsEventId = await resolveId(game.homeTeamAbbr, game.awayTeamAbbr);
@@ -5746,7 +5777,7 @@ export async function registerRoutes(
                       const bookKeys = Object.keys(oddsResult.books);
                       if (bookKeys.length === 0) {
                         zeroBookInPlayCount++;
-                        if (process.env.DEBUG_NBA === "true") {
+                        if (OBSERVE_NBA_HT) {
                           console.log("[NBA_HT_LINE_TRACE]", JSON.stringify({
                             player: playerName, statType, bookKeys: [], rejectReason: "no_live_2h_line", source: "live_2h_odds_api",
                           }));
@@ -5773,7 +5804,7 @@ export async function registerRoutes(
                           oddsFetchedAt: oddsResult.fetchedAt || Date.now(),
                           source: "live_2h_odds_api",
                         });
-                        if (process.env.DEBUG_NBA === "true") {
+                        if (OBSERVE_NBA_HT) {
                           console.log("[NBA_HT_LINE_TRACE]", JSON.stringify({
                             player: playerName, statType, bookKeys, oddsFetchedAt: oddsResult.fetchedAt,
                             oddsAgeMs: Date.now() - (oddsResult.fetchedAt || Date.now()), isDegraded: false,
@@ -5818,7 +5849,8 @@ export async function registerRoutes(
                   // removed. The deriveSecondHalfLine helper above is kept
                   // only for potential internal calculator/audit use.
                   skippedNoLine++;
-                  if (process.env.DEBUG_NBA === "true") {
+                  perGameRejectSamples.push({ player: playerName, stat: statType, reason: "no_live_2h_book_line_protocol" });
+                  if (OBSERVE_NBA_HT) {
                     console.log(`[NBA_HT_NO_LIVE_LINE_SKIP]`, JSON.stringify({
                       playerName, statType, halftimeStat, seasonAvg,
                       reason: "no_live_2h_book_line_protocol",
@@ -5838,7 +5870,8 @@ export async function registerRoutes(
                 // and survives this hard cap will be flagged as degraded below.
                 if (!Number.isFinite(htOddsAge) || htOddsAge < 0 || htOddsAge > HT_HARD_STALE_LINE_MS) {
                   skippedStaleLine++;
-                  if (process.env.DEBUG_NBA === "true") {
+                  perGameRejectSamples.push({ player: playerName, stat: statType, reason: `stale_line_hard_cap_${Math.round(htOddsAge / 1000)}s` });
+                  if (OBSERVE_NBA_HT) {
                     console.warn(`[NBA_HT_LINE_REJECTED]`, JSON.stringify({
                       playerName, statType, ageMs: htOddsAge, maxAgeMs: HT_HARD_STALE_LINE_MS, rejectReason: "stale_line_hard_cap",
                     }));
@@ -5849,7 +5882,7 @@ export async function registerRoutes(
                 // downstream confidence-tier reduction kicks in.
                 if (htOddsAge > HT_STALE_LINE_MS) {
                   lineIsDegraded = true;
-                  if (process.env.DEBUG_NBA === "true") {
+                  if (OBSERVE_NBA_HT) {
                     console.log(`[NBA_HT_LINE_SOFT_STALE]`, JSON.stringify({
                       playerName, statType, ageMs: htOddsAge, softCapMs: HT_STALE_LINE_MS,
                     }));
@@ -5859,7 +5892,8 @@ export async function registerRoutes(
                 // Zero-line guard — a line of 0 is invalid and must not be passed to the engine.
                 // This can occur if a book returns a zero point value due to a data error.
                 if (!liveLine || liveLine === 0) {
-                  if (process.env.DEBUG_NBA === "true") {
+                  perGameRejectSamples.push({ player: playerName, stat: statType, reason: "zero_line" });
+                  if (OBSERVE_NBA_HT) {
                     console.warn(`[NBA_HT_LINE_REJECTED]`, JSON.stringify({
                       playerName, statType, liveLine, rejectReason: "zero_line",
                     }));
@@ -5872,6 +5906,7 @@ export async function registerRoutes(
                 // Check BEFORE running calculateProbability to save compute cost.
                 if (halftimeStat >= liveLine) {
                   skippedAlreadyCleared++;
+                  perGameRejectSamples.push({ player: playerName, stat: statType, reason: `already_cleared_${halftimeStat}vs${liveLine}` });
                   continue;
                 }
 
@@ -5904,7 +5939,10 @@ export async function registerRoutes(
                 // Step 1: finite guard — must run before any arithmetic on result.probability.
                 // NaN < 6 === false in JS, so without this guard a NaN probability would silently
                 // pass the threshold check below and enter allPlays with garbage data.
-                if (!Number.isFinite(result.probability)) continue;
+                if (!Number.isFinite(result.probability)) {
+                  perGameRejectSamples.push({ player: dbPlayer.name, stat: statType, reason: "non_finite_probability" });
+                  continue;
+                }
 
                 // Step 2: compute edge — only after finite check
                 let edge = Math.abs(result.probability - 50);
@@ -5914,7 +5952,8 @@ export async function registerRoutes(
                 // engine strict-rules layer is the canonical actionable gate
                 // and we don't double-cut what calibration already compressed.
                 if (edge < 4) {
-                  if (process.env.DEBUG_NBA === "true") {
+                  perGameRejectSamples.push({ player: dbPlayer.name, stat: statType, reason: `lowEdge_route_halftime_e${Math.round(edge * 10) / 10}` });
+                  if (OBSERVE_NBA_HT) {
                     console.log(`[NBA_ROUTE_FILTER]`, { player: dbPlayer.name, market: statType, prob: Math.round(result.probability * 10) / 10, edge: Math.round(edge * 10) / 10, reason: "lowEdge_route_halftime" });
                   }
                   continue;
@@ -5923,7 +5962,8 @@ export async function registerRoutes(
                 // Step 4: explicit zero-edge exclusion (belt-and-suspenders; redundant with step 3
                 // since prob===50 → edge===0 < 6, but required by evaluation contract).
                 if (result.probability === 50) {
-                  if (process.env.DEBUG_NBA === "true") {
+                  perGameRejectSamples.push({ player: dbPlayer.name, stat: statType, reason: "zeroEdge_halftime" });
+                  if (OBSERVE_NBA_HT) {
                     console.log(`[NBA_FINAL_REJECT_REASON]`, { player: dbPlayer.name, market: statType, prob: result.probability, edge, reason: "zeroEdge_halftime" });
                   }
                   continue;
@@ -5947,6 +5987,7 @@ export async function registerRoutes(
 
                 // NO_SIGNAL guard: skip plays where engine has no directional conviction
                 if (result.recommendedSide === "NO_SIGNAL") {
+                  perGameRejectSamples.push({ player: dbPlayer.name, stat: statType, reason: "no_signal" });
                   console.log(`[HT_NO_SIGNAL] Skipping ${dbPlayer.name} (${statType}) — engine returned NO_SIGNAL`);
                   continue;
                 }
@@ -6060,7 +6101,7 @@ export async function registerRoutes(
                   sourceProvenance,
                 };
                 console.log(`[ENGINE_OUTPUT] sport=nba player=${dbPlayer.name} market=${statType} side=${betDirection.toUpperCase()} prob=${displayConfidence.toFixed(1)} edge=${edge.toFixed(1)} proj=${result.expectedTotal ?? "null"} line=${liveLine} timing=halftime`);
-                if (process.env.DEBUG_NBA === "true") {
+                if (OBSERVE_NBA_HT) {
                   console.log("[NBA_HT_FINAL_SURFACED]", JSON.stringify({
                     player: dbPlayer.name,
                     statType,
@@ -6071,6 +6112,7 @@ export async function registerRoutes(
                     sourceProvenance,
                   }));
                 }
+                perGameSurfaced++;
                 if (isVolatile) {
                   volatilePlays.push(playEntry);
                 } else {
@@ -6081,6 +6123,43 @@ export async function registerRoutes(
               }
             }
           }
+        }
+        } catch (gameErr: any) {
+          // Catch per-game so an exception in one game (boxscore fetch, ESPN
+          // schema change, network blip) does not kill the whole halftime
+          // cycle. The error is recorded in [NBA_HT_GAME_SUMMARY] below.
+          gameError = `game_error:${gameErr?.message ?? String(gameErr)}`;
+          console.warn(`[NBA_HT_GAME_ERROR] gameId=${game.gameId} ${gameError}`);
+        } finally {
+          // ── NBA_HT_GAME_SUMMARY: per-game aggregate emission ───────────
+          // One line per halftime game showing exactly where the funnel
+          // narrowed. Pair this with the always-on [SECOND_HALF_MARKET_AUDIT]
+          // / [SECOND_HALF_MARKET_RESULT] lines from oddsService to
+          // triangulate upstream availability vs downstream rejection.
+          // Wrapped in finally so we get a summary even when the game body
+          // hit an early `continue` (boxscore fetch failed, no players, etc.)
+          // or threw an exception caught above.
+          const _gameAttempts        = totalOddsAttempts       - _gameStartAttempts;
+          const _gameMarketsFound    = secondHalfMarketsFound  - _gameStartMarketsFound;
+          const _gameZeroBook        = zeroBookInPlayCount     - _gameStartZeroBook;
+          const _gameSkippedNoLine   = skippedNoLine           - _gameStartSkippedNoLine;
+          const _gameSkippedStale    = skippedStaleLine        - _gameStartSkippedStale;
+          const _gameSkippedCleared  = skippedAlreadyCleared   - _gameStartSkippedCleared;
+          console.log("[NBA_HT_GAME_SUMMARY]", JSON.stringify({
+            gameId: game.gameId,
+            matchup: `${game.awayTeamAbbr}@${game.homeTeamAbbr}`,
+            phase: (game as any).halftimePhase ?? "halftime",
+            oddsEventId,
+            attempts: _gameAttempts,
+            marketsFoundWithBooks: _gameMarketsFound,
+            zeroBookResults: _gameZeroBook,
+            skippedNoLine: _gameSkippedNoLine,
+            skippedStaleLine: _gameSkippedStale,
+            skippedAlreadyCleared: _gameSkippedCleared,
+            surfacedToEngineOutput: perGameSurfaced,
+            rejectSamples: perGameRejectSamples.slice(0, 10),
+            gameError,
+          }));
         }
       }
 
