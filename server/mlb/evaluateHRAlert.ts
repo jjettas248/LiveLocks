@@ -440,7 +440,7 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
   // `inning` the rest of this evaluator uses; downstream storage freezes
   // the first detected inning at CREATE time.
   const eliteBarrelHit = classified.some(
-    c => c.exitVelocity >= 105 && c.distance >= 400
+    c => c.exitVelocity >= 100 && c.distance >= 380
   );
   const dangerousSecondaryCount = factors.hardHits + factors.deepFlyouts;
 
@@ -565,8 +565,8 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
 
   if (
     totalHrShaped >= 2 &&
-    (qualifiedEVMean ?? 0) >= 99 &&
-    (maxDistance ?? 0) >= 375 &&
+    (qualifiedEVMean ?? 0) >= 95 &&
+    (maxDistance ?? 0) >= 350 &&
     (remainingPA === null || remainingPA >= 1.3) &&
     softVetoes.length === 0 &&
     (convProb === null || convProb >= HR_CONVERSION_ALERT_MIN)
@@ -597,7 +597,7 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
 
   if (
     totalHrShaped >= 2 &&
-    (qualifiedEVMean ?? 0) >= 96 &&
+    (qualifiedEVMean ?? 0) >= 92 &&
     hrBuildScore >= 3.5 &&
     (remainingPA === null || remainingPA >= 1.0) &&
     softVetoes.length <= 1 &&
@@ -722,14 +722,14 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
   }
 
   const powerContactCount = classified.filter(c => c.contactClass === "powerContact").length;
-  const hasStrongProfile = (input.barrelRate != null && input.barrelRate >= 0.08) ||
-    (input.xSLG != null && input.xSLG >= 0.450) ||
-    (input.hardHitRate != null && input.hardHitRate >= 0.42);
+  const hasStrongProfile = (input.barrelRate != null && input.barrelRate >= 0.06) ||
+    (input.xSLG != null && input.xSLG >= 0.420) ||
+    (input.hardHitRate != null && input.hardHitRate >= 0.38);
   const isHotTrend = (input.hrRateLast7 != null && input.hrRateLast30 != null && input.hrRateLast30 > 0 && input.hrRateLast7 > input.hrRateLast30 * 1.3) ||
-    (input.seasonHRRate != null && input.seasonHRRate >= 0.045);
+    (input.seasonHRRate != null && input.seasonHRRate >= 0.040);
 
   const hasQualityPowerContact = classified.some(c =>
-    c.contactClass === "powerContact" && c.exitVelocity >= 97 && c.distance >= 350
+    c.contactClass === "powerContact" && c.exitVelocity >= 92 && c.distance >= 320
   );
 
   if (

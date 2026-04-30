@@ -63,11 +63,11 @@ export interface HRBuildResult {
   };
 }
 
-const EV_BARREL_THRESHOLD = 98;
+const EV_BARREL_THRESHOLD = 95;
 const EV_HARD_HIT_THRESHOLD = 95;
-const LA_SWEET_SPOT_LOW = 20;
-const LA_SWEET_SPOT_HIGH = 35;
-const DEEP_FLY_DISTANCE = 350;
+const LA_SWEET_SPOT_LOW = 18;
+const LA_SWEET_SPOT_HIGH = 38;
+const DEEP_FLY_DISTANCE = 330;
 
 // ── Hitter power profile ─────────────────────────────────────────────────────
 // Combines seasonal damage traits + measured/derived bat-speed truth into a
@@ -160,14 +160,18 @@ export function classifyContactEvent(
 
   let contactClass: HRContactClass = "noiseContact";
 
-  // Strong-damage classes (UNCHANGED thresholds — preserve called-vs-uncalled integrity)
-  if (ev >= 102 && la >= 23 && la <= 34 && dist >= 390) {
+  // Strong-damage classes — relaxed per user spec: 95+ EV is a real HR threat,
+  // and we want to detect more (Brandon Valenzuela case, 2026-04-29: 99.6 mph
+  // single + 102 mph BRL barrel both went unflagged because the prior
+  // 100/102 EV floors below classified them as plain "powerContact"). Trade-
+  // off: more pre-HR alerts will fire that don't ultimately convert.
+  if (ev >= 98 && la >= 22 && la <= 36 && dist >= 360) {
     contactClass = "eliteHrContact";
-  } else if (ev >= 100 && la >= 24 && la <= 36 && dist >= 370) {
+  } else if (ev >= 95 && la >= 20 && la <= 38 && dist >= 340) {
     contactClass = "missedHrContact";
-  } else if (ev >= 96 && la >= 18 && la <= 40 && dist >= 340) {
+  } else if (ev >= 93 && la >= 16 && la <= 42 && dist >= 320) {
     contactClass = "hrShapedContact";
-  } else if (ev >= 95) {
+  } else if (ev >= 92) {
     contactClass = "powerContact";
   } else {
     // ── New sub-95 EV pre-HR classes ──
