@@ -444,6 +444,102 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
   );
   const dangerousSecondaryCount = factors.hardHits + factors.deepFlyouts;
 
+  // ── User spec (2026-04-30) — minimum thresholds that form a "good HR
+  // attempt": EV ≥ 95, bat speed ≥ 70 mph, xBA ≥ ~0.400. Three new
+  // FAST_PROMOTE tiers run BEFORE the legacy barrel+secondary tiers so a
+  // single elite contact, a barrel + meaningful xBA, or a barrel + decent
+  // bat speed will reliably surface as an alert. Brady House
+  // (106/25°/385ft), Spencer Horwitz (100.9/36°/397ft), and Juan Soto
+  // (101.1/33°/375ft barrel) are the exemplar cases this targets.
+  //
+  // Per spec ("minimum thresholds = fire"), these tiers tolerate up to
+  // ONE soft veto (e.g. same-side matchup, mild headwind, LA noise) so
+  // a real elite contact event isn't suppressed by ambient context.
+  // Hard vetoes still block earlier in this function. Confidence is
+  // discounted by the suppression count via computeConfidence.
+  const FAST_PROMOTE_SOFT_VETO_TOLERANCE = 1;
+  const fastPromoteVetoOk = softVetoes.length <= FAST_PROMOTE_SOFT_VETO_TOLERANCE;
+  const factorsMaxXBA = factors.maxXBA;
+  const factorsBatSpeedMph = factors.batSpeedMph;
+
+  // Tier 4-pre-A — Single elite HR-shaped contact alone → ATTACK.
+  // The legacy BARREL_PLUS path required a barrel AND a hard-hit/deep-fly
+  // secondary, which missed the Brady/Spencer cases (one elite ball, one
+  // weak topped grounder). One ball with EV≥98, LA 22-36, dist≥360 IS the
+  // minimum threshold per spec.
+  if (
+    factors.eliteHrCount >= 1 &&
+    fastPromoteVetoOk &&
+    (convProb === null || convProb >= HR_CONVERSION_OFFICIAL_MIN)
+  ) {
+    const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_SINGLE_ELITE", softVetoes.length, convProb);
+    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} SINGLE_ELITE eliteHr=${factors.eliteHrCount} softVetoes=${softVetoes.length} → officialAlert`);
+    return {
+      level: "ALERT",
+      triggerReason: `FAST_PROMOTE:single_elite_hr_contact`,
+      signalState: "PEAK",
+      decision: "BET_NOW",
+      confidenceScore: conf,
+      formattedReason: `Elite HR-shaped contact already in this game (conv ${convPct}). Promoting to Attack on minimum-threshold spec.`,
+      detectedInning: inning,
+      alertTier: "officialAlert",
+      diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_SINGLE_ELITE", positiveFactors: [...positiveFactors, `${factors.eliteHrCount} elite HR contact`] },
+    };
+  }
+
+  // Tier 4-pre-B — Barrel + meaningful xBA evidence → ATTACK.
+  // Per spec, xBA in the .400+ range is a "good HR attempt" indicator.
+  // This catches the Soto-style game where one PA was a barrel (101.1
+  // mph BRL, xBA .550) and another was a near-barrel (100.4 mph, xBA
+  // .750). The legacy BARREL_PLUS gate counted the second PA as
+  // dangerous only if EV≥95 AND it was tracked as a hardHit; xBA gives
+  // us a quality signal even when distance falls just short.
+  if (
+    factors.barrels >= 1 &&
+    factorsMaxXBA != null && factorsMaxXBA >= 0.400 &&
+    fastPromoteVetoOk &&
+    (convProb === null || convProb >= HR_CONVERSION_OFFICIAL_MIN)
+  ) {
+    const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_BARREL_XBA", softVetoes.length, convProb);
+    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} BARREL_XBA barrels=${factors.barrels} maxXBA=${factorsMaxXBA.toFixed(3)} softVetoes=${softVetoes.length} → officialAlert`);
+    return {
+      level: "ALERT",
+      triggerReason: `FAST_PROMOTE:barrel_xba_${factorsMaxXBA.toFixed(2)}`,
+      signalState: "PEAK",
+      decision: "BET_NOW",
+      confidenceScore: conf,
+      formattedReason: `Barrel contact plus a high-xBA at-bat (max xBA ${factorsMaxXBA.toFixed(3)}, conv ${convPct}). Promoting to Attack on contact quality.`,
+      detectedInning: inning,
+      alertTier: "officialAlert",
+      diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_BARREL_XBA", positiveFactors: [...positiveFactors, `barrel + xBA ${factorsMaxXBA.toFixed(3)}`] },
+    };
+  }
+
+  // Tier 4-pre-C — Barrel + decent bat speed → Building.
+  // Bat speed ≥ 70 mph is the user-spec minimum; combined with a real
+  // barrel that's enough to elevate to Building (one tier below Attack)
+  // even without a second damaging contact event.
+  if (
+    factors.barrels >= 1 &&
+    factorsBatSpeedMph != null && factorsBatSpeedMph >= 70 &&
+    fastPromoteVetoOk &&
+    (convProb === null || convProb >= HR_CONVERSION_WATCH_MIN)
+  ) {
+    const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_BARREL_BATSPEED", softVetoes.length, convProb);
+    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} BARREL_BATSPEED barrels=${factors.barrels} batSpeedMph=${factorsBatSpeedMph} softVetoes=${softVetoes.length} → prepare`);
+    return {
+      level: "ALERT",
+      triggerReason: `FAST_PROMOTE:barrel_batspeed_${factorsBatSpeedMph}`,
+      signalState: "BUILDING",
+      decision: "PREPARE",
+      confidenceScore: conf,
+      formattedReason: `Barrel contact with capable bat speed (${factorsBatSpeedMph}mph, conv ${convPct}). Promoting to Building on minimum-threshold spec.`,
+      detectedInning: inning,
+      alertTier: "prepare",
+      diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_BARREL_BATSPEED", positiveFactors: [...positiveFactors, `barrel + bat speed ${factorsBatSpeedMph}mph`] },
+    };
+  }
+
   // Tier 4a — Elite barrel (EV≥105, dist≥400) + collapsing pitcher → ATTACK.
   // Spec is unambiguous: this is the strongest in-game contact signal we
   // recognize and it must always emit officialAlert (Attack stage). The

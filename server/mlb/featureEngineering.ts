@@ -901,6 +901,7 @@ export function computeBatSpeedEngine(input: MLBPropInput): {
   batSpeedMultiplier: number;
   fastSwingMultiplier: number;
   batSpeedZ: number;
+  batSpeedMph: number;
   isConditionallyAmplified: boolean;
 } {
   const ev = input.contactQuality.exitVelocity ?? 90;
@@ -937,6 +938,7 @@ export function computeBatSpeedEngine(input: MLBPropInput): {
     batSpeedMultiplier,
     fastSwingMultiplier,
     batSpeedZ,
+    batSpeedMph: batSpeed,
     isConditionallyAmplified,
   };
 }

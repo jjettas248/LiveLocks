@@ -60,6 +60,16 @@ export interface HRBuildResult {
     deadPopupCount: number;
     airBallWarningCount: number;
     batSpeedWarningCount: number;
+    // ── In-game xBA exposure (per-AB Statcast xBA aggregates) ──
+    // Surfaced so the alert evaluator can fast-promote on barrel + xBA
+    // evidence per the user spec ("xBA in the .400 or so +").
+    maxXBA: number | null;
+    avgXBA: number | null;
+    // ── Real bat-speed mph (not just z-score) ──
+    // Surfaced so the alert evaluator can recognize the user-spec floor
+    // ("bat speed anything over 70 is good") even when the z-score
+    // (vs league avg 72) lands negative.
+    batSpeedMph: number | null;
   };
 }
 
@@ -160,18 +170,20 @@ export function classifyContactEvent(
 
   let contactClass: HRContactClass = "noiseContact";
 
-  // Strong-damage classes — relaxed per user spec: 95+ EV is a real HR threat,
-  // and we want to detect more (Brandon Valenzuela case, 2026-04-29: 99.6 mph
-  // single + 102 mph BRL barrel both went unflagged because the prior
-  // 100/102 EV floors below classified them as plain "powerContact"). Trade-
-  // off: more pre-HR alerts will fire that don't ultimately convert.
+  // Strong-damage classes — further relaxed per user spec (2026-04-30):
+  // "anything over 95 EV is good", "what forms a good HR attempt = our
+  // minimum thresholds". Brady House (106/25°/385ft), Spencer Horwitz
+  // (100.9/36°/397ft), and Juan Soto (100.4/28°/332ft + 101.1/33°/375ft)
+  // all had clearly elite contact yet went unsignaled. Loosened distance
+  // floors on missedHrContact (340→320) and powerContact entry (92→90)
+  // so borderline-distance elite EV still classifies as HR-shaped damage.
   if (ev >= 98 && la >= 22 && la <= 36 && dist >= 360) {
     contactClass = "eliteHrContact";
-  } else if (ev >= 95 && la >= 20 && la <= 38 && dist >= 340) {
+  } else if (ev >= 95 && la >= 20 && la <= 38 && dist >= 320) {
     contactClass = "missedHrContact";
-  } else if (ev >= 93 && la >= 16 && la <= 42 && dist >= 320) {
+  } else if (ev >= 93 && la >= 16 && la <= 42 && dist >= 300) {
     contactClass = "hrShapedContact";
-  } else if (ev >= 92) {
+  } else if (ev >= 90) {
     contactClass = "powerContact";
   } else {
     // ── New sub-95 EV pre-HR classes ──
@@ -293,13 +305,20 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
   const perABxBAs = priorABs
     .map((ab: any) => ab.perABxBA as number | null | undefined)
     .filter((v): v is number => v != null && Number.isFinite(v) && v > 0);
+  let maxXBA: number | null = null;
+  let avgXBA: number | null = null;
   if (perABxBAs.length > 0) {
-    const maxXBA = Math.max(...perABxBAs);
-    const avgXBA = perABxBAs.reduce((a, b) => a + b, 0) / perABxBAs.length;
+    maxXBA = Math.max(...perABxBAs);
+    avgXBA = perABxBAs.reduce((a, b) => a + b, 0) / perABxBAs.length;
+    // Per user spec (2026-04-30): xBA in the .400+ range qualifies as a
+    // "good HR attempt". Lower-tier scoring + new factor exposure so the
+    // alert evaluator can fast-promote on barrel + meaningful xBA.
     if (maxXBA >= 0.800) score += 1.5;
     else if (maxXBA >= 0.600) score += 0.8;
+    else if (maxXBA >= 0.400) score += 0.5;
     if (avgXBA >= 0.500) score += 1.0;
     else if (avgXBA >= 0.350) score += 0.4;
+    else if (avgXBA >= 0.250) score += 0.2;
   }
 
   if (qualifiedEVMean !== null && qualifiedEVMean >= 99) {
@@ -500,6 +519,9 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
       deadPopupCount,
       airBallWarningCount,
       batSpeedWarningCount,
+      maxXBA: maxXBA !== null ? Math.round(maxXBA * 1000) / 1000 : null,
+      avgXBA: avgXBA !== null ? Math.round(avgXBA * 1000) / 1000 : null,
+      batSpeedMph: Math.round(batSpeedData.batSpeedMph * 10) / 10,
     },
   };
 }
