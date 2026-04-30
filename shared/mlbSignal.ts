@@ -8,6 +8,11 @@ export interface MLBSignal {
   bookLine: number | null;
   projection: number | null;
   enginePct: number;
+  // Paired calibrated probabilities from the engine raw output. Sum ≈ 100.
+  // Used by the canonical resolver so both surfaces (box score badge +
+  // calculator panel) render the SAME numbers for the same player+market+line.
+  calibratedProbabilityOver?: number | null;
+  calibratedProbabilityUnder?: number | null;
   edge: number | null;
   evPct: number | null;
   recommendedSide: string;

@@ -87,19 +87,38 @@ type BoxScoreEngineStatePlayer = {
   surfaced: boolean;
   market: string | null;
   side: string | null;
-  // Decision-grade engine confidence (primary surfaced %).
+  // Engine conviction (NOT a probability) — kept for the tooltip/detail.
   engineConfidence: number;
   // Raw event probability (truth, shown only in tooltip / detail).
   probability: number | null;
+  // Canonical paired probabilities — same numbers the calculator panel
+  // displays for the same player+market+line. PRIMARY surfaced value.
+  overProbability: number | null;
+  underProbability: number | null;
+  recommendedSide: string | null;
   signalStrengthScore: number | null;
   drivers: string[];
   tags: string[];
   alreadyHit?: boolean;
+  source?: "engine" | "calculator";
+};
+
+type CanonicalSignalEntry = {
+  playerId: string;
+  market: string;
+  line: number | null;
+  recommendedSide: "OVER" | "UNDER" | "NO_EDGE";
+  overProbability: number;
+  underProbability: number;
+  engineConfidence: number;
+  signalState: "strong" | "building" | "watch" | "monitor" | "none";
+  source: "engine" | "calculator";
 };
 
 type BoxScoreEngineStateResponse = {
   mode: "live" | "no_lines" | "monitoring";
   players: BoxScoreEngineStatePlayer[];
+  canonicalSignals?: CanonicalSignalEntry[];
   updatedAt: number;
 };
 
@@ -189,6 +208,21 @@ export function MlbBoxScore({
   const engineByPlayer = new Map<string, BoxScoreEngineStatePlayer>();
   for (const p of engineState?.players ?? []) {
     engineByPlayer.set(p.playerId, p);
+  }
+
+  // Canonical-by-tuple lookup so the rotating per-play badge shows the SAME
+  // numbers the calculator panel would show for that exact player+market+line.
+  // Keyed by `${playerId}|${normalizedMarket}|${line ?? "_"}` and falls back to
+  // the player+market key when the displayed play has no line.
+  const canonicalByTuple = new Map<string, CanonicalSignalEntry>();
+  const canonicalByPlayerMarket = new Map<string, CanonicalSignalEntry>();
+  for (const c of engineState?.canonicalSignals ?? []) {
+    const lineKey = c.line != null ? c.line.toString() : "_";
+    canonicalByTuple.set(`${c.playerId}|${c.market}|${lineKey}`, c);
+    const pmKey = `${c.playerId}|${c.market}`;
+    if (!canonicalByPlayerMarket.has(pmKey)) {
+      canonicalByPlayerMarket.set(pmKey, c);
+    }
   }
 
   const players = data?.players ?? [];
@@ -431,14 +465,21 @@ export function MlbBoxScore({
                     const rotationIndex = Math.floor(Date.now() / 45000);
                     const cycleIdx = rotationIndex % allPlays.length;
                     const current = allPlays[cycleIdx];
-                    const rawPct = current.probability;
-                    // Show the actual per-play probability on the badge so it
-                    // matches what the tooltip surfaces. The clamped
-                    // engineConfidence value is preserved in the tooltip for
-                    // context but is no longer the primary number — its tight
-                    // floor/ceiling bands made many players appear identical.
-                    const displayPct = rawPct;
                     const isUnder = current.side === "UNDER" || current.side === "under";
+                    // CANONICAL-BY-TUPLE: look up the resolver's paired probs
+                    // for THIS displayed (player, market, line) tuple — same
+                    // numbers the calculator panel returns for the tuple. We
+                    // try the line-strict lookup first, then fall back to the
+                    // first canonical entry for player+market, and finally to
+                    // the legacy per-play probability if nothing matches.
+                    const currentLineKey = (current as any).line != null ? (current as any).line.toString() : "_";
+                    const canonicalEntry =
+                      canonicalByTuple.get(`${player.playerId}|${current.market}|${currentLineKey}`)
+                      ?? canonicalByPlayerMarket.get(`${player.playerId}|${current.market}`);
+                    const canonicalPct = canonicalEntry
+                      ? (isUnder ? canonicalEntry.underProbability : canonicalEntry.overProbability)
+                      : null;
+                    const displayPct = (typeof canonicalPct === "number") ? canonicalPct : current.probability;
                     const playTier = (displayPct >= 85 && isUnder) ? "red" as const : displayPct >= 75 ? "green" as const : displayPct >= 65 ? "yellow" as const : "blue" as const;
                     const playStyle = COLOR_TIER_STYLES[playTier];
                     const sideLabel = isUnder ? "U" : "O";
@@ -448,10 +489,10 @@ export function MlbBoxScore({
                         <span
                           data-testid={`signal-badge-${player.playerId}-${current.market}`}
                           title={
-                            `Engine confidence: ${displayPct.toFixed(0)}%` +
-                            (engineForPlayer?.probability != null
-                              ? ` · Raw probability: ${engineForPlayer.probability.toFixed(0)}%`
-                              : ` · Raw probability: ${rawPct.toFixed(0)}%`) +
+                            `Engine probability: ${displayPct.toFixed(0)}% (canonical, matches calculator)` +
+                            (engineForPlayer?.engineConfidence != null
+                              ? ` · Engine conviction: ${engineForPlayer.engineConfidence.toFixed(0)}`
+                              : "") +
                             "\n" +
                             allPlays.map(p => `${p.side === "UNDER" || p.side === "under" ? "U" : "O"} ${SHORT_MARKET_LABELS[p.market] ?? p.market} ${p.probability.toFixed(0)}%`).join(", ")
                           }

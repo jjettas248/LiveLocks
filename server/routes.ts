@@ -70,6 +70,9 @@ import { getActiveGames } from "./mlb/liveGameRegistry";
 import { mlbEdgeCache } from "./mlb/edgeCache";
 import { liveOrchestrator, normalizeMlbStatus } from "./mlb/liveGameOrchestrator";
 import { normalizeMLBSignal } from "./mlb/normalizeSignal";
+import { resolveMlbPlayerMarketSignal } from "./mlb/resolveCanonicalSignal";
+import { CALCULATOR_SOURCE_LABEL } from "../shared/mlbCanonicalSignal";
+import { normalizeMlbMarket } from "../shared/normalizeMlbMarket";
 
 // ── NCAAB live signal cache (populated by /api/ncaab/plays, read by /api/top-plays) ──
 const ncaabLiveSignals: { signals: any[]; updatedAt: number } = { signals: [], updatedAt: 0 };
@@ -2010,8 +2013,17 @@ export async function registerRoutes(
       const signalState = mapModeToState(sig.mode, sig.signalScore ?? 0);
       const surfaced = qualifiedKeys.has(`${sig.playerId}:${sig.market}:${sig.side}`);
       const probability = sig.engineProbability ?? null;
-      const normalizedMarket = (sig.market as string) === "hr" ? "home_runs" : sig.market;
+      const normalizedMarket = normalizeMlbMarket(sig.market as string);
       const engineConfidence = computeEngineConfidence(sig, signalState);
+
+      // Canonical resolver: same code path the calculator uses, so the
+      // numbers shown in this badge match the calculator panel exactly.
+      const canonical = resolveMlbPlayerMarketSignal({
+        gameId,
+        playerId: sig.playerId,
+        market: normalizedMarket,
+        line: (sig as any).line ?? undefined,
+      });
 
       return {
         gameId: sig.gameId,
@@ -2022,14 +2034,21 @@ export async function registerRoutes(
         surfaced,
         market: normalizedMarket,
         side: sig.side,
-        // engineConfidence is the primary surfaced value (decision-grade).
+        // engineConfidence is the engine's conviction value (NOT a probability).
         engineConfidence,
         // probability is the raw event probability (truth, for detail/grading).
         probability: probability != null ? Math.round(probability * 10) / 10 : null,
+        // Canonical paired probabilities — the box score badge surfaces these
+        // so the same player+market+line shows the same Over/Under % in
+        // both the box score and the calculator panel.
+        overProbability: canonical?.overProbability ?? null,
+        underProbability: canonical?.underProbability ?? null,
+        recommendedSide: canonical?.recommendedSide ?? sig.side ?? null,
         signalStrengthScore: sig.signalStrengthScore ?? sig.signalScore ?? null,
         drivers: sig.reasons ?? [],
         tags: sig.signalTags ?? [],
         alreadyHit: !!sig.alreadyHit,
+        source: canonical?.source ?? "engine",
       };
     });
 
@@ -2044,9 +2063,37 @@ export async function registerRoutes(
       `[MLB_BOXSCORE_ENGINE_STATE] gameId=${gameId} total=${players.length} strong=${strong} building=${building} watch=${watch} monitor=${monitor} surfaced=${players.filter(p => p.surfaced).length}`
     );
 
+    // Per-tuple canonical lookup: every (player, market, line) signal in the
+    // cache, resolved through the SAME canonical resolver the calculator uses.
+    // The client uses this to render rotating per-play badges with the same
+    // numbers the calculator panel would show — no per-row API calls needed.
+    const canonicalSignals = all
+      .map((sig) => {
+        const c = resolveMlbPlayerMarketSignal({
+          gameId,
+          playerId: sig.playerId,
+          market: sig.market as string,
+          line: sig.line ?? undefined,
+        });
+        if (!c) return null;
+        return {
+          playerId: c.playerId,
+          market: c.market,
+          line: c.line,
+          recommendedSide: c.recommendedSide,
+          overProbability: c.overProbability,
+          underProbability: c.underProbability,
+          engineConfidence: c.engineConfidence,
+          signalState: c.signalState,
+          source: c.source,
+        };
+      })
+      .filter((c): c is NonNullable<typeof c> => c !== null);
+
     return res.json({
       mode: "live",
       players,
+      canonicalSignals,
       updatedAt: entry.updatedAt ?? 0,
     });
   });
@@ -3222,15 +3269,13 @@ export async function registerRoutes(
         return fallback;
       };
 
-      // Market alias resolution — canonical backend values use different names than frontend aliases
-      const MANUAL_MARKET_ALIASES: Record<string, MLBMarket> = {
-        hr: "home_runs",
-        pitcher_k: "pitcher_strikeouts",
-      };
+      // Market alias resolution — use the shared canonical normalizer so
+      // any inbound key (HRR, h+r+rbi, hr, pitcher_k, outs_recorded, …)
+      // routes to the same canonical market the engine + box score use.
       const rawMarket = safeStr("market");
-      const resolvedMarket: string = MANUAL_MARKET_ALIASES[rawMarket] ?? rawMarket;
+      const resolvedMarket: string = normalizeMlbMarket(rawMarket);
       if (!resolvedMarket || !ALL_MLB_MARKETS.includes(resolvedMarket as MLBMarket)) {
-        return res.status(400).json({ error: `Invalid market. Must be one of: ${[...ALL_MLB_MARKETS, "hr", "pitcher_k"].join(", ")}` });
+        return res.status(400).json({ error: `Invalid market. Must be one of: ${ALL_MLB_MARKETS.join(", ")}` });
       }
       const market = resolvedMarket as MLBMarket;
 
@@ -3292,6 +3337,54 @@ export async function registerRoutes(
       const resolvedBatterHand = rosterPlayer?.bats ?? null;
 
       const gameId = safeStr("gameId");
+
+      // Canonical short-circuit — when the live engine has a signal for this
+      // (gameId, playerId, market[, line]) tuple, return THAT instead of
+      // recomputing manually. This guarantees the calculator panel shows
+      // the same numbers the box score badge does.
+      if (gameId && resolvedPlayerId) {
+        const canonical = resolveMlbPlayerMarketSignal({
+          gameId,
+          playerId: resolvedPlayerId,
+          market,
+          line: bookLine,
+        });
+        if (canonical) {
+          console.log(`[MLB_CANONICAL_RESOLVE] hit player=${canonical.playerName} market=${canonical.market} line=${canonical.line} side=${canonical.recommendedSide} over=${canonical.overProbability} under=${canonical.underProbability} state=${canonical.signalState}`);
+          return res.json({
+            // Canonical fields the client relies on for display.
+            playerId: canonical.playerId,
+            playerName: canonical.playerName,
+            team: canonical.team,
+            market: canonical.market,
+            bookLine: canonical.line ?? bookLine,
+            recommendedSide: canonical.recommendedSide,
+            calibratedProbabilityOver: canonical.overProbability,
+            calibratedProbabilityUnder: canonical.underProbability,
+            calibratedProbability: canonical.recommendedSide === "UNDER"
+              ? canonical.underProbability
+              : canonical.overProbability,
+            probability: canonical.recommendedSide === "UNDER"
+              ? canonical.underProbability
+              : canonical.overProbability,
+            modelProbability: canonical.recommendedSide === "UNDER"
+              ? canonical.underProbability
+              : canonical.overProbability,
+            engineConfidence: canonical.engineConfidence,
+            rawProbability: canonical.rawProbability,
+            signalState: canonical.signalState,
+            drivers: canonical.drivers,
+            // Source contract — clients render the badge based on this.
+            source: canonical.source,
+            label: canonical.label,
+            mode: "engine",
+            isManual: false,
+            updatedAt: canonical.updatedAt,
+          });
+        }
+        console.log(`[MLB_CANONICAL_RESOLVE] miss player=${resolvedPlayerName} market=${market} line=${bookLine} — falling back to calculator estimate`);
+      }
+
       const rolling = resolvedPlayerId ? mlbPlayerCache.batterRollingStats[resolvedPlayerId] : null;
       const MLB_LEAGUE_AVG_BA = 0.248;
       const resolvedSeasonAvg = rolling?.seasonAvg ?? rolling?.last30?.avg ?? rolling?.last15?.avg ?? MLB_LEAGUE_AVG_BA;
@@ -3398,7 +3491,9 @@ export async function registerRoutes(
         modelProbability: output.calibratedProbability,
         mode: "manual",
         isManual: true,
-        label: "Manual Projection (No Live Odds)",
+        // Source contract — calculator estimate (no live engine signal for this tuple).
+        source: "calculator",
+        label: CALCULATOR_SOURCE_LABEL,
       });
     } catch (err: any) {
       console.error("[MLB calculate-manual]", err.message);

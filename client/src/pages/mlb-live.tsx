@@ -2506,7 +2506,7 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
         <div className="flex flex-col md:flex-row items-center justify-between gap-5">
           <div className="flex-1 space-y-3 z-10">
             <div>
-              <div className="flex items-center gap-2 mb-1">
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
                 {modeStyle ? (
                   <span
                     data-testid="badge-live-edge"
@@ -2518,6 +2518,26 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
                 ) : (
                   <span data-testid="badge-live-edge" className="text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-zinc-500/20 text-zinc-400">
                     {isBatterOverMarket ? "SIGNAL" : "LIVE EDGE"}
+                  </span>
+                )}
+                {/* Source badge — single source of truth label so the user knows
+                    whether this panel is rendering the canonical live engine
+                    signal (matches box score) or a calculator fallback estimate. */}
+                {calcResult.source === "engine" ? (
+                  <span
+                    data-testid="badge-calc-source"
+                    className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                    title="This panel mirrors the live engine signal shown on the box score row."
+                  >
+                    {calcResult.label ?? "Live Engine Signal"}
+                  </span>
+                ) : (
+                  <span
+                    data-testid="badge-calc-source"
+                    className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-zinc-500/15 text-zinc-300 border border-zinc-500/30"
+                    title="No live engine signal exists for this player + market + line. Showing a calculator estimate."
+                  >
+                    {calcResult.label ?? "Calculator Estimate"}
                   </span>
                 )}
               </div>
@@ -2810,12 +2830,18 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
             playerName: activeCalcName,
             market: calcMarket,
             bookLine: parseFloat(calcBookLine),
-            enginePct: calcResult.probability ?? calcResult.modelProbability ?? 0,
+            enginePct: selectedSide === "OVER" ? overPct : underPct,
             edge: calcResult.edge ?? null,
             recommendedSide: selectedSide,
             gameId: selectedGameId ?? "",
-            sportsbook: "manual",
-          } as MlbSignalData)}
+            sportsbook: calcResult.source === "engine" ? "engine" : "manual",
+            // Canonical fields — preserved on the slip pick so any
+            // downstream consumer can render the same Over/Under prob.
+            calibratedProbabilityOver: overPct,
+            calibratedProbabilityUnder: underPct,
+            engineConfidence: calcResult.engineConfidence ?? null,
+            source: calcResult.source ?? "calculator",
+          } as unknown as MlbSignalData)}
           className="w-full py-3 rounded-xl border border-green-500/30 bg-green-500/10 text-green-400 font-semibold text-sm hover:bg-green-500/20 transition-colors min-h-[48px]"
         >
           + Add {selectedSide} to Bet Slip
@@ -2831,7 +2857,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
   const [liveFeedSub, setLiveFeedSub] = useState<"all" | "3rd" | "5th" | "7th">("all");
   const [signalSortBy, setSignalSortBy] = useState<"signalScore" | "enginePct">("signalScore");
   const mlbUpgradeNeeded = false;
-  const [mlbSlipPicks, setMlbSlipPicks] = useState<Array<{ playerId: string; playerName: string; market: string; line: number; side: string; sportsbook: string; edge: number | null; enginePct: number; gameId: string; overOdds?: number | null; underOdds?: number | null }>>([]);
+  const [mlbSlipPicks, setMlbSlipPicks] = useState<Array<{ playerId: string; playerName: string; market: string; line: number; side: string; sportsbook: string; edge: number | null; enginePct: number; gameId: string; overOdds?: number | null; underOdds?: number | null; overProbability?: number | null; underProbability?: number | null; engineConfidence?: number | null; source?: "engine" | "calculator" }>>([]);
   const [analyzeTarget, setAnalyzeTarget] = useState<{ playerId: string; gameId: string } | null>(null);
 
   const isElite = user?.hasMLB === true;
@@ -3064,12 +3090,19 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     if (mlbSlipPicks.length >= 10) return;
     const exists = mlbSlipPicks.find(p => p.playerId === sig.playerId && p.market === sig.market);
     if (exists) return;
+    const sigAny = sig as any;
     setMlbSlipPicks(prev => [...prev, {
       playerId: sig.playerId, playerName: sig.playerName, market: sig.market,
       line: sig.bookLine ?? 0, side: sig.recommendedSide,
       sportsbook: sig.sportsbook ?? "draftkings", edge: sig.edge ?? null,
       enginePct: sig.enginePct, gameId: sig.gameId ?? "",
       overOdds: sig.overOdds, underOdds: sig.underOdds,
+      // Canonical fields — preserved so the slip persists the same Over/Under
+      // probabilities the calculator + box score both rendered.
+      overProbability: sigAny.calibratedProbabilityOver ?? null,
+      underProbability: sigAny.calibratedProbabilityUnder ?? null,
+      engineConfidence: sigAny.engineConfidence ?? null,
+      source: sigAny.source ?? "engine",
     }]);
   };
 

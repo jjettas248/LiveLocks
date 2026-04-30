@@ -94,6 +94,7 @@ type SignalLike = {
   confidenceTier?: string;
   signalScore?: number | null;
   market?: string;
+  bookLine?: number | null;
 };
 
 export function deriveMlbQuickViewColorTier(signals: SignalLike[], playerId: string): MlbQuickViewColorTier {
@@ -128,6 +129,7 @@ export type BestPlayInfo = {
   probability: number;
   confidenceTier: "monitor" | "building" | "strong" | null;
   signalScore: number;
+  line?: number | null;
 };
 
 export function deriveBestPlay(signals: SignalLike[], playerId: string): BestPlayInfo | null {
@@ -137,7 +139,7 @@ export function deriveBestPlay(signals: SignalLike[], playerId: string): BestPla
     const pct = best.enginePct ?? 0;
     const tier: "monitor" | "building" | "strong" | null =
       pct >= 75 ? "strong" : pct >= 65 ? "building" : pct >= 55 ? "monitor" : null;
-    return { market: best.market ?? "", side: best.recommendedSide ?? "", probability: pct, confidenceTier: tier, signalScore: best.signalScore ?? 0 };
+    return { market: best.market ?? "", side: best.recommendedSide ?? "", probability: pct, confidenceTier: tier, signalScore: best.signalScore ?? 0, line: best.bookLine ?? null };
   }
   const anySignals = signals.filter(s => s.playerId === playerId && (s.enginePct ?? 0) > 0);
   if (anySignals.length > 0) {
@@ -145,7 +147,7 @@ export function deriveBestPlay(signals: SignalLike[], playerId: string): BestPla
     const pct = best.enginePct ?? 0;
     const tier: "monitor" | "building" | "strong" | null =
       pct >= 75 ? "strong" : pct >= 65 ? "building" : pct >= 55 ? "monitor" : null;
-    return { market: best.market ?? "", side: best.recommendedSide ?? "", probability: pct, confidenceTier: tier, signalScore: best.signalScore ?? 0 };
+    return { market: best.market ?? "", side: best.recommendedSide ?? "", probability: pct, confidenceTier: tier, signalScore: best.signalScore ?? 0, line: best.bookLine ?? null };
   }
   return null;
 }
@@ -175,6 +177,7 @@ export function deriveAllPlayerPlays(signals: SignalLike[], playerId: string): B
         probability: pct,
         confidenceTier: tier,
         signalScore: s.signalScore ?? 0,
+        line: s.bookLine ?? null,
       };
     });
 }

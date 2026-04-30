@@ -356,6 +356,19 @@ export function normalizeMLBSignal(
     ? (raw?.calibratedProbabilityOver ?? qs.engineProbability ?? 0)
     : (raw?.calibratedProbabilityUnder ?? qs.engineProbability ?? 0);
 
+  // Cache paired probabilities so the canonical resolver can render Over/Under
+  // for the same player+market+line everywhere (box score badge + calculator).
+  const calibProbOver: number | null = raw?.calibratedProbabilityOver != null
+    ? Math.round((raw.calibratedProbabilityOver as number) * 10) / 10
+    : (qs.side === "OVER" && qs.engineProbability != null
+        ? Math.round((qs.engineProbability as number) * 10) / 10
+        : null);
+  const calibProbUnder: number | null = raw?.calibratedProbabilityUnder != null
+    ? Math.round((raw.calibratedProbabilityUnder as number) * 10) / 10
+    : (qs.side === "UNDER" && qs.engineProbability != null
+        ? Math.round((qs.engineProbability as number) * 10) / 10
+        : null);
+
   const formRaw = qs.formIndicator;
   const formUpper = formRaw ? String(formRaw).toUpperCase() : null;
 
@@ -385,6 +398,8 @@ export function normalizeMLBSignal(
     bookLine: qs.line ?? null,
     projection: qs.projection ?? null,
     enginePct: Math.round(sidedProb * 10) / 10,
+    calibratedProbabilityOver: calibProbOver,
+    calibratedProbabilityUnder: calibProbUnder,
     edge: raw ? Math.round(raw.edge * 100) / 100 : null,
     evPct: raw ? Math.round((raw.evPct ?? 0) * 100) / 100 : null,
     recommendedSide: qs.side,
