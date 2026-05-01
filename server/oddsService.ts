@@ -675,23 +675,79 @@ export async function getPlayerOdds(
 
   const books: Record<string, OddsLine> = {};
   let foundForAnyBook = false;
+  // Strict-mode soft-stale tracking: when every bookmaker fails the fresh
+  // (<= maxAgeMs) gate but at least one is within the soft window
+  // (<= maxAgeMs * 3, capped at 15 min), we accept those books and flag the
+  // entire result as degraded so downstream tier reduction can downgrade
+  // confidence. This keeps the halftime pipeline from going completely dark
+  // during the 5-10 min window when books frequently suspend or slow-refresh
+  // player props around the half. Diagnostic counters drive a per-call
+  // [NBA_HT_BOOKMAKER_FILTER] summary log.
+  let strictDegradedFromSoftStale = false;
+  const SOFT_STALE_CAP_MS = strict ? Math.min(15 * 60 * 1000, options.maxAgeMs * 3) : 0;
+  const filterCounters = {
+    bookmakersTotal: bookmakers.length,
+    notInAllowList: 0,
+    noLastUpdate: 0,
+    freshAccepted: 0,
+    softStaleAccepted: 0,
+    hardStaleRejected: 0,
+    missingMarket: 0,
+    missingPlayer: 0,
+    missingOverUnder: 0,
+    // Usable-line freshness (only incremented when over+under are both
+    // present, i.e. the book actually contributed a line to `books`):
+    usableFresh: 0,
+    usableSoftStale: 0,
+  };
+  const softStaleSamples: Array<{ key: string; ageMs: number }> = [];
+  const hardStaleSamples: Array<{ key: string; ageMs: number }> = [];
 
   const now = Date.now();
   for (const bookmaker of bookmakers) {
     const bKey: string = bookmaker.key ?? "";
-    if (!PROP_BOOKMAKERS_SET.has(bKey)) continue;
+    if (!PROP_BOOKMAKERS_SET.has(bKey)) {
+      filterCounters.notInAllowList++;
+      continue;
+    }
     const lastUpdate = bookmaker.last_update ? new Date(bookmaker.last_update).getTime() : 0;
+    let bookIsSoftStale = false;
     if (strict) {
-      // Strict halftime mode: refuse any bookmaker without a last_update stamp,
-      // and refuse any line older than the configured maxAgeMs window.
-      if (!lastUpdate) continue;
-      if (now - lastUpdate > options.maxAgeMs) continue;
+      // Strict halftime mode (Phase 9 — soft-stale acceptance):
+      //   • lastUpdate within maxAgeMs           → fresh, accept normally
+      //   • lastUpdate within SOFT_STALE_CAP_MS  → accept but flag degraded
+      //   • lastUpdate older OR missing          → hard-reject
+      // Books frequently slow-refresh props around the half; refusing every
+      // line >5 min produces the empty-2H-pipeline failure mode we saw on
+      // 2026-04-30 DEN@MIN. Tier reduction downstream (route soft-stale gate
+      // + engine confidence floor) handles the trust loss.
+      if (!lastUpdate) {
+        filterCounters.noLastUpdate++;
+        continue;
+      }
+      const ageMs = now - lastUpdate;
+      if (ageMs > options.maxAgeMs) {
+        if (ageMs <= SOFT_STALE_CAP_MS) {
+          bookIsSoftStale = true;
+          filterCounters.softStaleAccepted++;
+          if (softStaleSamples.length < 5) softStaleSamples.push({ key: bKey, ageMs });
+        } else {
+          filterCounters.hardStaleRejected++;
+          if (hardStaleSamples.length < 5) hardStaleSamples.push({ key: bKey, ageMs });
+          continue;
+        }
+      } else {
+        filterCounters.freshAccepted++;
+      }
     } else {
       if (lastUpdate > 0 && now - lastUpdate > BOOKMAKER_STALE_MS) continue;
     }
 
     const market = bookmaker.markets?.find((m: any) => m.key === marketKey);
-    if (!market?.outcomes) continue;
+    if (!market?.outcomes) {
+      if (strict) filterCounters.missingMarket++;
+      continue;
+    }
 
     const playerOutcomes = market.outcomes.filter((o: any) => {
       const desc = normPlayerName(o.description ?? o.name ?? "");
@@ -731,7 +787,42 @@ export async function getPlayerOdds(
         edgeEstimate,
       };
       foundForAnyBook = true;
+      // Track USABLE-line freshness for degraded classification (architect
+      // fix): pre-validation freshAccepted counts books that passed the
+      // staleness gate but may have lacked the market/outcomes; we need to
+      // know whether any FRESH book actually contributed a usable line. If
+      // not, and a soft-stale book did, the result must be degraded.
+      if (strict) {
+        if (bookIsSoftStale) {
+          strictDegradedFromSoftStale = true;
+          filterCounters.usableSoftStale++;
+        } else {
+          filterCounters.usableFresh++;
+        }
+      }
+    } else if (strict) {
+      if (playerOutcomes.length === 0) filterCounters.missingPlayer++;
+      else filterCounters.missingOverUnder++;
     }
+  }
+
+  // Strict-mode per-call filter summary — emit only when in strict mode so
+  // we don't add noise to pre-game / live-signals fetches. Always logs (even
+  // on success) so we can see the bookmaker mix during halftime cycles.
+  if (strict) {
+    console.log("[NBA_HT_BOOKMAKER_FILTER]", JSON.stringify({
+      eventId: oddsEventId,
+      player: playerName,
+      statType,
+      marketKey,
+      maxAgeMs: options.maxAgeMs,
+      softStaleCapMs: SOFT_STALE_CAP_MS,
+      ...filterCounters,
+      booksAccepted: Object.keys(books).length,
+      degradedFromSoftStale: strictDegradedFromSoftStale,
+      softStaleSamples,
+      hardStaleSamples,
+    }));
   }
 
   if (!foundForAnyBook) {
@@ -770,7 +861,16 @@ export async function getPlayerOdds(
   }
 
   const freshFetchedAt = Date.now();
-  pipelineLog("NBA", oddsEventId, "odds:result", { player: playerName, statType, books: Object.keys(books), isDegraded: false, foundForAnyBook });
+  // Strict-mode soft-stale: if every USABLE book (one that actually
+  // contributed an over+under line) was inside the soft-stale window, surface
+  // as degraded so the route can tier-reduce confidence. Architect-fix: use
+  // usableFresh — a fresh book that lacked the market/outcomes does NOT
+  // count as a fresh contributor and must not block the degraded flag.
+  const isDegradedResult = strict && foundForAnyBook && strictDegradedFromSoftStale && filterCounters.usableFresh === 0;
+  pipelineLog("NBA", oddsEventId, "odds:result", { player: playerName, statType, books: Object.keys(books), isDegraded: isDegradedResult, foundForAnyBook });
+  if (isDegradedResult) {
+    return { isDegraded: true, quotaExhausted: false, books, fetchedAt: freshFetchedAt };
+  }
   return { isDegraded: false, quotaExhausted: false, books, fetchedAt: freshFetchedAt };
 }
 

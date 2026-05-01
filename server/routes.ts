@@ -5809,10 +5809,34 @@ export async function registerRoutes(
                         console.log(`[NBA_HT_LIVE_LINE_MISSING] ${playerName} (${statType}) — skipped (no fresh live 2H line)`);
                         oddsPlayerCache.set(lineCacheKey, null);
                       } else if (oddsResult.isDegraded) {
-                        // Defensive — strictLive should never hand back a degraded
-                        // result, but enforce the contract here regardless.
-                        console.warn(`[NBA_HT_DEGRADED_REJECTED] ${playerName} (${statType}) — strict mode received degraded payload`);
-                        oddsPlayerCache.set(lineCacheKey, null);
+                        // Phase 9 — strict mode now returns isDegraded=true when
+                        // every accepted book was inside the soft-stale window
+                        // (lastUpdate within 5-15 min). Accept the line and let
+                        // downstream tier reduction (lineIsDegraded → engine
+                        // confidence floor) handle the trust loss instead of
+                        // dropping the play entirely. This keeps the 2H pipeline
+                        // alive during the brittle 5-10 min window when books
+                        // slow-refresh player props around the half.
+                        secondHalfMarketsFound++;
+                        const lines = bookKeys.map(k => oddsResult.books[k].line);
+                        const lineDetail = bookKeys.map((k, i) => `${k}=${lines[i]}`).join(" | ");
+                        console.log(`[Halftime] Live 2H lines (DEGRADED soft-stale) for ${playerName} (${statType}): ${lineDetail}`);
+                        const sortedLines = [...lines].sort((a, b) => a - b);
+                        const medianLine = sortedLines[Math.floor(sortedLines.length / 2)];
+                        oddsPlayerCache.set(lineCacheKey, {
+                          line: medianLine,
+                          bookKeys,
+                          isDegraded: true,
+                          oddsFetchedAt: oddsResult.fetchedAt || Date.now(),
+                          source: "live_2h_odds_api_soft_stale",
+                        });
+                        if (OBSERVE_NBA_HT) {
+                          console.log("[NBA_HT_LINE_TRACE]", JSON.stringify({
+                            player: playerName, statType, bookKeys, oddsFetchedAt: oddsResult.fetchedAt,
+                            oddsAgeMs: Date.now() - (oddsResult.fetchedAt || Date.now()), isDegraded: true,
+                            line: medianLine, source: "live_2h_odds_api_soft_stale",
+                          }));
+                        }
                       } else {
                         secondHalfMarketsFound++;
                         const lines = bookKeys.map(k => oddsResult.books[k].line);
