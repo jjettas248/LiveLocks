@@ -59,7 +59,7 @@ import { buildLiveEventInterpretation } from "./liveEventInterpretation";
 import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, clearGameCooldowns, type HRAlertInput } from "./evaluateHRAlert";
-import { recomputeHrAlertState, clearGameHrStates, getHrAlertState, mapDynamicStateToStage, seedHrAlertDetection, closeHrAlertOnHit, type HRAlertSnapshot } from "./hrAlertEngine";
+import { recomputeHrAlertState, clearGameHrStates, getHrAlertState, mapDynamicStateToStage, seedHrAlertDetection, closeHrAlertOnHit, type HRAlertSnapshot, type HrRadarStage } from "./hrAlertEngine";
 import {
   recomputeNonHrSignalState,
   closeNonHrSignalOnHit,
@@ -401,6 +401,45 @@ function gradeHomeRunsFromPlays(gameId: string): void {
 // Task #121 Step 1 — per-process set of games whose HR-radar detection state
 // has been hydrated from DB after boot. Prevents re-hydration on every poll.
 const HR_RADAR_HYDRATED_GAMES = new Set<string>();
+
+// ── HR canonical-stage bridge (Goldmaster Phase 4.5) ────────────────────────
+// The dynamic engine's state machine (BET_NOW/PREPARE thresholds at calibrated
+// conv 14% / 8%) is intentionally strict. The PATH evaluator (FAST_PROMOTE
+// single-elite, EV_xBA, etc.) recognizes legitimate HR-shaped contact at much
+// lower calibrated probabilities (e.g. 95+ EV with .58 xBA → PEAK signalState).
+// Validation against 2026-04-30 found 9 HRs (Rutschman, M.Garcia, Frelick,
+// W.Contreras, Alvarez, Abrams, J.Jackson, Melendez, E.Díaz) where the PATH
+// evaluator was firing PEAK every tick but the dynamic engine sat at WATCH —
+// so the live row was stamped canonical_stage=watch / confidence_tier=monitor
+// and the called signal never surfaced on the user's board. This bridge takes
+// the MAX of (dynamic-engine-stage, PATH-evaluator-stage) so a real PEAK from
+// the PATH evaluator can promote the canonical stage past WATCH. Audit truth
+// for the dynamic state itself is preserved separately via dynamicState in
+// stageContract.
+//
+// Guardrails (review feedback):
+//   - "closed" is terminal: a PATH PEAK arriving after game-final or post-hit
+//     closure must NEVER reopen the alert. We short-circuit before ranking.
+//   - Cooling/building are peers (matching hrAlertEngine.ts STAGE_RANK), so a
+//     PATH BUILDING does NOT override an active "cooling" cool-off. Only a
+//     stronger PATH PEAK (= attack) outranks cooling.
+const STAGE_RANK_BRIDGE: Record<HrRadarStage, number> = { closed: -1, watch: 0, cooling: 1, building: 1, attack: 2 };
+function bridgeCanonicalStage(
+  dynamicStage: HrRadarStage | null,
+  pathSignalState: string | null | undefined,
+): HrRadarStage | null {
+  // Terminal-state guard — closed must not be reopened by PATH evaluator.
+  if (dynamicStage === "closed") return "closed";
+  const pathStage: HrRadarStage | null =
+    pathSignalState === "PEAK" ? "attack"
+    : pathSignalState === "BUILDING" ? "building"
+    : null;
+  if (dynamicStage && pathStage) {
+    // Strict greater-than so peers (cooling vs building) do not override.
+    return STAGE_RANK_BRIDGE[pathStage] > STAGE_RANK_BRIDGE[dynamicStage] ? pathStage : dynamicStage;
+  }
+  return pathStage ?? dynamicStage;
+}
 
 // ── Engine dedup lock ─────────────────────────────────────────────────────────
 const LAST_RUN = new Map<string, number>();
@@ -2221,7 +2260,11 @@ export class LiveGameOrchestrator {
       const earlyDetect = getHrAlertState(gameId, batter.playerId);
       // Phase 1–2: also pass canonical stage on the contact-update path so
       // a heavy contact event doesn't lag the canonical stage by one tick.
-      const contactCanonicalStage = earlyDetect ? mapDynamicStateToStage(earlyDetect.currentState) : null;
+      // Phase 4.5 bridge: if the PATH evaluator returned PEAK/BUILDING, that
+      // ranks above the dynamic engine's current stage and we promote here so
+      // the row's confidence_tier reflects the real engine signal.
+      const contactDynamicStage = earlyDetect ? mapDynamicStateToStage(earlyDetect.currentState) : null;
+      const contactCanonicalStage = bridgeCanonicalStage(contactDynamicStage, alertResult.signalState);
       // Goldmaster Phase 1, 3, 7 — AB context for the user-facing card.
       const contactPaCount = (playerContact.priorABResults ?? []).length;
       const contactHasLiveAB = contactSnap !== null;
@@ -3019,7 +3062,12 @@ export class LiveGameOrchestrator {
               // The dynamic engine state is the source of truth for the live
               // user-facing ladder. We pass it explicitly; storage maps it to
               // the legacy confidenceTier for backwards compat.
-              const canonicalStage = hrDynSnap ? mapDynamicStateToStage(hrDynSnap.currentState) : null;
+              // Phase 4.5 bridge: PATH evaluator PEAK/BUILDING signals can
+              // promote canonical stage past the dynamic engine's current
+              // state, surfacing real PATH-level FAST_PROMOTE evidence even
+              // when the calibrated-prob state machine sits at WATCH.
+              const canonicalDynamicStage = hrDynSnap ? mapDynamicStateToStage(hrDynSnap.currentState) : null;
+              const canonicalStage = bridgeCanonicalStage(canonicalDynamicStage, alertResult.signalState);
               // Goldmaster Phase 1, 3, 7 — AB context for the user-facing card.
               const enginePaCount = (playerContact?.priorABResults ?? []).length;
               const engineHasLiveAB = contactSnap !== null;

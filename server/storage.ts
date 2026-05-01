@@ -3389,27 +3389,68 @@ export class DatabaseStorage implements IStorage {
         // Live tier MUST follow the canonical engine stage (Phase 1–2). The
         // legacy sticky `bestTier` rule (max historical tier) is preserved
         // ONLY as audit data on stageContract.historicalBestStage; it must
-        // never decide what the user sees on the live board. If the engine
-        // has cooled the player off, the board cools off with it.
-        const tierOrder: Record<string, number> = { monitor: 0, building: 1, strong: 2 };
-        const liveTier = data.canonicalStage
-          ? data.confidenceTier // already remapped from canonicalStage above
-          : (tierOrder[data.confidenceTier] > tierOrder[alert.confidenceTier]
-              ? data.confidenceTier
-              : alert.confidenceTier);
-
-        // Update stageContract: keep currentCanonicalStage live, but bump
-        // historicalBestStage upward only when the new stage outranks it.
+        // never decide what the user sees on the live board.
+        //
+        // ── Phase 4.5 — promoted-tier floor (HR-leak fix, 2026-04-30) ────
+        // Validation against 2026-04-30 found that the dynamic engine cools
+        // many FAST_PROMOTE batters back to WATCH between ticks (decay /
+        // deriveState consecutive-decline behavior), which forced the live
+        // tier from strong/building back to monitor and hid real engine
+        // signals just before HRs landed (Melendez, M.Garcia, Frelick all
+        // reached historicalBestStage=building then dropped to monitor).
+        // Once the row has been promoted to building or strong in this
+        // game, never drop the user-visible tier below "building" — a
+        // transient cool-off should never erase a real call. The dynamic
+        // engine state itself is preserved in stageContract.dynamicState
+        // for audit/grading, so the matcher still sees ground truth.
+        //
+        // The floor predicate keys off stageContract.historicalBestStage
+        // (the durable record of prior promotion) rather than alert.confidenceTier
+        // alone, so rows that already decayed to monitor under the prior
+        // buggy logic still get re-floored once historicalBestStage is set.
         const stageRankLocal: Record<string, number> = { closed: -1, watch: 0, cooling: 1, building: 1, attack: 2 };
         const prevDiag = (alert.diagnosticsSnapshot ?? {}) as Record<string, any>;
         const prevStageContract = (prevDiag.stageContract ?? {}) as Record<string, any>;
         const prevHistorical = prevStageContract.historicalBestStage ?? null;
         const prevCanonical = prevStageContract.currentCanonicalStage ?? null;
         const incomingCanonical = data.canonicalStage ?? null;
+        // Compute newHistorical first so the floor can consult it via the
+        // updated rank (a fresh promotion this tick should also count).
         const newHistorical =
           incomingCanonical && (!prevHistorical || stageRankLocal[incomingCanonical] > stageRankLocal[prevHistorical])
             ? incomingCanonical
             : prevHistorical ?? incomingCanonical;
+
+        const tierOrder: Record<string, number> = { monitor: 0, building: 1, strong: 2 };
+        const liveTier = (() => {
+          if (!data.canonicalStage) {
+            return tierOrder[data.confidenceTier] > tierOrder[alert.confidenceTier]
+              ? data.confidenceTier
+              : alert.confidenceTier;
+          }
+          const stageTier = data.confidenceTier; // already remapped from canonicalStage above
+          // Closed is terminal: a game-over or hit-resolved row must reflect
+          // its final canonical state. The floor never fires on closed ticks
+          // even if newHistorical / alert.confidenceTier still record prior
+          // promotion (they are durable max-history values, not current).
+          if (data.canonicalStage === "closed") {
+            return stageTier;
+          }
+          // Floor: if historicalBestStage reached building/attack at any
+          // point this game, never drop user-visible tier below "building".
+          const historicalReachedPromotion =
+            newHistorical != null &&
+            newHistorical !== "closed" &&
+            stageRankLocal[newHistorical] >= stageRankLocal["building"];
+          if (
+            tierOrder[stageTier] < tierOrder["building"] &&
+            (historicalReachedPromotion ||
+             tierOrder[alert.confidenceTier ?? "monitor"] >= tierOrder["building"])
+          ) {
+            return "building" as typeof stageTier;
+          }
+          return stageTier;
+        })();
         const mergedDiag = {
           ...(data.diagnosticsSnapshot as Record<string, unknown>),
           stageContract: {
