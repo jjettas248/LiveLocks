@@ -7,6 +7,68 @@
 export type CanonicalSignalState = "strong" | "building" | "watch" | "monitor" | "none";
 export type CanonicalSide = "OVER" | "UNDER" | "NO_EDGE";
 export type CanonicalSource = "engine" | "calculator";
+export type CanonicalEngineMode = "strict" | "fallback";
+
+// Phase C: Diagnostics envelope — surfaces existing engine internals
+// (featureScores, scoreBreakdown subscores, BvP/WeatherPark/Handedness
+// summaries) so UI panels and analytics consumers can render explainability
+// without re-running any scoring math. Every field is read-only and sourced
+// from data already produced by the orchestrator.
+export interface MlbSignalDiagnostics {
+  // Final signal score breakdown (computeSignalScore output, 0-100 subscores)
+  scoreBreakdown: {
+    probability: number;
+    projection: number;
+    liveContext: number;
+    matchup: number;
+    form: number;
+    opportunity: number;
+    marketReliability: number;
+    priceValidation: number;
+    eventBoost: number;
+    total: number;
+  };
+
+  // Raw 0..1 feature scores produced by markets.ts (already rounded to 3dp)
+  featureScores: Record<string, number>;
+
+  // Batter-vs-pitcher history snapshot (already on the input; surfaced verbatim)
+  bvp: {
+    atBats: number;
+    hits: number;
+    homeRuns: number;
+    strikeouts: number;
+    avg: number | null;
+  } | null;
+
+  // Weather/park context snapshot (subset of WeatherParkContext)
+  weatherPark: {
+    parkFactor: number;
+    windDirection: "in" | "out" | "cross" | "calm" | null;
+    windSpeed: number | null;
+    isIndoors: boolean;
+    parkHistoryFactor: number | null;
+  } | null;
+
+  // Handedness matchup snapshot
+  handedness: {
+    batterHand: "L" | "R" | "S" | null;
+    pitcherThrows: "L" | "R" | null;
+    pitcherVsHandednessFactor: number | null;
+  } | null;
+
+  // Engine mode rollup — "fallback" when fallbackUsed=true, otherwise "strict"
+  engineMode: CanonicalEngineMode;
+
+  // Existing tag/badge arrays surfaced for UI tooltips
+  feedTags: string[];
+  signalTags: string[];
+  badges: string[];
+  riskFlags: string[];
+
+  // Phase D: human-readable driver lines derived from the data above
+  readableDrivers: string[];
+}
 
 export interface CanonicalMlbSignal {
   gameId: string;
@@ -28,6 +90,10 @@ export interface CanonicalMlbSignal {
   source: CanonicalSource;   // "engine" when from live cache, "calculator" when fallback
   label: string;             // human label for the source badge
   updatedAt: number;         // ms epoch
+
+  // Phase C: optional diagnostics envelope — present on engine-sourced signals,
+  // omitted on calculator estimates that don't have engine internals.
+  diagnostics?: MlbSignalDiagnostics;
 }
 
 export const ENGINE_SOURCE_LABEL = "Live Engine Signal";

@@ -40,6 +40,7 @@ import { MARKET_QUALIFY_FLOOR, ALL_MLB_MARKETS } from "./types";
 import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
 import { computeSignalScore, computeSignalScoreByFamily, scoreHRRadar, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily } from "./signalScore";
 import type { MarketFamily } from "./signalScore";
+import { buildSignalDiagnostics } from "./signalDiagnostics";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
 import { assignMlbTier, assignAndCheckPoll, markPolled, clearGame as clearScheduler, logTierAssignment, type MlbGameContext } from "../odds/oddsScheduler";
 import { clearTier } from "../odds/oddsDiagnostics";
@@ -1013,7 +1014,15 @@ export class LiveGameOrchestrator {
     let normalizedStatus: "live" | "pregame" | "final" | "unknown" = "unknown";
     let statusSource = "none";
     try {
-      const statusUrl = `https://statsapi.mlb.com/api/v1/game/${statsPk}/feed/live`;
+      // Phase B diagnosis: previously used /api/v1/game/{pk}/feed/live which
+      // MLB Stats API now returns HTTP 404 for ("Not Found"). The correct
+      // schema is v1.1 (used by dataPullService and rosterService). Because
+      // the prior code only logged on thrown errors (not on !res.ok), every
+      // status fetch silently failed → normalizedStatus stayed "unknown" →
+      // triggerEngine was NEVER called for any game → entire signal pipeline
+      // was dormant. ESPN fallback below also never fired for games whose
+      // espnStatus wasn't pre-populated, so the engine remained dark.
+      const statusUrl = `https://statsapi.mlb.com/api/v1.1/game/${statsPk}/feed/live`;
       const statusRes = await fetch(statusUrl, {
         headers: { "User-Agent": "LiveLocks/1.0" },
         signal: AbortSignal.timeout(4000),
@@ -1023,9 +1032,11 @@ export class LiveGameOrchestrator {
         const rawAbstractState: string = statusData.gameData?.status?.abstractGameState ?? "";
         normalizedStatus = normalizeMlbStatus(rawAbstractState);
         if (normalizedStatus !== "unknown") statusSource = "mlbStatsApi";
+      } else {
+        console.warn(`[MLB orchestrator] pollGame: MLB Stats API status HTTP ${statusRes.status} for game ${gameId} (gamePk=${statsPk}) — falling back to ESPN/time`);
       }
-    } catch {
-      console.warn(`[MLB orchestrator] pollGame: MLB Stats API status fetch failed for game ${gameId}`);
+    } catch (err: any) {
+      console.warn(`[MLB orchestrator] pollGame: MLB Stats API status fetch failed for game ${gameId}: ${err?.message ?? err}`);
     }
 
     if (normalizedStatus === "unknown" && registeredGame) {
@@ -1640,6 +1651,24 @@ export class LiveGameOrchestrator {
 
     this.sanitizeUserFacingFields(signal);
 
+    // Phase C+D: Build the diagnostics envelope from existing data only.
+    // Placed AFTER fallback/early-bypass stamping AND sanitizeUserFacingFields
+    // so the captured feedTags/signalTags/badges/riskFlags/fallbackUsed reflect
+    // the final user-facing state. No recomputation — we surface featureScores,
+    // scoreBreakdown subscores, and BvP/WeatherPark/Handedness snapshots
+    // verbatim, plus a small set of human-readable driver lines derived from
+    // those same fields.
+    signal.diagnostics = buildSignalDiagnostics({
+      input,
+      output,
+      scoreBreakdown,
+      feedTags: signal.feedTags,
+      signalTags: signal.signalTags,
+      badges: signal.badges,
+      riskFlags: signal.riskFlags,
+      fallbackUsed: !!signal.fallbackUsed,
+    });
+
     if (signal.fallbackUsed) {
       console.log(`[MLB_FALLBACK_USED] player=${output.playerName} market=${output.market} defaultRate=fallback`);
     }
@@ -1886,6 +1915,20 @@ export class LiveGameOrchestrator {
     watchSignal.eventBoost = scoreBreakdown.eventBoost;
 
     this.sanitizeUserFacingFields(watchSignal);
+
+    // Phase C+D: same diagnostics envelope on watchlist signals so the UI
+    // can render explainability for Pre-AB Watch entries identically.
+    watchSignal.diagnostics = buildSignalDiagnostics({
+      input,
+      output,
+      scoreBreakdown,
+      feedTags: watchSignal.feedTags,
+      signalTags: watchSignal.signalTags,
+      badges: watchSignal.badges,
+      riskFlags: watchSignal.riskFlags,
+      fallbackUsed: !!watchSignal.fallbackUsed,
+    });
+
     return watchSignal;
   }
 

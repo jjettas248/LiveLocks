@@ -485,5 +485,10 @@ export function normalizeMLBSignal(
     smartTags,
     primaryReason,
     pitchMatchupRatings,
+
+    // Phase C: pass the engine diagnostics envelope through to the wire
+    // shape verbatim. Older cached signals without this field simply yield
+    // undefined, which is the correct "no diagnostics available" state.
+    diagnostics: qs.diagnostics,
   };
 }

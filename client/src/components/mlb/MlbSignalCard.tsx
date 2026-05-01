@@ -366,12 +366,80 @@ export function MlbSignalCard({
           </div>
         )}
 
-        {/* Row 3: Primary Reason (1 sentence) */}
-        {primaryReason && (
+        {/* Phase E: engine mode pills — distinguish strict/fallback/watch
+             so users know whether a signal cleared the strict threshold or
+             came through the fallback path. Pure renderer of engine fields:
+               - sig.fallbackUsed → fallback pill
+               - sig.isEarlySignal → "Pre-AB Watch" pill (when no mode pill)
+               - sig.watchlist (non-early) → "Watch" pill (when no mode pill)
+             Mode pill in Row 1 already covers strict tiers (Elite/Strong/etc).
+        */}
+        {(sig.fallbackUsed || sig.isEarlySignal || (sig.watchlist && !sig.fallbackUsed && !modeStyle)) && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {sig.fallbackUsed && (
+              <span
+                data-testid={`badge-fallback-${sig.playerId}-${sig.market}`}
+                className="text-[9px] font-bold px-2 py-0.5 rounded-full border"
+                style={{
+                  color: "#fbbf24",
+                  borderColor: "rgba(251,191,36,0.4)",
+                  background: "rgba(251,191,36,0.08)",
+                }}
+                title="Fallback mode — engine surfaced this signal under relaxed criteria. Treat conviction as lower than strict signals."
+              >
+                Fallback
+              </span>
+            )}
+            {sig.isEarlySignal && (
+              <span
+                data-testid={`badge-pre-ab-watch-${sig.playerId}-${sig.market}`}
+                className="text-[9px] font-bold px-2 py-0.5 rounded-full border"
+                style={{
+                  color: "#a78bfa",
+                  borderColor: "rgba(167,139,250,0.4)",
+                  background: "rgba(167,139,250,0.08)",
+                }}
+                title="Pre-AB Watch — early-game signal flagged for monitoring before the engine has full plate-appearance data."
+              >
+                Pre-AB Watch
+              </span>
+            )}
+            {sig.watchlist && !sig.isEarlySignal && !modeStyle && (
+              <span
+                data-testid={`badge-watch-${sig.playerId}-${sig.market}`}
+                className="text-[9px] font-bold px-2 py-0.5 rounded-full border"
+                style={{
+                  color: "#94a3b8",
+                  borderColor: "rgba(148,163,184,0.4)",
+                  background: "rgba(148,163,184,0.08)",
+                }}
+                title="Watchlist — monitor only, not actionable at the strict-engine threshold."
+              >
+                Watch
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Row 3: Why now — readable drivers (Phase D) when present, else
+             fall back to the engine-generated primary reason. */}
+        {sig.diagnostics?.readableDrivers && sig.diagnostics.readableDrivers.length > 0 ? (
+          <ul
+            className="text-[10px] text-muted-foreground leading-snug list-none space-y-0.5"
+            data-testid={`readable-drivers-${sig.playerId}-${sig.market}`}
+          >
+            {sig.diagnostics.readableDrivers.slice(0, 3).map((line, i) => (
+              <li key={i} className="flex items-start gap-1">
+                <span className="text-primary/60 shrink-0">•</span>
+                <span>{line}</span>
+              </li>
+            ))}
+          </ul>
+        ) : primaryReason ? (
           <p className="text-[10px] text-muted-foreground leading-snug italic">
             {primaryReason}
           </p>
-        )}
+        ) : null}
 
         {/* Row 4: Compact status pills */}
         <div className="flex items-center gap-2 text-[9px]">
@@ -637,6 +705,28 @@ export function MlbSignalCard({
                   </span>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Phase D: Why now — full readable driver list (engine-built, no
+               recompute). Shown above the numeric driver bars so the user
+               sees the human story first, then the supporting metrics. */}
+          {sig.diagnostics?.readableDrivers && sig.diagnostics.readableDrivers.length > 0 && (
+            <div
+              className="rounded-lg p-2.5 bg-secondary/20 border border-border/20"
+              data-testid={`readable-drivers-expanded-${sig.playerId}-${sig.market}`}
+            >
+              <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Why Now
+              </div>
+              <ul className="space-y-1 text-[10px] text-foreground/90 list-none">
+                {sig.diagnostics.readableDrivers.map((line, i) => (
+                  <li key={i} className="flex items-start gap-1.5 leading-snug">
+                    <span className="text-primary/70 shrink-0 mt-0.5">•</span>
+                    <span>{line}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 

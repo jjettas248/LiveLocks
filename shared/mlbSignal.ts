@@ -159,6 +159,13 @@ export interface MLBSignal {
   smartTags: string[];
   primaryReason: string;
   pitchMatchupRatings: Record<string, PitchMatchupRating> | null;
+
+  // Phase C: Diagnostics envelope — optional because legacy cached signals
+  // pre-date this field. Surfaces existing engine internals (featureScores,
+  // scoreBreakdown subscores, BvP/WeatherPark/Handedness snapshots) and
+  // the readable driver lines without any recomputation. UI consumers should
+  // prefer `diagnostics.readableDrivers` over `reasons` when present.
+  diagnostics?: import("./mlbCanonicalSignal").MlbSignalDiagnostics;
 }
 
 export interface PitchMatchupRating {

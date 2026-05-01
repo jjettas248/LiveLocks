@@ -664,4 +664,10 @@ export interface MLBQualifiedSignal {
   liveScore?: number;
   eventBoost?: number;
   bvpHistory?: BatterVsPitcherHistory;
+
+  // Phase C: Diagnostics envelope — surfaces existing engine internals so
+  // the canonical resolver can pass them through to UI consumers without
+  // any recomputation. Imported as `MlbSignalDiagnostics` from the shared
+  // canonical-signal module to keep the wire shape stable.
+  diagnostics?: import("../../shared/mlbCanonicalSignal").MlbSignalDiagnostics;
 }

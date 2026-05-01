@@ -55,6 +55,17 @@ export function LiveBoard({
     }
   }
 
+  // Phase E: distinguish strict / fallback / watch / truly-empty so the
+  // empty-state copy doesn't say "no signals" when fallback signals exist.
+  // Buckets are mutually exclusive: fallback wins over watch (orchestrator
+  // stamps fallback signals with watchlist=true), then watch, then strict.
+  const totalSignals = signals.length;
+  const fallbackCount = signals.filter(s => s.fallbackUsed === true).length;
+  const watchCount = signals.filter(
+    s => s.fallbackUsed !== true && (s.watchlist === true || s.isEarlySignal === true)
+  ).length;
+  const strictCount = Math.max(0, totalSignals - fallbackCount - watchCount);
+
   for (const tier of Object.keys(grouped)) {
     grouped[tier].over.sort(sortFn);
     grouped[tier].under.sort(sortFn);
@@ -66,6 +77,45 @@ export function LiveBoard({
 
   return (
     <div className="space-y-4" data-testid="mlb-live-board">
+      {/* Phase E: top-of-board summary so users instantly see whether
+           the engine is in strict mode, fallback mode, or only producing
+           watch signals — and so the per-tier "no signals" copy reads
+           correctly in each case. */}
+      {totalSignals > 0 && (
+        <div
+          className="flex items-center gap-2 text-[10px] text-muted-foreground"
+          data-testid="mlb-board-mode-summary"
+        >
+          {strictCount > 0 && (
+            <span
+              className="px-2 py-0.5 rounded-full font-semibold"
+              style={{ background: "rgba(34,197,94,0.08)", color: "#86efac", border: "1px solid rgba(34,197,94,0.3)" }}
+              data-testid="mode-summary-strict"
+            >
+              {strictCount} Strict
+            </span>
+          )}
+          {fallbackCount > 0 && (
+            <span
+              className="px-2 py-0.5 rounded-full font-semibold"
+              style={{ background: "rgba(251,191,36,0.08)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }}
+              data-testid="mode-summary-fallback"
+              title="Fallback mode signals — engine surfaced these under relaxed criteria. Lower conviction than strict."
+            >
+              {fallbackCount} Fallback
+            </span>
+          )}
+          {watchCount > 0 && (
+            <span
+              className="px-2 py-0.5 rounded-full font-semibold"
+              style={{ background: "rgba(148,163,184,0.06)", color: "#94a3b8", border: "1px solid rgba(148,163,184,0.3)" }}
+              data-testid="mode-summary-watch"
+            >
+              {watchCount} Watch
+            </span>
+          )}
+        </div>
+      )}
       {TIERS.map((tier) => {
         const items = grouped[tier.key];
         const totalCount = items.over.length + items.under.length;
@@ -109,7 +159,16 @@ export function LiveBoard({
                 {totalCount === 0 ? (
                   <div className="py-3 text-center" data-testid={`text-tier-empty-${tier.key}`}>
                     <span className="text-[11px] text-muted-foreground/60">
-                      {tier.key === "watch" ? "No additional signals" : "No signals at this level yet"}
+                      {/* Phase E: contextual empty copy. If fallback or watch
+                          signals exist elsewhere, the strict tiers should not
+                          read as a flat "no signals" — they're just empty
+                          *at this strict level* while fallback content is
+                          available below. */}
+                      {tier.key === "watch"
+                        ? "No additional signals"
+                        : (fallbackCount + watchCount > 0
+                            ? "No strict signals — see fallback/watch below"
+                            : "No signals at this level yet")}
                     </span>
                   </div>
                 ) : (

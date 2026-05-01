@@ -189,7 +189,14 @@ export function resolveMlbPlayerMarketSignal(
     }
   }
 
-  const drivers = Array.isArray(sig.reasons) ? sig.reasons.slice(0, 4) : [];
+  // Phase C+D: prefer the engine's readable drivers when available so the
+  // box-score badge and calculator panel render the same human-readable
+  // explanations. Falls back to raw `reasons` when diagnostics are missing
+  // (older cached signals or transitional data).
+  const readable = sig.diagnostics?.readableDrivers;
+  const drivers = (readable && readable.length > 0)
+    ? readable.slice(0, 6)
+    : (Array.isArray(sig.reasons) ? sig.reasons.slice(0, 4) : []);
   const engineConfidence = computeEngineConfidence(sig, state);
 
   return {
@@ -212,5 +219,10 @@ export function resolveMlbPlayerMarketSignal(
     source: "engine",
     label: ENGINE_SOURCE_LABEL,
     updatedAt: entry.updatedAt ?? Date.now(),
+
+    // Phase C: pass the diagnostics envelope through verbatim. Omitted when
+    // the cached signal pre-dates the envelope (defensive — undefined is the
+    // correct wire shape for "no diagnostics available").
+    diagnostics: sig.diagnostics,
   };
 }

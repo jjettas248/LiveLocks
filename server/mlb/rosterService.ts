@@ -121,7 +121,10 @@ export async function updatePlayerPool(): Promise<void> {
 // ── Sync: Team Rosters ────────────────────────────────────────────────────────
 
 export async function updateTeamRosters(): Promise<void> {
-  const teamsUrl = `https://statsapi.mlb.com/api/v1/teams?leagueId=103,104&sportId=1`;
+  // MLB Stats API rejects multi-value leagueId in current schema (HTTP 400
+   // "Invalid Request with value: 103,104"). Use sportId+season which returns
+   // all 30 active MLB clubs in one call.
+  const teamsUrl = `https://statsapi.mlb.com/api/v1/teams?sportId=1&season=${MLB_SEASON}`;
   let teams: Array<{ id: number; abbreviation: string }> = [];
 
   try {

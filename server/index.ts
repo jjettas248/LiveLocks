@@ -4,6 +4,7 @@ import connectPgSimple from "connect-pg-simple";
 import pg from "pg";
 import { registerRoutes, registerAnalyticsRoutes, registerPlaysRoutes, registerTestAlertRoute, registerCalibrationRoutes, registerPerformanceRoutes } from "./routes";
 import { liveOrchestrator } from "./mlb/liveGameOrchestrator";
+import { updatePlayerPool, updateTeamRosters, getPlayerPoolCount } from "./mlb/rosterService";
 import { autoResolveAlerts } from "./analyticsResolver";
 import { gradePersistedPlays } from "./services/gradePersistedPlays";
 import { storage } from "./storage";
@@ -526,6 +527,22 @@ app.use((req, res, next) => {
 
   // Start MLB live game orchestrator (Phase A — admin-only, fire-and-forget)
   liveOrchestrator.start();
+
+  // Auto-sync MLB roster pool at startup + every 24h. Without this the
+  // in-memory playerPool is empty and every getPlayer() returns undefined,
+  // which starves the handedness feature (resolvedBatterHand=null) and
+  // the engine's handedness scoring component never engages.
+  const syncMlbRosters = async () => {
+    try {
+      await updatePlayerPool();
+      await updateTeamRosters();
+      console.log(`[startup] MLB roster auto-sync complete: pool=${getPlayerPoolCount()} players`);
+    } catch (err: any) {
+      console.error("[startup] MLB roster auto-sync error:", err?.message ?? err);
+    }
+  };
+  syncMlbRosters();
+  setInterval(syncMlbRosters, 24 * 60 * 60 * 1000);
 
   // Remove duplicate plays and alerts once on startup (fire-and-forget)
   storage.cleanDuplicatePlays().then(r => { if (r.removed > 0) console.log(`[startup] Cleaned ${r.removed} duplicate persisted plays`); }).catch(console.warn);

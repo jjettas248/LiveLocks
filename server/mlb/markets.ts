@@ -261,6 +261,11 @@ function determineConfidenceTier(
 }
 
 const BATTER_OVER_SIDE_MARKETS: MLBMarket[] = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
+// Positive-skew markets: HR/HRR have raw P(over) ≈ 15-30% even for hot batters
+// (because a single AB satisfies OVER), so we always emit OVER and let the
+// existing HR_VS_ELITE_PITCHER bypass + 40% floor in qualifySignal route
+// borderline candidates into Pre-AB Watch. HR UNDER is unplayable juice.
+const BATTER_OVER_POSITIVE_SKEW: MLBMarket[] = ["home_runs", "hrr"];
 
 function determineSide(
   calibratedProb: number,
@@ -269,7 +274,21 @@ function determineSide(
   market?: MLBMarket,
 ): MLBRecommendedSide {
   if (market && BATTER_OVER_SIDE_MARKETS.includes(market)) {
-    return "OVER";
+    // Phase B diagnosis: previously returned "OVER" unconditionally for ALL
+    // batter_over markets. For HR/HRR (positive-skew, single-event payoff)
+    // that's correct — raw P(over) is naturally low and the qualifier's
+    // HR_VS_ELITE_PITCHER bypass routes survivors to Pre-AB Watch. But for
+    // hits/total_bases/batter_strikeouts the OVER probability mass is near
+    // 50% on actually-playable signals, so emitting OVER when the math
+    // says UNDER is favored just produces 40% floor noise (35/36 reject
+    // rate observed). Drop those cleanly to NO_EDGE rather than flagging
+    // a contradiction the firewall has to passthrough. Floor unchanged;
+    // HR/HRR pipeline unchanged.
+    if (BATTER_OVER_POSITIVE_SKEW.includes(market)) {
+      return "OVER";
+    }
+    if (tier === "NO_EDGE") return "NO_EDGE";
+    return isOverFavored ? "OVER" : "NO_EDGE";
   }
   if (tier === "NO_EDGE") return "NO_EDGE";
   return isOverFavored ? "OVER" : "UNDER";
