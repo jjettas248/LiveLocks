@@ -37,6 +37,7 @@ import { registerStripeRoutes } from "./stripeService";
 import { getVapidPublicKey, sendPush } from "./webpush";
 import { checkAndSendAlerts } from "./alertManager";
 import { autoResolveAlerts, autoSettlePersistedPlays } from "./analyticsResolver";
+import { getROIMetrics } from "./services/roiEngine";
 import { syncMinutesProjections } from "./services/minutesProjectionService";
 import { calculateMLBPropEdge, canShowSignal, hasRealOdds } from "./mlb/markets";
 import { normalizeMlbMarketKey } from "./mlb/normalizeMarketKey";
@@ -677,7 +678,7 @@ export async function registerRoutes(
       console.log(`[SIGNAL PRIORITY][NCAAB] before=${validatedPlays.length} after=${prioritizedNcaabPlays.length}`);
 
       res.json({ plays: prioritizedNcaabPlays });
-      checkAndSendAlerts(freshPlays, storage).catch(console.warn);
+      checkAndSendAlerts({ sport: "ncaab", plays: freshPlays }, storage).catch(console.warn);
 
       const ncaabTopPlaySignals: any[] = [];
       for (const p of prioritizedNcaabPlays) {
@@ -1908,6 +1909,51 @@ export async function registerRoutes(
 
     const finalDegraded = cachedIsDegraded || isDataStale;
     mlbSignalsCache.set(gameId, { ts: Date.now(), signals: validatedApiSignals, updatedAt, isDegraded: finalDegraded });
+
+    // Audit finding 2.1: MLB display routes are read-from-cache while
+    // persistence runs separately inside liveGameOrchestrator.autoPersistMLBSignals.
+    // If that orchestrator persist call fails silently, plays appear in the UI
+    // but never reach persisted_plays → grading + analytics undercount.
+    // Defensive safety-net: fire-and-forget trackPlay for every served qualified
+    // signal. Idempotent via duplicateGuard; the UPSERT (storage.recordPlay) only
+    // overwrites when newSignalScore > oldSignalScore, so this never clobbers
+    // richer orchestrator data with the route's leaner payload.
+    if (validatedApiSignals.length > 0) {
+      const validIds = new Set(validatedApiSignals.map((s) => `${s.playerId}|${s.market}`));
+      for (const qs of (entry?.qualifiedSignals ?? []) as any[]) {
+        const dir = qs.side === "OVER" ? "over" : qs.side === "UNDER" ? "under" : null;
+        if (!dir) continue;
+        const normalizedMarketKey = (qs.market as string) === "hr" ? "home_runs" : qs.market;
+        if (!validIds.has(`${qs.playerId}|${normalizedMarketKey}`)) continue;
+        if (!Number.isFinite(qs.line) || qs.line <= 0) continue;
+        const sbk = qs.sportsbook && String(qs.sportsbook).trim() !== "" ? qs.sportsbook : "odds_api";
+        trackPlay({
+          gameId,
+          playerId: qs.playerId,
+          playerName: qs.playerName,
+          team: qs.team ?? null,
+          sport: "mlb",
+          market: qs.market,
+          direction: dir as "over" | "under",
+          line: qs.line,
+          projection: qs.projection,
+          probability: qs.engineProbability ?? qs.signalScore,
+          edge: qs.evPct ?? 0,
+          sportsbook: sbk,
+          derivedLine: false,
+          createdAt: qs.engineGeneratedAt ?? Date.now(),
+          signalScore: qs.signalScore ?? null,
+          confidenceTier: qs.confidenceTier ?? null,
+          inning: qs.inning ?? null,
+          abNumber: qs.completedAB ?? null,
+          opportunityScore: qs.opportunityScore ?? null,
+          liveScore: qs.liveScore ?? null,
+          eventBoost: qs.eventBoost ?? null,
+          signalMode: qs.mode ?? null,
+          marketFamily: qs.marketFamily ?? null,
+        }, storage).catch(err => console.warn(`[MLB_ROUTE_PERSIST_SAFETY] failed for ${qs.playerName}/${qs.market}: ${err?.message ?? err}`));
+      }
+    }
 
     return res.json({ mode: "live", engine: "MLB", engineMode: mlbEngineResult.mode, signals: validatedApiSignals, updatedAt, isDegraded: finalDegraded, gameCardTags: entry?.gameCardTags ?? [] });
   });
@@ -6466,7 +6512,7 @@ export async function registerRoutes(
             : `${halftimeGames.length} games detected at halftime. Waiting for 2H lines / engine output.`;
       }
       res.json(responsePayload);
-      checkAndSendAlerts(topPlays, storage).catch(console.warn);
+      checkAndSendAlerts({ sport: "nba", plays: topPlays }, storage).catch(console.warn);
       // NBA halftime ledger persistence — record every surfaced play into
       // halftime_play_alerts so daily grading + history reflects what users
       // were actually shown. Fire-and-forget; never blocks the live response.
@@ -8761,7 +8807,10 @@ export function registerAnalyticsRoutes(app: Express): void {
       const pushes = graded.filter(p => p.result === "push").length;
       const decided = hits + misses;
       const winRate = decided > 0 ? Math.round((hits / decided) * 1000) / 10 : 0;
-      const roi = decided > 0 ? Math.round(((hits * 0.909 - misses) / decided) * 1000) / 10 : 0;
+      // Audit finding 1.4: canonical roiEngine helper (per-play odds, -110
+      // fallback only when odds missing). Was previously hardcoded
+      // `hits * 0.909 - misses` which assumed every play priced at -110.
+      const roi = getROIMetrics(graded).roi;
 
       const byMarket = new Map<string, { wins: number; losses: number; pushes: number; total: number }>();
       for (const p of graded) {

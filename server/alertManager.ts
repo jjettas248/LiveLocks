@@ -79,36 +79,53 @@ async function record2HAlert(gameId: string): Promise<void> {
 }
 
 // ── Main alert dispatcher ─────────────────────────────────────────────────────
+//
+// Audit finding 3.1: previously inferred sport via duck-typing on `bettingWindow`
+// and `statType`. A future NCAAB play missing `bettingWindow` would have been
+// dispatched on the NBA H2 path. Sport is now explicit and required.
+export type AlertSport = "nba" | "ncaab" | "mlb";
+
 export async function checkAndSendAlerts(
-  plays: any[],
+  args: { sport: AlertSport; plays: any[] },
   storage: IStorage
 ): Promise<void> {
+  const { sport, plays } = args ?? ({} as any);
+
+  if (!sport) {
+    console.error("[alertManager] checkAndSendAlerts called without explicit sport — refusing to dispatch");
+    return;
+  }
   if (!plays || plays.length === 0) return;
 
-  const pushAlertPlays = plays.filter(
-    (p) => p.probability != null && Math.abs(p.probability - 50) >= 25
-  );
-  const smsAlertPlays = plays.filter(
-    (p) => p.probability != null && Math.abs(p.probability - 50) >= 35
-  );
+  // NBA-only: prop play push/SMS thresholds and the 2H game-started alert.
+  const pushAlertPlays = sport === "nba"
+    ? plays.filter((p) => p.probability != null && Math.abs(p.probability - 50) >= 25)
+    : [];
+  const smsAlertPlays = sport === "nba"
+    ? plays.filter((p) => p.probability != null && Math.abs(p.probability - 50) >= 35)
+    : [];
 
-  const newH2GameIds = plays
-    .filter((p) => p.statType !== "ncaab_total" && p.statType !== "ncaab_1h_total" && !p.bettingWindow)
-    .map((p) => p.gameId)
-    .filter((id) => id && !alerted2HGames.has(id));
+  const newH2GameIds = sport === "nba"
+    ? plays
+        .map((p) => p.gameId)
+        .filter((id) => id && !alerted2HGames.has(id))
+    : [];
 
+  // NCAAB-only: halftime over-2H game alert when conviction ≥ 85%.
   const ncaabHalftimeByGame = new Map<string, any>();
-  for (const p of plays) {
-    if (
-      p.bettingWindow === "HALFTIME" &&
-      p.over2HProb != null &&
-      p.over2HProb >= 85 &&
-      p.gameId &&
-      !alertedHalftimeGames.has(`${p.gameId}|${todayStr()}`)
-    ) {
-      const existing = ncaabHalftimeByGame.get(p.gameId);
-      if (!existing || p.over2HProb > existing.over2HProb) {
-        ncaabHalftimeByGame.set(p.gameId, p);
+  if (sport === "ncaab") {
+    for (const p of plays) {
+      if (
+        p.bettingWindow === "HALFTIME" &&
+        p.over2HProb != null &&
+        p.over2HProb >= 85 &&
+        p.gameId &&
+        !alertedHalftimeGames.has(`${p.gameId}|${todayStr()}`)
+      ) {
+        const existing = ncaabHalftimeByGame.get(p.gameId);
+        if (!existing || p.over2HProb > existing.over2HProb) {
+          ncaabHalftimeByGame.set(p.gameId, p);
+        }
       }
     }
   }

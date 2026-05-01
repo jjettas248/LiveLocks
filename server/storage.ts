@@ -2152,21 +2152,50 @@ export class DatabaseStorage implements IStorage {
       const oldScore = Number(existing[0].signalScore ?? 0);
       const newScore = Number(play.signalScore ?? 0);
       if (newScore > oldScore) {
-        await db.update(persistedPlays).set({
+        // UPSERT atomic scoring bundle — when a higher signalScore wins, update
+        // every field that describes the play's pricing/probability snapshot so
+        // the row never contains a mix of old and new evaluation state.
+        // Audit finding 2.3: prob/edge/bookImplied/odds previously stayed stale
+        // while projection/signalScore advanced, corrupting downstream analytics.
+        //
+        // Sparse-write protection: only overwrite a field when the caller
+        // provides a non-null value. This keeps richer prior data (e.g. when
+        // the route safety-net writes a leaner payload than the orchestrator)
+        // intact while still allowing the higher-score writer to update the
+        // fields it does have. Core scoring fields (line, prob, signalScore,
+        // confidenceTier) are always updated since they're the audit's primary
+        // concern and any caller producing a higher signalScore must have them.
+        const updateSet: Record<string, unknown> = {
           line: String(play.line),
           prob: String(play.prob),
-          engineProb: play.engineProb != null ? String(play.engineProb) : undefined,
-          edgeGap: play.edgeGap != null ? String(play.edgeGap) : undefined,
-          projection: play.projection != null ? String(play.projection) : undefined,
-          signalScore: play.signalScore != null ? String(play.signalScore) : undefined,
-          confidenceTier: play.confidenceTier ?? undefined,
-          liveScore: play.liveScore ?? undefined,
-          opportunityScore: play.opportunityScore ?? undefined,
-          eventBoost: play.eventBoost ?? undefined,
-          inning: play.inning ?? undefined,
-          abNumber: play.abNumber ?? undefined,
-        }).where(eq(persistedPlays.id, existing[0].id));
-        console.log(`[PlayTracker] UPSERT — updated ${existing[0].id} with higher signalScore ${newScore} > ${oldScore}`);
+          signalScore: play.signalScore != null ? String(play.signalScore) : null,
+          confidenceTier: play.confidenceTier ?? null,
+        };
+        if (play.engineProb != null) updateSet.engineProb = String(play.engineProb);
+        if (play.bookImplied != null) updateSet.bookImplied = String(play.bookImplied);
+        if (play.edgeGap != null) updateSet.edgeGap = String(play.edgeGap);
+        if (play.projection != null) updateSet.projection = String(play.projection);
+        if (play.odds != null) updateSet.odds = String(play.odds);
+        if (play.rawProbOver != null) updateSet.rawProbOver = String(play.rawProbOver);
+        if (play.rawProbUnder != null) updateSet.rawProbUnder = String(play.rawProbUnder);
+        if (play.finalProbOver != null) updateSet.finalProbOver = String(play.finalProbOver);
+        if (play.finalProbUnder != null) updateSet.finalProbUnder = String(play.finalProbUnder);
+        if (play.displayConfidence != null) updateSet.displayConfidence = String(play.displayConfidence);
+        if (play.modelEdge != null) updateSet.modelEdge = String(play.modelEdge);
+        if (play.mu != null) updateSet.mu = String(play.mu);
+        if (play.sigma != null) updateSet.sigma = String(play.sigma);
+        if (play.zScore != null) updateSet.zScore = String(play.zScore);
+        if (play.hrBuildScore != null) updateSet.hrBuildScore = String(play.hrBuildScore);
+        if (play.hrIntensity != null) updateSet.hrIntensity = play.hrIntensity;
+        if (play.liveScore != null) updateSet.liveScore = play.liveScore;
+        if (play.opportunityScore != null) updateSet.opportunityScore = play.opportunityScore;
+        if (play.eventBoost != null) updateSet.eventBoost = play.eventBoost;
+        if (play.inning != null) updateSet.inning = play.inning;
+        if (play.abNumber != null) updateSet.abNumber = play.abNumber;
+        if (play.pitchCount != null) updateSet.pitchCount = play.pitchCount;
+        if (play.contactQualityScore != null) updateSet.contactQualityScore = String(play.contactQualityScore);
+        await db.update(persistedPlays).set(updateSet).where(eq(persistedPlays.id, existing[0].id));
+        console.log(`[PlayTracker] UPSERT — updated ${existing[0].id} with higher signalScore ${newScore} > ${oldScore} (${Object.keys(updateSet).length} fields)`);
       }
       return { id: existing[0].id, isDuplicate: true };
     }

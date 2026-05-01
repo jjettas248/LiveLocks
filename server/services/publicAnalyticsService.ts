@@ -1,7 +1,8 @@
 import { db } from "../db";
-import { persistedPlays } from "@shared/schema";
+import { persistedPlays, type PersistedPlay } from "@shared/schema";
 import { sql, desc } from "drizzle-orm";
 import { daysAgoET } from "../utils/dateUtils";
+import { getROIMetrics } from "./roiEngine";
 
 export type PublicAnalyticsSummary = {
   last7Days: { winRate: number; roi: number; plays: number };
@@ -110,7 +111,11 @@ function buildNbaSegment(plays: any[], isPlayoffs: boolean): NbaSegment {
   const decided = wins + losses;
   const total = plays.length;
   const winRate = decided > 0 ? Math.round((wins / decided) * 1000) / 10 : 0;
-  const roi = decided > 0 ? Math.round(((wins * 0.909 - losses) / decided) * 1000) / 10 : 0;
+  // Audit finding 1.4: use the canonical roiEngine helper so admin analytics ROI
+  // matches the rest of the system (per-play odds, -110 fallback only when odds
+  // missing, pending excluded). Previously hardcoded `wins * 0.909 - losses`
+  // assumed every play was -110 and disagreed with roiEngine.calculatePayout.
+  const roi = getROIMetrics(plays as PersistedPlay[]).roi;
 
   let probSum = 0, probCount = 0;
   let edgeSum = 0, edgeCount = 0;
@@ -266,25 +271,28 @@ export async function getPublicAnalyticsSummary(): Promise<PublicAnalyticsSummar
   const losses = settled.filter(p => p.result === "miss").length;
   const decidedPlays = wins + losses;
   const winRate = decidedPlays > 0 ? Math.round((wins / decidedPlays) * 1000) / 10 : 0;
-  const roi = decidedPlays > 0 ? Math.round(((wins * 0.909 - losses) / decidedPlays) * 1000) / 10 : 0;
+  // Audit finding 1.4: canonical roiEngine helper (per-play odds, -110 fallback
+  // only when odds missing, pending excluded).
+  const roi = getROIMetrics(settled as PersistedPlay[]).roi;
 
-  const sportMap = new Map<string, { wins: number; losses: number; total: number }>();
+  // Group plays by sport keeping full-row references so the canonical ROI helper
+  // can read per-play `odds` instead of assuming a flat -110 vig.
+  const sportMap = new Map<string, PersistedPlay[]>();
   for (const p of settled) {
     const sport = (p.sport ?? "nba").toUpperCase();
-    if (!sportMap.has(sport)) sportMap.set(sport, { wins: 0, losses: 0, total: 0 });
-    const entry = sportMap.get(sport)!;
-    entry.total++;
-    if (p.result === "hit") entry.wins++;
-    if (p.result === "miss") entry.losses++;
+    if (!sportMap.has(sport)) sportMap.set(sport, []);
+    sportMap.get(sport)!.push(p as PersistedPlay);
   }
 
-  const bySport = Array.from(sportMap.entries()).map(([sport, data]) => {
-    const decided = data.wins + data.losses;
+  const bySport = Array.from(sportMap.entries()).map(([sport, sportPlays]) => {
+    const sWins = sportPlays.filter(p => p.result === "hit").length;
+    const sLosses = sportPlays.filter(p => p.result === "miss").length;
+    const sDecided = sWins + sLosses;
     return {
       sport,
-      winRate: decided > 0 ? Math.round((data.wins / decided) * 1000) / 10 : 0,
-      roi: decided > 0 ? Math.round(((data.wins * 0.909 - data.losses) / decided) * 1000) / 10 : 0,
-      plays: data.total,
+      winRate: sDecided > 0 ? Math.round((sWins / sDecided) * 1000) / 10 : 0,
+      roi: getROIMetrics(sportPlays).roi,
+      plays: sportPlays.length,
     };
   });
 
