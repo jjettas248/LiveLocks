@@ -2270,11 +2270,40 @@ export async function registerRoutes(
 
       const cachedLiveGames = mlbLiveGamesCache.get("games");
 
+      // HR Radar Final-Game Reconciliation — Phase 2 API guardrail.
+      // Set of game IDs whose status is currently `live` or `pregame`. Edge
+      // cache entries from games NOT in this set (i.e. final, suspended,
+      // postponed, completed) must NEVER produce active HR Radar cards. The
+      // orchestrator's Phase 1 transition gate flushes mlbEdgeCache on
+      // live → final, but this gate is the belt-and-suspenders authoritative
+      // filter at the request boundary so a stale cache entry can never leak.
+      // The same `activeGameIds` set is reused below for the dbAlerts loop.
+      const activeGameIds = new Set(cachedLiveGames?.games.filter((g: any) => g.status === "live" || g.status === "pregame").map((g: any) => g.gameId) ?? []);
+      // Per-game status map keyed by gameId — used by Phase 3 fixup so the
+      // engine can route final-game cards to their resolved buckets.
+      const gameStatusByGameId = new Map<string, string>(
+        (cachedLiveGames?.games ?? []).map((g: any) => [g.gameId, String(g.status ?? "").toLowerCase()])
+      );
+
       for (const [gid, edgeEntry] of Array.from(mlbEdgeCache.entries())) {
         const FEED_FRESHNESS_MS = 10 * 60 * 1000;
         // Two-axis freshness — same engine-liveness gate as the main edge-feed,
         // but with a tighter 10m signal-age cap appropriate for HR Radar.
         if (!isMLBEdgeEntryFresh(edgeEntry, FEED_FRESHNESS_MS)) continue;
+
+        // HR Radar Final-Game Reconciliation — Phase 2.
+        // If the game is no longer active (final/suspended/postponed/etc),
+        // skip its edge entry entirely. This prevents stale cache data from
+        // surfacing as active FIRE/BUILD/WATCH/READY cards after the game
+        // ends. The DB-backed cashed/missed display is unaffected — those
+        // rows come from `storage.getCanonicalHrRadarOutcomes()` below.
+        if (!activeGameIds.has(gid)) {
+          const cardCount = (edgeEntry.allSignals ?? []).filter((s: any) => s.market === "home_runs" && (s.feedTags ?? []).includes("hr_radar")).length;
+          if (cardCount > 0) {
+            console.log(`[HR_RADAR_FINAL_ACTIVE_FIXUP] gameId=${gid} reason=final_game_in_edge_cache cards=${cardCount}`);
+          }
+          continue;
+        }
 
         const game = cachedLiveGames?.games.find((g: any) => g.gameId === gid);
         // Freshness Integrity Fix #2.5 — symmetric market-key normalization
@@ -2427,7 +2456,8 @@ export async function registerRoutes(
       }
 
       const fixedHrEdges = hrEdges.map((e: any) => {
-        const fx = hrRadarFixup(e, { gameId: e.gameId, playerId: e.playerId });
+        const gs = gameStatusByGameId.get(e.gameId);
+        const fx = hrRadarFixup(e, { gameId: e.gameId, playerId: e.playerId, gameStatus: gs });
         if (fx.canonicalActive === false && !e.alreadyHit) {
           e.alreadyHit = true;
         }
@@ -2539,7 +2569,8 @@ export async function registerRoutes(
       const bettablePlayerIdSet = new Set(bettable.map((b: any) => b.playerId));
       const watchlistPlayerIdSet = new Set(cleanWatchlist.map((w: any) => w.playerId));
 
-      const activeGameIds = new Set(cachedLiveGames?.games.filter((g: any) => g.status === "live" || g.status === "pregame").map((g: any) => g.gameId) ?? []);
+      // `activeGameIds` is now declared at the top of the handler (Phase 2 guardrail).
+      // Reused here for the dbAlerts filter below.
 
       for (const alert of dbAlerts) {
         if (alert.status === "hit" || alert.status === "miss") continue;
@@ -2813,8 +2844,22 @@ export async function registerRoutes(
       // group by them per Spec Step 16. Pure additive — never replaces the
       // existing `outcomeType`, `gradingStatus`, or `currentStage` fields.
       const { applyHrRadarResolvedStateFixup: fixup } = await import("./mlb/hrRadarSection");
+      // HR Radar Final-Game Reconciliation — Phase 5.
+      // Stamp `isGameFinal` on every row so the client (HrRadarLadder
+      // LadderCard) can hide the `Take it / Pass / ~X PA left / expires after T…`
+      // CTAs once a game has gone final, even if a stale cache entry briefly
+      // slipped through the Phase 2 guardrail. Also passes `gameStatus` into
+      // the fixup so the engine routes final-game cards into the correct
+      // resolved bucket regardless of upstream signal slip.
       const stamp = (rows: any[]): any[] =>
-        rows.map((r) => fixup(r, { gameId: r?.gameId ?? r?.game_id, playerId: r?.playerId ?? r?.player_id }));
+        rows.map((r) => {
+          const gid = r?.gameId ?? r?.game_id;
+          const gs = gid ? gameStatusByGameId.get(gid) : undefined;
+          const isGameFinal = gs ? (gs === "final" || gs === "completed" || gs === "game_over") : false;
+          const fixed = fixup(r, { gameId: gid, playerId: r?.playerId ?? r?.player_id, gameStatus: gs }) as any;
+          fixed.isGameFinal = isGameFinal;
+          return fixed;
+        });
 
       return res.json({
         bettableHR: stamp(dedupBettable),
@@ -2916,6 +2961,31 @@ export async function registerRoutes(
         ? req.query.sessionDate
         : undefined;
       const ladder = await storage.getHrRadarLadder(sessionDate);
+      // HR Radar Final-Game Reconciliation — Phase 5.
+      // Stamp `isGameFinal` on every LadderCard so the client can hide the
+      // CTAs (Take it / Pass / ~X PA left / expires after T…) once a game
+      // has gone final. Storage layer doesn't import the orchestrator's
+      // status-normalizer, so we do the join here at the request boundary.
+      try {
+        const gameStates = (mlbGameCache as any)?.gameState ?? {};
+        const finalGameIds = new Set<string>();
+        for (const gid of Object.keys(gameStates)) {
+          const raw = (gameStates[gid] as any)?.status ?? (gameStates[gid] as any)?.detailedState ?? "";
+          const norm = normalizeMlbStatus(String(raw));
+          if (norm === "final") finalGameIds.add(gid);
+        }
+        const ladderSections = (ladder as any)?.sections ?? {};
+        for (const bucket of Object.values(ladderSections) as any[]) {
+          if (!Array.isArray(bucket)) continue;
+          for (const card of bucket) {
+            if (card && typeof card === "object") {
+              card.isGameFinal = finalGameIds.has(card.gameId);
+            }
+          }
+        }
+      } catch {
+        // best-effort — clients fall back to existing isResolved logic.
+      }
       // Master Fix Phase 6/8 — additive diagnostics block. Lets the empty
       // state on the client (and any operator/admin probe) honestly report
       // why the radar is empty: was it 0 live games, 0 rows in DB, or both?

@@ -193,6 +193,13 @@ export function isPlayerHrResolved(gameId: string, playerId: string | number): b
 // feed while the box-score catches up. Cleared at game-final.
 export const RESOLVED_NON_HR_MARKETS = new Set<string>();    // `${gameId}_${playerId}_${market}`
 
+// HR Radar Final-Game Reconciliation — once-per-process gate so the
+// `live → final` transition fires its log/cache-flush/reconcile branch
+// exactly once per game (the underlying status block runs every 10s
+// while the game stays final). Cleared in pollGames when the game
+// leaves the registry so a same-day re-run also re-fires.
+export const MLB_FINAL_LOGGED = new Set<string>();
+
 export function isPlayerMarketResolved(
   gameId: string,
   playerId: string | number,
@@ -787,6 +794,105 @@ export class LiveGameOrchestrator {
     }
   }
 
+  /**
+   * HR Radar Final-Game Reconciliation — once-only wrapper called from the
+   * `live → final` transition gate in `_pollGameInner`. Wraps the existing
+   * idempotent storage reconcilers so the final transition has a single
+   * authoritative entry point with diagnostic counts.
+   *
+   * Returns counts the caller / log can surface. NEVER throws — failures
+   * are swallowed and surfaced via the warn log in the caller's catch.
+   *
+   * Phase 4 — real implementation. Builds the per-game `playerHrMap` from the
+   * box score, awaits both storage reconcilers, then queries the
+   * `hr_radar_alerts` table to derive post-reconciliation counts.
+   * `activeRemainingAfterFinal` should be 0 after a healthy reconcile;
+   * non-zero values surface the exact slip the spec is hardening against.
+   */
+  async reconcileHrRadarFinalGame(
+    gameId: string,
+    sessionDate: string,
+  ): Promise<{
+    gameId: string;
+    resolvedHits: number;
+    resolvedMisses: number;
+    uncalledHrs: number;
+    expiredInactive: number;
+    activeRemainingAfterFinal: number;
+  }> {
+    const counts = {
+      gameId,
+      resolvedHits: 0,
+      resolvedMisses: 0,
+      uncalledHrs: 0,
+      expiredInactive: 0,
+      activeRemainingAfterFinal: 0,
+    };
+
+    try {
+      // Build playerHrMap from the box score (mirrors the per-poll block
+      // below at L1201). Falls back to an empty map when the box score has
+      // not been hydrated yet — the per-poll path will retry on the next
+      // 10s cycle and self-heal.
+      const boxScore = mlbGameCache.gameBoxScore?.[gameId];
+      const newState = mlbGameCache.gameState[gameId];
+      const playerHrMap = new Map<string, { inning: number; half: string }>();
+      if (boxScore?.byPlayerId) {
+        for (const [pid, bsp] of Object.entries(boxScore.byPlayerId)) {
+          const hrCount = (bsp as any).hr ?? 0;
+          if (hrCount > 0) {
+            const lastInning = newState?.inning ?? 9;
+            playerHrMap.set(pid, { inning: lastInning, half: "final" });
+          }
+        }
+      }
+
+      // The legacy `reconcileAlertsForGame` updates the persistedAlerts
+      // table and is independent of `playerHrMap`, so it always runs.
+      await storage.reconcileAlertsForGame(gameId).catch(() => 0);
+
+      // Hydration guard — `reconcileHrRadarAlertsForGame` mass-marks any
+      // remaining `status='live'` HR radar alerts as `called_miss` for
+      // every player NOT in `playerHrMap`. If the box score has not yet
+      // hydrated, that map is empty (or short), so true HR rows would be
+      // permanently mis-graded (subsequent calls only operate on
+      // `status='live'` rows, never reversing the miss).
+      //
+      // Strategy: only run the radar-table reconcile inside this once-only
+      // wrapper when the box score is clearly hydrated (has byPlayerId).
+      // If it is not hydrated, defer to the per-poll reconciler at
+      // `_pollGameInner` (~L1217), which keeps running every 10s while the
+      // game stays final and will self-heal once the box score arrives.
+      const boxHydrated = !!(boxScore?.byPlayerId && Object.keys(boxScore.byPlayerId).length > 0);
+      if (boxHydrated) {
+        await storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap).catch(() => undefined);
+      } else {
+        console.log(`[HR_RADAR_FINAL_RECONCILE] gameId=${gameId} sessionDate=${sessionDate} deferred=hr_radar_table reason=box_score_not_hydrated (per-poll reconciler will retry every 10s)`);
+      }
+
+      // Derive counts from the post-reconcile table state.
+      const rows = await storage.getTodayHrRadarBoardForSession(sessionDate).catch(() => [] as any[]);
+      const gameRows = (rows as any[]).filter((r) => r.gameId === gameId);
+      const calledHitStatuses = new Set([
+        "called_hit", "called_hit_attack", "called_hit_ready", "called_hit_build", "called_hit_watch",
+      ]);
+      for (const r of gameRows) {
+        const gs = String(r.gradingStatus ?? "").toLowerCase();
+        const st = String(r.status ?? "").toLowerCase();
+        if (calledHitStatuses.has(gs)) counts.resolvedHits++;
+        else if (gs === "called_miss" || st === "miss") counts.resolvedMisses++;
+        else if (gs === "uncalled_hr") counts.uncalledHrs++;
+        else if (gs === "late_signal" || gs === "early_hr_insufficient_sample") counts.expiredInactive++;
+        if (st === "live") counts.activeRemainingAfterFinal++;
+      }
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_FINAL_RECONCILE] gameId=${gameId} count derivation failed: ${err?.message ?? err}`);
+    }
+
+    console.log(`[HR_RADAR_FINAL_RECONCILE] gameId=${gameId} sessionDate=${sessionDate} resolvedHits=${counts.resolvedHits} resolvedMisses=${counts.resolvedMisses} uncalledHrs=${counts.uncalledHrs} expiredInactive=${counts.expiredInactive} activeRemainingAfterFinal=${counts.activeRemainingAfterFinal}`);
+    return counts;
+  }
+
   stop(): void {
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
@@ -824,6 +930,11 @@ export class LiveGameOrchestrator {
           this.previousStates.delete(existing.gameId);
           clearScheduler("mlb", existing.gameId);
           clearTier("mlb", existing.gameId);
+          // HR Radar Final-Game Reconciliation — release the once-only
+          // transition gate so a same-day re-discovery (rare, but possible
+          // after a midnight rollover or test reset) re-fires the
+          // [HR_RADAR_GAME_FINAL_DETECTED] branch.
+          MLB_FINAL_LOGGED.delete(existing.gameId);
         }
       }
     } catch (err: any) {
@@ -1125,6 +1236,31 @@ export class LiveGameOrchestrator {
     // normalizedStatus + statusSource were already resolved earlier (above the
     // HR-radar gates) so this section just consumes them.
     if (normalizedStatus === "final") {
+      // HR Radar Final-Game Reconciliation — Phase 1.
+      // Once-per-process transition gate. The body of this if-block runs every
+      // 10s while the game stays final; the operations below this gate must
+      // fire exactly once: the diagnostic log, the edge-cache flush, and
+      // (Phase 4) the reconcileHrRadarFinalGame wrapper. Idempotent inner
+      // operations (storage.reconcile*, KNOWN_HR_*.delete, etc.) stay outside
+      // the gate so they continue to self-heal on every poll.
+      if (!MLB_FINAL_LOGGED.has(gameId)) {
+        MLB_FINAL_LOGGED.add(gameId);
+        const oldStatusForLog = prevState ? "live_or_pregame" : "unknown";
+        console.log(`[HR_RADAR_GAME_FINAL_DETECTED] gameId=${gameId} oldStatus=${oldStatusForLog} newStatus=final sessionDate=${todayET()}`);
+        // Cache flush — drop the in-memory edge cache entry so /api/mlb/hr-radar
+        // (and every other route that iterates mlbEdgeCache.entries()) stops
+        // serving this game's signals as bettable. The reconciliation/grading
+        // tables in the DB remain authoritative for cashed/missed display.
+        const hadEdgeCache = mlbEdgeCache.has(gameId);
+        if (hadEdgeCache) mlbEdgeCache.delete(gameId);
+        console.log(`[HR_RADAR_FINAL_CACHE_FLUSH] gameId=${gameId} edgeCacheCleared=${hadEdgeCache}`);
+        // Phase 4 — fire the once-only reconciliation wrapper. Defensive
+        // try/catch so a reconcile failure never blocks the per-game cleanup
+        // below. Detailed counts are logged inside reconcileHrRadarFinalGame.
+        this.reconcileHrRadarFinalGame(gameId, todayET()).catch((err) =>
+          console.warn(`[HR_RADAR_FINAL_RECONCILE] gameId=${gameId} wrapper threw: ${err?.message ?? err}`)
+        );
+      }
       const boxScore = mlbGameCache.gameBoxScore?.[gameId];
       const playerHrMap = new Map<string, { inning: number; half: string }>();
       if (boxScore?.byPlayerId) {

@@ -379,7 +379,7 @@ export type HrRadarFixupOutput<T> = T & {
 
 export function applyHrRadarResolvedStateFixup<T extends CanonicalCardInput & Record<string, any>>(
   card: T,
-  ctx?: { gameId?: string; playerId?: string; logger?: (msg: string) => void },
+  ctx?: { gameId?: string; playerId?: string; logger?: (msg: string) => void; gameStatus?: string | null },
 ): HrRadarFixupOutput<T> {
   const outcome = deriveHrRadarOutcomeStatus(card);
   let lifecycle = deriveHrRadarLifecycleState(card);
@@ -391,6 +391,49 @@ export function applyHrRadarResolvedStateFixup<T extends CanonicalCardInput & Re
     lifecycle === "uncalled_hr" || lifecycle === "late_signal" ||
     lifecycle === "inactive"
   );
+
+  // HR Radar Final-Game Reconciliation — Phase 3.
+  // Final game state is the ultimate authority. If the game has ended, no
+  // card from that game may remain active regardless of its outcomeStatus,
+  // lifecycleState, or signalState. Spec Step 4 (API guardrail): route the
+  // card to the correct resolved bucket and force `active=false`. This runs
+  // BEFORE the resolved-slipped-active fixup so the [HR_RADAR_FINAL_ACTIVE_FIXUP]
+  // log captures the original active state for diagnostic clarity.
+  const gameStatusNorm = norm(ctx?.gameStatus ?? card.gameStatus);
+  const isGameFinal = gameStatusNorm === "final" ||
+                      gameStatusNorm === "completed" ||
+                      gameStatusNorm === "game_over" ||
+                      gameStatusNorm === "gameover" ||
+                      (card as any).isGameFinal === true;
+
+  if (isGameFinal) {
+    const wasActiveBeforeFinal = active;
+    if (CALLED_HIT_OUTCOME_STATUSES.has(outcome)) {
+      lifecycle = "cashed";
+      section = "cashed";
+    } else if (outcome === "called_miss") {
+      lifecycle = "missed";
+      section = "missed";
+    } else if (outcome === "uncalled_hr" || outcome === "late_signal" || outcome === "early_hr_insufficient_sample") {
+      // Diagnostic-only buckets — preserve the existing lifecycle if it
+      // already reflects the diagnostic outcome; otherwise mark inactive.
+      if (lifecycle !== "uncalled_hr" && lifecycle !== "late_signal") {
+        lifecycle = "inactive";
+      }
+      section = "diagnostic";
+    } else {
+      // Game ended without a resolved outcome (and no late_signal/uncalled
+      // tag) — treat as a missed call. This catches stale FIRE/BUILD/WATCH
+      // cards whose game went final without an HR for the player.
+      lifecycle = "missed";
+      section = "missed";
+    }
+    active = false;
+    if (wasActiveBeforeFinal) {
+      const log = ctx?.logger ?? console.log;
+      log(`[HR_RADAR_FINAL_ACTIVE_FIXUP] gameId=${ctx?.gameId ?? card.gameId ?? "?"} playerId=${ctx?.playerId ?? card.playerId ?? "?"} outcomeStatus=${outcome} newSection=${section} newLifecycle=${lifecycle} reason=game_final_overrides_active`);
+    }
+  }
 
   // Force resolved-state truth (Rule 3 — resolved always wins).
   const hrCount = Number(card.hrCount ?? card.hr ?? 0);

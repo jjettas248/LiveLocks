@@ -424,8 +424,16 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   const isAttack = section === "attackNow";
   // Goldmaster Phase 5 — derive live vs resolved mode. Resolved cards must
   // never carry "next AB" copy or any live-only verbiage.
+  // HR Radar Final-Game Reconciliation — Phase 5: a card whose game is
+  // already Final must also be treated as resolved so the Take it / Pass /
+  // ~X PA left / expires after T… CTAs are hidden, even if the card briefly
+  // slipped through with section=watch/building/attackNow. The server
+  // stamps `isGameFinal` on every ladder card from `mlbGameCache.gameState`.
   const isResolved =
-    entry.currentStatus === "resolved" || section === "cashed" || section === "dead";
+    entry.currentStatus === "resolved" ||
+    section === "cashed" ||
+    section === "dead" ||
+    (entry as any).isGameFinal === true;
   // Task #121 Step 3 — Take it / Pass are available on every LIVE card
   // (Attack Now / Building / Watch). Resolved sections (cashed/dead) get
   // no actions.
