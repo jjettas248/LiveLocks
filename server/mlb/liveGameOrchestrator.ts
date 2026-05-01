@@ -2291,6 +2291,10 @@ export class LiveGameOrchestrator {
     let signalsRejected = 0;
     let scoreSum = 0;
     let anyDegraded = false;
+    // [MLB_PRE_CHANGE_AUDIT] STEP 5 — Feature trace dedup. Loop is
+    // market-outer / batter-inner so the same batter is hit ~6× per cycle;
+    // log [MLB_FEATURES] only once per batter per triggerEngine invocation.
+    const featureLogged = new Set<string>();
     const state = mlbGameCache.gameState[gameId];
     const game = getGame(gameId);
 
@@ -2668,6 +2672,31 @@ export class LiveGameOrchestrator {
         }
 
         input.liveInterpretation = buildLiveEventInterpretation(input);
+
+        // [MLB_PRE_CHANGE_AUDIT] STEP 5 — Feature presence + values trace.
+        // Confirms BvP / weather / handedness / park / archetype data is
+        // actually reaching the engine input (not just shown in the UI).
+        // Once per batter per triggerEngine cycle (loop is market-outer).
+        if (!featureLogged.has(batter.playerId)) {
+          featureLogged.add(batter.playerId);
+          const bArchForLog = batterArchetypeCache.get(batter.playerId) ?? null;
+          console.log(`[MLB_FEATURES] ${JSON.stringify({
+            gameId,
+            player: batter.playerName,
+            playerId: batter.playerId,
+            hasBvp: !!(bvpData && bvpData.atBats > 0),
+            bvpScore: bvpData ? { atBats: bvpData.atBats, hits: bvpData.hits, hr: bvpData.homeRuns, k: bvpData.strikeouts, avg: bvpData.avg } : null,
+            hasWeather: !!(resolvedTemp != null || resolvedWindSpeed != null || weatherCache?.venueName),
+            weather: { temp: resolvedTemp, windSpeed: resolvedWindSpeed, windDir: resolvedWindDir, humidity: resolvedHumidity, indoors: weatherCache?.isIndoors ?? null, venue: weatherCache?.venueName ?? null, windShift: resolvedWindShift },
+            hasHandedness: !!(rosterLookup?.bats || pitcher?.throws),
+            handedness: { batterHand: rosterLookup?.bats ?? null, pitcherThrows: pitcher?.throws ?? null, resolved: resolvedBatterHand ?? null },
+            parkFactor: input.weatherPark.parkFactor,
+            batterArchetype: bArchForLog,
+            pitcherArchetype: pitcherArch ?? null,
+            hasRollingForm: !!rollingStats,
+            hasBoxScore: !!boxScorePlayer,
+          })}`);
+        }
 
         pLog(gameId, "engineInput", { player: input.playerName, market: input.market, bookLine: input.bookLine, inning: input.inning, parkFactor: input.weatherPark.parkFactor, venue: weatherCache?.venueName });
 
@@ -3503,6 +3532,41 @@ export class LiveGameOrchestrator {
       });
       const avgScore = signalsQualified > 0 ? Math.round(scoreSum / signalsQualified) : 0;
       console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=${signalsQualified} rejected=${signalsRejected} allSignals=${allSignals.length} avgScore=${avgScore} gameCardTags=[${gameCardTags.join(",")}]`);
+
+      // [MLB_PRE_CHANGE_AUDIT] STEP 3 — Surfaced signals trace at orchestrator
+      // (what is actually written to mlbEdgeCache and read by display routes).
+      // Engine-layer [MLB_SURFACED_SIGNALS] reflects per-engine-call output;
+      // this one reflects the post-qualification UI-facing reality.
+      console.log(`[MLB_SURFACED_SIGNALS] ${JSON.stringify({
+        layer: "orchestrator",
+        gameId,
+        qualifiedCount: qualifiedSignals.length,
+        allSignalsCount: allSignals.length,
+        marketsEvaluated,
+        rejected: signalsRejected,
+        players: qualifiedSignals.slice(0, 10).map(s => s.playerName),
+        markets: qualifiedSignals.slice(0, 10).map(s => s.market),
+        gameCardTags,
+        isDegraded: anyDegraded,
+      })}`);
+
+      // [MLB_PRE_CHANGE_AUDIT] STEP 4 — Empty-state warning at orchestrator.
+      // Distinct from engine-layer [MLB_EMPTY_STATE]: this fires when the
+      // engine produced output but qualification gates rejected everything,
+      // OR when the engine itself produced nothing for this game cycle.
+      if (qualifiedSignals.length === 0) {
+        console.warn(`[MLB_EMPTY_STATE] ${JSON.stringify({
+          layer: "orchestrator",
+          gameId,
+          marketsEvaluated,
+          rejected: signalsRejected,
+          allSignalsCount: allSignals.length,
+          outputsCount: outputs.length,
+          message: outputs.length > 0
+            ? "QUALIFICATION_REJECTED_ALL"
+            : (marketsEvaluated > 0 ? "ENGINE_PRODUCED_NOTHING" : "NO_MARKETS_EVALUATED"),
+        })}`);
+      }
 
       autoPersistMLBSignals(gameId, qualifiedSignals);
     }

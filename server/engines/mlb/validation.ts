@@ -80,10 +80,28 @@ export function filterMLBSignals<T extends MLBValidationCandidate>(
     const result = validateMLBSignal(sig, rules);
     if (result.valid) {
       valid.push(sig);
-    } else if (accumulator && result.reason) {
-      accumulator.filtered++;
-      if (!accumulator.reasons.includes(result.reason)) {
-        accumulator.reasons.push(result.reason);
+    } else {
+      // [MLB_PRE_CHANGE_AUDIT] STEP 2 — Filtering trace at validation layer.
+      // Emits the validator's structured rejection so we can see exactly which
+      // candidate was dropped and why (tier mismatch / invalid side / etc).
+      console.log(`[MLB_FILTERED_OUT] ${JSON.stringify({
+        stage: "validateMLBSignal",
+        reason: result.reason ?? "unknown",
+        ruleSet: rules.minConfidenceTier ?? null,
+        allowDeveloping: rules.allowDevelopingSignals ?? null,
+        player: sig.playerName ?? null,
+        market: sig.market ?? null,
+        line: sig.line ?? null,
+        probability: sig.probability ?? null,
+        edge: sig.edge ?? null,
+        confidenceTier: sig.confidenceTier ?? null,
+        recommendedSide: sig.recommendedSide ?? null,
+      })}`);
+      if (accumulator && result.reason) {
+        accumulator.filtered++;
+        if (!accumulator.reasons.includes(result.reason)) {
+          accumulator.reasons.push(result.reason);
+        }
       }
     }
   }

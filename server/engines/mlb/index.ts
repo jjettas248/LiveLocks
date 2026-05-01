@@ -94,10 +94,33 @@ function buildContactProfile(candidates: MLBEngineCandidate[]): MLBContactProfil
 
 function mapCandidateToPlay(c: MLBEngineCandidate, idx: number): MLBPlay | null {
   const prob = c.probability ?? c.engineProbability;
-  if (prob == null || !Number.isFinite(prob)) return null;
+  if (prob == null || !Number.isFinite(prob)) {
+    // [MLB_PRE_CHANGE_AUDIT] STEP 2 — Filtering trace at engine entry.
+    console.log(`[MLB_FILTERED_OUT] ${JSON.stringify({
+      stage: "mapCandidateToPlay",
+      reason: "invalid_prob",
+      player: c.playerName ?? `idx_${idx}`,
+      market: c.market ?? null,
+      probability: prob ?? null,
+      line: c.line ?? null,
+      edge: c.edge ?? null,
+    })}`);
+    return null;
+  }
 
   const line = c.line;
-  if (line == null || !Number.isFinite(line)) return null;
+  if (line == null || !Number.isFinite(line)) {
+    console.log(`[MLB_FILTERED_OUT] ${JSON.stringify({
+      stage: "mapCandidateToPlay",
+      reason: "invalid_line",
+      player: c.playerName ?? `idx_${idx}`,
+      market: c.market ?? null,
+      probability: prob,
+      line: line ?? null,
+      edge: c.edge ?? null,
+    })}`);
+    return null;
+  }
 
   const edge = c.edge ?? 0;
   const side = (c.recommendedSide ?? c.side ?? "OVER").toUpperCase() as "OVER" | "UNDER";
@@ -148,6 +171,31 @@ export function processMLBEngine(candidates: MLBEngineCandidate[]): MLBEngineOut
     if (play) allPlays.push(play);
     else reasonsFilteredOut.push(`Candidate ${i}: invalid data (missing line/prob)`);
   }
+
+  // [MLB_PRE_CHANGE_AUDIT] STEP 1 — Engine candidate output trace.
+  // Emits the raw count of mapped candidates and a 3-row sample so we can
+  // see whether the engine is producing candidates at all (vs. being filtered
+  // downstream) and whether feature data (BvP / weather / handedness) is
+  // present on the candidate at engine entry.
+  console.log(`[MLB_ENGINE_OUTPUT] ${JSON.stringify({
+    totalCandidates: allPlays.length,
+    totalEvaluated,
+    invalidDropped: totalEvaluated - allPlays.length,
+    sample: allPlays.slice(0, 3).map(p => ({
+      player: p.playerName,
+      market: p.market,
+      projection: p.projection,
+      probability: Math.round(p.probability * 100) / 100,
+      edge: Math.round(p.edge * 100) / 100,
+      line: p.line,
+      side: p.recommendedSide,
+      hasBvp: !!(p as any).bvp,
+      hasWeather: !!(p as any).weather,
+      hasHandedness: !!(p as any).handedness,
+      batterArchetype: p.diagnostics?.archetype ?? null,
+      pitcherArchetype: p.diagnostics?.pitcherArchetype ?? null,
+    })),
+  })}`);
 
   const fallbackAcc = { filtered: 0, reasons: [] as string[] };
   const fallbackPlays = filterMLBSignals(allPlays, MLB_FALLBACK_RULES, fallbackAcc);
@@ -200,6 +248,30 @@ export function processMLBEngine(candidates: MLBEngineCandidate[]): MLBEngineOut
     contactThresholdUsed: mode === "strict" ? "strong" : "developing",
     dataFreshness: Date.now(),
   };
+
+  // [MLB_PRE_CHANGE_AUDIT] STEP 3 — Surfaced signals trace.
+  // Emits the final list returned to consumers (orchestrator + routes).
+  console.log(`[MLB_SURFACED_SIGNALS] ${JSON.stringify({
+    count: finalPlays.length,
+    mode,
+    fallbackTriggered,
+    confidence: overallConfidence,
+    players: finalPlays.map(p => p.playerName),
+    markets: finalPlays.map(p => p.market),
+  })}`);
+
+  // [MLB_PRE_CHANGE_AUDIT] STEP 4 — Empty-state warning at engine layer.
+  if (finalPlays.length === 0) {
+    console.warn(`[MLB_EMPTY_STATE] ${JSON.stringify({
+      layer: "engine",
+      candidateCount: allPlays.length,
+      totalEvaluated,
+      totalFiltered: diagnostics.totalFiltered,
+      fallbackTriggered,
+      reasons: reasonsFilteredOut.slice(0, 10),
+      message: "NO_SIGNALS_AFTER_FILTERING",
+    })}`);
+  }
 
   return {
     plays: finalPlays,
