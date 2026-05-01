@@ -1461,6 +1461,43 @@ export class DatabaseStorage implements IStorage {
       seasonPhaseResolvedFrom: req.gameDate ? "gameDate" : "systemDate",
     };
 
+    // ── Unification: Playoff Rotation Truth Layer evidence ───────────────
+    // Surface per-player role evidence so the halftime route (and any other
+    // downstream consumer) can make role-aware decisions without re-fetching
+    // the profile. The bucket below is the canonical role label that the
+    // route's degraded-line tier-reduction uses to decide whether to demote
+    // a play, half-demote it, or leave it intact.
+    const _profCert = playoffRotationProfile?.playoffRoleCertainty ?? null;
+    const _profRank = playoffRotationProfile?.rotationRankEstimate ?? null;
+    const _profCloseTrust = playoffRotationProfile?.closeGameTrustScore ?? null;
+    let playoffRoleBucket: "STARTER" | "CORE_ROTATION" | "FRINGE" | "NONE" = "NONE";
+    // STARTER and CORE_ROTATION require REAL playoff logs. A
+    // regular_season_fallback profile is degraded evidence (Game 1 / sparse)
+    // and must not unlock the no-demotion / half-demotion paths in the
+    // halftime route — otherwise we'd over-trust stale lines for players
+    // whose playoff role is still unknown. Such cases stay FRINGE so the
+    // route applies the full degraded-line demotion ladder.
+    if (
+      playoffRotationProfile &&
+      playoffRotationProfile.dataSource === "playoffs"
+    ) {
+      const cert = _profCert ?? 0;
+      const rank = _profRank ?? 99;
+      const closeTrust = _profCloseTrust ?? 0;
+      if (cert >= 0.65 && rank <= 5 && closeTrust >= 0.55) {
+        playoffRoleBucket = "STARTER";
+      } else if (cert >= 0.45 && rank <= 8) {
+        playoffRoleBucket = "CORE_ROTATION";
+      } else {
+        playoffRoleBucket = "FRINGE";
+      }
+    } else if (
+      playoffRotationProfile &&
+      playoffRotationProfile.dataSource === "regular_season_fallback"
+    ) {
+      playoffRoleBucket = "FRINGE";
+    }
+
     const engineDiagnostics = {
       archetype,
       fragilityScore: Math.round(fragilityScore * 1000) / 1000,
@@ -1492,6 +1529,14 @@ export class DatabaseStorage implements IStorage {
       playoffDataFallbackUsed,
       playoffRotationFallbackUsed,
       playoffRotationDataSource: playoffRotationProfile?.dataSource ?? null,
+      // Per-player playoff role evidence (Truth Layer unification with 2H alerts)
+      playoffRoleBucket,
+      playoffRoleCertainty: _profCert,
+      closeGameTrustScore: _profCloseTrust,
+      rotationRankEstimate: _profRank,
+      playoffMinutesVariance: playoffRotationProfile?.playoffMinutesVariance ?? null,
+      coachShortBenchIndex: playoffRotationProfile?.coachShortBenchIndex ?? null,
+      coachStarRideIndex: playoffRotationProfile?.coachStarRideIndex ?? null,
       defenseMatchupResolved: !!nbaDefenseMatchup,
       playerUsageResolved: !!nbaPlayerUsage,
       // Surface playoff role-truth gate flags so downstream callers (e.g. the

@@ -5981,6 +5981,16 @@ export async function registerRoutes(
                   liveFta: htLiveFta,
                   liveFg3m: htLiveFg3m,
                   liveFg3a: htLiveFg3a,
+                  // Unification with NBA Playoff Rotation Truth Layer:
+                  // Pass gameId so getPlayoffRotationProfile() can use it for
+                  // provenance, and gameDate (ET-local slate date) so
+                  // seasonPhase resolves deterministically — not from raw
+                  // UTC system clock, which can flip the slate date during
+                  // late-night ET halftime windows. Without these the
+                  // playoff rotation profile fetch path can be skipped or
+                  // mis-bucketed and the engine falls back to season averages.
+                  gameId: game.gameId,
+                  gameDate: todayET(),
                 });
 
                 // SIGNAL EVALUATION CONTRACT — evaluation order is strict, do not reorder:
@@ -6017,20 +6027,63 @@ export async function registerRoutes(
                   continue;
                 }
 
-                // Confidence tier reduction for degraded lines:
-                // ELITE (edge>=20) → STRONG (edge 15-19), STRONG → VALUE (edge 10-14), VALUE → volatile pool
-                // This prevents a stale line from appearing as a high-confidence signal.
+                // Confidence tier reduction for degraded lines — UNIFIED with
+                // the NBA Playoff Rotation Truth Layer. The flat "subtract 5"
+                // demotion is now role-aware:
+                //   STARTER       → no demotion (the player's 2H minutes
+                //                   projection is well-anchored by playoff
+                //                   evidence, so a stale book line is a
+                //                   weaker signal than the role evidence).
+                //   CORE_ROTATION → half demotion (-2) and never volatile;
+                //                   role is solid but not bullet-proof.
+                //   FRINGE / NONE → original behavior: -5 across the board,
+                //                   VALUE-tier falls into the volatile pool.
+                // Buckets are computed in storage.ts (engineDiagnostics.playoffRoleBucket).
                 let isVolatile = false;
+                const _eng: any = (result as any).engineDiagnostics ?? {};
+                const playoffRoleBucket: "STARTER" | "CORE_ROTATION" | "FRINGE" | "NONE" =
+                  _eng.playoffRoleBucket ?? "NONE";
+                const _edgeBefore = edge;
                 if (lineIsDegraded) {
-                  if (edge >= 20) {
-                    edge = Math.min(edge - 5, 19); // ELITE → STRONG
-                  } else if (edge >= 15) {
-                    edge = Math.min(edge - 5, 14); // STRONG → VALUE
+                  if (playoffRoleBucket === "STARTER") {
+                    // No demotion — keep the engine's conviction intact.
+                  } else if (playoffRoleBucket === "CORE_ROTATION") {
+                    // Half demotion (-2) but clamp to the tier FLOOR so an
+                    // ELITE play stays ELITE, a STRONG play stays STRONG,
+                    // and a VALUE play stays VALUE. The role evidence is
+                    // strong enough that a stale book line shouldn't drop
+                    // a tier — only erode within-tier conviction.
+                    if (edge >= 20) {
+                      edge = Math.max(edge - 2, 20); // floor at ELITE
+                    } else if (edge >= 15) {
+                      edge = Math.max(edge - 2, 15); // floor at STRONG
+                    } else {
+                      edge = Math.max(edge - 2, 10); // floor at VALUE; never volatile
+                    }
                   } else {
-                    // VALUE tier with degraded line — move to volatile pool for low-supply mode
-                    console.log(`[QUICK VIEW DEBUG][ODDS FALLBACK] Degraded VALUE-tier play moved to volatile pool for ${playerName} (${statType})`);
-                    isVolatile = true;
+                    // FRINGE / NONE — original demotion ladder.
+                    if (edge >= 20) {
+                      edge = Math.min(edge - 5, 19); // ELITE → STRONG
+                    } else if (edge >= 15) {
+                      edge = Math.min(edge - 5, 14); // STRONG → VALUE
+                    } else {
+                      // VALUE tier with degraded line — move to volatile pool for low-supply mode
+                      console.log(`[QUICK VIEW DEBUG][ODDS FALLBACK] Degraded VALUE-tier play moved to volatile pool for ${playerName} (${statType})`);
+                      isVolatile = true;
+                    }
                   }
+                  console.log("[NBA_HT_PLAYOFF_UNIFY]", JSON.stringify({
+                    player: playerName,
+                    statType,
+                    bucket: playoffRoleBucket,
+                    roleCert: _eng.playoffRoleCertainty ?? null,
+                    rotationRank: _eng.rotationRankEstimate ?? null,
+                    closeTrust: _eng.closeGameTrustScore ?? null,
+                    edgeBefore: Math.round(_edgeBefore * 10) / 10,
+                    edgeAfter: Math.round(edge * 10) / 10,
+                    isVolatile,
+                    rotationDataSource: _eng.playoffRotationDataSource ?? null,
+                  }));
                 }
 
                 // NO_SIGNAL guard: skip plays where engine has no directional conviction
