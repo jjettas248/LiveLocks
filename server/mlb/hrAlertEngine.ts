@@ -41,6 +41,46 @@ export function isStageAdvance(prev: HrRadarStage | null | undefined, next: HrRa
 }
 
 /**
+ * Phase 5 — Unified canonical stage computation.
+ *
+ * Single source of truth that merges the dynamic state machine and the PATH
+ * evaluator into ONE canonical stage. Replaces the orchestrator-level
+ * `bridgeCanonicalStage` band-aid so the engine's snapshot already carries
+ * the user-facing stage and downstream code can stop running parallel logic.
+ *
+ * Rules:
+ *   - CLOSED is terminal. A PATH PEAK arriving after game-final / post-hit
+ *     closure must NEVER reopen the alert.
+ *   - PATH PEAK is treated as `attack` rank; PATH BUILDING as `building`.
+ *   - We take the MAX rank of (dynamic stage, path stage). Cooling and
+ *     building are peers — a PATH BUILDING does not override an active
+ *     cool-off; only a stronger PATH PEAK can outrank cooling.
+ *
+ * Note: pathSignalState is the PATH evaluator's `signalState` field. Engine
+ * callers should always pass `alertResult.signalState` from the same alert
+ * result that produced the dynamic state.
+ */
+const CANONICAL_STAGE_RANK: Record<HrRadarStage, number> = {
+  closed: -1, watch: 0, cooling: 1, building: 1, attack: 2,
+};
+export function computeUnifiedCanonicalStage(
+  dynamicStage: HrRadarStage,
+  pathSignalState: string | null | undefined,
+): HrRadarStage {
+  // Terminal-state guard — closed must not be reopened by PATH evaluator.
+  if (dynamicStage === "closed") return "closed";
+  const pathStage: HrRadarStage | null =
+    pathSignalState === "PEAK" ? "attack"
+    : pathSignalState === "BUILDING" ? "building"
+    : null;
+  if (!pathStage) return dynamicStage;
+  // Strict greater-than so peers (cooling vs building) do not override.
+  return CANONICAL_STAGE_RANK[pathStage] > CANONICAL_STAGE_RANK[dynamicStage]
+    ? pathStage
+    : dynamicStage;
+}
+
+/**
  * Canonical HR Radar score contract.
  *
  * These three score domains are NEVER interchangeable:
@@ -95,6 +135,13 @@ export interface HRAlertSnapshot {
   peakState: DynamicHRState;
   peakAt: number;
   alertResult: HRAlertResult;
+  /**
+   * Phase 5 — Unified canonical stage. The single user-facing stage produced
+   * by merging the dynamic state machine and the PATH evaluator's signalState
+   * via `computeUnifiedCanonicalStage`. Downstream code (orchestrator,
+   * storage) MUST consume this directly instead of recomputing the bridge.
+   */
+  canonicalStage: HrRadarStage;
 }
 
 interface BatterHRState {
@@ -128,8 +175,22 @@ function stateKey(gameId: string, playerId: string): string {
   return `${gameId}_${playerId}`;
 }
 
-const BET_NOW_THRESHOLD = 0.14;
-const PREPARE_THRESHOLD = 0.08;
+// Phase 5 (Goldmaster unification, 2026-05-01): the dynamic state machine
+// previously sat at WATCH for batters whom the PATH evaluator was actively
+// calling PEAK because the calibrated probability hadn't crossed 0.14. The
+// orchestrator-level `bridgeCanonicalStage` band-aid promoted those rows on
+// the canonical ladder but the dynamic state itself stayed cold, which caused
+// the user-facing tier to silently revert on the next tick when PATH cooled.
+//
+// We now run ONE unified scoring pipeline (see `computeUnifiedCanonicalStage`
+// below):
+//   1. Lower thresholds — calibrated 0.10 = BET_NOW, 0.06 = PREPARE — so the
+//      probability rail agrees with PATH more often (catches more HRs at the
+//      cost of some false positives, per product directive).
+//   2. PATH PEAK / BUILDING is folded into the engine result as a hard
+//      override on the canonical stage (terminal CLOSED still wins).
+const BET_NOW_THRESHOLD = 0.10;
+const PREPARE_THRESHOLD = 0.06;
 const WATCH_THRESHOLD = 0.05;
 
 const DECAY_HALF_LIFE_MINUTES = 12;
@@ -400,6 +461,23 @@ export function recomputeHrAlertState(
 
   const buildScore = (alertResult.diagnostics as any)?.hrBuildScore ?? null;
 
+  // Phase 5 — Unified canonical stage. Merge the dynamic state machine and
+  // the PATH evaluator's signalState into ONE stage at the engine boundary
+  // so every downstream consumer sees the same value.
+  const dynamicStage = mapDynamicStateToStage(newState);
+  const canonicalStage = computeUnifiedCanonicalStage(dynamicStage, alertResult.signalState);
+
+  // Observability: emit when the unified stage promotes above the dynamic
+  // stage so we can audit how often PATH override is firing.
+  if (canonicalStage !== dynamicStage) {
+    console.log(
+      `[HR_UNIFIED_STAGE] ${input.playerName} game=${input.gameId} ` +
+      `dynamic=${dynamicStage} pathSignal=${alertResult.signalState ?? "null"} ` +
+      `canonical=${canonicalStage} calProb=${effectiveCalibrated.toFixed(3)} ` +
+      `path=${alertResult.diagnostics?.alertPath ?? "n/a"}`
+    );
+  }
+
   const snapshot: HRAlertSnapshot = {
     isInitialized: true,
     currentState: newState,
@@ -427,6 +505,7 @@ export function recomputeHrAlertState(
     peakState: prev.peakState,
     peakAt: prev.peakAt,
     alertResult,
+    canonicalStage,
   };
 
   prev.lastSnapshot = snapshot;
@@ -474,6 +553,7 @@ export function getHrAlertState(gameId: string, playerId: string): HRAlertSnapsh
       peakState: prev.peakState,
       peakAt: prev.peakAt,
       alertResult: null as any,
+      canonicalStage: mapDynamicStateToStage(prev.currentState),
     };
   }
   // Reconstruct from last alert result if snapshot lost (defensive)
