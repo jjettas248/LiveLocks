@@ -459,3 +459,51 @@ export function computeFullModelProbability(
     purityTag: raw.purityTag,
   };
 }
+
+
+// ============================================================================
+// MLB Canonical Probability v1 — persistence & API guardrail
+// ----------------------------------------------------------------------------
+// Validates that a qualified MLB signal carries a usable engine probability
+// (recommended-side calibrated). Rejects null/undefined/NaN/non-finite values
+// and values outside [0, 100]. Callers should skip persistence and emit
+// [MLB_PERSIST_REJECT] when this returns null. signalScore is NEVER substituted.
+// ============================================================================
+export function validateMlbEngineProbability(qs: {
+  engineProbability?: number | null;
+  signalScore?: number | null;
+  player?: string | null;
+  playerName?: string | null;
+  market?: string | null;
+  side?: string | null;
+  recommendedSide?: string | null;
+}): number | null {
+  const p = qs.engineProbability;
+  if (p === null || p === undefined) return null;
+  if (typeof p !== "number" || !Number.isFinite(p)) return null;
+  if (p < 0 || p > 100) return null;
+  return p;
+}
+
+export function logMlbPersistReject(
+  reason: "missing_engine_probability" | "invalid_probability_at_persist" | "out_of_range",
+  qs: {
+    player?: string | null;
+    playerName?: string | null;
+    market?: string | null;
+    side?: string | null;
+    recommendedSide?: string | null;
+    engineProbability?: number | null;
+    signalScore?: number | null;
+  }
+): void {
+  console.warn("[MLB_PERSIST_REJECT]", {
+    reason,
+    player: qs.player ?? qs.playerName ?? null,
+    market: qs.market ?? null,
+    recommendedSide: qs.recommendedSide ?? qs.side ?? null,
+    engineProbability: qs.engineProbability ?? null,
+    signalScore: qs.signalScore ?? null,
+  });
+}
+

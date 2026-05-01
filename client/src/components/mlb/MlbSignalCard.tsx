@@ -270,6 +270,9 @@ export function MlbSignalCard({
             title={`Engine win probability — model's estimated chance ${sig.recommendedSide} ${sig.bookLine ?? ""} ${marketLabel} hits. Higher = stronger conviction.`}
             data-testid={`engine-prob-${sig.playerId}-${sig.market}`}
           >
+            {/* [MLB Canonical Probability v1] sig.enginePct is the recommended-
+                side calibrated probability emitted by the MLB engine. The UI
+                does no math on it — pure renderer. */}
             <span className="text-xl font-black tabular-nums leading-none" style={{ color: side.accent }}>
               {normalizePct(sig.enginePct).toFixed(0)}%
             </span>

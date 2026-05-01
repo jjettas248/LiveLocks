@@ -42,6 +42,7 @@ import { syncMinutesProjections } from "./services/minutesProjectionService";
 import { calculateMLBPropEdge, canShowSignal, hasRealOdds } from "./mlb/markets";
 import { normalizeMlbMarketKey } from "./mlb/normalizeMarketKey";
 import { getMarketParkFactor } from "./mlb/dataSources";
+import { validateMlbEngineProbability, logMlbPersistReject } from "./mlb/probabilityEngine";
 import {
   recordMLBDiagnostic,
   getMLBDiagnosticSummary,
@@ -1238,6 +1239,14 @@ export async function registerRoutes(
         const bestRawOutput = bestQualified
           ? cacheEntry?.outputs?.find((o) => o.playerId === bestQualified.playerId && o.market === bestQualified.market)
           : null;
+        // [MLB Canonical Probability v1] No signalScore fallback. If the engine
+        // probability is missing/invalid, surface null on the wire and log the
+        // rejection so analytics consumers do not silently get a confidence value
+        // masquerading as probability.
+        const bestMarketProb = bestQualified ? validateMlbEngineProbability(bestQualified) : null;
+        if (bestQualified && bestMarketProb === null) {
+          logMlbPersistReject("missing_engine_probability", bestQualified);
+        }
         const bestMarket = bestQualified ? {
           line: bestQualified.line,
           odds: bestRawOutput && (bestRawOutput.overOdds !== null || bestRawOutput.underOdds !== null)
@@ -1245,7 +1254,8 @@ export async function registerRoutes(
             : null,
           projection: bestQualified.projection,
           edge: bestRawOutput?.edge ?? null,
-          probability: bestQualified.engineProbability ?? bestQualified.signalScore,
+          probability: bestMarketProb,
+          probabilitySemantics: "recommended_side_calibrated" as const,
           oddsUpdatedAt: bestRawOutput ? new Date(bestRawOutput.oddsUpdatedAt).toISOString() : null,
           projectionUpdatedAt: bestRawOutput ? new Date(bestRawOutput.projectionUpdatedAt).toISOString() : null,
         } : null;
@@ -1711,10 +1721,15 @@ export async function registerRoutes(
 
     const apiSignals = engineAll
       .map((qs) => {
-        const hitProb = qs.side === "OVER"
-          ? (qs.engineProbability ?? qs.signalScore)
-          : (qs.engineProbability ?? qs.signalScore);
-        const enginePct = Math.round((hitProb ?? 0) * 10) / 10;
+        // [MLB Canonical Probability v1] enginePct is recommended-side calibrated
+        // probability — never a signalScore fallback. Drop the row if the engine
+        // probability is missing/invalid; downstream filtering handles removal.
+        const validProb = validateMlbEngineProbability(qs as any);
+        if (validProb === null) {
+          logMlbPersistReject("missing_engine_probability", qs as any);
+          return null;
+        }
+        const enginePct = Math.round(validProb * 10) / 10;
 
         let tier: "green" | "yellow" | "teal" | "red";
         if (qs.side === "UNDER" && enginePct >= 85) tier = "red";
@@ -1832,6 +1847,7 @@ export async function registerRoutes(
           mode: qs.mode ?? null,
         };
       })
+      .filter((s): s is NonNullable<typeof s> => s !== null)
       .sort((a, b) => {
         const tierDiff = (CONFIDENCE_RANK[b.confidenceTier ?? "NO_SIGNAL"] ?? 0) - (CONFIDENCE_RANK[a.confidenceTier ?? "NO_SIGNAL"] ?? 0);
         if (tierDiff !== 0) return tierDiff;
@@ -1839,30 +1855,43 @@ export async function registerRoutes(
       });
 
     // MLB Engine Isolation: run through sport-specific engine wrapper (authoritative gate)
-    const mlbEngineResult = processMLBEngine(engineAll.map((qs: any) => ({
-      playerId: qs.playerId,
-      playerName: qs.playerName,
-      team: qs.team ?? null,
-      market: qs.market,
-      line: qs.line,
-      projection: qs.projection,
-      probability: qs.engineProbability ?? qs.signalScore,
-      edge: qs.edge ?? 0,
-      recommendedSide: qs.side,
-      sportsbook: qs.sportsbook,
-      derivedLine: qs.derivedLine ?? false,
-      gameId: qs.gameId,
-      signalScore: qs.signalScore,
-      confidenceTier: qs.confidenceTier,
-      currentStats: qs.currentStats,
-      lastABContact: qs.lastABContact,
-      batterArchetype: qs.batterArchetype,
-      pitcherArchetype: qs.pitcherArchetype,
-      thesis: qs.thesis,
-      isFlagship: qs.isFlagship,
-      safetyCeilingApplied: qs.safetyCeilingApplied,
-      dataQuality: qs.dataQuality,
-    })));
+    // [MLB Canonical Probability v1] Drop signals with missing/invalid engine
+    // probability before they enter the wrapper. Never substitute signalScore.
+    const mlbEngineResult = processMLBEngine(
+      engineAll
+        .map((qs: any) => {
+          const validProb = validateMlbEngineProbability(qs);
+          if (validProb === null) {
+            logMlbPersistReject("missing_engine_probability", qs);
+            return null;
+          }
+          return {
+            playerId: qs.playerId,
+            playerName: qs.playerName,
+            team: qs.team ?? null,
+            market: qs.market,
+            line: qs.line,
+            projection: qs.projection,
+            probability: validProb,
+            edge: qs.edge ?? 0,
+            recommendedSide: qs.side,
+            sportsbook: qs.sportsbook,
+            derivedLine: qs.derivedLine ?? false,
+            gameId: qs.gameId,
+            signalScore: qs.signalScore,
+            confidenceTier: qs.confidenceTier,
+            currentStats: qs.currentStats,
+            lastABContact: qs.lastABContact,
+            batterArchetype: qs.batterArchetype,
+            pitcherArchetype: qs.pitcherArchetype,
+            thesis: qs.thesis,
+            isFlagship: qs.isFlagship,
+            safetyCeilingApplied: qs.safetyCeilingApplied,
+            dataQuality: qs.dataQuality,
+          };
+        })
+        .filter((p): p is NonNullable<typeof p> => p !== null)
+    );
     // Freshness Integrity Fix #4 — normalize both sides of the validation
     // key so the engine's "home_runs" plays don't get filtered out by an
     // upstream "hr" alias on apiSignals (and vice-versa).
@@ -1926,6 +1955,13 @@ export async function registerRoutes(
         const normalizedMarketKey = (qs.market as string) === "hr" ? "home_runs" : qs.market;
         if (!validIds.has(`${qs.playerId}|${normalizedMarketKey}`)) continue;
         if (!Number.isFinite(qs.line) || qs.line <= 0) continue;
+        // [MLB Canonical Probability v1] Reject persistence rather than fall back
+        // to signalScore. The orchestrator's primary persistence path will retry.
+        const validProb = validateMlbEngineProbability(qs);
+        if (validProb === null) {
+          logMlbPersistReject("missing_engine_probability", qs);
+          continue;
+        }
         const sbk = qs.sportsbook && String(qs.sportsbook).trim() !== "" ? qs.sportsbook : "odds_api";
         trackPlay({
           gameId,
@@ -1937,7 +1973,7 @@ export async function registerRoutes(
           direction: dir as "over" | "under",
           line: qs.line,
           projection: qs.projection,
-          probability: qs.engineProbability ?? qs.signalScore,
+          probability: validProb,
           edge: qs.evPct ?? 0,
           sportsbook: sbk,
           derivedLine: false,
@@ -8032,8 +8068,21 @@ export function registerPerformanceRoutes(app: Express): void {
       const nbaCount = plays.filter(p => p.sport === "nba").length;
       const mlbCount = plays.filter(p => p.sport === "mlb").length;
       console.log(`[performance] total=${plays.length} overs=${oversCount} unders=${undersCount} nba=${nbaCount} mlb=${mlbCount} buckets=${buckets.map(b => b.total).join(",")}`);
+      // [MLB Canonical Probability v1] Buckets above key off persisted_plays.prob,
+      // which is the canonical recommended-side calibrated probability for MLB.
+      // No signalScore, edge, dominant probability, or display confidence is
+      // ever used to bucket MLB plays.
+      if (mlbCount > 0) {
+        console.log("[MLB_ANALYTICS_PROBABILITY_SEMANTICS]", {
+          source: "persisted_plays",
+          probabilitySemantics: "recommended_side_calibrated",
+          route: "/api/performance",
+          mlbPlays: mlbCount,
+        });
+      }
 
       return res.json({
+        probabilitySemantics: "recommended_side_calibrated",
         plays: plays.map(p => ({
           id: p.id,
           sport: p.sport,
@@ -8629,10 +8678,20 @@ export function registerAnalyticsRoutes(app: Express): void {
         { label: "75-79", min: 75, max: 79.99 },
         { label: "80+", min: 80, max: 100 },
       ];
+      // [MLB Canonical Probability v1] For MLB, persisted_plays.prob IS the
+      // recommended-side calibrated probability — i.e. the operator's confidence
+      // in the recommended side. Bucketing by `prob` directly is the canonical
+      // path; the historical `100 - prob` flip for UNDER plays would re-apply
+      // dominant-probability semantics (forbidden by spec). NBA/NCAAB still
+      // persist dominant probability, so they keep the legacy transform.
+      const sportLower = (sport || "nba").toLowerCase();
+      const isMlbView = sportLower === "mlb";
       const buckets = bucketRanges.map(({ label, min, max }) => {
         const inBucket = settled.filter(p => {
           const prob = Number(p.prob);
-          const conf = p.direction === "over" ? prob : 100 - prob;
+          const conf = isMlbView
+            ? prob
+            : (p.direction === "over" ? prob : 100 - prob);
           return conf >= min && conf <= max;
         });
         const wins = inBucket.filter(p => p.result === "hit").length;
@@ -8642,7 +8701,19 @@ export function registerAnalyticsRoutes(app: Express): void {
         const winRate = total > 0 ? Math.round((wins / total) * 1000) / 10 : 0;
         return { label, total, wins, losses, pushes, winRate };
       });
-      return res.json({ buckets, filters: { sport: sport || "nba", direction: direction || "all", marketType: marketType || "all", archetype: archFilter || "all", flagship: flagship || "all" } });
+      if (isMlbView) {
+        console.log("[MLB_ANALYTICS_PROBABILITY_SEMANTICS]", {
+          source: "persisted_plays",
+          probabilitySemantics: "recommended_side_calibrated",
+          route: "/api/analytics/confidence-buckets",
+          mlbPlays: settled.length,
+        });
+      }
+      return res.json({
+        buckets,
+        probabilitySemantics: isMlbView ? "recommended_side_calibrated" : "dominant_over_oriented",
+        filters: { sport: sport || "nba", direction: direction || "all", marketType: marketType || "all", archetype: archFilter || "all", flagship: flagship || "all" },
+      });
     } catch (e: any) {
       return res.status(500).json({ error: "Confidence buckets failed", details: e.message });
     }

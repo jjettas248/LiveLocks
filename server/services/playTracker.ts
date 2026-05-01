@@ -68,6 +68,34 @@ export async function trackPlay(
   signal: TrackableSignal,
   storage: IStorage
 ): Promise<{ id: string; isDuplicate: boolean }> {
+  // [MLB Canonical Probability v1] MLB-specific persistence guard. Recommended-
+  // side calibrated probability is the canonical wire & DB value. Reject if
+  // missing/NaN/non-finite/out-of-range. signalScore is NEVER substituted.
+  if (signal.sport === "mlb") {
+    const p = signal.probability;
+    const probValid = typeof p === "number" && Number.isFinite(p) && p >= 0 && p <= 100;
+    if (!probValid) {
+      console.warn("[MLB_PERSIST_REJECT]", {
+        reason: "invalid_probability_at_persist",
+        player: signal.playerName,
+        market: signal.market,
+        recommendedSide: signal.direction,
+        probability: signal.probability,
+        signalScore: signal.signalScore ?? null,
+      });
+      return { id: "", isDuplicate: true };
+    }
+    console.log("[MLB_PERSIST_CHECK]", {
+      player: signal.playerName,
+      market: signal.market,
+      recommendedSide: signal.direction,
+      probability: signal.probability,
+      engineProb: signal.probability,
+      signalScore: signal.signalScore ?? null,
+      probabilitySemantics: "recommended_side_calibrated",
+    });
+  }
+
   // Phase 6/7 — single source of truth for "is this signal persistable?"
   const validation = validateLiveSignalForDisplay(signal);
   console.log("[PERSIST_CHECK]", JSON.stringify({

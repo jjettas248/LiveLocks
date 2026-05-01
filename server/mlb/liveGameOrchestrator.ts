@@ -1697,6 +1697,27 @@ export class LiveGameOrchestrator {
       if (!signalTags.includes("HIGH_PROB" as any)) (signalTags as string[]).push("HIGH_PROB");
     }
 
+    // [MLB Canonical Probability v1] Recommended-side calibrated probability is
+    // the single source of truth across Engine → API → DB → Analytics → UI.
+    // For OVER recommendations we expose calibratedProbabilityOver; for UNDER
+    // we expose calibratedProbabilityUnder. The previous dominant value is
+    // preserved on engineProbabilityDominant for diagnostics only — never used
+    // for persistence, analytics bucketing, or UI rendering.
+    const sidedCalibrated =
+      output.recommendedSide === "OVER"
+        ? output.calibratedProbabilityOver
+        : output.calibratedProbabilityUnder;
+    const previousDominantProbability = output.calibratedProbability;
+    console.log("[MLB_CANONICAL_PROBABILITY]", {
+      player: output.playerName,
+      market: output.market,
+      recommendedSide: output.recommendedSide,
+      calibratedProbabilityOver: output.calibratedProbabilityOver,
+      calibratedProbabilityUnder: output.calibratedProbabilityUnder,
+      previousDominantProbability,
+      canonicalProbability: sidedCalibrated,
+    });
+
     const signal: MLBQualifiedSignal = {
       id: `${gameId}_${output.playerId}_${output.market}`,
       gameId,
@@ -1708,7 +1729,11 @@ export class LiveGameOrchestrator {
       sportsbook: output.sportsbook,
       line: output.bookLine,
       impliedProbability: null,
-      engineProbability: output.calibratedProbability,
+      engineProbability: sidedCalibrated,
+      engineProbabilityDominant: previousDominantProbability,
+      calibratedProbabilityOver: output.calibratedProbabilityOver,
+      calibratedProbabilityUnder: output.calibratedProbabilityUnder,
+      probabilitySemantics: "recommended_side_calibrated",
       projection: adjustedProjection,
       evPct: output.evPct,
       confidenceTier: scoreBreakdown.confidenceTier,
@@ -1725,7 +1750,7 @@ export class LiveGameOrchestrator {
       riskFlags: output.computedRiskFlags ?? [],
       drivers: {
         edge: output.edge,
-        probability: output.calibratedProbability,
+        probability: sidedCalibrated,
         projection: adjustedProjection,
         formScore: output.formScore,
         contextScore: output.contextScore,
@@ -1998,6 +2023,21 @@ export class LiveGameOrchestrator {
       watchAdjProjection = output.projection + output.projection * sigBoost;
     }
 
+    // [MLB Canonical Probability v1] Same recommended-side rule applies to
+    // watchlist signals — sideProbability is already computed above for the
+    // gating check; reuse it as the canonical engine probability instead of
+    // the dominant calibratedProbability.
+    console.log("[MLB_CANONICAL_PROBABILITY]", {
+      player: output.playerName,
+      market: output.market,
+      recommendedSide: effectiveSide,
+      calibratedProbabilityOver: output.calibratedProbabilityOver,
+      calibratedProbabilityUnder: output.calibratedProbabilityUnder,
+      previousDominantProbability: output.calibratedProbability,
+      canonicalProbability: sideProbability,
+      lane: "watch",
+    });
+
     const watchSignal: MLBQualifiedSignal = {
       id: `${gameId}_${output.playerId}_${output.market}`,
       gameId,
@@ -2009,7 +2049,11 @@ export class LiveGameOrchestrator {
       sportsbook: output.sportsbook,
       line: bookLine,
       impliedProbability: null,
-      engineProbability: output.calibratedProbability,
+      engineProbability: sideProbability,
+      engineProbabilityDominant: output.calibratedProbability,
+      calibratedProbabilityOver: output.calibratedProbabilityOver,
+      calibratedProbabilityUnder: output.calibratedProbabilityUnder,
+      probabilitySemantics: "recommended_side_calibrated",
       projection: watchAdjProjection,
       evPct: output.evPct,
       confidenceTier: scoreBreakdown.total >= 55 ? scoreBreakdown.confidenceTier : "WATCHLIST" as any,
@@ -2026,7 +2070,7 @@ export class LiveGameOrchestrator {
       riskFlags: output.computedRiskFlags ?? [],
       drivers: {
         edge: output.edge,
-        probability: output.calibratedProbability,
+        probability: sideProbability,
         projection: watchAdjProjection,
         formScore: output.formScore,
         contextScore: output.contextScore,

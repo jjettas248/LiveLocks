@@ -549,6 +549,10 @@ export interface MLBQualifiedSignal {
   line: number;
   impliedProbability: number | null;
   engineProbability: number;
+  engineProbabilityDominant?: number;
+  calibratedProbabilityOver?: number;
+  calibratedProbabilityUnder?: number;
+  probabilitySemantics?: "recommended_side_calibrated";
   projection: number;
   evPct: number;
   confidenceTier: SignalConfidenceTier;
