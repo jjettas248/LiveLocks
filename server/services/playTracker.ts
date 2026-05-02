@@ -96,6 +96,34 @@ export async function trackPlay(
     });
   }
 
+  // [NBA Hardening v1] NBA-specific persistence guard. Mirrors the MLB guard at
+  // the persistence boundary without changing engine math or analytics
+  // semantics. Rejects null/NaN/non-finite/<0/>100. signalScore is NEVER
+  // substituted. Non-NBA paths are unaffected.
+  if (signal.sport === "nba") {
+    const p = signal.probability;
+    const probValid = typeof p === "number" && Number.isFinite(p) && p >= 0 && p <= 100;
+    if (!probValid) {
+      console.warn("[NBA_PERSIST_REJECT]", {
+        reason: "invalid_probability_at_persist",
+        player: signal.playerName,
+        market: signal.market,
+        recommendedSide: signal.direction,
+        probability: signal.probability,
+        signalScore: signal.signalScore ?? null,
+      });
+      return { id: "", isDuplicate: true };
+    }
+    console.log("[NBA_PERSIST_CHECK]", {
+      player: signal.playerName,
+      market: signal.market,
+      recommendedSide: signal.direction,
+      probability: signal.probability,
+      engineProb: signal.probability,
+      signalScore: signal.signalScore ?? null,
+    });
+  }
+
   // Phase 6/7 — single source of truth for "is this signal persistable?"
   const validation = validateLiveSignalForDisplay(signal);
   console.log("[PERSIST_CHECK]", JSON.stringify({

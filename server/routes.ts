@@ -5211,6 +5211,25 @@ export async function registerRoutes(
         }
         const diag = (s as any).engineDiagnostics;
         const engineProjection = (s as any).expectedTotal != null ? Number((s as any).expectedTotal) : Number(s.line) + (s.edge * (s.betDirection === "over" ? 1 : -1));
+        // [NBA Hardening v1] Strict probability validation at the route boundary.
+        // Replaces the legacy `Number(s.probability ?? 0)` silent coercion.
+        // Type-check FIRST so null/""/undefined cannot coerce to 0 via Number().
+        // signalScore is NEVER substituted; invalid probability => skip + log.
+        const rawProb = s.probability;
+        const probValid = typeof rawProb === "number" && Number.isFinite(rawProb) && rawProb >= 0 && rawProb <= 100;
+        if (!probValid) {
+          console.warn("[NBA_PERSIST_REJECT]", {
+            reason: "invalid_probability_at_route",
+            player: s.playerName,
+            market: s.statType,
+            recommendedSide: dir,
+            probability: rawProb,
+            probabilityType: typeof rawProb,
+            edge: s.edge,
+          });
+          continue;
+        }
+        const probNum = rawProb;
         console.log(`[PERSIST_CHECK] sport=nba player=${s.playerName} market=${s.statType} proj=${engineProjection} line=${s.line} timing=${(s as any).timingContext ?? "live"}`);
         trackPlay({
           gameId: (s as any).gameId || gameId,
@@ -5222,7 +5241,7 @@ export async function registerRoutes(
           direction: s.betDirection as "over" | "under",
           line: Number(s.line),
           projection: engineProjection,
-          probability: Number(s.probability ?? 0),
+          probability: probNum,
           edge: s.edge != null ? Number(s.edge) : 0,
           sportsbook: "consensus",
           derivedLine: false,
