@@ -5790,11 +5790,17 @@ export async function registerRoutes(
         // Resolve Odds API event ID for this game (for live prop lines)
         let oddsEventId: string | null = null;
         const oddsPlayerCache = new Map<string, { line: number; bookKeys: string[]; isDegraded: boolean; oddsFetchedAt: number; source?: string } | null>();
-        // Phase 5: book lines can be temporarily pulled/reposted around halftime.
-        // Soft-stale window (5 min) accepts the line but flags it as degraded so
-        // the engine downgrades confidence. Hard-stale (10 min) hard-rejects.
-        const HT_STALE_LINE_MS = 5 * 60 * 1000;
-        const HT_HARD_STALE_LINE_MS = 10 * 60 * 1000;
+        // Phase 5 (relaxed 2026-05-02): book lines can be temporarily pulled
+        // and slow-reposted around halftime. The original 5-min fresh / 10-min
+        // hard-cap pair was too tight for playoff games where books routinely
+        // suspend player props for 8-15 min through the intermission then
+        // refresh with the 2H-adjusted line. Result: every line was hard-stale
+        // rejected and the pipeline went empty for 7 days. New windows:
+        //   Fresh: <= 8 min   (accept normally)
+        //   Soft-stale: 8-25 min   (accept but flag degraded → engine demotion)
+        //   Hard-stale: > 25 min   (route hard-cap reject)
+        const HT_STALE_LINE_MS = 8 * 60 * 1000;
+        const HT_HARD_STALE_LINE_MS = 25 * 60 * 1000;
         try {
         try {
           const { resolveOddsEventId: resolveId } = await import("./oddsService");
@@ -6177,10 +6183,13 @@ export async function registerRoutes(
                 let edge = Math.abs(result.probability - 50);
 
                 // Step 3: threshold gate — plays below minimum edge are not actionable.
-                // Playoff calibration recovery: lowered from 6 → 4 so the
-                // engine strict-rules layer is the canonical actionable gate
-                // and we don't double-cut what calibration already compressed.
-                if (edge < 4) {
+                // Playoff calibration recovery: lowered 6 → 4 → 3 (2026-05-02)
+                // to align exactly with the NBA engine fallback rule
+                // (NBA_FALLBACK_RULES.minEdge = 3 in server/engines/nba/types.ts).
+                // The route should not be stricter than the engine itself —
+                // anything the engine accepts as actionable should reach the
+                // route's downstream qualification logic.
+                if (edge < 3) {
                   perGameRejectSamples.push({ player: dbPlayer.name, stat: statType, reason: `lowEdge_route_halftime_e${Math.round(edge * 10) / 10}` });
                   if (OBSERVE_NBA_HT) {
                     console.log(`[NBA_ROUTE_FILTER]`, { player: dbPlayer.name, market: statType, prob: Math.round(result.probability * 10) / 10, edge: Math.round(edge * 10) / 10, reason: "lowEdge_route_halftime" });

@@ -684,7 +684,13 @@ export async function getPlayerOdds(
   // player props around the half. Diagnostic counters drive a per-call
   // [NBA_HT_BOOKMAKER_FILTER] summary log.
   let strictDegradedFromSoftStale = false;
-  const SOFT_STALE_CAP_MS = strict ? Math.min(15 * 60 * 1000, options.maxAgeMs * 3) : 0;
+  // Soft-stale ceiling raised 15min → 25min (2026-05-02) so playoff books that
+  // suspend player props for 8-20min through the halftime intermission still
+  // surface as soft-stale (degraded) rather than hard-rejected. The route's
+  // HT_HARD_STALE_LINE_MS gate now also caps at 25min, so this aligns the two
+  // layers. Soft-stale lines still trigger role-aware confidence demotion
+  // downstream, so the trust loss is preserved.
+  const SOFT_STALE_CAP_MS = strict ? Math.min(25 * 60 * 1000, options.maxAgeMs * 3) : 0;
   const filterCounters = {
     bookmakersTotal: bookmakers.length,
     notInAllowList: 0,
