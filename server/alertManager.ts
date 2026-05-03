@@ -105,10 +105,32 @@ export async function checkAndSendAlerts(
     ? plays.filter((p) => p.probability != null && Math.abs(p.probability - 50) >= 35)
     : [];
 
+  // 2H "game started" push must only fire when there is an ACTUAL qualifying
+  // halftime signal for that game — not for any NBA play with a gameId. Bug
+  // report: users were getting "2H started. Check your slate." pushes for
+  // games whose only plays were low-edge value tips. Gate on:
+  //   (1) the play is a halftime-context play (timingContext === "halftime"),
+  //   (2) it clears the same edge bar as the per-play push (|prob-50| >= 25).
+  // Also dedupe gameIds so we don't iterate the same game N times.
+  const qualifying2HPlays = sport === "nba"
+    ? plays.filter((p) => {
+        const isHalftime =
+          p.timingContext === "halftime" ||
+          p.timing === "halftime" ||
+          p.bettingWindow === "HALFTIME";
+        const edgeOk =
+          p.probability != null && Math.abs(p.probability - 50) >= 25;
+        return isHalftime && edgeOk;
+      })
+    : [];
   const newH2GameIds = sport === "nba"
-    ? plays
-        .map((p) => p.gameId)
-        .filter((id) => id && !alerted2HGames.has(id))
+    ? Array.from(
+        new Set(
+          qualifying2HPlays
+            .map((p) => p.gameId)
+            .filter((id: any) => id && !alerted2HGames.has(id))
+        )
+      )
     : [];
 
   // NCAAB-only: halftime over-2H game alert when conviction ≥ 85%.
@@ -205,7 +227,7 @@ export async function checkAndSendAlerts(
       continue;
     }
 
-    const play = plays.find((p) => p.gameId === gameId);
+    const play = qualifying2HPlays.find((p) => p.gameId === gameId);
     if (!play) continue;
 
     const gameKey  = `2h|${gameId}`;
