@@ -48,6 +48,27 @@ interface NonHrStateEntry {
 
 const NON_HR_STATES = new Map<string, NonHrStateEntry>();
 
+// Daily slate-reset helper. Drops every entry whose gameId is not in the
+// supplied active set. Use this after the slate has rolled to evict residue
+// from games whose `final` transition was missed (server restart, API hiccup).
+export function clearStaleNonHrStates(activeGameIds: ReadonlySet<string>): number {
+  let removed = 0;
+  for (const [key, entry] of Array.from(NON_HR_STATES.entries())) {
+    if (!activeGameIds.has(entry.gameId)) {
+      NON_HR_STATES.delete(key);
+      removed++;
+    }
+  }
+  if (removed > 0) {
+    console.log(`[MLB_SLATE_RESET] nonHrSignalState pruned=${removed} kept=${NON_HR_STATES.size}`);
+  }
+  return removed;
+}
+
+export function getNonHrSignalStateSize(): number {
+  return NON_HR_STATES.size;
+}
+
 const ACTIVE_THRESHOLD = 55;   // matches existing `watchlistThreshold` in orchestrator
 const COOLING_DROP = 8;        // points below peak that triggers COOLING
 

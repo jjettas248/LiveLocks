@@ -8949,6 +8949,20 @@ export function registerAnalyticsRoutes(app: Express): void {
     }
   });
 
+  // Manual backstop for the daily 04:30 ET slate-reset cron. Sweeps every
+  // gameId-keyed in-memory cache in the MLB pipeline whose game is no longer
+  // in the live registry. Use this if the user reports MLB signals or HR
+  // Radar are stuck/stale and the morning cron didn't fire.
+  app.post("/api/admin/mlb/reset-slate-state", requireAdmin, async (_req, res) => {
+    try {
+      const { pruneStaleSlateMemory } = await import("./mlb/liveGameOrchestrator");
+      const result = await pruneStaleSlateMemory("admin_manual_trigger");
+      res.json({ ...result, triggeredAt: new Date().toISOString() });
+    } catch (e: any) {
+      res.status(500).json({ error: "MLB slate reset failed", details: e.message });
+    }
+  });
+
   app.post("/api/admin/mlb/clean-duplicates", requireAdmin, async (_req, res) => {
     try {
       const result = await storage.cleanDuplicatePlays();

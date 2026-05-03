@@ -974,6 +974,32 @@ app.use((req, res, next) => {
   );
   console.log("[snapshot-rolling-cron] Nightly batter rolling stat snapshot scheduled (03:30 ET)");
 
+  // ── Daily MLB slate-reset (recurring "must reset every day" bug fix) ─────
+  // Sweeps every gameId-keyed in-memory cache in the MLB pipeline whose game
+  // is no longer in the live registry. Cures the residue left when a game's
+  // `final` transition is missed (server restart, API hiccup, game removed
+  // from registry before final poll), which was poisoning the next slate and
+  // forcing a manual reset of MLB signals + HR Radar every morning.
+  //
+  // Runs at 04:30 ET — after the existing ladder validator (04:15) and well
+  // before any morning slate begins. Late-night Pacific games still in the
+  // registry at 04:30 ET are intentionally NOT pruned.
+  cron.schedule(
+    "30 4 * * *",
+    async () => {
+      try {
+        const { pruneStaleSlateMemory } = await import("./mlb/liveGameOrchestrator");
+        const result = await pruneStaleSlateMemory("daily_cron_0430_ET");
+        const totalRemoved = Object.values(result.removed).reduce((a, b) => a + b, 0);
+        console.log(`[mlb-slate-reset-cron] ok activeGames=${result.activeGames} totalRemoved=${totalRemoved}`);
+      } catch (err: any) {
+        console.error("[mlb-slate-reset-cron] failed:", err.message, err.stack);
+      }
+    },
+    { timezone: "America/New_York" }
+  );
+  console.log("[mlb-slate-reset-cron] Daily MLB slate memory reset scheduled (04:30 ET)");
+
   // Daily cleanup: remove unverified accounts older than 24 hours.
   // Strategy: hard-delete. Unverified users are blocked from plays (requirePlayAccess)
   // so they cannot accumulate meaningful dependent rows. The only FK (sent_alerts.user_id)

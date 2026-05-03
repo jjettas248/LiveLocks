@@ -32,3 +32,26 @@ export function getCachedMlbGameSessionDate(gameId: string): string | undefined 
 export function clearMlbGameSessionDate(gameId: string): void {
   sessionDateByGameId.delete(gameId);
 }
+
+// Daily slate-reset helper. Drops every cached (gameId -> sessionDate) entry
+// whose sessionDate is older than the most recent two ET dates we still care
+// about (today + yesterday — yesterday covers cross-coast late games whose
+// official date is the previous day but which are still active near 4 AM ET).
+// Returns the number of entries removed.
+export function pruneStaleSessionDates(keepDates: ReadonlySet<string>): number {
+  let removed = 0;
+  for (const [gameId, date] of Array.from(sessionDateByGameId.entries())) {
+    if (!keepDates.has(date)) {
+      sessionDateByGameId.delete(gameId);
+      removed++;
+    }
+  }
+  if (removed > 0) {
+    console.log(`[MLB_SLATE_RESET] sessionDateByGameId pruned=${removed} kept=${sessionDateByGameId.size} keepDates=${Array.from(keepDates).join(",")}`);
+  }
+  return removed;
+}
+
+export function getMlbGameSessionDateCacheSize(): number {
+  return sessionDateByGameId.size;
+}

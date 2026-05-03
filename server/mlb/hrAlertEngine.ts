@@ -612,6 +612,31 @@ export function seedHrAlertDetection(
   });
 }
 
+// Daily slate-reset helper. Drops every state-map entry whose gameId is not
+// in the supplied active set. Mirrors `clearStaleNonHrStates` in nonHrSignalState
+// and `pruneStaleSessionDates` in mlbSessionDate so a single slate-reset cron
+// can sweep every leaky in-memory cache the radar pipeline owns.
+export function clearStaleHrAlertStates(activeGameIds: ReadonlySet<string>): number {
+  let removed = 0;
+  for (const key of Array.from(stateMap.keys())) {
+    // stateKey format: `${gameId}_${playerId}` — split on FIRST underscore
+    const sepIdx = key.indexOf("_");
+    const gameId = sepIdx > 0 ? key.slice(0, sepIdx) : key;
+    if (!activeGameIds.has(gameId)) {
+      stateMap.delete(key);
+      removed++;
+    }
+  }
+  if (removed > 0) {
+    console.log(`[MLB_SLATE_RESET] hrAlertEngine.stateMap pruned=${removed} kept=${stateMap.size}`);
+  }
+  return removed;
+}
+
+export function getHrAlertStateMapSize(): number {
+  return stateMap.size;
+}
+
 export function clearGameHrStates(gameId: string): void {
   for (const key of Array.from(stateMap.keys())) {
     if (key.startsWith(`${gameId}_`)) stateMap.delete(key);

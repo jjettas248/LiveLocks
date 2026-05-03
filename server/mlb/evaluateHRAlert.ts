@@ -123,6 +123,28 @@ export function clearGameCooldowns(gameId: string): void {
   }
 }
 
+// Daily slate-reset helper. Drops every cooldown entry whose gameId is not in
+// the supplied active set. cooldownKey format: `${playerId}:${gameId}`.
+export function clearStaleAlertCooldowns(activeGameIds: ReadonlySet<string>): number {
+  let removed = 0;
+  for (const key of Array.from(recentAlerts.keys())) {
+    const sepIdx = key.lastIndexOf(":");
+    const gameId = sepIdx >= 0 ? key.slice(sepIdx + 1) : key;
+    if (!activeGameIds.has(gameId)) {
+      recentAlerts.delete(key);
+      removed++;
+    }
+  }
+  if (removed > 0) {
+    console.log(`[MLB_SLATE_RESET] evaluateHRAlert.recentAlerts pruned=${removed} kept=${recentAlerts.size}`);
+  }
+  return removed;
+}
+
+export function getRecentAlertsSize(): number {
+  return recentAlerts.size;
+}
+
 function ordinal(n: number): string {
   const s = ["th", "st", "nd", "rd"];
   const v = n % 100;

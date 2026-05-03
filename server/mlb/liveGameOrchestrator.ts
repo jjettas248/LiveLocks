@@ -200,6 +200,136 @@ export const RESOLVED_NON_HR_MARKETS = new Set<string>();    // `${gameId}_${pla
 // leaves the registry so a same-day re-run also re-fires.
 export const MLB_FINAL_LOGGED = new Set<string>();
 
+// ── Daily slate-reset coordinator ────────────────────────────────────────────
+// Recurring-bug fix: every cache below is keyed by gameId and was only cleared
+// at the per-game `final` transition. When that transition was missed (server
+// restart, API hiccup, game removed from registry before final poll), residue
+// survived past midnight and poisoned the next slate — which is why MLB
+// signals + HR Radar required a manual "reset" every day to start working.
+//
+// `pruneStaleSlateMemory` is invoked daily at 04:30 ET by the cron in
+// `server/index.ts` and on-demand via `/api/admin/mlb/reset-slate-state`.
+// It evicts every entry whose gameId is NOT in the live registry, so a
+// late-night Pacific game that's still active at 4 AM ET stays untouched.
+export async function pruneStaleSlateMemory(reason: string = "daily_cron"): Promise<{
+  reason: string;
+  activeGames: number;
+  removed: Record<string, number>;
+  remaining: Record<string, number>;
+}> {
+  const activeGameIds = new Set(getActiveGames().map((g) => g.gameId));
+
+  const dropByGamePrefix = <V,>(map: Map<string, V> | Set<string>): number => {
+    let n = 0;
+    const keys = Array.from((map as any).keys ? (map as any).keys() : (map as Set<string>).values());
+    for (const key of keys) {
+      const sepIdx = (key as string).indexOf("_");
+      const gameId = sepIdx > 0 ? (key as string).slice(0, sepIdx) : (key as string);
+      if (!activeGameIds.has(gameId)) {
+        (map as any).delete(key);
+        n++;
+      }
+    }
+    return n;
+  };
+
+  // Caches owned by this file
+  const removedKnownCounts = dropByGamePrefix(KNOWN_HR_COUNTS);
+  const removedKnownAB = dropByGamePrefix(KNOWN_HR_AB_INDEX);
+  const removedResolvedHR = dropByGamePrefix(RESOLVED_HR_PLAYERS);
+  const removedResolvedNonHR = dropByGamePrefix(RESOLVED_NON_HR_MARKETS);
+  let removedFinalLogged = 0;
+  for (const gameId of Array.from(MLB_FINAL_LOGGED)) {
+    if (!activeGameIds.has(gameId)) { MLB_FINAL_LOGGED.delete(gameId); removedFinalLogged++; }
+  }
+  let removedHydrated = 0;
+  for (const gameId of Array.from(HR_RADAR_HYDRATED_GAMES)) {
+    if (!activeGameIds.has(gameId)) { HR_RADAR_HYDRATED_GAMES.delete(gameId); removedHydrated++; }
+  }
+  let removedLastRun = 0;
+  for (const gameId of Array.from(LAST_RUN.keys())) {
+    if (!activeGameIds.has(gameId)) { LAST_RUN.delete(gameId); removedLastRun++; }
+  }
+  let removedRosterScanRun = 0;
+  for (const gameId of Array.from(hrRosterScanLastRun.keys())) {
+    if (!activeGameIds.has(gameId)) { hrRosterScanLastRun.delete(gameId); removedRosterScanRun++; }
+  }
+  let removedRosterScanAB = 0;
+  for (const gameId of Array.from(hrRosterScanLastABCount.keys())) {
+    if (!activeGameIds.has(gameId)) { hrRosterScanLastABCount.delete(gameId); removedRosterScanAB++; }
+  }
+  // mlbPersistGuard key format: `${playerId}|${market}|${dir}|${gameId}|${date}`
+  let removedPersistGuard = 0;
+  for (const key of Array.from(mlbPersistGuard.keys())) {
+    const parts = key.split("|");
+    const gameId = parts.length >= 4 ? parts[3] : "";
+    if (!activeGameIds.has(gameId)) { mlbPersistGuard.delete(key); removedPersistGuard++; }
+  }
+  // priorResolvedLines key format: `${oddsEventId}|${playerNameNorm}|${market}`
+  // — not keyed by gameId; safe to drop wholesale at slate reset since the
+  // odds service will re-resolve fresh lines on the next tick.
+  const priorResolvedSize = priorResolvedLines.size;
+  priorResolvedLines.clear();
+
+  // Caches owned by sibling modules
+  const { clearStaleNonHrStates, getNonHrSignalStateSize } = await import("./nonHrSignalState");
+  const { clearStaleHrAlertStates, getHrAlertStateMapSize } = await import("./hrAlertEngine");
+  const { clearStaleAlertCooldowns, getRecentAlertsSize } = await import("./evaluateHRAlert");
+  const { pruneStaleSessionDates, getMlbGameSessionDateCacheSize } = await import("../utils/mlbSessionDate");
+  const { todayET, daysAgoET } = await import("../utils/dateUtils");
+
+  const removedNonHr = clearStaleNonHrStates(activeGameIds);
+  const removedHrAlertEngine = clearStaleHrAlertStates(activeGameIds);
+  const removedCooldowns = clearStaleAlertCooldowns(activeGameIds);
+  const removedSessionDates = pruneStaleSessionDates(new Set([todayET(), daysAgoET(1)]));
+
+  // Edge cache prunes by registry on every write; force one sweep here too.
+  const { cleanupExpiredEntries } = await import("./edgeCache");
+  cleanupExpiredEntries();
+
+  const removed = {
+    KNOWN_HR_COUNTS: removedKnownCounts,
+    KNOWN_HR_AB_INDEX: removedKnownAB,
+    RESOLVED_HR_PLAYERS: removedResolvedHR,
+    RESOLVED_NON_HR_MARKETS: removedResolvedNonHR,
+    MLB_FINAL_LOGGED: removedFinalLogged,
+    HR_RADAR_HYDRATED_GAMES: removedHydrated,
+    LAST_RUN: removedLastRun,
+    hrRosterScanLastRun: removedRosterScanRun,
+    hrRosterScanLastABCount: removedRosterScanAB,
+    mlbPersistGuard: removedPersistGuard,
+    priorResolvedLines: priorResolvedSize,
+    nonHrSignalState: removedNonHr,
+    hrAlertEngineStateMap: removedHrAlertEngine,
+    evaluateHRAlertCooldowns: removedCooldowns,
+    sessionDateByGameId: removedSessionDates,
+  };
+
+  const remaining = {
+    KNOWN_HR_COUNTS: KNOWN_HR_COUNTS.size,
+    KNOWN_HR_AB_INDEX: KNOWN_HR_AB_INDEX.size,
+    RESOLVED_HR_PLAYERS: RESOLVED_HR_PLAYERS.size,
+    RESOLVED_NON_HR_MARKETS: RESOLVED_NON_HR_MARKETS.size,
+    MLB_FINAL_LOGGED: MLB_FINAL_LOGGED.size,
+    HR_RADAR_HYDRATED_GAMES: HR_RADAR_HYDRATED_GAMES.size,
+    LAST_RUN: LAST_RUN.size,
+    hrRosterScanLastRun: hrRosterScanLastRun.size,
+    hrRosterScanLastABCount: hrRosterScanLastABCount.size,
+    mlbPersistGuard: mlbPersistGuard.size,
+    priorResolvedLines: priorResolvedLines.size,
+    nonHrSignalState: getNonHrSignalStateSize(),
+    hrAlertEngineStateMap: getHrAlertStateMapSize(),
+    evaluateHRAlertCooldowns: getRecentAlertsSize(),
+    sessionDateByGameId: getMlbGameSessionDateCacheSize(),
+    activeGames: activeGameIds.size,
+  };
+
+  const totalRemoved = Object.values(removed).reduce((a, b) => a + b, 0);
+  console.log(`[MLB_SLATE_RESET] reason=${reason} activeGames=${activeGameIds.size} totalRemoved=${totalRemoved} removed=${JSON.stringify(removed)} remaining=${JSON.stringify(remaining)}`);
+
+  return { reason, activeGames: activeGameIds.size, removed, remaining };
+}
+
 export function isPlayerMarketResolved(
   gameId: string,
   playerId: string | number,
