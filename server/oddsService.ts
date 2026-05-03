@@ -763,7 +763,20 @@ export async function getPlayerOdds(
       filterCounters.notInAllowList++;
       continue;
     }
-    const lastUpdate = bookmaker.last_update ? new Date(bookmaker.last_update).getTime() : 0;
+    // Locate the requested market early so we can use market.last_update as
+    // a fallback freshness signal. Recent Odds API responses have moved the
+    // freshness timestamp from `bookmaker.last_update` (often null) onto
+    // `market.last_update`. Reading only the bookmaker field caused strict
+    // halftime mode to reject every book as `noLastUpdate` — emptying the
+    // 2H pipeline while live lines were actually fresh.
+    const market = bookmaker.markets?.find((m: any) => m.key === marketKey);
+    if (!market?.outcomes) {
+      if (strict) filterCounters.missingMarket++;
+      continue;
+    }
+    const bmLastUpdate = bookmaker.last_update ? new Date(bookmaker.last_update).getTime() : 0;
+    const mkLastUpdate = market.last_update ? new Date(market.last_update).getTime() : 0;
+    const lastUpdate = bmLastUpdate || mkLastUpdate;
     let bookIsSoftStale = false;
     if (strict) {
       // Strict halftime mode (Phase 9 — soft-stale acceptance):
@@ -794,12 +807,6 @@ export async function getPlayerOdds(
       }
     } else {
       if (lastUpdate > 0 && now - lastUpdate > BOOKMAKER_STALE_MS) continue;
-    }
-
-    const market = bookmaker.markets?.find((m: any) => m.key === marketKey);
-    if (!market?.outcomes) {
-      if (strict) filterCounters.missingMarket++;
-      continue;
     }
 
     const playerOutcomes = market.outcomes.filter((o: any) => {
