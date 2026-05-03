@@ -10,13 +10,35 @@ const ODDS_API_KEYS = [
 ].filter(Boolean) as string[];
 
 let activeKeyIndex = 0;
-const exhaustedKeys = new Set<number>();
+// Map keyIndex -> earliest timestamp (ms) at which the key is usable again.
+// Lazy-evicted on read so we don't depend on setTimeout firing exactly. Using
+// a per-key expiry (rather than a plain Set + delete-on-timer) prevents a
+// short 429 cool-down (10s) from prematurely clearing a long quota/auth
+// exhaustion (60min) if both events hit the same key in sequence.
+const exhaustedKeys = new Map<number, number>();
+
+function isKeyExhausted(keyIndex: number): boolean {
+  const expiresAt = exhaustedKeys.get(keyIndex);
+  if (expiresAt === undefined) return false;
+  if (Date.now() >= expiresAt) {
+    exhaustedKeys.delete(keyIndex);
+    return false;
+  }
+  return true;
+}
+
+/** Apply an exhaustion expiry to a key, but never SHORTEN an existing one. */
+function setKeyExhaustedUntil(keyIndex: number, expiresAt: number) {
+  const current = exhaustedKeys.get(keyIndex);
+  if (current !== undefined && current >= expiresAt) return;
+  exhaustedKeys.set(keyIndex, expiresAt);
+}
 
 export function getOddsApiKey(): string | undefined {
   if (ODDS_API_KEYS.length === 0) return undefined;
-  if (!exhaustedKeys.has(activeKeyIndex)) return ODDS_API_KEYS[activeKeyIndex];
+  if (!isKeyExhausted(activeKeyIndex)) return ODDS_API_KEYS[activeKeyIndex];
   for (let i = 0; i < ODDS_API_KEYS.length; i++) {
-    if (!exhaustedKeys.has(i)) {
+    if (!isKeyExhausted(i)) {
       activeKeyIndex = i;
       console.log(`[Odds API] Rotated to key ${i + 1}/${ODDS_API_KEYS.length}`);
       return ODDS_API_KEYS[i];
@@ -26,19 +48,33 @@ export function getOddsApiKey(): string | undefined {
 }
 
 function markKeyExhausted(keyIndex: number) {
-  exhaustedKeys.add(keyIndex);
-  console.warn(`[Odds API] Key ${keyIndex + 1}/${ODDS_API_KEYS.length} marked exhausted`);
-  setTimeout(() => {
-    exhaustedKeys.delete(keyIndex);
-    console.log(`[Odds API] Key ${keyIndex + 1} quota reset (60-min TTL expired)`);
-  }, 60 * 60 * 1000);
+  setKeyExhaustedUntil(keyIndex, Date.now() + 60 * 60 * 1000);
+  console.warn(`[Odds API] Key ${keyIndex + 1}/${ODDS_API_KEYS.length} marked exhausted (60-min)`);
+}
+
+// Short cool-down for 429 EXCEEDED_FREQ_LIMIT — that's a per-second/minute
+// frequency cap, not a monthly quota burn, so we only cool the key for a few
+// seconds and rotate to the next one immediately. This is what fixes the
+// "no_book_line" symptom that was forcing manual MLB resets: previously a
+// single 429 would just throw, leaving the orchestrator with no line and the
+// active key never advancing. Uses setKeyExhaustedUntil so an existing
+// longer exhaustion (quota/auth) is never shortened by a transient 429.
+function markKeyRateLimited(keyIndex: number, coolMs: number = 10_000) {
+  setKeyExhaustedUntil(keyIndex, Date.now() + coolMs);
+  console.warn(`[Odds API] Key ${keyIndex + 1}/${ODDS_API_KEYS.length} 429 frequency-limited — cooling ${Math.round(coolMs / 1000)}s, rotating`);
 }
 
 export function getOddsKeyStatus(): { totalKeys: number; activeKeyIndex: number; exhaustedKeys: number[] } {
+  const now = Date.now();
+  const live: number[] = [];
+  exhaustedKeys.forEach((expiresAt, idx) => {
+    if (expiresAt > now) live.push(idx);
+    else exhaustedKeys.delete(idx);
+  });
   return {
     totalKeys: ODDS_API_KEYS.length,
     activeKeyIndex,
-    exhaustedKeys: Array.from(exhaustedKeys),
+    exhaustedKeys: live,
   };
 }
 
@@ -323,7 +359,18 @@ async function getRawOdds(oddsEventId: string, marketKey: string, inPlay = false
           markKeyExhausted(usedKeyIndex);
           continue;
         }
-      } catch (_) {}
+        if (res.status === 429 || parsed.error_code === "EXCEEDED_FREQ_LIMIT") {
+          updateOddsHealth({ success: false, error: "rate_limited_429", keyIndex: usedKeyIndex });
+          markKeyRateLimited(usedKeyIndex);
+          continue;
+        }
+      } catch (_) {
+        if (res.status === 429) {
+          updateOddsHealth({ success: false, error: "rate_limited_429", keyIndex: usedKeyIndex });
+          markKeyRateLimited(usedKeyIndex);
+          continue;
+        }
+      }
       updateOddsHealth({ success: false, error: `fetch_failed_${res.status}`, keyIndex: usedKeyIndex });
       throw new Error(`Odds fetch failed: ${res.status} — ${body}`);
     }
@@ -1259,7 +1306,18 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
           markKeyExhausted(usedKeyIndex);
           continue;
         }
-      } catch (_) {}
+        if (res.status === 429 || parsed.error_code === "EXCEEDED_FREQ_LIMIT") {
+          updateOddsHealth({ success: false, error: "rate_limited_429", keyIndex: usedKeyIndex });
+          markKeyRateLimited(usedKeyIndex);
+          continue;
+        }
+      } catch (_) {
+        if (res.status === 429) {
+          updateOddsHealth({ success: false, error: "rate_limited_429", keyIndex: usedKeyIndex });
+          markKeyRateLimited(usedKeyIndex);
+          continue;
+        }
+      }
       updateOddsHealth({ success: false, error: `fetch_failed_${res.status}`, keyIndex: usedKeyIndex });
       throw new Error(`MLB odds fetch failed: ${res.status} — ${body}`);
     }
