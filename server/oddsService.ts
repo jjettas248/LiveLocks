@@ -1348,7 +1348,19 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
         const bms: any[] = Array.isArray(data?.bookmakers) ? data.bookmakers : [];
         const nowMs = Date.now();
         const ages = bms
-          .map((b: any) => (b?.last_update ? Math.round((nowMs - new Date(b.last_update).getTime()) / 1000) : -1))
+          .map((b: any) => {
+            // Recent Odds API responses move `last_update` from the bookmaker
+            // onto the market — fall back so the diag doesn't print -1 for
+            // books that are actually fresh.
+            const bmTs = b?.last_update ? new Date(b.last_update).getTime() : 0;
+            const mkts: any[] = Array.isArray(b?.markets) ? b.markets : [];
+            const mkTs = mkts.reduce((mx: number, m: any) => {
+              const t = m?.last_update ? new Date(m.last_update).getTime() : 0;
+              return t > mx ? t : mx;
+            }, 0);
+            const ts = bmTs || mkTs;
+            return ts ? Math.round((nowMs - ts) / 1000) : -1;
+          })
           .slice(0, 5);
         const keys = bms.map((b: any) => b?.key).slice(0, 8);
         console.log(`[MLB ODDS DIAG] event=${oddsEventId} market=${marketKey} inPlay=${inPlay} key=${usedKeyIndex + 1}/${ODDS_API_KEYS.length} remaining=${requestsRemaining ?? "?"} bookmakers=${bms.length} sampleKeys=[${keys.join(",")}] sampleAgesSec=[${ages.join(",")}] staleThresholdSec=${Math.round(BOOKMAKER_STALE_MS / 1000)}`);
@@ -1469,17 +1481,23 @@ export async function getMLBPlayerOdds(
     const bKey: string = bookmaker.key ?? "";
     if (!PROP_BOOKMAKERS_SET.has(bKey)) { cntFilteredOutByBookmaker++; continue; }
 
-    const lastUpdate = bookmaker.last_update ? new Date(bookmaker.last_update).getTime() : 0;
+    const market = (bookmaker.markets ?? []).find(
+      (m: any) => m.key === marketKey || isMLBPropKey(m.key ?? "", statType)
+    );
+    if (!market?.outcomes) { cntNoMatchingMarket++; continue; }
+
+    // Recent Odds API responses move `last_update` from the bookmaker onto
+    // the market — fall back so we don't accidentally treat fresh books as
+    // having no timestamp (which would skip the staleness gate entirely and
+    // also break diagnostics).
+    const bmLastUpdate = bookmaker.last_update ? new Date(bookmaker.last_update).getTime() : 0;
+    const mkLastUpdate = market.last_update ? new Date(market.last_update).getTime() : 0;
+    const lastUpdate = bmLastUpdate || mkLastUpdate;
     if (lastUpdate > 0 && now - lastUpdate > BOOKMAKER_STALE_MS) {
       cntStaleRejected++;
       console.warn(`[MLB Odds] Rejecting stale row from ${bKey} (age: ${Math.round((now - lastUpdate) / 1000)}s)`);
       continue;
     }
-
-    const market = (bookmaker.markets ?? []).find(
-      (m: any) => m.key === marketKey || isMLBPropKey(m.key ?? "", statType)
-    );
-    if (!market?.outcomes) { cntNoMatchingMarket++; continue; }
 
     const playerOutcomes = market.outcomes.filter((o: any) => {
       const desc = normPlayerName(o.description ?? o.name ?? "");
