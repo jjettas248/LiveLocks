@@ -23,7 +23,7 @@ import {
   type HrRadarCardUi,
   type HrRadarAnalyzeViewModel,
 } from "@/lib/mlbUiMappers";
-import { MODE_STYLES, resolveMlbSignalTier } from "@/lib/mlbFormatters";
+import { MODE_STYLES, resolveMlbSignalTier, TIER_COLORS_BY_SIGNAL_TIER } from "@/lib/mlbFormatters";
 import {
   buildSignalViewModel, buildHrRadarViewModel, buildGameViewModel,
   buildAtBatLogViewModel, buildPitchMatchupViewModel,
@@ -312,7 +312,14 @@ function SignalStrip({ signals, onPlayerClick }: { signals: MlbSignalData[]; onP
       <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
         {topSignals.map((sig, i) => {
           const pct = normalizePct(sig.enginePct);
-          const tierColor = pct >= 80 ? "#22c55e" : pct >= 70 ? "#eab308" : "#3b82f6";
+          // [MLB Canonical Signal Tier — Phase 2] Color is derived from the
+          // server-stamped signalTier, never from probability. The previous
+          // `pct >= 80 ? green : pct >= 70 ? yellow : blue` mapping was a
+          // client-side prob-to-tier inference that contradicted the server's
+          // canonical tier (e.g. an "elite" signal at 65% would have shown
+          // blue while the card badge showed ELITE). resolveMlbSignalTier()
+          // emits [MLB_TIER_FALLBACK] if the server hasn't stamped one.
+          const tierColor = TIER_COLORS_BY_SIGNAL_TIER[resolveMlbSignalTier(sig as any)].text;
           const sideColor = sig.recommendedSide === "OVER" ? "text-green-400" : "text-blue-400";
           return (
             <button
