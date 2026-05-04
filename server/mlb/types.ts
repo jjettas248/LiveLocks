@@ -578,6 +578,15 @@ export interface MLBQualifiedSignal {
   // and downstream services (topPlaysService, analytics, calculator) must
   // render this value rather than recomputing tiers from signalScore/enginePct.
   signalTier?: import("./signalScore").SignalTier;
+  // [MLB Phase 2.5] When detectNearHrContact() qualifies the player's last
+  // AB, the orchestrator stamps signalType:"hr_watch" so downstream surfaces
+  // (top plays, analytics, UI) can distinguish near-HR-contact watch entries
+  // from generic watch-tier entries. Probability/edge are NOT inflated.
+  signalType?: "hr_watch";
+  // [MLB Phase 3.1] Calibration version stamp. Bumped whenever the calibration
+  // layer changes so analytics can A/B compare buckets pre/post calibration
+  // change. Stamped at orchestrator emit time, never recomputed downstream.
+  calibrationVersion?: string;
   signalScore: number;
   reasons: string[];
   feedTags: string[];

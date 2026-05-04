@@ -40,6 +40,7 @@ import { MARKET_QUALIFY_FLOOR, ALL_MLB_MARKETS } from "./types";
 import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
 import { getCanonicalSidedProbability } from "./probabilityEngine";
 import { computeSignalScore, computeSignalScoreByFamily, scoreHRRadar, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily, deriveSignalTier } from "./signalScore";
+import { detectNearHrContact } from "./nearHrContact";
 import type { MarketFamily } from "./signalScore";
 import { buildSignalDiagnostics } from "./signalDiagnostics";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
@@ -1711,6 +1712,52 @@ export class LiveGameOrchestrator {
       hrRadarResult = scoreHRRadar(input, output);
     }
 
+    // [MLB Phase 2.5] Engine-owned HR Watch detection on the player's last AB.
+    // Pure detector — no probability touch. When triggered, we (a) lower the
+    // home_runs hr_watch gate from 35→25 player-specific so the signal can
+    // actually surface, (b) inject near-HR drivers into signalTags, and (c)
+    // stamp signalType:"hr_watch" downstream. We deliberately use the SAME
+    // input.contactQuality.priorABResults that the rest of the engine already
+    // sees — no cross-tick cache, no parallel data path.
+    const _lastAbForNearHr: any = (input.contactQuality?.priorABResults ?? []).slice(-1)[0] ?? null;
+    const nearHrResult = _lastAbForNearHr
+      ? detectNearHrContact({
+          ev: _lastAbForNearHr.exitVelocity ?? null,
+          la: _lastAbForNearHr.launchAngle ?? null,
+          distance: _lastAbForNearHr.distance ?? null,
+          xba: _lastAbForNearHr.xba ?? null,
+        })
+      : { tier: null as null | "watch" | "lean", drivers: [] as string[], suppressionReason: "no_at_bat" as string | undefined };
+    if (nearHrResult.tier) {
+      console.log("[MLB_HR_WATCH_DETECTED]", {
+        player: output.playerName,
+        team: input.team ?? null,
+        market: output.market,
+        inning: input.inning ?? null,
+        result: _lastAbForNearHr?.outcome ?? null,
+        ev: _lastAbForNearHr?.exitVelocity ?? null,
+        la: _lastAbForNearHr?.launchAngle ?? null,
+        distance: _lastAbForNearHr?.distance ?? null,
+        xba: _lastAbForNearHr?.xba ?? null,
+        signalTier: nearHrResult.tier,
+        drivers: nearHrResult.drivers,
+      });
+    } else if (nearHrResult.suppressionReason && nearHrResult.suppressionReason !== "no_at_bat") {
+      console.log("[MLB_HR_WATCH_SUPPRESSED]", {
+        player: output.playerName,
+        market: output.market,
+        reason: nearHrResult.suppressionReason,
+        ev: _lastAbForNearHr?.exitVelocity ?? null,
+        la: _lastAbForNearHr?.launchAngle ?? null,
+        distance: _lastAbForNearHr?.distance ?? null,
+        xba: _lastAbForNearHr?.xba ?? null,
+      });
+    }
+    // Player-specific gate lowering: when near-HR contact is confirmed, drop
+    // the HR Radar hr_watch threshold from 35 → 25 so the signal can surface.
+    // Phase 1.5 caps and qualification side-checks all still bind on top.
+    const HR_WATCH_GATE = nearHrResult.tier ? 25 : 35;
+
     // ROI HARDENING: batter_over markets (hits/total_bases/hrr/home_runs) are
     // the lowest-ROI family. Tighten the floor from 42→46 and add a borderline
     // conviction-cluster gate so single-positive setups stay watch-only and
@@ -1728,8 +1775,8 @@ export class LiveGameOrchestrator {
     let bypassedByHighProb = false;
     const minScore = isBatterOver ? 46 : 50;
     if (scoreBreakdown.total < minScore) {
-      if (hrRadarResult && hrRadarResult.total >= 35) {
-        console.log(`[MLB QUALIFY HR_WATCH][${gameId}] ${output.playerName}/${output.market} — batterOverScore=${scoreBreakdown.total} < ${minScore} but hrRadarScore=${hrRadarResult.total} ≥ 35, surfacing as HR_WATCH`);
+      if (hrRadarResult && hrRadarResult.total >= HR_WATCH_GATE) {
+        console.log(`[MLB QUALIFY HR_WATCH][${gameId}] ${output.playerName}/${output.market} — batterOverScore=${scoreBreakdown.total} < ${minScore} but hrRadarScore=${hrRadarResult.total} ≥ ${HR_WATCH_GATE} (nearHr=${nearHrResult.tier ?? "none"}), surfacing as HR_WATCH`);
       } else if (passesHighProb) {
         bypassedByHighProb = true;
         console.log(`[MLB QUALIFY HIGH_PROB_BYPASS][${gameId}] ${output.playerName}/${output.market} — signalScore=${scoreBreakdown.total} < ${minScore} but prob=${sideProbability.toFixed(1)} ≥ ${HIGH_PROB_BYPASS_THRESHOLD} — surfacing as HIGH_PROB watch`);
@@ -1757,8 +1804,8 @@ export class LiveGameOrchestrator {
         scoreBreakdown.liveContext >= 55 ||
         scoreBreakdown.form >= 60;
       if (!hasConviction) {
-        if (hrRadarResult && hrRadarResult.total >= 35) {
-          console.log(`[MLB QUALIFY HR_WATCH][${gameId}] ${output.playerName}/${output.market} — borderline batter_over score=${scoreBreakdown.total} no conviction cluster (matchup=${scoreBreakdown.matchup} live=${scoreBreakdown.liveContext} form=${scoreBreakdown.form}), routing to HR_WATCH`);
+        if (hrRadarResult && hrRadarResult.total >= HR_WATCH_GATE) {
+          console.log(`[MLB QUALIFY HR_WATCH][${gameId}] ${output.playerName}/${output.market} — borderline batter_over score=${scoreBreakdown.total} no conviction cluster (matchup=${scoreBreakdown.matchup} live=${scoreBreakdown.liveContext} form=${scoreBreakdown.form}) gate=${HR_WATCH_GATE} (nearHr=${nearHrResult.tier ?? "none"}), routing to HR_WATCH`);
         } else if (passesHighProb) {
           bypassedByHighProb = true;
           console.log(`[MLB QUALIFY HIGH_PROB_BYPASS][${gameId}] ${output.playerName}/${output.market} — borderline batter_over score=${scoreBreakdown.total} no conviction cluster but prob=${sideProbability.toFixed(1)} ≥ ${HIGH_PROB_BYPASS_THRESHOLD} — surfacing as HIGH_PROB watch`);
@@ -1822,7 +1869,45 @@ export class LiveGameOrchestrator {
       if (hrRadarResult.total >= 80) signalMode = "hr_elite";
       else if (hrRadarResult.total >= 65) signalMode = "hr_strong";
       else if (hrRadarResult.total >= 50) signalMode = "hr_heating_up";
-      else if (hrRadarResult.total >= 35) signalMode = "hr_watch";
+      else if (hrRadarResult.total >= HR_WATCH_GATE) signalMode = "hr_watch";
+    }
+
+    // [MLB Phase 2.5 + Phase 3.5] When near-HR contact is confirmed, enrich
+    // signalTags with the spec drivers so UI / analytics can see the watch
+    // reason. We DO NOT touch engineProbability, calibratedProbability*,
+    // evPct, or edge here — Phase 1/1.5 invariants stay frozen.
+    let stampSignalType: "hr_watch" | undefined = undefined;
+    if (nearHrResult.tier) {
+      for (const d of nearHrResult.drivers) {
+        if (!signalTags.includes(d as any)) (signalTags as string[]).push(d);
+      }
+      // Stamp signalType:"hr_watch" only when the surfaced mode actually
+      // lands in the watch band (don't overwrite a player who's already
+      // posting an elite/strong/lean signal on this market).
+      const isWatchBand = signalMode === "hr_watch" || signalMode === "hr_heating_up" ||
+                          signalMode === "watch" || signalMode === "heating_up" ||
+                          signalMode === null;
+      if (isWatchBand) {
+        stampSignalType = "hr_watch";
+        // "lean" tier upgrade per spec: only if the underlying scoreBreakdown
+        // already supports lean (don't fabricate it from contact alone).
+        if (nearHrResult.tier === "lean" && scoreBreakdown.total >= 55 && signalMode === "hr_watch") {
+          // Keep mode as hr_watch but log the upgrade-eligible state — actual
+          // mode promotion stays gated by signalScore so we never bypass
+          // qualification math.
+          console.log(`[MLB_HR_WATCH_LEAN_ELIGIBLE] ${output.playerName}/${output.market} nearHr=lean signalScore=${scoreBreakdown.total} mode=${signalMode}`);
+        }
+      }
+      console.log("[MLB_HR_WATCH_CONTEXT_USED]", {
+        player: output.playerName,
+        market: output.market,
+        nearHrTier: nearHrResult.tier,
+        signalMode,
+        signalScore: scoreBreakdown.total,
+        hrWatchGate: HR_WATCH_GATE,
+        signalType: stampSignalType ?? null,
+        driversInjected: nearHrResult.drivers.length,
+      });
     }
 
     // HIGH_PROB_BYPASS rescue: if we surfaced this signal solely because the
@@ -1891,6 +1976,14 @@ export class LiveGameOrchestrator {
       evPct: output.evPct,
       confidenceTier: scoreBreakdown.confidenceTier,
       signalTier: canonicalSignalTier,
+      // [MLB Phase 2.5] Stamped only when detectNearHrContact() qualified
+      // this player's last AB AND the surfaced mode lands in the watch band.
+      signalType: stampSignalType,
+      // [MLB Phase 3.1] Engine-owned calibration version stamp. Bumped by
+      // hand whenever the calibration layer changes (current value covers
+      // Phase 1 canonical prob + Phase 1.5 caps + Phase 2 tier unification +
+      // Phase 2.5 near-HR detection).
+      calibrationVersion: "mlb-cal-v3",
       signalScore: scoreBreakdown.total,
       reasons: output.explanationBullets,
       feedTags: feedTags as string[],
