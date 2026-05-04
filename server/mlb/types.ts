@@ -110,13 +110,29 @@ export const MARKET_PROBABILITY_CAPS: Record<MLBMarket, number> = {
   hits: 96,
   total_bases: 96,
   home_runs: 90,
-  hrr: 94,
+  // [MLB Phase 1.5] HRR cap lowered 94→88. 30d data showed 488 plays clamped
+  // to exactly 94 with a 88.3% true hit rate (~6pt overconfidence). The 90+
+  // bucket overall hit 84.1% on a 93.6% avg prob — 88 preserves the genuinely
+  // strong signals while removing the artificial uniform 94 cluster.
+  hrr: 88,
   pitcher_strikeouts: 96,
   pitcher_outs: 90,
   walks_allowed: 85,
   hits_allowed: 90,
   batter_strikeouts: 90,
   hr_allowed: 80,
+};
+
+// [MLB Phase 1.5] Side-specific UNDER caps for pitcher markets. 30d data
+// showed pitcher UNDER plays were materially overconfident:
+//   pitcher_outs UNDER 70+: avg 88.8 / hit 55.3% (33.5pt gap)
+//   hits_allowed UNDER 70+: avg 88.4 / hit 42.9% (45.5pt gap)
+//   pitcher_strikeouts UNDER 70+: avg 89.4 / hit 52.7% (36.7pt gap)
+// Batter UNDER calibration is fine and intentionally NOT capped here.
+export const MARKET_UNDER_CAPS: Partial<Record<MLBMarket, number>> = {
+  pitcher_outs: 72,
+  hits_allowed: 74,
+  pitcher_strikeouts: 76,
 };
 
 export type ProjectionSource =

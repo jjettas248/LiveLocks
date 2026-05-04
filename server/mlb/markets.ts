@@ -705,6 +705,9 @@ function buildOutput(input: MLBPropInput, distParams?: DistributionParams): MLBP
       projection: safeProjection,
       threshold: input.bookLine,
       market: input.market,
+      // [MLB Phase 1.5] Forwarded for diagnostic logging only — does not
+      // affect probability math.
+      playerName: input.playerName,
       ...(distParams?.adjustedRate != null ? { adjustedRate: distParams.adjustedRate } : {}),
       ...(distParams?.remainingPA != null ? { remainingPA: distParams.remainingPA } : {}),
       ...(distParams?.currentStatValue != null ? { currentStatValue: distParams.currentStatValue } : {}),

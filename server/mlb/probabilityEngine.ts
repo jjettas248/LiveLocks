@@ -1,5 +1,5 @@
 import type { MLBMarket } from "./types";
-import { MARKET_SIGMA, MARKET_PROBABILITY_CAPS } from "./types";
+import { MARKET_SIGMA, MARKET_PROBABILITY_CAPS, MARKET_UNDER_CAPS } from "./types";
 import type { MLBBatterArchetype, MLBPitcherArchetype } from "./archetypes";
 import { getCalibrationShrinkage, getMLBSafetyCeiling } from "./archetypes";
 
@@ -133,6 +133,9 @@ export interface ProbabilityInput {
   adjustedRate?: number;
   currentStatValue?: number;
   paDistribution?: Record<number, number>;
+  // [MLB Phase 1.5] Optional — used only for diagnostic logging in
+  // applyModelSafetyCeiling ([MLB_UNDER_CALIBRATION] / [MLB_HRR_CEILING]).
+  playerName?: string;
 }
 
 export interface ProbabilityOutput {
@@ -377,11 +380,39 @@ export function calibrateModelProbability(
 export function applyModelSafetyCeiling(
   calibratedProb: number,
   archetype: MLBBatterArchetype | MLBPitcherArchetype | null,
-  market: MLBMarket
+  market: MLBMarket,
+  recommendedSide?: "OVER" | "UNDER",
+  playerName?: string,
 ): { probability: number; ceilingApplied: boolean; ceiling: number } {
+  // [MLB Phase 1.5] Side-specific UNDER cap for overconfident pitcher markets.
+  // Applied BEFORE archetype/market caps so it always binds when triggered.
+  if (recommendedSide === "UNDER") {
+    const underCap = MARKET_UNDER_CAPS[market];
+    if (underCap && calibratedProb > underCap) {
+      console.log("[MLB_UNDER_CALIBRATION]", {
+        player: playerName,
+        market,
+        side: "UNDER",
+        rawProbability: calibratedProb,
+        adjustedProbability: underCap,
+        reason: "pitcher_under_cap",
+      });
+      return { probability: underCap, ceilingApplied: true, ceiling: underCap };
+    }
+  }
+
   if (!archetype) {
     const marketCap = MARKET_PROBABILITY_CAPS[market];
     if (marketCap && calibratedProb > marketCap) {
+      if (market === "hrr") {
+        console.log("[MLB_HRR_CEILING]", {
+          player: playerName,
+          rawProbability: calibratedProb,
+          cappedProbability: marketCap,
+          capSource: "MARKET_PROBABILITY_CAPS",
+          actualCap: marketCap,
+        });
+      }
       return { probability: marketCap, ceilingApplied: true, ceiling: marketCap };
     }
     return { probability: calibratedProb, ceilingApplied: false, ceiling: marketCap ?? 99 };
@@ -390,6 +421,15 @@ export function applyModelSafetyCeiling(
   const ceiling = getMLBSafetyCeiling(archetype, market);
   if (calibratedProb > ceiling) {
     console.log(`[PROBABILITY_ENGINE] ceiling applied: archetype=${archetype} market=${market} raw=${calibratedProb.toFixed(1)} capped=${ceiling}`);
+    if (market === "hrr") {
+      console.log("[MLB_HRR_CEILING]", {
+        player: playerName,
+        rawProbability: calibratedProb,
+        cappedProbability: ceiling,
+        capSource: `archetype:${archetype}`,
+        actualCap: ceiling,
+      });
+    }
     return { probability: ceiling, ceilingApplied: true, ceiling };
   }
 
@@ -435,8 +475,13 @@ export function computeFullModelProbability(
 
   const calibratedSidedRaw = raw.isOverFavored ? calibratedOver : calibratedUnder;
 
+  // [MLB Phase 1.5] Pass the model-favored side so applyModelSafetyCeiling can
+  // apply UNDER-specific pitcher caps. Note: BATTER_OVER_POSITIVE_SKEW markets
+  // (home_runs, hrr) get forced to OVER downstream by determineSide regardless,
+  // so the UNDER cap correctly never applies to them via this path.
+  const sideHint: "OVER" | "UNDER" = raw.isOverFavored ? "OVER" : "UNDER";
   const ceilingResult = market
-    ? applyModelSafetyCeiling(calibratedSidedRaw, archetype ?? null, market)
+    ? applyModelSafetyCeiling(calibratedSidedRaw, archetype ?? null, market, sideHint, input.playerName)
     : { probability: calibratedSidedRaw, ceilingApplied: false, ceiling: 99 };
 
   const calibratedSided = ceilingResult.probability;
