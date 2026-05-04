@@ -485,6 +485,53 @@ export function validateMlbEngineProbability(qs: {
   return p;
 }
 
+// MLB Canonical Probability v1 — single source of truth for sided mapping.
+// The orchestrator, persistence, API normalization and the test harness all
+// resolve recommended-side calibrated probability through THIS helper. If the
+// mapping ever regresses, every call site fails together (no silent drift).
+export function getCanonicalSidedProbability(output: {
+  recommendedSide: "OVER" | "UNDER" | string;
+  calibratedProbabilityOver: number;
+  calibratedProbabilityUnder: number;
+}): number {
+  return output.recommendedSide === "OVER"
+    ? output.calibratedProbabilityOver
+    : output.calibratedProbabilityUnder;
+}
+
+// MLB Canonical Probability v1 — analytics bucketing helper. Keys off the
+// canonical persisted recommended-side calibrated probability (`prob`). Never
+// reads signalScore, edge, or dominant probability. Exported so the analytics
+// route and the test harness share the same math.
+export const MLB_PROB_BUCKETS = [
+  { label: "60-64%", min: 60, max: 64 },
+  { label: "65-69%", min: 65, max: 69 },
+  { label: "70-74%", min: 70, max: 74 },
+  { label: "75%+", min: 75, max: 100 },
+] as const;
+
+export function bucketPlaysByCanonicalProb(
+  plays: Array<{ prob: number | string | null | undefined; result?: string | null }>,
+  buckets: ReadonlyArray<{ label: string; min: number; max: number }> = MLB_PROB_BUCKETS,
+): Array<{ label: string; total: number; hits: number; winRate: number }> {
+  return buckets.map((bucket) => {
+    const bucketPlays = plays.filter((p) => {
+      const prob = Number(p.prob) || 0;
+      return prob >= bucket.min && prob <= bucket.max;
+    });
+    const bucketHits = bucketPlays.filter((p) => p.result === "hit").length;
+    const bucketTotal = bucketPlays.filter(
+      (p) => p.result === "hit" || p.result === "miss",
+    ).length;
+    return {
+      label: bucket.label,
+      total: bucketPlays.length,
+      hits: bucketHits,
+      winRate: bucketTotal > 0 ? Math.round((bucketHits / bucketTotal) * 1000) / 10 : 0,
+    };
+  });
+}
+
 export function logMlbPersistReject(
   reason: "missing_engine_probability" | "invalid_probability_at_persist" | "out_of_range",
   qs: {

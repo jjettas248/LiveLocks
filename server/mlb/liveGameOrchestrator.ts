@@ -38,6 +38,7 @@ import { recordMLBDiagnostic } from "./diagnostics";
 import type { MLBPropInput, MLBPropOutput, MLBMarket, MLBQualifiedSignal } from "./types";
 import { MARKET_QUALIFY_FLOOR, ALL_MLB_MARKETS } from "./types";
 import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
+import { getCanonicalSidedProbability } from "./probabilityEngine";
 import { computeSignalScore, computeSignalScoreByFamily, scoreHRRadar, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily } from "./signalScore";
 import type { MarketFamily } from "./signalScore";
 import { buildSignalDiagnostics } from "./signalDiagnostics";
@@ -1606,9 +1607,7 @@ export class LiveGameOrchestrator {
     const marketFamily = getMarketFamily(output.market, output.recommendedSide);
     const isBatterOver = marketFamily === "batter_over";
 
-    const sideProbability = output.recommendedSide === "OVER"
-      ? output.calibratedProbabilityOver
-      : output.calibratedProbabilityUnder;
+    const sideProbability = getCanonicalSidedProbability(output);
 
     // Plan D + E: pitcher-quality-aware floor for batter HR/hrr, and pitcher
     // near-miss band (58 ≤ prob < market floor). Both lower the qualification
@@ -1833,10 +1832,7 @@ export class LiveGameOrchestrator {
     // we expose calibratedProbabilityUnder. The previous dominant value is
     // preserved on engineProbabilityDominant for diagnostics only — never used
     // for persistence, analytics bucketing, or UI rendering.
-    const sidedCalibrated =
-      output.recommendedSide === "OVER"
-        ? output.calibratedProbabilityOver
-        : output.calibratedProbabilityUnder;
+    const sidedCalibrated = getCanonicalSidedProbability(output);
     const previousDominantProbability = output.calibratedProbability;
     console.log("[MLB_CANONICAL_PROBABILITY]", {
       player: output.playerName,

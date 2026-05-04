@@ -42,7 +42,7 @@ import { syncMinutesProjections } from "./services/minutesProjectionService";
 import { calculateMLBPropEdge, canShowSignal, hasRealOdds } from "./mlb/markets";
 import { normalizeMlbMarketKey } from "./mlb/normalizeMarketKey";
 import { getMarketParkFactor } from "./mlb/dataSources";
-import { validateMlbEngineProbability, logMlbPersistReject } from "./mlb/probabilityEngine";
+import { validateMlbEngineProbability, logMlbPersistReject, MLB_PROB_BUCKETS, bucketPlaysByCanonicalProb } from "./mlb/probabilityEngine";
 import {
   recordMLBDiagnostic,
   getMLBDiagnosticSummary,
@@ -8019,12 +8019,10 @@ export function registerPlaysRoutes(app: Express): void {
 
 // ── Performance Analytics (Truth Layer) ──────────────────────────────────────
 export function registerPerformanceRoutes(app: Express): void {
-  const PROB_BUCKETS = [
-    { label: "60-64%", min: 60, max: 64 },
-    { label: "65-69%", min: 65, max: 69 },
-    { label: "70-74%", min: 70, max: 74 },
-    { label: "75%+", min: 75, max: 100 },
-  ];
+  // [MLB Canonical Probability v1] Buckets are defined in probabilityEngine.ts
+  // and shared with the validation harness so the analytics math is the same
+  // single source of truth as the canonical persisted probability.
+  const PROB_BUCKETS = MLB_PROB_BUCKETS;
 
   app.get("/api/performance", requireAdmin, async (req, res) => {
     try {
@@ -8076,20 +8074,10 @@ export function registerPerformanceRoutes(app: Express): void {
         ? Math.round(plays.reduce((s, p) => s + (Number(p.prob) || 0), 0) / plays.length * 10) / 10
         : 0;
 
-      const buckets = PROB_BUCKETS.map(bucket => {
-        const bucketPlays = plays.filter(p => {
-          const prob = Number(p.prob) || 0;
-          return prob >= bucket.min && prob <= bucket.max;
-        });
-        const bucketHits = bucketPlays.filter(p => p.result === "hit").length;
-        const bucketTotal = bucketPlays.filter(p => p.result === "hit" || p.result === "miss").length;
-        return {
-          label: bucket.label,
-          total: bucketPlays.length,
-          hits: bucketHits,
-          winRate: bucketTotal > 0 ? Math.round((bucketHits / bucketTotal) * 1000) / 10 : 0,
-        };
-      });
+      const buckets = bucketPlaysByCanonicalProb(
+        plays.map(p => ({ prob: p.prob, result: p.result })),
+        PROB_BUCKETS,
+      );
 
       const oversCount = plays.filter(p => p.direction === "over").length;
       const undersCount = plays.filter(p => p.direction === "under").length;
