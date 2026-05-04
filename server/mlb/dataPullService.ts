@@ -380,6 +380,28 @@ export async function syncGameState(statsPk: string, cacheKey?: string): Promise
         team: pitcherTeamAbbrev,
         throws: throwsHand,
       };
+    } else {
+      // Phase 9.2 — pre-game / early-game BvP warmup. When MLB has not yet
+      // populated currentPlay.matchup.pitcher (game still pregame or in
+      // mid-pitch transition), fall back to the probable starter from
+      // gameData.probablePitchers so BvP hydration can run pre-first-pitch.
+      // Without this, ~50% of games consistently show withBvP=0 in logs.
+      const probablePitchers = data.gameData?.probablePitchers ?? {};
+      const probable = probablePitchers[pitcherSide];
+      if (probable?.id) {
+        const pitcherId = String(probable.id);
+        const playerBox = boxTeams[pitcherSide]?.players?.[`ID${pitcherId}`];
+        const throwsHand: "L" | "R" | null =
+          playerBox?.person?.pitchHand?.code === "L" ? "L"
+          : playerBox?.person?.pitchHand?.code === "R" ? "R"
+          : null;
+        pitcherInGame = {
+          playerId: pitcherId,
+          playerName: probable.fullName ?? "",
+          team: pitcherTeamAbbrev,
+          throws: throwsHand,
+        };
+      }
     }
 
     // Batting order — use both home and away sides

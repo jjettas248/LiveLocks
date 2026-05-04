@@ -164,7 +164,7 @@ async function resolveGamePk(gameIdOrEspnId: string): Promise<string | null> {
   }
 }
 
-async function fetchMlbBoxScore(gameId: string): Promise<MlbBoxscoreData | null> {
+export async function fetchMlbBoxScore(gameId: string): Promise<MlbBoxscoreData | null> {
   const gamePk = await resolveGamePk(gameId);
   if (!gamePk) {
     console.warn("[GRADE MLB] Could not resolve gamePk for gameId:", gameId);
@@ -232,7 +232,7 @@ function parseNumericStats(raw: Record<string, unknown>): Record<string, number>
   return out;
 }
 
-function buildMlbPlayerStats(boxData: MlbBoxscoreData): Map<string, MlbPlayerEntry> {
+export function buildMlbPlayerStats(boxData: MlbBoxscoreData): Map<string, MlbPlayerEntry> {
   const playerMap = new Map<string, MlbPlayerEntry>();
   for (const side of ["away", "home"] as const) {
     const teamPlayers = boxData.teams?.[side]?.players ?? {};
@@ -248,7 +248,7 @@ function buildMlbPlayerStats(boxData: MlbBoxscoreData): Map<string, MlbPlayerEnt
   return playerMap;
 }
 
-function getMlbStatValue(entry: MlbPlayerEntry, market: string): number | null {
+export function getMlbStatValue(entry: MlbPlayerEntry, market: string): number | null {
   const mapping = MLB_STAT_KEY_MAP[market.toLowerCase().trim()];
   if (!mapping) return null;
   const sourceStats = entry[mapping.source];
@@ -513,11 +513,25 @@ export async function gradePersistedPlays(
 
             const finalStat = getMlbStatValue(playerEntry, market);
             if (finalStat === null) {
-              const availableBatting = Object.keys(playerEntry.batting).join(", ");
-              const availablePitching = Object.keys(playerEntry.pitching).join(", ");
+              const battingKeys = Object.keys(playerEntry.batting);
+              const pitchingKeys = Object.keys(playerEntry.pitching);
+              const isDnp = battingKeys.length === 0 && pitchingKeys.length === 0;
+
+              if (isDnp) {
+                // Phase 9.1 — DNP terminal settlement. Player is on the
+                // active roster but did not play (empty batting + pitching
+                // stat objects). Settling as "void" prevents the play from
+                // being retried every 3 min indefinitely. void is excluded
+                // from ROI/hit-rate metrics in roiEngine + publicAnalytics.
+                await storage.settlePlay(play.id, "void", null, new Date());
+                console.warn("[GRADING_RESULT]", JSON.stringify({ status: "void", sport: "MLB", playId: play.id, playerName: play.playerName, gameId, market, reason: "player_dnp" }));
+                skipped++;
+                continue;
+              }
+
               console.warn("[GRADE MLB] Could not resolve market:", market,
                 "player:", play.playerName,
-                "— batting:", availableBatting, "pitching:", availablePitching);
+                "— batting:", battingKeys.join(", "), "pitching:", pitchingKeys.join(", "));
               console.warn("[GRADING_RESULT]", JSON.stringify({ status: "failed", sport: "MLB", playId: play.id, playerName: play.playerName, gameId, market, reason: "market_unresolvable" }));
               skipped++;
               continue;

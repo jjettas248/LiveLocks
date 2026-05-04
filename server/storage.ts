@@ -2316,7 +2316,10 @@ export class DatabaseStorage implements IStorage {
 
   async getPlayStats(): Promise<PlayStats> {
     const rows = await db.select().from(persistedPlays);
-    const settled = rows.filter(r => r.result !== null);
+    // Phase 9.1 — exclude "void" (DNP) plays from settled counts. They are
+    // terminal but financially neutral and should not inflate hit-rate
+    // denominators or bucket totals.
+    const settled = rows.filter(r => r.result !== null && r.result !== "void");
     const pending = rows.filter(r => r.result === null);
 
     const makeBucket = (min: number, max: number) => {
@@ -4933,7 +4936,7 @@ export class DatabaseStorage implements IStorage {
           playerId: a.playerId,
           playerName: a.playerName,
           team: a.team,
-          status: a.result === "hit" ? "hit" : a.result === "miss" ? "miss" : "live",
+          status: a.result === "hit" ? "hit" : a.result === "miss" ? "miss" : a.result === "void" ? "void" : "live",
           detectedLabel: a.detectedLabel ?? null,
           detectedInning: null,
           detectedHalf: null,
@@ -4949,7 +4952,7 @@ export class DatabaseStorage implements IStorage {
           summaryText: null,
           alertPath: null,
           conversionPct: null,
-          gradingStatus: a.result === "hit" ? "called_hit" : a.result === "miss" ? "called_miss" : "active",
+          gradingStatus: a.result === "hit" ? "called_hit" : a.result === "miss" ? "called_miss" : a.result === "void" ? "voided_dnp" : "active",
           gradingReason: "analytics_fallback",
           matchedBeforeHr: null,
           fallbackCreated: false,

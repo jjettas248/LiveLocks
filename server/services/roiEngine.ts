@@ -87,6 +87,11 @@ export function getPrimaryROIMetrics(plays: PersistedPlay[]): ROIMetrics {
 }
 
 export function getROIMetrics(plays: PersistedPlay[]): ROIMetrics {
+  // Phase 9.1 — "void" results (player DNP) are settled (terminal) but
+  // intentionally excluded from totalBets/hits/misses/pushes/ROI/hitRate.
+  // They are NOT counted as "pending" either — they're complete with no
+  // financial consequence. The settled filter below already excludes void
+  // since it's not in the allowed-result set.
   const settled = plays.filter(p => p.result === "hit" || p.result === "miss" || p.result === "push");
   const pending = plays.filter(p => !p.result || p.result === null).length;
   const hits = settled.filter(p => p.result === "hit").length;

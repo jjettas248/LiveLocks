@@ -7125,7 +7125,8 @@ const NBA_TO_DB: Record<string, string> = {
 const normTeam = (t: string) => NBA_TO_DB[t.toUpperCase()] ?? t.toUpperCase();
 
 const normalizeName = (s: string) =>
-  s.toLowerCase().replace(/['.'\-\s]+/g, "").replace(/jr$|sr$|ii$|iii$|iv$/, "");
+  s.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+   .toLowerCase().replace(/['.'\-\s]+/g, "").replace(/jr$|sr$|ii$|iii$|iv$/, "");
 
 async function syncStatsFromNBA(): Promise<{ matched: number; unmatched: number }> {
   console.log("[nba-sync] Starting NBA.com stats sync…");
@@ -7306,7 +7307,10 @@ async function syncStatsFromNBAStuffer(): Promise<{ matched: number; unmatched: 
       };
 
       const normNbs = normalizeName(name);
-      const dbMatch = dbPlayers.find(p => normalizeName(p.name) === normNbs && (!p.ppg));
+      // Phase 9.3 — nbastuffer acts as enrichment overlay (rebound %, usage,
+      // efg %, etc.). Previously gated on `!p.ppg` which always failed because
+      // syncStatsFromNBA runs first and populates ppg → 0/229 match rate.
+      const dbMatch = dbPlayers.find(p => normalizeName(p.name) === normNbs);
       if (dbMatch) {
         await storage.updatePlayerStats(dbMatch.id, update as any);
         matched++;

@@ -285,7 +285,7 @@ export async function getPublicAnalyticsSummary(): Promise<PublicAnalyticsSummar
   const settled = await db
     .select()
     .from(persistedPlays)
-    .where(sql`${persistedPlays.result} IS NOT NULL AND ${persistedPlays.gameDate} >= ${sevenDaysStr}`)
+    .where(sql`${persistedPlays.result} IS NOT NULL AND ${persistedPlays.result} != 'void' AND ${persistedPlays.gameDate} >= ${sevenDaysStr}`)
     .orderBy(desc(persistedPlays.settledAt))
     .limit(2000);
 

@@ -863,6 +863,7 @@ export class LiveGameOrchestrator {
     // idempotent per-play HR grader. The grader uses the per-process
     // `KNOWN_HR_AB_INDEX` map so each HR is only stamped once even when
     // this loop and the 10s state poll race.
+    let hrRadarIdleTickCount = 0;
     this.timers.push(
       setInterval(() => {
         const tickStart = Date.now();
@@ -877,7 +878,17 @@ export class LiveGameOrchestrator {
           );
         }
         if (liveGames > 0) {
+          hrRadarIdleTickCount = 0;
           console.log(`[HR_RADAR_RECONCILE_TICK] liveGames=${liveGames} totalGames=${games.length} tookMs=${Date.now() - tickStart}`);
+        } else {
+          // Phase 9.4 — heartbeat. Emit one idle log every ~5 min (15 ticks
+          // × 20s) so admins can verify the reconcile loop is alive even
+          // when no games are currently live. Without this, total silence
+          // for 6+ hours/day was indistinguishable from a stalled timer.
+          hrRadarIdleTickCount += 1;
+          if (hrRadarIdleTickCount % 15 === 0) {
+            console.log(`[HR_RADAR_RECONCILE_IDLE] no live games (totalRegistered=${games.length}, idleTicks=${hrRadarIdleTickCount})`);
+          }
         }
       }, HR_RADAR_RECONCILE_MS)
     );
