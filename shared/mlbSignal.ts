@@ -18,6 +18,14 @@ export interface MLBSignal {
   recommendedSide: string;
   signalScore: number;
   confidenceTier: string;
+  // [MLB Canonical Signal Tier — Phase 2]
+  // Server-authoritative lowercase 4-state tier ("watch" | "lean" | "strong" |
+  // "elite"). Derived from confidenceTier via deriveSignalTier() in the
+  // orchestrator so every consumer (LiveBoard buckets, MlbSignalCard badge,
+  // mlb-live filters, topPlaysService, analytics) renders the SAME tier.
+  // Optional during the rollout window; clients fall back to a local mapper
+  // and emit [MLB_TIER_FALLBACK] when missing.
+  signalTier?: "watch" | "lean" | "strong" | "elite";
 
   awayAbbr: string | null;
   homeAbbr: string | null;

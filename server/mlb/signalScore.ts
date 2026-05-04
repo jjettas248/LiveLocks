@@ -15,6 +15,37 @@ export function getMarketFamily(market: MLBMarket, side: string): MarketFamily |
 
 export type SignalConfidenceTier = "ELITE" | "STRONG" | "SOLID" | "WATCHLIST" | "NO_SIGNAL";
 
+/**
+ * [MLB Canonical Signal Tier — Phase 2]
+ * Server-authoritative, lowercase, 4-state user-facing tier. This is the ONE
+ * tier value that flows Engine → API → DB → UI → Analytics. Derived once
+ * server-side from the existing `SignalConfidenceTier` so the underlying
+ * scoring formulas remain untouched. UI surfaces must render `signalTier`
+ * directly and never recompute from `signalScore`/`enginePct`.
+ */
+export type SignalTier = "watch" | "lean" | "strong" | "elite";
+
+/**
+ * Map the existing 5-state SignalConfidenceTier to the canonical 4-state
+ * SignalTier. SOLID collapses into "lean"; WATCHLIST and NO_SIGNAL collapse
+ * into "watch". This preserves current scoring behavior — it's a renaming /
+ * consolidation only, not a re-tiering.
+ */
+export function deriveSignalTier(confidenceTier: SignalConfidenceTier | string | null | undefined): SignalTier {
+  switch (confidenceTier) {
+    case "ELITE":
+      return "elite";
+    case "STRONG":
+      return "strong";
+    case "SOLID":
+      return "lean";
+    case "WATCHLIST":
+    case "NO_SIGNAL":
+    default:
+      return "watch";
+  }
+}
+
 export interface SignalScoreBreakdown {
   probability: number;
   projection: number;

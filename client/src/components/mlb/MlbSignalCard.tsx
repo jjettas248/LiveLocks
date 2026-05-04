@@ -5,6 +5,8 @@ import {
   formatAmericanOdds,
   getMlbLiveStatValue,
   TIER_COLORS,
+  TIER_COLORS_BY_SIGNAL_TIER,
+  resolveMlbSignalTier,
   SIDE_STYLES,
   MODE_STYLES,
   generateShareTweet,
@@ -144,7 +146,14 @@ export function MlbSignalCard({
     return () => clearInterval(id);
   }, []);
 
-  const tier = TIER_COLORS[sig.confidenceTier ?? "WATCHLIST"] ?? TIER_COLORS.WATCHLIST;
+  // [MLB Canonical Signal Tier — Phase 2] Prefer the server-stamped lowercase
+  // `signalTier` ("watch" | "lean" | "strong" | "elite") so the badge matches
+  // what LiveBoard buckets the signal under and what topPlaysService surfaces
+  // elsewhere. Falls back to the legacy uppercase confidenceTier color map
+  // only when signalTier is missing (cache rollover) — resolveMlbSignalTier
+  // emits [MLB_TIER_FALLBACK] in that path.
+  const canonicalTier = resolveMlbSignalTier(sig as any);
+  const tier = TIER_COLORS_BY_SIGNAL_TIER[canonicalTier] ?? TIER_COLORS[sig.confidenceTier ?? "WATCHLIST"] ?? TIER_COLORS.WATCHLIST;
   const side = SIDE_STYLES[sig.recommendedSide as keyof typeof SIDE_STYLES] ?? SIDE_STYLES.OVER;
   const marketLabel = formatMlbMarketLabel(sig.market);
   const matchup = sig.awayAbbr && sig.homeAbbr ? `${sig.awayAbbr} @ ${sig.homeAbbr}` : null;

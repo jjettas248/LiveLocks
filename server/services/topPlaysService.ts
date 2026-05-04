@@ -16,6 +16,12 @@ export type TopPlayItem = {
   betDirection?: string;
   routeTarget: string;
   confidenceTier: "ELITE" | "STRONG" | "VALUE" | "NO_EDGE";
+  // [MLB Canonical Signal Tier — Phase 2] Lowercase 4-state canonical tier
+  // for MLB plays. Server-derived from MLBSignal.signalTier; surfaces that
+  // care about tier semantics (e.g. share modal, analytics) should prefer
+  // this over the legacy `confidenceTier` enum. Always present for MLB,
+  // undefined for NBA/NCAAB which use their own tiering.
+  signalTier?: "watch" | "lean" | "strong" | "elite";
   updatedAt: string;
   signalScore?: number | null;
   timingContext?: string | null;
@@ -41,6 +47,26 @@ function classifyTier(prob: number): "ELITE" | "STRONG" | "VALUE" | "NO_EDGE" {
   if (prob >= 65) return "STRONG";
   if (prob >= 58) return "VALUE";
   return "NO_EDGE";
+}
+
+// [MLB Canonical Signal Tier — Phase 2] Translate the server-canonical
+// lowercase tier ("watch" | "lean" | "strong" | "elite") into the legacy
+// uppercase TopPlayItem.confidenceTier enum, so existing rank weighting and
+// UI styling continue to work without any per-surface re-mapping.
+function mapMlbSignalTierToConfidenceTier(
+  tier: "watch" | "lean" | "strong" | "elite" | null | undefined,
+): "ELITE" | "STRONG" | "VALUE" | "NO_EDGE" {
+  switch (tier) {
+    case "elite":
+      return "ELITE";
+    case "strong":
+      return "STRONG";
+    case "lean":
+      return "VALUE";
+    case "watch":
+    default:
+      return "NO_EDGE";
+  }
 }
 
 const TIER_WEIGHT: Record<string, number> = {
@@ -145,6 +171,30 @@ export function buildTopPlays(
     if (!sig || typeof sig.enginePct !== "number" || !Number.isFinite(sig.enginePct)) continue;
     if (sig.enginePct < 55) continue;
     const edge = typeof sig.edge === "number" && Number.isFinite(sig.edge) ? sig.edge : 0;
+
+    // [MLB Canonical Signal Tier — Phase 2] Prefer the server-stamped
+    // canonical signalTier. Fallback to the legacy confidenceTier-derived
+    // enum (and ultimately a probability-based classifier) only if it's
+    // missing — emit [MLB_TIER_FALLBACK] so we can detect and fix the
+    // missing stamp upstream.
+    const canonicalTier = (sig.signalTier as "watch" | "lean" | "strong" | "elite" | undefined);
+    const isCanonical = canonicalTier === "elite" || canonicalTier === "strong" || canonicalTier === "lean" || canonicalTier === "watch";
+    if (!isCanonical) {
+      try {
+        console.log("[MLB_TIER_FALLBACK]", {
+          surface: "topPlaysService",
+          player: sig.playerName,
+          market: sig.market,
+          confidenceTier: sig.confidenceTier,
+          signalScore: sig.signalScore,
+          enginePct: sig.enginePct,
+        });
+      } catch {}
+    }
+    const resolvedConfidenceTier = isCanonical
+      ? mapMlbSignalTierToConfidenceTier(canonicalTier)
+      : (sig.confidenceTier ?? classifyTier(sig.enginePct));
+
     plays.push({
       id: `mlb_${sig.playerId}_${sig.market}`,
       sport: "MLB",
@@ -159,7 +209,8 @@ export function buildTopPlays(
       summary: sig.thesis ?? sig.explanationBullets?.[0] ?? null,
       gameId: sig.gameId,
       routeTarget: "mlb",
-      confidenceTier: sig.confidenceTier ?? classifyTier(sig.enginePct),
+      confidenceTier: resolvedConfidenceTier,
+      signalTier: isCanonical ? canonicalTier : undefined,
       updatedAt: sig.updatedAt ?? new Date().toISOString(),
       signalScore: sig.signalScore ?? null,
       timingContext: sig.timingContext ?? null,

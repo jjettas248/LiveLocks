@@ -80,6 +80,68 @@ export const TIER_COLORS: Record<string, { bg: string; border: string; text: str
   WATCHLIST: { bg: "rgba(113,113,122,0.06)", border: "rgba(113,113,122,0.3)", text: "#71717a", badge: "WATCH" },
 };
 
+// [MLB Canonical Signal Tier — Phase 2] Lowercase, server-canonical tier
+// vocabulary used by every MLB UI surface. Keys match `MLBSignal.signalTier`
+// exactly, so consumers can do `TIER_COLORS_BY_SIGNAL_TIER[sig.signalTier]`
+// without translation. NEVER infer the tier from `signalScore` on the client
+// — always read `sig.signalTier` and use `resolveMlbSignalTier()` only as a
+// fallback if the server hasn't stamped it yet.
+export type MlbSignalTier = "watch" | "lean" | "strong" | "elite";
+
+export const TIER_COLORS_BY_SIGNAL_TIER: Record<MlbSignalTier, { bg: string; border: string; text: string; badge: string }> = {
+  elite:  { bg: "rgba(234,179,8,0.08)",   border: "rgba(234,179,8,0.4)",   text: "#eab308", badge: "ELITE" },
+  strong: { bg: "rgba(34,197,94,0.08)",   border: "rgba(34,197,94,0.4)",   text: "#22c55e", badge: "STRONG" },
+  lean:   { bg: "rgba(20,184,166,0.08)",  border: "rgba(20,184,166,0.4)",  text: "#14b8a6", badge: "LEAN"   },
+  watch:  { bg: "rgba(113,113,122,0.06)", border: "rgba(113,113,122,0.3)", text: "#71717a", badge: "WATCH"  },
+};
+
+// Map the legacy uppercase `confidenceTier` enum to the canonical lowercase
+// `signalTier` for clients that still receive a signal without a stamped
+// `signalTier` (cache rollover during deploy, legacy persisted rows). This
+// MUST mirror server-side `deriveSignalTier()` in signalScore.ts.
+function mapConfidenceTierToSignalTier(confidenceTier: string | null | undefined): MlbSignalTier {
+  switch (confidenceTier) {
+    case "ELITE":  return "elite";
+    case "STRONG": return "strong";
+    case "SOLID":  return "lean";
+    case "WATCHLIST":
+    case "NO_SIGNAL":
+    default:       return "watch";
+  }
+}
+
+/**
+ * Resolve the canonical `MlbSignalTier` for a signal. Always prefers the
+ * server-stamped `signalTier`; falls back to the legacy `confidenceTier`
+ * mapping (and emits a console warning so we can detect missing stamps in
+ * production). NEVER recomputes the tier from `signalScore`.
+ */
+export function resolveMlbSignalTier(sig: {
+  signalTier?: string | null;
+  confidenceTier?: string | null;
+  playerName?: string;
+  market?: string;
+}): MlbSignalTier {
+  const t = sig.signalTier;
+  if (t === "elite" || t === "strong" || t === "lean" || t === "watch") {
+    return t;
+  }
+  const derived = mapConfidenceTierToSignalTier(sig.confidenceTier);
+  try {
+    // Surface client-side fallback so the orchestrator team can correlate
+    // missing server stamps with the [MLB_TIER_FALLBACK] server log.
+    // eslint-disable-next-line no-console
+    console.warn("[MLB_TIER_FALLBACK]", {
+      surface: "client",
+      player: sig.playerName,
+      market: sig.market,
+      confidenceTier: sig.confidenceTier,
+      derivedSignalTier: derived,
+    });
+  } catch {}
+  return derived;
+}
+
 export const SIDE_STYLES = {
   OVER: { accent: "#22c55e", bg: "rgba(34,197,94,0.08)", border: "rgba(34,197,94,0.35)", label: "OVER" },
   UNDER: { accent: "#3b82f6", bg: "rgba(59,130,246,0.08)", border: "rgba(59,130,246,0.35)", label: "UNDER" },

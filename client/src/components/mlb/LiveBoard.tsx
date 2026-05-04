@@ -1,13 +1,15 @@
 import { Target, TrendingUp, Eye, Flame, ChevronDown, ChevronUp } from "lucide-react";
 import { useState } from "react";
 import { MlbSignalCard, type MlbSignalData } from "./MlbSignalCard";
-import { classifyTier } from "@/lib/mlbFormatters";
+import { resolveMlbSignalTier, type MlbSignalTier } from "@/lib/mlbFormatters";
 
+// [MLB Canonical Signal Tier — Phase 2] Bucket keys MUST match the server's
+// `signalTier` vocabulary exactly ("elite" | "strong" | "lean" | "watch") so
+// that `grouped[resolveMlbSignalTier(sig)]` is always defined. Display labels
+// remain user-facing names ("Elite" / "Strong" / "Lean" / "Watch").
 type TierConfig = {
-  key: string;
+  key: MlbSignalTier;
   label: string;
-  min: number;
-  max: number;
   color: string;
   bg: string;
   border: string;
@@ -15,10 +17,10 @@ type TierConfig = {
 };
 
 const TIERS: TierConfig[] = [
-  { key: "elite", label: "Elite", min: 75, max: 100, color: "#eab308", bg: "rgba(234,179,8,0.06)", border: "rgba(234,179,8,0.3)", icon: Flame },
-  { key: "edge", label: "Strong", min: 65, max: 74, color: "#22c55e", bg: "rgba(34,197,94,0.06)", border: "rgba(34,197,94,0.3)", icon: Target },
-  { key: "lean", label: "Solid", min: 55, max: 64, color: "#14b8a6", bg: "rgba(20,184,166,0.06)", border: "rgba(20,184,166,0.3)", icon: TrendingUp },
-  { key: "watch", label: "Watch", min: 0, max: 54, color: "#71717a", bg: "rgba(113,113,122,0.04)", border: "rgba(113,113,122,0.2)", icon: Eye },
+  { key: "elite",  label: "Elite",  color: "#eab308", bg: "rgba(234,179,8,0.06)",   border: "rgba(234,179,8,0.3)",   icon: Flame      },
+  { key: "strong", label: "Strong", color: "#22c55e", bg: "rgba(34,197,94,0.06)",   border: "rgba(34,197,94,0.3)",   icon: Target     },
+  { key: "lean",   label: "Lean",   color: "#14b8a6", bg: "rgba(20,184,166,0.06)",  border: "rgba(20,184,166,0.3)",  icon: TrendingUp },
+  { key: "watch",  label: "Watch",  color: "#71717a", bg: "rgba(113,113,122,0.04)", border: "rgba(113,113,122,0.2)", icon: Eye        },
 ];
 
 export function LiveBoard({
@@ -39,15 +41,18 @@ export function LiveBoard({
     ? (a: MlbSignalData, b: MlbSignalData) => (b.enginePct ?? 0) - (a.enginePct ?? 0)
     : (a: MlbSignalData, b: MlbSignalData) => (b.signalScore ?? 0) - (a.signalScore ?? 0);
 
-  const grouped: Record<string, { over: MlbSignalData[]; under: MlbSignalData[] }> = {
-    elite: { over: [], under: [] },
-    edge: { over: [], under: [] },
-    lean: { over: [], under: [] },
-    watch: { over: [], under: [] },
+  const grouped: Record<MlbSignalTier, { over: MlbSignalData[]; under: MlbSignalData[] }> = {
+    elite:  { over: [], under: [] },
+    strong: { over: [], under: [] },
+    lean:   { over: [], under: [] },
+    watch:  { over: [], under: [] },
   };
 
   for (const sig of signals) {
-    const tier = classifyTier(sig.signalScore);
+    // [MLB Canonical Signal Tier — Phase 2] Read server-stamped `signalTier`
+    // directly; resolveMlbSignalTier() emits [MLB_TIER_FALLBACK] only if the
+    // server hasn't stamped it (cache rollover) and falls back deterministically.
+    const tier = resolveMlbSignalTier(sig as any);
     if (sig.recommendedSide === "UNDER") {
       grouped[tier].under.push(sig);
     } else {
@@ -66,7 +71,7 @@ export function LiveBoard({
   ).length;
   const strictCount = Math.max(0, totalSignals - fallbackCount - watchCount);
 
-  for (const tier of Object.keys(grouped)) {
+  for (const tier of Object.keys(grouped) as MlbSignalTier[]) {
     grouped[tier].over.sort(sortFn);
     grouped[tier].under.sort(sortFn);
   }

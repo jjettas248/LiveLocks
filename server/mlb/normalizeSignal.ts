@@ -1,6 +1,7 @@
 import type { MLBSignal, PitchMatchupRating } from "../../shared/mlbSignal";
 import { normalizePitchTypeCode, getPitchFamily, PITCH_DISPLAY_LABEL } from "./pitchTypeNormalizer";
 import type { CanonicalPitchType } from "./pitchTypeNormalizer";
+import { deriveSignalTier, type SignalTier } from "./signalScore";
 
 export interface NormalizeContext {
   gameId: string;
@@ -405,6 +406,27 @@ export function normalizeMLBSignal(
     recommendedSide: qs.side,
     signalScore: qs.signalScore ?? 0,
     confidenceTier: qs.confidenceTier ?? "WATCHLIST",
+    // [MLB Canonical Signal Tier — Phase 2] Pass the orchestrator-stamped
+    // canonical tier through verbatim. If the orchestrator hasn't stamped it
+    // yet (cache rollover, legacy signal), derive it from confidenceTier here
+    // and emit a fallback log so we can detect and fix the missing stamp.
+    signalTier: ((): SignalTier => {
+      const stamped = qs.signalTier as SignalTier | undefined;
+      if (stamped === "elite" || stamped === "strong" || stamped === "lean" || stamped === "watch") {
+        return stamped;
+      }
+      const derived = deriveSignalTier(qs.confidenceTier);
+      try {
+        console.log("[MLB_TIER_FALLBACK]", {
+          surface: "normalizeSignal",
+          player: qs.playerName,
+          market: normalizedMkt,
+          confidenceTier: qs.confidenceTier,
+          derivedSignalTier: derived,
+        });
+      } catch {}
+      return derived;
+    })(),
 
     awayAbbr: ctx.game?.awayAbbr ?? null,
     homeAbbr: ctx.game?.homeAbbr ?? null,

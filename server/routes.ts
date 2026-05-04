@@ -1810,6 +1810,11 @@ export async function registerRoutes(
           } : null,
           signalScore: qs.signalScore,
           confidenceTier: qs.confidenceTier,
+          // [MLB Canonical Signal Tier — Phase 2] Pass the orchestrator-stamped
+          // canonical tier through to the wire so MlbSignalCard / LiveBoard read
+          // sig.signalTier directly via resolveMlbSignalTier() instead of falling
+          // through to the legacy [MLB_TIER_FALLBACK] confidenceTier→tier mapping.
+          signalTier: (qs as any).signalTier,
           signalTags: qs.signalTags,
           feedTags: qs.feedTags,
           playerGlowEligible: qs.playerGlowEligible,
@@ -8335,6 +8340,12 @@ export function registerAnalyticsRoutes(app: Express): void {
             gameId: sig.gameId,
             signalScore: sig.signalScore,
             confidenceTier: sig.confidenceTier,
+            // [MLB Canonical Signal Tier — Phase 2] Pass the orchestrator-stamped
+            // canonical tier through to topPlaysService so the Top Plays surface
+            // renders the SAME tier as LiveBoard / MlbSignalCard. Missing this
+            // pass-through caused topPlaysService to fall through to the legacy
+            // confidenceTier path and emit [MLB_TIER_FALLBACK] for every MLB row.
+            signalTier: sig.signalTier,
             timingContext: sigAny.timingContext ?? timingLabel,
             currentStats: sig.currentStats ?? null,
             lastABContact: sig.lastABContact ?? null,
@@ -8461,7 +8472,15 @@ export function registerAnalyticsRoutes(app: Express): void {
         const qs = entry.qualifiedSignals ?? [];
         for (const sig of qs) {
           totalLive++;
-          if (sig.confidenceTier === "ELITE" || sig.confidenceTier === "STRONG") mlbElite++;
+          // [MLB Canonical Signal Tier — Phase 2] Prefer the orchestrator-stamped
+          // canonical signalTier ("elite" | "strong" => high-confidence MLB row).
+          // Fall back to the legacy uppercase confidenceTier mapping so older
+          // cache entries written before the stamp shipped still count correctly.
+          const tier = (sig as any).signalTier as string | undefined;
+          const isHighConfidence = tier
+            ? (tier === "elite" || tier === "strong")
+            : (sig.confidenceTier === "ELITE" || sig.confidenceTier === "STRONG");
+          if (isHighConfidence) mlbElite++;
         }
       }
 

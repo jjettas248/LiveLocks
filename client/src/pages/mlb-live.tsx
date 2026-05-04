@@ -23,7 +23,7 @@ import {
   type HrRadarCardUi,
   type HrRadarAnalyzeViewModel,
 } from "@/lib/mlbUiMappers";
-import { MODE_STYLES } from "@/lib/mlbFormatters";
+import { MODE_STYLES, resolveMlbSignalTier } from "@/lib/mlbFormatters";
 import {
   buildSignalViewModel, buildHrRadarViewModel, buildGameViewModel,
   buildAtBatLogViewModel, buildPitchMatchupViewModel,
@@ -201,7 +201,14 @@ function inningLabel(game: MLBGame): string {
 }
 
 function gameLeanBadge(signals: MlbSignalData[], gameId: string): { label: string; color: string } | null {
-  const gameSignals = signals.filter(s => s.gameId === gameId && (s.confidenceTier === "ELITE" || s.confidenceTier === "STRONG"));
+  // [MLB Canonical Signal Tier — Phase 2] Filter MLB signals on the canonical
+  // lowercase signalTier rather than the legacy uppercase confidenceTier so
+  // the badge stays consistent with LiveBoard buckets and TopPlays.
+  const gameSignals = signals.filter(s => {
+    if (s.gameId !== gameId) return false;
+    const t = resolveMlbSignalTier(s as any);
+    return t === "elite" || t === "strong";
+  });
   if (gameSignals.length === 0) return null;
   const pitcherCount = gameSignals.filter(s => ["pitcher_k", "pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(s.market)).length;
   const batterCount = gameSignals.length - pitcherCount;
@@ -431,7 +438,10 @@ function SpikeAlertBanner({ signals }: { signals: MlbSignalData[] }) {
     // HR spike alerts use our engine signal score (book-implied HR probability
     // is structurally low and would never trigger a probability-based gate).
     const isHR = s.market === "home_runs" && (s.signalScore ?? 0) >= 60;
-    const isElite = s.confidenceTier === "ELITE";
+    // [MLB Canonical Signal Tier — Phase 2] Read canonical signalTier instead
+    // of the legacy uppercase confidenceTier so spike-band membership matches
+    // LiveBoard "Elite" bucket membership exactly.
+    const isElite = resolveMlbSignalTier(s as any) === "elite";
     const isLiveSpike = (s.liveScore ?? 0) >= 0.10;
     return hasPitcherSignal || isHR || isElite || isLiveSpike;
   });

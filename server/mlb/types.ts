@@ -556,6 +556,12 @@ export interface MLBQualifiedSignal {
   projection: number;
   evPct: number;
   confidenceTier: SignalConfidenceTier;
+  // [MLB Canonical Signal Tier — Phase 2]
+  // Lowercase 4-state user-facing tier derived from confidenceTier in the
+  // orchestrator (see deriveSignalTier in signalScore.ts). All MLB UI surfaces
+  // and downstream services (topPlaysService, analytics, calculator) must
+  // render this value rather than recomputing tiers from signalScore/enginePct.
+  signalTier?: import("./signalScore").SignalTier;
   signalScore: number;
   reasons: string[];
   feedTags: string[];

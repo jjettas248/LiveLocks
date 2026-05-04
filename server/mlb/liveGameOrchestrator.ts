@@ -39,7 +39,7 @@ import type { MLBPropInput, MLBPropOutput, MLBMarket, MLBQualifiedSignal } from 
 import { MARKET_QUALIFY_FLOOR, ALL_MLB_MARKETS } from "./types";
 import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
 import { getCanonicalSidedProbability } from "./probabilityEngine";
-import { computeSignalScore, computeSignalScoreByFamily, scoreHRRadar, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily } from "./signalScore";
+import { computeSignalScore, computeSignalScoreByFamily, scoreHRRadar, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily, deriveSignalTier } from "./signalScore";
 import type { MarketFamily } from "./signalScore";
 import { buildSignalDiagnostics } from "./signalDiagnostics";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
@@ -1844,6 +1844,22 @@ export class LiveGameOrchestrator {
       canonicalProbability: sidedCalibrated,
     });
 
+    // [MLB Canonical Signal Tier — Phase 2] Derive the canonical lowercase
+    // 4-state tier ONCE here from the existing confidenceTier so every
+    // downstream consumer (UI, topPlays, analytics, calculator) renders the
+    // SAME value. Underlying scoring formulas are untouched — this is a
+    // tier-name normalization, not a re-tiering.
+    const canonicalSignalTier = deriveSignalTier(scoreBreakdown.confidenceTier);
+    console.log("[MLB_SIGNAL_TIER]", {
+      player: output.playerName,
+      market: output.market,
+      recommendedSide: output.recommendedSide,
+      signalScore: scoreBreakdown.total,
+      confidenceTier: scoreBreakdown.confidenceTier,
+      signalTier: canonicalSignalTier,
+      mode: signalMode,
+    });
+
     const signal: MLBQualifiedSignal = {
       id: `${gameId}_${output.playerId}_${output.market}`,
       gameId,
@@ -1863,6 +1879,7 @@ export class LiveGameOrchestrator {
       projection: adjustedProjection,
       evPct: output.evPct,
       confidenceTier: scoreBreakdown.confidenceTier,
+      signalTier: canonicalSignalTier,
       signalScore: scoreBreakdown.total,
       reasons: output.explanationBullets,
       feedTags: feedTags as string[],
