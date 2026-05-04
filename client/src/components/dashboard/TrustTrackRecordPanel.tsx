@@ -39,6 +39,14 @@ export function TrustTrackRecordPanel() {
 
   const { last7Days, bySport, recentResults } = data;
 
+  // [PRIMARY ROI EXCLUSION v1] last7Days.roi/winRate are the Core Engine
+  // numbers — the server already filters out home_runs + batter_strikeouts.
+  // We surface the exclusion via a hover tooltip so users understand why
+  // the headline differs from the all-markets number.
+  const coreEngineHelp =
+    "Core Engine ROI: excludes high-variance Home Run and Batter Strikeout props " +
+    "(tracked separately in HR Radar). Reflects markets the engine is optimized for.";
+
   return (
     <div className="rounded-xl border border-border/40 bg-card overflow-hidden" data-testid="panel-trust-record">
       <div className="p-4 border-b border-border/30">
@@ -46,22 +54,36 @@ export function TrustTrackRecordPanel() {
       </div>
 
       <div className="p-4 grid grid-cols-3 gap-3">
-        <div className="bg-secondary/30 rounded-lg p-3 text-center">
-          <div className="text-[10px] text-muted-foreground">7-Day Win Rate</div>
-          <div className={`text-xl font-bold ${last7Days.winRate >= 55 ? "text-green-400" : "text-foreground"}`}>
+        <div className="bg-secondary/30 rounded-lg p-3 text-center" title={coreEngineHelp}>
+          <div className="text-[10px] text-muted-foreground" data-testid="label-trust-winrate">7d Win Rate</div>
+          <div
+            data-testid="text-trust-winrate"
+            className={`text-xl font-bold ${last7Days.winRate >= 55 ? "text-green-400" : "text-foreground"}`}
+          >
             {last7Days.winRate}%
           </div>
         </div>
-        <div className="bg-secondary/30 rounded-lg p-3 text-center">
-          <div className="text-[10px] text-muted-foreground">ROI</div>
-          <div className={`text-xl font-bold ${last7Days.roi > 0 ? "text-green-400" : last7Days.roi < 0 ? "text-red-400" : "text-foreground"}`}>
+        <div className="bg-secondary/30 rounded-lg p-3 text-center" title={coreEngineHelp}>
+          <div className="text-[10px] text-muted-foreground" data-testid="label-trust-roi">Core Engine ROI</div>
+          <div
+            data-testid="text-trust-roi"
+            className={`text-xl font-bold ${last7Days.roi > 0 ? "text-green-400" : last7Days.roi < 0 ? "text-red-400" : "text-foreground"}`}
+          >
             {last7Days.roi > 0 ? "+" : ""}{last7Days.roi}%
           </div>
         </div>
-        <div className="bg-secondary/30 rounded-lg p-3 text-center">
-          <div className="text-[10px] text-muted-foreground">Plays (7d)</div>
-          <div className="text-xl font-bold text-foreground">{last7Days.plays}</div>
+        <div className="bg-secondary/30 rounded-lg p-3 text-center" title={coreEngineHelp}>
+          <div className="text-[10px] text-muted-foreground" data-testid="label-trust-plays">Plays (7d)</div>
+          <div className="text-xl font-bold text-foreground" data-testid="text-trust-plays">{last7Days.plays}</div>
         </div>
+      </div>
+
+      <div
+        className="px-4 -mt-1 pb-2 text-[10px] text-muted-foreground/80 italic"
+        data-testid="text-trust-exclusion-footnote"
+        title={coreEngineHelp}
+      >
+        Core Engine — excludes HR &amp; K props (see HR Radar)
       </div>
 
       {bySport.length > 0 && (

@@ -2,10 +2,33 @@ import { db } from "../db";
 import { persistedPlays, type PersistedPlay } from "@shared/schema";
 import { sql, desc } from "drizzle-orm";
 import { daysAgoET } from "../utils/dateUtils";
-import { getROIMetrics } from "./roiEngine";
+import {
+  getROIMetrics,
+  getPrimaryROIMetrics,
+  filterPrimaryRoiPlays,
+  getRoiByMarket,
+  logRoiFilterApplied,
+  EXCLUDED_FROM_PRIMARY_ROI,
+  type MarketROIBreakdownRow,
+} from "./roiEngine";
 
 export type PublicAnalyticsSummary = {
+  /**
+   * [PRIMARY ROI EXCLUSION v1] Headline ROI / win rate / play count for the
+   * last 7 days. Excludes home_runs + batter_strikeouts so the user-facing
+   * "Core Engine ROI" reflects markets the engine is actually optimized for.
+   * The full all-markets numbers stay available on `last7DaysFull` for admin
+   * / internal observability.
+   */
   last7Days: { winRate: number; roi: number; plays: number };
+  last7DaysFull: { winRate: number; roi: number; plays: number };
+  excludedFromPrimary: readonly string[];
+  /**
+   * Per-market breakdown for the same 7-day window with the
+   * `excludedFromPrimary` flag stamped per row, so admin dashboards can
+   * surface "where did the ROI come from / where did it leak".
+   */
+  byMarket: MarketROIBreakdownRow[];
   bySport: Array<{ sport: string; winRate: number; roi: number; plays: number }>;
   // ── Playoff segmentation (PHASE 7) ──────────────────────────────────────
   // NBA-only breakdown of regular season vs. playoff performance, plus
@@ -267,16 +290,41 @@ export async function getPublicAnalyticsSummary(): Promise<PublicAnalyticsSummar
     .limit(2000);
 
   const totalPlays = settled.length;
-  const wins = settled.filter(p => p.result === "hit").length;
-  const losses = settled.filter(p => p.result === "miss").length;
-  const decidedPlays = wins + losses;
-  const winRate = decidedPlays > 0 ? Math.round((wins / decidedPlays) * 1000) / 10 : 0;
-  // Audit finding 1.4: canonical roiEngine helper (per-play odds, -110 fallback
-  // only when odds missing, pending excluded).
-  const roi = getROIMetrics(settled as PersistedPlay[]).roi;
+
+  // [PRIMARY ROI EXCLUSION v1] Compute both the headline (primary) and the
+  // full all-markets numbers. Headline excludes home_runs + batter_strikeouts;
+  // full keeps everything for internal observability.
+  const primaryPlays = filterPrimaryRoiPlays(settled as PersistedPlay[]);
+  logRoiFilterApplied({
+    surface: "publicAnalyticsService.last7Days",
+    totalPlays: settled.length,
+    primaryPlays: primaryPlays.length,
+  });
+
+  // Helper — winRate uses (hits / (hits + misses)), pushes excluded from the
+  // denominator. This preserves the prior numeric semantics of the public
+  // surface; only the input set changes between primary and full.
+  const computeWinRate = (rows: PersistedPlay[]): number => {
+    const w = rows.filter(p => p.result === "hit").length;
+    const l = rows.filter(p => p.result === "miss").length;
+    const d = w + l;
+    return d > 0 ? Math.round((w / d) * 1000) / 10 : 0;
+  };
+
+  const winRate = computeWinRate(primaryPlays);
+  const winRateFull = computeWinRate(settled as PersistedPlay[]);
+  // Canonical roiEngine helpers — per-play odds, -110 fallback only when odds
+  // missing, pending excluded.
+  const roi = getPrimaryROIMetrics(settled as PersistedPlay[]).roi;
+  const roiFull = getROIMetrics(settled as PersistedPlay[]).roi;
+
+  const byMarket = getRoiByMarket(settled as PersistedPlay[]);
 
   // Group plays by sport keeping full-row references so the canonical ROI helper
-  // can read per-play `odds` instead of assuming a flat -110 vig.
+  // can read per-play `odds` instead of assuming a flat -110 vig. For each
+  // sport we report the PRIMARY (headline) numbers; HR + K are MLB-only
+  // markets so NBA/NCAAB rows are unaffected, but MLB rows now reflect the
+  // exclusion. `plays` keeps the full count so users see total volume.
   const sportMap = new Map<string, PersistedPlay[]>();
   for (const p of settled) {
     const sport = (p.sport ?? "nba").toUpperCase();
@@ -285,13 +333,11 @@ export async function getPublicAnalyticsSummary(): Promise<PublicAnalyticsSummar
   }
 
   const bySport = Array.from(sportMap.entries()).map(([sport, sportPlays]) => {
-    const sWins = sportPlays.filter(p => p.result === "hit").length;
-    const sLosses = sportPlays.filter(p => p.result === "miss").length;
-    const sDecided = sWins + sLosses;
+    const sportPrimary = filterPrimaryRoiPlays(sportPlays);
     return {
       sport,
-      winRate: sDecided > 0 ? Math.round((sWins / sDecided) * 1000) / 10 : 0,
-      roi: getROIMetrics(sportPlays).roi,
+      winRate: computeWinRate(sportPrimary),
+      roi: getPrimaryROIMetrics(sportPlays).roi,
       plays: sportPlays.length,
     };
   });
@@ -318,5 +364,13 @@ export async function getPublicAnalyticsSummary(): Promise<PublicAnalyticsSummar
     settledAt: p.settledAt ? p.settledAt.toISOString() : "",
   }));
 
-  return { last7Days: { winRate, roi, plays: totalPlays }, bySport, nbaSeasonSegmentation, recentResults };
+  return {
+    last7Days: { winRate, roi, plays: primaryPlays.length },
+    last7DaysFull: { winRate: winRateFull, roi: roiFull, plays: totalPlays },
+    excludedFromPrimary: EXCLUDED_FROM_PRIMARY_ROI,
+    byMarket,
+    bySport,
+    nbaSeasonSegmentation,
+    recentResults,
+  };
 }

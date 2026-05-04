@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { db } from "./db";
 import { api } from "@shared/routes";
 import { z } from "zod";
-import { type Player, type ParlayPickInput, persistedPlays } from "@shared/schema";
+import { type Player, type ParlayPickInput, type PersistedPlay, persistedPlays } from "@shared/schema";
 import { sql, and, desc, gte } from "drizzle-orm";
 import { computeFamilyPenaltyFactor } from "./nba/marketFamily";
 import { recordSurfacedSignal, seedFromSettledPlays, getDirectionalSplit } from "./nba/directionalBias";
@@ -8072,6 +8072,28 @@ export function registerPerformanceRoutes(app: Express): void {
       const pushes = plays.filter(p => p.result === "push").length;
       const decided = hits + misses;
 
+      // [PRIMARY ROI EXCLUSION v1] Compute Core Engine ROI alongside the
+      // existing full-market summary. /api/performance is admin-facing so
+      // we expose BOTH numbers; existing fields (winRate, hits, misses) keep
+      // their full-market semantics for backward compatibility — primary
+      // numbers are added under `primaryROI`/`primaryWinRate`/`primaryHits`.
+      const { getPrimaryROIMetrics, getROIMetrics, filterPrimaryRoiPlays, logRoiFilterApplied } = await import("./services/roiEngine");
+      const playsForRoi = plays as unknown as PersistedPlay[];
+      const primaryPlays = filterPrimaryRoiPlays(playsForRoi);
+      logRoiFilterApplied({
+        surface: `performance.${sport}.${range}.${direction}`,
+        totalPlays: playsForRoi.length,
+        primaryPlays: primaryPlays.length,
+      });
+      const primaryROI = getPrimaryROIMetrics(playsForRoi).roi;
+      const fullROI = getROIMetrics(playsForRoi).roi;
+      const primaryHits = primaryPlays.filter(p => p.result === "hit").length;
+      const primaryMisses = primaryPlays.filter(p => p.result === "miss").length;
+      const primaryDecided = primaryHits + primaryMisses;
+      const primaryWinRate = primaryDecided > 0
+        ? Math.round((primaryHits / primaryDecided) * 1000) / 10
+        : 0;
+
       const avgEdge = plays.length > 0
         ? Math.round(plays.reduce((s, p) => s + (Number(p.edgeGap) || Number(p.modelEdge) || 0), 0) / plays.length * 10) / 10
         : 0;
@@ -8128,6 +8150,16 @@ export function registerPerformanceRoutes(app: Express): void {
           misses,
           pushes,
           winRate: decided > 0 ? Math.round((hits / decided) * 1000) / 10 : 0,
+          // [PRIMARY ROI EXCLUSION v1] Core Engine numbers (excludes
+          // home_runs + batter_strikeouts) — opt-in for callers that want to
+          // render the user-facing headline alongside the full-market view.
+          primaryTotal: primaryPlays.length,
+          primaryHits,
+          primaryMisses,
+          primaryWinRate,
+          primaryROI,
+          fullROI,
+          excludedFromPrimary: ["home_runs", "batter_strikeouts"],
           avgEdge,
           avgProb,
         },
@@ -8852,8 +8884,24 @@ export function registerAnalyticsRoutes(app: Express): void {
       const hits = settled.filter((p) => p.result === "hit").length;
       const total = settled.length;
       const winRate = total > 0 ? Math.round((hits / total) * 1000) / 10 : 0;
-      const roi = total > 0
-        ? Math.round(((hits * 90.91 - (total - hits) * 100) / total) * 10) / 10
+      // [PRIMARY ROI EXCLUSION v1] Headline `roi` excludes home_runs +
+      // batter_strikeouts (Core Engine ROI); `roiFull` keeps everything for
+      // admin observability. Both use the canonical roiEngine helpers (per-play
+      // odds, -110 fallback only when missing) — replaces the prior inline
+      // flat-vig calc which assumed every play was -110.
+      const { getPrimaryROIMetrics, getROIMetrics, logRoiFilterApplied, filterPrimaryRoiPlays } = await import("./services/roiEngine");
+      const settledForRoi = settled as unknown as PersistedPlay[];
+      const primaryPlays = filterPrimaryRoiPlays(settledForRoi);
+      logRoiFilterApplied({
+        surface: `analytics.summary.${league}.${range}`,
+        totalPlays: settledForRoi.length,
+        primaryPlays: primaryPlays.length,
+      });
+      const roi = getPrimaryROIMetrics(settledForRoi).roi;
+      const roiFull = getROIMetrics(settledForRoi).roi;
+      const primaryHits = primaryPlays.filter((p) => p.result === "hit").length;
+      const primaryWinRate = primaryPlays.length > 0
+        ? Math.round((primaryHits / primaryPlays.length) * 1000) / 10
         : 0;
 
       const pending = recentResult.plays.filter((p) => p.result === null).length;
@@ -8869,9 +8917,13 @@ export function registerAnalyticsRoutes(app: Express): void {
         league,
         range,
         winRate,
+        primaryWinRate,
         totalSettled: total,
+        totalSettledPrimary: primaryPlays.length,
         totalHits: hits,
         roi,
+        roiFull,
+        excludedFromPrimary: ["home_runs", "batter_strikeouts"],
         pending,
         overWinRate,
         underWinRate,

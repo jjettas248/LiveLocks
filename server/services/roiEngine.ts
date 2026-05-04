@@ -1,5 +1,53 @@
 import type { PersistedPlay } from "@shared/schema";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// [PRIMARY ROI EXCLUSION v1] User-facing dashboards report a "Core Engine ROI"
+// that excludes high-variance markets which the engine is not optimized for:
+//
+//   - home_runs        → low base rate (~10–15%), event-radar product
+//   - batter_strikeouts → tight book lines, marginal edge
+//
+// These markets remain in segmented analytics and internal diagnostics. Only
+// the headline / dashboard ROI excludes them. Canonical market keys come from
+// `shared/normalizeMlbMarket.ts`.
+// ─────────────────────────────────────────────────────────────────────────────
+export const EXCLUDED_FROM_PRIMARY_ROI: readonly string[] = Object.freeze([
+  "home_runs",
+  "batter_strikeouts",
+]);
+
+/** Returns true if a play's market is excluded from the primary (headline) ROI. */
+export function isExcludedFromPrimaryRoi(market: string | null | undefined): boolean {
+  if (!market) return false;
+  return EXCLUDED_FROM_PRIMARY_ROI.includes(market);
+}
+
+/** Filter plays down to those that count toward the primary (headline) ROI. */
+export function filterPrimaryRoiPlays<T extends { market?: string | null }>(plays: T[]): T[] {
+  return plays.filter(p => !isExcludedFromPrimaryRoi(p.market ?? null));
+}
+
+/**
+ * Structured log emitted whenever a surface applies the primary-ROI filter.
+ * Mirrors the [MLB_SIGNAL_TIER] / [MLB_CANONICAL_PROBABILITY] pattern so
+ * downstream observability can detect drift if a surface forgets to filter.
+ */
+export function logRoiFilterApplied(meta: {
+  surface: string;
+  totalPlays: number;
+  primaryPlays: number;
+  excludedMarkets?: readonly string[];
+}): void {
+  const removed = meta.totalPlays - meta.primaryPlays;
+  console.log("[ROI_FILTER_APPLIED]", {
+    surface: meta.surface,
+    totalPlays: meta.totalPlays,
+    primaryPlays: meta.primaryPlays,
+    removed,
+    excludedMarkets: meta.excludedMarkets ?? EXCLUDED_FROM_PRIMARY_ROI,
+  });
+}
+
 export function calculatePayout(play: PersistedPlay): number {
   const stake = play.stake ? parseFloat(String(play.stake)) : 1;
   const odds = play.odds ? parseFloat(String(play.odds)) : null;
@@ -27,6 +75,15 @@ export interface ROIMetrics {
   misses: number;
   pushes: number;
   pending: number;
+}
+
+/**
+ * Headline / dashboard ROI: excludes EXCLUDED_FROM_PRIMARY_ROI markets
+ * (home_runs, batter_strikeouts). This is what users see on the public
+ * proof strip, trust track record, and admin headline summary.
+ */
+export function getPrimaryROIMetrics(plays: PersistedPlay[]): ROIMetrics {
+  return getROIMetrics(filterPrimaryRoiPlays(plays));
 }
 
 export function getROIMetrics(plays: PersistedPlay[]): ROIMetrics {
@@ -82,6 +139,24 @@ export function groupByMarket(plays: PersistedPlay[]): SegmentedROI[] {
   return Array.from(groups.entries())
     .map(([segment, ps]) => ({ segment, metrics: getROIMetrics(ps) }))
     .sort((a, b) => b.metrics.totalBets - a.metrics.totalBets);
+}
+
+/**
+ * Segmented per-market ROI breakdown that explicitly flags which markets are
+ * excluded from the primary (headline) ROI. This is the data the admin /
+ * internal dashboard renders to break down "where is the ROI coming from".
+ */
+export interface MarketROIBreakdownRow {
+  market: string;
+  excludedFromPrimary: boolean;
+  metrics: ROIMetrics;
+}
+export function getRoiByMarket(plays: PersistedPlay[]): MarketROIBreakdownRow[] {
+  return groupByMarket(plays).map((row) => ({
+    market: row.segment,
+    excludedFromPrimary: isExcludedFromPrimaryRoi(row.segment),
+    metrics: row.metrics,
+  }));
 }
 
 export function groupByProbBucket(plays: PersistedPlay[]): SegmentedROI[] {
@@ -157,8 +232,16 @@ export function groupByTiming(plays: PersistedPlay[]): SegmentedROI[] {
 
 export interface FullROIReport {
   global: ROIMetrics;
+  /**
+   * [PRIMARY ROI EXCLUSION v1] Headline ROI block — excludes home_runs and
+   * batter_strikeouts so the admin can see the user-facing "Core Engine ROI"
+   * side-by-side with the full all-markets ROI in `global`.
+   */
+  primary: ROIMetrics;
+  excludedFromPrimary: readonly string[];
   bySport: SegmentedROI[];
   byMarket: SegmentedROI[];
+  byMarketBreakdown: MarketROIBreakdownRow[];
   byProbBucket: SegmentedROI[];
   bySignalScore: SegmentedROI[];
   byDirection: SegmentedROI[];
@@ -168,8 +251,11 @@ export interface FullROIReport {
 export function buildFullROIReport(plays: PersistedPlay[]): FullROIReport {
   return {
     global: getROIMetrics(plays),
+    primary: getPrimaryROIMetrics(plays),
+    excludedFromPrimary: EXCLUDED_FROM_PRIMARY_ROI,
     bySport: groupBySport(plays),
     byMarket: groupByMarket(plays),
+    byMarketBreakdown: getRoiByMarket(plays),
     byProbBucket: groupByProbBucket(plays),
     bySignalScore: groupBySignalScoreBucket(plays),
     byDirection: groupByDirection(plays),

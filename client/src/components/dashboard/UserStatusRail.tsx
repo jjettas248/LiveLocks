@@ -52,7 +52,10 @@ export function UserStatusRail({ tier, playsUsed, playsLimit, isAdmin, onUpgrade
           <div className="text-xs font-bold text-foreground">{totalLive}</div>
         </div>
         {isAdmin && (
-          <div>
+          <div
+            title="Core Engine 7d Win Rate — excludes home_runs and batter_strikeouts (see HR Radar for those)."
+            data-testid="tile-status-winrate"
+          >
             <div className="text-[9px] text-muted-foreground">7d Win</div>
             <div className={`text-xs font-bold ${winRate >= 55 ? "text-green-400" : "text-foreground"}`}>{winRate}%</div>
           </div>
