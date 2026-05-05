@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronUp, Activity, AlertTriangle, Flame, Database, Wrench } from "lucide-react";
+import { ChevronDown, ChevronUp, Activity, AlertTriangle, Flame, Database, Wrench, Eye } from "lucide-react";
+import { useAdminViewMode, useRealUser, type AdminViewMode } from "@/hooks/use-auth";
 
 type EngineDebugResponse = {
   now: number;
@@ -57,6 +58,14 @@ type EngineDebugResponse = {
   };
 };
 
+const VIEW_MODE_OPTIONS: Array<{ value: AdminViewMode; label: string; tone: string }> = [
+  { value: "real", label: "Real (you)", tone: "text-foreground" },
+  { value: "free", label: "Free user", tone: "text-zinc-400" },
+  { value: "pro_mlb", label: "Pro MLB", tone: "text-blue-400" },
+  { value: "all_sports", label: "All Sports", tone: "text-emerald-400" },
+  { value: "admin", label: "Admin", tone: "text-amber-400" },
+];
+
 function fmtAge(sec: number | null): string {
   if (sec == null) return "—";
   if (sec < 60) return `${sec}s`;
@@ -85,6 +94,8 @@ function StatTile({ label, value, tone }: { label: string; value: string | numbe
 
 export function AdminEngineDebugPanel({ selectedGameId }: { selectedGameId: string | null }) {
   const [open, setOpen] = useState(true);
+  const [viewMode, setViewMode] = useAdminViewMode();
+  const realUser = useRealUser();
   const params = selectedGameId ? `?gameId=${encodeURIComponent(selectedGameId)}` : "";
   const { data, isLoading, error, dataUpdatedAt } = useQuery<EngineDebugResponse>({
     queryKey: ["/api/admin/mlb/engine-debug", selectedGameId],
@@ -95,6 +106,11 @@ export function AdminEngineDebugPanel({ selectedGameId }: { selectedGameId: stri
     },
     refetchInterval: 15_000,
   });
+
+  // Defense in depth — never render the panel for non-admin REAL users, even
+  // if a parent forgets to gate. This prevents diagnostic data from ever
+  // appearing under a view-mode override.
+  if (!realUser?.isAdmin) return null;
 
   return (
     <div className="border border-amber-500/30 bg-amber-500/5 rounded-lg" data-testid="admin-engine-debug-panel">
@@ -118,6 +134,39 @@ export function AdminEngineDebugPanel({ selectedGameId }: { selectedGameId: stri
 
       {open && (
         <div className="px-3 pb-3 space-y-3" data-testid="admin-engine-debug-body">
+          {/* View-as switcher */}
+          <div className="rounded border border-border/40 bg-background/40 px-2 py-2">
+            <div className="flex items-center gap-2 mb-1.5">
+              <Eye className="w-3 h-3 text-muted-foreground" />
+              <span className="text-[10px] uppercase text-muted-foreground tracking-wider">View as</span>
+              {viewMode !== "real" && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-bold uppercase" data-testid="badge-view-mode-active">
+                  Override active — UI does not match your real account
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {VIEW_MODE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setViewMode(opt.value)}
+                  className={`text-[10px] px-2 py-1 rounded border ${
+                    viewMode === opt.value
+                      ? "border-amber-500/60 bg-amber-500/10 text-amber-300 font-bold"
+                      : "border-border/40 bg-background/20 text-muted-foreground hover:text-foreground"
+                  }`}
+                  data-testid={`button-view-mode-${opt.value}`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <div className="text-[9px] text-muted-foreground mt-1">
+              Cosmetic only — your real account stays {realUser?.email ? `as ${realUser.email}` : "intact"} on the server. Refreshes & re-logins reset to "Real".
+            </div>
+          </div>
+
           {isLoading && <div className="text-xs text-muted-foreground">Loading engine debug…</div>}
           {error && (
             <div className="text-xs text-red-400 flex items-center gap-1.5">

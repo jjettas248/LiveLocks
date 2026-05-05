@@ -170,6 +170,26 @@ export interface HrRadarLadderResponse {
     ready?: HrRadarLadderEntry[];
   };
   counts: { attackNow: number; building: number; watch: number; cashed: number; dead: number; total: number; ready?: number };
+  // Phase 2.5 HR Watch Bridge — additive surface for near-HR contact
+  // detections that the engine has stamped on a qualified signal but that
+  // don't (yet) live in the canonical ladder buckets. Optional so older
+  // server payloads still type-check.
+  hrWatch?: HrWatchBridgeEntry[];
+}
+
+export interface HrWatchBridgeEntry {
+  playerId: string;
+  playerName: string;
+  team: string | null;
+  gameId: string;
+  market: string;
+  signalScore: number | null;
+  signalTier: string | null;
+  nearHrEv: number | null;
+  nearHrLa: number | null;
+  nearHrDistance: number | null;
+  nearHrXba: number | null;
+  engineGeneratedAt: number | null;
 }
 
 // Phase 6 — `noAbYet` is an additive parking lot for live games where the
@@ -1086,6 +1106,41 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
           </Button>
         </div>
       </div>
+      {/* Phase 2.5 HR Watch Bridge — surfaces engine-stamped near-HR
+          contact detections (signalType="hr_watch") so admins/users can see
+          that the engine IS detecting near-HR plays even when the ladder
+          buckets are empty. Pure additive read; never affects bucket order. */}
+      {(data?.hrWatch?.length ?? 0) > 0 && (
+        <Card className="p-3 border-amber-500/30 bg-amber-500/5" data-testid="hr-watch-bridge-section">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400">HR Watch · Near-HR Contact</span>
+            <span className="text-[10px] text-muted-foreground">
+              {data!.hrWatch!.length} live · engine-detected near-HR drivers
+            </span>
+          </div>
+          <div className="space-y-1">
+            {data!.hrWatch!.slice(0, 12).map((w, i) => (
+              <div
+                key={`${w.playerId}-${w.gameId}-${w.market}-${i}`}
+                className="flex items-center justify-between gap-2 text-[11px] px-2 py-1.5 rounded border border-border/40 bg-background/40"
+                data-testid={`row-hr-watch-bridge-${w.playerId}`}
+              >
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <span className="font-semibold truncate">{w.playerName || w.playerId}</span>
+                  {w.team && <span className="text-muted-foreground shrink-0">{w.team}</span>}
+                  <span className="text-muted-foreground shrink-0">· {w.market}</span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {w.nearHrEv != null && <span className="text-muted-foreground">EV {w.nearHrEv.toFixed(0)}</span>}
+                  {w.nearHrLa != null && <span className="text-muted-foreground">LA {w.nearHrLa.toFixed(0)}°</span>}
+                  {w.nearHrDistance != null && <span className="text-muted-foreground">{w.nearHrDistance.toFixed(0)}ft</span>}
+                  {w.signalTier && <span className="text-amber-400 font-bold uppercase">{w.signalTier}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
       {order.map(key => {
         // Phase 6 — never render the parking lot section when empty;
         // its only value is grouping, so an empty "NO AB YET" header

@@ -1,4 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { queryClient, getAuthToken, setAuthToken, clearAuthToken } from "@/lib/queryClient";
 import { readStoredAttribution } from "@/hooks/useAttributionCapture";
 
@@ -34,6 +35,107 @@ export interface AuthUser {
   isFreeAccount?: boolean;
 }
 
+// ── Admin View-As Mode ─────────────────────────────────────────────────────
+// Admin-only client-side overlay that lets an admin preview the UX of a Free /
+// Pro / All-Sports user. Purely cosmetic — never touches server account state,
+// never sends overrides to the backend. The real user is preserved; only the
+// gating fields read by useAuth() consumers are swapped out client-side.
+//
+// Defense in depth: applyViewMode() refuses to apply unless the REAL user is
+// an admin. Non-admin users cannot trip this override even by editing
+// localStorage.
+const VIEW_MODE_KEY = "ll_admin_view_mode_v1";
+export type AdminViewMode = "real" | "free" | "pro_mlb" | "all_sports" | "admin";
+
+const viewModeListeners = new Set<() => void>();
+let _viewMode: AdminViewMode = (() => {
+  if (typeof window === "undefined") return "real";
+  const v = localStorage.getItem(VIEW_MODE_KEY) as AdminViewMode | null;
+  return v && ["real", "free", "pro_mlb", "all_sports", "admin"].includes(v) ? v : "real";
+})();
+
+export function getAdminViewMode(): AdminViewMode {
+  return _viewMode;
+}
+
+export function setAdminViewMode(m: AdminViewMode): void {
+  _viewMode = m;
+  if (typeof window !== "undefined") {
+    if (m === "real") localStorage.removeItem(VIEW_MODE_KEY);
+    else localStorage.setItem(VIEW_MODE_KEY, m);
+  }
+  viewModeListeners.forEach((l) => l());
+  // Force every useAuth() consumer to re-derive its `select` output.
+  queryClient.invalidateQueries({ queryKey: ["/api/auth/me"], refetchType: "none" });
+  // Trigger an immediate setQueryData round-trip so subscribers re-run select.
+  const cur = queryClient.getQueryData<AuthUser | null>(["/api/auth/me"]);
+  if (cur !== undefined) {
+    queryClient.setQueryData(["/api/auth/me"], cur);
+  }
+}
+
+export function useAdminViewMode(): [AdminViewMode, (m: AdminViewMode) => void] {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const l = () => force((n) => n + 1);
+    viewModeListeners.add(l);
+    return () => {
+      viewModeListeners.delete(l);
+    };
+  }, []);
+  return [_viewMode, setAdminViewMode];
+}
+
+function applyViewMode(real: AuthUser | null, mode: AdminViewMode): AuthUser | null {
+  if (!real || mode === "real") return real;
+  // Defense in depth — only an authenticated admin may apply overrides.
+  if (!real.isAdmin) return real;
+  const base = { ...real };
+  switch (mode) {
+    case "free":
+      return {
+        ...base,
+        isAdmin: false,
+        hasMLB: false,
+        hasNBA: false,
+        hasNCAAB: false,
+        hasUnlimited: false,
+        subscriptionTier: "free",
+        isFreeAccount: true,
+        isOnTrial: false,
+        subscriptionStatus: "free",
+      };
+    case "pro_mlb":
+      return {
+        ...base,
+        isAdmin: false,
+        hasMLB: true,
+        hasNBA: false,
+        hasNCAAB: false,
+        hasUnlimited: false,
+        subscriptionTier: "pro_mlb",
+        isFreeAccount: false,
+        subscriptionStatus: "active",
+      };
+    case "all_sports":
+      return {
+        ...base,
+        isAdmin: false,
+        hasMLB: true,
+        hasNBA: true,
+        hasNCAAB: true,
+        hasUnlimited: true,
+        subscriptionTier: "all_sports",
+        isFreeAccount: false,
+        subscriptionStatus: "active",
+      };
+    case "admin":
+      return base;
+    default:
+      return real;
+  }
+}
+
 async function apiFetch(path: string, options?: RequestInit) {
   const token = getAuthToken();
   const headers: Record<string, string> = {
@@ -52,7 +154,8 @@ async function apiFetch(path: string, options?: RequestInit) {
 }
 
 export function useAuth() {
-  const { data: user, isLoading } = useQuery<AuthUser | null>({
+  const [viewMode] = useAdminViewMode();
+  const { data: user, isLoading } = useQuery<AuthUser | null, Error, AuthUser | null>({
     queryKey: ["/api/auth/me"],
     queryFn: async () => {
       const res = await apiFetch("/api/auth/me");
@@ -64,6 +167,7 @@ export function useAuth() {
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
     retry: false,
+    select: (raw) => applyViewMode(raw, viewMode),
   });
 
   const loginMutation = useMutation({
@@ -113,6 +217,8 @@ export function useAuth() {
       clearAuthToken();
     },
     onSuccess: () => {
+      // Clear view-mode override on logout so the next account isn't confused.
+      setAdminViewMode("real");
       queryClient.setQueryData(["/api/auth/me"], null);
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
     },
@@ -130,4 +236,15 @@ export function useAuth() {
     logout: logoutMutation.mutate,
     logoutPending: logoutMutation.isPending,
   };
+}
+
+// Read the REAL (un-overridden) user — bypasses the view-mode overlay.
+// Use sparingly; ONLY for surfaces that must always reflect the actual
+// admin identity (e.g. the view-mode switcher itself, or audit banners).
+export function useRealUser(): AuthUser | null {
+  const { data } = useQuery<AuthUser | null>({
+    queryKey: ["/api/auth/me"],
+    enabled: false,
+  });
+  return data ?? null;
 }
