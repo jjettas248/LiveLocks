@@ -502,6 +502,23 @@ export async function registerRoutes(
       const recentPersistRejects = diag.getPersistRejects(20).map((r) => ({
         ts: r.ts, reason: r.reason, player: r.player, market: r.market,
       }));
+      // Phase 3 — market calibration audit reads.
+      const recentHrrCalibrations = diag.getHrrCalibrations(20).map((r) => ({
+        ts: r.ts, player: r.player, rawProbability: r.rawProbability,
+        adjustedProbability: r.adjustedProbability, capApplied: r.capApplied,
+        usedTbFallback: r.usedTbFallback, reason: r.reason,
+      }));
+      const recentHitsAllowedCalibrations = diag.getHitsAllowedCalibrations(20).map((r) => ({
+        ts: r.ts, pitcher: r.pitcher, side: r.side, rawProbability: r.rawProbability,
+        adjustedProbability: r.adjustedProbability, fallbackUsed: r.fallbackUsed,
+      }));
+      const recentHrWatchContextUses = diag.getHrWatchContextUses(20).map((r) => ({
+        ts: r.ts, player: r.player, market: r.market, nearHrCount: r.nearHrCount,
+        contactScore: r.contactScore, affectedSignalScore: r.affectedSignalScore,
+        affectedProbability: r.affectedProbability, signalTier: r.signalTier,
+      }));
+      const recentSelfLearningCalibrations = diag.getSelfLearningCalibrations(20);
+      const recentCapsApplied = diag.getCapsApplied(20);
 
       // Empty-state reason resolver — admin sees the SPECIFIC cause.
       let emptyStateReason: string | null = null;
@@ -544,15 +561,28 @@ export async function registerRoutes(
           hrWatchSuppressedCount: counts.hrWatchSuppressed,
           persistRejectedCount: counts.persistRejected,
           topPlaysCount,
+          // Phase 3 — market-calibration audit counters (10m window).
+          hrrCalibrationCount: counts.hrrCalibrations,
+          hitsAllowedCalibrationCount: counts.hitsAllowedCalibrations,
+          selfLearningCalibrationCount: counts.selfLearningCalibrations,
+          hrWatchContextUseCount: counts.hrWatchContextUses,
+          capsAppliedCount: counts.capsApplied,
         },
         emptyStateReason,
         recentHrWatchDetections,
         recentHrWatchSuppressed,
         recentPersistRejects,
+        // Phase 3 — recent calibration events for the admin debug panel.
+        recentHrrCalibrations,
+        recentHitsAllowedCalibrations,
+        recentHrWatchContextUses,
+        recentSelfLearningCalibrations,
+        recentCapsApplied,
         semantics: {
           probability: "Phase 1 canonical — engine probability only; signalScore never substituted",
           tier: "Phase 2 lowercase 4-state (watch | lean | strong | elite)",
-          calibrationVersion: "mlb-cal-v3",
+          calibrationVersion: diag.MLB_CALIBRATION_VERSION,
+          phase3Note: "HRR uses TB-distribution fallback; hits_allowed uses normal-CDF fallback. Phase 3 logs every call so deferred market wrappers can be calibrated against real traffic.",
         },
       });
     } catch (e: any) {

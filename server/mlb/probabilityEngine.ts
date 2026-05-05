@@ -175,7 +175,69 @@ export function computeModelProbability(input: ProbabilityInput): ProbabilityOut
   }
 
   if (market === "hrr" && input.remainingPA != null && input.adjustedRate != null) {
-    return computeTBDistributionProbability(input);
+    // Phase 3 — HRR currently routes through the TB distribution as a
+    // fallback (no HRR-specific binomial yet). Audit-log every HRR call so
+    // we can quantify how often the TB fallback is in play and validate
+    // that outputs aren't collapsing to a uniform 94/90% pattern. Phase 1.5
+    // HRR ceiling is still applied downstream by applyModelSafetyCeiling.
+    const out = computeTBDistributionProbability(input);
+    try {
+      const detRec = {
+        market: "hrr",
+        player: input.playerName ?? null,
+        rawProbability: out.dominantProbability,
+        adjustedProbability: out.dominantProbability,
+        capApplied: false,
+        usedTbFallback: true,
+        nearHrCount: null,
+        contactScore: null,
+        reason: "tb_distribution_fallback",
+      };
+      console.log(
+        `[MLB_HRR_CALIBRATION] player=${detRec.player ?? "?"} raw=${detRec.rawProbability.toFixed(2)} adj=${detRec.adjustedProbability.toFixed(2)} usedTbFallback=true cap=false reason=tb_distribution_fallback`
+      );
+      // Lazy import to avoid load-order coupling.
+      import("./diagnosticsBuffer").then((d) => {
+        d.recordHrrCalibration({
+          player: detRec.player,
+          rawProbability: detRec.rawProbability,
+          adjustedProbability: detRec.adjustedProbability,
+          capApplied: detRec.capApplied,
+          usedTbFallback: detRec.usedTbFallback,
+          nearHrCount: detRec.nearHrCount,
+          contactScore: detRec.contactScore,
+          reason: detRec.reason,
+        });
+      }).catch(() => {});
+    } catch {}
+    return out;
+  }
+
+  // Phase 3 — hits_allowed currently has no market-specific probability
+  // wrapper and falls through to the generic normal CDF. Audit-log every
+  // such fall-through so we can quantify how often the generic CDF is the
+  // sole arbiter for this pitcher market. Phase 1.5 UNDER cap is still
+  // applied downstream by applyModelSafetyCeiling.
+  if (market === "hits_allowed") {
+    const out = computeNormalCDFProbability(projection, threshold, market);
+    try {
+      console.log(
+        `[MLB_HITS_ALLOWED_CALIBRATION] pitcher=${input.playerName ?? "?"} raw=${out.dominantProbability.toFixed(2)} adj=${out.dominantProbability.toFixed(2)} fallbackUsed=true method=normal_cdf reason=no_market_specific_wrapper`
+      );
+      import("./diagnosticsBuffer").then((d) => {
+        d.recordHitsAllowedCalibration({
+          pitcher: input.playerName ?? null,
+          side: null,
+          rawProbability: out.dominantProbability,
+          adjustedProbability: out.dominantProbability,
+          pitchCount: null,
+          timesThroughOrder: null,
+          contactAllowedScore: null,
+          fallbackUsed: true,
+        });
+      }).catch(() => {});
+    } catch {}
+    return out;
   }
 
   return computeNormalCDFProbability(projection, threshold, market);

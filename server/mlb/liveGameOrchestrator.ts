@@ -41,6 +41,7 @@ import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
 import { getCanonicalSidedProbability } from "./probabilityEngine";
 import { computeSignalScore, computeSignalScoreByFamily, scoreHRRadar, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily, deriveSignalTier } from "./signalScore";
 import { detectNearHrContact } from "./nearHrContact";
+import { MLB_CALIBRATION_VERSION } from "./diagnosticsBuffer";
 import type { MarketFamily } from "./signalScore";
 import { buildSignalDiagnostics } from "./signalDiagnostics";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
@@ -1916,6 +1917,19 @@ export class LiveGameOrchestrator {
         signalType: stampSignalType ?? null,
         driversInjected: nearHrResult.drivers.length,
       });
+      // Phase 3 — record into ring buffer so admin debug endpoint can show
+      // a counter + recent list. Lazy import to avoid load-order coupling.
+      import("./diagnosticsBuffer").then((d) => {
+        d.recordHrWatchContext({
+          player: output.playerName ?? null,
+          market: output.market ?? null,
+          nearHrCount: nearHrResult.drivers.length,
+          contactScore: hrRadarResult?.total ?? null,
+          affectedSignalScore: scoreBreakdown.total,
+          affectedProbability: typeof (output as any).engineProbability === "number" ? (output as any).engineProbability : null,
+          signalTier: canonicalSignalTier ?? null,
+        });
+      }).catch(() => {});
     }
 
     // HIGH_PROB_BYPASS rescue: if we surfaced this signal solely because the
@@ -1987,11 +2001,12 @@ export class LiveGameOrchestrator {
       // [MLB Phase 2.5] Stamped only when detectNearHrContact() qualified
       // this player's last AB AND the surfaced mode lands in the watch band.
       signalType: stampSignalType,
-      // [MLB Phase 3.1] Engine-owned calibration version stamp. Bumped by
-      // hand whenever the calibration layer changes (current value covers
-      // Phase 1 canonical prob + Phase 1.5 caps + Phase 2 tier unification +
-      // Phase 2.5 near-HR detection).
-      calibrationVersion: "mlb-cal-v3",
+      // [MLB Phase 3] Engine-owned calibration version stamp. Sourced from
+      // diagnosticsBuffer.MLB_CALIBRATION_VERSION so the constant has a
+      // single source of truth. Current value covers Phase 1 canonical prob,
+      // Phase 1.5 caps, Phase 2 tier unification, Phase 2.5 near-HR detection,
+      // and Phase 3 market-calibration audit (HRR + hits_allowed logging).
+      calibrationVersion: MLB_CALIBRATION_VERSION,
       signalScore: scoreBreakdown.total,
       reasons: output.explanationBullets,
       feedTags: feedTags as string[],

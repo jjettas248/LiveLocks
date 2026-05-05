@@ -74,6 +74,14 @@ I prefer clear and concise explanations. When implementing new features or makin
 - **Live Update Toast**: Notifies users of new ELITE edges across sports.
 - **Shared Signal Components**: Reusable UI components for displaying signals and confidence across all sports.
 
+### MLB Phase 3 — Market Calibration Audit Layer
+- **Centralized version**: `MLB_CALIBRATION_VERSION = "mlb-market-cal-v3"` exported from `server/mlb/diagnosticsBuffer.ts`. Single source of truth, stamped on every MLB engine signal (orchestrator) and surfaced via `/api/admin/mlb/engine-debug.semantics.calibrationVersion`.
+- **Audit-only logging (no math change)**: `computeModelProbability()` in `probabilityEngine.ts` now logs every HRR call (`[MLB_HRR_CALIBRATION]`, marks `usedTbFallback=true`) and every hits_allowed call (`[MLB_HITS_ALLOWED_CALIBRATION]`, marks `fallbackUsed=true`). Phase 1 canonical prob, Phase 1.5 caps, Phase 2 signalTier, and Phase 2.5 HR Watch detection all unchanged.
+- **HR Watch context recording**: orchestrator emits `recordHrWatchContext()` alongside existing `[MLB_HR_WATCH_CONTEXT_USED]` log so admin debug can count contexts and show recent uses.
+- **Ring buffers** (50-entry caps, 10-min counter window) added in `diagnosticsBuffer.ts`: HRR calibrations, hits-allowed calibrations, self-learning calibrations, HR watch context uses, caps applied. All recorders are lazy-imported with try/catch wrappers.
+- **Admin debug surface**: `/api/admin/mlb/engine-debug` returns new `totals.{hrrCalibrationCount, hitsAllowedCalibrationCount, selfLearningCalibrationCount, hrWatchContextUseCount, capsAppliedCount}` plus `recentHrrCalibrations`, `recentHitsAllowedCalibrations`, `recentHrWatchContextUses` arrays. `AdminEngineDebugPanel` renders a "Market Calibration (last 10m)" tile group.
+- **Deferred Phase 3 work** (intentionally out of scope, awaiting calibration data from this audit layer): HRR-specific binomial wrapper, hits_allowed market-specific wrapper, pitcher self-learning extension, analytics slices UI, validation harness.
+
 ### Admin Panel
 - Manages users, subscription tiers, play counts, feedback, and daily slate reset times.
 

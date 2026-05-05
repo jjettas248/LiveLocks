@@ -28,7 +28,37 @@ type EngineDebugResponse = {
     hrWatchSuppressedCount: number;
     persistRejectedCount: number;
     topPlaysCount: number;
+    // Phase 3 — market-calibration audit counters.
+    hrrCalibrationCount?: number;
+    hitsAllowedCalibrationCount?: number;
+    selfLearningCalibrationCount?: number;
+    hrWatchContextUseCount?: number;
+    capsAppliedCount?: number;
   };
+  recentHrrCalibrations?: Array<{
+    ts: number;
+    player: string | null;
+    rawProbability: number | null;
+    adjustedProbability: number | null;
+    capApplied: boolean;
+    usedTbFallback: boolean;
+    reason: string;
+  }>;
+  recentHitsAllowedCalibrations?: Array<{
+    ts: number;
+    pitcher: string | null;
+    rawProbability: number | null;
+    adjustedProbability: number | null;
+    fallbackUsed: boolean;
+  }>;
+  recentHrWatchContextUses?: Array<{
+    ts: number;
+    player: string | null;
+    market: string | null;
+    nearHrCount: number | null;
+    affectedSignalScore: number | null;
+    signalTier: string | null;
+  }>;
   emptyStateReason: string | null;
   recentHrWatchDetections: Array<{
     ts: number;
@@ -55,6 +85,7 @@ type EngineDebugResponse = {
     probability: string;
     tier: string;
     calibrationVersion: string;
+    phase3Note?: string;
   };
 };
 
@@ -221,6 +252,57 @@ export function AdminEngineDebugPanel({ selectedGameId }: { selectedGameId: stri
                 </div>
               </div>
 
+              {/* Phase 3 — Market Calibration */}
+              <div>
+                <div className="text-[10px] uppercase text-muted-foreground mb-1 flex items-center gap-1.5">
+                  <Activity className="w-3 h-3" /> Market Calibration (last 10m)
+                </div>
+                <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
+                  <StatTile label="HRR Calls" value={data.totals.hrrCalibrationCount ?? 0} tone="muted" />
+                  <StatTile label="Hits-Allowed" value={data.totals.hitsAllowedCalibrationCount ?? 0} tone="muted" />
+                  <StatTile label="Self-Learn" value={data.totals.selfLearningCalibrationCount ?? 0} tone="muted" />
+                  <StatTile label="HR Watch Ctx" value={data.totals.hrWatchContextUseCount ?? 0} tone={data.totals.hrWatchContextUseCount && data.totals.hrWatchContextUseCount > 0 ? "ok" : "muted"} />
+                  <StatTile label="Caps Applied" value={data.totals.capsAppliedCount ?? 0} tone="muted" />
+                </div>
+                {data.recentHrrCalibrations && data.recentHrrCalibrations.length > 0 && (
+                  <div className="mt-1.5 space-y-0.5 max-h-32 overflow-y-auto">
+                    {data.recentHrrCalibrations.slice(0, 5).map((r, i) => (
+                      <div key={i} className="text-[10px] px-2 py-0.5 rounded bg-background/30 flex items-center justify-between gap-2" data-testid={`row-hrr-cal-${i}`}>
+                        <span className="font-mono text-muted-foreground shrink-0">{fmtTime(r.ts)}</span>
+                        <span className="truncate">{r.player ?? "?"}</span>
+                        <span className="shrink-0">raw={r.rawProbability?.toFixed(1)}</span>
+                        {r.usedTbFallback && <span className="text-amber-400 shrink-0">tb-fallback</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {data.recentHitsAllowedCalibrations && data.recentHitsAllowedCalibrations.length > 0 && (
+                  <div className="mt-1.5 space-y-0.5 max-h-32 overflow-y-auto">
+                    {data.recentHitsAllowedCalibrations.slice(0, 5).map((r, i) => (
+                      <div key={i} className="text-[10px] px-2 py-0.5 rounded bg-background/30 flex items-center justify-between gap-2" data-testid={`row-hits-allowed-cal-${i}`}>
+                        <span className="font-mono text-muted-foreground shrink-0">{fmtTime(r.ts)}</span>
+                        <span className="truncate">{r.pitcher ?? "?"}</span>
+                        <span className="shrink-0">raw={r.rawProbability?.toFixed(1)}</span>
+                        {r.fallbackUsed && <span className="text-amber-400 shrink-0">cdf-fallback</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {data.recentHrWatchContextUses && data.recentHrWatchContextUses.length > 0 && (
+                  <div className="mt-1.5 space-y-0.5 max-h-32 overflow-y-auto">
+                    {data.recentHrWatchContextUses.slice(0, 5).map((r, i) => (
+                      <div key={i} className="text-[10px] px-2 py-0.5 rounded bg-background/30 flex items-center justify-between gap-2" data-testid={`row-hr-watch-ctx-${i}`}>
+                        <span className="font-mono text-muted-foreground shrink-0">{fmtTime(r.ts)}</span>
+                        <span className="truncate">{r.player ?? "?"} · {r.market ?? "?"}</span>
+                        <span className="shrink-0">drv={r.nearHrCount}</span>
+                        <span className="shrink-0">score={r.affectedSignalScore}</span>
+                        {r.signalTier && <span className="text-amber-400 shrink-0">{r.signalTier}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* Per-game cache */}
               {data.edgeEntries.length > 0 && (
                 <div>
@@ -278,7 +360,8 @@ export function AdminEngineDebugPanel({ selectedGameId }: { selectedGameId: stri
               <div className="text-[9px] text-muted-foreground border-t border-border/30 pt-1.5 space-y-0.5">
                 <div>Probability: {data.semantics.probability}</div>
                 <div>Tier: {data.semantics.tier}</div>
-                <div>Calibration: {data.semantics.calibrationVersion}</div>
+                <div>Calibration: <span className="text-amber-400 font-mono">{data.semantics.calibrationVersion}</span></div>
+                {data.semantics.phase3Note && <div className="text-[9px] italic">{data.semantics.phase3Note}</div>}
                 <div>Snapshot age: {Math.round((Date.now() - dataUpdatedAt) / 1000)}s</div>
               </div>
             </>
