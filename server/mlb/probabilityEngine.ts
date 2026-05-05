@@ -589,13 +589,19 @@ export function logMlbPersistReject(
     signalScore?: number | null;
   }
 ): void {
-  console.warn("[MLB_PERSIST_REJECT]", {
+  const rec = {
     reason,
     player: qs.player ?? qs.playerName ?? null,
     market: qs.market ?? null,
     recommendedSide: qs.recommendedSide ?? qs.side ?? null,
     engineProbability: qs.engineProbability ?? null,
     signalScore: qs.signalScore ?? null,
-  });
+  };
+  console.warn("[MLB_PERSIST_REJECT]", rec);
+  // Mirror to admin diagnostics ring buffer for /api/admin/mlb/engine-debug.
+  // Lazy import to avoid any circular dependency risk at module load.
+  import("./diagnosticsBuffer")
+    .then((m) => m.recordPersistReject(rec))
+    .catch(() => {});
 }
 

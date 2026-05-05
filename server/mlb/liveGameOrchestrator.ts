@@ -1729,7 +1729,7 @@ export class LiveGameOrchestrator {
         })
       : { tier: null as null | "watch" | "lean", drivers: [] as string[], suppressionReason: "no_at_bat" as string | undefined };
     if (nearHrResult.tier) {
-      console.log("[MLB_HR_WATCH_DETECTED]", {
+      const detRec = {
         player: output.playerName,
         team: input.team ?? null,
         market: output.market,
@@ -1741,9 +1741,13 @@ export class LiveGameOrchestrator {
         xba: _lastAbForNearHr?.xba ?? null,
         signalTier: nearHrResult.tier,
         drivers: nearHrResult.drivers,
-      });
+      };
+      console.log("[MLB_HR_WATCH_DETECTED]", detRec);
+      import("./diagnosticsBuffer")
+        .then((m) => m.recordHrWatchDetection(detRec))
+        .catch(() => {});
     } else if (nearHrResult.suppressionReason && nearHrResult.suppressionReason !== "no_at_bat") {
-      console.log("[MLB_HR_WATCH_SUPPRESSED]", {
+      const supRec = {
         player: output.playerName,
         market: output.market,
         reason: nearHrResult.suppressionReason,
@@ -1751,7 +1755,11 @@ export class LiveGameOrchestrator {
         la: _lastAbForNearHr?.launchAngle ?? null,
         distance: _lastAbForNearHr?.distance ?? null,
         xba: _lastAbForNearHr?.xba ?? null,
-      });
+      };
+      console.log("[MLB_HR_WATCH_SUPPRESSED]", supRec);
+      import("./diagnosticsBuffer")
+        .then((m) => m.recordHrWatchSuppressed(supRec))
+        .catch(() => {});
     }
     // Player-specific gate lowering: when near-HR contact is confirmed, drop
     // the HR Radar hr_watch threshold from 35 → 25 so the signal can surface.
