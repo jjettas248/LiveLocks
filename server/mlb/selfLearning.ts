@@ -92,10 +92,43 @@ export function getAllCalibrationData(): {
   };
 }
 
+// [MLB Phase 3B] Sample-size tiers for the learned market-rate adjustment.
+// <30 samples = no learning (statistically meaningless). 30–99 = partial
+// (50% blend toward 1.0) so a market starts contributing as soon as we have
+// signal but won't whip wildly off a tiny window. 100+ = full strength.
+// Each tier transition is logged + recorded into the admin diagnostics ring
+// buffer for visibility.
 export function getLearnedRateAdjustment(market: MLBMarket): number {
   const cal = marketCalibrations[market];
-  if (!cal || cal.sampleSize < 30) return 1.0;
-  return cal.rateAdjustment;
+  if (!cal) return 1.0;
+  const size = cal.sampleSize;
+  let tier: "none" | "partial" | "full";
+  let adj: number;
+  if (size < 30) {
+    tier = "none";
+    adj = 1.0;
+  } else if (size < 100) {
+    tier = "partial";
+    adj = 1.0 + (cal.rateAdjustment - 1.0) * 0.5;
+  } else {
+    tier = "full";
+    adj = cal.rateAdjustment;
+  }
+  try {
+    console.log(`[SELF_LEARN_TIER] market=${market} size=${size} tier=${tier} raw=${cal.rateAdjustment.toFixed(3)} applied=${adj.toFixed(3)}`);
+    import("./diagnosticsBuffer").then((d) => {
+      d.recordSelfLearningCalibration({
+        market,
+        side: null,
+        sampleSize: size,
+        observedHitRate: cal.actualRate,
+        predictedAvg: cal.engineExpectedRate,
+        adjustmentFactor: adj,
+        applied: tier !== "none",
+      });
+    }).catch(() => {});
+  } catch {}
+  return adj;
 }
 
 async function learnContactProfile(): Promise<ContactProfile> {

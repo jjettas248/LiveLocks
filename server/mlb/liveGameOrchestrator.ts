@@ -1930,6 +1930,29 @@ export class LiveGameOrchestrator {
           signalTier: canonicalSignalTier ?? null,
         });
       }).catch(() => {});
+
+      // [MLB Phase 3B] HR Watch → signalScore additive nudge.
+      // Strict invariant: this NEVER touches engineProbability,
+      // calibratedProbabilityOver/Under, or evPct. It only nudges
+      // scoreBreakdown.total (and the derived confidenceTier/signalMode)
+      // so a near-HR batter gets credit in the signal composition layer
+      // without inflating the underlying probability.
+      const bump = nearHrResult.tier === "lean" ? 6 : nearHrResult.tier === "watch" ? 3 : 0;
+      if (bump > 0) {
+        const oldTotal = scoreBreakdown.total;
+        const newTotal = Math.max(0, Math.min(100, oldTotal + bump));
+        scoreBreakdown.total = newTotal;
+        // Re-derive confidenceTier per existing thresholds (signalScore.ts:
+        // 85=ELITE / 70=STRONG / 55=SOLID / 40=WATCHLIST / else NO_SIGNAL).
+        if (newTotal >= 85) scoreBreakdown.confidenceTier = "ELITE";
+        else if (newTotal >= 70) scoreBreakdown.confidenceTier = "STRONG";
+        else if (newTotal >= 55) scoreBreakdown.confidenceTier = "SOLID";
+        else if (newTotal >= 40) scoreBreakdown.confidenceTier = "WATCHLIST";
+        else scoreBreakdown.confidenceTier = "NO_SIGNAL";
+        try {
+          console.log(`[MLB_HR_WATCH_SCORE_BUMP] player=${output.playerName} market=${output.market} tier=${nearHrResult.tier} bump=+${bump} oldTotal=${oldTotal} newTotal=${newTotal}`);
+        } catch {}
+      }
     }
 
     // HIGH_PROB_BYPASS rescue: if we surfaced this signal solely because the

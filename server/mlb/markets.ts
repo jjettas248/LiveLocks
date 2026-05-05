@@ -712,6 +712,20 @@ function buildOutput(input: MLBPropInput, distParams?: DistributionParams): MLBP
       ...(distParams?.remainingPA != null ? { remainingPA: distParams.remainingPA } : {}),
       ...(distParams?.currentStatValue != null ? { currentStatValue: distParams.currentStatValue } : {}),
       ...(distParams?.paDistribution ? { paDistribution: distParams.paDistribution } : {}),
+      // [MLB Phase 3B] HRR wrapper — pass batter contactQuality from the
+      // feature layer. The wrapper compresses HRR > 82 unless contactScore
+      // >= 0.65 justifies the high probability.
+      ...(input.market === "hrr" ? { hrrJustification: { contactScore: features.contactQuality } } : {}),
+      // [MLB Phase 3B] hits_allowed wrapper — pass pitcher pitch count, TTO,
+      // and the opponent contact-quality (which is the contact-allowed proxy
+      // for the pitcher side of the matchup).
+      ...(input.market === "hits_allowed" ? {
+        pitcherFatigue: {
+          pitchCount: input.pitcher?.pitchCount,
+          timesThrough: input.pitcher?.timesThrough,
+          contactAllowedScore: features.contactQuality,
+        }
+      } : {}),
     },
     null,
     input.market,

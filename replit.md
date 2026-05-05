@@ -74,13 +74,20 @@ I prefer clear and concise explanations. When implementing new features or makin
 - **Live Update Toast**: Notifies users of new ELITE edges across sports.
 - **Shared Signal Components**: Reusable UI components for displaying signals and confidence across all sports.
 
-### MLB Phase 3 — Market Calibration Audit Layer
+### MLB Phase 3 — Market Calibration Engine (Phase 3A audit + Phase 3B math)
+
+**Phase 3A — Audit Layer**
 - **Centralized version**: `MLB_CALIBRATION_VERSION = "mlb-market-cal-v3"` exported from `server/mlb/diagnosticsBuffer.ts`. Single source of truth, stamped on every MLB engine signal (orchestrator) and surfaced via `/api/admin/mlb/engine-debug.semantics.calibrationVersion`.
-- **Audit-only logging (no math change)**: `computeModelProbability()` in `probabilityEngine.ts` now logs every HRR call (`[MLB_HRR_CALIBRATION]`, marks `usedTbFallback=true`) and every hits_allowed call (`[MLB_HITS_ALLOWED_CALIBRATION]`, marks `fallbackUsed=true`). Phase 1 canonical prob, Phase 1.5 caps, Phase 2 signalTier, and Phase 2.5 HR Watch detection all unchanged.
-- **HR Watch context recording**: orchestrator emits `recordHrWatchContext()` alongside existing `[MLB_HR_WATCH_CONTEXT_USED]` log so admin debug can count contexts and show recent uses.
 - **Ring buffers** (50-entry caps, 10-min counter window) added in `diagnosticsBuffer.ts`: HRR calibrations, hits-allowed calibrations, self-learning calibrations, HR watch context uses, caps applied. All recorders are lazy-imported with try/catch wrappers.
 - **Admin debug surface**: `/api/admin/mlb/engine-debug` returns new `totals.{hrrCalibrationCount, hitsAllowedCalibrationCount, selfLearningCalibrationCount, hrWatchContextUseCount, capsAppliedCount}` plus `recentHrrCalibrations`, `recentHitsAllowedCalibrations`, `recentHrWatchContextUses` arrays. `AdminEngineDebugPanel` renders a "Market Calibration (last 10m)" tile group.
-- **Deferred Phase 3 work** (intentionally out of scope, awaiting calibration data from this audit layer): HRR-specific binomial wrapper, hits_allowed market-specific wrapper, pitcher self-learning extension, analytics slices UI, validation harness.
+
+**Phase 3B — Real Calibration Math**
+- **HRR wrapper** (`probabilityEngine.ts` HRR branch): TB negative-binomial base, then **soft compression** when raw probability > 82 unless contact-quality justifies it. Compression formula: `compressed = 82 + (raw - 82) * 0.5`. Justification gate: `contactScore >= 0.65` (sourced from `features.contactQuality` in `markets.ts buildOutput`). Phase 1.5 ceiling of 88 still binds downstream — wrapper only shapes the climb 82 → 88. Logs `[MLB_HRR_COMPRESSION]` + `[MLB_HRR_CALIBRATION]` and records to ring buffer with `capApplied=true` when compression fires.
+- **hits_allowed wrapper** (`probabilityEngine.ts` hits_allowed branch): Normal CDF base, then **fatigue/TTO/contact-allowed shift toward OVER**. Shifts: pitchCount≥90→+6, pitchCount≥75→+3 (mutually exclusive), TTO≥3→+5, contactAllowedScore≥0.6→+4. Total shift capped at +12pts. `purityTag = "mlb-hits_allowed-wrapper-v1"` when shift fires. Phase 1.5 UNDER cap of 74 still binds downstream. Logs `[MLB_HITS_ALLOWED_WRAPPER]`.
+- **Pitcher self-learning sample-size tiers** (`selfLearning.ts getLearnedRateAdjustment`): <30 samples = no learning (1.0), 30-99 = partial (50% blend toward 1.0), ≥100 = full strength. Each lookup logs `[SELF_LEARN_TIER]` and records to ring buffer.
+- **HR Watch → signalScore additive bump** (`liveGameOrchestrator.ts`, after HR Watch context block): `watch` tier = +3, `lean` tier = +6 added to `scoreBreakdown.total` only. Re-derives `confidenceTier` from new total per existing thresholds (85/70/55/40). **Strict invariant**: never touches `engineProbability`, `calibratedProbabilityOver/Under`, or `evPct` — probability stays at the Phase 1 canonical value. Logs `[MLB_HR_WATCH_SCORE_BUMP]`.
+
+**Invariants preserved across Phase 3A+3B**: Phase 1 canonical probability untouched at the orchestrator/persistence/API layer; Phase 1.5 caps (88 HRR ceiling, 74 hits_allowed UNDER, 72 pitcher_outs UNDER, 76 pitcher_strikeouts UNDER) still applied downstream by `applyModelSafetyCeiling`; Phase 2 `signalTier` source-of-truth unchanged; Phase 2.5 HR Watch detection logic unchanged; HR Watch → HR Radar bridge unchanged; zero NBA/NCAAB changes.
 
 ### Admin Panel
 - Manages users, subscription tiers, play counts, feedback, and daily slate reset times.

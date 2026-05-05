@@ -136,6 +136,20 @@ export interface ProbabilityInput {
   // [MLB Phase 1.5] Optional — used only for diagnostic logging in
   // applyModelSafetyCeiling ([MLB_UNDER_CALIBRATION] / [MLB_HRR_CEILING]).
   playerName?: string;
+  // [MLB Phase 3B] HRR-specific input. When raw probability > 82, the HRR
+  // wrapper softly compresses unless `contactScore >= 0.65` (i.e. the
+  // batter has genuine contact-quality signal justifying the high prob).
+  // The Phase 1.5 ceiling of 88 still binds downstream — this layer only
+  // shapes the climb 82 → 88.
+  hrrJustification?: { contactScore?: number };
+  // [MLB Phase 3B] hits_allowed wrapper input. Pure normal CDF is replaced
+  // by a CDF + fatigue/TTO/contact-allowed shift toward OVER. Phase 1.5
+  // UNDER cap of 74 still binds downstream.
+  pitcherFatigue?: {
+    pitchCount?: number;
+    timesThrough?: number;
+    contactAllowedScore?: number;
+  };
 }
 
 export interface ProbabilityOutput {
@@ -175,65 +189,125 @@ export function computeModelProbability(input: ProbabilityInput): ProbabilityOut
   }
 
   if (market === "hrr" && input.remainingPA != null && input.adjustedRate != null) {
-    // Phase 3 — HRR currently routes through the TB distribution as a
-    // fallback (no HRR-specific binomial yet). Audit-log every HRR call so
-    // we can quantify how often the TB fallback is in play and validate
-    // that outputs aren't collapsing to a uniform 94/90% pattern. Phase 1.5
-    // HRR ceiling is still applied downstream by applyModelSafetyCeiling.
-    const out = computeTBDistributionProbability(input);
-    try {
-      const detRec = {
-        market: "hrr",
-        player: input.playerName ?? null,
-        rawProbability: out.dominantProbability,
-        adjustedProbability: out.dominantProbability,
-        capApplied: false,
-        usedTbFallback: true,
-        nearHrCount: null,
-        contactScore: null,
-        reason: "tb_distribution_fallback",
+    // [MLB Phase 3B] HRR wrapper.
+    // Base distribution is still the TB negative-binomial (separate from
+    // total_bases purely by being a different market with different
+    // featureMultiplier upstream — same probability primitive). On top
+    // of that we apply soft compression when raw probability climbs above
+    // 82 unless the batter's contact-quality signal justifies it.
+    // Compression: compressed = 82 + (raw - 82) * 0.5  →  smooth descent
+    // toward the Phase 1.5 ceiling of 88, never above it.
+    // Justification gate: contactScore >= 0.65 (computeFullFeatureLayer's
+    // contactQuality). If justified, full strength passes through and the
+    // Phase 1.5 ceiling of 88 still binds via applyModelSafetyCeiling.
+    const raw = computeTBDistributionProbability(input);
+    const COMPRESSION_FLOOR = 82;
+    const JUSTIFY_THRESHOLD = 0.65;
+    const contactScore = input.hrrJustification?.contactScore ?? null;
+    const justified = contactScore != null && contactScore >= JUSTIFY_THRESHOLD;
+
+    let out = raw;
+    let capApplied = false;
+    if (raw.dominantProbability > COMPRESSION_FLOOR && !justified) {
+      const dom = raw.dominantProbability;
+      const compressed = Math.round(
+        (COMPRESSION_FLOOR + (dom - COMPRESSION_FLOOR) * 0.5) * 100
+      ) / 100;
+      const opposite = Math.round((100 - compressed) * 100) / 100;
+      const compressedOver = raw.isOverFavored ? compressed : opposite;
+      const compressedUnder = raw.isOverFavored ? opposite : compressed;
+      out = {
+        overProbability: clampProbability(compressedOver),
+        underProbability: clampProbability(compressedUnder),
+        dominantProbability: Math.max(compressedOver, compressedUnder),
+        isOverFavored: raw.isOverFavored,
+        method: raw.method,
+        purityTag: raw.purityTag,
       };
+      capApplied = true;
+      try {
+        console.log(
+          `[MLB_HRR_COMPRESSION] player=${input.playerName ?? "?"} raw=${dom.toFixed(2)} compressed=${compressed.toFixed(2)} contactScore=${contactScore?.toFixed(2) ?? "null"} justified=false`
+        );
+      } catch {}
+    }
+
+    try {
       console.log(
-        `[MLB_HRR_CALIBRATION] player=${detRec.player ?? "?"} raw=${detRec.rawProbability.toFixed(2)} adj=${detRec.adjustedProbability.toFixed(2)} usedTbFallback=true cap=false reason=tb_distribution_fallback`
+        `[MLB_HRR_CALIBRATION] player=${input.playerName ?? "?"} raw=${raw.dominantProbability.toFixed(2)} adj=${out.dominantProbability.toFixed(2)} usedTbFallback=true cap=${capApplied} contactScore=${contactScore?.toFixed(2) ?? "null"} justified=${justified}`
       );
-      // Lazy import to avoid load-order coupling.
       import("./diagnosticsBuffer").then((d) => {
         d.recordHrrCalibration({
-          player: detRec.player,
-          rawProbability: detRec.rawProbability,
-          adjustedProbability: detRec.adjustedProbability,
-          capApplied: detRec.capApplied,
-          usedTbFallback: detRec.usedTbFallback,
-          nearHrCount: detRec.nearHrCount,
-          contactScore: detRec.contactScore,
-          reason: detRec.reason,
+          player: input.playerName ?? null,
+          rawProbability: raw.dominantProbability,
+          adjustedProbability: out.dominantProbability,
+          capApplied,
+          usedTbFallback: true,
+          nearHrCount: null,
+          contactScore: contactScore,
+          reason: capApplied ? "compression_above_82_unjustified" : (justified ? "passthrough_justified" : "passthrough_below_floor"),
         });
+        if (capApplied) {
+          d.recordCapApplied({
+            market: "hrr",
+            side: raw.isOverFavored ? "OVER" : "UNDER",
+            player: input.playerName ?? null,
+            rawProbability: raw.dominantProbability,
+            cappedProbability: out.dominantProbability,
+            capReason: "phase3b_hrr_compression",
+          });
+        }
       }).catch(() => {});
     } catch {}
     return out;
   }
 
-  // Phase 3 — hits_allowed currently has no market-specific probability
-  // wrapper and falls through to the generic normal CDF. Audit-log every
-  // such fall-through so we can quantify how often the generic CDF is the
-  // sole arbiter for this pitcher market. Phase 1.5 UNDER cap is still
-  // applied downstream by applyModelSafetyCeiling.
   if (market === "hits_allowed") {
-    const out = computeNormalCDFProbability(projection, threshold, market);
+    // [MLB Phase 3B] hits_allowed wrapper.
+    // Base = normal CDF. On top, apply a fatigue/TTO/contact-allowed shift
+    // toward OVER (more hits expected). The Phase 1.5 UNDER cap of 74 still
+    // binds downstream via applyModelSafetyCeiling, so the wrapper can only
+    // make UNDER less aggressive — never more.
+    //   pitchCount >= 90  →  +6
+    //   pitchCount >= 75  →  +3 (skipped if the >=90 branch already fired)
+    //   timesThrough >= 3 →  +5
+    //   contactAllowedScore >= 0.6 → +4
+    // Total shift capped at +12pts.
+    const base = computeNormalCDFProbability(projection, threshold, market);
+    const fatigue = input.pitcherFatigue ?? {};
+    let shift = 0;
+    if ((fatigue.pitchCount ?? 0) >= 90) shift += 6;
+    else if ((fatigue.pitchCount ?? 0) >= 75) shift += 3;
+    if ((fatigue.timesThrough ?? 0) >= 3) shift += 5;
+    if ((fatigue.contactAllowedScore ?? 0) >= 0.6) shift += 4;
+    if (shift > 12) shift = 12;
+
+    const adjustedOver = clampProbability(base.overProbability + shift);
+    const adjustedUnder = clampProbability(100 - adjustedOver);
+    const isOverFavored = adjustedOver >= adjustedUnder;
+    const out: ProbabilityOutput = {
+      overProbability: Math.round(adjustedOver * 100) / 100,
+      underProbability: Math.round(adjustedUnder * 100) / 100,
+      dominantProbability: Math.max(adjustedOver, adjustedUnder),
+      isOverFavored,
+      method: base.method,
+      purityTag: shift > 0 ? "mlb-hits_allowed-wrapper-v1" : base.purityTag,
+    };
+
     try {
       console.log(
-        `[MLB_HITS_ALLOWED_CALIBRATION] pitcher=${input.playerName ?? "?"} raw=${out.dominantProbability.toFixed(2)} adj=${out.dominantProbability.toFixed(2)} fallbackUsed=true method=normal_cdf reason=no_market_specific_wrapper`
+        `[MLB_HITS_ALLOWED_WRAPPER] pitcher=${input.playerName ?? "?"} baseOver=${base.overProbability.toFixed(2)} shift=+${shift} adjOver=${out.overProbability.toFixed(2)} pc=${fatigue.pitchCount ?? "?"} tto=${fatigue.timesThrough ?? "?"} contactAllowed=${fatigue.contactAllowedScore?.toFixed(2) ?? "?"}`
       );
       import("./diagnosticsBuffer").then((d) => {
         d.recordHitsAllowedCalibration({
           pitcher: input.playerName ?? null,
-          side: null,
-          rawProbability: out.dominantProbability,
+          side: isOverFavored ? "OVER" : "UNDER",
+          rawProbability: base.dominantProbability,
           adjustedProbability: out.dominantProbability,
-          pitchCount: null,
-          timesThroughOrder: null,
-          contactAllowedScore: null,
-          fallbackUsed: true,
+          pitchCount: fatigue.pitchCount ?? null,
+          timesThroughOrder: fatigue.timesThrough ?? null,
+          contactAllowedScore: fatigue.contactAllowedScore ?? null,
+          fallbackUsed: shift === 0,
         });
       }).catch(() => {});
     } catch {}
