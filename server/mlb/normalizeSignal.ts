@@ -340,7 +340,41 @@ function clamp01(n: number): number {
   return Math.min(1, Math.max(0, n));
 }
 
-export function normalizeMLBSignal(
+// ── MLB Canonical Display Contract ───────────────────────────────────────
+// Server-owned grade. NEVER derived from liveScore or raw probability — the
+// only inputs are the canonical signalTier (Phase 2) and signalScore.
+function deriveDisplayGrade(
+  signalTier: SignalTier,
+  signalScore: number,
+): "A+" | "A" | "B+" | "B" | "B-" | "Watch" {
+  if (signalTier === "elite" && signalScore >= 80) return "A+";
+  if (signalTier === "strong" && signalScore >= 70) return "A";
+  if (signalTier === "strong" && signalScore >= 60) return "B+";
+  if (signalTier === "lean" && signalScore >= 55) return "B";
+  if (signalTier === "lean" && signalScore >= 45) return "B-";
+  return "Watch";
+}
+
+function buildDisplayDrivers(qs: Record<string, any>, market: string): string[] {
+  const drivers = qs.drivers ?? {};
+  const isPitcher = market.startsWith("pitcher_") || market === "hits_allowed" || market === "walks_allowed" || market === "hr_allowed";
+  const out: string[] = [];
+  if (!isPitcher) {
+    if (drivers.contactQuality >= 0.65) out.push("Elite Contact");
+    else if (drivers.contactQuality >= 0.55) out.push("Solid Contact");
+    if (drivers.batSpeedPower >= 0.60) out.push("Power Profile");
+    if (drivers.handednessMatchup >= 0.55 || drivers.pitchBlendMatchup >= 0.55) out.push("Matchup Edge");
+    if (drivers.parkEnv >= 0.55) out.push("Park Boost");
+    if (drivers.hotColdForm >= 0.55) out.push("Hot Form");
+  } else {
+    if (drivers.pitcherSuppression >= 0.55) out.push("Dominant Stuff");
+    if (drivers.pitcherDeterioration >= 0.50) out.push("Fatigue Risk");
+    if (drivers.bullpenFactor >= 0.55) out.push("Bullpen Edge");
+  }
+  return out.slice(0, 3);
+}
+
+function buildBaseMLBSignal(
   qs: Record<string, any>,
   ctx: NormalizeContext,
 ): MLBSignal {
@@ -512,5 +546,106 @@ export function normalizeMLBSignal(
     // shape verbatim. Older cached signals without this field simply yield
     // undefined, which is the correct "no diagnostics available" state.
     diagnostics: qs.diagnostics,
+  };
+}
+
+/**
+ * Public entry point: normalize a quickSignal into a wire-shaped MLBSignal
+ * AND stamp the MLB Canonical Display Contract. Every consumer that calls
+ * normalizeMLBSignal automatically receives the contract fields — there is
+ * no opt-in path that bypasses them.
+ */
+export function normalizeMLBSignal(
+  qs: Record<string, any>,
+  ctx: NormalizeContext,
+): MLBSignal {
+  const base = buildBaseMLBSignal(qs, ctx);
+  return applyDisplayContract(base, qs);
+}
+
+/**
+ * Stamp the MLB Canonical Display Contract onto a normalized signal.
+ *
+ * Pure transform: takes a fully normalized MLBSignal (post-`normalizeMLBSignal`)
+ * plus the server-derived signalTier and produces the same signal augmented
+ * with displaySide / displayProbability / overProbability / underProbability /
+ * displayGrade / isBettable / isWatchOnly / displayDrivers.
+ *
+ * The display contract is the SOLE source of truth for client rendering:
+ *   - clients MUST NOT derive grade from signalScore or liveScore
+ *   - clients MUST NOT derive bettability from probability alone
+ *   - clients MUST NOT default selected side to OVER when displaySide=UNDER
+ *
+ * Logs `[MLB_DISPLAY_CONTRACT_MISMATCH]` when the engine's recommended side
+ * disagrees with the higher of OVER/UNDER probability (e.g. recommendedSide=
+ * OVER at 32% probability), or when bettable+low-prob combinations slip
+ * through. These logs are admin-only diagnostics.
+ */
+export function applyDisplayContract(
+  sig: MLBSignal,
+  qs: Record<string, any>,
+): MLBSignal {
+  // Sided post-cap probabilities from the calibrator. Fall back to enginePct
+  // for the recommended side (Phase 1 canonical), and complement for the
+  // opposite side, when paired calibration isn't available.
+  const recSide = (sig.recommendedSide === "UNDER" ? "UNDER" : "OVER") as "OVER" | "UNDER";
+  const overProb = sig.calibratedProbabilityOver != null
+    ? Math.round(sig.calibratedProbabilityOver * 10) / 10
+    : (recSide === "OVER" ? sig.enginePct : Math.max(0, Math.min(100, 100 - sig.enginePct)));
+  const underProb = sig.calibratedProbabilityUnder != null
+    ? Math.round(sig.calibratedProbabilityUnder * 10) / 10
+    : (recSide === "UNDER" ? sig.enginePct : Math.max(0, Math.min(100, 100 - sig.enginePct)));
+
+  const displaySide: "OVER" | "UNDER" = recSide;
+  const displayProbability = displaySide === "OVER" ? overProb : underProb;
+  const tier: "watch" | "lean" | "strong" | "elite" = sig.signalTier ?? "watch";
+  const displayGrade = deriveDisplayGrade(tier, sig.signalScore ?? 0);
+  const isBettable = displayProbability >= 50 && (tier as string) !== "watch";
+  const isWatchOnly = !isBettable || (tier as string) === "watch";
+  const displayDrivers = buildDisplayDrivers(qs, sig.market);
+
+  // Mismatch diagnostics. These NEVER affect what the user sees — they only
+  // surface internal disagreements between engine outputs and the display
+  // contract so the orchestrator team can fix them at the engine layer.
+  const oppositeProb = displaySide === "OVER" ? underProb : overProb;
+  const mismatchReasons: string[] = [];
+  if (displayProbability < 50 && isBettable) {
+    mismatchReasons.push("bettable_below_50");
+  }
+  if (oppositeProb > displayProbability + 5) {
+    mismatchReasons.push("recommended_side_lower_probability");
+  }
+  if (displayGrade === "A+" && (sig.signalScore ?? 0) < 80) {
+    mismatchReasons.push("a_plus_low_score");
+  }
+  if (mismatchReasons.length > 0) {
+    try {
+      console.log("[MLB_DISPLAY_CONTRACT_MISMATCH]", {
+        player: sig.playerName,
+        market: sig.market,
+        displaySide,
+        recommendedSide: sig.recommendedSide,
+        displayProbability,
+        overProbability: overProb,
+        underProbability: underProb,
+        signalScore: sig.signalScore,
+        signalTier: tier,
+        displayGrade,
+        isBettable,
+        reason: mismatchReasons.join(","),
+      });
+    } catch {}
+  }
+
+  return {
+    ...sig,
+    displaySide,
+    displayProbability,
+    overProbability: overProb,
+    underProbability: underProb,
+    displayGrade,
+    isBettable,
+    isWatchOnly,
+    displayDrivers,
   };
 }

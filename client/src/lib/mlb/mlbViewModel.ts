@@ -139,6 +139,19 @@ export type SignalViewModel = {
   tierBadge: string;
   liveGrade: { grade: string; color: string } | null;
   oppGrade: string | null;
+  // ── MLB Canonical Display Contract (server-owned) ──────────────────────
+  // These fields mirror the server-stamped display contract verbatim. UI
+  // surfaces MUST render these instead of re-deriving from signalScore.
+  displaySide: "OVER" | "UNDER";
+  displayProbability: number;
+  displayProbabilityLabel: string;
+  overProbability: number;
+  underProbability: number;
+  displayGrade: "A+" | "A" | "B+" | "B" | "B-" | "Watch";
+  displayGradeColor: string;
+  isBettable: boolean;
+  isWatchOnly: boolean;
+  displayDrivers: string[];
   detectionLabel: string;
   badges: Array<{ label: string; color: string }>;
   pitcherSignals: Array<{ label: string; color: string }>;
@@ -289,10 +302,26 @@ export function normalizeMarket(market: string): string {
   return MARKET_NORMALIZE[market] ?? market;
 }
 
+// Server-owned displayGrade → color (matches deriveDisplayGrade tiers).
+const DISPLAY_GRADE_COLORS: Record<string, string> = {
+  "A+": "#eab308",   // elite
+  "A":  "#22c55e",   // strong (top)
+  "B+": "#a3e635",   // strong (mid)
+  "B":  "#14b8a6",   // lean (top)
+  "B-": "#60a5fa",   // lean (low)
+  "Watch": "#71717a",
+};
+
 export function buildSignalViewModel(sig: MLBSignal): SignalViewModel {
   const tierKey = sig.confidenceTier ?? "WATCHLIST";
   const tierStyle = TIER_COLORS[tierKey] ?? TIER_COLORS.WATCHLIST;
-  const sideStyle = SIDE_STYLES[sig.recommendedSide as keyof typeof SIDE_STYLES] ?? SIDE_STYLES.OVER;
+  // ── Display contract (server-owned). Fall back to recommendedSide /
+  // calibrated probabilities only when the server hasn't stamped the
+  // contract yet (cache rollover during deploy). NEVER recompute grade
+  // from signalScore or liveScore on the client.
+  const displaySide: "OVER" | "UNDER" = sig.displaySide
+    ?? (sig.recommendedSide === "UNDER" ? "UNDER" : "OVER");
+  const sideStyle = SIDE_STYLES[displaySide] ?? SIDE_STYLES.OVER;
   const marketLabel = MARKET_LABELS[sig.market] ?? sig.market;
   const marketShort = MARKET_SHORT[sig.market] ?? sig.market;
   const matchup = sig.awayAbbr && sig.homeAbbr ? `${sig.awayAbbr} @ ${sig.homeAbbr}` : null;
@@ -301,7 +330,20 @@ export function buildSignalViewModel(sig: MLBSignal): SignalViewModel {
   const pitcherSigs = mapPitcherSignals((sig as any).pitcherSignals);
   const isPitcherMarket = sig.market.startsWith("pitcher_") || sig.market === "hits_allowed" || sig.market === "walks_allowed" || sig.market === "hr_allowed";
   const isHRMarket = sig.market === "home_runs" || sig.market === "hrr" || sig.market === "hr";
-  const prob = normalizePct(sig.enginePct);
+  const overProbRaw = sig.overProbability ?? sig.calibratedProbabilityOver
+    ?? (displaySide === "OVER" ? sig.enginePct : Math.max(0, 100 - sig.enginePct));
+  const underProbRaw = sig.underProbability ?? sig.calibratedProbabilityUnder
+    ?? (displaySide === "UNDER" ? sig.enginePct : Math.max(0, 100 - sig.enginePct));
+  const overProbability = normalizePct(overProbRaw);
+  const underProbability = normalizePct(underProbRaw);
+  const displayProbability = sig.displayProbability != null
+    ? normalizePct(sig.displayProbability)
+    : (displaySide === "OVER" ? overProbability : underProbability);
+  const displayGrade = (sig.displayGrade ?? "Watch") as SignalViewModel["displayGrade"];
+  const isBettable = sig.isBettable ?? (displayProbability >= 50 && (sig.signalTier ?? "watch") !== "watch");
+  const isWatchOnly = sig.isWatchOnly ?? !isBettable;
+  const displayDrivers = sig.displayDrivers ?? [];
+  const prob = displayProbability;
   const visibleBadges = (sig.badges ?? [])
     .map(b => BADGE_DISPLAY[b])
     .filter((b): b is { label: string; color: string } => b != null)
@@ -323,12 +365,22 @@ export function buildSignalViewModel(sig: MLBSignal): SignalViewModel {
     market: sig.market,
     marketLabel,
     marketShort,
-    side: sig.recommendedSide,
+    side: displaySide,
     sideStyle,
     bookLine: sig.bookLine,
     sportsbook: sig.sportsbook,
     probability: prob,
     probabilityDisplay: `${prob.toFixed(0)}%`,
+    displaySide,
+    displayProbability,
+    displayProbabilityLabel: `${displayProbability.toFixed(0)}%`,
+    overProbability,
+    underProbability,
+    displayGrade,
+    displayGradeColor: DISPLAY_GRADE_COLORS[displayGrade] ?? "#71717a",
+    isBettable,
+    isWatchOnly,
+    displayDrivers,
     edge: sig.edge,
     edgeDisplay: (() => {
       const BATTER_OVER = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
@@ -562,8 +614,11 @@ export function buildPitchMatchupViewModel(
 }
 
 export function buildTopOpportunitiesViewModel(signals: SignalViewModel[]): SignalViewModel[] {
+  // Display contract: only bettable, non-resolved signals are eligible for
+  // Top Live Opportunities. Watch-only signals (incl. low-probability or
+  // tier="watch") are explicitly excluded — they belong on the Watch row.
   return signals
-    .filter(s => s.actionable && !s.alreadyHit && s.liveScore > 0)
+    .filter(s => s.isBettable && s.actionable && !s.alreadyHit && s.liveScore > 0)
     .sort((a, b) => b.liveScore - a.liveScore)
     .slice(0, 5);
 }

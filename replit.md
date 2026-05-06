@@ -26,7 +26,8 @@ LiveLocks is a full-stack PWA for NBA, MLB, and NCAAB betting analytics, providi
 - **Shared Schemas**: `shared/schema.ts`
 - **API Contracts**: `shared/routes.ts`
 - **NBA Engine Validation Harness**: `server/validation/nba/`
-- **MLB Phase 3B Regression Harness**: `server/mlb/phase3bRegression.test.ts` (run: `npx tsx server/mlb/phase3bRegression.test.ts` — locks 8 invariants across Phase 1/1.5/2/3B)
+- **MLB Phase 3B Regression Harness**: `server/mlb/phase3bRegression.test.ts` (run: `npx tsx server/mlb/phase3bRegression.test.ts` — locks 21 invariants across Phase 1/1.5/2/2.5/3B including HRR compression, hits_allowed wrapper shift, self-learn tiers)
+- **MLB Phase 3B Real Wrappers**: HRR soft-compression in `probabilityEngine.ts` (`[MLB_HRR_COMPRESSION]`); hits_allowed pitch-count + TTO + contact-allowed shift wrapper (`[MLB_HITS_ALLOWED_WRAPPER]`, purityTag `mlb-hits_allowed-wrapper-v1`); self-learning sample-size tiers in `selfLearning.ts` (`[SELF_LEARN_TIER]` none/<30, partial/<100, full); HR Watch additive `signalScore` bump (+3 watch / +6 lean) in `liveGameOrchestrator.ts` that NEVER mutates engineProbability or calibrated*Probability (`[MLB_HR_WATCH_SCORE_BUMP]`).
 - **NBA Playoff Rotation Truth Layer**: `server/services/nbaRotationHistoryService.ts`
 - **MLB Signal Engine**: `server/mlb/signalScore.ts`, `server/mlb/markets.ts`
 - **MLB HR Radar Engine**: `server/mlb/hrAlertEngine.ts`, `server/mlb/hrRadarUserStage.ts`
@@ -42,6 +43,8 @@ LiveLocks is a full-stack PWA for NBA, MLB, and NCAAB betting analytics, providi
 - **Eastern Time Dominance**: All server-side date computations use `todayET()` (America/New_York) to prevent off-by-one-day bugs with late-night games.
 - **MLB Signal Pipeline**: Employs a clean ENGINE → NORMALIZER → API → UI CARD pipeline with `MLBSignal` as the single source of truth, including signal-to-projection linking and live event modifiers.
 - **HR Radar Unified Scoring**: The `HR Radar Goldmaster Phase 5` collapses parallel scoring systems into a single pipeline (`computeUnifiedCanonicalStage`) for consistent state management.
+- **MLB Engine Layering (Phase 1 → 1.5 → 2 → 2.5 → 3B)**: Phase 1 produces canonical sided probability; Phase 1.5 caps bind ABOVE wrappers (e.g. `hits_allowed` UNDER cap=74 still clamps even when the Phase 3B wrapper would push higher); Phase 2 derives `signalTier` from `confidenceTier`; Phase 2.5 fires HR Watch context; Phase 3B wrappers are math nudges (HRR compression, hits_allowed shift) and signal-composition nudges (HR Watch +3/+6 to signalScore only). Engine probability is NEVER mutated by signal-composition layers.
+- **MLB Canonical Display Contract**: The server stamps `displaySide`, `displayProbability`, `overProbability`, `underProbability`, `displayGrade` (A+/A/B+/B/B-/Watch derived from signalTier × signalScore — NEVER from liveScore), `isBettable` (≥50% AND tier!="watch"), `isWatchOnly`, and `displayDrivers` in `applyDisplayContract` (`server/mlb/normalizeSignal.ts`). Clients are PROHIBITED from re-deriving these. Mismatches log `[MLB_DISPLAY_CONTRACT_MISMATCH]`.
 - **NBA Playoff Rotation Truth Layer**: Confidence for NBA playoff props is earned from real playoff role evidence (game logs, minutes) rather than season averages.
 
 ## Product

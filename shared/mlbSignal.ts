@@ -27,6 +27,34 @@ export interface MLBSignal {
   // and emit [MLB_TIER_FALLBACK] when missing.
   signalTier?: "watch" | "lean" | "strong" | "elite";
 
+  // ── MLB Canonical Display Contract ─────────────────────────────────────
+  // Server-owned display fields. Every MLB UI surface (Top Opportunities,
+  // SignalCard, LiveBoard, calculator) MUST render these verbatim and is
+  // PROHIBITED from re-deriving them from signalScore/enginePct/probability.
+  //
+  //   displaySide          = recommended side (mirror of recommendedSide,
+  //                          but typed and never NO_EDGE — falls back to
+  //                          OVER when engine returns NO_EDGE)
+  //   displayProbability   = post-cap, post-calibration probability for
+  //                          displaySide (= overProbability when
+  //                          displaySide=OVER, else underProbability)
+  //   overProbability      = final OVER probability after all Phase 1.5 caps
+  //   underProbability     = final UNDER probability after all Phase 1.5 caps
+  //   displayGrade         = "A+"|"A"|"B+"|"B"|"B-"|"Watch" derived from
+  //                          (signalTier × signalScore) per the contract
+  //                          spec. NEVER from liveScore or raw probability.
+  //   isBettable           = displayProbability >= 50 AND signalTier != "watch"
+  //   isWatchOnly          = !isBettable OR signalTier == "watch"
+  //   displayDrivers       = up to 3 short driver labels for the badge row
+  displaySide?: "OVER" | "UNDER";
+  displayProbability?: number;
+  overProbability?: number;
+  underProbability?: number;
+  displayGrade?: "A+" | "A" | "B+" | "B" | "B-" | "Watch";
+  isBettable?: boolean;
+  isWatchOnly?: boolean;
+  displayDrivers?: string[];
+
   awayAbbr: string | null;
   homeAbbr: string | null;
   gameStatus: string | null;

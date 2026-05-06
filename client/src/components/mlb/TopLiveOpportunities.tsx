@@ -25,8 +25,9 @@ export function TopLiveOpportunities({
 
       <div className="divide-y divide-border/20">
         {ranked.map((vm, idx) => {
-          const color = vm.liveGrade?.color ?? "#94a3b8";
-          const grade = vm.liveGrade?.grade ?? "C";
+          // Display contract: server-owned grade (NEVER from liveScore).
+          const color = vm.displayGradeColor;
+          const grade = vm.displayGrade;
           const pitcherSigs = vm.pitcherSignals ?? [];
           const hasEventBoost = vm.eventBoost > 30;
 
@@ -50,9 +51,9 @@ export function TopLiveOpportunities({
                 </div>
                 <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                   <span className={`text-[10px] font-black`} style={{ color: vm.sideStyle.color }}>
-                    {vm.marketShort} {vm.side} {vm.bookLine}
+                    {vm.marketShort} {vm.displaySide} {vm.bookLine}
                   </span>
-                  <span className="text-[10px] font-bold tabular-nums text-foreground/80">{vm.probabilityDisplay}</span>
+                  <span className="text-[10px] font-bold tabular-nums text-foreground/80">{vm.displayProbabilityLabel}</span>
                   {vm.edgeDisplay && vm.edge != null && vm.edge > 0 && (
                     <span className="text-[9px] text-green-400/70">{vm.edgeDisplay}</span>
                   )}
