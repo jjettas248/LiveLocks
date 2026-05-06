@@ -26,6 +26,7 @@ LiveLocks is a full-stack PWA for NBA, MLB, and NCAAB betting analytics, providi
 - **Shared Schemas**: `shared/schema.ts`
 - **API Contracts**: `shared/routes.ts`
 - **NBA Engine Validation Harness**: `server/validation/nba/`
+- **MLB Phase 3B Regression Harness**: `server/mlb/phase3bRegression.test.ts` (run: `npx tsx server/mlb/phase3bRegression.test.ts` — locks 8 invariants across Phase 1/1.5/2/3B)
 - **NBA Playoff Rotation Truth Layer**: `server/services/nbaRotationHistoryService.ts`
 - **MLB Signal Engine**: `server/mlb/signalScore.ts`, `server/mlb/markets.ts`
 - **MLB HR Radar Engine**: `server/mlb/hrAlertEngine.ts`, `server/mlb/hrRadarUserStage.ts`
