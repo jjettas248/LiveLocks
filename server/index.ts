@@ -547,6 +547,10 @@ app.use((req, res, next) => {
     const { startBusSweeper } = await import("./services/liveSignalBus");
     startBusSweeper();
     console.log("[LL_SIGNAL_REGISTER] bus boot complete");
+    // MLB Shadow Qualification sweeper — expires shadow-qualified signals
+    // idle past TTL so the pending bucket doesn't grow unbounded.
+    const { startShadowSweeper } = await import("./mlb/shadowQualification");
+    startShadowSweeper();
   } catch (err) {
     console.warn("[LL_SIGNAL_REJECTED] bus boot failed:", (err as Error).message);
   }

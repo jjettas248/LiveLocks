@@ -309,6 +309,27 @@ export async function registerRoutes(
     }
   });
 
+  // MLB Shadow Qualification panel — passive parallel-runtime evaluation of a
+  // candidate threshold (batter_over signalScore >= 43) vs the live floor (46).
+  // Shadow signals are recorded for analytics ONLY and never surface to users,
+  // alerts, grading, or ROI. Use this to compare hit rate / volatility before
+  // proposing any live threshold change.
+  app.get("/api/admin/mlb-shadow-qualification", requireAdmin, async (req, res) => {
+    try {
+      const { getShadowSummary, listShadowSignals } = await import("./mlb/shadowQualification");
+      const includeRecords = String(req.query.includeRecords ?? "") === "1";
+      const summary = getShadowSummary();
+      if (includeRecords) {
+        const gameId = req.query.gameId ? String(req.query.gameId) : undefined;
+        return res.json({ ...summary, records: listShadowSignals({ gameId }) });
+      }
+      return res.json(summary);
+    } catch (err) {
+      console.error("[admin/mlb-shadow-qualification]", err);
+      return res.status(500).json({ error: "Failed to fetch MLB shadow qualification summary" });
+    }
+  });
+
   app.get("/api/admin/signal-lifecycle/:signalId", requireAdmin, async (req, res) => {
     try {
       const { getCanonical } = await import("./services/lifecycleStore");

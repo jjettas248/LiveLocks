@@ -53,6 +53,7 @@ import {
   recordCooldown as auditRecordCooldown,
   recordWatchSurfaced as auditRecordWatchSurfaced,
 } from "./qualificationAudit";
+import { evaluateShadowBatterOver } from "./shadowQualification";
 import type { MarketFamily } from "./signalScore";
 import { buildSignalDiagnostics } from "./signalDiagnostics";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
@@ -1838,6 +1839,39 @@ export class LiveGameOrchestrator {
       } else {
         console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — signalScore=${scoreBreakdown.total} < ${minScore} gate (tier=${scoreBreakdown.confidenceTier})`);
         auditRecordRejection(gameId, "signalScore", output.market, `signalScore_below_min:${minScore}`, { signalScore: scoreBreakdown.total, probability: sideProbability });
+        // SHADOW QUALIFICATION MODE — passive evaluation of the candidate
+        // batter_over signalScore floor (43 vs live 46). Shadow signals are
+        // recorded for analytics ONLY and NEVER surface to users / alerts /
+        // grading / ROI. We only enter shadow eval at this exact reject site
+        // because all other live gates above have already passed (probability,
+        // side validation, hydration, HR-UNDER block, suppression,
+        // HIGH_PROB_BYPASS, EARLY_BYPASS, HR_WATCH).
+        if (isBatterOver) {
+          try {
+            evaluateShadowBatterOver({
+              gameId,
+              market: output.market,
+              playerName: output.playerName,
+              playerId: (input as any).playerId ?? null,
+              side: output.recommendedSide,
+              probability: sideProbability,
+              signalScore: scoreBreakdown.total,
+              bookLine: output.bookLine ?? null,
+              projection: (output as any).projection ?? null,
+              edge: output.edge ?? null,
+              scoreBreakdown: {
+                matchup: scoreBreakdown.matchup,
+                liveContext: scoreBreakdown.liveContext,
+                form: scoreBreakdown.form,
+                total: scoreBreakdown.total,
+                confidenceTier: scoreBreakdown.confidenceTier,
+              },
+            });
+          } catch (shadowErr: any) {
+            // Shadow path is observation-only — never let it break live qual.
+            console.warn(`[LL_SHADOW_EVAL_ERROR] ${shadowErr?.message ?? shadowErr}`);
+          }
+        }
         return null;
       }
     } else if (
