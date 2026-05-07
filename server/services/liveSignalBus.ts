@@ -32,6 +32,13 @@ import {
   sweepExpired,
 } from "./lifecycleStore";
 import { applyLifecycleEvent } from "./lifecycleEngine";
+import { notifyLifecycleChange } from "./alertSubscriber";
+
+// Lifecycle ranking — used to detect upgrade transitions for alerts.
+const _ls_rank: Record<string, number> = {
+  watch: 0, build: 1, strong: 2, elite: 3,
+  cashed: 99, missed: 99, expired: 99,
+};
 
 // Default freshness window — a signal is considered stale if no update
 // has been observed in this many ms. Bus expires it via the lifecycle
@@ -185,6 +192,20 @@ export function registerSignal(incoming: CanonicalSignal): RegisterResult {
         `[LL_SIGNAL_REGISTER] signalId=${stored.signalId} sport=${stored.sport} market=${stored.market} side=${stored.side} state=${stored.lifecycleState}`
       );
       recordPropagation(Date.now() - start);
+      // Bus → alert subscriber: a freshly created signal at strong/elite
+      // tier is an upgrade-equivalent event.
+      try {
+        if (stored.signalTier === "strong" || stored.signalTier === "elite") {
+          notifyLifecycleChange(stored, "tier_upgraded", "first observation at bettable tier");
+        }
+        // HR Watch detection — flagged via signalTags or triggerSummary
+        const drv = stored.drivers ?? [];
+        const isHrWatch = drv.some((d) => /hr.?watch|near.?hr/i.test(d?.label ?? "")) ||
+          /hr.?watch/i.test(stored.triggerSummary ?? "");
+        if (isHrWatch) {
+          notifyLifecycleChange(stored, "hr_watch_detected", "first HR Watch surface");
+        }
+      } catch (e) { /* alerts must never break ingress */ }
       return { kind: "created", canonical: stored };
     }
 
@@ -193,6 +214,15 @@ export function registerSignal(incoming: CanonicalSignal): RegisterResult {
       `[LL_SIGNAL_UPDATE] signalId=${stored.signalId} state=${stored.lifecycleState} engineGeneratedAt=${stored.engineGeneratedAt}`
     );
     recordPropagation(Date.now() - start);
+    // Bus → alert subscriber: detect lifecycle UPGRADE (e.g. build→strong).
+    try {
+      const fromRank = _ls_rank[existing!.lifecycleState] ?? 0;
+      const toRank = _ls_rank[stored.lifecycleState] ?? 0;
+      if (toRank > fromRank && toRank < 99) {
+        notifyLifecycleChange(stored, "lifecycle_upgraded",
+          `${existing!.lifecycleState}→${stored.lifecycleState}`);
+      }
+    } catch (e) { /* alerts must never break ingress */ }
     return { kind: "updated", canonical: stored };
   } catch (err) {
     _metrics.rejected++;

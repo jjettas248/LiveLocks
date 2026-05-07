@@ -551,6 +551,16 @@ app.use((req, res, next) => {
     console.warn("[LL_SIGNAL_REJECTED] bus boot failed:", (err as Error).message);
   }
 
+  // ── LiveLocks Batch D — Alert subscriber drainer ─────────────────
+  // Fans bus-lifecycle alert events out to per-user channels every 5s.
+  try {
+    const { startAlertDrainer } = await import("./services/alertSubscriber");
+    startAlertDrainer();
+    console.log("[LL_ALERT_QUEUED] alert drainer boot complete");
+  } catch (err) {
+    console.warn("[LL_ALERT_SUPPRESSED] alert drainer boot failed:", (err as Error).message);
+  }
+
   // Auto-sync MLB roster pool at startup + every 24h. Without this the
   // in-memory playerPool is empty and every getPlayer() returns undefined,
   // which starves the handedness feature (resolvedBatterHand=null) and

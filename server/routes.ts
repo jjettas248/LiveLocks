@@ -272,9 +272,23 @@ export async function registerRoutes(
   app.get("/api/admin/signal-bus", requireAdmin, async (_req, res) => {
     try {
       const { getMetrics, SIGNAL_FRESHNESS_MS } = await import("./services/liveSignalBus");
+      const { getBridgeMetrics } = await import("./services/canonicalSignalViewModel");
+      const { getAlertMetrics } = await import("./services/alertSubscriber");
+      const { listCanonical } = await import("./services/lifecycleStore");
+      // Lifecycle event counts by current state (snapshot of the store).
+      const lifecycleEventCountsByState: Record<string, number> = {};
+      try {
+        for (const sig of listCanonical()) {
+          lifecycleEventCountsByState[sig.lifecycleState] =
+            (lifecycleEventCountsByState[sig.lifecycleState] ?? 0) + 1;
+        }
+      } catch {}
       return res.json({
         freshnessMs: SIGNAL_FRESHNESS_MS,
         ...getMetrics(),
+        bridge: getBridgeMetrics(),
+        alerts: getAlertMetrics(),
+        lifecycleEventCountsByState,
       });
     } catch (err) {
       console.error("[admin/signal-bus]", err);
@@ -2520,9 +2534,22 @@ export async function registerRoutes(
 
       console.log(`[MLB EDGE-FEED] edgeCacheEntries=${totalEdgeCacheEntries} total=${allSignals.length} generated=${totalGenerated} droppedStale=${totalDropped} feedTags=${JSON.stringify(feedTagDist)} newestUpdatedAt=${newestUpdatedAt}`);
 
+      // ── LiveLocks Batch D — canonical view-model bridge ──────────────
+      // The normalize loop above auto-registered each signal in the bus
+      // (sole-ingress contract). Now stamp canonical fields onto the
+      // wire-shape payload so the UI reads lifecycleState directly without
+      // inferring it from probability/score.
+      let enrichedSignals: any[] = allSignals;
+      try {
+        const { attachCanonicalToMlbSignals } = await import("./services/canonicalSignalViewModel");
+        enrichedSignals = attachCanonicalToMlbSignals(allSignals as any, "/api/mlb/edge-feed");
+      } catch (bridgeErr) {
+        console.warn(`[LL_CANONICAL_VIEWMODEL_BRIDGE] enrichment failed: ${(bridgeErr as Error).message}`);
+      }
+
       return res.json({
-        mode: allSignals.length > 0 ? "live" : "monitoring",
-        signals: allSignals,
+        mode: enrichedSignals.length > 0 ? "live" : "monitoring",
+        signals: enrichedSignals,
         updatedAt: newestUpdatedAt,
         generatedAt: Date.now(),
         staleCount: totalDropped,
@@ -3212,7 +3239,25 @@ export async function registerRoutes(
   });
 
   app.get("/api/mlb/hr-radar/ladder", requireAuth, async (req, res) => {
-    try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/mlb/hr-radar/ladder"); } catch {}
+    // ── LiveLocks Batch D — HR Radar canonical-aware read ──────────
+    // Read bus inventory of HR-Watch-flagged canonicals first; the
+    // ladder still sources its FIRE/READY/BUILDING buckets from the
+    // engine via storage.getHrRadarLadder, but we cross-reference
+    // canonical lifecycle to suppress duplicates.
+    let busHrWatchIds = new Set<string>();
+    try {
+      const { readBusInventory } = await import("./services/canonicalSignalViewModel");
+      const inv = readBusInventory({ route: "/api/mlb/hr-radar/ladder", excludeTerminal: true });
+      for (const item of inv) {
+        const drv = item.canonical.drivers ?? [];
+        const isHrWatch = drv.some((d) => /hr.?watch|near.?hr/i.test(d?.label ?? ""));
+        if (isHrWatch) busHrWatchIds.add(`${item.canonical.actorId}:${item.canonical.gameId}`);
+      }
+      console.log(`[LL_HR_RADAR_CANONICAL_READ] busInventory=${inv.length} hrWatchInBus=${busHrWatchIds.size}`);
+      console.log(`[LL_HR_RADAR_LIFECYCLE_SYNC] sync={total:${inv.length}}`);
+    } catch (e) {
+      console.warn(`[LL_HR_RADAR_CANONICAL_READ] bus read failed: ${(e as Error).message}`);
+    }
     // Helper — count live MLB games right now from the orchestrator cache.
     // Used purely for diagnostics on the response so an empty radar can be
     // explained ("0 live games" vs "live games but 0 candidates"). Never
@@ -3293,12 +3338,19 @@ export async function registerRoutes(
         nearHrXba: number | null;
         engineGeneratedAt: number | null;
       }> = [];
+      const hrWatchSeen = new Set<string>(); // dedupe key: playerId:gameId
       try {
         for (const [, entry] of Array.from(mlbEdgeCache.entries())) {
           if (!isMLBEdgeEntryFresh(entry, 20 * 60 * 1000)) continue;
           for (const sig of (entry.qualifiedSignals ?? []) as any[]) {
             const isHrWatch = sig.signalType === "hr_watch" || sig.mode === "hr_watch" || sig.signalMode === "hr_watch";
             if (!isHrWatch) continue;
+            const dedupeKey = `${sig.playerId}:${sig.gameId ?? entry.gameId}`;
+            if (hrWatchSeen.has(dedupeKey)) {
+              console.log(`[LL_HR_RADAR_DUPLICATE_BLOCKED] playerId=${sig.playerId} gameId=${sig.gameId ?? entry.gameId}`);
+              continue;
+            }
+            hrWatchSeen.add(dedupeKey);
             const drv = (sig.drivers ?? {}) as Record<string, number>;
             hrWatchEntries.push({
               playerId: String(sig.playerId ?? ""),
@@ -8631,7 +8683,21 @@ export function registerAnalyticsRoutes(app: Express): void {
   // - This endpoint reads signal results from calcLogEntries ONLY.
   app.get("/api/top-plays", requireAuth, async (_req, res) => {
     try {
-      try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/top-plays"); } catch {}
+      // ── LiveLocks Batch D — canonical-aware top-plays ──────────────
+      // Read bus inventory first (sole ingress). Bus is empty when no
+      // engine cycle has populated it yet — fall back to mlbEdgeCache
+      // iteration with [LL_TOP_PLAYS_CACHE_FALLBACK] tag.
+      try {
+        const { readBusInventory } = await import("./services/canonicalSignalViewModel");
+        const inv = readBusInventory({ route: "/api/top-plays", excludeTerminal: true });
+        if (inv.length > 0) {
+          console.log(`[LL_TOP_PLAYS_CANONICAL_READ] busItems=${inv.length}`);
+        } else {
+          console.log(`[LL_TOP_PLAYS_CACHE_FALLBACK] bus empty — falling back to mlbEdgeCache`);
+        }
+      } catch (e) {
+        console.warn(`[LL_TOP_PLAYS_CACHE_FALLBACK] bus read failed: ${(e as Error).message}`);
+      }
       const { buildTopPlays } = await import("./services/topPlaysService");
 
       const mlbSignals: any[] = [];

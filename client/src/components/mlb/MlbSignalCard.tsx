@@ -14,6 +14,7 @@ import {
 } from "@/lib/mlbFormatters";
 import { liveScoreToGrade, launchAngleLabel, sanitizeDisplayString } from "@/lib/mlbUiMappers";
 import { normalizePct } from "@/lib/mlb/mlbViewModel";
+import { readCanonicalLifecycle, LIFECYCLE_BADGE } from "@/lib/mlb/canonicalSignalViewModel";
 import type { MLBSignal } from "@shared/mlbSignal";
 
 export type MlbSignalData = MLBSignal;
@@ -154,6 +155,10 @@ export function MlbSignalCard({
   // emits [MLB_TIER_FALLBACK] in that path.
   const canonicalTier = resolveMlbSignalTier(sig as any);
   const tier = TIER_COLORS_BY_SIGNAL_TIER[canonicalTier] ?? TIER_COLORS[sig.confidenceTier ?? "WATCHLIST"] ?? TIER_COLORS.WATCHLIST;
+  // [LiveLocks Batch D] Canonical lifecycle badge — read directly from the
+  // server-stamped canonicalLifecycleState (NEVER inferred from probability).
+  const canonicalLifecycle = readCanonicalLifecycle(sig as any);
+  const lifecycleBadge = LIFECYCLE_BADGE[canonicalLifecycle];
   const side = SIDE_STYLES[sig.recommendedSide as keyof typeof SIDE_STYLES] ?? SIDE_STYLES.OVER;
   const marketLabel = formatMlbMarketLabel(sig.market);
   const matchup = sig.awayAbbr && sig.homeAbbr ? `${sig.awayAbbr} @ ${sig.homeAbbr}` : null;
@@ -253,6 +258,16 @@ export function MlbSignalCard({
                 data-testid={`badge-tier-${sig.playerId}-${sig.market}`}
               >
                 {tier.badge}
+              </span>
+            )}
+            {canonicalLifecycle !== "unknown" && (
+              <span
+                className="text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0"
+                style={{ background: lifecycleBadge.bg, color: lifecycleBadge.text }}
+                data-testid={`badge-lifecycle-${sig.playerId}-${sig.market}`}
+                title={`Lifecycle state: ${canonicalLifecycle}`}
+              >
+                {lifecycleBadge.label}
               </span>
             )}
             <div className="min-w-0">
