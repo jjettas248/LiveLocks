@@ -232,6 +232,69 @@ export async function registerRoutes(
   // Surfaces trial starts, active trials, trial dropoff, trial→paid conversion, paid churn,
   // and the alerts/telegram channel status distributions. All values come from the
   // additive lifecycle columns introduced in Pass 2 + the existing churn_tracking flow.
+  // ── LiveLocks Batch B — Signal Lifecycle admin debug ──────────────
+  // Read-only inspection of CanonicalSignal lifecycle state + history.
+  // Distinct namespace (`signal-lifecycle/`) from the existing
+  // subscription `/lifecycle-metrics` to avoid collision.
+  app.get("/api/admin/signal-lifecycle", requireAdmin, async (req, res) => {
+    try {
+      const { listCanonical } = await import("./services/lifecycleStore");
+      const sportQ = req.query.sport;
+      const sport = typeof sportQ === "string" ? sportQ : undefined;
+      const limit = req.query.limit ? Math.min(500, Number(req.query.limit) || 200) : 200;
+      const items = listCanonical({ sport, limit });
+      return res.json({
+        count: items.length,
+        items: items.map((s) => ({
+          signalId: s.signalId,
+          sport: s.sport,
+          actor: s.actorName,
+          market: s.market,
+          side: s.side,
+          signalTier: s.signalTier,
+          lifecycleState: s.lifecycleState,
+          updatedAt: s.updatedAt,
+          surfacedAt: s.surfacedAt,
+          expiresAt: s.expiresAt,
+          historyLen: s.lifecycleHistory.length,
+        })),
+      });
+    } catch (err) {
+      console.error("[admin/signal-lifecycle list]", err);
+      return res.status(500).json({ error: "Failed to fetch signal lifecycle list" });
+    }
+  });
+
+  app.get("/api/admin/signal-lifecycle/:signalId", requireAdmin, async (req, res) => {
+    try {
+      const { getCanonical } = await import("./services/lifecycleStore");
+      const sig = getCanonical(String(req.params.signalId));
+      if (!sig) return res.status(404).json({ error: "signalId not found" });
+      return res.json({
+        signalId: sig.signalId,
+        sport: sig.sport,
+        actor: sig.actorName,
+        market: sig.market,
+        side: sig.side,
+        signalTier: sig.signalTier,
+        signalScore: sig.signalScore,
+        displayProbability: sig.displayProbability,
+        lifecycleState: sig.lifecycleState,
+        lifecycleHistory: sig.lifecycleHistory,
+        surfacedAt: sig.surfacedAt,
+        updatedAt: sig.updatedAt,
+        expiresAt: sig.expiresAt,
+        suppressionReason: sig.suppressionReason ?? null,
+        expirationReason: sig.expirationReason ?? null,
+        gradingLink: sig.gradingLink ?? null,
+        sourceRef: sig.sourceRef ?? null,
+      });
+    } catch (err) {
+      console.error("[admin/signal-lifecycle get]", err);
+      return res.status(500).json({ error: "Failed to fetch signal lifecycle" });
+    }
+  });
+
   app.get("/api/admin/lifecycle-metrics", requireAdmin, async (_req, res) => {
     try {
       const metrics = await storage.getLifecycleMetrics();

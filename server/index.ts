@@ -528,6 +528,17 @@ app.use((req, res, next) => {
   // Start MLB live game orchestrator (Phase A — admin-only, fire-and-forget)
   liveOrchestrator.start();
 
+  // ── LiveLocks Batch B — Lifecycle TTL sweeper ────────────────────
+  // Promotes inactive non-terminal CanonicalSignals → expired every 5min.
+  // Idempotent; safe even when no signals are tracked yet.
+  try {
+    const { startTtlSweeper } = await import("./services/lifecycleStore");
+    startTtlSweeper();
+    console.log("[LL_LIFECYCLE_BOOT] ttl sweeper started");
+  } catch (err) {
+    console.warn("[LL_LIFECYCLE_BOOT] failed:", (err as Error).message);
+  }
+
   // Auto-sync MLB roster pool at startup + every 24h. Without this the
   // in-memory playerPool is empty and every getPlayer() returns undefined,
   // which starves the handedness feature (resolvedBatterHand=null) and

@@ -3,6 +3,9 @@ import { normalizePitchTypeCode, getPitchFamily, PITCH_DISPLAY_LABEL } from "./p
 import type { CanonicalPitchType } from "./pitchTypeNormalizer";
 import { deriveSignalTier, type SignalTier } from "./signalScore";
 import { buildMlbDrivers } from "../services/driverBuilder";
+import { toCanonicalFromMlb } from "../services/canonicalMapper";
+import { recordCanonical } from "../services/lifecycleStore";
+import { freezeCanonical } from "../services/signalMutationGuard";
 
 export interface NormalizeContext {
   gameId: string;
@@ -648,7 +651,7 @@ export function applyDisplayContract(
     market: sig.market,
   });
 
-  return {
+  const stamped: MLBSignal = {
     ...sig,
     displaySide,
     displayProbability,
@@ -661,4 +664,20 @@ export function applyDisplayContract(
     canonicalDrivers: explainability.drivers,
     triggerSummary: explainability.triggerSummary,
   };
+
+  // ── LiveLocks Batch B — Canonical mirror + lifecycle bridge ─────────
+  // Build the CanonicalSignal twin and register it in the lifecycle
+  // store. PURELY ADDITIVE: the MLBSignal returned here is unchanged in
+  // shape and content; downstream MLB code paths see exactly the same
+  // object as before. Failures are logged and swallowed so a lifecycle
+  // bug can never break the wire-shape pipeline.
+  try {
+    const canonical = toCanonicalFromMlb(stamped);
+    const stored = recordCanonical(canonical);
+    freezeCanonical(stored);
+  } catch (err) {
+    console.warn(`[LL_CANONICAL_MIRROR_FAILED] player=${sig.playerName} market=${sig.market} reason=${(err as Error).message}`);
+  }
+
+  return stamped;
 }
