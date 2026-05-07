@@ -15,7 +15,23 @@ if ("serviceWorker" in navigator) {
 
   const promptUpdate = (worker: ServiceWorker) => {
     worker.postMessage({ type: "SKIP_WAITING" });
-  }
+  };
+
+  // Phase 7 — PWA Stabilization. Surface SW lifecycle / cache /
+  // notification-routing diagnostics in the page console under
+  // [LL_PWA_*] / [LL_NOTIFICATION_ROUTE] tags. Pure observation; the SW
+  // already broadcasts the events.
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    const msg = event.data;
+    if (!msg || typeof msg.type !== "string") return;
+    if (msg.type === "LL_PWA_REFRESH") {
+      try { console.log("[LL_PWA_REFRESH]", msg.payload); } catch {}
+    } else if (msg.type === "LL_PWA_CACHE_INVALIDATE") {
+      try { console.log("[LL_PWA_CACHE_INVALIDATE]", msg.payload); } catch {}
+    } else if (msg.type === "LL_NOTIFICATION_ROUTE") {
+      try { console.log("[LL_NOTIFICATION_ROUTE]", msg.payload); } catch {}
+    }
+  });
 
   window.addEventListener("load", async () => {
     try {
@@ -38,6 +54,7 @@ if ("serviceWorker" in navigator) {
       navigator.serviceWorker.addEventListener("controllerchange", () => {
         if (refreshing) return;
         refreshing = true;
+        try { console.log("[LL_PWA_REFRESH]", { trigger: "controllerchange" }); } catch {}
         window.location.reload();
       });
 

@@ -42,6 +42,7 @@ import { getCanonicalSidedProbability } from "./probabilityEngine";
 import { computeSignalScore, computeSignalScoreByFamily, scoreHRRadar, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily, deriveSignalTier } from "./signalScore";
 import { detectNearHrContact } from "./nearHrContact";
 import { MLB_CALIBRATION_VERSION } from "./diagnosticsBuffer";
+import { recordDriftSnapshot } from "./goldmasterGuard";
 import type { MarketFamily } from "./signalScore";
 import { buildSignalDiagnostics } from "./signalDiagnostics";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
@@ -4034,6 +4035,23 @@ export class LiveGameOrchestrator {
         preservedAt: now,
       } as any);
       console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=0 rejected=${signalsRejected} PRESERVED ${existingCache.allSignals.length} existing signals (this cycle blank, last good cycle within ${Math.round(cacheAge/1000)}s) — updatedAt unchanged, isDegraded=true`);
+
+      // Phase 1 Gold Master — drift snapshot for the PRESERVED-cache branch.
+      // Without this, sustained empty cycles would silently stop emitting
+      // [MLB_SIGNAL_PARITY] / [MLB_DRIFT_WARNING] for this game (architect
+      // review finding). Passive observation only.
+      try {
+        recordDriftSnapshot({
+          gameId,
+          marketsEvaluated,
+          qualifiedSignals: 0,
+          rejectedSignals: signalsRejected,
+          signals: [],
+          payloadFieldSample: undefined,
+        });
+      } catch (err) {
+        console.warn("[MLB_DRIFT_WARNING] snapshot_failed:", (err as Error).message);
+      }
     } else {
       mlbEdgeCache.set(gameId, {
         gameId,
@@ -4048,6 +4066,23 @@ export class LiveGameOrchestrator {
       });
       const avgScore = signalsQualified > 0 ? Math.round(scoreSum / signalsQualified) : 0;
       console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=${signalsQualified} rejected=${signalsRejected} allSignals=${allSignals.length} avgScore=${avgScore} gameCardTags=[${gameCardTags.join(",")}]`);
+
+      // Phase 1 Gold Master — record drift snapshot for this cycle.
+      // Passive observation only; never mutates engine math or surfacing.
+      try {
+        const sampleSig = allSignals[0] as Record<string, any> | undefined;
+        recordDriftSnapshot({
+          gameId,
+          marketsEvaluated,
+          qualifiedSignals: signalsQualified,
+          rejectedSignals: signalsRejected,
+          signals: allSignals as any,
+          payloadFieldSample: sampleSig ? Object.keys(sampleSig) : undefined,
+        });
+      } catch (err) {
+        // Drift recording must NEVER break the qualification cycle.
+        console.warn("[MLB_DRIFT_WARNING] snapshot_failed:", (err as Error).message);
+      }
 
       // [MLB_PRE_CHANGE_AUDIT] STEP 3 — Surfaced signals trace at orchestrator
       // (what is actually written to mlbEdgeCache and read by display routes).

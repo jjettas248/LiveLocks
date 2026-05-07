@@ -2,6 +2,7 @@ import type { MLBSignal, PitchMatchupRating } from "../../shared/mlbSignal";
 import { normalizePitchTypeCode, getPitchFamily, PITCH_DISPLAY_LABEL } from "./pitchTypeNormalizer";
 import type { CanonicalPitchType } from "./pitchTypeNormalizer";
 import { deriveSignalTier, type SignalTier } from "./signalScore";
+import { buildMlbDrivers } from "../services/driverBuilder";
 
 export interface NormalizeContext {
   gameId: string;
@@ -637,6 +638,16 @@ export function applyDisplayContract(
     } catch {}
   }
 
+  // Phase 5 — Signal Explainability. Build the canonical driver envelope
+  // from engine-recorded evidence. Pure server-side; UI consumers render
+  // `canonicalDrivers` and `triggerSummary` verbatim.
+  const explainability = buildMlbDrivers({
+    ...qs,
+    displayDrivers,
+    playerName: sig.playerName,
+    market: sig.market,
+  });
+
   return {
     ...sig,
     displaySide,
@@ -647,5 +658,7 @@ export function applyDisplayContract(
     isBettable,
     isWatchOnly,
     displayDrivers,
+    canonicalDrivers: explainability.drivers,
+    triggerSummary: explainability.triggerSummary,
   };
 }

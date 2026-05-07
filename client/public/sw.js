@@ -2,6 +2,20 @@ const APP_VERSION = "__APP_VERSION__";
 const CACHE_NAME = `livelocks-${APP_VERSION}`;
 const APP_SHELL = ["/", "/index.html", "/favicon.png", "/manifest.json"];
 
+// Phase 7 — PWA Stabilization. Diagnostic helper that broadcasts a
+// `[LL_PWA_*]` style log payload to all controlled clients so the page
+// console reflects service-worker lifecycle events without requiring
+// chrome://serviceworker-internals.
+function broadcast(type, payload) {
+  try {
+    self.clients.matchAll({ includeUncontrolled: true, type: "window" }).then((list) => {
+      for (const client of list) {
+        try { client.postMessage({ type, payload }); } catch {}
+      }
+    });
+  } catch {}
+}
+
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
@@ -10,17 +24,23 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
+    caches.keys().then((keys) => {
+      const stale = keys.filter((k) => k !== CACHE_NAME);
+      if (stale.length > 0) {
+        broadcast("LL_PWA_CACHE_INVALIDATE", { removed: stale, kept: CACHE_NAME, version: APP_VERSION });
+      }
+      return Promise.all(stale.map((k) => caches.delete(k)));
+    })
   );
   self.clients.claim();
+  broadcast("LL_PWA_REFRESH", { version: APP_VERSION, cacheName: CACHE_NAME, ts: Date.now() });
 });
 
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
+  // API responses are NEVER cached — live signals must be fresh.
   if (url.pathname.startsWith("/api/")) {
     event.respondWith(fetch(request));
     return;
@@ -63,8 +83,6 @@ self.addEventListener("message", (event) => {
     return;
   }
   if (event.data.type === "GET_VERSION") {
-    // Respond on the dedicated MessagePort if the caller used one,
-    // otherwise broadcast to all controlled clients.
     const payload = { type: "SW_VERSION", version: APP_VERSION, cacheName: CACHE_NAME };
     if (event.ports && event.ports[0]) {
       try { event.ports[0].postMessage(payload); } catch {}
@@ -130,6 +148,11 @@ self.addEventListener("notificationclick", (event) => {
   if (data.trigger) params.set("trigger", data.trigger);
 
   const targetUrl = params.toString() ? `/?${params.toString()}` : "/";
+
+  // Phase 7 — emit a routing diagnostic so the client can log
+  // `[LL_NOTIFICATION_ROUTE]` consistently regardless of whether an
+  // existing window was focused or a new one was opened.
+  broadcast("LL_NOTIFICATION_ROUTE", { targetUrl, data, ts: Date.now() });
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {

@@ -55,6 +55,13 @@ export interface MLBSignal {
   isWatchOnly?: boolean;
   displayDrivers?: string[];
 
+  // ── Phase 5 — Signal Explainability Engine ────────────────────────────
+  // Server-built canonical driver envelope. Optional during rollout —
+  // clients should prefer `canonicalDrivers` + `triggerSummary` over
+  // legacy `displayDrivers` / `reasons` when present, but never fabricate.
+  canonicalDrivers?: import("./signalDrivers").SignalDriver[];
+  triggerSummary?: string | null;
+
   awayAbbr: string | null;
   homeAbbr: string | null;
   gameStatus: string | null;
