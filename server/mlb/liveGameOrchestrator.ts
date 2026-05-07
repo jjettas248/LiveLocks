@@ -1399,6 +1399,24 @@ export class LiveGameOrchestrator {
         const hadEdgeCache = mlbEdgeCache.has(gameId);
         if (hadEdgeCache) mlbEdgeCache.delete(gameId);
         console.log(`[HR_RADAR_FINAL_CACHE_FLUSH] gameId=${gameId} edgeCacheCleared=${hadEdgeCache}`);
+
+        // ── LiveLocks Batch C — Game-final lifecycle expiration ─────────
+        // Expire every CanonicalSignal still tracked for this game so
+        // the bus stops surfacing them to UI / alerts / analytics.
+        // Terminal-state signals (already cashed/missed) are no-ops.
+        try {
+          const { getRegistered, expireSignal } =
+            await import("../services/liveSignalBus");
+          const stillLive = getRegistered({ sport: "mlb", gameId, excludeTerminal: true, freshOnlyWithinMs: 0 });
+          for (const s of stillLive) {
+            expireSignal(s.signalId, "game-final");
+          }
+          if (stillLive.length > 0) {
+            console.log(`[LL_SIGNAL_EXPIRED] gameId=${gameId} reason=game-final count=${stillLive.length}`);
+          }
+        } catch (err) {
+          console.warn(`[LL_SIGNAL_REJECTED] game-final sweep failed gameId=${gameId} reason=${(err as Error).message}`);
+        }
         // Phase 4 — fire the once-only reconciliation wrapper. Defensive
         // try/catch so a reconcile failure never blocks the per-game cleanup
         // below. Detailed counts are logged inside reconcileHrRadarFinalGame.

@@ -4,7 +4,7 @@ import type { CanonicalPitchType } from "./pitchTypeNormalizer";
 import { deriveSignalTier, type SignalTier } from "./signalScore";
 import { buildMlbDrivers } from "../services/driverBuilder";
 import { toCanonicalFromMlb } from "../services/canonicalMapper";
-import { recordCanonical } from "../services/lifecycleStore";
+import { registerSignal } from "../services/liveSignalBus";
 import { freezeCanonical } from "../services/signalMutationGuard";
 
 export interface NormalizeContext {
@@ -665,16 +665,18 @@ export function applyDisplayContract(
     triggerSummary: explainability.triggerSummary,
   };
 
-  // ── LiveLocks Batch B — Canonical mirror + lifecycle bridge ─────────
-  // Build the CanonicalSignal twin and register it in the lifecycle
-  // store. PURELY ADDITIVE: the MLBSignal returned here is unchanged in
-  // shape and content; downstream MLB code paths see exactly the same
-  // object as before. Failures are logged and swallowed so a lifecycle
-  // bug can never break the wire-shape pipeline.
+  // ── LiveLocks Batch C — Sole ingress through LiveSignalBus ─────────
+  // Build the CanonicalSignal twin and register through the bus, which
+  // enforces dedupe / freshness / replay-safe semantics. PURELY ADDITIVE
+  // to the MLBSignal wire shape — `stamped` is unchanged. Failures
+  // logged and swallowed so a bus bug can never break the wire pipeline.
+  // Note: the bus internally calls lifecycleStore.recordCanonical, so
+  // this is the single registration path replacing the Batch B direct
+  // mirror call.
   try {
     const canonical = toCanonicalFromMlb(stamped);
-    const stored = recordCanonical(canonical);
-    freezeCanonical(stored);
+    const result = registerSignal(canonical);
+    if (result.canonical) freezeCanonical(result.canonical);
   } catch (err) {
     console.warn(`[LL_CANONICAL_MIRROR_FAILED] player=${sig.playerName} market=${sig.market} reason=${(err as Error).message}`);
   }

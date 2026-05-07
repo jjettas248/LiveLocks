@@ -265,6 +265,23 @@ export async function registerRoutes(
     }
   });
 
+  // ── LiveLocks Batch C — LiveSignalBus runtime metrics (constraint 14) ──
+  // Read-only admin surface exposing registration / dedupe / freshness /
+  // legacy-consumer counts and propagation timing percentiles. Used to
+  // verify "no signal disappearance between engine and UI" before Batch D.
+  app.get("/api/admin/signal-bus", requireAdmin, async (_req, res) => {
+    try {
+      const { getMetrics, SIGNAL_FRESHNESS_MS } = await import("./services/liveSignalBus");
+      return res.json({
+        freshnessMs: SIGNAL_FRESHNESS_MS,
+        ...getMetrics(),
+      });
+    } catch (err) {
+      console.error("[admin/signal-bus]", err);
+      return res.status(500).json({ error: "Failed to fetch signal bus metrics" });
+    }
+  });
+
   app.get("/api/admin/signal-lifecycle/:signalId", requireAdmin, async (req, res) => {
     try {
       const { getCanonical } = await import("./services/lifecycleStore");
@@ -1279,6 +1296,7 @@ export async function registerRoutes(
   }
 
   app.get("/api/mlb/live-games", requireAuth, async (req, res) => {
+    try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/mlb/live-games"); } catch {}
     const forceRefresh = req.query.force === "1";
     const cached = mlbLiveGamesCache.get("games");
     if (!forceRefresh && cached && Date.now() - cached.ts < MLB_LIVE_GAMES_TTL) {
@@ -1855,6 +1873,7 @@ export async function registerRoutes(
   // Phase 3.5 ext — single source of truth, shared with the grader.
 
   app.get("/api/mlb/live-signals/:gameId", requireMLBAccess, async (req, res) => {
+    try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/mlb/live-signals/:gameId"); } catch {}
     const gameId = req.params.gameId as string;
 
     let gameStatus = "";
@@ -2216,6 +2235,7 @@ export async function registerRoutes(
   // in the main live-signals feed. Engine is the sole source of truth — no edge,
   // implied-probability, or sportsbook gating is applied here.
   app.get("/api/mlb/boxscore-engine-state/:gameId", requireMLBAccess, async (req, res) => {
+    try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/mlb/boxscore-engine-state/:gameId"); } catch {}
     const gameId = req.params.gameId as string;
 
     const entry = mlbEdgeCache.get(gameId);
@@ -2517,6 +2537,7 @@ export async function registerRoutes(
   // ── MLB HR Radar Route ───────────────────────────────────────────────────────
   app.get("/api/mlb/hr-radar", requireAuth, async (req, res) => {
     try {
+      try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/mlb/hr-radar"); } catch {}
       const hrEdges: any[] = [];
       const hrWatchlist: any[] = [];
 
@@ -3191,6 +3212,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/mlb/hr-radar/ladder", requireAuth, async (req, res) => {
+    try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/mlb/hr-radar/ladder"); } catch {}
     // Helper — count live MLB games right now from the orchestrator cache.
     // Used purely for diagnostics on the response so an empty radar can be
     // explained ("0 live games" vs "live games but 0 candidates"). Never
@@ -3431,6 +3453,7 @@ export async function registerRoutes(
 
   app.get("/api/mlb/hr-radar-analyze/:playerId/:gameId", requireAuth, async (req, res) => {
     try {
+      try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/mlb/hr-radar-analyze"); } catch {}
       const playerId = String(req.params.playerId);
       const gameId = String(req.params.gameId);
       const sourceResult = await storage.getHrRadarAnalyzeSource(playerId, gameId);
@@ -3948,6 +3971,7 @@ export async function registerRoutes(
     if (!reqUser?.isAdmin) {
       return res.status(403).json({ error: "Admin access required" });
     }
+    try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/mlb/debug"); } catch {}
 
     const activeGames = getActiveGames();
     const allGameIds = activeGames.map((g) => g.gameId);
@@ -8607,6 +8631,7 @@ export function registerAnalyticsRoutes(app: Express): void {
   // - This endpoint reads signal results from calcLogEntries ONLY.
   app.get("/api/top-plays", requireAuth, async (_req, res) => {
     try {
+      try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/top-plays"); } catch {}
       const { buildTopPlays } = await import("./services/topPlaysService");
 
       const mlbSignals: any[] = [];

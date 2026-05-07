@@ -77,6 +77,7 @@ export function toCanonicalFromMlb(sig: MLBSignal, now: number = Date.now()): Ca
 
     lifecycleState,
     lifecycleHistory: [], // store fills in on first record
+    engineGeneratedAt: now, // SignalBus may overwrite with orchestrator cycle ts
     surfacedAt: now,
     updatedAt: now,
     expiresAt: null,

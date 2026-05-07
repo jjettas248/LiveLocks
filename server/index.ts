@@ -539,6 +539,18 @@ app.use((req, res, next) => {
     console.warn("[LL_LIFECYCLE_BOOT] failed:", (err as Error).message);
   }
 
+  // ── LiveLocks Batch C — LiveSignalBus freshness sweeper ──────────
+  // Sweeps stale (idle > SIGNAL_FRESHNESS_MS) signals into the
+  // expired lifecycle state every 60s. Centralized so no component
+  // expires locally — the bus is the single source of expiry truth.
+  try {
+    const { startBusSweeper } = await import("./services/liveSignalBus");
+    startBusSweeper();
+    console.log("[LL_SIGNAL_REGISTER] bus boot complete");
+  } catch (err) {
+    console.warn("[LL_SIGNAL_REJECTED] bus boot failed:", (err as Error).message);
+  }
+
   // Auto-sync MLB roster pool at startup + every 24h. Without this the
   // in-memory playerPool is empty and every getPlayer() returns undefined,
   // which starves the handedness feature (resolvedBatterHand=null) and

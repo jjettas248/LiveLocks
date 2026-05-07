@@ -73,6 +73,11 @@ export interface CanonicalSignal {
   // Lifecycle (MUTABLE by lifecycle engine ONLY) --------------------
   lifecycleState: LifecycleState;
   lifecycleHistory: LifecycleHistoryEntry[];
+  // Freshness — managed by SignalBus (Batch C). engineGeneratedAt is the
+  // engine's authoritative cycle timestamp; surfacedAt is when the bus
+  // first registered the signal; updatedAt is the bus's last observation;
+  // expiresAt is when the bus will sweep this signal stale.
+  engineGeneratedAt: number;
   surfacedAt: number;
   updatedAt: number;
   expiresAt: number | null;

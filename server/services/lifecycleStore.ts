@@ -70,8 +70,13 @@ export function recordCanonical(incoming: CanonicalSignal): CanonicalSignal {
     signalScore: incoming.signalScore,
     drivers: incoming.drivers,
     triggerSummary: incoming.triggerSummary,
+    // Replay-safe (Batch C): preserve surfacedAt + lifecycleHistory +
+    // gradingLink across re-registrations. engineGeneratedAt and
+    // updatedAt advance; surfacedAt is locked from first observation.
+    engineGeneratedAt: incoming.engineGeneratedAt,
     updatedAt: incoming.updatedAt,
     expiresAt: incoming.expiresAt ?? existing.expiresAt,
+    gradingLink: incoming.gradingLink ?? existing.gradingLink,
     sourceRef: incoming.sourceRef ?? existing.sourceRef,
   };
 
