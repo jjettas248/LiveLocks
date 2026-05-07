@@ -296,6 +296,19 @@ export async function registerRoutes(
     }
   });
 
+  // MLB Runtime Qualification audit — rolling-window summary of every
+  // rejection, suppression, and qualified signal across the engine pipeline.
+  // Used to diagnose qualified=0 cycles and propose threshold tuning.
+  app.get("/api/admin/mlb-qualification", requireAdmin, async (_req, res) => {
+    try {
+      const { getAuditSummary } = await import("./mlb/qualificationAudit");
+      return res.json(getAuditSummary());
+    } catch (err) {
+      console.error("[admin/mlb-qualification]", err);
+      return res.status(500).json({ error: "Failed to fetch MLB qualification audit" });
+    }
+  });
+
   app.get("/api/admin/signal-lifecycle/:signalId", requireAdmin, async (req, res) => {
     try {
       const { getCanonical } = await import("./services/lifecycleStore");

@@ -43,6 +43,16 @@ import { computeSignalScore, computeSignalScoreByFamily, scoreHRRadar, deriveSig
 import { detectNearHrContact } from "./nearHrContact";
 import { MLB_CALIBRATION_VERSION } from "./diagnosticsBuffer";
 import { recordDriftSnapshot } from "./goldmasterGuard";
+import {
+  beginCycle as auditBeginCycle,
+  endCycle as auditEndCycle,
+  recordRejection as auditRecordRejection,
+  recordQualified as auditRecordQualified,
+  recordRawCandidate as auditRecordRaw,
+  recordNormalizedCandidate as auditRecordNormalized,
+  recordCooldown as auditRecordCooldown,
+  recordWatchSurfaced as auditRecordWatchSurfaced,
+} from "./qualificationAudit";
 import type { MarketFamily } from "./signalScore";
 import { buildSignalDiagnostics } from "./signalDiagnostics";
 import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
@@ -1615,24 +1625,29 @@ export class LiveGameOrchestrator {
   private qualifySignal(gameId: string, input: MLBPropInput, output: MLBPropOutput): MLBQualifiedSignal | null {
     if (output.recommendedSide !== "OVER" && output.recommendedSide !== "UNDER") {
       console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — invalid side="${output.recommendedSide}"`);
+      auditRecordRejection(gameId, "marketValidation", output.market, "invalid_side");
       return null;
     }
 
     if (typeof output.bookLine !== "number" || !Number.isFinite(output.bookLine) || output.bookLine <= 0) {
       console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — invalid bookLine=${output.bookLine}`);
+      auditRecordRejection(gameId, "marketValidation", output.market, "invalid_bookLine");
       return null;
     }
     if (typeof output.calibratedProbabilityOver !== "number" || !Number.isFinite(output.calibratedProbabilityOver) || output.calibratedProbabilityOver <= 0) {
       console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — invalid probOver=${output.calibratedProbabilityOver}`);
+      auditRecordRejection(gameId, "probability", output.market, "invalid_probOver");
       return null;
     }
     if (typeof output.calibratedProbabilityUnder !== "number" || !Number.isFinite(output.calibratedProbabilityUnder) || output.calibratedProbabilityUnder <= 0) {
       console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — invalid probUnder=${output.calibratedProbabilityUnder}`);
+      auditRecordRejection(gameId, "probability", output.market, "invalid_probUnder");
       return null;
     }
 
     if (output.suppressed) {
       console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — suppressed`);
+      auditRecordRejection(gameId, "suppression", output.market, "engine_output_suppressed");
       return null;
     }
 
@@ -1669,6 +1684,7 @@ export class LiveGameOrchestrator {
       }
       if (sideProbability < absFloor) {
         console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — prob=${sideProbability.toFixed(1)} < ${absFloor} absolute floor (batter_over)`);
+        auditRecordRejection(gameId, "probability", output.market, `prob_below_batter_over_floor:${absFloor}`, { probability: sideProbability });
         return null;
       }
     } else {
@@ -1682,6 +1698,7 @@ export class LiveGameOrchestrator {
           console.log(`[MLB QUALIFY PITCHER_NEAR_MISS][${gameId}] ${output.playerName}/${output.market} — prob=${sideProbability.toFixed(1)} in [${PITCHER_NEAR_MISS_FLOOR}, ${qualifyFloor}) — routing to Pre-AB Watch`);
         } else {
           console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — prob=${sideProbability.toFixed(1)} < ${qualifyFloor} gate`);
+          auditRecordRejection(gameId, "probability", output.market, `prob_below_market_floor:${qualifyFloor}`, { probability: sideProbability });
           return null;
         }
       }
@@ -1700,11 +1717,13 @@ export class LiveGameOrchestrator {
     });
     if (!hydrationOk) {
       console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — hydration gate failed`);
+      auditRecordRejection(gameId, "staleOdds", output.market, "hydration_gate_failed");
       return null;
     }
 
     if (((output.market as string) === "hr" || output.market === "home_runs") && output.recommendedSide === "UNDER") {
       console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — HR UNDER suppressed (unplayable odds)`);
+      auditRecordRejection(gameId, "suppression", output.market, "hr_under_unplayable");
       return null;
     }
 
@@ -1712,16 +1731,19 @@ export class LiveGameOrchestrator {
       const tolerance = ({ hits: 0.08, total_bases: 0.15, home_runs: 0.05, hrr: 0.15, batter_strikeouts: 0.10 } as Record<string, number>)[output.market] ?? 0.10;
       if (output.recommendedSide === "OVER" && output.projection < output.bookLine - tolerance) {
         console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — side inconsistency: OVER but proj=${output.projection} < line=${output.bookLine} - ${tolerance} tolerance (batter_over)`);
+        auditRecordRejection(gameId, "marketValidation", output.market, "side_inconsistency_over_batter");
         return null;
       }
     } else {
       if (output.recommendedSide === "OVER" && output.projection < output.bookLine) {
         console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — side inconsistency: OVER but proj=${output.projection} < line=${output.bookLine}`);
+        auditRecordRejection(gameId, "marketValidation", output.market, "side_inconsistency_over");
         return null;
       }
     }
     if (output.recommendedSide === "UNDER" && output.projection > output.bookLine) {
       console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — side inconsistency: UNDER but proj=${output.projection} > line=${output.bookLine}`);
+      auditRecordRejection(gameId, "marketValidation", output.market, "side_inconsistency_under");
       return null;
     }
 
@@ -1815,6 +1837,7 @@ export class LiveGameOrchestrator {
         console.log(`[MLB QUALIFY EARLY_BYPASS_SCORE][${gameId}] ${output.playerName}/${output.market} — signalScore=${scoreBreakdown.total} < ${minScore} but tag=${earlyBypassTag} — surfacing as Pre-AB Watch`);
       } else {
         console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — signalScore=${scoreBreakdown.total} < ${minScore} gate (tier=${scoreBreakdown.confidenceTier})`);
+        auditRecordRejection(gameId, "signalScore", output.market, `signalScore_below_min:${minScore}`, { signalScore: scoreBreakdown.total, probability: sideProbability });
         return null;
       }
     } else if (
@@ -1839,6 +1862,7 @@ export class LiveGameOrchestrator {
           console.log(`[MLB QUALIFY HIGH_PROB_BYPASS][${gameId}] ${output.playerName}/${output.market} — borderline batter_over score=${scoreBreakdown.total} no conviction cluster but prob=${sideProbability.toFixed(1)} ≥ ${HIGH_PROB_BYPASS_THRESHOLD} — surfacing as HIGH_PROB watch`);
         } else {
           console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — borderline batter_over score=${scoreBreakdown.total} lacks conviction cluster (matchup=${scoreBreakdown.matchup} live=${scoreBreakdown.liveContext} form=${scoreBreakdown.form})`);
+          auditRecordRejection(gameId, "signalScore", output.market, "borderline_no_conviction_cluster", { signalScore: scoreBreakdown.total, probability: sideProbability });
           return null;
         }
       }
@@ -2842,6 +2866,7 @@ export class LiveGameOrchestrator {
     const last = LAST_RUN.get(gameId);
     if (last !== undefined && Date.now() - last < effectiveDedup) {
       console.log(`[MLB orchestrator] triggerEngine dedup-skipped for game ${gameId} (ran within ${effectiveDedup}ms)`);
+      auditRecordCooldown(gameId, Date.now() - last, effectiveDedup);
       return outputs;
     }
     LAST_RUN.set(gameId, Date.now());
@@ -2855,6 +2880,7 @@ export class LiveGameOrchestrator {
       console.warn(`[MLB orchestrator] triggerEngine: no game state cached for ${gameId}`);
       return outputs;
     }
+    auditBeginCycle(gameId);
 
     const contactCache = mlbGameCache.contactData[gameId];
     const pitcherCtxCache = mlbGameCache.pitcherContext[gameId];
@@ -2942,21 +2968,26 @@ export class LiveGameOrchestrator {
     for (const market of BATTER_MARKETS) {
       if (!impactedMarkets.has(market)) continue;
       for (const batter of state.battingOrder) {
+        auditRecordRaw(gameId);
         // ── Input validation: skip player if required context is missing ─────
         if (!batter.playerId || batter.playerId === "unknown") {
           console.warn(`[MLB orchestrator] Skipping batter — missing playerId (market: ${market})`);
+          auditRecordRejection(gameId, "missingContext", market, "missing_playerId");
           continue;
         }
         if (!batter.slot || batter.slot < 1 || batter.slot > 9) {
           console.warn(`[MLB orchestrator] Skipping ${batter.playerName} — invalid battingOrderSlot: ${batter.slot} (market: ${market})`);
+          auditRecordRejection(gameId, "missingContext", market, "invalid_battingOrderSlot");
           continue;
         }
         if (!gameId) {
           console.warn(`[MLB orchestrator] Skipping ${batter.playerName} — missing gameId (market: ${market})`);
+          auditRecordRejection(gameId, "missingContext", market, "missing_gameId");
           continue;
         }
         if (!state.inning || state.inning < 1) {
           console.warn(`[MLB orchestrator] Skipping ${batter.playerName} — inning not set: ${state.inning} (market: ${market})`);
+          auditRecordRejection(gameId, "missingContext", market, "inning_not_set");
           continue;
         }
 
@@ -2991,6 +3022,7 @@ export class LiveGameOrchestrator {
             console.log(`[MLB HR_RADAR_ONLY][${gameId}] ${batter.playerName} — no book line for home_runs, running HR radar scan only`);
           } else {
             console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "no_book_line" }`);
+            auditRecordRejection(gameId, "staleOdds", market, "no_book_line_batter");
             continue;
           }
         }
@@ -3001,9 +3033,11 @@ export class LiveGameOrchestrator {
           if (!hasRealOdds(resolvedMarketObj)) {
             console.warn(`[MLB orchestrator] hasRealOdds failed for ${batter.playerName}/${market} — signalLocked=false, skipping computation`);
             console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "no_real_odds", line: ${resolvedLine!.line} }`);
+            auditRecordRejection(gameId, "staleOdds", market, "no_real_odds_batter");
             continue;
           }
         }
+        auditRecordNormalized(gameId, market);
 
         const boxScorePlayer = mlbGameCache.gameBoxScore[gameId]?.byPlayerId?.[batter.playerId];
         const playerAB = boxScorePlayer?.ab ?? 0;
@@ -3295,6 +3329,7 @@ export class LiveGameOrchestrator {
           if (fwResult.hardReject && !hrRadarOnly) {
             signalsRejected++;
             console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "firewall_hard_reject" }`);
+            auditRecordRejection(gameId, "marketValidation", market, "firewall_hard_reject_batter");
             continue;
           }
 
@@ -3378,12 +3413,20 @@ export class LiveGameOrchestrator {
               allSignals.push(qResult);
               signalsQualified++;
               scoreSum += qResult.signalScore;
+              auditRecordQualified(gameId, {
+                market: qResult.market,
+                probability: qResult.engineProbability ?? 0,
+                signalScore: qResult.signalScore ?? 0,
+                edge: (qResult as any).edge ?? 0,
+                isHrWatch: (qResult.signalTags ?? []).some((t: string) => /hr_watch|hr_radar/i.test(t)),
+              });
             } else {
               if (!isEarlySignalMode) signalsRejected++;
               const watchSig = isEarlySignalMode
                 ? (qResult ?? this.buildWatchSignal(gameId, input, output))
                 : this.buildWatchSignal(gameId, input, output);
               if (watchSig) {
+                auditRecordWatchSurfaced(gameId, market);
                 watchSig.currentStats = batterStats;
                 watchSig.lastABContact = lastABContact;
                 watchSig.batterArchetype = bArch;
@@ -3781,8 +3824,10 @@ export class LiveGameOrchestrator {
         console.log(`[MLB MARKET INPUT][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", playerId: "${pitcherToEval.playerId}", inning: ${state.inning} }`);
 
         const resolvedPitcherLine = await resolveBookLine(oddsEventId, pitcherToEval.playerName, market);
+        auditRecordRaw(gameId);
         if (resolvedPitcherLine === null) {
           console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", reason: "no_book_line" }`);
+          auditRecordRejection(gameId, "staleOdds", market, "no_book_line_pitcher");
           continue;
         }
         if (resolvedPitcherLine.isDegraded) anyDegraded = true;
@@ -3791,8 +3836,10 @@ export class LiveGameOrchestrator {
         if (!hasRealOdds(resolvedPitcherMarketObj)) {
           console.warn(`[MLB orchestrator] hasRealOdds failed for pitcher ${pitcherToEval.playerName}/${market} — signalLocked=false, skipping computation`);
           console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", reason: "no_real_odds", line: ${resolvedPitcherLine.line} }`);
+          auditRecordRejection(gameId, "staleOdds", market, "no_real_odds_pitcher");
           continue;
         }
+        auditRecordNormalized(gameId, market);
 
         const pitcherSeasonForPitcherMarket = mlbPlayerCache.pitcherSeasonStats[pitcherToEval.playerId];
 
@@ -3921,6 +3968,7 @@ export class LiveGameOrchestrator {
           if (fwResult.hardReject) {
             signalsRejected++;
             console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", reason: "firewall_hard_reject" }`);
+            auditRecordRejection(gameId, "marketValidation", market, "firewall_hard_reject_pitcher");
             continue;
           }
 
@@ -3953,12 +4001,20 @@ export class LiveGameOrchestrator {
             allSignals.push(qResult);
             signalsQualified++;
             scoreSum += qResult.signalScore;
+            auditRecordQualified(gameId, {
+              market: qResult.market,
+              probability: qResult.engineProbability ?? 0,
+              signalScore: qResult.signalScore ?? 0,
+              edge: (qResult as any).edge ?? 0,
+              isHrWatch: false,
+            });
           } else {
             if (!isPitcherEarlySignal) signalsRejected++;
             const watchSig = isPitcherEarlySignal
               ? (qResult ?? this.buildWatchSignal(gameId, input, output))
               : this.buildWatchSignal(gameId, input, output);
             if (watchSig) {
+              auditRecordWatchSurfaced(gameId, market);
               watchSig.pitcherArchetype = pArchForMarket;
               watchSig.isDegraded = !!(input as any).isDegraded;
               if (isPitcherEarlySignal) {
@@ -4053,6 +4109,7 @@ export class LiveGameOrchestrator {
         preservedAt: now,
       } as any);
       console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=0 rejected=${signalsRejected} PRESERVED ${existingCache.allSignals.length} existing signals (this cycle blank, last good cycle within ${Math.round(cacheAge/1000)}s) — updatedAt unchanged, isDegraded=true`);
+      auditEndCycle(gameId);
 
       // Phase 1 Gold Master — drift snapshot for the PRESERVED-cache branch.
       // Without this, sustained empty cycles would silently stop emitting
@@ -4084,6 +4141,7 @@ export class LiveGameOrchestrator {
       });
       const avgScore = signalsQualified > 0 ? Math.round(scoreSum / signalsQualified) : 0;
       console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=${signalsQualified} rejected=${signalsRejected} allSignals=${allSignals.length} avgScore=${avgScore} gameCardTags=[${gameCardTags.join(",")}]`);
+      auditEndCycle(gameId);
 
       // Phase 1 Gold Master — record drift snapshot for this cycle.
       // Passive observation only; never mutates engine math or surfacing.
