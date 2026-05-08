@@ -183,27 +183,52 @@ function teamsMatch(a: string, b: string): boolean {
   return na === nb || na.includes(nb) || nb.includes(na);
 }
 
-// Fetch and cache the full list of NBA events from The Odds API
+// Fetch and cache the full list of NBA events from The Odds API.
+// Rotates across all configured keys on 401 (DEACTIVATED_KEY / auth) and 429
+// (frequency-limit) so a single dead key can't blank the entire UI when other
+// keys are healthy. Mirrors the rotation behavior of the prop-fetch path.
 async function getEvents(): Promise<any[]> {
   const cacheKey = "events_list";
   const cached = cache.get(cacheKey);
   if (isFresh(cached, EVENTS_TTL)) return cached!.data;
 
-  const apiKey = getOddsApiKey();
-  if (!apiKey) throw new Error("ODDS_API_KEY is not set");
+  if (ODDS_API_KEYS.length === 0) throw new Error("ODDS_API_KEY is not set");
 
-  const res = await fetch(
-    `${BASE_URL}/events?apiKey=${apiKey}&dateFormat=iso`,
-    { signal: AbortSignal.timeout(8000) }
-  );
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Events fetch failed: ${res.status} — ${body}`);
+  let lastErr: string = "no_keys";
+  const maxAttempts = ODDS_API_KEYS.length;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const apiKey = getOddsApiKey();
+    if (!apiKey) { lastErr = "no_active_key"; break; }
+    const usedKeyIndex = activeKeyIndex;
+    try {
+      const res = await fetch(
+        `${BASE_URL}/events?apiKey=${apiKey}&dateFormat=iso`,
+        { signal: AbortSignal.timeout(8000) }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        cache.set(cacheKey, { data, timestamp: Date.now() });
+        console.log(`[Odds] Fetched ${data.length} NBA events (key ${usedKeyIndex + 1}/${ODDS_API_KEYS.length})`);
+        return data;
+      }
+      const body = await res.text();
+      lastErr = `${res.status} — ${body.slice(0, 200)}`;
+      if (res.status === 401) {
+        console.warn(`[Odds API] events: key ${usedKeyIndex + 1} got 401 — cooling 60min and rotating`);
+        markKeyExhausted(usedKeyIndex);
+        continue;
+      }
+      if (res.status === 429) {
+        markKeyRateLimited(usedKeyIndex);
+        continue;
+      }
+      throw new Error(`Events fetch failed: ${lastErr}`);
+    } catch (err: any) {
+      lastErr = err?.message ?? String(err);
+      if (attempt === maxAttempts - 1) throw err;
+    }
   }
-  const data = await res.json();
-  cache.set(cacheKey, { data, timestamp: Date.now() });
-  console.log(`[Odds] Fetched ${data.length} NBA events`);
-  return data;
+  throw new Error(`Events fetch failed: all ${ODDS_API_KEYS.length} keys returned errors (${lastErr})`);
 }
 
 // Match a team abbreviation (or full name) to an Odds API event UUID.
@@ -1199,21 +1224,43 @@ async function getMLBEvents(): Promise<any[]> {
   const cacheKey = "mlb_events_list";
   const cached = cache.get(cacheKey);
   if (isFresh(cached, EVENTS_TTL)) return cached!.data;
-  const mlbEvKey = getOddsApiKey();
-  if (!mlbEvKey) throw new Error("ODDS_API_KEY is not set");
+  if (ODDS_API_KEYS.length === 0) throw new Error("ODDS_API_KEY is not set");
 
-  const res = await fetch(
-    `${MLB_BASE_URL}/events?apiKey=${mlbEvKey}&dateFormat=iso`,
-    { signal: AbortSignal.timeout(8000) }
-  );
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`MLB events fetch failed: ${res.status} — ${body}`);
+  let lastErr: string = "no_keys";
+  const maxAttempts = ODDS_API_KEYS.length;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const mlbEvKey = getOddsApiKey();
+    if (!mlbEvKey) { lastErr = "no_active_key"; break; }
+    const usedKeyIndex = activeKeyIndex;
+    try {
+      const res = await fetch(
+        `${MLB_BASE_URL}/events?apiKey=${mlbEvKey}&dateFormat=iso`,
+        { signal: AbortSignal.timeout(8000) }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        cache.set(cacheKey, { data, timestamp: Date.now() });
+        console.log(`[Odds] Fetched ${data.length} MLB events (key ${usedKeyIndex + 1}/${ODDS_API_KEYS.length})`);
+        return data;
+      }
+      const body = await res.text();
+      lastErr = `${res.status} — ${body.slice(0, 200)}`;
+      if (res.status === 401) {
+        console.warn(`[MLB Odds] events: key ${usedKeyIndex + 1} got 401 — cooling 60min and rotating`);
+        markKeyExhausted(usedKeyIndex);
+        continue;
+      }
+      if (res.status === 429) {
+        markKeyRateLimited(usedKeyIndex);
+        continue;
+      }
+      throw new Error(`MLB events fetch failed: ${lastErr}`);
+    } catch (err: any) {
+      lastErr = err?.message ?? String(err);
+      if (attempt === maxAttempts - 1) throw err;
+    }
   }
-  const data = await res.json();
-  cache.set(cacheKey, { data, timestamp: Date.now() });
-  console.log(`[Odds] Fetched ${data.length} MLB events`);
-  return data;
+  throw new Error(`MLB events fetch failed: all ${ODDS_API_KEYS.length} keys returned errors (${lastErr})`);
 }
 
 export async function resolveMLBOddsEventId(
