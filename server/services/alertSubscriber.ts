@@ -198,6 +198,11 @@ export function notifyLifecycleChange(
   console.log(
     `[LL_ALERT_QUEUED] signalId=${canonical.signalId} trigger=${trigger} severity=${severity} state=${canonical.lifecycleState} reason=${reason ?? "n/a"}`
   );
+  // Batch E — analytics tap (read-only).
+  try {
+    const { emitAlertEvent } = require("../analytics/eventEmitters");
+    emitAlertEvent(canonical, "alert_queued", trigger);
+  } catch { /* analytics never blocks runtime */ }
 }
 
 /**
@@ -237,6 +242,11 @@ export async function drainAlertQueue(): Promise<number> {
       console.log(
         `[LL_ALERT_SENT] signalId=${q.signalId} trigger=${q.trigger} severity=${q.severity} recipients=${result.recipients}`
       );
+      // Batch E — analytics tap (read-only).
+      try {
+        const { emitAlertEvent } = require("../analytics/eventEmitters");
+        emitAlertEvent(q.canonical, "alert_sent", q.trigger);
+      } catch { /* analytics never blocks runtime */ }
     } catch (err) {
       _alertMetrics.suppressed++;
       console.warn(
@@ -252,11 +262,27 @@ export async function drainAlertQueue(): Promise<number> {
 export function recordAlertOpened(signalId: string): void {
   _alertMetrics.opened++;
   console.log(`[LL_ALERT_OPENED] signalId=${signalId}`);
+  try {
+    const { getCanonical } = require("./lifecycleStore");
+    const c = getCanonical(signalId);
+    if (c) {
+      const { emitAlertEvent } = require("../analytics/eventEmitters");
+      emitAlertEvent(c, "alert_opened");
+    }
+  } catch { /* analytics never blocks runtime */ }
 }
 
 export function recordAlertClicked(signalId: string): void {
   _alertMetrics.clicked++;
   console.log(`[LL_ALERT_CLICKED] signalId=${signalId}`);
+  try {
+    const { getCanonical } = require("./lifecycleStore");
+    const c = getCanonical(signalId);
+    if (c) {
+      const { emitAlertEvent } = require("../analytics/eventEmitters");
+      emitAlertEvent(c, "alert_clicked");
+    }
+  } catch { /* analytics never blocks runtime */ }
 }
 
 // ── Drainer boot ─────────────────────────────────────────────────────

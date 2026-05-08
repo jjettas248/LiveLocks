@@ -378,6 +378,14 @@ export function recordShadowOutcome(
       `[LL_SHADOW_OUTCOME_RESOLVED] ${rec.playerName}/${rec.market} side=${rec.side} signalId=${signalId} outcome=cashed${note ? ` note=${note}` : ""}`,
     );
     console.log(`[LL_SHADOW_SIGNAL_CASHED] ${rec.playerName}/${rec.market} signalId=${signalId}`);
+    try {
+      const { emitShadowEvent } = require("../analytics/eventEmitters");
+      emitShadowEvent({
+        signalId, gameId: rec.gameId, playerId: rec.playerId ?? rec.playerName,
+        market: rec.market, side: rec.side as "OVER" | "UNDER", outcome: "cashed",
+        signalScore: rec.signalScore ?? null, probability: rec.probability ?? null,
+      });
+    } catch { /* analytics never blocks runtime */ }
   } else if (outcome === "missed") {
     aggregates.missedTotal++;
     ms.missed++;
@@ -386,6 +394,14 @@ export function recordShadowOutcome(
       `[LL_SHADOW_OUTCOME_RESOLVED] ${rec.playerName}/${rec.market} side=${rec.side} signalId=${signalId} outcome=missed${note ? ` note=${note}` : ""}`,
     );
     console.log(`[LL_SHADOW_SIGNAL_MISSED] ${rec.playerName}/${rec.market} signalId=${signalId}`);
+    try {
+      const { emitShadowEvent } = require("../analytics/eventEmitters");
+      emitShadowEvent({
+        signalId, gameId: rec.gameId, playerId: rec.playerId ?? rec.playerName,
+        market: rec.market, side: rec.side as "OVER" | "UNDER", outcome: "missed",
+        signalScore: rec.signalScore ?? null, probability: rec.probability ?? null,
+      });
+    } catch { /* analytics never blocks runtime */ }
   } else if (outcome === "push") {
     aggregates.pushTotal++;
     ms.push++;

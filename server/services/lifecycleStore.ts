@@ -53,6 +53,11 @@ export function recordCanonical(incoming: CanonicalSignal): CanonicalSignal {
       `[LL_SIGNAL_CREATED] signalId=${created.signalId} state=${created.lifecycleState} sport=${created.sport} market=${created.market} side=${created.side}`
     );
     _store.set(created.signalId, created);
+    // Batch E — analytics tap (read-only, never mutates the canonical).
+    try {
+      const { emitLifecycleEvent } = require("../analytics/eventEmitters");
+      emitLifecycleEvent(created, "created", "first observation");
+    } catch { /* analytics never blocks runtime */ }
     return created;
   }
 
@@ -90,6 +95,14 @@ export function recordCanonical(incoming: CanonicalSignal): CanonicalSignal {
     };
     const result = applyLifecycleEvent(merged, event);
     _store.set(result.next.signalId, result.next);
+    // Batch E — analytics tap (read-only, never mutates the canonical).
+    if (result.changed) {
+      try {
+        const { emitLifecycleEvent } = require("../analytics/eventEmitters");
+        const kind = event.kind === "suppressed" ? null : event.kind;
+        if (kind) emitLifecycleEvent(result.next, kind, event.reason);
+      } catch { /* analytics never blocks runtime */ }
+    }
     return result.next;
   }
 

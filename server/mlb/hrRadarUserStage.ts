@@ -550,6 +550,14 @@ export function enrichWithUserStage(input: {
       } else if (userStage === "fire") {
         console.log(`[HR_RADAR_FIRE] signalId=${sid} gameId=${gid} playerId=${pid} player=${pname}`);
       }
+      // Batch E — analytics tap (read-only).
+      try {
+        const { emitHrRadarTransition } = require("../analytics/eventEmitters");
+        emitHrRadarTransition({
+          signalId: sid, gameId: gid, playerId: pid,
+          fromStage: String(prevForTrace), toStage: String(userStage),
+        });
+      } catch { /* analytics never blocks runtime */ }
       userStageMemory.set(identityKey, userStage);
     }
     // else: prevForTrace === userStage — no change, stay silent.

@@ -560,6 +560,20 @@ app.use((req, res, next) => {
   try {
     const { startAlertDrainer } = await import("./services/alertSubscriber");
     startAlertDrainer();
+
+    // Batch E — Analytics aggregators. Read-only periodic snapshots.
+    try {
+      const { startMlbIntelligenceAggregator } = await import("./analytics/mlbSignalIntelligence");
+      const { startHrRadarIntelligenceAggregator } = await import("./analytics/hrRadarIntelligence");
+      const { startDriverIntelligenceAggregator } = await import("./analytics/driverIntelligence");
+      const { startShadowAnalyticsAggregator } = await import("./analytics/shadowAnalytics");
+      startMlbIntelligenceAggregator();
+      startHrRadarIntelligenceAggregator();
+      startDriverIntelligenceAggregator();
+      startShadowAnalyticsAggregator();
+    } catch (err: any) {
+      console.warn(`[LL_ANALYTICS_AGGREGATE] aggregators failed to start err=${err?.message ?? err}`);
+    }
     console.log("[LL_ALERT_QUEUED] alert drainer boot complete");
   } catch (err) {
     console.warn("[LL_ALERT_SUPPRESSED] alert drainer boot failed:", (err as Error).message);

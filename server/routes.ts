@@ -296,6 +296,70 @@ export async function registerRoutes(
     }
   });
 
+  // ── Batch E — MLB Signal Intelligence dashboard payload ──────────────
+  // Aggregates analytics ring buffer + shadow store + bus metrics into a
+  // single read-only snapshot. Server aggregates; client renders only.
+  app.get("/api/admin/mlb-signal-intelligence", requireAdmin, async (req, res) => {
+    try {
+      const windowMs = req.query.windowMs
+        ? Math.max(60_000, Math.min(7 * 24 * 60 * 60 * 1000, parseInt(String(req.query.windowMs), 10)))
+        : undefined;
+
+      const [
+        { computeMlbIntelligence },
+        { computeHrRadarIntelligence },
+        { computeDriverIntelligence },
+        { computeShadowAnalytics },
+        { getMetrics, SIGNAL_FRESHNESS_MS },
+        { getBridgeMetrics },
+        { getAlertMetrics },
+        { listCanonical },
+        { getAnalyticsBufferSize },
+      ] = await Promise.all([
+        import("./analytics/mlbSignalIntelligence"),
+        import("./analytics/hrRadarIntelligence"),
+        import("./analytics/driverIntelligence"),
+        import("./analytics/shadowAnalytics"),
+        import("./services/liveSignalBus"),
+        import("./services/canonicalSignalViewModel"),
+        import("./services/alertSubscriber"),
+        import("./services/lifecycleStore"),
+        import("./analytics/analyticsEvent"),
+      ]);
+
+      const lifecycleEventCountsByState: Record<string, number> = {};
+      const tierCountsCurrent: Record<string, number> = {};
+      try {
+        for (const sig of listCanonical({ sport: "mlb" })) {
+          lifecycleEventCountsByState[sig.lifecycleState] =
+            (lifecycleEventCountsByState[sig.lifecycleState] ?? 0) + 1;
+          tierCountsCurrent[sig.signalTier] =
+            (tierCountsCurrent[sig.signalTier] ?? 0) + 1;
+        }
+      } catch {}
+
+      return res.json({
+        runtimeHealth: {
+          freshnessMs: SIGNAL_FRESHNESS_MS,
+          ...getMetrics(),
+          bridge: getBridgeMetrics(),
+          alerts: getAlertMetrics(),
+          lifecycleEventCountsByState,
+          tierCountsCurrent,
+          analyticsBufferSize: getAnalyticsBufferSize(),
+        },
+        lifecycle: computeMlbIntelligence({ windowMs }),
+        hrRadar: computeHrRadarIntelligence({ windowMs }),
+        drivers: computeDriverIntelligence({ windowMs }),
+        shadow: computeShadowAnalytics({ windowMs }),
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("[admin/mlb-signal-intelligence]", err);
+      return res.status(500).json({ error: "Failed to fetch MLB signal intelligence" });
+    }
+  });
+
   // MLB Runtime Qualification audit — rolling-window summary of every
   // rejection, suppression, and qualified signal across the engine pipeline.
   // Used to diagnose qualified=0 cycles and propose threshold tuning.

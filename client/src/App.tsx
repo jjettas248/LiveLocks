@@ -7,6 +7,7 @@ import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
 import AuthPage from "@/pages/auth";
 import AdminPage from "@/pages/admin";
+import MlbSignalIntelligencePage from "@/pages/admin/mlb-signal-intelligence";
 import NcaabLivePage from "@/pages/ncaab-live";
 import PrivacyPage from "@/pages/privacy";
 import TermsPage from "@/pages/terms";
@@ -52,6 +53,7 @@ function ProtectedRouter() {
     <Switch>
       <Route path="/auth" component={AuthPage} />
       <Route path="/admin" component={AdminPage} />
+      <Route path="/admin/mlb-signal-intelligence" component={MlbSignalIntelligencePage} />
       <Route path="/analytics" component={AdminRedirect} />
       <Route path="/performance" component={AdminRedirect} />
       <Route path="/ncaab" component={NcaabLivePage} />
