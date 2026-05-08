@@ -482,6 +482,59 @@ function gradeSingleHRPlay(
   // so subsequent recompute ticks short-circuit and the player can never
   // re-enter BET_NOW after the HR. Idempotent.
   closeHrAlertOnHit(gameId, playerId);
+  // ── HR Radar Lifecycle Repair Fix #2 — CASHED linkage ──────────────────
+  // The forensic audit found that closeHrAlertOnHit set the engine state to
+  // CLOSED but `deriveHrRadarLifecycleState` mapped CLOSED → "inactive", not
+  // "cashed". So no card ever reached the cashed bucket. We now do two things
+  // synchronously alongside the existing close:
+  //   (a) Stamp an in-memory outcome record keyed by gameId_playerId. The
+  //       deriveHrRadarOutcomeStatus helper consults this stamp as a
+  //       fallback so the cashed bucket populates even before the DB grading
+  //       row is written or the box-score has caught up.
+  //   (b) Best-effort apply the canonical lifecycle "cashed" event to the
+  //       liveSignalBus / lifecycleStore by signalId so the canonical
+  //       lifecycle stays in sync. Wrapped in try/catch — a rejected
+  //       transition (e.g. signal not yet registered, or in `watch` state
+  //       which can't go directly to cashed) is logged and ignored. Never
+  //       blocks the close path.
+  try {
+    const stampMod = require("./hrRadarOutcomeStamp") as typeof import("./hrRadarOutcomeStamp");
+    const snap = getHrAlertState(gameId, playerId);
+    // HRAlertResult exposes alertTier + signalState (the engine's two
+    // surfaced taxonomies). Legacy `confidenceTier` is not on the snapshot
+    // — inferCashedFromTierStatus tolerates it being null and falls back
+    // to alertTier-driven mapping (officialAlert/prepare/watch).
+    const alertTier = snap?.alertResult?.alertTier ?? null;
+    const signalState = snap?.alertResult?.signalState ?? null;
+    const tieredStatus = (() => {
+      try {
+        const sec = require("./hrRadarSection") as typeof import("./hrRadarSection");
+        return sec.inferCashedFromTierStatus({
+          alertTier,
+          confidenceTier: null,
+          signalState,
+        });
+      } catch {
+        return "called_hit" as const;
+      }
+    })();
+    stampMod.stampHrRadarOutcome(gameId, playerId, tieredStatus, {
+      hitInning: inning,
+      alertTier,
+      confidenceTier: null,
+      signalState,
+      source,
+    });
+  } catch (err) {
+    console.warn(`[HR_RADAR_CASHED] stamp failed gameId=${gameId} playerId=${playerId} err=${(err as Error).message}`);
+  }
+  try {
+    const bus = require("../services/liveSignalBus") as typeof import("../services/liveSignalBus");
+    const signalId = `mlb:${gameId}:${playerId}:home_runs:OVER`;
+    bus.cashSignal(signalId, `HR observed inning=${inning} half=${halfInning}`);
+  } catch (err) {
+    console.warn(`[HR_RADAR_CASHED] lifecycle apply failed gameId=${gameId} playerId=${playerId} err=${(err as Error).message}`);
+  }
   storage.resolveAlertAsHit(playerId, gameId, inning, halfInning, atBatIndex, endTimeMs).catch(() => {});
   storage.resolveHrRadarAlertAsHit(playerId, gameId, inning, hitHalf, hitLabel, endTimeMs)
     .then((count) => {
@@ -1465,6 +1518,15 @@ export class LiveGameOrchestrator {
       for (const key of Array.from(RESOLVED_HR_PLAYERS)) {
         if (key.startsWith(`${gameId}_`)) RESOLVED_HR_PLAYERS.delete(key);
       }
+      // HR Radar Lifecycle Repair Fix #2 — release per-game outcome stamps
+      // at game-final so a same-day re-run starts clean.
+      try {
+        const stampMod = require("./hrRadarOutcomeStamp") as typeof import("./hrRadarOutcomeStamp");
+        const dropped = stampMod.clearHrRadarOutcomeStampsForGame(gameId);
+        if (dropped > 0) {
+          console.log(`[HR_RADAR_INACTIVE] gameId=${gameId} cleared HR Radar outcome stamps count=${dropped} reason=game_final`);
+        }
+      } catch { /* best effort */ }
       // MLB Signals audit P1 — release per-game resolved non-HR markets.
       for (const key of Array.from(RESOLVED_NON_HR_MARKETS)) {
         if (key.startsWith(`${gameId}_`)) RESOLVED_NON_HR_MARKETS.delete(key);

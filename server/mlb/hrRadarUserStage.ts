@@ -77,6 +77,14 @@ const PATH_PROMOTES_TO_FIRE: Record<string, true> = {
 // per process (avoids log spam every poll cycle).
 const loggedUnknownPaths = new Set<string>();
 
+export interface MapToUserStageTrace {
+  signalId?: string | null;
+  gameId?: string | number | null;
+  playerId?: string | number | null;
+  player?: string | null;
+  prev?: HrRadarUserStage | null;
+}
+
 export function mapToUserStage(input: {
   legacyTier?: string | null;
   legacyState?: string | null;
@@ -86,9 +94,11 @@ export function mapToUserStage(input: {
   confidenceScore?: number | null;
   convProb?: number | null;
   alertPath?: string | null;
-}): HrRadarUserStage {
+}, trace?: MapToUserStageTrace): HrRadarUserStage {
   const outcome = (input.outcome ?? "").toLowerCase();
-  if (outcome && outcome !== "pending" && outcome !== "active") return "resolved";
+  if (outcome && outcome !== "pending" && outcome !== "active") {
+    return emitTrace(trace, "resolved", "outcome_resolved");
+  }
 
   const dyn = (input.dynamicState ?? "").toUpperCase();
   const tier = (input.legacyTier ?? "").toLowerCase();
@@ -98,28 +108,40 @@ export function mapToUserStage(input: {
   const conv = typeof input.convProb === "number" ? input.convProb : null;
   const alertPath = (input.alertPath ?? "").toUpperCase();
 
-  // Task #140 step 5 — BET_NOW always reaches Fire regardless of legacy tier.
-  if (dyn === "BET_NOW" || state === "attack" || canonical === "attack") return "fire";
+  // ── HR Radar Lifecycle Repair Fix #1 — strict ordering ──────────────────
+  // Forensic finding: the prior order had `BET_NOW → fire` BEFORE any READY
+  // checks, which made READY structurally unreachable. The new order is:
+  //   1. resolved
+  //   2. explicit FIRE path confirmation (engine declared via actionable
+  //      officialAlert + FAST_PROMOTE_ELITE)
+  //   3. READY qualification (path-based / PREPARE escalation / strong tier)
+  //   4. BET_NOW-only fallback (calibrated-prob track promotes to fire when
+  //      no path/tier signal earned READY)
+  //   5. BUILD
+  //   6. TRACK
+  // No engine math, thresholds, or paths were changed — only the ladder
+  // collapse order. READY can now exist as a real lifecycle state.
 
-  // Path-based promotion to Fire — engine fast-promoted on its highest
-  // conviction lane (elite barrel + collapsing pitcher) and surfaced it as
-  // an actionable officialAlert. This is the engine declaring Fire even if
-  // the dynamic state machine's parallel calibrated-prob track lags.
-  if (state === "actionable" && PATH_PROMOTES_TO_FIRE[alertPath]) return "fire";
-
-  // Path-based promotion to Ready — engine surfaced a real promotion path
-  // (FAST_PROMOTE_*, LEI_ESCALATION, PATH_A..E_CONVICTION) at signal_state
-  // "live" (prepare-tier) or "actionable" (officialAlert-tier). PATH_F /
-  // WATCH / WATCH_POWER paths are intentionally excluded — they are the
-  // engine's "watching only, not promoted" signals.
-  if ((state === "actionable" || state === "live") && PATH_PROMOTES_TO_READY[alertPath]) {
-    return "ready";
+  // Step 2 — explicit FIRE path confirmation.
+  if (state === "actionable" && PATH_PROMOTES_TO_FIRE[alertPath]) {
+    return emitTrace(trace, "fire", "path_promotes_fire");
   }
 
-  // Drift guard: if the engine surfaced a non-empty alertPath at a
-  // promotable signal_state but it isn't in either promotion table, log
-  // once so future engine paths don't silently miss READY promotion. The
-  // mapper still falls through to the legacy/dynamic-state branches below.
+  // Step 3 — READY qualification.
+  // 3a) Engine surfaced a real promotion path at signal_state live|actionable.
+  if ((state === "actionable" || state === "live") && PATH_PROMOTES_TO_READY[alertPath]) {
+    return emitTrace(trace, "ready", "path_promotes_ready");
+  }
+  // 3b) PREPARE escalation by confidence/conv.
+  if (dyn === "PREPARE" && ((conf !== null && conf >= 7) || (conv !== null && conv >= 0.18))) {
+    return emitTrace(trace, "ready", "prepare_escalation");
+  }
+  // 3c) Legacy strong tier.
+  if (tier === "strong") {
+    return emitTrace(trace, "ready", "legacy_strong_tier");
+  }
+
+  // Drift guard for unrecognized promotable paths — log once per path.
   if (
     alertPath &&
     (state === "actionable" || state === "live") &&
@@ -137,15 +159,45 @@ export function mapToUserStage(input: {
     }
   }
 
-  // Task #140 step 5 — PREPARE escalates to Ready when engine confidence
-  // crosses 7.0 OR calibrated conversion crosses 18%.
-  if (dyn === "PREPARE" && ((conf !== null && conf >= 7) || (conv !== null && conv >= 0.18))) {
-    return "ready";
+  // Step 4 — BET_NOW-only fallback. The dynamic-state track gets to fire
+  // ONLY after READY qualification has been considered. This is the
+  // "calibrated probability is hot but no specific promotion path / tier
+  // earned READY" case.
+  if (dyn === "BET_NOW" || state === "attack" || canonical === "attack") {
+    return emitTrace(trace, "fire", "betnow_fallback");
   }
 
-  if (tier === "strong") return "ready";
-  if (dyn === "PREPARE" || tier === "building" || canonical === "building") return "build";
-  return "track";
+  // Step 5 — BUILD.
+  if (dyn === "PREPARE" || tier === "building" || canonical === "building") {
+    return emitTrace(trace, "build", "build_default");
+  }
+
+  // Step 6 — TRACK default.
+  return emitTrace(trace, "track", "track_default");
+}
+
+function emitTrace(
+  trace: MapToUserStageTrace | undefined,
+  next: HrRadarUserStage,
+  rule: string,
+): HrRadarUserStage {
+  if (!trace) return next;
+  const prev = trace.prev ?? null;
+  if (prev === next) return next;
+  const sid = trace.signalId ?? "?";
+  const gid = trace.gameId ?? "?";
+  const pid = trace.playerId ?? "?";
+  const pname = trace.player ?? "?";
+  console.log(
+    `[HR_RADAR_TRANSITION] from=${prev ?? "none"} to=${next} rule=${rule} ` +
+    `signalId=${sid} gameId=${gid} playerId=${pid} player=${pname}`,
+  );
+  if (next === "ready") {
+    console.log(`[HR_RADAR_READY] signalId=${sid} gameId=${gid} playerId=${pid} player=${pname} rule=${rule}`);
+  } else if (next === "fire") {
+    console.log(`[HR_RADAR_FIRE] signalId=${sid} gameId=${gid} playerId=${pid} player=${pname} rule=${rule}`);
+  }
+  return next;
 }
 
 // ── Phase 2 ────────────────────────────────────────────────────────────────

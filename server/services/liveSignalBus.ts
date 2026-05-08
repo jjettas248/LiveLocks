@@ -276,6 +276,37 @@ export function expireSignal(signalId: string, reason: string): void {
 }
 
 /**
+ * Mark a signal CASHED explicitly (e.g. HR observed for an HR Radar signal,
+ * stat threshold crossed for a player prop). Idempotent — terminal signals
+ * are no-ops. Invalid transitions (e.g. `watch → cashed` is not in the
+ * lifecycle transition graph) are logged via the lifecycle engine and
+ * silently dropped — the caller's downstream stamps still hold.
+ *
+ * Hard rule: bus is transport-only. This function NEVER mutates probability,
+ * tier, drivers, or projection — only the lifecycle subset.
+ */
+export function cashSignal(signalId: string, reason: string): void {
+  const existing = getCanonical(signalId);
+  if (!existing) return;
+  if (isTerminalLifecycle(existing.lifecycleState)) return;
+
+  const result = applyLifecycleEvent(existing, {
+    kind: "cashed",
+    to: "cashed",
+    reason,
+    by: "hr-radar-grader",
+    at: Date.now(),
+  });
+  if (result.changed) {
+    recordCanonical(result.next);
+    // Tag for HR Radar lifecycle repair audit. The lifecycle engine itself
+    // emits [LL_SIGNAL_CASHED] from applyLifecycleEvent — this is the
+    // bus-surface companion so admins can grep both.
+    console.log(`[HR_RADAR_CASHED] signalId=${signalId} reason=${reason}`);
+  }
+}
+
+/**
  * Central staleness sweep. Called by index.ts on a 60s cadence.
  * Components MUST NOT expire locally — only the bus expires.
  */

@@ -23,6 +23,8 @@
  *   - status (DB row):        live|hit|miss
  */
 
+import { getHrRadarOutcomeStamp } from "./hrRadarOutcomeStamp";
+
 export type HrRadarLifecycleState =
   | "pregame"
   | "watch"
@@ -143,6 +145,10 @@ export function inferCashedFromTierStatus(args: {
  * and raw hr_radar_alerts DB rows alike.
  */
 export interface CanonicalCardInput {
+  // Identity (used for outcome-stamp lookup; optional so legacy callers
+  // that only carried outcome/status fields keep working).
+  gameId?: string | number | null;
+  playerId?: string | number | null;
   // Outcome / status side
   gradingStatus?: string | null;        // DB
   outcome?: string | null;              // wire (pending|called_hit|miss|uncalled_hr|...)
@@ -231,6 +237,16 @@ export function deriveHrRadarOutcomeStatus(card: CanonicalCardInput): HrRadarOut
 
   const hrCount = Number(card.hrCount ?? card.hr ?? 0);
   if (hrCount > 0) return "uncalled_hr";
+
+  // ── HR Radar Lifecycle Repair Fix #2 — stamp lookup ──────────────────────
+  // The orchestrator stamps `${gameId}_${playerId}` with a tiered called_hit
+  // status the moment a HR is observed (closeHrAlertOnHit pathway). Consult
+  // that stamp BEFORE returning "unresolved" so the cashed bucket populates
+  // even before the DB grading row has been written / boxscore has caught up.
+  if (card.gameId != null && card.playerId != null) {
+    const stamp = getHrRadarOutcomeStamp(card.gameId, card.playerId);
+    if (stamp) return stamp.outcomeStatus;
+  }
 
   return "unresolved";
 }
@@ -422,16 +438,43 @@ export function applyHrRadarResolvedStateFixup<T extends CanonicalCardInput & Re
       }
       section = "diagnostic";
     } else {
-      // Game ended without a resolved outcome (and no late_signal/uncalled
-      // tag) — treat as a missed call. This catches stale FIRE/BUILD/WATCH
-      // cards whose game went final without an HR for the player.
-      lifecycle = "missed";
-      section = "missed";
+      // ── HR Radar Lifecycle Repair Fix #3 — DEAD/MISSED inflation ─────────
+      // Forensic finding: the prior branch unconditionally forced `missed`
+      // for every still-active card on a final game, including TRACK/WATCH/
+      // BUILD rows that never reached actionable territory. Those should be
+      // `inactive` (the alert never matured into something the user could
+      // act on), reserving `missed` for cards that actually reached READY/
+      // FIRE / actionable / strong / attack.
+      const wasActionable =
+        norm(card.userStage) === "fire" ||
+        norm(card.userStage) === "ready" ||
+        norm(card.canonicalStage) === "attack" ||
+        norm(card.currentStage) === "attack" ||
+        norm(card.confidenceTier) === "strong" ||
+        norm(card.signalState) === "actionable" ||
+        norm(card.lifecycleState) === "attack" ||
+        norm(card.lifecycleState) === "ready";
+      if (wasActionable) {
+        lifecycle = "missed";
+        section = "missed";
+      } else {
+        lifecycle = "inactive";
+        section = "inactive";
+      }
     }
     active = false;
     if (wasActiveBeforeFinal) {
       const log = ctx?.logger ?? console.log;
-      log(`[HR_RADAR_FINAL_ACTIVE_FIXUP] gameId=${ctx?.gameId ?? card.gameId ?? "?"} playerId=${ctx?.playerId ?? card.playerId ?? "?"} outcomeStatus=${outcome} newSection=${section} newLifecycle=${lifecycle} reason=game_final_overrides_active`);
+      const tag =
+        section === "missed" ? "[HR_RADAR_MISSED]"
+        : section === "cashed" ? "[HR_RADAR_CASHED]"
+        : section === "inactive" ? "[HR_RADAR_INACTIVE]"
+        : section === "diagnostic" ? "[HR_RADAR_INACTIVE]"
+        : "[HR_RADAR_INACTIVE]";
+      const gid = ctx?.gameId ?? card.gameId ?? "?";
+      const pid = ctx?.playerId ?? card.playerId ?? "?";
+      log(`[HR_RADAR_FINAL_ACTIVE_FIXUP] gameId=${gid} playerId=${pid} outcomeStatus=${outcome} newSection=${section} newLifecycle=${lifecycle} reason=game_final_overrides_active`);
+      log(`${tag} gameId=${gid} playerId=${pid} from=active to=${lifecycle} rule=game_final_overrides_active`);
     }
   }
 
