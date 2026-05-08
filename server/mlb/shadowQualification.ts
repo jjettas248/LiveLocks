@@ -20,14 +20,22 @@
 // Diagnostics tags emitted by this module:
 //   [LL_SHADOW_SIGNAL_QUALIFIED]
 //   [LL_SHADOW_SIGNAL_REJECTED]
-//   [LL_SHADOW_SIGNAL_CASHED]
-//   [LL_SHADOW_SIGNAL_MISSED]
-//   [LL_SHADOW_SIGNAL_EXPIRED]
+//   [LL_SHADOW_OUTCOME_RESOLVED]   — outcome successfully matched + recorded (cashed/missed/push)
+//   [LL_SHADOW_OUTCOME_MISSING]    — boxscore present but player/market unresolvable
+//   [LL_SHADOW_OUTCOME_PUSH]       — outcome resolved as push (finalStat == bookLine)
+//   [LL_SHADOW_OUTCOME_EXPIRED]    — TTL or sweeper marked record expired
+// Legacy tags retained for backwards compatibility:
+//   [LL_SHADOW_SIGNAL_CASHED] [LL_SHADOW_SIGNAL_MISSED] [LL_SHADOW_SIGNAL_EXPIRED]
 
 const SHADOW_BATTER_OVER_FLOOR = 43;
 const LIVE_BATTER_OVER_FLOOR = 46;
+const SHADOW_SAMPLE_SIZE_FLOOR = 50;
+// ROI proxy: shadow records do NOT carry odds. We approximate at standard
+// -110 vig (cashed pays 0.909u net, missed loses 1.0u, push = 0). This is a
+// *directional* indicator, never a real money figure.
+const ROI_VIG_PAYOUT = 0.909;
 
-export type ShadowOutcome = "pending" | "cashed" | "missed" | "expired";
+export type ShadowOutcome = "pending" | "cashed" | "missed" | "push" | "expired";
 
 export interface ShadowEvalCandidate {
   gameId: string;
@@ -83,6 +91,7 @@ interface ShadowMarketStats {
   shadowRejected: number;
   cashed: number;
   missed: number;
+  push: number;
   expired: number;
   pending: number;
   avgSignalScore: number;
@@ -93,14 +102,25 @@ interface ShadowMarketStats {
   _ssCount: number;
 }
 
+interface ShadowSideStats {
+  shadowQualified: number;
+  cashed: number;
+  missed: number;
+  push: number;
+  expired: number;
+  pending: number;
+}
+
 interface ShadowAggregates {
   shadowQualifiedTotal: number;
   shadowRejectedTotal: number;
   cashedTotal: number;
   missedTotal: number;
+  pushTotal: number;
   expiredTotal: number;
   pendingTotal: number;
   byMarket: Record<string, ShadowMarketStats>;
+  bySide: Record<string, ShadowSideStats>;
   scoreDistribution: { "43-44": number; "44-45": number; "45-46": number };
   rejectReasons: Record<string, number>;
   // Last-decision ring buffer for debugging
@@ -126,9 +146,11 @@ const aggregates: ShadowAggregates = {
   shadowRejectedTotal: 0,
   cashedTotal: 0,
   missedTotal: 0,
+  pushTotal: 0,
   expiredTotal: 0,
   pendingTotal: 0,
   byMarket: {},
+  bySide: {},
   scoreDistribution: { "43-44": 0, "44-45": 0, "45-46": 0 },
   rejectReasons: {},
   recent: [],
@@ -141,6 +163,7 @@ function ensureMarket(market: string): ShadowMarketStats {
       shadowRejected: 0,
       cashed: 0,
       missed: 0,
+      push: 0,
       expired: 0,
       pending: 0,
       avgSignalScore: 0,
@@ -151,6 +174,21 @@ function ensureMarket(market: string): ShadowMarketStats {
     };
   }
   return aggregates.byMarket[market];
+}
+
+function ensureSide(side: string): ShadowSideStats {
+  const k = (side || "unknown").toLowerCase();
+  if (!aggregates.bySide[k]) {
+    aggregates.bySide[k] = {
+      shadowQualified: 0,
+      cashed: 0,
+      missed: 0,
+      push: 0,
+      expired: 0,
+      pending: 0,
+    };
+  }
+  return aggregates.bySide[k];
 }
 
 function pushRecent(entry: ShadowAggregates["recent"][number]): void {
@@ -278,6 +316,9 @@ export function evaluateShadowBatterOver(c: ShadowEvalCandidate): ShadowDecision
   ms._ssCount++;
   ms.avgSignalScore = ms._ssSum / ms._ssCount;
   ms.avgProbability = ms._probSum / ms._ssCount;
+  const ss2 = ensureSide(c.side);
+  ss2.shadowQualified++;
+  ss2.pending++;
 
   if (ss < 44) aggregates.scoreDistribution["43-44"]++;
   else if (ss < 45) aggregates.scoreDistribution["44-45"]++;
@@ -322,21 +363,269 @@ export function recordShadowOutcome(
   aggregates.pendingTotal = Math.max(0, aggregates.pendingTotal - 1);
   const ms = ensureMarket(rec.market);
   ms.pending = Math.max(0, ms.pending - 1);
+  const sd = ensureSide(rec.side);
+  sd.pending = Math.max(0, sd.pending - 1);
 
   if (outcome === "cashed") {
     aggregates.cashedTotal++;
     ms.cashed++;
+    sd.cashed++;
+    console.log(
+      `[LL_SHADOW_OUTCOME_RESOLVED] ${rec.playerName}/${rec.market} side=${rec.side} signalId=${signalId} outcome=cashed${note ? ` note=${note}` : ""}`,
+    );
     console.log(`[LL_SHADOW_SIGNAL_CASHED] ${rec.playerName}/${rec.market} signalId=${signalId}`);
   } else if (outcome === "missed") {
     aggregates.missedTotal++;
     ms.missed++;
+    sd.missed++;
+    console.log(
+      `[LL_SHADOW_OUTCOME_RESOLVED] ${rec.playerName}/${rec.market} side=${rec.side} signalId=${signalId} outcome=missed${note ? ` note=${note}` : ""}`,
+    );
     console.log(`[LL_SHADOW_SIGNAL_MISSED] ${rec.playerName}/${rec.market} signalId=${signalId}`);
+  } else if (outcome === "push") {
+    aggregates.pushTotal++;
+    ms.push++;
+    sd.push++;
+    console.log(
+      `[LL_SHADOW_OUTCOME_PUSH] ${rec.playerName}/${rec.market} side=${rec.side} signalId=${signalId}${note ? ` note=${note}` : ""}`,
+    );
+    console.log(
+      `[LL_SHADOW_OUTCOME_RESOLVED] ${rec.playerName}/${rec.market} side=${rec.side} signalId=${signalId} outcome=push`,
+    );
   } else {
     aggregates.expiredTotal++;
     ms.expired++;
+    sd.expired++;
+    console.log(
+      `[LL_SHADOW_OUTCOME_EXPIRED] ${rec.playerName}/${rec.market} side=${rec.side} signalId=${signalId}${note ? ` note=${note}` : ""}`,
+    );
     console.log(`[LL_SHADOW_SIGNAL_EXPIRED] ${rec.playerName}/${rec.market} signalId=${signalId}`);
   }
   return true;
+}
+
+// ── Outcome resolver ─────────────────────────────────────────────────────────
+// Resolve all pending shadow records for finished MLB games. The grader injects
+// MLB Stats API helpers so this module stays decoupled from the grading layer
+// and shadow logic stays the only owner of the in-memory store.
+//
+// HARD CONTRACT:
+//   * Only writes shadow store. NEVER touches storage.settlePlay or
+//     persisted_plays. ROI / W-L analytics are unaffected.
+//   * Match strategy:
+//       (1) signalId direct lookup (callers can supply when known)
+//       (2) gameId + playerId + market (+ side, line) fallback key
+//   * Unmatched / unresolvable → leaves record pending; sweeper TTL will
+//     eventually mark it expired.
+
+export interface ResolvedPlayerEntry {
+  id: string;
+  name: string;
+}
+
+export interface ResolveShadowDeps<P extends ResolvedPlayerEntry> {
+  /**
+   * Returns boxscore-derived player map for a finished game, or null if the
+   * game is not final / boxscore unavailable. Map is keyed by playerId.
+   */
+  fetchPlayerMap(gameId: string): Promise<Map<string, P> | null>;
+  /**
+   * Returns the resolved final stat for the given (player, market), or null
+   * if the market cannot be computed (DNP, unsupported market, etc.).
+   */
+  getStatValue(entry: P, market: string): number | null;
+}
+
+export interface ResolveShadowSummary {
+  gamesScanned: number;
+  gamesSkippedNoBoxscore: number;
+  recordsScanned: number;
+  cashed: number;
+  missed: number;
+  push: number;
+  missing: number;
+}
+
+function normalizeNameForMatch(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/['.\-\s]+/g, "")
+    .replace(/jr$|sr$|ii$|iii$|iv$/, "");
+}
+
+/**
+ * Lookup a pending shadow record by either signalId (preferred) or by the
+ * canonical fallback key (gameId + playerId + market + side, optionally line).
+ * Returns the FIRST pending match — shadow records are unique per signalId so
+ * the fallback lookup also resolves at most one record.
+ */
+export function findPendingShadowRecord(query: {
+  signalId?: string;
+  gameId?: string;
+  playerId?: string | null;
+  playerName?: string;
+  market?: string;
+  side?: string;
+  line?: number | null;
+}): ShadowSignalRecord | undefined {
+  if (query.signalId) {
+    const direct = store.get(query.signalId);
+    if (direct && direct.outcome === "pending") return direct;
+  }
+  if (!query.gameId || !query.market || !query.side) return undefined;
+  const sideLc = query.side.toLowerCase();
+  const wantPid = query.playerId != null ? String(query.playerId) : null;
+  const wantNameNorm = query.playerName ? normalizeNameForMatch(query.playerName) : null;
+  for (const rec of Array.from(store.values())) {
+    if (rec.outcome !== "pending") continue;
+    if (rec.gameId !== query.gameId) continue;
+    if (rec.market !== query.market) continue;
+    if (rec.side.toLowerCase() !== sideLc) continue;
+    if (wantPid != null) {
+      if (String(rec.playerId ?? "") !== wantPid) continue;
+    } else if (wantNameNorm != null) {
+      if (normalizeNameForMatch(rec.playerName) !== wantNameNorm) continue;
+    }
+    if (
+      query.line != null &&
+      rec.bookLine != null &&
+      Math.abs(Number(rec.bookLine) - Number(query.line)) > 1e-6
+    ) {
+      continue;
+    }
+    return rec;
+  }
+  return undefined;
+}
+
+/**
+ * Compute the cashed / missed / push outcome for a shadow record given a
+ * resolved final stat. Pure function — exposed for tests.
+ */
+export function classifyShadowOutcome(
+  side: string,
+  bookLine: number | null,
+  finalStat: number,
+): "cashed" | "missed" | "push" | null {
+  if (bookLine == null || !Number.isFinite(bookLine)) return null;
+  if (!Number.isFinite(finalStat)) return null;
+  if (finalStat === bookLine) return "push";
+  const sideLc = side.toLowerCase();
+  if (sideLc === "over") return finalStat > bookLine ? "cashed" : "missed";
+  if (sideLc === "under") return finalStat < bookLine ? "cashed" : "missed";
+  return null;
+}
+
+/**
+ * Resolve outcomes for all pending shadow records by gameId. Iterates every
+ * pending record, groups by gameId, fetches the boxscore via injected deps,
+ * and records outcomes. Idempotent — already-settled records are skipped.
+ *
+ * Used by the persisted-play grader at the end of each grading tick. Safe to
+ * call when there are zero pending shadow records (returns early).
+ */
+export async function resolvePendingShadowOutcomes<P extends ResolvedPlayerEntry>(
+  deps: ResolveShadowDeps<P>,
+): Promise<ResolveShadowSummary> {
+  const summary: ResolveShadowSummary = {
+    gamesScanned: 0,
+    gamesSkippedNoBoxscore: 0,
+    recordsScanned: 0,
+    cashed: 0,
+    missed: 0,
+    push: 0,
+    missing: 0,
+  };
+  // Group pending records by gameId — batches box-score fetches.
+  const byGame = new Map<string, ShadowSignalRecord[]>();
+  for (const rec of Array.from(store.values())) {
+    if (rec.outcome !== "pending") continue;
+    const list = byGame.get(rec.gameId) ?? [];
+    list.push(rec);
+    byGame.set(rec.gameId, list);
+  }
+  if (byGame.size === 0) return summary;
+
+  for (const [gameId, recs] of Array.from(byGame.entries())) {
+    summary.gamesScanned++;
+    let playerMap: Map<string, P> | null = null;
+    try {
+      playerMap = await deps.fetchPlayerMap(gameId);
+    } catch (err: any) {
+      console.warn(
+        `[LL_SHADOW_OUTCOME_MISSING] gameId=${gameId} reason=boxscore_fetch_error msg=${err?.message ?? err}`,
+      );
+      summary.gamesSkippedNoBoxscore++;
+      continue;
+    }
+    if (!playerMap) {
+      // Game not final / postponed / boxscore unreachable — leave records
+      // pending; sweeper TTL will mark as expired if it persists.
+      summary.gamesSkippedNoBoxscore++;
+      continue;
+    }
+
+    for (const rec of recs) {
+      summary.recordsScanned++;
+      // Match by playerId first (preferred), then fallback by normalized name.
+      let entry: P | undefined;
+      if (rec.playerId) {
+        entry = playerMap.get(String(rec.playerId));
+      }
+      if (!entry && rec.playerName) {
+        const target = normalizeNameForMatch(rec.playerName);
+        for (const e of Array.from(playerMap.values())) {
+          if (normalizeNameForMatch(e.name) === target) {
+            entry = e;
+            break;
+          }
+        }
+      }
+      if (!entry) {
+        summary.missing++;
+        console.warn(
+          `[LL_SHADOW_OUTCOME_MISSING] ${rec.playerName}/${rec.market} signalId=${rec.signalId} reason=player_not_in_boxscore`,
+        );
+        continue;
+      }
+      const finalStat = deps.getStatValue(entry, rec.market);
+      if (finalStat == null) {
+        summary.missing++;
+        console.warn(
+          `[LL_SHADOW_OUTCOME_MISSING] ${rec.playerName}/${rec.market} signalId=${rec.signalId} reason=stat_unresolvable`,
+        );
+        continue;
+      }
+      if (rec.bookLine == null) {
+        summary.missing++;
+        console.warn(
+          `[LL_SHADOW_OUTCOME_MISSING] ${rec.playerName}/${rec.market} signalId=${rec.signalId} reason=no_book_line`,
+        );
+        continue;
+      }
+      const outcome = classifyShadowOutcome(rec.side, rec.bookLine, finalStat);
+      if (!outcome) {
+        summary.missing++;
+        console.warn(
+          `[LL_SHADOW_OUTCOME_MISSING] ${rec.playerName}/${rec.market} signalId=${rec.signalId} reason=invalid_side_or_line side=${rec.side} line=${rec.bookLine}`,
+        );
+        continue;
+      }
+      const ok = recordShadowOutcome(
+        rec.signalId,
+        outcome,
+        `finalStat=${finalStat} line=${rec.bookLine}`,
+      );
+      if (ok) {
+        if (outcome === "cashed") summary.cashed++;
+        else if (outcome === "missed") summary.missed++;
+        else summary.push++;
+      }
+    }
+  }
+  return summary;
 }
 
 /**
@@ -382,9 +671,20 @@ export interface ShadowSummary {
     pending: number;
     cashed: number;
     missed: number;
+    push: number;
     expired: number;
+    settled: number; // cashed + missed + push
   };
-  hitRate: number | null; // cashed / (cashed + missed)
+  hitRate: number | null; // cashed / (cashed + missed)  — push excluded
+  /**
+   * Approximate ROI in units assuming -110 vig per pick. Cashed = +0.909u,
+   * missed = -1.0u, push = 0u. Directional only — shadow records do NOT
+   * carry real odds.
+   */
+  roiUnits: number | null;
+  roiPerPick: number | null;
+  sampleSize: number; // settled (cashed+missed+push)
+  sampleSizeWarning: string | null;
   byMarket: Record<
     string,
     {
@@ -392,11 +692,24 @@ export interface ShadowSummary {
       shadowRejected: number;
       cashed: number;
       missed: number;
+      push: number;
       expired: number;
       pending: number;
       hitRate: number | null;
       avgSignalScore: number;
       avgProbability: number;
+    }
+  >;
+  bySide: Record<
+    string,
+    {
+      shadowQualified: number;
+      cashed: number;
+      missed: number;
+      push: number;
+      expired: number;
+      pending: number;
+      hitRate: number | null;
     }
   >;
   scoreDistribution: ShadowAggregates["scoreDistribution"];
@@ -407,6 +720,7 @@ export interface ShadowSummary {
     SHADOW_BATTER_OVER_FLOOR: number;
     LIVE_BATTER_OVER_FLOOR: number;
     SHADOW_TTL_MS: number;
+    SHADOW_SAMPLE_SIZE_FLOOR: number;
   };
   generatedAt: string;
 }
