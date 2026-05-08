@@ -1032,6 +1032,13 @@ export default function Dashboard() {
     }
   }, [activeTab, nbaSubTab]);
 
+  useEffect(() => {
+    if (activeTab === "calculator" && nbaSubTab === "halftime" && selectedGameId) {
+      queryClient.invalidateQueries({ queryKey: ["/api/halftime-plays"] });
+      refetchHalftimePlays();
+    }
+  }, [activeTab, nbaSubTab, selectedGameId]);
+
   // ── Mobile breakpoint detection ────────────────────────────────────────────
   useEffect(() => {
     const onResize = () => {
