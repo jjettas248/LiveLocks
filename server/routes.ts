@@ -5112,8 +5112,16 @@ export async function registerRoutes(
       const awayScore = parseInt(awayComp?.score ?? "0", 10);
       const scoreStr = `${awayScore}-${homeScore}`;
 
-      // Only run for genuinely in-progress games (not final, not scheduled)
-      const inProgress = statusDesc === "In Progress" || statusDesc === "Halftime";
+      // Only run for genuinely in-progress games (not final, not scheduled).
+      // End-of-period / end-of-quarter breaks are still LIVE — keep signals
+      // flowing through quarter breaks instead of blanking the box score.
+      const inProgress =
+        statusDesc === "In Progress" ||
+        statusDesc === "Halftime" ||
+        statusDesc === "End of Period" ||
+        statusDesc.startsWith("End of ") ||
+        statusDesc.startsWith("End Period") ||
+        statusDesc.startsWith("End of Quarter");
       if (!inProgress) {
         const nowTs = Date.now();
         const payload = { signals: [], engineOutput: {}, diagnostics: { reason: "not_in_progress", statusDesc, inProgress: false, period } };
