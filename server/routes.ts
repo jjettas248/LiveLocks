@@ -8718,38 +8718,80 @@ export function registerAnalyticsRoutes(app: Express): void {
   app.get("/api/top-plays", requireAuth, async (_req, res) => {
     try {
       // ── LiveLocks Batch D — canonical-aware top-plays ──────────────
-      // Read bus inventory first (sole ingress). Bus is empty when no
-      // engine cycle has populated it yet — fall back to mlbEdgeCache
-      // iteration with [LL_TOP_PLAYS_CACHE_FALLBACK] tag.
+      // Bus is the primary inventory source. When the bus has registered
+      // signals, build the top-plays input from bus items (canonical +
+      // matched MLBSignal payload). When the bus is empty (cold start /
+      // pre-engine-cycle), fall back to mlbEdgeCache iteration tagged
+      // with [LL_TOP_PLAYS_CACHE_FALLBACK] so the gap is observable.
+      const { buildTopPlays } = await import("./services/topPlaysService");
+      const { readBusInventory } = await import("./services/canonicalSignalViewModel");
+
+      const mlbSignals: any[] = [];
+      let usedBus = false;
+
       try {
-        const { readBusInventory } = await import("./services/canonicalSignalViewModel");
         const inv = readBusInventory({ route: "/api/top-plays", excludeTerminal: true });
         if (inv.length > 0) {
+          usedBus = true;
           console.log(`[LL_TOP_PLAYS_CANONICAL_READ] busItems=${inv.length}`);
-        } else {
-          console.log(`[LL_TOP_PLAYS_CACHE_FALLBACK] bus empty — falling back to mlbEdgeCache`);
+          for (const item of inv) {
+            const sig: any = item.mlbSignal;
+            if (!sig) continue; // bridge miss — payload not in cache, skip
+            const entry = mlbEdgeCache.get(item.canonical.gameId) as any;
+            const rawOutput = entry?.outputs?.find((o: any) => o.playerId === sig.playerId && o.market === sig.market);
+            const sigAny = sig as any;
+            const inning = entry?.inning ?? sigAny.inning ?? null;
+            const gameStatus = entry?.status ?? sigAny.status ?? null;
+            const timingLabel = inning != null ? `Inning ${inning}` : gameStatus === "pre" ? "Pre-game" : gameStatus === "in" ? "Live" : null;
+            mlbSignals.push({
+              playerId: sig.playerId,
+              playerName: sig.playerName,
+              market: sig.market,
+              enginePct: Math.round((sig.engineProbability ?? 0) * 10) / 10,
+              edge: rawOutput ? Math.round(rawOutput.edge * 100) / 100 : null,
+              bookLine: sig.line,
+              projection: sig.projection ?? null,
+              recommendedSide: sig.side,
+              gameId: sig.gameId,
+              signalScore: sig.signalScore,
+              confidenceTier: sig.confidenceTier,
+              signalTier: sig.signalTier,
+              timingContext: sigAny.timingContext ?? timingLabel,
+              currentStats: sig.currentStats ?? null,
+              lastABContact: sig.lastABContact ?? null,
+              batterArchetype: sig.batterArchetype ?? null,
+              pitcherArchetype: sig.pitcherArchetype ?? null,
+              thesis: sig.thesis ?? null,
+              isFlagship: sig.isFlagship ?? false,
+              safetyCeilingApplied: sig.safetyCeilingApplied ?? false,
+              dataQuality: sig.dataQuality ?? null,
+              canonicalLifecycleState: item.canonical.lifecycleState,
+              canonicalSurfacedAt: item.canonical.surfacedAt,
+              canonicalUpdatedAt: item.canonical.updatedAt,
+            });
+          }
         }
       } catch (e) {
         console.warn(`[LL_TOP_PLAYS_CACHE_FALLBACK] bus read failed: ${(e as Error).message}`);
       }
-      const { buildTopPlays } = await import("./services/topPlaysService");
 
-      const mlbSignals: any[] = [];
-      for (const [, entry] of Array.from(mlbEdgeCache.entries())) {
-        // Two-axis freshness — match the bettable edge-feed window (20m)
-        // so the top-plays widget stays consistent with the main feed and
-        // never drops a preserved blank-cycle signal that the feed still shows.
-        const FRESHNESS_MS = 20 * 60 * 1000;
-        if (!isMLBEdgeEntryFresh(entry, FRESHNESS_MS)) continue;
-        const qs = entry.qualifiedSignals ?? [];
-        for (const sig of qs) {
-          const rawOutput = entry.outputs?.find((o: any) => o.playerId === sig.playerId && o.market === sig.market);
-          const gameEntry = entry as any;
-          const sigAny = sig as any;
-          const inning = gameEntry.inning ?? sigAny.inning ?? null;
-          const gameStatus = gameEntry.status ?? sigAny.status ?? null;
-          const timingLabel = inning != null ? `Inning ${inning}` : gameStatus === "pre" ? "Pre-game" : gameStatus === "in" ? "Live" : null;
-          mlbSignals.push({
+      if (!usedBus) {
+        console.log(`[LL_TOP_PLAYS_CACHE_FALLBACK] bus empty — falling back to mlbEdgeCache`);
+        for (const [, entry] of Array.from(mlbEdgeCache.entries())) {
+          // Two-axis freshness — match the bettable edge-feed window (20m)
+          // so the top-plays widget stays consistent with the main feed and
+          // never drops a preserved blank-cycle signal that the feed still shows.
+          const FRESHNESS_MS = 20 * 60 * 1000;
+          if (!isMLBEdgeEntryFresh(entry, FRESHNESS_MS)) continue;
+          const qs = entry.qualifiedSignals ?? [];
+          for (const sig of qs) {
+            const rawOutput = entry.outputs?.find((o: any) => o.playerId === sig.playerId && o.market === sig.market);
+            const gameEntry = entry as any;
+            const sigAny = sig as any;
+            const inning = gameEntry.inning ?? sigAny.inning ?? null;
+            const gameStatus = gameEntry.status ?? sigAny.status ?? null;
+            const timingLabel = inning != null ? `Inning ${inning}` : gameStatus === "pre" ? "Pre-game" : gameStatus === "in" ? "Live" : null;
+            mlbSignals.push({
             playerId: sig.playerId,
             playerName: sig.playerName,
             market: sig.market,
@@ -8777,6 +8819,7 @@ export function registerAnalyticsRoutes(app: Express): void {
             safetyCeilingApplied: sig.safetyCeilingApplied ?? false,
             dataQuality: sig.dataQuality ?? null,
           });
+        }
         }
       }
 

@@ -1377,6 +1377,52 @@ export default function Dashboard() {
   // Live stats for selected game
   const { data: liveStats, refetch: refetchLiveStats, isLoading: isLiveStatsLoading } = useLiveStats(selectedGameId);
 
+  // Auto-select an NBA live game so the Live Box Score panel always fires
+  // when there's an in-progress game on screen. Two cases handled:
+  //   1) No selection + at least one live game → pick the first In-Progress
+  //      game so the panel renders without requiring a manual tile click.
+  //   2) Current selection is no longer In-Progress (game finalized or no
+  //      longer in the live list) → drop the stale selection so the panel
+  //      can either auto-pick a different live game or hide cleanly.
+  // Scoped to NBA tab (`activeTab === "calculator"`) so MLB/NCAAB tabs are
+  // not affected.
+  useEffect(() => {
+    if (activeTab !== "calculator") return;
+    const games = liveGames ?? [];
+    const isLiveStatus = (g: { status: string }) =>
+      g.status !== "Scheduled" && g.status !== "Pre-Game" && g.status !== "Final";
+
+    // Case 2: prune stale selection — runs even when liveGames is empty
+    // (e.g. last live game just finalized and dropped off the list).
+    if (selectedGameId) {
+      const cur = games.find((g) => g.id === selectedGameId);
+      if (!cur || !isLiveStatus(cur)) {
+        setSelectedGameId(undefined);
+        setSelectedGameTeams(undefined);
+        return;
+      }
+      return;
+    }
+
+    if (games.length === 0) return;
+
+    // Case 1: auto-pick the first In-Progress game
+    const firstLive = games.find(isLiveStatus);
+    if (!firstLive) return;
+    setSelectedGameId(firstLive.id);
+    setSelectedGameTeams({
+      home: firstLive.homeTeam,
+      away: firstLive.awayTeam,
+      homeAbbr: firstLive.homeTeamAbbr,
+      awayAbbr: firstLive.awayTeamAbbr,
+    });
+    form.setValue("gameId", firstLive.id);
+    if (firstLive.period >= 2) {
+      form.setValue("halftimeScore", `${firstLive.awayScore}-${firstLive.homeScore}`);
+    }
+    console.log(`[nba-live] Auto-selected live game ${firstLive.id} (${firstLive.awayTeamAbbr}@${firstLive.homeTeamAbbr}) — Q${firstLive.period} ${firstLive.clock}`);
+  }, [activeTab, liveGames, selectedGameId]);
+
   // Find a DB player by ESPN display name — uses first-initial + last-name matching
   const findPlayerByName = (espnName: string) => {
     const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");

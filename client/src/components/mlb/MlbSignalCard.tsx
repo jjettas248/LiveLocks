@@ -14,7 +14,7 @@ import {
 } from "@/lib/mlbFormatters";
 import { liveScoreToGrade, launchAngleLabel, sanitizeDisplayString } from "@/lib/mlbUiMappers";
 import { normalizePct } from "@/lib/mlb/mlbViewModel";
-import { readCanonicalLifecycle, LIFECYCLE_BADGE } from "@/lib/mlb/canonicalSignalViewModel";
+import { readCanonicalLifecycle, LIFECYCLE_BADGE, readSurfacedAgoMs, formatSurfacedAgo } from "@/lib/mlb/canonicalSignalViewModel";
 import type { MLBSignal } from "@shared/mlbSignal";
 
 export type MlbSignalData = MLBSignal;
@@ -159,6 +159,7 @@ export function MlbSignalCard({
   // server-stamped canonicalLifecycleState (NEVER inferred from probability).
   const canonicalLifecycle = readCanonicalLifecycle(sig as any);
   const lifecycleBadge = LIFECYCLE_BADGE[canonicalLifecycle];
+  const surfacedAgoLabel = formatSurfacedAgo(readSurfacedAgoMs(sig as any));
   const side = SIDE_STYLES[sig.recommendedSide as keyof typeof SIDE_STYLES] ?? SIDE_STYLES.OVER;
   const marketLabel = formatMlbMarketLabel(sig.market);
   const matchup = sig.awayAbbr && sig.homeAbbr ? `${sig.awayAbbr} @ ${sig.homeAbbr}` : null;
@@ -265,9 +266,18 @@ export function MlbSignalCard({
                 className="text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0"
                 style={{ background: lifecycleBadge.bg, color: lifecycleBadge.text }}
                 data-testid={`badge-lifecycle-${sig.playerId}-${sig.market}`}
-                title={`Lifecycle state: ${canonicalLifecycle}`}
+                title={`Lifecycle state: ${canonicalLifecycle}${surfacedAgoLabel ? ` · ${surfacedAgoLabel}` : ""}`}
               >
                 {lifecycleBadge.label}
+              </span>
+            )}
+            {surfacedAgoLabel && (
+              <span
+                className="text-[9px] font-medium text-muted-foreground shrink-0 hidden sm:inline"
+                data-testid={`text-surfaced-${sig.playerId}-${sig.market}`}
+                title={surfacedAgoLabel}
+              >
+                {surfacedAgoLabel.replace("surfaced ", "")}
               </span>
             )}
             <div className="min-w-0">
