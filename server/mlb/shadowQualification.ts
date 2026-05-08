@@ -280,6 +280,10 @@ export function evaluateShadowBatterOver(c: ShadowEvalCandidate): ShadowDecision
     existing.probability = c.probability;
     existing.signalScore = ss;
     existing.edge = c.edge ?? existing.edge;
+    // Outcome wiring uses bookLine for cashed/missed/push classification, so
+    // re-evaluation MUST refresh it when the line moves. Same for projection.
+    if (c.bookLine !== undefined) existing.bookLine = c.bookLine;
+    if (c.projection !== undefined) existing.projection = c.projection;
     existing.history.push({ at: now, event: "shadow_re_evaluated" });
     return { decision: "qualified", reason: "re_evaluated", signalId };
   }
@@ -488,12 +492,12 @@ export function findPendingShadowRecord(query: {
     } else if (wantNameNorm != null) {
       if (normalizeNameForMatch(rec.playerName) !== wantNameNorm) continue;
     }
-    if (
-      query.line != null &&
-      rec.bookLine != null &&
-      Math.abs(Number(rec.bookLine) - Number(query.line)) > 1e-6
-    ) {
-      continue;
+    if (query.line != null) {
+      // Strict line guard: when caller supplies a line, reject the record
+      // unless its stored bookLine matches. A null stored line is NOT a free
+      // pass — that would let stale lineless records absorb fresh queries.
+      if (rec.bookLine == null) continue;
+      if (Math.abs(Number(rec.bookLine) - Number(query.line)) > 1e-6) continue;
     }
     return rec;
   }
@@ -728,6 +732,19 @@ export interface ShadowSummary {
 export function getShadowSummary(): ShadowSummary {
   const cm = aggregates.cashedTotal + aggregates.missedTotal;
   const hitRate = cm > 0 ? aggregates.cashedTotal / cm : null;
+  const settled =
+    aggregates.cashedTotal + aggregates.missedTotal + aggregates.pushTotal;
+  // ROI proxy at -110 vig: cashed=+0.909u, missed=-1u, push=0.
+  const roiUnits =
+    settled > 0
+      ? aggregates.cashedTotal * ROI_VIG_PAYOUT - aggregates.missedTotal
+      : null;
+  const roiPerPick = roiUnits != null && settled > 0 ? roiUnits / settled : null;
+  const sampleSizeWarning =
+    settled < SHADOW_SAMPLE_SIZE_FLOOR
+      ? `Directional only — insufficient sample (settled=${settled}, floor=${SHADOW_SAMPLE_SIZE_FLOOR})`
+      : null;
+
   const byMarket: ShadowSummary["byMarket"] = {};
   for (const [market, ms] of Object.entries(aggregates.byMarket)) {
     const subCm = ms.cashed + ms.missed;
@@ -736,11 +753,25 @@ export function getShadowSummary(): ShadowSummary {
       shadowRejected: ms.shadowRejected,
       cashed: ms.cashed,
       missed: ms.missed,
+      push: ms.push,
       expired: ms.expired,
       pending: ms.pending,
       hitRate: subCm > 0 ? ms.cashed / subCm : null,
       avgSignalScore: ms._ssCount > 0 ? Math.round(ms.avgSignalScore * 100) / 100 : 0,
       avgProbability: ms._ssCount > 0 ? Math.round(ms.avgProbability * 100) / 100 : 0,
+    };
+  }
+  const bySide: ShadowSummary["bySide"] = {};
+  for (const [side, ss] of Object.entries(aggregates.bySide)) {
+    const subCm = ss.cashed + ss.missed;
+    bySide[side] = {
+      shadowQualified: ss.shadowQualified,
+      cashed: ss.cashed,
+      missed: ss.missed,
+      push: ss.push,
+      expired: ss.expired,
+      pending: ss.pending,
+      hitRate: subCm > 0 ? ss.cashed / subCm : null,
     };
   }
   return {
@@ -753,10 +784,17 @@ export function getShadowSummary(): ShadowSummary {
       pending: aggregates.pendingTotal,
       cashed: aggregates.cashedTotal,
       missed: aggregates.missedTotal,
+      push: aggregates.pushTotal,
       expired: aggregates.expiredTotal,
+      settled,
     },
     hitRate,
+    roiUnits,
+    roiPerPick,
+    sampleSize: settled,
+    sampleSizeWarning,
     byMarket,
+    bySide,
     scoreDistribution: aggregates.scoreDistribution,
     rejectReasons: aggregates.rejectReasons,
     activeShadowSignals: store.size,
@@ -765,6 +803,7 @@ export function getShadowSummary(): ShadowSummary {
       SHADOW_BATTER_OVER_FLOOR,
       LIVE_BATTER_OVER_FLOOR,
       SHADOW_TTL_MS,
+      SHADOW_SAMPLE_SIZE_FLOOR,
     },
     generatedAt: new Date().toISOString(),
   };

@@ -318,12 +318,36 @@ export async function registerRoutes(
     try {
       const { getShadowSummary, listShadowSignals } = await import("./mlb/shadowQualification");
       const includeRecords = String(req.query.includeRecords ?? "") === "1";
+      const outcomeFilter = req.query.outcome ? String(req.query.outcome) : undefined;
       const summary = getShadowSummary();
+      const enriched = {
+        ...summary,
+        // Surfaced for admin UI: outcome distribution + side breakdown +
+        // sample-size warning are now first-class fields on the summary.
+        outcomeBreakdown: {
+          cashed: summary.totals.cashed,
+          missed: summary.totals.missed,
+          push: summary.totals.push,
+          expired: summary.totals.expired,
+          pending: summary.totals.pending,
+          settled: summary.totals.settled,
+        },
+        roiProxy: {
+          unitsAt110: summary.roiUnits,
+          perPick: summary.roiPerPick,
+          sampleSize: summary.sampleSize,
+          warning: summary.sampleSizeWarning,
+          note: "Approximate ROI assuming standard -110 vig. Shadow records do not carry real odds.",
+        },
+      };
       if (includeRecords) {
         const gameId = req.query.gameId ? String(req.query.gameId) : undefined;
-        return res.json({ ...summary, records: listShadowSignals({ gameId }) });
+        const records = listShadowSignals(
+          outcomeFilter ? { gameId, outcome: outcomeFilter as any } : { gameId },
+        );
+        return res.json({ ...enriched, records });
       }
-      return res.json(summary);
+      return res.json(enriched);
     } catch (err) {
       console.error("[admin/mlb-shadow-qualification]", err);
       return res.status(500).json({ error: "Failed to fetch MLB shadow qualification summary" });

@@ -417,7 +417,7 @@ export async function gradePersistedPlays(
   try {
     const { plays: pending } = await storage.getPlays({ limit: 500, settled: "pending" });
     console.log("[ANALYTICS_QUERY] getPlays(pending) returned", pending.length, "plays");
-    if (pending.length === 0) return { settled, failed, skipped };
+    const skipMainLoop = pending.length === 0;
 
     console.log("[GRADE] Pending persisted plays to grade:", pending.length);
 
@@ -454,7 +454,7 @@ export async function gradePersistedPlays(
       byGameAndSport.set(key, list);
     }
 
-    for (const [gameKey, plays] of Array.from(byGameAndSport)) {
+    if (!skipMainLoop) for (const [gameKey, plays] of Array.from(byGameAndSport)) {
       const [sport, gameId] = gameKey.split("::") as [string, string];
 
       // ── MLB branch ───────────────────────────────────────────────────────
@@ -694,6 +694,30 @@ export async function gradePersistedPlays(
 
     if (settled > 0 || failed > 0 || skipped > 0) {
       console.log(`[GRADE] Complete — settled:${settled} failed:${failed} skipped:${skipped}`);
+    }
+
+    // ── Shadow Outcome Resolution Pass ───────────────────────────────────────
+    // Shadow signals never enter `persisted_plays` (no user surfacing, no ROI
+    // pollution), so they can only be resolved here. Always runs — including
+    // when there are zero pending persisted plays — so the in-memory shadow
+    // store stays current. Failures are isolated and never affect the grader's
+    // settle / fail / skip return contract.
+    try {
+      const { resolvePendingShadowOutcomes } = await import("../mlb/shadowQualification");
+      const r = await resolvePendingShadowOutcomes({
+        fetchPlayerMap: async (gid) => {
+          const box = await fetchMlbBoxScore(gid);
+          return box ? buildMlbPlayerStats(box) : null;
+        },
+        getStatValue: (entry, market) => getMlbStatValue(entry, market),
+      });
+      if (r.recordsScanned > 0) {
+        console.log(
+          `[LL_SHADOW_OUTCOME_PASS] games=${r.gamesScanned} skipped=${r.gamesSkippedNoBoxscore} scanned=${r.recordsScanned} cashed=${r.cashed} missed=${r.missed} push=${r.push} missing=${r.missing}`,
+        );
+      }
+    } catch (err) {
+      console.warn("[LL_SHADOW_OUTCOME_PASS_ERROR]", (err as Error).message);
     }
   } catch (err) {
     console.warn("[GRADE] Top-level error:", (err as Error).message);
