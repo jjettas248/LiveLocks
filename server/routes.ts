@@ -3074,6 +3074,9 @@ export async function registerRoutes(
               adminReasons: adminReasonsArr,
               alertPath: alert.alertPath ?? null,
               useFallbackScore: true,
+              gameId: alert.gameId,
+              playerId: alert.playerId,
+              player: alert.playerName,
             });
             if (HR_RADAR_GOLDMASTER_V1 && process.env.DEBUG_HR_RADAR_V1 === "true") {
               console.log("[HR_RADAR_V1_TRACE]", JSON.stringify(buildValidationPayload({
@@ -3534,6 +3537,9 @@ export async function registerRoutes(
           adminReasons: [],
           alertPath: r.alertPath ?? null,
           useFallbackScore: true,
+          gameId: r.gameId,
+          playerId: r.playerId,
+          player: r.playerName,
         });
         return { ...r, ...v1 };
       };

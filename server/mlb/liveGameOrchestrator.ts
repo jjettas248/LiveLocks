@@ -1527,6 +1527,16 @@ export class LiveGameOrchestrator {
           console.log(`[HR_RADAR_INACTIVE] gameId=${gameId} cleared HR Radar outcome stamps count=${dropped} reason=game_final`);
         }
       } catch { /* best effort */ }
+      // HR Radar Lifecycle Repair — release per-game user-stage memory at
+      // game-final so transition diagnostics for the next session don't
+      // compare against stale prior-game state.
+      try {
+        const stageMod = require("./hrRadarUserStage") as typeof import("./hrRadarUserStage");
+        const droppedStages = stageMod.clearUserStageMemoryForGame(gameId);
+        if (droppedStages > 0) {
+          console.log(`[HR_RADAR_INACTIVE] gameId=${gameId} cleared HR Radar user-stage memory count=${droppedStages} reason=game_final`);
+        }
+      } catch { /* best effort */ }
       // MLB Signals audit P1 — release per-game resolved non-HR markets.
       for (const key of Array.from(RESOLVED_NON_HR_MARKETS)) {
         if (key.startsWith(`${gameId}_`)) RESOLVED_NON_HR_MARKETS.delete(key);
@@ -4292,6 +4302,50 @@ export class LiveGameOrchestrator {
       }
 
       autoPersistMLBSignals(gameId, qualifiedSignals);
+
+      // ── LiveLocks Batch D — Orchestrator-driven bus population ────────
+      // Per Batch D constraint: the bus MUST be populated from the
+      // orchestrator after qualification, NOT from authed route reads
+      // (/api/mlb/edge-feed previously was the only path). Without this
+      // hook the bus stayed empty until the first authed user hit the
+      // edge-feed, and observability tags ([HR_RADAR_TRANSITION],
+      // alerts, hr-radar/ladder canonical reads) all stayed silent.
+      //
+      // We mirror the exact normalize call shape the edge-feed handler
+      // uses so the canonical signal id / contract / mirror behavior is
+      // bit-for-bit identical. normalizeMLBSignal internally calls
+      // registerSignal → recordCanonical → notifyLifecycleChange. Pure
+      // additive: orchestrator behavior unchanged, mlbEdgeCache write
+      // already happened above, this loop only feeds the bus.
+      try {
+        const { normalizeMLBSignal } = await import("./normalizeSignal");
+        const { normalizeMlbMarketKey } = await import("./normalizeMarketKey");
+        const rawOutputLookup = new Map(
+          (outputs ?? []).map((o: any) => [`${o.playerId}_${normalizeMlbMarketKey(o.market)}`, o])
+        );
+        const gameState = mlbGameCache.gameState[gameId] ?? null;
+        let busRegistered = 0;
+        for (const qs of qualifiedSignals) {
+          try {
+            const raw = rawOutputLookup.get(`${qs.playerId}_${normalizeMlbMarketKey(qs.market)}`);
+            normalizeMLBSignal(qs as any, {
+              gameId,
+              rawOutput: raw ?? null,
+              gameState: gameState as any,
+              game: null,
+              pitchMixFallback: null,
+            });
+            busRegistered++;
+          } catch (perSigErr) {
+            console.warn(`[LL_BUS_POPULATE] per-signal normalize failed player=${(qs as any).playerName} market=${qs.market} reason=${(perSigErr as Error).message}`);
+          }
+        }
+        if (busRegistered > 0) {
+          console.log(`[LL_BUS_POPULATE] gameId=${gameId} registered=${busRegistered} qualified=${qualifiedSignals.length}`);
+        }
+      } catch (busErr) {
+        console.warn(`[LL_BUS_POPULATE] bus population failed gameId=${gameId} reason=${(busErr as Error).message}`);
+      }
     }
     return outputs;
   }

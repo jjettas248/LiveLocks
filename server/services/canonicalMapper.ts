@@ -53,6 +53,21 @@ export function toCanonicalFromMlb(sig: MLBSignal, now: number = Date.now()): Ca
   const signalId = mlbSignalId(sig);
   const lifecycleState = deriveMlbLifecycleState(sig);
 
+  // Replay-safe dedupe key: prefer the engine cycle's own timestamp so
+  // re-registrations of the same engine output (orchestrator + edge-feed
+  // both calling normalizeMLBSignal at different wall-clock times) collapse
+  // into a `deduped` outcome at the bus rather than a spurious `updated`
+  // that would advance updatedAt and re-fire lifecycle subscribers.
+  const sigAny = sig as any;
+  const engineTs: number =
+    (typeof sigAny.engineGeneratedAt === "number" && sigAny.engineGeneratedAt > 0
+      ? sigAny.engineGeneratedAt
+      : null) ??
+    (typeof sigAny.signalTimestamp === "number" && sigAny.signalTimestamp > 0
+      ? sigAny.signalTimestamp
+      : null) ??
+    now;
+
   return {
     signalId,
     sport,
@@ -77,7 +92,7 @@ export function toCanonicalFromMlb(sig: MLBSignal, now: number = Date.now()): Ca
 
     lifecycleState,
     lifecycleHistory: [], // store fills in on first record
-    engineGeneratedAt: now, // SignalBus may overwrite with orchestrator cycle ts
+    engineGeneratedAt: engineTs,
     surfacedAt: now,
     updatedAt: now,
     expiresAt: null,

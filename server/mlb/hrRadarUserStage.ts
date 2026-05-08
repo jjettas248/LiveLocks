@@ -77,6 +77,27 @@ const PATH_PROMOTES_TO_FIRE: Record<string, true> = {
 // per process (avoids log spam every poll cycle).
 const loggedUnknownPaths = new Set<string>();
 
+// ── HR Radar Lifecycle Repair — production transition memory ───────────────
+// In-memory map keyed by `${gameId}_${playerId}` → last observed userStage.
+// Lets enrichWithUserStage emit [HR_RADAR_TRANSITION]/[HR_RADAR_READY]/
+// [HR_RADAR_FIRE] only on actual stage change. Pure observability — never
+// influences stage computation. Cleared by clearUserStageMemoryForGame at
+// game-final, or naturally bounded by gameId+playerId churn across days.
+const userStageMemory = new Map<string, HrRadarUserStage>();
+
+export function clearUserStageMemoryForGame(gameId: string | number | null | undefined): number {
+  if (gameId == null) return 0;
+  const prefix = `${gameId}_`;
+  let dropped = 0;
+  for (const k of Array.from(userStageMemory.keys())) {
+    if (k.startsWith(prefix)) {
+      userStageMemory.delete(k);
+      dropped++;
+    }
+  }
+  return dropped;
+}
+
 export interface MapToUserStageTrace {
   signalId?: string | null;
   gameId?: string | number | null;
@@ -461,7 +482,24 @@ export function enrichWithUserStage(input: {
   adminReasons?: string[] | null;
   alertPath?: string | null;
   useFallbackScore?: boolean; // Phase 3: opt-in display fallback for zero rows
+  // ── HR Radar Lifecycle Repair — observability ────────────────────────
+  // Identity fields used purely to label transition diagnostics. Optional;
+  // when omitted (e.g. unit tests) no transition tags are emitted from
+  // this path. When provided, prev userStage is looked up by gameId|playerId
+  // and a one-line [HR_RADAR_TRANSITION]/[HR_RADAR_READY]/[HR_RADAR_FIRE]
+  // is logged only on actual stage change.
+  signalId?: string | null;
+  gameId?: string | number | null;
+  playerId?: string | number | null;
+  player?: string | null;
 }): UserStageEnrichment {
+  const identityKey =
+    input.gameId != null && input.playerId != null
+      ? `${input.gameId}_${input.playerId}`
+      : null;
+  const prevForTrace: HrRadarUserStage | null = identityKey
+    ? userStageMemory.get(identityKey) ?? null
+    : null;
   const legacyMapped = mapToUserStage({
     legacyTier: input.legacyTier,
     legacyState: input.legacyState,
@@ -485,6 +523,37 @@ export function enrichWithUserStage(input: {
   const suggested = deriveSuggestedUserStageFromSignals({ qualifyingSignals });
   const userStage: HrRadarUserStage =
     legacyMapped === "resolved" ? "resolved" : strongerStage(legacyMapped, suggested);
+
+  // ── HR Radar Lifecycle Repair — production transition diagnostic ───────
+  // Pure observability. Logged ONLY when prev !== next so we don't flood the
+  // log every cycle. Identity required (gameId+playerId); without it we stay
+  // silent. Behavior is unchanged — this is a notification of the value
+  // already computed above.
+  if (identityKey) {
+    if (prevForTrace === null) {
+      // First observation — silent seed. Record current stage without
+      // emitting a transition tag so the very first cycle for a row
+      // (which would otherwise log `from=none to=track` for every player
+      // every time the in-memory map is empty) doesn't spam the log.
+      userStageMemory.set(identityKey, userStage);
+    } else if (prevForTrace !== userStage) {
+      const sid = input.signalId ?? "?";
+      const gid = input.gameId ?? "?";
+      const pid = input.playerId ?? "?";
+      const pname = input.player ?? "?";
+      console.log(
+        `[HR_RADAR_TRANSITION] from=${prevForTrace} to=${userStage} ` +
+        `signalId=${sid} gameId=${gid} playerId=${pid} player=${pname}`,
+      );
+      if (userStage === "ready") {
+        console.log(`[HR_RADAR_READY] signalId=${sid} gameId=${gid} playerId=${pid} player=${pname}`);
+      } else if (userStage === "fire") {
+        console.log(`[HR_RADAR_FIRE] signalId=${sid} gameId=${gid} playerId=${pid} player=${pname}`);
+      }
+      userStageMemory.set(identityKey, userStage);
+    }
+    // else: prevForTrace === userStage — no change, stay silent.
+  }
 
   // Phase 2 + 3 — user-facing 10-point scores.
   const initialFromInput = input.initialSignalScore10 ?? toSignalScore10(input.initialReadinessScore);

@@ -5411,6 +5411,9 @@ export class DatabaseStorage implements IStorage {
         adminReasons,
         alertPath: r.alertPath ?? null,
         useFallbackScore: true,
+        gameId: r.gameId,
+        playerId: r.playerId,
+        player: r.playerName,
       });
       // Phase 12 — emit a single-line validation log per row when the FF is
       // on AND a debug env opts in. Never noisy in production by default.
