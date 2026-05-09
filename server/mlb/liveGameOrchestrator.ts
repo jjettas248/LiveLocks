@@ -88,6 +88,16 @@ import { getPlayer } from "./rosterService";
 import { storage } from "../storage";
 import { trackPlay } from "../services/playTracker";
 import { runFullOnlyHomersScrape, getHotHitters, getLiveBallparkFactors, getBatterVsPitcherHrHistory } from "./onlyHomersService";
+// HR Radar Settlement Repair — promote previously-broken `require()` calls to
+// ESM static imports. Under ESM the runtime has no `require` global, so
+// every prior `require("./hrRadarOutcomeStamp")` etc. was throwing
+// `ReferenceError: require is not defined` and being silently swallowed by
+// the surrounding try/catch — explaining why bus.cashSignal NEVER fired
+// in production despite being in the code path.
+import * as hrRadarOutcomeStampMod from "./hrRadarOutcomeStamp";
+import * as hrRadarSectionMod from "./hrRadarSection";
+import * as hrRadarUserStageMod from "./hrRadarUserStage";
+import * as liveSignalBusMod from "../services/liveSignalBus";
 
 // ── HR Presence Floor eligibility thresholds (Task #126 / tuned in #128) ────
 // A batter passes the presence floor if ANY of these conditions hold:
@@ -498,7 +508,6 @@ function gradeSingleHRPlay(
   //       which can't go directly to cashed) is logged and ignored. Never
   //       blocks the close path.
   try {
-    const stampMod = require("./hrRadarOutcomeStamp") as typeof import("./hrRadarOutcomeStamp");
     const snap = getHrAlertState(gameId, playerId);
     // HRAlertResult exposes alertTier + signalState (the engine's two
     // surfaced taxonomies). Legacy `confidenceTier` is not on the snapshot
@@ -508,8 +517,7 @@ function gradeSingleHRPlay(
     const signalState = snap?.alertResult?.signalState ?? null;
     const tieredStatus = (() => {
       try {
-        const sec = require("./hrRadarSection") as typeof import("./hrRadarSection");
-        return sec.inferCashedFromTierStatus({
+        return hrRadarSectionMod.inferCashedFromTierStatus({
           alertTier,
           confidenceTier: null,
           signalState,
@@ -518,7 +526,7 @@ function gradeSingleHRPlay(
         return "called_hit" as const;
       }
     })();
-    stampMod.stampHrRadarOutcome(gameId, playerId, tieredStatus, {
+    hrRadarOutcomeStampMod.stampHrRadarOutcome(gameId, playerId, tieredStatus, {
       hitInning: inning,
       alertTier,
       confidenceTier: null,
@@ -529,11 +537,59 @@ function gradeSingleHRPlay(
     console.warn(`[HR_RADAR_CASHED] stamp failed gameId=${gameId} playerId=${playerId} err=${(err as Error).message}`);
   }
   try {
-    const bus = require("../services/liveSignalBus") as typeof import("../services/liveSignalBus");
-    const signalId = `mlb:${gameId}:${playerId}:home_runs:OVER`;
-    bus.cashSignal(signalId, `HR observed inning=${inning} half=${halfInning}`);
+    // HR Radar Settlement Repair — Bug #1: the canonical MLB market token for
+    // the HR Radar signal is `hrr` (see `mlbSignalId()` + production logs:
+    // `mlb:<gameId>:<playerId>:hrr:OVER`). Previously this was hardcoded to
+    // `home_runs`, so `getCanonical(signalId)` returned null and the cash was
+    // silently dropped. We try the canonical token first; the legacy
+    // `home_runs` form is also attempted for back-compat with any signal
+    // path that might still register under that market.
+    liveSignalBusMod.cashSignal(`mlb:${gameId}:${playerId}:hrr:OVER`, `HR observed inning=${inning} half=${halfInning}`);
+    liveSignalBusMod.cashSignal(`mlb:${gameId}:${playerId}:home_runs:OVER`, `HR observed inning=${inning} half=${halfInning}`);
   } catch (err) {
     console.warn(`[HR_RADAR_CASHED] lifecycle apply failed gameId=${gameId} playerId=${playerId} err=${(err as Error).message}`);
+  }
+  // HR Radar Settlement Repair — Bug #6: same-tick race protection. If the
+  // engine had this player past PATH A-E (alertTier ∈ {prepare, official_alert}
+  // OR signalState ∈ {actionable, fire}) at the moment of HR detection, but
+  // the engine's qualifying-event write hasn't committed yet, the matcher
+  // would fall to timestamp-rescue (or fail entirely) and the cash would be
+  // graded as `late_signal` / `uncalled_hr`. We synchronously persist a
+  // synthetic qualifying signal_event row anchored to the prior tick (so it
+  // strictly precedes hrEnd) — additive, never replaces a real engine event.
+  try {
+    const snap = getHrAlertState(gameId, playerId);
+    const alertTier = snap?.alertResult?.alertTier ?? null;
+    const signalState = snap?.alertResult?.signalState ?? null;
+    const wasQualified =
+      alertTier === "officialAlert" ||
+      alertTier === "prepare" ||
+      signalState === "PEAK" ||
+      signalState === "BUILDING";
+    if (wasQualified && endTimeMs && endTimeMs > 0) {
+      // Anchor 1s before HR endTime so it strictly precedes hrEnd in the
+      // matcher's `lt(hrRadarSignalEvents.detectedAt, new Date(hrEnd))`.
+      const anchor = new Date(endTimeMs - 1000);
+      const eventType =
+        alertTier === "officialAlert" || signalState === "PEAK"
+          ? "stage_attack"
+          : "stage_building";
+      void storage.appendHrRadarSignalEvent({
+        sessionDate: undefined as any,
+        gameId,
+        playerId,
+        team,
+        alertId: null,
+        eventType,
+        detectedAt: anchor,
+        inning,
+        half: hitHalf,
+        source: "grader_pre_close",
+      } as any).catch(() => {});
+      console.log(`[HR_RADAR_PRE_CLOSE_QUALIFY] playerId=${playerId} gameId=${gameId} eventType=${eventType} alertTier=${alertTier} signalState=${signalState} anchorMs=${endTimeMs - 1000}`);
+    }
+  } catch (err) {
+    // Never block the grading path on the synthetic-event fallback.
   }
   storage.resolveAlertAsHit(playerId, gameId, inning, halfInning, atBatIndex, endTimeMs).catch(() => {});
   storage.resolveHrRadarAlertAsHit(playerId, gameId, inning, hitHalf, hitLabel, endTimeMs)
@@ -1521,8 +1577,7 @@ export class LiveGameOrchestrator {
       // HR Radar Lifecycle Repair Fix #2 — release per-game outcome stamps
       // at game-final so a same-day re-run starts clean.
       try {
-        const stampMod = require("./hrRadarOutcomeStamp") as typeof import("./hrRadarOutcomeStamp");
-        const dropped = stampMod.clearHrRadarOutcomeStampsForGame(gameId);
+        const dropped = hrRadarOutcomeStampMod.clearHrRadarOutcomeStampsForGame(gameId);
         if (dropped > 0) {
           console.log(`[HR_RADAR_INACTIVE] gameId=${gameId} cleared HR Radar outcome stamps count=${dropped} reason=game_final`);
         }
@@ -1531,8 +1586,7 @@ export class LiveGameOrchestrator {
       // game-final so transition diagnostics for the next session don't
       // compare against stale prior-game state.
       try {
-        const stageMod = require("./hrRadarUserStage") as typeof import("./hrRadarUserStage");
-        const droppedStages = stageMod.clearUserStageMemoryForGame(gameId);
+        const droppedStages = hrRadarUserStageMod.clearUserStageMemoryForGame(gameId);
         if (droppedStages > 0) {
           console.log(`[HR_RADAR_INACTIVE] gameId=${gameId} cleared HR Radar user-stage memory count=${droppedStages} reason=game_final`);
         }

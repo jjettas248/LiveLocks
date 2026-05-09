@@ -122,9 +122,16 @@ export const IMMUTABLE_FIELDS: ReadonlyArray<keyof CanonicalSignal> = [
 
 // Allowed transitions. Keys are FROM states; values are valid TO states.
 // Terminal states (cashed/missed/expired) have no outgoing edges.
+//
+// HR Radar Settlement Repair — Bug #2: `cashed` is reachable from EVERY
+// non-terminal state. A HR is terminal evidence — it can land while a
+// presence-floor card is still in `watch` or while a partial-cred batter
+// sits in `build`. Previously `watch → cashed` was rejected as invalid,
+// silently dropping bus.cashSignal calls (see [LL_LIFECYCLE_INVALID_TRANSITION]
+// in production logs) and stranding the card in its live tier.
 export const LIFECYCLE_TRANSITIONS: Record<LifecycleState, LifecycleState[]> = {
-  watch:   ["build", "strong", "elite", "missed", "expired"],
-  build:   ["strong", "elite", "watch", "missed", "expired", "cashed"],
+  watch:   ["build", "strong", "elite", "cashed", "missed", "expired"],
+  build:   ["strong", "elite", "watch", "cashed", "missed", "expired"],
   strong:  ["elite", "build", "cashed", "missed", "expired"],
   elite:   ["strong", "cashed", "missed", "expired"],
   cashed:  [],

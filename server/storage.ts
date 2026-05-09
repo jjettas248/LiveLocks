@@ -4037,6 +4037,14 @@ export class DatabaseStorage implements IStorage {
       // sees a "Called miss" outcome in the dead bucket instead of a
       // hidden admin-only "Uncalled HR" row.
       if (matchResult.matched && matchResult.gradingStatus === "called_miss" && matchResult.alertId) {
+        // HR Radar Settlement Repair — Bug #5: presence-only rows (which the
+        // matcher tags with the verbatim marker "[presence-only]" in the
+        // gradingReason) must NOT surface as user-visible "called miss"
+        // outcomes. The user reasonably remembers the batter sitting on the
+        // HR board (presence floor surfaces power-threat batters who never
+        // crossed PATH A-E) and a HR by them showing up as "we said miss"
+        // is the symptom we're closing. Admin-only persistence preserved.
+        const isPresenceOnly = String(matchResult.gradingReason ?? "").includes("[presence-only]");
         const result = await db.update(hrRadarAlerts)
           .set({
             status: "hit",
@@ -4049,7 +4057,7 @@ export class DatabaseStorage implements IStorage {
             gradingReason: matchResult.gradingReason,
             matchedBeforeHr: false,
             fallbackCreated: false,
-            userVisible: true,
+            userVisible: !isPresenceOnly,
             matchMethod: matchResult.matchMethod,
           })
           .where(and(
@@ -4110,25 +4118,66 @@ export class DatabaseStorage implements IStorage {
 
       if (existing.length > 0) {
         if (existing[0].status === "live") {
-          // Race: a live alert exists but resolveHrRadarAlertAsHit didn't match before HR endTime.
-          // Treat as late_signal (admin-only, never user-visible Cashed).
-          await db.update(hrRadarAlerts)
-            .set({
-              status: "hit",
-              hitInning: data.inning,
-              hitHalf: halfLabel,
-              hitLabel: data.hitLabel,
-              hitDetectedAt: nowDate,
-              resolvedAt: nowDate,
-              gradingStatus: "late_signal",
-              gradingReason: "ensureHrRadarAlertHit fallback fired with live alert still present — race or post-HR signal",
-              matchedBeforeHr: false,
-              fallbackCreated: false,
-              userVisible: false,
-              matchMethod: "post_hr_fallback",
-            })
-            .where(eq(hrRadarAlerts.id, existing[0].id));
-          console.log(`[HR_RADAR_LATE_SIGNAL] (ensure-fallback) playerId=${data.playerId} gameId=${data.gameId}`);
+          // HR Radar Settlement Repair — Bug #3: if the live alert had
+          // already crossed PATH A-E before the race fired (confidenceTier ∈
+          // {strong, elite/actionable} OR signalState ∈ {actionable, fire}
+          // OR alertTier="official_alert"), credit it as called_hit instead
+          // of hiding behind late_signal. The race is between the matcher
+          // and the qualifying-event write — penalizing the user for an
+          // engine plumbing race produces the "I saw it on the Board but
+          // it's gone" symptom.
+          const e = existing[0] as any;
+          const conf = String(e.confidenceTier ?? "").toLowerCase();
+          const sigState = String(e.signalState ?? "").toLowerCase();
+          const aTier = String(e.alertTier ?? "").toLowerCase();
+          const wasQualified =
+            conf === "strong" || conf === "elite" ||
+            sigState === "actionable" || sigState === "fire" ||
+            aTier === "official_alert" || aTier === "prepare";
+          if (wasQualified) {
+            const tieredStatus = inferCashedFromTierStatus({
+              alertTier: e.alertTier ?? null,
+              confidenceTier: e.confidenceTier ?? null,
+              signalState: e.signalState ?? null,
+            });
+            await db.update(hrRadarAlerts)
+              .set({
+                status: "hit",
+                hitInning: data.inning,
+                hitHalf: halfLabel,
+                hitLabel: data.hitLabel,
+                hitDetectedAt: nowDate,
+                resolvedAt: nowDate,
+                gradingStatus: tieredStatus,
+                gradingReason: "ensure-fallback rescued: alert had crossed PATH A-E (qualified pre-HR) — race against qualifying-event write",
+                matchedBeforeHr: true,
+                fallbackCreated: false,
+                userVisible: true,
+                matchMethod: "post_hr_fallback",
+              })
+              .where(eq(hrRadarAlerts.id, existing[0].id));
+            console.log(`[HR_RADAR_CALLED_HIT] (ensure-rescue) playerId=${data.playerId} gameId=${data.gameId} tieredStatus=${tieredStatus} confTier=${conf} signalState=${sigState} alertTier=${aTier}`);
+          } else {
+            // Genuine late_signal: alert never crossed PATH A-E. Keep
+            // admin-only behavior so the cashed bucket isn't polluted.
+            await db.update(hrRadarAlerts)
+              .set({
+                status: "hit",
+                hitInning: data.inning,
+                hitHalf: halfLabel,
+                hitLabel: data.hitLabel,
+                hitDetectedAt: nowDate,
+                resolvedAt: nowDate,
+                gradingStatus: "late_signal",
+                gradingReason: "ensureHrRadarAlertHit fallback fired with live alert still present — race or post-HR signal",
+                matchedBeforeHr: false,
+                fallbackCreated: false,
+                userVisible: false,
+                matchMethod: "post_hr_fallback",
+              })
+              .where(eq(hrRadarAlerts.id, existing[0].id));
+            console.log(`[HR_RADAR_LATE_SIGNAL] (ensure-fallback) playerId=${data.playerId} gameId=${data.gameId}`);
+          }
         }
         return;
       }
@@ -4392,6 +4441,15 @@ export class DatabaseStorage implements IStorage {
       };
 
       for (const alert of liveAlerts) {
+        // HR Radar Settlement Repair — Bug #4: skip alerts that already have
+        // a hit stamp from per-poll grading (resolveHrRadarAlertAsHit). The
+        // final reconciler runs at game-final without precise HR endTimes
+        // and `playerHrMap` only carries each player's LAST HR inning, so
+        // re-grading already-graded alerts can flip a true `late_signal` /
+        // `called_miss` to false `called_hit`. Status is the canonical
+        // gate (`live` ⇔ ungraded), but belt-and-suspenders we also skip
+        // when hitInning is already populated.
+        if (alert.hitInning != null) continue;
         const hrData = playerHrMap.get(alert.playerId);
         const nowDate = new Date();
         if (hrData) {
@@ -4404,7 +4462,21 @@ export class DatabaseStorage implements IStorage {
           // includes a timestamp-rescue branch. The reconcile fallback only
           // runs at game-final and lacks the HR endTime, so it stays on the
           // existing inning/half comparison.
-          const isPreHr = signalIsStrictlyBeforeHr(sigInn, sigHalf, hrData.inning, hrData.half);
+          //
+          // HR Radar Settlement Repair — Bug #4: when reconcile is called
+          // with a synthetic `half:"final"` and `inning:lastInning` (the
+          // game-final wrapper at liveGameOrchestrator.reconcileHrRadarFinalGame),
+          // ANY signal in the game would falsely qualify as "strictly before
+          // HR" — halfOrd("final")=2 outranks both top(0) and bottom(1).
+          // To avoid manufactured called_hit grades we treat a synthetic
+          // `final` half as a hard inning-only test: the signal inning must
+          // be STRICTLY less than the last-known inning (not equal). Real
+          // hr_play data with concrete top/bottom halves keeps the original
+          // semantic.
+          const isSyntheticFinal = hrData.half === "final";
+          const isPreHr = isSyntheticFinal
+            ? (sigInn != null && sigInn < hrData.inning)
+            : signalIsStrictlyBeforeHr(sigInn, sigHalf, hrData.inning, hrData.half);
           if (isPreHr) {
             await db.update(hrRadarAlerts)
               .set({

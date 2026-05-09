@@ -100,7 +100,13 @@ export function decideHrRadarMatch(input: {
       signalInning: null,
       signalHalf: null,
       gradingStatus: "called_miss",
-      gradingReason: "presence-only — never crossed PATH A-E threshold",
+      // HR Radar Settlement Repair — Bug #5: presence-only rows must signal
+      // their nature in the gradingReason so downstream graders set
+      // `userVisible=false`. Surfacing presence-floor HRs as user-visible
+      // `called_miss` produces the "we said it was a miss but he hit a HR"
+      // symptom — the user reasonably remembers seeing the batter on the
+      // board. The marker `[presence-only]` is matched verbatim by graders.
+      gradingReason: "[presence-only] never crossed PATH A-E threshold — admin-only, not user-visible",
       matchMethod: "player_game_only",
     };
   }
