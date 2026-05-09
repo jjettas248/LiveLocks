@@ -5229,9 +5229,32 @@ export class DatabaseStorage implements IStorage {
       // merit a higher bucket. This is strictly additive — promotion only,
       // never demotion — so high-conviction signals never get buried in the
       // (collapsed-by-default) Track section.
+      //
+      // HR HIT THIS INNING — keep card in pre-hit zone until next inning.
+      // When hitInning === currentInning the player just hit THIS inning and
+      // the card should visually linger in its zone (FIRE/READY/BUILD/TRACK)
+      // so the user sees it hit. Next inning currentInning > hitInning and
+      // the card naturally falls through to "cashed" as normal.
       let section: keyof typeof sections;
+      let hitThisInning = false;
       if (currentStatus === "resolved") {
-        section = outcome === "called_hit" ? "cashed" : "dead";
+        if (outcome === "called_hit") {
+          const gameCurrentInning = currentInningByGameId.get(r.gameId) ?? null;
+          const hitInn = r.hitInning ?? null;
+          if (hitInn != null && gameCurrentInning != null && hitInn === gameCurrentInning) {
+            hitThisInning = true;
+            // Route to the pre-hit zone using the tiered grading status.
+            const gs = (grading ?? "") as string;
+            section = gs === "called_hit_attack" ? "attackNow"
+              : gs === "called_hit_ready" ? "ready"
+              : gs === "called_hit_build" ? "building"
+              : "watch";
+          } else {
+            section = "cashed";
+          }
+        } else {
+          section = "dead";
+        }
       } else {
         // Canonical-stage section (engine's authoritative view).
         const canonicalSection: keyof typeof sections | null = canonicalStage
