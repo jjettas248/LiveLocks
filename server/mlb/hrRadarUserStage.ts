@@ -390,6 +390,157 @@ export function strongerStage(a: HrRadarUserStage, b: HrRadarUserStage): HrRadar
   return STAGE_RANK[a] >= STAGE_RANK[b] ? a : b;
 }
 
+// ── HR Radar READY → FIRE promotion ────────────────────────────────────────
+// Forensic finding (May 2026): live ladder showed FIRE=0 / READY=16 with
+// multiple cards at 10.0/10 and "Attack window is open" copy. Root cause was
+// that `mapToUserStage` Step 3a returns READY immediately for any row whose
+// alertPath sits in PATH_PROMOTES_TO_READY at signalState live|actionable —
+// it never reaches the Step 4 BET_NOW / canonicalStage="attack" fallback. So
+// a card with alertPath=PATH_C + state=live + dynamicState=BET_NOW + score
+// 10.0/10 + canonical=attack got stuck at READY forever.
+//
+// This promotion layer runs AFTER `strongerStage(legacyMapped, suggested)`
+// inside `enrichWithUserStage`. It NEVER demotes (only ready → fire) and
+// NEVER touches engine math, calibration, thresholds, or the dynamic state
+// machine. It only re-derives the user-facing ladder bucket from evidence
+// the engine already exposed.
+//
+// A "strong HR driver" is a qualifying signal that the engine has already
+// flagged as conviction-grade. We require AT LEAST ONE for Rule A so a
+// 10/10 card with no real driver (e.g. fallback-score-only) cannot promote.
+const STRONG_HR_DRIVER_SIGNALS: ReadonlyArray<HrQualifyingSignalType> = [
+  "elite_barrel",
+  "two_hard_hit_balls",
+  "massive_single_contact",
+  "pitcher_collapse_power",
+];
+
+export interface ReadyToFireContext {
+  alertPath?: string | null;
+  signalState?: string | null;     // engine signalState ("watching"|"live"|"actionable")
+  dynamicState?: string | null;    // "BET_NOW"|"PREPARE"|"WATCH"|...
+  canonicalStage?: string | null;  // "attack"|"building"|"watch"|"cooling"|"closed"
+  displayScore10?: number | null;  // post-cap /10 score (what the user sees)
+  currentReadinessScore?: number | null;
+  peakReadinessScore?: number | null;
+  qualifyingSignals: HrQualifyingSignalType[];
+  signalId?: string | null;
+  gameId?: string | number | null;
+  playerId?: string | number | null;
+  player?: string | null;
+}
+
+/**
+ * Promote a READY user stage to FIRE when the evidence the engine already
+ * stamped on the row matches one of three rules. Pure & additive — never
+ * demotes and never runs on stages other than `ready`.
+ *
+ * Rules (any one promotes):
+ *   A) displayScore10 ≥ 9.5 AND canonicalStage === "attack" AND ≥1 strong driver
+ *   B) alertPath ∈ PATH_PROMOTES_TO_FIRE AND signalState ∈ {live, actionable}
+ *   C) dynamicState === "BET_NOW" AND displayScore10 ≥ 9.5 AND not stale-decaying
+ *
+ * Stale = current readiness < 0.85 × peak readiness (engine signal is fading).
+ *
+ * Diagnostics:
+ *   - Promotion → `[HR_RADAR_READY_TO_FIRE]` JSON line incl. matched rule + drivers.
+ *   - High-score block → `[HR_RADAR_FIRE_BLOCKED]` JSON line listing what's missing.
+ *     Gated to displayScore10 ≥ 9.5 to keep noise bounded.
+ */
+export function maybePromoteReadyToFire(
+  current: HrRadarUserStage,
+  ctx: ReadyToFireContext,
+): HrRadarUserStage {
+  if (current !== "ready") return current;
+
+  const score = typeof ctx.displayScore10 === "number" && Number.isFinite(ctx.displayScore10)
+    ? ctx.displayScore10
+    : 0;
+  const path = (ctx.alertPath ?? "").toUpperCase();
+  const sig = (ctx.signalState ?? "").toLowerCase();
+  const dyn = (ctx.dynamicState ?? "").toUpperCase();
+  const canonical = (ctx.canonicalStage ?? "").toLowerCase();
+  const signals = new Set(ctx.qualifyingSignals ?? []);
+  const matchedDrivers: HrQualifyingSignalType[] = STRONG_HR_DRIVER_SIGNALS.filter(d => signals.has(d));
+  const hasStrongDriver = matchedDrivers.length > 0;
+
+  const peak = Number(ctx.peakReadinessScore ?? 0);
+  const cur = Number(ctx.currentReadinessScore ?? 0);
+  const stale = peak > 0 && cur > 0 && cur < peak * 0.85;
+
+  let rule: string | null = null;
+  if (PATH_PROMOTES_TO_FIRE[path] && (sig === "live" || sig === "actionable")) {
+    rule = "path_promotes_fire_live_or_actionable";
+  } else if (score >= 9.5 && canonical === "attack" && hasStrongDriver) {
+    rule = "score_max_attack_window_strong_driver";
+  } else if (dyn === "BET_NOW" && score >= 9.5 && !stale) {
+    rule = "betnow_score_max_not_stale";
+  }
+
+  const sid = ctx.signalId ?? "?";
+  const gid = ctx.gameId ?? "?";
+  const pid = ctx.playerId ?? "?";
+  const pname = ctx.player ?? "?";
+
+  if (rule) {
+    console.log(
+      `[HR_RADAR_READY_TO_FIRE] ` + JSON.stringify({
+        signalId: sid, gameId: gid, playerId: pid, player: pname,
+        from: "ready", to: "fire",
+        rule,
+        displayScore10: Math.round(score * 10) / 10,
+        alertPath: path || null,
+        signalState: sig || null,
+        dynamicState: dyn || null,
+        canonicalStage: canonical || null,
+        strongDrivers: matchedDrivers,
+        currentReadinessScore: Number.isFinite(cur) ? cur : null,
+        peakReadinessScore: Number.isFinite(peak) ? peak : null,
+        stale,
+      }),
+    );
+    return "fire";
+  }
+
+  // Block diagnostic — only when score is near the FIRE bar so we don't
+  // log every READY card every cycle. Lists each unmet rule's missing piece.
+  if (score >= 9.5) {
+    const reasons: string[] = [];
+    if (!PATH_PROMOTES_TO_FIRE[path]) {
+      reasons.push("path_not_in_promotes_fire");
+    } else if (sig !== "live" && sig !== "actionable") {
+      reasons.push("path_promotes_fire_but_signal_state_not_live_or_actionable");
+    }
+    if (canonical !== "attack") {
+      reasons.push("canonical_stage_not_attack");
+    } else if (!hasStrongDriver) {
+      reasons.push("no_strong_hr_driver");
+    }
+    if (dyn !== "BET_NOW") {
+      reasons.push("dynamic_state_not_bet_now");
+    } else if (stale) {
+      reasons.push("bet_now_but_stale_decaying");
+    }
+    console.log(
+      `[HR_RADAR_FIRE_BLOCKED] ` + JSON.stringify({
+        signalId: sid, gameId: gid, playerId: pid, player: pname,
+        userStage: "ready",
+        displayScore10: Math.round(score * 10) / 10,
+        alertPath: path || null,
+        signalState: sig || null,
+        dynamicState: dyn || null,
+        canonicalStage: canonical || null,
+        strongDrivers: matchedDrivers,
+        hasStrongDriver,
+        stale,
+        reasons,
+      }),
+    );
+  }
+
+  return current;
+}
+
 // ── Phase 4 / 8 / 9 / 12 — combined enrichment ─────────────────────────────
 export interface UserStageEnrichment {
   userStage: HrRadarUserStage;
@@ -521,8 +672,49 @@ export function enrichWithUserStage(input: {
 
   // Phase 7 — combine. Resolved is sticky from legacy mapping.
   const suggested = deriveSuggestedUserStageFromSignals({ qualifyingSignals });
-  const userStage: HrRadarUserStage =
+  const mergedUserStage: HrRadarUserStage =
     legacyMapped === "resolved" ? "resolved" : strongerStage(legacyMapped, suggested);
+
+  // ── HR Radar READY → FIRE promotion ────────────────────────────────────
+  // Compute the user-visible /10 score EARLY (mirrors the canonical math
+  // applied below for the returned UserStageEnrichment) so promotion is
+  // gated by the SAME number rendered on the card. We only need the
+  // capped current score for the promotion decision.
+  const _initialFromInputEarly = input.initialSignalScore10 ?? toSignalScore10(input.initialReadinessScore);
+  const _currentFromInputEarly = input.currentSignalScore10 ?? toSignalScore10(input.currentReadinessScore);
+  const _peakFromInputEarly = input.peakSignalScore10 ?? toSignalScore10(input.peakReadinessScore);
+  const _useFallbackEarly = input.useFallbackScore === true;
+  const _fallbackEarly = fallbackScoreForStage(mergedUserStage);
+  const _currentScoreEarly =
+    _useFallbackEarly && (_currentFromInputEarly == null || _currentFromInputEarly === 0)
+      ? _fallbackEarly
+      : _currentFromInputEarly;
+  const _displayCap10Early = mergedUserStage === "resolved"
+    ? null
+    : convictionDisplayCeiling10(input.alertPath);
+  const _displayCurrentScoreEarly =
+    _displayCap10Early != null && _currentScoreEarly != null
+      ? Math.min(_currentScoreEarly, _displayCap10Early)
+      : _currentScoreEarly;
+
+  const userStage: HrRadarUserStage = maybePromoteReadyToFire(mergedUserStage, {
+    alertPath: input.alertPath ?? null,
+    signalState: input.legacyState ?? null,
+    dynamicState: input.dynamicState ?? null,
+    canonicalStage: input.canonicalStage ?? null,
+    displayScore10: _displayCurrentScoreEarly ?? null,
+    currentReadinessScore: input.currentReadinessScore ?? null,
+    peakReadinessScore: input.peakReadinessScore ?? null,
+    qualifyingSignals,
+    signalId: input.signalId ?? null,
+    gameId: input.gameId ?? null,
+    playerId: input.playerId ?? null,
+    player: input.player ?? null,
+  });
+  // Silence unused-var warnings — values are intentionally re-derived below
+  // with the post-promotion userStage so that fallbackScoreForStage stays
+  // in lock-step with the final ladder bucket.
+  void _initialFromInputEarly; void _peakFromInputEarly;
 
   // ── HR Radar Lifecycle Repair — production transition diagnostic ───────
   // Pure observability. Logged ONLY when prev !== next so we don't flood the
