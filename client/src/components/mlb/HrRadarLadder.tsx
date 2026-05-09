@@ -195,8 +195,18 @@ export interface HrWatchBridgeEntry {
 // Phase 6 — `noAbYet` is an additive parking lot for live games where the
 // player still has zero tracked PAs. Keeps the engine's bucket assignment
 // intact server-side; only the UI re-shelves these rows so the live decision
-// sections (FIRE/READY/BUILD/TRACK) stop showing 0.0/10 pregame noise.
-type SectionKey = "attackNow" | "building" | "ready" | "watch" | "noAbYet" | "cashed" | "dead";
+// sections (FIRE/READY/BUILD/WATCH) stop showing 0.0/10 pregame noise.
+// Batch A — `modelReview` is an admin-only bucket that holds uncalled_hr /
+// early_hr_insufficient_sample rows so they don't pollute MISSED.
+type SectionKey =
+  | "attackNow"
+  | "building"
+  | "ready"
+  | "watch"
+  | "noAbYet"
+  | "cashed"
+  | "dead"
+  | "modelReview";
 
 const SECTION_META: Record<SectionKey, {
   label: string;
@@ -207,8 +217,7 @@ const SECTION_META: Record<SectionKey, {
   defaultCollapsed: boolean;
 }> = {
   attackNow: {
-    // Goldmaster v1 — relabeled from "ATTACK NOW" to "FIRE" for the new
-    // Track / Build / Ready / Fire ladder. Color/icon untouched.
+    // Batch A — display label is FIRE per product brief. Server enum stays attackNow.
     label: "FIRE",
     icon: Flame,
     accent: "border-red-500/40 bg-red-500/5",
@@ -225,7 +234,7 @@ const SECTION_META: Record<SectionKey, {
     defaultCollapsed: false,
   },
   building: {
-    // Goldmaster v1 — relabeled from "BUILDING" to "BUILD".
+    // Batch A — display label is BUILD per product brief.
     label: "BUILD",
     icon: Zap,
     accent: "border-amber-500/40 bg-amber-500/5",
@@ -234,13 +243,13 @@ const SECTION_META: Record<SectionKey, {
     defaultCollapsed: false,
   },
   watch: {
-    // Goldmaster v1 — relabeled from "WATCH" to "TRACK".
-    label: "TRACK",
+    // Batch A — display label is WATCH per product brief (was "TRACK").
+    label: "WATCH",
     icon: Eye,
     accent: "border-blue-500/30 bg-blue-500/5",
     badge: "bg-blue-500 text-white",
-    description: "Tracking. HR conditions are forming, not actionable yet.",
-    defaultCollapsed: true,
+    description: "Watching. HR conditions are forming, not actionable yet.",
+    defaultCollapsed: false, // dynamic — collapses when >8 entries (see LadderSection)
   },
   // Phase 6 — additive bucket. Holds rows whose game is live but the player
   // has zero tracked PAs yet (engine score is necessarily 0.0/10). Hidden by
@@ -262,14 +271,91 @@ const SECTION_META: Record<SectionKey, {
     defaultCollapsed: false,
   },
   dead: {
-    label: "DEAD / MISSED",
+    // Batch A — display label is MISSED (was "DEAD / MISSED"). Per the
+    // product brief, dead/missed should be minimized and collapsed by
+    // default so it doesn't dominate the screen.
+    label: "MISSED",
     icon: XCircle,
     accent: "border-zinc-500/30 bg-zinc-500/5",
     badge: "bg-zinc-500 text-white",
-    description: "Signals that resolved without conversion.",
+    description: "Signals that resolved without an HR.",
+    defaultCollapsed: true,
+  },
+  // Batch A — admin-only Model Review bucket. Surfaces uncalled_hr +
+  // early_hr_insufficient_sample so admins can review WHY the engine missed
+  // them, without polluting the user-facing MISSED column.
+  modelReview: {
+    label: "MODEL REVIEW",
+    icon: AlertTriangle,
+    accent: "border-purple-500/30 bg-purple-500/5",
+    badge: "bg-purple-600 text-white",
+    description: "Admin-only. Uncalled HRs and first-AB HRs flagged for engine calibration.",
     defaultCollapsed: true,
   },
 };
+
+// Batch A — Phase 1: per-section visible-by-default card caps. When the
+// section has more entries than the cap, the rest are collapsed behind a
+// "Show all (N)" button so users see the most important rows first.
+// FIRE 5 / READY 8 / BUILD 5 / WATCH 8. Cashed/missed/modelReview/noAbYet
+// don't need card-cap (they're already collapsed sections).
+const SECTION_CARD_CAPS: Partial<Record<SectionKey, number>> = {
+  attackNow: 5,
+  ready: 8,
+  building: 5,
+  watch: 8,
+};
+
+// Batch A — Phase 2: client-side jargon→plain-English mapper. The server
+// strips most engine debug tokens via buildHrRadarReasonSets, but legacy
+// tokens like "FAST PROMOTE:Single Elite Hr Contact" still leak through on
+// older cached rows. This is a final user-facing polish layer that runs
+// AFTER the server's strip and the existing isUserSafeReason filter.
+const REASON_REPLACEMENTS: Array<{ pattern: RegExp; replacement: string }> = [
+  { pattern: /^FAST[ _]PROMOTE:?\s*single[ _]elite[ _]hr[ _]contact/i, replacement: "Elite HR-shaped contact" },
+  { pattern: /^FAST[ _]PROMOTE:?\s*elite[ _]barrel/i, replacement: "Elite barrel detected" },
+  { pattern: /^FAST[ _]PROMOTE:?\s*massive[ _]single[ _]contact/i, replacement: "Massive single contact" },
+  { pattern: /^FAST[ _]PROMOTE:?\s*two[ _]hard[ _]hit[ _]balls/i, replacement: "Two hard-hit balls in a row" },
+  { pattern: /^FAST[ _]PROMOTE:?\s*pitcher[ _]collapse[ _]power/i, replacement: "Pitcher fatigue + power matchup" },
+  { pattern: /^FAST[ _]PROMOTE:?\s*barrel[ _]xba/i, replacement: "Barrel-quality xBA contact" },
+  { pattern: /^FAST[ _]PROMOTE:?\s*/i, replacement: "Strong promote: " },
+  { pattern: /^elite[ _]barrel/i, replacement: "Elite barrel" },
+  { pattern: /^two[ _]hard[ _]hit[ _]balls/i, replacement: "Two hard-hit balls" },
+  { pattern: /^massive[ _]single[ _]contact/i, replacement: "Massive single contact" },
+  { pattern: /^pitcher[ _]collapse[ _]power/i, replacement: "Pitcher fatigue + power matchup" },
+  { pattern: /^near[ _]hr[ _]contact/i, replacement: "Near-HR contact in last 5 ABs" },
+  { pattern: /^hr[ _]watch/i, replacement: "HR watch contact" },
+  { pattern: /^velocity[ _]drop/i, replacement: "Pitcher velocity dropping" },
+  { pattern: /^park[ _]boost/i, replacement: "Hitter-friendly park" },
+  { pattern: /^wind[ _]out/i, replacement: "Wind blowing out" },
+  { pattern: /^handedness[ _]edge/i, replacement: "Handedness matchup edge" },
+  { pattern: /^signal[ _]climb/i, replacement: "Signal score climbing" },
+];
+
+function humanizeReason(s: string): string {
+  const trimmed = (s ?? "").trim();
+  if (!trimmed) return trimmed;
+  for (const { pattern, replacement } of REASON_REPLACEMENTS) {
+    if (pattern.test(trimmed)) {
+      // If the replacement ends with a colon or space, append the
+      // remainder of the original string (preserves any payload after the
+      // prefix). Otherwise, return the replacement as-is.
+      if (replacement.endsWith(": ") || replacement.endsWith(" ")) {
+        return replacement + trimmed.replace(pattern, "").trim();
+      }
+      return replacement;
+    }
+  }
+  // Convert snake_case / SCREAMING_CASE leftovers to "Sentence case".
+  if (/^[A-Z0-9_]+$/.test(trimmed) || /_/.test(trimmed)) {
+    const sentence = trimmed
+      .replace(/_/g, " ")
+      .toLowerCase()
+      .replace(/^\w/, (c) => c.toUpperCase());
+    return sentence;
+  }
+  return trimmed;
+}
 
 function formatHalfInning(inning: number | null, half: string | null): string | null {
   if (inning == null) return null;
@@ -474,7 +560,18 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
     ? entry.supportingReasons
     : ((entry.userReasons && entry.userReasons.length > 0) ? entry.userReasons : entry.whyNowReasons);
   const reasonsRaw = headline ? [headline, ...(supporting ?? [])] : (supporting ?? []);
-  const reasons = Array.from(new Set((reasonsRaw ?? []).filter(isUserSafeReason)));
+  // Batch A — Phase 2: run safe reasons through humanizeReason() so legacy
+  // SCREAMING_CASE / "FAST PROMOTE:..." tokens render as plain English.
+  // Dedupe AFTER humanization so two different raw tokens that humanize to
+  // the same phrase only show once.
+  const reasons = Array.from(
+    new Set(
+      (reasonsRaw ?? [])
+        .filter(isUserSafeReason)
+        .map(humanizeReason)
+        .filter((r) => r.length > 0),
+    ),
+  );
   // Pregame zero-AB rows must not render any contact-implying bullets — the
   // server already empties supportingReasons, but defend against legacy data.
   const reasonsForRender = isPregameOnly ? reasons.slice(0, 1) : reasons;
@@ -624,13 +721,33 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
           row carries a tiered called_hit_* status, surface which tier the
           engine was at when the HR landed so users see Watch/Build/Ready
           calls counted as wins instead of buried as misses. Falls back to
-          rendering nothing for legacy plain `called_hit` rows. */}
-      {section === "cashed" && cashedFromTierLabel(entry.outcomeStatus) && (
+          rendering nothing for legacy plain `called_hit` rows.
+          Batch A — Phase 4: extended to also surface the peak /10 score so
+          users can see how strong the call got before it cashed. */}
+      {section === "cashed" && (cashedFromTierLabel(entry.outcomeStatus) || peak10 != null) && (
         <div
-          className="mt-1 text-[10px] text-emerald-300/80"
+          className="mt-1 flex items-center gap-2 text-[10px] text-emerald-300/80"
           data-testid={`text-cashed-from-tier-${entry.playerId}`}
         >
-          Cashed from {cashedFromTierLabel(entry.outcomeStatus)}
+          {cashedFromTierLabel(entry.outcomeStatus) && (
+            <span>Cashed from {cashedFromTierLabel(entry.outcomeStatus)}</span>
+          )}
+          {peak10 != null && (
+            <span className="text-emerald-400/90 font-mono font-semibold">
+              · Peak {peak10.toFixed(1)}/10
+            </span>
+          )}
+        </div>
+      )}
+      {/* Batch A — Phase 4: cashed cards show the headline reason as a brief
+          "Why" line so users see the signal that triggered the call. Pulled
+          from the same human-friendly reasons[] used in live cards. */}
+      {section === "cashed" && reasons.length > 0 && (
+        <div
+          className="mt-1 text-[10px] text-emerald-200/70 italic"
+          data-testid={`text-cashed-why-${entry.playerId}`}
+        >
+          Why: {reasons.slice(0, 2).join(" · ")}
         </div>
       )}
       {section === "cashed" && entry.onlyHomersVerified && (
@@ -692,31 +809,56 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
         </ul>
       )}
 
-      {/* Task #121 Step 4 — remaining-window urgency line. Lives directly
-          above the actions so the user sees it just before deciding. */}
-      {!isResolved && entry.remainingPAExpectation != null && entry.remainingPAExpectation > 0 && (() => {
+      {/* Batch A — Phase 3: timing labels. "Game final — resolved" beats
+          everything when isGameFinal is true on a card that briefly slipped
+          into a live section. Otherwise we show the remaining-PA / late-window
+          / next-PA-soon / expires-after copy based on currentInning + PA. */}
+      {(entry as any).isGameFinal && !isResolved && (
+        <div
+          className="mt-2 flex items-center gap-1 text-[11px] text-zinc-400"
+          data-testid={`text-game-final-${entry.playerId}`}
+        >
+          <Clock className="w-3 h-3" />
+          <span>Game final — resolved</span>
+        </div>
+      )}
+      {!isResolved && !(entry as any).isGameFinal && entry.remainingPAExpectation != null && entry.remainingPAExpectation > 0 && (() => {
         const pa = entry.remainingPAExpectation!;
         // Use live game-state inning (currentInning) for late-inning copy —
         // detectedInning is frozen and would misstate urgency for signals
         // detected early but now in the bottom of the order.
         const inn = entry.currentInning ?? entry.detectedInning ?? null;
         const lateInning = inn != null && inn >= 7;
+        const veryLate = inn != null && inn >= 8;
         const lowPA = pa <= 2;
         const critical = pa <= 1;
+        const nextSoon = pa >= 0.5 && pa <= 1.5;
         const urgent = critical || lowPA || lateInning;
         const tone = critical
           ? "text-amber-300"
           : urgent
           ? "text-amber-400"
           : "text-muted-foreground";
-        const expiresLabel = lateInning ? `expires after T${Math.max(8, inn ?? 8)}` : null;
+        // Phase 3 timing-label copy. We pick the SINGLE most informative
+        // label rather than stacking — e.g. "Late-window only" already
+        // implies short PA, so we don't add "~1 PA left" on top.
+        let label: string;
+        if (veryLate && lowPA) {
+          label = "Late-window only";
+        } else if (nextSoon) {
+          label = "Next PA likely soon";
+        } else {
+          const paText = `~${pa < 1 ? pa.toFixed(1) : Math.round(pa)} PA left`;
+          const expiresLabel = lateInning ? ` · expires after T${Math.max(8, inn ?? 8)}` : "";
+          label = `${paText}${expiresLabel}`;
+        }
         return (
           <div
             className={`mt-2 flex items-center gap-1 text-[11px] ${tone}`}
             data-testid={`text-remaining-window-${entry.playerId}`}
           >
             <Clock className="w-3 h-3" />
-            <span>~{pa < 1 ? pa.toFixed(1) : Math.round(pa)} PA left{expiresLabel ? ` · ${expiresLabel}` : ""}</span>
+            <span>{label}</span>
           </div>
         );
       })()}
@@ -775,14 +917,43 @@ interface LadderSectionProps {
 
 function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails, onPass, onAccept, acceptedKeys, freshlyCashedKeys }: LadderSectionProps) {
   const meta = SECTION_META[sectionKey];
-  const [collapsed, setCollapsed] = useState(meta.defaultCollapsed);
+  // Batch A — Phase 1: WATCH defaults to collapsed when it's holding more
+  // than 8 entries (per spec). All other sections honor SECTION_META.
+  const dynamicDefaultCollapsed =
+    sectionKey === "watch" && entries.length > 8 ? true : meta.defaultCollapsed;
+  const [collapsed, setCollapsed] = useState(dynamicDefaultCollapsed);
+  // Batch A — Phase 1 (reactive): track whether the user has explicitly
+  // toggled the section. If they have, auto-collapse never overrides their
+  // choice. If they haven't, WATCH re-evaluates the threshold whenever the
+  // entry count crosses 8 (in either direction) so a slowly-growing
+  // WATCH list will auto-collapse the moment it exceeds the cap.
+  const userToggledRef = useRef(false);
+  const handleToggle = () => {
+    userToggledRef.current = true;
+    setCollapsed((c) => !c);
+  };
+  useEffect(() => {
+    if (sectionKey !== "watch") return;
+    if (userToggledRef.current) return;
+    const shouldCollapse = entries.length > 8;
+    setCollapsed((prev) => (prev === shouldCollapse ? prev : shouldCollapse));
+  }, [sectionKey, entries.length]);
+  // Batch A — Phase 1: per-section visible-by-default card caps. Anything
+  // beyond the cap is hidden behind a "Show all (N)" expander so the user
+  // sees the most important rows first without flooding the screen.
+  const cap = SECTION_CARD_CAPS[sectionKey] ?? null;
+  const [showAll, setShowAll] = useState(false);
+  const visibleEntries = cap != null && !showAll && entries.length > cap
+    ? entries.slice(0, cap)
+    : entries;
+  const hiddenCount = entries.length - visibleEntries.length;
   const Icon = meta.icon;
 
   return (
     <Card className={`${meta.accent} border-2`} data-testid={`section-ladder-${sectionKey}`}>
       <button
         className="w-full flex items-center justify-between gap-2 p-3 text-left min-w-0"
-        onClick={() => setCollapsed(c => !c)}
+        onClick={handleToggle}
         data-testid={`button-toggle-section-${sectionKey}`}
       >
         <div className="flex items-center gap-2 min-w-0 shrink-0">
@@ -804,27 +975,53 @@ function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails, onPass
               No entries.
             </div>
           ) : (
-            entries.map(e => {
-              const dismissKey = entryDismissKey(e.playerId, e.gameId);
-              const justCashed = sectionKey === "cashed" && (freshlyCashedKeys?.has(dismissKey) ?? false);
-              return (
-                <div
-                  key={`${sectionKey}-${e.playerId}-${e.gameId}`}
-                  className={justCashed ? "animate-pulse-once" : undefined}
-                  data-testid={justCashed ? `wrap-cashed-pulse-${e.playerId}` : undefined}
+            <>
+              {visibleEntries.map(e => {
+                const dismissKey = entryDismissKey(e.playerId, e.gameId);
+                const justCashed = sectionKey === "cashed" && (freshlyCashedKeys?.has(dismissKey) ?? false);
+                return (
+                  <div
+                    key={`${sectionKey}-${e.playerId}-${e.gameId}`}
+                    className={justCashed ? "animate-pulse-once" : undefined}
+                    data-testid={justCashed ? `wrap-cashed-pulse-${e.playerId}` : undefined}
+                  >
+                    <LadderCard
+                      entry={e}
+                      section={sectionKey}
+                      onAddToSlip={onAddToSlip}
+                      onOpenDetails={onOpenDetails}
+                      onPass={onPass}
+                      onAccept={onAccept}
+                      isAccepted={acceptedKeys?.has(dismissKey) ?? false}
+                    />
+                  </div>
+                );
+              })}
+              {hiddenCount > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full h-7 text-[11px] text-muted-foreground hover:text-foreground"
+                  onClick={() => setShowAll(true)}
+                  data-testid={`button-show-all-${sectionKey}`}
                 >
-                  <LadderCard
-                    entry={e}
-                    section={sectionKey}
-                    onAddToSlip={onAddToSlip}
-                    onOpenDetails={onOpenDetails}
-                    onPass={onPass}
-                    onAccept={onAccept}
-                    isAccepted={acceptedKeys?.has(dismissKey) ?? false}
-                  />
-                </div>
-              );
-            })
+                  <ChevronDown className="w-3 h-3 mr-1" />
+                  Show all ({hiddenCount} more)
+                </Button>
+              )}
+              {showAll && cap != null && entries.length > cap && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full h-7 text-[11px] text-muted-foreground hover:text-foreground"
+                  onClick={() => setShowAll(false)}
+                  data-testid={`button-show-less-${sectionKey}`}
+                >
+                  <ChevronRight className="w-3 h-3 mr-1 rotate-90" />
+                  Show less
+                </Button>
+              )}
+            </>
           )}
         </div>
       )}
@@ -924,10 +1121,29 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
       for (const e of list) (isLiveButNoAb(e) ? parked : keep).push(e);
       return { keep, parked };
     };
-    const attackP = partitionLive(filterDismissed(rawSections.attackNow ?? []));
-    const readyP = partitionLive(filterDismissed((rawSections as any).ready ?? []));
-    const buildingP = partitionLive(filterDismissed(rawSections.building ?? []));
-    const watchP = partitionLive(filterDismissed(rawSections.watch ?? []));
+    // Batch A — Phase 8: final-game reconciliation guard. Any row whose
+    // game has gone final must NOT appear in an active live section
+    // (FIRE/READY/BUILD/WATCH) — even if the server briefly flagged it
+    // there before the next reconcile tick. The server already stamps
+    // isGameFinal at the request boundary; we enforce the contract here
+    // by filtering out final-game rows from active sections.
+    const filterActiveLive = (list: HrRadarLadderEntry[]): HrRadarLadderEntry[] =>
+      list.filter((e) => (e as any).isGameFinal !== true);
+    const attackP = partitionLive(filterActiveLive(filterDismissed(rawSections.attackNow ?? [])));
+    const readyP = partitionLive(filterActiveLive(filterDismissed((rawSections as any).ready ?? [])));
+    const buildingP = partitionLive(filterActiveLive(filterDismissed(rawSections.building ?? [])));
+    const watchP = partitionLive(filterActiveLive(filterDismissed(rawSections.watch ?? [])));
+    // Batch A — Phase 5: split admin-only outcomes (uncalled_hr,
+    // early_hr_insufficient_sample) into a separate Model Review bucket
+    // so they don't pollute the user-facing MISSED column. Non-admins
+    // never see Model Review at all (controlled by `order` array below).
+    const allDead = rawSections.dead ?? [];
+    const userMissed = allDead.filter(
+      (e) => !ADMIN_ONLY_DEAD_STATUSES.has((e.outcomeStatus ?? "") as string),
+    );
+    const adminModelReview = allDead.filter((e) =>
+      ADMIN_ONLY_DEAD_STATUSES.has((e.outcomeStatus ?? "") as string),
+    );
     return {
       attackNow: attackP.keep,
       // Goldmaster v1 — additive Ready bucket (filtered like other live sections).
@@ -945,13 +1161,8 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
         ...watchP.parked,
       ],
       cashed: rawSections.cashed ?? [],
-      // Phase 4 — non-admin users never see calibration-only outcomes
-      // (uncalled_hr, early_hr_insufficient_sample). They're useful only
-      // for admins reviewing why the engine missed; surfacing them to
-      // regular users creates noise that looks like product failure.
-      dead: (rawSections.dead ?? []).filter(
-        e => isAdmin || !ADMIN_ONLY_DEAD_STATUSES.has((e.outcomeStatus ?? "") as string),
-      ),
+      dead: userMissed,
+      modelReview: adminModelReview,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawSections, dismissed, isAdmin]);
@@ -1054,9 +1265,14 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
   // sections so users see the parking lot only after scrolling past
   // actionable rows. Hidden when empty (handled by LadderSection's
   // empty-state branch already).
-  const allOrder: SectionKey[] = ["attackNow", "ready", "building", "watch", "noAbYet", "cashed", "dead"];
+  // Batch A — Phase 5: `modelReview` only appears for admins, at the very
+  // bottom (after CASHED + MISSED) so it never competes with user-facing
+  // sections. Hidden completely when not admin.
+  const allOrder: SectionKey[] = isAdmin
+    ? ["attackNow", "ready", "building", "watch", "noAbYet", "cashed", "dead", "modelReview"]
+    : ["attackNow", "ready", "building", "watch", "noAbYet", "cashed", "dead"];
   const order: SectionKey[] = hideFinished
-    ? allOrder.filter(k => k !== "cashed" && k !== "dead")
+    ? allOrder.filter(k => k !== "cashed" && k !== "dead" && k !== "modelReview")
     : allOrder;
   const finishedCount = counts.cashed + counts.dead;
   const refreshSpinning = isRefreshing || isFetching;
@@ -1146,6 +1362,9 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
         // its only value is grouping, so an empty "NO AB YET" header
         // would just be noise in its own right.
         if (key === "noAbYet" && sections.noAbYet.length === 0) return null;
+        // Batch A — Phase 5: same rule for admin Model Review — empty
+        // section adds no signal, hide it.
+        if (key === "modelReview" && (sections as any).modelReview?.length === 0) return null;
         return (
           <LadderSection
             key={key}
