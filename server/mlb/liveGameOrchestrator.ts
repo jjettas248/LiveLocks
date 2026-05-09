@@ -40,7 +40,7 @@ import { MARKET_QUALIFY_FLOOR, ALL_MLB_MARKETS } from "./types";
 import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
 import { getCanonicalSidedProbability } from "./probabilityEngine";
 import { computeSignalScore, computeSignalScoreByFamily, scoreHRRadar, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily, deriveSignalTier } from "./signalScore";
-import { detectNearHrContact } from "./nearHrContact";
+import { detectNearHrContact, detectNearHrContactPeak } from "./nearHrContact";
 import { MLB_CALIBRATION_VERSION } from "./diagnosticsBuffer";
 import { recordDriftSnapshot } from "./goldmasterGuard";
 import {
@@ -1888,28 +1888,50 @@ export class LiveGameOrchestrator {
     // stamp signalType:"hr_watch" downstream. We deliberately use the SAME
     // input.contactQuality.priorABResults that the rest of the engine already
     // sees — no cross-tick cache, no parallel data path.
-    const _lastAbForNearHr: any = (input.contactQuality?.priorABResults ?? []).slice(-1)[0] ?? null;
-    const nearHrResult = _lastAbForNearHr
-      ? detectNearHrContact({
-          ev: _lastAbForNearHr.exitVelocity ?? null,
-          la: _lastAbForNearHr.launchAngle ?? null,
-          distance: _lastAbForNearHr.distance ?? null,
-          xba: _lastAbForNearHr.xba ?? null,
-        })
-      : { tier: null as null | "watch" | "lean", drivers: [] as string[], suppressionReason: "no_at_bat" as string | undefined };
+    // Phase 2.5 fix (May 2026) — scan the last 5 ABs and take the
+    // strongest near-HR tier seen, instead of only the most recent AB.
+    // Real-world miss: Brandon Valenzuela (TOR @ HOU, B5) AB#3 was a
+    // textbook lean (104.4 EV / 24° / 382 ft / barrel / xBA .830) but
+    // AB#4 was a flat 99.6 mph 6° liner. The old "last AB only" path
+    // saw AB#4, returned tier=null, the alert peakReadinessScore stayed
+    // at 0, and the eventual HR was graded uncalled. Scanning a small
+    // recent window preserves peak detection across the next AB.
+    const _priorAbsForNearHr: any[] = (input.contactQuality?.priorABResults ?? []);
+    const nearHrPeak = detectNearHrContactPeak(
+      _priorAbsForNearHr.map((ab: any) => ({
+        ev: ab?.exitVelocity ?? null,
+        la: ab?.launchAngle ?? null,
+        distance: ab?.distance ?? null,
+        xba: ab?.xba ?? null,
+      })),
+      5,
+    );
+    const nearHrResult: { tier: null | "watch" | "lean"; drivers: string[]; suppressionReason?: string } = {
+      tier: nearHrPeak.tier,
+      drivers: nearHrPeak.drivers,
+      suppressionReason: nearHrPeak.suppressionReason,
+    };
+    const _sourceAb: any =
+      nearHrPeak.sourceAbIndex != null
+        ? _priorAbsForNearHr[nearHrPeak.sourceAbIndex]
+        : (_priorAbsForNearHr.slice(-1)[0] ?? null);
+    const _lastAbForNearHr: any = _priorAbsForNearHr.slice(-1)[0] ?? null;
     if (nearHrResult.tier) {
       const detRec = {
         player: output.playerName,
         team: input.team ?? null,
         market: output.market,
         inning: input.inning ?? null,
-        result: _lastAbForNearHr?.outcome ?? null,
-        ev: _lastAbForNearHr?.exitVelocity ?? null,
-        la: _lastAbForNearHr?.launchAngle ?? null,
-        distance: _lastAbForNearHr?.distance ?? null,
-        xba: _lastAbForNearHr?.xba ?? null,
+        result: _sourceAb?.outcome ?? null,
+        ev: _sourceAb?.exitVelocity ?? null,
+        la: _sourceAb?.launchAngle ?? null,
+        distance: _sourceAb?.distance ?? null,
+        xba: _sourceAb?.xba ?? null,
         signalTier: nearHrResult.tier,
         drivers: nearHrResult.drivers,
+        sourceAbIndex: nearHrPeak.sourceAbIndex,
+        scannedWindow: Math.min(5, _priorAbsForNearHr.length),
+        totalAbs: _priorAbsForNearHr.length,
       };
       console.log("[MLB_HR_WATCH_DETECTED]", detRec);
       import("./diagnosticsBuffer")
