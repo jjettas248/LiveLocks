@@ -7,6 +7,7 @@ import {
   isVolatileArchetype,
   isImpactedArchetype,
 } from "./archetypes";
+import { finalizeNbaProbability, deriveFreshOdds } from "./probabilityFinalizer";
 
 const STAT_SIGMA_FLOORS: Record<string, number> = {
   points: 3.0,
@@ -42,13 +43,12 @@ function phi(z: number): number {
   return 0.5 * (1.0 + sign * y);
 }
 
-export type SingleStat = "points" | "rebounds" | "assists" | "steals" | "blocks" | "threes";
-export type ComboStat = "pts_reb" | "pts_ast" | "reb_ast" | "pts_reb_ast";
-export type MarketType = SingleStat | ComboStat;
-
-export function isComboMarket(m: string): boolean {
-  return m === "pts_reb" || m === "pts_ast" || m === "reb_ast" || m === "pts_reb_ast" || m === "stl_blk";
-}
+// Market taxonomy moved to ./marketTaxonomy to break the
+// probabilityEngine ↔ probabilityFinalizer cyclic ESM import.
+import { isComboMarket } from "./marketTaxonomy";
+import type { SingleStat, ComboStat, MarketType } from "./marketTaxonomy";
+export { isComboMarket };
+export type { SingleStat, ComboStat, MarketType };
 
 export interface StatRates {
   points: number;
@@ -104,6 +104,10 @@ export interface EngineInput {
     rho_PA: number;
     rho_RA: number;
   }>;
+
+  // NBA Calibration v2 — odds freshness for the elite gate. When the book
+  // line is stale (>10min) the gate refuses to award elite conviction.
+  oddsAgeSec?: number;
 }
 
 export interface FragilityInputs {
@@ -417,15 +421,48 @@ export function computeProbability(
     archetype: input.archetype,
     underBiasCorrectionActive: underBiasActive,
   };
-  const { calibrated: P_side_calibrated, track: calibrationTrack } = calibrate(P_side_directional, calCtx);
+  const { calibrated: P_side_calibrated, track: calibrationTrackBase } = calibrate(P_side_directional, calCtx);
 
-  // ENGINE-AS-TRUTH: archetype safety ceilings removed. The engine's
-  // calibrated probability is the source of truth — caps were masking
-  // calibration errors instead of fixing them. Hard rails [0.02, 0.98]
-  // applied later in storage are the only numeric bounds.
-  const P_side_final = P_side_calibrated;
-  const confidenceCeilingApplied = false;
-  const ceilingReason: string | null = null;
+  // NBA Calibration v2 — finalizer with dampened modifier stacking, market
+  // caps, elite gate, hard 82 ceiling, fragility subtraction. NEVER raises.
+  // Conflict-survivor cap is applied at the route layer where both sides
+  // of the family are visible. See server/nba/probabilityFinalizer.ts.
+  const _projectionDeltaPctEng = input.line && Math.abs(input.line) > 0
+    ? Math.abs(projection - input.line) / Math.max(Math.abs(input.line), 1)
+    : 0;
+  const _minutesCertaintyEng = Math.max(0, Math.min(1,
+    1 - (Math.sqrt(Math.max(0, input.minutes.variance ?? 0)) / 8)
+  ));
+  const _finalizerSideEng: "OVER" | "UNDER" = rawSide === "NO_SIGNAL" ? "OVER" : rawSide;
+  // Real elite-gate inputs (no longer hardcoded):
+  //   • freshOdds: pulled from input.oddsAgeSec when caller provides it;
+  //     odds older than 10 min are treated as stale.
+  //   • edgeFromGapOnly: when projection separation is < 4% the edge is
+  //     dominated by the model/book gap rather than projection conviction.
+  // Fail-closed: if oddsAgeSec is missing/unknown, freshOdds is FALSE.
+  // Centralized in deriveFreshOdds so engine, storage, and audit script
+  // all share the exact same rule.
+  const _freshOddsEng = deriveFreshOdds(input.oddsAgeSec);
+  const _edgeFromGapOnlyEng = _projectionDeltaPctEng < 0.04;
+  const _finalizerEng = finalizeNbaProbability(P_side_calibrated, {
+    rawSide: _finalizerSideEng,
+    market: input.market,
+    archetype: input.archetype,
+    isCombo: combo,
+    fragilityScore,
+    isPlayoffs: false,
+    minutesCertainty: _minutesCertaintyEng,
+    projectionDeltaPct: _projectionDeltaPctEng,
+    freshOdds: _freshOddsEng,
+    edgeFromGapOnly: _edgeFromGapOnlyEng,
+    conflictingSideSuppressed: false,
+  });
+  const P_side_final = _finalizerEng.pSideFinal;
+  const confidenceCeilingApplied = _finalizerEng.capApplied;
+  const ceilingReason: string | null = _finalizerEng.capReason;
+  const calibrationTrack = _finalizerEng.capApplied
+    ? `${calibrationTrackBase}+nbaCalV2:${_finalizerEng.capReason ?? "capped"}`
+    : calibrationTrackBase;
 
   let finalProbabilityOver: number, finalProbabilityUnder: number;
   if (rawSide === "OVER") {

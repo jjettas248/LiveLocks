@@ -116,6 +116,52 @@ interface BatchSignal {
   [key: string]: any;
 }
 
+// NBA Calibration v2 — conflicting OVER/UNDER suppression. When the engine
+// surfaces both sides of the same player+market-family+game on a comparable
+// line (alt lines / line variants of the same stat), keep the higher-
+// conviction side, drop the weaker, and cap the survivor at 68%.
+// Mutates `engineDiagnostics.calibrationVersion` / `confidenceCeilingApplied`
+// / `ceilingReason` so admin analytics see the cap.
+//
+// Market family normalization handles common alt-line / variant naming so
+// e.g. `points`, `points_alt`, `points_15.5`, `pts` all collapse to the
+// same family — otherwise the suppression silently misses real conflicts.
+function nbaMarketFamilyKey(statType: string | undefined): string {
+  const raw = String(statType ?? "").toLowerCase().trim();
+  if (!raw) return "unknown";
+  // Strip trailing line numbers ("points_15.5" → "points") and common
+  // variant suffixes (_alt, _alt1, _yes, _no, _o, _u, _over, _under).
+  let s = raw
+    .replace(/_alt\d*$/i, "")
+    .replace(/_(yes|no|o|u|over|under)$/i, "")
+    .replace(/[_-]?\d+(\.\d+)?$/, "");
+  // Canonical aliases
+  const alias: Record<string, string> = {
+    pts: "points",
+    reb: "rebounds",
+    ast: "assists",
+    stl: "steals",
+    blk: "blocks",
+    "3pm": "threes",
+    fg3m: "threes",
+    three_pointers_made: "threes",
+    blocks_steals: "stl_blk",
+    steals_blocks: "stl_blk",
+    pra: "pts_reb_ast",
+    pts_ast_reb: "pts_reb_ast",
+    points_rebounds_assists: "pts_reb_ast",
+  };
+  s = alias[s] ?? s;
+  return s;
+}
+// Pure conflict-suppression logic lives in server/nba/conflictSuppression.ts
+// so the regression audit can exercise it without booting Express.
+import { applyNbaConflictSuppression as _applyNbaConflictSuppressionPure } from "./nba/conflictSuppression";
+
+function applyNbaConflictSuppression<T extends BatchSignal>(signals: T[]): T[] {
+  return _applyNbaConflictSuppressionPure(signals, nbaMarketFamilyKey);
+}
+
 function applyBatchFamilySuppression<T extends BatchSignal>(signals: T[]): T[] {
   const familyMap = new Map<string, T[]>();
   for (const s of signals) {
@@ -5385,6 +5431,13 @@ export async function registerRoutes(
                 liveFta,
                 liveFg3m,
                 liveFg3a,
+                // Forward measured odds-fetch age (sec) so the NBA finalizer
+                // elite gate can pass under genuinely fresh odds. Missing
+                // oddsFetchedAt → NaN → finalizer treats as not-fresh
+                // (fail-closed via deriveFreshOdds).
+                oddsAgeSec: typeof oddsEntry.oddsFetchedAt === "number"
+                  ? Math.max(0, Math.round((Date.now() - oddsEntry.oddsFetchedAt) / 1000))
+                  : undefined,
               });
 
               // SIGNAL EVALUATION CONTRACT — strict sequential continues.
@@ -5585,6 +5638,15 @@ export async function registerRoutes(
       allSignals.push(...suppressedSignals);
       console.log(`[FAMILY_SUPPRESS] live-signals: ${preSuppressionCount} → ${allSignals.length} after family suppression`);
 
+      // NBA Calibration v2 — conflicting OVER/UNDER side suppression.
+      const preConflictCount = allSignals.length;
+      const conflictResolved = applyNbaConflictSuppression(allSignals);
+      allSignals.length = 0;
+      allSignals.push(...conflictResolved);
+      if (preConflictCount !== allSignals.length) {
+        console.log(`[NBA_CONFLICT_SUPPRESS] live-signals: ${preConflictCount} → ${allSignals.length}`);
+      }
+
       const survivingKeys = new Set(allSignals.map(s => `${s.playerId}|${s.statType}`));
       for (const pid of Object.keys(engineOutput)) {
         const pData = engineOutput[Number(pid)];
@@ -5748,6 +5810,18 @@ export async function registerRoutes(
             playerVolatilityScore: diag.playerVolatilityScore,
             comboCovarianceEstimate: diag.comboCovarianceEstimate,
             engineVersion: diag.engineVersion,
+            // NBA Calibration v2 — forward finalizer telemetry through to
+            // playTracker so the persistence layer can emit structured
+            // [NBA_CALIBRATION_V2_PERSIST] logs (no DB column needed).
+            calibrationVersion: diag.calibrationVersion,
+            finalizerCapReason: diag.finalizerCapReason,
+            finalizerMarketRiskTier: diag.finalizerMarketRiskTier,
+            finalizerEliteGateApplied: diag.finalizerEliteGateApplied,
+            finalizerHighBucketCapped: diag.finalizerHighBucketCapped,
+            finalizerInitialPct: diag.finalizerInitialPct,
+            finalizerFinalPct: diag.finalizerFinalPct,
+            conflictingSideSuppressed: diag.conflictingSideSuppressed,
+            conflictingSignalSuppressed: diag.conflictingSignalSuppressed ?? diag.conflictingSideSuppressed,
           } : undefined,
         }, storage).catch(console.warn);
       }
@@ -6645,6 +6719,13 @@ export async function registerRoutes(
                   // mis-bucketed and the engine falls back to season averages.
                   gameId: game.gameId,
                   gameDate: todayET(),
+                  // Forward measured odds-fetch age (sec) so the NBA finalizer
+                  // elite gate can pass under genuinely fresh odds. Missing
+                  // oddsFetchedAt → undefined → finalizer treats as not-fresh
+                  // (fail-closed via deriveFreshOdds).
+                  oddsAgeSec: typeof effectiveEntry.oddsFetchedAt === "number"
+                    ? Math.max(0, Math.round(htOddsAge / 1000))
+                    : undefined,
                 });
 
                 // SIGNAL EVALUATION CONTRACT — evaluation order is strict, do not reorder:
@@ -6935,6 +7016,19 @@ export async function registerRoutes(
 
       console.log(`[FAMILY_SUPPRESS] halftime-plays: ${htPreSuppression} → ${allPlays.length}, volatile: ${volPreSuppression} → ${volatilePlays.length}`);
 
+      // NBA Calibration v2 — conflicting OVER/UNDER suppression on both pools.
+      const htConflictPre = allPlays.length;
+      const htConflictResolved = applyNbaConflictSuppression(allPlays);
+      allPlays.length = 0;
+      allPlays.push(...htConflictResolved);
+      const volConflictPre = volatilePlays.length;
+      const volConflictResolved = applyNbaConflictSuppression(volatilePlays);
+      volatilePlays.length = 0;
+      volatilePlays.push(...volConflictResolved);
+      if (htConflictPre !== allPlays.length || volConflictPre !== volatilePlays.length) {
+        console.log(`[NBA_CONFLICT_SUPPRESS] halftime: ${htConflictPre}→${allPlays.length}, volatile: ${volConflictPre}→${volatilePlays.length}`);
+      }
+
       const familyMap = new Map<string, { player: string; gameId: string; familyId: string; markets: string[]; flagship: string | null; derivatives: string[] }>();
       for (const p of allPlays) {
         const fid = `${p.playerName}|${p.gameId}|${p.betDirection}`;
@@ -7183,6 +7277,16 @@ export async function registerRoutes(
             playerVolatilityScore: diag.playerVolatilityScore,
             comboCovarianceEstimate: diag.comboCovarianceEstimate,
             engineVersion: diag.engineVersion,
+            // NBA Calibration v2 — forward finalizer telemetry (halftime path).
+            calibrationVersion: diag.calibrationVersion,
+            finalizerCapReason: diag.finalizerCapReason,
+            finalizerMarketRiskTier: diag.finalizerMarketRiskTier,
+            finalizerEliteGateApplied: diag.finalizerEliteGateApplied,
+            finalizerHighBucketCapped: diag.finalizerHighBucketCapped,
+            finalizerInitialPct: diag.finalizerInitialPct,
+            finalizerFinalPct: diag.finalizerFinalPct,
+            conflictingSideSuppressed: diag.conflictingSideSuppressed,
+            conflictingSignalSuppressed: diag.conflictingSignalSuppressed ?? diag.conflictingSideSuppressed,
           } : undefined,
         }, storage).catch(console.warn);
       }
@@ -9014,6 +9118,8 @@ export function registerAnalyticsRoutes(app: Express): void {
   app.get("/api/public-analytics/summary", async (_req, res) => {
     try {
       const { getPublicAnalyticsSummary } = await import("./services/publicAnalyticsService");
+      // Public response — admin-only calibration diagnostics
+      // (highBucketWarning / overconfidenceDelta) are stripped by default.
       const summary = await getPublicAnalyticsSummary();
       return res.json(summary);
     } catch (e: any) {
@@ -9023,6 +9129,20 @@ export function registerAnalyticsRoutes(app: Express): void {
         bySport: [],
         recentResults: [],
       });
+    }
+  });
+
+  // Admin-gated variant — includes NBA Calibration v2 high-bucket warning
+  // and overconfidence delta for internal calibration monitoring. Same
+  // data shape as the public summary, plus the admin-only fields.
+  app.get("/api/admin/analytics/summary", requireAdmin, async (_req, res) => {
+    try {
+      const { getPublicAnalyticsSummary } = await import("./services/publicAnalyticsService");
+      const summary = await getPublicAnalyticsSummary({ admin: true });
+      return res.json(summary);
+    } catch (e: any) {
+      console.error("[admin/analytics-summary]", e.message);
+      return res.status(500).json({ error: "Failed to load admin analytics summary" });
     }
   });
 

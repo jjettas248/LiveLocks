@@ -32,6 +32,22 @@ export interface EngineDiagnostics {
   mu?: number;
   sigma?: number;
   zScore?: number;
+  // ── NBA Calibration v2 — finalizer telemetry (NBA-only) ─────────────────
+  // Stamped by the NBA finalizer in storage.ts / probabilityEngine.ts so
+  // the persisted play carries calibration provenance even though we don't
+  // mint new DB columns. The route trackPlay whitelist forwards these
+  // fields and the playTracker logs them via [NBA_CALIBRATION_V2_PERSIST]
+  // so admin can grep persistence parity. The cap reason is also folded
+  // into calibrationTrack as `+nbaCalV2:<reason>` for query-friendly use.
+  calibrationVersion?: string;
+  finalizerCapReason?: string | null;
+  finalizerMarketRiskTier?: string;
+  finalizerEliteGateApplied?: boolean;
+  finalizerHighBucketCapped?: boolean;
+  finalizerInitialPct?: number;
+  finalizerFinalPct?: number;
+  conflictingSideSuppressed?: boolean;
+  conflictingSignalSuppressed?: boolean;
 }
 
 export interface TrackableSignal {
@@ -221,6 +237,39 @@ export async function trackPlay(
 
   if (!result.isDuplicate) {
     console.log(`[PlayTracker] Tracked play ${id} — ${signal.playerName} ${signal.market} ${signal.direction} ${signal.line} (${signal.sport}) sportsbook=${signal.sportsbook}`);
+    // NBA Calibration v2 persistence-parity log. The DB schema does not
+    // include dedicated columns for the finalizer telemetry, so we emit a
+    // structured fallback log per persisted NBA play so admin can verify
+    // engine→persistence parity end-to-end.
+    if (signal.sport === "nba" && d?.calibrationVersion) {
+      const conflictingSuppressed =
+        d.conflictingSignalSuppressed ?? d.conflictingSideSuppressed ?? false;
+      console.log("[NBA_CALIBRATION_V2_PERSIST]", JSON.stringify({
+        id,
+        player: signal.playerName,
+        market: signal.market,
+        direction: signal.direction,
+        line: signal.line,
+        probability: signal.probability,
+        calibrationVersion: d.calibrationVersion,
+        // Canonical calibration-v2 contract field names. Aliases retained
+        // for backwards compatibility with existing log consumers.
+        rawProbability: d.finalizerInitialPct ?? null,
+        finalProbability: d.finalizerFinalPct ?? null,
+        probabilityCapApplied: d.finalizerCapReason !== null && d.finalizerCapReason !== undefined,
+        capReason: d.finalizerCapReason ?? null,
+        conflictingSignalSuppressed: conflictingSuppressed,
+        // Legacy/alias field names — kept so older greps keep working.
+        finalizerCapReason: d.finalizerCapReason ?? null,
+        finalizerMarketRiskTier: d.finalizerMarketRiskTier ?? null,
+        finalizerEliteGateApplied: d.finalizerEliteGateApplied ?? false,
+        finalizerHighBucketCapped: d.finalizerHighBucketCapped ?? false,
+        conflictingSideSuppressed: conflictingSuppressed,
+        finalizerInitialPct: d.finalizerInitialPct ?? null,
+        finalizerFinalPct: d.finalizerFinalPct ?? null,
+        calibrationTrack: d.calibrationTrack ?? null,
+      }));
+    }
   }
 
   return result;

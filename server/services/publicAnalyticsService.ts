@@ -63,6 +63,17 @@ export type NbaSegment = {
   avgEdge: number;
   topBucketWinRate: number; // 80-100 prob bucket win rate
   buckets: Array<{ bucket: string; plays: number; winRate: number }>;
+  // ── NBA Calibration v2 — high-bucket overconfidence diagnostics ─────────
+  // ADMIN-ONLY. highBucketWarning fires when the 80-100% bucket has ≥5
+  // settled plays AND the bucket's win rate is below the 55% break-even
+  // line — that's the failure mode the calibrator is meant to prevent.
+  // overconfidenceDelta is reported against the bucket midpoint (90%) so
+  // the value is comparable across days regardless of which exact
+  // probability the engine produced. Stripped from public responses; only
+  // included when getPublicAnalyticsSummary({ admin: true }) is called.
+  highBucketWarning?: boolean;
+  overconfidenceDelta?: number; // pp (90 - topBucketWinRate)
+  highBucketPlays?: number;
   // ── Phase 8: Playoff role-truth breakdowns (only populated when isPlayoffs) ─
   // Derived from calibrationTrack markers stamped by the role gate / fragility
   // pipeline. Lets admin verify the new layer is actually moving the high-bucket
@@ -128,7 +139,7 @@ function bucketForProbability(p: number): string {
   return "<50";
 }
 
-function buildNbaSegment(plays: any[], isPlayoffs: boolean): NbaSegment {
+function buildNbaSegment(plays: any[], isPlayoffs: boolean, includeAdminFields: boolean = false): NbaSegment {
   const wins = plays.filter(p => p.result === "hit").length;
   const losses = plays.filter(p => p.result === "miss").length;
   const decided = wins + losses;
@@ -168,6 +179,19 @@ function buildNbaSegment(plays: any[], isPlayoffs: boolean): NbaSegment {
   const top = bucketMap.get("80-100");
   const topDecided = top ? top.wins + top.losses : 0;
   const topBucketWinRate = top && topDecided > 0 ? Math.round((top.wins / topDecided) * 1000) / 10 : 0;
+
+  // ── NBA Calibration v2 — high-bucket overconfidence detector ──────────
+  // Warns when the 80-100% bucket has accumulated a meaningful sample
+  // (≥5 graded plays) AND the bucket's win rate sits below the 55%
+  // break-even line — that's the failure mode the calibrator is designed
+  // to prevent. overconfidenceDelta is reported against the bucket
+  // midpoint (90%) so the value is comparable across days regardless of
+  // which exact probability the engine produced.
+  const highBucketPlays = top?.total ?? 0;
+  const overconfidenceDelta = topDecided > 0
+    ? Math.round((90 - topBucketWinRate) * 10) / 10
+    : 0;
+  const highBucketWarning = topDecided >= 5 && topBucketWinRate < 55;
 
   // ── Phase 8: Playoff role-truth breakdowns ──────────────────────────────
   // Bucket plays by whether the role gate clamped them (no_rotation_data,
@@ -270,6 +294,13 @@ function buildNbaSegment(plays: any[], isPlayoffs: boolean): NbaSegment {
     avgEdge: edgeCount > 0 ? Math.round((edgeSum / edgeCount) * 100) / 100 : 0,
     topBucketWinRate,
     buckets,
+    // Admin-only — omitted entirely from public responses so we don't
+    // expose calibration-weakness telemetry to non-admin users.
+    ...(includeAdminFields ? {
+      highBucketWarning,
+      overconfidenceDelta,
+      highBucketPlays,
+    } : {}),
     roleGateBuckets,
     comboVsSingle,
     playoffRoleCertaintyBuckets,
@@ -279,7 +310,8 @@ function buildNbaSegment(plays: any[], isPlayoffs: boolean): NbaSegment {
   };
 }
 
-export async function getPublicAnalyticsSummary(): Promise<PublicAnalyticsSummary> {
+export async function getPublicAnalyticsSummary(opts: { admin?: boolean } = {}): Promise<PublicAnalyticsSummary> {
+  const includeAdminFields = opts.admin === true;
   const sevenDaysStr = daysAgoET(7);
 
   const settled = await db
@@ -347,8 +379,8 @@ export async function getPublicAnalyticsSummary(): Promise<PublicAnalyticsSummar
   const nbaPlayoffs = nbaPlays.filter(p => isNbaPlayoffDate(p.gameDate));
   const nbaRegular = nbaPlays.filter(p => !isNbaPlayoffDate(p.gameDate));
   const nbaSeasonSegmentation = {
-    regularSeason: buildNbaSegment(nbaRegular, false),
-    playoffs: buildNbaSegment(nbaPlayoffs, true),
+    regularSeason: buildNbaSegment(nbaRegular, false, includeAdminFields),
+    playoffs: buildNbaSegment(nbaPlayoffs, true, includeAdminFields),
   };
 
   const recentResults = settled.slice(0, 5).map(p => ({

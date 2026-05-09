@@ -165,6 +165,9 @@ export const calculateProbabilitySchema = z.object({
   isDebug: z.boolean().optional(),
   bookOdds: z.coerce.number().optional(),
   gameDate: z.string().optional(),
+  // NBA Calibration v2 — odds freshness signal for the elite gate. When the
+  // book line is stale (>10min) the gate refuses to award elite conviction.
+  oddsAgeSec: z.coerce.number().optional(),
 });
 
 export type CalculateProbabilityRequest = z.infer<typeof calculateProbabilitySchema>;

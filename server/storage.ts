@@ -15,6 +15,7 @@ import { getPlayerUsage, getTeamDefenseMatchup, computeUsageAdjustment, computeD
 import { getPlayoffRotationProfile, type PlayoffRotationProfile } from "./services/nbaRotationHistoryService";
 import { classifyArchetype as classifyNBAArchetype, type NBAArchetype, VARIANCE_MULTIPLIERS, MINUTES_FRAGILITY_MULTIPLIERS, CORRELATION_DEFAULTS, COMBO_VARIANCE_EXTRA, isVolatileArchetype, isImpactedArchetype, isStableArchetype, getSafetyCeiling, getPlayoffSafetyCeiling, getPlayoffFragilityMultiplier } from "./nba/archetypes";
 import { isUnderBiasCorrectionActive } from "./nba/directionalBias";
+import { finalizeNbaProbability, NBA_CALIBRATION_VERSION, deriveFreshOdds } from "./nba/probabilityFinalizer";
 import {
   players,
   teamDefense,
@@ -1177,18 +1178,54 @@ export class DatabaseStorage implements IStorage {
       calibrationTrack += `+playoff_shrink_${baseShrink.toFixed(2)}x${archetypePenalty.toFixed(2)}`;
     }
 
-    // ENGINE-AS-TRUTH: archetype safety ceilings removed for ALL game
-    // states. Caps were masking calibration errors — the calibrated
-    // probability is the source of truth. Hard rails [2, 98] applied
-    // below at percentage scale are the only numeric bounds.
+    // NBA Calibration v2 — finalizer with dampened modifier stacking, market
+    // caps, elite gate, hard 82 ceiling, fragility subtraction. NEVER raises
+    // probability. Conflict-survivor cap is applied at the route layer where
+    // both sides of the family are visible. See server/nba/probabilityFinalizer.ts.
     const regularCeiling = getSafetyCeiling(nbaArchetype, isComboStat);
     const playoffCeiling = isPlayoffs ? getPlayoffSafetyCeiling(nbaArchetype, isComboStat) : regularCeiling;
     const appliedCeiling = isPlayoffs && isStableArchetype(nbaArchetype)
       ? playoffCeiling
       : Math.min(regularCeiling, playoffCeiling);
-    const P_side_final = P_side_calibrated;
-    const confidenceCeilingApplied = false;
-    const ceilingReason: string | null = null;
+
+    const _projectionDeltaPct = req.liveLine && Math.abs(req.liveLine) > 0
+      ? Math.abs(expectedTotal - req.liveLine) / Math.max(Math.abs(req.liveLine), 1)
+      : 0;
+    const _minutesCertainty = Math.max(0, Math.min(1, 1 - (Math.sqrt(Math.max(0, minVar)) / 8)));
+    const _finalizerRawSide: "OVER" | "UNDER" = rawSide === "NO_SIGNAL" ? "OVER" : rawSide;
+    // Real elite-gate inputs (no longer hardcoded):
+    //   • freshOdds: derived from req.oddsAgeSec when available; treat odds
+    //     older than 10 min as stale.
+    //   • edgeFromGapOnly: when projection separation is < 4% the edge is
+    //     dominated by the model/book gap rather than projection conviction
+    //     — too thin to qualify as "elite".
+    //   • conflictingSideSuppressed: stamped at the route layer post-batch.
+    // Fail-closed: if oddsAgeSec is missing/unknown, freshOdds is FALSE.
+    // Centralized in deriveFreshOdds so the engine, storage, and audit
+    // script all share the exact same rule.
+    const _oddsAgeSec = req.oddsAgeSec;
+    const _freshOdds = deriveFreshOdds(_oddsAgeSec);
+    const _edgeFromGapOnly = _projectionDeltaPct < 0.04;
+    const _finalizer = finalizeNbaProbability(P_side_calibrated, {
+      rawSide: _finalizerRawSide,
+      market: req.statType,
+      archetype: nbaArchetype,
+      isCombo: isComboStat,
+      fragilityScore,
+      isPlayoffs,
+      minutesCertainty: _minutesCertainty,
+      projectionDeltaPct: _projectionDeltaPct,
+      freshOdds: _freshOdds,
+      edgeFromGapOnly: _edgeFromGapOnly,
+      conflictingSideSuppressed: false,
+    });
+    const P_side_final = _finalizer.pSideFinal;
+    const confidenceCeilingApplied = _finalizer.capApplied;
+    const ceilingReason: string | null = _finalizer.capReason;
+    if (_finalizer.capApplied) {
+      calibrationTrack += `+nbaCalV2:${_finalizer.capReason ?? "capped"}`;
+    }
+    console.log(`[NBA_CALIBRATION_V2] player=${player.name} market=${req.statType} initialPct=${_finalizer.initialProbabilityPct.toFixed(1)} finalPct=${_finalizer.finalProbabilityPct.toFixed(1)} tier=${_finalizer.marketRiskTier} capReason=${_finalizer.capReason ?? "none"} eliteGate=${_finalizer.eliteGateApplied} hardCeiling=${_finalizer.highBucketCapped} fragPp=${_finalizer.fragilityDeltaPp.toFixed(2)} mods=${_finalizer.modifierStack.map(m => `${m.name}@${m.weight}=${m.appliedDeltaPp.toFixed(2)}`).join(",")}`);
     // Backwards-compat for existing diagnostics field name.
     const ceiling = appliedCeiling;
 
@@ -1550,6 +1587,26 @@ export class DatabaseStorage implements IStorage {
       playoffRoleGate80Applied,
       playoffHighBucketGuardApplied,
       playoffFallbackCapApplied,
+      // NBA Calibration v2 stamping — admin analytics keys off these.
+      calibrationVersion: NBA_CALIBRATION_VERSION,
+      finalizerCapReason: _finalizer.capReason,
+      finalizerMarketRiskTier: _finalizer.marketRiskTier,
+      finalizerEliteGateApplied: _finalizer.eliteGateApplied,
+      finalizerHighBucketCapped: _finalizer.highBucketCapped,
+      finalizerInitialPct: Math.round(_finalizer.initialProbabilityPct * 10) / 10,
+      finalizerFinalPct: Math.round(_finalizer.finalProbabilityPct * 10) / 10,
+      // Canonical contract field names so downstream consumers can read
+      // the calibration-v2 result without depending on internal aliases.
+      rawProbability: Math.round(_finalizer.initialProbabilityPct * 10) / 10,
+      finalProbability: Math.round(_finalizer.finalProbabilityPct * 10) / 10,
+      probabilityCapApplied: _finalizer.capApplied,
+      conflictingSignalSuppressed: false,
+      finalizerFragilityDeltaPp: Math.round(_finalizer.fragilityDeltaPp * 100) / 100,
+      finalizerModifierStack: _finalizer.modifierStack.map(m => ({
+        name: m.name,
+        weight: m.weight,
+        appliedDeltaPp: Math.round(m.appliedDeltaPp * 100) / 100,
+      })),
     };
 
     if (!noSignal && (req as any).sport === "nba") {
