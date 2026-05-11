@@ -672,11 +672,14 @@ function GameContextPanel({ game, signalCount }: { game: MLBGame; signalCount: n
   );
 }
 
-function GameSignalsPanel({ signals, isElite, onAddToSlip, onOpenCalculator }: {
+function GameSignalsPanel({ signals, isElite, onAddToSlip, onOpenCalculator, selectedGameId, totalFeedSignals, isAdmin }: {
   signals: MlbSignalData[];
   isElite: boolean;
   onAddToSlip: (sig: MlbSignalData) => void;
   onOpenCalculator?: (sig: MlbSignalData) => void;
+  selectedGameId: string | null;
+  totalFeedSignals: number;
+  isAdmin: boolean;
 }) {
   // Plan B: Active Signals panel renders confirmed live signals only — early /
   // watchlist (HR_VS_ELITE_PITCHER, PITCHER_NEAR_MISS, fallback watch) entries
@@ -697,15 +700,24 @@ function GameSignalsPanel({ signals, isElite, onAddToSlip, onOpenCalculator }: {
       </div>
 
       {visible.length === 0 ? (
-        <div className="rounded-xl border border-border/40 bg-card p-6 text-center">
+        <div className="rounded-xl border border-border/40 bg-card p-6 text-center" data-testid="active-signals-empty-state">
           <div className="flex items-center justify-center gap-2 text-sm text-blue-400">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
             </span>
-            Monitoring
+            Engine evaluating this game — no actionable signals yet
           </div>
-          <div className="text-xs text-muted-foreground/60 mt-1">Signals appear as the game progresses and pitcher fatigue data accumulates.</div>
+          <div className="text-xs text-muted-foreground/60 mt-1">Signals surface as at-bats produce qualifying contact, pitcher fatigue, or HR-shaped batted balls.</div>
+          {isAdmin && (
+            <div className="mt-3 pt-3 border-t border-border/30 text-[10px] font-mono text-muted-foreground/70 space-y-0.5 text-left max-w-md mx-auto" data-testid="admin-empty-debug">
+              <div>selectedGameId: <span className="text-foreground">{selectedGameId ?? "null"}</span></div>
+              <div>matched: <span className="text-foreground">{signals.length}</span> / feed: <span className="text-foreground">{totalFeedSignals}</span></div>
+              <div>endpoint: <span className="text-foreground">/api/mlb/edge-feed</span> (bus populator)</div>
+              <div>client filters: isEarlySignal=excluded, watchlist=excluded → see Pre-AB Watch band</div>
+              <div className="text-muted-foreground/50 italic">Open the admin engine panel above for raw candidates / qualification / rejections.</div>
+            </div>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -3201,6 +3213,23 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     }
   }, [games, selectedGameId]);
 
+  // Auto-select the first live game when nothing is selected so the user is
+  // never stuck on a dead "Ready to Predict" empty state during live games.
+  // Prefers status==="live"; falls back to the first game in the list (which
+  // is the next-up pregame card). Pure UI state change — does not call any
+  // API, mutate engine math, or affect signals/lifecycle/bus.
+  useEffect(() => {
+    if (selectedGameId) return;
+    if (!games || games.length === 0) return;
+    const liveGame = games.find(g => g?.status === "live" && g.gameId);
+    const pick = liveGame ?? games.find(g => g?.gameId);
+    if (pick?.gameId) {
+      const liveCount = games.filter(g => g?.status === "live").length;
+      console.log(`[MLB_AUTO_SELECT_GAME] gameId=${pick.gameId} status=${pick.status ?? "unknown"} liveGames=${liveCount} totalGames=${games.length}`);
+      setSelectedGameId(pick.gameId);
+    }
+  }, [games, selectedGameId]);
+
   if (authLoading || gamesLoading) {
     return (
       <div className="max-w-6xl mx-auto px-4 py-6 space-y-3">
@@ -3504,23 +3533,29 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                     </div>
                   )}
 
-                  <GameSignalsPanel signals={gameSignals} isElite={isElite} onAddToSlip={handleAddToSlip} onOpenCalculator={handleSignalClick} />
+                  <GameSignalsPanel
+                    signals={gameSignals}
+                    isElite={isElite}
+                    onAddToSlip={handleAddToSlip}
+                    onOpenCalculator={handleSignalClick}
+                    selectedGameId={selectedGameId}
+                    totalFeedSignals={edgeFeedSignals.length}
+                    isAdmin={!!user?.isAdmin}
+                  />
                 </div>
               </div>
             </>
           )}
 
-          {!selectedGameId && (
+          {/* Only renders when there are zero games today — the auto-select
+              effect above ensures any non-empty `games` list immediately picks
+              the first live (or fallback first) game, so this empty state is
+              now a true "no slate" surface rather than a dead end. */}
+          {!selectedGameId && games.length === 0 && (
             <div className="rounded-xl border border-border/40 bg-card p-8 text-center space-y-3" data-testid="mlb-games-empty-state">
               <Target className="w-10 h-10 text-muted-foreground/30 mx-auto" />
-              <div className="text-sm font-bold text-foreground">Ready to Predict</div>
-              <div className="text-xs text-muted-foreground">Select a game above to get started</div>
-              <div className="text-[11px] text-muted-foreground/60 space-y-1 max-w-xs mx-auto text-left">
-                <div className="flex items-center gap-2"><span className="text-primary">◎</span> Click a game tile above</div>
-                <div className="flex items-center gap-2"><span className="text-primary">◎</span> Click a player in the box score</div>
-                <div className="flex items-center gap-2"><span className="text-primary">◎</span> Pick a stat type &amp; live line</div>
-                <div className="flex items-center gap-2"><span className="text-primary">◎</span> Hit Calculate</div>
-              </div>
+              <div className="text-sm font-bold text-foreground">No Live Games Right Now</div>
+              <div className="text-xs text-muted-foreground">Game tiles will appear here as soon as today's slate is live.</div>
             </div>
           )}
 
