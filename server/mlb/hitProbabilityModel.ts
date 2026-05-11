@@ -81,37 +81,6 @@ export function applyWeatherModifier(
   return rate * modifier;
 }
 
-function binomialCoeff(n: number, k: number): number {
-  if (k < 0 || k > n) return 0;
-  if (k === 0 || k === n) return 1;
-  let result = 1;
-  for (let i = 0; i < k; i++) {
-    result = (result * (n - i)) / (i + 1);
-  }
-  return result;
-}
-
-export function binomialOverProbability(
-  remainingPA: number,
-  adjustedHitRate: number,
-  neededHits: number
-): number {
-  const n = Math.round(Math.max(1, remainingPA));
-  const p = Math.max(0, Math.min(1, adjustedHitRate));
-  const target = Math.max(0, Math.ceil(neededHits));
-
-  if (target <= 0) return 100;
-  if (target > n) {
-    let prob = 0;
-    for (let k = target; k <= n; k++) {
-      prob += binomialCoeff(n, k) * Math.pow(p, k) * Math.pow(1 - p, n - k);
-    }
-    return prob * 100;
-  }
-
-  let cumUnder = 0;
-  for (let k = 0; k < target; k++) {
-    cumUnder += binomialCoeff(n, k) * Math.pow(p, k) * Math.pow(1 - p, n - k);
-  }
-  return (1 - cumUnder) * 100;
-}
+// binomialCoeff and binomialOverProbability moved to ./math/distributions.
+// Re-exported here for back-compat with existing import sites.
+export { binomialOverProbability } from "./math/distributions";

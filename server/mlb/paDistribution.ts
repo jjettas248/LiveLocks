@@ -1,3 +1,5 @@
+import { poissonPMF } from "./math/distributions";
+
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
 export function estimatePADistribution(
@@ -106,11 +108,3 @@ function adaptiveSupport(mean: number, hardCap: number): number {
   return Math.min(k, hardCap);
 }
 
-function poissonPMF(lambda: number, k: number): number {
-  if (lambda <= 0) return k === 0 ? 1 : 0;
-  let logProb = k * Math.log(lambda) - lambda;
-  for (let i = 1; i <= k; i++) {
-    logProb -= Math.log(i);
-  }
-  return Math.exp(logProb);
-}

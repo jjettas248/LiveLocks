@@ -1,36 +1,8 @@
-import { binomialOverProbability } from "./hitProbabilityModel";
-
-function logGamma(z: number): number {
-  if (z <= 0) return Infinity;
-  const c = [
-    76.18009172947146, -86.50532032941677, 24.01409824083091,
-    -1.231739572450155, 0.001208650973866179, -0.000005395239384953,
-  ];
-  let x = z;
-  let y = z;
-  let tmp = x + 5.5;
-  tmp -= (x + 0.5) * Math.log(tmp);
-  let ser = 1.000000000190015;
-  for (let j = 0; j < 6; j++) {
-    y += 1;
-    ser += c[j] / y;
-  }
-  return -tmp + Math.log((2.5066282746310005 * ser) / x);
-}
-
-function negativeBinomialPMF(x: number, k: number, p: number): number {
-  const logCoeff = logGamma(x + k) - logGamma(x + 1) - logGamma(k);
-  const logProb = x * Math.log(Math.max(1e-15, 1 - p)) + k * Math.log(Math.max(1e-15, p));
-  const result = Math.exp(logCoeff + logProb);
-  return result;
-}
-
-function poissonPMF(lambda: number, k: number): number {
-  if (lambda <= 0) return k === 0 ? 1 : 0;
-  let logProb = k * Math.log(lambda) - lambda;
-  for (let i = 1; i <= k; i++) logProb -= Math.log(i);
-  return Math.exp(logProb);
-}
+import {
+  binomialOverProbability,
+  negativeBinomialPMFSafe as negativeBinomialPMF,
+  poissonPMF,
+} from "./math/distributions";
 
 function binomialPMF(n: number, k: number, p: number): number {
   if (k < 0 || k > n) return 0;
