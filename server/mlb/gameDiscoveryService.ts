@@ -397,7 +397,17 @@ export async function discoverTodaysGames(): Promise<MLBGame[]> {
 
     return games;
   } catch (err: any) {
+    // CRITICAL: do NOT return [] here. An empty array is indistinguishable
+    // from a real off-day, and the orchestrator's pollGames() loop interprets
+    // an empty discovery as "no games today → prune every registered game".
+    // That wipe is what causes the daily HR Radar stall: ESPN's scoreboard API
+    // intermittently times out a few hours into the slate, the catch silently
+    // returned [], every active game got evicted from the registry, and the
+    // 10-second state poll had nothing to iterate until the next 5-min
+    // discovery cycle re-registered everything from scratch (often losing
+    // gameState/contact/odds caches mid-game). Re-throw so pollGames'
+    // try/catch can log it and leave the registry untouched.
     console.error("[MLB DISCOVERY] discoverTodaysGames error:", err.message);
-    return [];
+    throw err;
   }
 }

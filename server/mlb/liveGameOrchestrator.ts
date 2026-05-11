@@ -82,7 +82,7 @@ import {
   clearNonHrStatesForGame,
   type NonHrSignalState,
 } from "./nonHrSignalState";
-import { todayET } from "../utils/dateUtils";
+import { todayET, dateToET } from "../utils/dateUtils";
 import { buildHRSignal } from "./HRSignalBuilder";
 import { getPlayer } from "./rosterService";
 import { storage } from "../storage";
@@ -1168,6 +1168,28 @@ export class LiveGameOrchestrator {
     try {
       const discovered = await discoverTodaysGames();
       const discoveredIds = new Set(discovered.map((g) => g.gameId));
+
+      // Defense-in-depth: even if a future change makes discoverTodaysGames
+      // swallow errors and return [] again, refuse to wipe the registry when
+      // discovery comes back empty but we still have registered games WHOSE
+      // startTime is from today (ET). Stale registrations from a prior session
+      // date (e.g. the process survived across a true off-day) MUST still be
+      // pruned, otherwise yesterday's games would poll forever.
+      const previouslyRegistered = getActiveGames();
+      if (discovered.length === 0 && previouslyRegistered.length > 0) {
+        const today = todayET();
+        const todaysRegistered = previouslyRegistered.filter((g) => {
+          if (!g.startTime) return false;
+          const gameET = dateToET(new Date(g.startTime));
+          return gameET === today;
+        });
+        if (todaysRegistered.length > 0) {
+          console.warn(
+            `[MLB orchestrator] pollGames: discovery returned 0 games but ${todaysRegistered.length}/${previouslyRegistered.length} registered are from today (${today}) — treating as transient failure, skipping prune.`
+          );
+          return;
+        }
+      }
 
       // Register new games + pre-hydrate pitcher stats and weather
       for (const game of discovered) {
