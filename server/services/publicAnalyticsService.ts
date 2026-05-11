@@ -332,6 +332,34 @@ export async function getPublicAnalyticsSummary(opts: { admin?: boolean } = {}):
     totalPlays: settled.length,
     primaryPlays: primaryPlays.length,
   });
+  // [ANALYTICS_QUERY] mirror — surface-level log so the public summary
+  // emits the same observability tag as every other MLB analytics surface.
+  try {
+    const {
+      PRIMARY_MLB_ROI_MARKETS,
+      EXCLUDED_FROM_PRIMARY_MLB_ROI,
+      logAnalyticsQuery,
+    } = await import("../analytics/mlbMarketGroups");
+    const mlbRows = (settled as PersistedPlay[]).filter(
+      (p) => (p.sport ?? "").toLowerCase() === "mlb",
+    );
+    const mlbPrimary = mlbRows.filter(
+      (p) => !EXCLUDED_FROM_PRIMARY_MLB_ROI.includes(p.market ?? ""),
+    );
+    logAnalyticsQuery({
+      surface: opts.admin
+        ? "/api/admin/analytics/summary"
+        : "/api/public-analytics/summary",
+      sport: "mlb",
+      analyticsScope: "primary_mlb_roi",
+      includedMarkets: PRIMARY_MLB_ROI_MARKETS,
+      excludedMarkets: EXCLUDED_FROM_PRIMARY_MLB_ROI,
+      totalPlays: mlbRows.length,
+      retainedPlays: mlbPrimary.length,
+    });
+  } catch (_) {
+    /* logging is best-effort, never blocks the response */
+  }
 
   // Helper — winRate uses (hits / (hits + misses)), pushes excluded from the
   // denominator. This preserves the prior numeric semantics of the public

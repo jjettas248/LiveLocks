@@ -1,20 +1,14 @@
 import type { PersistedPlay } from "@shared/schema";
+import { EXCLUDED_FROM_PRIMARY_MLB_ROI } from "../analytics/mlbMarketGroups";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // [PRIMARY ROI EXCLUSION v1] User-facing dashboards report a "Core Engine ROI"
-// that excludes high-variance markets which the engine is not optimized for:
-//
-//   - home_runs        → low base rate (~10–15%), event-radar product
-//   - batter_strikeouts → tight book lines, marginal edge
-//
-// These markets remain in segmented analytics and internal diagnostics. Only
-// the headline / dashboard ROI excludes them. Canonical market keys come from
-// `shared/normalizeMlbMarket.ts`.
+// that excludes high-variance markets which the engine is not optimized for.
+// The canonical exclusion list now lives in
+// `server/analytics/mlbMarketGroups.ts` (single source of truth) and is
+// re-exported here under its historical name for backward-compatible imports.
 // ─────────────────────────────────────────────────────────────────────────────
-export const EXCLUDED_FROM_PRIMARY_ROI: readonly string[] = Object.freeze([
-  "home_runs",
-  "batter_strikeouts",
-]);
+export const EXCLUDED_FROM_PRIMARY_ROI: readonly string[] = EXCLUDED_FROM_PRIMARY_MLB_ROI;
 
 /** Returns true if a play's market is excluded from the primary (headline) ROI. */
 export function isExcludedFromPrimaryRoi(market: string | null | undefined): boolean {

@@ -8667,6 +8667,21 @@ export function registerPerformanceRoutes(app: Express): void {
       });
       const primaryROI = getPrimaryROIMetrics(playsForRoi).roi;
       const fullROI = getROIMetrics(playsForRoi).roi;
+      // [ANALYTICS_QUERY] log — confirms the headline ROI block on
+      // /api/performance applied the MLB primary filter when relevant.
+      if (sport === "mlb" || sport === "all") {
+        const { PRIMARY_MLB_ROI_MARKETS, EXCLUDED_FROM_PRIMARY_MLB_ROI, logAnalyticsQuery } =
+          await import("./analytics/mlbMarketGroups");
+        logAnalyticsQuery({
+          surface: "/api/performance",
+          sport,
+          analyticsScope: "primary_mlb_roi",
+          includedMarkets: PRIMARY_MLB_ROI_MARKETS,
+          excludedMarkets: EXCLUDED_FROM_PRIMARY_MLB_ROI,
+          totalPlays: playsForRoi.length,
+          retainedPlays: primaryPlays.length,
+        });
+      }
       const primaryHits = primaryPlays.filter(p => p.result === "hit").length;
       const primaryMisses = primaryPlays.filter(p => p.result === "miss").length;
       const primaryDecided = primaryHits + primaryMisses;
@@ -8845,15 +8860,64 @@ export function registerCalibrationRoutes(app: Express): void {
   app.get("/api/persisted-plays/calibration", requireAdmin, async (req, res) => {
     try {
       const { sport, market, startDate, endDate } = req.query as Record<string, string>;
+      // Analytics scope: "primary" (default for MLB) excludes home_runs +
+      // batter_strikeouts; "hr_radar" isolates home_runs; "experimental"
+      // isolates batter_strikeouts; "full" returns every market untouched
+      // (admin only — already gated by requireAdmin).
+      const scopeRaw = String((req.query as any).scope ?? "primary").toLowerCase();
+      const analyticsScope: "primary_mlb_roi" | "hr_radar" | "experimental_mlb" | "full" =
+        scopeRaw === "hr_radar" ? "hr_radar"
+        : scopeRaw === "experimental" || scopeRaw === "experimental_mlb" ? "experimental_mlb"
+        : scopeRaw === "full" ? "full"
+        : "primary_mlb_roi";
 
-      const plays = await storage.getGradedPlaysForCalibration({
+      const allPlays = await storage.getGradedPlaysForCalibration({
         sport: sport || undefined,
         market: market || undefined,
         startDate: startDate || undefined,
         endDate: endDate || undefined,
       });
 
-      type PersistedPlay = (typeof plays)[0];
+      type PersistedPlay = (typeof allPlays)[0];
+
+      const sportLower = (sport || "").toLowerCase();
+      const isMlb = sportLower === "mlb";
+      const {
+        PRIMARY_MLB_ROI_MARKETS,
+        EXCLUDED_FROM_PRIMARY_MLB_ROI,
+        HR_RADAR_ANALYTICS_MARKETS,
+        EXPERIMENTAL_MLB_MARKETS,
+        filterPrimaryMlbRoiPlays,
+        logAnalyticsQuery,
+      } = await import("./analytics/mlbMarketGroups");
+
+      // Apply MLB scope filter only when the request targets MLB. Non-MLB
+      // (NBA / NCAAB / cross-sport) requests pass through untouched per the
+      // hard rule that NBA/NCAAB analytics are unaffected by this change.
+      let plays = allPlays as PersistedPlay[];
+      if (isMlb) {
+        if (analyticsScope === "primary_mlb_roi") {
+          plays = filterPrimaryMlbRoiPlays(plays);
+        } else if (analyticsScope === "hr_radar") {
+          plays = plays.filter((p) => HR_RADAR_ANALYTICS_MARKETS.includes(p.market));
+        } else if (analyticsScope === "experimental_mlb") {
+          plays = plays.filter((p) => EXPERIMENTAL_MLB_MARKETS.includes(p.market));
+        }
+        logAnalyticsQuery({
+          surface: "/api/persisted-plays/calibration",
+          sport: "mlb",
+          analyticsScope,
+          includedMarkets:
+            analyticsScope === "primary_mlb_roi" ? PRIMARY_MLB_ROI_MARKETS
+            : analyticsScope === "hr_radar" ? HR_RADAR_ANALYTICS_MARKETS
+            : analyticsScope === "experimental_mlb" ? EXPERIMENTAL_MLB_MARKETS
+            : [],
+          excludedMarkets:
+            analyticsScope === "primary_mlb_roi" ? EXCLUDED_FROM_PRIMARY_MLB_ROI : [],
+          totalPlays: allPlays.length,
+          retainedPlays: plays.length,
+        });
+      }
 
       const totalPlays = plays.length;
       const wins = plays.filter((p: PersistedPlay) => p.result === "hit").length;
@@ -8900,11 +8964,23 @@ export function registerCalibrationRoutes(app: Express): void {
         makeBucketStats(plays, "80–100", (p: PersistedPlay) => { const prob = Number(p.prob); return prob >= 80 && prob <= 100; }),
       ];
 
+      const sportForResponse = (sport || "").toLowerCase();
+      const isMlbResponse = sportForResponse === "mlb";
+      const scopeForResponseRaw = String((req.query as any).scope ?? "primary").toLowerCase();
+      const scopeForResponse = scopeForResponseRaw === "hr_radar" ? "hr_radar"
+        : scopeForResponseRaw === "experimental" || scopeForResponseRaw === "experimental_mlb" ? "experimental_mlb"
+        : scopeForResponseRaw === "full" ? "full"
+        : "primary_mlb_roi";
+
       return res.json({
         plays,
         summary: { totalPlays, winRate, pushRate, avgEdge, avgProbability },
         edgeBuckets,
         probBuckets,
+        analyticsScope: isMlbResponse ? scopeForResponse : "full",
+        excludedMarkets: isMlbResponse && scopeForResponse === "primary_mlb_roi"
+          ? Array.from(EXCLUDED_FROM_PRIMARY_MLB_ROI)
+          : [],
       });
     } catch (e) {
       console.error("[calibration]", (e as Error).message);
@@ -9392,6 +9468,52 @@ export function registerAnalyticsRoutes(app: Express): void {
       if (flagship === "flagship") settled = settled.filter(p => (p as any).flagshipOrDerivative === "flagship");
       if (flagship === "derivative") settled = settled.filter(p => (p as any).flagshipOrDerivative === "derivative");
 
+      // Analytics scope for MLB calibration. Defaults to "primary" so the
+      // confidence-bucket dashboard reflects the headline lane (excludes
+      // home_runs + batter_strikeouts). Admin can pass ?scope=hr_radar or
+      // ?scope=experimental to inspect the side lanes; ?scope=full keeps
+      // everything (legacy behaviour).
+      const sportLowerScope = (sport || "nba").toLowerCase();
+      const isMlbScope = sportLowerScope === "mlb";
+      const scopeRaw = String((req.query as any).scope ?? "primary").toLowerCase();
+      const analyticsScope: "primary_mlb_roi" | "hr_radar" | "experimental_mlb" | "full" =
+        scopeRaw === "hr_radar" ? "hr_radar"
+        : scopeRaw === "experimental" || scopeRaw === "experimental_mlb" ? "experimental_mlb"
+        : scopeRaw === "full" ? "full"
+        : "primary_mlb_roi";
+      if (isMlbScope) {
+        const {
+          PRIMARY_MLB_ROI_MARKETS,
+          EXCLUDED_FROM_PRIMARY_MLB_ROI,
+          HR_RADAR_ANALYTICS_MARKETS,
+          EXPERIMENTAL_MLB_MARKETS,
+          filterPrimaryMlbRoiPlays,
+          logAnalyticsQuery,
+        } = await import("./analytics/mlbMarketGroups");
+        const beforeCount = settled.length;
+        if (analyticsScope === "primary_mlb_roi") {
+          settled = filterPrimaryMlbRoiPlays(settled);
+        } else if (analyticsScope === "hr_radar") {
+          settled = settled.filter((p: any) => HR_RADAR_ANALYTICS_MARKETS.includes(p.market));
+        } else if (analyticsScope === "experimental_mlb") {
+          settled = settled.filter((p: any) => EXPERIMENTAL_MLB_MARKETS.includes(p.market));
+        }
+        logAnalyticsQuery({
+          surface: "/api/analytics/confidence-buckets",
+          sport: "mlb",
+          analyticsScope,
+          includedMarkets:
+            analyticsScope === "primary_mlb_roi" ? PRIMARY_MLB_ROI_MARKETS
+            : analyticsScope === "hr_radar" ? HR_RADAR_ANALYTICS_MARKETS
+            : analyticsScope === "experimental_mlb" ? EXPERIMENTAL_MLB_MARKETS
+            : [],
+          excludedMarkets:
+            analyticsScope === "primary_mlb_roi" ? EXCLUDED_FROM_PRIMARY_MLB_ROI : [],
+          totalPlays: beforeCount,
+          retainedPlays: settled.length,
+        });
+      }
+
       const bucketRanges = [
         { label: "60-64", min: 60, max: 64.99 },
         { label: "65-69", min: 65, max: 69.99 },
@@ -9434,6 +9556,10 @@ export function registerAnalyticsRoutes(app: Express): void {
         buckets,
         probabilitySemantics: isMlbView ? "recommended_side_calibrated" : "dominant_over_oriented",
         filters: { sport: sport || "nba", direction: direction || "all", marketType: marketType || "all", archetype: archFilter || "all", flagship: flagship || "all" },
+        analyticsScope: isMlbView ? analyticsScope : "full",
+        excludedMarkets: isMlbView && analyticsScope === "primary_mlb_roi"
+          ? Array.from((await import("./analytics/mlbMarketGroups")).EXCLUDED_FROM_PRIMARY_MLB_ROI)
+          : [],
       });
     } catch (e: any) {
       return res.status(500).json({ error: "Confidence buckets failed", details: e.message });

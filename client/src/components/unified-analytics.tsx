@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getAuthToken } from "@/lib/queryClient";
+import { useAuth } from "@/hooks/use-auth";
 import {
   TrendingUp, RefreshCw, Target, BarChart3, CheckCircle, XCircle,
-  ArrowUp, ArrowDown, Activity, Loader2, Minus, Calendar
+  ArrowUp, ArrowDown, Activity, Loader2, Minus, Calendar, AlertTriangle
 } from "lucide-react";
 
 type SportFilter = "all" | "nba" | "mlb" | "ncaab";
@@ -44,6 +45,27 @@ interface PerformanceSummary {
   winRate: number;
   avgEdge: number;
   avgProb: number;
+  // [PRIMARY ROI EXCLUSION v1] — Core / primary lane (MLB excludes
+  // home_runs + batter_strikeouts). Optional for backward compatibility
+  // with older API payloads.
+  primaryTotal?: number;
+  primaryHits?: number;
+  primaryMisses?: number;
+  primaryWinRate?: number;
+  primaryROI?: number;
+  fullROI?: number;
+  excludedFromPrimary?: string[];
+}
+
+interface MarketBreakdownRow {
+  market: string;
+  excludedFromPrimary: boolean;
+  metrics: { totalBets: number; hits: number; misses: number; pushes: number; roi: number; hitRate: number };
+}
+
+interface AdminAnalyticsSummary {
+  byMarket?: MarketBreakdownRow[];
+  excludedFromPrimary?: string[];
 }
 
 interface PerformanceResponse {
@@ -147,6 +169,8 @@ function ToggleGroup({ options, value, onChange, testId }: {
 
 function DashboardSection() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const isAdmin = !!user?.isAdmin;
   const [sport, setSport] = useState<SportFilter>("all");
   const [direction, setDirection] = useState<DirFilter>("all");
   const [range, setRange] = useState<RangeFilter>("all");
@@ -201,9 +225,49 @@ function DashboardSection() {
   const pagedPlays = allPlays.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const totalPages = Math.ceil(allPlays.length / PAGE_SIZE);
 
-  const roi = summary && (summary.hits + summary.misses) > 0
-    ? Math.round(((summary.hits * 90.91 - summary.misses * 100) / (summary.hits + summary.misses)) * 10) / 10
-    : 0;
+  // For MLB, prefer the server-computed primary ROI/win-rate (excludes
+  // home_runs + batter_strikeouts). For NBA/NCAAB/all the client-side
+  // -110 approximation stays as a fallback when primaryROI isn't present.
+  const isMlbView = sport === "mlb";
+  const winRate = isMlbView && summary?.primaryWinRate != null
+    ? summary.primaryWinRate
+    : summary?.winRate ?? 0;
+  const winRateHits = isMlbView && summary?.primaryHits != null ? summary.primaryHits : (summary?.hits ?? 0);
+  const winRateMisses = isMlbView && summary?.primaryMisses != null ? summary.primaryMisses : (summary?.misses ?? 0);
+  const totalForKpi = isMlbView && summary?.primaryTotal != null ? summary.primaryTotal : (summary?.total ?? 0);
+  const decidedForKpi = isMlbView && summary?.primaryHits != null && summary?.primaryMisses != null
+    ? summary.primaryHits + summary.primaryMisses
+    : (summary ? summary.hits + summary.misses : 0);
+  const roi = isMlbView && summary?.primaryROI != null
+    ? summary.primaryROI
+    : (summary && (summary.hits + summary.misses) > 0
+      ? Math.round(((summary.hits * 90.91 - summary.misses * 100) / (summary.hits + summary.misses)) * 10) / 10
+      : 0);
+  const roiLabel = isMlbView ? "MLB Core ROI" : "ROI (@ -110)";
+  const winRateLabel = isMlbView ? "Primary MLB Win Rate" : "Win Rate";
+
+  // ── Admin-only By-Market breakdown (last 7 days) ──────────────────────
+  // Powered by /api/admin/analytics/summary which already returns per-market
+  // rows with `excludedFromPrimary` flagged. We only fetch when admin so
+  // non-admin users never see internal performance/calibration views.
+  const { data: adminSummary } = useQuery<AdminAnalyticsSummary>({
+    queryKey: ["/api/admin/analytics/summary"],
+    enabled: isAdmin,
+    refetchInterval: 5 * 60 * 1000,
+  });
+  const mlbMarketRows = (adminSummary?.byMarket ?? []).filter((r) => {
+    // Best-effort MLB filter: the canonical MLB market keys live in the
+    // shared groupings module. We treat these as MLB markets for the
+    // admin breakdown since publicAnalyticsService groups by raw market.
+    const MLB_KEYS = new Set([
+      "hits", "total_bases", "hrr", "hits_allowed", "pitcher_outs",
+      "pitcher_strikeouts", "hr_allowed", "home_runs", "batter_strikeouts",
+      "rbi", "runs", "stolen_bases",
+    ]);
+    return MLB_KEYS.has(r.market);
+  });
+  const hrRadarRow = mlbMarketRows.find((r) => r.market === "home_runs") ?? null;
+  const experimentalRow = mlbMarketRows.find((r) => r.market === "batter_strikeouts") ?? null;
 
   const overPlays = allPlays.filter(p => p.direction === "O");
   const underPlays = allPlays.filter(p => p.direction === "U");
@@ -284,17 +348,53 @@ function DashboardSection() {
       ) : summary ? (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3" data-testid="kpi-row">
-            <KpiCard icon={Target} label="Win Rate" value={`${summary.winRate}%`} sub={`${summary.hits}W - ${summary.misses}L`}
-              color={summary.winRate >= 55 ? "text-emerald-500" : summary.winRate >= 50 ? "text-yellow-500" : "text-red-500"} />
-            <KpiCard icon={Activity} label="Total Plays" value={summary.total.toLocaleString()} sub={`${summary.hits + summary.misses} decided`} />
-            <KpiCard icon={TrendingUp} label="ROI (@ -110)" value={`${roi > 0 ? "+" : ""}${roi}%`}
+            <KpiCard icon={Target} label={winRateLabel} value={`${winRate}%`} sub={`${winRateHits}W - ${winRateMisses}L`}
+              color={winRate >= 55 ? "text-emerald-500" : winRate >= 50 ? "text-yellow-500" : "text-red-500"} />
+            <KpiCard icon={Activity} label="Total Plays" value={totalForKpi.toLocaleString()} sub={`${decidedForKpi} decided`} />
+            <KpiCard icon={TrendingUp} label={roiLabel} value={`${roi > 0 ? "+" : ""}${roi}%`}
               color={roi >= 0 ? "text-emerald-500" : "text-red-500"} />
             <KpiCard icon={BarChart3} label="Avg Edge" value={`${summary.avgEdge > 0 ? "+" : ""}${summary.avgEdge}%`}
               color={summary.avgEdge > 0 ? "text-emerald-500" : "text-red-500"} />
             <KpiCard icon={BarChart3} label="Avg Prob" value={`${summary.avgProb}%`} />
-            <KpiCard icon={ArrowUp} label="O / U Split" value={direction === "all" ? `${overWinRate}% / ${underWinRate}%` : `${summary.winRate}%`}
+            <KpiCard icon={ArrowUp} label="O / U Split" value={direction === "all" ? `${overWinRate}% / ${underWinRate}%` : `${winRate}%`}
               sub={direction === "all" ? "OVER / UNDER win%" : `${direction.toUpperCase()} only`} />
           </div>
+          {isMlbView && isAdmin && (
+            <p className="text-[10px] text-muted-foreground -mt-2" data-testid="text-mlb-core-roi-note">
+              Excludes HR Radar and experimental batter strikeout markets.
+            </p>
+          )}
+
+          {isAdmin && isMlbView && (hrRadarRow || experimentalRow || mlbMarketRows.length > 0) && (
+            <>
+              {hrRadarRow && (
+                <AdminLaneCard
+                  title="HR Radar Performance"
+                  subtitle="home_runs only — admin diagnostic lane (excluded from MLB Core ROI)"
+                  icon={Target}
+                  accent="text-orange-400"
+                  rows={[hrRadarRow]}
+                  badge="HR Radar · excluded"
+                  testId="section-admin-hr-radar-performance"
+                />
+              )}
+              {experimentalRow && (
+                <AdminLaneCard
+                  title="Experimental MLB Markets"
+                  subtitle="batter_strikeouts — admin diagnostic lane"
+                  icon={AlertTriangle}
+                  accent="text-yellow-400"
+                  rows={[experimentalRow]}
+                  badge="Experimental · excluded"
+                  warning="Excluded from primary calibration"
+                  testId="section-admin-experimental-mlb"
+                />
+              )}
+              {mlbMarketRows.length > 0 && (
+                <ByMarketTable rows={mlbMarketRows} testId="table-admin-mlb-by-market" />
+              )}
+            </>
+          )}
 
           {probBuckets.length > 0 && (
             <div>
@@ -425,6 +525,129 @@ function DashboardSection() {
           </div>
         </>
       ) : null}
+    </div>
+  );
+}
+
+function AdminLaneCard({
+  title, subtitle, icon: Icon, accent, rows, badge, warning, testId,
+}: {
+  title: string;
+  subtitle: string;
+  icon: typeof Target;
+  accent: string;
+  rows: MarketBreakdownRow[];
+  badge: string;
+  warning?: string;
+  testId: string;
+}) {
+  const totals = rows.reduce(
+    (acc, r) => {
+      acc.bets += r.metrics.totalBets;
+      acc.hits += r.metrics.hits;
+      acc.misses += r.metrics.misses;
+      acc.pushes += r.metrics.pushes;
+      return acc;
+    },
+    { bets: 0, hits: 0, misses: 0, pushes: 0 },
+  );
+  const decided = totals.hits + totals.misses;
+  const hitRate = decided > 0 ? Math.round((totals.hits / decided) * 1000) / 10 : 0;
+  const roiAvg =
+    rows.reduce((sum, r) => sum + r.metrics.roi * r.metrics.totalBets, 0) /
+    Math.max(1, totals.bets);
+  return (
+    <div
+      className="rounded-xl border border-border bg-card p-3 space-y-2"
+      data-testid={testId}
+    >
+      <div className="flex items-center gap-2">
+        <Icon className={`w-4 h-4 ${accent}`} />
+        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground" data-testid={`${testId}-badge`}>
+          {badge}
+        </span>
+      </div>
+      <p className="text-[10px] text-muted-foreground">{subtitle}</p>
+      {warning && (
+        <p className="text-[10px] flex items-center gap-1 text-yellow-400" data-testid={`${testId}-warning`}>
+          <AlertTriangle className="w-3 h-3" /> {warning}
+        </p>
+      )}
+      <div className="grid grid-cols-4 gap-2">
+        <div className="text-center p-2 rounded-lg bg-muted/20">
+          <div className="text-[9px] text-muted-foreground">Sample</div>
+          <div className="text-sm font-bold text-foreground">{totals.bets}</div>
+        </div>
+        <div className="text-center p-2 rounded-lg bg-emerald-500/10">
+          <div className="text-[9px] text-emerald-400">Hits</div>
+          <div className="text-sm font-bold text-emerald-400">{totals.hits}</div>
+        </div>
+        <div className="text-center p-2 rounded-lg bg-zinc-500/10">
+          <div className="text-[9px] text-zinc-400">Misses</div>
+          <div className="text-sm font-bold text-zinc-400">{totals.misses}</div>
+        </div>
+        <div className="text-center p-2 rounded-lg bg-blue-500/10">
+          <div className="text-[9px] text-blue-400">Hit Rate</div>
+          <div className="text-sm font-bold text-blue-400">{hitRate}%</div>
+        </div>
+      </div>
+      <p className="text-[10px] text-muted-foreground">
+        ROI proxy:{" "}
+        <span className={Number.isFinite(roiAvg) && roiAvg >= 0 ? "text-emerald-400" : "text-red-400"}>
+          {Number.isFinite(roiAvg) ? `${roiAvg > 0 ? "+" : ""}${Math.round(roiAvg * 10) / 10}%` : "—"}
+        </span>{" "}
+        · directional only when stake odds are missing
+      </p>
+    </div>
+  );
+}
+
+function ByMarketTable({ rows, testId }: { rows: MarketBreakdownRow[]; testId: string }) {
+  return (
+    <div className="space-y-1">
+      <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider" data-testid={`${testId}-title`}>
+        MLB By Market (admin)
+      </h3>
+      <div className="overflow-x-auto rounded-xl border border-border">
+        <table className="w-full text-xs" data-testid={testId}>
+          <thead>
+            <tr className="bg-muted/50 text-left text-[10px] text-muted-foreground">
+              <th className="px-3 py-2">Market</th>
+              <th className="px-3 py-2 text-center">Lane</th>
+              <th className="px-3 py-2 text-right">Bets</th>
+              <th className="px-3 py-2 text-right">Hit %</th>
+              <th className="px-3 py-2 text-right">ROI</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const isHr = r.market === "home_runs";
+              const isExp = r.market === "batter_strikeouts";
+              const badge = isHr
+                ? { label: "HR Radar · excluded", cls: "bg-orange-500/15 text-orange-400" }
+                : isExp
+                ? { label: "Experimental · excluded", cls: "bg-yellow-500/15 text-yellow-400" }
+                : { label: "MLB Core", cls: "bg-emerald-500/15 text-emerald-400" };
+              return (
+                <tr key={r.market} className="border-t border-border/50" data-testid={`${testId}-row-${r.market}`}>
+                  <td className="px-3 py-1.5 font-medium">{formatMarket(r.market)}</td>
+                  <td className="px-3 py-1.5 text-center">
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${badge.cls}`} data-testid={`${testId}-badge-${r.market}`}>
+                      {badge.label}
+                    </span>
+                  </td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{r.metrics.totalBets}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{r.metrics.hitRate}%</td>
+                  <td className={`px-3 py-1.5 text-right tabular-nums ${r.metrics.roi >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                    {r.metrics.roi > 0 ? "+" : ""}{r.metrics.roi}%
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
