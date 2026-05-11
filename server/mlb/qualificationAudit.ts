@@ -17,6 +17,8 @@
 //   9. missingContext     — required input missing (playerId, slot, gameId, inning)
 //  10. cooldown           — orchestrator dedup window suppressed the whole cycle
 
+import { boundedPush } from "../utils/ringBuffer";
+
 export type RejectionCategory =
   | "probability"
   | "signalScore"
@@ -110,8 +112,7 @@ export function endCycle(gameId: string): void {
   const c = openCycles.get(gameId);
   if (!c) return;
   c.endedAt = Date.now();
-  completedCycles.push(c);
-  while (completedCycles.length > RING_SIZE) completedCycles.shift();
+  boundedPush(completedCycles, c, RING_SIZE);
   openCycles.delete(gameId);
 }
 

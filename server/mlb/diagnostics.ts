@@ -6,6 +6,7 @@ import type {
   ProjectionLog,
 } from "./types";
 import { ALL_MLB_MARKETS } from "./types";
+import { boundedPush } from "../utils/ringBuffer";
 
 export interface MLBDiagnosticRecord {
   timestamp: number;
@@ -112,10 +113,7 @@ export function recordMLBDiagnostic(
     projectionError,
   };
 
-  diagnosticRecords.push(record);
-  if (diagnosticRecords.length > MAX_RECORDS) {
-    diagnosticRecords.splice(0, diagnosticRecords.length - MAX_RECORDS);
-  }
+  boundedPush(diagnosticRecords, record, MAX_RECORDS);
 
   console.log(
     `[MLB DIAG] ${record.playerName} | ${record.market} | proj=${record.projection} | line=${record.bookLine} | edge=${record.edge.toFixed(1)}% | side=${record.recommendedSide} | tier=${record.confidenceTier} | mode=${record.mode} | suppressed=${record.suppressed}`

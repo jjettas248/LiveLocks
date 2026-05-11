@@ -106,6 +106,8 @@ export interface CapAppliedRecord {
   capReason: string;
 }
 
+import { boundedPush, recentReversed, countSinceMs } from "../utils/ringBuffer";
+
 const _hrWatchDetections: HrWatchDetectionRecord[] = [];
 const _hrWatchSuppressed: HrWatchSuppressedRecord[] = [];
 const _persistRejects: PersistRejectRecord[] = [];
@@ -116,8 +118,7 @@ const _hrWatchContextUses: HrWatchContextRecord[] = [];
 const _capsApplied: CapAppliedRecord[] = [];
 
 function pushCapped<T>(arr: T[], item: T): void {
-  arr.push(item);
-  if (arr.length > MAX_ENTRIES) arr.splice(0, arr.length - MAX_ENTRIES);
+  boundedPush(arr, item, MAX_ENTRIES);
 }
 
 export function recordHrWatchDetection(rec: Omit<HrWatchDetectionRecord, "ts">): void {
@@ -153,35 +154,35 @@ export function recordCapApplied(rec: Omit<CapAppliedRecord, "ts">): void {
 }
 
 export function getHrWatchDetections(limit = MAX_ENTRIES): HrWatchDetectionRecord[] {
-  return _hrWatchDetections.slice(-limit).reverse();
+  return recentReversed(_hrWatchDetections, limit);
 }
 
 export function getHrWatchSuppressed(limit = MAX_ENTRIES): HrWatchSuppressedRecord[] {
-  return _hrWatchSuppressed.slice(-limit).reverse();
+  return recentReversed(_hrWatchSuppressed, limit);
 }
 
 export function getPersistRejects(limit = MAX_ENTRIES): PersistRejectRecord[] {
-  return _persistRejects.slice(-limit).reverse();
+  return recentReversed(_persistRejects, limit);
 }
 
 export function getHrrCalibrations(limit = MAX_ENTRIES): HrrCalibrationRecord[] {
-  return _hrrCalibrations.slice(-limit).reverse();
+  return recentReversed(_hrrCalibrations, limit);
 }
 
 export function getHitsAllowedCalibrations(limit = MAX_ENTRIES): HitsAllowedCalibrationRecord[] {
-  return _hitsAllowedCalibrations.slice(-limit).reverse();
+  return recentReversed(_hitsAllowedCalibrations, limit);
 }
 
 export function getSelfLearningCalibrations(limit = MAX_ENTRIES): SelfLearningCalibrationRecord[] {
-  return _selfLearningCalibrations.slice(-limit).reverse();
+  return recentReversed(_selfLearningCalibrations, limit);
 }
 
 export function getHrWatchContextUses(limit = MAX_ENTRIES): HrWatchContextRecord[] {
-  return _hrWatchContextUses.slice(-limit).reverse();
+  return recentReversed(_hrWatchContextUses, limit);
 }
 
 export function getCapsApplied(limit = MAX_ENTRIES): CapAppliedRecord[] {
-  return _capsApplied.slice(-limit).reverse();
+  return recentReversed(_capsApplied, limit);
 }
 
 export function getDiagnosticsCounts(windowMs = 10 * 60 * 1000): {
@@ -194,15 +195,18 @@ export function getDiagnosticsCounts(windowMs = 10 * 60 * 1000): {
   hrWatchContextUses: number;
   capsApplied: number;
 } {
-  const cutoff = Date.now() - windowMs;
+  // Snapshot `now` once so all 8 windows share the exact same cutoff
+  // (previously each filter called Date.now()-windowMs independently within
+  // microseconds — observationally identical, now made explicit).
+  const now = Date.now();
   return {
-    hrWatchDetected: _hrWatchDetections.filter((r) => r.ts >= cutoff).length,
-    hrWatchSuppressed: _hrWatchSuppressed.filter((r) => r.ts >= cutoff).length,
-    persistRejected: _persistRejects.filter((r) => r.ts >= cutoff).length,
-    hrrCalibrations: _hrrCalibrations.filter((r) => r.ts >= cutoff).length,
-    hitsAllowedCalibrations: _hitsAllowedCalibrations.filter((r) => r.ts >= cutoff).length,
-    selfLearningCalibrations: _selfLearningCalibrations.filter((r) => r.ts >= cutoff).length,
-    hrWatchContextUses: _hrWatchContextUses.filter((r) => r.ts >= cutoff).length,
-    capsApplied: _capsApplied.filter((r) => r.ts >= cutoff).length,
+    hrWatchDetected: countSinceMs(_hrWatchDetections, windowMs, now),
+    hrWatchSuppressed: countSinceMs(_hrWatchSuppressed, windowMs, now),
+    persistRejected: countSinceMs(_persistRejects, windowMs, now),
+    hrrCalibrations: countSinceMs(_hrrCalibrations, windowMs, now),
+    hitsAllowedCalibrations: countSinceMs(_hitsAllowedCalibrations, windowMs, now),
+    selfLearningCalibrations: countSinceMs(_selfLearningCalibrations, windowMs, now),
+    hrWatchContextUses: countSinceMs(_hrWatchContextUses, windowMs, now),
+    capsApplied: countSinceMs(_capsApplied, windowMs, now),
   };
 }
