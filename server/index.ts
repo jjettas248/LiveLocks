@@ -528,6 +528,27 @@ app.use((req, res, next) => {
   // Start MLB live game orchestrator (Phase A — admin-only, fire-and-forget)
   liveOrchestrator.start();
 
+  // ── NBA Calibration Backfill — boot-time idempotent run ──────────
+  // Tags any pre-cutover NBA plays missing the nbaCalV2 marker so the
+  // cohort report classifies them correctly. Idempotent: when the table
+  // is fully tagged, the first paginated query returns 0 rows and this
+  // returns in ≈0 ms. Runs in the background so it never blocks boot.
+  (async () => {
+    try {
+      const { runNbaCalibrationBackfill } = await import(
+        "./scripts/nbaCalibrationBackfill"
+      );
+      const { tagged, skipped } = await runNbaCalibrationBackfill();
+      console.log(
+        `[NBA_CAL_BACKFILL_BOOT] tagged=${tagged} skipped=${skipped}`,
+      );
+    } catch (err) {
+      console.warn(
+        `[NBA_CAL_BACKFILL_BOOT] failed err=${(err as Error).message}`,
+      );
+    }
+  })();
+
   // ── LiveLocks Batch B — Lifecycle TTL sweeper ────────────────────
   // Promotes inactive non-terminal CanonicalSignals → expired every 5min.
   // Idempotent; safe even when no signals are tracked yet.
