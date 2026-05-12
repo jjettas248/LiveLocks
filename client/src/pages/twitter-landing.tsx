@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { Link } from "wouter";
 import { ArrowRight, Lock, TrendingUp, Zap } from "lucide-react";
 import { usePublicAnalytics } from "@/hooks/usePublicAnalytics";
-import { PublicProofStrip } from "@/components/dashboard/public-proof-strip";
+import { SignalPreviewConversionCard } from "@/components/dashboard/SignalPreviewConversionCard";
 
 const PROFIT_PER_UNIT = 25;
 
@@ -94,9 +94,9 @@ export default function TwitterLandingPage() {
           </p>
         </section>
 
-        {/* Recent player prop wins */}
-        <section className="space-y-3" data-testid="section-recent-wins">
-          <PublicProofStrip />
+        {/* Premium signal preview (replaces legacy recent-results feed) */}
+        <section className="space-y-3" data-testid="section-signal-preview">
+          <SignalPreviewConversionCard />
         </section>
 
         {/* Missed-value teaser block (locked-out framing using public data) */}

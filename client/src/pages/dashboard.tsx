@@ -27,7 +27,7 @@ import { hasProAccess } from "@/lib/tierUtils";
 import { useLocation } from "wouter";
 import { TopPlaysPanel } from "@/components/dashboard/TopPlaysPanel";
 import { FreeActivationRail } from "@/components/dashboard/free-activation-rail";
-import { PublicProofStrip } from "@/components/dashboard/public-proof-strip";
+import { SignalPreviewConversionCard } from "@/components/dashboard/SignalPreviewConversionCard";
 import { TrialMissionRail } from "@/components/dashboard/trial-mission-rail";
 import { trackRailEvent } from "@/lib/railAnalytics";
 import { SignalDetailDialog } from "@/components/signals/SignalDetailDialog";
@@ -2305,7 +2305,13 @@ export default function Dashboard() {
                       file is gated off so it never duplicates here.
                     */}
                     <LockedSignalModule onUpgradeClick={handleUpgradeClick} />
-                    <PublicProofStrip />
+                    {/*
+                      Conversion: free users see a forward-looking premium
+                      signal preview (no losses, no stale plays, no repeated
+                      players). Admins still have full graded history in
+                      Analytics. Replaces legacy <PublicProofStrip /> here.
+                    */}
+                    <SignalPreviewConversionCard onUpgradeClick={handleUpgradeClick} />
                   </>
                 );
               }
@@ -2319,7 +2325,10 @@ export default function Dashboard() {
                 import.meta.env.VITE_SHOW_LEGACY_GLOBAL_SIGNALS === "true" ||
                 !!user?.isAdmin;
               if (!SHOW_LEGACY_GLOBAL_SIGNALS) {
-                return <PublicProofStrip />;
+                // Paid (non-admin) users do not see the conversion card and
+                // do not see the negative recent-results feed. Graded
+                // history remains accessible in Analytics for admins only.
+                return null;
               }
               return (
                 <TopPlaysPanel
