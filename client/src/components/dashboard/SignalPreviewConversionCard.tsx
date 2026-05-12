@@ -1,4 +1,5 @@
 import { Lock, Sparkles, Check, ArrowRight, Activity, Bell, Trophy } from "lucide-react";
+import { useLocation } from "wouter";
 
 interface SignalPreviewConversionCardProps {
   onUpgradeClick?: () => void;
@@ -14,6 +15,11 @@ const VALUE_BULLETS: { icon: React.ComponentType<{ className?: string }>; text: 
 const REASON_TAGS = ["Live movement", "Model edge", "Timing window"];
 
 export function SignalPreviewConversionCard({ onUpgradeClick }: SignalPreviewConversionCardProps) {
+  const [, navigate] = useLocation();
+  // When no upgrade handler is provided (e.g. on the public /twitter
+  // landing page), fall back to the registration flow which routes
+  // through the trial → Stripe upgrade funnel.
+  const handleClick = onUpgradeClick ?? (() => navigate("/auth?tab=register"));
   return (
     <div
       data-testid="panel-signal-preview-conversion"
@@ -105,7 +111,7 @@ export function SignalPreviewConversionCard({ onUpgradeClick }: SignalPreviewCon
         <button
           type="button"
           data-testid="button-unlock-full-access"
-          onClick={onUpgradeClick}
+          onClick={handleClick}
           className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-primary text-primary-foreground font-semibold text-sm hover:opacity-90 active:translate-y-px transition"
         >
           Unlock Full Access
