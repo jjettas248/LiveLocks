@@ -41,6 +41,8 @@ import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
 import { getCanonicalSidedProbability } from "./probabilityEngine";
 import { computeSignalScore, computeSignalScoreByFamily, scoreHRRadar, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily, deriveSignalTier } from "./signalScore";
 import { detectNearHrContact, detectNearHrContactPeak } from "./nearHrContact";
+import { upsertCanonicalHrRadarState } from "./hrRadarCanonicalStore";
+import type { HrRadarLifecycleEvent } from "./hrRadarStateMachine";
 import { MLB_CALIBRATION_VERSION } from "./diagnosticsBuffer";
 import { recordDriftSnapshot } from "./goldmasterGuard";
 import {
@@ -1963,6 +1965,64 @@ export class LiveGameOrchestrator {
         console.log("[MLB_HR_NEAR_CONTACT_EVAL]", JSON.stringify(eval_payload));
         if (d.missedPattern) {
           console.log("[MLB_HR_NEAR_CONTACT_MISSED_PATTERN]", JSON.stringify(eval_payload));
+        }
+      }
+
+      // ── HR Radar Canonical State Machine — Phase 2 wiring ──────────────
+      // Every qualifying evidence event (HIGH_XBA_DANGER, BARREL_OVERRIDE,
+      // REPEATED_DANGER, near-HR LEAN/WATCH) immediately upserts the
+      // canonical HR Radar state for this player/game so settlement, UI,
+      // and analytics all read the same truth. In-memory only for now.
+      // Pure observation — never mutates engine math, signalScore, or
+      // CanonicalSignal. Rejected transitions log [HR_RADAR_STATE_REJECTED]
+      // and leave existing state untouched.
+      const matchedPath = nearHrResult.matchedPath ?? null;
+      let canonicalEvent: HrRadarLifecycleEvent | null = null;
+      if (matchedPath === "REPEATED_DANGER") canonicalEvent = "REPEATED_DANGER";
+      else if (matchedPath === "BARREL_OVERRIDE_LEAN" || matchedPath === "BARREL_OVERRIDE" || matchedPath === "HIGH_XBA_DANGER_BARREL") canonicalEvent = "BARREL";
+      else if (matchedPath === "HIGH_XBA_DANGER") canonicalEvent = "NEAR_HR";
+      else if (nearHrResult.tier === "lean") canonicalEvent = "NEAR_HR";
+      else if (nearHrResult.tier === "watch") canonicalEvent = "CONTACT_EVIDENCE";
+      if (canonicalEvent && (input as any).playerId != null) {
+        try {
+          const evidence: Array<Record<string, unknown>> = [];
+          if (nearHrPeak.sourceAbIndex != null) {
+            const ab = _priorAbsForNearHr[nearHrPeak.sourceAbIndex];
+            if (ab) {
+              evidence.push({
+                abIndex: nearHrPeak.sourceAbIndex,
+                ev: ab?.exitVelocity ?? null,
+                la: ab?.launchAngle ?? null,
+                distance: ab?.distance ?? null,
+                xba: ab?.xba ?? ab?.perABxBA ?? null,
+                isBarrel: ab?.isBarrel === true,
+                outcome: ab?.outcome ?? null,
+              });
+            }
+          }
+          upsertCanonicalHrRadarState({
+            gameId,
+            playerId: (input as any).playerId,
+            playerName: output.playerName,
+            team: input.team ?? null,
+            event: canonicalEvent,
+            context: {
+              reason: matchedPath ?? `near_hr_${nearHrResult.tier}`,
+              inning: input.inning ?? null,
+            },
+            triggerAbIndex: nearHrPeak.sourceAbIndex ?? null,
+            triggerReasons: nearHrResult.drivers,
+            triggerTags: nearHrResult.matchedPath ? [nearHrResult.matchedPath] : [],
+            contactEvidence: evidence,
+          });
+        } catch (e) {
+          // canonical state is observability-only — never block the
+          // existing qualification pipeline if the store throws.
+          console.log("[HR_RADAR_CANONICAL_UPSERT_ERROR]", JSON.stringify({
+            gameId,
+            playerId: (input as any).playerId,
+            error: (e as Error)?.message ?? String(e),
+          }));
         }
       }
     }
