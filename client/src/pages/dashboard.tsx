@@ -547,7 +547,7 @@ export default function Dashboard() {
 
   const [activeTab, setActiveTab] = useState<"calculator" | "ncaab" | "analytics" | "mlb">("calculator");
   const [nbaSubTab, setNbaSubTab] = useState<"live" | "halftime">("live");
-  const [mlbSubTab, setMlbSubTab] = useState<"games" | "live_feed" | "hr_radar">("games");
+  const [mlbSubTab, setMlbSubTab] = useState<"games" | "live_feed" | "hr_radar">("live_feed");
   const [expandToGameId, setExpandToGameId] = useState<string | null>(null);
   const [showWelcomeBanner, setShowWelcomeBanner] = useState(false);
   const [showSportPicker, setShowSportPicker] = useState(false);
@@ -2615,9 +2615,9 @@ export default function Dashboard() {
           {activeTab === "mlb" && (
             <div className="flex gap-1 mt-2 w-fit bg-secondary/40 border border-border/60 rounded-xl p-1">
               {([
-                { key: "games", label: "Games" },
                 { key: "live_feed", label: "Live Feed" },
                 { key: "hr_radar", label: "HR Radar" },
+                { key: "games", label: "Games" },
               ] as const).map(tab => (
                 <button
                   key={tab.key}
@@ -3131,7 +3131,7 @@ export default function Dashboard() {
                   {calculateMutation.isPending ? (
                     <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
                   ) : (
-                    "Calculate Probability"
+                    "Get Signal Read"
                   )}
                 </button>
 
@@ -3202,9 +3202,9 @@ export default function Dashboard() {
                     <Zap className="w-3 h-3 text-primary" />
                   </div>
                 </div>
-                <h3 className="text-lg font-semibold text-foreground mb-2">Ready to Predict</h3>
+                <h3 className="text-lg font-semibold text-foreground mb-2">Awaiting Signal</h3>
                 <p className="max-w-xs text-sm text-muted-foreground mb-4">
-                  Select a player and opponent, fill in halftime stats, then calculate the 2H probability.
+                  The Live Feed surfaces signals automatically. Use this panel to read a specific player's live signal on demand.
                 </p>
                 {allGames.length > 0 && (
                   <div className="space-y-1.5 text-left text-xs text-muted-foreground/70 bg-secondary/30 border border-border/30 rounded-lg px-4 py-3 max-w-xs w-full">
@@ -3212,7 +3212,7 @@ export default function Dashboard() {
                     <p>① Click a game tile above</p>
                     <p>② Click a player row in the box score</p>
                     <p>③ Pick a stat type &amp; live line</p>
-                    <p>④ Hit Calculate</p>
+                    <p>④ Read the live signal</p>
                   </div>
                 )}
               </div>

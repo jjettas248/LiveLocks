@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { TopPlays } from "@/components/mlb/TopPlays";
 import { TopLiveOpportunities } from "@/components/mlb/TopLiveOpportunities";
 import { LiveBoard } from "@/components/mlb/LiveBoard";
+import { LiveFeed } from "@/components/mlb/LiveFeed";
 import { MlbSignalCard, type MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { HrRadarLadder, type HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
 import { MlbBoxScore, type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
@@ -2885,6 +2886,10 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
   const { user, isLoading: authLoading } = useAuth();
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
   const [liveFeedSub, setLiveFeedSub] = useState<"all" | "3rd" | "5th" | "7th">("all");
+  // Signal-first inning-window filter for the new market-signals feed.
+  // Independent of `liveFeedSub` (legacy 3rd/5th/7th feedTag filter) so
+  // we can keep both controls during rollout. Default "all".
+  const [inningWindowFilter, setInningWindowFilter] = useState<"all" | "early" | "mid" | "late">("all");
   const [signalSortBy, setSignalSortBy] = useState<"signalScore" | "enginePct">("signalScore");
   const mlbUpgradeNeeded = false;
   const [mlbSlipPicks, setMlbSlipPicks] = useState<Array<{ playerId: string; playerName: string; market: string; line: number; side: string; sportsbook: string; edge: number | null; enginePct: number; gameId: string; overOdds?: number | null; underOdds?: number | null; overProbability?: number | null; underProbability?: number | null; engineConfidence?: number | null; source?: "engine" | "calculator" }>>([]);
@@ -2903,6 +2908,27 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
     queryKey: ["/api/mlb/edge-feed"],
     refetchInterval: 20_000,
     placeholderData: (prev) => prev,
+  });
+  // Signal-first market-signals view (LiveLocks MLB UX Phase 1).
+  // Returns server-stamped MarketSignalViewModel rows already grouped
+  // by displayGroup. Inning window filter is sent as a query param —
+  // server filters but never DROPS valid signals (unknown rows pass
+  // through, just de-prioritized in sort).
+  const { data: marketSignalsResp } = useQuery<{
+    rows: import("@/components/mlb/LiveFeed").MarketSignalViewModelClient[];
+    grouped: Record<string, import("@/components/mlb/LiveFeed").MarketSignalViewModelClient[]>;
+    unknownInningCount: number;
+    unknownInningReasons: Record<string, number>;
+  }>({
+    queryKey: ["/api/mlb/edge-feed", "market-signals", inningWindowFilter],
+    queryFn: async () => {
+      const res = await fetch(`/api/mlb/edge-feed?view=market-signals&inningWindow=${inningWindowFilter}`, { credentials: "include" });
+      if (!res.ok) throw new Error("market-signals fetch failed");
+      return res.json();
+    },
+    refetchInterval: 20_000,
+    placeholderData: (prev) => prev,
+    enabled: activeSubTab === "live_feed",
   });
   const rawSignals: MlbSignalData[] = Array.isArray(edgeFeedResp?.signals)
     ? (edgeFeedResp!.signals as MlbSignalData[]).map(s => mapMlbSignalToUi(s) as unknown as MlbSignalData)
@@ -3493,7 +3519,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                         {calcMutation.isPending ? (
                           <><Loader2 className="w-4 h-4 animate-spin" /> Calculating...</>
                         ) : (
-                          <><Calculator className="w-4 h-4" /> Calculate Probability</>
+                          <><Calculator className="w-4 h-4" /> Get Signal Read</>
                         )}
                       </button>
 
@@ -3578,18 +3604,19 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
 
       {activeSubTab === "live_feed" && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
+          {/* Signal-first inning window filter (LiveLocks MLB UX Phase 1). */}
+          <div className="flex items-center justify-between gap-2 flex-wrap" data-testid="mlb-inning-filter-row">
             <div className="flex gap-1.5 flex-wrap">
-              {(["all", "3rd", "5th", "7th"] as const).map(sub => (
+              {(["all", "early", "mid", "late"] as const).map(win => (
                 <button
-                  key={sub}
-                  data-testid={`tab-feed-${sub}`}
-                  onClick={() => setLiveFeedSub(sub)}
+                  key={`win-${win}`}
+                  data-testid={`tab-inning-window-${win}`}
+                  onClick={() => setInningWindowFilter(win)}
                   className={`px-3.5 py-2.5 min-h-[44px] text-xs font-semibold rounded-full border transition-all ${
-                    liveFeedSub === sub ? "bg-background text-foreground border-primary/50 shadow-sm" : "border-border/50 text-muted-foreground hover:text-foreground"
+                    inningWindowFilter === win ? "bg-background text-foreground border-primary/50 shadow-sm" : "border-border/50 text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  {sub === "all" ? "All Signals" : sub === "3rd" ? "3rd Inning" : sub === "5th" ? "5th Inning" : "7th Inning"}
+                  {win === "all" ? "All Innings" : win === "early" ? "Early 1–3" : win === "mid" ? "Mid 4–6" : "Late 7+"}
                 </button>
               ))}
             </div>
@@ -3618,6 +3645,38 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
             </div>
           </div>
           {(() => {
+            // Signal-first surface: render server-grouped MarketSignalViewModel
+            // rows when the new endpoint has responded. Falls back to the
+            // legacy LiveBoard if the response is missing (cache rollover or
+            // server-side bridge failure).
+            const marketRows = marketSignalsResp?.rows ?? null;
+            if (marketRows && marketRows.length > 0) {
+              // Build a fast lookup from view-model signalId → MlbSignalData
+              // sourced from the existing sticky-merged feed so the card
+              // renders with full driver/odds context unchanged.
+              const sigIndex = new Map<string, MlbSignalData>();
+              for (const s of edgeFeedSignals) {
+                const sid = `mlb:${s.gameId}:${s.playerId}:${s.market}:${s.recommendedSide ?? "OVER"}`;
+                sigIndex.set(sid, s);
+              }
+              const resolveSignal = (vm: import("@/components/mlb/LiveFeed").MarketSignalViewModelClient): MlbSignalData | null => {
+                return sigIndex.get(vm.signalId) ?? null;
+              };
+              return (
+                <div className="space-y-6">
+                  <LiveFeed
+                    rows={marketRows}
+                    resolveSignal={resolveSignal}
+                    onAddToSlip={handleAddToSlip}
+                    onOpenCalculator={handleSignalClick}
+                    isElite={isElite}
+                    unknownInningCount={marketSignalsResp?.unknownInningCount}
+                  />
+                </div>
+              );
+            }
+
+            // Legacy fallback (no market-signals data yet) — original logic.
             let filtered = edgeFeedSignals;
             if (liveFeedSub !== "all") {
               const feedTagKey = liveFeedSub === "3rd" ? "inning_3" : liveFeedSub === "5th" ? "inning_5" : "inning_7";

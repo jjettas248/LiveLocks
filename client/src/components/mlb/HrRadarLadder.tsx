@@ -5,6 +5,18 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, AlertTriangle, RefreshCw, Eraser, X, ArrowRight, Clock, DollarSign } from "lucide-react";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
+import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
+
+// ── Signal-first inning pill (LiveLocks MLB UX Phase 1) ───────────────
+// Pure read of the row's currentInning (preferred) or detectedInning.
+// Surfacing-only — does NOT change ladder thresholds, sectioning, or scoring.
+const HR_INNING_WINDOW_PILL: Record<MlbInningWindow, { label: string; color: string }> = {
+  late:    { label: "Late attack",    color: "#ef4444" },
+  early:   { label: "Early build",    color: "#a78bfa" },
+  mid:     { label: "Mid watch",      color: "#94a3b8" },
+  unknown: { label: "Unknown inning", color: "#64748b" },
+  all:     { label: "",               color: "#94a3b8" },
+};
 
 // Task #121 Step 3 — per-session dismiss + accept lists. Both keyed by
 // sessionDate so tomorrow's session starts clean. Pass = dismissed (hidden).
@@ -497,6 +509,13 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   // the (inning, half) pair for legacy rows that pre-date the label fields.
   const detected = entry.detectedLabel ?? formatHalfInning(entry.detectedInning, entry.detectedHalf);
   const hit = entry.hitLabel ?? formatHalfInning(entry.hitInning, entry.hitHalf);
+  // Signal-first inning pill — read the row's live currentInning first,
+  // fall back to the frozen detectedInning for resolved rows. Pure surfacing.
+  const inningWindowSource: number | null =
+    (typeof entry.currentInning === "number" && entry.currentInning >= 1 ? entry.currentInning : null) ??
+    (typeof entry.detectedInning === "number" && entry.detectedInning >= 1 ? entry.detectedInning : null);
+  const inningWindow: MlbInningWindow = getMlbInningWindow(inningWindowSource);
+  const inningWindowPill = HR_INNING_WINDOW_PILL[inningWindow];
   // Headline /10 score — prefer the conviction-aware DISPLAY score so the
   // number renders coherent with the section the engine assigned the row to
   // (e.g. PATH_F_BLOCKED_BRIDGE caps at 6.0/10 while sitting in Track).
@@ -621,6 +640,16 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
             {detected && (
               <span data-testid={`text-ladder-detected-${entry.playerId}`}>
                 {isResolved ? `Called ${detected}` : `Detected ${detected}`}
+              </span>
+            )}
+            {inningWindowPill.label && (
+              <span
+                data-testid={`hr-inning-window-pill-${entry.playerId}-${inningWindow}`}
+                className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border whitespace-nowrap"
+                style={{ color: inningWindowPill.color, borderColor: `${inningWindowPill.color}40`, background: `${inningWindowPill.color}10` }}
+                title={getMlbInningWindowLabel(inningWindow)}
+              >
+                {inningWindowPill.label}
               </span>
             )}
             {/* Live-mode only: pregame indicator + next-AB estimate. */}

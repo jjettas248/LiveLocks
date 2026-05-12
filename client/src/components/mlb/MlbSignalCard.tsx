@@ -16,8 +16,31 @@ import { liveScoreToGrade, launchAngleLabel, sanitizeDisplayString } from "@/lib
 import { normalizePct } from "@/lib/mlb/mlbViewModel";
 import { readCanonicalLifecycle, LIFECYCLE_BADGE, readSurfacedAgoMs, formatSurfacedAgo } from "@/lib/mlb/canonicalSignalViewModel";
 import type { MLBSignal } from "@shared/mlbSignal";
+import type { MlbInningWindow } from "@shared/mlbInningWindow";
+import { getMlbInningWindow, getMlbInningWindowLabel } from "@shared/mlbInningWindow";
 
 export type MlbSignalData = MLBSignal;
+
+// ── Signal-first surfacing pills (additive props) ─────────────────────
+// Server-stamped on MarketSignalViewModel; passed through by LiveFeed.
+// When omitted (legacy LiveBoard / Top Plays consumers), the card falls
+// back to deriving inningWindow from sig.inning so HR Radar / box-score
+// uses still get a meaningful pill.
+const INNING_WINDOW_PILL: Record<MlbInningWindow, { label: string; color: string }> = {
+  late:    { label: "Late attack",   color: "#ef4444" },
+  early:   { label: "Early build",   color: "#a78bfa" },
+  mid:     { label: "Mid watch",     color: "#94a3b8" },
+  unknown: { label: "Unknown inning", color: "#64748b" },
+  all:     { label: "",              color: "#94a3b8" },
+};
+
+const ACTIONABILITY_PILL: Record<string, { label: string; color: string; bg: string }> = {
+  urgent:     { label: "URGENT",     color: "#ef4444", bg: "rgba(239,68,68,0.12)" },
+  actionable: { label: "ACTIONABLE", color: "#f59e0b", bg: "rgba(245,158,11,0.12)" },
+  forming:    { label: "BUILDING",   color: "#a78bfa", bg: "rgba(167,139,250,0.12)" },
+  monitor:    { label: "MONITOR",    color: "#94a3b8", bg: "rgba(148,163,184,0.10)" },
+  resolved:   { label: "RESOLVED",   color: "#22c55e", bg: "rgba(34,197,94,0.12)" },
+};
 
 const BATTER_OVER_MARKETS_CARD = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
 
@@ -129,13 +152,29 @@ export function MlbSignalCard({
   onAddToSlip,
   onDismiss,
   onOpenCalculator,
+  inningWindow,
+  marketActionability,
+  primarySignalLabel,
 }: {
   sig: MlbSignalData;
   onPlayerClick?: (gameId: string, playerId: string) => void;
   onAddToSlip?: (sig: MlbSignalData) => void;
   onDismiss?: (sig: MlbSignalData) => void;
   onOpenCalculator?: (sig: MlbSignalData) => void;
+  // ── Signal-first surfacing (additive, server-stamped) ───────────────
+  // When present these come from MarketSignalViewModel via LiveFeed.
+  // When omitted, inningWindow falls back to deriving from sig.inning so
+  // legacy callers (LiveBoard / TopPlays / box score) still get a pill.
+  inningWindow?: MlbInningWindow;
+  marketActionability?: "urgent" | "actionable" | "forming" | "monitor" | "resolved";
+  primarySignalLabel?: string;
 }) {
+  // Resolve effective inning window: prop > derive from sig.inning.
+  const effectiveInningWindow: MlbInningWindow = inningWindow ?? getMlbInningWindow(
+    typeof sig.inning === "number" && sig.inning >= 1 ? sig.inning : null,
+  );
+  const inningPill = INNING_WINDOW_PILL[effectiveInningWindow];
+  const actionabilityPill = marketActionability ? ACTIONABILITY_PILL[marketActionability] : null;
   const [expanded, setExpanded] = useState(false);
   // MLB Signals audit P6 — freshness pulse. The "as of N seconds ago" stamp
   // and the decay bar both depend on `Date.now()`, so we tick a 1Hz local
@@ -318,8 +357,28 @@ export function MlbSignalCard({
         </div>
 
         {/* Row 2: Smart Tags + HR Intensity Badge + Pitcher Signals */}
-        {(smartTags.length > 0 || hrStyle || (sig.pitcherSignals && sig.pitcherSignals.length > 0) || (sig.liveScore ?? 0) > 0) && (
+        {(smartTags.length > 0 || hrStyle || (sig.pitcherSignals && sig.pitcherSignals.length > 0) || (sig.liveScore ?? 0) > 0 || actionabilityPill || effectiveInningWindow !== "all") && (
           <div className="flex items-center gap-1.5 flex-wrap">
+            {actionabilityPill && (
+              <span
+                data-testid={`actionability-pill-${marketActionability}`}
+                className="text-[9px] font-black px-1.5 py-0.5 rounded-full border tracking-wider"
+                style={{ color: actionabilityPill.color, borderColor: `${actionabilityPill.color}66`, background: actionabilityPill.bg }}
+                title={primarySignalLabel ?? actionabilityPill.label}
+              >
+                {actionabilityPill.label}
+              </span>
+            )}
+            {effectiveInningWindow !== "all" && inningPill.label && (
+              <span
+                data-testid={`inning-window-pill-${effectiveInningWindow}`}
+                className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border"
+                style={{ color: inningPill.color, borderColor: `${inningPill.color}40`, background: `${inningPill.color}10` }}
+                title={getMlbInningWindowLabel(effectiveInningWindow)}
+              >
+                {inningPill.label}
+              </span>
+            )}
             {hrStyle && (
               <span
                 data-testid={`hr-intensity-${sig.playerId}`}

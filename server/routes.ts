@@ -2715,6 +2715,77 @@ export async function registerRoutes(
         console.warn(`[LL_CANONICAL_VIEWMODEL_BRIDGE] enrichment failed: ${(bridgeErr as Error).message}`);
       }
 
+      // ── Signal-First Surfacing (LiveLocks MLB UX Phase 1) ────────────
+      // Optional alternate response shape: ?view=market-signals returns
+      // pre-grouped, signal-first MarketSignalViewModel rows used by the
+      // new MLB Live Feed surface. Default branch unchanged for back-compat.
+      const view = (req.query.view as string | undefined) ?? "default";
+      if (view === "market-signals") {
+        try {
+          const liveSignalBus = await import("./services/liveSignalBus");
+          const {
+            toMarketSignalViewModel,
+            sortMarketSignals,
+            groupByDisplayGroup,
+            summarizeUnknownInning,
+          } = await import("./services/mlbMarketSignalViewModel");
+          const { inningWindowMatchesFilter } = await import("../shared/mlbInningWindow");
+
+          const inningWindowParam = (req.query.inningWindow as string | undefined) ?? "all";
+          const allowedWindows = ["all", "early", "mid", "late"] as const;
+          type AllowedWindow = (typeof allowedWindows)[number];
+          const filter: AllowedWindow = (allowedWindows.includes(inningWindowParam as AllowedWindow)
+            ? (inningWindowParam as AllowedWindow)
+            : "all");
+
+          // Map each MLBSignal to a view model. Canonical lookup via the bus
+          // by signalId — the bus is the sole-ingress source of truth.
+          const rows = enrichedSignals.map((sig: any) => {
+            const signalId = sig?.canonicalSignalId
+              ?? `mlb:${sig.gameId}:${sig.playerId}:${sig.market}:${sig.recommendedSide ?? "OVER"}`;
+            const canonical = liveSignalBus.getRegisteredById?.(signalId) ?? null;
+            return toMarketSignalViewModel(sig, {
+              canonical,
+              sourceEndpoint: "/api/mlb/edge-feed?view=market-signals",
+              silent: true,
+            });
+          });
+
+          // Inning filter — never drops valid signals; unknown rows pass
+          // through under any specific filter (de-prioritized in sort).
+          const filtered = rows.filter((r) =>
+            inningWindowMatchesFilter(r.inningWindow, filter, true),
+          );
+          const sorted = sortMarketSignals(filtered);
+          const grouped = groupByDisplayGroup(sorted);
+          const unknownSummary = summarizeUnknownInning(sorted);
+
+          console.log(
+            `[MLB_MARKET_SORT] view=market-signals filter=${filter} total=${sorted.length} ` +
+              `actionNow=${grouped.ACTION_NOW.length} building=${grouped.BUILDING.length} ` +
+              `monitor=${grouped.MONITOR.length} resolved=${grouped.RESOLVED.length} ` +
+              `unknownInning=${unknownSummary.unknownInningCount}`,
+          );
+
+          return res.json({
+            mode: sorted.length > 0 ? "live" : "monitoring",
+            view: "market-signals",
+            inningWindow: filter,
+            rows: sorted,
+            grouped,
+            unknownInningCount: unknownSummary.unknownInningCount,
+            unknownInningReasons: unknownSummary.unknownInningReasons,
+            updatedAt: newestUpdatedAt,
+            generatedAt: Date.now(),
+            staleCount: totalDropped,
+            edgeCacheEntries: totalEdgeCacheEntries,
+          });
+        } catch (vmErr) {
+          console.warn(`[MLB_MARKET_VIEWMODEL] market-signals view failed: ${(vmErr as Error).message}`);
+          // Fall through to default response so the client never breaks.
+        }
+      }
+
       return res.json({
         mode: enrichedSignals.length > 0 ? "live" : "monitoring",
         signals: enrichedSignals,
@@ -2726,6 +2797,81 @@ export async function registerRoutes(
     } catch (e: any) {
       console.error("[mlb/edge-feed]", e.message);
       return res.json({ mode: "monitoring", signals: [], updatedAt: 0, generatedAt: Date.now(), staleCount: 0, edgeCacheEntries: 0 });
+    }
+  });
+
+  // ── Admin: MLB Market Signals Debug ──────────────────────────────
+  app.get("/api/admin/mlb-market-signals-debug", requireAdmin, async (_req, res) => {
+    try {
+      const liveSignalBus = await import("./services/liveSignalBus");
+      const {
+        toMarketSignalViewModel,
+        sortMarketSignals,
+        summarizeUnknownInning,
+      } = await import("./services/mlbMarketSignalViewModel");
+
+      // Reuse the bus's view of registered MLB signals — the canonical truth.
+      const registered = liveSignalBus.getRegistered({ sport: "mlb" }) ?? [];
+      const rows = registered.map((canonical: any) => {
+        // Synthesize a minimal MLBSignal-shaped object from canonical fields
+        // so the view model can run without re-reading mlbEdgeCache.
+        // For HR/inning context fall back to canonical fields and
+        // sourceRef-tagged inning if present.
+        const sigShim: any = {
+          playerId: canonical.actorId,
+          playerName: canonical.actorName,
+          gameId: canonical.gameId,
+          market: canonical.market,
+          recommendedSide: canonical.side,
+          displaySide: canonical.side,
+          inning: canonical.inning ?? 0,
+          isTopInning: false,
+          gameStatus: canonical.gameStatus ?? null,
+          enginePct: canonical.displayProbability,
+          edge: canonical.edge,
+          projection: canonical.projection,
+          bookLine: canonical.bookLine,
+          confidenceTier: canonical.signalTier?.toUpperCase() ?? "WATCH",
+          signalTier: canonical.signalTier,
+          overOdds: null,
+          underOdds: null,
+          awayAbbr: null,
+          homeAbbr: null,
+          hrAlert: null,
+          canonicalDrivers: canonical.drivers ?? [],
+          triggerSummary: canonical.triggerSummary ?? null,
+        };
+        const vm = toMarketSignalViewModel(sigShim, {
+          canonical,
+          sourceEndpoint: "/api/admin/mlb-market-signals-debug",
+          silent: true,
+        });
+        return {
+          ...vm,
+          // Admin-only diagnostics envelope
+          _debug: {
+            canonicalSurfacedAt: canonical.surfacedAt,
+            canonicalUpdatedAt: canonical.updatedAt,
+            canonicalExpiresAt: canonical.expiresAt,
+            lifecycleHistoryLen: canonical.lifecycleHistory?.length ?? 0,
+            sourceRefKind: canonical.sourceRef?.kind ?? null,
+            reasonSurfaced: vm.marketActionability,
+            sourceEndpoint: "bus.getRegistered",
+          },
+        };
+      });
+      const sorted = sortMarketSignals(rows);
+      const summary = summarizeUnknownInning(sorted);
+      return res.json({
+        total: sorted.length,
+        unknownInningCount: summary.unknownInningCount,
+        unknownInningReasons: summary.unknownInningReasons,
+        rows: sorted,
+        generatedAt: Date.now(),
+      });
+    } catch (e: any) {
+      console.error("[admin/mlb-market-signals-debug]", e.message);
+      return res.status(500).json({ error: e.message });
     }
   });
 
