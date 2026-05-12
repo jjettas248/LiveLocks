@@ -286,7 +286,13 @@ export type HrQualifyingSignalType =
   | "pitcher_collapse_power"
   | "late_game_power_build"
   | "massive_single_contact"
-  | "pre_hr_danger";
+  | "pre_hr_danger"
+  // Phase 2 STEP 4 (Ben Rice repair, May 2026) — surfaces when at least
+  // one prior AB met the HIGH_XBA_DANGER threshold (xBA>=.65 + EV>=96 +
+  // LA in [16,34]). Recognized via factors.maxXBA / per-AB tags / the
+  // orchestrator's nearHr drivers ("High-xBA HR danger contact" /
+  // "Barrel + high-xBA danger") propagated into triggerTags.
+  | "high_xba_danger";
 
 /**
  * Derive qualifying signals from the engine's existing diagnostic snapshot
@@ -306,6 +312,9 @@ export function deriveQualifyingSignals(input: {
     maxLA?: number | null;
     nearBarrels?: number | null;
     pitcherFatigueBoost?: number | null;
+    // Phase 2 STEP 4 — peak xBA across recent ABs. Optional; when missing
+    // the high_xba_danger signal can still fire from triggerTags.
+    maxXBA?: number | null;
   } | null;
   triggerTags?: string[] | null;
   inning?: number | null;
@@ -346,6 +355,25 @@ export function deriveQualifyingSignals(input: {
     out.add("pre_hr_danger");
   }
 
+  // Phase 2 STEP 4 (Ben Rice repair) — high_xba_danger via factors or tags.
+  // Factor path: peak xBA across recent ABs >= .65 with elite-EV context.
+  // Tag path: orchestrator near-HR drivers propagated into triggerTags
+  // ("High-xBA HR danger contact" / "Barrel + high-xBA danger") OR
+  // ("Repeated HR-danger contact" / "Pre-HR pattern").
+  const maxXBA = Number(f.maxXBA ?? 0);
+  if (maxXBA >= 0.65 && maxEV >= 96) out.add("high_xba_danger");
+  if (tags.some(t =>
+    t.includes("high_xba_danger") ||
+    t.includes("high-xba") ||
+    t.includes("xba hr danger") ||
+    t.includes("barrel + high-xba") ||
+    t.includes("repeated hr-danger") ||
+    t.includes("pre-hr pattern")
+  )) {
+    out.add("high_xba_danger");
+    out.add("pre_hr_danger");
+  }
+
   return Array.from(out);
 }
 
@@ -376,7 +404,8 @@ export function deriveSuggestedUserStageFromSignals(args: {
     signals.has("deep_fly_warning") ||
     signals.has("high_bat_speed_lift") ||
     signals.has("pre_hr_danger") ||
-    signals.has("pitcher_collapse_power")
+    signals.has("pitcher_collapse_power") ||
+    signals.has("high_xba_danger")
   ) return "build";
   return "track";
 }
@@ -759,14 +788,23 @@ export function enrichWithUserStage(input: {
   const initialFromInput = input.initialSignalScore10 ?? toSignalScore10(input.initialReadinessScore);
   const currentFromInput = input.currentSignalScore10 ?? toSignalScore10(input.currentReadinessScore);
   const peakFromInput = input.peakSignalScore10 ?? toSignalScore10(input.peakReadinessScore);
+  // Phase 3 STEP 7 (Ben Rice repair, May 2026) — auto-apply the
+  // stage-derived display fallback whenever the row carries qualifying
+  // signal evidence, regardless of useFallbackScore. Spec invariant:
+  //   "If any qualifying signal exists, displayScore10 must not be 0.0."
+  // The fallback is display-only (mirrors fallbackScoreForStage) — the raw
+  // initial/current/peakReadinessScore on the alert row is untouched.
   const useFallback = input.useFallbackScore === true;
+  const evidenceFloorActive = qualifyingSignals.length > 0;
   const fallback = fallbackScoreForStage(userStage);
-  const currentSignalScore10 =
-    useFallback && (currentFromInput == null || currentFromInput === 0) ? fallback : currentFromInput;
-  const initialSignalScore10 =
-    useFallback && (initialFromInput == null || initialFromInput === 0) ? fallback : initialFromInput;
-  const peakSignalScore10 =
-    useFallback && (peakFromInput == null || peakFromInput === 0) ? fallback : peakFromInput;
+  const applyFloor = (s: number | null): number | null => {
+    if (!evidenceFloorActive && !useFallback) return s;
+    if (s == null || s === 0) return fallback;
+    return Math.max(s, fallback);
+  };
+  const currentSignalScore10 = applyFloor(currentFromInput);
+  const initialSignalScore10 = applyFloor(initialFromInput);
+  const peakSignalScore10 = applyFloor(peakFromInput);
 
   // ── Conviction-aware DISPLAY scores ────────────────────────────────────
   // For rows whose alertPath the engine intentionally locks at WATCH (e.g.

@@ -1924,15 +1924,48 @@ export class LiveGameOrchestrator {
         ev: ab?.exitVelocity ?? null,
         la: ab?.launchAngle ?? null,
         distance: ab?.distance ?? null,
-        xba: ab?.xba ?? null,
+        xba: ab?.xba ?? ab?.perABxBA ?? null,
+        // Phase 2 STEP 5 — propagate Statcast barrel flag from dataPullService
+        // so the BARREL_OVERRIDE detection path can fire (Ben Rice repair).
+        isBarrel: ab?.isBarrel === true,
       })),
       5,
     );
-    const nearHrResult: { tier: null | "watch" | "lean"; drivers: string[]; suppressionReason?: string } = {
+    const nearHrResult: { tier: null | "watch" | "lean"; drivers: string[]; suppressionReason?: string; matchedPath?: string | null; repeatedDanger?: boolean } = {
       tier: nearHrPeak.tier,
       drivers: nearHrPeak.drivers,
       suppressionReason: nearHrPeak.suppressionReason,
+      matchedPath: nearHrPeak.matchedPath ?? null,
+      repeatedDanger: nearHrPeak.repeatedDanger,
     };
+    // Phase 1 STEP 1 — per-AB eval logs and missed-pattern audit. Pure
+    // diagnostics — never affects the tier the orchestrator acts on. Logged
+    // for HR-eligible (home_runs / hrr) markets only to bound noise; other
+    // markets call the detector but don't surface the AB-level forensic.
+    if (output.market === "home_runs" || output.market === "hrr") {
+      for (const d of nearHrPeak.diagnostics) {
+        const eval_payload = {
+          gameId,
+          playerId: (input as any).playerId ?? null,
+          playerName: output.playerName,
+          abIndex: d.abIndex,
+          ev: d.ev,
+          launchAngle: d.la,
+          distance: d.distance,
+          xba: d.xba,
+          isBarrel: d.isBarrel,
+          tags: null,
+          isHardHit: d.ev != null && d.ev >= 95,
+          detectedTier: d.detectedTier,
+          matchedPath: d.matchedPath,
+          rejectedReason: d.rejectedReason,
+        };
+        console.log("[MLB_HR_NEAR_CONTACT_EVAL]", JSON.stringify(eval_payload));
+        if (d.missedPattern) {
+          console.log("[MLB_HR_NEAR_CONTACT_MISSED_PATTERN]", JSON.stringify(eval_payload));
+        }
+      }
+    }
     const _sourceAb: any =
       nearHrPeak.sourceAbIndex != null
         ? _priorAbsForNearHr[nearHrPeak.sourceAbIndex]
@@ -2197,7 +2230,25 @@ export class LiveGameOrchestrator {
         else if (newTotal >= 40) scoreBreakdown.confidenceTier = "WATCHLIST";
         else scoreBreakdown.confidenceTier = "NO_SIGNAL";
         try {
-          console.log(`[MLB_HR_WATCH_SCORE_BUMP] player=${output.playerName} market=${output.market} tier=${nearHrResult.tier} bump=+${bump} oldTotal=${oldTotal} newTotal=${newTotal}`);
+          // Phase 1 STEP 2 — enriched score-bump diagnostic so an audit can
+          // tell WHICH AB triggered the lean/watch and which drivers were
+          // injected, plus the gate state before/after the bump.
+          const bumpPayload = {
+            playerId: (input as any).playerId ?? null,
+            playerName: output.playerName,
+            market: output.market,
+            sourceAbIndex: nearHrPeak.sourceAbIndex,
+            tier: nearHrResult.tier,
+            matchedPath: nearHrResult.matchedPath ?? null,
+            repeatedDanger: nearHrResult.repeatedDanger === true,
+            oldScore: oldTotal,
+            bump,
+            newScore: newTotal,
+            gateBefore: 35,
+            gateAfter: HR_WATCH_GATE,
+            driversAdded: nearHrResult.drivers,
+          };
+          console.log("[MLB_HR_WATCH_SCORE_BUMP]", JSON.stringify(bumpPayload));
         } catch {}
       }
     }
