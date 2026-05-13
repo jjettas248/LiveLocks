@@ -10,14 +10,8 @@ export type MLBMarket =
   | "batter_strikeouts"
   | "hr_allowed";
 
-// `home_runs` is intentionally disabled as a per-AB engine market — HR Radar
-// owns the entire HR analytics surface (alerts, lifecycle, settlement). The
-// MLBMarket type union still includes "home_runs" because HR Radar persists
-// its own plays under that key, but the orchestrator's per-AB qualification
-// loop no longer iterates it.
 export const DISABLED_MLB_MARKETS: MLBMarket[] = [
   "batter_strikeouts",
-  "home_runs",
   "hr_allowed",
   "walks_allowed",
 ];
@@ -27,6 +21,7 @@ export const ALL_MLB_MARKETS: MLBMarket[] = [
   "total_bases",
   "pitcher_strikeouts",
   "hits_allowed",
+  "home_runs",
   "hrr",
   "pitcher_outs",
 ];
@@ -93,6 +88,7 @@ export const USER_FACING_MLB_MARKETS: MLBMarket[] = [
   "hits",
   "total_bases",
   "pitcher_strikeouts",
+  "home_runs",
 ];
 
 export const CORE_MARKETS: MLBMarket[] = [
@@ -101,10 +97,7 @@ export const CORE_MARKETS: MLBMarket[] = [
   "pitcher_strikeouts",
 ];
 
-// `home_runs` and `batter_strikeouts` are no longer engine markets — see
-// DISABLED_MLB_MARKETS above. HR analytics live exclusively on the HR Radar
-// surface; batter_strikeouts is fully deprecated.
-export const EXPERIMENTAL_MARKETS: MLBMarket[] = ["hr_allowed"];
+export const EXPERIMENTAL_MARKETS: MLBMarket[] = ["home_runs", "batter_strikeouts", "hr_allowed"];
 
 export const EXPERIMENTAL_CONFIDENCE_CEILING: MLBConfidenceTier = "STRONG";
 
