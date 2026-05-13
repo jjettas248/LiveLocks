@@ -2615,7 +2615,7 @@ export default function Dashboard() {
           {activeTab === "mlb" && (
             <div className="flex gap-1 mt-2 w-fit bg-secondary/40 border border-border/60 rounded-xl p-1">
               {([
-                { key: "live_feed", label: "Live Feed" },
+                { key: "live_feed", label: "Action Feed" },
                 { key: "hr_radar", label: "HR Radar" },
                 { key: "games", label: "Games" },
               ] as const).map(tab => (
@@ -3204,7 +3204,7 @@ export default function Dashboard() {
                 </div>
                 <h3 className="text-lg font-semibold text-foreground mb-2">Awaiting Signal</h3>
                 <p className="max-w-xs text-sm text-muted-foreground mb-4">
-                  The Live Feed surfaces signals automatically. Use this panel to read a specific player's live signal on demand.
+                  The Action Feed surfaces signals automatically. Use this panel to read a specific player's live signal on demand.
                 </p>
                 {allGames.length > 0 && (
                   <div className="space-y-1.5 text-left text-xs text-muted-foreground/70 bg-secondary/30 border border-border/30 rounded-lg px-4 py-3 max-w-xs w-full">

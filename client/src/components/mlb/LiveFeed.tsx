@@ -1,12 +1,13 @@
-// ── MLB Live Feed (signal-first surface) ──────────────────────────────
-// Renders the four canonical display groups (ACTION NOW / BUILDING /
-// MONITOR / RESOLVED) coming from /api/mlb/edge-feed?view=market-signals.
-// This component is a pure renderer — no engine math, no thresholds,
-// no calibration. Inning pills + actionability badges are read straight
-// from the server-stamped MarketSignalViewModel.
+// ── MLB Action Feed (signal-first surface) ────────────────────────────
+// Renders the four canonical display groups as the signal-first stack:
+//   LIVE ATTACK WINDOWS (hero) · BUILDING SIGNALS · MONITORING · RESOLVED
+// from /api/mlb/edge-feed?view=market-signals.
+// Pure renderer — no engine math, no thresholds, no calibration.
+// Inning pills + actionability badges are read straight from the
+// server-stamped MarketSignalViewModel.
 
-import { useState } from "react";
-import { ChevronDown, ChevronUp, Flame, TrendingUp, Eye, CheckCircle2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ChevronDown, ChevronUp, Flame, TrendingUp, Eye, CheckCircle2, Activity } from "lucide-react";
 import { MlbSignalCard, type MlbSignalData } from "./MlbSignalCard";
 
 export type MarketActionability = "urgent" | "actionable" | "forming" | "monitor" | "resolved";
@@ -45,11 +46,13 @@ const GROUPS: Array<{
   border: string;
   icon: typeof Flame;
   emptyCopy: string;
+  /** Sections collapsed by default — Monitor + Resolved per signal-first spec. */
+  defaultCollapsed: boolean;
 }> = [
-  { key: "ACTION_NOW", label: "Action Now", color: "#ef4444", bg: "rgba(239,68,68,0.06)",   border: "rgba(239,68,68,0.30)",   icon: Flame,         emptyCopy: "No urgent signals right now." },
-  { key: "BUILDING",   label: "Building",   color: "#f59e0b", bg: "rgba(245,158,11,0.06)",  border: "rgba(245,158,11,0.30)",  icon: TrendingUp,    emptyCopy: "No signals are building yet." },
-  { key: "MONITOR",    label: "Monitor",    color: "#94a3b8", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.30)", icon: Eye,           emptyCopy: "Nothing on the watch list." },
-  { key: "RESOLVED",   label: "Resolved",   color: "#22c55e", bg: "rgba(34,197,94,0.06)",   border: "rgba(34,197,94,0.30)",   icon: CheckCircle2,  emptyCopy: "No graded signals yet today." },
+  { key: "ACTION_NOW", label: "Live Attack Windows", color: "#ef4444", bg: "rgba(239,68,68,0.06)",   border: "rgba(239,68,68,0.30)",   icon: Flame,         emptyCopy: "No live attack window right now — the engine is still scoring contact and matchups.", defaultCollapsed: false },
+  { key: "BUILDING",   label: "Building Signals",    color: "#f59e0b", bg: "rgba(245,158,11,0.06)",  border: "rgba(245,158,11,0.30)",  icon: TrendingUp,    emptyCopy: "No signals are forming yet — checking pitcher fatigue, contact streaks, and lineup leverage.", defaultCollapsed: false },
+  { key: "MONITOR",    label: "Monitoring",          color: "#94a3b8", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.30)", icon: Eye,           emptyCopy: "Nothing on the watch list.", defaultCollapsed: true },
+  { key: "RESOLVED",   label: "Resolved",            color: "#22c55e", bg: "rgba(34,197,94,0.06)",   border: "rgba(34,197,94,0.30)",   icon: CheckCircle2,  emptyCopy: "No graded signals yet today.", defaultCollapsed: true },
 ];
 
 export interface LiveFeedProps {
@@ -73,7 +76,13 @@ export function LiveFeed({
   isElite = true,
   unknownInningCount,
 }: LiveFeedProps) {
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // Initialize collapsed state from each group's defaultCollapsed flag so
+  // Monitoring + Resolved are tucked away by default. Users can expand.
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = {};
+    for (const g of GROUPS) init[g.key] = g.defaultCollapsed;
+    return init;
+  });
   const grouped: Record<MarketDisplayGroup, MarketSignalViewModelClient[]> = {
     ACTION_NOW: [],
     BUILDING: [],
@@ -81,6 +90,34 @@ export function LiveFeed({
     RESOLVED: [],
   };
   for (const r of rows) grouped[r.displayGroup].push(r);
+
+  // Signal-first empty state: when there are NO actionable rows at all
+  // (action + building + monitor all 0), the feed should NOT render four
+  // empty buckets. Resolved is allowed to be non-empty without triggering
+  // the narrative state — graded outcomes are real activity.
+  const liveCount = grouped.ACTION_NOW.length + grouped.BUILDING.length + grouped.MONITOR.length;
+  const lateActionCount = grouped.ACTION_NOW.filter((r) => r.inningWindow === "late").length;
+  const buildingLiveCount = grouped.BUILDING.length;
+  const isFullyEmpty = liveCount === 0;
+
+  // ── Diagnostics: signal-first surface tags ──────────────────────────
+  // Emitted once per render to keep [MLB_ACTION_FEED] / [MLB_LATE_WINDOW] /
+  // [MLB_BUILDING_SIGNAL] / [MLB_EMPTY_STATE] visible in the browser
+  // console for the spec's required admin debug surface. Pure logging.
+  useEffect(() => {
+    try {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[MLB_ACTION_FEED] live=${liveCount} action=${grouped.ACTION_NOW.length} ` +
+          `building=${grouped.BUILDING.length} monitor=${grouped.MONITOR.length} ` +
+          `resolved=${grouped.RESOLVED.length} unknownInning=${unknownInningCount ?? 0}`,
+      );
+      if (lateActionCount > 0) console.log(`[MLB_LATE_WINDOW] count=${lateActionCount}`);
+      if (buildingLiveCount > 0) console.log(`[MLB_BUILDING_SIGNAL] count=${buildingLiveCount}`);
+      if (isFullyEmpty) console.log(`[MLB_EMPTY_STATE] action+building+monitor=0 narrative=engine_building_conviction`);
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows.length, liveCount, lateActionCount, buildingLiveCount]);
 
   return (
     <div className="space-y-4" data-testid="mlb-live-feed">
@@ -94,9 +131,37 @@ export function LiveFeed({
         </div>
       )}
 
+      {/* Signal-first narrative empty state — replaces "0 / 0 / 0 / 0"
+          dead-bucket rendering with an active, alive system message that
+          tells the user what the engine is doing right now. */}
+      {isFullyEmpty && (
+        <div
+          data-testid="mlb-action-feed-empty-narrative"
+          className="rounded-xl border border-primary/20 bg-gradient-to-b from-primary/5 to-transparent p-5 sm:p-6 text-center space-y-3"
+        >
+          <div className="flex items-center justify-center gap-2">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
+            </span>
+            <Activity className="w-4 h-4 text-primary" />
+            <span className="text-sm font-bold tracking-tight text-foreground">Engine Building Conviction</span>
+          </div>
+          <p className="text-xs text-muted-foreground max-w-sm mx-auto leading-relaxed">
+            Live games are being scored — pitcher fatigue, lineup leverage, and contact streaks
+            are still developing. Live Attack Windows fire when the evidence escalates.
+          </p>
+        </div>
+      )}
+
       {GROUPS.map((g) => {
         const items = grouped[g.key];
-        const isCollapsed = collapsed[g.key] ?? false;
+        // Hide empty Monitor + Resolved entirely when the feed is fully empty
+        // so we don't show four empty rows under the narrative card.
+        if (isFullyEmpty && (g.key === "MONITOR" || g.key === "RESOLVED") && items.length === 0) {
+          return null;
+        }
+        const isCollapsed = collapsed[g.key] ?? g.defaultCollapsed;
         const Icon = g.icon;
         const visible = isElite ? items : items.slice(0, g.key === "ACTION_NOW" ? 1 : 0);
         const blurred = isElite ? [] : items.slice(visible.length, visible.length + 2);

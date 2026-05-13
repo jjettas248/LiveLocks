@@ -365,6 +365,28 @@ export function groupByDisplayGroup(rows: MarketSignalViewModel[]): GroupedMarke
     RESOLVED: [],
   };
   for (const r of rows) out[r.displayGroup].push(r);
+
+  // Signal-first surface diagnostics — counts of late-inning attack windows
+  // and building-signal rows. Pure logging; never affects sort/grouping.
+  try {
+    const lateAction = out.ACTION_NOW.filter((r) => r.inningWindow === "late").length;
+    const earlyBuild = out.BUILDING.filter((r) => r.inningWindow === "early").length;
+    const liveCount = out.ACTION_NOW.length + out.BUILDING.length + out.MONITOR.length;
+    console.log(
+      `[MLB_SIGNAL_SURFACE] action=${out.ACTION_NOW.length} building=${out.BUILDING.length} ` +
+        `monitor=${out.MONITOR.length} resolved=${out.RESOLVED.length} live=${liveCount}`,
+    );
+    if (out.ACTION_NOW.length > 0) {
+      console.log(`[MLB_LATE_WINDOW] action=${out.ACTION_NOW.length} late=${lateAction}`);
+    }
+    if (out.BUILDING.length > 0) {
+      console.log(`[MLB_BUILDING_SIGNAL] count=${out.BUILDING.length} early=${earlyBuild}`);
+    }
+    if (liveCount === 0) {
+      console.log(`[MLB_EMPTY_STATE] reason=no_live_actionable_signals resolved=${out.RESOLVED.length}`);
+    }
+  } catch {}
+
   return out;
 }
 
