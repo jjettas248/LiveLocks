@@ -4,10 +4,15 @@
 // belong to admin-only diagnostic lanes.
 //
 // Spec (LiveLocks Phase 1, Analytics Integrity):
-//   PRIMARY_MLB_ROI_MARKETS   — counted in headline ROI / hit rate / calibration
-//   EXCLUDED_FROM_PRIMARY_MLB_ROI — explicitly removed from the headline
-//   HR_RADAR_ANALYTICS_MARKETS — admin-only HR Radar performance lane
-//   EXPERIMENTAL_MLB_MARKETS   — admin-only experimental diagnostics lane
+//   PRIMARY_MLB_ROI_MARKETS       — counted in headline ROI / hit rate / calibration
+//   EXCLUDED_FROM_PRIMARY_MLB_ROI — explicitly removed from the headline (defensive net for legacy plays)
+//   HR_RADAR_ANALYTICS_MARKETS    — admin-only HR Radar performance lane
+//
+// `home_runs` is no longer produced by the per-AB engine — HR Radar owns the
+// entire HR analytics surface (alerts, lifecycle, settlement) and continues
+// to persist its plays under the `home_runs` market label. The HR Radar
+// admin lane reads those rows. `batter_strikeouts` is fully deprecated and
+// has no analytics lane.
 //
 // Hard rules:
 //   - This file MUST NOT be imported by engine math, signal generation, the
@@ -22,7 +27,6 @@
 export type MlbMarketAnalyticsGroup =
   | "primary_mlb_roi"
   | "hr_radar"
-  | "experimental_mlb"
   | "other";
 
 /**
@@ -41,22 +45,19 @@ export const PRIMARY_MLB_ROI_MARKETS: readonly string[] = Object.freeze([
 
 /**
  * Markets explicitly excluded from primary MLB ROI / hit rate / calibration.
- * - home_runs        → routed to HR Radar Performance lane (admin only)
- * - batter_strikeouts → routed to Experimental MLB Markets lane (admin only)
+ * Defensive net: ANY persisted_play (including legacy rows) carrying these
+ * markets is filtered out of headline ROI. Going forward neither market is
+ * produced by the engine — `home_runs` is owned exclusively by HR Radar and
+ * `batter_strikeouts` is fully deprecated.
  */
 export const EXCLUDED_FROM_PRIMARY_MLB_ROI: readonly string[] = Object.freeze([
   "home_runs",
   "batter_strikeouts",
 ]);
 
-/** Admin-only HR Radar analytics lane. */
+/** Admin-only HR Radar analytics lane (Unified Analytics card). */
 export const HR_RADAR_ANALYTICS_MARKETS: readonly string[] = Object.freeze([
   "home_runs",
-]);
-
-/** Admin-only experimental MLB diagnostics lane. */
-export const EXPERIMENTAL_MLB_MARKETS: readonly string[] = Object.freeze([
-  "batter_strikeouts",
 ]);
 
 /** Returns true iff the market counts toward the primary MLB ROI headline. */
@@ -82,7 +83,6 @@ export function getMlbMarketAnalyticsGroup(
 ): MlbMarketAnalyticsGroup {
   if (!market) return "other";
   if (HR_RADAR_ANALYTICS_MARKETS.includes(market)) return "hr_radar";
-  if (EXPERIMENTAL_MLB_MARKETS.includes(market)) return "experimental_mlb";
   if (PRIMARY_MLB_ROI_MARKETS.includes(market)) return "primary_mlb_roi";
   return "other";
 }
@@ -103,7 +103,7 @@ export function filterPrimaryMlbRoiPlays<T extends { market?: string | null; spo
 }
 
 /** Analytics scope tag emitted alongside `[ANALYTICS_QUERY]` log lines. */
-export type AnalyticsScope = "primary_mlb_roi" | "hr_radar" | "experimental_mlb" | "full";
+export type AnalyticsScope = "primary_mlb_roi" | "hr_radar" | "full";
 
 /**
  * Structured log emitted by every MLB analytics endpoint so observability can

@@ -259,15 +259,16 @@ function DashboardSection() {
     // Best-effort MLB filter: the canonical MLB market keys live in the
     // shared groupings module. We treat these as MLB markets for the
     // admin breakdown since publicAnalyticsService groups by raw market.
+    // `batter_strikeouts` is deprecated and intentionally excluded from
+    // the admin breakdown — it has no engine output and no analytics lane.
     const MLB_KEYS = new Set([
       "hits", "total_bases", "hrr", "hits_allowed", "pitcher_outs",
-      "pitcher_strikeouts", "hr_allowed", "home_runs", "batter_strikeouts",
+      "pitcher_strikeouts", "hr_allowed", "home_runs",
       "rbi", "runs", "stolen_bases",
     ]);
     return MLB_KEYS.has(r.market);
   });
   const hrRadarRow = mlbMarketRows.find((r) => r.market === "home_runs") ?? null;
-  const experimentalRow = mlbMarketRows.find((r) => r.market === "batter_strikeouts") ?? null;
 
   const overPlays = allPlays.filter(p => p.direction === "O");
   const underPlays = allPlays.filter(p => p.direction === "U");
@@ -361,11 +362,11 @@ function DashboardSection() {
           </div>
           {isMlbView && isAdmin && (
             <p className="text-[10px] text-muted-foreground -mt-2" data-testid="text-mlb-core-roi-note">
-              Excludes HR Radar and experimental batter strikeout markets.
+              Excludes the HR Radar lane (lives on the HR Radar tab).
             </p>
           )}
 
-          {isAdmin && isMlbView && (hrRadarRow || experimentalRow || mlbMarketRows.length > 0) && (
+          {isAdmin && isMlbView && (hrRadarRow || mlbMarketRows.length > 0) && (
             <>
               {hrRadarRow && (
                 <AdminLaneCard
@@ -376,18 +377,6 @@ function DashboardSection() {
                   rows={[hrRadarRow]}
                   badge="HR Radar · excluded"
                   testId="section-admin-hr-radar-performance"
-                />
-              )}
-              {experimentalRow && (
-                <AdminLaneCard
-                  title="Experimental MLB Markets"
-                  subtitle="batter_strikeouts — admin diagnostic lane"
-                  icon={AlertTriangle}
-                  accent="text-yellow-400"
-                  rows={[experimentalRow]}
-                  badge="Experimental · excluded"
-                  warning="Excluded from primary calibration"
-                  testId="section-admin-experimental-mlb"
                 />
               )}
               {mlbMarketRows.length > 0 && (

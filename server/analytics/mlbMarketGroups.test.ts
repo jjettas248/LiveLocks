@@ -9,7 +9,6 @@ import {
   PRIMARY_MLB_ROI_MARKETS,
   EXCLUDED_FROM_PRIMARY_MLB_ROI,
   HR_RADAR_ANALYTICS_MARKETS,
-  EXPERIMENTAL_MLB_MARKETS,
   isPrimaryMlbRoiMarket,
   isExcludedFromPrimaryMlbRoi,
   getMlbMarketAnalyticsGroup,
@@ -47,7 +46,6 @@ assert(!EXCLUDED_FROM_PRIMARY_MLB_ROI.includes("pitcher_strikeouts"), "excluded 
 assert(!EXCLUDED_FROM_PRIMARY_MLB_ROI.includes("hrr"), "excluded list does NOT include hrr");
 
 assert(HR_RADAR_ANALYTICS_MARKETS.length === 1 && HR_RADAR_ANALYTICS_MARKETS[0] === "home_runs", "HR Radar lane = [home_runs]");
-assert(EXPERIMENTAL_MLB_MARKETS.length === 1 && EXPERIMENTAL_MLB_MARKETS[0] === "batter_strikeouts", "Experimental lane = [batter_strikeouts]");
 
 // ── Predicates ──────────────────────────────────────────────────────────
 assert(isPrimaryMlbRoiMarket("hits"), "isPrimaryMlbRoiMarket(hits)=true");
@@ -65,7 +63,7 @@ assert(getMlbMarketAnalyticsGroup("hits") === "primary_mlb_roi", "group(hits)=pr
 assert(getMlbMarketAnalyticsGroup("hrr") === "primary_mlb_roi", "group(hrr)=primary_mlb_roi");
 assert(getMlbMarketAnalyticsGroup("pitcher_strikeouts") === "primary_mlb_roi", "group(pitcher_strikeouts)=primary_mlb_roi");
 assert(getMlbMarketAnalyticsGroup("home_runs") === "hr_radar", "group(home_runs)=hr_radar");
-assert(getMlbMarketAnalyticsGroup("batter_strikeouts") === "experimental_mlb", "group(batter_strikeouts)=experimental_mlb");
+assert(getMlbMarketAnalyticsGroup("batter_strikeouts") === "other", "group(batter_strikeouts)=other (deprecated — no dedicated lane)");
 assert(getMlbMarketAnalyticsGroup("unknown_new_market") === "other", "group(unknown)=other (never silently folded into headline)");
 assert(getMlbMarketAnalyticsGroup(null) === "other", "group(null)=other");
 

@@ -305,32 +305,20 @@ async function learnMarketRates(): Promise<Record<string, MarketCalibrationData>
 
     result["hits"] = buildCal("hits", actualHitRate, defaultHitRate);
     result["total_bases"] = buildCal("total_bases", actualTbRate, defaultTbRate);
-    result["batter_strikeouts"] = buildCal("batter_strikeouts", actualKRate, defaultKRate);
 
-    const hrRows = await db.execute(sql`
-      SELECT COUNT(*) as hr_count FROM hr_outcomes
-    `);
-    const hrTotalFromOH = parseInt((hrRows.rows[0] as any).hr_count ?? "0");
+    // `home_runs` and `batter_strikeouts` calibration removed — HR analytics
+    // live entirely on the HR Radar surface (its own self-learning loop), and
+    // batter_strikeouts is deprecated as an engine market. The variables
+    // `actualKRate` / `defaultKRate` are intentionally left in place upstream
+    // so the surrounding SQL aggregate can still feed `hrr` math without a
+    // second round-trip.
+    void actualKRate;
+    void defaultKRate;
 
     const gpsHrRows = await db.execute(sql`
       SELECT SUM(ab) as total_ab FROM game_player_stats WHERE ab > 0
     `);
     const gpsAb = parseInt((gpsHrRows.rows[0] as any).total_ab ?? "0");
-
-    const radarRows = await db.execute(sql`
-      SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN result = 'hit' THEN 1 ELSE 0 END) as hits
-      FROM hr_radar_analytics
-    `);
-    const radarTotal = parseInt((radarRows.rows[0] as any).total ?? "0");
-    const radarHits = parseInt((radarRows.rows[0] as any).hits ?? "0");
-
-    if (radarTotal >= 20) {
-      const radarHitRate = radarHits / radarTotal;
-      const expectedHrRate = 0.035;
-      result["home_runs"] = buildCal("home_runs", radarHitRate, expectedHrRate);
-    }
 
     const hrrRate = gpsAb > 0 ? (totalH + totalR + totalRBI) / gpsAb : 0;
     if (gpsAb >= 100) {

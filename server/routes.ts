@@ -9007,14 +9007,15 @@ export function registerCalibrationRoutes(app: Express): void {
     try {
       const { sport, market, startDate, endDate } = req.query as Record<string, string>;
       // Analytics scope: "primary" (default for MLB) excludes home_runs +
-      // batter_strikeouts; "hr_radar" isolates home_runs; "experimental"
-      // isolates batter_strikeouts; "full" returns every market untouched
-      // (admin only — already gated by requireAdmin).
+      // batter_strikeouts; "hr_radar" isolates home_runs; "full" returns
+      // every market untouched (admin only — already gated by requireAdmin).
+      // The legacy "experimental" / "experimental_mlb" scope (batter_strikeouts)
+      // is collapsed onto "full" — batter_strikeouts is deprecated and no
+      // longer has a dedicated analytics lane.
       const scopeRaw = String((req.query as any).scope ?? "primary").toLowerCase();
-      const analyticsScope: "primary_mlb_roi" | "hr_radar" | "experimental_mlb" | "full" =
+      const analyticsScope: "primary_mlb_roi" | "hr_radar" | "full" =
         scopeRaw === "hr_radar" ? "hr_radar"
-        : scopeRaw === "experimental" || scopeRaw === "experimental_mlb" ? "experimental_mlb"
-        : scopeRaw === "full" ? "full"
+        : scopeRaw === "full" || scopeRaw === "experimental" || scopeRaw === "experimental_mlb" ? "full"
         : "primary_mlb_roi";
 
       const allPlays = await storage.getGradedPlaysForCalibration({
@@ -9032,7 +9033,6 @@ export function registerCalibrationRoutes(app: Express): void {
         PRIMARY_MLB_ROI_MARKETS,
         EXCLUDED_FROM_PRIMARY_MLB_ROI,
         HR_RADAR_ANALYTICS_MARKETS,
-        EXPERIMENTAL_MLB_MARKETS,
         filterPrimaryMlbRoiPlays,
         logAnalyticsQuery,
       } = await import("./analytics/mlbMarketGroups");
@@ -9046,8 +9046,6 @@ export function registerCalibrationRoutes(app: Express): void {
           plays = filterPrimaryMlbRoiPlays(plays);
         } else if (analyticsScope === "hr_radar") {
           plays = plays.filter((p) => HR_RADAR_ANALYTICS_MARKETS.includes(p.market));
-        } else if (analyticsScope === "experimental_mlb") {
-          plays = plays.filter((p) => EXPERIMENTAL_MLB_MARKETS.includes(p.market));
         }
         logAnalyticsQuery({
           surface: "/api/persisted-plays/calibration",
@@ -9056,7 +9054,6 @@ export function registerCalibrationRoutes(app: Express): void {
           includedMarkets:
             analyticsScope === "primary_mlb_roi" ? PRIMARY_MLB_ROI_MARKETS
             : analyticsScope === "hr_radar" ? HR_RADAR_ANALYTICS_MARKETS
-            : analyticsScope === "experimental_mlb" ? EXPERIMENTAL_MLB_MARKETS
             : [],
           excludedMarkets:
             analyticsScope === "primary_mlb_roi" ? EXCLUDED_FROM_PRIMARY_MLB_ROI : [],
@@ -9622,17 +9619,17 @@ export function registerAnalyticsRoutes(app: Express): void {
       const sportLowerScope = (sport || "nba").toLowerCase();
       const isMlbScope = sportLowerScope === "mlb";
       const scopeRaw = String((req.query as any).scope ?? "primary").toLowerCase();
-      const analyticsScope: "primary_mlb_roi" | "hr_radar" | "experimental_mlb" | "full" =
+      // Legacy "experimental"/"experimental_mlb" scope collapsed onto "full" —
+      // batter_strikeouts is deprecated and no longer has a dedicated lane.
+      const analyticsScope: "primary_mlb_roi" | "hr_radar" | "full" =
         scopeRaw === "hr_radar" ? "hr_radar"
-        : scopeRaw === "experimental" || scopeRaw === "experimental_mlb" ? "experimental_mlb"
-        : scopeRaw === "full" ? "full"
+        : scopeRaw === "full" || scopeRaw === "experimental" || scopeRaw === "experimental_mlb" ? "full"
         : "primary_mlb_roi";
       if (isMlbScope) {
         const {
           PRIMARY_MLB_ROI_MARKETS,
           EXCLUDED_FROM_PRIMARY_MLB_ROI,
           HR_RADAR_ANALYTICS_MARKETS,
-          EXPERIMENTAL_MLB_MARKETS,
           filterPrimaryMlbRoiPlays,
           logAnalyticsQuery,
         } = await import("./analytics/mlbMarketGroups");
@@ -9641,8 +9638,6 @@ export function registerAnalyticsRoutes(app: Express): void {
           settled = filterPrimaryMlbRoiPlays(settled);
         } else if (analyticsScope === "hr_radar") {
           settled = settled.filter((p: any) => HR_RADAR_ANALYTICS_MARKETS.includes(p.market));
-        } else if (analyticsScope === "experimental_mlb") {
-          settled = settled.filter((p: any) => EXPERIMENTAL_MLB_MARKETS.includes(p.market));
         }
         logAnalyticsQuery({
           surface: "/api/analytics/confidence-buckets",
@@ -9651,7 +9646,6 @@ export function registerAnalyticsRoutes(app: Express): void {
           includedMarkets:
             analyticsScope === "primary_mlb_roi" ? PRIMARY_MLB_ROI_MARKETS
             : analyticsScope === "hr_radar" ? HR_RADAR_ANALYTICS_MARKETS
-            : analyticsScope === "experimental_mlb" ? EXPERIMENTAL_MLB_MARKETS
             : [],
           excludedMarkets:
             analyticsScope === "primary_mlb_roi" ? EXCLUDED_FROM_PRIMARY_MLB_ROI : [],
