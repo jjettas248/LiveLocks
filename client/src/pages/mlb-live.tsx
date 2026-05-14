@@ -3339,7 +3339,8 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                   <div className="rounded-xl border border-primary/20 bg-card shadow-[0_0_20px_-5px_hsl(var(--primary)/0.15)]" data-testid="mlb-calculator">
                     <div className="flex items-center gap-2 px-4 py-3 border-b border-primary/20" style={{ background: "linear-gradient(135deg, rgba(var(--primary-rgb, 59,130,246),0.08), transparent)" }}>
                       <Calculator className="w-4 h-4 text-primary" />
-                      <span className="text-xs font-bold text-foreground">MLB Calculator</span>
+                      <span className="text-xs font-bold text-foreground">Signal Read</span>
+                      <span className="text-[9px] text-muted-foreground/70 ml-auto">Engine evaluating this player</span>
                     </div>
 
                     <div className="p-4 space-y-4">
@@ -3662,6 +3663,19 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
               const resolveSignal = (vm: import("@/components/mlb/LiveFeed").MarketSignalViewModelClient): MlbSignalData | null => {
                 return sigIndex.get(vm.signalId) ?? null;
               };
+              // Narrative empty-state counts: derive once so the empty
+              // card reads as alive ("7 games monitored, 24 batters")
+              // rather than as four dead "0 0 0 0" buckets. Pure UI.
+              const distinctBatterIds = new Set<string>();
+              for (const s of edgeFeedSignals) {
+                if (s?.playerId) distinctBatterIds.add(String(s.playerId));
+              }
+              const buildingCount = marketRows.filter((r) => r.displayGroup === "BUILDING").length;
+              const lateWindowsForming = marketRows.filter(
+                (r) =>
+                  (r.displayGroup === "ACTION_NOW" || r.displayGroup === "BUILDING") &&
+                  r.inningWindow === "late",
+              ).length;
               return (
                 <div className="space-y-6">
                   <LiveFeed
@@ -3671,6 +3685,12 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                     onOpenCalculator={handleSignalClick}
                     isElite={isElite}
                     unknownInningCount={marketSignalsResp?.unknownInningCount}
+                    narrativeStats={{
+                      gamesMonitored: games.length,
+                      batterProfiles: distinctBatterIds.size,
+                      buildingCount,
+                      lateWindowsForming,
+                    }}
                   />
                 </div>
               );

@@ -499,12 +499,25 @@ export function MlbBoxScore({
                     const playStyle = COLOR_TIER_STYLES[playTier];
                     const sideLabel = isUnder ? "U" : "O";
 
+                    // Signal-state-first row label per Action Feed UX spec —
+                    // lead with conviction state (FIRE / READY) ahead of side+
+                    // market+prob. Tier mapping: elite → FIRE, strong → READY,
+                    // lean → BUILD, watch → MON. Falls back to READY for any
+                    // feed-qualified play missing tier (cache rollover).
+                    const sigTier = ((current as any).signalTier as string | undefined)?.toLowerCase();
+                    const stateLabel =
+                      sigTier === "elite" ? "FIRE"
+                      : sigTier === "strong" ? "READY"
+                      : sigTier === "lean" ? "BUILD"
+                      : sigTier === "watch" ? "MON"
+                      : "READY";
                     signalBadge = (
                       <span className="flex items-center gap-1">
                         <span
                           data-testid={`signal-badge-${player.playerId}-${current.market}`}
                           title={
-                            `Engine probability: ${displayPct.toFixed(0)}% (canonical, matches calculator)` +
+                            `${stateLabel} · ${sideLabel} ${SHORT_MARKET_LABELS[current.market] ?? current.market}` +
+                            ` · Engine probability: ${displayPct.toFixed(0)}% (canonical, matches calculator)` +
                             (engineForPlayer?.engineConfidence != null
                               ? ` · Engine conviction: ${engineForPlayer.engineConfidence.toFixed(0)}`
                               : "") +
@@ -522,6 +535,7 @@ export function MlbBoxScore({
                             borderRadius: "5px",
                           }}
                         >
+                          <span style={{ fontSize: "9px", opacity: 0.85, marginRight: "4px", letterSpacing: "0.04em" }}>{stateLabel}</span>
                           {sideLabel} {SHORT_MARKET_LABELS[current.market] ?? current.market} {displayPct.toFixed(0)}%
                         </span>
                         {allPlays.length > 1 && (
@@ -553,16 +567,20 @@ export function MlbBoxScore({
                       (rawProb != null ? ` · Raw probability: ${rawProb.toFixed(0)}%` : "") +
                       `\n${driversText}`;
 
+                    // Signal-state-first label per Action Feed UX spec —
+                    // engine non-qualified states map: strong→READY,
+                    // building→BUILD, watch→MON, monitor→MON. Side+market+conf
+                    // remain visible but state leads visually.
                     if (state === "strong" || state === "building") {
-                      // Engine-strong/building but not yet feed-qualified: lighter colored pill.
                       const isStrong = state === "strong";
                       const bg = isStrong ? "rgba(34,197,94,0.15)" : "rgba(234,179,8,0.12)";
                       const border = isStrong ? "rgba(34,197,94,0.45)" : "rgba(234,179,8,0.4)";
                       const fg = isStrong ? "#22c55e" : "#eab308";
+                      const stateLabel = isStrong ? "READY" : "BUILD";
                       signalBadge = (
                         <span
                           data-testid={`engine-state-${player.playerId}-${state}`}
-                          title={tooltip}
+                          title={`${stateLabel} · ${tooltip}`}
                           className="cursor-help select-none whitespace-nowrap leading-none"
                           style={{
                             background: bg,
@@ -574,9 +592,10 @@ export function MlbBoxScore({
                             borderRadius: "5px",
                           }}
                         >
+                          <span style={{ fontSize: "9px", opacity: 0.85, marginRight: "4px", letterSpacing: "0.04em" }}>{stateLabel}</span>
                           {marketShort
                             ? `${sideLabel} ${marketShort} ${conf.toFixed(0)}%`
-                            : (isStrong ? "STRONG" : "BUILDING")}
+                            : stateLabel}
                         </span>
                       );
                     } else {
@@ -588,7 +607,7 @@ export function MlbBoxScore({
                       signalBadge = (
                         <span
                           data-testid={`engine-state-${player.playerId}-${state}`}
-                          title={tooltip}
+                          title={`MON · ${tooltip}`}
                           className="cursor-help select-none whitespace-nowrap leading-none uppercase tracking-wide"
                           style={{
                             background: bg,
@@ -600,7 +619,7 @@ export function MlbBoxScore({
                             borderRadius: "4px",
                           }}
                         >
-                          {isWatch ? "Watch" : "Mon"}
+                          MON
                           {marketShort ? ` · ${marketShort}` : ""}
                         </span>
                       );
@@ -688,7 +707,7 @@ export function MlbBoxScore({
 
           {onPlayerClick && (
             <div className="px-3 py-2 border-t border-border/20">
-              <p className="text-[9px] text-muted-foreground/50 text-center">Tap a player row to auto-fill the calculator</p>
+              <p className="text-[9px] text-muted-foreground/50 text-center">Tap a player row to read their signal</p>
             </div>
           )}
 

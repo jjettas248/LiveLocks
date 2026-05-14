@@ -55,6 +55,20 @@ const GROUPS: Array<{
   { key: "RESOLVED",   label: "Resolved",            color: "#22c55e", bg: "rgba(34,197,94,0.06)",   border: "rgba(34,197,94,0.30)",   icon: CheckCircle2,  emptyCopy: "No graded signals yet today.", defaultCollapsed: true },
 ];
 
+/** Optional live-context counts surfaced inside the narrative empty state
+ *  so the engine reads as "active" rather than "dead" when no signals
+ *  are currently actionable. Pure display — no engine math. */
+export interface NarrativeStats {
+  /** Total live/upcoming MLB games being polled by the engine. */
+  gamesMonitored?: number;
+  /** Distinct active batter profiles across all monitored games. */
+  batterProfiles?: number;
+  /** Currently-forming building signals (BUILDING bucket count). */
+  buildingCount?: number;
+  /** Late-window (7+ inning) attack windows about to fire. */
+  lateWindowsForming?: number;
+}
+
 export interface LiveFeedProps {
   rows: MarketSignalViewModelClient[];
   /** Find the underlying MLBSignal so the existing card renders unchanged. */
@@ -65,6 +79,8 @@ export interface LiveFeedProps {
   /** Optional gating tail blur for non-elite users. */
   isElite?: boolean;
   unknownInningCount?: number;
+  /** Optional live-context counts for the narrative empty state. */
+  narrativeStats?: NarrativeStats;
 }
 
 export function LiveFeed({
@@ -75,6 +91,7 @@ export function LiveFeed({
   onPlayerClick,
   isElite = true,
   unknownInningCount,
+  narrativeStats,
 }: LiveFeedProps) {
   // Initialize collapsed state from each group's defaultCollapsed flag so
   // Monitoring + Resolved are tucked away by default. Users can expand.
@@ -133,11 +150,12 @@ export function LiveFeed({
 
       {/* Signal-first narrative empty state — replaces "0 / 0 / 0 / 0"
           dead-bucket rendering with an active, alive system message that
-          tells the user what the engine is doing right now. */}
+          tells the user what the engine is doing right now. Optional
+          narrativeStats render as live "what's being evaluated" rows. */}
       {isFullyEmpty && (
         <div
           data-testid="mlb-action-feed-empty-narrative"
-          className="rounded-xl border border-primary/20 bg-gradient-to-b from-primary/5 to-transparent p-5 sm:p-6 text-center space-y-3"
+          className="rounded-xl border border-primary/20 bg-gradient-to-b from-primary/5 to-transparent p-5 sm:p-6 space-y-4"
         >
           <div className="flex items-center justify-center gap-2">
             <span className="relative flex h-2 w-2">
@@ -147,10 +165,43 @@ export function LiveFeed({
             <Activity className="w-4 h-4 text-primary" />
             <span className="text-sm font-bold tracking-tight text-foreground">Engine Building Conviction</span>
           </div>
-          <p className="text-xs text-muted-foreground max-w-sm mx-auto leading-relaxed">
+          <p className="text-xs text-muted-foreground max-w-sm mx-auto leading-relaxed text-center">
             Live games are being scored — pitcher fatigue, lineup leverage, and contact streaks
             are still developing. Live Attack Windows fire when the evidence escalates.
           </p>
+          {narrativeStats && (
+            (narrativeStats.gamesMonitored ?? 0) > 0 ||
+            (narrativeStats.batterProfiles ?? 0) > 0 ||
+            (narrativeStats.buildingCount ?? 0) > 0 ||
+            (narrativeStats.lateWindowsForming ?? 0) > 0
+          ) ? (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 max-w-md mx-auto pt-1" data-testid="empty-state-live-counts">
+              {(narrativeStats.gamesMonitored ?? 0) > 0 && (
+                <div className="rounded-lg bg-secondary/40 border border-border/30 px-2.5 py-2 text-center">
+                  <div className="text-base font-bold text-foreground tabular-nums" data-testid="text-games-monitored">{narrativeStats.gamesMonitored}</div>
+                  <div className="text-[9px] text-muted-foreground uppercase tracking-wider mt-0.5">Games monitored</div>
+                </div>
+              )}
+              {(narrativeStats.batterProfiles ?? 0) > 0 && (
+                <div className="rounded-lg bg-secondary/40 border border-border/30 px-2.5 py-2 text-center">
+                  <div className="text-base font-bold text-foreground tabular-nums" data-testid="text-batter-profiles">{narrativeStats.batterProfiles}</div>
+                  <div className="text-[9px] text-muted-foreground uppercase tracking-wider mt-0.5">Active batters</div>
+                </div>
+              )}
+              {(narrativeStats.buildingCount ?? 0) > 0 && (
+                <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-2.5 py-2 text-center">
+                  <div className="text-base font-bold text-amber-400 tabular-nums" data-testid="text-building-count">{narrativeStats.buildingCount}</div>
+                  <div className="text-[9px] text-muted-foreground uppercase tracking-wider mt-0.5">Forming</div>
+                </div>
+              )}
+              {(narrativeStats.lateWindowsForming ?? 0) > 0 && (
+                <div className="rounded-lg bg-red-500/10 border border-red-500/30 px-2.5 py-2 text-center">
+                  <div className="text-base font-bold text-red-400 tabular-nums" data-testid="text-late-windows-forming">{narrativeStats.lateWindowsForming}</div>
+                  <div className="text-[9px] text-muted-foreground uppercase tracking-wider mt-0.5">Late windows</div>
+                </div>
+              )}
+            </div>
+          ) : null}
         </div>
       )}
 
