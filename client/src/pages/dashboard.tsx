@@ -2615,8 +2615,8 @@ export default function Dashboard() {
           {activeTab === "mlb" && (
             <div className="flex gap-1 mt-2 w-fit bg-secondary/40 border border-border/60 rounded-xl p-1">
               {([
-                { key: "live_feed", label: "Action Feed" },
                 { key: "hr_radar", label: "HR Radar" },
+                { key: "live_feed", label: "Action Feed" },
                 { key: "games", label: "Games" },
               ] as const).map(tab => (
                 <button
