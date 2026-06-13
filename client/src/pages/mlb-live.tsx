@@ -8,6 +8,7 @@ import { LiveBoard } from "@/components/mlb/LiveBoard";
 import { LiveFeed } from "@/components/mlb/LiveFeed";
 import { MlbSignalCard, type MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { HrRadarLadder, type HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
+import { HrQuickDecide } from "@/components/mlb/HrQuickDecide";
 import { MlbBoxScore, type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
 import { AdminEngineDebugPanel } from "@/components/mlb/AdminEngineDebugPanel";
 import type { MLBSignal } from "@shared/mlbSignal";
@@ -2894,6 +2895,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
   const mlbUpgradeNeeded = false;
   const [mlbSlipPicks, setMlbSlipPicks] = useState<Array<{ playerId: string; playerName: string; market: string; line: number; side: string; sportsbook: string; edge: number | null; enginePct: number; gameId: string; overOdds?: number | null; underOdds?: number | null; overProbability?: number | null; underProbability?: number | null; engineConfidence?: number | null; source?: "engine" | "calculator" }>>([]);
   const [analyzeTarget, setAnalyzeTarget] = useState<{ playerId: string; gameId: string } | null>(null);
+  const [hrViewMode, setHrViewMode] = useState<"quick" | "ladder">("quick");
 
   const isElite = user?.hasMLB === true;
 
@@ -3788,18 +3790,45 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
       )}
 
       {activeSubTab === "hr_radar" && (
-        <HrRadarLadder
-          onAddToSlip={handleAddToSlip}
-          isAdmin={!!user?.isAdmin}
-          onOpenDetails={(entry: HrRadarLadderEntry) => {
-            handleHrRadarClick({
-              playerId: entry.playerId,
-              playerName: entry.playerName,
-              team: entry.team,
-              gameId: entry.gameId,
-            } as unknown as HrRadarCardUi);
-          }}
-        />
+        <div className="space-y-4">
+          {/* Quick Decide / Full Ladder toggle */}
+          <div className="flex items-center gap-1 p-1 bg-muted/30 rounded-lg border border-border/50">
+            <button
+              data-testid="button-hr-mode-quick"
+              onClick={() => setHrViewMode("quick")}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-md transition-colors ${hrViewMode === "quick" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              ⚡ Quick Decide
+            </button>
+            <button
+              data-testid="button-hr-mode-ladder"
+              onClick={() => setHrViewMode("ladder")}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-md transition-colors ${hrViewMode === "ladder" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              Full Ladder
+            </button>
+          </div>
+
+          {hrViewMode === "quick" ? (
+            <HrQuickDecide
+              onAddToSlip={handleAddToSlip}
+              onSwitchToLadder={() => setHrViewMode("ladder")}
+            />
+          ) : (
+            <HrRadarLadder
+              onAddToSlip={handleAddToSlip}
+              isAdmin={!!user?.isAdmin}
+              onOpenDetails={(entry: HrRadarLadderEntry) => {
+                handleHrRadarClick({
+                  playerId: entry.playerId,
+                  playerName: entry.playerName,
+                  team: entry.team,
+                  gameId: entry.gameId,
+                } as unknown as HrRadarCardUi);
+              }}
+            />
+          )}
+        </div>
       )}
 
       {analyzeTarget && (
