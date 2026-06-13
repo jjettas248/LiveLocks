@@ -2946,6 +2946,15 @@ export class LiveGameOrchestrator {
         hrInput.hotHitterBoost = boost;
       }
 
+      // Gap 3: pre-game pitcher fatigue for HR Radar path
+      if (pitcherCtx) {
+        hrInput.pitcherEntryFatigue = {
+          lastStartPitchCount: pitcherCtx.lastStartPitchCount ?? null,
+          daysSinceLastStart: pitcherCtx.daysSinceLastStart ?? null,
+          last3StartERA: pitcherCtx.last3StartERA ?? null,
+        };
+      }
+
       hrInput.liveInterpretation = buildLiveEventInterpretation(hrInput);
 
       const hrBuild = buildHRSignal(hrInput);
@@ -3039,6 +3048,10 @@ export class LiveGameOrchestrator {
         })),
         preHrDangerScore: hrBuild.preHrDangerScore,
         dangerFlags: hrBuild.dangerFlags,
+        pitchMix: pitcherCtx?.pitchMix ?? null,
+        lastStartPitchCount: pitcherCtx?.lastStartPitchCount ?? null,
+        daysSinceLastStart: pitcherCtx?.daysSinceLastStart ?? null,
+        last3StartERA: pitcherCtx?.last3StartERA ?? null,
       };
 
       const alertResult = evaluateHRAlert(alertInput);
@@ -3552,6 +3565,14 @@ export class LiveGameOrchestrator {
           if (ohData.isHotHitter) {
             const boost = ohData.hotHitterPeriod === "7d" ? 0.8 : ohData.hotHitterPeriod === "14d" ? 0.5 : 0.3;
             input.hotHitterBoost = boost;
+          }
+          // Gap 3: pre-game pitcher fatigue for HR/HRR markets
+          if (pitcherCtx) {
+            input.pitcherEntryFatigue = {
+              lastStartPitchCount: pitcherCtx.lastStartPitchCount ?? null,
+              daysSinceLastStart: pitcherCtx.daysSinceLastStart ?? null,
+              last3StartERA: pitcherCtx.last3StartERA ?? null,
+            };
           }
         }
 

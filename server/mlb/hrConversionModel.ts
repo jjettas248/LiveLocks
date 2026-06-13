@@ -1,5 +1,7 @@
 import type { HRBuildResult, ClassifiedContact } from "./HRSignalBuilder";
 import { estimateRichPADistribution } from "./paDistribution";
+import type { PitchMixEntry } from "./types";
+import { getPitchFamily } from "./pitchTypeNormalizer";
 
 export interface PitcherDeteriorationContext {
   velocityDrop: number | null;
@@ -37,6 +39,12 @@ export interface HRConversionInput {
   hardHitRate: number | null;
   xSLG: number | null;
   pitcherDeterioration?: PitcherDeteriorationContext | null;
+  // Gap 1: pitch mix for handedness × pitch-type HR multiplier
+  pitchMix?: PitchMixEntry[] | null;
+  // Gap 3: pre-game pitcher fatigue
+  lastStartPitchCount?: number | null;
+  daysSinceLastStart?: number | null;
+  last3StartERA?: number | null;
 }
 
 export interface HRConversionResult {
@@ -59,6 +67,7 @@ export interface HRConversionResult {
     liveAdjustedRate: number;
     pitcherAdjustedRate: number;
     envAdjustedRate: number;
+    entryAdjustedRate: number;
     finalPerPARate: number;
     paDist: Record<number, number>;
     pZeroHR: number;
@@ -315,7 +324,10 @@ function computeEnvironmentMultiplier(input: HRConversionInput): number {
     else if (temp <= 50) multiplier *= 0.94;
   }
 
-  if (input.batterHand && input.pitcherThrows && input.batterHand !== input.pitcherThrows) {
+  // Gap 1: replace simple handedness ±% with full pitch mix × handedness model.
+  if (input.pitchMix && input.pitchMix.length > 0) {
+    multiplier *= computePitchMixHandednessMultiplier(input.pitchMix, input.batterHand, input.pitcherThrows);
+  } else if (input.batterHand && input.pitcherThrows && input.batterHand !== input.pitcherThrows) {
     multiplier *= 1.06;
   } else if (input.batterHand && input.pitcherThrows && input.batterHand === input.pitcherThrows) {
     multiplier *= 0.94;
@@ -323,6 +335,89 @@ function computeEnvironmentMultiplier(input: HRConversionInput): number {
 
   // Phase 4: tightened cap to reduce upstream probability inflation.
   return Math.min(1.35, multiplier);
+}
+
+// Gap 1: pitch mix × handedness HR multiplier.
+// A fastball-heavy pitcher against a pull-power hitter is structurally more
+// hittable for HRs than the same handedness matchup against a breaking-ball
+// specialist. This is the mechanism behind the "hot hand is independent of
+// who's pitching" finding — it's not independent, it's that pitch mix × hand
+// is a more precise predictor than pitcher identity alone.
+//
+// Rules (multiplicative, capped at 1.18 total boost / 0.88 floor):
+//   - Fastball% >= 55 vs opposite-hand batter: +10% (fastballs cross the
+//     plate at a favorable angle for power hitters on the pull side)
+//   - Fastball% >= 55 vs same-hand batter: +4% (still hittable but less pull)
+//   - Breaking% >= 45 vs any batter: -8% (breaking balls suppress HR rate)
+//   - Offspeed% >= 35: -5% (changes disrupt timing)
+//   - FB-dominant (>= 60%) + no breaking balls: +6% additional
+function computePitchMixHandednessMultiplier(
+  pitchMix: PitchMixEntry[],
+  batterHand: string | null,
+  pitcherThrows: string | null,
+): number {
+  if (!pitchMix || pitchMix.length === 0) return 1.0;
+
+  let fbPct = 0, breakPct = 0, offspeedPct = 0;
+  for (const entry of pitchMix) {
+    const family = getPitchFamily(entry.pitchType);
+    if (family === "fastball") fbPct += entry.percentage;
+    else if (family === "breaking") breakPct += entry.percentage;
+    else if (family === "offspeed") offspeedPct += entry.percentage;
+  }
+
+  const isOppositeHand = batterHand && pitcherThrows && batterHand !== pitcherThrows;
+  const isSameHand = batterHand && pitcherThrows && batterHand === pitcherThrows;
+
+  let mult = 1.0;
+  if (fbPct >= 55) {
+    mult *= isOppositeHand ? 1.10 : isSameHand ? 1.04 : 1.06;
+  }
+  if (breakPct >= 45) mult *= 0.92;
+  if (offspeedPct >= 35) mult *= 0.95;
+  if (fbPct >= 60 && breakPct < 20) mult *= 1.06;
+
+  return Math.min(1.18, Math.max(0.88, mult));
+}
+
+// Gap 3: pre-game pitcher fatigue multiplier.
+// A starter entering today on short rest or coming off a high-pitch-count
+// outing has a structurally elevated HR vulnerability before the first pitch
+// is thrown — independent of in-game pitch count tracking.
+//
+// Rules:
+//   - lastStartPitchCount >= 110: +12% (arm not fully recovered)
+//   - lastStartPitchCount >= 95:  +7%
+//   - daysSinceLastStart <= 3:    +10% (short rest — mechanics degrade)
+//   - daysSinceLastStart <= 4:    +5%
+//   - daysSinceLastStart >= 8:    -5% (well-rested, arm fresh)
+//   - last3StartERA >= 6.0:       +10% (poor recent form)
+//   - last3StartERA >= 5.0:       +6%
+//   - last3StartERA <= 2.5:       -8% (dominant recent form)
+function computePitcherEntryFatigueMultiplier(input: HRConversionInput): number {
+  let mult = 1.0;
+
+  const lastPC = input.lastStartPitchCount;
+  if (lastPC !== null && lastPC !== undefined) {
+    if (lastPC >= 110) mult *= 1.12;
+    else if (lastPC >= 95) mult *= 1.07;
+  }
+
+  const daysRest = input.daysSinceLastStart;
+  if (daysRest !== null && daysRest !== undefined) {
+    if (daysRest <= 3) mult *= 1.10;
+    else if (daysRest <= 4) mult *= 1.05;
+    else if (daysRest >= 8) mult *= 0.95;
+  }
+
+  const recentERA = input.last3StartERA;
+  if (recentERA !== null && recentERA !== undefined) {
+    if (recentERA >= 6.0) mult *= 1.10;
+    else if (recentERA >= 5.0) mult *= 1.06;
+    else if (recentERA <= 2.5) mult *= 0.92;
+  }
+
+  return Math.min(1.30, Math.max(0.90, mult));
 }
 
 export function computeHRConversionProbability(input: HRConversionInput): HRConversionResult {
@@ -347,8 +442,13 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
   const environmentMultiplier = computeEnvironmentMultiplier(input);
   const envAdjustedRate = pitcherAdjustedRate * environmentMultiplier;
 
+  // Gap 3: pre-game pitcher fatigue. Applied after env to keep multiplier layers
+  // orthogonal and auditable in the components log.
+  const entryFatigueMultiplier = computePitcherEntryFatigueMultiplier(input);
+  const entryAdjustedRate = envAdjustedRate * entryFatigueMultiplier;
+
   // Phase 4: tightened final per-PA cap (0.25 → 0.12) to prevent runaway probabilities.
-  const finalPerPARate = Math.max(0.005, Math.min(0.12, envAdjustedRate));
+  const finalPerPARate = Math.max(0.005, Math.min(0.12, entryAdjustedRate));
 
   const paDist = estimateRichPADistribution(
     input.inning,
@@ -395,6 +495,7 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
       liveAdjustedRate: Math.round(liveAdjustedRate * 10000) / 10000,
       pitcherAdjustedRate: Math.round(pitcherAdjustedRate * 10000) / 10000,
       envAdjustedRate: Math.round(envAdjustedRate * 10000) / 10000,
+      entryAdjustedRate: Math.round(entryAdjustedRate * 10000) / 10000,
       finalPerPARate: Math.round(finalPerPARate * 10000) / 10000,
       paDist,
       pZeroHR: Math.round(pZeroHR * 10000) / 10000,

@@ -84,6 +84,10 @@ export interface PitcherContextEntry {
   timesThroughOrder: number;
   velocityDrop: number | null;
   seasonAvgVelocity: number | null;
+  // Gap 3: pre-game fatigue — pitcher's recent start history
+  lastStartPitchCount: number | null;
+  daysSinceLastStart: number | null;
+  last3StartERA: number | null;
 }
 
 export interface PitcherContextCache {
@@ -958,6 +962,8 @@ export async function syncPitcherContext(statsPk: string, cacheKey?: string): Pr
           velocityDrop = parseFloat((firstHalfAvg - secondHalfAvg).toFixed(2));
         }
 
+        const entryFatigue = await fetchPitcherRecentStarts(String(pid));
+
         byPitcherId[String(pid)] = {
           pitchMix,
           avgVelocity,
@@ -965,6 +971,9 @@ export async function syncPitcherContext(statsPk: string, cacheKey?: string): Pr
           timesThroughOrder,
           velocityDrop,
           seasonAvgVelocity: null,
+          lastStartPitchCount: entryFatigue.lastStartPitchCount,
+          daysSinceLastStart: entryFatigue.daysSinceLastStart,
+          last3StartERA: entryFatigue.last3StartERA,
         };
       }
     }
@@ -973,6 +982,53 @@ export async function syncPitcherContext(statsPk: string, cacheKey?: string): Pr
     console.log(`[MLB pull] syncPitcherContext: game ${gameId} — ${Object.keys(byPitcherId).length} pitchers`);
   } catch (err: any) {
     console.error(`[MLB pull] syncPitcherContext(${gameId}) error:`, err.message);
+  }
+}
+
+// ── fetchPitcherRecentStarts ──────────────────────────────────────────────────
+// Gap 3: fetch last 3 starts for a pitcher to derive pre-game fatigue context.
+// Returns null fields on any failure so callers are never blocked.
+async function fetchPitcherRecentStarts(pitcherId: string): Promise<{
+  lastStartPitchCount: number | null;
+  daysSinceLastStart: number | null;
+  last3StartERA: number | null;
+}> {
+  const empty = { lastStartPitchCount: null, daysSinceLastStart: null, last3StartERA: null };
+  try {
+    const currentYear = new Date().getFullYear();
+    const url = `https://statsapi.mlb.com/api/v1/people/${pitcherId}/stats?stats=gameLog&season=${currentYear}&group=pitching`;
+    const data = await fetchJson(url);
+    const splits: any[] = data.stats?.[0]?.splits ?? [];
+    if (splits.length === 0) return empty;
+
+    // Most recent first
+    const starts = splits
+      .filter((s: any) => (safeNum(s.stat?.inningsPitched) ?? 0) >= 1)
+      .slice(-10)
+      .reverse();
+
+    if (starts.length === 0) return empty;
+
+    const last = starts[0];
+    const lastStartPitchCount = safeNum(last.stat?.numberOfPitches) ?? null;
+    const lastDateStr: string | null = last.date ?? null;
+    let daysSinceLastStart: number | null = null;
+    if (lastDateStr) {
+      const lastDate = new Date(lastDateStr);
+      daysSinceLastStart = Math.round((Date.now() - lastDate.getTime()) / 86400000);
+    }
+
+    const recent3 = starts.slice(0, 3);
+    let totalER = 0, totalIP = 0;
+    for (const s of recent3) {
+      totalER += safeNum(s.stat?.earnedRuns) ?? 0;
+      totalIP += parseBaseballInnings(s.stat?.inningsPitched) ?? 0;
+    }
+    const last3StartERA = totalIP > 0 ? parseFloat(((totalER / totalIP) * 9).toFixed(2)) : null;
+
+    return { lastStartPitchCount, daysSinceLastStart, last3StartERA };
+  } catch {
+    return empty;
   }
 }
 

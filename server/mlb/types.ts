@@ -340,6 +340,13 @@ export interface MLBPropInput {
   hotHitterBoost?: number;
   bvpHrBoost?: number;
 
+  // Gap 3: pre-game pitcher fatigue entering this start
+  pitcherEntryFatigue?: {
+    lastStartPitchCount: number | null;
+    daysSinceLastStart: number | null;
+    last3StartERA: number | null;
+  };
+
   liveInterpretation?: {
     contactScore: number;
     nearHrScore: number;

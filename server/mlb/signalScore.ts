@@ -1,5 +1,6 @@
 import type { MLBPropInput, MLBPropOutput, MLBMarket } from "./types";
 import { EXPERIMENTAL_MARKETS } from "./types";
+import { getPitchFamily } from "./pitchTypeNormalizer";
 
 export type MarketFamily = "batter_over" | "under" | "hr_radar";
 
@@ -540,16 +541,35 @@ export function scoreBatterOverSignal(
   const prob = computeProbabilityComponent(output.calibratedProbability);
   const proj = computeProjectionComponent(output.projection, output.bookLine, output.market, output.recommendedSide);
 
-  const baseTotal = Math.round(
-    0.15 * form +
-    0.20 * matchup +
-    0.10 * parkWeather +
-    0.25 * lei +
-    0.10 * opportunity +
-    0.10 * eventBoost +
-    0.05 * prob +
-    0.05 * proj
-  );
+  const isHRMarket = output.market === "home_runs";
+  const pitchMixMatchup = isHRMarket ? computePitchMixMatchupScore(input) : 50;   // Gap 1
+  const hrTiming = isHRMarket ? computeHrTimingComponent(input) : 50;             // Gap 2
+  const entryFatigue = isHRMarket ? computePitcherEntryFatigueScore(input) : 50;  // Gap 3
+
+  const baseTotal = isHRMarket
+    ? Math.round(
+        0.13 * form +
+        0.15 * matchup +
+        0.08 * parkWeather +
+        0.20 * lei +
+        0.08 * opportunity +
+        0.10 * eventBoost +
+        0.10 * pitchMixMatchup +
+        0.08 * hrTiming +
+        0.05 * entryFatigue +
+        0.02 * prob +
+        0.01 * proj
+      )
+    : Math.round(
+        0.15 * form +
+        0.20 * matchup +
+        0.10 * parkWeather +
+        0.25 * lei +
+        0.10 * opportunity +
+        0.10 * eventBoost +
+        0.05 * prob +
+        0.05 * proj
+      );
 
   const total = clamp(baseTotal, 0, 100);
 
@@ -625,6 +645,83 @@ export function scoreUnderSignal(
   };
 }
 
+// Gap 2: HR timing score from abSinceLastHR regression-to-rate.
+// When a power hitter is overdue (ABs since last HR >> personal avg AB/HR),
+// their per-game HR probability rises as regression to mean pulls them back.
+// Score 0–100, used in scoreHRRadar and scoreBatterOverSignal for HR market.
+function computeHrTimingComponent(input: MLBPropInput): number {
+  const trend = input.hrTrend;
+  if (!trend) return 50;
+  const { abSinceLastHR, seasonTotalHR, seasonTotalAB } = trend;
+  if (abSinceLastHR == null || seasonTotalAB === 0 || seasonTotalHR === 0) return 50;
+
+  const expectedABperHR = seasonTotalAB / seasonTotalHR;
+  const overdueRatio = abSinceLastHR / expectedABperHR;
+
+  if (overdueRatio >= 3.0) return 90;
+  if (overdueRatio >= 2.5) return 80;
+  if (overdueRatio >= 2.0) return 72;
+  if (overdueRatio >= 1.5) return 62;
+  if (overdueRatio >= 1.0) return 52;
+  // Below expected — recently hit one, slight suppression
+  if (overdueRatio < 0.5) return 35;
+  return 45;
+}
+
+// Gap 1: pitch mix × handedness score for signal scoring layer.
+// Mirrors the multiplier logic in hrConversionModel but returns a 0–100
+// score for weighting in SignalScoreBreakdown. Used in scoreHRRadar.
+function computePitchMixMatchupScore(input: MLBPropInput): number {
+  const pitchMix = input.pitcher?.pitchMix;
+  if (!pitchMix || pitchMix.length === 0) return 50;
+
+  let fbPct = 0, breakPct = 0, offspeedPct = 0;
+  for (const entry of pitchMix) {
+    const family = getPitchFamily(entry.pitchType);
+    if (family === "fastball") fbPct += entry.percentage;
+    else if (family === "breaking") breakPct += entry.percentage;
+    else if (family === "offspeed") offspeedPct += entry.percentage;
+  }
+
+  const batterHand = input.batterHand;
+  const pitcherThrows = input.pitcher?.throws ?? null;
+  const isOpposite = batterHand && pitcherThrows && batterHand !== pitcherThrows;
+
+  let score = 50;
+  if (fbPct >= 60) score += isOpposite ? 20 : 12;
+  else if (fbPct >= 50) score += isOpposite ? 14 : 8;
+  if (breakPct >= 45) score -= 18;
+  else if (breakPct >= 35) score -= 10;
+  if (offspeedPct >= 35) score -= 10;
+  if (fbPct >= 60 && breakPct < 20) score += 8;
+
+  return clamp(score, 0, 100);
+}
+
+// Gap 3: pre-game pitcher entry fatigue score for signal scoring layer.
+function computePitcherEntryFatigueScore(input: MLBPropInput): number {
+  const ef = input.pitcherEntryFatigue;
+  if (!ef) return 50;
+  let score = 50;
+
+  if (ef.lastStartPitchCount !== null) {
+    if (ef.lastStartPitchCount >= 110) score += 20;
+    else if (ef.lastStartPitchCount >= 95) score += 12;
+  }
+  if (ef.daysSinceLastStart !== null) {
+    if (ef.daysSinceLastStart <= 3) score += 18;
+    else if (ef.daysSinceLastStart <= 4) score += 10;
+    else if (ef.daysSinceLastStart >= 8) score -= 10;
+  }
+  if (ef.last3StartERA !== null) {
+    if (ef.last3StartERA >= 6.0) score += 18;
+    else if (ef.last3StartERA >= 5.0) score += 10;
+    else if (ef.last3StartERA <= 2.5) score -= 15;
+  }
+
+  return clamp(score, 0, 100);
+}
+
 export function scoreHRRadar(
   input: MLBPropInput,
   output: MLBPropOutput
@@ -666,13 +763,19 @@ export function scoreHRRadar(
 
   const parkWeather = computeParkWeatherComponent(input);
   const opportunity = computeOpportunityComponent(input);
+  const pitchMixMatchup = computePitchMixMatchupScore(input);        // Gap 1
+  const hrTiming = computeHrTimingComponent(input);                  // Gap 2
+  const entryFatigue = computePitcherEntryFatigueScore(input);       // Gap 3
 
   const baseTotal = Math.round(
-    0.30 * nearHrScore +
-    0.25 * contactScore +
-    0.20 * pitcherVuln +
-    0.15 * parkWeather +
-    0.10 * opportunity
+    0.22 * nearHrScore +
+    0.20 * contactScore +
+    0.15 * pitcherVuln +
+    0.12 * pitchMixMatchup +
+    0.10 * hrTiming +
+    0.08 * entryFatigue +
+    0.08 * parkWeather +
+    0.05 * opportunity
   );
 
   const total = clamp(baseTotal, 0, 100);

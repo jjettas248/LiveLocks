@@ -2,6 +2,7 @@ import type { HRBuildResult, ClassifiedContact } from "./HRSignalBuilder";
 import { classifyContactEvent } from "./HRSignalBuilder";
 import { computeHRConversionProbability, type HRConversionInput, type HRConversionResult, type PitcherDeteriorationContext } from "./hrConversionModel";
 import type { MLBBatterArchetype } from "./archetypes";
+import type { PitchMixEntry } from "./types";
 
 export type HRAlertLevel = "ALERT" | "WATCH" | null;
 export type HRSignalState = "PEAK" | "BUILDING" | "FORMATION" | "COOLDOWN" | null;
@@ -58,11 +59,14 @@ export interface HRAlertInput {
   // ── Pre-HR danger layer (optional; fed in by buildHRSignal callers) ──
   preHrDangerScore?: number;
   dangerFlags?: string[];
-  // Phase 3 — optional batter archetype, used to ease/tighten fast-promotion
-  // tiers. When `elite_power`, a single barrel alone is enough to promote on
-  // tier 4c without requiring pitcher/env favorability. Callers that don't
-  // supply this field get the unchanged legacy behavior.
+  // Phase 3 — optional batter archetype
   batterArchetype?: MLBBatterArchetype | null;
+  // Gap 1: in-game pitch mix for handedness × pitch-type multiplier
+  pitchMix?: PitchMixEntry[] | null;
+  // Gap 3: pre-game pitcher entry fatigue
+  lastStartPitchCount?: number | null;
+  daysSinceLastStart?: number | null;
+  last3StartERA?: number | null;
 }
 
 export interface HRSuppressionFlag {
@@ -314,6 +318,10 @@ function buildConversionInput(input: HRAlertInput): HRConversionInput {
     hardHitRate: input.hardHitRate ?? null,
     xSLG: input.xSLG ?? null,
     pitcherDeterioration: input.pitcherDeterioration ?? null,
+    pitchMix: input.pitchMix ?? null,
+    lastStartPitchCount: input.lastStartPitchCount ?? null,
+    daysSinceLastStart: input.daysSinceLastStart ?? null,
+    last3StartERA: input.last3StartERA ?? null,
   };
 }
 
