@@ -382,6 +382,16 @@ app.use((req, res, next) => {
 
   try {
     await pool.query(`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS last_login_at timestamp;
+    `);
+    console.log("[startup] Schema migration: last_login_at column ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (last_login_at):", err.message);
+  }
+
+  try {
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS hr_outcomes (
         id SERIAL PRIMARY KEY,
         season INTEGER NOT NULL DEFAULT 2026,

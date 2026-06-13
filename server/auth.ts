@@ -271,6 +271,7 @@ export async function registerAuthRoutes(app: import("express").Express) {
     }
 
     req.session.userId = user.id;
+    await storage.updateUser(user.id, { lastLoginAt: new Date() });
     const token = signToken(user.id);
     return res.status(201).json({ ...safeUser(user), token });
   });
@@ -289,6 +290,7 @@ export async function registerAuthRoutes(app: import("express").Express) {
     await storage.updateUser(user.id, {
       emailVerified: true,
       emailVerificationToken: null,
+      lastLoginAt: new Date(),
     });
 
     console.log("EMAIL VERIFIED:", user.email);
