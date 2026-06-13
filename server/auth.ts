@@ -358,6 +358,7 @@ export async function registerAuthRoutes(app: import("express").Express) {
     }
 
     req.session.userId = user.id;
+    await storage.updateUser(user.id, { lastLoginAt: new Date() });
     const token = signToken(user.id);
     return res.json({ ...safeUser(user), token });
   });

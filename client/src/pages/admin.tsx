@@ -31,6 +31,7 @@ type AdminUser = {
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
   createdAt: string;
+  lastLoginAt: string | null;
 };
 
 type FeedbackRow = {
@@ -438,6 +439,35 @@ export default function AdminPage() {
 
         {/* Users table */}
         {activeTab === "users" && (
+          <>
+          {/* Activity summary */}
+          {!usersLoading && (allUsers ?? []).length > 0 && (() => {
+            const now = Date.now();
+            const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+            const realUsers = (allUsers ?? []).filter((u) => !u.isAdmin && !TEST_EMAIL_PATTERNS.some((p) => p.test(u.email)));
+            const active = realUsers.filter((u) => u.lastLoginAt && now - new Date(u.lastLoginAt).getTime() < THIRTY_DAYS);
+            const inactive = realUsers.filter((u) => u.lastLoginAt && now - new Date(u.lastLoginAt).getTime() >= THIRTY_DAYS);
+            const neverLogged = realUsers.filter((u) => !u.lastLoginAt);
+            return (
+              <div className="grid grid-cols-3 gap-3 mb-3">
+                <div className="bg-card border border-border rounded-xl px-4 py-3">
+                  <div className="text-xs text-muted-foreground uppercase tracking-wider font-semibold mb-1">Active (30d)</div>
+                  <div className="text-2xl font-bold text-emerald-400">{active.length}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">logged in last 30 days</div>
+                </div>
+                <div className="bg-card border border-border rounded-xl px-4 py-3">
+                  <div className="text-xs text-muted-foreground uppercase tracking-wider font-semibold mb-1">Inactive (30d+)</div>
+                  <div className="text-2xl font-bold text-yellow-400">{inactive.length}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">no login in 30+ days</div>
+                </div>
+                <div className="bg-card border border-border rounded-xl px-4 py-3">
+                  <div className="text-xs text-muted-foreground uppercase tracking-wider font-semibold mb-1">Never Logged In</div>
+                  <div className="text-2xl font-bold text-muted-foreground">{neverLogged.length}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">signed up, never returned</div>
+                </div>
+              </div>
+            );
+          })()}
           <div className="bg-card border border-border rounded-xl overflow-hidden">
             <div className="px-4 py-3 border-b border-border/60 flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
@@ -470,6 +500,7 @@ export default function AdminPage() {
                     <tr className="border-b border-border/60 bg-muted/30">
                       <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Email</th>
                       <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Joined</th>
+                      <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Last Seen</th>
                       <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Tier</th>
                       <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Plays Used</th>
                       <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Actions</th>
@@ -486,6 +517,16 @@ export default function AdminPage() {
                         </td>
                         <td className="px-4 py-3 text-muted-foreground text-xs">
                           {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-xs">
+                          {u.lastLoginAt ? (() => {
+                            const diffDays = Math.floor((Date.now() - new Date(u.lastLoginAt).getTime()) / (1000 * 60 * 60 * 24));
+                            return (
+                              <span className={diffDays <= 7 ? "text-emerald-400" : diffDays <= 30 ? "text-yellow-400" : "text-muted-foreground"}>
+                                {diffDays === 0 ? "Today" : diffDays === 1 ? "Yesterday" : `${diffDays}d ago`}
+                              </span>
+                            );
+                          })() : <span className="text-muted-foreground/40">Never</span>}
                         </td>
                         <td className="px-4 py-3">
                           <TierBadge tier={u.subscriptionTier} />
@@ -612,6 +653,7 @@ export default function AdminPage() {
               </div>
             )}
           </div>
+          </>
         )}
 
         {/* Feedback inbox */}
