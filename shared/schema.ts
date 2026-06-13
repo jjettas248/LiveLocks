@@ -60,6 +60,7 @@ export const users = pgTable("users", {
   telegramUsername: text("telegram_username"),
   telegramConnectedAt: timestamp("telegram_connected_at"),
   telegramConnectionStatus: text("telegram_connection_status"),
+  lastLoginAt: timestamp("last_login_at"),
 });
 
 export const stripeEvents = pgTable("stripe_events", {
