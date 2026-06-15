@@ -3116,6 +3116,7 @@ export class LiveGameOrchestrator {
           launchAngle: c.launchAngle, distance: c.distance,
           outcome: c.outcome, isBarrel: c.isBarrel,
         })),
+        pitcherHrVulnerability: getHrAlertState(gameId, batter.playerId)?.pitcherHrVulnerability ?? null,
       } : null;
 
       // Pull engine's earliest in-memory detection so the row's detected
@@ -3979,6 +3980,7 @@ export class LiveGameOrchestrator {
                   launchAngle: c.launchAngle, distance: c.distance,
                   outcome: c.outcome, isBarrel: c.isBarrel,
                 })),
+                pitcherHrVulnerability: hrDynSnap?.pitcherHrVulnerability ?? null,
               } : null;
 
               // ── Goldmaster Phase 5: unified canonical stage ──────────────

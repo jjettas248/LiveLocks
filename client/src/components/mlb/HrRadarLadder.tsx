@@ -93,6 +93,7 @@ export interface HrRadarLadderEntry {
   peakReadinessScore?: number | null;
   buildScore?: number | null;
   conversionProbability?: number | null;
+  pitcherHrVulnerability?: number | null;
   // Goldmaster RESTORE — 10-point USER-FACING signal score (0.0-10.0).
   initialSignalScore10?: number | null;
   currentSignalScore10?: number | null;
@@ -503,6 +504,21 @@ function HeatingUpMeter({
   );
 }
 
+function hrBreakdownBar(pct: number, isHrProb = false): string {
+  if (isHrProb) {
+    if (pct >= 35) return "#22c55e";
+    if (pct >= 20) return "#a3e635";
+    if (pct >= 12) return "#94a3b8";
+    if (pct >= 6)  return "#f59e0b";
+    return "#ef4444";
+  }
+  if (pct >= 70) return "#22c55e";
+  if (pct >= 55) return "#a3e635";
+  if (pct >= 45) return "#94a3b8";
+  if (pct >= 35) return "#f59e0b";
+  return "#ef4444";
+}
+
 function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAccept, isAccepted }: CardProps) {
   // Goldmaster Phase 2+3 — prefer the FROZEN server-stamped detectedLabel /
   // hitLabel (these never advance on score climbs). Fall back to formatting
@@ -837,6 +853,52 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
           ))}
         </ul>
       )}
+
+      {/* HR Breakdown — 4-bar mini panel */}
+      {!isResolved && (() => {
+        const bars: Array<{ label: string; pct: number | null; isHrProb?: boolean }> = [
+          { label: "Formation",    pct: entry.buildScore != null ? Math.min(100, Math.round(entry.buildScore * 10)) : null },
+          { label: "Readiness",    pct: entry.currentReadinessScore != null ? Math.min(100, Math.round(entry.currentReadinessScore)) : null },
+          { label: "HR Prob",      pct: entry.conversionProbability != null ? Math.min(100, Math.round(entry.conversionProbability * 100)) : null, isHrProb: true },
+          { label: "Pitcher Vuln", pct: entry.pitcherHrVulnerability != null ? Math.min(100, Math.round(entry.pitcherHrVulnerability)) : null },
+        ];
+        if (bars.filter(b => b.pct != null).length < 2) return null;
+        return (
+          <div
+            className="mt-2 rounded-lg p-2.5 bg-secondary/20 border border-border/20"
+            data-testid={`panel-hr-breakdown-${entry.playerId}`}
+          >
+            <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">
+              HR Breakdown
+            </div>
+            <div className="space-y-1">
+              {bars.map(({ label, pct, isHrProb }) => {
+                if (pct == null) return null;
+                const color = hrBreakdownBar(pct, isHrProb);
+                return (
+                  <div key={label} className="flex items-center justify-between gap-2">
+                    <span className="text-[9px] text-muted-foreground truncate">{label}</span>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-16 h-1.5 rounded-full bg-secondary/60 overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all"
+                          style={{ width: `${pct}%`, backgroundColor: color }}
+                        />
+                      </div>
+                      <span
+                        className="text-[8px] font-bold tabular-nums w-5 text-right"
+                        style={{ color }}
+                      >
+                        {pct}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Batch A — Phase 3: timing labels. "Game final — resolved" beats
           everything when isGameFinal is true on a card that briefly slipped

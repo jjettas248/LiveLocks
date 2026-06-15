@@ -5448,6 +5448,7 @@ export class DatabaseStorage implements IStorage {
       const conversionProbability = typeof scoreContractRow.conversionProbability === "number"
         ? scoreContractRow.conversionProbability
         : (typeof scoreContractRow.conversionProbabilityRaw === "number" ? scoreContractRow.conversionProbabilityRaw : null);
+      const pitcherHrVulnerability = typeof diag.pitcherHrVulnerability === "number" ? diag.pitcherHrVulnerability : null;
 
       // ── Goldmaster Phase 4-7 — canonical stage drives explanation copy ─────
       // stageExplanation = the same copy buildHrRadarSummary returns for live
@@ -5618,6 +5619,7 @@ export class DatabaseStorage implements IStorage {
         peakReadinessScore,
         buildScore,
         conversionProbability,
+        pitcherHrVulnerability,
         // ── Goldmaster RESTORE — 10-point USER-FACING signal score (0.0-10.0)
         initialSignalScore10,
         currentSignalScore10,
@@ -5955,6 +5957,8 @@ export interface HrRadarLadderEntry {
   buildScore: number | null;
   /** Calibrated conversion probability (0-1). Admin/debug only. */
   conversionProbability: number | null;
+  /** Pitcher HR vulnerability score (0-100). Higher = pitcher more vulnerable. Admin/debug only. */
+  pitcherHrVulnerability: number | null;
 
   // ── Goldmaster RESTORE — 10-point USER-FACING signal score (0.0-10.0). ─────
   /** Initial signal score on the user-facing 0.0-10.0 scale (one decimal). */
