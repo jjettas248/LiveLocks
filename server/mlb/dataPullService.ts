@@ -2,7 +2,7 @@
 // Fetches and caches live game data from MLB Stats API and Baseball Savant.
 // All functions: 8-second timeout, try/catch, log-and-return on error.
 
-import type { PitchMixEntry } from "./types";
+import type { PitchMixEntry, PitcherHandednessSplits, BatterHandednessSplits } from "./types";
 import { normalizePitchTypeCode } from "./pitchTypeNormalizer";
 import { fetchBaseballSavantData, fetchSavantGameFeed, getStadiumCoords, windDirectionRelativeToField, isVenueIndoors } from "./dataSources";
 import { classifyContact, computeGameContactProfile } from "./statcastXBA";
@@ -52,6 +52,12 @@ export interface PlayerContactData {
   gameMaxXBA: number | null;
   gameBarrelCount: number;
   gameContactQuality: number;
+  // Power profile — Gaps 7–9
+  flyBallPercent: number | null;
+  hrFBRatio: number | null;
+  xwOBASeason: number | null;
+  xISOSeason: number | null;
+  sweetSpotPercent: number | null;
   priorABResults: Array<{
     exitVelocity: number | null;
     launchAngle: number | null;
@@ -616,6 +622,11 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
           gameBarrelCount: 0,
           gameContactQuality: 0,
           priorABResults: [],
+          flyBallPercent: null,
+          hrFBRatio: null,
+          xwOBASeason: null,
+          xISOSeason: null,
+          sweetSpotPercent: null,
         };
       }
 
@@ -842,6 +853,7 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
             }
             if (bestIdx >= 0) {
               ab.perABxBA = hits[bestIdx].xBA;
+              (ab as any).perABxWOBA = hits[bestIdx].xWOBA;
               usedSavantIdx.add(bestIdx);
             }
           }
@@ -1029,6 +1041,72 @@ async function fetchPitcherRecentStarts(pitcherId: string): Promise<{
     return { lastStartPitchCount, daysSinceLastStart, last3StartERA };
   } catch {
     return empty;
+  }
+}
+
+// ── fetchPitcherHandednessSplits ──────────────────────────────────────────────
+// Gap 4: pitcher ERA and HR rate split by opposing batter handedness.
+// MLB Stats API stats=byHand&group=pitching returns separate rows for "vs. Left"
+// and "vs. Right" batters. Cached 24h — season-level stats don't change intraday.
+
+const pitcherSplitsCache = new Map<string, { data: PitcherHandednessSplits; fetchedAt: number }>();
+const batterSplitsCache = new Map<string, { data: BatterHandednessSplits; fetchedAt: number }>();
+const SPLITS_TTL = 24 * 60 * 60 * 1000;
+
+export async function fetchPitcherHandednessSplits(pitcherId: string): Promise<PitcherHandednessSplits | null> {
+  const empty: PitcherHandednessSplits = { eraVsLHB: null, eraVsRHB: null, hrPer9VsLHB: null, hrPer9VsRHB: null };
+  if (!pitcherId) return null;
+  const cached = pitcherSplitsCache.get(pitcherId);
+  if (cached && Date.now() - cached.fetchedAt < SPLITS_TTL) return cached.data;
+  try {
+    const currentYear = new Date().getFullYear();
+    const url = `https://statsapi.mlb.com/api/v1/people/${pitcherId}/stats?stats=byHand&group=pitching&season=${currentYear}&gameType=R`;
+    const data = await fetchJson(url);
+    const splits: any[] = data.stats?.[0]?.splits ?? [];
+    const result = { ...empty };
+    for (const s of splits) {
+      const desc: string = (s.split?.description ?? "").toLowerCase();
+      const stat = s.stat ?? {};
+      const era = safeNum(stat.era);
+      const hr = safeNum(stat.homeRuns);
+      const ip = parseBaseballInnings(stat.inningsPitched);
+      const hrPer9 = ip != null && ip > 0 && hr != null ? parseFloat(((hr / ip) * 9).toFixed(2)) : null;
+      if (desc.includes("left")) { result.eraVsLHB = era; result.hrPer9VsLHB = hrPer9; }
+      else if (desc.includes("right")) { result.eraVsRHB = era; result.hrPer9VsRHB = hrPer9; }
+    }
+    pitcherSplitsCache.set(pitcherId, { data: result, fetchedAt: Date.now() });
+    console.log(`[HR_RADAR_SPLITS] pitcher=${pitcherId} eraVsLHB=${result.eraVsLHB} eraVsRHB=${result.eraVsRHB} hrPer9VsLHB=${result.hrPer9VsLHB} hrPer9VsRHB=${result.hrPer9VsRHB}`);
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchBatterHandednessSplits(batterId: string): Promise<BatterHandednessSplits | null> {
+  const empty: BatterHandednessSplits = { hrRateVsLHP: null, hrRateVsRHP: null, opsVsLHP: null, opsVsRHP: null };
+  if (!batterId) return null;
+  const cached = batterSplitsCache.get(batterId);
+  if (cached && Date.now() - cached.fetchedAt < SPLITS_TTL) return cached.data;
+  try {
+    const currentYear = new Date().getFullYear();
+    const url = `https://statsapi.mlb.com/api/v1/people/${batterId}/stats?stats=byHand&group=hitting&season=${currentYear}&gameType=R`;
+    const data = await fetchJson(url);
+    const splits: any[] = data.stats?.[0]?.splits ?? [];
+    const result = { ...empty };
+    for (const s of splits) {
+      const desc: string = (s.split?.description ?? "").toLowerCase();
+      const stat = s.stat ?? {};
+      const ab = safeNum(stat.atBats) ?? 0;
+      const hr = safeNum(stat.homeRuns) ?? 0;
+      const hrRate = ab >= 30 ? parseFloat((hr / ab).toFixed(4)) : null;
+      const ops = safeNum(stat.ops);
+      if (desc.includes("left")) { result.hrRateVsLHP = hrRate; result.opsVsLHP = ops; }
+      else if (desc.includes("right")) { result.hrRateVsRHP = hrRate; result.opsVsRHP = ops; }
+    }
+    batterSplitsCache.set(batterId, { data: result, fetchedAt: Date.now() });
+    return result;
+  } catch {
+    return null;
   }
 }
 
@@ -1448,6 +1526,11 @@ export async function syncSavantSeasonForLineup(gameId: string): Promise<void> {
         gameBarrelCount: 0,
         gameContactQuality: 0,
         priorABResults: [],
+        flyBallPercent: savant.flyBallPercent,
+        hrFBRatio: savant.hrFBRatio,
+        xwOBASeason: savant.xwOBASeason,
+        xISOSeason: savant.xISOSeason,
+        sweetSpotPercent: savant.sweetSpotPercent,
       };
     } else {
       const entry = mlbGameCache.contactData[gameId].byPlayerId[pid];
@@ -1458,6 +1541,11 @@ export async function syncSavantSeasonForLineup(gameId: string): Promise<void> {
       if (entry.barrelPct === null && savant.barrelRateProxySeason != null) entry.barrelPct = savant.barrelRateProxySeason;
       if (entry.avgBatSpeed === null && savant.avgBatSpeed != null) entry.avgBatSpeed = savant.avgBatSpeed;
       if (entry.avgSwingLength === null && savant.avgSwingLength != null) entry.avgSwingLength = savant.avgSwingLength;
+      if (entry.flyBallPercent === null && savant.flyBallPercent != null) entry.flyBallPercent = savant.flyBallPercent;
+      if (entry.hrFBRatio === null && savant.hrFBRatio != null) entry.hrFBRatio = savant.hrFBRatio;
+      if (entry.xwOBASeason === null && savant.xwOBASeason != null) entry.xwOBASeason = savant.xwOBASeason;
+      if (entry.xISOSeason === null && savant.xISOSeason != null) entry.xISOSeason = savant.xISOSeason;
+      if (entry.sweetSpotPercent === null && savant.sweetSpotPercent != null) entry.sweetSpotPercent = savant.sweetSpotPercent;
     }
     enriched++;
   }

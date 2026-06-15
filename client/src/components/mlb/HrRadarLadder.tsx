@@ -1471,6 +1471,48 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
           </Button>
         </div>
       </div>
+      {/* Section count summary — lets users see the radar state at a glance
+          without scrolling through all sections. Only shows non-zero counts. */}
+      {counts.total > 0 && (
+        <div
+          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-card border border-border/40 overflow-x-auto"
+          data-testid="ladder-summary-bar"
+        >
+          {counts.attackNow > 0 && (
+            <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-red-400" data-testid="summary-fire">
+              <Flame className="w-3 h-3" /> FIRE {counts.attackNow}
+            </span>
+          )}
+          {(counts.ready ?? 0) > 0 && (
+            <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-orange-400" data-testid="summary-ready">
+              <Zap className="w-3 h-3" /> READY {counts.ready}
+            </span>
+          )}
+          {counts.building > 0 && (
+            <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-amber-400" data-testid="summary-build">
+              <Zap className="w-3 h-3" /> BUILD {counts.building}
+            </span>
+          )}
+          {counts.watch > 0 && (
+            <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-blue-400" data-testid="summary-watch">
+              <Eye className="w-3 h-3" /> WATCH {counts.watch}
+            </span>
+          )}
+          {counts.cashed > 0 && (
+            <>
+              <span className="text-muted-foreground/30 text-[11px]">·</span>
+              <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-emerald-400" data-testid="summary-cashed">
+                <Trophy className="w-3 h-3" /> {counts.cashed} HR
+              </span>
+            </>
+          )}
+          {counts.dead > 0 && (
+            <span className="text-[11px] text-muted-foreground/50 whitespace-nowrap" data-testid="summary-missed">
+              {counts.dead} missed
+            </span>
+          )}
+        </div>
+      )}
       {/* Phase 2.5 HR Watch Bridge — surfaces engine-stamped near-HR
           contact detections (signalType="hr_watch") so admins/users can see
           that the engine IS detecting near-HR plays even when the ladder

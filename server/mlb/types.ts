@@ -198,6 +198,12 @@ export interface ContactQualityMetrics {
   learnedHitLikelihood?: number | null;
   learnedHrLikelihood?: number | null;
   pitchTypeHrRisk?: number | null;
+  // Power profile — Gaps 7–9
+  flyBallPercent?: number | null;    // % BIP that are fly balls
+  hrFBRatio?: number | null;         // home runs per fly ball (%)
+  xwOBASeason?: number | null;       // season avg expected wOBA
+  xISOSeason?: number | null;        // expected isolated power (xSLG − xBA)
+  sweetSpotPercent?: number | null;  // % BIP with launch angle 8–32°
 }
 
 export interface ABResult {
@@ -207,6 +213,22 @@ export interface ABResult {
   outcome: "hit" | "out" | "strikeout" | "walk" | "hbp" | "error" | "other" | "home_run" | "hr" | "homerun";
   pitchType?: string | null;
   pitchSpeed?: number | null;
+}
+
+// Gap 4: pitcher season stats split by opposing batter handedness
+export interface PitcherHandednessSplits {
+  eraVsLHB: number | null;
+  eraVsRHB: number | null;
+  hrPer9VsLHB: number | null;
+  hrPer9VsRHB: number | null;
+}
+
+// Gap 5: batter season stats split by pitcher handedness
+export interface BatterHandednessSplits {
+  hrRateVsLHP: number | null;   // HR/AB vs left-handed pitchers
+  hrRateVsRHP: number | null;
+  opsVsLHP: number | null;
+  opsVsRHP: number | null;
 }
 
 export interface PitcherContext {
@@ -221,6 +243,8 @@ export interface PitcherContext {
   pitchMix: PitchMixEntry[];
   throws: "L" | "R" | null;
   seasonAvgVelocity?: number | null;
+  // Gap 4: empirical handedness splits
+  handednessSplits?: PitcherHandednessSplits | null;
 }
 
 export interface PitchMixEntry {
@@ -346,6 +370,10 @@ export interface MLBPropInput {
     daysSinceLastStart: number | null;
     last3StartERA: number | null;
   };
+
+  // Gap 4 & 5: matchup-specific handedness splits
+  pitcherHandednessSplits?: PitcherHandednessSplits | null;
+  batterHandednessSplits?: BatterHandednessSplits | null;
 
   liveInterpretation?: {
     contactScore: number;

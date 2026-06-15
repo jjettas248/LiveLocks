@@ -28,6 +28,12 @@ export interface BaseballSavantData {
     breaking: number | null;
     offspeed: number | null;
   };
+  // Power profile — Gaps 7–9
+  flyBallPercent: number | null;    // % BIP that are fly balls (bb_type="fly_ball")
+  hrFBRatio: number | null;         // home runs / fly balls (%)
+  xwOBASeason: number | null;       // avg expected wOBA across all BIP this season
+  xISOSeason: number | null;        // expected isolated power (xSLG − xBA)
+  sweetSpotPercent: number | null;  // % BIP with launch angle 8–32°
 }
 
 // Cache for Savant data (updated infrequently — season stats)
@@ -221,6 +227,11 @@ export async function fetchBaseballSavantData(
     avgFastballVelocity: null,
     avgFastballSpin: null,
     pitchMixPct: { fastball: null, breaking: null, offspeed: null },
+    flyBallPercent: null,
+    hrFBRatio: null,
+    xwOBASeason: null,
+    xISOSeason: null,
+    sweetSpotPercent: null,
   };
 
   if (!mlbPlayerId || mlbPlayerId === "undefined") return nullResult;
@@ -241,6 +252,12 @@ export async function fetchBaseballSavantData(
   let avgFastballVelocity: number | null = null;
   let avgFastballSpin: number | null = null;
   const pitchMixPct = { fastball: null as number | null, breaking: null as number | null, offspeed: null as number | null };
+  // Power profile accumulators (Gaps 7–9)
+  let flyBallPercent: number | null = null;
+  let hrFBRatio: number | null = null;
+  let xwOBASeason: number | null = null;
+  let xISOSeason: number | null = null;
+  let sweetSpotPercent: number | null = null;
 
   try {
     const currentYear = new Date().getFullYear();
@@ -287,6 +304,12 @@ export async function fetchBaseballSavantData(
         let bipRows = 0;
         const batSpeeds: number[] = [];
         const swingLengths: number[] = [];
+        // Power profile counters (Gaps 7–9)
+        let flyBallBIP = 0;
+        let hrAmongFlyBalls = 0;
+        let xwobaSum = 0;
+        let xwobaCount = 0;
+        let sweetSpotBIP = 0;
 
         for (const row of rows) {
           totalRows++;
@@ -318,6 +341,16 @@ export async function fetchBaseballSavantData(
           if (dist != null && dist > 0 && dist <= 500) dists.push(dist);
           if (rowXBA != null && rowXBA > 0 && rowXBA <= 1.0) { xbaSum += rowXBA; xbaCount++; }
           if (rowXSLG != null && rowXSLG > 0 && rowXSLG <= 4.0) { xslgSum += rowXSLG; xslgCount++; }
+
+          // Power profile parsing
+          if (bbType === "fly_ball") {
+            flyBallBIP++;
+            if ((row["events"]?.trim() ?? "") === "home_run") hrAmongFlyBalls++;
+          }
+          const rawXWOBA = row["estimated_woba_using_speedangle"]?.trim();
+          const rowXWOBA = rawXWOBA && rawXWOBA !== "" ? safeNum(rawXWOBA) : null;
+          if (rowXWOBA != null && rowXWOBA >= 0 && rowXWOBA <= 2.0) { xwobaSum += rowXWOBA; xwobaCount++; }
+          if (la != null && ev != null && ev > 0 && la >= 8 && la <= 32) sweetSpotBIP++;
         }
 
         if (batSpeeds.length > 0) avgBatSpeed = parseFloat((batSpeeds.reduce((a, b) => a + b, 0) / batSpeeds.length).toFixed(1));
@@ -332,6 +365,13 @@ export async function fetchBaseballSavantData(
         }
         if (xbaCount > 0) xBA = parseFloat((xbaSum / xbaCount).toFixed(3));
         if (xslgCount > 0) xSLG = parseFloat((xslgSum / xslgCount).toFixed(3));
+
+        // Power profile derivations (Gaps 7–9)
+        if (totalBIP > 0) flyBallPercent = parseFloat(((flyBallBIP / totalBIP) * 100).toFixed(1));
+        if (flyBallBIP > 0) hrFBRatio = parseFloat(((hrAmongFlyBalls / flyBallBIP) * 100).toFixed(1));
+        if (xwobaCount > 0) xwOBASeason = parseFloat((xwobaSum / xwobaCount).toFixed(3));
+        if (totalBIP > 0) sweetSpotPercent = parseFloat(((sweetSpotBIP / totalBIP) * 100).toFixed(1));
+        if (xSLG != null && xBA != null) xISOSeason = parseFloat((xSLG - xBA).toFixed(3));
       }
     } else {
       console.warn("[Savant] Batter CSV fetch failed — trying MLB Stats API fallback");
@@ -401,13 +441,18 @@ export async function fetchBaseballSavantData(
       avgFastballVelocity,
       avgFastballSpin,
       pitchMixPct,
+      flyBallPercent,
+      hrFBRatio,
+      xwOBASeason,
+      xISOSeason,
+      sweetSpotPercent,
     };
 
     savantCache.set(cacheKey, { data: result, fetchedAt: Date.now() });
 
     const hasAny = [xBA, xSLG, exitVelocity, avgFastballVelocity, avgBatSpeed].some((v) => v != null);
     if (hasAny) {
-      console.log(`[Savant] Player ${mlbPlayerId}: xBA=${xBA} xSLG=${xSLG} EV=${exitVelocity} batSpd=${avgBatSpeed} swgLen=${avgSwingLength} FBv=${avgFastballVelocity}`);
+      console.log(`[Savant] Player ${mlbPlayerId}: xBA=${xBA} xSLG=${xSLG} xwOBA=${xwOBASeason} xISO=${xISOSeason} FB%=${flyBallPercent} HR/FB=${hrFBRatio} SS%=${sweetSpotPercent} EV=${exitVelocity} batSpd=${avgBatSpeed}`);
     }
 
     return result;

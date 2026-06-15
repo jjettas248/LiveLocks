@@ -28,21 +28,32 @@ client/src/          React frontend (Vite + Tailwind + shadcn/ui)
 
 server/              Express backend
   mlb/               MLB engine (core)
-    featureEngineering.ts   11 normalized feature scores per matchup
-    markets.ts              Market-specific probability engines (hits, TB, HR, K, etc.)
-    projections.ts          Baseline projection with modifier application
-    signalScore.ts          0-100 signal strength scoring
-    HRSignalBuilder.ts      HR contact classification and build scoring
-    evaluateHRAlert.ts      Three-path HR alert system with negative suppression
-    normalizeSignal.ts      Engine output → flat MLBSignal with display fields
-    liveGameOrchestrator.ts Central heartbeat — game discovery, polling, engine triggering
-    dataPullService.ts      MLB Stats API data fetching and caching
-    dataSources.ts          Baseball Savant, park factors, wind calculations
-    onlyHomersService.ts    OnlyHomers.com scraper (HR outcomes, hot hitters, ballparks)
-    edgeCache.ts            TTL-aware in-memory cache for engine outputs
-    types.ts                MLBPropInput, MLBPropOutput, MLBQualifiedSignal types
-    archetypes.ts           8 batter + 6 pitcher archetype classification
-    diagnostics.ts          Engine diagnostic logging
+    featureEngineering.ts       11 normalized feature scores per matchup
+    markets.ts                  Market-specific probability engines (hits, TB, HR, K, etc.)
+    projections.ts              Baseline projection with modifier application
+    signalScore.ts              0-100 signal scoring (pitch mix, HR timing, pitcher fatigue components)
+    hrConversionModel.ts        HR conversion probability with pitch-mix × handedness multiplier
+    HRSignalBuilder.ts          HR contact classification and build scoring
+    evaluateHRAlert.ts          Three-path HR alert system with negative suppression
+    normalizeSignal.ts          Engine output → flat MLBSignal with display fields
+    liveGameOrchestrator.ts     Central heartbeat — game discovery, polling, engine triggering
+    dataPullService.ts          MLB Stats API + pitcher recent-starts fetching and caching
+    dataSources.ts              Baseball Savant, park factors, wind calculations
+    onlyHomersService.ts        OnlyHomers.com scraper (HR outcomes, hot hitters, ballparks)
+    edgeCache.ts                TTL-aware in-memory cache for engine outputs
+    types.ts                    MLBPropInput, MLBPropOutput, MLBQualifiedSignal types
+    archetypes.ts               8 batter + 6 pitcher archetype classification
+    diagnostics.ts              Engine diagnostic logging
+    hrRadarStateMachine.ts      Canonical HR Radar lifecycle state machine (pure transitions)
+    hrRadarCanonicalStore.ts    In-memory persistence for HR Radar lifecycle state
+    hrRadarSection.ts           Section/outcome helpers for HR Radar API layer
+    hrRadarState.ts             HR Radar state helpers and constants
+    hrRadarOutcomeStamp.ts      Outcome stamping for HR Radar records
+    nearHrContact.ts            Phase 2.5 near-HR contact detector (pure function)
+    nonHrSignalState.ts         BUILDING→ACTIVE→COOLING→CLOSED state engine for non-HR markets
+    liveEventInterpretation.ts  Live AB contact scoring (contactScore, nearHrScore, momentum)
+    integrityFirewall.ts        Signal integrity enforcement layer
+    goldmasterGuard.ts          Goldmaster version lock + per-cycle drift snapshot
 
   nba/               NBA engine
     probabilityEngine.ts    Normal CDF probability with archetype calibration
@@ -105,12 +116,20 @@ GAME DISCOVERY (5min) → PRE-HYDRATION → LIVE POLLING (10s)
 - **Pitcher**: pitcher_strikeouts, pitcher_outs, hits_allowed, walks_allowed
 
 ### HR Radar
-Contact-based HR opportunity detection with three alert paths (PATH_A, PATH_B, PATH_C) and negative suppression vetoes. OnlyHomers.com provides hot hitter enrichment and verified Statcast outcomes.
+Contact-based HR opportunity detection with:
+- **Canonical state machine** (`hrRadarStateMachine.ts`): 9 states — `inactive → watch → build → ready → fire → cashed|missed|model_review|expired`. Terminal states are sticky; illegal transitions are rejected, not thrown.
+- **Three alert paths** (PATH_A, PATH_B, PATH_C) with negative suppression vetoes in `evaluateHRAlert.ts`
+- **Near-HR contact detector** (`nearHrContact.ts`, Phase 2.5): pure function surfacing `watch|lean` tiers from EV/LA/distance/xBA/barrel data, with `REPEATED_DANGER` pattern detection
+- **Signal gap components** added to `signalScore.ts` and `hrConversionModel.ts`:
+  - **Gap 1 — Pitch-mix × handedness**: `computePitchMixMatchupScore` (12% weight in HR markets); fastball-heavy = +10%/+4%, breaking-heavy = −8%, offspeed-heavy = −5%
+  - **Gap 2 — HR timing**: `computeHrTimingComponent` (8% weight); scores overdue batters (≥3× expected AB/HR rate) at 90, recently-hit batters at 35
+  - **Gap 3 — Pitcher entry fatigue**: `computePitcherEntryFatigueScore` (5–8% weight) using last 3 starts (pitch count, days rest, ERA); max +30%/−10% conversion multiplier
 
 ### Intelligence Layers
 - **BvP History**: Career matchup stats flowing through to signal cards
 - **Arsenal Matchups**: Bidirectional pitch-type ratings (batter favor / pitcher favor)
 - **OnlyHomers**: Hot hitter boosts, verified HR outcomes, ballpark factors
+- **Signal state labels**: `LiveFeed.tsx` and `MlbBoxScore.tsx` display conviction states (FIRE, READY, BUILD, WATCH) and live counts for monitored games and active batter profiles
 
 ---
 

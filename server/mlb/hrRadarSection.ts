@@ -25,7 +25,14 @@
 
 import { getHrRadarOutcomeStamp } from "./hrRadarOutcomeStamp";
 
-export type HrRadarLifecycleState =
+/**
+ * Display/section lifecycle state — the presentation layer's view of an HR
+ * Radar card's current state. This is DISTINCT from hrRadarStateMachine.ts's
+ * HrRadarLifecycleState (which uses "fire"/"model_review"/"expired" and drives
+ * the pure FSM). These two types exist at different layers and must NOT be
+ * conflated: the FSM type drives transitions; this type drives section placement.
+ */
+export type HrRadarSectionState =
   | "pregame"
   | "watch"
   | "build"
@@ -262,7 +269,7 @@ export function deriveHrRadarOutcomeStatus(card: CanonicalCardInput): HrRadarOut
  *   5) confidenceTier/signalState legacy fallback
  *   6) default pregame if no live context, else watch
  */
-export function deriveHrRadarLifecycleState(card: CanonicalCardInput): HrRadarLifecycleState {
+export function deriveHrRadarLifecycleState(card: CanonicalCardInput): HrRadarSectionState {
   const outcome = deriveHrRadarOutcomeStatus(card);
   if (CALLED_HIT_OUTCOME_STATUSES.has(outcome)) return "cashed";
   if (outcome === "called_miss") return "missed";
@@ -280,12 +287,12 @@ export function deriveHrRadarLifecycleState(card: CanonicalCardInput): HrRadarLi
   if (hrCount > 0) return "cashed";
 
   const lifecycleExplicit = norm(card.lifecycleState);
-  const validLifecycle: ReadonlySet<HrRadarLifecycleState> = new Set([
+  const validLifecycle: ReadonlySet<HrRadarSectionState> = new Set([
     "pregame", "watch", "build", "ready", "attack",
     "cashed", "missed", "late_signal", "uncalled_hr", "inactive",
   ] as const);
-  if (validLifecycle.has(lifecycleExplicit as HrRadarLifecycleState)) {
-    return lifecycleExplicit as HrRadarLifecycleState;
+  if (validLifecycle.has(lifecycleExplicit as HrRadarSectionState)) {
+    return lifecycleExplicit as HrRadarSectionState;
   }
 
   const stage = norm(card.currentStage) || norm(card.canonicalStage);
@@ -387,7 +394,7 @@ export function isResolvedHrRadarOutcome(card: CanonicalCardInput): boolean {
  * field on the input row is preserved verbatim.
  */
 export type HrRadarFixupOutput<T> = T & {
-  lifecycleState: HrRadarLifecycleState;
+  lifecycleState: HrRadarSectionState;
   canonicalOutcomeStatus: HrRadarOutcomeStatus;
   section: HrRadarSection;
   active: boolean;
@@ -538,7 +545,7 @@ export function applyHrRadarResolvedStateFixup<T extends CanonicalCardInput & Re
  * is what those callsites can return / log so consumers see one shape.
  */
 export interface ResolveHrRadarPlayerOutcomeResult {
-  lifecycleState: HrRadarLifecycleState;
+  lifecycleState: HrRadarSectionState;
   section: HrRadarSection;
   outcomeStatus: HrRadarOutcomeStatus;
   active: boolean;

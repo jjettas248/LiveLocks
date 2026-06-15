@@ -67,6 +67,16 @@ export interface HRAlertInput {
   lastStartPitchCount?: number | null;
   daysSinceLastStart?: number | null;
   last3StartERA?: number | null;
+  // Gap 4: empirical pitcher ERA/HR rate by batter handedness
+  pitcherHandednessSplits?: import("./types").PitcherHandednessSplits | null;
+  // Gap 5: batter HR rate vs this pitcher's hand
+  batterHandednessSplits?: import("./types").BatterHandednessSplits | null;
+  // Gaps 7–9: Savant power profile
+  flyBallPercent?: number | null;
+  hrFBRatio?: number | null;
+  xwOBA?: number | null;
+  xISO?: number | null;
+  sweetSpotPercent?: number | null;
 }
 
 export interface HRSuppressionFlag {
@@ -322,6 +332,13 @@ function buildConversionInput(input: HRAlertInput): HRConversionInput {
     lastStartPitchCount: input.lastStartPitchCount ?? null,
     daysSinceLastStart: input.daysSinceLastStart ?? null,
     last3StartERA: input.last3StartERA ?? null,
+    pitcherHandednessSplits: input.pitcherHandednessSplits ?? null,
+    batterHandednessSplits: input.batterHandednessSplits ?? null,
+    flyBallPercent: input.flyBallPercent ?? null,
+    hrFBRatio: input.hrFBRatio ?? null,
+    xwOBA: input.xwOBA ?? null,
+    xISO: input.xISO ?? null,
+    sweetSpotPercent: input.sweetSpotPercent ?? null,
   };
 }
 

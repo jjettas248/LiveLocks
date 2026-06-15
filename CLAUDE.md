@@ -21,8 +21,11 @@ Guidance for Claude (and other AI coding assistants) working in this repo.
 **Regression suites (run before merging engine-adjacent changes):**
 ```
 npx tsx server/mlb/phase3bRegression.test.ts        # 21 invariants
-npx tsx server/mlb/shadowOutcomeWiring.test.ts      # 26 invariants
+npx tsx server/mlb/shadowOutcomeWiring.test.ts      # 41 invariants
 npx tsx server/mlb/hrRadarLifecycleRepair.test.ts   # 34 invariants
+npx tsx server/mlb/hrRadarStateMachine.test.ts      # 5 invariants
+npx tsx server/mlb/hrRadarReadyToFire.test.ts       # 5 invariants
+npx tsx server/mlb/nearHrContact.test.ts            # 2 invariants
 ```
 
 The `Start application` workflow runs `npm run dev` automatically; restart it after server changes.
@@ -51,10 +54,13 @@ NBA, MLB, NCAAB engines live in `server/engines/`, `server/mlb/`, `server/nba/`,
 - **Phase 1:** canonical sided probability
 - **Phase 1.5:** caps bind **above** wrappers (e.g. `hits_allowed` UNDER cap=74 still clamps even if 3B wrapper would push higher)
 - **Phase 2:** derive `signalTier` from `confidenceTier`
-- **Phase 2.5:** HR Watch context fires
+- **Phase 2.5:** near-HR contact detection (`nearHrContact.ts`) and HR Watch context fire; pitch-mix × handedness multiplier (`computePitchMixMatchupScore`), HR timing component (`computeHrTimingComponent`), and pitcher entry fatigue score (`computePitcherEntryFatigueScore`) are applied to HR markets here
 - **Phase 3B:** math nudges (HRR compression, hits_allowed shift) **and** signal-composition nudges (HR Watch +3/+6 to `signalScore` only)
 
 > Engine probability is **never** mutated by signal-composition layers.
+
+### 3.2a HR Radar canonical state machine
+`hrRadarStateMachine.ts` owns the **pure transition graph** for HR Radar lifecycle: `inactive → watch → build → ready → fire → cashed|missed|model_review|expired`. Terminal states are sticky. `hrRadarCanonicalStore.ts` owns in-memory persistence. `hrRadarSection.ts` provides section/outcome helpers for the API layer. `nonHrSignalState.ts` mirrors the same pattern for non-HR markets (`BUILDING → ACTIVE → COOLING → CLOSED`). No UI component may derive lifecycle state — all read from server-stamped values.
 
 ### 3.3 The signal pipeline (single source of truth)
 ```
@@ -92,7 +98,12 @@ All server-side date logic must use `todayET()` (America/New_York). Late-night g
 | MLB engine | `server/mlb/signalScore.ts`, `server/mlb/markets.ts`, `server/mlb/probabilityEngine.ts` |
 | MLB normalizer + display contract | `server/mlb/normalizeSignal.ts` |
 | MLB signal bus + lifecycle | `server/services/liveSignalBus.ts`, `server/services/lifecycleStore.ts`, `server/services/lifecycleEngine.ts` |
-| MLB HR Radar engine | `server/mlb/hrAlertEngine.ts`, `server/mlb/hrRadarUserStage.ts` |
+| MLB HR Radar engine | `server/mlb/hrAlertEngine.ts`, `server/mlb/hrRadarUserStage.ts`, `server/mlb/hrConversionModel.ts` |
+| MLB HR Radar state machine | `server/mlb/hrRadarStateMachine.ts`, `server/mlb/hrRadarCanonicalStore.ts`, `server/mlb/hrRadarSection.ts`, `server/mlb/hrRadarState.ts`, `server/mlb/hrRadarOutcomeStamp.ts` |
+| MLB near-HR contact detector | `server/mlb/nearHrContact.ts` (Phase 2.5, pure function — no I/O) |
+| MLB non-HR signal state engine | `server/mlb/nonHrSignalState.ts` (BUILDING→ACTIVE→COOLING→CLOSED) |
+| MLB live event interpretation | `server/mlb/liveEventInterpretation.ts` |
+| MLB integrity firewall | `server/mlb/integrityFirewall.ts` |
 | MLB shadow qualification | `server/mlb/shadowQualification.ts` |
 | MLB orchestrator (per-tick driver) | `server/mlb/liveGameOrchestrator.ts` |
 | Goldmaster lock + drift guard | `server/mlb/goldmasterGuard.ts` |

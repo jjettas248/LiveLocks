@@ -1,6 +1,6 @@
 # LiveLocks — Product Requirements Document
 
-**Version**: 2.1 (April 7, 2026)
+**Version**: 2.2 (June 15, 2026)
 **Product**: LiveLocks by PropPulse
 **Status**: Production
 
@@ -78,9 +78,11 @@ GAME DISCOVERY → DATA SYNC → FEATURE ENGINEERING → MARKET ENGINE → QUALI
 4. **Feature Engineering**: 11 normalized scores per batter/pitcher matchup:
    - contactQuality, batSpeedPower, handednessMatchup, pitchBlendMatchup, hotColdForm, parkEnv, bvp, lineupOpportunity, bullpenFactor, pitcherSuppression, pitcherDeterioration
 5. **Market Engine**: Distribution-based probability (Normal CDF, negative binomial, binomial) per market
-6. **Qualification Gate**: Probability floor, edge validation, projection consistency, real odds check
-7. **Normalization**: Flat signal with smart tags, primary reason, pitch matchup ratings, BvP history
-8. **Confidence Tiers**: ELITE > STRONG > SOLID > LEAN > WATCHLIST
+6. **Phase 2.5 Enrichment**: Near-HR contact detection; pitch-mix × handedness multiplier; HR timing component; pitcher entry fatigue score (HR markets only)
+7. **Qualification Gate**: Probability floor, edge validation, projection consistency, real odds check
+8. **Normalization**: Flat signal with smart tags, primary reason, pitch matchup ratings, BvP history
+9. **Confidence Tiers**: ELITE > STRONG > SOLID > LEAN > WATCHLIST
+10. **Signal State Labels**: Conviction state (FIRE/READY/BUILD/WATCH) displayed in Action Feed and box score rows with live game and batter profile counts
 
 ### 4.3 Event-Driven Triggers
 High-impact game events trigger immediate re-evaluation (5s dedup):
@@ -108,7 +110,13 @@ High-impact game events trigger immediate re-evaluation (5s dedup):
 
 ### 4.5 HR Radar System
 
-**Contact Classification per at-bat:**
+**Canonical State Machine** (`hrRadarStateMachine.ts`):
+9-state lifecycle — `inactive → watch → build → ready → fire → cashed|missed|model_review|expired`. Terminal states (`cashed`, `missed`, `model_review`, `expired`) are sticky and cannot be re-entered. Illegal transitions return `ok=false` and are logged, never thrown. In-memory persistence lives in `hrRadarCanonicalStore.ts`. Section/outcome helpers for the API layer live in `hrRadarSection.ts`.
+
+**Near-HR Contact Detector** (`nearHrContact.ts`, Phase 2.5):
+Pure function — no I/O, no probability mutation. Surfaces `watch|lean` tiers from per-AB contact data (EV/LA/distance/xBA/barrel flag). Supports `REPEATED_DANGER` pattern (multiple elevated-risk ABs). Callers log results under `[MLB_HR_NEAR_CONTACT_EVAL]` / `[MLB_HR_NEAR_CONTACT_MISSED_PATTERN]`.
+
+**Contact Classification per at-bat (hrAlertEngine.ts):**
 | Class | Thresholds |
 |:---|:---|
 | eliteHrContact | EV ≥ 102, LA 23-34°, dist ≥ 390 |
@@ -117,7 +125,7 @@ High-impact game events trigger immediate re-evaluation (5s dedup):
 | powerContact | Hard hit, suboptimal trajectory |
 | noiseContact | Routine batted ball |
 
-**Three Alert Paths:**
+**Three Alert Paths (evaluateHRAlert.ts):**
 - PATH_A: 2+ HR-shaped events + qualified EV mean ≥ 99 + max dist ≥ 375 + remaining PA ≥ 1.3
 - PATH_B: 1 missed/elite HR + pitcher fatigue or favorable environment
 - PATH_C: Late-game (inning 5+) with HR-shaped contact + favorable pitcher
@@ -125,6 +133,17 @@ High-impact game events trigger immediate re-evaluation (5s dedup):
 **Negative Suppression:** Veto system for remaining PA, headwind, same-side matchup, cold temperature, repeat confirmation, LA consistency.
 
 **Alert Tiers:** officialAlert, prepare, watch — with full diagnostics (alertPath, positiveFactors, suppressionFlags, pitcherFatigueState, environmentContext).
+
+**Signal Gap Components** (added June 2026, `signalScore.ts` + `hrConversionModel.ts`):
+
+| Component | Weight | Logic |
+|:---|:---|:---|
+| computePitchMixMatchupScore (Gap 1) | 12% in HR markets | Fastball-heavy opposite-side: +10%; same-side: +4%; breaking-heavy: −8%; offspeed-heavy: −5% |
+| computeHrTimingComponent (Gap 2) | 8% in HR markets | Overdue (≥3× expected AB/HR rate): 90; recently hit: 35 |
+| computePitcherEntryFatigueScore (Gap 3) | 5–8% in HR markets | Derived from last 3 pitcher starts (pitch count, days rest, ERA); max +30%/−10% conversion multiplier |
+
+**Non-HR Signal State Engine** (`nonHrSignalState.ts`):
+Mirrors HR Radar pattern for batter-over and pitcher markets: `BUILDING → ACTIVE → COOLING → CLOSED`. Terminal `CLOSED` state. `COOLING` fires when `signalScore` drops ≥ COOLING_DROP from peak. Daily slate-reset via `clearStaleNonHrStates`.
 
 ### 4.6 MLB Grading
 - End-to-end grading using MLB Stats API boxscores

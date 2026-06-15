@@ -854,13 +854,24 @@ export function computeSpecContactQuality(input: MLBPropInput): number {
   const xSLG = cq.xSLG ?? 0.430;
 
   const la = cq.launchAngle ?? 14;
-  const inSweetSpot = la >= 10 && la <= 30;
-  const sweetSpotScore = inSweetSpot ? normalize01(la, 10, 25) : 0.2;
+  // Use direct Statcast sweet_spot_percent when available (Gap 9); fall back to
+  // inferred LA threshold which can false-positive on weak 30° grounders.
+  const sweetSpotPct = cq.sweetSpotPercent;
+  const inSweetSpot = sweetSpotPct != null
+    ? sweetSpotPct >= 30
+    : (la >= 10 && la <= 30);
+  const sweetSpotScore = sweetSpotPct != null
+    ? normalize01(sweetSpotPct, 20, 45)
+    : (inSweetSpot ? normalize01(la, 10, 25) : 0.2);
 
   const evLaSurface = normalize01(ev, 80, 110) * (inSweetSpot ? 1.0 : 0.6);
 
   const xBASkill = normalize01(xBA, 0.200, 0.320);
-  const xwOBASkill = normalize01(xSLG, 0.300, 0.550);
+  // Prefer xwOBASeason when available — better contact quality anchor than xSLG (Gap 8).
+  const xwOBASeason = cq.xwOBASeason;
+  const xwOBASkill = xwOBASeason != null
+    ? normalize01(xwOBASeason, 0.270, 0.400)
+    : normalize01(xSLG, 0.300, 0.550);
   const barrelScore = normalize01(barrel, 0.02, 0.15);
   const hardHitScore = normalize01(hhr, 0.25, 0.55);
 

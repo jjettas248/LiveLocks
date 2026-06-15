@@ -25,6 +25,9 @@ Treat MLB engine output as a **versioned contract**. Every deploy either:
   external monitoring
 - A documented reset procedure (`mlb-reset-skill.md`) restores baseline
 - Phase 3B regression harness (21 invariants) gates every merge
+- Shadow outcome wiring harness (41 invariants) gates every merge
+- HR Radar lifecycle repair harness (34 invariants) gates every merge
+- State machine harness (5 invariants), ReadyToFire harness (5), NearHR detector harness (2) gate HR-adjacent merges
 - Zero behavior change at version bump time — the lock is observation-only
 
 ## SCOPE
