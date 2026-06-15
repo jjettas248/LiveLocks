@@ -1056,6 +1056,43 @@ app.use((req, res, next) => {
   );
   console.log("[snapshot-rolling-cron] Nightly batter rolling stat snapshot scheduled (03:30 ET)");
 
+  // ── Phase 3 — daily HR Radar recap tweet ───────────────────────────────
+  // Posts a summary tweet of the day's cashed HR Radar signals at 11:45 PM ET.
+  // No-ops gracefully when TWITTER_APP_KEY is not configured.
+  cron.schedule(
+    "45 23 * * *",
+    async () => {
+      try {
+        const { postDailySummaryTweet } = await import("./services/twitterService");
+        const { todayET } = await import("./utils/dateUtils");
+        const date = todayET();
+        const ladder = await storage.getHrRadarLadder(date);
+        const cashed = ladder.sections?.cashed ?? [];
+        const cashedHits = cashed
+          .filter((e: any) => e.outcome === "hit" || e.outcomeStatus === "hit")
+          .map((e: any) => ({
+            playerName: e.playerName as string,
+            team: e.team as string,
+            inning: (e.hitInning ?? e.detectedInning ?? 0) as number,
+          }));
+        await postDailySummaryTweet({
+          date,
+          cashHits: cashedHits,
+          totalCalled:
+            (ladder.sections?.attackNow?.length ?? 0) +
+            (ladder.sections?.building?.length ?? 0) +
+            (ladder.sections?.ready?.length ?? 0) +
+            cashed.length,
+          totalHit: cashedHits.length,
+        });
+      } catch (err: any) {
+        console.error("[twitter-daily-cron] failed:", err.message);
+      }
+    },
+    { timezone: "America/New_York" }
+  );
+  console.log("[twitter-daily-cron] Daily HR Radar recap tweet scheduled (23:45 ET)");
+
   // ── Daily MLB slate-reset (recurring "must reset every day" bug fix) ─────
   // Sweeps every gameId-keyed in-memory cache in the MLB pipeline whose game
   // is no longer in the live registry. Cures the residue left when a game's

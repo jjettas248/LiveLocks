@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, AlertTriangle, RefreshCw, Eraser, X, ArrowRight, Clock, DollarSign } from "lucide-react";
+import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, AlertTriangle, RefreshCw, Eraser, X, ArrowRight, Clock, DollarSign, Share2 } from "lucide-react";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
 
@@ -93,6 +93,7 @@ export interface HrRadarLadderEntry {
   peakReadinessScore?: number | null;
   buildScore?: number | null;
   conversionProbability?: number | null;
+  pitcherHrVulnerability?: number | null;
   // Goldmaster RESTORE — 10-point USER-FACING signal score (0.0-10.0).
   initialSignalScore10?: number | null;
   currentSignalScore10?: number | null;
@@ -503,6 +504,21 @@ function HeatingUpMeter({
   );
 }
 
+function hrBreakdownBar(pct: number, isHrProb = false): string {
+  if (isHrProb) {
+    if (pct >= 35) return "#22c55e";
+    if (pct >= 20) return "#a3e635";
+    if (pct >= 12) return "#94a3b8";
+    if (pct >= 6)  return "#f59e0b";
+    return "#ef4444";
+  }
+  if (pct >= 70) return "#22c55e";
+  if (pct >= 55) return "#a3e635";
+  if (pct >= 45) return "#94a3b8";
+  if (pct >= 35) return "#f59e0b";
+  return "#ef4444";
+}
+
 function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAccept, isAccepted }: CardProps) {
   // Goldmaster Phase 2+3 — prefer the FROZEN server-stamped detectedLabel /
   // hitLabel (these never advance on score climbs). Fall back to formatting
@@ -596,6 +612,34 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   const reasonsForRender = isPregameOnly ? reasons.slice(0, 1) : reasons;
   // Outcome label for resolved rows uses the canonical outcome when present.
   const resolvedOutcomeKey = entry.outcome ?? entry.outcomeStatus;
+
+  const [shareLoading, setShareLoading] = useState(false);
+  const handleShare = async () => {
+    if (shareLoading) return;
+    setShareLoading(true);
+    try {
+      const score10Val = entry.displayCurrentScore10 ?? entry.currentSignalScore10 ?? null;
+      const params = new URLSearchParams({
+        playerName: entry.playerName,
+        team: entry.team,
+        stage: entry.userStage ?? entry.currentStage ?? "track",
+        ...(score10Val != null       ? { score10:      String(score10Val) }                                       : {}),
+        ...(entry.currentReadinessScore != null ? { readinessPct: String(entry.currentReadinessScore) }          : {}),
+        ...(entry.conversionProbability != null ? { hrProbPct:    String(entry.conversionProbability * 100) }    : {}),
+        ...(entry.headlineReason        ? { headline:     entry.headlineReason }                                  : {}),
+      });
+      const resp = await fetch(`/api/mlb/hr-radar/share-card?${params.toString()}`);
+      if (!resp.ok) throw new Error("share-card failed");
+      const { shareId, tweetText } = await resp.json() as { shareId: string; tweetText: string };
+      const shareUrl = `${window.location.origin}/share/hr/${shareId}`;
+      const intent = `https://x.com/intent/tweet?text=${encodeURIComponent(tweetText)}&url=${encodeURIComponent(shareUrl)}`;
+      window.open(intent, "_blank", "noopener,noreferrer,width=600,height=450");
+    } catch {
+      // Silently fail — user can retry
+    } finally {
+      setShareLoading(false);
+    }
+  };
 
   const handleAdd = () => {
     if (!onAddToSlip) return;
@@ -838,6 +882,52 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
         </ul>
       )}
 
+      {/* HR Breakdown — 4-bar mini panel */}
+      {!isResolved && (() => {
+        const bars: Array<{ label: string; pct: number | null; isHrProb?: boolean }> = [
+          { label: "Formation",    pct: entry.buildScore != null ? Math.min(100, Math.round(entry.buildScore * 10)) : null },
+          { label: "Readiness",    pct: entry.currentReadinessScore != null ? Math.min(100, Math.round(entry.currentReadinessScore)) : null },
+          { label: "HR Prob",      pct: entry.conversionProbability != null ? Math.min(100, Math.round(entry.conversionProbability * 100)) : null, isHrProb: true },
+          { label: "Pitcher Vuln", pct: entry.pitcherHrVulnerability != null ? Math.min(100, Math.round(entry.pitcherHrVulnerability)) : null },
+        ];
+        if (bars.filter(b => b.pct != null).length < 2) return null;
+        return (
+          <div
+            className="mt-2 rounded-lg p-2.5 bg-secondary/20 border border-border/20"
+            data-testid={`panel-hr-breakdown-${entry.playerId}`}
+          >
+            <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">
+              HR Breakdown
+            </div>
+            <div className="space-y-1">
+              {bars.map(({ label, pct, isHrProb }) => {
+                if (pct == null) return null;
+                const color = hrBreakdownBar(pct, isHrProb);
+                return (
+                  <div key={label} className="flex items-center justify-between gap-2">
+                    <span className="text-[9px] text-muted-foreground truncate">{label}</span>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-16 h-1.5 rounded-full bg-secondary/60 overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all"
+                          style={{ width: `${pct}%`, backgroundColor: color }}
+                        />
+                      </div>
+                      <span
+                        className="text-[8px] font-bold tabular-nums w-5 text-right"
+                        style={{ color }}
+                      >
+                        {pct}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Batch A — Phase 3: timing labels. "Game final — resolved" beats
           everything when isGameFinal is true on a card that briefly slipped
           into a live section. Otherwise we show the remaining-PA / late-window
@@ -907,25 +997,55 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
         </div>
       )}
       {canAdd && !isAccepted && (
-        <div className="mt-2 flex items-center justify-end gap-2">
+        <div className="mt-2 flex items-center justify-between gap-2">
           <Button
             size="sm"
             variant="ghost"
-            className="h-7 text-[11px] gap-1 text-muted-foreground hover:text-foreground"
-            onClick={() => onPass?.(entry)}
-            data-testid={`button-pass-ladder-${entry.playerId}`}
-            title="Dismiss this card for the rest of today's session"
+            className="h-7 text-[11px] gap-1 text-muted-foreground/60 hover:text-muted-foreground"
+            onClick={handleShare}
+            disabled={shareLoading}
+            data-testid={`button-share-ladder-${entry.playerId}`}
+            title="Share on X (Twitter)"
           >
-            <X className="w-3 h-3" /> Pass
+            <Share2 className="w-3 h-3" />
+            {shareLoading ? "Sharing…" : "Share"}
           </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-[11px] gap-1 text-muted-foreground hover:text-foreground"
+              onClick={() => onPass?.(entry)}
+              data-testid={`button-pass-ladder-${entry.playerId}`}
+              title="Dismiss this card for the rest of today's session"
+            >
+              <X className="w-3 h-3" /> Pass
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-[11px] gap-1 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10"
+              onClick={handleAdd}
+              data-testid={`button-take-it-ladder-${entry.playerId}`}
+            >
+              <Plus className="w-3 h-3" /> Take it
+            </Button>
+          </div>
+        </div>
+      )}
+      {(!canAdd) && (
+        <div className="mt-2 flex items-center justify-end">
           <Button
             size="sm"
-            variant="outline"
-            className="h-7 text-[11px] gap-1 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10"
-            onClick={handleAdd}
-            data-testid={`button-take-it-ladder-${entry.playerId}`}
+            variant="ghost"
+            className="h-7 text-[11px] gap-1 text-muted-foreground/60 hover:text-muted-foreground"
+            onClick={handleShare}
+            disabled={shareLoading}
+            data-testid={`button-share-ladder-${entry.playerId}`}
+            title="Share on X (Twitter)"
           >
-            <Plus className="w-3 h-3" /> Take it
+            <Share2 className="w-3 h-3" />
+            {shareLoading ? "Sharing…" : "Share"}
           </Button>
         </div>
       )}
@@ -1351,6 +1471,48 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
           </Button>
         </div>
       </div>
+      {/* Section count summary — lets users see the radar state at a glance
+          without scrolling through all sections. Only shows non-zero counts. */}
+      {counts.total > 0 && (
+        <div
+          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-card border border-border/40 overflow-x-auto"
+          data-testid="ladder-summary-bar"
+        >
+          {counts.attackNow > 0 && (
+            <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-red-400" data-testid="summary-fire">
+              <Flame className="w-3 h-3" /> FIRE {counts.attackNow}
+            </span>
+          )}
+          {(counts.ready ?? 0) > 0 && (
+            <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-orange-400" data-testid="summary-ready">
+              <Zap className="w-3 h-3" /> READY {counts.ready}
+            </span>
+          )}
+          {counts.building > 0 && (
+            <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-amber-400" data-testid="summary-build">
+              <Zap className="w-3 h-3" /> BUILD {counts.building}
+            </span>
+          )}
+          {counts.watch > 0 && (
+            <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-blue-400" data-testid="summary-watch">
+              <Eye className="w-3 h-3" /> WATCH {counts.watch}
+            </span>
+          )}
+          {counts.cashed > 0 && (
+            <>
+              <span className="text-muted-foreground/30 text-[11px]">·</span>
+              <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-emerald-400" data-testid="summary-cashed">
+                <Trophy className="w-3 h-3" /> {counts.cashed} HR
+              </span>
+            </>
+          )}
+          {counts.dead > 0 && (
+            <span className="text-[11px] text-muted-foreground/50 whitespace-nowrap" data-testid="summary-missed">
+              {counts.dead} missed
+            </span>
+          )}
+        </div>
+      )}
       {/* Phase 2.5 HR Watch Bridge — surfaces engine-stamped near-HR
           contact detections (signalType="hr_watch") so admins/users can see
           that the engine IS detecting near-HR plays even when the ladder

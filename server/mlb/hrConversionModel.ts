@@ -1,6 +1,6 @@
 import type { HRBuildResult, ClassifiedContact } from "./HRSignalBuilder";
 import { estimateRichPADistribution } from "./paDistribution";
-import type { PitchMixEntry } from "./types";
+import type { PitchMixEntry, PitcherHandednessSplits, BatterHandednessSplits } from "./types";
 import { getPitchFamily } from "./pitchTypeNormalizer";
 
 export interface PitcherDeteriorationContext {
@@ -45,6 +45,16 @@ export interface HRConversionInput {
   lastStartPitchCount?: number | null;
   daysSinceLastStart?: number | null;
   last3StartERA?: number | null;
+  // Gap 4: empirical pitcher ERA/HR rate by batter handedness
+  pitcherHandednessSplits?: PitcherHandednessSplits | null;
+  // Gap 5: batter HR rate vs this pitcher's hand
+  batterHandednessSplits?: BatterHandednessSplits | null;
+  // Gaps 7–9: Savant power profile
+  flyBallPercent?: number | null;
+  hrFBRatio?: number | null;
+  xwOBA?: number | null;
+  xISO?: number | null;
+  sweetSpotPercent?: number | null;
 }
 
 export interface HRConversionResult {
@@ -230,6 +240,73 @@ function describePitcherDeteriorationState(input: HRConversionInput): string {
   return parts.length > 0 ? parts.join(", ") : "stable";
 }
 
+// Gap 4: select the matchup-appropriate ERA from pitcher handedness splits.
+// Falls back to generic ERA if splits unavailable. Max swing ±8%.
+function computeHandednessERAMultiplier(input: HRConversionInput): number {
+  const splits = input.pitcherHandednessSplits;
+  const batterHand = input.batterHand;
+  if (!splits || !batterHand) return 1.0;
+  const matchupERA = batterHand === "L" ? splits.eraVsLHB : splits.eraVsRHB;
+  if (matchupERA == null) return 1.0;
+  if (matchupERA >= 6.0) return 1.08;
+  if (matchupERA >= 5.0) return 1.05;
+  if (matchupERA >= 4.5) return 1.02;
+  if (matchupERA <= 2.5) return 0.92;
+  if (matchupERA <= 3.2) return 0.96;
+  return 1.0;
+}
+
+// Gaps 7–9: structural HR power profile multiplier from Savant season stats.
+// Applied after environment to keep layers orthogonal. Cap at ×1.20 / floor 0.88.
+function computePowerProfileMultiplier(input: HRConversionInput): number {
+  let mult = 1.0;
+  const LEAGUE_AVG_HR_FB = 11;    // ~11% league avg
+  const LEAGUE_AVG_FB_PCT = 35;   // ~35% fly ball rate
+
+  const hrFB = input.hrFBRatio;
+  if (hrFB != null) {
+    if (hrFB >= 18) mult *= 1.20;
+    else if (hrFB >= 14) mult *= 1.12;
+    else if (hrFB >= LEAGUE_AVG_HR_FB) mult *= 1.04;
+    else if (hrFB <= 8) mult *= 0.90;
+    else if (hrFB <= LEAGUE_AVG_HR_FB) mult *= 0.96;
+  }
+
+  const fbPct = input.flyBallPercent;
+  if (fbPct != null) {
+    if (fbPct >= 42) mult *= 1.12;
+    else if (fbPct >= 38) mult *= 1.05;
+    else if (fbPct <= 28) mult *= 0.90;
+    else if (fbPct <= LEAGUE_AVG_FB_PCT) mult *= 0.96;
+  }
+
+  const xISO = input.xISO;
+  if (xISO != null) {
+    if (xISO >= 0.220) mult *= 1.15;
+    else if (xISO >= 0.180) mult *= 1.08;
+    else if (xISO >= 0.140) mult *= 1.02;
+    else if (xISO <= 0.100) mult *= 0.92;
+  }
+
+  const xwoba = input.xwOBA;
+  if (xwoba != null) {
+    if (xwoba >= 0.380) mult *= 1.08;
+    else if (xwoba >= 0.340) mult *= 1.03;
+    else if (xwoba <= 0.280) mult *= 0.93;
+  }
+
+  return Math.min(1.28, Math.max(0.88, mult));
+}
+
+// Gap 6: lineup slot weight for HR markets.
+// Cleanup hitters (3–5) produce HRs at structurally higher rates.
+function computeLineupSlotHRMultiplier(slot: number): number {
+  if (slot >= 3 && slot <= 5) return 1.06;
+  if (slot === 2 || slot === 6) return 1.02;
+  if (slot === 1) return 0.97;   // leadoff — speed/OBP, not power focus
+  return 0.94;                    // 7–9: weakest HR production
+}
+
 function computePitcherMultiplier(input: HRConversionInput): number {
   let multiplier = 1.0;
   const det = input.pitcherDeterioration;
@@ -296,6 +373,9 @@ function computePitcherMultiplier(input: HRConversionInput): number {
     if (det.relieversUsedCount >= 4) multiplier *= 1.08;
     else if (det.relieversUsedCount >= 3) multiplier *= 1.04;
   }
+
+  // Gap 4: adjust for matchup-specific pitcher ERA vs this batter's hand
+  multiplier *= computeHandednessERAMultiplier(input);
 
   // Phase 4: tightened cap to reduce upstream probability inflation.
   return Math.min(2.0, multiplier);
@@ -424,12 +504,30 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
   let baseRate = input.seasonHRRate ?? LEAGUE_AVG_HR_PER_PA;
   if (baseRate <= 0 || baseRate > 0.12) baseRate = LEAGUE_AVG_HR_PER_PA;
 
+  // Gap 5: blend in handedness-specific batter HR rate (30% weight) when
+  // sufficient sample exists — more predictive than undifferentiated season rate.
+  const batterSplits = input.batterHandednessSplits;
+  const pitcherThrows = input.pitcherThrows;
+  if (batterSplits && pitcherThrows) {
+    const matchupHRRate = pitcherThrows === "L" ? batterSplits.hrRateVsLHP : batterSplits.hrRateVsRHP;
+    if (matchupHRRate != null && matchupHRRate > 0 && matchupHRRate <= 0.12) {
+      baseRate = 0.70 * baseRate + 0.30 * matchupHRRate;
+    }
+  }
+
   const barrelRate = input.barrelRate ?? LEAGUE_AVG_BARREL_RATE;
   const barrelAdj = Math.min(1.5, barrelRate / LEAGUE_AVG_BARREL_RATE);
   baseRate *= 0.6 + 0.4 * barrelAdj;
 
-  if (input.xSLG !== null && input.xSLG > 0) {
-    const xslgFactor = input.xSLG / 0.400;
+  // Use xwOBA when available (better contact quality anchor than xSLG alone);
+  // fall back to xSLG for the scaling factor.
+  const xwoba = input.xwOBA;
+  const xslg = input.xSLG;
+  if (xwoba != null && xwoba > 0) {
+    const xwobaFactor = xwoba / 0.320;   // league avg ~.320
+    baseRate *= Math.max(0.70, Math.min(1.55, xwobaFactor));
+  } else if (xslg !== null && xslg > 0) {
+    const xslgFactor = xslg / 0.400;
     baseRate *= Math.max(0.7, Math.min(1.5, xslgFactor));
   }
 
@@ -447,8 +545,17 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
   const entryFatigueMultiplier = computePitcherEntryFatigueMultiplier(input);
   const entryAdjustedRate = envAdjustedRate * entryFatigueMultiplier;
 
+  // Gaps 7–9: structural power profile (fly ball%, HR/FB, xISO, xwOBA).
+  // Applied last so it modulates the fully-env/pitcher-adjusted rate.
+  const powerMultiplier = computePowerProfileMultiplier(input);
+  const powerAdjustedRate = entryAdjustedRate * powerMultiplier;
+
+  // Gap 6: lineup slot weight — cleanup hitters structurally produce more HRs.
+  const slotMultiplier = computeLineupSlotHRMultiplier(input.battingOrderSlot);
+  const slotAdjustedRate = powerAdjustedRate * slotMultiplier;
+
   // Phase 4: tightened final per-PA cap (0.25 → 0.12) to prevent runaway probabilities.
-  const finalPerPARate = Math.max(0.005, Math.min(0.12, entryAdjustedRate));
+  const finalPerPARate = Math.max(0.005, Math.min(0.12, slotAdjustedRate));
 
   const paDist = estimateRichPADistribution(
     input.inning,
