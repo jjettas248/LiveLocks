@@ -612,6 +612,20 @@ function gradeSingleHRPlay(
         }).catch(err => console.warn(`[HR_RADAR_ENSURE_HIT] Failed: ${err.message}`));
       }
     }).catch(() => {});
+  // Phase 2 — best-effort brand auto-tweet when a tracked player homers.
+  // Fire-and-forget: never blocks the grading path.
+  Promise.resolve().then(() =>
+    import("../services/twitterService").then(({ postHrHitTweet }) =>
+      postHrHitTweet({
+        playerName,
+        team,
+        inning,
+        hitLabel,
+        stage: (getHrAlertState(gameId, playerId) as any)?.alertResult?.alertTier ?? "fire",
+        score10: null,
+      })
+    )
+  ).catch(() => {});
 }
 
 /**

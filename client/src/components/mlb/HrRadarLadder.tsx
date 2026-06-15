@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, AlertTriangle, RefreshCw, Eraser, X, ArrowRight, Clock, DollarSign } from "lucide-react";
+import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, AlertTriangle, RefreshCw, Eraser, X, ArrowRight, Clock, DollarSign, Share2 } from "lucide-react";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
 
@@ -613,6 +613,34 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   // Outcome label for resolved rows uses the canonical outcome when present.
   const resolvedOutcomeKey = entry.outcome ?? entry.outcomeStatus;
 
+  const [shareLoading, setShareLoading] = useState(false);
+  const handleShare = async () => {
+    if (shareLoading) return;
+    setShareLoading(true);
+    try {
+      const score10Val = entry.displayCurrentScore10 ?? entry.currentSignalScore10 ?? null;
+      const params = new URLSearchParams({
+        playerName: entry.playerName,
+        team: entry.team,
+        stage: entry.userStage ?? entry.currentStage ?? "track",
+        ...(score10Val != null       ? { score10:      String(score10Val) }                                       : {}),
+        ...(entry.currentReadinessScore != null ? { readinessPct: String(entry.currentReadinessScore) }          : {}),
+        ...(entry.conversionProbability != null ? { hrProbPct:    String(entry.conversionProbability * 100) }    : {}),
+        ...(entry.headlineReason        ? { headline:     entry.headlineReason }                                  : {}),
+      });
+      const resp = await fetch(`/api/mlb/hr-radar/share-card?${params.toString()}`);
+      if (!resp.ok) throw new Error("share-card failed");
+      const { shareId, tweetText } = await resp.json() as { shareId: string; tweetText: string };
+      const shareUrl = `${window.location.origin}/share/hr/${shareId}`;
+      const intent = `https://x.com/intent/tweet?text=${encodeURIComponent(tweetText)}&url=${encodeURIComponent(shareUrl)}`;
+      window.open(intent, "_blank", "noopener,noreferrer,width=600,height=450");
+    } catch {
+      // Silently fail — user can retry
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
   const handleAdd = () => {
     if (!onAddToSlip) return;
     onAccept?.(entry);
@@ -969,25 +997,55 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
         </div>
       )}
       {canAdd && !isAccepted && (
-        <div className="mt-2 flex items-center justify-end gap-2">
+        <div className="mt-2 flex items-center justify-between gap-2">
           <Button
             size="sm"
             variant="ghost"
-            className="h-7 text-[11px] gap-1 text-muted-foreground hover:text-foreground"
-            onClick={() => onPass?.(entry)}
-            data-testid={`button-pass-ladder-${entry.playerId}`}
-            title="Dismiss this card for the rest of today's session"
+            className="h-7 text-[11px] gap-1 text-muted-foreground/60 hover:text-muted-foreground"
+            onClick={handleShare}
+            disabled={shareLoading}
+            data-testid={`button-share-ladder-${entry.playerId}`}
+            title="Share on X (Twitter)"
           >
-            <X className="w-3 h-3" /> Pass
+            <Share2 className="w-3 h-3" />
+            {shareLoading ? "Sharing…" : "Share"}
           </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-[11px] gap-1 text-muted-foreground hover:text-foreground"
+              onClick={() => onPass?.(entry)}
+              data-testid={`button-pass-ladder-${entry.playerId}`}
+              title="Dismiss this card for the rest of today's session"
+            >
+              <X className="w-3 h-3" /> Pass
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-[11px] gap-1 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10"
+              onClick={handleAdd}
+              data-testid={`button-take-it-ladder-${entry.playerId}`}
+            >
+              <Plus className="w-3 h-3" /> Take it
+            </Button>
+          </div>
+        </div>
+      )}
+      {(!canAdd) && (
+        <div className="mt-2 flex items-center justify-end">
           <Button
             size="sm"
-            variant="outline"
-            className="h-7 text-[11px] gap-1 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10"
-            onClick={handleAdd}
-            data-testid={`button-take-it-ladder-${entry.playerId}`}
+            variant="ghost"
+            className="h-7 text-[11px] gap-1 text-muted-foreground/60 hover:text-muted-foreground"
+            onClick={handleShare}
+            disabled={shareLoading}
+            data-testid={`button-share-ladder-${entry.playerId}`}
+            title="Share on X (Twitter)"
           >
-            <Plus className="w-3 h-3" /> Take it
+            <Share2 className="w-3 h-3" />
+            {shareLoading ? "Sharing…" : "Share"}
           </Button>
         </div>
       )}
