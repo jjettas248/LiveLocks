@@ -495,7 +495,12 @@ export function maybePromoteReadyToFire(
 
   const peak = Number(ctx.peakReadinessScore ?? 0);
   const cur = Number(ctx.currentReadinessScore ?? 0);
-  const stale = peak > 0 && cur > 0 && cur < peak * 0.85;
+  // Graduated staleness (was a hard 0.85 cliff). A decaying-but-still-elite
+  // signal — score still ≥9.5 (above the 9.0 FIRE display floor) and readiness
+  // within 80% of peak — should still fire right before the swing instead of
+  // being blocked. Ladder/display logic only; does NOT touch engine probability
+  // (parity-neutral).
+  const stale = peak > 0 && cur > 0 && cur < peak * 0.80;
 
   let rule: string | null = null;
   if (PATH_PROMOTES_TO_FIRE[path] && (sig === "live" || sig === "actionable")) {

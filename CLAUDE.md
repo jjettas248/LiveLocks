@@ -25,7 +25,8 @@ npx tsx server/mlb/shadowOutcomeWiring.test.ts      # 41 invariants
 npx tsx server/mlb/hrRadarLifecycleRepair.test.ts   # 34 invariants
 npx tsx server/mlb/hrRadarStateMachine.test.ts      # 5 invariants
 npx tsx server/mlb/hrRadarReadyToFire.test.ts       # 5 invariants
-npx tsx server/mlb/nearHrContact.test.ts            # 2 invariants
+npx tsx server/mlb/nearHrContact.test.ts            # near-HR + "almost HR" detection
+npx tsx server/mlb/pullAndPregame.test.ts           # pull rate + pregame HR-form prior
 ```
 
 The `Start application` workflow runs `npm run dev` automatically; restart it after server changes.
@@ -161,12 +162,42 @@ Admin pages live under `/admin` and `/admin/mlb-signal-intelligence`.
 2. **Do not** add a new ingress path for signals — `LiveSignalBus.registerSignal` is the only entry point.
 3. **Do not** dedupe by player name, market label, or UI string. Dedupe is `signalId`-only.
 4. **Do not** re-derive `displaySide`, `displayProbability`, `displayGrade`, or `isBettable` on the client. Read from the server-stamped values.
-5. **Do not** mutate engine probability from a signal-composition layer (HR Watch may bump `signalScore` only).
+5. **Do not** mutate engine probability from a signal-composition layer (HR Watch may bump `signalScore` only). *Engine-math changes that improve probability are allowed **inside the engine layer itself** (e.g. `hrConversionModel.ts`, `probabilityEngine.ts`) — see §7a; the prohibition is on composition/normalizer/lifecycle/bus layers reaching back and rewriting it.*
 6. **Do not** import across sport engines (`server/mlb` ↔ `server/nba` ↔ `server/ncaab`).
 7. **Do not** edit `package.json` directly — use the package management tools, and never modify Vite / Drizzle config without strong cause.
 8. **Do not** add analytics code paths that mutate runtime state. Analytics are read-only and wrapped in `try/catch` so they can never break runtime.
 9. **Do not** use `new Date()` for slate / window logic — use `todayET()`.
 10. **Do not** display or write secret values. Use Replit-managed env vars.
+
+---
+
+## 7a. Sanctioned Engine Changes (improving behavior is allowed)
+
+The Hard Rules above protect **structural integrity** (sole ingress, post-bus immutability,
+cross-sport isolation, analytics read-only, ET dominance, secrets). They are **not** a freeze on
+the model. **Intentionally changing engine math/behavior to improve accuracy — including HR
+conversion probability, scoring thresholds, gates, and new predictive features — IS permitted**,
+provided every change follows this discipline:
+
+1. **Make the change in the right layer.** Probability/behavior changes live in the engine
+   (`server/mlb/hrConversionModel.ts`, `evaluateHRAlert.ts`, `hrAlertEngine.ts`,
+   `signalScore.ts`, `probabilityEngine.ts`, `nearHrContact.ts`) **before the bus**. Never via a
+   composition/normalizer/lifecycle/bus/analytics layer (Hard Rules 1, 2, 5, 8 still hold).
+2. **Keep new model inputs additive & no-op when absent** (return `1.0` / `+0` / `null`) so partial
+   data never destabilizes runtime and regression fixtures stay green.
+3. **Don't silently change the emitted payload shape.** New engine inputs/feature signals stay
+   internal unless deliberately surfaced; a payload-shape change must be intentional (it trips the
+   drift guard's `shape_change`).
+4. **Cap probability effects** so a single feature can't swing the per-PA rate past existing clamps
+   (Phase 1.5 caps still bind above all new multipliers).
+5. **Re-baseline the goldmaster.** When engine behavior changes on purpose, bump
+   `MLB_GOLDMASTER_VERSION` in `server/mlb/goldmasterGuard.ts` to document it — `[MLB_DRIFT_WARNING]`
+   is then expected/acceptable transient noise, not a regression. "Drift" only means **unintended**
+   change; a documented, re-baselined improvement is not drift.
+6. **Run the regression suites** (§1) and add/adjust cases for the new behavior before merging.
+
+In short: improvements are encouraged. The rules govern *how* (layer, caps, re-baseline,
+test), not *whether*.
 
 ---
 

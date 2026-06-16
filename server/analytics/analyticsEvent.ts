@@ -24,7 +24,10 @@ export type AnalyticsEventType =
   | "shadow_signal_missed"
   | "hr_radar_transition"
   | "hr_radar_cashed"
-  | "hr_radar_missed";
+  | "hr_radar_missed"
+  // Recall / lead-time measurement (read-only diagnostics).
+  | "hr_radar_miss_trace"
+  | "hr_radar_called_hit_lead";
 
 export interface AnalyticsEvent {
   // Required envelope
@@ -56,6 +59,15 @@ export interface AnalyticsEvent {
   fromStage?: string;
   toStage?: string;
   reason?: string;
+
+  // HR Radar recall / lead-time measurement (read-only).
+  // `blockedGate` = derived reason a miss never fired (conv_low / below_prepare
+  // / below_bet_now / suppressed:<reason> / decayed / no_alert).
+  // `strongContact` = the engine had barrel/high-xBA-grade evidence yet missed.
+  // `leadTimeMs` = (hrEnd - signalDetectedAt) for a called hit.
+  blockedGate?: string;
+  strongContact?: boolean;
+  leadTimeMs?: number;
 }
 
 // ── Engine + calibration versioning ────────────────────────────────

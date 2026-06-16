@@ -58,6 +58,7 @@ export interface PlayerContactData {
   xwOBASeason: number | null;
   xISOSeason: number | null;
   sweetSpotPercent: number | null;
+  pullRatePercent: number | null;
   priorABResults: Array<{
     exitVelocity: number | null;
     launchAngle: number | null;
@@ -628,6 +629,7 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
           xwOBASeason: null,
           xISOSeason: null,
           sweetSpotPercent: null,
+          pullRatePercent: null,
         };
       }
 
@@ -1542,6 +1544,7 @@ export async function syncSavantSeasonForLineup(gameId: string): Promise<void> {
         xwOBASeason: savant.xwOBASeason,
         xISOSeason: savant.xISOSeason,
         sweetSpotPercent: savant.sweetSpotPercent,
+        pullRatePercent: savant.pullRatePercent,
       };
     } else {
       const entry = mlbGameCache.contactData[gameId].byPlayerId[pid];
@@ -1557,6 +1560,7 @@ export async function syncSavantSeasonForLineup(gameId: string): Promise<void> {
       if (entry.xwOBASeason === null && savant.xwOBASeason != null) entry.xwOBASeason = savant.xwOBASeason;
       if (entry.xISOSeason === null && savant.xISOSeason != null) entry.xISOSeason = savant.xISOSeason;
       if (entry.sweetSpotPercent === null && savant.sweetSpotPercent != null) entry.sweetSpotPercent = savant.sweetSpotPercent;
+      if (entry.pullRatePercent === null && savant.pullRatePercent != null) entry.pullRatePercent = savant.pullRatePercent;
     }
     enriched++;
   }

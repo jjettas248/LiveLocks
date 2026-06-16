@@ -1947,6 +1947,10 @@ export class LiveGameOrchestrator {
         // Phase 2 STEP 5 — propagate Statcast barrel flag from dataPullService
         // so the BARREL_OVERRIDE detection path can fire (Ben Rice repair).
         isBarrel: ab?.isBarrel === true,
+        // "Almost HR" outcome inputs — deep flyout / power double-triple /
+        // high-xBA hard out are strong pre-HR evidence (composition only).
+        outcome: ab?.outcome ?? null,
+        hitType: ab?.hitType ?? null,
       })),
       5,
     );
@@ -2922,6 +2926,7 @@ export class LiveGameOrchestrator {
           xwOBASeason: playerContact.xwOBASeason ?? null,
           xISOSeason: playerContact.xISOSeason ?? null,
           sweetSpotPercent: playerContact.sweetSpotPercent ?? null,
+          pullRatePercent: playerContact.pullRatePercent ?? null,
         },
         pitcher: {
           pitchCount: pitcher ? state.pitchCount : 0,
@@ -3095,6 +3100,7 @@ export class LiveGameOrchestrator {
         xwOBA: playerContact.xwOBASeason ?? null,
         xISO: playerContact.xISOSeason ?? null,
         sweetSpotPercent: playerContact.sweetSpotPercent ?? null,
+        pullRatePercent: playerContact.pullRatePercent ?? null,
       };
 
       const alertResult = evaluateHRAlert(alertInput);
@@ -3534,6 +3540,7 @@ export class LiveGameOrchestrator {
               xwOBASeason: playerContact?.xwOBASeason ?? null,
               xISOSeason: playerContact?.xISOSeason ?? null,
               sweetSpotPercent: playerContact?.sweetSpotPercent ?? null,
+              pullRatePercent: playerContact?.pullRatePercent ?? null,
             };
           })(),
           pitcher: {
@@ -3954,6 +3961,7 @@ export class LiveGameOrchestrator {
               xwOBA: playerContact?.xwOBASeason ?? null,
               xISO: playerContact?.xISOSeason ?? null,
               sweetSpotPercent: playerContact?.sweetSpotPercent ?? null,
+              pullRatePercent: playerContact?.pullRatePercent ?? null,
             };
             const alertResult = evaluateHRAlert(alertInput);
 

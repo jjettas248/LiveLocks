@@ -2,6 +2,8 @@ import { db } from "./db";
 import { todayET, daysAgoET } from "./utils/dateUtils";
 import { resolveMlbGameSessionDate } from "./utils/mlbSessionDate";
 import { decideHrRadarMatch, QUALIFYING_EVENT_TYPES } from "./validation/hrRadar/matchDecision";
+import { traceMissedHr } from "./analytics/hrRadarMissTracer";
+import { emitCalledHitLeadTime } from "./analytics/eventEmitters";
 import { applyHrRadarResolvedStateFixup, inferCashedFromTierStatus, CALLED_HIT_OUTCOME_STATUSES } from "./mlb/hrRadarSection";
 import {
   HR_RADAR_GOLDMASTER_V1,
@@ -3156,6 +3158,14 @@ export class DatabaseStorage implements IStorage {
             .limit(1);
           if (earlyEvents.length === 0) {
             console.log(`[HR_RADAR_EARLY_HR_NO_WINDOW] playerId=${params.playerId} gameId=${params.gameId} hrInning=${params.hrInning}${params.hrHalf} — exempt from uncalled-miss bucket`);
+            try {
+              traceMissedHr({
+                gameId: params.gameId, playerId: params.playerId,
+                hrInning: params.hrInning, hrHalf: params.hrHalf,
+                gradingStatus: "early_hr_no_window",
+                gradingReason: "first-inning HR with no realistic pre-signal window",
+              });
+            } catch {}
             return {
               matched: false, matchedBeforeHr: false, isLateSignal: false,
               alertId: null, signalEventId: null,
@@ -3168,6 +3178,14 @@ export class DatabaseStorage implements IStorage {
             };
           }
         }
+        try {
+          traceMissedHr({
+            gameId: params.gameId, playerId: params.playerId,
+            hrInning: params.hrInning, hrHalf: params.hrHalf,
+            gradingStatus: "uncalled_hr",
+            gradingReason: "no canonical hr_radar_alert row exists for player/game",
+          });
+        } catch {}
         return {
           matched: false, matchedBeforeHr: false, isLateSignal: false,
           alertId: null, signalEventId: null,
@@ -3233,6 +3251,34 @@ export class DatabaseStorage implements IStorage {
       } else {
         console.log(`[HR_RADAR_MATCH_RESULT] late_signal player=${params.playerId} game=${params.gameId} alertId=${alert.id} signalAt=${new Date(sigMsLog).toISOString()} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"}`);
       }
+
+      // Recall / lead-time measurement taps (read-only, never throw).
+      try {
+        if (decision.gradingStatus === "called_hit" && hrEnd != null) {
+          // Prefer the matched qualifying-event time (the true pre-HR signal
+          // moment) over the alert-row timestamp, which can drift to/after
+          // hrEnd. emitCalledHitLeadTime clamps a non-positive/inconsistent
+          // lead to null so the hit still counts toward recall but is excluded
+          // from the lead-time distribution.
+          const sigMs = (lastQualifyingEvent?.detectedAt ?? decision.signalDetectedAt ?? alert.signalDetectedAt ?? alert.detectedAt)?.getTime?.();
+          const lead = typeof sigMs === "number" && Number.isFinite(sigMs) ? hrEnd - sigMs : null;
+          emitCalledHitLeadTime({
+            signalId: `mlb:${params.gameId}:${params.playerId}:home_runs:OVER`,
+            gameId: params.gameId, playerId: params.playerId,
+            leadTimeMs: lead,
+            alertPath: alert.alertPath ?? null,
+          });
+        } else if (decision.gradingStatus === "late_signal") {
+          traceMissedHr({
+            gameId: params.gameId, playerId: params.playerId,
+            hrInning: params.hrInning, hrHalf: params.hrHalf,
+            gradingStatus: "late_signal",
+            gradingReason: decision.gradingReason,
+            alertPath: alert.alertPath ?? null,
+            alertSignalState: alert.signalState ?? null,
+          });
+        }
+      } catch {}
 
       // Phase 1 — enrich decision with the matched alert's persisted tier
       // fields so the grader can derive a tiered called_hit_* status.

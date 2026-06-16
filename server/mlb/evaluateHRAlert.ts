@@ -77,6 +77,8 @@ export interface HRAlertInput {
   xwOBA?: number | null;
   xISO?: number | null;
   sweetSpotPercent?: number | null;
+  // SlateRadar gap #6: batter pull rate (% BIP to pull side).
+  pullRatePercent?: number | null;
 }
 
 export interface HRSuppressionFlag {
@@ -339,6 +341,7 @@ function buildConversionInput(input: HRAlertInput): HRConversionInput {
     xwOBA: input.xwOBA ?? null,
     xISO: input.xISO ?? null,
     sweetSpotPercent: input.sweetSpotPercent ?? null,
+    pullRatePercent: input.pullRatePercent ?? null,
   };
 }
 

@@ -810,6 +810,14 @@ function computePowerProfileScore(input: MLBPropInput): number {
     else if (eff < 8.5) score -= 5;
   }
 
+  // SlateRadar gap #6: pull rate — pull-side power clears fences more often.
+  const pull = cq.pullRatePercent;
+  if (pull != null) {
+    if (pull >= 48) score += 8;
+    else if (pull >= 43) score += 4;
+    else if (pull <= 32) score -= 5;
+  }
+
   return clamp(score, 0, 100);
 }
 

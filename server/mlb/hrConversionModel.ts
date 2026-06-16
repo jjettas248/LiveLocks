@@ -55,6 +55,9 @@ export interface HRConversionInput {
   xwOBA?: number | null;
   xISO?: number | null;
   sweetSpotPercent?: number | null;
+  // SlateRadar gap #6: batter pull rate (% BIP to pull side). Pull-heavy power
+  // hitters homer at higher rates. Optional — no-op (1.0) when null.
+  pullRatePercent?: number | null;
 }
 
 export interface HRConversionResult {
@@ -73,6 +76,8 @@ export interface HRConversionResult {
   calibrationBucketLabel: string | null;
   calibrationSampleCount: number;
   components: {
+    pregameFormScore: number;
+    pregamePriorMult: number;
     baseRate: number;
     liveAdjustedRate: number;
     pitcherAdjustedRate: number;
@@ -318,6 +323,17 @@ function computePowerProfileMultiplier(input: HRConversionInput): number {
     else if (xwoba <= 0.280) mult *= 0.93;
   }
 
+  // SlateRadar gap #6: pull rate. Pull-side power clears fences more often; a
+  // short pull-side porch (handedness park split) amplifies it. League pull
+  // rate on BIP is ~40%. Capped, no-op when null.
+  const pull = input.pullRatePercent;
+  if (pull != null) {
+    const parkHrBias = (input.parkFactor ?? 1.0) >= 1.05;
+    if (pull >= 48) mult *= parkHrBias ? 1.10 : 1.07;
+    else if (pull >= 43) mult *= parkHrBias ? 1.05 : 1.03;
+    else if (pull <= 32) mult *= 0.95;
+  }
+
   return Math.min(1.28, Math.max(0.88, mult));
 }
 
@@ -523,6 +539,55 @@ function computePitcherEntryFatigueMultiplier(input: HRConversionInput): number 
   return Math.min(1.30, Math.max(0.90, mult));
 }
 
+// ── SlateRadar gap #7 — pregame HR-form prior ──────────────────────────────
+// Flag-gated (default on). A genuine power threat should carry a non-zero HR
+// estimate INTO his first AB so we stop missing first-AB HRs
+// (early_hr_no_window). The prior nudges baseRate from the season power profile
+// and DECAYS to zero as live in-game contact accumulates, so existing in-game
+// graded signals are unchanged (no drift on live signals). Engine-internal —
+// never surfaced as a user-facing payload field.
+const HR_PREGAME_PRIOR: boolean = (() => {
+  const raw = (process.env.HR_PREGAME_PRIOR ?? "").trim().toLowerCase();
+  if (raw === "false" || raw === "0" || raw === "off" || raw === "no") return false;
+  return true;
+})();
+
+/**
+ * Blend the season power profile into a 0–100 pregame HR-form score. Uses only
+ * fields already on HRConversionInput; returns a neutral 50 when no profile data
+ * is present. Pure, no I/O.
+ */
+export function computePregameHrFormScore(input: HRConversionInput): number {
+  let s = 50;
+  let n = 0;
+  const hrFB = input.hrFBRatio;
+  if (hrFB != null) { s += hrFB >= 18 ? 12 : hrFB >= 14 ? 7 : hrFB >= 11 ? 2 : hrFB <= 8 ? -8 : -2; n++; }
+  const fb = input.flyBallPercent;
+  if (fb != null) { s += fb >= 42 ? 8 : fb >= 38 ? 4 : fb <= 28 ? -6 : 0; n++; }
+  const pull = input.pullRatePercent;
+  if (pull != null) { s += pull >= 48 ? 8 : pull >= 43 ? 4 : pull <= 32 ? -4 : 0; n++; }
+  const xiso = input.xISO;
+  if (xiso != null) { s += xiso >= 0.220 ? 10 : xiso >= 0.180 ? 5 : xiso <= 0.100 ? -8 : 0; n++; }
+  const xwoba = input.xwOBA;
+  if (xwoba != null) { s += xwoba >= 0.380 ? 6 : xwoba >= 0.340 ? 3 : xwoba <= 0.300 ? -5 : 0; n++; }
+  const park = input.parkFactor;
+  if (park != null) { s += park >= 1.10 ? 5 : park >= 1.05 ? 2 : park <= 0.92 ? -4 : 0; }
+  const bs = input.batterHandednessSplits;
+  const pt = input.pitcherThrows;
+  if (bs && pt) {
+    const r = pt === "L" ? bs.hrRateVsLHP : bs.hrRateVsRHP;
+    if (r != null) { s += r >= 0.05 ? 6 : r >= 0.035 ? 2 : r <= 0.02 ? -4 : 0; }
+  }
+  if (n === 0) return 50;
+  return Math.max(0, Math.min(100, s));
+}
+
+// Map the 0–100 pregame form score to a small capped multiplier on baseRate.
+// Center (50) → 1.0; elite (~90) → ~1.14; cold (~20) → ~0.90.
+function pregamePriorMultiplier(score: number): number {
+  return Math.max(0.92, Math.min(1.15, 1 + (score - 50) * 0.0035));
+}
+
 export function computeHRConversionProbability(input: HRConversionInput): HRConversionResult {
   let baseRate = input.seasonHRRate ?? LEAGUE_AVG_HR_PER_PA;
   if (baseRate <= 0 || baseRate > 0.12) baseRate = LEAGUE_AVG_HR_PER_PA;
@@ -552,6 +617,19 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
   } else if (xslg !== null && xslg > 0) {
     const xslgFactor = xslg / 0.400;
     baseRate *= Math.max(0.7, Math.min(1.5, xslgFactor));
+  }
+
+  // SlateRadar gap #7: pregame HR-form prior. Full weight pre-contact, decaying
+  // to zero as hrBuildScore (live in-game contact) accumulates — so strong live
+  // signals are unchanged but pre/early-AB power threats carry a real estimate.
+  let pregameFormScore = 50;
+  let pregamePriorMult = 1.0;
+  if (HR_PREGAME_PRIOR) {
+    pregameFormScore = computePregameHrFormScore(input);
+    const fullMult = pregamePriorMultiplier(pregameFormScore);
+    const liveness = Math.min(1, Math.max(0, (input.hrBuildScore ?? 0) / 4));
+    pregamePriorMult = 1 + (fullMult - 1) * (1 - liveness);
+    baseRate *= pregamePriorMult;
   }
 
   const liveContactMultiplier = computeLiveContactMultiplier(input.factors);
@@ -621,6 +699,8 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
     calibrationBucketLabel: cal.bucketLabel,
     calibrationSampleCount: cal.samples,
     components: {
+      pregameFormScore: Math.round(pregameFormScore * 10) / 10,
+      pregamePriorMult: Math.round(pregamePriorMult * 1000) / 1000,
       baseRate: Math.round(baseRate * 10000) / 10000,
       liveAdjustedRate: Math.round(liveAdjustedRate * 10000) / 10000,
       pitcherAdjustedRate: Math.round(pitcherAdjustedRate * 10000) / 10000,
