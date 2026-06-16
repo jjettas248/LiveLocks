@@ -204,6 +204,7 @@ export interface ContactQualityMetrics {
   xwOBASeason?: number | null;       // season avg expected wOBA
   xISOSeason?: number | null;        // expected isolated power (xSLG − xBA)
   sweetSpotPercent?: number | null;  // % BIP with launch angle 8–32°
+  pullRatePercent?: number | null;   // % BIP hit to the pull side (spray angle)
 }
 
 export interface ABResult {

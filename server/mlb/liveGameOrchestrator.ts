@@ -2926,6 +2926,7 @@ export class LiveGameOrchestrator {
           xwOBASeason: playerContact.xwOBASeason ?? null,
           xISOSeason: playerContact.xISOSeason ?? null,
           sweetSpotPercent: playerContact.sweetSpotPercent ?? null,
+          pullRatePercent: playerContact.pullRatePercent ?? null,
         },
         pitcher: {
           pitchCount: pitcher ? state.pitchCount : 0,
@@ -3099,6 +3100,7 @@ export class LiveGameOrchestrator {
         xwOBA: playerContact.xwOBASeason ?? null,
         xISO: playerContact.xISOSeason ?? null,
         sweetSpotPercent: playerContact.sweetSpotPercent ?? null,
+        pullRatePercent: playerContact.pullRatePercent ?? null,
       };
 
       const alertResult = evaluateHRAlert(alertInput);
@@ -3538,6 +3540,7 @@ export class LiveGameOrchestrator {
               xwOBASeason: playerContact?.xwOBASeason ?? null,
               xISOSeason: playerContact?.xISOSeason ?? null,
               sweetSpotPercent: playerContact?.sweetSpotPercent ?? null,
+              pullRatePercent: playerContact?.pullRatePercent ?? null,
             };
           })(),
           pitcher: {
@@ -3958,6 +3961,7 @@ export class LiveGameOrchestrator {
               xwOBA: playerContact?.xwOBASeason ?? null,
               xISO: playerContact?.xISOSeason ?? null,
               sweetSpotPercent: playerContact?.sweetSpotPercent ?? null,
+              pullRatePercent: playerContact?.pullRatePercent ?? null,
             };
             const alertResult = evaluateHRAlert(alertInput);
 
