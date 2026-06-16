@@ -26,6 +26,7 @@ import { usePullRefresh } from "@/hooks/use-pull-refresh";
 import { hasProAccess } from "@/lib/tierUtils";
 import { useLocation } from "wouter";
 import { TopPlaysPanel } from "@/components/dashboard/TopPlaysPanel";
+import { QueryErrorState } from "@/components/common/QueryErrorState";
 import { FreeActivationRail } from "@/components/dashboard/free-activation-rail";
 import { SignalPreviewConversionCard } from "@/components/dashboard/SignalPreviewConversionCard";
 import { TrialMissionRail } from "@/components/dashboard/trial-mission-rail";
@@ -305,7 +306,7 @@ export default function Dashboard() {
 
   const { data: players, isLoading: isPlayersLoading } = usePlayers();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
-  const { data: liveGames, isLoading: isGamesLoading, refetch: refetchGames } = useLiveGames();
+  const { data: liveGames, isLoading: isGamesLoading, isError: isGamesError, isFetching: isGamesFetching, refetch: refetchGames } = useLiveGames();
   
   const { data: dataHealth } = useQuery({
     queryKey: ["/api/debug/data-health"],
@@ -2704,6 +2705,15 @@ export default function Dashboard() {
             </div>
           )}
         </div>
+
+        {/* Games failed to load — show retry instead of a silently empty slate */}
+        {activeTab === "calculator" && allGames.length === 0 && isGamesError && (
+          <QueryErrorState
+            message="Couldn't load today's games."
+            onRetry={() => refetchGames()}
+            isRetrying={isGamesFetching}
+          />
+        )}
 
         {/* Live Games Strip — NBA Live tab only (hidden on NCAAB and Analytics) */}
         {activeTab === "calculator" && allGames.length > 0 && (
