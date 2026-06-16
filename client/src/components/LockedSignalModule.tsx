@@ -69,7 +69,7 @@ export function LockedSignalModule({ onUpgradeClick }: LockedSignalModuleProps) 
       {(totalLive > 0 || (analytics?.last7Days && analytics.last7Days.plays >= 5)) && (
         <div
           data-testid="band-missed-value"
-          className="rounded-2xl border border-[#00d4aa]/35 bg-gradient-to-br from-[#00d4aa]/12 to-[#0a0a0a] p-4 sm:p-5 space-y-3"
+          className="rounded-2xl border border-brand/35 bg-gradient-to-br from-brand/12 to-[#0a0a0a] p-4 sm:p-5 space-y-3"
         >
           {totalLive > 0 && (
             <p
@@ -77,7 +77,7 @@ export function LockedSignalModule({ onUpgradeClick }: LockedSignalModuleProps) 
               className="text-sm sm:text-base font-semibold text-white text-center leading-snug"
             >
               You are locked out of{" "}
-              <span className="text-[#00d4aa] font-black text-lg sm:text-xl">
+              <span className="text-brand font-black text-lg sm:text-xl">
                 {totalLive}
               </span>{" "}
               live player prop signal{totalLive !== 1 ? "s" : ""} right now
@@ -131,8 +131,8 @@ export function LockedSignalModule({ onUpgradeClick }: LockedSignalModuleProps) 
           <button
             data-testid="button-unlock-signals-cta"
             onClick={onUpgradeClick}
-            className="w-full py-3 sm:py-3.5 rounded-xl text-sm sm:text-base font-black tracking-wide transition-all active:scale-95 shadow-lg shadow-[#00d4aa]/20"
-            style={{ background: "#00d4aa", color: "#000" }}
+            className="w-full py-3 sm:py-3.5 rounded-xl text-sm sm:text-base font-black tracking-wide transition-all active:scale-95 shadow-lg shadow-brand/20"
+            style={{ background: "hsl(var(--brand-accent))", color: "#000" }}
           >
             Unlock Live Signals → $1 for 3 Days
           </button>
@@ -177,7 +177,7 @@ export function LockedSignalModule({ onUpgradeClick }: LockedSignalModuleProps) 
             data-testid="button-unlock-signals-cta-fallback"
             onClick={onUpgradeClick}
             className="w-full py-3 rounded-xl text-sm font-black tracking-wide transition-all active:scale-95"
-            style={{ background: "#00d4aa", color: "#000" }}
+            style={{ background: "hsl(var(--brand-accent))", color: "#000" }}
           >
             Unlock Live Signals → $1 for 3 Days
           </button>

@@ -2593,7 +2593,7 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
           data-testid="badge-model-confidence-calc"
           className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium ${
             calcResult.confidenceTier === "ELITE" ? "bg-yellow-500/10 border border-yellow-500/20 text-yellow-400" :
-            calcResult.confidenceTier === "STRONG" ? "bg-[#00d4aa]/10 border border-[#00d4aa]/20 text-[#00d4aa]" :
+            calcResult.confidenceTier === "STRONG" ? "bg-brand/10 border border-brand/20 text-brand" :
             calcResult.confidenceTier === "SOLID" ? "bg-blue-500/10 border border-blue-500/20 text-blue-400" :
             "bg-secondary/40 border border-border/30 text-muted-foreground"
           }`}

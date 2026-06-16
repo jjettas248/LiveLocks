@@ -475,12 +475,12 @@ function H2HSection({
           const coverage = determineCoverage(g);
           const awayWon = g.awayScore > g.homeScore;
 
-          const ouColor   = ouResult === "OVER" ? "#00d4aa" : ouResult === "UNDER" ? "#ef4444" : "#71717a";
-          const ouBg      = ouResult === "OVER" ? "rgba(0,212,170,0.15)" : ouResult === "UNDER" ? "rgba(239,68,68,0.15)" : "#27272a";
-          const ouBorder  = ouResult === "OVER" ? "rgba(0,212,170,0.3)"  : ouResult === "UNDER" ? "rgba(239,68,68,0.3)"  : "#3f3f46";
-          const covColor  = coverage.result === "covered" ? "#00d4aa" : coverage.result === "failed" ? "#ef4444" : "#71717a";
-          const covBg     = coverage.result === "covered" ? "rgba(0,212,170,0.15)" : coverage.result === "failed" ? "rgba(239,68,68,0.15)" : "#27272a";
-          const covBorder = coverage.result === "covered" ? "rgba(0,212,170,0.3)"  : coverage.result === "failed" ? "rgba(239,68,68,0.3)"  : "#3f3f46";
+          const ouColor   = ouResult === "OVER" ? "hsl(var(--brand-accent))" : ouResult === "UNDER" ? "#ef4444" : "#71717a";
+          const ouBg      = ouResult === "OVER" ? "hsl(var(--brand-accent) / 0.15)" : ouResult === "UNDER" ? "rgba(239,68,68,0.15)" : "#27272a";
+          const ouBorder  = ouResult === "OVER" ? "hsl(var(--brand-accent) / 0.3)"  : ouResult === "UNDER" ? "rgba(239,68,68,0.3)"  : "#3f3f46";
+          const covColor  = coverage.result === "covered" ? "hsl(var(--brand-accent))" : coverage.result === "failed" ? "#ef4444" : "#71717a";
+          const covBg     = coverage.result === "covered" ? "hsl(var(--brand-accent) / 0.15)" : coverage.result === "failed" ? "rgba(239,68,68,0.15)" : "#27272a";
+          const covBorder = coverage.result === "covered" ? "hsl(var(--brand-accent) / 0.3)"  : coverage.result === "failed" ? "rgba(239,68,68,0.3)"  : "#3f3f46";
           const covLabel  = coverage.result === "covered"
             ? `${coverage.team} cvrd` : coverage.result === "failed"
             ? `${coverage.team} fail` : coverage.result;
@@ -574,7 +574,7 @@ const WINDOW_COLORS: Record<string, string> = {
 function getConfidenceTier(prob: number | null): { label: string; color: string; bg: string; border: string } | null {
   if (prob == null) return null;
   const confidence = Math.max(prob, 100 - prob);
-  if (confidence >= 85) return { label: "Elite", color: "#00d4aa", bg: "rgba(0,212,170,0.15)", border: "rgba(0,212,170,0.3)" };
+  if (confidence >= 85) return { label: "Elite", color: "hsl(var(--brand-accent))", bg: "hsl(var(--brand-accent) / 0.15)", border: "hsl(var(--brand-accent) / 0.3)" };
   if (confidence >= 70) return { label: "Strong", color: "#f59e0b", bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.3)" };
   if (confidence >= 60) return { label: "Value", color: "#38bdf8", bg: "rgba(56,189,248,0.12)", border: "rgba(56,189,248,0.3)" };
   return null;
@@ -850,8 +850,8 @@ const CONFIDENCE_TIER_MAP: Record<string, { label: string; sublabel: string; col
   "No Edge": { label: "Monitoring", sublabel: "Even matchup — watching for movement", color: "#71717a", bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.08)" },
   "Low": { label: "Slight Lean", sublabel: "Early signal — watching for confirmation", color: "#71717a", bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.08)" },
   "Moderate": { label: "Moderate Signal", sublabel: "Pre-game lean — monitor at tipoff", color: "#f59e0b", bg: "rgba(245,158,11,0.08)", border: "rgba(245,158,11,0.2)" },
-  "High": { label: "Strong Pre-Game Signal", sublabel: "Model has clear lean before tipoff", color: "#00d4aa", bg: "rgba(0,212,170,0.08)", border: "rgba(0,212,170,0.2)" },
-  "Extreme": { label: "High Confidence", sublabel: "Significant model edge pre-game", color: "#00d4aa", bg: "rgba(0,212,170,0.12)", border: "rgba(0,212,170,0.25)" },
+  "High": { label: "Strong Pre-Game Signal", sublabel: "Model has clear lean before tipoff", color: "hsl(var(--brand-accent))", bg: "hsl(var(--brand-accent) / 0.08)", border: "hsl(var(--brand-accent) / 0.2)" },
+  "Extreme": { label: "High Confidence", sublabel: "Significant model edge pre-game", color: "hsl(var(--brand-accent))", bg: "hsl(var(--brand-accent) / 0.12)", border: "hsl(var(--brand-accent) / 0.25)" },
 };
 
 function getPreGameConfidenceTier(labelOrProb: string | number | null | undefined) {
@@ -890,7 +890,7 @@ function MarketRow({
     eng != null && book != null ? parseFloat((eng - book).toFixed(1)) : null;
   const edgeColor = (e: number | null) => {
     if (e == null) return "#71717a";
-    if (e >= 5) return "#00d4aa";
+    if (e >= 5) return "hsl(var(--brand-accent))";
     if (e >= 2) return "#f59e0b";
     if (e <= -5) return "#ef4444";
     return "#71717a";
@@ -911,10 +911,10 @@ function MarketRow({
         onClick={onSelectSide}
         style={{
           padding: "10px 16px", borderBottom: "1px solid #1a1a1a",
-          background: isSelectedSide ? "rgba(0,212,170,0.08)" : (edge ?? 0) >= 5 ? "rgba(0,212,170,0.04)" : "#111111",
+          background: isSelectedSide ? "hsl(var(--brand-accent) / 0.08)" : (edge ?? 0) >= 5 ? "hsl(var(--brand-accent) / 0.04)" : "#111111",
           display: "flex", justifyContent: "space-between", alignItems: "center",
           cursor: onSelectSide ? "pointer" : "default",
-          outline: isSelectedSide ? "1.5px solid rgba(0,212,170,0.5)" : "none",
+          outline: isSelectedSide ? "1.5px solid hsl(var(--brand-accent) / 0.5)" : "none",
           borderRadius: isSelectedSide ? 6 : 0,
           transition: "background 120ms ease",
         }}
@@ -940,7 +940,7 @@ function MarketRow({
   const overEdge  = calcEdge(overProb, overBookImplied);
   const underEdge = calcEdge(underProb, underBookImplied);
   return (
-    <div style={{ borderBottom: "1px solid #1a1a1a", background: ((overEdge ?? 0) >= 5 || (underEdge ?? 0) >= 5) ? "rgba(0,212,170,0.03)" : "#111111" }}>
+    <div style={{ borderBottom: "1px solid #1a1a1a", background: ((overEdge ?? 0) >= 5 || (underEdge ?? 0) >= 5) ? "hsl(var(--brand-accent) / 0.03)" : "#111111" }}>
       <div style={{ padding: "6px 16px 2px", color: "#71717a", fontSize: 10, textTransform: "uppercase" as const, letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 6 }}>
         {label}{isEstimated && <span style={{ color: "#f59e0b", fontSize: 9 }}>~est</span>}
       </div>
@@ -953,11 +953,11 @@ function MarketRow({
             key={side}
             onClick={onSel}
             style={{
-              background: isSel ? (side === "OVER" ? "rgba(0,212,170,0.15)" : "rgba(239,68,68,0.15)") : (e ?? 0) >= 5 ? (side === "OVER" ? "rgba(0,212,170,0.08)" : "rgba(239,68,68,0.08)") : "rgba(255,255,255,0.02)",
+              background: isSel ? (side === "OVER" ? "hsl(var(--brand-accent) / 0.15)" : "rgba(239,68,68,0.15)") : (e ?? 0) >= 5 ? (side === "OVER" ? "hsl(var(--brand-accent) / 0.08)" : "rgba(239,68,68,0.08)") : "rgba(255,255,255,0.02)",
               borderRadius: 6, padding: "8px 10px",
               border: isSel
-                ? `1.5px solid ${side === "OVER" ? "#00d4aa" : "#ef4444"}`
-                : `1px solid ${(e ?? 0) >= 5 ? (side === "OVER" ? "rgba(0,212,170,0.2)" : "rgba(239,68,68,0.2)") : "#27272a"}`,
+                ? `1.5px solid ${side === "OVER" ? "hsl(var(--brand-accent))" : "#ef4444"}`
+                : `1px solid ${(e ?? 0) >= 5 ? (side === "OVER" ? "hsl(var(--brand-accent) / 0.2)" : "rgba(239,68,68,0.2)") : "#27272a"}`,
               cursor: onSel ? "pointer" : "default",
               transition: "background 120ms ease, border 120ms ease",
             }}
@@ -1137,8 +1137,8 @@ function Live2HPanel({
   if (!h2Lines?.h2Total) return null;
   const hasEdge   = h2Engine?.hasEdge ?? false;
   const edgeSide  = h2Engine?.edgeSide ?? null;
-  const borderClr = hasEdge ? (edgeSide === "OVER" ? "rgba(0,212,170,0.3)" : "rgba(239,68,68,0.3)") : "#27272a";
-  const bgClr     = hasEdge ? (edgeSide === "OVER" ? "rgba(0,212,170,0.04)" : "rgba(239,68,68,0.04)") : "#0f0f0f";
+  const borderClr = hasEdge ? (edgeSide === "OVER" ? "hsl(var(--brand-accent) / 0.3)" : "rgba(239,68,68,0.3)") : "#27272a";
+  const bgClr     = hasEdge ? (edgeSide === "OVER" ? "hsl(var(--brand-accent) / 0.04)" : "rgba(239,68,68,0.04)") : "#0f0f0f";
 
   return (
     <div style={{ margin: "8px 0", border: `1px solid ${borderClr}`, borderRadius: 10, overflow: "hidden", background: bgClr }}>
@@ -1155,11 +1155,11 @@ function Live2HPanel({
           { side: "OVER", line: h2Lines.h2Total, prob: h2Engine?.overProb, bookImplied: h2Engine?.bookOverImplied, edge: h2Engine?.overEdge, isEdge: edgeSide === "OVER" },
           { side: "UNDER", line: h2Lines.h2Total, prob: h2Engine?.underProb, bookImplied: h2Engine?.bookUnderImplied, edge: h2Engine?.underEdge, isEdge: edgeSide === "UNDER" },
         ].map(({ side, line, prob, bookImplied, edge, isEdge }) => (
-          <div key={side} style={{ background: isEdge ? (side === "OVER" ? "rgba(0,212,170,0.1)" : "rgba(239,68,68,0.1)") : "rgba(255,255,255,0.03)", borderRadius: 8, padding: "10px 12px", border: `1px solid ${isEdge ? (side === "OVER" ? "rgba(0,212,170,0.25)" : "rgba(239,68,68,0.25)") : "#27272a"}` }}>
+          <div key={side} style={{ background: isEdge ? (side === "OVER" ? "hsl(var(--brand-accent) / 0.1)" : "rgba(239,68,68,0.1)") : "rgba(255,255,255,0.03)", borderRadius: 8, padding: "10px 12px", border: `1px solid ${isEdge ? (side === "OVER" ? "hsl(var(--brand-accent) / 0.25)" : "rgba(239,68,68,0.25)") : "#27272a"}` }}>
             <div style={{ color: "#71717a", fontSize: 9, textTransform: "uppercase" as const, marginBottom: 4 }}>2H {side} {line}</div>
-            {prob != null && <div style={{ color: isEdge ? (side === "OVER" ? "#00d4aa" : "#ef4444") : "#ffffff", fontSize: 22, fontWeight: 800, lineHeight: 1 }}>{prob}%</div>}
+            {prob != null && <div style={{ color: isEdge ? (side === "OVER" ? "hsl(var(--brand-accent))" : "#ef4444") : "#ffffff", fontSize: 22, fontWeight: 800, lineHeight: 1 }}>{prob}%</div>}
             {bookImplied != null && <div style={{ color: "#52525b", fontSize: 10, marginTop: 3 }}>Book: {bookImplied}%</div>}
-            {edge != null && <div style={{ color: (edge ?? 0) >= 5 ? (side === "OVER" ? "#00d4aa" : "#ef4444") : "#71717a", fontSize: 11, fontWeight: 600, marginTop: 2 }}>{edge > 0 ? "+" : ""}{edge}pp edge</div>}
+            {edge != null && <div style={{ color: (edge ?? 0) >= 5 ? (side === "OVER" ? "hsl(var(--brand-accent))" : "#ef4444") : "#71717a", fontSize: 11, fontWeight: 600, marginTop: 2 }}>{edge > 0 ? "+" : ""}{edge}pp edge</div>}
           </div>
         ))}
       </div>
@@ -1234,7 +1234,7 @@ function NCAABGameCard({
     teamAbbr: string;
   } | null>(null);
   const [flashActive, setFlashActive]       = useState(false);
-  const [flashColor, setFlashColor]         = useState("#00d4aa");
+  const [flashColor, setFlashColor]         = useState("hsl(var(--brand-accent))");
   const prevOverProb = useRef(overProb);
 
   // H2H state (items 2-4): collapsed by default for live card
@@ -1283,7 +1283,7 @@ function NCAABGameCard({
   // Newly-live flash on mount (item 6): inline teal glow instead of toast
   useEffect(() => {
     if (!isNewlyLive) return;
-    setFlashColor("#00d4aa");
+    setFlashColor("hsl(var(--brand-accent))");
     setFlashActive(true);
     const t = setTimeout(() => setFlashActive(false), 200);
     return () => clearTimeout(t);
@@ -1362,7 +1362,7 @@ function NCAABGameCard({
         return () => { clearTimeout(clear); clearTimeout(clearFlash); };
       } else {
         // Significant / normal flash
-        setFlashColor(overProb > prev ? "#00d4aa" : "#ef4444");
+        setFlashColor(overProb > prev ? "hsl(var(--brand-accent))" : "#ef4444");
         setFlashActive(true);
         const t = setTimeout(() => setFlashActive(false), 300);
         prevOverProb.current = overProb;
@@ -1453,7 +1453,7 @@ function NCAABGameCard({
   const gaugeForMarket = (m: "over" | "under" | "spread") =>
     m === "over" ? overProb : m === "under" ? underProb : spreadProb;
   const gaugeValue     = gaugeForMarket(selectedMarket);
-  const gaugeColor  = selectedMarket === "over" ? "#00d4aa" : selectedMarket === "under" ? "#ef4444" : "#94a3b8";
+  const gaugeColor  = selectedMarket === "over" ? "hsl(var(--brand-accent))" : selectedMarket === "under" ? "#ef4444" : "#94a3b8";
   const gaugeLabel  = selectedMarket === "over" ? "OVER" : selectedMarket === "under" ? "UNDER" : "COVER";
 
   // Read edge and confidence directly from canonical market — tab-aware (never recompute in UI)
@@ -1481,7 +1481,7 @@ function NCAABGameCard({
     : edgeGap >= 2 ? `Slight ${edgeSide} Lean`
     : "Even — Monitoring";
   const edgeBelow = edgeGap < 4;
-  const evColor   = edgeSide === "Under" ? "#ef4444" : "#00d4aa";
+  const evColor   = edgeSide === "Under" ? "#ef4444" : "hsl(var(--brand-accent))";
 
   const getLegId      = (m: string) => `${play.gameId}:${m}`;
   const isLegParlayed = (m: string) => parlayLegs.includes(getLegId(m));
@@ -1569,8 +1569,8 @@ function NCAABGameCard({
 
   // Animated stat grid colors (item 5): color transitions for Engine Over/Under% on direction flip
   // T004: always teal/red — never muted #71717a
-  const overColor  = overProb  === null ? "#71717a" : overProb  > 50 ? "#00d4aa" : "#ef4444";
-  const underColor = underProb === null ? "#71717a" : underProb > 50 ? "#00d4aa" : "#ef4444";
+  const overColor  = overProb  === null ? "#71717a" : overProb  > 50 ? "hsl(var(--brand-accent))" : "#ef4444";
+  const underColor = underProb === null ? "#71717a" : underProb > 50 ? "hsl(var(--brand-accent))" : "#ef4444";
 
   return (
     <>
@@ -1583,7 +1583,7 @@ function NCAABGameCard({
           border: "1px solid #27272a",
           boxShadow: flashActive
             ? `0 0 0 2px ${flashColor}66`
-            : bestEdge >= 15 ? "0 0 14px -3px rgba(0,212,170,0.25)" : undefined,
+            : bestEdge >= 15 ? "0 0 14px -3px hsl(var(--brand-accent) / 0.25)" : undefined,
         }}
       >
         {/* Parlay counter badge */}
@@ -1605,7 +1605,7 @@ function NCAABGameCard({
           title="Refresh analytics data"
           className="absolute top-10 right-3 w-5 h-5 flex items-center justify-center rounded transition-colors"
           style={{ color: "#3f3f46", background: "transparent" }}
-          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "#00d4aa"; }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "hsl(var(--brand-accent))"; }}
           onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "#3f3f46"; }}
         >
           <RefreshCw className={`w-3 h-3 ${enrichedLoading ? "animate-spin" : ""}`} />
@@ -1675,7 +1675,7 @@ function NCAABGameCard({
               <span
                 data-testid={`ncaab-sources-badge-desktop-${play.gameId}`}
                 className="text-[9px] font-bold px-2 py-0.5 rounded-full"
-                style={{ background: "rgba(0,212,170,0.12)", color: "#00d4aa", border: "1px solid rgba(0,212,170,0.25)" }}
+                style={{ background: "hsl(var(--brand-accent) / 0.12)", color: "hsl(var(--brand-accent))", border: "1px solid hsl(var(--brand-accent) / 0.25)" }}
               >
                 {enrichedData.sources.length} source{enrichedData.sources.length !== 1 ? "s" : ""}
               </span>
@@ -1701,7 +1701,7 @@ function NCAABGameCard({
                   .filter(m => m !== selectedMarket && (m !== "spread" || displaySpread !== null))
                   .map(m => {
                     const mVal = gaugeForMarket(m);
-                    const mColor = m === "over" ? "#00d4aa" : m === "under" ? "#ef4444" : "#94a3b8";
+                    const mColor = m === "over" ? "hsl(var(--brand-accent))" : m === "under" ? "#ef4444" : "#94a3b8";
                     const mLabel = m === "over" ? "OVER" : m === "under" ? "UNDER" : "COVER";
                     return (
                       <RadialGauge
@@ -1721,7 +1721,7 @@ function NCAABGameCard({
               <span
                 data-testid={`ncaab-sources-badge-${play.gameId}`}
                 className="text-[9px] font-bold px-2 py-0.5 rounded-full"
-                style={{ background: "rgba(0,212,170,0.12)", color: "#00d4aa", border: "1px solid rgba(0,212,170,0.25)" }}
+                style={{ background: "hsl(var(--brand-accent) / 0.12)", color: "hsl(var(--brand-accent))", border: "1px solid hsl(var(--brand-accent) / 0.25)" }}
               >
                 {enrichedData.sources.length} source{enrichedData.sources.length !== 1 ? "s" : ""}
               </span>
@@ -1796,7 +1796,7 @@ function NCAABGameCard({
             if (handleSide === sharpSide) {
               const teamName = sharpSide === "home" ? play.homeTeam : play.awayTeam;
               synthesisLabel = `Confirmed edge: ${teamName}`;
-              synthesisColor = "#00d4aa";
+              synthesisColor = "hsl(var(--brand-accent))";
             } else {
               synthesisLabel = "Split market signal";
               synthesisColor = "#f59e0b";
@@ -1853,7 +1853,7 @@ function NCAABGameCard({
           const proj = team === "home" ? fullHomeProj : fullAwayProj;
           if (proj === null) return null;
           const v = getTeamTotalVerdict(direction, isEstimated, null);
-          const ttColor = v.edgeSide === "Over" ? "#00d4aa" : "#ef4444";
+          const ttColor = v.edgeSide === "Over" ? "hsl(var(--brand-accent))" : "#ef4444";
           const ttEdgeBelow = v.edgeGap < 5;
           return (
             <div className="space-y-2">
@@ -2064,7 +2064,7 @@ function NCAABGameCard({
                       <>
                         {(["over", "under"] as const).map(dir => {
                           const isSelected = selectedTeamMarket?.team === "away" && selectedTeamMarket?.direction === dir;
-                          const btnColor = dir === "over" ? "#00d4aa" : "#ef4444";
+                          const btnColor = dir === "over" ? "hsl(var(--brand-accent))" : "#ef4444";
                           const prefix = dir === "over" ? "O" : "U";
                           return (
                             <button
@@ -2112,7 +2112,7 @@ function NCAABGameCard({
                         <>
                           {(["over", "under"] as const).map(dir => {
                             const isSelected = selectedTeamMarket?.team === "home" && selectedTeamMarket?.direction === dir;
-                            const btnColor = dir === "over" ? "#00d4aa" : "#ef4444";
+                            const btnColor = dir === "over" ? "hsl(var(--brand-accent))" : "#ef4444";
                             const prefix = dir === "over" ? "O" : "U";
                             return (
                               <button
@@ -2159,7 +2159,7 @@ function NCAABGameCard({
             if (m === "spread" && (marketTab === "h1" || marketTab === "h2") && displaySpreadProb === null) return null;
             const isSelected = selectedMarket === m;
             const isParlayed = isLegParlayed(m);
-            const mColor = m === "over" ? "#00d4aa" : m === "under" ? "#ef4444" : "#94a3b8";
+            const mColor = m === "over" ? "hsl(var(--brand-accent))" : m === "under" ? "#ef4444" : "#94a3b8";
             const mProb: number | null = m === "over" ? displayOverProb : m === "under" ? displayUnderProb : displaySpreadProb;
             // Rule 4: prefer displayOutput pre-formatted strings for full-game tab
             const mProbText: string = (() => {
@@ -2230,7 +2230,7 @@ function NCAABGameCard({
                 onClick={() => window.open(url, "_blank")}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all duration-300"
                 style={{ background: "#181818", border: "1px solid #27272a", color: "#a1a1aa" }}
-                onMouseEnter={e => (e.currentTarget.style.borderColor = "#00d4aa")}
+                onMouseEnter={e => (e.currentTarget.style.borderColor = "hsl(var(--brand-accent))")}
                 onMouseLeave={e => (e.currentTarget.style.borderColor = "#27272a")}
               >
                 <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
@@ -2248,11 +2248,11 @@ function NCAABGameCard({
         {/* ── SELECTED MARKET CALLOUT ─────────────────────────────────── */}
         {mktCallout && (() => {
           const edgeVal = mktCallout.edge;
-          const edgeClr = edgeVal == null ? "#71717a" : edgeVal >= 5 ? "#00d4aa" : edgeVal >= 2 ? "#f59e0b" : edgeVal != null && edgeVal <= -5 ? "#ef4444" : "#71717a";
+          const edgeClr = edgeVal == null ? "#71717a" : edgeVal >= 5 ? "hsl(var(--brand-accent))" : edgeVal >= 2 ? "#f59e0b" : edgeVal != null && edgeVal <= -5 ? "#ef4444" : "#71717a";
           return (
-            <div style={{ margin: "8px 0", padding: "10px 14px", borderRadius: 8, border: "1.5px solid rgba(0,212,170,0.4)", background: "rgba(0,212,170,0.06)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <div style={{ margin: "8px 0", padding: "10px 14px", borderRadius: 8, border: "1.5px solid hsl(var(--brand-accent) / 0.4)", background: "hsl(var(--brand-accent) / 0.06)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ color: "#00d4aa", fontSize: 11, fontWeight: 700, marginBottom: 3 }}>{mktCallout.label}</div>
+                <div style={{ color: "hsl(var(--brand-accent))", fontSize: 11, fontWeight: 700, marginBottom: 3 }}>{mktCallout.label}</div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" as const }}>
                   {mktCallout.impliedPct != null && (
                     <span style={{ color: "#71717a", fontSize: 10 }}>Book: <span style={{ color: "#a1a1aa", fontWeight: 600 }}>{mktCallout.impliedPct}% implied</span></span>
@@ -2302,10 +2302,10 @@ function NCAABGameCard({
           return (
             <div className="rounded-lg overflow-hidden" style={{ border: "1px solid #1e3a3a" }}>
               <div className="flex items-center justify-between px-3 py-2" style={{ background: "#0b1f1f" }}>
-                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "#00d4aa" }}>Betting Intelligence</span>
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "hsl(var(--brand-accent))" }}>Betting Intelligence</span>
                 {sharpSide && (
                   <span className="text-[9px] font-black px-2 py-0.5 rounded-full"
-                    style={{ background: sharpSide === "Over" ? "rgba(0,212,170,0.2)" : "rgba(239,68,68,0.2)", color: sharpSide === "Over" ? "#00d4aa" : "#ef4444", border: `1px solid ${sharpSide === "Over" ? "rgba(0,212,170,0.4)" : "rgba(239,68,68,0.4)"}` }}>
+                    style={{ background: sharpSide === "Over" ? "hsl(var(--brand-accent) / 0.2)" : "rgba(239,68,68,0.2)", color: sharpSide === "Over" ? "hsl(var(--brand-accent))" : "#ef4444", border: `1px solid ${sharpSide === "Over" ? "hsl(var(--brand-accent) / 0.4)" : "rgba(239,68,68,0.4)"}` }}>
                     ⚡ Sharp {sharpSide}
                   </span>
                 )}
@@ -2315,7 +2315,7 @@ function NCAABGameCard({
                   <div className="flex items-center justify-between">
                     <span className="text-[10px]" style={{ color: "#71717a" }}>Public %</span>
                     <span className="text-[10px] font-mono font-semibold" style={{ color: "#a1a1aa" }}>
-                      <span style={{ color: "#00d4aa" }}>{an.overPct}% Over</span>
+                      <span style={{ color: "hsl(var(--brand-accent))" }}>{an.overPct}% Over</span>
                       {" / "}
                       <span style={{ color: "#ef4444" }}>{an.underPct}% Under</span>
                     </span>
@@ -2333,7 +2333,7 @@ function NCAABGameCard({
                   <div className="flex items-center justify-between">
                     <span className="text-[10px]" style={{ color: "#71717a" }}>Line Movement</span>
                     <span className="text-[10px] font-mono font-semibold"
-                      style={{ color: movement === 0 ? "#71717a" : movement! > 0 ? "#00d4aa" : "#ef4444" }}>
+                      style={{ color: movement === 0 ? "#71717a" : movement! > 0 ? "hsl(var(--brand-accent))" : "#ef4444" }}>
                       Open {an.openTotal} → {an.total} {movement !== 0 && movement !== null ? `(${movement > 0 ? "+" : ""}${movement})` : "(no move)"}
                     </span>
                   </div>
@@ -2366,13 +2366,13 @@ function NCAABGameCard({
 
           const avgTempo = ht?.tempo && at?.tempo ? (ht.tempo + at.tempo) / 2 : null;
           const tempoLabel = avgTempo ? (avgTempo > 72 ? "Fast Pace" : avgTempo < 65 ? "Slow Pace" : "Average Pace") : null;
-          const tempoColor = avgTempo ? (avgTempo > 72 ? "#00d4aa" : avgTempo < 65 ? "#ef4444" : "#71717a") : "#71717a";
+          const tempoColor = avgTempo ? (avgTempo > 72 ? "hsl(var(--brand-accent))" : avgTempo < 65 ? "#ef4444" : "#71717a") : "#71717a";
           const compositeTotal = enrichedData.composite?.projTotal;
           const liveLine = effectiveFGLine;
           const compositeLean = compositeTotal && liveLine ? parseFloat((compositeTotal - liveLine).toFixed(1)) : null;
 
           const leanColor = (diff: number | null) =>
-            diff == null ? "#71717a" : diff > 1 ? "#00d4aa" : diff < -1 ? "#ef4444" : "#71717a";
+            diff == null ? "#71717a" : diff > 1 ? "hsl(var(--brand-accent))" : diff < -1 ? "#ef4444" : "#71717a";
 
           return (
             <div className="rounded-lg overflow-hidden" style={{ border: "1px solid #1e293b" }}>
@@ -2402,7 +2402,7 @@ function NCAABGameCard({
                           <StatWithTooltip label="AdjO" tooltip={TORVIK_TOOLTIPS.adjO}>
                             <span>AdjO</span>
                           </StatWithTooltip>{" "}
-                          <span style={{ color: "#00d4aa" }}>{t.adjO.toFixed(1)}</span>
+                          <span style={{ color: "hsl(var(--brand-accent))" }}>{t.adjO.toFixed(1)}</span>
                           {" · "}
                           <StatWithTooltip label="AdjD" tooltip={TORVIK_TOOLTIPS.adjD}>
                             <span>AdjD</span>
@@ -2497,7 +2497,7 @@ function NCAABGameCard({
                           <StatWithTooltip label="SRS" tooltip={TORVIK_TOOLTIPS.srs}>
                             <span>SRS</span>
                           </StatWithTooltip>{" "}
-                          <span style={{ color: c.srs > 0 ? "#00d4aa" : "#ef4444" }}>{c.srs.toFixed(1)}</span>
+                          <span style={{ color: c.srs > 0 ? "hsl(var(--brand-accent))" : "#ef4444" }}>{c.srs.toFixed(1)}</span>
                         </>
                       )}
                       {c.srs != null && c.sos != null && <span style={{ color: "#3f3f46" }}> · </span>}
@@ -2506,7 +2506,7 @@ function NCAABGameCard({
                           <StatWithTooltip label="SOS" tooltip={TORVIK_TOOLTIPS.sos}>
                             <span>SOS</span>
                           </StatWithTooltip>{" "}
-                          <span style={{ color: c.sos > 0 ? "#00d4aa" : "#ef4444" }}>{c.sos.toFixed(1)}</span>
+                          <span style={{ color: c.sos > 0 ? "hsl(var(--brand-accent))" : "#ef4444" }}>{c.sos.toFixed(1)}</span>
                         </>
                       )}
                     </span>
@@ -2602,7 +2602,7 @@ function NCAABGameCard({
                     <span className="text-[10px]" style={{ color: "#71717a" }}>{sig.name}</span>
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] font-mono"
-                        style={{ color: sig.diff > 0.5 ? "#00d4aa" : sig.diff < -0.5 ? "#ef4444" : "#52525b" }}>
+                        style={{ color: sig.diff > 0.5 ? "hsl(var(--brand-accent))" : sig.diff < -0.5 ? "#ef4444" : "#52525b" }}>
                         {sig.diff > 0 ? "+" : ""}{sig.diff.toFixed(1)} pts
                       </span>
                       <span className="text-[9px] font-bold px-1.5 py-0.5 rounded"
@@ -2673,7 +2673,7 @@ function NCAABGameCard({
                   navigator.clipboard.writeText(text);
                 }}
                 className="flex-1 py-2.5 rounded-lg text-sm font-bold"
-                style={{ background: "rgba(0,212,170,0.15)", color: "#00d4aa", border: "1px solid rgba(0,212,170,0.3)" }}
+                style={{ background: "hsl(var(--brand-accent) / 0.15)", color: "hsl(var(--brand-accent))", border: "1px solid hsl(var(--brand-accent) / 0.3)" }}
               >
                 Copy Slip
               </button>
@@ -2737,10 +2737,10 @@ function getChipValueSignal(play: NCAABPlay | undefined): { label: string; color
   const edge = canonicalEdgeVal;
   const bettingWindow = play.bettingWindow;
   if (bettingWindow === "HALFTIME" && edge >= 5) {
-    return { label: "2H EDGE", color: "#00d4aa", bg: "rgba(0,212,170,0.15)" };
+    return { label: "2H EDGE", color: "hsl(var(--brand-accent))", bg: "hsl(var(--brand-accent) / 0.15)" };
   }
   if (edge >= 10) {
-    return { label: `+${edge.toFixed(0)}%`, color: "#00d4aa", bg: "rgba(0,212,170,0.12)" };
+    return { label: `+${edge.toFixed(0)}%`, color: "hsl(var(--brand-accent))", bg: "hsl(var(--brand-accent) / 0.12)" };
   }
   if (edge >= 5) {
     return { label: `+${edge.toFixed(0)}%`, color: "#f59e0b", bg: "rgba(245,158,11,0.12)" };
@@ -2808,17 +2808,17 @@ function GameChip({
         maxWidth: 200,
         background: isSelected
           ? "#1f1f1f"
-          : colorTier === "green" ? "rgba(0,212,170,0.05)"
+          : colorTier === "green" ? "hsl(var(--brand-accent) / 0.05)"
           : colorTier === "yellow" ? "rgba(245,158,11,0.05)"
           : colorTier === "red" ? "rgba(239,68,68,0.05)"
           : "#111111",
         border: isSelected
-          ? "1.5px solid #00d4aa"
+          ? "1.5px solid hsl(var(--brand-accent))"
           : g.isLive
-          ? "1px solid rgba(0,212,170,0.2)"
+          ? "1px solid hsl(var(--brand-accent) / 0.2)"
           : "1px solid #27272a",
         borderLeft: isSelected ? undefined
-          : colorTier === "green" ? "3px solid #00d4aa"
+          : colorTier === "green" ? "3px solid hsl(var(--brand-accent))"
           : colorTier === "yellow" ? "3px solid #f59e0b"
           : colorTier === "red" ? "3px solid #ef4444"
           : undefined,
@@ -2833,9 +2833,9 @@ function GameChip({
       onMouseEnter={e => { if (!isSelected) e.currentTarget.style.borderColor = "#3f3f46"; }}
       onMouseLeave={e => {
         if (!isSelected) {
-          e.currentTarget.style.border = g.isLive ? "1px solid rgba(0,212,170,0.2)" : "1px solid #27272a";
+          e.currentTarget.style.border = g.isLive ? "1px solid hsl(var(--brand-accent) / 0.2)" : "1px solid #27272a";
           if (colorTier !== "neutral") {
-            e.currentTarget.style.borderLeft = colorTier === "green" ? "3px solid #00d4aa" : colorTier === "yellow" ? "3px solid #f59e0b" : "3px solid #ef4444";
+            e.currentTarget.style.borderLeft = colorTier === "green" ? "3px solid hsl(var(--brand-accent))" : colorTier === "yellow" ? "3px solid #f59e0b" : "3px solid #ef4444";
           }
         }
       }}
@@ -3099,7 +3099,7 @@ function NCAABGamesStrip({
             <span style={{ color: "#52525b", fontSize: 10, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.04em" }}>Legend:</span>
             {hasTeal && (
               <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <span style={{ background: "rgba(0,212,170,0.15)", border: "1px solid rgba(0,212,170,0.27)", borderRadius: 9999, padding: "1px 6px", fontSize: 9, fontWeight: 700, color: "#00d4aa" }}>+10%</span>
+                <span style={{ background: "hsl(var(--brand-accent) / 0.15)", border: "1px solid hsl(var(--brand-accent) / 0.27)", borderRadius: 9999, padding: "1px 6px", fontSize: 9, fontWeight: 700, color: "hsl(var(--brand-accent))" }}>+10%</span>
                 <span style={{ fontSize: 10, color: "#71717a" }}>Strong edge</span>
               </span>
             )}
@@ -3301,7 +3301,7 @@ function GroupedGamesList({
                             <span
                               data-testid={`ncaab-pregame-pill-${g.id}`}
                               className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
-                              style={{ background: "rgba(0,212,170,0.08)", border: "1px solid rgba(0,212,170,0.2)", color: "#00d4aa" }}
+                              style={{ background: "hsl(var(--brand-accent) / 0.08)", border: "1px solid hsl(var(--brand-accent) / 0.2)", color: "hsl(var(--brand-accent))" }}
                             >
                               Pre-game model · {g.enginePreGame.overProb > 50 ? "O" : "U"} {Math.round(Math.max(g.enginePreGame.overProb, 100 - g.enginePreGame.overProb))}%
                             </span>
@@ -3485,7 +3485,7 @@ function PreGameCard({
       style={{
         background: "#0a0a0a",
         border: "1px solid #27272a",
-        boxShadow: headerFlash ? "0 0 0 2px rgba(0,212,170,0.45)" : undefined,
+        boxShadow: headerFlash ? "0 0 0 2px hsl(var(--brand-accent) / 0.45)" : undefined,
         transition: "box-shadow 200ms ease",
       }}
     >
@@ -3503,7 +3503,7 @@ function PreGameCard({
           {timerState === "countdown" ? (
             <>
               <p className="text-[10px] uppercase tracking-wide" style={{ color: "#52525b" }}>Tipoff in</p>
-              <p className="text-lg font-black tabular-nums" style={{ color: "#00d4aa" }}>{countdown}</p>
+              <p className="text-lg font-black tabular-nums" style={{ color: "hsl(var(--brand-accent))" }}>{countdown}</p>
             </>
           ) : (
             <div className="flex items-center gap-1.5">
@@ -3566,7 +3566,7 @@ function PreGameCard({
         const tier = getPreGameConfidenceTier(overProb);
         const gaugeVal = overProb;
         const isLowTier = !tier || tier.label === "Monitoring" || tier.label === "Slight Lean";
-        const gaugeColor = (gaugeVal === null || isLowTier) ? "#52525b" : (gaugeVal > 50 ? "#00d4aa" : "#ef4444");
+        const gaugeColor = (gaugeVal === null || isLowTier) ? "#52525b" : (gaugeVal > 50 ? "hsl(var(--brand-accent))" : "#ef4444");
         const circum = 2 * Math.PI * 68;
         return (
           <div className="flex items-center gap-4 py-1">
@@ -3613,7 +3613,7 @@ function PreGameCard({
         const isLowTier = tier.label === "Monitoring" || tier.label === "Slight Lean";
         const edgeGap = parseFloat(Math.abs(overProb - 50).toFixed(1));
         const edgeSide = overProb > 50 ? "Over" : "Under";
-        const evColor = isLowTier ? "#52525b" : (overProb > 50 ? "#00d4aa" : "#ef4444");
+        const evColor = isLowTier ? "#52525b" : (overProb > 50 ? "hsl(var(--brand-accent))" : "#ef4444");
         const edgeLabel = edgeGap >= 18 ? `Strong ${edgeSide} EV`
           : edgeGap >= 10 ? `Lean ${edgeSide} EV`
           : edgeGap >= 5 ? `Slight ${edgeSide} Lean`
@@ -3660,7 +3660,7 @@ function PreGameCard({
               const legKey = `total:${dir}`;
               const isSelected = addedLegKey === legKey;
               const isPending = pendingLeg?.legKey === legKey;
-              const mColor = dir === "over" ? "#00d4aa" : "#ef4444";
+              const mColor = dir === "over" ? "hsl(var(--brand-accent))" : "#ef4444";
               const mProb = dir === "over" ? overProbRaw : underProbRaw;
               return (
                 <div key={dir}>
@@ -4095,9 +4095,9 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
             title="Clear analytics enrichment cache (admin)"
             className="flex-shrink-0 flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px] font-semibold transition-colors disabled:opacity-50"
             style={{
-              background: cacheClearMsg?.startsWith("Cleared") ? "rgba(0,212,170,0.1)" : "#0d0d0d",
-              border: cacheClearMsg?.startsWith("Cleared") ? "1px solid rgba(0,212,170,0.3)" : "1px solid #27272a",
-              color: cacheClearMsg?.startsWith("Cleared") ? "#00d4aa" : "#52525b",
+              background: cacheClearMsg?.startsWith("Cleared") ? "hsl(var(--brand-accent) / 0.1)" : "#0d0d0d",
+              border: cacheClearMsg?.startsWith("Cleared") ? "1px solid hsl(var(--brand-accent) / 0.3)" : "1px solid #27272a",
+              color: cacheClearMsg?.startsWith("Cleared") ? "hsl(var(--brand-accent))" : "#52525b",
             }}
           >
             <RefreshCw className={`w-2.5 h-2.5 ${cacheClearPending ? "animate-spin" : ""}`} />
@@ -4160,9 +4160,9 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                         onClick={() => setNcaabBookFilter(opt.key)}
                         className="px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all duration-200"
                         style={{
-                          background: isActive ? "rgba(0,212,170,0.15)" : "#111111",
-                          border: isActive ? "1px solid rgba(0,212,170,0.4)" : "1px solid #27272a",
-                          color: isActive ? "#00d4aa" : "#71717a",
+                          background: isActive ? "hsl(var(--brand-accent) / 0.15)" : "#111111",
+                          border: isActive ? "1px solid hsl(var(--brand-accent) / 0.4)" : "1px solid #27272a",
+                          color: isActive ? "hsl(var(--brand-accent))" : "#71717a",
                         }}
                       >
                         {opt.abbr} {count > 0 && <span className="ml-0.5 tabular-nums">{count}</span>}
@@ -4174,7 +4174,7 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                 {(() => {
                   const ALL_TOP_MARKET_KEYS: NCAABMarketKey[] = ["full_total", "full_spread", "h1_total", "h1_spread", "h2_total", "h2_spread"];
                   const TIER_STYLES: Record<string, { color: string; bg: string; border: string }> = {
-                    ELITE: { color: "#00d4aa", bg: "rgba(0,212,170,0.12)", border: "rgba(0,212,170,0.35)" },
+                    ELITE: { color: "hsl(var(--brand-accent))", bg: "hsl(var(--brand-accent) / 0.12)", border: "hsl(var(--brand-accent) / 0.35)" },
                     STRONG: { color: "#2dd4bf", bg: "rgba(45,212,191,0.1)", border: "rgba(45,212,191,0.3)" },
                     VALUE: { color: "#71717a", bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.1)" },
                     NONE: { color: "#52525b", bg: "rgba(255,255,255,0.02)", border: "#27272a" },
@@ -4251,7 +4251,7 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                           ? { color: "#a1a1aa", bg: "rgba(161,161,170,0.08)", border: "rgba(161,161,170,0.2)" }
                           : tier.style;
                         const edgeSide = mkt.side === "OVER" ? "Over" : mkt.side === "UNDER" ? "Under" : mkt.side === "HOME" ? "Home" : mkt.side === "AWAY" ? "Away" : "—";
-                        const edgeColor = isFallback ? "#a1a1aa" : tier.label === "ELITE" ? "#00d4aa" : tier.label === "STRONG" ? "#2dd4bf" : "#a1a1aa";
+                        const edgeColor = isFallback ? "#a1a1aa" : tier.label === "ELITE" ? "hsl(var(--brand-accent))" : tier.label === "STRONG" ? "#2dd4bf" : "#a1a1aa";
                         const halfLabel = p.half === 1 ? "H1" : p.half === 2 ? "H2" : "OT";
                         const confidenceDisplay = isFallback ? "Low" : mkt.modelProb != null ? `${mkt.modelProb.toFixed(1)}%` : "—";
                         const is2H = isH2Market(mkt.marketKey);
@@ -4360,7 +4360,7 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                                     }
                                   }}
                                   className="text-[10px] font-bold px-2.5 py-1 rounded-lg transition-colors"
-                                  style={{ background: "rgba(0,212,170,0.12)", color: "#00d4aa", border: "1px solid rgba(0,212,170,0.25)" }}
+                                  style={{ background: "hsl(var(--brand-accent) / 0.12)", color: "hsl(var(--brand-accent))", border: "1px solid hsl(var(--brand-accent) / 0.25)" }}
                                 >
                                   + Bet Card
                                 </button>
@@ -4403,9 +4403,9 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
 
           {/* Slate complete banner */}
           {allFinal && games.length > 0 && (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: "rgba(0,212,170,0.08)", border: "1px solid rgba(0,212,170,0.2)" }}>
-              <CheckCircle className="w-4 h-4 shrink-0" style={{ color: "#00d4aa" }} />
-              <span className="text-xs font-semibold" style={{ color: "#00d4aa" }}>Slate Complete</span>
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ background: "hsl(var(--brand-accent) / 0.08)", border: "1px solid hsl(var(--brand-accent) / 0.2)" }}>
+              <CheckCircle className="w-4 h-4 shrink-0" style={{ color: "hsl(var(--brand-accent))" }} />
+              <span className="text-xs font-semibold" style={{ color: "hsl(var(--brand-accent))" }}>Slate Complete</span>
             </div>
           )}
 
@@ -4453,7 +4453,7 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                 src={propPulseLogo}
                 alt="LiveLocks"
                 className="w-14 h-14 rounded-xl mx-auto"
-                style={{ boxShadow: "0 0 24px rgba(0,212,170,0.2)" }}
+                style={{ boxShadow: "0 0 24px hsl(var(--brand-accent) / 0.2)" }}
               />
               <p data-testid="text-no-games" className="text-sm font-semibold text-foreground">
                 {games.length === 0 ? "No NCAAB games scheduled today" : "No live NCAAB games right now"}
@@ -4471,7 +4471,7 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                   return (
                     <p data-testid="text-next-tipoff" className="text-xs text-muted-foreground">
                       Next game: <span className="font-semibold text-foreground">{next.awayTeamAbbr ?? next.awayTeam} @ {next.homeTeamAbbr ?? next.homeTeam}</span>
-                      {" "}— tipoff in <span style={{ color: "#00d4aa" }}>{timeStr}</span>
+                      {" "}— tipoff in <span style={{ color: "hsl(var(--brand-accent))" }}>{timeStr}</span>
                     </p>
                   );
                 }
@@ -4492,7 +4492,7 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
               {/* Engine record (build step 5) */}
               <div className="px-4 pb-2 flex items-center gap-2">
                 <p className="text-xs" style={{ color: "#52525b" }}>Engine Record:</p>
-                <span className="text-sm font-black" style={{ color: "#00d4aa" }}>{wins}W</span>
+                <span className="text-sm font-black" style={{ color: "hsl(var(--brand-accent))" }}>{wins}W</span>
                 <span className="text-sm font-black" style={{ color: "#71717a" }}>–</span>
                 <span className="text-sm font-black" style={{ color: "#ef4444" }}>{losses}L</span>
                 <span className="text-[10px] ml-1" style={{ color: "#52525b" }}>· Dominant side at final whistle</span>
@@ -4506,10 +4506,10 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                   const callLabel  = r.line !== null
                     ? `${engineCall === "under" ? "Under" : "Over"} ${r.line}`
                     : "—";
-                  const callColor  = engineCall === "under" ? "#ef4444" : "#00d4aa";
-                  const borderColor = r.result === "HIT" ? "#00d4aa" : r.result === "MISS" ? "#ef4444" : "#52525b";
+                  const callColor  = engineCall === "under" ? "#ef4444" : "hsl(var(--brand-accent))";
+                  const borderColor = r.result === "HIT" ? "hsl(var(--brand-accent))" : r.result === "MISS" ? "#ef4444" : "#52525b";
                   const badgeStyle = r.result === "HIT"
-                    ? { background: "rgba(0,212,170,0.15)", color: "#00d4aa", border: "1px solid rgba(0,212,170,0.3)" }
+                    ? { background: "hsl(var(--brand-accent) / 0.15)", color: "hsl(var(--brand-accent))", border: "1px solid hsl(var(--brand-accent) / 0.3)" }
                     : r.result === "MISS"
                     ? { background: "rgba(239,68,68,0.15)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.3)" }
                     : { background: "#27272a", color: "#71717a", border: "1px solid #3f3f46" };
@@ -4554,9 +4554,9 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
 
               {/* Summary footer */}
               <div className="flex items-center justify-center gap-2 px-4 py-3" style={{ borderTop: "1px solid #1a1a1a" }}>
-                <CheckCircle className="w-3.5 h-3.5 shrink-0" style={{ color: "#00d4aa" }} />
+                <CheckCircle className="w-3.5 h-3.5 shrink-0" style={{ color: "hsl(var(--brand-accent))" }} />
                 <p className="text-[11px]" style={{ color: "#52525b" }}>
-                  Slate Complete · {summaryGames.length} {summaryGames.length === 1 ? "game" : "games"} · <span style={{ color: "#00d4aa" }}>{wins}W</span> <span style={{ color: "#ef4444" }}>{losses}L</span>
+                  Slate Complete · {summaryGames.length} {summaryGames.length === 1 ? "game" : "games"} · <span style={{ color: "hsl(var(--brand-accent))" }}>{wins}W</span> <span style={{ color: "#ef4444" }}>{losses}L</span>
                 </p>
               </div>
             </div>
@@ -4883,17 +4883,17 @@ export function NCAABAdminTab({ onAddToParlay, onAddToCard, expandToGameId, isAd
                   data-testid={`ncaab-toast-view-${toast.game.id}`}
                   onClick={() => handleViewGame(toast.game.id, toast.id)}
                   style={{
-                    background: "rgba(0,212,170,0.15)",
-                    border: "1px solid rgba(0,212,170,0.35)",
-                    color: "#00d4aa",
+                    background: "hsl(var(--brand-accent) / 0.15)",
+                    border: "1px solid hsl(var(--brand-accent) / 0.35)",
+                    color: "hsl(var(--brand-accent))",
                     fontSize: "11px",
                     fontWeight: 600,
                     borderRadius: "6px",
                     padding: "3px 8px",
                     cursor: "pointer",
                   }}
-                  onMouseEnter={e => (e.currentTarget.style.background = "rgba(0,212,170,0.25)")}
-                  onMouseLeave={e => (e.currentTarget.style.background = "rgba(0,212,170,0.15)")}
+                  onMouseEnter={e => (e.currentTarget.style.background = "hsl(var(--brand-accent) / 0.25)")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "hsl(var(--brand-accent) / 0.15)")}
                 >
                   View Game
                 </button>
