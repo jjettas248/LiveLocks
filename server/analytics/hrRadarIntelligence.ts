@@ -7,10 +7,12 @@
 //   - false FIRE rate (FIRE that ended in MISSED)
 //   - READY effectiveness (READY that progressed to FIRE)
 //   - BUILD maturation rates (BUILD that progressed beyond)
+//   - computeCalibrationBuckets: empirical calibration from settled outcome stamps
 //
 // HARD RULE: no mutation. Reads from analytics ring buffer + bus only.
 
 import { getAnalyticsEvents } from "./analyticsEvent";
+import type { HrCalibrationBucket } from "../mlb/hrConversionModel";
 
 const STAGES = ["track", "build", "ready", "fire", "cashed", "missed", "dead"] as const;
 type HrStage = (typeof STAGES)[number];
@@ -258,4 +260,51 @@ export function startHrRadarIntelligenceAggregator(intervalMs: number = 5 * 60 *
     }
   }, intervalMs);
   if (typeof _hrRadarTimer.unref === "function") _hrRadarTimer.unref();
+}
+
+// Empirical calibration update from settled HR Radar outcome stamps.
+// Called by the 30-minute cron in server/index.ts.
+// HARD RULE: read-only — calls setEmpiricalCalibrationBuckets externally; does not mutate here.
+// Requires n >= 30 settled outcomes per bucket before overriding the static table.
+export function computeCalibrationBuckets(): HrCalibrationBucket[] {
+  try {
+    // Inline require to avoid circular import at module load time.
+    const { _getAllHrRadarOutcomeStamps } = require("../mlb/hrRadarOutcomeStamp") as {
+      _getAllHrRadarOutcomeStamps: () => Array<{ outcomeStatus: string; rawConversionProbability?: number | null }>;
+    };
+    const stamps = _getAllHrRadarOutcomeStamps();
+
+    // Only consider settled plays (cashed = HR hit, missed = no HR)
+    const settled = stamps.filter(s =>
+      s.rawConversionProbability != null &&
+      (s.outcomeStatus === "called_hit" ||
+       s.outcomeStatus === "called_hit_attack" ||
+       s.outcomeStatus === "called_hit_ready" ||
+       s.outcomeStatus === "missed" ||
+       s.outcomeStatus === "expired"),
+    );
+
+    // Mirror the 11 bins from CALIBRATION_TABLE in hrConversionModel.ts
+    const BIN_EDGES = [0.00, 0.03, 0.05, 0.07, 0.09, 0.12, 0.16, 0.20, 0.25, 0.30, 0.40, 1.00];
+    const buckets: HrCalibrationBucket[] = [];
+
+    for (let i = 0; i < BIN_EDGES.length - 1; i++) {
+      const min = BIN_EDGES[i];
+      const max = BIN_EDGES[i + 1];
+      const inBin = settled.filter(s => {
+        const p = s.rawConversionProbability!;
+        return p >= min && p < max;
+      });
+      const cashed = inBin.filter(s => s.outcomeStatus.startsWith("called_hit")).length;
+      if (inBin.length >= 30) {
+        buckets.push({ min, max, calibrated: cashed / inBin.length, samples: inBin.length });
+      }
+    }
+
+    console.log(`[LL_ANALYTICS_HR_RADAR] calibration update: ${buckets.length} qualifying bins from ${settled.length} settled outcomes`);
+    return buckets;
+  } catch (err: any) {
+    console.warn(`[LL_ANALYTICS_HR_RADAR] computeCalibrationBuckets failed: ${err?.message ?? err}`);
+    return [];
+  }
 }

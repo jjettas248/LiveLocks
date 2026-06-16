@@ -259,7 +259,7 @@ function isMissedDangerPattern(ev: NearHrContactEvent, tier: NearHrTier | null):
  */
 export function detectNearHrContactPeak(
   events: NearHrContactEvent[],
-  windowSize = 5,
+  windowSize = 7,
 ): NearHrPeakResult {
   if (!events || events.length === 0) {
     return {
@@ -318,6 +318,24 @@ export function detectNearHrContactPeak(
   }
   const repeatedDanger = hardCount >= 2 && eliteCount >= 1;
 
+  // EV acceleration detection: rising exit velocity across sequential ABs is a
+  // leading indicator not captured by static per-AB thresholds.
+  // Fires a weak repeatedDanger (watch tier only, not lean) when the last 2 ABs
+  // both qualify (EV >= 92) and their average exceeds the prior 2 ABs' average by >= 3 mph.
+  let evAcceleration = false;
+  if (!repeatedDanger && diagnostics.length >= 4) {
+    const last2 = diagnostics.slice(-2);
+    const prior2 = diagnostics.slice(-4, -2);
+    const last2EVs = last2.map(d => d.ev ?? 0);
+    const prior2EVs = prior2.map(d => d.ev ?? 0);
+    const bothRecentQualify = last2.every(d => (d.ev ?? 0) >= 92);
+    const recentAvg = (last2EVs[0] + last2EVs[1]) / 2;
+    const priorAvg = (prior2EVs[0] + prior2EVs[1]) / 2;
+    if (bothRecentQualify && recentAvg - priorAvg >= 3.0) {
+      evAcceleration = true;
+    }
+  }
+
   // Walk newest→oldest for the per-AB strongest tier (lean wins).
   let bestTier: NearHrTier | null = null;
   let bestDrivers: string[] = [];
@@ -361,6 +379,19 @@ export function detectNearHrContactPeak(
       repeatedDanger,
       diagnostics,
       matchedPath: bestPath,
+    };
+  }
+
+  // EV acceleration: rising exit velocity without a qualifying individual AB.
+  // Only promotes to watch (not lean) — a precursor signal, not a confirmed danger.
+  if (evAcceleration) {
+    return {
+      tier: "watch",
+      drivers: ["Exit velocity accelerating — rising contact quality"],
+      sourceAbIndex: events.length - 1,
+      repeatedDanger: false,
+      diagnostics,
+      matchedPath: "WATCH",
     };
   }
 

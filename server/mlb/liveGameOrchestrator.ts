@@ -536,6 +536,7 @@ function gradeSingleHRPlay(
       confidenceTier: null,
       signalState,
       source,
+      rawConversionProbability: snap?.peakConversionProbability ?? null,
     });
   } catch (err) {
     console.warn(`[HR_RADAR_CASHED] stamp failed gameId=${gameId} playerId=${playerId} err=${(err as Error).message}`);
@@ -2934,6 +2935,8 @@ export class LiveGameOrchestrator {
           pitchMix: pitcherCtx?.pitchMix ?? [],
           throws: pitcher?.throws ?? null,
           seasonAvgVelocity: pitcherCtx?.seasonAvgVelocity ?? null,
+          velocityDrop: pitcherCtx?.velocityDrop ?? null,
+          avgFastballSpin: pitcherCtx?.avgFastballSpin ?? null,
         },
         ...(rollingStats ? {
           hrTrend: {
@@ -3545,6 +3548,8 @@ export class LiveGameOrchestrator {
             pitchMix: pitcherCtx?.pitchMix ?? [],
             throws: pitcher?.throws ?? null,
             seasonAvgVelocity: pitcherCtx?.seasonAvgVelocity ?? null,
+            velocityDrop: pitcherCtx?.velocityDrop ?? null,
+            avgFastballSpin: pitcherCtx?.avgFastballSpin ?? null,
           },
           ...(market === "hrr" && boxScorePlayer ? {
             hrrComponents: {
@@ -4308,6 +4313,8 @@ export class LiveGameOrchestrator {
             pitchMix: pitcherCtx?.pitchMix ?? [],
             throws: pitcherToEval.throws ?? null,
             seasonAvgVelocity: pitcherCtx?.seasonAvgVelocity ?? null,
+            velocityDrop: pitcherCtx?.velocityDrop ?? null,
+            avgFastballSpin: pitcherCtx?.avgFastballSpin ?? null,
           },
           lineup: {
             battingOrderSlot: 5,

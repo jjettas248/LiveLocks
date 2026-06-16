@@ -90,6 +90,7 @@ export interface PitcherContextEntry {
   timesThroughOrder: number;
   velocityDrop: number | null;
   seasonAvgVelocity: number | null;
+  avgFastballSpin: number | null;
   // Gap 3: pre-game fatigue — pitcher's recent start history
   lastStartPitchCount: number | null;
   daysSinceLastStart: number | null;
@@ -976,6 +977,15 @@ export async function syncPitcherContext(statsPk: string, cacheKey?: string): Pr
 
         const entryFatigue = await fetchPitcherRecentStarts(String(pid));
 
+        // Season fastball spin from Savant pitcher CSV — 4h cached, no extra network cost per tick.
+        let avgFastballSpin: number | null = null;
+        try {
+          const savant = await fetchBaseballSavantData(String(pid), gameId);
+          avgFastballSpin = savant.avgFastballSpin ?? null;
+        } catch {
+          // Non-fatal; scoring falls back to no spin adjustment
+        }
+
         byPitcherId[String(pid)] = {
           pitchMix,
           avgVelocity,
@@ -983,6 +993,7 @@ export async function syncPitcherContext(statsPk: string, cacheKey?: string): Pr
           timesThroughOrder,
           velocityDrop,
           seasonAvgVelocity: null,
+          avgFastballSpin,
           lastStartPitchCount: entryFatigue.lastStartPitchCount,
           daysSinceLastStart: entryFatigue.daysSinceLastStart,
           last3StartERA: entryFatigue.last3StartERA,

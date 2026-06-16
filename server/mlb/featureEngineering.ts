@@ -940,6 +940,17 @@ export function computeBatSpeedEngine(input: MLBPropInput): {
     batSpeedPowerScore = 0.45 + batSpeedPowerScore * 0.2;
   }
 
+  // Improvement 6: swing efficiency (bat speed / swing length) — compact swings
+  // keep the barrel in the zone longer and correlate with barrel rate.
+  const swingLen = input.contactQuality.avgSwingLength;
+  if (measuredBatSpeed != null && swingLen != null && swingLen > 0) {
+    const efficiency = measuredBatSpeed / swingLen;
+    if (efficiency >= 10.5) batSpeedPowerScore = clamp(batSpeedPowerScore + 0.08, 0, 1);
+    else if (efficiency >= 10.0) batSpeedPowerScore = clamp(batSpeedPowerScore + 0.05, 0, 1);
+    else if (efficiency >= 9.5) batSpeedPowerScore = clamp(batSpeedPowerScore + 0.02, 0, 1);
+    else if (efficiency < 8.5) batSpeedPowerScore = clamp(batSpeedPowerScore - 0.03, 0, 1);
+  }
+
   const hasStrongContact = barrel >= 0.08 || ev >= 95 || hhr >= 0.40;
   const hasWeakContact = ev < 88 && hhr < 0.28;
   const isConditionallyAmplified = hasStrongContact;

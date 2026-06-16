@@ -81,6 +81,8 @@ export interface LiveFeedProps {
   unknownInningCount?: number;
   /** Optional live-context counts for the narrative empty state. */
   narrativeStats?: NarrativeStats;
+  /** Admin-only diagnostic features (unknown inning count, etc.). */
+  isAdmin?: boolean;
 }
 
 export function LiveFeed({
@@ -92,6 +94,7 @@ export function LiveFeed({
   isElite = true,
   unknownInningCount,
   narrativeStats,
+  isAdmin = false,
 }: LiveFeedProps) {
   // Initialize collapsed state from each group's defaultCollapsed flag so
   // Monitoring + Resolved are tucked away by default. Users can expand.
@@ -138,13 +141,25 @@ export function LiveFeed({
 
   return (
     <div className="space-y-4" data-testid="mlb-live-feed">
-      {unknownInningCount != null && unknownInningCount > 0 && (
+      {/* Admin-only: unknown inning diagnostic. Hidden from regular users. */}
+      {isAdmin && unknownInningCount != null && unknownInningCount > 0 && (
         <div
-          className="text-[10px] text-muted-foreground/70 px-2"
+          className="text-[10px] text-muted-foreground/50 px-2"
           data-testid="text-unknown-inning-count"
           title="Signals where the engine could not resolve the inning. Still surfaced; de-prioritized in sort."
         >
-          {unknownInningCount} signal{unknownInningCount === 1 ? "" : "s"} with unknown inning
+          ℹ️ {unknownInningCount} signal{unknownInningCount === 1 ? "" : "s"} missing inning data
+        </div>
+      )}
+
+      {/* Live window urgency banner — only when ACTION_NOW has signals. */}
+      {grouped.ACTION_NOW.length > 0 && (
+        <div
+          className="flex items-center gap-2 px-3 py-2 rounded-lg border border-red-500/20 bg-red-500/8 text-[11px] text-red-400"
+          data-testid="banner-live-window-open"
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shrink-0" />
+          Live window open — these edges close as the inning ends
         </div>
       )}
 
@@ -245,8 +260,27 @@ export function LiveFeed({
             {!isCollapsed && (
               <div className="mt-2 space-y-2">
                 {items.length === 0 ? (
-                  <div className="py-3 text-center" data-testid={`text-group-empty-${g.key.toLowerCase()}`}>
+                  <div className="py-3 text-center space-y-2" data-testid={`text-group-empty-${g.key.toLowerCase()}`}>
                     <span className="text-[11px] text-muted-foreground/60">{g.emptyCopy}</span>
+                    {g.key === "ACTION_NOW" && grouped.BUILDING.length > 0 && (() => {
+                      const nextVm = grouped.BUILDING[0];
+                      const nextSig = resolveSignal(nextVm);
+                      if (!nextSig) return null;
+                      return (
+                        <div className="mt-2 text-left" data-testid="next-attack-window-preview">
+                          <div className="text-[10px] font-semibold text-amber-400 uppercase tracking-wide mb-1">Next likely attack window</div>
+                          <MlbSignalCard
+                            sig={nextSig}
+                            inningWindow={nextVm.inningWindow}
+                            marketActionability={nextVm.marketActionability}
+                            primarySignalLabel={nextVm.primarySignalLabel}
+                            onAddToSlip={onAddToSlip}
+                            onOpenCalculator={onOpenCalculator}
+                            onPlayerClick={onPlayerClick}
+                          />
+                        </div>
+                      );
+                    })()}
                   </div>
                 ) : (
                   <>
