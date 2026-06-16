@@ -52,9 +52,9 @@ const SIGNAL_STYLES: Record<SignalTier, { border: string; bg: string; dot: strin
 };
 
 const SIGNAL_TIER_STYLES: Record<"elite" | "strong" | "value", { border: string; bg: string; dot: string }> = {
-  elite:  { border: "#22c55e", bg: "rgba(34,197,94,0.12)",   dot: "#22c55e" },
-  strong: { border: "#eab308", bg: "rgba(234,179,8,0.12)",   dot: "#eab308" },
-  value:  { border: "#3b82f6", bg: "rgba(59,130,246,0.12)",  dot: "#3b82f6" },
+  elite:  { border: "hsl(var(--tier-elite) / 0.6)",  bg: "hsl(var(--tier-elite) / 0.12)",  dot: "hsl(var(--tier-elite))" },
+  strong: { border: "hsl(var(--tier-strong) / 0.6)", bg: "hsl(var(--tier-strong) / 0.12)", dot: "hsl(var(--tier-strong))" },
+  value:  { border: "hsl(var(--tier-value) / 0.6)",  bg: "hsl(var(--tier-value) / 0.12)",  dot: "hsl(var(--tier-value))" },
 };
 
 function getSignalTier(prob: number): "elite" | "strong" | "value" | "none" {

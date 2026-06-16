@@ -81,10 +81,10 @@ const BADGE_DISPLAY: Record<string, { label: string; color: string } | null> = {
 };
 
 const TIER_COLORS: Record<string, { bg: string; text: string; border: string }> = {
-  ELITE: { bg: "#422006", text: "#fbbf24", border: "#f59e0b" },
-  STRONG: { bg: "#052e16", text: "#4ade80", border: "#22c55e" },
-  SOLID: { bg: "#172554", text: "#60a5fa", border: "#3b82f6" },
-  WATCHLIST: { bg: "#1c1917", text: "#a3a3a3", border: "#525252" },
+  ELITE:     { bg: "hsl(var(--tier-elite) / 0.13)",  text: "hsl(var(--tier-elite))",  border: "hsl(var(--tier-elite) / 0.6)" },
+  STRONG:    { bg: "hsl(var(--tier-strong) / 0.13)", text: "hsl(var(--tier-strong))", border: "hsl(var(--tier-strong) / 0.6)" },
+  SOLID:     { bg: "hsl(var(--tier-value) / 0.13)",  text: "hsl(var(--tier-value))",  border: "hsl(var(--tier-value) / 0.6)" },
+  WATCHLIST: { bg: "hsl(var(--tier-watch) / 0.13)",  text: "hsl(var(--tier-watch))",  border: "hsl(var(--tier-watch) / 0.6)" },
 };
 
 const SIDE_STYLES: Record<string, { color: string; bg: string }> = {

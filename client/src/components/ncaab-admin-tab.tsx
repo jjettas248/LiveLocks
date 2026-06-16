@@ -582,9 +582,9 @@ function getConfidenceTier(prob: number | null): { label: string; color: string;
 
 function tierDisplayFromCanonical(tier: string | null | undefined): { label: string; color: string; bg: string; border: string } | null {
   if (!tier || tier === "NONE") return null;
-  if (tier === "ELITE")  return { label: "Elite",  color: "#00d4aa", bg: "rgba(0,212,170,0.15)",  border: "rgba(0,212,170,0.3)" };
-  if (tier === "STRONG") return { label: "Strong", color: "#f59e0b", bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.3)" };
-  if (tier === "VALUE")  return { label: "Value",  color: "#38bdf8", bg: "rgba(56,189,248,0.12)", border: "rgba(56,189,248,0.3)" };
+  if (tier === "ELITE")  return { label: "Elite",  color: "hsl(var(--tier-elite))",  bg: "hsl(var(--tier-elite) / 0.15)",  border: "hsl(var(--tier-elite) / 0.3)" };
+  if (tier === "STRONG") return { label: "Strong", color: "hsl(var(--tier-strong))", bg: "hsl(var(--tier-strong) / 0.12)", border: "hsl(var(--tier-strong) / 0.3)" };
+  if (tier === "VALUE")  return { label: "Value",  color: "hsl(var(--tier-value))",  bg: "hsl(var(--tier-value) / 0.12)", border: "hsl(var(--tier-value) / 0.3)" };
   return null;
 }
 

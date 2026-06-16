@@ -232,3 +232,15 @@
     scroll-behavior: auto !important;
   }
 }
+
+@layer base {
+  /* App-wide keyboard focus ring. Most hand-rolled interactive elements set
+     focus:outline-none without a replacement, so keyboard focus was invisible.
+     :where() keeps specificity at 0 so elements with their own focus-visible
+     styles (e.g. shadcn Button/Input) still win, and outline (not box-shadow)
+     is used so the ring isn't clipped by overflow-hidden ancestors. */
+  :where(a, button, [role="button"], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])):focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+}
