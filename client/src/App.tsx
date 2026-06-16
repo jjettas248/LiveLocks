@@ -17,6 +17,7 @@ import VerifyPendingPage from "@/pages/verify-pending";
 import ResetPasswordPage from "@/pages/reset-password";
 import { useAuth } from "@/hooks/use-auth";
 import { useAttributionCapture } from "@/hooks/useAttributionCapture";
+import { safeReturnTo } from "@/lib/returnTo";
 import { useEffect } from "react";
 
 function AdminRedirect() {
@@ -31,10 +32,13 @@ function ProtectedRouter() {
 
   useEffect(() => {
     if (!isLoading && !user && location !== "/auth") {
-      navigate("/auth");
+      // Preserve the attempted destination so SMS/push/bookmark deep links
+      // survive the auth round-trip instead of always dumping on /dashboard.
+      const returnTo = location && location !== "/" ? `?returnTo=${encodeURIComponent(location)}` : "";
+      navigate(`/auth${returnTo}`);
     }
     if (!isLoading && user && location === "/auth") {
-      navigate("/dashboard");
+      navigate(safeReturnTo() || "/dashboard");
     }
     if (!isLoading && user && !user.isAdmin && (location === "/admin" || location === "/analytics" || location === "/performance")) {
       navigate("/dashboard");

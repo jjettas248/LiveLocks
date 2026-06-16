@@ -1202,7 +1202,14 @@ export default function Dashboard() {
       };
 
       tryCheckoutComplete(1).then(async (success) => {
-        if (!success) {
+        if (success) {
+          toast({
+            title: "You're all set 🎉",
+            description: "Payment received — your upgraded access is now unlocked.",
+          });
+          return;
+        }
+        {
           let recovered = false;
           for (let poll = 0; poll < 5; poll++) {
             await new Promise(r => setTimeout(r, 3000));
@@ -1222,7 +1229,12 @@ export default function Dashboard() {
               }
             } catch { /* continue polling */ }
           }
-          if (!recovered) {
+          if (recovered) {
+            toast({
+              title: "You're all set 🎉",
+              description: "Payment received — your upgraded access is now unlocked.",
+            });
+          } else {
             toast({
               title: "Subscription activation delayed",
               description: "Your payment was received. Please refresh the page in a minute to see your upgraded access.",
@@ -1233,6 +1245,11 @@ export default function Dashboard() {
       });
     } else if (payment === "cancelled") {
       window.history.replaceState({}, "", "/dashboard");
+      toast({
+        title: "Checkout cancelled",
+        description: "No charge was made — your current access is unchanged.",
+        variant: "default",
+      });
     }
   }, []);
 
