@@ -81,11 +81,31 @@ export default {
           busy: "rgb(239 68 68)",
           offline: "rgb(156 163 175)",
         },
+        // Semantic state colors (were defined as CSS vars but not exposed).
+        success: "hsl(var(--success) / <alpha-value>)",
+        warning: "hsl(var(--warning) / <alpha-value>)",
+        // Signal-tier palette — single source of truth for confidence colors.
+        tier: {
+          elite: "hsl(var(--tier-elite) / <alpha-value>)",
+          strong: "hsl(var(--tier-strong) / <alpha-value>)",
+          value: "hsl(var(--tier-value) / <alpha-value>)",
+          watch: "hsl(var(--tier-watch) / <alpha-value>)",
+        },
+        // Per-sport accents.
+        sport: {
+          mlb: "hsl(var(--sport-mlb) / <alpha-value>)",
+          nba: "hsl(var(--sport-nba) / <alpha-value>)",
+          ncaab: "hsl(var(--sport-ncaab) / <alpha-value>)",
+        },
+        brand: "hsl(var(--brand-accent) / <alpha-value>)",
       },
       fontFamily: {
         sans: ["var(--font-sans)"],
         serif: ["var(--font-serif)"],
         mono: ["var(--font-mono)"],
+        // Display face (Outfit). Was referenced via `font-display` in
+        // components but never wired here, so it silently fell back to Inter.
+        display: ["var(--font-display)"],
       },
       keyframes: {
         "accordion-down": {

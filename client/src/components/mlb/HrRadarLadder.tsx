@@ -688,7 +688,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
 
   return (
     <div
-      className="rounded-lg border border-border/60 bg-background/50 p-3 hover:bg-background/80 transition-colors"
+      className="rounded-xl border border-border/60 bg-background/50 p-3 hover:bg-background/80 transition-colors"
       data-testid={`ladder-card-${section}-${entry.playerId}`}
     >
       <div className="flex items-start justify-between gap-2 min-w-0">

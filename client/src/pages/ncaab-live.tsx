@@ -89,7 +89,7 @@ function ProbabilityRing({ value, label, size = "lg", color }: {
   const pct = value ?? 0;
   const dashOffset = circumference * (1 - Math.min(pct, 100) / 100);
 
-  const ringColor = color ?? (pct >= 65 ? "#00d4aa" : pct >= 55 ? "#f59e0b" : pct > 0 ? "#ef4444" : "#374151");
+  const ringColor = color ?? (pct >= 65 ? "hsl(var(--brand-accent))" : pct >= 55 ? "#f59e0b" : pct > 0 ? "#ef4444" : "#374151");
 
   return (
     <div className="flex flex-col items-center gap-1" data-testid={`ring-${label.toLowerCase()}`}>
@@ -324,7 +324,7 @@ function NcaabGameCard({ card }: { card: NcaabCard }) {
           </div>
 
           <div className="flex items-center justify-center gap-8">
-            <ProbabilityRing value={card.fullGameTotal.overProbability} label="OVER" size="sm" color="#00d4aa" />
+            <ProbabilityRing value={card.fullGameTotal.overProbability} label="OVER" size="sm" color="hsl(var(--brand-accent))" />
             <div className="flex flex-col items-center gap-0.5">
               {card.fullGameTotal.line !== null && (
                 <span className="text-sm font-bold">{card.fullGameTotal.line}</span>

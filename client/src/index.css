@@ -56,7 +56,24 @@
     /* Custom sports colors */
     --success: 142 71% 45%;
     --warning: 38 92% 50%;
-    
+
+    /* Signal-tier palette — single source of truth for confidence colors.
+       Canonical scheme: elite = gold, strong = green, value = teal,
+       watch = slate. Use via Tailwind (text-tier-elite) or
+       hsl(var(--tier-elite) / <alpha>) in inline styles. */
+    --tier-elite: 43 96% 56%;
+    --tier-strong: 142 71% 45%;
+    --tier-value: 175 70% 41%;
+    --tier-watch: 220 9% 55%;
+
+    /* Sport accents — MLB green, NBA orange, NCAAB blue. */
+    --sport-mlb: 142 71% 45%;
+    --sport-nba: 25 95% 53%;
+    --sport-ncaab: 217 91% 60%;
+
+    /* Brand accent (≈ #00d4aa teal) — was hardcoded across MLB/NCAAB. */
+    --brand-accent: 168 100% 42%;
+
     --elevate-1: rgba(255, 255, 255, 0.04);
     --elevate-2: rgba(255, 255, 255, 0.08);
   }
@@ -213,5 +230,17 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+@layer base {
+  /* App-wide keyboard focus ring. Most hand-rolled interactive elements set
+     focus:outline-none without a replacement, so keyboard focus was invisible.
+     :where() keeps specificity at 0 so elements with their own focus-visible
+     styles (e.g. shadcn Button/Input) still win, and outline (not box-shadow)
+     is used so the ring isn't clipped by overflow-hidden ancestors. */
+  :where(a, button, [role="button"], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])):focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
   }
 }
