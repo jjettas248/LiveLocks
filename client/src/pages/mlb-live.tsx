@@ -106,6 +106,81 @@ type EdgeFeedResponse = {
 };
 
 
+type CanonicalGradedOutcome = {
+  sessionDate: string;
+  gameId: string;
+  playerId: string;
+  playerName: string;
+  team: string;
+  finalStatus: "hit" | "miss";
+  detectedLabel: string | null;
+  hitLabel: string | null;
+  hitInning?: number | null;
+  hitHalf?: string | null;
+  detectedScore: number | null;
+  peakScore: number | null;
+  triggerTags: string[];
+  resolvedAt: string | null;
+};
+
+type HrRadarGradingSummary = {
+  wins: number;
+  losses: number;
+  totalGraded: number;
+  hitRate: number;
+};
+
+type HRRadarResponse = {
+  hrEdges: Array<any>;
+  bettableHR: Array<any>;
+  cashedToday: Array<any>;
+  activity?: Array<any>;
+  hrWatchlist: Array<any>;
+  gradedHits?: CanonicalGradedOutcome[];
+  gradedMisses?: CanonicalGradedOutcome[];
+  gradingSummary?: HrRadarGradingSummary;
+};
+
+interface HRAlert {
+  id: number;
+  playerId: string;
+  playerName: string;
+  teamAbbr: string | null;
+  gameId: string;
+  alertType: string;
+  triggerReason: string | null;
+  hrBuildScore: number | null;
+  hrIntensity: string | null;
+  inning: number | null;
+  outcome: string | null;
+  signalState: string | null;
+  decision: string | null;
+  confidenceScore: number | null;
+  formattedReason: string | null;
+  factors: {
+    avgEV: number | null;
+    maxEV: number | null;
+    avgLA: number | null;
+    barrels: number;
+    hardHits: number;
+    deepFlyouts: number;
+    batSpeedScore?: number;
+    pitcherFatigueBoost?: number;
+    parkWindBoost?: number;
+    platoonBoost?: number;
+  } | null;
+  createdAt: string | null;
+}
+
+interface AlertConversionStats {
+  totalAlerts: number;
+  totalHR: number;
+  totalNoHR: number;
+  totalPending: number;
+  conversionRate: number;
+  alertTypeBreakdown: Record<string, { total: number; hr: number; rate: number }>;
+}
+
 const MARKET_LABELS: Record<string, string> = {
   hits: "Hits", total_bases: "Total Bases", hrr: "H+R+RBI",
   pitcher_k: "K (Pitcher)", pitcher_strikeouts: "K (Pitcher)", pitcher_outs: "Pitcher Outs",
