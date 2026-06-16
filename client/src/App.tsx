@@ -34,7 +34,11 @@ function ProtectedRouter() {
     if (!isLoading && !user && location !== "/auth") {
       // Preserve the attempted destination so SMS/push/bookmark deep links
       // survive the auth round-trip instead of always dumping on /dashboard.
-      const returnTo = location && location !== "/" ? `?returnTo=${encodeURIComponent(location)}` : "";
+      // wouter's location is path-only, so append the query string — that's
+      // where deep-link state (tab/gameId/cardType) and Stripe-return params
+      // (payment/tier/session_id) live.
+      const attempted = `${location}${window.location.search}`;
+      const returnTo = attempted && attempted !== "/" ? `?returnTo=${encodeURIComponent(attempted)}` : "";
       navigate(`/auth${returnTo}`);
     }
     if (!isLoading && user && location === "/auth") {
