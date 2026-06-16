@@ -3743,41 +3743,48 @@ export async function registerRoutes(
   });
 
   // ── HR Radar Share Card ──────────────────────────────────────────────────
-  // In-memory store for generated card images (2-hour TTL).
-  const _hrShareCache = new Map<string, { buf: Buffer; expires: number }>();
-  function _cleanShareCache() {
-    const now = Date.now();
-    for (const [id, entry] of Array.from(_hrShareCache.entries())) {
-      if (now > entry.expires) _hrShareCache.delete(id);
-    }
+  // shareId = base64url(JSON) of the card params — fully self-contained so
+  // the image endpoint can regenerate without any in-memory state. This
+  // survives server restarts and requires no cache lookup.
+  function _hrShareEncode(params: Record<string, unknown>): string {
+    return Buffer.from(JSON.stringify(params)).toString("base64url");
+  }
+  function _hrShareDecode(id: string): Record<string, unknown> | null {
+    try { return JSON.parse(Buffer.from(id, "base64url").toString("utf8")); }
+    catch { return null; }
+  }
+  // Derive the public base URL from forwarded proxy headers. Replit (and most
+  // PaaS proxies) terminate TLS and pass x-forwarded-proto/host. Always emit
+  // https:// so Twitter's crawler accepts the og:image URL.
+  function _hrShareBaseUrl(req: any): string {
+    const proto = String(req.get("x-forwarded-proto") || req.protocol).split(",")[0].trim();
+    const host  = req.get("x-forwarded-host") || req.get("host") || "localhost";
+    // Force HTTPS — Twitter requires it; the internal HTTP proxy hop is fine.
+    return `https://${host}`;
   }
 
-  // POST (or GET) /api/mlb/hr-radar/share-card — generate PNG, cache it, return shareId + tweet text
+  // GET /api/mlb/hr-radar/share-card — validate params, encode shareId, return tweet text.
+  // Does NOT generate the PNG here; the image endpoint generates on demand.
   app.get("/api/mlb/hr-radar/share-card", requireAuth, async (req, res) => {
     try {
-      _cleanShareCache();
       const q = req.query as Record<string, string>;
-      const playerName  = String(q.playerName  ?? "").trim().slice(0, 60);
-      const team        = String(q.team         ?? "").trim().slice(0, 40);
-      const stage       = String(q.stage        ?? "track").trim();
-      const score10     = q.score10     != null ? parseFloat(q.score10)     : null;
+      const playerName   = String(q.playerName  ?? "").trim().slice(0, 60);
+      const team         = String(q.team         ?? "").trim().slice(0, 40);
+      const stage        = String(q.stage        ?? "track").trim();
+      const score10      = q.score10      != null ? parseFloat(q.score10)      : null;
       const readinessPct = q.readinessPct != null ? parseFloat(q.readinessPct) : null;
-      const hrProbPct   = q.hrProbPct   != null ? parseFloat(q.hrProbPct)   : null;
-      const headline    = q.headline    ? String(q.headline).trim().slice(0, 120) : null;
+      const hrProbPct    = q.hrProbPct    != null ? parseFloat(q.hrProbPct)    : null;
+      const headline     = q.headline ? String(q.headline).trim().slice(0, 120) : null;
 
       if (!playerName) return res.status(400).json({ error: "playerName required" });
 
-      const { generateHrShareCardPng } = await import("./mlb/hrShareCard");
-      const buf = await generateHrShareCardPng({ playerName, team, stage, score10, readinessPct, hrProbPct, headline });
-
-      const shareId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-      _hrShareCache.set(shareId, { buf, expires: Date.now() + 2 * 60 * 60 * 1000 });
+      const shareId = _hrShareEncode({ playerName, team, stage, score10, readinessPct, hrProbPct, headline });
 
       const stageEmoji: Record<string, string> = { fire: "🔥", ready: "⚡", build: "📈", track: "👀" };
-      const emoji = stageEmoji[stage] ?? "🔥";
-      const scoreStr = score10 != null ? ` | Score: ${score10.toFixed(1)}/10` : "";
+      const emoji    = stageEmoji[stage] ?? "🔥";
+      const scoreStr = score10      != null ? ` | Score: ${score10.toFixed(1)}/10`      : "";
       const readStr  = readinessPct != null ? ` | Readiness: ${Math.round(readinessPct)}%` : "";
-      const probStr  = hrProbPct != null ? ` | HR Prob: ${Math.round(hrProbPct)}%` : "";
+      const probStr  = hrProbPct    != null ? ` | HR Prob: ${Math.round(hrProbPct)}%`    : "";
       const hdLine   = headline ? `\n"${headline.slice(0, 80)}"` : "";
       const tweetText = `${emoji} HR Radar: ${playerName} (${team})${scoreStr}${readStr}${probStr}${hdLine}\n\n#MLB #HRRadar #PropPulse`;
 
@@ -3788,22 +3795,45 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/mlb/hr-radar/card-image/:shareId — serve cached PNG
+  // GET /api/mlb/hr-radar/card-image/:shareId — decode params from shareId, render PNG on demand.
+  // No cache dependency; safe to hit by Twitter's crawler at any time.
   app.get("/api/mlb/hr-radar/card-image/:shareId", async (req, res) => {
-    const entry = _hrShareCache.get(req.params.shareId);
-    if (!entry || Date.now() > entry.expires) return res.status(404).send("expired");
-    res.set({ "Content-Type": "image/png", "Cache-Control": "public, max-age=7200" });
-    return res.send(entry.buf);
+    try {
+      const params = _hrShareDecode(req.params.shareId);
+      if (!params || !params.playerName) return res.status(400).send("invalid shareId");
+      const { generateHrShareCardPng } = await import("./mlb/hrShareCard");
+      const buf = await generateHrShareCardPng({
+        playerName:   String(params.playerName ?? ""),
+        team:         String(params.team ?? ""),
+        stage:        String(params.stage ?? "track"),
+        score10:      typeof params.score10 === "number" ? params.score10 : null,
+        readinessPct: typeof params.readinessPct === "number" ? params.readinessPct : null,
+        hrProbPct:    typeof params.hrProbPct === "number" ? params.hrProbPct : null,
+        headline:     typeof params.headline === "string" ? params.headline : null,
+      });
+      res.set({ "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" });
+      return res.send(buf);
+    } catch (e: any) {
+      console.error("[hr-radar/card-image]", e.message);
+      return res.status(500).send("render failed");
+    }
   });
 
-  // GET /share/hr/:shareId — OG meta page for Twitter card bot scraping
+  // GET /share/hr/:shareId — OG meta page for Twitter card bot scraping.
+  // Decodes player info from shareId for the description; image URL is self-contained.
   app.get("/share/hr/:shareId", (req, res) => {
     const { shareId } = req.params;
-    const entry = _hrShareCache.get(shareId);
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
-    const imgUrl  = `${baseUrl}/api/mlb/hr-radar/card-image/${shareId}`;
-    const title   = "LiveLocks HR Radar Alert";
-    const desc    = entry ? "HR Radar signal — real-time analysis by PropPulse." : "HR Radar card expired.";
+    const params  = _hrShareDecode(shareId);
+    const baseUrl = _hrShareBaseUrl(req);
+    const imgUrl  = `${baseUrl}/api/mlb/hr-radar/card-image/${encodeURIComponent(shareId)}`;
+    const title   = params?.playerName
+      ? `HR Radar: ${params.playerName} (${params.team ?? ""}) — LiveLocks`
+      : "LiveLocks HR Radar Alert";
+    const stageLabels: Record<string, string> = { fire: "Attack Now", ready: "Ready", build: "Building", track: "Tracking" };
+    const stageLbl = stageLabels[String(params?.stage ?? "")] ?? "HR Radar";
+    const desc    = params
+      ? `${stageLbl} signal for ${params.playerName} — real-time HR analysis by PropPulse.`
+      : "HR Radar signal — real-time analysis by PropPulse.";
     res.set("Content-Type", "text/html");
     return res.send(`<!DOCTYPE html>
 <html>
