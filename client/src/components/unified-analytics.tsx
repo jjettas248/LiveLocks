@@ -493,7 +493,7 @@ function DashboardSection() {
                     <tr key={p.id} className={`border-t border-border/50 ${i % 2 === 0 ? "bg-card" : "bg-card/50"}`} data-testid={`play-row-${p.id}`}>
                       <td className="px-3 py-1.5 text-muted-foreground whitespace-nowrap">{p.settledAt ? new Date(p.settledAt).toLocaleDateString() : new Date(p.createdAt).toLocaleDateString()}</td>
                       <td className="px-3 py-1.5 font-medium whitespace-nowrap">{p.player}{p.team && <span className="text-muted-foreground ml-1">({p.team})</span>}</td>
-                      <td className="px-3 py-1.5"><span className={`font-medium px-1.5 py-0.5 rounded text-[10px] ${p.sport === "nba" ? "bg-orange-500/20 text-orange-400" : p.sport === "mlb" ? "bg-blue-500/20 text-blue-400" : "bg-purple-500/20 text-purple-400"}`}>{p.sport?.toUpperCase()}</span></td>
+                      <td className="px-3 py-1.5"><span className={`font-medium px-1.5 py-0.5 rounded text-[10px] ${p.sport === "nba" ? "bg-sport-nba/20 text-sport-nba" : p.sport === "mlb" ? "bg-sport-mlb/20 text-sport-mlb" : "bg-sport-ncaab/20 text-sport-ncaab"}`}>{p.sport?.toUpperCase()}</span></td>
                       <td className="px-3 py-1.5 hidden sm:table-cell">{formatMarket(p.stat)}</td>
                       <td className="px-3 py-1.5 text-center"><span className={`font-bold ${p.direction === "O" ? "text-emerald-400" : "text-red-400"}`}>{p.direction === "O" ? <ArrowUp className="w-3 h-3 inline" /> : <ArrowDown className="w-3 h-3 inline" />}{p.direction}</span></td>
                       <td className="px-3 py-1.5 text-right font-mono">{p.line}</td>
