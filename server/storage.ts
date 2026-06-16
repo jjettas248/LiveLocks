@@ -3255,15 +3255,19 @@ export class DatabaseStorage implements IStorage {
       // Recall / lead-time measurement taps (read-only, never throw).
       try {
         if (decision.gradingStatus === "called_hit" && hrEnd != null) {
-          const sigMs = (decision.signalDetectedAt ?? alert.signalDetectedAt ?? alert.detectedAt)?.getTime?.();
-          if (typeof sigMs === "number" && Number.isFinite(sigMs)) {
-            emitCalledHitLeadTime({
-              signalId: `mlb:${params.gameId}:${params.playerId}:home_runs:OVER`,
-              gameId: params.gameId, playerId: params.playerId,
-              leadTimeMs: hrEnd - sigMs,
-              alertPath: alert.alertPath ?? null,
-            });
-          }
+          // Prefer the matched qualifying-event time (the true pre-HR signal
+          // moment) over the alert-row timestamp, which can drift to/after
+          // hrEnd. emitCalledHitLeadTime clamps a non-positive/inconsistent
+          // lead to null so the hit still counts toward recall but is excluded
+          // from the lead-time distribution.
+          const sigMs = (lastQualifyingEvent?.detectedAt ?? decision.signalDetectedAt ?? alert.signalDetectedAt ?? alert.detectedAt)?.getTime?.();
+          const lead = typeof sigMs === "number" && Number.isFinite(sigMs) ? hrEnd - sigMs : null;
+          emitCalledHitLeadTime({
+            signalId: `mlb:${params.gameId}:${params.playerId}:home_runs:OVER`,
+            gameId: params.gameId, playerId: params.playerId,
+            leadTimeMs: lead,
+            alertPath: alert.alertPath ?? null,
+          });
         } else if (decision.gradingStatus === "late_signal") {
           traceMissedHr({
             gameId: params.gameId, playerId: params.playerId,

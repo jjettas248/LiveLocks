@@ -166,10 +166,16 @@ export function emitCalledHitLeadTime(args: {
   signalId: string;
   gameId: string;
   playerId: string;
-  leadTimeMs: number;
+  // null when the called hit has no clean (positive, finite) lead time — the
+  // hit still counts toward recall but is excluded from the lead-time distribution.
+  leadTimeMs: number | null;
   alertPath?: string | null;
 }): void {
   try {
+    const cleanLead =
+      typeof args.leadTimeMs === "number" && Number.isFinite(args.leadTimeMs) && args.leadTimeMs > 0
+        ? args.leadTimeMs
+        : undefined;
     recordAnalyticsEvent({
       eventType: "hr_radar_called_hit_lead",
       signalId: args.signalId,
@@ -180,7 +186,7 @@ export function emitCalledHitLeadTime(args: {
       side: "OVER",
       signalTier: null,
       lifecycleState: null,
-      leadTimeMs: args.leadTimeMs,
+      leadTimeMs: cleanLead,
       reason: args.alertPath ?? undefined,
     });
   } catch (err: any) {
