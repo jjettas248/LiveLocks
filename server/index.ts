@@ -595,13 +595,23 @@ app.use((req, res, next) => {
     // Batch E — Analytics aggregators. Read-only periodic snapshots.
     try {
       const { startMlbIntelligenceAggregator } = await import("./analytics/mlbSignalIntelligence");
-      const { startHrRadarIntelligenceAggregator } = await import("./analytics/hrRadarIntelligence");
+      const { startHrRadarIntelligenceAggregator, computeCalibrationBuckets } = await import("./analytics/hrRadarIntelligence");
       const { startDriverIntelligenceAggregator } = await import("./analytics/driverIntelligence");
       const { startShadowAnalyticsAggregator } = await import("./analytics/shadowAnalytics");
       startMlbIntelligenceAggregator();
       startHrRadarIntelligenceAggregator();
       startDriverIntelligenceAggregator();
       startShadowAnalyticsAggregator();
+      // Empirical calibration update — runs every 30 minutes using settled outcome stamps.
+      setInterval(async () => {
+        try {
+          const { setEmpiricalCalibrationBuckets } = await import("./mlb/hrConversionModel");
+          const buckets = computeCalibrationBuckets();
+          if (buckets.length > 0) setEmpiricalCalibrationBuckets(buckets);
+        } catch (err: any) {
+          console.warn(`[LL_ANALYTICS_HR_RADAR] calibration cron failed err=${err?.message ?? err}`);
+        }
+      }, 30 * 60 * 1000);
     } catch (err: any) {
       console.warn(`[LL_ANALYTICS_AGGREGATE] aggregators failed to start err=${err?.message ?? err}`);
     }

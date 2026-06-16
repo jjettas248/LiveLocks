@@ -243,6 +243,8 @@ export interface PitcherContext {
   pitchMix: PitchMixEntry[];
   throws: "L" | "R" | null;
   seasonAvgVelocity?: number | null;
+  velocityDrop?: number | null;
+  avgFastballSpin?: number | null;
   // Gap 4: empirical handedness splits
   handednessSplits?: PitcherHandednessSplits | null;
 }

@@ -246,14 +246,34 @@ function computeHandednessERAMultiplier(input: HRConversionInput): number {
   const splits = input.pitcherHandednessSplits;
   const batterHand = input.batterHand;
   if (!splits || !batterHand) return 1.0;
+
   const matchupERA = batterHand === "L" ? splits.eraVsLHB : splits.eraVsRHB;
-  if (matchupERA == null) return 1.0;
-  if (matchupERA >= 6.0) return 1.08;
-  if (matchupERA >= 5.0) return 1.05;
-  if (matchupERA >= 4.5) return 1.02;
-  if (matchupERA <= 2.5) return 0.92;
-  if (matchupERA <= 3.2) return 0.96;
-  return 1.0;
+  let eraMultiplier = 1.0;
+  if (matchupERA != null) {
+    if (matchupERA >= 6.0) eraMultiplier = 1.08;
+    else if (matchupERA >= 5.0) eraMultiplier = 1.05;
+    else if (matchupERA >= 4.5) eraMultiplier = 1.02;
+    else if (matchupERA <= 2.5) eraMultiplier = 0.92;
+    else if (matchupERA <= 3.2) eraMultiplier = 0.96;
+  }
+
+  // Blend in HR/9 by batter handedness (40%) — more direct signal for the HR market.
+  // League avg HR/9 allowed is ~1.2.
+  const matchupHrPer9 = batterHand === "L" ? splits.hrPer9VsLHB : splits.hrPer9VsRHB;
+  let hrPer9Multiplier = 1.0;
+  if (matchupHrPer9 != null) {
+    if (matchupHrPer9 >= 2.0) hrPer9Multiplier = 1.10;
+    else if (matchupHrPer9 >= 1.5) hrPer9Multiplier = 1.05;
+    else if (matchupHrPer9 <= 0.6) hrPer9Multiplier = 0.88;
+    else if (matchupHrPer9 <= 0.9) hrPer9Multiplier = 0.94;
+  }
+
+  // 60% ERA-based, 40% HR/9-based when both are available; ERA-only otherwise.
+  const blended = matchupHrPer9 != null
+    ? 0.60 * eraMultiplier + 0.40 * hrPer9Multiplier
+    : eraMultiplier;
+
+  return Math.max(0.88, Math.min(1.12, blended));
 }
 
 // Gaps 7–9: structural HR power profile multiplier from Savant season stats.
@@ -263,7 +283,10 @@ function computePowerProfileMultiplier(input: HRConversionInput): number {
   const LEAGUE_AVG_HR_FB = 11;    // ~11% league avg
   const LEAGUE_AVG_FB_PCT = 35;   // ~35% fly ball rate
 
-  const hrFB = input.hrFBRatio;
+  // Improvement 5: park-normalize fly ball stats (~50% home game assumption).
+  const parkBias = 0.5 + 0.5 * (input.parkFactor ?? 1.0);
+
+  const hrFB = input.hrFBRatio != null ? input.hrFBRatio / parkBias : null;
   if (hrFB != null) {
     if (hrFB >= 18) mult *= 1.20;
     else if (hrFB >= 14) mult *= 1.12;
@@ -272,7 +295,7 @@ function computePowerProfileMultiplier(input: HRConversionInput): number {
     else if (hrFB <= LEAGUE_AVG_HR_FB) mult *= 0.96;
   }
 
-  const fbPct = input.flyBallPercent;
+  const fbPct = input.flyBallPercent != null ? input.flyBallPercent / Math.sqrt(parkBias) : null;
   if (fbPct != null) {
     if (fbPct >= 42) mult *= 1.12;
     else if (fbPct >= 38) mult *= 1.05;

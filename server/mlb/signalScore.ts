@@ -721,6 +721,16 @@ function computeHandednessSplitsScore(input: MLBPropInput): number {
       else if (matchupERA <= 2.5) score -= 18;
       else if (matchupERA <= 3.2) score -= 10;
     }
+    // HR/9 by batter handedness — more direct than ERA for the HR market.
+    // League avg HR/9 allowed is ~1.2; >= 2.0 is HR-vulnerable, <= 0.6 is elite suppressor.
+    const matchupHrPer9 = batterHand === "L" ? pitcherSplits.hrPer9VsLHB : pitcherSplits.hrPer9VsRHB;
+    if (matchupHrPer9 != null) {
+      if (matchupHrPer9 >= 2.5) score += 22;
+      else if (matchupHrPer9 >= 2.0) score += 14;
+      else if (matchupHrPer9 >= 1.5) score += 7;
+      else if (matchupHrPer9 <= 0.6) score -= 15;
+      else if (matchupHrPer9 <= 0.9) score -= 8;
+    }
   }
 
   if (batterSplits && pitcherThrows) {
@@ -748,7 +758,12 @@ function computePowerProfileScore(input: MLBPropInput): number {
   let score = 50;
   const cq = input.contactQuality;
 
-  const hrFB = cq.hrFBRatio;
+  // Improvement 5: de-bias fly ball stats by park factor (~50% home games assumption).
+  // Coors hitters inflate HR/FB and FB% vs. Oracle/Petco hitters at equal true power.
+  const rawParkFactor = (input.weatherPark as any)?.parkFactor ?? 1.0;
+  const parkBias = 0.5 + 0.5 * rawParkFactor;
+
+  const hrFB = cq.hrFBRatio != null ? cq.hrFBRatio / parkBias : null;
   if (hrFB != null) {
     if (hrFB >= 18) score += 22;
     else if (hrFB >= 14) score += 14;
@@ -757,7 +772,7 @@ function computePowerProfileScore(input: MLBPropInput): number {
     else if (hrFB <= 11) score -= 4;
   }
 
-  const fbPct = cq.flyBallPercent;
+  const fbPct = cq.flyBallPercent != null ? cq.flyBallPercent / Math.sqrt(parkBias) : null;
   if (fbPct != null) {
     if (fbPct >= 42) score += 12;
     else if (fbPct >= 38) score += 6;
@@ -784,6 +799,15 @@ function computePowerProfileScore(input: MLBPropInput): number {
     if (ss >= 38) score += 8;
     else if (ss >= 32) score += 4;
     else if (ss <= 22) score -= 6;
+  }
+
+  // Improvement 6: swing efficiency — compact swings keep barrel in zone longer
+  const batSpeed = cq.avgBatSpeed;
+  const swingLen = cq.avgSwingLength;
+  if (batSpeed != null && swingLen != null && swingLen > 0) {
+    const eff = batSpeed / swingLen;
+    if (eff >= 10.5) score += 8;
+    else if (eff < 8.5) score -= 5;
   }
 
   return clamp(score, 0, 100);
@@ -860,6 +884,30 @@ export function scoreHRRadar(
   else if (input.pitcher.era != null && input.pitcher.era >= 4.0) pitcherVuln = clamp(pitcherVuln + 6, 0, 100);
   if (input.pitcher.isPitcherCollapsing) pitcherVuln = clamp(pitcherVuln + 15, 0, 100);
   if (input.pitcher.timesThrough >= 3) pitcherVuln = clamp(pitcherVuln + 10, 0, 100);
+
+  // Improvement 3: fastball spin rate — low spin = flat FB batters barrel easily
+  const spin = input.pitcher.avgFastballSpin;
+  if (spin != null) {
+    if (spin < 2100) pitcherVuln = clamp(pitcherVuln + 12, 0, 100);
+    else if (spin < 2200) pitcherVuln = clamp(pitcherVuln + 6, 0, 100);
+    else if (spin > 2450) pitcherVuln = clamp(pitcherVuln - 8, 0, 100);
+  }
+
+  // Improvement 1: velocity fade — raw drop is more granular than the binary collapse flag
+  const veloDrop = input.pitcher.velocityDrop;
+  if (veloDrop != null && veloDrop > 0) {
+    if (veloDrop >= 3.5) pitcherVuln = clamp(pitcherVuln + 18, 0, 100);
+    else if (veloDrop >= 2.5) pitcherVuln = clamp(pitcherVuln + 10, 0, 100);
+    else if (veloDrop >= 1.5) pitcherVuln = clamp(pitcherVuln + 5, 0, 100);
+  }
+
+  // Improvement 4: bullpen quality — only relevant once starter is approaching exit
+  if (input.pitcher.pitchCount >= 70 || input.pitcher.timesThrough >= 2) {
+    const bp = input.bullpen;
+    if (bp.bullpenEra != null && bp.bullpenEra >= 4.5) pitcherVuln = clamp(pitcherVuln + 8, 0, 100);
+    if (bp.bullpenUsageLastThreeDays != null && bp.bullpenUsageLastThreeDays >= 80) pitcherVuln = clamp(pitcherVuln + 6, 0, 100);
+    if (!bp.isTopRelieverAvailable) pitcherVuln = clamp(pitcherVuln + 4, 0, 100);
+  }
 
   const parkWeather = computeParkWeatherComponent(input);
   const opportunity = computeOpportunityComponent(input);

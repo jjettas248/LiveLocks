@@ -547,7 +547,7 @@ export default function Dashboard() {
 
   const [activeTab, setActiveTab] = useState<"calculator" | "ncaab" | "analytics" | "mlb">("calculator");
   const [nbaSubTab, setNbaSubTab] = useState<"live" | "halftime">("live");
-  const [mlbSubTab, setMlbSubTab] = useState<"games" | "live_feed" | "hr_radar">("live_feed");
+  const [mlbSubTab, setMlbSubTab] = useState<"live_feed" | "hr_radar">("live_feed");
   const [expandToGameId, setExpandToGameId] = useState<string | null>(null);
   const [showWelcomeBanner, setShowWelcomeBanner] = useState(false);
   const [showSportPicker, setShowSportPicker] = useState(false);
@@ -2617,7 +2617,6 @@ export default function Dashboard() {
               {([
                 { key: "hr_radar", label: "HR Radar" },
                 { key: "live_feed", label: "Action Feed" },
-                { key: "games", label: "Games" },
               ] as const).map(tab => (
                 <button
                   key={tab.key}
