@@ -43,6 +43,11 @@ export interface HrRadarIntelligenceSnapshot {
   falseFireRate: number | null; // FIRE → MISSED / total FIRE outcomes
   readyEffectiveness: number | null; // READY → FIRE / total READY outcomes
   buildMaturation: number | null; // BUILD → READY+ / total BUILD outcomes
+  // Recall / lead-time (from miss-tracer + called-hit lead events).
+  recall: number | null; // calledHits / (calledHits + uncalledHr + lateSignal)
+  missBreakdown: Record<string, number>; // counts per derived blockedGate
+  missedWithStrongContact: number; // misses where engine had barrel/high-xBA evidence
+  leadTimeMs: { p50: number | null; p90: number | null }; // lead before HR on called hits
   sampleSizeWarning: string | null;
 }
 
@@ -80,6 +85,16 @@ export function computeHrRadarIntelligence(opts?: {
   const misses = getAnalyticsEvents({
     sport: "mlb",
     eventType: "hr_radar_missed",
+    sinceMs: since,
+  });
+  const missTraces = getAnalyticsEvents({
+    sport: "mlb",
+    eventType: "hr_radar_miss_trace",
+    sinceMs: since,
+  });
+  const leadEvents = getAnalyticsEvents({
+    sport: "mlb",
+    eventType: "hr_radar_called_hit_lead",
     sinceMs: since,
   });
 
@@ -209,6 +224,35 @@ export function computeHrRadarIntelligence(opts?: {
     }
   }
 
+  // ── Recall / lead-time from the miss-tracer + called-hit lead events ──────
+  // Miss traces carry a derived `blockedGate` (in `outcome` we stored the
+  // grading status; `blockedGate` + `strongContact` are first-class fields).
+  const missBreakdown: Record<string, number> = {};
+  let uncalledOrLate = 0;
+  let missedWithStrongContact = 0;
+  for (const m of missTraces) {
+    const gate = m.blockedGate ?? "unknown";
+    missBreakdown[gate] = (missBreakdown[gate] ?? 0) + 1;
+    // `early_hr_no_window` is excluded from recall (no realistic pre-call window),
+    // matching the coverage exclusion in storage.ts.
+    if (m.outcome !== "early_hr_no_window") uncalledOrLate += 1;
+    if (m.strongContact) missedWithStrongContact += 1;
+  }
+  const calledHits = leadEvents.length;
+  const recallDenom = calledHits + uncalledOrLate;
+  const recall = recallDenom > 0 ? calledHits / recallDenom : null;
+
+  const leadTimes = leadEvents
+    .map((e) => e.leadTimeMs)
+    .filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0)
+    .sort((a, b) => a - b);
+  function pct(arr: number[], p: number): number | null {
+    if (arr.length === 0) return null;
+    const idx = Math.min(arr.length - 1, Math.floor((p / 100) * arr.length));
+    return arr[idx];
+  }
+  const leadTimeMs = { p50: pct(leadTimes, 50), p90: pct(leadTimes, 90) };
+
   const sampleSize = traces.size;
   const sampleSizeWarning =
     sampleSize < 25
@@ -239,6 +283,10 @@ export function computeHrRadarIntelligence(opts?: {
     falseFireRate: fireOutcomes > 0 ? falseFire / fireOutcomes : null,
     readyEffectiveness: readyOutcomes > 0 ? readyAdvanced / readyOutcomes : null,
     buildMaturation: buildOutcomes > 0 ? buildAdvanced / buildOutcomes : null,
+    recall,
+    missBreakdown,
+    missedWithStrongContact,
+    leadTimeMs,
     sampleSizeWarning,
   };
 }
@@ -253,7 +301,9 @@ export function startHrRadarIntelligenceAggregator(intervalMs: number = 5 * 60 *
         `[LL_ANALYTICS_HR_RADAR] transitions=${snap.totals.transitionsObserved} ` +
           `cashed=${snap.totals.cashedObserved} missed=${snap.totals.missedObserved} ` +
           `fireToCashed=${snap.conversion.fireToCashed ?? "n/a"} ` +
-          `falseFireRate=${snap.falseFireRate ?? "n/a"}`,
+          `falseFireRate=${snap.falseFireRate ?? "n/a"} ` +
+          `recall=${snap.recall ?? "n/a"} ` +
+          `missStrongContact=${snap.missedWithStrongContact}`,
       );
     } catch (err: any) {
       console.warn(`[LL_ANALYTICS_HR_RADAR] snapshot failed err=${err?.message ?? err}`);
@@ -296,7 +346,13 @@ export function computeCalibrationBuckets(): HrCalibrationBucket[] {
         return p >= min && p < max;
       });
       const cashed = inBin.filter(s => s.outcomeStatus.startsWith("called_hit")).length;
-      if (inBin.length >= 30) {
+      // Per-bin minimum: dense low bins need n>=30, but high-prob HR events are
+      // rare, so the sparse top bins (min>=0.20) would never reach 30 and the
+      // static table's aggressive >=0.40->0.38 compression would dominate
+      // forever. Require only n>=20 there so genuine elite probability can be
+      // learned empirically instead of being permanently discarded.
+      const minSamples = min >= 0.20 ? 20 : 30;
+      if (inBin.length >= minSamples) {
         buckets.push({ min, max, calibrated: cashed / inBin.length, samples: inBin.length });
       }
     }

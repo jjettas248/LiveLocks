@@ -129,6 +129,65 @@ export function emitShadowEvent(args: {
   }
 }
 
+// ── HR Radar miss tracing / lead-time (recall measurement) ─────────────
+export function emitHrRadarMissTrace(args: {
+  signalId: string;
+  gameId: string;
+  playerId: string;
+  gradingStatus: string;
+  blockedGate: string;
+  strongContact: boolean;
+  drivers?: string[];
+  probability?: number | null;
+}): void {
+  try {
+    recordAnalyticsEvent({
+      eventType: "hr_radar_miss_trace",
+      signalId: args.signalId,
+      sport: "mlb",
+      gameId: args.gameId,
+      playerId: args.playerId,
+      market: "home_runs",
+      side: "OVER",
+      signalTier: null,
+      lifecycleState: null,
+      outcome: args.gradingStatus,
+      blockedGate: args.blockedGate,
+      strongContact: args.strongContact,
+      drivers: args.drivers,
+      probability: args.probability ?? null,
+    });
+  } catch (err: any) {
+    console.warn(`[LL_ANALYTICS_EVENT] hr_radar_miss_trace emit failed err=${err?.message ?? err}`);
+  }
+}
+
+export function emitCalledHitLeadTime(args: {
+  signalId: string;
+  gameId: string;
+  playerId: string;
+  leadTimeMs: number;
+  alertPath?: string | null;
+}): void {
+  try {
+    recordAnalyticsEvent({
+      eventType: "hr_radar_called_hit_lead",
+      signalId: args.signalId,
+      sport: "mlb",
+      gameId: args.gameId,
+      playerId: args.playerId,
+      market: "home_runs",
+      side: "OVER",
+      signalTier: null,
+      lifecycleState: null,
+      leadTimeMs: args.leadTimeMs,
+      reason: args.alertPath ?? undefined,
+    });
+  } catch (err: any) {
+    console.warn(`[LL_ANALYTICS_EVENT] hr_radar_called_hit_lead emit failed err=${err?.message ?? err}`);
+  }
+}
+
 // ── HR Radar stage transitions ────────────────────────────────────────
 export function emitHrRadarTransition(args: {
   signalId: string;

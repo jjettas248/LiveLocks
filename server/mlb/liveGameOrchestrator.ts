@@ -1947,6 +1947,10 @@ export class LiveGameOrchestrator {
         // Phase 2 STEP 5 — propagate Statcast barrel flag from dataPullService
         // so the BARREL_OVERRIDE detection path can fire (Ben Rice repair).
         isBarrel: ab?.isBarrel === true,
+        // "Almost HR" outcome inputs — deep flyout / power double-triple /
+        // high-xBA hard out are strong pre-HR evidence (composition only).
+        outcome: ab?.outcome ?? null,
+        hitType: ab?.hitType ?? null,
       })),
       5,
     );
