@@ -3,6 +3,7 @@ import { useTopPlays, type UnifiedTopPlay } from "@/hooks/useTopPlays";
 import { useLiveSignalCounts } from "@/hooks/useLiveSignalCounts";
 import { SportSignalCard } from "@/components/signals/SportSignalCard";
 import { SignalSkeletonCard } from "@/components/signals/SignalSkeletonCard";
+import { QueryErrorState } from "@/components/common/QueryErrorState";
 import { Zap, X, ChevronUp, Lock, Sparkles, Trophy } from "lucide-react";
 
 type TopPlaysPanelProps = {
@@ -58,7 +59,7 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip, onViewD
       </button>
     );
   };
-  const { data, isLoading } = useTopPlays();
+  const { data, isLoading, isError, isFetching, refetch } = useTopPlays();
   const allPlays = data?.plays ?? [];
   // Group same-player same-game plays (presentation only). Cap at 6 groups
   // so we still show ~6 distinct opportunities while collapsing duplicates.
@@ -117,7 +118,7 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip, onViewD
               {hasPlays ? "Live Signals" : "Signal Feed"}
             </span>
             <span className="block text-[10px] text-muted-foreground/70">
-              {isLoading ? "Scanning..." : hasPlays ? `${plays.length} signal${plays.length !== 1 ? "s" : ""} across all sports` : "Monitoring opportunities"}
+              {isError && !hasPlays ? "Couldn't load — tap to retry" : isLoading ? "Scanning..." : hasPlays ? `${plays.length} signal${plays.length !== 1 ? "s" : ""} across all sports` : "Monitoring opportunities"}
             </span>
           </div>
         </div>
@@ -144,7 +145,15 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip, onViewD
             </div>
           )}
 
-          {!isLoading && plays.length === 0 && (
+          {!isLoading && isError && plays.length === 0 && (
+            <QueryErrorState
+              message="Couldn't load live signals."
+              onRetry={() => refetch()}
+              isRetrying={isFetching}
+            />
+          )}
+
+          {!isLoading && !isError && plays.length === 0 && (
             <div className="rounded-xl border border-border/40 bg-card p-6 text-center">
               <div className="flex items-center justify-center gap-2 text-sm text-blue-400">
                 <span className="relative flex h-2 w-2">
