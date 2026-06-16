@@ -30,18 +30,28 @@ Revert these files to their state at the locked baseline:
 
 - `server/mlb/probabilityEngine.ts` (Phase 1 + Phase 3B wrappers)
 - `server/mlb/markets.ts` (qualification + plumbing)
-- `server/mlb/signalScore.ts` (Phase 2 tier mapping + scoring)
+- `server/mlb/signalScore.ts` (Phase 2 tier mapping + scoring; pitch mix, HR timing, fatigue components)
 - `server/mlb/normalizeSignal.ts` (Display Contract)
 - `server/mlb/liveGameOrchestrator.ts` (HR Watch bump + drift snapshot)
 - `server/mlb/hrAlertEngine.ts` (HR Radar lifecycle)
+- `server/mlb/hrConversionModel.ts` (pitch-mix × handedness + pitcher entry fatigue multiplier)
+- `server/mlb/hrRadarStateMachine.ts` (canonical state machine)
+- `server/mlb/hrRadarCanonicalStore.ts` (in-memory lifecycle persistence)
+- `server/mlb/nearHrContact.ts` (near-HR contact detector)
+- `server/mlb/nonHrSignalState.ts` (non-HR signal state engine)
 - `server/mlb/selfLearning.ts` (sample-size tiers)
 
 ### 4. Verify parity
 Run the locked validation gates:
 ```
 npx tsc --noEmit
-npx tsx server/mlb/phase3bRegression.test.ts   # must report 21/21
-node server/validation/nba/run.ts              # NBA must remain green
+npx tsx server/mlb/phase3bRegression.test.ts      # must report 21/21
+npx tsx server/mlb/shadowOutcomeWiring.test.ts    # must report 41/41
+npx tsx server/mlb/hrRadarLifecycleRepair.test.ts # must report 34/34
+npx tsx server/mlb/hrRadarStateMachine.test.ts    # must report 5/5
+npx tsx server/mlb/hrRadarReadyToFire.test.ts     # must report 5/5
+npx tsx server/mlb/nearHrContact.test.ts          # must report 2/2
+node server/validation/nba/run.ts                 # NBA must remain green
 ```
 
 ### 5. Verify on a live slate

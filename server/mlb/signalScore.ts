@@ -542,23 +542,28 @@ export function scoreBatterOverSignal(
   const proj = computeProjectionComponent(output.projection, output.bookLine, output.market, output.recommendedSide);
 
   const isHRMarket = output.market === "home_runs";
-  const pitchMixMatchup = isHRMarket ? computePitchMixMatchupScore(input) : 50;   // Gap 1
-  const hrTiming = isHRMarket ? computeHrTimingComponent(input) : 50;             // Gap 2
-  const entryFatigue = isHRMarket ? computePitcherEntryFatigueScore(input) : 50;  // Gap 3
+  const pitchMixMatchup = isHRMarket ? computePitchMixMatchupScore(input) : 50;       // Gap 1
+  const hrTiming = isHRMarket ? computeHrTimingComponent(input) : 50;                 // Gap 2
+  const entryFatigue = isHRMarket ? computePitcherEntryFatigueScore(input) : 50;      // Gap 3
+  const handednessSplits = isHRMarket ? computeHandednessSplitsScore(input) : 50;     // Gaps 4 & 5
+  const lineupSlotHR = isHRMarket ? computeLineupSlotHRScore(input) : 50;             // Gap 6
+  const powerProfile = isHRMarket ? computePowerProfileScore(input) : 50;             // Gaps 7–9
 
   const baseTotal = isHRMarket
     ? Math.round(
-        0.13 * form +
-        0.15 * matchup +
-        0.08 * parkWeather +
-        0.20 * lei +
-        0.08 * opportunity +
-        0.10 * eventBoost +
-        0.10 * pitchMixMatchup +
-        0.08 * hrTiming +
-        0.05 * entryFatigue +
-        0.02 * prob +
-        0.01 * proj
+        0.10 * form +
+        0.12 * matchup +
+        0.06 * parkWeather +
+        0.15 * lei +
+        0.06 * opportunity +
+        0.07 * eventBoost +
+        0.09 * pitchMixMatchup +
+        0.06 * hrTiming +
+        0.04 * entryFatigue +
+        0.07 * handednessSplits +
+        0.10 * powerProfile +
+        0.06 * lineupSlotHR +
+        0.02 * prob
       )
     : Math.round(
         0.15 * form +
@@ -698,6 +703,125 @@ function computePitchMixMatchupScore(input: MLBPropInput): number {
   return clamp(score, 0, 100);
 }
 
+// Gap 4 & 5: handedness splits score — uses empirical pitcher ERA vs batter hand
+// and batter HR rate vs pitcher hand to assess the quality of this matchup.
+function computeHandednessSplitsScore(input: MLBPropInput): number {
+  let score = 50;
+  const pitcherSplits = input.pitcherHandednessSplits;
+  const batterSplits = input.batterHandednessSplits;
+  const pitcherThrows = input.pitcher?.throws ?? null;
+  const batterHand = input.batterHand;
+
+  if (pitcherSplits && batterHand) {
+    const matchupERA = batterHand === "L" ? pitcherSplits.eraVsLHB : pitcherSplits.eraVsRHB;
+    if (matchupERA != null) {
+      if (matchupERA >= 6.0) score += 20;
+      else if (matchupERA >= 5.0) score += 13;
+      else if (matchupERA >= 4.5) score += 7;
+      else if (matchupERA <= 2.5) score -= 18;
+      else if (matchupERA <= 3.2) score -= 10;
+    }
+    // HR/9 by batter handedness — more direct than ERA for the HR market.
+    // League avg HR/9 allowed is ~1.2; >= 2.0 is HR-vulnerable, <= 0.6 is elite suppressor.
+    const matchupHrPer9 = batterHand === "L" ? pitcherSplits.hrPer9VsLHB : pitcherSplits.hrPer9VsRHB;
+    if (matchupHrPer9 != null) {
+      if (matchupHrPer9 >= 2.5) score += 22;
+      else if (matchupHrPer9 >= 2.0) score += 14;
+      else if (matchupHrPer9 >= 1.5) score += 7;
+      else if (matchupHrPer9 <= 0.6) score -= 15;
+      else if (matchupHrPer9 <= 0.9) score -= 8;
+    }
+  }
+
+  if (batterSplits && pitcherThrows) {
+    const hrRate = pitcherThrows === "L" ? batterSplits.hrRateVsLHP : batterSplits.hrRateVsRHP;
+    const ops = pitcherThrows === "L" ? batterSplits.opsVsLHP : batterSplits.opsVsRHP;
+    if (hrRate != null) {
+      if (hrRate >= 0.055) score += 18;
+      else if (hrRate >= 0.040) score += 10;
+      else if (hrRate >= 0.030) score += 5;
+      else if (hrRate <= 0.015) score -= 12;
+    }
+    if (ops != null) {
+      if (ops >= 0.900) score += 8;
+      else if (ops <= 0.650) score -= 8;
+    }
+  }
+
+  return clamp(score, 0, 100);
+}
+
+// Gaps 7–9: power profile score from Savant season stats.
+// flyBallPercent, hrFBRatio, xISO, xwOBA — structural HR tendency independent
+// of today's in-game contact.
+function computePowerProfileScore(input: MLBPropInput): number {
+  let score = 50;
+  const cq = input.contactQuality;
+
+  // Improvement 5: de-bias fly ball stats by park factor (~50% home games assumption).
+  // Coors hitters inflate HR/FB and FB% vs. Oracle/Petco hitters at equal true power.
+  const rawParkFactor = (input.weatherPark as any)?.parkFactor ?? 1.0;
+  const parkBias = 0.5 + 0.5 * rawParkFactor;
+
+  const hrFB = cq.hrFBRatio != null ? cq.hrFBRatio / parkBias : null;
+  if (hrFB != null) {
+    if (hrFB >= 18) score += 22;
+    else if (hrFB >= 14) score += 14;
+    else if (hrFB >= 11) score += 6;
+    else if (hrFB <= 8) score -= 12;
+    else if (hrFB <= 11) score -= 4;
+  }
+
+  const fbPct = cq.flyBallPercent != null ? cq.flyBallPercent / Math.sqrt(parkBias) : null;
+  if (fbPct != null) {
+    if (fbPct >= 42) score += 12;
+    else if (fbPct >= 38) score += 6;
+    else if (fbPct <= 28) score -= 10;
+  }
+
+  const xISO = cq.xISOSeason;
+  if (xISO != null) {
+    if (xISO >= 0.220) score += 16;
+    else if (xISO >= 0.180) score += 10;
+    else if (xISO >= 0.140) score += 4;
+    else if (xISO <= 0.100) score -= 10;
+  }
+
+  const xwoba = cq.xwOBASeason;
+  if (xwoba != null) {
+    if (xwoba >= 0.380) score += 10;
+    else if (xwoba >= 0.340) score += 4;
+    else if (xwoba <= 0.280) score -= 8;
+  }
+
+  const ss = cq.sweetSpotPercent;
+  if (ss != null) {
+    if (ss >= 38) score += 8;
+    else if (ss >= 32) score += 4;
+    else if (ss <= 22) score -= 6;
+  }
+
+  // Improvement 6: swing efficiency — compact swings keep barrel in zone longer
+  const batSpeed = cq.avgBatSpeed;
+  const swingLen = cq.avgSwingLength;
+  if (batSpeed != null && swingLen != null && swingLen > 0) {
+    const eff = batSpeed / swingLen;
+    if (eff >= 10.5) score += 8;
+    else if (eff < 8.5) score -= 5;
+  }
+
+  return clamp(score, 0, 100);
+}
+
+// Gap 6: HR-specific lineup slot score.
+function computeLineupSlotHRScore(input: MLBPropInput): number {
+  const slot = input.lineup.battingOrderSlot;
+  if (slot >= 3 && slot <= 5) return 70;
+  if (slot === 2 || slot === 6) return 58;
+  if (slot === 1) return 45;
+  return 35;
+}
+
 // Gap 3: pre-game pitcher entry fatigue score for signal scoring layer.
 function computePitcherEntryFatigueScore(input: MLBPropInput): number {
   const ef = input.pitcherEntryFatigue;
@@ -761,21 +885,51 @@ export function scoreHRRadar(
   if (input.pitcher.isPitcherCollapsing) pitcherVuln = clamp(pitcherVuln + 15, 0, 100);
   if (input.pitcher.timesThrough >= 3) pitcherVuln = clamp(pitcherVuln + 10, 0, 100);
 
+  // Improvement 3: fastball spin rate — low spin = flat FB batters barrel easily
+  const spin = input.pitcher.avgFastballSpin;
+  if (spin != null) {
+    if (spin < 2100) pitcherVuln = clamp(pitcherVuln + 12, 0, 100);
+    else if (spin < 2200) pitcherVuln = clamp(pitcherVuln + 6, 0, 100);
+    else if (spin > 2450) pitcherVuln = clamp(pitcherVuln - 8, 0, 100);
+  }
+
+  // Improvement 1: velocity fade — raw drop is more granular than the binary collapse flag
+  const veloDrop = input.pitcher.velocityDrop;
+  if (veloDrop != null && veloDrop > 0) {
+    if (veloDrop >= 3.5) pitcherVuln = clamp(pitcherVuln + 18, 0, 100);
+    else if (veloDrop >= 2.5) pitcherVuln = clamp(pitcherVuln + 10, 0, 100);
+    else if (veloDrop >= 1.5) pitcherVuln = clamp(pitcherVuln + 5, 0, 100);
+  }
+
+  // Improvement 4: bullpen quality — only relevant once starter is approaching exit
+  if (input.pitcher.pitchCount >= 70 || input.pitcher.timesThrough >= 2) {
+    const bp = input.bullpen;
+    if (bp.bullpenEra != null && bp.bullpenEra >= 4.5) pitcherVuln = clamp(pitcherVuln + 8, 0, 100);
+    if (bp.bullpenUsageLastThreeDays != null && bp.bullpenUsageLastThreeDays >= 80) pitcherVuln = clamp(pitcherVuln + 6, 0, 100);
+    if (!bp.isTopRelieverAvailable) pitcherVuln = clamp(pitcherVuln + 4, 0, 100);
+  }
+
   const parkWeather = computeParkWeatherComponent(input);
   const opportunity = computeOpportunityComponent(input);
-  const pitchMixMatchup = computePitchMixMatchupScore(input);        // Gap 1
-  const hrTiming = computeHrTimingComponent(input);                  // Gap 2
-  const entryFatigue = computePitcherEntryFatigueScore(input);       // Gap 3
+  const pitchMixMatchup = computePitchMixMatchupScore(input);            // Gap 1
+  const hrTiming = computeHrTimingComponent(input);                      // Gap 2
+  const entryFatigue = computePitcherEntryFatigueScore(input);           // Gap 3
+  const handednessSplits = computeHandednessSplitsScore(input);          // Gaps 4 & 5
+  const powerProfile = computePowerProfileScore(input);                   // Gaps 7–9
+  const lineupSlotHR = computeLineupSlotHRScore(input);                  // Gap 6
 
   const baseTotal = Math.round(
-    0.22 * nearHrScore +
-    0.20 * contactScore +
-    0.15 * pitcherVuln +
-    0.12 * pitchMixMatchup +
-    0.10 * hrTiming +
-    0.08 * entryFatigue +
-    0.08 * parkWeather +
-    0.05 * opportunity
+    0.19 * nearHrScore +
+    0.17 * contactScore +
+    0.12 * pitcherVuln +
+    0.10 * pitchMixMatchup +
+    0.08 * hrTiming +
+    0.07 * entryFatigue +
+    0.06 * handednessSplits +
+    0.08 * powerProfile +
+    0.07 * parkWeather +
+    0.03 * lineupSlotHR +
+    0.03 * opportunity
   );
 
   const total = clamp(baseTotal, 0, 100);

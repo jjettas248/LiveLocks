@@ -29,6 +29,8 @@ import {
   mlbPlayerCache,
   type GameStateCache,
   type HRPlayMeta,
+  fetchPitcherHandednessSplits,
+  fetchBatterHandednessSplits,
 } from "./dataPullService";
 import { estimateRemainingPA, estimatePitcherRemainingBF } from "./paEstimator";
 import { getMarketParkFactor, isVenueIndoors } from "./dataSources";
@@ -534,6 +536,7 @@ function gradeSingleHRPlay(
       confidenceTier: null,
       signalState,
       source,
+      rawConversionProbability: snap?.peakConversionProbability ?? null,
     });
   } catch (err) {
     console.warn(`[HR_RADAR_CASHED] stamp failed gameId=${gameId} playerId=${playerId} err=${(err as Error).message}`);
@@ -2862,6 +2865,14 @@ export class LiveGameOrchestrator {
       const resolvedBatterHand: "L" | "R" | "S" | null = rosterLookup?.bats ?? null;
       const rollingStats = mlbPlayerCache.batterRollingStats[batter.playerId];
 
+      // Gaps 4 & 5: fetch empirical handedness splits in parallel (24h cached)
+      const [pitcherSplits, batterSplits] = await Promise.allSettled([
+        pitcher?.playerId ? fetchPitcherHandednessSplits(pitcher.playerId) : Promise.resolve(null),
+        fetchBatterHandednessSplits(batter.playerId),
+      ]);
+      const resolvedPitcherSplits = pitcherSplits.status === "fulfilled" ? pitcherSplits.value : null;
+      const resolvedBatterSplits = batterSplits.status === "fulfilled" ? batterSplits.value : null;
+
       const { remainingPA } = estimateRemainingPA(
         state.inning,
         state.isTopInning,
@@ -2906,6 +2917,11 @@ export class LiveGameOrchestrator {
           learnedHitLikelihood: null,
           learnedHrLikelihood: null,
           pitchTypeHrRisk: null,
+          flyBallPercent: playerContact.flyBallPercent ?? null,
+          hrFBRatio: playerContact.hrFBRatio ?? null,
+          xwOBASeason: playerContact.xwOBASeason ?? null,
+          xISOSeason: playerContact.xISOSeason ?? null,
+          sweetSpotPercent: playerContact.sweetSpotPercent ?? null,
         },
         pitcher: {
           pitchCount: pitcher ? state.pitchCount : 0,
@@ -2919,6 +2935,8 @@ export class LiveGameOrchestrator {
           pitchMix: pitcherCtx?.pitchMix ?? [],
           throws: pitcher?.throws ?? null,
           seasonAvgVelocity: pitcherCtx?.seasonAvgVelocity ?? null,
+          velocityDrop: pitcherCtx?.velocityDrop ?? null,
+          avgFastballSpin: pitcherCtx?.avgFastballSpin ?? null,
         },
         ...(rollingStats ? {
           hrTrend: {
@@ -2968,6 +2986,10 @@ export class LiveGameOrchestrator {
           last3StartERA: pitcherCtx.last3StartERA ?? null,
         };
       }
+
+      // Gaps 4 & 5: wire handedness splits into the signal input
+      if (resolvedPitcherSplits) hrInput.pitcherHandednessSplits = resolvedPitcherSplits;
+      if (resolvedBatterSplits) hrInput.batterHandednessSplits = resolvedBatterSplits;
 
       hrInput.liveInterpretation = buildLiveEventInterpretation(hrInput);
 
@@ -3066,6 +3088,13 @@ export class LiveGameOrchestrator {
         lastStartPitchCount: pitcherCtx?.lastStartPitchCount ?? null,
         daysSinceLastStart: pitcherCtx?.daysSinceLastStart ?? null,
         last3StartERA: pitcherCtx?.last3StartERA ?? null,
+        pitcherHandednessSplits: resolvedPitcherSplits ?? null,
+        batterHandednessSplits: resolvedBatterSplits ?? null,
+        flyBallPercent: playerContact.flyBallPercent ?? null,
+        hrFBRatio: playerContact.hrFBRatio ?? null,
+        xwOBA: playerContact.xwOBASeason ?? null,
+        xISO: playerContact.xISOSeason ?? null,
+        sweetSpotPercent: playerContact.sweetSpotPercent ?? null,
       };
 
       const alertResult = evaluateHRAlert(alertInput);
@@ -3500,6 +3529,11 @@ export class LiveGameOrchestrator {
               learnedHitLikelihood: learnedScores?.hitLikelihood ?? null,
               learnedHrLikelihood: learnedScores?.hrLikelihood ?? null,
               pitchTypeHrRisk: pitchHrRisk,
+              flyBallPercent: playerContact?.flyBallPercent ?? null,
+              hrFBRatio: playerContact?.hrFBRatio ?? null,
+              xwOBASeason: playerContact?.xwOBASeason ?? null,
+              xISOSeason: playerContact?.xISOSeason ?? null,
+              sweetSpotPercent: playerContact?.sweetSpotPercent ?? null,
             };
           })(),
           pitcher: {
@@ -3514,6 +3548,8 @@ export class LiveGameOrchestrator {
             pitchMix: pitcherCtx?.pitchMix ?? [],
             throws: pitcher?.throws ?? null,
             seasonAvgVelocity: pitcherCtx?.seasonAvgVelocity ?? null,
+            velocityDrop: pitcherCtx?.velocityDrop ?? null,
+            avgFastballSpin: pitcherCtx?.avgFastballSpin ?? null,
           },
           ...(market === "hrr" && boxScorePlayer ? {
             hrrComponents: {
@@ -3589,6 +3625,14 @@ export class LiveGameOrchestrator {
               last3StartERA: pitcherCtx.last3StartERA ?? null,
             };
           }
+          // Gaps 4 & 5: handedness splits for HR markets (fire-and-forget; 24h cached)
+          Promise.allSettled([
+            pitcher?.playerId ? fetchPitcherHandednessSplits(pitcher.playerId) : Promise.resolve(null),
+            fetchBatterHandednessSplits(batter.playerId),
+          ]).then(([ps, bs]) => {
+            if (ps.status === "fulfilled" && ps.value) input.pitcherHandednessSplits = ps.value;
+            if (bs.status === "fulfilled" && bs.value) input.batterHandednessSplits = bs.value;
+          }).catch(() => {});
         }
 
         input.liveInterpretation = buildLiveEventInterpretation(input);
@@ -3901,6 +3945,15 @@ export class LiveGameOrchestrator {
               // tier 4c promotion for elite_power profiles. Cache lookup is
               // already done above in this try block.
               batterArchetype: bArch,
+              // Gaps 4 & 5: handedness splits (populated async above via fire-and-forget)
+              pitcherHandednessSplits: input.pitcherHandednessSplits ?? null,
+              batterHandednessSplits: input.batterHandednessSplits ?? null,
+              // Gaps 7–9: Savant power profile
+              flyBallPercent: playerContact?.flyBallPercent ?? null,
+              hrFBRatio: playerContact?.hrFBRatio ?? null,
+              xwOBA: playerContact?.xwOBASeason ?? null,
+              xISO: playerContact?.xISOSeason ?? null,
+              sweetSpotPercent: playerContact?.sweetSpotPercent ?? null,
             };
             const alertResult = evaluateHRAlert(alertInput);
 
@@ -4260,6 +4313,8 @@ export class LiveGameOrchestrator {
             pitchMix: pitcherCtx?.pitchMix ?? [],
             throws: pitcherToEval.throws ?? null,
             seasonAvgVelocity: pitcherCtx?.seasonAvgVelocity ?? null,
+            velocityDrop: pitcherCtx?.velocityDrop ?? null,
+            avgFastballSpin: pitcherCtx?.avgFastballSpin ?? null,
           },
           lineup: {
             battingOrderSlot: 5,

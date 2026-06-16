@@ -227,15 +227,16 @@ const SECTION_META: Record<SectionKey, {
   accent: string;
   badge: string;
   description: string;
+  sublabel: string;
   defaultCollapsed: boolean;
 }> = {
   attackNow: {
-    // Batch A — display label is FIRE per product brief. Server enum stays attackNow.
     label: "FIRE",
     icon: Flame,
     accent: "border-red-500/40 bg-red-500/5",
     badge: "bg-red-500 text-white",
     description: "Highest-conviction HR signals firing right now.",
+    sublabel: "Act now — conviction confirmed",
     defaultCollapsed: false,
   },
   ready: {
@@ -244,35 +245,34 @@ const SECTION_META: Record<SectionKey, {
     accent: "border-orange-500/40 bg-orange-500/5",
     badge: "bg-orange-500 text-white",
     description: "Playable HR setup — contact quality and matchup are aligned.",
+    sublabel: "High readiness, waiting for final trigger",
     defaultCollapsed: false,
   },
   building: {
-    // Batch A — display label is BUILD per product brief.
     label: "BUILD",
     icon: Zap,
     accent: "border-amber-500/40 bg-amber-500/5",
     badge: "bg-amber-500 text-white",
     description: "Pattern is building — one more quality contact could move this up.",
+    sublabel: "Score climbing — keep an eye on these",
     defaultCollapsed: false,
   },
   watch: {
-    // Batch A — display label is WATCH per product brief (was "TRACK").
     label: "WATCH",
     icon: Eye,
     accent: "border-blue-500/30 bg-blue-500/5",
     badge: "bg-blue-500 text-white",
     description: "Watching. HR conditions are forming, not actionable yet.",
-    defaultCollapsed: false, // dynamic — collapses when >8 entries (see LadderSection)
+    sublabel: "Early formation detected",
+    defaultCollapsed: false,
   },
-  // Phase 6 — additive bucket. Holds rows whose game is live but the player
-  // has zero tracked PAs yet (engine score is necessarily 0.0/10). Hidden by
-  // default and CTA-disabled so the live decision sections stay clean.
   noAbYet: {
     label: "NO AB YET",
     icon: Eye,
     accent: "border-zinc-500/30 bg-zinc-500/5",
     badge: "bg-zinc-600 text-white",
     description: "Game is live, no plate appearance tracked yet — parked here until the first AB.",
+    sublabel: "Live game, no at-bats yet",
     defaultCollapsed: true,
   },
   cashed: {
@@ -281,28 +281,25 @@ const SECTION_META: Record<SectionKey, {
     accent: "border-emerald-500/40 bg-emerald-500/5",
     badge: "bg-emerald-500 text-white",
     description: "HR confirmed after a called signal.",
+    sublabel: "Called it ✓",
     defaultCollapsed: false,
   },
   dead: {
-    // Batch A — display label is MISSED (was "DEAD / MISSED"). Per the
-    // product brief, dead/missed should be minimized and collapsed by
-    // default so it doesn't dominate the screen.
     label: "MISSED",
     icon: XCircle,
     accent: "border-zinc-500/30 bg-zinc-500/5",
     badge: "bg-zinc-500 text-white",
     description: "Signals that resolved without an HR.",
+    sublabel: "Resolved without HR",
     defaultCollapsed: true,
   },
-  // Batch A — admin-only Model Review bucket. Surfaces uncalled_hr +
-  // early_hr_insufficient_sample so admins can review WHY the engine missed
-  // them, without polluting the user-facing MISSED column.
   modelReview: {
     label: "MODEL REVIEW",
     icon: AlertTriangle,
     accent: "border-purple-500/30 bg-purple-500/5",
     badge: "bg-purple-600 text-white",
     description: "Admin-only. Uncalled HRs and first-AB HRs flagged for engine calibration.",
+    sublabel: "Engine calibration review",
     defaultCollapsed: true,
   },
 };
@@ -310,10 +307,9 @@ const SECTION_META: Record<SectionKey, {
 // Batch A — Phase 1: per-section visible-by-default card caps. When the
 // section has more entries than the cap, the rest are collapsed behind a
 // "Show all (N)" button so users see the most important rows first.
-// FIRE 5 / READY 8 / BUILD 5 / WATCH 8. Cashed/missed/modelReview/noAbYet
-// don't need card-cap (they're already collapsed sections).
+// FIRE has no cap (highest conviction — never truncate). READY 8 / BUILD 5 / WATCH 8.
+// Cashed/missed/modelReview/noAbYet don't need card-cap (already collapsed sections).
 const SECTION_CARD_CAPS: Partial<Record<SectionKey, number>> = {
-  attackNow: 5,
   ready: 8,
   building: 5,
   watch: 8,
@@ -619,21 +615,52 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
     setShareLoading(true);
     try {
       const score10Val = entry.displayCurrentScore10 ?? entry.currentSignalScore10 ?? null;
+      const stage = entry.userStage ?? entry.currentStage ?? "track";
+      const stageEmoji: Record<string, string> = { fire: "🔥", ready: "⚡", build: "📈", track: "👀" };
+      const emoji = stageEmoji[stage] ?? "🔥";
+      const hrProbPct = entry.conversionProbability != null ? Math.round(entry.conversionProbability * 100) : null;
+      const readPct   = entry.currentReadinessScore != null ? Math.round(entry.currentReadinessScore) : null;
+      const scoreStr  = score10Val != null ? ` | Score: ${Number(score10Val).toFixed(1)}/10` : "";
+      const readStr   = readPct   != null ? ` | Readiness: ${readPct}%` : "";
+      const probStr   = hrProbPct != null ? ` | HR Prob: ${hrProbPct}%` : "";
+      const hdLine    = entry.headlineReason ? `\n"${entry.headlineReason.slice(0, 80)}"` : "";
+      const tweetText = `${emoji} HR Radar: ${entry.playerName} (${entry.team})${scoreStr}${readStr}${probStr}${hdLine}\n\n#MLB #HRRadar #LiveLocks`;
+
+      const pitcherVulnPct = entry.pitcherHrVulnerability != null ? Math.min(100, Math.round(entry.pitcherHrVulnerability)) : null;
       const params = new URLSearchParams({
         playerName: entry.playerName,
         team: entry.team,
-        stage: entry.userStage ?? entry.currentStage ?? "track",
-        ...(score10Val != null       ? { score10:      String(score10Val) }                                       : {}),
-        ...(entry.currentReadinessScore != null ? { readinessPct: String(entry.currentReadinessScore) }          : {}),
-        ...(entry.conversionProbability != null ? { hrProbPct:    String(entry.conversionProbability * 100) }    : {}),
-        ...(entry.headlineReason        ? { headline:     entry.headlineReason }                                  : {}),
+        stage,
+        ...(score10Val != null                   ? { score10:      String(score10Val) }                             : {}),
+        ...(readPct != null                      ? { readinessPct: String(readPct) }                                : {}),
+        ...(hrProbPct != null                    ? { hrProbPct:    String(hrProbPct) }                              : {}),
+        ...(entry.headlineReason                 ? { headline:     entry.headlineReason }                           : {}),
+        ...(entry.buildScore != null             ? { buildScore:   String(entry.buildScore) }                       : {}),
+        ...(pitcherVulnPct != null               ? { pitcherVuln:  String(pitcherVulnPct) }                        : {}),
       });
+
       const resp = await fetch(`/api/mlb/hr-radar/share-card?${params.toString()}`);
       if (!resp.ok) throw new Error("share-card failed");
-      const { shareId, tweetText } = await resp.json() as { shareId: string; tweetText: string };
-      const shareUrl = `${window.location.origin}/share/hr/${shareId}`;
-      const intent = `https://x.com/intent/tweet?text=${encodeURIComponent(tweetText)}&url=${encodeURIComponent(shareUrl)}`;
-      window.open(intent, "_blank", "noopener,noreferrer,width=600,height=450");
+      const blob = await resp.blob();
+      const file = new File([blob], `hr-radar-${entry.playerName.replace(/\s+/g, "-")}.png`, { type: "image/png" });
+
+      // Mobile / supported browser: attach image directly (no URL leaves the platform)
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], text: tweetText });
+      } else {
+        // Desktop fallback: download the image, then open compose with text only
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = file.name;
+        a.click();
+        URL.revokeObjectURL(blobUrl);
+        window.open(
+          `https://x.com/intent/tweet?text=${encodeURIComponent(tweetText)}`,
+          "_blank",
+          "noopener,noreferrer,width=600,height=450",
+        );
+      }
     } catch {
       // Silently fail — user can retry
     } finally {
@@ -689,8 +716,8 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
             {inningWindowPill.label && (
               <span
                 data-testid={`hr-inning-window-pill-${entry.playerId}-${inningWindow}`}
-                className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border whitespace-nowrap"
-                style={{ color: inningWindowPill.color, borderColor: `${inningWindowPill.color}40`, background: `${inningWindowPill.color}10` }}
+                className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full border whitespace-nowrap"
+                style={{ color: inningWindowPill.color, borderColor: `${inningWindowPill.color}40`, background: `${inningWindowPill.color}15` }}
                 title={getMlbInningWindowLabel(inningWindow)}
               >
                 {inningWindowPill.label}
@@ -719,17 +746,25 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
         </button>
         <div className="flex flex-col items-end gap-1 shrink-0 max-w-[45%]">
           {score10 != null && !isResolved && (
-            <div className="flex items-baseline gap-1">
-              <span
-                className={`text-base font-mono font-bold leading-none ${isAttack ? "text-red-400" : "text-foreground/90"}`}
-                data-testid={`text-signal-score-10-${entry.playerId}`}
-              >
-                {/* Goldmaster RESTORE — USER-FACING 10-point score with one
-                    decimal. Internal 0-100 is never shown as the primary
-                    number on the user surface. */}
-                {score10.toFixed(1)}
-              </span>
-              <span className="text-[9px] text-muted-foreground leading-none">/ 10</span>
+            <div className="flex items-center gap-1.5">
+              <div className="flex items-baseline gap-1">
+                <span
+                  className={`text-base font-mono font-bold leading-none ${isAttack ? "text-red-400" : "text-foreground/90"}`}
+                  data-testid={`text-signal-score-10-${entry.playerId}`}
+                >
+                  {score10.toFixed(1)}
+                </span>
+                <span className="text-[9px] text-muted-foreground leading-none">/ 10</span>
+              </div>
+              {inningWindowPill.label && (
+                <span
+                  className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full border whitespace-nowrap"
+                  style={{ color: inningWindowPill.color, borderColor: `${inningWindowPill.color}40`, background: `${inningWindowPill.color}15` }}
+                  title={getMlbInningWindowLabel(inningWindow)}
+                >
+                  {inningWindowPill.label}
+                </span>
+              )}
             </div>
           )}
           {/* Heating-up meter (live rows only). Three-stop indicator showing
@@ -1108,7 +1143,10 @@ function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails, onPass
         <div className="flex items-center gap-2 min-w-0 shrink-0">
           {collapsed ? <ChevronRight className="w-4 h-4 shrink-0" /> : <ChevronDown className="w-4 h-4 shrink-0" />}
           <Icon className="w-4 h-4 shrink-0" />
-          <span className="font-bold text-sm tracking-wide whitespace-nowrap">{meta.label}</span>
+          <div className="flex flex-col items-start">
+            <span className="font-bold text-sm tracking-wide whitespace-nowrap leading-tight">{meta.label}</span>
+            <span className="text-[9px] text-muted-foreground whitespace-nowrap leading-tight">{meta.sublabel}</span>
+          </div>
           <Badge className={`${meta.badge} text-[10px] px-1.5 py-0 shrink-0`} data-testid={`badge-count-${sectionKey}`}>
             {entries.length}
           </Badge>
@@ -1471,6 +1509,53 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
           </Button>
         </div>
       </div>
+      {/* Section count summary — sticky so the radar state is always visible
+          while scrolling through the sections. Only shows non-zero counts. */}
+      {counts.total > 0 && (
+        <div
+          className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm pb-1"
+          data-testid="ladder-summary-bar-wrapper"
+        >
+        <div
+          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-card border border-border/40 overflow-x-auto"
+          data-testid="ladder-summary-bar"
+        >
+          {counts.attackNow > 0 && (
+            <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-red-400" data-testid="summary-fire">
+              <Flame className="w-3 h-3" /> FIRE {counts.attackNow}
+            </span>
+          )}
+          {(counts.ready ?? 0) > 0 && (
+            <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-orange-400" data-testid="summary-ready">
+              <Zap className="w-3 h-3" /> READY {counts.ready}
+            </span>
+          )}
+          {counts.building > 0 && (
+            <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-amber-400" data-testid="summary-build">
+              <Zap className="w-3 h-3" /> BUILD {counts.building}
+            </span>
+          )}
+          {counts.watch > 0 && (
+            <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-blue-400" data-testid="summary-watch">
+              <Eye className="w-3 h-3" /> WATCH {counts.watch}
+            </span>
+          )}
+          {counts.cashed > 0 && (
+            <>
+              <span className="text-muted-foreground/30 text-[11px]">·</span>
+              <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-emerald-400" data-testid="summary-cashed">
+                <Trophy className="w-3 h-3" /> {counts.cashed} HR
+              </span>
+            </>
+          )}
+          {counts.dead > 0 && (
+            <span className="text-[11px] text-muted-foreground/50 whitespace-nowrap" data-testid="summary-missed">
+              {counts.dead} missed
+            </span>
+          )}
+        </div>
+        </div>
+      )}
       {/* Phase 2.5 HR Watch Bridge — surfaces engine-stamped near-HR
           contact detections (signalType="hr_watch") so admins/users can see
           that the engine IS detecting near-HR plays even when the ladder

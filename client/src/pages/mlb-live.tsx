@@ -105,40 +105,6 @@ type EdgeFeedResponse = {
   edgeCacheEntries?: number;
 };
 
-type CanonicalGradedOutcome = {
-  sessionDate: string;
-  gameId: string;
-  playerId: string;
-  playerName: string;
-  team: string;
-  finalStatus: "hit" | "miss";
-  detectedLabel: string | null;
-  hitLabel: string | null;
-  hitInning?: number | null;
-  hitHalf?: string | null;
-  detectedScore: number | null;
-  peakScore: number | null;
-  triggerTags: string[];
-  resolvedAt: string | null;
-};
-
-type HrRadarGradingSummary = {
-  wins: number;
-  losses: number;
-  totalGraded: number;
-  hitRate: number;
-};
-
-type HRRadarResponse = {
-  hrEdges: Array<any>;
-  bettableHR: Array<any>;
-  cashedToday: Array<any>;
-  activity?: Array<any>;
-  hrWatchlist: Array<any>;
-  gradedHits?: CanonicalGradedOutcome[];
-  gradedMisses?: CanonicalGradedOutcome[];
-  gradingSummary?: HrRadarGradingSummary;
-};
 
 const MARKET_LABELS: Record<string, string> = {
   hits: "Hits", total_bases: "Total Bases", hrr: "H+R+RBI",
@@ -217,46 +183,6 @@ function gameLeanBadge(signals: MlbSignalData[], gameId: string): { label: strin
   if (pitcherCount > batterCount) return { label: "Pitch", color: "#3b82f6" };
   if (batterCount > pitcherCount) return { label: "Hit", color: "#f97316" };
   return { label: "Mixed", color: "#71717a" };
-}
-
-interface HRAlert {
-  id: number;
-  playerId: string;
-  playerName: string;
-  teamAbbr: string | null;
-  gameId: string;
-  alertType: string;
-  triggerReason: string | null;
-  hrBuildScore: number | null;
-  hrIntensity: string | null;
-  inning: number | null;
-  outcome: string | null;
-  signalState: string | null;
-  decision: string | null;
-  confidenceScore: number | null;
-  formattedReason: string | null;
-  factors: {
-    avgEV: number | null;
-    maxEV: number | null;
-    avgLA: number | null;
-    barrels: number;
-    hardHits: number;
-    deepFlyouts: number;
-    batSpeedScore?: number;
-    pitcherFatigueBoost?: number;
-    parkWindBoost?: number;
-    platoonBoost?: number;
-  } | null;
-  createdAt: string | null;
-}
-
-interface AlertConversionStats {
-  totalAlerts: number;
-  totalHR: number;
-  totalNoHR: number;
-  totalPending: number;
-  conversionRate: number;
-  alertTypeBreakdown: Record<string, { total: number; hr: number; rate: number }>;
 }
 
 function LivePulse({ updatedAt }: { updatedAt: number }) {
@@ -2882,7 +2808,7 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
   );
 }
 
-function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | "hr_radar" }) {
+function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar" }) {
   const { user, isLoading: authLoading } = useAuth();
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
   const [liveFeedSub, setLiveFeedSub] = useState<"all" | "3rd" | "5th" | "7th">("all");
@@ -3294,7 +3220,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
       {user?.isAdmin && (
         <AdminEngineDebugPanel selectedGameId={selectedGameId} />
       )}
-      {activeSubTab === "games" && (
+      {(activeSubTab as string) === "games" && (
         <>
           {games.length === 0 ? (
             <div className="text-xs text-muted-foreground py-3" data-testid="text-no-mlb-games-today">
@@ -3608,18 +3534,22 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
           {/* Signal-first inning window filter (LiveLocks MLB UX Phase 1). */}
           <div className="flex items-center justify-between gap-2 flex-wrap" data-testid="mlb-inning-filter-row">
             <div className="flex gap-1.5 flex-wrap">
-              {(["all", "early", "mid", "late"] as const).map(win => (
-                <button
-                  key={`win-${win}`}
-                  data-testid={`tab-inning-window-${win}`}
-                  onClick={() => setInningWindowFilter(win)}
-                  className={`px-3.5 py-2.5 min-h-[44px] text-xs font-semibold rounded-full border transition-all ${
-                    inningWindowFilter === win ? "bg-background text-foreground border-primary/50 shadow-sm" : "border-border/50 text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {win === "all" ? "All Innings" : win === "early" ? "Early 1–3" : win === "mid" ? "Mid 4–6" : "Late 7+"}
-                </button>
-              ))}
+              {(["all", "early", "mid", "late"] as const).map(win => {
+                const dotColor = win === "early" ? "#a78bfa" : win === "mid" ? "#94a3b8" : win === "late" ? "#ef4444" : null;
+                return (
+                  <button
+                    key={`win-${win}`}
+                    data-testid={`tab-inning-window-${win}`}
+                    onClick={() => setInningWindowFilter(win)}
+                    className={`flex items-center gap-1.5 px-3.5 py-2.5 min-h-[44px] text-xs font-semibold rounded-full border transition-all ${
+                      inningWindowFilter === win ? "bg-background text-foreground border-primary/50 shadow-sm" : "border-border/50 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {dotColor && <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dotColor }} />}
+                    {win === "all" ? "All Innings" : win === "early" ? "Early 1–3" : win === "mid" ? "Mid 4–6" : "Late 7+"}
+                  </button>
+                );
+              })}
             </div>
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Sort</span>
@@ -3682,8 +3612,8 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
                     rows={marketRows}
                     resolveSignal={resolveSignal}
                     onAddToSlip={handleAddToSlip}
-                    onOpenCalculator={handleSignalClick}
                     isElite={isElite}
+                    isAdmin={!!user?.isAdmin}
                     unknownInningCount={marketSignalsResp?.unknownInningCount}
                     narrativeStats={{
                       gamesMonitored: games.length,
@@ -3879,7 +3809,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "games" | "live_feed" | 
   );
 }
 
-export default function MlbLivePage({ activeSubTab = "games" }: { activeSubTab?: "games" | "live_feed" | "hr_radar" }) {
+export default function MlbLivePage({ activeSubTab = "live_feed" }: { activeSubTab?: "live_feed" | "hr_radar" }) {
   return (
     <MLBErrorBoundary>
       <MlbLiveInner activeSubTab={activeSubTab} />

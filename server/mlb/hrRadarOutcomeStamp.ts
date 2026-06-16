@@ -6,6 +6,7 @@ export interface HrRadarOutcomeStampMeta {
   confidenceTier?: string | null;
   signalState?: string | null;
   source?: "play_feed" | "box_score_fallback" | "engine_close";
+  rawConversionProbability?: number | null;
 }
 
 export interface HrRadarOutcomeStamp extends HrRadarOutcomeStampMeta {
@@ -36,6 +37,7 @@ export function stampHrRadarOutcome(
     confidenceTier: meta?.confidenceTier ?? null,
     signalState: meta?.signalState ?? null,
     source: meta?.source,
+    rawConversionProbability: meta?.rawConversionProbability ?? null,
   };
   HR_OUTCOME_STAMPS.set(k, stamp);
   console.log(
@@ -73,4 +75,8 @@ export function _resetHrRadarOutcomeStampsForTests(): void {
 
 export function _hrRadarOutcomeStampSize(): number {
   return HR_OUTCOME_STAMPS.size;
+}
+
+export function _getAllHrRadarOutcomeStamps(): HrRadarOutcomeStamp[] {
+  return Array.from(HR_OUTCOME_STAMPS.values());
 }

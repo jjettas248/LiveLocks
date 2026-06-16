@@ -854,13 +854,24 @@ export function computeSpecContactQuality(input: MLBPropInput): number {
   const xSLG = cq.xSLG ?? 0.430;
 
   const la = cq.launchAngle ?? 14;
-  const inSweetSpot = la >= 10 && la <= 30;
-  const sweetSpotScore = inSweetSpot ? normalize01(la, 10, 25) : 0.2;
+  // Use direct Statcast sweet_spot_percent when available (Gap 9); fall back to
+  // inferred LA threshold which can false-positive on weak 30° grounders.
+  const sweetSpotPct = cq.sweetSpotPercent;
+  const inSweetSpot = sweetSpotPct != null
+    ? sweetSpotPct >= 30
+    : (la >= 10 && la <= 30);
+  const sweetSpotScore = sweetSpotPct != null
+    ? normalize01(sweetSpotPct, 20, 45)
+    : (inSweetSpot ? normalize01(la, 10, 25) : 0.2);
 
   const evLaSurface = normalize01(ev, 80, 110) * (inSweetSpot ? 1.0 : 0.6);
 
   const xBASkill = normalize01(xBA, 0.200, 0.320);
-  const xwOBASkill = normalize01(xSLG, 0.300, 0.550);
+  // Prefer xwOBASeason when available — better contact quality anchor than xSLG (Gap 8).
+  const xwOBASeason = cq.xwOBASeason;
+  const xwOBASkill = xwOBASeason != null
+    ? normalize01(xwOBASeason, 0.270, 0.400)
+    : normalize01(xSLG, 0.300, 0.550);
   const barrelScore = normalize01(barrel, 0.02, 0.15);
   const hardHitScore = normalize01(hhr, 0.25, 0.55);
 
@@ -927,6 +938,17 @@ export function computeBatSpeedEngine(input: MLBPropInput): {
 
   if (!hasMeasuredData) {
     batSpeedPowerScore = 0.45 + batSpeedPowerScore * 0.2;
+  }
+
+  // Improvement 6: swing efficiency (bat speed / swing length) — compact swings
+  // keep the barrel in the zone longer and correlate with barrel rate.
+  const swingLen = input.contactQuality.avgSwingLength;
+  if (measuredBatSpeed != null && swingLen != null && swingLen > 0) {
+    const efficiency = measuredBatSpeed / swingLen;
+    if (efficiency >= 10.5) batSpeedPowerScore = clamp(batSpeedPowerScore + 0.08, 0, 1);
+    else if (efficiency >= 10.0) batSpeedPowerScore = clamp(batSpeedPowerScore + 0.05, 0, 1);
+    else if (efficiency >= 9.5) batSpeedPowerScore = clamp(batSpeedPowerScore + 0.02, 0, 1);
+    else if (efficiency < 8.5) batSpeedPowerScore = clamp(batSpeedPowerScore - 0.03, 0, 1);
   }
 
   const hasStrongContact = barrel >= 0.08 || ev >= 95 || hhr >= 0.40;
