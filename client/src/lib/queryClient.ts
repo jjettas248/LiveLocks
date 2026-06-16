@@ -77,10 +77,16 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
+      // Per-query polling stays opt-in via refetchInterval. These defaults make
+      // non-polling queries self-heal and refresh on return instead of showing
+      // a frozen first-load snapshot forever:
+      //  - finite staleTime so a refetch trigger (focus/remount) can refresh
+      //  - refetchOnWindowFocus so returning to a backgrounded tab updates
+      //  - retry once so a single transient blip doesn't become a dead error
       refetchInterval: false,
-      refetchOnWindowFocus: false,
-      staleTime: Infinity,
-      retry: false,
+      refetchOnWindowFocus: true,
+      staleTime: 30_000,
+      retry: 1,
     },
     mutations: {
       retry: false,

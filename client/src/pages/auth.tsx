@@ -4,6 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation, useSearch } from "wouter";
+import { safeReturnTo } from "@/lib/returnTo";
 import propPulseLogo from "@assets/kuXz_snw_400x400_1772143708894.jpg";
 
 const loginSchema = z.object({
@@ -77,7 +78,7 @@ export default function AuthPage() {
       if (result && result.emailVerified === false) {
         navigate("/verify-pending");
       } else {
-        navigate("/dashboard");
+        navigate(safeReturnTo() || "/dashboard");
       }
     } catch (err: any) {
       setErrorMessage(err.message || "Something went wrong. Please try again.");
@@ -96,7 +97,7 @@ export default function AuthPage() {
       if (result && result.emailVerified === false) {
         navigate("/verify-pending");
       } else {
-        navigate("/dashboard");
+        navigate(safeReturnTo() || "/dashboard");
       }
     } catch (err: any) {
       setErrorMessage(err.message || "Something went wrong. Please try again.");

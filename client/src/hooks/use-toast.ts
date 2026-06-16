@@ -5,8 +5,10 @@ import type {
   ToastProps,
 } from "@/components/ui/toast"
 
-const TOAST_LIMIT = 1
-const TOAST_REMOVE_DELAY = 1000000
+const TOAST_LIMIT = 3
+// Auto-dismiss after a few seconds so transient confirmations don't pile up or
+// silently replace each other (was 1000000ms ≈ 16min, which never dismissed).
+const TOAST_REMOVE_DELAY = 5000
 
 type ToasterToast = ToastProps & {
   id: string
