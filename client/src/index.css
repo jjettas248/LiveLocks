@@ -56,7 +56,24 @@
     /* Custom sports colors */
     --success: 142 71% 45%;
     --warning: 38 92% 50%;
-    
+
+    /* Signal-tier palette — single source of truth for confidence colors.
+       Canonical scheme: elite = gold, strong = green, value = teal,
+       watch = slate. Use via Tailwind (text-tier-elite) or
+       hsl(var(--tier-elite) / <alpha>) in inline styles. */
+    --tier-elite: 43 96% 56%;
+    --tier-strong: 142 71% 45%;
+    --tier-value: 175 70% 41%;
+    --tier-watch: 220 9% 55%;
+
+    /* Sport accents — MLB green, NBA orange, NCAAB blue. */
+    --sport-mlb: 142 71% 45%;
+    --sport-nba: 25 95% 53%;
+    --sport-ncaab: 217 91% 60%;
+
+    /* Brand accent (≈ #00d4aa teal) — was hardcoded across MLB/NCAAB. */
+    --brand-accent: 168 100% 42%;
+
     --elevate-1: rgba(255, 255, 255, 0.04);
     --elevate-2: rgba(255, 255, 255, 0.08);
   }
