@@ -503,6 +503,110 @@ function computeLEIComponent(input: MLBPropInput): number {
   );
 }
 
+function computeHrLEIComponent(input: MLBPropInput): number {
+  const lei = input.liveInterpretation;
+  if (!lei) return 50;
+  const contactPart  = Math.min(100, (lei.contactScore        / 0.20) * 100);
+  const nearHrPart   = Math.min(100, (lei.nearHrScore         / 0.15) * 100);
+  const momentumPart = Math.min(100, (lei.momentumScore       / 0.10) * 100);
+  const fatiguePart  = Math.min(100, (lei.pitcherFatigueScore / 0.15) * 100);
+  const veloDropPart = Math.min(100, (lei.veloDropScore       / 0.10) * 100);
+  return clamp(
+    0.40 * nearHrPart + 0.30 * fatiguePart + 0.15 * veloDropPart +
+    0.10 * contactPart + 0.05 * momentumPart,
+    0, 100
+  );
+}
+
+function computeHrMatchupComponent(input: MLBPropInput, output: MLBPropOutput): number {
+  let score = 50;
+
+  const bvp = input.bvpHistory;
+  if (bvp && bvp.atBats >= 5) {
+    const bvpHrRate = (bvp.homeRuns ?? 0) / bvp.atBats;
+    if (bvpHrRate >= 0.10) score += 25;
+    else if (bvpHrRate >= 0.05) score += 15;
+    else if (bvpHrRate > 0) score += 7;
+    const bvpAvg = bvp.avg ?? 0;
+    if (bvpAvg >= 0.350) score += 8;
+    else if (bvpAvg >= 0.300) score += 4;
+    else if (bvpAvg < 0.150 && bvp.atBats >= 10) score -= 10;
+  }
+
+  const kPer9 = input.pitcher?.kPer9;
+  if (kPer9 != null) {
+    if (kPer9 >= 11.0) score -= 18;
+    else if (kPer9 >= 9.0) score -= 10;
+    else if (kPer9 <= 6.0) score += 12;
+    else if (kPer9 <= 7.5) score += 6;
+  }
+
+  const bbPer9 = input.pitcher?.bbPer9;
+  if (bbPer9 != null) {
+    if (bbPer9 >= 4.5) score += 14;
+    else if (bbPer9 >= 3.5) score += 8;
+    else if (bbPer9 <= 1.5) score -= 6;
+  }
+
+  // Low fastball spin = flat trajectory = easier to barrel
+  const spin = input.pitcher?.avgFastballSpin;
+  if (spin != null) {
+    if (spin < 2100) score += 12;
+    else if (spin < 2200) score += 6;
+    else if (spin > 2450) score -= 8;
+  }
+
+  const pa = output.pitcherAnalysis;
+  if (pa) {
+    if (pa.stuff >= 80 && pa.swingMiss >= 75) score -= 14;
+    else if (pa.stuff >= 70 && pa.swingMiss >= 65) score -= 7;
+    else if (pa.stuff <= 45) score += 10;
+  }
+
+  if (input.pitcher?.era != null) {
+    if (input.pitcher.era >= 5.0) score += 8;
+    else if (input.pitcher.era >= 4.0) score += 4;
+    else if (input.pitcher.era <= 2.5) score -= 8;
+  }
+
+  return clamp(score, 0, 100);
+}
+
+function computeRecentFormScore(input: MLBPropInput): number {
+  let score = 50;
+  const trend = input.hrTrend;
+  const rolling = input.rollingForm;
+
+  if (trend && trend.seasonTotalHR > 0 && trend.seasonTotalAB > 0) {
+    const seasonRate = trend.seasonTotalHR / trend.seasonTotalAB;
+    const l7 = trend.hrRateLast7;
+    const l15 = trend.hrRateLast15;
+    if (l7 != null && seasonRate > 0) {
+      const ratio7 = l7 / seasonRate;
+      if (ratio7 >= 2.5) score += 25;
+      else if (ratio7 >= 1.8) score += 18;
+      else if (ratio7 >= 1.2) score += 10;
+      else if (ratio7 <= 0.4) score -= 15;
+      else if (ratio7 <= 0.7) score -= 8;
+    }
+    if (l15 != null && seasonRate > 0) {
+      const ratio15 = l15 / seasonRate;
+      if (ratio15 >= 2.0) score += 15;
+      else if (ratio15 >= 1.5) score += 8;
+      else if (ratio15 <= 0.5) score -= 10;
+    }
+  }
+
+  if (rolling?.last15Ops != null) {
+    const ops15 = rolling.last15Ops;
+    if (ops15 >= 0.950) score += 12;
+    else if (ops15 >= 0.850) score += 7;
+    else if (ops15 <= 0.600) score -= 8;
+  }
+
+  return clamp(score, 0, 100);
+}
+
 function computeParkWeatherComponent(input: MLBPropInput): number {
   let score = 50;
   if (input.weatherPark?.parkFactor != null) {
@@ -544,21 +648,26 @@ export function scoreBatterOverSignal(
   const lineupSlotHR = isHRMarket ? computeLineupSlotHRScore(input) : 50;             // Gap 6
   const powerProfile = isHRMarket ? computePowerProfileScore(input) : 50;             // Gaps 7–9
 
+  // HR-specific overrides: replace generic components with HR-targeted ones
+  const leiScore  = isHRMarket ? computeHrLEIComponent(input)            : lei;
+  const hrMatchup = isHRMarket ? computeHrMatchupComponent(input, output) : matchup;
+  const hrForm    = isHRMarket ? computeRecentFormScore(input)            : form;
+
   const baseTotal = isHRMarket
     ? Math.round(
-        0.10 * form +
-        0.12 * matchup +
+        0.08 * hrForm +           // L7/L15 HR-rate trend + OPS
+        0.13 * hrMatchup +        // BvP HR history, K/9, BB/9, spin, stuff
         0.06 * parkWeather +
-        0.15 * lei +
-        0.06 * opportunity +
+        0.13 * leiScore +         // nearHr 40%, fatigue 30%, veloDrop 15%
+        0.05 * opportunity +
         0.07 * eventBoost +
         0.09 * pitchMixMatchup +
         0.06 * hrTiming +
         0.04 * entryFatigue +
-        0.07 * handednessSplits +
-        0.10 * powerProfile +
-        0.06 * lineupSlotHR +
-        0.02 * prob
+        0.08 * handednessSplits + // pitcher HR/9 by batter hand + batter HR rate
+        0.12 * powerProfile +     // now includes barrel, hardHit, xBA, xSLG, learnedHr
+        0.05 * lineupSlotHR +
+        0.04 * prob
       )
     : Math.round(
         0.15 * form +
@@ -583,9 +692,9 @@ export function scoreBatterOverSignal(
   return {
     probability: Math.round(prob),
     projection: Math.round(proj),
-    liveContext: Math.round(lei),
-    matchup: Math.round(matchup),
-    form: Math.round(form),
+    liveContext: Math.round(leiScore),
+    matchup: isHRMarket ? Math.round(handednessSplits) : Math.round(matchup),
+    form:    isHRMarket ? Math.round(hrTiming)          : Math.round(form),
     opportunity: Math.round(opportunity),
     marketReliability: Math.round(parkWeather),
     priceValidation: 50,
@@ -801,6 +910,44 @@ function computePowerProfileScore(input: MLBPropInput): number {
     else if (eff < 8.5) score -= 5;
   }
 
+  // Statcast contact quality — strongest predictors of HR production
+  const barrelRate = cq.barrelRateProxySeason;
+  if (barrelRate != null) {
+    if (barrelRate >= 0.12) score += 14;
+    else if (barrelRate >= 0.08) score += 8;
+    else if (barrelRate >= 0.05) score += 3;
+    else if (barrelRate <= 0.03) score -= 8;
+  }
+
+  const hardHit = cq.hardHitRateSeason;
+  if (hardHit != null) {
+    if (hardHit >= 0.50) score += 8;
+    else if (hardHit >= 0.40) score += 4;
+    else if (hardHit <= 0.28) score -= 5;
+  }
+
+  const xba = cq.xBA;
+  if (xba != null) {
+    if (xba >= 0.290) score += 8;
+    else if (xba >= 0.260) score += 4;
+    else if (xba <= 0.210) score -= 5;
+  }
+
+  const xslg = cq.xSLG;
+  if (xslg != null) {
+    if (xslg >= 0.550) score += 12;
+    else if (xslg >= 0.480) score += 6;
+    else if (xslg >= 0.420) score += 2;
+    else if (xslg <= 0.340) score -= 8;
+  }
+
+  const hrLikelihood = cq.learnedHrLikelihood;
+  if (hrLikelihood != null && hrLikelihood > 0) {
+    if (hrLikelihood >= 0.20) score += 15;
+    else if (hrLikelihood >= 0.12) score += 8;
+    else if (hrLikelihood >= 0.06) score += 3;
+  }
+
   return clamp(score, 0, 100);
 }
 
@@ -933,15 +1080,15 @@ export function scoreHRRadar(
   else confidenceTier = "NO_SIGNAL";
 
   return {
-    probability: Math.round(nearHrScore),
-    projection: Math.round(contactScore),
-    liveContext: Math.round(pitcherVuln),
-    matchup: 50,
-    form: 50,
-    opportunity: Math.round(opportunity),
+    probability:       Math.round(nearHrScore),
+    projection:        Math.round(contactScore),
+    liveContext:       Math.round(pitcherVuln),
+    matchup:           Math.round(pitchMixMatchup),
+    form:              Math.round(hrTiming),
+    opportunity:       Math.round(opportunity),
     marketReliability: Math.round(parkWeather),
-    priceValidation: 50,
-    eventBoost: Math.round(nearHrScore),
+    priceValidation:   Math.round(powerProfile),
+    eventBoost:        Math.round(entryFatigue),
     total,
     confidenceTier,
   };
