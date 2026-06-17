@@ -39,6 +39,15 @@ import {
   normalizeMlbGameChip,
 } from "@/lib/mlb/mlbNormalizers";
 
+const TIER_RANK: Record<string, number> = { elite: 4, strong: 3, lean: 2, watch: 1 };
+
+function tierFirstSort(a: MlbSignalData, b: MlbSignalData): number {
+  const ta = TIER_RANK[resolveMlbSignalTier(a)] ?? 0;
+  const tb = TIER_RANK[resolveMlbSignalTier(b)] ?? 0;
+  if (ta !== tb) return tb - ta;
+  return (b.signalScore ?? 0) - (a.signalScore ?? 0);
+}
+
 class MLBErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
   constructor(props: { children: ReactNode }) {
     super(props);
@@ -227,7 +236,7 @@ function SignalStrip({ signals, onPlayerClick }: { signals: MlbSignalData[]; onP
       // engine's authoritative composite.
       return (s.signalScore ?? 0) >= 50 && s.recommendedSide !== "NO_EDGE";
     })
-    .sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0))
+    .sort(tierFirstSort)
     .slice(0, 8);
 
   if (topSignals.length === 0) return null;
@@ -300,7 +309,7 @@ function PreABWatchBand({ signals, onPlayerClick }: { signals: MlbSignalData[]; 
       const edge = s.edge ?? 0;
       return pct >= 60 && edge >= 3;
     })
-    .sort((a, b) => normalizePct(b.enginePct) - normalizePct(a.enginePct))
+    .sort(tierFirstSort)
     .slice(0, 8);
 
   const autoCollapse = confirmedCount >= 3;
@@ -613,7 +622,7 @@ function GameSignalsPanel({ signals, isElite, onAddToSlip, onOpenCalculator, sel
   // watchlist (HR_VS_ELITE_PITCHER, PITCHER_NEAR_MISS, fallback watch) entries
   // belong in the dedicated PreABWatchBand surface above this panel.
   const confirmed = signals.filter(s => !(s as any).isEarlySignal && !(s as any).watchlist);
-  const sorted = [...confirmed].sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
+  const sorted = [...confirmed].sort(tierFirstSort);
   const visible = isElite ? sorted : sorted.slice(0, 2);
   const lockedCount = isElite ? 0 : Math.max(0, sorted.length - 2);
 
@@ -1648,6 +1657,48 @@ function GradedMissCard({ outcome }: { outcome: CanonicalGradedOutcome }) {
   );
 }
 
+type CanonicalGradedOutcome = {
+  playerId: string;
+  gameId: string;
+  playerName: string;
+  team?: string;
+  triggerTags: string[];
+  hitLabel?: string | null;
+  detectedLabel?: string | null;
+  hitInning?: number | null;
+  hitHalf?: string | null;
+  resolvedAt?: string | null;
+  peakScore?: number | null;
+  detectedScore?: number | null;
+};
+
+type HRRadarResponse = {
+  bettableHR?: any[];
+  hrWatchlist?: any[];
+  cashedToday?: any[];
+  activity?: any[];
+  gradedHits?: CanonicalGradedOutcome[];
+  gradedMisses?: CanonicalGradedOutcome[];
+  gradingSummary?: { wins: number; losses: number; totalGraded: number; hitRate: number } | null;
+};
+
+type HRAlert = {
+  outcome: string | null;
+  alertType: string;
+  playerId: string;
+  gameId: string;
+  [key: string]: any;
+};
+
+type AlertConversionStats = {
+  totalAlerts: number;
+  totalHR: number;
+  totalNoHR: number;
+  totalPending: number;
+  conversionRate: number;
+  alertTypeBreakdown: Record<string, { total: number; hr: number; rate: number }>;
+};
+
 type RadarFilterMode = "all" | "active" | "cashed" | "missed";
 
 type GradingHistoryDay = {
@@ -1958,7 +2009,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
       radarState.set(key, {
         playerId: ch.playerId,
         playerName: ch.playerName,
-        team: ch.team,
+        team: ch.team ?? "",
         gameId: ch.gameId,
         status: "CASHED",
         signalState: null,
@@ -2030,7 +2081,7 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
       radarState.set(key, {
         playerId: cm.playerId,
         playerName: cm.playerName,
-        team: cm.team,
+        team: cm.team ?? "",
         gameId: cm.gameId,
         status: "MISSED",
         signalState: null,
@@ -2106,6 +2157,10 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
     if (aDyn != null && bDyn != null && aDyn !== bDyn) return aDyn - bDyn;
     if (aDyn != null && bDyn == null) return -1;
     if (aDyn == null && bDyn != null) return 1;
+    const RADAR_RANK: Record<string, number> = { HIGH: 2, MODERATE: 1, WATCH: 0 };
+    const aRR = RADAR_RANK[a.radarTier ?? "WATCH"] ?? 0;
+    const bRR = RADAR_RANK[b.radarTier ?? "WATCH"] ?? 0;
+    if (aRR !== bRR) return bRR - aRR;
     const aConv = a.hrConversionCalibrated ?? 0;
     const bConv = b.hrConversionCalibrated ?? 0;
     if (aConv !== bConv) return bConv - aConv;
@@ -3534,70 +3589,71 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
       {activeSubTab === "live_feed" && (
         <div className="space-y-4">
           {/* Signal-first inning window filter (LiveLocks MLB UX Phase 1). */}
-          <div className="flex items-center justify-between gap-2 flex-wrap" data-testid="mlb-inning-filter-row">
-            <div className="flex gap-1.5 flex-wrap">
-              {(["all", "early", "mid", "late"] as const).map(win => {
-                const dotColor = win === "early" ? "#a78bfa" : win === "mid" ? "#94a3b8" : win === "late" ? "#ef4444" : null;
-                return (
-                  <button
-                    key={`win-${win}`}
-                    data-testid={`tab-inning-window-${win}`}
-                    onClick={() => setInningWindowFilter(win)}
-                    className={`flex items-center gap-1.5 px-3.5 py-2.5 min-h-[44px] text-xs font-semibold rounded-full border transition-all ${
-                      inningWindowFilter === win ? "bg-background text-foreground border-primary/50 shadow-sm" : "border-border/50 text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {dotColor && <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dotColor }} />}
-                    {win === "all" ? "All Innings" : win === "early" ? "Early 1–3" : win === "mid" ? "Mid 4–6" : "Late 7+"}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Sort</span>
-              <div className="inline-flex rounded-full border border-border/50 overflow-hidden">
-                <button
-                  data-testid="button-sort-signal-score"
-                  onClick={() => setSignalSortBy("signalScore")}
-                  className={`px-3 py-1.5 text-[11px] font-semibold transition-colors ${
-                    signalSortBy === "signalScore" ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  Signal
-                </button>
-                <button
-                  data-testid="button-sort-engine-pct"
-                  onClick={() => setSignalSortBy("enginePct")}
-                  className={`px-3 py-1.5 text-[11px] font-semibold transition-colors ${
-                    signalSortBy === "enginePct" ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  Win %
-                </button>
-              </div>
-            </div>
-          </div>
           {(() => {
-            // Signal-first surface: render server-grouped MarketSignalViewModel
-            // rows when the new endpoint has responded. Falls back to the
-            // legacy LiveBoard if the response is missing (cache rollover or
-            // server-side bridge failure).
-            const marketRows = marketSignalsResp?.rows ?? null;
-            if (marketRows && marketRows.length > 0) {
-              // Build a fast lookup from view-model signalId → MlbSignalData
-              // sourced from the existing sticky-merged feed so the card
-              // renders with full driver/odds context unchanged.
+            // Compute per-window counts from marketSignalsResp for pill badges.
+            // Only shown when we have loaded data; undefined = loading.
+            const allRows = marketSignalsResp?.rows ?? [];
+            const liveTotal = allRows.filter(r => r.displayGroup === "ACTION_NOW" || r.displayGroup === "BUILDING").length;
+            return (
+              <div className="flex items-center gap-2 flex-wrap" data-testid="mlb-inning-filter-row">
+                <div className="flex gap-1.5 flex-wrap flex-1">
+                  {(["all", "early", "mid", "late"] as const).map(win => {
+                    const dotColor = win === "early" ? "#a78bfa" : win === "mid" ? "#94a3b8" : win === "late" ? "#ef4444" : null;
+                    const count = win === "all"
+                      ? allRows.length
+                      : allRows.filter(r => r.inningWindow === win).length;
+                    return (
+                      <button
+                        key={`win-${win}`}
+                        data-testid={`tab-inning-window-${win}`}
+                        onClick={() => setInningWindowFilter(win)}
+                        className={`flex items-center gap-1.5 px-3.5 py-2.5 min-h-[44px] text-xs font-semibold rounded-full border transition-all ${
+                          inningWindowFilter === win ? "bg-background text-foreground border-primary/50 shadow-sm" : "border-border/50 text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {dotColor && <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dotColor }} />}
+                        {win === "all" ? "All Innings" : win === "early" ? "Early 1–3" : win === "mid" ? "Mid 4–6" : "Late 7+"}
+                        {marketSignalsResp !== undefined && count > 0 && (
+                          <span className={`text-[9px] font-bold px-1 py-0.5 rounded-full ml-0.5 ${
+                            inningWindowFilter === win ? "bg-primary/20 text-primary" : "bg-border/40 text-muted-foreground"
+                          }`}>{count}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                {/* Live pulse with active signal count */}
+                {marketSignalsResp !== undefined && (
+                  <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground shrink-0">
+                    {liveTotal > 0
+                      ? <><span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" /><span className="text-green-400 font-semibold">{liveTotal} live</span></>
+                      : <><span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" /><span>Engine scoring</span></>
+                    }
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          {(() => {
+            // Signal-first surface: render LiveFeed whenever the market-signals
+            // endpoint has responded (even with 0 rows — the LiveFeed component
+            // has its own narrative empty state). Falls back to legacy view only
+            // during initial load before the query has fired.
+            if (marketSignalsResp !== undefined) {
+              const marketRows = marketSignalsResp.rows ?? [];
+              // Build a fast lookup from view-model signalId → MlbSignalData.
+              // Also index by canonicalSignalId to handle cases where the bus
+              // signalId differs from the manually-constructed key.
               const sigIndex = new Map<string, MlbSignalData>();
               for (const s of edgeFeedSignals) {
                 const sid = `mlb:${s.gameId}:${s.playerId}:${s.market}:${s.recommendedSide ?? "OVER"}`;
                 sigIndex.set(sid, s);
+                const csid = (s as any).canonicalSignalId;
+                if (csid) sigIndex.set(csid, s);
               }
               const resolveSignal = (vm: import("@/components/mlb/LiveFeed").MarketSignalViewModelClient): MlbSignalData | null => {
                 return sigIndex.get(vm.signalId) ?? null;
               };
-              // Narrative empty-state counts: derive once so the empty
-              // card reads as alive ("7 games monitored, 24 batters")
-              // rather than as four dead "0 0 0 0" buckets. Pure UI.
               const distinctBatterIds = new Set<string>();
               for (const s of edgeFeedSignals) {
                 if (s?.playerId) distinctBatterIds.add(String(s.playerId));
@@ -3628,7 +3684,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
               );
             }
 
-            // Legacy fallback (no market-signals data yet) — original logic.
+            // Legacy fallback — only shown during initial load before market-signals responds.
             let filtered = edgeFeedSignals;
             if (liveFeedSub !== "all") {
               const feedTagKey = liveFeedSub === "3rd" ? "inning_3" : liveFeedSub === "5th" ? "inning_5" : "inning_7";
