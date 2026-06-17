@@ -221,7 +221,7 @@ function buildSuppression(input: HRAlertInput, classified: ClassifiedContact[]):
     c.contactClass === "missedHrContact" || c.contactClass === "eliteHrContact"
   );
 
-  if (remainingPA !== null && remainingPA < 1.0 && !hasEliteOrMissed) {
+  if (remainingPA !== null && remainingPA < 0.5 && !hasEliteOrMissed) {
     flags.push({ reason: `remainingPA too low (${remainingPA.toFixed(1)}) without elite evidence`, severity: "hard" });
   }
 
@@ -319,7 +319,7 @@ function computeLeiBoost(input: HRAlertInput): { scoreBoost: number; escalate: b
 
 const HR_CONVERSION_ALERT_MIN = 0.08;
 const HR_CONVERSION_OFFICIAL_MIN = 0.12;
-const HR_CONVERSION_WATCH_MIN = 0.05;
+const HR_CONVERSION_WATCH_MIN = 0.03;
 
 function buildConversionInput(input: HRAlertInput): HRConversionInput {
   return {

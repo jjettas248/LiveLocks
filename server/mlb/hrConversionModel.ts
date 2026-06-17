@@ -775,8 +775,20 @@ function pregamePriorMultiplier(score: number): number {
 }
 
 export function computeHRConversionProbability(input: HRConversionInput): HRConversionResult {
-  let baseRate = input.seasonHRRate ?? LEAGUE_AVG_HR_PER_PA;
-  if (baseRate <= 0 || baseRate > 0.12) baseRate = LEAGUE_AVG_HR_PER_PA;
+  // When seasonHRRate is unavailable (rookie/prospect/API gap), derive a
+  // context-sensitive proxy from barrel rate rather than blindly applying
+  // the league average — barrel rate is the strongest single HR predictor.
+  let baseRate: number;
+  let skipBarrelAdj = false;
+  if (input.seasonHRRate !== null && input.seasonHRRate !== undefined && input.seasonHRRate > 0 && input.seasonHRRate <= 0.12) {
+    baseRate = input.seasonHRRate;
+  } else if (input.barrelRate !== null && input.barrelRate !== undefined && input.barrelRate > 0) {
+    const ratio = Math.min(2.5, input.barrelRate / LEAGUE_AVG_BARREL_RATE);
+    baseRate = Math.min(0.08, Math.max(0.015, LEAGUE_AVG_HR_PER_PA * ratio));
+    skipBarrelAdj = true;
+  } else {
+    baseRate = LEAGUE_AVG_HR_PER_PA;
+  }
 
   // Gap 5: blend in handedness-specific batter HR rate (30% weight) when
   // sufficient sample exists — more predictive than undifferentiated season rate.
@@ -790,7 +802,7 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
   }
 
   const barrelRate = input.barrelRate ?? LEAGUE_AVG_BARREL_RATE;
-  const barrelAdj = Math.min(1.5, barrelRate / LEAGUE_AVG_BARREL_RATE);
+  const barrelAdj = skipBarrelAdj ? 1.0 : Math.min(1.5, barrelRate / LEAGUE_AVG_BARREL_RATE);
   baseRate *= 0.6 + 0.4 * barrelAdj;
 
   // Use xwOBA when available (better contact quality anchor than xSLG alone);

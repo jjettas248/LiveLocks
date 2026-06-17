@@ -123,12 +123,12 @@ import * as liveSignalBusMod from "../services/liveSignalBus";
 //   - uncalled HRs covered:    9  →  8   (–1 covered HR)
 //   - miss:hr ratio:          15.9 → 10.6 (~33% better)
 //   - coverage:               42.9% → 38.1%
-// We accept the 1-HR coverage drop because the noise reduction is
-// substantial. seasonHRRate and hrRateLast30 are unchanged because the
-// barrel axis dominates discrimination on the available data.
+// Barrel floor rolled back from 0.120 → 0.090 to recover missed HRs from
+// power hitters between those thresholds. Lineup slots 1-5 also bypass the
+// floor entirely — top-of-order bats see enough PA that presence matters.
 export const PRESENCE_FLOOR_SEASON_HR_RATE = 0.025;
 export const PRESENCE_FLOOR_HR_RATE_L30 = 0.030;
-export const PRESENCE_FLOOR_BARREL_RATE = 0.120;
+export const PRESENCE_FLOOR_BARREL_RATE = 0.090;
 
 // ── OnlyHomers data caches (refreshed periodically) ─────────────────────────
 let ohHotHitters7d: Map<string, number> = new Map();
@@ -3153,7 +3153,7 @@ export class LiveGameOrchestrator {
       hrInput.liveInterpretation = buildLiveEventInterpretation(hrInput);
 
       const hrBuild = buildHRSignal(hrInput);
-      if (hrBuild.score <= 0) continue;
+      if (hrBuild.score < 0.05) continue;
 
       const isReliever = bullpenCache?.relieversUsed?.some(
         r => r.playerId === pitcher?.playerId
@@ -4291,6 +4291,10 @@ export class LiveGameOrchestrator {
           : null;
 
         const eligibilityReasons: string[] = [];
+        const lineupSlot = batter.slot ?? 9;
+        // Lineup slots 1-5 get unconditional watch coverage — top-of-order bats
+        // see the most PA and historically account for the largest share of missed HRs.
+        if (lineupSlot >= 1 && lineupSlot <= 5) eligibilityReasons.push(`lineupSlot=${lineupSlot}`);
         if (seasonHRRate != null && seasonHRRate >= PRESENCE_FLOOR_SEASON_HR_RATE) eligibilityReasons.push(`seasonHRRate=${seasonHRRate.toFixed(3)}`);
         if (hrRateLast30 != null && hrRateLast30 >= PRESENCE_FLOOR_HR_RATE_L30) eligibilityReasons.push(`hrRateLast30=${hrRateLast30.toFixed(3)}`);
         if (barrelRate != null && barrelRate >= PRESENCE_FLOOR_BARREL_RATE) eligibilityReasons.push(`barrelRate=${barrelRate.toFixed(3)}`);
