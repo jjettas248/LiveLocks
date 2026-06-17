@@ -353,6 +353,17 @@ export interface MLBPropInput {
     last30Avg: number | null;
     last7Ops: number | null;
     last15Ops: number | null;
+    seasonOps?: number | null;
+  };
+
+  // IBB feared-slugger prior context (signal-score mirror). seasonIBBRate is the
+  // standing respect signal; the base/out fields confirm a high-leverage spot.
+  ibbContext?: {
+    seasonIBBRate: number | null;
+    firstBaseOpen: boolean | null;
+    runnerInScoringPosition: boolean | null;
+    scoreDifferential: number | null;
+    inning: number | null;
   };
 
   hrTrend?: {

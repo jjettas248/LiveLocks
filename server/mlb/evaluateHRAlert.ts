@@ -82,6 +82,14 @@ export interface HRAlertInput {
   sweetSpotPercent?: number | null;
   // SlateRadar gap #6: batter pull rate (% BIP to pull side).
   pullRatePercent?: number | null;
+  // Recent form: broader AVG/OPS form to pair with the existing hrRateLast* fields.
+  recentOps?: number | null;   // L15 OPS
+  seasonOps?: number | null;
+  // IBB feared-slugger prior: season IBB rate + in-game base/out leverage context.
+  seasonIBBRate?: number | null;   // IBB / PA
+  firstBaseOpen?: boolean | null;
+  runnerInScoringPosition?: boolean | null;
+  scoreDifferential?: number | null;
 }
 
 export interface HRSuppressionFlag {
@@ -347,6 +355,15 @@ function buildConversionInput(input: HRAlertInput): HRConversionInput {
     xISO: input.xISO ?? null,
     sweetSpotPercent: input.sweetSpotPercent ?? null,
     pullRatePercent: input.pullRatePercent ?? null,
+    hrRateLast7: input.hrRateLast7 ?? null,
+    hrRateLast15: input.hrRateLast15 ?? null,
+    hrRateLast30: input.hrRateLast30 ?? null,
+    recentOps: input.recentOps ?? null,
+    seasonOps: input.seasonOps ?? null,
+    seasonIBBRate: input.seasonIBBRate ?? null,
+    firstBaseOpen: input.firstBaseOpen ?? null,
+    runnerInScoringPosition: input.runnerInScoringPosition ?? null,
+    scoreDifferential: input.scoreDifferential ?? null,
   };
 }
 
