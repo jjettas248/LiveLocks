@@ -452,6 +452,10 @@ export interface ReadyToFireContext {
   displayScore10?: number | null;  // post-cap /10 score (what the user sees)
   currentReadinessScore?: number | null;
   peakReadinessScore?: number | null;
+  // Lane 1.4 — consecutive ticks the dynamic state has supported promotion
+  // (from HRAlertSnapshot.consecutivePromoteTicks). Sustained-conviction input
+  // for the ready→fire gate; replaces the old peak-staleness cliff.
+  consecutivePromoteTicks?: number | null;
   qualifyingSignals: HrQualifyingSignalType[];
   signalId?: string | null;
   gameId?: string | number | null;
@@ -459,22 +463,31 @@ export interface ReadyToFireContext {
   player?: string | null;
 }
 
+// Lane 1.4 — ready→fire sustained-conviction window. The model must hold top
+// conviction (BET_NOW) for this many consecutive ticks before fire, so a single
+// noisy tick can't fire the card. Replaces the old magic `displayScore10 >= 9.5`
+// + peak-staleness cliff.
+const READY_TO_FIRE_SUSTAIN_TICKS = 2;
+
 /**
- * Promote a READY user stage to FIRE when the evidence the engine already
- * stamped on the row matches one of three rules. Pure & additive — never
- * demotes and never runs on stages other than `ready`.
+ * Promote a READY user stage to FIRE when the model holds sustained top
+ * conviction. Pure & additive — never demotes and never runs on stages other
+ * than `ready`.
  *
- * Rules (any one promotes):
- *   A) displayScore10 ≥ 9.5 AND canonicalStage === "attack" AND ≥1 strong driver
- *   B) alertPath ∈ PATH_PROMOTES_TO_FIRE AND signalState ∈ {live, actionable}
- *   C) dynamicState === "BET_NOW" AND displayScore10 ≥ 9.5 AND not stale-decaying
+ * Primary gate (probability + sustained conviction — all required):
+ *   - dynamicState === "BET_NOW"            (the engine's top conviction)
+ *   - canonicalStage === "attack"
+ *   - consecutivePromoteTicks ≥ READY_TO_FIRE_SUSTAIN_TICKS  (held, not a blip)
+ *   - ≥1 strong driver from STRONG_HR_DRIVER_SIGNALS  (a fallback-only 10/10
+ *     can't fire — kept from the legacy guard)
  *
- * Stale = current readiness < 0.85 × peak readiness (engine signal is fading).
+ * Secondary fast-path (engine conviction path):
+ *   - alertPath ∈ PATH_PROMOTES_TO_FIRE AND signalState ∈ {live, actionable}
  *
  * Diagnostics:
  *   - Promotion → `[HR_RADAR_READY_TO_FIRE]` JSON line incl. matched rule + drivers.
- *   - High-score block → `[HR_RADAR_FIRE_BLOCKED]` JSON line listing what's missing.
- *     Gated to displayScore10 ≥ 9.5 to keep noise bounded.
+ *   - Near-miss block → `[HR_RADAR_FIRE_BLOCKED]` JSON line listing what's missing.
+ *     Gated to dynamicState === "BET_NOW" to keep noise bounded.
  */
 export function maybePromoteReadyToFire(
   current: HrRadarUserStage,
@@ -495,15 +508,17 @@ export function maybePromoteReadyToFire(
 
   const peak = Number(ctx.peakReadinessScore ?? 0);
   const cur = Number(ctx.currentReadinessScore ?? 0);
-  const stale = peak > 0 && cur > 0 && cur < peak * 0.85;
+  // Lane 1.4 — sustained-conviction count (consecutive BET_NOW/PREPARE ticks
+  // from the engine snapshot). Replaces the old peak-staleness cliff: instead
+  // of "not yet decayed", fire requires conviction to be positively *held*.
+  const sustainTicks = Number(ctx.consecutivePromoteTicks ?? 0);
+  const sustained = sustainTicks >= READY_TO_FIRE_SUSTAIN_TICKS;
 
   let rule: string | null = null;
   if (PATH_PROMOTES_TO_FIRE[path] && (sig === "live" || sig === "actionable")) {
     rule = "path_promotes_fire_live_or_actionable";
-  } else if (score >= 9.5 && canonical === "attack" && hasStrongDriver) {
-    rule = "score_max_attack_window_strong_driver";
-  } else if (dyn === "BET_NOW" && score >= 9.5 && !stale) {
-    rule = "betnow_score_max_not_stale";
+  } else if (dyn === "BET_NOW" && canonical === "attack" && sustained && hasStrongDriver) {
+    rule = "betnow_attack_sustained_strong_driver";
   }
 
   const sid = ctx.signalId ?? "?";
@@ -525,30 +540,29 @@ export function maybePromoteReadyToFire(
         strongDrivers: matchedDrivers,
         currentReadinessScore: Number.isFinite(cur) ? cur : null,
         peakReadinessScore: Number.isFinite(peak) ? peak : null,
-        stale,
+        consecutivePromoteTicks: sustainTicks,
       }),
     );
     return "fire";
   }
 
-  // Block diagnostic — only when score is near the FIRE bar so we don't
-  // log every READY card every cycle. Lists each unmet rule's missing piece.
-  if (score >= 9.5) {
+  // Block diagnostic — only when the model is at top conviction (BET_NOW) so we
+  // don't log every READY card every cycle. Lists each unmet primary-rule piece.
+  if (dyn === "BET_NOW") {
     const reasons: string[] = [];
+    if (canonical !== "attack") {
+      reasons.push("canonical_stage_not_attack");
+    }
+    if (!sustained) {
+      reasons.push(`conviction_not_sustained (${sustainTicks}/${READY_TO_FIRE_SUSTAIN_TICKS})`);
+    }
+    if (!hasStrongDriver) {
+      reasons.push("no_strong_hr_driver");
+    }
     if (!PATH_PROMOTES_TO_FIRE[path]) {
       reasons.push("path_not_in_promotes_fire");
     } else if (sig !== "live" && sig !== "actionable") {
       reasons.push("path_promotes_fire_but_signal_state_not_live_or_actionable");
-    }
-    if (canonical !== "attack") {
-      reasons.push("canonical_stage_not_attack");
-    } else if (!hasStrongDriver) {
-      reasons.push("no_strong_hr_driver");
-    }
-    if (dyn !== "BET_NOW") {
-      reasons.push("dynamic_state_not_bet_now");
-    } else if (stale) {
-      reasons.push("bet_now_but_stale_decaying");
     }
     console.log(
       `[HR_RADAR_FIRE_BLOCKED] ` + JSON.stringify({
@@ -561,7 +575,7 @@ export function maybePromoteReadyToFire(
         canonicalStage: canonical || null,
         strongDrivers: matchedDrivers,
         hasStrongDriver,
-        stale,
+        consecutivePromoteTicks: sustainTicks,
         reasons,
       }),
     );
@@ -661,6 +675,9 @@ export function enrichWithUserStage(input: {
   userReasons?: string[] | null;
   adminReasons?: string[] | null;
   alertPath?: string | null;
+  // Lane 1.4 — sustained-conviction count from the engine snapshot
+  // (HRAlertSnapshot.consecutivePromoteTicks), persisted on the stage contract.
+  consecutivePromoteTicks?: number | null;
   useFallbackScore?: boolean; // Phase 3: opt-in display fallback for zero rows
   // ── HR Radar Lifecycle Repair — observability ────────────────────────
   // Identity fields used purely to label transition diagnostics. Optional;
@@ -734,6 +751,7 @@ export function enrichWithUserStage(input: {
     displayScore10: _displayCurrentScoreEarly ?? null,
     currentReadinessScore: input.currentReadinessScore ?? null,
     peakReadinessScore: input.peakReadinessScore ?? null,
+    consecutivePromoteTicks: input.consecutivePromoteTicks ?? null,
     qualifyingSignals,
     signalId: input.signalId ?? null,
     gameId: input.gameId ?? null,

@@ -23,7 +23,7 @@ export function WelcomeBanner({ onExplore, onDismiss, subtitle, subtitleColor }:
         opacity: visible ? 1 : 0,
         transition: "transform 400ms cubic-bezier(0.34,1.56,0.64,1), opacity 300ms ease",
         background: "linear-gradient(135deg, #0a1a16 0%, #0f1f1a 50%, #091510 100%)",
-        border: "1px solid rgba(0, 212, 170, 0.35)",
+        border: "1px solid hsl(var(--brand-accent) / 0.35)",
         borderRadius: 14,
         padding: "20px 24px",
         position: "relative",
@@ -34,7 +34,7 @@ export function WelcomeBanner({ onExplore, onDismiss, subtitle, subtitleColor }:
         style={{
           position: "absolute",
           top: 0, left: 0, right: 0, bottom: 0,
-          background: "radial-gradient(ellipse at top left, rgba(0,212,170,0.06) 0%, transparent 60%)",
+          background: "radial-gradient(ellipse at top left, hsl(var(--brand-accent) / 0.06) 0%, transparent 60%)",
           pointerEvents: "none",
         }}
       />
@@ -63,8 +63,8 @@ export function WelcomeBanner({ onExplore, onDismiss, subtitle, subtitleColor }:
           style={{
             width: 44, height: 44,
             borderRadius: 12,
-            background: "rgba(0,212,170,0.12)",
-            border: "1px solid rgba(0,212,170,0.25)",
+            background: "hsl(var(--brand-accent) / 0.12)",
+            border: "1px solid hsl(var(--brand-accent) / 0.25)",
             display: "flex", alignItems: "center", justifyContent: "center",
             flexShrink: 0,
             fontSize: 22,
@@ -76,7 +76,7 @@ export function WelcomeBanner({ onExplore, onDismiss, subtitle, subtitleColor }:
         <div className="flex-1 min-w-0">
           <p
             style={{
-              color: "#00d4aa",
+              color: "hsl(var(--brand-accent))",
               fontWeight: 700,
               fontSize: 15,
               letterSpacing: "-0.01em",
@@ -94,7 +94,7 @@ export function WelcomeBanner({ onExplore, onDismiss, subtitle, subtitleColor }:
               data-testid="welcome-banner-explore"
               onClick={onExplore}
               style={{
-                background: "#00d4aa",
+                background: "hsl(var(--brand-accent))",
                 color: "#000000",
                 fontWeight: 700,
                 fontSize: 13,

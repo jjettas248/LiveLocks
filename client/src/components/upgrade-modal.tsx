@@ -78,8 +78,8 @@ export function UpgradeModal({ playsUsed, limit, onClose, lockedEdgesCount, topL
 
         <div className="p-6 pb-4">
           <div className="flex items-center gap-2 mb-3">
-            <ShieldAlert className="w-5 h-5 text-[#00d4aa]" />
-            <span className="text-xs font-semibold uppercase tracking-wider text-[#00d4aa]">LiveLocks</span>
+            <ShieldAlert className="w-5 h-5 text-brand" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-brand">LiveLocks</span>
           </div>
           <h2
             data-testid="text-upgrade-header"
@@ -127,7 +127,7 @@ export function UpgradeModal({ playsUsed, limit, onClose, lockedEdgesCount, topL
                 </p>
               </div>
               <div className="text-right z-0">
-                <p className="text-lg font-black text-[#00d4aa]">{Math.round(topLockedEdge.probability ?? 0)}%</p>
+                <p className="text-lg font-black text-brand">{Math.round(topLockedEdge.probability ?? 0)}%</p>
                 {(topLockedEdge.edge ?? 0) > 0 && (
                   <p className="text-[10px] text-[#a1a1aa]">+{(topLockedEdge.edge ?? 0).toFixed(1)}% edge</p>
                 )}
@@ -139,15 +139,15 @@ export function UpgradeModal({ playsUsed, limit, onClose, lockedEdgesCount, topL
         <div className="px-6 pb-4">
           <div className="space-y-2">
             <div className="flex items-start gap-2.5">
-              <TrendingUp className="w-4 h-4 text-[#00d4aa] mt-0.5 shrink-0" />
+              <TrendingUp className="w-4 h-4 text-brand mt-0.5 shrink-0" />
               <span className="text-sm text-[#d4d4d8]">Live halftime edges — model fires when lines are soft</span>
             </div>
             <div className="flex items-start gap-2.5">
-              <Zap className="w-4 h-4 text-[#00d4aa] mt-0.5 shrink-0" />
+              <Zap className="w-4 h-4 text-brand mt-0.5 shrink-0" />
               <span className="text-sm text-[#d4d4d8]">Real-time probability engine across NBA, NCAAB & MLB</span>
             </div>
             <div className="flex items-start gap-2.5">
-              <Bell className="w-4 h-4 text-[#00d4aa] mt-0.5 shrink-0" />
+              <Bell className="w-4 h-4 text-brand mt-0.5 shrink-0" />
               <span className="text-sm text-[#d4d4d8]">SMS alerts for high-confidence plays (All Sports tier)</span>
             </div>
           </div>
@@ -158,25 +158,25 @@ export function UpgradeModal({ playsUsed, limit, onClose, lockedEdgesCount, topL
             data-testid="button-upgrade-all"
             onClick={() => handleUpgrade("all")}
             disabled={!!loadingTier}
-            className="relative text-left p-4 rounded-xl border border-[#27272a] bg-[#111] hover:border-[#00d4aa]/50 hover:bg-[#00d4aa]/5 transition-all disabled:opacity-60 group"
+            className="relative text-left p-4 rounded-xl border border-[#27272a] bg-[#111] hover:border-brand/50 hover:bg-brand/5 transition-all disabled:opacity-60 group"
           >
             <div className="flex items-center gap-1.5 mb-1">
-              <Trophy className="w-4 h-4 text-[#00d4aa]" />
+              <Trophy className="w-4 h-4 text-brand" />
               <span className="text-sm font-bold text-white">PRO</span>
             </div>
             <div className="text-2xl font-black text-white">
               $40<span className="text-xs font-normal text-[#71717a]">/mo</span>
             </div>
-            <p className="text-[10px] text-[#00d4aa] font-semibold mt-0.5">$1 today &middot; Then $40/mo &middot; Cancel anytime</p>
+            <p className="text-[10px] text-brand font-semibold mt-0.5">$1 today &middot; Then $40/mo &middot; Cancel anytime</p>
             <ul className="mt-1.5 space-y-0.5">
-              <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#00d4aa] shrink-0" />Live halftime edges</li>
-              <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#00d4aa] shrink-0" />NBA & NCAAB 2H plays</li>
-              <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-[#00d4aa] shrink-0" />Real-time probability engine</li>
+              <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-brand shrink-0" />Live halftime edges</li>
+              <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-brand shrink-0" />NBA & NCAAB 2H plays</li>
+              <li className="text-[11px] text-[#a1a1aa] flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-brand shrink-0" />Real-time probability engine</li>
               <li className="text-[11px] text-[#71717a] flex items-center gap-1"><XCircle className="w-3 h-3 text-[#52525b] shrink-0" />MLB props (not included)</li>
             </ul>
             {loadingTier === "all" && (
               <div className="absolute inset-0 flex items-center justify-center bg-[#111]/80 rounded-xl">
-                <div className="w-5 h-5 border-2 border-[#00d4aa] border-t-transparent rounded-full animate-spin" />
+                <div className="w-5 h-5 border-2 border-brand border-t-transparent rounded-full animate-spin" />
               </div>
             )}
           </button>
@@ -218,7 +218,7 @@ export function UpgradeModal({ playsUsed, limit, onClose, lockedEdgesCount, topL
             onClick={() => handleUpgrade("all")}
             disabled={!!loadingTier}
             className="w-full py-3 rounded-xl text-sm font-bold transition-all disabled:opacity-60"
-            style={{ background: "#00d4aa", color: "#000" }}
+            style={{ background: "hsl(var(--brand-accent))", color: "#000" }}
           >
             {loadingTier ? "Redirecting to checkout..." : "Start 3-Day Trial \u2013 $1"}
           </button>

@@ -130,7 +130,7 @@ async function ensureLeagueTeamStats(seasonType: NBASeasonType = "Regular Season
 
 function getCurrentSeason(): string {
   const now = new Date();
-  const year = now.getMonth() >= 9 ? now.getFullYear() : now.getFullYear() - 1;
+  const year = now.getUTCMonth() >= 9 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
   return `${year}-${String(year + 1).slice(2)}`;
 }
 

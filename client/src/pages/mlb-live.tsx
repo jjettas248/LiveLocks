@@ -8,6 +8,7 @@ import { LiveBoard } from "@/components/mlb/LiveBoard";
 import { LiveFeed } from "@/components/mlb/LiveFeed";
 import { MlbSignalCard, type MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { HrRadarLadder, type HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
+import { HrQuickDecide } from "@/components/mlb/HrQuickDecide";
 import { MlbBoxScore, type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
 import { AdminEngineDebugPanel } from "@/components/mlb/AdminEngineDebugPanel";
 import type { MLBSignal } from "@shared/mlbSignal";
@@ -61,7 +62,7 @@ class MLBErrorBoundary extends Component<{ children: ReactNode }, { hasError: bo
   render() {
     if (this.state.hasError) {
       return (
-        <div className="max-w-5xl mx-auto px-4 py-12 text-center space-y-3">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12 text-center space-y-3">
           <div className="text-sm font-semibold text-foreground">Something went wrong loading MLB</div>
           <div className="text-xs text-muted-foreground">{this.state.message}</div>
           <button className="text-xs text-primary underline" onClick={() => this.setState({ hasError: false, message: "" })}>
@@ -2647,7 +2648,7 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
           data-testid="badge-model-confidence-calc"
           className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium ${
             calcResult.confidenceTier === "ELITE" ? "bg-yellow-500/10 border border-yellow-500/20 text-yellow-400" :
-            calcResult.confidenceTier === "STRONG" ? "bg-[#00d4aa]/10 border border-[#00d4aa]/20 text-[#00d4aa]" :
+            calcResult.confidenceTier === "STRONG" ? "bg-brand/10 border border-brand/20 text-brand" :
             calcResult.confidenceTier === "SOLID" ? "bg-blue-500/10 border border-blue-500/20 text-blue-400" :
             "bg-secondary/40 border border-border/30 text-muted-foreground"
           }`}
@@ -2875,6 +2876,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
   const mlbUpgradeNeeded = false;
   const [mlbSlipPicks, setMlbSlipPicks] = useState<Array<{ playerId: string; playerName: string; market: string; line: number; side: string; sportsbook: string; edge: number | null; enginePct: number; gameId: string; overOdds?: number | null; underOdds?: number | null; overProbability?: number | null; underProbability?: number | null; engineConfidence?: number | null; source?: "engine" | "calculator" }>>([]);
   const [analyzeTarget, setAnalyzeTarget] = useState<{ playerId: string; gameId: string } | null>(null);
+  const [hrViewMode, setHrViewMode] = useState<"quick" | "ladder">("quick");
 
   const isElite = user?.hasMLB === true;
 
@@ -3239,7 +3241,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
 
   if (authLoading || gamesLoading) {
     return (
-      <div className="max-w-6xl mx-auto px-4 py-6 space-y-3">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-3">
         <SkeletonCard count={4} />
       </div>
     );
@@ -3247,7 +3249,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
 
   if (mlbUpgradeNeeded) {
     return (
-      <div className="max-w-6xl mx-auto px-4 py-12 flex flex-col items-center justify-center gap-4">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12 flex flex-col items-center justify-center gap-4">
         <EmptyState
           icon="\u26BE"
           title="MLB Preview Limit Reached"
@@ -3263,7 +3265,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
 
   return (
     <div
-      className="max-w-6xl mx-auto px-4 py-6 space-y-5"
+      className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-5"
       style={{ paddingBottom: mlbSlipPicks.length > 0 ? "calc(env(safe-area-inset-bottom, 16px) + 280px)" : "calc(env(safe-area-inset-bottom, 16px) + 24px)" }}
     >
       <div className="flex items-center justify-between">
@@ -3774,18 +3776,45 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
       )}
 
       {activeSubTab === "hr_radar" && (
-        <HrRadarLadder
-          onAddToSlip={handleAddToSlip}
-          isAdmin={!!user?.isAdmin}
-          onOpenDetails={(entry: HrRadarLadderEntry) => {
-            handleHrRadarClick({
-              playerId: entry.playerId,
-              playerName: entry.playerName,
-              team: entry.team,
-              gameId: entry.gameId,
-            } as unknown as HrRadarCardUi);
-          }}
-        />
+        <div className="space-y-4">
+          {/* Quick Decide / Full Ladder toggle */}
+          <div className="flex items-center gap-1 p-1 bg-muted/30 rounded-lg border border-border/50">
+            <button
+              data-testid="button-hr-mode-quick"
+              onClick={() => setHrViewMode("quick")}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-md transition-colors ${hrViewMode === "quick" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              ⚡ Quick Decide
+            </button>
+            <button
+              data-testid="button-hr-mode-ladder"
+              onClick={() => setHrViewMode("ladder")}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-md transition-colors ${hrViewMode === "ladder" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              Full Ladder
+            </button>
+          </div>
+
+          {hrViewMode === "quick" ? (
+            <HrQuickDecide
+              onAddToSlip={handleAddToSlip}
+              onSwitchToLadder={() => setHrViewMode("ladder")}
+            />
+          ) : (
+            <HrRadarLadder
+              onAddToSlip={handleAddToSlip}
+              isAdmin={!!user?.isAdmin}
+              onOpenDetails={(entry: HrRadarLadderEntry) => {
+                handleHrRadarClick({
+                  playerId: entry.playerId,
+                  playerName: entry.playerName,
+                  team: entry.team,
+                  gameId: entry.gameId,
+                } as unknown as HrRadarCardUi);
+              }}
+            />
+          )}
+        </div>
       )}
 
       {analyzeTarget && (

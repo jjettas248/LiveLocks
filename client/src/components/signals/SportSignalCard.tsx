@@ -171,18 +171,18 @@ export function SportSignalCard({
 
         <div className="flex items-end gap-5">
           <div>
-            <div className={`text-2xl font-bold ${EDGE_COLOR(edge)}`}>{probWhole}%</div>
+            <div className={`text-2xl font-bold tabular-nums ${EDGE_COLOR(edge)}`}>{probWhole}%</div>
             <div className="text-[10px] text-muted-foreground">Probability</div>
           </div>
           {projection != null && sport !== "MLB" && (
             <div>
-              <div className="text-sm font-semibold text-foreground">{typeof projection === "number" ? projection.toFixed(1) : projection}</div>
+              <div className="text-sm font-semibold tabular-nums text-foreground">{typeof projection === "number" ? projection.toFixed(1) : projection}</div>
               <div className="text-[10px] text-muted-foreground">Proj</div>
             </div>
           )}
           {line != null && (
             <div>
-              <div className="text-sm font-semibold text-foreground">{line}</div>
+              <div className="text-sm font-semibold tabular-nums text-foreground">{line}</div>
               <div className="text-[10px] text-muted-foreground">Line</div>
             </div>
           )}
@@ -329,7 +329,10 @@ export function SportSignalCard({
                   window.open(url, "_blank", "noopener,noreferrer,width=550,height=420");
                 }}
               >
-                𝕏 Tweet
+                <svg viewBox="0 0 24 24" className="w-3 h-3 fill-current" aria-hidden="true">
+                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+                </svg>
+                Tweet
               </button>
             </>
           )}

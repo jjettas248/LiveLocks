@@ -43,8 +43,9 @@ import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
 import { getCanonicalSidedProbability } from "./probabilityEngine";
 import { computeSignalScore, computeSignalScoreByFamily, scoreHRRadar, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily, deriveSignalTier } from "./signalScore";
 import { detectNearHrContact, detectNearHrContactPeak } from "./nearHrContact";
-import { upsertCanonicalHrRadarState } from "./hrRadarCanonicalStore";
+import { upsertCanonicalHrRadarState, getCanonicalHrRadarState } from "./hrRadarCanonicalStore";
 import type { HrRadarLifecycleEvent } from "./hrRadarStateMachine";
+import { rankOf } from "./hrRadarStateMachine";
 import { MLB_CALIBRATION_VERSION } from "./diagnosticsBuffer";
 import { recordDriftSnapshot } from "./goldmasterGuard";
 import {
@@ -79,7 +80,7 @@ import { buildLiveEventInterpretation } from "./liveEventInterpretation";
 import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, clearGameCooldowns, type HRAlertInput } from "./evaluateHRAlert";
-import { recomputeHrAlertState, clearGameHrStates, getHrAlertState, mapDynamicStateToStage, computeUnifiedCanonicalStage, seedHrAlertDetection, closeHrAlertOnHit, type HRAlertSnapshot, type HrRadarStage } from "./hrAlertEngine";
+import { recomputeHrAlertState, clearGameHrStates, getHrAlertState, mapDynamicStateToStage, computeUnifiedCanonicalStage, seedHrAlertDetection, closeHrAlertOnHit, deriveCanonicalPromotionIntent, type HRAlertSnapshot, type HrRadarStage } from "./hrAlertEngine";
 import {
   recomputeNonHrSignalState,
   closeNonHrSignalOnHit,
@@ -192,6 +193,27 @@ export function getOnlyHomersEnrichment(playerName: string): {
 
 export function getOnlyHomersBallparkHrCount(ballpark: string): number | null {
   return ohBallparkFactors.get(ballpark) ?? null;
+}
+
+// IBB in-game leverage context. The base/out state describes only the CURRENT
+// plate appearance, so the leverage fields (first base open, RISP, score diff)
+// must be gated to the batter actually in the box — otherwise every off-turn
+// 3–5 hitter scanned in the lineup loop would inherit this PA's base/out state.
+// The season IBB rate is a standing prior and is applied per batter separately.
+function buildIbbBaseOutContext(
+  state: GameStateCache,
+  batterPlayerId: string,
+): { firstBaseOpen: boolean | null; runnerInScoringPosition: boolean | null; scoreDifferential: number | null } {
+  if (state.currentBatter?.playerId !== batterPlayerId) {
+    return { firstBaseOpen: null, runnerInScoringPosition: null, scoreDifferential: null };
+  }
+  return {
+    firstBaseOpen: !state.runnersOnBase.includes("first"),
+    runnerInScoringPosition: state.runnersOnBase.some(b => b === "second" || b === "third"),
+    scoreDifferential: (state.homeScore != null && state.awayScore != null)
+      ? state.homeScore - state.awayScore
+      : null,
+  };
 }
 
 // ── HR alert grading tracker ──────────────────────────────────────────────────
@@ -519,8 +541,14 @@ function gradeSingleHRPlay(
     // to alertTier-driven mapping (officialAlert/prepare/watch).
     const alertTier = snap?.alertResult?.alertTier ?? null;
     const signalState = snap?.alertResult?.signalState ?? null;
+    // Phase 1 (3-tier ladder) — only HR-Max-Window signals stamp a counted
+    // cash; sub-actionable Watch/Building HRs stamp `uncalled_hr` (diagnostic).
+    // Keeps the in-memory outcome stamp symmetric with the DB grading paths.
     const tieredStatus = (() => {
       try {
+        if (!hrRadarSectionMod.reachedHrMaxWindow({ alertTier, confidenceTier: null, signalState })) {
+          return "uncalled_hr" as const;
+        }
         return hrRadarSectionMod.inferCashedFromTierStatus({
           alertTier,
           confidenceTier: null,
@@ -749,6 +777,22 @@ const priorResolvedLines = new Map<string, number>();
 const PREFERRED_BOOKMAKERS = ["draftkings", "fanduel", "hardrockbet", "betmgm", "betrivers", "espnbet"];
 
 type ResolvedLine = { line: number; overOdds: number | null; underOdds: number | null; isDegraded: boolean; source: "live" | "prior" | "cache" | "lkg" };
+
+// Phase 2 — most-recent resolved batter_home_runs prices per (gameId, playerId).
+// The per-tick market loop resolves HR odds; the contact-reevaluation path
+// (reevaluateHRRadarOnContact) has no odds in scope, so it reads them here to
+// EV-gate the HR Max Window tier. TTL keeps stale prices from gating.
+const HR_OVER_ODDS_CACHE = new Map<string, { overOdds: number | null; underOdds: number | null; ts: number }>();
+const HR_ODDS_CACHE_TTL_MS = 5 * 60 * 1000;
+function hrOddsKey(gameId: string, playerId: string): string { return `${gameId}_${playerId}`; }
+function cacheHrOdds(gameId: string, playerId: string, overOdds: number | null, underOdds: number | null): void {
+  HR_OVER_ODDS_CACHE.set(hrOddsKey(gameId, playerId), { overOdds, underOdds, ts: Date.now() });
+}
+function getCachedHrOdds(gameId: string, playerId: string): { overOdds: number | null; underOdds: number | null } | null {
+  const e = HR_OVER_ODDS_CACHE.get(hrOddsKey(gameId, playerId));
+  if (!e || Date.now() - e.ts > HR_ODDS_CACHE_TTL_MS) return null;
+  return { overOdds: e.overOdds, underOdds: e.underOdds };
+}
 
 // ── Resolve a real book line for a player/market ──────────────────────────────
 // Precedence:
@@ -1149,7 +1193,7 @@ export class LiveGameOrchestrator {
       // game stays final and will self-heal once the box score arrives.
       const boxHydrated = !!(boxScore?.byPlayerId && Object.keys(boxScore.byPlayerId).length > 0);
       if (boxHydrated) {
-        await storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap).catch(() => undefined);
+        await storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap, newState?.inning ?? null).catch(() => undefined);
       } else {
         console.log(`[HR_RADAR_FINAL_RECONCILE] gameId=${gameId} sessionDate=${sessionDate} deferred=hr_radar_table reason=box_score_not_hydrated (per-poll reconciler will retry every 10s)`);
       }
@@ -1602,7 +1646,7 @@ export class LiveGameOrchestrator {
         }
       }
       storage.reconcileAlertsForGame(gameId).catch(() => {});
-      storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap).catch(() => {});
+      storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap, newState.inning ?? null).catch(() => {});
       clearGameCooldowns(gameId);
       clearGameHrStates(gameId);
       for (const key of Array.from(KNOWN_HR_COUNTS.keys())) {
@@ -1947,6 +1991,10 @@ export class LiveGameOrchestrator {
         // Phase 2 STEP 5 — propagate Statcast barrel flag from dataPullService
         // so the BARREL_OVERRIDE detection path can fire (Ben Rice repair).
         isBarrel: ab?.isBarrel === true,
+        // "Almost HR" outcome inputs — deep flyout / power double-triple /
+        // high-xBA hard out are strong pre-HR evidence (composition only).
+        outcome: ab?.outcome ?? null,
+        hitType: ab?.hitType ?? null,
       })),
       5,
     );
@@ -2870,6 +2918,10 @@ export class LiveGameOrchestrator {
       xwOBA: p.playerContact?.xwOBASeason ?? null,
       xISO: p.playerContact?.xISOSeason ?? null,
       sweetSpotPercent: p.playerContact?.sweetSpotPercent ?? null,
+      pullRatePercent: p.playerContact?.pullRatePercent ?? null,
+      recentOps: p.rollingStats?.last15?.ops ?? null,
+      seasonOps: p.rollingStats?.seasonOps ?? null,
+      seasonIBBRate: p.rollingStats?.seasonIBBRate ?? null,
     };
   }
 
@@ -3015,6 +3067,7 @@ export class LiveGameOrchestrator {
           xwOBASeason: playerContact.xwOBASeason ?? null,
           xISOSeason: playerContact.xISOSeason ?? null,
           sweetSpotPercent: playerContact.sweetSpotPercent ?? null,
+          pullRatePercent: playerContact.pullRatePercent ?? null,
         },
         pitcher: {
           pitchCount: pitcher ? state.pitchCount : 0,
@@ -3032,6 +3085,14 @@ export class LiveGameOrchestrator {
           avgFastballSpin: pitcherCtx?.avgFastballSpin ?? null,
         },
         ...(rollingStats ? {
+          rollingForm: {
+            last7Avg: rollingStats.last7.avg,
+            last15Avg: rollingStats.last15.avg,
+            last30Avg: rollingStats.last30.avg,
+            last7Ops: rollingStats.last7.ops,
+            last15Ops: rollingStats.last15.ops,
+            seasonOps: rollingStats.seasonOps,
+          },
           hrTrend: {
             abSinceLastHR: rollingStats.abSinceLastHR,
             hrRateLast7: rollingStats.hrRateLast7,
@@ -3041,6 +3102,11 @@ export class LiveGameOrchestrator {
             seasonTotalAB: rollingStats.seasonTotalAB,
           },
         } : {}),
+        ibbContext: {
+          seasonIBBRate: rollingStats?.seasonIBBRate ?? null,
+          ...buildIbbBaseOutContext(state, batter.playerId),
+          inning: state.inning,
+        },
         lineup: {
           battingOrderSlot: batter.slot,
           orderTurnoverProximity: 0.5,
@@ -3320,6 +3386,8 @@ export class LiveGameOrchestrator {
     const resolvedWindSpeed = hourlyWeather?.windSpeed ?? weatherCache?.windSpeed ?? null;
     const resolvedWindDir = hourlyWeather?.windDirection ?? weatherCache?.windDirection ?? null;
     const resolvedHumidity = hourlyWeather?.humidity ?? weatherCache?.humidity ?? null;
+    // Lane 3.2 — barometric pressure (Open-Meteo). Null when unavailable.
+    const resolvedPressure = hourlyWeather?.pressure ?? weatherCache?.pressure ?? null;
     const resolvedWindShift = weatherCache?.windShiftDetected ?? false;
 
     if (weatherCache?.venueName) {
@@ -3456,6 +3524,12 @@ export class LiveGameOrchestrator {
         }
         if (resolvedLine && resolvedLine.isDegraded) anyDegraded = true;
 
+        // Phase 2 — stash resolved HR prices so the contact-reevaluation path
+        // can EV-gate the HR Max Window tier (it has no odds in scope).
+        if (market === "home_runs" && resolvedLine) {
+          cacheHrOdds(gameId, batter.playerId, resolvedLine.overOdds, resolvedLine.underOdds);
+        }
+
         if (!hrRadarOnly) {
           const resolvedMarketObj = { line: resolvedLine!.line, odds: (resolvedLine!.overOdds !== null || resolvedLine!.underOdds !== null) ? { overOdds: resolvedLine!.overOdds, underOdds: resolvedLine!.underOdds } : null };
           if (!hasRealOdds(resolvedMarketObj)) {
@@ -3590,6 +3664,7 @@ export class LiveGameOrchestrator {
               xwOBASeason: playerContact?.xwOBASeason ?? null,
               xISOSeason: playerContact?.xISOSeason ?? null,
               sweetSpotPercent: playerContact?.sweetSpotPercent ?? null,
+              pullRatePercent: playerContact?.pullRatePercent ?? null,
             };
           })(),
           pitcher: {
@@ -3633,6 +3708,7 @@ export class LiveGameOrchestrator {
               last30Avg: rollingStats.last30.avg,
               last7Ops: rollingStats.last7.ops,
               last15Ops: rollingStats.last15.ops,
+              seasonOps: rollingStats.seasonOps,
             },
             hrTrend: {
               abSinceLastHR: rollingStats.abSinceLastHR,
@@ -3643,6 +3719,11 @@ export class LiveGameOrchestrator {
               seasonTotalAB: rollingStats.seasonTotalAB,
             },
           } : {}),
+          ibbContext: {
+            seasonIBBRate: rollingStats?.seasonIBBRate ?? null,
+            ...buildIbbBaseOutContext(state, batter.playerId),
+            inning: state.inning,
+          },
           lineup: {
             battingOrderSlot: batter.slot,
             orderTurnoverProximity: 0.5,
@@ -3939,6 +4020,8 @@ export class LiveGameOrchestrator {
               bullpenEra: bullpenCache?.bullpenEra ?? null,
               bullpenUsageLast3Days: bullpenCache?.bullpenUsageLastThreeDays ?? null,
               relieversUsedCount: bullpenCache?.relieversUsed?.length ?? 0,
+              // Lane 3.3 — recent in-game velocity trend (slope).
+              veloTrendSlope: pitcherCtx?.recentVeloTrend ?? null,
             };
 
             const resolvedSeasonHRRate = rollingStats?.seasonHRRate ?? null;
@@ -3983,6 +4066,49 @@ export class LiveGameOrchestrator {
             });
             (output as any).hrAlertSnapshot = hrDynSnap;
             console.log(`[HR_DYNAMIC] ${batter.playerName} state=${hrDynSnap.currentState} readiness=${hrDynSnap.hrReadinessScore} convRaw=${(hrDynSnap.hrConversionProbabilityRaw * 100).toFixed(1)}% convCal=${(hrDynSnap.hrConversionProbabilityCalibrated * 100).toFixed(1)}% decay=${hrDynSnap.decayFactor.toFixed(2)} pitVuln=${hrDynSnap.pitcherHrVulnerability} remPA=${hrDynSnap.remainingPAExpectation.toFixed(1)} tick=${hrDynSnap.tickCount} game=${gameId}`);
+
+            // ── Lane 1.3 — probability rail feeds the canonical FSM ──────────
+            // The dynamic state (calibrated prob × decay × pitcher vuln) is
+            // mapped to a lifecycle event so the canonical ladder tracks the
+            // model, not just discrete near-HR contact. We only emit when the
+            // intended floor strictly outranks the current FSM state, which
+            // (a) avoids per-tick [HR_RADAR_STATE_EVENT] spam and (b) sidesteps
+            // PROMOTE not-strictly-higher rejections. Terminal stickiness and
+            // contact-evidence floors (BARREL → build, etc.) are preserved:
+            // the contact path runs first and BARREL is idempotent at/above
+            // build, so a real barrel floor is never undone by the prob rail.
+            if (batter.playerId != null) {
+              try {
+                const promo = deriveCanonicalPromotionIntent(hrDynSnap);
+                if (promo.event && promo.floor) {
+                  const existingCanon = getCanonicalHrRadarState(gameId, batter.playerId);
+                  const curState = existingCanon?.lifecycleState ?? "inactive";
+                  if (!existingCanon?.terminal && rankOf(promo.floor) > rankOf(curState)) {
+                    upsertCanonicalHrRadarState({
+                      gameId,
+                      playerId: batter.playerId,
+                      playerName: batter.playerName,
+                      team: batter.team ?? null,
+                      event: promo.event,
+                      context: {
+                        reason: `prob_rail_${promo.reason}`,
+                        inning: state.inning,
+                        ...(promo.promoteTo ? { promoteTo: promo.promoteTo } : {}),
+                        displayScore10: hrDynSnap.hrReadinessScore / 10,
+                      },
+                      triggerReasons: [`prob_rail:${promo.reason}`],
+                      triggerTags: ["PROB_RAIL"],
+                    });
+                  }
+                }
+              } catch (e) {
+                // Prob rail is observability/promotion-only — never block a tick.
+                console.log("[HR_RADAR_PROB_RAIL_ERROR]", JSON.stringify({
+                  gameId, playerId: batter.playerId,
+                  error: (e as Error)?.message ?? String(e),
+                }));
+              }
+            }
 
             const convResult = alertResult.diagnostics.hrConversion;
             const rawPct = convResult ? `${(convResult.hrConversionProbability * 100).toFixed(1)}%` : "n/a";
@@ -4098,6 +4224,8 @@ export class LiveGameOrchestrator {
                 // user-stage layer can authoritatively read engine state from
                 // stageContract.dynamicState rather than re-deriving it.
                 dynamicState: hrDynSnap?.currentState ?? null,
+                // Lane 1.4 — sustained-conviction counter for the ready→fire gate.
+                consecutivePromoteTicks: hrDynSnap?.consecutivePromoteTicks ?? null,
                 plateAppearancesTracked: enginePaCount,
                 hasLiveABContext: engineHasLiveAB,
                 confidenceTier: tierMap[alertResult.signalState ?? "FORMATION"] ?? "monitor",

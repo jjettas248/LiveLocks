@@ -58,6 +58,7 @@ export interface PlayerContactData {
   xwOBASeason: number | null;
   xISOSeason: number | null;
   sweetSpotPercent: number | null;
+  pullRatePercent: number | null;
   priorABResults: Array<{
     exitVelocity: number | null;
     launchAngle: number | null;
@@ -89,6 +90,9 @@ export interface PitcherContextEntry {
   pitchCount: number;
   timesThroughOrder: number;
   velocityDrop: number | null;
+  // Lane 3.3 — recent in-game velocity trend (mph) = avg(last 5 pitches) −
+  // avg(prior 5). Negative = velo falling right now. Null until >= 10 pitches.
+  recentVeloTrend: number | null;
   seasonAvgVelocity: number | null;
   avgFastballSpin: number | null;
   // Gap 3: pre-game fatigue — pitcher's recent start history
@@ -110,6 +114,8 @@ export interface HourlyWeatherEntry {
   windDegrees: number | null;
   humidity: number | null;
   precipProb: number | null;
+  // Lane 3.2 — surface barometric pressure (hPa). Optional.
+  pressure?: number | null;
 }
 
 export interface WeatherCache {
@@ -117,6 +123,9 @@ export interface WeatherCache {
   windSpeed: number | null;
   windDirection: "in" | "out" | "cross" | "calm" | null;
   humidity: number | null;
+  // Lane 3.2 — surface barometric pressure (hPa). Optional; null when source
+  // (Open-Meteo) didn't provide it or weather came from the MLB feed.
+  pressure?: number | null;
   fetchedAt: number;
   venueName: string | null;
   isIndoors: boolean;
@@ -158,6 +167,10 @@ export interface BatterRollingStats {
   hrRateLast30: number | null;
   seasonTotalHR: number;
   seasonTotalAB: number;
+  // Intentional walks (feared-slugger prior). Defensive: 0 / null when the feed
+  // does not expose intentionalWalks, so downstream multipliers stay neutral.
+  seasonTotalIBB: number;
+  seasonIBBRate: number | null;   // IBB / PA
   fetchedAt: number;
 }
 
@@ -628,6 +641,7 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
           xwOBASeason: null,
           xISOSeason: null,
           sweetSpotPercent: null,
+          pullRatePercent: null,
         };
       }
 
@@ -975,6 +989,18 @@ export async function syncPitcherContext(statsPk: string, cacheKey?: string): Pr
           velocityDrop = parseFloat((firstHalfAvg - secondHalfAvg).toFixed(2));
         }
 
+        // Lane 3.3 — recent velocity TREND: avg(last 5) − avg(prior 5). A
+        // fresher decline signal than the whole-game first/second-half split:
+        // a pitcher stably down all game vs one losing velo right now.
+        let recentVeloTrend: number | null = null;
+        if (pitchVelocities.length >= 10) {
+          const last5 = pitchVelocities.slice(-5);
+          const prior5 = pitchVelocities.slice(-10, -5);
+          const last5Avg = last5.reduce((a, b) => a + b, 0) / last5.length;
+          const prior5Avg = prior5.reduce((a, b) => a + b, 0) / prior5.length;
+          recentVeloTrend = parseFloat((last5Avg - prior5Avg).toFixed(2));
+        }
+
         const entryFatigue = await fetchPitcherRecentStarts(String(pid));
 
         // Season fastball spin from Savant pitcher CSV — 4h cached, no extra network cost per tick.
@@ -992,6 +1018,7 @@ export async function syncPitcherContext(statsPk: string, cacheKey?: string): Pr
           pitchCount,
           timesThroughOrder,
           velocityDrop,
+          recentVeloTrend,
           seasonAvgVelocity: null,
           avgFastballSpin,
           lastStartPitchCount: entryFatigue.lastStartPitchCount,
@@ -1369,6 +1396,7 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
           seasonAvg: null, seasonOps: null, seasonHRRate: null,
           abSinceLastHR: null, hrRateLast7: null, hrRateLast15: null, hrRateLast30: null,
           seasonTotalHR: 0, seasonTotalAB: 0,
+          seasonTotalIBB: 0, seasonIBBRate: null,
           fetchedAt: Date.now(),
         };
       } else {
@@ -1423,7 +1451,7 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
     const seasonAvg = allGames.avg;
     const seasonOps = allGames.ops;
 
-    let seasonTotalPA = 0, seasonTotalHR = 0, seasonTotalAB = 0;
+    let seasonTotalPA = 0, seasonTotalHR = 0, seasonTotalAB = 0, seasonTotalIBB = 0;
     for (const g of splits) {
       const s = g.stat;
       const ab = safeNum(s.atBats) ?? 0;
@@ -1431,11 +1459,16 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
       const hbp = safeNum(s.hitByPitch) ?? 0;
       const sf = safeNum(s.sacFlies) ?? 0;
       const hr = safeNum(s.homeRuns) ?? 0;
+      // intentionalWalks: standard MLB Stats API hitting field. Defensive —
+      // 0 when absent, so seasonIBBRate stays low/null and the prior is neutral.
+      const ibb = safeNum(s.intentionalWalks) ?? safeNum(s.intentionalBaseOnBalls) ?? 0;
       seasonTotalPA += ab + bb + hbp + sf;
       seasonTotalHR += hr;
       seasonTotalAB += ab;
+      seasonTotalIBB += ibb;
     }
     const seasonHRRate = seasonTotalPA >= 50 ? parseFloat((seasonTotalHR / seasonTotalPA).toFixed(4)) : null;
+    const seasonIBBRate = seasonTotalPA >= 50 ? parseFloat((seasonTotalIBB / seasonTotalPA).toFixed(4)) : null;
 
     let abSinceLastHR: number | null = null;
     let abAccum = 0;
@@ -1471,10 +1504,11 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
       last7, last15, last30, seasonAvg, seasonOps, seasonHRRate,
       abSinceLastHR, hrRateLast7, hrRateLast15, hrRateLast30,
       seasonTotalHR, seasonTotalAB,
+      seasonTotalIBB, seasonIBBRate,
       fetchedAt: Date.now(),
     };
 
-    console.log(`[MLB pull] syncBatterRollingStats: player ${playerId} — L7=${last7.avg} L15=${last15.avg} L30=${last30.avg} Season=${seasonAvg} HR/PA=${seasonHRRate ?? "n/a"} abSinceHR=${abSinceLastHR ?? "n/a"} hrL7=${hrRateLast7 ?? "n/a"} hrL15=${hrRateLast15 ?? "n/a"} (${splits.length} games)`);
+    console.log(`[MLB pull] syncBatterRollingStats: player ${playerId} — L7=${last7.avg} L15=${last15.avg} L30=${last30.avg} Season=${seasonAvg} HR/PA=${seasonHRRate ?? "n/a"} IBB/PA=${seasonIBBRate ?? "n/a"} abSinceHR=${abSinceLastHR ?? "n/a"} hrL7=${hrRateLast7 ?? "n/a"} hrL15=${hrRateLast15 ?? "n/a"} (${splits.length} games)`);
   } catch (err: any) {
     console.error(`[MLB pull] syncBatterRollingStats(${playerId}) error:`, err.message);
     if (cached) cached.fetchedAt = Date.now();
@@ -1542,6 +1576,7 @@ export async function syncSavantSeasonForLineup(gameId: string): Promise<void> {
         xwOBASeason: savant.xwOBASeason,
         xISOSeason: savant.xISOSeason,
         sweetSpotPercent: savant.sweetSpotPercent,
+        pullRatePercent: savant.pullRatePercent,
       };
     } else {
       const entry = mlbGameCache.contactData[gameId].byPlayerId[pid];
@@ -1557,6 +1592,7 @@ export async function syncSavantSeasonForLineup(gameId: string): Promise<void> {
       if (entry.xwOBASeason === null && savant.xwOBASeason != null) entry.xwOBASeason = savant.xwOBASeason;
       if (entry.xISOSeason === null && savant.xISOSeason != null) entry.xISOSeason = savant.xISOSeason;
       if (entry.sweetSpotPercent === null && savant.sweetSpotPercent != null) entry.sweetSpotPercent = savant.sweetSpotPercent;
+      if (entry.pullRatePercent === null && savant.pullRatePercent != null) entry.pullRatePercent = savant.pullRatePercent;
     }
     enriched++;
   }
@@ -1605,7 +1641,9 @@ export async function syncOpenMeteoWeather(gameId: string, venueName: string | n
   }
 
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,precipitation_probability&temperature_unit=fahrenheit&wind_speed_unit=mph&forecast_days=1&timezone=auto`;
+    // Lane 3.2 — request surface_pressure (one extra field on the existing
+    // call, no new feed) for the HR-distance air-density adjustment.
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,surface_pressure&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,precipitation_probability,surface_pressure&temperature_unit=fahrenheit&wind_speed_unit=mph&forecast_days=1&timezone=auto`;
     const res = await fetch(url, {
       headers: { "User-Agent": "LiveLocks/1.0" },
       signal: AbortSignal.timeout(8000),
@@ -1617,6 +1655,7 @@ export async function syncOpenMeteoWeather(gameId: string, venueName: string | n
     const temperature = safeNum(current.temperature_2m);
     const windSpeed = safeNum(current.wind_speed_10m);
     const humidity = safeNum(current.relative_humidity_2m);
+    const pressure = safeNum(current.surface_pressure);
     const windDeg = safeNum(current.wind_direction_10m);
 
     const windDirection = windDeg != null
@@ -1644,6 +1683,7 @@ export async function syncOpenMeteoWeather(gameId: string, venueName: string | n
           windDegrees: hWindDeg,
           humidity: safeNum(hourlyData.relative_humidity_2m?.[i]),
           precipProb: safeNum(hourlyData.precipitation_probability?.[i]),
+          pressure: safeNum(hourlyData.surface_pressure?.[i]),
         });
       }
     }
@@ -1660,6 +1700,7 @@ export async function syncOpenMeteoWeather(gameId: string, venueName: string | n
       windSpeed,
       windDirection: currentWindDir,
       humidity,
+      pressure,
       fetchedAt: Date.now(),
       venueName,
       isIndoors: false,

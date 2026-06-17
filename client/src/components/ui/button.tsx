@@ -19,6 +19,10 @@ const buttonVariants = cva(
           // Inherits the current text color.
           " border [border-color:var(--button-outline)]  shadow-xs active:shadow-none ",
         secondary: "border bg-secondary text-secondary-foreground border border-secondary-border ",
+        // Semantic state variants — absorb the many ad-hoc colored "soft" pill
+        // buttons (success/positive actions, caution/warning actions).
+        success: "bg-success text-background border border-success/60",
+        warning: "bg-warning text-background border border-warning/60",
         // Add a transparent border so that when someone toggles a border on later, it doesn't shift layout/size.
         ghost: "border border-transparent",
       },

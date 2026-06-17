@@ -3308,6 +3308,7 @@ export async function registerRoutes(
               legacyTier: alert.confidenceTier,
               legacyState: alert.signalState,
               dynamicState: stageContractRow?.dynamicState ?? null,
+              consecutivePromoteTicks: stageContractRow?.consecutivePromoteTicks ?? null,
               canonicalStage,
               outcome: "pending",
               currentReadinessScore: score,
@@ -3800,6 +3801,7 @@ export async function registerRoutes(
           legacyTier: r.confidenceTier,
           legacyState: r.signalState,
           dynamicState: stage?.dynamicState ?? null,
+          consecutivePromoteTicks: stage?.consecutivePromoteTicks ?? null,
           canonicalStage,
           outcome,
           currentReadinessScore: r.currentReadinessScore != null ? parseFloat(r.currentReadinessScore) : null,
@@ -9320,7 +9322,9 @@ export function registerAnalyticsRoutes(app: Express): void {
       return res.json({ plays });
     } catch (e: any) {
       console.error("[top-plays]", e.message);
-      return res.json({ plays: [] });
+      // Return a real error (not 200 {plays:[]}) so the client can distinguish
+      // a backend failure from a genuinely empty slate and surface a retry.
+      return res.status(500).json({ error: "Failed to load top plays" });
     }
   });
 

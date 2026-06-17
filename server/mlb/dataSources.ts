@@ -34,6 +34,9 @@ export interface BaseballSavantData {
   xwOBASeason: number | null;       // avg expected wOBA across all BIP this season
   xISOSeason: number | null;        // expected isolated power (xSLG − xBA)
   sweetSpotPercent: number | null;  // % BIP with launch angle 8–32°
+  // Batter pull rate — % of BIP hit to the pull side (spray angle from hc_x/hc_y,
+  // sign-adjusted for batter stand). Null when hit-coordinate data is unavailable.
+  pullRatePercent: number | null;
 }
 
 // Cache for Savant data (updated infrequently — season stats)
@@ -232,6 +235,7 @@ export async function fetchBaseballSavantData(
     xwOBASeason: null,
     xISOSeason: null,
     sweetSpotPercent: null,
+    pullRatePercent: null,
   };
 
   if (!mlbPlayerId || mlbPlayerId === "undefined") return nullResult;
@@ -258,6 +262,7 @@ export async function fetchBaseballSavantData(
   let xwOBASeason: number | null = null;
   let xISOSeason: number | null = null;
   let sweetSpotPercent: number | null = null;
+  let pullRatePercent: number | null = null;
 
   try {
     const currentYear = new Date().getFullYear();
@@ -310,6 +315,10 @@ export async function fetchBaseballSavantData(
         let xwobaSum = 0;
         let xwobaCount = 0;
         let sweetSpotBIP = 0;
+        // Pull-rate accumulators — spray angle from hit coordinates (hc_x/hc_y),
+        // sign-adjusted by batter stand. Pull = >=15° to the batter's pull side.
+        let pulledBIP = 0;
+        let sprayClassifiedBIP = 0;
 
         for (const row of rows) {
           totalRows++;
@@ -351,6 +360,24 @@ export async function fetchBaseballSavantData(
           const rowXWOBA = rawXWOBA && rawXWOBA !== "" ? safeNum(rawXWOBA) : null;
           if (rowXWOBA != null && rowXWOBA >= 0 && rowXWOBA <= 2.0) { xwobaSum += rowXWOBA; xwobaCount++; }
           if (la != null && ev != null && ev > 0 && la >= 8 && la <= 32) sweetSpotBIP++;
+
+          // Pull classification from hit coordinates. Spray angle convention:
+          //   phi = atan2(hc_x - 125.42, 198.27 - hc_y)  (deg); + = toward RF/1B.
+          // Pull side is RF for LHB and LF for RHB, so flip sign for RHB.
+          const hcx = safeNum(row["hc_x"]);
+          const hcy = safeNum(row["hc_y"]);
+          const stand = (row["stand"] ?? "").trim().toUpperCase();
+          if (hcx != null && hcy != null && (stand === "L" || stand === "R")) {
+            const denom = 198.27 - hcy;
+            if (denom !== 0) {
+              const phi = (Math.atan2(hcx - 125.42, denom) * 180) / Math.PI;
+              const pullAngle = stand === "L" ? phi : -phi;
+              if (Number.isFinite(pullAngle)) {
+                sprayClassifiedBIP++;
+                if (pullAngle >= 15) pulledBIP++;
+              }
+            }
+          }
         }
 
         if (batSpeeds.length > 0) avgBatSpeed = parseFloat((batSpeeds.reduce((a, b) => a + b, 0) / batSpeeds.length).toFixed(1));
@@ -371,6 +398,8 @@ export async function fetchBaseballSavantData(
         if (flyBallBIP > 0) hrFBRatio = parseFloat(((hrAmongFlyBalls / flyBallBIP) * 100).toFixed(1));
         if (xwobaCount > 0) xwOBASeason = parseFloat((xwobaSum / xwobaCount).toFixed(3));
         if (totalBIP > 0) sweetSpotPercent = parseFloat(((sweetSpotBIP / totalBIP) * 100).toFixed(1));
+        // Require a minimum spray sample so the rate is stable before it's used.
+        if (sprayClassifiedBIP >= 20) pullRatePercent = parseFloat(((pulledBIP / sprayClassifiedBIP) * 100).toFixed(1));
         if (xSLG != null && xBA != null) xISOSeason = parseFloat((xSLG - xBA).toFixed(3));
       }
     } else {
@@ -446,6 +475,7 @@ export async function fetchBaseballSavantData(
       xwOBASeason,
       xISOSeason,
       sweetSpotPercent,
+      pullRatePercent,
     };
 
     savantCache.set(cacheKey, { data: result, fetchedAt: Date.now() });

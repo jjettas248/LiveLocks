@@ -48,13 +48,13 @@ const SIGNAL_STYLES: Record<SignalTier, { border: string; bg: string; dot: strin
   green:  { border: "#22c55e", bg: "rgba(34,197,94,0.12)",   dot: "#22c55e" },
   red:    { border: "#ef4444", bg: "rgba(239,68,68,0.12)",   dot: "#ef4444" },
   yellow: { border: "#eab308", bg: "rgba(234,179,8,0.12)",   dot: "#eab308" },
-  teal:   { border: "#00d4aa", bg: "rgba(0,212,170,0.12)",   dot: "#00d4aa" },
+  teal:   { border: "hsl(var(--brand-accent))", bg: "hsl(var(--brand-accent) / 0.12)",   dot: "hsl(var(--brand-accent))" },
 };
 
 const SIGNAL_TIER_STYLES: Record<"elite" | "strong" | "value", { border: string; bg: string; dot: string }> = {
-  elite:  { border: "#22c55e", bg: "rgba(34,197,94,0.12)",   dot: "#22c55e" },
-  strong: { border: "#eab308", bg: "rgba(234,179,8,0.12)",   dot: "#eab308" },
-  value:  { border: "#3b82f6", bg: "rgba(59,130,246,0.12)",  dot: "#3b82f6" },
+  elite:  { border: "hsl(var(--tier-elite) / 0.6)",  bg: "hsl(var(--tier-elite) / 0.12)",  dot: "hsl(var(--tier-elite))" },
+  strong: { border: "hsl(var(--tier-strong) / 0.6)", bg: "hsl(var(--tier-strong) / 0.12)", dot: "hsl(var(--tier-strong))" },
+  value:  { border: "hsl(var(--tier-value) / 0.6)",  bg: "hsl(var(--tier-value) / 0.12)",  dot: "hsl(var(--tier-value))" },
 };
 
 function getSignalTier(prob: number): "elite" | "strong" | "value" | "none" {
@@ -309,7 +309,7 @@ export function LiveBoxscore({
               <span className="flex items-center gap-1"><span style={{ color: "#22c55e" }}>●</span> Over ≥85%</span>
               <span className="flex items-center gap-1"><span style={{ color: "#ef4444" }}>●</span> Under ≥85%</span>
               <span className="flex items-center gap-1"><span style={{ color: "#eab308" }}>●</span> 70–84%</span>
-              <span className="flex items-center gap-1"><span style={{ color: "#00d4aa" }}>●</span> 60–69%</span>
+              <span className="flex items-center gap-1"><span style={{ color: "hsl(var(--brand-accent))" }}>●</span> 60–69%</span>
             </div>
 
             {/* Filter + Sort Controls */}
@@ -496,7 +496,7 @@ export function LiveBoxscore({
 
                         // Stat cell color: use stat-type-specific signal for exact column color
                         const statCellSignal = pid != null ? statCellSignalMap.get(pid) ?? null : null;
-                        const statCellColor = statCellSignal ? SIGNAL_STYLES[statCellSignal.tier].dot : "#00d4aa";
+                        const statCellColor = statCellSignal ? SIGNAL_STYLES[statCellSignal.tier].dot : "hsl(var(--brand-accent))";
 
                         return (
                           <tr
