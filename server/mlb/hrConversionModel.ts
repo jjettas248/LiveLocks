@@ -105,6 +105,7 @@ export interface HRConversionResult {
     pregameFormScore: number;
     pregamePriorMult: number;
     baseRate: number;
+    hardHitInteractionMult: number;
     liveAdjustedRate: number;
     pitcherAdjustedRate: number;
     envAdjustedRate: number;
@@ -249,6 +250,63 @@ function computeLiveContactMultiplier(factors: HRBuildResult["factors"]): number
 
   // Phase 4: tightened cap to reduce upstream probability inflation.
   return Math.min(2.5, multiplier);
+}
+
+// ── Phase 3 — hard-hit × angle × bat-speed × IBB interaction booster ────────
+// Real-world truth: a hard-hit ball OR a high-xBA ball is *much* more likely to
+// be a HR when it co-occurs with a favorable launch angle, elite bat speed, or a
+// feared-slugger (IBB) profile. The independent EV/xBA/LA/bat-speed/IBB terms in
+// the model are additive and under-reward that co-occurrence, so this applies a
+// small MULTIPLICATIVE interaction on top. Additive + no-op when the trigger
+// isn't present or inputs are absent; capped at 1.25× so it can never breach the
+// Phase 1.5 final per-PA clamp (§7a #4). Pure.
+const HHI_HARD_HIT_EV = 104;        // peak EV that counts as "hard hit"
+const HHI_HIGH_XBA = 0.65;          // in-game peak per-AB xBA that counts as "high"
+const HHI_LA_SWEET_LOW = 20;
+const HHI_LA_SWEET_HIGH = 35;
+const HHI_ELITE_BAT_SPEED_MPH = 75; // user spec: >70 good, elite ~75+
+const HHI_GOOD_BAT_SPEED_MPH = 72;
+
+export function computeHardHitInteractionMultiplier(input: HRConversionInput): number {
+  const f = input.factors;
+  const classified = f.contactClasses;
+  if (!classified || classified.length === 0) return 1.0;
+
+  // 1. Trigger — a hard-hit OR high-xBA ball this game (peak across contact).
+  const peakEV = f.maxEV ?? f.qualifiedEVMean ?? 0;
+  const peakXBA = f.maxXBA ?? 0;
+  const hardHit = peakEV >= HHI_HARD_HIT_EV;
+  const highXba = peakXBA >= HHI_HIGH_XBA;
+  if (!hardHit && !highXba) return 1.0;
+
+  // 2. Favorable-angle co-occurrence — was a damage ball struck at a HR-sweet
+  //    launch angle? (the hard-hit/barreled contact specifically, not any ball)
+  let favorableAngle = false;
+  for (const c of classified) {
+    const ev = c.exitVelocity ?? 0;
+    const la = c.launchAngle;
+    const carriesTrigger = ev >= HHI_HARD_HIT_EV || c.isBarrel;
+    if (carriesTrigger && la != null && la >= HHI_LA_SWEET_LOW && la <= HHI_LA_SWEET_HIGH) {
+      favorableAngle = true;
+      break;
+    }
+  }
+
+  // Base interaction — hard-hit AND high-xBA together is the strongest signal.
+  let mult = (hardHit && highXba) ? 1.10 : 1.06;
+
+  // 3. Amplifiers — favorable angle, elite bat speed, feared-slugger IBB.
+  if (favorableAngle) mult *= 1.05;
+  const batSpeed = f.batSpeedMph;
+  if (batSpeed != null) {
+    if (batSpeed >= HHI_ELITE_BAT_SPEED_MPH) mult *= 1.05;
+    else if (batSpeed >= HHI_GOOD_BAT_SPEED_MPH) mult *= 1.02;
+  }
+  const ibb = input.seasonIBBRate ?? 0;
+  if (ibb >= 0.02) mult *= 1.04;
+  else if (ibb >= 0.01) mult *= 1.02;
+
+  return Math.min(1.25, mult);
 }
 
 function describePitcherDeteriorationState(input: HRConversionInput): string {
@@ -773,7 +831,10 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
   }
 
   const liveContactMultiplier = computeLiveContactMultiplier(input.factors);
-  const liveAdjustedRate = baseRate * liveContactMultiplier;
+  // Phase 3 — multiplicative interaction booster (hard-hit/high-xBA × angle ×
+  // bat speed × IBB). No-op (1.0) when the trigger or inputs are absent.
+  const hardHitInteractionMult = computeHardHitInteractionMultiplier(input);
+  const liveAdjustedRate = baseRate * liveContactMultiplier * hardHitInteractionMult;
 
   const pitcherMultiplier = computePitcherMultiplier(input);
   const pitcherAdjustedRate = liveAdjustedRate * pitcherMultiplier;
@@ -850,6 +911,7 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
       pregameFormScore: Math.round(pregameFormScore * 10) / 10,
       pregamePriorMult: Math.round(pregamePriorMult * 1000) / 1000,
       baseRate: Math.round(baseRate * 10000) / 10000,
+      hardHitInteractionMult: Math.round(hardHitInteractionMult * 1000) / 1000,
       liveAdjustedRate: Math.round(liveAdjustedRate * 10000) / 10000,
       pitcherAdjustedRate: Math.round(pitcherAdjustedRate * 10000) / 10000,
       envAdjustedRate: Math.round(envAdjustedRate * 10000) / 10000,
