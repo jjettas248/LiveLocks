@@ -194,7 +194,17 @@ export const NBA_FIXTURES: NBAFixture[] = [
       minutes: { expected: 26, variance: 30 },
       currentStat: 0,
       minutesPlayed: 0,
-      fragilityInputs: HIGH_FRAGILITY,
+      // Keep all three structural fragility signals above their reason thresholds
+      // (0.5) while staying below the finalizer's fragility-subtraction floor
+      // (fragilityScore < 0.40) so the signal isn't suppressed to NO_SIGNAL.
+      fragilityInputs: {
+        normalizedMinutesVariance: 0.55,
+        roleUncertainty: 0.55,
+        lineupInstability: 0.55,
+        blowoutRisk: 0.0,
+        usageShock: 0.0,
+        lateSeasonChaos: 0.0,
+      },
     },
     options: { underBiasCorrectionActive: true },
     expectations: {
@@ -400,10 +410,14 @@ export const NBA_FIXTURES: NBAFixture[] = [
       varianceRateRecent: makeRates(0.12, 0.06, 0.04),
       varianceRateSeason: makeRates(0.10, 0.05, 0.03),
       varianceRateRole: makeRates(0.09, 0.05, 0.03),
-      minutes: { expected: 16, variance: 8 },
+      // variance=7 gives minutesCertainty=0.669 (≥0.65 elite-gate floor).
+      // oddsAgeSec=60 satisfies the freshOdds elite-gate requirement — halftime
+      // lines are live, so stale-odds treatment would be wrong here.
+      minutes: { expected: 16, variance: 7 },
       currentStat: 18,
       minutesPlayed: 22,
       fragilityInputs: LOW_FRAGILITY,
+      oddsAgeSec: 60,
     },
     options: { underBiasCorrectionActive: true },
     expectations: {
