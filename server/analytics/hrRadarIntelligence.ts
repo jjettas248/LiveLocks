@@ -13,6 +13,14 @@
 
 import { getAnalyticsEvents } from "./analyticsEvent";
 import type { HrCalibrationBucket } from "../mlb/hrConversionModel";
+import { CALIBRATION_BIN_EDGES } from "../mlb/hrConversionModel";
+import { CALLED_HIT_OUTCOME_STATUSES } from "../mlb/hrRadarSection";
+// Lane 2 — static import. The previous inline `require(...)` threw
+// "require is not defined" under ESM (how the server runs via tsx), so the
+// calibration cron silently failed every cycle. Analytics is a top-level
+// consumer and hrRadarOutcomeStamp is a leaf (imports only hrRadarSection
+// types) — no circular dependency.
+import { _getAllHrRadarOutcomeStamps } from "../mlb/hrRadarOutcomeStamp";
 
 const STAGES = ["track", "build", "ready", "fire", "cashed", "missed", "dead"] as const;
 type HrStage = (typeof STAGES)[number];
@@ -318,24 +326,28 @@ export function startHrRadarIntelligenceAggregator(intervalMs: number = 5 * 60 *
 // Requires n >= 30 settled outcomes per bucket before overriding the static table.
 export function computeCalibrationBuckets(): HrCalibrationBucket[] {
   try {
-    // Inline require to avoid circular import at module load time.
-    const { _getAllHrRadarOutcomeStamps } = require("../mlb/hrRadarOutcomeStamp") as {
-      _getAllHrRadarOutcomeStamps: () => Array<{ outcomeStatus: string; rawConversionProbability?: number | null }>;
-    };
     const stamps = _getAllHrRadarOutcomeStamps();
 
-    // Only consider settled plays (cashed = HR hit, missed = no HR)
+    // Lane 2.2/2.3 — correct outcome-status classification.
+    //   cashed (HR occurred) = the full CALLED_HIT_OUTCOME_STATUSES set
+    //     (called_hit + all tiered called_hit_attack/ready/build/watch). The
+    //     previous filter dropped called_hit_build / called_hit_watch entirely.
+    //   non-HR (no HR while we tracked) = "called_miss". The previous filter
+    //     tested "missed"/"expired", which are NOT valid HrRadarOutcomeStatus
+    //     values — so the non-HR denominator was always empty and every bin
+    //     would have calibrated≈1.0 if it ever crossed the sample floor.
+    //   Ambiguous statuses (uncalled_hr / early_hr_insufficient_sample /
+    //     late_signal / active / unresolved) are excluded: they lack a clean
+    //     predicted-probability → observed-outcome pairing for calibration.
+    const isCashed = (status: string): boolean =>
+      CALLED_HIT_OUTCOME_STATUSES.has(status as any);
     const settled = stamps.filter(s =>
       s.rawConversionProbability != null &&
-      (s.outcomeStatus === "called_hit" ||
-       s.outcomeStatus === "called_hit_attack" ||
-       s.outcomeStatus === "called_hit_ready" ||
-       s.outcomeStatus === "missed" ||
-       s.outcomeStatus === "expired"),
+      (isCashed(s.outcomeStatus) || s.outcomeStatus === "called_miss"),
     );
 
-    // Mirror the 11 bins from CALIBRATION_TABLE in hrConversionModel.ts
-    const BIN_EDGES = [0.00, 0.03, 0.05, 0.07, 0.09, 0.12, 0.16, 0.20, 0.25, 0.30, 0.40, 1.00];
+    // Lane 2.1 — bins shared 1:1 with CALIBRATION_TABLE via CALIBRATION_BIN_EDGES.
+    const BIN_EDGES = CALIBRATION_BIN_EDGES;
     const buckets: HrCalibrationBucket[] = [];
 
     for (let i = 0; i < BIN_EDGES.length - 1; i++) {
@@ -345,7 +357,7 @@ export function computeCalibrationBuckets(): HrCalibrationBucket[] {
         const p = s.rawConversionProbability!;
         return p >= min && p < max;
       });
-      const cashed = inBin.filter(s => s.outcomeStatus.startsWith("called_hit")).length;
+      const cashed = inBin.filter(s => isCashed(s.outcomeStatus)).length;
       // Per-bin minimum: dense low bins need n>=30, but high-prob HR events are
       // rare, so the sparse top bins (min>=0.20) would never reach 30 and the
       // static table's aggressive >=0.40->0.38 compression would dominate
@@ -353,7 +365,11 @@ export function computeCalibrationBuckets(): HrCalibrationBucket[] {
       // learned empirically instead of being permanently discarded.
       const minSamples = min >= 0.20 ? 20 : 30;
       if (inBin.length >= minSamples) {
-        buckets.push({ min, max, calibrated: cashed / inBin.length, samples: inBin.length });
+        // Lane 2.3 — Laplace smoothing: (cashed+1)/(n+2) so a bin that happens
+        // to see all-misses (or all-hits) can't snap the calibrated value to a
+        // hard 0 (or 1), which would over-correct off a finite sample.
+        const calibrated = (cashed + 1) / (inBin.length + 2);
+        buckets.push({ min, max, calibrated, samples: inBin.length });
       }
     }
 

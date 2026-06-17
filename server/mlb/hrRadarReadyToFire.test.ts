@@ -36,41 +36,48 @@ console.log("\n=== HR Radar READY → FIRE Promotion — Invariant Suite ===\n")
 // ── Pure helper tests ─────────────────────────────────────────────────────
 console.log("maybePromoteReadyToFire — direct rule coverage");
 
-// Rule A: score≥9.5 + canonical=attack + strong driver → fire.
-eq("A.1 score=10 + canonical=attack + elite_barrel → fire",
+// Lane 1.4 PRIMARY gate: BET_NOW + canonical=attack + sustained(≥2) + strong driver.
+eq("A.1 BET_NOW + attack + sustain=2 + elite_barrel → fire",
   maybePromoteReadyToFire("ready", {
-    displayScore10: 10.0, canonicalStage: "attack",
-    qualifyingSignals: ["elite_barrel"],
+    dynamicState: "BET_NOW", canonicalStage: "attack",
+    consecutivePromoteTicks: 2, qualifyingSignals: ["elite_barrel"],
   }), "fire");
 
-eq("A.2 score=9.5 + canonical=attack + two_hard_hit_balls → fire",
+eq("A.2 BET_NOW + attack + sustain=3 + two_hard_hit_balls → fire",
   maybePromoteReadyToFire("ready", {
-    displayScore10: 9.5, canonicalStage: "attack",
-    qualifyingSignals: ["two_hard_hit_balls"],
+    dynamicState: "BET_NOW", canonicalStage: "attack",
+    consecutivePromoteTicks: 3, qualifyingSignals: ["two_hard_hit_balls"],
   }), "fire");
 
-// Rule A negative — no strong driver.
-eq("A.3 score=10 + canonical=attack + only near_barrel (not strong) → ready",
+// Negative — no strong driver.
+eq("A.3 BET_NOW + attack + sustain=2 + only near_barrel (not strong) → ready",
   maybePromoteReadyToFire("ready", {
-    displayScore10: 10.0, canonicalStage: "attack",
-    qualifyingSignals: ["near_barrel"],
+    dynamicState: "BET_NOW", canonicalStage: "attack",
+    consecutivePromoteTicks: 2, qualifyingSignals: ["near_barrel"],
   }), "ready");
 
-// Rule A negative — canonical not attack.
-eq("A.4 score=10 + canonical=building + elite_barrel → ready",
+// Negative — canonical not attack.
+eq("A.4 BET_NOW + canonical=building + sustain=2 + elite_barrel → ready",
   maybePromoteReadyToFire("ready", {
-    displayScore10: 10.0, canonicalStage: "building",
-    qualifyingSignals: ["elite_barrel"],
+    dynamicState: "BET_NOW", canonicalStage: "building",
+    consecutivePromoteTicks: 2, qualifyingSignals: ["elite_barrel"],
   }), "ready");
 
-// Rule A negative — score below threshold.
-eq("A.5 score=9.4 + canonical=attack + elite_barrel → ready",
+// Negative — conviction not sustained (single-tick blip).
+eq("A.5 BET_NOW + attack + sustain=1 + elite_barrel → ready (not sustained)",
   maybePromoteReadyToFire("ready", {
-    displayScore10: 9.4, canonicalStage: "attack",
-    qualifyingSignals: ["elite_barrel"],
+    dynamicState: "BET_NOW", canonicalStage: "attack",
+    consecutivePromoteTicks: 1, qualifyingSignals: ["elite_barrel"],
   }), "ready");
 
-// Rule B: PATH_PROMOTES_TO_FIRE + signalState live|actionable → fire.
+// Negative — not BET_NOW (only PREPARE conviction).
+eq("A.6 PREPARE + attack + sustain=5 + elite_barrel → ready (not BET_NOW)",
+  maybePromoteReadyToFire("ready", {
+    dynamicState: "PREPARE", canonicalStage: "attack",
+    consecutivePromoteTicks: 5, qualifyingSignals: ["elite_barrel"],
+  }), "ready");
+
+// Rule B (secondary fast-path): PATH_PROMOTES_TO_FIRE + signalState live|actionable → fire.
 eq("B.1 alertPath=FAST_PROMOTE_ELITE + signalState=live → fire",
   maybePromoteReadyToFire("ready", {
     alertPath: "FAST_PROMOTE_ELITE", signalState: "live",
@@ -95,65 +102,57 @@ eq("B.4 alertPath=PATH_C (READY-only path) + signalState=live → ready",
     qualifyingSignals: [],
   }), "ready");
 
-// Rule C: BET_NOW + score≥9.5 + not stale → fire.
-eq("C.1 dynamic=BET_NOW + score=10 + peak=current → fire",
+// C: old magic-number rules are gone — these must NOT promote anymore.
+eq("C.1 BET_NOW + attack + strong driver but NO sustain field → ready",
   maybePromoteReadyToFire("ready", {
-    dynamicState: "BET_NOW", displayScore10: 10.0,
+    dynamicState: "BET_NOW", canonicalStage: "attack", displayScore10: 10.0,
     currentReadinessScore: 95, peakReadinessScore: 95,
-    qualifyingSignals: [],
-  }), "fire");
-
-eq("C.2 dynamic=BET_NOW + score=10 + current=70% of peak (stale) → ready",
-  maybePromoteReadyToFire("ready", {
-    dynamicState: "BET_NOW", displayScore10: 10.0,
-    currentReadinessScore: 70, peakReadinessScore: 100,
-    qualifyingSignals: [],
+    qualifyingSignals: ["elite_barrel"],
   }), "ready");
 
-eq("C.3 dynamic=BET_NOW + score=9.4 + fresh → ready (score gate)",
+eq("C.2 high displayScore10 alone (no BET_NOW) never fires",
   maybePromoteReadyToFire("ready", {
-    dynamicState: "BET_NOW", displayScore10: 9.4,
-    currentReadinessScore: 95, peakReadinessScore: 95,
-    qualifyingSignals: [],
+    displayScore10: 10.0, canonicalStage: "attack",
+    consecutivePromoteTicks: 5, qualifyingSignals: ["elite_barrel"],
   }), "ready");
 
 // Non-ready inputs — never promoted.
 eq("D.1 stage=track is never promoted",
   maybePromoteReadyToFire("track", {
-    displayScore10: 10.0, canonicalStage: "attack",
-    qualifyingSignals: ["elite_barrel"],
+    dynamicState: "BET_NOW", canonicalStage: "attack",
+    consecutivePromoteTicks: 5, qualifyingSignals: ["elite_barrel"],
   }), "track");
 
 eq("D.2 stage=build is never promoted",
   maybePromoteReadyToFire("build", {
-    dynamicState: "BET_NOW", displayScore10: 10.0,
-    currentReadinessScore: 95, peakReadinessScore: 95,
-    qualifyingSignals: [],
+    dynamicState: "BET_NOW", canonicalStage: "attack",
+    consecutivePromoteTicks: 5, qualifyingSignals: ["elite_barrel"],
   }), "build");
 
 eq("D.3 stage=fire is preserved (idempotent)",
   maybePromoteReadyToFire("fire", {
-    displayScore10: 10.0, canonicalStage: "attack",
-    qualifyingSignals: ["elite_barrel"],
+    dynamicState: "BET_NOW", canonicalStage: "attack",
+    consecutivePromoteTicks: 5, qualifyingSignals: ["elite_barrel"],
   }), "fire");
 
 eq("D.4 stage=resolved is preserved (sticky)",
   maybePromoteReadyToFire("resolved", {
-    displayScore10: 10.0, canonicalStage: "attack",
-    qualifyingSignals: ["elite_barrel"],
+    dynamicState: "BET_NOW", canonicalStage: "attack",
+    consecutivePromoteTicks: 5, qualifyingSignals: ["elite_barrel"],
   }), "resolved");
 
 // ── Integration via enrichWithUserStage — reproduce the live bug shape ────
 console.log("\nenrichWithUserStage — bug repro (FIRE=0 / READY=16 at 10.0/10)");
 
-// E.1 The forensic case: PATH_C live + BET_NOW + canonical=attack + score 10.
-// Pre-fix this stuck at "ready"; post-fix promotes via Rule C (BET_NOW
-// score-max not stale) AND Rule A (score+attack+strong-driver).
+// E.1 The forensic case: PATH_C live + BET_NOW + canonical=attack + sustained.
+// Pre-fix this stuck at "ready"; post-fix promotes via the Lane 1.4 primary
+// gate (BET_NOW + attack + sustained conviction + strong driver).
 const e1 = enrichWithUserStage({
   legacyTier: "strong",
   legacyState: "live",
   dynamicState: "BET_NOW",
   canonicalStage: "attack",
+  consecutivePromoteTicks: 3,
   outcome: "pending",
   currentReadinessScore: 100, peakReadinessScore: 100, initialReadinessScore: 60,
   factors: { barrels: 1, hardHits: 2, maxEV: 110, avgEV: 96 },
@@ -162,7 +161,7 @@ const e1 = enrichWithUserStage({
   inning: 7, alertPath: "PATH_C",
   useFallbackScore: true, gameId: "g1", playerId: "p1", player: "Test Slugger",
 });
-eq("E.1 PATH_C live + BET_NOW + attack + 10/10 → fire", e1.userStage, "fire");
+eq("E.1 PATH_C live + BET_NOW + attack + sustained + strong driver → fire", e1.userStage, "fire");
 
 // E.2 The block side — PATH_C live + canonical=watch + no strong drivers.
 const e2 = enrichWithUserStage({

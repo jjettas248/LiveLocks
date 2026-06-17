@@ -49,12 +49,55 @@ function getDisplayScore(entry: HrRadarLadderEntry): number | null {
   return entry.displayCurrentScore10 ?? entry.currentSignalScore10 ?? null;
 }
 
-function getTopReason(entry: HrRadarLadderEntry): string {
-  const reasons = entry.supportingReasons?.length
-    ? entry.supportingReasons
-    : (entry.cleanReasons ?? []);
-  return reasons[0] ?? entry.headlineReason ?? entry.stageDescription ?? "";
+function getReasons(entry: HrRadarLadderEntry): string[] {
+  // Prefer the jargon-stripped cleanReasons; fall back to supportingReasons,
+  // then a single headline/stage line. Rendered verbatim (CLAUDE.md §3.5).
+  const source = entry.cleanReasons?.length
+    ? entry.cleanReasons
+    : (entry.supportingReasons?.length ? entry.supportingReasons : []);
+  const reasons = source.length
+    ? source
+    : [entry.headlineReason ?? entry.stageDescription ?? ""].filter(Boolean);
+  return reasons.slice(0, 2);
 }
+
+// Compact decision metrics — reuse the exact field formulas the Full Ladder's
+// HR Breakdown panel uses (HrRadarLadder.tsx HR Breakdown), shown as chips so
+// the quick decision has a visible, quantified basis. All server-stamped values
+// (formatted only, never re-derived).
+type WhyChip = { label: string; tone: "neutral" | "success" | "warning" };
+
+function getWhyChips(entry: HrRadarLadderEntry): WhyChip[] {
+  const chips: WhyChip[] = [];
+  if (entry.conversionProbability != null) {
+    chips.push({ label: `HR ${Math.min(100, Math.round(entry.conversionProbability * 100))}%`, tone: "success" });
+  }
+  if (entry.pitcherHrVulnerability != null) {
+    chips.push({ label: `Vuln ${Math.min(100, Math.round(entry.pitcherHrVulnerability))}`, tone: "neutral" });
+  }
+  if (entry.currentReadinessScore != null) {
+    chips.push({ label: `Ready ${Math.min(100, Math.round(entry.currentReadinessScore))}`, tone: "neutral" });
+  }
+  switch (entry.momentumLabel) {
+    case "heating_up":
+      chips.push({ label: "Heating up", tone: "success" });
+      break;
+    case "cooling_off":
+      chips.push({ label: "Cooling", tone: "warning" });
+      break;
+    case "holding_strong":
+      chips.push({ label: "Holding", tone: "neutral" });
+      break;
+    // "flat" / undefined → no momentum chip
+  }
+  return chips;
+}
+
+const CHIP_TONE: Record<WhyChip["tone"], string> = {
+  neutral: "bg-muted/50 text-muted-foreground border-border/40",
+  success: "bg-success/15 text-success border-success/30",
+  warning: "bg-warning/15 text-warning border-warning/30",
+};
 
 function formatPA(pa: number | null | undefined): string {
   if (pa == null || pa <= 0) return "";
@@ -80,7 +123,8 @@ function QuickCard({
 }) {
   const cfg = STAGE_CONFIG[stage];
   const score = getDisplayScore(entry);
-  const reason = getTopReason(entry);
+  const reasons = getReasons(entry);
+  const whyChips = getWhyChips(entry);
   const pa = formatPA(entry.remainingPAExpectation);
   const inning = formatInning(
     entry.currentInning ?? entry.detectedInning,
@@ -121,11 +165,33 @@ function QuickCard({
         </span>
       </div>
 
-      {/* Single headline reason */}
-      {reason && (
-        <p className="text-sm text-muted-foreground leading-snug">
-          "{reason}"
-        </p>
+      {/* Why — top reasons (verbatim server evidence) */}
+      {reasons.length > 0 && (
+        <div className="space-y-1">
+          {reasons.map((r, i) => (
+            <p
+              key={i}
+              className="text-sm text-muted-foreground leading-snug"
+              data-testid={`text-quick-reason-${entry.playerId}-${i}`}
+            >
+              {reasons.length > 1 ? "• " : '"'}{r}{reasons.length > 1 ? "" : '"'}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {/* Why — quantified decision metrics (server-stamped, formatted only) */}
+      {whyChips.length > 0 && (
+        <div className="flex flex-wrap gap-1.5" data-testid={`chips-quick-why-${entry.playerId}`}>
+          {whyChips.map((chip, i) => (
+            <span
+              key={i}
+              className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border tabular-nums ${CHIP_TONE[chip.tone]}`}
+            >
+              {chip.label}
+            </span>
+          ))}
+        </div>
       )}
 
       {/* Timing */}
