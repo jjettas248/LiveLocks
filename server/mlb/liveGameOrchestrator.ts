@@ -546,7 +546,16 @@ function gradeSingleHRPlay(
     // Keeps the in-memory outcome stamp symmetric with the DB grading paths.
     const tieredStatus = (() => {
       try {
-        if (!hrRadarSectionMod.reachedHrMaxWindow({ alertTier, confidenceTier: null, signalState })) {
+        // Fix A — honor a prior in-window peak. The current tier may have
+        // decayed below the HR Max Window before the ball left the yard; if
+        // the signal genuinely peaked into the window earlier, the call stands.
+        const reachedWindow =
+          hrRadarSectionMod.reachedHrMaxWindow({ alertTier, confidenceTier: null, signalState }) ||
+          hrRadarSectionMod.reachedHrMaxWindowPeak({
+            peakState: snap?.peakState ?? null,
+            peakConversionProbability: snap?.peakConversionProbability ?? null,
+          });
+        if (!reachedWindow) {
           return "uncalled_hr" as const;
         }
         return hrRadarSectionMod.inferCashedFromTierStatus({
@@ -594,17 +603,26 @@ function gradeSingleHRPlay(
     const snap = getHrAlertState(gameId, playerId);
     const alertTier = snap?.alertResult?.alertTier ?? null;
     const signalState = snap?.alertResult?.signalState ?? null;
+    // Fix A — peak-into-window: if the dynamic state peaked at BET_NOW (with a
+    // qualifying conv-prob floor) earlier in the game, the signal reached the
+    // HR Max Window even if the *current* tier has since decayed. Anchor the
+    // qualifying event so the DB matcher grades `called_hit`, not `uncalled_hr`.
+    const peakedIntoWindow = hrRadarSectionMod.reachedHrMaxWindowPeak({
+      peakState: snap?.peakState ?? null,
+      peakConversionProbability: snap?.peakConversionProbability ?? null,
+    });
     const wasQualified =
       alertTier === "officialAlert" ||
       alertTier === "prepare" ||
       signalState === "PEAK" ||
-      signalState === "BUILDING";
+      signalState === "BUILDING" ||
+      peakedIntoWindow;
     if (wasQualified && endTimeMs && endTimeMs > 0) {
       // Anchor 1s before HR endTime so it strictly precedes hrEnd in the
       // matcher's `lt(hrRadarSignalEvents.detectedAt, new Date(hrEnd))`.
       const anchor = new Date(endTimeMs - 1000);
       const eventType =
-        alertTier === "officialAlert" || signalState === "PEAK"
+        alertTier === "officialAlert" || signalState === "PEAK" || peakedIntoWindow
           ? "stage_attack"
           : "stage_building";
       void storage.appendHrRadarSignalEvent({
