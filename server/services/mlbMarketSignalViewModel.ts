@@ -410,14 +410,14 @@ export function summarizeUnknownInning(rows: MarketSignalViewModel[]): {
 }
 
 // ── Local fallback: confidenceTier → signalTier ─────────────────────
-// Mirrors deriveSignalTier in the orchestrator. Only used when neither
-// canonical.signalTier nor sig.signalTier is present (cache rollover).
+// Must stay in sync with deriveSignalTier in signalScore.ts.
+// Only used when neither canonical.signalTier nor sig.signalTier is present.
 function mapConfidenceTierToSignalTier(
   confidenceTier: string | undefined,
 ): MarketSignalViewModel["signalTier"] {
   const t = (confidenceTier ?? "").toUpperCase();
   if (t === "ELITE") return "elite";
   if (t === "STRONG") return "strong";
-  if (t === "LEAN" || t === "MODERATE") return "lean";
+  if (t === "LEAN" || t === "MODERATE" || t === "SOLID") return "lean";
   return "watch";
 }

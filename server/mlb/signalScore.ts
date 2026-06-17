@@ -721,8 +721,6 @@ function computeHandednessSplitsScore(input: MLBPropInput): number {
       else if (matchupERA <= 2.5) score -= 18;
       else if (matchupERA <= 3.2) score -= 10;
     }
-    // HR/9 by batter handedness — more direct than ERA for the HR market.
-    // League avg HR/9 allowed is ~1.2; >= 2.0 is HR-vulnerable, <= 0.6 is elite suppressor.
     const matchupHrPer9 = batterHand === "L" ? pitcherSplits.hrPer9VsLHB : pitcherSplits.hrPer9VsRHB;
     if (matchupHrPer9 != null) {
       if (matchupHrPer9 >= 2.5) score += 22;

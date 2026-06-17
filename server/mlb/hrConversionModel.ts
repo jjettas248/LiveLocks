@@ -240,41 +240,6 @@ function describePitcherDeteriorationState(input: HRConversionInput): string {
   return parts.length > 0 ? parts.join(", ") : "stable";
 }
 
-// Gap 4: select the matchup-appropriate ERA from pitcher handedness splits.
-// Falls back to generic ERA if splits unavailable. Max swing ±8%.
-function computeHandednessERAMultiplier(input: HRConversionInput): number {
-  const splits = input.pitcherHandednessSplits;
-  const batterHand = input.batterHand;
-  if (!splits || !batterHand) return 1.0;
-
-  const matchupERA = batterHand === "L" ? splits.eraVsLHB : splits.eraVsRHB;
-  let eraMultiplier = 1.0;
-  if (matchupERA != null) {
-    if (matchupERA >= 6.0) eraMultiplier = 1.08;
-    else if (matchupERA >= 5.0) eraMultiplier = 1.05;
-    else if (matchupERA >= 4.5) eraMultiplier = 1.02;
-    else if (matchupERA <= 2.5) eraMultiplier = 0.92;
-    else if (matchupERA <= 3.2) eraMultiplier = 0.96;
-  }
-
-  // Blend in HR/9 by batter handedness (40%) — more direct signal for the HR market.
-  // League avg HR/9 allowed is ~1.2.
-  const matchupHrPer9 = batterHand === "L" ? splits.hrPer9VsLHB : splits.hrPer9VsRHB;
-  let hrPer9Multiplier = 1.0;
-  if (matchupHrPer9 != null) {
-    if (matchupHrPer9 >= 2.0) hrPer9Multiplier = 1.10;
-    else if (matchupHrPer9 >= 1.5) hrPer9Multiplier = 1.05;
-    else if (matchupHrPer9 <= 0.6) hrPer9Multiplier = 0.88;
-    else if (matchupHrPer9 <= 0.9) hrPer9Multiplier = 0.94;
-  }
-
-  // 60% ERA-based, 40% HR/9-based when both are available; ERA-only otherwise.
-  const blended = matchupHrPer9 != null
-    ? 0.60 * eraMultiplier + 0.40 * hrPer9Multiplier
-    : eraMultiplier;
-
-  return Math.max(0.88, Math.min(1.12, blended));
-}
 
 // Gaps 7–9: structural HR power profile multiplier from Savant season stats.
 // Applied after environment to keep layers orthogonal. Cap at ×1.20 / floor 0.88.
@@ -404,6 +369,42 @@ function computePitcherMultiplier(input: HRConversionInput): number {
   return Math.min(2.0, multiplier);
 }
 
+// Gap 4: select the matchup-appropriate ERA from pitcher handedness splits.
+// Falls back to generic ERA if splits unavailable. Max swing ±8%.
+function computeHandednessERAMultiplier(input: HRConversionInput): number {
+  const splits = input.pitcherHandednessSplits;
+  const batterHand = input.batterHand;
+  if (!splits || !batterHand) return 1.0;
+
+  const matchupERA = batterHand === "L" ? splits.eraVsLHB : splits.eraVsRHB;
+  let eraMultiplier = 1.0;
+  if (matchupERA != null) {
+    if (matchupERA >= 6.0) eraMultiplier = 1.08;
+    else if (matchupERA >= 5.0) eraMultiplier = 1.05;
+    else if (matchupERA >= 4.5) eraMultiplier = 1.02;
+    else if (matchupERA <= 2.5) eraMultiplier = 0.92;
+    else if (matchupERA <= 3.2) eraMultiplier = 0.96;
+  }
+
+  // Blend in HR/9 by batter handedness (40%) — more direct signal for the HR market.
+  // League avg HR/9 allowed is ~1.2.
+  const matchupHrPer9 = batterHand === "L" ? splits.hrPer9VsLHB : splits.hrPer9VsRHB;
+  let hrPer9Multiplier = 1.0;
+  if (matchupHrPer9 != null) {
+    if (matchupHrPer9 >= 2.0) hrPer9Multiplier = 1.10;
+    else if (matchupHrPer9 >= 1.5) hrPer9Multiplier = 1.05;
+    else if (matchupHrPer9 <= 0.6) hrPer9Multiplier = 0.88;
+    else if (matchupHrPer9 <= 0.9) hrPer9Multiplier = 0.94;
+  }
+
+  // 60% ERA-based, 40% HR/9-based when both are available; ERA-only otherwise.
+  const blended = matchupHrPer9 != null
+    ? 0.60 * eraMultiplier + 0.40 * hrPer9Multiplier
+    : eraMultiplier;
+
+  return Math.max(0.88, Math.min(1.12, blended));
+}
+
 function computeEnvironmentMultiplier(input: HRConversionInput): number {
   let multiplier = 1.0;
 
@@ -441,19 +442,6 @@ function computeEnvironmentMultiplier(input: HRConversionInput): number {
 }
 
 // Gap 1: pitch mix × handedness HR multiplier.
-// A fastball-heavy pitcher against a pull-power hitter is structurally more
-// hittable for HRs than the same handedness matchup against a breaking-ball
-// specialist. This is the mechanism behind the "hot hand is independent of
-// who's pitching" finding — it's not independent, it's that pitch mix × hand
-// is a more precise predictor than pitcher identity alone.
-//
-// Rules (multiplicative, capped at 1.18 total boost / 0.88 floor):
-//   - Fastball% >= 55 vs opposite-hand batter: +10% (fastballs cross the
-//     plate at a favorable angle for power hitters on the pull side)
-//   - Fastball% >= 55 vs same-hand batter: +4% (still hittable but less pull)
-//   - Breaking% >= 45 vs any batter: -8% (breaking balls suppress HR rate)
-//   - Offspeed% >= 35: -5% (changes disrupt timing)
-//   - FB-dominant (>= 60%) + no breaking balls: +6% additional
 function computePitchMixHandednessMultiplier(
   pitchMix: PitchMixEntry[],
   batterHand: string | null,
