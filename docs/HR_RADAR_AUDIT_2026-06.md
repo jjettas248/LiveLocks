@@ -201,10 +201,30 @@ run to verify. The window is currently enforced at the (already-tested) game-fin
 - Goldmaster re-baselined to **v5** (`mlb-goldmaster-v5-2026-06-17-hr-ev-gate`).
 - Tests: `hrEvGate.test.ts` (13 checks). Emits `[HR_RADAR_EV_GATE]` PASS/DEMOTE.
 
-### Phase 3 — Probability accuracy
-- Calibration loop + the new/under-used stats and the hard-hit interaction booster from §2.3.
-  Files: `hrConversionModel.ts`, `nearHrContact.ts`, `dataPullService.ts`, `dataSources.ts`,
-  `goldmasterGuard.ts`; new cases in `hrCalibration.test.ts` and the regression suites in `CLAUDE.md §1`.
+### Phase 3 — Probability accuracy — PARTIALLY SHIPPED (audit corrected on re-verification)
+On implementation, two roadmap items turned out to **already exist** in the codebase (the original
+subagent audit overstated the gaps):
+- **Calibration loop — ✅ already closed.** `server/index.ts:598–610` schedules
+  `computeCalibrationBuckets()` (analytics, built from resolved `rawConversionProbability` + outcome
+  samples) and installs them via `setEmpiricalCalibrationBuckets()`; `calibrate()` prefers empirical
+  buckets over the static table. No work needed.
+- **Handedness park factor — ✅ already wired.** `getMarketParkFactor(venue, "home_runs", batterHand)`
+  (`dataSources.ts:135–138`) already returns `hrLHB`/`hrRHB`, and the orchestrator already passes that
+  as `input.parkFactor` into the environment multiplier. No work needed.
+
+**Shipped this phase:**
+- **Hard-hit × angle × bat-speed × IBB interaction booster — ✅ SHIPPED** (user-requested). New pure
+  `computeHardHitInteractionMultiplier()` in `hrConversionModel.ts`: hard-hit (EV≥104) OR high-xBA
+  (≥0.65) trigger, compounding with favorable launch angle, elite bat speed (wires in the previously
+  unused `factors.batSpeedMph`), and season IBB respect. Capped at 1.25× (Phase 1.5 clamp still binds);
+  no-op when absent. Goldmaster re-baselined to **v6**. Tests: `hrHardHitInteraction.test.ts` (11).
+
+**Genuinely remaining (require NEW data ingestion — larger plumbing, deferred):**
+- **Rolling Statcast power trend** — the model uses *season* barrel%/xISO + rolling HR-rate, but not
+  rolling barrel%/hard-hit%/xISO (L7/L15). Needs a new Savant rolling sync in `dataPullService.ts`.
+- **Pitcher pitch-type HR vulnerability** — a general `computePitcherHrVulnerability` exists (ERA/HR9/
+  fatigue) but not HR-allowed-per-pitch-type. Needs per-pitch-type HR data from Savant.
+- **Batted-ball-type weighting** (LD vs FB per AB) in the live-contact term.
 
 **Sequencing rationale:** Phases 0–1 fix the spray-and-pray *perception and accounting* immediately and
 are low-risk; Phase 2 makes the top tier *strategic* (EV-gated); Phase 3 raises raw accuracy. Each phase
