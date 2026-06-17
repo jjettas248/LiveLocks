@@ -13,6 +13,11 @@ export interface PitcherDeteriorationContext {
   bullpenEra: number | null;
   bullpenUsageLast3Days: number | null;
   relieversUsedCount: number;
+  // Lane 3.3: recent in-game fastball velocity trend (mph) = avg(last N pitches)
+  // − avg(prior N). Negative = velo actively falling now — a fresher decline
+  // signal than the whole-game first/second-half `velocityDrop`. Optional —
+  // no-op when null.
+  veloTrendSlope?: number | null;
 }
 
 export interface HRConversionInput {
@@ -31,6 +36,12 @@ export interface HRConversionInput {
   windDirection: string | null;
   windSpeed: number | null;
   temperature: number | null;
+  // Lane 3.1: relative humidity % (Open-Meteo). Higher humidity → less dense
+  // air → ball carries slightly farther. Optional — no-op (1.0) when null.
+  humidity?: number | null;
+  // Lane 3.2: surface barometric pressure hPa (Open-Meteo). Lower pressure →
+  // thinner air → more carry. Optional — no-op (1.0) when null.
+  pressure?: number | null;
   isIndoors: boolean;
   batterHand: string | null;
   pitcherThrows: string | null;
@@ -127,6 +138,14 @@ export function getEmpiricalCalibrationBuckets(): HrCalibrationBucket[] {
 
 const LEAGUE_AVG_HR_PER_PA = 0.033;
 const LEAGUE_AVG_BARREL_RATE = 0.065;
+
+// Lane 2.1 — single source of truth for calibration bin edges. The analytics
+// empirical-bucket builder (server/analytics/hrRadarIntelligence.ts) imports
+// this exact array so empirical buckets align 1:1 with the static table bins.
+// Keep CALIBRATION_TABLE's [rawMin,rawMax) boundaries in lock-step with these.
+export const CALIBRATION_BIN_EDGES: readonly number[] = [
+  0.00, 0.03, 0.05, 0.08, 0.10, 0.13, 0.16, 0.20, 0.25, 0.30, 0.40, 1.00,
+];
 
 const CALIBRATION_TABLE: Array<{ rawMin: number; rawMax: number; calibrated: number }> = [
   { rawMin: 0.00, rawMax: 0.03, calibrated: 0.01 },
@@ -396,6 +415,14 @@ function computePitcherMultiplier(input: HRConversionInput): number {
       else if (det.velocityDrop < -1.0) multiplier *= 0.95;
     }
 
+    // Lane 3.3: recent velocity-decay TREND (last N pitches vs prior N). A
+    // negative slope means the pitcher is losing velo right now — fresher than
+    // the whole-game velocityDrop above. Small, under the Math.min(2.0) cap.
+    if (det.veloTrendSlope != null) {
+      if (det.veloTrendSlope <= -2.0) multiplier *= 1.10;
+      else if (det.veloTrendSlope <= -1.0) multiplier *= 1.06;
+    }
+
     if (det.bullpenEra !== null && !det.isReliever) {
       if (input.pitchCount >= 80 || input.timesThrough >= 3) {
         if (det.bullpenEra >= 5.5) multiplier *= 1.10;
@@ -441,6 +468,23 @@ function computeEnvironmentMultiplier(input: HRConversionInput): number {
     else if (temp >= 80) multiplier *= 1.04;
     else if (temp <= 40) multiplier *= 0.88;
     else if (temp <= 50) multiplier *= 0.94;
+
+    // Lane 3.1: humidity. Humid air is less dense → marginally more carry.
+    // Small, capped by the env Math.min(1.35) below. No-op when null.
+    const humidity = input.humidity;
+    if (humidity != null) {
+      if (humidity >= 85) multiplier *= 1.05;
+      else if (humidity >= 70) multiplier *= 1.03;
+      else if (humidity <= 30) multiplier *= 0.98;
+    }
+
+    // Lane 3.2: barometric pressure. Low pressure → thinner air → more carry.
+    // Sea-level avg ≈ 1013 hPa. No-op when null.
+    const pressure = input.pressure;
+    if (pressure != null) {
+      if (pressure <= 1000) multiplier *= 1.04;
+      else if (pressure >= 1025) multiplier *= 0.97;
+    }
   }
 
   // Gap 1: replace simple handedness ±% with full pitch mix × handedness model.
