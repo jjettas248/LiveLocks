@@ -142,6 +142,53 @@ export function inferCashedFromTierStatus(args: {
 }
 
 /**
+ * Phase 1 (3-tier ladder) — did this alert ever reach the **HR Max Window**,
+ * the single actionable top tier? Per the approved roadmap
+ * (docs/HR_RADAR_AUDIT_2026-06.md §2.1) the user-facing ladder collapses to
+ * three tiers — Watch → Building → HR Max Window — and **only the HR Max
+ * Window tier is graded as a pick.** Watch/Building are ambient context and
+ * must never produce a counted `called_miss` (or a counted cash).
+ *
+ * "HR Max Window" maps onto the engine's existing actionable markers:
+ *   - alertTier      === "officialAlert" / "official_alert"
+ *   - confidenceTier === "strong" | "elite"
+ *   - signalState    === "actionable" | "fire"
+ *
+ * Everything below that (alertTier prepare/watch, confidenceTier
+ * monitor/building, signalState live/watching, presence-only rows) is the
+ * Watch/Building band and is NOT graded. Pure — no I/O.
+ */
+export function reachedHrMaxWindow(args: {
+  alertTier?: string | null;
+  confidenceTier?: string | null;
+  signalState?: string | null;
+}): boolean {
+  const tier = norm(args.alertTier);
+  const conf = norm(args.confidenceTier);
+  const sig = norm(args.signalState);
+  return (
+    tier === "officialalert" || tier === "official_alert" ||
+    conf === "strong" || conf === "elite" ||
+    sig === "actionable" || sig === "fire"
+  );
+}
+
+/**
+ * Phase 1 — given a still-active alert at game-final with NO home run, decide
+ * the honest terminal grade. Only HR-Max-Window alerts become a counted
+ * `called_miss`; sub-actionable Watch/Building rows become `expired` (which
+ * `deriveHrRadarOutcomeStatus` maps to "unresolved" — excluded from the
+ * missed bucket, the W/L ledger, and the user-facing MISSED section). Pure.
+ */
+export function resolveFinalNoHrGrading(args: {
+  alertTier?: string | null;
+  confidenceTier?: string | null;
+  signalState?: string | null;
+}): "called_miss" | "expired" {
+  return reachedHrMaxWindow(args) ? "called_miss" : "expired";
+}
+
+/**
  * Best-effort coercion of any HR Radar row/entry shape into the canonical
  * lifecycle / section / outcome model. Reads existing fields produced by the
  * ladder builder, board enricher, and legacy serializer — never invents

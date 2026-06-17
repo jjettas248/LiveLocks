@@ -541,8 +541,14 @@ function gradeSingleHRPlay(
     // to alertTier-driven mapping (officialAlert/prepare/watch).
     const alertTier = snap?.alertResult?.alertTier ?? null;
     const signalState = snap?.alertResult?.signalState ?? null;
+    // Phase 1 (3-tier ladder) — only HR-Max-Window signals stamp a counted
+    // cash; sub-actionable Watch/Building HRs stamp `uncalled_hr` (diagnostic).
+    // Keeps the in-memory outcome stamp symmetric with the DB grading paths.
     const tieredStatus = (() => {
       try {
+        if (!hrRadarSectionMod.reachedHrMaxWindow({ alertTier, confidenceTier: null, signalState })) {
+          return "uncalled_hr" as const;
+        }
         return hrRadarSectionMod.inferCashedFromTierStatus({
           alertTier,
           confidenceTier: null,
@@ -771,6 +777,22 @@ const priorResolvedLines = new Map<string, number>();
 const PREFERRED_BOOKMAKERS = ["draftkings", "fanduel", "hardrockbet", "betmgm", "betrivers", "espnbet"];
 
 type ResolvedLine = { line: number; overOdds: number | null; underOdds: number | null; isDegraded: boolean; source: "live" | "prior" | "cache" | "lkg" };
+
+// Phase 2 — most-recent resolved batter_home_runs prices per (gameId, playerId).
+// The per-tick market loop resolves HR odds; the contact-reevaluation path
+// (reevaluateHRRadarOnContact) has no odds in scope, so it reads them here to
+// EV-gate the HR Max Window tier. TTL keeps stale prices from gating.
+const HR_OVER_ODDS_CACHE = new Map<string, { overOdds: number | null; underOdds: number | null; ts: number }>();
+const HR_ODDS_CACHE_TTL_MS = 5 * 60 * 1000;
+function hrOddsKey(gameId: string, playerId: string): string { return `${gameId}_${playerId}`; }
+function cacheHrOdds(gameId: string, playerId: string, overOdds: number | null, underOdds: number | null): void {
+  HR_OVER_ODDS_CACHE.set(hrOddsKey(gameId, playerId), { overOdds, underOdds, ts: Date.now() });
+}
+function getCachedHrOdds(gameId: string, playerId: string): { overOdds: number | null; underOdds: number | null } | null {
+  const e = HR_OVER_ODDS_CACHE.get(hrOddsKey(gameId, playerId));
+  if (!e || Date.now() - e.ts > HR_ODDS_CACHE_TTL_MS) return null;
+  return { overOdds: e.overOdds, underOdds: e.underOdds };
+}
 
 // ── Resolve a real book line for a player/market ──────────────────────────────
 // Precedence:
@@ -1171,7 +1193,7 @@ export class LiveGameOrchestrator {
       // game stays final and will self-heal once the box score arrives.
       const boxHydrated = !!(boxScore?.byPlayerId && Object.keys(boxScore.byPlayerId).length > 0);
       if (boxHydrated) {
-        await storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap).catch(() => undefined);
+        await storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap, newState?.inning ?? null).catch(() => undefined);
       } else {
         console.log(`[HR_RADAR_FINAL_RECONCILE] gameId=${gameId} sessionDate=${sessionDate} deferred=hr_radar_table reason=box_score_not_hydrated (per-poll reconciler will retry every 10s)`);
       }
@@ -1624,7 +1646,7 @@ export class LiveGameOrchestrator {
         }
       }
       storage.reconcileAlertsForGame(gameId).catch(() => {});
-      storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap).catch(() => {});
+      storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap, newState.inning ?? null).catch(() => {});
       clearGameCooldowns(gameId);
       clearGameHrStates(gameId);
       for (const key of Array.from(KNOWN_HR_COUNTS.keys())) {
@@ -3140,6 +3162,8 @@ export class LiveGameOrchestrator {
         seasonOps: rollingStats?.seasonOps ?? null,
         seasonIBBRate: rollingStats?.seasonIBBRate ?? null,
         ...buildIbbBaseOutContext(state, batter.playerId),
+        // Phase 2 — EV gate inputs (no-op when no cached price for this batter).
+        ...(getCachedHrOdds(gameId, batter.playerId) ?? { overOdds: null, underOdds: null }),
       };
 
       const alertResult = evaluateHRAlert(alertInput);
@@ -3446,6 +3470,12 @@ export class LiveGameOrchestrator {
           }
         }
         if (resolvedLine && resolvedLine.isDegraded) anyDegraded = true;
+
+        // Phase 2 — stash resolved HR prices so the contact-reevaluation path
+        // can EV-gate the HR Max Window tier (it has no odds in scope).
+        if (market === "home_runs" && resolvedLine) {
+          cacheHrOdds(gameId, batter.playerId, resolvedLine.overOdds, resolvedLine.underOdds);
+        }
 
         if (!hrRadarOnly) {
           const resolvedMarketObj = { line: resolvedLine!.line, odds: (resolvedLine!.overOdds !== null || resolvedLine!.underOdds !== null) ? { overOdds: resolvedLine!.overOdds, underOdds: resolvedLine!.underOdds } : null };
@@ -4018,6 +4048,8 @@ export class LiveGameOrchestrator {
               seasonOps: rollingStats?.seasonOps ?? null,
               seasonIBBRate: rollingStats?.seasonIBBRate ?? null,
               ...buildIbbBaseOutContext(state, batter.playerId),
+              // Phase 2 — EV gate inputs (no-op when no cached price).
+              ...(getCachedHrOdds(gameId, batter.playerId) ?? { overOdds: null, underOdds: null }),
             };
             const alertResult = evaluateHRAlert(alertInput);
 
