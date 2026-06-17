@@ -1062,7 +1062,7 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
 
   // PATH_E (CONVICTION FALLBACK) — high-conviction safety net.
   //
-  // Task #140 update — was previously WATCH-tier ONLY, which capped
+  // Was previously WATCH-tier ONLY, which capped
   // 25%+ conviction batters (Moisés Ballesteros, Shea Langeliers,
   // Carter Jensen, etc.) at the Track section even though the dynamic
   // engine had already promoted them to BET_NOW. Now uses a graduated
@@ -1099,7 +1099,7 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     if (pitcherFavorable) positiveFactors.push(`pitcher: ${pitcherFatigueState}`);
     if (envFavorable) positiveFactors.push(`env: ${environmentContext}`);
 
-    // Tier escalator (Task #140) — only escalates above WATCH when both
+    // Tier escalator — only escalates above WATCH when both
     // conviction AND score clear the higher bar AND favorable context
     // confirms. Otherwise the original WATCH-tier behavior is preserved.
     // PEAK additionally requires at least one *power contact* (not just an
@@ -1165,7 +1165,7 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     };
   }
 
-  // ── PATH_F_BLOCKED_BRIDGE (Task #140) ───────────────────────────────────
+  // ── PATH_F_BLOCKED_BRIDGE ────────────────────────────────────────────────
   // Was previously a silent BLOCKED log returning nullResult, which left
   // moderate-conviction batters (e.g. Mike Trout conv=27.1% score=4.4,
   // Bobby Witt Jr conv=17.5% score=3.24, Teoscar Hernández conv=26.3%

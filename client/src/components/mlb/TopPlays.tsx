@@ -1,5 +1,6 @@
 import { Flame } from "lucide-react";
 import { MlbSignalCard, type MlbSignalData } from "./MlbSignalCard";
+import { resolveMlbSignalTier } from "@/lib/mlbFormatters";
 
 export function TopPlays({
   signals,
@@ -14,9 +15,15 @@ export function TopPlays({
   onOpenCalculator?: (sig: MlbSignalData) => void;
   sortBy?: "signalScore" | "enginePct";
 }) {
-  const sortFn = sortBy === "enginePct"
-    ? (a: MlbSignalData, b: MlbSignalData) => (b.enginePct ?? 0) - (a.enginePct ?? 0)
-    : (a: MlbSignalData, b: MlbSignalData) => (b.signalScore ?? 0) - (a.signalScore ?? 0);
+  const TIER_RANK: Record<string, number> = { elite: 4, strong: 3, lean: 2, watch: 1 };
+  const sortFn = (a: MlbSignalData, b: MlbSignalData) => {
+    const ta = TIER_RANK[resolveMlbSignalTier(a)] ?? 0;
+    const tb = TIER_RANK[resolveMlbSignalTier(b)] ?? 0;
+    if (ta !== tb) return tb - ta;
+    return sortBy === "enginePct"
+      ? (b.enginePct ?? 0) - (a.enginePct ?? 0)
+      : (b.signalScore ?? 0) - (a.signalScore ?? 0);
+  };
   const sorted = [...signals].sort(sortFn);
   const topPlays = sorted.slice(0, 6);
 

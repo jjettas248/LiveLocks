@@ -2780,6 +2780,99 @@ export class LiveGameOrchestrator {
     return watchSignal;
   }
 
+  private buildHRAlertInput(p: {
+    batter: { playerId: string; playerName: string; team: string; slot?: number };
+    gameId: string;
+    state: { inning: number; isTopInning?: boolean; pitchCount: number; homeScore?: number | null; awayScore?: number | null };
+    remainingPA: number;
+    hrBuildScore: number;
+    hrIntensity: string;
+    factors: any;
+    liveInterpretation: any;
+    preHrDangerScore?: number | null;
+    dangerFlags?: string[] | null;
+    batterArchetype?: any;
+    pitcherHandednessSplits?: any;
+    batterHandednessSplits?: any;
+    pitcher: any;
+    pitcherCtx: any;
+    pitcherSeasonStats: any;
+    isPitcherCollapsing: boolean;
+    pitcherDeteriorationCtx: any;
+    weatherCache: any;
+    resolvedBatterHand: string | null;
+    resolvedWindDir: string | null | undefined;
+    resolvedWindSpeed: number | null | undefined;
+    resolvedTemp: number | null | undefined;
+    playerContact: any;
+    rollingStats: any;
+  }): HRAlertInput {
+    return {
+      playerId: p.batter.playerId,
+      playerName: p.batter.playerName,
+      teamAbbr: p.batter.team,
+      gameId: p.gameId,
+      hrBuildScore: p.hrBuildScore,
+      hrIntensity: p.hrIntensity,
+      factors: p.factors,
+      inning: p.state.inning,
+      isTopInning: p.state.isTopInning,
+      battingOrderSlot: p.batter.slot,
+      remainingPA: p.remainingPA,
+      pitchCount: p.pitcher ? p.state.pitchCount : 0,
+      timesThrough: p.pitcherCtx?.timesThroughOrder ?? 1,
+      isPitcherCollapsing: p.isPitcherCollapsing,
+      parkFactor: getMarketParkFactor(p.weatherCache?.venueName, "home_runs", p.resolvedBatterHand),
+      windDirection: p.resolvedWindDir,
+      windSpeed: p.resolvedWindSpeed,
+      temperature: p.resolvedTemp,
+      isIndoors: p.weatherCache?.isIndoors ?? isVenueIndoors(p.weatherCache?.venueName),
+      batterHand: p.resolvedBatterHand,
+      pitcherThrows: p.pitcher?.throws ?? null,
+      era: p.pitcherSeasonStats?.era ?? null,
+      currentRuns: (p.state.homeScore != null || p.state.awayScore != null)
+        ? (p.state.homeScore ?? 0) + (p.state.awayScore ?? 0)
+        : 4.5,
+      leagueAvgRuns: 4.5,
+      seasonHRRate: p.rollingStats?.seasonHRRate ?? null,
+      barrelRate: p.playerContact?.barrelPct != null ? p.playerContact.barrelPct / 100 : null,
+      hardHitRate: p.playerContact?.hardHitPct != null ? p.playerContact.hardHitPct / 100 : null,
+      xSLG: p.playerContact?.xSLG ?? null,
+      abSinceLastHR: p.rollingStats?.abSinceLastHR ?? null,
+      hrRateLast7: p.rollingStats?.hrRateLast7 ?? null,
+      hrRateLast15: p.rollingStats?.hrRateLast15 ?? null,
+      hrRateLast30: p.rollingStats?.hrRateLast30 ?? null,
+      handednessParkFactor: getMarketParkFactor(p.weatherCache?.venueName, "home_runs", p.resolvedBatterHand),
+      pitcherDeterioration: p.pitcherDeteriorationCtx,
+      leiNearHrScore: p.liveInterpretation?.nearHrScore,
+      leiMomentumScore: p.liveInterpretation?.momentumScore,
+      leiPitcherFatigueScore: p.liveInterpretation?.pitcherFatigueScore,
+      leiVeloDropScore: p.liveInterpretation?.veloDropScore,
+      leiConfidenceBoost: p.liveInterpretation?.confidenceBoost,
+      leiTags: p.liveInterpretation?.tags,
+      priorABResults: (p.playerContact?.priorABResults ?? []).map((ab: any) => ({
+        exitVelocity: ab.exitVelocity ?? null,
+        launchAngle: ab.launchAngle ?? null,
+        distance: ab.distance ?? null,
+        outcome: ab.outcome ?? "out",
+      })),
+      preHrDangerScore: p.preHrDangerScore ?? undefined,
+      dangerFlags: p.dangerFlags ?? undefined,
+      batterArchetype: p.batterArchetype,
+      pitchMix: p.pitcherCtx?.pitchMix ?? null,
+      lastStartPitchCount: p.pitcherCtx?.lastStartPitchCount ?? null,
+      daysSinceLastStart: p.pitcherCtx?.daysSinceLastStart ?? null,
+      last3StartERA: p.pitcherCtx?.last3StartERA ?? null,
+      pitcherHandednessSplits: p.pitcherHandednessSplits ?? null,
+      batterHandednessSplits: p.batterHandednessSplits ?? null,
+      flyBallPercent: p.playerContact?.flyBallPercent ?? null,
+      hrFBRatio: p.playerContact?.hrFBRatio ?? null,
+      xwOBA: p.playerContact?.xwOBASeason ?? null,
+      xISO: p.playerContact?.xISOSeason ?? null,
+      sweetSpotPercent: p.playerContact?.sweetSpotPercent ?? null,
+    };
+  }
+
   async periodicHRRadarRosterScan(gameId: string): Promise<void> {
     const lastScan = hrRosterScanLastRun.get(gameId) ?? 0;
     const sinceLast = Date.now() - lastScan;
@@ -3033,69 +3126,32 @@ export class LiveGameOrchestrator {
         relieversUsedCount: bullpenCache?.relieversUsed?.length ?? 0,
       };
 
-      const alertInput: HRAlertInput = {
-        playerId: batter.playerId,
-        playerName: batter.playerName,
-        teamAbbr: batter.team,
+      const alertInput = this.buildHRAlertInput({
+        batter,
         gameId,
+        state,
+        remainingPA,
         hrBuildScore: hrBuild.score,
         hrIntensity: hrBuild.intensity,
         factors: hrBuild.factors,
-        inning: state.inning,
-        isTopInning: state.isTopInning,
-        battingOrderSlot: batter.slot,
-        remainingPA,
-        pitchCount: pitcher ? state.pitchCount : 0,
-        timesThrough: pitcherCtx?.timesThroughOrder ?? 1,
-        isPitcherCollapsing,
-        parkFactor: getMarketParkFactor(weatherCache?.venueName, "home_runs", resolvedBatterHand),
-        windDirection: resolvedWindDir,
-        windSpeed: resolvedWindSpeed,
-        temperature: resolvedTemp,
-        isIndoors: weatherCache?.isIndoors ?? isVenueIndoors(weatherCache?.venueName),
-        batterHand: resolvedBatterHand,
-        pitcherThrows: pitcher?.throws ?? null,
-        era: pitcherSeasonStats?.era ?? null,
-        currentRuns: (state.homeScore != null || state.awayScore != null)
-          ? (state.homeScore ?? 0) + (state.awayScore ?? 0)
-          : 4.5,
-        leagueAvgRuns: 4.5,
-        seasonHRRate: rollingStats?.seasonHRRate ?? null,
-        barrelRate: playerContact.barrelPct != null ? playerContact.barrelPct / 100 : null,
-        hardHitRate: playerContact.hardHitPct != null ? playerContact.hardHitPct / 100 : null,
-        xSLG: playerContact.xSLG ?? null,
-        abSinceLastHR: rollingStats?.abSinceLastHR ?? null,
-        hrRateLast7: rollingStats?.hrRateLast7 ?? null,
-        hrRateLast15: rollingStats?.hrRateLast15 ?? null,
-        hrRateLast30: rollingStats?.hrRateLast30 ?? null,
-        handednessParkFactor: getMarketParkFactor(weatherCache?.venueName, "home_runs", resolvedBatterHand),
-        pitcherDeterioration: pitcherDeteriorationCtx,
-        leiNearHrScore: hrInput.liveInterpretation?.nearHrScore,
-        leiMomentumScore: hrInput.liveInterpretation?.momentumScore,
-        leiPitcherFatigueScore: hrInput.liveInterpretation?.pitcherFatigueScore,
-        leiVeloDropScore: hrInput.liveInterpretation?.veloDropScore,
-        leiConfidenceBoost: hrInput.liveInterpretation?.confidenceBoost,
-        leiTags: hrInput.liveInterpretation?.tags,
-        priorABResults: (playerContact.priorABResults ?? []).map((ab: any) => ({
-          exitVelocity: ab.exitVelocity ?? null,
-          launchAngle: ab.launchAngle ?? null,
-          distance: ab.distance ?? null,
-          outcome: ab.outcome ?? "out",
-        })),
+        liveInterpretation: hrInput.liveInterpretation,
         preHrDangerScore: hrBuild.preHrDangerScore,
         dangerFlags: hrBuild.dangerFlags,
-        pitchMix: pitcherCtx?.pitchMix ?? null,
-        lastStartPitchCount: pitcherCtx?.lastStartPitchCount ?? null,
-        daysSinceLastStart: pitcherCtx?.daysSinceLastStart ?? null,
-        last3StartERA: pitcherCtx?.last3StartERA ?? null,
         pitcherHandednessSplits: resolvedPitcherSplits ?? null,
         batterHandednessSplits: resolvedBatterSplits ?? null,
-        flyBallPercent: playerContact.flyBallPercent ?? null,
-        hrFBRatio: playerContact.hrFBRatio ?? null,
-        xwOBA: playerContact.xwOBASeason ?? null,
-        xISO: playerContact.xISOSeason ?? null,
-        sweetSpotPercent: playerContact.sweetSpotPercent ?? null,
-      };
+        pitcher,
+        pitcherCtx,
+        pitcherSeasonStats,
+        isPitcherCollapsing,
+        pitcherDeteriorationCtx,
+        weatherCache,
+        resolvedBatterHand,
+        resolvedWindDir,
+        resolvedWindSpeed,
+        resolvedTemp,
+        playerContact,
+        rollingStats,
+      });
 
       const alertResult = evaluateHRAlert(alertInput);
       if (alertResult.level !== "ALERT" && alertResult.level !== "WATCH") continue;
@@ -3890,71 +3946,33 @@ export class LiveGameOrchestrator {
               ? (batter.team === state.homeTeamAbbr ? state.awayTeamAbbr : state.homeTeamAbbr)
               : "";
 
-            const alertInput: HRAlertInput = {
-              playerId: batter.playerId,
-              playerName: batter.playerName,
-              teamAbbr: batter.team,
+            const alertInput = this.buildHRAlertInput({
+              batter,
               gameId,
+              state,
+              remainingPA,
               hrBuildScore: output.hrBuildScore,
               hrIntensity: output.hrIntensity ?? "weak",
               factors: hrFactorsBuild as any,
-              inning: state.inning,
-              isTopInning: state.isTopInning,
-              battingOrderSlot: batter.slot,
-              remainingPA,
-              pitchCount: pitcher ? state.pitchCount : 0,
-              timesThrough: pitcherCtx?.timesThroughOrder ?? 1,
-              isPitcherCollapsing,
-              parkFactor: getMarketParkFactor(weatherCache?.venueName, "home_runs", resolvedBatterHand),
-              windDirection: resolvedWindDir,
-              windSpeed: resolvedWindSpeed,
-              temperature: resolvedTemp,
-              isIndoors: weatherCache?.isIndoors ?? isVenueIndoors(weatherCache?.venueName),
-              batterHand: resolvedBatterHand,
-              pitcherThrows: pitcher?.throws ?? null,
-              era: pitcherSeasonStats?.era ?? null,
-              currentRuns: (state.homeScore != null || state.awayScore != null)
-                ? (state.homeScore ?? 0) + (state.awayScore ?? 0)
-                : 4.5,
-              leagueAvgRuns: 4.5,
-              seasonHRRate: resolvedSeasonHRRate,
-              barrelRate: playerContact?.barrelPct != null ? playerContact.barrelPct / 100 : null,
-              hardHitRate: playerContact?.hardHitPct != null ? playerContact.hardHitPct / 100 : null,
-              xSLG: playerContact?.xSLG ?? null,
-              abSinceLastHR: rollingStats?.abSinceLastHR ?? null,
-              hrRateLast7: rollingStats?.hrRateLast7 ?? null,
-              hrRateLast15: rollingStats?.hrRateLast15 ?? null,
-              hrRateLast30: rollingStats?.hrRateLast30 ?? null,
-              handednessParkFactor: getMarketParkFactor(weatherCache?.venueName, "home_runs", resolvedBatterHand),
-              pitcherDeterioration: pitcherDeteriorationCtx,
-              leiNearHrScore: input.liveInterpretation?.nearHrScore,
-              leiMomentumScore: input.liveInterpretation?.momentumScore,
-              leiPitcherFatigueScore: input.liveInterpretation?.pitcherFatigueScore,
-              leiVeloDropScore: input.liveInterpretation?.veloDropScore,
-              leiConfidenceBoost: input.liveInterpretation?.confidenceBoost,
-              leiTags: input.liveInterpretation?.tags,
-              priorABResults: (playerContact?.priorABResults ?? []).map((ab: any) => ({
-                exitVelocity: ab.exitVelocity ?? null,
-                launchAngle: ab.launchAngle ?? null,
-                distance: ab.distance ?? null,
-                outcome: ab.outcome ?? "out",
-              })),
+              liveInterpretation: input.liveInterpretation,
               preHrDangerScore: (output.hrFactors as any)?.preHrDangerScore,
               dangerFlags: (output.hrFactors as any)?.dangerFlags,
-              // Phase 3 — pass batter archetype so evaluateHRAlert can ease
-              // tier 4c promotion for elite_power profiles. Cache lookup is
-              // already done above in this try block.
               batterArchetype: bArch,
-              // Gaps 4 & 5: handedness splits (populated async above via fire-and-forget)
               pitcherHandednessSplits: input.pitcherHandednessSplits ?? null,
               batterHandednessSplits: input.batterHandednessSplits ?? null,
-              // Gaps 7–9: Savant power profile
-              flyBallPercent: playerContact?.flyBallPercent ?? null,
-              hrFBRatio: playerContact?.hrFBRatio ?? null,
-              xwOBA: playerContact?.xwOBASeason ?? null,
-              xISO: playerContact?.xISOSeason ?? null,
-              sweetSpotPercent: playerContact?.sweetSpotPercent ?? null,
-            };
+              pitcher,
+              pitcherCtx,
+              pitcherSeasonStats,
+              isPitcherCollapsing,
+              pitcherDeteriorationCtx,
+              weatherCache,
+              resolvedBatterHand,
+              resolvedWindDir,
+              resolvedWindSpeed,
+              resolvedTemp,
+              playerContact,
+              rollingStats,
+            });
             const alertResult = evaluateHRAlert(alertInput);
 
             const hrDynSnap = recomputeHrAlertState(alertInput, {

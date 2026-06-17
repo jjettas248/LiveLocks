@@ -76,11 +76,6 @@ function clamp(val: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, val));
 }
 
-function scaleTo100(raw: number, min: number, max: number): number {
-  if (max <= min) return 50;
-  return clamp(((raw - min) / (max - min)) * 100, 0, 100);
-}
-
 function computeProbabilityComponent(engineProb: number): number {
   if (engineProb >= 75) return 100;
   if (engineProb >= 65) return 80;
@@ -613,13 +608,11 @@ export function scoreUnderSignal(
   const price = computePriceValidationComponent(output.edge, output.overOdds, output.underOdds);
   const eventBoost = computeEventBoostComponent(input, output);
 
-  const pitcherSupp = computeLiveContextComponent(input);
-
   const baseTotal = Math.round(
     0.22 * prob +
     0.18 * proj +
     0.15 * matchup +
-    0.15 * pitcherSupp +
+    0.15 * live +
     0.12 * live +
     0.08 * form +
     0.05 * opportunity +
@@ -943,7 +936,7 @@ export function scoreHRRadar(
     probability: Math.round(nearHrScore),
     projection: Math.round(contactScore),
     liveContext: Math.round(pitcherVuln),
-    matchup: Math.round(pitcherVuln),
+    matchup: 50,
     form: 50,
     opportunity: Math.round(opportunity),
     marketReliability: Math.round(parkWeather),

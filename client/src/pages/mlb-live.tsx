@@ -38,6 +38,15 @@ import {
   normalizeMlbGameChip,
 } from "@/lib/mlb/mlbNormalizers";
 
+const TIER_RANK: Record<string, number> = { elite: 4, strong: 3, lean: 2, watch: 1 };
+
+function tierFirstSort(a: MlbSignalData, b: MlbSignalData): number {
+  const ta = TIER_RANK[resolveMlbSignalTier(a)] ?? 0;
+  const tb = TIER_RANK[resolveMlbSignalTier(b)] ?? 0;
+  if (ta !== tb) return tb - ta;
+  return (b.signalScore ?? 0) - (a.signalScore ?? 0);
+}
+
 class MLBErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
   constructor(props: { children: ReactNode }) {
     super(props);
@@ -226,7 +235,7 @@ function SignalStrip({ signals, onPlayerClick }: { signals: MlbSignalData[]; onP
       // engine's authoritative composite.
       return (s.signalScore ?? 0) >= 50 && s.recommendedSide !== "NO_EDGE";
     })
-    .sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0))
+    .sort(tierFirstSort)
     .slice(0, 8);
 
   if (topSignals.length === 0) return null;
@@ -299,7 +308,7 @@ function PreABWatchBand({ signals, onPlayerClick }: { signals: MlbSignalData[]; 
       const edge = s.edge ?? 0;
       return pct >= 60 && edge >= 3;
     })
-    .sort((a, b) => normalizePct(b.enginePct) - normalizePct(a.enginePct))
+    .sort(tierFirstSort)
     .slice(0, 8);
 
   const autoCollapse = confirmedCount >= 3;
@@ -612,7 +621,7 @@ function GameSignalsPanel({ signals, isElite, onAddToSlip, onOpenCalculator, sel
   // watchlist (HR_VS_ELITE_PITCHER, PITCHER_NEAR_MISS, fallback watch) entries
   // belong in the dedicated PreABWatchBand surface above this panel.
   const confirmed = signals.filter(s => !(s as any).isEarlySignal && !(s as any).watchlist);
-  const sorted = [...confirmed].sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
+  const sorted = [...confirmed].sort(tierFirstSort);
   const visible = isElite ? sorted : sorted.slice(0, 2);
   const lockedCount = isElite ? 0 : Math.max(0, sorted.length - 2);
 
@@ -2147,6 +2156,10 @@ function HRRadarSection({ isElite, onAddToSlip, onOpenHrDetails, games }: { isEl
     if (aDyn != null && bDyn != null && aDyn !== bDyn) return aDyn - bDyn;
     if (aDyn != null && bDyn == null) return -1;
     if (aDyn == null && bDyn != null) return 1;
+    const RADAR_RANK: Record<string, number> = { HIGH: 2, MODERATE: 1, WATCH: 0 };
+    const aRR = RADAR_RANK[a.radarTier ?? "WATCH"] ?? 0;
+    const bRR = RADAR_RANK[b.radarTier ?? "WATCH"] ?? 0;
+    if (aRR !== bRR) return bRR - aRR;
     const aConv = a.hrConversionCalibrated ?? 0;
     const bConv = b.hrConversionCalibrated ?? 0;
     if (aConv !== bConv) return bConv - aConv;
