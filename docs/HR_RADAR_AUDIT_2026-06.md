@@ -168,15 +168,28 @@ Log, per resolved signal, the **max tier it reached** and outcome; emit a daily 
 max-tier. Confirms the 206 misses are dominated by Watch/Building.
 - Files: `server/mlb/liveGameOrchestrator.ts`, `server/analytics/hrRadarIntelligence.ts` (read-only).
 
-### Phase 1 — 3-tier ladder + honest grading (biggest credibility win)
-- Collapse `ready`→Building; define the `HR Max Window` mapping.
-  Files: `hrRadarStateMachine.ts`, `hrRadarUserStage.ts`, `hrRadarSection.ts`, `hrRadarState.ts`.
-- Restrict `called_miss`/`cashed` to signals that entered HR Max Window; introduce PA-bounded `expired`.
-  Files: `server/storage.ts` (`reconcileHrRadarAlertsForGame`), `hrRadarOutcomeStamp.ts`.
-- UI: 3 sections + separate "context volume" count.
-  Files: `client/src/components/mlb/HrRadarLadder.tsx`, `client/src/pages/mlb-live.tsx`.
-- Tests: extend `hrRadarStateMachine.test.ts`, `hrRadarReadyToFire.test.ts`,
-  `hrRadarLifecycleRepair.test.ts`, `server/validation/hrRadar/ladderInvariants.ts`.
+### Phase 1 — 3-tier ladder + honest grading (biggest credibility win) — ✅ SHIPPED
+Implemented on branch `claude/hr-tracking-engine-audit-1wyq4m` in four slices, all with
+`server/mlb/hrRadarHonestGrading.test.ts` (35 checks) + green regression suites:
+
+- **Honest miss grading.** `reconcileHrRadarAlertsForGame` only stamps `called_miss` for signals that
+  reached the HR Max Window (actionable top tier); sub-actionable Watch/Building/presence rows become
+  `expired` (excluded from the miss record). New pure helpers `reachedHrMaxWindow()` /
+  `resolveFinalNoHrGrading()` in `hrRadarSection.ts`.
+- **Symmetric cash gating.** Every cash path (`resolveHrRadarAlertAsHit`, reconcile fallback,
+  `ensureHrRadarAlertHit`, `liveGameOrchestrator.closeHrAlertOnHit`) now credits a counted win only when
+  `reachedHrMaxWindow` is true; sub-actionable pre-HR signals → `uncalled_hr` (diagnostic, not a win).
+  Building/`prepare` no longer counts toward the record.
+- **3-tier ladder UI.** `HrRadarLadder.tsx` collapses FIRE/READY/BUILD/WATCH → **Watch / Building /
+  HR Max Window** (FIRE+READY merge into the synthetic `hrMax` bucket), with a header "`N` HR Max ·
+  `N` context" split.
+- **PA-bounded window.** New `hrMaxWindow.ts` (`classifyHrMaxWindowAtFinal`) splits HR Max Window misses
+  into `called_miss` (window played out) vs `expired` (fired too late, window cut short), threaded into
+  reconcile via `finalInning`.
+
+**Deferred follow-up:** the *live mid-game auto-expiry sweep* (resolving a signal the instant its PA
+window lapses, before game-final) is not yet enabled — it mutates live state per tick and needs a live
+run to verify. The window is currently enforced at the (already-tested) game-final grading path.
 
 ### Phase 2 — EV-gating against `batter_home_runs`
 - Join market price into the HR Radar candidate; de-vig; gate HR Max Window on edge margin; add edge
