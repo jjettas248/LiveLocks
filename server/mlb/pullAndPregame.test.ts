@@ -65,5 +65,48 @@ console.log("\n[SlateRadar #6/#7 — pull rate + pregame prior] running cases\n"
   assert("Prior weight decays with live contact", live.components.pregamePriorMult < preAB.components.pregamePriorMult);
 }
 
+// ── Lane 3.1 — humidity (additive, no-op when null, capped) ──────────────
+{
+  const dry = computeHRConversionProbability(baseInput({ humidity: 25 }));
+  const humid = computeHRConversionProbability(baseInput({ humidity: 90 }));
+  const none = computeHRConversionProbability(baseInput({ humidity: null }));
+  assert("Humid air → higher env multiplier than dry", humid.environmentMultiplier > dry.environmentMultiplier,
+    `humid=${humid.environmentMultiplier} dry=${dry.environmentMultiplier}`);
+  assert("Humidity null → no-op vs no-humidity baseline", none.environmentMultiplier === computeHRConversionProbability(baseInput({})).environmentMultiplier);
+  assert("Indoors suppresses humidity effect",
+    computeHRConversionProbability(baseInput({ humidity: 90, isIndoors: true })).environmentMultiplier ===
+    computeHRConversionProbability(baseInput({ humidity: 25, isIndoors: true })).environmentMultiplier);
+}
+
+// ── Lane 3.2 — barometric pressure (additive, no-op when null, capped) ────
+{
+  const low = computeHRConversionProbability(baseInput({ pressure: 995 }));
+  const high = computeHRConversionProbability(baseInput({ pressure: 1030 }));
+  const none = computeHRConversionProbability(baseInput({ pressure: null }));
+  assert("Low pressure → higher env multiplier than high pressure", low.environmentMultiplier > high.environmentMultiplier,
+    `low=${low.environmentMultiplier} high=${high.environmentMultiplier}`);
+  assert("Pressure null → no-op vs baseline", none.environmentMultiplier === computeHRConversionProbability(baseInput({})).environmentMultiplier);
+  assert("Env multiplier stays within 1.35 cap with all density boosts",
+    computeHRConversionProbability(baseInput({ humidity: 95, pressure: 990, temperature: 95, windDirection: "out", windSpeed: 15, parkFactor: 1.2 })).environmentMultiplier <= 1.35);
+}
+
+// ── Lane 3.3 — in-game velocity-decay trend (slope) ──────────────────────
+{
+  const det = (veloTrendSlope: number | null) => ({
+    velocityDrop: null, avgVelocity: 93, seasonAvgVelocity: 94,
+    isReliever: false, relieverEra: null, starterEra: 4.0,
+    bullpenEra: null, bullpenUsageLast3Days: null, relieversUsedCount: 0,
+    veloTrendSlope,
+  });
+  const falling = computeHRConversionProbability(baseInput({ pitcherDeterioration: det(-2.5) }));
+  const stable = computeHRConversionProbability(baseInput({ pitcherDeterioration: det(0) }));
+  const none = computeHRConversionProbability(baseInput({ pitcherDeterioration: det(null) }));
+  assert("Falling velo trend → higher pitcher multiplier than stable", falling.pitcherMultiplier > stable.pitcherMultiplier,
+    `falling=${falling.pitcherMultiplier} stable=${stable.pitcherMultiplier}`);
+  assert("Velo trend null → no-op vs stable", none.pitcherMultiplier === stable.pitcherMultiplier);
+  assert("Pitcher multiplier stays within 2.0 cap",
+    computeHRConversionProbability(baseInput({ pitchCount: 110, timesThrough: 3, isPitcherCollapsing: true, era: 7, pitcherDeterioration: det(-3) })).pitcherMultiplier <= 2.0);
+}
+
 console.log(`\n[SlateRadar #6/#7] ${passed}/${passed + failed} cases passed${failed > 0 ? ` (${failed} FAILED)` : ""}\n`);
 if (failed > 0) process.exit(1);

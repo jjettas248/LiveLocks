@@ -3350,6 +3350,14 @@ export class DatabaseStorage implements IStorage {
      */
     dynamicState?: "WATCH" | "PREPARE" | "BET_NOW" | "COOLED_OFF" | "CLOSED" | null;
     /**
+     * Lane 1.4 — consecutive ticks the dynamic state has supported promotion
+     * (HRAlertSnapshot.consecutivePromoteTicks). Persisted into
+     * `diagnosticsSnapshot.stageContract.consecutivePromoteTicks` so the
+     * user-stage layer's ready→fire gate can require sustained conviction
+     * without a DB schema change. Null when caller did not provide one.
+     */
+    consecutivePromoteTicks?: number | null;
+    /**
      * Dynamic readiness score (0–100) from hrAlertEngine snapshot.
      * When provided, this is used as the live `readinessScore` instead of raw
      * hrBuildScore so progression is engine-driven, not formation-driven.
@@ -3423,6 +3431,8 @@ export class DatabaseStorage implements IStorage {
       // so the user-stage layer reads it directly. Null when caller did
       // not provide one (e.g. presence-only rows).
       dynamicState: data.dynamicState ?? null,
+      // Lane 1.4 — sustained-conviction counter for the ready→fire gate.
+      consecutivePromoteTicks: data.consecutivePromoteTicks ?? null,
     };
     // Map canonical stage -> legacy confidenceTier so the rest of the system
     // (ladder, board) keeps working without schema changes. attack→strong,
@@ -3641,6 +3651,9 @@ export class DatabaseStorage implements IStorage {
             // Preserves prior value when caller does not pass a new one
             // (defensive — every live tick should pass it).
             dynamicState: data.dynamicState ?? prevStageContract.dynamicState ?? null,
+            // Lane 1.4 — refresh sustained-conviction counter on every UPDATE.
+            consecutivePromoteTicks:
+              data.consecutivePromoteTicks ?? prevStageContract.consecutivePromoteTicks ?? null,
           },
         };
 

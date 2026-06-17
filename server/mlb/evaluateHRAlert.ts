@@ -28,6 +28,9 @@ export interface HRAlertInput {
   windDirection?: string | null;
   windSpeed?: number | null;
   temperature?: number | null;
+  // Lane 3.1/3.2: weather density inputs (Open-Meteo). Optional — no-op when null.
+  humidity?: number | null;
+  pressure?: number | null;
   isIndoors?: boolean;
   batterHand?: string | null;
   pitcherThrows?: string | null;
@@ -322,6 +325,8 @@ function buildConversionInput(input: HRAlertInput): HRConversionInput {
     windDirection: input.windDirection ?? null,
     windSpeed: input.windSpeed ?? null,
     temperature: input.temperature ?? null,
+    humidity: input.humidity ?? null,
+    pressure: input.pressure ?? null,
     isIndoors: input.isIndoors ?? false,
     batterHand: input.batterHand ?? null,
     pitcherThrows: input.pitcherThrows ?? null,
