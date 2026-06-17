@@ -5,6 +5,7 @@ import { decideHrRadarMatch, QUALIFYING_EVENT_TYPES } from "./validation/hrRadar
 import { traceMissedHr } from "./analytics/hrRadarMissTracer";
 import { emitCalledHitLeadTime } from "./analytics/eventEmitters";
 import { applyHrRadarResolvedStateFixup, inferCashedFromTierStatus, CALLED_HIT_OUTCOME_STATUSES, resolveFinalNoHrGrading, reachedHrMaxWindow } from "./mlb/hrRadarSection";
+import { classifyHrMaxWindowAtFinal } from "./mlb/hrMaxWindow";
 import {
   HR_RADAR_GOLDMASTER_V1,
   enrichWithUserStage,
@@ -4497,7 +4498,7 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async reconcileHrRadarAlertsForGame(gameId: string, playerHrMap: Map<string, { inning: number; half: string }>): Promise<void> {
+  async reconcileHrRadarAlertsForGame(gameId: string, playerHrMap: Map<string, { inning: number; half: string }>, finalInning?: number | null): Promise<void> {
     try {
       const today = resolveMlbGameSessionDate(gameId);
       const liveAlerts = await db.select().from(hrRadarAlerts)
@@ -4633,18 +4634,35 @@ export class DatabaseStorage implements IStorage {
           // (→ "unresolved", excluded from the missed bucket / W/L ledger /
           // user-facing MISSED section). This is what collapses the inflated
           // "everything is a miss" wall into the genuinely actionable set.
-          const finalGrade = resolveFinalNoHrGrading({
+          let finalGrade = resolveFinalNoHrGrading({
             alertTier: alert.alertTier,
             confidenceTier: alert.confidenceTier,
             signalState: alert.signalState,
           });
+          // ── Phase 1 slice 3 — PA-bounded HR Max Window ───────────────────
+          // A genuine HR Max Window miss only counts when the batter had the
+          // window's worth of opportunity. If the actionable signal fired so
+          // late that its PA window was cut short by game-end, resolve it to
+          // `expired` (window lapsed, not counted) rather than a hard miss —
+          // so "window closed" reflects a real window, not just game-over.
+          let windowCutShort = false;
+          if (finalGrade === "called_miss") {
+            const windowClass = classifyHrMaxWindowAtFinal({
+              signalInning: alert.signalInning ?? alert.detectedInning,
+              finalInning: finalInning ?? null,
+            });
+            if (windowClass === "expired") {
+              finalGrade = "expired";
+              windowCutShort = true;
+            }
+          }
           if (finalGrade === "called_miss") {
             await db.update(hrRadarAlerts)
               .set({
                 status: "miss",
                 resolvedAt: nowDate,
                 gradingStatus: "called_miss",
-                gradingReason: "reconcile: HR Max Window signal — game ended without HR",
+                gradingReason: "reconcile: HR Max Window signal — PA window played out without HR",
                 userVisible: true,
                 matchedBeforeHr: false,
                 matchMethod: "direct_pre_hr_signal",
@@ -4662,21 +4680,25 @@ export class DatabaseStorage implements IStorage {
               source: "grader",
             } as InsertHrRadarSignalEvent);
           } else {
-            // Watch/Building context — never reached the actionable tier.
-            // Stamp `expired` (admin-only) so it leaves the active set without
-            // polluting the user-facing miss record.
+            // `expired` — either sub-actionable Watch/Building context (never a
+            // pick) OR an HR Max Window signal whose PA window was cut short by
+            // game-end. Admin-only; leaves the active set without polluting the
+            // user-facing miss record / W/L ledger.
+            const expiredReason = windowCutShort
+              ? "reconcile: HR Max Window signal fired too late — PA window cut short by game-end; not counted"
+              : "reconcile: sub-actionable (Watch/Building) signal — game ended without HR; not a called pick";
             await db.update(hrRadarAlerts)
               .set({
                 status: "miss",
                 resolvedAt: nowDate,
                 gradingStatus: "expired",
-                gradingReason: "reconcile: sub-actionable (Watch/Building) signal — game ended without HR; not a called pick",
+                gradingReason: expiredReason,
                 userVisible: false,
                 matchedBeforeHr: false,
                 matchMethod: "direct_pre_hr_signal",
               })
               .where(eq(hrRadarAlerts.id, alert.id));
-            console.log(`[HR_RADAR_INACTIVE] (reconcile) playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel ?? "presence"} reason=sub_actionable_not_graded confTier=${alert.confidenceTier ?? "?"} signalState=${alert.signalState ?? "?"} alertTier=${alert.alertTier ?? "?"}`);
+            console.log(`[HR_RADAR_INACTIVE] (reconcile) playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel ?? "presence"} reason=${windowCutShort ? "hr_max_window_cut_short" : "sub_actionable_not_graded"} confTier=${alert.confidenceTier ?? "?"} signalState=${alert.signalState ?? "?"} alertTier=${alert.alertTier ?? "?"}`);
           }
         }
       }

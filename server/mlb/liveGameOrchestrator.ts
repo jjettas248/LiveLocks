@@ -1177,7 +1177,7 @@ export class LiveGameOrchestrator {
       // game stays final and will self-heal once the box score arrives.
       const boxHydrated = !!(boxScore?.byPlayerId && Object.keys(boxScore.byPlayerId).length > 0);
       if (boxHydrated) {
-        await storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap).catch(() => undefined);
+        await storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap, newState?.inning ?? null).catch(() => undefined);
       } else {
         console.log(`[HR_RADAR_FINAL_RECONCILE] gameId=${gameId} sessionDate=${sessionDate} deferred=hr_radar_table reason=box_score_not_hydrated (per-poll reconciler will retry every 10s)`);
       }
@@ -1630,7 +1630,7 @@ export class LiveGameOrchestrator {
         }
       }
       storage.reconcileAlertsForGame(gameId).catch(() => {});
-      storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap).catch(() => {});
+      storage.reconcileHrRadarAlertsForGame(gameId, playerHrMap, newState.inning ?? null).catch(() => {});
       clearGameCooldowns(gameId);
       clearGameHrStates(gameId);
       for (const key of Array.from(KNOWN_HR_COUNTS.keys())) {

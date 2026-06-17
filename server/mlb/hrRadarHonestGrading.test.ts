@@ -9,6 +9,11 @@ import {
   deriveHrRadarOutcomeStatus,
   deriveHrRadarSection,
 } from "./hrRadarSection";
+import {
+  classifyHrMaxWindowAtFinal,
+  hrMaxWindowClosesByInning,
+  HR_MAX_WINDOW_MIN_ELAPSED_INNINGS,
+} from "./hrMaxWindow";
 
 let pass = 0;
 let fail = 0;
@@ -85,6 +90,27 @@ function cashGrade(args: { alertTier?: string | null; confidenceTier?: string | 
 check("HR + officialAlert → counted win", cashGrade({ alertTier: "officialAlert" }) === "counted");
 check("HR + prepare/Building → uncalled (not a win)", cashGrade({ alertTier: "prepare" }) === "uncalled_hr");
 check("HR + watch → uncalled (not a win)", cashGrade({ alertTier: "watch", confidenceTier: "monitor" }) === "uncalled_hr");
+
+// ─── PA-bounded HR Max Window (slice 3) ────────────────────────────────────
+// An HR Max Window miss only counts when the batter had the window's worth of
+// opportunity. A signal fired in the game's final frame → expired (cut short).
+check("signal in inning 3, game ends inning 9 → called_miss (window played out)",
+  classifyHrMaxWindowAtFinal({ signalInning: 3, finalInning: 9 }) === "called_miss");
+check("signal in inning 9, game ends inning 9 → expired (no room left)",
+  classifyHrMaxWindowAtFinal({ signalInning: 9, finalInning: 9 }) === "expired");
+check("signal one inning before final → called_miss (MIN_ELAPSED met)",
+  classifyHrMaxWindowAtFinal({ signalInning: 8, finalInning: 8 + HR_MAX_WINDOW_MIN_ELAPSED_INNINGS }) === "called_miss");
+check("null signalInning fails safe to called_miss (never drop a loss)",
+  classifyHrMaxWindowAtFinal({ signalInning: null, finalInning: 9 }) === "called_miss");
+check("null finalInning fails safe to called_miss",
+  classifyHrMaxWindowAtFinal({ signalInning: 5, finalInning: null }) === "called_miss");
+check("extra-innings signal (inning 10) still grades when game runs long",
+  classifyHrMaxWindowAtFinal({ signalInning: 10, finalInning: 12 }) === "called_miss");
+
+// Window descriptor for the UI.
+check("window closes-by inning is signal + budget*innings-per-PA",
+  hrMaxWindowClosesByInning(4) === 4 + 2 * 2);
+check("window descriptor null-safe", hrMaxWindowClosesByInning(null) === null);
 
 console.log(`[HR_RADAR_HONEST_GRADING_TEST] passed=${pass} failed=${fail}`);
 if (fail > 0) process.exit(1);
