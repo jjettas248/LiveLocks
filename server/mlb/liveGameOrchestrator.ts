@@ -194,6 +194,27 @@ export function getOnlyHomersBallparkHrCount(ballpark: string): number | null {
   return ohBallparkFactors.get(ballpark) ?? null;
 }
 
+// IBB in-game leverage context. The base/out state describes only the CURRENT
+// plate appearance, so the leverage fields (first base open, RISP, score diff)
+// must be gated to the batter actually in the box — otherwise every off-turn
+// 3–5 hitter scanned in the lineup loop would inherit this PA's base/out state.
+// The season IBB rate is a standing prior and is applied per batter separately.
+function buildIbbBaseOutContext(
+  state: GameStateCache,
+  batterPlayerId: string,
+): { firstBaseOpen: boolean | null; runnerInScoringPosition: boolean | null; scoreDifferential: number | null } {
+  if (state.currentBatter?.playerId !== batterPlayerId) {
+    return { firstBaseOpen: null, runnerInScoringPosition: null, scoreDifferential: null };
+  }
+  return {
+    firstBaseOpen: !state.runnersOnBase.includes("first"),
+    runnerInScoringPosition: state.runnersOnBase.some(b => b === "second" || b === "third"),
+    scoreDifferential: (state.homeScore != null && state.awayScore != null)
+      ? state.homeScore - state.awayScore
+      : null,
+  };
+}
+
 // ── HR alert grading tracker ──────────────────────────────────────────────────
 // Tracks the highest atBatIndex of an HR play we've already graded per
 // (gameId, playerId). Using the play's atBatIndex (canonical from MLB Stats API)
@@ -2963,11 +2984,7 @@ export class LiveGameOrchestrator {
         } : {}),
         ibbContext: {
           seasonIBBRate: rollingStats?.seasonIBBRate ?? null,
-          firstBaseOpen: !state.runnersOnBase.includes("first"),
-          runnerInScoringPosition: state.runnersOnBase.some(b => b === "second" || b === "third"),
-          scoreDifferential: (state.homeScore != null && state.awayScore != null)
-            ? state.homeScore - state.awayScore
-            : null,
+          ...buildIbbBaseOutContext(state, batter.playerId),
           inning: state.inning,
         },
         lineup: {
@@ -3121,11 +3138,7 @@ export class LiveGameOrchestrator {
         recentOps: rollingStats?.last15?.ops ?? null,
         seasonOps: rollingStats?.seasonOps ?? null,
         seasonIBBRate: rollingStats?.seasonIBBRate ?? null,
-        firstBaseOpen: !state.runnersOnBase.includes("first"),
-        runnerInScoringPosition: state.runnersOnBase.some(b => b === "second" || b === "third"),
-        scoreDifferential: (state.homeScore != null && state.awayScore != null)
-          ? state.homeScore - state.awayScore
-          : null,
+        ...buildIbbBaseOutContext(state, batter.playerId),
       };
 
       const alertResult = evaluateHRAlert(alertInput);
@@ -3622,11 +3635,7 @@ export class LiveGameOrchestrator {
           } : {}),
           ibbContext: {
             seasonIBBRate: rollingStats?.seasonIBBRate ?? null,
-            firstBaseOpen: !state.runnersOnBase.includes("first"),
-            runnerInScoringPosition: state.runnersOnBase.some(b => b === "second" || b === "third"),
-            scoreDifferential: (state.homeScore != null && state.awayScore != null)
-              ? state.homeScore - state.awayScore
-              : null,
+            ...buildIbbBaseOutContext(state, batter.playerId),
             inning: state.inning,
           },
           lineup: {
@@ -3997,6 +4006,10 @@ export class LiveGameOrchestrator {
               xISO: playerContact?.xISOSeason ?? null,
               sweetSpotPercent: playerContact?.sweetSpotPercent ?? null,
               pullRatePercent: playerContact?.pullRatePercent ?? null,
+              recentOps: rollingStats?.last15?.ops ?? null,
+              seasonOps: rollingStats?.seasonOps ?? null,
+              seasonIBBRate: rollingStats?.seasonIBBRate ?? null,
+              ...buildIbbBaseOutContext(state, batter.playerId),
             };
             const alertResult = evaluateHRAlert(alertInput);
 
