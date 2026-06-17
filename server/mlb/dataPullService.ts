@@ -159,6 +159,10 @@ export interface BatterRollingStats {
   hrRateLast30: number | null;
   seasonTotalHR: number;
   seasonTotalAB: number;
+  // Intentional walks (feared-slugger prior). Defensive: 0 / null when the feed
+  // does not expose intentionalWalks, so downstream multipliers stay neutral.
+  seasonTotalIBB: number;
+  seasonIBBRate: number | null;   // IBB / PA
   fetchedAt: number;
 }
 
@@ -1371,6 +1375,7 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
           seasonAvg: null, seasonOps: null, seasonHRRate: null,
           abSinceLastHR: null, hrRateLast7: null, hrRateLast15: null, hrRateLast30: null,
           seasonTotalHR: 0, seasonTotalAB: 0,
+          seasonTotalIBB: 0, seasonIBBRate: null,
           fetchedAt: Date.now(),
         };
       } else {
@@ -1425,7 +1430,7 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
     const seasonAvg = allGames.avg;
     const seasonOps = allGames.ops;
 
-    let seasonTotalPA = 0, seasonTotalHR = 0, seasonTotalAB = 0;
+    let seasonTotalPA = 0, seasonTotalHR = 0, seasonTotalAB = 0, seasonTotalIBB = 0;
     for (const g of splits) {
       const s = g.stat;
       const ab = safeNum(s.atBats) ?? 0;
@@ -1433,11 +1438,16 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
       const hbp = safeNum(s.hitByPitch) ?? 0;
       const sf = safeNum(s.sacFlies) ?? 0;
       const hr = safeNum(s.homeRuns) ?? 0;
+      // intentionalWalks: standard MLB Stats API hitting field. Defensive —
+      // 0 when absent, so seasonIBBRate stays low/null and the prior is neutral.
+      const ibb = safeNum(s.intentionalWalks) ?? safeNum(s.intentionalBaseOnBalls) ?? 0;
       seasonTotalPA += ab + bb + hbp + sf;
       seasonTotalHR += hr;
       seasonTotalAB += ab;
+      seasonTotalIBB += ibb;
     }
     const seasonHRRate = seasonTotalPA >= 50 ? parseFloat((seasonTotalHR / seasonTotalPA).toFixed(4)) : null;
+    const seasonIBBRate = seasonTotalPA >= 50 ? parseFloat((seasonTotalIBB / seasonTotalPA).toFixed(4)) : null;
 
     let abSinceLastHR: number | null = null;
     let abAccum = 0;
@@ -1473,10 +1483,11 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
       last7, last15, last30, seasonAvg, seasonOps, seasonHRRate,
       abSinceLastHR, hrRateLast7, hrRateLast15, hrRateLast30,
       seasonTotalHR, seasonTotalAB,
+      seasonTotalIBB, seasonIBBRate,
       fetchedAt: Date.now(),
     };
 
-    console.log(`[MLB pull] syncBatterRollingStats: player ${playerId} — L7=${last7.avg} L15=${last15.avg} L30=${last30.avg} Season=${seasonAvg} HR/PA=${seasonHRRate ?? "n/a"} abSinceHR=${abSinceLastHR ?? "n/a"} hrL7=${hrRateLast7 ?? "n/a"} hrL15=${hrRateLast15 ?? "n/a"} (${splits.length} games)`);
+    console.log(`[MLB pull] syncBatterRollingStats: player ${playerId} — L7=${last7.avg} L15=${last15.avg} L30=${last30.avg} Season=${seasonAvg} HR/PA=${seasonHRRate ?? "n/a"} IBB/PA=${seasonIBBRate ?? "n/a"} abSinceHR=${abSinceLastHR ?? "n/a"} hrL7=${hrRateLast7 ?? "n/a"} hrL15=${hrRateLast15 ?? "n/a"} (${splits.length} games)`);
   } catch (err: any) {
     console.error(`[MLB pull] syncBatterRollingStats(${playerId}) error:`, err.message);
     if (cached) cached.fetchedAt = Date.now();

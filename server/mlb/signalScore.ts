@@ -854,6 +854,67 @@ function computePitcherEntryFatigueScore(input: MLBPropInput): number {
   return clamp(score, 0, 100);
 }
 
+// Recent form score (0–100) — hot/cold streak mirror of the engine multiplier.
+// Combines HR-rate streak (recent vs season from hrTrend) with broader L15 OPS
+// vs season OPS. Neutral 50 when no form data is present.
+function computeRecentFormScore(input: MLBPropInput): number {
+  let score = 50;
+  const trend = input.hrTrend;
+  if (trend && trend.seasonTotalAB > 0 && trend.seasonTotalHR > 0) {
+    const seasonRate = trend.seasonTotalHR / trend.seasonTotalAB;
+    const l7 = trend.hrRateLast7;
+    const l15 = trend.hrRateLast15;
+    let recent: number | null = null;
+    if (l7 != null && l15 != null) recent = 0.4 * l7 + 0.6 * l15;
+    else if (l15 != null) recent = l15;
+    else if (l7 != null) recent = l7;
+    if (recent != null && seasonRate > 0) {
+      const ratio = recent / seasonRate;
+      if (ratio >= 1.8) score += 24;
+      else if (ratio >= 1.4) score += 14;
+      else if (ratio >= 1.1) score += 6;
+      else if (ratio <= 0.4) score -= 16;
+      else if (ratio <= 0.7) score -= 8;
+    }
+  }
+
+  const rf = input.rollingForm;
+  if (rf && rf.last15Ops != null && rf.seasonOps != null && rf.seasonOps > 0) {
+    const opsRatio = rf.last15Ops / rf.seasonOps;
+    if (opsRatio >= 1.15) score += 12;
+    else if (opsRatio >= 1.07) score += 6;
+    else if (opsRatio <= 0.85) score -= 10;
+    else if (opsRatio <= 0.93) score -= 4;
+  }
+
+  return clamp(score, 0, 100);
+}
+
+// IBB feared-slugger score (0–100, positive-leaning) — mirror of the engine's
+// positive-only respect multiplier. Neutral 50 when no IBB context is present.
+function computeIbbRespectScore(input: MLBPropInput): number {
+  const ibb = input.ibbContext;
+  if (!ibb) return 50;
+  let score = 50;
+
+  const rate = ibb.seasonIBBRate;
+  if (rate != null && rate > 0) {
+    if (rate >= 0.030) score += 22;
+    else if (rate >= 0.020) score += 14;
+    else if (rate >= 0.010) score += 7;
+  }
+
+  const slot = input.lineup.battingOrderSlot;
+  const isThreat = (rate != null && rate >= 0.010) || (slot >= 3 && slot <= 5);
+  const closeGame = ibb.scoreDifferential != null && Math.abs(ibb.scoreDifferential) <= 2;
+  const lateGame = ibb.inning != null && ibb.inning >= 6;
+  if (ibb.firstBaseOpen === true && ibb.runnerInScoringPosition === true && isThreat) {
+    score += closeGame && lateGame ? 14 : 7;
+  }
+
+  return clamp(score, 0, 100);
+}
+
 export function scoreHRRadar(
   input: MLBPropInput,
   output: MLBPropOutput
@@ -925,19 +986,23 @@ export function scoreHRRadar(
   const handednessSplits = computeHandednessSplitsScore(input);          // Gaps 4 & 5
   const powerProfile = computePowerProfileScore(input);                   // Gaps 7–9
   const lineupSlotHR = computeLineupSlotHRScore(input);                  // Gap 6
+  const recentForm = computeRecentFormScore(input);                      // Recent form
+  const ibbRespect = computeIbbRespectScore(input);                      // IBB feared-slugger
 
   const baseTotal = Math.round(
-    0.19 * nearHrScore +
-    0.17 * contactScore +
-    0.12 * pitcherVuln +
-    0.10 * pitchMixMatchup +
-    0.08 * hrTiming +
+    0.17 * nearHrScore +
+    0.16 * contactScore +
+    0.11 * pitcherVuln +
+    0.09 * pitchMixMatchup +
+    0.07 * hrTiming +
     0.07 * entryFatigue +
     0.06 * handednessSplits +
-    0.08 * powerProfile +
-    0.07 * parkWeather +
+    0.07 * powerProfile +
+    0.06 * parkWeather +
     0.03 * lineupSlotHR +
-    0.03 * opportunity
+    0.03 * opportunity +
+    0.05 * recentForm +
+    0.03 * ibbRespect
   );
 
   const total = clamp(baseTotal, 0, 100);
@@ -954,7 +1019,7 @@ export function scoreHRRadar(
     projection: Math.round(contactScore),
     liveContext: Math.round(pitcherVuln),
     matchup: Math.round(pitcherVuln),
-    form: 50,
+    form: Math.round(recentForm),
     opportunity: Math.round(opportunity),
     marketReliability: Math.round(parkWeather),
     priceValidation: 50,

@@ -58,6 +58,21 @@ export interface HRConversionInput {
   // SlateRadar gap #6: batter pull rate (% BIP to pull side). Pull-heavy power
   // hitters homer at higher rates. Optional — no-op (1.0) when null.
   pullRatePercent?: number | null;
+  // Recent form: HR-rate streak + AVG/OPS form. A hot slugger should carry a
+  // higher per-PA HR rate than an identical-profile cold one. Optional — no-op
+  // (1.0) when absent.
+  hrRateLast7?: number | null;
+  hrRateLast15?: number | null;
+  hrRateLast30?: number | null;
+  recentOps?: number | null;   // L15 OPS
+  seasonOps?: number | null;
+  // Intentional-walk "feared slugger" prior (positive-only). Season IBB rate is
+  // the standing respect signal; the in-game base/out context confirms it in a
+  // high-leverage spot. Optional — no-op (1.0) when absent.
+  seasonIBBRate?: number | null;   // IBB / PA
+  firstBaseOpen?: boolean | null;
+  runnerInScoringPosition?: boolean | null;
+  scoreDifferential?: number | null;
 }
 
 export interface HRConversionResult {
@@ -83,6 +98,8 @@ export interface HRConversionResult {
     pitcherAdjustedRate: number;
     envAdjustedRate: number;
     entryAdjustedRate: number;
+    recentFormMult: number;
+    ibbRespectMult: number;
     finalPerPARate: number;
     paDist: Record<number, number>;
     pZeroHR: number;
@@ -539,6 +556,85 @@ function computePitcherEntryFatigueMultiplier(input: HRConversionInput): number 
   return Math.min(1.30, Math.max(0.90, mult));
 }
 
+// Recent form multiplier — a batter's hot/cold streak.
+// Two orthogonal signals, combined multiplicatively:
+//   1. HR-rate streak: blended recent HR rate (0.4*L7 + 0.6*L15, skipping nulls)
+//      relative to season HR rate. A hot run pulls the per-PA rate up; a cold
+//      stretch pulls it down (regression cuts both ways).
+//   2. AVG/OPS form: recent (L15) OPS relative to season OPS — broader contact
+//      form independent of HR specifically.
+// Capped [0.90, 1.15]; no-op (1.0) when neither signal has data.
+function computeRecentFormMultiplier(input: HRConversionInput): number {
+  let mult = 1.0;
+
+  // HR-rate streak vs season.
+  const season = input.seasonHRRate;
+  if (season != null && season > 0) {
+    const l7 = input.hrRateLast7;
+    const l15 = input.hrRateLast15;
+    let recent: number | null = null;
+    if (l7 != null && l15 != null) recent = 0.4 * l7 + 0.6 * l15;
+    else if (l15 != null) recent = l15;
+    else if (l7 != null) recent = l7;
+    if (recent != null) {
+      const ratio = recent / season;
+      if (ratio >= 1.8) mult *= 1.08;
+      else if (ratio >= 1.4) mult *= 1.05;
+      else if (ratio <= 0.4) mult *= 0.93;
+      else if (ratio <= 0.7) mult *= 0.97;
+    }
+  }
+
+  // Broader AVG/OPS form: recent L15 OPS vs season OPS.
+  const recentOps = input.recentOps;
+  const seasonOps = input.seasonOps;
+  if (recentOps != null && seasonOps != null && seasonOps > 0) {
+    const opsRatio = recentOps / seasonOps;
+    if (opsRatio >= 1.15) mult *= 1.05;
+    else if (opsRatio >= 1.07) mult *= 1.02;
+    else if (opsRatio <= 0.85) mult *= 0.95;
+    else if (opsRatio <= 0.93) mult *= 0.98;
+  }
+
+  return Math.min(1.15, Math.max(0.90, mult));
+}
+
+// Intentional-walk "feared slugger" prior — positive-only (floor 1.0).
+// Batters who draw intentional walks are, by definition, treated as power
+// threats. We model this as a standing season prior plus an in-game leverage
+// confirmation; we never SUPPRESS opportunity (product decision: feared-slugger
+// prior only). Capped [1.0, 1.10]; no-op (1.0) when absent.
+function computeIbbRespectMultiplier(input: HRConversionInput): number {
+  let mult = 1.0;
+
+  // Season IBB rate (IBB / PA). League avg is ~0.4%; elite feared sluggers run
+  // 2–4%+. Higher rate ⇒ more respect ⇒ stronger HR threat.
+  const ibbRate = input.seasonIBBRate;
+  if (ibbRate != null && ibbRate > 0) {
+    if (ibbRate >= 0.030) mult *= 1.06;
+    else if (ibbRate >= 0.020) mult *= 1.04;
+    else if (ibbRate >= 0.010) mult *= 1.02;
+  }
+
+  // In-game IBB-risk respect context: first base open, runner in scoring
+  // position, close game, late innings — the classic spot a dangerous bat gets
+  // pitched around. Gated so we only reward genuine threats (high IBB rate or a
+  // cleanup-slot bat), never an average hitter who happens to be in the spot.
+  const firstBaseOpen = input.firstBaseOpen === true;
+  const risp = input.runnerInScoringPosition === true;
+  const scoreDiff = input.scoreDifferential;
+  const closeGame = scoreDiff != null && Math.abs(scoreDiff) <= 2;
+  const lateGame = input.inning >= 6;
+  const isThreat = (ibbRate != null && ibbRate >= 0.010) ||
+    (input.battingOrderSlot >= 3 && input.battingOrderSlot <= 5);
+  if (firstBaseOpen && risp && isThreat) {
+    if (closeGame && lateGame) mult *= 1.04;
+    else mult *= 1.02;
+  }
+
+  return Math.min(1.10, Math.max(1.0, mult));
+}
+
 // ── SlateRadar gap #7 — pregame HR-form prior ──────────────────────────────
 // Flag-gated (default on). A genuine power threat should carry a non-zero HR
 // estimate INTO his first AB so we stop missing first-AB HRs
@@ -655,8 +751,16 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
   const slotMultiplier = computeLineupSlotHRMultiplier(input.battingOrderSlot);
   const slotAdjustedRate = powerAdjustedRate * slotMultiplier;
 
+  // Recent form (hot/cold streak) and IBB feared-slugger prior. Applied last so
+  // they modulate the fully-adjusted rate; both no-op (1.0) when data absent.
+  const recentFormMult = computeRecentFormMultiplier(input);
+  const formAdjustedRate = slotAdjustedRate * recentFormMult;
+
+  const ibbRespectMult = computeIbbRespectMultiplier(input);
+  const ibbAdjustedRate = formAdjustedRate * ibbRespectMult;
+
   // Phase 4: tightened final per-PA cap (0.25 → 0.12) to prevent runaway probabilities.
-  const finalPerPARate = Math.max(0.005, Math.min(0.12, slotAdjustedRate));
+  const finalPerPARate = Math.max(0.005, Math.min(0.12, ibbAdjustedRate));
 
   const paDist = estimateRichPADistribution(
     input.inning,
@@ -706,6 +810,8 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
       pitcherAdjustedRate: Math.round(pitcherAdjustedRate * 10000) / 10000,
       envAdjustedRate: Math.round(envAdjustedRate * 10000) / 10000,
       entryAdjustedRate: Math.round(entryAdjustedRate * 10000) / 10000,
+      recentFormMult: Math.round(recentFormMult * 1000) / 1000,
+      ibbRespectMult: Math.round(ibbRespectMult * 1000) / 1000,
       finalPerPARate: Math.round(finalPerPARate * 10000) / 10000,
       paDist,
       pZeroHR: Math.round(pZeroHR * 10000) / 10000,

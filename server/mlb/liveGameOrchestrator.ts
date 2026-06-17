@@ -2944,6 +2944,14 @@ export class LiveGameOrchestrator {
           avgFastballSpin: pitcherCtx?.avgFastballSpin ?? null,
         },
         ...(rollingStats ? {
+          rollingForm: {
+            last7Avg: rollingStats.last7.avg,
+            last15Avg: rollingStats.last15.avg,
+            last30Avg: rollingStats.last30.avg,
+            last7Ops: rollingStats.last7.ops,
+            last15Ops: rollingStats.last15.ops,
+            seasonOps: rollingStats.seasonOps,
+          },
           hrTrend: {
             abSinceLastHR: rollingStats.abSinceLastHR,
             hrRateLast7: rollingStats.hrRateLast7,
@@ -2953,6 +2961,15 @@ export class LiveGameOrchestrator {
             seasonTotalAB: rollingStats.seasonTotalAB,
           },
         } : {}),
+        ibbContext: {
+          seasonIBBRate: rollingStats?.seasonIBBRate ?? null,
+          firstBaseOpen: !state.runnersOnBase.includes("first"),
+          runnerInScoringPosition: state.runnersOnBase.some(b => b === "second" || b === "third"),
+          scoreDifferential: (state.homeScore != null && state.awayScore != null)
+            ? state.homeScore - state.awayScore
+            : null,
+          inning: state.inning,
+        },
         lineup: {
           battingOrderSlot: batter.slot,
           orderTurnoverProximity: 0.5,
@@ -3101,6 +3118,14 @@ export class LiveGameOrchestrator {
         xISO: playerContact.xISOSeason ?? null,
         sweetSpotPercent: playerContact.sweetSpotPercent ?? null,
         pullRatePercent: playerContact.pullRatePercent ?? null,
+        recentOps: rollingStats?.last15?.ops ?? null,
+        seasonOps: rollingStats?.seasonOps ?? null,
+        seasonIBBRate: rollingStats?.seasonIBBRate ?? null,
+        firstBaseOpen: !state.runnersOnBase.includes("first"),
+        runnerInScoringPosition: state.runnersOnBase.some(b => b === "second" || b === "third"),
+        scoreDifferential: (state.homeScore != null && state.awayScore != null)
+          ? state.homeScore - state.awayScore
+          : null,
       };
 
       const alertResult = evaluateHRAlert(alertInput);
@@ -3584,6 +3609,7 @@ export class LiveGameOrchestrator {
               last30Avg: rollingStats.last30.avg,
               last7Ops: rollingStats.last7.ops,
               last15Ops: rollingStats.last15.ops,
+              seasonOps: rollingStats.seasonOps,
             },
             hrTrend: {
               abSinceLastHR: rollingStats.abSinceLastHR,
@@ -3594,6 +3620,15 @@ export class LiveGameOrchestrator {
               seasonTotalAB: rollingStats.seasonTotalAB,
             },
           } : {}),
+          ibbContext: {
+            seasonIBBRate: rollingStats?.seasonIBBRate ?? null,
+            firstBaseOpen: !state.runnersOnBase.includes("first"),
+            runnerInScoringPosition: state.runnersOnBase.some(b => b === "second" || b === "third"),
+            scoreDifferential: (state.homeScore != null && state.awayScore != null)
+              ? state.homeScore - state.awayScore
+              : null,
+            inning: state.inning,
+          },
           lineup: {
             battingOrderSlot: batter.slot,
             orderTurnoverProximity: 0.5,
