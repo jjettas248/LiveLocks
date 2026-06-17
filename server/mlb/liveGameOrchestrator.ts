@@ -778,6 +778,22 @@ const PREFERRED_BOOKMAKERS = ["draftkings", "fanduel", "hardrockbet", "betmgm", 
 
 type ResolvedLine = { line: number; overOdds: number | null; underOdds: number | null; isDegraded: boolean; source: "live" | "prior" | "cache" | "lkg" };
 
+// Phase 2 — most-recent resolved batter_home_runs prices per (gameId, playerId).
+// The per-tick market loop resolves HR odds; the contact-reevaluation path
+// (reevaluateHRRadarOnContact) has no odds in scope, so it reads them here to
+// EV-gate the HR Max Window tier. TTL keeps stale prices from gating.
+const HR_OVER_ODDS_CACHE = new Map<string, { overOdds: number | null; underOdds: number | null; ts: number }>();
+const HR_ODDS_CACHE_TTL_MS = 5 * 60 * 1000;
+function hrOddsKey(gameId: string, playerId: string): string { return `${gameId}_${playerId}`; }
+function cacheHrOdds(gameId: string, playerId: string, overOdds: number | null, underOdds: number | null): void {
+  HR_OVER_ODDS_CACHE.set(hrOddsKey(gameId, playerId), { overOdds, underOdds, ts: Date.now() });
+}
+function getCachedHrOdds(gameId: string, playerId: string): { overOdds: number | null; underOdds: number | null } | null {
+  const e = HR_OVER_ODDS_CACHE.get(hrOddsKey(gameId, playerId));
+  if (!e || Date.now() - e.ts > HR_ODDS_CACHE_TTL_MS) return null;
+  return { overOdds: e.overOdds, underOdds: e.underOdds };
+}
+
 // ── Resolve a real book line for a player/market ──────────────────────────────
 // Precedence:
 //   (1) Odds service live/cached line (getMLBPlayerOdds) — preferred book order
@@ -3146,6 +3162,8 @@ export class LiveGameOrchestrator {
         seasonOps: rollingStats?.seasonOps ?? null,
         seasonIBBRate: rollingStats?.seasonIBBRate ?? null,
         ...buildIbbBaseOutContext(state, batter.playerId),
+        // Phase 2 — EV gate inputs (no-op when no cached price for this batter).
+        ...(getCachedHrOdds(gameId, batter.playerId) ?? { overOdds: null, underOdds: null }),
       };
 
       const alertResult = evaluateHRAlert(alertInput);
@@ -3452,6 +3470,12 @@ export class LiveGameOrchestrator {
           }
         }
         if (resolvedLine && resolvedLine.isDegraded) anyDegraded = true;
+
+        // Phase 2 — stash resolved HR prices so the contact-reevaluation path
+        // can EV-gate the HR Max Window tier (it has no odds in scope).
+        if (market === "home_runs" && resolvedLine) {
+          cacheHrOdds(gameId, batter.playerId, resolvedLine.overOdds, resolvedLine.underOdds);
+        }
 
         if (!hrRadarOnly) {
           const resolvedMarketObj = { line: resolvedLine!.line, odds: (resolvedLine!.overOdds !== null || resolvedLine!.underOdds !== null) ? { overOdds: resolvedLine!.overOdds, underOdds: resolvedLine!.underOdds } : null };
@@ -4024,6 +4048,8 @@ export class LiveGameOrchestrator {
               seasonOps: rollingStats?.seasonOps ?? null,
               seasonIBBRate: rollingStats?.seasonIBBRate ?? null,
               ...buildIbbBaseOutContext(state, batter.playerId),
+              // Phase 2 — EV gate inputs (no-op when no cached price).
+              ...(getCachedHrOdds(gameId, batter.playerId) ?? { overOdds: null, underOdds: null }),
             };
             const alertResult = evaluateHRAlert(alertInput);
 
