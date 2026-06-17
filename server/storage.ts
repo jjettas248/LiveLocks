@@ -4238,7 +4238,7 @@ export class DatabaseStorage implements IStorage {
                 matchMethod: "post_hr_fallback",
               })
               .where(eq(hrRadarAlerts.id, existing[0].id));
-            console.log(`[HR_RADAR_CALLED_HIT] (ensure-rescue) playerId=${data.playerId} gameId=${data.gameId} tieredStatus=${tieredStatus} confTier=${conf} signalState=${sigState} alertTier=${aTier}`);
+            console.log(`[HR_RADAR_CALLED_HIT] (ensure-rescue) playerId=${data.playerId} gameId=${data.gameId} tieredStatus=${tieredStatus} confTier=${e.confidenceTier ?? null} signalState=${e.signalState ?? null} alertTier=${e.alertTier ?? null}`);
           } else {
             // Genuine late_signal: alert never crossed PATH A-E. Keep
             // admin-only behavior so the cashed bucket isn't polluted.

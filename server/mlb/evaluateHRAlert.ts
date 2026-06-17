@@ -767,6 +767,36 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
     };
   }
 
+  // Fix B — conviction-bridge. A high-conviction, high-score profile with at
+  // least one HR-shaped contact can reach the HR Max Window even without a
+  // textbook barrel or a second HR-shaped ball: convProb at the official floor
+  // (0.12), a strong build score, and HR-shaped contact. Closes the "high
+  // conviction + high score + no barrel ⇒ permanently stuck at building" gap.
+  // Additive — no-op unless every gate clears; Phase 1.5 caps still bind the
+  // per-PA rate upstream. NOTE: the 8.5 build-score floor is intentionally
+  // conservative (never over-fires a counted cash) and should be re-validated /
+  // tuned against live fixtures once replayable game data is available.
+  if (
+    convProb !== null && convProb >= HR_CONVERSION_OFFICIAL_MIN &&
+    hrBuildScore >= 8.5 &&
+    totalHrShaped >= 1 &&
+    softVetoes.length === 0
+  ) {
+    const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_CONVICTION_BRIDGE", softVetoes.length, convProb);
+    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} CONVICTION_BRIDGE score=${hrBuildScore.toFixed(1)} conv=${convPct} hrShaped=${totalHrShaped} → officialAlert`);
+    return {
+      level: "ALERT",
+      triggerReason: `FAST_PROMOTE:conviction_bridge_score${hrBuildScore.toFixed(1)}`,
+      signalState: "PEAK",
+      decision: "BET_NOW",
+      confidenceScore: conf,
+      formattedReason: `High-conviction power build (score ${hrBuildScore.toFixed(1)}/10, conv ${convPct}) with HR-shaped contact. Promoting to HR Max Window on conviction.`,
+      detectedInning: inning,
+      alertTier: "officialAlert",
+      diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_CONVICTION_BRIDGE", positiveFactors: [...positiveFactors, `conviction bridge: score ${hrBuildScore.toFixed(1)}, ${totalHrShaped} HR-shaped`] },
+    };
+  }
+
   if (
     totalHrShaped >= 2 &&
     (qualifiedEVMean ?? 0) >= 95 &&

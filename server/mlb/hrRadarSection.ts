@@ -174,6 +174,39 @@ export function reachedHrMaxWindow(args: {
 }
 
 /**
+ * Fix A (decay-out-of-window grading) — did this alert **ever peak** into the
+ * HR Max Window during the game, even if it has since cooled below it?
+ *
+ * `reachedHrMaxWindow` above reads the CURRENT (possibly decayed) tier, so an
+ * HR that legitimately reached the top tier earlier and then cooled before the
+ * ball left the yard would be erased to `uncalled_hr`. This peak-aware
+ * companion lets the HR-HIT grading path honor the prior in-window call.
+ *
+ * Source-of-truth signal is the engine's `peakState` (dynamic state machine):
+ * `BET_NOW` is the top-conviction state. We additionally require the peak
+ * calibrated conversion probability to clear `HR_CONVERSION_OFFICIAL_MIN`
+ * (0.12) as a floor guard, because the dynamic `BET_NOW` state can briefly
+ * diverge from the PATH evaluator's `alertTier`; the floor prevents
+ * over-counting borderline signals that only grazed the window.
+ *
+ * IMPORTANT: this is intended ONLY for the HR-HIT (`cashed`/`uncalled_hr`)
+ * decision. It must NOT widen `resolveFinalNoHrGrading` — a no-HR alert that
+ * merely peaked must still expire, never become a counted `called_miss`. Pure.
+ */
+const HR_MAX_WINDOW_PEAK_CONV_FLOOR = 0.12;
+
+export function reachedHrMaxWindowPeak(args: {
+  peakState?: string | null;
+  peakConversionProbability?: number | null;
+}): boolean {
+  const peak = norm(args.peakState);
+  const conv = typeof args.peakConversionProbability === "number"
+    ? args.peakConversionProbability
+    : 0;
+  return peak === "bet_now" && conv >= HR_MAX_WINDOW_PEAK_CONV_FLOOR;
+}
+
+/**
  * Phase 1 — given a still-active alert at game-final with NO home run, decide
  * the honest terminal grade. Only HR-Max-Window alerts become a counted
  * `called_miss`; sub-actionable Watch/Building rows become `expired` (which
