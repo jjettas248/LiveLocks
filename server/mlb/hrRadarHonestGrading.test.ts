@@ -63,6 +63,29 @@ const missSection = deriveHrRadarSection({ gradingStatus: "called_miss" });
 check("called_miss row still routes to missed section", missSection === "missed",
   `got section=${missSection}`);
 
+// ─── Symmetric cash side — only HR Max Window HRs count as wins ─────────────
+// Sub-actionable pre-HR signals are stamped `uncalled_hr` and must route to
+// the diagnostic bucket (NOT cashed) so they don't inflate the win count.
+const uncalledSection = deriveHrRadarSection({ gradingStatus: "uncalled_hr" });
+check("uncalled_hr (sub-actionable HR) is NOT cashed", uncalledSection !== "cashed",
+  `got section=${uncalledSection}`);
+check("uncalled_hr routes to diagnostic", uncalledSection === "diagnostic",
+  `got section=${uncalledSection}`);
+// HR Max Window cashes still count as wins.
+check("called_hit_attack (HR Max Window win) routes to cashed",
+  deriveHrRadarSection({ gradingStatus: "called_hit_attack" }) === "cashed");
+check("called_hit_ready (HR Max Window win) routes to cashed",
+  deriveHrRadarSection({ gradingStatus: "called_hit_ready" }) === "cashed");
+
+// ─── Cash-side gate parity with reachedHrMaxWindow ─────────────────────────
+// The gate used by every cash path: reachedHrMaxWindow ? counted : uncalled.
+function cashGrade(args: { alertTier?: string | null; confidenceTier?: string | null; signalState?: string | null }): "counted" | "uncalled_hr" {
+  return reachedHrMaxWindow(args) ? "counted" : "uncalled_hr";
+}
+check("HR + officialAlert → counted win", cashGrade({ alertTier: "officialAlert" }) === "counted");
+check("HR + prepare/Building → uncalled (not a win)", cashGrade({ alertTier: "prepare" }) === "uncalled_hr");
+check("HR + watch → uncalled (not a win)", cashGrade({ alertTier: "watch", confidenceTier: "monitor" }) === "uncalled_hr");
+
 console.log(`[HR_RADAR_HONEST_GRADING_TEST] passed=${pass} failed=${fail}`);
 if (fail > 0) process.exit(1);
 console.log("[HR_RADAR_HONEST_GRADING_TEST] OK");

@@ -541,8 +541,14 @@ function gradeSingleHRPlay(
     // to alertTier-driven mapping (officialAlert/prepare/watch).
     const alertTier = snap?.alertResult?.alertTier ?? null;
     const signalState = snap?.alertResult?.signalState ?? null;
+    // Phase 1 (3-tier ladder) — only HR-Max-Window signals stamp a counted
+    // cash; sub-actionable Watch/Building HRs stamp `uncalled_hr` (diagnostic).
+    // Keeps the in-memory outcome stamp symmetric with the DB grading paths.
     const tieredStatus = (() => {
       try {
+        if (!hrRadarSectionMod.reachedHrMaxWindow({ alertTier, confidenceTier: null, signalState })) {
+          return "uncalled_hr" as const;
+        }
         return hrRadarSectionMod.inferCashedFromTierStatus({
           alertTier,
           confidenceTier: null,
