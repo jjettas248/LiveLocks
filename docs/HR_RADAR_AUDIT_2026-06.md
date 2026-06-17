@@ -191,10 +191,15 @@ Implemented on branch `claude/hr-tracking-engine-audit-1wyq4m` in four slices, a
 window lapses, before game-final) is not yet enabled — it mutates live state per tick and needs a live
 run to verify. The window is currently enforced at the (already-tested) game-final grading path.
 
-### Phase 2 — EV-gating against `batter_home_runs`
-- Join market price into the HR Radar candidate; de-vig; gate HR Max Window on edge margin; add edge
-  fields to the payload (intentional shape change → bump goldmaster).
-  Files: `hrAlertEngine.ts`/`evaluateHRAlert.ts` (gate) + a new join helper reading `oddsService.ts`.
+### Phase 2 — EV-gating against `batter_home_runs` — ✅ SHIPPED
+- `evaluateHRAlert.ts` is now an EV-gate wrapper around `evaluateHRAlertCore`: when a signal holds the
+  actionable `officialAlert` tier and a price is present, it requires model game P(HR) ≥ de-vigged
+  market-implied × (1 + `HR_EV_EDGE_MARGIN` = 10%), else **demotes to `prepare` (Building)** — surfaced
+  as context, never bet/graded. New pure helpers `americanToImpliedProb()` / `deviggedMarketHrProb()`.
+- The orchestrator caches per-tick resolved HR prices per (gameId, playerId) and feeds both
+  `evaluateHRAlert` call sites (contact + dynamic-state paths) — no new API calls, no-op when absent.
+- Goldmaster re-baselined to **v5** (`mlb-goldmaster-v5-2026-06-17-hr-ev-gate`).
+- Tests: `hrEvGate.test.ts` (13 checks). Emits `[HR_RADAR_EV_GATE]` PASS/DEMOTE.
 
 ### Phase 3 — Probability accuracy
 - Calibration loop + the new/under-used stats and the hard-hit interaction booster from §2.3.
