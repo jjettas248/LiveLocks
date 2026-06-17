@@ -4689,7 +4689,12 @@ export class DatabaseStorage implements IStorage {
               : "reconcile: sub-actionable (Watch/Building) signal — game ended without HR; not a called pick";
             await db.update(hrRadarAlerts)
               .set({
-                status: "miss",
+                // status `expired` (not `miss`) so the raw `status === "miss"`
+                // W/L counters (e.g. the HR Radar accuracy summary) exclude
+                // these non-graded rows. `gradingStatus="expired"` already maps
+                // to "unresolved" in deriveHrRadarOutcomeStatus, keeping the
+                // canonical section/outcome path consistent.
+                status: "expired",
                 resolvedAt: nowDate,
                 gradingStatus: "expired",
                 gradingReason: expiredReason,

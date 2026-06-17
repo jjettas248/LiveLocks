@@ -1310,14 +1310,26 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
   }
   // Insufficient edge — demote HR Max Window → Building (prepare). Still
   // surfaced as context; just not graded/bet as a max-window pick.
+  //
+  // IMPORTANT: demoting `alertTier` alone is not enough. The orchestrator
+  // persists `signalState`/`decision` (not alertTier) into the DB
+  // `confidenceTier`/`signalState` columns (PEAK → strong/actionable), and the
+  // grading helper `reachedHrMaxWindow` treats strong/actionable as the HR Max
+  // Window tier — so an EV-demoted PEAK signal would still be graded/notified as
+  // actionable. Clear every actionable marker: drop to BUILDING/PREPARE and
+  // downgrade the level from ALERT → WATCH so cooldown/notifications (gated on
+  // level === "ALERT") don't fire for a non-bet signal.
   console.log(
     `[HR_RADAR_EV_GATE] DEMOTE ${input.playerName} game=${input.gameId} ` +
     `model=${(modelProb * 100).toFixed(1)}% mkt=${(marketImplied * 100).toFixed(1)}% ` +
-    `edge=${edgePct.toFixed(0)}% need≥${(required * 100).toFixed(1)}% → prepare`,
+    `edge=${edgePct.toFixed(0)}% need≥${(required * 100).toFixed(1)}% → building`,
   );
   return {
     ...result,
     alertTier: "prepare",
+    level: result.level === "ALERT" ? "WATCH" : result.level,
+    signalState: result.signalState === "PEAK" ? "BUILDING" : result.signalState,
+    decision: result.decision === "BET_NOW" ? "PREPARE" : result.decision,
     triggerReason:
       `${result.triggerReason} · EV-gated (model ${(modelProb * 100).toFixed(1)}% ` +
       `vs mkt ${(marketImplied * 100).toFixed(1)}%, edge ${edgePct.toFixed(0)}%)`,
