@@ -44,7 +44,9 @@ const _ls_rank: Record<string, number> = {
 // has been observed in this many ms. Bus expires it via the lifecycle
 // engine. Independent of the lifecycle store's longer 30 min TTL — the
 // bus's freshness is for "is this signal currently live and surfaceable?"
-export const SIGNAL_FRESHNESS_MS = 5 * 60 * 1000;
+// Extended to 15 min to prevent HR signals expiring between periodic scan
+// cycles when a game has a slow half-inning.
+export const SIGNAL_FRESHNESS_MS = 15 * 60 * 1000;
 
 // ── Metrics ──────────────────────────────────────────────────────────
 interface BusMetrics {
