@@ -202,8 +202,13 @@ const CALIBRATION_TABLE: Array<{ rawMin: number; rawMax: number; calibrated: num
   { rawMin: 0.16, rawMax: 0.20, calibrated: 0.165 },
   { rawMin: 0.20, rawMax: 0.25, calibrated: 0.21 },
   { rawMin: 0.25, rawMax: 0.30, calibrated: 0.255 },
-  { rawMin: 0.30, rawMax: 0.40, calibrated: 0.32 },
-  { rawMin: 0.40, rawMax: 1.00, calibrated: 0.38 },
+  // Audit fix C3 — the top bins were over-compressed: attack/STRONG calls
+  // realized ~57–67% but calibrated probability was ceilinged at 0.38, leaving
+  // the model badly under-confident exactly where it commits. Lift the top two
+  // bins toward the observed rate. The final per-PA clamp (0.12, §7a #4) and the
+  // empirical buckets (C4) still bind above this static fallback.
+  { rawMin: 0.30, rawMax: 0.40, calibrated: 0.36 },
+  { rawMin: 0.40, rawMax: 1.00, calibrated: 0.46 },
 ];
 
 function calibrate(rawProb: number): { value: number; source: "static_table" | "empirical_buckets"; bucketLabel: string | null; samples: number } {
@@ -233,7 +238,7 @@ function calibrate(rawProb: number): { value: number; source: "static_table" | "
     }
   }
   return {
-    value: rawProb >= 0.40 ? 0.38 : 0.01,
+    value: rawProb >= 0.40 ? 0.46 : 0.01,
     source: "static_table",
     bucketLabel: null,
     samples: 0,

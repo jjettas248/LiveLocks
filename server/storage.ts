@@ -4762,23 +4762,67 @@ export class DatabaseStorage implements IStorage {
           eq(hrRadarAlerts.analyticsPersisted, false),
         ));
 
-      for (const alert of alerts) {
-        await db.insert(hrRadarAnalytics).values({
-          sessionDate: alert.sessionDate,
-          gameId: alert.gameId,
-          playerId: alert.playerId,
-          playerName: alert.playerName,
-          team: alert.team,
-          detectedLabel: alert.detectedLabel,
-          hitLabel: alert.hitLabel,
-          detectedScore: alert.initialReadinessScore,
-          peakScore: alert.peakReadinessScore,
-          scoreIncreaseAmount: alert.scoreIncreaseAmount,
-          result: alert.status,
-          confidenceTier: alert.confidenceTier,
-          triggerTags: alert.triggerTags,
-        });
+      // ── Audit fix F2 — de-duplicate before archiving ─────────────────────
+      // `collapseDuplicateHrRadarOutcomes` harmonizes duplicate alert rows
+      // (propagating a hit) but never removes them, so without this every
+      // player landed in the analytics table 2× as byte-identical rows. Pick
+      // one canonical alert per (playerId): a graded HIT wins, otherwise the
+      // row with the highest peak readiness. The other dupes are still flagged
+      // analyticsPersisted so they never re-enter the archive.
+      const num = (v: unknown): number => {
+        const n = typeof v === "number" ? v : parseFloat(String(v ?? ""));
+        return Number.isFinite(n) ? n : 0;
+      };
+      const byPlayer = new Map<string, typeof alerts>();
+      for (const a of alerts) {
+        const list = byPlayer.get(a.playerId) ?? ([] as typeof alerts);
+        list.push(a);
+        byPlayer.set(a.playerId, list);
+      }
+      const canonicalAlerts = Array.from(byPlayer.values()).map((dupes) => {
+        if (dupes.length === 1) return dupes[0];
+        const hit = dupes.find((d) => d.status === "hit");
+        if (hit) return hit;
+        return dupes.reduce((best, d) =>
+          num(d.peakReadinessScore) > num(best.peakReadinessScore) ? d : best, dupes[0]);
+      });
 
+      // Idempotency guard — never insert a second analytics row for a key that
+      // already exists (protects against a re-archive after a partial run).
+      const existing = await db.select({
+        gameId: hrRadarAnalytics.gameId,
+        playerId: hrRadarAnalytics.playerId,
+      }).from(hrRadarAnalytics).where(and(
+        eq(hrRadarAnalytics.sessionDate, sessionDate),
+        eq(hrRadarAnalytics.gameId, gameId),
+      ));
+      const existingKeys = new Set(existing.map((e) => `${e.gameId}_${e.playerId}`));
+
+      for (const alert of canonicalAlerts) {
+        if (!existingKeys.has(`${alert.gameId}_${alert.playerId}`)) {
+          await db.insert(hrRadarAnalytics).values({
+            sessionDate: alert.sessionDate,
+            gameId: alert.gameId,
+            playerId: alert.playerId,
+            playerName: alert.playerName,
+            team: alert.team,
+            detectedLabel: alert.detectedLabel,
+            hitLabel: alert.hitLabel,
+            detectedScore: alert.initialReadinessScore,
+            // Audit fix F1 — archive the real terminal readiness so the UI's
+            // "Score" column reflects the live score instead of a stale 0.
+            currentScore: alert.currentReadinessScore,
+            peakScore: alert.peakReadinessScore,
+            scoreIncreaseAmount: alert.scoreIncreaseAmount,
+            result: alert.status,
+            confidenceTier: alert.confidenceTier,
+            triggerTags: alert.triggerTags,
+          });
+        }
+      }
+
+      // Flag *every* processed alert (canonical + collapsed dupes) as persisted.
+      for (const alert of alerts) {
         await db.update(hrRadarAlerts)
           .set({ analyticsPersisted: true })
           .where(eq(hrRadarAlerts.id, alert.id));

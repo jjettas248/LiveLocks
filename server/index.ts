@@ -602,8 +602,12 @@ app.use((req, res, next) => {
       startHrRadarIntelligenceAggregator();
       startDriverIntelligenceAggregator();
       startShadowAnalyticsAggregator();
-      // Empirical calibration update — runs every 30 minutes using settled outcome stamps.
-      setInterval(async () => {
+      // Empirical calibration update — runs every 30 minutes using settled
+      // outcome stamps. Audit fix C4 — also run once shortly after boot:
+      // `setInterval` alone first fires 30 min in, so after every restart the
+      // engine ran static-table-only for half an hour even when settled outcomes
+      // were already available. The 60s delay lets the outcome-stamp store hydrate.
+      const refreshCalibrationBuckets = async () => {
         try {
           const { setEmpiricalCalibrationBuckets } = await import("./mlb/hrConversionModel");
           const buckets = computeCalibrationBuckets();
@@ -611,7 +615,9 @@ app.use((req, res, next) => {
         } catch (err: any) {
           console.warn(`[LL_ANALYTICS_HR_RADAR] calibration cron failed err=${err?.message ?? err}`);
         }
-      }, 30 * 60 * 1000);
+      };
+      setTimeout(refreshCalibrationBuckets, 60 * 1000);
+      setInterval(refreshCalibrationBuckets, 30 * 60 * 1000);
     } catch (err: any) {
       console.warn(`[LL_ANALYTICS_AGGREGATE] aggregators failed to start err=${err?.message ?? err}`);
     }

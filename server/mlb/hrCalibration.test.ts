@@ -76,13 +76,35 @@ seed(40, "expired" as HrRadarOutcomeStatus, 0.115, "dead_expired");
   assert("legacy 'missed'/'expired' strings form NO bucket", buckets.length === 0, `buckets=${buckets.length}`);
 }
 
-// ── Sub-threshold sample produces no bucket ────────────────────────────────
+// ── Sub-threshold sample produces no bucket (C4: floor lowered to 15) ───────
 _resetHrRadarOutcomeStampsForTests();
-seed(10, "called_hit", 0.11, "thin_hit");
-seed(10, "called_miss", 0.115, "thin_miss");
+seed(6, "called_hit", 0.11, "thin_hit");
+seed(6, "called_miss", 0.115, "thin_miss");
 {
   const buckets = computeCalibrationBuckets();
-  assert("20 samples in a min<0.20 bin → below n≥30 floor → no bucket", buckets.length === 0, `buckets=${buckets.length}`);
+  assert("12 samples in a min<0.20 bin → below n≥15 floor → no bucket", buckets.length === 0, `buckets=${buckets.length}`);
+}
+
+// ── At-floor sample DOES form a bucket (C4: n≥15 now qualifies) ─────────────
+_resetHrRadarOutcomeStampsForTests();
+seed(8, "called_hit", 0.11, "floor_hit");
+seed(8, "called_miss", 0.115, "floor_miss");
+{
+  const buckets = computeCalibrationBuckets();
+  const b = buckets.find(x => x.min === 0.10 && x.max === 0.13);
+  assert("16 samples (≥15 floor) → 0.10–0.13 bucket exists", !!b, `buckets=${buckets.length}`);
+  if (b) assert("at-floor bucket samples=16", b.samples === 16, `samples=${b.samples}`);
+}
+
+// ── uncalled_hr counts as a cashed positive (C4) ───────────────────────────
+_resetHrRadarOutcomeStampsForTests();
+seed(15, "uncalled_hr" as HrRadarOutcomeStatus, 0.04, "uncalled");
+{
+  const buckets = computeCalibrationBuckets();
+  const b = buckets.find(x => x.min === 0.03 && x.max === 0.05);
+  assert("uncalled_hr forms a 0.03–0.05 bucket (≥15)", !!b, `buckets=${JSON.stringify(buckets.map(x => [x.min, x.samples]))}`);
+  // All 15 are HR positives → Laplace (15+1)/(15+2) = 16/17.
+  if (b) assert("uncalled_hr counted as cashed → calibrated = 16/17", Math.abs(b.calibrated - 16 / 17) < 1e-9, `calibrated=${b.calibrated}`);
 }
 
 _resetHrRadarOutcomeStampsForTests();

@@ -95,6 +95,7 @@ interface HrRadarAnalyticsRecord {
   detectedLabel: string | null;
   hitLabel: string | null;
   detectedScore: string | null;
+  currentScore: string | null;
   peakScore: string | null;
   scoreIncreaseAmount: string | null;
   result: string;
@@ -662,14 +663,14 @@ function HrRadarSection() {
 
   const { data, isLoading } = useQuery<{
     records: HrRadarAnalyticsRecord[];
-    summary: { total: number; hits: number; misses: number; hitRate: number };
+    summary: { total: number; hits: number; misses: number; ungraded: number; hitRate: number };
   }>({
     queryKey: ["/api/admin/hr-radar-analytics"],
     refetchInterval: 5 * 60 * 1000,
   });
 
   const records = data?.records ?? [];
-  const summary = data?.summary ?? { total: 0, hits: 0, misses: 0, hitRate: 0 };
+  const summary = data?.summary ?? { total: 0, hits: 0, misses: 0, ungraded: 0, hitRate: 0 };
 
   const filtered = records.filter(r => {
     if (filterResult !== "all" && r.result !== filterResult) return false;
@@ -679,7 +680,11 @@ function HrRadarSection() {
 
   const filteredHits = filtered.filter(r => r.result === "hit").length;
   const filteredMisses = filtered.filter(r => r.result === "miss").length;
-  const filteredRate = filtered.length > 0 ? Math.round((filteredHits / filtered.length) * 1000) / 10 : 0;
+  const filteredUngraded = filtered.length - filteredHits - filteredMisses;
+  // Audit fix F3 — graded-only hit rate: hits / (hits + misses).
+  const filteredRate = (filteredHits + filteredMisses) > 0
+    ? Math.round((filteredHits / (filteredHits + filteredMisses)) * 1000) / 10
+    : 0;
 
   return (
     <div className="space-y-4" data-testid="section-hr-radar-analytics">
@@ -701,10 +706,12 @@ function HrRadarSection() {
         <div className="text-center p-2 rounded-lg bg-zinc-500/10 border border-zinc-500/20">
           <div className="text-[9px] text-zinc-400">Misses</div>
           <div className="text-sm font-bold text-zinc-400">{summary.misses}</div>
+          <div className="text-[8px] text-muted-foreground">+{summary.ungraded} ungraded</div>
         </div>
         <div className="text-center p-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
           <div className="text-[9px] text-blue-400">Hit Rate</div>
           <div className="text-sm font-bold text-blue-400">{summary.hitRate}%</div>
+          <div className="text-[8px] text-muted-foreground">graded only</div>
         </div>
       </div>
 
@@ -713,19 +720,25 @@ function HrRadarSection() {
         const tierData = tiers.map(tier => {
           const tierRecords = records.filter(r => r.confidenceTier === tier);
           const tierHits = tierRecords.filter(r => r.result === "hit").length;
-          const tierRate = tierRecords.length > 0 ? Math.round((tierHits / tierRecords.length) * 1000) / 10 : 0;
+          const tierMisses = tierRecords.filter(r => r.result === "miss").length;
+          // Audit fix F3 — graded-only rate so ungraded context never dilutes a tier.
+          const tierGraded = tierHits + tierMisses;
+          const tierRate = tierGraded > 0 ? Math.round((tierHits / tierGraded) * 1000) / 10 : 0;
           const tierWithPeak = tierRecords.filter(r => r.peakScore != null && parseFloat(r.peakScore) > 0);
           const avgPeak = tierWithPeak.length > 0
             ? Math.round(tierWithPeak.reduce((sum, r) => sum + parseFloat(r.peakScore!), 0) / tierWithPeak.length * 10) / 10
             : 0;
-          return { tier, total: tierRecords.length, hits: tierHits, rate: tierRate, avgPeak };
+          return { tier, total: tierGraded, hits: tierHits, rate: tierRate, avgPeak };
         }).filter(t => t.total > 0);
 
+        // Audit fix F5 — peak readiness is a 0–100 score, not 0–10. The old
+        // 0-3/3-5/5-7/7+ edges dumped everything into "7+"; these bands split
+        // the real readiness range. Rate is graded-only (F3).
         const scoreBuckets = [
-          { label: "0-3", min: 0, max: 3 },
-          { label: "3-5", min: 3, max: 5 },
-          { label: "5-7", min: 5, max: 7 },
-          { label: "7+", min: 7, max: 999 },
+          { label: "<25", min: 0.0001, max: 25 },
+          { label: "25-45", min: 25, max: 45 },
+          { label: "45-65", min: 45, max: 65 },
+          { label: "65+", min: 65, max: 9999 },
         ].map(b => {
           const bRecords = records.filter(r => {
             if (!r.peakScore || parseFloat(r.peakScore) <= 0) return false;
@@ -733,7 +746,9 @@ function HrRadarSection() {
             return pk >= b.min && pk < b.max;
           });
           const bHits = bRecords.filter(r => r.result === "hit").length;
-          return { ...b, total: bRecords.length, hits: bHits, rate: bRecords.length > 0 ? Math.round((bHits / bRecords.length) * 1000) / 10 : 0 };
+          const bMisses = bRecords.filter(r => r.result === "miss").length;
+          const bGraded = bHits + bMisses;
+          return { ...b, total: bGraded, hits: bHits, rate: bGraded > 0 ? Math.round((bHits / bGraded) * 1000) / 10 : 0 };
         }).filter(b => b.total > 0);
 
         return (
@@ -785,7 +800,7 @@ function HrRadarSection() {
           <option value="strong">Strong</option>
         </select>
         <span className="text-[10px] text-muted-foreground ml-auto self-center">
-          Showing {filtered.length} | {filteredHits}W / {filteredMisses}L ({filteredRate}%)
+          Showing {filtered.length} | {filteredHits}W / {filteredMisses}L ({filteredRate}% graded) · {filteredUngraded} ungraded
         </span>
       </div>
 
@@ -811,7 +826,11 @@ function HrRadarSection() {
             </thead>
             <tbody>
               {filtered.slice(0, 100).map((r) => {
-                const detScore = r.detectedScore ? parseFloat(r.detectedScore) : null;
+                // Audit fix F1 — "Score" shows the live/final readiness
+                // (currentScore), not the always-0 detection score. Older rows
+                // archived before this fix have no currentScore → fall back to peak.
+                const liveScore = r.currentScore != null ? parseFloat(r.currentScore)
+                  : (r.peakScore != null ? parseFloat(r.peakScore) : null);
                 const pkScore = r.peakScore ? parseFloat(r.peakScore) : null;
                 return (
                   <tr key={r.id} className="border-b border-border/10 hover:bg-muted/10" data-testid={`row-hr-analytics-${r.id}`}>
@@ -819,7 +838,7 @@ function HrRadarSection() {
                     <td className="px-2 py-1.5 text-foreground font-semibold">{r.playerName}</td>
                     <td className="px-2 py-1.5 text-center text-muted-foreground">{r.team}</td>
                     <td className="px-2 py-1.5 text-center text-muted-foreground">{r.detectedLabel ?? "—"}</td>
-                    <td className="px-2 py-1.5 text-center text-foreground font-bold tabular-nums">{detScore != null ? detScore.toFixed(1) : "—"}</td>
+                    <td className="px-2 py-1.5 text-center text-foreground font-bold tabular-nums">{liveScore != null ? liveScore.toFixed(1) : "—"}</td>
                     <td className="px-2 py-1.5 text-center text-foreground tabular-nums">{pkScore != null ? pkScore.toFixed(1) : "—"}</td>
                     <td className="px-2 py-1.5 text-center">
                       <span className={`px-1.5 py-0.5 rounded-full text-[8px] font-bold ${
@@ -829,8 +848,12 @@ function HrRadarSection() {
                       }`}>{r.confidenceTier.toUpperCase()}</span>
                     </td>
                     <td className="px-2 py-1.5 text-center">
-                      <span className={`font-bold ${r.result === "hit" ? "text-emerald-400" : "text-zinc-400"}`}>
-                        {r.result === "hit" ? "HIT" : "MISS"}
+                      {/* Audit fix F6 — don't paint ungraded context as a loss. */}
+                      <span
+                        className={`font-bold ${r.result === "hit" ? "text-emerald-400" : r.result === "miss" ? "text-zinc-400" : "text-muted-foreground"}`}
+                        title={r.result}
+                      >
+                        {r.result === "hit" ? "HIT" : r.result === "miss" ? "MISS" : "—"}
                       </span>
                     </td>
                     <td className="px-2 py-1.5 text-center text-muted-foreground">{r.hitLabel ?? "—"}</td>

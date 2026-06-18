@@ -199,7 +199,13 @@ function stateKey(gameId: string, playerId: string): string {
 //   2. PATH PEAK / BUILDING is folded into the engine result as a hard
 //      override on the canonical stage (terminal CLOSED still wins).
 const BET_NOW_THRESHOLD = 0.10;
-const PREPARE_THRESHOLD = 0.06;
+// Audit fix C1 — BUILDING converted at/below the MONITOR floor (7.7% vs 19.2%)
+// because the PREPARE band sat one point above WATCH (0.06 vs 0.05), so
+// "building" carried almost no separation from "monitor". Lift PREPARE to 0.07
+// to give the middle tier a cleaner ~0.07–0.10 band that sits strictly above
+// the watch floor. (True monotonicity comes from the empirical calibration loop
+// — see C4 — once it is unstarved.)
+const PREPARE_THRESHOLD = 0.07;
 const WATCH_THRESHOLD = 0.05;
 
 const DECAY_HALF_LIFE_MINUTES = 12;
@@ -420,7 +426,18 @@ export function recomputeHrAlertState(
   const stateChanged = newState !== prev.currentState;
   // Readiness: up to 40pts from confidenceScore (0–10 → /10 * 40),
   // up to 60pts from calibrated HR-conversion probability (0–1 → * 60).
-  const confidencePts = Math.max(0, Math.min(40, (alertResult.confidenceScore / 10) * 40));
+  //
+  // Audit fix C2 — the confidence half measures loud RECENT contact, not the
+  // forward-looking HR probability. Left ungated, a single squared-up ball
+  // manufactures a peak-50+ readiness on a batter the model rates <6% to homer
+  // (these dominated the high-peak MISS population). Gate the confidence points
+  // by a 0..1 ramp on forward probability: fully engaged at/above the PREPARE
+  // threshold (so every building/attack row is UNCHANGED — no drift on live
+  // signals), softly damped below it with a 0.4 floor so confidence still
+  // contributes. The conversion half is untouched. Never raises readiness above
+  // the prior formula → caps still bind.
+  const fwdProbGate = 0.4 + 0.6 * Math.min(1, Math.max(0, effectiveCalibrated / PREPARE_THRESHOLD));
+  const confidencePts = Math.max(0, Math.min(40, (alertResult.confidenceScore / 10) * 40)) * fwdProbGate;
   const conversionPts = Math.max(0, Math.min(60, effectiveCalibrated * 60));
   const readinessScore = Math.round(confidencePts + conversionPts);
   const clampedReadiness = Math.min(100, Math.max(0, readinessScore));

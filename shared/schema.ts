@@ -721,6 +721,11 @@ export const hrRadarAnalytics = pgTable("hr_radar_analytics", {
   detectedLabel: text("detected_label"),
   hitLabel: text("hit_label"),
   detectedScore: numeric("detected_score"),
+  // Audit fix F1 — the live/final readiness score at archive time. Previously
+  // the UI's "Score" column read `detectedScore` (= initialReadinessScore,
+  // stamped 0 at creation), so it was universally 0.0. `currentScore` carries
+  // the real terminal readiness so the column is no longer dead.
+  currentScore: numeric("current_score"),
   peakScore: numeric("peak_score"),
   scoreIncreaseAmount: numeric("score_increase_amount"),
   result: text("result").notNull(),

@@ -4030,17 +4030,23 @@ export async function registerRoutes(
         limit: limit ? parseInt(String(limit)) : 200,
       });
 
+      // Audit fix F3 — only `hit`/`miss` are graded outcomes. Every other
+      // terminal status (expired / uncalled_hr / early_hr_insufficient_sample /
+      // unresolved …) is "ungraded context" and must NOT silently count as a
+      // loss. Hit rate is graded-only: hits / (hits + misses).
       const totalHits = records.filter(r => r.result === "hit").length;
       const totalMisses = records.filter(r => r.result === "miss").length;
-      const hitRate = records.length > 0 ? Math.round((totalHits / records.length) * 1000) / 10 : 0;
+      const ungraded = records.length - totalHits - totalMisses;
+      const graded = totalHits + totalMisses;
+      const hitRate = graded > 0 ? Math.round((totalHits / graded) * 1000) / 10 : 0;
 
       return res.json({
         records,
-        summary: { total: records.length, hits: totalHits, misses: totalMisses, hitRate },
+        summary: { total: records.length, hits: totalHits, misses: totalMisses, ungraded, hitRate },
       });
     } catch (e: any) {
       console.error("[admin/hr-radar-analytics]", e.message);
-      return res.json({ records: [], summary: { total: 0, hits: 0, misses: 0, hitRate: 0 } });
+      return res.json({ records: [], summary: { total: 0, hits: 0, misses: 0, ungraded: 0, hitRate: 0 } });
     }
   });
 
