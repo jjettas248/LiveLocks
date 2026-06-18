@@ -1,5 +1,6 @@
 import type { HRAlertInput, HRAlertResult } from "./evaluateHRAlert";
 import { evaluateHRAlert } from "./evaluateHRAlert";
+import type { HrRadarLifecycleEvent, HrRadarLifecycleState } from "./hrRadarStateMachine";
 
 export type DynamicHRState = "WATCH" | "PREPARE" | "BET_NOW" | "COOLED_OFF" | "CLOSED";
 
@@ -142,6 +143,12 @@ export interface HRAlertSnapshot {
    * storage) MUST consume this directly instead of recomputing the bridge.
    */
   canonicalStage: HrRadarStage;
+  /**
+   * Lane 1.2 — consecutive ticks the dynamic state has supported an up-rank
+   * promotion (PREPARE/BET_NOW). Hysteresis input for the canonical promotion
+   * mapper and the ready→fire gate. Resets to 0 on watch/cooled/closed.
+   */
+  consecutivePromoteTicks: number;
 }
 
 interface BatterHRState {
@@ -166,6 +173,8 @@ interface BatterHRState {
   lastAlertResult: HRAlertResult | null;
   previousPitcherId: string | null;
   consecutiveDeclineTicks: number;
+  // Lane 1.2 — symmetric promote-sustain counter (mirror of decline ticks).
+  consecutivePromoteTicks: number;
   lastSnapshot: HRAlertSnapshot | null;
 }
 
@@ -204,6 +213,19 @@ const CONSECUTIVE_DECLINE_COOLDOWN = 3;
 // ago but hasn't batted will visibly slide out of BET_NOW.
 const STALE_PA_GRACE_MINUTES = 8;
 const STALE_PA_HALF_LIFE_MINUTES = 8;
+
+// ── Lane 1 — promotion-path unification ────────────────────────────────────
+// The dynamic HR state already blends calibrated probability × decay × pitcher
+// vulnerability, so it is the single conviction signal we feed into the
+// canonical FSM (see `deriveCanonicalPromotionIntent`). Two tunable knobs:
+//   * FADE_VULN_THRESHOLD — pitcher HR-vulnerability (0–100) at/above which the
+//     previously-dead PITCHER_FADE lifecycle event is emitted while a batter is
+//     already building. Reuses `computePitcherHrVulnerability` output.
+//   * PROMOTE_SUSTAIN_TICKS — an up-rank promotion to `ready` must persist this
+//     many consecutive ticks before the mapper emits it, so a single noisy tick
+//     can't flap the ladder.
+const FADE_VULN_THRESHOLD = 78;
+const PROMOTE_SUSTAIN_TICKS = 2;
 
 function computeDecayFactor(
   minutesSinceDetection: number,
@@ -337,6 +359,7 @@ export function recomputeHrAlertState(
       lastAlertResult: null,
       previousPitcherId: options.currentPitcherId ?? null,
       consecutiveDeclineTicks: 0,
+      consecutivePromoteTicks: 0,
       lastSnapshot: null,
     };
     stateMap.set(key, prev);
@@ -450,6 +473,11 @@ export function recomputeHrAlertState(
   prev.lastRecomputeAt = now;
   prev.lastAlertResult = alertResult;
   prev.consecutiveDeclineTicks = consecutiveDeclines;
+  // Lane 1.2 — track consecutive ticks the dynamic state supports an up-rank
+  // promotion (PREPARE/BET_NOW). Resets the instant the state falls back to
+  // watch/cooled/closed so the sustain gate measures *current* conviction.
+  const supportsPromote = newState === "PREPARE" || newState === "BET_NOW";
+  prev.consecutivePromoteTicks = supportsPromote ? prev.consecutivePromoteTicks + 1 : 0;
   if (options.currentPitcherId != null) {
     prev.previousPitcherId = options.currentPitcherId;
   }
@@ -501,10 +529,90 @@ export function recomputeHrAlertState(
     peakAt: prev.peakAt,
     alertResult,
     canonicalStage,
+    consecutivePromoteTicks: prev.consecutivePromoteTicks,
   };
 
   prev.lastSnapshot = snapshot;
   return snapshot;
+}
+
+// ── Lane 1.1 — probability→canonical-event mapper ──────────────────────────
+export interface CanonicalPromotionIntent {
+  /** Lifecycle event to apply, or null for a no-op (no promotion this tick). */
+  event: HrRadarLifecycleEvent | null;
+  /** Explicit target for a PROMOTE event (omitted for floor events). */
+  promoteTo?: HrRadarLifecycleState;
+  /**
+   * Minimum lifecycle state this event guarantees. Lets the orchestrator
+   * rank-compare against the current FSM state and skip the upsert when it
+   * wouldn't advance the ladder — avoiding per-tick log spam and PROMOTE
+   * not-strictly-higher rejections. Null when no event.
+   */
+  floor: HrRadarLifecycleState | null;
+  reason: string;
+}
+
+/**
+ * Translate the dynamic HR-state snapshot — which already blends calibrated
+ * probability × decay × pitcher vulnerability — into a canonical FSM lifecycle
+ * event so the ladder tracks the model instead of contact luck alone. Pure: no
+ * I/O, no mutation. Returns `{ event: null }` when the snapshot is
+ * uninitialized or the state warrants no promotion, so it is a safe no-op when
+ * data is absent.
+ *
+ * Hysteresis: an up-rank PROMOTE to `ready` (and PITCHER_FADE, which floors at
+ * `ready`) is only emitted once the dynamic state has supported promotion for
+ * >= PROMOTE_SUSTAIN_TICKS consecutive ticks. Terminal stickiness,
+ * contact-evidence floors, and FSM decay are owned by the state machine — this
+ * mapper never emits DECAY (it returns null on cool-off / closed).
+ */
+export function deriveCanonicalPromotionIntent(
+  snap: HRAlertSnapshot | null | undefined,
+): CanonicalPromotionIntent {
+  if (!snap || !snap.isInitialized) return { event: null, floor: null, reason: "uninitialized" };
+
+  const state = snap.currentState;
+  const stage = snap.canonicalStage;
+  const sustained = (snap.consecutivePromoteTicks ?? 0) >= PROMOTE_SUSTAIN_TICKS;
+
+  // Cool-off / closed — let the FSM own decay + terminal stickiness.
+  if (state === "COOLED_OFF" || state === "CLOSED") {
+    return { event: null, floor: null, reason: `no_promote_from_${state.toLowerCase()}` };
+  }
+
+  // Pitcher fade — wire the previously-dead PITCHER_FADE event. A fading /
+  // fatigued pitcher (vuln >= floor) while the batter is already building is a
+  // ready-grade promotion regardless of contact. Gated by sustain.
+  if (
+    snap.pitcherHrVulnerability >= FADE_VULN_THRESHOLD &&
+    (state === "PREPARE" || state === "BET_NOW")
+  ) {
+    if (!sustained) return { event: null, floor: null, reason: "pitcher_fade_awaiting_sustain" };
+    return {
+      event: "PITCHER_FADE",
+      floor: "ready",
+      reason: `pitcher_fade_vuln_${Math.round(snap.pitcherHrVulnerability)}`,
+    };
+  }
+
+  // Top conviction + attack window → ready (fire is gated separately in the
+  // user-stage layer). Requires sustain to avoid single-tick flapping.
+  if (state === "BET_NOW" && stage === "attack") {
+    if (!sustained) return { event: null, floor: null, reason: "bet_now_attack_awaiting_sustain" };
+    return { event: "PROMOTE", promoteTo: "ready", floor: "ready", reason: "bet_now_attack_sustained" };
+  }
+
+  // Building conviction → build (lower-stakes; emitted immediately).
+  if (state === "BET_NOW" || state === "PREPARE") {
+    return { event: "PROMOTE", promoteTo: "build", floor: "build", reason: `dynamic_${state.toLowerCase()}_build` };
+  }
+
+  // Watch-grade probability → at least watch.
+  if (state === "WATCH") {
+    return { event: "CONTACT_EVIDENCE", floor: "watch", reason: "dynamic_watch" };
+  }
+
+  return { event: null, floor: null, reason: "no_intent" };
 }
 
 /**
@@ -549,6 +657,7 @@ export function getHrAlertState(gameId: string, playerId: string): HRAlertSnapsh
       peakAt: prev.peakAt,
       alertResult: null as any,
       canonicalStage: mapDynamicStateToStage(prev.currentState),
+      consecutivePromoteTicks: prev.consecutivePromoteTicks ?? 0,
     };
   }
   // Reconstruct from last alert result if snapshot lost (defensive)
@@ -603,6 +712,7 @@ export function seedHrAlertDetection(
     lastAlertResult: null,
     previousPitcherId: null,
     consecutiveDeclineTicks: 0,
+    consecutivePromoteTicks: 0,
     lastSnapshot: null,
   });
 }

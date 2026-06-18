@@ -13,6 +13,14 @@
 
 import { getAnalyticsEvents } from "./analyticsEvent";
 import type { HrCalibrationBucket } from "../mlb/hrConversionModel";
+import { CALIBRATION_BIN_EDGES } from "../mlb/hrConversionModel";
+import { CALLED_HIT_OUTCOME_STATUSES } from "../mlb/hrRadarSection";
+// Lane 2 — static import. The previous inline `require(...)` threw
+// "require is not defined" under ESM (how the server runs via tsx), so the
+// calibration cron silently failed every cycle. Analytics is a top-level
+// consumer and hrRadarOutcomeStamp is a leaf (imports only hrRadarSection
+// types) — no circular dependency.
+import { _getAllHrRadarOutcomeStamps } from "../mlb/hrRadarOutcomeStamp";
 
 const STAGES = ["track", "build", "ready", "fire", "cashed", "missed", "dead"] as const;
 type HrStage = (typeof STAGES)[number];
@@ -43,6 +51,11 @@ export interface HrRadarIntelligenceSnapshot {
   falseFireRate: number | null; // FIRE → MISSED / total FIRE outcomes
   readyEffectiveness: number | null; // READY → FIRE / total READY outcomes
   buildMaturation: number | null; // BUILD → READY+ / total BUILD outcomes
+  // Recall / lead-time (from miss-tracer + called-hit lead events).
+  recall: number | null; // calledHits / (calledHits + uncalledHr + lateSignal)
+  missBreakdown: Record<string, number>; // counts per derived blockedGate
+  missedWithStrongContact: number; // misses where engine had barrel/high-xBA evidence
+  leadTimeMs: { p50: number | null; p90: number | null }; // lead before HR on called hits
   sampleSizeWarning: string | null;
 }
 
@@ -80,6 +93,16 @@ export function computeHrRadarIntelligence(opts?: {
   const misses = getAnalyticsEvents({
     sport: "mlb",
     eventType: "hr_radar_missed",
+    sinceMs: since,
+  });
+  const missTraces = getAnalyticsEvents({
+    sport: "mlb",
+    eventType: "hr_radar_miss_trace",
+    sinceMs: since,
+  });
+  const leadEvents = getAnalyticsEvents({
+    sport: "mlb",
+    eventType: "hr_radar_called_hit_lead",
     sinceMs: since,
   });
 
@@ -209,6 +232,35 @@ export function computeHrRadarIntelligence(opts?: {
     }
   }
 
+  // ── Recall / lead-time from the miss-tracer + called-hit lead events ──────
+  // Miss traces carry a derived `blockedGate` (in `outcome` we stored the
+  // grading status; `blockedGate` + `strongContact` are first-class fields).
+  const missBreakdown: Record<string, number> = {};
+  let uncalledOrLate = 0;
+  let missedWithStrongContact = 0;
+  for (const m of missTraces) {
+    const gate = m.blockedGate ?? "unknown";
+    missBreakdown[gate] = (missBreakdown[gate] ?? 0) + 1;
+    // `early_hr_no_window` is excluded from recall (no realistic pre-call window),
+    // matching the coverage exclusion in storage.ts.
+    if (m.outcome !== "early_hr_no_window") uncalledOrLate += 1;
+    if (m.strongContact) missedWithStrongContact += 1;
+  }
+  const calledHits = leadEvents.length;
+  const recallDenom = calledHits + uncalledOrLate;
+  const recall = recallDenom > 0 ? calledHits / recallDenom : null;
+
+  const leadTimes = leadEvents
+    .map((e) => e.leadTimeMs)
+    .filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0)
+    .sort((a, b) => a - b);
+  function pct(arr: number[], p: number): number | null {
+    if (arr.length === 0) return null;
+    const idx = Math.min(arr.length - 1, Math.floor((p / 100) * arr.length));
+    return arr[idx];
+  }
+  const leadTimeMs = { p50: pct(leadTimes, 50), p90: pct(leadTimes, 90) };
+
   const sampleSize = traces.size;
   const sampleSizeWarning =
     sampleSize < 25
@@ -239,6 +291,10 @@ export function computeHrRadarIntelligence(opts?: {
     falseFireRate: fireOutcomes > 0 ? falseFire / fireOutcomes : null,
     readyEffectiveness: readyOutcomes > 0 ? readyAdvanced / readyOutcomes : null,
     buildMaturation: buildOutcomes > 0 ? buildAdvanced / buildOutcomes : null,
+    recall,
+    missBreakdown,
+    missedWithStrongContact,
+    leadTimeMs,
     sampleSizeWarning,
   };
 }
@@ -253,7 +309,9 @@ export function startHrRadarIntelligenceAggregator(intervalMs: number = 5 * 60 *
         `[LL_ANALYTICS_HR_RADAR] transitions=${snap.totals.transitionsObserved} ` +
           `cashed=${snap.totals.cashedObserved} missed=${snap.totals.missedObserved} ` +
           `fireToCashed=${snap.conversion.fireToCashed ?? "n/a"} ` +
-          `falseFireRate=${snap.falseFireRate ?? "n/a"}`,
+          `falseFireRate=${snap.falseFireRate ?? "n/a"} ` +
+          `recall=${snap.recall ?? "n/a"} ` +
+          `missStrongContact=${snap.missedWithStrongContact}`,
       );
     } catch (err: any) {
       console.warn(`[LL_ANALYTICS_HR_RADAR] snapshot failed err=${err?.message ?? err}`);
@@ -268,24 +326,28 @@ export function startHrRadarIntelligenceAggregator(intervalMs: number = 5 * 60 *
 // Requires n >= 30 settled outcomes per bucket before overriding the static table.
 export function computeCalibrationBuckets(): HrCalibrationBucket[] {
   try {
-    // Inline require to avoid circular import at module load time.
-    const { _getAllHrRadarOutcomeStamps } = require("../mlb/hrRadarOutcomeStamp") as {
-      _getAllHrRadarOutcomeStamps: () => Array<{ outcomeStatus: string; rawConversionProbability?: number | null }>;
-    };
     const stamps = _getAllHrRadarOutcomeStamps();
 
-    // Only consider settled plays (cashed = HR hit, missed = no HR)
+    // Lane 2.2/2.3 — correct outcome-status classification.
+    //   cashed (HR occurred) = the full CALLED_HIT_OUTCOME_STATUSES set
+    //     (called_hit + all tiered called_hit_attack/ready/build/watch). The
+    //     previous filter dropped called_hit_build / called_hit_watch entirely.
+    //   non-HR (no HR while we tracked) = "called_miss". The previous filter
+    //     tested "missed"/"expired", which are NOT valid HrRadarOutcomeStatus
+    //     values — so the non-HR denominator was always empty and every bin
+    //     would have calibrated≈1.0 if it ever crossed the sample floor.
+    //   Ambiguous statuses (uncalled_hr / early_hr_insufficient_sample /
+    //     late_signal / active / unresolved) are excluded: they lack a clean
+    //     predicted-probability → observed-outcome pairing for calibration.
+    const isCashed = (status: string): boolean =>
+      CALLED_HIT_OUTCOME_STATUSES.has(status as any);
     const settled = stamps.filter(s =>
       s.rawConversionProbability != null &&
-      (s.outcomeStatus === "called_hit" ||
-       s.outcomeStatus === "called_hit_attack" ||
-       s.outcomeStatus === "called_hit_ready" ||
-       s.outcomeStatus === "missed" ||
-       s.outcomeStatus === "expired"),
+      (isCashed(s.outcomeStatus) || s.outcomeStatus === "called_miss"),
     );
 
-    // Mirror the 11 bins from CALIBRATION_TABLE in hrConversionModel.ts
-    const BIN_EDGES = [0.00, 0.03, 0.05, 0.07, 0.09, 0.12, 0.16, 0.20, 0.25, 0.30, 0.40, 1.00];
+    // Lane 2.1 — bins shared 1:1 with CALIBRATION_TABLE via CALIBRATION_BIN_EDGES.
+    const BIN_EDGES = CALIBRATION_BIN_EDGES;
     const buckets: HrCalibrationBucket[] = [];
 
     for (let i = 0; i < BIN_EDGES.length - 1; i++) {
@@ -295,9 +357,19 @@ export function computeCalibrationBuckets(): HrCalibrationBucket[] {
         const p = s.rawConversionProbability!;
         return p >= min && p < max;
       });
-      const cashed = inBin.filter(s => s.outcomeStatus.startsWith("called_hit")).length;
-      if (inBin.length >= 30) {
-        buckets.push({ min, max, calibrated: cashed / inBin.length, samples: inBin.length });
+      const cashed = inBin.filter(s => isCashed(s.outcomeStatus)).length;
+      // Per-bin minimum: dense low bins need n>=30, but high-prob HR events are
+      // rare, so the sparse top bins (min>=0.20) would never reach 30 and the
+      // static table's aggressive >=0.40->0.38 compression would dominate
+      // forever. Require only n>=20 there so genuine elite probability can be
+      // learned empirically instead of being permanently discarded.
+      const minSamples = min >= 0.20 ? 20 : 30;
+      if (inBin.length >= minSamples) {
+        // Lane 2.3 — Laplace smoothing: (cashed+1)/(n+2) so a bin that happens
+        // to see all-misses (or all-hits) can't snap the calibrated value to a
+        // hard 0 (or 1), which would over-correct off a finite sample.
+        const calibrated = (cashed + 1) / (inBin.length + 2);
+        buckets.push({ min, max, calibrated, samples: inBin.length });
       }
     }
 

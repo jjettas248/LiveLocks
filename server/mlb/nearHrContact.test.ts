@@ -105,5 +105,38 @@ console.log("\n[Phase 2.5 — detectNearHrContact] running cases\n");
   assert("Junk contact (75/5/150) → null no suppressionReason", r.tier === null && !r.suppressionReason);
 }
 
+// ── "Almost HR" outcome-aware paths ──────────────────────────────────────
+{
+  const r = detectNearHrContact({ ev: 95, la: 25, distance: 365, outcome: "out" });
+  assert("Deep warning-track flyout (95/25/365/out) → lean", r.tier === "lean" && r.matchedPath === "DEEP_FLYOUT_LEAN", `got tier=${r.tier} path=${r.matchedPath}`);
+  assert("Deep flyout driver surfaced", r.drivers.includes("Deep warning-track flyout"));
+}
+{
+  const r = detectNearHrContact({ ev: 93, la: 25, distance: 335, outcome: "out" });
+  assert("Deep flyout watch (93/25/335/out) → watch", r.tier === "watch" && r.matchedPath === "DEEP_FLYOUT_WATCH", `got tier=${r.tier} path=${r.matchedPath}`);
+}
+{
+  const r = detectNearHrContact({ ev: 96, la: 12, distance: 355, hitType: "double" });
+  assert("Power double off wall (96/12/355/double) → watch", r.tier === "watch" && r.matchedPath === "POWER_DOUBLE", `got tier=${r.tier} path=${r.matchedPath}`);
+}
+{
+  const r = detectNearHrContact({ ev: 97, la: 10, distance: 360, hitType: "triple" });
+  assert("Power triple (97/10/360/triple) → watch", r.tier === "watch" && r.matchedPath === "POWER_TRIPLE", `got tier=${r.tier} path=${r.matchedPath}`);
+}
+{
+  const r = detectNearHrContact({ ev: 96, la: 14, distance: 310, xba: 0.70, outcome: "out" });
+  assert("High-xBA hard out (96/14/310/.70/out) → watch", r.tier === "watch" && r.matchedPath === "XBA_MISMATCH_DANGER", `got tier=${r.tier} path=${r.matchedPath}`);
+}
+{
+  // No outcome data plumbed → outcome-aware paths skipped → unchanged behavior.
+  const r = detectNearHrContact({ ev: 93, la: 25, distance: 335 });
+  assert("Deep dist w/o outcome data → null (backward compatible)", r.tier === null, `got tier=${r.tier}`);
+}
+{
+  // An actual HR must NOT be misread as a deep-flyout "almost HR".
+  const r = detectNearHrContact({ ev: 95, la: 25, distance: 365, outcome: "home_run" });
+  assert("HR outcome not flagged as almost-HR", r.matchedPath !== "DEEP_FLYOUT_LEAN");
+}
+
 console.log(`\n[Phase 2.5 — detectNearHrContact] ${passed}/${passed + failed} cases passed${failed > 0 ? ` (${failed} FAILED)` : ""}\n`);
 if (failed > 0) process.exit(1);

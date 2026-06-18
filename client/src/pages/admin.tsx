@@ -628,10 +628,10 @@ export default function AdminPage() {
                                 const r = verifyResults[u.id] as { dbTier: string | null; hasNcaabAccess: boolean; requiresRefresh: boolean };
                                 return (
                                   <>
-                                    <span className="text-[10px] px-2 py-0.5 rounded border font-mono" style={{ background: r.dbTier ? "rgba(0,212,170,0.1)" : "rgba(82,82,91,0.2)", borderColor: r.dbTier ? "rgba(0,212,170,0.3)" : "#3f3f46", color: r.dbTier ? "#00d4aa" : "#71717a" }}>
+                                    <span className="text-[10px] px-2 py-0.5 rounded border font-mono" style={{ background: r.dbTier ? "hsl(var(--brand-accent) / 0.1)" : "rgba(82,82,91,0.2)", borderColor: r.dbTier ? "hsl(var(--brand-accent) / 0.3)" : "#3f3f46", color: r.dbTier ? "hsl(var(--brand-accent))" : "#71717a" }}>
                                       DB: {r.dbTier ?? "free"}
                                     </span>
-                                    <span className="text-[10px] px-2 py-0.5 rounded border font-mono" style={{ background: r.hasNcaabAccess ? "rgba(0,212,170,0.1)" : "rgba(239,68,68,0.1)", borderColor: r.hasNcaabAccess ? "rgba(0,212,170,0.3)" : "rgba(239,68,68,0.3)", color: r.hasNcaabAccess ? "#00d4aa" : "#ef4444" }}>
+                                    <span className="text-[10px] px-2 py-0.5 rounded border font-mono" style={{ background: r.hasNcaabAccess ? "hsl(var(--brand-accent) / 0.1)" : "rgba(239,68,68,0.1)", borderColor: r.hasNcaabAccess ? "hsl(var(--brand-accent) / 0.3)" : "rgba(239,68,68,0.3)", color: r.hasNcaabAccess ? "hsl(var(--brand-accent))" : "#ef4444" }}>
                                       NCAAB: {r.hasNcaabAccess ? "✓" : "✗"}
                                     </span>
                                     <span className="text-[10px] px-2 py-0.5 rounded border font-mono" style={{ background: r.requiresRefresh ? "rgba(245,158,11,0.1)" : "rgba(82,82,91,0.1)", borderColor: r.requiresRefresh ? "rgba(245,158,11,0.3)" : "#3f3f46", color: r.requiresRefresh ? "#f59e0b" : "#71717a" }}>
@@ -725,9 +725,9 @@ export default function AdminPage() {
                   onClick={() => saveResetTime(resetTime)}
                   disabled={resetTimeSaving}
                   style={{
-                    background: "rgba(0,212,170,0.15)",
-                    border: "1px solid rgba(0,212,170,0.3)",
-                    color: "#00d4aa",
+                    background: "hsl(var(--brand-accent) / 0.15)",
+                    border: "1px solid hsl(var(--brand-accent) / 0.3)",
+                    color: "hsl(var(--brand-accent))",
                     fontSize: "13px",
                     fontWeight: 600,
                     borderRadius: "8px",

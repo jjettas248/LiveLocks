@@ -615,7 +615,7 @@ export function MlbSignalCard({
 
       {/* ── EXPANDED: Explainability Grid ── */}
       {expanded && (
-        <div className="px-3 pb-3 space-y-2 border-t border-border/20 pt-2 animate-in slide-in-from-top-1 duration-200" onClick={(e) => e.stopPropagation()}>
+        <div className="px-3 pb-3 space-y-2 border-t border-border/20 pt-3 animate-in slide-in-from-top-1 duration-200" onClick={(e) => e.stopPropagation()}>
           {/* Core Metrics Grid */}
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
             {sig.bookLine != null && (

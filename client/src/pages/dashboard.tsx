@@ -26,6 +26,7 @@ import { usePullRefresh } from "@/hooks/use-pull-refresh";
 import { hasProAccess } from "@/lib/tierUtils";
 import { useLocation } from "wouter";
 import { TopPlaysPanel } from "@/components/dashboard/TopPlaysPanel";
+import { QueryErrorState } from "@/components/common/QueryErrorState";
 import { FreeActivationRail } from "@/components/dashboard/free-activation-rail";
 import { SignalPreviewConversionCard } from "@/components/dashboard/SignalPreviewConversionCard";
 import { TrialMissionRail } from "@/components/dashboard/trial-mission-rail";
@@ -209,7 +210,7 @@ function NewSlateOverlay({
         <img
           src={propPulseLogo}
           alt="LiveLocks"
-          style={{ width: 64, height: 64, borderRadius: 16, boxShadow: "0 0 32px rgba(0,212,170,0.35)" }}
+          style={{ width: 64, height: 64, borderRadius: 16, boxShadow: "0 0 32px hsl(var(--brand-accent) / 0.35)" }}
         />
       </div>
 
@@ -229,7 +230,7 @@ function NewSlateOverlay({
             style={{
               height: "100%",
               width: `${progressPct}%`,
-              background: "#00d4aa",
+              background: "hsl(var(--brand-accent))",
               borderRadius: 99,
               transition: "width 400ms ease",
             }}
@@ -249,8 +250,8 @@ function NewSlateOverlay({
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {liveCount > 0 ? (
             <>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#00d4aa", display: "inline-block" }} />
-              <span style={{ color: "#00d4aa", fontSize: 13 }}>{liveCount} game{liveCount !== 1 ? "s" : ""} live now</span>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "hsl(var(--brand-accent))", display: "inline-block" }} />
+              <span style={{ color: "hsl(var(--brand-accent))", fontSize: 13 }}>{liveCount} game{liveCount !== 1 ? "s" : ""} live now</span>
             </>
           ) : (
             <span style={{ color: "#71717a", fontSize: 13 }}>Slate loaded — check back at tipoff</span>
@@ -305,7 +306,7 @@ export default function Dashboard() {
 
   const { data: players, isLoading: isPlayersLoading } = usePlayers();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
-  const { data: liveGames, isLoading: isGamesLoading, refetch: refetchGames } = useLiveGames();
+  const { data: liveGames, isLoading: isGamesLoading, isError: isGamesError, isFetching: isGamesFetching, refetch: refetchGames } = useLiveGames();
   
   const { data: dataHealth } = useQuery({
     queryKey: ["/api/debug/data-health"],
@@ -1202,7 +1203,14 @@ export default function Dashboard() {
       };
 
       tryCheckoutComplete(1).then(async (success) => {
-        if (!success) {
+        if (success) {
+          toast({
+            title: "You're all set 🎉",
+            description: "Payment received — your upgraded access is now unlocked.",
+          });
+          return;
+        }
+        {
           let recovered = false;
           for (let poll = 0; poll < 5; poll++) {
             await new Promise(r => setTimeout(r, 3000));
@@ -1222,7 +1230,12 @@ export default function Dashboard() {
               }
             } catch { /* continue polling */ }
           }
-          if (!recovered) {
+          if (recovered) {
+            toast({
+              title: "You're all set 🎉",
+              description: "Payment received — your upgraded access is now unlocked.",
+            });
+          } else {
             toast({
               title: "Subscription activation delayed",
               description: "Your payment was received. Please refresh the page in a minute to see your upgraded access.",
@@ -1233,6 +1246,11 @@ export default function Dashboard() {
       });
     } else if (payment === "cancelled") {
       window.history.replaceState({}, "", "/dashboard");
+      toast({
+        title: "Checkout cancelled",
+        description: "No charge was made — your current access is unchanged.",
+        variant: "default",
+      });
     }
   }, []);
 
@@ -1347,7 +1365,7 @@ export default function Dashboard() {
     const live = ncaabGames.filter(g => g.status === "In Progress").length;
     const halftime = ncaabGames.filter(g => g.status === "Halftime").length;
     // Top play is always visible when games are live — strong edge or labeled fallback lean
-    if (live > 0) return { text: `${live} game${live === 1 ? "" : "s"} live — top play always on`, color: "#00d4aa" };
+    if (live > 0) return { text: `${live} game${live === 1 ? "" : "s"} live — top play always on`, color: "hsl(var(--brand-accent))" };
     if (halftime > 0) return { text: "Games at halftime — 2H edges ready", color: "#f59e0b" };
     return { text: "NCAAB Live + full access now active", color: "#a1a1aa" };
   })();
@@ -2382,7 +2400,7 @@ export default function Dashboard() {
             data-testid="scanning-edges-loader"
             className="rounded-xl border border-[#27272a] bg-[#0a0a0a] p-5 flex items-center gap-3 animate-pulse"
           >
-            <Loader2 className="w-5 h-5 text-[#00d4aa] animate-spin" />
+            <Loader2 className="w-5 h-5 text-brand animate-spin" />
             <span className="text-sm font-medium text-[#a1a1aa]">Scanning live edges...</span>
           </div>
         )}
@@ -2390,7 +2408,7 @@ export default function Dashboard() {
         {autoRunResult && (
           <div
             data-testid="auto-run-result"
-            className="rounded-2xl border border-[#00d4aa]/30 bg-[#0a0a0a] p-5 animate-fade-in-up"
+            className="rounded-2xl border border-brand/30 bg-[#0a0a0a] p-5 animate-fade-in-up"
           >
             <div className="flex items-center gap-2 mb-3">
               <span className="text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-red-500/20 text-red-400">
@@ -2426,7 +2444,7 @@ export default function Dashboard() {
             {showConfidenceBadge && (
               <div
                 data-testid="badge-model-confidence"
-                className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#00d4aa]/10 border border-[#00d4aa]/20 text-[#00d4aa] text-xs font-medium"
+                className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand/10 border border-brand/20 text-brand text-xs font-medium"
               >
                 <Target className="w-3 h-3" />
                 Model confidence is strong on this play
@@ -2551,7 +2569,7 @@ export default function Dashboard() {
                       position: "absolute",
                       top: -8,
                       right: -20,
-                      background: "#00d4aa",
+                      background: "hsl(var(--brand-accent))",
                       color: "#000000",
                       fontSize: 9,
                       fontWeight: 700,
@@ -2687,6 +2705,15 @@ export default function Dashboard() {
             </div>
           )}
         </div>
+
+        {/* Games failed to load — show retry instead of a silently empty slate */}
+        {activeTab === "calculator" && allGames.length === 0 && isGamesError && (
+          <QueryErrorState
+            message="Couldn't load today's games."
+            onRetry={() => refetchGames()}
+            isRetrying={isGamesFetching}
+          />
+        )}
 
         {/* Live Games Strip — NBA Live tab only (hidden on NCAAB and Analytics) */}
         {activeTab === "calculator" && allGames.length > 0 && (
@@ -3299,7 +3326,7 @@ export default function Dashboard() {
                 {result && (
                   <div
                     data-testid="badge-model-confidence-calc"
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#00d4aa]/10 border border-[#00d4aa]/20 text-[#00d4aa] text-xs font-medium"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand/10 border border-brand/20 text-brand text-xs font-medium"
                   >
                     <Target className="w-3 h-3" />
                     Model confidence is strong on this play
@@ -3572,7 +3599,7 @@ export default function Dashboard() {
                           <span
                             data-testid="text-halftime-play-count"
                             className={halftimeCountPulse ? "halftime-count-pulse" : ""}
-                            style={{ display: "inline-block", color: "#00d4aa" }}
+                            style={{ display: "inline-block", color: "hsl(var(--brand-accent))" }}
                             key={`p-${playCount}`}
                           >
                             {playCount}
@@ -3832,7 +3859,7 @@ export default function Dashboard() {
                             className="relative"
                             style={{
                               animation: isExiting ? "halftimeExit 2.5s ease forwards" : "none",
-                              border: isExiting ? "1px solid rgba(0,212,170,0.3)" : "1px solid transparent",
+                              border: isExiting ? "1px solid hsl(var(--brand-accent) / 0.3)" : "1px solid transparent",
                               borderRadius: 12,
                               transition: "border-color 200ms ease",
                             }}
@@ -4079,7 +4106,7 @@ export default function Dashboard() {
                                               const probColor =
                                                 displayProb >= 85 ? (play.betDirection === "under" ? "text-red-400" : "text-green-400") :
                                                 displayProb >= 70 ? "text-yellow-400" :
-                                                displayProb >= 60 ? "text-[#00d4aa]" : "text-muted-foreground";
+                                                displayProb >= 60 ? "text-brand" : "text-muted-foreground";
                                               return (
                                                 <>
                                                   <div className={`text-xl font-bold font-mono ${probColor}`}>
@@ -4102,7 +4129,7 @@ export default function Dashboard() {
                                           <span
                                             className="text-xs font-mono px-2 py-0.5 rounded font-bold"
                                             style={isOver
-                                              ? { background: "rgba(0,212,170,0.15)", border: "1px solid rgba(0,212,170,0.3)", color: "#00d4aa" }
+                                              ? { background: "hsl(var(--brand-accent) / 0.15)", border: "1px solid hsl(var(--brand-accent) / 0.3)", color: "hsl(var(--brand-accent))" }
                                               : { background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444" }
                                             }
                                           >
@@ -4241,7 +4268,7 @@ export default function Dashboard() {
                                                 !isInParlay ? "bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20" : ""
                                               }`}
                                               style={isInParlay
-                                                ? { background: "rgba(0,212,170,0.15)", border: "1px solid rgba(0,212,170,0.3)", color: "#00d4aa" }
+                                                ? { background: "hsl(var(--brand-accent) / 0.15)", border: "1px solid hsl(var(--brand-accent) / 0.3)", color: "hsl(var(--brand-accent))" }
                                                 : undefined}
                                             >
                                               {isInParlay ? <>✓ Added</> : <><Plus className="w-3.5 h-3.5" />Add to Parlay</>}
@@ -4304,7 +4331,7 @@ export default function Dashboard() {
                                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
                                   <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-400" />
                                 </span>
-                                <span className="text-lg font-bold" style={{ color: "#00d4aa" }}>2H Underway</span>
+                                <span className="text-lg font-bold" style={{ color: "hsl(var(--brand-accent))" }}>2H Underway</span>
                                 <span className="font-semibold text-sm text-white">{group.awayTeamAbbr} {group.awayScore} – {group.homeScore} {group.homeTeamAbbr}</span>
                                 <span className="text-xs" style={{ color: "#71717a" }}>Tracking live...</span>
                               </div>
@@ -4573,7 +4600,7 @@ export default function Dashboard() {
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
           </span>
-          <span className="text-sm font-semibold" style={{ color: "#00d4aa" }}>
+          <span className="text-sm font-semibold" style={{ color: "hsl(var(--brand-accent))" }}>
             {halfTransitionToast.away} @ {halfTransitionToast.home}
           </span>
           <span className="text-sm" style={{ color: "#a1a1aa" }}>— 2H Underway</span>
@@ -4599,7 +4626,7 @@ export default function Dashboard() {
                 <span className="text-xs text-zinc-400">Push</span>
                 {pushSubscribed
                   ? <button data-testid="button-disable-push" onClick={handleDisablePush} disabled={pushLoading} className="text-xs text-zinc-400 underline underline-offset-2 hover:text-zinc-200 transition-colors disabled:opacity-50">{pushLoading ? "..." : "Disable"}</button>
-                  : <button data-testid="button-enable-push" onClick={handleEnablePush} disabled={pushLoading} className="text-xs text-[#00d4aa] underline underline-offset-2 hover:text-white transition-colors disabled:opacity-50">{pushLoading ? "..." : "Enable"}</button>
+                  : <button data-testid="button-enable-push" onClick={handleEnablePush} disabled={pushLoading} className="text-xs text-brand underline underline-offset-2 hover:text-white transition-colors disabled:opacity-50">{pushLoading ? "..." : "Enable"}</button>
                 }
                 {pushSubscribed && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />}
               </div>
@@ -4624,7 +4651,7 @@ export default function Dashboard() {
                 <div className="rounded-lg px-4 py-3 mb-1" style={{ background: "#111111", border: "1px solid #27272a" }}>
                   <p className="text-xs uppercase tracking-wider font-semibold mb-1" style={{ color: "#71717a" }}>Today's Record</p>
                   <div className="flex items-baseline gap-1.5">
-                    <span className="text-lg font-bold" style={{ color: "#00d4aa" }}>{hits}W</span>
+                    <span className="text-lg font-bold" style={{ color: "hsl(var(--brand-accent))" }}>{hits}W</span>
                     <span className="text-lg font-bold text-white">–</span>
                     <span className="text-lg font-bold" style={{ color: "#ef4444" }}>{misses}L</span>
                     {pending > 0 && <span className="text-xs ml-2" style={{ color: "#71717a" }}>{pending} pending</span>}
@@ -4645,7 +4672,7 @@ export default function Dashboard() {
             {/* Log entries */}
             {notificationLog.map((entry) => {
               const timeStr = new Date(entry.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-              const confColor = entry.confidence >= 85 ? "#00d4aa" : entry.confidence >= 80 ? "#f59e0b" : "#71717a";
+              const confColor = entry.confidence >= 85 ? "hsl(var(--brand-accent))" : entry.confidence >= 80 ? "#f59e0b" : "#71717a";
               return (
                 <button
                   key={entry.id}
@@ -4678,7 +4705,7 @@ export default function Dashboard() {
                       <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "#27272a", color: "#71717a" }}>Pending</span>
                     )}
                     {entry.result === "HIT" && (
-                      <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: "rgba(0,212,170,0.15)", border: "1px solid rgba(0,212,170,0.3)", color: "#00d4aa" }}>✓ HIT</span>
+                      <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: "hsl(var(--brand-accent) / 0.15)", border: "1px solid hsl(var(--brand-accent) / 0.3)", color: "hsl(var(--brand-accent))" }}>✓ HIT</span>
                     )}
                     {entry.result === "MISS" && (
                       <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444" }}>✗ MISS</span>
@@ -4694,7 +4721,7 @@ export default function Dashboard() {
                     {entry.confidence > 0 && (
                       <span className="text-xs font-semibold" style={{ color: confColor }}>{entry.confidence}% confidence</span>
                     )}
-                    <span className="text-xs ml-auto" style={{ color: "#00d4aa" }}>View →</span>
+                    <span className="text-xs ml-auto" style={{ color: "hsl(var(--brand-accent))" }}>View →</span>
                   </div>
                 </button>
               );
@@ -4731,7 +4758,7 @@ export default function Dashboard() {
                     background: "#18181b",
                     border: smsBellInputError ? "1px solid #ef4444" : "1px solid #3f3f46",
                   }}
-                  onFocus={e => { if (!smsBellInputError) e.currentTarget.style.borderColor = "#00d4aa"; }}
+                  onFocus={e => { if (!smsBellInputError) e.currentTarget.style.borderColor = "hsl(var(--brand-accent))"; }}
                   onBlur={e => { if (!smsBellInputError) e.currentTarget.style.borderColor = "#3f3f46"; }}
                 />
                 {smsBellInputError && (
@@ -4753,7 +4780,7 @@ export default function Dashboard() {
                     toast({ title: "✓ SMS alerts enabled", description: smsBellInput, duration: 3000 });
                   }}
                   className="w-full py-2.5 rounded-lg text-sm font-bold transition-opacity hover:opacity-90"
-                  style={{ background: "#00d4aa", color: "#000" }}
+                  style={{ background: "hsl(var(--brand-accent))", color: "#000" }}
                 >
                   Enable SMS Alerts
                 </button>
@@ -4832,7 +4859,7 @@ export default function Dashboard() {
                 data-testid="button-sms-re-enable"
                 onClick={() => { setSmsStatus("unprompted"); setSmsModalFlow("view"); }}
                 className="w-full py-2.5 rounded-lg text-sm font-bold transition-opacity hover:opacity-90"
-                style={{ background: "#00d4aa", color: "#000" }}
+                style={{ background: "hsl(var(--brand-accent))", color: "#000" }}
               >
                 Enable Alerts
               </button>

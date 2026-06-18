@@ -148,9 +148,11 @@ export const SIDE_STYLES = {
 };
 
 export const MODE_STYLES: Record<string, { label: string; color: string; bg: string; border: string; icon: string }> = {
-  elite:         { label: "ELITE",       color: "#eab308", bg: "rgba(234,179,8,0.12)",  border: "rgba(234,179,8,0.5)",  icon: "🔒" },
-  strong:        { label: "STRONG",      color: "#22c55e", bg: "rgba(34,197,94,0.10)",  border: "rgba(34,197,94,0.45)", icon: "🟢" },
-  lean:          { label: "LEAN",        color: "#14b8a6", bg: "rgba(20,184,166,0.10)", border: "rgba(20,184,166,0.4)", icon: "📊" },
+  // Core signal tiers route through the shared --tier-* tokens (single source
+  // of truth) so "elite/strong/value" render the same color everywhere.
+  elite:         { label: "ELITE",       color: "hsl(var(--tier-elite))",  bg: "hsl(var(--tier-elite) / 0.13)",  border: "hsl(var(--tier-elite) / 0.5)",  icon: "🔒" },
+  strong:        { label: "STRONG",      color: "hsl(var(--tier-strong))", bg: "hsl(var(--tier-strong) / 0.10)", border: "hsl(var(--tier-strong) / 0.45)", icon: "🟢" },
+  lean:          { label: "LEAN",        color: "hsl(var(--tier-value))",  bg: "hsl(var(--tier-value) / 0.10)",  border: "hsl(var(--tier-value) / 0.4)",  icon: "📊" },
   heating_up:    { label: "HEATING UP",  color: "#f59e0b", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.4)", icon: "🔥" },
   watch:         { label: "WATCH",       color: "#71717a", bg: "rgba(113,113,122,0.08)", border: "rgba(113,113,122,0.3)", icon: "👁" },
   hr_elite:      { label: "HR ELITE",    color: "#ef4444", bg: "rgba(239,68,68,0.12)",  border: "rgba(239,68,68,0.5)",  icon: "💣" },

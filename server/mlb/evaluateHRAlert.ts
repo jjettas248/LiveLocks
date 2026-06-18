@@ -28,6 +28,9 @@ export interface HRAlertInput {
   windDirection?: string | null;
   windSpeed?: number | null;
   temperature?: number | null;
+  // Lane 3.1/3.2: weather density inputs (Open-Meteo). Optional — no-op when null.
+  humidity?: number | null;
+  pressure?: number | null;
   isIndoors?: boolean;
   batterHand?: string | null;
   pitcherThrows?: string | null;
@@ -77,6 +80,21 @@ export interface HRAlertInput {
   xwOBA?: number | null;
   xISO?: number | null;
   sweetSpotPercent?: number | null;
+  // SlateRadar gap #6: batter pull rate (% BIP to pull side).
+  pullRatePercent?: number | null;
+  // Recent form: broader AVG/OPS form to pair with the existing hrRateLast* fields.
+  recentOps?: number | null;   // L15 OPS
+  seasonOps?: number | null;
+  // IBB feared-slugger prior: season IBB rate + in-game base/out leverage context.
+  seasonIBBRate?: number | null;   // IBB / PA
+  firstBaseOpen?: boolean | null;
+  runnerInScoringPosition?: boolean | null;
+  scoreDifferential?: number | null;
+  // Phase 2 — market HR prop prices (American odds) for EV-gating the HR Max
+  // Window tier. Optional and no-op when absent (HR-radar-only runs, pregame,
+  // quota exhaustion) so partial odds coverage never suppresses signals.
+  overOdds?: number | null;
+  underOdds?: number | null;
 }
 
 export interface HRSuppressionFlag {
@@ -203,7 +221,7 @@ function buildSuppression(input: HRAlertInput, classified: ClassifiedContact[]):
     c.contactClass === "missedHrContact" || c.contactClass === "eliteHrContact"
   );
 
-  if (remainingPA !== null && remainingPA < 1.0 && !hasEliteOrMissed) {
+  if (remainingPA !== null && remainingPA < 0.5 && !hasEliteOrMissed) {
     flags.push({ reason: `remainingPA too low (${remainingPA.toFixed(1)}) without elite evidence`, severity: "hard" });
   }
 
@@ -301,7 +319,7 @@ function computeLeiBoost(input: HRAlertInput): { scoreBoost: number; escalate: b
 
 const HR_CONVERSION_ALERT_MIN = 0.08;
 const HR_CONVERSION_OFFICIAL_MIN = 0.12;
-const HR_CONVERSION_WATCH_MIN = 0.05;
+const HR_CONVERSION_WATCH_MIN = 0.03;
 
 function buildConversionInput(input: HRAlertInput): HRConversionInput {
   return {
@@ -320,6 +338,8 @@ function buildConversionInput(input: HRAlertInput): HRConversionInput {
     windDirection: input.windDirection ?? null,
     windSpeed: input.windSpeed ?? null,
     temperature: input.temperature ?? null,
+    humidity: input.humidity ?? null,
+    pressure: input.pressure ?? null,
     isIndoors: input.isIndoors ?? false,
     batterHand: input.batterHand ?? null,
     pitcherThrows: input.pitcherThrows ?? null,
@@ -339,10 +359,20 @@ function buildConversionInput(input: HRAlertInput): HRConversionInput {
     xwOBA: input.xwOBA ?? null,
     xISO: input.xISO ?? null,
     sweetSpotPercent: input.sweetSpotPercent ?? null,
+    pullRatePercent: input.pullRatePercent ?? null,
+    hrRateLast7: input.hrRateLast7 ?? null,
+    hrRateLast15: input.hrRateLast15 ?? null,
+    hrRateLast30: input.hrRateLast30 ?? null,
+    recentOps: input.recentOps ?? null,
+    seasonOps: input.seasonOps ?? null,
+    seasonIBBRate: input.seasonIBBRate ?? null,
+    firstBaseOpen: input.firstBaseOpen ?? null,
+    runnerInScoringPosition: input.runnerInScoringPosition ?? null,
+    scoreDifferential: input.scoreDifferential ?? null,
   };
 }
 
-export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
+function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
   const { hrBuildScore, factors, inning, priorABResults } = input;
 
   const classified = factors.contactClasses && factors.contactClasses.length > 0
@@ -1062,7 +1092,7 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
 
   // PATH_E (CONVICTION FALLBACK) — high-conviction safety net.
   //
-  // Task #140 update — was previously WATCH-tier ONLY, which capped
+  // Was previously WATCH-tier ONLY, which capped
   // 25%+ conviction batters (Moisés Ballesteros, Shea Langeliers,
   // Carter Jensen, etc.) at the Track section even though the dynamic
   // engine had already promoted them to BET_NOW. Now uses a graduated
@@ -1099,7 +1129,7 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     if (pitcherFavorable) positiveFactors.push(`pitcher: ${pitcherFatigueState}`);
     if (envFavorable) positiveFactors.push(`env: ${environmentContext}`);
 
-    // Tier escalator (Task #140) — only escalates above WATCH when both
+    // Tier escalator — only escalates above WATCH when both
     // conviction AND score clear the higher bar AND favorable context
     // confirms. Otherwise the original WATCH-tier behavior is preserved.
     // PEAK additionally requires at least one *power contact* (not just an
@@ -1165,7 +1195,7 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     };
   }
 
-  // ── PATH_F_BLOCKED_BRIDGE (Task #140) ───────────────────────────────────
+  // ── PATH_F_BLOCKED_BRIDGE ────────────────────────────────────────────────
   // Was previously a silent BLOCKED log returning nullResult, which left
   // moderate-conviction batters (e.g. Mike Trout conv=27.1% score=4.4,
   // Bobby Witt Jr conv=17.5% score=3.24, Teoscar Hernández conv=26.3%
@@ -1220,4 +1250,88 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
   }
 
   return nullResult;
+}
+
+// ─── Phase 2 — EV gate against the batter_home_runs market ─────────────────
+// The HR Max Window (officialAlert) is the only tier graded to the record, so
+// it should only fire when the model's game P(HR) beats the market price. This
+// is a thin post-processing wrapper around the core evaluator: it can DEMOTE
+// an otherwise-actionable signal to "prepare" (Building) when the edge is
+// negative/insufficient, but never promotes. Additive + no-op when odds are
+// absent so partial coverage never suppresses signals (Hard-Rule §7a #2).
+
+/** Model game P(HR) must beat the de-vigged market-implied prob by this much
+ * (relative) to hold the actionable HR Max Window tier. */
+export const HR_EV_EDGE_MARGIN = 0.10;
+
+/** American odds → implied probability (0–1). Null for missing/garbage. Pure. */
+export function americanToImpliedProb(odds: number | null | undefined): number | null {
+  if (odds == null || !Number.isFinite(odds)) return null;
+  if (odds < 0) return Math.abs(odds) / (Math.abs(odds) + 100);
+  if (odds > 0) return 100 / (odds + 100);
+  return null;
+}
+
+/** De-vigged market-implied P(HR) from the over (and optional under) price.
+ * Two-sided removes the bookmaker hold; one-sided falls back to raw over
+ * implied (which slightly overstates HR prob → a stricter, conservative gate).
+ * Pure; null when no usable over price. */
+export function deviggedMarketHrProb(
+  overOdds: number | null | undefined,
+  underOdds: number | null | undefined,
+): number | null {
+  const over = americanToImpliedProb(overOdds);
+  if (over == null) return null;
+  const under = americanToImpliedProb(underOdds);
+  if (under == null || over + under <= 0) return over;
+  return over / (over + under);
+}
+
+export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
+  const result = evaluateHRAlertCore(input);
+  // Only the actionable HR Max Window tier is EV-gated.
+  if (result.alertTier !== "officialAlert") return result;
+  const marketImplied = deviggedMarketHrProb(input.overOdds, input.underOdds);
+  if (marketImplied == null) return result; // no price → preserve legacy behavior
+  const modelProb =
+    result.diagnostics.hrConversion?.calibratedProbability ??
+    result.diagnostics.hrConversion?.hrConversionProbability ??
+    null;
+  if (modelProb == null) return result;
+  const required = marketImplied * (1 + HR_EV_EDGE_MARGIN);
+  const edgePct = marketImplied > 0 ? ((modelProb - marketImplied) / marketImplied) * 100 : 0;
+  if (modelProb >= required) {
+    // Positive edge — keep the actionable tier; annotate for observability.
+    console.log(
+      `[HR_RADAR_EV_GATE] PASS ${input.playerName} game=${input.gameId} ` +
+      `model=${(modelProb * 100).toFixed(1)}% mkt=${(marketImplied * 100).toFixed(1)}% edge=${edgePct.toFixed(0)}%`,
+    );
+    return result;
+  }
+  // Insufficient edge — demote HR Max Window → Building (prepare). Still
+  // surfaced as context; just not graded/bet as a max-window pick.
+  //
+  // IMPORTANT: demoting `alertTier` alone is not enough. The orchestrator
+  // persists `signalState`/`decision` (not alertTier) into the DB
+  // `confidenceTier`/`signalState` columns (PEAK → strong/actionable), and the
+  // grading helper `reachedHrMaxWindow` treats strong/actionable as the HR Max
+  // Window tier — so an EV-demoted PEAK signal would still be graded/notified as
+  // actionable. Clear every actionable marker: drop to BUILDING/PREPARE and
+  // downgrade the level from ALERT → WATCH so cooldown/notifications (gated on
+  // level === "ALERT") don't fire for a non-bet signal.
+  console.log(
+    `[HR_RADAR_EV_GATE] DEMOTE ${input.playerName} game=${input.gameId} ` +
+    `model=${(modelProb * 100).toFixed(1)}% mkt=${(marketImplied * 100).toFixed(1)}% ` +
+    `edge=${edgePct.toFixed(0)}% need≥${(required * 100).toFixed(1)}% → building`,
+  );
+  return {
+    ...result,
+    alertTier: "prepare",
+    level: result.level === "ALERT" ? "WATCH" : result.level,
+    signalState: result.signalState === "PEAK" ? "BUILDING" : result.signalState,
+    decision: result.decision === "BET_NOW" ? "PREPARE" : result.decision,
+    triggerReason:
+      `${result.triggerReason} · EV-gated (model ${(modelProb * 100).toFixed(1)}% ` +
+      `vs mkt ${(marketImplied * 100).toFixed(1)}%, edge ${edgePct.toFixed(0)}%)`,
+  };
 }

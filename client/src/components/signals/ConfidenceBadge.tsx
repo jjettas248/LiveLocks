@@ -1,9 +1,13 @@
+import { tierBadgeClasses } from "@/lib/uiTokens";
+
 export type ConfidenceTier = "ELITE" | "STRONG" | "VALUE" | "NO_EDGE";
 
+// Tier colors come from the shared token helper (canonical: elite=gold,
+// strong=green, value=teal). NO_EDGE stays neutral/muted.
 const TIER_STYLES: Record<ConfidenceTier, string> = {
-  ELITE: "bg-green-500/15 text-green-400 border-green-500/30",
-  STRONG: "bg-yellow-500/15 text-yellow-400 border-yellow-500/30",
-  VALUE: "bg-teal-500/15 text-teal-400 border-teal-500/30",
+  ELITE: tierBadgeClasses("elite"),
+  STRONG: tierBadgeClasses("strong"),
+  VALUE: tierBadgeClasses("value"),
   NO_EDGE: "bg-muted/50 text-muted-foreground border-border/30",
 };
 

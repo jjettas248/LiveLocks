@@ -20,7 +20,16 @@ export type NearHrMatchedPath =
   | "HIGH_XBA_DANGER_BARREL"
   | "BARREL_OVERRIDE"
   | "BARREL_OVERRIDE_LEAN"
-  | "REPEATED_DANGER";
+  | "REPEATED_DANGER"
+  // "Almost HR" outcome-aware paths (composition only — Phase 2.5). These
+  // key off the ACTUAL batted-ball OUTCOME (deep flyout, double/triple off
+  // the wall, high-xBA hard out), which is among the strongest evidence a
+  // batter homers in a later AB. They never touch engine probability.
+  | "DEEP_FLYOUT_LEAN"
+  | "DEEP_FLYOUT_WATCH"
+  | "POWER_DOUBLE"
+  | "POWER_TRIPLE"
+  | "XBA_MISMATCH_DANGER";
 
 export interface NearHrContactEvent {
   ev: number | null | undefined;
@@ -32,6 +41,12 @@ export interface NearHrContactEvent {
   // free-form bag in case a future caller plumbs Savant batted-ball tags.
   isBarrel?: boolean | null | undefined;
   tags?: string[] | null | undefined;
+  // "Almost HR" outcome inputs (optional — absent ⇒ outcome-aware paths are
+  // skipped, so behavior is unchanged for callers that don't plumb these).
+  // `outcome` is the AB result ("out" | "hit" | "home_run" | ...) and
+  // `hitType` is the hit class ("single" | "double" | "triple" | "home_run").
+  outcome?: string | null | undefined;
+  hitType?: string | null | undefined;
 }
 
 export interface NearHrContactResult {
@@ -97,6 +112,32 @@ const DRIVERS_REPEATED = [
   "Pre-HR pattern",
 ];
 
+// "Almost HR" driver labels — real evidence surfaced verbatim to the UI.
+const DRIVERS_DEEP_FLYOUT = [
+  "Deep warning-track flyout",
+  "Elite exit velocity",
+  "Optimal launch angle",
+];
+
+const DRIVERS_POWER_DOUBLE = [
+  "Power double off the wall",
+  "Elite exit velocity",
+];
+
+const DRIVERS_POWER_TRIPLE = [
+  "Power triple off the wall",
+  "Elite exit velocity",
+];
+
+const DRIVERS_XBA_MISMATCH = [
+  "High-xBA hard out (robbed contact)",
+  "Quality contact suppressed by outcome",
+];
+
+// Deep-fly distance floor — mirrors DEEP_FLY_DISTANCE in HRSignalBuilder.ts so
+// the "almost HR" deep-flyout watch threshold stays consistent across layers.
+const DEEP_FLY_DISTANCE = 330;
+
 function isFiniteNum(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
 }
@@ -113,6 +154,70 @@ function tagSaysBarrel(tags: string[] | null | undefined): boolean {
 function isBarrelEvent(ev: NearHrContactEvent): boolean {
   if (ev.isBarrel === true) return true;
   return tagSaysBarrel(ev.tags);
+}
+
+function normStr(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim().toLowerCase();
+  return s.length ? s : null;
+}
+
+function isOutOutcome(ev: NearHrContactEvent): boolean {
+  const o = normStr(ev.outcome);
+  // Treat plain outs and uncategorized batted balls as "out" for almost-HR
+  // purposes; never treat an actual HR or a categorized hit as an out.
+  if (o === null) return false;
+  if (o.includes("home") || o === "hr" || o === "homerun" || o === "home_run") return false;
+  return o === "out" || o === "other";
+}
+
+function normHitType(ev: NearHrContactEvent): "single" | "double" | "triple" | "home_run" | null {
+  const h = normStr(ev.hitType);
+  if (h === "double" || h === "triple" || h === "single") return h;
+  if (h === "home_run" || h === "homerun" || h === "home run" || h === "hr") return "home_run";
+  return null;
+}
+
+/**
+ * "Almost HR" outcome-aware detection (Phase 2.5, composition only). Runs AFTER
+ * the contact-quality ladder so a true LEAN/WATCH always wins; only adds NEW
+ * catches the outcome reveals: deep warning-track flyouts, doubles/triples off
+ * the wall, and high-xBA hard outs ("robbed"). Returns null when no outcome
+ * data is plumbed or none of the patterns match. Never consults probability.
+ */
+function detectAlmostHr(
+  event: NearHrContactEvent,
+  ev: number,
+  la: number,
+  distance: number,
+  xba: number | null,
+): NearHrContactResult | null {
+  const hitType = normHitType(event);
+  const isOut = isOutOutcome(event);
+
+  // Deep warning-track flyout — a ball that died at the track is a near-miss HR.
+  if (isOut) {
+    if (distance >= 360 && la >= 20 && la <= 35 && ev >= 95) {
+      return { tier: "lean", drivers: [...DRIVERS_DEEP_FLYOUT], matchedPath: "DEEP_FLYOUT_LEAN" };
+    }
+    if (distance >= DEEP_FLY_DISTANCE && la >= 18 && la <= 40 && ev >= 92) {
+      return { tier: "watch", drivers: [...DRIVERS_DEEP_FLYOUT], matchedPath: "DEEP_FLYOUT_WATCH" };
+    }
+  }
+
+  // Double / triple off the wall — extra-base power that just missed clearing.
+  if ((hitType === "double" || hitType === "triple") && ev >= 94 && distance >= 350) {
+    return hitType === "triple"
+      ? { tier: "watch", drivers: [...DRIVERS_POWER_TRIPLE], matchedPath: "POWER_TRIPLE" }
+      : { tier: "watch", drivers: [...DRIVERS_POWER_DOUBLE], matchedPath: "POWER_DOUBLE" };
+  }
+
+  // High-xBA hard out — quality contact the box score buried as an out.
+  if (isOut && xba !== null && xba >= 0.65 && ev >= 95) {
+    return { tier: "watch", drivers: [...DRIVERS_XBA_MISMATCH], matchedPath: "XBA_MISMATCH_DANGER" };
+  }
+
+  return null;
 }
 
 /**
@@ -194,6 +299,13 @@ export function detectNearHrContact(event: NearHrContactEvent): NearHrContactRes
       return { tier: "lean", drivers: [...DRIVERS_BARREL], matchedPath: "BARREL_OVERRIDE_LEAN" };
     }
     return { tier: "watch", drivers: [...DRIVERS_BARREL], matchedPath: "BARREL_OVERRIDE" };
+  }
+
+  // 5. "Almost HR" outcome-aware paths (deep flyout / power double-triple /
+  //    high-xBA hard out). Only adds catches the contact ladder above missed.
+  const almostHr = detectAlmostHr(event, ev, la, distance, xba);
+  if (almostHr) {
+    return almostHr;
   }
 
   const closeToWatch =
@@ -302,14 +414,27 @@ export function detectNearHrContactPeak(
     const l = isFiniteNum(d.la) ? d.la : null;
     const dist = isFiniteNum(d.distance) ? d.distance : null;
     const x = isFiniteNum(d.xba) ? d.xba : null;
+    // "Almost HR" outcome paths count as danger in the window: a deep flyout
+    // or extra-base power that just missed clearing is real pre-HR evidence.
+    const almostPath = d.matchedPath;
+    const isAlmostHard =
+      almostPath === "DEEP_FLYOUT_LEAN" ||
+      almostPath === "DEEP_FLYOUT_WATCH" ||
+      almostPath === "POWER_DOUBLE" ||
+      almostPath === "POWER_TRIPLE" ||
+      almostPath === "XBA_MISMATCH_DANGER";
+    const isAlmostElite =
+      almostPath === "DEEP_FLYOUT_LEAN" || almostPath === "POWER_TRIPLE";
     const isHard =
       (e !== null && e >= 95 && l !== null && l >= 15 && l <= 35) ||
-      (x !== null && x >= 0.6);
+      (x !== null && x >= 0.6) ||
+      isAlmostHard;
     const isElite =
       (e !== null && e >= 100) ||
       (x !== null && x >= 0.65) ||
       d.isBarrel ||
-      (dist !== null && dist >= 365);
+      (dist !== null && dist >= 365) ||
+      isAlmostElite;
     if (isHard) hardCount += 1;
     if (isElite) {
       eliteCount += 1;

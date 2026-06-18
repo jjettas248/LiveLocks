@@ -85,7 +85,10 @@ export function useLiveGames() {
     queryKey: [api.liveGames.list.path],
     queryFn: async (): Promise<LiveGame[]> => {
       const res = await fetch(api.liveGames.list.path);
-      if (!res.ok) return [];
+      // Surface failures as query errors (not an empty slate) so the UI can show
+      // a retry affordance. placeholderData keeps the last good list visible
+      // through a transient refetch error.
+      if (!res.ok) throw new Error("Failed to load live games");
       return res.json();
     },
     refetchInterval: 30000,

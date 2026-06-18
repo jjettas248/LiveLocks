@@ -2,7 +2,10 @@ import { db } from "./db";
 import { todayET, daysAgoET } from "./utils/dateUtils";
 import { resolveMlbGameSessionDate } from "./utils/mlbSessionDate";
 import { decideHrRadarMatch, QUALIFYING_EVENT_TYPES } from "./validation/hrRadar/matchDecision";
-import { applyHrRadarResolvedStateFixup, inferCashedFromTierStatus, CALLED_HIT_OUTCOME_STATUSES } from "./mlb/hrRadarSection";
+import { traceMissedHr } from "./analytics/hrRadarMissTracer";
+import { emitCalledHitLeadTime } from "./analytics/eventEmitters";
+import { applyHrRadarResolvedStateFixup, inferCashedFromTierStatus, CALLED_HIT_OUTCOME_STATUSES, resolveFinalNoHrGrading, reachedHrMaxWindow } from "./mlb/hrRadarSection";
+import { classifyHrMaxWindowAtFinal } from "./mlb/hrMaxWindow";
 import {
   HR_RADAR_GOLDMASTER_V1,
   enrichWithUserStage,
@@ -3156,6 +3159,14 @@ export class DatabaseStorage implements IStorage {
             .limit(1);
           if (earlyEvents.length === 0) {
             console.log(`[HR_RADAR_EARLY_HR_NO_WINDOW] playerId=${params.playerId} gameId=${params.gameId} hrInning=${params.hrInning}${params.hrHalf} — exempt from uncalled-miss bucket`);
+            try {
+              traceMissedHr({
+                gameId: params.gameId, playerId: params.playerId,
+                hrInning: params.hrInning, hrHalf: params.hrHalf,
+                gradingStatus: "early_hr_no_window",
+                gradingReason: "first-inning HR with no realistic pre-signal window",
+              });
+            } catch {}
             return {
               matched: false, matchedBeforeHr: false, isLateSignal: false,
               alertId: null, signalEventId: null,
@@ -3168,6 +3179,14 @@ export class DatabaseStorage implements IStorage {
             };
           }
         }
+        try {
+          traceMissedHr({
+            gameId: params.gameId, playerId: params.playerId,
+            hrInning: params.hrInning, hrHalf: params.hrHalf,
+            gradingStatus: "uncalled_hr",
+            gradingReason: "no canonical hr_radar_alert row exists for player/game",
+          });
+        } catch {}
         return {
           matched: false, matchedBeforeHr: false, isLateSignal: false,
           alertId: null, signalEventId: null,
@@ -3233,6 +3252,34 @@ export class DatabaseStorage implements IStorage {
       } else {
         console.log(`[HR_RADAR_MATCH_RESULT] late_signal player=${params.playerId} game=${params.gameId} alertId=${alert.id} signalAt=${new Date(sigMsLog).toISOString()} hrEndAt=${hrEnd ? new Date(hrEnd).toISOString() : "n/a"}`);
       }
+
+      // Recall / lead-time measurement taps (read-only, never throw).
+      try {
+        if (decision.gradingStatus === "called_hit" && hrEnd != null) {
+          // Prefer the matched qualifying-event time (the true pre-HR signal
+          // moment) over the alert-row timestamp, which can drift to/after
+          // hrEnd. emitCalledHitLeadTime clamps a non-positive/inconsistent
+          // lead to null so the hit still counts toward recall but is excluded
+          // from the lead-time distribution.
+          const sigMs = (lastQualifyingEvent?.detectedAt ?? decision.signalDetectedAt ?? alert.signalDetectedAt ?? alert.detectedAt)?.getTime?.();
+          const lead = typeof sigMs === "number" && Number.isFinite(sigMs) ? hrEnd - sigMs : null;
+          emitCalledHitLeadTime({
+            signalId: `mlb:${params.gameId}:${params.playerId}:home_runs:OVER`,
+            gameId: params.gameId, playerId: params.playerId,
+            leadTimeMs: lead,
+            alertPath: alert.alertPath ?? null,
+          });
+        } else if (decision.gradingStatus === "late_signal") {
+          traceMissedHr({
+            gameId: params.gameId, playerId: params.playerId,
+            hrInning: params.hrInning, hrHalf: params.hrHalf,
+            gradingStatus: "late_signal",
+            gradingReason: decision.gradingReason,
+            alertPath: alert.alertPath ?? null,
+            alertSignalState: alert.signalState ?? null,
+          });
+        }
+      } catch {}
 
       // Phase 1 — enrich decision with the matched alert's persisted tier
       // fields so the grader can derive a tiered called_hit_* status.
@@ -3303,6 +3350,14 @@ export class DatabaseStorage implements IStorage {
      * in stageContract and represent independent signal paths.
      */
     dynamicState?: "WATCH" | "PREPARE" | "BET_NOW" | "COOLED_OFF" | "CLOSED" | null;
+    /**
+     * Lane 1.4 — consecutive ticks the dynamic state has supported promotion
+     * (HRAlertSnapshot.consecutivePromoteTicks). Persisted into
+     * `diagnosticsSnapshot.stageContract.consecutivePromoteTicks` so the
+     * user-stage layer's ready→fire gate can require sustained conviction
+     * without a DB schema change. Null when caller did not provide one.
+     */
+    consecutivePromoteTicks?: number | null;
     /**
      * Dynamic readiness score (0–100) from hrAlertEngine snapshot.
      * When provided, this is used as the live `readinessScore` instead of raw
@@ -3377,6 +3432,8 @@ export class DatabaseStorage implements IStorage {
       // so the user-stage layer reads it directly. Null when caller did
       // not provide one (e.g. presence-only rows).
       dynamicState: data.dynamicState ?? null,
+      // Lane 1.4 — sustained-conviction counter for the ready→fire gate.
+      consecutivePromoteTicks: data.consecutivePromoteTicks ?? null,
     };
     // Map canonical stage -> legacy confidenceTier so the rest of the system
     // (ladder, board) keeps working without schema changes. attack→strong,
@@ -3595,6 +3652,9 @@ export class DatabaseStorage implements IStorage {
             // Preserves prior value when caller does not pass a new one
             // (defensive — every live tick should pass it).
             dynamicState: data.dynamicState ?? prevStageContract.dynamicState ?? null,
+            // Lane 1.4 — refresh sustained-conviction counter on every UPDATE.
+            consecutivePromoteTicks:
+              data.consecutivePromoteTicks ?? prevStageContract.consecutivePromoteTicks ?? null,
           },
         };
 
@@ -3923,14 +3983,24 @@ export class DatabaseStorage implements IStorage {
         // sessionDate/gameId/playerId/status='live' update could mutate
         // unrelated live rows (e.g. a fresh row created after the matched
         // one). matchResult.alertId is the canonical row to grade.
-        // Phase 1 — derive tiered called_hit status from the matched
-        // alert's persisted tier fields. Falls back to plain "called_hit"
-        // only when no tier info is available, preserving legacy behavior.
-        const tieredStatus = inferCashedFromTierStatus({
+        // Phase 1 (3-tier ladder) — only HR-Max-Window signals are graded as
+        // a counted win, symmetric with the miss side. A signal that preceded
+        // the HR but never reached the actionable top tier (Watch/Building) is
+        // stamped `uncalled_hr` (diagnostic, NOT a counted cash) rather than a
+        // tiered called_hit. Otherwise derive the tiered called_hit status from
+        // the matched alert's persisted tier fields.
+        const reachedMax = reachedHrMaxWindow({
           alertTier: matchResult.alertTier,
           confidenceTier: matchResult.alertConfidenceTier,
           signalState: matchResult.alertSignalState,
         });
+        const tieredStatus = reachedMax
+          ? inferCashedFromTierStatus({
+              alertTier: matchResult.alertTier,
+              confidenceTier: matchResult.alertConfidenceTier,
+              signalState: matchResult.alertSignalState,
+            })
+          : "uncalled_hr";
         const result = matchResult.alertId
           ? await db.update(hrRadarAlerts)
               .set({
@@ -3941,10 +4011,12 @@ export class DatabaseStorage implements IStorage {
                 hitDetectedAt: hrEndTimeMs ? new Date(hrEndTimeMs) : nowDate,
                 resolvedAt: nowDate,
                 gradingStatus: tieredStatus,
-                gradingReason: matchResult.gradingReason,
+                gradingReason: reachedMax
+                  ? matchResult.gradingReason
+                  : `${matchResult.gradingReason} — sub-actionable (Watch/Building) pre-HR signal; HR not credited as a called pick`,
                 matchedBeforeHr: true,
                 fallbackCreated: false,
-                userVisible: true,
+                userVisible: reachedMax,
                 matchMethod: matchResult.matchMethod,
                 signalDetectedAt: matchResult.signalDetectedAt ?? nowDate,
                 signalInning: matchResult.signalInning,
@@ -3957,7 +4029,11 @@ export class DatabaseStorage implements IStorage {
           : { rowCount: 0 } as any;
         const count = (result as any).rowCount ?? 0;
         if (count > 0) {
-          console.log(`[HR_RADAR_CALLED_HIT] playerId=${playerId} gameId=${gameId} signalLabel=${matchResult.signalHalf}${matchResult.signalInning ?? ""} hitLabel=${hitLabelVal} tieredStatus=${tieredStatus} alertTier=${matchResult.alertTier ?? "n/a"} reason="${matchResult.gradingReason}"`);
+          if (reachedMax) {
+            console.log(`[HR_RADAR_CALLED_HIT] playerId=${playerId} gameId=${gameId} signalLabel=${matchResult.signalHalf}${matchResult.signalInning ?? ""} hitLabel=${hitLabelVal} tieredStatus=${tieredStatus} alertTier=${matchResult.alertTier ?? "n/a"} reason="${matchResult.gradingReason}"`);
+          } else {
+            console.log(`[HR_RADAR_UNCALLED_HR] (sub-actionable pre-HR signal) playerId=${playerId} gameId=${gameId} hitLabel=${hitLabelVal} alertTier=${matchResult.alertTier ?? "n/a"} confTier=${matchResult.alertConfidenceTier ?? "n/a"} signalState=${matchResult.alertSignalState ?? "n/a"} — not counted as a win`);
+          }
           console.log(`[HR_LEDGER_GRADE] outcome=${tieredStatus} sessionDate=${today} gameId=${gameId} playerId=${playerId} signalInning=${matchResult.signalInning ?? "n/a"}${matchResult.signalHalf ?? ""} hitInning=${hitInningNum}${hitHalfVal} alertId=${matchResult.alertId} matchMethod=${matchResult.matchMethod}`);
           await this.appendHrRadarSignalEvent({
             sessionDate: today, gameId, playerId,
@@ -3969,14 +4045,17 @@ export class DatabaseStorage implements IStorage {
             half: hitHalfVal,
             source: "grader",
           } as InsertHrRadarSignalEvent);
-          // Goldmaster Phase 9 — canonical alias.
-          await this.appendHrRadarSignalEvent({
-            sessionDate: today, gameId, playerId, team: "",
-            alertId: matchResult.alertId,
-            eventType: "resolved_called_hit",
-            detectedAt: nowDate, inning: hitInningNum, half: hitHalfVal,
-            source: "grader",
-          } as InsertHrRadarSignalEvent);
+          // Goldmaster Phase 9 — canonical alias. Only emit the called-hit alias
+          // for genuine HR-Max-Window wins; sub-actionable HRs are uncalled.
+          if (reachedMax) {
+            await this.appendHrRadarSignalEvent({
+              sessionDate: today, gameId, playerId, team: "",
+              alertId: matchResult.alertId,
+              eventType: "resolved_called_hit",
+              detectedAt: nowDate, inning: hitInningNum, half: hitHalfVal,
+              source: "grader",
+            } as InsertHrRadarSignalEvent);
+          }
         }
         return count;
       }
@@ -4127,13 +4206,16 @@ export class DatabaseStorage implements IStorage {
           // engine plumbing race produces the "I saw it on the Board but
           // it's gone" symptom.
           const e = existing[0] as any;
-          const conf = String(e.confidenceTier ?? "").toLowerCase();
-          const sigState = String(e.signalState ?? "").toLowerCase();
-          const aTier = String(e.alertTier ?? "").toLowerCase();
-          const wasQualified =
-            conf === "strong" || conf === "elite" ||
-            sigState === "actionable" || sigState === "fire" ||
-            aTier === "official_alert" || aTier === "prepare";
+          // Phase 1 (3-tier ladder) — credit the race-rescued cash ONLY when
+          // the alert reached the HR Max Window (actionable top tier). Bare
+          // `prepare`/Building no longer qualifies as a counted win; it falls
+          // through to the late_signal/diagnostic branch below. Symmetric with
+          // the per-poll and reconcile cash paths.
+          const wasQualified = reachedHrMaxWindow({
+            alertTier: e.alertTier ?? null,
+            confidenceTier: e.confidenceTier ?? null,
+            signalState: e.signalState ?? null,
+          });
           if (wasQualified) {
             const tieredStatus = inferCashedFromTierStatus({
               alertTier: e.alertTier ?? null,
@@ -4416,7 +4498,7 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async reconcileHrRadarAlertsForGame(gameId: string, playerHrMap: Map<string, { inning: number; half: string }>): Promise<void> {
+  async reconcileHrRadarAlertsForGame(gameId: string, playerHrMap: Map<string, { inning: number; half: string }>, finalInning?: number | null): Promise<void> {
     try {
       const today = resolveMlbGameSessionDate(gameId);
       const liveAlerts = await db.select().from(hrRadarAlerts)
@@ -4478,6 +4560,22 @@ export class DatabaseStorage implements IStorage {
             ? (sigInn != null && sigInn < hrData.inning)
             : signalIsStrictlyBeforeHr(sigInn, sigHalf, hrData.inning, hrData.half);
           if (isPreHr) {
+            // Phase 1 (3-tier ladder) — symmetric with the per-poll cash path:
+            // only HR-Max-Window signals that preceded the HR are credited as a
+            // counted win. Sub-actionable Watch/Building precursors are stamped
+            // `uncalled_hr` (diagnostic, not counted).
+            const reconcileReachedMax = reachedHrMaxWindow({
+              alertTier: alert.alertTier,
+              confidenceTier: alert.confidenceTier,
+              signalState: alert.signalState,
+            });
+            const reconcileCashStatus = reconcileReachedMax
+              ? inferCashedFromTierStatus({
+                  alertTier: alert.alertTier,
+                  confidenceTier: alert.confidenceTier,
+                  signalState: alert.signalState,
+                })
+              : "uncalled_hr";
             await db.update(hrRadarAlerts)
               .set({
                 status: "hit",
@@ -4486,18 +4584,24 @@ export class DatabaseStorage implements IStorage {
                 hitLabel,
                 hitDetectedAt: nowDate,
                 resolvedAt: nowDate,
-                gradingStatus: "called_hit",
-                gradingReason: `reconcile: signal ${sigInn}/${sigHalf} strictly precedes HR ${hrData.inning}/${hrData.half}`,
+                gradingStatus: reconcileCashStatus,
+                gradingReason: reconcileReachedMax
+                  ? `reconcile: HR Max Window signal ${sigInn}/${sigHalf} strictly precedes HR ${hrData.inning}/${hrData.half}`
+                  : `reconcile: sub-actionable (Watch/Building) signal ${sigInn}/${sigHalf} precedes HR ${hrData.inning}/${hrData.half}; not credited as a called pick`,
                 matchedBeforeHr: true,
-                userVisible: true,
+                userVisible: reconcileReachedMax,
                 matchMethod: "direct_pre_hr_signal",
                 signalDetectedAt: alert.signalDetectedAt ?? alert.detectedAt,
                 signalInning: sigInn,
                 signalHalf: sigHalf,
               })
               .where(eq(hrRadarAlerts.id, alert.id));
-            console.log(`[HR_RADAR_CALLED_HIT] (reconcile) playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel} hitLabel=${hitLabel}`);
-            console.log(`[HR_LEDGER_GRADE] outcome=called_hit (reconcile) sessionDate=${today} gameId=${gameId} playerId=${alert.playerId} signalInning=${sigInn ?? "n/a"}${sigHalf ?? ""} hitInning=${hrData.inning}${hrData.half} alertId=${alert.id}`);
+            if (reconcileReachedMax) {
+              console.log(`[HR_RADAR_CALLED_HIT] (reconcile) playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel} hitLabel=${hitLabel} tieredStatus=${reconcileCashStatus}`);
+            } else {
+              console.log(`[HR_RADAR_UNCALLED_HR] (reconcile, sub-actionable) playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel} hitLabel=${hitLabel} — not counted as a win`);
+            }
+            console.log(`[HR_LEDGER_GRADE] outcome=${reconcileCashStatus} (reconcile) sessionDate=${today} gameId=${gameId} playerId=${alert.playerId} signalInning=${sigInn ?? "n/a"}${sigHalf ?? ""} hitInning=${hrData.inning}${hrData.half} alertId=${alert.id}`);
           } else {
             // Signal occurred at or after HR — late_signal, admin-only.
             await db.update(hrRadarAlerts)
@@ -4522,28 +4626,85 @@ export class DatabaseStorage implements IStorage {
             console.log(`[HR_LEDGER_LATE] (reconcile) sessionDate=${today} gameId=${gameId} playerId=${alert.playerId} signalInning=${sigInn ?? "n/a"}${sigHalf ?? ""} hitInning=${hrData.inning}${hrData.half} alertId=${alert.id}`);
           }
         } else {
-          await db.update(hrRadarAlerts)
-            .set({
-              status: "miss",
-              resolvedAt: nowDate,
-              gradingStatus: "called_miss",
-              gradingReason: "reconcile: game ended without HR for this called signal",
-              userVisible: true,
-              matchedBeforeHr: false,
-              matchMethod: "direct_pre_hr_signal",
-            })
-            .where(eq(hrRadarAlerts.id, alert.id));
-          console.log(`[HR_RADAR_ALERT_MISS] playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel}`);
-          console.log(`[HR_LEDGER_GRADE] outcome=called_miss (reconcile) sessionDate=${today} gameId=${gameId} playerId=${alert.playerId} detectedLabel=${alert.detectedLabel} alertId=${alert.id}`);
-          // Goldmaster Phase 9 — canonical resolved_miss alias.
-          await this.appendHrRadarSignalEvent({
-            sessionDate: today, gameId, playerId: alert.playerId, team: alert.team ?? "",
-            alertId: alert.id,
-            eventType: "resolved_miss",
-            detectedAt: nowDate,
-            inning: 0, half: "F",
-            source: "grader",
-          } as InsertHrRadarSignalEvent);
+          // ── Phase 1 (3-tier ladder) — honest miss grading ────────────────
+          // Only alerts that reached the HR Max Window (the single actionable
+          // top tier) are graded as a counted `called_miss`. Sub-actionable
+          // Watch/Building rows — including presence-only floor rows — were
+          // ambient context, never a pick, and are stamped `expired`
+          // (→ "unresolved", excluded from the missed bucket / W/L ledger /
+          // user-facing MISSED section). This is what collapses the inflated
+          // "everything is a miss" wall into the genuinely actionable set.
+          let finalGrade = resolveFinalNoHrGrading({
+            alertTier: alert.alertTier,
+            confidenceTier: alert.confidenceTier,
+            signalState: alert.signalState,
+          });
+          // ── Phase 1 slice 3 — PA-bounded HR Max Window ───────────────────
+          // A genuine HR Max Window miss only counts when the batter had the
+          // window's worth of opportunity. If the actionable signal fired so
+          // late that its PA window was cut short by game-end, resolve it to
+          // `expired` (window lapsed, not counted) rather than a hard miss —
+          // so "window closed" reflects a real window, not just game-over.
+          let windowCutShort = false;
+          if (finalGrade === "called_miss") {
+            const windowClass = classifyHrMaxWindowAtFinal({
+              signalInning: alert.signalInning ?? alert.detectedInning,
+              finalInning: finalInning ?? null,
+            });
+            if (windowClass === "expired") {
+              finalGrade = "expired";
+              windowCutShort = true;
+            }
+          }
+          if (finalGrade === "called_miss") {
+            await db.update(hrRadarAlerts)
+              .set({
+                status: "miss",
+                resolvedAt: nowDate,
+                gradingStatus: "called_miss",
+                gradingReason: "reconcile: HR Max Window signal — PA window played out without HR",
+                userVisible: true,
+                matchedBeforeHr: false,
+                matchMethod: "direct_pre_hr_signal",
+              })
+              .where(eq(hrRadarAlerts.id, alert.id));
+            console.log(`[HR_RADAR_ALERT_MISS] playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel}`);
+            console.log(`[HR_LEDGER_GRADE] outcome=called_miss (reconcile) sessionDate=${today} gameId=${gameId} playerId=${alert.playerId} detectedLabel=${alert.detectedLabel} alertId=${alert.id}`);
+            // Goldmaster Phase 9 — canonical resolved_miss alias.
+            await this.appendHrRadarSignalEvent({
+              sessionDate: today, gameId, playerId: alert.playerId, team: alert.team ?? "",
+              alertId: alert.id,
+              eventType: "resolved_miss",
+              detectedAt: nowDate,
+              inning: 0, half: "F",
+              source: "grader",
+            } as InsertHrRadarSignalEvent);
+          } else {
+            // `expired` — either sub-actionable Watch/Building context (never a
+            // pick) OR an HR Max Window signal whose PA window was cut short by
+            // game-end. Admin-only; leaves the active set without polluting the
+            // user-facing miss record / W/L ledger.
+            const expiredReason = windowCutShort
+              ? "reconcile: HR Max Window signal fired too late — PA window cut short by game-end; not counted"
+              : "reconcile: sub-actionable (Watch/Building) signal — game ended without HR; not a called pick";
+            await db.update(hrRadarAlerts)
+              .set({
+                // status `expired` (not `miss`) so the raw `status === "miss"`
+                // W/L counters (e.g. the HR Radar accuracy summary) exclude
+                // these non-graded rows. `gradingStatus="expired"` already maps
+                // to "unresolved" in deriveHrRadarOutcomeStatus, keeping the
+                // canonical section/outcome path consistent.
+                status: "expired",
+                resolvedAt: nowDate,
+                gradingStatus: "expired",
+                gradingReason: expiredReason,
+                userVisible: false,
+                matchedBeforeHr: false,
+                matchMethod: "direct_pre_hr_signal",
+              })
+              .where(eq(hrRadarAlerts.id, alert.id));
+            console.log(`[HR_RADAR_INACTIVE] (reconcile) playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel ?? "presence"} reason=${windowCutShort ? "hr_max_window_cut_short" : "sub_actionable_not_graded"} confTier=${alert.confidenceTier ?? "?"} signalState=${alert.signalState ?? "?"} alertTier=${alert.alertTier ?? "?"}`);
+          }
         }
       }
 
