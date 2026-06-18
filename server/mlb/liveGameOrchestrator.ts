@@ -2993,6 +2993,88 @@ export class LiveGameOrchestrator {
       console.log(`[HR_RADAR_ROSTER_SCAN] game=${gameId} evaluating ${allChanges.length} batters with contact data`);
       await this.reevaluateHRRadarOnContact(gameId, allChanges);
     }
+
+    // Pregame seeding: for batters with NO prior ABs, compute an environment+profile
+    // prior score and initialize the HR Radar to "watch" if strong enough.
+    // This prevents first-AB HRs (T1 homers) from being completely invisible
+    // pregame when favorable conditions exist (park + BVP + pitcher vulnerability).
+    const weatherCache = mlbGameCache.weather[gameId];
+    const pitcher = state.pitcherInGame;
+    const pitcherCtxCache = mlbGameCache.pitcherContext?.[gameId];
+    const pitcherCtx = pitcher?.playerId ? pitcherCtxCache?.byPitcherId?.[pitcher.playerId] : undefined;
+    const pitcherEra = pitcher?.playerId ? mlbPlayerCache.pitcherSeasonStats[pitcher.playerId]?.era ?? null : null;
+
+    const venuePf = getMarketParkFactor(weatherCache?.venueName ?? null, "home_runs", null);
+    const resolvedWindSpeed = weatherCache?.windSpeed ?? null;
+    const resolvedWindDir = weatherCache?.windDirection ?? null;
+    const isIndoors = weatherCache?.isIndoors ?? isVenueIndoors(weatherCache?.venueName);
+
+    for (const batter of state.battingOrder) {
+      const playerContact = contactCache?.byPlayerId?.[batter.playerId];
+      const priorABs = (playerContact?.priorABResults ?? []) as any[];
+      if (priorABs.length > 0) continue; // already handled above
+
+      const existingCanon = getCanonicalHrRadarState(gameId, batter.playerId);
+      if (existingCanon && existingCanon.lifecycleState !== "inactive") continue; // already seeded or active
+
+      let pregameScore = 0;
+
+      // Park factor
+      if (venuePf >= 1.15) pregameScore += 0.8;
+      else if (venuePf >= 1.10) pregameScore += 0.4;
+
+      // Wind
+      if (!isIndoors && resolvedWindDir === "out") {
+        const ws = resolvedWindSpeed ?? 0;
+        if (ws >= 18) pregameScore += 1.0;
+        else if (ws >= 12) pregameScore += 0.7;
+        else if (ws >= 8) pregameScore += 0.4;
+      }
+
+      // Pitcher ERA vulnerability
+      if (pitcherEra != null) {
+        if (pitcherEra >= 6.0) pregameScore += 0.6;
+        else if (pitcherEra >= 5.0) pregameScore += 0.4;
+      }
+
+      // BVP HR history vs today's pitcher
+      if (pitcher) {
+        const bvpKey = `${batter.playerId}_vs_${pitcher.playerId}`;
+        const bvpData = mlbPlayerCache.bvpMatchups[bvpKey];
+        if (bvpData && bvpData.atBats >= 5) {
+          if (bvpData.homeRuns >= 2) pregameScore += 0.7;
+          else if (bvpData.homeRuns >= 1 && bvpData.atBats <= 15) pregameScore += 0.5;
+          else if (bvpData.homeRuns / bvpData.atBats > 0.08) pregameScore += 0.3;
+        }
+      }
+
+      // Hot streak
+      const ohData = getOnlyHomersEnrichment(batter.playerName);
+      if (ohData.isHotHitter) {
+        pregameScore += ohData.hotHitterPeriod === "7d" ? 0.8 : ohData.hotHitterPeriod === "14d" ? 0.5 : 0.3;
+      }
+
+      if (pregameScore >= 1.5) {
+        console.log(`[HR_RADAR_PREGAME_SEED] game=${gameId} player=${batter.playerName} score=${pregameScore.toFixed(2)} pf=${venuePf.toFixed(2)} wind=${resolvedWindDir ?? "none"}@${resolvedWindSpeed ?? 0}mph era=${pitcherEra ?? "n/a"} → seeding watch`);
+        try {
+          upsertCanonicalHrRadarState({
+            gameId,
+            playerId: batter.playerId,
+            playerName: batter.playerName,
+            team: batter.team ?? null,
+            event: "CONTACT_EVIDENCE",
+            context: {
+              reason: `pregame_priors_score${pregameScore.toFixed(2)}`,
+              inning: state.inning ?? 0,
+            },
+            triggerReasons: [`pregame_priors:pf${venuePf.toFixed(2)}_era${pitcherEra ?? "n/a"}`],
+            triggerTags: ["PREGAME_SEED"],
+          });
+        } catch (e) {
+          // Never block the scan on a canonical store failure.
+        }
+      }
+    }
   }
 
   async reevaluateHRRadarOnContact(gameId: string, contactChanges: ContactChangeEvent[]): Promise<void> {
