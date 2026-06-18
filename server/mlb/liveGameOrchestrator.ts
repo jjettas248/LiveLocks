@@ -3153,6 +3153,29 @@ export class LiveGameOrchestrator {
       if (ohData.isHotHitter) {
         const boost = ohData.hotHitterPeriod === "7d" ? 0.8 : ohData.hotHitterPeriod === "14d" ? 0.5 : 0.3;
         hrInput.hotHitterBoost = boost;
+      } else if (rollingStats) {
+        // Cold streak penalty: well below their own HR pace AND extended drought
+        const trend = hrInput.hrTrend;
+        if (trend) {
+          const abSince = trend.abSinceLastHR ?? 0;
+          const hrRate30 = trend.hrRateLast30 ?? 0;
+          const seasonAB = trend.seasonTotalAB ?? 0;
+          if (seasonAB >= 50 && abSince >= 30 && hrRate30 < 0.02) {
+            hrInput.hotHitterBoost = -0.3;
+          }
+        }
+      }
+
+      // BVP HR priming: batter has history of HRs vs this specific pitcher
+      if (pitcher) {
+        const hrBvpKey = `${batter.playerId}_vs_${pitcher.playerId}`;
+        const hrBvpData = mlbPlayerCache.bvpMatchups[hrBvpKey];
+        if (hrBvpData && hrBvpData.atBats >= 5) {
+          const bvpHrRate = hrBvpData.homeRuns / hrBvpData.atBats;
+          if (hrBvpData.homeRuns >= 2) hrInput.bvpHrBoost = 0.7;
+          else if (hrBvpData.homeRuns >= 1 && hrBvpData.atBats <= 15) hrInput.bvpHrBoost = 0.5;
+          else if (bvpHrRate > 0.08) hrInput.bvpHrBoost = 0.3;
+        }
       }
 
       // Gap 3: pre-game pitcher fatigue for HR Radar path

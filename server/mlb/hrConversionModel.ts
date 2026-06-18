@@ -551,7 +551,8 @@ function computeEnvironmentMultiplier(input: HRConversionInput): number {
 
   if (!input.isIndoors) {
     const ws = input.windSpeed ?? 0;
-    if (input.windDirection === "out" && ws >= 12) multiplier *= 1.15;
+    if (input.windDirection === "out" && ws >= 18) multiplier *= 1.22;
+    else if (input.windDirection === "out" && ws >= 12) multiplier *= 1.15;
     else if (input.windDirection === "out" && ws >= 8) multiplier *= 1.08;
     else if (input.windDirection === "in" && ws >= 12) multiplier *= 0.82;
     else if (input.windDirection === "in" && ws >= 8) multiplier *= 0.90;
