@@ -5,6 +5,7 @@
 
 import {
   reachedHrMaxWindow,
+  reachedHrMaxWindowPeak,
   resolveFinalNoHrGrading,
   deriveHrRadarOutcomeStatus,
   deriveHrRadarSection,
@@ -90,6 +91,41 @@ function cashGrade(args: { alertTier?: string | null; confidenceTier?: string | 
 check("HR + officialAlert → counted win", cashGrade({ alertTier: "officialAlert" }) === "counted");
 check("HR + prepare/Building → uncalled (not a win)", cashGrade({ alertTier: "prepare" }) === "uncalled_hr");
 check("HR + watch → uncalled (not a win)", cashGrade({ alertTier: "watch", confidenceTier: "monitor" }) === "uncalled_hr");
+
+// ─── Fix A — peak-aware HR Max Window (decay-out-of-window grading) ─────────
+// reachedHrMaxWindowPeak honors a prior in-window peak even after the current
+// tier has decayed below it. Source of truth: peakState BET_NOW + conv floor.
+check("peakState BET_NOW + conv 0.14 reached window (peak)",
+  reachedHrMaxWindowPeak({ peakState: "BET_NOW", peakConversionProbability: 0.14 }));
+check("peakState BET_NOW exactly at 0.12 floor reached window",
+  reachedHrMaxWindowPeak({ peakState: "BET_NOW", peakConversionProbability: 0.12 }));
+check("peakState BET_NOW but conv below 0.12 floor → NOT reached (over-count guard)",
+  !reachedHrMaxWindowPeak({ peakState: "BET_NOW", peakConversionProbability: 0.08 }));
+check("peakState PREPARE (not top conviction) → NOT reached",
+  !reachedHrMaxWindowPeak({ peakState: "PREPARE", peakConversionProbability: 0.20 }));
+check("no peak state → NOT reached",
+  !reachedHrMaxWindowPeak({ peakState: null, peakConversionProbability: null }));
+
+// Peak-aware cash gate: an HR whose CURRENT tier decayed to building but which
+// genuinely peaked into the window earlier should grade as a counted win
+// (Merrill-style). A genuinely thin signal (no peak, weak current) stays
+// uncalled (McGonigle-style) — the fix must not erase that correctness.
+function cashGradePeakAware(args: {
+  alertTier?: string | null; confidenceTier?: string | null; signalState?: string | null;
+  peakState?: string | null; peakConversionProbability?: number | null;
+}): "counted" | "uncalled_hr" {
+  return reachedHrMaxWindow(args) || reachedHrMaxWindowPeak(args) ? "counted" : "uncalled_hr";
+}
+check("Merrill-style: current building/live but peaked BET_NOW@0.14 → counted",
+  cashGradePeakAware({ alertTier: "prepare", confidenceTier: "building", signalState: "live", peakState: "BET_NOW", peakConversionProbability: 0.14 }) === "counted");
+check("McGonigle-style: current monitor/watching, no real peak → still uncalled",
+  cashGradePeakAware({ confidenceTier: "monitor", signalState: "watching", peakState: "WATCH", peakConversionProbability: 0.056 }) === "uncalled_hr");
+
+// Guard: peak fallback must NOT widen the no-HR terminal grade. The
+// resolveFinalNoHrGrading signature accepts no peak fields, so a building/watch
+// signal that merely peaked still expires (never a counted called_miss).
+check("no-HR grading ignores peak (Building still expires)",
+  resolveFinalNoHrGrading({ alertTier: "prepare", confidenceTier: "building" }) === "expired");
 
 // ─── PA-bounded HR Max Window (slice 3) ────────────────────────────────────
 // An HR Max Window miss only counts when the batter had the window's worth of
