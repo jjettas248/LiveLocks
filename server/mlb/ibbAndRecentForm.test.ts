@@ -43,11 +43,18 @@ console.log("\n[Recent form + IBB feared-slugger] running cases\n");
     `hot=${hot.hrConversionProbability} base=${baseline.hrConversionProbability}`);
   assert("Cold streak → lower prob than baseline", cold.hrConversionProbability < baseline.hrConversionProbability,
     `cold=${cold.hrConversionProbability} base=${baseline.hrConversionProbability}`);
-  assert("Hot recentFormMult > 1.0", hot.components.recentFormMult > 1.0, `mult=${hot.components.recentFormMult}`);
-  assert("Cold recentFormMult < 1.0", cold.components.recentFormMult < 1.0, `mult=${cold.components.recentFormMult}`);
-  // Recent-form multiplier is capped [0.90, 1.15].
-  assert("recentFormMult capped <= 1.15", hot.components.recentFormMult <= 1.15, `mult=${hot.components.recentFormMult}`);
-  assert("recentFormMult floored >= 0.90", cold.components.recentFormMult >= 0.90, `mult=${cold.components.recentFormMult}`);
+  // Recent form now lives in the consolidated overlay's recency sub-engine.
+  assert("Hot streak → positive recency score", hot.overlay.components.recency.score > 0,
+    `score=${hot.overlay.components.recency.score}`);
+  assert("Cold streak → negative recency score", cold.overlay.components.recency.score < 0,
+    `score=${cold.overlay.components.recency.score}`);
+  // Overlay multiplier stays inside its clamp envelope.
+  assert("Hot overlay multiplier within cap [0.60, 1.60]",
+    hot.overlay.overlayMultiplier <= 1.60 && hot.overlay.overlayMultiplier >= 0.60,
+    `mult=${hot.overlay.overlayMultiplier}`);
+  assert("Cold overlay multiplier within cap [0.60, 1.60]",
+    cold.overlay.overlayMultiplier <= 1.60 && cold.overlay.overlayMultiplier >= 0.60,
+    `mult=${cold.overlay.overlayMultiplier}`);
 }
 
 // ── IBB feared-slugger season prior raises probability (positive-only) ────
@@ -84,8 +91,12 @@ console.log("\n[Recent form + IBB feared-slugger] running cases\n");
 // ── No-op: absent recent-form/IBB inputs match baseline exactly ──────────
 {
   const baseline = computeHRConversionProbability(baseInput());
-  assert("Absent recent form → recentFormMult == 1.0", baseline.components.recentFormMult === 1.0,
-    `mult=${baseline.components.recentFormMult}`);
+  assert("Absent recent form → recency sub-engine neutral (score 0)",
+    baseline.overlay.components.recency.score === 0,
+    `score=${baseline.overlay.components.recency.score}`);
+  assert("Absent recent form → recency coverage MISSING",
+    baseline.overlay.components.recency.coverage === "MISSING",
+    `coverage=${baseline.overlay.components.recency.coverage}`);
   assert("Absent IBB context → ibbRespectMult == 1.0", baseline.components.ibbRespectMult === 1.0,
     `mult=${baseline.components.ibbRespectMult}`);
 }
