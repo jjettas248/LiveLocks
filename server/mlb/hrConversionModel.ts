@@ -2,6 +2,10 @@ import type { HRBuildResult, ClassifiedContact } from "./HRSignalBuilder";
 import { estimateRichPADistribution } from "./paDistribution";
 import type { PitchMixEntry, PitcherHandednessSplits, BatterHandednessSplits } from "./types";
 import { getPitchFamily } from "./pitchTypeNormalizer";
+import { computeHROverlay } from "./hr/hrOverlay";
+import type { HROverlayResult, SeasonStatBundle, PitchTypeBatterSplit } from "./hr/hrOverlayTypes";
+
+export type { SeasonStatBundle, PitchTypeBatterSplit };
 
 export interface PitcherDeteriorationContext {
   velocityDrop: number | null;
@@ -84,6 +88,16 @@ export interface HRConversionInput {
   firstBaseOpen?: boolean | null;
   runnerInScoringPosition?: boolean | null;
   scoreDifferential?: number | null;
+
+  // Consolidated overlay inputs (all optional — no-op when absent).
+  // Overlay supersedes powerMultiplier × slotMultiplier × recentFormMult.
+  maxEV?: number | null;                         // avg/max exit velocity, mph
+  toppedPercent?: number | null;                 // Topped% (Phase 2 data)
+  seasonSLG?: number | null;                     // season SLG baseline for Δ
+  recentSLG?: number | null;                     // L15–L30 SLG for Δ
+  battingOrderSlgSplit?: number | null;          // slot-specific SLG (Phase 2)
+  seasonBundles?: SeasonStatBundle[] | null;     // multi-season triad (Phase 2)
+  pitchTypeSplits?: PitchTypeBatterSplit[] | null; // batter pitch-type damage (Phase 2)
 }
 
 export interface HRConversionResult {
@@ -101,6 +115,9 @@ export interface HRConversionResult {
   calibrationSource: "static_table" | "empirical_buckets";
   calibrationBucketLabel: string | null;
   calibrationSampleCount: number;
+  // Consolidated overlay result (Ψ/Γ/Λ/Θ/Δ sub-engines + soft gate).
+  // Intentional payload shape change — goldmaster re-baselined to v8.
+  overlay: HROverlayResult;
   components: {
     pregameFormScore: number;
     pregamePriorMult: number;
@@ -110,7 +127,7 @@ export interface HRConversionResult {
     pitcherAdjustedRate: number;
     envAdjustedRate: number;
     entryAdjustedRate: number;
-    recentFormMult: number;
+    overlayMultiplier: number;
     ibbRespectMult: number;
     finalPerPARate: number;
     paDist: Record<number, number>;
@@ -847,22 +864,31 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
   const entryFatigueMultiplier = computePitcherEntryFatigueMultiplier(input);
   const entryAdjustedRate = envAdjustedRate * entryFatigueMultiplier;
 
-  // Gaps 7–9: structural power profile (fly ball%, HR/FB, xISO, xwOBA).
-  // Applied last so it modulates the fully-env/pitcher-adjusted rate.
-  const powerMultiplier = computePowerProfileMultiplier(input);
-  const powerAdjustedRate = entryAdjustedRate * powerMultiplier;
-
-  // Gap 6: lineup slot weight — cleanup hitters structurally produce more HRs.
-  const slotMultiplier = computeLineupSlotHRMultiplier(input.battingOrderSlot);
-  const slotAdjustedRate = powerAdjustedRate * slotMultiplier;
-
-  // Recent form (hot/cold streak) and IBB feared-slugger prior. Applied last so
-  // they modulate the fully-adjusted rate; both no-op (1.0) when data absent.
-  const recentFormMult = computeRecentFormMultiplier(input);
-  const formAdjustedRate = slotAdjustedRate * recentFormMult;
+  // Consolidated overlay: Ψ (power profile) + Λ (launch topology) + Θ (lineup
+  // volume) + Δ (recency delta) + Γ (arsenal matchup, Phase 2 no-op) + K (soft gate).
+  // Supersedes the previous powerMultiplier × slotMultiplier × recentFormMult chain.
+  const overlayResult = computeHROverlay({
+    barrelPerPA: input.barrelRate ?? null,
+    maxEV: input.maxEV ?? null,
+    sweetSpotPct: input.sweetSpotPercent ?? null,
+    xwOBAcon: input.xwOBA ?? null,
+    fbPct: input.flyBallPercent ?? null,
+    pullAirPct: input.pullRatePercent ?? null,
+    toppedPct: input.toppedPercent ?? null,
+    battingOrderSlot: input.battingOrderSlot,
+    battingOrderSlgSplit: input.battingOrderSlgSplit ?? null,
+    overallSLG: input.xSLG ?? null,
+    seasonSLG: input.seasonSLG ?? null,
+    recentSLG: input.recentSLG ?? null,
+    recentOPS: input.recentOps ?? null,
+    seasonOPS: input.seasonOps ?? null,
+    pitchTypeSplits: input.pitchTypeSplits ?? null,
+    seasonBundles: input.seasonBundles ?? null,
+  });
+  const overlayAdjustedRate = entryAdjustedRate * overlayResult.overlayMultiplier;
 
   const ibbRespectMult = computeIbbRespectMultiplier(input);
-  const ibbAdjustedRate = formAdjustedRate * ibbRespectMult;
+  const ibbAdjustedRate = overlayAdjustedRate * ibbRespectMult;
 
   // Phase 4: tightened final per-PA cap (0.25 → 0.12) to prevent runaway probabilities.
   const finalPerPARate = Math.max(0.005, Math.min(0.12, ibbAdjustedRate));
@@ -907,6 +933,7 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
     calibrationSource: cal.source,
     calibrationBucketLabel: cal.bucketLabel,
     calibrationSampleCount: cal.samples,
+    overlay: overlayResult,
     components: {
       pregameFormScore: Math.round(pregameFormScore * 10) / 10,
       pregamePriorMult: Math.round(pregamePriorMult * 1000) / 1000,
@@ -916,7 +943,7 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
       pitcherAdjustedRate: Math.round(pitcherAdjustedRate * 10000) / 10000,
       envAdjustedRate: Math.round(envAdjustedRate * 10000) / 10000,
       entryAdjustedRate: Math.round(entryAdjustedRate * 10000) / 10000,
-      recentFormMult: Math.round(recentFormMult * 1000) / 1000,
+      overlayMultiplier: Math.round(overlayResult.overlayMultiplier * 10000) / 10000,
       ibbRespectMult: Math.round(ibbRespectMult * 1000) / 1000,
       finalPerPARate: Math.round(finalPerPARate * 10000) / 10000,
       paDist,

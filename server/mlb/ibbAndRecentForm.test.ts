@@ -43,11 +43,15 @@ console.log("\n[Recent form + IBB feared-slugger] running cases\n");
     `hot=${hot.hrConversionProbability} base=${baseline.hrConversionProbability}`);
   assert("Cold streak → lower prob than baseline", cold.hrConversionProbability < baseline.hrConversionProbability,
     `cold=${cold.hrConversionProbability} base=${baseline.hrConversionProbability}`);
-  assert("Hot recentFormMult > 1.0", hot.components.recentFormMult > 1.0, `mult=${hot.components.recentFormMult}`);
-  assert("Cold recentFormMult < 1.0", cold.components.recentFormMult < 1.0, `mult=${cold.components.recentFormMult}`);
-  // Recent-form multiplier is capped [0.90, 1.15].
-  assert("recentFormMult capped <= 1.15", hot.components.recentFormMult <= 1.15, `mult=${hot.components.recentFormMult}`);
-  assert("recentFormMult floored >= 0.90", cold.components.recentFormMult >= 0.90, `mult=${cold.components.recentFormMult}`);
+  // Overlay delta component captures recency signal (replaced recentFormMult).
+  assert("Hot streak → overlay delta positive", hot.overlay.components.delta.score > 0,
+    `delta=${hot.overlay.components.delta.score}`);
+  assert("Cold streak → overlay delta negative", cold.overlay.components.delta.score < 0,
+    `delta=${cold.overlay.components.delta.score}`);
+  assert("Overlay delta winsorized ≤ 1.0", hot.overlay.components.delta.score <= 1.0,
+    `delta=${hot.overlay.components.delta.score}`);
+  assert("Overlay delta winsorized ≥ -1.0", cold.overlay.components.delta.score >= -1.0,
+    `delta=${cold.overlay.components.delta.score}`);
 }
 
 // ── IBB feared-slugger season prior raises probability (positive-only) ────
@@ -84,8 +88,9 @@ console.log("\n[Recent form + IBB feared-slugger] running cases\n");
 // ── No-op: absent recent-form/IBB inputs match baseline exactly ──────────
 {
   const baseline = computeHRConversionProbability(baseInput());
-  assert("Absent recent form → recentFormMult == 1.0", baseline.components.recentFormMult === 1.0,
-    `mult=${baseline.components.recentFormMult}`);
+  assert("Absent recent form → overlay delta score = 0",
+    baseline.overlay.components.delta.score === 0,
+    `delta=${baseline.overlay.components.delta.score}`);
   assert("Absent IBB context → ibbRespectMult == 1.0", baseline.components.ibbRespectMult === 1.0,
     `mult=${baseline.components.ibbRespectMult}`);
 }
