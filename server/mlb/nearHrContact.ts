@@ -47,6 +47,10 @@ export interface NearHrContactEvent {
   // `hitType` is the hit class ("single" | "double" | "triple" | "home_run").
   outcome?: string | null | undefined;
   hitType?: string | null | undefined;
+  // Park factor (optional). When ≥1.10 (hitter-friendly), the WATCH upper
+  // launch-angle bound extends to 42° — a 98+ mph, 42° ball goes out in
+  // short parks even at above-sweet-spot trajectory (IKF pattern).
+  parkFactor?: number | null | undefined;
 }
 
 export interface NearHrContactResult {
@@ -267,13 +271,19 @@ export function detectNearHrContact(event: NearHrContactEvent): NearHrContactRes
   }
 
   // 2. WATCH
+  // In hitter-friendly parks (PF ≥ 1.10), extend the LA upper bound from
+  // 35° to 42° — elevated fly balls that clear short fences still qualify
+  // as near-HR evidence even at above-sweet-spot trajectory (IKF pattern:
+  // 98.4 mph / 42° / 360ft HR that the standard 35° ceiling missed).
+  const isHitterFriendlyPark = (event.parkFactor ?? 1.0) >= 1.10;
+  const watchLaMax = isHitterFriendlyPark ? 42 : 35;
   const meetsWatch =
     ev >= 98 &&
-    la >= 20 && la <= 35 &&
+    la >= 20 && la <= watchLaMax &&
     distance >= 350;
   if (meetsWatch) {
     // If this watch is ALSO a barrel, surface as lean — barrel + EV>=98
-    // + LA 20-35 + dist>=350 is a textbook HR-shaped batted ball even
+    // + LA 20-watchLaMax + dist>=350 is a textbook HR-shaped batted ball even
     // when distance falls just shy of the 375 ft LEAN gate.
     if (barrel) {
       return { tier: "lean", drivers: [...DRIVERS_BARREL], matchedPath: "BARREL_OVERRIDE_LEAN" };
@@ -308,9 +318,10 @@ export function detectNearHrContact(event: NearHrContactEvent): NearHrContactRes
     return almostHr;
   }
 
+  const closeToWatchLaMax = isHitterFriendlyPark ? 45 : 38;
   const closeToWatch =
     ev >= 95 &&
-    la >= 18 && la <= 38 &&
+    la >= 18 && la <= closeToWatchLaMax &&
     distance >= 320;
   if (closeToWatch) {
     return {
