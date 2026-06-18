@@ -2000,6 +2000,7 @@ export class LiveGameOrchestrator {
     // at 0, and the eventual HR was graded uncalled. Scanning a small
     // recent window preserves peak detection across the next AB.
     const _priorAbsForNearHr: any[] = (input.contactQuality?.priorABResults ?? []);
+    const _nearHrParkFactor = input.weatherPark?.parkFactor ?? null;
     const nearHrPeak = detectNearHrContactPeak(
       _priorAbsForNearHr.map((ab: any) => ({
         ev: ab?.exitVelocity ?? null,
@@ -2013,6 +2014,9 @@ export class LiveGameOrchestrator {
         // high-xBA hard out are strong pre-HR evidence (composition only).
         outcome: ab?.outcome ?? null,
         hitType: ab?.hitType ?? null,
+        // Park-aware LA upper bound: hitter-friendly parks extend WATCH from
+        // 35° to 42° so elevated fly balls in short parks aren't missed.
+        parkFactor: _nearHrParkFactor,
       })),
       5,
     );
