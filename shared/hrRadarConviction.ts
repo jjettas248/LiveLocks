@@ -35,6 +35,34 @@
  * both server enrichment + client renderers pick it up automatically.
  */
 
+/**
+ * Pregame seed cap (0–100 readiness scale) for presence-floor HR Radar rows.
+ * A presence-only row is a pre-/early-contact power threat seeded from the
+ * season power profile so the card reflects the batter instead of showing 0.0.
+ * The cap sits BELOW the in-game "ready" floor (75) and the "attack" band so a
+ * pure pregame seed can never masquerade as a fired/qualified signal — grading
+ * detection stays gated on real in-game contact. Shared so the engine
+ * (orchestrator), the persistence layer (storage), and any display clamp all
+ * agree on the same ceiling.
+ */
+export const PREGAME_SEED_CAP = 55;
+
+/**
+ * Display-only tier label "lift" for a pregame-seeded presence row, derived
+ * purely from the seeded /10 score. This is presentational ONLY: it never
+ * touches `canonicalStage`, `confidenceTier`, section placement, or grading —
+ * a presence row stays in the watch section and grades as before. Returns null
+ * for a weak/absent seed so callers fall back to the canonical tier label.
+ * Deterministic formatting of a server-stamped value (safe to call on either
+ * side; not an invented display-contract field).
+ */
+export function pregameSeedTierLabel(seedScore10: number | null | undefined): string | null {
+  if (seedScore10 == null || !Number.isFinite(seedScore10)) return null;
+  if (seedScore10 >= 4.5) return "LEAN";
+  if (seedScore10 >= 3.0) return "WATCH";
+  return null;
+}
+
 export interface ConvictionDisplayBadge {
   /** Short pill label (≤ 22 chars). */
   label: string;

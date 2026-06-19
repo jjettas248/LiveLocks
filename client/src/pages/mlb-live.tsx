@@ -13,7 +13,7 @@ import { HrQuickDecide } from "@/components/mlb/HrQuickDecide";
 import { MlbBoxScore, type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
 import { AdminEngineDebugPanel } from "@/components/mlb/AdminEngineDebugPanel";
 import type { MLBSignal } from "@shared/mlbSignal";
-import { applyConvictionCap10, convictionDisplayBadge } from "@shared/hrRadarConviction";
+import { applyConvictionCap10, convictionDisplayBadge, pregameSeedTierLabel } from "@shared/hrRadarConviction";
 import { ProbabilityRing } from "@/components/probability-ring";
 import { StatCard } from "@/components/stat-card";
 import { SkeletonCard } from "@/components/sports/SkeletonCard";
@@ -1263,6 +1263,15 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
   const peak10 = applyConvictionCap10(rawPeak10, capPath) ?? rawPeak10;
   const convictionBadge = convictionDisplayBadge(capPath);
 
+  // Pregame seed (presence-floor rows): a display-only lifted tier + "why"
+  // drivers from the season power profile. Read straight off the server-stamped
+  // diagnosticsSnapshot.pregameSeed — formatting only, no re-derivation.
+  const pregameSeed = (aAny.diagnosticsSnapshot?.pregameSeed ?? null) as
+    | { seedScore?: number; drivers?: string[] }
+    | null;
+  const pregameDrivers: string[] = Array.isArray(pregameSeed?.drivers) ? pregameSeed!.drivers.slice(0, 4) : [];
+  const pregameSeedTier = !isResolvedAlert ? pregameSeedTierLabel(current10) : null;
+
   const statusColor = alert.status === "hit" ? "text-emerald-400" : alert.status === "miss" ? "text-zinc-400" : "text-blue-400";
   const statusLabel = alert.status === "hit" ? "HIT" : alert.status === "miss" ? "MISS" : "LIVE";
 
@@ -1355,10 +1364,22 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground font-semibold">
               <Activity className="w-3 h-3" />
-              <span>Tier: {alert.confidenceTier?.toUpperCase()}</span>
+              <span data-testid="text-analyze-tier">Tier: {pregameSeedTier ?? alert.confidenceTier?.toUpperCase()}</span>
+              {pregameSeedTier && (
+                <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-300 border border-orange-500/20 font-semibold">
+                  Pregame
+                </span>
+              )}
               <span className="text-muted-foreground/40">|</span>
               <span>State: {alert.signalState?.toUpperCase()}</span>
             </div>
+            {pregameDrivers.length > 0 && (
+              <div className="flex flex-wrap gap-1" data-testid="chips-analyze-pregame-drivers">
+                {pregameDrivers.map((d, i) => (
+                  <span key={i} className="text-[8px] px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-300 border border-orange-500/20 font-semibold">{d}</span>
+                ))}
+              </div>
+            )}
             {(alert.triggerTags ?? []).length > 0 && (
               <div className="flex flex-wrap gap-1">
                 {(alert.triggerTags as string[]).map((tag: string, i: number) => (

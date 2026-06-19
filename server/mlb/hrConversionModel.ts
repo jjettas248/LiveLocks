@@ -4,6 +4,7 @@ import type { PitchMixEntry, PitcherHandednessSplits, BatterHandednessSplits } f
 import { getPitchFamily } from "./pitchTypeNormalizer";
 import { computeHROverlay } from "./hr/hrOverlay";
 import type { HROverlayResult, SeasonStatBundle, PitchTypeBatterSplit } from "./hr/hrOverlayTypes";
+import { PREGAME_SEED_CAP } from "@shared/hrRadarConviction";
 
 export type { SeasonStatBundle, PitchTypeBatterSplit };
 
@@ -757,33 +758,133 @@ const HR_PREGAME_PRIOR: boolean = (() => {
 })();
 
 /**
- * Blend the season power profile into a 0–100 pregame HR-form score. Uses only
- * fields already on HRConversionInput; returns a neutral 50 when no profile data
- * is present. Pure, no I/O.
+ * Pregame HR-form breakdown: the 0–100 form score PLUS the human-readable
+ * "why" drivers that pushed it above neutral. Single source of truth so the
+ * score and its explanation can never drift. Uses only fields already on
+ * HRConversionInput; returns a neutral 50 / empty drivers when no profile data
+ * is present. Pure, no I/O. Drivers are positive-only (what makes this a
+ * threat) and ordered by descending contribution for clean chip truncation.
  */
-export function computePregameHrFormScore(input: HRConversionInput): number {
+export function computePregameHrFormBreakdown(input: HRConversionInput): {
+  score: number;
+  drivers: string[];
+  hasProfile: boolean;
+} {
   let s = 50;
   let n = 0;
+  // Collect (contribution, label) for positive drivers so we can rank them.
+  const pos: Array<{ pts: number; label: string }> = [];
   const hrFB = input.hrFBRatio;
-  if (hrFB != null) { s += hrFB >= 18 ? 12 : hrFB >= 14 ? 7 : hrFB >= 11 ? 2 : hrFB <= 8 ? -8 : -2; n++; }
+  if (hrFB != null) {
+    const d = hrFB >= 18 ? 12 : hrFB >= 14 ? 7 : hrFB >= 11 ? 2 : hrFB <= 8 ? -8 : -2;
+    s += d; n++;
+    if (d >= 7) pos.push({ pts: d, label: hrFB >= 18 ? "Elite HR/FB" : "Strong HR/FB" });
+  }
   const fb = input.flyBallPercent;
-  if (fb != null) { s += fb >= 42 ? 8 : fb >= 38 ? 4 : fb <= 28 ? -6 : 0; n++; }
+  if (fb != null) {
+    const d = fb >= 42 ? 8 : fb >= 38 ? 4 : fb <= 28 ? -6 : 0;
+    s += d; n++;
+    if (d >= 4) pos.push({ pts: d, label: "Fly-ball lean" });
+  }
   const pull = input.pullRatePercent;
-  if (pull != null) { s += pull >= 48 ? 8 : pull >= 43 ? 4 : pull <= 32 ? -4 : 0; n++; }
+  if (pull != null) {
+    const d = pull >= 48 ? 8 : pull >= 43 ? 4 : pull <= 32 ? -4 : 0;
+    s += d; n++;
+    if (d >= 4) pos.push({ pts: d, label: "Pull power" });
+  }
   const xiso = input.xISO;
-  if (xiso != null) { s += xiso >= 0.220 ? 10 : xiso >= 0.180 ? 5 : xiso <= 0.100 ? -8 : 0; n++; }
+  if (xiso != null) {
+    const d = xiso >= 0.220 ? 10 : xiso >= 0.180 ? 5 : xiso <= 0.100 ? -8 : 0;
+    s += d; n++;
+    if (d >= 5) pos.push({ pts: d, label: xiso >= 0.220 ? "Elite xISO" : "Strong xISO" });
+  }
   const xwoba = input.xwOBA;
-  if (xwoba != null) { s += xwoba >= 0.380 ? 6 : xwoba >= 0.340 ? 3 : xwoba <= 0.300 ? -5 : 0; n++; }
+  if (xwoba != null) {
+    const d = xwoba >= 0.380 ? 6 : xwoba >= 0.340 ? 3 : xwoba <= 0.300 ? -5 : 0;
+    s += d; n++;
+    if (d >= 3) pos.push({ pts: d, label: "Strong xwOBA" });
+  }
   const park = input.parkFactor;
-  if (park != null) { s += park >= 1.10 ? 5 : park >= 1.05 ? 2 : park <= 0.92 ? -4 : 0; }
+  if (park != null) {
+    const d = park >= 1.10 ? 5 : park >= 1.05 ? 2 : park <= 0.92 ? -4 : 0;
+    s += d;
+    if (d >= 2) pos.push({ pts: d, label: "Hitter park" });
+  }
   const bs = input.batterHandednessSplits;
   const pt = input.pitcherThrows;
   if (bs && pt) {
     const r = pt === "L" ? bs.hrRateVsLHP : bs.hrRateVsRHP;
-    if (r != null) { s += r >= 0.05 ? 6 : r >= 0.035 ? 2 : r <= 0.02 ? -4 : 0; }
+    if (r != null) {
+      const d = r >= 0.05 ? 6 : r >= 0.035 ? 2 : r <= 0.02 ? -4 : 0;
+      s += d;
+      if (d >= 2) pos.push({ pts: d, label: "Matchup edge" });
+    }
   }
-  if (n === 0) return 50;
-  return Math.max(0, Math.min(100, s));
+  pos.sort((a, b) => b.pts - a.pts);
+  return {
+    score: n === 0 ? 50 : Math.max(0, Math.min(100, s)),
+    drivers: pos.map(p => p.label),
+    hasProfile: n > 0,
+  };
+}
+
+/**
+ * Blend the season power profile into a 0–100 pregame HR-form score. Thin
+ * wrapper over computePregameHrFormBreakdown for callers that only need the
+ * number. Pure, no I/O.
+ */
+export function computePregameHrFormScore(input: HRConversionInput): number {
+  return computePregameHrFormBreakdown(input).score;
+}
+
+// Presence-floor eligibility thresholds — kept in lockstep with the orchestrator's
+// PRESENCE_FLOOR_* constants so the seed nudges match the eligibility gate.
+const SEED_SEASON_HR_RATE_FLOOR = 0.025;
+const SEED_HR_RATE_L30_FLOOR = 0.030;
+const SEED_BARREL_RATE_FLOOR = 0.090;
+
+export interface PregameSeedEligibility {
+  lineupSlot?: number | null;
+  seasonHRRate?: number | null;
+  hrRateLast30?: number | null;
+  barrelRate?: number | null;
+  isHotHitter?: boolean | null;
+}
+
+/**
+ * Pregame seed: blend the season power profile (form breakdown) into a non-zero
+ * 0–100 readiness floor PLUS the "why" drivers, so a pre-contact card reflects
+ * the batter instead of a bare 0.0. Optional eligibility signals (slot / season
+ * HR / L30 / barrel / hot streak) add display drivers and a small capped nudge —
+ * additive and no-op when absent, so callers without rolling stats still get a
+ * clean form-only seed. Clamped to PREGAME_SEED_CAP, which sits BELOW the in-game
+ * ready/attack bands: a pure seed never fires a signal and never affects grading.
+ * Pure, no I/O. Single source of truth for every pre-contact HR-radar row.
+ */
+export function computePregameSeed(
+  input: HRConversionInput,
+  eligibility: PregameSeedEligibility = {},
+): { seedScore: number; formScore: number; drivers: string[] } {
+  const formBreakdown = computePregameHrFormBreakdown(input);
+
+  let seed = 25 + (formBreakdown.score - 50) * 0.6;
+  const drivers = [...formBreakdown.drivers];
+
+  const { lineupSlot, seasonHRRate, hrRateLast30, barrelRate, isHotHitter } = eligibility;
+  if (lineupSlot != null && lineupSlot >= 1 && lineupSlot <= 3) drivers.push(`Slot ${lineupSlot}`);
+  if (seasonHRRate != null && seasonHRRate >= 0.045) { seed += 6; drivers.push("Power bat"); }
+  else if (seasonHRRate != null && seasonHRRate >= SEED_SEASON_HR_RATE_FLOOR) { seed += 3; }
+  if (hrRateLast30 != null && hrRateLast30 >= 0.05) { seed += 5; drivers.push("Hot L30"); }
+  else if (hrRateLast30 != null && hrRateLast30 >= SEED_HR_RATE_L30_FLOOR) { seed += 2; }
+  if (barrelRate != null && barrelRate >= 0.12) { seed += 5; drivers.push("Elite barrel"); }
+  else if (barrelRate != null && barrelRate >= SEED_BARREL_RATE_FLOOR) { seed += 2; }
+  if (isHotHitter) drivers.push("Recent HRs");
+
+  const seedScore = Math.max(0, Math.min(PREGAME_SEED_CAP, Math.round(seed)));
+  // De-dup while preserving order; keep the top 4 for clean chip display.
+  const dedupedDrivers = Array.from(new Set(drivers)).slice(0, 4);
+
+  return { seedScore, formScore: formBreakdown.score, drivers: dedupedDrivers };
 }
 
 // Map the 0–100 pregame form score to a small capped multiplier on baseRate.
