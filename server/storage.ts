@@ -5560,10 +5560,40 @@ export class DatabaseStorage implements IStorage {
         }
       } catch { /* best-effort */ }
       let contactEventsCount = 0;
+      // Compact per-PA projection for the card's collapsed chip + inline
+      // At-Bat Log expand. Additive, transport-only — mirrors the
+      // /api/mlb/hr-radar-analyze priorABs shape (barrel/hard-hit derivation)
+      // so the ladder card and analyze modal render identically. Capped to the
+      // most recent 6 PAs to keep the ladder payload lean.
+      let recentABs: Array<{
+        abNumber: number;
+        exitVelocity: number | null;
+        launchAngle: number | null;
+        distance: number | null;
+        outcome: string;
+        isBarrel: boolean;
+        isHardHit: boolean;
+        perABxBA: number | null;
+        contactGrade: string | null;
+      }> | undefined;
       try {
         const cd = (mlbGameCacheLocal?.contactData?.[r.gameId]?.byPlayerId?.[r.playerId]) as
           { priorABResults?: unknown[] } | undefined;
-        if (cd && Array.isArray(cd.priorABResults)) contactEventsCount = cd.priorABResults.length;
+        if (cd && Array.isArray(cd.priorABResults)) {
+          contactEventsCount = cd.priorABResults.length;
+          const projected = cd.priorABResults.map((raw: any, idx: number) => ({
+            abNumber: idx + 1,
+            exitVelocity: raw?.exitVelocity ?? null,
+            launchAngle: raw?.launchAngle ?? null,
+            distance: raw?.distance ?? null,
+            outcome: raw?.outcome ?? "unknown",
+            isBarrel: (raw?.exitVelocity ?? 0) >= 98 && (raw?.launchAngle ?? 0) >= 20 && (raw?.launchAngle ?? 0) <= 35,
+            isHardHit: (raw?.exitVelocity ?? 0) >= 95,
+            perABxBA: raw?.perABxBA ?? null,
+            contactGrade: raw?.contactGrade ?? null,
+          }));
+          if (projected.length > 0) recentABs = projected.slice(-6);
+        }
       } catch { /* best-effort */ }
       const hasLiveABContext: boolean =
         abContextRow.hasLiveABContext === true ? true
@@ -5750,6 +5780,7 @@ export class DatabaseStorage implements IStorage {
         outcome,
         plateAppearancesTracked,
         hasLiveABContext,
+        recentABs,
         userReasons: liveContactReasons,
         adminReasons,
         // Goldmaster v1 enrichment (additive — never replaces a legacy field).
@@ -6100,6 +6131,23 @@ export interface HrRadarLadderEntry {
   plateAppearancesTracked: number | null;
   /** True iff at least one live AB contact has been logged for this player/game. */
   hasLiveABContext: boolean;
+  /**
+   * Compact per-PA projection (additive, transport-only) for the card's
+   * collapsed chip + inline At-Bat Log expand. Mirrors the
+   * /api/mlb/hr-radar-analyze priorABs shape. Capped to the most recent 6 PAs.
+   * Optional — absent on pregame/legacy rows.
+   */
+  recentABs?: Array<{
+    abNumber: number;
+    exitVelocity: number | null;
+    launchAngle: number | null;
+    distance: number | null;
+    outcome: string;
+    isBarrel: boolean;
+    isHardHit: boolean;
+    perABxBA: number | null;
+    contactGrade: string | null;
+  }>;
   /** Plain-English reasons for users (engine jargon stripped). */
   userReasons: string[];
   /** Raw engine diagnostic strings — admin/debug view only, never default user view. */
