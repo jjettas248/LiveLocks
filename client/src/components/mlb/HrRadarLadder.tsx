@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, AlertTriangle, RefreshCw, Eraser, X, ArrowRight, Clock, DollarSign, Share2, Target } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { AbLogRows, abChipSummary, type AbRow } from "@/components/mlb/AbLogRows";
+import { hrEntryCurrentScore10, hrEntryInitialScore10, hrEntryPeakScore10 } from "@/components/mlb/hrRadarScore";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
 
@@ -152,6 +153,10 @@ export interface HrRadarLadderEntry {
   // the collapsed chip summary + the inline expand on live cards. Absent on
   // older cached rows → card falls back to the plateAppearancesTracked count.
   recentABs?: AbRow[];
+  // Server-stamped (routes.ts) — true once the game is Final, so the client
+  // hides live-only CTAs / timing copy even if the row briefly sat in a live
+  // section. Optional; absent on older cached rows.
+  isGameFinal?: boolean;
 
   // ── Goldmaster v1 — additive user-facing stage layer (optional). ──────────
   userStage?: "track" | "build" | "ready" | "fire" | "resolved";
@@ -554,21 +559,9 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   // (e.g. PATH_F_BLOCKED_BRIDGE caps at 6.0/10 while sitting in Track).
   // Fall back to raw signalScore10 → 0-100 readiness → legacy mirrors so an
   // older cached row never blanks the headline.
-  const score10 =
-    entry.displayCurrentScore10 ??
-    entry.currentSignalScore10 ??
-    (entry.currentReadinessScore != null ? Math.round(entry.currentReadinessScore) / 10 : null) ??
-    (entry.signalStrengthScore != null ? Math.round(entry.signalStrengthScore) / 10 : null) ??
-    (entry.peakSignalScore10 ?? null);
-  const initial10 =
-    entry.displayInitialScore10 ??
-    entry.initialSignalScore10 ??
-    (entry.initialReadinessScore != null ? Math.round(entry.initialReadinessScore) / 10 : null);
-  const peak10 =
-    entry.displayPeakScore10 ??
-    entry.peakSignalScore10 ??
-    (entry.peakReadinessScore != null ? Math.round(entry.peakReadinessScore) / 10 : null) ??
-    (entry.peakScore != null ? Math.round(entry.peakScore) / 10 : null);
+  const score10 = hrEntryCurrentScore10(entry);
+  const initial10 = hrEntryInitialScore10(entry);
+  const peak10 = hrEntryPeakScore10(entry);
   // Watch-only pill — true iff the engine intentionally locked this row at
   // a sub-fire conviction ceiling (server-derived; null on uncapped rows).
   const convictionBadgeLabel = entry.displayCapBadgeLabel ?? null;
@@ -601,7 +594,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
     entry.currentStatus === "resolved" ||
     section === "cashed" ||
     section === "dead" ||
-    (entry as any).isGameFinal === true;
+    entry.isGameFinal === true;
   // Task #121 Step 3 — Take it / Pass are available on every LIVE card
   // (Attack Now / Building / Watch). Resolved sections (cashed/dead) get
   // no actions.
@@ -650,7 +643,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
     if (shareLoading) return;
     setShareLoading(true);
     try {
-      const score10Val = entry.displayCurrentScore10 ?? entry.currentSignalScore10 ?? null;
+      const score10Val = hrEntryCurrentScore10(entry);
       const stage = entry.userStage ?? entry.currentStage ?? "track";
       const stageEmoji: Record<string, string> = { fire: "🔥", ready: "⚡", build: "📈", track: "👀" };
       const emoji = stageEmoji[stage] ?? "🔥";
@@ -947,7 +940,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
       {/* Batch A — Phase 3: "Game final — resolved" stays always-visible
           (status, not detail) when a card briefly slipped into a live
           section after its game ended. */}
-      {(entry as any).isGameFinal && !isResolved && (
+      {entry.isGameFinal && !isResolved && (
         <div
           className="mt-2 flex items-center gap-1 text-[11px] text-zinc-400"
           data-testid={`text-game-final-${entry.playerId}`}
@@ -1049,7 +1042,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
             })()}
 
             {/* Remaining-window timing copy. */}
-            {!(entry as any).isGameFinal && entry.remainingPAExpectation != null && entry.remainingPAExpectation > 0 && (() => {
+            {!entry.isGameFinal && entry.remainingPAExpectation != null && entry.remainingPAExpectation > 0 && (() => {
               const pa = entry.remainingPAExpectation!;
               // Use live game-state inning (currentInning) for late-inning copy —
               // detectedInning is frozen and would misstate urgency for signals
@@ -1389,7 +1382,7 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
     // isGameFinal at the request boundary; we enforce the contract here
     // by filtering out final-game rows from active sections.
     const filterActiveLive = (list: HrRadarLadderEntry[]): HrRadarLadderEntry[] =>
-      list.filter((e) => (e as any).isGameFinal !== true);
+      list.filter((e) => e.isGameFinal !== true);
     const attackP = partitionLive(filterActiveLive(filterDismissed(rawSections.attackNow ?? [])));
     const readyP = partitionLive(filterActiveLive(filterDismissed((rawSections as any).ready ?? [])));
     const buildingP = partitionLive(filterActiveLive(filterDismissed(rawSections.building ?? [])));

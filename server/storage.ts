@@ -6,6 +6,7 @@ import { traceMissedHr } from "./analytics/hrRadarMissTracer";
 import { emitCalledHitLeadTime } from "./analytics/eventEmitters";
 import { applyHrRadarResolvedStateFixup, inferCashedFromTierStatus, CALLED_HIT_OUTCOME_STATUSES, resolveFinalNoHrGrading, reachedHrMaxWindow } from "./mlb/hrRadarSection";
 import { classifyHrMaxWindowAtFinal } from "./mlb/hrMaxWindow";
+import { isBarrel as isCanonicalBarrel } from "./mlb/statcastXBA";
 import {
   HR_RADAR_GOLDMASTER_V1,
   enrichWithUserStage,
@@ -5587,7 +5588,7 @@ export class DatabaseStorage implements IStorage {
             launchAngle: raw?.launchAngle ?? null,
             distance: raw?.distance ?? null,
             outcome: raw?.outcome ?? "unknown",
-            isBarrel: (raw?.exitVelocity ?? 0) >= 98 && (raw?.launchAngle ?? 0) >= 20 && (raw?.launchAngle ?? 0) <= 35,
+            isBarrel: isCanonicalBarrel(raw?.exitVelocity ?? null, raw?.launchAngle ?? null),
             isHardHit: (raw?.exitVelocity ?? 0) >= 95,
             perABxBA: raw?.perABxBA ?? null,
             contactGrade: raw?.contactGrade ?? null,
@@ -6131,6 +6132,9 @@ export interface HrRadarLadderEntry {
   plateAppearancesTracked: number | null;
   /** True iff at least one live AB contact has been logged for this player/game. */
   hasLiveABContext: boolean;
+  /** Stamped by the route layer once the game is Final (additive). Lets the client
+   * hide live-only CTAs/timing even if the row briefly sat in a live section. */
+  isGameFinal?: boolean;
   /**
    * Compact per-PA projection (additive, transport-only) for the card's
    * collapsed chip + inline At-Bat Log expand. Mirrors the

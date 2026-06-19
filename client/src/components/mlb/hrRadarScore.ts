@@ -1,0 +1,43 @@
+import type { HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
+
+// Single source of truth for deriving the user-facing 0-10 HR Radar score
+// from a ladder entry. Previously each surface (ladder card, share card,
+// quick-decide) re-implemented the fallback chain — and the share/quick-decide
+// versions used a weaker 2-step chain that blanked scores the ladder showed.
+// These helpers reproduce LadderCard's robust fallback so every surface agrees.
+//
+// Order matters: conviction-aware DISPLAY score first (so the number matches
+// the section the engine assigned the row to), then the raw signalScore10, then
+// the 0-100 readiness / legacy mirrors divided to the 10-point scale.
+const toScore10 = (v: number | null | undefined): number | null =>
+  v != null ? Math.round(v) / 10 : null;
+
+export function hrEntryCurrentScore10(entry: HrRadarLadderEntry): number | null {
+  return (
+    entry.displayCurrentScore10 ??
+    entry.currentSignalScore10 ??
+    toScore10(entry.currentReadinessScore) ??
+    toScore10(entry.signalStrengthScore) ??
+    entry.peakSignalScore10 ??
+    null
+  );
+}
+
+export function hrEntryInitialScore10(entry: HrRadarLadderEntry): number | null {
+  return (
+    entry.displayInitialScore10 ??
+    entry.initialSignalScore10 ??
+    toScore10(entry.initialReadinessScore) ??
+    null
+  );
+}
+
+export function hrEntryPeakScore10(entry: HrRadarLadderEntry): number | null {
+  return (
+    entry.displayPeakScore10 ??
+    entry.peakSignalScore10 ??
+    toScore10(entry.peakReadinessScore) ??
+    toScore10(entry.peakScore) ??
+    null
+  );
+}
