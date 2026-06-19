@@ -1,6 +1,7 @@
 import type { MLBPropInput, MLBPropOutput, MLBMarket } from "./types";
 import { EXPERIMENTAL_MARKETS } from "./types";
 import { getPitchFamily } from "./pitchTypeNormalizer";
+import { isBarrel } from "./statcastXBA";
 
 export type MarketFamily = "batter_over" | "under" | "hr_radar";
 
@@ -204,9 +205,7 @@ function computeEventBoostComponent(input: MLBPropInput, output: MLBPropOutput):
   const hasHR = priorABs.some(ab => ab.outcome === "home_run" || ab.outcome === "homerun");
   if (hasHR) boost += 40;
 
-  const hasBarrel = priorABs.some(ab =>
-    (ab.exitVelocity ?? 0) >= 98 && (ab.launchAngle ?? 0) >= 25 && (ab.launchAngle ?? 0) <= 35
-  );
+  const hasBarrel = priorABs.some(ab => isBarrel(ab.exitVelocity ?? null, ab.launchAngle ?? null));
   if (hasBarrel) boost += 30;
 
   const ev = input.contactQuality.exitVelocity ?? 0;
@@ -1032,9 +1031,7 @@ export function scoreHRRadar(
     nearHrScore = clamp(50 + (lei.nearHrScore / 0.15) * 50, 0, 100);
   }
   const priorABs = input.contactQuality.priorABResults ?? [];
-  const hasBarrel = priorABs.some(ab =>
-    (ab.exitVelocity ?? 0) >= 98 && (ab.launchAngle ?? 0) >= 25 && (ab.launchAngle ?? 0) <= 35
-  );
+  const hasBarrel = priorABs.some(ab => isBarrel(ab.exitVelocity ?? null, ab.launchAngle ?? null));
   const hasHR = priorABs.some(ab => ab.outcome === "home_run" || ab.outcome === "homerun" || ab.outcome === "hr");
   if (hasBarrel) nearHrScore = clamp(nearHrScore + 25, 0, 100);
   if (hasHR) nearHrScore = clamp(nearHrScore + 30, 0, 100);

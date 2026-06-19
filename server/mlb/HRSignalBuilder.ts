@@ -1,5 +1,6 @@
 import type { MLBPropInput } from "./types";
 import { computeBatSpeedEngine } from "./featureEngineering";
+import { isBarrel as isCanonicalBarrel } from "./statcastXBA";
 
 export type HRIntensity = "weak" | "watch" | "strong" | "imminent";
 
@@ -79,7 +80,6 @@ export interface HRBuildResult {
   };
 }
 
-const EV_BARREL_THRESHOLD = 95;
 const EV_HARD_HIT_THRESHOLD = 95;
 const LA_SWEET_SPOT_LOW = 18;
 const LA_SWEET_SPOT_HIGH = 38;
@@ -172,7 +172,9 @@ export function classifyContactEvent(
   const ev = ab.exitVelocity ?? 0;
   const la = ab.launchAngle ?? 0;
   const dist = ab.distance ?? 0;
-  const isBarrel = ev >= EV_BARREL_THRESHOLD && la >= LA_SWEET_SPOT_LOW && la <= LA_SWEET_SPOT_HIGH;
+  // Canonical EV-scaled Statcast barrel — single source of truth shared with
+  // the display BRL tag, so engine barrel counts and the UI never disagree.
+  const isBarrel = isCanonicalBarrel(ev, la);
 
   let contactClass: HRContactClass = "noiseContact";
 

@@ -4,6 +4,7 @@
 // and triggers engine recalculations.
 
 import { discoverTodaysGames } from "./gameDiscoveryService";
+import { isBarrel } from "./statcastXBA";
 import {
   registerGame,
   removeGame,
@@ -3266,7 +3267,7 @@ export class LiveGameOrchestrator {
         la: lastAB.launchAngle ?? null,
         distance: lastAB.distance ?? null,
         hardHit: (lastAB.exitVelocity ?? 0) >= 95,
-        barrel: (lastAB.exitVelocity ?? 0) >= 98 && (lastAB.launchAngle ?? 0) >= 20 && (lastAB.launchAngle ?? 0) <= 35,
+        barrel: isBarrel(lastAB.exitVelocity ?? null, lastAB.launchAngle ?? null),
       } : null;
 
       const convSnap = alertResult.diagnostics?.hrConversion ? {
@@ -4176,7 +4177,7 @@ export class LiveGameOrchestrator {
                 la: lastAB.launchAngle ?? null,
                 distance: lastAB.distance ?? null,
                 hardHit: (lastAB.exitVelocity ?? 0) >= 95,
-                barrel: (lastAB.exitVelocity ?? 0) >= 98 && (lastAB.launchAngle ?? 0) >= 20 && (lastAB.launchAngle ?? 0) <= 35,
+                barrel: isBarrel(lastAB.exitVelocity ?? null, lastAB.launchAngle ?? null),
               } : null;
 
               const convSnap = alertResult.diagnostics?.hrConversion ? {

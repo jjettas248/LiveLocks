@@ -5,7 +5,7 @@
 import type { PitchMixEntry, PitcherHandednessSplits, BatterHandednessSplits } from "./types";
 import { normalizePitchTypeCode } from "./pitchTypeNormalizer";
 import { fetchBaseballSavantData, fetchSavantGameFeed, getStadiumCoords, windDirectionRelativeToField, isVenueIndoors } from "./dataSources";
-import { classifyContact, computeGameContactProfile } from "./statcastXBA";
+import { classifyContact, computeGameContactProfile, isBarrel as isCanonicalBarrel } from "./statcastXBA";
 import { storage } from "../storage";
 import { todayET } from "../utils/dateUtils";
 
@@ -730,7 +730,7 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
         const fingerprint = `${statsPk}:${playerId}:${abIndex}:${bestEV ?? 0}:${bestLA ?? 0}`;
         if (!persistedContactKeys.has(fingerprint) && bestEV != null) {
           persistedContactKeys.add(fingerprint);
-          const isBarrel = (bestEV ?? 0) >= 98 && (bestLA ?? 0) >= 20 && (bestLA ?? 0) <= 35;
+          const isBarrel = isCanonicalBarrel(bestEV ?? null, bestLA ?? null);
           storage.insertContactEvent({
             playerId,
             playerName: batterName,

@@ -10,6 +10,7 @@ import type {
 } from "./types";
 import { STANDARD_THRESHOLDS, EARLY_EXPLOSIVE_THRESHOLDS, FORM_THRESHOLDS, HR_MIN_QUALIFYING_FACTORS } from "./types";
 import { normalizePercentage } from "../services/normalizationService";
+import { isDeepFly } from "./statcastXBA";
 import { getPitchFamily, normalizePitchTypeCode } from "./pitchTypeNormalizer";
 
 function clampRange(val: number, min: number, max: number): number {
@@ -780,7 +781,7 @@ export function computeHRQualifyingFactors(input: MLBPropInput): HRQualifyingFac
   }
 
   const deepFlys = priorABs.filter(
-    (ab) => ab.outcome === "out" && (ab.distance ?? 0) >= 350 && (ab.launchAngle ?? 0) >= 20
+    (ab) => ab.outcome === "out" && isDeepFly(ab.launchAngle ?? null, ab.distance ?? null)
   );
   if (deepFlys.length > 0) {
     factors.deepFlyout = true;

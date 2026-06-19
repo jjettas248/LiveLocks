@@ -120,6 +120,31 @@ function estimateHRProbability(ev: number, la: number): number {
   return 0.05;
 }
 
+// ── Canonical contact-geometry classifiers (single source of truth) ─────────
+// Baseball is event-based, so we have compute budget between plate appearances
+// to classify contact with the real EV-scaled Statcast barrel rather than a
+// cheap fixed launch-angle band. EVERY barrel check in the codebase (display,
+// DTO, orchestrator snapshots, AND engine scoring) routes through `isBarrel`
+// so the on-screen BRL tag can never disagree with what the engine scored.
+//
+// Official Statcast "barrel": EV ≥ 98 mph, with a launch-angle window that
+// widens as EV rises — ~[26°,30°] at 98 mph, expanding to ~[8°,50°] by 116 mph.
+export function isBarrel(exitVelocity: number | null, launchAngle: number | null): boolean {
+  if (exitVelocity == null || launchAngle == null) return false;
+  if (exitVelocity < 98) return false;
+  const spread = exitVelocity - 98; // 0 at 98 mph → 18 at 116 mph
+  const low = Math.max(8, 26 - spread);          // 26 → 8
+  const high = Math.min(50, 30 + spread * 1.111); // 30 → 50
+  return launchAngle >= low && launchAngle <= high;
+}
+
+// Deep fly geometry (the "almost-out-to-the-track" shape). Outcome ("out") is
+// checked at the call site; this owns the EV-agnostic geometry only.
+export function isDeepFly(launchAngle: number | null, distance: number | null): boolean {
+  if (launchAngle == null || distance == null) return false;
+  return launchAngle >= 20 && distance >= 350;
+}
+
 export function classifyContact(exitVelocity: number | null, launchAngle: number | null): StatcastContactClass {
   if (exitVelocity == null || launchAngle == null) {
     return {
@@ -133,14 +158,14 @@ export function classifyContact(exitVelocity: number | null, launchAngle: number
   const la = launchAngle;
   const xBA = computeXBA(ev, la);
   const xSLG = computeXSLG(ev, la);
-  const isBarrel = ev >= 98 && la >= 20 && la <= 35;
+  const isBarrelHit = isBarrel(ev, la);
   const isHardHit = ev >= 95;
   const isSweetSpot = la >= 8 && la <= 32;
   const isFlare = ev < 90 && la >= 15 && la <= 28 && xBA >= 0.300;
   const hrProb = estimateHRProbability(ev, la);
 
   let contactGrade: StatcastContactClass["contactGrade"];
-  if (isBarrel) contactGrade = "barrel";
+  if (isBarrelHit) contactGrade = "barrel";
   else if (isHardHit && isSweetSpot && xBA >= 0.500) contactGrade = "solid";
   else if (isFlare) contactGrade = "flare";
   else if (la > 50) contactGrade = "popup";
@@ -148,7 +173,7 @@ export function classifyContact(exitVelocity: number | null, launchAngle: number
   else if (ev < 80 && la >= 20) contactGrade = "under";
   else contactGrade = "weak";
 
-  return { xBA, xSLG, isBarrel, isHardHit, isSweetSpot, isFlare, contactGrade, hrProbability: hrProb };
+  return { xBA, xSLG, isBarrel: isBarrelHit, isHardHit, isSweetSpot, isFlare, contactGrade, hrProbability: hrProb };
 }
 
 export function computeGameContactProfile(contacts: Array<{ exitVelocity: number | null; launchAngle: number | null }>): {
