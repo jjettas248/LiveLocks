@@ -122,6 +122,10 @@ export interface HrRadarLadderEntry {
   stageExplanation?: string;
   headlineReason?: string | null;
   supportingReasons?: string[];
+  // Pregame seed (presence-floor rows) — additive, display-only.
+  pregameSeedScore10?: number | null;
+  pregameDrivers?: string[];
+  pregameSeedTier?: string | null;
   // Legacy fields (still populated for backwards compat).
   state: string | null;
   confidenceTier: string | null;
@@ -474,11 +478,17 @@ function HeatingUpMeter({
   current,
   peak,
   playerId,
+  isPregame = false,
 }: {
   initial: number;
   current: number;
   peak: number;
   playerId: string;
+  // When true the row is a pre-contact PRIOR (no live AB yet): render a dashed,
+  // unfilled track with a hollow "current" marker so users can tell a seeded
+  // estimate apart from a live-earned score. Flips to the solid treatment once
+  // live contact arrives.
+  isPregame?: boolean;
 }) {
   const clamp = (n: number) => Math.max(0, Math.min(10, n));
   const ci = clamp(initial);
@@ -488,6 +498,26 @@ function HeatingUpMeter({
   const climb = cc - ci;
   const trackColor =
     climb >= 0.5 ? "bg-emerald-500/30" : climb <= -0.5 ? "bg-orange-500/30" : "bg-muted";
+
+  if (isPregame) {
+    // Pregame seed (prior): dashed outline track, hollow current marker — no
+    // live journey envelope to draw because there's no trajectory yet.
+    return (
+      <div
+        className="relative w-24 h-1.5 rounded-full border border-dashed border-muted-foreground/40 bg-transparent overflow-visible"
+        data-testid={`meter-heating-${playerId}`}
+        data-pregame="true"
+        title={`Pregame seed ${cc.toFixed(1)} — prior, no live at-bats yet`}
+      >
+        {/* Current marker as a hollow ring (◌) — a prior, not a live read. */}
+        <div
+          className="absolute -top-1 w-2.5 h-2.5 rounded-full border-[1.5px] border-muted-foreground/70 bg-transparent"
+          style={{ left: `calc(${pct(cc)} - 5px)` }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       className="relative w-24 h-1.5 rounded-full bg-muted/40 overflow-visible"
@@ -534,6 +564,74 @@ function hrBreakdownBar(pct: number, isHrProb = false): string {
   if (pct >= 45) return "#94a3b8";
   if (pct >= 35) return "#f59e0b";
   return "#ef4444";
+}
+
+type HrBreakdownBarSpec = { label: string; short: string; pct: number | null; isHrProb?: boolean };
+
+/**
+ * Build the 4-metric HR breakdown spec from an entry. Single source of truth so
+ * the compact always-on strip and the expanded panel can never disagree.
+ * Server-stamped values only — the UI just formats them (no re-derivation).
+ */
+function buildHrBreakdownBars(entry: HrRadarLadderEntry): HrBreakdownBarSpec[] {
+  return [
+    { label: "Formation",    short: "FORM", pct: entry.buildScore != null ? Math.min(100, Math.round(entry.buildScore * 10)) : null },
+    { label: "Readiness",    short: "RDY",  pct: entry.currentReadinessScore != null ? Math.min(100, Math.round(entry.currentReadinessScore)) : null },
+    { label: "HR Prob",      short: "HR%",  pct: entry.conversionProbability != null ? Math.min(100, Math.round(entry.conversionProbability * 100)) : null, isHrProb: true },
+    { label: "Pitcher Vuln", short: "PVUL", pct: entry.pitcherHrVulnerability != null ? Math.min(100, Math.round(entry.pitcherHrVulnerability)) : null },
+  ];
+}
+
+/**
+ * Compact always-visible HR breakdown strip — 4 tiny labelled bars in one row.
+ * Renders nothing when fewer than 2 metrics are present.
+ */
+function HrBreakdownStrip({ entry }: { entry: HrRadarLadderEntry }) {
+  const bars = buildHrBreakdownBars(entry).filter(b => b.pct != null);
+  if (bars.length < 2) return null;
+  return (
+    <div
+      className="mt-2 grid grid-cols-4 gap-1.5"
+      data-testid={`strip-hr-breakdown-${entry.playerId}`}
+    >
+      {bars.map(({ short, pct, isHrProb }) => {
+        const color = hrBreakdownBar(pct!, isHrProb);
+        return (
+          <div key={short} className="flex flex-col gap-0.5 min-w-0" title={`${short} ${pct}`}>
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-[8px] text-muted-foreground/80 tracking-wide">{short}</span>
+              <span className="text-[8px] font-bold tabular-nums" style={{ color }}>{pct}</span>
+            </div>
+            <div className="h-1 rounded-full bg-secondary/60 overflow-hidden">
+              <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: color }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Pregame "why" driver chips — verbatim server-stamped power-profile drivers
+ * (e.g. "Hitter park", "Elite xISO", "Slot 2"). Renders nothing when absent.
+ */
+function PregameDriverChips({ entry }: { entry: HrRadarLadderEntry }) {
+  const drivers = entry.pregameDrivers ?? [];
+  if (drivers.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-1" data-testid={`chips-pregame-drivers-${entry.playerId}`}>
+      {drivers.slice(0, 4).map((d, i) => (
+        <span
+          key={i}
+          className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-300 border border-orange-500/20"
+          data-testid={`chip-pregame-driver-${entry.playerId}-${i}`}
+        >
+          {d}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAccept, isAccepted }: CardProps) {
@@ -791,7 +889,21 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
                   {score10.toFixed(1)}
                 </span>
                 <span className="text-[9px] text-muted-foreground leading-none">/ 10</span>
-                {momentumArrow && (
+                {/* #3 — mark a pre-contact PRIOR right on the headline so a seed
+                    score is never mistaken for a live-earned read. Suppressed
+                    once live contact arrives (isPregameOnly flips false). */}
+                {!isResolved && isPregameOnly && (
+                  <span
+                    className="text-[9px] font-medium leading-none text-muted-foreground/80"
+                    data-testid={`tag-pregame-seed-${entry.playerId}`}
+                    title="Pregame seed — prior estimate, no live at-bats yet"
+                  >
+                    Pregame
+                  </span>
+                )}
+                {/* A prior has no trajectory — never show a momentum arrow on a
+                    pregame seed row. */}
+                {!isPregameOnly && momentumArrow && (
                   <span
                     className={`text-sm font-bold leading-none ${momentumArrow.color}`}
                     data-testid={`text-momentum-arrow-${entry.playerId}`}
@@ -819,6 +931,17 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
               title={convictionBadgeReason ?? undefined}
             >
               {convictionBadgeLabel}
+            </span>
+          )}
+          {/* Display-only tier lift for a pregame-seeded power threat. Lives
+              alongside the canonical section; never changes placement/grading. */}
+          {!isResolved && entry.pregameSeedTier && (
+            <span
+              className="text-[9px] font-semibold px-1.5 py-0 rounded-full border whitespace-nowrap text-orange-300 bg-orange-500/10 border-orange-500/30"
+              data-testid={`badge-pregame-tier-${entry.playerId}`}
+              title="Pregame power profile — display-only tier"
+            >
+              {entry.pregameSeedTier}
             </span>
           )}
           {isResolved && section === "dead" && (
@@ -944,6 +1067,44 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
         </ul>
       )}
 
+      {/* Always-visible HR breakdown (moved up from the expand). Pregame driver
+          chips explain a seeded score; the mini 4-metric strip shows the live
+          formation/readiness/HR%/pitcher-vuln at a glance; the compact
+          trajectory shows initial → current · peak without expanding. Full
+          versions remain inside the tap-to-expand detail below. */}
+      {!isResolved && (
+        <>
+          <PregameDriverChips entry={entry} />
+          <HrBreakdownStrip entry={entry} />
+          {score10 != null && initial10 != null && peak10 != null && (
+            isPregameOnly ? (
+              // Pregame seed: a prior has no initial→current→peak journey, so
+              // show the seed value once with the dashed meter instead of a
+              // redundant "x → x · peak x" trajectory.
+              <div
+                className="mt-2 flex items-center gap-1.5 text-[10px] text-muted-foreground font-mono"
+                data-testid={`text-trajectory-compact-${entry.playerId}`}
+              >
+                <span className="text-foreground/80 font-semibold">{score10.toFixed(1)}</span>
+                <span className="text-muted-foreground/60">pregame seed</span>
+                <HeatingUpMeter initial={initial10} current={score10} peak={peak10} playerId={entry.playerId} isPregame />
+              </div>
+            ) : (
+              <div
+                className="mt-2 flex items-center gap-1.5 text-[10px] text-muted-foreground font-mono"
+                data-testid={`text-trajectory-compact-${entry.playerId}`}
+              >
+                <span>{initial10.toFixed(1)}</span>
+                <ArrowRight className="w-3 h-3" />
+                <span className="text-foreground/90 font-semibold">{score10.toFixed(1)}</span>
+                <span className="text-muted-foreground/60">· peak {peak10.toFixed(1)}</span>
+                <HeatingUpMeter initial={initial10} current={score10} peak={peak10} playerId={entry.playerId} />
+              </div>
+            )
+          )}
+        </>
+      )}
+
       {/* Batch A — Phase 3: "Game final — resolved" stays always-visible
           (status, not detail) when a card briefly slipped into a live
           section after its game ended. */}
@@ -975,41 +1136,24 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
           <CollapsibleContent className="mt-2 space-y-2">
             {recentABs.length > 0 && <AbLogRows abs={recentABs} />}
 
-            {/* Numeric trajectory + heating meter (moved here from the
-                always-on view). */}
-            {score10 != null && initial10 != null && peak10 != null && (
-              <div className="space-y-1">
-                <div
-                  className="flex items-center gap-1.5 text-[10px] text-muted-foreground font-mono"
-                  data-testid={`text-trajectory-${entry.playerId}`}
-                >
-                  <span>{initial10.toFixed(1)}</span>
-                  <ArrowRight className="w-3 h-3" />
-                  <span className="text-foreground/90 font-semibold">{score10.toFixed(1)}</span>
-                  <span className="text-muted-foreground/60">· peak {peak10.toFixed(1)}</span>
-                  {momentumDisplay && (
-                    <span className={`ml-1 px-1.5 py-0 rounded border text-[9px] font-medium ${momentumDisplay.color}`}>
-                      {momentumDisplay.label}
-                    </span>
-                  )}
-                </div>
-                <HeatingUpMeter
-                  initial={initial10}
-                  current={score10}
-                  peak={peak10}
-                  playerId={entry.playerId}
-                />
+            {/* Momentum label detail (the compact trajectory + heating meter are
+                now always-on above; this expands it with the momentum bucket). */}
+            {score10 != null && momentumDisplay && (
+              <div
+                className="flex items-center gap-1.5 text-[10px] text-muted-foreground"
+                data-testid={`text-momentum-detail-${entry.playerId}`}
+              >
+                <span>Momentum</span>
+                <span className={`px-1.5 py-0 rounded border text-[9px] font-medium ${momentumDisplay.color}`}>
+                  {momentumDisplay.label}
+                </span>
               </div>
             )}
 
-            {/* HR Breakdown — 4-bar mini panel */}
+            {/* HR Breakdown — full labelled 4-bar panel (shares buildHrBreakdownBars
+                with the always-on compact strip so the two can't disagree). */}
             {(() => {
-              const bars: Array<{ label: string; pct: number | null; isHrProb?: boolean }> = [
-                { label: "Formation",    pct: entry.buildScore != null ? Math.min(100, Math.round(entry.buildScore * 10)) : null },
-                { label: "Readiness",    pct: entry.currentReadinessScore != null ? Math.min(100, Math.round(entry.currentReadinessScore)) : null },
-                { label: "HR Prob",      pct: entry.conversionProbability != null ? Math.min(100, Math.round(entry.conversionProbability * 100)) : null, isHrProb: true },
-                { label: "Pitcher Vuln", pct: entry.pitcherHrVulnerability != null ? Math.min(100, Math.round(entry.pitcherHrVulnerability)) : null },
-              ];
+              const bars = buildHrBreakdownBars(entry);
               if (bars.filter(b => b.pct != null).length < 2) return null;
               return (
                 <div

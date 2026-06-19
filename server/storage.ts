@@ -62,6 +62,7 @@ import {
   type HrRadarSignalEvent,
   type InsertHrRadarSignalEvent,
 } from "@shared/schema";
+import { PREGAME_SEED_CAP, pregameSeedTierLabel } from "@shared/hrRadarConviction";
 import { eq, and, desc, isNull, isNotNull, sql, lt, lte, gte, inArray, ne } from "drizzle-orm";
 
 const HIGH_VOLATILITY_TEAMS = new Set(["BKN", "WAS", "CHA", "POR", "UTA", "DET"]);
@@ -3403,6 +3404,14 @@ export class DatabaseStorage implements IStorage {
      * never crossed PATH A-E threshold) — never into `called_hit`.
      */
     isPresenceOnly?: boolean;
+    /**
+     * Pregame seed (0–PREGAME_SEED_CAP) for presence-floor rows. When present,
+     * the presence-only branch persists this as the initial/current/peak
+     * readiness instead of coercing to 0, so a power threat shows a non-zero
+     * pregame score. Bounded here defensively. Grading detection is still NOT
+     * stamped from a seed — only real in-game contact qualifies a row.
+     */
+    presenceSeedScore?: number | null;
   }): Promise<HrRadarAlert | null> {
     // Embed canonical score contract into diagnosticsSnapshot so consumers
     // can read explicit per-domain values without DB schema changes.
@@ -3460,11 +3469,18 @@ export class DatabaseStorage implements IStorage {
       // eslint-disable-next-line no-param-reassign
       data.readinessScore = data.dynamicReadinessScore;
     } else if (data.isPresenceOnly) {
-      // Task #126 — presence-only rows intentionally have no engine
-      // readiness. Coerce to the floor (0) so storage invariants stay
-      // happy without falsely advertising any heat.
+      // Task #126 — presence-only rows carry no in-game engine readiness, but
+      // a pregame seed (season power profile) may be supplied so the card
+      // reflects the batter instead of a bare 0.0. Bound the seed defensively
+      // to [0, PREGAME_SEED_CAP]; fall back to 0 when no seed is present. This
+      // is a PREGAME prior only — it never stamps grading detection (see the
+      // presence-only short-circuit below), so ROI / W-L / the presence-only→
+      // called_miss matcher are unchanged.
+      const seed = Number(data.presenceSeedScore);
       // eslint-disable-next-line no-param-reassign
-      data.readinessScore = 0;
+      data.readinessScore = Number.isFinite(seed)
+        ? Math.max(0, Math.min(PREGAME_SEED_CAP, seed))
+        : 0;
     } else {
       // ── Goldmaster Detection Ledger Phase 2 (RC1) ─────────────────────
       // The persisted live row MUST be driven by the dynamic HR alert
@@ -5659,6 +5675,27 @@ export class DatabaseStorage implements IStorage {
         .slice(0, 3);
       const stageExplanation: string = summary;
 
+      // ── Pregame seed (presence-floor rows) — additive, display-only. ───────
+      // Surface the seeded /10 score, its "why" drivers, and a display-only
+      // lifted tier label. Read from diagnosticsSnapshot.pregameSeed (stamped
+      // at row creation). All optional — absent on real/legacy rows.
+      const pregameSeedDiag = (diag.pregameSeed ?? null) as
+        | { seedScore?: number; drivers?: string[] }
+        | null;
+      const pregameSeedScore10: number | null =
+        pregameSeedDiag && typeof pregameSeedDiag.seedScore === "number"
+          ? Math.round(Math.max(0, Math.min(100, pregameSeedDiag.seedScore))) / 10
+          : null;
+      const pregameDrivers: string[] = Array.isArray(pregameSeedDiag?.drivers)
+        ? pregameSeedDiag!.drivers.slice(0, 4)
+        : [];
+      // Only lift the tier for still-live, pre-contact seed rows — once real
+      // contact arrives the canonical tier takes over.
+      const pregameSeedTier: string | null =
+        currentStatus === "live" && isPregameOnlyEntry
+          ? pregameSeedTierLabel(pregameSeedScore10)
+          : null;
+
       // ── Goldmaster RESTORE Phase 1+2 — 10-point user-facing score + heating-up meter
       // Internal storage stays on canonical 0-100 (audit-friendly). The wire
       // additionally exposes a 0.0-10.0 score with one decimal as the
@@ -5837,6 +5874,9 @@ export class DatabaseStorage implements IStorage {
         stageExplanation,
         headlineReason,
         supportingReasons,
+        pregameSeedScore10,
+        pregameDrivers,
+        pregameSeedTier,
         state: r.signalState ?? null,
         confidenceTier: r.confidenceTier ?? null,
         peakScore: peakReadinessScore,
@@ -6217,6 +6257,14 @@ export interface HrRadarLadderEntry {
   headlineReason: string | null;
   /** Up to 3 short supporting reasons rendered as bullets under the headline. */
   supportingReasons: string[];
+
+  // ── Pregame seed (presence-floor rows) — additive, display-only. ───────────
+  /** Pregame seed score on the user-facing 0.0-10.0 scale (null for non-seed rows). */
+  pregameSeedScore10?: number | null;
+  /** Top pregame "why" drivers (e.g. "Hitter park", "Elite xISO", "Slot 2"). */
+  pregameDrivers?: string[];
+  /** Display-only lifted tier label from the seed ("LEAN"/"WATCH"); null = no lift. */
+  pregameSeedTier?: string | null;
 
   // ── Legacy fields preserved for backwards compat. ──────────────────────────
   /** @deprecated use currentStage. Internal signal state string. */
