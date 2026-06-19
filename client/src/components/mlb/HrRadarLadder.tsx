@@ -3,7 +3,9 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, AlertTriangle, RefreshCw, Eraser, X, ArrowRight, Clock, DollarSign, Share2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, AlertTriangle, RefreshCw, Eraser, X, ArrowRight, Clock, DollarSign, Share2, Target } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { AbLogRows, abChipSummary, type AbRow } from "@/components/mlb/AbLogRows";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
 
@@ -146,6 +148,10 @@ export interface HrRadarLadderEntry {
   ohLaunchAngle?: number | null;
   ohDistance?: number | null;
   ohPitchType?: string | null;
+  // Compact per-PA At-Bat Log projection (additive, transport-only). Powers
+  // the collapsed chip summary + the inline expand on live cards. Absent on
+  // older cached rows → card falls back to the plateAppearancesTracked count.
+  recentABs?: AbRow[];
 
   // ── Goldmaster v1 — additive user-facing stage layer (optional). ──────────
   userStage?: "track" | "build" | "ready" | "fire" | "resolved";
@@ -573,6 +579,14 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
     : momentum === "holding_strong" ? { label: "Holding strong", color: "text-amber-400 bg-amber-500/10 border-amber-500/30" }
     : momentum === "cooling_off" ? { label: "Cooling off", color: "text-orange-400 bg-orange-500/10 border-orange-500/30" }
     : null;
+  // Compact momentum arrow shown next to the headline score — replaces the
+  // always-on Initial/Current/Peak rows + "Score increased" line. The full
+  // numeric trajectory + heating meter move into the collapsible detail.
+  const momentumArrow =
+    momentum === "heating_up" ? { glyph: "↑", color: "text-emerald-400" }
+    : momentum === "cooling_off" ? { glyph: "↓", color: "text-orange-400" }
+    : momentum === "holding_strong" ? { glyph: "→", color: "text-amber-400" }
+    : null;
   // Phase 1 (3-tier ladder) — "hrMax" is the merged actionable section
   // (FIRE + READY). Treat it like the old attackNow for styling + slip actions.
   const isAttack = section === "attackNow" || section === "hrMax";
@@ -627,6 +641,11 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   const resolvedOutcomeKey = entry.outcome ?? entry.outcomeStatus;
 
   const [shareLoading, setShareLoading] = useState(false);
+  // Per-card inline expand — compact summary by default, full At-Bat Log +
+  // trajectory + breakdown on tap. Live rows only.
+  const [detailOpen, setDetailOpen] = useState(false);
+  const recentABs = entry.recentABs ?? [];
+  const abChip = abChipSummary(recentABs, entry.plateAppearancesTracked);
   const handleShare = async () => {
     if (shareLoading) return;
     setShareLoading(true);
@@ -772,6 +791,15 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
                   {score10.toFixed(1)}
                 </span>
                 <span className="text-[9px] text-muted-foreground leading-none">/ 10</span>
+                {momentumArrow && (
+                  <span
+                    className={`text-sm font-bold leading-none ${momentumArrow.color}`}
+                    data-testid={`text-momentum-arrow-${entry.playerId}`}
+                    title={momentumDisplay?.label ?? undefined}
+                  >
+                    {momentumArrow.glyph}
+                  </span>
+                )}
               </div>
               {inningWindowPill.label && (
                 <span
@@ -783,24 +811,6 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
                 </span>
               )}
             </div>
-          )}
-          {/* Heating-up meter (live rows only). Three-stop indicator showing
-              initial → current → peak on the 10-point scale. */}
-          {!isResolved && score10 != null && initial10 != null && peak10 != null && (
-            <HeatingUpMeter
-              initial={initial10}
-              current={score10}
-              peak={peak10}
-              playerId={entry.playerId}
-            />
-          )}
-          {!isResolved && momentumDisplay && (
-            <span
-              className={`text-[9px] font-medium px-1.5 py-0 rounded border ${momentumDisplay.color}`}
-              data-testid={`text-momentum-${entry.playerId}`}
-            >
-              {momentumDisplay.label}
-            </span>
           )}
           {!isResolved && convictionBadgeLabel && (
             <span
@@ -934,56 +944,9 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
         </ul>
       )}
 
-      {/* HR Breakdown — 4-bar mini panel */}
-      {!isResolved && (() => {
-        const bars: Array<{ label: string; pct: number | null; isHrProb?: boolean }> = [
-          { label: "Formation",    pct: entry.buildScore != null ? Math.min(100, Math.round(entry.buildScore * 10)) : null },
-          { label: "Readiness",    pct: entry.currentReadinessScore != null ? Math.min(100, Math.round(entry.currentReadinessScore)) : null },
-          { label: "HR Prob",      pct: entry.conversionProbability != null ? Math.min(100, Math.round(entry.conversionProbability * 100)) : null, isHrProb: true },
-          { label: "Pitcher Vuln", pct: entry.pitcherHrVulnerability != null ? Math.min(100, Math.round(entry.pitcherHrVulnerability)) : null },
-        ];
-        if (bars.filter(b => b.pct != null).length < 2) return null;
-        return (
-          <div
-            className="mt-2 rounded-lg p-2.5 bg-secondary/20 border border-border/20"
-            data-testid={`panel-hr-breakdown-${entry.playerId}`}
-          >
-            <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">
-              HR Breakdown
-            </div>
-            <div className="space-y-1">
-              {bars.map(({ label, pct, isHrProb }) => {
-                if (pct == null) return null;
-                const color = hrBreakdownBar(pct, isHrProb);
-                return (
-                  <div key={label} className="flex items-center justify-between gap-2">
-                    <span className="text-[9px] text-muted-foreground truncate">{label}</span>
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-16 h-1.5 rounded-full bg-secondary/60 overflow-hidden">
-                        <div
-                          className="h-full rounded-full transition-all"
-                          style={{ width: `${pct}%`, backgroundColor: color }}
-                        />
-                      </div>
-                      <span
-                        className="text-[8px] font-bold tabular-nums w-5 text-right"
-                        style={{ color }}
-                      >
-                        {pct}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Batch A — Phase 3: timing labels. "Game final — resolved" beats
-          everything when isGameFinal is true on a card that briefly slipped
-          into a live section. Otherwise we show the remaining-PA / late-window
-          / next-PA-soon / expires-after copy based on currentInning + PA. */}
+      {/* Batch A — Phase 3: "Game final — resolved" stays always-visible
+          (status, not detail) when a card briefly slipped into a live
+          section after its game ended. */}
       {(entry as any).isGameFinal && !isResolved && (
         <div
           className="mt-2 flex items-center gap-1 text-[11px] text-zinc-400"
@@ -993,46 +956,140 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
           <span>Game final — resolved</span>
         </div>
       )}
-      {!isResolved && !(entry as any).isGameFinal && entry.remainingPAExpectation != null && entry.remainingPAExpectation > 0 && (() => {
-        const pa = entry.remainingPAExpectation!;
-        // Use live game-state inning (currentInning) for late-inning copy —
-        // detectedInning is frozen and would misstate urgency for signals
-        // detected early but now in the bottom of the order.
-        const inn = entry.currentInning ?? entry.detectedInning ?? null;
-        const lateInning = inn != null && inn >= 7;
-        const veryLate = inn != null && inn >= 8;
-        const lowPA = pa <= 2;
-        const critical = pa <= 1;
-        const nextSoon = pa >= 0.5 && pa <= 1.5;
-        const urgent = critical || lowPA || lateInning;
-        const tone = critical
-          ? "text-amber-300"
-          : urgent
-          ? "text-amber-400"
-          : "text-muted-foreground";
-        // Phase 3 timing-label copy. We pick the SINGLE most informative
-        // label rather than stacking — e.g. "Late-window only" already
-        // implies short PA, so we don't add "~1 PA left" on top.
-        let label: string;
-        if (veryLate && lowPA) {
-          label = "Late-window only";
-        } else if (nextSoon) {
-          label = "Next PA likely soon";
-        } else {
-          const paText = `~${pa < 1 ? pa.toFixed(1) : Math.round(pa)} PA left`;
-          const expiresLabel = lateInning ? ` · expires after T${Math.max(8, inn ?? 8)}` : "";
-          label = `${paText}${expiresLabel}`;
-        }
-        return (
-          <div
-            className={`mt-2 flex items-center gap-1 text-[11px] ${tone}`}
-            data-testid={`text-remaining-window-${entry.playerId}`}
+
+      {/* Compact card + tap-to-expand detail (live rows only). The collapsed
+          chip summarizes the At-Bat activity; expanding reveals the full
+          At-Bat Log, score trajectory, heating meter, HR breakdown bars, and
+          remaining-window timing — all moved out of the always-on view to
+          keep the default card scannable. */}
+      {!isResolved && (
+        <Collapsible open={detailOpen} onOpenChange={setDetailOpen} className="mt-2">
+          <CollapsibleTrigger
+            className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground hover:text-foreground transition-colors"
+            data-testid={`button-toggle-ab-detail-${entry.playerId}`}
           >
-            <Clock className="w-3 h-3" />
-            <span>{label}</span>
-          </div>
-        );
-      })()}
+            <ChevronRight className={`w-3 h-3 transition-transform ${detailOpen ? "rotate-90" : ""}`} />
+            <Target className="w-3 h-3" />
+            <span>{abChip ?? "Details"}</span>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-2 space-y-2">
+            {recentABs.length > 0 && <AbLogRows abs={recentABs} />}
+
+            {/* Numeric trajectory + heating meter (moved here from the
+                always-on view). */}
+            {score10 != null && initial10 != null && peak10 != null && (
+              <div className="space-y-1">
+                <div
+                  className="flex items-center gap-1.5 text-[10px] text-muted-foreground font-mono"
+                  data-testid={`text-trajectory-${entry.playerId}`}
+                >
+                  <span>{initial10.toFixed(1)}</span>
+                  <ArrowRight className="w-3 h-3" />
+                  <span className="text-foreground/90 font-semibold">{score10.toFixed(1)}</span>
+                  <span className="text-muted-foreground/60">· peak {peak10.toFixed(1)}</span>
+                  {momentumDisplay && (
+                    <span className={`ml-1 px-1.5 py-0 rounded border text-[9px] font-medium ${momentumDisplay.color}`}>
+                      {momentumDisplay.label}
+                    </span>
+                  )}
+                </div>
+                <HeatingUpMeter
+                  initial={initial10}
+                  current={score10}
+                  peak={peak10}
+                  playerId={entry.playerId}
+                />
+              </div>
+            )}
+
+            {/* HR Breakdown — 4-bar mini panel */}
+            {(() => {
+              const bars: Array<{ label: string; pct: number | null; isHrProb?: boolean }> = [
+                { label: "Formation",    pct: entry.buildScore != null ? Math.min(100, Math.round(entry.buildScore * 10)) : null },
+                { label: "Readiness",    pct: entry.currentReadinessScore != null ? Math.min(100, Math.round(entry.currentReadinessScore)) : null },
+                { label: "HR Prob",      pct: entry.conversionProbability != null ? Math.min(100, Math.round(entry.conversionProbability * 100)) : null, isHrProb: true },
+                { label: "Pitcher Vuln", pct: entry.pitcherHrVulnerability != null ? Math.min(100, Math.round(entry.pitcherHrVulnerability)) : null },
+              ];
+              if (bars.filter(b => b.pct != null).length < 2) return null;
+              return (
+                <div
+                  className="rounded-lg p-2.5 bg-secondary/20 border border-border/20"
+                  data-testid={`panel-hr-breakdown-${entry.playerId}`}
+                >
+                  <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">
+                    HR Breakdown
+                  </div>
+                  <div className="space-y-1">
+                    {bars.map(({ label, pct, isHrProb }) => {
+                      if (pct == null) return null;
+                      const color = hrBreakdownBar(pct, isHrProb);
+                      return (
+                        <div key={label} className="flex items-center justify-between gap-2">
+                          <span className="text-[9px] text-muted-foreground truncate">{label}</span>
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-16 h-1.5 rounded-full bg-secondary/60 overflow-hidden">
+                              <div
+                                className="h-full rounded-full transition-all"
+                                style={{ width: `${pct}%`, backgroundColor: color }}
+                              />
+                            </div>
+                            <span
+                              className="text-[8px] font-bold tabular-nums w-5 text-right"
+                              style={{ color }}
+                            >
+                              {pct}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Remaining-window timing copy. */}
+            {!(entry as any).isGameFinal && entry.remainingPAExpectation != null && entry.remainingPAExpectation > 0 && (() => {
+              const pa = entry.remainingPAExpectation!;
+              // Use live game-state inning (currentInning) for late-inning copy —
+              // detectedInning is frozen and would misstate urgency for signals
+              // detected early but now in the bottom of the order.
+              const inn = entry.currentInning ?? entry.detectedInning ?? null;
+              const lateInning = inn != null && inn >= 7;
+              const veryLate = inn != null && inn >= 8;
+              const lowPA = pa <= 2;
+              const critical = pa <= 1;
+              const nextSoon = pa >= 0.5 && pa <= 1.5;
+              const urgent = critical || lowPA || lateInning;
+              const tone = critical
+                ? "text-amber-300"
+                : urgent
+                ? "text-amber-400"
+                : "text-muted-foreground";
+              // Pick the SINGLE most informative label rather than stacking.
+              let label: string;
+              if (veryLate && lowPA) {
+                label = "Late-window only";
+              } else if (nextSoon) {
+                label = "Next PA likely soon";
+              } else {
+                const paText = `~${pa < 1 ? pa.toFixed(1) : Math.round(pa)} PA left`;
+                const expiresLabel = lateInning ? ` · expires after T${Math.max(8, inn ?? 8)}` : "";
+                label = `${paText}${expiresLabel}`;
+              }
+              return (
+                <div
+                  className={`flex items-center gap-1 text-[11px] ${tone}`}
+                  data-testid={`text-remaining-window-${entry.playerId}`}
+                >
+                  <Clock className="w-3 h-3" />
+                  <span>{label}</span>
+                </div>
+              );
+            })()}
+          </CollapsibleContent>
+        </Collapsible>
+      )}
 
       {/* Task #121 Step 3 — Take it / Pass dual control on live cards
           (Attack Now / Building / Watch). Once the user has taken it, the
