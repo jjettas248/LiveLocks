@@ -396,10 +396,11 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
   if (input.weatherPark.parkFactor >= 1.10) {
     parkWindBoost += 0.4;
   }
-  if (!input.weatherPark.isIndoors &&
-      input.weatherPark.windDirection === "out" &&
-      (input.weatherPark.windSpeed ?? 0) >= 8) {
-    parkWindBoost += 0.4;
+  if (!input.weatherPark.isIndoors && input.weatherPark.windDirection === "out") {
+    const ws = input.weatherPark.windSpeed ?? 0;
+    if (ws >= 18) parkWindBoost += 1.0;
+    else if (ws >= 12) parkWindBoost += 0.7;
+    else if (ws >= 8) parkWindBoost += 0.4;
   }
   const temp = input.weatherPark.temperature ?? 70;
   if (temp >= 85) parkWindBoost += 0.2;

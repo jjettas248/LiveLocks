@@ -455,8 +455,16 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
     };
   }
 
-  if (convProb !== null && convProb < HR_CONVERSION_WATCH_MIN) {
-    console.log(`[HR_ALERT_CONV_GATE] ${input.playerName} game=${input.gameId} — convProb=${(convProb * 100).toFixed(1)}% below watch min ${(HR_CONVERSION_WATCH_MIN * 100).toFixed(0)}%. Suppressing.`);
+  // In hitter-friendly parks during late innings, allow marginal hitters
+  // (IKF pattern) to proceed with a 1.5% floor instead of 3%.
+  // These batters can still HR on favorable pitches even with low base rates.
+  const inningForConvGate = input.inning ?? 1;
+  const parkFactorForConvGate = input.parkFactor ?? 1.0;
+  const convWatchMin = (parkFactorForConvGate >= 1.10 && inningForConvGate >= 7)
+    ? 0.015
+    : HR_CONVERSION_WATCH_MIN;
+  if (convProb !== null && convProb < convWatchMin) {
+    console.log(`[HR_ALERT_CONV_GATE] ${input.playerName} game=${input.gameId} — convProb=${(convProb * 100).toFixed(1)}% below watch min ${(convWatchMin * 100).toFixed(1)}%. Suppressing.`);
     return {
       ...nullResult,
       diagnostics: {
@@ -1117,6 +1125,69 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
       detectedInning: inning,
       alertTier: isPrepare ? "prepare" : "watch",
       diagnostics: { ...baseDiagnostics, alertPath: "PATH_PRE_HR_DANGER", positiveFactors },
+    };
+  }
+
+  // ── PATH_POPUP_PARK_LATE ─────────────────────────────────────────────────
+  // Popup-to-HR precursor in hitter-friendly parks during late innings.
+  // Catches slap-hitters and contact batters who pop up repeatedly (getting
+  // under pitches), then elevate one in a short park (IKF pattern: 2 popups
+  // at 63° and 83°, then a 98.4 mph / 42° HR in B8 of a hitter-friendly park).
+  // Deliberately does NOT require a power profile — the park does the work.
+  // WATCH-only, low confidence ceiling to avoid false positives.
+  if (
+    popupCount >= 2 &&
+    hrShapedCount === 0 &&
+    (input.parkFactor ?? 1.0) >= 1.10 &&
+    (input.inning ?? 1) >= 7 &&
+    softVetoes.length === 0 &&
+    (remainingPA === null || remainingPA >= 1.0)
+  ) {
+    const rawConf = computeConfidence(hrBuildScore, factors, "PATH_POPUP_PARK_LATE", softVetoes.length, convProb);
+    const cappedConf = Math.min(4.0, rawConf);
+    console.log(`[HR_ALERT_PATH_POPUP_PARK_LATE] ${input.playerName} game=${input.gameId} popups=${popupCount} park=${(input.parkFactor ?? 1.0).toFixed(2)} inning=${input.inning ?? 1} score=${hrBuildScore} conv=${convPct}`);
+    return {
+      level: "WATCH",
+      triggerReason: `PATH_POPUP_PARK_LATE:popups${popupCount}_park${(input.parkFactor ?? 1.0).toFixed(2)}_inn${input.inning ?? 1}`,
+      signalState: "FORMATION",
+      decision: "MONITOR",
+      confidenceScore: cappedConf,
+      formattedReason: `${popupCount} popups in hitter-friendly park, late innings — elevation pattern building (conv ${convPct}).`,
+      detectedInning: inning,
+      alertTier: "watch",
+      diagnostics: { ...baseDiagnostics, alertPath: "PATH_POPUP_PARK_LATE", positiveFactors: [...positiveFactors, `${popupCount} dead popups`, `park ${(input.parkFactor ?? 1.0).toFixed(2)}`] },
+    };
+  }
+
+  // ── PATH_LATE_INNING_EV_WATCH ────────────────────────────────────────────
+  // Hard-hit floor for power hitters facing fatigued pitchers in late innings.
+  // A batter who hammered a non-HR-shaped contact early (e.g. a 95.5 mph
+  // groundball at -11° like Bazzana) should remain on watch when the pitcher
+  // is now deep in the count in T7+. The early hard hit shows bat-speed
+  // capability; pitcher fatigue shifts the expected pitch quality.
+  // WATCH-only, moderate confidence ceiling (5.0) — no HR shape seen yet.
+  if (
+    totalHrShaped === 0 &&
+    factors.hardHits >= 1 &&
+    factors.maxEV != null && factors.maxEV >= 95 &&
+    (input.inning ?? 1) >= 7 &&
+    pitcherFavorable &&
+    softVetoes.length === 0 &&
+    (remainingPA === null || remainingPA >= 1.0)
+  ) {
+    const rawConf = computeConfidence(hrBuildScore, factors, "PATH_LATE_INNING_EV_WATCH", softVetoes.length, convProb);
+    const cappedConf = Math.min(5.0, rawConf);
+    console.log(`[HR_ALERT_PATH_LATE_INNING_EV] ${input.playerName} game=${input.gameId} hardHits=${factors.hardHits} maxEV=${factors.maxEV} inning=${input.inning ?? 1} pitcherFav=${pitcherFavorable} score=${hrBuildScore} conv=${convPct}`);
+    return {
+      level: "WATCH",
+      triggerReason: `PATH_LATE_INNING_EV:hardHit${factors.hardHits}_maxEV${factors.maxEV}_inn${input.inning ?? 1}`,
+      signalState: "FORMATION",
+      decision: "MONITOR",
+      confidenceScore: cappedConf,
+      formattedReason: `Hard-hit contact earlier this game (max EV ${factors.maxEV} mph) with pitcher now fatigued in T${input.inning ?? 1} — watching for late-inning power event (conv ${convPct}).`,
+      detectedInning: inning,
+      alertTier: "watch",
+      diagnostics: { ...baseDiagnostics, alertPath: "PATH_LATE_INNING_EV_WATCH", positiveFactors: [...positiveFactors, `${factors.hardHits} hard-hit ball(s)`, `maxEV ${factors.maxEV}`, `pitcher: ${pitcherFatigueState}`] },
     };
   }
 

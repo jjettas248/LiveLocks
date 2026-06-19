@@ -418,9 +418,14 @@ export function recomputeHrAlertState(
   );
 
   const stateChanged = newState !== prev.currentState;
-  // Readiness: up to 40pts from confidenceScore (0–10 → /10 * 40),
-  // up to 60pts from calibrated HR-conversion probability (0–1 → * 60).
-  const confidencePts = Math.max(0, Math.min(40, (alertResult.confidenceScore / 10) * 40));
+  // Readiness: confidence is the primary driver (up to 65pts) because the
+  // calibration table caps all conversion probabilities ≥ 0.40 raw at 0.38,
+  // limiting conversionPts to at most 0.38 × 60 = 22.8 pts regardless of
+  // the 60-pt ceiling. Keeping confidence at 40 produced a formula max of
+  // ~63 (6.3/10), which is below the "ready" state floor (7.5) and made
+  // peak scores appear capped there. At 65pts confidence, elite signals
+  // (confidence=10, calibrated=0.38) reach 65+22.8 = 87.8 → 8.78/10.
+  const confidencePts = Math.max(0, Math.min(65, (alertResult.confidenceScore / 10) * 65));
   const conversionPts = Math.max(0, Math.min(60, effectiveCalibrated * 60));
   const readinessScore = Math.round(confidencePts + conversionPts);
   const clampedReadiness = Math.min(100, Math.max(0, readinessScore));
