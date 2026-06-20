@@ -707,7 +707,7 @@ Three lightweight filters run after calibration and before the result is returne
 | SMS | Twilio |
 | Push | Web Push API (VAPID) |
 | PWA | Service Worker + Web App Manifest |
-| Hosting | Replit Deployments |
+| Hosting | Railway |
 
 ---
 
