@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronUp, Twitter, Loader2 } from "lucide-react";
+import { getAuthToken } from "@/lib/queryClient";
 
 type CampaignBreakdown = {
   campaign: string;
@@ -37,7 +38,11 @@ export function TwitterAttributionPanel() {
   const { data, isLoading, isError } = useQuery<AttributionSummary>({
     queryKey: ["/api/admin/attribution/twitter", days],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/attribution/twitter?days=${days}`, { credentials: "include" });
+      const token = getAuthToken();
+      const res = await fetch(`/api/admin/attribution/twitter?days=${days}`, {
+        credentials: "include",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (!res.ok) throw new Error("failed");
       return res.json();
     },

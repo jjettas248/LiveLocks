@@ -1124,7 +1124,11 @@ function AdminROIPanel() {
     queryKey: ["/api/admin/roi", sportFilter, dateRange],
     queryFn: async () => {
       const url = `/api/admin/roi${queryParams.toString() ? "?" + queryParams.toString() : ""}`;
-      const res = await fetch(url, { credentials: "include" });
+      const token = getAuthToken();
+      const res = await fetch(url, {
+        credentials: "include",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (!res.ok) throw new Error("Failed to load ROI");
       return res.json();
     },

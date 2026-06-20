@@ -12,6 +12,7 @@ import {
   ReferenceLine,
 } from "recharts";
 import { ChevronUp, ChevronDown, Target } from "lucide-react";
+import { getAuthToken } from "@/lib/queryClient";
 
 interface PersistedPlay {
   id: string;
@@ -164,8 +165,10 @@ export function CalibrationDashboard() {
   const { data, isLoading } = useQuery<CalibrationData>({
     queryKey: ["/api/persisted-plays/calibration", sport, market, startDate, endDate],
     queryFn: async () => {
+      const token = getAuthToken();
       const res = await fetch(`/api/persisted-plays/calibration?${queryParams.toString()}`, {
         credentials: "include",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error("Failed to load calibration data");
       return res.json();

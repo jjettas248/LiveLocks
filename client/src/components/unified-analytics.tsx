@@ -189,7 +189,11 @@ function DashboardSection() {
       if (sport !== "all") params.set("sport", sport);
       if (direction !== "all") params.set("direction", direction);
       if (range !== "all") params.set("range", range);
-      const res = await fetch(`/api/performance?${params.toString()}`, { credentials: "include" });
+      const token = getAuthToken();
+      const res = await fetch(`/api/performance?${params.toString()}`, {
+        credentials: "include",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (!res.ok) throw new Error("Failed to fetch performance data");
       return res.json();
     },
