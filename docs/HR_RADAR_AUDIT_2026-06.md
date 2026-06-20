@@ -289,7 +289,17 @@ calibration layer. Goldmaster re-baselined to **v9** (`mlb-goldmaster-v9-2026-06
 - **C4 — starved empirical calibrator.** Count `uncalled_hr` as a cashed positive; lower the per-bin floor
   30/20 → 15/12; and run the calibration refresh once ~60s after boot (not only every 30 min)
   (`hrRadarIntelligence.ts`, `index.ts`). New test coverage in `hrCalibration.test.ts`.
-  **Remaining:** outcome stamps are still in-memory and reset on process restart — durable persistence of
-  `HrRadarOutcomeStamp` (DB-backed) is the follow-up to let the sample accumulate across restarts.
+- **C4 (persistence) — durable outcome stamps.** Outcome stamps were in-memory only and reset on every
+  process restart, so the per-bin sample never accumulated. Added a persisted `hr_radar_outcome_stamps`
+  table (`shared/schema.ts`), an injected fire-and-forget persister + boot hydration in the stamp module
+  (`hrRadarOutcomeStamp.ts`: `setHrRadarOutcomeStampPersister` / `hydrateHrRadarOutcomeStamps`), storage
+  upsert/load methods (`storage.ts`: `persistHrRadarOutcomeStamp` / `loadRecentHrRadarOutcomeStamps`, 21-day
+  window), and boot wiring in `index.ts` (register persister + hydrate before the first calibration run).
+  Injection keeps the module DB-free for unit tests. **Requires `drizzle-kit push:pg`.**
 
 All 16 MLB suites pass; `npx tsc --noEmit` clean.
+
+### DB migration required before deploy
+`drizzle-kit push:pg` — adds `hr_radar_analytics.current_score` (F1) and the `hr_radar_outcome_stamps`
+table (C4). Until applied, the relevant inserts are wrapped in try/catch and no-op (they never crash
+runtime), so archiving/persistence simply won't write until the migration runs.

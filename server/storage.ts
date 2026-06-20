@@ -5,6 +5,8 @@ import { decideHrRadarMatch, QUALIFYING_EVENT_TYPES } from "./validation/hrRadar
 import { traceMissedHr } from "./analytics/hrRadarMissTracer";
 import { emitCalledHitLeadTime } from "./analytics/eventEmitters";
 import { applyHrRadarResolvedStateFixup, inferCashedFromTierStatus, CALLED_HIT_OUTCOME_STATUSES, resolveFinalNoHrGrading, reachedHrMaxWindow } from "./mlb/hrRadarSection";
+import type { HrRadarOutcomeStatus } from "./mlb/hrRadarSection";
+import type { PersistedHrRadarOutcomeStamp } from "./mlb/hrRadarOutcomeStamp";
 import { classifyHrMaxWindowAtFinal } from "./mlb/hrMaxWindow";
 import {
   HR_RADAR_GOLDMASTER_V1,
@@ -33,6 +35,7 @@ import {
   persistedAlerts,
   hrRadarAlerts,
   hrRadarAnalytics,
+  hrRadarOutcomeStamps,
   hrRadarSignalEvents,
   hrOutcomes,
   signalInteractions,
@@ -5326,6 +5329,65 @@ export class DatabaseStorage implements IStorage {
       ? await query.where(and(...conditions)).orderBy(desc(hrRadarAnalytics.createdAt)).limit(filters?.limit ?? 200)
       : await query.orderBy(desc(hrRadarAnalytics.createdAt)).limit(filters?.limit ?? 200);
     return rows;
+  }
+
+  // ── Audit fix C4 — durable HR Radar outcome-stamp persistence ──────────────
+  // Upsert a single stamp (first-write-wins via the unique (gameId, playerId)
+  // index → onConflictDoNothing). Called fire-and-forget from the in-memory
+  // stamp store; wrapped so a DB hiccup can never break runtime grading.
+  async persistHrRadarOutcomeStamp(stamp: {
+    gameId: string;
+    playerId: string;
+    outcomeStatus: string;
+    resolvedAt: number;
+    hitInning?: number | null;
+    alertTier?: string | null;
+    confidenceTier?: string | null;
+    signalState?: string | null;
+    source?: string | null;
+    rawConversionProbability?: number | null;
+  }): Promise<void> {
+    try {
+      await db.insert(hrRadarOutcomeStamps).values({
+        gameId: stamp.gameId,
+        playerId: stamp.playerId,
+        outcomeStatus: stamp.outcomeStatus,
+        hitInning: stamp.hitInning ?? null,
+        alertTier: stamp.alertTier ?? null,
+        confidenceTier: stamp.confidenceTier ?? null,
+        signalState: stamp.signalState ?? null,
+        source: stamp.source ?? null,
+        rawConversionProbability: stamp.rawConversionProbability != null ? String(stamp.rawConversionProbability) : null,
+        resolvedAt: new Date(stamp.resolvedAt),
+      }).onConflictDoNothing();
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_STAMP_PERSIST] failed game=${stamp.gameId} player=${stamp.playerId}: ${err.message}`);
+    }
+  }
+
+  // Load recently-resolved stamps (default 21d) so the calibrator can hydrate
+  // its working set at boot. Returns plain objects matching the in-memory shape.
+  async loadRecentHrRadarOutcomeStamps(days: number = 21): Promise<PersistedHrRadarOutcomeStamp[]> {
+    try {
+      const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const rows = await db.select().from(hrRadarOutcomeStamps)
+        .where(gte(hrRadarOutcomeStamps.resolvedAt, cutoff));
+      return rows.map((r) => ({
+        gameId: r.gameId,
+        playerId: r.playerId,
+        outcomeStatus: r.outcomeStatus as HrRadarOutcomeStatus,
+        resolvedAt: r.resolvedAt ? r.resolvedAt.getTime() : Date.now(),
+        hitInning: r.hitInning ?? null,
+        alertTier: r.alertTier ?? null,
+        confidenceTier: r.confidenceTier ?? null,
+        signalState: r.signalState ?? null,
+        source: (r.source ?? undefined) as PersistedHrRadarOutcomeStamp["source"],
+        rawConversionProbability: r.rawConversionProbability != null ? parseFloat(r.rawConversionProbability) : null,
+      }));
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_STAMP_HYDRATE] load failed: ${err.message}`);
+      return [];
+    }
   }
 
   // ── HR Radar Decision Ladder (Step 11–18 of HR ledger spec) ──

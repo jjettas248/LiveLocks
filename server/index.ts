@@ -602,6 +602,22 @@ app.use((req, res, next) => {
       startHrRadarIntelligenceAggregator();
       startDriverIntelligenceAggregator();
       startShadowAnalyticsAggregator();
+      // Audit fix C4 — wire durable outcome-stamp persistence + boot hydration.
+      // Every newly-stamped outcome is fire-and-forget upserted to the DB, and
+      // the in-memory working set is seeded from recent rows at boot so the
+      // empirical-calibration sample survives process restarts.
+      try {
+        const stampMod = await import("./mlb/hrRadarOutcomeStamp");
+        stampMod.setHrRadarOutcomeStampPersister((s) => {
+          void storage.persistHrRadarOutcomeStamp(s).catch(() => {});
+        });
+        const recent = await storage.loadRecentHrRadarOutcomeStamps(21);
+        const seeded = stampMod.hydrateHrRadarOutcomeStamps(recent);
+        console.log(`[HR_RADAR_STAMP_HYDRATE] seeded=${seeded} from ${recent.length} durable rows`);
+      } catch (err: any) {
+        console.warn(`[HR_RADAR_STAMP_HYDRATE] wiring failed err=${err?.message ?? err}`);
+      }
+
       // Empirical calibration update — runs every 30 minutes using settled
       // outcome stamps. Audit fix C4 — also run once shortly after boot:
       // `setInterval` alone first fires 30 min in, so after every restart the

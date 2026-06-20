@@ -742,6 +742,32 @@ export const insertHrRadarAnalyticsSchema = createInsertSchema(hrRadarAnalytics)
 export type HrRadarAnalyticsRecord = typeof hrRadarAnalytics.$inferSelect;
 export type InsertHrRadarAnalyticsRecord = z.infer<typeof insertHrRadarAnalyticsSchema>;
 
+// Audit fix C4 — durable HR Radar outcome stamps. The empirical calibrator
+// (server/analytics/hrRadarIntelligence.ts) reads settled (predicted-prob →
+// observed-outcome) pairs to remap the static table. Those pairs lived only in
+// an in-memory Map that reset on every process restart, so the per-bin sample
+// never accumulated enough to override the static table. This table persists
+// each stamp so the calibrator can hydrate its working set at boot. One row per
+// (gameId, playerId), first-write-wins (mirrors the in-memory store).
+export const hrRadarOutcomeStamps = pgTable("hr_radar_outcome_stamps", {
+  id: serial("id").primaryKey(),
+  gameId: text("game_id").notNull(),
+  playerId: text("player_id").notNull(),
+  outcomeStatus: text("outcome_status").notNull(),
+  hitInning: integer("hit_inning"),
+  alertTier: text("alert_tier"),
+  confidenceTier: text("confidence_tier"),
+  signalState: text("signal_state"),
+  source: text("source"),
+  rawConversionProbability: numeric("raw_conversion_probability"),
+  resolvedAt: timestamp("resolved_at").defaultNow(),
+}, (table) => ({
+  gamePlayerIdx: uniqueIndex("hr_radar_outcome_stamps_game_player_idx").on(table.gameId, table.playerId),
+  resolvedIdx: index("hr_radar_outcome_stamps_resolved_idx").on(table.resolvedAt),
+}));
+
+export type HrRadarOutcomeStampRow = typeof hrRadarOutcomeStamps.$inferSelect;
+
 export const signalInteractions = pgTable("signal_interactions", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").references(() => users.id),
