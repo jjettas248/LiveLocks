@@ -2,6 +2,10 @@
 // Fetches data from Baseball Savant (Statcast), Ballpark Pal, and ESPN.
 // All calls: try/catch with safe null-fallback returns.
 
+import { getPitchFamily } from "./pitchTypeNormalizer";
+import type { PitchMixEntry } from "./types";
+import type { PitchTypeBatterSplit } from "./hr/hrOverlayTypes";
+
 export interface BallparkPalData {
   parkFactor: number;
   temperature: number | null;
@@ -37,6 +41,14 @@ export interface BaseballSavantData {
   // Batter pull rate — % of BIP hit to the pull side (spray angle from hc_x/hc_y,
   // sign-adjusted for batter stand). Null when hit-coordinate data is unavailable.
   pullRatePercent: number | null;
+  // Phase 2 — overlay aggregates from the same per-pitch CSV.
+  // Batter xSLG + Whiff% by pitch family (Γ arsenal matchup; usagePct attached later).
+  batterPitchSplits: PitchTypeBatterSplit[] | null;
+  // % of BBE classified "topped" (launch_speed_angle == 2) — soft-gate input.
+  // Null when the column/sample is unavailable.
+  toppedPct: number | null;
+  // Season max exit velocity (mph) — power/soft-gate input.
+  maxEV: number | null;
 }
 
 // Cache for Savant data (updated infrequently — season stats)
@@ -48,6 +60,101 @@ function safeNum(v: unknown): number | null {
   if (v == null) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+// Phase 2 overlay aggregates derived from the per-pitch Statcast CSV
+// (`type=details`). Pure over already-fetched rows (no I/O) — unit-testable.
+export interface SavantPitchContactAgg {
+  batterPitchSplits: PitchTypeBatterSplit[] | null; // xSLG + Whiff% by family
+  toppedPct: number | null;
+  maxEV: number | null;
+}
+
+const SAVANT_SWING_DESC = new Set([
+  "hit_into_play", "foul", "swinging_strike", "swinging_strike_blocked",
+  "foul_tip", "foul_bunt", "missed_bunt", "bunt_foul_tip",
+]);
+const SAVANT_WHIFF_DESC = new Set([
+  "swinging_strike", "swinging_strike_blocked", "missed_bunt",
+]);
+
+export function aggregateBatterPitchAndContact(
+  rows: Array<Record<string, string>>,
+): SavantPitchContactAgg {
+  type Fam = "fastball" | "breaking" | "offspeed";
+  type Acc = { swings: number; whiffs: number; xslgSum: number; xslgN: number };
+  const fam: Record<Fam, Acc> = {
+    fastball: { swings: 0, whiffs: 0, xslgSum: 0, xslgN: 0 },
+    breaking: { swings: 0, whiffs: 0, xslgSum: 0, xslgN: 0 },
+    offspeed: { swings: 0, whiffs: 0, xslgSum: 0, xslgN: 0 },
+  };
+  let maxEV: number | null = null;
+  let toppedCount = 0;
+  let lsaClassifiedBIP = 0;
+
+  for (const row of rows) {
+    const family = getPitchFamily(row["pitch_type"]);
+    const desc = (row["description"] ?? "").trim().toLowerCase();
+    // Whiff% needs ALL pitches (not just balls in play).
+    if (family !== "other" && SAVANT_SWING_DESC.has(desc)) {
+      fam[family].swings++;
+      if (SAVANT_WHIFF_DESC.has(desc)) fam[family].whiffs++;
+    }
+
+    const ev = safeNum(row["launch_speed"]);
+    if (ev != null && ev > 0 && ev <= 130 && (maxEV == null || ev > maxEV)) maxEV = ev;
+
+    const bbType = (row["bb_type"] ?? "").trim();
+    if (!bbType) continue; // BBE-only aggregates below
+
+    if (family !== "other") {
+      const xslg = safeNum(row["estimated_slg_using_speedangle"]);
+      if (xslg != null && xslg >= 0 && xslg <= 4.0) {
+        fam[family].xslgSum += xslg;
+        fam[family].xslgN++;
+      }
+    }
+
+    // launch_speed_angle: 1=weak 2=topped 3=under 4=flare/burner 5=solid 6=barrel.
+    const lsa = safeNum(row["launch_speed_angle"]);
+    if (lsa != null) {
+      lsaClassifiedBIP++;
+      if (lsa === 2) toppedCount++;
+    }
+  }
+
+  const families: Fam[] = ["fastball", "breaking", "offspeed"];
+  const splits: PitchTypeBatterSplit[] = families
+    .map((f) => ({
+      pitchType: f,
+      xSLG: fam[f].xslgN > 0 ? parseFloat((fam[f].xslgSum / fam[f].xslgN).toFixed(3)) : null,
+      whiffPct: fam[f].swings >= 10 ? parseFloat(((fam[f].whiffs / fam[f].swings) * 100).toFixed(1)) : null,
+    }))
+    .filter((s) => s.xSLG != null || s.whiffPct != null);
+
+  return {
+    batterPitchSplits: splits.length > 0 ? splits : null,
+    toppedPct: lsaClassifiedBIP >= 20 ? parseFloat(((toppedCount / lsaClassifiedBIP) * 100).toFixed(1)) : null,
+    maxEV,
+  };
+}
+
+// Attach the pitcher's per-family usage% to a batter's pitch-type splits so the
+// Γ arsenal engine can weight damage by what the pitcher actually throws today.
+// Pure; no-op (returns input) when the pitch mix is unavailable.
+export function mergePitchUsage(
+  splits: PitchTypeBatterSplit[] | null | undefined,
+  pitchMix: PitchMixEntry[] | null | undefined,
+): PitchTypeBatterSplit[] | null {
+  if (!splits || splits.length === 0) return splits ?? null;
+  if (!pitchMix || pitchMix.length === 0) return splits;
+  const usage: Record<string, number> = { fastball: 0, breaking: 0, offspeed: 0 };
+  for (const p of pitchMix) {
+    const f = getPitchFamily(p.pitchType);
+    if (f === "other") continue;
+    usage[f] += safeNum(p.percentage) ?? 0;
+  }
+  return splits.map((s) => ({ ...s, usagePct: usage[s.pitchType] || null }));
 }
 
 interface ParkFactors {
@@ -236,6 +343,9 @@ export async function fetchBaseballSavantData(
     xISOSeason: null,
     sweetSpotPercent: null,
     pullRatePercent: null,
+    batterPitchSplits: null,
+    toppedPct: null,
+    maxEV: null,
   };
 
   if (!mlbPlayerId || mlbPlayerId === "undefined") return nullResult;
@@ -263,6 +373,9 @@ export async function fetchBaseballSavantData(
   let xISOSeason: number | null = null;
   let sweetSpotPercent: number | null = null;
   let pullRatePercent: number | null = null;
+  let batterPitchSplits: PitchTypeBatterSplit[] | null = null;
+  let toppedPct: number | null = null;
+  let maxEV: number | null = null;
 
   try {
     const currentYear = new Date().getFullYear();
@@ -401,6 +514,12 @@ export async function fetchBaseballSavantData(
         // Require a minimum spray sample so the rate is stable before it's used.
         if (sprayClassifiedBIP >= 20) pullRatePercent = parseFloat(((pulledBIP / sprayClassifiedBIP) * 100).toFixed(1));
         if (xSLG != null && xBA != null) xISOSeason = parseFloat((xSLG - xBA).toFixed(3));
+
+        // Phase 2 — pitch-family splits + quality-of-contact from the same rows.
+        const agg = aggregateBatterPitchAndContact(rows);
+        batterPitchSplits = agg.batterPitchSplits;
+        toppedPct = agg.toppedPct;
+        maxEV = agg.maxEV;
       }
     } else {
       console.warn("[Savant] Batter CSV fetch failed — trying MLB Stats API fallback");
@@ -476,6 +595,9 @@ export async function fetchBaseballSavantData(
       xISOSeason,
       sweetSpotPercent,
       pullRatePercent,
+      batterPitchSplits,
+      toppedPct,
+      maxEV,
     };
 
     savantCache.set(cacheKey, { data: result, fetchedAt: Date.now() });

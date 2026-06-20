@@ -22,6 +22,7 @@ import {
   type ContactChangeEvent,
   syncPitcherSeasonStats,
   syncBatterRollingStats,
+  syncBatterOrderSplits,
   syncBvPMatchup,
   syncSavantSeasonForLineup,
   syncOpenMeteoWeather,
@@ -34,7 +35,8 @@ import {
   fetchBatterHandednessSplits,
 } from "./dataPullService";
 import { estimateRemainingPA, estimatePitcherRemainingBF } from "./paEstimator";
-import { getMarketParkFactor, isVenueIndoors } from "./dataSources";
+import { getMarketParkFactor, isVenueIndoors, mergePitchUsage } from "./dataSources";
+import { slgForSlot } from "./orderSplits";
 import { calculateMLBPropEdge, hasRealOdds, canShowSignal, updateSelfLearningCalibration } from "./markets";
 import { refreshFullSelfLearning, getLearnedRateAdjustment, getLearnedContactProfile, getContactQualityScore, getPitchTypeHrRisk, getAllCalibrationData } from "./selfLearning";
 import { recordMLBDiagnostic } from "./diagnostics";
@@ -106,6 +108,12 @@ import * as hrRadarOutcomeStampMod from "./hrRadarOutcomeStamp";
 import * as hrRadarSectionMod from "./hrRadarSection";
 import * as hrRadarUserStageMod from "./hrRadarUserStage";
 import * as liveSignalBusMod from "../services/liveSignalBus";
+
+// Max of the finite numbers in a list, or null when none are finite.
+function maxFinite(values: Array<number | null | undefined>): number | null {
+  const finite = values.filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  return finite.length > 0 ? Math.max(...finite) : null;
+}
 
 // ── HR Presence Floor eligibility thresholds (Task #126 / tuned in #128) ────
 // A batter passes the presence floor if ANY of these conditions hold:
@@ -1583,6 +1591,8 @@ export class LiveGameOrchestrator {
               if (mlbPlayerCache.batterRollingStats[batter.playerId]) rollingCount++;
             })
           );
+          // Phase 2 — batting-order SLG/OPS splits from local game history.
+          playerSyncPromises.push(syncBatterOrderSplits(batter.playerId));
           if (stateAfterSync.pitcherInGame?.playerId) {
             const bvpKey = `${batter.playerId}_vs_${stateAfterSync.pitcherInGame.playerId}`;
             playerSyncPromises.push(
@@ -2948,6 +2958,18 @@ export class LiveGameOrchestrator {
       recentOps: p.rollingStats?.last15?.ops ?? null,
       seasonOps: p.rollingStats?.seasonOps ?? null,
       seasonIBBRate: p.rollingStats?.seasonIBBRate ?? null,
+      // Consolidated HR overlay (Phase 2 ingestion) — all optional, no-op absent.
+      maxEV: p.playerContact?.maxEV
+        ?? maxFinite((p.playerContact?.priorABResults ?? []).map((ab: any) => ab?.exitVelocity)),
+      toppedPercent: p.playerContact?.toppedPct ?? null,
+      seasonSLG: p.rollingStats?.seasonSlg ?? null,
+      recentSLG: p.rollingStats?.last15?.slg ?? null,
+      battingOrderSlgSplit: slgForSlot(
+        mlbPlayerCache.batterOrderSplits[p.batter.playerId] ?? { splits: [], overallSlg: null },
+        p.batter.slot,
+      ),
+      // Attach the pitcher's per-family usage% so Γ can weight batter damage.
+      pitchTypeSplits: mergePitchUsage(p.playerContact?.batterPitchSplits, p.pitcherCtx?.pitchMix),
     };
   }
 

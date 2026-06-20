@@ -54,19 +54,49 @@ export function computePowerProfile(input: HROverlayInput): OverlayComponentResu
 }
 
 // ── Γ (Arsenal Matchup Fit) ───────────────────────────────────────────────────
-// Fully no-op until Phase 2 pitch-type batter-split data is ingested.
-// Returns +0 and coverage MISSING so the weight (0.20) is effectively inert.
+// Weights the batter's damage (xSLG) minus a whiff penalty for each pitch family
+// by how often today's pitcher throws it (usagePct). Falls back to equal weight
+// when usage is absent. No-op (+0, MISSING) until Phase 2 splits are ingested.
 export function computeArsenalMatchupFit(input: HROverlayInput): OverlayComponentResult {
-  if (!input.pitchTypeSplits || input.pitchTypeSplits.length === 0) {
-    return {
-      score: 0,
-      coverage: "MISSING",
-      reasons: [],
-      risks: ["PITCH_TRACKING_PARTIAL"],
-    };
+  const splits = input.pitchTypeSplits;
+  if (!splits || splits.length === 0) {
+    return { score: 0, coverage: "MISSING", reasons: [], risks: ["PITCH_TRACKING_PARTIAL"] };
   }
-  // Phase 2 placeholder — data present but scoring not yet implemented.
-  return { score: 0, coverage: "PARTIAL", reasons: [], risks: ["PITCH_TRACKING_PARTIAL"] };
+
+  let totalUsage = 0;
+  for (const s of splits) {
+    if (s.usagePct != null && s.usagePct > 0) totalUsage += s.usagePct;
+  }
+
+  let acc = 0;
+  let coveredWeight = 0;
+  const reasons: string[] = [];
+  for (const s of splits) {
+    if (s.xSLG == null && s.whiffPct == null) continue;
+    const weight = totalUsage > 0 && s.usagePct != null && s.usagePct > 0
+      ? s.usagePct / totalUsage
+      : 1 / splits.length;
+    const baseXslg = LEAGUE_BASELINES.xSlgByPitchType[s.pitchType];
+    const baseWhiff = LEAGUE_BASELINES.whiffPctByPitchType[s.pitchType];
+    const damage = s.xSLG != null && baseXslg ? ratioVsBaseline(s.xSLG, baseXslg, 2.0) : 0;
+    const whiff = s.whiffPct != null && baseWhiff ? ratioVsBaseline(s.whiffPct, baseWhiff, 2.0) : 0;
+    acc += weight * (damage - 0.5 * whiff);
+    coveredWeight += weight;
+    if (s.xSLG != null && damage > 0.3 && weight >= 0.30) reasons.push("ARSENAL_DAMAGE_MATCH");
+  }
+
+  if (coveredWeight <= 0) {
+    return { score: 0, coverage: "MISSING", reasons: [], risks: ["PITCH_TRACKING_PARTIAL"] };
+  }
+  // Normalize over the families actually covered so partial data isn't diluted.
+  const score = winsorize(acc / coveredWeight, 1.0);
+  const coverage: DataCoverage = coveredWeight >= 0.75 ? "FULL" : "PARTIAL";
+  return {
+    score,
+    coverage,
+    reasons: Array.from(new Set(reasons)),
+    risks: coverage === "FULL" ? [] : ["PITCH_TRACKING_PARTIAL"],
+  };
 }
 
 // ── Λ (Launch Topology) ───────────────────────────────────────────────────────

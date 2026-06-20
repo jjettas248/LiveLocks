@@ -2707,6 +2707,30 @@ export class DatabaseStorage implements IStorage {
     return rows;
   }
 
+  // Phase 2 — per-game stat lines (slot + AB/H/TB/BB) for batting-order split
+  // aggregation. Read-only; newest-first, capped to a season window.
+  async getBatterOrderSplitRows(playerId: string, limit = 600): Promise<Array<{
+    battingOrderSlot: number | null;
+    ab: number | null;
+    h: number | null;
+    tb: number | null;
+    bb: number | null;
+  }>> {
+    const rows = await db
+      .select({
+        battingOrderSlot: gamePlayerStats.battingOrderSlot,
+        ab: gamePlayerStats.ab,
+        h: gamePlayerStats.h,
+        tb: gamePlayerStats.tb,
+        bb: gamePlayerStats.bb,
+      })
+      .from(gamePlayerStats)
+      .where(eq(gamePlayerStats.playerId, playerId))
+      .orderBy(desc(gamePlayerStats.createdAt))
+      .limit(limit);
+    return rows;
+  }
+
   async getPlayerHistory(playerId: string, limit = 10): Promise<Array<{
     gameId: string;
     playerName: string;
