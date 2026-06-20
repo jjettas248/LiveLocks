@@ -339,8 +339,13 @@ export function computeCalibrationBuckets(): HrCalibrationBucket[] {
     //   Ambiguous statuses (uncalled_hr / early_hr_insufficient_sample /
     //     late_signal / active / unresolved) are excluded: they lack a clean
     //     predicted-probability → observed-outcome pairing for calibration.
+    // Audit fix C4 — `uncalled_hr` is a genuine HR-occurred outcome (a homer we
+    // tracked but never formally called). When it carries a predicted
+    // probability it is a valid positive for calibration, and excluding it was a
+    // major source of the starved denominator that kept empirical buckets from
+    // ever qualifying. Count it as cashed.
     const isCashed = (status: string): boolean =>
-      CALLED_HIT_OUTCOME_STATUSES.has(status as any);
+      CALLED_HIT_OUTCOME_STATUSES.has(status as any) || status === "uncalled_hr";
     const settled = stamps.filter(s =>
       s.rawConversionProbability != null &&
       (isCashed(s.outcomeStatus) || s.outcomeStatus === "called_miss"),
@@ -358,12 +363,12 @@ export function computeCalibrationBuckets(): HrCalibrationBucket[] {
         return p >= min && p < max;
       });
       const cashed = inBin.filter(s => isCashed(s.outcomeStatus)).length;
-      // Per-bin minimum: dense low bins need n>=30, but high-prob HR events are
-      // rare, so the sparse top bins (min>=0.20) would never reach 30 and the
-      // static table's aggressive >=0.40->0.38 compression would dominate
-      // forever. Require only n>=20 there so genuine elite probability can be
-      // learned empirically instead of being permanently discarded.
-      const minSamples = min >= 0.20 ? 20 : 30;
+      // Per-bin minimum. Audit fix C4 — the old 30/20 floors were almost never
+      // reached (a single process rarely settles 30 graded outcomes per bin in a
+      // bin's lifetime before restart), so empirical buckets stayed empty and the
+      // static table ruled forever. Lower to 15 (dense low bins) / 12 (sparse
+      // high bins, min>=0.20). Laplace smoothing below keeps small-n bins honest.
+      const minSamples = min >= 0.20 ? 12 : 15;
       if (inBin.length >= minSamples) {
         // Lane 2.3 — Laplace smoothing: (cashed+1)/(n+2) so a bin that happens
         // to see all-misses (or all-hits) can't snap the calibrated value to a

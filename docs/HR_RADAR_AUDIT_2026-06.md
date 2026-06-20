@@ -255,3 +255,51 @@ npx tsx server/mlb/ibbAndRecentForm.test.ts
 ```
 Plus `npx tsc --noEmit` clean, and a re-baselined `MLB_GOLDMASTER_VERSION` for any intentional behavior
 change.
+
+---
+
+## 6. Second audit pass (2026-06-18) — export-integrity + calibration fixes
+
+Triggered by an HR Radar export where **Score=0.0 on every row**, every player appeared **twice**, and the
+header read **38 hits / 6 misses / 200 total**. Root-caused and fixed both the telemetry layer and the
+calibration layer. Goldmaster re-baselined to **v9** (`mlb-goldmaster-v9-2026-06-18-hr-radar-calibration-audit`).
+
+### Integrity (display/accounting — no engine math)
+- **F1 — dead `Score` column.** The UI's "Score" read `detectedScore` (= `initialReadinessScore`, stamped 0
+  at creation). Added a persisted `currentScore` column (`shared/schema.ts`), archived
+  `alert.currentReadinessScore` (`storage.ts archiveDailyHrRadarOutcomesToAnalytics`), and rendered it
+  (`unified-analytics.tsx`). **Requires a DB migration: `drizzle-kit push:pg`.** Old rows fall back to peak.
+- **F2 — duplicate rows.** `collapseDuplicateHrRadarOutcomes` harmonizes dupe alert rows but never removes
+  them, so the archiver inserted each twice. Archive now de-dupes by `(playerId)` (HIT wins, else highest
+  peak) and guards against existing `(sessionDate, gameId, playerId)` keys.
+- **F3 — grade accounting.** Hit rate is now graded-only (`hits/(hits+misses)`); non-`hit`/`miss` terminal
+  statuses are surfaced as **ungraded context**, never silent losses (`routes.ts`, `unified-analytics.tsx`).
+- **F5 — peak buckets.** Re-scaled the distribution buckets from a 0–10 assumption to the real 0–100
+  readiness scale (`<25 / 25-45 / 45-65 / 65+`).
+- **F6 — honest result labels.** The table no longer paints every non-hit as "MISS"; ungraded shows "—".
+
+### Calibration (engine — §7a, re-baselined + tested)
+- **C1 — tier separation.** `PREPARE_THRESHOLD` 0.06 → 0.07 (`hrAlertEngine.ts`) so BUILDING sits in a clean
+  ~0.07–0.10 band above the WATCH floor (BUILDING had been converting at/below MONITOR).
+- **C2 — readiness over-weighted loud contact.** The 40-pt confidence half is now gated by a forward-prob
+  ramp (`0.4 + 0.6·min(1, calibrated/PREPARE)`): unchanged for building/attack rows, damped for
+  low-probability rows so a single squared-up ball no longer manufactures a high peak (`hrAlertEngine.ts`).
+- **C3 — top-end under-confidence.** Calibration table top bins lifted (0.30–0.40 → 0.36; ≥0.40 → 0.46) to
+  match the ~57–67% realized rate of attack/STRONG calls (`hrConversionModel.ts`).
+- **C4 — starved empirical calibrator.** Count `uncalled_hr` as a cashed positive; lower the per-bin floor
+  30/20 → 15/12; and run the calibration refresh once ~60s after boot (not only every 30 min)
+  (`hrRadarIntelligence.ts`, `index.ts`). New test coverage in `hrCalibration.test.ts`.
+- **C4 (persistence) — durable outcome stamps.** Outcome stamps were in-memory only and reset on every
+  process restart, so the per-bin sample never accumulated. Added a persisted `hr_radar_outcome_stamps`
+  table (`shared/schema.ts`), an injected fire-and-forget persister + boot hydration in the stamp module
+  (`hrRadarOutcomeStamp.ts`: `setHrRadarOutcomeStampPersister` / `hydrateHrRadarOutcomeStamps`), storage
+  upsert/load methods (`storage.ts`: `persistHrRadarOutcomeStamp` / `loadRecentHrRadarOutcomeStamps`, 21-day
+  window), and boot wiring in `index.ts` (register persister + hydrate before the first calibration run).
+  Injection keeps the module DB-free for unit tests. **Requires `drizzle-kit push:pg`.**
+
+All 16 MLB suites pass; `npx tsc --noEmit` clean.
+
+### DB migration required before deploy
+`drizzle-kit push:pg` — adds `hr_radar_analytics.current_score` (F1) and the `hr_radar_outcome_stamps`
+table (C4). Until applied, the relevant inserts are wrapped in try/catch and no-op (they never crash
+runtime), so archiving/persistence simply won't write until the migration runs.

@@ -199,7 +199,13 @@ function stateKey(gameId: string, playerId: string): string {
 //   2. PATH PEAK / BUILDING is folded into the engine result as a hard
 //      override on the canonical stage (terminal CLOSED still wins).
 const BET_NOW_THRESHOLD = 0.10;
-const PREPARE_THRESHOLD = 0.06;
+// Audit fix C1 — BUILDING converted at/below the MONITOR floor (7.7% vs 19.2%)
+// because the PREPARE band sat one point above WATCH (0.06 vs 0.05), so
+// "building" carried almost no separation from "monitor". Lift PREPARE to 0.07
+// to give the middle tier a cleaner ~0.07–0.10 band that sits strictly above
+// the watch floor. (True monotonicity comes from the empirical calibration loop
+// — see C4 — once it is unstarved.)
+const PREPARE_THRESHOLD = 0.07;
 const WATCH_THRESHOLD = 0.05;
 
 const DECAY_HALF_LIFE_MINUTES = 12;
@@ -419,13 +425,23 @@ export function recomputeHrAlertState(
 
   const stateChanged = newState !== prev.currentState;
   // Readiness: confidence is the primary driver (up to 65pts) because the
-  // calibration table caps all conversion probabilities ≥ 0.40 raw at 0.38,
-  // limiting conversionPts to at most 0.38 × 60 = 22.8 pts regardless of
+  // calibration table caps conversion probability (now 0.46 at the top after
+  // audit fix C3), limiting conversionPts to ~0.46 × 60 ≈ 28 pts regardless of
   // the 60-pt ceiling. Keeping confidence at 40 produced a formula max of
-  // ~63 (6.3/10), which is below the "ready" state floor (7.5) and made
-  // peak scores appear capped there. At 65pts confidence, elite signals
-  // (confidence=10, calibrated=0.38) reach 65+22.8 = 87.8 → 8.78/10.
-  const confidencePts = Math.max(0, Math.min(65, (alertResult.confidenceScore / 10) * 65));
+  // ~63 (6.3/10), below the "ready" floor (7.5) and made peaks appear capped.
+  // At 65pts confidence, elite signals reach the ready band.
+  //
+  // Audit fix C2 (reconciled with main's 65pt rework) — the confidence half
+  // measures loud RECENT contact, not forward HR probability. Left ungated, a
+  // single squared-up ball manufactures a high peak on a batter the model rates
+  // <PREPARE to homer (these dominated the high-peak MISS population). Gate the
+  // 65pt confidence base by a 0..1 ramp on forward probability: fully engaged
+  // at/above the PREPARE threshold (so every building/attack row keeps main's
+  // intended readiness — no drift on live signals), softly damped below it with
+  // a 0.4 floor so confidence still contributes. Conversion half untouched;
+  // never raises readiness above the 65+60 ceiling → caps still bind.
+  const fwdProbGate = 0.4 + 0.6 * Math.min(1, Math.max(0, effectiveCalibrated / PREPARE_THRESHOLD));
+  const confidencePts = Math.max(0, Math.min(65, (alertResult.confidenceScore / 10) * 65)) * fwdProbGate;
   const conversionPts = Math.max(0, Math.min(60, effectiveCalibrated * 60));
   const readinessScore = Math.round(confidencePts + conversionPts);
   const clampedReadiness = Math.min(100, Math.max(0, readinessScore));

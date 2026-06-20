@@ -5,6 +5,8 @@ import { decideHrRadarMatch, QUALIFYING_EVENT_TYPES } from "./validation/hrRadar
 import { traceMissedHr } from "./analytics/hrRadarMissTracer";
 import { emitCalledHitLeadTime } from "./analytics/eventEmitters";
 import { applyHrRadarResolvedStateFixup, inferCashedFromTierStatus, CALLED_HIT_OUTCOME_STATUSES, resolveFinalNoHrGrading, reachedHrMaxWindow } from "./mlb/hrRadarSection";
+import type { HrRadarOutcomeStatus } from "./mlb/hrRadarSection";
+import type { PersistedHrRadarOutcomeStamp } from "./mlb/hrRadarOutcomeStamp";
 import { classifyHrMaxWindowAtFinal } from "./mlb/hrMaxWindow";
 import { isBarrel as isCanonicalBarrel } from "./mlb/statcastXBA";
 import {
@@ -34,6 +36,7 @@ import {
   persistedAlerts,
   hrRadarAlerts,
   hrRadarAnalytics,
+  hrRadarOutcomeStamps,
   hrRadarSignalEvents,
   hrOutcomes,
   signalInteractions,
@@ -4779,23 +4782,67 @@ export class DatabaseStorage implements IStorage {
           eq(hrRadarAlerts.analyticsPersisted, false),
         ));
 
-      for (const alert of alerts) {
-        await db.insert(hrRadarAnalytics).values({
-          sessionDate: alert.sessionDate,
-          gameId: alert.gameId,
-          playerId: alert.playerId,
-          playerName: alert.playerName,
-          team: alert.team,
-          detectedLabel: alert.detectedLabel,
-          hitLabel: alert.hitLabel,
-          detectedScore: alert.initialReadinessScore,
-          peakScore: alert.peakReadinessScore,
-          scoreIncreaseAmount: alert.scoreIncreaseAmount,
-          result: alert.status,
-          confidenceTier: alert.confidenceTier,
-          triggerTags: alert.triggerTags,
-        });
+      // ── Audit fix F2 — de-duplicate before archiving ─────────────────────
+      // `collapseDuplicateHrRadarOutcomes` harmonizes duplicate alert rows
+      // (propagating a hit) but never removes them, so without this every
+      // player landed in the analytics table 2× as byte-identical rows. Pick
+      // one canonical alert per (playerId): a graded HIT wins, otherwise the
+      // row with the highest peak readiness. The other dupes are still flagged
+      // analyticsPersisted so they never re-enter the archive.
+      const num = (v: unknown): number => {
+        const n = typeof v === "number" ? v : parseFloat(String(v ?? ""));
+        return Number.isFinite(n) ? n : 0;
+      };
+      const byPlayer = new Map<string, typeof alerts>();
+      for (const a of alerts) {
+        const list = byPlayer.get(a.playerId) ?? ([] as typeof alerts);
+        list.push(a);
+        byPlayer.set(a.playerId, list);
+      }
+      const canonicalAlerts = Array.from(byPlayer.values()).map((dupes) => {
+        if (dupes.length === 1) return dupes[0];
+        const hit = dupes.find((d) => d.status === "hit");
+        if (hit) return hit;
+        return dupes.reduce((best, d) =>
+          num(d.peakReadinessScore) > num(best.peakReadinessScore) ? d : best, dupes[0]);
+      });
 
+      // Idempotency guard — never insert a second analytics row for a key that
+      // already exists (protects against a re-archive after a partial run).
+      const existing = await db.select({
+        gameId: hrRadarAnalytics.gameId,
+        playerId: hrRadarAnalytics.playerId,
+      }).from(hrRadarAnalytics).where(and(
+        eq(hrRadarAnalytics.sessionDate, sessionDate),
+        eq(hrRadarAnalytics.gameId, gameId),
+      ));
+      const existingKeys = new Set(existing.map((e) => `${e.gameId}_${e.playerId}`));
+
+      for (const alert of canonicalAlerts) {
+        if (!existingKeys.has(`${alert.gameId}_${alert.playerId}`)) {
+          await db.insert(hrRadarAnalytics).values({
+            sessionDate: alert.sessionDate,
+            gameId: alert.gameId,
+            playerId: alert.playerId,
+            playerName: alert.playerName,
+            team: alert.team,
+            detectedLabel: alert.detectedLabel,
+            hitLabel: alert.hitLabel,
+            detectedScore: alert.initialReadinessScore,
+            // Audit fix F1 — archive the real terminal readiness so the UI's
+            // "Score" column reflects the live score instead of a stale 0.
+            currentScore: alert.currentReadinessScore,
+            peakScore: alert.peakReadinessScore,
+            scoreIncreaseAmount: alert.scoreIncreaseAmount,
+            result: alert.status,
+            confidenceTier: alert.confidenceTier,
+            triggerTags: alert.triggerTags,
+          });
+        }
+      }
+
+      // Flag *every* processed alert (canonical + collapsed dupes) as persisted.
+      for (const alert of alerts) {
         await db.update(hrRadarAlerts)
           .set({ analyticsPersisted: true })
           .where(eq(hrRadarAlerts.id, alert.id));
@@ -5299,6 +5346,65 @@ export class DatabaseStorage implements IStorage {
       ? await query.where(and(...conditions)).orderBy(desc(hrRadarAnalytics.createdAt)).limit(filters?.limit ?? 200)
       : await query.orderBy(desc(hrRadarAnalytics.createdAt)).limit(filters?.limit ?? 200);
     return rows;
+  }
+
+  // ── Audit fix C4 — durable HR Radar outcome-stamp persistence ──────────────
+  // Upsert a single stamp (first-write-wins via the unique (gameId, playerId)
+  // index → onConflictDoNothing). Called fire-and-forget from the in-memory
+  // stamp store; wrapped so a DB hiccup can never break runtime grading.
+  async persistHrRadarOutcomeStamp(stamp: {
+    gameId: string;
+    playerId: string;
+    outcomeStatus: string;
+    resolvedAt: number;
+    hitInning?: number | null;
+    alertTier?: string | null;
+    confidenceTier?: string | null;
+    signalState?: string | null;
+    source?: string | null;
+    rawConversionProbability?: number | null;
+  }): Promise<void> {
+    try {
+      await db.insert(hrRadarOutcomeStamps).values({
+        gameId: stamp.gameId,
+        playerId: stamp.playerId,
+        outcomeStatus: stamp.outcomeStatus,
+        hitInning: stamp.hitInning ?? null,
+        alertTier: stamp.alertTier ?? null,
+        confidenceTier: stamp.confidenceTier ?? null,
+        signalState: stamp.signalState ?? null,
+        source: stamp.source ?? null,
+        rawConversionProbability: stamp.rawConversionProbability != null ? String(stamp.rawConversionProbability) : null,
+        resolvedAt: new Date(stamp.resolvedAt),
+      }).onConflictDoNothing();
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_STAMP_PERSIST] failed game=${stamp.gameId} player=${stamp.playerId}: ${err.message}`);
+    }
+  }
+
+  // Load recently-resolved stamps (default 21d) so the calibrator can hydrate
+  // its working set at boot. Returns plain objects matching the in-memory shape.
+  async loadRecentHrRadarOutcomeStamps(days: number = 21): Promise<PersistedHrRadarOutcomeStamp[]> {
+    try {
+      const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const rows = await db.select().from(hrRadarOutcomeStamps)
+        .where(gte(hrRadarOutcomeStamps.resolvedAt, cutoff));
+      return rows.map((r) => ({
+        gameId: r.gameId,
+        playerId: r.playerId,
+        outcomeStatus: r.outcomeStatus as HrRadarOutcomeStatus,
+        resolvedAt: r.resolvedAt ? r.resolvedAt.getTime() : Date.now(),
+        hitInning: r.hitInning ?? null,
+        alertTier: r.alertTier ?? null,
+        confidenceTier: r.confidenceTier ?? null,
+        signalState: r.signalState ?? null,
+        source: (r.source ?? undefined) as PersistedHrRadarOutcomeStamp["source"],
+        rawConversionProbability: r.rawConversionProbability != null ? parseFloat(r.rawConversionProbability) : null,
+      }));
+    } catch (err: any) {
+      console.warn(`[HR_RADAR_STAMP_HYDRATE] load failed: ${err.message}`);
+      return [];
+    }
   }
 
   // ── HR Radar Decision Ladder (Step 11–18 of HR ledger spec) ──
