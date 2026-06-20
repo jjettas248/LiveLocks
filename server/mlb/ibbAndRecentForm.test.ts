@@ -43,18 +43,15 @@ console.log("\n[Recent form + IBB feared-slugger] running cases\n");
     `hot=${hot.hrConversionProbability} base=${baseline.hrConversionProbability}`);
   assert("Cold streak → lower prob than baseline", cold.hrConversionProbability < baseline.hrConversionProbability,
     `cold=${cold.hrConversionProbability} base=${baseline.hrConversionProbability}`);
-  // Recent form now lives in the consolidated overlay's recency sub-engine.
-  assert("Hot streak → positive recency score", hot.overlay.components.recency.score > 0,
-    `score=${hot.overlay.components.recency.score}`);
-  assert("Cold streak → negative recency score", cold.overlay.components.recency.score < 0,
-    `score=${cold.overlay.components.recency.score}`);
-  // Overlay multiplier stays inside its clamp envelope.
-  assert("Hot overlay multiplier within cap [0.60, 1.60]",
-    hot.overlay.overlayMultiplier <= 1.60 && hot.overlay.overlayMultiplier >= 0.60,
-    `mult=${hot.overlay.overlayMultiplier}`);
-  assert("Cold overlay multiplier within cap [0.60, 1.60]",
-    cold.overlay.overlayMultiplier <= 1.60 && cold.overlay.overlayMultiplier >= 0.60,
-    `mult=${cold.overlay.overlayMultiplier}`);
+  // Overlay delta component captures recency signal (replaced recentFormMult).
+  assert("Hot streak → overlay delta positive", hot.overlay.components.delta.score > 0,
+    `delta=${hot.overlay.components.delta.score}`);
+  assert("Cold streak → overlay delta negative", cold.overlay.components.delta.score < 0,
+    `delta=${cold.overlay.components.delta.score}`);
+  assert("Overlay delta winsorized ≤ 1.0", hot.overlay.components.delta.score <= 1.0,
+    `delta=${hot.overlay.components.delta.score}`);
+  assert("Overlay delta winsorized ≥ -1.0", cold.overlay.components.delta.score >= -1.0,
+    `delta=${cold.overlay.components.delta.score}`);
 }
 
 // ── IBB feared-slugger season prior raises probability (positive-only) ────
@@ -91,12 +88,9 @@ console.log("\n[Recent form + IBB feared-slugger] running cases\n");
 // ── No-op: absent recent-form/IBB inputs match baseline exactly ──────────
 {
   const baseline = computeHRConversionProbability(baseInput());
-  assert("Absent recent form → recency sub-engine neutral (score 0)",
-    baseline.overlay.components.recency.score === 0,
-    `score=${baseline.overlay.components.recency.score}`);
-  assert("Absent recent form → recency coverage MISSING",
-    baseline.overlay.components.recency.coverage === "MISSING",
-    `coverage=${baseline.overlay.components.recency.coverage}`);
+  assert("Absent recent form → overlay delta score = 0",
+    baseline.overlay.components.delta.score === 0,
+    `delta=${baseline.overlay.components.delta.score}`);
   assert("Absent IBB context → ibbRespectMult == 1.0", baseline.components.ibbRespectMult === 1.0,
     `mult=${baseline.components.ibbRespectMult}`);
 }

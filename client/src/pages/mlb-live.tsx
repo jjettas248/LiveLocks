@@ -8,11 +8,12 @@ import { LiveBoard } from "@/components/mlb/LiveBoard";
 import { LiveFeed } from "@/components/mlb/LiveFeed";
 import { MlbSignalCard, type MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { HrRadarLadder, type HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
+import { AbLogRows, type AbRow } from "@/components/mlb/AbLogRows";
 import { HrQuickDecide } from "@/components/mlb/HrQuickDecide";
 import { MlbBoxScore, type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
 import { AdminEngineDebugPanel } from "@/components/mlb/AdminEngineDebugPanel";
 import type { MLBSignal } from "@shared/mlbSignal";
-import { applyConvictionCap10, convictionDisplayBadge } from "@shared/hrRadarConviction";
+import { applyConvictionCap10, convictionDisplayBadge, pregameSeedTierLabel } from "@shared/hrRadarConviction";
 import { ProbabilityRing } from "@/components/probability-ring";
 import { StatCard } from "@/components/stat-card";
 import { SkeletonCard } from "@/components/sports/SkeletonCard";
@@ -115,6 +116,81 @@ type EdgeFeedResponse = {
   edgeCacheEntries?: number;
 };
 
+
+type CanonicalGradedOutcome = {
+  sessionDate: string;
+  gameId: string;
+  playerId: string;
+  playerName: string;
+  team: string;
+  finalStatus: "hit" | "miss";
+  detectedLabel: string | null;
+  hitLabel: string | null;
+  hitInning?: number | null;
+  hitHalf?: string | null;
+  detectedScore: number | null;
+  peakScore: number | null;
+  triggerTags: string[];
+  resolvedAt: string | null;
+};
+
+type HrRadarGradingSummary = {
+  wins: number;
+  losses: number;
+  totalGraded: number;
+  hitRate: number;
+};
+
+type HRRadarResponse = {
+  hrEdges: Array<any>;
+  bettableHR: Array<any>;
+  cashedToday: Array<any>;
+  activity?: Array<any>;
+  hrWatchlist: Array<any>;
+  gradedHits?: CanonicalGradedOutcome[];
+  gradedMisses?: CanonicalGradedOutcome[];
+  gradingSummary?: HrRadarGradingSummary;
+};
+
+interface HRAlert {
+  id: number;
+  playerId: string;
+  playerName: string;
+  teamAbbr: string | null;
+  gameId: string;
+  alertType: string;
+  triggerReason: string | null;
+  hrBuildScore: number | null;
+  hrIntensity: string | null;
+  inning: number | null;
+  outcome: string | null;
+  signalState: string | null;
+  decision: string | null;
+  confidenceScore: number | null;
+  formattedReason: string | null;
+  factors: {
+    avgEV: number | null;
+    maxEV: number | null;
+    avgLA: number | null;
+    barrels: number;
+    hardHits: number;
+    deepFlyouts: number;
+    batSpeedScore?: number;
+    pitcherFatigueBoost?: number;
+    parkWindBoost?: number;
+    platoonBoost?: number;
+  } | null;
+  createdAt: string | null;
+}
+
+interface AlertConversionStats {
+  totalAlerts: number;
+  totalHR: number;
+  totalNoHR: number;
+  totalPending: number;
+  conversionRate: number;
+  alertTypeBreakdown: Record<string, { total: number; hr: number; rate: number }>;
+}
 
 const MARKET_LABELS: Record<string, string> = {
   hits: "Hits", total_bases: "Total Bases", hrr: "H+R+RBI",
@@ -1187,6 +1263,15 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
   const peak10 = applyConvictionCap10(rawPeak10, capPath) ?? rawPeak10;
   const convictionBadge = convictionDisplayBadge(capPath);
 
+  // Pregame seed (presence-floor rows): a display-only lifted tier + "why"
+  // drivers from the season power profile. Read straight off the server-stamped
+  // diagnosticsSnapshot.pregameSeed — formatting only, no re-derivation.
+  const pregameSeed = (aAny.diagnosticsSnapshot?.pregameSeed ?? null) as
+    | { seedScore?: number; drivers?: string[] }
+    | null;
+  const pregameDrivers: string[] = Array.isArray(pregameSeed?.drivers) ? pregameSeed!.drivers.slice(0, 4) : [];
+  const pregameSeedTier = !isResolvedAlert ? pregameSeedTierLabel(current10) : null;
+
   const statusColor = alert.status === "hit" ? "text-emerald-400" : alert.status === "miss" ? "text-zinc-400" : "text-blue-400";
   const statusLabel = alert.status === "hit" ? "HIT" : alert.status === "miss" ? "MISS" : "LIVE";
 
@@ -1221,18 +1306,14 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
             </div>
           )}
           {/* Goldmaster RESTORE — Initial / Current / Peak rendered on the
-              USER-FACING 0.0-10.0 scale (one decimal). Internal 0-100
-              readiness is shown as a small admin sub-row underneath for
-              power users; the harness still validates against the 0-100
-              canonical scale on the wire. */}
+              single USER-FACING 0.0-10.0 scale (one decimal). The redundant
+              0-100 readiness sub-row was removed for clarity; the harness
+              still validates against the 0-100 canonical scale on the wire. */}
           <div className="grid grid-cols-3 gap-3">
             <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
               <div className="text-[9px] text-muted-foreground">Initial</div>
               <div className="text-sm font-bold text-foreground" data-testid="text-signal-score-10-initial">
                 {initial10.toFixed(1)}<span className="text-[9px] text-muted-foreground"> / 10</span>
-              </div>
-              <div className="text-[8px] text-muted-foreground/60 font-mono mt-0.5" data-testid="text-readiness-initial">
-                {Math.round(initialScore)}/100
               </div>
             </div>
             <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
@@ -1240,17 +1321,11 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
               <div className="text-sm font-bold" style={{ color: tier.color }} data-testid="text-signal-score-10-current">
                 {current10.toFixed(1)}<span className="text-[9px] text-muted-foreground"> / 10</span>
               </div>
-              <div className="text-[8px] text-muted-foreground/60 font-mono mt-0.5" data-testid="text-readiness-current">
-                {Math.round(currentScore)}/100
-              </div>
             </div>
             <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
               <div className="text-[9px] text-muted-foreground">Peak</div>
               <div className="text-sm font-bold text-foreground" data-testid="text-signal-score-10-peak">
                 {peak10.toFixed(1)}<span className="text-[9px] text-muted-foreground"> / 10</span>
-              </div>
-              <div className="text-[8px] text-muted-foreground/60 font-mono mt-0.5" data-testid="text-readiness-peak">
-                {Math.round(peakScore)}/100
               </div>
             </div>
           </div>
@@ -1289,10 +1364,22 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground font-semibold">
               <Activity className="w-3 h-3" />
-              <span>Tier: {alert.confidenceTier?.toUpperCase()}</span>
+              <span data-testid="text-analyze-tier">Tier: {pregameSeedTier ?? alert.confidenceTier?.toUpperCase()}</span>
+              {pregameSeedTier && (
+                <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-300 border border-orange-500/20 font-semibold">
+                  Pregame
+                </span>
+              )}
               <span className="text-muted-foreground/40">|</span>
               <span>State: {alert.signalState?.toUpperCase()}</span>
             </div>
+            {pregameDrivers.length > 0 && (
+              <div className="flex flex-wrap gap-1" data-testid="chips-analyze-pregame-drivers">
+                {pregameDrivers.map((d, i) => (
+                  <span key={i} className="text-[8px] px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-300 border border-orange-500/20 font-semibold">{d}</span>
+                ))}
+              </div>
+            )}
             {(alert.triggerTags ?? []).length > 0 && (
               <div className="flex flex-wrap gap-1">
                 {(alert.triggerTags as string[]).map((tag: string, i: number) => (
@@ -1305,58 +1392,7 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
             )}
           </div>
 
-          {priorABs.length > 0 && (() => {
-            // Filter out placeholder/padded rows the server appends when boxscore
-            // PA count exceeds tracked contact data. Those rows have outcome
-            // "unknown" and no EV/LA/distance, and would render as bare "PA"
-            // lines with no detail (confusing the user).
-            const renderableABs = priorABs.filter(ab =>
-              (ab.outcome && ab.outcome !== "unknown")
-              || ab.exitVelocity != null
-              || ab.launchAngle != null
-              || ab.distance != null
-            );
-            if (renderableABs.length === 0) return null;
-            return (
-            <div className="space-y-1.5">
-              <div className="text-[10px] font-semibold text-muted-foreground flex items-center gap-1.5">
-                <Target className="w-3 h-3" />
-                <span>At-Bat Log ({renderableABs.length} of {priorABs.length} PAs)</span>
-              </div>
-              <div className="space-y-1">
-                {renderableABs.map((ab) => {
-                  const outcomeLabel = ab.outcome === "hit" ? "Hit" : ab.outcome === "strikeout" ? "K" : ab.outcome === "walk" ? "BB" : ab.outcome === "hbp" ? "HBP" : ab.outcome === "out" ? "Out" : ab.outcome === "error" ? "Error" : "PA";
-                  const outcomeColor = ab.outcome === "hit" ? "text-green-400" : ab.outcome === "strikeout" ? "text-red-400" : ab.outcome === "walk" || ab.outcome === "hbp" ? "text-blue-400" : "text-muted-foreground";
-                  return (
-                    <div key={ab.abNumber} className="flex items-center gap-2 text-[10px] p-1.5 rounded-lg bg-muted/10 border border-border/10">
-                      <span className="w-5 text-center text-muted-foreground font-bold">#{ab.abNumber}</span>
-                      <span className={`font-semibold ${outcomeColor}`}>{outcomeLabel}</span>
-                      {ab.exitVelocity != null && (
-                        <span className={`font-bold tabular-nums ${ab.isBarrel ? "text-orange-400" : ab.isHardHit ? "text-yellow-400" : "text-muted-foreground"}`}>
-                          {ab.exitVelocity.toFixed(1)} mph
-                        </span>
-                      )}
-                      {ab.launchAngle != null && <span className="text-muted-foreground tabular-nums">{ab.launchAngle.toFixed(0)}°</span>}
-                      {ab.distance != null && <span className="text-muted-foreground tabular-nums">{ab.distance.toFixed(0)}ft</span>}
-                      {ab.isBarrel && <span className="text-[8px] px-1 py-0.5 rounded bg-orange-500/15 text-orange-400 font-bold">BRL</span>}
-                      {ab.isHardHit && !ab.isBarrel && <span className="text-[8px] px-1 py-0.5 rounded bg-yellow-500/15 text-yellow-400 font-bold">HH</span>}
-                      {ab.perABxBA != null && ab.perABxBA > 0 && (
-                        <span className={`text-[8px] px-1 py-0.5 rounded font-bold tabular-nums ${ab.perABxBA >= 0.700 ? "bg-emerald-500/15 text-emerald-400" : ab.perABxBA >= 0.400 ? "bg-sky-500/15 text-sky-400" : "text-muted-foreground bg-muted/20"}`} data-testid={`text-xba-ab-${ab.abNumber}`}>
-                          xBA .{(ab.perABxBA * 1000).toFixed(0).padStart(3, "0")}
-                        </span>
-                      )}
-                      {ab.contactGrade && ab.contactGrade !== "weak" && (
-                        <span className={`text-[8px] px-1 py-0.5 rounded font-medium ${ab.contactGrade === "barrel" ? "text-orange-400 bg-orange-500/10" : ab.contactGrade === "solid" ? "text-emerald-400 bg-emerald-500/10" : ab.contactGrade === "flare" ? "text-sky-400 bg-sky-500/10" : "text-muted-foreground bg-muted/10"}`}>
-                          {ab.contactGrade}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            );
-          })()}
+          {priorABs.length > 0 && <AbLogRows abs={priorABs as AbRow[]} />}
 
           {(analyze?.explanationBullets ?? []).length > 0 && (
             <div className="space-y-1">
@@ -1656,48 +1692,6 @@ function GradedMissCard({ outcome }: { outcome: CanonicalGradedOutcome }) {
     </div>
   );
 }
-
-type CanonicalGradedOutcome = {
-  playerId: string;
-  gameId: string;
-  playerName: string;
-  team?: string;
-  triggerTags: string[];
-  hitLabel?: string | null;
-  detectedLabel?: string | null;
-  hitInning?: number | null;
-  hitHalf?: string | null;
-  resolvedAt?: string | null;
-  peakScore?: number | null;
-  detectedScore?: number | null;
-};
-
-type HRRadarResponse = {
-  bettableHR?: any[];
-  hrWatchlist?: any[];
-  cashedToday?: any[];
-  activity?: any[];
-  gradedHits?: CanonicalGradedOutcome[];
-  gradedMisses?: CanonicalGradedOutcome[];
-  gradingSummary?: { wins: number; losses: number; totalGraded: number; hitRate: number } | null;
-};
-
-type HRAlert = {
-  outcome: string | null;
-  alertType: string;
-  playerId: string;
-  gameId: string;
-  [key: string]: any;
-};
-
-type AlertConversionStats = {
-  totalAlerts: number;
-  totalHR: number;
-  totalNoHR: number;
-  totalPending: number;
-  conversionRate: number;
-  alertTypeBreakdown: Record<string, { total: number; hr: number; rate: number }>;
-};
 
 type RadarFilterMode = "all" | "active" | "cashed" | "missed";
 

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Check, X, Zap, ListFilter } from "lucide-react";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { type HrRadarLadderEntry, type HrRadarLadderResponse } from "@/components/mlb/HrRadarLadder";
+import { hrEntryCurrentScore10 } from "@/components/mlb/hrRadarScore";
 
 // Session key format mirrors HrRadarLadder.tsx exactly so Quick Decide and
 // Full Ladder share the same accept/dismiss state across view toggles.
@@ -46,7 +47,7 @@ const STAGE_CONFIG = {
 type ActionableStage = "fire" | "ready";
 
 function getDisplayScore(entry: HrRadarLadderEntry): number | null {
-  return entry.displayCurrentScore10 ?? entry.currentSignalScore10 ?? null;
+  return hrEntryCurrentScore10(entry);
 }
 
 function getReasons(entry: HrRadarLadderEntry): string[] {

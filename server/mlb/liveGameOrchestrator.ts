@@ -4,6 +4,7 @@
 // and triggers engine recalculations.
 
 import { discoverTodaysGames } from "./gameDiscoveryService";
+import { isBarrel } from "./statcastXBA";
 import {
   registerGame,
   removeGame,
@@ -81,6 +82,8 @@ import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, clearGameCooldowns, type HRAlertInput } from "./evaluateHRAlert";
 import { recomputeHrAlertState, clearGameHrStates, getHrAlertState, mapDynamicStateToStage, computeUnifiedCanonicalStage, seedHrAlertDetection, closeHrAlertOnHit, deriveCanonicalPromotionIntent, type HRAlertSnapshot, type HrRadarStage } from "./hrAlertEngine";
+import { computePregameSeed, type HRConversionInput } from "./hrConversionModel";
+import { PREGAME_SEED_CAP } from "@shared/hrRadarConviction";
 import {
   recomputeNonHrSignalState,
   closeNonHrSignalOnHit,
@@ -129,6 +132,7 @@ import * as liveSignalBusMod from "../services/liveSignalBus";
 export const PRESENCE_FLOOR_SEASON_HR_RATE = 0.025;
 export const PRESENCE_FLOOR_HR_RATE_L30 = 0.030;
 export const PRESENCE_FLOOR_BARREL_RATE = 0.090;
+
 
 // ── OnlyHomers data caches (refreshed periodically) ─────────────────────────
 let ohHotHitters7d: Map<string, number> = new Map();
@@ -2000,6 +2004,7 @@ export class LiveGameOrchestrator {
     // at 0, and the eventual HR was graded uncalled. Scanning a small
     // recent window preserves peak detection across the next AB.
     const _priorAbsForNearHr: any[] = (input.contactQuality?.priorABResults ?? []);
+    const _nearHrParkFactor = input.weatherPark?.parkFactor ?? null;
     const nearHrPeak = detectNearHrContactPeak(
       _priorAbsForNearHr.map((ab: any) => ({
         ev: ab?.exitVelocity ?? null,
@@ -2013,6 +2018,9 @@ export class LiveGameOrchestrator {
         // high-xBA hard out are strong pre-HR evidence (composition only).
         outcome: ab?.outcome ?? null,
         hitType: ab?.hitType ?? null,
+        // Park-aware LA upper bound: hitter-friendly parks extend WATCH from
+        // 35° to 42° so elevated fly balls in short parks aren't missed.
+        parkFactor: _nearHrParkFactor,
       })),
       5,
     );
@@ -2993,6 +3001,88 @@ export class LiveGameOrchestrator {
       console.log(`[HR_RADAR_ROSTER_SCAN] game=${gameId} evaluating ${allChanges.length} batters with contact data`);
       await this.reevaluateHRRadarOnContact(gameId, allChanges);
     }
+
+    // Pregame seeding: for batters with NO prior ABs, compute an environment+profile
+    // prior score and initialize the HR Radar to "watch" if strong enough.
+    // This prevents first-AB HRs (T1 homers) from being completely invisible
+    // pregame when favorable conditions exist (park + BVP + pitcher vulnerability).
+    const weatherCache = mlbGameCache.weather[gameId];
+    const pitcher = state.pitcherInGame;
+    const pitcherCtxCache = mlbGameCache.pitcherContext?.[gameId];
+    const pitcherCtx = pitcher?.playerId ? pitcherCtxCache?.byPitcherId?.[pitcher.playerId] : undefined;
+    const pitcherEra = pitcher?.playerId ? mlbPlayerCache.pitcherSeasonStats[pitcher.playerId]?.era ?? null : null;
+
+    const venuePf = getMarketParkFactor(weatherCache?.venueName ?? null, "home_runs", null);
+    const resolvedWindSpeed = weatherCache?.windSpeed ?? null;
+    const resolvedWindDir = weatherCache?.windDirection ?? null;
+    const isIndoors = weatherCache?.isIndoors ?? isVenueIndoors(weatherCache?.venueName);
+
+    for (const batter of state.battingOrder) {
+      const playerContact = contactCache?.byPlayerId?.[batter.playerId];
+      const priorABs = (playerContact?.priorABResults ?? []) as any[];
+      if (priorABs.length > 0) continue; // already handled above
+
+      const existingCanon = getCanonicalHrRadarState(gameId, batter.playerId);
+      if (existingCanon && existingCanon.lifecycleState !== "inactive") continue; // already seeded or active
+
+      let pregameScore = 0;
+
+      // Park factor
+      if (venuePf >= 1.15) pregameScore += 0.8;
+      else if (venuePf >= 1.10) pregameScore += 0.4;
+
+      // Wind
+      if (!isIndoors && resolvedWindDir === "out") {
+        const ws = resolvedWindSpeed ?? 0;
+        if (ws >= 18) pregameScore += 1.0;
+        else if (ws >= 12) pregameScore += 0.7;
+        else if (ws >= 8) pregameScore += 0.4;
+      }
+
+      // Pitcher ERA vulnerability
+      if (pitcherEra != null) {
+        if (pitcherEra >= 6.0) pregameScore += 0.6;
+        else if (pitcherEra >= 5.0) pregameScore += 0.4;
+      }
+
+      // BVP HR history vs today's pitcher
+      if (pitcher) {
+        const bvpKey = `${batter.playerId}_vs_${pitcher.playerId}`;
+        const bvpData = mlbPlayerCache.bvpMatchups[bvpKey];
+        if (bvpData && bvpData.atBats >= 5) {
+          if (bvpData.homeRuns >= 2) pregameScore += 0.7;
+          else if (bvpData.homeRuns >= 1 && bvpData.atBats <= 15) pregameScore += 0.5;
+          else if (bvpData.homeRuns / bvpData.atBats > 0.08) pregameScore += 0.3;
+        }
+      }
+
+      // Hot streak
+      const ohData = getOnlyHomersEnrichment(batter.playerName);
+      if (ohData.isHotHitter) {
+        pregameScore += ohData.hotHitterPeriod === "7d" ? 0.8 : ohData.hotHitterPeriod === "14d" ? 0.5 : 0.3;
+      }
+
+      if (pregameScore >= 1.5) {
+        console.log(`[HR_RADAR_PREGAME_SEED] game=${gameId} player=${batter.playerName} score=${pregameScore.toFixed(2)} pf=${venuePf.toFixed(2)} wind=${resolvedWindDir ?? "none"}@${resolvedWindSpeed ?? 0}mph era=${pitcherEra ?? "n/a"} → seeding watch`);
+        try {
+          upsertCanonicalHrRadarState({
+            gameId,
+            playerId: batter.playerId,
+            playerName: batter.playerName,
+            team: batter.team ?? null,
+            event: "CONTACT_EVIDENCE",
+            context: {
+              reason: `pregame_priors_score${pregameScore.toFixed(2)}`,
+              inning: state.inning ?? 0,
+            },
+            triggerReasons: [`pregame_priors:pf${venuePf.toFixed(2)}_era${pitcherEra ?? "n/a"}`],
+            triggerTags: ["PREGAME_SEED"],
+          });
+        } catch (e) {
+          // Never block the scan on a canonical store failure.
+        }
+      }
+    }
   }
 
   async reevaluateHRRadarOnContact(gameId: string, contactChanges: ContactChangeEvent[]): Promise<void> {
@@ -3153,6 +3243,29 @@ export class LiveGameOrchestrator {
       if (ohData.isHotHitter) {
         const boost = ohData.hotHitterPeriod === "7d" ? 0.8 : ohData.hotHitterPeriod === "14d" ? 0.5 : 0.3;
         hrInput.hotHitterBoost = boost;
+      } else if (rollingStats) {
+        // Cold streak penalty: well below their own HR pace AND extended drought
+        const trend = hrInput.hrTrend;
+        if (trend) {
+          const abSince = trend.abSinceLastHR ?? 0;
+          const hrRate30 = trend.hrRateLast30 ?? 0;
+          const seasonAB = trend.seasonTotalAB ?? 0;
+          if (seasonAB >= 50 && abSince >= 30 && hrRate30 < 0.02) {
+            hrInput.hotHitterBoost = -0.3;
+          }
+        }
+      }
+
+      // BVP HR priming: batter has history of HRs vs this specific pitcher
+      if (pitcher) {
+        const hrBvpKey = `${batter.playerId}_vs_${pitcher.playerId}`;
+        const hrBvpData = mlbPlayerCache.bvpMatchups[hrBvpKey];
+        if (hrBvpData && hrBvpData.atBats >= 5) {
+          const bvpHrRate = hrBvpData.homeRuns / hrBvpData.atBats;
+          if (hrBvpData.homeRuns >= 2) hrInput.bvpHrBoost = 0.7;
+          else if (hrBvpData.homeRuns >= 1 && hrBvpData.atBats <= 15) hrInput.bvpHrBoost = 0.5;
+          else if (bvpHrRate > 0.08) hrInput.bvpHrBoost = 0.3;
+        }
       }
 
       // Gap 3: pre-game pitcher fatigue for HR Radar path
@@ -3266,7 +3379,7 @@ export class LiveGameOrchestrator {
         la: lastAB.launchAngle ?? null,
         distance: lastAB.distance ?? null,
         hardHit: (lastAB.exitVelocity ?? 0) >= 95,
-        barrel: (lastAB.exitVelocity ?? 0) >= 98 && (lastAB.launchAngle ?? 0) >= 20 && (lastAB.launchAngle ?? 0) <= 35,
+        barrel: isBarrel(lastAB.exitVelocity ?? null, lastAB.launchAngle ?? null),
       } : null;
 
       const convSnap = alertResult.diagnostics?.hrConversion ? {
@@ -4176,7 +4289,7 @@ export class LiveGameOrchestrator {
                 la: lastAB.launchAngle ?? null,
                 distance: lastAB.distance ?? null,
                 hardHit: (lastAB.exitVelocity ?? 0) >= 95,
-                barrel: (lastAB.exitVelocity ?? 0) >= 98 && (lastAB.launchAngle ?? 0) >= 20 && (lastAB.launchAngle ?? 0) <= 35,
+                barrel: isBarrel(lastAB.exitVelocity ?? null, lastAB.launchAngle ?? null),
               } : null;
 
               const convSnap = alertResult.diagnostics?.hrConversion ? {
@@ -4225,6 +4338,37 @@ export class LiveGameOrchestrator {
               const enginePaCount = (playerContact?.priorABResults ?? []).length;
               const engineHasLiveAB = contactSnap !== null;
 
+              // ── #1 — pregame seed floor for pre-contact "real" rows ──────────
+              // A real engine row evaluated before any live AB (e.g. a
+              // PATH_E_CONVICTION pre-contact WATCH) otherwise surfaces a bare
+              // ~0 readiness. Stamp the same form-based seed used by the
+              // presence-floor pass so EVERY pre-contact card carries a baseline.
+              // The seed is a FLOOR only and is never applied once live contact
+              // arrives (engineHasLiveAB === true) — a live score is never lowered
+              // or overwritten by the prior.
+              let seededReadiness = output.hrBuildScore;
+              let pregameSeedSnap: { seedScore: number; formScore: number; drivers: string[] } | null = null;
+              if (!engineHasLiveAB) {
+                const ohSeed = getOnlyHomersEnrichment(batter.playerName);
+                const seedRes = computePregameSeed({
+                  hrFBRatio: playerContact?.hrFBRatio ?? null,
+                  flyBallPercent: playerContact?.flyBallPercent ?? null,
+                  pullRatePercent: playerContact?.pullRatePercent ?? null,
+                  xISO: playerContact?.xISOSeason ?? null,
+                  xwOBA: playerContact?.xwOBASeason ?? null,
+                  parkFactor: getMarketParkFactor(weatherCache?.venueName ?? null, "home_runs", null),
+                  pitcherThrows: state.pitcherInGame?.throws ?? null,
+                } as HRConversionInput, {
+                  lineupSlot: batter.slot ?? null,
+                  seasonHRRate: rollingStats?.seasonHRRate ?? null,
+                  hrRateLast30: rollingStats?.hrRateLast30 ?? null,
+                  barrelRate: playerContact?.barrelPct != null ? playerContact.barrelPct / 100 : null,
+                  isHotHitter: ohSeed.isHotHitter,
+                });
+                pregameSeedSnap = seedRes;
+                seededReadiness = Math.max(output.hrBuildScore ?? 0, seedRes.seedScore);
+              }
+
               storage.createOrUpdateHrRadarAlert({
                 gameId,
                 playerId: batter.playerId,
@@ -4233,7 +4377,8 @@ export class LiveGameOrchestrator {
                 opponent: resolvedOpponent,
                 inning: state.inning,
                 half: state.isTopInning ? "top" : "bottom",
-                readinessScore: output.hrBuildScore,
+                readinessScore: seededReadiness,
+                presenceSeedScore: pregameSeedSnap ? pregameSeedSnap.seedScore : null,
                 // Phase 2 — dynamic engine readiness becomes the live progression score
                 dynamicReadinessScore: hrDynSnap?.hrReadinessScore ?? null,
                 // Phase 1 — canonical stage (overrides legacy sticky tier)
@@ -4253,7 +4398,9 @@ export class LiveGameOrchestrator {
                 contactSnapshot: contactSnap,
                 alertPath: alertResult.diagnostics?.alertPath ?? null,
                 alertTier: alertResult.alertTier ?? null,
-                diagnosticsSnapshot: diagSnap,
+                diagnosticsSnapshot: pregameSeedSnap
+                  ? { ...(diagSnap ?? {}), pregameSeed: pregameSeedSnap }
+                  : diagSnap,
                 // Canonical HR score contract (Phase 3)
                 buildScore: output.hrBuildScore ?? null,
                 conversionProbabilityRaw: alertResult.diagnostics?.hrConversion?.hrConversionProbability ?? null,
@@ -4308,6 +4455,77 @@ export class LiveGameOrchestrator {
           ? playerContact.barrelPct / 100
           : null;
 
+        const presenceOpponent = state.homeTeamAbbr && state.awayTeamAbbr
+          ? (batter.team === state.homeTeamAbbr ? state.awayTeamAbbr : state.homeTeamAbbr)
+          : "";
+
+        // ── Promote a live-contact row the PATH gate left behind ─────────────
+        // Dual-engine disagreement (see shared/hrRadarConviction.ts): the
+        // dynamic state machine (System B) can reach build/attack readiness on
+        // a genuine barrel/hard-hit while the PATH evaluator (System A) keeps
+        // alertResult.level below WATCH — so the main loop never created a row
+        // and the batter would otherwise show a FROZEN presence-only 0 despite
+        // real in-game contact. If the engine already holds a live snapshot
+        // with real contact AND meaningful stage/readiness, surface a real
+        // (non-presence) row from that snapshot so the contact actually scores
+        // and grades (this is exactly Bobby Witt Jr.'s 419ft-barrel case).
+        const dynSnap = getHrAlertState(gameId, batter.playerId);
+        const priorABs = (playerContact?.priorABResults ?? []) as any[];
+        const hasLiveContact = priorABs.some(ab => ab?.exitVelocity != null);
+        if (
+          dynSnap &&
+          dynSnap.isInitialized &&
+          hasLiveContact &&
+          (dynSnap.canonicalStage !== "watch" || dynSnap.hrReadinessScore >= PREGAME_SEED_CAP)
+        ) {
+          const lastAB = priorABs.slice(-1)[0] as any;
+          const contactSnap = lastAB ? {
+            ev: lastAB.exitVelocity ?? null,
+            la: lastAB.launchAngle ?? null,
+            distance: lastAB.distance ?? null,
+            hardHit: (lastAB.exitVelocity ?? 0) >= 95,
+            barrel: isBarrel(lastAB.exitVelocity ?? null, lastAB.launchAngle ?? null),
+          } : null;
+          console.log(`[HR_PRESENCE_PROMOTE][${gameId}] ${batter.playerName} stage=${dynSnap.canonicalStage} readiness=${dynSnap.hrReadinessScore} — promoting live-contact row left behind by PATH gate`);
+          storage.createOrUpdateHrRadarAlert({
+            gameId,
+            playerId: batter.playerId,
+            playerName: batter.playerName,
+            team: batter.team,
+            opponent: presenceOpponent,
+            inning: state.inning,
+            half: state.isTopInning ? "top" : "bottom",
+            readinessScore: dynSnap.buildScore ?? 0,
+            dynamicReadinessScore: dynSnap.hrReadinessScore,
+            canonicalStage: dynSnap.canonicalStage,
+            dynamicState: dynSnap.currentState,
+            consecutivePromoteTicks: dynSnap.consecutivePromoteTicks ?? null,
+            confidenceTier: "monitor",
+            signalState: "live",
+            triggerTags: dynSnap.positiveDrivers?.slice(0, 4) ?? [],
+            summaryText: dynSnap.positiveDrivers?.[0] ?? "Live contact detected",
+            contactSnapshot: contactSnap,
+            alertPath: null,
+            alertTier: null,
+            diagnosticsSnapshot: { pitcherHrVulnerability: dynSnap.pitcherHrVulnerability ?? null },
+            buildScore: dynSnap.buildScore ?? null,
+            conversionProbabilityRaw: dynSnap.hrConversionProbabilityRaw ?? null,
+            conversionProbability: dynSnap.hrConversionProbabilityCalibrated ?? null,
+            peakConversionProbability: dynSnap.peakConversionProbability ?? null,
+            firstDetectedInning: dynSnap.detectedInning ?? null,
+            firstDetectedHalf: dynSnap.detectedHalf ?? null,
+            firstDetectedAtMs: dynSnap.detectedAtMs ?? null,
+            plateAppearancesTracked: priorABs.length,
+            hasLiveABContext: true,
+            isPresenceOnly: false,
+          }).catch(err => console.warn(`[HR_PRESENCE_PROMOTE] persist failed for ${batter.playerName}: ${err.message}`));
+          // Promoted rows are real (non-presence) rows — they have their own
+          // [HR_PRESENCE_PROMOTE] log line and must not inflate the presence
+          // counter, which tracks pregame-only seeds.
+          playersWithRealHrRow.add(batter.playerId);
+          continue;
+        }
+
         const eligibilityReasons: string[] = [];
         const lineupSlot = batter.slot ?? 9;
         // Lineup slots 1-5 get unconditional watch coverage — top-of-order bats
@@ -4320,25 +4538,48 @@ export class LiveGameOrchestrator {
 
         if (eligibilityReasons.length === 0) continue;
 
-        const resolvedOpponent = state.homeTeamAbbr && state.awayTeamAbbr
-          ? (batter.team === state.homeTeamAbbr ? state.awayTeamAbbr : state.homeTeamAbbr)
-          : "";
+        // ── Pregame seed score (cheap cache reads only) ──────────────────────
+        // Blend the season power profile into a non-zero readiness seed so the
+        // card reflects the batter instead of showing a bare 0.0. The form
+        // breakdown (profile metrics) supplies the score + "why" drivers; the
+        // eligibility signals (slot / season HR / L30 / barrel) add display
+        // drivers and a small capped nudge. Capped at PREGAME_SEED_CAP, which
+        // sits below the in-game "ready"/"attack" bands — a pure seed never
+        // fires a signal, and grading detection stays gated on real contact.
+        const pregameFormInput = {
+          hrFBRatio: playerContact?.hrFBRatio ?? null,
+          flyBallPercent: playerContact?.flyBallPercent ?? null,
+          pullRatePercent: playerContact?.pullRatePercent ?? null,
+          xISO: playerContact?.xISOSeason ?? null,
+          xwOBA: playerContact?.xwOBASeason ?? null,
+          parkFactor: getMarketParkFactor(weatherCache?.venueName ?? null, "home_runs", null),
+          pitcherThrows: state.pitcherInGame?.throws ?? null,
+        } as HRConversionInput;
+        const { seedScore, formScore, drivers: dedupedDrivers } = computePregameSeed(pregameFormInput, {
+          lineupSlot,
+          seasonHRRate,
+          hrRateLast30,
+          barrelRate,
+          isHotHitter: oh.isHotHitter,
+        });
 
         storage.createOrUpdateHrRadarAlert({
           gameId,
           playerId: batter.playerId,
           playerName: batter.playerName,
           team: batter.team,
-          opponent: resolvedOpponent,
+          opponent: presenceOpponent,
           inning: state.inning,
           half: state.isTopInning ? "top" : "bottom",
-          readinessScore: 0,
+          readinessScore: seedScore,
           dynamicReadinessScore: null,
           canonicalStage: "watch",
           confidenceTier: "monitor",
           signalState: "watching",
           triggerTags: ["presence_floor", ...eligibilityReasons],
-          summaryText: "On HR radar — power profile present",
+          summaryText: dedupedDrivers.length > 0
+            ? `Pregame power profile — ${dedupedDrivers.slice(0, 2).join(", ")}`
+            : "On HR radar — power profile present",
           contactSnapshot: null,
           alertPath: null,
           alertTier: null,
@@ -4352,7 +4593,13 @@ export class LiveGameOrchestrator {
               hotHitterPeriod: oh.hotHitterPeriod,
               hotHitterHrCount: oh.hotHitterHrCount,
             },
+            pregameSeed: {
+              seedScore,
+              formScore,
+              drivers: dedupedDrivers,
+            },
           },
+          presenceSeedScore: seedScore,
           buildScore: null,
           conversionProbabilityRaw: null,
           conversionProbability: null,

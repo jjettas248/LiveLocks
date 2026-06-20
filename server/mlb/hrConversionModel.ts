@@ -3,13 +3,10 @@ import { estimateRichPADistribution } from "./paDistribution";
 import type { PitchMixEntry, PitcherHandednessSplits, BatterHandednessSplits } from "./types";
 import { getPitchFamily } from "./pitchTypeNormalizer";
 import { computeHROverlay } from "./hr/hrOverlay";
-import type {
-  HROverlayInput,
-  HROverlayResult,
-  PitchTypeSplit,
-  BattingOrderSplit,
-} from "./hr/hrOverlayTypes";
-import type { SeasonValue } from "./hr/temporalFilter";
+import type { HROverlayResult, SeasonStatBundle, PitchTypeBatterSplit } from "./hr/hrOverlayTypes";
+import { PREGAME_SEED_CAP } from "@shared/hrRadarConviction";
+
+export type { SeasonStatBundle, PitchTypeBatterSplit };
 
 export interface PitcherDeteriorationContext {
   velocityDrop: number | null;
@@ -92,23 +89,16 @@ export interface HRConversionInput {
   firstBaseOpen?: boolean | null;
   runnerInScoringPosition?: boolean | null;
   scoreDifferential?: number | null;
-  // Consolidated HR overlay (Ω) — supersedes the legacy power / lineup-slot /
-  // recent-form multipliers. All inputs below are optional and no-op when
-  // absent. Statcast/launch/recency fields reuse the existing inputs above;
-  // these add the genuinely-new data the overlay consumes (typically null
-  // until Phase 2 ingestion lands).
-  exitVelocity?: number | null;
-  xwOBAcon?: number | null;
-  maxEV?: number | null;
-  toppedPct?: number | null;
-  recentSlg?: number | null;
-  seasonSlg?: number | null;
-  overallSlg?: number | null;
-  barrelPerPA?: number | null;
-  barrelPerPABySeason?: SeasonValue[] | null;
-  batterPitchSplits?: PitchTypeSplit[] | null;
-  orderSplits?: BattingOrderSplit[] | null;
-  totalPA2024to2026?: number | null;
+
+  // Consolidated overlay inputs (all optional — no-op when absent).
+  // Overlay supersedes powerMultiplier × slotMultiplier × recentFormMult.
+  maxEV?: number | null;                         // avg/max exit velocity, mph
+  toppedPercent?: number | null;                 // Topped% (Phase 2 data)
+  seasonSLG?: number | null;                     // season SLG baseline for Δ
+  recentSLG?: number | null;                     // L15–L30 SLG for Δ
+  battingOrderSlgSplit?: number | null;          // slot-specific SLG (Phase 2)
+  seasonBundles?: SeasonStatBundle[] | null;     // multi-season triad (Phase 2)
+  pitchTypeSplits?: PitchTypeBatterSplit[] | null; // batter pitch-type damage (Phase 2)
 }
 
 export interface HRConversionResult {
@@ -120,14 +110,15 @@ export interface HRConversionResult {
   pitcherMultiplier: number;
   environmentMultiplier: number;
   pitcherDeteriorationState: string;
-  // Consolidated HR overlay result (supersedes legacy power/slot/recent-form).
-  overlay: HROverlayResult;
   // Phase 4 calibration diagnostics
   rawConversionProbability: number;
   calibratedConversionProbability: number;
   calibrationSource: "static_table" | "empirical_buckets";
   calibrationBucketLabel: string | null;
   calibrationSampleCount: number;
+  // Consolidated overlay result (Ψ/Γ/Λ/Θ/Δ sub-engines + soft gate).
+  // Intentional payload shape change — goldmaster re-baselined to v8.
+  overlay: HROverlayResult;
   components: {
     pregameFormScore: number;
     pregamePriorMult: number;
@@ -374,38 +365,67 @@ function describePitcherDeteriorationState(input: HRConversionInput): string {
 
 // Gaps 7–9: structural HR power profile multiplier from Savant season stats.
 // Applied after environment to keep layers orthogonal. Cap at ×1.20 / floor 0.88.
-// Build the overlay's input view from the conversion input. Existing engine
-// fields are mapped onto the overlay's sub-engine inputs; genuinely-new data
-// (pitch-type splits, order splits, recent SLG, Topped%, MaxEV) flows through
-// optional fields and no-ops when absent. `pullRatePercent` is the best
-// available proxy for Pull AIR% until Phase 2 ingestion adds the true metric.
-function buildOverlayInput(input: HRConversionInput): HROverlayInput {
-  return {
-    barrelPerPA: input.barrelPerPA ?? null,
-    barrelPerPABySeason: input.barrelPerPABySeason ?? null,
-    barrelRate: input.barrelRate ?? null,
-    exitVelocity: input.exitVelocity ?? null,
-    sweetSpotPct: input.sweetSpotPercent ?? null,
-    xwOBAcon: input.xwOBAcon ?? null,
-    xwOBA: input.xwOBA ?? null,
-    pitchMix: input.pitchMix ?? null,
-    batterPitchSplits: input.batterPitchSplits ?? null,
-    flyBallPct: input.flyBallPercent ?? null,
-    pullAirPct: input.pullRatePercent ?? null,
-    battingOrderSlot: input.battingOrderSlot ?? null,
-    orderSplits: input.orderSplits ?? null,
-    overallSlg: input.overallSlg ?? input.xSLG ?? null,
-    recentSlg: input.recentSlg ?? null,
-    recentOps: input.recentOps ?? null,
-    seasonSlg: input.seasonSlg ?? null,
-    seasonOps: input.seasonOps ?? null,
-    hrRateLast7: input.hrRateLast7 ?? null,
-    hrRateLast15: input.hrRateLast15 ?? null,
-    seasonHRRate: input.seasonHRRate ?? null,
-    maxEV: input.maxEV ?? input.factors?.maxEV ?? null,
-    toppedPct: input.toppedPct ?? null,
-    totalPA2024to2026: input.totalPA2024to2026 ?? null,
-  };
+function computePowerProfileMultiplier(input: HRConversionInput): number {
+  let mult = 1.0;
+  const LEAGUE_AVG_HR_FB = 11;    // ~11% league avg
+  const LEAGUE_AVG_FB_PCT = 35;   // ~35% fly ball rate
+
+  // Improvement 5: park-normalize fly ball stats (~50% home game assumption).
+  const parkBias = 0.5 + 0.5 * (input.parkFactor ?? 1.0);
+
+  const hrFB = input.hrFBRatio != null ? input.hrFBRatio / parkBias : null;
+  if (hrFB != null) {
+    if (hrFB >= 18) mult *= 1.20;
+    else if (hrFB >= 14) mult *= 1.12;
+    else if (hrFB >= LEAGUE_AVG_HR_FB) mult *= 1.04;
+    else if (hrFB <= 8) mult *= 0.90;
+    else if (hrFB <= LEAGUE_AVG_HR_FB) mult *= 0.96;
+  }
+
+  const fbPct = input.flyBallPercent != null ? input.flyBallPercent / Math.sqrt(parkBias) : null;
+  if (fbPct != null) {
+    if (fbPct >= 42) mult *= 1.12;
+    else if (fbPct >= 38) mult *= 1.05;
+    else if (fbPct <= 28) mult *= 0.90;
+    else if (fbPct <= LEAGUE_AVG_FB_PCT) mult *= 0.96;
+  }
+
+  const xISO = input.xISO;
+  if (xISO != null) {
+    if (xISO >= 0.220) mult *= 1.15;
+    else if (xISO >= 0.180) mult *= 1.08;
+    else if (xISO >= 0.140) mult *= 1.02;
+    else if (xISO <= 0.100) mult *= 0.92;
+  }
+
+  const xwoba = input.xwOBA;
+  if (xwoba != null) {
+    if (xwoba >= 0.380) mult *= 1.08;
+    else if (xwoba >= 0.340) mult *= 1.03;
+    else if (xwoba <= 0.280) mult *= 0.93;
+  }
+
+  // SlateRadar gap #6: pull rate. Pull-side power clears fences more often; a
+  // short pull-side porch (handedness park split) amplifies it. League pull
+  // rate on BIP is ~40%. Capped, no-op when null.
+  const pull = input.pullRatePercent;
+  if (pull != null) {
+    const parkHrBias = (input.parkFactor ?? 1.0) >= 1.05;
+    if (pull >= 48) mult *= parkHrBias ? 1.10 : 1.07;
+    else if (pull >= 43) mult *= parkHrBias ? 1.05 : 1.03;
+    else if (pull <= 32) mult *= 0.95;
+  }
+
+  return Math.min(1.28, Math.max(0.88, mult));
+}
+
+// Gap 6: lineup slot weight for HR markets.
+// Cleanup hitters (3–5) produce HRs at structurally higher rates.
+function computeLineupSlotHRMultiplier(slot: number): number {
+  if (slot >= 3 && slot <= 5) return 1.06;
+  if (slot === 2 || slot === 6) return 1.02;
+  if (slot === 1) return 0.97;   // leadoff — speed/OBP, not power focus
+  return 0.94;                    // 7–9: weakest HR production
 }
 
 function computePitcherMultiplier(input: HRConversionInput): number {
@@ -537,7 +557,8 @@ function computeEnvironmentMultiplier(input: HRConversionInput): number {
 
   if (!input.isIndoors) {
     const ws = input.windSpeed ?? 0;
-    if (input.windDirection === "out" && ws >= 12) multiplier *= 1.15;
+    if (input.windDirection === "out" && ws >= 18) multiplier *= 1.22;
+    else if (input.windDirection === "out" && ws >= 12) multiplier *= 1.15;
     else if (input.windDirection === "out" && ws >= 8) multiplier *= 1.08;
     else if (input.windDirection === "in" && ws >= 12) multiplier *= 0.82;
     else if (input.windDirection === "in" && ws >= 8) multiplier *= 0.90;
@@ -657,6 +678,41 @@ function computePitcherEntryFatigueMultiplier(input: HRConversionInput): number 
 //   2. AVG/OPS form: recent (L15) OPS relative to season OPS — broader contact
 //      form independent of HR specifically.
 // Capped [0.90, 1.15]; no-op (1.0) when neither signal has data.
+function computeRecentFormMultiplier(input: HRConversionInput): number {
+  let mult = 1.0;
+
+  // HR-rate streak vs season.
+  const season = input.seasonHRRate;
+  if (season != null && season > 0) {
+    const l7 = input.hrRateLast7;
+    const l15 = input.hrRateLast15;
+    let recent: number | null = null;
+    if (l7 != null && l15 != null) recent = 0.4 * l7 + 0.6 * l15;
+    else if (l15 != null) recent = l15;
+    else if (l7 != null) recent = l7;
+    if (recent != null) {
+      const ratio = recent / season;
+      if (ratio >= 1.8) mult *= 1.08;
+      else if (ratio >= 1.4) mult *= 1.05;
+      else if (ratio <= 0.4) mult *= 0.93;
+      else if (ratio <= 0.7) mult *= 0.97;
+    }
+  }
+
+  // Broader AVG/OPS form: recent L15 OPS vs season OPS.
+  const recentOps = input.recentOps;
+  const seasonOps = input.seasonOps;
+  if (recentOps != null && seasonOps != null && seasonOps > 0) {
+    const opsRatio = recentOps / seasonOps;
+    if (opsRatio >= 1.15) mult *= 1.05;
+    else if (opsRatio >= 1.07) mult *= 1.02;
+    else if (opsRatio <= 0.85) mult *= 0.95;
+    else if (opsRatio <= 0.93) mult *= 0.98;
+  }
+
+  return Math.min(1.15, Math.max(0.90, mult));
+}
+
 // Intentional-walk "feared slugger" prior — positive-only (floor 1.0).
 // Batters who draw intentional walks are, by definition, treated as power
 // threats. We model this as a standing season prior plus an in-game leverage
@@ -707,33 +763,133 @@ const HR_PREGAME_PRIOR: boolean = (() => {
 })();
 
 /**
- * Blend the season power profile into a 0–100 pregame HR-form score. Uses only
- * fields already on HRConversionInput; returns a neutral 50 when no profile data
- * is present. Pure, no I/O.
+ * Pregame HR-form breakdown: the 0–100 form score PLUS the human-readable
+ * "why" drivers that pushed it above neutral. Single source of truth so the
+ * score and its explanation can never drift. Uses only fields already on
+ * HRConversionInput; returns a neutral 50 / empty drivers when no profile data
+ * is present. Pure, no I/O. Drivers are positive-only (what makes this a
+ * threat) and ordered by descending contribution for clean chip truncation.
  */
-export function computePregameHrFormScore(input: HRConversionInput): number {
+export function computePregameHrFormBreakdown(input: HRConversionInput): {
+  score: number;
+  drivers: string[];
+  hasProfile: boolean;
+} {
   let s = 50;
   let n = 0;
+  // Collect (contribution, label) for positive drivers so we can rank them.
+  const pos: Array<{ pts: number; label: string }> = [];
   const hrFB = input.hrFBRatio;
-  if (hrFB != null) { s += hrFB >= 18 ? 12 : hrFB >= 14 ? 7 : hrFB >= 11 ? 2 : hrFB <= 8 ? -8 : -2; n++; }
+  if (hrFB != null) {
+    const d = hrFB >= 18 ? 12 : hrFB >= 14 ? 7 : hrFB >= 11 ? 2 : hrFB <= 8 ? -8 : -2;
+    s += d; n++;
+    if (d >= 7) pos.push({ pts: d, label: hrFB >= 18 ? "Elite HR/FB" : "Strong HR/FB" });
+  }
   const fb = input.flyBallPercent;
-  if (fb != null) { s += fb >= 42 ? 8 : fb >= 38 ? 4 : fb <= 28 ? -6 : 0; n++; }
+  if (fb != null) {
+    const d = fb >= 42 ? 8 : fb >= 38 ? 4 : fb <= 28 ? -6 : 0;
+    s += d; n++;
+    if (d >= 4) pos.push({ pts: d, label: "Fly-ball lean" });
+  }
   const pull = input.pullRatePercent;
-  if (pull != null) { s += pull >= 48 ? 8 : pull >= 43 ? 4 : pull <= 32 ? -4 : 0; n++; }
+  if (pull != null) {
+    const d = pull >= 48 ? 8 : pull >= 43 ? 4 : pull <= 32 ? -4 : 0;
+    s += d; n++;
+    if (d >= 4) pos.push({ pts: d, label: "Pull power" });
+  }
   const xiso = input.xISO;
-  if (xiso != null) { s += xiso >= 0.220 ? 10 : xiso >= 0.180 ? 5 : xiso <= 0.100 ? -8 : 0; n++; }
+  if (xiso != null) {
+    const d = xiso >= 0.220 ? 10 : xiso >= 0.180 ? 5 : xiso <= 0.100 ? -8 : 0;
+    s += d; n++;
+    if (d >= 5) pos.push({ pts: d, label: xiso >= 0.220 ? "Elite xISO" : "Strong xISO" });
+  }
   const xwoba = input.xwOBA;
-  if (xwoba != null) { s += xwoba >= 0.380 ? 6 : xwoba >= 0.340 ? 3 : xwoba <= 0.300 ? -5 : 0; n++; }
+  if (xwoba != null) {
+    const d = xwoba >= 0.380 ? 6 : xwoba >= 0.340 ? 3 : xwoba <= 0.300 ? -5 : 0;
+    s += d; n++;
+    if (d >= 3) pos.push({ pts: d, label: "Strong xwOBA" });
+  }
   const park = input.parkFactor;
-  if (park != null) { s += park >= 1.10 ? 5 : park >= 1.05 ? 2 : park <= 0.92 ? -4 : 0; }
+  if (park != null) {
+    const d = park >= 1.10 ? 5 : park >= 1.05 ? 2 : park <= 0.92 ? -4 : 0;
+    s += d;
+    if (d >= 2) pos.push({ pts: d, label: "Hitter park" });
+  }
   const bs = input.batterHandednessSplits;
   const pt = input.pitcherThrows;
   if (bs && pt) {
     const r = pt === "L" ? bs.hrRateVsLHP : bs.hrRateVsRHP;
-    if (r != null) { s += r >= 0.05 ? 6 : r >= 0.035 ? 2 : r <= 0.02 ? -4 : 0; }
+    if (r != null) {
+      const d = r >= 0.05 ? 6 : r >= 0.035 ? 2 : r <= 0.02 ? -4 : 0;
+      s += d;
+      if (d >= 2) pos.push({ pts: d, label: "Matchup edge" });
+    }
   }
-  if (n === 0) return 50;
-  return Math.max(0, Math.min(100, s));
+  pos.sort((a, b) => b.pts - a.pts);
+  return {
+    score: n === 0 ? 50 : Math.max(0, Math.min(100, s)),
+    drivers: pos.map(p => p.label),
+    hasProfile: n > 0,
+  };
+}
+
+/**
+ * Blend the season power profile into a 0–100 pregame HR-form score. Thin
+ * wrapper over computePregameHrFormBreakdown for callers that only need the
+ * number. Pure, no I/O.
+ */
+export function computePregameHrFormScore(input: HRConversionInput): number {
+  return computePregameHrFormBreakdown(input).score;
+}
+
+// Presence-floor eligibility thresholds — kept in lockstep with the orchestrator's
+// PRESENCE_FLOOR_* constants so the seed nudges match the eligibility gate.
+const SEED_SEASON_HR_RATE_FLOOR = 0.025;
+const SEED_HR_RATE_L30_FLOOR = 0.030;
+const SEED_BARREL_RATE_FLOOR = 0.090;
+
+export interface PregameSeedEligibility {
+  lineupSlot?: number | null;
+  seasonHRRate?: number | null;
+  hrRateLast30?: number | null;
+  barrelRate?: number | null;
+  isHotHitter?: boolean | null;
+}
+
+/**
+ * Pregame seed: blend the season power profile (form breakdown) into a non-zero
+ * 0–100 readiness floor PLUS the "why" drivers, so a pre-contact card reflects
+ * the batter instead of a bare 0.0. Optional eligibility signals (slot / season
+ * HR / L30 / barrel / hot streak) add display drivers and a small capped nudge —
+ * additive and no-op when absent, so callers without rolling stats still get a
+ * clean form-only seed. Clamped to PREGAME_SEED_CAP, which sits BELOW the in-game
+ * ready/attack bands: a pure seed never fires a signal and never affects grading.
+ * Pure, no I/O. Single source of truth for every pre-contact HR-radar row.
+ */
+export function computePregameSeed(
+  input: HRConversionInput,
+  eligibility: PregameSeedEligibility = {},
+): { seedScore: number; formScore: number; drivers: string[] } {
+  const formBreakdown = computePregameHrFormBreakdown(input);
+
+  let seed = 25 + (formBreakdown.score - 50) * 0.6;
+  const drivers = [...formBreakdown.drivers];
+
+  const { lineupSlot, seasonHRRate, hrRateLast30, barrelRate, isHotHitter } = eligibility;
+  if (lineupSlot != null && lineupSlot >= 1 && lineupSlot <= 3) drivers.push(`Slot ${lineupSlot}`);
+  if (seasonHRRate != null && seasonHRRate >= 0.045) { seed += 6; drivers.push("Power bat"); }
+  else if (seasonHRRate != null && seasonHRRate >= SEED_SEASON_HR_RATE_FLOOR) { seed += 3; }
+  if (hrRateLast30 != null && hrRateLast30 >= 0.05) { seed += 5; drivers.push("Hot L30"); }
+  else if (hrRateLast30 != null && hrRateLast30 >= SEED_HR_RATE_L30_FLOOR) { seed += 2; }
+  if (barrelRate != null && barrelRate >= 0.12) { seed += 5; drivers.push("Elite barrel"); }
+  else if (barrelRate != null && barrelRate >= SEED_BARREL_RATE_FLOOR) { seed += 2; }
+  if (isHotHitter) drivers.push("Recent HRs");
+
+  const seedScore = Math.max(0, Math.min(PREGAME_SEED_CAP, Math.round(seed)));
+  // De-dup while preserving order; keep the top 4 for clean chip display.
+  const dedupedDrivers = Array.from(new Set(drivers)).slice(0, 4);
+
+  return { seedScore, formScore: formBreakdown.score, drivers: dedupedDrivers };
 }
 
 // Map the 0–100 pregame form score to a small capped multiplier on baseRate.
@@ -815,14 +971,28 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
   const entryFatigueMultiplier = computePitcherEntryFatigueMultiplier(input);
   const entryAdjustedRate = envAdjustedRate * entryFatigueMultiplier;
 
-  // Consolidated HR overlay (Ω) — supersedes the legacy power-profile,
-  // lineup-slot, and recent-form multipliers with a single capped, additive
-  // multiplier built from the Ψ/Γ/Λ/Θ/Δ sub-engines and the soft contact gate.
-  // No-op (~1.0) when overlay inputs are absent. Applied here so it modulates
-  // the fully env/pitcher-adjusted rate, exactly where the three legacy
-  // multipliers used to bind.
-  const overlay = computeHROverlay(buildOverlayInput(input));
-  const overlayAdjustedRate = entryAdjustedRate * overlay.overlayMultiplier;
+  // Consolidated overlay: Ψ (power profile) + Λ (launch topology) + Θ (lineup
+  // volume) + Δ (recency delta) + Γ (arsenal matchup, Phase 2 no-op) + K (soft gate).
+  // Supersedes the previous powerMultiplier × slotMultiplier × recentFormMult chain.
+  const overlayResult = computeHROverlay({
+    barrelPerPA: input.barrelRate ?? null,
+    maxEV: input.maxEV ?? null,
+    sweetSpotPct: input.sweetSpotPercent ?? null,
+    xwOBAcon: input.xwOBA ?? null,
+    fbPct: input.flyBallPercent ?? null,
+    pullAirPct: input.pullRatePercent ?? null,
+    toppedPct: input.toppedPercent ?? null,
+    battingOrderSlot: input.battingOrderSlot,
+    battingOrderSlgSplit: input.battingOrderSlgSplit ?? null,
+    overallSLG: input.xSLG ?? null,
+    seasonSLG: input.seasonSLG ?? null,
+    recentSLG: input.recentSLG ?? null,
+    recentOPS: input.recentOps ?? null,
+    seasonOPS: input.seasonOps ?? null,
+    pitchTypeSplits: input.pitchTypeSplits ?? null,
+    seasonBundles: input.seasonBundles ?? null,
+  });
+  const overlayAdjustedRate = entryAdjustedRate * overlayResult.overlayMultiplier;
 
   const ibbRespectMult = computeIbbRespectMultiplier(input);
   const ibbAdjustedRate = overlayAdjustedRate * ibbRespectMult;
@@ -864,13 +1034,13 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
     pitcherMultiplier: Math.round(pitcherMultiplier * 100) / 100,
     environmentMultiplier: Math.round(environmentMultiplier * 100) / 100,
     pitcherDeteriorationState,
-    overlay,
     // Phase 4: explicit calibration diagnostics
     rawConversionProbability: Math.round(rawProbability * 10000) / 10000,
     calibratedConversionProbability: Math.round(calibratedProbability * 10000) / 10000,
     calibrationSource: cal.source,
     calibrationBucketLabel: cal.bucketLabel,
     calibrationSampleCount: cal.samples,
+    overlay: overlayResult,
     components: {
       pregameFormScore: Math.round(pregameFormScore * 10) / 10,
       pregamePriorMult: Math.round(pregamePriorMult * 1000) / 1000,
@@ -880,7 +1050,7 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
       pitcherAdjustedRate: Math.round(pitcherAdjustedRate * 10000) / 10000,
       envAdjustedRate: Math.round(envAdjustedRate * 10000) / 10000,
       entryAdjustedRate: Math.round(entryAdjustedRate * 10000) / 10000,
-      overlayMultiplier: overlay.overlayMultiplier,
+      overlayMultiplier: Math.round(overlayResult.overlayMultiplier * 10000) / 10000,
       ibbRespectMult: Math.round(ibbRespectMult * 1000) / 1000,
       finalPerPARate: Math.round(finalPerPARate * 10000) / 10000,
       paDist,

@@ -424,20 +424,24 @@ export function recomputeHrAlertState(
   );
 
   const stateChanged = newState !== prev.currentState;
-  // Readiness: up to 40pts from confidenceScore (0–10 → /10 * 40),
-  // up to 60pts from calibrated HR-conversion probability (0–1 → * 60).
+  // Readiness: confidence is the primary driver (up to 65pts) because the
+  // calibration table caps conversion probability (now 0.46 at the top after
+  // audit fix C3), limiting conversionPts to ~0.46 × 60 ≈ 28 pts regardless of
+  // the 60-pt ceiling. Keeping confidence at 40 produced a formula max of
+  // ~63 (6.3/10), below the "ready" floor (7.5) and made peaks appear capped.
+  // At 65pts confidence, elite signals reach the ready band.
   //
-  // Audit fix C2 — the confidence half measures loud RECENT contact, not the
-  // forward-looking HR probability. Left ungated, a single squared-up ball
-  // manufactures a peak-50+ readiness on a batter the model rates <6% to homer
-  // (these dominated the high-peak MISS population). Gate the confidence points
-  // by a 0..1 ramp on forward probability: fully engaged at/above the PREPARE
-  // threshold (so every building/attack row is UNCHANGED — no drift on live
-  // signals), softly damped below it with a 0.4 floor so confidence still
-  // contributes. The conversion half is untouched. Never raises readiness above
-  // the prior formula → caps still bind.
+  // Audit fix C2 (reconciled with main's 65pt rework) — the confidence half
+  // measures loud RECENT contact, not forward HR probability. Left ungated, a
+  // single squared-up ball manufactures a high peak on a batter the model rates
+  // <PREPARE to homer (these dominated the high-peak MISS population). Gate the
+  // 65pt confidence base by a 0..1 ramp on forward probability: fully engaged
+  // at/above the PREPARE threshold (so every building/attack row keeps main's
+  // intended readiness — no drift on live signals), softly damped below it with
+  // a 0.4 floor so confidence still contributes. Conversion half untouched;
+  // never raises readiness above the 65+60 ceiling → caps still bind.
   const fwdProbGate = 0.4 + 0.6 * Math.min(1, Math.max(0, effectiveCalibrated / PREPARE_THRESHOLD));
-  const confidencePts = Math.max(0, Math.min(40, (alertResult.confidenceScore / 10) * 40)) * fwdProbGate;
+  const confidencePts = Math.max(0, Math.min(65, (alertResult.confidenceScore / 10) * 65)) * fwdProbGate;
   const conversionPts = Math.max(0, Math.min(60, effectiveCalibrated * 60));
   const readinessScore = Math.round(confidencePts + conversionPts);
   const clampedReadiness = Math.min(100, Math.max(0, readinessScore));

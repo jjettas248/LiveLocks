@@ -4,8 +4,10 @@
 import {
   computeHRConversionProbability,
   computePregameHrFormScore,
+  computePregameSeed,
   type HRConversionInput,
 } from "./hrConversionModel";
+import { PREGAME_SEED_CAP } from "@shared/hrRadarConviction";
 
 let passed = 0;
 let failed = 0;
@@ -39,6 +41,26 @@ console.log("\n[SlateRadar #6/#7 — pull rate + pregame prior] running cases\n"
   assert("Cold profile → form score < 50", cold < 50, `got ${cold}`);
   const neutral = computePregameHrFormScore(baseInput({ hrFBRatio: null, flyBallPercent: null, pullRatePercent: null, xISO: null, xwOBA: null }));
   assert("No profile data → neutral 50", neutral === 50, `got ${neutral}`);
+}
+
+// ── Pregame seed (presence-floor / pre-contact rows) ─────────────────────
+{
+  const eliteProfile = { pullRatePercent: 50, hrFBRatio: 20, flyBallPercent: 44, xISO: 0.24, xwOBA: 0.39, parkFactor: 1.12 };
+  const elite = computePregameSeed(baseInput(eliteProfile), {
+    lineupSlot: 2, seasonHRRate: 0.05, hrRateLast30: 0.06, barrelRate: 0.13, isHotHitter: true,
+  });
+  assert("Elite profile+eligibility → seed score well above base", elite.seedScore > 30, `got ${elite.seedScore}`);
+  assert("Elite seed never exceeds PREGAME_SEED_CAP", elite.seedScore <= PREGAME_SEED_CAP, `got ${elite.seedScore}`);
+  assert("Elite seed surfaces drivers", elite.drivers.length > 0, `got ${JSON.stringify(elite.drivers)}`);
+  assert("Drivers capped at 4 for chip display", elite.drivers.length <= 4, `got ${elite.drivers.length}`);
+  assert("Drivers are de-duplicated", new Set(elite.drivers).size === elite.drivers.length);
+
+  const neutral = computePregameSeed(baseInput({ hrFBRatio: null, flyBallPercent: null, pullRatePercent: null, xISO: null, xwOBA: null }), {});
+  assert("Neutral profile, no eligibility → modest seed (~base 25)", neutral.seedScore >= 20 && neutral.seedScore <= 30, `got ${neutral.seedScore}`);
+
+  const cold = computePregameSeed(baseInput({ pullRatePercent: 28, hrFBRatio: 6, flyBallPercent: 26, xISO: 0.09, xwOBA: 0.29, parkFactor: 0.9 }), {});
+  assert("Cold profile → seed below neutral", cold.seedScore < neutral.seedScore, `cold=${cold.seedScore} neutral=${neutral.seedScore}`);
+  assert("Seed never negative", cold.seedScore >= 0, `got ${cold.seedScore}`);
 }
 
 // ── Pull rate raises HR probability (else equal) ─────────────────────────

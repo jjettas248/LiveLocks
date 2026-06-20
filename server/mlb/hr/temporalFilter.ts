@@ -1,67 +1,61 @@
-// Temporal filter (T) — enforces the 2024–2026 player-data window and blends
-// per-season values with fixed recency weights. Pure, no I/O.
+// HR Overlay — season triad filter and temporal weighting.
+// Restricts data to HR_ALLOWED_SEASONS and blends across present seasons
+// using TEMPORAL_WEIGHTS. Marks coverage based on how many seasons are present.
 
-import {
-  HR_ALLOWED_SEASONS,
-  SEASON_TRIAD_WEIGHTS,
-  type AllowedSeason,
-} from "./hrOverlayConstants";
-import { isPresent } from "./normalization";
+import { HR_ALLOWED_SEASONS, TEMPORAL_WEIGHTS } from "./hrOverlayConstants";
+import type { SeasonStatBundle, DataCoverage } from "./hrOverlayTypes";
 
-export interface SeasonValue {
-  season: number;
-  value: number | null;
-  pa?: number | null;
-}
+const BLENDED_NUMERIC_KEYS: ReadonlyArray<keyof SeasonStatBundle> = [
+  "barrelPerPA", "maxEV", "sweetSpotPct", "xwOBAcon",
+  "fbPct", "pullAirPct", "xSLG", "toppedPct", "slgBySlot",
+];
 
-export interface TriadResult {
-  value: number | null;
-  seasonsUsed: AllowedSeason[];
-  totalPA: number;
-  rejectedSeasons: number[];
-}
-
-export function isAllowedSeason(season: number): season is AllowedSeason {
-  return (HR_ALLOWED_SEASONS as readonly number[]).includes(season);
+export interface TriadBlendResult {
+  blended: Partial<SeasonStatBundle>;
+  coverage: DataCoverage;
+  presentSeasons: number[];
 }
 
 /**
- * Blend per-season values across the 2024–2026 triad using fixed recency
- * weights, renormalized over the seasons actually present with data. Rows
- * outside the triad are rejected (recorded, never used). Returns a null value
- * when no allowed season has data.
+ * Filter season bundles to HR_ALLOWED_SEASONS and compute a temporally-weighted blend.
+ * Seasons outside [2024, 2025, 2026] are excluded — their data is stale for the current model.
  */
 export function applySeasonTriadWeighting(
-  rows: SeasonValue[] | null | undefined,
-): TriadResult {
-  const rejectedSeasons: number[] = [];
-  const valid: Array<{ season: AllowedSeason; value: number; pa: number }> = [];
-
-  for (const r of rows ?? []) {
-    if (!isAllowedSeason(r.season)) {
-      rejectedSeasons.push(r.season);
-      continue;
-    }
-    if (!isPresent(r.value)) continue;
-    valid.push({ season: r.season, value: r.value, pa: r.pa ?? 0 });
-  }
+  bundles: SeasonStatBundle[],
+): TriadBlendResult {
+  const allowedSet = new Set<number>(HR_ALLOWED_SEASONS);
+  const valid = bundles.filter(b => allowedSet.has(b.season));
+  const presentSeasons = valid.map(b => b.season);
 
   if (valid.length === 0) {
-    return { value: null, seasonsUsed: [], totalPA: 0, rejectedSeasons };
+    return { blended: {}, coverage: "MISSING", presentSeasons: [] };
   }
 
-  let weightSum = 0;
-  for (const v of valid) weightSum += SEASON_TRIAD_WEIGHTS[v.season];
+  const coverage: DataCoverage =
+    presentSeasons.length === HR_ALLOWED_SEASONS.length ? "FULL" : "PARTIAL";
 
-  let acc = 0;
-  for (const v of valid) {
-    acc += (SEASON_TRIAD_WEIGHTS[v.season] / weightSum) * v.value;
+  // Renormalize weights over the seasons that are actually present.
+  const totalWeight = presentSeasons.reduce(
+    (sum, s) => sum + (TEMPORAL_WEIGHTS[s] ?? 0), 0,
+  );
+  if (totalWeight === 0) return { blended: {}, coverage: "MISSING", presentSeasons: [] };
+
+  const blended: Partial<SeasonStatBundle> = {};
+  for (const key of BLENDED_NUMERIC_KEYS) {
+    let weightedSum = 0;
+    let keyWeight = 0;
+    for (const bundle of valid) {
+      const val = bundle[key];
+      if (val != null && typeof val === "number" && Number.isFinite(val)) {
+        const w = TEMPORAL_WEIGHTS[bundle.season] ?? 0;
+        weightedSum += val * w;
+        keyWeight += w;
+      }
+    }
+    if (keyWeight > 0) {
+      (blended as Record<string, unknown>)[key] = weightedSum / keyWeight;
+    }
   }
 
-  return {
-    value: acc,
-    seasonsUsed: valid.map((v) => v.season),
-    totalPA: valid.reduce((s, v) => s + v.pa, 0),
-    rejectedSeasons,
-  };
+  return { blended, coverage, presentSeasons };
 }

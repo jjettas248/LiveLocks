@@ -257,6 +257,7 @@ export interface CanonicalCardInput {
   hasLiveABContext?: boolean | null;
   plateAppearancesTracked?: number | null;
   gameStatus?: string | null;           // pregame|live|final|...
+  isGameFinal?: boolean | null;         // route-stamped final flag (authoritative)
 }
 
 const norm = (v: unknown): string => String(v ?? "").trim().toLowerCase();
@@ -507,7 +508,7 @@ export function applyHrRadarResolvedStateFixup<T extends CanonicalCardInput & Re
                       gameStatusNorm === "completed" ||
                       gameStatusNorm === "game_over" ||
                       gameStatusNorm === "gameover" ||
-                      (card as any).isGameFinal === true;
+                      card.isGameFinal === true;
 
   if (isGameFinal) {
     const wasActiveBeforeFinal = active;

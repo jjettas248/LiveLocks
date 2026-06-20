@@ -1,6 +1,7 @@
 import type { MLBPropInput, MLBPropOutput, MLBMarket } from "./types";
 import { EXPERIMENTAL_MARKETS } from "./types";
 import { getPitchFamily } from "./pitchTypeNormalizer";
+import { isBarrel } from "./statcastXBA";
 
 export type MarketFamily = "batter_over" | "under" | "hr_radar";
 
@@ -204,9 +205,7 @@ function computeEventBoostComponent(input: MLBPropInput, output: MLBPropOutput):
   const hasHR = priorABs.some(ab => ab.outcome === "home_run" || ab.outcome === "homerun");
   if (hasHR) boost += 40;
 
-  const hasBarrel = priorABs.some(ab =>
-    (ab.exitVelocity ?? 0) >= 98 && (ab.launchAngle ?? 0) >= 25 && (ab.launchAngle ?? 0) <= 35
-  );
+  const hasBarrel = priorABs.some(ab => isBarrel(ab.exitVelocity ?? null, ab.launchAngle ?? null));
   if (hasBarrel) boost += 30;
 
   const ev = input.contactQuality.exitVelocity ?? 0;
@@ -788,6 +787,8 @@ function computeHandednessSplitsScore(input: MLBPropInput): number {
       else if (matchupERA <= 2.5) score -= 18;
       else if (matchupERA <= 3.2) score -= 10;
     }
+    // HR/9 by batter handedness — more direct than ERA for the HR market.
+    // League avg HR/9 allowed is ~1.2; >= 2.0 is HR-vulnerable, <= 0.6 is elite suppressor.
     const matchupHrPer9 = batterHand === "L" ? pitcherSplits.hrPer9VsLHB : pitcherSplits.hrPer9VsRHB;
     if (matchupHrPer9 != null) {
       if (matchupHrPer9 >= 2.5) score += 22;
@@ -921,6 +922,7 @@ function computePowerProfileScore(input: MLBPropInput): number {
     else if (hrLikelihood >= 0.06) score += 3;
   }
 
+
   return clamp(score, 0, 100);
 }
 
@@ -1029,9 +1031,7 @@ export function scoreHRRadar(
     nearHrScore = clamp(50 + (lei.nearHrScore / 0.15) * 50, 0, 100);
   }
   const priorABs = input.contactQuality.priorABResults ?? [];
-  const hasBarrel = priorABs.some(ab =>
-    (ab.exitVelocity ?? 0) >= 98 && (ab.launchAngle ?? 0) >= 25 && (ab.launchAngle ?? 0) <= 35
-  );
+  const hasBarrel = priorABs.some(ab => isBarrel(ab.exitVelocity ?? null, ab.launchAngle ?? null));
   const hasHR = priorABs.some(ab => ab.outcome === "home_run" || ab.outcome === "homerun" || ab.outcome === "hr");
   if (hasBarrel) nearHrScore = clamp(nearHrScore + 25, 0, 100);
   if (hasHR) nearHrScore = clamp(nearHrScore + 30, 0, 100);

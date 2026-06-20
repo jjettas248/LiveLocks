@@ -42,6 +42,7 @@ import { syncMinutesProjections } from "./services/minutesProjectionService";
 import { calculateMLBPropEdge, canShowSignal, hasRealOdds } from "./mlb/markets";
 import { normalizeMlbMarketKey } from "./mlb/normalizeMarketKey";
 import { getMarketParkFactor } from "./mlb/dataSources";
+import { isBarrel as isCanonicalBarrel } from "./mlb/statcastXBA";
 import { validateMlbEngineProbability, logMlbPersistReject, MLB_PROB_BUCKETS, bucketPlaysByCanonicalProb } from "./mlb/probabilityEngine";
 import {
   recordMLBDiagnostic,
@@ -78,6 +79,19 @@ import { normalizeMlbMarket } from "../shared/normalizeMlbMarket";
 
 // ── NCAAB live signal cache (populated by /api/ncaab/plays, read by /api/top-plays) ──
 const ncaabLiveSignals: { signals: any[]; updatedAt: number } = { signals: [], updatedAt: 0 };
+
+// Safe per-row JSON-array parse. A single malformed cached blob (e.g. a row's
+// `abResults`) must not throw and 500 an entire multi-row response — fall back
+// to [] for just that row.
+function safeParseJsonArray(raw: string | null | undefined): any[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 function getPlayKey(p: {
   playerId?: string | number | null;
@@ -1911,7 +1925,7 @@ export async function registerRoutes(
       const stats = await storage.getGamePlayerStats(gameId);
       const players = stats.map(s => ({
         ...s,
-        priorABResults: s.abResults ? JSON.parse(s.abResults) : [],
+        priorABResults: safeParseJsonArray(s.abResults),
       }));
       return res.json({ ready: true, players });
     } catch (e: any) {
@@ -1928,7 +1942,7 @@ export async function registerRoutes(
       return res.json({
         games: games.map(g => ({
           ...g,
-          priorABResults: g.abResults ? JSON.parse(g.abResults) : [],
+          priorABResults: safeParseJsonArray(g.abResults),
         })),
       });
     } catch (e: any) {
@@ -3898,7 +3912,7 @@ export async function registerRoutes(
         outcome: ab.outcome ?? "unknown",
         pitchType: ab.pitchType ?? null,
         pitchSpeed: ab.pitchSpeed ?? null,
-        isBarrel: (ab.exitVelocity ?? 0) >= 98 && (ab.launchAngle ?? 0) >= 20 && (ab.launchAngle ?? 0) <= 35,
+        isBarrel: isCanonicalBarrel(ab.exitVelocity ?? null, ab.launchAngle ?? null),
         isHardHit: (ab.exitVelocity ?? 0) >= 95,
         perABxBA: ab.perABxBA ?? null,
         contactGrade: ab.contactGrade ?? null,

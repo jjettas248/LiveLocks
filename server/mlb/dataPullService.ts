@@ -5,7 +5,7 @@
 import type { PitchMixEntry, PitcherHandednessSplits, BatterHandednessSplits } from "./types";
 import { normalizePitchTypeCode } from "./pitchTypeNormalizer";
 import { fetchBaseballSavantData, fetchSavantGameFeed, getStadiumCoords, windDirectionRelativeToField, isVenueIndoors } from "./dataSources";
-import { classifyContact, computeGameContactProfile } from "./statcastXBA";
+import { classifyContact, computeGameContactProfile, isBarrel as isCanonicalBarrel } from "./statcastXBA";
 import { storage } from "../storage";
 import { todayET } from "../utils/dateUtils";
 
@@ -730,7 +730,7 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
         const fingerprint = `${statsPk}:${playerId}:${abIndex}:${bestEV ?? 0}:${bestLA ?? 0}`;
         if (!persistedContactKeys.has(fingerprint) && bestEV != null) {
           persistedContactKeys.add(fingerprint);
-          const isBarrel = (bestEV ?? 0) >= 98 && (bestLA ?? 0) >= 20 && (bestLA ?? 0) <= 35;
+          const isBarrel = isCanonicalBarrel(bestEV ?? null, bestLA ?? null);
           storage.insertContactEvent({
             playerId,
             playerName: batterName,
@@ -1606,7 +1606,9 @@ export async function syncSavantSeasonForLineup(gameId: string): Promise<void> {
 // Used as fallback when MLB Stats API live feed weather is not yet available,
 // and always used to enrich the weather cache with hourly forecasts.
 const openMeteoCache = new Map<string, { data: WeatherCache; fetchedAt: number }>();
-const OPEN_METEO_TTL = 60 * 60 * 1000;
+// 15-min TTL so wind readings stay fresh during active games (wind can shift
+// significantly mid-game vs. the pregame read).
+const OPEN_METEO_TTL = 15 * 60 * 1000;
 
 export async function syncOpenMeteoWeather(gameId: string, venueName: string | null): Promise<void> {
   if (!venueName) return;
@@ -1716,10 +1718,22 @@ export async function syncOpenMeteoWeather(gameId: string, venueName: string | n
       mlbGameCache.weather[gameId] = weatherData;
       console.log(`[MLB_WEATHER_OPENMETEO] game=${gameId} venue="${venueName}" — ${temperature}°F, wind ${windSpeed}mph ${windDirection}, humidity ${humidity}%, hourly=${hourlyForecast.length}h, utcOff=${utcOffsetSeconds}s`);
     } else {
-      mlbGameCache.weather[gameId].hourlyForecast = hourlyForecast;
-      mlbGameCache.weather[gameId].utcOffsetSeconds = utcOffsetSeconds;
-      mlbGameCache.weather[gameId].gameStartWindDirection = gameStartWindDir;
-      mlbGameCache.weather[gameId].windShiftDetected = windShiftDetected;
+      const existing = mlbGameCache.weather[gameId];
+      // If Open-Meteo has a materially different wind reading, prefer it — the
+      // MLB live-feed wind field is set at first pitch and rarely updates
+      // mid-game, so it can lag by 3+ innings when wind picks up.
+      const existingWs = existing.windSpeed ?? 0;
+      const omWs = windSpeed ?? 0;
+      const windDrift = Math.abs(omWs - existingWs);
+      if (windSpeed != null && (windDrift >= 5 || existing.windSpeed == null)) {
+        existing.windSpeed = windSpeed;
+        existing.windDirection = currentWindDir;
+        console.log(`[MLB_WEATHER_OPENMETEO_WIND_UPDATE] game=${gameId} mlbWind=${existingWs}mph → omWind=${windSpeed}mph ${windDirection} (drift=${windDrift.toFixed(0)}mph)`);
+      }
+      existing.hourlyForecast = hourlyForecast;
+      existing.utcOffsetSeconds = utcOffsetSeconds;
+      existing.gameStartWindDirection = gameStartWindDir;
+      existing.windShiftDetected = windShiftDetected;
       if (windShiftDetected) {
         console.log(`[MLB_WEATHER_WIND_SHIFT] game=${gameId} — wind shifted from ${gameStartWindDir} to ${currentWindDir} since game start`);
       }

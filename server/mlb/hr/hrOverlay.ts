@@ -1,20 +1,12 @@
-// Consolidated HR overlay (Ω) — orchestrates the sub-engines into a single,
-// capped, additive multiplier applied inside the HR engine before the bus.
+// HR Overlay — orchestrator.
+// Runs T (temporal filter) → sub-engines Ψ/Γ/Λ/Θ/Δ → soft gate K →
+// final overlayMultiplier = clamp((1 + Ω) · K, [0.6, 1.6]).
 //
-//   overlayMultiplier = clamp( (1 + Ω) · K_soft )
-//   Ω = Σ wᵢ · componentᵢ        (componentᵢ ∈ [-1, 1])
-//
-// It supersedes the legacy power / lineup-slot / recent-form multipliers. Every
-// input is optional and no-op when absent, so the multiplier degrades to ~1.0
-// on thin data rather than fabricating signal.
+// Integration point: called from computeHRConversionProbability in
+// hrConversionModel.ts. Replaces powerMultiplier × slotMultiplier × recentFormMult.
 
-import {
-  OVERLAY_WEIGHTS,
-  OVERLAY_MULTIPLIER_MIN,
-  OVERLAY_MULTIPLIER_MAX,
-  LOW_SAMPLE_PA,
-} from "./hrOverlayConstants";
-import { clamp, isPresent } from "./normalization";
+import { SUB_ENGINE_WEIGHTS, OVERLAY_CLAMP } from "./hrOverlayConstants";
+import { applySeasonTriadWeighting } from "./temporalFilter";
 import {
   computePowerProfile,
   computeArsenalMatchupFit,
@@ -26,96 +18,86 @@ import {
 import type {
   HROverlayInput,
   HROverlayResult,
-  HROverlayComponent,
-  SubEngineResult,
-  Coverage,
+  DataCoverage,
+  OverlayComponentResult,
 } from "./hrOverlayTypes";
 
-function round4(x: number): number {
-  return Math.round(x * 10000) / 10000;
-}
-
-function withWeight(sub: SubEngineResult, weight: number): HROverlayComponent {
-  return { score: round4(sub.score), coverage: sub.coverage, weight };
-}
+export type { HROverlayInput, HROverlayResult };
 
 export function computeHROverlay(input: HROverlayInput): HROverlayResult {
-  const power = computePowerProfile(input);
-  const matchup = computeArsenalMatchupFit(input);
-  const launch = computeLaunchTopology(input);
-  const lineup = computeLineupVolume(input);
-  const recency = computeRecencyDelta(input);
+  // 1. Temporal triad weighting — blend multi-season bundles when provided.
+  let effectiveInput = input;
+  let triadCoverage: DataCoverage = "PARTIAL"; // default when no bundles
+  if (input.seasonBundles && input.seasonBundles.length > 0) {
+    const { blended, coverage, presentSeasons } = applySeasonTriadWeighting(input.seasonBundles);
+    if (presentSeasons.length > 0) {
+      effectiveInput = { ...input, ...blended };
+      triadCoverage = coverage;
+    } else {
+      triadCoverage = "MISSING";
+    }
+  }
 
+  // 2. Run sub-engines.
+  const psi: OverlayComponentResult = computePowerProfile(effectiveInput);
+  const gamma: OverlayComponentResult = computeArsenalMatchupFit(effectiveInput);
+  const lambda: OverlayComponentResult = computeLaunchTopology(effectiveInput);
+  const theta: OverlayComponentResult = computeLineupVolume(effectiveInput);
+  const delta: OverlayComponentResult = computeRecencyDelta(effectiveInput);
+
+  // 3. Soft gate K.
+  const { softGateFactor, confidencePenalty } = computeSoftGate(effectiveInput);
+
+  // 4. Ω = weighted sum of component scores.
   const omega =
-    OVERLAY_WEIGHTS.power * power.score +
-    OVERLAY_WEIGHTS.matchup * matchup.score +
-    OVERLAY_WEIGHTS.launch * launch.score +
-    OVERLAY_WEIGHTS.lineup * lineup.score +
-    OVERLAY_WEIGHTS.recency * recency.score;
+    SUB_ENGINE_WEIGHTS.psi * psi.score +
+    SUB_ENGINE_WEIGHTS.gamma * gamma.score +
+    SUB_ENGINE_WEIGHTS.lambda * lambda.score +
+    SUB_ENGINE_WEIGHTS.theta * theta.score +
+    SUB_ENGINE_WEIGHTS.delta * delta.score;
 
-  const gate = computeSoftGate(input);
-  const overlayMultiplier = clamp(
-    (1 + omega) * gate.factor,
-    OVERLAY_MULTIPLIER_MIN,
-    OVERLAY_MULTIPLIER_MAX,
+  // 5. Final multiplier: (1 + Ω) · K, clamped.
+  const overlayMultiplier = Math.max(
+    OVERLAY_CLAMP.min,
+    Math.min(OVERLAY_CLAMP.max, (1 + omega) * softGateFactor),
   );
 
-  // ── Reason codes (positive evidence only) ─────────────────────────────────
-  const reasons: string[] = [];
-  if (power.score >= 0.40) reasons.push("STRONG_STATCAST_POWER");
-  if (launch.score >= 0.40) reasons.push("PULL_AIR_POWER_SHAPE");
-  if (matchup.coverage !== "MISSING" && matchup.score >= 0.30) {
-    reasons.push("ARSENAL_DAMAGE_MATCH");
-  }
-  if (lineup.score >= 0.15) reasons.push("PROJECTED_PA_VOLUME");
-  if (recency.score >= 0.30) reasons.push("RECENT_POWER_CONFIRMED");
+  // 6. Aggregate coverage.
+  const coverageMap = {
+    psi: psi.coverage,
+    gamma: gamma.coverage,
+    lambda: lambda.coverage,
+    theta: theta.coverage,
+    delta: delta.coverage,
+  };
+  const coverageValues = Object.values(coverageMap) as DataCoverage[];
+  const overall: DataCoverage = coverageValues.every(c => c === "FULL")
+    ? "FULL"
+    : coverageValues.every(c => c === "MISSING")
+    ? "MISSING"
+    : "PARTIAL";
 
-  // ── Risk codes ────────────────────────────────────────────────────────────
-  const risks: string[] = [...gate.risks];
-  if (matchup.coverage === "MISSING") risks.push("PITCH_TRACKING_MISSING");
-  else if (matchup.coverage === "PARTIAL") risks.push("PITCH_TRACKING_PARTIAL");
-  if (lineup.coverage === "PARTIAL") risks.push("BATTING_ORDER_SPLIT_UNAVAILABLE");
-  if (recency.coverage === "MISSING") risks.push("RECENT_FORM_UNAVAILABLE");
-
-  let confidencePenalty = gate.confidencePenalty;
-  if (isPresent(input.totalPA2024to2026) && input.totalPA2024to2026 < LOW_SAMPLE_PA) {
+  // 7. Aggregate reasons and risks.
+  const reasons: string[] = [
+    ...psi.reasons, ...gamma.reasons, ...lambda.reasons,
+    ...theta.reasons, ...delta.reasons,
+  ];
+  const risks: string[] = [
+    ...psi.risks, ...gamma.risks, ...lambda.risks,
+    ...theta.risks, ...delta.risks,
+  ];
+  if (triadCoverage !== "FULL" && !risks.includes("LOW_2024_2026_SAMPLE")) {
     risks.push("LOW_2024_2026_SAMPLE");
-    confidencePenalty = true;
   }
-
-  const qualityContact = qualityContactCoverage(input);
 
   return {
-    omega: round4(omega),
-    softGateFactor: round4(gate.factor),
-    overlayMultiplier: round4(overlayMultiplier),
+    overlayMultiplier: Math.round(overlayMultiplier * 10000) / 10000,
+    omega: Math.round(omega * 10000) / 10000,
+    softGateFactor: Math.round(softGateFactor * 10000) / 10000,
     confidencePenalty,
-    components: {
-      power: withWeight(power, OVERLAY_WEIGHTS.power),
-      matchup: withWeight(matchup, OVERLAY_WEIGHTS.matchup),
-      launch: withWeight(launch, OVERLAY_WEIGHTS.launch),
-      lineup: withWeight(lineup, OVERLAY_WEIGHTS.lineup),
-      recency: withWeight(recency, OVERLAY_WEIGHTS.recency),
-    },
-    dataCoverage: {
-      statcastBatting: power.coverage,
-      pitchTracking: matchup.coverage,
-      battedBallProfile: launch.coverage,
-      battingOrderSplits: lineup.coverage,
-      recentPower: recency.coverage,
-      qualityContact,
-    },
+    components: { psi, gamma, lambda, theta, delta },
+    dataCoverage: { ...coverageMap, overall },
     reasons,
-    risks: Array.from(new Set(risks)),
+    risks,
   };
 }
-
-function qualityContactCoverage(input: HROverlayInput): Coverage {
-  const hasGateInputs =
-    isPresent(input.barrelRate) || isPresent(input.barrelPerPA) || isPresent(input.maxEV);
-  if (!hasGateInputs) return "MISSING";
-  // Topped% is the last missing piece until Phase 2 ingestion lands.
-  return isPresent(input.toppedPct) ? "FULL" : "PARTIAL";
-}
-
-export type { HROverlayInput, HROverlayResult } from "./hrOverlayTypes";

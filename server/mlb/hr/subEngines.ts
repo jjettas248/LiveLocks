@@ -1,279 +1,205 @@
-// HR overlay sub-engines (Ψ, Γ, Λ, Θ, Δ) and the soft gate (K).
-//
-// Every sub-engine is a pure function and returns a neutral score of 0 with
-// coverage "MISSING" when its inputs are absent — so partial data never
-// destabilizes the model and the overlay multiplier degrades gracefully to 1.0.
+// HR Overlay — pure sub-engine functions.
+// Each returns an OverlayComponentResult with score ∈ [-1, 1].
+// All are no-op (+0, MISSING) when their required inputs are absent.
 
-import { getPitchFamily } from "../pitchTypeNormalizer";
-import {
-  LEAGUE_BASELINES,
-  GATE_THRESHOLDS,
-  GATE_DAMPENERS,
-  GATE_SOFT_FLOOR,
-  ARSENAL_THETA_DAMAGE,
-  ARSENAL_THETA_WHIFF,
-  ORDER_SPLIT_SHRINKAGE,
-  LINEUP_SLOT_BASE_PA,
-  BASELINE_PA,
-  WINSOR_RATIO_MIN,
-  WINSOR_RATIO_MAX,
-} from "./hrOverlayConstants";
-import { clamp, isPresent, ratioVsBaseline, ratioToScore } from "./normalization";
-import { applySeasonTriadWeighting } from "./temporalFilter";
-import type {
-  HROverlayInput,
-  SubEngineResult,
-  Coverage,
-  PitchFamilyKey,
-} from "./hrOverlayTypes";
+import { LEAGUE_BASELINES, GATE_THRESHOLDS } from "./hrOverlayConstants";
+import { ratioVsBaseline, winsorize } from "./normalization";
+import type { HROverlayInput, OverlayComponentResult, DataCoverage } from "./hrOverlayTypes";
 
-interface WeightedRatio {
-  ratio: number | null;
-  weight: number;
-}
-
-/**
- * Combine weighted ratio parts into a signed score. Coverage reflects how much
- * of the intended weight was backed by real data.
- *
- * normalizeBy "present" (default): renormalize over the parts actually present
- * so a dominant-but-lone signal (e.g. Barrel/PA in Ψ) still counts at full
- * strength. normalizeBy "total": divide by the full intended weight so missing
- * sub-parts dampen the result — used for the recency confirmation layer so a
- * single low-priority signal (e.g. OPS) cannot originate a strong push.
- */
-function aggregate(
-  parts: WeightedRatio[],
-  opts: { normalizeBy?: "present" | "total" } = {},
-): SubEngineResult {
-  const normalizeBy = opts.normalizeBy ?? "present";
-  let acc = 0;
-  let presentWeight = 0;
-  let totalWeight = 0;
-  for (const p of parts) {
-    totalWeight += p.weight;
-    if (p.ratio != null) {
-      acc += p.weight * ratioToScore(p.ratio);
-      presentWeight += p.weight;
-    }
-  }
-  const denom = normalizeBy === "total" ? totalWeight : presentWeight;
-  const score = denom > 0 ? clamp(acc / denom, -1, 1) : 0;
-  return { score, coverage: coverageOf(presentWeight, totalWeight) };
-}
-
-function coverageOf(presentWeight: number, totalWeight: number): Coverage {
-  if (presentWeight <= 0) return "MISSING";
-  if (presentWeight >= totalWeight - 1e-9) return "FULL";
-  return "PARTIAL";
-}
-
-// ── Ψ power: pure raw-power profile ─────────────────────────────────────────
-export function computePowerProfile(input: HROverlayInput): SubEngineResult {
-  // Prefer triad-blended Barrel/PA; fall back to single-season Barrel/PA, then
-  // to Barrel% of BBE (its own baseline) so today's data still scores.
-  const triadBarrel = input.barrelPerPABySeason
-    ? applySeasonTriadWeighting(input.barrelPerPABySeason).value
-    : null;
-  const barrelPA = triadBarrel ?? input.barrelPerPA;
-  let barrelRatio: number | null = null;
-  if (isPresent(barrelPA)) {
-    barrelRatio = ratioVsBaseline(barrelPA, LEAGUE_BASELINES.barrelPerPA);
-  } else if (isPresent(input.barrelRate)) {
-    barrelRatio = ratioVsBaseline(input.barrelRate, LEAGUE_BASELINES.barrelRateBBE);
-  }
-
-  // xwOBAcon preferred; fall back to overall xwOBA with its own anchor.
-  let xwobaRatio: number | null = null;
-  if (isPresent(input.xwOBAcon)) {
-    xwobaRatio = ratioVsBaseline(input.xwOBAcon, LEAGUE_BASELINES.xwOBAcon);
-  } else if (isPresent(input.xwOBA)) {
-    xwobaRatio = ratioVsBaseline(input.xwOBA, LEAGUE_BASELINES.xwOBA);
-  }
-
-  return aggregate([
-    { ratio: barrelRatio, weight: 0.40 },
-    { ratio: ratioVsBaseline(input.exitVelocity, LEAGUE_BASELINES.exitVelocity), weight: 0.20 },
-    { ratio: ratioVsBaseline(input.sweetSpotPct, LEAGUE_BASELINES.sweetSpotPct), weight: 0.15 },
-    { ratio: xwobaRatio, weight: 0.25 },
-  ]);
-}
-
-// ── Λ launch: air × pull topology ───────────────────────────────────────────
-// ln((FB%·PullAIR%)/(μFB·μPull)) expressed via the shared log-symmetric score.
-export function computeLaunchTopology(input: HROverlayInput): SubEngineResult {
-  const fbRatio = ratioVsBaseline(input.flyBallPct, LEAGUE_BASELINES.flyBallPct);
-  const pullRatio = ratioVsBaseline(input.pullAirPct, LEAGUE_BASELINES.pullAirPct);
-
-  if (fbRatio == null && pullRatio == null) {
-    return { score: 0, coverage: "MISSING" };
-  }
-  // Product of available ratios (winsorized) → log-symmetric score.
-  const product = (fbRatio ?? 1) * (pullRatio ?? 1);
-  const boundedProduct = clamp(product, WINSOR_RATIO_MIN, WINSOR_RATIO_MAX);
-  const coverage: Coverage = fbRatio != null && pullRatio != null ? "FULL" : "PARTIAL";
-  return { score: ratioToScore(boundedProduct), coverage };
-}
-
-// ── Θ lineup: expected-PA volume × shrunk power-by-slot split ────────────────
-export function computeLineupVolume(input: HROverlayInput): SubEngineResult {
-  const slot = input.battingOrderSlot;
-  let volumeRatio: number | null = null;
-  if (isPresent(slot) && LINEUP_SLOT_BASE_PA[slot] != null) {
-    volumeRatio = ratioVsBaseline(LINEUP_SLOT_BASE_PA[slot], BASELINE_PA);
-  }
-
-  // Power-by-slot split (NEW DATA). Shrink hard toward the overall line; no-op
-  // when the split is absent — coverage then degrades to PARTIAL.
-  let powerRatio: number | null = null;
-  const split = isPresent(slot)
-    ? input.orderSplits?.find((s) => s.slot === slot)
-    : undefined;
-  if (split && isPresent(split.slg) && isPresent(input.overallSlg) && input.overallSlg > 0) {
-    const pa = split.pa ?? 0;
-    const shrunk =
-      (pa / (pa + ORDER_SPLIT_SHRINKAGE)) * split.slg +
-      (ORDER_SPLIT_SHRINKAGE / (pa + ORDER_SPLIT_SHRINKAGE)) * input.overallSlg;
-    powerRatio = ratioVsBaseline(shrunk, input.overallSlg);
-  }
-
-  return aggregate([
-    { ratio: volumeRatio, weight: 0.60 },
-    { ratio: powerRatio, weight: 0.40 },
-  ]);
-}
-
-// ── Δ recency: short-term power/HR momentum vs the triad average ─────────────
-// SLG highest priority, recent HR-rate streak next, OPS lowest (a confirmation
-// signal — never an originator).
-export function computeRecencyDelta(input: HROverlayInput): SubEngineResult {
-  let slgRatio: number | null = null;
-  if (isPresent(input.recentSlg) && isPresent(input.seasonSlg) && input.seasonSlg > 0) {
-    slgRatio = clamp(input.recentSlg / input.seasonSlg, WINSOR_RATIO_MIN, WINSOR_RATIO_MAX);
-  }
-
-  let streakRatio: number | null = null;
-  const season = input.seasonHRRate;
-  if (isPresent(season) && season > 0) {
-    const l7 = input.hrRateLast7;
-    const l15 = input.hrRateLast15;
-    let recent: number | null = null;
-    if (isPresent(l7) && isPresent(l15)) recent = 0.4 * l7 + 0.6 * l15;
-    else if (isPresent(l15)) recent = l15;
-    else if (isPresent(l7)) recent = l7;
-    if (recent != null) {
-      streakRatio = clamp(recent / season, WINSOR_RATIO_MIN, WINSOR_RATIO_MAX);
-    }
-  }
-
-  let opsRatio: number | null = null;
-  if (isPresent(input.recentOps) && isPresent(input.seasonOps) && input.seasonOps > 0) {
-    opsRatio = clamp(input.recentOps / input.seasonOps, WINSOR_RATIO_MIN, WINSOR_RATIO_MAX);
-  }
-
-  if (slgRatio == null && streakRatio == null && opsRatio == null) {
-    return { score: 0, coverage: "MISSING" };
-  }
-
-  // Normalize over the full intended weight so a lone low-priority signal
-  // (OPS) cannot originate a strong push — recency only confirms.
-  return aggregate(
-    [
-      { ratio: slgRatio, weight: 0.50 },   // SLG highest priority
-      { ratio: streakRatio, weight: 0.30 }, // recent HR-rate streak
-      { ratio: opsRatio, weight: 0.20 },   // OPS lowest priority
-    ],
-    { normalizeBy: "total" },
-  );
-}
-
-// ── Γ arsenal matchup: pitcher usage · batter pitch-family damage ────────────
-export function computeArsenalMatchupFit(input: HROverlayInput): SubEngineResult {
-  const splits = input.batterPitchSplits;
-  const mix = input.pitchMix;
-  if (!splits || splits.length === 0 || !mix || mix.length === 0) {
-    return { score: 0, coverage: "MISSING" };
-  }
-
-  const usageByFamily: Record<PitchFamilyKey, number> = {
-    fastball: 0,
-    breaking: 0,
-    offspeed: 0,
-  };
-  let totalUsage = 0;
-  for (const p of mix) {
-    const fam = getPitchFamily(p.pitchType);
-    if (fam === "other") continue;
-    const pct = isPresent(p.percentage) ? p.percentage : 0;
-    usageByFamily[fam] += pct;
-    totalUsage += pct;
-  }
-  if (totalUsage <= 0) return { score: 0, coverage: "MISSING" };
-
-  let acc = 0;
-  let coveredUsage = 0;
-  for (const s of splits) {
-    const usage = (usageByFamily[s.family] ?? 0) / totalUsage;
-    if (usage <= 0) continue;
-    const xslgRatio = ratioVsBaseline(s.xSlg, LEAGUE_BASELINES.xSlgByFamily[s.family]);
-    const whiffRatio = ratioVsBaseline(s.whiffPct, LEAGUE_BASELINES.whiffPctByFamily[s.family]);
-    if (xslgRatio == null && whiffRatio == null) continue;
-    const damage = ratioToScore(xslgRatio);
-    const whiffPenalty = ratioToScore(whiffRatio);
-    acc += usage * (ARSENAL_THETA_DAMAGE * damage - ARSENAL_THETA_WHIFF * whiffPenalty);
-    coveredUsage += usage;
-  }
-
-  if (coveredUsage <= 0) return { score: 0, coverage: "MISSING" };
-  return {
-    score: clamp(acc, -1, 1),
-    coverage: coveredUsage >= 0.75 ? "FULL" : "PARTIAL",
-  };
-}
-
-// ── K soft gate: contact-floor suppression (dampens, never zeroes) ───────────
-export interface SoftGateResult {
-  factor: number;
-  confidencePenalty: boolean;
-  risks: string[];
-}
-
-export function computeSoftGate(input: HROverlayInput): SoftGateResult {
-  let factor = 1.0;
-  let penalty = false;
+// ── Ψ (Power Profile) ────────────────────────────────────────────────────────
+// Inputs: Barrel/PA, MaxEV, SweetSpot%, xwOBAcon.
+// Score is a weighted average of ratio-vs-baseline for each present metric.
+export function computePowerProfile(input: HROverlayInput): OverlayComponentResult {
+  const scores: number[] = [];
+  const reasons: string[] = [];
   const risks: string[] = [];
 
-  // Barrel floor — prefer Barrel/PA, fall back to Barrel% of BBE.
-  if (isPresent(input.barrelPerPA)) {
-    if (input.barrelPerPA < GATE_THRESHOLDS.barrelPerPAFloor) {
-      factor *= GATE_DAMPENERS.lowBarrel;
-      penalty = true;
-      risks.push("LOW_BARREL_FLOOR");
-    }
-  } else if (isPresent(input.barrelRate)) {
-    if (input.barrelRate < GATE_THRESHOLDS.barrelRateBBEFloor) {
-      factor *= GATE_DAMPENERS.lowBarrel;
-      penalty = true;
-      risks.push("LOW_BARREL_FLOOR");
-    }
+  const barrel = input.barrelPerPA;
+  if (barrel != null) {
+    const s = ratioVsBaseline(barrel, LEAGUE_BASELINES.barrelPerPA, 2.0);
+    scores.push(s);
+    if (s > 0.3) reasons.push("STRONG_BARREL_RATE");
+    else if (s < -0.3) risks.push("WEAK_BARREL_RATE");
   }
 
-  if (isPresent(input.maxEV) && input.maxEV < GATE_THRESHOLDS.maxEvFloor) {
-    factor *= GATE_DAMPENERS.lowMaxEv;
-    penalty = true;
-    risks.push("LOW_MAX_EV");
+  const ev = input.maxEV;
+  if (ev != null) {
+    // EV is an absolute threshold metric — winsorize tighter (1.5×)
+    const s = ratioVsBaseline(ev, LEAGUE_BASELINES.maxEV, 1.5) * 0.8;
+    scores.push(s);
+    if (s > 0.2) reasons.push("STRONG_XHR_PER_PA");
+    else if (s < -0.2) risks.push("LOW_EXIT_VELOCITY");
   }
 
-  // Topped% ceiling — skipped entirely when absent (Phase 2 data).
-  if (isPresent(input.toppedPct) && input.toppedPct > GATE_THRESHOLDS.toppedPctCeiling) {
-    factor *= GATE_DAMPENERS.highTopped;
-    penalty = true;
-    risks.push("GROUND_BALL_SUPPRESSION");
+  const ss = input.sweetSpotPct;
+  if (ss != null) {
+    scores.push(ratioVsBaseline(ss, LEAGUE_BASELINES.sweetSpotPct, 2.0) * 0.85);
   }
 
-  return {
-    factor: Math.max(GATE_SOFT_FLOOR, factor),
-    confidencePenalty: penalty,
-    risks,
+  const xwoba = input.xwOBAcon;
+  if (xwoba != null) {
+    const s = ratioVsBaseline(xwoba, LEAGUE_BASELINES.xwOBAcon, 2.0);
+    scores.push(s);
+    if (s > 0.3) reasons.push("HIGH_XWOBACON");
+    else if (s < -0.3) risks.push("WEAK_XWOBACON");
+  }
+
+  if (scores.length === 0) {
+    return { score: 0, coverage: "MISSING", reasons: [], risks: ["POWER_PROFILE_MISSING"] };
+  }
+
+  const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+  const coverage: DataCoverage = scores.length >= 4 ? "FULL" : "PARTIAL";
+  return { score: winsorize(avg, 1.0), coverage, reasons, risks };
+}
+
+// ── Γ (Arsenal Matchup Fit) ───────────────────────────────────────────────────
+// Fully no-op until Phase 2 pitch-type batter-split data is ingested.
+// Returns +0 and coverage MISSING so the weight (0.20) is effectively inert.
+export function computeArsenalMatchupFit(input: HROverlayInput): OverlayComponentResult {
+  if (!input.pitchTypeSplits || input.pitchTypeSplits.length === 0) {
+    return {
+      score: 0,
+      coverage: "MISSING",
+      reasons: [],
+      risks: ["PITCH_TRACKING_PARTIAL"],
+    };
+  }
+  // Phase 2 placeholder — data present but scoring not yet implemented.
+  return { score: 0, coverage: "PARTIAL", reasons: [], risks: ["PITCH_TRACKING_PARTIAL"] };
+}
+
+// ── Λ (Launch Topology) ───────────────────────────────────────────────────────
+// Score = ln((FB% · PullAir%) / (μ_FB · μ_PullAir)), scaled and clamped.
+// High FB% combined with high pull-air rate → power-pull shape → positive.
+export function computeLaunchTopology(input: HROverlayInput): OverlayComponentResult {
+  const fb = input.fbPct;
+  const pull = input.pullAirPct;
+
+  if (fb == null && pull == null) {
+    return { score: 0, coverage: "MISSING", reasons: [], risks: ["LAUNCH_TOPOLOGY_MISSING"] };
+  }
+
+  // Use league baseline as stand-in for whichever input is absent.
+  const fbEff = fb ?? LEAGUE_BASELINES.fbPct;
+  const pullEff = pull ?? LEAGUE_BASELINES.pullAirPct;
+
+  const safeProduct = Math.max(0.001, fbEff * pullEff);
+  const baseProduct = LEAGUE_BASELINES.fbPct * LEAGUE_BASELINES.pullAirPct;
+  // Scale factor 0.7 keeps most real-world values within [-1, 1] before winsorize.
+  const logRatio = Math.log(safeProduct / baseProduct) * 0.7;
+
+  const score = winsorize(logRatio, 1.0);
+  const reasons: string[] = score > 0.3 ? ["PULL_AIR_POWER_SHAPE"] : [];
+  const risks: string[] = score < -0.3 ? ["GROUND_BALL_SUPPRESSION"] : [];
+  const coverage: DataCoverage = (fb != null && pull != null) ? "FULL" : "PARTIAL";
+
+  return { score, coverage, reasons, risks };
+}
+
+// ── Θ (Lineup Volume) ─────────────────────────────────────────────────────────
+// Models expected HR opportunity based on batting order position.
+// Slot 6 is the neutral reference (score 0). When battingOrderSlgSplit is
+// present (Phase 2 partial), it's Bayesian-shrunk toward the overall SLG.
+export function computeLineupVolume(input: HROverlayInput): OverlayComponentResult {
+  const slot = input.battingOrderSlot;
+
+  if (slot == null) {
+    return { score: 0, coverage: "MISSING", reasons: [], risks: [] };
+  }
+
+  // HR opportunity by slot relative to slot 6 (neutral reference).
+  const SLOT_BASE: Record<number, number> = {
+    1: 0.05, 2: 0.10, 3: 0.28, 4: 0.32, 5: 0.20,
+    6: 0.00, 7: -0.15, 8: -0.20, 9: -0.25,
   };
+  const baseScore = SLOT_BASE[slot] ?? 0.0;
+
+  // Batting-order SLG split (Phase 2) — shrink toward overall with 120 PA prior.
+  let slgBoost = 0.0;
+  let coverage: DataCoverage = "PARTIAL"; // slot alone
+  const slgSplit = input.battingOrderSlgSplit;
+  const overallSlg = input.overallSLG;
+  if (slgSplit != null) {
+    const ref = overallSlg ?? LEAGUE_BASELINES.xSLG;
+    // Bayesian shrink: observed split weighted at 150 PA against 120 PA at ref.
+    const shrunk = (slgSplit * 150 + ref * 120) / 270;
+    slgBoost = ratioVsBaseline(shrunk, ref, 1.5) * 0.4;
+    coverage = "FULL";
+  }
+
+  const score = winsorize(baseScore + slgBoost, 1.0);
+  const reasons: string[] = score > 0.2 ? ["CLEANUP_SLOT_POWER"] : [];
+  const risks: string[] = slot >= 7 ? ["LOW_ORDER_POSITION"] : [];
+
+  return { score, coverage, reasons, risks };
+}
+
+// ── Δ (Recency Delta) ─────────────────────────────────────────────────────────
+// Measures how much the batter's recent form (L15–L30) deviates from his
+// season baseline. Captures hot/cold streaks. Lowest weight (0.10) because
+// the hot-hand effect is real but noisy.
+export function computeRecencyDelta(input: HROverlayInput): OverlayComponentResult {
+  const contributions: number[] = [];
+
+  const recentSlg = input.recentSLG;
+  const seasonSlg = input.seasonSLG;
+  if (recentSlg != null && seasonSlg != null && seasonSlg > 0) {
+    contributions.push((recentSlg - seasonSlg) / seasonSlg);
+  }
+
+  const recentOps = input.recentOPS;
+  const seasonOps = input.seasonOPS;
+  if (recentOps != null && seasonOps != null && seasonOps > 0) {
+    contributions.push((recentOps - seasonOps) / seasonOps);
+  }
+
+  if (contributions.length === 0) {
+    return { score: 0, coverage: "MISSING", reasons: [], risks: [] };
+  }
+
+  const avg = contributions.reduce((a, b) => a + b, 0) / contributions.length;
+  const score = winsorize(avg, 1.0);
+  const reasons: string[] = score > 0.2 ? ["HOT_RECENT_FORM"] : [];
+  const risks: string[] = score < -0.2 ? ["COLD_RECENT_FORM"] : [];
+  const coverage: DataCoverage = contributions.length >= 2 ? "FULL" : "PARTIAL";
+
+  return { score, coverage, reasons, risks };
+}
+
+// ── K (Soft Gate) ─────────────────────────────────────────────────────────────
+// Dampens the overlay when a batter fails basic contact-quality floors.
+// Never zeros the overlay — minimum is GATE_THRESHOLDS.gateFloor (0.65).
+// Stamps confidencePenalty when any gate condition fires.
+export function computeSoftGate(input: HROverlayInput): {
+  softGateFactor: number;
+  confidencePenalty: boolean;
+} {
+  let gate = 1.0;
+  let confidencePenalty = false;
+
+  const barrel = input.barrelPerPA;
+  if (barrel != null && barrel < GATE_THRESHOLDS.barrelFloor) {
+    // Linear dampening from gateFloor (barrel=0) to 1.0 (barrel=floor).
+    const deficit = 1 - barrel / GATE_THRESHOLDS.barrelFloor;
+    gate *= 1 - deficit * (1 - GATE_THRESHOLDS.gateFloor);
+    confidencePenalty = true;
+  }
+
+  const ev = input.maxEV;
+  if (ev != null && ev < GATE_THRESHOLDS.evFloor) {
+    const deficit = 1 - ev / GATE_THRESHOLDS.evFloor;
+    // Half weight vs barrel — EV alone is less definitive.
+    gate *= 1 - deficit * (1 - GATE_THRESHOLDS.gateFloor) * 0.5;
+    confidencePenalty = true;
+  }
+
+  const topped = input.toppedPct;
+  if (topped != null && topped > GATE_THRESHOLDS.toppedCeiling) {
+    const excess = (topped - GATE_THRESHOLDS.toppedCeiling) / GATE_THRESHOLDS.toppedCeiling;
+    gate *= 1 - Math.min(0.35, excess * 0.5) * (1 - GATE_THRESHOLDS.gateFloor);
+    confidencePenalty = true;
+  }
+
+  return { softGateFactor: Math.max(GATE_THRESHOLDS.gateFloor, gate), confidencePenalty };
 }

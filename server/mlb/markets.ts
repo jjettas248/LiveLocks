@@ -8,6 +8,7 @@ import type {
 } from "./types";
 import { MARKET_PROBABILITY_CAPS } from "./types";
 import { getPlayer, getPlayerByName } from "./rosterService";
+import { isDeepFly } from "./statcastXBA";
 import { mlbGameCache } from "./dataPullService";
 import { buildHRSignal } from "./HRSignalBuilder";
 
@@ -467,7 +468,7 @@ function translateToScoutReport(input: MLBPropInput, output: Partial<MLBPropOutp
     bullets.push("Crushes This Park");
   }
 
-  const deepFlys = priorABs.filter((ab) => ab.outcome === "out" && (ab.distance ?? 0) >= 350 && (ab.launchAngle ?? 0) >= 20);
+  const deepFlys = priorABs.filter((ab) => ab.outcome === "out" && isDeepFly(ab.launchAngle ?? null, ab.distance ?? null));
   if (deepFlys.length > 0) {
     bullets.push(`${deepFlys.length} Deep Flyout${deepFlys.length > 1 ? "s" : ""}`);
   }
