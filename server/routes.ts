@@ -933,17 +933,17 @@ export async function registerRoutes(
       const tier = ((req.query.tier as string) || "").toLowerCase();
       const range = ((req.query.range as string) || "all").toLowerCase();
 
+      const { buildFullROIReport, normalizeTier } = await import("./services/roiEngine");
+      const { getShadowSummary } = await import("./mlb/shadowQualification");
+      const { MLB_GOLDMASTER_VERSION } = await import("./mlb/goldmasterGuard");
+
       const startDate = trackRecordStartDate(range);
       let plays = await storage.getPlaysInRange({
         sport: sport === "all" ? undefined : sport,
         startDate: startDate || undefined,
       });
       if (market) plays = plays.filter(p => p.market === market);
-      if (tier) plays = plays.filter(p => (p.confidenceTier ?? "untiered").toLowerCase() === tier);
-
-      const { buildFullROIReport } = await import("./services/roiEngine");
-      const { getShadowSummary } = await import("./mlb/shadowQualification");
-      const { MLB_GOLDMASTER_VERSION } = await import("./mlb/goldmasterGuard");
+      if (tier) plays = plays.filter(p => normalizeTier(p.confidenceTier) === tier);
 
       const report = buildFullROIReport(plays as unknown as PersistedPlay[]);
 
@@ -987,17 +987,22 @@ export async function registerRoutes(
       const tier = ((req.query.tier as string) || "").toLowerCase();
       const range = ((req.query.range as string) || "all").toLowerCase();
 
+      const { calculatePayout, normalizeTier } = await import("./services/roiEngine");
       const startDate = trackRecordStartDate(range);
       let plays = await storage.getPlaysInRange({
         sport: sport === "all" ? undefined : sport,
         startDate: startDate || undefined,
       });
       if (market) plays = plays.filter(p => p.market === market);
-      if (tier) plays = plays.filter(p => (p.confidenceTier ?? "untiered").toLowerCase() === tier);
+      if (tier) plays = plays.filter(p => normalizeTier(p.confidenceTier) === tier);
 
-      const { calculatePayout } = await import("./services/roiEngine");
       const body = (plays as unknown as PersistedPlay[]).map(p => {
-        const settled = p.result === "hit" || p.result === "miss" || p.result === "push";
+        // A "void" (DNP) result is terminal & financially neutral — the ROI
+        // engine drops it from both settled and pending. Treat any non-null
+        // result as terminal so the CSV never mislabels a void as pending.
+        const financiallySettled = p.result === "hit" || p.result === "miss" || p.result === "push";
+        const isVoid = p.result === "void";
+        const terminal = p.result != null;
         const hasOdds = p.odds != null && Number.isFinite(Number(p.odds));
         return [
           "historical_engine",
@@ -1014,10 +1019,10 @@ export async function registerRoutes(
           p.signalScore ?? "",
           p.engineVersion ?? "unknown",
           p.result ?? "",
-          settled ? "settled" : "pending",
+          terminal ? "settled" : "pending",
           p.finalStat ?? "",
-          settled ? Math.round(calculatePayout(p) * 1000) / 1000 : "",
-          settled ? (hasOdds ? "actual_odds" : "assumed_-110") : "",
+          financiallySettled ? Math.round(calculatePayout(p) * 1000) / 1000 : isVoid ? 0 : "",
+          financiallySettled ? (hasOdds ? "actual_odds" : "assumed_-110") : isVoid ? "void_no_action" : "",
         ];
       });
 
@@ -1045,7 +1050,11 @@ export async function registerRoutes(
       if (market) records = records.filter(r => r.market === market);
 
       const body = records.map(r => {
-        const settled = r.outcome === "cashed" || r.outcome === "missed" || r.outcome === "push";
+        // "expired" (TTL reached without resolution) is terminal but has no
+        // financial outcome — mirror the historical void handling so it is not
+        // mislabeled as pending.
+        const financiallySettled = r.outcome === "cashed" || r.outcome === "missed" || r.outcome === "push";
+        const terminal = r.outcome != null && r.outcome !== "pending";
         const pl = r.outcome === "cashed" ? SHADOW_VIG_PAYOUT : r.outcome === "missed" ? -1 : r.outcome === "push" ? 0 : "";
         return [
           "shadow_experimental",
@@ -1062,10 +1071,10 @@ export async function registerRoutes(
           r.signalScore ?? "",
           "shadow",
           r.outcome ?? "",
-          settled ? "settled" : "pending",
+          terminal ? "settled" : "pending",
           "", // final stat not retained on shadow record
           pl,
-          settled ? "shadow_proxy_-110" : "",
+          financiallySettled ? "shadow_proxy_-110" : "",
         ];
       });
 

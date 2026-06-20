@@ -128,16 +128,48 @@ export function groupBySport(plays: PersistedPlay[]): SegmentedROI[] {
   }));
 }
 
-/**
- * Per-signal-tier ROI. Keys off `confidenceTier` (watch/lean/strong/elite),
- * bucketing null/empty under "untiered" so every surfaced play is accounted
- * for. Ordered by tier strength so the dashboard reads watch→elite.
- */
 const TIER_ORDER = ["watch", "lean", "strong", "elite", "untiered"];
+
+/**
+ * Normalize the persisted `confidenceTier` into the canonical signal-tier
+ * vocabulary (`watch`/`lean`/`strong`/`elite`) used by the buyer track record
+ * filters and By-Signal-Tier breakdown.
+ *
+ * `persisted_plays.confidenceTier` carries mixed vocabularies depending on the
+ * source: the legacy MLB 4-tier `WATCHLIST/SOLID/STRONG/ELITE` (ranked 1→4 in
+ * `server/engines/mlb/validation.ts`) maps rank-for-rank onto the canonical
+ * 4-tier, and `VALUE` is the lean-equivalent value tier. Non-tier sentinels
+ * (`NONE`, `NO_EDGE`, `NO_SIGNAL`) and null collapse to `untiered`. Anything we
+ * don't recognize is kept as its own lowercased bucket — never hidden — so a
+ * buyer always sees every play accounted for.
+ */
+const CANONICAL_TIER_ALIASES: Record<string, string> = {
+  watch: "watch",
+  watchlist: "watch",
+  lean: "lean",
+  solid: "lean",
+  value: "lean",
+  strong: "strong",
+  elite: "elite",
+};
+const UNTIERED_SENTINELS = new Set(["", "none", "no_edge", "no_signal", "na", "n/a"]);
+export function normalizeTier(raw: string | null | undefined): string {
+  if (raw == null) return "untiered";
+  const k = String(raw).trim().toLowerCase();
+  if (UNTIERED_SENTINELS.has(k)) return "untiered";
+  return CANONICAL_TIER_ALIASES[k] ?? k;
+}
+
+/**
+ * Per-signal-tier ROI. Keys off the normalized `confidenceTier`
+ * (watch/lean/strong/elite, else untiered), so legacy uppercase tiers bucket
+ * and filter correctly. Ordered by tier strength so the dashboard reads
+ * watch→elite.
+ */
 export function groupByTier(plays: PersistedPlay[]): SegmentedROI[] {
   const groups = new Map<string, PersistedPlay[]>();
   for (const p of plays) {
-    const tier = (p.confidenceTier ?? "untiered").toLowerCase();
+    const tier = normalizeTier(p.confidenceTier);
     if (!groups.has(tier)) groups.set(tier, []);
     groups.get(tier)!.push(p);
   }
