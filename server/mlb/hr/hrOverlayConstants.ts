@@ -19,6 +19,9 @@ export const LEAGUE_BASELINES = {
   fbPct: 35.0,           // fly ball %
   pullAirPct: 12.0,      // pull % in air (FB + LD pull side)
   xSLG: 0.420,           // SLG baseline for lineup slot normalization
+  // Γ arsenal matchup — batter xSLG / whiff% baselines by pitch family.
+  xSlgByPitchType: { fastball: 0.430, breaking: 0.370, offspeed: 0.380 },
+  whiffPctByPitchType: { fastball: 22.0, breaking: 32.0, offspeed: 30.0 },
 } as const;
 
 // Soft-gate (K) thresholds — contact-quality floors below which the overlay is dampened.

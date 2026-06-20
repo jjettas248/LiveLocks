@@ -90,6 +90,13 @@ export interface HRAlertInput {
   firstBaseOpen?: boolean | null;
   runnerInScoringPosition?: boolean | null;
   scoreDifferential?: number | null;
+  // Consolidated HR overlay (Phase 2 ingestion) — all optional, no-op when absent.
+  maxEV?: number | null;
+  toppedPercent?: number | null;
+  seasonSLG?: number | null;
+  recentSLG?: number | null;
+  battingOrderSlgSplit?: number | null;
+  pitchTypeSplits?: import("./hr/hrOverlayTypes").PitchTypeBatterSplit[] | null;
   // Phase 2 — market HR prop prices (American odds) for EV-gating the HR Max
   // Window tier. Optional and no-op when absent (HR-radar-only runs, pregame,
   // quota exhaustion) so partial odds coverage never suppresses signals.
@@ -369,6 +376,13 @@ function buildConversionInput(input: HRAlertInput): HRConversionInput {
     firstBaseOpen: input.firstBaseOpen ?? null,
     runnerInScoringPosition: input.runnerInScoringPosition ?? null,
     scoreDifferential: input.scoreDifferential ?? null,
+    // Consolidated HR overlay (Phase 2 ingestion).
+    maxEV: input.maxEV ?? null,
+    toppedPercent: input.toppedPercent ?? null,
+    seasonSLG: input.seasonSLG ?? null,
+    recentSLG: input.recentSLG ?? null,
+    battingOrderSlgSplit: input.battingOrderSlgSplit ?? null,
+    pitchTypeSplits: input.pitchTypeSplits ?? null,
   };
 }
 

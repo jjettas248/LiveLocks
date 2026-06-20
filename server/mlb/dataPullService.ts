@@ -7,6 +7,7 @@ import { normalizePitchTypeCode } from "./pitchTypeNormalizer";
 import { fetchBaseballSavantData, fetchSavantGameFeed, getStadiumCoords, windDirectionRelativeToField, isVenueIndoors } from "./dataSources";
 import { classifyContact, computeGameContactProfile, isBarrel as isCanonicalBarrel } from "./statcastXBA";
 import { storage } from "../storage";
+import { aggregateOrderSplits } from "./orderSplits";
 import { todayET } from "../utils/dateUtils";
 
 // ── Cache type definitions ────────────────────────────────────────────────────
@@ -59,6 +60,10 @@ export interface PlayerContactData {
   xISOSeason: number | null;
   sweetSpotPercent: number | null;
   pullRatePercent: number | null;
+  // Phase 2 — overlay season Savant aggregates (optional, no-op when absent).
+  batterPitchSplits?: import("./hr/hrOverlayTypes").PitchTypeBatterSplit[] | null;
+  toppedPct?: number | null;
+  maxEV?: number | null;
   priorABResults: Array<{
     exitVelocity: number | null;
     launchAngle: number | null;
@@ -155,11 +160,12 @@ export interface PitcherSeasonStats {
 }
 
 export interface BatterRollingStats {
-  last7: { avg: number | null; ops: number | null; games: number };
-  last15: { avg: number | null; ops: number | null; games: number };
-  last30: { avg: number | null; ops: number | null; games: number };
+  last7: { avg: number | null; ops: number | null; slg: number | null; games: number };
+  last15: { avg: number | null; ops: number | null; slg: number | null; games: number };
+  last30: { avg: number | null; ops: number | null; slg: number | null; games: number };
   seasonAvg: number | null;
   seasonOps: number | null;
+  seasonSlg: number | null;
   seasonHRRate: number | null;
   abSinceLastHR: number | null;
   hrRateLast7: number | null;
@@ -167,6 +173,7 @@ export interface BatterRollingStats {
   hrRateLast30: number | null;
   seasonTotalHR: number;
   seasonTotalAB: number;
+  seasonTotalPA: number;
   // Intentional walks (feared-slugger prior). Defensive: 0 / null when the feed
   // does not expose intentionalWalks, so downstream multipliers stay neutral.
   seasonTotalIBB: number;
@@ -243,15 +250,24 @@ export const mlbGameCache: {
 export const mlbPlayerCache: {
   pitcherSeasonStats: Record<string, PitcherSeasonStats>;
   batterRollingStats: Record<string, BatterRollingStats>;
+  batterOrderSplits: Record<string, BatterOrderSplitsData>;
   bvpMatchups: Record<string, BvPMatchupStats>;
 } = {
   pitcherSeasonStats: {},
   batterRollingStats: {},
+  batterOrderSplits: {},
   bvpMatchups: {},
 };
 
+export interface BatterOrderSplitsData {
+  splits: Array<{ slot: number; slg: number | null; ops: number | null; pa: number }>;
+  overallSlg: number | null;
+  fetchedAt: number;
+}
+
 const PITCHER_SEASON_TTL = 30 * 60 * 1000;
 const BATTER_ROLLING_TTL = 20 * 60 * 1000;
+const BATTER_ORDER_SPLITS_TTL = 6 * 60 * 60 * 1000; // lineup-slot history moves slowly
 const BVP_TTL = 60 * 60 * 1000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1390,12 +1406,12 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
     if (splits.length === 0) {
       if (!cached) {
         mlbPlayerCache.batterRollingStats[playerId] = {
-          last7: { avg: null, ops: null, games: 0 },
-          last15: { avg: null, ops: null, games: 0 },
-          last30: { avg: null, ops: null, games: 0 },
-          seasonAvg: null, seasonOps: null, seasonHRRate: null,
+          last7: { avg: null, ops: null, slg: null, games: 0 },
+          last15: { avg: null, ops: null, slg: null, games: 0 },
+          last30: { avg: null, ops: null, slg: null, games: 0 },
+          seasonAvg: null, seasonOps: null, seasonSlg: null, seasonHRRate: null,
           abSinceLastHR: null, hrRateLast7: null, hrRateLast15: null, hrRateLast30: null,
-          seasonTotalHR: 0, seasonTotalAB: 0,
+          seasonTotalHR: 0, seasonTotalAB: 0, seasonTotalPA: 0,
           seasonTotalIBB: 0, seasonIBBRate: null,
           fetchedAt: Date.now(),
         };
@@ -1405,8 +1421,8 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
       return;
     }
 
-    const computeRolling = (games: any[]): { avg: number | null; ops: number | null; games: number } => {
-      if (games.length === 0) return { avg: null, ops: null, games: 0 };
+    const computeRolling = (games: any[]): { avg: number | null; ops: number | null; slg: number | null; games: number } => {
+      if (games.length === 0) return { avg: null, ops: null, slg: null, games: 0 };
       let totalAB = 0, totalH = 0, totalPA = 0, totalTB = 0, totalOBP_num = 0;
       for (const g of games) {
         const s = g.stat;
@@ -1427,9 +1443,10 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
       }
       const avg = totalAB > 0 ? parseFloat((totalH / totalAB).toFixed(3)) : null;
       const obp = totalPA > 0 ? totalOBP_num / totalPA : 0;
-      const slg = totalAB > 0 ? totalTB / totalAB : 0;
-      const ops = (obp + slg) > 0 ? parseFloat((obp + slg).toFixed(3)) : null;
-      return { avg, ops, games: games.length };
+      const slgRaw = totalAB > 0 ? totalTB / totalAB : 0;
+      const slg = totalAB > 0 ? parseFloat(slgRaw.toFixed(3)) : null;
+      const ops = (obp + slgRaw) > 0 ? parseFloat((obp + slgRaw).toFixed(3)) : null;
+      return { avg, ops, slg, games: games.length };
     }
 
     const now = new Date();
@@ -1450,6 +1467,7 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
     const allGames = computeRolling(splits);
     const seasonAvg = allGames.avg;
     const seasonOps = allGames.ops;
+    const seasonSlg = allGames.slg;
 
     let seasonTotalPA = 0, seasonTotalHR = 0, seasonTotalAB = 0, seasonTotalIBB = 0;
     for (const g of splits) {
@@ -1501,9 +1519,9 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
     const hrRateLast30 = computeHRRate(filterByDays(30));
 
     mlbPlayerCache.batterRollingStats[playerId] = {
-      last7, last15, last30, seasonAvg, seasonOps, seasonHRRate,
+      last7, last15, last30, seasonAvg, seasonOps, seasonSlg, seasonHRRate,
       abSinceLastHR, hrRateLast7, hrRateLast15, hrRateLast30,
-      seasonTotalHR, seasonTotalAB,
+      seasonTotalHR, seasonTotalAB, seasonTotalPA,
       seasonTotalIBB, seasonIBBRate,
       fetchedAt: Date.now(),
     };
@@ -1511,6 +1529,25 @@ export async function syncBatterRollingStats(playerId: string): Promise<void> {
     console.log(`[MLB pull] syncBatterRollingStats: player ${playerId} — L7=${last7.avg} L15=${last15.avg} L30=${last30.avg} Season=${seasonAvg} HR/PA=${seasonHRRate ?? "n/a"} IBB/PA=${seasonIBBRate ?? "n/a"} abSinceHR=${abSinceLastHR ?? "n/a"} hrL7=${hrRateLast7 ?? "n/a"} hrL15=${hrRateLast15 ?? "n/a"} (${splits.length} games)`);
   } catch (err: any) {
     console.error(`[MLB pull] syncBatterRollingStats(${playerId}) error:`, err.message);
+    if (cached) cached.fetchedAt = Date.now();
+  }
+}
+
+// ── syncBatterOrderSplits ─────────────────────────────────────────────────────
+// SLG/OPS by lineup slot, aggregated from the locally-collected per-game stat
+// lines (game_player_stats) — real data the app already persists. No-ops
+// gracefully (empty splits) for players with no tracked history. Pure
+// aggregation lives in ./orderSplits (DB-free, unit-testable).
+export async function syncBatterOrderSplits(playerId: string): Promise<void> {
+  if (!playerId || playerId === "unknown") return;
+  const cached = mlbPlayerCache.batterOrderSplits[playerId];
+  if (cached && Date.now() - cached.fetchedAt < BATTER_ORDER_SPLITS_TTL) return;
+  try {
+    const rows = await storage.getBatterOrderSplitRows(playerId, 600);
+    const agg = aggregateOrderSplits(rows);
+    mlbPlayerCache.batterOrderSplits[playerId] = { ...agg, fetchedAt: Date.now() };
+  } catch (err: any) {
+    console.error(`[MLB pull] syncBatterOrderSplits(${playerId}) error:`, err.message);
     if (cached) cached.fetchedAt = Date.now();
   }
 }
@@ -1577,6 +1614,9 @@ export async function syncSavantSeasonForLineup(gameId: string): Promise<void> {
         xISOSeason: savant.xISOSeason,
         sweetSpotPercent: savant.sweetSpotPercent,
         pullRatePercent: savant.pullRatePercent,
+        batterPitchSplits: savant.batterPitchSplits,
+        toppedPct: savant.toppedPct,
+        maxEV: savant.maxEV,
       };
     } else {
       const entry = mlbGameCache.contactData[gameId].byPlayerId[pid];
@@ -1593,6 +1633,9 @@ export async function syncSavantSeasonForLineup(gameId: string): Promise<void> {
       if (entry.xISOSeason === null && savant.xISOSeason != null) entry.xISOSeason = savant.xISOSeason;
       if (entry.sweetSpotPercent === null && savant.sweetSpotPercent != null) entry.sweetSpotPercent = savant.sweetSpotPercent;
       if (entry.pullRatePercent === null && savant.pullRatePercent != null) entry.pullRatePercent = savant.pullRatePercent;
+      if (entry.batterPitchSplits == null && savant.batterPitchSplits != null) entry.batterPitchSplits = savant.batterPitchSplits;
+      if (entry.toppedPct == null && savant.toppedPct != null) entry.toppedPct = savant.toppedPct;
+      if (entry.maxEV == null && savant.maxEV != null) entry.maxEV = savant.maxEV;
     }
     enriched++;
   }
