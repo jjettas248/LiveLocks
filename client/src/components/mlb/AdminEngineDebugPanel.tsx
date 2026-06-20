@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { getAuthToken } from "@/lib/queryClient";
 import {
   Activity,
   AlertTriangle,
@@ -208,7 +209,11 @@ export function AdminEngineDebugPanel({ selectedGameId }: { selectedGameId: stri
   const { data, isLoading, error, dataUpdatedAt } = useQuery<EngineDebugResponse>({
     queryKey: ["/api/admin/mlb/engine-debug", selectedGameId],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/mlb/engine-debug${params}`, { credentials: "include" });
+      const token = getAuthToken();
+      const res = await fetch(`/api/admin/mlb/engine-debug${params}`, {
+        credentials: "include",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },

@@ -1,7 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
-import pg from "pg";
+import { pool as dbPool } from "./db";
 import { registerRoutes, registerAnalyticsRoutes, registerPlaysRoutes, registerTestAlertRoute, registerCalibrationRoutes, registerPerformanceRoutes } from "./routes";
 import { liveOrchestrator } from "./mlb/liveGameOrchestrator";
 import { updatePlayerPool, updateTeamRosters, getPlayerPoolCount } from "./mlb/rosterService";
@@ -90,16 +90,16 @@ app.post(
   }
 );
 
+// Sessions persist in Postgres (connect-pg-simple → "user_sessions" table)
+// so they survive server restarts/redeploys. Reuses the shared ORM pool from
+// ./db rather than opening a second connection pool to the same database.
+// db.ts throws at import time when DATABASE_URL is missing, so the pool here
+// is always present.
 const PgSession = connectPgSimple(session);
-const pgPool = process.env.DATABASE_URL
-  ? new pg.Pool({ connectionString: process.env.DATABASE_URL })
-  : undefined;
 
 app.use(
   session({
-    store: pgPool
-      ? new PgSession({ pool: pgPool, tableName: "user_sessions", createTableIfMissing: true })
-      : undefined,
+    store: new PgSession({ pool: dbPool, tableName: "user_sessions", createTableIfMissing: true }),
     secret: process.env.SESSION_SECRET || "livelocks-dev-secret",
     resave: false,
     saveUninitialized: false,
