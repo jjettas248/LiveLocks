@@ -69,6 +69,13 @@ function AdminLink() {
         </div>
         <div className="flex items-center gap-3">
           <button
+            data-testid="link-track-record"
+            onClick={() => navigate("/admin/track-record")}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-lg border border-border hover:bg-muted"
+          >
+            Track Record
+          </button>
+          <button
             data-testid="link-dashboard"
             onClick={() => navigate("/dashboard")}
             className="text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-lg border border-border hover:bg-muted"

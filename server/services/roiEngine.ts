@@ -128,6 +128,45 @@ export function groupBySport(plays: PersistedPlay[]): SegmentedROI[] {
   }));
 }
 
+/**
+ * Per-signal-tier ROI. Keys off `confidenceTier` (watch/lean/strong/elite),
+ * bucketing null/empty under "untiered" so every surfaced play is accounted
+ * for. Ordered by tier strength so the dashboard reads watch→elite.
+ */
+const TIER_ORDER = ["watch", "lean", "strong", "elite", "untiered"];
+export function groupByTier(plays: PersistedPlay[]): SegmentedROI[] {
+  const groups = new Map<string, PersistedPlay[]>();
+  for (const p of plays) {
+    const tier = (p.confidenceTier ?? "untiered").toLowerCase();
+    if (!groups.has(tier)) groups.set(tier, []);
+    groups.get(tier)!.push(p);
+  }
+  return Array.from(groups.entries())
+    .map(([segment, ps]) => ({ segment, metrics: getROIMetrics(ps) }))
+    .sort((a, b) => {
+      const ai = TIER_ORDER.indexOf(a.segment);
+      const bi = TIER_ORDER.indexOf(b.segment);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
+}
+
+/**
+ * Per-engine-version ROI. Keys off the `engineVersion` stamped on each play at
+ * record time (e.g. the MLB goldmaster version), so a buyer can attribute the
+ * track record to the exact model build that produced it. Null → "unknown".
+ */
+export function groupByEngineVersion(plays: PersistedPlay[]): SegmentedROI[] {
+  const groups = new Map<string, PersistedPlay[]>();
+  for (const p of plays) {
+    const version = p.engineVersion ?? "unknown";
+    if (!groups.has(version)) groups.set(version, []);
+    groups.get(version)!.push(p);
+  }
+  return Array.from(groups.entries())
+    .map(([segment, ps]) => ({ segment, metrics: getROIMetrics(ps) }))
+    .sort((a, b) => b.metrics.totalBets - a.metrics.totalBets);
+}
+
 export function groupByMarket(plays: PersistedPlay[]): SegmentedROI[] {
   const groups = new Map<string, PersistedPlay[]>();
   for (const p of plays) {
@@ -241,6 +280,8 @@ export interface FullROIReport {
   bySport: SegmentedROI[];
   byMarket: SegmentedROI[];
   byMarketBreakdown: MarketROIBreakdownRow[];
+  byTier: SegmentedROI[];
+  byEngineVersion: SegmentedROI[];
   byProbBucket: SegmentedROI[];
   bySignalScore: SegmentedROI[];
   byDirection: SegmentedROI[];
@@ -255,6 +296,8 @@ export function buildFullROIReport(plays: PersistedPlay[]): FullROIReport {
     bySport: groupBySport(plays),
     byMarket: groupByMarket(plays),
     byMarketBreakdown: getRoiByMarket(plays),
+    byTier: groupByTier(plays),
+    byEngineVersion: groupByEngineVersion(plays),
     byProbBucket: groupByProbBucket(plays),
     bySignalScore: groupBySignalScoreBucket(plays),
     byDirection: groupByDirection(plays),

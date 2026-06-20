@@ -275,6 +275,7 @@ export interface IStorage {
   }): Promise<{ id: string; isDuplicate: boolean }>;
   getPlays(opts: { sport?: string; limit?: number; settled?: string; date?: string }): Promise<{ plays: PersistedPlay[]; total: number }>;
   getAllSettledPlays(opts?: { sport?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]>;
+  getPlaysInRange(opts?: { sport?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]>;
   getGradedPlaysForCalibration(opts: { sport?: string; market?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]>;
   settlePlay(id: string, result: string, finalStat: number | null, settledAt: Date): Promise<PersistedPlay | null>;
   getPlayStats(): Promise<PlayStats>;
@@ -2433,6 +2434,34 @@ export class DatabaseStorage implements IStorage {
         if (Number(row.signalScore ?? 0) > Number(existing.signalScore ?? 0)) {
           seen.set(canonKey, row);
         }
+      }
+    }
+    return Array.from(seen.values());
+  }
+
+  /**
+   * Like getAllSettledPlays but WITHOUT the `result IS NOT NULL` filter, so it
+   * returns settled AND pending plays in the window. Used by the buyer track
+   * record so surfaced/pending counts are honest. Same canonKey dedup (keep the
+   * highest signalScore per unique signal) for consistent "unique surfaced" math.
+   */
+  async getPlaysInRange(opts?: { sport?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]> {
+    const conds = [] as any[];
+    if (opts?.sport) conds.push(sql`${persistedPlays.sport} = ${opts.sport}`);
+    if (opts?.startDate) conds.push(sql`${persistedPlays.gameDate} >= ${opts.startDate}`);
+    if (opts?.endDate) conds.push(sql`${persistedPlays.gameDate} <= ${opts.endDate}`);
+    const rows = conds.length > 0
+      ? await db.select().from(persistedPlays).where(and(...conds)).orderBy(desc(persistedPlays.timestamp))
+      : await db.select().from(persistedPlays).orderBy(desc(persistedPlays.timestamp));
+
+    const seen = new Map<string, PersistedPlay>();
+    for (const row of rows) {
+      const canonKey = `${row.playerId ?? row.playerName}|${row.market}|${row.direction}|${row.gameId}|${row.gameDate}`;
+      const existing = seen.get(canonKey);
+      if (!existing) {
+        seen.set(canonKey, row);
+      } else if (Number(row.signalScore ?? 0) > Number(existing.signalScore ?? 0)) {
+        seen.set(canonKey, row);
       }
     }
     return Array.from(seen.values());
