@@ -1292,7 +1292,7 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
               <span className={`font-bold ${statusColor}`}>{statusLabel}</span>
             </div>
           </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-muted/30" data-testid="button-close-analyze-x"><X className="w-4 h-4 text-muted-foreground" /></button>
+          <button onClick={onClose} aria-label="Close" className="p-1 rounded hover:bg-muted/30" data-testid="button-close-analyze-x"><X className="w-4 h-4 text-muted-foreground" aria-hidden="true" /></button>
         </div>
 
         <div className="p-4 space-y-4">
