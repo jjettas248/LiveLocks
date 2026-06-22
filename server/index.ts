@@ -97,10 +97,25 @@ app.post(
 // is always present.
 const PgSession = connectPgSimple(session);
 
+// Fail fast if SESSION_SECRET is missing in production: falling back to a
+// hardcoded, publicly-known secret would let anyone forge signed session
+// cookies. Dev keeps the convenience fallback (with a warning) so local
+// boots don't require the secret.
+const isProduction = !!process.env.REPLIT_DOMAINS || process.env.NODE_ENV === "production";
+const sessionSecret = process.env.SESSION_SECRET;
+if (isProduction && !sessionSecret) {
+  throw new Error(
+    "SESSION_SECRET must be set in production. Refusing to start with the public dev fallback secret.",
+  );
+}
+if (!isProduction && !sessionSecret) {
+  console.warn("[session] SESSION_SECRET not set — using insecure dev fallback (development only).");
+}
+
 app.use(
   session({
     store: new PgSession({ pool: dbPool, tableName: "user_sessions", createTableIfMissing: true }),
-    secret: process.env.SESSION_SECRET || "livelocks-dev-secret",
+    secret: sessionSecret || "livelocks-dev-secret",
     resave: false,
     saveUninitialized: false,
     cookie: {
