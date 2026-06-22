@@ -27,6 +27,7 @@ import { hasProAccess } from "@/lib/tierUtils";
 import { useLocation } from "wouter";
 import { TopPlaysPanel } from "@/components/dashboard/TopPlaysPanel";
 import { QueryErrorState } from "@/components/common/QueryErrorState";
+import { LiveIndicator } from "@/components/common/LiveIndicator";
 import { FreeActivationRail } from "@/components/dashboard/free-activation-rail";
 import { SignalPreviewConversionCard } from "@/components/dashboard/SignalPreviewConversionCard";
 import { TrialMissionRail } from "@/components/dashboard/trial-mission-rail";
@@ -168,6 +169,19 @@ const RESET_STEPS = [
   "Engine ready...",
   "Let's go 🔒",
 ];
+
+// ── Auto-scan qualification thresholds (NBA edge scanner) ──────────────────
+// A play qualifies for the auto-run result when it clears both the probability
+// floor and the edge floor; plays above the top-tier probability sort first.
+const AUTOSCAN_MIN_PROB = 55;
+const AUTOSCAN_MIN_EDGE = 5;
+const AUTOSCAN_TOP_TIER_PROB = 70;
+
+// Minimum perceived "scanning" time so the edge scan never flashes instantly —
+// returns a slightly randomized 300–800ms floor used to pad fast responses.
+function autoScanMinDelayMs(): number {
+  return 300 + Math.random() * 500;
+}
 
 function NewSlateOverlay({
   step,
@@ -335,7 +349,7 @@ export default function Dashboard() {
       const res = await fetch("/api/halftime-plays", { credentials: "include", headers });
       if (!res.ok) {
         const elapsed = Date.now() - scanStart;
-        const minDelay = 300 + Math.random() * 500;
+        const minDelay = autoScanMinDelayMs();
         if (elapsed < minDelay) await new Promise(r => setTimeout(r, minDelay - elapsed));
         setScanningEdges(false);
         setAutoRunFallback("no_edges");
@@ -343,9 +357,6 @@ export default function Dashboard() {
       }
       const data = await res.json();
       const plays = data.plays ?? [];
-      const autoScanOver = plays.filter((p: any) => p.betDirection === "over").length;
-      const autoScanUnder = plays.filter((p: any) => p.betDirection === "under").length;
-      console.log("[HT_CLIENT_FETCHED]", { source: "auto-scan", received: plays.length, over: autoScanOver, under: autoScanUnder });
       if (plays.length > 0) {
         fetch("/api/halftime-plays/verify-client", { credentials: "include",
           method: "POST",
@@ -361,23 +372,21 @@ export default function Dashboard() {
         .filter((p: any) => {
           const prob = parseFloat(p.probability);
           const edge = parseFloat(p.edge ?? "0");
-          return prob >= 55 && edge >= 5;
+          return prob >= AUTOSCAN_MIN_PROB && edge >= AUTOSCAN_MIN_EDGE;
         })
         .sort((a: any, b: any) => {
           const probA = parseFloat(a.probability);
           const probB = parseFloat(b.probability);
-          if (probA >= 70 && probB < 70) return -1;
-          if (probB >= 70 && probA < 70) return 1;
+          if (probA >= AUTOSCAN_TOP_TIER_PROB && probB < AUTOSCAN_TOP_TIER_PROB) return -1;
+          if (probB >= AUTOSCAN_TOP_TIER_PROB && probA < AUTOSCAN_TOP_TIER_PROB) return 1;
           const edgeA = parseFloat(a.edge ?? "0");
           const edgeB = parseFloat(b.edge ?? "0");
           if (probA === probB) return Math.abs(edgeB) - Math.abs(edgeA);
           return probB - probA;
         });
-      console.log(`[NBA_RENDER_FILTER] autoScan: received=${plays.length} qualified=${qualifiedPlays.length} (prob>=55 & edge>=5)`);
-
       if (qualifiedPlays.length === 0) {
         const elapsed = Date.now() - scanStart;
-        const minDelay = 300 + Math.random() * 500;
+        const minDelay = autoScanMinDelayMs();
         if (elapsed < minDelay) await new Promise(r => setTimeout(r, minDelay - elapsed));
         setScanningEdges(false);
         setAutoRunFallback("no_edges");
@@ -392,7 +401,7 @@ export default function Dashboard() {
       const edge = parseFloat(best.edge ?? "0");
 
       const elapsed = Date.now() - scanStart;
-      const minDelay = 300 + Math.random() * 500;
+      const minDelay = autoScanMinDelayMs();
       if (elapsed < minDelay) await new Promise(r => setTimeout(r, minDelay - elapsed));
       setScanningEdges(false);
 
@@ -408,7 +417,7 @@ export default function Dashboard() {
       setShowConfidenceBadge(true);
     } catch {
       const elapsed = Date.now() - scanStart;
-      const minDelay = 300 + Math.random() * 500;
+      const minDelay = autoScanMinDelayMs();
       if (elapsed < minDelay) await new Promise(r => setTimeout(r, minDelay - elapsed));
       setScanningEdges(false);
       setAutoRunFallback("no_edges");
@@ -471,7 +480,6 @@ export default function Dashboard() {
     next.setUTCHours(resetHourUTC, minutes, 0, 0);
     if (new Date() >= next) next.setUTCDate(next.getUTCDate() + 1);
     const delay = next.getTime() - Date.now();
-    console.log(`[RESET] Rescheduled: ${hours}:${String(minutes).padStart(2, "0")} EST (in ${Math.round(delay / 60000)}m)`);
     resetTimerRef.current = setTimeout(() => {
       executeSlateReset.current();
       rescheduleResetTimer.current(hours, minutes);
@@ -2788,7 +2796,7 @@ export default function Dashboard() {
                       <span className="font-semibold text-foreground">{game.homeTeamAbbr}</span>
                     </div>
                     <div className="flex items-center gap-1 text-muted-foreground mt-0.5">
-                      {isLive && <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse inline-block" />}
+                      {isLive && <LiveIndicator />}
                       {isFinal && <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 inline-block" />}
                       <span className={isLive ? "text-green-400" : isFinal ? "text-muted-foreground/60" : ""}>
                         {isLive
@@ -2917,7 +2925,7 @@ export default function Dashboard() {
                     Game Situation
                     {autoFilledFields.size > 0 && (
                       <span className="text-green-400 text-xs normal-case font-normal ml-1 flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse inline-block" />
+                        <LiveIndicator />
                         Auto-filled
                       </span>
                     )}

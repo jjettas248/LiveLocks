@@ -173,22 +173,6 @@ export function LiveBoxscore({
     .filter(s => s.minutes !== "0" && s.minutes !== "0:00")
     .filter(s => !filterLower || s.playerName.toLowerCase().includes(filterLower));
 
-  const totalLiveStatsCount = (liveStats ?? []).length;
-  // Aligned with the server's minutes>=1 threshold in /api/live-signals so a
-  // freshly-checked-in player whose signals were already computed server-side
-  // is not silently hidden by a stricter client gate.
-  const badgeCount = (liveStats ?? []).filter(s => {
-    const pid = s.playerId;
-    if (!pid) return false;
-    if (parseMinDec(s.minutes) < 1) return false;
-    const pData = resolvedEngineOutput[pid as number];
-    return pData && Object.keys(pData).length > 0;
-  }).length;
-  const highlightedCount = (liveStats ?? []).filter(s => s.playerId != null && playerSignalMap.has(s.playerId as number)).length;
-  console.log(`[boxscore] liveStats players: ${totalLiveStatsCount}`);
-  console.log(`[boxscore] engineOutput playerIds: ${Object.keys(resolvedEngineOutput).length}`);
-  console.log(`[boxscore] badges rendered (all stats): ${badgeCount}`);
-  console.log(`[boxscore] highlighted players: ${highlightedCount}`);
 
   // Surface the live-signals diagnostics as a small status pill so the user
   // can tell *why* badges may be empty (odds outage vs no actionable edge vs

@@ -18,6 +18,7 @@ import { ProbabilityRing } from "@/components/probability-ring";
 import { StatCard } from "@/components/stat-card";
 import { SkeletonCard } from "@/components/sports/SkeletonCard";
 import { EmptyState } from "@/components/sports/EmptyState";
+import { LiveIndicator } from "@/components/common/LiveIndicator";
 import { Radio, Target, RefreshCw, Calculator, Loader2, Flame, Zap, Trophy, Eye, ChevronDown, ChevronUp, Bell, Activity, X, BarChart3, Plus, ExternalLink, TrendingUp, TrendingDown, Clock, CheckCircle2, Calendar } from "lucide-react";
 import {
   mapHrRadarCardToUi, mapAlertToUi, formatTriggerReason,
@@ -595,7 +596,7 @@ function GameChipStrip({ games, selectedGameId, onSelectGame, edgeFeedSignals, o
                 <span className="font-semibold text-foreground">{chip.homeTeam}</span>
               </div>
               <div className="flex items-center gap-1.5 text-muted-foreground mt-0.5">
-                {chip.isLive && <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse inline-block" />}
+                {chip.isLive && <LiveIndicator />}
                 {chip.isFinal && <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 inline-block" />}
                 <span className={chip.isLive ? "text-green-400" : chip.isFinal ? "text-muted-foreground/60" : ""}>
                   {statusText}
