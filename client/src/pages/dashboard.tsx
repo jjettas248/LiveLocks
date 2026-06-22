@@ -725,7 +725,7 @@ export default function Dashboard() {
     const tab = params.get("tab");
     const gameId = params.get("gameId");
     const cardType = params.get("cardType");
-    if (tab === "ncaab" || tab === "calculator") setActiveTab(tab as any);
+    if (tab === "ncaab" || tab === "calculator" || tab === "mlb" || tab === "analytics") setActiveTab(tab as any);
     if (gameId && cardType === "game") {
       setTimeout(() => setSelectedGameId(gameId), 400);
     }
@@ -790,6 +790,12 @@ export default function Dashboard() {
   const handleEnablePush = async () => {
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
       toast({ title: "Push not supported", description: "Please use Chrome or Firefox on Android, or install the app on iOS 16.4+.", variant: "destructive" });
+      return;
+    }
+    // Pre-check permission so a previously-denied user gets a clear message
+    // instead of a silent pushManager.subscribe() failure.
+    if (typeof Notification !== "undefined" && Notification.permission === "denied") {
+      toast({ title: "Notifications are blocked", description: "Enable notifications for this site in your browser settings, then try again.", variant: "destructive" });
       return;
     }
     setPushLoading(true);

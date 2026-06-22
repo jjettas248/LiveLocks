@@ -1,4 +1,4 @@
-import { sendPush } from "./webpush";
+import { sendPushToUser } from "./pushDelivery";
 import { sendSms } from "./twilioService";
 import type { IStorage } from "./storage";
 import { db } from "./db";
@@ -205,7 +205,7 @@ export async function checkAndSendAlerts(
 
     if (isPushEligible) {
       for (const user of usersWithPush) {
-        sendPush(user.pushSubscription, {
+        sendPushToUser(user, {
           title, body: pushBody, url: "/", data: deepLinkData,
         }).catch(console.warn);
       }
@@ -240,7 +240,7 @@ export async function checkAndSendAlerts(
     };
 
     for (const user of usersWithPush) {
-      sendPush(user.pushSubscription, {
+      sendPushToUser(user, {
         title, body: pushBody, url: "/", data: deepLinkData,
       }).catch(console.warn);
     }
@@ -271,7 +271,7 @@ export async function checkAndSendAlerts(
     console.log(`[alertManager] NCAAB halftime alert: ${play.awayTeam} @ ${play.homeTeam} — ${prob}% over`);
 
     for (const user of usersWithPush) {
-      sendPush(user.pushSubscription, {
+      sendPushToUser(user, {
         title, body: pushBody, url: "/", data: deepLinkData,
       }).catch(console.warn);
     }

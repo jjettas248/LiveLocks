@@ -1,4 +1,5 @@
 import webpush from "web-push";
+import { pushNotificationPayloadSchema } from "@shared/pushNotificationSchema";
 
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
@@ -31,15 +32,23 @@ export async function sendPush(
 ): Promise<void> {
   ensureInit();
   if (!initialized) return;
+
+  // Defense-in-depth: never ship a malformed payload to the push service.
+  const parsed = pushNotificationPayloadSchema.safeParse(payload);
+  if (!parsed.success) {
+    console.warn("[LL_PUSH_PAYLOAD_INVALID]", parsed.error.issues.map((i) => i.message).join("; "));
+    return;
+  }
+
   try {
     const subscription = JSON.parse(subscriptionJson) as webpush.PushSubscription;
     await webpush.sendNotification(
       subscription,
       JSON.stringify({
-        title: payload.title,
-        body: payload.body,
-        url: payload.url ?? "/",
-        data: payload.data ?? {},
+        title: parsed.data.title,
+        body: parsed.data.body,
+        url: parsed.data.url ?? "/",
+        data: parsed.data.data ?? {},
       })
     );
   } catch (err: any) {

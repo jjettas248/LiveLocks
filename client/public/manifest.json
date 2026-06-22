@@ -18,15 +18,44 @@
     },
     {
       "src": "/favicon.png",
-      "sizes": "192x192",
+      "sizes": "512x512",
       "type": "image/png",
-      "purpose": "maskable"
+      "purpose": "any"
     },
     {
       "src": "/favicon.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "MLB Live",
+      "short_name": "MLB",
+      "url": "/?tab=mlb",
+      "description": "Open live MLB signals and HR Radar"
+    },
+    {
+      "name": "NBA Live",
+      "short_name": "NBA",
+      "url": "/?tab=calculator",
+      "description": "Open live NBA plays"
+    },
+    {
+      "name": "NCAAB Live",
+      "short_name": "NCAAB",
+      "url": "/?tab=ncaab",
+      "description": "Open live NCAAB plays"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/dashboard-preview.png",
+      "sizes": "1395x861",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "LiveLocks dashboard with live plays"
     }
   ]
 }
