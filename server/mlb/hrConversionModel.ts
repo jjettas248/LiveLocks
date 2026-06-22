@@ -756,6 +756,11 @@ function computeIbbRespectMultiplier(input: HRConversionInput): number {
 // and DECAYS to zero as live in-game contact accumulates, so existing in-game
 // graded signals are unchanged (no drift on live signals). Engine-internal —
 // never surfaced as a user-facing payload field.
+// Feature flag: HR_PREGAME_PRIOR
+//   Purpose: enables the pregame power-profile prior (decays to zero as live
+//     contact accumulates). Default ON; set env to false/0/off/no to disable.
+//   Retirement: once validated against a full season of graded outcomes, fold
+//     the prior in permanently and remove this flag.
 const HR_PREGAME_PRIOR: boolean = (() => {
   const raw = (process.env.HR_PREGAME_PRIOR ?? "").trim().toLowerCase();
   if (raw === "false" || raw === "0" || raw === "off" || raw === "no") return false;

@@ -215,9 +215,13 @@ export function upsertCanonicalHrRadarState(input: UpsertInput): UpsertResult {
     active: merged.active,
     terminal: merged.terminal,
   };
-  console.log("[HR_RADAR_STATE_EVENT]", JSON.stringify(eventPayload));
+  // On a real state change the TRANSITION line carries the identical payload,
+  // so emit EVENT only when nothing transitioned — avoids a redundant third
+  // log line per state change during live games.
   if (currentState !== next) {
     console.log("[HR_RADAR_STATE_TRANSITION]", JSON.stringify(eventPayload));
+  } else {
+    console.log("[HR_RADAR_STATE_EVENT]", JSON.stringify(eventPayload));
   }
   console.log(
     "[HR_RADAR_CANONICAL_UPSERT]",

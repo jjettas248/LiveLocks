@@ -481,116 +481,148 @@ export type HrRadarFixupOutput<T> = T & {
   active: boolean;
 };
 
-export function applyHrRadarResolvedStateFixup<T extends CanonicalCardInput & Record<string, any>>(
-  card: T,
-  ctx?: { gameId?: string; playerId?: string; logger?: (msg: string) => void; gameStatus?: string | null },
-): HrRadarFixupOutput<T> {
-  const outcome = deriveHrRadarOutcomeStatus(card);
-  let lifecycle = deriveHrRadarLifecycleState(card);
-  let section = deriveHrRadarSection(card);
-  let active = !(
-    outcome === "called_hit" || outcome === "called_miss" ||
-    outcome === "uncalled_hr" || outcome === "late_signal" ||
-    lifecycle === "cashed" || lifecycle === "missed" ||
-    lifecycle === "uncalled_hr" || lifecycle === "late_signal" ||
-    lifecycle === "inactive"
-  );
+// Internal mutable state threaded through the fixup pipeline. Kept tiny so each
+// stage (initial derivation → game-final override → resolved-slip fixup) reads
+// as a pure transform on the same shape.
+type HrRadarFixupState = {
+  lifecycle: HrRadarSectionState;
+  section: HrRadarSection;
+  active: boolean;
+};
 
-  // HR Radar Final-Game Reconciliation — Phase 3.
-  // Final game state is the ultimate authority. If the game has ended, no
-  // card from that game may remain active regardless of its outcomeStatus,
-  // lifecycleState, or signalState. Spec Step 4 (API guardrail): route the
-  // card to the correct resolved bucket and force `active=false`. This runs
-  // BEFORE the resolved-slipped-active fixup so the [HR_RADAR_FINAL_ACTIVE_FIXUP]
-  // log captures the original active state for diagnostic clarity.
+type HrRadarFixupCtx = { gameId?: string; playerId?: string; logger?: (msg: string) => void; gameStatus?: string | null };
+
+/**
+ * Stage 2 — HR Radar Final-Game Reconciliation (Phase 3).
+ * Final game state is the ultimate authority: once a game has ended, no card
+ * from it may remain active regardless of outcomeStatus/lifecycleState/signalState.
+ * Routes the card to the correct resolved bucket and forces `active=false`.
+ * Runs BEFORE the resolved-slip fixup so the [HR_RADAR_FINAL_ACTIVE_FIXUP] log
+ * captures the original active state. Pure aside from logging.
+ */
+function applyGameFinalOverride(
+  card: Record<string, any>,
+  ctx: HrRadarFixupCtx | undefined,
+  outcome: HrRadarOutcomeStatus,
+  state: HrRadarFixupState,
+): HrRadarFixupState {
   const gameStatusNorm = norm(ctx?.gameStatus ?? card.gameStatus);
   const isGameFinal = gameStatusNorm === "final" ||
                       gameStatusNorm === "completed" ||
                       gameStatusNorm === "game_over" ||
                       gameStatusNorm === "gameover" ||
                       card.isGameFinal === true;
+  if (!isGameFinal) return state;
 
-  if (isGameFinal) {
-    const wasActiveBeforeFinal = active;
-    if (CALLED_HIT_OUTCOME_STATUSES.has(outcome)) {
-      lifecycle = "cashed";
-      section = "cashed";
-    } else if (outcome === "called_miss") {
-      lifecycle = "missed";
-      section = "missed";
-    } else if (outcome === "uncalled_hr" || outcome === "late_signal" || outcome === "early_hr_insufficient_sample") {
-      // Diagnostic-only buckets — preserve the existing lifecycle if it
-      // already reflects the diagnostic outcome; otherwise mark inactive.
-      if (lifecycle !== "uncalled_hr" && lifecycle !== "late_signal") {
-        lifecycle = "inactive";
-      }
-      section = "diagnostic";
-    } else {
-      // ── HR Radar Lifecycle Repair Fix #3 — DEAD/MISSED inflation ─────────
-      // Forensic finding: the prior branch unconditionally forced `missed`
-      // for every still-active card on a final game, including TRACK/WATCH/
-      // BUILD rows that never reached actionable territory. Those should be
-      // `inactive` (the alert never matured into something the user could
-      // act on), reserving `missed` for cards that actually reached READY/
-      // FIRE / actionable / strong / attack.
-      const wasActionable =
-        norm(card.userStage) === "fire" ||
-        norm(card.userStage) === "ready" ||
-        norm(card.canonicalStage) === "attack" ||
-        norm(card.currentStage) === "attack" ||
-        norm(card.confidenceTier) === "strong" ||
-        norm(card.signalState) === "actionable" ||
-        norm(card.lifecycleState) === "attack" ||
-        norm(card.lifecycleState) === "ready";
-      if (wasActionable) {
-        lifecycle = "missed";
-        section = "missed";
-      } else {
-        lifecycle = "inactive";
-        section = "inactive";
-      }
-    }
-    active = false;
-    if (wasActiveBeforeFinal) {
-      const log = ctx?.logger ?? console.log;
-      const tag =
-        section === "missed" ? "[HR_RADAR_MISSED]"
-        : section === "cashed" ? "[HR_RADAR_CASHED]"
-        : section === "inactive" ? "[HR_RADAR_INACTIVE]"
-        : section === "diagnostic" ? "[HR_RADAR_INACTIVE]"
-        : "[HR_RADAR_INACTIVE]";
-      const gid = ctx?.gameId ?? card.gameId ?? "?";
-      const pid = ctx?.playerId ?? card.playerId ?? "?";
-      log(`[HR_RADAR_FINAL_ACTIVE_FIXUP] gameId=${gid} playerId=${pid} outcomeStatus=${outcome} newSection=${section} newLifecycle=${lifecycle} reason=game_final_overrides_active`);
-      log(`${tag} gameId=${gid} playerId=${pid} from=active to=${lifecycle} rule=game_final_overrides_active`);
-    }
-  }
+  let { lifecycle, section } = state;
+  const wasActiveBeforeFinal = state.active;
 
-  // Force resolved-state truth (Rule 3 — resolved always wins).
-  const hrCount = Number(card.hrCount ?? card.hr ?? 0);
-  const wasResolvedSlippedActive =
-    (outcome === "called_hit" || lifecycle === "cashed" || hrCount > 0) &&
-    (section === "attack" || section === "ready" || section === "build" || section === "watch");
-
-  if (wasResolvedSlippedActive) {
-    const oldSection = section;
-    const oldLifecycle = lifecycle;
+  if (CALLED_HIT_OUTCOME_STATUSES.has(outcome)) {
     lifecycle = "cashed";
     section = "cashed";
-    active = false;
-    const log = ctx?.logger ?? console.log;
-    log(`[HR_RADAR_INTEGRITY_FIXUP] gameId=${ctx?.gameId ?? card.gameId ?? "?"} playerId=${ctx?.playerId ?? card.playerId ?? "?"} oldState=${oldLifecycle} newState=cashed oldSection=${oldSection} newSection=cashed outcomeStatus=${outcome} reason=resolved_outcome_in_active_section`);
-  } else if (
-    (outcome === "uncalled_hr" || outcome === "late_signal") &&
-    (section === "attack" || section === "ready" || section === "build" || section === "watch")
-  ) {
-    const oldSection = section;
-    const oldLifecycle = lifecycle;
+  } else if (outcome === "called_miss") {
+    lifecycle = "missed";
+    section = "missed";
+  } else if (outcome === "uncalled_hr" || outcome === "late_signal" || outcome === "early_hr_insufficient_sample") {
+    // Diagnostic-only buckets — preserve the existing lifecycle if it
+    // already reflects the diagnostic outcome; otherwise mark inactive.
+    if (lifecycle !== "uncalled_hr" && lifecycle !== "late_signal") {
+      lifecycle = "inactive";
+    }
     section = "diagnostic";
-    active = false;
-    const log = ctx?.logger ?? console.log;
-    log(`[HR_RADAR_INTEGRITY_FIXUP] gameId=${ctx?.gameId ?? card.gameId ?? "?"} playerId=${ctx?.playerId ?? card.playerId ?? "?"} oldState=${oldLifecycle} newState=${lifecycle} oldSection=${oldSection} newSection=diagnostic outcomeStatus=${outcome} reason=diagnostic_outcome_in_active_section`);
+  } else {
+    // ── HR Radar Lifecycle Repair Fix #3 — DEAD/MISSED inflation ─────────
+    // Forensic finding: the prior branch unconditionally forced `missed`
+    // for every still-active card on a final game, including TRACK/WATCH/
+    // BUILD rows that never reached actionable territory. Those should be
+    // `inactive` (the alert never matured into something the user could
+    // act on), reserving `missed` for cards that actually reached READY/
+    // FIRE / actionable / strong / attack.
+    const wasActionable =
+      norm(card.userStage) === "fire" ||
+      norm(card.userStage) === "ready" ||
+      norm(card.canonicalStage) === "attack" ||
+      norm(card.currentStage) === "attack" ||
+      norm(card.confidenceTier) === "strong" ||
+      norm(card.signalState) === "actionable" ||
+      norm(card.lifecycleState) === "attack" ||
+      norm(card.lifecycleState) === "ready";
+    if (wasActionable) {
+      lifecycle = "missed";
+      section = "missed";
+    } else {
+      lifecycle = "inactive";
+      section = "inactive";
+    }
   }
+
+  if (wasActiveBeforeFinal) {
+    const log = ctx?.logger ?? console.log;
+    const tag =
+      section === "missed" ? "[HR_RADAR_MISSED]"
+      : section === "cashed" ? "[HR_RADAR_CASHED]"
+      : "[HR_RADAR_INACTIVE]";
+    const gid = ctx?.gameId ?? card.gameId ?? "?";
+    const pid = ctx?.playerId ?? card.playerId ?? "?";
+    log(`[HR_RADAR_FINAL_ACTIVE_FIXUP] gameId=${gid} playerId=${pid} outcomeStatus=${outcome} newSection=${section} newLifecycle=${lifecycle} reason=game_final_overrides_active`);
+    log(`${tag} gameId=${gid} playerId=${pid} from=active to=${lifecycle} rule=game_final_overrides_active`);
+  }
+
+  return { lifecycle, section, active: false };
+}
+
+/**
+ * Stage 3 — resolved-state truth (Rule 3: a resolved outcome always wins, even
+ * if the card somehow slipped into an active section). Pure aside from logging.
+ */
+function applyResolvedSlipFixup(
+  card: Record<string, any>,
+  ctx: HrRadarFixupCtx | undefined,
+  outcome: HrRadarOutcomeStatus,
+  state: HrRadarFixupState,
+): HrRadarFixupState {
+  const { lifecycle, section } = state;
+  const inActiveSection = section === "attack" || section === "ready" || section === "build" || section === "watch";
+  const hrCount = Number(card.hrCount ?? card.hr ?? 0);
+
+  if ((outcome === "called_hit" || lifecycle === "cashed" || hrCount > 0) && inActiveSection) {
+    const log = ctx?.logger ?? console.log;
+    log(`[HR_RADAR_INTEGRITY_FIXUP] gameId=${ctx?.gameId ?? card.gameId ?? "?"} playerId=${ctx?.playerId ?? card.playerId ?? "?"} oldState=${lifecycle} newState=cashed oldSection=${section} newSection=cashed outcomeStatus=${outcome} reason=resolved_outcome_in_active_section`);
+    return { lifecycle: "cashed", section: "cashed", active: false };
+  }
+
+  if ((outcome === "uncalled_hr" || outcome === "late_signal") && inActiveSection) {
+    const log = ctx?.logger ?? console.log;
+    log(`[HR_RADAR_INTEGRITY_FIXUP] gameId=${ctx?.gameId ?? card.gameId ?? "?"} playerId=${ctx?.playerId ?? card.playerId ?? "?"} oldState=${lifecycle} newState=${lifecycle} oldSection=${section} newSection=diagnostic outcomeStatus=${outcome} reason=diagnostic_outcome_in_active_section`);
+    return { lifecycle, section: "diagnostic", active: false };
+  }
+
+  return state;
+}
+
+export function applyHrRadarResolvedStateFixup<T extends CanonicalCardInput & Record<string, any>>(
+  card: T,
+  ctx?: HrRadarFixupCtx,
+): HrRadarFixupOutput<T> {
+  const outcome = deriveHrRadarOutcomeStatus(card);
+  const initialLifecycle = deriveHrRadarLifecycleState(card);
+
+  let state: HrRadarFixupState = {
+    lifecycle: initialLifecycle,
+    section: deriveHrRadarSection(card),
+    active: !(
+      outcome === "called_hit" || outcome === "called_miss" ||
+      outcome === "uncalled_hr" || outcome === "late_signal" ||
+      initialLifecycle === "cashed" || initialLifecycle === "missed" ||
+      initialLifecycle === "uncalled_hr" || initialLifecycle === "late_signal" ||
+      initialLifecycle === "inactive"
+    ),
+  };
+
+  state = applyGameFinalOverride(card, ctx, outcome, state);
+  state = applyResolvedSlipFixup(card, ctx, outcome, state);
+
+  const { lifecycle, section, active } = state;
 
   // Strict additive contract: spread `card` LAST so any incoming fields
   // win over our additions, EXCEPT for the four canonical fields we own.
