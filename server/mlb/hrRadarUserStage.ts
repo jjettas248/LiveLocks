@@ -444,6 +444,17 @@ const STRONG_HR_DRIVER_SIGNALS: ReadonlyArray<HrQualifyingSignalType> = [
   "pitcher_collapse_power",
 ];
 
+// Hit-rate tightening (2026-06): firing required only ANY strong driver, so a
+// `pitcher_collapse_power` context with no real in-flight contact could commit
+// a pick. Firing now requires a CONTACT driver — tangible HR-shaped evidence
+// from the bat. Pitcher collapse may still promote to *ready*, but cannot
+// *fire* on its own.
+const CONTACT_HR_DRIVER_SIGNALS: ReadonlyArray<HrQualifyingSignalType> = [
+  "elite_barrel",
+  "two_hard_hit_balls",
+  "massive_single_contact",
+];
+
 export interface ReadyToFireContext {
   alertPath?: string | null;
   signalState?: string | null;     // engine signalState ("watching"|"live"|"actionable")
@@ -467,7 +478,9 @@ export interface ReadyToFireContext {
 // conviction (BET_NOW) for this many consecutive ticks before fire, so a single
 // noisy tick can't fire the card. Replaces the old magic `displayScore10 >= 9.5`
 // + peak-staleness cliff.
-const READY_TO_FIRE_SUSTAIN_TICKS = 2;
+// Hit-rate tightening (2026-06): 2 ticks let brief conviction blips fire. Lift
+// to 3 so the model must hold top conviction longer before a card commits.
+const READY_TO_FIRE_SUSTAIN_TICKS = 3;
 
 /**
  * Promote a READY user stage to FIRE when the model holds sustained top
@@ -505,6 +518,8 @@ export function maybePromoteReadyToFire(
   const signals = new Set(ctx.qualifyingSignals ?? []);
   const matchedDrivers: HrQualifyingSignalType[] = STRONG_HR_DRIVER_SIGNALS.filter(d => signals.has(d));
   const hasStrongDriver = matchedDrivers.length > 0;
+  // Fire requires a CONTACT driver specifically (not pitcher-collapse alone).
+  const hasContactDriver = CONTACT_HR_DRIVER_SIGNALS.some(d => signals.has(d));
 
   const peak = Number(ctx.peakReadinessScore ?? 0);
   const cur = Number(ctx.currentReadinessScore ?? 0);
@@ -517,8 +532,8 @@ export function maybePromoteReadyToFire(
   let rule: string | null = null;
   if (PATH_PROMOTES_TO_FIRE[path] && (sig === "live" || sig === "actionable")) {
     rule = "path_promotes_fire_live_or_actionable";
-  } else if (dyn === "BET_NOW" && canonical === "attack" && sustained && hasStrongDriver) {
-    rule = "betnow_attack_sustained_strong_driver";
+  } else if (dyn === "BET_NOW" && canonical === "attack" && sustained && hasContactDriver) {
+    rule = "betnow_attack_sustained_contact_driver";
   }
 
   const sid = ctx.signalId ?? "?";
@@ -556,8 +571,8 @@ export function maybePromoteReadyToFire(
     if (!sustained) {
       reasons.push(`conviction_not_sustained (${sustainTicks}/${READY_TO_FIRE_SUSTAIN_TICKS})`);
     }
-    if (!hasStrongDriver) {
-      reasons.push("no_strong_hr_driver");
+    if (!hasContactDriver) {
+      reasons.push(hasStrongDriver ? "strong_driver_present_but_no_contact_driver" : "no_contact_hr_driver");
     }
     if (!PATH_PROMOTES_TO_FIRE[path]) {
       reasons.push("path_not_in_promotes_fire");

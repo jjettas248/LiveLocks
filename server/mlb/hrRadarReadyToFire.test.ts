@@ -36,12 +36,30 @@ console.log("\n=== HR Radar READY → FIRE Promotion — Invariant Suite ===\n")
 // ── Pure helper tests ─────────────────────────────────────────────────────
 console.log("maybePromoteReadyToFire — direct rule coverage");
 
-// Lane 1.4 PRIMARY gate: BET_NOW + canonical=attack + sustained(≥2) + strong driver.
-eq("A.1 BET_NOW + attack + sustain=2 + elite_barrel → fire",
+// Lane 1.4 PRIMARY gate: BET_NOW + canonical=attack + sustained(≥3) + CONTACT driver.
+// Hit-rate tightening (2026-06): sustain raised 2→3 and the fire gate now
+// requires a CONTACT driver (elite_barrel/two_hard_hit_balls/massive_single_contact),
+// not pitcher_collapse_power alone.
+eq("A.1 BET_NOW + attack + sustain=3 + elite_barrel → fire",
+  maybePromoteReadyToFire("ready", {
+    dynamicState: "BET_NOW", canonicalStage: "attack",
+    consecutivePromoteTicks: 3, qualifyingSignals: ["elite_barrel"],
+  }), "fire");
+
+// Negative — sustain below the raised 3-tick floor.
+eq("A.1b BET_NOW + attack + sustain=2 + elite_barrel → ready (sustain<3)",
   maybePromoteReadyToFire("ready", {
     dynamicState: "BET_NOW", canonicalStage: "attack",
     consecutivePromoteTicks: 2, qualifyingSignals: ["elite_barrel"],
-  }), "fire");
+  }), "ready");
+
+// Negative — pitcher_collapse_power is a STRONG driver but NOT a contact driver;
+// it can no longer fire on its own.
+eq("A.1c BET_NOW + attack + sustain=3 + pitcher_collapse_power only → ready",
+  maybePromoteReadyToFire("ready", {
+    dynamicState: "BET_NOW", canonicalStage: "attack",
+    consecutivePromoteTicks: 3, qualifyingSignals: ["pitcher_collapse_power"],
+  }), "ready");
 
 eq("A.2 BET_NOW + attack + sustain=3 + two_hard_hit_balls → fire",
   maybePromoteReadyToFire("ready", {

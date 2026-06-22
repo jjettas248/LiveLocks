@@ -325,7 +325,10 @@ function computeLeiBoost(input: HRAlertInput): { scoreBoost: number; escalate: b
 }
 
 const HR_CONVERSION_ALERT_MIN = 0.08;
-const HR_CONVERSION_OFFICIAL_MIN = 0.12;
+// Hit-rate tightening (2026-06): the official/ATTACK floor governs what becomes
+// a committed, graded pick. Raise 0.12 → 0.15 so only genuinely top-tier
+// conversion probabilities reach the HR Max Window. (§7a engine change.)
+const HR_CONVERSION_OFFICIAL_MIN = 0.15;
 const HR_CONVERSION_WATCH_MIN = 0.03;
 
 function buildConversionInput(input: HRAlertInput): HRConversionInput {

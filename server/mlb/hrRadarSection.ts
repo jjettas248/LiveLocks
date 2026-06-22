@@ -65,6 +65,12 @@ export type HrRadarOutcomeStatus =
   | "called_hit_ready"
   | "called_hit_build"
   | "called_hit_watch"
+  // Near-HR credit (2026-06) — an HR-Max-Window pick whose batter squared up a
+  // genuine near-HR (barrel / warning-track / elite EV detected by
+  // nearHrContact.ts) but the ball stayed in the yard. Treated as a hit-class
+  // outcome (counts as a win, routes to `cashed`) so the radar is graded on
+  // "called the danger" rather than the binary coin-flip of HR/no-HR.
+  | "called_near_hr"
   | "called_miss"
   | "uncalled_hr"
   | "late_signal"
@@ -83,6 +89,7 @@ export const CALLED_HIT_OUTCOME_STATUSES: ReadonlySet<HrRadarOutcomeStatus> = ne
   "called_hit_ready",
   "called_hit_build",
   "called_hit_watch",
+  "called_near_hr",
 ]);
 
 /**
@@ -91,12 +98,13 @@ export const CALLED_HIT_OUTCOME_STATUSES: ReadonlySet<HrRadarOutcomeStatus> = ne
  */
 export function getCashedFromTierLabel(
   status: HrRadarOutcomeStatus | string | null | undefined,
-): "Attack" | "Ready" | "Build" | "Watch" | null {
+): "Attack" | "Ready" | "Build" | "Watch" | "Near-HR" | null {
   switch (status) {
     case "called_hit_attack": return "Attack";
     case "called_hit_ready": return "Ready";
     case "called_hit_build": return "Build";
     case "called_hit_watch": return "Watch";
+    case "called_near_hr": return "Near-HR";
     default: return null;
   }
 }
@@ -164,11 +172,16 @@ export function reachedHrMaxWindow(args: {
   signalState?: string | null;
 }): boolean {
   const tier = norm(args.alertTier);
-  const conf = norm(args.confidenceTier);
   const sig = norm(args.signalState);
+  // Hit-rate tightening (2026-06): the HR Max Window is the **committed fire
+  // tier only**. Previously a bare `confidenceTier === "strong" | "elite"`
+  // also qualified, so hundreds of merely-"strong" rows that never actually
+  // fired were graded as counted picks — inflating the miss wall (269/6).
+  // A signal is only a graded pick when the engine actually committed it:
+  // `alertTier === officialAlert` OR `signalState ∈ {actionable, fire}`.
+  // confidenceTier is intentionally NO LONGER a qualifier on its own.
   return (
     tier === "officialalert" || tier === "official_alert" ||
-    conf === "strong" || conf === "elite" ||
     sig === "actionable" || sig === "fire"
   );
 }
@@ -219,6 +232,54 @@ export function resolveFinalNoHrGrading(args: {
   signalState?: string | null;
 }): "called_miss" | "expired" {
   return reachedHrMaxWindow(args) ? "called_miss" : "expired";
+}
+
+/**
+ * Near-HR credit (2026-06) — peak batted-ball contact a player produced while
+ * an HR-Max-Window signal was active. Stored on the alert's `contactSnapshot`
+ * jsonb column (no migration) and consulted at game-final reconciliation so a
+ * squared-up "almost HR" is credited instead of counted as a hard miss.
+ *
+ * All fields optional / nullable so absent data is a clean no-op (no credit),
+ * never a crash. Mirrors the inputs `nearHrContact.ts` already evaluates.
+ */
+export interface HrRadarPeakContact {
+  peakEv?: number | null;
+  peakLaunchAngle?: number | null;
+  peakDistance?: number | null;
+  isBarrel?: boolean | null;
+  /** Best `NearHrTier` the engine assigned across the window ("lean" | "watch"). */
+  nearHrTier?: string | null;
+}
+
+// Credit thresholds — a near-HR is a genuinely squared-up ball that stayed in
+// the yard. Kept deliberately strict so credit reflects real HR-shaped contact,
+// not any hard-hit ball. Tunable in one place.
+const NEAR_HR_CREDIT_MIN_DISTANCE = 380; // ft — warning-track / wall-scraper
+const NEAR_HR_CREDIT_MIN_EV = 104;       // mph — elite exit velocity
+const NEAR_HR_CREDIT_LA_LOW = 20;        // ° — HR launch-angle band (lower)
+const NEAR_HR_CREDIT_LA_HIGH = 35;       // ° — HR launch-angle band (upper)
+
+/**
+ * Does this peak contact qualify a no-HR HR-Max-Window pick for `called_near_hr`
+ * credit? Pure. Credit when ANY of:
+ *   - Statcast barrel flag, OR
+ *   - the engine's near-HR detector already tagged a "lean" (its top tier), OR
+ *   - peak distance ≥ 380 ft, OR
+ *   - peak EV ≥ 104 mph within the 20–35° HR launch-angle band.
+ */
+export function qualifiesForNearHrCredit(contact: HrRadarPeakContact | null | undefined): boolean {
+  if (!contact) return false;
+  if (contact.isBarrel === true) return true;
+  if (norm(contact.nearHrTier) === "lean") return true;
+  const dist = typeof contact.peakDistance === "number" ? contact.peakDistance : null;
+  if (dist != null && dist >= NEAR_HR_CREDIT_MIN_DISTANCE) return true;
+  const ev = typeof contact.peakEv === "number" ? contact.peakEv : null;
+  const la = typeof contact.peakLaunchAngle === "number" ? contact.peakLaunchAngle : null;
+  if (ev != null && ev >= NEAR_HR_CREDIT_MIN_EV && la != null && la >= NEAR_HR_CREDIT_LA_LOW && la <= NEAR_HR_CREDIT_LA_HIGH) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -281,6 +342,7 @@ export function deriveHrRadarOutcomeStatus(card: CanonicalCardInput): HrRadarOut
     explicit === "called_hit_ready" ||
     explicit === "called_hit_build" ||
     explicit === "called_hit_watch" ||
+    explicit === "called_near_hr" ||
     explicit === "called_miss" ||
     explicit === "uncalled_hr" ||
     explicit === "late_signal" ||
@@ -295,6 +357,7 @@ export function deriveHrRadarOutcomeStatus(card: CanonicalCardInput): HrRadarOut
   if (grading === "called_hit_ready") return "called_hit_ready";
   if (grading === "called_hit_build") return "called_hit_build";
   if (grading === "called_hit_watch") return "called_hit_watch";
+  if (grading === "called_near_hr") return "called_near_hr";
   if (grading === "called_miss") return "called_miss";
   if (grading === "uncalled_hr") return "uncalled_hr";
   if (grading === "late_signal") return "late_signal";
