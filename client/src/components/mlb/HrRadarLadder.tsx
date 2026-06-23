@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, AlertTriangle, RefreshCw, Eraser, X, ArrowRight, Clock, DollarSign, Share2, Target } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { AbLogRows, abChipSummary, type AbRow } from "@/components/mlb/AbLogRows";
-import { hrEntryCurrentScore10, hrEntryInitialScore10, hrEntryPeakScore10 } from "@/components/mlb/hrRadarScore";
+import { hrEntryCurrentScore10, hrEntryInitialScore10, hrEntryPeakScore10, hrEntryHrChancePct, hrEntryActionPct, hrEntryActionScore10 } from "@/components/mlb/hrRadarScore";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
 
@@ -183,6 +183,19 @@ export interface HrRadarLadderEntry {
   hrOccurredInning?: number | null;
   debugReasons?: string[];
   enginePath?: string | null;
+
+  // ── HR Radar display contract (presentation-only, server-stamped). ────────
+  // Render these verbatim — do not recompute probability, infer tier, or
+  // rebuild the action bands on the client.
+  displayHrChancePct?: number | null;
+  displayReadinessScore10?: number | null;
+  displayActionScore10?: number | null;
+  displayActionPct?: number | null;
+  displayStageLabel?: "TOP WINDOW" | "ALMOST" | "WATCHING";
+  displayStageSubLabel?: string;
+  displayPrimaryReason?: string | null;
+  displayWhyNotTopWindow?: string | null;
+  displayRecordEligible?: boolean;
 }
 
 export interface HrRadarLadderResponse {
@@ -261,12 +274,12 @@ const SECTION_META: Record<SectionKey, {
     defaultCollapsed: false,
   },
   hrMax: {
-    label: "HR MAX WINDOW",
+    label: "TOP WINDOW",
     icon: Flame,
     accent: "border-red-500/40 bg-red-500/5",
     badge: "bg-red-500 text-white",
-    description: "Actionable HR signals in their max window — the only tier that grades to the record.",
-    sublabel: "Bet window open — conviction confirmed",
+    description: "Strongest HR window right now. Official record uses only record-eligible signals — those cards are tagged.",
+    sublabel: "Strongest HR window right now",
     defaultCollapsed: false,
   },
   ready: {
@@ -279,21 +292,21 @@ const SECTION_META: Record<SectionKey, {
     defaultCollapsed: false,
   },
   building: {
-    label: "BUILDING",
+    label: "ALMOST",
     icon: Zap,
     accent: "border-amber-500/40 bg-amber-500/5",
     badge: "bg-amber-500 text-white",
-    description: "Pattern is building — context only, not graded to the record yet.",
-    sublabel: "Score climbing — keep an eye on these",
+    description: "Heating up, waiting on confirmation — context only, not graded to the record yet.",
+    sublabel: "Heating up, waiting on confirmation",
     defaultCollapsed: false,
   },
   watch: {
-    label: "WATCH",
+    label: "WATCHING",
     icon: Eye,
     accent: "border-blue-500/30 bg-blue-500/5",
     badge: "bg-blue-500 text-white",
-    description: "Watching. HR conditions are forming, not actionable yet.",
-    sublabel: "Early formation detected",
+    description: "Setup is forming, not a play yet.",
+    sublabel: "Setup is forming, not a play yet",
     defaultCollapsed: false,
   },
   noAbYet: {
@@ -728,6 +741,16 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   // Pregame zero-AB rows must not render any contact-implying bullets — the
   // server already empties supportingReasons, but defend against legacy data.
   const reasonsForRender = isPregameOnly ? reasons.slice(0, 1) : reasons;
+  // ── HR Radar display contract (server-stamped, formatting-only). The card
+  // leads with the TRUE HR chance %; action strength is the tier-banded bar.
+  const hrChancePct = hrEntryHrChancePct(entry);
+  const actionPct = hrEntryActionPct(entry);
+  const actionScore10 = hrEntryActionScore10(entry);
+  const primaryReason = entry.displayPrimaryReason ?? entry.headlineReason ?? "HR setup is forming.";
+  const whyNotTopWindow = entry.displayWhyNotTopWindow ?? null;
+  const recordEligible = entry.displayRecordEligible === true;
+  // Big stage icon — reuse the section's SECTION_META icon (Flame/Zap/Eye).
+  const StageIcon = SECTION_META[section]?.icon ?? null;
   // Outcome label for resolved rows uses the canonical outcome when present.
   const resolvedOutcomeKey = entry.outcome ?? entry.outcomeStatus;
 
@@ -819,6 +842,16 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
       data-testid={`ladder-card-${section}-${entry.playerId}`}
     >
       <div className="flex items-start justify-between gap-2 min-w-0">
+        {/* Big stage icon — instant visual tier recognition. */}
+        {StageIcon && !isResolved && (
+          <div
+            className={`shrink-0 mt-0.5 ${isAttack ? "text-red-400" : section === "building" ? "text-amber-400" : "text-blue-400"}`}
+            data-testid={`icon-stage-${section}-${entry.playerId}`}
+            aria-hidden="true"
+          >
+            <StageIcon className="w-7 h-7" />
+          </div>
+        )}
         <button
           className="text-left min-w-0 flex-1 overflow-hidden"
           onClick={() => onOpenDetails?.(entry)}
@@ -831,7 +864,33 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
             <span className="text-[10px] text-muted-foreground uppercase tracking-wide shrink-0">
               {entry.team}
             </span>
+            {recordEligible && (
+              <span
+                className="text-[8px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-300 border border-red-500/30 shrink-0"
+                data-testid={`badge-record-eligible-${entry.playerId}`}
+                title="This signal counts toward the official HR Radar record"
+              >
+                Counts in record
+              </span>
+            )}
           </div>
+          {/* Plain-English reason — why this card matters now. */}
+          {!isResolved && (
+            <p
+              className="text-xs font-medium leading-snug text-foreground/90 mb-0.5"
+              data-testid={`text-primary-reason-${entry.playerId}`}
+            >
+              {primaryReason}
+            </p>
+          )}
+          {!isResolved && whyNotTopWindow && (
+            <p
+              className="text-[11px] text-muted-foreground leading-snug mb-0.5"
+              data-testid={`text-why-not-top-${entry.playerId}`}
+            >
+              {whyNotTopWindow}
+            </p>
+          )}
           {/* HR Radar contract: `detected` is frozen first-detection inning;
               never substitute `signalInning` or `scoreIncreaseInning` here. */}
           <div className="flex items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground flex-wrap">
@@ -872,37 +931,60 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
           </div>
         </button>
         <div className="flex flex-col items-end gap-1 shrink-0 max-w-[45%]">
-          {score10 != null && !isResolved && (
+          {!isResolved && (hrChancePct != null || actionScore10 != null) && (
             <div className="flex items-center gap-1.5">
-              <div className="flex items-baseline gap-1">
-                <span
-                  className={`text-base font-mono font-bold leading-none ${isAttack ? "text-red-400" : "text-foreground/90"}`}
-                  data-testid={`text-signal-score-10-${entry.playerId}`}
-                >
-                  {score10.toFixed(1)}
+              <div className="flex flex-col items-end">
+                {/* HERO = true HR chance %. Falls back to tier-banded strength
+                    only when probability is missing (older cached rows). */}
+                {hrChancePct != null ? (
+                  <div className="flex items-baseline gap-1">
+                    <span
+                      className={`text-2xl font-bold leading-none ${isAttack ? "text-red-400" : "text-foreground/90"}`}
+                      data-testid={`text-hr-chance-${entry.playerId}`}
+                    >
+                      {hrChancePct}%
+                    </span>
+                    {!isPregameOnly && momentumArrow && (
+                      <span
+                        className={`text-sm font-bold leading-none ${momentumArrow.color}`}
+                        data-testid={`text-momentum-arrow-${entry.playerId}`}
+                        title={momentumDisplay?.label ?? undefined}
+                      >
+                        {momentumArrow.glyph}
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex items-baseline gap-1">
+                    <span
+                      className={`text-2xl font-bold leading-none ${isAttack ? "text-red-400" : "text-foreground/90"}`}
+                      data-testid={`text-action-strength-${entry.playerId}`}
+                    >
+                      {actionScore10!.toFixed(1)}
+                    </span>
+                    {!isPregameOnly && momentumArrow && (
+                      <span
+                        className={`text-sm font-bold leading-none ${momentumArrow.color}`}
+                        data-testid={`text-momentum-arrow-${entry.playerId}`}
+                        title={momentumDisplay?.label ?? undefined}
+                      >
+                        {momentumArrow.glyph}
+                      </span>
+                    )}
+                  </div>
+                )}
+                <span className="text-[9px] uppercase tracking-wide text-muted-foreground leading-none mt-0.5">
+                  {hrChancePct != null ? "HR chance" : "strength"}
                 </span>
-                <span className="text-[9px] text-muted-foreground leading-none">/ 10</span>
-                {/* #3 — mark a pre-contact PRIOR right on the headline so a seed
-                    score is never mistaken for a live-earned read. Suppressed
-                    once live contact arrives (isPregameOnly flips false). */}
+                {/* Mark a pre-contact PRIOR so a seed is never mistaken for a
+                    live-earned read. Suppressed once live contact arrives. */}
                 {!isResolved && isPregameOnly && (
                   <span
-                    className="text-[9px] font-medium leading-none text-muted-foreground/80"
+                    className="text-[9px] font-medium leading-none text-muted-foreground/80 mt-0.5"
                     data-testid={`tag-pregame-seed-${entry.playerId}`}
                     title="Pregame seed — prior estimate, no live at-bats yet"
                   >
                     Pregame
-                  </span>
-                )}
-                {/* A prior has no trajectory — never show a momentum arrow on a
-                    pregame seed row. */}
-                {!isPregameOnly && momentumArrow && (
-                  <span
-                    className={`text-sm font-bold leading-none ${momentumArrow.color}`}
-                    data-testid={`text-momentum-arrow-${entry.playerId}`}
-                    title={momentumDisplay?.label ?? undefined}
-                  >
-                    {momentumArrow.glyph}
                   </span>
                 )}
               </div>
@@ -949,6 +1031,24 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
           )}
         </div>
       </div>
+
+      {/* Window strength — tier-banded actionability bar. Mapped server-side so
+          WATCHING ≤54%, ALMOST 55-69%, TOP WINDOW ≥70% — a lower tier can never
+          visually outrank a higher one. This is NOT the true HR chance %. */}
+      {!isResolved && actionPct != null && (
+        <div className="mt-2" data-testid={`window-strength-${entry.playerId}`}>
+          <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
+            <span>Window strength</span>
+            <span>{actionPct}%</span>
+          </div>
+          <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+            <div
+              className={`h-full rounded-full ${isAttack ? "bg-red-400" : section === "building" ? "bg-amber-400" : "bg-blue-400"}`}
+              style={{ width: `${actionPct}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Task #121 Step 5 — cashed cards: "Called T{d} → Hit T{h}" arc with
           inning delta + Statcast (EV / dist / LA / pitch) row when verified. */}
@@ -1696,9 +1796,9 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
           )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <span data-testid="text-ladder-total" title="HR Max Window signals are graded to the record; Building/Watch are non-graded context.">
-            {counts.attackNow + counts.ready} HR Max
-            <span className="text-muted-foreground/60"> · {counts.building + counts.watch} context</span>
+          <span data-testid="text-ladder-total" title="Official record uses only record-eligible signals. Record-eligible cards are tagged.">
+            {counts.attackNow + counts.ready} Top Window
+            <span className="text-muted-foreground/60"> · {counts.building} Almost · {counts.watch} Watching</span>
           </span>
           <Button
             variant="ghost"
@@ -1739,24 +1839,19 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
           className="flex items-center gap-2 px-3 py-2 rounded-lg bg-card border border-border/40 overflow-x-auto"
           data-testid="ladder-summary-bar"
         >
-          {counts.attackNow > 0 && (
-            <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-red-400" data-testid="summary-fire">
-              <Flame className="w-3 h-3" /> FIRE {counts.attackNow}
-            </span>
-          )}
-          {(counts.ready ?? 0) > 0 && (
-            <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-orange-400" data-testid="summary-ready">
-              <Zap className="w-3 h-3" /> READY {counts.ready}
+          {(counts.attackNow + counts.ready) > 0 && (
+            <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-red-400" data-testid="summary-top-window">
+              <Flame className="w-3 h-3" /> TOP WINDOW {counts.attackNow + counts.ready}
             </span>
           )}
           {counts.building > 0 && (
-            <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-amber-400" data-testid="summary-build">
-              <Zap className="w-3 h-3" /> BUILD {counts.building}
+            <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-amber-400" data-testid="summary-almost">
+              <Zap className="w-3 h-3" /> ALMOST {counts.building}
             </span>
           )}
           {counts.watch > 0 && (
-            <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-blue-400" data-testid="summary-watch">
-              <Eye className="w-3 h-3" /> WATCH {counts.watch}
+            <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-blue-400" data-testid="summary-watching">
+              <Eye className="w-3 h-3" /> WATCHING {counts.watch}
             </span>
           )}
           {counts.cashed > 0 && (

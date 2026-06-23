@@ -5,6 +5,7 @@ import { decideHrRadarMatch, QUALIFYING_EVENT_TYPES } from "./validation/hrRadar
 import { traceMissedHr } from "./analytics/hrRadarMissTracer";
 import { emitCalledHitLeadTime } from "./analytics/eventEmitters";
 import { applyHrRadarResolvedStateFixup, inferCashedFromTierStatus, CALLED_HIT_OUTCOME_STATUSES, resolveFinalNoHrGrading, reachedHrMaxWindow, qualifiesForNearHrCredit, isContactInCommittedWindow } from "./mlb/hrRadarSection";
+import { buildHrRadarDisplayContract, getRawCurrentReadinessScore10 } from "./mlb/hrRadarDisplayContract";
 import type { HrRadarOutcomeStatus, HrRadarPeakContact } from "./mlb/hrRadarSection";
 import type { PersistedHrRadarOutcomeStamp } from "./mlb/hrRadarOutcomeStamp";
 import { classifyHrMaxWindowAtFinal } from "./mlb/hrMaxWindow";
@@ -6289,12 +6290,26 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    // Within sections, order by priority signal: cashed by hit time desc; everyone else by peak score desc
+    // ── HR Radar display contract (presentation-only). Stamp AFTER final
+    // bucketing — a live `userStage === "ready"` row is re-routed into
+    // sections.ready above, so its tier-banded action score must be computed
+    // against the section it actually ended up in. Never touches grading.
+    const LIVE_SECTION_KEYS = ["attackNow", "ready", "building", "watch"] as const;
+    for (const sectionKey of LIVE_SECTION_KEYS) {
+      for (const entry of sections[sectionKey]) {
+        Object.assign(entry, buildHrRadarDisplayContract(entry, sectionKey));
+      }
+    }
+
+    // Within sections, order by CURRENT readiness desc (never peak — peak was
+    // the old "backwards" bug). cashed by hit time desc; dead by resolved desc.
+    const sortKeyCurrent = (e: HrRadarLadderEntry): number =>
+      e.displayReadinessScore10 ?? getRawCurrentReadinessScore10(e) ?? 0;
     sections.cashed.sort((a, b) => (b.hitDetectedAt?.getTime() ?? 0) - (a.hitDetectedAt?.getTime() ?? 0));
-    sections.attackNow.sort((a, b) => (b.signalStrengthScore ?? 0) - (a.signalStrengthScore ?? 0));
-    sections.ready.sort((a, b) => (b.currentSignalScore10 ?? b.signalStrengthScore ?? 0) - (a.currentSignalScore10 ?? a.signalStrengthScore ?? 0));
-    sections.building.sort((a, b) => (b.peakScore ?? 0) - (a.peakScore ?? 0));
-    sections.watch.sort((a, b) => (b.peakScore ?? 0) - (a.peakScore ?? 0));
+    sections.attackNow.sort((a, b) => sortKeyCurrent(b) - sortKeyCurrent(a));
+    sections.ready.sort((a, b) => sortKeyCurrent(b) - sortKeyCurrent(a));
+    sections.building.sort((a, b) => sortKeyCurrent(b) - sortKeyCurrent(a));
+    sections.watch.sort((a, b) => sortKeyCurrent(b) - sortKeyCurrent(a));
     sections.dead.sort((a, b) => (b.resolvedAt?.getTime() ?? 0) - (a.resolvedAt?.getTime() ?? 0));
 
     const counts = {
@@ -6701,6 +6716,27 @@ export interface HrRadarLadderEntry {
   /** Hidden debug surface — admin-only. */
   debugReasons: string[];
   enginePath: string | null;
+
+  // ── HR Radar display contract (presentation-only; see hrRadarDisplayContract.ts).
+  // Stamped after final bucketing. All optional + additive — never replace any
+  // legacy field, never affect grading/qualification/W-L.
+  /** True calibrated HR probability as a whole percent. Never tier-capped. */
+  displayHrChancePct?: number | null;
+  /** Raw current readiness on the 0-10 scale (NOT path/section-capped). */
+  displayReadinessScore10?: number | null;
+  /** Tier-banded actionability score on the 0-10 scale. */
+  displayActionScore10?: number | null;
+  /** Tier-banded actionability as a whole percent (drives the window bar). */
+  displayActionPct?: number | null;
+  /** Friendly live tier. */
+  displayStageLabel?: "TOP WINDOW" | "ALMOST" | "WATCHING";
+  displayStageSubLabel?: string;
+  /** First user-safe reason (humanized). */
+  displayPrimaryReason?: string | null;
+  /** Why a lower-tier card is not yet a top-window play (null for TOP WINDOW). */
+  displayWhyNotTopWindow?: string | null;
+  /** Display-only: derived from officialSignalStage. Not a grading write. */
+  displayRecordEligible?: boolean;
 }
 
 export const storage = new DatabaseStorage();
