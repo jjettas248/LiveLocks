@@ -5,7 +5,7 @@ import { normalizeMlbMarketKey } from "../mlb/normalizeMarketKey";
 async function main() {
   console.log("[BACKFILL_DNP] Starting one-shot DNP void backfill for stuck MLB plays…");
 
-  const { plays: pending } = await storage.getPlays({ limit: 5000, settled: "pending" });
+  const pending = await storage.getPendingPlaysForGrading(20000);
   const mlbStuck = pending.filter(p => p.sport === "mlb" && p.gameId && p.playerId);
   console.log(`[BACKFILL_DNP] Found ${mlbStuck.length} pending MLB plays`);
 

@@ -75,7 +75,7 @@ import {
   type InsertHrRadarSignalEvent,
 } from "@shared/schema";
 import { PREGAME_SEED_CAP, pregameSeedTierLabel } from "@shared/hrRadarConviction";
-import { eq, and, desc, isNull, isNotNull, sql, lt, lte, gte, inArray, ne } from "drizzle-orm";
+import { eq, and, asc, desc, isNull, isNotNull, sql, lt, lte, gte, inArray, ne } from "drizzle-orm";
 
 const HIGH_VOLATILITY_TEAMS = new Set(["BKN", "WAS", "CHA", "POR", "UTA", "DET"]);
 
@@ -341,6 +341,7 @@ export interface IStorage {
     contactQualityScore?: number;
   }): Promise<{ id: string; isDuplicate: boolean }>;
   getPlays(opts: { sport?: string; limit?: number; settled?: string; date?: string }): Promise<{ plays: PersistedPlay[]; total: number }>;
+  getPendingPlaysForGrading(limit?: number): Promise<PersistedPlay[]>;
   getAllSettledPlays(opts?: { sport?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]>;
   getPlaysInRange(opts?: { sport?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]>;
   getGradedPlaysForCalibration(opts: { sport?: string; market?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]>;
@@ -2411,6 +2412,23 @@ export class DatabaseStorage implements IStorage {
     if (conditions.length > 0) query = query.where(and(...conditions));
     const rows = await query.orderBy(desc(persistedPlays.timestamp)).limit(limit);
     return { plays: rows, total: rows.length };
+  }
+
+  // Grader-only pending feed. The public getPlays() returns the NEWEST 500
+  // pending plays (ordered desc, hard-capped at 500). That starves the grader
+  // once the pending backlog exceeds 500: the window fills with today's
+  // not-yet-final games while older, already-final gradeable plays sit beyond
+  // the cutoff and never settle — which also freezes calibration, since
+  // calibration reads only settled rows. This path orders OLDEST-first so the
+  // grader always drains the backlog from the bottom, and lifts the cap so a
+  // multi-day backlog can recover in a single cycle.
+  async getPendingPlaysForGrading(limit = 5000): Promise<PersistedPlay[]> {
+    return await db
+      .select()
+      .from(persistedPlays)
+      .where(isNull(persistedPlays.result))
+      .orderBy(asc(persistedPlays.timestamp))
+      .limit(Math.max(1, Math.min(limit, 20000)));
   }
 
   async getGradedPlaysForCalibration(opts: { sport?: string; market?: string; startDate?: string; endDate?: string }): Promise<PersistedPlay[]> {
