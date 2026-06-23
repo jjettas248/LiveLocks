@@ -8,6 +8,7 @@ import { LiveBoard } from "@/components/mlb/LiveBoard";
 import { LiveFeed } from "@/components/mlb/LiveFeed";
 import { MlbSignalCard, type MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { HrRadarLadder, type HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
+import { PregamePowerRadar } from "@/components/mlb/PregamePowerRadar";
 import { AbLogRows, type AbRow } from "@/components/mlb/AbLogRows";
 import { HrQuickDecide } from "@/components/mlb/HrQuickDecide";
 import { MlbBoxScore, type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
@@ -2858,7 +2859,7 @@ function ResultPanel({ calcResult, calcMarket, calcBookLine, activeCalcName, cal
   );
 }
 
-function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar" }) {
+function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar" | "pregame_power" }) {
   const { user, isLoading: authLoading } = useAuth();
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
   const [liveFeedSub, setLiveFeedSub] = useState<"all" | "3rd" | "5th" | "7th">("all");
@@ -3769,6 +3770,12 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
         </div>
       )}
 
+      {activeSubTab === "pregame_power" && (
+        <div className="space-y-4">
+          <PregamePowerRadar />
+        </div>
+      )}
+
       {activeSubTab === "hr_radar" && (
         <div className="space-y-4">
           {/* Quick Decide / Full Ladder toggle */}
@@ -3888,7 +3895,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
   );
 }
 
-export default function MlbLivePage({ activeSubTab = "live_feed" }: { activeSubTab?: "live_feed" | "hr_radar" }) {
+export default function MlbLivePage({ activeSubTab = "live_feed" }: { activeSubTab?: "live_feed" | "hr_radar" | "pregame_power" }) {
   return (
     <MLBErrorBoundary>
       <MlbLiveInner activeSubTab={activeSubTab} />

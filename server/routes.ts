@@ -478,6 +478,81 @@ export async function registerRoutes(
     }
   });
 
+  // ── MLB Pre-Game Power Radar (additive, confirmed-lineup targets) ───────────
+  // Admin debug: includes suppressed rows + full diagnostics.
+  app.get("/api/admin/mlb/pregame-power-radar/debug", requireAdmin, async (_req, res) => {
+    try {
+      const { getRadarSnapshot } = await import("./mlb/pregamePowerRadar/pregamePowerRadarService");
+      const { buildResponse } = await import("./mlb/pregamePowerRadar/diagnostics");
+      const { getPregameOutcomeSummary } = await import("./mlb/pregamePowerRadar/shadowOutcomes");
+      const { todayET } = await import("./utils/dateUtils");
+      const { snapshot, source } = await getRadarSnapshot();
+      if (!snapshot) {
+        return res.json({
+          date: todayET(), buildId: "", generatedAt: "", source, gamesScanned: 0,
+          signals: [], diagnostics: { lineupCoverage: 0, weatherCoverage: 0, batterCoverage: 0, pitcherCoverage: 0, totalBattersEvaluated: 0, publicSignals: 0, suppressedSignals: 0, topSuppressionReasons: [] },
+        });
+      }
+      const signals = Array.from(snapshot.signals.values());
+      const resp = buildResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
+        gamesScanned: snapshot.gamesScanned, battersEvaluated: snapshot.battersEvaluated,
+        ...snapshot.coverage,
+      }, true);
+      return res.json({ ...resp, outcomeSummary: getPregameOutcomeSummary() });
+    } catch (err) {
+      console.error("[admin/mlb/pregame-power-radar/debug]", err);
+      return res.status(500).json({ error: "Failed to fetch pre-game power radar debug" });
+    }
+  });
+
+  // Public: confirmed-lineup, non-suppressed targets for today's slate.
+  app.get("/api/mlb/pregame-power-radar", requireMLBAccess, async (_req, res) => {
+    try {
+      const { getRadarSnapshot } = await import("./mlb/pregamePowerRadar/pregamePowerRadarService");
+      const { buildResponse } = await import("./mlb/pregamePowerRadar/diagnostics");
+      const { todayET } = await import("./utils/dateUtils");
+      const { snapshot, source } = await getRadarSnapshot();
+      if (!snapshot) {
+        return res.json({
+          date: todayET(), buildId: "", generatedAt: "", source, gamesScanned: 0,
+          signals: [], diagnostics: { lineupCoverage: 0, weatherCoverage: 0, batterCoverage: 0, pitcherCoverage: 0, totalBattersEvaluated: 0, publicSignals: 0, suppressedSignals: 0, topSuppressionReasons: [] },
+        });
+      }
+      const signals = Array.from(snapshot.signals.values());
+      return res.json(buildResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
+        gamesScanned: snapshot.gamesScanned, battersEvaluated: snapshot.battersEvaluated,
+        ...snapshot.coverage,
+      }, false));
+    } catch (err) {
+      console.error("[mlb/pregame-power-radar]", err);
+      return res.status(500).json({ error: "Failed to fetch pre-game power radar" });
+    }
+  });
+
+  // Public: one game's confirmed-lineup targets.
+  app.get("/api/mlb/pregame-power-radar/:gameId", requireMLBAccess, async (req, res) => {
+    try {
+      const { getRadarSnapshot } = await import("./mlb/pregamePowerRadar/pregamePowerRadarService");
+      const { buildResponse } = await import("./mlb/pregamePowerRadar/diagnostics");
+      const { todayET } = await import("./utils/dateUtils");
+      const gameId = String(req.params.gameId);
+      const { snapshot, source } = await getRadarSnapshot();
+      if (!snapshot) {
+        return res.json({
+          date: todayET(), buildId: "", generatedAt: "", source, gamesScanned: 0,
+          signals: [], diagnostics: { lineupCoverage: 0, weatherCoverage: 0, batterCoverage: 0, pitcherCoverage: 0, totalBattersEvaluated: 0, publicSignals: 0, suppressedSignals: 0, topSuppressionReasons: [] },
+        });
+      }
+      const signals = Array.from(snapshot.signals.values()).filter((s) => s.gameId === gameId);
+      return res.json(buildResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
+        gamesScanned: 1, battersEvaluated: signals.length, ...snapshot.coverage,
+      }, false));
+    } catch (err) {
+      console.error("[mlb/pregame-power-radar/:gameId]", err);
+      return res.status(500).json({ error: "Failed to fetch pre-game power radar for game" });
+    }
+  });
+
   app.get("/api/admin/signal-lifecycle/:signalId", requireAdmin, async (req, res) => {
     try {
       const { getCanonical } = await import("./services/lifecycleStore");

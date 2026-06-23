@@ -553,6 +553,80 @@ app.use((req, res, next) => {
   // Start MLB live game orchestrator (Phase A — admin-only, fire-and-forget)
   liveOrchestrator.start();
 
+  // ── MLB Pre-Game Power Radar — guarded scheduled builds ──────────
+  // Additive, confirmed-lineup target radar. NOT a blind all-day cron: an
+  // initial slate build runs shortly after boot, then a guarded tick rebuilds
+  // only when a game is near first pitch (within ~2h) or no snapshot exists for
+  // today. The build is internally concurrency-guarded and fully try/catch'd so
+  // it can never crash runtime.
+  (async () => {
+    try {
+      const { buildPregamePowerRadar } = await import(
+        "./mlb/pregamePowerRadar/buildPregamePowerRadar"
+      );
+      const { getSnapshot } = await import(
+        "./mlb/pregamePowerRadar/pregamePowerRadarStore"
+      );
+      const { installPregamePersistence } = await import(
+        "./mlb/pregamePowerRadar/pregamePersistence"
+      );
+      const { todayET } = await import("./utils/dateUtils");
+
+      // Wire DB persistence (build sink + DB fallback) before the first build.
+      installPregamePersistence();
+
+      // Initial slate build (deferred so rosters/weather can populate first).
+      setTimeout(() => {
+        buildPregamePowerRadar().catch((e) =>
+          console.warn("[PREGAME_POWER_RADAR_BOOT] initial build failed:", e?.message),
+        );
+      }, 90 * 1000);
+
+      // Guarded 15-min tick.
+      setInterval(() => {
+        try {
+          const snap = getSnapshot();
+          const needInitial = !snap || snap.sessionDate !== todayET();
+          let nearFirstPitch = false;
+          if (snap) {
+            const now = Date.now();
+            for (const s of Array.from(snap.signals.values())) {
+              if (s.gameStatus === "live") { nearFirstPitch = true; break; }
+              if (!s.startsAt) continue;
+              const t = Date.parse(s.startsAt);
+              if (Number.isFinite(t) && t - now > 0 && t - now < 2 * 60 * 60 * 1000) {
+                nearFirstPitch = true;
+                break;
+              }
+            }
+          }
+          if (needInitial || nearFirstPitch) {
+            buildPregamePowerRadar().catch((e) =>
+              console.warn("[PREGAME_POWER_RADAR_TICK] build failed:", e?.message),
+            );
+          }
+        } catch (e) {
+          console.warn("[PREGAME_POWER_RADAR_TICK] error:", (e as Error).message);
+        }
+      }, 15 * 60 * 1000);
+
+      // Shadow-outcome grader + live bridge (Phase 4/5) — read-only on the live
+      // engine; writes only to the pre-game track. Every 5 min, try/catch.
+      const { gradePregameOutcomes } = await import(
+        "./mlb/pregamePowerRadar/shadowOutcomes"
+      );
+      setInterval(() => {
+        gradePregameOutcomes().catch((e) =>
+          console.warn("[PREGAME_POWER_RADAR_GRADE] failed:", e?.message),
+        );
+      }, 5 * 60 * 1000);
+
+      console.log("[PREGAME_POWER_RADAR_BOOT] scheduled builds armed");
+    } catch (err) {
+      console.warn("[PREGAME_POWER_RADAR_BOOT] failed:", (err as Error).message);
+    }
+  })();
+
   // ── NBA Calibration Backfill — boot-time idempotent run ──────────
   // Tags any pre-cutover NBA plays missing the nbaCalV2 marker so the
   // cohort report classifies them correctly. Idempotent: when the table

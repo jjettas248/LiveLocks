@@ -45,6 +45,12 @@ import {
   batterRollingSnapshots,
   type BatterRollingSnapshot,
   type InsertBatterRollingSnapshot,
+  pregamePowerRadarSignals,
+  pregamePowerRadarBuilds,
+  type PregamePowerRadarSignalRow,
+  type InsertPregamePowerRadarSignal,
+  type PregamePowerRadarBuildRow,
+  type InsertPregamePowerRadarBuild,
   type Player,
   type InsertPlayer,
   type TeamDefense,
@@ -317,6 +323,13 @@ export interface IStorage {
   upsertBatterRollingSnapshot(snap: InsertBatterRollingSnapshot): Promise<void>;
   getBatterRollingSnapshot(playerId: string, sessionDate: string): Promise<BatterRollingSnapshot | null>;
   getBatterRollingSnapshotsForDateRange(from: string, to: string): Promise<BatterRollingSnapshot[]>;
+
+  // ── MLB Pre-Game Power Radar (additive; never feeds ROI) ──────────────────
+  upsertPregamePowerRadarSignal(row: InsertPregamePowerRadarSignal): Promise<void>;
+  getPregamePowerRadarSignalsByDate(sessionDate: string): Promise<PregamePowerRadarSignalRow[]>;
+  getPregamePowerRadarSignalsByGame(sessionDate: string, gameId: string): Promise<PregamePowerRadarSignalRow[]>;
+  recordPregamePowerBuild(build: InsertPregamePowerRadarBuild): Promise<void>;
+  getLatestPregamePowerBuild(sessionDate: string): Promise<PregamePowerRadarBuildRow | null>;
 }
 
 // ─── Usage compression for blowout games ──────────────────────────────────
@@ -3062,6 +3075,96 @@ export class DatabaseStorage implements IStorage {
       telegramConnectionStatus,
       subscriptionSource,
     };
+  }
+
+  // ── MLB Pre-Game Power Radar (additive; never feeds ROI) ──────────────────
+  async upsertPregamePowerRadarSignal(row: InsertPregamePowerRadarSignal): Promise<void> {
+    // Conflict on signalId (PK) — deterministic from sessionDate/gameId/batterId,
+    // so this is idempotent across repeated builds.
+    await db
+      .insert(pregamePowerRadarSignals)
+      .values(row)
+      .onConflictDoUpdate({
+        target: pregamePowerRadarSignals.signalId,
+        set: {
+          buildId: row.buildId,
+          gameStatus: row.gameStatus,
+          firstPitchLockEligible: row.firstPitchLockEligible,
+          pitcherId: row.pitcherId ?? null,
+          pitcherName: row.pitcherName ?? null,
+          battingOrderSlot: row.battingOrderSlot ?? null,
+          primaryMarket: row.primaryMarket,
+          marketTags: row.marketTags,
+          marketScores: row.marketScores,
+          score10: row.score10,
+          tier: row.tier,
+          drivers: row.drivers,
+          warnings: row.warnings,
+          diagnostics: row.diagnostics,
+          lineupStatus: row.lineupStatus,
+          weatherStatus: row.weatherStatus,
+          status: row.status,
+          suppressed: row.suppressed,
+          suppressedReasons: row.suppressedReasons,
+          outcomes: row.outcomes ?? null,
+          becameLiveReady: row.becameLiveReady,
+          becameLiveFire: row.becameLiveFire,
+          convertedLiveAt: row.convertedLiveAt ?? null,
+          lockedAt: row.lockedAt ?? null,
+          gradedAt: row.gradedAt ?? null,
+          updatedAt: new Date(),
+        },
+      });
+  }
+
+  async getPregamePowerRadarSignalsByDate(sessionDate: string): Promise<PregamePowerRadarSignalRow[]> {
+    return db
+      .select()
+      .from(pregamePowerRadarSignals)
+      .where(eq(pregamePowerRadarSignals.sessionDate, sessionDate));
+  }
+
+  async getPregamePowerRadarSignalsByGame(sessionDate: string, gameId: string): Promise<PregamePowerRadarSignalRow[]> {
+    return db
+      .select()
+      .from(pregamePowerRadarSignals)
+      .where(and(
+        eq(pregamePowerRadarSignals.sessionDate, sessionDate),
+        eq(pregamePowerRadarSignals.gameId, gameId),
+      ));
+  }
+
+  async recordPregamePowerBuild(build: InsertPregamePowerRadarBuild): Promise<void> {
+    await db
+      .insert(pregamePowerRadarBuilds)
+      .values(build)
+      .onConflictDoUpdate({
+        target: pregamePowerRadarBuilds.buildId,
+        set: {
+          completedAt: build.completedAt ?? null,
+          gamesScanned: build.gamesScanned ?? 0,
+          battersEvaluated: build.battersEvaluated ?? 0,
+          lineupCoverage: build.lineupCoverage ?? null,
+          weatherCoverage: build.weatherCoverage ?? null,
+          batterCoverage: build.batterCoverage ?? null,
+          pitcherCoverage: build.pitcherCoverage ?? null,
+          signalsCreated: build.signalsCreated ?? 0,
+          suppressedCount: build.suppressedCount ?? 0,
+          status: build.status ?? "complete",
+          error: build.error ?? null,
+          updatedAt: new Date(),
+        },
+      });
+  }
+
+  async getLatestPregamePowerBuild(sessionDate: string): Promise<PregamePowerRadarBuildRow | null> {
+    const rows = await db
+      .select()
+      .from(pregamePowerRadarBuilds)
+      .where(eq(pregamePowerRadarBuilds.sessionDate, sessionDate))
+      .orderBy(desc(pregamePowerRadarBuilds.startedAt))
+      .limit(1);
+    return rows[0] ?? null;
   }
 
   // ── Task #129 — batter rolling stat snapshots ──────────────────────────
