@@ -41,3 +41,28 @@ export function hrEntryPeakScore10(entry: HrRadarLadderEntry): number | null {
     null
   );
 }
+
+// ── HR Radar display contract — FORMATTING ONLY. ────────────────────────────
+// These read server-stamped fields (see server/mlb/hrRadarDisplayContract.ts)
+// and clamp for safety. They must NOT recompute probability, infer the tier, or
+// rebuild the action bands — the server owns all of that.
+
+export function hrEntryHrChancePct(entry: HrRadarLadderEntry): number | null {
+  const n = Number(entry?.displayHrChancePct);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : null;
+}
+
+export function hrEntryActionPct(entry: HrRadarLadderEntry): number | null {
+  const n = Number(entry?.displayActionPct);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : null;
+}
+
+export function hrEntryActionScore10(entry: HrRadarLadderEntry): number | null {
+  const n = Number(entry?.displayActionScore10);
+  return Number.isFinite(n) ? Math.max(0, Math.min(10, Math.round(n * 10) / 10)) : null;
+}
+
+export function hrEntryReadinessScore10(entry: HrRadarLadderEntry): number | null {
+  const n = Number(entry?.displayReadinessScore10);
+  return Number.isFinite(n) ? Math.max(0, Math.min(10, Math.round(n * 10) / 10)) : null;
+}
