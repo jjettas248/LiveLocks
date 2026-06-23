@@ -2939,6 +2939,8 @@ export class LiveGameOrchestrator {
         launchAngle: ab.launchAngle ?? null,
         distance: ab.distance ?? null,
         outcome: ab.outcome ?? "out",
+        inning: ab.inning ?? null,
+        half: ab.half ?? null,
       })),
       preHrDangerScore: p.preHrDangerScore ?? undefined,
       dangerFlags: p.dangerFlags ?? undefined,
@@ -3402,6 +3404,8 @@ export class LiveGameOrchestrator {
         distance: lastAB.distance ?? null,
         hardHit: (lastAB.exitVelocity ?? 0) >= 95,
         barrel: isBarrel(lastAB.exitVelocity ?? null, lastAB.launchAngle ?? null),
+        inning: lastAB.inning ?? null,
+        half: lastAB.half ?? null,
       } : null;
 
       const convSnap = alertResult.diagnostics?.hrConversion ? {
@@ -3433,6 +3437,7 @@ export class LiveGameOrchestrator {
           contactClass: c.contactClass, exitVelocity: c.exitVelocity,
           launchAngle: c.launchAngle, distance: c.distance,
           outcome: c.outcome, isBarrel: c.isBarrel,
+          inning: c.inning ?? null, half: c.half ?? null,
         })),
         pitcherHrVulnerability: getHrAlertState(gameId, batter.playerId)?.pitcherHrVulnerability ?? null,
       } : null;
@@ -4312,6 +4317,8 @@ export class LiveGameOrchestrator {
                 distance: lastAB.distance ?? null,
                 hardHit: (lastAB.exitVelocity ?? 0) >= 95,
                 barrel: isBarrel(lastAB.exitVelocity ?? null, lastAB.launchAngle ?? null),
+                inning: lastAB.inning ?? null,
+                half: lastAB.half ?? null,
               } : null;
 
               const convSnap = alertResult.diagnostics?.hrConversion ? {
@@ -4343,6 +4350,7 @@ export class LiveGameOrchestrator {
                   contactClass: c.contactClass, exitVelocity: c.exitVelocity,
                   launchAngle: c.launchAngle, distance: c.distance,
                   outcome: c.outcome, isBarrel: c.isBarrel,
+                  inning: c.inning ?? null, half: c.half ?? null,
                 })),
                 pitcherHrVulnerability: hrDynSnap?.pitcherHrVulnerability ?? null,
               } : null;
@@ -4507,6 +4515,8 @@ export class LiveGameOrchestrator {
             distance: lastAB.distance ?? null,
             hardHit: (lastAB.exitVelocity ?? 0) >= 95,
             barrel: isBarrel(lastAB.exitVelocity ?? null, lastAB.launchAngle ?? null),
+            inning: lastAB.inning ?? null,
+            half: lastAB.half ?? null,
           } : null;
           console.log(`[HR_PRESENCE_PROMOTE][${gameId}] ${batter.playerName} stage=${dynSnap.canonicalStage} readiness=${dynSnap.hrReadinessScore} — promoting live-contact row left behind by PATH gate`);
           storage.createOrUpdateHrRadarAlert({

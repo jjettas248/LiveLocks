@@ -250,6 +250,51 @@ export interface HrRadarPeakContact {
   isBarrel?: boolean | null;
   /** Best `NearHrTier` the engine assigned across the window ("lean" | "watch"). */
   nearHrTier?: string | null;
+  // Committed-window scoping (2026-06) — the inning/half this contact occurred,
+  // so near-HR credit can be limited to contact AT OR AFTER the signal was
+  // committed. Optional/nullable so absent timing is handled explicitly
+  // (see isContactInCommittedWindow).
+  inning?: number | null;
+  half?: string | null;
+}
+
+/** Half ordering within an inning: top precedes bottom; unknown sorts last. */
+function halfOrdinal(h: string | null | undefined): number {
+  const n = norm(h);
+  if (n === "top" || n === "t") return 0;
+  if (n === "bottom" || n === "b") return 1;
+  return 2;
+}
+
+/**
+ * Committed-window scoping (2026-06) — is this contact AT OR AFTER the moment
+ * the signal was committed (its `signalInning`/`signalHalf`)? Near-HR credit
+ * must only count contact from the committed window, otherwise a barrel from an
+ * earlier watch/build phase could inflate a later no-HR official pick into a
+ * `called_near_hr` (Codex review #25). Pure.
+ *
+ * Null handling is deliberate:
+ *   - signal inning unknown  → cannot scope; return true (preserve prior
+ *     behavior rather than silently drop all credit).
+ *   - signal inning known but contact inning unknown → return false (we cannot
+ *     prove the contact happened in-window, so we do not credit it).
+ */
+export function isContactInCommittedWindow(
+  contact: { inning?: number | null; half?: string | null } | null | undefined,
+  signal: { signalInning?: number | null; signalHalf?: string | null },
+): boolean {
+  const sigInn = typeof signal.signalInning === "number" && Number.isFinite(signal.signalInning)
+    ? signal.signalInning
+    : null;
+  if (sigInn == null) return true; // no committed-window timing — cannot scope
+  if (!contact) return false;
+  const cInn = typeof contact.inning === "number" && Number.isFinite(contact.inning)
+    ? contact.inning
+    : null;
+  if (cInn == null) return false; // signal time known, contact time unknown → not provable
+  if (cInn > sigInn) return true;
+  if (cInn < sigInn) return false;
+  return halfOrdinal(contact.half) >= halfOrdinal(signal.signalHalf);
 }
 
 // Credit thresholds — a near-HR is a genuinely squared-up ball that stayed in

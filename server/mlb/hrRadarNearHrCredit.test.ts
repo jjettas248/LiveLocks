@@ -18,6 +18,7 @@ import {
   reachedHrMaxWindow,
   resolveFinalNoHrGrading,
   qualifiesForNearHrCredit,
+  isContactInCommittedWindow,
   CALLED_HIT_OUTCOME_STATUSES,
   deriveHrRadarOutcomeStatus,
   deriveHrRadarSection,
@@ -121,6 +122,64 @@ eq("5.2 committed pick + weak contact, no HR → called_miss",
   gradeNoHr({ alertTier: "officialAlert", contact: { peakEv: 98, peakDistance: 330 } }), "called_miss");
 eq("5.3 sub-actionable + barrel, no HR → expired (never a counted pick)",
   gradeNoHr({ confidenceTier: "strong", contact: { isBarrel: true } }), "expired");
+
+// ── 6. isContactInCommittedWindow — committed-window scoping ─────────────────
+console.log("\nisContactInCommittedWindow — only count contact at/after the signal");
+
+eq("6.1 signal inning unknown → cannot scope, returns true",
+  isContactInCommittedWindow({ inning: 2, half: "top" }, { signalInning: null }), true);
+eq("6.2 contact in later inning → in window",
+  isContactInCommittedWindow({ inning: 7, half: "top" }, { signalInning: 5, signalHalf: "top" }), true);
+eq("6.3 contact in earlier inning → out of window",
+  isContactInCommittedWindow({ inning: 3, half: "top" }, { signalInning: 5, signalHalf: "top" }), false);
+eq("6.4 same inning, same half → in window",
+  isContactInCommittedWindow({ inning: 5, half: "top" }, { signalInning: 5, signalHalf: "top" }), true);
+eq("6.5 same inning, contact bottom vs signal top → in window (after)",
+  isContactInCommittedWindow({ inning: 5, half: "bottom" }, { signalInning: 5, signalHalf: "top" }), true);
+eq("6.6 same inning, contact top vs signal bottom → out of window (before)",
+  isContactInCommittedWindow({ inning: 5, half: "top" }, { signalInning: 5, signalHalf: "bottom" }), false);
+eq("6.7 signal time known but contact inning unknown → not provable, excluded",
+  isContactInCommittedWindow({ inning: null, half: null }, { signalInning: 5, signalHalf: "top" }), false);
+
+// ── 7. Windowed near-HR credit mirror (extractAlertPeakContact + reconcile) ──
+console.log("\nwindowed credit — a pre-fire barrel must NOT credit a later pick");
+
+function gradeNoHrWindowed(args: {
+  alertTier?: string | null; confidenceTier?: string | null; signalState?: string | null;
+  signalInning?: number | null; signalHalf?: string | null;
+  contacts: HrRadarPeakContact[];
+}): "called_near_hr" | "called_miss" | "expired" {
+  const base = resolveFinalNoHrGrading(args);
+  if (base !== "called_miss") return base;
+  const inWindow = args.contacts.filter(c =>
+    isContactInCommittedWindow(c, { signalInning: args.signalInning, signalHalf: args.signalHalf }));
+  const qualifying = inWindow.find(c => qualifiesForNearHrCredit(c));
+  return qualifying ? "called_near_hr" : "called_miss";
+}
+
+eq("7.1 committed pick + in-window barrel → called_near_hr",
+  gradeNoHrWindowed({
+    alertTier: "officialAlert", signalInning: 5, signalHalf: "top",
+    contacts: [{ isBarrel: true, inning: 6, half: "top" }],
+  }), "called_near_hr");
+eq("7.2 committed pick + ONLY pre-fire barrel (earlier inning) → called_miss",
+  gradeNoHrWindowed({
+    alertTier: "officialAlert", signalInning: 5, signalHalf: "top",
+    contacts: [{ isBarrel: true, inning: 2, half: "top" }],
+  }), "called_miss");
+eq("7.3 committed pick + pre-fire barrel AND in-window weak contact → called_miss",
+  gradeNoHrWindowed({
+    alertTier: "officialAlert", signalInning: 5, signalHalf: "top",
+    contacts: [
+      { isBarrel: true, inning: 2, half: "top" },
+      { peakEv: 96, peakDistance: 320, inning: 6, half: "top" },
+    ],
+  }), "called_miss");
+eq("7.4 committed pick + in-window 385ft → called_near_hr",
+  gradeNoHrWindowed({
+    alertTier: "officialAlert", signalInning: 5, signalHalf: "top",
+    contacts: [{ peakDistance: 385, inning: 5, half: "top" }],
+  }), "called_near_hr");
 
 console.log(`\n=== Result: ${pass} pass, ${fail} fail ===`);
 if (fail > 0) {

@@ -22,6 +22,11 @@ export interface ClassifiedContact {
   distance: number;
   outcome: string;
   isBarrel: boolean;
+  // Committed-window scoping (2026-06) — when this contact occurred, threaded
+  // through from the play feed so near-HR credit can be limited to the
+  // committed window. Optional; null when the source AB carried no timing.
+  inning?: number | null;
+  half?: string | null;
 }
 
 export interface HitterPowerProfile {
@@ -166,6 +171,8 @@ export function classifyContactEvent(
     launchAngle: number | null;
     distance: number | null;
     outcome: string;
+    inning?: number | null;
+    half?: string | null;
   },
   context?: { batSpeedZ?: number; hitterPowerProfileScore?: number },
 ): ClassifiedContact {
@@ -227,6 +234,8 @@ export function classifyContactEvent(
     distance: dist,
     outcome: ab.outcome ?? "out",
     isBarrel,
+    inning: ab.inning ?? null,
+    half: ab.half ?? null,
   };
 }
 

@@ -4,7 +4,7 @@ import { resolveMlbGameSessionDate } from "./utils/mlbSessionDate";
 import { decideHrRadarMatch, QUALIFYING_EVENT_TYPES } from "./validation/hrRadar/matchDecision";
 import { traceMissedHr } from "./analytics/hrRadarMissTracer";
 import { emitCalledHitLeadTime } from "./analytics/eventEmitters";
-import { applyHrRadarResolvedStateFixup, inferCashedFromTierStatus, CALLED_HIT_OUTCOME_STATUSES, resolveFinalNoHrGrading, reachedHrMaxWindow, qualifiesForNearHrCredit } from "./mlb/hrRadarSection";
+import { applyHrRadarResolvedStateFixup, inferCashedFromTierStatus, CALLED_HIT_OUTCOME_STATUSES, resolveFinalNoHrGrading, reachedHrMaxWindow, qualifiesForNearHrCredit, isContactInCommittedWindow } from "./mlb/hrRadarSection";
 import type { HrRadarOutcomeStatus, HrRadarPeakContact } from "./mlb/hrRadarSection";
 import type { PersistedHrRadarOutcomeStamp } from "./mlb/hrRadarOutcomeStamp";
 import { classifyHrMaxWindowAtFinal } from "./mlb/hrMaxWindow";
@@ -73,16 +73,20 @@ const HIGH_VOLATILITY_TEAMS = new Set(["BKN", "WAS", "CHA", "POR", "UTA", "DET"]
 
 /**
  * Near-HR credit (2026-06) — derive the best near-HR-shaped contact a player
- * produced while an HR-Max-Window signal was active, for `called_near_hr`
- * grading at game-final reconciliation. Reads the per-contact window already
- * persisted on `diagnosticsSnapshot.contactClasses` (EV/LA/distance/barrel),
- * falling back to the last-AB `contactSnapshot`. Returns the FIRST contact that
- * clears the credit bar (so `qualifiesForNearHrCredit` returns true), else the
- * window's peak metrics (for logging) which will not qualify. Pure; null-safe.
+ * produced **within the committed window** (at/after the signal's
+ * `signalInning`/`signalHalf`), for `called_near_hr` grading at game-final
+ * reconciliation. Reads the per-contact window already persisted on
+ * `diagnosticsSnapshot.contactClasses` (EV/LA/distance/barrel/inning/half),
+ * falling back to the last-AB `contactSnapshot`. Contacts from an earlier
+ * watch/build phase are filtered out so a pre-fire barrel cannot inflate a
+ * later no-HR official pick (Codex review #25). Returns the FIRST in-window
+ * contact that clears the credit bar (so `qualifiesForNearHrCredit` returns
+ * true), else the window's peak metrics (for logging). Pure; null-safe.
  */
 function extractAlertPeakContact(
   diagnosticsSnapshot: unknown,
   contactSnapshot: unknown,
+  committedWindow: { signalInning?: number | null; signalHalf?: string | null },
 ): HrRadarPeakContact | null {
   const candidates: HrRadarPeakContact[] = [];
   const diag = diagnosticsSnapshot as any;
@@ -93,6 +97,8 @@ function extractAlertPeakContact(
       peakLaunchAngle: typeof c?.launchAngle === "number" ? c.launchAngle : null,
       peakDistance: typeof c?.distance === "number" ? c.distance : null,
       isBarrel: c?.isBarrel === true,
+      inning: typeof c?.inning === "number" ? c.inning : null,
+      half: typeof c?.half === "string" ? c.half : null,
     });
   }
   const snap = contactSnapshot as any;
@@ -102,18 +108,23 @@ function extractAlertPeakContact(
       peakLaunchAngle: typeof snap.la === "number" ? snap.la : null,
       peakDistance: typeof snap.distance === "number" ? snap.distance : null,
       isBarrel: snap.barrel === true,
+      inning: typeof snap.inning === "number" ? snap.inning : null,
+      half: typeof snap.half === "string" ? snap.half : null,
     });
   }
-  if (candidates.length === 0) return null;
-  const qualifying = candidates.find(c => qualifiesForNearHrCredit(c));
+  // Committed-window scoping — drop contact from before the signal fired so
+  // only danger squared up during the committed pick can earn credit.
+  const inWindow = candidates.filter(c => isContactInCommittedWindow(c, committedWindow));
+  if (inWindow.length === 0) return null;
+  const qualifying = inWindow.find(c => qualifiesForNearHrCredit(c));
   if (qualifying) return qualifying;
-  // None qualify — return the window peak purely for logging context.
-  return candidates.reduce((best, c) => ({
+  // None qualify — return the in-window peak purely for logging context.
+  return inWindow.reduce((best, c) => ({
     peakEv: Math.max(best.peakEv ?? 0, c.peakEv ?? 0) || null,
     peakLaunchAngle: (c.peakDistance ?? 0) > (best.peakDistance ?? 0) ? c.peakLaunchAngle : best.peakLaunchAngle,
     peakDistance: Math.max(best.peakDistance ?? 0, c.peakDistance ?? 0) || null,
     isBarrel: (best.isBarrel === true) || (c.isBarrel === true),
-  }), candidates[0]);
+  }), inWindow[0]);
 }
 
 // ─── Normal CDF (standard normal) ───────────────────────────────────────────
@@ -4754,7 +4765,11 @@ export class DatabaseStorage implements IStorage {
           // persisted on `diagnosticsSnapshot.contactClasses`, with the last-AB
           // `contactSnapshot` as a fallback — no schema change, no new write path.
           if (finalGrade === "called_miss") {
-            const peakContact = extractAlertPeakContact(alert.diagnosticsSnapshot, alert.contactSnapshot);
+            const peakContact = extractAlertPeakContact(
+              alert.diagnosticsSnapshot,
+              alert.contactSnapshot,
+              { signalInning: alert.signalInning ?? alert.detectedInning, signalHalf: alert.signalHalf ?? alert.detectedHalf },
+            );
             if (peakContact && qualifiesForNearHrCredit(peakContact)) {
               await db.update(hrRadarAlerts)
                 .set({

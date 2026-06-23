@@ -58,6 +58,10 @@ export interface HRAlertInput {
     launchAngle: number | null;
     distance: number | null;
     outcome: string;
+    // Committed-window scoping (2026-06) — optional inning/half threaded from
+    // the play feed so classifyContactEvent can stamp each contact's timing.
+    inning?: number | null;
+    half?: string | null;
   }>;
   // ── Pre-HR danger layer (optional; fed in by buildHRSignal callers) ──
   preHrDangerScore?: number;
