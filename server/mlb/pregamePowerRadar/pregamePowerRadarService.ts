@@ -8,6 +8,7 @@ import { todayET } from "../../utils/dateUtils";
 import { buildPregamePowerRadar } from "./buildPregamePowerRadar";
 import {
   getSnapshot,
+  setSnapshot,
   snapshotAgeMs,
   type PregamePowerSnapshot,
 } from "./pregamePowerRadarStore";
@@ -74,4 +75,45 @@ export async function getRadarSnapshot(): Promise<ResolvedSnapshot> {
     }
   }
   return { snapshot, source: "memory" };
+}
+
+let backgroundRefreshInFlight = false;
+
+/**
+ * Non-blocking accessor for hot paths (e.g. the live HR ladder bridge).
+ *
+ * Returns the current same-date in-memory snapshot immediately (or null when
+ * absent / from a prior date) and NEVER awaits a rebuild. When the snapshot is
+ * stale/missing it kicks a single guarded background `getRadarSnapshot()` —
+ * which performs the TTL rebuild AND DB fallback — and persists the resolved
+ * result via `setSnapshot`, so subsequent peeks converge to the same snapshot
+ * the public Pre-Game endpoints serve (typically within one client poll). Hot
+ * callers thus reflect the service-resolved snapshot without paying the
+ * network-heavy rebuild cost inline.
+ */
+export function peekRadarSnapshot(): PregamePowerSnapshot | null {
+  const sessionDate = todayET();
+  const snapshot = getSnapshot();
+  const wrongDate = !!snapshot && snapshot.sessionDate !== sessionDate;
+  const ttl = nearFirstPitch(snapshot) ? TTL_NEAR_FIRST_PITCH_MS : TTL_NORMAL_MS;
+  const stale = !snapshot || wrongDate || snapshotAgeMs() > ttl;
+
+  if (stale && !backgroundRefreshInFlight) {
+    backgroundRefreshInFlight = true;
+    void getRadarSnapshot()
+      .then((r) => {
+        // Persist the resolved snapshot (incl. db_fallback) as runtime truth so
+        // the next peek converges. Rebuilds already call setSnapshot internally;
+        // this also captures the db_fallback branch, which does not.
+        if (r.snapshot) setSnapshot(r.snapshot);
+      })
+      .catch(() => {
+        /* never throw into runtime */
+      })
+      .finally(() => {
+        backgroundRefreshInFlight = false;
+      });
+  }
+
+  return wrongDate ? null : snapshot;
 }
