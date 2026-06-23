@@ -9,11 +9,18 @@
 import { randomUUID } from "crypto";
 import { todayET } from "../../utils/dateUtils";
 import { discoverTodaysGames } from "../gameDiscoveryService";
-import { getStartingLineup, getStartingPitcher, getPlayer } from "../rosterService";
+import {
+  getStartingLineup,
+  getStartingPitcher,
+  getPlayer,
+  updateStartingLineups,
+  updateStartingPitchers,
+} from "../rosterService";
 import { fetchBaseballSavantData, getMarketParkFactor, isVenueIndoors } from "../dataSources";
 import {
   fetchPitcherHandednessSplits,
   fetchBatterHandednessSplits,
+  syncWeather,
   mlbGameCache,
   mlbPlayerCache,
 } from "../dataPullService";
@@ -123,7 +130,32 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
       const startsAt = game.startTime || null;
       const firstPitchLockEligible = gameStatus === "scheduled" || gameStatus === "pre";
 
-      const lineup = getStartingLineup(game.gameId);
+      // The roster + weather stores are keyed by the MLB Stats gamePk (the
+      // statsapi feed/live id), NOT the ESPN event id in game.gameId. Without a
+      // gamePk we cannot hydrate lineups/pitchers/weather — skip cleanly.
+      const gamePk = game.gamePk ?? null;
+      if (!gamePk) {
+        console.log(`[PREGAME_POWER_RADAR_GAME_SCANNED] game=${game.gameId} skipped — no gamePk`);
+        continue;
+      }
+
+      // Hydrate lineups, starters, and weather for this game (none are populated
+      // elsewhere for pre-game slates). Independent fetches → run in parallel;
+      // each is internally try/catch'd so one failure can't abort the build.
+      // Weather is cached under the ESPN game.gameId (matching the orchestrator's
+      // `syncWeather(gamePk, gameId)`) so the signal's gameId and the live
+      // weather entry stay aligned; lineups/pitchers key by gamePk.
+      try {
+        await Promise.all([
+          updateStartingLineups(gamePk),
+          updateStartingPitchers(gamePk),
+          syncWeather(gamePk, game.gameId),
+        ]);
+      } catch {
+        /* hydration failures degrade to empty/neutral below */
+      }
+
+      const lineup = getStartingLineup(gamePk);
       if (lineup.length > 0) lineupGames++;
 
       const weather = mlbGameCache.weather[game.gameId];
@@ -132,11 +164,18 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
       const isIndoors = weather?.isIndoors ?? isVenueIndoors(venueName);
       if (weatherAvailable || isIndoors) weatherGames++;
 
-      const pitcher = getStartingPitcher(game.gameId);
+      // Starters are keyed `${gamePk}:home|away`. Resolve the opposing starter
+      // per batter by team side (both lineup.team and pitcher.team come from the
+      // same MLB feed, so the abbreviations match — no ESPN/MLB skew).
+      const sideStarters = [
+        getStartingPitcher(`${gamePk}:home`),
+        getStartingPitcher(`${gamePk}:away`),
+      ].filter((p): p is NonNullable<typeof p> => !!p);
+      const lineupTeams = Array.from(new Set(lineup.map((l) => l.team)));
 
       console.log(
-        `[PREGAME_POWER_RADAR_GAME_SCANNED] game=${game.gameId} ${game.awayTeam}@${game.homeTeam} ` +
-          `status=${gameStatus} lineup=${lineup.length} weather=${weatherAvailable}`,
+        `[PREGAME_POWER_RADAR_GAME_SCANNED] game=${game.gameId} pk=${gamePk} ${game.awayTeam}@${game.homeTeam} ` +
+          `status=${gameStatus} lineup=${lineup.length} starters=${sideStarters.length} weather=${weatherAvailable}`,
       );
 
       for (const slot of lineup) {
@@ -145,11 +184,12 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
         battersEvaluated++;
 
         const batterTeam = slot.team;
-        const opponent = batterTeam === game.homeTeam ? game.awayTeam : game.homeTeam;
+        const opponent =
+          lineupTeams.find((t) => t !== batterTeam) ??
+          (batterTeam === game.homeTeam ? game.awayTeam : game.homeTeam);
 
-        // Opposing pitcher: the stored starter when it belongs to the other team.
-        const opposingPitcher =
-          pitcher && pitcher.team && pitcher.team !== batterTeam ? pitcher : null;
+        // Opposing starter: the side whose team differs from the batter's.
+        const opposingPitcher = sideStarters.find((p) => p.team !== batterTeam) ?? null;
         const pitcherKnown = !!opposingPitcher;
         if (pitcherKnown) pitcherResolved++;
 
@@ -157,7 +197,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
         let savant: Awaited<ReturnType<typeof fetchBaseballSavantData>> | null = null;
         try {
           const savantId = player.savantId ?? player.playerId;
-          savant = await fetchBaseballSavantData(String(savantId), game.gameId);
+          savant = await fetchBaseballSavantData(String(savantId), gamePk);
         } catch {
           savant = null;
         }
