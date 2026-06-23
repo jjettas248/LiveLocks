@@ -1231,13 +1231,13 @@ export class LiveGameOrchestrator {
       // Derive counts from the post-reconcile table state.
       const rows = await storage.getTodayHrRadarBoardForSession(sessionDate).catch(() => [] as any[]);
       const gameRows = (rows as any[]).filter((r) => r.gameId === gameId);
-      const calledHitStatuses = new Set([
-        "called_hit", "called_hit_attack", "called_hit_ready", "called_hit_build", "called_hit_watch",
-      ]);
+      // Use the canonical hit-class set (includes tiered called_hit_* AND
+      // called_near_hr) so new hit-class outcomes are never under-counted here.
+      const calledHitStatuses = hrRadarSectionMod.CALLED_HIT_OUTCOME_STATUSES;
       for (const r of gameRows) {
         const gs = String(r.gradingStatus ?? "").toLowerCase();
         const st = String(r.status ?? "").toLowerCase();
-        if (calledHitStatuses.has(gs)) counts.resolvedHits++;
+        if (calledHitStatuses.has(gs as any)) counts.resolvedHits++;
         else if (gs === "called_miss" || st === "miss") counts.resolvedMisses++;
         else if (gs === "uncalled_hr") counts.uncalledHrs++;
         else if (gs === "late_signal" || gs === "early_hr_insufficient_sample") counts.expiredInactive++;

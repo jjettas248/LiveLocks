@@ -4001,11 +4001,11 @@ export async function registerRoutes(
           calledHitWithTiming++;
         }
       }
-      const calledHits = (byStatus["called_hit"] ?? 0)
-        + (byStatus["called_hit_attack"] ?? 0)
-        + (byStatus["called_hit_ready"] ?? 0)
-        + (byStatus["called_hit_build"] ?? 0)
-        + (byStatus["called_hit_watch"] ?? 0);
+      // Sum across the canonical hit-class set (tiered called_hit_* AND
+      // called_near_hr) so new hit-class outcomes are counted in the summary.
+      const calledHits = Object.entries(byStatus)
+        .filter(([gs]) => CALLED_HIT_OUTCOME_STATUSES.has(gs as any))
+        .reduce((sum, [, n]) => sum + n, 0);
       const calledMisses = byStatus["called_miss"] ?? 0;
       const uncalled = byStatus["uncalled_hr"] ?? 0;
       const late = byStatus["late_signal"] ?? 0;
