@@ -11,6 +11,10 @@
 // uses looser EV>92 / dist>300 thresholds for its `nearHrScore` boost into
 // the generic confidence stack — different purpose, kept intentionally).
 
+// Deep-fly distance floor — single source of truth in hrThresholds.ts, shared
+// with HRSignalBuilder.ts so the deep-flyout watch threshold stays consistent.
+import { DEEP_FLY_DISTANCE } from "./hrThresholds";
+
 export type NearHrTier = "watch" | "lean";
 
 export type NearHrMatchedPath =
@@ -138,9 +142,8 @@ const DRIVERS_XBA_MISMATCH = [
   "Quality contact suppressed by outcome",
 ];
 
-// Deep-fly distance floor — mirrors DEEP_FLY_DISTANCE in HRSignalBuilder.ts so
-// the "almost HR" deep-flyout watch threshold stays consistent across layers.
-const DEEP_FLY_DISTANCE = 330;
+// DEEP_FLY_DISTANCE is imported at the top from hrThresholds.ts (shared with
+// HRSignalBuilder.ts).
 
 function isFiniteNum(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);

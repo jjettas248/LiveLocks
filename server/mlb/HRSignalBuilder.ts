@@ -1,6 +1,7 @@
 import type { MLBPropInput } from "./types";
 import { computeBatSpeedEngine } from "./featureEngineering";
 import { isBarrel as isCanonicalBarrel } from "./statcastXBA";
+import { DEEP_FLY_DISTANCE } from "./hrThresholds";
 
 export type HRIntensity = "weak" | "watch" | "strong" | "imminent";
 
@@ -83,7 +84,7 @@ export interface HRBuildResult {
 const EV_HARD_HIT_THRESHOLD = 95;
 const LA_SWEET_SPOT_LOW = 18;
 const LA_SWEET_SPOT_HIGH = 38;
-const DEEP_FLY_DISTANCE = 330;
+// DEEP_FLY_DISTANCE imported from hrThresholds.ts (shared with nearHrContact.ts).
 
 // ── Hitter power profile ─────────────────────────────────────────────────────
 // Combines seasonal damage traits + measured/derived bat-speed truth into a

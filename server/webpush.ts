@@ -1,4 +1,5 @@
 import webpush from "web-push";
+import { pushNotificationPayloadSchema } from "@shared/pushNotificationSchema";
 
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
@@ -31,15 +32,26 @@ export async function sendPush(
 ): Promise<void> {
   ensureInit();
   if (!initialized) return;
+
+  // Defense-in-depth: never ship a malformed payload to the push service.
+  // Throw (rather than silently return) so callers can tell a dropped payload
+  // apart from a delivered one — otherwise sendPushToUser counts it as "sent".
+  const parsed = pushNotificationPayloadSchema.safeParse(payload);
+  if (!parsed.success) {
+    const detail = parsed.error.issues.map((i) => i.message).join("; ");
+    console.warn("[LL_PUSH_PAYLOAD_INVALID]", detail);
+    throw Object.assign(new Error(`Invalid push payload: ${detail}`), { invalidPayload: true });
+  }
+
   try {
     const subscription = JSON.parse(subscriptionJson) as webpush.PushSubscription;
     await webpush.sendNotification(
       subscription,
       JSON.stringify({
-        title: payload.title,
-        body: payload.body,
-        url: payload.url ?? "/",
-        data: payload.data ?? {},
+        title: parsed.data.title,
+        body: parsed.data.body,
+        url: parsed.data.url ?? "/",
+        data: parsed.data.data ?? {},
       })
     );
   } catch (err: any) {
@@ -48,5 +60,6 @@ export async function sendPush(
       throw Object.assign(err, { expired: true });
     }
     console.warn("[webpush] Send failed:", err.message);
+    throw err;
   }
 }

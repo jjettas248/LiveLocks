@@ -34,7 +34,8 @@ import {
 } from "./mlb/hrRadarUserStage";
 import { CALLED_HIT_OUTCOME_STATUSES } from "./mlb/hrRadarSection";
 import { registerStripeRoutes } from "./stripeService";
-import { getVapidPublicKey, sendPush } from "./webpush";
+import { getVapidPublicKey } from "./webpush";
+import { sendPushToUser } from "./pushDelivery";
 import { checkAndSendAlerts } from "./alertManager";
 import { autoResolveAlerts, autoSettlePersistedPlays } from "./analyticsResolver";
 import { getROIMetrics } from "./services/roiEngine";
@@ -9076,13 +9077,24 @@ export function registerTestAlertRoute(app: Express): void {
         if (!adminUser?.pushSubscription) {
           return res.status(404).json({ error: "No push subscription found. Install app to home screen first." });
         }
-        await sendPush(adminUser.pushSubscription, {
+        const selfResult = await sendPushToUser(adminUser, {
           title,
           body,
           url: "/",
           data: { isTest: true, testPlay },
         });
-        return res.json({ success: true, deliveredTo: 1, target: "self" });
+        if (selfResult === "sent") {
+          return res.json({ success: true, deliveredTo: 1, target: "self" });
+        }
+        // Don't report success when nothing was actually delivered (rate-limited,
+        // expired subscription just cleaned up, invalid payload, or send failure).
+        const selfStatus = selfResult === "rate_limited" ? 429 : selfResult === "expired" ? 410 : 502;
+        return res.status(selfStatus).json({
+          success: false,
+          deliveredTo: 0,
+          target: "self",
+          reason: selfResult,
+        });
       }
 
       if (target === "all") {
@@ -9093,8 +9105,8 @@ export function registerTestAlertRoute(app: Express): void {
         await Promise.allSettled(
           usersWithPush.map(async (u: any) => {
             try {
-              await sendPush(u.pushSubscription, { title, body, url: "/", data: { isTest: true, testPlay } });
-              sent++;
+              const result = await sendPushToUser(u, { title, body, url: "/", data: { isTest: true, testPlay } });
+              if (result === "sent") sent++;
             } catch (_) {}
           })
         );

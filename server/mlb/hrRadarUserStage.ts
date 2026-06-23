@@ -26,9 +26,12 @@ import { convictionDisplayCeiling10, convictionDisplayBadge } from "@shared/hrRa
  */
 
 // ── Phase 0 ────────────────────────────────────────────────────────────────
-// Default ON, but structured so a `false` env value forces it off and a
-// caller can also flip it programmatically. Never throw — radar must keep
-// serving even if env parsing is weird.
+// Feature flag: HR_RADAR_GOLDMASTER_V1
+//   Purpose: gates the unified-stage goldmaster path. Default ON; set the env
+//     to false/0/off/no to fall back. Structured so env parsing never throws —
+//     radar must keep serving even with a weird value.
+//   Retirement: once the goldmaster path has been the sole code path for a full
+//     season with no regressions, inline it and delete the flag + fallback.
 export const HR_RADAR_GOLDMASTER_V1: boolean = (() => {
   const raw = (process.env.HR_RADAR_GOLDMASTER_V1 ?? "").trim().toLowerCase();
   if (raw === "false" || raw === "0" || raw === "off" || raw === "no") return false;
@@ -84,6 +87,26 @@ const loggedUnknownPaths = new Set<string>();
 // influences stage computation. Cleared by clearUserStageMemoryForGame at
 // game-final, or naturally bounded by gameId+playerId churn across days.
 const userStageMemory = new Map<string, HrRadarUserStage>();
+
+// Safety bound: clearUserStageMemoryForGame normally evicts a game's rows at
+// game-final, but a process running for days (or games that never resolve
+// cleanly) could otherwise leak keys forever. A slate is only a few hundred
+// batter-rows, so this cap is generous while still guaranteeing the map can't
+// grow without limit. Re-setting an existing key refreshes its recency.
+const MAX_USER_STAGE_MEMORY = 5000;
+
+function rememberUserStage(key: string, stage: HrRadarUserStage): void {
+  // Move-to-end on rewrite so the eviction order is least-recently-touched.
+  if (userStageMemory.has(key)) userStageMemory.delete(key);
+  userStageMemory.set(key, stage);
+  if (userStageMemory.size > MAX_USER_STAGE_MEMORY) {
+    const oldest = userStageMemory.keys().next().value;
+    if (oldest !== undefined) {
+      userStageMemory.delete(oldest);
+      console.log(`[HR_RADAR_MEMORY_EVICT] size>${MAX_USER_STAGE_MEMORY} evicted=${oldest}`);
+    }
+  }
+}
 
 export function clearUserStageMemoryForGame(gameId: string | number | null | undefined): number {
   if (gameId == null) return 0;
@@ -774,7 +797,7 @@ export function enrichWithUserStage(input: {
       // emitting a transition tag so the very first cycle for a row
       // (which would otherwise log `from=none to=track` for every player
       // every time the in-memory map is empty) doesn't spam the log.
-      userStageMemory.set(identityKey, userStage);
+      rememberUserStage(identityKey, userStage);
     } else if (prevForTrace !== userStage) {
       const sid = input.signalId ?? "?";
       const gid = input.gameId ?? "?";
@@ -797,7 +820,7 @@ export function enrichWithUserStage(input: {
           fromStage: String(prevForTrace), toStage: String(userStage),
         });
       } catch { /* analytics never blocks runtime */ }
-      userStageMemory.set(identityKey, userStage);
+      rememberUserStage(identityKey, userStage);
     }
     // else: prevForTrace === userStage — no change, stay silent.
   }

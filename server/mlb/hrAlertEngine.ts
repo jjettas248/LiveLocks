@@ -27,8 +27,9 @@ export function mapDynamicStateToStage(s: DynamicHRState): HrRadarStage {
   }
 }
 
-/** Numeric rank for ladder progression — used to detect auto-advance transitions. */
-export const STAGE_RANK: Record<HrRadarStage, number> = {
+/** Numeric rank for ladder progression — used to detect auto-advance transitions.
+ *  Module-private: only `isStageAdvance` below consumes it. */
+const STAGE_RANK: Record<HrRadarStage, number> = {
   closed:   -1,
   watch:     0,
   cooling:   1, // peer of building (sideways from attack), but not below watch

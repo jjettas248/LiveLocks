@@ -77,7 +77,9 @@ function RootRedirect() {
 
   useEffect(() => {
     if (!isLoading && user) {
-      navigate("/dashboard");
+      // Preserve any query string (e.g. PWA shortcuts / notification deep-links
+      // like `/?tab=mlb`) so the dashboard can read `tab` from location.search.
+      navigate("/dashboard" + window.location.search);
     }
   }, [user, isLoading, navigate]);
 
