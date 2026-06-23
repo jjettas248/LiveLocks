@@ -725,6 +725,40 @@ interface UncalledHrRow {
   parkWeatherScore: number | null;
   atBatIndex: number | null;
   resolvedAt: string | null;
+  // Review bucket taxonomy (diagnosticsSnapshot.hrReview) — additive, nullable.
+  reviewBucket: string | null;
+  reviewReason: string | null;
+  reviewDataQuality: string | null;
+  preHrPeakStage: string | null;
+  preHrPeakScore10: number | null;
+  currentStage: string | null;
+  currentScore10: number | null;
+}
+
+const HR_REVIEW_BUCKET_META: Record<string, { label: string; cls: string }> = {
+  called_hit: { label: "Called", cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" },
+  late_signal: { label: "Late", cls: "bg-sky-500/15 text-sky-300 border-sky-500/30" },
+  attribution_miss: { label: "Attribution", cls: "bg-orange-500/15 text-orange-300 border-orange-500/30" },
+  same_pa_hr_no_prior_live_signal: { label: "Same-PA", cls: "bg-zinc-500/15 text-zinc-300 border-zinc-500/30" },
+  early_window_hr: { label: "Early", cls: "bg-zinc-500/15 text-zinc-300 border-zinc-500/30" },
+  live_promotion_miss: { label: "Promotion", cls: "bg-amber-500/15 text-amber-300 border-amber-500/30" },
+  context_miss: { label: "Context", cls: "bg-amber-500/15 text-amber-300 border-amber-500/30" },
+  true_uncalled_hr: { label: "True Miss", cls: "bg-red-500/15 text-red-300 border-red-500/30" },
+  insufficient_review_data: { label: "Data Gap", cls: "bg-purple-500/15 text-purple-300 border-purple-500/30" },
+};
+
+function HrReviewBucketBadge({ bucket, reason }: { bucket: string | null; reason: string | null }) {
+  if (!bucket) return <span className="text-muted-foreground">—</span>;
+  const meta = HR_REVIEW_BUCKET_META[bucket] ?? { label: bucket, cls: "bg-zinc-500/15 text-zinc-300 border-zinc-500/30" };
+  return (
+    <span
+      className={`inline-block rounded border px-1.5 py-0.5 text-[10px] font-medium ${meta.cls}`}
+      title={reason ?? bucket}
+      data-testid={`badge-hrreview-${bucket}`}
+    >
+      {meta.label}
+    </span>
+  );
 }
 
 function UncalledHrReviewPanel({ open, onToggle }: { open: boolean; onToggle: () => void }) {
@@ -769,6 +803,9 @@ function UncalledHrReviewPanel({ open, onToggle }: { open: boolean; onToggle: ()
                   <tr className="border-b border-border/40">
                     <th className="text-left py-1.5 pr-2">Date</th>
                     <th className="text-left py-1.5 pr-2">Player</th>
+                    <th className="text-left py-1.5 pr-2">Bucket</th>
+                    <th className="text-left py-1.5 pr-2">Peak → Now</th>
+                    <th className="text-center py-1.5 pr-2">Data</th>
                     <th className="text-left py-1.5 pr-2">Status</th>
                     <th className="text-right py-1.5 pr-2">Inn</th>
                     <th className="text-right py-1.5 pr-2">AB#</th>
@@ -794,6 +831,23 @@ function UncalledHrReviewPanel({ open, onToggle }: { open: boolean; onToggle: ()
                         <div className="font-medium text-foreground">{r.playerName}</div>
                         <div className="text-muted-foreground">{r.team}</div>
                       </td>
+                      <td className="py-1.5 pr-2">
+                        <HrReviewBucketBadge bucket={r.reviewBucket} reason={r.reviewReason} />
+                      </td>
+                      <td className="py-1.5 pr-2 font-mono text-muted-foreground" data-testid={`cell-peaknow-${r.id}`}>
+                        {r.preHrPeakStage || r.currentStage ? (
+                          <>
+                            {(r.preHrPeakStage ?? "—")}
+                            {r.preHrPeakScore10 != null ? `@${r.preHrPeakScore10.toFixed(1)}` : ""}
+                            {" → "}
+                            {(r.currentStage ?? "—")}
+                            {r.currentScore10 != null ? `@${r.currentScore10.toFixed(1)}` : ""}
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="py-1.5 pr-2 text-center text-muted-foreground">{r.reviewDataQuality ?? "—"}</td>
                       <td className="py-1.5 pr-2">
                         <span className={
                           r.gradingStatus === "uncalled_hr"

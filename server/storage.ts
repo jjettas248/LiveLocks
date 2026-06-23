@@ -5346,6 +5346,25 @@ export class DatabaseStorage implements IStorage {
     parkWeatherScore: number | null;
     atBatIndex: number | null;
     resolvedAt: Date | null;
+    // Review bucket taxonomy (diagnosticsSnapshot.hrReview) — additive, nullable
+    // when the classifier has not stamped this row yet.
+    reviewBucket: string | null;
+    reviewReason: string | null;
+    reviewDataQuality: string | null;
+    reviewDataQualityReasons: string[] | null;
+    preHrPeakStage: string | null;
+    preHrPeakScore10: number | null;
+    currentStage: string | null;
+    currentScore10: number | null;
+    completedAbsBeforeHr: number | null;
+    hadPregameTargetTag: boolean | null;
+    hadNearHrBeforeHr: boolean | null;
+    hadHrCandidateContactBeforeHr: boolean | null;
+    hadPitcherCollapseBeforeHr: boolean | null;
+    signalBusHadPreHrRecord: boolean | null;
+    lifecycleHadPreHrRecord: boolean | null;
+    checkedSignalIds: string[] | null;
+    classifierVersion: number | null;
   }>> {
     try {
       const cutoffStr = daysAgoET(daysBack);
@@ -5392,6 +5411,11 @@ export class DatabaseStorage implements IStorage {
             (typeof contact.hardHits === "number" && contact.hardHits > 0)
           );
 
+        const hrReview = (diag.hrReview ?? null) as Record<string, any> | null;
+        const reviewSnap = (hrReview?.snapshot ?? null) as Record<string, any> | null;
+        const numOrNull = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+        const boolOrNull = (v: unknown): boolean | null => (typeof v === "boolean" ? v : null);
+
         return {
           id: r.id,
           sessionDate: r.sessionDate,
@@ -5415,6 +5439,23 @@ export class DatabaseStorage implements IStorage {
           parkWeatherScore: parkWeather as number | null,
           atBatIndex,
           resolvedAt: r.resolvedAt,
+          reviewBucket: typeof hrReview?.bucket === "string" ? hrReview.bucket : null,
+          reviewReason: typeof hrReview?.reason === "string" ? hrReview.reason : null,
+          reviewDataQuality: typeof reviewSnap?.dataQuality === "string" ? reviewSnap.dataQuality : null,
+          reviewDataQualityReasons: Array.isArray(reviewSnap?.dataQualityReasons) ? reviewSnap!.dataQualityReasons : null,
+          preHrPeakStage: typeof reviewSnap?.preHrPeakStage === "string" ? reviewSnap.preHrPeakStage : null,
+          preHrPeakScore10: numOrNull(reviewSnap?.preHrPeakScore10),
+          currentStage: typeof reviewSnap?.currentStage === "string" ? reviewSnap.currentStage : null,
+          currentScore10: numOrNull(reviewSnap?.currentScore10),
+          completedAbsBeforeHr: numOrNull(reviewSnap?.completedAbsBeforeHr),
+          hadPregameTargetTag: boolOrNull(reviewSnap?.hadPregameTargetTag),
+          hadNearHrBeforeHr: boolOrNull(reviewSnap?.hadNearHrBeforeHr),
+          hadHrCandidateContactBeforeHr: boolOrNull(reviewSnap?.hadHrCandidateContactBeforeHr),
+          hadPitcherCollapseBeforeHr: boolOrNull(reviewSnap?.hadPitcherCollapseBeforeHr),
+          signalBusHadPreHrRecord: boolOrNull(reviewSnap?.signalBusHadPreHrRecord),
+          lifecycleHadPreHrRecord: boolOrNull(reviewSnap?.lifecycleHadPreHrRecord),
+          checkedSignalIds: Array.isArray(reviewSnap?.checkedSignalIds) ? reviewSnap!.checkedSignalIds : null,
+          classifierVersion: numOrNull(hrReview?.classifierVersion),
         };
       });
     } catch (err: any) {
@@ -5593,6 +5634,52 @@ export class DatabaseStorage implements IStorage {
       }).onConflictDoNothing();
     } catch (err: any) {
       console.warn(`[HR_RADAR_STAMP_PERSIST] failed game=${stamp.gameId} player=${stamp.playerId}: ${err.message}`);
+    }
+  }
+
+  /**
+   * Persist an HR review-bucket classification onto the alert's diagnostics
+   * jsonb (`diagnosticsSnapshot.hrReview`). SAFE ADDITIVE / diagnostic-only:
+   *   - never touches gradingStatus / userVisible / ROI / W-L fields
+   *   - never throws (fire-and-forget from the grader)
+   *   - no migration — reuses the existing diagnostics_snapshot column
+   *
+   * Fallback ladder: update latest hr_radar_alerts row for game+player; if no
+   * such row exists (a true uncalled HR with no alert), log
+   * `[HR_REVIEW_PERSIST_SKIPPED]` and return — we do NOT synthesize a W/L row.
+   */
+  async persistHrReviewClassification(
+    gameId: string,
+    playerId: string | number,
+    payload: {
+      bucket: string;
+      reason: string;
+      snapshot: Record<string, unknown>;
+      classifiedAt: string;
+      classifierVersion: number;
+    },
+  ): Promise<void> {
+    try {
+      const pid = String(playerId);
+      const rows = await db.select().from(hrRadarAlerts)
+        .where(and(
+          eq(hrRadarAlerts.gameId, gameId),
+          eq(hrRadarAlerts.playerId, pid),
+        ))
+        .orderBy(desc(hrRadarAlerts.detectedAt))
+        .limit(1);
+      const row = rows[0];
+      if (!row) {
+        console.log(`[HR_REVIEW_PERSIST_SKIPPED] gameId=${gameId} playerId=${pid} bucket=${payload.bucket} reason=no_alert_row`);
+        return;
+      }
+      const prevDiag = (row.diagnosticsSnapshot ?? {}) as Record<string, unknown>;
+      const mergedDiag = { ...prevDiag, hrReview: payload };
+      await db.update(hrRadarAlerts)
+        .set({ diagnosticsSnapshot: mergedDiag })
+        .where(eq(hrRadarAlerts.id, row.id));
+    } catch (err: any) {
+      console.warn(`[HR_REVIEW_PERSIST] failed game=${gameId} player=${playerId}: ${err?.message ?? err}`);
     }
   }
 
