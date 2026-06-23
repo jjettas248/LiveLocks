@@ -933,3 +933,86 @@ export interface PlayStats {
   totalPending: number;
   allTimeRecord: { hits: number; misses: number; pushes: number };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MLB Pre-Game Power Radar — durable snapshots (additive; never feeds ROI).
+//
+// Stores ALL evaluated batter rows (public + suppressed + admin-only) so admin
+// diagnostics and backtesting are complete. Public endpoints filter at read.
+// Unique identity is (sessionDate, gameId, batterId) — NOT primaryMarket.
+// ─────────────────────────────────────────────────────────────────────────────
+export const pregamePowerRadarSignals = pgTable("pregame_power_radar_signals", {
+  signalId: text("signal_id").primaryKey(),
+  buildId: text("build_id").notNull(),
+  sessionDate: text("session_date").notNull(),
+  gameId: text("game_id").notNull(),
+  gameDate: text("game_date").notNull(),
+  startsAt: text("starts_at"),
+  gameStatus: text("game_status").notNull().default("unknown"),
+  firstPitchLockEligible: boolean("first_pitch_lock_eligible").notNull().default(false),
+  batterId: text("batter_id").notNull(),
+  batterName: text("batter_name").notNull(),
+  team: text("team").notNull(),
+  opponent: text("opponent").notNull(),
+  pitcherId: text("pitcher_id"),
+  pitcherName: text("pitcher_name"),
+  battingOrderSlot: integer("batting_order_slot"),
+  primaryMarket: text("primary_market").notNull(),
+  marketTags: jsonb("market_tags").notNull().default([]),
+  marketScores: jsonb("market_scores").notNull().default({}),
+  score10: numeric("score_10").notNull(),
+  tier: text("tier").notNull(),
+  drivers: jsonb("drivers").notNull().default([]),
+  warnings: jsonb("warnings").notNull().default([]),
+  diagnostics: jsonb("diagnostics").notNull().default({}),
+  lineupStatus: text("lineup_status").notNull(),
+  weatherStatus: text("weather_status").notNull(),
+  hasMarketLine: boolean("has_market_line").notNull().default(false),
+  isOfficialPlay: boolean("is_official_play").notNull().default(false),
+  isPregameTarget: boolean("is_pregame_target").notNull().default(true),
+  status: text("status").notNull().default("active"),
+  suppressed: boolean("suppressed").notNull().default(false),
+  suppressedReasons: jsonb("suppressed_reasons").notNull().default([]),
+  outcomes: jsonb("outcomes"),
+  becameLiveReady: boolean("became_live_ready").notNull().default(false),
+  becameLiveFire: boolean("became_live_fire").notNull().default(false),
+  convertedLiveAt: timestamp("converted_live_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  lockedAt: timestamp("locked_at"),
+  gradedAt: timestamp("graded_at"),
+}, (table) => ({
+  uniqueIdx: uniqueIndex("pregame_power_radar_signals_unique_idx").on(table.sessionDate, table.gameId, table.batterId),
+  dateIdx: index("pregame_power_radar_signals_session_date_idx").on(table.sessionDate),
+  buildIdx: index("pregame_power_radar_signals_build_idx").on(table.buildId),
+}));
+
+export const insertPregamePowerRadarSignalSchema = createInsertSchema(pregamePowerRadarSignals).omit({ createdAt: true, updatedAt: true });
+export type PregamePowerRadarSignalRow = typeof pregamePowerRadarSignals.$inferSelect;
+export type InsertPregamePowerRadarSignal = z.infer<typeof insertPregamePowerRadarSignalSchema>;
+
+// Durable build manifest — required for DB fallback + latest-build lookup.
+export const pregamePowerRadarBuilds = pgTable("pregame_power_radar_builds", {
+  buildId: text("build_id").primaryKey(),
+  sessionDate: text("session_date").notNull(),
+  startedAt: text("started_at").notNull(),
+  completedAt: text("completed_at"),
+  gamesScanned: integer("games_scanned").notNull().default(0),
+  battersEvaluated: integer("batters_evaluated").notNull().default(0),
+  lineupCoverage: numeric("lineup_coverage"),
+  weatherCoverage: numeric("weather_coverage"),
+  batterCoverage: numeric("batter_coverage"),
+  pitcherCoverage: numeric("pitcher_coverage"),
+  signalsCreated: integer("signals_created").notNull().default(0),
+  suppressedCount: integer("suppressed_count").notNull().default(0),
+  status: text("status").notNull().default("complete"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  dateIdx: index("pregame_power_radar_builds_session_date_idx").on(table.sessionDate),
+}));
+
+export const insertPregamePowerRadarBuildSchema = createInsertSchema(pregamePowerRadarBuilds).omit({ createdAt: true, updatedAt: true });
+export type PregamePowerRadarBuildRow = typeof pregamePowerRadarBuilds.$inferSelect;
+export type InsertPregamePowerRadarBuild = z.infer<typeof insertPregamePowerRadarBuildSchema>;

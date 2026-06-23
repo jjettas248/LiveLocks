@@ -567,7 +567,13 @@ app.use((req, res, next) => {
       const { getSnapshot } = await import(
         "./mlb/pregamePowerRadar/pregamePowerRadarStore"
       );
+      const { installPregamePersistence } = await import(
+        "./mlb/pregamePowerRadar/pregamePersistence"
+      );
       const { todayET } = await import("./utils/dateUtils");
+
+      // Wire DB persistence (build sink + DB fallback) before the first build.
+      installPregamePersistence();
 
       // Initial slate build (deferred so rosters/weather can populate first).
       setTimeout(() => {

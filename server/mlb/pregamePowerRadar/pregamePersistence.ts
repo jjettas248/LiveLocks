@@ -1,0 +1,159 @@
+// Pre-Game Power Radar — persistence adapter (Phase 2).
+//
+// Bridges the pure build module to storage. Imports storage here (NOT in the
+// build/scoring modules) so the engine stays storage-free and unit-testable.
+// Installs the build sink (persist all evaluated rows + manifest) and the DB
+// fallback loader (reconstruct a snapshot from the latest persisted build).
+
+import { storage } from "../../storage";
+import type {
+  InsertPregamePowerRadarSignal,
+  PregamePowerRadarSignalRow,
+} from "@shared/schema";
+import type { PregamePowerSignal } from "./types";
+import { setPregameBuildSink } from "./buildPregamePowerRadar";
+import { setDbFallback } from "./pregamePowerRadarService";
+import type { PregamePowerSnapshot } from "./pregamePowerRadarStore";
+
+function signalToRow(s: PregamePowerSignal): InsertPregamePowerRadarSignal {
+  return {
+    signalId: s.signalId,
+    buildId: s.buildId,
+    sessionDate: s.sessionDate,
+    gameId: s.gameId,
+    gameDate: s.gameDate,
+    startsAt: s.startsAt ?? null,
+    gameStatus: s.gameStatus,
+    firstPitchLockEligible: s.firstPitchLockEligible,
+    batterId: s.batterId,
+    batterName: s.batterName,
+    team: s.team,
+    opponent: s.opponent,
+    pitcherId: s.pitcherId ?? null,
+    pitcherName: s.pitcherName ?? null,
+    battingOrderSlot: s.battingOrderSlot ?? null,
+    primaryMarket: s.primaryMarket,
+    marketTags: s.marketTags,
+    marketScores: s.marketScores,
+    score10: String(s.score10),
+    tier: s.tier,
+    drivers: s.drivers,
+    warnings: s.warnings,
+    diagnostics: s.diagnostics,
+    lineupStatus: s.lineupStatus,
+    weatherStatus: s.weatherStatus,
+    hasMarketLine: s.hasMarketLine,
+    isOfficialPlay: s.isOfficialPlay,
+    isPregameTarget: s.isPregameTarget,
+    status: s.status,
+    suppressed: s.suppressed,
+    suppressedReasons: s.suppressedReasons,
+    outcomes: s.outcomes ?? null,
+    becameLiveReady: s.becameLiveReady,
+    becameLiveFire: s.becameLiveFire,
+    convertedLiveAt: s.convertedLiveAt ? new Date(s.convertedLiveAt) : null,
+    lockedAt: s.lockedAt ? new Date(s.lockedAt) : null,
+    gradedAt: null,
+  };
+}
+
+function rowToSignal(r: PregamePowerRadarSignalRow): PregamePowerSignal {
+  return {
+    signalId: r.signalId,
+    sport: "mlb",
+    engine: "pregame_power_radar",
+    sessionDate: r.sessionDate,
+    gameId: r.gameId,
+    gameDate: r.gameDate,
+    startsAt: r.startsAt ?? null,
+    generatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : "",
+    buildId: r.buildId,
+    batterId: r.batterId,
+    batterName: r.batterName,
+    team: r.team,
+    opponent: r.opponent,
+    pitcherId: r.pitcherId ?? null,
+    pitcherName: r.pitcherName ?? null,
+    battingOrderSlot: r.battingOrderSlot ?? null,
+    handednessMatchup: null,
+    primaryMarket: r.primaryMarket as PregamePowerSignal["primaryMarket"],
+    marketTags: (r.marketTags as PregamePowerSignal["marketTags"]) ?? [],
+    marketScores: (r.marketScores as PregamePowerSignal["marketScores"]) ?? {},
+    score10: typeof r.score10 === "string" ? parseFloat(r.score10) : (r.score10 as number),
+    tier: r.tier as PregamePowerSignal["tier"],
+    drivers: (r.drivers as PregamePowerSignal["drivers"]) ?? [],
+    warnings: (r.warnings as string[]) ?? [],
+    tags: [],
+    lineupStatus: r.lineupStatus as PregamePowerSignal["lineupStatus"],
+    weatherStatus: r.weatherStatus as PregamePowerSignal["weatherStatus"],
+    gameStatus: r.gameStatus as PregamePowerSignal["gameStatus"],
+    firstPitchLockEligible: r.firstPitchLockEligible,
+    lockedAt: r.lockedAt ? new Date(r.lockedAt).toISOString() : null,
+    hasMarketLine: r.hasMarketLine,
+    isOfficialPlay: false,
+    isPregameTarget: true,
+    status: r.status as PregamePowerSignal["status"],
+    suppressed: r.suppressed,
+    suppressedReasons: (r.suppressedReasons as string[]) ?? [],
+    outcomes: (r.outcomes as PregamePowerSignal["outcomes"]) ?? null,
+    becameLiveReady: r.becameLiveReady,
+    becameLiveFire: r.becameLiveFire,
+    convertedLiveAt: r.convertedLiveAt ? new Date(r.convertedLiveAt).toISOString() : null,
+    diagnostics: r.diagnostics as PregamePowerSignal["diagnostics"],
+  };
+}
+
+let installed = false;
+
+/** Wire the build sink + DB fallback. Idempotent. */
+export function installPregamePersistence(): void {
+  if (installed) return;
+  installed = true;
+
+  setPregameBuildSink(async (signals, manifest) => {
+    for (const s of signals) {
+      await storage.upsertPregamePowerRadarSignal(signalToRow(s));
+    }
+    await storage.recordPregamePowerBuild({
+      buildId: manifest.buildId,
+      sessionDate: manifest.sessionDate,
+      startedAt: manifest.startedAt,
+      completedAt: manifest.completedAt,
+      gamesScanned: manifest.gamesScanned,
+      battersEvaluated: manifest.battersEvaluated,
+      lineupCoverage: String(manifest.lineupCoverage),
+      weatherCoverage: String(manifest.weatherCoverage),
+      batterCoverage: String(manifest.batterCoverage),
+      pitcherCoverage: String(manifest.pitcherCoverage),
+      signalsCreated: manifest.signalsCreated,
+      suppressedCount: manifest.suppressedCount,
+      status: "complete",
+    });
+    console.log(`[PREGAME_POWER_RADAR_DB_UPSERT] persisted ${signals.length} rows build=${manifest.buildId}`);
+  });
+
+  setDbFallback(async (sessionDate): Promise<PregamePowerSnapshot | null> => {
+    const build = await storage.getLatestPregamePowerBuild(sessionDate);
+    if (!build) return null;
+    const rows = await storage.getPregamePowerRadarSignalsByDate(sessionDate);
+    const buildRows = rows.filter((r) => r.buildId === build.buildId);
+    if (buildRows.length === 0) return null;
+    const signals = new Map<string, PregamePowerSignal>();
+    for (const r of buildRows) signals.set(r.signalId, rowToSignal(r));
+    return {
+      buildId: build.buildId,
+      sessionDate,
+      generatedAt: build.completedAt ?? build.startedAt,
+      builtAtMs: build.completedAt ? Date.parse(build.completedAt) : Date.now(),
+      gamesScanned: build.gamesScanned,
+      battersEvaluated: build.battersEvaluated,
+      signals,
+      coverage: {
+        lineupCoverage: build.lineupCoverage ? parseFloat(build.lineupCoverage) : 0,
+        weatherCoverage: build.weatherCoverage ? parseFloat(build.weatherCoverage) : 0,
+        batterCoverage: build.batterCoverage ? parseFloat(build.batterCoverage) : 0,
+        pitcherCoverage: build.pitcherCoverage ? parseFloat(build.pitcherCoverage) : 0,
+      },
+    };
+  });
+}
