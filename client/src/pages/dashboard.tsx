@@ -548,7 +548,7 @@ export default function Dashboard() {
 
   const [activeTab, setActiveTab] = useState<"calculator" | "ncaab" | "analytics" | "mlb">("calculator");
   const [nbaSubTab, setNbaSubTab] = useState<"live" | "halftime">("live");
-  const [mlbSubTab, setMlbSubTab] = useState<"live_feed" | "hr_radar">("hr_radar");
+  const [mlbSubTab, setMlbSubTab] = useState<"live_feed" | "hr_radar" | "pregame_power">("hr_radar");
   const [expandToGameId, setExpandToGameId] = useState<string | null>(null);
   const [showWelcomeBanner, setShowWelcomeBanner] = useState(false);
   const [showSportPicker, setShowSportPicker] = useState(false);
@@ -2634,6 +2634,7 @@ export default function Dashboard() {
             <div className="flex gap-1 mt-2 w-fit bg-secondary/40 border border-border/60 rounded-xl p-1">
               {([
                 { key: "hr_radar", label: "HR Radar" },
+                { key: "pregame_power", label: "Pre-Game Power" },
                 // Action Feed (live_feed) hidden for now — re-add this entry to restore.
                 // { key: "live_feed", label: "Action Feed" },
               ] as const).map(tab => (
