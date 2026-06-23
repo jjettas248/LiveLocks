@@ -36,10 +36,12 @@ export async function sendPushToUser(user: PushUser, payload: PushPayload): Prom
     console.warn("[LL_PUSH_RATE_LIMITED]", { userId: user.id, sinceLastMs: now - last });
     return "rate_limited";
   }
-  lastPushAtByUser.set(user.id, now);
 
   try {
     await sendPush(user.pushSubscription, payload);
+    // Only count an actually-delivered push toward the rate limit — a dropped
+    // or failed send shouldn't lock the user out of the next attempt.
+    lastPushAtByUser.set(user.id, now);
     return "sent";
   } catch (err: any) {
     if (err?.expired) {

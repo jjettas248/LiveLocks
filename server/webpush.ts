@@ -34,10 +34,13 @@ export async function sendPush(
   if (!initialized) return;
 
   // Defense-in-depth: never ship a malformed payload to the push service.
+  // Throw (rather than silently return) so callers can tell a dropped payload
+  // apart from a delivered one — otherwise sendPushToUser counts it as "sent".
   const parsed = pushNotificationPayloadSchema.safeParse(payload);
   if (!parsed.success) {
-    console.warn("[LL_PUSH_PAYLOAD_INVALID]", parsed.error.issues.map((i) => i.message).join("; "));
-    return;
+    const detail = parsed.error.issues.map((i) => i.message).join("; ");
+    console.warn("[LL_PUSH_PAYLOAD_INVALID]", detail);
+    throw Object.assign(new Error(`Invalid push payload: ${detail}`), { invalidPayload: true });
   }
 
   try {
@@ -57,5 +60,6 @@ export async function sendPush(
       throw Object.assign(err, { expired: true });
     }
     console.warn("[webpush] Send failed:", err.message);
+    throw err;
   }
 }

@@ -9002,13 +9002,24 @@ export function registerTestAlertRoute(app: Express): void {
         if (!adminUser?.pushSubscription) {
           return res.status(404).json({ error: "No push subscription found. Install app to home screen first." });
         }
-        await sendPushToUser(adminUser, {
+        const selfResult = await sendPushToUser(adminUser, {
           title,
           body,
           url: "/",
           data: { isTest: true, testPlay },
         });
-        return res.json({ success: true, deliveredTo: 1, target: "self" });
+        if (selfResult === "sent") {
+          return res.json({ success: true, deliveredTo: 1, target: "self" });
+        }
+        // Don't report success when nothing was actually delivered (rate-limited,
+        // expired subscription just cleaned up, invalid payload, or send failure).
+        const selfStatus = selfResult === "rate_limited" ? 429 : selfResult === "expired" ? 410 : 502;
+        return res.status(selfStatus).json({
+          success: false,
+          deliveredTo: 0,
+          target: "self",
+          reason: selfResult,
+        });
       }
 
       if (target === "all") {
