@@ -28,6 +28,7 @@ npx tsx server/mlb/hrRadarReadyToFire.test.ts       # 5 invariants
 npx tsx server/mlb/nearHrContact.test.ts            # near-HR + "almost HR" detection
 npx tsx server/mlb/pullAndPregame.test.ts           # pull rate + pregame HR-form prior
 npx tsx server/mlb/ibbAndRecentForm.test.ts         # recent form streak + IBB feared-slugger prior
+npx tsx server/mlb/hrReviewClassifier.test.ts       # 30 invariants — pre-HR review bucket taxonomy
 ```
 
 Railway runs the configured start command on each deploy; for local development run `npm run dev` and restart the dev server after server changes.
