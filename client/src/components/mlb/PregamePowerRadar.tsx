@@ -40,6 +40,8 @@ interface PregameSignal {
   status: "active" | "locked" | "expired" | "graded";
   gameStatus: string;
   lineupStatus: string;
+  becameLiveReady?: boolean;
+  becameLiveFire?: boolean;
 }
 
 interface RadarResponse {
@@ -198,6 +200,15 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
                 <Lock className="w-3 h-3" /> Locked at first pitch
               </span>
             )}
+            {s.becameLiveFire ? (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-400">
+                <Flame className="w-3 h-3" /> Pre-game target now live FIRE
+              </span>
+            ) : s.becameLiveReady ? (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-300">
+                <Flame className="w-3 h-3" /> Pre-game target now live-ready
+              </span>
+            ) : null}
           </div>
           <div className="text-[11px] text-muted-foreground mt-0.5">
             {s.pitcherName ? `vs ${s.pitcherName}` : "Pitcher TBD"}

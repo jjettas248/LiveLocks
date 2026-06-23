@@ -610,6 +610,17 @@ app.use((req, res, next) => {
         }
       }, 15 * 60 * 1000);
 
+      // Shadow-outcome grader + live bridge (Phase 4/5) — read-only on the live
+      // engine; writes only to the pre-game track. Every 5 min, try/catch.
+      const { gradePregameOutcomes } = await import(
+        "./mlb/pregamePowerRadar/shadowOutcomes"
+      );
+      setInterval(() => {
+        gradePregameOutcomes().catch((e) =>
+          console.warn("[PREGAME_POWER_RADAR_GRADE] failed:", e?.message),
+        );
+      }, 5 * 60 * 1000);
+
       console.log("[PREGAME_POWER_RADAR_BOOT] scheduled builds armed");
     } catch (err) {
       console.warn("[PREGAME_POWER_RADAR_BOOT] failed:", (err as Error).message);

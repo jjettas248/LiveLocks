@@ -484,6 +484,7 @@ export async function registerRoutes(
     try {
       const { getRadarSnapshot } = await import("./mlb/pregamePowerRadar/pregamePowerRadarService");
       const { buildResponse } = await import("./mlb/pregamePowerRadar/diagnostics");
+      const { getPregameOutcomeSummary } = await import("./mlb/pregamePowerRadar/shadowOutcomes");
       const { todayET } = await import("./utils/dateUtils");
       const { snapshot, source } = await getRadarSnapshot();
       if (!snapshot) {
@@ -493,10 +494,11 @@ export async function registerRoutes(
         });
       }
       const signals = Array.from(snapshot.signals.values());
-      return res.json(buildResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
+      const resp = buildResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
         gamesScanned: snapshot.gamesScanned, battersEvaluated: snapshot.battersEvaluated,
         ...snapshot.coverage,
-      }, true));
+      }, true);
+      return res.json({ ...resp, outcomeSummary: getPregameOutcomeSummary() });
     } catch (err) {
       console.error("[admin/mlb/pregame-power-radar/debug]", err);
       return res.status(500).json({ error: "Failed to fetch pre-game power radar debug" });
